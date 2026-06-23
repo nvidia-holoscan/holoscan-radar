@@ -1,0 +1,41 @@
+{
+  "$schema": "urn:holohub:module:v2",
+  "module": {
+    "name": "holoscan-radar",
+    "version": "0.1.0",
+    "description": "Accelerated radar signal processing operators for the Holoscan ecosystem",
+    "authors": [
+      {
+        "name": "Holoscan Team",
+        "affiliation": "NVIDIA"
+      }
+    ],
+    "license": "Apache-2.0",
+    "language": ["C++", "Python"],
+    "namespace": {
+      "cpp": "holoscan::radar",
+      "python": "holoscan.radar"
+    },
+    "holoscan_sdk": {
+      "minimum_required_version": "4.3.0",
+      "tested_versions": ["4.3.0"]
+    },
+    "platforms": ["x86_64", "aarch64"],
+    "tags": ["TODO: add tags"],
+    "source_repository": "https://github.com/TODO/holoscan-radar",
+    "operator_names": ["radar_op"],
+    "dockerfile": "Dockerfile",
+    "binary_packages": {
+      "debian": "holoscan-radar",
+      "pypi": "holoscan-radar",
+      "install_commands": ["pip install holoscan-radar"]
+    },
+    "documentation": {
+      "readme": "README.md"
+    },
+    "testing": {
+      "cpp": "ctest",
+      "python": "pytest"
+    }
+  }
+}
