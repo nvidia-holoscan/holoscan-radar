@@ -7,7 +7,7 @@
 # Run with:
 #   HOLOSCAN_RADAR_BUILD_DIR=build \
 #   PYTHONPATH=build/python${PYTHONPATH:+:$PYTHONPATH} \
-#   python applications/radar_pipeline/radar_pipeline.py
+#   python applications/radar_pipeline/python/radar_pipeline.py
 
 import logging
 

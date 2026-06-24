@@ -81,7 +81,8 @@ fi
 # Install holoscan-cli unless a source-project-capable one is already present.
 # Probe the command surface (not just importability) so a stale legacy
 # holoscan-cli (<= 4.2.0) doesn't satisfy the check.
-if ! "${PYTHON_BIN}" -m holoscan_cli --help 2>/dev/null | grep -qw build; then
+_holoscan_cli_help=$("${PYTHON_BIN}" -m holoscan_cli --help 2>/dev/null || true)
+if ! grep -qw build <<< "${_holoscan_cli_help}"; then
     # Bootstrap pip if the interpreter lacks it (minimal Python installs omit
     # it). `pip install` below would otherwise fail with a confusing error.
     if ! "${PYTHON_BIN}" -m pip --version >/dev/null 2>&1; then

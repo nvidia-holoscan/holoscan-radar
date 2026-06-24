@@ -18,7 +18,7 @@
             "tested_versions": ["4.3.0"]
         },
         "platforms": ["x86_64", "aarch64"],
-        "tags": ["Radar", "Signal Processing", "GPU", "Accelerated Computing", "FMCW", "Pulse-Doppler", "Syntheic Aperture Radar"],
+        "tags": ["Radar", "Signal Processing", "GPU", "Accelerated Computing", "FMCW", "Pulse-Doppler", "Synthetic Aperture Radar"],
         "ranking": 3,
         "requirements": {}
     }

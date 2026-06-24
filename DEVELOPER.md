@@ -7,7 +7,7 @@ distributing this Holoscan Module.
 
 ## Module layout
 
-```
+```text
 holoscan-radar/
 ├── holohub                         # CLI wrapper (delegates to holoscan-cli)
 ├── Dockerfile                      # Development container image
@@ -21,8 +21,8 @@ holoscan-radar/
 ├── applications/
 │   └── radar_pipeline/
 │       └── cpp/
-│           └── radar_pipeline.cpp   # Example pipeline
-│           └── metadata.json           # Operator-level metadata
+│           ├── radar_pipeline.cpp   # Example pipeline
+│           └── metadata.json        # Application-level metadata
 ├── python/holoscan/radar/
 │   └── __init__.py                 # Re-exports operators for `from holoscan.radar import ...`
 └── tests/

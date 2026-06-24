@@ -100,6 +100,7 @@ cmake --build build -j$(nproc)
 ```bash
 ./holohub run-container
 cmake -S . -B build/tests -DHOLOSCAN_RADAR_BUILD_TESTING:BOOL=ON
+cmake --build build -j$(nproc)
 
 # C++ (GTest via CTest)
 ctest --test-dir build/tests --output-on-failure -L unit
