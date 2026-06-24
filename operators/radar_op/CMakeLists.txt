@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 Holoscan Team / NVIDIA. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 add_library(radar_op radar_op.cpp)
@@ -10,7 +10,14 @@ target_include_directories(radar_op PUBLIC
 
 target_link_libraries(radar_op PRIVATE holoscan::core)
 
-install(FILES radar_op.hpp DESTINATION include/radar_op)
+install(TARGETS radar_op
+    EXPORT holoscan_radar_op_targets
+)
+
+install(EXPORT holoscan_radar_op_targets
+    NAMESPACE holoscan::
+    DESTINATION lib/cmake/holoscan_radar
+)
 
 add_subdirectory(python)
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 Holoscan Team / NVIDIA. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # conftest.py — makes the build-tree Python package visible to pytest.
