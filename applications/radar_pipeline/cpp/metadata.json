@@ -24,6 +24,7 @@
         "default_mode": "default",
         "modes": {
 			"default": {
+				"description": "Run the C++ radar pipeline",
 				"run": {
 					"command": "<holohub_app_bin>/radar_pipeline",
 					"workdir": "holohub_app_bin"

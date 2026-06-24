@@ -24,6 +24,7 @@
 
         "modes": {
 			"default": {
+				"description": "Run the Python radar pipeline",
 				"run": {
 					"command": "python3 <holohub_app_source>/radar_pipeline.py",
 					"workdir": "holohub_app_bin"
