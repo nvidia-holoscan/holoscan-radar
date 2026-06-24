@@ -89,7 +89,7 @@ int main() { holoscan::make_application<MyApp>()->run(); }
 | Python | 3.10 - 3.13 |
 
 ```bash
-cmake -S . -B build -DBUILD_ALL=ON -DHOLOSCAN_RADAR_BUILD_TESTING=ON
+cmake -S . -B build
 cmake --build build -j$(nproc)
 ```
 
@@ -98,36 +98,15 @@ cmake --build build -j$(nproc)
 ## Testing
 
 ```bash
-./holohub test
-```
+./holohub run-container
+cmake -S . -B build/tests -DHOLOSCAN_RADAR_BUILD_TESTING:BOOL=ON
 
-Or, without the HoloHub CLI:
-
-```bash
 # C++ (GTest via CTest)
-ctest --test-dir build --output-on-failure -L unit
+ctest --test-dir build/tests --output-on-failure -L unit
+
+# Python (pytest via CTest)
+ctest --test-dir build/tests --output-on-failure -R pytest
 ```
-
-```bash
-# Python (pytest)
-PYTHONPATH=build/python${PYTHONPATH:+:$PYTHONPATH} HOLOSCAN_RADAR_BUILD_DIR=build pytest tests/python/ -v
-```
-
-`PYTHONPATH` is **prepended** (with `${PYTHONPATH:+:$PYTHONPATH}`) so that an
-ambient holoscan SDK install stays visible. A bare `PYTHONPATH=build/python`
-would replace the variable and hide the SDK from pytest. A bare
-`PYTHONPATH=build/python:$PYTHONPATH` looks safe but, when `$PYTHONPATH` is
-unset (typical on a fresh shell or CI runner), it expands to a trailing colon
-that Python reads as an empty path entry — equivalent to `.`, which silently
-adds the test CWD to `sys.path` and lets a local file shadow installed
-packages.
-
-The pytest suite currently covers importability and build-smoke only; full
-live-pipeline coverage is a TODO and may require real hardware. CTest is
-configured with `SKIP_RETURN_CODE 5` on the pytest entry — if a CTest run
-reports "Skipped" unexpectedly, the most common cause is that the holoscan
-SDK is not importable in the test environment (pytest collects zero items
-and exits 5).
 
 ---
 

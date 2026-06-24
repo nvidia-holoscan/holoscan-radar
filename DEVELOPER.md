@@ -1,4 +1,4 @@
-# Developer Guide — radar
+# Developer Guide — Holoscan Radar
 
 This guide covers the layout, build system, and day-to-day workflow for developing and
 distributing this Holoscan Module.
@@ -20,7 +20,9 @@ holoscan-radar/
 │       └── metadata.json           # Operator-level metadata
 ├── applications/
 │   └── radar_pipeline/
-│       └── radar_pipeline.cpp   # Example pipeline
+│       └── cpp/
+│           └── radar_pipeline.cpp   # Example pipeline
+│           └── metadata.json           # Operator-level metadata
 ├── python/holoscan/radar/
 │   └── __init__.py                 # Re-exports operators for `from holoscan.radar import ...`
 └── tests/
@@ -39,10 +41,11 @@ defaults. On first run it installs `holoscan-cli` via pip if it isn't already im
 | Command | What it does |
 |---|---|
 | `./holohub run-container` | Build and start the development container |
-| `./holohub build radar_pipeline` | CMake configure + build inside the container |
-| `./holohub run radar_pipeline` | Run the example pipeline |
-| `./holohub test` | Run CTest (C++ unit tests) and pytest |
+| `./holohub build radar_pipeline` | Configure and build the example pipeline inside the container |
+| `./holohub run radar_pipeline` | Configure, build, and run the example pipeline inside the container |
 | `./holohub install --dev` | Install a `.pth` hook so `import holoscan.radar` works in any shell |
+| `./holohub package holoscan-radar` | Build a native Debian package with Holoscan Radar operators |
+| `./holohub package holoscan-radar --pkg-generator=WHEEL` | Build a native Python 3.12 package with Holoscan Radar operators |
 
 Set `HOLOSCAN_CLI_INSTALL_ARGS` to override the pip install arguments. The
 wrapper forwards this value into Docker builds as the
@@ -55,7 +58,7 @@ checkout for host-side CLI development.
 ## Building without the wrapper
 
 ```bash
-cmake -S . -B build -DBUILD_ALL=ON -DHOLOSCAN_RADAR_BUILD_TESTING=ON
+cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
 cmake --build build -j"$(nproc)"
 ```
 
@@ -71,14 +74,10 @@ Run Python tests:
 
 ```bash
 HOLOSCAN_RADAR_BUILD_DIR=build \
+# Prepend to PYTHONPATH so that the build directory Python module is importable
 PYTHONPATH=build/python${PYTHONPATH:+:$PYTHONPATH} \
 pytest tests/python/ -v
 ```
-
-`PYTHONPATH` is **prepended via `${PYTHONPATH:+:$PYTHONPATH}`** so that an existing entry on the variable is kept while an unset/empty variable doesn't yield a trailing colon. Two failure modes the shorter forms invite:
-
-- **`PYTHONPATH=build/python`** (replace): drops any ambient holoscan SDK install on `PYTHONPATH`. The module-level `importorskip("holoscan")` then fires, pytest exits with code 5, and CTest marks the run as Skipped.
-- **`PYTHONPATH=build/python:$PYTHONPATH`** (naive prepend): on a fresh shell or CI runner where `$PYTHONPATH` is unset, this expands to `PYTHONPATH=build/python:` — Python treats the trailing empty entry as the current directory, silently shadowing installed packages with whatever happens to live in the test CWD.
 
 ---
 
@@ -121,3 +120,4 @@ python -m build --wheel
 - [HoloHub documentation](https://github.com/nvidia-holoscan/holohub)
 - [Holoscan SDK documentation](https://docs.nvidia.com/holoscan/sdk-user-guide/introduction/getting-started)
 - [Holoscan Module ecosystem](https://nvidia-holoscan.github.io/)
+- [Holoscan CLI documentation](https://github.com/nvidia-holoscan/holoscan-cli)

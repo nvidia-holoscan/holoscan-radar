@@ -2,4 +2,7 @@
 .holohub/
 build/
 _CPack_Packages/
-
+__pycache__/
+.cache/
+.nv/
+.local/
