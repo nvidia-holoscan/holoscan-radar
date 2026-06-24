@@ -89,8 +89,9 @@ repos:
     hooks:
       - id: holoscan-metadata-validate
         name: validate metadata.json files against schemas
-        entry: python3 .github/workflows/scripts/validate_metadata.py
-        language: system
+        entry: python .github/workflows/scripts/validate_metadata.py
+        language: python
+        additional_dependencies: ["holoscan-cli[create]==4.3.0"]
         files: '(^|/)metadata\.json$'
         exclude: '^(build|\.local|_CPack_Packages)/'
         pass_filenames: false
