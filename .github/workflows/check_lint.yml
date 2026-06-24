@@ -55,14 +55,18 @@ jobs:
 
       - name: Check copyright headers (pull request)
         if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           python3 .github/workflows/scripts/check_copyright.py . \
-            --git-modified-only origin/${{ github.base_ref }} \
+            --git-modified-only "origin/${BASE_REF}" \
             --exclude-config .github/workflows/scripts/copyright_excludes.txt
 
       - name: Check copyright headers (push to main)
         if: github.event_name == 'push'
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
           python3 .github/workflows/scripts/check_copyright.py . \
-            --git-modified-only ${{ github.event.before }} \
+            --git-modified-only "${BEFORE_SHA}" \
             --exclude-config .github/workflows/scripts/copyright_excludes.txt
