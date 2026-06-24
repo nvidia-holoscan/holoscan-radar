@@ -21,21 +21,9 @@
       "tested_versions": ["4.3.0"]
     },
     "platforms": ["x86_64", "aarch64"],
-    "tags": ["TODO: add tags"],
-    "source_repository": "https://github.com/TODO/holoscan-radar",
+    "tags": ["Radar", "Signal Processing", "GPU", "Accelerated Computing", "FMCW", "Pulse-Doppler", "Syntheic Aperture Radar"],
+    "source_repository": "https://github.com/nvidia-holoscan/holoscan-radar",
     "operator_names": ["radar_op"],
-    "dockerfile": "Dockerfile",
-    "binary_packages": {
-      "debian": "holoscan-radar",
-      "pypi": "holoscan-radar",
-      "install_commands": ["pip install holoscan-radar"]
-    },
-    "documentation": {
-      "readme": "README.md"
-    },
-    "testing": {
-      "cpp": "ctest",
-      "python": "pytest"
-    }
+    "dockerfile": "Dockerfile"
   }
 }

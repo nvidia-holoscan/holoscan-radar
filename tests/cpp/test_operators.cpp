@@ -10,9 +10,6 @@
 #include <holoscan/holoscan.hpp>
 #include <radar_op/radar_op.hpp>
 
-// Convenience alias for holoscan::radar — use in real tests.
-namespace mm = holoscan::radar;
-
 // TODO: implement minimal Application wrappers that exercise your operator,
 // then write test functions that construct and run those apps and assert on results.
 

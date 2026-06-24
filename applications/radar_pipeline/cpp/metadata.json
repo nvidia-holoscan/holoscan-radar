@@ -1,0 +1,34 @@
+{
+    "$schema": "urn:holohub:application:v1",
+    "application": {
+        "name": "radar_pipeline",
+        "authors": [
+            {
+                "name": "Holoscan Team",
+                "affiliation": "NVIDIA"
+            }
+        ],
+        "language": ["C++"],
+        "version": "0.1.0",
+        "changelog": {
+            "0.1.0": "Initial Release"
+        },
+        "holoscan_sdk": {
+            "minimum_required_version": "4.3.0",
+            "tested_versions": ["4.3.0"]
+        },
+        "platforms": ["x86_64", "aarch64"],
+        "tags": ["Radar", "Signal Processing", "GPU", "Accelerated Computing", "FMCW", "Pulse-Doppler", "Syntheic Aperture Radar"],
+        "ranking": 3,
+        "requirements": {},
+        "default_mode": "default",
+        "modes": {
+			"default": {
+				"run": {
+					"command": "<holohub_app_bin>/radar_pipeline",
+					"workdir": "holohub_app_bin"
+				}
+			}
+        }
+    }
+}

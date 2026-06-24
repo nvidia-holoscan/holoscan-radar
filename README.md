@@ -1,8 +1,8 @@
-# radar
+# Holoscan Radar
 
-Accelerated radar signal processing operators for the Holoscan ecosystem
+Accelerated radar signal processing operators for the Holoscan ecosystem.
 
-A **Holoscan Module** — a self-contained, redistributable library that extends
+Holoscan Radar is a **Holoscan Module** — a self-contained, redistributable library that extends
 [Holoscan SDK](https://developer.nvidia.com/holoscan-sdk) with reusable operators under the
 `holoscan.radar` namespace.
 
@@ -82,14 +82,14 @@ int main() { holoscan::make_application<MyApp>()->run(); }
 | Requirement | Version |
 |---|---|
 | Holoscan SDK | ≥ 4.3.0 |
-| CUDA Toolkit | 13.x (matches the Holoscan SDK CUDA pin; the dev `Dockerfile` uses `cuda13-dgpu`) |
-| CMake | ≥ 3.24 |
-| C++ compiler | C++17 (GCC 11+) |
+| CUDA Toolkit | 13.x |
+| CMake | ≥ 3.31 |
+| C++ compiler | ≥ C++17 (GCC 11+) |
 | pybind11 | ≥ 2.11 |
-| Python | 3.10–3.13 |
+| Python | 3.10 - 3.13 |
 
 ```bash
-cmake -S . -B build -DBUILD_ALL=ON -DRADAR_BUILD_TESTING=ON
+cmake -S . -B build -DBUILD_ALL=ON -DHOLOSCAN_RADAR_BUILD_TESTING=ON
 cmake --build build -j$(nproc)
 ```
 
@@ -103,18 +103,14 @@ cmake --build build -j$(nproc)
 
 Or, without the HoloHub CLI:
 
-
-
 ```bash
 # C++ (GTest via CTest)
 ctest --test-dir build --output-on-failure -L unit
 ```
 
-
-
 ```bash
 # Python (pytest)
-PYTHONPATH=build/python${PYTHONPATH:+:$PYTHONPATH} RADAR_BUILD_DIR=build pytest tests/python/ -v
+PYTHONPATH=build/python${PYTHONPATH:+:$PYTHONPATH} HOLOSCAN_RADAR_BUILD_DIR=build pytest tests/python/ -v
 ```
 
 `PYTHONPATH` is **prepended** (with `${PYTHONPATH:+:$PYTHONPATH}`) so that an

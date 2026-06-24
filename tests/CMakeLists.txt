@@ -23,7 +23,7 @@ add_test(
 # SKIP_RETURN_CODE 5 is the safety net for the env-broken case where the
 # holoscan SDK still isn't importable (pytest collects zero items, exits 5).
 set_tests_properties(pytest PROPERTIES
-    ENVIRONMENT "RADAR_BUILD_DIR=${CMAKE_BINARY_DIR}"
-    ENVIRONMENT_MODIFICATION "PYTHONPATH=path_list_prepend:${RADAR_PYTHON_ROOT}"
+    ENVIRONMENT "HOLOSCAN_RADAR_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    ENVIRONMENT_MODIFICATION "PYTHONPATH=path_list_prepend:${HOLOSCAN_RADAR_PYTHON_ROOT}"
     SKIP_RETURN_CODE 5
     LABELS "python")

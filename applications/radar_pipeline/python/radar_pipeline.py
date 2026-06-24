@@ -5,7 +5,7 @@
 # TODO: replace the stub with your actual pipeline topology.
 #
 # Run with:
-#   RADAR_BUILD_DIR=build \
+#   HOLOSCAN_RADAR_BUILD_DIR=build \
 #   PYTHONPATH=build/python${PYTHONPATH:+:$PYTHONPATH} \
 #   python applications/radar_pipeline/radar_pipeline.py
 
@@ -22,6 +22,8 @@ class RadarPipelineApp(Application):
         # TODO: instantiate and connect your operators, e.g.:
         op = RadarOp(self, name="radar_op")  # noqa: F841 (wire up via add_flow below)
         # self.add_flow(source, op, {("out", "in")})
+
+        logging.info("TODO: RadarPipelineApp is not yet implemented")
 
 
 if __name__ == "__main__":

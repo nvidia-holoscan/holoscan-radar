@@ -8,22 +8,27 @@
                 "affiliation": "NVIDIA"
             }
         ],
-        "language": ["C++", "Python"],
+        "language": ["Python"],
         "version": "0.1.0",
         "changelog": {
-            "0.1.0": "TODO: describe this example application"
+            "0.1.0": "Initial Release"
         },
         "holoscan_sdk": {
             "minimum_required_version": "4.3.0",
             "tested_versions": ["4.3.0"]
         },
         "platforms": ["x86_64", "aarch64"],
-        "tags": ["TODO: add tags"],
+        "tags": ["Radar", "Signal Processing", "GPU", "Accelerated Computing", "FMCW", "Pulse-Doppler", "Syntheic Aperture Radar"],
         "ranking": 3,
         "requirements": {},
-        "run": {
-            "command": "<holohub_app_bin>/radar_pipeline",
-            "workdir": "holohub_app_bin"
+        
+        "modes": {
+			"default": {
+				"run": {
+					"command": "python3 <holohub_app_source>/radar_pipeline.py",
+					"workdir": "holohub_app_bin"
+				}
+			}
         }
     }
 }

@@ -11,14 +11,14 @@
         "language": ["C++", "Python"],
         "version": "0.1.0",
         "changelog": {
-            "0.1.0": "TODO: describe what this operator does"
+            "0.1.0": "Initial Release"
         },
         "holoscan_sdk": {
             "minimum_required_version": "4.3.0",
             "tested_versions": ["4.3.0"]
         },
         "platforms": ["x86_64", "aarch64"],
-        "tags": ["Development"],
+        "tags": ["Radar", "Signal Processing", "GPU", "Accelerated Computing", "FMCW", "Pulse-Doppler", "Syntheic Aperture Radar"],
         "ranking": 3,
         "requirements": {}
     }

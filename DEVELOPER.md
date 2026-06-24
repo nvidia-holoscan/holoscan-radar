@@ -55,7 +55,7 @@ checkout for host-side CLI development.
 ## Building without the wrapper
 
 ```bash
-cmake -S . -B build -DBUILD_ALL=ON -DRADAR_BUILD_TESTING=ON
+cmake -S . -B build -DBUILD_ALL=ON -DHOLOSCAN_RADAR_BUILD_TESTING=ON
 cmake --build build -j"$(nproc)"
 ```
 
@@ -70,7 +70,7 @@ ctest --test-dir build --output-on-failure -L unit
 Run Python tests:
 
 ```bash
-RADAR_BUILD_DIR=build \
+HOLOSCAN_RADAR_BUILD_DIR=build \
 PYTHONPATH=build/python${PYTHONPATH:+:$PYTHONPATH} \
 pytest tests/python/ -v
 ```
@@ -112,7 +112,7 @@ python -m build --wheel
 | Repository folder | `holoscan-<slug>` (kebab) | `holoscan-radar` |
 | Debian package | `holoscan-<slug>` (kebab) | `holoscan-radar` |
 | PyPI package | `holoscan-<slug>` (kebab) | `holoscan-radar` |
-| CMake option prefix | `UPPER_SNAKE` | `RADAR_BUILD_TESTING` |
+| CMake option prefix | `UPPER_SNAKE` | `HOLOSCAN_RADAR_BUILD_TESTING` |
 
 ---
 

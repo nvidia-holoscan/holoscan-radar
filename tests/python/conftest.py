@@ -11,7 +11,7 @@
 import os
 
 build_dir = os.environ.get(
-    "RADAR_BUILD_DIR",
+    "HOLOSCAN_RADAR_BUILD_DIR",
     os.path.join(os.path.dirname(__file__), "..", "..", "build"),
 )
 
