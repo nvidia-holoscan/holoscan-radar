@@ -1,0 +1,29 @@
+{
+  "$schema": "urn:holohub:module:v2",
+  "module": {
+    "name": "holoscan-radar",
+    "version": "0.1.0",
+    "description": "Accelerated radar signal processing operators for the Holoscan ecosystem",
+    "authors": [
+      {
+        "name": "Holoscan Team",
+        "affiliation": "NVIDIA"
+      }
+    ],
+    "license": "Apache-2.0",
+    "language": ["C++", "Python"],
+    "namespace": {
+      "cpp": "holoscan::radar",
+      "python": "holoscan.radar"
+    },
+    "holoscan_sdk": {
+      "minimum_required_version": "4.3.0",
+      "tested_versions": ["4.3.0"]
+    },
+    "platforms": ["x86_64", "aarch64"],
+    "tags": ["Radar", "Signal Processing", "GPU", "Accelerated Computing", "FMCW", "Pulse-Doppler", "Synthetic Aperture Radar"],
+    "source_repository": "https://github.com/nvidia-holoscan/holoscan-radar",
+    "operator_names": ["radar_op"],
+    "dockerfile": "Dockerfile"
+  }
+}
