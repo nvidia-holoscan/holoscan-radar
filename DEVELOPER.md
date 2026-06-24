@@ -39,7 +39,7 @@ defaults. On first run it installs `holoscan-cli` via pip if it isn't already im
 (internet required); subsequent runs reuse the installed copy.
 
 | Command | What it does |
-|---|---|
+| --- | --- |
 | `./holohub run-container` | Build and start the development container |
 | `./holohub build radar_pipeline` | Configure and build the example pipeline inside the container |
 | `./holohub run radar_pipeline` | Configure, build, and run the example pipeline inside the container |
@@ -62,13 +62,11 @@ cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
 cmake --build build -j"$(nproc)"
 ```
 
-
 Run C++ tests:
 
 ```bash
 ctest --test-dir build --output-on-failure -L unit
 ```
-
 
 Run Python tests:
 
@@ -87,7 +85,7 @@ pytest tests/python/ -v
 wheel packaging. Key fields to update before publishing:
 
 | Field | Purpose |
-|---|---|
+| --- | --- |
 | `[project].name` | PyPI package name — should match `metadata.json:module.binary_packages.pypi` |
 | `[project].version` | Sync with `metadata.json:module.version` |
 | `[project].description` | Short description shown on PyPI |
@@ -106,7 +104,7 @@ python -m build --wheel
 ## Naming conventions
 
 | Context | Convention | Example |
-|---|---|---|
+| --- | --- | --- |
 | Python import / C++ namespace | `snake_case` | `holoscan.radar` |
 | Repository folder | `holoscan-<slug>` (kebab) | `holoscan-radar` |
 | Debian package | `holoscan-<slug>` (kebab) | `holoscan-radar` |

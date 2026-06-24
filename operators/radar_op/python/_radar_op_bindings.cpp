@@ -4,14 +4,14 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <memory>
+#include <string>
+
 #include <holoscan/core/condition.hpp>
 #include <holoscan/core/fragment.hpp>
 #include <holoscan/core/operator.hpp>
 #include <holoscan/core/operator_spec.hpp>
 #include <holoscan/core/resource.hpp>
-
-#include <memory>
-#include <string>
 
 #include <radar_op/radar_op.hpp>
 
@@ -22,7 +22,8 @@ namespace holoscan::radar {
 // Forward optional Condition / Resource positional args from py::args onto the
 // operator. Takes a raw Operator* — calling shared_from_this() inside the
 // constructor doesn't work because the object isn't yet owned by a shared_ptr.
-static void add_conditions_and_resources(holoscan::Operator* op, const py::args& args) {
+static void add_conditions_and_resources(holoscan::Operator* op,
+                                         const py::args& args) {
   for (const auto& item : args) {
     auto obj = py::cast<py::object>(item);
     try {
@@ -33,8 +34,8 @@ static void add_conditions_and_resources(holoscan::Operator* op, const py::args&
       op->add_arg(obj.cast<std::shared_ptr<holoscan::Resource>>());
     } catch (const py::cast_error&) {
       HOLOSCAN_LOG_WARN(
-          "Operator '{}': positional arg of type '{}' is neither a Condition nor a Resource — "
-          "add_arg skipped.",
+          "Operator '{}': positional arg of type '{}' is neither a "
+          "Condition nor a Resource — add_arg skipped.",
           op->name(),
           py::str(obj.get_type()).cast<std::string>());
     }
@@ -63,7 +64,8 @@ class PyRadarOp : public RadarOp {
 }  // namespace holoscan::radar
 
 PYBIND11_MODULE(_radar_op, m) {
-  using namespace holoscan::radar;
+  using holoscan::radar::PyRadarOp;
+  using holoscan::radar::RadarOp;
 
   m.doc() = "RadarOp Python bindings";
 

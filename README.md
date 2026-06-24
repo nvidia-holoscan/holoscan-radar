@@ -23,12 +23,11 @@ Holoscan Radar is a **Holoscan Module** — a self-contained, redistributable li
 
 ## Operators
 
-| Operator | Implementation | Ports | Parameters |
-|---|---|---|---|
-| `RadarOp` | C++ + pybind11 | TODO | TODO |
+| Operator  | Implementation | Ports | Parameters |
+| --------- | -------------- | ----- | ---------- |
+| `RadarOp` | C++ + pybind11 | TODO  | TODO       |
 
-**Namespace**
-
+### Namespace
 
 - C++: `holoscan::radar`
 
@@ -54,8 +53,6 @@ class MyApp(Application):
 MyApp().run()
 ```
 
-
-
 ### C++
 
 ```cpp
@@ -73,14 +70,12 @@ class MyApp : public holoscan::Application {
 int main() { holoscan::make_application<MyApp>()->run(); }
 ```
 
-
-
 ---
 
 ## Building from Source (without HoloHub CLI)
 
 | Requirement | Version |
-|---|---|
+| --- | --- |
 | Holoscan SDK | ≥ 4.3.0 |
 | CUDA Toolkit | 13.x |
 | CMake | ≥ 3.31 |

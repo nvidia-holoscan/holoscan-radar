@@ -21,7 +21,7 @@
         "tags": ["Radar", "Signal Processing", "GPU", "Accelerated Computing", "FMCW", "Pulse-Doppler", "Synthetic Aperture Radar"],
         "ranking": 3,
         "requirements": {},
-        
+
         "modes": {
 			"default": {
 				"run": {

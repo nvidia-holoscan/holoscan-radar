@@ -15,12 +15,12 @@ import pytest
 # importorskip("holoscan.radar") at module level — that
 # would mask an actual build/import failure of *our* module as a "Skipped"
 # result, and CTest would silently report success-with-zero-tests (exit code 5).
-pytest.importorskip("holoscan", reason="holoscan SDK not installed", exc_type=ImportError)
-
-
-EXPECTED_OPERATORS = (
-    "RadarOp",
+pytest.importorskip(
+    "holoscan", reason="holoscan SDK not installed", exc_type=ImportError
 )
+
+
+EXPECTED_OPERATORS = ("RadarOp",)
 
 
 @pytest.mark.parametrize("operator_name", EXPECTED_OPERATORS)

@@ -15,7 +15,8 @@ class RadarOp : public holoscan::Operator {
   RadarOp() = default;
 
   void setup(OperatorSpec& spec) override;
-  void compute(InputContext& op_input, OutputContext& op_output, ExecutionContext& /*context*/) override;
+  void compute(InputContext& op_input, OutputContext& op_output,
+               ExecutionContext& /*context*/) override;
 
  private:
   // TODO: declare parameters, e.g.:

@@ -3,7 +3,8 @@
 //
 // GTest functional tests for RadarOp.
 // TODO: replace the placeholder with real pipeline coverage.
-// See holoscan-example-module/tests/cpp/test_operators.cpp for a worked example.
+// See holoscan-example-module/tests/cpp/test_operators.cpp for a worked
+// example.
 
 #include <gtest/gtest.h>
 
@@ -11,7 +12,8 @@
 #include <radar_op/radar_op.hpp>
 
 // TODO: implement minimal Application wrappers that exercise your operator,
-// then write test functions that construct and run those apps and assert on results.
+// then write test functions that construct and run those apps and assert
+// on results.
 
 TEST(RadarOpTest, Placeholder) {
   // TODO: replace with a real pipeline test.

@@ -9,4 +9,3 @@ target_link_libraries(radar_pipeline PRIVATE
 
 target_include_directories(radar_pipeline PRIVATE
     ${PROJECT_SOURCE_DIR}/operators)
-

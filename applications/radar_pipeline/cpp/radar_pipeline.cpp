@@ -18,7 +18,7 @@ class RadarPipelineApp : public holoscan::Application {
     // TODO: instantiate and connect your operators, e.g.:
     auto op = make_operator<mm::RadarOp>("radar_op");
     // add_flow(source, op, ('out', 'in'));
-    
+
     HOLOSCAN_LOG_INFO("TODO: RadarPipelineApp is not yet implemented");
   }
 };
