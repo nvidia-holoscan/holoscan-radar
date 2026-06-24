@@ -66,7 +66,7 @@ endif()
 # ---------------------------------------------------------------------------
 
 set(HOLOSCAN_RADAR_PYTHON_ROOT
-    ${CMAKE_BINARY_DIR}/python)
+    ${CMAKE_BINARY_DIR}/python/lib)
 set(HOLOSCAN_RADAR_PYTHON_PKG_DIR
     ${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan/radar)
 
