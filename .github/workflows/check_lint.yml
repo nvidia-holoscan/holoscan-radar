@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Check linting
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check-lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history is required so the copyright checker can diff
+          # against the base branch (pull_request) or a prior commit (push).
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install pre-commit
+        run: pip install pre-commit==4.5.1
+
+      # The check-copyright pre-commit hook uses --git-modified-only with no
+      # ref, which finds zero uncommitted files in a clean CI checkout (no-op).
+      # Skip it here and run it explicitly below with the correct ref.
+      - name: Run pre-commit hooks
+        run: pre-commit run --all-files
+        env:
+          SKIP: check-copyright
+
+      - name: Check copyright headers (pull request)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          python3 .github/workflows/scripts/check_copyright.py . \
+            --git-modified-only "origin/${BASE_REF}" \
+            --exclude-config .github/workflows/scripts/copyright_excludes.txt
+
+      - name: Check copyright headers (push to main)
+        if: github.event_name == 'push'
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          python3 .github/workflows/scripts/check_copyright.py . \
+            --git-modified-only "${BEFORE_SHA}" \
+            --exclude-config .github/workflows/scripts/copyright_excludes.txt
