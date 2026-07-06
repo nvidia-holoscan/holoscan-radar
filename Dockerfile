@@ -8,7 +8,7 @@
 # Extends the Holoscan SDK image with the build tools needed to configure,
 # compile, and test the module from a live source mount. No source is copied
 # into the image; the project tree is bind-mounted by the holoscan-cli at
-# /workspace/radar when the container is launched.
+# /workspace/holoscan-radar when the container is launched.
 #
 # Build & run via the holoscan-cli wrapper (recommended):
 #   ./holohub run-container
@@ -16,7 +16,8 @@
 # Manual build (without the CLI):
 #   docker build -t holoscan-radar .
 
-ARG BASE_IMAGE=nvcr.io/nvidia/clara-holoscan/holoscan:v4.3.0-cuda13-dgpu
+# NGC publishes v4.3.0 as the cuda13 tag (no -dgpu variant at this version).
+ARG BASE_IMAGE=nvcr.io/nvidia/clara-holoscan/holoscan:v4.3.0-cuda13
 FROM ${BASE_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive

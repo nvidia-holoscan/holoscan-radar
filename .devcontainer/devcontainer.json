@@ -1,0 +1,47 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Dev container for holoscan-radar.
+//
+// Reuses the module's root Dockerfile (the same image `./holohub run-container`
+// builds) and mirrors the holoscan-cli layout so paths match whether you work
+// in this dev container or via the CLI:
+//   * the repo is bind-mounted at /workspace/holoscan-radar,
+//   * the data dir lands at /workspace/holoscan-radar/data.
+//
+// Per-developer data/storage directory:
+//   export HOLOSCAN_RADAR_DATA_DIR=/mnt/scratch/radar-data on the host before
+//   opening the container (see .devcontainer/README.md).
+{
+  "name": "holoscan-radar",
+
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "dev",
+  "workspaceFolder": "/workspace/holoscan-radar",
+
+  // Ensure the host data-dir source exists before compose bind-mounts it.
+  "initializeCommand": "bash ${localWorkspaceFolder}/.devcontainer/initialize-host.sh ${localWorkspaceFolder}",
+
+  "hostRequirements": {
+    "gpu": "optional"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "ms-python.python",
+        "charliermarsh.ruff"
+      ],
+      "settings": {
+        "cmake.sourceDirectory": "/workspace/holoscan-radar",
+        "cmake.buildDirectory": "/workspace/holoscan-radar/build",
+        "cmake.configureArgs": [
+          "-DHOLOSCAN_RADAR_BUILD_TESTING=ON"
+        ],
+        "python.defaultInterpreterPath": "/usr/bin/python3"
+      }
+    }
+  }
+}
