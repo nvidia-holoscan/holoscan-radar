@@ -5,5 +5,8 @@
 # Add one add_holohub_application() call per application; declare operator
 # dependencies via DEPENDS OPERATORS so they auto-enable when the app is built.
 add_holohub_application(radar_pipeline
-    DEPENDS OPERATORS radar_op
+    DEPENDS OPERATORS
+        fmcw_range_processor_op
+        clutter_filter_op
+        fmcw_doppler_processor_op
 )

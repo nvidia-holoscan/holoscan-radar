@@ -11,64 +11,78 @@ Holoscan Radar is a **Holoscan Module** — a self-contained, redistributable li
 ## Quick Start
 
 ```bash
-# 1. Run the Python demo application
-./holohub run radar_pipeline --language python
-
-# 2. Run the C++ demo application
+# Run the C++ demo application (synthetic SISO FMCW chain)
 ./holohub run radar_pipeline
-
 ```
 
 ---
 
 ## Operators
 
-| Operator  | Implementation | Ports | Parameters |
-| --------- | -------------- | ----- | ---------- |
-| `RadarOp` | C++ + pybind11 | TODO  | TODO       |
+Each operator's header documents its full port/parameter contract; shared
+conventions live in [`operators/common/README.md`](operators/common/README.md)
+and the group overview in [`operators/fmcw/README.md`](operators/fmcw/README.md).
+Precision is fixed per instance by the template parameter (`float` →
+complex64, `double` → complex128).
+
+| Operator | Implementation | Function |
+| --- | --- | --- |
+| `FMCWRangeProcessorOp<T>` | C++/CUDA (MatX) | Range compression: optional software dechirp, windowed fast-time FFT; `range_bins` axis output |
+| `ClutterFilterOp<T>` | C++/CUDA (MatX) | Slow-time clutter suppression: mean subtraction or 1st/2nd-order MTI delay cancellers |
+| `FMCWDopplerProcessorOp<T>` | C++/CUDA (MatX) | Doppler compression: windowed slow-time FFT, zero-Doppler centering; `velocity_bins` axis output |
+| `FMCWRangeDopplerProcessorOp<T>` | C++/CUDA (MatX) | Fused range + optional clutter + Doppler in one node (bitwise parity with the split chain) |
+
+Python bindings are deferred to a later phase.
 
 ### Namespace
 
 - C++: `holoscan::radar`
 
-- Python: `holoscan.radar`
+- Python: `holoscan.radar` (placeholder until bindings land)
 
 ---
 
 ## Usage
 
-### Python
-
-```python
-from holoscan.core import Application
-from holoscan.radar import RadarOp
-
-
-class MyApp(Application):
-    def compose(self):
-        op = RadarOp(self, name="radar_op")
-        # TODO: connect operators and add_flow calls
-
-
-MyApp().run()
-```
-
 ### C++
 
 ```cpp
 #include <holoscan/holoscan.hpp>
-#include <radar_op/radar_op.hpp>
+
+#include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
+#include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
+#include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 
 class MyApp : public holoscan::Application {
  public:
   void compose() override {
-    auto op = make_operator<holoscan::radar::RadarOp>("radar_op");
-    // TODO: connect operators
+    using holoscan::Arg;
+    namespace radar = holoscan::radar;
+
+    radar::FMCWWaveformDescriptor waveform;
+    waveform.carrier_frequency = 77e9;
+    waveform.bandwidth = 150e6;
+    waveform.chirp_duration = 20e-6;
+    waveform.sample_rate = 12.8e6;
+    waveform.chirp_repetition_interval = 25e-6;
+
+    auto range = make_operator<radar::FMCWRangeProcessorOp<float>>(
+        "range", Arg("waveform") = waveform);
+    auto clutter = make_operator<radar::ClutterFilterOp<float>>("clutter");
+    auto doppler = make_operator<radar::FMCWDopplerProcessorOp<float>>(
+        "doppler", Arg("waveform") = waveform);
+
+    // add_flow(source, range, {{"adc_cube", "adc_cube"}}); ...
+    add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
+    add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
   }
 };
 
 int main() { holoscan::make_application<MyApp>()->run(); }
 ```
+
+See [`applications/radar_pipeline`](applications/radar_pipeline) for the
+complete example, including the synthetic ADC source and peak reporting.
 
 ---
 

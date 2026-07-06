@@ -15,18 +15,26 @@ holoscan-radar/
 ├── pyproject.toml                  # Python packaging metadata (scikit-build-core)
 ├── metadata.json                   # Module-level metadata (schema: urn:holohub:module:v2)
 ├── operators/
-│   └── radar_op/
-│       ├── radar_op.cpp / .hpp  # Operator implementation
-│       └── metadata.json           # Operator-level metadata
+│   ├── common/                     # Shared radar_common library
+│   │   └── radar_common/           # Organized by dependency layer:
+│   │       ├── descriptors/        #   shared config-plane types (STL only)
+│   │       ├── dsp/                #   host-side signal math
+│   │       ├── tensor/             #   tensor/DLPack/MatX plumbing
+│   │       └── sdk/                #   Holoscan-integration glue
+│   └── fmcw/                       # FMCW signal-processing group
+│       └── <operator_name>/
+│           ├── <operator_name>.hpp / .cu   # Operator + stage kernel
+│           ├── <operator_name>_stage.hpp   # (stage header name varies)
+│           └── metadata.json       # Operator-level metadata
 ├── applications/
 │   └── radar_pipeline/
 │       └── cpp/
-│           ├── radar_pipeline.cpp   # Example pipeline
+│           ├── radar_pipeline.cpp   # Example SISO pipeline
 │           └── metadata.json        # Application-level metadata
 ├── python/holoscan/radar/
-│   └── __init__.py                 # Re-exports operators for `from holoscan.radar import ...`
+│   └── __init__.py                 # Placeholder (bindings deferred)
 └── tests/
-    ├── cpp/                        # GTest suite (C++ modules only)
+    ├── cpp/                        # GTest suite (+ utils/: simulator, harness)
     └── python/                     # pytest suite
 ```
 

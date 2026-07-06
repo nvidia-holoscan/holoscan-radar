@@ -27,8 +27,7 @@
       "fmcw_range_processor_op",
       "clutter_filter_op",
       "fmcw_doppler_processor_op",
-      "fmcw_range_doppler_processor_op",
-      "radar_op"
+      "fmcw_range_doppler_processor_op"
     ],
     "dockerfile": "Dockerfile"
   }

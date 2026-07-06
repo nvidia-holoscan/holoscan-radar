@@ -38,14 +38,8 @@ radar_add_test(test_fmcw_range_doppler_processor
     holoscan::fmcw_range_processor_op
     holoscan::clutter_filter_op
     holoscan::fmcw_doppler_processor_op)
-
-# radar_op template placeholder test — removed together with radar_op once
-# the first real operator lands (docs/planning/STATUS.md).
-add_executable(test_operators test_operators.cpp)
-target_link_libraries(test_operators PRIVATE
-    holoscan::radar_op
-    holoscan::core
-    GTest::gtest_main)
-target_include_directories(test_operators PRIVATE
-    ${PROJECT_SOURCE_DIR}/operators)
-gtest_discover_tests(test_operators PROPERTIES LABELS "unit")
+radar_add_test(test_pipeline
+    holoscan::fmcw_range_processor_op
+    holoscan::clutter_filter_op
+    holoscan::fmcw_doppler_processor_op
+    holoscan::fmcw_range_doppler_processor_op)

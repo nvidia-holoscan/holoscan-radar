@@ -21,10 +21,6 @@ add_subdirectory(common)
 # CMakeLists.txt for grouped operators).
 add_subdirectory(fmcw)
 
-# Template placeholder — kept until the first real operator lands with tests
-# (see docs/planning/STATUS.md — settled decisions), then removed.
-add_holohub_operator(radar_op)
-
 # Install the aggregate __init__.py alongside each operator's built module.
 configure_file(
     ${PROJECT_SOURCE_DIR}/python/holoscan/radar/__init__.py

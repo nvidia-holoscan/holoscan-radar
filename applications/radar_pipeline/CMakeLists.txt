@@ -2,4 +2,5 @@
 # SPDX-License-Identifier: Apache-2.0
 
 add_subdirectory(cpp)
-add_subdirectory(python)
+# The Python variant returns when the Python bindings land (deferred to a
+# later phase).

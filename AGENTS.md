@@ -2,7 +2,7 @@
 
 GPU radar signal-processing operator library for the NVIDIA Holoscan SDK: Holoscan operators implemented in C++/CUDA on [MatX](https://github.com/NVIDIA/MatX), composed into pipelines purely by port connections — no glue code between operators.
 
-**Current phase: FMCW operator API lockdown.** The operator contracts (ports, shapes, dtypes, parameters) are fully specified in `docs/planning/`; implementation lands against them. The only operator code in the tree today is the `radar_op` template placeholder.
+**Current phase: FMCW implementation.** The operator contracts (ports, shapes, dtypes, parameters) are fully specified in `docs/planning/`; implementation lands against them. The signal-processing group (`operators/fmcw/`: range, clutter, Doppler, fused range-Doppler) and the shared `operators/common/` library are implemented; detection, clustering, angle estimation, and MIMO marshaling are next.
 
 ## Source of truth
 
@@ -36,8 +36,9 @@ Rules that follow from "lockdown":
 | --- | --- |
 | `docs/planning/` | The specs above — the work queue and contract source of truth |
 | `operators/` | Operator libraries, one dir per group, gated by `add_holohub_operator()` / `OP_<name>` CMake options |
-| `operators/radar_op/` | Template placeholder operator — kept as the scaffolding exemplar until the first real operator lands |
-| `applications/radar_pipeline/` | Example pipeline app (C++ and Python) |
+| `operators/common/` | Shared `radar_common` library: descriptors, window generation, config cache, tensor/MatX utilities |
+| `operators/fmcw/` | FMCW signal-processing operators (+ future MIMO marshaling) |
+| `applications/radar_pipeline/` | Example SISO pipeline app (C++; Python variant returns with the bindings) |
 | `python/holoscan/radar/` | Python package root; re-exports operators from per-operator pybind11 submodules |
 | `tests/cpp/`, `tests/python/` | GTest and pytest suites |
 | `pkg/` | Debian/wheel packaging (`add_holohub_package`) |

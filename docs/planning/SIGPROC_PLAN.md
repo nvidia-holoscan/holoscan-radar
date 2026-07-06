@@ -6,6 +6,15 @@ Implementation plan for the four FMCW signal-processing operators on branch
 data structures); code must match them exactly. Test requirements come from
 [`TESTING.md`](TESTING.md).
 
+**Status (2026-07-06): all four phases complete** on `deustice/sigproc-ops`.
+Notable deltas from the plan as written: an SDK 5.x migration was attempted
+and rolled back mid-effort (the pre-release lacks the operator framework;
+the module stays on 4.3); [live] overrides were clarified as sticky in
+`OPERATOR_API.md` (contract clarification); the split-vs-fused parity
+measured bitwise-identical (delta exactly 0.0); YAML converters remain
+deferred (custom parameter types register direct-any argument setters via
+`radar_common/arg_setters.hpp` until `from_config()` support lands).
+
 ## Scope and sequencing
 
 1. **Phase 0 — Foundation** (sequential): shared `operators/common/` library,
@@ -121,15 +130,18 @@ Decisions already applied to the planning docs (2026-07-06):
 New files (as landed):
 
 - `operators/common/`: `CMakeLists.txt` (STATIC lib `radar_common` +
-  `holoscan::radar_common` alias, links `holoscan::core`),
-  `radar_common/{enums.hpp, window_spec.hpp, fmcw_waveform_descriptor.hpp,
-  window.{hpp,cpp}, config_cache.hpp, live_param.hpp, tensor_utils.{hpp,cpp},
-  dlpack_buffer.hpp, matx_utils.hpp}`. `matx_utils.hpp` is MatX-side
-  (include from `.cu` only); `dlpack_buffer.hpp` wraps a cudaMalloc device
-  buffer as a full-rank `holoscan::Tensor` (dynamic-rank outputs — MatX
-  tensors are compile-time-rank, so kernels use collapsed 3-D views over the
-  same memory). YAML converters deferred (not needed by the locked contract;
-  add with `from_config()` support later).
+  `holoscan::radar_common` alias, links `holoscan::core`), with
+  `radar_common/` organized by dependency layer:
+  `descriptors/{enums, window_spec, fmcw_waveform_descriptor}.hpp` (STL
+  only), `dsp/window.{hpp,cpp}` (host math), `tensor/{tensor_utils.{hpp,cpp},
+  dlpack_buffer.hpp, matx_utils.hpp}` (tensor/DLPack/MatX plumbing), and
+  `sdk/{override_param, config_cache, arg_setters}.hpp` (Holoscan glue).
+  `matx_utils.hpp` is MatX-side (include from `.cu` only);
+  `dlpack_buffer.hpp` wraps a cudaMalloc device buffer as a full-rank
+  `holoscan::Tensor` (dynamic-rank outputs — MatX tensors are
+  compile-time-rank, so kernels use collapsed 3-D views over the same
+  memory). YAML converters deferred (not needed by the locked contract; add
+  with `from_config()` support later).
 - `operators/fmcw/CMakeLists.txt` (fused op declared FIRST so its DEPENDS
   force-set precedes its dependencies' option() binding) + four operator dirs
   `operators/fmcw/{fmcw_range_processor_op, clutter_filter_op,
@@ -143,14 +155,18 @@ New files (as landed):
   `radar_op`'s, plus `matx::matx` + `holoscan::radar_common`, no `python/`
   subdir).
 - `tests/cpp/utils/{point_target_sim.hpp, bin_model.hpp, tensor_fixtures.hpp,
-  op_harness.hpp}`: analytic point-target simulator per `TESTING.md`
+  sdk_harness.hpp}`: analytic point-target simulator per `TESTING.md`
   (host-only, `std::complex<double>`, convention-free Cartesian scene,
   stop-and-hop, complex-IF / real-IF / pre-mixer outputs, seeded noise,
   ground truth out; no operator/MatX includes — independence guards against
   tautological tests); forward bin model; host↔device Tensor fixtures +
-  `RADAR_TEST_SKIP_IF_NO_GPU()`; single-operator `Application` harness
-  (`OpHarness`: playback source, per-port `ValueSourceOp<V>` live-override
-  feeds, capture sinks with optional-port support).
+  `RADAR_TEST_SKIP_IF_NO_GPU()`; radar-flavored glue over the SDK-native
+  operator test harness (`holoscan::test::OperatorTestHarness` +
+  `TestHarnessSourceOp`/`TestHarnessSinkOp`): TensorMap capture-to-host
+  validators and leading-tick [live]-override wiring. (An initial custom
+  `OpHarness` was replaced by the SDK harness;
+  `holoscan::ops::OperatorRunner` was evaluated and rejected — it requires
+  a running application's executor.)
 - `tests/cpp/test_common.cpp` (window generation incl. sidelobe checks,
   cache semantics, waveform descriptor, simulator cross-checks — fully
   implemented in Phase 0) + `tests/cpp/test_{fmcw_range_processor,

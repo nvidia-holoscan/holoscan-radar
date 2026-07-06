@@ -22,12 +22,11 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | Work item | Owner | Branch | State |
 | --- | --- | --- | --- |
 | Fill out `AGENTS.md` + this status file | deustice | `deustice/planning` | in review |
-| Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness | deustice | `deustice/sigproc-ops` | in progress |
+| Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness; `radar_op` placeholder removed and app/tests/package rewired | deustice | `deustice/sigproc-ops` | in review |
 
 ## Up next (unclaimed)
 
 Roughly in dependency order — claim by adding a row above:
 
-1. **C++ API skeletons** — supporting data structures + operator headers with `setup()` port/parameter declarations per `OPERATOR_API.md`, stub `compute()`, compilable; MatX/CUDA wired into CMake.
-2. **Simulator + test harness** — the analytic point-target simulator and test scaffolding per `TESTING.md`.
-3. **Operator implementations** — kernels against the locked contracts, per functional group.
+1. **Operator implementations, remaining groups** — detection & clustering, angle estimation, and MIMO marshaling kernels against the locked contracts (`operators/common/` supporting types `ArrayGeometry`, `AngleConvention`, `DDMCodeDescriptor`, `TXSchedule` land with their first consumer). The signal-processing group, the simulator + test harness, and the MatX/CUDA build wiring landed on `deustice/sigproc-ops`.
+2. **Python bindings** — pybind11 bindings for the implemented operators plus YAML converters for the shared descriptor types (restores `from_config()` and the Python example app).
