@@ -9,6 +9,11 @@ services:
         # Override the Holoscan SDK base image by exporting HOLOSCAN_RADAR_BASE_IMAGE
         # on the host; unset falls back to the Dockerfile-pinned default.
         BASE_IMAGE: ${HOLOSCAN_RADAR_BASE_IMAGE:-nvcr.io/nvidia/clara-holoscan/holoscan:v4.3.0-cuda13}
+        # Build the in-container `dev` user with the host user's ids so the
+        # bind-mounted source stays writable. initialize-host.sh writes these to
+        # .devcontainer/.env, which Compose auto-loads; defaults to 1000 otherwise.
+        DEV_UID: ${DEV_UID:-1000}
+        DEV_GID: ${DEV_GID:-1000}
     volumes:
       # Source-mount the repo; edits persist on the host.
       - ..:/workspace/holoscan-radar:cached

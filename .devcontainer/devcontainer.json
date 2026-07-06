@@ -19,7 +19,13 @@
   "service": "dev",
   "workspaceFolder": "/workspace/holoscan-radar",
 
-  // Ensure the host data-dir source exists before compose bind-mounts it.
+  // Work as the non-root `dev` user (team convention). Its UID/GID are baked to
+  // match the host user at build time, so no runtime UID remap is needed.
+  "remoteUser": "dev",
+  "updateRemoteUserUID": false,
+
+  // Ensure the host data-dir source exists and record host UID/GID (see script)
+  // before compose builds and bind-mounts.
   "initializeCommand": "bash ${localWorkspaceFolder}/.devcontainer/initialize-host.sh ${localWorkspaceFolder}",
 
   "hostRequirements": {

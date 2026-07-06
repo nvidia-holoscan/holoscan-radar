@@ -13,6 +13,29 @@ work here or through the `holohub` wrapper.
 - **Exposes the GPUs.** Compose sets `gpus: all` (requires the
   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)).
   On a GPU-less host, remove the `gpus:` line from `docker-compose.yml`.
+- **Runs as a non-root `dev` user** (team convention). Its UID/GID are built to
+  match your host account so the bind-mounted source stays writable — see below.
+
+## The `dev` user
+
+You work inside the container as `dev` (passwordless `sudo` available), not root.
+So that files written through the source mount keep your host ownership,
+[`initialize-host.sh`](initialize-host.sh) records your host `id -u`/`id -g` into
+`.devcontainer/.env`, and Compose bakes them into the image's `dev` user via the
+`DEV_UID`/`DEV_GID` build args. `.env` is per-developer and git-ignored; without it
+the ids default to `1000`.
+
+Passwordless `sudo` is enabled for `dev`, matching common dev-container practice.
+Treat the container as a development environment: code and tools you run inside it
+can escalate to root within the container.
+
+This non-root workflow is specific to the dev container. The
+`./holohub run-container` path intentionally keeps the Dockerfile's default root
+user for compatibility with the CLI and packaging flows, so files created through
+that path may have different ownership behavior on bind mounts.
+
+If your host UID/GID change, rebuild the container (*Dev Containers: Rebuild
+Container*) so the `dev` user is recreated with the new ids.
 
 ## Opening it
 

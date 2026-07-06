@@ -3,6 +3,7 @@
 build/
 data/
 .cursor/
+.devcontainer/.env
 _CPack_Packages/
 __pycache__/
 .cache/
