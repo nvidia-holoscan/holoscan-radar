@@ -264,7 +264,7 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 **Parameters:**
 
 - `range_window` **[live]** — WindowSpec {none, Hann, Hamming, Blackman, Blackman-Harris, Kaiser, Chebyshev, Taylor, flat_top, Tukey, custom}, coherent-gain normalized. Window applied along fast-time before the range FFT. Overriding to an unseen window rebuilds its coefficients and warns once; prior windows are cached. Default: none (rectangular — best resolution, ~−13 dB sidelobes).
-- `apply_dechirp` **[live]** — bool. Conjugate-multiply the input against the reference chirp along fast-time before windowing/FFT (for data not dechirped in hardware). Requires a `waveform` when `true`. Default: `false`.
+- `apply_dechirp` **[live]** — bool. Conjugate-multiply the input against the reference chirp along fast-time before windowing/FFT (for data not dechirped in hardware). Requires a `waveform` and complex-IF input when `true` — software dechirp produces complex samples, which is inconsistent with the real-IF `samples_per_chirp//2 + 1` output size, so real-IF input with `apply_dechirp = true` is an error. Default: `false`.
 - `waveform` **[live]** — FMCWWaveformDescriptor. Shared chirp descriptor; source for the dechirp reference and the `range_bins` axis. Overriding supports a waveform that changes between frames (the fused reference is cached, rebuilt only when the descriptor changes). Default: none (required when `apply_dechirp = true` and/or `range_bins` is used; unused otherwise).
 - `fft_norm` **[live]** — enum {backward, ortho, forward}. FFT normalization; `backward` (unnormalized forward) is the radar-standard, keeping coherent-integration gain visible. Default: backward.
 - `propagation_speed` **[live]** — float. Wave speed for the beat-frequency → range conversion (`range_bins` only). Default: speed of light ≈ 2.998e8 m/s.
@@ -304,7 +304,7 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 
 - `range_window` **[live]** — WindowSpec. Window along fast-time (range FFT). Overriding to an unseen window rebuilds its coefficients and warns once; cached. Default: none.
 - `doppler_window` **[live]** — WindowSpec. Window along the chirp axis (Doppler FFT). Overriding to an unseen window rebuilds its coefficients and warns once; cached. Default: none.
-- `apply_dechirp` **[live]** — bool. Software dechirp before the range FFT. Requires a `waveform` when `true`. Default: `false`.
+- `apply_dechirp` **[live]** — bool. Software dechirp before the range FFT. Requires a `waveform` and complex-IF input when `true` (same constraint as FMCWRangeProcessorOp). Default: `false`.
 - `clutter_filter` **[live]** — enum {none, mean_subtraction, single_delay, double_delay}. Optional inline clutter stage between the range and Doppler stages (same semantics as ClutterFilterOp `method`); the delay cancellers reduce `num_doppler` (downstream infers it). No setup cost. Default: none.
 - `waveform` **[live]** — FMCWWaveformDescriptor. Dechirp reference and the `range_bins` / `velocity_bins` axes. Override for a changing waveform. Default: none (required for software dechirp and/or those outputs).
 - `fft_norm` **[live]** — enum {backward, ortho, forward}. One normalization convention for both transforms. Default: backward.

@@ -12,9 +12,9 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 
 | Decision | Choice | Date |
 | --- | --- | --- |
-| Operator directory layout | Per functional group under `operators/` (signal processing, detection & clustering, angle estimation, MIMO marshaling) plus a shared `common/` library for the six supporting types | 2026-07-01 |
-| Python bindings for new operators | Deferred — bindings land with implementations, not with the API skeletons | 2026-07-01 |
-| `radar_op` template placeholder | Keep until the first real operator lands with bindings + tests, then remove and rewire the app/tests/package | 2026-07-01 |
+| Operator directory layout | Per functional group under `operators/`: `fmcw/` (signal processing + MIMO marshaling), `detection/`, `clustering/`, `angle_estimation/`, plus a shared `common/` library for the six supporting types | 2026-07-06 |
+| Python bindings for new operators | Deferred to a later phase — operators land C++-first with tests; bindings for the full operator set follow as a dedicated effort | 2026-07-06 |
+| `radar_op` template placeholder | Keep until the first real operator lands with tests (bindings deferred per the row above), then remove and rewire the app/tests/package | 2026-07-06 |
 | MatX + CUDA build wiring | Wire into the build from the start (not deferred to first kernel) | 2026-07-01 |
 
 ## In-flight work
@@ -22,6 +22,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | Work item | Owner | Branch | State |
 | --- | --- | --- | --- |
 | Fill out `AGENTS.md` + this status file | deustice | `deustice/planning` | in review |
+| Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness | deustice | `deustice/sigproc-ops` | in progress |
 
 ## Up next (unclaimed)
 
