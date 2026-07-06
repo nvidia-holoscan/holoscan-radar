@@ -7,6 +7,7 @@
 # translation units, so this target does not link MatX or CUDA.
 
 add_library(radar_common STATIC
+    radar_common/tensor/tensor_utils.cpp
     radar_common/dsp/window.cpp
 )
 add_library(holoscan::radar_common ALIAS radar_common)
