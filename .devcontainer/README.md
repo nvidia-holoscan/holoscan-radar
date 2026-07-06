@@ -48,12 +48,5 @@ the same path the `holohub` wrapper uses for `HOLOSCAN_CLI_DATA_DIR`.
 ## Overriding the base image
 
 The container is pinned to the SDK version in the [`Dockerfile`](../Dockerfile)
-(`BASE_IMAGE`). To build against a different Holoscan SDK image, export
-`HOLOSCAN_RADAR_BASE_IMAGE` on the host before opening the container:
-
-```bash
-export HOLOSCAN_RADAR_BASE_IMAGE=nvcr.io/nvidia/clara-holoscan/holoscan:v4.2.0-cuda13
-```
-
-The dev container uses the Dockerfile default. To change it, pass a different
-`BASE_IMAGE` build arg in `devcontainer.json`.
+(`BASE_IMAGE`). To build against a different Holoscan SDK image, pass a
+different `BASE_IMAGE` build arg in `devcontainer.json`.
