@@ -1,0 +1,195 @@
+# Holoscan Radar Module — Testing & Simulation Requirements
+
+## Purpose
+
+Defines what the FMCW operators must be tested against: (1) the **minimal simulator** — an analytic point-target signal model that produces raw ADC cubes with known ground truth — and (2) the **high-level, I/O-level tests** each operator must pass. This document stays at the interface level: it specifies *what property* each test asserts, not the fixtures, tolerances, or framework. Lower-level unit tests (kernel internals, numerical tolerances, boundary indexing) are deferred.
+
+## Test tiers
+
+- **Unit** — one operator, minimal synthetic input with a closed-form answer (a tone, a steering vector, a DC-across-chirps sequence). Most operators are fully checkable here without the simulator.
+- **Integration** — a chain (or full modality) fed by the simulator; assert that targets in produce the correct detections / velocities / angles out, within resolution.
+- **Statistical** — Monte-Carlo properties (CFAR false-alarm rate, DOA error vs. the Cramér-Rao bound). Called out per operator where relevant.
+
+This document lists the **high-level checks** across these tiers; exact fixtures and tolerances are a later step.
+
+---
+
+## Minimal simulator (analytic point-target signal model)
+
+The simulator is a **signal model, not a physics/EM solver**: it synthesizes the raw ADC cube by summing each point target's closed-form contribution over (tx, rx, chirp, fast-time sample), then adds noise. Cheap, deterministic, and its own correctness is easy to reason about.
+
+### Inputs it must accept
+
+- **Scene** — a list of point targets, each with a **Cartesian position** `(x, y, z)` (m) and **Cartesian velocity** `(vx, vy, vz)` (m/s) in the array-local frame, plus a complex amplitude (or RCS + a range law). The simulator derives range `R = ‖position‖`, radial velocity `v_r` (the velocity vector projected onto the line of sight), and look direction `û = position / ‖position‖`. Stationary clutter is just zero-velocity targets.
+- **Array geometry** — TX element positions and RX element positions (meters), in the array-local frame that the operators use.
+- **Waveform** — the fields of `FMCWWaveformDescriptor` (carrier frequency, bandwidth/slope, chirp duration, sample rate, PRI), plus `num_chirps` and `samples_per_chirp`.
+- **TX multiplexing** — SISO / SIMO / MIMO-TDM (a `TXSchedule`) / MIMO-DDM (a `DDMCodeDescriptor`).
+- **Noise** — additive complex Gaussian, configurable by SNR or noise power, with a seed.
+- **Output dtype** — complex IF (analytic) or real IF, to exercise both front-end paths.
+
+### Outputs it must produce
+
+- The **raw ADC cube** in the exact layout the front-end expects for the chosen modality — interleaved slow-time for TDM, per-chirp coded for DDM, `(…, N_rx, num_chirps, samples)` etc.
+- **Ground truth** alongside it: each target's derived **physical** quantities — range (m), radial velocity (m/s), look direction (Cartesian unit vector / direction cosines) — plus the expected virtual-array geometry for MIMO.
+  - **Not bin indices:** those depend on the processing configuration (FFT lengths, clutter-canceller chirp loss, `center_zero_doppler`, real-vs-complex range axis), which the simulator does not know.
+  - Tests therefore assert in the **physical domain** — map an operator's output bin back to physical units via its own `range_bins` / `velocity_bins` outputs and compare to ground truth within resolution (this also validates those axis outputs).
+  - A shared "forward bin model" helper, parameterized by the specific operator config, is available where an exact-bin assertion is wanted.
+  - Comparing an estimator's `(az, el)` to the ground-truth direction goes through that estimator's `AngleConvention`, or the estimator is run in the canonical / `direction_cosine` convention for a direct compare.
+
+### The signal model (per target, summed)
+
+With `R`, `v_r`, and `û` derived from each target's Cartesian position and velocity, the contribution for each (tx `m`, rx `n`, chirp `k`, sample `s`) is the product of:
+
+- a **fast-time beat phase** ∝ `R` (→ beat frequency via the sweep slope and sample rate),
+- a **slow-time Doppler phase** ∝ `v_r` (advances by `2π·f_d·PRI` per chirp, evaluated at that TX's firing time within the cycle),
+- a **spatial phase** `∝ (p_tx,m + p_rx,n)·û / λ` — the two-way array phase, with `û` the target's Cartesian look direction (no angle naming — it dots directly with element positions; this is what makes the virtual-array and angle operators testable),
+- the **TX modulation** — TDM: placed in its time slot; DDM: the per-chirp code phase,
+- the target's **complex amplitude** (× an optional range law).
+
+Sum over targets, add noise.
+
+### Scene frame and angle conventions
+
+The scene is specified in the **array-local Cartesian frame**, so the simulator is **convention-free** — like the operator kernels, it only ever dots direction vectors with element positions and never names an angle. It therefore takes **no `AngleConvention`**. Supplying targets by `(az, el)` would reintroduce the naming ambiguity; converting `(az, el)` + an `AngleConvention` into a Cartesian direction is an **upstream helper's** job, and the resulting Cartesian direction is what feeds the simulator. This keeps the sim aligned with the module principle that the internal math is convention-free and `AngleConvention` is only a boundary relabeling — which also means the simulator can validate the angle operators' convention handling without itself depending on it.
+
+### Modeling assumptions (state these explicitly)
+
+- **Stop-and-hop.** The target is frozen *within* a chirp (fast-time) and advances in phase *between* chirps (slow-time). This models motion-between-chirps at the Doppler-phase level and **omits intra-CPI range migration** (range-Doppler coupling) — matching the operators' scope (range-Doppler coupling is out of the first wave). Valid while range·velocity products are modest; breaks for very fast targets × long CPIs × wide bandwidth.
+- **Ego motion frozen over a CPI.** The platform sits at one position/orientation for the CPI (ranges and angles constant across chirps). Ego motion is **not** dropped from velocity — it folds into each target's *relative* velocity vector (target world velocity minus platform velocity), from which the radial component is derived; otherwise-static clutter then carries a nonzero ego-Doppler. Cross-frame ego motion and world-frame placement are the caller's responsibility (upstream frame transforms), consistent with the coordinate-conventions stance.
+- **Far-field plane wave**, **monostatic**, **single-slope sweeps**, **ideal hardware**.
+
+### Explicitly out of scope (first wave)
+
+EM propagation / scattering; multipath; antenna element patterns and mutual coupling; hardware impairments (phase noise, IQ imbalance, ADC quantization); intra-CPI range migration; SAR aperture synthesis; near-field; bistatic geometry. These mirror the operator-lockdown exclusions and can be added later as optional layers.
+
+### Cross-cutting simulator requirements
+
+- **Aliasing modeled.** Targets beyond the unambiguous range / velocity must fold correctly, so wrap-around behavior (and the ÷M MIMO velocity reduction) can be tested.
+- **Determinism.** A fixed seed reproduces the cube bit-for-bit.
+- **Guard against tautology.** Derive the signal model independently of the operator implementations, and cross-check a few canonical cases against an independent reference (a textbook closed form or an established external radar model). Tests assert against **analytic ground truth** (target at 12.3 m / 4.1 m/s / +7°), not merely that the generator round-trips through the pipeline.
+- **No kinematic driver (yet).** The simulator is **per-frame**: velocity is a frame parameter (it lives in the slow-time phase within one CPI), so a static generator exercises range, Doppler, angle, and all MIMO paths. A time-stepping driver (targets evolving across frames) is deferred until a frame-spanning consumer exists (a tracker, multi-frame integration, or clutter-map CFAR — all out of scope now). Inter-frame coverage is instead obtained by parameter-sweeping the static generator across many independent scenes. The generator's per-frame API should be shaped so a driver is a thin future add.
+
+---
+
+## Per-operator high-level tests
+
+Each operator lists the I/O-level properties to validate. Unless noted, all also carry the module-wide checks in *Cross-cutting tests* (precision, memory space, rank-agnostic batching, determinism).
+
+### Signal processing
+
+#### FMCWRangeProcessorOp
+
+- Single target at known range → the `range_profiles` peak maps (via `range_bins`) to the target's range within one bin; `range_bins` itself matches the analytic range axis (slope, sample rate, propagation speed) for the configured `nfft` / dtype.
+- Both front-end paths: complex IF → full FFT bins; real IF → RFFT non-negative-beat bins.
+- `apply_dechirp` on synthetic pre-mixer data reproduces the hardware-dechirped result.
+- Windowing lowers peak sidelobe level vs. rectangular; coherent gain preserved (peak magnitude as expected under the chosen `fft_norm`).
+- `nfft` oversampling adds bins and interpolates the peak location — no added resolution or extent.
+- Leading axes (rx, or tx×rx) preserved and processed independently.
+
+#### ClutterFilterOp
+
+- Zero-Doppler (DC-across-chirps) input → `mean_subtraction` nulls it (≈ 0 at those cells); a moving target is preserved.
+- `single_delay` / `double_delay`: output chirp count drops by 1 / 2; response is the binomial high-pass (DC notch).
+- Leading axes preserved.
+
+#### FMCWDopplerProcessorOp
+
+- Target at known velocity → the `rd_maps` peak maps (via `velocity_bins`) to the target's radial velocity within one bin; `velocity_bins` matches `v = −f_d·λ/2`, accounting for `center_zero_doppler` and any clutter chirp loss.
+- `center_zero_doppler`: zero-Doppler centered (true) vs. DC at bin 0 (false).
+- Windowing / `nfft` behave as in the range operator.
+
+#### FMCWRangeDopplerProcessorOp (fused)
+
+- **Parity:** identical `rd_maps` (within tolerance) to the split `FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp` chain for matching parameters.
+- Inline `clutter_filter` reduces `num_doppler` consistently with the standalone op; `range_bins` / `velocity_bins` match the split.
+
+### Detection & clustering
+
+#### CFARDetectorOp
+
+- Target injected above threshold over known noise → detection at the target's cell (verified in physical units via the RD axes); `detection_score > 1` there and `< 1` elsewhere; `detection_mask == (detection_score > 1)`.
+- **Statistical:** over noise-only trials, the realized false-alarm rate ≈ configured `pfa` for each variant {CA, OS, GO, SO}.
+- `nci_axes` integration raises detectability and the realized Pfa still matches (Gamma(K) threshold with the correct `K`).
+- Real-power input (float dtype) thresholds directly and yields the same detections as the complex `|·|²` path.
+- `detection_idx` lists exactly the detected cells, sized to the count; a set `max_detections` caps and warns on overflow.
+
+#### ClusterDBSCANOp
+
+- Synthetic blobs in feature space → correct membership; noise points labeled `−1`.
+- Per-axis `epsilon` correctly handles mixed-unit (anisotropic) features; `min_points` separates core vs. noise.
+- `labels` row-aligned with `points`; `sizes` counts per cluster; `max_clusters` caps.
+
+#### FeatureAssemblyOp (bridge)
+
+- `points` columns equal the looked-up physical values at each detection (`range = range_bins[range_bin]`, `velocity = velocity_bins[doppler_bin]`, `score` gathered from `detection_score`, az/el from `aoa_estimates`), in the configured `features` order.
+- Rows 1:1 with `detection_idx`.
+- Selecting a feature whose source input is absent → error.
+
+#### DetectionReductionOp (bridge)
+
+- `peak` policy → `rep_idx` is the max-score member of each cluster; `first` / `medoid` select the expected member (`medoid` respects `feature_weights`).
+- Every `rep_idx` addresses a real detected cell (a subset of `detection_idx`); one per cluster; noise (`−1`) excluded.
+
+### Angle estimation
+
+#### PhaseShiftBeamformerOp (dense)
+
+- RD maps synthesized as a steering vector for a known (az, el) → `rda_cube` peak at the expected beam bin.
+- `angle_convention`: the same physical direction is reported with the expected (az, el) labels under different presets; `direction_cosine` masks the invisible region (`u²+v² > 1`).
+- `array_taper` lowers spatial sidelobes.
+- `[live]` overrides (`array_geometry` / `az_angles` / `el_angles` / `array_taper`) change the output and reuse cached weights when unchanged.
+
+#### SnapshotGatherOp (bridge)
+
+- `snapshot_window (0,0)` → `snapshot` equals the per-channel vector at each detected cell, shape `(num_detections, num_channels, 1)`.
+- A non-trivial window gathers the correct neighborhood; `num_snapshots = (2·d+1)(2·r+1)`.
+- Edge modes: `wrap` wraps the Doppler axis; `shift` slides inward keeping the count; `clamp` truncates and marks the missing slots in `is_valid`.
+- Channel axis preserved (gathers per-channel, not the NCI-integrated map).
+
+#### Sparse angle estimators (shared slot)
+
+Common check (all five): `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_estimates ≈ θ` within grid/interpolation or the CRLB; an `is_valid` mask correctly excludes masked snapshots.
+
+- **BeamscanEstimatorOp** — single-source recovery; accepts 2-D or 3-D-with-`num_snapshots=1`; errors on 3-D with `num_snapshots ≠ 1`.
+- **MVDREstimatorOp** — multi-snapshot covariance nulls an interferer better than Beamscan; `diagonal_loading` stabilizes the low-snapshot / ill-conditioned case.
+- **MUSICEstimatorOp** — resolves two closely-spaced sources that Beamscan cannot, given the source count (fixed or MDL/AIC `auto`).
+- **RootMUSICEstimatorOp / ESPRITEstimatorOp** — gridless DOA on ULA / shift-invariant geometry ≈ truth, with **no** `angle_spectrum` output; on a non-uniform virtual array they either use the subarray/smoothing step or fail predictably.
+- Multi-source estimators fill `doa_multi` / `source_count` up to `max_sources`.
+
+### MIMO marshaling
+
+#### MIMODeinterleaveOp
+
+- An interleaved cube with TX-tagged content → output correctly split into `(M_tx, N_rx, L, samples)` for a round-robin `tx_schedule` and for a custom order.
+- A non-uniform schedule is rejected with an error (first-wave TDM assumes uniform spacing).
+- Dtype preserved.
+
+#### MIMOCoherentCompensationOp
+
+- **TDM:** a moving target → after compensation the inter-TX motion phase is removed, so the assembled virtual array yields an **unbiased** DOA (whereas skipping compensation biases it) — this is the key regression.
+- **DDM:** a multi-TX coded cube → demux recovers each TX into the `M_tx` axis at its band with the code phase removed.
+- `num_tx` derived correctly (TDM from the input axis, DDM from `ddm_code`).
+
+#### VirtualArrayAssemblyOp
+
+- `(tx, rx)` block → virtual channel axis with `p_virtual = p_tx + p_rx`; emitted `array_geometry.element_positions` match the analytic virtual layout.
+- `overlap_policy`: `dedup` collapses coincident positions (`num_virtual` = unique count); `keep_all` retains `M·N`; `average` combines coincident samples.
+- `num_virtual ≤ M·N`.
+
+---
+
+## Cross-cutting tests
+
+- **End-to-end per modality.** SISO / SIMO / MIMO-TDM / MIMO-DDM: a scene with known targets → detections at the correct range / velocity (and angle for the angle-bearing modalities), within resolution. The MIMO end-to-end runs are the primary validation of the marshaling + angle chain together.
+- **Sparse-slot interchangeability.** With the wiring fixed, swapping the estimator in `⟨sparse angle estimator⟩` (Beamscan ↔ MVDR ↔ MUSIC ↔ …) requires no graph change and each recovers the DOA — validating the shared contract.
+- **`[live]` override behavior.** Overriding a `[live]` parameter mid-stream changes the output accordingly and warns only when a genuine rebuild is triggered (FFT plan, window coefficients, CFAR window kernel); previously-seen configurations are reused from cache.
+- **Precision.** Single- and double-precision instantiations agree within their respective tolerances.
+- **Memory spaces.** Operators accept and produce tensors in each supported memory space.
+- **Determinism.** A fixed seed reproduces identical outputs across runs.
+
+---
+
+## CI notes
+
+- Unit and integration tests should be fast and deterministic (seeded), suitable for per-commit CI; the statistical tests (Pfa, DOA-vs-CRLB) are heavier Monte-Carlo runs better suited to a nightly job.
+- The simulator is a first-class test dependency and should be versioned and tested itself (its analytic outputs cross-checked against an independent reference), since every integration test relies on it.
