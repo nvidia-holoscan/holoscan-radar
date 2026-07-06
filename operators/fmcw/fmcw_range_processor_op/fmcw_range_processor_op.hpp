@@ -45,6 +45,10 @@ class FMCWRangeProcessorOp : public holoscan::Operator {
   FMCWRangeProcessorOp() = default;
   ~FMCWRangeProcessorOp() override;
 
+  // Registers the argument setters for the custom parameter types
+  // (radar_common/sdk/arg_setters.hpp) before the base class processes args.
+  void initialize() override;
+
   void setup(OperatorSpec& spec) override;
   void compute(InputContext& op_input, OutputContext& op_output,
                ExecutionContext& context) override;
