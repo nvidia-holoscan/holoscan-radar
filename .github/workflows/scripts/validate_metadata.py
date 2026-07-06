@@ -31,7 +31,12 @@ _EXCLUDE_DIRS = {"build", ".local", ".cache", "_CPack_Packages"}
 
 def iter_metadata_files(repo_root: Path):
     for dirpath, dirnames, filenames in os.walk(repo_root):
-        dirnames[:] = [d for d in dirnames if d not in _EXCLUDE_DIRS]
+        # Skip the explicit build/cache dirs and any hidden directory (.git,
+        # .nv, …); the latter can harbor unrelated metadata.json artifacts
+        # (e.g. tooling caches under .git) that aren't project metadata.
+        dirnames[:] = [
+            d for d in dirnames if d not in _EXCLUDE_DIRS and not d.startswith(".")
+        ]
         if "metadata.json" in filenames:
             yield Path(dirpath) / "metadata.json"
 

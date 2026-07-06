@@ -49,7 +49,7 @@ Rules that follow from "lockdown":
 See [`DEVELOPER.md`](DEVELOPER.md) for detail. Quick reference:
 
 ```bash
-# Configure + build (requires Holoscan SDK >= 4.3.0 discoverable via find_package;
+# Configure + build (requires Holoscan SDK >= 5.0.0 discoverable via find_package;
 # `pip install holoscan` gives a CPU-capable config, or use `./holohub run-container`)
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
 cmake --build build -j"$(nproc)"

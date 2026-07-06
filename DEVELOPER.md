@@ -38,6 +38,17 @@ The `holohub` script at the module root wraps the `holoscan-cli` package with mo
 defaults. On first run it installs `holoscan-cli` via pip if it isn't already importable
 (internet required); subsequent runs reuse the installed copy.
 
+> **Prerequisite (one time):** the development container is based on the Holoscan SDK
+> 5.x pre-release dev image, published on the internal GitLab registry and pinned by
+> `main-5x` git SHA. Authenticate to the registry once before building:
+>
+> ```sh
+> docker login gitlab-master.nvidia.com:5005   # NV username / GitLab access token
+> ```
+>
+> To bump the pinned SHA or target aarch64, override `HOLOSCAN_CLI_BASE_IMAGE`
+> (used by the wrapper) and the `BASE_IMAGE` build arg in the `Dockerfile`.
+
 | Command | What it does |
 | --- | --- |
 | `./holohub run-container` | Build and start the development container |

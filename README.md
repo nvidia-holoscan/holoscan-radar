@@ -11,17 +11,16 @@ Holoscan Radar is a **Holoscan Module** — a self-contained, redistributable li
 ## Quick Start
 
 ```bash
-# 1. Run the Python demo application
-./holohub run radar_pipeline --language python
+# One-time GitLab login
+docker login gitlab-master.nvidia.com:5005   # NV username / GitLab access token
 
-# 2. Run the C++ demo application
-./holohub run radar_pipeline
-
+# Run container
+./holohub run-container
 ```
 
 ---
 
-## Operators
+## [WIP] Operators
 
 | Operator  | Implementation | Ports | Parameters |
 | --------- | -------------- | ----- | ---------- |
@@ -35,9 +34,9 @@ Holoscan Radar is a **Holoscan Module** — a self-contained, redistributable li
 
 ---
 
-## Usage
+## [WIP] Usage
 
-### Python
+### [TBD - Planned] Python
 
 ```python
 from holoscan.core import Application
@@ -53,7 +52,7 @@ class MyApp(Application):
 MyApp().run()
 ```
 
-### C++
+### [WIP] C++
 
 ```cpp
 #include <holoscan/holoscan.hpp>
@@ -72,11 +71,11 @@ int main() { holoscan::make_application<MyApp>()->run(); }
 
 ---
 
-## Building from Source (without HoloHub CLI)
+## [WIP] Building from Source (without HoloHub CLI)
 
 | Requirement | Version |
 | --- | --- |
-| Holoscan SDK | ≥ 4.3.0 |
+| Holoscan SDK | ≥ 5.0.0 (5.x pre-release) |
 | CUDA Toolkit | 13.x |
 | CMake | ≥ 3.31 |
 | C++ compiler | ≥ C++17 (GCC 11+) |
@@ -90,7 +89,7 @@ cmake --build build -j$(nproc)
 
 ---
 
-## Testing
+## [WIP] Testing
 
 ```bash
 ./holohub run-container

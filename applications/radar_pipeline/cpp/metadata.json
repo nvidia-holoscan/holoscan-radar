@@ -14,8 +14,8 @@
             "0.1.0": "Initial Release"
         },
         "holoscan_sdk": {
-            "minimum_required_version": "4.3.0",
-            "tested_versions": ["4.3.0"]
+            "minimum_required_version": "5.0.0",
+            "tested_versions": ["5.0.0"]
         },
         "platforms": ["x86_64", "aarch64"],
         "tags": ["Radar", "Signal Processing", "GPU", "Accelerated Computing", "FMCW", "Pulse-Doppler", "Synthetic Aperture Radar"],

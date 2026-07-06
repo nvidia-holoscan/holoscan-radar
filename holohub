@@ -68,11 +68,20 @@ export CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 PYTHON_BIN="${HOLOSCAN_CLI_PYTHON_BIN:-${HOLOHUB_PYTHON_BIN:-python3}}"
 export HOLOSCAN_CLI_INSTALL_ARGS="${HOLOSCAN_CLI_INSTALL_ARGS:---pre --extra-index-url https://pypi.nvidia.com holoscan-cli>4.2.0}"
 
-# Default Holoscan SDK version for this module's container base image.
+# Base container image for this module's development/runtime container.
 # holoscan-cli decoupled the base image from its own version (holoscan-cli#177)
-# and no longer ships a built-in default, so it errors unless this is set (or
-# --base-img is passed). Defaults to the module's holoscan_version.
-export HOLOSCAN_CLI_BASE_SDK_VERSION="${HOLOSCAN_CLI_BASE_SDK_VERSION:-4.3.0}"
+# and no longer ships a built-in default, so it errors unless a base image is
+# resolvable. We target the Holoscan SDK 5.x pre-release dev container, which
+# is published per-arch on the internal GitLab registry and tagged by the
+# 9-char main-5x git SHA (no friendly 5.0.0 release yet) — so we pass a full
+# image reference via HOLOSCAN_CLI_BASE_IMAGE rather than inferring an nvcr.io
+# tag from a version string. The x86_64 repo has no `-dgpu` suffix (x86_64 is
+# dgpu-only); aarch64 is `dev-cu13-aarch64-dgpu`. Not every commit is published,
+# so the tag is the newest main-5x commit with a built image. Requires one-time:
+#   docker login gitlab-master.nvidia.com:5005
+# Override to bump the pin or target another arch. Keep in sync with the
+# Dockerfile's ARG BASE_IMAGE default.
+export HOLOSCAN_CLI_BASE_IMAGE="${HOLOSCAN_CLI_BASE_IMAGE:-gitlab-master.nvidia.com:5005/holoscan/holoscan-sdk/dev-cu13-x86_64:570e5ec1c}"
 
 if [[ -n "${HOLOSCAN_CLI_SOURCE:-}" ]]; then
     export PYTHONPATH="${HOLOSCAN_CLI_SOURCE%/}/src${PYTHONPATH:+:${PYTHONPATH}}"
