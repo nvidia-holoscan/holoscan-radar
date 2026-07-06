@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/tensor/matx_utils.hpp"
@@ -59,6 +60,65 @@ template <typename T>
 void run_clutter_stage(ClutterFilterMethod method, const void* in,
                        int64_t batch, int64_t num_chirps,
                        int64_t num_range_bins, void* out,
-                       cudaStream_t stream);
+                       cudaStream_t stream) {
+  if (method == ClutterFilterMethod::kSingleDelay && num_chirps < 2) {
+    throw std::invalid_argument(
+        "clutter stage: method 'single_delay' needs num_chirps >= 2, got " +
+        std::to_string(num_chirps));
+  }
+  if (method == ClutterFilterMethod::kDoubleDelay && num_chirps < 3) {
+    throw std::invalid_argument(
+        "clutter stage: method 'double_delay' needs num_chirps >= 3, got " +
+        std::to_string(num_chirps));
+  }
+
+  auto in_view =
+      make_const_complex_view3<T>(in, batch, num_chirps, num_range_bins);
+  const int64_t num_chirps_out = clutter_num_chirps_out(method, num_chirps);
+  auto out_view =
+      make_complex_view3<T>(out, batch, num_chirps_out, num_range_bins);
+  matx::cudaExecutor exec{stream};
+
+  switch (method) {
+    case ClutterFilterMethod::kNone:
+      // Fused operator's inline passthrough only.
+      (out_view = in_view).run(exec);
+      break;
+    case ClutterFilterMethod::kMeanSubtraction: {
+      // Subtract the per-(batch, range-bin) slow-time mean, broadcast back
+      // over the chirp axis. Shape preserved.
+      auto slow_time_mean = matx::mean(in_view, {1});  // (batch, bins)
+      auto mean_bcast = matx::clone<3>(
+          slow_time_mean,
+          {matx::matxKeepDim, num_chirps, matx::matxKeepDim});
+      (out_view = in_view - mean_bcast).run(exec);
+      break;
+    }
+    case ClutterFilterMethod::kSingleDelay: {
+      // out[k] = in[k+1] - in[k], k in [0, num_chirps - 1).
+      auto head = matx::slice(
+          in_view, {0, 0, 0},
+          {matx::matxEnd, num_chirps - 1, matx::matxEnd});
+      auto tail = matx::slice(in_view, {0, 1, 0},
+                              {matx::matxEnd, num_chirps, matx::matxEnd});
+      (out_view = tail - head).run(exec);
+      break;
+    }
+    case ClutterFilterMethod::kDoubleDelay: {
+      // out[k] = in[k] - 2 in[k+1] + in[k+2], k in [0, num_chirps - 2).
+      auto x0 = matx::slice(
+          in_view, {0, 0, 0},
+          {matx::matxEnd, num_chirps - 2, matx::matxEnd});
+      auto x1 = matx::slice(
+          in_view, {0, 1, 0},
+          {matx::matxEnd, num_chirps - 1, matx::matxEnd});
+      auto x2 = matx::slice(in_view, {0, 2, 0},
+                            {matx::matxEnd, num_chirps, matx::matxEnd});
+      const cuda::std::complex<T> two{static_cast<T>(2), T{0}};
+      (out_view = x0 - two * x1 + x2).run(exec);
+      break;
+    }
+  }
+}
 
 }  // namespace holoscan::radar::detail
