@@ -10,7 +10,7 @@ Design conventions (from the workflows doc): plain-tensor ports (bridge with sma
 
 ---
 
-# Coordinate conventions
+## Coordinate conventions
 
 The angle-estimation operators carry azimuth/elevation, which is the module's single biggest cross-domain interoperability hazard — radar, robotics, automated-driving, aerospace, and remote-sensing communities each define these angles differently. The key to a domain-agnostic API is recognizing that "coordinate frame" is really **two independent problems** that are routinely conflated:
 
@@ -18,14 +18,18 @@ The angle-estimation operators carry azimuth/elevation, which is the module's si
 
 2. **The azimuth/elevation (AER) parameterization within a frame** — how a unit direction vector is named by two angles. This is **not** standardized across domains and is the real ambiguity: even after two parties agree on a Cartesian frame, navigation (azimuth clockwise from North, elevation up from the horizon) and physics (azimuth counter-clockwise from +x, polar angle from zenith) name the *same* direction with *different* angles. Standard libraries each hard-code one AER convention for their domain; a multi-domain library cannot.
 
-## Module stance
+### Module stance
 
 - **Array-local Cartesian frame is the source of truth.** Operators are defined purely in the right-handed, meters frame set by `ArrayGeometry.element_positions`. The beamforming math only ever dots element positions with a look-direction unit vector, so the kernels are inherently convention-free.
 - **The internal canonical parameterization is fixed** (boresight = +x, +y to the left, +z up; azimuth CCW from +x about +z; elevation up from the x-y plane). Direction cosines: `u = cos(el)·sin(az)`, `v = sin(el)`, `w = cos(el)·cos(az)`. All internal kernels operate in this one convention.
-- **The AER parameterization is made explicit at the API boundary** via a shared `AngleConvention` descriptor (see Supporting data structures), reused by every angle operator and by anything that emits `(az, el)`. It ships with named per-domain presets plus a fully-parameterized `custom` form, and is applied as a thin relabeling on the input scan grids and the output `doa` — never inside the kernels. It is a **required, standalone parameter (no default)** on operators that consume or emit angles, so the frame is never silently inherited. Cartesian `element_positions` carry no convention, but the convention's axis references are interpreted in that same array-local frame. Frame-to-frame transforms remain the caller's job; `AngleConvention` resolves only the angular naming. Angles are radians throughout.
+- **The AER parameterization is made explicit at the API boundary** via a shared `AngleConvention` descriptor (see Supporting data structures), reused by every angle operator and by anything that emits `(az, el)`.
+  - It ships with named per-domain presets plus a fully-parameterized `custom` form, and is applied as a thin relabeling on the input scan grids and the output `doa` — never inside the kernels.
+  - It is a **required, standalone parameter (no default)** on operators that consume or emit angles, so the frame is never silently inherited.
+  - Cartesian `element_positions` carry no convention, but the convention's axis references are interpreted in that same array-local frame.
+  - Frame-to-frame transforms remain the caller's job; `AngleConvention` resolves only the angular naming. Angles are radians throughout.
 - **A convention-free direction-cosine (u, v / sine-space) scan mode** is offered as an escape hatch: unambiguous, singularity-free (no degeneracy at the pole), uniform in beam spacing, and the natural form for the spatial-FFT fast path on uniform arrays.
 
-## Cross-domain landscape
+### Cross-domain landscape
 
 The basis for the `AngleConvention` presets. (Radar array conventions vary between texts; the row below is the common boresight-relative choice.)
 
@@ -38,7 +42,7 @@ The basis for the `AngleConvention` presets. (Radar array conventions vary betwe
 | Radar / phased array | IEEE 686 / 149 | boresight +x, +y left, +z up | +x (boresight) | CCW | from horizon, +z up | u,v / deg |
 | Geodesy / nav libs | pymap3d, MATLAB | ENU / NED | True North (+y ENU, +x NED) | **CW** | from horizon, up | deg |
 
-## High-risk silent mismatches the presets must prevent
+### High-risk silent mismatches the presets must prevent
 
 - **Geodetic azimuth (x↔y swap):** geodesy measures azimuth clockwise from North (+y in ENU), so `az = 0` means +y, not +x — a 90° rotation versus the math convention. Feeding math-convention angles into a geodetic mapper silently swaps the axes.
 - **NED elevation sign flip:** in NED / FRD frames +z points *down*, so "positive elevation = up" maps to −z. Reusing the standard `z = R·sin(el)` puts the track below the platform.
@@ -49,11 +53,11 @@ The takeaway for the API: pin the internal math to one fixed convention, and for
 
 ---
 
-# Workflows
+## Workflows
 
 The standard operator flow graphs the module must support, abbreviated from `holoscan-radar-fmcw-workflows.md` (see that doc for the full rationale). These are the target chains the locked operators have to compose into — the reason the inventory below exists. `→` is a port connection; `[...]` is optional; shapes follow each stage.
 
-## Scope
+### Scope
 
 | Configuration | TX × RX | TX multiplexing | Angle capability |
 | :------------ | :------ | :-------------- | :--------------- |
@@ -64,18 +68,18 @@ The standard operator flow graphs the module must support, abbreviated from `hol
 
 Out of scope here. **CDM / BPM** (code-division / binary-phase multiplexing) are **under consideration for a future wave** — architecturally a small extension of the DDM path (all TX on, per-chirp phase code, separated after the Doppler stage), reusing `MIMOCoherentCompensationOp` in a code-correlation mode and the rest of the MIMO chain unchanged — but not implemented here. **FDM** (frequency-division) and **PMCW** (fast-time code division — a different waveform, not FMCW) are excluded.
 
-## Cross-cutting structure
+### Cross-cutting structure
 
 - **Two angle paths.** *Dense* — `PhaseShiftBeamformerOp` forms an angle for every RD cell → RDA cube → `CFARDetectorOp` on the cube. `PhaseShiftBeamformerOp` is the only dense estimator (forming a full MVDR/MUSIC cube over every RD cell is prohibitive), so the dense slot is hardcoded. *Sparse* — `CFARDetectorOp` detects first (non-coherently integrating the channel axis), then a per-detection channel snapshot is gathered and a sparse angle estimator resolves one DOA per detection.
 - **The sparse angle estimator is a pluggable slot** (`⟨sparse angle estimator⟩` in the chains below), orthogonal to the antenna/multiplexing modality — whatever produced the snapshots (physical RX for SIMO, assembled virtual array for MIMO) feeds the same slot. Any estimator fills it: `BeamscanEstimatorOp` (conventional/Bartlett, the default), `MVDREstimatorOp`, `MUSICEstimatorOp`, `RootMUSICEstimatorOp`, or `ESPRITEstimatorOp`. The choice affects only the estimator's own I/O (single- vs. multi-snapshot input, source count, geometry constraint), not the surrounding graph — see the Angle-estimation enumeration.
 - **Clustering placement.** `ClusterDBSCANOp` is orthogonal to modality and attaches at the detection/angle stage in one of two patterns: *angle-then-cluster* (default; cluster in range/velocity/az/el — the only option on the dense path) or, sparse path only, *cluster-then-angle* (cluster in range-Doppler, reduce to one representative per cluster, then estimate angle once per representative).
 - **The three bridges** (plain-tensor add-on operators, shown inline below). `SnapshotGatherOp`: RD maps + `detection_idx` → per-detection channel snapshot, feeding the sparse estimators. `FeatureAssemblyOp`: `detection_idx` (+ bin axes, `detection_score`, angle) → the `points` feature matrix that clustering consumes. `DetectionReductionOp`: labels + `detection_idx` + `points` → one representative detection per cluster, enabling cluster-then-angle.
 
-## SISO (1 × 1)
+### SISO (1 × 1)
 
 Range-Doppler only; no spatial information, no angle stage.
 
-```
+```text
 ADC (num_chirps, samples)
   → FMCWRangeProcessorOp     → (num_chirps, num_range)
   → [ClutterFilterOp]        → (num_chirps, num_range)
@@ -87,11 +91,11 @@ ADC (num_chirps, samples)
 
 The fused `FMCWRangeDopplerProcessorOp` replaces the three signal-processing operators one-for-one. No marshaling operators; only trailing range-Doppler clustering applies (no cluster-then-angle).
 
-## SIMO (1 × N)
+### SIMO (1 × N)
 
 The physical RX array *is* the channel axis; angle from receive beamforming. No TX multiplexing → no marshaling operators.
 
-```
+```text
 ADC (N_rx, num_chirps, samples)
   → FMCWRangeProcessorOp     → (N_rx, num_chirps, num_range)
   → [ClutterFilterOp]        → (N_rx, num_chirps, num_range)
@@ -101,7 +105,7 @@ ADC (N_rx, num_chirps, samples)
 
 Dense angle path:
 
-```
+```text
   … (N_rx, num_doppler, num_range)
   → PhaseShiftBeamformerOp   → (num_az, num_el, num_doppler, num_range)   [RDA cube]
   → CFARDetectorOp (on cube) → detection_idx over the cube (+ score)
@@ -111,7 +115,7 @@ Dense angle path:
 
 Sparse angle path — *angle-then-cluster*:
 
-```
+```text
   … (N_rx, num_doppler, num_range)
   → CFARDetectorOp (nci_axes = {rx})   → detection_idx (+ score)
   → SnapshotGatherOp                   → snapshot (num_points, N_rx, num_snapshots)
@@ -121,7 +125,7 @@ Sparse angle path — *angle-then-cluster*:
 
 Sparse angle path — *cluster-then-angle* (fewer beamform calls when detections are dense):
 
-```
+```text
   … (N_rx, num_doppler, num_range)
   → CFARDetectorOp (nci_axes = {rx})   → detection_idx (+ score)
   → FeatureAssemblyOp                  → points                [range, velocity, score]
@@ -131,11 +135,11 @@ Sparse angle path — *cluster-then-angle* (fewer beamform calls when detections
   → ⟨sparse angle estimator⟩           → aoa_estimates (num_clusters, 2)
 ```
 
-## MIMO — TDM (M × N, time-division)
+### MIMO — TDM (M × N, time-division)
 
 M TX fire in separate time slots, so their chirps interleave along slow-time. All three marshaling operators are needed.
 
-```
+```text
 ADC (N_rx, M·L, samples)     [L = chirps per TX; slow-time interleaves the M TX]
   → MIMODeinterleaveOp         → (M_tx, N_rx, L, samples)              [TX becomes an explicit axis]
   → FMCWRangeProcessorOp       → (M_tx, N_rx, L, num_range)
@@ -148,11 +152,11 @@ ADC (N_rx, M·L, samples)     [L = chirps per TX; slow-time interleaves the M TX
 
 The fused `FMCWRangeDopplerProcessorOp` may replace the range/Doppler pair *after* de-interleave; compensation and assembly still follow it. Clustering attaches on the assembled virtual RD maps exactly as in SIMO.
 
-## MIMO — DDM (M × N, Doppler-division)
+### MIMO — DDM (M × N, Doppler-division)
 
 M TX transmit simultaneously with per-chirp phase codes placing each TX in a distinct Doppler sub-band. No slow-time interleave → no de-interleave; TX separation is a post-Doppler band demux.
 
-```
+```text
 ADC (N_rx, num_chirps, samples)   [all M TX present every chirp, per-chirp phase codes]
   → FMCWRangeProcessorOp       → (N_rx, num_chirps, num_range)
   → FMCWDopplerProcessorOp     → (N_rx, num_doppler, num_range)               [Doppler holds M TX bands]
@@ -164,7 +168,7 @@ ADC (N_rx, num_chirps, samples)   [all M TX present every chirp, per-chirp phase
 
 No `MIMODeinterleaveOp` (nothing interleaved in slow-time). `ClutterFilterOp` runs *after* demux here (the per-chirp TX codes ride on the raw chirps, so a slow-time clutter filter must follow demux). Clustering as in SIMO/TDM.
 
-## Workflow comparison
+### Workflow comparison
 
 | Modality   | TX × RX | `MIMODeinterleaveOp` | `MIMOCoherentCompensationOp`  | `VirtualArrayAssemblyOp` | Angle path      | Channel axis      |
 | :--------- | :------ | :------------------- | :---------------------------- | :----------------------- | :-------------- | :---------------- |
@@ -177,11 +181,11 @@ The signal-processing core, `CFARDetectorOp`, and the angle operators are common
 
 ---
 
-# Operator inventory
+## Operator inventory
 
 The operators the FMCW workflows require, grouped by function — a one-line map; full contracts are under *Operator APIs*. Where an operator's role differs across modalities, the workflows doc chains are the reference.
 
-## Signal-processing core
+### Signal-processing core
 
 Common to every workflow (SISO through MIMO). The split trio plus the fused drop-in.
 
@@ -190,12 +194,12 @@ Common to every workflow (SISO through MIMO). The split trio plus the fused drop
 - **FMCWDopplerProcessorOp** — Doppler compression: windowed FFT along slow-time, range profiles → range-Doppler maps.
 - **FMCWRangeDopplerProcessorOp** — fused range + optional clutter + Doppler in one graph node (drop-in for the split trio where the intermediate range profiles aren't needed; for MIMO, usable up to the point a marshaling step must interpose).
 
-## Detection & clustering
+### Detection & clustering
 
 - **CFARDetectorOp** — 2D CFAR on the (Doppler, range) plane; batches/integrates leading axes (`nci_axes`), so it serves both the dense (per RDA-cube slice) and sparse (non-coherent channel integration) paths.
 - **ClusterDBSCANOp** — general N-D density clustering over a caller-assembled feature matrix; orthogonal to modality, placeable before or after angle estimation.
 
-## Angle estimation
+### Angle estimation
 
 Orthogonal to the antenna/multiplexing modality: whatever produces channel snapshots (physical RX for SIMO, assembled virtual array for MIMO) plugs into the same slot. Dense path is Bartlett-only; the rest are sparse-path estimators.
 
@@ -206,9 +210,11 @@ Orthogonal to the antenna/multiplexing modality: whatever produces channel snaps
 - **RootMUSICEstimatorOp** — subspace, gridless (polynomial rooting); ULA/uniform geometry; no scan grid, no spectrum.
 - **ESPRITEstimatorOp** — subspace, gridless (rotational invariance); shift-invariant geometry; closed-form DOAs.
 
-*(All covariance estimators share open items: multi-snapshot / spatial-smoothing input form, source-count source (fixed vs. MDL/AIC vs. CFAR-cluster), and — for the gridless pair — a ULA/subarray-selection step on non-uniform virtual arrays.)*
+#### Covariance estimator open items
 
-## MIMO marshaling
+All covariance estimators share open items: multi-snapshot / spatial-smoothing input form, source-count source (fixed vs. MDL/AIC vs. CFAR-cluster), and — for the gridless pair — a ULA/subarray-selection step on non-uniform virtual arrays.
+
+### MIMO marshaling
 
 Three operators, one per responsibility, spanning TX separation through virtual-array assembly.
 
@@ -216,7 +222,7 @@ Three operators, one per responsibility, spanning TX separation through virtual-
 - **MIMOCoherentCompensationOp** — TX separation + phase-aware coherent compensation (TDM: per-Doppler-bin phase correction; DDM: band demux + code removal + alignment). The one genuine MIMO compute step.
 - **VirtualArrayAssemblyOp** — flatten the separated `(tx, rx)` block into a virtual channel axis and emit the matching virtual `ArrayGeometry` (`p_virtual = p_tx + p_rx`, with overlap dedup).
 
-## I/O bridges
+### I/O bridges
 
 The small add-on operators that connect detection, clustering, and the sparse angle estimators via plain-tensor ports. Each is filed under its functional group above; their contracts are in *Operator APIs*.
 
@@ -224,25 +230,32 @@ The small add-on operators that connect detection, clustering, and the sparse an
 - **`DetectionReductionOp`** — reads cluster labels + `detection_idx` (+ features) → one representative detection per cluster, for the cluster-then-angle (pre-angle) sparse path.
 - **`FeatureAssemblyOp`** — maps `detection_idx` (+ bin axes, `detection_score`, angle) → the `points` feature matrix for `ClusterDBSCANOp` / `DetectionReductionOp`.
 
-## Explicitly out of scope for this FMCW pass
+### Explicitly out of scope for this FMCW pass
 
 **Not** required by the FMCW workflows, so excluded from this lockdown: Pulse-Doppler operators, SAR image-formation operators, and PVA SDK operators. Multiplexing scope (see Workflows → Scope): **CDM / BPM** are under consideration for a future wave (would reuse `MIMOCoherentCompensationOp` in a code-correlation mode, rest of the MIMO chain unchanged); **FDM** and **PMCW** are excluded.
 
 ---
 
-# Operator APIs
+## Operator APIs
 
 Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a dtype + shape; every parameter carries a `Default:` (required parameters shown as `Default: none (required)`). Algorithm and Notes are added when each operator is fully locked. Each port lists both precision forms (`complex64 / complex128`, `float32 / float64`); an operator instance uses one, fixed by its template instantiation, with inputs and outputs matching. Leading `...` axes are opaque, preserved batch dims.
 
-**Parameter override convention.** Parameters are configuration set at graph build. A parameter tagged **[live]** may additionally be overridden in-flight via a same-named non-blocking input port (unconnected → the parameter value is used). The philosophy is to not over-constrain a caller who knows what they are doing: allow a reasonable set of footguns, and warn where relevant. Output shapes are inferred from the input tensors each tick (never assumed fixed downstream), so a **[live]** change that alters an output shape is allowed — consumers re-infer. Where a **[live]** override incurs a genuine cost — an FFT-plan build, a window-coefficient build, a CFAR window-kernel build — the operator **warns** (once per new configuration) and **caches** prior configurations so alternating values do not thrash. A few parameters are genuinely fixed for an instance's lifetime (e.g. the CFAR variant, which selects the kernel) and are **static**; instantiate separate operators to vary those. A **[live]** parameter is listed once — here under Parameters, with the tag — never duplicated under Inputs; only true data inputs (the tensors consumed anew each tick) appear under Inputs.
+**Parameter override convention.** Parameters are configuration set at graph build.
+
+- A parameter tagged **[live]** may additionally be overridden in-flight via a same-named non-blocking input port (unconnected → the parameter value is used).
+- The philosophy is to not over-constrain a caller who knows what they are doing: allow a reasonable set of footguns, and warn where relevant.
+- Output shapes are inferred from the input tensors each tick (never assumed fixed downstream), so a **[live]** change that alters an output shape is allowed — consumers re-infer.
+- Where a **[live]** override incurs a genuine cost — an FFT-plan build, a window-coefficient build, a CFAR window-kernel build — the operator **warns** (once per new configuration) and **caches** prior configurations so alternating values do not thrash.
+- A few parameters are genuinely fixed for an instance's lifetime (e.g. the CFAR variant, which selects the kernel) and are **static**; instantiate separate operators to vary those.
+- A **[live]** parameter is listed once — here under Parameters, with the tag — never duplicated under Inputs; only true data inputs (the tensors consumed anew each tick) appear under Inputs.
 
 **Bridge operators.** The workflows also use small add-on operators to connect detection, clustering, and the sparse angle estimators. Per the plain-tensor-ports convention, bridging is done by explicit add-on operators (never shared structs). Each carries a **delivery-model** decision — a mainstream library operator, a per-application implementation, or a shared helper called inside another operator's `compute()` — recorded per bridge. Three exist — `SnapshotGatherOp`, `DetectionReductionOp`, and `FeatureAssemblyOp` — grouped into the functional sections below alongside the operators they connect (each flagged in its own Notes).
 
 ---
 
-## Signal Processing Operators
+### Signal Processing Operators
 
-### FMCWRangeProcessorOp
+#### FMCWRangeProcessorOp
 
 - **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(..., num_chirps, samples_per_chirp)`. Range FFT along the last (fast-time) axis.
 - **Out:** `range_profiles` — complex64 / complex128, `(..., num_chirps, num_range_bins)`. `num_range_bins = samples_per_chirp` (complex IF) or `samples_per_chirp//2 + 1` (real IF); grows to `nfft` when set. No range-axis `fftshift` (bin 0 = zero range).
@@ -257,7 +270,7 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 - `propagation_speed` **[live]** — float. Wave speed for the beat-frequency → range conversion (`range_bins` only). Default: speed of light ≈ 2.998e8 m/s.
 - `nfft` **[live]** — int, ≥ `samples_per_chirp`. Fast-time FFT length; larger zero-pads for a finer interpolated range grid over the same span (also the fast-length escape hatch for a large-prime `samples_per_chirp`). The output range-bin count follows `nfft` (downstream infers it). Overriding to an unseen length builds a new FFT plan and warns; seen lengths are reused from the MatX plan cache. Default: none (= `samples_per_chirp`, exact N-point).
 
-### ClutterFilterOp
+#### ClutterFilterOp
 
 - **In:** `range_profiles` — complex64 / complex128, `(..., num_chirps, num_range_bins)`. Slow-time (chirp) axis second-to-last.
 - **Out:** `range_profiles` — complex64 / complex128, `(..., num_chirps_out, num_range_bins)`. `num_chirps_out = num_chirps` (`mean_subtraction`), `num_chirps − 1` (`single_delay`), `num_chirps − 2` (`double_delay`).
@@ -266,7 +279,7 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 
 - `method` **[live]** — enum {mean_subtraction, single_delay, double_delay}. Slow-time clutter suppression: `mean_subtraction` nulls zero-Doppler with no chirp loss; the delay cancellers are 1st/2nd-order MTI high-pass (wider near-DC notch, and drop 1–2 chirps). Switching to/from a delay canceller changes `num_chirps_out`; the downstream Doppler stage infers the chirp count, so this is allowed. No setup cost. Default: mean_subtraction.
 
-### FMCWDopplerProcessorOp
+#### FMCWDopplerProcessorOp
 
 - **In:** `range_profiles` — complex64 / complex128, `(..., num_chirps, num_range_bins)`. Doppler FFT along the `num_chirps` (slow-time) axis.
 - **Out:** `rd_maps` — complex64 / complex128, `(..., num_doppler, num_range_bins)`. `num_doppler = num_chirps` (or `nfft`); zero-Doppler centered by default.
@@ -280,7 +293,7 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 - `fft_norm` **[live]** — enum {backward, ortho, forward}. Same convention and rationale as FMCWRangeProcessorOp. Default: backward.
 - `nfft` **[live]** — int, ≥ `num_chirps`. Doppler FFT length; larger interpolates the velocity grid over the same span (also the large-prime escape hatch). The output Doppler-bin count follows `nfft` (downstream infers it). Overriding to an unseen length builds a new FFT plan and warns; seen lengths reused from the MatX plan cache. Default: none (= `num_chirps`, exact N-point).
 
-### FMCWRangeDopplerProcessorOp (fused)
+#### FMCWRangeDopplerProcessorOp (fused)
 
 - **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(..., num_chirps, samples_per_chirp)`.
 - **Out:** `rd_maps` — complex64 / complex128, `(..., num_doppler, num_range_bins)`. `num_range_bins` per FMCWRangeProcessorOp, `num_doppler = num_chirps` (reduced by the delay-canceller chirp loss when `clutter_filter` is a delay canceller). No intermediate range-profile output.
@@ -299,12 +312,11 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 - `propagation_speed` **[live]** — float. For the `range_bins` output. Default: speed of light ≈ 2.998e8 m/s.
 - `nfft_range`, `nfft_doppler` **[live]** — int, each ≥ its natural length. Per-axis FFT lengths (interpolation / large-prime escape hatch); the output bin counts follow them (downstream infers). Overriding to an unseen length builds a new FFT plan and warns; seen lengths reused from the plan cache. Default: none (= exact `samples_per_chirp` / `num_chirps`).
 
-
 ---
 
-## Detection & Clustering Operators
+### Detection & Clustering Operators
 
-### CFARDetectorOp
+#### CFARDetectorOp
 
 - **In:** `rd_maps` — complex64 / complex128, **or** a real float32 / float64 power map, `(..., num_doppler, num_range_bins)`. CFAR plane = last two axes; leading axes batched/integrated per `nci_axes`. The path is auto-selected by input dtype (no parameter, mirroring FMCWRangeProcessorOp): **complex** → form the square-law power `|·|²`; **real** → treat as an already-formed power map and threshold it directly.
 - **Out:** `detection_mask` — bool, `(..., num_doppler, num_range_bins)` (axes in `nci_axes` reduced; other leading axes preserved). `True` where detected — equivalently `detection_score > 1`.
@@ -322,9 +334,9 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 - `threshold_scale` **[live]** — float. Empirical multiplier on top of the Pfa-derived threshold (`threshold = threshold_scale · α · noise_estimate`); `1.0` = pure CFAR. Cheap; hand-tuning without changing the CFAR model. Default: 1.0.
 - `nci_axes` **[live]** — set/vector of leading-axis indices to non-coherently integrate before thresholding; other leading axes stay batched. Changes the output shape (integrated axes reduced — downstream infers) and the integration fold count `K = ∏ sizes of nci_axes`, which sets the cell statistic to Gamma(K); α takes `K` and is recomputed by closed form (cheap). Default: `[]` (no integration; `K = 1`, exponential cell statistic).
 - `max_detections` (optional) **[live]** — int. Upper cap on the number of detections emitted in `detection_idx`; if the scene produces more, the surplus is dropped and a warning raised. `detection_idx` is always sized to the actual count (≤ this cap, reallocated per tick). Unset → no cap (emit all detections). Default: none (uncapped).
-- `max_cached_kernels` — int. How many distinct guard/training window-footprint kernels to retain before evicting (and rebuilding on re-use). Static. Default: 4.
+- `max_cached_kernels` — int. How many distinct guard/training window-footprint kernels to retain before evicting (and rebuilding on reuse). Static. Default: 4.
 
-### ClusterDBSCANOp
+#### ClusterDBSCANOp
 
 - **In:** `points` — float32 / float64, `(num_points, num_features)`. Caller-assembled feature matrix (e.g. `[range, velocity, az, el]`); radar-agnostic.
 - **Out:** `labels` — int, `(num_points,)`. Cluster id per point, noise = `-1`; row-aligned with `points`.
@@ -336,7 +348,7 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 - `min_points` **[live]** — int. Minimum neighbors (including the point itself) for a core point (DBSCAN `minPts`). Overridable. Default: `2 · num_features` (common heuristic).
 - `max_clusters` (optional) **[live]** — int. Upper cap on the number of clusters reported in `sizes`; surplus dropped and a warning raised if exceeded. `sizes` is sized to the actual cluster count (≤ this cap). Unset → no cap. Default: none (uncapped).
 
-### FeatureAssemblyOp
+#### FeatureAssemblyOp
 
 Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`) by gathering each detection's physical attributes from its cell — mapping CFAR's bare bin indices to physical range / velocity, gathering the detection strength, and appending angle when available. Pure gather / lookup — the feature-engineering step between detection and clustering.
 
@@ -366,7 +378,7 @@ Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`
 - *Row alignment:* `points` rows are 1:1 with `detection_idx` rows, so `labels` positionally join back and `DetectionReductionOp.rep_idx` resolves to real cells.
 - *Carried over:* plain-tensor ports; precision by template instantiation; MatX + MatX memory spaces.
 
-### DetectionReductionOp
+#### DetectionReductionOp
 
 Reduces each cluster to one **representative detection** so the cluster-then-angle path estimates angle once per cluster instead of once per detection. Selects a real cluster member (a detected cell) by a configurable policy; a thin wrapper over the shared group-by-label reduction primitive.
 
@@ -390,19 +402,20 @@ Reduces each cluster to one **representative detection** so the cluster-then-ang
 
 **Notes:**
 
-- *Delivery model — thin operator over a shared library primitive:* the generic group-by-label reduction (segmented argmax/argmin/medoid, and aggregate stats) is a **public library function** any operator can call — the reusable core. Cluster-reduction ships as a **thin standalone operator** wrapping it, **not** folded into `ClusterDBSCANOp`: it combines `labels` + radar `detection_idx` + a `points`-derived score and emits representative *cell* indices, which would pollute the deliberately radar-agnostic clusterer (a `points`-only contract), and the representative *policy* is consumer-specific ("no universal representative"). Keeping it a node also makes the cluster-then-angle path wireable out of the box. The primitive stays public, so a future clustering op could call it directly if a strong case appears.
+- *Delivery model — thin operator over a shared library primitive:* the generic group-by-label reduction (segmented argmax/argmin/medoid, and aggregate stats) is a **public library function** any operator can call — the reusable core.
+  - Cluster-reduction ships as a **thin standalone operator** wrapping it, **not** folded into `ClusterDBSCANOp`: it combines `labels` + radar `detection_idx` + a `points`-derived score and emits representative *cell* indices, which would pollute the deliberately radar-agnostic clusterer (a `points`-only contract), and the representative *policy* is consumer-specific ("no universal representative").
+  - Keeping it a node also makes the cluster-then-angle path wireable out of the box. The primitive stays public, so a future clustering op could call it directly if a strong case appears.
 - *Representative is a real cell:* every policy selects an actual cluster member, so `rep_idx` addresses a real RD cell for `SnapshotGatherOp`. A mean/centroid is deliberately excluded — it is not a detected cell and cannot be gathered from.
 - *Score source:* the `peak` score is derived from `points` columns (via `feature_weights` / `score_method`), so any selection attribute — power, SNR — must be present as a feature column. Supplying it is the feature-assembly bridge's job (it builds `points` from detection attributes), which settles where the score comes from: a column of the same matrix used for clustering, not a separate input. The natural strength column is CFAR's `detection_score` (SNR-proportional), gathered per detection by feature-assembly — but the operator is not beholden to it: it reduces over whatever columns `points` carries, so any feature (or `score_fn` of several) can drive selection.
 - *Custom scoring:* `score_method = custom` uses a compile-time device functor (`score_fn`) — the module's template-based customization, GPU-callable — not a runtime callback. The built-in methods cover weighted feature combinations; the functor covers anything else (nonlinear scores, ratios, etc.).
 - *Feature centroid (medoid only):* the centroid is computed **inside the operator** — the per-cluster mean of the `feature_weights`-scaled `points` — and the medoid is the member nearest it (min scaled distance). It is never emitted (not a real cell). Matching `feature_weights` to the upstream DBSCAN `epsilon` keeps "nearest to centroid" consistent with the metric that formed the cluster. Both `peak` and `medoid` read `points` now; only `first` is feature-free.
 - *Carried over:* plain-tensor ports; precision by template instantiation; MatX + MatX memory spaces.
 
-
 ---
 
-## Angle Estimation Operators
+### Angle Estimation Operators
 
-### PhaseShiftBeamformerOp (dense)
+#### PhaseShiftBeamformerOp (dense)
 
 - **In:** `rd_maps` — complex64 / complex128, `(..., num_channels, num_doppler, num_range_bins)`. The channel axis sits immediately before the `(doppler, range)` plane and is reduced into the beam axes; `num_channels` must match `array_geometry`.
 - **Out:** `rda_cube` — complex64 / complex128, `(..., num_az, num_el, num_doppler, num_range_bins)`. Channel axis replaced by the `az × el` beam grid (or `u × v` under the `direction_cosine` convention); feeds CFARDetectorOp's dense path directly.
@@ -417,7 +430,7 @@ Reduces each cluster to one **representative detection** so the cluster-then-ang
 
 *(The beam weights W depend on `array_geometry`, `az_angles`, `el_angles`, and `array_taper`; overriding any of them rebuilds W — cached keyed on the inputs, so an unchanged override is free and a continuously-steered grid rebuilds as its expected per-tick cost.)*
 
-### SnapshotGatherOp
+#### SnapshotGatherOp
 
 Gathers, for each detection, the per-channel complex snapshot(s) from the RD maps — the channel vector at the detected cell plus a configurable range-Doppler neighborhood — into the `snapshot` matrix the sparse angle estimators consume. Pure indexed gather; no arithmetic.
 
@@ -449,7 +462,7 @@ Gathers, for each detection, the per-channel complex snapshot(s) from the RD map
 - *Beamscan:* the default `(0, 0)` window yields `num_snapshots = 1`, which Beamscan accepts (its 2D-or-3D-with-`num_snapshots=1` rule).
 - *Carried over:* plain-tensor ports; precision by template instantiation; MatX + MatX memory spaces.
 
-### Sparse angle estimators (shared slot)
+#### Sparse angle estimators (shared slot)
 
 `BeamscanEstimatorOp`, `MVDREstimatorOp`, `MUSICEstimatorOp`, `RootMUSICEstimatorOp`, and `ESPRITEstimatorOp` fill the same pluggable sparse slot. They share one **mandatory input port** and one **mandatory output port** so any estimator drops into the slot without rewiring; estimator-specific capabilities (spectrum, multi-source, diagnostics) ride on **separate optional ports** that a common consumer can ignore.
 
@@ -480,7 +493,7 @@ Grid-scan estimators (Beamscan, MVDR, MUSIC) additionally take a scan grid; the 
 
 Per-estimator deviations from the shared contract:
 
-#### BeamscanEstimatorOp
+##### BeamscanEstimatorOp
 
 - **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels)` **or** `(num_items, num_channels, num_snapshots)`. Beamscan is single-snapshot: a 3D input with `num_snapshots ≠ 1` is an error (a 2D input is the canonical form).
 - **Out:** `aoa_estimates` — `(num_items, 2)`.
@@ -491,7 +504,7 @@ Per-estimator deviations from the shared contract:
 - `array_taper` **[live]** — WindowSpec. Amplitude taper across the elements for spatial sidelobe control (aperture shading). Overriding rebuilds weights (cached). Default: none.
 - `peak_interpolation` **[live]** — enum {none, parabolic}. Sub-grid peak refinement: `parabolic` fits a quadratic around the grid maximum for sub-bin accuracy; `none` returns the argmax cell. Default: none.
 
-#### MVDREstimatorOp
+##### MVDREstimatorOp
 
 - **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`. `num_snapshots` should be ≳ `num_channels` for a well-conditioned (invertible) covariance.
 - **Out:** `aoa_estimates` — `(num_items, 2)`.
@@ -504,7 +517,7 @@ Per-estimator deviations from the shared contract:
 - `spatial_smoothing` **[live]** — int or none. Forward (sub-array averaging) spatial smoothing to decorrelate coherent multipath and raise the covariance rank, at the cost of effective aperture; requires a uniform sub-array geometry. Default: none.
 - `max_sources` **[live]** — int. Capacity of the optional `doa_multi` output — the number of Capon-spectrum peaks to report (`aoa_estimates` is always the strongest). Overriding reallocates `doa_multi` (minor). Default: 1.
 
-#### MUSICEstimatorOp
+##### MUSICEstimatorOp
 
 - **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`.
 - **Out:** `aoa_estimates` — `(num_items, 2)`.
@@ -517,7 +530,7 @@ Per-estimator deviations from the shared contract:
 - `spatial_smoothing` **[live]** — int or none. As MVDR — decorrelates coherent multipath at the cost of aperture; requires a uniform sub-array geometry. Default: none.
 - `max_sources` **[live]** — int. Capacity of the optional `doa_multi` / `source_count` outputs (holds up to `min(num_sources, max_sources)` DOAs). Default: 4.
 
-#### RootMUSICEstimatorOp
+##### RootMUSICEstimatorOp
 
 - **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`. Requires a ULA / uniform (Vandermonde) array geometry.
 - **Out:** `aoa_estimates` — `(num_items, 2)`. Gridless (DOAs from polynomial roots) — **no `angle_spectrum`**.
@@ -531,7 +544,7 @@ Per-estimator deviations from the shared contract:
 
 Requires a ULA / uniform (Vandermonde) geometry; a non-uniform virtual array needs a uniform sub-array selection (or spatial smoothing) first, and native 2-D az/el needs a 2-D-capable variant.
 
-#### ESPRITEstimatorOp
+##### ESPRITEstimatorOp
 
 - **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`. Requires a shift-invariant geometry (ULA or two identical displaced subarrays).
 - **Out:** `aoa_estimates` — `(num_items, 2)`. Gridless (closed-form eigenvalue rotation) — **no `angle_spectrum`**.
@@ -548,12 +561,11 @@ Requires a shift-invariant geometry; native 2-D az/el needs a 2-D variant (e.g. 
 
 *(Geometry note: Root-MUSIC and ESPRIT constrain the valid `array_geometry` — the non-uniform / holey virtual arrays from `VirtualArrayAssemblyOp` may need a ULA/subarray-selection or spatial-smoothing step first, and native 2-D az/el needs a 2-D-capable variant. They do not change the port shapes above.)*
 
-
 ---
 
-## MIMO Marshaling Operators
+### MIMO Marshaling Operators
 
-### MIMODeinterleaveOp
+#### MIMODeinterleaveOp
 
 - **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(..., N_rx, M·L, samples_per_chirp)`. Slow-time interleaves the M TX per the TX schedule.
 - **Out:** `adc_cube` — complex64 / complex128 / float32 / float64 (dtype preserved), `(..., M_tx, N_rx, L, samples_per_chirp)`. TX split into an explicit axis. Pure marshaling (strided reshape/gather).
@@ -562,7 +574,7 @@ Requires a shift-invariant geometry; native 2-D az/el needs a 2-D variant (e.g. 
 
 - `tx_schedule` — TXSchedule. The TDM firing pattern (carries `num_tx`); determines how the interleaved `M·L` slow-time axis splits into `(M_tx, L)`. The split is not inferable from the input alone — the `M·L` axis carries no marker of the boundaries — so this is required; `chirps_per_tx` (L) is then `(M·L)/num_tx`. Static (a fixed waveform / hardware property). TDM only. Default: none (required). The first-wave TDM chain (the downstream per-TX phase compensation) assumes **uniform** per-TX spacing, so a non-uniform / non-round-robin schedule is rejected with an error.
 
-### MIMOCoherentCompensationOp
+#### MIMOCoherentCompensationOp
 
 - **In:** `rd_maps` — complex64 / complex128. **TDM mode:** `(..., M_tx, N_rx, num_doppler, num_range_bins)` (TX axis already explicit from de-interleave). **DDM mode:** `(..., N_rx, num_doppler, num_range_bins)` (the M TX sit in distinct Doppler sub-bands). Rank/interpretation set by the `multiplexing_scheme` parameter.
 - **Out:** `rd_maps` — complex64 / complex128, `(..., M_tx, N_rx, num_doppler_out, num_range_bins)`. Separated, phase-aligned `(tx, rx)` block. `num_doppler_out = num_doppler` (TDM) or `num_doppler_per_tx` (DDM band width).
@@ -575,7 +587,7 @@ Requires a shift-invariant geometry; native 2-D az/el needs a 2-D variant (e.g. 
 
 *(No array/element geometry is needed here — this is a phase/demux operation, not a spatial one; `element_positions` enter only downstream at VirtualArrayAssemblyOp. `num_tx` is not a separate parameter — TDM reads it from the input's `M_tx` axis, DDM from `ddm_code`; anything sized by `num_tx` (e.g. the TDM per-Doppler-bin correction table) is built lazily on the first tick and cached, as with FFT plans, so it needs no init-time `num_tx`. TDM assumes uniform per-TX spacing; a non-uniform schedule is rejected upstream (see MIMODeinterleaveOp). Doppler-ambiguity / ÷M velocity handling lives here.)*
 
-### VirtualArrayAssemblyOp
+#### VirtualArrayAssemblyOp
 
 - **In:** `rd_maps` — complex64 / complex128, `(..., M_tx, N_rx, num_doppler, num_range_bins)`. Separated `(tx, rx)` block. (TX/RX element positions are parameters.)
 - **Out:** `rd_maps` — complex64 / complex128, `(..., num_virtual, num_doppler, num_range_bins)`. `(tx, rx)` flattened to a single virtual channel axis (`c = tx·N_rx + rx`), overlapped virtual elements deduped, so `num_virtual ≤ M·N`.
@@ -590,11 +602,11 @@ Requires a shift-invariant geometry; native 2-D az/el needs a 2-D variant (e.g. 
 
 ---
 
-# Supporting data structures
+## Supporting data structures
 
 Shared types the operators depend on; expanded as each operator is locked.
 
-## ArrayGeometry
+### ArrayGeometry
 
 Describes the (virtual) antenna array for beamforming and DOA estimation. Shared across `PhaseShiftBeamformerOp` and the sparse DOA estimators to keep array conventions consistent. Passed as a parameter (config), not a port.
 
@@ -602,7 +614,7 @@ Describes the (virtual) antenna array for beamforming and DOA estimation. Shared
 - `wavelength` — float. Operating wavelength (m), `c / carrier_frequency`. Sets the steering-vector phase per element.
 - `geometry_type` (optional) — enum {ULA, URA, UCA, Conformal}. Informational; enables optimized kernels (e.g. the spatial-FFT fast path).
 
-## AngleConvention
+### AngleConvention
 
 Defines the azimuth/elevation (AER) parameterization at the API boundary — the `(az, el) ↔ unit-vector` mapping — for every operator that consumes a scan grid or emits `(az, el)`. Passed as a **standalone, required parameter (no default)**; *not* folded into `ArrayGeometry`. Axis references interpreted in the array-local Cartesian frame; angles in radians; applied only as a boundary relabeling (kernels run in the fixed canonical convention).
 
@@ -612,7 +624,7 @@ Defines the azimuth/elevation (AER) parameterization at the API boundary — the
 - `elevation_positive_axis` — signed-axis enum. Axis increasing elevation rotates toward (`+z` = up, `−z` = NED-style down). Orthogonal to both other axes. `custom` only.
 - `elevation_reference` — enum {horizon, zenith}. Elevation up from the azimuth plane (radar/robotics/aviation) vs. polar angle from boresight/pole (physics). `zenith` carries `el ↔ π/2 − polar` (a genuine angle transform). Default: horizon (`custom` only).
 
-## WindowSpec
+### WindowSpec
 
 Specifies a window function for the FFT-based operators (range / Doppler windowing) and the array taper.
 
@@ -626,7 +638,7 @@ Specifies a window function for the FFT-based operators (range / Doppler windowi
 
 Used by: `FMCWRangeProcessorOp` / `FMCWDopplerProcessorOp` / `FMCWRangeDopplerProcessorOp` (`range_window`, `doppler_window`) and `PhaseShiftBeamformerOp` / `BeamscanEstimatorOp` (`array_taper`).
 
-## FMCWWaveformDescriptor
+### FMCWWaveformDescriptor
 
 Parameters of the transmitted FMCW chirp, shared across operators to avoid parameter drift.
 
@@ -639,7 +651,7 @@ Parameters of the transmitted FMCW chirp, shared across operators to avoid param
 
 Used by: `FMCWRangeProcessorOp` (dechirp reference; slope + sample rate for `range_bins`), `FMCWDopplerProcessorOp` (carrier → λ, PRI → PRF for `velocity_bins`), and the fused operator. Passed as a static parameter and/or delivered in-flight on the `waveform` override port.
 
-## DDMCodeDescriptor
+### DDMCodeDescriptor
 
 Describes the Doppler-division multiplexing scheme for `MIMOCoherentCompensationOp` (DDM mode) — how the M TX are separated after the Doppler FFT. (The forward-looking CDM/BPM extension would carry its orthogonal code here in a code-correlation mode; out of scope for now.)
 
@@ -650,7 +662,7 @@ Describes the Doppler-division multiplexing scheme for `MIMOCoherentCompensation
 
 Notes: the `[0, PRF)` Doppler span is shared across the M bands, so unambiguous velocity is reduced by M; band width `num_doppler_per_tx` follows the offset/guard layout. Doppler-ambiguity handling lives in `MIMOCoherentCompensationOp`.
 
-## TXSchedule
+### TXSchedule
 
 Describes the TDM slow-time firing pattern for `MIMODeinterleaveOp` — how the interleaved slow-time axis (`M·L` chirps) splits into an explicit TX axis.
 

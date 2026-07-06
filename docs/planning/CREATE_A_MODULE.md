@@ -534,7 +534,7 @@ wheel.packages = []
 
 ### 4.5 (Optional) Enable Debian packaging
 
-Add a `holohub_configure_deb(...)` call in `modules/my_sensor/CMakeLists.txt` to enable Debian
+Add a `holohub_configure_deb(...)` call in `modules/holoscan-my-sensor/CMakeLists.txt` to enable Debian
 packaging. See the function description in [cmake/HoloHubConfigHelpers.cmake](/cmake/HoloHubConfigHelpers.cmake)
 for parameters, including package dependency handling.
 
