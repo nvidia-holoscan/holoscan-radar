@@ -3,30 +3,32 @@
 //
 // Dev container for holoscan-radar.
 //
-// Reuses the module's root Dockerfile (the same image `./holohub run-container`
-// builds) and mirrors the holoscan-cli layout so paths match whether you work
-// in this dev container or via the CLI:
+// Reuses the module's root Dockerfile and mirrors the holoscan-cli layout:
 //   * the repo is bind-mounted at /workspace/holoscan-radar,
 //   * the data dir lands at /workspace/holoscan-radar/data.
-//
-// Per-developer data/storage directory:
-//   export HOLOSCAN_RADAR_DATA_DIR=/mnt/scratch/radar-data on the host before
-//   opening the container (see .devcontainer/README.md).
 {
   "name": "holoscan-radar",
 
-  "dockerComposeFile": "docker-compose.yml",
-  "service": "dev",
+  "build": {
+    "context": "..",
+    "dockerfile": "../Dockerfile"
+  },
+
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/holoscan-radar,type=bind,consistency=cached",
   "workspaceFolder": "/workspace/holoscan-radar",
 
-  // Work as the non-root `dev` user (team convention). Its UID/GID are baked to
-  // match the host user at build time, so no runtime UID remap is needed.
+  // Work as the non-root `dev` user (team convention). Let the devcontainer
+  // runtime update its UID/GID to match the host user for bind-mount writes.
   "remoteUser": "dev",
-  "updateRemoteUserUID": false,
+  "updateRemoteUserUID": true,
 
-  // Ensure the host data-dir source exists and record host UID/GID (see script)
-  // before compose builds and bind-mounts.
+  // Ensure the in-repo data directory exists before the workspace is mounted.
   "initializeCommand": "bash ${localWorkspaceFolder}/.devcontainer/initialize-host.sh ${localWorkspaceFolder}",
+
+  // Requires NVIDIA Container Toolkit. Remove on GPU-less hosts.
+  "runArgs": [
+    "--gpus=all"
+  ],
 
   "hostRequirements": {
     "gpu": "optional"
