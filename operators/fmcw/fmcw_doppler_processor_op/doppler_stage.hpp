@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -74,7 +75,82 @@ void run_doppler_stage(const DopplerStageConfig& cfg,
                        DopplerStageState<T>& state, const void* in,
                        int64_t batch, int64_t num_chirps,
                        int64_t num_range_bins, void* out, int64_t num_doppler,
-                       bool warn_on_rebuild, cudaStream_t stream);
+                       bool warn_on_rebuild, cudaStream_t stream) {
+  if (batch < 1 || num_chirps < 1 || num_range_bins < 1) {
+    throw std::invalid_argument(
+        "doppler stage: input view (batch, num_chirps, num_range_bins) "
+        "must be non-empty, got (" + std::to_string(batch) + ", " +
+        std::to_string(num_chirps) + ", " + std::to_string(num_range_bins) +
+        ")");
+  }
+  if (cfg.nfft.has_value() && *cfg.nfft < num_chirps) {
+    throw std::invalid_argument(
+        "doppler stage: nfft (" + std::to_string(*cfg.nfft) +
+        ") must be >= num_chirps (" + std::to_string(num_chirps) + ")");
+  }
+  if (num_doppler != doppler_num_bins(num_chirps, cfg.nfft)) {
+    throw std::invalid_argument(
+        "doppler stage: output num_doppler (" + std::to_string(num_doppler) +
+        ") does not match doppler_num_bins(num_chirps, nfft) (" +
+        std::to_string(doppler_num_bins(num_chirps, cfg.nfft)) + ")");
+  }
+
+  auto in_view =
+      make_const_complex_view3<T>(in, batch, num_chirps, num_range_bins);
+  auto out_view =
+      make_complex_view3<T>(out, batch, num_doppler, num_range_bins);
+  matx::cudaExecutor exec{stream};
+
+  // Correctness-first approach: materialize the
+  // slow-time axis innermost so the window multiply, FFT, and fftshift all
+  // act along the last axis, then permute back into the caller's layout.
+  auto permuted = matx::make_tensor<cuda::std::complex<T>>(
+      {batch, num_range_bins, num_chirps}, matx::MATX_ASYNC_DEVICE_MEMORY,
+      stream);
+  (permuted = matx::permute(in_view, {0, 2, 1})).run(exec);
+
+  if (cfg.window.type != WindowType::kNone) {
+    const std::string key = window_cache_key(cfg.window, num_chirps);
+    const auto& window = state.windows.get_or_build(
+        key, warn_on_rebuild, "Doppler window", [&]() {
+          return upload_coefficients<T>(generate_window(cfg.window,
+                                                        num_chirps),
+                                        stream);
+        });
+    auto window_bcast = matx::clone<3>(
+        window, {batch, num_range_bins, matx::matxKeepDim});
+    (permuted = permuted * window_bcast).run(exec);
+  }
+
+  // FFT plan reuse comes from MatX's internal plan cache; seen_fft_keys
+  // exists purely to decide when an override-driven new length warns.
+  const std::string fft_key =
+      "nfft=" + std::to_string(num_doppler) +
+      ",len=" + std::to_string(num_chirps) +
+      ",batch=" + std::to_string(batch * num_range_bins) +
+      ",dtype=" + std::string(sizeof(T) == 4 ? "complex64" : "complex128");
+  state.seen_fft_keys.get_or_build(fft_key, warn_on_rebuild,
+                                   "Doppler FFT plan",
+                                   []() { return true; });
+
+  // FFT along the (now innermost) slow-time axis; MatX zero-pads the input
+  // up to num_doppler when nfft > num_chirps.
+  auto spectrum = matx::make_tensor<cuda::std::complex<T>>(
+      {batch, num_range_bins, num_doppler}, matx::MATX_ASYNC_DEVICE_MEMORY,
+      stream);
+  (spectrum = matx::fft(permuted, static_cast<uint64_t>(num_doppler),
+                        to_matx_norm(cfg.fft_norm))).run(exec);
+
+  if (cfg.center_zero_doppler) {
+    // matx::fftshift1D maps output index i to input (i + (n + 1) / 2) % n
+    // along the last axis, which is exactly numpy.fft.fftshift's
+    // out[i] = in[(i + ceil(n / 2)) % n] for both even and odd n.
+    (out_view = matx::permute(matx::fftshift1D(spectrum), {0, 2, 1}))
+        .run(exec);
+  } else {
+    (out_view = matx::permute(spectrum, {0, 2, 1})).run(exec);
+  }
+}
 
 // Compute the velocity_bins axis (m/s) for the current configuration into a
 // device buffer of length num_doppler: v = -f_d * lambda / 2 with
@@ -83,6 +159,53 @@ void run_doppler_stage(const DopplerStageConfig& cfg,
 // cfg.center_zero_doppler). Requires cfg.waveform. Enqueued on `stream`.
 template <typename T>
 void fill_velocity_bins(const DopplerStageConfig& cfg, int64_t num_doppler,
-                        T* out, cudaStream_t stream);
+                        T* out, cudaStream_t stream) {
+  if (!cfg.waveform.has_value()) {
+    throw std::invalid_argument(
+        "doppler stage: velocity_bins requires a waveform descriptor");
+  }
+  if (num_doppler < 1) {
+    throw std::invalid_argument(
+        "doppler stage: velocity_bins length must be >= 1, got " +
+        std::to_string(num_doppler));
+  }
+  const double pri = cfg.waveform->chirp_repetition_interval;
+  if (pri <= 0.0) {
+    throw std::invalid_argument(
+        "doppler stage: waveform.chirp_repetition_interval must be > 0 to "
+        "derive the velocity_bins axis");
+  }
+  const double prf = 1.0 / pri;
+  const double wavelength = cfg.waveform->wavelength();
+
+  // Per-bin Doppler frequency on the (possibly centered) axis, then
+  // v = -f_d * lambda / 2. This must agree exactly with the independent
+  // reference in tests/cpp/utils/bin_model.hpp (expected_velocity_axis).
+  std::vector<T> axis(static_cast<size_t>(num_doppler));
+  for (int64_t i = 0; i < num_doppler; ++i) {
+    int64_t idx = i;
+    if (cfg.center_zero_doppler) {
+      // Position i on the shifted axis corresponds to unshifted bin
+      // (i - n/2) mod n (numpy.fft.fftshift semantics).
+      idx = (i - num_doppler / 2 + num_doppler) % num_doppler;
+    }
+    double f = static_cast<double>(idx) / static_cast<double>(num_doppler) *
+               prf;
+    if (f >= prf / 2.0) {
+      f -= prf;
+    }
+    axis[static_cast<size_t>(i)] = static_cast<T>(-f * wavelength / 2.0);
+  }
+
+  if (cudaMemcpyAsync(out, axis.data(), sizeof(T) * axis.size(),
+                      cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+    throw std::runtime_error(
+        "doppler stage: velocity_bins host-to-device upload failed");
+  }
+  // The host staging vector is freed on return: block until the copy lands
+  // (mirrors upload_coefficients; callers enqueue this before the Doppler
+  // FFT so the wait does not cover the hot path).
+  cudaStreamSynchronize(stream);
+}
 
 }  // namespace holoscan::radar::detail

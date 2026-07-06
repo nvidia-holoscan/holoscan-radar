@@ -45,6 +45,7 @@ class FMCWDopplerProcessorOp : public holoscan::Operator {
   FMCWDopplerProcessorOp() = default;
   ~FMCWDopplerProcessorOp() override;
 
+  void initialize() override;
   void setup(OperatorSpec& spec) override;
   void compute(InputContext& op_input, OutputContext& op_output,
                ExecutionContext& context) override;
