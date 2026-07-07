@@ -19,9 +19,10 @@ in-container layout.
 ## The `dev` user
 
 You work inside the container as `dev` (passwordless `sudo` available), not root.
-The image creates `dev` with default UID/GID `1000`, and the devcontainer runtime
-updates that account to match your host user when the container is created. That
-keeps files written through the source mount owned by your host account.
+The image creates `dev` at UID/GID `1000` (reclaiming those ids from the base
+image's `ubuntu` account), and the devcontainer runtime updates them to match
+your host user if it isn't `1000`. That keeps files written through the source
+mount owned by your host account.
 
 Passwordless `sudo` is enabled for `dev`, matching common dev-container practice.
 Treat the container as a development environment: code and tools you run inside it

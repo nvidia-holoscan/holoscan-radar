@@ -22,9 +22,6 @@
   "remoteUser": "dev",
   "updateRemoteUserUID": true,
 
-  // Ensure the in-repo data directory exists before the workspace is mounted.
-  "initializeCommand": "bash ${localWorkspaceFolder}/.devcontainer/initialize-host.sh ${localWorkspaceFolder}",
-
   // Requires NVIDIA Container Toolkit. Remove on GPU-less hosts.
   "runArgs": [
     "--gpus=all"
