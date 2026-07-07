@@ -1,0 +1,53 @@
+# Dev container
+
+A ready-to-use standalone development container for `holoscan-radar`. It reuses
+the module's root [`Dockerfile`](../Dockerfile) and mirrors the `holoscan-cli`
+in-container layout.
+
+## What it does
+
+- **Source-mounts the working directory.** The repo is bind-mounted at
+  `/workspace/holoscan-radar`, so every edit in the container is written back to
+  your local checkout.
+- **Exposes the GPUs.** The dev container passes `--gpus=all` (requires the
+  [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)).
+  On a GPU-less host, remove `runArgs` from `devcontainer.json`.
+- **Runs as a non-root `dev` user** (team convention). The devcontainer runtime
+  updates its UID/GID to match your host account so the bind-mounted source stays
+  writable.
+
+## The `dev` user
+
+You work inside the container as `dev` (passwordless `sudo` available), not root.
+The image creates `dev` at UID/GID `1000` (reclaiming those ids from the base
+image's `ubuntu` account), and the devcontainer runtime updates them to match
+your host user if it isn't `1000`. That keeps files written through the source
+mount owned by your host account.
+
+Passwordless `sudo` is enabled for `dev`, matching common dev-container practice.
+Treat the container as a development environment: code and tools you run inside it
+can escalate to root within the container.
+
+This non-root workflow is specific to the dev container. The
+`./holohub run-container` path intentionally keeps the Dockerfile's default root
+user for compatibility with the CLI and packaging flows, so files created through
+that path may have different ownership behavior on bind mounts.
+
+If your host UID/GID change, rebuild the container (*Dev Containers: Rebuild
+Container*) so the `dev` user is recreated with the new ids.
+
+## Opening it
+
+- **VS Code / Cursor:** *Dev Containers: Reopen in Container* from the command palette.
+- **CLI:** `devcontainer up --workspace-folder .`
+
+## Data Directory
+
+The in-repo `./data` folder is available at `/workspace/holoscan-radar/data`,
+the same path the `holohub` wrapper uses for `HOLOSCAN_CLI_DATA_DIR`.
+
+## Overriding the base image
+
+The container is pinned to the SDK version in the [`Dockerfile`](../Dockerfile)
+(`BASE_IMAGE`). To build against a different Holoscan SDK image, pass a
+different `BASE_IMAGE` build arg in `devcontainer.json`.

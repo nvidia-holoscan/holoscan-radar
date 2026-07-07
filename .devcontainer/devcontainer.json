@@ -1,0 +1,52 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Dev container for holoscan-radar.
+//
+// Reuses the module's root Dockerfile and mirrors the holoscan-cli layout:
+//   * the repo is bind-mounted at /workspace/holoscan-radar,
+//   * the data dir lands at /workspace/holoscan-radar/data.
+{
+  "name": "holoscan-radar",
+
+  "build": {
+    "context": "..",
+    "dockerfile": "../Dockerfile"
+  },
+
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/holoscan-radar,type=bind,consistency=cached",
+  "workspaceFolder": "/workspace/holoscan-radar",
+
+  // Work as the non-root `dev` user (team convention). Let the devcontainer
+  // runtime update its UID/GID to match the host user for bind-mount writes.
+  "remoteUser": "dev",
+  "updateRemoteUserUID": true,
+
+  // Requires NVIDIA Container Toolkit. Remove on GPU-less hosts.
+  "runArgs": [
+    "--gpus=all"
+  ],
+
+  "hostRequirements": {
+    "gpu": "optional"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "ms-python.python",
+        "charliermarsh.ruff"
+      ],
+      "settings": {
+        "cmake.sourceDirectory": "/workspace/holoscan-radar",
+        "cmake.buildDirectory": "/workspace/holoscan-radar/build",
+        "cmake.configureArgs": [
+          "-DHOLOSCAN_RADAR_BUILD_TESTING=ON"
+        ],
+        "python.defaultInterpreterPath": "/usr/bin/python3"
+      }
+    }
+  }
+}

@@ -1,6 +1,8 @@
 .bash_history
 .holohub/
 build/
+data/
+.cursor/
 _CPack_Packages/
 __pycache__/
 .cache/
