@@ -226,7 +226,7 @@ overrides, plus its own parameter handling.
 
 - Delete `operators/radar_op/`, `tests/cpp/test_operators.cpp`,
   `tests/python/test_radar_op.py` per the settled decision.
-- Rewire `applications/radar_pipeline/cpp` to a sim-source → range → clutter →
+- Rewire `applications/fmcw_siso/cpp` to a sim-source → range → clutter →
   Doppler chain; the Python app variant has no operators to import (bindings
   deferred) — reduce to a placeholder or remove, noted in the PR.
 - Update `python/holoscan/radar/__init__.py` (no operator exports until

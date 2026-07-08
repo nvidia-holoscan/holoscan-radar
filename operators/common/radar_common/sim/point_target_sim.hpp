@@ -6,9 +6,12 @@
 // closed-form contribution is summed over (rx, chirp, fast-time sample),
 // then noise is added.
 //
-// Deliberately independent of the operator implementations (no operator or
-// MatX includes) — this is the tautology guard: tests assert operator
-// outputs against this model's analytic ground truth.
+// A shared radar_common utility: applications use it to synthesize input
+// cubes, and tests use it as the tautology guard (asserting operator outputs
+// against its analytic ground truth). Deliberately independent of the operator
+// implementations (STL-only; no operator or MatX includes) so that the ground
+// truth it produces is derived from the signal model, not from the code under
+// test.
 //
 // Modeling assumptions: stop-and-hop (target frozen within a
 // chirp, advances between chirps), ego motion folded into target relative
@@ -39,7 +42,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace holoscan::radar::testing {
+namespace holoscan::radar::sim {
 
 inline constexpr double kSimPi = 3.14159265358979323846;
 inline constexpr double kSimSpeedOfLight = 299792458.0;
@@ -228,4 +231,4 @@ inline std::vector<double> to_real_if(const SimResult& sim) {
   return real_cube;
 }
 
-}  // namespace holoscan::radar::testing
+}  // namespace holoscan::radar::sim

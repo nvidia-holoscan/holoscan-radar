@@ -1,4 +1,4 @@
-# Radar Pipeline
+# FMCW SISO
 
 A SISO FMCW example application demonstrating the signal-processing chain:
 a synthetic ADC source (one static clutter return + one moving target,
@@ -7,11 +7,11 @@ analytic dechirped point-target model) feeding
 sink that locates the range-Doppler peak and reports it in physical units
 via the operators' `range_bins` / `velocity_bins` axis outputs.
 
-Launch via `./holohub run radar_pipeline`, or build directly:
+Launch via `./holohub run fmcw_siso`, or build directly:
 
 ```bash
 cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
-./build/applications/radar_pipeline/cpp/radar_pipeline
+./build/applications/fmcw_siso/cpp/fmcw_siso
 ```
 
 The clutter filter suppresses the (stronger) static return, so the reported

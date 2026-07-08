@@ -3,8 +3,9 @@
 
 // Tests for FMCWRangeProcessorOp.
 //
-// The analytic point-target simulator (utils/point_target_sim.hpp) provides
-// the input cubes and the forward bin model (utils/bin_model.hpp) the
+// The analytic point-target simulator
+// (radar_common/sim/point_target_sim.hpp) provides the input cubes and the
+// forward bin model (utils/bin_model.hpp) the
 // independent ground truth; assertions are made in the physical domain via
 // the operator's own range_bins output wherever possible. Driven through
 // the SDK-native holoscan::test::OperatorTestHarness (utils/sdk_harness.hpp).
@@ -26,7 +27,7 @@
 
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "utils/bin_model.hpp"
-#include "utils/point_target_sim.hpp"
+#include "radar_common/sim/point_target_sim.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
@@ -39,18 +40,18 @@ using holoscan::radar::WindowType;
 using holoscan::radar::testing::complex_cube_to_device;
 using holoscan::radar::testing::expected_range_axis;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::kSimSpeedOfLight;
-using holoscan::radar::testing::PointTarget;
+using holoscan::radar::sim::kSimSpeedOfLight;
+using holoscan::radar::sim::PointTarget;
 using holoscan::radar::testing::range_of_bin;
 using holoscan::radar::testing::real_cube_to_device;
-using holoscan::radar::testing::simulate;
-using holoscan::radar::testing::SimResult;
-using holoscan::radar::testing::SimScene;
-using holoscan::radar::testing::SimWaveform;
+using holoscan::radar::sim::simulate;
+using holoscan::radar::sim::SimResult;
+using holoscan::radar::sim::SimScene;
+using holoscan::radar::sim::SimWaveform;
 using holoscan::radar::testing::single_map;
 using holoscan::radar::testing::TensorMapCapture;
-using holoscan::radar::testing::to_real_if;
-using holoscan::radar::testing::Vec3;
+using holoscan::radar::sim::to_real_if;
+using holoscan::radar::sim::Vec3;
 using holoscan::radar::testing::wire_capture_sink;
 using holoscan::radar::testing::wire_data_source;
 using holoscan::radar::testing::wire_leading_override;

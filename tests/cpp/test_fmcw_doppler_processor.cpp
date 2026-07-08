@@ -33,7 +33,7 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "utils/bin_model.hpp"
-#include "utils/point_target_sim.hpp"
+#include "radar_common/sim/point_target_sim.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
@@ -755,7 +755,7 @@ TEST(FMCWDopplerProcessorOpTest, NfftSmallerThanChirpCountRejected) {
 // velocity read via velocity_bins matches the simulator's ground truth.
 TEST(FMCWDopplerProcessorOpTest, SimulatorTargetMapsToTruthVelocity) {
   RADAR_TEST_SKIP_IF_NO_GPU();
-  namespace rt = holoscan::radar::testing;
+  namespace rt = holoscan::radar::sim;
 
   rt::SimScene scene;
   scene.num_chirps = 32;

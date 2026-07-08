@@ -4,8 +4,9 @@
 find_package(GTest REQUIRED)
 include(GoogleTest)
 
-# Shared test utilities: analytic point-target simulator, forward bin
-# model, tensor fixtures, and the single-operator harness (tests/cpp/utils).
+# Shared test utilities: forward bin model, tensor fixtures, and the
+# single-operator harness (tests/cpp/utils). The analytic point-target
+# simulator now lives in radar_common/sim (reached via holoscan::radar_common).
 add_library(radar_test_utils INTERFACE)
 target_include_directories(radar_test_utils INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR})

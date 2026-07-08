@@ -27,14 +27,14 @@ holoscan-radar/
 │           ├── <operator_name>_stage.hpp   # (stage header name varies)
 │           └── metadata.json       # Operator-level metadata
 ├── applications/
-│   └── radar_pipeline/
+│   └── fmcw_siso/
 │       └── cpp/
-│           ├── radar_pipeline.cpp   # Example SISO pipeline
+│           ├── fmcw_siso.cpp        # Example SISO FMCW pipeline
 │           └── metadata.json        # Application-level metadata
 ├── python/holoscan/radar/
 │   └── __init__.py                 # Placeholder (bindings deferred)
 └── tests/
-    ├── cpp/                        # GTest suite (+ utils/: simulator, harness)
+    ├── cpp/                        # GTest suite (+ utils/: harness, fixtures, bin model)
     └── python/                     # pytest suite
 ```
 
@@ -49,8 +49,8 @@ defaults. On first run it installs `holoscan-cli` via pip if it isn't already im
 | Command | What it does |
 | --- | --- |
 | `./holohub run-container` | Build and start the development container |
-| `./holohub build radar_pipeline` | Configure and build the example pipeline inside the container |
-| `./holohub run radar_pipeline` | Configure, build, and run the example pipeline inside the container |
+| `./holohub build fmcw_siso` | Configure and build the example pipeline inside the container |
+| `./holohub run fmcw_siso` | Configure, build, and run the example pipeline inside the container |
 | `./holohub install --dev` | Install a `.pth` hook so `import holoscan.radar` works in any shell |
 | `./holohub package holoscan-radar` | Build a native Debian package with Holoscan Radar operators |
 | `./holohub package holoscan-radar --pkg-generator=WHEEL` | Build a native Python 3.12 package with Holoscan Radar operators |

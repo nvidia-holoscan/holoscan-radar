@@ -13,6 +13,7 @@ Each folder depends only on the layers above it:
 | --- | --- | --- |
 | `radar_common/descriptors/` | Shared config-plane types (`WindowSpec`, `FMCWWaveformDescriptor`, …) and the contract enums (`WindowType`, `FftNorm`, `ClutterFilterMethod`) | STL only |
 | `radar_common/dsp/` | Host-side signal math (window/taper generation) | descriptors |
+| `radar_common/sim/` | Analytic point-target FMCW signal simulator (input synthesis for applications; analytic ground truth for tests) | STL only |
 | `radar_common/tensor/` | Rank-agnostic batching, DLPack device buffers, MatX view/upload helpers | holoscan::Tensor, CUDA |
 | `radar_common/sdk/` | Operator-authoring glue: parameter override ports, warn-once config cache, argument-setter registration | holoscan core |
 

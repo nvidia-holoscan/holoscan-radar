@@ -36,7 +36,7 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "utils/bin_model.hpp"
-#include "utils/point_target_sim.hpp"
+#include "radar_common/sim/point_target_sim.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
@@ -54,19 +54,19 @@ using holoscan::radar::testing::complex_cube_to_device;
 using holoscan::radar::testing::expected_doppler_bin;
 using holoscan::radar::testing::expected_range_bin;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::kSimSpeedOfLight;
-using holoscan::radar::testing::PointTarget;
+using holoscan::radar::sim::kSimSpeedOfLight;
+using holoscan::radar::sim::PointTarget;
 using holoscan::radar::testing::range_of_bin;
 using holoscan::radar::testing::real_cube_to_device;
-using holoscan::radar::testing::simulate;
-using holoscan::radar::testing::SimResult;
-using holoscan::radar::testing::SimScene;
-using holoscan::radar::testing::SimWaveform;
+using holoscan::radar::sim::simulate;
+using holoscan::radar::sim::SimResult;
+using holoscan::radar::sim::SimScene;
+using holoscan::radar::sim::SimWaveform;
 using holoscan::radar::testing::single_map;
 using holoscan::radar::testing::TensorMapCapture;
 using holoscan::radar::testing::to_device_tensor;
-using holoscan::radar::testing::to_real_if;
-using holoscan::radar::testing::Vec3;
+using holoscan::radar::sim::to_real_if;
+using holoscan::radar::sim::Vec3;
 using holoscan::radar::testing::wire_capture_sink;
 using holoscan::radar::testing::wire_data_source;
 using holoscan::radar::testing::wire_leading_override;

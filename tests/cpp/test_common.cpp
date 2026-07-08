@@ -21,7 +21,7 @@
 #include "radar_common/dsp/window.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "utils/bin_model.hpp"
-#include "utils/point_target_sim.hpp"
+#include "radar_common/sim/point_target_sim.hpp"
 
 namespace {
 
@@ -31,7 +31,8 @@ using holoscan::radar::generate_window;
 using holoscan::radar::window_cache_key;
 using holoscan::radar::WindowSpec;
 using holoscan::radar::WindowType;
-namespace sim = holoscan::radar::testing;
+namespace sim = holoscan::radar::sim;
+namespace fix = holoscan::radar::testing;  // bin-model / fixture helpers
 
 constexpr double kPi = 3.14159265358979323846;
 
@@ -395,7 +396,7 @@ TEST(PointTargetSim, BeatFrequencyMatchesAnalyticModel) {
     }
   }
 
-  const int64_t expected = sim::expected_range_bin(
+  const int64_t expected = fix::expected_range_bin(
       result.truth[0].range, scene.waveform.slope(),
       scene.waveform.sample_rate, n, scene.propagation_speed);
   EXPECT_NEAR(static_cast<double>(best_bin), static_cast<double>(expected),
@@ -416,7 +417,7 @@ TEST(PointTargetSim, DopplerPhaseSlopeMatchesRadialVelocity) {
 
   const double lambda = scene.waveform.wavelength();
   const double f_d =
-      sim::doppler_frequency(result.truth[0].radial_velocity, lambda);
+      fix::doppler_frequency(result.truth[0].radial_velocity, lambda);
   double expected =
       2.0 * kPi * f_d * scene.waveform.chirp_repetition_interval;
   // Wrap to (-pi, pi] for comparison.

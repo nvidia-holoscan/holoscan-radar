@@ -12,7 +12,7 @@ Holoscan Radar is a **Holoscan Module** — a self-contained, redistributable li
 
 ```bash
 # Run the C++ demo application (synthetic SISO FMCW chain)
-./holohub run radar_pipeline
+./holohub run fmcw_siso
 ```
 
 ---
@@ -81,7 +81,7 @@ class MyApp : public holoscan::Application {
 int main() { holoscan::make_application<MyApp>()->run(); }
 ```
 
-See [`applications/radar_pipeline`](applications/radar_pipeline) for the
+See [`applications/fmcw_siso`](applications/fmcw_siso) for the
 complete example, including the synthetic ADC source and peak reporting.
 
 ---

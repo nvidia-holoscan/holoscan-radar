@@ -1,7 +1,7 @@
 {
     "$schema": "urn:holohub:application:v1",
     "application": {
-        "name": "radar_pipeline",
+        "name": "fmcw_siso",
         "authors": [
             {
                 "name": "Holoscan Team",
@@ -24,9 +24,9 @@
         "default_mode": "default",
         "modes": {
 			"default": {
-				"description": "Run the C++ radar pipeline",
+				"description": "Run the C++ FMCW SISO pipeline",
 				"run": {
-					"command": "<holohub_app_bin>/radar_pipeline",
+					"command": "<holohub_app_bin>/fmcw_siso",
 					"workdir": "holohub_app_bin"
 				}
 			}

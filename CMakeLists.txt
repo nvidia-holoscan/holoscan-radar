@@ -170,7 +170,7 @@ file(WRITE ${_DEV_PTH_FILE}
 # ---------------------------------------------------------------------------
 # Debian / wheel packaging lives under pkg/. pkg/CMakeLists.txt calls
 # add_holohub_package(holoscan-radar OPERATORS radar_op
-# APPLICATIONS radar_pipeline), which defines the
+# APPLICATIONS fmcw_siso), which defines the
 # PKG_holoscan_radar option, FORCEs the OP_/APP_ deps to ON when the
 # package is enabled, and enters pkg/holoscan-radar/CMakeLists.txt
 # for the holohub_configure_deb() call.

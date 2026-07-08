@@ -79,8 +79,8 @@ inline int64_t range_num_bins(bool complex_input, int64_t samples_per_chirp,
 // cfg.fft_norm normalization. No fftshift (bin 0 = zero range). All work is
 // enqueued on `stream`; no synchronization.
 //
-// Dechirp reference convention (must match the test simulator,
-// tests/cpp/utils/point_target_sim.hpp): when cfg.waveform has
+// Dechirp reference convention (must match the point-target simulator,
+// radar_common/sim/point_target_sim.hpp): when cfg.waveform has
 // reference_samples they are used directly; otherwise the reference is
 // synthesized as r[s] = exp(+j*pi*slope*t_s^2) with t_s = s / sample_rate,
 // and the dechirped signal is in[s] * conj(r[s]).

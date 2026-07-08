@@ -27,7 +27,7 @@
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/point_target_sim.hpp"
+#include "radar_common/sim/point_target_sim.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
@@ -45,7 +45,7 @@ using holoscan::radar::testing::wire_capture_sink;
 using holoscan::radar::testing::wire_data_source;
 using holoscan::radar::testing::wire_leading_override;
 using holoscan::test::create_operator_test;
-namespace sim = holoscan::radar::testing;
+namespace sim = holoscan::radar::sim;
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr int64_t kChirps = 16;

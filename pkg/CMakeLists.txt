@@ -20,4 +20,4 @@
 #      value when their own helpers run option().
 add_holohub_package(holoscan-radar
                     OPERATORS    radar_op
-                    APPLICATIONS radar_pipeline)
+                    APPLICATIONS fmcw_siso)

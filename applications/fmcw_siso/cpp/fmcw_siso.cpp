@@ -8,12 +8,13 @@
 //               -> FMCWDopplerProcessorOp -> PeakReportOp
 //
 // The source synthesizes one static clutter return and one moving target
-// with the analytic dechirped point-target model; the sink locates the
-// range-Doppler peak and reports it in physical units via the operators'
-// range_bins / velocity_bins axis outputs.
+// with the shared analytic point-target simulator
+// (radar_common/sim/point_target_sim.hpp); the sink locates the range-Doppler
+// peak and reports it in physical units via the operators' range_bins /
+// velocity_bins axis outputs.
 //
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
-// Run:   ./build/applications/radar_pipeline/cpp/radar_pipeline
+// Run:   ./build/applications/fmcw_siso/cpp/fmcw_siso
 
 #include <cuda_runtime_api.h>
 
@@ -31,13 +32,13 @@
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/sim/point_target_sim.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace radar = holoscan::radar;
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 constexpr int64_t kNumChirps = 128;
 constexpr int64_t kSamplesPerChirp = 256;
 
@@ -51,31 +52,29 @@ radar::FMCWWaveformDescriptor demo_waveform() {
   return waveform;
 }
 
-// Analytic dechirped point-target contribution (stop-and-hop), matching
-// the operators' sign conventions: beat = slope * tau (positive), carrier
-// phase -2*pi*f_c*tau so radial velocity v_r > 0 (receding) satisfies
-// v = -f_d * lambda / 2.
-void add_target(std::vector<std::complex<float>>* cube, double range_m,
-                double radial_velocity, double amplitude) {
+// Scene for the shared analytic point-target simulator
+// (radar_common/sim/point_target_sim.hpp): one static clutter return and one
+// receding moving target, along the +x look direction. The simulator emits a
+// dechirped IF cube whose sign conventions match the operators' locked
+// dechirp/Doppler semantics, so its output feeds the range processor directly.
+radar::sim::SimScene demo_scene() {
   const radar::FMCWWaveformDescriptor waveform = demo_waveform();
-  const double c = radar::kDefaultPropagationSpeed;
-  const double slope = waveform.slope();
-  const double pri = waveform.chirp_repetition_interval;
-  for (int64_t k = 0; k < kNumChirps; ++k) {
-    const double range_k =
-        range_m + radial_velocity * static_cast<double>(k) * pri;
-    const double tau = 2.0 * range_k / c;
-    const double beat = slope * tau;
-    for (int64_t s = 0; s < kSamplesPerChirp; ++s) {
-      const double t = static_cast<double>(s) / waveform.sample_rate;
-      const double phase =
-          2.0 * kPi * beat * t - 2.0 * kPi * waveform.carrier_frequency * tau;
-      (*cube)[static_cast<size_t>(k * kSamplesPerChirp + s)] +=
-          std::complex<float>(
-              static_cast<float>(amplitude * std::cos(phase)),
-              static_cast<float>(amplitude * std::sin(phase)));
-    }
-  }
+  radar::sim::SimScene scene;
+  scene.waveform.carrier_frequency = waveform.carrier_frequency;
+  scene.waveform.bandwidth = waveform.slope() * waveform.chirp_duration;
+  scene.waveform.chirp_duration = waveform.chirp_duration;
+  scene.waveform.sample_rate = waveform.sample_rate;
+  scene.waveform.chirp_repetition_interval =
+      waveform.chirp_repetition_interval;
+  scene.num_chirps = kNumChirps;
+  scene.samples_per_chirp = kSamplesPerChirp;
+  scene.targets.push_back({radar::sim::Vec3{60.0, 0.0, 0.0},
+                           radar::sim::Vec3{0.0, 0.0, 0.0},
+                           {1.0, 0.0}});  // static clutter
+  scene.targets.push_back({radar::sim::Vec3{42.0, 0.0, 0.0},
+                           radar::sim::Vec3{5.5, 0.0, 0.0},
+                           {0.5, 0.0}});  // moving target (receding)
+  return scene;
 }
 
 }  // namespace
@@ -94,12 +93,14 @@ class AdcSourceOp : public holoscan::Operator {
                holoscan::OutputContext& op_output,
                [[maybe_unused]] holoscan::ExecutionContext& context)
       override {
-    std::vector<std::complex<float>> cube(
-        static_cast<size_t>(kNumChirps * kSamplesPerChirp), {0.0F, 0.0F});
-    add_target(&cube, /*range_m=*/60.0, /*radial_velocity=*/0.0,
-               /*amplitude=*/1.0);  // static clutter
-    add_target(&cube, /*range_m=*/42.0, /*radial_velocity=*/5.5,
-               /*amplitude=*/0.5);  // moving target
+    // The simulator computes in double precision; cast to the float ADC
+    // sample type before upload.
+    const radar::sim::SimResult sim = radar::sim::simulate(demo_scene());
+    std::vector<std::complex<float>> cube(sim.cube.size());
+    for (size_t i = 0; i < sim.cube.size(); ++i) {
+      cube[i] = std::complex<float>(static_cast<float>(sim.cube[i].real()),
+                                    static_cast<float>(sim.cube[i].imag()));
+    }
 
     auto tensor = radar::make_device_tensor(
         {kNumChirps, kSamplesPerChirp}, radar::complex_dtype<float>());

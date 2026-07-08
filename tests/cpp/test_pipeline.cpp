@@ -26,7 +26,7 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "utils/bin_model.hpp"
-#include "utils/point_target_sim.hpp"
+#include "radar_common/sim/point_target_sim.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
@@ -38,6 +38,7 @@ using holoscan::radar::FMCWDopplerProcessorOp;
 using holoscan::radar::FMCWRangeProcessorOp;
 using holoscan::radar::FMCWWaveformDescriptor;
 namespace rt = holoscan::radar::testing;
+namespace psim = holoscan::radar::sim;
 
 FMCWWaveformDescriptor chain_waveform() {
   FMCWWaveformDescriptor waveform;
@@ -49,8 +50,8 @@ FMCWWaveformDescriptor chain_waveform() {
   return waveform;
 }
 
-rt::SimScene chain_scene() {
-  rt::SimScene scene;
+psim::SimScene chain_scene() {
+  psim::SimScene scene;
   scene.waveform.carrier_frequency = 77e9;
   scene.waveform.bandwidth = 150e6;
   scene.waveform.chirp_duration = 20e-6;
@@ -62,9 +63,9 @@ rt::SimScene chain_scene() {
   scene.seed = 0xC0FFEE;
   // Static clutter (stronger) + moving target.
   scene.targets.push_back(
-      {rt::Vec3{0.0, 60.0, 0.0}, rt::Vec3{0.0, 0.0, 0.0}, {2.0, 0.0}});
+      {psim::Vec3{0.0, 60.0, 0.0}, psim::Vec3{0.0, 0.0, 0.0}, {2.0, 0.0}});
   scene.targets.push_back(
-      {rt::Vec3{0.0, 42.0, 0.0}, rt::Vec3{0.0, 5.5, 0.0}, {1.0, 0.0}});
+      {psim::Vec3{0.0, 42.0, 0.0}, psim::Vec3{0.0, 5.5, 0.0}, {1.0, 0.0}});
   return scene;
 }
 
@@ -106,8 +107,8 @@ struct ChainResult {
   rt::HostTensor velocity_axis;
 };
 
-ChainResult run_split_chain(const rt::SimScene& scene) {
-  const auto sim = rt::simulate(scene);
+ChainResult run_split_chain(const psim::SimScene& scene) {
+  const auto sim = psim::simulate(scene);
   auto cube = rt::complex_cube_to_device<float>(sim.cube, sim.shape);
 
   rt::TensorMapCapture rd_maps;
@@ -129,7 +130,7 @@ ChainResult run_split_chain(const rt::SimScene& scene) {
 
 TEST(EndToEndPipeline, SisoChainDetectsMovingTargetAtTruth) {
   RADAR_TEST_SKIP_IF_NO_GPU();
-  const rt::SimScene scene = chain_scene();
+  const psim::SimScene scene = chain_scene();
   const ChainResult result = run_split_chain(scene);
 
   ASSERT_EQ(result.rd_map.shape.size(), 2u);
@@ -178,7 +179,7 @@ TEST(EndToEndPipeline, SisoChainDetectsMovingTargetAtTruth) {
 
 TEST(EndToEndPipeline, ChainIsDeterministicForFixedSeed) {
   RADAR_TEST_SKIP_IF_NO_GPU();
-  const rt::SimScene scene = chain_scene();
+  const psim::SimScene scene = chain_scene();
   const ChainResult a = run_split_chain(scene);
   const ChainResult b = run_split_chain(scene);
   ASSERT_EQ(a.rd_map.data.size(), b.rd_map.data.size());
