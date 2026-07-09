@@ -75,6 +75,35 @@ CfarOutputs run_cfar_score(std::shared_ptr<holoscan::Tensor> input,
   return {std::move(score_cap.frames.front())};
 }
 
+template <typename T, typename... Args>
+std::vector<HostTensor> run_cfar_scores(std::vector<holoscan::TensorMap> frames,
+                                        Args&&... args) {
+  auto harness = create_operator_test<CFARDetectorOp<T>>(
+      std::forward<Args>(args)...);
+  harness->template add_input_port<holoscan::TensorMap>("rd_maps",
+                                                        std::move(frames));
+
+  TensorMapCapture mask_cap;
+  TensorMapCapture score_cap;
+  TensorMapCapture noise_cap;
+  TensorMapCapture idx_cap;
+  harness->template add_output_port<holoscan::TensorMap>(
+      "detection_mask", mask_cap.validators());
+  harness->template add_output_port<holoscan::TensorMap>(
+      "detection_score", score_cap.validators());
+  harness->template add_output_port<holoscan::TensorMap>(
+      "noise_estimate", noise_cap.validators());
+  harness->template add_output_port<holoscan::TensorMap>(
+      "detection_idx", idx_cap.validators());
+
+  harness->run_test();
+
+  EXPECT_EQ(mask_cap.frames.size(), score_cap.frames.size());
+  EXPECT_EQ(noise_cap.frames.size(), score_cap.frames.size());
+  EXPECT_EQ(idx_cap.frames.size(), score_cap.frames.size());
+  return std::move(score_cap.frames);
+}
+
 auto ca_args(double pfa) {
   return std::make_tuple(
       holoscan::Arg("cfar_variant") = CfarVariant::kCA,
@@ -159,19 +188,26 @@ PfaTrialResult run_monte_carlo_pfa_k1(int num_trials, int64_t num_doppler,
   PfaTrialResult aggregate;
   std::mt19937_64 rng(seed);
   const auto args =
-      (variant == CfarVariant::kGO) ? go_args(configured_pfa) : ca_args(configured_pfa);
+      (variant == CfarVariant::kGO) ? go_args(configured_pfa)
+                                    : ca_args(configured_pfa);
+  std::vector<holoscan::TensorMap> frames;
+  frames.reserve(static_cast<size_t>(num_trials));
   for (int trial = 0; trial < num_trials; ++trial) {
     const auto map =
         exponential_power_map(num_doppler, num_range, 1.0, rng);
     auto input = to_device_tensor<double>(map, {num_doppler, num_range},
                                           real_dtype<double>());
-    const auto out = std::apply(
-        [&](auto&&... a) {
-          return run_cfar_score<double>(input, std::forward<decltype(a)>(a)...);
-        },
-        args);
+    frames.push_back(single_map(std::move(input), "rd_maps"));
+  }
+  const auto scores = std::apply(
+      [&](auto&&... a) {
+        return run_cfar_scores<double>(std::move(frames),
+                                       std::forward<decltype(a)>(a)...);
+      },
+      args);
+  for (const HostTensor& score : scores) {
     const PfaTrialResult trial_result =
-        count_interior_false_alarms<double>(out.score, num_doppler, num_range);
+        count_interior_false_alarms<double>(score, num_doppler, num_range);
     aggregate.interior_cells += trial_result.interior_cells;
     aggregate.false_alarms += trial_result.false_alarms;
   }
@@ -180,22 +216,28 @@ PfaTrialResult run_monte_carlo_pfa_k1(int num_trials, int64_t num_doppler,
 
 PfaTrialResult run_monte_carlo_pfa_nci(int num_trials, int64_t num_channels,
                                        int64_t num_doppler, int64_t num_range,
-                                       double configured_pfa, uint64_t seed) {
+                                       double configured_pfa, uint64_t seed,
+                                       CfarVariant variant) {
   PfaTrialResult aggregate;
   std::mt19937_64 rng(seed);
+  std::vector<holoscan::TensorMap> frames;
+  frames.reserve(static_cast<size_t>(num_trials));
   for (int trial = 0; trial < num_trials; ++trial) {
     const auto cube = exponential_power_cube(
         {num_channels, num_doppler, num_range}, 1.0, rng);
     auto input = to_device_tensor<double>(
         cube, {num_channels, num_doppler, num_range}, real_dtype<double>());
-    const auto out = run_cfar_score<double>(
-        input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
-        holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
-        holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
-        holoscan::Arg("pfa") = configured_pfa,
-        holoscan::Arg("nci_axes") = std::vector<int64_t>{0});
+    frames.push_back(single_map(std::move(input), "rd_maps"));
+  }
+  const auto scores = run_cfar_scores<double>(
+      std::move(frames), holoscan::Arg("cfar_variant") = variant,
+      holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
+      holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
+      holoscan::Arg("pfa") = configured_pfa,
+      holoscan::Arg("nci_axes") = std::vector<int64_t>{0});
+  for (const HostTensor& score : scores) {
     const PfaTrialResult trial_result =
-        count_interior_false_alarms<double>(out.score, num_doppler, num_range);
+        count_interior_false_alarms<double>(score, num_doppler, num_range);
     aggregate.interior_cells += trial_result.interior_cells;
     aggregate.false_alarms += trial_result.false_alarms;
   }
@@ -250,7 +292,27 @@ TEST(CFARDetectorOpStatisticalTest, CaMonteCarloPfaNciK8) {
   constexpr double kPfa = 1e-2;
 
   const PfaTrialResult result = run_monte_carlo_pfa_nci(
-      kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0xCAFEBABE0002ULL);
+      kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0xCAFEBABE0002ULL,
+      CfarVariant::kCA);
+  ASSERT_GT(result.interior_cells, 0);
+  const double realized =
+      static_cast<double>(result.false_alarms) /
+      static_cast<double>(result.interior_cells);
+  expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells);
+}
+
+TEST(CFARDetectorOpStatisticalTest, GoMonteCarloPfaNciK8) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+
+  constexpr int kTrials = 30;
+  constexpr int64_t kChannels = 8;
+  constexpr int64_t kMapDoppler = 64;
+  constexpr int64_t kMapRange = 64;
+  constexpr double kPfa = 1e-2;
+
+  const PfaTrialResult result = run_monte_carlo_pfa_nci(
+      kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0x474F434641520002ULL,
+      CfarVariant::kGO);
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
       static_cast<double>(result.false_alarms) /

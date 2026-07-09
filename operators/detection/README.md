@@ -34,8 +34,7 @@ header is the full contract; the current build implements a faithful subset:
   `detection_idx`, unit + Monte Carlo statistical tests per variant, and the
   four output ports. `detection_score`, `detection_mask`, and `noise_estimate`
   are dense maps; `detection_idx` is compacted per tick. Team open items (bool
-  mask transport, K>1 contract wording, `max_cached_kernels` no-op, GO NCI
-  `K>1` calibration) live in
+  mask transport, K>1 contract wording, `max_cached_kernels` no-op) live in
   [`cfar_detector_op/OPEN_ITEMS.md`](cfar_detector_op/OPEN_ITEMS.md).
 - **Staged follow-ups (declared, not yet implemented — not contract
   changes):**
@@ -68,10 +67,10 @@ header is the full contract; the current build implements a faithful subset:
   uploaded as a per-training-count lookup table for interior and border
   cells. The GO multiplier uses the same Gamma(`K`) CUT statistic but
   calibrates against the 2-D GOGO noise model (range GO × Doppler GO) via
-  host Monte Carlo inversion, bracketed from the CA seed. For `K = 1` both
-  variants are Monte Carlo / closed-form validated. For `K > 1` the code is
-  **ahead of the contract** — see
-  [`cfar_detector_op/OPEN_ITEMS.md`](cfar_detector_op/OPEN_ITEMS.md) §2 and §5.
+  host Monte Carlo inversion, bracketed from the CA seed. For `K = 1` and
+  representative `K > 1` NCI cases, both variants are Monte Carlo /
+  closed-form validated. For `K > 1` the code is **ahead of the contract** —
+  see [`cfar_detector_op/OPEN_ITEMS.md`](cfar_detector_op/OPEN_ITEMS.md) §2.
   Preserved leading axes stay batched and are recorded in `detection_idx` as
   extra columns before `(doppler_bin, range_bin)`.
 - **Streams.** Work is enqueued on the stream from `receive_cuda_stream()`;

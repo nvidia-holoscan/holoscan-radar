@@ -274,14 +274,6 @@ double sample_gamma_k(int64_t k, std::mt19937_64& rng) {
   return sum;
 }
 
-double sample_side_mean(int64_t n_side, int64_t k, std::mt19937_64& rng) {
-  double sum = 0.0;
-  for (int64_t i = 0; i < n_side; ++i) {
-    sum += sample_gamma_k(k, rng);
-  }
-  return sum / static_cast<double>(n_side);
-}
-
 double go_side_statistic_host(double neg_sum, int64_t neg_cnt, double pos_sum,
                               int64_t pos_cnt) {
   if (neg_cnt > 0 && pos_cnt > 0) {
@@ -341,18 +333,6 @@ double simulate_gogo_noise_interior(int guard_d, int guard_r, int train_d,
   return std::max(range_go, doppler_go);
 }
 
-double simulate_gogo_noise_symmetric(int64_t n_side, int64_t k,
-                                     std::mt19937_64& rng) {
-  if (n_side <= 0) {
-    return 0.0;
-  }
-  const double range_go =
-      std::max(sample_side_mean(n_side, k, rng), sample_side_mean(n_side, k, rng));
-  const double doppler_go =
-      std::max(sample_side_mean(n_side, k, rng), sample_side_mean(n_side, k, rng));
-  return std::max(range_go, doppler_go);
-}
-
 double go_cfar_pfa_from_alpha_impl(double alpha, int64_t n_side, int64_t k,
                                    int mc_trials, int guard_d, int guard_r,
                                    int train_d, int train_r) {
@@ -366,8 +346,8 @@ double go_cfar_pfa_from_alpha_impl(double alpha, int64_t n_side, int64_t k,
                       (static_cast<uint64_t>(k) << 32));
   int64_t false_alarms = 0;
   for (int trial = 0; trial < mc_trials; ++trial) {
-    const double noise =
-        simulate_gogo_noise_interior(guard_d, guard_r, train_d, train_r, k, rng);
+    const double noise = simulate_gogo_noise_interior(
+        guard_d, guard_r, train_d, train_r, k, rng);
     const double cut = sample_gamma_k(k, rng);
     if (cut > alpha * noise) {
       ++false_alarms;

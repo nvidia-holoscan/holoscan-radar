@@ -35,8 +35,9 @@ std::vector<double> build_ca_alpha_lut(double pfa, int64_t fold,
 // cell (matches cfar_go_kernel).
 void go_training_side_counts(int d, int r, int num_doppler, int num_range,
                              int guard_d, int guard_r, int train_d,
-                             int train_r, int64_t* range_neg, int64_t* range_pos,
-                             int64_t* doppler_neg, int64_t* doppler_pos);
+                             int train_r, int64_t* range_neg,
+                             int64_t* range_pos, int64_t* doppler_neg,
+                             int64_t* doppler_pos);
 
 // LUT index from side counts (symmetric interior → n; border-asymmetric →
 // min of the two active sides per axis, then min across axes when both

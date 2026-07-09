@@ -38,8 +38,9 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
   deferred to group discussion.
 - **`CFARDetectorOp` GO slice** — 2-D GOGO greatest-of stencil (range GO ×
   Doppler GO), host Monte Carlo `alpha` LUT (CA-seeded bracket), full GO
-  contract test matrix + `GoMonteCarloPfaK1` statistical test. Checklist-complete
-  for the GO variant modulo shared open items (§2, §4) and GO NCI `K>1` (§5).
+  contract test matrix + `GoMonteCarloPfaK1` / `GoMonteCarloPfaNciK8`
+  statistical tests. Checklist-complete for the GO variant modulo shared open
+  items (§2, §4).
 - **Still outstanding on the same operator:** SO / OS variants (`cfar_variant`
   values other than CA/GO throw today).
 
