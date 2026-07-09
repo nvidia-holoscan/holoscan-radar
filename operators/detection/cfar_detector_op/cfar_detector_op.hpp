@@ -58,10 +58,10 @@ constexpr std::string_view to_string(CfarVariant variant) {
 // Precision is fixed at compile time by the template instantiation
 // (T = float → complex64/float32, T = double → complex128/float64).
 //
-// Implementation status: the CA variant is implemented for arbitrary leading
-// axes with optional non-coherent integration (nci_axes), Gamma(K) CA
-// thresholding, and batch-widened detection_idx. GO/SO/OS variants are
-// declared but not yet implemented — see operators/detection/README.md.
+// Implementation status: the CA and GO variants are implemented for arbitrary
+// leading axes with optional non-coherent integration (nci_axes), Gamma(K)
+// thresholding, and batch-widened detection_idx. SO/OS variants are declared
+// but not yet implemented — see operators/detection/README.md.
 template <typename T>
 class CFARDetectorOp : public holoscan::Operator {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
@@ -120,9 +120,10 @@ class CFARDetectorOp : public holoscan::Operator {
   std::shared_ptr<holoscan::Tensor> nci_table_dev_{};
   std::vector<int64_t> nci_table_host_cache_{};
 
-  // Host-built alpha(N) LUT for CA-CFAR (incomplete-beta inversion). Rebuilt
-  // when pfa, fold, window footprint, or map size changes.
+  // Host-built alpha(N) LUT for CA/GO-CFAR. Rebuilt when pfa, fold, window
+  // footprint, map size, or variant changes.
   struct AlphaLutKey {
+    CfarVariant variant{CfarVariant::kCA};
     double pfa{-1.0};
     int64_t fold{0};
     int guard_d{0};
@@ -133,10 +134,11 @@ class CFARDetectorOp : public holoscan::Operator {
     int64_t num_range{0};
 
     bool operator==(const AlphaLutKey& other) const {
-      return pfa == other.pfa && fold == other.fold &&
-             guard_d == other.guard_d && guard_r == other.guard_r &&
-             train_d == other.train_d && train_r == other.train_r &&
-             num_doppler == other.num_doppler && num_range == other.num_range;
+      return variant == other.variant && pfa == other.pfa &&
+             fold == other.fold && guard_d == other.guard_d &&
+             guard_r == other.guard_r && train_d == other.train_d &&
+             train_r == other.train_r && num_doppler == other.num_doppler &&
+             num_range == other.num_range;
     }
     bool operator!=(const AlphaLutKey& other) const {
       return !(*this == other);

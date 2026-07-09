@@ -25,7 +25,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | --- | --- | --- | --- |
 | Fill out `AGENTS.md` + this status file | deustice | `deustice/planning` | in review |
 | Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness | deustice | `deustice/sigproc-ops` | in progress |
-| Detection operator (`operators/detection/` + `CFARDetectorOp`) | dpc | `dpc/detection` | **CA variant done** (see below); GO/SO/OS outstanding |
+| Detection operator (`operators/detection/` + `CFARDetectorOp`) | dpc | `dpc/detection` | **CA + GO done** (see below); SO/OS outstanding |
 
 ### Landed on `dpc/detection`
 
@@ -36,8 +36,12 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
   the CA variant; open contract/SDK items in
   [`CFARDetectorOp open items`](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md)
   deferred to group discussion.
-- **Still outstanding on the same operator:** GO / SO / OS variants (`cfar_variant`
-  values other than CA throw today).
+- **`CFARDetectorOp` GO slice** — 2-D GOGO greatest-of stencil (range GO ×
+  Doppler GO), host Monte Carlo `alpha` LUT (CA-seeded bracket), full GO
+  contract test matrix + `GoMonteCarloPfaK1` statistical test. Checklist-complete
+  for the GO variant modulo shared open items (§2, §4) and GO NCI `K>1` (§5).
+- **Still outstanding on the same operator:** SO / OS variants (`cfar_variant`
+  values other than CA/GO throw today).
 
 ## Up next (unclaimed)
 

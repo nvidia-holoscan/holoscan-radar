@@ -195,14 +195,25 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
   const int train_d = static_cast<int>(effective_training_cells_[0]);
   const int train_r = static_cast<int>(effective_training_cells_[1]);
 
-  AlphaLutKey lut_key{effective_pfa_,       plan.fold,
+  AlphaLutKey lut_key{cfar_variant_.get(),
+                      effective_pfa_,       plan.fold,
                       guard_d,              guard_r,
                       train_d,              train_r,
                       num_doppler,          num_range};
   if (lut_key != alpha_lut_key_) {
-    alpha_lut_host_cache_ = detail::build_ca_alpha_lut(
-        effective_pfa_, plan.fold, num_doppler, num_range, guard_d, guard_r,
-        train_d, train_r);
+    if (cfar_variant_.get() == CfarVariant::kCA) {
+      alpha_lut_host_cache_ = detail::build_ca_alpha_lut(
+          effective_pfa_, plan.fold, num_doppler, num_range, guard_d, guard_r,
+          train_d, train_r);
+    } else if (cfar_variant_.get() == CfarVariant::kGO) {
+      alpha_lut_host_cache_ = detail::build_go_alpha_lut(
+          effective_pfa_, plan.fold, num_doppler, num_range, guard_d, guard_r,
+          train_d, train_r);
+    } else {
+      throw std::invalid_argument(
+          std::string("CFARDetectorOp: variant '") +
+          std::string(to_string(cfar_variant_.get())) + "' is not implemented");
+    }
     alpha_lut_key_ = lut_key;
 
     std::vector<T> lut_t(alpha_lut_host_cache_.size());

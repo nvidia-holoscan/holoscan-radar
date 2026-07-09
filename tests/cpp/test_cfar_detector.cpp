@@ -1052,21 +1052,6 @@ TEST(CFARDetectorOpTest, RejectsInvalidNciAxis) {
       std::invalid_argument);
 }
 
-TEST(CFARDetectorOpTest, RejectsUnimplementedGoVariant) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
-  const auto map = power_map(1.0, {{8, 16}}, 100.0);
-  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
-                                        real_dtype<double>());
-  EXPECT_THROW(
-      run_cfar<double>(input, holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-                       holoscan::Arg("guard_cells") =
-                           std::vector<int64_t>{1, 1},
-                       holoscan::Arg("training_cells") =
-                           std::vector<int64_t>{2, 2},
-                       holoscan::Arg("pfa") = 1e-3),
-      std::invalid_argument);
-}
-
 TEST(CFARDetectorOpTest, RejectsUnimplementedSoVariant) {
   RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{8, 16}}, 100.0);

@@ -24,21 +24,23 @@ Typical placement:
 [`docs/planning/OPERATOR_API.md`](../../docs/planning/OPERATOR_API.md). The
 header is the full contract; the current build implements a faithful subset:
 
-- **Implemented (CA variant — checklist-complete):** CA (cell-averaging)
-  variant only, complex and real IF power paths, per-cell (border-correct)
-  training-cell count, `pfa` / `guard_cells` / `training_cells` /
-  `threshold_scale` / `max_detections` / `nci_axes` (all overridable with
-  sticky mid-stream tests), non-coherent integration over leading axes with
-  Gamma(`K`) CA thresholding (host incomplete-beta LUT), batch-widened
-  `detection_idx`, unit + Monte Carlo statistical tests, and the four output
-  ports. `detection_score`, `detection_mask`, and `noise_estimate` are dense
-  maps; `detection_idx` is compacted per tick. Team open items (bool mask
-  transport, K>1 contract wording, `max_cached_kernels` no-op) live in
+- **Implemented (CA + GO variants — checklist-complete for each):** CA
+  (cell-averaging) and GO (2-D GOGO greatest-of) variants, complex and real
+  IF power paths, per-cell (border-correct) training-cell count, `pfa` /
+  `guard_cells` / `training_cells` / `threshold_scale` / `max_detections` /
+  `nci_axes` (all overridable with sticky mid-stream tests), non-coherent
+  integration over leading axes with Gamma(`K`) thresholding (CA: host
+  incomplete-beta LUT; GO: host Monte Carlo LUT seeded from CA), batch-widened
+  `detection_idx`, unit + Monte Carlo statistical tests per variant, and the
+  four output ports. `detection_score`, `detection_mask`, and `noise_estimate`
+  are dense maps; `detection_idx` is compacted per tick. Team open items (bool
+  mask transport, K>1 contract wording, `max_cached_kernels` no-op, GO NCI
+  `K>1` calibration) live in
   [`cfar_detector_op/OPEN_ITEMS.md`](cfar_detector_op/OPEN_ITEMS.md).
 - **Staged follow-ups (declared, not yet implemented — not contract
   changes):**
-  - GO / SO / OS variants (`cfar_variant` is static, so each is a clean
-    per-instance boundary; non-CA currently raises a clear error).
+  - SO / OS variants (`cfar_variant` is static, so each is a clean
+    per-instance boundary; non-CA/GO currently raises a clear error).
   - Device-side `detection_idx` compaction (v1 compacts host-side with one
     stream sync per tick).
 
@@ -59,14 +61,17 @@ header is the full contract; the current build implements a faithful subset:
   `|·|²`; real `rd_maps` → treated as an already-formed power map (mirrors
   `FMCWRangeProcessorOp`'s real/complex handling). No parameter.
 - **Non-coherent integration.** `nci_axes` sums power along the listed leading
-  axes before CA-CFAR; the cell statistic is Gamma(`K`) with
+  axes before CFAR; the cell statistic is Gamma(`K`) with
   `K = ∏ integrated axis sizes` (`K = 1` when `nci_axes = []`). The CA
   multiplier `alpha(N)` is precomputed on the host by inverting
   `Pfa = I_{1/(1 + alpha/N)}(N·K, K)` (regularized incomplete beta) and
   uploaded as a per-training-count lookup table for interior and border
-  cells. For `K = 1` this matches the contract exactly. For `K > 1` the code
-  is **ahead of the contract** — see
-  [`cfar_detector_op/OPEN_ITEMS.md`](cfar_detector_op/OPEN_ITEMS.md) §2.
+  cells. The GO multiplier uses the same Gamma(`K`) CUT statistic but
+  calibrates against the 2-D GOGO noise model (range GO × Doppler GO) via
+  host Monte Carlo inversion, bracketed from the CA seed. For `K = 1` both
+  variants are Monte Carlo / closed-form validated. For `K > 1` the code is
+  **ahead of the contract** — see
+  [`cfar_detector_op/OPEN_ITEMS.md`](cfar_detector_op/OPEN_ITEMS.md) §2 and §5.
   Preserved leading axes stay batched and are recorded in `detection_idx` as
   extra columns before `(doppler_bin, range_bin)`.
 - **Streams.** Work is enqueued on the stream from `receive_cuda_stream()`;

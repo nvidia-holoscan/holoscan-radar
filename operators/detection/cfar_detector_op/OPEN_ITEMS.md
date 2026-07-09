@@ -154,3 +154,27 @@ checklist/CI lint gate was not reproduced here.
 **Status:** open — CA-CFAR implementation is otherwise checklist-complete;
 resolve by passing CI lint on the PR or running pre-commit locally before
 merge.
+
+---
+
+## 5. GO-CFAR `nci_axes` / Gamma(K) calibration — **K = 1 validated; K > 1
+deferred**
+
+**Context.** GO-CFAR uses a 2-D GOGO noise model (greatest-of on range sides,
+then Doppler sides, then max across axes). `alpha` is calibrated on the host
+via Monte Carlo inversion (`cfar_alpha.cpp`), bracketed from the CA closed-form
+seed. `GoMonteCarloPfaK1` validates realized Pfa ≈ configured `pfa` for
+homogeneous clutter with `K = 1`.
+
+**What is not yet covered.** There is no `GoMonteCarloPfaNciK8` statistical
+test (unlike CA). GO NCI integration reuses the same Gamma(`K`) CUT statistic
+and applies `go_cfar_alpha(pfa, n_side, K)` when building the LUT, but the
+Monte Carlo simulator was validated only for `K = 1` in this slice.
+
+**Questions for the team.**
+
+- Add `GoMonteCarloPfaNciK8` before claiming GO contract completeness for NCI
+  Pfa, or explicitly defer alongside §2's contract gap?
+
+**Status:** open — GO unit NCI tests cover shape/detectability; statistical Pfa
+for `K > 1` is not yet validated.

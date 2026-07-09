@@ -83,6 +83,14 @@ auto ca_args(double pfa) {
       holoscan::Arg("pfa") = pfa);
 }
 
+auto go_args(double pfa) {
+  return std::make_tuple(
+      holoscan::Arg("cfar_variant") = CfarVariant::kGO,
+      holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
+      holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
+      holoscan::Arg("pfa") = pfa);
+}
+
 std::vector<double> exponential_power_map(int64_t num_doppler,
                                           int64_t num_range, double mean,
                                           std::mt19937_64& rng) {
@@ -147,9 +155,11 @@ void expect_realized_pfa_near_configured(double realized, double configured,
 
 PfaTrialResult run_monte_carlo_pfa_k1(int num_trials, int64_t num_doppler,
                                       int64_t num_range, double configured_pfa,
-                                      uint64_t seed) {
+                                      uint64_t seed, CfarVariant variant) {
   PfaTrialResult aggregate;
   std::mt19937_64 rng(seed);
+  const auto args =
+      (variant == CfarVariant::kGO) ? go_args(configured_pfa) : ca_args(configured_pfa);
   for (int trial = 0; trial < num_trials; ++trial) {
     const auto map =
         exponential_power_map(num_doppler, num_range, 1.0, rng);
@@ -159,7 +169,7 @@ PfaTrialResult run_monte_carlo_pfa_k1(int num_trials, int64_t num_doppler,
         [&](auto&&... a) {
           return run_cfar_score<double>(input, std::forward<decltype(a)>(a)...);
         },
-        ca_args(configured_pfa));
+        args);
     const PfaTrialResult trial_result =
         count_interior_false_alarms<double>(out.score, num_doppler, num_range);
     aggregate.interior_cells += trial_result.interior_cells;
@@ -203,7 +213,26 @@ TEST(CFARDetectorOpStatisticalTest, CaMonteCarloPfaK1) {
   constexpr double kPfa = 1e-2;
 
   const PfaTrialResult result = run_monte_carlo_pfa_k1(
-      kTrials, kMapDoppler, kMapRange, kPfa, 0xCAFEBABE0001ULL);
+      kTrials, kMapDoppler, kMapRange, kPfa, 0xCAFEBABE0001ULL,
+      CfarVariant::kCA);
+  ASSERT_GT(result.interior_cells, 0);
+  const double realized =
+      static_cast<double>(result.false_alarms) /
+      static_cast<double>(result.interior_cells);
+  expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells);
+}
+
+TEST(CFARDetectorOpStatisticalTest, GoMonteCarloPfaK1) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+
+  constexpr int kTrials = 30;
+  constexpr int64_t kMapDoppler = 64;
+  constexpr int64_t kMapRange = 64;
+  constexpr double kPfa = 1e-2;
+
+  const PfaTrialResult result = run_monte_carlo_pfa_k1(
+      kTrials, kMapDoppler, kMapRange, kPfa, 0x474F434641520001ULL,
+      CfarVariant::kGO);
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
       static_cast<double>(result.false_alarms) /

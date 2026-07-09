@@ -125,6 +125,129 @@ __global__ void cfar_ca_kernel(const T* power, int64_t batch,
   mask[idx] = s > T{1};
 }
 
+// GO-CFAR (2-D GOGO): split training cells by range sign (rr) and Doppler
+// sign (dd) relative to the CUT, form range_go = max(mean_neg, mean_pos) and
+// doppler_go = max(mean_neg, mean_pos) on each axis (single-sided at borders),
+// then noise_estimate = max(range_go, doppler_go). Alpha LUT is indexed by
+// go_lut_index(range_neg, range_pos, doppler_neg, doppler_pos).
+__device__ int64_t go_lut_side_index_dev(int64_t neg_count, int64_t pos_count) {
+  if (neg_count > 0 && pos_count > 0) {
+    return neg_count < pos_count ? neg_count : pos_count;
+  }
+  return neg_count > pos_count ? neg_count : pos_count;
+}
+
+__device__ int64_t go_lut_index_dev(int64_t range_neg, int64_t range_pos,
+                                    int64_t doppler_neg, int64_t doppler_pos) {
+  const int64_t nr = go_lut_side_index_dev(range_neg, range_pos);
+  const int64_t nd = go_lut_side_index_dev(doppler_neg, doppler_pos);
+  if (nr > 0 && nd > 0) {
+    return nr < nd ? nr : nd;
+  }
+  return nr > nd ? nr : nd;
+}
+
+template <typename T>
+__device__ T go_side_statistic(T neg_sum, int64_t neg_cnt, T pos_sum,
+                               int64_t pos_cnt) {
+  if (neg_cnt > 0 && pos_cnt > 0) {
+    const T neg_mean = neg_sum / static_cast<T>(neg_cnt);
+    const T pos_mean = pos_sum / static_cast<T>(pos_cnt);
+    return neg_mean > pos_mean ? neg_mean : pos_mean;
+  }
+  if (neg_cnt > 0) {
+    return neg_sum / static_cast<T>(neg_cnt);
+  }
+  if (pos_cnt > 0) {
+    return pos_sum / static_cast<T>(pos_cnt);
+  }
+  return T{0};
+}
+
+template <typename T>
+__global__ void cfar_go_kernel(const T* power, int64_t batch,
+                               int64_t num_doppler, int64_t num_range,
+                               int guard_d, int guard_r, int train_d,
+                               int train_r, T threshold_scale,
+                               const T* alpha_lut, int64_t alpha_lut_size,
+                               T* score, T* noise, bool* mask) {
+  const int64_t r = blockIdx.x * blockDim.x + threadIdx.x;
+  const int64_t d = blockIdx.y * blockDim.y + threadIdx.y;
+  const int64_t b = blockIdx.z;
+  if (r >= num_range || d >= num_doppler || b >= batch) {
+    return;
+  }
+
+  const int half_d = guard_d + train_d;
+  const int half_r = guard_r + train_r;
+  const int64_t plane = num_doppler * num_range;
+  const T* p = power + b * plane;
+
+  T range_neg_sum = T{0};
+  T range_pos_sum = T{0};
+  T doppler_neg_sum = T{0};
+  T doppler_pos_sum = T{0};
+  int64_t range_neg_cnt = 0;
+  int64_t range_pos_cnt = 0;
+  int64_t doppler_neg_cnt = 0;
+  int64_t doppler_pos_cnt = 0;
+
+  for (int dd = -half_d; dd <= half_d; ++dd) {
+    const int64_t nd = d + dd;
+    if (nd < 0 || nd >= num_doppler) {
+      continue;
+    }
+    const bool guard_row = (dd >= -guard_d && dd <= guard_d);
+    for (int rr = -half_r; rr <= half_r; ++rr) {
+      const int64_t nr = r + rr;
+      if (nr < 0 || nr >= num_range) {
+        continue;
+      }
+      if (guard_row && rr >= -guard_r && rr <= guard_r) {
+        continue;
+      }
+      const T cell = p[nd * num_range + nr];
+      if (rr < 0) {
+        range_neg_sum += cell;
+        ++range_neg_cnt;
+      } else if (rr > 0) {
+        range_pos_sum += cell;
+        ++range_pos_cnt;
+      }
+      if (dd < 0) {
+        doppler_neg_sum += cell;
+        ++doppler_neg_cnt;
+      } else if (dd > 0) {
+        doppler_pos_sum += cell;
+        ++doppler_pos_cnt;
+      }
+    }
+  }
+
+  const int64_t idx = b * plane + d * num_range + r;
+  const int64_t lut_idx = go_lut_index_dev(range_neg_cnt, range_pos_cnt,
+                                           doppler_neg_cnt, doppler_pos_cnt);
+  if (lut_idx == 0) {
+    noise[idx] = T{0};
+    score[idx] = T{0};
+    mask[idx] = false;
+    return;
+  }
+
+  const T range_go =
+      go_side_statistic(range_neg_sum, range_neg_cnt, range_pos_sum, range_pos_cnt);
+  const T doppler_go = go_side_statistic(doppler_neg_sum, doppler_neg_cnt,
+                                         doppler_pos_sum, doppler_pos_cnt);
+  const T noise_est = range_go > doppler_go ? range_go : doppler_go;
+  const T alpha = lut_idx < alpha_lut_size ? alpha_lut[lut_idx] : T{0};
+  const T threshold = threshold_scale * alpha * noise_est;
+  noise[idx] = noise_est;
+  const T s =
+      threshold > T{0} ? p[d * num_range + r] / threshold : T{0};
+  score[idx] = s;
+  mask[idx] = s > T{1};
+}
+
 // Run the CFAR stage over a collapsed batch of (doppler, range) planes.
 //
 //   in     — device pointer, (batch_in, num_doppler, num_range).
@@ -143,7 +266,7 @@ __global__ void cfar_ca_kernel(const T* power, int64_t batch,
 // All outputs are preallocated by the caller. Work is enqueued on `stream`;
 // no synchronization here.
 //
-// v1 implements CfarVariant::kCA only; GO/SO/OS throw std::invalid_argument
+// v1 implements CfarVariant::kCA and kGO; SO/OS throw std::invalid_argument
 // (they are static per instance, so this is a clean per-instance boundary).
 template <typename T>
 void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
@@ -153,11 +276,11 @@ void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
                     const int64_t* batch_in_table_dev, const void* alpha_lut,
                     int64_t alpha_lut_size, void* power, void* integrated_power,
                     void* score, void* noise, void* mask, cudaStream_t stream) {
-  if (variant != CfarVariant::kCA) {
+  if (variant != CfarVariant::kCA && variant != CfarVariant::kGO) {
     throw std::invalid_argument(
         std::string("CFAR stage: variant '") + std::string(to_string(variant)) +
-        "' is not implemented yet (v1 implements CA); instantiate a CA "
-        "detector or extend cfar_stage.hpp");
+        "' is not implemented yet (v1 implements CA and GO); instantiate a "
+        "supported detector or extend cfar_stage.hpp");
   }
 
   const int64_t n = batch_in * num_doppler * num_range;
@@ -203,12 +326,21 @@ void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
                   1);
   for (int64_t b = 0; b < out_batch; ++b) {
     const int64_t plane = num_doppler * num_range;
-    cfar_ca_kernel<T><<<grid, block, 0, stream>>>(
-        cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
-        train_d, train_r, static_cast<T>(threshold_scale), alpha_lut_t,
-        alpha_lut_size, static_cast<T*>(score) + b * plane,
-        static_cast<T*>(noise) + b * plane,
-        static_cast<bool*>(mask) + b * plane);
+    if (variant == CfarVariant::kCA) {
+      cfar_ca_kernel<T><<<grid, block, 0, stream>>>(
+          cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
+          train_d, train_r, static_cast<T>(threshold_scale), alpha_lut_t,
+          alpha_lut_size, static_cast<T*>(score) + b * plane,
+          static_cast<T*>(noise) + b * plane,
+          static_cast<bool*>(mask) + b * plane);
+    } else {
+      cfar_go_kernel<T><<<grid, block, 0, stream>>>(
+          cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
+          train_d, train_r, static_cast<T>(threshold_scale), alpha_lut_t,
+          alpha_lut_size, static_cast<T*>(score) + b * plane,
+          static_cast<T*>(noise) + b * plane,
+          static_cast<bool*>(mask) + b * plane);
+    }
   }
 }
 

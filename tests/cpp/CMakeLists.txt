@@ -55,5 +55,7 @@ radar_add_test(test_pipeline
     holoscan::fmcw_range_doppler_processor_op)
 radar_add_test(test_cfar_detector
     holoscan::cfar_detector_op)
+radar_add_test(test_cfar_detector_go
+    holoscan::cfar_detector_op)
 radar_add_statistical_test(test_cfar_detector_statistical
     holoscan::cfar_detector_op)
