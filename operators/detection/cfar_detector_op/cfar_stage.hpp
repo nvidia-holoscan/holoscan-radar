@@ -30,16 +30,6 @@
 
 namespace holoscan::radar::detail {
 
-// Device pow(pfa, exp) at the instantiation precision.
-template <typename T>
-__device__ inline T cfar_pow(T base, T exp) {
-  if constexpr (sizeof(T) == sizeof(float)) {
-    return powf(base, exp);
-  } else {
-    return pow(base, exp);
-  }
-}
-
 // Sum power along integrated leading axes using a host-built lookup table.
 // in_power is (batch_in, doppler, range); out_power is (out_batch, doppler,
 // range).
@@ -71,18 +61,17 @@ __global__ void nci_sum_kernel(const T* in_power, T* out_power,
 // count, the noise estimate, the Pfa-derived multiplier alpha, the score,
 // and the boolean mask in a single launch.
 //
-//   alpha(N, K) = N * (pfa^(-1/(N*K)) - 1)   [CA, Gamma(K) cell statistic]
+//   Pfa = I_{1/(1 + alpha/N)}(N*K, K)  [regularized incomplete beta]
+//   alpha(N) is precomputed on the host and passed as alpha_lut[N].
 //   threshold = threshold_scale * alpha * noise
 //   score = power / threshold ; mask = score > 1
-//
-// K = 1 recovers the exponential-cell CA formula used when nci_axes = [].
 template <typename T>
 __global__ void cfar_ca_kernel(const T* power, int64_t batch,
                                int64_t num_doppler, int64_t num_range,
                                int guard_d, int guard_r, int train_d,
-                               int train_r, T pfa, T threshold_scale,
-                               int64_t nci_fold, T* score, T* noise,
-                               bool* mask) {
+                               int train_r, T threshold_scale,
+                               const T* alpha_lut, int64_t alpha_lut_size,
+                               T* score, T* noise, bool* mask) {
   const int64_t r = blockIdx.x * blockDim.x + threadIdx.x;
   const int64_t d = blockIdx.y * blockDim.y + threadIdx.y;
   const int64_t b = blockIdx.z;
@@ -124,14 +113,14 @@ __global__ void cfar_ca_kernel(const T* power, int64_t batch,
     return;
   }
   const T n = static_cast<T>(train_cnt);
-  const T fold = static_cast<T>(nci_fold);
   const T noise_est = train_sum / n;
+  // train_cnt > 0 here (the train_cnt == 0 case returned above).
   const T alpha =
-      n * (cfar_pow<T>(pfa, T{-1} / (n * fold)) - T{1});
+      train_cnt < alpha_lut_size ? alpha_lut[train_cnt] : T{0};
   const T threshold = threshold_scale * alpha * noise_est;
   noise[idx] = noise_est;
-  const T s = threshold > T{0} ? p[b * plane + d * num_range + r] / threshold
-                               : T{0};
+  const T s =
+      threshold > T{0} ? p[d * num_range + r] / threshold : T{0};
   score[idx] = s;
   mask[idx] = s > T{1};
 }
@@ -160,10 +149,10 @@ template <typename T>
 void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
                     int64_t batch_in, int64_t out_batch, int64_t num_doppler,
                     int64_t num_range, int guard_d, int guard_r, int train_d,
-                    int train_r, double pfa, double threshold_scale,
-                    int64_t nci_fold, const int64_t* batch_in_table_dev,
-                    void* power, void* integrated_power, void* score,
-                    void* noise, void* mask, cudaStream_t stream) {
+                    int train_r, double threshold_scale, int64_t nci_fold,
+                    const int64_t* batch_in_table_dev, const void* alpha_lut,
+                    int64_t alpha_lut_size, void* power, void* integrated_power,
+                    void* score, void* noise, void* mask, cudaStream_t stream) {
   if (variant != CfarVariant::kCA) {
     throw std::invalid_argument(
         std::string("CFAR stage: variant '") + std::string(to_string(variant)) +
@@ -207,6 +196,7 @@ void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
         "run_cfar_stage: out_batch != batch_in requires nci_fold > 1");
   }
 
+  const T* alpha_lut_t = static_cast<const T*>(alpha_lut);
   const dim3 block(16, 16, 1);
   const dim3 grid(static_cast<unsigned>((num_range + block.x - 1) / block.x),
                   static_cast<unsigned>((num_doppler + block.y - 1) / block.y),
@@ -215,8 +205,8 @@ void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
     const int64_t plane = num_doppler * num_range;
     cfar_ca_kernel<T><<<grid, block, 0, stream>>>(
         cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
-        train_d, train_r, static_cast<T>(pfa), static_cast<T>(threshold_scale),
-        nci_fold, static_cast<T*>(score) + b * plane,
+        train_d, train_r, static_cast<T>(threshold_scale), alpha_lut_t,
+        alpha_lut_size, static_cast<T*>(score) + b * plane,
         static_cast<T*>(noise) + b * plane,
         static_cast<bool*>(mask) + b * plane);
   }

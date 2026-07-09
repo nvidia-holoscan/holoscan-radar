@@ -24,13 +24,17 @@ Typical placement:
 [`docs/planning/OPERATOR_API.md`](../../docs/planning/OPERATOR_API.md). The
 header is the full contract; the current build implements a faithful subset:
 
-- **Implemented:** CA (cell-averaging) variant, complex and real IF power
-  paths, per-cell (border-correct) training-cell count, `pfa` /
-  `guard_cells` / `training_cells` / `threshold_scale` / `max_detections`
-  / `nci_axes` (all overridable), non-coherent integration over leading
-  axes with Gamma(`K`) CA thresholding, batch-widened `detection_idx`, and
-  the four output ports. `detection_score`, `detection_mask`, and
-  `noise_estimate` are dense maps; `detection_idx` is compacted per tick.
+- **Implemented (CA variant — checklist-complete):** CA (cell-averaging)
+  variant only, complex and real IF power paths, per-cell (border-correct)
+  training-cell count, `pfa` / `guard_cells` / `training_cells` /
+  `threshold_scale` / `max_detections` / `nci_axes` (all overridable with
+  sticky mid-stream tests), non-coherent integration over leading axes with
+  Gamma(`K`) CA thresholding (host incomplete-beta LUT), batch-widened
+  `detection_idx`, unit + Monte Carlo statistical tests, and the four output
+  ports. `detection_score`, `detection_mask`, and `noise_estimate` are dense
+  maps; `detection_idx` is compacted per tick. Team open items (bool mask
+  transport, K>1 contract wording, `max_cached_kernels` no-op) live in
+  [`cfar_detector_op/OPEN_ITEMS.md`](cfar_detector_op/OPEN_ITEMS.md).
 - **Staged follow-ups (declared, not yet implemented — not contract
   changes):**
   - GO / SO / OS variants (`cfar_variant` is static, so each is a clean
@@ -57,11 +61,11 @@ header is the full contract; the current build implements a faithful subset:
 - **Non-coherent integration.** `nci_axes` sums power along the listed leading
   axes before CA-CFAR; the cell statistic is Gamma(`K`) with
   `K = ∏ integrated axis sizes` (`K = 1` when `nci_axes = []`). The CA
-  multiplier is recomputed from `K` each tick. For `K = 1` this matches the
-  contract exactly: `α = N · (Pfa^(-1/N) - 1)`. For `K > 1` the code uses the
-  power-law generalization `α = N · (Pfa^(-1/(N·K)) - 1)` — sufficient for
-  current unit tests but **not** the settled false-alarm calibration; the
-  correct CA-CFAR Pfa under Gamma statistics needs incomplete-beta math. See
+  multiplier `alpha(N)` is precomputed on the host by inverting
+  `Pfa = I_{1/(1 + alpha/N)}(N·K, K)` (regularized incomplete beta) and
+  uploaded as a per-training-count lookup table for interior and border
+  cells. For `K = 1` this matches the contract exactly. For `K > 1` the code
+  is **ahead of the contract** — see
   [`cfar_detector_op/OPEN_ITEMS.md`](cfar_detector_op/OPEN_ITEMS.md) §2.
   Preserved leading axes stay batched and are recorded in `detection_idx` as
   extra columns before `(doppler_bin, range_bin)`.

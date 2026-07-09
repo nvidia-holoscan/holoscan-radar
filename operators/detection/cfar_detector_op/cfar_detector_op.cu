@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_stage.hpp"
 #include "detection/cfar_detector_op/nci_plan.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
@@ -189,6 +190,34 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
   auto integrated_power = make_device_tensor(
       {plan.out_batch, num_doppler, num_range}, real_dtype<T>());
 
+  const int guard_d = static_cast<int>(effective_guard_cells_[0]);
+  const int guard_r = static_cast<int>(effective_guard_cells_[1]);
+  const int train_d = static_cast<int>(effective_training_cells_[0]);
+  const int train_r = static_cast<int>(effective_training_cells_[1]);
+
+  AlphaLutKey lut_key{effective_pfa_,       plan.fold,
+                      guard_d,              guard_r,
+                      train_d,              train_r,
+                      num_doppler,          num_range};
+  if (lut_key != alpha_lut_key_) {
+    alpha_lut_host_cache_ = detail::build_ca_alpha_lut(
+        effective_pfa_, plan.fold, num_doppler, num_range, guard_d, guard_r,
+        train_d, train_r);
+    alpha_lut_key_ = lut_key;
+
+    std::vector<T> lut_t(alpha_lut_host_cache_.size());
+    for (size_t i = 0; i < alpha_lut_host_cache_.size(); ++i) {
+      lut_t[i] = static_cast<T>(alpha_lut_host_cache_[i]);
+    }
+    alpha_lut_dev_ = make_device_tensor(
+        {static_cast<int64_t>(lut_t.size())}, real_dtype<T>());
+    if (cudaMemcpyAsync(alpha_lut_dev_->data(), lut_t.data(),
+                        lut_t.size() * sizeof(T), cudaMemcpyHostToDevice,
+                        stream) != cudaSuccess) {
+      throw std::runtime_error("CFARDetectorOp: alpha LUT H2D copy failed");
+    }
+  }
+
   // Upload the NCI lookup table only when the integration layout changes;
   // otherwise reuse the cached device buffer (no per-tick alloc/free/upload).
   const int64_t* nci_table_dev_ptr = nullptr;
@@ -208,12 +237,10 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
 
   detail::run_cfar_stage<T>(
       cfar_variant_.get(), input->data(), input_is_complex, plan.batch_in,
-      plan.out_batch, num_doppler, num_range,
-      static_cast<int>(effective_guard_cells_[0]),
-      static_cast<int>(effective_guard_cells_[1]),
-      static_cast<int>(effective_training_cells_[0]),
-      static_cast<int>(effective_training_cells_[1]), effective_pfa_,
-      effective_threshold_scale_, plan.fold, nci_table_dev_ptr, power->data(),
+      plan.out_batch, num_doppler, num_range, guard_d, guard_r, train_d,
+      train_r, effective_threshold_scale_, plan.fold, nci_table_dev_ptr,
+      alpha_lut_dev_->data(),
+      static_cast<int64_t>(alpha_lut_host_cache_.size()), power->data(),
       integrated_power->data(), score->data(), noise->data(), mask->data(),
       stream);
 

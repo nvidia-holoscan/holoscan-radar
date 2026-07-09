@@ -44,10 +44,13 @@ by this library:
   changed in-flight via a same-named non-blocking input port
   (`sdk/override_param.hpp`). Overrides are **sticky**: the parameter seeds
   the initial effective value and an arriving override remains effective
-  until the next override. Where an override incurs a genuine cost (FFT
-  plan, window coefficients), the operator warns once per new configuration
-  and caches prior ones (`sdk/config_cache.hpp`) so alternating values do
-  not thrash; the initial parameter-driven build is silent.
+  until the next override. Vector-typed overrides are received via the
+  `std::any` port path because Holoscan's `receive<std::vector<T>>()` treats
+  a same-named `Parameter` as a legacy receivers list. Where an override
+  incurs a genuine cost (FFT plan, window coefficients), the operator warns
+  once per new configuration and caches prior ones (`sdk/config_cache.hpp`)
+  so alternating values do not thrash; the initial parameter-driven build is
+  silent.
 - **Custom parameter types need registered argument setters.** Holoscan's
   `ArgumentSetter` only knows built-in types. Every operator therefore
   calls `holoscan::radar::ensure_radar_arg_setters()`

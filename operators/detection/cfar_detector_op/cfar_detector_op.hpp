@@ -120,6 +120,32 @@ class CFARDetectorOp : public holoscan::Operator {
   std::shared_ptr<holoscan::Tensor> nci_table_dev_{};
   std::vector<int64_t> nci_table_host_cache_{};
 
+  // Host-built alpha(N) LUT for CA-CFAR (incomplete-beta inversion). Rebuilt
+  // when pfa, fold, window footprint, or map size changes.
+  struct AlphaLutKey {
+    double pfa{-1.0};
+    int64_t fold{0};
+    int guard_d{0};
+    int guard_r{0};
+    int train_d{0};
+    int train_r{0};
+    int64_t num_doppler{0};
+    int64_t num_range{0};
+
+    bool operator==(const AlphaLutKey& other) const {
+      return pfa == other.pfa && fold == other.fold &&
+             guard_d == other.guard_d && guard_r == other.guard_r &&
+             train_d == other.train_d && train_r == other.train_r &&
+             num_doppler == other.num_doppler && num_range == other.num_range;
+    }
+    bool operator!=(const AlphaLutKey& other) const {
+      return !(*this == other);
+    }
+  };
+  AlphaLutKey alpha_lut_key_{};
+  std::vector<double> alpha_lut_host_cache_{};
+  std::shared_ptr<holoscan::Tensor> alpha_lut_dev_{};
+
   // Keeps the previous tick's input alive until this tick's kernels are
   // enqueued (stream-ordered lifetime guard).
   std::shared_ptr<holoscan::Tensor> retained_input_;

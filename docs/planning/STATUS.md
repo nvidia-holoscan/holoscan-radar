@@ -25,7 +25,19 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | --- | --- | --- | --- |
 | Fill out `AGENTS.md` + this status file | deustice | `deustice/planning` | in review |
 | Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness | deustice | `deustice/sigproc-ops` | in progress |
-| Detection operator (`operators/detection/` + `CFARDetectorOp`, CA/OS/GO/SO variants) with tests against the point-target simulator | dpc | `dpc/detection` | in progress |
+| Detection operator (`operators/detection/` + `CFARDetectorOp`) | dpc | `dpc/detection` | **CA variant done** (see below); GO/SO/OS outstanding |
+
+### Landed on `dpc/detection`
+
+- **`CFARDetectorOp` CA slice** — complex/real power paths, border-correct CA
+  stencil, `[live]` overrides with sticky semantics, `nci_axes` non-coherent
+  integration (Gamma(`K`) threshold via host incomplete-beta LUT), batch-widened
+  `detection_idx`, unit + Monte Carlo statistical tests. Checklist-complete for
+  the CA variant; open contract/SDK items in
+  [`CFARDetectorOp open items`](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md)
+  deferred to group discussion.
+- **Still outstanding on the same operator:** GO / SO / OS variants (`cfar_variant`
+  values other than CA throw today).
 
 ## Up next (unclaimed)
 

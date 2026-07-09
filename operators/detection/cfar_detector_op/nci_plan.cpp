@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <sstream>
+#include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace holoscan::radar::detail {
 
@@ -90,7 +92,8 @@ NciPlan NciPlan::from_shape(const std::vector<int64_t>& shape,
   std::vector<bool> integrated(static_cast<size_t>(num_leading), false);
   for (int64_t axis : plan.integrated_axes) {
     integrated[static_cast<size_t>(axis)] = true;
-    plan.integrated_dims.push_back(plan.leading_dims[static_cast<size_t>(axis)]);
+    plan.integrated_dims.push_back(
+        plan.leading_dims[static_cast<size_t>(axis)]);
   }
 
   for (int64_t i = 0; i < num_leading; ++i) {

@@ -27,6 +27,15 @@ function(radar_add_test NAME)
     gtest_discover_tests(${NAME} PROPERTIES LABELS "unit")
 endfunction()
 
+function(radar_add_statistical_test NAME)
+    add_executable(${NAME} ${NAME}.cpp)
+    target_link_libraries(${NAME} PRIVATE
+        radar_test_utils
+        GTest::gtest_main
+        ${ARGN})
+    gtest_discover_tests(${NAME} PROPERTIES LABELS "statistical")
+endfunction()
+
 radar_add_test(test_common)
 radar_add_test(test_fmcw_range_processor
     holoscan::fmcw_range_processor_op)
@@ -45,4 +54,6 @@ radar_add_test(test_pipeline
     holoscan::fmcw_doppler_processor_op
     holoscan::fmcw_range_doppler_processor_op)
 radar_add_test(test_cfar_detector
+    holoscan::cfar_detector_op)
+radar_add_statistical_test(test_cfar_detector_statistical
     holoscan::cfar_detector_op)
