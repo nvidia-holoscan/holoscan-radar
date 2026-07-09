@@ -1,0 +1,132 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <string_view>
+#include <type_traits>
+#include <vector>
+
+#include <holoscan/holoscan.hpp>
+
+namespace holoscan::radar {
+
+// CFAR noise-estimation rule. Static per instance (selects the kernel); to
+// run different variants, instantiate separate detectors.
+enum class CfarVariant {
+  kCA,  // cell-averaging
+  kGO,  // greatest-of
+  kSO,  // smallest-of
+  kOS,  // order-statistic
+};
+
+constexpr std::string_view to_string(CfarVariant variant) {
+  switch (variant) {
+    case CfarVariant::kCA: return "CA";
+    case CfarVariant::kGO: return "GO";
+    case CfarVariant::kSO: return "SO";
+    case CfarVariant::kOS: return "OS";
+  }
+  return "unknown";
+}
+
+// 2-D CFAR detector on the (Doppler, range) plane. This header is the
+// contract reference for the operator's ports, shapes, dtypes, and
+// parameters; module-wide conventions live in operators/common/README.md.
+//
+// In:  rd_maps        — complex64/complex128 (square-law power formed
+//                       internally) or real float32/float64 (already-formed
+//                       power map), (..., num_doppler, num_range_bins). The
+//                       CFAR plane is the last two axes; leading axes are
+//                       batched, or non-coherently integrated per nci_axes.
+//                       Path auto-selected by dtype (no parameter).
+// Out: detection_mask  — bool, (..., num_doppler, num_range_bins), with the
+//                       nci_axes reduced. True where detected
+//                       (detection_score > 1).
+// Out: detection_score — float32/float64, same shape as detection_mask.
+//                       P / (threshold_scale * alpha * noise_estimate); >1
+//                       ⇔ detected, doubles as the per-detection strength.
+// Out: noise_estimate  — float32/float64, same shape as detection_mask.
+//                       Per-cell training-cell noise (N cells).
+// Out: detection_idx   — int64, (num_detections, 2 [+ n_batch]),
+//                       (doppler_bin, range_bin) per row. Always emitted,
+//                       sized to the detection count and reallocated per
+//                       tick. Capped by max_detections when set.
+//
+// Precision is fixed at compile time by the template instantiation
+// (T = float → complex64/float32, T = double → complex128/float64).
+//
+// Implementation status: the CA variant is implemented for arbitrary leading
+// axes with optional non-coherent integration (nci_axes), Gamma(K) CA
+// thresholding, and batch-widened detection_idx. GO/SO/OS variants are
+// declared but not yet implemented — see operators/detection/README.md.
+template <typename T>
+class CFARDetectorOp : public holoscan::Operator {
+  static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
+                "CFARDetectorOp supports float and double precision");
+
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(CFARDetectorOp)
+
+  CFARDetectorOp() = default;
+  ~CFARDetectorOp() override;
+
+  // Registers the argument setters for the custom parameter types
+  // (radar_common/sdk/arg_setters.hpp, plus the local CfarVariant enum)
+  // before the base class processes args.
+  void initialize() override;
+
+  void setup(OperatorSpec& spec) override;
+  void compute(InputContext& op_input, OutputContext& op_output,
+               ExecutionContext& context) override;
+
+ private:
+  // Parameters per the locked contract. cfar_variant and max_cached_kernels
+  // are static; the rest are overridable (each has a same-named
+  // non-blocking override input port declared in setup()).
+  Parameter<CfarVariant> cfar_variant_;
+  Parameter<int64_t> os_rank_;                  // OS only
+  Parameter<std::vector<int64_t>> guard_cells_;    // (doppler, range)
+  Parameter<std::vector<int64_t>> training_cells_;  // (doppler, range)
+  Parameter<double> pfa_;
+  Parameter<double> threshold_scale_;
+  Parameter<std::vector<int64_t>> nci_axes_;
+  Parameter<int64_t> max_detections_;  // <= 0 → uncapped
+  // Contract parameter; the fused stencil has no per-footprint window kernel
+  // to rebuild, so there is nothing costly to cache and this is currently a
+  // no-op (kept for OPERATOR_API compliance).
+  Parameter<int64_t> max_cached_kernels_;
+
+  // Effective override values as of the last tick (override-aware), used to
+  // detect override-triggered window-kernel rebuilds for the
+  // warn-once-and-cache rule.
+  std::vector<int64_t> effective_guard_cells_{};
+  std::vector<int64_t> effective_training_cells_{};
+  double effective_pfa_{1e-6};
+  double effective_threshold_scale_{1.0};
+  int64_t effective_os_rank_{0};
+  std::vector<int64_t> effective_nci_axes_{};
+  int64_t effective_max_detections_{0};
+
+  // Set once the effective_* values have been seeded from the parameters
+  // (first tick); overrides are applied on top each tick thereafter.
+  bool seeded_{false};
+
+  // Cached device copy of the NCI batch_in lookup table. Rebuilt only when the
+  // integration layout changes (plan.batch_in_table differs), so a stable
+  // nci_axes + input shape incurs no per-tick device alloc/free or upload.
+  std::shared_ptr<holoscan::Tensor> nci_table_dev_{};
+  std::vector<int64_t> nci_table_host_cache_{};
+
+  // Keeps the previous tick's input alive until this tick's kernels are
+  // enqueued (stream-ordered lifetime guard).
+  std::shared_ptr<holoscan::Tensor> retained_input_;
+};
+
+// Explicit instantiations live in cfar_detector_op.cu.
+extern template class CFARDetectorOp<float>;
+extern template class CFARDetectorOp<double>;
+
+}  // namespace holoscan::radar
