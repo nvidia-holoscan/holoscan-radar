@@ -78,6 +78,15 @@ if(NOT DEFINED HOLOSCAN_RADAR_BUILD_TESTING)
     endif()
 endif()
 
+# Performance characterization suite (performance/). Off by default; it builds
+# standalone benchmark executables (not part of the operator libraries or the
+# CTest unit/statistical suites) that measure setup, steady-state compute, and
+# live-override latency. Enable with -DHOLOSCAN_RADAR_BUILD_PERFORMANCE=ON.
+if(NOT DEFINED HOLOSCAN_RADAR_BUILD_PERFORMANCE)
+    set(HOLOSCAN_RADAR_BUILD_PERFORMANCE OFF
+        CACHE BOOL "Build the radar module's performance characterization suite")
+endif()
+
 # ---------------------------------------------------------------------------
 # Python package root in the build tree.
 # PYTHONPATH=${HOLOSCAN_RADAR_PYTHON_ROOT} lets Python find
@@ -127,6 +136,10 @@ add_subdirectory(operators)
 if(HOLOSCAN_RADAR_BUILD_TESTING)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+if(HOLOSCAN_RADAR_BUILD_PERFORMANCE)
+    add_subdirectory(performance)
 endif()
 
 # ---------------------------------------------------------------------------
