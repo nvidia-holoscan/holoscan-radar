@@ -228,7 +228,8 @@ class LiveCfarApp : public holoscan::Application {
         holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
         holoscan::Arg("pfa") = 1e-3,
         holoscan::Arg("threshold_scale") = 1.0,
-        holoscan::Arg("nci_axes") = std::vector<int64_t>{});
+        holoscan::Arg("nci_axes") = std::vector<int64_t>{},
+        holoscan::Arg("blocking_alpha_lut_rebuild") = true);
     wire_data_source(this, op, "rd_maps", frames);
     if (wire_overrides) {
       wire_overrides(this, op);
@@ -645,12 +646,14 @@ TEST(CFARDetectorOpTest, GuardCellsOverrideAffectsScore) {
       input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
       holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
       holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3);
+      holoscan::Arg("pfa") = 1e-3,
+      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
   const auto wide = run_cfar<double>(
       input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
       holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 2},
       holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3);
+      holoscan::Arg("pfa") = 1e-3,
+      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
   EXPECT_LT(score_at(narrow.score, dt, rt), score_at(wide.score, dt, rt));
 }
 
@@ -665,12 +668,14 @@ TEST(CFARDetectorOpTest, TrainingCellsOverrideAffectsScore) {
       input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
       holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
       holoscan::Arg("training_cells") = std::vector<int64_t>{3, 3},
-      holoscan::Arg("pfa") = 1e-3);
+      holoscan::Arg("pfa") = 1e-3,
+      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
   const auto narrow = run_cfar<double>(
       input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
       holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
       holoscan::Arg("training_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("pfa") = 1e-3);
+      holoscan::Arg("pfa") = 1e-3,
+      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
   EXPECT_GT(score_at(wide.score, dt, rt), score_at(narrow.score, dt, rt));
 }
 
@@ -690,7 +695,8 @@ TEST(CFARDetectorOpTest, HarnessGuardCellsOverridePerTick) {
       holoscan::Arg("cfar_variant") = CfarVariant::kCA,
       holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
       holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3);
+      holoscan::Arg("pfa") = 1e-3,
+      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
   harness->add_input_port<holoscan::TensorMap>("rd_maps",
                                                {frame(), frame(), frame()});
   harness->add_input_port<std::vector<int64_t>>(
@@ -738,7 +744,8 @@ TEST(CFARDetectorOpTest, LiveGuardCellsOverrideMidStreamAndSticky) {
           holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
           holoscan::Arg("pfa") = 1e-3,
           holoscan::Arg("threshold_scale") = 1.0,
-          holoscan::Arg("nci_axes") = std::vector<int64_t>{});
+          holoscan::Arg("nci_axes") = std::vector<int64_t>{},
+          holoscan::Arg("blocking_alpha_lut_rebuild") = true);
       wire_data_source(this, op, "rd_maps", frames);
       wire_leading_override<std::vector<int64_t>>(
           this, op, "guard_cells",
@@ -787,7 +794,8 @@ TEST(CFARDetectorOpTest, LiveTrainingCellsOverrideMidStreamAndSticky) {
           holoscan::Arg("training_cells") = std::vector<int64_t>{1, 1},
           holoscan::Arg("pfa") = 1e-3,
           holoscan::Arg("threshold_scale") = 1.0,
-          holoscan::Arg("nci_axes") = std::vector<int64_t>{});
+          holoscan::Arg("nci_axes") = std::vector<int64_t>{},
+          holoscan::Arg("blocking_alpha_lut_rebuild") = true);
       wire_data_source(this, op, "rd_maps", frames);
       wire_leading_override<std::vector<int64_t>>(
           this, op, "training_cells",
@@ -842,7 +850,8 @@ TEST(CFARDetectorOpTest, LiveNciAxesOverrideMidStreamAndSticky) {
           holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
           holoscan::Arg("pfa") = 1e-6,
           holoscan::Arg("threshold_scale") = 1.0,
-          holoscan::Arg("nci_axes") = std::vector<int64_t>{});
+          holoscan::Arg("nci_axes") = std::vector<int64_t>{},
+          holoscan::Arg("blocking_alpha_lut_rebuild") = true);
       wire_data_source(this, op, "rd_maps", frames);
       if (wire_overrides) {
         wire_overrides(this, op);
@@ -995,7 +1004,8 @@ TEST(CFARDetectorOpTest, BatchIdxIncludesPreservedAxes) {
       input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
       holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
       holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3);
+      holoscan::Arg("pfa") = 1e-3,
+      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
 
   ASSERT_EQ(num_detections(out.idx), 2);
   EXPECT_TRUE(idx_contains(out.idx, dt, rt, {0}));

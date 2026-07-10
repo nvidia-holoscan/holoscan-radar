@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
+#include "detection/cfar_detector_op/cfar_alpha_mc.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <deque>
@@ -22,6 +24,8 @@
 #include <vector>
 
 namespace holoscan::radar::detail {
+
+constexpr int kMcBisectionMaxIter = 100;
 
 namespace {
 
@@ -209,7 +213,7 @@ double ca_cfar_alpha(double pfa, int64_t n, int64_t k) {
     }
   }
 
-  for (int iter = 0; iter < 100; ++iter) {
+  for (int iter = 0; iter < kMcBisectionMaxIter; ++iter) {
     const double mid = 0.5 * (lo + hi);
     if (ca_cfar_pfa_from_alpha(mid, n, k) > pfa) {
       lo = mid;
@@ -319,6 +323,10 @@ namespace {
 constexpr int kMcCalTrials = 4096;
 constexpr int kMcVerifyTrials = 8192;
 
+int mc_trials_for_calibration(int64_t k) {
+  return k > 1 ? kMcVerifyTrials : kMcCalTrials;
+}
+
 double sample_gamma_k(int64_t k, std::mt19937_64& rng) {
   std::exponential_distribution<double> dist(1.0);
   double sum = 0.0;
@@ -419,6 +427,14 @@ double goso_cfar_pfa_from_alpha_impl(double alpha, int64_t n_side, int64_t k,
   if (alpha <= 0.0) {
     return 1.0;
   }
+  if (k == 1 && gpu_mc_calibration_available()) {
+    const double gpu_pfa = goso_mc_pfa_from_alpha_gpu(
+        alpha, n_side, k, mc_trials, guard_d, guard_r, train_d, train_r,
+        greatest_of);
+    if (gpu_pfa >= 0.0) {
+      return gpu_pfa;
+    }
+  }
   std::mt19937_64 rng(0x474F43464152ULL ^ static_cast<uint64_t>(n_side) ^
                       (static_cast<uint64_t>(k) << 32) ^
                       (greatest_of ? 0ULL : 0x534F43464152ULL));
@@ -493,6 +509,14 @@ double os_cfar_pfa_from_alpha_impl(double alpha, int64_t n, int64_t os_rank,
     return 1.0;
   }
   const int64_t effective_rank = os_rank < n ? os_rank : n - 1;
+  if (k == 1 && gpu_mc_calibration_available()) {
+    const double gpu_pfa = os_mc_pfa_from_alpha_gpu(
+        alpha, n, effective_rank, k, mc_trials, guard_d, guard_r, train_d,
+        train_r);
+    if (gpu_pfa >= 0.0) {
+      return gpu_pfa;
+    }
+  }
   std::mt19937_64 rng(0x4F5343464152ULL ^ static_cast<uint64_t>(n) ^
                       (static_cast<uint64_t>(effective_rank) << 16) ^
                       (static_cast<uint64_t>(k) << 32));
@@ -530,7 +554,8 @@ double go_cfar_alpha(double pfa, int64_t n_side, int64_t k, int guard_d,
   // does not collapse alpha toward zero.
   double lo = ca_cfar_alpha(pfa, n_side, k);
   double hi = lo * 8.0;
-  while (go_cfar_pfa_from_alpha_impl(hi, n_side, k, kMcCalTrials, guard_d,
+  const int mc_trials = mc_trials_for_calibration(k);
+  while (go_cfar_pfa_from_alpha_impl(hi, n_side, k, mc_trials, guard_d,
                                      guard_r, train_d, train_r) > pfa) {
     hi *= 2.0;
     if (hi > 1e12) {
@@ -538,14 +563,14 @@ double go_cfar_alpha(double pfa, int64_t n_side, int64_t k, int guard_d,
     }
   }
   while (lo > 0.0 &&
-         go_cfar_pfa_from_alpha_impl(lo, n_side, k, kMcCalTrials, guard_d,
+         go_cfar_pfa_from_alpha_impl(lo, n_side, k, mc_trials, guard_d,
                                      guard_r, train_d, train_r) <= pfa) {
     lo *= 0.5;
   }
 
-  for (int iter = 0; iter < 100; ++iter) {
+  for (int iter = 0; iter < kMcBisectionMaxIter; ++iter) {
     const double mid = 0.5 * (lo + hi);
-    if (go_cfar_pfa_from_alpha_impl(mid, n_side, k, kMcCalTrials, guard_d,
+    if (go_cfar_pfa_from_alpha_impl(mid, n_side, k, mc_trials, guard_d,
                                      guard_r, train_d, train_r) > pfa) {
       lo = mid;
     } else {
@@ -592,7 +617,8 @@ double so_cfar_alpha(double pfa, int64_t n_side, int64_t k, int guard_d,
   // inversion per LUT index.
   double lo = ca_cfar_alpha(pfa, n_side, k);
   double hi = lo * 8.0;
-  while (so_cfar_pfa_from_alpha_impl(hi, n_side, k, kMcCalTrials, guard_d,
+  const int mc_trials = mc_trials_for_calibration(k);
+  while (so_cfar_pfa_from_alpha_impl(hi, n_side, k, mc_trials, guard_d,
                                      guard_r, train_d, train_r) > pfa) {
     hi *= 2.0;
     if (hi > 1e12) {
@@ -600,14 +626,14 @@ double so_cfar_alpha(double pfa, int64_t n_side, int64_t k, int guard_d,
     }
   }
   while (lo > 0.0 &&
-         so_cfar_pfa_from_alpha_impl(lo, n_side, k, kMcCalTrials, guard_d,
+         so_cfar_pfa_from_alpha_impl(lo, n_side, k, mc_trials, guard_d,
                                      guard_r, train_d, train_r) <= pfa) {
     lo *= 0.5;
   }
 
-  for (int iter = 0; iter < 100; ++iter) {
+  for (int iter = 0; iter < kMcBisectionMaxIter; ++iter) {
     const double mid = 0.5 * (lo + hi);
-    if (so_cfar_pfa_from_alpha_impl(mid, n_side, k, kMcCalTrials, guard_d,
+    if (so_cfar_pfa_from_alpha_impl(mid, n_side, k, mc_trials, guard_d,
                                     guard_r, train_d, train_r) > pfa) {
       lo = mid;
     } else {
@@ -654,7 +680,8 @@ double os_cfar_alpha(double pfa, int64_t n, int64_t os_rank, int64_t k,
 
   double lo = ca_cfar_alpha(pfa, n, k);
   double hi = lo * 8.0;
-  while (os_cfar_pfa_from_alpha_impl(hi, n, os_rank, k, kMcCalTrials, guard_d,
+  const int mc_trials = mc_trials_for_calibration(k);
+  while (os_cfar_pfa_from_alpha_impl(hi, n, os_rank, k, mc_trials, guard_d,
                                      guard_r, train_d, train_r) > pfa) {
     hi *= 2.0;
     if (hi > 1e12) {
@@ -662,15 +689,14 @@ double os_cfar_alpha(double pfa, int64_t n, int64_t os_rank, int64_t k,
     }
   }
   while (lo > 0.0 &&
-         os_cfar_pfa_from_alpha_impl(lo, n, os_rank, k, kMcCalTrials,
-                                     guard_d, guard_r, train_d, train_r) <=
-             pfa) {
+         os_cfar_pfa_from_alpha_impl(lo, n, os_rank, k, mc_trials, guard_d,
+                                     guard_r, train_d, train_r) <= pfa) {
     lo *= 0.5;
   }
 
-  for (int iter = 0; iter < 100; ++iter) {
+  for (int iter = 0; iter < kMcBisectionMaxIter; ++iter) {
     const double mid = 0.5 * (lo + hi);
-    if (os_cfar_pfa_from_alpha_impl(mid, n, os_rank, k, kMcCalTrials, guard_d,
+    if (os_cfar_pfa_from_alpha_impl(mid, n, os_rank, k, mc_trials, guard_d,
                                     guard_r, train_d, train_r) > pfa) {
       lo = mid;
     } else {
@@ -697,8 +723,6 @@ std::vector<double> build_os_alpha_lut(double pfa, int64_t fold,
   });
   return lut;
 }
-
-namespace {
 
 struct CfarAlphaLutKeyHash {
   size_t operator()(const CfarAlphaLutKey& key) const {
@@ -769,12 +793,92 @@ std::vector<double> build_alpha_lut(const CfarAlphaLutKey& key) {
   }
 }
 
-}  // namespace
+void drain_in_flight_lut_builds() {
+  std::vector<AlphaLutFuture> futures;
+  {
+    std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
+    futures.reserve(g_alpha_lut_in_flight.size());
+    for (const auto& entry : g_alpha_lut_in_flight) {
+      futures.push_back(entry.second);
+    }
+  }
+  for (AlphaLutFuture& future : futures) {
+    future.wait();
+  }
+}
+
+void commit_cache_entry(const CfarAlphaLutKey& key, AlphaLut built) {
+  std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
+  if (g_alpha_lut_cache.emplace(key, built).second) {
+    g_alpha_lut_order.push_back(key);
+  }
+  g_alpha_lut_in_flight.erase(key);
+  while (g_alpha_lut_cache.size() > kMaxCachedAlphaLuts &&
+         !g_alpha_lut_order.empty()) {
+    const CfarAlphaLutKey oldest = g_alpha_lut_order.front();
+    if (oldest == key) {
+      break;
+    }
+    g_alpha_lut_cache.erase(oldest);
+    g_alpha_lut_order.pop_front();
+  }
+}
+
+void run_lut_build(const CfarAlphaLutKey& key,
+                   const std::shared_ptr<std::promise<AlphaLut>>& promise) {
+  try {
+    AlphaLut built = build_alpha_lut(key);
+    commit_cache_entry(key, built);
+    promise->set_value(std::move(built));
+  } catch (...) {
+    {
+      std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
+      g_alpha_lut_in_flight.erase(key);
+    }
+    promise->set_exception(std::current_exception());
+  }
+}
+
+AlphaLutSnapshot poll_cached_alpha_lut(const CfarAlphaLutKey& key) {
+  drain_in_flight_lut_builds();
+  AlphaLutFuture future;
+  {
+    std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
+    const auto it = g_alpha_lut_cache.find(key);
+    if (it != g_alpha_lut_cache.end()) {
+      return {true, it->second};
+    }
+    const auto in_flight = g_alpha_lut_in_flight.find(key);
+    if (in_flight == g_alpha_lut_in_flight.end()) {
+      return {};
+    }
+    future = in_flight->second;
+  }
+  if (future.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    return {true, future.get()};
+  }
+  return {};
+}
+
+void ensure_alpha_lut_build(const CfarAlphaLutKey& key) {
+  drain_in_flight_lut_builds();
+  std::shared_ptr<std::promise<AlphaLut>> promise;
+  {
+    std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
+    if (g_alpha_lut_cache.find(key) != g_alpha_lut_cache.end()) {
+      return;
+    }
+    if (g_alpha_lut_in_flight.find(key) != g_alpha_lut_in_flight.end()) {
+      return;
+    }
+    promise = std::make_shared<std::promise<AlphaLut>>();
+    g_alpha_lut_in_flight.emplace(key, promise->get_future().share());
+  }
+  std::thread([key, promise]() { run_lut_build(key, promise); }).detach();
+}
 
 std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key) {
-  // Either return the cached LUT, join an in-flight build for the same key, or
-  // claim the build ourselves. The global mutex is held only for these O(1)
-  // map lookups, never across the MC calibration in build_alpha_lut.
+  drain_in_flight_lut_builds();
   std::shared_ptr<std::promise<AlphaLut>> promise;
   AlphaLutFuture future;
   {
@@ -794,37 +898,10 @@ std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key) {
   }
 
   if (!promise) {
-    // Another thread is building this key; wait for its result.
     return future.get();
   }
 
-  try {
-    AlphaLut built = build_alpha_lut(key);
-    {
-      std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
-      if (g_alpha_lut_cache.emplace(key, built).second) {
-        g_alpha_lut_order.push_back(key);
-      }
-      g_alpha_lut_in_flight.erase(key);
-      while (g_alpha_lut_cache.size() > kMaxCachedAlphaLuts &&
-             !g_alpha_lut_order.empty()) {
-        const CfarAlphaLutKey oldest = g_alpha_lut_order.front();
-        if (oldest == key) {
-          break;  // never evict the entry we just inserted
-        }
-        g_alpha_lut_cache.erase(oldest);
-        g_alpha_lut_order.pop_front();
-      }
-    }
-    promise->set_value(std::move(built));
-  } catch (...) {
-    {
-      std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
-      g_alpha_lut_in_flight.erase(key);
-    }
-    promise->set_exception(std::current_exception());
-    throw;
-  }
+  run_lut_build(key, promise);
   return future.get();
 }
 

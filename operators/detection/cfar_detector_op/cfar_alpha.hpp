@@ -12,9 +12,20 @@ struct CfarAlphaLutKey;
 
 namespace detail {
 
-// Return a cached host alpha LUT, building it on first use for this key in
-// the process. MC calibration (GO/SO/OS) is amortized across operator
-// instances and test cases that share the same key.
+// Non-blocking LUT lookup for async live-override paths.
+struct AlphaLutSnapshot {
+  bool ready{false};
+  std::vector<double> lut{};
+};
+
+// Returns a ready LUT when cached; otherwise queues a build (if needed) and
+// returns ready=false.
+AlphaLutSnapshot poll_cached_alpha_lut(const CfarAlphaLutKey& key);
+
+// Idempotently queue a background LUT build for key when not cached.
+void ensure_alpha_lut_build(const CfarAlphaLutKey& key);
+
+// Blocking LUT lookup (first tick or when async rebuild is disabled).
 std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key);
 
 // Training-cell count for one (doppler, range) cell under the CA window

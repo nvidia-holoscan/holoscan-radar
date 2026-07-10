@@ -331,6 +331,19 @@ bisection step and is where the largest win likely lives.
 - Should MC move to CUDA only if profiling proves host MC is still too slow
   after the CA-seed fix?
 
-**Status:** open — host MC is intentional for v1; latency characterized above;
-CUDA is feasible for the trial loop but not yet justified without post-fix
-profiling on realistic override patterns.
+**Status:** open — host MC is intentional for v1; latency characterized above.
+**Landed optimizations (this branch):**
+
+| Optimization | Effect |
+| --- | --- |
+| SO CA-seed bracketing | SO cold LUT ~6 s → ~2 s |
+| GPU MC trial kernels (`cfar_alpha_mc.cu`) | GO ~2 s → ~0.5 s; OS ~7 s → ~0.6 s cold LUT |
+| `blocking_alpha_lut_rebuild=false` (default) | `[live]` LUT-key change returns immediately using stale LUT + one-shot warn; background thread builds the new table |
+| `poll_cached_alpha_lut` / `ensure_alpha_lut_build` | Non-blocking cache API for the operator |
+| Bisection cap (`kMcBisectionMaxIter=50`) | Marginal savings on CA/GO/SO/OS inversion loops |
+
+Set `blocking_alpha_lut_rebuild=true` when a `[live]` override must affect the same
+tick (unit tests that assert immediate score changes use this).
+
+CUDA is feasible for the trial loop; the shipped GPU path addresses the inner
+loop. Further wins would require batched bisection on GPU or precomputed tables.

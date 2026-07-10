@@ -123,6 +123,10 @@ class CFARDetectorOp : public holoscan::Operator {
   // to rebuild, so there is nothing costly to cache and this is currently a
   // no-op (kept for OPERATOR_API compliance).
   Parameter<int64_t> max_cached_kernels_;
+  // When false (default), a [live] LUT-key change serves the previous alpha LUT
+  // on that tick while the new table calibrates in the background (one-shot
+  // warn). When true, compute() blocks until the new LUT is ready.
+  Parameter<bool> blocking_alpha_lut_rebuild_;
 
   // Effective override values as of the last tick (override-aware), used to
   // detect override-triggered window-kernel rebuilds for the
@@ -150,6 +154,9 @@ class CFARDetectorOp : public holoscan::Operator {
   // via detail::get_cached_alpha_lut.
   using AlphaLutKey = CfarAlphaLutKey;
   AlphaLutKey alpha_lut_key_{};
+  AlphaLutKey pending_lut_key_{};
+  bool pending_lut_active_{false};
+  bool stale_lut_warned_{false};
   std::vector<double> alpha_lut_host_cache_{};
   std::shared_ptr<holoscan::Tensor> alpha_lut_dev_{};
 

@@ -114,6 +114,12 @@ void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
   spec.param(max_cached_kernels_, "max_cached_kernels", "Max cached kernels",
              "Distinct window footprints retained before eviction.",
              int64_t{4});
+  spec.param(blocking_alpha_lut_rebuild_, "blocking_alpha_lut_rebuild",
+             "Blocking alpha LUT rebuild",
+             "When false, serve the previous LUT while a new one calibrates "
+             "after a [live] config change; when true, block compute() until "
+             "the new LUT is ready.",
+             false);
 
   add_override_port<int64_t>(spec, "os_rank");
   add_override_port<std::vector<int64_t>>(spec, "guard_cells");
@@ -226,13 +232,11 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
                       train_r,
                       static_cast<int>(num_doppler),
                       static_cast<int>(num_range)};
-  if (lut_key != alpha_lut_key_) {
-    alpha_lut_host_cache_ = detail::get_cached_alpha_lut(lut_key);
-    alpha_lut_key_ = lut_key;
 
-    std::vector<T> lut_t(alpha_lut_host_cache_.size());
-    for (size_t i = 0; i < alpha_lut_host_cache_.size(); ++i) {
-      lut_t[i] = static_cast<T>(alpha_lut_host_cache_[i]);
+  auto upload_alpha_lut = [&](const std::vector<double>& host_lut) {
+    std::vector<T> lut_t(host_lut.size());
+    for (size_t i = 0; i < host_lut.size(); ++i) {
+      lut_t[i] = static_cast<T>(host_lut[i]);
     }
     alpha_lut_dev_ = make_device_tensor(
         {static_cast<int64_t>(lut_t.size())}, real_dtype<T>());
@@ -240,6 +244,55 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
                         lut_t.size() * sizeof(T), cudaMemcpyHostToDevice,
                         stream) != cudaSuccess) {
       throw std::runtime_error("CFARDetectorOp: alpha LUT H2D copy failed");
+    }
+  };
+
+  const bool blocking_lut = blocking_alpha_lut_rebuild_.get();
+  if (lut_key != alpha_lut_key_) {
+    if (blocking_lut) {
+      alpha_lut_host_cache_ = detail::get_cached_alpha_lut(lut_key);
+      alpha_lut_key_ = lut_key;
+      pending_lut_key_ = {};
+      pending_lut_active_ = false;
+      stale_lut_warned_ = false;
+      upload_alpha_lut(alpha_lut_host_cache_);
+    } else {
+      detail::AlphaLutSnapshot snap = detail::poll_cached_alpha_lut(lut_key);
+      if (snap.ready) {
+        alpha_lut_host_cache_ = std::move(snap.lut);
+        alpha_lut_key_ = lut_key;
+        pending_lut_key_ = {};
+        pending_lut_active_ = false;
+        stale_lut_warned_ = false;
+        upload_alpha_lut(alpha_lut_host_cache_);
+      } else if (!alpha_lut_host_cache_.empty()) {
+        detail::ensure_alpha_lut_build(lut_key);
+        pending_lut_key_ = lut_key;
+        pending_lut_active_ = true;
+        if (!stale_lut_warned_) {
+          HOLOSCAN_LOG_WARN(
+              "CFARDetectorOp: alpha LUT for the new configuration is still "
+              "calibrating; using the previous LUT for this tick");
+          stale_lut_warned_ = true;
+        }
+      } else {
+        alpha_lut_host_cache_ = detail::get_cached_alpha_lut(lut_key);
+        alpha_lut_key_ = lut_key;
+        pending_lut_key_ = {};
+        pending_lut_active_ = false;
+        stale_lut_warned_ = false;
+        upload_alpha_lut(alpha_lut_host_cache_);
+      }
+    }
+  } else if (pending_lut_active_ && pending_lut_key_ == lut_key) {
+    detail::AlphaLutSnapshot snap = detail::poll_cached_alpha_lut(lut_key);
+    if (snap.ready) {
+      alpha_lut_host_cache_ = std::move(snap.lut);
+      alpha_lut_key_ = lut_key;
+      pending_lut_key_ = {};
+      pending_lut_active_ = false;
+      stale_lut_warned_ = false;
+      upload_alpha_lut(alpha_lut_host_cache_);
     }
   }
 
