@@ -42,15 +42,17 @@ struct RangeStageConfig {
   std::optional<int64_t> nfft{};  // >= samples_per_chirp when set
 };
 
-// Kernel-side caches, owned by the operator across ticks. Window
-// coefficients and dechirp references are rebuilt only for unseen
-// configurations (ConfigCache implements the warn-once rule); FFT plan
+// Kernel-side caches, owned by the operator across ticks; rebuilt only for
+// unseen configurations (ConfigCache implements the warn-once rule). The
+// complex-input path folds the window taps and the conjugated dechirp
+// reference into one cached per-sample multiplier (`premultipliers`); the
+// real-input path cannot dechirp and caches plain window taps. FFT plan
 // reuse itself comes from MatX's internal plan cache, so `seen_fft_keys`
 // exists only to decide when to warn.
 template <typename T>
 struct RangeStageState {
+  ConfigCache<matx::tensor_t<cuda::std::complex<T>, 1>> premultipliers;
   ConfigCache<matx::tensor_t<T, 1>> windows;
-  ConfigCache<matx::tensor_t<cuda::std::complex<T>, 1>> dechirp_references;
   ConfigCache<bool> seen_fft_keys;
 };
 
@@ -147,15 +149,12 @@ inline std::string dechirp_cache_key(const FMCWWaveformDescriptor& waveform,
   return key;
 }
 
-// Build the device dechirp reference for one chirp: measured samples when
-// present (validated against samples_per_chirp), otherwise synthesized as
-// r[s] = exp(+j*pi*slope*t_s^2), t_s = s / sample_rate (the simulator's
-// locked sign convention; dechirp is in * conj(r)).
-template <typename T>
-matx::tensor_t<cuda::std::complex<T>, 1> build_dechirp_reference(
-    const FMCWWaveformDescriptor& waveform, int64_t samples_per_chirp,
-    cudaStream_t stream) {
-  std::vector<std::complex<double>> host;
+// Host-side dechirp reference for one chirp (double precision): measured
+// samples when present (validated against samples_per_chirp), otherwise
+// synthesized as r[s] = exp(+j*pi*slope*t_s^2), t_s = s / sample_rate (the
+// simulator's locked sign convention; dechirp is in * conj(r)).
+inline std::vector<std::complex<double>> host_dechirp_reference(
+    const FMCWWaveformDescriptor& waveform, int64_t samples_per_chirp) {
   if (!waveform.reference_samples().empty()) {
     if (static_cast<int64_t>(waveform.reference_samples().size()) !=
         samples_per_chirp) {
@@ -165,23 +164,79 @@ matx::tensor_t<cuda::std::complex<T>, 1> build_dechirp_reference(
           ") does not match samples_per_chirp (" +
           std::to_string(samples_per_chirp) + ")");
     }
-    host = waveform.reference_samples();
-  } else {
-    if (!waveform.is_valid()) {
-      throw std::invalid_argument(
-          "range stage: an empty (default-constructed) waveform descriptor "
-          "cannot synthesize the dechirp reference");
-    }
-    const double slope = waveform.slope();
-    host.resize(static_cast<size_t>(samples_per_chirp));
-    for (int64_t s = 0; s < samples_per_chirp; ++s) {
-      const double t = static_cast<double>(s) / waveform.sample_rate();
-      const double phase = kRangeStagePi * slope * t * t;
-      host[static_cast<size_t>(s)] =
-          std::complex<double>(std::cos(phase), std::sin(phase));
+    return waveform.reference_samples();
+  }
+  if (!waveform.is_valid()) {
+    throw std::invalid_argument(
+        "range stage: an empty (default-constructed) waveform descriptor "
+        "cannot synthesize the dechirp reference");
+  }
+  const double slope = waveform.slope();
+  std::vector<std::complex<double>> host(
+      static_cast<size_t>(samples_per_chirp));
+  for (int64_t s = 0; s < samples_per_chirp; ++s) {
+    const double t = static_cast<double>(s) / waveform.sample_rate();
+    const double phase = kRangeStagePi * slope * t * t;
+    host[static_cast<size_t>(s)] =
+        std::complex<double>(std::cos(phase), std::sin(phase));
+  }
+  return host;
+}
+
+// Cache key for the combined pre-FFT multiplier: exactly the window and
+// dechirp inputs build_premultiplier consumes.
+inline std::string premultiplier_cache_key(const RangeStageConfig& cfg,
+                                           int64_t samples_per_chirp) {
+  std::string key = "win=";
+  key += cfg.window.type != WindowType::kNone
+             ? window_cache_key(cfg.window, samples_per_chirp)
+             : "none";
+  key += ";dechirp=";
+  key += cfg.apply_dechirp
+             ? dechirp_cache_key(*cfg.waveform, samples_per_chirp)
+             : "none";
+  return key;
+}
+
+// Combined per-sample pre-FFT multiplier for the complex-input path:
+// conj(reference) (dechirp), the window taps, or their product — combined
+// in double precision once per configuration, then cast and uploaded.
+// Requires cfg.apply_dechirp or an active window.
+template <typename T>
+matx::tensor_t<cuda::std::complex<T>, 1> build_premultiplier(
+    const RangeStageConfig& cfg, int64_t samples_per_chirp,
+    cudaStream_t stream) {
+  std::vector<std::complex<double>> mult(
+      static_cast<size_t>(samples_per_chirp), {1.0, 0.0});
+  if (cfg.apply_dechirp) {
+    const auto reference =
+        host_dechirp_reference(*cfg.waveform, samples_per_chirp);
+    for (size_t s = 0; s < mult.size(); ++s) {
+      mult[s] = std::conj(reference[s]);
     }
   }
-  return upload_complex_coefficients<T>(host, stream);
+  if (cfg.window.type != WindowType::kNone) {
+    const auto taps = generate_window(cfg.window, samples_per_chirp);
+    for (size_t s = 0; s < mult.size(); ++s) {
+      mult[s] *= taps[s];
+    }
+  }
+  return upload_complex_coefficients<T>(mult, stream);
+}
+
+// Materialize a pre-FFT expression into a stream-ordered temporary, then
+// FFT it into out_view — the FFT's zero-padding path requires a plain
+// tensor, so fused expressions cannot feed matx::fft directly.
+template <typename StorageT, typename OutView, typename Expr>
+void range_fft_through_temp(OutView out_view, Expr expr, int64_t batch,
+                            int64_t num_chirps, int64_t samples_per_chirp,
+                            uint64_t fft_size, matx::FFTNorm norm,
+                            matx::cudaExecutor& exec, cudaStream_t stream) {
+  auto pre = matx::make_tensor<StorageT>(
+      {batch, num_chirps, samples_per_chirp}, matx::MATX_ASYNC_DEVICE_MEMORY,
+      stream);
+  (pre = expr).run(exec);
+  (out_view = matx::fft(pre, fft_size, norm)).run(exec);
 }
 
 template <typename T>
@@ -237,48 +292,23 @@ void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
   }
 
   const bool apply_window = cfg.window.type != WindowType::kNone;
-  const matx::tensor_t<T, 1>* window = nullptr;
-  if (apply_window) {
-    window = &state.windows.get_or_build(
-        window_cache_key(cfg.window, samples_per_chirp), warn_on_rebuild,
-        "window coefficient", [&] {
-          return upload_coefficients<T>(
-              generate_window(cfg.window, samples_per_chirp), stream);
-        });
-  }
-
   const uint64_t fft_size = static_cast<uint64_t>(nfft);
+  const auto bcast = [&](const auto& coeffs) {
+    return matx::clone<3>(coeffs, {batch, num_chirps, matx::matxKeepDim});
+  };
+
   if (complex_input) {
     auto in_view = make_const_complex_view3<T>(in, batch, num_chirps,
                                                samples_per_chirp);
     if (cfg.apply_dechirp || apply_window) {
-      // Materialize the pre-FFT product into a stream-ordered temporary so
-      // the FFT (and its zero-padding path) consumes a plain tensor.
-      auto pre = matx::make_tensor<cuda::std::complex<T>>(
-          {batch, num_chirps, samples_per_chirp},
-          matx::MATX_ASYNC_DEVICE_MEMORY, stream);
-      if (cfg.apply_dechirp) {
-        const auto& reference = state.dechirp_references.get_or_build(
-            dechirp_cache_key(*cfg.waveform, samples_per_chirp),
-            warn_on_rebuild, "dechirp reference", [&] {
-              return build_dechirp_reference<T>(*cfg.waveform,
-                                                samples_per_chirp, stream);
-            });
-        auto conj_ref = matx::clone<3>(
-            matx::conj(reference), {batch, num_chirps, matx::matxKeepDim});
-        if (apply_window) {
-          auto taps = matx::clone<3>(*window,
-                                     {batch, num_chirps, matx::matxKeepDim});
-          (pre = in_view * conj_ref * taps).run(exec);
-        } else {
-          (pre = in_view * conj_ref).run(exec);
-        }
-      } else {
-        auto taps = matx::clone<3>(*window,
-                                   {batch, num_chirps, matx::matxKeepDim});
-        (pre = in_view * taps).run(exec);
-      }
-      (out_view = matx::fft(pre, fft_size, norm)).run(exec);
+      const auto& mult = state.premultipliers.get_or_build(
+          premultiplier_cache_key(cfg, samples_per_chirp), warn_on_rebuild,
+          "pre-FFT multiplier", [&] {
+            return build_premultiplier<T>(cfg, samples_per_chirp, stream);
+          });
+      range_fft_through_temp<cuda::std::complex<T>>(
+          out_view, in_view * bcast(mult), batch, num_chirps,
+          samples_per_chirp, fft_size, norm, exec, stream);
     } else {
       (out_view = matx::fft(in_view, fft_size, norm)).run(exec);
     }
@@ -286,12 +316,15 @@ void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
     auto in_view = make_real_view3<T>(in, batch, num_chirps,
                                       samples_per_chirp);
     if (apply_window) {
-      auto pre = matx::make_tensor<T>({batch, num_chirps, samples_per_chirp},
-                                      matx::MATX_ASYNC_DEVICE_MEMORY, stream);
-      auto taps = matx::clone<3>(*window,
-                                 {batch, num_chirps, matx::matxKeepDim});
-      (pre = in_view * taps).run(exec);
-      (out_view = matx::fft(pre, fft_size, norm)).run(exec);
+      const auto& taps = state.windows.get_or_build(
+          window_cache_key(cfg.window, samples_per_chirp), warn_on_rebuild,
+          "window coefficient", [&] {
+            return upload_coefficients<T>(
+                generate_window(cfg.window, samples_per_chirp), stream);
+          });
+      range_fft_through_temp<T>(out_view, in_view * bcast(taps), batch,
+                                num_chirps, samples_per_chirp, fft_size,
+                                norm, exec, stream);
     } else {
       (out_view = matx::fft(in_view, fft_size, norm)).run(exec);
     }
