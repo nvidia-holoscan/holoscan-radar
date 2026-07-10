@@ -87,6 +87,20 @@ AppConfig load_config(const std::filesystem::path& path) {
   cfg.scene.num_chirps = root["cube"]["num_chirps"].as<int64_t>();
   cfg.scene.samples_per_chirp = root["cube"]["samples_per_chirp"].as<int64_t>();
 
+  // Fail here with the offending key rather than mid-graph: these values
+  // reach cudaMalloc sizing (cube dims) and the Count/Periodic conditions
+  // (run cadence), where bad values surface as cryptic CUDA/GXF errors.
+  const auto require_positive = [](const char* key, auto value) {
+    if (value <= 0) {
+      throw std::runtime_error(std::string(key) + " must be > 0, got " +
+                               std::to_string(value));
+    }
+  };
+  require_positive("run.num_frames", cfg.num_frames);
+  require_positive("run.frame_period", cfg.frame_period);
+  require_positive("cube.num_chirps", cfg.scene.num_chirps);
+  require_positive("cube.samples_per_chirp", cfg.scene.samples_per_chirp);
+
   for (const YAML::Node& t : root["targets"]) {
     const double range = t["range"].as<double>();
     const double velocity = t["velocity"].as<double>();
