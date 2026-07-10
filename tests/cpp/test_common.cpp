@@ -155,6 +155,12 @@ TEST(WindowGeneration, KaiserBetaOverridesAttenuation) {
   const auto w_beta = generate_window(by_beta, 64);
   const auto w_atten = generate_window(by_atten, 64);
   EXPECT_NE(w_beta, w_atten);
+
+  // With both fields configured, kaiser_beta wins: the window is identical
+  // to the beta-only spec, and the attenuation is never consulted.
+  WindowSpec both = by_beta;
+  both.sidelobe_attenuation_db = 90.0;
+  EXPECT_EQ(generate_window(both, 64), w_beta);
 }
 
 TEST(WindowGeneration, TukeyAlphaZeroIsRectangular) {
