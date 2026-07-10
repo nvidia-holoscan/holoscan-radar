@@ -36,6 +36,19 @@ void FMCWDopplerProcessorOp<T>::initialize() {
   // processes the arguments. Idempotent.
   ensure_radar_arg_setters();
   Operator::initialize();
+
+  // Seed the effective override values from the now-populated parameters
+  // (the parameter supplies the initial effective value; overrides are
+  // sticky per the contract) and allocate the kernel-side caches. Both are
+  // parameter-/host-only: the device-sized artifacts (windows, dechirp
+  // reference, FFT plans) stay lazy in the ConfigCaches because their
+  // sizes come from the input cube, unknown until data arrives.
+  state_ = std::make_shared<detail::DopplerStageState<T>>();
+  effective_window_ = doppler_window_.get();
+  effective_center_zero_doppler_ = center_zero_doppler_.get();
+  effective_fft_norm_ = fft_norm_.get();
+  effective_waveform_ = waveform_.try_get();
+  effective_nfft_ = nfft_.try_get();
 }
 
 template <typename T>
@@ -110,17 +123,6 @@ void FMCWDopplerProcessorOp<T>::compute(InputContext& op_input,
   if (!input) {
     throw std::runtime_error(
         op_name + ": received a null tensor on input port 'range_profiles'");
-  }
-
-  // First tick: seed the effective values from the parameters and
-  // allocate the kernel-side caches.
-  if (!state_) {
-    state_ = std::make_shared<detail::DopplerStageState<T>>();
-    effective_window_ = doppler_window_.get();
-    effective_center_zero_doppler_ = center_zero_doppler_.get();
-    effective_fft_norm_ = fft_norm_.get();
-    effective_waveform_ = waveform_.try_get();
-    effective_nfft_ = nfft_.try_get();
   }
 
   // Resolve overrides against the previous effective values. Only

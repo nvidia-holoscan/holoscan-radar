@@ -34,6 +34,20 @@ template <typename T>
 void FMCWRangeProcessorOp<T>::initialize() {
   ensure_radar_arg_setters();
   Operator::initialize();
+
+  // Seed the effective override values from the now-populated parameters
+  // (the parameter supplies the initial effective value; overrides are
+  // sticky per the contract) and allocate the kernel-side caches. Both are
+  // parameter-/host-only: the device-sized artifacts (windows, dechirp
+  // reference, FFT plans) stay lazy in the ConfigCaches because their
+  // sizes come from the input cube, unknown until data arrives.
+  state_ = std::make_shared<detail::RangeStageState<T>>();
+  effective_window_ = range_window_.get();
+  effective_apply_dechirp_ = apply_dechirp_.get();
+  effective_waveform_ = waveform_.try_get();
+  effective_fft_norm_ = fft_norm_.get();
+  effective_propagation_speed_ = propagation_speed_.get();
+  effective_nfft_ = nfft_.try_get();
 }
 
 template <typename T>
@@ -109,19 +123,6 @@ void FMCWRangeProcessorOp<T>::compute(InputContext& op_input,
   std::shared_ptr<holoscan::Tensor> input = in_map.begin()->second;
   if (!input) {
     throw std::runtime_error(who + ": null tensor received on adc_cube");
-  }
-
-  // First tick: allocate the kernel caches and seed the effective override
-  // values from the parameters (the parameter supplies the initial
-  // effective value; overrides are sticky per the contract).
-  if (!state_) {
-    state_ = std::make_shared<detail::RangeStageState<T>>();
-    effective_window_ = range_window_.get();
-    effective_apply_dechirp_ = apply_dechirp_.get();
-    effective_waveform_ = waveform_.try_get();
-    effective_fft_norm_ = fft_norm_.get();
-    effective_propagation_speed_ = propagation_speed_.get();
-    effective_nfft_ = nfft_.try_get();
   }
 
   // 2. Resolve the overridable parameters against the previous effective

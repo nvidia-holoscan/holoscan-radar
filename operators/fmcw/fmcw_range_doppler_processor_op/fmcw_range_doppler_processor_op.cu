@@ -39,6 +39,25 @@ void FMCWRangeDopplerProcessorOp<T>::initialize() {
   // Operator::initialize() processes the arguments. Idempotent.
   ensure_radar_arg_setters();
   Operator::initialize();
+
+  // Seed the effective override values from the now-populated parameters
+  // (the parameter supplies the initial effective value; overrides are
+  // sticky per the contract) and allocate the kernel-side caches. Both are
+  // parameter-/host-only: the device-sized artifacts (windows, dechirp
+  // reference, FFT plans) stay lazy in the ConfigCaches because their
+  // sizes come from the input cube, unknown until data arrives.
+  range_state_ = std::make_shared<detail::RangeStageState<T>>();
+  doppler_state_ = std::make_shared<detail::DopplerStageState<T>>();
+  effective_range_window_ = range_window_.get();
+  effective_doppler_window_ = doppler_window_.get();
+  effective_apply_dechirp_ = apply_dechirp_.get();
+  effective_clutter_filter_ = clutter_filter_.get();
+  effective_waveform_ = waveform_.try_get();
+  effective_fft_norm_ = fft_norm_.get();
+  effective_center_zero_doppler_ = center_zero_doppler_.get();
+  effective_propagation_speed_ = propagation_speed_.get();
+  effective_nfft_range_ = nfft_range_.try_get();
+  effective_nfft_doppler_ = nfft_doppler_.try_get();
 }
 
 template <typename T>
@@ -140,23 +159,6 @@ void FMCWRangeDopplerProcessorOp<T>::compute(InputContext& op_input,
   std::shared_ptr<holoscan::Tensor> input = in_map.begin()->second;
   if (!input) {
     throw std::runtime_error(who + ": null tensor received on adc_cube");
-  }
-
-  // First tick: seed the effective values from the parameters and
-  // allocate the kernel-side caches for both FFT stages.
-  if (!range_state_) {
-    range_state_ = std::make_shared<detail::RangeStageState<T>>();
-    doppler_state_ = std::make_shared<detail::DopplerStageState<T>>();
-    effective_range_window_ = range_window_.get();
-    effective_doppler_window_ = doppler_window_.get();
-    effective_apply_dechirp_ = apply_dechirp_.get();
-    effective_clutter_filter_ = clutter_filter_.get();
-    effective_waveform_ = waveform_.try_get();
-    effective_fft_norm_ = fft_norm_.get();
-    effective_center_zero_doppler_ = center_zero_doppler_.get();
-    effective_propagation_speed_ = propagation_speed_.get();
-    effective_nfft_range_ = nfft_range_.try_get();
-    effective_nfft_doppler_ = nfft_doppler_.try_get();
   }
 
   // 2. Resolve overrides against the previous effective values.
