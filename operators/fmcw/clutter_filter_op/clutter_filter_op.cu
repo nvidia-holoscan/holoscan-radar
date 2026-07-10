@@ -58,6 +58,11 @@ void ClutterFilterOp<T>::compute(InputContext& op_input,
         std::to_string(in_map.size()) + " entries");
   }
   std::shared_ptr<holoscan::Tensor> input = in_map.begin()->second;
+  if (!input) {
+    throw std::runtime_error(
+        "ClutterFilterOp: received a null tensor on input port "
+        "'range_profiles'");
+  }
 
   // method for this tick; no setup cost, so no warn-once machinery.
   const ClutterFilterMethod method =
