@@ -13,6 +13,7 @@
 #include <cstring>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -105,7 +106,14 @@ inline HostTensor to_host(const holoscan::Tensor& tensor) {
   host.shape = tensor.shape();
   host.dtype = tensor.dtype();
   host.data.resize(static_cast<size_t>(tensor.nbytes()));
-  cudaDeviceSynchronize();
+  // Surface an earlier async kernel failure here, with its own error,
+  // rather than as a confusing failure of the copy below.
+  const cudaError_t sync = cudaDeviceSynchronize();
+  if (sync != cudaSuccess) {
+    throw std::runtime_error(
+        std::string("to_host: cudaDeviceSynchronize failed: ") +
+        cudaGetErrorString(sync));
+  }
   const cudaMemcpyKind kind =
       holoscan::radar::is_cuda_accessible(tensor) ? cudaMemcpyDeviceToHost
                                                   : cudaMemcpyHostToHost;
