@@ -12,10 +12,14 @@ add_library(radar_common STATIC
 )
 add_library(holoscan::radar_common ALIAS radar_common)
 
+# Headers install under ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar (see the
+# install(DIRECTORY) below), and code includes them as "radar_common/...",
+# so that directory is the exported include root.
+include(GNUInstallDirs)
 target_include_directories(radar_common
     PUBLIC
         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators/common>
-        $<INSTALL_INTERFACE:include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar>
 )
 
 target_link_libraries(radar_common
@@ -35,7 +39,6 @@ install(EXPORT holoscan_radar_common_targets
     DESTINATION lib/cmake/holoscan_radar
 )
 
-include(GNUInstallDirs)
 install(DIRECTORY radar_common
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar
     FILES_MATCHING PATTERN "*.hpp"
