@@ -256,11 +256,14 @@ GO, SO, and OS instead calibrate each LUT entry by Monte Carlo plus bisection
 in `cfar_alpha.cpp`. For each LUT index `n`, the code probes candidate
 `alpha`, estimates realized Pfa with thousands of random trials, and adjusts
 the bracket. OS is especially expensive because every trial draws the full
-training window and selects an order statistic. The per-trial Monte Carlo runs
-on the GPU (`cfar_alpha_mc.cu`) for **all** `K` when CUDA is available, falling
-back to the host mt19937 path otherwise. (An earlier `K == 1` gate forced the
-much slower host path for every NCI case; it was removed once the statistical
-suite confirmed GPU calibration matches the host reference for `K > 1`.)
+training window and selects an order statistic — except **OS with `K = 1`**,
+where the pooled order-statistic Pfa is inverted in closed form
+(`os_cfar_alpha_closed_k1`) and LUT builds are sub-millisecond. The per-trial
+Monte Carlo runs on the GPU (`cfar_alpha_mc.cu`) for GO/SO and for OS when
+`K > 1`, falling back to the host mt19937 path otherwise. (An earlier
+`K == 1` gate forced the much slower host path for every NCI case; it was
+removed once the statistical suite confirmed GPU calibration matches the
+host reference for `K > 1`.)
 
 **What is in the LUT.** The LUT is still tiny and one-dimensional, not
 per-cell:
@@ -282,7 +285,7 @@ LUT key, calibration only — no Holoscan graph startup).**
 | CA | ~0.2 ms | ~0.5 ms | ~2 ms | ~0.5 ms |
 | GO | ~2.36 s | ~6.26 s | ~28.82 s | ~1.1 s |
 | SO | ~2.14 s | ~6.11 s | ~28.77 s | ~1.0 s |
-| OS | ~3.78 s | ~8.93 s | >180 s (timed out) | ~1.2 s |
+| OS | ~sub-ms | ~8.93 s | >180 s (timed out) | ~1.2 s |
 
 Small window = `guard_cells={1,1}`, `training_cells={2,2}`; mid window =
 `guard_cells={1,1}`, `training_cells={4,4}`; typical large footprint =

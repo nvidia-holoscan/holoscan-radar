@@ -345,6 +345,55 @@ int mc_trials_for_calibration(int64_t k) {
   return k > 1 ? kMcVerifyTrials : kMcCalTrials;
 }
 
+int64_t effective_os_rank(int64_t n, int64_t os_rank) {
+  return os_rank < n ? os_rank : n - 1;
+}
+
+// OS-CFAR K=1 closed form: pooled training cells, ascending 0-based rank.
+//   Pfa = prod_{i=0}^{rank} (N - i) / (N - i + alpha)
+// Matches cfar_os_kernel when each cell is Exp(1) under homogeneous noise.
+double os_cfar_pfa_closed_k1(double alpha, int64_t n, int64_t os_rank) {
+  if (n <= 0) {
+    return 0.0;
+  }
+  if (alpha <= 0.0) {
+    return 1.0;
+  }
+  const int64_t rank = effective_os_rank(n, os_rank);
+  double pfa = 1.0;
+  for (int64_t i = 0; i <= rank; ++i) {
+    pfa *= static_cast<double>(n - i) /
+           (static_cast<double>(n - i) + alpha);
+  }
+  return pfa;
+}
+
+double os_cfar_alpha_closed_k1(double pfa, int64_t n, int64_t os_rank) {
+  double lo = ca_cfar_alpha(pfa, n, 1);
+  double hi = lo * 8.0;
+  while (os_cfar_pfa_closed_k1(hi, n, os_rank) > pfa) {
+    hi *= 2.0;
+    if (hi > 1e12) {
+      throw std::runtime_error("os_cfar_alpha_closed_k1: failed to bracket");
+    }
+  }
+  while (lo > 0.0 && os_cfar_pfa_closed_k1(lo, n, os_rank) <= pfa) {
+    lo *= 0.5;
+  }
+  for (int iter = 0; iter < kMcBisectionMaxIter; ++iter) {
+    const double mid = 0.5 * (lo + hi);
+    if (os_cfar_pfa_closed_k1(mid, n, os_rank) > pfa) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+    if (hi - lo <= kEps * std::max(1.0, hi)) {
+      break;
+    }
+  }
+  return 0.5 * (lo + hi);
+}
+
 double sample_gamma_k(int64_t k, std::mt19937_64& rng) {
   std::exponential_distribution<double> dist(1.0);
   double sum = 0.0;
@@ -529,8 +578,11 @@ double os_cfar_pfa_from_alpha_impl(double alpha, int64_t n, int64_t os_rank,
   if (alpha <= 0.0) {
     return 1.0;
   }
-  const int64_t effective_rank = os_rank < n ? os_rank : n - 1;
-  // Same GPU-vs-host RNG note as goso_cfar_pfa_from_alpha_impl above.
+  const int64_t effective_rank = effective_os_rank(n, os_rank);
+  if (k == 1) {
+    return os_cfar_pfa_closed_k1(alpha, n, effective_rank);
+  }
+  // Same GPU-vs-host RNG note as goso_cfar_pfa_from_alpha_impl below.
   if (gpu_mc_calibration_available()) {
     const double gpu_pfa = os_mc_pfa_from_alpha_gpu(
         alpha, n, effective_rank, k, mc_trials, guard_d, guard_r, train_d,
@@ -700,6 +752,10 @@ double os_cfar_alpha(double pfa, int64_t n, int64_t os_rank, int64_t k,
         "os_cfar_alpha: pfa must be in (0, 1) exclusive");
   }
 
+  if (k == 1) {
+    return os_cfar_alpha_closed_k1(pfa, n, os_rank);
+  }
+
   double lo = ca_cfar_alpha(pfa, n, k);
   double hi = lo * 8.0;
   const int mc_trials = mc_trials_for_calibration(k);
@@ -739,7 +795,7 @@ std::vector<double> build_os_alpha_lut(double pfa, int64_t fold,
       num_doppler, num_range, guard_d, guard_r, train_d, train_r);
   std::vector<double> lut(static_cast<size_t>(max_n + 1), 0.0);
   parallel_fill_lut(lut, max_n, [&](int64_t n) {
-    const int64_t effective_rank = os_rank < n ? os_rank : n - 1;
+    const int64_t effective_rank = effective_os_rank(n, os_rank);
     return os_cfar_alpha(pfa, n, effective_rank, fold, guard_d, guard_r,
                          train_d, train_r);
   });
