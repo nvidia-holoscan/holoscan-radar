@@ -17,9 +17,6 @@ namespace detail {
 // instances and test cases that share the same key.
 std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key);
 
-// Clear the process-wide LUT cache (unit tests only).
-void clear_alpha_lut_cache_for_tests();
-
 // Training-cell count for one (doppler, range) cell under the CA window
 // footprint (matches cfar_ca_kernel).
 int64_t training_cell_count(int d, int r, int num_doppler, int num_range,

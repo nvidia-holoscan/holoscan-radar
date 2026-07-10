@@ -146,8 +146,9 @@ before push. CI enforces the same command in
 (ruff/isort/black, cpplint, cmakelint, markdownlint, codespell, metadata
 schema, etc. — see [`.pre-commit-config.yaml`](../../../.pre-commit-config.yaml)).
 
-**What was verified locally.** `ctest -L unit` (52 tests) and manual `cpplint`
-on touched C++/CUDA files in the CA slice.
+**What was verified locally.** `ctest -L unit` (the four CFAR variant binaries
+contribute 111 unit tests: CA 28, GO 27, SO 27, OS 29) and manual `cpplint`
+on touched C++/CUDA files across all four variants.
 
 **What was not verified locally.** The full `pre-commit` hook stack — the
 `pre-commit` CLI is not installed in the current container/workspace, so the
@@ -236,3 +237,100 @@ same way as other variants; only the statistical test acceptance band differs.
 
 **Status:** open — SO statistical tests pass with 0.25; worth a reviewer's eye
 before treating SO Pfa validation as on par with CA/GO/OS.
+
+---
+
+## 7. Host Monte Carlo alpha calibration runs synchronously inside
+`compute()`
+
+**Context.** GO, SO, and OS have no closed-form `alpha` for the 2-D
+border-correct window geometry. `CFARDetectorOp::compute()` calls
+`detail::get_cached_alpha_lut()` on every tick; when the LUT key
+`(variant, pfa, fold, os_rank, guard/training footprint, map size)` changes,
+the operator **blocks the tick** while the host builds the full per-`N` LUT
+(`cfar_alpha.cpp`), then uploads it to the device.
+
+CA does **not** use MC — it inverts the incomplete-beta relation in closed
+form on the host (microseconds).
+
+**What the MC sim does (GO/SO/OS).** For each LUT index `n` (training-cell
+count or GO side-count), the code runs a **bisection** (~100 iterations) on
+`alpha`. Each bisection step evaluates the false-alarm rate by Monte Carlo:
+
+1. Draw `mc_trials` (4096) independent clutter maps under the **interior**
+   window geometry matching the runtime stencil (`guard_cells`,
+   `training_cells`).
+2. Per trial: sample each training cell as Gamma(`K`) clutter (`K` = NCI
+   fold), form the variant noise statistic (GOGO max-of-sides, SOSO min-of-
+   sides, or OS order statistic), draw an independent Gamma(`K`) CUT, and
+   count trials where `CUT > alpha * noise`.
+3. Return `false_alarms / mc_trials` and adjust the `alpha` bracket.
+
+`parallel_fill_lut()` calibrates every `n` in `[1, max_n]` on a thread pool;
+the process-wide LUT cache (`get_cached_alpha_lut`) amortizes the cost across
+operator instances and repeated configs.
+
+**Measured latency (this environment, guard=1 / train=2, 64×64 map, cold
+cache, single `compute()` tick including Holoscan harness overhead).**
+
+| Variant | First-tick wall time | LUT method |
+| --- | --- | --- |
+| CA | ~0.3 s | closed form |
+| GO | ~2 s | host MC |
+| SO | ~2 s (was ~6 s before CA-seed fix) | host MC |
+| OS | ~7 s | host MC |
+
+A `[live]` override to an **unseen** `(pfa, footprint, os_rank, …)` key pays
+the same cold-build stall on that tick. Subsequent ticks are cache hits
+(microseconds). Changing only `threshold_scale` does **not** rebuild the LUT.
+
+**Is CUDA acceleration a good fit?** **Partially yes** — the inner trial loop
+is embarrassingly parallel (4096 independent trials per `alpha` probe), which
+is the classic MC-on-GPU pattern. A kernel could assign one thread (or warp)
+per trial, use cuRAND (or a deterministic counter-based RNG for test
+reproducibility), reproduce the small fixed-window GOSO/OS statistics, and
+atomically accumulate false-alarm counts. Batching **all `n` indices and all
+bisection probes** into one launch grid would remove the host round-trip per
+bisection step and is where the largest win likely lives.
+
+**Caveats before porting MC to CUDA.**
+
+- **Arithmetic intensity is low** per trial (≤ 40 Gamma draws + a few
+  min/max/mean ops for the default footprint). Speedup may be launch-latency
+  limited unless many `(n, bisection_step)` probes are batched into one grid.
+- **Bisection is inherently sequential** unless replaced by a fixed grid of
+  `alpha` candidates or a GPU root-find with multiple probes per launch.
+- **OS trials need an in-register sort** (same pattern as `cfar_os_kernel`) —
+  fine on GPU, but more registers than GO/SO.
+- **Determinism** — unit tests seed host `std::mt19937_64` per `(n, k)`;
+  a GPU port must either match those seeds or relax test tolerances.
+- **The fused detection stencil already runs on GPU** — MC calibration is a
+  separate, config-time problem. Keeping it on the host avoids coupling the
+  alpha path to CUDA context/stream lifetime in `compute()`.
+
+**Recommendations (in priority order).**
+
+1. **Keep host MC for now** with the CA-seed fix and process cache (landed).
+   Re-profile after the fix; SO cold LUT should be closer to GO (~2–3 s).
+2. **If live overrides must be sub-second**, consider moving LUT build **off
+   the tick critical path** first (async warm-up on key change, serve the
+   previous LUT with a one-shot `HOLOSCAN_LOG_WARN` until the new table is
+   ready) — often simpler than a CUDA port and directly addresses pipeline
+   stall semantics.
+3. **If profiling still shows multi-second stalls**, a CUDA MC kernel batched
+   over `(n, trial)` is the next lever — not porting `betainc` into the
+   detection stencil (see §2).
+4. **Precomputed alpha tables** for a fixed set of `(variant, pfa, footprint)`
+   pairs are an alternative if live sweeps are out of scope.
+
+**Questions for the team.**
+
+- Is a multi-second stall on the first tick after a `[live]` config change
+  acceptable, or should `compute()` never block on calibration?
+- Prefer async LUT warm-up (warn + stale alpha) vs synchronous GPU MC rebuild?
+- Should MC move to CUDA only if profiling proves host MC is still too slow
+  after the CA-seed fix?
+
+**Status:** open — host MC is intentional for v1; latency characterized above;
+CUDA is feasible for the trial loop but not yet justified without post-fix
+profiling on realistic override patterns.

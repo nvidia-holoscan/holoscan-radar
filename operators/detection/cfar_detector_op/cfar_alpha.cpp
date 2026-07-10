@@ -8,12 +8,17 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <functional>
+#include <future>
+#include <memory>
 #include <mutex>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace holoscan::radar::detail {
@@ -343,11 +348,6 @@ double goso_side_statistic_host(double neg_sum, int64_t neg_cnt, double pos_sum,
   return 0.0;
 }
 
-double go_side_statistic_host(double neg_sum, int64_t neg_cnt, double pos_sum,
-                              int64_t pos_cnt) {
-  return goso_side_statistic_host<true>(neg_sum, neg_cnt, pos_sum, pos_cnt);
-}
-
 template <bool kGreatestOf>
 double simulate_goso_noise_interior(int guard_d, int guard_r, int train_d,
                                     int train_r, int64_t k,
@@ -411,7 +411,8 @@ double simulate_soso_noise_interior(int guard_d, int guard_r, int train_d,
 
 double goso_cfar_pfa_from_alpha_impl(double alpha, int64_t n_side, int64_t k,
                                      int mc_trials, int guard_d, int guard_r,
-                                     int train_d, int train_r, bool greatest_of) {
+                                     int train_d, int train_r,
+                                     bool greatest_of) {
   if (n_side <= 0 || k <= 0) {
     return 0.0;
   }
@@ -585,9 +586,11 @@ double so_cfar_alpha(double pfa, int64_t n_side, int64_t k, int guard_d,
         "so_cfar_alpha: pfa must be in (0, 1) exclusive");
   }
 
-  // SO-CFAR is less conservative than GO; seed the bracket from the GO
-  // inversion so Monte Carlo noise does not underestimate alpha.
-  double lo = go_cfar_alpha(pfa, n_side, k, guard_d, guard_r, train_d, train_r);
+  // SO-CFAR is less conservative than CA; seed the bracket from the CA
+  // closed-form inversion (same strategy as GO and OS). SO alpha > CA alpha,
+  // so ca_cfar_alpha is a valid lower bracket; avoids nesting a full GO MC
+  // inversion per LUT index.
+  double lo = ca_cfar_alpha(pfa, n_side, k);
   double hi = lo * 8.0;
   while (so_cfar_pfa_from_alpha_impl(hi, n_side, k, kMcCalTrials, guard_d,
                                      guard_r, train_d, train_r) > pfa) {
@@ -719,9 +722,27 @@ struct CfarAlphaLutKeyHash {
   }
 };
 
+using AlphaLut = std::vector<double>;
+using AlphaLutFuture = std::shared_future<AlphaLut>;
+
+// Bound on the process-wide LUT cache. Each entry is tiny (a few hundred
+// doubles) and distinct keys are rare in practice (one per (variant, pfa,
+// footprint, os_rank, map size) combination), so a generous FIFO cap keeps
+// a long-running pipeline that sweeps many configurations from growing the
+// cache without bound.
+constexpr size_t kMaxCachedAlphaLuts = 64;
+
 std::mutex g_alpha_lut_cache_mutex;
-std::unordered_map<CfarAlphaLutKey, std::vector<double>, CfarAlphaLutKeyHash>
-    g_alpha_lut_cache;
+std::unordered_map<CfarAlphaLutKey, AlphaLut, CfarAlphaLutKeyHash>
+    g_alpha_lut_cache;  // NOLINT(whitespace/indent_namespace)
+// Insertion order for FIFO eviction once the cache exceeds its cap.
+std::deque<CfarAlphaLutKey>
+    g_alpha_lut_order;  // NOLINT(whitespace/indent_namespace)
+// Keys whose LUT is currently being built. Concurrent callers for the same
+// key wait on the shared future instead of duplicating the (expensive) MC
+// calibration.
+std::unordered_map<CfarAlphaLutKey, AlphaLutFuture, CfarAlphaLutKeyHash>
+    g_alpha_lut_in_flight;  // NOLINT(whitespace/indent_namespace)
 
 std::vector<double> build_alpha_lut(const CfarAlphaLutKey& key) {
   switch (key.variant) {
@@ -751,22 +772,60 @@ std::vector<double> build_alpha_lut(const CfarAlphaLutKey& key) {
 }  // namespace
 
 std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key) {
+  // Either return the cached LUT, join an in-flight build for the same key, or
+  // claim the build ourselves. The global mutex is held only for these O(1)
+  // map lookups, never across the MC calibration in build_alpha_lut.
+  std::shared_ptr<std::promise<AlphaLut>> promise;
+  AlphaLutFuture future;
   {
     std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
     const auto it = g_alpha_lut_cache.find(key);
     if (it != g_alpha_lut_cache.end()) {
       return it->second;
     }
+    const auto in_flight = g_alpha_lut_in_flight.find(key);
+    if (in_flight != g_alpha_lut_in_flight.end()) {
+      future = in_flight->second;
+    } else {
+      promise = std::make_shared<std::promise<AlphaLut>>();
+      future = promise->get_future().share();
+      g_alpha_lut_in_flight.emplace(key, future);
+    }
   }
-  std::vector<double> built = build_alpha_lut(key);
-  std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
-  const auto [it, inserted] = g_alpha_lut_cache.emplace(key, std::move(built));
-  return it->second;
-}
 
-void clear_alpha_lut_cache_for_tests() {
-  std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
-  g_alpha_lut_cache.clear();
+  if (!promise) {
+    // Another thread is building this key; wait for its result.
+    return future.get();
+  }
+
+  try {
+    AlphaLut built = build_alpha_lut(key);
+    {
+      std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
+      if (g_alpha_lut_cache.emplace(key, built).second) {
+        g_alpha_lut_order.push_back(key);
+      }
+      g_alpha_lut_in_flight.erase(key);
+      while (g_alpha_lut_cache.size() > kMaxCachedAlphaLuts &&
+             !g_alpha_lut_order.empty()) {
+        const CfarAlphaLutKey oldest = g_alpha_lut_order.front();
+        if (oldest == key) {
+          break;  // never evict the entry we just inserted
+        }
+        g_alpha_lut_cache.erase(oldest);
+        g_alpha_lut_order.pop_front();
+      }
+    }
+    promise->set_value(std::move(built));
+  } catch (...) {
+    {
+      std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
+      g_alpha_lut_in_flight.erase(key);
+    }
+    promise->set_exception(std::current_exception());
+    throw;
+  }
+  return future.get();
 }
 
 }  // namespace holoscan::radar::detail

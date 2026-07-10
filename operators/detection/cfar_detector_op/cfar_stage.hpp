@@ -316,6 +316,12 @@ __global__ void cfar_os_kernel(const T* power, int64_t batch,
       if (guard_row && rr >= -guard_r && rr <= guard_r) {
         continue;
       }
+      // Defensive bound: compute() rejects footprints whose training-cell
+      // count exceeds kMaxOsTrainingCells, so this is belt-and-suspenders
+      // against a stack-buffer overrun if that guard is ever bypassed.
+      if (train_cnt >= kMaxOsTrainingCells) {
+        continue;
+      }
       train_samples[train_cnt++] = p[nd * num_range + nr];
     }
   }

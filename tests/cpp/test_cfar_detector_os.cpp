@@ -1008,7 +1008,8 @@ TEST(CFARDetectorOpOsTest, LiveOsRankOverrideMidStreamAndSticky) {
       holoscan::Arg("pfa") = 1e-3);
   harness->add_input_port<holoscan::TensorMap>("rd_maps",
                                                {frame(), frame(), frame()});
-  harness->add_input_port<int64_t>("os_rank", {int64_t{5}, int64_t{30}, int64_t{30}});
+  harness->add_input_port<int64_t>(
+      "os_rank", {int64_t{5}, int64_t{30}, int64_t{30}});
   harness->add_output_port<holoscan::TensorMap>("noise_estimate",
                                                 noise_cap.validators());
   TensorMapCapture mask_cap;
