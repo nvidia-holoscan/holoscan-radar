@@ -36,7 +36,7 @@ Rules that follow from "lockdown":
 | --- | --- |
 | `docs/planning/` | The specs above — the work queue and contract source of truth |
 | `operators/` | Operator libraries, one dir per group, gated by `add_holohub_operator()` / `OP_<name>` CMake options |
-| `operators/common/` | Shared `radar_common` library: descriptors, window generation, config cache, tensor/MatX utilities |
+| `operators/common/` | Shared `radar_common` library: descriptors, window generation, point-target simulator, config cache, tensor/MatX utilities |
 | `operators/fmcw/` | FMCW signal-processing operators (+ future MIMO marshaling) |
 | `applications/fmcw_siso/` | Example SISO FMCW pipeline app (C++; Python variant returns with the bindings) |
 | `python/holoscan/radar/` | Python package root; re-exports operators from per-operator pybind11 submodules |

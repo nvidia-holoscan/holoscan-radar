@@ -19,6 +19,7 @@ holoscan-radar/
 │   │   └── radar_common/           # Organized by dependency layer:
 │   │       ├── descriptors/        #   shared config-plane types (STL only)
 │   │       ├── dsp/                #   host-side signal math
+│   │       ├── sim/                #   analytic point-target simulator (STL only)
 │   │       ├── tensor/             #   tensor/DLPack/MatX plumbing
 │   │       └── sdk/                #   Holoscan-integration glue
 │   └── fmcw/                       # FMCW signal-processing group

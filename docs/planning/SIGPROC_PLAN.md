@@ -157,12 +157,15 @@ New files (as landed):
   shared with the simulator), `metadata.json`, `CMakeLists.txt` (modeled on
   `radar_op`'s, plus `matx::matx` + `holoscan::radar_common`, no `python/`
   subdir).
-- `tests/cpp/utils/{point_target_sim.hpp, bin_model.hpp, tensor_fixtures.hpp,
-  sdk_harness.hpp}`: analytic point-target simulator per `TESTING.md`
-  (host-only, `std::complex<double>`, convention-free Cartesian scene,
-  stop-and-hop, complex-IF / real-IF / pre-mixer outputs, seeded noise,
-  ground truth out; no operator/MatX includes — independence guards against
-  tautological tests); forward bin model; host↔device Tensor fixtures +
+- `operators/common/radar_common/sim/point_target_sim.hpp`: analytic
+  point-target simulator per `TESTING.md` (host-only,
+  `std::complex<double>`, convention-free Cartesian scene, stop-and-hop,
+  complex-IF / real-IF / pre-mixer outputs, seeded noise, ground truth out;
+  no operator/MatX includes — independence guards against tautological
+  tests). Landed under `tests/cpp/utils/`, then graduated into
+  `radar_common` once the SISO app took it as an input-synthesis dependency.
+- `tests/cpp/utils/{bin_model.hpp, tensor_fixtures.hpp,
+  sdk_harness.hpp}`: forward bin model; host↔device Tensor fixtures +
   `RADAR_TEST_SKIP_IF_NO_GPU()`; radar-flavored glue over the SDK-native
   operator test harness (`holoscan::test::OperatorTestHarness` +
   `TestHarnessSourceOp`/`TestHarnessSinkOp`): TensorMap capture-to-host

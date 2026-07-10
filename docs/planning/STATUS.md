@@ -14,7 +14,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | --- | --- | --- |
 | Operator directory layout | Per functional group under `operators/`: `fmcw/` (signal processing + MIMO marshaling), `detection/`, `clustering/`, `angle_estimation/`, plus a shared `common/` library for the six supporting types | 2026-07-06 |
 | Python bindings for new operators | Deferred to a later phase — operators land C++-first with tests; bindings for the full operator set follow as a dedicated effort | 2026-07-06 |
-| `radar_op` template placeholder | Keep until the first real operator lands with tests (bindings deferred per the row above), then remove and rewire the app/tests/package | 2026-07-06 |
+| `radar_op` template placeholder | Removed on `deustice/sigproc-ops` once the first real operators landed with tests; app, tests, and package rewired to the FMCW operators | 2026-07-10 |
 | MatX + CUDA build wiring | Wire into the build from the start (not deferred to first kernel) | 2026-07-01 |
 
 ## In-flight work
