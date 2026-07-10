@@ -120,6 +120,23 @@ auto go_args(double pfa) {
       holoscan::Arg("pfa") = pfa);
 }
 
+auto so_args(double pfa) {
+  return std::make_tuple(
+      holoscan::Arg("cfar_variant") = CfarVariant::kSO,
+      holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
+      holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
+      holoscan::Arg("pfa") = pfa);
+}
+
+auto os_args(double pfa) {
+  return std::make_tuple(
+      holoscan::Arg("cfar_variant") = CfarVariant::kOS,
+      holoscan::Arg("os_rank") = int64_t{30},
+      holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
+      holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
+      holoscan::Arg("pfa") = pfa);
+}
+
 std::vector<double> exponential_power_map(int64_t num_doppler,
                                           int64_t num_range, double mean,
                                           std::mt19937_64& rng) {
@@ -163,7 +180,8 @@ PfaTrialResult count_interior_false_alarms(const HostTensor& score,
 }
 
 void expect_realized_pfa_near_configured(double realized, double configured,
-                                         int64_t total_cells) {
+                                         int64_t total_cells,
+                                         double min_ratio_tol = 0.15) {
   ASSERT_GT(total_cells, 0);
   const double expected = configured * static_cast<double>(total_cells);
   ASSERT_GE(expected, 50.0)
@@ -176,7 +194,7 @@ void expect_realized_pfa_near_configured(double realized, double configured,
   const double sigma =
       std::sqrt(configured * (1.0 - configured) /
                 static_cast<double>(total_cells));
-  const double tol = std::max(4.0 * sigma / configured, 0.15);
+  const double tol = std::max(4.0 * sigma / configured, min_ratio_tol);
   EXPECT_NEAR(ratio, 1.0, tol)
       << "realized_pfa=" << realized << " configured_pfa=" << configured
       << " total_interior_cells=" << total_cells;
@@ -187,9 +205,6 @@ PfaTrialResult run_monte_carlo_pfa_k1(int num_trials, int64_t num_doppler,
                                       uint64_t seed, CfarVariant variant) {
   PfaTrialResult aggregate;
   std::mt19937_64 rng(seed);
-  const auto args =
-      (variant == CfarVariant::kGO) ? go_args(configured_pfa)
-                                    : ca_args(configured_pfa);
   std::vector<holoscan::TensorMap> frames;
   frames.reserve(static_cast<size_t>(num_trials));
   for (int trial = 0; trial < num_trials; ++trial) {
@@ -199,12 +214,36 @@ PfaTrialResult run_monte_carlo_pfa_k1(int num_trials, int64_t num_doppler,
                                           real_dtype<double>());
     frames.push_back(single_map(std::move(input), "rd_maps"));
   }
-  const auto scores = std::apply(
-      [&](auto&&... a) {
-        return run_cfar_scores<double>(std::move(frames),
-                                       std::forward<decltype(a)>(a)...);
-      },
-      args);
+  std::vector<HostTensor> scores;
+  if (variant == CfarVariant::kGO) {
+    scores = std::apply(
+        [&](auto&&... a) {
+          return run_cfar_scores<double>(std::move(frames),
+                                         std::forward<decltype(a)>(a)...);
+        },
+        go_args(configured_pfa));
+  } else if (variant == CfarVariant::kSO) {
+    scores = std::apply(
+        [&](auto&&... a) {
+          return run_cfar_scores<double>(std::move(frames),
+                                         std::forward<decltype(a)>(a)...);
+        },
+        so_args(configured_pfa));
+  } else if (variant == CfarVariant::kOS) {
+    scores = std::apply(
+        [&](auto&&... a) {
+          return run_cfar_scores<double>(std::move(frames),
+                                         std::forward<decltype(a)>(a)...);
+        },
+        os_args(configured_pfa));
+  } else {
+    scores = std::apply(
+        [&](auto&&... a) {
+          return run_cfar_scores<double>(std::move(frames),
+                                         std::forward<decltype(a)>(a)...);
+        },
+        ca_args(configured_pfa));
+  }
   for (const HostTensor& score : scores) {
     const PfaTrialResult trial_result =
         count_interior_false_alarms<double>(score, num_doppler, num_range);
@@ -229,12 +268,37 @@ PfaTrialResult run_monte_carlo_pfa_nci(int num_trials, int64_t num_channels,
         cube, {num_channels, num_doppler, num_range}, real_dtype<double>());
     frames.push_back(single_map(std::move(input), "rd_maps"));
   }
-  const auto scores = run_cfar_scores<double>(
-      std::move(frames), holoscan::Arg("cfar_variant") = variant,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
-      holoscan::Arg("pfa") = configured_pfa,
-      holoscan::Arg("nci_axes") = std::vector<int64_t>{0});
+  std::vector<HostTensor> scores;
+  if (variant == CfarVariant::kGO) {
+    scores = run_cfar_scores<double>(
+        std::move(frames), holoscan::Arg("cfar_variant") = variant,
+        holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
+        holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
+        holoscan::Arg("pfa") = configured_pfa,
+        holoscan::Arg("nci_axes") = std::vector<int64_t>{0});
+  } else if (variant == CfarVariant::kSO) {
+    scores = run_cfar_scores<double>(
+        std::move(frames), holoscan::Arg("cfar_variant") = variant,
+        holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
+        holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
+        holoscan::Arg("pfa") = configured_pfa,
+        holoscan::Arg("nci_axes") = std::vector<int64_t>{0});
+  } else if (variant == CfarVariant::kOS) {
+    scores = run_cfar_scores<double>(
+        std::move(frames), holoscan::Arg("cfar_variant") = variant,
+        holoscan::Arg("os_rank") = int64_t{30},
+        holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
+        holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
+        holoscan::Arg("pfa") = configured_pfa,
+        holoscan::Arg("nci_axes") = std::vector<int64_t>{0});
+  } else {
+    scores = run_cfar_scores<double>(
+        std::move(frames), holoscan::Arg("cfar_variant") = variant,
+        holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
+        holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
+        holoscan::Arg("pfa") = configured_pfa,
+        holoscan::Arg("nci_axes") = std::vector<int64_t>{0});
+  }
   for (const HostTensor& score : scores) {
     const PfaTrialResult trial_result =
         count_interior_false_alarms<double>(score, num_doppler, num_range);
@@ -313,6 +377,84 @@ TEST(CFARDetectorOpStatisticalTest, GoMonteCarloPfaNciK8) {
   const PfaTrialResult result = run_monte_carlo_pfa_nci(
       kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0x474F434641520002ULL,
       CfarVariant::kGO);
+  ASSERT_GT(result.interior_cells, 0);
+  const double realized =
+      static_cast<double>(result.false_alarms) /
+      static_cast<double>(result.interior_cells);
+  expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells);
+}
+
+TEST(CFARDetectorOpStatisticalTest, SoMonteCarloPfaK1) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+
+  constexpr int kTrials = 30;
+  constexpr int64_t kMapDoppler = 64;
+  constexpr int64_t kMapRange = 64;
+  constexpr double kPfa = 1e-2;
+
+  const PfaTrialResult result = run_monte_carlo_pfa_k1(
+      kTrials, kMapDoppler, kMapRange, kPfa, 0x534F434641520001ULL,
+      CfarVariant::kSO);
+  ASSERT_GT(result.interior_cells, 0);
+  const double realized =
+      static_cast<double>(result.false_alarms) /
+      static_cast<double>(result.interior_cells);
+  // SO min-of-side noise is more sensitive to shared training-cell correlation
+  // across neighboring CUTs than GO/CA; relax the ratio envelope accordingly.
+  expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells,
+                                      0.25);
+}
+
+TEST(CFARDetectorOpStatisticalTest, SoMonteCarloPfaNciK8) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+
+  constexpr int kTrials = 30;
+  constexpr int64_t kChannels = 8;
+  constexpr int64_t kMapDoppler = 64;
+  constexpr int64_t kMapRange = 64;
+  constexpr double kPfa = 1e-2;
+
+  const PfaTrialResult result = run_monte_carlo_pfa_nci(
+      kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0x534F434641520002ULL,
+      CfarVariant::kSO);
+  ASSERT_GT(result.interior_cells, 0);
+  const double realized =
+      static_cast<double>(result.false_alarms) /
+      static_cast<double>(result.interior_cells);
+  expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells,
+                                      0.25);
+}
+
+TEST(CFARDetectorOpStatisticalTest, OsMonteCarloPfaK1) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+
+  constexpr int kTrials = 30;
+  constexpr int64_t kMapDoppler = 64;
+  constexpr int64_t kMapRange = 64;
+  constexpr double kPfa = 1e-2;
+
+  const PfaTrialResult result = run_monte_carlo_pfa_k1(
+      kTrials, kMapDoppler, kMapRange, kPfa, 0x4F53434641520001ULL,
+      CfarVariant::kOS);
+  ASSERT_GT(result.interior_cells, 0);
+  const double realized =
+      static_cast<double>(result.false_alarms) /
+      static_cast<double>(result.interior_cells);
+  expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells);
+}
+
+TEST(CFARDetectorOpStatisticalTest, OsMonteCarloPfaNciK8) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+
+  constexpr int kTrials = 30;
+  constexpr int64_t kChannels = 8;
+  constexpr int64_t kMapDoppler = 64;
+  constexpr int64_t kMapRange = 64;
+  constexpr double kPfa = 1e-2;
+
+  const PfaTrialResult result = run_monte_carlo_pfa_nci(
+      kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0x4F53434641520002ULL,
+      CfarVariant::kOS);
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
       static_cast<double>(result.false_alarms) /

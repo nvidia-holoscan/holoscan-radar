@@ -6,7 +6,19 @@
 #include <cstdint>
 #include <vector>
 
-namespace holoscan::radar::detail {
+namespace holoscan::radar {
+
+struct CfarAlphaLutKey;
+
+namespace detail {
+
+// Return a cached host alpha LUT, building it on first use for this key in
+// the process. MC calibration (GO/SO/OS) is amortized across operator
+// instances and test cases that share the same key.
+std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key);
+
+// Clear the process-wide LUT cache (unit tests only).
+void clear_alpha_lut_cache_for_tests();
 
 // Training-cell count for one (doppler, range) cell under the CA window
 // footprint (matches cfar_ca_kernel).
@@ -64,4 +76,29 @@ std::vector<double> build_go_alpha_lut(double pfa, int64_t fold,
                                        int guard_d, int guard_r, int train_d,
                                        int train_r);
 
-}  // namespace holoscan::radar::detail
+// SO-CFAR shares GOGO window geometry and LUT indexing; only the side and
+// axis combine uses min instead of max.
+double so_cfar_pfa_from_alpha(double alpha, int64_t n_side, int64_t k);
+
+double so_cfar_alpha(double pfa, int64_t n_side, int64_t k, int guard_d,
+                     int guard_r, int train_d, int train_r);
+
+std::vector<double> build_so_alpha_lut(double pfa, int64_t fold,
+                                       int num_doppler, int num_range,
+                                       int guard_d, int guard_r, int train_d,
+                                       int train_r);
+
+// OS-CFAR: os_rank is a 0-based index into ascending-sorted training powers.
+double os_cfar_pfa_from_alpha(double alpha, int64_t n, int64_t os_rank,
+                              int64_t k);
+
+double os_cfar_alpha(double pfa, int64_t n, int64_t os_rank, int64_t k,
+                     int guard_d, int guard_r, int train_d, int train_r);
+
+std::vector<double> build_os_alpha_lut(double pfa, int64_t fold,
+                                       int64_t os_rank, int num_doppler,
+                                       int num_range, int guard_d, int guard_r,
+                                       int train_d, int train_r);
+
+}  // namespace detail
+}  // namespace holoscan::radar

@@ -25,7 +25,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | --- | --- | --- | --- |
 | Fill out `AGENTS.md` + this status file | deustice | `deustice/planning` | in review |
 | Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness | deustice | `deustice/sigproc-ops` | in progress |
-| Detection operator (`operators/detection/` + `CFARDetectorOp`) | dpc | `dpc/detection` | **CA + GO done** (see below); SO/OS outstanding |
+| Detection operator (`operators/detection/` + `CFARDetectorOp`) | dpc | `dpc/detection` | **All four CFAR variants done** (see below) |
 
 ### Landed on `dpc/detection`
 
@@ -41,8 +41,13 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
   contract test matrix + `GoMonteCarloPfaK1` / `GoMonteCarloPfaNciK8`
   statistical tests. Checklist-complete for the GO variant modulo shared open
   items (§2, §4).
-- **Still outstanding on the same operator:** SO / OS variants (`cfar_variant`
-  values other than CA/GO throw today).
+- **`CFARDetectorOp` SO slice** — 2-D SOSO smallest-of stencil (shared GOGO
+  partition), host Monte Carlo `alpha` LUT, full SO contract test matrix +
+  `SoMonteCarloPfaK1` / `SoMonteCarloPfaNciK8` statistical tests.
+- **`CFARDetectorOp` OS slice** — per-cell order-statistic stencil with
+  `[live] os_rank` (0-based ascending), host Monte Carlo `alpha` LUT keyed by
+  rank, OS-specific validation/live-override tests, full contract test matrix
+  + `OsMonteCarloPfaK1` / `OsMonteCarloPfaNciK8` statistical tests.
 
 ## Up next (unclaimed)
 

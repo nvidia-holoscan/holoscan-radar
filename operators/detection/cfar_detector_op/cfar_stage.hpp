@@ -147,13 +147,16 @@ __device__ int64_t go_lut_index_dev(int64_t range_neg, int64_t range_pos,
   return nr > nd ? nr : nd;
 }
 
-template <typename T>
-__device__ T go_side_statistic(T neg_sum, int64_t neg_cnt, T pos_sum,
-                               int64_t pos_cnt) {
+template <typename T, bool kGreatestOf>
+__device__ T goso_side_statistic(T neg_sum, int64_t neg_cnt, T pos_sum,
+                                 int64_t pos_cnt) {
   if (neg_cnt > 0 && pos_cnt > 0) {
     const T neg_mean = neg_sum / static_cast<T>(neg_cnt);
     const T pos_mean = pos_sum / static_cast<T>(pos_cnt);
-    return neg_mean > pos_mean ? neg_mean : pos_mean;
+    if (kGreatestOf) {
+      return neg_mean > pos_mean ? neg_mean : pos_mean;
+    }
+    return neg_mean < pos_mean ? neg_mean : pos_mean;
   }
   if (neg_cnt > 0) {
     return neg_sum / static_cast<T>(neg_cnt);
@@ -164,13 +167,13 @@ __device__ T go_side_statistic(T neg_sum, int64_t neg_cnt, T pos_sum,
   return T{0};
 }
 
-template <typename T>
-__global__ void cfar_go_kernel(const T* power, int64_t batch,
-                               int64_t num_doppler, int64_t num_range,
-                               int guard_d, int guard_r, int train_d,
-                               int train_r, T threshold_scale,
-                               const T* alpha_lut, int64_t alpha_lut_size,
-                               T* score, T* noise, bool* mask) {
+template <typename T, bool kGreatestOf>
+__global__ void cfar_goso_kernel(const T* power, int64_t batch,
+                                 int64_t num_doppler, int64_t num_range,
+                                 int guard_d, int guard_r, int train_d,
+                                 int train_r, T threshold_scale,
+                                 const T* alpha_lut, int64_t alpha_lut_size,
+                                 T* score, T* noise, bool* mask) {
   const int64_t r = blockIdx.x * blockDim.x + threadIdx.x;
   const int64_t d = blockIdx.y * blockDim.y + threadIdx.y;
   const int64_t b = blockIdx.z;
@@ -234,12 +237,99 @@ __global__ void cfar_go_kernel(const T* power, int64_t batch,
     return;
   }
 
-  const T range_go =
-      go_side_statistic(range_neg_sum, range_neg_cnt, range_pos_sum, range_pos_cnt);
-  const T doppler_go = go_side_statistic(doppler_neg_sum, doppler_neg_cnt,
-                                         doppler_pos_sum, doppler_pos_cnt);
-  const T noise_est = range_go > doppler_go ? range_go : doppler_go;
+  const T range_stat =
+      goso_side_statistic<T, kGreatestOf>(range_neg_sum, range_neg_cnt,
+                                          range_pos_sum, range_pos_cnt);
+  const T doppler_stat =
+      goso_side_statistic<T, kGreatestOf>(doppler_neg_sum, doppler_neg_cnt,
+                                          doppler_pos_sum, doppler_pos_cnt);
+  const T noise_est = kGreatestOf ? (range_stat > doppler_stat ? range_stat
+                                                               : doppler_stat)
+                                  : (range_stat < doppler_stat ? range_stat
+                                                               : doppler_stat);
   const T alpha = lut_idx < alpha_lut_size ? alpha_lut[lut_idx] : T{0};
+  const T threshold = threshold_scale * alpha * noise_est;
+  noise[idx] = noise_est;
+  const T s =
+      threshold > T{0} ? p[d * num_range + r] / threshold : T{0};
+  score[idx] = s;
+  mask[idx] = s > T{1};
+}
+
+// OS-CFAR: noise_estimate is the os_rank-th order statistic (0-based,
+// ascending) of training-cell powers in the CA window footprint. When
+// train_cnt <= os_rank, the maximum available rank (train_cnt - 1) is used.
+constexpr int kMaxOsTrainingCells = 512;
+
+template <typename T>
+__device__ T os_select_rank(T* samples, int count, int64_t os_rank) {
+  if (count <= 0) {
+    return T{0};
+  }
+  const int rank =
+      os_rank < static_cast<int64_t>(count) ? static_cast<int>(os_rank)
+                                           : count - 1;
+  for (int i = 1; i < count; ++i) {
+    const T key = samples[i];
+    int j = i - 1;
+    while (j >= 0 && samples[j] > key) {
+      samples[j + 1] = samples[j];
+      --j;
+    }
+    samples[j + 1] = key;
+  }
+  return samples[rank];
+}
+
+template <typename T>
+__global__ void cfar_os_kernel(const T* power, int64_t batch,
+                               int64_t num_doppler, int64_t num_range,
+                               int guard_d, int guard_r, int train_d,
+                               int train_r, int64_t os_rank, T threshold_scale,
+                               const T* alpha_lut, int64_t alpha_lut_size,
+                               T* score, T* noise, bool* mask) {
+  const int64_t r = blockIdx.x * blockDim.x + threadIdx.x;
+  const int64_t d = blockIdx.y * blockDim.y + threadIdx.y;
+  const int64_t b = blockIdx.z;
+  if (r >= num_range || d >= num_doppler || b >= batch) {
+    return;
+  }
+
+  const int half_d = guard_d + train_d;
+  const int half_r = guard_r + train_r;
+  const int64_t plane = num_doppler * num_range;
+  const T* p = power + b * plane;
+
+  T train_samples[kMaxOsTrainingCells];
+  int train_cnt = 0;
+  for (int dd = -half_d; dd <= half_d; ++dd) {
+    const int64_t nd = d + dd;
+    if (nd < 0 || nd >= num_doppler) {
+      continue;
+    }
+    const bool guard_row = (dd >= -guard_d && dd <= guard_d);
+    for (int rr = -half_r; rr <= half_r; ++rr) {
+      const int64_t nr = r + rr;
+      if (nr < 0 || nr >= num_range) {
+        continue;
+      }
+      if (guard_row && rr >= -guard_r && rr <= guard_r) {
+        continue;
+      }
+      train_samples[train_cnt++] = p[nd * num_range + nr];
+    }
+  }
+
+  const int64_t idx = b * plane + d * num_range + r;
+  if (train_cnt == 0) {
+    noise[idx] = T{0};
+    score[idx] = T{0};
+    mask[idx] = false;
+    return;
+  }
+
+  const T noise_est = os_select_rank(train_samples, train_cnt, os_rank);
+  const T alpha = train_cnt < alpha_lut_size ? alpha_lut[train_cnt] : T{0};
   const T threshold = threshold_scale * alpha * noise_est;
   noise[idx] = noise_est;
   const T s =
@@ -266,21 +356,22 @@ __global__ void cfar_go_kernel(const T* power, int64_t batch,
 // All outputs are preallocated by the caller. Work is enqueued on `stream`;
 // no synchronization here.
 //
-// v1 implements CfarVariant::kCA and kGO; SO/OS throw std::invalid_argument
-// (they are static per instance, so this is a clean per-instance boundary).
+// v1 implements CfarVariant::kCA, kGO, kSO, and kOS.
 template <typename T>
 void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
                     int64_t batch_in, int64_t out_batch, int64_t num_doppler,
                     int64_t num_range, int guard_d, int guard_r, int train_d,
-                    int train_r, double threshold_scale, int64_t nci_fold,
-                    const int64_t* batch_in_table_dev, const void* alpha_lut,
-                    int64_t alpha_lut_size, void* power, void* integrated_power,
-                    void* score, void* noise, void* mask, cudaStream_t stream) {
-  if (variant != CfarVariant::kCA && variant != CfarVariant::kGO) {
+                    int train_r, int64_t os_rank, double threshold_scale,
+                    int64_t nci_fold, const int64_t* batch_in_table_dev,
+                    const void* alpha_lut, int64_t alpha_lut_size, void* power,
+                    void* integrated_power, void* score, void* noise,
+                    void* mask, cudaStream_t stream) {
+  if (variant != CfarVariant::kCA && variant != CfarVariant::kGO &&
+      variant != CfarVariant::kSO && variant != CfarVariant::kOS) {
     throw std::invalid_argument(
         std::string("CFAR stage: variant '") + std::string(to_string(variant)) +
-        "' is not implemented yet (v1 implements CA and GO); instantiate a "
-        "supported detector or extend cfar_stage.hpp");
+        "' is not implemented; instantiate a supported detector or extend "
+        "cfar_stage.hpp");
   }
 
   const int64_t n = batch_in * num_doppler * num_range;
@@ -333,11 +424,25 @@ void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
           alpha_lut_size, static_cast<T*>(score) + b * plane,
           static_cast<T*>(noise) + b * plane,
           static_cast<bool*>(mask) + b * plane);
-    } else {
-      cfar_go_kernel<T><<<grid, block, 0, stream>>>(
+    } else if (variant == CfarVariant::kGO) {
+      cfar_goso_kernel<T, true><<<grid, block, 0, stream>>>(
           cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
           train_d, train_r, static_cast<T>(threshold_scale), alpha_lut_t,
           alpha_lut_size, static_cast<T*>(score) + b * plane,
+          static_cast<T*>(noise) + b * plane,
+          static_cast<bool*>(mask) + b * plane);
+    } else if (variant == CfarVariant::kSO) {
+      cfar_goso_kernel<T, false><<<grid, block, 0, stream>>>(
+          cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
+          train_d, train_r, static_cast<T>(threshold_scale), alpha_lut_t,
+          alpha_lut_size, static_cast<T*>(score) + b * plane,
+          static_cast<T*>(noise) + b * plane,
+          static_cast<bool*>(mask) + b * plane);
+    } else {
+      cfar_os_kernel<T><<<grid, block, 0, stream>>>(
+          cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
+          train_d, train_r, os_rank, static_cast<T>(threshold_scale),
+          alpha_lut_t, alpha_lut_size, static_cast<T*>(score) + b * plane,
           static_cast<T*>(noise) + b * plane,
           static_cast<bool*>(mask) + b * plane);
     }

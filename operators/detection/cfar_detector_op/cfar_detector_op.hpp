@@ -32,6 +32,32 @@ constexpr std::string_view to_string(CfarVariant variant) {
   return "unknown";
 }
 
+// Cache key for the host-built per-training-count alpha LUT. Shared between
+// operator instances via detail::get_cached_alpha_lut.
+struct CfarAlphaLutKey {
+  CfarVariant variant{CfarVariant::kCA};
+  double pfa{-1.0};
+  int64_t fold{0};
+  int64_t os_rank{0};
+  int guard_d{0};
+  int guard_r{0};
+  int train_d{0};
+  int train_r{0};
+  int num_doppler{0};
+  int num_range{0};
+
+  bool operator==(const CfarAlphaLutKey& other) const {
+    return variant == other.variant && pfa == other.pfa &&
+           fold == other.fold && os_rank == other.os_rank &&
+           guard_d == other.guard_d && guard_r == other.guard_r &&
+           train_d == other.train_d && train_r == other.train_r &&
+           num_doppler == other.num_doppler && num_range == other.num_range;
+  }
+  bool operator!=(const CfarAlphaLutKey& other) const {
+    return !(*this == other);
+  }
+};
+
 // 2-D CFAR detector on the (Doppler, range) plane. This header is the
 // contract reference for the operator's ports, shapes, dtypes, and
 // parameters; module-wide conventions live in operators/common/README.md.
@@ -58,10 +84,9 @@ constexpr std::string_view to_string(CfarVariant variant) {
 // Precision is fixed at compile time by the template instantiation
 // (T = float → complex64/float32, T = double → complex128/float64).
 //
-// Implementation status: the CA and GO variants are implemented for arbitrary
-// leading axes with optional non-coherent integration (nci_axes), Gamma(K)
-// thresholding, and batch-widened detection_idx. SO/OS variants are declared
-// but not yet implemented — see operators/detection/README.md.
+// Implementation status: all four variants (CA, GO, SO, OS) are implemented for
+// arbitrary leading axes with optional non-coherent integration (nci_axes),
+// Gamma(K) thresholding, and batch-widened detection_idx.
 template <typename T>
 class CFARDetectorOp : public holoscan::Operator {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
@@ -120,30 +145,10 @@ class CFARDetectorOp : public holoscan::Operator {
   std::shared_ptr<holoscan::Tensor> nci_table_dev_{};
   std::vector<int64_t> nci_table_host_cache_{};
 
-  // Host-built alpha(N) LUT for CA/GO-CFAR. Rebuilt when pfa, fold, window
-  // footprint, map size, or variant changes.
-  struct AlphaLutKey {
-    CfarVariant variant{CfarVariant::kCA};
-    double pfa{-1.0};
-    int64_t fold{0};
-    int guard_d{0};
-    int guard_r{0};
-    int train_d{0};
-    int train_r{0};
-    int64_t num_doppler{0};
-    int64_t num_range{0};
-
-    bool operator==(const AlphaLutKey& other) const {
-      return variant == other.variant && pfa == other.pfa &&
-             fold == other.fold && guard_d == other.guard_d &&
-             guard_r == other.guard_r && train_d == other.train_d &&
-             train_r == other.train_r && num_doppler == other.num_doppler &&
-             num_range == other.num_range;
-    }
-    bool operator!=(const AlphaLutKey& other) const {
-      return !(*this == other);
-    }
-  };
+  // Host-built alpha(N) LUT. Rebuilt when pfa, fold, window footprint, map
+  // size, or variant changes. Host table is shared across operator instances
+  // via detail::get_cached_alpha_lut.
+  using AlphaLutKey = CfarAlphaLutKey;
   AlphaLutKey alpha_lut_key_{};
   std::vector<double> alpha_lut_host_cache_{};
   std::shared_ptr<holoscan::Tensor> alpha_lut_dev_{};
