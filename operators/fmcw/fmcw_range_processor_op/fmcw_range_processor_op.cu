@@ -133,16 +133,15 @@ void FMCWRangeProcessorOp<T>::compute(InputContext& op_input,
   // warn.
   bool warn_on_rebuild = false;
   bool changed = false;
-  effective_window_ = resolve_override_param(op_input, "range_window",
-                                         effective_window_, &changed);
+  effective_window_ = resolve_override_param(
+      op_input, "range_window", effective_window_, &changed);
   warn_on_rebuild = warn_on_rebuild || changed;
   effective_apply_dechirp_ = resolve_override_param(
       op_input, "apply_dechirp", effective_apply_dechirp_, nullptr);
-  effective_fft_norm_ = resolve_override_param(op_input, "fft_norm",
-                                           effective_fft_norm_, nullptr);
-  effective_propagation_speed_ =
-      resolve_override_param(op_input, "propagation_speed",
-                         effective_propagation_speed_, nullptr);
+  effective_fft_norm_ = resolve_override_param(
+      op_input, "fft_norm", effective_fft_norm_, nullptr);
+  effective_propagation_speed_ = resolve_override_param(
+      op_input, "propagation_speed", effective_propagation_speed_, nullptr);
 
   auto waveform_override =
       receive_override<FMCWWaveformDescriptor>(op_input, "waveform");
