@@ -152,6 +152,14 @@ class AdcSourceOp : public holoscan::Operator {
     // The simulator computes in double precision; cast to the float ADC
     // sample type before upload.
     const radar::sim::SimResult sim = radar::sim::simulate(scene);
+    // SISO app: the allocation below assumes the sim's single-RX rank-2
+    // cube. A multi-RX scene yields rank-3 — allocate from sim.shape when
+    // lifting this source for SIMO/MIMO apps.
+    if (sim.shape.size() != 2) {
+      throw std::runtime_error(
+          "AdcSourceOp: SISO source expects a rank-2 cube, got rank " +
+          std::to_string(sim.shape.size()));
+    }
     std::vector<std::complex<float>> cube(sim.cube.size());
     for (size_t i = 0; i < sim.cube.size(); ++i) {
       cube[i] = std::complex<float>(static_cast<float>(sim.cube[i].real()),
@@ -198,6 +206,14 @@ class PeakReportOp : public holoscan::Operator {
     auto velocity_bins = single_tensor(op_input, "velocity_bins");
 
     const auto shape = rd_map->shape();
+    // SISO app: the host buffer below is sized from the trailing two axes
+    // while the copy uses nbytes(); a batched (rank > 2) map would overflow
+    // it. Index within the trailing slab when lifting this sink.
+    if (shape.size() != 2) {
+      throw std::runtime_error(
+          "PeakReportOp: SISO sink expects a rank-2 rd_map, got rank " +
+          std::to_string(shape.size()));
+    }
     const int64_t num_doppler = shape[shape.size() - 2];
     const int64_t num_range = shape[shape.size() - 1];
 
