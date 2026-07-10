@@ -11,9 +11,12 @@ Notable deltas from the plan as written: an SDK 5.x migration was attempted
 and rolled back mid-effort (the pre-release lacks the operator framework;
 the module stays on 4.3); [live] overrides were clarified as sticky in
 `OPERATOR_API.md` (contract clarification); the split-vs-fused parity
-measured bitwise-identical (delta exactly 0.0); YAML converters remain
-deferred (custom parameter types register direct-any argument setters via
-`radar_common/arg_setters.hpp` until `from_config()` support lands).
+measured bitwise-identical (delta exactly 0.0); the YAML-converter
+deferral was later lifted on this branch (`YAML::convert<>`
+specializations in `radar_common/sdk/yaml_converters.hpp`, registered
+through the SDK default setter in `radar_common/sdk/arg_setters.hpp`, so
+custom parameter types work through both native Args and `from_config()`;
+the SISO app consumes the per-operator YAML blocks natively).
 
 ## Scope and sequencing
 
@@ -140,8 +143,8 @@ New files (as landed):
   `dlpack_buffer.hpp` wraps a cudaMalloc device buffer as a full-rank
   `holoscan::Tensor` (dynamic-rank outputs — MatX tensors are
   compile-time-rank, so kernels use collapsed 3-D views over the same
-  memory). YAML converters deferred (not needed by the locked contract; add
-  with `from_config()` support later).
+  memory). YAML converters initially deferred, later landed on this branch
+  (`sdk/yaml_converters.hpp`).
 - `operators/fmcw/CMakeLists.txt` (fused op declared FIRST so its DEPENDS
   force-set precedes its dependencies' option() binding) + four operator dirs
   `operators/fmcw/{fmcw_range_processor_op, clutter_filter_op,

@@ -49,9 +49,12 @@ by this library:
   and caches prior ones (`sdk/config_cache.hpp`) so alternating values do
   not thrash; the initial parameter-driven build is silent.
 - **Custom parameter types need registered argument setters.** Holoscan's
-  `ArgumentSetter` only knows built-in types, and its YAML-backed
-  registration path requires `YAML::convert<T>` specializations that are
-  deferred until `from_config()` support lands. Every operator therefore
+  `ArgumentSetter` only knows built-in types. Every operator therefore
   calls `holoscan::radar::ensure_radar_arg_setters()`
-  (`sdk/arg_setters.hpp`) from an `initialize()` override; native C++ Args
-  work, YAML configuration of these types does not (yet).
+  (`sdk/arg_setters.hpp`) from an `initialize()` override, which registers
+  the SDK's default setter for each shared descriptor type. Both native
+  C++ Args and YAML-sourced Args (`from_config()`) work; the YAML side
+  decodes through the `YAML::convert<T>` specializations in
+  `sdk/yaml_converters.hpp`, using the canonical spellings from
+  `descriptors/enums.hpp` (e.g. `method: mean_subtraction`,
+  `range_window: hann` or a full `WindowSpec` map).

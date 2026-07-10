@@ -29,4 +29,4 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 Roughly in dependency order — claim by adding a row above:
 
 1. **Operator implementations, remaining groups** — detection & clustering, angle estimation, and MIMO marshaling kernels against the locked contracts (`operators/common/` supporting types `ArrayGeometry`, `AngleConvention`, `DDMCodeDescriptor`, `TXSchedule` land with their first consumer). The signal-processing group, the simulator + test harness, and the MatX/CUDA build wiring landed on `deustice/sigproc-ops`.
-2. **Python bindings** — pybind11 bindings for the implemented operators plus YAML converters for the shared descriptor types (restores `from_config()` and the Python example app).
+2. **Python bindings** — pybind11 bindings for the implemented operators (restores the Python example app). The YAML converters for the shared descriptor types landed on `deustice/sigproc-ops` (`radar_common/sdk/yaml_converters.hpp`; `from_config()` works for C++ apps).

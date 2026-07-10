@@ -15,9 +15,10 @@
 // operators' range_bins / velocity_bins axis outputs, so the moving target's
 // range is seen to sweep over the run.
 //
-// Waveform, cube dimensions, run cadence, targets, and clutter method are
-// read from fmcw_siso.yaml (staged next to the binary; override with a path
-// as the first CLI argument).
+// All configuration lives in fmcw_siso.yaml (staged next to the binary;
+// override with a path as the first CLI argument): the per-operator blocks
+// flow through Holoscan's native config()/from_config() path, and the
+// cube/run/target sections drive the synthetic source.
 //
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/fmcw_siso/cpp/fmcw_siso [config.yaml]
@@ -32,7 +33,6 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <holoscan/holoscan.hpp>
@@ -40,39 +40,27 @@
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
-#include "radar_common/descriptors/enums.hpp"
-#include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/sdk/yaml_converters.hpp"
 #include "radar_common/sim/point_target_sim.hpp"
+#include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace radar = holoscan::radar;
 
 namespace {
 
-// Parsed application configuration (see fmcw_siso.yaml).
+// App-owned configuration: everything the synthetic source and run cadence
+// need (see fmcw_siso.yaml). Operator parameters are NOT parsed here — the
+// per-operator YAML blocks flow through Holoscan's from_config() in
+// compose(), converted by radar_common/sdk/yaml_converters.hpp.
 struct AppConfig {
-  radar::FMCWWaveformDescriptor waveform;
-  radar::ClutterFilterMethod clutter_method{
-      radar::ClutterFilterMethod::kMeanSubtraction};
   radar::sim::SimScene scene;  // waveform, cube dims, targets, noise
   int64_t num_frames{1};
   double frame_period{0.1};  // s, between emitted cubes (and target motion)
 };
 
-radar::ClutterFilterMethod parse_clutter_method(const std::string& name) {
-  using radar::ClutterFilterMethod;
-  for (auto method : {ClutterFilterMethod::kMeanSubtraction,
-                      ClutterFilterMethod::kSingleDelay,
-                      ClutterFilterMethod::kDoubleDelay}) {
-    if (name == radar::to_string(method)) {
-      return method;
-    }
-  }
-  throw std::runtime_error("unknown clutter_filter.method '" + name + "'");
-}
-
-// Load and validate the YAML configuration.
+// Load and validate the app-owned YAML sections.
 AppConfig load_config(const std::filesystem::path& path) {
   if (!std::filesystem::exists(path)) {
     throw std::runtime_error("config file not found: " + path.string());
@@ -80,38 +68,22 @@ AppConfig load_config(const std::filesystem::path& path) {
   const YAML::Node root = YAML::LoadFile(path.string());
   AppConfig cfg;
 
-  const YAML::Node wf = root["waveform"];
-  radar::FMCWWaveformSpec wf_spec;
-  wf_spec.carrier_frequency = wf["carrier_frequency"].as<double>();
-  if (const YAML::Node bw = wf["bandwidth"]) {
-    wf_spec.bandwidth = bw.as<double>();
-  }
-  if (const YAML::Node slope = wf["chirp_slope"]) {
-    wf_spec.chirp_slope = slope.as<double>();
-  }
-  wf_spec.chirp_duration = wf["chirp_duration"].as<double>();
-  wf_spec.sample_rate = wf["sample_rate"].as<double>();
-  wf_spec.chirp_repetition_interval =
-      wf["chirp_repetition_interval"].as<double>();
-  // Validates and derives (slope <-> bandwidth) once; throws with a field
-  // name on an incomplete or inconsistent waveform section.
-  cfg.waveform = radar::FMCWWaveformDescriptor(std::move(wf_spec));
-
-  cfg.clutter_method =
-      parse_clutter_method(root["clutter_filter"]["method"].as<std::string>());
+  // Decode + validate the shared waveform anchor through the same
+  // YAML::convert<> the operators use, then mirror it into the simulator's
+  // decoupled SimWaveform. The descriptor derives bandwidth at
+  // construction, so a bandwidth- or slope-spelled config maps to the same
+  // beat rate.
+  const auto waveform =
+      root["waveform"].as<radar::FMCWWaveformDescriptor>();
+  cfg.scene.waveform.carrier_frequency = waveform.carrier_frequency();
+  cfg.scene.waveform.bandwidth = waveform.bandwidth();
+  cfg.scene.waveform.chirp_duration = waveform.chirp_duration();
+  cfg.scene.waveform.sample_rate = waveform.sample_rate();
+  cfg.scene.waveform.chirp_repetition_interval =
+      waveform.chirp_repetition_interval();
 
   cfg.num_frames = root["run"]["num_frames"].as<int64_t>();
   cfg.frame_period = root["run"]["frame_period"].as<double>();
-
-  // Mirror the waveform into the simulator's decoupled SimWaveform. The
-  // descriptor derives bandwidth at construction, so a bandwidth- or
-  // slope-spelled config maps to the same beat rate.
-  cfg.scene.waveform.carrier_frequency = cfg.waveform.carrier_frequency();
-  cfg.scene.waveform.bandwidth = cfg.waveform.bandwidth();
-  cfg.scene.waveform.chirp_duration = cfg.waveform.chirp_duration();
-  cfg.scene.waveform.sample_rate = cfg.waveform.sample_rate();
-  cfg.scene.waveform.chirp_repetition_interval =
-      cfg.waveform.chirp_repetition_interval();
   cfg.scene.num_chirps = root["cube"]["num_chirps"].as<int64_t>();
   cfg.scene.samples_per_chirp = root["cube"]["samples_per_chirp"].as<int64_t>();
 
@@ -267,8 +239,6 @@ class FmcwSisoApp : public holoscan::Application {
   AppConfig cfg;  // set before run()
 
   void compose() override {
-    using holoscan::Arg;
-
     // Emit cfg.num_frames cubes, one every cfg.frame_period seconds, so the
     // targets are seen moving through space over the run.
     auto source = make_operator<AdcSourceOp>(
@@ -280,12 +250,14 @@ class FmcwSisoApp : public holoscan::Application {
     source->scene = cfg.scene;
     source->frame_period = cfg.frame_period;
 
+    // Operator parameters come straight from the same-named YAML blocks;
+    // the yaml_converters.hpp specializations decode the custom types.
     auto range = make_operator<radar::FMCWRangeProcessorOp<float>>(
-        "range_processor", Arg("waveform") = cfg.waveform);
+        "range_processor", from_config("range_processor"));
     auto clutter = make_operator<radar::ClutterFilterOp<float>>(
-        "clutter_filter", Arg("method") = cfg.clutter_method);
+        "clutter_filter", from_config("clutter_filter"));
     auto doppler = make_operator<radar::FMCWDopplerProcessorOp<float>>(
-        "doppler_processor", Arg("waveform") = cfg.waveform);
+        "doppler_processor", from_config("doppler_processor"));
     auto sink = make_operator<PeakReportOp>("peak_report");
 
     add_flow(source, range, {{"adc_cube", "adc_cube"}});
@@ -309,7 +281,12 @@ std::filesystem::path resolve_config_path(int argc, char** argv) {
 int main(int argc, char** argv) {
   auto app = holoscan::make_application<FmcwSisoApp>();
   try {
-    app->cfg = load_config(resolve_config_path(argc, argv));
+    const std::filesystem::path config_path =
+        resolve_config_path(argc, argv);
+    app->cfg = load_config(config_path);
+    // Same file feeds the native config path: compose() pulls the
+    // per-operator blocks via from_config().
+    app->config(config_path.string());
   } catch (const std::exception& e) {
     HOLOSCAN_LOG_ERROR("fmcw_siso: {}", e.what());
     return 1;

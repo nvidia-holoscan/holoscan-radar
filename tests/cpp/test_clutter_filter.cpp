@@ -9,6 +9,7 @@
 // (utils/sdk_harness.hpp).
 
 #include <gtest/gtest.h>
+#include <yaml-cpp/yaml.h>
 
 #include <algorithm>
 #include <cmath>
@@ -229,6 +230,24 @@ TEST(ClutterFilterOpTest, SingleDelayShapeAndResponse) {
           << "cell (" << k << ", " << r << ")";
     }
   }
+}
+
+// A YAML-sourced Arg (the from_config() path) must configure the method
+// parameter identically to a native Arg — exercises the default argument
+// setter's kYAMLNode branch through the yaml_converters.hpp specialization.
+TEST(ClutterFilterOpTest, MethodConfigurableFromYamlNode) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  const auto tone = doppler_tone<float>(kChirps, kBins, 0.19);
+  auto frame = single_map(
+      to_device_tensor(tone, {kChirps, kBins}, complex_dtype<float>()),
+      "range_profiles");
+  const HostTensor out = run_harness_single<float>(
+      create_operator_test<ClutterFilterOp<float>>(
+          holoscan::Arg("method") = YAML::Load("single_delay")),
+      std::move(frame));
+  // single_delay drops one chirp — proof the YAML value took effect (the
+  // default, mean_subtraction, preserves the chirp count).
+  ASSERT_EQ(out.shape, (std::vector<int64_t>{kChirps - 1, kBins}));
 }
 
 TEST(ClutterFilterOpTest, DoubleDelayShapeAndResponse) {
