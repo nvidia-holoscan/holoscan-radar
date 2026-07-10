@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Configuration for the FMCW SISO example application. Loaded at startup by
+# fmcw_siso (pass a path as the first CLI argument to override; otherwise the
+# copy staged next to the executable is used).
+
+# FMCW waveform. Provide exactly one of `bandwidth` or `chirp_slope`; the
+# operators derive the other. See FMCWWaveformDescriptor.
+waveform:
+  carrier_frequency: 77.0e9           # Hz
+  bandwidth: 150.0e6                   # Hz
+  chirp_duration: 20.0e-6              # s
+  sample_rate: 12.8e6                  # Hz
+  chirp_repetition_interval: 25.0e-6   # s (PRI)
+
+# ADC data-cube dimensions per coherent processing interval (CPI).
+cube:
+  num_chirps: 128
+  samples_per_chirp: 256
+
+# Run cadence. The source emits `num_frames` cubes, one every `frame_period`
+# seconds, advancing the targets through space between frames.
+run:
+  num_frames: 24
+  frame_period: 0.1                    # s (10 Hz frame rate)
+
+# Slow-time clutter suppression: one of mean_subtraction, single_delay,
+# double_delay.
+clutter_filter:
+  method: mean_subtraction
+
+# Scene targets. Each is placed along the +x look direction at `range` metres,
+# closing/receding at `velocity` m/s (positive = receding), with a linear
+# `amplitude`.
+targets:
+  - { range: 60.0, velocity: 0.0, amplitude: 1.0 }   # static clutter
+  - { range: 42.0, velocity: 5.5, amplitude: 0.5 }   # moving target
+
+# Additive complex white Gaussian noise, SNR in dB relative to a unit-amplitude
+# target. Set to null (or omit) for a noise-free cube.
+noise_snr_db: null
