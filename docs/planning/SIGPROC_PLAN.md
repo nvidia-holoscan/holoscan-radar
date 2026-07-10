@@ -165,8 +165,9 @@ New files (as landed):
   tests). Landed under `tests/cpp/utils/`, then graduated into
   `radar_common` once the SISO app took it as an input-synthesis dependency.
 - `tests/cpp/utils/{bin_model.hpp, tensor_fixtures.hpp,
-  sdk_harness.hpp}`: forward bin model; host↔device Tensor fixtures +
-  `RADAR_TEST_SKIP_IF_NO_GPU()`; radar-flavored glue over the SDK-native
+  sdk_harness.hpp}`: forward bin model; host↔device Tensor fixtures
+  (a CUDA-capable GPU is a hard test dependency — no skip-if-no-GPU
+  fallback); radar-flavored glue over the SDK-native
   operator test harness (`holoscan::test::OperatorTestHarness` +
   `TestHarnessSourceOp`/`TestHarnessSinkOp`): TensorMap capture-to-host
   validators and leading-tick [live]-override wiring. (An initial custom

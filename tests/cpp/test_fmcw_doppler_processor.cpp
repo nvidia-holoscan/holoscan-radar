@@ -222,7 +222,6 @@ class LiveOverrideApp : public holoscan::Application {
 };
 
 TEST(FMCWDopplerProcessorOpTest, VelocityPeakMatchesTruthCentered) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t num_chirps = 32;
   const int64_t num_bins = 16;
   const int64_t range_bin = 5;
@@ -266,7 +265,6 @@ TEST(FMCWDopplerProcessorOpTest, VelocityPeakMatchesTruthCentered) {
 }
 
 TEST(FMCWDopplerProcessorOpTest, VelocityAxisUncentered) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t num_chirps = 32;
   const int64_t num_bins = 8;
   const int64_t range_bin = 3;
@@ -306,7 +304,6 @@ TEST(FMCWDopplerProcessorOpTest, VelocityAxisUncentered) {
 }
 
 TEST(FMCWDopplerProcessorOpTest, CenterZeroDopplerPlacesDc) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t num_chirps = 32;
   const int64_t num_bins = 4;
   const int64_t range_bin = 1;
@@ -340,7 +337,6 @@ TEST(FMCWDopplerProcessorOpTest, CenterZeroDopplerPlacesDc) {
 }
 
 TEST(FMCWDopplerProcessorOpTest, OddChirpCountFftshiftMatchesNumpy) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t num_chirps = 31;  // odd length exercises fftshift semantics
   const int64_t num_bins = 4;
   const int64_t range_bin = 2;
@@ -375,7 +371,6 @@ TEST(FMCWDopplerProcessorOpTest, OddChirpCountFftshiftMatchesNumpy) {
 }
 
 TEST(FMCWDopplerProcessorOpTest, HannWindowPreservesOnBinPeak) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t num_chirps = 32;
   const int64_t num_bins = 4;
   const int64_t range_bin = 1;
@@ -424,7 +419,6 @@ double max_doppler_sidelobe(const HostTensor& rd_map, int64_t num_chirps,
 }
 
 TEST(FMCWDopplerProcessorOpTest, HannWindowLowersDopplerSidelobes) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t num_chirps = 32;
   const int64_t num_bins = 4;
   const int64_t range_bin = 2;
@@ -454,7 +448,6 @@ TEST(FMCWDopplerProcessorOpTest, HannWindowLowersDopplerSidelobes) {
 }
 
 TEST(FMCWDopplerProcessorOpTest, NfftInterpolatesVelocityGrid) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t num_chirps = 32;
   const int64_t nfft = 64;
   const int64_t num_bins = 8;
@@ -498,7 +491,6 @@ TEST(FMCWDopplerProcessorOpTest, NfftInterpolatesVelocityGrid) {
 }
 
 TEST(FMCWDopplerProcessorOpTest, LeadingBatchAxesProcessedIndependently) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t batch = 2;
   const int64_t num_chirps = 32;
   const int64_t num_bins = 8;
@@ -526,7 +518,6 @@ TEST(FMCWDopplerProcessorOpTest, LeadingBatchAxesProcessedIndependently) {
 }
 
 TEST(FMCWDopplerProcessorOpTest, LiveOverrideCenterZeroDoppler) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t num_chirps = 32;
   const int64_t num_bins = 4;
   const int64_t range_bin = 1;
@@ -585,7 +576,6 @@ TEST(FMCWDopplerProcessorOpTest, LiveOverrideCenterZeroDoppler) {
 }
 
 TEST(FMCWDopplerProcessorOpTest, LiveOverrideDopplerWindow) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t num_chirps = 32;
   const int64_t num_bins = 4;
   const int64_t range_bin = 2;
@@ -628,7 +618,6 @@ TEST(FMCWDopplerProcessorOpTest, LiveOverrideDopplerWindow) {
 }
 
 TEST(FMCWDopplerProcessorOpTest, VelocityBinsOnlyEmittedWithWaveform) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t num_chirps = 32;
   const int64_t num_bins = 4;
   auto frame = [&]() {
@@ -681,7 +670,6 @@ TEST(FMCWDopplerProcessorOpTest, VelocityBinsOnlyEmittedWithWaveform) {
 }
 
 TEST(FMCWDopplerProcessorOpTest, FloatAndDoubleAgree) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t num_chirps = 32;
   const int64_t num_bins = 8;
   const double pri = 25e-6;
@@ -712,7 +700,6 @@ TEST(FMCWDopplerProcessorOpTest, FloatAndDoubleAgree) {
 }
 
 TEST(FMCWDopplerProcessorOpTest, RealInputRejected) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t num_chirps = 8;
   const int64_t num_bins = 4;
   const std::vector<double> real_cube(
@@ -728,7 +715,6 @@ TEST(FMCWDopplerProcessorOpTest, RealInputRejected) {
 }
 
 TEST(FMCWDopplerProcessorOpTest, MultiEntryInputRejected) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto tone = tone_profiles(8, 4, 1, 0.0, 25e-6);
   holoscan::TensorMap map;
   map["a"] = complex_cube_to_device<float>(tone, {8, 4});
@@ -741,7 +727,6 @@ TEST(FMCWDopplerProcessorOpTest, MultiEntryInputRejected) {
 }
 
 TEST(FMCWDopplerProcessorOpTest, NfftSmallerThanChirpCountRejected) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto tone = tone_profiles(32, 4, 1, 0.0, 25e-6);
   EXPECT_THROW(
       run_rd_single(create_operator_test<FMCWDopplerProcessorOp<float>>(
@@ -754,7 +739,6 @@ TEST(FMCWDopplerProcessorOpTest, NfftSmallerThanChirpCountRejected) {
 // reference range DFT, then through the operator — the physical-domain
 // velocity read via velocity_bins matches the simulator's ground truth.
 TEST(FMCWDopplerProcessorOpTest, SimulatorTargetMapsToTruthVelocity) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   namespace rt = holoscan::radar::sim;
 
   rt::SimScene scene;

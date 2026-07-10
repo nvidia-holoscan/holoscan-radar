@@ -159,7 +159,6 @@ RunOutputs run_complex_frame(const SimResult& sim, ArgsT&&... args) {
 }
 
 TEST(FMCWRangeProcessorOpTest, SingleTargetComplexIfPeakAndRangeAxis) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimWaveform waveform{};
   const double target_range = range_at_bin(30.0);
   const auto sim = simulate(make_scene(target_range));
@@ -188,7 +187,6 @@ TEST(FMCWRangeProcessorOpTest, SingleTargetComplexIfPeakAndRangeAxis) {
 }
 
 TEST(FMCWRangeProcessorOpTest, RealIfPathPeakAtRange) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimWaveform waveform{};
   const double target_range = range_at_bin(30.0);
   const auto sim = simulate(make_scene(target_range));
@@ -212,7 +210,6 @@ TEST(FMCWRangeProcessorOpTest, RealIfPathPeakAtRange) {
 }
 
 TEST(FMCWRangeProcessorOpTest, NoRangeBinsWithoutWaveform) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto sim = simulate(make_scene(range_at_bin(30.0)));
 
   // No waveform descriptor: range_profiles still flows, but the optional
@@ -239,7 +236,6 @@ TEST(FMCWRangeProcessorOpTest, NoRangeBinsWithoutWaveform) {
 }
 
 TEST(FMCWRangeProcessorOpTest, ApplyDechirpMatchesHardwareDechirp) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimWaveform waveform{};
   const double target_range = range_at_bin(30.5);
 
@@ -270,7 +266,6 @@ TEST(FMCWRangeProcessorOpTest, ApplyDechirpMatchesHardwareDechirp) {
 }
 
 TEST(FMCWRangeProcessorOpTest, ApplyDechirpWithoutWaveformErrors) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto sim = simulate(make_scene(range_at_bin(30.0), false));
 
   auto harness = create_operator_test<FMCWRangeProcessorOp<float>>(
@@ -284,7 +279,6 @@ TEST(FMCWRangeProcessorOpTest, ApplyDechirpWithoutWaveformErrors) {
 }
 
 TEST(FMCWRangeProcessorOpTest, ApplyDechirpWithRealInputErrors) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimWaveform waveform{};
   const auto sim = simulate(make_scene(range_at_bin(30.0)));
   const auto real_cube = to_real_if(sim);
@@ -300,7 +294,6 @@ TEST(FMCWRangeProcessorOpTest, ApplyDechirpWithRealInputErrors) {
 }
 
 TEST(FMCWRangeProcessorOpTest, HannWindowLowersSidelobesKeepsPeak) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimWaveform waveform{};
   WindowSpec hann;
   hann.type = WindowType::kHann;
@@ -350,7 +343,6 @@ TEST(FMCWRangeProcessorOpTest, HannWindowLowersSidelobesKeepsPeak) {
 }
 
 TEST(FMCWRangeProcessorOpTest, NfftOversamplingInterpolatesGrid) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimWaveform waveform{};
   const double target_range = range_at_bin(30.0);
   const auto sim = simulate(make_scene(target_range));
@@ -378,7 +370,6 @@ TEST(FMCWRangeProcessorOpTest, NfftOversamplingInterpolatesGrid) {
 }
 
 TEST(FMCWRangeProcessorOpTest, LeadingBatchAxesRoundTrip) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimWaveform waveform{};
   const double target_range = range_at_bin(30.0);
 
@@ -429,7 +420,6 @@ class LiveOverrideApp : public holoscan::Application {
 };
 
 TEST(FMCWRangeProcessorOpTest, LiveWindowOverrideAppliesPerTick) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimWaveform waveform{};
   // Off-bin target so rectangular and Hann profiles differ materially.
   const auto sim = simulate(make_scene(range_at_bin(30.5)));
@@ -489,7 +479,6 @@ TEST(FMCWRangeProcessorOpTest, LiveWindowOverrideAppliesPerTick) {
 }
 
 TEST(FMCWRangeProcessorOpTest, FloatAndDoubleInstantiationsAgree) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimWaveform waveform{};
   const auto sim = simulate(make_scene(range_at_bin(30.5)));
 

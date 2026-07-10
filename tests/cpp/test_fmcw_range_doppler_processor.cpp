@@ -333,17 +333,14 @@ void parity_all_clutter_filters(double rel_tol) {
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, ParityAllClutterFiltersFloat) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   parity_all_clutter_filters<float>(1e-5);
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, ParityAllClutterFiltersDouble) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   parity_all_clutter_filters<double>(1e-12);
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, ParityNfftOverrides) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto waveform = to_descriptor(SimWaveform{});
   const auto factory = complex_factory<float>(parity_sim());
   ParityConfig cfg;
@@ -358,7 +355,6 @@ TEST(FMCWRangeDopplerProcessorOpTest, ParityNfftOverrides) {
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, ParityWindows) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto waveform = to_descriptor(SimWaveform{});
   const auto factory = complex_factory<float>(parity_sim());
   ParityConfig cfg;
@@ -370,7 +366,6 @@ TEST(FMCWRangeDopplerProcessorOpTest, ParityWindows) {
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, ParityRealIfInput) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto waveform = to_descriptor(SimWaveform{});
   const SimResult& sim = parity_sim();
   const std::vector<double> real_cube = to_real_if(sim);
@@ -388,7 +383,6 @@ TEST(FMCWRangeDopplerProcessorOpTest, ParityRealIfInput) {
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, ParityApplyDechirp) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto waveform = to_descriptor(SimWaveform{});
   const auto factory = complex_factory<float>(parity_sim_pre_mixer());
   ParityConfig cfg;
@@ -401,7 +395,6 @@ TEST(FMCWRangeDopplerProcessorOpTest, ParityApplyDechirp) {
 // Inline clutter reduces num_doppler exactly as the standalone op's
 // num_chirps_out contract prescribes (nfft_doppler unset).
 TEST(FMCWRangeDopplerProcessorOpTest, InlineClutterReducesDopplerLength) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto waveform = to_descriptor(SimWaveform{});
   const auto factory = complex_factory<float>(parity_sim());
   const struct {
@@ -430,7 +423,6 @@ TEST(FMCWRangeDopplerProcessorOpTest, InlineClutterReducesDopplerLength) {
 // range_bins / velocity_bins to the target's range and radial velocity
 // within one bin each.
 TEST(FMCWRangeDopplerProcessorOpTest, PeakMapsToTruthRangeAndVelocity) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   SimScene scene;
   scene.num_chirps = kChirps;
   scene.samples_per_chirp = kSamples;
@@ -490,7 +482,6 @@ TEST(FMCWRangeDopplerProcessorOpTest, PeakMapsToTruthRangeAndVelocity) {
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, OptionalOutputsOnlyWithWaveform) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimResult& sim = parity_sim();
   TensorMapCapture rd;
   auto rd_validators = rd.validators();
@@ -519,7 +510,6 @@ TEST(FMCWRangeDopplerProcessorOpTest, OptionalOutputsOnlyWithWaveform) {
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, ApplyDechirpWithoutWaveformErrors) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimResult& sim = parity_sim_pre_mixer();
   auto harness = create_operator_test<FMCWRangeDopplerProcessorOp<float>>(
       holoscan::Arg("apply_dechirp") = true);
@@ -532,7 +522,6 @@ TEST(FMCWRangeDopplerProcessorOpTest, ApplyDechirpWithoutWaveformErrors) {
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, ApplyDechirpWithRealInputErrors) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimResult& sim = parity_sim();
   const auto real_cube = to_real_if(sim);
   auto harness = create_operator_test<FMCWRangeDopplerProcessorOp<float>>(
@@ -547,7 +536,6 @@ TEST(FMCWRangeDopplerProcessorOpTest, ApplyDechirpWithRealInputErrors) {
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, NfftRangeTooSmallErrors) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimResult& sim = parity_sim();
   auto harness = create_operator_test<FMCWRangeDopplerProcessorOp<float>>(
       holoscan::Arg("nfft_range") = kSamples / 2);
@@ -560,7 +548,6 @@ TEST(FMCWRangeDopplerProcessorOpTest, NfftRangeTooSmallErrors) {
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, NfftDopplerTooSmallErrors) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimResult& sim = parity_sim();
   // nfft_doppler below the raw chirp count.
   {
@@ -614,7 +601,6 @@ class LiveClutterOverrideApp : public holoscan::Application {
 };
 
 TEST(FMCWRangeDopplerProcessorOpTest, LiveClutterOverrideChangesShape) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const SimResult& sim = parity_sim();
   auto frame = [&] {
     return single_map(complex_cube_to_device<float>(sim.cube, sim.shape),
@@ -651,7 +637,6 @@ TEST(FMCWRangeDopplerProcessorOpTest, LiveClutterOverrideChangesShape) {
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, FloatAndDoubleAgree) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto waveform = to_descriptor(SimWaveform{});
   ParityConfig cfg;
   cfg.clutter = ClutterFilterMethod::kMeanSubtraction;

@@ -154,7 +154,6 @@ sim::PointTarget moving_target(const sim::SimWaveform& waveform, double f) {
 // --- mean_subtraction: zero-Doppler clutter nulling ----------------------
 
 TEST(ClutterFilterOpTest, MeanSubtractionNullsStaticTarget) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   sim::SimScene scene;
   scene.num_chirps = kChirps;
   scene.samples_per_chirp = kBins;
@@ -178,7 +177,6 @@ TEST(ClutterFilterOpTest, MeanSubtractionNullsStaticTarget) {
 }
 
 TEST(ClutterFilterOpTest, MeanSubtractionPreservesMovingTarget) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   sim::SimScene scene;
   scene.num_chirps = kChirps;
   scene.samples_per_chirp = kBins;
@@ -210,7 +208,6 @@ TEST(ClutterFilterOpTest, MeanSubtractionPreservesMovingTarget) {
 // --- delay cancellers: shape and binomial high-pass response --------------
 
 TEST(ClutterFilterOpTest, SingleDelayShapeAndResponse) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const double f = 0.19;  // normalized Doppler, cycles/chirp
   const auto tone = doppler_tone<float>(kChirps, kBins, f);
   const HostTensor out = run_single<float>(
@@ -236,7 +233,6 @@ TEST(ClutterFilterOpTest, SingleDelayShapeAndResponse) {
 // parameter identically to a native Arg — exercises the default argument
 // setter's kYAMLNode branch through the yaml_converters.hpp specialization.
 TEST(ClutterFilterOpTest, MethodConfigurableFromYamlNode) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto tone = doppler_tone<float>(kChirps, kBins, 0.19);
   auto frame = single_map(
       to_device_tensor(tone, {kChirps, kBins}, complex_dtype<float>()),
@@ -251,7 +247,6 @@ TEST(ClutterFilterOpTest, MethodConfigurableFromYamlNode) {
 }
 
 TEST(ClutterFilterOpTest, DoubleDelayShapeAndResponse) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const double f = 0.19;
   const auto tone = doppler_tone<float>(kChirps, kBins, f);
   const HostTensor out = run_single<float>(
@@ -273,7 +268,6 @@ TEST(ClutterFilterOpTest, DoubleDelayShapeAndResponse) {
 }
 
 TEST(ClutterFilterOpTest, DelayCancellersNotchDC) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto dc = doppler_tone<float>(kChirps, kBins, 0.0);
   for (const ClutterFilterMethod method :
        {ClutterFilterMethod::kSingleDelay,
@@ -288,7 +282,6 @@ TEST(ClutterFilterOpTest, DelayCancellersNotchDC) {
 // --- leading batch axes ----------------------------------------------------
 
 TEST(ClutterFilterOpTest, LeadingBatchAxesPreservedAndIndependent) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t batch = 2;
   const int64_t nc = 8;
   const int64_t nb = 16;
@@ -359,7 +352,6 @@ class LiveOverrideApp : public holoscan::Application {
 };
 
 TEST(ClutterFilterOpTest, LiveMethodOverrideMidStreamAndSticky) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto tone = doppler_tone<float>(kChirps, kBins, 0.19);
   auto frame = [&]() {
     return single_map(to_device_tensor(tone, {kChirps, kBins},
@@ -389,7 +381,6 @@ TEST(ClutterFilterOpTest, LiveMethodOverrideMidStreamAndSticky) {
 // --- error paths -------------------------------------------------------------
 
 TEST(ClutterFilterOpTest, RejectsMethodNone) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto tone = doppler_tone<float>(kChirps, kBins, 0.19);
   try {
     run_single<float>(tone, {kChirps, kBins}, ClutterFilterMethod::kNone);
@@ -401,7 +392,6 @@ TEST(ClutterFilterOpTest, RejectsMethodNone) {
 }
 
 TEST(ClutterFilterOpTest, RejectsRealInput) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const std::vector<float> real_cube(
       static_cast<size_t>(kChirps * kBins), 1.0f);
   auto frame = single_map(
@@ -419,7 +409,6 @@ TEST(ClutterFilterOpTest, RejectsRealInput) {
 }
 
 TEST(ClutterFilterOpTest, RejectsTooFewChirps) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto one_chirp = doppler_tone<float>(1, kBins, 0.0);
   EXPECT_THROW(run_single<float>(one_chirp, {1, kBins},
                                  ClutterFilterMethod::kSingleDelay),
@@ -431,7 +420,6 @@ TEST(ClutterFilterOpTest, RejectsTooFewChirps) {
 }
 
 TEST(ClutterFilterOpTest, RejectsMultiEntryTensorMap) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto tone = doppler_tone<float>(kChirps, kBins, 0.19);
   holoscan::TensorMap map;
   map.insert({"a", to_device_tensor(tone, {kChirps, kBins},
@@ -446,7 +434,6 @@ TEST(ClutterFilterOpTest, RejectsMultiEntryTensorMap) {
 // --- precision agreement -----------------------------------------------------
 
 TEST(ClutterFilterOpTest, FloatAndDoubleAgree) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto tone_d = doppler_tone<double>(kChirps, kBins, 0.15);
   std::vector<std::complex<float>> tone_f(tone_d.size());
   for (size_t i = 0; i < tone_d.size(); ++i) {

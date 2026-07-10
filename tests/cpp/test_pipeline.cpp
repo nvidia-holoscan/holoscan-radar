@@ -129,7 +129,6 @@ ChainResult run_split_chain(const psim::SimScene& scene) {
 }
 
 TEST(EndToEndPipeline, SisoChainDetectsMovingTargetAtTruth) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const psim::SimScene scene = chain_scene();
   const ChainResult result = run_split_chain(scene);
 
@@ -178,7 +177,6 @@ TEST(EndToEndPipeline, SisoChainDetectsMovingTargetAtTruth) {
 }
 
 TEST(EndToEndPipeline, ChainIsDeterministicForFixedSeed) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const psim::SimScene scene = chain_scene();
   const ChainResult a = run_split_chain(scene);
   const ChainResult b = run_split_chain(scene);
