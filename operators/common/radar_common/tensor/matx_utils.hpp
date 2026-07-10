@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -68,10 +69,14 @@ matx::tensor_t<T, 1> upload_coefficients(const std::vector<double>& host,
     cast[i] = static_cast<T>(host[i]);
   }
   auto device = matx::make_tensor<T>({n}, matx::MATX_DEVICE_MEMORY);
-  cudaMemcpyAsync(device.Data(), cast.data(), sizeof(T) * host.size(),
-                  cudaMemcpyHostToDevice, stream);
+  if (cudaMemcpyAsync(device.Data(), cast.data(), sizeof(T) * host.size(),
+                      cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+    throw std::runtime_error("upload_coefficients: H2D copy failed");
+  }
   // The host staging vector is freed on return: block until the copy lands.
-  cudaStreamSynchronize(stream);
+  if (cudaStreamSynchronize(stream) != cudaSuccess) {
+    throw std::runtime_error("upload_coefficients: stream sync failed");
+  }
   return device;
 }
 
@@ -87,10 +92,14 @@ matx::tensor_t<cuda::std::complex<T>, 1> upload_complex_coefficients(
   }
   auto device =
       matx::make_tensor<cuda::std::complex<T>>({n}, matx::MATX_DEVICE_MEMORY);
-  cudaMemcpyAsync(device.Data(), cast.data(),
-                  sizeof(cuda::std::complex<T>) * host.size(),
-                  cudaMemcpyHostToDevice, stream);
-  cudaStreamSynchronize(stream);
+  if (cudaMemcpyAsync(device.Data(), cast.data(),
+                      sizeof(cuda::std::complex<T>) * host.size(),
+                      cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+    throw std::runtime_error("upload_complex_coefficients: H2D copy failed");
+  }
+  if (cudaStreamSynchronize(stream) != cudaSuccess) {
+    throw std::runtime_error("upload_complex_coefficients: stream sync failed");
+  }
   return device;
 }
 
