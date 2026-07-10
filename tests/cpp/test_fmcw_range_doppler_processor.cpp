@@ -86,14 +86,14 @@ double range_bin_width(int64_t nfft) {
 double range_at_bin(double bin) { return bin * range_bin_width(kSamples); }
 
 FMCWWaveformDescriptor to_descriptor(const SimWaveform& waveform) {
-  FMCWWaveformDescriptor descriptor;
-  descriptor.carrier_frequency = waveform.carrier_frequency;
-  descriptor.bandwidth = waveform.bandwidth;
-  descriptor.chirp_duration = waveform.chirp_duration;
-  descriptor.sample_rate = waveform.sample_rate;
-  descriptor.chirp_repetition_interval =
+  holoscan::radar::FMCWWaveformSpec spec;
+  spec.carrier_frequency = waveform.carrier_frequency;
+  spec.bandwidth = waveform.bandwidth;
+  spec.chirp_duration = waveform.chirp_duration;
+  spec.sample_rate = waveform.sample_rate;
+  spec.chirp_repetition_interval =
       waveform.chirp_repetition_interval;
-  return descriptor;
+  return FMCWWaveformDescriptor(spec);
 }
 
 // Parity scene: a static target plus a receding one (the parity

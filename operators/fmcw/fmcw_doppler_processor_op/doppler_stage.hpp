@@ -169,13 +169,12 @@ void fill_velocity_bins(const DopplerStageConfig& cfg, int64_t num_doppler,
         "doppler stage: velocity_bins length must be >= 1, got " +
         std::to_string(num_doppler));
   }
-  const double pri = cfg.waveform->chirp_repetition_interval;
-  if (pri <= 0.0) {
+  if (!cfg.waveform->is_valid()) {
     throw std::invalid_argument(
-        "doppler stage: waveform.chirp_repetition_interval must be > 0 to "
-        "derive the velocity_bins axis");
+        "doppler stage: velocity_bins requires a valid (non-empty) waveform "
+        "descriptor");
   }
-  const double prf = 1.0 / pri;
+  const double prf = 1.0 / cfg.waveform->chirp_repetition_interval();
   const double wavelength = cfg.waveform->wavelength();
 
   // Per-bin Doppler frequency on the (possibly centered) axis, then

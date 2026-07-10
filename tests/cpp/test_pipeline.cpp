@@ -41,13 +41,13 @@ namespace rt = holoscan::radar::testing;
 namespace psim = holoscan::radar::sim;
 
 FMCWWaveformDescriptor chain_waveform() {
-  FMCWWaveformDescriptor waveform;
-  waveform.carrier_frequency = 77e9;
-  waveform.bandwidth = 150e6;
-  waveform.chirp_duration = 20e-6;
-  waveform.sample_rate = 12.8e6;
-  waveform.chirp_repetition_interval = 25e-6;
-  return waveform;
+  holoscan::radar::FMCWWaveformSpec spec;
+  spec.carrier_frequency = 77e9;
+  spec.bandwidth = 150e6;
+  spec.chirp_duration = 20e-6;
+  spec.sample_rate = 12.8e6;
+  spec.chirp_repetition_interval = 25e-6;
+  return FMCWWaveformDescriptor(spec);
 }
 
 psim::SimScene chain_scene() {

@@ -133,16 +133,16 @@ inline uint64_t range_stage_fnv1a(const void* data, size_t bytes) {
 inline std::string dechirp_cache_key(const FMCWWaveformDescriptor& waveform,
                                      int64_t samples_per_chirp) {
   std::string key = "n=" + std::to_string(samples_per_chirp);
-  if (!waveform.reference_samples.empty()) {
-    key += ";ref_len=" + std::to_string(waveform.reference_samples.size());
+  if (!waveform.reference_samples().empty()) {
+    key += ";ref_len=" + std::to_string(waveform.reference_samples().size());
     key += ";ref_hash=" +
            std::to_string(range_stage_fnv1a(
-               waveform.reference_samples.data(),
-               waveform.reference_samples.size() *
+               waveform.reference_samples().data(),
+               waveform.reference_samples().size() *
                    sizeof(std::complex<double>)));
   } else {
     key += ";slope=" + range_stage_double_key(waveform.slope());
-    key += ";fs=" + range_stage_double_key(waveform.sample_rate);
+    key += ";fs=" + range_stage_double_key(waveform.sample_rate());
   }
   return key;
 }
@@ -156,26 +156,26 @@ matx::tensor_t<cuda::std::complex<T>, 1> build_dechirp_reference(
     const FMCWWaveformDescriptor& waveform, int64_t samples_per_chirp,
     cudaStream_t stream) {
   std::vector<std::complex<double>> host;
-  if (!waveform.reference_samples.empty()) {
-    if (static_cast<int64_t>(waveform.reference_samples.size()) !=
+  if (!waveform.reference_samples().empty()) {
+    if (static_cast<int64_t>(waveform.reference_samples().size()) !=
         samples_per_chirp) {
       throw std::invalid_argument(
           "range stage: waveform.reference_samples length (" +
-          std::to_string(waveform.reference_samples.size()) +
+          std::to_string(waveform.reference_samples().size()) +
           ") does not match samples_per_chirp (" +
           std::to_string(samples_per_chirp) + ")");
     }
-    host = waveform.reference_samples;
+    host = waveform.reference_samples();
   } else {
-    if (waveform.sample_rate <= 0.0) {
+    if (!waveform.is_valid()) {
       throw std::invalid_argument(
-          "range stage: waveform.sample_rate must be > 0 to synthesize the "
-          "dechirp reference");
+          "range stage: an empty (default-constructed) waveform descriptor "
+          "cannot synthesize the dechirp reference");
     }
     const double slope = waveform.slope();
     host.resize(static_cast<size_t>(samples_per_chirp));
     for (int64_t s = 0; s < samples_per_chirp; ++s) {
-      const double t = static_cast<double>(s) / waveform.sample_rate;
+      const double t = static_cast<double>(s) / waveform.sample_rate();
       const double phase = kRangeStagePi * slope * t * t;
       host[static_cast<size_t>(s)] =
           std::complex<double>(std::cos(phase), std::sin(phase));
@@ -305,18 +305,13 @@ void fill_range_bins(const RangeStageConfig& cfg, int64_t samples_per_chirp,
     throw std::invalid_argument(
         "range stage: range_bins requires a waveform descriptor");
   }
-  const double fs = cfg.waveform->sample_rate;
-  if (fs <= 0.0) {
+  if (!cfg.waveform->is_valid()) {
     throw std::invalid_argument(
-        "range stage: waveform.sample_rate must be > 0 to compute "
-        "range_bins");
+        "range stage: range_bins requires a valid (non-empty) waveform "
+        "descriptor");
   }
+  const double fs = cfg.waveform->sample_rate();
   const double slope = cfg.waveform->slope();
-  if (slope == 0.0) {
-    throw std::invalid_argument(
-        "range stage: waveform slope must be non-zero to compute "
-        "range_bins");
-  }
   const int64_t nfft = cfg.nfft.value_or(samples_per_chirp);
 
   std::vector<double> host(static_cast<size_t>(num_bins));

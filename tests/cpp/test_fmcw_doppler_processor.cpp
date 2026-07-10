@@ -61,13 +61,13 @@ constexpr double kSpeedOfLight = 299792458.0;
 
 // Waveform shared by the velocity_bins tests (77 GHz automotive-style).
 FMCWWaveformDescriptor test_waveform() {
-  FMCWWaveformDescriptor waveform;
-  waveform.carrier_frequency = 77e9;
-  waveform.bandwidth = 150e6;
-  waveform.chirp_duration = 20e-6;
-  waveform.sample_rate = 12.8e6;
-  waveform.chirp_repetition_interval = 25e-6;
-  return waveform;
+  holoscan::radar::FMCWWaveformSpec spec;
+  spec.carrier_frequency = 77e9;
+  spec.bandwidth = 150e6;
+  spec.chirp_duration = 20e-6;
+  spec.sample_rate = 12.8e6;
+  spec.chirp_repetition_interval = 25e-6;
+  return FMCWWaveformDescriptor(spec);
 }
 
 // Synthetic range profiles: a per-chirp complex exponential
@@ -228,7 +228,7 @@ TEST(FMCWDopplerProcessorOpTest, VelocityPeakMatchesTruthCentered) {
   const int64_t range_bin = 5;
   const double radial_velocity = 5.0;  // m/s, positive = receding
   const auto waveform = test_waveform();
-  const double pri = waveform.chirp_repetition_interval;
+  const double pri = waveform.chirp_repetition_interval();
   const double wavelength = waveform.wavelength();
   const double doppler_hz = -2.0 * radial_velocity / wavelength;
 
@@ -272,7 +272,7 @@ TEST(FMCWDopplerProcessorOpTest, VelocityAxisUncentered) {
   const int64_t range_bin = 3;
   const double radial_velocity = -4.0;  // approaching
   const auto waveform = test_waveform();
-  const double pri = waveform.chirp_repetition_interval;
+  const double pri = waveform.chirp_repetition_interval();
   const double wavelength = waveform.wavelength();
   const double doppler_hz = -2.0 * radial_velocity / wavelength;
 
@@ -345,7 +345,7 @@ TEST(FMCWDopplerProcessorOpTest, OddChirpCountFftshiftMatchesNumpy) {
   const int64_t num_bins = 4;
   const int64_t range_bin = 2;
   const auto waveform = test_waveform();
-  const double pri = waveform.chirp_repetition_interval;
+  const double pri = waveform.chirp_repetition_interval();
   const double wavelength = waveform.wavelength();
   // A tone exactly on unshifted bin 3: after numpy-style fftshift with odd
   // n, bin u lands at (u + floor(n/2)) % n = (3 + 15) % 31 = 18.
@@ -461,7 +461,7 @@ TEST(FMCWDopplerProcessorOpTest, NfftInterpolatesVelocityGrid) {
   const int64_t range_bin = 6;
   const double radial_velocity = 7.0;
   const auto waveform = test_waveform();
-  const double pri = waveform.chirp_repetition_interval;
+  const double pri = waveform.chirp_repetition_interval();
   const double wavelength = waveform.wavelength();
   const double doppler_hz = -2.0 * radial_velocity / wavelength;
 
@@ -531,7 +531,7 @@ TEST(FMCWDopplerProcessorOpTest, LiveOverrideCenterZeroDoppler) {
   const int64_t num_bins = 4;
   const int64_t range_bin = 1;
   const auto waveform = test_waveform();
-  const double pri = waveform.chirp_repetition_interval;
+  const double pri = waveform.chirp_repetition_interval();
   const double wavelength = waveform.wavelength();
   auto frame = [&]() {
     return profiles_frame<float>(
@@ -792,13 +792,14 @@ TEST(FMCWDopplerProcessorOpTest, SimulatorTargetMapsToTruthVelocity) {
     }
   }
 
-  FMCWWaveformDescriptor waveform;
-  waveform.carrier_frequency = scene.waveform.carrier_frequency;
-  waveform.bandwidth = scene.waveform.bandwidth;
-  waveform.chirp_duration = scene.waveform.chirp_duration;
-  waveform.sample_rate = scene.waveform.sample_rate;
-  waveform.chirp_repetition_interval =
+  holoscan::radar::FMCWWaveformSpec spec;
+  spec.carrier_frequency = scene.waveform.carrier_frequency;
+  spec.bandwidth = scene.waveform.bandwidth;
+  spec.chirp_duration = scene.waveform.chirp_duration;
+  spec.sample_rate = scene.waveform.sample_rate;
+  spec.chirp_repetition_interval =
       scene.waveform.chirp_repetition_interval;
+  const FMCWWaveformDescriptor waveform(spec);
 
   const auto [rd_map, bins] = run_rd_velocity_single(
       create_operator_test<FMCWDopplerProcessorOp<float>>(
