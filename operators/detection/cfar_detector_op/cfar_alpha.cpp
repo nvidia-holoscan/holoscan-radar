@@ -170,6 +170,24 @@ int64_t training_cell_count(int d, int r, int num_doppler, int num_range,
 
 int64_t max_training_cell_count(int num_doppler, int num_range, int guard_d,
                                 int guard_r, int train_d, int train_r) {
+  // The training count for a cell is (in-bounds window cells) - (in-bounds
+  // guard+CUT box cells). Both are axis-separable rectangles, so clipping at a
+  // border only ever reduces the count relative to a fully in-bounds cell.
+  // The maximum therefore occurs at any interior cell whose whole window fits,
+  // which exists exactly when the map is at least as large as the window in
+  // each axis. In that (overwhelmingly common) case max_N is closed-form and
+  // independent of map size; only sub-window maps need the exhaustive scan
+  // (and there D*R is tiny, so the scan is cheap).
+  const int half_d = guard_d + train_d;
+  const int half_r = guard_r + train_r;
+  const int64_t win_d = static_cast<int64_t>(2 * half_d + 1);
+  const int64_t win_r = static_cast<int64_t>(2 * half_r + 1);
+  if (num_doppler >= win_d && num_range >= win_r) {
+    const int64_t window = win_d * win_r;
+    const int64_t guard_box =
+        static_cast<int64_t>(2 * guard_d + 1) * (2 * guard_r + 1);
+    return window - guard_box;
+  }
   int64_t max_cnt = 0;
   for (int64_t d = 0; d < num_doppler; ++d) {
     for (int64_t r = 0; r < num_range; ++r) {

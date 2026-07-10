@@ -40,8 +40,7 @@ environment (only 4.3.0 installed).
 
 ---
 
-## 2. CFAR `nci_axes` / Gamma(K) threshold multiplier — **implemented in
-conflict with contract (pre-emptive)**
+## 2. CFAR `nci_axes` / Gamma(K) threshold multiplier — implemented in conflict with contract (pre-emptive)
 
 **Context.** `OPERATOR_API.md` requires that when `nci_axes` integrates `K`
 leading axes, the cell statistic is Gamma(`K`) and `alpha` is recomputed from
@@ -240,110 +239,90 @@ before treating SO Pfa validation as on par with CA/GO/OS.
 
 ---
 
-## 7. Host Monte Carlo alpha calibration runs synchronously inside
-`compute()`
+## 7. GO/SO/OS alpha calibration conflicts with "cheap" live-override wording
 
-**Context.** GO, SO, and OS have no closed-form `alpha` for the 2-D
-border-correct window geometry. `CFARDetectorOp::compute()` calls
-`detail::get_cached_alpha_lut()` on every tick; when the LUT key
-`(variant, pfa, fold, os_rank, guard/training footprint, map size)` changes,
-the operator **blocks the tick** while the host builds the full per-`N` LUT
-(`cfar_alpha.cpp`), then uploads it to the device.
+**Context.** `OPERATOR_API.md` specifies `pfa` as `[live]` and says it "sets
+the per-variant threshold multiplier α" with a "cheap scalar recompute." It
+also says `nci_axes` changes `K` and α is "recomputed by closed form (cheap)."
+That wording is true for CA in the current implementation, but not for GO, SO,
+or OS.
 
-CA does **not** use MC — it inverts the incomplete-beta relation in closed
-form on the host (microseconds).
+**Current implementation.** CA builds `alpha_lut[train_cnt]` by numerically
+inverting a closed-form incomplete-beta relation on the host; after the
+closed-form `max_training_cell_count()` fix, cold CA LUT rebuilds are
+sub-millisecond to ~2 ms on a 1024×2048 map depending on footprint.
 
-**What the MC sim does (GO/SO/OS).** For each LUT index `n` (training-cell
-count or GO side-count), the code runs a **bisection** (~100 iterations) on
-`alpha`. Each bisection step evaluates the false-alarm rate by Monte Carlo:
+GO, SO, and OS instead calibrate each LUT entry by Monte Carlo plus bisection
+in `cfar_alpha.cpp`. For each LUT index `n`, the code probes candidate
+`alpha`, estimates realized Pfa with thousands of random trials, and adjusts
+the bracket. OS is especially expensive because every trial draws the full
+training window and selects an order statistic.
 
-1. Draw `mc_trials` (4096) independent clutter maps under the **interior**
-   window geometry matching the runtime stencil (`guard_cells`,
-   `training_cells`).
-2. Per trial: sample each training cell as Gamma(`K`) clutter (`K` = NCI
-   fold), form the variant noise statistic (GOGO max-of-sides, SOSO min-of-
-   sides, or OS order statistic), draw an independent Gamma(`K`) CUT, and
-   count trials where `CUT > alpha * noise`.
-3. Return `false_alarms / mc_trials` and adjust the `alpha` bracket.
+**What is in the LUT.** The LUT is still tiny and one-dimensional, not
+per-cell:
 
-`parallel_fill_lut()` calibrates every `n` in `[1, max_n]` on a thread pool;
-the process-wide LUT cache (`get_cached_alpha_lut`) amortizes the cost across
-operator instances and repeated configs.
+- CA / OS: `alpha_lut[n]`, where `n` is the number of in-bounds training cells
+  around the CUT; slot 0 is unused.
+- GO / SO: `alpha_lut[n_side]`, where `n_side` is the side-count index used by
+  the GOGO/SOSO stencil.
 
-**Measured latency (this environment, guard=1 / train=2, 64×64 map, cold
-cache, single `compute()` tick including Holoscan harness overhead).**
+The runtime stencil uses `alpha_lut[...]` only to avoid doing calibration in
+the fused detection kernel. The expensive part is building the table, not
+storing or uploading it.
 
-| Variant | First-tick wall time | LUT method |
-| --- | --- | --- |
-| CA | ~0.3 s | closed form |
-| GO | ~2 s | host MC |
-| SO | ~2 s (was ~6 s before CA-seed fix) | host MC |
-| OS | ~7 s | host MC |
+**Large-map cold rebuild measurements (this environment, 1024×2048 map, cold
+LUT key, calibration only — no Holoscan graph startup).**
 
-A `[live]` override to an **unseen** `(pfa, footprint, os_rank, …)` key pays
-the same cold-build stall on that tick. Subsequent ticks are cache hits
-(microseconds). Changing only `threshold_scale` does **not** rebuild the LUT.
+| Variant | `pfa` change, small window | footprint change, mid window | typical large footprint | `nci_axes` K=8, small window |
+| --- | ---: | ---: | ---: | ---: |
+| CA | ~0.2 ms | ~0.5 ms | ~2 ms | ~0.5 ms |
+| GO | ~2.36 s | ~6.26 s | ~28.82 s | ~21.73 s |
+| SO | ~2.14 s | ~6.11 s | ~28.77 s | ~21.33 s |
+| OS | ~3.78 s | ~8.93 s | >180 s (timed out) | ~46.52 s |
 
-**Is CUDA acceleration a good fit?** **Partially yes** — the inner trial loop
-is embarrassingly parallel (4096 independent trials per `alpha` probe), which
-is the classic MC-on-GPU pattern. A kernel could assign one thread (or warp)
-per trial, use cuRAND (or a deterministic counter-based RNG for test
-reproducibility), reproduce the small fixed-window GOSO/OS statistics, and
-atomically accumulate false-alarm counts. Batching **all `n` indices and all
-bisection probes** into one launch grid would remove the host round-trip per
-bisection step and is where the largest win likely lives.
+Small window = `guard_cells={1,1}`, `training_cells={2,2}`; mid window =
+`guard_cells={1,1}`, `training_cells={4,4}`; typical large footprint =
+`guard_cells={2,2}`, `training_cells={8,8}`, `pfa=1e-6`.
 
-**Caveats before porting MC to CUDA.**
+With `blocking_alpha_lut_rebuild=false` (the default), a live override to an
+unseen key serves the previous LUT for the tick and builds the new LUT in the
+background. With `blocking_alpha_lut_rebuild=true`, or on first tick when no
+previous LUT exists, these cold-build costs are tick stalls.
 
-- **Arithmetic intensity is low** per trial (≤ 40 Gamma draws + a few
-  min/max/mean ops for the default footprint). Speedup may be launch-latency
-  limited unless many `(n, bisection_step)` probes are batched into one grid.
-- **Bisection is inherently sequential** unless replaced by a fixed grid of
-  `alpha` candidates or a GPU root-find with multiple probes per launch.
-- **OS trials need an in-register sort** (same pattern as `cfar_os_kernel`) —
-  fine on GPU, but more registers than GO/SO.
-- **Determinism** — unit tests seed host `std::mt19937_64` per `(n, k)`;
-  a GPU port must either match those seeds or relax test tolerances.
-- **The fused detection stencil already runs on GPU** — MC calibration is a
-  separate, config-time problem. Keeping it on the host avoids coupling the
-  alpha path to CUDA context/stream lifetime in `compute()`.
+**Contract tension.** The contract does **not** require Monte Carlo
+calibration. It requires the user-facing semantics of `pfa`, `threshold_scale`,
+`os_rank`, the noise statistic, and the score formula. Full MC is an
+implementation choice, and it is hard to reconcile with the current "cheap
+scalar recompute" wording for `[live]` `pfa`, `guard_cells`,
+`training_cells`, `os_rank`, and `nci_axes`.
 
-**Recommendations (in priority order).**
+**Possible contract/API direction: explicit alpha input.** Real-world OS-CFAR
+implementations often receive `alpha` from upstream configuration, offline
+calibration, or a precomputed table instead of deriving it from `pfa` at
+runtime. To support that pattern, consider a contract change such as:
 
-1. **Keep host MC for now** with the CA-seed fix and process cache (landed).
-   Re-profile after the fix; SO cold LUT should be closer to GO (~2–3 s).
-2. **If live overrides must be sub-second**, consider moving LUT build **off
-   the tick critical path** first (async warm-up on key change, serve the
-   previous LUT with a one-shot `HOLOSCAN_LOG_WARN` until the new table is
-   ready) — often simpler than a CUDA port and directly addresses pipeline
-   stall semantics.
-3. **If profiling still shows multi-second stalls**, a CUDA MC kernel batched
-   over `(n, trial)` is the next lever — not porting `betainc` into the
-   detection stencil (see §2).
-4. **Precomputed alpha tables** for a fixed set of `(variant, pfa, footprint)`
-   pairs are an alternative if live sweeps are out of scope.
+- Add an optional static or `[live]` `alpha` scalar that bypasses Pfa-derived
+  calibration and uses the same multiplier for all training counts.
+- Add an optional static or `[live]` `alpha_lut` vector for callers who want
+  border-correct per-`N` or per-side-count thresholds.
+- Define precedence explicitly, e.g. `alpha_lut` > `alpha` > `pfa`-derived
+  calibration, and specify validation against the configured variant and
+  maximum LUT index.
+
+This would be a real contract change (new parameter/port), so it should be
+made in `OPERATOR_API.md` and called out in the PR. It would not change the
+existing data-plane tensor ports or the detection score formula.
 
 **Questions for the team.**
 
-- Is a multi-second stall on the first tick after a `[live]` config change
-  acceptable, or should `compute()` never block on calibration?
-- Prefer async LUT warm-up (warn + stale alpha) vs synchronous GPU MC rebuild?
-- Should MC move to CUDA only if profiling proves host MC is still too slow
-  after the CA-seed fix?
+- Should the contract keep promising `pfa` as the primary calibration API for
+  GO/SO/OS, or should explicit `alpha` / `alpha_lut` be added as the practical
+  real-time path?
+- If `pfa` remains primary, should GO/SO/OS use analytic/numerical formulas or
+  precomputed tables instead of full MC where possible?
+- Should `[live]` wording be narrowed to say costly calibration may be async
+  and serve a stale LUT until the new key is ready?
 
-**Status:** open — host MC is intentional for v1; latency characterized above.
-**Landed optimizations (this branch):**
-
-| Optimization | Effect |
-| --- | --- |
-| SO CA-seed bracketing | SO cold LUT ~6 s → ~2 s |
-| GPU MC trial kernels (`cfar_alpha_mc.cu`) | GO ~2 s → ~0.5 s; OS ~7 s → ~0.6 s cold LUT |
-| `blocking_alpha_lut_rebuild=false` (default) | `[live]` LUT-key change returns immediately using stale LUT + one-shot warn; background thread builds the new table |
-| `poll_cached_alpha_lut` / `ensure_alpha_lut_build` | Non-blocking cache API for the operator |
-| Bisection cap (`kMcBisectionMaxIter=50`) | Marginal savings on CA/GO/SO/OS inversion loops |
-
-Set `blocking_alpha_lut_rebuild=true` when a `[live]` override must affect the same
-tick (unit tests that assert immediate score changes use this).
-
-CUDA is feasible for the trial loop; the shipped GPU path addresses the inner
-loop. Further wins would require batched bisection on GPU or precomputed tables.
+**Status:** open — current GO/SO/OS MC calibration works functionally but does
+not match the contract's "cheap recompute" implication. Decide whether to
+change the implementation strategy, change the contract, or both.
