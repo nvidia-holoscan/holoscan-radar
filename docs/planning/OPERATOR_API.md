@@ -641,7 +641,7 @@ Used by: `FMCWRangeProcessorOp` / `FMCWDopplerProcessorOp` / `FMCWRangeDopplerPr
 
 ### FMCWWaveformDescriptor
 
-Parameters of the transmitted FMCW chirp, shared across operators to avoid parameter drift.
+Parameters of the transmitted FMCW chirp, shared across operators to avoid parameter drift. Immutable value type: built from an `FMCWWaveformSpec` (the construction input), which is validated once at construction — every derived quantity (slope ↔ bandwidth, wavelength) is precomputed there, all accessors are plain non-throwing reads, and a constructed descriptor cannot hold inconsistent fields. To change a value, construct a new descriptor from an updated spec.
 
 - `carrier_frequency` — float (Hz). Sets the wavelength `λ = c / carrier_frequency` (Doppler/velocity axis and the steering-vector phase).
 - `bandwidth` **or** `chirp_slope` — float. Define one, derive the other (`slope = bandwidth / chirp_duration`). Sets range resolution and the beat-frequency → range mapping.
