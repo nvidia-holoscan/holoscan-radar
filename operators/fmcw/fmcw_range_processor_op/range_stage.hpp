@@ -321,10 +321,16 @@ void fill_range_bins(const RangeStageConfig& cfg, int64_t samples_per_chirp,
     host[static_cast<size_t>(i)] =
         cfg.propagation_speed * beat / (2.0 * slope);
   }
-  auto device = upload_coefficients<T>(host, stream);
-  cudaMemcpyAsync(out, device.Data(),
-                  sizeof(T) * static_cast<size_t>(num_bins),
-                  cudaMemcpyDeviceToDevice, stream);
+  // Cast to the instantiation precision and copy straight into the output
+  // buffer, stream-ordered; sync before the host staging vector goes out of
+  // scope (mirrors fill_velocity_bins in doppler_stage.hpp).
+  std::vector<T> cast(host.begin(), host.end());
+  if (cudaMemcpyAsync(out, cast.data(),
+                      sizeof(T) * static_cast<size_t>(num_bins),
+                      cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+    throw std::runtime_error("range stage: range_bins H2D copy failed");
+  }
+  cudaStreamSynchronize(stream);
 }
 
 }  // namespace holoscan::radar::detail
