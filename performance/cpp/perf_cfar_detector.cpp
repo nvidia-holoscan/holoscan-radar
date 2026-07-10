@@ -21,7 +21,6 @@
 #include <numeric>
 #include <sstream>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -263,20 +262,6 @@ perf::ResultRow base_row(const CfarScenario& scen) {
   return row;
 }
 
-std::string override_scenario_id(const CfarScenario& sc) {
-  constexpr std::string_view kComputeSuffix = "_compute";
-  std::ostringstream id;
-  if (sc.id.size() >= kComputeSuffix.size() &&
-      sc.id.compare(sc.id.size() - kComputeSuffix.size(), kComputeSuffix.size(),
-                    kComputeSuffix) == 0) {
-    id << sc.id.substr(0, sc.id.size() - kComputeSuffix.size());
-  } else {
-    id << sc.id;
-  }
-  id << "_override_pfa";
-  return id.str();
-}
-
 // ---------------------------------------------------------------------------
 // Run one scenario (all repeats), append its rows to the report.
 // Each run measures setup, steady-state compute, and a blocking pfa live
@@ -355,25 +340,15 @@ void run_scenario(const CfarScenario& scen, const perf::RunSettings& rs,
     row.bucket = "compute";
     row.cold_ms = perf::summarize(cold_samples).median_ms;
     row.latency = perf::summarize(steady_samples);
-    fill_throughput(&row, row.latency.median_ms);
-    row.notes =
-        "cold_ms is first-frame latency including initial LUT calibration; "
-        "median/p90 are pre-override steady state";
-    report->results.push_back(row);
-  }
-
-  {
-    perf::ResultRow row = base_row(scen);
-    row.scenario_id = override_scenario_id(scen);
-    row.bucket = "live_override";
-    row.latency = perf::summarize(steady_samples);
     row.override_ms = override_ms_best;
     if (!std::isnan(override_ms_best) && !std::isnan(row.latency.median_ms)) {
       row.override_delta_ms = override_ms_best - row.latency.median_ms;
     }
+    fill_throughput(&row, row.latency.median_ms);
     row.notes =
-        "inline blocking pfa override in same session; override_ms is peak "
-        "latency over the 3-frame window at the reconfig tick";
+        "cold_ms is first-frame latency including initial LUT calibration; "
+        "median/p90 are pre-override steady state; override_ms is peak latency "
+        "over the 3-frame blocking pfa reconfig window inline in the same run";
     report->results.push_back(row);
   }
 }

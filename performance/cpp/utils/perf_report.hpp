@@ -49,7 +49,7 @@ struct SizeDef {
 struct ResultRow {
   std::string scenario_id;
   std::string op_name{"CFARDetectorOp"};
-  std::string bucket;  // "setup" | "compute" | "live_override"
+  std::string bucket;  // "setup" | "compute"
   std::string variant;
   std::string precision{"float"};
   std::string size_id;
@@ -310,11 +310,12 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
     os << "\n";
   }
 
-  // --- compute ---
-  os << "\n--- compute (steady state) ---\n";
+  // --- compute (steady state + inline live override) ---
+  os << "\n--- compute ---\n";
   os << detail::col("scenario", 40) << detail::col("size", 6)
      << detail::col("shape", 14) << detail::col("cold_ms", 10)
      << detail::col("median_ms", 10) << detail::col("p90_ms", 10)
+     << detail::col("ovr_ms", 10) << detail::col("ovr_d_ms", 10)
      << detail::col("cells/s", 11) << detail::col("GB/s", 8) << "\n";
   for (const auto& row : r.results) {
     if (row.bucket != "compute") {
@@ -325,26 +326,10 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
        << detail::col(detail::fixed(row.cold_ms, 3), 10)
        << detail::col(detail::fixed(row.latency.median_ms, 3), 10)
        << detail::col(detail::fixed(row.latency.p90_ms, 3), 10)
+       << detail::col(detail::fixed(row.override_ms, 3), 10)
+       << detail::col(detail::fixed(row.override_delta_ms, 3), 10)
        << detail::col(detail::sci(row.cells_per_second), 11)
        << detail::col(detail::fixed(row.estimated_effective_gbps, 1), 8);
-    if (row.status != "ok") {
-      os << " [" << row.status << "]";
-    }
-    os << "\n";
-  }
-
-  // --- live_override ---
-  os << "\n--- live_override ---\n";
-  os << detail::col("scenario", 44) << detail::col("size", 6)
-     << detail::col("override_ms", 12) << detail::col("delta_vs_med", 13)
-     << "\n";
-  for (const auto& row : r.results) {
-    if (row.bucket != "live_override") {
-      continue;
-    }
-    os << detail::col(row.scenario_id, 44) << detail::col(row.size_id, 6)
-       << detail::col(detail::fixed(row.override_ms, 3), 12)
-       << detail::col(detail::fixed(row.override_delta_ms, 3), 13);
     if (row.status != "ok") {
       os << " [" << row.status << "]";
     }
