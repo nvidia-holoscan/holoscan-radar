@@ -106,16 +106,20 @@ cmake --build build -j$(nproc)
 
 ## Testing
 
+Tests build with the code by default in a standalone checkout
+(`HOLOSCAN_RADAR_BUILD_TESTING` defaults to ON; the explicit flag below
+matters only when this module is built as a subproject):
+
 ```bash
 ./holohub run-container
-cmake -S . -B build/tests -DHOLOSCAN_RADAR_BUILD_TESTING:BOOL=ON
+cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING:BOOL=ON
 cmake --build build -j$(nproc)
 
 # C++ (GTest via CTest)
-ctest --test-dir build/tests --output-on-failure -L unit
+ctest --test-dir build --output-on-failure -L unit
 
 # Python (pytest via CTest)
-ctest --test-dir build/tests --output-on-failure -R pytest
+ctest --test-dir build --output-on-failure -R pytest
 ```
 
 ---
