@@ -32,6 +32,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <holoscan/holoscan.hpp>
@@ -80,12 +81,21 @@ AppConfig load_config(const std::filesystem::path& path) {
   AppConfig cfg;
 
   const YAML::Node wf = root["waveform"];
-  cfg.waveform.carrier_frequency = wf["carrier_frequency"].as<double>();
-  cfg.waveform.bandwidth = wf["bandwidth"].as<double>();
-  cfg.waveform.chirp_duration = wf["chirp_duration"].as<double>();
-  cfg.waveform.sample_rate = wf["sample_rate"].as<double>();
-  cfg.waveform.chirp_repetition_interval =
+  radar::FMCWWaveformSpec wf_spec;
+  wf_spec.carrier_frequency = wf["carrier_frequency"].as<double>();
+  if (const YAML::Node bw = wf["bandwidth"]) {
+    wf_spec.bandwidth = bw.as<double>();
+  }
+  if (const YAML::Node slope = wf["chirp_slope"]) {
+    wf_spec.chirp_slope = slope.as<double>();
+  }
+  wf_spec.chirp_duration = wf["chirp_duration"].as<double>();
+  wf_spec.sample_rate = wf["sample_rate"].as<double>();
+  wf_spec.chirp_repetition_interval =
       wf["chirp_repetition_interval"].as<double>();
+  // Validates and derives (slope <-> bandwidth) once; throws with a field
+  // name on an incomplete or inconsistent waveform section.
+  cfg.waveform = radar::FMCWWaveformDescriptor(std::move(wf_spec));
 
   cfg.clutter_method =
       parse_clutter_method(root["clutter_filter"]["method"].as<std::string>());
@@ -93,16 +103,15 @@ AppConfig load_config(const std::filesystem::path& path) {
   cfg.num_frames = root["run"]["num_frames"].as<int64_t>();
   cfg.frame_period = root["run"]["frame_period"].as<double>();
 
-  // Mirror the waveform into the simulator's decoupled SimWaveform. slope() is
-  // the source of truth, so a bandwidth- or slope-spelled descriptor both map
-  // to the same beat rate.
-  cfg.scene.waveform.carrier_frequency = cfg.waveform.carrier_frequency;
-  cfg.scene.waveform.bandwidth =
-      cfg.waveform.slope() * cfg.waveform.chirp_duration;
-  cfg.scene.waveform.chirp_duration = cfg.waveform.chirp_duration;
-  cfg.scene.waveform.sample_rate = cfg.waveform.sample_rate;
+  // Mirror the waveform into the simulator's decoupled SimWaveform. The
+  // descriptor derives bandwidth at construction, so a bandwidth- or
+  // slope-spelled config maps to the same beat rate.
+  cfg.scene.waveform.carrier_frequency = cfg.waveform.carrier_frequency();
+  cfg.scene.waveform.bandwidth = cfg.waveform.bandwidth();
+  cfg.scene.waveform.chirp_duration = cfg.waveform.chirp_duration();
+  cfg.scene.waveform.sample_rate = cfg.waveform.sample_rate();
   cfg.scene.waveform.chirp_repetition_interval =
-      cfg.waveform.chirp_repetition_interval;
+      cfg.waveform.chirp_repetition_interval();
   cfg.scene.num_chirps = root["cube"]["num_chirps"].as<int64_t>();
   cfg.scene.samples_per_chirp = root["cube"]["samples_per_chirp"].as<int64_t>();
 
