@@ -21,11 +21,22 @@ namespace holoscan::radar {
 namespace detail {
 
 // Ownership block for a device allocation exported through DLPack. The
-// deleter runs when the last holoscan::Tensor reference is released.
+// destructor frees the allocation, so the holder is leak-safe under RAII
+// until ownership transfers to the DLPack deleter (which just deletes the
+// holder) when the last holoscan::Tensor reference is released.
 struct DeviceBufferHolder {
   void* data{nullptr};
   std::vector<int64_t> shape;
   DLManagedTensor dl_managed{};
+
+  DeviceBufferHolder() = default;
+  DeviceBufferHolder(const DeviceBufferHolder&) = delete;
+  DeviceBufferHolder& operator=(const DeviceBufferHolder&) = delete;
+  ~DeviceBufferHolder() {
+    if (data != nullptr) {
+      cudaFree(data);
+    }
+  }
 };
 
 }  // namespace detail
@@ -74,13 +85,13 @@ inline std::shared_ptr<holoscan::Tensor> make_device_tensor(
   dl.dl_tensor.byte_offset = 0;
   dl.manager_ctx = holder.get();
   dl.deleter = [](DLManagedTensor* self) {
-    auto* h = static_cast<detail::DeviceBufferHolder*>(self->manager_ctx);
-    cudaFree(h->data);
-    delete h;
+    delete static_cast<detail::DeviceBufferHolder*>(self->manager_ctx);
   };
 
+  // The unique_ptr keeps the allocation leak-safe if Tensor construction
+  // throws; ownership moves to the DLPack deleter only after it succeeds.
   auto tensor = std::make_shared<holoscan::Tensor>(&holder->dl_managed);
-  holder.release();  // ownership transferred to the DLPack deleter
+  holder.release();
   return tensor;
 }
 
