@@ -4,10 +4,8 @@
 // Range-compression stage: the pure kernel behind FMCWRangeProcessorOp.
 //
 // The fused FMCWRangeDopplerProcessorOp calls this same code path, which is
-// what guarantees the split-vs-fused parity property by
-// construction. The signatures below are therefore FROZEN for the parallel
-// implementation phase: implement the bodies, do not change the interfaces
-// (escalate to the orchestrator if a change seems necessary).
+// what guarantees the split-vs-fused parity property by construction. The
+// signatures below are the stable stage API: extend via additive overloads.
 //
 // Includes <matx.h> (via matx_utils.hpp): include only from .cu files.
 

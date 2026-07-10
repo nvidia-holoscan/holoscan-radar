@@ -3,11 +3,12 @@
 
 // Doppler-compression stage: the pure kernel behind FMCWDopplerProcessorOp.
 //
-// The fused FMCWRangeDopplerProcessorOp calls this same code path, which is
-// what guarantees the split-vs-fused parity property by
-// construction. The signatures below are therefore FROZEN for the parallel
-// implementation phase: implement the bodies, do not change the interfaces
-// (escalate to the orchestrator if a change seems necessary).
+// The fused FMCWRangeDopplerProcessorOp consumes the same code path — the
+// expression entry point below, fed the single-source clutter expression
+// (clutter_stage.hpp with_clutter_expr) — which is what guarantees the
+// split-vs-fused parity property by construction, at expression
+// granularity, and it is enforced by the BitExact parity tests. The
+// signatures below are the stable stage API: extend via additive overloads.
 //
 // Includes <matx.h> (via matx_utils.hpp): include only from .cu files.
 
@@ -17,6 +18,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "radar_common/sdk/config_cache.hpp"
@@ -51,10 +53,12 @@ inline int64_t doppler_num_bins(int64_t num_chirps,
   return nfft.has_value() ? *nfft : num_chirps;
 }
 
-// Run Doppler compression over a collapsed batch view.
+// Run Doppler compression over a rank-3 MatX operator expression.
 //
-//   in          — device pointer, (batch, num_chirps, num_range_bins),
-//                 cuda::std::complex<T>.
+//   in_op       — rank-3 MatX operator, (batch, num_chirps,
+//                 num_range_bins), value_type cuda::std::complex<T>.
+//                 num_chirps is the POST-clutter chirp count when the caller
+//                 composed a clutter expression (with_clutter_expr).
 //   out         — device pointer, (batch, num_doppler, num_range_bins),
 //                 cuda::std::complex<T>, preallocated by the caller;
 //                 num_doppler must equal doppler_num_bins(...).
@@ -70,12 +74,21 @@ inline int64_t doppler_num_bins(int64_t num_chirps,
 //
 // Throws std::invalid_argument for contract violations
 // (nfft < num_chirps, ...).
-template <typename T>
+template <typename T, typename InOp>
 void run_doppler_stage(const DopplerStageConfig& cfg,
-                       DopplerStageState<T>& state, const void* in,
-                       int64_t batch, int64_t num_chirps,
-                       int64_t num_range_bins, void* out, int64_t num_doppler,
+                       DopplerStageState<T>& state, const InOp& in_op,
+                       void* out, int64_t num_doppler,
                        bool warn_on_rebuild, cudaStream_t stream) {
+  static_assert(matx::is_matx_op<InOp>(),
+                "doppler stage: in_op must be a MatX operator or tensor");
+  static_assert(InOp::Rank() == 3,
+                "doppler stage: in_op must be rank-3 (batch, chirps, bins)");
+  static_assert(
+      std::is_same_v<typename InOp::value_type, cuda::std::complex<T>>,
+      "doppler stage: in_op value_type must be cuda::std::complex<T>");
+  const int64_t batch = in_op.Size(0);
+  const int64_t num_chirps = in_op.Size(1);
+  const int64_t num_range_bins = in_op.Size(2);
   if (batch < 1 || num_chirps < 1 || num_range_bins < 1) {
     throw std::invalid_argument(
         "doppler stage: input view (batch, num_chirps, num_range_bins) "
@@ -95,8 +108,6 @@ void run_doppler_stage(const DopplerStageConfig& cfg,
         std::to_string(doppler_num_bins(num_chirps, cfg.nfft)) + ")");
   }
 
-  auto in_view =
-      make_const_complex_view3<T>(in, batch, num_chirps, num_range_bins);
   auto out_view =
       make_complex_view3<T>(out, batch, num_doppler, num_range_bins);
   matx::cudaExecutor exec{stream};
@@ -144,10 +155,29 @@ void run_doppler_stage(const DopplerStageConfig& cfg,
         });
     auto window_bcast = matx::clone<3>(
         window, {batch, num_range_bins, matx::matxKeepDim});
-    fft_into_out(matx::permute(in_view, {0, 2, 1}) * window_bcast);
+    fft_into_out(matx::permute(in_op, {0, 2, 1}) * window_bcast);
   } else {
-    fft_into_out(matx::permute(in_view, {0, 2, 1}));
+    fft_into_out(matx::permute(in_op, {0, 2, 1}));
   }
+}
+
+// Run Doppler compression over a collapsed batch view.
+//
+//   in — device pointer, (batch, num_chirps, num_range_bins),
+//        cuda::std::complex<T>.
+//
+// Thin wrapper over the expression entry point above, which holds all
+// validation and the math — the two entry points cannot drift.
+template <typename T>
+void run_doppler_stage(const DopplerStageConfig& cfg,
+                       DopplerStageState<T>& state, const void* in,
+                       int64_t batch, int64_t num_chirps,
+                       int64_t num_range_bins, void* out, int64_t num_doppler,
+                       bool warn_on_rebuild, cudaStream_t stream) {
+  run_doppler_stage<T>(
+      cfg, state,
+      make_const_complex_view3<T>(in, batch, num_chirps, num_range_bins),
+      out, num_doppler, warn_on_rebuild, stream);
 }
 
 // Compute the velocity_bins axis (m/s) for the current configuration into a

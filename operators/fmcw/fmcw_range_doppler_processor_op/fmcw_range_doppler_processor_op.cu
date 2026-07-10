@@ -269,8 +269,10 @@ void FMCWRangeDopplerProcessorOp<T>::compute(InputContext& op_input,
   // before the processing chain — STATUS.md decision 2026-07-10).
   require_cuda_accessible(*input, "adc_cube", who);
 
-  // 5. Build the two stage configs from the effective params — the SAME
-  // stage functions the split operators run, which is what guarantees
+  // 5. Build the two stage configs from the effective params — the range
+  // stage runs as the SAME stage call the split operator makes, and the
+  // clutter math is the SAME single-source expression (with_clutter_expr)
+  // composed into the SAME Doppler entry point, which is what guarantees
   // split-vs-fused parity by construction.
   detail::RangeStageConfig range_cfg;
   range_cfg.window = effective_range_window_;
@@ -323,29 +325,26 @@ void FMCWRangeDopplerProcessorOp<T>::compute(InputContext& op_input,
                              samples_per_chirp, profiles.Data(),
                              num_range_bins, warn_range, stream);
 
-  // 8. Optional inline clutter stage. kNone skips the stage call entirely
-  // and aliases the range output (no passthrough copy) — the split chain
-  // omits ClutterFilterOp for that case too, so parity is unaffected.
-  auto post_clutter =
-      effective_clutter_filter_ == ClutterFilterMethod::kNone
-          ? profiles
-          : matx::make_tensor<cuda::std::complex<T>>(
-                {batched.batch, chirps_out, num_range_bins},
-                matx::MATX_ASYNC_DEVICE_MEMORY, stream);
-  if (effective_clutter_filter_ != ClutterFilterMethod::kNone) {
-    detail::run_clutter_stage<T>(effective_clutter_filter_, profiles.Data(),
-                                 batched.batch, num_chirps, num_range_bins,
-                                 post_clutter.Data(), stream);
-  }
-
-  // 9. Doppler stage into the emitted output tensor.
+  // 8+9. Clutter fused into the Doppler pre-FFT expression: the clutter
+  // math (single-sourced from clutter_stage.hpp's with_clutter_expr, the
+  // same expressions ClutterFilterOp materializes) feeds run_doppler_stage's
+  // expression entry point directly, so MatX evaluates it inside the one
+  // fused pass that materializes the FFT input — no post-clutter cube
+  // write+read or extra kernel launch. kNone passes `profiles` through
+  // unchanged (zero added kernels), matching the split chain omitting
+  // ClutterFilterOp. Byte-identity with the split chain is enforced by the
+  // BitExact parity tests. Everything is enqueued inside the visitor, so
+  // `profiles` outlives the kernels via its stream-ordered free.
   auto rd_maps = make_device_tensor(
       full_rank_shape(batched, num_doppler, num_range_bins),
       complex_dtype<T>());
-  detail::run_doppler_stage<T>(doppler_cfg, *doppler_state_,
-                               post_clutter.Data(), batched.batch,
-                               chirps_out, num_range_bins, rd_maps->data(),
-                               num_doppler, warn_doppler, stream);
+  detail::with_clutter_expr(
+      effective_clutter_filter_, profiles, num_chirps,
+      [&](const auto& expr) {
+        detail::run_doppler_stage<T>(doppler_cfg, *doppler_state_, expr,
+                                     rd_maps->data(), num_doppler,
+                                     warn_doppler, stream);
+      });
   holoscan::TensorMap rd_map;
   rd_map.insert({"rd_maps", std::move(rd_maps)});
   op_output.emit(rd_map, "rd_maps");

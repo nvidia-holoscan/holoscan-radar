@@ -297,7 +297,7 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 #### FMCWRangeDopplerProcessorOp (fused)
 
 - **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(..., num_chirps, samples_per_chirp)`.
-- **Out:** `rd_maps` — complex64 / complex128, `(..., num_doppler, num_range_bins)`. `num_range_bins` per FMCWRangeProcessorOp, `num_doppler = num_chirps` (reduced by the delay-canceller chirp loss when `clutter_filter` is a delay canceller). No intermediate range-profile output.
+- **Out:** `rd_maps` — complex64 / complex128, `(..., num_doppler, num_range_bins)`. `num_range_bins` per FMCWRangeProcessorOp, `num_doppler = num_chirps` (reduced by the delay-canceller chirp loss when `clutter_filter` is a delay canceller). No intermediate range-profile output; the inline clutter filter is fused into the Doppler pre-FFT expression (no materialized intermediate), bit-identical to `ClutterFilterOp` → `FMCWDopplerProcessorOp`.
 - **Out:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`.
 - **Out:** `velocity_bins` (optional) — float32 / float64, `(num_doppler,)`.
 

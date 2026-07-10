@@ -85,9 +85,14 @@ Decisions already applied to the planning docs (2026-07-06):
    stage function (`range_stage.hpp`, `clutter_stage.hpp`,
    `doppler_stage.hpp` — template over MatX views + config + state + stream)
    living in that operator's own directory; `compute()` is a thin shell. The
-   fused operator includes the three stage headers and calls them
-   back-to-back — identical instantiated code, so the `TESTING.md` parity
-   test holds by construction. Stage signatures are frozen in Phase 0.
+   fused operator runs the range stage as the same stage call and composes
+   the single-source clutter expression (`with_clutter_expr`) into the
+   Doppler stage's pre-FFT expression entry point — identical instantiated
+   math with no post-clutter cube materialization, so the `TESTING.md`
+   parity test holds by construction at expression granularity and is
+   enforced bit-exactly by the `BitExact*` parity tests. Stage signatures
+   are the stable stage API (frozen in Phase 0; extended via additive
+   overloads).
 7. **Batching**: validate rank ≥ 2 and compact row-major, collapse leading
    dims to one batch dim, zero-copy 3-D MatX view, emit with original leading
    dims restored. Device/managed/pinned memory used in place; pageable host
