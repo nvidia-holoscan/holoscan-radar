@@ -101,27 +101,6 @@ void run_doppler_stage(const DopplerStageConfig& cfg,
       make_complex_view3<T>(out, batch, num_doppler, num_range_bins);
   matx::cudaExecutor exec{stream};
 
-  // Correctness-first approach: materialize the
-  // slow-time axis innermost so the window multiply, FFT, and fftshift all
-  // act along the last axis, then permute back into the caller's layout.
-  auto permuted = matx::make_tensor<cuda::std::complex<T>>(
-      {batch, num_range_bins, num_chirps}, matx::MATX_ASYNC_DEVICE_MEMORY,
-      stream);
-  (permuted = matx::permute(in_view, {0, 2, 1})).run(exec);
-
-  if (cfg.window.type != WindowType::kNone) {
-    const std::string key = window_cache_key(cfg.window, num_chirps);
-    const auto& window = state.windows.get_or_build(
-        key, warn_on_rebuild, "Doppler window", [&]() {
-          return upload_coefficients<T>(generate_window(cfg.window,
-                                                        num_chirps),
-                                        stream);
-        });
-    auto window_bcast = matx::clone<3>(
-        window, {batch, num_range_bins, matx::matxKeepDim});
-    (permuted = permuted * window_bcast).run(exec);
-  }
-
   // FFT plan reuse comes from MatX's internal plan cache; seen_fft_keys
   // exists purely to decide when an override-driven new length warns.
   const std::string fft_key =
@@ -133,22 +112,41 @@ void run_doppler_stage(const DopplerStageConfig& cfg,
                                    "Doppler FFT plan",
                                    []() { return true; });
 
-  // FFT along the (now innermost) slow-time axis; MatX zero-pads the input
-  // up to num_doppler when nfft > num_chirps.
-  auto spectrum = matx::make_tensor<cuda::std::complex<T>>(
-      {batch, num_range_bins, num_doppler}, matx::MATX_ASYNC_DEVICE_MEMORY,
-      stream);
-  (spectrum = matx::fft(permuted, static_cast<uint64_t>(num_doppler),
-                        to_matx_norm(cfg.fft_norm))).run(exec);
+  // The slow-time axis is permuted innermost so the window multiply, FFT,
+  // and fftshift all act along the last axis. The pre-FFT expression feeds
+  // matx::fft directly: MatX materializes operator inputs into a
+  // stream-ordered temp in a single fused pass (and zero-pads it up to
+  // num_doppler when nfft > num_chirps). The FFT output is permuted back
+  // into the caller's layout through a nested expression — the FFT runs
+  // into an internal stream-ordered temp during PreRun, and the
+  // permute(+shift) is one elementwise kernel into out_view.
+  const auto fft_into_out = [&](const auto& pre) {
+    auto spectrum = matx::fft(pre, static_cast<uint64_t>(num_doppler),
+                              to_matx_norm(cfg.fft_norm));
+    if (cfg.center_zero_doppler) {
+      // matx::fftshift1D maps output index i to input (i + (n + 1) / 2) % n
+      // along the last axis, which is exactly numpy.fft.fftshift's
+      // out[i] = in[(i + ceil(n / 2)) % n] for both even and odd n.
+      (out_view = matx::permute(matx::fftshift1D(spectrum), {0, 2, 1}))
+          .run(exec);
+    } else {
+      (out_view = matx::permute(spectrum, {0, 2, 1})).run(exec);
+    }
+  };
 
-  if (cfg.center_zero_doppler) {
-    // matx::fftshift1D maps output index i to input (i + (n + 1) / 2) % n
-    // along the last axis, which is exactly numpy.fft.fftshift's
-    // out[i] = in[(i + ceil(n / 2)) % n] for both even and odd n.
-    (out_view = matx::permute(matx::fftshift1D(spectrum), {0, 2, 1}))
-        .run(exec);
+  if (cfg.window.type != WindowType::kNone) {
+    const std::string key = window_cache_key(cfg.window, num_chirps);
+    const auto& window = state.windows.get_or_build(
+        key, warn_on_rebuild, "Doppler window", [&]() {
+          return upload_coefficients<T>(generate_window(cfg.window,
+                                                        num_chirps),
+                                        stream);
+        });
+    auto window_bcast = matx::clone<3>(
+        window, {batch, num_range_bins, matx::matxKeepDim});
+    fft_into_out(matx::permute(in_view, {0, 2, 1}) * window_bcast);
   } else {
-    (out_view = matx::permute(spectrum, {0, 2, 1})).run(exec);
+    fft_into_out(matx::permute(in_view, {0, 2, 1}));
   }
 }
 

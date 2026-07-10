@@ -224,21 +224,6 @@ matx::tensor_t<cuda::std::complex<T>, 1> build_premultiplier(
   return upload_complex_coefficients<T>(mult, stream);
 }
 
-// Materialize a pre-FFT expression into a stream-ordered temporary, then
-// FFT it into out_view — the FFT's zero-padding path requires a plain
-// tensor, so fused expressions cannot feed matx::fft directly.
-template <typename StorageT, typename OutView, typename Expr>
-void range_fft_through_temp(OutView out_view, Expr expr, int64_t batch,
-                            int64_t num_chirps, int64_t samples_per_chirp,
-                            uint64_t fft_size, matx::FFTNorm norm,
-                            matx::cudaExecutor& exec, cudaStream_t stream) {
-  auto pre = matx::make_tensor<StorageT>(
-      {batch, num_chirps, samples_per_chirp}, matx::MATX_ASYNC_DEVICE_MEMORY,
-      stream);
-  (pre = expr).run(exec);
-  (out_view = matx::fft(pre, fft_size, norm)).run(exec);
-}
-
 template <typename T>
 void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
                      const void* in, bool complex_input, int64_t batch,
@@ -296,6 +281,13 @@ void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
   const auto bcast = [&](const auto& coeffs) {
     return matx::clone<3>(coeffs, {batch, num_chirps, matx::matxKeepDim});
   };
+  // matx::fft accepts operator expressions: non-tensor inputs are
+  // materialized into a stream-ordered internal temp (and zero-padding
+  // allocates its own temp either way), so no manual staging tensor is
+  // needed. Plain tensor views feed cuFFT with no extra copy.
+  const auto fft_into_out = [&](const auto& pre) {
+    (out_view = matx::fft(pre, fft_size, norm)).run(exec);
+  };
 
   if (complex_input) {
     auto in_view = make_const_complex_view3<T>(in, batch, num_chirps,
@@ -306,11 +298,9 @@ void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
           "pre-FFT multiplier", [&] {
             return build_premultiplier<T>(cfg, samples_per_chirp, stream);
           });
-      range_fft_through_temp<cuda::std::complex<T>>(
-          out_view, in_view * bcast(mult), batch, num_chirps,
-          samples_per_chirp, fft_size, norm, exec, stream);
+      fft_into_out(in_view * bcast(mult));
     } else {
-      (out_view = matx::fft(in_view, fft_size, norm)).run(exec);
+      fft_into_out(in_view);
     }
   } else {
     auto in_view = make_real_view3<T>(in, batch, num_chirps,
@@ -322,11 +312,9 @@ void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
             return upload_coefficients<T>(
                 generate_window(cfg.window, samples_per_chirp), stream);
           });
-      range_fft_through_temp<T>(out_view, in_view * bcast(taps), batch,
-                                num_chirps, samples_per_chirp, fft_size,
-                                norm, exec, stream);
+      fft_into_out(in_view * bcast(taps));
     } else {
-      (out_view = matx::fft(in_view, fft_size, norm)).run(exec);
+      fft_into_out(in_view);
     }
   }
 }
