@@ -17,6 +17,7 @@
 
 #include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/dsp/window.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "utils/bin_model.hpp"
@@ -457,6 +458,22 @@ TEST(PointTargetSim, SimoCubeHasRxLeadingAxis) {
     EXPECT_NEAR(result.cube[i].real(), result.cube[per_rx + i].real(),
                 1e-12);
   }
+}
+
+// ---- Device buffer allocation -----------------------------------------------
+
+TEST(MakeDeviceTensor, RejectsInvalidAndOverflowingShapes) {
+  const auto dtype = holoscan::radar::complex_dtype<float>();
+  // Non-positive dims and int64-overflowing products must throw before any
+  // allocation (a wrapped count would produce an undersized buffer that
+  // full-extent views write past).
+  EXPECT_THROW(holoscan::radar::make_device_tensor({0, 4}, dtype),
+               std::invalid_argument);
+  EXPECT_THROW(holoscan::radar::make_device_tensor({-1, 4}, dtype),
+               std::invalid_argument);
+  EXPECT_THROW(holoscan::radar::make_device_tensor(
+                   {int64_t{1} << 32, int64_t{1} << 32}, dtype),
+               std::invalid_argument);
 }
 
 }  // namespace

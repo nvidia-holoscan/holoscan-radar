@@ -6,8 +6,8 @@
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
-#include <numeric>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -40,9 +40,17 @@ struct DeviceBufferHolder {
 // leading axes through the operators.
 inline std::shared_ptr<holoscan::Tensor> make_device_tensor(
     const std::vector<int64_t>& shape, DLDataType dtype) {
-  const int64_t count =
-      std::accumulate(shape.begin(), shape.end(), int64_t{1},
-                      [](int64_t a, int64_t b) { return a * b; });
+  // Reject non-positive dims and int64 overflow before the size_t cast: a
+  // wrapped count would allocate an undersized buffer that downstream
+  // full-extent views write past.
+  int64_t count = 1;
+  for (const int64_t dim : shape) {
+    if (dim <= 0 || count > std::numeric_limits<int64_t>::max() / dim) {
+      throw std::invalid_argument(
+          "make_device_tensor: invalid or overflowing shape");
+    }
+    count *= dim;
+  }
   const size_t bytes = static_cast<size_t>(count) *
                        ((static_cast<size_t>(dtype.bits) + 7) / 8) *
                        dtype.lanes;
