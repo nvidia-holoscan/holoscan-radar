@@ -445,6 +445,9 @@ double goso_cfar_pfa_from_alpha_impl(double alpha, int64_t n_side, int64_t k,
   if (alpha <= 0.0) {
     return 1.0;
   }
+  // Prefer GPU MC when CUDA is available. The GPU path uses an LCG; the host
+  // fallback uses mt19937_64 — LUT entries can differ slightly between paths
+  // (and between GPU vs CPU-only machines) but both stay within MC tolerance.
   if (gpu_mc_calibration_available()) {
     const double gpu_pfa = goso_mc_pfa_from_alpha_gpu(
         alpha, n_side, k, mc_trials, guard_d, guard_r, train_d, train_r,
@@ -527,6 +530,7 @@ double os_cfar_pfa_from_alpha_impl(double alpha, int64_t n, int64_t os_rank,
     return 1.0;
   }
   const int64_t effective_rank = os_rank < n ? os_rank : n - 1;
+  // Same GPU-vs-host RNG note as goso_cfar_pfa_from_alpha_impl above.
   if (gpu_mc_calibration_available()) {
     const double gpu_pfa = os_mc_pfa_from_alpha_gpu(
         alpha, n, effective_rank, k, mc_trials, guard_d, guard_r, train_d,

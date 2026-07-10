@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_alpha_mc.hpp"
 
 #include <cuda_runtime_api.h>
@@ -14,8 +15,6 @@ namespace holoscan::radar::detail {
 namespace {
 
 std::mutex g_gpu_mc_mutex;
-
-constexpr int kMaxMcTrainingCells = 512;
 
 __device__ uint64_t rng_step(uint64_t state) {
   return state * 6364136223846793005ULL + 1ULL;
@@ -128,7 +127,7 @@ __device__ double simulate_os_noise_dev(int guard_d, int guard_r, int train_d,
                                         int64_t k, uint64_t* state) {
   const int half_d = guard_d + train_d;
   const int half_r = guard_r + train_r;
-  double samples[kMaxMcTrainingCells];
+  double samples[kMaxOsTrainingCells];
   int train_cnt = 0;
   for (int dd = -half_d; dd <= half_d; ++dd) {
     const bool guard_row = (dd >= -guard_d && dd <= guard_d);
@@ -136,7 +135,7 @@ __device__ double simulate_os_noise_dev(int guard_d, int guard_r, int train_d,
       if (guard_row && rr >= -guard_r && rr <= guard_r) {
         continue;
       }
-      if (train_cnt >= kMaxMcTrainingCells) {
+      if (train_cnt >= kMaxOsTrainingCells) {
         continue;
       }
       samples[train_cnt++] = sample_gamma_k(k, state);

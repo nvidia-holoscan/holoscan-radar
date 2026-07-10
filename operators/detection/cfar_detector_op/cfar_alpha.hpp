@@ -12,6 +12,11 @@ struct CfarAlphaLutKey;
 
 namespace detail {
 
+// Maximum in-bounds training cells for OS-CFAR on a map. Shared by the fused
+// OS stencil (cfar_stage.hpp), compute()-time validation, and the GPU Monte
+// Carlo calibration kernel (cfar_alpha_mc.cu).
+constexpr int kMaxOsTrainingCells = 512;
+
 // Non-blocking LUT lookup for async live-override paths.
 struct AlphaLutSnapshot {
   bool ready{false};

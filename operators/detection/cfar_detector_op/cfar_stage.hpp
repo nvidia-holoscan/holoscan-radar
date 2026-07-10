@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 
+#include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "radar_common/tensor/matx_utils.hpp"
 
@@ -259,7 +260,6 @@ __global__ void cfar_goso_kernel(const T* power, int64_t batch,
 // OS-CFAR: noise_estimate is the os_rank-th order statistic (0-based,
 // ascending) of training-cell powers in the CA window footprint. When
 // train_cnt <= os_rank, the maximum available rank (train_cnt - 1) is used.
-constexpr int kMaxOsTrainingCells = 512;
 
 template <typename T>
 __device__ T os_select_rank(T* samples, int count, int64_t os_rank) {
