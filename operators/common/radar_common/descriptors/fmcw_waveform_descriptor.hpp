@@ -67,21 +67,35 @@ class FMCWWaveformDescriptor {
   // std::invalid_argument naming the offending field when the spec is
   // incomplete or inconsistent.
   explicit FMCWWaveformDescriptor(FMCWWaveformSpec spec) {
-    if (spec.carrier_frequency <= 0.0) {
+    // NaN compares false against every bound, so each check must require
+    // finiteness explicitly — otherwise non-finite values would flow into
+    // the derived fields of a descriptor reporting is_valid().
+    if (!std::isfinite(spec.carrier_frequency) ||
+        spec.carrier_frequency <= 0.0) {
       throw std::invalid_argument(
-          "FMCWWaveformDescriptor: carrier_frequency must be > 0");
+          "FMCWWaveformDescriptor: carrier_frequency must be finite and > 0");
     }
-    if (spec.chirp_duration <= 0.0) {
+    if (!std::isfinite(spec.chirp_duration) || spec.chirp_duration <= 0.0) {
       throw std::invalid_argument(
-          "FMCWWaveformDescriptor: chirp_duration must be > 0");
+          "FMCWWaveformDescriptor: chirp_duration must be finite and > 0");
     }
-    if (spec.sample_rate <= 0.0) {
+    if (!std::isfinite(spec.sample_rate) || spec.sample_rate <= 0.0) {
       throw std::invalid_argument(
-          "FMCWWaveformDescriptor: sample_rate must be > 0");
+          "FMCWWaveformDescriptor: sample_rate must be finite and > 0");
     }
-    if (spec.chirp_repetition_interval <= 0.0) {
+    if (!std::isfinite(spec.chirp_repetition_interval) ||
+        spec.chirp_repetition_interval <= 0.0) {
       throw std::invalid_argument(
-          "FMCWWaveformDescriptor: chirp_repetition_interval must be > 0");
+          "FMCWWaveformDescriptor: chirp_repetition_interval must be finite "
+          "and > 0");
+    }
+    if (spec.bandwidth.has_value() && !std::isfinite(*spec.bandwidth)) {
+      throw std::invalid_argument(
+          "FMCWWaveformDescriptor: bandwidth must be finite");
+    }
+    if (spec.chirp_slope.has_value() && !std::isfinite(*spec.chirp_slope)) {
+      throw std::invalid_argument(
+          "FMCWWaveformDescriptor: chirp_slope must be finite");
     }
     if (!spec.bandwidth.has_value() && !spec.chirp_slope.has_value()) {
       throw std::invalid_argument(
@@ -107,6 +121,14 @@ class FMCWWaveformDescriptor {
     bandwidth_ = spec.bandwidth.has_value()
                      ? *spec.bandwidth
                      : chirp_slope_ * spec.chirp_duration;
+    // Finite inputs can still overflow the derivation (bandwidth / tiny
+    // duration, slope * huge duration).
+    if (!std::isfinite(chirp_slope_) || !std::isfinite(bandwidth_)) {
+      throw std::invalid_argument(
+          "FMCWWaveformDescriptor: derived sweep slope / bandwidth is not "
+          "finite (bandwidth, chirp_slope, and chirp_duration are "
+          "mutually inconsistent in magnitude)");
+    }
     carrier_frequency_ = spec.carrier_frequency;
     chirp_duration_ = spec.chirp_duration;
     sample_rate_ = spec.sample_rate;

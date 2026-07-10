@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <complex>
 #include <numeric>
 #include <vector>
@@ -269,6 +270,38 @@ TEST(WaveformDescriptor, ConstructionRejectsIncompleteOrInconsistentSpecs) {
     spec.*field = 0.0;
     EXPECT_THROW(FMCWWaveformDescriptor{spec}, std::invalid_argument);
   }
+}
+
+TEST(WaveformDescriptor, ConstructionRejectsNonFiniteValues) {
+  // NaN compares false against every bound, so finiteness is enforced
+  // explicitly; both spellings of the sweep and every scalar are covered.
+  for (double bad : {std::numeric_limits<double>::quiet_NaN(),
+                     std::numeric_limits<double>::infinity(),
+                     -std::numeric_limits<double>::infinity()}) {
+    for (auto field : {&holoscan::radar::FMCWWaveformSpec::carrier_frequency,
+                       &holoscan::radar::FMCWWaveformSpec::chirp_duration,
+                       &holoscan::radar::FMCWWaveformSpec::sample_rate,
+                       &holoscan::radar::FMCWWaveformSpec::
+                           chirp_repetition_interval}) {
+      auto spec = test_waveform_spec();
+      spec.*field = bad;
+      EXPECT_THROW(FMCWWaveformDescriptor{spec}, std::invalid_argument);
+    }
+    auto bad_bandwidth = test_waveform_spec();
+    bad_bandwidth.bandwidth = bad;
+    EXPECT_THROW(FMCWWaveformDescriptor{bad_bandwidth},
+                 std::invalid_argument);
+    auto bad_slope = test_waveform_spec();
+    bad_slope.bandwidth.reset();
+    bad_slope.chirp_slope = bad;
+    EXPECT_THROW(FMCWWaveformDescriptor{bad_slope}, std::invalid_argument);
+  }
+
+  // Finite inputs whose derivation overflows are rejected too.
+  auto overflow = test_waveform_spec();
+  overflow.bandwidth = std::numeric_limits<double>::max();
+  overflow.chirp_duration = 1e-12;
+  EXPECT_THROW(FMCWWaveformDescriptor{overflow}, std::invalid_argument);
 }
 
 TEST(WaveformDescriptor, WavelengthPrecomputedAndDefaultInvalid) {
