@@ -19,5 +19,8 @@
 #      *before* operators/ and applications/, so those see the forced ON
 #      value when their own helpers run option().
 add_holohub_package(holoscan-radar
-                    OPERATORS    radar_op
+                    OPERATORS    fmcw_range_processor_op
+                                 clutter_filter_op
+                                 fmcw_doppler_processor_op
+                                 fmcw_range_doppler_processor_op
                     APPLICATIONS fmcw_siso)
