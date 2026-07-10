@@ -265,17 +265,9 @@ void FMCWRangeDopplerProcessorOp<T>::compute(InputContext& op_input,
   // 4. Operator stream (input streams synchronized; output ports emit it).
   cudaStream_t stream = op_input.receive_cuda_stream("adc_cube");
 
-  // Host-memory input: stage to the device, stream-ordered. (Pageable H2D
-  // copies synchronize on the host, so the source may be released after.)
-  std::shared_ptr<holoscan::Tensor> device_input = input;
-  if (!is_cuda_accessible(*input)) {
-    device_input = make_device_tensor(input->shape(), input->dtype());
-    if (cudaMemcpyAsync(device_input->data(), input->data(),
-                        static_cast<size_t>(input->nbytes()),
-                        cudaMemcpyHostToDevice, stream) != cudaSuccess) {
-      throw std::runtime_error(who + ": H2D staging copy failed");
-    }
-  }
+  // CUDA-accessible input only (module-wide; ingest operators upload
+  // before the processing chain — STATUS.md decision 2026-07-10).
+  require_cuda_accessible(*input, "adc_cube", who);
 
   // 5. Build the two stage configs from the effective params — the SAME
   // stage functions the split operators run, which is what guarantees
@@ -326,7 +318,7 @@ void FMCWRangeDopplerProcessorOp<T>::compute(InputContext& op_input,
   auto profiles = matx::make_tensor<cuda::std::complex<T>>(
       {batched.batch, num_chirps, num_range_bins},
       matx::MATX_ASYNC_DEVICE_MEMORY, stream);
-  detail::run_range_stage<T>(range_cfg, *range_state_, device_input->data(),
+  detail::run_range_stage<T>(range_cfg, *range_state_, input->data(),
                              complex_input, batched.batch, num_chirps,
                              samples_per_chirp, profiles.Data(),
                              num_range_bins, warn_range, stream);
@@ -360,7 +352,7 @@ void FMCWRangeDopplerProcessorOp<T>::compute(InputContext& op_input,
 
   // 10. Stream-ordered lifetime guard: keep this tick's input alive until
   // the next tick so enqueued kernels never outlive their source buffer.
-  retained_input_ = std::move(device_input);
+  retained_input_ = std::move(input);
 }
 
 template class FMCWRangeDopplerProcessorOp<float>;

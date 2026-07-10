@@ -192,17 +192,9 @@ void FMCWRangeProcessorOp<T>::compute(InputContext& op_input,
   // 4. Operator stream (input streams synchronized; output ports emit it).
   cudaStream_t stream = op_input.receive_cuda_stream("adc_cube");
 
-  // Host-memory input: stage to the device, stream-ordered. (Pageable H2D
-  // copies synchronize on the host, so the source may be released after.)
-  std::shared_ptr<holoscan::Tensor> device_input = input;
-  if (!is_cuda_accessible(*input)) {
-    device_input = make_device_tensor(input->shape(), input->dtype());
-    if (cudaMemcpyAsync(device_input->data(), input->data(),
-                        static_cast<size_t>(input->nbytes()),
-                        cudaMemcpyHostToDevice, stream) != cudaSuccess) {
-      throw std::runtime_error(who + ": H2D staging copy failed");
-    }
-  }
+  // CUDA-accessible input only (module-wide; ingest operators upload
+  // before the processing chain — STATUS.md decision 2026-07-10).
+  require_cuda_accessible(*input, "adc_cube", who);
 
   // 5. Run the range stage into a freshly allocated output tensor.
   const int64_t num_bins =
@@ -218,7 +210,7 @@ void FMCWRangeProcessorOp<T>::compute(InputContext& op_input,
 
   auto profiles = make_device_tensor(
       full_rank_shape(batched, batched.rows, num_bins), complex_dtype<T>());
-  detail::run_range_stage<T>(cfg, *state_, device_input->data(),
+  detail::run_range_stage<T>(cfg, *state_, input->data(),
                              complex_input, batched.batch, batched.rows,
                              batched.cols, profiles->data(), num_bins,
                              warn_on_rebuild, stream);
@@ -240,7 +232,7 @@ void FMCWRangeProcessorOp<T>::compute(InputContext& op_input,
   // 7. Stream-ordered lifetime guard: keep this tick's input alive until
   // the next tick (the previous tick's guard is released here, after this
   // tick's kernels are enqueued).
-  retained_input_ = std::move(device_input);
+  retained_input_ = std::move(input);
 }
 
 template class FMCWRangeProcessorOp<float>;

@@ -90,9 +90,12 @@ Decisions already applied to the planning docs (2026-07-06):
    test holds by construction. Stage signatures are frozen in Phase 0.
 7. **Batching**: validate rank ≥ 2 and compact row-major, collapse leading
    dims to one batch dim, zero-copy 3-D MatX view, emit with original leading
-   dims restored. Device/managed/pinned memory used in place; host (`kDLCPU`)
-   staged H2D; outputs are always stream-ordered device memory. Strided
-   (non-compact) inputs error in this wave.
+   dims restored. Device/managed/pinned memory used in place; pageable host
+   (`kDLCPU`) input is rejected with a clear error — ingest operators upload
+   before the processing chain (amended 2026-07-10; originally "staged H2D",
+   dropped for uniformity across the operator group). Outputs are always
+   stream-ordered device memory. Strided (non-compact) inputs error in this
+   wave.
 8. **Streams**: `stream = op_input.receive_cuda_stream("<in port>")`; all MatX
    ops run on `matx::cudaExecutor(stream)`;
    `op_output.set_cuda_stream(stream, port)` before emit; the input tensor

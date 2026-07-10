@@ -77,11 +77,7 @@ void ClutterFilterOp<T>::compute(InputContext& op_input,
 
   // Complex-only input per the locked contract; collapse leading batch axes.
   classify_input_dtype<T>(*input, "range_profiles", /*allow_real=*/false);
-  if (!is_cuda_accessible(*input)) {
-    throw std::invalid_argument(
-        "ClutterFilterOp: input port 'range_profiles' requires "
-        "CUDA-accessible memory");
-  }
+  require_cuda_accessible(*input, "range_profiles", "ClutterFilterOp");
   const BatchedShape batched = collapse_batch(*input, "range_profiles");
   const int64_t num_chirps = batched.rows;
   if (method == ClutterFilterMethod::kSingleDelay && num_chirps < 2) {
