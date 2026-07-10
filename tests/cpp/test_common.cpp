@@ -188,6 +188,20 @@ TEST(WindowGeneration, InvalidSpecsThrow) {
   EXPECT_THROW(generate_window(bad_nbar, 8), std::invalid_argument);
 
   EXPECT_THROW(generate_window(WindowSpec{}, 0), std::invalid_argument);
+
+  // Non-positive (or NaN) attenuation would silently degrade Kaiser and
+  // produce NaN taps for Chebyshev/Taylor (acosh of a ratio < 1).
+  for (WindowType type : {WindowType::kKaiser, WindowType::kChebyshev,
+                          WindowType::kTaylor}) {
+    for (double bad : {0.0, -30.0,
+                       std::numeric_limits<double>::quiet_NaN()}) {
+      WindowSpec bad_atten;
+      bad_atten.type = type;
+      bad_atten.sidelobe_attenuation_db = bad;
+      EXPECT_THROW(generate_window(bad_atten, 8), std::invalid_argument)
+          << holoscan::radar::to_string(type) << " atten=" << bad;
+    }
+  }
 }
 
 // ---- Cache key / ConfigCache ----------------------------------------------

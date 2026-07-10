@@ -88,6 +88,12 @@ double bessel_i0(double x) {
 // Kaiser beta from the target sidelobe attenuation (Kaiser's empirical
 // formula; attenuation in positive dB).
 double kaiser_beta_from_attenuation(double atten_db) {
+  // !(x > 0) also rejects NaN, which every comparison below would pass.
+  if (!(atten_db > 0.0)) {
+    throw std::invalid_argument(
+        "WindowSpec: sidelobe_attenuation_db must be > 0 for the kaiser "
+        "window (when kaiser_beta is unset)");
+  }
   if (atten_db > 50.0) {
     return 0.1102 * (atten_db - 8.7);
   }
@@ -116,6 +122,11 @@ std::vector<double> kaiser_window(int64_t n, double beta) {
 // via the standard frequency-sampling construction (as in
 // scipy.signal.windows.chebwin).
 std::vector<double> chebyshev_window(int64_t n, double atten_db) {
+  if (!(atten_db > 0.0)) {
+    throw std::invalid_argument(
+        "WindowSpec: sidelobe_attenuation_db must be > 0 for the chebyshev "
+        "window");
+  }
   if (n == 1) {
     return {1.0};
   }
@@ -165,6 +176,11 @@ std::vector<double> chebyshev_window(int64_t n, double atten_db) {
 // Taylor window (as in scipy.signal.windows.taylor): nbar nearly-constant
 // sidelobes at -atten_db dB.
 std::vector<double> taylor_window(int64_t n, double atten_db, int nbar) {
+  if (!(atten_db > 0.0)) {
+    throw std::invalid_argument(
+        "WindowSpec: sidelobe_attenuation_db must be > 0 for the taylor "
+        "window");
+  }
   if (nbar < 1) {
     throw std::invalid_argument("WindowSpec: taylor_nbar must be >= 1");
   }
