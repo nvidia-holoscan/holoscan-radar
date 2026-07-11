@@ -66,7 +66,7 @@ targets:
 # target. Set to null (or omit) for a noise-free cube.
 noise_snr_db: null
 
-# Live RD-map visualization (Holoviz gray image of the normalized
+# Live RD-map visualization (Holoviz turbo-colormapped image of the
 # log-magnitude map). Requires a GUI-capable host; when no display is
 # detected the app warns and runs as if this were false.
 visualize: false

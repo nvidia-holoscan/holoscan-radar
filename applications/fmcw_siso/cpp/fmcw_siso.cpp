@@ -55,6 +55,10 @@ namespace radar = holoscan::radar;
 
 namespace {
 
+// Entry count of the Holoviz color lookup table; the RD-map image values
+// index into it directly.
+constexpr size_t kLutSize = 256;
+
 // App-owned configuration: everything the synthetic source and run cadence
 // need (see fmcw_siso.yaml). Operator parameters are NOT parsed here — the
 // per-operator YAML blocks flow through Holoscan's from_config() in
@@ -294,16 +298,15 @@ class PeakReportOp : public holoscan::Operator {
   }
 };
 
-// Converts the complex RD map into a normalized log-magnitude float32
-// image for Holoviz (single-channel float32 renders as a gray image layer).
-// Per frame: |RD| in dB, mapped onto [0, 1] over a fixed dynamic range
-// below that frame's peak.
+// Converts the complex RD map into a log-magnitude float32 image for
+// Holoviz (rendered through the turbo color lookup table). Per frame:
+// |RD| in dB, mapped between that frame's measured noise floor and its
+// peak onto [0, kLutSize - 1] — HolovizOp's LUT is non-normalized, so the
+// pixel value is used as an integer index into the table.
 class RdMapToImageOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(RdMapToImageOp)
   RdMapToImageOp() = default;
-
-  static constexpr float kDynamicRangeDb = 60.0F;
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("rd_maps");
@@ -338,21 +341,30 @@ class RdMapToImageOp : public holoscan::Operator {
       throw std::runtime_error("RdMapToImageOp: D2H copy failed");
     }
 
-    // Log magnitude, normalized to [0, 1] over the top kDynamicRangeDb of
-    // this frame (per-frame normalization keeps the moving target visible
-    // as the scene's absolute levels drift).
+    // Log magnitude, normalized to [0, 1] between this frame's noise floor
+    // and peak. The floor is estimated as the median dB value (the map is
+    // overwhelmingly noise cells, so the median tracks the noise floor and
+    // is insensitive to the few target/clutter cells). Per-frame
+    // normalization keeps the target visible as absolute levels drift.
     std::vector<float> image(rd.size());
     float peak_db = -std::numeric_limits<float>::infinity();
     for (size_t i = 0; i < rd.size(); ++i) {
       image[i] = 20.0F * std::log10(std::abs(rd[i]) + 1e-20F);
       peak_db = std::max(peak_db, image[i]);
     }
+    std::vector<float> sorted(image);
+    std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2,
+                     sorted.end());
+    const float floor_db = sorted[sorted.size() / 2];
+    const float span_db = std::max(peak_db - floor_db, 1.0F);
     for (float& v : image) {
-      v = std::clamp((v - (peak_db - kDynamicRangeDb)) / kDynamicRangeDb,
-                     0.0F, 1.0F);
+      v = std::clamp((v - floor_db) / span_db, 0.0F, 1.0F) *
+          static_cast<float>(kLutSize - 1);
     }
 
-    auto tensor = radar::make_device_tensor({num_doppler, num_range},
+    // Holoviz image layers require a rank-3 (height, width, channels)
+    // tensor, so add an explicit single-channel dimension.
+    auto tensor = radar::make_device_tensor({num_doppler, num_range, 1},
                                             radar::real_dtype<float>());
     if (cudaMemcpy(tensor->data(), image.data(),
                    sizeof(float) * image.size(),
@@ -364,6 +376,29 @@ class RdMapToImageOp : public holoscan::Operator {
     op_output.emit(out, "rd_image");
   }
 };
+
+// kLutSize-entry RGBA lookup table for the turbo colormap, built from the
+// published 5th-order polynomial fit of the Google turbo palette.
+std::vector<std::vector<float>> make_turbo_lut() {
+  constexpr float kR[6] = {0.13572138F, 4.61539260F, -42.66032258F,
+                           132.13108234F, -152.94239396F, 59.28637943F};
+  constexpr float kG[6] = {0.09140261F, 2.19418839F, 4.84296658F,
+                           -14.18503333F, 4.27729857F, 2.82956604F};
+  constexpr float kB[6] = {0.10667330F, 12.64194608F, -60.58204836F,
+                           110.36276771F, -89.90310912F, 27.34824973F};
+  auto poly = [](const float (&c)[6], float t) {
+    float v = c[5];
+    for (int i = 4; i >= 0; --i) { v = v * t + c[i]; }
+    return std::clamp(v, 0.0F, 1.0F);
+  };
+  std::vector<std::vector<float>> lut;
+  lut.reserve(kLutSize);
+  for (size_t i = 0; i < kLutSize; ++i) {
+    const float t = static_cast<float>(i) / (kLutSize - 1);
+    lut.push_back({poly(kR, t), poly(kG, t), poly(kB, t), 1.0F});
+  }
+  return lut;
+}
 
 class FmcwSisoApp : public holoscan::Application {
  public:
@@ -400,14 +435,15 @@ class FmcwSisoApp : public holoscan::Application {
 
     // Optional live RD-map window (cfg.visualize; main() has already
     // downgraded it with a warning on GUI-less hosts). The converter's
-    // single-channel float32 tensor renders as a gray image layer.
+    // single-channel float32 tensor is colored via the turbo LUT.
     if (cfg.visualize) {
       auto to_image = make_operator<RdMapToImageOp>("rd_map_to_image");
       std::vector<holoscan::ops::HolovizOp::InputSpec> input_specs;
       input_specs.emplace_back("rd_map",
-                               holoscan::ops::HolovizOp::InputType::COLOR);
+                               holoscan::ops::HolovizOp::InputType::COLOR_LUT);
       auto visualizer = make_operator<holoscan::ops::HolovizOp>(
           "holoviz", holoscan::Arg("tensors", input_specs),
+          holoscan::Arg("color_lut", make_turbo_lut()),
           holoscan::Arg("window_title",
                         std::string("FMCW SISO - Range-Doppler")),
           holoscan::Arg("width", 800U), holoscan::Arg("height", 600U));
