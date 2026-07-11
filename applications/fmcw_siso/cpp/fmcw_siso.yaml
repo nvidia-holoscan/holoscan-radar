@@ -70,3 +70,9 @@ noise_snr_db: null
 # log-magnitude map). Requires a GUI-capable host; when no display is
 # detected the app warns and runs as if this were false.
 visualize: false
+
+# Skip the startup display probe (a brief Holoviz window init/teardown).
+# Saves the probe's startup cost on hosts known to have a working display,
+# but if none is available the app aborts mid-graph instead of falling back
+# to running without the window.
+skip_display_check: false

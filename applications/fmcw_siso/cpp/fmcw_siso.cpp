@@ -68,6 +68,10 @@ struct AppConfig {
   int64_t num_frames{1};
   double frame_period{0.1};  // s, between emitted cubes (and target motion)
   bool visualize{false};     // live RD-map window (requires a GUI host)
+  // Skip the startup display probe: saves its GLFW + Vulkan init/teardown,
+  // but on a host without a usable display the failure then surfaces inside
+  // the running graph and aborts the process instead of downgrading.
+  bool skip_display_check{false};
 };
 
 // Load and validate the app-owned YAML sections.
@@ -128,6 +132,10 @@ AppConfig load_config(const std::filesystem::path& path) {
   const YAML::Node visualize = root["visualize"];
   if (visualize && !visualize.IsNull()) {
     cfg.visualize = visualize.as<bool>();
+  }
+  const YAML::Node skip_check = root["skip_display_check"];
+  if (skip_check && !skip_check.IsNull()) {
+    cfg.skip_display_check = skip_check.as<bool>();
   }
   return cfg;
 }
@@ -468,7 +476,8 @@ int main(int argc, char** argv) {
     const std::filesystem::path config_path =
         resolve_config_path(argc, argv);
     app->cfg = load_config(config_path);
-    if (app->cfg.visualize && !gui_available()) {
+    if (app->cfg.visualize && !app->cfg.skip_display_check &&
+        !gui_available()) {
       HOLOSCAN_LOG_WARN(
           "fmcw_siso: visualize is enabled but no usable display was "
           "detected (Holoviz could not initialize a window); running "
