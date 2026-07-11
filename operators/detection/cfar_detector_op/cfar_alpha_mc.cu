@@ -56,9 +56,35 @@ __device__ double goso_side_dev(double neg_sum, int neg_cnt, double pos_sum,
 }
 
 template <bool kGreatestOf>
-__device__ double simulate_goso_noise_dev(int guard_d, int guard_r, int train_d,
-                                          int train_r, int64_t k,
-                                          uint64_t* state) {
+__device__ double simulate_goso_noise_nsides_dev(int64_t n_side, int64_t k,
+                                                 uint64_t* state) {
+  auto side_mean = [&]() {
+    double sum = 0.0;
+    for (int64_t i = 0; i < n_side; ++i) {
+      sum += sample_gamma_k(k, state);
+    }
+    return sum / static_cast<double>(n_side);
+  };
+  const double range_neg = side_mean();
+  const double range_pos = side_mean();
+  const double doppler_neg = side_mean();
+  const double doppler_pos = side_mean();
+  const double range_stat =
+      goso_side_dev<kGreatestOf>(range_neg, 1, range_pos, 1);
+  const double doppler_stat =
+      goso_side_dev<kGreatestOf>(doppler_neg, 1, doppler_pos, 1);
+  if (kGreatestOf) {
+    return range_stat > doppler_stat ? range_stat : doppler_stat;
+  }
+  return range_stat < doppler_stat ? range_stat : doppler_stat;
+}
+
+template <bool kGreatestOf>
+__device__ double simulate_goso_noise_at_cell_dev(int d, int r, int num_doppler,
+                                                  int num_range, int guard_d,
+                                                  int guard_r, int train_d,
+                                                  int train_r, int64_t k,
+                                                  uint64_t* state) {
   const int half_d = guard_d + train_d;
   const int half_r = guard_r + train_r;
   double range_neg_sum = 0.0;
@@ -70,8 +96,16 @@ __device__ double simulate_goso_noise_dev(int guard_d, int guard_r, int train_d,
   int doppler_neg_cnt = 0;
   int doppler_pos_cnt = 0;
   for (int dd = -half_d; dd <= half_d; ++dd) {
+    const int nd = d + dd;
+    if (nd < 0 || nd >= num_doppler) {
+      continue;
+    }
     const bool guard_row = (dd >= -guard_d && dd <= guard_d);
     for (int rr = -half_r; rr <= half_r; ++rr) {
+      const int nr = r + rr;
+      if (nr < 0 || nr >= num_range) {
+        continue;
+      }
       if (guard_row && rr >= -guard_r && rr <= guard_r) {
         continue;
       }
@@ -144,10 +178,30 @@ __device__ double simulate_os_noise_dev(int guard_d, int guard_r, int train_d,
   return os_select_rank_dev(samples, train_cnt, os_rank);
 }
 
-__global__ void goso_mc_pfa_kernel(double alpha, int64_t k, int guard_d,
-                                   int guard_r, int train_d, int train_r,
-                                   int mc_trials, bool greatest_of,
-                                   uint64_t seed_base, int* out_fa) {
+__global__ void goso_mc_nsides_kernel(double alpha, int64_t n_side, int64_t k,
+                                      int mc_trials, bool greatest_of,
+                                      uint64_t seed_base, int* out_fa) {
+  const int trial = blockIdx.x * blockDim.x + threadIdx.x;
+  if (trial >= mc_trials) {
+    return;
+  }
+  uint64_t state =
+      seed_base ^ (static_cast<uint64_t>(trial) * 0xD6E8FEB86659FD93ULL);
+  const double noise =
+      greatest_of ? simulate_goso_noise_nsides_dev<true>(n_side, k, &state)
+                  : simulate_goso_noise_nsides_dev<false>(n_side, k, &state);
+  const double cut = sample_gamma_k(k, &state);
+  if (cut > alpha * noise) {
+    atomicAdd(out_fa, 1);
+  }
+}
+
+__global__ void goso_mc_at_cell_kernel(double alpha, int64_t k, int d, int r,
+                                       int num_doppler, int num_range,
+                                       int guard_d, int guard_r, int train_d,
+                                       int train_r, int mc_trials,
+                                       bool greatest_of, uint64_t seed_base,
+                                       int* out_fa) {
   const int trial = blockIdx.x * blockDim.x + threadIdx.x;
   if (trial >= mc_trials) {
     return;
@@ -156,10 +210,12 @@ __global__ void goso_mc_pfa_kernel(double alpha, int64_t k, int guard_d,
       seed_base ^ (static_cast<uint64_t>(trial) * 0xD6E8FEB86659FD93ULL);
   const double noise =
       greatest_of
-          ? simulate_goso_noise_dev<true>(guard_d, guard_r, train_d, train_r,
-                                          k, &state)
-          : simulate_goso_noise_dev<false>(guard_d, guard_r, train_d, train_r,
-                                           k, &state);
+          ? simulate_goso_noise_at_cell_dev<true>(
+                d, r, num_doppler, num_range, guard_d, guard_r, train_d,
+                train_r, k, &state)
+          : simulate_goso_noise_at_cell_dev<false>(
+                d, r, num_doppler, num_range, guard_d, guard_r, train_d,
+                train_r, k, &state);
   const double cut = sample_gamma_k(k, &state);
   if (cut > alpha * noise) {
     atomicAdd(out_fa, 1);
@@ -202,8 +258,9 @@ bool gpu_mc_calibration_available() {
 }
 
 double goso_mc_pfa_from_alpha_gpu(double alpha, int64_t n_side, int64_t k,
-                                  int mc_trials, int guard_d, int guard_r,
-                                  int train_d, int train_r, bool greatest_of) {
+                                  int mc_trials, int /*guard_d*/,
+                                  int /*guard_r*/, int /*train_d*/,
+                                  int /*train_r*/, bool greatest_of) {
   if (n_side <= 0 || k <= 0 || alpha <= 0.0 || mc_trials <= 0) {
     return alpha <= 0.0 ? 1.0 : 0.0;
   }
@@ -221,9 +278,46 @@ double goso_mc_pfa_from_alpha_gpu(double alpha, int64_t n_side, int64_t k,
       0x474F43464152ULL ^ static_cast<uint64_t>(n_side) ^
       (static_cast<uint64_t>(k) << 32) ^
       (greatest_of ? 0ULL : 0x534F43464152ULL);
-  goso_mc_pfa_kernel<<<dim3(grid_x), dim3(block)>>>(
-      alpha, k, guard_d, guard_r, train_d, train_r, mc_trials, greatest_of,
-      seed, counter);
+  goso_mc_nsides_kernel<<<dim3(grid_x), dim3(block)>>>(
+      alpha, n_side, k, mc_trials, greatest_of, seed, counter);
+  if (cudaGetLastError() != cudaSuccess) {
+    return -1.0;
+  }
+  if (cudaDeviceSynchronize() != cudaSuccess) {
+    return -1.0;
+  }
+  int host_fa = 0;
+  if (cudaMemcpy(&host_fa, counter, sizeof(int), cudaMemcpyDeviceToHost) !=
+      cudaSuccess) {
+    return -1.0;
+  }
+  return static_cast<double>(host_fa) / static_cast<double>(mc_trials);
+}
+
+double goso_mc_pfa_at_cell_gpu(double alpha, int64_t k, int mc_trials, int d,
+                               int r, int num_doppler, int num_range,
+                               int guard_d, int guard_r, int train_d,
+                               int train_r, bool greatest_of) {
+  if (k <= 0 || alpha <= 0.0 || mc_trials <= 0) {
+    return alpha <= 0.0 ? 1.0 : 0.0;
+  }
+  std::lock_guard<std::mutex> lock(g_gpu_mc_mutex);
+  int* counter = device_false_alarm_counter();
+  if (counter == nullptr) {
+    return -1.0;
+  }
+  if (cudaMemset(counter, 0, sizeof(int)) != cudaSuccess) {
+    return -1.0;
+  }
+  const int block = 256;
+  const int grid_x = (mc_trials + block - 1) / block;
+  const uint64_t seed =
+      0x474F43464152ULL ^ (static_cast<uint64_t>(d) << 32) ^
+      static_cast<uint64_t>(r) ^ (static_cast<uint64_t>(k) << 16) ^
+      (greatest_of ? 0ULL : 0x534F43464152ULL);
+  goso_mc_at_cell_kernel<<<dim3(grid_x), dim3(block)>>>(
+      alpha, k, d, r, num_doppler, num_range, guard_d, guard_r, train_d,
+      train_r, mc_trials, greatest_of, seed, counter);
   if (cudaGetLastError() != cudaSuccess) {
     return -1.0;
   }

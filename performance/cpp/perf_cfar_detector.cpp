@@ -21,11 +21,13 @@
 #include <numeric>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <holoscan/holoscan.hpp>
 
+#include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "utils/perf_app.hpp"
 #include "utils/perf_platform.hpp"
@@ -43,7 +45,7 @@ namespace {
 
 using PerfPrecision = float;  // v1 characterizes single precision.
 
-enum class OverrideKind { kNone, kPfa, kTrainingCells };
+enum class OverrideKind { kNone, kPfa, kTrainingCells, kAlphaLut };
 
 struct Footprint {
   std::string name;
@@ -73,6 +75,10 @@ struct CfarScenario {
   double override_double{0.0};
   std::vector<int64_t> override_vec;
   bool blocking_rebuild{false};
+  std::vector<double> override_alpha_lut;
+  std::string calibration_pair;
+  bool use_alpha_lut{false};
+  std::vector<double> alpha_lut;
 };
 
 // --- size ladder (docs/planning WORKFLOWS moderate application scale) -----
@@ -154,6 +160,36 @@ void batch_and_k(const std::vector<int64_t>& shape,
   }
 }
 
+std::vector<double> precompute_alpha_lut(const CfarScenario& scen) {
+  const size_t n = scen.input_shape.size();
+  const int num_doppler = static_cast<int>(scen.input_shape[n - 2]);
+  const int num_range = static_cast<int>(scen.input_shape[n - 1]);
+  const int guard_d = static_cast<int>(scen.footprint.guard[0]);
+  const int guard_r = static_cast<int>(scen.footprint.guard[1]);
+  const int train_d = static_cast<int>(scen.footprint.training[0]);
+  const int train_r = static_cast<int>(scen.footprint.training[1]);
+  int64_t out_batch = 1;
+  int64_t k = 1;
+  batch_and_k(scen.input_shape, scen.nci_axes, &out_batch, &k);
+  (void)out_batch;
+  switch (scen.variant) {
+    case hr::CfarVariant::kCA:
+      return hr::detail::build_ca_alpha_lut(scen.pfa, k, num_doppler, num_range,
+                                          guard_d, guard_r, train_d, train_r);
+    case hr::CfarVariant::kGO:
+      return hr::detail::build_go_alpha_lut(scen.pfa, k, num_doppler, num_range,
+                                          guard_d, guard_r, train_d, train_r);
+    case hr::CfarVariant::kSO:
+      return hr::detail::build_so_alpha_lut(scen.pfa, k, num_doppler, num_range,
+                                          guard_d, guard_r, train_d, train_r);
+    case hr::CfarVariant::kOS:
+      return hr::detail::build_os_alpha_lut(
+          scen.pfa, k, scen.os_rank, num_doppler, num_range, guard_d, guard_r,
+          train_d, train_r);
+  }
+  return {};
+}
+
 // ---------------------------------------------------------------------------
 // Mini-application: source -> CFAR -> terminal + null sinks (+ optional
 // override source). Fresh instance per scenario run.
@@ -175,7 +211,8 @@ class CfarPerfApp : public holoscan::Application {
         Arg("pfa") = scen->pfa, Arg("threshold_scale") = 1.0,
         Arg("nci_axes") = scen->nci_axes, Arg("os_rank") = scen->os_rank,
         Arg("max_detections") = int64_t{0},
-        Arg("blocking_alpha_lut_rebuild") = scen->blocking_rebuild);
+        Arg("blocking_alpha_lut_rebuild") = scen->blocking_rebuild,
+        Arg("alpha_lut") = scen->alpha_lut);
 
     auto src = make_operator<perf::PerfDataSourceOp>(
         "src", make_condition<holoscan::CountCondition>(total_frames));
@@ -220,6 +257,13 @@ class CfarPerfApp : public holoscan::Application {
         add_flow(s, op, {{"output", "training_cells"}});
         break;
       }
+      case OverrideKind::kAlphaLut: {
+        auto s = make_operator<perf::PerfOverrideSourceOp<std::vector<double>>>(
+            "ovr", make_condition<holoscan::CountCondition>(total_frames));
+        s->configure(scen->override_at, scen->override_alpha_lut);
+        add_flow(s, op, {{"output", "alpha_lut"}});
+        break;
+      }
     }
   }
 };
@@ -259,6 +303,8 @@ perf::ResultRow base_row(const CfarScenario& scen) {
   batch_and_k(scen.input_shape, scen.nci_axes, &out_batch, &k);
   row.out_batch = out_batch;
   row.k = k;
+  row.calibration_pair = scen.calibration_pair;
+  row.calibration_mode = scen.use_alpha_lut ? "alpha_lut" : "pfa";
   return row;
 }
 
@@ -287,10 +333,21 @@ void run_scenario(const CfarScenario& scen, const perf::RunSettings& rs,
 
   for (int rep = 0; rep < rs.repeats; ++rep) {
     CfarScenario run_scen = scen;
-    run_scen.override_kind = OverrideKind::kPfa;
-    run_scen.override_double = 1e-6;
-    run_scen.blocking_rebuild = true;
+    if (run_scen.use_alpha_lut && run_scen.alpha_lut.empty()) {
+      run_scen.alpha_lut = precompute_alpha_lut(run_scen);
+    }
     run_scen.override_at = override_at;
+    if (run_scen.use_alpha_lut) {
+      CfarScenario override_scen = run_scen;
+      override_scen.pfa = 1e-6;
+      run_scen.override_kind = OverrideKind::kAlphaLut;
+      run_scen.override_alpha_lut = precompute_alpha_lut(override_scen);
+      run_scen.blocking_rebuild = false;
+    } else {
+      run_scen.override_kind = OverrideKind::kPfa;
+      run_scen.override_double = 1e-6;
+      run_scen.blocking_rebuild = true;
+    }
 
     perf::TimingCollector collector;
     // Preallocate the input before starting the setup clock so H2D upload is
@@ -345,10 +402,19 @@ void run_scenario(const CfarScenario& scen, const perf::RunSettings& rs,
       row.override_delta_ms = override_ms_best - row.latency.median_ms;
     }
     fill_throughput(&row, row.latency.median_ms);
-    row.notes =
-        "cold_ms is first-frame latency including initial LUT calibration; "
-        "median/p90 are pre-override steady state; override_ms is peak latency "
-        "over the 3-frame blocking pfa reconfig window inline in the same run";
+    if (scen.use_alpha_lut) {
+      row.notes =
+          "cold_ms is first-frame latency including initial alpha_lut H2D; "
+          "median/p90 are pre-override steady state; override_ms is peak "
+          "latency over the 3-frame alpha_lut live-update window "
+          "(pfa=1e-6 LUT)";
+    } else {
+      row.notes =
+          "cold_ms is first-frame latency including initial LUT "
+          "calibration; median/p90 are pre-override steady state; "
+          "override_ms is peak latency over the 3-frame blocking pfa "
+          "reconfig window inline in the same run";
+    }
     report->results.push_back(row);
   }
 }
@@ -423,6 +489,103 @@ std::vector<CfarScenario> build_default_matrix() {
     }
   }
   return out;
+}
+
+struct CalibrationPairSpec {
+  std::string slow_id;
+  std::string pair_id;
+};
+
+const std::vector<CalibrationPairSpec>& calibration_pair_specs() {
+  static const std::vector<CalibrationPairSpec> specs = {
+      {"cfar_GO_xlw_small_k1_compute", "GO_xlw_k1"},
+      {"cfar_SO_xlw_small_k1_compute", "SO_xlw_k1"},
+      {"cfar_GO_md_small_k8_compute", "GO_md_k8"},
+      {"cfar_SO_md_small_k8_compute", "SO_md_k8"},
+      {"cfar_OS_md_small_k8_compute", "OS_md_k8"},
+      {"cfar_OS_lg_small_k8_compute", "OS_lg_k8"},
+  };
+  return specs;
+}
+
+void tag_and_append_alpha_lut_pairs(std::vector<CfarScenario>* scenarios) {
+  std::unordered_map<std::string, CfarScenario> by_id;
+  for (const auto& sc : *scenarios) {
+    by_id.emplace(sc.id, sc);
+  }
+  for (const auto& spec : calibration_pair_specs()) {
+    auto it = by_id.find(spec.slow_id);
+    if (it == by_id.end()) {
+      continue;
+    }
+    for (auto& sc : *scenarios) {
+      if (sc.id == spec.slow_id) {
+        sc.calibration_pair = spec.pair_id;
+      }
+    }
+    CfarScenario fast = it->second;
+    fast.calibration_pair = spec.pair_id;
+    fast.use_alpha_lut = true;
+    fast.alpha_lut.clear();
+    const std::string suffix = "_compute";
+    if (fast.id.size() > suffix.size() &&
+        fast.id.compare(fast.id.size() - suffix.size(), suffix.size(),
+                        suffix) == 0) {
+      fast.id.replace(fast.id.size() - suffix.size(), suffix.size(),
+                      "_alphalut_compute");
+    } else {
+      fast.id += "_alphalut";
+    }
+    scenarios->push_back(std::move(fast));
+  }
+}
+
+void build_alpha_calibration_summary(perf::PerfReport* report) {
+  std::unordered_map<std::string, perf::AlphaCalibrationRow> rows;
+  for (const auto& spec : calibration_pair_specs()) {
+    perf::AlphaCalibrationRow row;
+    row.pair_id = spec.pair_id;
+    rows.emplace(spec.pair_id, std::move(row));
+  }
+  for (const auto& row : report->results) {
+    if (row.bucket != "compute" || row.calibration_pair.empty()) {
+      continue;
+    }
+    auto it = rows.find(row.calibration_pair);
+    if (it == rows.end()) {
+      continue;
+    }
+    perf::AlphaCalibrationRow& out = it->second;
+    out.variant = row.variant;
+    out.size_id = row.size_id;
+    out.k = row.k;
+    if (row.calibration_mode == "pfa") {
+      out.slow_cold_ms = row.cold_ms;
+      out.slow_ovr_ms = row.override_ms;
+    } else if (row.calibration_mode == "alpha_lut") {
+      out.fast_cold_ms = row.cold_ms;
+      out.fast_ovr_ms = row.override_ms;
+    }
+  }
+  for (auto& [_, row] : rows) {
+    if (perf::detail::is_num(row.slow_cold_ms) &&
+        perf::detail::is_num(row.fast_cold_ms) && row.fast_cold_ms > 0.0) {
+      row.cold_speedup = row.slow_cold_ms / row.fast_cold_ms;
+    }
+    if (perf::detail::is_num(row.slow_ovr_ms) &&
+        perf::detail::is_num(row.fast_ovr_ms) && row.fast_ovr_ms > 0.0) {
+      row.ovr_speedup = row.slow_ovr_ms / row.fast_ovr_ms;
+    }
+    if (perf::detail::is_num(row.slow_cold_ms) ||
+        perf::detail::is_num(row.fast_cold_ms)) {
+      report->alpha_calibration.push_back(row);
+    }
+  }
+  std::sort(report->alpha_calibration.begin(), report->alpha_calibration.end(),
+            [](const perf::AlphaCalibrationRow& a,
+               const perf::AlphaCalibrationRow& b) {
+              return a.pair_id < b.pair_id;
+            });
 }
 
 std::vector<CfarScenario> build_size_sweep(
@@ -596,6 +759,7 @@ int main(int argc, char** argv) {
     scenarios = build_size_sweep(opt.sizes);
   } else {
     scenarios = build_default_matrix();
+    tag_and_append_alpha_lut_pairs(&scenarios);
   }
 
   perf::PerfReport report;
@@ -644,6 +808,7 @@ int main(int argc, char** argv) {
     }
   }
   report.run_settings.stopped_early = stopped_early;
+  build_alpha_calibration_summary(&report);
 
   if (!opt.output.empty()) {
     std::ofstream f(opt.output);

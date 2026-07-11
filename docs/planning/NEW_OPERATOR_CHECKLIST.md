@@ -6,6 +6,10 @@ lives in [`OPERATOR_API.md`](OPERATOR_API.md); tests in
 [`AGENTS.md`](../../AGENTS.md) and
 [`operators/common/README.md`](../../operators/common/README.md).
 
+For *how* to implement well (hot-path discipline, diagnosis, `[live]` /
+calibration pitfalls, performance characterization — lessons from landed
+operators), see [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md).
+
 Use **Before you're done** as the final gate; the sections below are the
 detailed how-to if you need them.
 

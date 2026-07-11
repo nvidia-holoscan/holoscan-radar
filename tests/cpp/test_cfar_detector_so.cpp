@@ -963,3 +963,36 @@ TEST(CFARDetectorOpSoTest, SoAlphaInvertsMonteCarloPfa) {
       holoscan::radar::detail::so_cfar_pfa_from_alpha(alpha, kN, 1);
   EXPECT_NEAR(recovered, kPfa, 0.02);
 }
+
+// Regression: SO MC must depend on n_side. The old interior-window simulator
+// ignored n_side, so alpha(n=8) ≈ alpha(n=18).
+TEST(CFARDetectorOpSoTest, SoAlphaDependsOnSideCount) {
+  constexpr double kPfa = 1e-2;
+  const double alpha_small =
+      holoscan::radar::detail::so_cfar_alpha(kPfa, 8, 1, 1, 1, 2, 2);
+  const double alpha_large =
+      holoscan::radar::detail::so_cfar_alpha(kPfa, 18, 1, 1, 1, 2, 2);
+  ASSERT_GT(alpha_large, 0.0);
+  EXPECT_GT(std::abs(alpha_small - alpha_large) / alpha_large, 0.05)
+      << "alpha_small=" << alpha_small << " alpha_large=" << alpha_large;
+}
+
+// Regression: LUT slots must use cell-faithful MC. Corner (0,0) has two sides
+// of 10 cells (lut index 10); the four-side so_cfar_alpha(n=10) model is not
+// the same distribution, so lut[10] must track at_cell(0,0) and diverge from
+// so_cfar_alpha(10). (Unlike GO, SO corner vs interior alphas can be close.)
+TEST(CFARDetectorOpSoTest, SoLutUsesCellFaithfulAlpha) {
+  constexpr double kPfa = 1e-2;
+  const auto lut = holoscan::radar::detail::build_so_alpha_lut(
+      kPfa, 1, 32, 32, 1, 1, 2, 2);
+  ASSERT_GT(lut.size(), 10u);
+  ASSERT_GT(lut[10], 0.0);
+  const double at_corner = holoscan::radar::detail::so_cfar_alpha_at_cell(
+      kPfa, 1, 0, 0, 32, 32, 1, 1, 2, 2);
+  const double four_side =
+      holoscan::radar::detail::so_cfar_alpha(kPfa, 10, 1, 1, 1, 2, 2);
+  EXPECT_NEAR(lut[10], at_corner, 0.05 * at_corner)
+      << "lut=" << lut[10] << " at_cell=" << at_corner;
+  EXPECT_GT(std::abs(lut[10] - four_side) / lut[10], 0.05)
+      << "lut=" << lut[10] << " four_side_n10=" << four_side;
+}

@@ -13,6 +13,10 @@
 
 namespace holoscan::radar {
 
+namespace detail {
+struct DetectionIdxCompactState;
+}  // namespace detail
+
 // CFAR noise-estimation rule. Static per instance (selects the kernel); to
 // run different variants, instantiate separate detectors.
 enum class CfarVariant {
@@ -116,6 +120,7 @@ class CFARDetectorOp : public holoscan::Operator {
   Parameter<std::vector<int64_t>> guard_cells_;    // (doppler, range)
   Parameter<std::vector<int64_t>> training_cells_;  // (doppler, range)
   Parameter<double> pfa_;
+  Parameter<std::vector<double>> alpha_lut_;
   Parameter<double> threshold_scale_;
   Parameter<std::vector<int64_t>> nci_axes_;
   Parameter<int64_t> max_detections_;  // <= 0 → uncapped
@@ -134,6 +139,7 @@ class CFARDetectorOp : public holoscan::Operator {
   std::vector<int64_t> effective_guard_cells_{};
   std::vector<int64_t> effective_training_cells_{};
   double effective_pfa_{1e-6};
+  std::vector<double> effective_alpha_lut_{};
   double effective_threshold_scale_{1.0};
   int64_t effective_os_rank_{0};
   std::vector<int64_t> effective_nci_axes_{};
@@ -157,8 +163,36 @@ class CFARDetectorOp : public holoscan::Operator {
   AlphaLutKey pending_lut_key_{};
   bool pending_lut_active_{false};
   bool stale_lut_warned_{false};
+  bool pfa_lut_slow_warned_{false};
+  bool using_external_alpha_lut_{false};
+  bool pfa_ignored_while_alpha_lut_warned_{false};
+  bool alpha_lut_cleared_pfa_active_warned_{false};
   std::vector<double> alpha_lut_host_cache_{};
   std::shared_ptr<holoscan::Tensor> alpha_lut_dev_{};
+
+  // Device-side detection_idx compaction scratch (CUB temps + scan offsets).
+  // shared_ptr (not unique_ptr) so the incomplete type is OK in TUs that only
+  // see the forward declaration — the deleter is type-erased at creation in
+  // the .cu.
+  std::shared_ptr<detail::DetectionIdxCompactState> detection_idx_compact_;
+
+  // Ping-ponged dense workspaces. score/noise/mask are emitted, so two sets
+  // avoid overwriting a buffer a downstream consumer may still hold. power /
+  // integrated_power are scratch-only (same slot is fine within a tick).
+  // Reallocated only when (batch_in, out_batch, D, R) changes.
+  struct DenseWorkspace {
+    std::shared_ptr<holoscan::Tensor> score;
+    std::shared_ptr<holoscan::Tensor> noise;
+    std::shared_ptr<holoscan::Tensor> mask;
+    std::shared_ptr<holoscan::Tensor> power;
+    std::shared_ptr<holoscan::Tensor> integrated_power;
+    int64_t batch_in{0};
+    int64_t out_batch{0};
+    int64_t num_doppler{0};
+    int64_t num_range{0};
+  };
+  DenseWorkspace dense_workspace_[2]{};
+  int dense_workspace_idx_{0};
 
   // Keeps the previous tick's input alive until this tick's kernels are
   // enqueued (stream-ordered lifetime guard).

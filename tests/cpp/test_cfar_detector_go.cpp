@@ -963,3 +963,47 @@ TEST(CFARDetectorOpGoTest, GoAlphaInvertsMonteCarloPfa) {
       holoscan::radar::detail::go_cfar_pfa_from_alpha(alpha, kN, 1);
   EXPECT_NEAR(recovered, kPfa, 0.02);
 }
+
+// Regression: GO MC must depend on n_side. The old interior-window simulator
+// ignored n_side, so alpha(n=8) ≈ alpha(n=18) and border LUT slots were wrong.
+TEST(CFARDetectorOpGoTest, GoAlphaDependsOnSideCount) {
+  constexpr double kPfa = 1e-2;
+  const double alpha_small =
+      holoscan::radar::detail::go_cfar_alpha(kPfa, 8, 1, 1, 1, 2, 2);
+  const double alpha_large =
+      holoscan::radar::detail::go_cfar_alpha(kPfa, 18, 1, 1, 1, 2, 2);
+  ASSERT_GT(alpha_large, 0.0);
+  EXPECT_GT(std::abs(alpha_small - alpha_large) / alpha_large, 0.05)
+      << "alpha_small=" << alpha_small << " alpha_large=" << alpha_large;
+}
+
+TEST(CFARDetectorOpGoTest, GoLutBorderAlphaDiffersFromInterior) {
+  constexpr double kPfa = 1e-2;
+  const auto lut = holoscan::radar::detail::build_go_alpha_lut(
+      kPfa, 1, 32, 32, 1, 1, 2, 2);
+  // guard=1,train=2 → interior lut index 18; corner (0,0) → index 10.
+  ASSERT_GT(lut.size(), 18u);
+  ASSERT_GT(lut[10], 0.0);
+  ASSERT_GT(lut[18], 0.0);
+  EXPECT_GT(std::abs(lut[10] - lut[18]) / lut[18], 0.05)
+      << "border=" << lut[10] << " interior=" << lut[18];
+}
+
+// Regression: LUT must use cell-faithful MC, not the four-side n_side model.
+// Corner (0,0) → index 10 with two sides of 10; go_cfar_alpha(10) assumes
+// four sides of 10 and understates alpha substantially.
+TEST(CFARDetectorOpGoTest, GoLutUsesCellFaithfulAlpha) {
+  constexpr double kPfa = 1e-2;
+  const auto lut = holoscan::radar::detail::build_go_alpha_lut(
+      kPfa, 1, 32, 32, 1, 1, 2, 2);
+  ASSERT_GT(lut.size(), 10u);
+  ASSERT_GT(lut[10], 0.0);
+  const double at_corner = holoscan::radar::detail::go_cfar_alpha_at_cell(
+      kPfa, 1, 0, 0, 32, 32, 1, 1, 2, 2);
+  const double four_side =
+      holoscan::radar::detail::go_cfar_alpha(kPfa, 10, 1, 1, 1, 2, 2);
+  EXPECT_NEAR(lut[10], at_corner, 0.05 * at_corner)
+      << "lut=" << lut[10] << " at_cell=" << at_corner;
+  EXPECT_GT(std::abs(lut[10] - four_side) / lut[10], 0.05)
+      << "lut=" << lut[10] << " four_side_n10=" << four_side;
+}

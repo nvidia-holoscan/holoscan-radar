@@ -5,6 +5,8 @@
 
 #include <cuda_runtime_api.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -13,6 +15,7 @@
 #include <vector>
 
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
+#include "detection/cfar_detector_op/cfar_compact.cuh"
 #include "detection/cfar_detector_op/cfar_stage.hpp"
 #include "detection/cfar_detector_op/nci_plan.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
@@ -26,6 +29,73 @@ namespace {
 
 constexpr DLDataType kBoolDtype{kDLBool, 8, 1};
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
+
+// GO/SO always calibrate alpha from Pfa via Monte Carlo; OS uses MC when K>1
+// (closed-form when K=1). Warn once so callers know to supply alpha_lut for
+// low-latency live updates.
+bool uses_slow_pfa_lut_calibration(CfarVariant variant, int64_t fold) {
+  return variant == CfarVariant::kGO || variant == CfarVariant::kSO ||
+         (variant == CfarVariant::kOS && fold > 1);
+}
+
+int64_t max_alpha_lut_index(CfarVariant variant, int num_doppler,
+                            int num_range, int guard_d, int guard_r,
+                            int train_d, int train_r) {
+  if (variant == CfarVariant::kGO || variant == CfarVariant::kSO) {
+    return detail::max_go_lut_index(num_doppler, num_range, guard_d, guard_r,
+                                    train_d, train_r);
+  }
+  return detail::max_training_cell_count(num_doppler, num_range, guard_d,
+                                         guard_r, train_d, train_r);
+}
+
+void validate_external_alpha_lut(CfarVariant variant,
+                                 const std::vector<double>& lut,
+                                 int64_t max_lut_index, int num_doppler,
+                                 int num_range, int guard_d, int guard_r,
+                                 int train_d, int train_r) {
+  if (max_lut_index <= 0) {
+    return;
+  }
+  if (lut.size() <= static_cast<size_t>(max_lut_index)) {
+    throw std::invalid_argument(
+        "CFARDetectorOp: alpha_lut length must exceed the maximum LUT index "
+        "for the configured variant, footprint, and map size");
+  }
+  // Every slot in 1..max must be finite and non-negative. Zeros are only legal
+  // for GO/SO unreachable indices (sparse offline tables); CA/OS use every
+  // index in range as a possible training-cell count.
+  for (int64_t idx = 1; idx <= max_lut_index; ++idx) {
+    const double alpha = lut[static_cast<size_t>(idx)];
+    if (!std::isfinite(alpha) || alpha < 0.0) {
+      throw std::invalid_argument(
+          "CFARDetectorOp: alpha_lut entries for used indices must be finite "
+          "and non-negative");
+    }
+  }
+  if (variant == CfarVariant::kGO || variant == CfarVariant::kSO) {
+    const std::vector<int64_t> reachable = detail::reachable_go_lut_indices(
+        num_doppler, num_range, guard_d, guard_r, train_d, train_r);
+    for (int64_t idx : reachable) {
+      if (idx <= 0 || idx > max_lut_index) {
+        continue;
+      }
+      if (lut[static_cast<size_t>(idx)] <= 0.0) {
+        throw std::invalid_argument(
+            "CFARDetectorOp: alpha_lut entries for reachable GO/SO LUT "
+            "indices must be finite and positive");
+      }
+    }
+    return;
+  }
+  for (int64_t idx = 1; idx <= max_lut_index; ++idx) {
+    if (lut[static_cast<size_t>(idx)] <= 0.0) {
+      throw std::invalid_argument(
+          "CFARDetectorOp: alpha_lut entries for used indices must be finite "
+          "and positive");
+    }
+  }
+}
 
 std::shared_ptr<holoscan::Tensor> receive_single(
     holoscan::InputContext& op_input, const char* port) {
@@ -100,7 +170,13 @@ void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
              "Training/reference extent each side, for the noise estimate.",
              std::vector<int64_t>{});
   spec.param(pfa_, "pfa", "Probability of false alarm",
-             "Sets the per-variant threshold multiplier alpha.", 1e-6);
+             "Sets the per-variant threshold multiplier alpha when alpha_lut "
+             "is unset.",
+             1e-6);
+  spec.param(alpha_lut_, "alpha_lut", "Precomputed alpha LUT",
+             "Optional threshold multiplier table; when non-empty, used "
+             "directly and pfa is ignored for alpha calibration.",
+             std::vector<double>{});
   spec.param(threshold_scale_, "threshold_scale", "Threshold scale",
              "Empirical multiplier on top of the Pfa-derived threshold; "
              "1.0 = pure CFAR.",
@@ -125,6 +201,7 @@ void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
   add_override_port<std::vector<int64_t>>(spec, "guard_cells");
   add_override_port<std::vector<int64_t>>(spec, "training_cells");
   add_override_port<double>(spec, "pfa");
+  add_override_port<std::vector<double>>(spec, "alpha_lut");
   add_override_port<double>(spec, "threshold_scale");
   add_override_port<std::vector<int64_t>>(spec, "nci_axes");
   add_override_port<int64_t>(spec, "max_detections");
@@ -140,6 +217,7 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
     effective_guard_cells_ = guard_cells_.get();
     effective_training_cells_ = training_cells_.get();
     effective_pfa_ = pfa_.get();
+    effective_alpha_lut_ = alpha_lut_.get();
     effective_threshold_scale_ = threshold_scale_.get();
     effective_os_rank_ = os_rank_.get();
     effective_nci_axes_ = nci_axes_.get();
@@ -150,8 +228,12 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
       op_input, "guard_cells", effective_guard_cells_, nullptr);
   effective_training_cells_ = resolve_override_param<std::vector<int64_t>>(
       op_input, "training_cells", effective_training_cells_, nullptr);
+  bool pfa_override_changed = false;
   effective_pfa_ = resolve_override_param<double>(op_input, "pfa",
-                                                  effective_pfa_, nullptr);
+                                                  effective_pfa_,
+                                                  &pfa_override_changed);
+  effective_alpha_lut_ = resolve_override_param<std::vector<double>>(
+      op_input, "alpha_lut", effective_alpha_lut_, nullptr);
   effective_threshold_scale_ = resolve_override_param<double>(
       op_input, "threshold_scale", effective_threshold_scale_, nullptr);
   effective_os_rank_ = resolve_override_param<int64_t>(
@@ -188,13 +270,31 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
 
   cudaStream_t stream = op_input.receive_cuda_stream("rd_maps");
 
-  auto score = make_device_tensor(output_shape, real_dtype<T>());
-  auto noise = make_device_tensor(output_shape, real_dtype<T>());
-  auto mask = make_device_tensor(output_shape, kBoolDtype);
-  auto power = make_device_tensor(
-      {plan.batch_in, num_doppler, num_range}, real_dtype<T>());
-  auto integrated_power = make_device_tensor(
-      {plan.out_batch, num_doppler, num_range}, real_dtype<T>());
+  // Reuse a ping-ponged dense workspace when the CFAR geometry is unchanged.
+  dense_workspace_idx_ ^= 1;
+  DenseWorkspace& ws = dense_workspace_[dense_workspace_idx_];
+  const bool ws_hit = ws.score && ws.batch_in == plan.batch_in &&
+                      ws.out_batch == plan.out_batch &&
+                      ws.num_doppler == num_doppler &&
+                      ws.num_range == num_range;
+  if (!ws_hit) {
+    ws.score = make_device_tensor(output_shape, real_dtype<T>());
+    ws.noise = make_device_tensor(output_shape, real_dtype<T>());
+    ws.mask = make_device_tensor(output_shape, kBoolDtype);
+    ws.power = make_device_tensor({plan.batch_in, num_doppler, num_range},
+                                 real_dtype<T>());
+    ws.integrated_power = make_device_tensor(
+        {plan.out_batch, num_doppler, num_range}, real_dtype<T>());
+    ws.batch_in = plan.batch_in;
+    ws.out_batch = plan.out_batch;
+    ws.num_doppler = num_doppler;
+    ws.num_range = num_range;
+  }
+  auto& score = ws.score;
+  auto& noise = ws.noise;
+  auto& mask = ws.mask;
+  auto& power = ws.power;
+  auto& integrated_power = ws.integrated_power;
 
   const int guard_d = static_cast<int>(effective_guard_cells_[0]);
   const int guard_r = static_cast<int>(effective_guard_cells_[1]);
@@ -247,16 +347,102 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
     }
   };
 
-  const bool blocking_lut = blocking_alpha_lut_rebuild_.get();
-  if (lut_key != alpha_lut_key_) {
-    if (blocking_lut) {
-      alpha_lut_host_cache_ = detail::get_cached_alpha_lut(lut_key);
-      alpha_lut_key_ = lut_key;
-      pending_lut_key_ = {};
-      pending_lut_active_ = false;
-      stale_lut_warned_ = false;
+  const bool had_external_alpha_lut = using_external_alpha_lut_;
+  const bool has_external_alpha_lut = !effective_alpha_lut_.empty();
+
+  if (had_external_alpha_lut && !has_external_alpha_lut) {
+    if (!alpha_lut_cleared_pfa_active_warned_) {
+      HOLOSCAN_LOG_WARN(
+          "CFARDetectorOp: alpha_lut cleared; pfa-derived alpha calibration is "
+          "now active and may use the slow Monte Carlo path for GO, SO, or OS "
+          "with K > 1");
+      alpha_lut_cleared_pfa_active_warned_ = true;
+    }
+    using_external_alpha_lut_ = false;
+    alpha_lut_key_ = {};
+    pending_lut_key_ = {};
+    pending_lut_active_ = false;
+    stale_lut_warned_ = false;
+  }
+
+  if (pfa_override_changed && has_external_alpha_lut &&
+      !pfa_ignored_while_alpha_lut_warned_) {
+    HOLOSCAN_LOG_WARN(
+        "CFARDetectorOp: pfa override has no effect while alpha_lut is "
+        "supplied");
+    pfa_ignored_while_alpha_lut_warned_ = true;
+  }
+
+  if (has_external_alpha_lut) {
+    // max_alpha_lut_index is closed-form for maps that fit the window (the
+    // common case); only needed to validate an externally supplied LUT.
+    const int64_t max_lut_index = max_alpha_lut_index(
+        variant, static_cast<int>(num_doppler), static_cast<int>(num_range),
+        guard_d, guard_r, train_d, train_r);
+    validate_external_alpha_lut(variant, effective_alpha_lut_, max_lut_index,
+                                static_cast<int>(num_doppler),
+                                static_cast<int>(num_range), guard_d, guard_r,
+                                train_d, train_r);
+    using_external_alpha_lut_ = true;
+    if (effective_alpha_lut_ != alpha_lut_host_cache_) {
+      alpha_lut_host_cache_ = effective_alpha_lut_;
       upload_alpha_lut(alpha_lut_host_cache_);
-    } else {
+    }
+  } else {
+    using_external_alpha_lut_ = false;
+    const bool blocking_lut = blocking_alpha_lut_rebuild_.get();
+    if (lut_key != alpha_lut_key_) {
+      const auto warn_slow_pfa_lut = [&]() {
+        if (pfa_lut_slow_warned_ ||
+            !uses_slow_pfa_lut_calibration(lut_key.variant, lut_key.fold)) {
+          return;
+        }
+        HOLOSCAN_LOG_WARN(
+            "CFARDetectorOp: deriving the alpha LUT from pfa for {} is the "
+            "slow calibration path (Monte Carlo LUT build); for low-latency "
+            "live updates supply a precomputed alpha_lut",
+            to_string(lut_key.variant));
+        pfa_lut_slow_warned_ = true;
+      };
+      if (blocking_lut) {
+        warn_slow_pfa_lut();
+        alpha_lut_host_cache_ = detail::get_cached_alpha_lut(lut_key);
+        alpha_lut_key_ = lut_key;
+        pending_lut_key_ = {};
+        pending_lut_active_ = false;
+        stale_lut_warned_ = false;
+        upload_alpha_lut(alpha_lut_host_cache_);
+      } else {
+        detail::AlphaLutSnapshot snap = detail::poll_cached_alpha_lut(lut_key);
+        if (snap.ready) {
+          alpha_lut_host_cache_ = std::move(snap.lut);
+          alpha_lut_key_ = lut_key;
+          pending_lut_key_ = {};
+          pending_lut_active_ = false;
+          stale_lut_warned_ = false;
+          upload_alpha_lut(alpha_lut_host_cache_);
+        } else if (!alpha_lut_host_cache_.empty()) {
+          warn_slow_pfa_lut();
+          detail::ensure_alpha_lut_build(lut_key);
+          pending_lut_key_ = lut_key;
+          pending_lut_active_ = true;
+          if (!stale_lut_warned_) {
+            HOLOSCAN_LOG_WARN(
+                "CFARDetectorOp: alpha LUT for the new configuration is still "
+                "calibrating; using the previous LUT for this tick");
+            stale_lut_warned_ = true;
+          }
+        } else {
+          warn_slow_pfa_lut();
+          alpha_lut_host_cache_ = detail::get_cached_alpha_lut(lut_key);
+          alpha_lut_key_ = lut_key;
+          pending_lut_key_ = {};
+          pending_lut_active_ = false;
+          stale_lut_warned_ = false;
+          upload_alpha_lut(alpha_lut_host_cache_);
+        }
+      }
+    } else if (pending_lut_active_ && pending_lut_key_ == lut_key) {
       detail::AlphaLutSnapshot snap = detail::poll_cached_alpha_lut(lut_key);
       if (snap.ready) {
         alpha_lut_host_cache_ = std::move(snap.lut);
@@ -265,34 +451,7 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
         pending_lut_active_ = false;
         stale_lut_warned_ = false;
         upload_alpha_lut(alpha_lut_host_cache_);
-      } else if (!alpha_lut_host_cache_.empty()) {
-        detail::ensure_alpha_lut_build(lut_key);
-        pending_lut_key_ = lut_key;
-        pending_lut_active_ = true;
-        if (!stale_lut_warned_) {
-          HOLOSCAN_LOG_WARN(
-              "CFARDetectorOp: alpha LUT for the new configuration is still "
-              "calibrating; using the previous LUT for this tick");
-          stale_lut_warned_ = true;
-        }
-      } else {
-        alpha_lut_host_cache_ = detail::get_cached_alpha_lut(lut_key);
-        alpha_lut_key_ = lut_key;
-        pending_lut_key_ = {};
-        pending_lut_active_ = false;
-        stale_lut_warned_ = false;
-        upload_alpha_lut(alpha_lut_host_cache_);
       }
-    }
-  } else if (pending_lut_active_ && pending_lut_key_ == lut_key) {
-    detail::AlphaLutSnapshot snap = detail::poll_cached_alpha_lut(lut_key);
-    if (snap.ready) {
-      alpha_lut_host_cache_ = std::move(snap.lut);
-      alpha_lut_key_ = lut_key;
-      pending_lut_key_ = {};
-      pending_lut_active_ = false;
-      stale_lut_warned_ = false;
-      upload_alpha_lut(alpha_lut_host_cache_);
     }
   }
 
@@ -324,50 +483,21 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
 
   const int64_t plane = num_doppler * num_range;
   const int64_t out_elems = plan.out_batch * plane;
-  std::vector<uint8_t> host_mask(static_cast<size_t>(out_elems));
-  if (cudaMemcpyAsync(host_mask.data(), mask->data(),
-                      static_cast<size_t>(out_elems) * sizeof(uint8_t),
-                      cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
-    throw std::runtime_error("CFARDetectorOp: mask D2H copy failed");
-  }
-  cudaStreamSynchronize(stream);
-
   const int64_t idx_cols = 2 + plan.n_preserved;
-  std::vector<int64_t> idx_rows;
-  idx_rows.reserve(64);
-  std::vector<int64_t> preserved_coords;
-  const bool capped = effective_max_detections_ > 0;
-  int64_t num_detections = 0;
-  bool dropped = false;
-  for (int64_t b_out = 0; b_out < plan.out_batch; ++b_out) {
-    detail::decompose_row_major(b_out, plan.preserved_dims, preserved_coords);
-    for (int64_t d = 0; d < num_doppler; ++d) {
-      for (int64_t r = 0; r < num_range; ++r) {
-        const size_t mask_idx =
-            static_cast<size_t>(b_out * plane + d * num_range + r);
-        if (host_mask[mask_idx] == 0) {
-          continue;
-        }
-        if (capped && num_detections >= effective_max_detections_) {
-          dropped = true;
-          break;
-        }
-        for (int64_t coord : preserved_coords) {
-          idx_rows.push_back(coord);
-        }
-        idx_rows.push_back(d);
-        idx_rows.push_back(r);
-        ++num_detections;
-      }
-      if (dropped) {
-        break;
-      }
-    }
-    if (dropped) {
-      break;
-    }
+
+  if (!detection_idx_compact_) {
+    detection_idx_compact_ =
+        std::make_shared<detail::DetectionIdxCompactState>();
   }
-  if (dropped) {
+  const int64_t total_detections = detail::count_mask_detections(
+      static_cast<const bool*>(mask->data()), out_elems,
+      detection_idx_compact_.get(), stream);
+
+  const bool capped = effective_max_detections_ > 0;
+  const int64_t num_detections =
+      capped ? std::min(total_detections, effective_max_detections_)
+             : total_detections;
+  if (capped && total_detections > effective_max_detections_) {
     HOLOSCAN_LOG_WARN(
         "CFARDetectorOp: detections exceeded max_detections ({}); surplus "
         "dropped",
@@ -376,12 +506,11 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
 
   auto detection_idx =
       make_device_tensor({num_detections, idx_cols}, kInt64Dtype);
-  if (num_detections > 0 &&
-      cudaMemcpy(detection_idx->data(), idx_rows.data(),
-                 idx_rows.size() * sizeof(int64_t),
-                 cudaMemcpyHostToDevice) != cudaSuccess) {
-    throw std::runtime_error("CFARDetectorOp: detection_idx H2D copy failed");
-  }
+  detail::compact_detection_idx(
+      static_cast<const bool*>(mask->data()), out_elems, num_doppler,
+      num_range, plan.preserved_dims, num_detections,
+      static_cast<int64_t*>(detection_idx->data()),
+      detection_idx_compact_.get(), stream);
 
   if (stream != cudaStreamDefault) {
     op_output.set_cuda_stream(stream, "detection_mask");

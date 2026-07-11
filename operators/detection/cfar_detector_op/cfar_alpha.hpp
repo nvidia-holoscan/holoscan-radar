@@ -72,17 +72,33 @@ int64_t go_lut_side_index(int64_t neg_count, int64_t pos_count);
 int64_t go_lut_index(int64_t range_neg, int64_t range_pos, int64_t doppler_neg,
                      int64_t doppler_pos);
 
+// Maximum GO/SO LUT index on a map. Closed-form for maps that fit the window
+// (interior side-count index); exhaustive only for sub-window maps.
 int64_t max_go_lut_index(int num_doppler, int num_range, int guard_d,
                          int guard_r, int train_d, int train_r);
 
-// False-alarm probability for symmetric GOGO-CFAR with `n_side` reference
-// cells on each range/doppler side and Gamma(`k`) integrated clutter.
+// Distinct GO/SO LUT indices that appear for at least one cell on the map
+// (exhaustive scan; used to validate sparse external alpha_lut tables).
+std::vector<int64_t> reachable_go_lut_indices(int num_doppler, int num_range,
+                                              int guard_d, int guard_r,
+                                              int train_d, int train_r);
+
+// False-alarm probability for symmetric GOGO-CFAR with `n_side` i.i.d.
+// reference cells on each of the four half-sides (range±, Doppler±) and
+// Gamma(`k`) integrated clutter.
 double go_cfar_pfa_from_alpha(double alpha, int64_t n_side, int64_t k);
 
-// Invert go_cfar_pfa_from_alpha (host Monte Carlo + bisection). Uses the
-// interior 2-D window geometry so the simulator matches cfar_go_kernel.
+// Invert go_cfar_pfa_from_alpha (Monte Carlo + bisection). The `guard_*` /
+// `train_*` arguments are retained for call-site compatibility; the noise
+// model is parameterized by `n_side` alone (four half-sides of that length).
 double go_cfar_alpha(double pfa, int64_t n_side, int64_t k, int guard_d,
                      int guard_r, int train_d, int train_r);
+
+// Invert Pfa at a specific map cell by Monte Carlo matching cfar_go_kernel's
+// clipped window at (d, r). Used when building per-map alpha LUTs.
+double go_cfar_alpha_at_cell(double pfa, int64_t k, int d, int r,
+                             int num_doppler, int num_range, int guard_d,
+                             int guard_r, int train_d, int train_r);
 
 std::vector<double> build_go_alpha_lut(double pfa, int64_t fold,
                                        int num_doppler, int num_range,
@@ -95,6 +111,10 @@ double so_cfar_pfa_from_alpha(double alpha, int64_t n_side, int64_t k);
 
 double so_cfar_alpha(double pfa, int64_t n_side, int64_t k, int guard_d,
                      int guard_r, int train_d, int train_r);
+
+double so_cfar_alpha_at_cell(double pfa, int64_t k, int d, int r,
+                             int num_doppler, int num_range, int guard_d,
+                             int guard_r, int train_d, int train_r);
 
 std::vector<double> build_so_alpha_lut(double pfa, int64_t fold,
                                        int num_doppler, int num_range,

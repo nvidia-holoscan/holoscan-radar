@@ -64,4 +64,5 @@ Roughly in dependency order — claim by adding a row above:
 Contract, SDK, and signal-processing questions that need a team decision are
 tracked with the operator that surfaced them (for example,
 [`CFARDetectorOp open items`](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md)).
-New operators should follow [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md).
+New operators should follow [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md)
+and [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md).

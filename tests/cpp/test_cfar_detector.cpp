@@ -560,6 +560,30 @@ TEST(CFARDetectorOpTest, DetectsTwoTargets) {
   EXPECT_TRUE(idx_contains(out.idx, 12, 24));
 }
 
+// Device-side compaction must emit detections in batch-major raster order
+// (ascending doppler, then range) — the same order as the former host walk.
+TEST(CFARDetectorOpTest, DetectionIdxRasterOrder) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  const auto map = power_map(1.0, {{4, 8}, {12, 24}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
+                                        real_dtype<double>());
+
+  const auto out = std::apply(
+      [&](auto&&... a) {
+        return run_cfar<double>(input, std::forward<decltype(a)>(a)...);
+      },
+      ca_args(1e-3));
+
+  ASSERT_EQ(num_detections(out.idx), 2);
+  ASSERT_EQ(out.idx.shape.size(), 2u);
+  ASSERT_EQ(out.idx.shape[1], 2);
+  const auto* rows = out.idx.as<int64_t>();
+  EXPECT_EQ(rows[0], 4);
+  EXPECT_EQ(rows[1], 8);
+  EXPECT_EQ(rows[2], 12);
+  EXPECT_EQ(rows[3], 24);
+}
+
 // --- [live] sticky threshold_scale override ------------------------------
 
 TEST(CFARDetectorOpTest, LiveThresholdScaleOverrideMidStreamAndSticky) {
@@ -636,6 +660,7 @@ TEST(CFARDetectorOpTest, LiveMaxDetectionsOverrideMidStreamAndSticky) {
 }
 
 TEST(CFARDetectorOpTest, GuardCellsOverrideAffectsScore) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
   auto map = power_map(1.0, {}, 1.0);
@@ -658,6 +683,7 @@ TEST(CFARDetectorOpTest, GuardCellsOverrideAffectsScore) {
 }
 
 TEST(CFARDetectorOpTest, TrainingCellsOverrideAffectsScore) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
   auto map = power_map(1.0, {}, 1.0);

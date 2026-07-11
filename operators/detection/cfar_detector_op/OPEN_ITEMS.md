@@ -309,33 +309,56 @@ implementation choice, and it is hard to reconcile with the current "cheap
 scalar recompute" wording for `[live]` `pfa`, `guard_cells`,
 `training_cells`, `os_rank`, and `nci_axes`.
 
-**Possible contract/API direction: explicit alpha input.** Real-world OS-CFAR
-implementations often receive `alpha` from upstream configuration, offline
-calibration, or a precomputed table instead of deriving it from `pfa` at
-runtime. To support that pattern, consider a contract change such as:
+**Team direction (Dylan, 2026-07-10).** Keep `pfa` as a supported calibration
+path for correctness and convenience. When GO/SO/OS (or OS with `K > 1`) derive
+the alpha LUT from `pfa` at runtime, **warn once** that this is the slow
+calibration path. Add an optional **fast path** to the contract so production
+pipelines can bypass online MC.
 
-- Add an optional static or `[live]` `alpha` scalar that bypasses Pfa-derived
-  calibration and uses the same multiplier for all training counts.
-- Add an optional static or `[live]` `alpha_lut` vector for callers who want
-  border-correct per-`N` or per-side-count thresholds.
-- Define precedence explicitly, e.g. `alpha_lut` > `alpha` > `pfa`-derived
-  calibration, and specify validation against the configured variant and
-  maximum LUT index.
+**Recommended fast path: `alpha_lut` [live].** Precomputed threshold
+multipliers indexed by training-cell count (CA/OS: `alpha_lut[n]`; GO/SO:
+`alpha_lut[n_side]`; slot 0 unused). Matches deployed radar practice (offline
+design / ROM tables) and preserves border-correct per-`N` thresholds. A scalar
+`alpha` alone is a poor fit for 2-D CFAR because edge cells use reduced `N`;
+defer scalar `alpha` unless a homogeneous-map shortcut is explicitly needed.
 
-This would be a real contract change (new parameter/port), so it should be
-made in `OPERATOR_API.md` and called out in the PR. It would not change the
-existing data-plane tensor ports or the detection score formula.
+**Proposed contract addition** — now drafted in
+[`OPERATOR_API.md`](../../../docs/planning/OPERATOR_API.md) under the CFAR
+parameters section as a block headed
+**“PROPOSED — needs team review (not locked)”**. That block is **not**
+accepted lockdown text until the team explicitly adopts it. Summary of the
+proposal:
+
+- `alpha_lut` **[live]** — float vector, optional. When set, used directly as
+  the threshold multiplier table; `pfa` is ignored for alpha calibration.
+  Length must cover the maximum LUT index for the configured variant,
+  footprint, and map size (`len > max_n` where `max_n` is variant-specific).
+  Cheap: host→device upload only, no MC.
+- Precedence: `alpha_lut` (if provided) → else `pfa`-derived calibration.
+- Narrow `pfa` wording: for CA (and OS `K = 1`) calibration is closed-form and
+  cheap; for GO/SO and OS `K > 1`, `pfa` triggers Monte Carlo LUT calibration
+  (seconds on large footprints unless `blocking_alpha_lut_rebuild=false` serves
+  a stale LUT while the new table builds).
+
+**Implementation follow-up.**
+
+- Warn-once in `CFARDetectorOp` when a cache-miss LUT build uses Pfa-derived
+  calibration on the slow path (GO, SO, OS with `K > 1`).
+- Land `alpha_lut` parameter + `[live]` port per the contract addition above.
 
 **Questions for the team.**
 
-- Should the contract keep promising `pfa` as the primary calibration API for
-  GO/SO/OS, or should explicit `alpha` / `alpha_lut` be added as the practical
-  real-time path?
-- If `pfa` remains primary, should GO/SO/OS use analytic/numerical formulas or
-  precomputed tables instead of full MC where possible?
-- Should `[live]` wording be narrowed to say costly calibration may be async
-  and serve a stale LUT until the new key is ready?
+- Confirm `alpha_lut`-only fast path (no scalar `alpha` in v1)?
+- Should offline tooling document how to generate `alpha_lut` from `pfa` (batch
+  MC / design-time bisection) without doing it in the realtime graph?
+- Adopt the proposed `OPERATOR_API.md` block as locked text (and drop the
+  PROPOSED banner), or revise / reject?
 
-**Status:** open — current GO/SO/OS MC calibration works functionally but does
-not match the contract's "cheap recompute" implication. Decide whether to
-change the implementation strategy, change the contract, or both.
+**Status:**
+- **Implementation:** landed — `alpha_lut` parameter and `[live]` override
+  port; warn-once for slow `pfa` path; ignored `pfa` while `alpha_lut` is
+  active; `alpha_lut` cleared → `pfa` active transitions. Offline
+  LUT-generation tooling remains a follow-up.
+- **Contract:** **PROPOSED — needs team review.** Text is in
+  `OPERATOR_API.md` behind a clear “not locked” banner; do not treat it as
+  adopted until review.

@@ -20,6 +20,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -67,6 +68,49 @@ void parallel_fill_lut(std::vector<double>& lut, int64_t max_n,
   std::vector<std::thread> pool;
   pool.reserve(static_cast<size_t>(workers - 1));
   for (int64_t w = 0; w < workers - 1; ++w) {
+    pool.emplace_back(run);
+  }
+  run();
+  for (std::thread& t : pool) {
+    t.join();
+  }
+}
+
+// Fill lut[n] only for n in indices (sorted unique, all in [1, lut.size())).
+template <typename Calibrate>
+void parallel_fill_lut_indices(std::vector<double>& lut,
+                               const std::vector<int64_t>& indices,
+                               Calibrate&& calibrate) {
+  if (indices.empty()) {
+    return;
+  }
+  const size_t count = indices.size();
+  unsigned hw = std::thread::hardware_concurrency();
+  if (hw == 0) {
+    hw = 1;
+  }
+  const size_t workers =
+      std::min<size_t>(static_cast<size_t>(hw), count);
+  if (workers <= 1) {
+    for (int64_t n : indices) {
+      lut[static_cast<size_t>(n)] = calibrate(n);
+    }
+    return;
+  }
+  std::atomic<size_t> next{0};
+  const auto run = [&]() {
+    for (;;) {
+      const size_t i = next.fetch_add(1);
+      if (i >= count) {
+        break;
+      }
+      const int64_t n = indices[i];
+      lut[static_cast<size_t>(n)] = calibrate(n);
+    }
+  };
+  std::vector<std::thread> pool;
+  pool.reserve(workers - 1);
+  for (size_t w = 0; w < workers - 1; ++w) {
     pool.emplace_back(run);
   }
   run();
@@ -200,6 +244,27 @@ int64_t max_training_cell_count(int num_doppler, int num_range, int guard_d,
   return max_cnt;
 }
 
+std::vector<int64_t> reachable_training_cell_counts(int num_doppler,
+                                                    int num_range, int guard_d,
+                                                    int guard_r, int train_d,
+                                                    int train_r) {
+  std::unordered_set<int64_t> seen;
+  seen.reserve(64);
+  for (int64_t d = 0; d < num_doppler; ++d) {
+    for (int64_t r = 0; r < num_range; ++r) {
+      const int64_t n = training_cell_count(
+          static_cast<int>(d), static_cast<int>(r), num_doppler, num_range,
+          guard_d, guard_r, train_d, train_r);
+      if (n > 0) {
+        seen.insert(n);
+      }
+    }
+  }
+  std::vector<int64_t> indices(seen.begin(), seen.end());
+  std::sort(indices.begin(), indices.end());
+  return indices;
+}
+
 double ca_cfar_pfa_from_alpha(double alpha, int64_t n, int64_t k) {
   if (n <= 0 || k <= 0) {
     return 0.0;
@@ -318,8 +383,69 @@ int64_t go_lut_index(int64_t range_neg, int64_t range_pos, int64_t doppler_neg,
   return std::max(nr, nd);
 }
 
+namespace {
+
+struct GoLutReachability {
+  int64_t max_index{0};
+  std::vector<int64_t> reachable_indices;
+  // First cell on the map that produces each LUT index (for cell-faithful MC).
+  std::unordered_map<int64_t, std::pair<int, int>> representative_cell;
+};
+
+GoLutReachability go_lut_reachability(int num_doppler, int num_range,
+                                      int guard_d, int guard_r, int train_d,
+                                      int train_r) {
+  std::unordered_set<int64_t> seen;
+  seen.reserve(64);
+  GoLutReachability out;
+  for (int64_t d = 0; d < num_doppler; ++d) {
+    for (int64_t r = 0; r < num_range; ++r) {
+      int64_t rn = 0;
+      int64_t rp = 0;
+      int64_t dn = 0;
+      int64_t dp = 0;
+      go_training_side_counts(static_cast<int>(d), static_cast<int>(r),
+                              num_doppler, num_range, guard_d, guard_r, train_d,
+                              train_r, &rn, &rp, &dn, &dp);
+      const int64_t idx = go_lut_index(rn, rp, dn, dp);
+      out.max_index = std::max(out.max_index, idx);
+      if (idx > 0 && seen.insert(idx).second) {
+        out.representative_cell.emplace(
+            idx, std::make_pair(static_cast<int>(d), static_cast<int>(r)));
+      }
+    }
+  }
+  out.reachable_indices.assign(seen.begin(), seen.end());
+  std::sort(out.reachable_indices.begin(), out.reachable_indices.end());
+  return out;
+}
+
+}  // namespace
+
 int64_t max_go_lut_index(int num_doppler, int num_range, int guard_d,
                          int guard_r, int train_d, int train_r) {
+  // Same interior-vs-border argument as max_training_cell_count: clipping at a
+  // border never increases a GO/SO LUT index relative to a fully in-bounds
+  // cell, so the maximum is the interior index whenever the map fits the
+  // window. Sub-window maps fall back to a scan (D*R is tiny there).
+  const int half_d = guard_d + train_d;
+  const int half_r = guard_r + train_r;
+  const int64_t win_d = static_cast<int64_t>(2 * half_d + 1);
+  const int64_t win_r = static_cast<int64_t>(2 * half_r + 1);
+  if (num_doppler >= win_d && num_range >= win_r) {
+    // Interior side counts (axis-separable; matches go_training_side_counts
+    // for a fully in-bounds CUT):
+    //   range_neg = train_r * (2*half_d+1) + 2*guard_r*train_d
+    //   doppler_neg = train_d * (2*half_r+1) + 2*guard_d*train_r
+    // and range_pos == range_neg, doppler_pos == doppler_neg by symmetry.
+    const int64_t range_side =
+        static_cast<int64_t>(train_r) * win_d +
+        2 * static_cast<int64_t>(guard_r) * train_d;
+    const int64_t doppler_side =
+        static_cast<int64_t>(train_d) * win_r +
+        2 * static_cast<int64_t>(guard_d) * train_r;
+    return go_lut_index(range_side, range_side, doppler_side, doppler_side);
+  }
   int64_t max_idx = 0;
   for (int64_t d = 0; d < num_doppler; ++d) {
     for (int64_t r = 0; r < num_range; ++r) {
@@ -328,12 +454,20 @@ int64_t max_go_lut_index(int num_doppler, int num_range, int guard_d,
       int64_t dn = 0;
       int64_t dp = 0;
       go_training_side_counts(static_cast<int>(d), static_cast<int>(r),
-                            num_doppler, num_range, guard_d, guard_r, train_d,
-                            train_r, &rn, &rp, &dn, &dp);
+                              num_doppler, num_range, guard_d, guard_r, train_d,
+                              train_r, &rn, &rp, &dn, &dp);
       max_idx = std::max(max_idx, go_lut_index(rn, rp, dn, dp));
     }
   }
   return max_idx;
+}
+
+std::vector<int64_t> reachable_go_lut_indices(int num_doppler, int num_range,
+                                              int guard_d, int guard_r,
+                                              int train_d, int train_r) {
+  return go_lut_reachability(num_doppler, num_range, guard_d, guard_r, train_d,
+                             train_r)
+      .reachable_indices;
 }
 
 namespace {
@@ -424,9 +558,30 @@ double goso_side_statistic_host(double neg_sum, int64_t neg_cnt, double pos_sum,
 }
 
 template <bool kGreatestOf>
-double simulate_goso_noise_interior(int guard_d, int guard_r, int train_d,
-                                    int train_r, int64_t k,
-                                    std::mt19937_64& rng) {
+double simulate_goso_noise_nsides(int64_t n_side, int64_t k,
+                                  std::mt19937_64& rng) {
+  auto side_mean = [&]() {
+    double sum = 0.0;
+    for (int64_t i = 0; i < n_side; ++i) {
+      sum += sample_gamma_k(k, rng);
+    }
+    return sum / static_cast<double>(n_side);
+  };
+  const double range_stat = goso_side_statistic_host<kGreatestOf>(
+      side_mean(), 1, side_mean(), 1);
+  const double doppler_stat = goso_side_statistic_host<kGreatestOf>(
+      side_mean(), 1, side_mean(), 1);
+  if (kGreatestOf) {
+    return std::max(range_stat, doppler_stat);
+  }
+  return std::min(range_stat, doppler_stat);
+}
+
+template <bool kGreatestOf>
+double simulate_goso_noise_at_cell(int d, int r, int num_doppler, int num_range,
+                                   int guard_d, int guard_r, int train_d,
+                                   int train_r, int64_t k,
+                                   std::mt19937_64& rng) {
   const int half_d = guard_d + train_d;
   const int half_r = guard_r + train_r;
   double range_neg_sum = 0.0;
@@ -438,8 +593,16 @@ double simulate_goso_noise_interior(int guard_d, int guard_r, int train_d,
   int64_t doppler_neg_cnt = 0;
   int64_t doppler_pos_cnt = 0;
   for (int dd = -half_d; dd <= half_d; ++dd) {
+    const int64_t nd = static_cast<int64_t>(d) + dd;
+    if (nd < 0 || nd >= num_doppler) {
+      continue;
+    }
     const bool guard_row = (dd >= -guard_d && dd <= guard_d);
     for (int rr = -half_r; rr <= half_r; ++rr) {
+      const int64_t nr = static_cast<int64_t>(r) + rr;
+      if (nr < 0 || nr >= num_range) {
+        continue;
+      }
       if (guard_row && rr >= -guard_r && rr <= guard_r) {
         continue;
       }
@@ -470,24 +633,8 @@ double simulate_goso_noise_interior(int guard_d, int guard_r, int train_d,
   return std::min(range_stat, doppler_stat);
 }
 
-double simulate_gogo_noise_interior(int guard_d, int guard_r, int train_d,
-                                    int train_r, int64_t k,
-                                    std::mt19937_64& rng) {
-  return simulate_goso_noise_interior<true>(guard_d, guard_r, train_d, train_r,
-                                            k, rng);
-}
-
-double simulate_soso_noise_interior(int guard_d, int guard_r, int train_d,
-                                    int train_r, int64_t k,
-                                    std::mt19937_64& rng) {
-  return simulate_goso_noise_interior<false>(guard_d, guard_r, train_d, train_r,
-                                             k, rng);
-}
-
 double goso_cfar_pfa_from_alpha_impl(double alpha, int64_t n_side, int64_t k,
-                                     int mc_trials, int guard_d, int guard_r,
-                                     int train_d, int train_r,
-                                     bool greatest_of) {
+                                     int mc_trials, bool greatest_of) {
   if (n_side <= 0 || k <= 0) {
     return 0.0;
   }
@@ -499,8 +646,8 @@ double goso_cfar_pfa_from_alpha_impl(double alpha, int64_t n_side, int64_t k,
   // (and between GPU vs CPU-only machines) but both stay within MC tolerance.
   if (gpu_mc_calibration_available()) {
     const double gpu_pfa = goso_mc_pfa_from_alpha_gpu(
-        alpha, n_side, k, mc_trials, guard_d, guard_r, train_d, train_r,
-        greatest_of);
+        alpha, n_side, k, mc_trials, /*guard_d=*/0, /*guard_r=*/0,
+        /*train_d=*/0, /*train_r=*/0, greatest_of);
     if (gpu_pfa >= 0.0) {
       return gpu_pfa;
     }
@@ -511,11 +658,48 @@ double goso_cfar_pfa_from_alpha_impl(double alpha, int64_t n_side, int64_t k,
   int64_t false_alarms = 0;
   for (int trial = 0; trial < mc_trials; ++trial) {
     const double noise =
+        greatest_of ? simulate_goso_noise_nsides<true>(n_side, k, rng)
+                    : simulate_goso_noise_nsides<false>(n_side, k, rng);
+    const double cut = sample_gamma_k(k, rng);
+    if (cut > alpha * noise) {
+      ++false_alarms;
+    }
+  }
+  return static_cast<double>(false_alarms) / static_cast<double>(mc_trials);
+}
+
+double goso_cfar_pfa_at_cell_impl(double alpha, int64_t k, int mc_trials, int d,
+                                  int r, int num_doppler, int num_range,
+                                  int guard_d, int guard_r, int train_d,
+                                  int train_r, bool greatest_of) {
+  if (k <= 0) {
+    return 0.0;
+  }
+  if (alpha <= 0.0) {
+    return 1.0;
+  }
+  if (gpu_mc_calibration_available()) {
+    const double gpu_pfa = goso_mc_pfa_at_cell_gpu(
+        alpha, k, mc_trials, d, r, num_doppler, num_range, guard_d, guard_r,
+        train_d, train_r, greatest_of);
+    if (gpu_pfa >= 0.0) {
+      return gpu_pfa;
+    }
+  }
+  std::mt19937_64 rng(0x474F43464152ULL ^ (static_cast<uint64_t>(d) << 32) ^
+                      static_cast<uint64_t>(r) ^
+                      (static_cast<uint64_t>(k) << 16) ^
+                      (greatest_of ? 0ULL : 0x534F43464152ULL));
+  int64_t false_alarms = 0;
+  for (int trial = 0; trial < mc_trials; ++trial) {
+    const double noise =
         greatest_of
-            ? simulate_goso_noise_interior<true>(guard_d, guard_r, train_d,
-                                                   train_r, k, rng)
-            : simulate_goso_noise_interior<false>(guard_d, guard_r, train_d,
-                                                    train_r, k, rng);
+            ? simulate_goso_noise_at_cell<true>(d, r, num_doppler, num_range,
+                                                guard_d, guard_r, train_d,
+                                                train_r, k, rng)
+            : simulate_goso_noise_at_cell<false>(d, r, num_doppler, num_range,
+                                                 guard_d, guard_r, train_d,
+                                                 train_r, k, rng);
     const double cut = sample_gamma_k(k, rng);
     if (cut > alpha * noise) {
       ++false_alarms;
@@ -525,17 +709,17 @@ double goso_cfar_pfa_from_alpha_impl(double alpha, int64_t n_side, int64_t k,
 }
 
 double go_cfar_pfa_from_alpha_impl(double alpha, int64_t n_side, int64_t k,
-                                   int mc_trials, int guard_d, int guard_r,
-                                   int train_d, int train_r) {
-  return goso_cfar_pfa_from_alpha_impl(alpha, n_side, k, mc_trials, guard_d,
-                                       guard_r, train_d, train_r, true);
+                                   int mc_trials, int /*guard_d*/,
+                                   int /*guard_r*/, int /*train_d*/,
+                                   int /*train_r*/) {
+  return goso_cfar_pfa_from_alpha_impl(alpha, n_side, k, mc_trials, true);
 }
 
 double so_cfar_pfa_from_alpha_impl(double alpha, int64_t n_side, int64_t k,
-                                   int mc_trials, int guard_d, int guard_r,
-                                   int train_d, int train_r) {
-  return goso_cfar_pfa_from_alpha_impl(alpha, n_side, k, mc_trials, guard_d,
-                                       guard_r, train_d, train_r, false);
+                                   int mc_trials, int /*guard_d*/,
+                                   int /*guard_r*/, int /*train_d*/,
+                                   int /*train_r*/) {
+  return goso_cfar_pfa_from_alpha_impl(alpha, n_side, k, mc_trials, false);
 }
 
 double os_select_rank_host(std::vector<double>& samples, int64_t os_rank) {
@@ -657,15 +841,73 @@ double go_cfar_alpha(double pfa, int64_t n_side, int64_t k, int guard_d,
   return 0.5 * (lo + hi);
 }
 
+double go_cfar_alpha_at_cell(double pfa, int64_t k, int d, int r,
+                             int num_doppler, int num_range, int guard_d,
+                             int guard_r, int train_d, int train_r) {
+  if (k <= 0) {
+    throw std::invalid_argument("go_cfar_alpha_at_cell: k must be positive");
+  }
+  if (pfa <= 0.0 || pfa >= 1.0) {
+    throw std::invalid_argument(
+        "go_cfar_alpha_at_cell: pfa must be in (0, 1) exclusive");
+  }
+  int64_t rn = 0;
+  int64_t rp = 0;
+  int64_t dn = 0;
+  int64_t dp = 0;
+  go_training_side_counts(d, r, num_doppler, num_range, guard_d, guard_r,
+                          train_d, train_r, &rn, &rp, &dn, &dp);
+  const int64_t n_side = go_lut_index(rn, rp, dn, dp);
+  if (n_side <= 0) {
+    throw std::invalid_argument(
+        "go_cfar_alpha_at_cell: cell has no training sides");
+  }
+  double lo = ca_cfar_alpha(pfa, n_side, k);
+  double hi = lo * 8.0;
+  const int mc_trials = mc_trials_for_calibration(k);
+  auto pfa_at = [&](double alpha) {
+    return goso_cfar_pfa_at_cell_impl(alpha, k, mc_trials, d, r, num_doppler,
+                                      num_range, guard_d, guard_r, train_d,
+                                      train_r, true);
+  };
+  while (pfa_at(hi) > pfa) {
+    hi *= 2.0;
+    if (hi > 1e12) {
+      throw std::runtime_error("go_cfar_alpha_at_cell: failed to bracket alpha");
+    }
+  }
+  while (lo > 0.0 && pfa_at(lo) <= pfa) {
+    lo *= 0.5;
+  }
+  for (int iter = 0; iter < kMcBisectionMaxIter; ++iter) {
+    const double mid = 0.5 * (lo + hi);
+    if (pfa_at(mid) > pfa) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+    if (hi - lo <= kEps * std::max(1.0, hi)) {
+      break;
+    }
+  }
+  return 0.5 * (lo + hi);
+}
+
 std::vector<double> build_go_alpha_lut(double pfa, int64_t fold,
                                        int num_doppler, int num_range,
                                        int guard_d, int guard_r, int train_d,
                                        int train_r) {
-  const int64_t max_n = max_go_lut_index(num_doppler, num_range, guard_d,
-                                         guard_r, train_d, train_r);
-  std::vector<double> lut(static_cast<size_t>(max_n + 1), 0.0);
-  parallel_fill_lut(lut, max_n, [&](int64_t n) {
-    return go_cfar_alpha(pfa, n, fold, guard_d, guard_r, train_d, train_r);
+  const GoLutReachability reach = go_lut_reachability(
+      num_doppler, num_range, guard_d, guard_r, train_d, train_r);
+  std::vector<double> lut(static_cast<size_t>(reach.max_index + 1), 0.0);
+  parallel_fill_lut_indices(lut, reach.reachable_indices, [&](int64_t n) {
+    const auto it = reach.representative_cell.find(n);
+    if (it == reach.representative_cell.end()) {
+      return go_cfar_alpha(pfa, n, fold, guard_d, guard_r, train_d, train_r);
+    }
+    return go_cfar_alpha_at_cell(pfa, fold, it->second.first, it->second.second,
+                                 num_doppler, num_range, guard_d, guard_r,
+                                 train_d, train_r);
   });
   return lut;
 }
@@ -720,15 +962,73 @@ double so_cfar_alpha(double pfa, int64_t n_side, int64_t k, int guard_d,
   return 0.5 * (lo + hi);
 }
 
+double so_cfar_alpha_at_cell(double pfa, int64_t k, int d, int r,
+                             int num_doppler, int num_range, int guard_d,
+                             int guard_r, int train_d, int train_r) {
+  if (k <= 0) {
+    throw std::invalid_argument("so_cfar_alpha_at_cell: k must be positive");
+  }
+  if (pfa <= 0.0 || pfa >= 1.0) {
+    throw std::invalid_argument(
+        "so_cfar_alpha_at_cell: pfa must be in (0, 1) exclusive");
+  }
+  int64_t rn = 0;
+  int64_t rp = 0;
+  int64_t dn = 0;
+  int64_t dp = 0;
+  go_training_side_counts(d, r, num_doppler, num_range, guard_d, guard_r,
+                          train_d, train_r, &rn, &rp, &dn, &dp);
+  const int64_t n_side = go_lut_index(rn, rp, dn, dp);
+  if (n_side <= 0) {
+    throw std::invalid_argument(
+        "so_cfar_alpha_at_cell: cell has no training sides");
+  }
+  double lo = ca_cfar_alpha(pfa, n_side, k);
+  double hi = lo * 8.0;
+  const int mc_trials = mc_trials_for_calibration(k);
+  auto pfa_at = [&](double alpha) {
+    return goso_cfar_pfa_at_cell_impl(alpha, k, mc_trials, d, r, num_doppler,
+                                      num_range, guard_d, guard_r, train_d,
+                                      train_r, false);
+  };
+  while (pfa_at(hi) > pfa) {
+    hi *= 2.0;
+    if (hi > 1e12) {
+      throw std::runtime_error("so_cfar_alpha_at_cell: failed to bracket alpha");
+    }
+  }
+  while (lo > 0.0 && pfa_at(lo) <= pfa) {
+    lo *= 0.5;
+  }
+  for (int iter = 0; iter < kMcBisectionMaxIter; ++iter) {
+    const double mid = 0.5 * (lo + hi);
+    if (pfa_at(mid) > pfa) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+    if (hi - lo <= kEps * std::max(1.0, hi)) {
+      break;
+    }
+  }
+  return 0.5 * (lo + hi);
+}
+
 std::vector<double> build_so_alpha_lut(double pfa, int64_t fold,
                                        int num_doppler, int num_range,
                                        int guard_d, int guard_r, int train_d,
                                        int train_r) {
-  const int64_t max_n = max_go_lut_index(num_doppler, num_range, guard_d,
-                                         guard_r, train_d, train_r);
-  std::vector<double> lut(static_cast<size_t>(max_n + 1), 0.0);
-  parallel_fill_lut(lut, max_n, [&](int64_t n) {
-    return so_cfar_alpha(pfa, n, fold, guard_d, guard_r, train_d, train_r);
+  const GoLutReachability reach = go_lut_reachability(
+      num_doppler, num_range, guard_d, guard_r, train_d, train_r);
+  std::vector<double> lut(static_cast<size_t>(reach.max_index + 1), 0.0);
+  parallel_fill_lut_indices(lut, reach.reachable_indices, [&](int64_t n) {
+    const auto it = reach.representative_cell.find(n);
+    if (it == reach.representative_cell.end()) {
+      return so_cfar_alpha(pfa, n, fold, guard_d, guard_r, train_d, train_r);
+    }
+    return so_cfar_alpha_at_cell(pfa, fold, it->second.first, it->second.second,
+                                 num_doppler, num_range, guard_d, guard_r,
+                                 train_d, train_r);
   });
   return lut;
 }
@@ -794,7 +1094,19 @@ std::vector<double> build_os_alpha_lut(double pfa, int64_t fold,
   const int64_t max_n = max_training_cell_count(
       num_doppler, num_range, guard_d, guard_r, train_d, train_r);
   std::vector<double> lut(static_cast<size_t>(max_n + 1), 0.0);
-  parallel_fill_lut(lut, max_n, [&](int64_t n) {
+  if (fold == 1) {
+    // Closed-form inversion per N; no map scan — calibrate the full 1..max_n
+    // range cheaply (reachable-only would add a costly D×R scan for no gain).
+    for (int64_t n = 1; n <= max_n; ++n) {
+      const int64_t effective_rank = effective_os_rank(n, os_rank);
+      lut[static_cast<size_t>(n)] =
+          os_cfar_alpha_closed_k1(pfa, n, effective_rank);
+    }
+    return lut;
+  }
+  const std::vector<int64_t> indices = reachable_training_cell_counts(
+      num_doppler, num_range, guard_d, guard_r, train_d, train_r);
+  parallel_fill_lut_indices(lut, indices, [&](int64_t n) {
     const int64_t effective_rank = effective_os_rank(n, os_rank);
     return os_cfar_alpha(pfa, n, effective_rank, fold, guard_d, guard_r,
                          train_d, train_r);
@@ -871,20 +1183,6 @@ std::vector<double> build_alpha_lut(const CfarAlphaLutKey& key) {
   }
 }
 
-void drain_in_flight_lut_builds() {
-  std::vector<AlphaLutFuture> futures;
-  {
-    std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
-    futures.reserve(g_alpha_lut_in_flight.size());
-    for (const auto& entry : g_alpha_lut_in_flight) {
-      futures.push_back(entry.second);
-    }
-  }
-  for (AlphaLutFuture& future : futures) {
-    future.wait();
-  }
-}
-
 void commit_cache_entry(const CfarAlphaLutKey& key, AlphaLut built) {
   std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
   if (g_alpha_lut_cache.emplace(key, built).second) {
@@ -917,29 +1215,47 @@ void run_lut_build(const CfarAlphaLutKey& key,
   }
 }
 
+// Look up `key` under the cache lock. If a build for this key just finished
+// between the cache miss and the in-flight miss, a second cache check closes
+// that race without waiting on unrelated keys.
+bool try_get_cached_lut_locked(const CfarAlphaLutKey& key, AlphaLut* out) {
+  const auto it = g_alpha_lut_cache.find(key);
+  if (it == g_alpha_lut_cache.end()) {
+    return false;
+  }
+  *out = it->second;
+  return true;
+}
+
 AlphaLutSnapshot poll_cached_alpha_lut(const CfarAlphaLutKey& key) {
-  drain_in_flight_lut_builds();
+  AlphaLut cached;
   AlphaLutFuture future;
+  bool have_future = false;
   {
     std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
-    const auto it = g_alpha_lut_cache.find(key);
-    if (it != g_alpha_lut_cache.end()) {
-      return {true, it->second};
+    if (try_get_cached_lut_locked(key, &cached)) {
+      return {true, std::move(cached)};
     }
     const auto in_flight = g_alpha_lut_in_flight.find(key);
-    if (in_flight == g_alpha_lut_in_flight.end()) {
-      return {};
+    if (in_flight != g_alpha_lut_in_flight.end()) {
+      future = in_flight->second;
+      have_future = true;
+    } else if (try_get_cached_lut_locked(key, &cached)) {
+      // Builder committed and erased in-flight between the two lookups.
+      return {true, std::move(cached)};
     }
-    future = in_flight->second;
   }
-  if (future.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-    return {true, future.get()};
+  if (!have_future) {
+    return {};
   }
-  return {};
+  // Non-blocking: only this key's future; never wait on other builds.
+  if (future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+    return {};
+  }
+  return {true, future.get()};
 }
 
 void ensure_alpha_lut_build(const CfarAlphaLutKey& key) {
-  drain_in_flight_lut_builds();
   std::shared_ptr<std::promise<AlphaLut>> promise;
   {
     std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
@@ -956,18 +1272,19 @@ void ensure_alpha_lut_build(const CfarAlphaLutKey& key) {
 }
 
 std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key) {
-  drain_in_flight_lut_builds();
   std::shared_ptr<std::promise<AlphaLut>> promise;
   AlphaLutFuture future;
+  AlphaLut cached;
   {
     std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
-    const auto it = g_alpha_lut_cache.find(key);
-    if (it != g_alpha_lut_cache.end()) {
-      return it->second;
+    if (try_get_cached_lut_locked(key, &cached)) {
+      return cached;
     }
     const auto in_flight = g_alpha_lut_in_flight.find(key);
     if (in_flight != g_alpha_lut_in_flight.end()) {
       future = in_flight->second;
+    } else if (try_get_cached_lut_locked(key, &cached)) {
+      return cached;
     } else {
       promise = std::make_shared<std::promise<AlphaLut>>();
       future = promise->get_future().share();
@@ -976,6 +1293,7 @@ std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key) {
   }
 
   if (!promise) {
+    // Wait only on this key's in-flight build.
     return future.get();
   }
 

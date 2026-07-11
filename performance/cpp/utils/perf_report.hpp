@@ -73,6 +73,21 @@ struct ResultRow {
 
   std::string status{"ok"};  // "ok" | "skipped" | "timeout"
   std::string notes;
+  std::string calibration_pair;   // paired slow/fast id, empty if none
+  std::string calibration_mode;   // "pfa" | "alpha_lut"
+};
+
+struct AlphaCalibrationRow {
+  std::string pair_id;
+  std::string variant;
+  std::string size_id;
+  int64_t k{1};
+  double slow_cold_ms{std::numeric_limits<double>::quiet_NaN()};
+  double fast_cold_ms{std::numeric_limits<double>::quiet_NaN()};
+  double slow_ovr_ms{std::numeric_limits<double>::quiet_NaN()};
+  double fast_ovr_ms{std::numeric_limits<double>::quiet_NaN()};
+  double cold_speedup{std::numeric_limits<double>::quiet_NaN()};
+  double ovr_speedup{std::numeric_limits<double>::quiet_NaN()};
 };
 
 struct PerfReport {
@@ -81,6 +96,7 @@ struct PerfReport {
   RunSettings run_settings;
   std::vector<SizeDef> sizes;
   std::vector<ResultRow> results;
+  std::vector<AlphaCalibrationRow> alpha_calibration;
 };
 
 namespace detail {
@@ -250,8 +266,37 @@ inline void write_json(std::ostream& os, const PerfReport& r) {
     os << "      \"estimated_effective_gbps\": "
        << detail::num_or_null(row.estimated_effective_gbps) << ",\n";
     os << "      \"status\": \"" << row.status << "\",\n";
-    os << "      \"notes\": \"" << detail::json_escape(row.notes) << "\"\n";
+    os << "      \"notes\": \"" << detail::json_escape(row.notes) << "\",\n";
+    os << "      \"calibration_pair\": \""
+       << detail::json_escape(row.calibration_pair) << "\",\n";
+    os << "      \"calibration_mode\": \""
+       << detail::json_escape(row.calibration_mode) << "\"\n";
     os << "    }" << (i + 1 < r.results.size() ? "," : "") << "\n";
+  }
+  os << "  ],\n";
+  os << "  \"alpha_calibration\": [\n";
+  for (size_t i = 0; i < r.alpha_calibration.size(); ++i) {
+    const auto& row = r.alpha_calibration[i];
+    os << "    {\n";
+    os << "      \"pair_id\": \"" << detail::json_escape(row.pair_id)
+       << "\",\n";
+    os << "      \"variant\": \"" << detail::json_escape(row.variant)
+       << "\",\n";
+    os << "      \"size_id\": \"" << row.size_id << "\",\n";
+    os << "      \"k\": " << row.k << ",\n";
+    os << "      \"slow_cold_ms\": " << detail::num_or_null(row.slow_cold_ms)
+       << ",\n";
+    os << "      \"fast_cold_ms\": " << detail::num_or_null(row.fast_cold_ms)
+       << ",\n";
+    os << "      \"slow_ovr_ms\": " << detail::num_or_null(row.slow_ovr_ms)
+       << ",\n";
+    os << "      \"fast_ovr_ms\": " << detail::num_or_null(row.fast_ovr_ms)
+       << ",\n";
+    os << "      \"cold_speedup\": " << detail::num_or_null(row.cold_speedup)
+       << ",\n";
+    os << "      \"ovr_speedup\": " << detail::num_or_null(row.ovr_speedup)
+       << "\n";
+    os << "    }" << (i + 1 < r.alpha_calibration.size() ? "," : "") << "\n";
   }
   os << "  ]\n";
   os << "}\n";
@@ -334,6 +379,25 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
       os << " [" << row.status << "]";
     }
     os << "\n";
+  }
+
+  if (!r.alpha_calibration.empty()) {
+    os << "--- alpha calibration ---\n";
+    os << detail::col("pair", 14) << detail::col("variant", 6)
+       << detail::col("size", 6) << detail::col("k", 4)
+       << detail::col("slow_cold", 10) << detail::col("fast_cold", 10)
+       << detail::col("cold_x", 8) << detail::col("slow_ovr", 10)
+       << detail::col("fast_ovr", 10) << detail::col("ovr_x", 8) << "\n";
+    for (const auto& row : r.alpha_calibration) {
+      os << detail::col(row.pair_id, 14) << detail::col(row.variant, 6)
+         << detail::col(row.size_id, 6) << detail::col(std::to_string(row.k), 4)
+         << detail::col(detail::fixed(row.slow_cold_ms, 3), 10)
+         << detail::col(detail::fixed(row.fast_cold_ms, 3), 10)
+         << detail::col(detail::fixed(row.cold_speedup, 2), 8)
+         << detail::col(detail::fixed(row.slow_ovr_ms, 3), 10)
+         << detail::col(detail::fixed(row.fast_ovr_ms, 3), 10)
+         << detail::col(detail::fixed(row.ovr_speedup, 2), 8) << "\n";
+    }
   }
   os << "\n";
 }
