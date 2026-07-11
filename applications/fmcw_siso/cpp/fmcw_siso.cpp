@@ -6,6 +6,7 @@
 //
 //   AdcSourceOp -> FMCWRangeProcessorOp -> ClutterFilterOp
 //               -> FMCWDopplerProcessorOp -> PeakReportOp
+//                                         [-> RdMapToImageOp -> HolovizOp]
 //
 // The source synthesizes one static clutter return and one moving target
 // with the shared analytic point-target simulator
@@ -26,16 +27,20 @@
 #include <cuda_runtime_api.h>
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include <holoscan/holoscan.hpp>
+#include <holoscan/operators/holoviz/holoviz.hpp>
+#include <holoviz/holoviz.hpp>
 
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
@@ -58,6 +63,7 @@ struct AppConfig {
   radar::sim::SimScene scene;  // waveform, cube dims, targets, noise
   int64_t num_frames{1};
   double frame_period{0.1};  // s, between emitted cubes (and target motion)
+  bool visualize{false};     // live RD-map window (requires a GUI host)
 };
 
 // Load and validate the app-owned YAML sections.
@@ -114,7 +120,31 @@ AppConfig load_config(const std::filesystem::path& path) {
   if (noise && !noise.IsNull()) {
     cfg.scene.snr_db = noise.as<double>();
   }
+
+  const YAML::Node visualize = root["visualize"];
+  if (visualize && !visualize.IsNull()) {
+    cfg.visualize = visualize.as<bool>();
+  }
   return cfg;
+}
+
+// Holoviz needs a reachable display server and a Vulkan surface; checking
+// DISPLAY/WAYLAND_DISPLAY is not enough (the variable may be set with no
+// server behind it). Probe by briefly initializing the Holoviz module — the
+// same GLFW + Vulkan stack HolovizOp uses — on the main thread, where the
+// failure is a catchable exception. Inside the running graph the same
+// failure is thrown from a GXF worker thread and terminates the process,
+// which is exactly what this probe exists to avoid.
+bool gui_available() {
+  namespace viz = holoscan::viz;
+  try {
+    viz::Init(64, 64, "fmcw_siso display probe");
+    viz::Shutdown();
+    return true;
+  } catch (const std::exception& e) {
+    HOLOSCAN_LOG_DEBUG("fmcw_siso: display probe failed: {}", e.what());
+    return false;
+  }
 }
 
 // Advance each target's base position by one frame period. The simulator
@@ -264,6 +294,77 @@ class PeakReportOp : public holoscan::Operator {
   }
 };
 
+// Converts the complex RD map into a normalized log-magnitude float32
+// image for Holoviz (single-channel float32 renders as a gray image layer).
+// Per frame: |RD| in dB, mapped onto [0, 1] over a fixed dynamic range
+// below that frame's peak.
+class RdMapToImageOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(RdMapToImageOp)
+  RdMapToImageOp() = default;
+
+  static constexpr float kDynamicRangeDb = 60.0F;
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::TensorMap>("rd_maps");
+    spec.output<holoscan::TensorMap>("rd_image");
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               holoscan::OutputContext& op_output,
+               [[maybe_unused]] holoscan::ExecutionContext& context)
+      override {
+    auto maybe = op_input.receive<holoscan::TensorMap>("rd_maps");
+    if (!maybe || maybe->size() != 1) {
+      throw std::runtime_error(
+          "RdMapToImageOp: expected one tensor on port rd_maps");
+    }
+    std::shared_ptr<holoscan::Tensor> rd_map = maybe->begin()->second;
+    const auto shape = rd_map->shape();
+    if (shape.size() != 2) {
+      throw std::runtime_error(
+          "RdMapToImageOp: SISO app expects a rank-2 rd_map, got rank " +
+          std::to_string(shape.size()));
+    }
+    const int64_t num_doppler = shape[0];
+    const int64_t num_range = shape[1];
+
+    std::vector<std::complex<float>> rd(
+        static_cast<size_t>(num_doppler * num_range));
+    cudaDeviceSynchronize();
+    if (cudaMemcpy(rd.data(), rd_map->data(),
+                   static_cast<size_t>(rd_map->nbytes()),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+      throw std::runtime_error("RdMapToImageOp: D2H copy failed");
+    }
+
+    // Log magnitude, normalized to [0, 1] over the top kDynamicRangeDb of
+    // this frame (per-frame normalization keeps the moving target visible
+    // as the scene's absolute levels drift).
+    std::vector<float> image(rd.size());
+    float peak_db = -std::numeric_limits<float>::infinity();
+    for (size_t i = 0; i < rd.size(); ++i) {
+      image[i] = 20.0F * std::log10(std::abs(rd[i]) + 1e-20F);
+      peak_db = std::max(peak_db, image[i]);
+    }
+    for (float& v : image) {
+      v = std::clamp((v - (peak_db - kDynamicRangeDb)) / kDynamicRangeDb,
+                     0.0F, 1.0F);
+    }
+
+    auto tensor = radar::make_device_tensor({num_doppler, num_range},
+                                            radar::real_dtype<float>());
+    if (cudaMemcpy(tensor->data(), image.data(),
+                   sizeof(float) * image.size(),
+                   cudaMemcpyHostToDevice) != cudaSuccess) {
+      throw std::runtime_error("RdMapToImageOp: H2D upload failed");
+    }
+    holoscan::TensorMap out;
+    out.insert({"rd_map", tensor});
+    op_output.emit(out, "rd_image");
+  }
+};
+
 class FmcwSisoApp : public holoscan::Application {
  public:
   AppConfig cfg;  // set before run()
@@ -296,6 +397,23 @@ class FmcwSisoApp : public holoscan::Application {
     add_flow(doppler, sink, {{"rd_maps", "rd_maps"}});
     add_flow(range, sink, {{"range_bins", "range_bins"}});
     add_flow(doppler, sink, {{"velocity_bins", "velocity_bins"}});
+
+    // Optional live RD-map window (cfg.visualize; main() has already
+    // downgraded it with a warning on GUI-less hosts). The converter's
+    // single-channel float32 tensor renders as a gray image layer.
+    if (cfg.visualize) {
+      auto to_image = make_operator<RdMapToImageOp>("rd_map_to_image");
+      std::vector<holoscan::ops::HolovizOp::InputSpec> input_specs;
+      input_specs.emplace_back("rd_map",
+                               holoscan::ops::HolovizOp::InputType::COLOR);
+      auto visualizer = make_operator<holoscan::ops::HolovizOp>(
+          "holoviz", holoscan::Arg("tensors", input_specs),
+          holoscan::Arg("window_title",
+                        std::string("FMCW SISO - Range-Doppler")),
+          holoscan::Arg("width", 800U), holoscan::Arg("height", 600U));
+      add_flow(doppler, to_image, {{"rd_maps", "rd_maps"}});
+      add_flow(to_image, visualizer, {{"rd_image", "receivers"}});
+    }
   }
 };
 
@@ -314,6 +432,13 @@ int main(int argc, char** argv) {
     const std::filesystem::path config_path =
         resolve_config_path(argc, argv);
     app->cfg = load_config(config_path);
+    if (app->cfg.visualize && !gui_available()) {
+      HOLOSCAN_LOG_WARN(
+          "fmcw_siso: visualize is enabled but no usable display was "
+          "detected (Holoviz could not initialize a window); running "
+          "without the RD-map window");
+      app->cfg.visualize = false;
+    }
     // Same file feeds the native config path: compose() pulls the
     // per-operator blocks via from_config().
     app->config(config_path.string());

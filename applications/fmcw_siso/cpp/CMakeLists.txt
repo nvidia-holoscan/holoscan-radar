@@ -13,6 +13,8 @@ target_link_libraries(fmcw_siso PRIVATE
     holoscan::fmcw_doppler_processor_op
     holoscan::radar_common
     holoscan::core
+    holoscan::ops::holoviz
+    holoscan::viz
     yaml-cpp::yaml-cpp
     CUDA::cudart)
 

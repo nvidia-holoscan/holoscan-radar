@@ -65,3 +65,8 @@ targets:
 # Additive complex white Gaussian noise, SNR in dB relative to a unit-amplitude
 # target. Set to null (or omit) for a noise-free cube.
 noise_snr_db: null
+
+# Live RD-map visualization (Holoviz gray image of the normalized
+# log-magnitude map). Requires a GUI-capable host; when no display is
+# detected the app warns and runs as if this were false.
+visualize: false

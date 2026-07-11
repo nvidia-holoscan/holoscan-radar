@@ -29,5 +29,15 @@ different path as the first CLI argument to override it. Each target is
 placed along the +x look direction at a given `range` (m) and radial
 `velocity` (m/s, positive = receding) with a linear `amplitude`.
 
+## Visualization
+
+Set `visualize: true` in the config to open a live Holoviz window showing
+the range-Doppler map (normalized log magnitude, gray scale; range along x,
+Doppler along y) alongside the textual peak reports. This requires a
+GUI-capable host — a reachable display server and Vulkan. At startup the app
+probes Holoviz directly; if no usable display is found (headless host, or a
+stale `DISPLAY` with no server behind it), it logs a warning and runs
+exactly as if `visualize` were `false`.
+
 A Python variant will be added when the Python bindings land (deferred to
 a later phase).
