@@ -40,6 +40,8 @@ throws / sits in `OPEN_ITEMS.md`.
 - [ ] **Tests** — `tests/cpp/test_<operator>.cpp` covers `TESTING.md` unit
       checks; all output ports wired in harness tests; float/double + error
       paths where applicable.
+- [ ] **Performance** — `performance/cpp/perf_<operator>.cpp` harness + CMake
+      smoke test when a hot path exists (see **Performance** below).
 - [ ] **`ctest -L unit`** and **`pre-commit run --all-files`** pass.
 - [ ] **Performance** — `performance/cpp/perf_<operator>` consumer when the
       operator is GPU/hot-path; **includes inline `[live]` override
@@ -158,20 +160,38 @@ throws / sits in `OPEN_ITEMS.md`.
 
 ## Performance
 
-- [ ] **`performance/cpp/perf_<operator>.cpp`** consumer when the operator is
-      GPU / hot-path (measurement tool — no timing pass/fail asserts).
+Measurement harness (not pass/fail thresholds). See
+[`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md) → Performance
+characterization. Skip only if the operator has no GPU/hot path yet; say so
+in `OPEN_ITEMS.md`.
+
+- [ ] **`performance/cpp/perf_<operator>.cpp`** — second (or Nth) consumer of
+      `radar_perf_utils`; scenario matrix covering representative sizes and
+      the operator's meaningful axes (variants, batch, sparse counts, …).
+- [ ] Wire **every output port** (terminal sink on the primary sparse/dense
+      result; null sinks on the rest) so the operator ticks.
+- [ ] **Process warmup** — discarded graph session before the measured matrix
+      (`performance/cpp/utils/perf_process_warmup.hpp`) so scenario #1
+      `cold_ms` is not inflated by CUDA/Holoscan first-touch.
+- [ ] Report **setup**, **cold** (first timed frame), and **steady**
+      (median / p90) separately; annotate platform / provenance.
 - [ ] **`[live]` overrides in the harness** — if the operator has any live
       params, every default/`--full` compute run (or an explicit override
       scenario matrix) must inline a mid-session override and report
       `override_ms` / `override_delta_ms`. Cover each functionally distinct
-      live param at least once. See `OPERATOR_DEVELOPMENT.md` → Performance
+      live param at least once, and exercise any `[live]` fast paths (named
+      slow/fast pairs if applicable); do not claim a fast path while timing
+      the slow one. See `OPERATOR_DEVELOPMENT.md` → Performance
       characterization → Required coverage.
-- [ ] **Process warmup** — discarded graph session before the measured matrix
-      (`performance/cpp/utils/perf_process_warmup.hpp`) so scenario #1
-      `cold_ms` is not inflated by CUDA/Holoscan first-touch.
-- [ ] Wire the executable + optional `*_smoke` ctest in
+- [ ] **CMake** — `add_executable(perf_<operator> …)` linked to the operator
+      lib; optional `add_test(… LABELS performance)` `*_smoke`
+      (`--sizes xs --warmup 1 --frames 2 --quiet --output …`) in
       **`performance/cpp/CMakeLists.txt`**.
-- [ ] Smoke passes: `ctest --test-dir build -R perf_<operator>_smoke`.
+- [ ] Smoke passes: `ctest --test-dir build -R perf_<operator>_smoke` (or via
+      `ctest -L performance`); skim cold vs steady for per-tick alloc / D2H /
+      host-scan red flags before calling the operator performance-ready.
+
+Exemplar: `performance/cpp/perf_cfar_detector.cpp`.
 
 ---
 

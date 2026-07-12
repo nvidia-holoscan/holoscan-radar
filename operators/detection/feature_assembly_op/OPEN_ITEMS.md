@@ -25,6 +25,6 @@ API has a second consumer.
 buffers. `points` is `(num_detections, num_features)` — typically small
 (sparse detections).
 
-**Status:** deferred until a perf baseline shows per-tick alloc of `points`
-matters on real detection counts. Prefer measuring before adding lifetime
-state.
+**Status:** deferred — measure with `performance/cpp/perf_feature_assembly`
+across the detection-count ladder before adding lifetime state. Prefer
+evidence over guessing.

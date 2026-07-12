@@ -367,3 +367,40 @@ proposal:
 - **Contract:** **PROPOSED — needs team review.** Text is in
   `OPERATOR_API.md` behind a clear “not locked” banner; do not treat it as
   adopted until review.
+
+---
+
+## 8. Exact-sized `detection_idx` forces a scalar device→host sync
+
+**Context.** `OPERATOR_API.md` requires `detection_idx` (and companion score /
+noise tensors) to be **exactly** sized to the number of detections that tick —
+shape `{num_detections, ndim}` with no trailing unused capacity. Holoscan
+tensor emit goes through the host allocator API (`make_device_tensor` /
+equivalent), so the host must know `num_detections` before allocating.
+`CFARDetectorOp` therefore:
+
+1. Compacts detections on the GPU (device-side atomic count + write indices).
+2. Copies a **scalar** detection count device→host and synchronizes.
+3. Allocates exact-sized device tensors and copies the compacted rows into them.
+
+Detection payload stays on the GPU; the sync is only for the count. This is
+the only per-tick device→host dependency in the CFAR hot path today.
+
+**Impact.** Latency floors at least one D2H + sync per tick even when the
+detection count is small or zero. Downstream consumers that only need a
+fixed-capacity buffer + count (or can tolerate oversize + valid-length) pay for
+exact sizing they may not use. `FeatureAssemblyOp` inherits the exact-size
+tensors and does not itself need a count sync.
+
+**Questions for the team.**
+
+- Keep exact sizing as locked (accept the scalar sync as the cost of the
+  contract)?
+- Add a contract alternative: fixed / max capacity `detection_idx` plus a
+  scalar `num_detections` port (or length metadata), so allocation can be
+  amortized and the hot path can stay fully device-side?
+- Allow oversized buffers with an explicit valid-length companion and treat
+  exact trim as optional / downstream?
+
+**Status:** open — current implementation matches the locked exact-size
+contract; alternatives require a contract change.
