@@ -94,6 +94,11 @@ __global__ void assemble_features_kernel(
   if (row >= num_points) {
     return;
   }
+  // Prior kernel (score plane offsets) may have already flagged an error;
+  // do not read uninitialized offsets or gather further.
+  if (*error_flag != 0) {
+    return;
+  }
 
   const int64_t* idx_row = detection_idx + row * idx_cols;
   const int64_t doppler = idx_row[n_preserved];
