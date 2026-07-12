@@ -122,6 +122,9 @@ std::vector<double> build_so_alpha_lut(double pfa, int64_t fold,
                                        int train_r);
 
 // OS-CFAR: os_rank is a 0-based index into ascending-sorted training powers.
+// For K>1, Monte Carlo draws exactly `n` i.i.d. Gamma(K) training cells
+// (matching the clipped window count); guard/train are retained on
+// os_cfar_alpha for call-site compatibility only.
 double os_cfar_pfa_from_alpha(double alpha, int64_t n, int64_t os_rank,
                               int64_t k);
 

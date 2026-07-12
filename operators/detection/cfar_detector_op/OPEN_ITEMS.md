@@ -270,8 +270,10 @@ per-cell:
 
 - CA / OS: `alpha_lut[n]`, where `n` is the number of in-bounds training cells
   around the CUT; slot 0 is unused.
-- GO / SO: `alpha_lut[n_side]`, where `n_side` is the side-count index used by
-  the GOGO/SOSO stencil.
+- GO / SO: `alpha_lut[i]`, where `i = go_lut_index(range_neg, range_pos,
+  doppler_neg, doppler_pos)` (per-axis `min` of alive sides, then `min` across
+  axes). Distinct border geometries may share one `i`; `pfa`-derived builds
+  store the max α across those geometries.
 
 The runtime stencil uses `alpha_lut[...]` only to avoid doing calibration in
 the fused detection kernel. The expensive part is building the table, not
@@ -317,10 +319,11 @@ pipelines can bypass online MC.
 
 **Recommended fast path: `alpha_lut` [live].** Precomputed threshold
 multipliers indexed by training-cell count (CA/OS: `alpha_lut[n]`; GO/SO:
-`alpha_lut[n_side]`; slot 0 unused). Matches deployed radar practice (offline
-design / ROM tables) and preserves border-correct per-`N` thresholds. A scalar
-`alpha` alone is a poor fit for 2-D CFAR because edge cells use reduced `N`;
-defer scalar `alpha` unless a homogeneous-map shortcut is explicitly needed.
+`alpha_lut[go_lut_index(...)]` as above; slot 0 unused). Matches deployed
+radar practice (offline design / ROM tables) and preserves border-correct
+per-index thresholds. A scalar `alpha` alone is a poor fit for 2-D CFAR
+because edge cells use reduced `N`; defer scalar `alpha` unless a
+homogeneous-map shortcut is explicitly needed.
 
 **Proposed contract addition** — now drafted in
 [`OPERATOR_API.md`](../../../docs/planning/OPERATOR_API.md) under the CFAR
@@ -342,9 +345,11 @@ proposal:
 
 **Implementation follow-up.**
 
-- Warn-once in `CFARDetectorOp` when a cache-miss LUT build uses Pfa-derived
-  calibration on the slow path (GO, SO, OS with `K > 1`).
-- Land `alpha_lut` parameter + `[live]` port per the contract addition above.
+- Offline LUT-generation tooling (batch MC / design-time bisection helpers
+  that emit `alpha_lut` tables from `pfa` without doing it in the realtime
+  graph).
+- Team review of the PROPOSED `OPERATOR_API.md` block (adopt as locked text,
+  revise, or reject).
 
 **Questions for the team.**
 

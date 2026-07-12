@@ -362,13 +362,23 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 > - `alpha_lut` **[live]** **[PROPOSED — new parameter]** — optional float
 >   vector. Precomputed threshold multiplier LUT. When non-empty, used
 >   directly and `pfa` is ignored for α calibration. Indexing matches the
->   runtime stencil: CA/OS use `alpha_lut[n]` where `n` is the in-bounds
->   training-cell count; GO/SO use `alpha_lut[n_side]` per the side-count LUT
->   key; slot 0 is unused. Length must exceed the maximum LUT index for the
+>   runtime stencil:
+>   - **CA / OS:** `alpha_lut[n]` where `n` is the in-bounds training-cell
+>     count at the cell under test.
+>   - **GO / SO:** `alpha_lut[i]` where `i = go_lut_index(range_neg,
+>     range_pos, doppler_neg, doppler_pos)` — the compact side-count key used
+>     by the GOGO/SOSO stencil (`cfar_alpha.hpp`). Per axis: if both half-sides
+>     are alive use `min(neg, pos)`, else the alive side’s count; then if both
+>     axes are alive use `min(range_side, doppler_side)`, else the alive axis.
+>     Distinct border geometries can share one `i`; a single α serves all of
+>     them (`pfa`-derived builds take the max α across aliased geometries so
+>     every cell at that index meets the target Pfa). Offline tables must use
+>     this same `go_lut_index` — not raw per-side length and not CA-style `N`.
+>   Slot 0 is unused. Length must exceed the maximum LUT index for the
 >   configured variant, footprint, and map size (`len > max_n`). CA/OS require
 >   every index in `1..max_n` to be finite and strictly positive (slot 0 and
 >   any past `max_n` may be zero). GO/SO allow zeros at unreachable indices
->   but require every reachable side-count index to be finite and strictly
+>   but require every reachable `go_lut_index` to be finite and strictly
 >   positive; negative or non-finite entries are always rejected. Cheap:
 >   validation and host→device upload only. Default: `[]` (unset →
 >   `pfa`-derived calibration). Precedence: `alpha_lut` if provided, else

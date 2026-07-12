@@ -23,7 +23,8 @@ double goso_mc_pfa_at_cell_gpu(double alpha, int64_t k, int mc_trials, int d,
                                int guard_d, int guard_r, int train_d,
                                int train_r, bool greatest_of);
 
-// Monte Carlo false-alarm rate for interior OS geometry on the GPU.
+// Monte Carlo false-alarm rate for OS-CFAR with exactly `n` i.i.d. training
+// cells (clipped-window count). guard/train args are unused (API compat).
 double os_mc_pfa_from_alpha_gpu(double alpha, int64_t n, int64_t os_rank,
                                 int64_t k, int mc_trials, int guard_d,
                                 int guard_r, int train_d, int train_r);

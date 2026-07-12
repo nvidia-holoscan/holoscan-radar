@@ -178,7 +178,7 @@ inline std::string sci(double v) {
 
 inline void write_json(std::ostream& os, const PerfReport& r) {
   os << "{\n";
-  os << "  \"schema_version\": 1,\n";
+  os << "  \"schema_version\": 2,\n";
   os << "  \"provenance\": {\n";
   os << "    \"git_commit\": \"" << detail::json_escape(r.provenance.git_commit)
      << "\",\n";

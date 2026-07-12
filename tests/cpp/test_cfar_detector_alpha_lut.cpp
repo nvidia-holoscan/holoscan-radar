@@ -102,7 +102,7 @@ CfarOutputs run_cfar_idx(std::shared_ptr<holoscan::Tensor> input,
       "noise_estimate", {noop});
 
   harness->run_test();
-  EXPECT_EQ(idx_cap.frames.size(), 1u);
+  ASSERT_EQ(idx_cap.frames.size(), 1u);
   return {std::move(idx_cap.frames.front())};
 }
 
@@ -379,18 +379,19 @@ TEST(CFARDetectorAlphaLutTest, LiveAlphaLutOverrideStickyAndClearing) {
   EXPECT_GE(num_detections(capture.frames[2]), 1);
 }
 
-struct LivePfaNonBlockingApp : public holoscan::Application {
+struct LivePfaRebuildApp : public holoscan::Application {
   std::vector<holoscan::TensorMap> frames;
   std::vector<double> pfa_overrides;
   TensorMapCapture* idx_capture = nullptr;
+  bool blocking_rebuild = false;
 
   void compose() override {
     auto op = make_operator<CFARDetectorOp<double>>(
         "op_under_test", holoscan::Arg("cfar_variant") = CfarVariant::kGO,
         holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
         holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-        holoscan::Arg("pfa") = 1e-3,
-        holoscan::Arg("blocking_alpha_lut_rebuild") = false);
+        holoscan::Arg("pfa") = pfa_overrides.empty() ? 1e-3 : pfa_overrides[0],
+        holoscan::Arg("blocking_alpha_lut_rebuild") = blocking_rebuild);
     wire_data_source(this, op, "rd_maps", frames);
     wire_leading_override<double>(this, op, "pfa", pfa_overrides);
     wire_capture_sink(this, op, "detection_idx", idx_capture);
@@ -399,8 +400,10 @@ struct LivePfaNonBlockingApp : public holoscan::Application {
 };
 
 // After a warm LUT exists, a non-blocking pfa change must serve the previous
-// LUT immediately (GO MC rebuild is multi-second; a sub-second tick proves
-// the stale path ran).
+// LUT immediately instead of waiting for a second GO MC rebuild. Compare
+// against an otherwise identical blocking run on a disjoint pfa pair: absolute
+// timing is vacuous on small maps (warm GO LUT is ~100 ms here, not
+// multi-second), but blocking does two cold builds while non-blocking does one.
 TEST(CFARDetectorAlphaLutTest, NonBlockingPfaOverrideServesStaleLut) {
   RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
@@ -408,27 +411,41 @@ TEST(CFARDetectorAlphaLutTest, NonBlockingPfaOverrideServesStaleLut) {
       to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>()),
       "rd_maps");
 
-  TensorMapCapture capture;
-  auto app = holoscan::make_application<LivePfaNonBlockingApp>();
-  app->frames = {frame, frame};
-  // Frame 0: establish warm LUT at pfa=1e-3 (blocks once: no prior LUT).
-  // Frame 1: override to a new pfa — must not wait for the GO MC rebuild.
-  app->pfa_overrides = {1e-3, 1e-6};
-  app->idx_capture = &capture;
+  auto run_pair = [&](bool blocking, double pfa_a, double pfa_b) {
+    TensorMapCapture capture;
+    auto app = holoscan::make_application<LivePfaRebuildApp>();
+    app->frames = {frame, frame};
+    app->pfa_overrides = {pfa_a, pfa_b};
+    app->blocking_rebuild = blocking;
+    app->idx_capture = &capture;
+    const auto t0 = std::chrono::steady_clock::now();
+    app->run();
+    const double elapsed_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0)
+            .count();
+    return std::make_pair(elapsed_ms, std::move(capture));
+  };
 
-  const auto t0 = std::chrono::steady_clock::now();
-  app->run();
-  const auto elapsed_ms =
-      std::chrono::duration<double, std::milli>(
-          std::chrono::steady_clock::now() - t0)
-          .count();
+  // Disjoint pfa pairs so neither run can inherit the other's LUT cache
+  // (including a background build started by the non-blocking path).
+  const auto [block_ms, block_cap] = run_pair(true, 2.7e-3, 4.1e-6);
+  ASSERT_EQ(block_cap.frames.size(), 2u);
+  EXPECT_GE(num_detections(block_cap.frames[0]), 1);
+  EXPECT_GE(num_detections(block_cap.frames[1]), 1);
 
-  ASSERT_EQ(capture.frames.size(), 2u);
-  EXPECT_GE(num_detections(capture.frames[0]), 1);
-  EXPECT_GE(num_detections(capture.frames[1]), 1);
-  // Warm GO LUT ~2–3 s on this footprint. A blocking second build would push
-  // the total near 2× that; the stale path keeps total near one warm build.
-  EXPECT_LT(elapsed_ms, 3500.0) << "elapsed_ms=" << elapsed_ms;
+  const auto [nonblock_ms, nonblock_cap] = run_pair(false, 3.3e-3, 5.2e-6);
+  ASSERT_EQ(nonblock_cap.frames.size(), 2u);
+  EXPECT_GE(num_detections(nonblock_cap.frames[0]), 1);
+  EXPECT_GE(num_detections(nonblock_cap.frames[1]), 1);
+
+  // Non-blocking total should stay well below blocking (one GO MC rebuild
+  // vs two). Require a clear gap so a regression to blocking on frame 1 fails.
+  EXPECT_LT(nonblock_ms, 0.75 * block_ms)
+      << "nonblock_ms=" << nonblock_ms << " block_ms=" << block_ms;
+  EXPECT_GT(block_ms - nonblock_ms, 20.0)
+      << "nonblock_ms=" << nonblock_ms << " block_ms=" << block_ms
+      << " (gap too small to distinguish stale vs blocking)";
 }
 
 int64_t brute_max_go_lut_index(int num_doppler, int num_range, int guard_d,

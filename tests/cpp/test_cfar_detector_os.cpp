@@ -976,6 +976,22 @@ TEST(CFARDetectorOpOsTest, OsAlphaInvertsMonteCarloPfa) {
   EXPECT_NEAR(recovered, kPfa, 0.02);
 }
 
+// Regression: OS K>1 MC must draw exactly `n` training samples. The old
+// interior-window simulator ignored n (only os_rank mattered), so
+// alpha(n=8, rank=5, K=2) ≈ alpha(n=40, rank=5, K=2).
+TEST(CFARDetectorOpOsTest, OsAlphaDependsOnTrainingCountForKGreaterThan1) {
+  constexpr double kPfa = 1e-2;
+  constexpr int64_t kRank = 5;
+  constexpr int64_t kFold = 2;
+  const double alpha_small = holoscan::radar::detail::os_cfar_alpha(
+      kPfa, 8, kRank, kFold, 1, 1, 2, 2);
+  const double alpha_large = holoscan::radar::detail::os_cfar_alpha(
+      kPfa, 40, kRank, kFold, 1, 1, 2, 2);
+  ASSERT_GT(alpha_large, 0.0);
+  EXPECT_GT(std::abs(alpha_small - alpha_large) / alpha_large, 0.05)
+      << "alpha_small=" << alpha_small << " alpha_large=" << alpha_large;
+}
+
 TEST(CFARDetectorOpOsTest, RejectsOsRankOutOfRange) {
   RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{8, 16}}, 100.0);

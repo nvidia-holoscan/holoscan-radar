@@ -156,26 +156,17 @@ __device__ double os_select_rank_dev(double* samples, int count,
   return samples[rank];
 }
 
-__device__ double simulate_os_noise_dev(int guard_d, int guard_r, int train_d,
-                                        int train_r, int64_t os_rank,
-                                        int64_t k, uint64_t* state) {
-  const int half_d = guard_d + train_d;
-  const int half_r = guard_r + train_r;
+__device__ double simulate_os_noise_n_dev(int64_t n, int64_t os_rank,
+                                          int64_t k, uint64_t* state) {
   double samples[kMaxOsTrainingCells];
-  int train_cnt = 0;
-  for (int dd = -half_d; dd <= half_d; ++dd) {
-    const bool guard_row = (dd >= -guard_d && dd <= guard_d);
-    for (int rr = -half_r; rr <= half_r; ++rr) {
-      if (guard_row && rr >= -guard_r && rr <= guard_r) {
-        continue;
-      }
-      if (train_cnt >= kMaxOsTrainingCells) {
-        continue;
-      }
-      samples[train_cnt++] = sample_gamma_k(k, state);
-    }
+  const int count =
+      n > static_cast<int64_t>(kMaxOsTrainingCells)
+          ? kMaxOsTrainingCells
+          : static_cast<int>(n);
+  for (int i = 0; i < count; ++i) {
+    samples[i] = sample_gamma_k(k, state);
   }
-  return os_select_rank_dev(samples, train_cnt, os_rank);
+  return os_select_rank_dev(samples, count, os_rank);
 }
 
 __global__ void goso_mc_nsides_kernel(double alpha, int64_t n_side, int64_t k,
@@ -222,9 +213,8 @@ __global__ void goso_mc_at_cell_kernel(double alpha, int64_t k, int d, int r,
   }
 }
 
-__global__ void os_mc_pfa_kernel(double alpha, int64_t os_rank, int64_t k,
-                                 int guard_d, int guard_r, int train_d,
-                                 int train_r, int mc_trials, uint64_t seed_base,
+__global__ void os_mc_pfa_kernel(double alpha, int64_t n, int64_t os_rank,
+                                 int64_t k, int mc_trials, uint64_t seed_base,
                                  int* out_fa) {
   const int trial = blockIdx.x * blockDim.x + threadIdx.x;
   if (trial >= mc_trials) {
@@ -232,8 +222,7 @@ __global__ void os_mc_pfa_kernel(double alpha, int64_t os_rank, int64_t k,
   }
   uint64_t state =
       seed_base ^ (static_cast<uint64_t>(trial) * 0xA24BAED4963EE407ULL);
-  const double noise = simulate_os_noise_dev(guard_d, guard_r, train_d, train_r,
-                                           os_rank, k, &state);
+  const double noise = simulate_os_noise_n_dev(n, os_rank, k, &state);
   const double cut = sample_gamma_k(k, &state);
   if (cut > alpha * noise) {
     atomicAdd(out_fa, 1);
@@ -333,10 +322,14 @@ double goso_mc_pfa_at_cell_gpu(double alpha, int64_t k, int mc_trials, int d,
 }
 
 double os_mc_pfa_from_alpha_gpu(double alpha, int64_t n, int64_t os_rank,
-                                int64_t k, int mc_trials, int guard_d,
-                                int guard_r, int train_d, int train_r) {
+                                int64_t k, int mc_trials, int /*guard_d*/,
+                                int /*guard_r*/, int /*train_d*/,
+                                int /*train_r*/) {
   if (n <= 0 || k <= 0 || alpha <= 0.0 || mc_trials <= 0) {
     return alpha <= 0.0 ? 1.0 : 0.0;
+  }
+  if (n > static_cast<int64_t>(kMaxOsTrainingCells)) {
+    return -1.0;
   }
   const int64_t effective_rank = os_rank < n ? os_rank : n - 1;
   std::lock_guard<std::mutex> lock(g_gpu_mc_mutex);
@@ -354,8 +347,7 @@ double os_mc_pfa_from_alpha_gpu(double alpha, int64_t n, int64_t os_rank,
       (static_cast<uint64_t>(effective_rank) << 16) ^
       (static_cast<uint64_t>(k) << 32);
   os_mc_pfa_kernel<<<dim3(grid_x), dim3(block)>>>(
-      alpha, effective_rank, k, guard_d, guard_r, train_d, train_r, mc_trials,
-      seed, counter);
+      alpha, n, effective_rank, k, mc_trials, seed, counter);
   if (cudaGetLastError() != cudaSuccess) {
     return -1.0;
   }

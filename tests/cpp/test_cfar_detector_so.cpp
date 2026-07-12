@@ -979,8 +979,8 @@ TEST(CFARDetectorOpSoTest, SoAlphaDependsOnSideCount) {
 
 // Regression: LUT slots must use cell-faithful MC. Corner (0,0) has two sides
 // of 10 cells (lut index 10); the four-side so_cfar_alpha(n=10) model is not
-// the same distribution, so lut[10] must track at_cell(0,0) and diverge from
-// so_cfar_alpha(10). (Unlike GO, SO corner vs interior alphas can be close.)
+// the same distribution. Compact indexing aliases multiple geometries onto
+// index 10; lut[10] is the max α across them (covers every aliased cell).
 TEST(CFARDetectorOpSoTest, SoLutUsesCellFaithfulAlpha) {
   constexpr double kPfa = 1e-2;
   const auto lut = holoscan::radar::detail::build_so_alpha_lut(
@@ -989,10 +989,14 @@ TEST(CFARDetectorOpSoTest, SoLutUsesCellFaithfulAlpha) {
   ASSERT_GT(lut[10], 0.0);
   const double at_corner = holoscan::radar::detail::so_cfar_alpha_at_cell(
       kPfa, 1, 0, 0, 32, 32, 1, 1, 2, 2);
+  const double at_edge = holoscan::radar::detail::so_cfar_alpha_at_cell(
+      kPfa, 1, 0, 16, 32, 32, 1, 1, 2, 2);
   const double four_side =
       holoscan::radar::detail::so_cfar_alpha(kPfa, 10, 1, 1, 1, 2, 2);
-  EXPECT_NEAR(lut[10], at_corner, 0.05 * at_corner)
-      << "lut=" << lut[10] << " at_cell=" << at_corner;
+  EXPECT_GE(lut[10], at_corner * 0.95)
+      << "lut=" << lut[10] << " at_corner=" << at_corner;
+  EXPECT_GE(lut[10], at_edge * 0.95)
+      << "lut=" << lut[10] << " at_edge=" << at_edge;
   EXPECT_GT(std::abs(lut[10] - four_side) / lut[10], 0.05)
       << "lut=" << lut[10] << " four_side_n10=" << four_side;
 }
