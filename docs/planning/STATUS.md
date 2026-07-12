@@ -26,22 +26,19 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | Fill out `AGENTS.md` + this status file | deustice | `deustice/planning` | in review |
 | Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness | deustice | `deustice/sigproc-ops` | in progress |
 | Detection operator (`operators/detection/` + `CFARDetectorOp`) | dpc | `dpc/detection` | **All four CFAR variants done** (see below) |
-| Detection bridge `DetectionReductionOp` | dpc | `dpc/detection-reduction` | **checklist-complete** — first/peak/medoid, live sticky overrides, unit tests, perf smoke |
+| Detection bridge `DetectionReductionOp` | dpc | `dpc/detection-reduction` | **checklist-complete** — first/peak/medoid + built-in scorers + `ScoreFn`/`custom` + live + tests + perf |
 
 ### Landed on `dpc/detection`
 
 - **`CFARDetectorOp` CA slice** — complex/real power paths, border-correct CA
   stencil, `[live]` overrides with sticky semantics, `nci_axes` non-coherent
   integration (Gamma(`K`) threshold via host incomplete-beta LUT), batch-widened
-  `detection_idx`, unit + Monte Carlo statistical tests. Checklist-complete for
-  the CA variant; open contract/SDK items in
-  [`CFARDetectorOp open items`](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md)
-  deferred to group discussion.
+  `detection_idx`, unit + Monte Carlo statistical tests. Team open items in
+  [`CFARDetectorOp open items`](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md).
 - **`CFARDetectorOp` GO slice** — 2-D GOGO greatest-of stencil (range GO ×
   Doppler GO), host Monte Carlo `alpha` LUT (CA-seeded bracket), full GO
   contract test matrix + `GoMonteCarloPfaK1` / `GoMonteCarloPfaNciK8`
-  statistical tests. Checklist-complete for the GO variant modulo shared open
-  items (§2, §4).
+  statistical tests.
 - **`CFARDetectorOp` SO slice** — 2-D SOSO smallest-of stencil (shared GOGO
   partition), host Monte Carlo `alpha` LUT, full SO contract test matrix +
   `SoMonteCarloPfaK1` / `SoMonteCarloPfaNciK8` statistical tests.

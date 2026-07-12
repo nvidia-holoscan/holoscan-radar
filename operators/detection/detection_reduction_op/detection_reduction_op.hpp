@@ -14,9 +14,6 @@
 
 namespace holoscan::radar {
 
-// Default ScoreFn placeholder; used only when score_method == custom.
-struct NoCustomScore {};
-
 // Reduces each cluster to one representative detection cell (cluster-then-
 // angle path). This header is the contract reference for ports, shapes,
 // dtypes, and parameters; module-wide conventions live in
@@ -34,9 +31,12 @@ struct NoCustomScore {};
 //                       detection_idx row per non-noise cluster; sized to the
 //                       cluster count and reallocated per tick.
 //
-// Precision T = float | double. Optional ScoreFn is a compile-time functor
-// used only when score_method == custom (default instantiation rejects
-// custom).
+// Precision T = float | double. Optional ScoreFn is a compile-time device
+// functor used when score_method=custom: callable as
+//   T operator()(const T* row, int64_t num_features) const
+// on device. Default ScoreFn = NoCustomScore rejects custom at runtime.
+// Instantiations with a non-default ScoreFn must be compiled in a CUDA TU
+// (explicit template class DetectionReductionOp<T, ScoreFn>).
 template <typename T, typename ScoreFn = NoCustomScore>
 class DetectionReductionOp : public holoscan::Operator {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
@@ -66,7 +66,6 @@ class DetectionReductionOp : public holoscan::Operator {
   std::shared_ptr<holoscan::Tensor> retained_idx_;
   std::shared_ptr<holoscan::Tensor> retained_points_;
   std::shared_ptr<holoscan::Tensor> retained_weights_;
-  ScoreFn score_fn_{};
 };
 
 }  // namespace holoscan::radar

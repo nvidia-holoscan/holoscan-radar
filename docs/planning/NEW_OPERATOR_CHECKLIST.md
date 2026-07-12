@@ -13,13 +13,24 @@ operators), see [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md).
 Use **Before you're done** as the final gate; the sections below are the
 detailed how-to if you need them.
 
+**Vertical slices are fine; they do not clear this checklist.** Implement and
+land intermediate slices (one policy, one CFAR variant, …) to make progress —
+that is expected. A slice is **never** enough to mark the checklist done or
+call the operator ready. Clear this checklist only when the **full**
+`OPERATOR_API.md` contract for the operator is implemented (every port,
+parameter, and documented mode), not when a useful subset works and the rest
+throws / sits in `OPEN_ITEMS.md`.
+
 ---
 
 ## Before you're done
 
-- [ ] Matches **`OPERATOR_API.md`** — ports, shapes, dtypes, parameters,
-      `[live]` tags; contract changes documented in the same PR.
-- [ ] **`STATUS.md`** updated (claim in flight → done or refreshed).
+- [ ] Matches **`OPERATOR_API.md` in full** — every port, shape, dtype,
+      parameter, `[live]` tag, and documented mode; no staged contract
+      features left unimplemented. Contract changes documented in the same PR.
+- [ ] **`STATUS.md`** updated (claim in flight → done or refreshed). Do not
+      label the operator checklist-complete / ready while contract surface
+      remains unfinished.
 - [ ] **Build wired** — group + operator `CMakeLists.txt`, `metadata.json`,
       group `README.md`, SPDX on all new files.
 - [ ] **`setup()` complete** — single-entry `TensorMap` ports, `initialize()`
@@ -34,8 +45,11 @@ detailed how-to if you need them.
       operator is GPU/hot-path; **includes inline `[live]` override
       measurement** whenever the contract has live params (see
       `OPERATOR_DEVELOPMENT.md` → Performance characterization).
-- [ ] **Open items** — unresolved contract/SDK/math questions recorded in
-      `operators/<group>/<operator>/OPEN_ITEMS.md`.
+- [ ] **Open items** — unresolved *team* questions (contract ambiguity, SDK
+      gaps, math decisions) recorded in
+      `operators/<group>/<operator>/OPEN_ITEMS.md`. Missing contract
+      features are not open items — they are unfinished work that blocks
+      checklist completion.
 
 ---
 

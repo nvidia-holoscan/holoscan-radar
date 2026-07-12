@@ -44,9 +44,11 @@ slow?"
    bounded descriptors, template precision, rank-agnostic batching, `[live]`
    convention, convention-free kernels. Do not invent new shared message types
    or descriptor ports without a contract change.
-5. **Checklist is mandatory.** Before claiming an operator (or a variant
-   slice) done, walk
-   [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md).
+5. **Checklist means the whole operator.** Vertical slices are fine for
+   progress, but
+   [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md) clears only when
+   the full `OPERATOR_API.md` contract is implemented. Do not call an
+   operator ready / checklist-complete while contract features remain staged.
 
 ---
 
@@ -56,16 +58,18 @@ slow?"
 STATUS.md claim
     → read OPERATOR_API + WORKFLOWS + any OPEN_ITEMS
     → scaffold (group CMake, metadata, three-file split, README row)
-    → implement a vertical slice that is checklist-complete
+    → implement vertical slices toward the full contract (PRs OK mid-way)
     → unit (+ statistical) tests; wire every output port
     → performance baseline when the hot path exists
-    → record open items; update STATUS; PR
+    → clear NEW_OPERATOR_CHECKLIST only when the full contract is done
+    → record team open items; update STATUS; PR
 ```
 
 ### Slice by contract surface, not by "get it compiling"
 
-Land a *faithful subset* that is useful and testable (one variant, one path),
-with deferred modes throwing clearly. Prefer:
+Land *faithful intermediate slices* that are useful and testable (one variant,
+one path), with not-yet-landed modes throwing clearly. Slices are how you
+make progress — they are **not** checklist completion. Prefer:
 
 - CA before GO/SO/OS (or whichever mode has a closed-form reference)
 - Complex + real dtype paths early (they share most of the shell)

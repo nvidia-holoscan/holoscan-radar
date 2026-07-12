@@ -26,7 +26,8 @@ Typical placement:
 header is the full contract; the current build implements a faithful subset:
 
 - **`DetectionReductionOp` (checklist-complete):** group-by-label reduction
-  with `first` / `peak` / `medoid`, sticky `[live]` overrides
+  with `first` / `peak` / `medoid`, built-in peak scorers plus compile-time
+  `ScoreFn` for `score_method=custom`, sticky `[live]` overrides
   (`representative`, `score_method`, `feature_weights`), exact-sized
   `rep_idx`, public `radar_common/reduce/` primitives, unit tests, and
   `perf_detection_reduction` smoke. Open items in

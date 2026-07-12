@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-add_library(detection_reduction_op detection_reduction_op.cu)
+# group_by_label.cu owns the CUDA kernels; host launch wrappers are the public
+# surface (no RDC required). Link this target rather than recompiling kernels.
+add_library(detection_reduction_op
+    detection_reduction_op.cu
+    ${PROJECT_SOURCE_DIR}/operators/common/radar_common/reduce/group_by_label.cu)
 add_library(holoscan::detection_reduction_op ALIAS detection_reduction_op)
 
 target_include_directories(detection_reduction_op PUBLIC

@@ -102,6 +102,44 @@ TEST(DetectionReductionOpTest, PeakSelectsMaxWeightedSum) {
   EXPECT_EQ(r[3], 2);
 }
 
+TEST(DetectionReductionOpTest, PeakSelectsMaxWeightedL2) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  // sum: row0=7 > row1=6; L2: row1=6 > row0=5 — L2 must pick row1.
+  std::vector<int64_t> labels = {0, 0};
+  std::vector<int64_t> idx = {10, 1, 20, 2};
+  std::vector<double> points = {4.0, 3.0, 6.0, 0.0};
+  auto lab_t = to_device_tensor(labels, {2}, DLDataType{kDLInt, 64, 1});
+  auto idx_t = to_device_tensor(idx, {2, 2}, DLDataType{kDLInt, 64, 1});
+  auto pts = to_device_tensor(points, {2, 2}, real_dtype<double>());
+  const auto rep = run_reduction<double>(
+      lab_t, idx_t, pts,
+      holoscan::Arg("representative") = RepresentativePolicy::kPeak,
+      holoscan::Arg("score_method") = ScoreMethod::kWeightedL2,
+      holoscan::Arg("feature_weights") = std::vector<double>{1.0, 1.0});
+  ASSERT_EQ(rep.shape[0], 1);
+  EXPECT_EQ(rep.as<int64_t>()[0], 20);
+  EXPECT_EQ(rep.as<int64_t>()[1], 2);
+}
+
+TEST(DetectionReductionOpTest, PeakSelectsMaxWeightedMax) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  // sum: row1=17 > row0=11; max: row0=10 > row1=9 — max must pick row0.
+  std::vector<int64_t> labels = {0, 0};
+  std::vector<int64_t> idx = {10, 1, 20, 2};
+  std::vector<double> points = {10.0, 1.0, 9.0, 8.0};
+  auto lab_t = to_device_tensor(labels, {2}, DLDataType{kDLInt, 64, 1});
+  auto idx_t = to_device_tensor(idx, {2, 2}, DLDataType{kDLInt, 64, 1});
+  auto pts = to_device_tensor(points, {2, 2}, real_dtype<double>());
+  const auto rep = run_reduction<double>(
+      lab_t, idx_t, pts,
+      holoscan::Arg("representative") = RepresentativePolicy::kPeak,
+      holoscan::Arg("score_method") = ScoreMethod::kWeightedMax,
+      holoscan::Arg("feature_weights") = std::vector<double>{1.0, 1.0});
+  ASSERT_EQ(rep.shape[0], 1);
+  EXPECT_EQ(rep.as<int64_t>()[0], 10);
+  EXPECT_EQ(rep.as<int64_t>()[1], 1);
+}
+
 TEST(DetectionReductionOpTest, MedoidRespectsFeatureWeights) {
   RADAR_TEST_SKIP_IF_NO_GPU();
   // One cluster, three points on a line; weights emphasize dim 0.
@@ -267,6 +305,127 @@ TEST(DetectionReductionOpTest, LiveRepresentativeStickyOverride) {
   expect_cell(cap.frames[0], 1, 1);
   expect_cell(cap.frames[1], 0, 0);
   expect_cell(cap.frames[2], 0, 0);
+}
+
+// Sticky [live] score_method: weighted_sum → weighted_l2, then sticky.
+TEST(DetectionReductionOpTest, LiveScoreMethodStickyOverride) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+
+  // sum picks row0 (7>6); L2 picks row1 (6>5).
+  std::vector<int64_t> labels = {0, 0};
+  std::vector<int64_t> idx = {10, 1, 20, 2};
+  std::vector<float> points = {4.0f, 3.0f, 6.0f, 0.0f};
+  auto lab = to_device_tensor(labels, {2}, DLDataType{kDLInt, 64, 1});
+  auto det = to_device_tensor(idx, {2, 2}, DLDataType{kDLInt, 64, 1});
+  auto pts = to_device_tensor(points, {2, 2}, real_dtype<float>());
+
+  class App : public holoscan::Application {
+   public:
+    std::vector<holoscan::TensorMap> labels_frames;
+    std::vector<holoscan::TensorMap> idx_frames;
+    std::vector<holoscan::TensorMap> points_frames;
+    std::vector<ScoreMethod> method_overrides;
+    TensorMapCapture* capture = nullptr;
+
+    void compose() override {
+      auto op = make_operator<DetectionReductionOp<float>>(
+          "reduction",
+          holoscan::Arg("representative") = RepresentativePolicy::kPeak,
+          holoscan::Arg("score_method") = ScoreMethod::kWeightedSum,
+          holoscan::Arg("feature_weights") = std::vector<double>{1.0, 1.0});
+      add_operator(op);
+      wire_data_source(this, op, "labels", labels_frames);
+      wire_data_source(this, op, "detection_idx", idx_frames);
+      wire_data_source(this, op, "points", points_frames);
+      wire_leading_override<ScoreMethod>(this, op, "score_method",
+                                         method_overrides);
+      wire_capture_sink(this, op, "rep_idx", capture);
+    }
+  };
+
+  App app;
+  for (int i = 0; i < 3; ++i) {
+    app.labels_frames.push_back(single_map(lab, "labels"));
+    app.idx_frames.push_back(single_map(det, "detection_idx"));
+    app.points_frames.push_back(single_map(pts, "points"));
+  }
+  app.method_overrides = {ScoreMethod::kWeightedSum, ScoreMethod::kWeightedL2};
+  TensorMapCapture cap;
+  app.capture = &cap;
+  app.config();
+  app.run();
+
+  ASSERT_EQ(cap.frames.size(), 3u);
+  auto expect_cell = [](const HostTensor& frame, int64_t a, int64_t b) {
+    ASSERT_EQ(frame.shape[0], 1);
+    ASSERT_EQ(frame.shape[1], 2);
+    EXPECT_EQ(frame.as<int64_t>()[0], a);
+    EXPECT_EQ(frame.as<int64_t>()[1], b);
+  };
+  expect_cell(cap.frames[0], 10, 1);  // sum → row0
+  expect_cell(cap.frames[1], 20, 2);  // L2 → row1
+  expect_cell(cap.frames[2], 20, 2);  // sticky L2
+}
+
+// Sticky [live] feature_weights: emphasize col0 → col1, then sticky.
+TEST(DetectionReductionOpTest, LiveFeatureWeightsStickyOverride) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+
+  // One-hot col0 → row0 (5>1); one-hot col1 → row1 (10>0).
+  std::vector<int64_t> labels = {0, 0};
+  std::vector<int64_t> idx = {10, 1, 20, 2};
+  std::vector<float> points = {5.0f, 0.0f, 1.0f, 10.0f};
+  auto lab = to_device_tensor(labels, {2}, DLDataType{kDLInt, 64, 1});
+  auto det = to_device_tensor(idx, {2, 2}, DLDataType{kDLInt, 64, 1});
+  auto pts = to_device_tensor(points, {2, 2}, real_dtype<float>());
+
+  class App : public holoscan::Application {
+   public:
+    std::vector<holoscan::TensorMap> labels_frames;
+    std::vector<holoscan::TensorMap> idx_frames;
+    std::vector<holoscan::TensorMap> points_frames;
+    std::vector<std::vector<double>> weight_overrides;
+    TensorMapCapture* capture = nullptr;
+
+    void compose() override {
+      auto op = make_operator<DetectionReductionOp<float>>(
+          "reduction",
+          holoscan::Arg("representative") = RepresentativePolicy::kPeak,
+          holoscan::Arg("score_method") = ScoreMethod::kWeightedSum,
+          holoscan::Arg("feature_weights") = std::vector<double>{1.0, 0.0});
+      add_operator(op);
+      wire_data_source(this, op, "labels", labels_frames);
+      wire_data_source(this, op, "detection_idx", idx_frames);
+      wire_data_source(this, op, "points", points_frames);
+      wire_leading_override<std::vector<double>>(this, op, "feature_weights",
+                                                 weight_overrides);
+      wire_capture_sink(this, op, "rep_idx", capture);
+    }
+  };
+
+  App app;
+  for (int i = 0; i < 3; ++i) {
+    app.labels_frames.push_back(single_map(lab, "labels"));
+    app.idx_frames.push_back(single_map(det, "detection_idx"));
+    app.points_frames.push_back(single_map(pts, "points"));
+  }
+  app.weight_overrides = {std::vector<double>{1.0, 0.0},
+                          std::vector<double>{0.0, 1.0}};
+  TensorMapCapture cap;
+  app.capture = &cap;
+  app.config();
+  app.run();
+
+  ASSERT_EQ(cap.frames.size(), 3u);
+  auto expect_cell = [](const HostTensor& frame, int64_t a, int64_t b) {
+    ASSERT_EQ(frame.shape[0], 1);
+    ASSERT_EQ(frame.shape[1], 2);
+    EXPECT_EQ(frame.as<int64_t>()[0], a);
+    EXPECT_EQ(frame.as<int64_t>()[1], b);
+  };
+  expect_cell(cap.frames[0], 10, 1);  // w=(1,0) → row0
+  expect_cell(cap.frames[1], 20, 2);  // w=(0,1) → row1
+  expect_cell(cap.frames[2], 20, 2);  // sticky
 }
 
 }  // namespace

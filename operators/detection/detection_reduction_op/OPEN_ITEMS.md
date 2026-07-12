@@ -27,10 +27,13 @@ labels are remapped differently.
 
 ## 3. Custom `ScoreFn` template path
 
-**Context.** Default instantiation rejects `score_method=custom`. A second
-template instantiation with a device functor is deferred.
+**Context.** Contract `score_method=custom` uses a compile-time device
+functor (`DetectionReductionOp<T, ScoreFn>`). Implemented: custom peak
+kernels are header templates; default `ScoreFn = NoCustomScore` rejects
+`custom` at runtime; callers with a real functor must explicitly
+instantiate the op in a CUDA TU (see `detection_reduction_op_impl.cuh`).
 
-**Status:** staged.
+**Status:** done.
 
 ---
 
@@ -41,3 +44,15 @@ slice uses custom CUDA atomics / compact (CUB/MatX segmented reduce can
 replace later). `OPERATOR_API.md` now notes the custom-CUDA implementation.
 
 **Status:** documented — keep open until a MatX/CUB rewrite lands.
+
+---
+
+## 5. Per-tick scratch `make_device_tensor` allocations
+
+**Context.** Each compute tick allocates temporary device buffers
+(`best_rows`, score-bit scratch, centroid sums, packed working sets, …)
+rather than pooling/reusing across ticks like CFAR's dense-buffer pool.
+Steady-state cost includes allocator traffic.
+
+**Status:** accepted for now (push-review dismissed) — pool when a second
+consumer or a hot production path makes it worth the complexity.

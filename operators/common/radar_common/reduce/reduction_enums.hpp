@@ -20,6 +20,10 @@ enum class ScoreMethod {
   kCustom,
 };
 
+// Default second template argument for DetectionReductionOp: score_method=
+// custom is rejected unless the caller supplies a real device ScoreFn.
+struct NoCustomScore {};
+
 constexpr std::string_view to_string(RepresentativePolicy policy) {
   switch (policy) {
     case RepresentativePolicy::kPeak: return "peak";
