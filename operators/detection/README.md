@@ -17,6 +17,7 @@ Typical placement:
 | Operator | In → Out | Function |
 | --- | --- | --- |
 | `CFARDetectorOp<T>` | `rd_maps` (…, doppler, range; complex or real power) → `detection_mask`, `detection_score`, `noise_estimate`, `detection_idx` | 2-D CFAR on the (Doppler, range) plane; complex input → square-law power, real input → thresholded directly; per-cell adaptive threshold from the training-cell noise estimate |
+| `DetectionReductionOp<T>` | `labels` + `detection_idx` (+ `points`) → `rep_idx` | One representative CFAR cell per cluster (`first` / `peak` / `medoid`) for cluster-then-angle |
 
 ## Implementation status
 
@@ -24,7 +25,14 @@ Typical placement:
 [`docs/planning/OPERATOR_API.md`](../../docs/planning/OPERATOR_API.md). The
 header is the full contract; the current build implements a faithful subset:
 
-- **Implemented (all four variants — checklist-complete per variant as landed):**
+- **`DetectionReductionOp` (checklist-complete):** group-by-label reduction
+  with `first` / `peak` / `medoid`, sticky `[live]` overrides
+  (`representative`, `score_method`, `feature_weights`), exact-sized
+  `rep_idx`, public `radar_common/reduce/` primitives, unit tests, and
+  `perf_detection_reduction` smoke. Open items in
+  [`detection_reduction_op/OPEN_ITEMS.md`](detection_reduction_op/OPEN_ITEMS.md).
+
+- **Implemented (all four CFAR variants — checklist-complete per variant as landed):**
   CA (cell-averaging), GO (2-D GOGO greatest-of), SO (2-D SOSO smallest-of),
   and OS (order-statistic with `[live] os_rank`), complex and real IF power
   paths, per-cell (border-correct) training-cell count, `pfa` / `guard_cells` /

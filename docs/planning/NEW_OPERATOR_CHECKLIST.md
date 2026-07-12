@@ -30,6 +30,10 @@ detailed how-to if you need them.
       checks; all output ports wired in harness tests; float/double + error
       paths where applicable.
 - [ ] **`ctest -L unit`** and **`pre-commit run --all-files`** pass.
+- [ ] **Performance** — `performance/cpp/perf_<operator>` consumer when the
+      operator is GPU/hot-path; **includes inline `[live]` override
+      measurement** whenever the contract has live params (see
+      `OPERATOR_DEVELOPMENT.md` → Performance characterization).
 - [ ] **Open items** — unresolved contract/SDK/math questions recorded in
       `operators/<group>/<operator>/OPEN_ITEMS.md`.
 
@@ -135,6 +139,25 @@ detailed how-to if you need them.
 - [ ] Register the test in **`tests/cpp/CMakeLists.txt`**.
 - [ ] Run **`ctest -L unit`** and **`pre-commit run --all-files`** before
       push.
+
+---
+
+## Performance
+
+- [ ] **`performance/cpp/perf_<operator>.cpp`** consumer when the operator is
+      GPU / hot-path (measurement tool — no timing pass/fail asserts).
+- [ ] **`[live]` overrides in the harness** — if the operator has any live
+      params, every default/`--full` compute run (or an explicit override
+      scenario matrix) must inline a mid-session override and report
+      `override_ms` / `override_delta_ms`. Cover each functionally distinct
+      live param at least once. See `OPERATOR_DEVELOPMENT.md` → Performance
+      characterization → Required coverage.
+- [ ] **Process warmup** — discarded graph session before the measured matrix
+      (`performance/cpp/utils/perf_process_warmup.hpp`) so scenario #1
+      `cold_ms` is not inflated by CUDA/Holoscan first-touch.
+- [ ] Wire the executable + optional `*_smoke` ctest in
+      **`performance/cpp/CMakeLists.txt`**.
+- [ ] Smoke passes: `ctest --test-dir build -R perf_<operator>_smoke`.
 
 ---
 

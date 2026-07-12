@@ -26,6 +26,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | Fill out `AGENTS.md` + this status file | deustice | `deustice/planning` | in review |
 | Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness | deustice | `deustice/sigproc-ops` | in progress |
 | Detection operator (`operators/detection/` + `CFARDetectorOp`) | dpc | `dpc/detection` | **All four CFAR variants done** (see below) |
+| Detection bridge `DetectionReductionOp` | dpc | `dpc/detection-reduction` | **checklist-complete** — first/peak/medoid, live sticky overrides, unit tests, perf smoke |
 
 ### Landed on `dpc/detection`
 

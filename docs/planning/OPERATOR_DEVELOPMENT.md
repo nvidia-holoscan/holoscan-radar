@@ -332,14 +332,38 @@ benchmark suite. Goals:
 2. Judge distance to architectural speed-of-light (kernel-only vs full graph).
 3. Catch regressions from incremental changes.
 
+### Required coverage
+
+Every `perf_<operator>` consumer **must** exercise `[live]` overrides when the
+operator has any — not only build-time `Arg` variants. Match the CFAR pattern:
+
+- Inline a mid-session override in the **same** graph run as steady-state
+  compute (do not require a separate scenario loop just to touch the override
+  port).
+- Report `override_ms` / `override_delta_ms` on the compute row (peak latency
+  over a short post-override window vs pre-override median).
+- Cover each functionally distinct live param at least once in the default or
+  `--full` matrix (cheap sticky flips and any costly rebuild paths). Claiming
+  a fast path (`alpha_lut`, cached plans, …) while only timing the slow path
+  is a harness bug.
+
+**Process warmup (required).** Before the measured scenario loop, run one
+discarded graph session (`perf_process_warmup.hpp`) so CUDA context init and
+Holoscan's first Application tick are not billed to scenario #1's `cold_ms`.
+Optionally prime each distinct kernel path the matrix will hit (e.g. each
+policy / variant) so first-touch JIT does not land on a measured row either.
+`--warmup` frames inside a scenario are separate: they exclude early frames
+*within* a run from the steady median, and do not replace process warmup.
+
+Operators with no `[live]` parameters are exempt from the override rule; note
+that in the consumer header comment. Process warmup still applies.
+
 ### What to report
 
 - Platform annotation (GPU, driver, build type).
 - **Setup / instantiate** time vs **compute** time.
 - **Cold** (first timed frame after config) vs **median / p90** steady.
-- Live-override scenarios: cost of changing a live param (and whether the fast
-  path is actually exercised — do not claim `alpha_lut` benefit while still
-  timing the `pfa` path).
+- Live-override cost (`override_ms` / `override_delta_ms`) as above.
 - Size ladder up to moderate real application shapes, not only micro sizes.
 
 ### How to diagnose a slow scenario

@@ -63,5 +63,7 @@ radar_add_test(test_cfar_detector_os
     holoscan::cfar_detector_op)
 radar_add_test(test_cfar_detector_alpha_lut
     holoscan::cfar_detector_op)
+radar_add_test(test_detection_reduction
+    holoscan::detection_reduction_op)
 radar_add_statistical_test(test_cfar_detector_statistical
     holoscan::cfar_detector_op)

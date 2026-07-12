@@ -494,7 +494,7 @@ Reduces each cluster to one **representative detection** so the cluster-then-ang
 
 1. Group the detection rows by `labels`, excluding noise (`-1`).
 2. Per cluster, select the representative row by `representative`, via the shared group-by-label reduction primitive: `peak` = argmax of the per-row score (`score_method` applied to `feature_weights ⊙ points`, or the `score_fn` functor); `first` = lowest index; `medoid` = form the centroid as the (segmented) mean of the `feature_weights`-scaled `points`, then take the argmin scaled-distance member (two segmented passes — a mean, then an argmin).
-3. Emit `rep_idx` = the selected rows of `detection_idx`, one per cluster, sized to the cluster count. Pure gather + segmented reduction (MatX).
+3. Emit `rep_idx` = the selected rows of `detection_idx`, one per cluster, sized to the cluster count. Pure gather + segmented reduction (custom CUDA atomics / compact in the current implementation; CUB/MatX segmented reduce is a staged replacement).
 
 **Notes:**
 

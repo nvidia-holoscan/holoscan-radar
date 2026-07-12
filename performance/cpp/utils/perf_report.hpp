@@ -148,12 +148,22 @@ inline std::string shape_text(const std::vector<int64_t>& s) {
   return out;
 }
 
-// Fixed-width left-justified column.
+// Fixed-width left-justified column. Overlong values are truncated with
+// "..." so subsequent columns stay aligned.
 inline std::string col(const std::string& s, int width) {
-  if (static_cast<int>(s.size()) >= width) {
-    return s + " ";
+  if (width <= 0) {
+    return "";
   }
-  return s + std::string(static_cast<size_t>(width) - s.size(), ' ');
+  if (static_cast<int>(s.size()) == width) {
+    return s;
+  }
+  if (static_cast<int>(s.size()) < width) {
+    return s + std::string(static_cast<size_t>(width) - s.size(), ' ');
+  }
+  if (width <= 3) {
+    return s.substr(0, static_cast<size_t>(width));
+  }
+  return s.substr(0, static_cast<size_t>(width - 3)) + "...";
 }
 
 inline std::string fixed(double v, int prec) {

@@ -18,6 +18,11 @@ target_link_libraries(perf_cfar_detector PRIVATE
     radar_perf_utils
     holoscan::cfar_detector_op)
 
+add_executable(perf_detection_reduction perf_detection_reduction.cpp)
+target_link_libraries(perf_detection_reduction PRIVATE
+    radar_perf_utils
+    holoscan::detection_reduction_op)
+
 # Optional smoke: runs a tiny scenario subset and verifies a report file is
 # written. No timing thresholds — CI only checks the tool executes and emits.
 if(HOLOSCAN_RADAR_BUILD_TESTING)
@@ -25,5 +30,11 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
         COMMAND perf_cfar_detector --sizes xs --warmup 1 --frames 2 --quiet
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_smoke.json)
     set_tests_properties(perf_cfar_detector_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_detection_reduction_smoke
+        COMMAND perf_detection_reduction --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_detection_reduction_smoke.json)
+    set_tests_properties(perf_detection_reduction_smoke PROPERTIES
         LABELS "performance")
 endif()
