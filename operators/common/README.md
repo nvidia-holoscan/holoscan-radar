@@ -16,9 +16,15 @@ Each folder depends only on the layers above it:
 | `radar_common/sim/` | Analytic point-target FMCW signal simulator (input synthesis for applications; analytic ground truth for tests) | STL only |
 | `radar_common/tensor/` | Rank-agnostic batching, DLPack device buffers, MatX view/upload helpers | holoscan::Tensor, CUDA |
 | `radar_common/sdk/` | Operator-authoring glue: parameter override ports, warn-once config cache, argument-setter registration | holoscan core |
+| `radar_common/reduce/` | Public group-by-label CUDA primitives (headers + `radar_common_reduce` lib) | CUDA, descriptors/enums |
 
 `tensor/matx_utils.hpp` includes `<matx.h>` and must only be included from
 CUDA translation units (`.cu` files and the stage headers they include).
+
+`reduce/group_by_label.hpp` declares host launch wrappers; non-template
+kernels are compiled once into `holoscan::radar_common_reduce`. Link that
+target rather than recompiling `group_by_label.cu` in a second library
+(ODR). Template custom-peak launches live in the header (`__CUDACC__`).
 
 ## Module conventions
 

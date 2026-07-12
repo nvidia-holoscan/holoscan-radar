@@ -4,9 +4,10 @@
 // Public group-by-label reduction primitives.
 // Non-noise labels must lie in [0, max_label] (DBSCAN-style).
 //
-// Host launch wrappers are declared here; CUDA kernels live only in
-// group_by_label.cu (compiled into detection_reduction_op). Callers link that
-// library — they must not re-define the kernels in another TU.
+// Host launch wrappers are declared here; non-template CUDA kernels live in
+// group_by_label.cu and are compiled into holoscan::radar_common_reduce.
+// Link that library — do not recompile the .cu into another target (ODR).
+// Template custom-peak launches are defined below under __CUDACC__.
 
 #pragma once
 

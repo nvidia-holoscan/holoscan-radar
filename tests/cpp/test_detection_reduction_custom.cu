@@ -49,6 +49,9 @@ using holoscan::radar::testing::HostTensor;
 using holoscan::radar::testing::TensorMapCapture;
 using holoscan::radar::testing::single_map;
 using holoscan::radar::testing::to_device_tensor;
+using holoscan::radar::testing::wire_capture_sink;
+using holoscan::radar::testing::wire_data_source;
+using holoscan::radar::testing::wire_leading_override;
 using holoscan::test::create_operator_test;
 using detection_reduction_test::Col0MinusCol1;
 
@@ -106,6 +109,70 @@ TEST(DetectionReductionOpTest, RejectsCustomWithoutScoreFn) {
   harness->template add_output_port<holoscan::TensorMap>("rep_idx",
                                                         cap.validators());
   EXPECT_THROW(harness->run_test(), std::invalid_argument);
+}
+
+// Sticky live score_method into custom and back out.
+TEST(DetectionReductionOpTest, LiveScoreMethodIntoAndOutOfCustom) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+
+  // sum (1,1): row1 wins (8>1). custom col0-col1: row0 wins (1-0 > 3-5).
+  std::vector<int64_t> labels = {0, 0};
+  std::vector<int64_t> idx = {10, 1, 20, 2};
+  std::vector<float> points = {1.0f, 0.0f, 3.0f, 5.0f};
+  auto lab = to_device_tensor(labels, {2}, DLDataType{kDLInt, 64, 1});
+  auto det = to_device_tensor(idx, {2, 2}, DLDataType{kDLInt, 64, 1});
+  auto pts = to_device_tensor(points, {2, 2}, real_dtype<float>());
+
+  class App : public holoscan::Application {
+   public:
+    std::vector<holoscan::TensorMap> labels_frames;
+    std::vector<holoscan::TensorMap> idx_frames;
+    std::vector<holoscan::TensorMap> points_frames;
+    std::vector<ScoreMethod> method_overrides;
+    TensorMapCapture* capture = nullptr;
+
+    void compose() override {
+      auto op =
+          make_operator<DetectionReductionOp<float, Col0MinusCol1>>(
+              "reduction",
+              holoscan::Arg("representative") = RepresentativePolicy::kPeak,
+              holoscan::Arg("score_method") = ScoreMethod::kWeightedSum,
+              holoscan::Arg("feature_weights") =
+                  std::vector<double>{1.0, 1.0});
+      add_operator(op);
+      wire_data_source(this, op, "labels", labels_frames);
+      wire_data_source(this, op, "detection_idx", idx_frames);
+      wire_data_source(this, op, "points", points_frames);
+      wire_leading_override<ScoreMethod>(this, op, "score_method",
+                                         method_overrides);
+      wire_capture_sink(this, op, "rep_idx", capture);
+    }
+  };
+
+  // Tick0: sum → row1. Tick1: custom → row0. Tick2: sum → row1.
+  App app;
+  for (int i = 0; i < 3; ++i) {
+    app.labels_frames.push_back(single_map(lab, "labels"));
+    app.idx_frames.push_back(single_map(det, "detection_idx"));
+    app.points_frames.push_back(single_map(pts, "points"));
+  }
+  app.method_overrides = {ScoreMethod::kWeightedSum, ScoreMethod::kCustom,
+                          ScoreMethod::kWeightedSum};
+  TensorMapCapture cap;
+  app.capture = &cap;
+  app.config();
+  app.run();
+
+  ASSERT_EQ(cap.frames.size(), 3u);
+  auto expect_cell = [](const HostTensor& frame, int64_t a, int64_t b) {
+    ASSERT_EQ(frame.shape[0], 1);
+    ASSERT_EQ(frame.shape[1], 2);
+    EXPECT_EQ(frame.as<int64_t>()[0], a);
+    EXPECT_EQ(frame.as<int64_t>()[1], b);
+  };
+  expect_cell(cap.frames[0], 20, 2);
+  expect_cell(cap.frames[1], 10, 1);
+  expect_cell(cap.frames[2], 20, 2);
 }
 
 }  // namespace

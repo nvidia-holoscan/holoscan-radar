@@ -245,6 +245,87 @@ TEST(DetectionReductionOpTest, EmptyInputEmitsZeroClusters) {
   EXPECT_EQ(rep.shape[1], 2);
 }
 
+TEST(DetectionReductionOpTest, AllNoiseEmitsZeroClusters) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  std::vector<int64_t> labels = {-1, -1};
+  std::vector<int64_t> idx = {1, 2, 3, 4};
+  auto lab_t = to_device_tensor(labels, {2}, DLDataType{kDLInt, 64, 1});
+  auto idx_t = to_device_tensor(idx, {2, 2}, DLDataType{kDLInt, 64, 1});
+  const auto rep = run_reduction<float>(
+      lab_t, idx_t, nullptr,
+      holoscan::Arg("representative") = RepresentativePolicy::kFirst);
+  EXPECT_EQ(rep.shape[0], 0);
+  ASSERT_EQ(rep.shape.size(), 2u);
+  EXPECT_EQ(rep.shape[1], 2);
+}
+
+TEST(DetectionReductionOpTest, SparseLabelGapsSkipped) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  // Labels 0 and 2 (gap at 1) → two clusters, compact order by label id.
+  std::vector<int64_t> labels = {0, 2};
+  std::vector<int64_t> idx = {10, 1, 30, 3};
+  auto lab_t = to_device_tensor(labels, {2}, DLDataType{kDLInt, 64, 1});
+  auto idx_t = to_device_tensor(idx, {2, 2}, DLDataType{kDLInt, 64, 1});
+  const auto rep = run_reduction<float>(
+      lab_t, idx_t, nullptr,
+      holoscan::Arg("representative") = RepresentativePolicy::kFirst);
+  ASSERT_EQ(rep.shape[0], 2);
+  EXPECT_EQ(rep.as<int64_t>()[0], 10);
+  EXPECT_EQ(rep.as<int64_t>()[1], 1);
+  EXPECT_EQ(rep.as<int64_t>()[2], 30);
+  EXPECT_EQ(rep.as<int64_t>()[3], 3);
+}
+
+TEST(DetectionReductionOpTest, WidenedDetectionIdxCols) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  std::vector<int64_t> labels = {0};
+  // (doppler, range, batch) — third column preserved in rep_idx.
+  std::vector<int64_t> idx = {7, 8, 9};
+  auto lab_t = to_device_tensor(labels, {1}, DLDataType{kDLInt, 64, 1});
+  auto idx_t = to_device_tensor(idx, {1, 3}, DLDataType{kDLInt, 64, 1});
+  const auto rep = run_reduction<float>(
+      lab_t, idx_t, nullptr,
+      holoscan::Arg("representative") = RepresentativePolicy::kFirst);
+  ASSERT_EQ(rep.shape[0], 1);
+  ASSERT_EQ(rep.shape[1], 3);
+  EXPECT_EQ(rep.as<int64_t>()[0], 7);
+  EXPECT_EQ(rep.as<int64_t>()[1], 8);
+  EXPECT_EQ(rep.as<int64_t>()[2], 9);
+}
+
+TEST(DetectionReductionOpTest, PeakEqualScorePicksLowestIndex) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  std::vector<int64_t> labels = {0, 0};
+  std::vector<int64_t> idx = {10, 1, 20, 2};
+  std::vector<double> points = {5.0, 5.0};
+  auto lab_t = to_device_tensor(labels, {2}, DLDataType{kDLInt, 64, 1});
+  auto idx_t = to_device_tensor(idx, {2, 2}, DLDataType{kDLInt, 64, 1});
+  auto pts = to_device_tensor(points, {2, 1}, real_dtype<double>());
+  const auto rep = run_reduction<double>(
+      lab_t, idx_t, pts,
+      holoscan::Arg("representative") = RepresentativePolicy::kPeak,
+      holoscan::Arg("feature_weights") = std::vector<double>{1.0});
+  ASSERT_EQ(rep.shape[0], 1);
+  EXPECT_EQ(rep.as<int64_t>()[0], 10);
+  EXPECT_EQ(rep.as<int64_t>()[1], 1);
+}
+
+TEST(DetectionReductionOpTest, CustomScoreMethodIgnoredForFirst) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  // score_method is unused for first — custom must not require ScoreFn.
+  std::vector<int64_t> labels = {0, 0};
+  std::vector<int64_t> idx = {10, 1, 20, 2};
+  auto lab_t = to_device_tensor(labels, {2}, DLDataType{kDLInt, 64, 1});
+  auto idx_t = to_device_tensor(idx, {2, 2}, DLDataType{kDLInt, 64, 1});
+  const auto rep = run_reduction<float>(
+      lab_t, idx_t, nullptr,
+      holoscan::Arg("representative") = RepresentativePolicy::kFirst,
+      holoscan::Arg("score_method") = ScoreMethod::kCustom);
+  ASSERT_EQ(rep.shape[0], 1);
+  EXPECT_EQ(rep.as<int64_t>()[0], 10);
+  EXPECT_EQ(rep.as<int64_t>()[1], 1);
+}
+
 // Sticky [live] representative override: peak → first mid-stream, then sticky.
 TEST(DetectionReductionOpTest, LiveRepresentativeStickyOverride) {
   RADAR_TEST_SKIP_IF_NO_GPU();

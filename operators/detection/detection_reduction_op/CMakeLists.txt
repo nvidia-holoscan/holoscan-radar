@@ -1,11 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# group_by_label.cu owns the CUDA kernels; host launch wrappers are the public
-# surface (no RDC required). Link this target rather than recompiling kernels.
-add_library(detection_reduction_op
-    detection_reduction_op.cu
-    ${PROJECT_SOURCE_DIR}/operators/common/radar_common/reduce/group_by_label.cu)
+# Thin operator over holoscan::radar_common_reduce (group-by-label kernels).
+add_library(detection_reduction_op detection_reduction_op.cu)
 add_library(holoscan::detection_reduction_op ALIAS detection_reduction_op)
 
 target_include_directories(detection_reduction_op PUBLIC
@@ -15,7 +12,8 @@ target_include_directories(detection_reduction_op PUBLIC
 target_link_libraries(detection_reduction_op
     PUBLIC
         holoscan::core
-        holoscan::radar_common)
+        holoscan::radar_common
+        holoscan::radar_common_reduce)
 
 set_property(TARGET detection_reduction_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
@@ -30,6 +28,9 @@ install(EXPORT holoscan_detection_reduction_op_targets
 )
 
 include(GNUInstallDirs)
-install(FILES detection_reduction_op.hpp
+install(FILES
+    detection_reduction_op.hpp
+    detection_reduction_op_impl.cuh
+    detection_reduction_stage.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/detection
 )

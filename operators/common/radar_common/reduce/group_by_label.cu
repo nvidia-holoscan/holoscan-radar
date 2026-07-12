@@ -11,31 +11,6 @@ namespace holoscan::radar::detail {
 namespace {
 
 template <typename T>
-__device__ cuda_u64 ordered_bits(T v);
-
-template <>
-__device__ cuda_u64 ordered_bits<float>(float v) {
-  unsigned int bits = __float_as_uint(v);
-  if (bits & 0x80000000u) {
-    bits = ~bits;
-  } else {
-    bits ^= 0x80000000u;
-  }
-  return static_cast<cuda_u64>(bits);
-}
-
-template <>
-__device__ cuda_u64 ordered_bits<double>(double v) {
-  cuda_u64 bits = static_cast<cuda_u64>(__double_as_longlong(v));
-  if (bits & 0x8000000000000000ull) {
-    bits = ~bits;
-  } else {
-    bits ^= 0x8000000000000000ull;
-  }
-  return bits;
-}
-
-template <typename T>
 __device__ T peak_score(const T* row, const T* weights, int64_t num_features,
                         ScoreMethod method) {
   switch (method) {
@@ -65,10 +40,9 @@ __device__ T peak_score(const T* row, const T* weights, int64_t num_features,
       }
       return s;
     }
-    case ScoreMethod::kCustom:
+    default:
       return T{0};
   }
-  return T{0};
 }
 
 template <typename T>
@@ -153,7 +127,7 @@ __global__ void peak_max_score_kernel(const int64_t* labels, const T* points,
   }
   const T score =
       peak_score(points + i * num_features, weights, num_features, method);
-  atomicMax(best_score_bits + lab, ordered_bits(score));
+  atomicMax(best_score_bits + lab, ordered_bits_t(score));
 }
 
 template <typename T>
@@ -173,7 +147,7 @@ __global__ void peak_min_row_kernel(const int64_t* labels, const T* points,
   }
   const T score =
       peak_score(points + i * num_features, weights, num_features, method);
-  if (ordered_bits(score) != best_score_bits[lab]) {
+  if (ordered_bits_t(score) != best_score_bits[lab]) {
     return;
   }
   atomicMin(reinterpret_cast<cuda_u64*>(best_rows + lab),
@@ -236,7 +210,7 @@ __global__ void medoid_max_negdist_kernel(const int64_t* labels,
   const T score =
       medoid_neg_dist2(points + i * num_features, weights,
                        centroids + lab * num_features, num_features);
-  atomicMax(best_score_bits + lab, ordered_bits(score));
+  atomicMax(best_score_bits + lab, ordered_bits_t(score));
 }
 
 template <typename T>
@@ -257,7 +231,7 @@ __global__ void medoid_min_row_kernel(const int64_t* labels, const T* points,
   const T score =
       medoid_neg_dist2(points + i * num_features, weights,
                        centroids + lab * num_features, num_features);
-  if (ordered_bits(score) != best_score_bits[lab]) {
+  if (ordered_bits_t(score) != best_score_bits[lab]) {
     return;
   }
   atomicMin(reinterpret_cast<cuda_u64*>(best_rows + lab),
@@ -332,6 +306,9 @@ void launch_peak_select(const int64_t* labels, const T* points,
                         int64_t* best_rows, cudaStream_t stream) {
   // Caller initializes best_score_bits to 0 and best_rows to kEmptyRow over
   // the slot count (not n). This launcher only walks the point axis.
+  if (method == ScoreMethod::kCustom) {
+    return;
+  }
   peak_max_score_kernel<T><<<grid_for(n), 256, 0, stream>>>(
       labels, points, weights, n, num_features, method, best_score_bits);
   peak_min_row_kernel<T><<<grid_for(n), 256, 0, stream>>>(

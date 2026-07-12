@@ -100,6 +100,15 @@ inline void require_dtype(const std::shared_ptr<holoscan::Tensor>& tensor,
   }
 }
 
+inline void check_cuda(const char* where) {
+  const cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    throw std::runtime_error(
+        std::string("DetectionReductionOp: ") + where + ": " +
+        cudaGetErrorString(err));
+  }
+}
+
 }  // namespace reduction_op_detail
 
 using reduction_op_detail::receive_single;
@@ -108,6 +117,7 @@ using reduction_op_detail::emit_single;
 using reduction_op_detail::require_cuda;
 using reduction_op_detail::require_contiguous;
 using reduction_op_detail::require_dtype;
+using reduction_op_detail::check_cuda;
 using reduction_op_detail::kInt64Dtype;
 
 template <typename T, typename ScoreFn>
@@ -162,7 +172,8 @@ void DetectionReductionOp<T, ScoreFn>::compute(InputContext& op_input,
   effective_feature_weights_ = resolve_override_param(
       op_input, "feature_weights", effective_feature_weights_, nullptr);
 
-  if (effective_score_method_ == ScoreMethod::kCustom &&
+  if (effective_representative_ == RepresentativePolicy::kPeak &&
+      effective_score_method_ == ScoreMethod::kCustom &&
       std::is_same_v<ScoreFn, NoCustomScore>) {
     throw std::invalid_argument(
         "DetectionReductionOp: score_method=custom requires a compile-time "
@@ -247,6 +258,7 @@ void DetectionReductionOp<T, ScoreFn>::compute(InputContext& op_input,
     retained_labels_ = std::move(labels);
     retained_idx_ = std::move(detection_idx);
     retained_points_ = std::move(points);
+    retained_weights_.reset();
     return;
   }
 
@@ -266,6 +278,7 @@ void DetectionReductionOp<T, ScoreFn>::compute(InputContext& op_input,
       static_cast<const int64_t*>(labels->data()), num_points,
       static_cast<int64_t*>(max_label_t->data()),
       static_cast<int*>(any_cluster_t->data()), stream);
+  check_cuda("find_max_label");
 
   int64_t max_label = 0;
   int any_cluster = 0;
@@ -284,6 +297,7 @@ void DetectionReductionOp<T, ScoreFn>::compute(InputContext& op_input,
     retained_labels_ = std::move(labels);
     retained_idx_ = std::move(detection_idx);
     retained_points_ = std::move(points);
+    retained_weights_.reset();
     return;
   }
   const int64_t n_slots = max_label + 1;
@@ -356,6 +370,7 @@ void DetectionReductionOp<T, ScoreFn>::compute(InputContext& op_input,
         num_features, static_cast<detail::cuda_u64*>(best_score->data()),
         static_cast<int64_t*>(best_rows->data()), stream);
   }
+  check_cuda("select_representative");
 
   auto cluster_count_t = make_device_tensor({1}, kInt64Dtype);
   {
@@ -367,6 +382,7 @@ void DetectionReductionOp<T, ScoreFn>::compute(InputContext& op_input,
                                 n_slots,
                                 static_cast<int64_t*>(cluster_count_t->data()),
                                 stream);
+  check_cuda("count_occupied");
   int64_t num_clusters = 0;
   cudaMemcpyAsync(&num_clusters, cluster_count_t->data(), sizeof(int64_t),
                   cudaMemcpyDeviceToHost, stream);
@@ -379,10 +395,7 @@ void DetectionReductionOp<T, ScoreFn>::compute(InputContext& op_input,
         static_cast<const int64_t*>(best_rows->data()),
         static_cast<const int64_t*>(detection_idx->data()), n_slots, idx_cols,
         static_cast<int64_t*>(rep_idx->data()), stream);
-    if (cudaGetLastError() != cudaSuccess) {
-      throw std::runtime_error(
-          "DetectionReductionOp: compact/gather kernel failed");
-    }
+    check_cuda("compact_and_gather");
   }
 
   if (stream != cudaStreamDefault) {

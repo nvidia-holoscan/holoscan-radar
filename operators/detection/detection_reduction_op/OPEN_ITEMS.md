@@ -30,8 +30,9 @@ labels are remapped differently.
 **Context.** Contract `score_method=custom` uses a compile-time device
 functor (`DetectionReductionOp<T, ScoreFn>`). Implemented: custom peak
 kernels are header templates; default `ScoreFn = NoCustomScore` rejects
-`custom` at runtime; callers with a real functor must explicitly
-instantiate the op in a CUDA TU (see `detection_reduction_op_impl.cuh`).
+`custom` only when `representative=peak`; callers with a real functor must
+explicitly instantiate the op in a CUDA TU (`detection_reduction_op_impl.cuh`
+is installed with the operator headers).
 
 **Status:** done.
 
@@ -42,6 +43,8 @@ instantiate the op in a CUDA TU (see `detection_reduction_op_impl.cuh`).
 **Context.** Locked algorithm line mentioned MatX segmented reduction; this
 slice uses custom CUDA atomics / compact (CUB/MatX segmented reduce can
 replace later). `OPERATOR_API.md` now notes the custom-CUDA implementation.
+Non-template kernels compile into `holoscan::radar_common_reduce` (public
+link target); operators must not recompile `group_by_label.cu`.
 
 **Status:** documented — keep open until a MatX/CUB rewrite lands.
 
