@@ -18,6 +18,7 @@ Typical placement:
 | --- | --- | --- |
 | `CFARDetectorOp<T>` | `rd_maps` (…, doppler, range; complex or real power) → `detection_mask`, `detection_score`, `noise_estimate`, `detection_idx` | 2-D CFAR on the (Doppler, range) plane; complex input → square-law power, real input → thresholded directly; per-cell adaptive threshold from the training-cell noise estimate |
 | `DetectionReductionOp<T>` | `labels` + `detection_idx` (+ `points`) → `rep_idx` | One representative CFAR cell per cluster (`first` / `peak` / `medoid`) for cluster-then-angle |
+| `FeatureAssemblyOp<T>` | `detection_idx` (+ optional `range_bins` / `velocity_bins` / `detection_score` / `aoa_estimates`) → `points` | Gather / bin→physical lookup into the clustering feature matrix; static `features` list sets column layout |
 
 ## Implementation status
 
@@ -57,6 +58,17 @@ header is the full contract; the current build implements a faithful subset:
   - ~~Per-tick dense buffer alloc~~ **landed** — score/noise/mask/power/
     integrated_power are ping-pong cached and reallocated only on geometry
     change.
+
+`FeatureAssemblyOp` is in progress on `dpc/feature-assembly`:
+
+- **Implemented (vertical slice):** static `features` column layout; required
+  `detection_idx`; optional `range_bins` / `velocity_bins` / `detection_score`
+  / `aoa_estimates` (non-blocking); raw-bin fallback when physical bin axes
+  are absent; score/az/el require their inputs; GPU assemble kernel; float and
+  double; empty `detection_idx` → empty `points`.
+- **Staged follow-ups:** batch-preserved score gather path is implemented but
+  lightly tested; shared gather primitive extraction for `SnapshotGatherOp`;
+  ping-pong `points` if steady alloc shows up on large detection counts.
 
 ## Shared kernel conventions
 

@@ -5,3 +5,4 @@
 # gated on its own OP_<name> option (defaulting to ${BUILD_ALL}).
 add_holohub_operator(cfar_detector_op)
 add_holohub_operator(detection_reduction_op)
+add_holohub_operator(feature_assembly_op)

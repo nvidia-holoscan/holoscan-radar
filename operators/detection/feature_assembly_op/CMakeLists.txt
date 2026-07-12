@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+add_library(feature_assembly_op feature_assembly_op.cu)
+add_library(holoscan::feature_assembly_op ALIAS feature_assembly_op)
+
+target_include_directories(feature_assembly_op PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators>
+    $<INSTALL_INTERFACE:include>)
+
+target_link_libraries(feature_assembly_op
+    PUBLIC
+        holoscan::core
+        holoscan::radar_common
+    PRIVATE
+        matx::matx)
+
+set_property(TARGET feature_assembly_op
+    PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+install(TARGETS feature_assembly_op
+    EXPORT holoscan_feature_assembly_op_targets
+)
+
+install(EXPORT holoscan_feature_assembly_op_targets
+    NAMESPACE holoscan::
+    DESTINATION lib/cmake/holoscan_radar
+)
+
+include(GNUInstallDirs)
+install(FILES feature_assembly_op.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/detection
+)

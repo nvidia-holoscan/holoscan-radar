@@ -27,6 +27,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness | deustice | `deustice/sigproc-ops` | in progress |
 | Detection operator (`operators/detection/` + `CFARDetectorOp`) | dpc | `dpc/detection` | **All four CFAR variants done** (see below) |
 | Detection bridge `DetectionReductionOp` | dpc | `dpc/detection-reduction` | **checklist-complete** — first/peak/medoid + built-in scorers + `ScoreFn`/`custom` + live + tests + perf |
+| Detection bridge `FeatureAssemblyOp` | dpc | `dpc/feature-assembly` | **in progress** — scaffold + vertical slice |
 
 ### Landed on `dpc/detection`
 
