@@ -115,40 +115,6 @@ bool needs_aoa(const std::vector<AssemblyFeature>& features) {
   return false;
 }
 
-// Build per-row plane offsets for a compact row-major score map whose
-// trailing axes are (D, R) and whose leading axes match the preserved
-// columns of detection_idx (same order as CFAR emits).
-std::vector<int64_t> build_score_plane_offsets(
-    const int64_t* idx_host, int64_t num_points, int64_t idx_cols,
-    int64_t n_preserved, const std::vector<int64_t>& score_leading_dims,
-    int64_t plane_elems) {
-  std::vector<int64_t> offsets(static_cast<size_t>(num_points), 0);
-  if (n_preserved == 0) {
-    return offsets;
-  }
-  if (static_cast<int64_t>(score_leading_dims.size()) != n_preserved) {
-    throw std::invalid_argument(
-        "FeatureAssemblyOp: detection_score leading rank must match "
-        "detection_idx preserved batch columns");
-  }
-  for (int64_t row = 0; row < num_points; ++row) {
-    const int64_t* idx_row = idx_host + row * idx_cols;
-    int64_t linear = 0;
-    for (int64_t a = 0; a < n_preserved; ++a) {
-      const int64_t coord = idx_row[a];
-      const int64_t dim = score_leading_dims[static_cast<size_t>(a)];
-      if (coord < 0 || coord >= dim) {
-        throw std::invalid_argument(
-            "FeatureAssemblyOp: detection_idx batch coordinate out of range "
-            "for detection_score");
-      }
-      linear = linear * dim + coord;
-    }
-    offsets[static_cast<size_t>(row)] = linear * plane_elems;
-  }
-  return offsets;
-}
-
 }  // namespace
 
 template <typename T>
@@ -313,13 +279,17 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
     feature_ids[static_cast<size_t>(i)] =
         feature_to_id(features[static_cast<size_t>(i)]);
   }
-  auto feature_ids_dev =
-      make_device_tensor({num_features}, DLDataType{kDLInt, 32, 1});
-  if (cudaMemcpyAsync(feature_ids_dev->data(), feature_ids.data(),
-                      feature_ids.size() * sizeof(int), cudaMemcpyHostToDevice,
-                      stream) != cudaSuccess) {
-    throw std::runtime_error(
-        "FeatureAssemblyOp: feature id H2D copy failed");
+  if (!feature_ids_ready_ || !retained_feature_ids_ ||
+      retained_feature_ids_->shape()[0] != num_features) {
+    retained_feature_ids_ =
+        make_device_tensor({num_features}, DLDataType{kDLInt, 32, 1});
+    if (cudaMemcpyAsync(retained_feature_ids_->data(), feature_ids.data(),
+                        feature_ids.size() * sizeof(int),
+                        cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+      throw std::runtime_error(
+          "FeatureAssemblyOp: feature id H2D copy failed");
+    }
+    feature_ids_ready_ = true;
   }
 
   std::shared_ptr<holoscan::Tensor> score_offsets_dev;
@@ -327,27 +297,34 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
   const bool gather_score =
       detection_score != nullptr && needs_score(features);
   if (gather_score && n_preserved > 0) {
-    std::vector<int64_t> idx_host(
-        static_cast<size_t>(num_points * idx_cols));
-    if (cudaMemcpyAsync(idx_host.data(), detection_idx->data(),
-                        idx_host.size() * sizeof(int64_t),
-                        cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
-      throw std::runtime_error(
-          "FeatureAssemblyOp: detection_idx D2H copy failed");
+    if (static_cast<int64_t>(score_leading.size()) != n_preserved) {
+      throw std::invalid_argument(
+          "FeatureAssemblyOp: detection_score leading rank must match "
+          "detection_idx preserved batch columns");
     }
-    if (cudaStreamSynchronize(stream) != cudaSuccess) {
-      throw std::runtime_error(
-          "FeatureAssemblyOp: stream sync after idx D2H failed");
+    if (n_preserved > detail::kMaxPreservedBatchDims) {
+      throw std::invalid_argument(
+          "FeatureAssemblyOp: too many preserved batch dims in "
+          "detection_idx");
     }
-    const auto offsets = build_score_plane_offsets(
-        idx_host.data(), num_points, idx_cols, n_preserved, score_leading,
-        plane_elems);
-    score_offsets_dev = make_device_tensor({num_points}, kInt64Dtype);
-    if (cudaMemcpyAsync(score_offsets_dev->data(), offsets.data(),
-                        offsets.size() * sizeof(int64_t),
+    retained_score_leading_ =
+        make_device_tensor({n_preserved}, kInt64Dtype);
+    if (cudaMemcpyAsync(retained_score_leading_->data(), score_leading.data(),
+                        score_leading.size() * sizeof(int64_t),
                         cudaMemcpyHostToDevice, stream) != cudaSuccess) {
       throw std::runtime_error(
-          "FeatureAssemblyOp: score plane offset H2D copy failed");
+          "FeatureAssemblyOp: score leading-dims H2D copy failed");
+    }
+    score_offsets_dev = make_device_tensor({num_points}, kInt64Dtype);
+    detail::launch_score_plane_offsets(
+        static_cast<const int64_t*>(detection_idx->data()), num_points,
+        idx_cols, n_preserved,
+        static_cast<const int64_t*>(retained_score_leading_->data()),
+        plane_elems, static_cast<int64_t*>(score_offsets_dev->data()),
+        stream);
+    if (cudaGetLastError() != cudaSuccess) {
+      throw std::runtime_error(
+          "FeatureAssemblyOp: score plane offset kernel failed");
     }
     score_offsets_ptr =
         static_cast<const int64_t*>(score_offsets_dev->data());
@@ -358,7 +335,7 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
       n_preserved, range_ptr, num_range, range_bins != nullptr, velocity_ptr,
       num_doppler, velocity_bins != nullptr, score_ptr, num_score_range,
       score_offsets_ptr, gather_score, aoa_ptr, aoa_estimates != nullptr,
-      static_cast<const int*>(feature_ids_dev->data()), num_features,
+      static_cast<const int*>(retained_feature_ids_->data()), num_features,
       static_cast<T*>(points->data()), stream);
 
   if (cudaGetLastError() != cudaSuccess) {
@@ -375,7 +352,6 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
   retained_velocity_bins_ = std::move(velocity_bins);
   retained_score_ = std::move(detection_score);
   retained_aoa_ = std::move(aoa_estimates);
-  retained_feature_ids_ = std::move(feature_ids_dev);
   retained_score_offsets_ = std::move(score_offsets_dev);
 }
 

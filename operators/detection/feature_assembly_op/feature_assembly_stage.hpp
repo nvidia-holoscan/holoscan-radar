@@ -18,10 +18,50 @@ constexpr int kFeatEl = 4;
 constexpr int kFeatDopplerBin = 5;
 constexpr int kFeatRangeBin = 6;
 
+// Cap on preserved batch rank for score-plane indexing (CFAR n_preserved).
+constexpr int kMaxPreservedBatchDims = 8;
+
+// Per-row element offset into a compact (…, D, R) score map from the
+// preserved batch columns of detection_idx.
+__global__ void score_plane_offsets_kernel(
+    const int64_t* __restrict__ detection_idx, int64_t num_points,
+    int64_t idx_cols, int64_t n_preserved,
+    const int64_t* __restrict__ leading_dims, int64_t plane_elems,
+    int64_t* __restrict__ offsets) {
+  const int64_t row = static_cast<int64_t>(blockIdx.x) * blockDim.x +
+                      threadIdx.x;
+  if (row >= num_points) {
+    return;
+  }
+  const int64_t* idx_row = detection_idx + row * idx_cols;
+  int64_t linear = 0;
+  for (int64_t a = 0; a < n_preserved; ++a) {
+    linear = linear * leading_dims[a] + idx_row[a];
+  }
+  offsets[row] = linear * plane_elems;
+}
+
+inline void launch_score_plane_offsets(const int64_t* detection_idx,
+                                       int64_t num_points, int64_t idx_cols,
+                                       int64_t n_preserved,
+                                       const int64_t* leading_dims,
+                                       int64_t plane_elems, int64_t* offsets,
+                                       cudaStream_t stream) {
+  if (num_points <= 0 || n_preserved <= 0) {
+    return;
+  }
+  const int block = 256;
+  const int grid =
+      static_cast<int>((num_points + block - 1) / static_cast<int64_t>(block));
+  score_plane_offsets_kernel<<<grid, block, 0, stream>>>(
+      detection_idx, num_points, idx_cols, n_preserved, leading_dims,
+      plane_elems, offsets);
+}
+
 // Assemble `points[row, f]` from detection_idx and optional sources.
 // detection_idx columns: (…preserved_batch, doppler_bin, range_bin).
 // score_plane_offsets[row] is the element offset to the start of that row's
-// (D, R) plane within score_map (0 when there are no preserved batch dims).
+// (D, R) plane within score_map (nullptr ⇒ plane base 0).
 template <typename T>
 __global__ void assemble_features_kernel(
     const int64_t* __restrict__ detection_idx, int64_t num_points,

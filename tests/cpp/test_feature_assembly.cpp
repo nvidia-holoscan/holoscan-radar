@@ -185,7 +185,6 @@ TEST(FeatureAssemblyOpTest, EmptyDetectionIdxEmitsEmptyPoints) {
 
 TEST(FeatureAssemblyOpTest, FloatDoubleAgreeOnPhysicalLookup) {
   RADAR_TEST_SKIP_IF_NO_GPU();
-  constexpr int64_t kD = 4;
   constexpr int64_t kR = 4;
   std::vector<int64_t> idx = {1, 2};
   auto idx_d = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
@@ -200,7 +199,50 @@ TEST(FeatureAssemblyOpTest, FloatDoubleAgreeOnPhysicalLookup) {
   const auto pf = run_assembly<float>(idx_f, {AssemblyFeature::kRange}, rb_f);
   EXPECT_NEAR(pd.as<double>()[0], static_cast<double>(pf.as<float>()[0]),
               1e-5);
-  (void)kD;
+}
+
+TEST(FeatureAssemblyOpTest, GathersScoreAcrossPreservedBatch) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  // detection_idx columns: (batch, doppler, range) — matches CFAR with one
+  // preserved leading axis. Score map shape (B=2, D=4, R=4).
+  constexpr int64_t kB = 2;
+  constexpr int64_t kD = 4;
+  constexpr int64_t kR = 4;
+  // Two detections in different batch slices.
+  std::vector<int64_t> idx = {
+      0, 1, 2,  // batch 0, d=1, r=2 → score should be 11
+      1, 2, 3,  // batch 1, d=2, r=3 → score should be 23
+  };
+  auto idx_t = to_device_tensor(idx, {2, 3}, DLDataType{kDLInt, 64, 1});
+
+  std::vector<double> score(static_cast<size_t>(kB * kD * kR), 0.0);
+  score[static_cast<size_t>(0 * kD * kR + 1 * kR + 2)] = 11.0;
+  score[static_cast<size_t>(1 * kD * kR + 2 * kR + 3)] = 23.0;
+  auto sc = to_device_tensor(score, {kB, kD, kR}, real_dtype<double>());
+
+  const auto points = run_assembly<double>(
+      idx_t, {AssemblyFeature::kScore}, nullptr, nullptr, sc);
+  ASSERT_EQ(points.shape[0], 2);
+  ASSERT_EQ(points.shape[1], 1);
+  EXPECT_DOUBLE_EQ(points.as<double>()[0], 11.0);
+  EXPECT_DOUBLE_EQ(points.as<double>()[1], 23.0);
+}
+
+TEST(FeatureAssemblyOpTest, RejectsAzFeatureWithoutAoaInput) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  std::vector<int64_t> idx = {0, 0};
+  auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
+  EXPECT_THROW(run_assembly<double>(idx_t, {AssemblyFeature::kAz}),
+               std::invalid_argument);
+}
+
+TEST(FeatureAssemblyOpTest, RejectsBadDetectionIdxRank) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  std::vector<int64_t> idx = {0, 1, 2};
+  auto idx_t = to_device_tensor(idx, {3}, DLDataType{kDLInt, 64, 1});
+  EXPECT_THROW(
+      run_assembly<double>(idx_t, {AssemblyFeature::kDopplerBin}),
+      std::invalid_argument);
 }
 
 }  // namespace

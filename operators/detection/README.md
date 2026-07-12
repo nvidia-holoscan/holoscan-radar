@@ -59,16 +59,18 @@ header is the full contract; the current build implements a faithful subset:
     integrated_power are ping-pong cached and reallocated only on geometry
     change.
 
-`FeatureAssemblyOp` is in progress on `dpc/feature-assembly`:
+`FeatureAssemblyOp` is checklist-complete on `dpc/feature-assembly`:
 
-- **Implemented (vertical slice):** static `features` column layout; required
-  `detection_idx`; optional `range_bins` / `velocity_bins` / `detection_score`
-  / `aoa_estimates` (non-blocking); raw-bin fallback when physical bin axes
-  are absent; score/az/el require their inputs; GPU assemble kernel; float and
-  double; empty `detection_idx` → empty `points`.
-- **Staged follow-ups:** batch-preserved score gather path is implemented but
-  lightly tested; shared gather primitive extraction for `SnapshotGatherOp`;
-  ping-pong `points` if steady alloc shows up on large detection counts.
+- **Implemented:** static `features` column layout; required `detection_idx`;
+  optional `range_bins` / `velocity_bins` / `detection_score` /
+  `aoa_estimates` (non-blocking); raw-bin fallback when physical bin axes are
+  absent; score/az/el require their inputs; GPU assemble kernel with
+  device-side score-plane offsets for preserved batch dims; float and double;
+  empty `detection_idx` → empty `points`; unit tests cover
+  [`TESTING.md`](../../docs/planning/TESTING.md) FeatureAssembly checks.
+- **Staged follow-ups:** see
+  [`feature_assembly_op/OPEN_ITEMS.md`](feature_assembly_op/OPEN_ITEMS.md)
+  (shared gather with SnapshotGatherOp; optional `points` ping-pong).
 
 ## Shared kernel conventions
 
