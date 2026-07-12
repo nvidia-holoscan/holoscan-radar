@@ -85,10 +85,13 @@ class FeatureAssemblyOp : public holoscan::Operator {
   std::shared_ptr<holoscan::Tensor> retained_score_;
   std::shared_ptr<holoscan::Tensor> retained_aoa_;
   // Scratch uploads used by the assemble kernel (feature ids, score offsets,
-  // score leading dims). Feature ids are static → uploaded once.
+  // score leading dims). Feature ids are static → uploaded once. Leading
+  // dims are re-uploaded only when the score-map layout changes.
   std::shared_ptr<holoscan::Tensor> retained_feature_ids_;
   std::shared_ptr<holoscan::Tensor> retained_score_offsets_;
   std::shared_ptr<holoscan::Tensor> retained_score_leading_;
+  std::shared_ptr<holoscan::Tensor> retained_error_flag_;
+  std::vector<int64_t> cached_score_leading_;
   bool feature_ids_ready_{false};
 };
 

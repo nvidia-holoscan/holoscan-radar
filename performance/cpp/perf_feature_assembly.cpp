@@ -135,18 +135,31 @@ std::shared_ptr<holoscan::Tensor> make_device_from_host(
 }
 
 // Deterministic detection grid across the DxR plane (wraps if N > cells).
+// When score_batch > 1, emits preserved batch column `(batch, doppler, range)`
+// so the assemble kernel's multi-plane score gather is exercised.
 std::shared_ptr<holoscan::Tensor> make_detection_idx(int64_t num_detections,
                                                      int64_t doppler,
-                                                     int64_t range) {
+                                                     int64_t range,
+                                                     int64_t score_batch) {
+  const int64_t cols = score_batch > 1 ? 3 : 2;
   std::vector<int64_t> host(
-      static_cast<size_t>(std::max<int64_t>(num_detections, 0) * 2), 0);
+      static_cast<size_t>(std::max<int64_t>(num_detections, 0) * cols), 0);
   const int64_t cells = std::max<int64_t>(doppler * range, 1);
+  const int64_t batch = std::max<int64_t>(score_batch, 1);
   for (int64_t i = 0; i < num_detections; ++i) {
     const int64_t cell = (i * 997) % cells;
-    host[static_cast<size_t>(i * 2)] = cell / range;
-    host[static_cast<size_t>(i * 2 + 1)] = cell % range;
+    const int64_t base = i * cols;
+    size_t col = 0;
+    if (cols == 3) {
+      host[static_cast<size_t>(base + static_cast<int64_t>(col++))] =
+          i % batch;
+    }
+    host[static_cast<size_t>(base + static_cast<int64_t>(col++))] =
+        cell / range;
+    host[static_cast<size_t>(base + static_cast<int64_t>(col))] =
+        cell % range;
   }
-  return make_device_from_host(host, {num_detections, 2}, kInt64Dtype);
+  return make_device_from_host(host, {num_detections, cols}, kInt64Dtype);
 }
 
 template <typename T>
@@ -184,8 +197,8 @@ class FeatAsmPerfSourceOp : public holoscan::Operator {
   FeatAsmPerfSourceOp() = default;
 
   void setup(holoscan::OperatorSpec& spec) override {
-    // Ports are always declared: Holoscan calls setup() before compose() can
-    // configure() emit flags. Unused outputs simply stay unwired.
+    // All ports declared up front (setup runs before configure). Unused
+    // outputs are wired to null sinks in the app so Holoscan will tick.
     spec.output<holoscan::TensorMap>("detection_idx");
     spec.output<holoscan::TensorMap>("range_bins");
     spec.output<holoscan::TensorMap>("velocity_bins");
@@ -250,15 +263,24 @@ class FeatAsmPerfApp : public holoscan::Application {
 
     auto src = make_operator<FeatAsmPerfSourceOp>(
         "src", make_condition<holoscan::CountCondition>(total_frames));
-    // Always emit and wire every optional input: Holoscan refuses to tick a
-    // source with an unconnected output port. FeatureAssembly ignores unused
-    // optionals when the feature pack does not require them.
     src->configure(collector, idx, range_bins, velocity_bins, score, aoa);
     add_flow(src, op, {{"detection_idx", "detection_idx"}});
     add_flow(src, op, {{"range_bins", "range_bins"}});
     add_flow(src, op, {{"velocity_bins", "velocity_bins"}});
-    add_flow(src, op, {{"detection_score", "detection_score"}});
-    add_flow(src, op, {{"aoa_estimates", "aoa_estimates"}});
+    // Wire score/aoa into the op only when the pack needs them; otherwise
+    // drain via null sinks so pack-to-pack latency stays comparable.
+    if (pack_needs_score(scen->pack)) {
+      add_flow(src, op, {{"detection_score", "detection_score"}});
+    } else {
+      auto ns = make_operator<perf::PerfNullSinkOp>("score_drain");
+      add_flow(src, ns, {{"detection_score", "input"}});
+    }
+    if (pack_needs_aoa(scen->pack)) {
+      add_flow(src, op, {{"aoa_estimates", "aoa_estimates"}});
+    } else {
+      auto ns = make_operator<perf::PerfNullSinkOp>("aoa_drain");
+      add_flow(src, ns, {{"aoa_estimates", "input"}});
+    }
 
     auto term = make_operator<perf::PerfTerminalSinkOp>("points_sink");
     term->configure(collector);
@@ -302,7 +324,7 @@ perf::ResultRow base_row(const FeatScenario& scen) {
   row.variant = pack_tag(scen.pack);
   row.size_id = scen.size_id;
   row.map_shape = {scen.doppler, scen.range};
-  row.input_shape = {scen.num_detections, 2};
+  row.input_shape = {scen.num_detections, scen.score_batch > 1 ? 3 : 2};
   row.out_batch = scen.num_detections;
   row.k = static_cast<int64_t>(pack_features(scen.pack).size());
   if (scen.score_batch > 1) {
@@ -322,8 +344,8 @@ void run_scenario(const FeatScenario& scen, const perf::RunSettings& rs,
   for (int rep = 0; rep < rs.repeats; ++rep) {
     perf::TimingCollector collector;
 
-    auto idx_t =
-        make_detection_idx(scen.num_detections, scen.doppler, scen.range);
+    auto idx_t = make_detection_idx(scen.num_detections, scen.doppler,
+                                    scen.range, scen.score_batch);
     auto range_t = make_axis_bins<PerfPrecision>(scen.range);
     auto vel_t = make_axis_bins<PerfPrecision>(scen.doppler);
     std::vector<int64_t> score_shape;

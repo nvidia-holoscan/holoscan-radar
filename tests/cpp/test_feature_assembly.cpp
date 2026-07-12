@@ -245,4 +245,101 @@ TEST(FeatureAssemblyOpTest, RejectsBadDetectionIdxRank) {
       std::invalid_argument);
 }
 
+TEST(FeatureAssemblyOpTest, RejectsElFeatureWithoutAoaInput) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  std::vector<int64_t> idx = {0, 0};
+  auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
+  EXPECT_THROW(run_assembly<double>(idx_t, {AssemblyFeature::kEl}),
+               std::invalid_argument);
+}
+
+TEST(FeatureAssemblyOpTest, RejectsScoreLeadingRankMismatch) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  // Score has a leading batch dim but detection_idx has no preserved cols.
+  std::vector<int64_t> idx = {0, 1};
+  auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
+  std::vector<double> score(2 * 4 * 4, 1.0);
+  auto sc = to_device_tensor(score, {2, 4, 4}, real_dtype<double>());
+  EXPECT_THROW(
+      run_assembly<double>(idx_t, {AssemblyFeature::kScore}, nullptr, nullptr,
+                           sc),
+      std::invalid_argument);
+}
+
+TEST(FeatureAssemblyOpTest, RejectsOobRangeBinWhenBinsPresent) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  std::vector<int64_t> idx = {0, 99};  // range_bin 99 with only 4 bins
+  auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
+  std::vector<double> range_bins = {0, 10, 20, 30};
+  auto rb = to_device_tensor(range_bins, {4}, real_dtype<double>());
+  EXPECT_THROW(run_assembly<double>(idx_t, {AssemblyFeature::kRange}, rb),
+               std::invalid_argument);
+}
+
+TEST(FeatureAssemblyOpTest, RejectsOobScoreCoords) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  std::vector<int64_t> idx = {8, 1};  // doppler 8 out of range for D=4
+  auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
+  std::vector<double> score(4 * 4, 1.0);
+  auto sc = to_device_tensor(score, {4, 4}, real_dtype<double>());
+  EXPECT_THROW(
+      run_assembly<double>(idx_t, {AssemblyFeature::kScore}, nullptr, nullptr,
+                           sc),
+      std::invalid_argument);
+}
+
+TEST(FeatureAssemblyOpTest, RejectsOobPreservedBatchCoord) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  // batch coord 2 is OOB for score leading dim B=2.
+  std::vector<int64_t> idx = {2, 0, 0};
+  auto idx_t = to_device_tensor(idx, {1, 3}, DLDataType{kDLInt, 64, 1});
+  std::vector<double> score(2 * 4 * 4, 1.0);
+  auto sc = to_device_tensor(score, {2, 4, 4}, real_dtype<double>());
+  EXPECT_THROW(
+      run_assembly<double>(idx_t, {AssemblyFeature::kScore}, nullptr, nullptr,
+                           sc),
+      std::invalid_argument);
+}
+
+TEST(FeatureAssemblyOpTest, RejectsNonContiguousDetectionIdx) {
+  RADAR_TEST_SKIP_IF_NO_GPU();
+  // Shape (1, 2) with strides (2, 2): elements at offsets 0 and 2 — not
+  // compact row-major, so is_contiguous() is false.
+  struct Holder {
+    void* data{nullptr};
+    std::vector<int64_t> shape{1, 2};
+    std::vector<int64_t> strides{2, 2};
+    DLManagedTensor dl{};
+  };
+  auto holder = std::make_unique<Holder>();
+  if (cudaMalloc(&holder->data, 4 * sizeof(int64_t)) != cudaSuccess) {
+    FAIL() << "cudaMalloc failed";
+  }
+  std::vector<int64_t> host = {0, 0, 1, 0};  // values at stride slots 0 and 2
+  cudaMemcpy(holder->data, host.data(), 4 * sizeof(int64_t),
+             cudaMemcpyHostToDevice);
+  int device_id = 0;
+  cudaGetDevice(&device_id);
+  holder->dl.dl_tensor.data = holder->data;
+  holder->dl.dl_tensor.device = DLDevice{kDLCUDA, device_id};
+  holder->dl.dl_tensor.ndim = 2;
+  holder->dl.dl_tensor.dtype = DLDataType{kDLInt, 64, 1};
+  holder->dl.dl_tensor.shape = holder->shape.data();
+  holder->dl.dl_tensor.strides = holder->strides.data();
+  holder->dl.dl_tensor.byte_offset = 0;
+  holder->dl.manager_ctx = holder.get();
+  holder->dl.deleter = [](DLManagedTensor* self) {
+    auto* h = static_cast<Holder*>(self->manager_ctx);
+    cudaFree(h->data);
+    delete h;
+  };
+  auto idx_t = std::make_shared<holoscan::Tensor>(&holder->dl);
+  holder.release();
+  ASSERT_FALSE(idx_t->is_contiguous());
+  EXPECT_THROW(
+      run_assembly<double>(idx_t, {AssemblyFeature::kDopplerBin,
+                                   AssemblyFeature::kRangeBin}),
+      std::invalid_argument);
+}
+
 }  // namespace

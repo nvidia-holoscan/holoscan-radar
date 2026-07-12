@@ -11,9 +11,7 @@ target_include_directories(feature_assembly_op PUBLIC
 target_link_libraries(feature_assembly_op
     PUBLIC
         holoscan::core
-        holoscan::radar_common
-    PRIVATE
-        matx::matx)
+        holoscan::radar_common)
 
 set_property(TARGET feature_assembly_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)

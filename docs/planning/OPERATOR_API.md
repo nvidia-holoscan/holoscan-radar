@@ -463,7 +463,9 @@ Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`
 
 1. For each `detection_idx` row, read `(doppler_bin, range_bin)`.
 2. Build each configured feature: `range = range_bins[range_bin]` (or the raw bin), `velocity = velocity_bins[doppler_bin]` (or raw), `score =` gather `detection_score` at the cell, `az` / `el` `= aoa_estimates[row]`.
-3. Stack the columns in `features` order → `points`. Pure gather / 1-D lookup (MatX); no scaling.
+3. Stack the columns in `features` order → `points`. Pure gather / 1-D
+   lookup (custom CUDA; MatX is a poor fit for sparse irregular gathers);
+   no scaling.
 
 **Notes:**
 
@@ -472,7 +474,8 @@ Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`
 - *Placement:* pre-angle (cluster-then-angle) uses `features = [range, velocity, score]` (no `aoa_estimates`); post-angle (angle-then-cluster) adds `[az, el]`. The `features` list + optional `aoa_estimates` cover both without a variant.
 - *Shared gather primitive:* the same per-detection gather as `SnapshotGatherOp` (which pulls channel vectors); here it pulls scalars and does the 1-D bin-axis lookups. One primitive, two bridges.
 - *Row alignment:* `points` rows are 1:1 with `detection_idx` rows, so `labels` positionally join back and `DetectionReductionOp.rep_idx` resolves to real cells.
-- *Carried over:* plain-tensor ports; precision by template instantiation; MatX + MatX memory spaces.
+- *Carried over:* plain-tensor ports; precision by template instantiation;
+  device tensors on the Holoscan CUDA stream (custom CUDA gather kernel).
 
 #### DetectionReductionOp
 
