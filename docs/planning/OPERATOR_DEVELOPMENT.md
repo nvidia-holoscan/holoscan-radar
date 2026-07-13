@@ -97,13 +97,28 @@ Put math in the stage. Put host calibration / LUT builders in dedicated TUs
 
 | Need | Header |
 | --- | --- |
+| Single-entry `TensorMap` receive/emit | `radar_common/sdk/tensor_io.hpp` |
 | Sticky `[live]` resolve | `radar_common/sdk/override_param.hpp` |
 | Warn-once artifact cache | `radar_common/sdk/config_cache.hpp` |
 | Arg setters for custom types | `radar_common/sdk/arg_setters.hpp` |
-| Batching / dtype / device checks | `radar_common/tensor/tensor_utils.hpp` |
+| Batching / dtype / device / contiguity checks | `radar_common/tensor/tensor_utils.hpp` |
+| CUDA last-error guard | `radar_common/tensor/cuda_check.hpp` |
 | Device tensor alloc | `radar_common/tensor/dlpack_buffer.hpp` |
 | MatX views | `radar_common/tensor/matx_utils.hpp` (`.cu` / stage only) |
 | Tests | `tests/cpp/utils/sdk_harness.hpp`, `tensor_fixtures.hpp` |
+
+**Do not re-derive per-operator I/O or validation boilerplate.** The single-entry
+`TensorMap` receive/emit (`receive_single` / `receive_optional` / `emit_single`),
+the input checks (`require_cuda_accessible` / `require_contiguous` /
+`require_dtype`), and the CUDA last-error guard (`check_cuda`) all live in
+`radar_common` and take the operator name as a `who` argument so error messages
+stay specific. Call them; do not paste a local `namespace { ... }` copy into the
+`.cu`. If you genuinely need a helper that is not there yet and more than one
+operator would use it, add it to `radar_common` (who-parameterized) rather than
+inlining a private version — silent per-operator copies drift apart (subtly
+different messages, empty-map handling, null checks) and are exactly what the
+detection and FMCW operators were consolidated *out of* once each had grown its
+own near-identical set.
 
 ---
 
