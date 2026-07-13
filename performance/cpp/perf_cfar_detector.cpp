@@ -796,7 +796,16 @@ int main(int argc, char** argv) {
     std::cerr << "[" << (i + 1) << "/" << n << "] " << scenarios[i].id
               << std::flush;
     const auto t0 = perf::Clock::now();
-    run_scenario(scenarios[i], opt.rs, &report);
+    // Isolate scenario failures: a thrown graph error (e.g. an operator
+    // rejecting an invalid parameter) would otherwise propagate out of main
+    // and abort the process, taking the remaining scenarios and the report
+    // with it. Log and continue so one bad scenario does not lose the sweep.
+    try {
+      run_scenario(scenarios[i], opt.rs, &report);
+    } catch (const std::exception& e) {
+      std::cerr << "  FAILED: " << e.what() << "\n";
+      continue;
+    }
     const double elapsed_s = perf::to_ms(perf::Clock::now() - t0) / 1000.0;
     std::cerr << "  (" << elapsed_s << " s)\n";
     report.run_settings.scenarios_completed = static_cast<int>(i + 1);

@@ -534,10 +534,14 @@ int main(int argc, char** argv) {
     // Same file feeds the native config path: compose() pulls the
     // per-operator blocks via from_config().
     app->config(config_path.string());
+    // run() is inside the try: a graph failure (e.g. an operator rejecting an
+    // invalid parameter mid-tick) is rethrown out of run(); catching it here
+    // exits cleanly with the message instead of terminating on an uncaught
+    // exception, which the runtime reports as a process abort.
+    app->run();
   } catch (const std::exception& e) {
     HOLOSCAN_LOG_ERROR("fmcw_siso: {}", e.what());
     return 1;
   }
-  app->run();
   return 0;
 }
