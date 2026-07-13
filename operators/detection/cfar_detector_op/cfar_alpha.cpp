@@ -11,7 +11,6 @@
 #include <cmath>
 #include <cstring>
 #include <deque>
-#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -511,9 +510,32 @@ namespace {
 
 constexpr int kMcCalTrials = 4096;
 constexpr int kMcVerifyTrials = 8192;
+// K>1 GO/SO/OS bisection with only kMcVerifyTrials under-shoots alpha on the
+// CRN sample (isolation re-check at 200k trials saw ~1.27x Pfa for GO K=8).
+// More trials tighten the finite-sample quantile used during inversion.
+constexpr int kMcCalTrialsKgt1 = 65536;
 
 int mc_trials_for_calibration(int64_t k) {
-  return k > 1 ? kMcVerifyTrials : kMcCalTrials;
+  return k > 1 ? kMcCalTrialsKgt1 : kMcCalTrials;
+}
+
+// After noisy MC bisection, prefer the high end of the bracket: pfa_at(hi) was
+// observed <= target on the calibration sample, while the midpoint can still
+// sit on the high-Pfa side of a flat FA-count plateau.
+template <typename PfaAt>
+double mc_bisection_alpha(double pfa, double lo, double hi, PfaAt&& pfa_at) {
+  for (int iter = 0; iter < kMcBisectionMaxIter; ++iter) {
+    const double mid = 0.5 * (lo + hi);
+    if (pfa_at(mid) > pfa) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+    if (hi - lo <= kEps * std::max(1.0, hi)) {
+      break;
+    }
+  }
+  return hi;
 }
 
 int64_t effective_os_rank(int64_t n, int64_t os_rank) {
@@ -856,19 +878,10 @@ double go_cfar_alpha(double pfa, int64_t n_side, int64_t k, int guard_d,
     lo *= 0.5;
   }
 
-  for (int iter = 0; iter < kMcBisectionMaxIter; ++iter) {
-    const double mid = 0.5 * (lo + hi);
-    if (go_cfar_pfa_from_alpha_impl(mid, n_side, k, mc_trials, guard_d,
-                                     guard_r, train_d, train_r) > pfa) {
-      lo = mid;
-    } else {
-      hi = mid;
-    }
-    if (hi - lo <= kEps * std::max(1.0, hi)) {
-      break;
-    }
-  }
-  return 0.5 * (lo + hi);
+  return mc_bisection_alpha(pfa, lo, hi, [&](double alpha) {
+    return go_cfar_pfa_from_alpha_impl(alpha, n_side, k, mc_trials, guard_d,
+                                       guard_r, train_d, train_r);
+  });
 }
 
 double go_cfar_alpha_at_cell(double pfa, int64_t k, int d, int r,
@@ -910,18 +923,7 @@ double go_cfar_alpha_at_cell(double pfa, int64_t k, int d, int r,
   while (lo > 0.0 && pfa_at(lo) <= pfa) {
     lo *= 0.5;
   }
-  for (int iter = 0; iter < kMcBisectionMaxIter; ++iter) {
-    const double mid = 0.5 * (lo + hi);
-    if (pfa_at(mid) > pfa) {
-      lo = mid;
-    } else {
-      hi = mid;
-    }
-    if (hi - lo <= kEps * std::max(1.0, hi)) {
-      break;
-    }
-  }
-  return 0.5 * (lo + hi);
+  return mc_bisection_alpha(pfa, lo, hi, pfa_at);
 }
 
 std::vector<double> build_go_alpha_lut(double pfa, int64_t fold,
@@ -985,19 +987,10 @@ double so_cfar_alpha(double pfa, int64_t n_side, int64_t k, int guard_d,
     lo *= 0.5;
   }
 
-  for (int iter = 0; iter < kMcBisectionMaxIter; ++iter) {
-    const double mid = 0.5 * (lo + hi);
-    if (so_cfar_pfa_from_alpha_impl(mid, n_side, k, mc_trials, guard_d,
-                                    guard_r, train_d, train_r) > pfa) {
-      lo = mid;
-    } else {
-      hi = mid;
-    }
-    if (hi - lo <= kEps * std::max(1.0, hi)) {
-      break;
-    }
-  }
-  return 0.5 * (lo + hi);
+  return mc_bisection_alpha(pfa, lo, hi, [&](double alpha) {
+    return so_cfar_pfa_from_alpha_impl(alpha, n_side, k, mc_trials, guard_d,
+                                       guard_r, train_d, train_r);
+  });
 }
 
 double so_cfar_alpha_at_cell(double pfa, int64_t k, int d, int r,
@@ -1039,18 +1032,7 @@ double so_cfar_alpha_at_cell(double pfa, int64_t k, int d, int r,
   while (lo > 0.0 && pfa_at(lo) <= pfa) {
     lo *= 0.5;
   }
-  for (int iter = 0; iter < kMcBisectionMaxIter; ++iter) {
-    const double mid = 0.5 * (lo + hi);
-    if (pfa_at(mid) > pfa) {
-      lo = mid;
-    } else {
-      hi = mid;
-    }
-    if (hi - lo <= kEps * std::max(1.0, hi)) {
-      break;
-    }
-  }
-  return 0.5 * (lo + hi);
+  return mc_bisection_alpha(pfa, lo, hi, pfa_at);
 }
 
 std::vector<double> build_so_alpha_lut(double pfa, int64_t fold,
@@ -1116,19 +1098,10 @@ double os_cfar_alpha(double pfa, int64_t n, int64_t os_rank, int64_t k,
     lo *= 0.5;
   }
 
-  for (int iter = 0; iter < kMcBisectionMaxIter; ++iter) {
-    const double mid = 0.5 * (lo + hi);
-    if (os_cfar_pfa_from_alpha_impl(mid, n, os_rank, k, mc_trials, guard_d,
-                                    guard_r, train_d, train_r) > pfa) {
-      lo = mid;
-    } else {
-      hi = mid;
-    }
-    if (hi - lo <= kEps * std::max(1.0, hi)) {
-      break;
-    }
-  }
-  return 0.5 * (lo + hi);
+  return mc_bisection_alpha(pfa, lo, hi, [&](double alpha) {
+    return os_cfar_pfa_from_alpha_impl(alpha, n, os_rank, k, mc_trials,
+                                       guard_d, guard_r, train_d, train_r);
+  });
 }
 
 std::vector<double> build_os_alpha_lut(double pfa, int64_t fold,

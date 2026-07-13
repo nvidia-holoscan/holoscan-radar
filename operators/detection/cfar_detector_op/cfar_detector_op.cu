@@ -384,6 +384,10 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
       alpha_lut_cleared_pfa_active_warned_ = true;
     }
     using_external_alpha_lut_ = false;
+    // Drop the external table from the host cache so the non-blocking stale
+    // path cannot keep applying it while pfa-derived calibration runs.
+    alpha_lut_host_cache_.clear();
+    alpha_lut_dev_.reset();
     alpha_lut_key_ = {};
     pending_lut_key_ = {};
     pending_lut_active_ = false;

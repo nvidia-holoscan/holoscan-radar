@@ -19,6 +19,7 @@
 #include <holoscan/test/test_harness.hpp>
 
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
+#include "detection/cfar_detector_op/cfar_alpha_mc.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/sdk_harness.hpp"
@@ -985,4 +986,24 @@ TEST(CFARDetectorOpGoTest, GoLutUsesCellFaithfulAlpha) {
       << "lut=" << lut[10] << " at_edge=" << at_edge;
   EXPECT_GT(std::abs(lut[10] - four_side) / lut[10], 0.05)
       << "lut=" << lut[10] << " four_side_n10=" << four_side;
+}
+
+// K>1 MC inversion used too few CRN trials and returned the bracket midpoint,
+// which systematically under-shot alpha (isolation Pfa ~1.27x at K=8).
+TEST(CFARDetectorOpGoTest, GoAlphaAtCellInvertsMonteCarloPfaKgt1) {
+  using holoscan::radar::detail::go_cfar_alpha_at_cell;
+  using holoscan::radar::detail::goso_mc_pfa_at_cell_gpu;
+  constexpr double kPfa = 1e-2;
+  constexpr int64_t kFold = 8;
+  constexpr int nd = 64, nr = 64, g = 1, t = 2, d = 32, r = 32;
+  // Calibrate a single interior cell — full-map LUT build is unnecessary here
+  // and would pull this unit test into multi-second statistical territory.
+  const double alpha =
+      go_cfar_alpha_at_cell(kPfa, kFold, d, r, nd, nr, g, g, t, t);
+  ASSERT_GT(alpha, 0.0);
+  const double pfa_est = goso_mc_pfa_at_cell_gpu(
+      alpha, kFold, 200000, d, r, nd, nr, g, g, t, t, true);
+  ASSERT_GE(pfa_est, 0.0) << "GPU MC calibration unavailable";
+  EXPECT_NEAR(pfa_est, kPfa, 0.15 * kPfa)
+      << "alpha=" << alpha << " pfa_est=" << pfa_est;
 }
