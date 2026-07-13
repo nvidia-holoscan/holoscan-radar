@@ -24,12 +24,11 @@ std::vector<double> cosine_sum_window(int64_t n,
                                       const std::vector<double>& a) {
   std::vector<double> w(n, a[0]);
   if (n == 1) {
-    // Single-sample window: the peak value, sum_i (-1)^i a[i].
+    // Single-sample window: the center/peak value, sum_i a[i]. The endpoint
+    // formula sum_i (-1)^i a[i] would collapse Hann/Hamming/etc. to ~0.
     double v = 0.0;
-    double sign = 1.0;
     for (double c : a) {
-      v += sign * c;
-      sign = -sign;
+      v += c;
     }
     w[0] = v;
     return w;

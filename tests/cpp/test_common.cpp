@@ -95,6 +95,21 @@ TEST(WindowGeneration, HannSymmetricWithZeroEndpoints) {
   }
 }
 
+TEST(WindowGeneration, SingleSampleCosineSumWindowsPeakAtUnity) {
+  // Length-1 cosine-sum windows must return the center/peak value (sum_i a[i]),
+  // not the endpoint sum_i (-1)^i a[i] which collapses to ~0 and, under
+  // coherent-gain normalization, would divide by a zero mean.
+  for (WindowType type :
+       {WindowType::kHann, WindowType::kHamming, WindowType::kBlackman,
+        WindowType::kBlackmanHarris, WindowType::kFlatTop}) {
+    WindowSpec spec;
+    spec.type = type;
+    const auto w = generate_window(spec, 1);
+    ASSERT_EQ(w.size(), 1U) << holoscan::radar::to_string(type);
+    EXPECT_NEAR(w[0], 1.0, 1e-12) << holoscan::radar::to_string(type);
+  }
+}
+
 TEST(WindowGeneration, CoherentGainNormalizationYieldsUnitMean) {
   for (WindowType type :
        {WindowType::kHann, WindowType::kHamming, WindowType::kBlackman,
