@@ -37,7 +37,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # find_dependency(MATX ...), so find_package(holoscan) also provides the
 # matx::matx target used by the operator kernels.
 
-find_package(CUDAToolkit QUIET)
+find_package(CUDAToolkit REQUIRED)
 find_package(holoscan REQUIRED COMPONENTS core)
 
 
