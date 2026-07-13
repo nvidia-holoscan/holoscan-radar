@@ -122,12 +122,9 @@ using reduction_op_detail::kInt64Dtype;
 
 template <typename T, typename ScoreFn>
 void DetectionReductionOp<T, ScoreFn>::initialize() {
+  // RepresentativePolicy / ScoreMethod are shared radar_common types
+  // registered centrally; std::vector<double> is an SDK built-in.
   ensure_radar_arg_setters();
-  register_any_argument_setter<RepresentativePolicy>(
-      "holoscan::radar::RepresentativePolicy");
-  register_any_argument_setter<ScoreMethod>(
-      "holoscan::radar::ScoreMethod");
-  register_any_argument_setter<std::vector<double>>("std::vector<double>");
   Operator::initialize();
 }
 

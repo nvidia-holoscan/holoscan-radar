@@ -149,8 +149,32 @@ const char* kernel_error_message(int code) {
 template <typename T>
 void FeatureAssemblyOp<T>::initialize() {
   ensure_radar_arg_setters();
-  register_any_argument_setter<std::vector<AssemblyFeature>>(
-      "std::vector<AssemblyFeature>");
+  // `features` is a native std::vector<AssemblyFeature>. The SDK's default
+  // setter (ArgumentSetter::ensure_type) only handles vectors of built-in /
+  // resource elements — it rejects a vector whose element is a custom type
+  // (argument_setter-inl.hpp, ArgElementType::kCustom). So register a setter
+  // that any_casts the native vector directly. from_config() YAML is not
+  // supported for this parameter (matches the operator's native-only contract).
+  ArgumentSetter::get_instance()
+      .add_argument_setter<std::vector<AssemblyFeature>>(
+          [](ParameterWrapper& param_wrap, Arg& arg) -> bool {
+            auto& param =
+                *std::any_cast<Parameter<std::vector<AssemblyFeature>>*>(
+                    param_wrap.value());
+            if (arg.name().empty() && !arg.has_value()) {
+              param.set_default_value();
+              return true;
+            }
+            try {
+              param = std::any_cast<std::vector<AssemblyFeature>>(arg.value());
+              return true;
+            } catch (const std::bad_any_cast&) {
+              HOLOSCAN_LOG_ERROR(
+                  "argument '{}' is not a std::vector<AssemblyFeature>",
+                  arg.name());
+              return false;
+            }
+          });
   Operator::initialize();
 }
 

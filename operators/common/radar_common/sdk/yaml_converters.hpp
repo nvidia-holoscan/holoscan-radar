@@ -14,6 +14,7 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
+#include "radar_common/reduce/reduction_enums.hpp"
 
 // YAML::convert<> specializations for the shared config-plane descriptor
 // types, enabling Holoscan's from_config() path for operator parameters
@@ -68,6 +69,19 @@ inline constexpr ClutterFilterMethod kAllClutterFilterMethods[] = {
     ClutterFilterMethod::kDoubleDelay,
 };
 
+inline constexpr RepresentativePolicy kAllRepresentativePolicies[] = {
+    RepresentativePolicy::kPeak,
+    RepresentativePolicy::kMedoid,
+    RepresentativePolicy::kFirst,
+};
+
+inline constexpr ScoreMethod kAllScoreMethods[] = {
+    ScoreMethod::kWeightedSum,
+    ScoreMethod::kWeightedL2,
+    ScoreMethod::kWeightedMax,
+    ScoreMethod::kCustom,
+};
+
 }  // namespace holoscan::radar::detail
 
 namespace YAML {
@@ -117,6 +131,39 @@ struct convert<holoscan::radar::ClutterFilterMethod> {
     value = holoscan::radar::detail::parse_enum(
         node.as<std::string>(), "ClutterFilterMethod",
         holoscan::radar::detail::kAllClutterFilterMethods);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::RepresentativePolicy> {
+  static Node encode(const holoscan::radar::RepresentativePolicy& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::RepresentativePolicy& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "RepresentativePolicy",
+        holoscan::radar::detail::kAllRepresentativePolicies);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::ScoreMethod> {
+  static Node encode(const holoscan::radar::ScoreMethod& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node, holoscan::radar::ScoreMethod& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "ScoreMethod",
+        holoscan::radar::detail::kAllScoreMethods);
     return true;
   }
 };

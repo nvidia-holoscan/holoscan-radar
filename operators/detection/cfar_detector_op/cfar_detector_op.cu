@@ -23,6 +23,31 @@
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
+// YAML::convert for the operator-local CfarVariant enum, mirroring the shared
+// converters in radar_common/sdk/yaml_converters.hpp (reusing
+// detail::parse_enum) so ArgumentSetter::ensure_type<CfarVariant>() supports
+// from_config(). Kept in this TU because CfarVariant is cfar-local; common
+// must not depend on it.
+namespace YAML {
+template <>
+struct convert<holoscan::radar::CfarVariant> {
+  static Node encode(const holoscan::radar::CfarVariant& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node, holoscan::radar::CfarVariant& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    static constexpr holoscan::radar::CfarVariant kAll[] = {
+        holoscan::radar::CfarVariant::kCA, holoscan::radar::CfarVariant::kGO,
+        holoscan::radar::CfarVariant::kSO, holoscan::radar::CfarVariant::kOS};
+    value = holoscan::radar::detail::parse_enum(node.as<std::string>(),
+                                                "CfarVariant", kAll);
+    return true;
+  }
+};
+}  // namespace YAML
+
 namespace holoscan::radar {
 
 namespace {
@@ -142,7 +167,7 @@ CFARDetectorOp<T>::~CFARDetectorOp() = default;
 template <typename T>
 void CFARDetectorOp<T>::initialize() {
   ensure_radar_arg_setters();
-  register_any_argument_setter<CfarVariant>("CfarVariant");
+  ArgumentSetter::ensure_type<CfarVariant>();
   Operator::initialize();
 }
 
