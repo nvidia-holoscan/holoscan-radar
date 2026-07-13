@@ -263,16 +263,24 @@ class PeakReportOp : public holoscan::Operator {
         static_cast<size_t>(num_doppler * num_range));
     std::vector<float> ranges(static_cast<size_t>(num_range));
     std::vector<float> velocities(static_cast<size_t>(num_doppler));
-    cudaDeviceSynchronize();
-    cudaMemcpy(rd.data(), rd_map->data(),
-               static_cast<size_t>(rd_map->nbytes()),
-               cudaMemcpyDeviceToHost);
-    cudaMemcpy(ranges.data(), range_bins->data(),
-               static_cast<size_t>(range_bins->nbytes()),
-               cudaMemcpyDeviceToHost);
-    cudaMemcpy(velocities.data(), velocity_bins->data(),
-               static_cast<size_t>(velocity_bins->nbytes()),
-               cudaMemcpyDeviceToHost);
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+      throw std::runtime_error("PeakReportOp: device synchronize failed");
+    }
+    if (cudaMemcpy(rd.data(), rd_map->data(),
+                   static_cast<size_t>(rd_map->nbytes()),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+      throw std::runtime_error("PeakReportOp: rd_map D2H copy failed");
+    }
+    if (cudaMemcpy(ranges.data(), range_bins->data(),
+                   static_cast<size_t>(range_bins->nbytes()),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+      throw std::runtime_error("PeakReportOp: range_bins D2H copy failed");
+    }
+    if (cudaMemcpy(velocities.data(), velocity_bins->data(),
+                   static_cast<size_t>(velocity_bins->nbytes()),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+      throw std::runtime_error("PeakReportOp: velocity_bins D2H copy failed");
+    }
 
     // The zero-Doppler column is suppressed by the clutter filter; report
     // the strongest remaining (moving-target) cell.
