@@ -26,12 +26,18 @@ import os
 import sys
 from pathlib import Path
 
-_EXCLUDE_DIRS = {"build", "build-docker", ".git", ".local", ".cache", "_CPack_Packages"}
+_EXCLUDE_DIRS = {".git", ".local", ".cache", "_CPack_Packages"}
+
+
+def _is_excluded_dir(name: str) -> bool:
+    # Skip build trees: the literal `build/` plus any `build-<variant>/`
+    # (mirrors the `build-*/` pattern in .gitignore, e.g. build-docker).
+    return name in _EXCLUDE_DIRS or name == "build" or name.startswith("build-")
 
 
 def iter_metadata_files(repo_root: Path):
     for dirpath, dirnames, filenames in os.walk(repo_root):
-        dirnames[:] = [d for d in dirnames if d not in _EXCLUDE_DIRS]
+        dirnames[:] = [d for d in dirnames if not _is_excluded_dir(d)]
         if "metadata.json" in filenames:
             yield Path(dirpath) / "metadata.json"
 
