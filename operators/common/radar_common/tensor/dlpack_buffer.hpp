@@ -82,7 +82,10 @@ inline std::shared_ptr<holoscan::Tensor> make_device_tensor(
   }
 
   int device_id = 0;
-  cudaGetDevice(&device_id);
+  if (cudaGetDevice(&device_id) != cudaSuccess) {
+    // holder still owns the allocation here; its dtor frees on unwind.
+    throw std::runtime_error("make_device_tensor: cudaGetDevice failed");
+  }
 
   DLManagedTensor& dl = holder->dl_managed;
   dl.dl_tensor.data = holder->data;
