@@ -280,6 +280,26 @@ class PeakReportOp : public holoscan::Operator {
         static_cast<size_t>(num_doppler * num_range));
     std::vector<float> ranges(static_cast<size_t>(num_range));
     std::vector<float> velocities(static_cast<size_t>(num_doppler));
+
+    // The copies below use each source tensor's nbytes() into these fixed-size
+    // host buffers, so a tensor whose dtype or element count disagrees with
+    // the rd_map-derived dimensions would overflow the destination. Verify the
+    // exact byte size of each source against its buffer before copying.
+    const auto require_bytes =
+        [](const char* name, const std::shared_ptr<holoscan::Tensor>& t,
+           size_t expected) {
+          if (static_cast<size_t>(t->nbytes()) != expected) {
+            throw std::runtime_error(
+                std::string("PeakReportOp: ") + name +
+                " byte size mismatch (expected " + std::to_string(expected) +
+                ", got " + std::to_string(t->nbytes()) + ")");
+          }
+        };
+    require_bytes("rd_map", rd_map, sizeof(std::complex<float>) * rd.size());
+    require_bytes("range_bins", range_bins, sizeof(float) * ranges.size());
+    require_bytes("velocity_bins", velocity_bins,
+                  sizeof(float) * velocities.size());
+
     if (cudaDeviceSynchronize() != cudaSuccess) {
       throw std::runtime_error("PeakReportOp: device synchronize failed");
     }
