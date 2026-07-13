@@ -38,8 +38,8 @@ class ConfigCache {
           "override selected an unseen {} configuration; building it "
           "now and caching for reuse (key: {})", what, key);
     }
-    auto [inserted, ok] = cache_.emplace(key, builder());
-    return inserted->second;
+    auto [entry, inserted] = cache_.emplace(key, builder());
+    return entry->second;
   }
 
   bool contains(const std::string& key) const {
