@@ -4,8 +4,9 @@
 find_package(GTest REQUIRED)
 include(GoogleTest)
 
-# Shared test utilities: analytic point-target simulator, forward bin
-# model, tensor fixtures, and the single-operator harness (tests/cpp/utils).
+# Shared test utilities: forward bin model, tensor fixtures, and the
+# single-operator harness (tests/cpp/utils). The analytic point-target
+# simulator now lives in radar_common/sim (reached via holoscan::radar_common).
 add_library(radar_test_utils INTERFACE)
 target_include_directories(radar_test_utils INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR})
@@ -27,14 +28,19 @@ function(radar_add_test NAME)
 endfunction()
 
 radar_add_test(test_common)
-
-# radar_op template placeholder test — removed together with radar_op once
-# the first real operators land.
-add_executable(test_operators test_operators.cpp)
-target_link_libraries(test_operators PRIVATE
-    holoscan::radar_op
-    holoscan::core
-    GTest::gtest_main)
-target_include_directories(test_operators PRIVATE
-    ${PROJECT_SOURCE_DIR}/operators)
-gtest_discover_tests(test_operators PROPERTIES LABELS "unit")
+radar_add_test(test_fmcw_range_processor
+    holoscan::fmcw_range_processor_op)
+radar_add_test(test_clutter_filter
+    holoscan::clutter_filter_op)
+radar_add_test(test_fmcw_doppler_processor
+    holoscan::fmcw_doppler_processor_op)
+radar_add_test(test_fmcw_range_doppler_processor
+    holoscan::fmcw_range_doppler_processor_op
+    holoscan::fmcw_range_processor_op
+    holoscan::clutter_filter_op
+    holoscan::fmcw_doppler_processor_op)
+radar_add_test(test_pipeline
+    holoscan::fmcw_range_processor_op
+    holoscan::clutter_filter_op
+    holoscan::fmcw_doppler_processor_op
+    holoscan::fmcw_range_doppler_processor_op)

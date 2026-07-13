@@ -13,15 +13,18 @@
 #include <limits>
 #include <complex>
 #include <numeric>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/dsp/window.hpp"
+#include "radar_common/sdk/yaml_converters.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "utils/bin_model.hpp"
-#include "utils/point_target_sim.hpp"
+#include "radar_common/sim/point_target_sim.hpp"
 
 namespace {
 
@@ -31,7 +34,8 @@ using holoscan::radar::generate_window;
 using holoscan::radar::window_cache_key;
 using holoscan::radar::WindowSpec;
 using holoscan::radar::WindowType;
-namespace sim = holoscan::radar::testing;
+namespace sim = holoscan::radar::sim;
+namespace fix = holoscan::radar::testing;  // bin-model / fixture helpers
 
 constexpr double kPi = 3.14159265358979323846;
 
@@ -88,6 +92,21 @@ TEST(WindowGeneration, HannSymmetricWithZeroEndpoints) {
   EXPECT_NEAR(w[32], 1.0, 1e-12);  // symmetric peak at the center
   for (size_t k = 0; k < w.size(); ++k) {
     EXPECT_NEAR(w[k], w[w.size() - 1 - k], 1e-12);
+  }
+}
+
+TEST(WindowGeneration, SingleSampleCosineSumWindowsPeakAtUnity) {
+  // Length-1 cosine-sum windows must return the center/peak value (sum_i a[i]),
+  // not the endpoint sum_i (-1)^i a[i] which collapses to ~0 and, under
+  // coherent-gain normalization, would divide by a zero mean.
+  for (WindowType type :
+       {WindowType::kHann, WindowType::kHamming, WindowType::kBlackman,
+        WindowType::kBlackmanHarris, WindowType::kFlatTop}) {
+    WindowSpec spec;
+    spec.type = type;
+    const auto w = generate_window(spec, 1);
+    ASSERT_EQ(w.size(), 1U) << holoscan::radar::to_string(type);
+    EXPECT_NEAR(w[0], 1.0, 1e-12) << holoscan::radar::to_string(type);
   }
 }
 
@@ -395,7 +414,7 @@ TEST(PointTargetSim, BeatFrequencyMatchesAnalyticModel) {
     }
   }
 
-  const int64_t expected = sim::expected_range_bin(
+  const int64_t expected = fix::expected_range_bin(
       result.truth[0].range, scene.waveform.slope(),
       scene.waveform.sample_rate, n, scene.propagation_speed);
   EXPECT_NEAR(static_cast<double>(best_bin), static_cast<double>(expected),
@@ -416,7 +435,7 @@ TEST(PointTargetSim, DopplerPhaseSlopeMatchesRadialVelocity) {
 
   const double lambda = scene.waveform.wavelength();
   const double f_d =
-      sim::doppler_frequency(result.truth[0].radial_velocity, lambda);
+      fix::doppler_frequency(result.truth[0].radial_velocity, lambda);
   double expected =
       2.0 * kPi * f_d * scene.waveform.chirp_repetition_interval;
   // Wrap to (-pi, pi] for comparison.
@@ -449,23 +468,6 @@ TEST(PointTargetSim, PreMixerTimesConjReferenceIsDechirped) {
   }
 }
 
-TEST(PointTargetSim, SimoCubeHasRxLeadingAxis) {
-  auto scene = single_target_scene();
-  scene.rx_positions = {sim::Vec3{0.0, 0.0, 0.0},
-                        sim::Vec3{0.002, 0.0, 0.0}};
-  const auto result = sim::simulate(scene);
-  ASSERT_EQ(result.shape.size(), 3u);
-  EXPECT_EQ(result.shape[0], 2);
-  // Broadside target on the y axis: zero aperture projection, so both RX
-  // see the identical signal.
-  const size_t per_rx =
-      static_cast<size_t>(scene.num_chirps * scene.samples_per_chirp);
-  for (size_t i = 0; i < per_rx; ++i) {
-    EXPECT_NEAR(result.cube[i].real(), result.cube[per_rx + i].real(),
-                1e-12);
-  }
-}
-
 // ---- Device buffer allocation -----------------------------------------------
 
 TEST(MakeDeviceTensor, RejectsInvalidAndOverflowingShapes) {
@@ -480,6 +482,110 @@ TEST(MakeDeviceTensor, RejectsInvalidAndOverflowingShapes) {
   EXPECT_THROW(holoscan::radar::make_device_tensor(
                    {int64_t{1} << 32, int64_t{1} << 32}, dtype),
                std::invalid_argument);
+}
+
+// ---- YAML converters --------------------------------------------------------
+
+TEST(YamlConverters, EnumsRoundTripAndRejectUnknownSpellings) {
+  using holoscan::radar::ClutterFilterMethod;
+  using holoscan::radar::FftNorm;
+
+  for (auto norm : {FftNorm::kBackward, FftNorm::kOrtho, FftNorm::kForward}) {
+    const YAML::Node node = YAML::convert<FftNorm>::encode(norm);
+    EXPECT_EQ(node.as<FftNorm>(), norm);
+  }
+  for (auto method : {ClutterFilterMethod::kNone,
+                      ClutterFilterMethod::kMeanSubtraction,
+                      ClutterFilterMethod::kSingleDelay,
+                      ClutterFilterMethod::kDoubleDelay}) {
+    const YAML::Node node =
+        YAML::convert<ClutterFilterMethod>::encode(method);
+    EXPECT_EQ(node.as<ClutterFilterMethod>(), method);
+  }
+  for (auto type : holoscan::radar::detail::kAllWindowTypes) {
+    const YAML::Node node = YAML::convert<WindowType>::encode(type);
+    EXPECT_EQ(node.as<WindowType>(), type);
+  }
+
+  EXPECT_THROW(YAML::Load("hanning").as<WindowType>(),
+               std::invalid_argument);
+  EXPECT_THROW(YAML::Load("mean-subtraction").as<ClutterFilterMethod>(),
+               std::invalid_argument);
+}
+
+TEST(YamlConverters, WindowSpecMapScalarAndRoundTrip) {
+  const YAML::Node map = YAML::Load(
+      "{type: kaiser, kaiser_beta: 8.5, coherent_gain_normalization: false}");
+  const auto spec = map.as<WindowSpec>();
+  EXPECT_EQ(spec.type, WindowType::kKaiser);
+  ASSERT_TRUE(spec.kaiser_beta.has_value());
+  EXPECT_DOUBLE_EQ(*spec.kaiser_beta, 8.5);
+  EXPECT_FALSE(spec.coherent_gain_normalization);
+  // Omitted keys keep the struct defaults.
+  EXPECT_DOUBLE_EQ(spec.tukey_alpha, WindowSpec{}.tukey_alpha);
+
+  // Bare scalar is shorthand for a default spec of that type.
+  const auto shorthand = YAML::Load("hann").as<WindowSpec>();
+  EXPECT_EQ(shorthand.type, WindowType::kHann);
+  EXPECT_EQ(shorthand.kaiser_beta, WindowSpec{}.kaiser_beta);
+
+  // encode -> decode is identity (operator== covers every field).
+  EXPECT_EQ(YAML::convert<WindowSpec>::encode(spec).as<WindowSpec>(), spec);
+}
+
+TEST(YamlConverters, WaveformDecodesBothSpellingsAndValidates) {
+  const char* common =
+      "carrier_frequency: 77.0e9\n"
+      "chirp_duration: 20.0e-6\n"
+      "sample_rate: 12.8e6\n"
+      "chirp_repetition_interval: 25.0e-6\n";
+  const auto by_bandwidth =
+      YAML::Load(std::string(common) + "bandwidth: 150.0e6")
+          .as<FMCWWaveformDescriptor>();
+  const auto by_slope =
+      YAML::Load(std::string(common) + "chirp_slope: 7.5e12")
+          .as<FMCWWaveformDescriptor>();
+  EXPECT_TRUE(by_bandwidth.is_valid());
+  // Same waveform through either spelling (field-level: the derived slope
+  // 150e6/20e-6 rounds one ulp away from the literal 7.5e12), and the
+  // bandwidth spelling matches native construction exactly.
+  EXPECT_DOUBLE_EQ(by_slope.slope(), 7.5e12);
+  EXPECT_NEAR(by_bandwidth.slope(), by_slope.slope(), 2.0);  // ~1 ulp @ 7e12
+  EXPECT_DOUBLE_EQ(by_bandwidth.bandwidth(), by_slope.bandwidth());
+  EXPECT_EQ(by_bandwidth, FMCWWaveformDescriptor(test_waveform_spec()));
+
+  // Construction validation applies to YAML decode: neither spelling, and
+  // inconsistent double spelling, both throw.
+  EXPECT_THROW(YAML::Load(common).as<FMCWWaveformDescriptor>(),
+               std::invalid_argument);
+  EXPECT_THROW(YAML::Load(std::string(common) +
+                          "bandwidth: 150.0e6\nchirp_slope: 1.0e12")
+                   .as<FMCWWaveformDescriptor>(),
+               std::invalid_argument);
+
+  // encode -> decode is identity for analytic (non-reference) waveforms.
+  EXPECT_EQ(YAML::convert<FMCWWaveformDescriptor>::encode(by_bandwidth)
+                .as<FMCWWaveformDescriptor>(),
+            by_bandwidth);
+}
+
+TEST(PointTargetSim, SimoCubeHasRxLeadingAxis) {
+  auto scene = single_target_scene();
+  scene.rx_positions = {sim::Vec3{0.0, 0.0, 0.0},
+                        sim::Vec3{0.002, 0.0, 0.0}};
+  const auto result = sim::simulate(scene);
+  ASSERT_EQ(result.shape.size(), 3u);
+  EXPECT_EQ(result.shape[0], 2);
+  // Broadside target on the y axis: zero aperture projection, so both RX
+  // see the identical signal.
+  const size_t per_rx =
+      static_cast<size_t>(scene.num_chirps * scene.samples_per_chirp);
+  for (size_t i = 0; i < per_rx; ++i) {
+    EXPECT_NEAR(result.cube[i].real(), result.cube[per_rx + i].real(),
+                1e-12);
+    EXPECT_NEAR(result.cube[i].imag(), result.cube[per_rx + i].imag(),
+                1e-12);
+  }
 }
 
 }  // namespace

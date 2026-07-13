@@ -9,8 +9,8 @@
 #
 # Usage:
 #   ./holohub run-container
-#   ./holohub build radar_pipeline
-#   ./holohub run   radar_pipeline --language python
+#   ./holohub build fmcw_siso
+#   ./holohub run   fmcw_siso --language python
 #   ./holohub --help
 #
 # Optional overrides (rarely needed):

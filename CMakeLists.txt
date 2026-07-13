@@ -37,7 +37,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # find_dependency(MATX ...), so find_package(holoscan) also provides the
 # matx::matx target used by the operator kernels.
 
-find_package(CUDAToolkit QUIET)
+find_package(CUDAToolkit REQUIRED)
 find_package(holoscan REQUIRED COMPONENTS core)
 
 
@@ -169,8 +169,8 @@ file(WRITE ${_DEV_PTH_FILE}
 # Packaging
 # ---------------------------------------------------------------------------
 # Debian / wheel packaging lives under pkg/. pkg/CMakeLists.txt calls
-# add_holohub_package(holoscan-radar OPERATORS radar_op
-# APPLICATIONS radar_pipeline), which defines the
+# add_holohub_package(holoscan-radar OPERATORS <the fmcw operators>
+# APPLICATIONS fmcw_siso), which defines the
 # PKG_holoscan_radar option, FORCEs the OP_/APP_ deps to ON when the
 # package is enabled, and enters pkg/holoscan-radar/CMakeLists.txt
 # for the holohub_configure_deb() call.

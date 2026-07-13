@@ -4,7 +4,7 @@
 
 An **FMCW-focused** operator API lockdown. Scope is derived from the FMCW workflows doc: the operators here are exactly those the SISO / SIMO / MIMO-TDM / MIMO-DDM chains require, plus the MIMO data-marshaling operators and the I/O bridges those chains lean on. Each operator is specified by its **Inputs / Outputs / Parameters / Algorithm / Notes**.
 
-Design conventions (from the workflows doc): plain-tensor ports (bridge with small explicit add-on operators, never shared record/struct message types); precision fixed by compile-time template instantiation (single + double), not a runtime flag or dtype inference; MatX implementation accepting/producing tensors in any MatX memory space; rank-agnostic batching (operate on the meaningful axes, treat leading axes as opaque batch dims, infer shapes from tensors); industry-standard operator names; and angle operators that make the az/el convention explicit at the API boundary (required, no default).
+Design conventions (from the workflows doc): plain-tensor ports (bridge with small explicit add-on operators, never shared record/struct message types); precision fixed by compile-time template instantiation (single + double), not a runtime flag or dtype inference; MatX implementation accepting tensors in any CUDA-accessible memory space (device, managed, pinned host — pageable-host input is rejected; amended 2026-07-10) and producing device memory; rank-agnostic batching (operate on the meaningful axes, treat leading axes as opaque batch dims, infer shapes from tensors); industry-standard operator names; and angle operators that make the az/el convention explicit at the API boundary (required, no default).
 
 **Precision (all operators).** Every operator supports both **single** (`complex64` / `float32`) and **double** (`complex128` / `float64`) precision floating-point I/O. Precision is fixed at compile time by the operator's template instantiation — it is neither a runtime parameter nor inferred from the data — and an operator's input and output tensors must match that templated precision. The per-operator dtype labels below list both forms (e.g. `complex64 / complex128`, `float32 / float64`); a given operator instance uses one, fixed by its instantiation, and its inputs and outputs share it. Any operator that must fix precision for a qualitative reason is called out in its own Notes.
 
@@ -297,7 +297,7 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 #### FMCWRangeDopplerProcessorOp (fused)
 
 - **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(..., num_chirps, samples_per_chirp)`.
-- **Out:** `rd_maps` — complex64 / complex128, `(..., num_doppler, num_range_bins)`. `num_range_bins` per FMCWRangeProcessorOp, `num_doppler = num_chirps` (reduced by the delay-canceller chirp loss when `clutter_filter` is a delay canceller). No intermediate range-profile output.
+- **Out:** `rd_maps` — complex64 / complex128, `(..., num_doppler, num_range_bins)`. `num_range_bins` per FMCWRangeProcessorOp, `num_doppler = num_chirps` (reduced by the delay-canceller chirp loss when `clutter_filter` is a delay canceller). No intermediate range-profile output; the inline clutter filter is fused into the Doppler pre-FFT expression (no materialized intermediate), bit-identical to `ClutterFilterOp` → `FMCWDopplerProcessorOp`.
 - **Out:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`.
 - **Out:** `velocity_bins` (optional) — float32 / float64, `(num_doppler,)`.
 

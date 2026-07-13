@@ -21,17 +21,6 @@
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
-// Skip the current test when no CUDA device is available (keeps the unit
-// label runnable on CPU-only CI hosts).
-#define RADAR_TEST_SKIP_IF_NO_GPU()                                       \
-  do {                                                                    \
-    int device_count_ = 0;                                                \
-    if (cudaGetDeviceCount(&device_count_) != cudaSuccess ||              \
-        device_count_ == 0) {                                             \
-      GTEST_SKIP() << "No CUDA device available";                         \
-    }                                                                     \
-  } while (false)
-
 namespace holoscan::radar::testing {
 
 // Upload host samples as a device holoscan::Tensor with the given

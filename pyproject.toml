@@ -24,10 +24,12 @@ requires-python = ">=3.10"
 cmake.version = ">=3.24"
 # Build only what the wheel needs: turn off test and app subprojects, and
 # turn off the deb option (which is build-type-driven, not wheel-driven).
+# No OP_<name> flags: the wheel currently ships only the placeholder Python
+# package (bindings are deferred to a later phase); the C++
+# operators are distributed via the Debian package.
 cmake.args = [
     "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
     "-DBUILD_ALL=OFF",
-    "-DOP_radar_op=ON",
 ]
 # Wheel content comes from CMake install rules. Use *relative* DESTINATIONs in
 # install(...) calls — scikit-build-core stages those into the wheel root.

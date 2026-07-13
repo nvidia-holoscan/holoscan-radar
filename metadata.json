@@ -23,7 +23,12 @@
     "platforms": ["x86_64", "aarch64"],
     "tags": ["Radar", "Signal Processing", "GPU", "Accelerated Computing", "FMCW", "Pulse-Doppler", "Synthetic Aperture Radar"],
     "source_repository": "https://github.com/nvidia-holoscan/holoscan-radar",
-    "operator_names": ["radar_op"],
+    "operator_names": [
+      "fmcw_range_processor_op",
+      "clutter_filter_op",
+      "fmcw_doppler_processor_op",
+      "fmcw_range_doppler_processor_op"
+    ],
     "dockerfile": "Dockerfile"
   }
 }

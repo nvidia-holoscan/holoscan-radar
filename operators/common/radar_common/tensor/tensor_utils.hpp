@@ -63,6 +63,13 @@ std::vector<int64_t> full_rank_shape(const BatchedShape& shape, int64_t rows,
 // (device, managed, or pinned-host memory).
 bool is_cuda_accessible(const holoscan::Tensor& tensor);
 
+// Throw std::invalid_argument (naming the operator and the port) unless the
+// tensor is CUDA-accessible. Module-wide input requirement: pageable-host
+// input is rejected; ingest operators upload before the processing chain
+// (STATUS.md decision 2026-07-10).
+void require_cuda_accessible(const holoscan::Tensor& tensor,
+                             const char* port_name, const std::string& who);
+
 // Classification of an operator input against its instantiation precision.
 enum class InputPrecision {
   kReal,     // float32/float64 matching T (real-IF front end)

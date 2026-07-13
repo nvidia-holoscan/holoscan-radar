@@ -184,7 +184,7 @@ Common check (all five): `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_e
 - **Sparse-slot interchangeability.** With the wiring fixed, swapping the estimator in `⟨sparse angle estimator⟩` (Beamscan ↔ MVDR ↔ MUSIC ↔ …) requires no graph change and each recovers the DOA — validating the shared contract.
 - **`[live]` override behavior.** Overriding a `[live]` parameter mid-stream changes the output accordingly and warns only when a genuine rebuild is triggered (FFT plan, window coefficients, CFAR window kernel); previously-seen configurations are reused from cache.
 - **Precision.** Single- and double-precision instantiations agree within their respective tolerances.
-- **Memory spaces.** Operators accept and produce tensors in each supported memory space.
+- **Memory spaces.** Operators accept tensors in each CUDA-accessible memory space (device, managed, pinned host) and reject pageable-host input with a clear error; outputs are always device memory.
 - **Determinism.** A fixed seed reproduces identical outputs across runs.
 
 ---

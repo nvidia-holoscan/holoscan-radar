@@ -2,7 +2,7 @@
 
 GPU radar signal-processing operator library for the NVIDIA Holoscan SDK: Holoscan operators implemented in C++/CUDA on [MatX](https://github.com/NVIDIA/MatX), composed into pipelines purely by port connections — no glue code between operators.
 
-**Current phase: FMCW operator API lockdown.** The operator contracts (ports, shapes, dtypes, parameters) are fully specified in `docs/planning/`; implementation lands against them. The only operator code in the tree today is the `radar_op` template placeholder.
+**Current phase: FMCW implementation.** The operator contracts (ports, shapes, dtypes, parameters) are fully specified in `docs/planning/`; implementation lands against them. The signal-processing group (`operators/fmcw/`: range, clutter, Doppler, fused range-Doppler) and the shared `operators/common/` library are implemented; detection, clustering, angle estimation, and MIMO marshaling are next.
 
 ## Source of truth
 
@@ -27,6 +27,7 @@ Rules that follow from "lockdown":
 5. **`[live]` override convention.** Parameters are build-time config by default; a `[live]` parameter may additionally be overridden in-flight via a same-named non-blocking input port. Costly overrides (FFT plans, window coefficients, CFAR kernels) warn once per new configuration and cache prior ones. Structural parameters (e.g. `cfar_variant`, `angle_convention`, `multiplexing_scheme`) stay static — instantiate separate operators to vary them. Philosophy: don't over-constrain a caller who knows what they're doing; allow reasonable footguns and warn where relevant.
 6. **Convention-free kernels, explicit angle boundary.** Kernels only dot direction vectors with element positions in the fixed canonical array-local frame. `AngleConvention` is a **required parameter with no default** on every operator that consumes or emits angles; it is applied only as a boundary relabeling. `direction_cosine` (u, v) is the convention-free escape hatch.
 7. **Industry-standard operator names** over internal schemes.
+8. **A CUDA-capable NVIDIA GPU is a hard dependency** — for the operators, the apps, and the C++ test suite (decided 2026-07-10). Do not add CPU fallback compute paths, skip-if-no-GPU test guards, or GPU-optional build modes; the only host-only code is deliberately host-only by design (the analytic simulator, window generation).
 
 **Scope guardrail:** this wave is FMCW SISO/SIMO/MIMO-TDM/MIMO-DDM only. Do not add Pulse-Doppler, SAR, or PVA operators; CDM/BPM is deferred to a future wave; FDM and PMCW are excluded outright.
 
@@ -36,8 +37,9 @@ Rules that follow from "lockdown":
 | --- | --- |
 | `docs/planning/` | The specs above — the work queue and contract source of truth |
 | `operators/` | Operator libraries, one dir per group, gated by `add_holohub_operator()` / `OP_<name>` CMake options |
-| `operators/radar_op/` | Template placeholder operator — kept as the scaffolding exemplar until the first real operator lands |
-| `applications/radar_pipeline/` | Example pipeline app (C++ and Python) |
+| `operators/common/` | Shared `radar_common` library: descriptors, window generation, point-target simulator, config cache, tensor/MatX utilities |
+| `operators/fmcw/` | FMCW signal-processing operators (+ future MIMO marshaling) |
+| `applications/fmcw_siso/` | Example SISO FMCW pipeline app (C++; Python variant returns with the bindings) |
 | `python/holoscan/radar/` | Python package root; re-exports operators from per-operator pybind11 submodules |
 | `tests/cpp/`, `tests/python/` | GTest and pytest suites |
 | `pkg/` | Debian/wheel packaging (`add_holohub_package`) |

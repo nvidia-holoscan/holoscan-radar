@@ -8,6 +8,7 @@
 
 # operators/ is organized per functional group:
 #   common/           — shared radar_common library (descriptors, windows, utils)
+#   fmcw/             — FMCW signal processing (+ future MIMO marshaling)
 #   detection/        — (future) detection operators
 #   clustering/       — (future) clustering operators
 #   angle_estimation/ — (future) angle estimation operators
@@ -15,9 +16,10 @@
 # The shared library is not gated: every operator group links against it.
 add_subdirectory(common)
 
-# Template placeholder — kept until the first real operators land with
-# tests, then removed.
-add_holohub_operator(radar_op)
+# Each operator is gated on its own OP_<name> option, defaulting to ${BUILD_ALL}.
+# One add_holohub_operator() call per operator (inside the group's
+# CMakeLists.txt for grouped operators).
+add_subdirectory(fmcw)
 
 # Install the aggregate __init__.py alongside each operator's built module.
 configure_file(

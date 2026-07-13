@@ -85,6 +85,15 @@ bool is_cuda_accessible(const holoscan::Tensor& tensor) {
   }
 }
 
+void require_cuda_accessible(const holoscan::Tensor& tensor,
+                             const char* port_name, const std::string& who) {
+  if (!is_cuda_accessible(tensor)) {
+    throw std::invalid_argument(
+        who + ": tensor received on input port '" + port_name + "' is not "
+        "CUDA-accessible (device, managed, or pinned-host memory required)");
+  }
+}
+
 template <typename T>
 InputPrecision classify_input_dtype(const holoscan::Tensor& tensor,
                                     const char* port_name, bool allow_real) {
