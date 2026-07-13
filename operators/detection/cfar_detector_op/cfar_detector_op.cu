@@ -20,6 +20,7 @@
 #include "detection/cfar_detector_op/nci_plan.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 #include "radar_common/sdk/override_param.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
@@ -52,6 +53,7 @@ namespace holoscan::radar {
 
 namespace {
 
+constexpr const char* kOpName = "CFARDetectorOp";
 constexpr DLDataType kBoolDtype{kDLBool, 8, 1};
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
 
@@ -122,23 +124,6 @@ void validate_external_alpha_lut(CfarVariant variant,
   }
 }
 
-std::shared_ptr<holoscan::Tensor> receive_single(
-    holoscan::InputContext& op_input, const char* port) {
-  auto maybe = op_input.receive<holoscan::TensorMap>(port);
-  if (!maybe) {
-    throw std::runtime_error(std::string("CFARDetectorOp: no message on '") +
-                             port + "'");
-  }
-  holoscan::TensorMap& map = maybe.value();
-  if (map.size() != 1) {
-    throw std::invalid_argument(
-        std::string("CFARDetectorOp: input port '") + port +
-        "' expects a single-entry TensorMap, got " +
-        std::to_string(map.size()) + " entries");
-  }
-  return map.begin()->second;
-}
-
 void require_pair(const std::vector<int64_t>& v, const char* name) {
   if (v.size() != 2) {
     throw std::invalid_argument(
@@ -150,13 +135,6 @@ void require_pair(const std::vector<int64_t>& v, const char* name) {
     throw std::invalid_argument(std::string("CFARDetectorOp: '") + name +
                                 "' entries must be >= 0");
   }
-}
-
-void emit_single(holoscan::OutputContext& op_output, const char* port,
-                 std::shared_ptr<holoscan::Tensor> tensor) {
-  holoscan::TensorMap map;
-  map.insert({port, std::move(tensor)});
-  op_output.emit(map, port);
 }
 
 }  // namespace
@@ -236,7 +214,8 @@ template <typename T>
 void CFARDetectorOp<T>::compute(InputContext& op_input,
                                 OutputContext& op_output,
                                 [[maybe_unused]] ExecutionContext& context) {
-  std::shared_ptr<holoscan::Tensor> input = receive_single(op_input, "rd_maps");
+  std::shared_ptr<holoscan::Tensor> input =
+      receive_single(op_input, "rd_maps", kOpName);
 
   if (!seeded_) {
     effective_guard_cells_ = guard_cells_.get();
@@ -274,16 +253,8 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
   const InputPrecision precision =
       classify_input_dtype<T>(*input, "rd_maps", /*allow_real=*/true);
   const bool input_is_complex = (precision == InputPrecision::kComplex);
-  if (!is_cuda_accessible(*input)) {
-    throw std::invalid_argument(
-        "CFARDetectorOp: input port 'rd_maps' requires CUDA-accessible "
-        "memory");
-  }
-  if (!input->is_contiguous()) {
-    throw std::invalid_argument(
-        "CFARDetectorOp: input port 'rd_maps' must be a compact row-major "
-        "tensor");
-  }
+  require_cuda_accessible(*input, "rd_maps", kOpName);
+  require_contiguous(*input, "rd_maps", kOpName);
 
   const detail::NciPlan plan =
       detail::NciPlan::from_shape(input->shape(), effective_nci_axes_,

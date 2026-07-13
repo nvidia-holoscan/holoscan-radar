@@ -14,6 +14,8 @@
 
 #include "detection/feature_assembly_op/feature_assembly_stage.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
+#include "radar_common/tensor/cuda_check.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
@@ -21,78 +23,9 @@ namespace holoscan::radar {
 
 namespace {
 
+constexpr const char* kOpName = "FeatureAssemblyOp";
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
 constexpr DLDataType kInt32Dtype{kDLInt, 32, 1};
-
-std::shared_ptr<holoscan::Tensor> receive_single(
-    holoscan::InputContext& op_input, const char* port) {
-  auto maybe = op_input.receive<holoscan::TensorMap>(port);
-  if (!maybe) {
-    throw std::runtime_error(
-        std::string("FeatureAssemblyOp: no message on '") + port + "'");
-  }
-  auto& map = maybe.value();
-  if (map.size() != 1) {
-    throw std::invalid_argument(
-        std::string("FeatureAssemblyOp: port '") + port +
-        "' expects a single-entry TensorMap");
-  }
-  return map.begin()->second;
-}
-
-std::shared_ptr<holoscan::Tensor> receive_optional(
-    holoscan::InputContext& op_input, const char* port) {
-  auto maybe = op_input.receive<holoscan::TensorMap>(port);
-  if (!maybe) {
-    return nullptr;
-  }
-  auto& map = maybe.value();
-  if (map.empty()) {
-    return nullptr;
-  }
-  if (map.size() != 1) {
-    throw std::invalid_argument(
-        std::string("FeatureAssemblyOp: port '") + port +
-        "' expects a single-entry TensorMap");
-  }
-  return map.begin()->second;
-}
-
-void emit_single(holoscan::OutputContext& op_output, const char* port,
-                 const std::shared_ptr<holoscan::Tensor>& tensor) {
-  holoscan::TensorMap map;
-  map.insert({port, tensor});
-  op_output.emit(map, port);
-}
-
-void require_cuda(const std::shared_ptr<holoscan::Tensor>& tensor,
-                  const char* port) {
-  if (!tensor || !is_cuda_accessible(*tensor)) {
-    throw std::invalid_argument(
-        std::string("FeatureAssemblyOp: '") + port +
-        "' must be a CUDA-accessible tensor");
-  }
-}
-
-void require_contiguous(const std::shared_ptr<holoscan::Tensor>& tensor,
-                        const char* port) {
-  if (!tensor->is_contiguous()) {
-    throw std::invalid_argument(
-        std::string("FeatureAssemblyOp: '") + port +
-        "' must be contiguous (compact row-major)");
-  }
-}
-
-void require_dtype(const std::shared_ptr<holoscan::Tensor>& tensor,
-                   DLDataType expected, const char* port) {
-  const auto dt = tensor->dtype();
-  if (dt.code != expected.code || dt.bits != expected.bits ||
-      dt.lanes != expected.lanes) {
-    throw std::invalid_argument(
-        std::string("FeatureAssemblyOp: '") + port +
-        "' has unexpected dtype");
-  }
-}
 
 int feature_to_id(AssemblyFeature feature) {
   switch (feature) {
@@ -209,10 +142,10 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
   }
   const int64_t num_features = static_cast<int64_t>(features.size());
 
-  auto detection_idx = receive_single(op_input, "detection_idx");
-  require_cuda(detection_idx, "detection_idx");
-  require_contiguous(detection_idx, "detection_idx");
-  require_dtype(detection_idx, kInt64Dtype, "detection_idx");
+  auto detection_idx = receive_single(op_input, "detection_idx", kOpName);
+  require_cuda_accessible(*detection_idx, "detection_idx", kOpName);
+  require_contiguous(*detection_idx, "detection_idx", kOpName);
+  require_dtype(*detection_idx, kInt64Dtype, "detection_idx", kOpName);
 
   const auto& idx_shape = detection_idx->shape();
   if (idx_shape.size() != 2 || idx_shape[1] < 2) {
@@ -224,10 +157,10 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
   const int64_t idx_cols = idx_shape[1];
   const int64_t n_preserved = idx_cols - 2;
 
-  auto range_bins = receive_optional(op_input, "range_bins");
-  auto velocity_bins = receive_optional(op_input, "velocity_bins");
-  auto detection_score = receive_optional(op_input, "detection_score");
-  auto aoa_estimates = receive_optional(op_input, "aoa_estimates");
+  auto range_bins = receive_optional(op_input, "range_bins", kOpName);
+  auto velocity_bins = receive_optional(op_input, "velocity_bins", kOpName);
+  auto detection_score = receive_optional(op_input, "detection_score", kOpName);
+  auto aoa_estimates = receive_optional(op_input, "aoa_estimates", kOpName);
 
   if (needs_score(features) && !detection_score) {
     throw std::invalid_argument(
@@ -246,9 +179,9 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
   int64_t num_range = 0;
   const T* range_ptr = nullptr;
   if (range_bins) {
-    require_cuda(range_bins, "range_bins");
-    require_contiguous(range_bins, "range_bins");
-    require_dtype(range_bins, real_dtype<T>(), "range_bins");
+    require_cuda_accessible(*range_bins, "range_bins", kOpName);
+    require_contiguous(*range_bins, "range_bins", kOpName);
+    require_dtype(*range_bins, real_dtype<T>(), "range_bins", kOpName);
     if (range_bins->shape().size() != 1) {
       throw std::invalid_argument(
           "FeatureAssemblyOp: range_bins must be rank-1 (num_range,)");
@@ -260,9 +193,9 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
   int64_t num_doppler = 0;
   const T* velocity_ptr = nullptr;
   if (velocity_bins) {
-    require_cuda(velocity_bins, "velocity_bins");
-    require_contiguous(velocity_bins, "velocity_bins");
-    require_dtype(velocity_bins, real_dtype<T>(), "velocity_bins");
+    require_cuda_accessible(*velocity_bins, "velocity_bins", kOpName);
+    require_contiguous(*velocity_bins, "velocity_bins", kOpName);
+    require_dtype(*velocity_bins, real_dtype<T>(), "velocity_bins", kOpName);
     if (velocity_bins->shape().size() != 1) {
       throw std::invalid_argument(
           "FeatureAssemblyOp: velocity_bins must be rank-1 (num_doppler,)");
@@ -277,9 +210,9 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
   std::vector<int64_t> score_leading;
   int64_t plane_elems = 0;
   if (detection_score) {
-    require_cuda(detection_score, "detection_score");
-    require_contiguous(detection_score, "detection_score");
-    require_dtype(detection_score, real_dtype<T>(), "detection_score");
+    require_cuda_accessible(*detection_score, "detection_score", kOpName);
+    require_contiguous(*detection_score, "detection_score", kOpName);
+    require_dtype(*detection_score, real_dtype<T>(), "detection_score", kOpName);
     const auto& sshape = detection_score->shape();
     if (sshape.size() < 2) {
       throw std::invalid_argument(
@@ -301,9 +234,9 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
 
   const T* aoa_ptr = nullptr;
   if (aoa_estimates) {
-    require_cuda(aoa_estimates, "aoa_estimates");
-    require_contiguous(aoa_estimates, "aoa_estimates");
-    require_dtype(aoa_estimates, real_dtype<T>(), "aoa_estimates");
+    require_cuda_accessible(*aoa_estimates, "aoa_estimates", kOpName);
+    require_contiguous(*aoa_estimates, "aoa_estimates", kOpName);
+    require_dtype(*aoa_estimates, real_dtype<T>(), "aoa_estimates", kOpName);
     const auto& ashape = aoa_estimates->shape();
     if (ashape.size() != 2 || ashape[1] != 2) {
       throw std::invalid_argument(
@@ -398,10 +331,7 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
         static_cast<const int64_t*>(retained_score_leading_->data()),
         plane_elems, static_cast<int64_t*>(score_offsets_dev->data()),
         error_flag, stream);
-    if (cudaGetLastError() != cudaSuccess) {
-      throw std::runtime_error(
-          "FeatureAssemblyOp: score plane offset kernel failed");
-    }
+    check_cuda("score plane offset kernel", kOpName);
     score_offsets_ptr =
         static_cast<const int64_t*>(score_offsets_dev->data());
   }
@@ -415,9 +345,7 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
       static_cast<const int*>(retained_feature_ids_->data()), num_features,
       static_cast<T*>(points->data()), error_flag, stream);
 
-  if (cudaGetLastError() != cudaSuccess) {
-    throw std::runtime_error("FeatureAssemblyOp: assemble kernel failed");
-  }
+  check_cuda("assemble kernel", kOpName);
 
   int host_error = 0;
   if (cudaMemcpyAsync(&host_error, retained_error_flag_->data(), sizeof(int),

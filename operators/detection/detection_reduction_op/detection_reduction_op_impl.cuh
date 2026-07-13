@@ -21,104 +21,17 @@
 #include "detection/detection_reduction_op/detection_reduction_stage.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 #include "radar_common/sdk/override_param.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
+#include "radar_common/tensor/cuda_check.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
 
-namespace reduction_op_detail {
-
+namespace {
+constexpr const char* kOpName = "DetectionReductionOp";
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
-
-inline std::shared_ptr<holoscan::Tensor> receive_single(
-    holoscan::InputContext& op_input, const char* port) {
-  auto maybe = op_input.receive<holoscan::TensorMap>(port);
-  if (!maybe) {
-    throw std::runtime_error(
-        std::string("DetectionReductionOp: no message on '") + port + "'");
-  }
-  auto& map = maybe.value();
-  if (map.size() != 1) {
-    throw std::invalid_argument(
-        std::string("DetectionReductionOp: port '") + port +
-        "' expects a single-entry TensorMap");
-  }
-  return map.begin()->second;
-}
-
-inline std::shared_ptr<holoscan::Tensor> receive_optional(
-    holoscan::InputContext& op_input, const char* port) {
-  auto maybe = op_input.receive<holoscan::TensorMap>(port);
-  if (!maybe) {
-    return nullptr;
-  }
-  auto& map = maybe.value();
-  if (map.empty()) {
-    return nullptr;
-  }
-  if (map.size() != 1) {
-    throw std::invalid_argument(
-        std::string("DetectionReductionOp: port '") + port +
-        "' expects a single-entry TensorMap");
-  }
-  return map.begin()->second;
-}
-
-inline void emit_single(holoscan::OutputContext& op_output, const char* port,
-                 const std::shared_ptr<holoscan::Tensor>& tensor) {
-  holoscan::TensorMap map;
-  map.insert({port, tensor});
-  op_output.emit(map, port);
-}
-
-inline void require_cuda(const std::shared_ptr<holoscan::Tensor>& tensor,
-                  const char* port) {
-  if (!tensor || !is_cuda_accessible(*tensor)) {
-    throw std::invalid_argument(
-        std::string("DetectionReductionOp: '") + port +
-        "' must be a CUDA-accessible tensor");
-  }
-}
-
-inline void require_contiguous(const std::shared_ptr<holoscan::Tensor>& tensor,
-                        const char* port) {
-  if (!tensor->is_contiguous()) {
-    throw std::invalid_argument(
-        std::string("DetectionReductionOp: '") + port +
-        "' must be contiguous (compact row-major)");
-  }
-}
-
-inline void require_dtype(const std::shared_ptr<holoscan::Tensor>& tensor,
-                   DLDataType expected, const char* port) {
-  const auto dt = tensor->dtype();
-  if (dt.code != expected.code || dt.bits != expected.bits ||
-      dt.lanes != expected.lanes) {
-    throw std::invalid_argument(
-        std::string("DetectionReductionOp: '") + port +
-        "' has unexpected dtype");
-  }
-}
-
-inline void check_cuda(const char* where) {
-  const cudaError_t err = cudaGetLastError();
-  if (err != cudaSuccess) {
-    throw std::runtime_error(
-        std::string("DetectionReductionOp: ") + where + ": " +
-        cudaGetErrorString(err));
-  }
-}
-
-}  // namespace reduction_op_detail
-
-using reduction_op_detail::receive_single;
-using reduction_op_detail::receive_optional;
-using reduction_op_detail::emit_single;
-using reduction_op_detail::require_cuda;
-using reduction_op_detail::require_contiguous;
-using reduction_op_detail::require_dtype;
-using reduction_op_detail::check_cuda;
-using reduction_op_detail::kInt64Dtype;
+}  // namespace
 
 template <typename T, typename ScoreFn>
 void DetectionReductionOp<T, ScoreFn>::initialize() {
@@ -177,16 +90,16 @@ void DetectionReductionOp<T, ScoreFn>::compute(InputContext& op_input,
         "ScoreFn template argument (DetectionReductionOp<T, ScoreFn>)");
   }
 
-  auto labels = receive_single(op_input, "labels");
-  auto detection_idx = receive_single(op_input, "detection_idx");
-  auto points = receive_optional(op_input, "points");
+  auto labels = receive_single(op_input, "labels", kOpName);
+  auto detection_idx = receive_single(op_input, "detection_idx", kOpName);
+  auto points = receive_optional(op_input, "points", kOpName);
 
-  require_cuda(labels, "labels");
-  require_contiguous(labels, "labels");
-  require_dtype(labels, kInt64Dtype, "labels");
-  require_cuda(detection_idx, "detection_idx");
-  require_contiguous(detection_idx, "detection_idx");
-  require_dtype(detection_idx, kInt64Dtype, "detection_idx");
+  require_cuda_accessible(*labels, "labels", kOpName);
+  require_contiguous(*labels, "labels", kOpName);
+  require_dtype(*labels, kInt64Dtype, "labels", kOpName);
+  require_cuda_accessible(*detection_idx, "detection_idx", kOpName);
+  require_contiguous(*detection_idx, "detection_idx", kOpName);
+  require_dtype(*detection_idx, kInt64Dtype, "detection_idx", kOpName);
 
   if (labels->shape().size() != 1) {
     throw std::invalid_argument(
@@ -223,9 +136,9 @@ void DetectionReductionOp<T, ScoreFn>::compute(InputContext& op_input,
   int64_t num_features = 0;
   const T* points_ptr = nullptr;
   if (points) {
-    require_cuda(points, "points");
-    require_contiguous(points, "points");
-    require_dtype(points, real_dtype<T>(), "points");
+    require_cuda_accessible(*points, "points", kOpName);
+    require_contiguous(*points, "points", kOpName);
+    require_dtype(*points, real_dtype<T>(), "points", kOpName);
     if (points->shape().size() != 2 || points->shape()[0] != num_points) {
       throw std::invalid_argument(
           "DetectionReductionOp: points must have shape "
@@ -275,7 +188,7 @@ void DetectionReductionOp<T, ScoreFn>::compute(InputContext& op_input,
       static_cast<const int64_t*>(labels->data()), num_points,
       static_cast<int64_t*>(max_label_t->data()),
       static_cast<int*>(any_cluster_t->data()), stream);
-  check_cuda("find_max_label");
+  check_cuda("find_max_label", kOpName);
 
   int64_t max_label = 0;
   int any_cluster = 0;
@@ -367,7 +280,7 @@ void DetectionReductionOp<T, ScoreFn>::compute(InputContext& op_input,
         num_features, static_cast<detail::cuda_u64*>(best_score->data()),
         static_cast<int64_t*>(best_rows->data()), stream);
   }
-  check_cuda("select_representative");
+  check_cuda("select_representative", kOpName);
 
   auto cluster_count_t = make_device_tensor({1}, kInt64Dtype);
   {
@@ -379,7 +292,7 @@ void DetectionReductionOp<T, ScoreFn>::compute(InputContext& op_input,
                                 n_slots,
                                 static_cast<int64_t*>(cluster_count_t->data()),
                                 stream);
-  check_cuda("count_occupied");
+  check_cuda("count_occupied", kOpName);
   int64_t num_clusters = 0;
   cudaMemcpyAsync(&num_clusters, cluster_count_t->data(), sizeof(int64_t),
                   cudaMemcpyDeviceToHost, stream);
@@ -392,7 +305,7 @@ void DetectionReductionOp<T, ScoreFn>::compute(InputContext& op_input,
         static_cast<const int64_t*>(best_rows->data()),
         static_cast<const int64_t*>(detection_idx->data()), n_slots, idx_cols,
         static_cast<int64_t*>(rep_idx->data()), stream);
-    check_cuda("compact_and_gather");
+    check_cuda("compact_and_gather", kOpName);
   }
 
   if (stream != cudaStreamDefault) {

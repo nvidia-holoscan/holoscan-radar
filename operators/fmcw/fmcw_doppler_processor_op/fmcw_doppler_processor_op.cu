@@ -11,6 +11,7 @@
 
 #include "fmcw/fmcw_doppler_processor_op/doppler_stage.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -103,27 +104,8 @@ void FMCWDopplerProcessorOp<T>::compute(InputContext& op_input,
 
   // Module convention: accept a single-entry TensorMap regardless of its
   // key (upstream operators may name the tensor freely).
-  auto maybe_map = op_input.receive<holoscan::TensorMap>("range_profiles");
-  if (!maybe_map) {
-    throw std::runtime_error(
-        op_name + ": no message received on input port 'range_profiles'");
-  }
-  holoscan::TensorMap& in_map = maybe_map.value();
-  if (in_map.empty()) {
-    throw std::runtime_error(
-        op_name + ": no tensor received on input port 'range_profiles'");
-  }
-  if (in_map.size() != 1) {
-    std::ostringstream msg;
-    msg << op_name << ": expected a single-entry TensorMap on input port "
-        << "'range_profiles', received " << in_map.size() << " entries";
-    throw std::invalid_argument(msg.str());
-  }
-  std::shared_ptr<holoscan::Tensor> input = in_map.begin()->second;
-  if (!input) {
-    throw std::runtime_error(
-        op_name + ": received a null tensor on input port 'range_profiles'");
-  }
+  std::shared_ptr<holoscan::Tensor> input =
+      receive_single(op_input, "range_profiles", op_name);
 
   // Resolve overrides against the previous effective values. Only
   // the costly configuration values (window, nfft) drive the warn-once
