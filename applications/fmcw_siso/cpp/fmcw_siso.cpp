@@ -115,6 +115,23 @@ AppConfig load_config(const std::filesystem::path& path) {
   require_positive("cube.num_chirps", cfg.scene.num_chirps);
   require_positive("cube.samples_per_chirp", cfg.scene.samples_per_chirp);
 
+  // frame_period feeds a PeriodicCondition in nanoseconds (see compose()).
+  // require_positive rejects <= 0, but NaN slips through (NaN <= 0 is false)
+  // and a positive sub-nanosecond period would round to a zero (spinning)
+  // interval, while a huge one overflows the int64 cast. Require a finite
+  // value whose nanosecond count lands in [1, INT64_MAX].
+  if (!std::isfinite(cfg.frame_period)) {
+    throw std::runtime_error("run.frame_period must be finite");
+  }
+  const double frame_period_ns = cfg.frame_period * 1e9;
+  if (frame_period_ns < 1.0 ||
+      frame_period_ns >
+          static_cast<double>(std::numeric_limits<int64_t>::max())) {
+    throw std::runtime_error(
+        "run.frame_period must be within [1 ns, INT64_MAX ns], got " +
+        std::to_string(cfg.frame_period) + " s");
+  }
+
   for (const YAML::Node& t : root["targets"]) {
     const double range = t["range"].as<double>();
     const double velocity = t["velocity"].as<double>();
