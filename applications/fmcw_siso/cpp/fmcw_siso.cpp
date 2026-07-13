@@ -396,7 +396,9 @@ std::vector<std::vector<float>> make_turbo_lut() {
                            110.36276771F, -89.90310912F, 27.34824973F};
   auto poly = [](const float (&c)[6], float t) {
     float v = c[5];
-    for (int i = 4; i >= 0; --i) { v = v * t + c[i]; }
+    for (int i = 4; i >= 0; --i) {
+      v = v * t + c[i];
+    }
     return std::clamp(v, 0.0F, 1.0F);
   };
   std::vector<std::vector<float>> lut;
