@@ -70,6 +70,17 @@ bool is_cuda_accessible(const holoscan::Tensor& tensor);
 void require_cuda_accessible(const holoscan::Tensor& tensor,
                              const char* port_name, const std::string& who);
 
+// Throw std::invalid_argument (naming the operator and the port) unless the
+// tensor is contiguous (compact row-major). Strided inputs are rejected by the
+// operators that index raw device pointers directly.
+void require_contiguous(const holoscan::Tensor& tensor, const char* port_name,
+                        const std::string& who);
+
+// Throw std::invalid_argument (naming the operator, the port, the received
+// dtype, and the expected dtype) unless the tensor's dtype matches `expected`.
+void require_dtype(const holoscan::Tensor& tensor, DLDataType expected,
+                   const char* port_name, const std::string& who);
+
 // Classification of an operator input against its instantiation precision.
 enum class InputPrecision {
   kReal,     // float32/float64 matching T (real-IF front end)
