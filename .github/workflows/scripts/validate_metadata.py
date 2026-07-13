@@ -26,7 +26,7 @@ import os
 import sys
 from pathlib import Path
 
-_EXCLUDE_DIRS = {"build", ".local", ".cache", "_CPack_Packages"}
+_EXCLUDE_DIRS = {"build", "build-docker", ".git", ".local", ".cache", "_CPack_Packages"}
 
 
 def iter_metadata_files(repo_root: Path):

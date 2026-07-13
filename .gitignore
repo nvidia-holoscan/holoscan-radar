@@ -1,6 +1,7 @@
 .bash_history
 .holohub/
 build/
+build-*/
 data/
 .cursor/
 _CPack_Packages/
@@ -9,3 +10,4 @@ __pycache__/
 .nv/
 .local/
 *.deb
+uv.lock

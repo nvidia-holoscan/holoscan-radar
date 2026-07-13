@@ -3,22 +3,41 @@
 
 cmake_minimum_required(VERSION 3.24)
 
+# Default the CUDA architectures before project() enables the CUDA language,
+# following the SDK's MatX examples: `native` targets the GPU present at
+# build time; numeric values below 70 are floored (MatX requires compute
+# capability >= 7.0). Override with -DCMAKE_CUDA_ARCHITECTURES for CI or
+# cross-target builds.
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES "native")
+elseif(CMAKE_CUDA_ARCHITECTURES MATCHES "^[0-9]+$"
+       AND CMAKE_CUDA_ARCHITECTURES LESS 70)
+    message(STATUS "MatX requires CUDA compute capability >= 7.0; using 70")
+    set(CMAKE_CUDA_ARCHITECTURES "70")
+endif()
+
 project(holoscan_radar
     VERSION 0.1.0
     DESCRIPTION "Accelerated radar signal processing operators for the Holoscan ecosystem"
-    LANGUAGES CXX
+    LANGUAGES CXX CUDA
 )
 
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ---------------------------------------------------------------------------
 # Dependencies
 # ---------------------------------------------------------------------------
+# The Holoscan SDK install tree bundles MatX and holoscan-config.cmake chains
+# find_dependency(MATX ...), so find_package(holoscan) also provides the
+# matx::matx target used by the operator kernels.
 
+find_package(CUDAToolkit QUIET)
 find_package(holoscan REQUIRED COMPONENTS core)
 
 

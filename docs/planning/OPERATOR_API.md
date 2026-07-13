@@ -243,6 +243,7 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 **Parameter override convention.** Parameters are configuration set at graph build.
 
 - A parameter tagged **[live]** may additionally be overridden in-flight via a same-named non-blocking input port (unconnected → the parameter value is used).
+- Overrides are **sticky**: once a value arrives on the override port it remains the effective value on later ticks until another override arrives; the parameter supplies the initial effective value. (Re-emitting configuration every tick would make the override port a per-tick data port, contradicting "parameters are configuration".)
 - The philosophy is to not over-constrain a caller who knows what they are doing: allow a reasonable set of footguns, and warn where relevant.
 - Output shapes are inferred from the input tensors each tick (never assumed fixed downstream), so a **[live]** change that alters an output shape is allowed — consumers re-infer.
 - Where a **[live]** override incurs a genuine cost — an FFT-plan build, a window-coefficient build, a CFAR window-kernel build — the operator **warns** (once per new configuration) and **caches** prior configurations so alternating values do not thrash.
@@ -640,7 +641,7 @@ Used by: `FMCWRangeProcessorOp` / `FMCWDopplerProcessorOp` / `FMCWRangeDopplerPr
 
 ### FMCWWaveformDescriptor
 
-Parameters of the transmitted FMCW chirp, shared across operators to avoid parameter drift.
+Parameters of the transmitted FMCW chirp, shared across operators to avoid parameter drift. Immutable value type: built from an `FMCWWaveformSpec` (the construction input), which is validated once at construction — every derived quantity (slope ↔ bandwidth, wavelength) is precomputed there, all accessors are plain non-throwing reads, and a constructed descriptor cannot hold inconsistent fields. To change a value, construct a new descriptor from an updated spec.
 
 - `carrier_frequency` — float (Hz). Sets the wavelength `λ = c / carrier_frequency` (Doppler/velocity axis and the steering-vector phase).
 - `bandwidth` **or** `chirp_slope` — float. Define one, derive the other (`slope = bandwidth / chirp_duration`). Sets range resolution and the beat-frequency → range mapping.
