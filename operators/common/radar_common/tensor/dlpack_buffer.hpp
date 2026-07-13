@@ -62,9 +62,18 @@ inline std::shared_ptr<holoscan::Tensor> make_device_tensor(
     }
     count *= dim;
   }
-  const size_t bytes = static_cast<size_t>(count) *
-                       ((static_cast<size_t>(dtype.bits) + 7) / 8) *
-                       dtype.lanes;
+  // Guard the byte computation against size_t overflow: even a count that
+  // fits in int64 can overflow when scaled by the per-element byte size, and
+  // a wrapped result would under-allocate the device buffer.
+  const size_t bytes_per_element =
+      ((static_cast<size_t>(dtype.bits) + 7) / 8) * dtype.lanes;
+  if (bytes_per_element == 0 ||
+      static_cast<size_t>(count) >
+          std::numeric_limits<size_t>::max() / bytes_per_element) {
+    throw std::invalid_argument(
+        "make_device_tensor: invalid or overflowing shape");
+  }
+  const size_t bytes = static_cast<size_t>(count) * bytes_per_element;
 
   auto holder = std::make_unique<detail::DeviceBufferHolder>();
   holder->shape = shape;
