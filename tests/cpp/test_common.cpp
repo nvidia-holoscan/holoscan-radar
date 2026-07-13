@@ -583,6 +583,8 @@ TEST(PointTargetSim, SimoCubeHasRxLeadingAxis) {
   for (size_t i = 0; i < per_rx; ++i) {
     EXPECT_NEAR(result.cube[i].real(), result.cube[per_rx + i].real(),
                 1e-12);
+    EXPECT_NEAR(result.cube[i].imag(), result.cube[per_rx + i].imag(),
+                1e-12);
   }
 }
 
