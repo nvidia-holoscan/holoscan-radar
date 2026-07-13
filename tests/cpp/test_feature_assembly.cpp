@@ -20,7 +20,6 @@
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
-
 using holoscan::radar::AssemblyFeature;
 using holoscan::radar::FeatureAssemblyOp;
 using holoscan::radar::real_dtype;
@@ -73,7 +72,6 @@ HostTensor run_assembly(
 }
 
 TEST(FeatureAssemblyOpTest, AssemblesRawBinEscapeHatches) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   // Two detections: (d,r) = (3,5) and (7,2).
   std::vector<int64_t> idx = {3, 5, 7, 2};
   auto idx_t = to_device_tensor(idx, {2, 2}, DLDataType{kDLInt, 64, 1});
@@ -90,7 +88,6 @@ TEST(FeatureAssemblyOpTest, AssemblesRawBinEscapeHatches) {
 }
 
 TEST(FeatureAssemblyOpTest, LooksUpPhysicalRangeVelocityAndScore) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t kD = 8;
   constexpr int64_t kR = 16;
   std::vector<int64_t> idx = {2, 4};
@@ -125,7 +122,6 @@ TEST(FeatureAssemblyOpTest, LooksUpPhysicalRangeVelocityAndScore) {
 }
 
 TEST(FeatureAssemblyOpTest, RangeFallsBackToRawBinWhenBinsAbsent) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> idx = {1, 9};
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
   const auto points = run_assembly<float>(
@@ -136,7 +132,6 @@ TEST(FeatureAssemblyOpTest, RangeFallsBackToRawBinWhenBinsAbsent) {
 }
 
 TEST(FeatureAssemblyOpTest, AppendsAoaEstimates) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> idx = {0, 1, 2, 3};
   auto idx_t = to_device_tensor(idx, {2, 2}, DLDataType{kDLInt, 64, 1});
   std::vector<double> aoa = {0.1, -0.2, 0.3, 0.4};
@@ -157,7 +152,6 @@ TEST(FeatureAssemblyOpTest, AppendsAoaEstimates) {
 }
 
 TEST(FeatureAssemblyOpTest, RejectsScoreFeatureWithoutScoreInput) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> idx = {0, 0};
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
   EXPECT_THROW(
@@ -166,14 +160,12 @@ TEST(FeatureAssemblyOpTest, RejectsScoreFeatureWithoutScoreInput) {
 }
 
 TEST(FeatureAssemblyOpTest, RejectsEmptyFeatures) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> idx = {0, 0};
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
   EXPECT_THROW(run_assembly<double>(idx_t, {}), std::invalid_argument);
 }
 
 TEST(FeatureAssemblyOpTest, EmptyDetectionIdxEmitsEmptyPoints) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> idx;
   auto idx_t = to_device_tensor(idx, {0, 2}, DLDataType{kDLInt, 64, 1});
   const auto points = run_assembly<double>(
@@ -184,7 +176,6 @@ TEST(FeatureAssemblyOpTest, EmptyDetectionIdxEmitsEmptyPoints) {
 }
 
 TEST(FeatureAssemblyOpTest, FloatDoubleAgreeOnPhysicalLookup) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t kR = 4;
   std::vector<int64_t> idx = {1, 2};
   auto idx_d = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
@@ -202,7 +193,6 @@ TEST(FeatureAssemblyOpTest, FloatDoubleAgreeOnPhysicalLookup) {
 }
 
 TEST(FeatureAssemblyOpTest, GathersScoreAcrossPreservedBatch) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   // detection_idx columns: (batch, doppler, range) — matches CFAR with one
   // preserved leading axis. Score map shape (B=2, D=4, R=4).
   constexpr int64_t kB = 2;
@@ -229,7 +219,6 @@ TEST(FeatureAssemblyOpTest, GathersScoreAcrossPreservedBatch) {
 }
 
 TEST(FeatureAssemblyOpTest, RejectsAzFeatureWithoutAoaInput) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> idx = {0, 0};
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
   EXPECT_THROW(run_assembly<double>(idx_t, {AssemblyFeature::kAz}),
@@ -237,7 +226,6 @@ TEST(FeatureAssemblyOpTest, RejectsAzFeatureWithoutAoaInput) {
 }
 
 TEST(FeatureAssemblyOpTest, RejectsBadDetectionIdxRank) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> idx = {0, 1, 2};
   auto idx_t = to_device_tensor(idx, {3}, DLDataType{kDLInt, 64, 1});
   EXPECT_THROW(
@@ -246,7 +234,6 @@ TEST(FeatureAssemblyOpTest, RejectsBadDetectionIdxRank) {
 }
 
 TEST(FeatureAssemblyOpTest, RejectsElFeatureWithoutAoaInput) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> idx = {0, 0};
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
   EXPECT_THROW(run_assembly<double>(idx_t, {AssemblyFeature::kEl}),
@@ -254,7 +241,6 @@ TEST(FeatureAssemblyOpTest, RejectsElFeatureWithoutAoaInput) {
 }
 
 TEST(FeatureAssemblyOpTest, RejectsScoreLeadingRankMismatch) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   // Score has a leading batch dim but detection_idx has no preserved cols.
   std::vector<int64_t> idx = {0, 1};
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
@@ -267,7 +253,6 @@ TEST(FeatureAssemblyOpTest, RejectsScoreLeadingRankMismatch) {
 }
 
 TEST(FeatureAssemblyOpTest, RejectsOobRangeBinWhenBinsPresent) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> idx = {0, 99};  // range_bin 99 with only 4 bins
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
   std::vector<double> range_bins = {0, 10, 20, 30};
@@ -277,7 +262,6 @@ TEST(FeatureAssemblyOpTest, RejectsOobRangeBinWhenBinsPresent) {
 }
 
 TEST(FeatureAssemblyOpTest, RejectsOobScoreCoords) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> idx = {8, 1};  // doppler 8 out of range for D=4
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
   std::vector<double> score(4 * 4, 1.0);
@@ -289,7 +273,6 @@ TEST(FeatureAssemblyOpTest, RejectsOobScoreCoords) {
 }
 
 TEST(FeatureAssemblyOpTest, RejectsOobPreservedBatchCoord) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   // batch coord 2 is OOB for score leading dim B=2.
   std::vector<int64_t> idx = {2, 0, 0};
   auto idx_t = to_device_tensor(idx, {1, 3}, DLDataType{kDLInt, 64, 1});
@@ -302,7 +285,6 @@ TEST(FeatureAssemblyOpTest, RejectsOobPreservedBatchCoord) {
 }
 
 TEST(FeatureAssemblyOpTest, RejectsNonContiguousDetectionIdx) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   // Shape (1, 2) with strides (2, 2): elements at offsets 0 and 2 — not
   // compact row-major, so is_contiguous() is false.
   struct Holder {

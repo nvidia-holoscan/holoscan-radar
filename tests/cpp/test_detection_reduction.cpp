@@ -20,7 +20,6 @@
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
-
 using holoscan::radar::DetectionReductionOp;
 using holoscan::radar::RepresentativePolicy;
 using holoscan::radar::ScoreMethod;
@@ -61,7 +60,6 @@ HostTensor run_reduction(std::shared_ptr<holoscan::Tensor> labels,
 }
 
 TEST(DetectionReductionOpTest, FirstSelectsLowestIndexPerCluster) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   // rows: 0→cluster0, 1→cluster1, 2→cluster0, 3→noise
   std::vector<int64_t> labels = {0, 1, 0, -1};
   std::vector<int64_t> idx = {10, 1, 20, 2, 11, 3, 99, 9};
@@ -81,7 +79,6 @@ TEST(DetectionReductionOpTest, FirstSelectsLowestIndexPerCluster) {
 }
 
 TEST(DetectionReductionOpTest, PeakSelectsMaxWeightedSum) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> labels = {0, 0, 1};
   std::vector<int64_t> idx = {0, 0, 1, 1, 2, 2};
   // scores in column 0: 1, 5, 3 → cluster0 picks row1; cluster1 picks row2
@@ -103,7 +100,6 @@ TEST(DetectionReductionOpTest, PeakSelectsMaxWeightedSum) {
 }
 
 TEST(DetectionReductionOpTest, PeakSelectsMaxWeightedL2) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   // sum: row0=7 > row1=6; L2: row1=6 > row0=5 — L2 must pick row1.
   std::vector<int64_t> labels = {0, 0};
   std::vector<int64_t> idx = {10, 1, 20, 2};
@@ -122,7 +118,6 @@ TEST(DetectionReductionOpTest, PeakSelectsMaxWeightedL2) {
 }
 
 TEST(DetectionReductionOpTest, PeakSelectsMaxWeightedMax) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   // sum: row1=17 > row0=11; max: row0=10 > row1=9 — max must pick row0.
   std::vector<int64_t> labels = {0, 0};
   std::vector<int64_t> idx = {10, 1, 20, 2};
@@ -141,7 +136,6 @@ TEST(DetectionReductionOpTest, PeakSelectsMaxWeightedMax) {
 }
 
 TEST(DetectionReductionOpTest, MedoidRespectsFeatureWeights) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   // One cluster, three points on a line; weights emphasize dim 0.
   // Centroid of scaled feats ≈ (2,0); nearest is row1 (value 2).
   std::vector<int64_t> labels = {0, 0, 0};
@@ -161,7 +155,6 @@ TEST(DetectionReductionOpTest, MedoidRespectsFeatureWeights) {
 }
 
 TEST(DetectionReductionOpTest, ExcludesNoiseAndEmitsOnePerCluster) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> labels = {-1, 0, -1, 1};
   std::vector<int64_t> idx = {9, 9, 0, 1, 8, 8, 2, 3};
   auto lab_t = to_device_tensor(labels, {4}, DLDataType{kDLInt, 64, 1});
@@ -178,7 +171,6 @@ TEST(DetectionReductionOpTest, ExcludesNoiseAndEmitsOnePerCluster) {
 }
 
 TEST(DetectionReductionOpTest, RejectsPeakWithoutPoints) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> labels = {0};
   std::vector<int64_t> idx = {0, 0};
   auto lab_t = to_device_tensor(labels, {1}, DLDataType{kDLInt, 64, 1});
@@ -192,7 +184,6 @@ TEST(DetectionReductionOpTest, RejectsPeakWithoutPoints) {
 }
 
 TEST(DetectionReductionOpTest, RejectsMismatchedFeatureWeights) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> labels = {0};
   std::vector<int64_t> idx = {0, 0};
   std::vector<double> points = {1.0, 2.0};
@@ -208,7 +199,6 @@ TEST(DetectionReductionOpTest, RejectsMismatchedFeatureWeights) {
 }
 
 TEST(DetectionReductionOpTest, FloatDoubleAgreeOnPeak) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> labels = {0, 0};
   std::vector<int64_t> idx = {0, 0, 1, 1};
   std::vector<double> pd = {1.0, 4.0};
@@ -232,7 +222,6 @@ TEST(DetectionReductionOpTest, FloatDoubleAgreeOnPeak) {
 }
 
 TEST(DetectionReductionOpTest, EmptyInputEmitsZeroClusters) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> labels;
   std::vector<int64_t> idx;
   auto lab_t = to_device_tensor(labels, {0}, DLDataType{kDLInt, 64, 1});
@@ -246,7 +235,6 @@ TEST(DetectionReductionOpTest, EmptyInputEmitsZeroClusters) {
 }
 
 TEST(DetectionReductionOpTest, AllNoiseEmitsZeroClusters) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> labels = {-1, -1};
   std::vector<int64_t> idx = {1, 2, 3, 4};
   auto lab_t = to_device_tensor(labels, {2}, DLDataType{kDLInt, 64, 1});
@@ -260,7 +248,6 @@ TEST(DetectionReductionOpTest, AllNoiseEmitsZeroClusters) {
 }
 
 TEST(DetectionReductionOpTest, SparseLabelGapsSkipped) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   // Labels 0 and 2 (gap at 1) → two clusters, compact order by label id.
   std::vector<int64_t> labels = {0, 2};
   std::vector<int64_t> idx = {10, 1, 30, 3};
@@ -277,7 +264,6 @@ TEST(DetectionReductionOpTest, SparseLabelGapsSkipped) {
 }
 
 TEST(DetectionReductionOpTest, WidenedDetectionIdxCols) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> labels = {0};
   // (doppler, range, batch) — third column preserved in rep_idx.
   std::vector<int64_t> idx = {7, 8, 9};
@@ -294,7 +280,6 @@ TEST(DetectionReductionOpTest, WidenedDetectionIdxCols) {
 }
 
 TEST(DetectionReductionOpTest, PeakEqualScorePicksLowestIndex) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> labels = {0, 0};
   std::vector<int64_t> idx = {10, 1, 20, 2};
   std::vector<double> points = {5.0, 5.0};
@@ -311,7 +296,6 @@ TEST(DetectionReductionOpTest, PeakEqualScorePicksLowestIndex) {
 }
 
 TEST(DetectionReductionOpTest, CustomScoreMethodIgnoredForFirst) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   // score_method is unused for first — custom must not require ScoreFn.
   std::vector<int64_t> labels = {0, 0};
   std::vector<int64_t> idx = {10, 1, 20, 2};
@@ -328,8 +312,6 @@ TEST(DetectionReductionOpTest, CustomScoreMethodIgnoredForFirst) {
 
 // Sticky [live] representative override: peak → first mid-stream, then sticky.
 TEST(DetectionReductionOpTest, LiveRepresentativeStickyOverride) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
-
   std::vector<int64_t> labels = {0, 0};
   std::vector<int64_t> idx = {0, 0, 1, 1};
   std::vector<float> points = {1.0f, 5.0f};
@@ -390,8 +372,6 @@ TEST(DetectionReductionOpTest, LiveRepresentativeStickyOverride) {
 
 // Sticky [live] score_method: weighted_sum → weighted_l2, then sticky.
 TEST(DetectionReductionOpTest, LiveScoreMethodStickyOverride) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
-
   // sum picks row0 (7>6); L2 picks row1 (6>5).
   std::vector<int64_t> labels = {0, 0};
   std::vector<int64_t> idx = {10, 1, 20, 2};
@@ -450,8 +430,6 @@ TEST(DetectionReductionOpTest, LiveScoreMethodStickyOverride) {
 
 // Sticky [live] feature_weights: emphasize col0 → col1, then sticky.
 TEST(DetectionReductionOpTest, LiveFeatureWeightsStickyOverride) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
-
   // One-hot col0 → row0 (5>1); one-hot col1 → row1 (10>0).
   std::vector<int64_t> labels = {0, 0};
   std::vector<int64_t> idx = {10, 1, 20, 2};

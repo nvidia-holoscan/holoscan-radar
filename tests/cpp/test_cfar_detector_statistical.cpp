@@ -25,7 +25,6 @@
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
-
 using holoscan::radar::CFARDetectorOp;
 using holoscan::radar::CfarVariant;
 using holoscan::radar::real_dtype;
@@ -311,8 +310,6 @@ PfaTrialResult run_monte_carlo_pfa_nci(int num_trials, int64_t num_channels,
 }  // namespace
 
 TEST(CFARDetectorOpStatisticalTest, CaMonteCarloPfaK1) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
-
   constexpr int kTrials = 30;
   constexpr int64_t kMapDoppler = 64;
   constexpr int64_t kMapRange = 64;
@@ -329,8 +326,6 @@ TEST(CFARDetectorOpStatisticalTest, CaMonteCarloPfaK1) {
 }
 
 TEST(CFARDetectorOpStatisticalTest, GoMonteCarloPfaK1) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
-
   constexpr int kTrials = 30;
   constexpr int64_t kMapDoppler = 64;
   constexpr int64_t kMapRange = 64;
@@ -347,8 +342,6 @@ TEST(CFARDetectorOpStatisticalTest, GoMonteCarloPfaK1) {
 }
 
 TEST(CFARDetectorOpStatisticalTest, CaMonteCarloPfaNciK8) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
-
   constexpr int kTrials = 30;
   constexpr int64_t kChannels = 8;
   constexpr int64_t kMapDoppler = 64;
@@ -366,8 +359,6 @@ TEST(CFARDetectorOpStatisticalTest, CaMonteCarloPfaNciK8) {
 }
 
 TEST(CFARDetectorOpStatisticalTest, GoMonteCarloPfaNciK8) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
-
   constexpr int kTrials = 30;
   constexpr int64_t kChannels = 8;
   constexpr int64_t kMapDoppler = 64;
@@ -385,8 +376,6 @@ TEST(CFARDetectorOpStatisticalTest, GoMonteCarloPfaNciK8) {
 }
 
 TEST(CFARDetectorOpStatisticalTest, SoMonteCarloPfaK1) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
-
   constexpr int kTrials = 30;
   constexpr int64_t kMapDoppler = 64;
   constexpr int64_t kMapRange = 64;
@@ -406,8 +395,6 @@ TEST(CFARDetectorOpStatisticalTest, SoMonteCarloPfaK1) {
 }
 
 TEST(CFARDetectorOpStatisticalTest, SoMonteCarloPfaNciK8) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
-
   constexpr int kTrials = 30;
   constexpr int64_t kChannels = 8;
   constexpr int64_t kMapDoppler = 64;
@@ -426,8 +413,6 @@ TEST(CFARDetectorOpStatisticalTest, SoMonteCarloPfaNciK8) {
 }
 
 TEST(CFARDetectorOpStatisticalTest, OsMonteCarloPfaK1) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
-
   constexpr int kTrials = 30;
   constexpr int64_t kMapDoppler = 64;
   constexpr int64_t kMapRange = 64;
@@ -444,8 +429,6 @@ TEST(CFARDetectorOpStatisticalTest, OsMonteCarloPfaK1) {
 }
 
 TEST(CFARDetectorOpStatisticalTest, OsMonteCarloPfaNciK8) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
-
   constexpr int kTrials = 30;
   constexpr int64_t kChannels = 8;
   constexpr int64_t kMapDoppler = 64;

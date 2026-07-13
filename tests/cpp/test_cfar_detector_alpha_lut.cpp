@@ -26,7 +26,6 @@
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
-
 using holoscan::radar::CFARDetectorOp;
 using holoscan::radar::CfarVariant;
 using holoscan::radar::real_dtype;
@@ -102,7 +101,7 @@ CfarOutputs run_cfar_idx(std::shared_ptr<holoscan::Tensor> input,
       "noise_estimate", {noop});
 
   harness->run_test();
-  ASSERT_EQ(idx_cap.frames.size(), 1u);
+  EXPECT_EQ(idx_cap.frames.size(), 1u);
   return {std::move(idx_cap.frames.front())};
 }
 
@@ -139,7 +138,6 @@ std::vector<double> inflated_lut(const std::vector<double>& lut,
 }
 
 TEST(CFARDetectorAlphaLutTest, AlphaLutPrecedenceOverPfaCA) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
   const auto input =
       to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
@@ -165,7 +163,6 @@ TEST(CFARDetectorAlphaLutTest, AlphaLutPrecedenceOverPfaCA) {
 }
 
 TEST(CFARDetectorAlphaLutTest, AlphaLutPrecedenceOverPfaGO) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
   const auto input =
       to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
@@ -191,7 +188,6 @@ TEST(CFARDetectorAlphaLutTest, AlphaLutPrecedenceOverPfaGO) {
 }
 
 TEST(CFARDetectorAlphaLutTest, AlphaLutPrecedenceOverPfaSO) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
   const auto input =
       to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
@@ -217,7 +213,6 @@ TEST(CFARDetectorAlphaLutTest, AlphaLutPrecedenceOverPfaSO) {
 }
 
 TEST(CFARDetectorAlphaLutTest, AlphaLutPrecedenceOverPfaOS) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
   const auto input =
       to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
@@ -246,7 +241,6 @@ TEST(CFARDetectorAlphaLutTest, AlphaLutPrecedenceOverPfaOS) {
 }
 
 TEST(CFARDetectorAlphaLutTest, RejectsTooShortAlphaLut) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {}, 1.0);
   const auto input =
       to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
@@ -262,7 +256,6 @@ TEST(CFARDetectorAlphaLutTest, RejectsTooShortAlphaLut) {
 }
 
 TEST(CFARDetectorAlphaLutTest, RejectsZeroAlphaLutEntry) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {}, 1.0);
   const auto input =
       to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
@@ -280,7 +273,6 @@ TEST(CFARDetectorAlphaLutTest, RejectsZeroAlphaLutEntry) {
 }
 
 TEST(CFARDetectorAlphaLutTest, RejectsNonFiniteAlphaLutEntry) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {}, 1.0);
   const auto input =
       to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
@@ -298,7 +290,6 @@ TEST(CFARDetectorAlphaLutTest, RejectsNonFiniteAlphaLutEntry) {
 }
 
 TEST(CFARDetectorAlphaLutTest, FloatDoubleAgreeWithExternalAlphaLut) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
   const auto lut = build_variant_lut(CfarVariant::kCA, 1e-3, 1, 0);
   std::vector<float> mapf(map.begin(), map.end());
@@ -320,7 +311,6 @@ TEST(CFARDetectorAlphaLutTest, FloatDoubleAgreeWithExternalAlphaLut) {
 }
 
 TEST(CFARDetectorAlphaLutTest, PfaIgnoredWhileExternalAlphaLutActive) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
   const auto input =
       to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
@@ -357,7 +347,6 @@ struct LiveAlphaLutApp : public holoscan::Application {
 };
 
 TEST(CFARDetectorAlphaLutTest, LiveAlphaLutOverrideStickyAndClearing) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
   const auto pfa_lut = build_variant_lut(CfarVariant::kCA, 1e-3, 1, 0);
   const auto huge_lut = inflated_lut(pfa_lut, 1e6);
@@ -405,7 +394,6 @@ struct LivePfaRebuildApp : public holoscan::Application {
 // timing is vacuous on small maps (warm GO LUT is ~100 ms here, not
 // multi-second), but blocking does two cold builds while non-blocking does one.
 TEST(CFARDetectorAlphaLutTest, NonBlockingPfaOverrideServesStaleLut) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
   holoscan::TensorMap frame = single_map(
       to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>()),

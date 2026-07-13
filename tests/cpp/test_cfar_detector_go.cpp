@@ -25,7 +25,6 @@
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
-
 using holoscan::radar::CFARDetectorOp;
 using holoscan::radar::CfarVariant;
 using holoscan::radar::complex_dtype;
@@ -283,7 +282,6 @@ class LiveGoThresholdScaleApp : public holoscan::Application {
 }  // namespace
 
 TEST(CFARDetectorOpGoTest, DetectsSingleTargetRealPath) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t dt = 8;
   const int64_t rt = 16;
   const auto map = power_map(1.0, {{dt, rt}}, 100.0);
@@ -305,7 +303,6 @@ TEST(CFARDetectorOpGoTest, DetectsSingleTargetRealPath) {
 }
 
 TEST(CFARDetectorOpGoTest, NoiseEstimateTracksFloor) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const double floor = 3.5;
   const auto map = power_map(floor, {}, floor);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange},
@@ -321,7 +318,6 @@ TEST(CFARDetectorOpGoTest, NoiseEstimateTracksFloor) {
 }
 
 TEST(CFARDetectorOpGoTest, NoFalseAlarmsOnFlatMap) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {}, 1.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange},
                                         real_dtype<double>());
@@ -336,7 +332,6 @@ TEST(CFARDetectorOpGoTest, NoFalseAlarmsOnFlatMap) {
 }
 
 TEST(CFARDetectorOpGoTest, ComplexInputFormsPower) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t dt = 5;
   const int64_t rt = 20;
   std::vector<std::complex<double>> cube(
@@ -356,7 +351,6 @@ TEST(CFARDetectorOpGoTest, ComplexInputFormsPower) {
 }
 
 TEST(CFARDetectorOpGoTest, MaxDetectionsCap) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{4, 8}, {12, 24}}, 100.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange},
                                         real_dtype<double>());
@@ -372,7 +366,6 @@ TEST(CFARDetectorOpGoTest, MaxDetectionsCap) {
 }
 
 TEST(CFARDetectorOpGoTest, FloatDoubleAgree) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t dt = 8;
   const int64_t rt = 16;
   const auto map = power_map(1.0, {{dt, rt}}, 100.0);
@@ -400,7 +393,6 @@ TEST(CFARDetectorOpGoTest, FloatDoubleAgree) {
 }
 
 TEST(CFARDetectorOpGoTest, DetectsOnLargeMap) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t kLargeDoppler = 256;
   constexpr int64_t kLargeRange = 512;
   const int64_t dt = 128;
@@ -423,7 +415,6 @@ TEST(CFARDetectorOpGoTest, DetectsOnLargeMap) {
 }
 
 TEST(CFARDetectorOpGoTest, MaskMatchesScoreInterior) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange},
                                         real_dtype<double>());
@@ -439,7 +430,6 @@ TEST(CFARDetectorOpGoTest, MaskMatchesScoreInterior) {
 }
 
 TEST(CFARDetectorOpGoTest, RealAndComplexPathsAgree) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const int64_t dt = 10;
   const int64_t rt = 22;
   const double floor = 2.0;
@@ -475,7 +465,6 @@ TEST(CFARDetectorOpGoTest, RealAndComplexPathsAgree) {
 }
 
 TEST(CFARDetectorOpGoTest, BorderCellsUseInBoundsTrainingOnly) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const double floor = 4.0;
   const auto map = power_map(floor, {}, floor);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange},
@@ -496,7 +485,6 @@ TEST(CFARDetectorOpGoTest, BorderCellsUseInBoundsTrainingOnly) {
 }
 
 TEST(CFARDetectorOpGoTest, DetectsTwoTargets) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{4, 8}, {12, 24}}, 100.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange},
                                         real_dtype<double>());
@@ -513,7 +501,6 @@ TEST(CFARDetectorOpGoTest, DetectsTwoTargets) {
 }
 
 TEST(CFARDetectorOpGoTest, MoreConservativeThanCaWithOneSidedInterferer) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
   auto map = power_map(1.0, {}, 1.0);
@@ -540,7 +527,6 @@ TEST(CFARDetectorOpGoTest, MoreConservativeThanCaWithOneSidedInterferer) {
 }
 
 TEST(CFARDetectorOpGoTest, LiveThresholdScaleOverrideMidStreamAndSticky) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
   auto frame = [&]() {
     return single_map(to_device_tensor(map, {kDoppler, kRange},
@@ -562,7 +548,6 @@ TEST(CFARDetectorOpGoTest, LiveThresholdScaleOverrideMidStreamAndSticky) {
 }
 
 TEST(CFARDetectorOpGoTest, HarnessGuardCellsOverridePerTick) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
   auto map = power_map(1.0, {}, 1.0);
@@ -605,7 +590,6 @@ TEST(CFARDetectorOpGoTest, HarnessGuardCellsOverridePerTick) {
 }
 
 TEST(CFARDetectorOpGoTest, LivePfaOverrideMidStreamAndSticky) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
   const auto map = power_map(1.0, {{dt, rt}}, 26.0);
@@ -632,7 +616,6 @@ TEST(CFARDetectorOpGoTest, LivePfaOverrideMidStreamAndSticky) {
 }
 
 TEST(CFARDetectorOpGoTest, LiveMaxDetectionsOverrideMidStreamAndSticky) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {{4, 8}, {12, 24}}, 100.0);
   auto frame = [&]() {
     return single_map(to_device_tensor(map, {kDoppler, kRange},
@@ -654,7 +637,6 @@ TEST(CFARDetectorOpGoTest, LiveMaxDetectionsOverrideMidStreamAndSticky) {
 }
 
 TEST(CFARDetectorOpGoTest, LiveGuardCellsOverrideMidStreamAndSticky) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
   auto map = power_map(1.0, {}, 1.0);
@@ -697,7 +679,6 @@ TEST(CFARDetectorOpGoTest, LiveGuardCellsOverrideMidStreamAndSticky) {
 }
 
 TEST(CFARDetectorOpGoTest, LiveTrainingCellsOverrideMidStreamAndSticky) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
   auto map = power_map(1.0, {}, 1.0);
@@ -740,7 +721,6 @@ TEST(CFARDetectorOpGoTest, LiveTrainingCellsOverrideMidStreamAndSticky) {
 }
 
 TEST(CFARDetectorOpGoTest, LiveNciAxesOverrideMidStreamAndSticky) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t kChannels = 8;
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
@@ -790,7 +770,6 @@ TEST(CFARDetectorOpGoTest, LiveNciAxesOverrideMidStreamAndSticky) {
 }
 
 TEST(CFARDetectorOpGoTest, NciIntegratesChannelsForDetection) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t kChannels = 8;
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
@@ -830,7 +809,6 @@ TEST(CFARDetectorOpGoTest, NciIntegratesChannelsForDetection) {
 }
 
 TEST(CFARDetectorOpGoTest, NciSumsAllChannelPower) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t kChannels = 4;
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
@@ -854,7 +832,6 @@ TEST(CFARDetectorOpGoTest, NciSumsAllChannelPower) {
 }
 
 TEST(CFARDetectorOpGoTest, NciPreservesBatchAxis) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t kBatch = 2;
   constexpr int64_t kChannels = 3;
   constexpr int64_t dt = 8;
@@ -884,7 +861,6 @@ TEST(CFARDetectorOpGoTest, NciPreservesBatchAxis) {
 }
 
 TEST(CFARDetectorOpGoTest, BatchIdxIncludesPreservedAxes) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t kBatch = 2;
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
@@ -907,7 +883,6 @@ TEST(CFARDetectorOpGoTest, BatchIdxIncludesPreservedAxes) {
 }
 
 TEST(CFARDetectorOpGoTest, NciMaskMatchesScoreOnIntegratedMap) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   constexpr int64_t kChannels = 4;
   const auto cube = power_cube({kChannels, kDoppler, kRange}, 1.0,
                                {{{0, 8, 16}, 40.0}});
@@ -926,7 +901,6 @@ TEST(CFARDetectorOpGoTest, NciMaskMatchesScoreOnIntegratedMap) {
 }
 
 TEST(CFARDetectorOpGoTest, RejectsMissingGuardCells) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {}, 1.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange},
                                         real_dtype<double>());
@@ -939,7 +913,6 @@ TEST(CFARDetectorOpGoTest, RejectsMissingGuardCells) {
 }
 
 TEST(CFARDetectorOpGoTest, RejectsInvalidNciAxis) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   const auto map = power_map(1.0, {}, 1.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange},
                                         real_dtype<double>());

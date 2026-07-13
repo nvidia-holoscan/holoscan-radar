@@ -20,7 +20,6 @@
 #include "utils/tensor_fixtures.hpp"
 
 namespace detection_reduction_test {
-
 // score = col0 - col1 (nonlinear vs weighted_sum of the same columns).
 struct Col0MinusCol1 {
   template <typename T>
@@ -40,7 +39,6 @@ template class holoscan::radar::DetectionReductionOp<
     double, detection_reduction_test::Col0MinusCol1>;
 
 namespace {
-
 using holoscan::radar::DetectionReductionOp;
 using holoscan::radar::RepresentativePolicy;
 using holoscan::radar::ScoreMethod;
@@ -56,7 +54,6 @@ using holoscan::test::create_operator_test;
 using detection_reduction_test::Col0MinusCol1;
 
 TEST(DetectionReductionOpTest, CustomScoreFnSelectsPeak) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   // Cluster 0: row0 score 1-0=1, row1 score 3-5=-2 → peak is row0.
   // weighted_sum with equal weights would pick row1 (3+5 > 1+0).
   std::vector<int64_t> labels = {0, 0};
@@ -88,7 +85,6 @@ TEST(DetectionReductionOpTest, CustomScoreFnSelectsPeak) {
 }
 
 TEST(DetectionReductionOpTest, RejectsCustomWithoutScoreFn) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
   std::vector<int64_t> labels = {0};
   std::vector<int64_t> idx = {0, 0};
   std::vector<float> points = {1.0f};
@@ -113,8 +109,6 @@ TEST(DetectionReductionOpTest, RejectsCustomWithoutScoreFn) {
 
 // Sticky live score_method into custom and back out.
 TEST(DetectionReductionOpTest, LiveScoreMethodIntoAndOutOfCustom) {
-  RADAR_TEST_SKIP_IF_NO_GPU();
-
   // sum (1,1): row1 wins (8>1). custom col0-col1: row0 wins (1-0 > 3-5).
   std::vector<int64_t> labels = {0, 0};
   std::vector<int64_t> idx = {10, 1, 20, 2};
