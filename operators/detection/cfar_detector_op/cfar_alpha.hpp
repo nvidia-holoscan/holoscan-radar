@@ -43,6 +43,14 @@ int64_t training_cell_count(int d, int r, int num_doppler, int num_range,
 int64_t max_training_cell_count(int num_doppler, int num_range, int guard_d,
                                 int guard_r, int train_d, int train_r);
 
+// Distinct CA-window training-cell counts that appear for at least one cell on
+// the map (exhaustive scan). Used to validate sparse external alpha_lut tables
+// for OS K>1, whose LUTs fill only these reachable counts.
+std::vector<int64_t> reachable_training_cell_counts(int num_doppler,
+                                                    int num_range, int guard_d,
+                                                    int guard_r, int train_d,
+                                                    int train_r);
+
 // False-alarm probability for CA-CFAR on Gamma(K) integrated clutter:
 //   Pfa = I_{1/(1 + alpha/N)}(N*K, K)
 double ca_cfar_pfa_from_alpha(double alpha, int64_t n, int64_t k);

@@ -76,7 +76,7 @@ int64_t max_alpha_lut_index(CfarVariant variant, int num_doppler,
                                          guard_r, train_d, train_r);
 }
 
-void validate_external_alpha_lut(CfarVariant variant,
+void validate_external_alpha_lut(CfarVariant variant, int64_t fold,
                                  const std::vector<double>& lut,
                                  int64_t max_lut_index, int num_doppler,
                                  int num_range, int guard_d, int guard_r,
@@ -90,8 +90,8 @@ void validate_external_alpha_lut(CfarVariant variant,
         "for the configured variant, footprint, and map size");
   }
   // Every slot in 1..max must be finite and non-negative. Zeros are only legal
-  // for GO/SO unreachable indices (sparse offline tables); CA/OS use every
-  // index in range as a possible training-cell count.
+  // at unreachable indices of a sparse table (see the positivity checks below);
+  // any negative or non-finite entry is corruption regardless of reachability.
   for (int64_t idx = 1; idx <= max_lut_index; ++idx) {
     const double alpha = lut[static_cast<size_t>(idx)];
     if (!std::isfinite(alpha) || alpha < 0.0) {
@@ -100,19 +100,31 @@ void validate_external_alpha_lut(CfarVariant variant,
           "and non-negative");
     }
   }
-  if (variant == CfarVariant::kGO || variant == CfarVariant::kSO) {
-    const std::vector<int64_t> reachable = detail::reachable_go_lut_indices(
-        num_doppler, num_range, guard_d, guard_r, train_d, train_r);
+  // Require a positive alpha only at indices the kernel can actually read.
+  // GO/SO always build sparse tables (positive on reachable side-counts, zero
+  // elsewhere); OS builds a sparse table for K>1 (reachable training-cell
+  // counts) but a dense one for K=1. CA is always dense. For the sparse cases
+  // check the reachable set; otherwise require every index positive.
+  auto require_reachable_positive = [&](const std::vector<int64_t>& reachable) {
     for (int64_t idx : reachable) {
       if (idx <= 0 || idx > max_lut_index) {
         continue;
       }
       if (lut[static_cast<size_t>(idx)] <= 0.0) {
         throw std::invalid_argument(
-            "CFARDetectorOp: alpha_lut entries for reachable GO/SO LUT "
-            "indices must be finite and positive");
+            "CFARDetectorOp: alpha_lut entries for reachable LUT indices must "
+            "be finite and positive");
       }
     }
+  };
+  if (variant == CfarVariant::kGO || variant == CfarVariant::kSO) {
+    require_reachable_positive(detail::reachable_go_lut_indices(
+        num_doppler, num_range, guard_d, guard_r, train_d, train_r));
+    return;
+  }
+  if (variant == CfarVariant::kOS && fold > 1) {
+    require_reachable_positive(detail::reachable_training_cell_counts(
+        num_doppler, num_range, guard_d, guard_r, train_d, train_r));
     return;
   }
   for (int64_t idx = 1; idx <= max_lut_index; ++idx) {
@@ -379,8 +391,8 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
     const int64_t max_lut_index = max_alpha_lut_index(
         variant, static_cast<int>(num_doppler), static_cast<int>(num_range),
         guard_d, guard_r, train_d, train_r);
-    validate_external_alpha_lut(variant, effective_alpha_lut_, max_lut_index,
-                                static_cast<int>(num_doppler),
+    validate_external_alpha_lut(variant, plan.fold, effective_alpha_lut_,
+                                max_lut_index, static_cast<int>(num_doppler),
                                 static_cast<int>(num_range), guard_d, guard_r,
                                 train_d, train_r);
     using_external_alpha_lut_ = true;
