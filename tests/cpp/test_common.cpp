@@ -472,11 +472,12 @@ TEST(PointTargetSim, PreMixerTimesConjReferenceIsDechirped) {
 
 TEST(MakeDeviceTensor, RejectsInvalidAndOverflowingShapes) {
   const auto dtype = holoscan::radar::complex_dtype<float>();
-  // Non-positive dims and int64-overflowing products must throw before any
-  // allocation (a wrapped count would produce an undersized buffer that
-  // full-extent views write past).
-  EXPECT_THROW(holoscan::radar::make_device_tensor({0, 4}, dtype),
-               std::invalid_argument);
+  // Zero-sized dims are valid: an empty tensor is a legitimate pipeline state
+  // (e.g. zero detections → empty detection_idx / points) that operators
+  // allocate-then-check. Only negative dims and int64-overflowing products
+  // must throw before any allocation (a wrapped count would produce an
+  // undersized buffer that full-extent views write past).
+  EXPECT_NO_THROW(holoscan::radar::make_device_tensor({0, 4}, dtype));
   EXPECT_THROW(holoscan::radar::make_device_tensor({-1, 4}, dtype),
                std::invalid_argument);
   EXPECT_THROW(holoscan::radar::make_device_tensor(
