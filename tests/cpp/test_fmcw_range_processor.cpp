@@ -390,7 +390,7 @@ TEST(FMCWRangeProcessorOpTest, LeadingBatchAxesRoundTrip) {
     const auto rx0 = slice_abs<float>(out.profiles, 0, chirp);
     const auto rx1 = slice_abs<float>(out.profiles, 1, chirp);
     for (int64_t i = 0; i < kSamples; ++i) {
-      ASSERT_NEAR(rx0[static_cast<size_t>(i)], rx1[static_cast<size_t>(i)],
+      EXPECT_NEAR(rx0[static_cast<size_t>(i)], rx1[static_cast<size_t>(i)],
                   1e-3)
           << "chirp " << chirp << " bin " << i;
     }
@@ -493,7 +493,7 @@ TEST(FMCWRangeProcessorOpTest, FloatAndDoubleInstantiationsAgree) {
   const double peak = mag_d[static_cast<size_t>(argmax(mag_d))];
   EXPECT_EQ(argmax(mag_f), argmax(mag_d));
   for (int64_t i = 0; i < kSamples; ++i) {
-    ASSERT_NEAR(mag_f[static_cast<size_t>(i)],
+    EXPECT_NEAR(mag_f[static_cast<size_t>(i)],
                 mag_d[static_cast<size_t>(i)], 1e-4 * peak)
         << "bin " << i;
   }
