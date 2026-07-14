@@ -5,11 +5,17 @@
 // a real (already-formed power) map on the device so benchmarks exercise the
 // real-input CFAR path with a fixed, reproducible payload. The map is
 // preallocated once per scenario and reused across every frame.
+//
+// FMCW consumers additionally need a complex IQ cube (adc_cube / range_profiles
+// payload); make_iq_cube_device<T>() builds one with a deterministic multi-tone
+// pattern so the FFT stages exercise real spectral structure, not zeros.
 
 #pragma once
 
 #include <cuda_runtime_api.h>
 
+#include <cmath>
+#include <complex>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -64,6 +70,55 @@ std::shared_ptr<holoscan::Tensor> make_power_map_device(
   if (cudaMemcpy(tensor->data(), host.data(), sizeof(T) * host.size(),
                  cudaMemcpyHostToDevice) != cudaSuccess) {
     throw std::runtime_error("make_power_map_device: cudaMemcpy H2D failed");
+  }
+  return tensor;
+}
+
+// Deterministic complex IQ payload for the FMCW stages. The last axis is the
+// transform axis (fast-time samples for adc_cube, slow-time chirps once
+// transposed for Doppler); a few fixed tones along it give the FFT real
+// spectral structure. Patterned (not random) so the same shape yields the same
+// payload across commits on the same box.
+template <typename T>
+std::vector<std::complex<T>> deterministic_iq_host(
+    const std::vector<int64_t>& shape) {
+  int64_t count = 1;
+  for (int64_t d : shape) {
+    count *= d;
+  }
+  const int64_t n = shape.empty() ? 1 : shape.back();  // transform length
+  std::vector<std::complex<T>> host(static_cast<size_t>(count));
+  // Two coprime-ish tone indices plus a small DC term; the pattern repeats
+  // every `n` elements so each row along the transform axis is identical.
+  const double two_pi = 6.283185307179586;
+  const double k1 = 5.0;
+  const double k2 = 17.0;
+  for (int64_t i = 0; i < count; ++i) {
+    const int64_t s = (n > 0) ? (i % n) : 0;
+    const double phase1 = two_pi * k1 * static_cast<double>(s) /
+                          static_cast<double>(n > 0 ? n : 1);
+    const double phase2 = two_pi * k2 * static_cast<double>(s) /
+                          static_cast<double>(n > 0 ? n : 1);
+    const double re = std::cos(phase1) + 0.5 * std::cos(phase2) + 0.1;
+    const double im = std::sin(phase1) + 0.5 * std::sin(phase2);
+    host[static_cast<size_t>(i)] =
+        std::complex<T>(static_cast<T>(re), static_cast<T>(im));
+  }
+  return host;
+}
+
+// Allocate a complex64/complex128 device tensor of `shape` and upload the
+// deterministic IQ payload. Used for adc_cube (range/fused) and range_profiles
+// (Doppler/clutter) inputs.
+template <typename T>
+std::shared_ptr<holoscan::Tensor> make_iq_cube_device(
+    const std::vector<int64_t>& shape) {
+  const auto host = deterministic_iq_host<T>(shape);
+  auto tensor = make_device_tensor(shape, complex_dtype<T>());
+  if (cudaMemcpy(tensor->data(), host.data(),
+                 sizeof(std::complex<T>) * host.size(),
+                 cudaMemcpyHostToDevice) != cudaSuccess) {
+    throw std::runtime_error("make_iq_cube_device: cudaMemcpy H2D failed");
   }
   return tensor;
 }

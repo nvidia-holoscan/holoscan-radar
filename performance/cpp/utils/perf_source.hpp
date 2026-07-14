@@ -55,6 +55,59 @@ class PerfDataSourceOp : public holoscan::Operator {
   holoscan::TensorMap frame_;
 };
 
+// Compile-time port-name tags for the single-input source below. A tag is a
+// tiny struct exposing `kName`; the source declares and emits on that port.
+// The common radar-module payload ports are provided here; consumers can add
+// their own tag structs for other port names.
+struct RdMapsPort {
+  static constexpr const char* kName = "rd_maps";
+};
+struct AdcCubePort {
+  static constexpr const char* kName = "adc_cube";
+};
+struct RangeProfilesPort {
+  static constexpr const char* kName = "range_profiles";
+};
+
+// Single-input analogue of PerfDataSourceOp with the output port chosen at
+// compile time by PortTag. Emits the same preallocated single-key TensorMap
+// every tick (no per-frame H2D) and records a start timestamp, so measured
+// latency is dominated by the operator under test. Lets FMCW consumers reuse
+// one source for adc_cube / range_profiles inputs instead of writing a bespoke
+// source per operator.
+template <typename PortTag>
+class PerfTensorSourceOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(PerfTensorSourceOp)
+  PerfTensorSourceOp() = default;
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.output<holoscan::TensorMap>(PortTag::kName);
+  }
+
+  void compute(holoscan::InputContext&, holoscan::OutputContext& op_output,
+               holoscan::ExecutionContext&) override {
+    const auto now = Clock::now();
+    if (collector_ != nullptr) {
+      if (!collector_->first_tick_set) {
+        collector_->t_first_tick = now;
+        collector_->first_tick_set = true;
+      }
+      collector_->starts.push_back(now);
+    }
+    op_output.emit(frame_, PortTag::kName);
+  }
+
+  void configure(TimingCollector* collector, holoscan::TensorMap frame) {
+    collector_ = collector;
+    frame_ = std::move(frame);
+  }
+
+ private:
+  TimingCollector* collector_{nullptr};
+  holoscan::TensorMap frame_;
+};
+
 // Emits `value` exactly once on tick == target_tick, silent otherwise. The
 // override input ports on the operator under test are non-blocking, so the
 // silent ticks keep the previous (sticky) value.
