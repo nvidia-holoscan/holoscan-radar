@@ -9,7 +9,8 @@
 //                                        -> DetectionReportOp
 //                                        -> FeatureAssemblyOp
 //                                             -> ClusterDBSCANOp
-//                                                  -> ClusterReportOp
+//                                                  -> DetectionReductionOp
+//                                                       -> ClusterReportOp
 //                                         [-> RdMapToImageOp   -> HolovizOp]
 //                                         [-> ClusterOverlayOp -> HolovizOp]
 //                                         [-> RollingPlotOp    -> HolovizOp]
@@ -59,6 +60,7 @@
 
 #include "clustering/cluster_dbscan_op/cluster_dbscan_op.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
+#include "detection/detection_reduction_op/detection_reduction_op.hpp"
 #include "detection/feature_assembly_op/feature_assembly_op.hpp"
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
@@ -105,6 +107,20 @@ struct ClusteringConfig {
   int64_t max_clusters{0};                // <= 0 → uncapped
 };
 
+// DetectionReductionOp configuration: reduces each cluster to one
+// representative CFAR cell. App-parsed (RepresentativePolicy / ScoreMethod
+// have no YAML::convert). The default `medoid` picks the most-central real
+// detection in the [range, velocity] feature space — the centroid-like choice
+// that suits this app's points (peak would rank by range/velocity magnitude,
+// which is meaningless without a score feature). feature_weights defaults to
+// the inverse clustering epsilon so the medoid metric matches DBSCAN's.
+struct ReductionConfig {
+  radar::RepresentativePolicy representative{
+      radar::RepresentativePolicy::kMedoid};
+  radar::ScoreMethod score_method{radar::ScoreMethod::kWeightedSum};
+  std::vector<double> feature_weights;  // empty → derived from epsilon
+};
+
 // Rolling time-series plots drawn beside the RD map (range and velocity vs
 // time). Only consulted when visualize is on; the plots share the Holoviz
 // window via sub-viewports.
@@ -117,6 +133,7 @@ struct AppConfig {
   radar::sim::SimScene scene;  // waveform, cube dims, targets, noise
   CfarConfig cfar;
   ClusteringConfig clustering;
+  ReductionConfig reduction;
   PlotsConfig plots;
   int64_t num_frames{1};
   double frame_period{0.1};  // s, between emitted cubes (and target motion)
@@ -338,6 +355,68 @@ AppConfig load_config(const std::filesystem::path& path) {
       throw std::runtime_error(
           "clustering.epsilon values must be finite and > 0");
     }
+  }
+
+  // Reduction stage (app-parsed; applied as Args in compose()). All optional.
+  const YAML::Node reduction = root["reduction"];
+  if (reduction && !reduction.IsNull()) {
+    if (reduction["representative"]) {
+      const std::string spelling =
+          reduction["representative"].as<std::string>();
+      bool matched = false;
+      for (radar::RepresentativePolicy v :
+           {radar::RepresentativePolicy::kPeak,
+            radar::RepresentativePolicy::kMedoid,
+            radar::RepresentativePolicy::kFirst}) {
+        if (spelling == radar::to_string(v)) {
+          cfg.reduction.representative = v;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        throw std::runtime_error(
+            "reduction.representative: unknown value '" + spelling +
+            "' (accepted: peak, medoid, first)");
+      }
+    }
+    if (reduction["score_method"]) {
+      const std::string spelling = reduction["score_method"].as<std::string>();
+      bool matched = false;
+      for (radar::ScoreMethod v :
+           {radar::ScoreMethod::kWeightedSum, radar::ScoreMethod::kWeightedL2,
+            radar::ScoreMethod::kWeightedMax, radar::ScoreMethod::kCustom}) {
+        if (spelling == radar::to_string(v)) {
+          cfg.reduction.score_method = v;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        throw std::runtime_error(
+            "reduction.score_method: unknown value '" + spelling +
+            "' (accepted: weighted_sum, weighted_l2, weighted_max, custom)");
+      }
+    }
+    if (reduction["feature_weights"]) {
+      cfg.reduction.feature_weights =
+          reduction["feature_weights"].as<std::vector<double>>();
+    }
+  }
+  // custom scoring needs a compile-time ScoreFn the app doesn't provide.
+  if (cfg.reduction.score_method == radar::ScoreMethod::kCustom) {
+    throw std::runtime_error(
+        "reduction.score_method: 'custom' is not supported by this app");
+  }
+  // If given, feature_weights must match the feature count; if empty it is
+  // derived from the clustering epsilon in compose().
+  if (!cfg.reduction.feature_weights.empty() &&
+      cfg.reduction.feature_weights.size() !=
+          cfg.clustering.features.size()) {
+    throw std::runtime_error(
+        "reduction.feature_weights length must equal the number of features "
+        "(" +
+        std::to_string(cfg.clustering.features.size()) + ")");
   }
 
   return cfg;
@@ -564,10 +643,11 @@ class DetectionReportOp : public holoscan::Operator {
 // Reports the DBSCAN clusters formed over the CFAR detections. `points` is the
 // FeatureAssemblyOp feature matrix (this app assembles [range (m),
 // velocity (m/s)]); `labels` is the per-point cluster id (noise = -1,
-// row-aligned with points) and `sizes` the per-cluster point count. Logs the
-// cluster count, the noise-point count, and each cluster's size and centroid
-// in physical units — so the adjacent CFAR cells lit by one target read as a
-// single (range, velocity) estimate.
+// row-aligned with points) and `sizes` the per-cluster point count. For each
+// cluster it logs the size, the mean centroid, and DetectionReductionOp's
+// representative cell (`rep_idx`, row-aligned with clusters) resolved to
+// physical units via the axis bins — so the mean and the chosen real
+// detection can be compared.
 class ClusterReportOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(ClusterReportOp)
@@ -577,6 +657,9 @@ class ClusterReportOp : public holoscan::Operator {
     spec.input<holoscan::TensorMap>("points");
     spec.input<holoscan::TensorMap>("labels");
     spec.input<holoscan::TensorMap>("sizes");
+    spec.input<holoscan::TensorMap>("rep_idx");
+    spec.input<holoscan::TensorMap>("range_bins");
+    spec.input<holoscan::TensorMap>("velocity_bins");
   }
 
   void compute(holoscan::InputContext& op_input,
@@ -587,6 +670,9 @@ class ClusterReportOp : public holoscan::Operator {
     auto points = radar::receive_single(op_input, "points", who);
     auto labels = radar::receive_single(op_input, "labels", who);
     auto sizes = radar::receive_single(op_input, "sizes", who);
+    auto rep_idx = radar::receive_single(op_input, "rep_idx", who);
+    auto range_bins = radar::receive_single(op_input, "range_bins", who);
+    auto velocity_bins = radar::receive_single(op_input, "velocity_bins", who);
 
     const auto pshape = points->shape();
     // This app fixes the FeatureAssemblyOp columns to [range, velocity]; the
@@ -609,9 +695,22 @@ class ClusterReportOp : public holoscan::Operator {
     }
     const int64_t num_clusters = sshape[0];
 
+    // rep_idx is (num_clusters, 2): (doppler_bin, range_bin) per cluster,
+    // row-aligned with sizes (dense cluster ids).
+    const auto rshape = rep_idx->shape();
+    if (rshape.size() != 2 || rshape[1] != 2 || rshape[0] != num_clusters) {
+      throw std::runtime_error(
+          "ClusterReportOp: rep_idx must be (num_clusters, 2)");
+    }
+    const int64_t num_range = range_bins->shape()[0];
+    const int64_t num_doppler = velocity_bins->shape()[0];
+
     std::vector<float> pts(static_cast<size_t>(num_points * 2));
     std::vector<int64_t> lab(static_cast<size_t>(num_points));
     std::vector<int64_t> sz(static_cast<size_t>(num_clusters));
+    std::vector<int64_t> rep(static_cast<size_t>(num_clusters * 2));
+    std::vector<float> ranges(static_cast<size_t>(num_range));
+    std::vector<float> velocities(static_cast<size_t>(num_doppler));
 
     const auto require_bytes =
         [](const char* name, const std::shared_ptr<holoscan::Tensor>& t,
@@ -626,6 +725,10 @@ class ClusterReportOp : public holoscan::Operator {
     require_bytes("points", points, sizeof(float) * pts.size());
     require_bytes("labels", labels, sizeof(int64_t) * lab.size());
     require_bytes("sizes", sizes, sizeof(int64_t) * sz.size());
+    require_bytes("rep_idx", rep_idx, sizeof(int64_t) * rep.size());
+    require_bytes("range_bins", range_bins, sizeof(float) * ranges.size());
+    require_bytes("velocity_bins", velocity_bins,
+                  sizeof(float) * velocities.size());
 
     if (cudaDeviceSynchronize() != cudaSuccess) {
       throw std::runtime_error("ClusterReportOp: device synchronize failed");
@@ -646,6 +749,9 @@ class ClusterReportOp : public holoscan::Operator {
     copy_d2h("points", pts.data(), points);
     copy_d2h("labels", lab.data(), labels);
     copy_d2h("sizes", sz.data(), sizes);
+    copy_d2h("rep_idx", rep.data(), rep_idx);
+    copy_d2h("range_bins", ranges.data(), range_bins);
+    copy_d2h("velocity_bins", velocities.data(), velocity_bins);
 
     // Accumulate per-cluster centroids from the points, keyed by label; noise
     // (-1) is counted but excluded from any cluster.
@@ -674,11 +780,20 @@ class ClusterReportOp : public holoscan::Operator {
     for (int64_t c = 0; c < n_log; ++c) {
       const int64_t n = sz[static_cast<size_t>(c)];
       const double inv = n > 0 ? 1.0 / static_cast<double>(n) : 0.0;
+      const int64_t rep_dd = rep[static_cast<size_t>(c * 2 + 0)];
+      const int64_t rep_rr = rep[static_cast<size_t>(c * 2 + 1)];
+      if (rep_dd < 0 || rep_dd >= num_doppler || rep_rr < 0 ||
+          rep_rr >= num_range) {
+        throw std::runtime_error(
+            "ClusterReportOp: rep_idx out of axis bounds");
+      }
       HOLOSCAN_LOG_INFO(
           "  cluster {}: {} pts, centroid range {:.2f} m, velocity "
-          "{:+.2f} m/s",
+          "{:+.2f} m/s; rep range {:.2f} m, velocity {:+.2f} m/s",
           c, n, sum_range[static_cast<size_t>(c)] * inv,
-          sum_velocity[static_cast<size_t>(c)] * inv);
+          sum_velocity[static_cast<size_t>(c)] * inv,
+          ranges[static_cast<size_t>(rep_rr)],
+          velocities[static_cast<size_t>(rep_dd)]);
     }
     if (num_clusters > kMaxLogged) {
       HOLOSCAN_LOG_INFO("  ... {} more clusters not logged",
@@ -799,6 +914,9 @@ class RdMapToImageOp : public holoscan::Operator {
 // points (label -1) go to their own muted layer.
 constexpr int kNumClusterColors = 8;
 constexpr const char* kNoiseLayerName = "noise";
+// One extra layer for the DetectionReductionOp representative cell per cluster,
+// drawn as a larger distinct cross (a single color, set in compose()).
+constexpr const char* kRepresentativeLayerName = "representative";
 inline std::string cluster_layer_name(int color) {
   return "cluster_" + std::to_string(color);
 }
@@ -818,12 +936,15 @@ class ClusterOverlayOp : public holoscan::Operator {
   HOLOSCAN_OPERATOR_FORWARD_ARGS(ClusterOverlayOp)
   ClusterOverlayOp() = default;
 
-  // Half-size of each cross, as a fraction of the image extent.
+  // Half-size of each cross, as a fraction of the image extent. The
+  // representative marker is larger so it reads as distinct from detections.
   static constexpr float kCrossSize = 0.02F;
+  static constexpr float kRepCrossSize = 0.035F;
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("detection_idx");
     spec.input<holoscan::TensorMap>("labels");
+    spec.input<holoscan::TensorMap>("rep_idx");
     spec.input<holoscan::TensorMap>("rd_maps");
     spec.output<holoscan::TensorMap>("overlay");
   }
@@ -835,6 +956,7 @@ class ClusterOverlayOp : public holoscan::Operator {
     const std::string who = "ClusterOverlayOp";
     auto idx = radar::receive_single(op_input, "detection_idx", who);
     auto labels = radar::receive_single(op_input, "labels", who);
+    auto rep_idx = radar::receive_single(op_input, "rep_idx", who);
     auto rd_map = radar::receive_single(op_input, "rd_maps", who);
 
     // The RD map (only its shape is needed) sizes the normalization; the
@@ -863,9 +985,17 @@ class ClusterOverlayOp : public holoscan::Operator {
           "ClusterOverlayOp: labels must be (num_points,) row-aligned with "
           "detection_idx");
     }
+    // rep_idx is int64 (num_clusters, 2): the representative cell per cluster.
+    const auto rep_shape = rep_idx->shape();
+    if (rep_shape.size() != 2 || rep_shape[1] != 2) {
+      throw std::runtime_error(
+          "ClusterOverlayOp: rep_idx must be (num_clusters, 2)");
+    }
+    const int64_t num_clusters = rep_shape[0];
 
     std::vector<int64_t> bins(static_cast<size_t>(num_points * 2));
     std::vector<int64_t> lab(static_cast<size_t>(num_points));
+    std::vector<int64_t> rep(static_cast<size_t>(num_clusters * 2));
     const size_t idx_bytes = sizeof(int64_t) * bins.size();
     const size_t lab_bytes = sizeof(int64_t) * lab.size();
     if (static_cast<size_t>(idx->nbytes()) != idx_bytes) {
@@ -874,6 +1004,10 @@ class ClusterOverlayOp : public holoscan::Operator {
     }
     if (static_cast<size_t>(labels->nbytes()) != lab_bytes) {
       throw std::runtime_error("ClusterOverlayOp: labels byte size mismatch");
+    }
+    if (static_cast<size_t>(rep_idx->nbytes()) !=
+        sizeof(int64_t) * rep.size()) {
+      throw std::runtime_error("ClusterOverlayOp: rep_idx byte size mismatch");
     }
     if (cudaDeviceSynchronize() != cudaSuccess) {
       throw std::runtime_error("ClusterOverlayOp: device synchronize failed");
@@ -888,6 +1022,12 @@ class ClusterOverlayOp : public holoscan::Operator {
                      cudaMemcpyDeviceToHost) != cudaSuccess) {
         throw std::runtime_error("ClusterOverlayOp: labels D2H copy failed");
       }
+    }
+    if (num_clusters > 0 &&
+        cudaMemcpy(rep.data(), rep_idx->data(),
+                   static_cast<size_t>(rep_idx->nbytes()),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+      throw std::runtime_error("ClusterOverlayOp: rep_idx D2H copy failed");
     }
 
     // Bucket detections into the palette layers by cluster id; the last bucket
@@ -913,26 +1053,46 @@ class ClusterOverlayOp : public holoscan::Operator {
       buckets[bucket].push_back(kCrossSize);
     }
 
+    // Representative cell per cluster → a larger cross in one distinct color
+    // (set in compose()). rep_idx columns are (doppler_bin, range_bin).
+    std::vector<float> rep_crosses;
+    for (int64_t c = 0; c < num_clusters; ++c) {
+      const int64_t doppler_bin = rep[static_cast<size_t>(c * 2 + 0)];
+      const int64_t range_bin = rep[static_cast<size_t>(c * 2 + 1)];
+      if (doppler_bin < 0 || doppler_bin >= num_doppler || range_bin < 0 ||
+          range_bin >= num_range) {
+        throw std::runtime_error("ClusterOverlayOp: rep_idx out of map bounds");
+      }
+      rep_crosses.push_back((static_cast<float>(range_bin) + 0.5F) /
+                            static_cast<float>(num_range));
+      rep_crosses.push_back((static_cast<float>(doppler_bin) + 0.5F) /
+                            static_cast<float>(num_doppler));
+      rep_crosses.push_back(kRepCrossSize);
+    }
+
     // Emit every layer each tick (0-row when empty) so the fixed HolovizOp
     // InputSpec list always has its matching tensor.
     constexpr int64_t kCrossComponents = 3;
     holoscan::TensorMap out;
-    for (int c = 0; c <= kNumClusterColors; ++c) {
-      const std::string name =
-          c < kNumClusterColors ? cluster_layer_name(c) : kNoiseLayerName;
+    const auto emit_crosses = [&](const std::string& name,
+                                  const std::vector<float>& data) {
       const int64_t n =
-          static_cast<int64_t>(buckets[static_cast<size_t>(c)].size()) /
-          kCrossComponents;
+          static_cast<int64_t>(data.size()) / kCrossComponents;
       auto tensor = radar::make_device_tensor({n, kCrossComponents},
                                               radar::real_dtype<float>());
-      if (n > 0 &&
-          cudaMemcpy(tensor->data(), buckets[static_cast<size_t>(c)].data(),
-                     sizeof(float) * buckets[static_cast<size_t>(c)].size(),
-                     cudaMemcpyHostToDevice) != cudaSuccess) {
+      if (n > 0 && cudaMemcpy(tensor->data(), data.data(),
+                              sizeof(float) * data.size(),
+                              cudaMemcpyHostToDevice) != cudaSuccess) {
         throw std::runtime_error("ClusterOverlayOp: H2D upload failed");
       }
       out.insert({name, tensor});
+    };
+    for (int c = 0; c <= kNumClusterColors; ++c) {
+      emit_crosses(
+          c < kNumClusterColors ? cluster_layer_name(c) : kNoiseLayerName,
+          buckets[static_cast<size_t>(c)]);
     }
+    emit_crosses(kRepresentativeLayerName, rep_crosses);
     op_output.emit(out, "overlay");
   }
 };
@@ -989,17 +1149,20 @@ constexpr const char* kVelocityTitleLayer = "velocity_title";
 // Rolling time-series plots of the detections' range and velocity. Keeps a
 // scrolling window of the last `window` frames and, each tick, rasterizes two
 // RGBA images (range vs time, velocity vs time): every CFAR detection is a dot
-// colored by its DBSCAN cluster (noise gray), and each cluster's centroid is a
-// distinct '+' marker in the same color. The Y axes are fixed to the physical
-// extents of the range / velocity bins (so absolute level is a stable
-// reference); X is the frame window, newest at the right. HolovizOp places the
-// images in right-side sub-viewports (see compose()).
+// colored by its DBSCAN cluster (noise gray), and each cluster's centroid — the
+// DetectionReductionOp representative cell (`rep_idx`) resolved to physical
+// units — is a distinct '+' marker in the same color. The Y axes are fixed to
+// the physical extents of the range / velocity bins (so absolute level is a
+// stable reference); X is the frame window, newest at the right. HolovizOp
+// places the images in right-side sub-viewports (see compose()).
 //
 // In:  points        — float32, (num_points, 2): columns [range (m),
 //                     velocity (m/s)] (this app's FeatureAssemblyOp layout).
 // In:  labels        — int64, (num_points,): DBSCAN cluster id (noise = -1).
-// In:  range_bins    — float32, (num_range,): fixes the range plot's Y extent.
-// In:  velocity_bins — float32, (num_doppler,): fixes the velocity Y extent.
+// In:  rep_idx       — int64, (num_clusters, 2): representative cell per
+//                     cluster (doppler_bin, range_bin); the '+' markers.
+// In:  range_bins    — float32, (num_range,): range plot Y extent + rep lookup.
+// In:  velocity_bins — float32, (num_doppler,): velocity Y extent + rep lookup.
 // Out: range_plot / velocity_plot — uint8 RGBA (H, W, 4) images.
 // Out: range_title / velocity_title — float32 (1, 3) TEXT positions.
 class RollingPlotOp : public holoscan::Operator {
@@ -1017,6 +1180,7 @@ class RollingPlotOp : public holoscan::Operator {
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("points");
     spec.input<holoscan::TensorMap>("labels");
+    spec.input<holoscan::TensorMap>("rep_idx");
     spec.input<holoscan::TensorMap>("range_bins");
     spec.input<holoscan::TensorMap>("velocity_bins");
     spec.output<holoscan::TensorMap>("plots");
@@ -1029,6 +1193,7 @@ class RollingPlotOp : public holoscan::Operator {
     const std::string who = "RollingPlotOp";
     auto points = radar::receive_single(op_input, "points", who);
     auto labels = radar::receive_single(op_input, "labels", who);
+    auto rep_idx = radar::receive_single(op_input, "rep_idx", who);
     auto range_bins = radar::receive_single(op_input, "range_bins", who);
     auto velocity_bins = radar::receive_single(op_input, "velocity_bins", who);
 
@@ -1043,44 +1208,58 @@ class RollingPlotOp : public holoscan::Operator {
       throw std::runtime_error(
           "RollingPlotOp: labels must be (N,) row-aligned with points");
     }
+    const auto rshape = rep_idx->shape();
+    if (rshape.size() != 2 || rshape[1] != 2) {
+      throw std::runtime_error(
+          "RollingPlotOp: rep_idx must be (num_clusters, 2)");
+    }
+    const int64_t num_clusters = rshape[0];
 
-    // Fix the Y axes once, from the physical bin extents (constant per run).
+    // Cache the physical bin axes once (constant per run); they fix the Y
+    // extents and resolve rep_idx bins to physical range / velocity.
     if (!axis_set_) {
-      const auto extent = [](const std::shared_ptr<holoscan::Tensor>& t,
-                             const char* name, float* lo, float* hi) {
-        const auto sh = t->shape();
-        if (sh.size() != 1 || sh[0] < 1) {
-          throw std::runtime_error(std::string("RollingPlotOp: ") + name +
-                                   " must be a non-empty rank-1 tensor");
-        }
-        std::vector<float> host(static_cast<size_t>(sh[0]));
-        if (static_cast<size_t>(t->nbytes()) != sizeof(float) * host.size()) {
-          throw std::runtime_error(std::string("RollingPlotOp: ") + name +
-                                   " must be float32");
-        }
-        if (cudaMemcpy(host.data(), t->data(),
-                       static_cast<size_t>(t->nbytes()),
-                       cudaMemcpyDeviceToHost) != cudaSuccess) {
-          throw std::runtime_error(std::string("RollingPlotOp: ") + name +
-                                   " D2H copy failed");
-        }
-        const auto mm = std::minmax_element(host.begin(), host.end());
-        *lo = *mm.first;
-        *hi = *mm.second;
-      };
+      const auto load_axis =
+          [](const std::shared_ptr<holoscan::Tensor>& t, const char* name,
+             std::vector<float>* out, float* lo, float* hi) {
+            const auto sh = t->shape();
+            if (sh.size() != 1 || sh[0] < 1) {
+              throw std::runtime_error(std::string("RollingPlotOp: ") + name +
+                                       " must be a non-empty rank-1 tensor");
+            }
+            out->resize(static_cast<size_t>(sh[0]));
+            if (static_cast<size_t>(t->nbytes()) !=
+                sizeof(float) * out->size()) {
+              throw std::runtime_error(std::string("RollingPlotOp: ") + name +
+                                       " must be float32");
+            }
+            if (cudaMemcpy(out->data(), t->data(),
+                           static_cast<size_t>(t->nbytes()),
+                           cudaMemcpyDeviceToHost) != cudaSuccess) {
+              throw std::runtime_error(std::string("RollingPlotOp: ") + name +
+                                       " D2H copy failed");
+            }
+            const auto mm = std::minmax_element(out->begin(), out->end());
+            *lo = *mm.first;
+            *hi = *mm.second;
+          };
       if (cudaDeviceSynchronize() != cudaSuccess) {
         throw std::runtime_error("RollingPlotOp: device synchronize failed");
       }
-      extent(range_bins, "range_bins", &r_lo_, &r_hi_);
-      extent(velocity_bins, "velocity_bins", &v_lo_, &v_hi_);
+      load_axis(range_bins, "range_bins", &range_axis_, &r_lo_, &r_hi_);
+      load_axis(velocity_bins, "velocity_bins", &velocity_axis_, &v_lo_,
+                &v_hi_);
       axis_set_ = true;
     }
 
     std::vector<float> pts(static_cast<size_t>(num_points * 2));
     std::vector<int64_t> lab(static_cast<size_t>(num_points));
+    std::vector<int64_t> rep(static_cast<size_t>(num_clusters * 2));
     if (static_cast<size_t>(points->nbytes()) != sizeof(float) * pts.size() ||
-        static_cast<size_t>(labels->nbytes()) != sizeof(int64_t) * lab.size()) {
-      throw std::runtime_error("RollingPlotOp: points/labels dtype mismatch");
+        static_cast<size_t>(labels->nbytes()) !=
+            sizeof(int64_t) * lab.size() ||
+        static_cast<size_t>(rep_idx->nbytes()) !=
+            sizeof(int64_t) * rep.size()) {
+      throw std::runtime_error("RollingPlotOp: input dtype/size mismatch");
     }
     if (cudaDeviceSynchronize() != cudaSuccess) {
       throw std::runtime_error("RollingPlotOp: device synchronize failed");
@@ -1095,38 +1274,33 @@ class RollingPlotOp : public holoscan::Operator {
         throw std::runtime_error("RollingPlotOp: points/labels D2H failed");
       }
     }
-
-    // Append this frame's detections, and one centroid per cluster, to the
-    // scrolling history; then evict frames older than the window.
-    int64_t num_clusters = 0;
-    for (int64_t i = 0; i < num_points; ++i) {
-      num_clusters = std::max(num_clusters, lab[static_cast<size_t>(i)] + 1);
+    if (num_clusters > 0 &&
+        cudaMemcpy(rep.data(), rep_idx->data(),
+                   static_cast<size_t>(rep_idx->nbytes()),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+      throw std::runtime_error("RollingPlotOp: rep_idx D2H failed");
     }
-    std::vector<double> sum_r(static_cast<size_t>(num_clusters), 0.0);
-    std::vector<double> sum_v(static_cast<size_t>(num_clusters), 0.0);
-    std::vector<int64_t> count(static_cast<size_t>(num_clusters), 0);
+
+    // Append this frame's detections (one dot each, colored by cluster) and
+    // each cluster's representative cell (the '+' marker, from rep_idx mapped
+    // to physical units), then evict frames older than the window.
     for (int64_t i = 0; i < num_points; ++i) {
       const int64_t c = lab[static_cast<size_t>(i)];
-      const float r = pts[static_cast<size_t>(i * 2 + 0)];
-      const float v = pts[static_cast<size_t>(i * 2 + 1)];
       const int bucket = c >= 0 ? static_cast<int>(c % kNumClusterColors)
                                 : kNumClusterColors;  // noise
-      det_hist_.push_back({tick_, r, v, bucket});
-      if (c >= 0) {
-        sum_r[static_cast<size_t>(c)] += r;
-        sum_v[static_cast<size_t>(c)] += v;
-        ++count[static_cast<size_t>(c)];
-      }
+      det_hist_.push_back({tick_, pts[static_cast<size_t>(i * 2 + 0)],
+                           pts[static_cast<size_t>(i * 2 + 1)], bucket});
     }
     for (int64_t c = 0; c < num_clusters; ++c) {
-      const int64_t n = count[static_cast<size_t>(c)];
-      if (n == 0) {
-        continue;
+      const int64_t dd = rep[static_cast<size_t>(c * 2 + 0)];
+      const int64_t rr = rep[static_cast<size_t>(c * 2 + 1)];
+      if (dd < 0 || dd >= static_cast<int64_t>(velocity_axis_.size()) ||
+          rr < 0 || rr >= static_cast<int64_t>(range_axis_.size())) {
+        throw std::runtime_error("RollingPlotOp: rep_idx out of axis bounds");
       }
-      cen_hist_.push_back(
-          {tick_, static_cast<float>(sum_r[static_cast<size_t>(c)] / n),
-           static_cast<float>(sum_v[static_cast<size_t>(c)] / n),
-           static_cast<int>(c % kNumClusterColors)});
+      cen_hist_.push_back({tick_, range_axis_[static_cast<size_t>(rr)],
+                           velocity_axis_[static_cast<size_t>(dd)],
+                           static_cast<int>(c % kNumClusterColors)});
     }
     const int64_t oldest = tick_ - window + 1;
     const auto evict = [oldest](std::deque<Sample>* h) {
@@ -1361,6 +1535,8 @@ class RollingPlotOp : public holoscan::Operator {
   std::deque<Sample> det_hist_;
   std::deque<Sample> cen_hist_;
   int64_t tick_{0};
+  std::vector<float> range_axis_;     // cached range_bins (bin → physical)
+  std::vector<float> velocity_axis_;  // cached velocity_bins
   float r_lo_{0}, r_hi_{1}, v_lo_{0}, v_hi_{1};
   bool axis_set_{false};
 };
@@ -1417,6 +1593,21 @@ class FmcwSisoApp : public holoscan::Application {
         holoscan::Arg("min_points") = cfg.clustering.min_points,
         holoscan::Arg("max_clusters") = cfg.clustering.max_clusters);
     auto cluster_report = make_operator<ClusterReportOp>("cluster_report");
+    // Reduce each cluster to one representative cell. feature_weights defaults
+    // to the inverse clustering epsilon so the medoid distance matches the
+    // DBSCAN metric (else range's larger magnitude would dominate velocity).
+    std::vector<double> reduction_weights = cfg.reduction.feature_weights;
+    if (reduction_weights.empty()) {
+      const auto& eps = cfg.clustering.epsilon;
+      for (size_t i = 0; i < cfg.clustering.features.size(); ++i) {
+        reduction_weights.push_back(1.0 / eps[eps.size() == 1 ? 0 : i]);
+      }
+    }
+    auto reduction = make_operator<radar::DetectionReductionOp<float>>(
+        "detection_reduction",
+        holoscan::Arg("representative") = cfg.reduction.representative,
+        holoscan::Arg("score_method") = cfg.reduction.score_method,
+        holoscan::Arg("feature_weights") = reduction_weights);
 
     add_flow(source, range, {{"adc_cube", "adc_cube"}});
     add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
@@ -1440,6 +1631,16 @@ class FmcwSisoApp : public holoscan::Application {
     add_flow(feature_assembly, cluster_report, {{"points", "points"}});
     add_flow(cluster, cluster_report, {{"labels", "labels"}});
     add_flow(cluster, cluster_report, {{"sizes", "sizes"}});
+
+    // Reduction: one representative cell per cluster (medoid = most-central
+    // real detection). rep_idx feeds the report (logged in physical units, so
+    // the report also needs the axis bins) and, when visualizing, the GUI.
+    add_flow(cluster, reduction, {{"labels", "labels"}});
+    add_flow(cfar, reduction, {{"detection_idx", "detection_idx"}});
+    add_flow(feature_assembly, reduction, {{"points", "points"}});
+    add_flow(reduction, cluster_report, {{"rep_idx", "rep_idx"}});
+    add_flow(range, cluster_report, {{"range_bins", "range_bins"}});
+    add_flow(doppler, cluster_report, {{"velocity_bins", "velocity_bins"}});
 
     // Optional live RD-map window (cfg.visualize; main() has already
     // downgraded it with a warning on GUI-less hosts). Turbo-mapped |RD|
@@ -1475,6 +1676,15 @@ class FmcwSisoApp : public holoscan::Application {
         add_crosses(cluster_layer_name(c), palette[static_cast<size_t>(c)]);
       }
       add_crosses(kNoiseLayerName, {0.6F, 0.6F, 0.6F, 1.0F});
+      // Reduction representative per cluster: a bold white cross above the
+      // detection crosses (added before the view loop so it shares the view).
+      {
+        InputSpec rep(kRepresentativeLayerName, InputType::CROSSES);
+        rep.color_ = {1.0F, 1.0F, 1.0F, 1.0F};
+        rep.line_width_ = 3.0F;
+        rep.priority_ = 2;
+        input_specs.push_back(rep);
+      }
 
       // A View maps a layer's [0,1] content into an (offset, size) rectangle
       // of the window. With plots enabled, the RD map + overlay share the left
@@ -1532,6 +1742,7 @@ class FmcwSisoApp : public holoscan::Application {
       // map dimensions; its per-color layers fan into the same receiver.
       add_flow(cfar, overlay, {{"detection_idx", "detection_idx"}});
       add_flow(cluster, overlay, {{"labels", "labels"}});
+      add_flow(reduction, overlay, {{"rep_idx", "rep_idx"}});
       add_flow(doppler, overlay, {{"rd_maps", "rd_maps"}});
       add_flow(overlay, visualizer, {{"overlay", "receivers"}});
 
@@ -1540,6 +1751,7 @@ class FmcwSisoApp : public holoscan::Application {
       if (plot) {
         add_flow(feature_assembly, plot, {{"points", "points"}});
         add_flow(cluster, plot, {{"labels", "labels"}});
+        add_flow(reduction, plot, {{"rep_idx", "rep_idx"}});
         add_flow(range, plot, {{"range_bins", "range_bins"}});
         add_flow(doppler, plot, {{"velocity_bins", "velocity_bins"}});
         add_flow(plot, visualizer, {{"plots", "receivers"}});

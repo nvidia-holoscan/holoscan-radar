@@ -76,6 +76,18 @@ clustering:
   min_points: 1
   max_clusters: 0
 
+# Reduction stage (app-parsed; DetectionReductionOp reduces each cluster to one
+# representative cell, used as the cluster's centroid in the GUI + logs). All
+# keys optional.
+#   representative — medoid | peak | first. Default medoid (the most-central
+#                    real detection); peak needs a score feature this app's
+#                    [range, velocity] points don't provide.
+#   score_method   — weighted_sum | weighted_l2 | weighted_max (peak only).
+#   feature_weights — per-feature weights for the medoid/peak metric; empty →
+#                     derived from the clustering epsilon (1/eps per feature).
+reduction:
+  representative: medoid
+
 # ADC data-cube dimensions per coherent processing interval (CPI).
 cube:
   num_chirps: 128

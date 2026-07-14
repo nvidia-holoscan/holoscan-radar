@@ -7,7 +7,8 @@ moving target, analytic dechirped point-target model) feeding
 ```text
 FMCWRangeProcessorOp → ClutterFilterOp → FMCWDopplerProcessorOp
   → CFARDetectorOp → DetectionReportOp
-                   → FeatureAssemblyOp → ClusterDBSCANOp → ClusterReportOp
+                   → FeatureAssemblyOp → ClusterDBSCANOp
+                        → DetectionReductionOp → ClusterReportOp
 ```
 
 The detection sink reports each CFAR detection in physical units via the
@@ -16,9 +17,11 @@ cube per tick and advances the targets between ticks, so the reported range
 sweeps over the run. In parallel, `FeatureAssemblyOp` gathers a
 `[range, velocity]` feature matrix from the CFAR cells (same axis outputs,
 physical units) and `ClusterDBSCANOp` density-clusters it, so the handful of
-adjacent cells one target lights collapse into a single cluster;
-`ClusterReportOp` logs each cluster's size and centroid. An optional Holoviz
-branch still renders the RD map from Doppler.
+adjacent cells one target lights collapse into a single cluster.
+`DetectionReductionOp` then reduces each cluster to one representative cell
+(default `medoid` — the most-central real detection), and `ClusterReportOp`
+logs each cluster's size, its mean centroid, and that representative. An
+optional Holoviz branch renders the RD map from Doppler.
 
 Launch via `./holohub run fmcw_siso`, or build directly:
 
@@ -49,6 +52,15 @@ parameters (`epsilon` per-feature radius, `min_points`, `max_clusters`). It is
 optional — the app defaults (a 3 m × 2 m/s neighborhood, `min_points: 2`) hold
 when the block or any key is omitted.
 
+The optional `reduction` block configures `DetectionReductionOp`
+(`representative`: `medoid` | `peak` | `first`; `score_method`;
+`feature_weights`). It defaults to `medoid`, the centroid-like choice for the
+`[range, velocity]` feature space (`peak` would rank cells by range/velocity
+magnitude, which is meaningless without a score feature); `feature_weights`
+defaults to the inverse clustering `epsilon` so the medoid metric matches the
+DBSCAN neighborhood. The representative is what the GUI marks as each cluster's
+centroid.
+
 ## Visualization
 
 Set `visualize: true` in the config to open a live Holoviz window. On the
@@ -56,14 +68,17 @@ left is the range-Doppler map (normalized log magnitude, turbo colormap;
 range along x, Doppler along y), with the CFAR detections overlaid as a
 crosses geometry layer **colored by DBSCAN cluster** (a categorical palette,
 one color per cluster; detections that stayed noise are drawn in gray), so
-the grouping is visible on the map alongside the textual cluster reports.
+the grouping is visible on the map alongside the textual cluster reports. Each
+cluster's `DetectionReductionOp` representative (its centroid) is marked with a
+larger bold white cross.
 
 On the right (when `plots.enable` is set) two rolling time-series plots
 stack: **range (m) vs time** and **velocity (m/s) vs time**. Each scrolling
 plot shows every detection as a dot colored by its cluster and each cluster's
-centroid as a distinct `+` marker in the same color, over a fixed Y axis (the
-range / velocity bin extents, with numeric tick labels) and an X axis of the
-last `plots.window` frames in seconds (0 = now).
+centroid — the reduction representative — as a distinct `+` marker in the same
+color, over a fixed Y axis (the range / velocity bin extents, with numeric
+tick labels) and an X axis of the last `plots.window` frames in seconds
+(0 = now).
 Over a run the moving target traces a rising range and a roughly constant
 velocity. Set `plots.enable: false` to let the RD map fill the window.
 
