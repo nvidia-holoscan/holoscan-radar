@@ -1007,7 +1007,8 @@ class RollingPlotOp : public holoscan::Operator {
   HOLOSCAN_OPERATOR_FORWARD_ARGS(RollingPlotOp)
   RollingPlotOp() = default;
 
-  int64_t window{120};  // set from cfg.plots.window before the graph runs
+  int64_t window{120};   // set from cfg.plots.window before the graph runs
+  double frame_period{0.1};  // s/frame; scales the time-axis tick labels
 
   // Rasterized plot image size (pixels). HolovizOp scales it into its view.
   static constexpr int64_t kW = 420;
@@ -1178,6 +1179,68 @@ class RollingPlotOp : public holoscan::Operator {
     (*img)[o + 3] = 255;
   }
 
+  // Minimal 3x5 bitmap font for axis tick labels (digits, '-', '.'); each
+  // row's low 3 bits are the columns (bit 0 = left). Rendered at kFontScale.
+  static constexpr int kFontScale = 2;
+  static std::array<uint8_t, 5> glyph_rows(char c) {
+    switch (c) {
+      case '0': return {7, 5, 5, 5, 7};
+      case '1': return {2, 3, 2, 2, 7};
+      case '2': return {7, 4, 7, 1, 7};
+      case '3': return {7, 4, 7, 4, 7};
+      case '4': return {5, 5, 7, 4, 4};
+      case '5': return {7, 1, 7, 4, 7};
+      case '6': return {7, 1, 7, 5, 7};
+      case '7': return {7, 4, 2, 2, 2};
+      case '8': return {7, 5, 7, 5, 7};
+      case '9': return {7, 5, 7, 4, 7};
+      case '-': return {0, 0, 7, 0, 0};
+      case '.': return {0, 0, 0, 0, 2};
+      default: return {0, 0, 0, 0, 0};
+    }
+  }
+  static int64_t text_width(const std::string& s) {
+    return static_cast<int64_t>(s.size()) * 4 * kFontScale;
+  }
+  static void draw_text(std::vector<uint8_t>* img, int64_t x, int64_t y,
+                        const std::string& s,
+                        const std::array<uint8_t, 3>& col) {
+    int64_t cx = x;
+    for (char c : s) {
+      const auto rows = glyph_rows(c);
+      for (int r = 0; r < 5; ++r) {
+        for (int ci = 0; ci < 3; ++ci) {
+          if ((rows[static_cast<size_t>(r)] >> ci) & 1) {
+            for (int sy = 0; sy < kFontScale; ++sy) {
+              for (int sx = 0; sx < kFontScale; ++sx) {
+                put_px(img, cx + ci * kFontScale + sx,
+                       y + r * kFontScale + sy, col);
+              }
+            }
+          }
+        }
+      }
+      cx += 4 * kFontScale;
+    }
+  }
+  // Format a tick value with `dec` decimals (0 or 1); no locale / sprintf.
+  static std::string format_tick(float value, int dec) {
+    const bool neg = value < 0.0F;
+    const float av = neg ? -value : value;
+    std::string mag;
+    bool nonzero = false;
+    if (dec <= 0) {
+      const int64_t v = static_cast<int64_t>(av + 0.5F);
+      mag = std::to_string(v);
+      nonzero = v != 0;
+    } else {
+      const int64_t scaled = static_cast<int64_t>(av * 10.0F + 0.5F);
+      mag = std::to_string(scaled / 10) + "." + std::to_string(scaled % 10);
+      nonzero = scaled != 0;
+    }
+    return (neg && nonzero ? "-" : "") + mag;
+  }
+
   // Rasterize one plot: use_range picks the range vs velocity axis. Returns a
   // (kH, kW, 4) uint8 RGBA device tensor.
   std::shared_ptr<holoscan::Tensor> render_plot(bool use_range,
@@ -1191,9 +1254,10 @@ class RollingPlotOp : public holoscan::Operator {
       img[static_cast<size_t>(p * 4 + 2)] = kBg[2];
       img[static_cast<size_t>(p * 4 + 3)] = 255;
     }
-    // Plot box (leave a top margin for the Holoviz title text).
-    constexpr int64_t kLeft = 40, kRight = kW - 12, kTop = 30,
-                      kBottom = kH - 20;
+    // Plot box; margins leave room for the Holoviz title (top), the Y tick
+    // labels (left) and the X tick labels (bottom).
+    constexpr int64_t kLeft = 46, kRight = kW - 12, kTop = 30,
+                      kBottom = kH - 26;
     for (int64_t x = kLeft; x <= kRight; ++x) {
       put_px(&img, x, kTop, kGrid);
       put_px(&img, x, kBottom, kGrid);
@@ -1202,17 +1266,45 @@ class RollingPlotOp : public holoscan::Operator {
       put_px(&img, kLeft, y, kGrid);
       put_px(&img, kRight, y, kGrid);
     }
-    // Interior horizontal gridlines (quarters).
-    for (int q = 1; q < 4; ++q) {
-      const int64_t y = kTop + (kBottom - kTop) * q / 4;
-      for (int64_t x = kLeft + 1; x < kRight; x += 4) {
-        put_px(&img, x, y, kGrid);
-      }
-    }
 
     const float lo = use_range ? r_lo_ : v_lo_;
     const float hi = use_range ? r_hi_ : v_hi_;
     const float span = std::max(hi - lo, 1e-6F);
+
+    // Axis tick labels (rasterized). Y ticks span the fixed value axis; X
+    // ticks span the scrolling window in seconds (0 = now, negative = past).
+    constexpr std::array<uint8_t, 3> kLabel = {200, 200, 210};
+    constexpr int kTicks = 5;
+    const int y_dec = span < 10.0F ? 1 : 0;
+    for (int i = 0; i < kTicks; ++i) {
+      const float f = static_cast<float>(i) / (kTicks - 1);
+      const int64_t y =
+          kBottom -
+          static_cast<int64_t>(f * static_cast<float>(kBottom - kTop));
+      for (int64_t x = kLeft + 1; x < kRight; x += 4) {  // dashed gridline
+        put_px(&img, x, y, kGrid);
+      }
+      for (int64_t d = 1; d <= 3; ++d) {  // tick mark
+        put_px(&img, kLeft - d, y, kLabel);
+      }
+      const std::string s = format_tick(lo + f * span, y_dec);
+      draw_text(&img, kLeft - 4 - text_width(s), y - kFontScale * 2, s,
+                kLabel);
+    }
+    for (int i = 0; i < kTicks; ++i) {
+      const float f = static_cast<float>(i) / (kTicks - 1);
+      const int64_t x =
+          kLeft +
+          static_cast<int64_t>(f * static_cast<float>(kRight - kLeft));
+      for (int64_t d = 1; d <= 3; ++d) {  // tick mark
+        put_px(&img, x, kBottom + d, kLabel);
+      }
+      const float secs = -(1.0F - f) * static_cast<float>(window - 1) *
+                         static_cast<float>(frame_period);
+      const std::string s = format_tick(secs, 0);
+      draw_text(&img, x - text_width(s) / 2, kBottom + 5, s, kLabel);
+    }
+
     const auto to_px = [&](int64_t t, float val, int64_t* px, int64_t* py) {
       const float xf = static_cast<float>(t - oldest) /
                        static_cast<float>(window - 1);
@@ -1415,13 +1507,14 @@ class FmcwSisoApp : public holoscan::Application {
           text.views_ = {make_view(0.63F, oy, 0.35F, 0.44F)};
           input_specs.push_back(text);
         };
-        add_plot(kRangePlotLayer, kRangeTitleLayer, "Range (m) vs time",
+        add_plot(kRangePlotLayer, kRangeTitleLayer, "Range (m) vs time (s)",
                  0.04F);
         add_plot(kVelocityPlotLayer, kVelocityTitleLayer,
-                 "Velocity (m/s) vs time", 0.52F);
+                 "Velocity (m/s) vs time (s)", 0.52F);
 
         plot = make_operator<RollingPlotOp>("rolling_plot");
         plot->window = cfg.plots.window;
+        plot->frame_period = cfg.frame_period;
       }
 
       auto visualizer = make_operator<holoscan::ops::HolovizOp>(

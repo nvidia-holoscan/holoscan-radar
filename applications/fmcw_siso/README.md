@@ -62,7 +62,8 @@ On the right (when `plots.enable` is set) two rolling time-series plots
 stack: **range (m) vs time** and **velocity (m/s) vs time**. Each scrolling
 plot shows every detection as a dot colored by its cluster and each cluster's
 centroid as a distinct `+` marker in the same color, over a fixed Y axis (the
-range / velocity bin extents) and a window of the last `plots.window` frames.
+range / velocity bin extents, with numeric tick labels) and an X axis of the
+last `plots.window` frames in seconds (0 = now).
 Over a run the moving target traces a rising range and a roughly constant
 velocity. Set `plots.enable: false` to let the RD map fill the window.
 
