@@ -675,7 +675,8 @@ class FmcwSisoApp : public holoscan::Application {
 
     // Optional live RD-map window (cfg.visualize; main() has already
     // downgraded it with a warning on GUI-less hosts). Turbo-mapped |RD|
-    // with CFAR detections marked by dark box outlines (range = x, Doppler = y).
+    // with CFAR detections marked by dark box outlines (range = x,
+    // Doppler = y).
     if (cfg.visualize) {
       auto to_image = make_operator<RdMapToImageOp>("rd_map_to_image");
       std::vector<holoscan::ops::HolovizOp::InputSpec> input_specs;
