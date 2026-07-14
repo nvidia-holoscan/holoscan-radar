@@ -27,6 +27,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness | deustice | `deustice/sigproc-ops` | **merged** (PR #8) |
 | Detection operators (`CFARDetectorOp` + FeatureAssembly + DetectionReduction) | dpc | `dpc/detection-full` | **merged** (PR #10) |
 | Wire `CFARDetectorOp` into `applications/fmcw_siso` | dpc | `dpc/fmcw-siso-cfar` | in review |
+| Clustering operator (`operators/clustering/` + `ClusterDBSCANOp`) | deustice | `deustice/clustering` | **checklist-complete** — GPU DBSCAN (brute-force neighbor graph + iterative CC), `epsilon` (scalar/vector) + `min_points` + `max_clusters` sticky live params, `labels` + `sizes`, float/double, unit + `perf_cluster_dbscan`; staged perf follow-ups in OPEN_ITEMS |
 
 ### Landed on `dpc/detection`
 
