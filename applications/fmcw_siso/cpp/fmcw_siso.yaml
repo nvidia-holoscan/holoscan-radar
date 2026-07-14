@@ -33,6 +33,7 @@ waveform: &waveform
 #   propagation_speed: 299792458.0     # m/s
 range_processor:
   waveform: *waveform
+  range_window: hann
 
 # ClutterFilterOp parameters: method is one of mean_subtraction,
 # single_delay, double_delay.
@@ -44,15 +45,16 @@ clutter_filter:
 #   center_zero_doppler: true
 doppler_processor:
   waveform: *waveform
+  doppler_window: hann
 
 # CFARDetectorOp parameters (app-parsed). guard_cells / training_cells are
 # (doppler, range) half-extents; pfa sets the CA threshold multiplier.
 # os_rank is only required when cfar_variant is OS.
 cfar_detector:
   cfar_variant: CA
-  guard_cells: [2, 2]
-  training_cells: [4, 4]
-  pfa: 1.0e-7
+  guard_cells: [3, 3]
+  training_cells: [3, 3]
+  pfa: 1.0e-9
   os_rank: 0
 
 # Clustering stage (app-parsed like cfar_detector; AssemblyFeature has no
@@ -70,7 +72,7 @@ cfar_detector:
 #                  <= 0 is uncapped.
 clustering:
   features: [range, velocity]
-  epsilon: [30.0, 2.0]
+  epsilon: [3.0, 2.0]
   min_points: 1
   max_clusters: 0
 
