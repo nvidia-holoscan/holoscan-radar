@@ -76,5 +76,7 @@ set_source_files_properties(test_detection_reduction_custom.cu
     PROPERTIES LANGUAGE CUDA)
 radar_add_test(test_feature_assembly
     holoscan::feature_assembly_op)
+radar_add_test(test_cluster_dbscan
+    holoscan::cluster_dbscan_op)
 radar_add_statistical_test(test_cfar_detector_statistical
     holoscan::cfar_detector_op)
