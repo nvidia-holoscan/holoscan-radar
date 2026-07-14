@@ -510,21 +510,28 @@ namespace {
 
 constexpr int kMcCalTrials = 4096;
 constexpr int kMcVerifyTrials = 8192;
-// K>1 GO/SO/OS bisection with only kMcVerifyTrials under-shoots alpha on the
-// CRN sample (isolation re-check at 200k trials saw ~1.27x Pfa for GO K=8).
-// More trials tighten the finite-sample quantile used during inversion.
-constexpr int kMcCalTrialsKgt1 = 65536;
+// K>1 GO/SO/OS: bisection stays on kMcVerifyTrials (cheap CRN root find), then
+// a short high-trial polish bumps alpha until the extended-sample Pfa meets
+// the target. Running the full 65k-trial budget on every bisection probe made
+// NCI LUT cold builds ~8x slower (perf --full / live pfa rebuilds).
+constexpr int kMcPolishTrialsKgt1 = 65536;
+constexpr int kMcPolishMaxBumps = 8;
+constexpr double kMcPolishGrow = 1.08;
+// Keep the polish refinement short: a full kMcBisectionMaxIter pass at 65k
+// trials is what we are trying to avoid.
+constexpr int kMcPolishBisectIters = 12;
 
 int mc_trials_for_calibration(int64_t k) {
-  return k > 1 ? kMcCalTrialsKgt1 : kMcCalTrials;
+  return k > 1 ? kMcVerifyTrials : kMcCalTrials;
 }
 
 // After noisy MC bisection, prefer the high end of the bracket: pfa_at(hi) was
 // observed <= target on the calibration sample, while the midpoint can still
 // sit on the high-Pfa side of a flat FA-count plateau.
 template <typename PfaAt>
-double mc_bisection_alpha(double pfa, double lo, double hi, PfaAt&& pfa_at) {
-  for (int iter = 0; iter < kMcBisectionMaxIter; ++iter) {
+double mc_bisection_alpha(double pfa, double lo, double hi, int max_iter,
+                          PfaAt&& pfa_at) {
+  for (int iter = 0; iter < max_iter; ++iter) {
     const double mid = 0.5 * (lo + hi);
     if (pfa_at(mid) > pfa) {
       lo = mid;
@@ -536,6 +543,32 @@ double mc_bisection_alpha(double pfa, double lo, double hi, PfaAt&& pfa_at) {
     }
   }
   return hi;
+}
+
+template <typename PfaAt>
+double mc_bisection_alpha(double pfa, double lo, double hi, PfaAt&& pfa_at) {
+  return mc_bisection_alpha(pfa, lo, hi, kMcBisectionMaxIter,
+                            std::forward<PfaAt>(pfa_at));
+}
+
+// Raise alpha until a higher-trial Pfa estimate is at or below target, then
+// briefly bisect back so we do not park far on the conservative side.
+template <typename PfaAt>
+double mc_polish_alpha(double pfa, double alpha, PfaAt&& pfa_at) {
+  if (pfa_at(alpha) <= pfa) {
+    return alpha;
+  }
+  double lo = alpha;
+  double hi = alpha;
+  for (int bump = 0; bump < kMcPolishMaxBumps; ++bump) {
+    hi *= kMcPolishGrow;
+    if (pfa_at(hi) <= pfa) {
+      return mc_bisection_alpha(pfa, lo, hi, kMcPolishBisectIters, pfa_at);
+    }
+    lo = hi;
+  }
+  throw std::runtime_error(
+      "mc_polish_alpha: exceeded bump budget without meeting target Pfa");
 }
 
 int64_t effective_os_rank(int64_t n, int64_t os_rank) {
@@ -878,10 +911,17 @@ double go_cfar_alpha(double pfa, int64_t n_side, int64_t k, int guard_d,
     lo *= 0.5;
   }
 
-  return mc_bisection_alpha(pfa, lo, hi, [&](double alpha) {
-    return go_cfar_pfa_from_alpha_impl(alpha, n_side, k, mc_trials, guard_d,
+  double alpha = mc_bisection_alpha(pfa, lo, hi, [&](double a) {
+    return go_cfar_pfa_from_alpha_impl(a, n_side, k, mc_trials, guard_d,
                                        guard_r, train_d, train_r);
   });
+  if (k > 1) {
+    alpha = mc_polish_alpha(pfa, alpha, [&](double a) {
+      return go_cfar_pfa_from_alpha_impl(a, n_side, k, kMcPolishTrialsKgt1,
+                                         guard_d, guard_r, train_d, train_r);
+    });
+  }
+  return alpha;
 }
 
 double go_cfar_alpha_at_cell(double pfa, int64_t k, int d, int r,
@@ -908,8 +948,8 @@ double go_cfar_alpha_at_cell(double pfa, int64_t k, int d, int r,
   double lo = ca_cfar_alpha(pfa, n_side, k);
   double hi = lo * 8.0;
   const int mc_trials = mc_trials_for_calibration(k);
-  auto pfa_at = [&](double alpha) {
-    return goso_cfar_pfa_at_cell_impl(alpha, k, mc_trials, d, r, num_doppler,
+  auto pfa_at = [&](double a) {
+    return goso_cfar_pfa_at_cell_impl(a, k, mc_trials, d, r, num_doppler,
                                       num_range, guard_d, guard_r, train_d,
                                       train_r, true);
   };
@@ -923,7 +963,15 @@ double go_cfar_alpha_at_cell(double pfa, int64_t k, int d, int r,
   while (lo > 0.0 && pfa_at(lo) <= pfa) {
     lo *= 0.5;
   }
-  return mc_bisection_alpha(pfa, lo, hi, pfa_at);
+  double alpha = mc_bisection_alpha(pfa, lo, hi, pfa_at);
+  if (k > 1) {
+    alpha = mc_polish_alpha(pfa, alpha, [&](double a) {
+      return goso_cfar_pfa_at_cell_impl(a, k, kMcPolishTrialsKgt1, d, r,
+                                        num_doppler, num_range, guard_d,
+                                        guard_r, train_d, train_r, true);
+    });
+  }
+  return alpha;
 }
 
 std::vector<double> build_go_alpha_lut(double pfa, int64_t fold,
@@ -987,10 +1035,17 @@ double so_cfar_alpha(double pfa, int64_t n_side, int64_t k, int guard_d,
     lo *= 0.5;
   }
 
-  return mc_bisection_alpha(pfa, lo, hi, [&](double alpha) {
-    return so_cfar_pfa_from_alpha_impl(alpha, n_side, k, mc_trials, guard_d,
+  double alpha = mc_bisection_alpha(pfa, lo, hi, [&](double a) {
+    return so_cfar_pfa_from_alpha_impl(a, n_side, k, mc_trials, guard_d,
                                        guard_r, train_d, train_r);
   });
+  if (k > 1) {
+    alpha = mc_polish_alpha(pfa, alpha, [&](double a) {
+      return so_cfar_pfa_from_alpha_impl(a, n_side, k, kMcPolishTrialsKgt1,
+                                         guard_d, guard_r, train_d, train_r);
+    });
+  }
+  return alpha;
 }
 
 double so_cfar_alpha_at_cell(double pfa, int64_t k, int d, int r,
@@ -1017,8 +1072,8 @@ double so_cfar_alpha_at_cell(double pfa, int64_t k, int d, int r,
   double lo = ca_cfar_alpha(pfa, n_side, k);
   double hi = lo * 8.0;
   const int mc_trials = mc_trials_for_calibration(k);
-  auto pfa_at = [&](double alpha) {
-    return goso_cfar_pfa_at_cell_impl(alpha, k, mc_trials, d, r, num_doppler,
+  auto pfa_at = [&](double a) {
+    return goso_cfar_pfa_at_cell_impl(a, k, mc_trials, d, r, num_doppler,
                                       num_range, guard_d, guard_r, train_d,
                                       train_r, false);
   };
@@ -1032,7 +1087,15 @@ double so_cfar_alpha_at_cell(double pfa, int64_t k, int d, int r,
   while (lo > 0.0 && pfa_at(lo) <= pfa) {
     lo *= 0.5;
   }
-  return mc_bisection_alpha(pfa, lo, hi, pfa_at);
+  double alpha = mc_bisection_alpha(pfa, lo, hi, pfa_at);
+  if (k > 1) {
+    alpha = mc_polish_alpha(pfa, alpha, [&](double a) {
+      return goso_cfar_pfa_at_cell_impl(a, k, kMcPolishTrialsKgt1, d, r,
+                                        num_doppler, num_range, guard_d,
+                                        guard_r, train_d, train_r, false);
+    });
+  }
+  return alpha;
 }
 
 std::vector<double> build_so_alpha_lut(double pfa, int64_t fold,
@@ -1098,10 +1161,15 @@ double os_cfar_alpha(double pfa, int64_t n, int64_t os_rank, int64_t k,
     lo *= 0.5;
   }
 
-  return mc_bisection_alpha(pfa, lo, hi, [&](double alpha) {
-    return os_cfar_pfa_from_alpha_impl(alpha, n, os_rank, k, mc_trials,
+  double alpha = mc_bisection_alpha(pfa, lo, hi, [&](double a) {
+    return os_cfar_pfa_from_alpha_impl(a, n, os_rank, k, mc_trials, guard_d,
+                                       guard_r, train_d, train_r);
+  });
+  alpha = mc_polish_alpha(pfa, alpha, [&](double a) {
+    return os_cfar_pfa_from_alpha_impl(a, n, os_rank, k, kMcPolishTrialsKgt1,
                                        guard_d, guard_r, train_d, train_r);
   });
+  return alpha;
 }
 
 std::vector<double> build_os_alpha_lut(double pfa, int64_t fold,
