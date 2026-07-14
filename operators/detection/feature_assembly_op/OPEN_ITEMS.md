@@ -43,4 +43,3 @@ kernel (sparse irregular gathers are a poor MatX fit), matching CFAR’s
 **Status:** resolved in contract — `OPERATOR_API.md` FeatureAssembly
 algorithm / carried-over notes now say custom CUDA. Keep this section as
 a breadcrumb for SnapshotGather when sharing the gather primitive.
-

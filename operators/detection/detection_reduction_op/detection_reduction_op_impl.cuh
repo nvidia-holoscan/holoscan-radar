@@ -28,10 +28,13 @@
 
 namespace holoscan::radar {
 
-namespace {
+namespace detection_reduction_op_detail {
 constexpr const char* kOpName = "DetectionReductionOp";
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
-}  // namespace
+}  // namespace detection_reduction_op_detail
+
+using detection_reduction_op_detail::kInt64Dtype;
+using detection_reduction_op_detail::kOpName;
 
 template <typename T, typename ScoreFn>
 void DetectionReductionOp<T, ScoreFn>::initialize() {

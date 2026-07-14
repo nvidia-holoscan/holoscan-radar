@@ -46,7 +46,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 - **`CFARDetectorOp` OS slice** — per-cell order-statistic stencil with
   `[live] os_rank` (0-based ascending), host Monte Carlo `alpha` LUT keyed by
   rank, OS-specific validation/live-override tests, full contract test matrix
-  + `OsMonteCarloPfaK1` / `OsMonteCarloPfaNciK8` statistical tests.
+  plus `OsMonteCarloPfaK1` / `OsMonteCarloPfaNciK8` statistical tests.
 
 ## Up next (unclaimed)
 

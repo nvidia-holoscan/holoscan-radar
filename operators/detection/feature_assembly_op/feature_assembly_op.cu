@@ -212,7 +212,8 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
   if (detection_score) {
     require_cuda_accessible(*detection_score, "detection_score", kOpName);
     require_contiguous(*detection_score, "detection_score", kOpName);
-    require_dtype(*detection_score, real_dtype<T>(), "detection_score", kOpName);
+    require_dtype(*detection_score, real_dtype<T>(), "detection_score",
+                  kOpName);
     const auto& sshape = detection_score->shape();
     if (sshape.size() < 2) {
       throw std::invalid_argument(

@@ -40,7 +40,7 @@ environment (only 4.3.0 installed).
 
 ---
 
-## 2. CFAR `nci_axes` / Gamma(K) threshold multiplier — implemented in conflict with contract (pre-emptive)
+## 2. CFAR `nci_axes` / Gamma(K) threshold multiplier — implemented in conflict with contract (preemptive)
 
 **Context.** `OPERATOR_API.md` requires that when `nci_axes` integrates `K`
 leading axes, the cell statistic is Gamma(`K`) and `alpha` is recomputed from
@@ -53,7 +53,7 @@ alpha = N * (Pfa^(-1/N) - 1)
 For **K > 1** the contract says `alpha` "takes `K`" but does **not** pin the
 closed form — that was left for a signal-processing owner decision.
 
-**What we implemented (pre-emptively).** Rather than block `nci_axes`
+**What we implemented (preemptively).** Rather than block `nci_axes`
 development on that contract gap, the operator now uses the **correct**
 Gamma-statistic CA-CFAR calibration:
 
@@ -91,7 +91,7 @@ the host scan + inversion dominate.
 - Or revert to the power-law placeholder and gate `nci_axes` until the
   contract is updated?
 
-**Status:** open — **code is ahead of the contract**; landed pre-emptively so
+**Status:** open — **code is ahead of the contract**; landed preemptively so
 `nci_axes` development and Monte Carlo calibration can continue. Resolve by
 either updating `OPERATOR_API.md` to match the implementation or reverting
 the implementation to match the contract.
@@ -360,6 +360,7 @@ proposal:
   PROPOSED banner), or revise / reject?
 
 **Status:**
+
 - **Implementation:** landed — `alpha_lut` parameter and `[live]` override
   port; warn-once for slow `pfa` path; ignored `pfa` while `alpha_lut` is
   active; `alpha_lut` cleared → `pfa` active transitions. Offline
