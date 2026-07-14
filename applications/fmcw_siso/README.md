@@ -1,8 +1,8 @@
 # FMCW SISO
 
-A SISO FMCW example application demonstrating the signal-processing + detection
-+ clustering chain: a synthetic ADC source (one static clutter return + one
-moving target, analytic dechirped point-target model) feeding
+A SISO FMCW example application demonstrating the signal-processing,
+detection, and clustering chain: a synthetic ADC source (one static clutter
+return + one moving target, analytic dechirped point-target model) feeding
 
 ```text
 FMCWRangeProcessorOp → ClutterFilterOp → FMCWDopplerProcessorOp
@@ -46,20 +46,23 @@ CLI argument to override it. Each target is placed along the +x look direction
 at a given `range` (m) and radial `velocity` (m/s, positive = receding) with a
 linear `amplitude`.
 
-The `clustering` block selects the FeatureAssemblyOp feature columns
-(`features`, fixed to `[range, velocity]` for this app) and the DBSCAN
-parameters (`epsilon` per-feature radius, `min_points`, `max_clusters`). It is
-optional — the app defaults (a 3 m × 2 m/s neighborhood, `min_points: 2`) hold
-when the block or any key is omitted.
+The per-operator blocks (`range_processor`, `clutter_filter`,
+`doppler_processor`, `cfar_detector`, `cluster_dbscan`, `reduction`) are all
+consumed natively through Holoscan's `from_config()` — every key is an operator
+parameter. `FeatureAssemblyOp`'s `features` is the one exception: it is fixed in
+the app code to `[range, velocity]` (the parameter is native-only by operator
+contract, and the report / overlays assume that 2-column layout), so there is
+no `feature_assembly` YAML block.
 
-The optional `reduction` block configures `DetectionReductionOp`
-(`representative`: `medoid` | `peak` | `first`; `score_method`;
-`feature_weights`). It defaults to `medoid`, the centroid-like choice for the
-`[range, velocity]` feature space (`peak` would rank cells by range/velocity
-magnitude, which is meaningless without a score feature); `feature_weights`
-defaults to the inverse clustering `epsilon` so the medoid metric matches the
-DBSCAN neighborhood. The representative is what the GUI marks as each cluster's
-centroid.
+The `cluster_dbscan` block holds the DBSCAN parameters (`epsilon` per-feature
+radius, `min_points`, `max_clusters`). The `reduction` block configures
+`DetectionReductionOp` (`representative`: `medoid` | `peak` | `first`;
+`score_method`; `feature_weights`). `medoid` is the centroid-like choice for
+the `[range, velocity]` feature space (`peak` would rank cells by
+range/velocity magnitude, meaningless without a score feature); set
+`feature_weights` ~ `1/epsilon` so the medoid metric matches the DBSCAN
+neighborhood. The representative is what the GUI marks as each cluster's
+centroid. Each operator validates its own parameters at startup.
 
 ## Visualization
 
