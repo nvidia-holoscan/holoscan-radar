@@ -26,7 +26,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | Fill out `AGENTS.md` + this status file | deustice | `deustice/planning` | in review |
 | Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness | deustice | `deustice/sigproc-ops` | **merged** (PR #8) |
 | Detection operators (`CFARDetectorOp` + FeatureAssembly + DetectionReduction) | dpc | `dpc/detection-full` | **merged** (PR #10) |
-| Wire `CFARDetectorOp` into `applications/fmcw_siso` | dpc | `dpc/fmcw-siso-cfar` | in progress |
+| Wire `CFARDetectorOp` into `applications/fmcw_siso` | dpc | `dpc/fmcw-siso-cfar` | in review |
 
 ### Landed on `dpc/detection`
 

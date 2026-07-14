@@ -7,58 +7,58 @@
 //   * the repo is bind-mounted at /workspace/holoscan-radar,
 //   * the data dir lands at /workspace/holoscan-radar/data.
 {
-    "name": "holoscan-radar",
+  "name": "holoscan-radar",
 
-    "build": {
-        "context": "..",
-        "dockerfile": "../Dockerfile"
-    },
+  "build": {
+    "context": "..",
+    "dockerfile": "../Dockerfile"
+  },
 
-    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/holoscan-radar,type=bind,consistency=cached",
-    "workspaceFolder": "/workspace/holoscan-radar",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/holoscan-radar,type=bind,consistency=cached",
+  "workspaceFolder": "/workspace/holoscan-radar",
 
-    // Work as the non-root `dev` user (team convention). Let the devcontainer
-    // runtime update its UID/GID to match the host user for bind-mount writes.
-    "remoteUser": "dev",
-    "updateRemoteUserUID": true,
+  // Work as the non-root `dev` user (team convention). Let the devcontainer
+  // runtime update its UID/GID to match the host user for bind-mount writes.
+  "remoteUser": "dev",
+  "updateRemoteUserUID": true,
 
-    // Host display → container (Holoviz / fmcw_siso visualize).
-    // initializeCommand runs on the *host* before the container starts and
-    // opens local X clients; mounts + containerEnv forward DISPLAY and the
-    // X11 socket. Headless / no-xhost hosts: the || true keeps startup soft.
-    "initializeCommand": "bash -c 'command -v xhost >/dev/null && (xhost +local:docker || xhost +local:) || true'",
-    "containerEnv": {
-        "DISPLAY": "${localEnv:DISPLAY}"
-    },
-    "mounts": [
-        "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind"
-    ],
+  // Host display → container (Holoviz / fmcw_siso visualize).
+  // initializeCommand runs on the *host* before the container starts and
+  // opens local X clients; mounts + containerEnv forward DISPLAY and the
+  // X11 socket. Headless / no-xhost hosts: the || true keeps startup soft.
+  "initializeCommand": "bash -c 'command -v xhost >/dev/null && (xhost +local:docker || xhost +local:) || true'",
+  "containerEnv": {
+    "DISPLAY": "${localEnv:DISPLAY}"
+  },
+  "mounts": [
+    "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind"
+  ],
 
-    // Requires NVIDIA Container Toolkit. Remove on GPU-less hosts.
-    "runArgs": [
-        "--gpus=all"
-    ],
+  // Requires NVIDIA Container Toolkit. Remove on GPU-less hosts.
+  "runArgs": [
+    "--gpus=all"
+  ],
 
-    "hostRequirements": {
-        "gpu": "optional"
-    },
+  "hostRequirements": {
+    "gpu": "optional"
+  },
 
-    "customizations": {
-        "vscode": {
-            "extensions": [
-                "ms-vscode.cpptools",
-                "ms-vscode.cmake-tools",
-                "ms-python.python",
-                "charliermarsh.ruff"
-            ],
-            "settings": {
-                "cmake.sourceDirectory": "/workspace/holoscan-radar",
-                "cmake.buildDirectory": "/workspace/holoscan-radar/build",
-                "cmake.configureArgs": [
-                    "-DHOLOSCAN_RADAR_BUILD_TESTING=ON"
-                ],
-                "python.defaultInterpreterPath": "/usr/bin/python3"
-            }
-        }
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "ms-python.python",
+        "charliermarsh.ruff"
+      ],
+      "settings": {
+        "cmake.sourceDirectory": "/workspace/holoscan-radar",
+        "cmake.buildDirectory": "/workspace/holoscan-radar/build",
+        "cmake.configureArgs": [
+          "-DHOLOSCAN_RADAR_BUILD_TESTING=ON"
+        ],
+        "python.defaultInterpreterPath": "/usr/bin/python3"
+      }
     }
+  }
 }

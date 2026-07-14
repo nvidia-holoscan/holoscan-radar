@@ -63,8 +63,8 @@ cube:
 # Run cadence. The source emits `num_frames` cubes, one every `frame_period`
 # seconds, advancing the targets through space between frames.
 run:
-  num_frames: 100
-  frame_period: 0.1                    # s (10 Hz → ~10 s total)
+  num_frames: 300
+  frame_period: 0.1                    # s (10 Hz → ~30 s total)
 
 # Scene targets. Each is placed along the +x look direction at `range` metres,
 # closing/receding at `velocity` m/s (positive = receding), with a linear
@@ -82,7 +82,7 @@ noise_snr_db: 20.0
 # Live RD-map visualization (Holoviz turbo-colormapped image of the
 # log-magnitude map). Requires a GUI-capable host; when no display is
 # detected the app warns and runs as if this were false.
-visualize: false
+visualize: true
 
 # Skip the startup display probe (a brief Holoviz window init/teardown).
 # Saves the probe's startup cost on hosts known to have a working display,

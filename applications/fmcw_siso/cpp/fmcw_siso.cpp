@@ -8,7 +8,7 @@
 //               -> FMCWDopplerProcessorOp -> CFARDetectorOp
 //                                        -> DetectionReportOp
 //                                         [-> RdMapToImageOp -> HolovizOp]
-//                                              (paints CFAR crosses on image)
+//                                              (paints CFAR box outlines)
 //
 // The source synthesizes one static clutter return and one moving target
 // with the shared analytic point-target simulator
