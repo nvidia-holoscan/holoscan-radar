@@ -99,8 +99,9 @@ targets:
 noise_snr_db: 20.0
 
 # Live RD-map visualization (Holoviz turbo-colormapped image of the
-# log-magnitude map). Requires a GUI-capable host; when no display is
-# detected the app warns and runs as if this were false.
+# log-magnitude map, with the CFAR detections overlaid as crosses colored by
+# DBSCAN cluster). Requires a GUI-capable host; when no display is detected
+# the app warns and runs as if this were false.
 visualize: true
 
 # Skip the startup display probe (a brief Holoviz window init/teardown).
@@ -108,3 +109,8 @@ visualize: true
 # but if none is available the app aborts mid-graph instead of falling back
 # to running without the window.
 skip_display_check: false
+
+# Render Holoviz offscreen (no window). Lets the visual pipeline run on a
+# display-less host (CI, headless dev boxes); the startup display probe is
+# skipped when set. Combine with visualize: true.
+headless: false

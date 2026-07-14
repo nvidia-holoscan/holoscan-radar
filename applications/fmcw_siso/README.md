@@ -53,12 +53,19 @@ when the block or any key is omitted.
 
 Set `visualize: true` in the config to open a live Holoviz window showing
 the range-Doppler map (normalized log magnitude, turbo colormap; range along
-x, Doppler along y) with dark box outlines at CFAR detections (peak left
-visible inside), alongside the textual detection reports. This requires a
+x, Doppler along y). The CFAR detections are overlaid as a crosses geometry
+layer, **colored by DBSCAN cluster** (a categorical palette, one color per
+cluster; detections that stayed noise are drawn in gray), so the grouping is
+visible on the map alongside the textual cluster reports. This requires a
 GUI-capable host — a reachable display server and Vulkan. At startup the app
 probes Holoviz directly; if no usable display is found (headless host, or a
 stale `DISPLAY` with no server behind it), it logs a warning and runs
 exactly as if `visualize` were `false`.
+
+Set `headless: true` (with `visualize: true`) to render Holoviz offscreen
+with no window — the startup display probe is skipped, letting the visual
+pipeline run on a display-less host (e.g. CI) provided a Vulkan driver is
+present.
 
 A Python variant will be added when the Python bindings land (deferred to
 a later phase).
