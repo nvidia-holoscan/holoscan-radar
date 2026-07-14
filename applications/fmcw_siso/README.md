@@ -1,19 +1,24 @@
 # FMCW SISO
 
 A SISO FMCW example application demonstrating the signal-processing + detection
-chain: a synthetic ADC source (one static clutter return + one moving target,
-analytic dechirped point-target model) feeding
++ clustering chain: a synthetic ADC source (one static clutter return + one
+moving target, analytic dechirped point-target model) feeding
 
 ```text
 FMCWRangeProcessorOp → ClutterFilterOp → FMCWDopplerProcessorOp
   → CFARDetectorOp → DetectionReportOp
+                   → FeatureAssemblyOp → ClusterDBSCANOp → ClusterReportOp
 ```
 
-The sink reports each CFAR detection in physical units via the operators'
-`range_bins` / `velocity_bins` axis outputs. The source emits one cube per
-tick and advances the targets between ticks, so the reported range sweeps
-over the run. An optional Holoviz branch still renders the RD map from
-Doppler.
+The detection sink reports each CFAR detection in physical units via the
+operators' `range_bins` / `velocity_bins` axis outputs. The source emits one
+cube per tick and advances the targets between ticks, so the reported range
+sweeps over the run. In parallel, `FeatureAssemblyOp` gathers a
+`[range, velocity]` feature matrix from the CFAR cells (same axis outputs,
+physical units) and `ClusterDBSCANOp` density-clusters it, so the handful of
+adjacent cells one target lights collapse into a single cluster;
+`ClusterReportOp` logs each cluster's size and centroid. An optional Holoviz
+branch still renders the RD map from Doppler.
 
 Launch via `./holohub run fmcw_siso`, or build directly:
 
@@ -31,11 +36,18 @@ zero and no cells cross threshold.
 ## Configuration
 
 The waveform, cube dimensions, run cadence, clutter method, CFAR parameters,
-targets, and noise are read from [`cpp/fmcw_siso.yaml`](cpp/fmcw_siso.yaml) at
-startup. A copy is staged next to the built executable and used by default;
-pass a different path as the first CLI argument to override it. Each target is
-placed along the +x look direction at a given `range` (m) and radial
-`velocity` (m/s, positive = receding) with a linear `amplitude`.
+clustering parameters, targets, and noise are read from
+[`cpp/fmcw_siso.yaml`](cpp/fmcw_siso.yaml) at startup. A copy is staged next to
+the built executable and used by default; pass a different path as the first
+CLI argument to override it. Each target is placed along the +x look direction
+at a given `range` (m) and radial `velocity` (m/s, positive = receding) with a
+linear `amplitude`.
+
+The `clustering` block selects the FeatureAssemblyOp feature columns
+(`features`, fixed to `[range, velocity]` for this app) and the DBSCAN
+parameters (`epsilon` per-feature radius, `min_points`, `max_clusters`). It is
+optional — the app defaults (a 3 m × 2 m/s neighborhood, `min_points: 2`) hold
+when the block or any key is omitted.
 
 ## Visualization
 

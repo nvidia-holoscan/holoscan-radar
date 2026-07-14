@@ -55,6 +55,25 @@ cfar_detector:
   pfa: 1.0e-6
   os_rank: 0
 
+# Clustering stage (app-parsed like cfar_detector; AssemblyFeature has no
+# YAML::convert). FeatureAssemblyOp assembles the `points` matrix, one column
+# per `features` token in order, then ClusterDBSCANOp density-clusters it. The
+# whole block is optional; these values are the app defaults.
+#   features     — column tokens (accepted: range, velocity, score, az, el,
+#                  doppler_bin, range_bin). This app fixes them to
+#                  [range, velocity]; the cluster report assumes that layout.
+#   epsilon      — per-feature neighborhood radius, matching `features` order
+#                  (here metres, then m/s). Length 1 → isotropic.
+#   min_points   — DBSCAN minPts (neighbors incl. self for a core point);
+#                  <= 0 selects the 2*num_features default.
+#   max_clusters — cap on reported clusters (surplus dropped to noise);
+#                  <= 0 is uncapped.
+clustering:
+  features: [range, velocity]
+  epsilon: [3.0, 2.0]
+  min_points: 2
+  max_clusters: 0
+
 # ADC data-cube dimensions per coherent processing interval (CPI).
 cube:
   num_chirps: 128

@@ -28,6 +28,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | Detection operators (`CFARDetectorOp` + FeatureAssembly + DetectionReduction) | dpc | `dpc/detection-full` | **merged** (PR #10) |
 | Wire `CFARDetectorOp` into `applications/fmcw_siso` | dpc | `dpc/fmcw-siso-cfar` | in review |
 | Clustering operator (`operators/clustering/` + `ClusterDBSCANOp`) | deustice | `deustice/clustering` | **checklist-complete** — GPU DBSCAN (brute-force neighbor graph + iterative CC), `epsilon` (scalar/vector) + `min_points` + `max_clusters` sticky live params, `labels` + `sizes`, float/double, unit + `perf_cluster_dbscan`; staged perf follow-ups in OPEN_ITEMS |
+| Wire `ClusterDBSCANOp` into `applications/fmcw_siso` | deustice | `deustice/clustering` | in progress — `CFARDetectorOp → FeatureAssemblyOp ([range, velocity]) → ClusterDBSCANOp → ClusterReportOp` branch; app-parsed `clustering` YAML block (`features`/`epsilon`/`min_points`/`max_clusters`), reporter logs per-cluster size + physical-unit centroid |
 
 ### Landed on `dpc/detection`
 

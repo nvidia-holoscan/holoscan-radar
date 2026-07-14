@@ -7,6 +7,9 @@
 //   AdcSourceOp -> FMCWRangeProcessorOp -> ClutterFilterOp
 //               -> FMCWDopplerProcessorOp -> CFARDetectorOp
 //                                        -> DetectionReportOp
+//                                        -> FeatureAssemblyOp
+//                                             -> ClusterDBSCANOp
+//                                                  -> ClusterReportOp
 //                                         [-> RdMapToImageOp -> HolovizOp]
 //                                              (paints CFAR box outlines)
 //
@@ -16,7 +19,11 @@
 // and advancing the targets through space between ticks. CFAR detects on the
 // range-Doppler map; the sink reports each detection in physical units via
 // the operators' range_bins / velocity_bins axis outputs, so the moving
-// target's range is seen to sweep over the run.
+// target's range is seen to sweep over the run. In parallel, FeatureAssemblyOp
+// gathers a [range, velocity] feature matrix from the CFAR cells (same axis
+// outputs, physical units) and ClusterDBSCANOp density-clusters it, so the
+// adjacent cells lit by one target collapse into a single cluster;
+// ClusterReportOp logs each cluster's size and centroid.
 //
 // All configuration lives in fmcw_siso.yaml (staged next to the binary;
 // override with a path as the first CLI argument): the per-operator blocks
@@ -45,11 +52,14 @@
 #include <holoscan/operators/holoviz/holoviz.hpp>
 #include <holoviz/holoviz.hpp>
 
+#include "clustering/cluster_dbscan_op/cluster_dbscan_op.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
+#include "detection/feature_assembly_op/feature_assembly_op.hpp"
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
 #include "radar_common/sim/point_target_sim.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
@@ -76,9 +86,24 @@ struct CfarConfig {
   int64_t os_rank{0};
 };
 
+// Clustering-stage configuration: the FeatureAssemblyOp feature columns plus
+// the ClusterDBSCANOp parameters. Like CfarConfig, this is app-parsed rather
+// than routed through from_config() — AssemblyFeature has no radar_common
+// YAML::convert, so the whole stage is kept as one app-validated block and
+// applied as Args in compose(). The defaults assemble a [range, velocity]
+// matrix (physical units) and cluster it with a per-axis neighborhood.
+struct ClusteringConfig {
+  std::vector<radar::AssemblyFeature> features{
+      radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity};
+  std::vector<double> epsilon{3.0, 2.0};  // per-feature radius: m, m/s
+  int64_t min_points{2};                  // <= 0 → 2*num_features
+  int64_t max_clusters{0};                // <= 0 → uncapped
+};
+
 struct AppConfig {
   radar::sim::SimScene scene;  // waveform, cube dims, targets, noise
   CfarConfig cfar;
+  ClusteringConfig clustering;
   int64_t num_frames{1};
   double frame_period{0.1};  // s, between emitted cubes (and target motion)
   bool visualize{false};     // live RD-map window (requires a GUI host)
@@ -212,6 +237,72 @@ AppConfig load_config(const std::filesystem::path& path) {
   }
   if (!(cfg.cfar.pfa > 0.0 && cfg.cfar.pfa < 1.0)) {
     throw std::runtime_error("cfar_detector.pfa must be in (0, 1)");
+  }
+
+  // Clustering stage (app-parsed; applied as Args in compose()). All keys are
+  // optional — the ClusteringConfig defaults hold when a key or the whole
+  // block is omitted.
+  const YAML::Node clustering = root["clustering"];
+  if (clustering && !clustering.IsNull()) {
+    if (clustering["features"]) {
+      std::vector<radar::AssemblyFeature> features;
+      for (const YAML::Node& f : clustering["features"]) {
+        const std::string spelling = f.as<std::string>();
+        bool matched = false;
+        for (radar::AssemblyFeature v :
+             {radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity,
+              radar::AssemblyFeature::kScore, radar::AssemblyFeature::kAz,
+              radar::AssemblyFeature::kEl, radar::AssemblyFeature::kDopplerBin,
+              radar::AssemblyFeature::kRangeBin}) {
+          if (spelling == radar::to_string(v)) {
+            features.push_back(v);
+            matched = true;
+            break;
+          }
+        }
+        if (!matched) {
+          throw std::runtime_error(
+              "clustering.features: unknown token '" + spelling +
+              "' (accepted: range, velocity, score, az, el, doppler_bin, "
+              "range_bin)");
+        }
+      }
+      if (features.empty()) {
+        throw std::runtime_error(
+            "clustering.features must list at least one feature");
+      }
+      cfg.clustering.features = features;
+    }
+    if (clustering["epsilon"]) {
+      cfg.clustering.epsilon =
+          clustering["epsilon"].as<std::vector<double>>();
+    }
+    if (clustering["min_points"]) {
+      cfg.clustering.min_points = clustering["min_points"].as<int64_t>();
+    }
+    if (clustering["max_clusters"]) {
+      cfg.clustering.max_clusters = clustering["max_clusters"].as<int64_t>();
+    }
+  }
+  // epsilon reaches ClusterDBSCANOp, which rejects a bad value mid-graph;
+  // validate here so the offending key surfaces at startup instead. Length
+  // must be 1 (isotropic) or match the feature count (per-axis), and every
+  // value finite and > 0.
+  if (cfg.clustering.epsilon.empty()) {
+    throw std::runtime_error("clustering.epsilon must be non-empty");
+  }
+  if (cfg.clustering.epsilon.size() != 1 &&
+      cfg.clustering.epsilon.size() != cfg.clustering.features.size()) {
+    throw std::runtime_error(
+        "clustering.epsilon must have length 1 or match the number of "
+        "features (" +
+        std::to_string(cfg.clustering.features.size()) + ")");
+  }
+  for (const double e : cfg.clustering.epsilon) {
+    if (!(std::isfinite(e) && e > 0.0)) {
+      throw std::runtime_error(
+          "clustering.epsilon values must be finite and > 0");
+    }
   }
 
   return cfg;
@@ -432,6 +523,132 @@ class DetectionReportOp : public holoscan::Operator {
                                port);
     }
     return maybe->begin()->second;
+  }
+};
+
+// Reports the DBSCAN clusters formed over the CFAR detections. `points` is the
+// FeatureAssemblyOp feature matrix (this app assembles [range (m),
+// velocity (m/s)]); `labels` is the per-point cluster id (noise = -1,
+// row-aligned with points) and `sizes` the per-cluster point count. Logs the
+// cluster count, the noise-point count, and each cluster's size and centroid
+// in physical units — so the adjacent CFAR cells lit by one target read as a
+// single (range, velocity) estimate.
+class ClusterReportOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(ClusterReportOp)
+  ClusterReportOp() = default;
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::TensorMap>("points");
+    spec.input<holoscan::TensorMap>("labels");
+    spec.input<holoscan::TensorMap>("sizes");
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               [[maybe_unused]] holoscan::OutputContext& op_output,
+               [[maybe_unused]] holoscan::ExecutionContext& context)
+      override {
+    const std::string who = "ClusterReportOp";
+    auto points = radar::receive_single(op_input, "points", who);
+    auto labels = radar::receive_single(op_input, "labels", who);
+    auto sizes = radar::receive_single(op_input, "sizes", who);
+
+    const auto pshape = points->shape();
+    // This app fixes the FeatureAssemblyOp columns to [range, velocity]; the
+    // centroid reporting below assumes that 2-column layout.
+    if (pshape.size() != 2 || pshape[1] != 2) {
+      throw std::runtime_error(
+          "ClusterReportOp: points must be (N, 2) [range, velocity], got "
+          "rank " +
+          std::to_string(pshape.size()));
+    }
+    const int64_t num_points = pshape[0];
+    const auto lshape = labels->shape();
+    if (lshape.size() != 1 || lshape[0] != num_points) {
+      throw std::runtime_error(
+          "ClusterReportOp: labels must be (N,) row-aligned with points");
+    }
+    const auto sshape = sizes->shape();
+    if (sshape.size() != 1) {
+      throw std::runtime_error("ClusterReportOp: sizes must be rank-1");
+    }
+    const int64_t num_clusters = sshape[0];
+
+    std::vector<float> pts(static_cast<size_t>(num_points * 2));
+    std::vector<int64_t> lab(static_cast<size_t>(num_points));
+    std::vector<int64_t> sz(static_cast<size_t>(num_clusters));
+
+    const auto require_bytes =
+        [](const char* name, const std::shared_ptr<holoscan::Tensor>& t,
+           size_t expected) {
+          if (static_cast<size_t>(t->nbytes()) != expected) {
+            throw std::runtime_error(
+                std::string("ClusterReportOp: ") + name +
+                " byte size mismatch (expected " + std::to_string(expected) +
+                ", got " + std::to_string(t->nbytes()) + ")");
+          }
+        };
+    require_bytes("points", points, sizeof(float) * pts.size());
+    require_bytes("labels", labels, sizeof(int64_t) * lab.size());
+    require_bytes("sizes", sizes, sizeof(int64_t) * sz.size());
+
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+      throw std::runtime_error("ClusterReportOp: device synchronize failed");
+    }
+    // Guard the zero-length copies: an empty tick (no detections) yields empty
+    // tensors whose data() may be null.
+    const auto copy_d2h = [](const char* name, void* dst,
+                             const std::shared_ptr<holoscan::Tensor>& src) {
+      if (src->nbytes() == 0) {
+        return;
+      }
+      if (cudaMemcpy(dst, src->data(), static_cast<size_t>(src->nbytes()),
+                     cudaMemcpyDeviceToHost) != cudaSuccess) {
+        throw std::runtime_error(std::string("ClusterReportOp: ") + name +
+                                 " D2H copy failed");
+      }
+    };
+    copy_d2h("points", pts.data(), points);
+    copy_d2h("labels", lab.data(), labels);
+    copy_d2h("sizes", sz.data(), sizes);
+
+    // Accumulate per-cluster centroids from the points, keyed by label; noise
+    // (-1) is counted but excluded from any cluster.
+    std::vector<double> sum_range(static_cast<size_t>(num_clusters), 0.0);
+    std::vector<double> sum_velocity(static_cast<size_t>(num_clusters), 0.0);
+    int64_t noise = 0;
+    for (int64_t i = 0; i < num_points; ++i) {
+      const int64_t c = lab[static_cast<size_t>(i)];
+      if (c < 0) {
+        ++noise;
+        continue;
+      }
+      if (c >= num_clusters) {
+        throw std::runtime_error(
+            "ClusterReportOp: label out of range for sizes");
+      }
+      sum_range[static_cast<size_t>(c)] += pts[static_cast<size_t>(i * 2 + 0)];
+      sum_velocity[static_cast<size_t>(c)] +=
+          pts[static_cast<size_t>(i * 2 + 1)];
+    }
+
+    HOLOSCAN_LOG_INFO("DBSCAN clusters: {} ({} points, {} noise)",
+                      num_clusters, num_points, noise);
+    constexpr int64_t kMaxLogged = 16;
+    const int64_t n_log = std::min(num_clusters, kMaxLogged);
+    for (int64_t c = 0; c < n_log; ++c) {
+      const int64_t n = sz[static_cast<size_t>(c)];
+      const double inv = n > 0 ? 1.0 / static_cast<double>(n) : 0.0;
+      HOLOSCAN_LOG_INFO(
+          "  cluster {}: {} pts, centroid range {:.2f} m, velocity "
+          "{:+.2f} m/s",
+          c, n, sum_range[static_cast<size_t>(c)] * inv,
+          sum_velocity[static_cast<size_t>(c)] * inv);
+    }
+    if (num_clusters > kMaxLogged) {
+      HOLOSCAN_LOG_INFO("  ... {} more clusters not logged",
+                        num_clusters - kMaxLogged);
+    }
   }
 };
 
@@ -662,6 +879,21 @@ class FmcwSisoApp : public holoscan::Application {
     auto mask_sink = make_operator<NullSinkOp>("detection_mask_sink");
     auto noise_sink = make_operator<NullSinkOp>("noise_estimate_sink");
 
+    // Clustering branch: assemble a [range, velocity] feature matrix from the
+    // CFAR cells (physical units, via the range/Doppler axis outputs) and
+    // density-cluster it. `features` is applied as an Arg (AssemblyFeature has
+    // no YAML::convert, mirroring CFAR); the DBSCAN parameters likewise come
+    // from the app-parsed clustering block.
+    auto feature_assembly = make_operator<radar::FeatureAssemblyOp<float>>(
+        "feature_assembly",
+        holoscan::Arg("features") = cfg.clustering.features);
+    auto cluster = make_operator<radar::ClusterDBSCANOp<float>>(
+        "cluster_dbscan",
+        holoscan::Arg("epsilon") = cfg.clustering.epsilon,
+        holoscan::Arg("min_points") = cfg.clustering.min_points,
+        holoscan::Arg("max_clusters") = cfg.clustering.max_clusters);
+    auto cluster_report = make_operator<ClusterReportOp>("cluster_report");
+
     add_flow(source, range, {{"adc_cube", "adc_cube"}});
     add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
     add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
@@ -672,6 +904,18 @@ class FmcwSisoApp : public holoscan::Application {
     add_flow(doppler, sink, {{"velocity_bins", "velocity_bins"}});
     add_flow(cfar, mask_sink, {{"detection_mask", "input"}});
     add_flow(cfar, noise_sink, {{"noise_estimate", "input"}});
+
+    // CFAR cells → feature matrix → DBSCAN → report. The range/Doppler axis
+    // outputs feed FeatureAssemblyOp so the columns land in physical units;
+    // its `points` output fans out to both the clusterer and the reporter
+    // (the reporter reads it for centroids).
+    add_flow(cfar, feature_assembly, {{"detection_idx", "detection_idx"}});
+    add_flow(range, feature_assembly, {{"range_bins", "range_bins"}});
+    add_flow(doppler, feature_assembly, {{"velocity_bins", "velocity_bins"}});
+    add_flow(feature_assembly, cluster, {{"points", "points"}});
+    add_flow(feature_assembly, cluster_report, {{"points", "points"}});
+    add_flow(cluster, cluster_report, {{"labels", "labels"}});
+    add_flow(cluster, cluster_report, {{"sizes", "sizes"}});
 
     // Optional live RD-map window (cfg.visualize; main() has already
     // downgraded it with a warning on GUI-less hosts). Turbo-mapped |RD|
