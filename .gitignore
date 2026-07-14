@@ -3,6 +3,7 @@
 build/
 build-*/
 data/
+.claude/
 .cursor/
 _CPack_Packages/
 __pycache__/
@@ -11,3 +12,4 @@ __pycache__/
 .local/
 *.deb
 uv.lock
+.venv/
