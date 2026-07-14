@@ -49,6 +49,11 @@ target_link_libraries(perf_fmcw_range_doppler_processor PRIVATE
     radar_perf_utils
     holoscan::fmcw_range_doppler_processor_op)
 
+add_executable(perf_cluster_dbscan perf_cluster_dbscan.cpp)
+target_link_libraries(perf_cluster_dbscan PRIVATE
+    radar_perf_utils
+    holoscan::cluster_dbscan_op)
+
 # Optional smoke: runs a tiny scenario subset and verifies a report file is
 # written. No timing thresholds — CI only checks the tool executes and emits.
 if(HOLOSCAN_RADAR_BUILD_TESTING)
@@ -93,5 +98,11 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
             --quiet
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_range_doppler_processor_smoke.json)
     set_tests_properties(perf_fmcw_range_doppler_processor_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_cluster_dbscan_smoke
+        COMMAND perf_cluster_dbscan --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_cluster_dbscan_smoke.json)
+    set_tests_properties(perf_cluster_dbscan_smoke PROPERTIES
         LABELS "performance")
 endif()
