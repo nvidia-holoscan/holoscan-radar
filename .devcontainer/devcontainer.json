@@ -8,15 +8,12 @@
 //   * the data dir lands at /workspace/holoscan-radar/data.
 {
   "name": "holoscan-radar",
-
   "build": {
     "context": "..",
     "dockerfile": "../Dockerfile"
   },
-
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/holoscan-radar,type=bind,consistency=cached",
   "workspaceFolder": "/workspace/holoscan-radar",
-
   // Work as the non-root `dev` user (team convention). Let the devcontainer
   // runtime update its UID/GID to match the host user for bind-mount writes.
   "remoteUser": "dev",
@@ -36,13 +33,13 @@
 
   // Requires NVIDIA Container Toolkit. Remove on GPU-less hosts.
   "runArgs": [
-    "--gpus=all"
+    "--gpus=all",
+    "--ulimit",
+    "stack=33554432"
   ],
-
   "hostRequirements": {
     "gpu": "optional"
   },
-
   "customizations": {
     "vscode": {
       "extensions": [
