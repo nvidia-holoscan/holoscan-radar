@@ -480,7 +480,10 @@ TEST(FMCWRangeProcessorOpTest, LiveWindowOverrideAppliesPerTick) {
 
 TEST(FMCWRangeProcessorOpTest, FloatAndDoubleInstantiationsAgree) {
   const SimWaveform waveform{};
-  const auto sim = simulate(make_scene(range_at_bin(30.5)));
+  // On-bin target: a half-bin offset (30.5) straddles two equal-magnitude
+  // neighbors, so float vs double rounding can tip argmax either way without
+  // indicating a real disagreement (see HannWindowLowersSidelobesKeepsPeak).
+  const auto sim = simulate(make_scene(range_at_bin(30.0)));
 
   const RunOutputs run_f = run_complex_frame<float>(
       sim, holoscan::Arg("waveform") = to_descriptor(waveform));

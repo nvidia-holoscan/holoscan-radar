@@ -24,11 +24,44 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | Work item | Owner | Branch | State |
 | --- | --- | --- | --- |
 | Fill out `AGENTS.md` + this status file | deustice | `deustice/planning` | in review |
-| Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness; `radar_op` placeholder removed and app/tests/package rewired | deustice | `deustice/sigproc-ops` | in review |
+| Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness | deustice | `deustice/sigproc-ops` | in progress |
+| Detection operator (`operators/detection/` + `CFARDetectorOp`) | dpc | `dpc/detection` | **All four CFAR variants done** (see below) |
+| Detection bridge `DetectionReductionOp` | dpc | `dpc/detection-reduction` | **checklist-complete** — first/peak/medoid + built-in scorers + `ScoreFn`/`custom` + live + tests + perf |
+| Detection bridge `FeatureAssemblyOp` | dpc | `dpc/feature-assembly` | **checklist-complete** (unit + `perf_feature_assembly`; staged follow-ups in OPEN_ITEMS) |
+
+### Landed on `dpc/detection`
+
+- **`CFARDetectorOp` CA slice** — complex/real power paths, border-correct CA
+  stencil, `[live]` overrides with sticky semantics, `nci_axes` non-coherent
+  integration (Gamma(`K`) threshold via host incomplete-beta LUT), batch-widened
+  `detection_idx`, unit + Monte Carlo statistical tests. Team open items in
+  [`CFARDetectorOp open items`](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md).
+- **`CFARDetectorOp` GO slice** — 2-D GOGO greatest-of stencil (range GO ×
+  Doppler GO), host Monte Carlo `alpha` LUT (CA-seeded bracket), full GO
+  contract test matrix + `GoMonteCarloPfaK1` / `GoMonteCarloPfaNciK8`
+  statistical tests.
+- **`CFARDetectorOp` SO slice** — 2-D SOSO smallest-of stencil (shared GOGO
+  partition), host Monte Carlo `alpha` LUT, full SO contract test matrix +
+  `SoMonteCarloPfaK1` / `SoMonteCarloPfaNciK8` statistical tests.
+- **`CFARDetectorOp` OS slice** — per-cell order-statistic stencil with
+  `[live] os_rank` (0-based ascending), host Monte Carlo `alpha` LUT keyed by
+  rank, OS-specific validation/live-override tests, full contract test matrix
+  plus `OsMonteCarloPfaK1` / `OsMonteCarloPfaNciK8` statistical tests.
 
 ## Up next (unclaimed)
 
 Roughly in dependency order — claim by adding a row above:
 
-1. **Operator implementations, remaining groups** — detection & clustering, angle estimation, and MIMO marshaling kernels against the locked contracts (`operators/common/` supporting types `ArrayGeometry`, `AngleConvention`, `DDMCodeDescriptor`, `TXSchedule` land with their first consumer). The signal-processing group, the simulator + test harness, and the MatX/CUDA build wiring landed on `deustice/sigproc-ops`.
-2. **Python bindings** — pybind11 bindings for the implemented operators (restores the Python example app). The YAML converters for the shared descriptor types landed on `deustice/sigproc-ops` (`radar_common/sdk/yaml_converters.hpp`; `from_config()` works for C++ apps).
+1. **C++ API skeletons** — supporting data structures + operator headers with `setup()` port/parameter declarations per `OPERATOR_API.md`, stub `compute()`, compilable; MatX/CUDA wired into CMake.
+2. **Simulator + test harness** — the analytic point-target simulator and test scaffolding per `TESTING.md`.
+3. **Operator implementations** — kernels against the locked contracts, per functional group.
+4. **Operator implementations, remaining groups** — detection & clustering, angle estimation, and MIMO marshaling kernels against the locked contracts (`operators/common/` supporting types `ArrayGeometry`, `AngleConvention`, `DDMCodeDescriptor`, `TXSchedule` land with their first consumer). The signal-processing group, the simulator + test harness, and the MatX/CUDA build wiring landed on `deustice/sigproc-ops`.
+5. **Python bindings** — pybind11 bindings for the implemented operators (restores the Python example app). The YAML converters for the shared descriptor types landed on `deustice/sigproc-ops` (`radar_common/sdk/yaml_converters.hpp`; `from_config()` works for C++ apps).
+
+## Open items for team review
+
+Contract, SDK, and signal-processing questions that need a team decision are
+tracked with the operator that surfaced them (for example,
+[`CFARDetectorOp open items`](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md)).
+New operators should follow [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md)
+and [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md).

@@ -16,9 +16,15 @@ Each folder depends only on the layers above it:
 | `radar_common/sim/` | Analytic point-target FMCW signal simulator (input synthesis for applications; analytic ground truth for tests) | STL only |
 | `radar_common/tensor/` | Rank-agnostic batching, DLPack device buffers, MatX view/upload helpers | holoscan::Tensor, CUDA |
 | `radar_common/sdk/` | Operator-authoring glue: parameter override ports, warn-once config cache, argument-setter registration | holoscan core |
+| `radar_common/reduce/` | Public group-by-label CUDA primitives (headers + `radar_common_reduce` lib) | CUDA, descriptors/enums |
 
 `tensor/matx_utils.hpp` includes `<matx.h>` and must only be included from
 CUDA translation units (`.cu` files and the stage headers they include).
+
+`reduce/group_by_label.hpp` declares host launch wrappers; non-template
+kernels are compiled once into `holoscan::radar_common_reduce`. Link that
+target rather than recompiling `group_by_label.cu` in a second library
+(ODR). Template custom-peak launches live in the header (`__CUDACC__`).
 
 ## Module conventions
 
@@ -44,10 +50,13 @@ by this library:
   changed in-flight via a same-named non-blocking input port
   (`sdk/override_param.hpp`). Overrides are **sticky**: the parameter seeds
   the initial effective value and an arriving override remains effective
-  until the next override. Where an override incurs a genuine cost (FFT
-  plan, window coefficients), the operator warns once per new configuration
-  and caches prior ones (`sdk/config_cache.hpp`) so alternating values do
-  not thrash; the initial parameter-driven build is silent.
+  until the next override. Vector-typed overrides are received via the
+  `std::any` port path because Holoscan's `receive<std::vector<T>>()` treats
+  a same-named `Parameter` as a legacy receivers list. Where an override
+  incurs a genuine cost (FFT plan, window coefficients), the operator warns
+  once per new configuration and caches prior ones (`sdk/config_cache.hpp`)
+  so alternating values do not thrash; the initial parameter-driven build is
+  silent.
 - **Custom parameter types need registered argument setters.** Holoscan's
   `ArgumentSetter` only knows built-in types. Every operator therefore
   calls `holoscan::radar::ensure_radar_arg_setters()`

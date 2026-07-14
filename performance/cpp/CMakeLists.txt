@@ -1,0 +1,97 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Reusable harness headers (utils/) plus thin per-operator consumers. Shared
+# code lives in utils/ as an INTERFACE library; only the scenario matrix is
+# operator-specific.
+add_library(radar_perf_utils INTERFACE)
+target_include_directories(radar_perf_utils INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/operators)
+target_link_libraries(radar_perf_utils INTERFACE
+    holoscan::core
+    holoscan::radar_common
+    CUDA::cudart)
+
+add_executable(perf_cfar_detector perf_cfar_detector.cpp)
+target_link_libraries(perf_cfar_detector PRIVATE
+    radar_perf_utils
+    holoscan::cfar_detector_op)
+
+add_executable(perf_detection_reduction perf_detection_reduction.cpp)
+target_link_libraries(perf_detection_reduction PRIVATE
+    radar_perf_utils
+    holoscan::detection_reduction_op)
+
+add_executable(perf_feature_assembly perf_feature_assembly.cpp)
+target_link_libraries(perf_feature_assembly PRIVATE
+    radar_perf_utils
+    holoscan::feature_assembly_op)
+
+add_executable(perf_fmcw_range_processor perf_fmcw_range_processor.cpp)
+target_link_libraries(perf_fmcw_range_processor PRIVATE
+    radar_perf_utils
+    holoscan::fmcw_range_processor_op)
+
+add_executable(perf_fmcw_doppler_processor perf_fmcw_doppler_processor.cpp)
+target_link_libraries(perf_fmcw_doppler_processor PRIVATE
+    radar_perf_utils
+    holoscan::fmcw_doppler_processor_op)
+
+add_executable(perf_clutter_filter perf_clutter_filter.cpp)
+target_link_libraries(perf_clutter_filter PRIVATE
+    radar_perf_utils
+    holoscan::clutter_filter_op)
+
+add_executable(perf_fmcw_range_doppler_processor
+    perf_fmcw_range_doppler_processor.cpp)
+target_link_libraries(perf_fmcw_range_doppler_processor PRIVATE
+    radar_perf_utils
+    holoscan::fmcw_range_doppler_processor_op)
+
+# Optional smoke: runs a tiny scenario subset and verifies a report file is
+# written. No timing thresholds — CI only checks the tool executes and emits.
+if(HOLOSCAN_RADAR_BUILD_TESTING)
+    add_test(NAME perf_cfar_detector_smoke
+        COMMAND perf_cfar_detector --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_smoke.json)
+    set_tests_properties(perf_cfar_detector_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_detection_reduction_smoke
+        COMMAND perf_detection_reduction --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_detection_reduction_smoke.json)
+    set_tests_properties(perf_detection_reduction_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_feature_assembly_smoke
+        COMMAND perf_feature_assembly --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_feature_assembly_smoke.json)
+    set_tests_properties(perf_feature_assembly_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_fmcw_range_processor_smoke
+        COMMAND perf_fmcw_range_processor --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_range_processor_smoke.json)
+    set_tests_properties(perf_fmcw_range_processor_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_fmcw_doppler_processor_smoke
+        COMMAND perf_fmcw_doppler_processor --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_doppler_processor_smoke.json)
+    set_tests_properties(perf_fmcw_doppler_processor_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_clutter_filter_smoke
+        COMMAND perf_clutter_filter --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_clutter_filter_smoke.json)
+    set_tests_properties(perf_clutter_filter_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_fmcw_range_doppler_processor_smoke
+        COMMAND perf_fmcw_range_doppler_processor --sizes xs --warmup 1 --frames 2
+            --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_range_doppler_processor_smoke.json)
+    set_tests_properties(perf_fmcw_range_doppler_processor_smoke PROPERTIES
+        LABELS "performance")
+endif()

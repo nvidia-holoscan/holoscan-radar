@@ -51,12 +51,17 @@ struct DeviceBufferHolder {
 // leading axes through the operators.
 inline std::shared_ptr<holoscan::Tensor> make_device_tensor(
     const std::vector<int64_t>& shape, DLDataType dtype) {
-  // Reject non-positive dims and int64 overflow before the size_t cast: a
-  // wrapped count would allocate an undersized buffer that downstream
-  // full-extent views write past.
+  // Reject negative dims and int64 overflow before the size_t cast: a wrapped
+  // count would allocate an undersized buffer that downstream full-extent
+  // views write past. Zero-sized dims are allowed — an empty tensor is a valid
+  // pipeline state (e.g. zero detections → empty detection_idx / points) and
+  // the operators allocate-then-check for it. The overflow division is skipped
+  // when dim == 0 (count stays 0, which cannot overflow and would divide by
+  // zero here).
   int64_t count = 1;
   for (const int64_t dim : shape) {
-    if (dim <= 0 || count > std::numeric_limits<int64_t>::max() / dim) {
+    if (dim < 0 ||
+        (dim != 0 && count > std::numeric_limits<int64_t>::max() / dim)) {
       throw std::invalid_argument(
           "make_device_tensor: invalid or overflowing shape");
     }

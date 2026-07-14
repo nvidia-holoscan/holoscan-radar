@@ -94,6 +94,26 @@ void require_cuda_accessible(const holoscan::Tensor& tensor,
   }
 }
 
+void require_contiguous(const holoscan::Tensor& tensor, const char* port_name,
+                        const std::string& who) {
+  if (!tensor.is_contiguous()) {
+    throw std::invalid_argument(
+        who + ": tensor received on input port '" + port_name +
+        "' must be contiguous (compact row-major)");
+  }
+}
+
+void require_dtype(const holoscan::Tensor& tensor, DLDataType expected,
+                   const char* port_name, const std::string& who) {
+  if (!dldatatype_equals(tensor.dtype(), expected)) {
+    std::ostringstream msg;
+    msg << who << ": tensor received on input port '" << port_name
+        << "' has dtype " << dldatatype_name(tensor.dtype()) << ", expected "
+        << dldatatype_name(expected);
+    throw std::invalid_argument(msg.str());
+  }
+}
+
 template <typename T>
 InputPrecision classify_input_dtype(const holoscan::Tensor& tensor,
                                     const char* port_name, bool allow_real) {

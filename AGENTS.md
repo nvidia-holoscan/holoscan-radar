@@ -12,11 +12,14 @@ Read before starting non-trivial work, in this precedence order:
 2. [`docs/planning/WORKFLOWS.md`](docs/planning/WORKFLOWS.md) — scope: the SISO / SIMO / MIMO-TDM / MIMO-DDM operator chains, with port-level wiring diagrams.
 3. [`docs/planning/TESTING.md`](docs/planning/TESTING.md) — what tests must assert; the analytic point-target simulator requirements.
 4. [`docs/planning/CREATE_A_MODULE.md`](docs/planning/CREATE_A_MODULE.md) — how the Holoscan Module scaffolding (build, packaging, bindings) works.
+5. [`docs/planning/NEW_OPERATOR_CHECKLIST.md`](docs/planning/NEW_OPERATOR_CHECKLIST.md) — landing gate; verify before claiming an operator (or variant slice) done.
+6. [`docs/planning/OPERATOR_DEVELOPMENT.md`](docs/planning/OPERATOR_DEVELOPMENT.md) — how to implement well: hot-path discipline, diagnosis, `[live]`/calibration pitfalls, tests, and performance characterization (lessons from landed operators).
 
 Rules that follow from "lockdown":
 
 - **Docs first.** Code must match `OPERATOR_API.md` exactly — port names, shapes, dtype pairs, parameter names/defaults, `[live]` tags. To change an interface, change the doc (in the same PR at minimum), call it out as a contract change in the PR description, and get it reviewed as such. Never deviate silently in code.
 - **Do not silently resolve documented open items.** The known ones: the covariance estimators' multi-snapshot / spatial-smoothing input form; where the source count comes from (fixed vs. MDL/AIC vs. CFAR-cluster); ULA/subarray selection for Root-MUSIC/ESPRIT on non-uniform virtual arrays. Surface these for a team decision instead of picking an answer in code.
+- **Checklist + development guidance.** Follow `NEW_OPERATOR_CHECKLIST.md` as the done gate; use `OPERATOR_DEVELOPMENT.md` when designing `compute()`, live overrides, tests, or chasing performance.
 
 ## Design invariants (do not violate)
 
@@ -36,10 +39,12 @@ Rules that follow from "lockdown":
 | Path | What it is |
 | --- | --- |
 | `docs/planning/` | The specs above — the work queue and contract source of truth |
+| `docs/planning/OPERATOR_DEVELOPMENT.md` | Agent/human guidance for implementing operators (hot path, diagnosis, perf) |
 | `operators/` | Operator libraries, one dir per group, gated by `add_holohub_operator()` / `OP_<name>` CMake options |
 | `operators/common/` | Shared `radar_common` library: descriptors, window generation, point-target simulator, config cache, tensor/MatX utilities |
 | `operators/fmcw/` | FMCW signal-processing operators (+ future MIMO marshaling) |
 | `applications/fmcw_siso/` | Example SISO FMCW pipeline app (C++; Python variant returns with the bindings) |
+| `performance/` | Measurement harness (cold vs steady, regression pairs) — not pass/fail tests |
 | `python/holoscan/radar/` | Python package root; re-exports operators from per-operator pybind11 submodules |
 | `tests/cpp/`, `tests/python/` | GTest and pytest suites |
 | `pkg/` | Debian/wheel packaging (`add_holohub_package`) |

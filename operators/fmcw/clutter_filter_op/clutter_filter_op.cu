@@ -10,6 +10,7 @@
 
 #include "fmcw/clutter_filter_op/clutter_stage.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -44,25 +45,8 @@ void ClutterFilterOp<T>::compute(InputContext& op_input,
                                  [[maybe_unused]] ExecutionContext& context) {
   // Single-entry TensorMap, accepted regardless of its key (module
   // convention: the port name is the contract, not the map key).
-  auto maybe_map = op_input.receive<holoscan::TensorMap>("range_profiles");
-  if (!maybe_map) {
-    throw std::runtime_error(
-        "ClutterFilterOp: no message received on input port "
-        "'range_profiles'");
-  }
-  holoscan::TensorMap& in_map = maybe_map.value();
-  if (in_map.size() != 1) {
-    throw std::invalid_argument(
-        "ClutterFilterOp: input port 'range_profiles' expects a "
-        "single-entry TensorMap, got " +
-        std::to_string(in_map.size()) + " entries");
-  }
-  std::shared_ptr<holoscan::Tensor> input = in_map.begin()->second;
-  if (!input) {
-    throw std::runtime_error(
-        "ClutterFilterOp: received a null tensor on input port "
-        "'range_profiles'");
-  }
+  std::shared_ptr<holoscan::Tensor> input =
+      receive_single(op_input, "range_profiles", "ClutterFilterOp");
 
   // method for this tick; no setup cost, so no warn-once machinery.
   const ClutterFilterMethod method =

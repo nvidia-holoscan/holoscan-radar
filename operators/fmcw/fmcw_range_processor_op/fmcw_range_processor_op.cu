@@ -12,6 +12,7 @@
 
 #include "fmcw/fmcw_range_processor_op/range_stage.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -108,22 +109,8 @@ void FMCWRangeProcessorOp<T>::compute(InputContext& op_input,
 
   // 1. Receive the data input: a single-entry TensorMap, lenient on the
   // key (module convention).
-  auto maybe_map = op_input.receive<holoscan::TensorMap>("adc_cube");
-  if (!maybe_map) {
-    throw std::runtime_error(who +
-                             ": no message received on port adc_cube");
-  }
-  holoscan::TensorMap in_map = std::move(maybe_map.value());
-  if (in_map.size() != 1) {
-    throw std::invalid_argument(
-        who + ": expected a single-entry TensorMap on port adc_cube, "
-              "received " +
-        std::to_string(in_map.size()) + " entries");
-  }
-  std::shared_ptr<holoscan::Tensor> input = in_map.begin()->second;
-  if (!input) {
-    throw std::runtime_error(who + ": null tensor received on adc_cube");
-  }
+  std::shared_ptr<holoscan::Tensor> input =
+      receive_single(op_input, "adc_cube", who);
 
   // 2. Resolve the overridable parameters against the previous effective
   // values: an arriving override remains effective on later ticks until

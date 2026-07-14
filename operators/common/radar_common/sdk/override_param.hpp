@@ -3,10 +3,12 @@
 
 #pragma once
 
+#include <any>
 #include <optional>
 #include <utility>
 
 #include <holoscan/holoscan.hpp>
+#include <holoscan/core/type_traits.hpp>
 
 namespace holoscan::radar {
 
@@ -28,14 +30,30 @@ void add_override_port(holoscan::OperatorSpec& spec, const char* name) {
 // Receive an override if one arrived this tick. Returns std::nullopt when
 // the port is unconnected or carried no message, in which case the current
 // effective value stands.
+//
+// Vector overrides use the std::any receive path: Holoscan's
+// receive<std::vector<T>>() treats a same-named Parameter as a legacy
+// receivers list (vector<IOSpec*>) and rejects ordinary vector parameters.
 template <typename T>
 std::optional<T> receive_override(holoscan::InputContext& op_input,
                                   const char* name) {
-  auto maybe = op_input.receive<T>(name);
-  if (maybe) {
-    return std::optional<T>(std::move(maybe.value()));
+  if constexpr (holoscan::is_vector_v<T>) {
+    auto maybe = op_input.receive<std::any>(name);
+    if (!maybe) {
+      return std::nullopt;
+    }
+    try {
+      return std::optional<T>(std::any_cast<T>(maybe.value()));
+    } catch (const std::bad_any_cast&) {
+      return std::nullopt;
+    }
+  } else {
+    auto maybe = op_input.receive<T>(name);
+    if (maybe) {
+      return std::optional<T>(std::move(maybe.value()));
+    }
+    return std::nullopt;
   }
-  return std::nullopt;
 }
 
 // Resolve the effective value of an overridable parameter for this tick:

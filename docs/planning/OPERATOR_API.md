@@ -8,6 +8,8 @@ Design conventions (from the workflows doc): plain-tensor ports (bridge with sma
 
 **Precision (all operators).** Every operator supports both **single** (`complex64` / `float32`) and **double** (`complex128` / `float64`) precision floating-point I/O. Precision is fixed at compile time by the operator's template instantiation — it is neither a runtime parameter nor inferred from the data — and an operator's input and output tensors must match that templated precision. The per-operator dtype labels below list both forms (e.g. `complex64 / complex128`, `float32 / float64`); a given operator instance uses one, fixed by its instantiation, and its inputs and outputs share it. Any operator that must fix precision for a qualitative reason is called out in its own Notes.
 
+**Proposed amendments.** Text marked **PROPOSED — needs team review (not locked)** (or tagged **[PROPOSED]**) is a working proposal only. It is not accepted lockdown until the team explicitly adopts it. Today that applies to the `CFARDetectorOp` calibration / `alpha_lut` block under Detection & Clustering.
+
 ---
 
 ## Coordinate conventions
@@ -337,6 +339,99 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 - `max_detections` (optional) **[live]** — int. Upper cap on the number of detections emitted in `detection_idx`; if the scene produces more, the surplus is dropped and a warning raised. `detection_idx` is always sized to the actual count (≤ this cap, reallocated per tick). Unset → no cap (emit all detections). Default: none (uncapped).
 - `max_cached_kernels` — int. How many distinct guard/training window-footprint kernels to retain before evicting (and rebuilding on reuse). Static. Default: 4.
 
+> ### PROPOSED — needs team review (not locked)
+>
+> The block below is a **proposed contract modification** for `CFARDetectorOp`
+> calibration. It is **not** accepted lockdown text until the team reviews and
+> explicitly adopts it. Implementation on `dpc/detection` already follows this
+> proposal so correctness/perf work can proceed; do not treat presence in this
+> file as approval. Tracking:
+> [`operators/detection/cfar_detector_op/OPEN_ITEMS.md`](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md)
+> §7.
+>
+> **What changes if adopted** (replaces / narrows the locked bullets above for
+> the named parameters; adds `alpha_lut`):
+>
+> - `pfa` **[live]** **[PROPOSED]** — float. Probability of false alarm; sets
+>   the per-variant threshold multiplier α when `alpha_lut` is unset. CA and
+>   OS with `K = 1` calibrate α by closed-form inversion (cheap). GO, SO, and
+>   OS with `K > 1` may trigger Monte Carlo LUT calibration on cache miss
+>   (seconds on large footprints unless a precomputed `alpha_lut` is supplied
+>   or `blocking_alpha_lut_rebuild = false` serves a stale LUT while the new
+>   table builds). Default: 1e-6.
+> - `alpha_lut` **[live]** **[PROPOSED — new parameter]** — optional float
+>   vector. Precomputed threshold multiplier LUT. When non-empty, used
+>   directly and `pfa` is ignored for α calibration. Indexing matches the
+>   runtime stencil:
+>   - **CA / OS:** `alpha_lut[n]` where `n` is the in-bounds training-cell
+>     count at the cell under test.
+>   - **GO / SO:** `alpha_lut[i]` where `i = go_lut_index(range_neg,
+>     range_pos, doppler_neg, doppler_pos)` — the compact side-count key used
+>     by the GOGO/SOSO stencil (`cfar_alpha.hpp`). Per axis: if both half-sides
+>     are alive use `min(neg, pos)`, else the alive side’s count; then if both
+>     axes are alive use `min(range_side, doppler_side)`, else the alive axis.
+>     Distinct border geometries can share one `i`; a single α serves all of
+>     them (`pfa`-derived builds take the max α across aliased geometries so
+>     every cell at that index meets the target Pfa). Offline tables must use
+>     this same `go_lut_index` — not raw per-side length and not CA-style `N`.
+>   Slot 0 is unused. Length must exceed the maximum LUT index for the
+>   configured variant, footprint, and map size (`len > max_n`). CA/OS require
+>   every index in `1..max_n` to be finite and strictly positive (slot 0 and
+>   any past `max_n` may be zero). GO/SO allow zeros at unreachable indices
+>   but require every reachable `go_lut_index` to be finite and strictly
+>   positive; negative or non-finite entries are always rejected. Cheap:
+>   validation and host→device upload only. Default: `[]` (unset →
+>   `pfa`-derived calibration). Precedence: `alpha_lut` if provided, else
+>   `pfa`-derived calibration.
+> - `blocking_alpha_lut_rebuild` **[PROPOSED — new parameter]** — bool. When
+>   `true`, a `pfa`-derived LUT cache miss blocks the tick until calibration
+>   finishes. When `false` (default), an unseen key starts a background build
+>   and the previous LUT is served for the tick (warn once); if no previous
+>   LUT exists yet, the tick still blocks on the first build. Has no effect
+>   while an external `alpha_lut` is supplied. Static. Default: `false`.
+> - `threshold_scale` **[live]** **[PROPOSED wording]** — float. Empirical
+>   multiplier on top of the active α source
+>   (`threshold = threshold_scale · α · noise_estimate`); `1.0` = pure CFAR.
+>   Cheap; hand-tuning without changing the CFAR model. Default: 1.0.
+> - `nci_axes` **[live]** **[PROPOSED wording]** — set/vector of leading-axis
+>   indices to non-coherently integrate before thresholding; other leading
+>   axes stay batched. Changes the output shape (integrated axes reduced —
+>   downstream infers) and the integration fold count
+>   `K = ∏ sizes of nci_axes`, which sets the cell statistic to Gamma(K); α
+>   takes `K` and is recomputed from `pfa` (closed form for CA; Monte Carlo
+>   for GO/SO/OS when `K > 1` and `alpha_lut` is unset). Default: `[]` (no
+>   integration; `K = 1`, exponential cell statistic).
+> - `training_cells` **[live]** **[PROPOSED wording note]** — the locked
+>   “cheap scalar recompute” claim for α is false for GO/SO and OS with
+>   `K > 1` under `pfa`-derived calibration; adopt the narrowed `pfa` /
+>   `alpha_lut` wording above instead.
+>
+> **[PROPOSED] Future calibration fast paths.** If `alpha_lut` is adopted as
+> the v1 explicit fast path (same per-index threshold semantics as
+> `pfa`-derived calibration), other user-facing fast paths remain deferred and
+> are **not** part of this proposal:
+>
+> - an interior-cell scalar `alpha` for homogeneous maps where border exactness
+>   is not required;
+> - scalar `alpha` plus simplified edge-handling modes, such as cropping the
+>   CFAR-valid region, treating border cells as non-detections, or accepting
+>   approximate border thresholds;
+> - hybrid scalar/table modes, such as using scalar `alpha` for fully
+>   in-bounds interior cells and a small border LUT for reduced-`N` edge
+>   cells;
+> - hybrid scalar/policy modes, such as scalar `alpha` for the interior plus
+>   an explicit edge policy that crops, suppresses, approximates, or
+>   delegates border handling to a downstream stage;
+> - helper utilities that generate `alpha_lut` tables offline from
+>   `(variant, pfa, K, os_rank, guard_cells, training_cells)`;
+> - domain-specific table packaging or deployment conventions outside the
+>   operator API.
+>
+> **End proposed block.** Until team review lands, treat the locked parameter
+> bullets above this banner as the contract source of truth for review of
+> non-calibration topics; treat the proposed block as the working text the
+> implementation is targeting.
+
 #### ClusterDBSCANOp
 
 - **In:** `points` — float32 / float64, `(num_points, num_features)`. Caller-assembled feature matrix (e.g. `[range, velocity, az, el]`); radar-agnostic.
@@ -368,7 +463,9 @@ Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`
 
 1. For each `detection_idx` row, read `(doppler_bin, range_bin)`.
 2. Build each configured feature: `range = range_bins[range_bin]` (or the raw bin), `velocity = velocity_bins[doppler_bin]` (or raw), `score =` gather `detection_score` at the cell, `az` / `el` `= aoa_estimates[row]`.
-3. Stack the columns in `features` order → `points`. Pure gather / 1-D lookup (MatX); no scaling.
+3. Stack the columns in `features` order → `points`. Pure gather / 1-D
+   lookup (custom CUDA; MatX is a poor fit for sparse irregular gathers);
+   no scaling.
 
 **Notes:**
 
@@ -377,7 +474,8 @@ Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`
 - *Placement:* pre-angle (cluster-then-angle) uses `features = [range, velocity, score]` (no `aoa_estimates`); post-angle (angle-then-cluster) adds `[az, el]`. The `features` list + optional `aoa_estimates` cover both without a variant.
 - *Shared gather primitive:* the same per-detection gather as `SnapshotGatherOp` (which pulls channel vectors); here it pulls scalars and does the 1-D bin-axis lookups. One primitive, two bridges.
 - *Row alignment:* `points` rows are 1:1 with `detection_idx` rows, so `labels` positionally join back and `DetectionReductionOp.rep_idx` resolves to real cells.
-- *Carried over:* plain-tensor ports; precision by template instantiation; MatX + MatX memory spaces.
+- *Carried over:* plain-tensor ports; precision by template instantiation;
+  device tensors on the Holoscan CUDA stream (custom CUDA gather kernel).
 
 #### DetectionReductionOp
 
@@ -399,7 +497,7 @@ Reduces each cluster to one **representative detection** so the cluster-then-ang
 
 1. Group the detection rows by `labels`, excluding noise (`-1`).
 2. Per cluster, select the representative row by `representative`, via the shared group-by-label reduction primitive: `peak` = argmax of the per-row score (`score_method` applied to `feature_weights ⊙ points`, or the `score_fn` functor); `first` = lowest index; `medoid` = form the centroid as the (segmented) mean of the `feature_weights`-scaled `points`, then take the argmin scaled-distance member (two segmented passes — a mean, then an argmin).
-3. Emit `rep_idx` = the selected rows of `detection_idx`, one per cluster, sized to the cluster count. Pure gather + segmented reduction (MatX).
+3. Emit `rep_idx` = the selected rows of `detection_idx`, one per cluster, sized to the cluster count. Pure gather + segmented reduction (custom CUDA atomics / compact in the current implementation; CUB/MatX segmented reduce is a staged replacement).
 
 **Notes:**
 
