@@ -28,6 +28,27 @@ target_link_libraries(perf_feature_assembly PRIVATE
     radar_perf_utils
     holoscan::feature_assembly_op)
 
+add_executable(perf_fmcw_range_processor perf_fmcw_range_processor.cpp)
+target_link_libraries(perf_fmcw_range_processor PRIVATE
+    radar_perf_utils
+    holoscan::fmcw_range_processor_op)
+
+add_executable(perf_fmcw_doppler_processor perf_fmcw_doppler_processor.cpp)
+target_link_libraries(perf_fmcw_doppler_processor PRIVATE
+    radar_perf_utils
+    holoscan::fmcw_doppler_processor_op)
+
+add_executable(perf_clutter_filter perf_clutter_filter.cpp)
+target_link_libraries(perf_clutter_filter PRIVATE
+    radar_perf_utils
+    holoscan::clutter_filter_op)
+
+add_executable(perf_fmcw_range_doppler_processor
+    perf_fmcw_range_doppler_processor.cpp)
+target_link_libraries(perf_fmcw_range_doppler_processor PRIVATE
+    radar_perf_utils
+    holoscan::fmcw_range_doppler_processor_op)
+
 # Optional smoke: runs a tiny scenario subset and verifies a report file is
 # written. No timing thresholds — CI only checks the tool executes and emits.
 if(HOLOSCAN_RADAR_BUILD_TESTING)
@@ -47,5 +68,30 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
         COMMAND perf_feature_assembly --sizes xs --warmup 1 --frames 2 --quiet
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_feature_assembly_smoke.json)
     set_tests_properties(perf_feature_assembly_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_fmcw_range_processor_smoke
+        COMMAND perf_fmcw_range_processor --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_range_processor_smoke.json)
+    set_tests_properties(perf_fmcw_range_processor_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_fmcw_doppler_processor_smoke
+        COMMAND perf_fmcw_doppler_processor --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_doppler_processor_smoke.json)
+    set_tests_properties(perf_fmcw_doppler_processor_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_clutter_filter_smoke
+        COMMAND perf_clutter_filter --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_clutter_filter_smoke.json)
+    set_tests_properties(perf_clutter_filter_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_fmcw_range_doppler_processor_smoke
+        COMMAND perf_fmcw_range_doppler_processor --sizes xs --warmup 1 --frames 2
+            --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_range_doppler_processor_smoke.json)
+    set_tests_properties(perf_fmcw_range_doppler_processor_smoke PROPERTIES
         LABELS "performance")
 endif()
