@@ -8,10 +8,8 @@ _No open items._
 
 <!--
 Recently landed:
-- Mirror the operator tree under `tests/cpp/` (common/, fmcw/, detection/;
-  integration label for cross-family tests).
+- Mirror the operator tree under `tests/cpp/` (common/, fmcw/, detection/,
+  clustering/; integration label for cross-family tests).
 - Split `test_common.cpp` along `radar_common` layers into common/test_window,
   test_descriptors, test_sdk, test_sim, test_tensor.
 -->
-
-
