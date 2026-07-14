@@ -10,12 +10,9 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <fstream>
 #include <iostream>
-#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -27,9 +24,11 @@
 #include "detection/detection_reduction_op/detection_reduction_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/perf_app.hpp"
+#include "utils/perf_driver.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_runner.hpp"
 #include "utils/perf_sink.hpp"
 #include "utils/perf_source.hpp"
 #include "utils/perf_stats.hpp"
@@ -329,102 +328,6 @@ perf::ResultRow base_row(const RedScenario& scen) {
   return row;
 }
 
-// Run one scenario (all repeats). Each run measures setup, pre-override
-// steady-state compute, and an inline [live] override spike in one session.
-void run_scenario(const RedScenario& scen, const perf::RunSettings& rs,
-                  perf::PerfReport* report) {
-  constexpr int kOverrideSpikeFrames = 3;
-  const int64_t override_at =
-      rs.warmup_frames + std::max(2, rs.measured_frames / 2);
-  const int total =
-      std::max(rs.warmup_frames + rs.measured_frames,
-               static_cast<int>(override_at) + kOverrideSpikeFrames);
-
-  std::vector<double> setup_samples;
-  std::vector<double> cold_samples;
-  std::vector<double> steady_samples;
-  double override_ms_best = std::numeric_limits<double>::quiet_NaN();
-
-  for (int rep = 0; rep < rs.repeats; ++rep) {
-    RedScenario run_scen = scen;
-    run_scen.override_at = override_at;
-    if (run_scen.override_kind == OverrideKind::kRepresentative) {
-      run_scen.override_policy = flip_policy(run_scen.policy);
-    } else if (run_scen.override_kind == OverrideKind::kFeatureWeights) {
-      run_scen.override_weights.assign(
-          static_cast<size_t>(run_scen.num_features), 0.0);
-      if (!run_scen.override_weights.empty()) {
-        run_scen.override_weights[0] = 1.0;
-      }
-    } else if (run_scen.override_kind == OverrideKind::kScoreMethod) {
-      run_scen.override_score_method = hr::ScoreMethod::kWeightedL2;
-    }
-
-    perf::TimingCollector collector;
-    auto labels_t = make_labels(scen.num_points, scen.num_clusters);
-    auto idx_t = make_detection_idx(scen.num_points);
-    auto points_t =
-        make_points<PerfPrecision>(scen.num_points, scen.num_features);
-
-    auto labels = perf::single_map(std::move(labels_t), "labels");
-    auto idx = perf::single_map(std::move(idx_t), "detection_idx");
-    auto points = perf::single_map(std::move(points_t), "points");
-
-    collector.t_construct = perf::Clock::now();
-    auto app = holoscan::make_application<ReductionPerfApp<PerfPrecision>>();
-    app->scen = &run_scen;
-    app->collector = &collector;
-    app->labels = std::move(labels);
-    app->idx = std::move(idx);
-    app->points = std::move(points);
-    app->total_frames = total;
-    app->run();
-
-    setup_samples.push_back(collector.setup_ms());
-    const auto lat = collector.frame_latencies_ms();
-    if (!lat.empty()) {
-      cold_samples.push_back(lat.front());
-    }
-    for (size_t i = static_cast<size_t>(rs.warmup_frames); i < lat.size();
-         ++i) {
-      const int64_t frame = static_cast<int64_t>(i);
-      if (frame < override_at) {
-        steady_samples.push_back(lat[i]);
-      } else if (frame < override_at + kOverrideSpikeFrames) {
-        const double v = lat[i];
-        if (std::isnan(override_ms_best) || v > override_ms_best) {
-          override_ms_best = v;
-        }
-      }
-    }
-  }
-
-  {
-    perf::ResultRow row = base_row(scen);
-    row.bucket = "setup";
-    row.setup_ms = perf::summarize(setup_samples).median_ms;
-    report->results.push_back(row);
-  }
-  {
-    perf::ResultRow row = base_row(scen);
-    row.bucket = "compute";
-    row.cold_ms = perf::summarize(cold_samples).median_ms;
-    row.latency = perf::summarize(steady_samples);
-    row.override_ms = override_ms_best;
-    if (!std::isnan(override_ms_best) && !std::isnan(row.latency.median_ms)) {
-      row.override_delta_ms = override_ms_best - row.latency.median_ms;
-    }
-    fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes =
-        "cold_ms is first-frame latency; median/p90 are pre-override "
-        "steady state; override_ms is peak latency over the 3-frame "
-        "live-" +
-        override_param_name(scen.override_kind) +
-        " window; cells/s is points/s";
-    report->results.push_back(row);
-  }
-}
-
 RedScenario make_scenario(hr::RepresentativePolicy policy, const SizeSpec& s,
                           OverrideKind ovr = OverrideKind::kRepresentative) {
   RedScenario sc;
@@ -447,260 +350,173 @@ RedScenario make_scenario(hr::RepresentativePolicy policy, const SizeSpec& s,
   return sc;
 }
 
-std::vector<RedScenario> build_default_matrix() {
-  std::vector<RedScenario> out;
-  const SizeSpec& md = must_find_size("md");
-  for (auto p : {hr::RepresentativePolicy::kFirst,
-                 hr::RepresentativePolicy::kPeak,
-                 hr::RepresentativePolicy::kMedoid}) {
-    out.push_back(make_scenario(p, md));
-  }
-  for (const char* sid : {"xs", "sm", "md", "lg"}) {
-    out.push_back(make_scenario(hr::RepresentativePolicy::kPeak,
-                                must_find_size(sid)));
-  }
-  // Distinct live params beyond the default representative flip.
-  out.push_back(make_scenario(hr::RepresentativePolicy::kPeak, md,
-                              OverrideKind::kFeatureWeights));
-  out.push_back(make_scenario(hr::RepresentativePolicy::kPeak, md,
-                              OverrideKind::kScoreMethod));
-  return out;
-}
+// ---------------------------------------------------------------------------
+// Traits: the operator-specific surface the shared driver (perf_driver.hpp)
+// plugs into. DetectionReductionOp has [live] override ports (exercised inline
+// in run_scenario) and benefits from a per-policy process warmup, so it
+// overrides process_warmup; it takes the default no-op post_run and the
+// default (no) failure isolation.
+// ---------------------------------------------------------------------------
+struct RedTraits : perf::PerfDriverDefaults {
+  using Scenario = RedScenario;
 
-std::vector<RedScenario> build_size_sweep(
-    const std::vector<std::string>& sizes) {
-  std::vector<RedScenario> out;
-  for (const auto& sid : sizes) {
-    const SizeSpec* s = find_size(sid);
-    if (s == nullptr) {
-      std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
-      continue;
+  static const char* tool_name() { return "perf_detection_reduction"; }
+  static const char* tool_description() {
+    return "DetectionReductionOp performance characterization";
+  }
+  static const char* sizes_all_help() {
+    return "Peak-policy size sweep (inline representative override)";
+  }
+  static const char* sizes_subset_help() {
+    return "Peak-policy size sweep across an explicit subset";
+  }
+  static const char* full_help() {
+    return "Full matrix (policies x sizes + feature_weights/score_method "
+           "overrides)";
+  }
+
+  static std::vector<perf::SizeDef> size_ladder_defs() {
+    std::vector<perf::SizeDef> out;
+    for (const auto& s : size_ladder()) {
+      perf::SizeDef def;
+      def.id = s.id;
+      def.shape = {s.num_points, s.num_features};
+      def.cells = s.num_points;
+      def.role = s.role;
+      out.push_back(def);
     }
-    out.push_back(make_scenario(hr::RepresentativePolicy::kPeak, *s));
+    return out;
   }
-  return out;
-}
 
-std::vector<RedScenario> build_full_matrix() {
-  std::vector<RedScenario> out;
-  for (const auto& s : size_ladder()) {
+  static std::vector<RedScenario> build_default_matrix() {
+    std::vector<RedScenario> out;
+    const SizeSpec& md = must_find_size("md");
     for (auto p : {hr::RepresentativePolicy::kFirst,
                    hr::RepresentativePolicy::kPeak,
                    hr::RepresentativePolicy::kMedoid}) {
-      out.push_back(make_scenario(p, s));
+      out.push_back(make_scenario(p, md));
     }
-    out.push_back(make_scenario(hr::RepresentativePolicy::kPeak, s,
+    for (const char* sid : {"xs", "sm", "md", "lg"}) {
+      out.push_back(make_scenario(hr::RepresentativePolicy::kPeak,
+                                  must_find_size(sid)));
+    }
+    // Distinct live params beyond the default representative flip.
+    out.push_back(make_scenario(hr::RepresentativePolicy::kPeak, md,
                                 OverrideKind::kFeatureWeights));
-    out.push_back(make_scenario(hr::RepresentativePolicy::kPeak, s,
+    out.push_back(make_scenario(hr::RepresentativePolicy::kPeak, md,
                                 OverrideKind::kScoreMethod));
+    return out;
   }
-  return out;
-}
 
-struct Options {
-  std::string output;
-  std::string text;
-  bool quiet{false};
-  bool full{false};
-  std::vector<std::string> sizes;
-  bool sizes_all{false};
-  double stop_after_s{0.0};
-  perf::RunSettings rs;
-};
-
-std::vector<std::string> split_csv(const std::string& s) {
-  std::vector<std::string> out;
-  std::stringstream ss(s);
-  std::string item;
-  while (std::getline(ss, item, ',')) {
-    if (!item.empty()) {
-      out.push_back(item);
+  static std::vector<RedScenario> build_size_sweep(
+      const std::vector<std::string>& sizes) {
+    std::vector<RedScenario> out;
+    for (const auto& sid : sizes) {
+      const SizeSpec* s = find_size(sid);
+      if (s == nullptr) {
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        continue;
+      }
+      out.push_back(make_scenario(hr::RepresentativePolicy::kPeak, *s));
     }
-  }
-  return out;
-}
-
-void print_help() {
-  std::cerr
-      << "Usage: perf_detection_reduction [options]\n"
-      << "  --output PATH    Write JSON report\n"
-      << "  --text PATH      Write text report\n"
-      << "  --quiet          Suppress stdout text report\n"
-      << "  --warmup N       Warmup frames (default from RunSettings)\n"
-      << "  --frames N       Measured frames\n"
-      << "  --repeats N      Scenario repeats\n"
-      << "  --sizes all      Peak-policy size sweep (inline representative "
-         "override)\n"
-      << "  --sizes a,b,c    Peak-policy size sweep across a subset\n"
-      << "  --full           Full matrix (policies × sizes + "
-         "feature_weights/score_method overrides)\n"
-      << "  --stop-after-s S Stop after a scenario exceeds S seconds\n"
-      << "  --help           Show this help\n";
-}
-
-bool parse_args(int argc, char** argv, Options* opt) {
-  for (int i = 1; i < argc; ++i) {
-    const std::string a = argv[i];
-    auto next = [&](const char* flag) -> std::string {
-      if (i + 1 >= argc) {
-        std::cerr << "error: " << flag << " requires an argument\n";
-        std::exit(2);
-      }
-      return argv[++i];
-    };
-    if (a == "--help" || a == "-h") {
-      print_help();
-      std::exit(0);
-    } else if (a == "--output") {
-      opt->output = next("--output");
-    } else if (a == "--text") {
-      opt->text = next("--text");
-    } else if (a == "--quiet") {
-      opt->quiet = true;
-    } else if (a == "--full") {
-      opt->full = true;
-    } else if (a == "--warmup") {
-      opt->rs.warmup_frames = std::stoi(next("--warmup"));
-    } else if (a == "--frames") {
-      opt->rs.measured_frames = std::stoi(next("--frames"));
-    } else if (a == "--repeats") {
-      opt->rs.repeats = std::stoi(next("--repeats"));
-    } else if (a == "--stop-after-s") {
-      opt->stop_after_s = std::stod(next("--stop-after-s"));
-      if (opt->stop_after_s <= 0.0) {
-        std::cerr << "error: --stop-after-s must be positive\n";
-        return false;
-      }
-    } else if (a == "--sizes") {
-      const std::string v = next("--sizes");
-      if (v == "all") {
-        opt->sizes_all = true;
-      } else {
-        opt->sizes = split_csv(v);
-      }
-    } else {
-      std::cerr << "error: unknown argument '" << a << "'\n";
-      return false;
-    }
-  }
-  return true;
-}
-
-}  // namespace
-
-int main(int argc, char** argv) {
-  Options opt;
-  if (!parse_args(argc, argv, &opt)) {
-    return 2;
+    return out;
   }
 
-  int device_count = 0;
-  if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-    std::cerr << "error: no CUDA device available; DetectionReductionOp "
-                 "requires a GPU\n";
-    return 1;
-  }
-
-  if (std::getenv("HOLOSCAN_LOG_LEVEL") == nullptr) {
-    setenv("HOLOSCAN_LOG_LEVEL", "ERROR", 0);
-  }
-
-  std::vector<RedScenario> scenarios;
-  if (opt.full) {
-    scenarios = build_full_matrix();
-  } else if (opt.sizes_all) {
-    std::vector<std::string> all;
+  static std::vector<RedScenario> build_full_matrix() {
+    std::vector<RedScenario> out;
     for (const auto& s : size_ladder()) {
-      all.push_back(s.id);
+      for (auto p : {hr::RepresentativePolicy::kFirst,
+                     hr::RepresentativePolicy::kPeak,
+                     hr::RepresentativePolicy::kMedoid}) {
+        out.push_back(make_scenario(p, s));
+      }
+      out.push_back(make_scenario(hr::RepresentativePolicy::kPeak, s,
+                                  OverrideKind::kFeatureWeights));
+      out.push_back(make_scenario(hr::RepresentativePolicy::kPeak, s,
+                                  OverrideKind::kScoreMethod));
     }
-    scenarios = build_size_sweep(all);
-  } else if (!opt.sizes.empty()) {
-    scenarios = build_size_sweep(opt.sizes);
-  } else {
-    scenarios = build_default_matrix();
+    return out;
   }
 
-  perf::PerfReport report;
-  report.provenance = perf::capture_provenance();
-  report.platform = perf::capture_platform();
-  report.run_settings = opt.rs;
-  report.run_settings.stop_after_s = opt.stop_after_s;
-  report.run_settings.scenarios_planned = static_cast<int>(scenarios.size());
+  // Run one scenario (all repeats). Each run measures setup, pre-override
+  // steady-state compute, and an inline [live] override spike in one session.
+  static void run_scenario(const RedScenario& scen, const perf::RunSettings& rs,
+                           perf::PerfReport* report) {
+    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    const auto samples = perf::collect_scenario_samples(
+        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+          RedScenario run_scen = scen;
+          run_scen.override_at = p.override_at;
+          if (run_scen.override_kind == OverrideKind::kRepresentative) {
+            run_scen.override_policy = flip_policy(run_scen.policy);
+          } else if (run_scen.override_kind == OverrideKind::kFeatureWeights) {
+            run_scen.override_weights.assign(
+                static_cast<size_t>(run_scen.num_features), 0.0);
+            if (!run_scen.override_weights.empty()) {
+              run_scen.override_weights[0] = 1.0;
+            }
+          } else if (run_scen.override_kind == OverrideKind::kScoreMethod) {
+            run_scen.override_score_method = hr::ScoreMethod::kWeightedL2;
+          }
 
-  {
-    std::vector<std::string> used;
-    for (const auto& sc : scenarios) {
-      if (std::find(used.begin(), used.end(), sc.size_id) == used.end()) {
-        used.push_back(sc.size_id);
-      }
-    }
-    for (const auto& s : size_ladder()) {
-      if (std::find(used.begin(), used.end(), s.id) != used.end()) {
-        perf::SizeDef def;
-        def.id = s.id;
-        def.shape = {s.num_points, s.num_features};
-        def.cells = s.num_points;
-        def.role = s.role;
-        report.sizes.push_back(def);
-      }
-    }
+          perf::TimingCollector collector;
+          auto labels_t = make_labels(scen.num_points, scen.num_clusters);
+          auto idx_t = make_detection_idx(scen.num_points);
+          auto points_t =
+              make_points<PerfPrecision>(scen.num_points, scen.num_features);
+
+          auto labels = perf::single_map(std::move(labels_t), "labels");
+          auto idx = perf::single_map(std::move(idx_t), "detection_idx");
+          auto points = perf::single_map(std::move(points_t), "points");
+
+          collector.t_construct = perf::Clock::now();
+          auto app =
+              holoscan::make_application<ReductionPerfApp<PerfPrecision>>();
+          app->scen = &run_scen;
+          app->collector = &collector;
+          app->labels = std::move(labels);
+          app->idx = std::move(idx);
+          app->points = std::move(points);
+          app->total_frames = p.total_frames;
+          app->run();
+          return collector;
+        });
+
+    perf::append_setup_row(base_row(scen), samples, report);
+
+    perf::ResultRow row = base_row(scen);
+    perf::fill_compute_row(&row, samples);
+    fill_throughput(&row, scen, row.latency.median_ms);
+    row.notes =
+        "cold_ms is first-frame latency; median/p90 are pre-override "
+        "steady state; override_ms is peak latency over the 3-frame "
+        "live-" +
+        override_param_name(scen.override_kind) +
+        " window; cells/s is points/s";
+    report->results.push_back(row);
   }
 
   // Pay CUDA + Holoscan first-Application costs (and first-touch each policy
   // kernel) so scenario #1 cold_ms is comparable to later rows.
-  perf::run_process_warmup([&] {
-    perf::PerfReport discarded;
-    perf::RunSettings warm_rs;
-    warm_rs.warmup_frames = 0;
-    warm_rs.measured_frames = 2;
-    warm_rs.repeats = 1;
-    const SizeSpec& xs = must_find_size("xs");
-    for (auto p : {hr::RepresentativePolicy::kFirst,
-                   hr::RepresentativePolicy::kPeak,
-                   hr::RepresentativePolicy::kMedoid}) {
-      run_scenario(make_scenario(p, xs), warm_rs, &discarded);
-    }
-  });
+  static void process_warmup(const perf::RunSettings&) {
+    perf::run_process_warmup([&] {
+      perf::PerfReport discarded;
+      perf::RunSettings warm_rs;
+      warm_rs.warmup_frames = 0;
+      warm_rs.measured_frames = 2;
+      warm_rs.repeats = 1;
+      const SizeSpec& xs = must_find_size("xs");
+      for (auto p : {hr::RepresentativePolicy::kFirst,
+                     hr::RepresentativePolicy::kPeak,
+                     hr::RepresentativePolicy::kMedoid}) {
+        run_scenario(make_scenario(p, xs), warm_rs, &discarded);
+      }
+    });
+  }
+};
 
-  const size_t n = scenarios.size();
-  bool stopped_early = false;
-  for (size_t i = 0; i < n; ++i) {
-    std::cerr << "[" << (i + 1) << "/" << n << "] " << scenarios[i].id
-              << std::flush;
-    const auto t0 = perf::Clock::now();
-    run_scenario(scenarios[i], opt.rs, &report);
-    const double elapsed_s = perf::to_ms(perf::Clock::now() - t0) / 1000.0;
-    std::cerr << "  (" << elapsed_s << " s)\n";
-    report.run_settings.scenarios_completed = static_cast<int>(i + 1);
-    if (opt.stop_after_s > 0.0 && elapsed_s > opt.stop_after_s) {
-      std::cerr << "stopping early: scenario exceeded --stop-after-s "
-                << opt.stop_after_s << " s\n";
-      stopped_early = true;
-      break;
-    }
-  }
-  report.run_settings.stopped_early = stopped_early;
+}  // namespace
 
-  if (!opt.output.empty()) {
-    std::ofstream f(opt.output);
-    if (!f) {
-      std::cerr << "error: cannot open --output file '" << opt.output << "'\n";
-      return 1;
-    }
-    perf::write_json(f, report);
-    std::cerr << "wrote JSON report: " << opt.output << "\n";
-  }
-  if (!opt.text.empty()) {
-    std::ofstream f(opt.text);
-    if (!f) {
-      std::cerr << "error: cannot open --text file '" << opt.text << "'\n";
-      return 1;
-    }
-    perf::write_text(f, report);
-    std::cerr << "wrote text report: " << opt.text << "\n";
-  }
-  if (!opt.quiet) {
-    perf::write_text(std::cout, report);
-  }
-  return 0;
+int main(int argc, char** argv) {
+  return holoscan::radar::perf::perf_main<RedTraits>(argc, argv);
 }

@@ -11,9 +11,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
-#include <fstream>
 #include <iostream>
-#include <limits>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -27,8 +25,10 @@
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/perf_app.hpp"
+#include "utils/perf_driver.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_runner.hpp"
 #include "utils/perf_sink.hpp"
 #include "utils/perf_stats.hpp"
 #include "utils/tensor_factory.hpp"
@@ -333,83 +333,6 @@ perf::ResultRow base_row(const FeatScenario& scen) {
   return row;
 }
 
-void run_scenario(const FeatScenario& scen, const perf::RunSettings& rs,
-                  perf::PerfReport* report) {
-  const int total = rs.warmup_frames + rs.measured_frames;
-
-  std::vector<double> setup_samples;
-  std::vector<double> cold_samples;
-  std::vector<double> steady_samples;
-
-  for (int rep = 0; rep < rs.repeats; ++rep) {
-    perf::TimingCollector collector;
-
-    auto idx_t = make_detection_idx(scen.num_detections, scen.doppler,
-                                    scen.range, scen.score_batch);
-    auto range_t = make_axis_bins<PerfPrecision>(scen.range);
-    auto vel_t = make_axis_bins<PerfPrecision>(scen.doppler);
-    std::vector<int64_t> score_shape;
-    if (scen.score_batch > 1) {
-      score_shape = {scen.score_batch, scen.doppler, scen.range};
-    } else {
-      score_shape = {scen.doppler, scen.range};
-    }
-    auto score_t = make_score_map<PerfPrecision>(score_shape);
-    auto aoa_t = make_aoa<PerfPrecision>(scen.num_detections);
-
-    auto idx = perf::single_map(std::move(idx_t), "detection_idx");
-    auto range_bins = perf::single_map(std::move(range_t), "range_bins");
-    auto velocity_bins = perf::single_map(std::move(vel_t), "velocity_bins");
-    auto score = perf::single_map(std::move(score_t), "detection_score");
-    auto aoa = perf::single_map(std::move(aoa_t), "aoa_estimates");
-
-    collector.t_construct = perf::Clock::now();
-    auto app = holoscan::make_application<FeatAsmPerfApp<PerfPrecision>>();
-    app->scen = &scen;
-    app->collector = &collector;
-    app->idx = std::move(idx);
-    app->range_bins = std::move(range_bins);
-    app->velocity_bins = std::move(velocity_bins);
-    app->score = std::move(score);
-    app->aoa = std::move(aoa);
-    app->total_frames = total;
-    app->run();
-
-    setup_samples.push_back(collector.setup_ms());
-    const auto lat = collector.frame_latencies_ms();
-    if (!lat.empty()) {
-      cold_samples.push_back(lat.front());
-    }
-    for (size_t i = static_cast<size_t>(rs.warmup_frames); i < lat.size();
-         ++i) {
-      steady_samples.push_back(lat[i]);
-    }
-  }
-
-  {
-    perf::ResultRow row = base_row(scen);
-    row.bucket = "setup";
-    row.setup_ms = perf::summarize(setup_samples).median_ms;
-    report->results.push_back(row);
-  }
-  {
-    perf::ResultRow row = base_row(scen);
-    row.bucket = "compute";
-    row.cold_ms = perf::summarize(cold_samples).median_ms;
-    row.latency = perf::summarize(steady_samples);
-    fill_throughput(&row, scen, row.latency.median_ms);
-    if (row.notes.empty()) {
-      row.notes =
-          "cold_ms is first-frame latency; median/p90 are post-warmup "
-          "steady state; cells/s is detections/s";
-    } else {
-      row.notes +=
-          "; cold_ms first-frame; median/p90 steady; cells/s detections/s";
-    }
-    report->results.push_back(row);
-  }
-}
-
 FeatScenario make_scenario(FeaturePack pack, const SizeSpec& s,
                            int64_t num_detections, int64_t score_batch = 1) {
   FeatScenario sc;
@@ -429,249 +352,160 @@ FeatScenario make_scenario(FeaturePack pack, const SizeSpec& s,
   return sc;
 }
 
-std::vector<FeatScenario> build_default_matrix() {
-  std::vector<FeatScenario> out;
-  const SizeSpec& md = must_find_size("md");
-  const std::vector<int64_t> counts = {64, 1024, 16384};
-  const std::vector<FeaturePack> packs = {
-      FeaturePack::kBins, FeaturePack::kScore, FeaturePack::kFull};
-  for (int64_t n : counts) {
-    for (auto pack : packs) {
-      out.push_back(make_scenario(pack, md, n));
-    }
-  }
-  for (const char* sid : {"xs", "md", "lg", "xlw"}) {
-    const SizeSpec& s = must_find_size(sid);
-    out.push_back(make_scenario(FeaturePack::kScore, s, 1024));
-  }
-  out.push_back(make_scenario(FeaturePack::kScore, md, 1024, 4));
-  out.push_back(make_scenario(FeaturePack::kBins, md, 0));
-  return out;
-}
+// ---------------------------------------------------------------------------
+// Traits: the operator-specific surface the shared driver (perf_driver.hpp)
+// plugs into. Everything else — CLI, GPU check, report header, run loop,
+// output — lives in the driver. FeatureAssemblyOp has no [live] override
+// ports, so it takes the no-op process_warmup/post_run/isolate_failures
+// defaults from PerfDriverDefaults.
+// ---------------------------------------------------------------------------
+struct FeatTraits : perf::PerfDriverDefaults {
+  using Scenario = FeatScenario;
 
-std::vector<FeatScenario> build_size_sweep(
-    const std::vector<std::string>& sizes) {
-  std::vector<FeatScenario> out;
-  for (const auto& sid : sizes) {
-    const SizeSpec* s = find_size(sid);
-    if (s == nullptr) {
-      std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
-      continue;
-    }
-    out.push_back(make_scenario(FeaturePack::kScore, *s, 1024));
+  static const char* tool_name() { return "perf_feature_assembly"; }
+  static const char* tool_description() {
+    return "FeatureAssemblyOp performance characterization";
   }
-  return out;
-}
+  static const char* sizes_all_help() {
+    return "Score-pack size sweep across the full ladder";
+  }
+  static const char* sizes_subset_help() {
+    return "Score-pack size sweep across an explicit subset";
+  }
+  static const char* full_help() {
+    return "Full matrix (packs x sizes x detection counts)";
+  }
 
-std::vector<FeatScenario> build_full_matrix() {
-  std::vector<FeatScenario> out;
-  const std::vector<int64_t> counts = {0, 64, 256, 1024, 4096, 16384, 65536};
-  const std::vector<FeaturePack> packs = {
-      FeaturePack::kBins, FeaturePack::kScore, FeaturePack::kFull};
-  for (const auto& s : size_ladder()) {
+  static std::vector<perf::SizeDef> size_ladder_defs() {
+    std::vector<perf::SizeDef> out;
+    for (const auto& s : size_ladder()) {
+      perf::SizeDef def;
+      def.id = s.id;
+      def.shape = {s.doppler, s.range};
+      def.cells = s.doppler * s.range;
+      def.role = s.role;
+      out.push_back(def);
+    }
+    return out;
+  }
+
+  static std::vector<FeatScenario> build_default_matrix() {
+    std::vector<FeatScenario> out;
+    const SizeSpec& md = must_find_size("md");
+    const std::vector<int64_t> counts = {64, 1024, 16384};
+    const std::vector<FeaturePack> packs = {
+        FeaturePack::kBins, FeaturePack::kScore, FeaturePack::kFull};
     for (int64_t n : counts) {
       for (auto pack : packs) {
-        out.push_back(make_scenario(pack, s, n));
+        out.push_back(make_scenario(pack, md, n));
       }
     }
-  }
-  const SizeSpec& md = must_find_size("md");
-  for (int64_t b : {4, 16}) {
-    out.push_back(make_scenario(FeaturePack::kScore, md, 1024, b));
-    out.push_back(make_scenario(FeaturePack::kFull, md, 4096, b));
-  }
-  return out;
-}
-
-struct Options {
-  std::string output;
-  std::string text;
-  bool quiet{false};
-  bool full{false};
-  std::vector<std::string> sizes;
-  bool sizes_all{false};
-  double stop_after_s{0.0};
-  perf::RunSettings rs;
-};
-
-std::vector<std::string> split_csv(const std::string& s) {
-  std::vector<std::string> out;
-  std::stringstream ss(s);
-  std::string tok;
-  while (std::getline(ss, tok, ',')) {
-    if (!tok.empty()) {
-      out.push_back(tok);
+    for (const char* sid : {"xs", "md", "lg", "xlw"}) {
+      const SizeSpec& s = must_find_size(sid);
+      out.push_back(make_scenario(FeaturePack::kScore, s, 1024));
     }
+    out.push_back(make_scenario(FeaturePack::kScore, md, 1024, 4));
+    out.push_back(make_scenario(FeaturePack::kBins, md, 0));
+    return out;
   }
-  return out;
-}
 
-void print_help() {
-  std::cout <<
-      "perf_feature_assembly — FeatureAssemblyOp performance "
-      "characterization\n\n"
-      "Usage: perf_feature_assembly [options]\n\n"
-      "  --output <path>   Write machine-readable JSON report\n"
-      "  --text <path>     Also write the text summary to a file\n"
-      "  --quiet           Suppress the stdout text summary\n"
-      "  --warmup N        Warmup frames excluded from stats (default 5)\n"
-      "  --frames N        Measured frames per scenario (default 20)\n"
-      "  --repeats N       Repeat each scenario N times, pooled (default 1)\n"
-      "  --sizes all       Score-pack size sweep across the full ladder\n"
-      "  --sizes a,b,c     Score-pack size sweep across an explicit subset\n"
-      "  --full            Full matrix (packs × sizes × detection counts)\n"
-      "  --stop-after-s S  Stop after first scenario whose wall time exceeds "
-      "S seconds\n"
-      "  --help            Show this help\n";
-}
+  static std::vector<FeatScenario> build_size_sweep(
+      const std::vector<std::string>& sizes) {
+    std::vector<FeatScenario> out;
+    for (const auto& sid : sizes) {
+      const SizeSpec* s = find_size(sid);
+      if (s == nullptr) {
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        continue;
+      }
+      out.push_back(make_scenario(FeaturePack::kScore, *s, 1024));
+    }
+    return out;
+  }
 
-bool parse_args(int argc, char** argv, Options* opt) {
-  for (int i = 1; i < argc; ++i) {
-    const std::string a = argv[i];
-    auto next = [&](const char* flag) -> std::string {
-      if (i + 1 >= argc) {
-        std::cerr << "error: " << flag << " requires an argument\n";
-        std::exit(2);
+  static std::vector<FeatScenario> build_full_matrix() {
+    std::vector<FeatScenario> out;
+    const std::vector<int64_t> counts = {0,    64,    256, 1024,
+                                         4096, 16384, 65536};
+    const std::vector<FeaturePack> packs = {
+        FeaturePack::kBins, FeaturePack::kScore, FeaturePack::kFull};
+    for (const auto& s : size_ladder()) {
+      for (int64_t n : counts) {
+        for (auto pack : packs) {
+          out.push_back(make_scenario(pack, s, n));
+        }
       }
-      return argv[++i];
-    };
-    if (a == "--help" || a == "-h") {
-      print_help();
-      std::exit(0);
-    } else if (a == "--output") {
-      opt->output = next("--output");
-    } else if (a == "--text") {
-      opt->text = next("--text");
-    } else if (a == "--quiet") {
-      opt->quiet = true;
-    } else if (a == "--full") {
-      opt->full = true;
-    } else if (a == "--warmup") {
-      opt->rs.warmup_frames = std::stoi(next("--warmup"));
-    } else if (a == "--frames") {
-      opt->rs.measured_frames = std::stoi(next("--frames"));
-    } else if (a == "--repeats") {
-      opt->rs.repeats = std::stoi(next("--repeats"));
-    } else if (a == "--stop-after-s") {
-      opt->stop_after_s = std::stod(next("--stop-after-s"));
-      if (opt->stop_after_s <= 0.0) {
-        std::cerr << "error: --stop-after-s must be positive\n";
-        return false;
-      }
-    } else if (a == "--sizes") {
-      const std::string v = next("--sizes");
-      if (v == "all") {
-        opt->sizes_all = true;
-      } else {
-        opt->sizes = split_csv(v);
-      }
+    }
+    const SizeSpec& md = must_find_size("md");
+    for (int64_t b : {4, 16}) {
+      out.push_back(make_scenario(FeaturePack::kScore, md, 1024, b));
+      out.push_back(make_scenario(FeaturePack::kFull, md, 4096, b));
+    }
+    return out;
+  }
+
+  static void run_scenario(const FeatScenario& scen,
+                           const perf::RunSettings& rs,
+                           perf::PerfReport* report) {
+    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
+    const auto samples = perf::collect_scenario_samples(
+        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+          perf::TimingCollector collector;
+
+          auto idx_t = make_detection_idx(scen.num_detections, scen.doppler,
+                                          scen.range, scen.score_batch);
+          auto range_t = make_axis_bins<PerfPrecision>(scen.range);
+          auto vel_t = make_axis_bins<PerfPrecision>(scen.doppler);
+          std::vector<int64_t> score_shape;
+          if (scen.score_batch > 1) {
+            score_shape = {scen.score_batch, scen.doppler, scen.range};
+          } else {
+            score_shape = {scen.doppler, scen.range};
+          }
+          auto score_t = make_score_map<PerfPrecision>(score_shape);
+          auto aoa_t = make_aoa<PerfPrecision>(scen.num_detections);
+
+          auto idx = perf::single_map(std::move(idx_t), "detection_idx");
+          auto range_bins = perf::single_map(std::move(range_t), "range_bins");
+          auto velocity_bins =
+              perf::single_map(std::move(vel_t), "velocity_bins");
+          auto score = perf::single_map(std::move(score_t), "detection_score");
+          auto aoa = perf::single_map(std::move(aoa_t), "aoa_estimates");
+
+          collector.t_construct = perf::Clock::now();
+          auto app =
+              holoscan::make_application<FeatAsmPerfApp<PerfPrecision>>();
+          app->scen = &scen;
+          app->collector = &collector;
+          app->idx = std::move(idx);
+          app->range_bins = std::move(range_bins);
+          app->velocity_bins = std::move(velocity_bins);
+          app->score = std::move(score);
+          app->aoa = std::move(aoa);
+          app->total_frames = p.total_frames;
+          app->run();
+          return collector;
+        });
+
+    perf::append_setup_row(base_row(scen), samples, report);
+
+    perf::ResultRow row = base_row(scen);
+    perf::fill_compute_row(&row, samples);
+    fill_throughput(&row, scen, row.latency.median_ms);
+    if (row.notes.empty()) {
+      row.notes =
+          "cold_ms is first-frame latency; median/p90 are post-warmup "
+          "steady state; cells/s is detections/s";
     } else {
-      std::cerr << "error: unknown argument '" << a << "'\n";
-      return false;
+      row.notes +=
+          "; cold_ms first-frame; median/p90 steady; cells/s detections/s";
     }
+    report->results.push_back(row);
   }
-  return true;
-}
+};
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  Options opt;
-  if (!parse_args(argc, argv, &opt)) {
-    return 2;
-  }
-
-  int device_count = 0;
-  if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-    std::cerr << "error: no CUDA device available; FeatureAssemblyOp requires "
-                 "a GPU\n";
-    return 1;
-  }
-
-  if (std::getenv("HOLOSCAN_LOG_LEVEL") == nullptr) {
-    setenv("HOLOSCAN_LOG_LEVEL", "ERROR", 0);
-  }
-
-  std::vector<FeatScenario> scenarios;
-  if (opt.full) {
-    scenarios = build_full_matrix();
-  } else if (opt.sizes_all) {
-    std::vector<std::string> all;
-    for (const auto& s : size_ladder()) {
-      all.push_back(s.id);
-    }
-    scenarios = build_size_sweep(all);
-  } else if (!opt.sizes.empty()) {
-    scenarios = build_size_sweep(opt.sizes);
-  } else {
-    scenarios = build_default_matrix();
-  }
-
-  perf::PerfReport report;
-  report.provenance = perf::capture_provenance();
-  report.platform = perf::capture_platform();
-  report.run_settings = opt.rs;
-  report.run_settings.stop_after_s = opt.stop_after_s;
-  report.run_settings.scenarios_planned = static_cast<int>(scenarios.size());
-
-  {
-    std::vector<std::string> used;
-    for (const auto& sc : scenarios) {
-      if (std::find(used.begin(), used.end(), sc.size_id) == used.end()) {
-        used.push_back(sc.size_id);
-      }
-    }
-    for (const auto& s : size_ladder()) {
-      if (std::find(used.begin(), used.end(), s.id) != used.end()) {
-        perf::SizeDef def;
-        def.id = s.id;
-        def.shape = {s.doppler, s.range};
-        def.cells = s.doppler * s.range;
-        def.role = s.role;
-        report.sizes.push_back(def);
-      }
-    }
-  }
-
-  const size_t n = scenarios.size();
-  bool stopped_early = false;
-  for (size_t i = 0; i < n; ++i) {
-    std::cerr << "[" << (i + 1) << "/" << n << "] " << scenarios[i].id
-              << std::flush;
-    const auto t0 = perf::Clock::now();
-    run_scenario(scenarios[i], opt.rs, &report);
-    const double elapsed_s = perf::to_ms(perf::Clock::now() - t0) / 1000.0;
-    std::cerr << "  (" << elapsed_s << " s)\n";
-    report.run_settings.scenarios_completed = static_cast<int>(i + 1);
-    if (opt.stop_after_s > 0.0 && elapsed_s > opt.stop_after_s) {
-      std::cerr << "stopping early: scenario exceeded --stop-after-s "
-                << opt.stop_after_s << " s\n";
-      stopped_early = true;
-      break;
-    }
-  }
-  report.run_settings.stopped_early = stopped_early;
-
-  if (!opt.output.empty()) {
-    std::ofstream f(opt.output);
-    if (!f) {
-      std::cerr << "error: cannot open --output file '" << opt.output << "'\n";
-      return 1;
-    }
-    perf::write_json(f, report);
-    std::cerr << "wrote JSON report: " << opt.output << "\n";
-  }
-  if (!opt.text.empty()) {
-    std::ofstream f(opt.text);
-    if (!f) {
-      std::cerr << "error: cannot open --text file '" << opt.text << "'\n";
-      return 1;
-    }
-    perf::write_text(f, report);
-    std::cerr << "wrote text report: " << opt.text << "\n";
-  }
-  if (!opt.quiet) {
-    perf::write_text(std::cout, report);
-  }
-  return 0;
+  return holoscan::radar::perf::perf_main<FeatTraits>(argc, argv);
 }
