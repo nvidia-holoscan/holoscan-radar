@@ -5,21 +5,24 @@
 // signal-processing chain
 //
 //   AdcSourceOp -> FMCWRangeProcessorOp -> ClutterFilterOp
-//               -> FMCWDopplerProcessorOp -> PeakReportOp
+//               -> FMCWDopplerProcessorOp -> CFARDetectorOp
+//                                        -> DetectionReportOp
 //                                         [-> RdMapToImageOp -> HolovizOp]
+//                                              (paints CFAR crosses on image)
 //
 // The source synthesizes one static clutter return and one moving target
 // with the shared analytic point-target simulator
 // (radar_common/sim/point_target_sim.hpp), emitting one cube (CPI) per tick
-// and advancing the targets through space between ticks. The sink locates the
-// range-Doppler peak per frame and reports it in physical units via the
-// operators' range_bins / velocity_bins axis outputs, so the moving target's
-// range is seen to sweep over the run.
+// and advancing the targets through space between ticks. CFAR detects on the
+// range-Doppler map; the sink reports each detection in physical units via
+// the operators' range_bins / velocity_bins axis outputs, so the moving
+// target's range is seen to sweep over the run.
 //
 // All configuration lives in fmcw_siso.yaml (staged next to the binary;
 // override with a path as the first CLI argument): the per-operator blocks
-// flow through Holoscan's native config()/from_config() path, and the
-// cube/run/target sections drive the synthetic source.
+// for the signal-processing ops flow through Holoscan's native
+// config()/from_config() path; the CFAR block is parsed into AppConfig (no
+// YAML::convert for CfarVariant in radar_common yet) and applied as Args.
 //
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/fmcw_siso/cpp/fmcw_siso [config.yaml]
@@ -42,6 +45,7 @@
 #include <holoscan/operators/holoviz/holoviz.hpp>
 #include <holoviz/holoviz.hpp>
 
+#include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
@@ -60,11 +64,21 @@ namespace {
 constexpr size_t kLutSize = 256;
 
 // App-owned configuration: everything the synthetic source and run cadence
-// need (see fmcw_siso.yaml). Operator parameters are NOT parsed here — the
-// per-operator YAML blocks flow through Holoscan's from_config() in
-// compose(), converted by radar_common/sdk/yaml_converters.hpp.
+// need (see fmcw_siso.yaml). Operator parameters for the signal-processing
+// ops are NOT parsed here — those YAML blocks flow through Holoscan's
+// from_config() in compose(). CFAR parameters are parsed here because
+// CfarVariant has no radar_common YAML::convert yet.
+struct CfarConfig {
+  radar::CfarVariant variant{radar::CfarVariant::kCA};
+  std::vector<int64_t> guard_cells{1, 1};
+  std::vector<int64_t> training_cells{2, 2};
+  double pfa{1e-4};
+  int64_t os_rank{0};
+};
+
 struct AppConfig {
   radar::sim::SimScene scene;  // waveform, cube dims, targets, noise
+  CfarConfig cfar;
   int64_t num_frames{1};
   double frame_period{0.1};  // s, between emitted cubes (and target motion)
   bool visualize{false};     // live RD-map window (requires a GUI host)
@@ -154,6 +168,52 @@ AppConfig load_config(const std::filesystem::path& path) {
   if (skip_check && !skip_check.IsNull()) {
     cfg.skip_display_check = skip_check.as<bool>();
   }
+
+  // CFARDetectorOp parameters (app-parsed; applied as Args in compose()).
+  const YAML::Node cfar = root["cfar_detector"];
+  if (cfar && !cfar.IsNull()) {
+    if (cfar["cfar_variant"]) {
+      const std::string spelling = cfar["cfar_variant"].as<std::string>();
+      bool matched = false;
+      for (radar::CfarVariant v : {radar::CfarVariant::kCA,
+                                   radar::CfarVariant::kGO,
+                                   radar::CfarVariant::kSO,
+                                   radar::CfarVariant::kOS}) {
+        if (spelling == radar::to_string(v)) {
+          cfg.cfar.variant = v;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        throw std::runtime_error(
+            "cfar_detector.cfar_variant: unknown value '" + spelling +
+            "' (accepted: CA, GO, SO, OS)");
+      }
+    }
+    if (cfar["guard_cells"]) {
+      cfg.cfar.guard_cells = cfar["guard_cells"].as<std::vector<int64_t>>();
+    }
+    if (cfar["training_cells"]) {
+      cfg.cfar.training_cells =
+          cfar["training_cells"].as<std::vector<int64_t>>();
+    }
+    if (cfar["pfa"]) {
+      cfg.cfar.pfa = cfar["pfa"].as<double>();
+    }
+    if (cfar["os_rank"]) {
+      cfg.cfar.os_rank = cfar["os_rank"].as<int64_t>();
+    }
+  }
+  if (cfg.cfar.guard_cells.size() != 2 || cfg.cfar.training_cells.size() != 2) {
+    throw std::runtime_error(
+        "cfar_detector.guard_cells and training_cells must each have "
+        "exactly 2 entries (doppler, range)");
+  }
+  if (!(cfg.cfar.pfa > 0.0 && cfg.cfar.pfa < 1.0)) {
+    throw std::runtime_error("cfar_detector.pfa must be in (0, 1)");
+  }
+
   return cfg;
 }
 
@@ -243,15 +303,17 @@ class AdcSourceOp : public holoscan::Operator {
   }
 };
 
-// Locates the range-Doppler peak and reports it in physical units via the
-// upstream operators' axis outputs.
-class PeakReportOp : public holoscan::Operator {
+// Reports CFAR detections in physical units via the upstream operators'
+// axis outputs. detection_score is the dense CFAR map; each detection_idx
+// row indexes into it for the per-cell strength (score > 1 ⇔ detected).
+class DetectionReportOp : public holoscan::Operator {
  public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(PeakReportOp)
-  PeakReportOp() = default;
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(DetectionReportOp)
+  DetectionReportOp() = default;
 
   void setup(holoscan::OperatorSpec& spec) override {
-    spec.input<holoscan::TensorMap>("rd_maps");
+    spec.input<holoscan::TensorMap>("detection_idx");
+    spec.input<holoscan::TensorMap>("detection_score");
     spec.input<holoscan::TensorMap>("range_bins");
     spec.input<holoscan::TensorMap>("velocity_bins");
   }
@@ -260,83 +322,104 @@ class PeakReportOp : public holoscan::Operator {
                [[maybe_unused]] holoscan::OutputContext& op_output,
                [[maybe_unused]] holoscan::ExecutionContext& context)
       override {
-    auto rd_map = single_tensor(op_input, "rd_maps");
+    auto detection_idx = single_tensor(op_input, "detection_idx");
+    auto detection_score = single_tensor(op_input, "detection_score");
     auto range_bins = single_tensor(op_input, "range_bins");
     auto velocity_bins = single_tensor(op_input, "velocity_bins");
 
-    const auto shape = rd_map->shape();
-    // SISO app: the host buffer below is sized from the trailing two axes
-    // while the copy uses nbytes(); a batched (rank > 2) map would overflow
-    // it. Index within the trailing slab when lifting this sink.
-    if (shape.size() != 2) {
+    const auto idx_shape = detection_idx->shape();
+    const auto score_shape = detection_score->shape();
+    if (idx_shape.size() != 2 || idx_shape[1] != 2) {
       throw std::runtime_error(
-          "PeakReportOp: SISO sink expects a rank-2 rd_map, got rank " +
-          std::to_string(shape.size()));
+          "DetectionReportOp: detection_idx must be (N, 2), got rank " +
+          std::to_string(idx_shape.size()));
     }
-    const int64_t num_doppler = shape[shape.size() - 2];
-    const int64_t num_range = shape[shape.size() - 1];
+    if (score_shape.size() != 2) {
+      throw std::runtime_error(
+          "DetectionReportOp: SISO expects a rank-2 detection_score, got "
+          "rank " +
+          std::to_string(score_shape.size()));
+    }
+    const int64_t num_detections = idx_shape[0];
+    const int64_t num_doppler = score_shape[0];
+    const int64_t num_range = score_shape[1];
 
-    std::vector<std::complex<float>> rd(
+    std::vector<int64_t> idx(static_cast<size_t>(num_detections * 2));
+    std::vector<float> scores(
         static_cast<size_t>(num_doppler * num_range));
     std::vector<float> ranges(static_cast<size_t>(num_range));
     std::vector<float> velocities(static_cast<size_t>(num_doppler));
 
-    // The copies below use each source tensor's nbytes() into these fixed-size
-    // host buffers, so a tensor whose dtype or element count disagrees with
-    // the rd_map-derived dimensions would overflow the destination. Verify the
-    // exact byte size of each source against its buffer before copying.
     const auto require_bytes =
         [](const char* name, const std::shared_ptr<holoscan::Tensor>& t,
            size_t expected) {
           if (static_cast<size_t>(t->nbytes()) != expected) {
             throw std::runtime_error(
-                std::string("PeakReportOp: ") + name +
+                std::string("DetectionReportOp: ") + name +
                 " byte size mismatch (expected " + std::to_string(expected) +
                 ", got " + std::to_string(t->nbytes()) + ")");
           }
         };
-    require_bytes("rd_map", rd_map, sizeof(std::complex<float>) * rd.size());
+    require_bytes("detection_idx", detection_idx,
+                  sizeof(int64_t) * idx.size());
+    require_bytes("detection_score", detection_score,
+                  sizeof(float) * scores.size());
     require_bytes("range_bins", range_bins, sizeof(float) * ranges.size());
     require_bytes("velocity_bins", velocity_bins,
                   sizeof(float) * velocities.size());
 
     if (cudaDeviceSynchronize() != cudaSuccess) {
-      throw std::runtime_error("PeakReportOp: device synchronize failed");
+      throw std::runtime_error(
+          "DetectionReportOp: device synchronize failed");
     }
-    if (cudaMemcpy(rd.data(), rd_map->data(),
-                   static_cast<size_t>(rd_map->nbytes()),
+    if (cudaMemcpy(idx.data(), detection_idx->data(),
+                   static_cast<size_t>(detection_idx->nbytes()),
                    cudaMemcpyDeviceToHost) != cudaSuccess) {
-      throw std::runtime_error("PeakReportOp: rd_map D2H copy failed");
+      throw std::runtime_error(
+          "DetectionReportOp: detection_idx D2H copy failed");
+    }
+    if (cudaMemcpy(scores.data(), detection_score->data(),
+                   static_cast<size_t>(detection_score->nbytes()),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+      throw std::runtime_error(
+          "DetectionReportOp: detection_score D2H copy failed");
     }
     if (cudaMemcpy(ranges.data(), range_bins->data(),
                    static_cast<size_t>(range_bins->nbytes()),
                    cudaMemcpyDeviceToHost) != cudaSuccess) {
-      throw std::runtime_error("PeakReportOp: range_bins D2H copy failed");
+      throw std::runtime_error(
+          "DetectionReportOp: range_bins D2H copy failed");
     }
     if (cudaMemcpy(velocities.data(), velocity_bins->data(),
                    static_cast<size_t>(velocity_bins->nbytes()),
                    cudaMemcpyDeviceToHost) != cudaSuccess) {
-      throw std::runtime_error("PeakReportOp: velocity_bins D2H copy failed");
+      throw std::runtime_error(
+          "DetectionReportOp: velocity_bins D2H copy failed");
     }
 
-    // The zero-Doppler column is suppressed by the clutter filter; report
-    // the strongest remaining (moving-target) cell.
-    size_t peak = 0;
-    float peak_mag = 0.0F;
-    for (size_t i = 0; i < rd.size(); ++i) {
-      const float mag = std::abs(rd[i]);
-      if (mag > peak_mag) {
-        peak_mag = mag;
-        peak = i;
+    HOLOSCAN_LOG_INFO("CFAR detections: {}", num_detections);
+    constexpr int64_t kMaxLogged = 16;
+    const int64_t n_log = std::min(num_detections, kMaxLogged);
+    for (int64_t i = 0; i < n_log; ++i) {
+      const int64_t doppler_bin = idx[static_cast<size_t>(i * 2 + 0)];
+      const int64_t range_bin = idx[static_cast<size_t>(i * 2 + 1)];
+      if (doppler_bin < 0 || doppler_bin >= num_doppler || range_bin < 0 ||
+          range_bin >= num_range) {
+        throw std::runtime_error(
+            "DetectionReportOp: detection_idx out of map bounds");
       }
+      const float score =
+          scores[static_cast<size_t>(doppler_bin * num_range + range_bin)];
+      HOLOSCAN_LOG_INFO(
+          "  [{}] score={:.2f} range bin {} ({:.2f} m), Doppler bin {} "
+          "({:+.2f} m/s)",
+          i, score, range_bin, ranges[static_cast<size_t>(range_bin)],
+          doppler_bin, velocities[static_cast<size_t>(doppler_bin)]);
     }
-    const size_t doppler_bin = peak / static_cast<size_t>(num_range);
-    const size_t range_bin = peak % static_cast<size_t>(num_range);
-    HOLOSCAN_LOG_INFO(
-        "Peak |RD| = {:.1f} at range bin {} ({:.2f} m), Doppler bin {} "
-        "({:+.2f} m/s)",
-        peak_mag, range_bin, ranges[range_bin], doppler_bin,
-        velocities[doppler_bin]);
+    if (num_detections > kMaxLogged) {
+      HOLOSCAN_LOG_INFO("  ... {} more detections not logged",
+                        num_detections - kMaxLogged);
+    }
   }
 
  private:
@@ -344,10 +427,31 @@ class PeakReportOp : public holoscan::Operator {
       holoscan::InputContext& op_input, const char* port) {
     auto maybe = op_input.receive<holoscan::TensorMap>(port);
     if (!maybe || maybe->size() != 1) {
-      throw std::runtime_error(std::string("PeakReportOp: expected one "
-                                           "tensor on port ") + port);
+      throw std::runtime_error(std::string("DetectionReportOp: expected one "
+                                           "tensor on port ") +
+                               port);
     }
     return maybe->begin()->second;
+  }
+};
+
+// Drain a CFAR dense output without deserializing it as a TensorMap. The
+// bool detection_mask path trips Holoscan 4.3's unsupported-DLPack-bool
+// error when received as a TensorMap; raw Entity receive sidesteps that.
+class NullSinkOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(NullSinkOp)
+  NullSinkOp() = default;
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::gxf::Entity>("input");
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               [[maybe_unused]] holoscan::OutputContext& op_output,
+               [[maybe_unused]] holoscan::ExecutionContext& context)
+      override {
+    (void)op_input.receive<holoscan::gxf::Entity>("input");
   }
 };
 
@@ -355,7 +459,11 @@ class PeakReportOp : public holoscan::Operator {
 // Holoviz (rendered through the turbo color lookup table). Per frame:
 // |RD| in dB, mapped between that frame's measured noise floor and its
 // peak onto [0, kLutSize - 1] — HolovizOp's LUT is non-normalized, so the
-// pixel value is used as an integer index into the table.
+// pixel value is used as an integer index into the table. CFAR
+// detection_idx cells are marked with a dark box outline (LUT index 0) so
+// the peak cell stays visible inside. Markers stay pixel-aligned with the
+// map (no separate Holoviz geometry layer — those are easy to miss against
+// a turbo peak).
 class RdMapToImageOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(RdMapToImageOp)
@@ -363,6 +471,7 @@ class RdMapToImageOp : public holoscan::Operator {
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("rd_maps");
+    spec.input<holoscan::TensorMap>("detection_idx");
     spec.output<holoscan::TensorMap>("rd_image");
   }
 
@@ -385,13 +494,42 @@ class RdMapToImageOp : public holoscan::Operator {
     const int64_t num_doppler = shape[0];
     const int64_t num_range = shape[1];
 
+    auto maybe_idx = op_input.receive<holoscan::TensorMap>("detection_idx");
+    if (!maybe_idx || maybe_idx->size() != 1) {
+      throw std::runtime_error(
+          "RdMapToImageOp: expected one tensor on port detection_idx");
+    }
+    auto idx_t = maybe_idx->begin()->second;
+    const auto idx_shape = idx_t->shape();
+    if (idx_shape.size() != 2 || idx_shape[1] != 2) {
+      throw std::runtime_error(
+          "RdMapToImageOp: detection_idx must be (N, 2)");
+    }
+    const int64_t num_detections = idx_shape[0];
+
     std::vector<std::complex<float>> rd(
         static_cast<size_t>(num_doppler * num_range));
-    cudaDeviceSynchronize();
+    std::vector<int64_t> idx(static_cast<size_t>(num_detections * 2));
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+      throw std::runtime_error("RdMapToImageOp: device synchronize failed");
+    }
     if (cudaMemcpy(rd.data(), rd_map->data(),
                    static_cast<size_t>(rd_map->nbytes()),
                    cudaMemcpyDeviceToHost) != cudaSuccess) {
-      throw std::runtime_error("RdMapToImageOp: D2H copy failed");
+      throw std::runtime_error("RdMapToImageOp: rd_map D2H copy failed");
+    }
+    if (num_detections > 0) {
+      if (static_cast<size_t>(idx_t->nbytes()) !=
+          sizeof(int64_t) * idx.size()) {
+        throw std::runtime_error(
+            "RdMapToImageOp: detection_idx byte size mismatch");
+      }
+      if (cudaMemcpy(idx.data(), idx_t->data(),
+                     static_cast<size_t>(idx_t->nbytes()),
+                     cudaMemcpyDeviceToHost) != cudaSuccess) {
+        throw std::runtime_error(
+            "RdMapToImageOp: detection_idx D2H copy failed");
+      }
     }
 
     // Log magnitude, normalized to [0, 1] between this frame's noise floor
@@ -413,6 +551,37 @@ class RdMapToImageOp : public holoscan::Operator {
     for (float& v : image) {
       v = std::clamp((v - floor_db) / span_db, 0.0F, 1.0F) *
           static_cast<float>(kLutSize - 1);
+    }
+
+    // Burn a dark box outline around each CFAR detection so the peak cell
+    // stays visible inside. Half-extent in bins (box is 2*kBoxHalf+1 wide).
+    constexpr int64_t kBoxHalf = 4;
+    auto paint = [&](int64_t d, int64_t r) {
+      if (d < 0 || d >= num_doppler || r < 0 || r >= num_range) {
+        return;
+      }
+      image[static_cast<size_t>(d * num_range + r)] = 0.0F;
+    };
+    for (int64_t i = 0; i < num_detections; ++i) {
+      const int64_t doppler_bin = idx[static_cast<size_t>(i * 2 + 0)];
+      const int64_t range_bin = idx[static_cast<size_t>(i * 2 + 1)];
+      if (doppler_bin < 0 || doppler_bin >= num_doppler || range_bin < 0 ||
+          range_bin >= num_range) {
+        throw std::runtime_error(
+            "RdMapToImageOp: detection_idx out of map bounds");
+      }
+      const int64_t d0 = doppler_bin - kBoxHalf;
+      const int64_t d1 = doppler_bin + kBoxHalf;
+      const int64_t r0 = range_bin - kBoxHalf;
+      const int64_t r1 = range_bin + kBoxHalf;
+      for (int64_t r = r0; r <= r1; ++r) {
+        paint(d0, r);
+        paint(d1, r);
+      }
+      for (int64_t d = d0; d <= d1; ++d) {
+        paint(d, r0);
+        paint(d, r1);
+      }
     }
 
     // Holoviz image layers require a rank-3 (height, width, channels)
@@ -479,18 +648,34 @@ class FmcwSisoApp : public holoscan::Application {
         "clutter_filter", from_config("clutter_filter"));
     auto doppler = make_operator<radar::FMCWDopplerProcessorOp<float>>(
         "doppler_processor", from_config("doppler_processor"));
-    auto sink = make_operator<PeakReportOp>("peak_report");
+    // CFAR args are applied explicitly: CfarVariant has no YAML::convert in
+    // radar_common yet (parsed into AppConfig.cfar in load_config()).
+    auto cfar = make_operator<radar::CFARDetectorOp<float>>(
+        "cfar_detector",
+        holoscan::Arg("cfar_variant") = cfg.cfar.variant,
+        holoscan::Arg("guard_cells") = cfg.cfar.guard_cells,
+        holoscan::Arg("training_cells") = cfg.cfar.training_cells,
+        holoscan::Arg("pfa") = cfg.cfar.pfa,
+        holoscan::Arg("os_rank") = cfg.cfar.os_rank);
+    auto sink = make_operator<DetectionReportOp>("detection_report");
+    // Every CFAR output needs a receiver or the operator never ticks.
+    auto mask_sink = make_operator<NullSinkOp>("detection_mask_sink");
+    auto noise_sink = make_operator<NullSinkOp>("noise_estimate_sink");
 
     add_flow(source, range, {{"adc_cube", "adc_cube"}});
     add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
     add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
-    add_flow(doppler, sink, {{"rd_maps", "rd_maps"}});
+    add_flow(doppler, cfar, {{"rd_maps", "rd_maps"}});
+    add_flow(cfar, sink, {{"detection_idx", "detection_idx"}});
+    add_flow(cfar, sink, {{"detection_score", "detection_score"}});
     add_flow(range, sink, {{"range_bins", "range_bins"}});
     add_flow(doppler, sink, {{"velocity_bins", "velocity_bins"}});
+    add_flow(cfar, mask_sink, {{"detection_mask", "input"}});
+    add_flow(cfar, noise_sink, {{"noise_estimate", "input"}});
 
     // Optional live RD-map window (cfg.visualize; main() has already
-    // downgraded it with a warning on GUI-less hosts). The converter's
-    // single-channel float32 tensor is colored via the turbo LUT.
+    // downgraded it with a warning on GUI-less hosts). Turbo-mapped |RD|
+    // with CFAR detections marked by dark box outlines (range = x, Doppler = y).
     if (cfg.visualize) {
       auto to_image = make_operator<RdMapToImageOp>("rd_map_to_image");
       std::vector<holoscan::ops::HolovizOp::InputSpec> input_specs;
@@ -500,9 +685,10 @@ class FmcwSisoApp : public holoscan::Application {
           "holoviz", holoscan::Arg("tensors", input_specs),
           holoscan::Arg("color_lut", make_turbo_lut()),
           holoscan::Arg("window_title",
-                        std::string("FMCW SISO - Range-Doppler")),
+                        std::string("FMCW SISO - Range-Doppler + CFAR")),
           holoscan::Arg("width", 800U), holoscan::Arg("height", 600U));
       add_flow(doppler, to_image, {{"rd_maps", "rd_maps"}});
+      add_flow(cfar, to_image, {{"detection_idx", "detection_idx"}});
       add_flow(to_image, visualizer, {{"rd_image", "receivers"}});
     }
   }

@@ -8,9 +8,10 @@
 # The per-operator blocks (range_processor, clutter_filter,
 # doppler_processor) are consumed natively via Holoscan's from_config(): every
 # key is an operator parameter, converted by the YAML::convert<>
-# specializations in radar_common/sdk/yaml_converters.hpp. The remaining
-# top-level sections (cube, run, targets, noise_snr_db) configure the app's
-# synthetic source and run cadence.
+# specializations in radar_common/sdk/yaml_converters.hpp. The cfar_detector
+# block is parsed by the app (no YAML::convert for CfarVariant yet) and
+# applied as Args. The remaining top-level sections (cube, run, targets,
+# noise_snr_db) configure the app's synthetic source and run cadence.
 
 # FMCW waveform, anchored so the range and Doppler blocks (and the app's
 # simulator mirror) share one definition. Provide exactly one of `bandwidth`
@@ -44,6 +45,16 @@ clutter_filter:
 doppler_processor:
   waveform: *waveform
 
+# CFARDetectorOp parameters (app-parsed). guard_cells / training_cells are
+# (doppler, range) half-extents; pfa sets the CA threshold multiplier.
+# os_rank is only required when cfar_variant is OS.
+cfar_detector:
+  cfar_variant: CA
+  guard_cells: [1, 1]
+  training_cells: [2, 2]
+  pfa: 1.0e-6
+  os_rank: 0
+
 # ADC data-cube dimensions per coherent processing interval (CPI).
 cube:
   num_chirps: 128
@@ -52,8 +63,8 @@ cube:
 # Run cadence. The source emits `num_frames` cubes, one every `frame_period`
 # seconds, advancing the targets through space between frames.
 run:
-  num_frames: 24
-  frame_period: 0.1                    # s (10 Hz frame rate)
+  num_frames: 100
+  frame_period: 0.1                    # s (10 Hz → ~10 s total)
 
 # Scene targets. Each is placed along the +x look direction at `range` metres,
 # closing/receding at `velocity` m/s (positive = receding), with a linear
@@ -63,8 +74,10 @@ targets:
   - { range: 42.0, velocity: 5.5, amplitude: 0.5 }   # moving target
 
 # Additive complex white Gaussian noise, SNR in dB relative to a unit-amplitude
-# target. Set to null (or omit) for a noise-free cube.
-noise_snr_db: null
+# target. Required for CFAR: a noise-free cube yields a zero training-cell
+# noise estimate, so the adaptive threshold collapses and no cells detect.
+# Set to null (or omit) only when exercising the signal-processing chain alone.
+noise_snr_db: 20.0
 
 # Live RD-map visualization (Holoviz turbo-colormapped image of the
 # log-magnitude map). Requires a GUI-capable host; when no display is

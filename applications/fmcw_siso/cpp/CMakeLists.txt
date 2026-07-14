@@ -11,6 +11,7 @@ target_link_libraries(fmcw_siso PRIVATE
     holoscan::fmcw_range_processor_op
     holoscan::clutter_filter_op
     holoscan::fmcw_doppler_processor_op
+    holoscan::cfar_detector_op
     holoscan::radar_common
     holoscan::core
     holoscan::ops::holoviz

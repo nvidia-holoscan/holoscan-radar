@@ -24,10 +24,9 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | Work item | Owner | Branch | State |
 | --- | --- | --- | --- |
 | Fill out `AGENTS.md` + this status file | deustice | `deustice/planning` | in review |
-| Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness | deustice | `deustice/sigproc-ops` | in progress |
-| Detection operator (`operators/detection/` + `CFARDetectorOp`) | dpc | `dpc/detection` | **All four CFAR variants done** (see below) |
-| Detection bridge `DetectionReductionOp` | dpc | `dpc/detection-reduction` | **checklist-complete** — first/peak/medoid + built-in scorers + `ScoreFn`/`custom` + live + tests + perf |
-| Detection bridge `FeatureAssemblyOp` | dpc | `dpc/feature-assembly` | **checklist-complete** (unit + `perf_feature_assembly`; staged follow-ups in OPEN_ITEMS) |
+| Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness | deustice | `deustice/sigproc-ops` | **merged** (PR #8) |
+| Detection operators (`CFARDetectorOp` + FeatureAssembly + DetectionReduction) | dpc | `dpc/detection-full` | **merged** (PR #10) |
+| Wire `CFARDetectorOp` into `applications/fmcw_siso` | dpc | `dpc/fmcw-siso-cfar` | in progress |
 
 ### Landed on `dpc/detection`
 

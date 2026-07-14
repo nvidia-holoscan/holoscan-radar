@@ -9,4 +9,5 @@ add_holohub_application(fmcw_siso
         fmcw_range_processor_op
         clutter_filter_op
         fmcw_doppler_processor_op
+        cfar_detector_op
 )
