@@ -12,7 +12,9 @@
 //                                                  -> ClusterReportOp
 //                                         [-> RdMapToImageOp   -> HolovizOp]
 //                                         [-> ClusterOverlayOp -> HolovizOp]
-//                                              (crosses colored by cluster)
+//                                         [-> RollingPlotOp    -> HolovizOp]
+//                                              (RD map + cluster crosses left;
+//                                               range/velocity-vs-time right)
 //
 // The source synthesizes one static clutter return and one moving target
 // with the shared analytic point-target simulator
@@ -39,9 +41,11 @@
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <deque>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <limits>
 #include <memory>
@@ -101,10 +105,19 @@ struct ClusteringConfig {
   int64_t max_clusters{0};                // <= 0 → uncapped
 };
 
+// Rolling time-series plots drawn beside the RD map (range and velocity vs
+// time). Only consulted when visualize is on; the plots share the Holoviz
+// window via sub-viewports.
+struct PlotsConfig {
+  bool enable{true};
+  int64_t window{120};  // frames retained in the scrolling window
+};
+
 struct AppConfig {
   radar::sim::SimScene scene;  // waveform, cube dims, targets, noise
   CfarConfig cfar;
   ClusteringConfig clustering;
+  PlotsConfig plots;
   int64_t num_frames{1};
   double frame_period{0.1};  // s, between emitted cubes (and target motion)
   bool visualize{false};     // live RD-map window (requires a GUI host)
@@ -201,6 +214,19 @@ AppConfig load_config(const std::filesystem::path& path) {
   const YAML::Node headless = root["headless"];
   if (headless && !headless.IsNull()) {
     cfg.headless = headless.as<bool>();
+  }
+  const YAML::Node plots = root["plots"];
+  if (plots && !plots.IsNull()) {
+    if (plots["enable"]) {
+      cfg.plots.enable = plots["enable"].as<bool>();
+    }
+    if (plots["window"]) {
+      cfg.plots.window = plots["window"].as<int64_t>();
+    }
+  }
+  if (cfg.plots.window <= 1) {
+    throw std::runtime_error("plots.window must be > 1, got " +
+                             std::to_string(cfg.plots.window));
   }
 
   // CFARDetectorOp parameters (app-parsed; applied as Args in compose()).
@@ -952,6 +978,301 @@ std::vector<std::vector<float>> cluster_palette() {
   };
 }
 
+// Holoviz layer names for the side plots, shared by RollingPlotOp (emitted
+// tensor keys) and compose() (InputSpec names). Each plot is an RGBA image
+// (the rasterized scatter) plus a TEXT layer for its title.
+constexpr const char* kRangePlotLayer = "range_plot";
+constexpr const char* kVelocityPlotLayer = "velocity_plot";
+constexpr const char* kRangeTitleLayer = "range_title";
+constexpr const char* kVelocityTitleLayer = "velocity_title";
+
+// Rolling time-series plots of the detections' range and velocity. Keeps a
+// scrolling window of the last `window` frames and, each tick, rasterizes two
+// RGBA images (range vs time, velocity vs time): every CFAR detection is a dot
+// colored by its DBSCAN cluster (noise gray), and each cluster's centroid is a
+// distinct '+' marker in the same color. The Y axes are fixed to the physical
+// extents of the range / velocity bins (so absolute level is a stable
+// reference); X is the frame window, newest at the right. HolovizOp places the
+// images in right-side sub-viewports (see compose()).
+//
+// In:  points        — float32, (num_points, 2): columns [range (m),
+//                     velocity (m/s)] (this app's FeatureAssemblyOp layout).
+// In:  labels        — int64, (num_points,): DBSCAN cluster id (noise = -1).
+// In:  range_bins    — float32, (num_range,): fixes the range plot's Y extent.
+// In:  velocity_bins — float32, (num_doppler,): fixes the velocity Y extent.
+// Out: range_plot / velocity_plot — uint8 RGBA (H, W, 4) images.
+// Out: range_title / velocity_title — float32 (1, 3) TEXT positions.
+class RollingPlotOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(RollingPlotOp)
+  RollingPlotOp() = default;
+
+  int64_t window{120};  // set from cfg.plots.window before the graph runs
+
+  // Rasterized plot image size (pixels). HolovizOp scales it into its view.
+  static constexpr int64_t kW = 420;
+  static constexpr int64_t kH = 300;
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::TensorMap>("points");
+    spec.input<holoscan::TensorMap>("labels");
+    spec.input<holoscan::TensorMap>("range_bins");
+    spec.input<holoscan::TensorMap>("velocity_bins");
+    spec.output<holoscan::TensorMap>("plots");
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               holoscan::OutputContext& op_output,
+               [[maybe_unused]] holoscan::ExecutionContext& context)
+      override {
+    const std::string who = "RollingPlotOp";
+    auto points = radar::receive_single(op_input, "points", who);
+    auto labels = radar::receive_single(op_input, "labels", who);
+    auto range_bins = radar::receive_single(op_input, "range_bins", who);
+    auto velocity_bins = radar::receive_single(op_input, "velocity_bins", who);
+
+    const auto pshape = points->shape();
+    if (pshape.size() != 2 || pshape[1] != 2) {
+      throw std::runtime_error(
+          "RollingPlotOp: points must be (N, 2) [range, velocity]");
+    }
+    const int64_t num_points = pshape[0];
+    const auto lshape = labels->shape();
+    if (lshape.size() != 1 || lshape[0] != num_points) {
+      throw std::runtime_error(
+          "RollingPlotOp: labels must be (N,) row-aligned with points");
+    }
+
+    // Fix the Y axes once, from the physical bin extents (constant per run).
+    if (!axis_set_) {
+      const auto extent = [](const std::shared_ptr<holoscan::Tensor>& t,
+                             const char* name, float* lo, float* hi) {
+        const auto sh = t->shape();
+        if (sh.size() != 1 || sh[0] < 1) {
+          throw std::runtime_error(std::string("RollingPlotOp: ") + name +
+                                   " must be a non-empty rank-1 tensor");
+        }
+        std::vector<float> host(static_cast<size_t>(sh[0]));
+        if (static_cast<size_t>(t->nbytes()) != sizeof(float) * host.size()) {
+          throw std::runtime_error(std::string("RollingPlotOp: ") + name +
+                                   " must be float32");
+        }
+        if (cudaMemcpy(host.data(), t->data(),
+                       static_cast<size_t>(t->nbytes()),
+                       cudaMemcpyDeviceToHost) != cudaSuccess) {
+          throw std::runtime_error(std::string("RollingPlotOp: ") + name +
+                                   " D2H copy failed");
+        }
+        const auto mm = std::minmax_element(host.begin(), host.end());
+        *lo = *mm.first;
+        *hi = *mm.second;
+      };
+      if (cudaDeviceSynchronize() != cudaSuccess) {
+        throw std::runtime_error("RollingPlotOp: device synchronize failed");
+      }
+      extent(range_bins, "range_bins", &r_lo_, &r_hi_);
+      extent(velocity_bins, "velocity_bins", &v_lo_, &v_hi_);
+      axis_set_ = true;
+    }
+
+    std::vector<float> pts(static_cast<size_t>(num_points * 2));
+    std::vector<int64_t> lab(static_cast<size_t>(num_points));
+    if (static_cast<size_t>(points->nbytes()) != sizeof(float) * pts.size() ||
+        static_cast<size_t>(labels->nbytes()) != sizeof(int64_t) * lab.size()) {
+      throw std::runtime_error("RollingPlotOp: points/labels dtype mismatch");
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+      throw std::runtime_error("RollingPlotOp: device synchronize failed");
+    }
+    if (num_points > 0) {
+      if (cudaMemcpy(pts.data(), points->data(),
+                     static_cast<size_t>(points->nbytes()),
+                     cudaMemcpyDeviceToHost) != cudaSuccess ||
+          cudaMemcpy(lab.data(), labels->data(),
+                     static_cast<size_t>(labels->nbytes()),
+                     cudaMemcpyDeviceToHost) != cudaSuccess) {
+        throw std::runtime_error("RollingPlotOp: points/labels D2H failed");
+      }
+    }
+
+    // Append this frame's detections, and one centroid per cluster, to the
+    // scrolling history; then evict frames older than the window.
+    int64_t num_clusters = 0;
+    for (int64_t i = 0; i < num_points; ++i) {
+      num_clusters = std::max(num_clusters, lab[static_cast<size_t>(i)] + 1);
+    }
+    std::vector<double> sum_r(static_cast<size_t>(num_clusters), 0.0);
+    std::vector<double> sum_v(static_cast<size_t>(num_clusters), 0.0);
+    std::vector<int64_t> count(static_cast<size_t>(num_clusters), 0);
+    for (int64_t i = 0; i < num_points; ++i) {
+      const int64_t c = lab[static_cast<size_t>(i)];
+      const float r = pts[static_cast<size_t>(i * 2 + 0)];
+      const float v = pts[static_cast<size_t>(i * 2 + 1)];
+      const int bucket = c >= 0 ? static_cast<int>(c % kNumClusterColors)
+                                : kNumClusterColors;  // noise
+      det_hist_.push_back({tick_, r, v, bucket});
+      if (c >= 0) {
+        sum_r[static_cast<size_t>(c)] += r;
+        sum_v[static_cast<size_t>(c)] += v;
+        ++count[static_cast<size_t>(c)];
+      }
+    }
+    for (int64_t c = 0; c < num_clusters; ++c) {
+      const int64_t n = count[static_cast<size_t>(c)];
+      if (n == 0) {
+        continue;
+      }
+      cen_hist_.push_back(
+          {tick_, static_cast<float>(sum_r[static_cast<size_t>(c)] / n),
+           static_cast<float>(sum_v[static_cast<size_t>(c)] / n),
+           static_cast<int>(c % kNumClusterColors)});
+    }
+    const int64_t oldest = tick_ - window + 1;
+    const auto evict = [oldest](std::deque<Sample>* h) {
+      while (!h->empty() && h->front().t < oldest) {
+        h->pop_front();
+      }
+    };
+    evict(&det_hist_);
+    evict(&cen_hist_);
+
+    // Rasterize both plots and emit, plus the (constant) title positions.
+    holoscan::TensorMap out;
+    out.insert({kRangePlotLayer, render_plot(/*use_range=*/true, oldest)});
+    out.insert(
+        {kVelocityPlotLayer, render_plot(/*use_range=*/false, oldest)});
+    out.insert({kRangeTitleLayer, title_pos()});
+    out.insert({kVelocityTitleLayer, title_pos()});
+    op_output.emit(out, "plots");
+    ++tick_;
+  }
+
+ private:
+  struct Sample {
+    int64_t t;
+    float r;
+    float v;
+    int bucket;  // [0, kNumClusterColors) cluster color, or kNumClusterColors
+  };
+
+  // RGBA byte color for a history bucket (cluster color, or gray for noise).
+  static std::array<uint8_t, 3> bucket_color(int bucket) {
+    if (bucket >= kNumClusterColors) {
+      return {150, 150, 150};  // noise
+    }
+    const auto c = cluster_palette()[static_cast<size_t>(bucket)];
+    return {static_cast<uint8_t>(c[0] * 255.0F),
+            static_cast<uint8_t>(c[1] * 255.0F),
+            static_cast<uint8_t>(c[2] * 255.0F)};
+  }
+
+  static void put_px(std::vector<uint8_t>* img, int64_t x, int64_t y,
+                     const std::array<uint8_t, 3>& c) {
+    if (x < 0 || x >= kW || y < 0 || y >= kH) {
+      return;
+    }
+    const size_t o = static_cast<size_t>((y * kW + x) * 4);
+    (*img)[o + 0] = c[0];
+    (*img)[o + 1] = c[1];
+    (*img)[o + 2] = c[2];
+    (*img)[o + 3] = 255;
+  }
+
+  // Rasterize one plot: use_range picks the range vs velocity axis. Returns a
+  // (kH, kW, 4) uint8 RGBA device tensor.
+  std::shared_ptr<holoscan::Tensor> render_plot(bool use_range,
+                                                int64_t oldest) {
+    constexpr std::array<uint8_t, 3> kBg = {20, 20, 28};
+    constexpr std::array<uint8_t, 3> kGrid = {80, 80, 95};
+    std::vector<uint8_t> img(static_cast<size_t>(kW * kH * 4));
+    for (int64_t p = 0; p < kW * kH; ++p) {
+      img[static_cast<size_t>(p * 4 + 0)] = kBg[0];
+      img[static_cast<size_t>(p * 4 + 1)] = kBg[1];
+      img[static_cast<size_t>(p * 4 + 2)] = kBg[2];
+      img[static_cast<size_t>(p * 4 + 3)] = 255;
+    }
+    // Plot box (leave a top margin for the Holoviz title text).
+    constexpr int64_t kLeft = 40, kRight = kW - 12, kTop = 30,
+                      kBottom = kH - 20;
+    for (int64_t x = kLeft; x <= kRight; ++x) {
+      put_px(&img, x, kTop, kGrid);
+      put_px(&img, x, kBottom, kGrid);
+    }
+    for (int64_t y = kTop; y <= kBottom; ++y) {
+      put_px(&img, kLeft, y, kGrid);
+      put_px(&img, kRight, y, kGrid);
+    }
+    // Interior horizontal gridlines (quarters).
+    for (int q = 1; q < 4; ++q) {
+      const int64_t y = kTop + (kBottom - kTop) * q / 4;
+      for (int64_t x = kLeft + 1; x < kRight; x += 4) {
+        put_px(&img, x, y, kGrid);
+      }
+    }
+
+    const float lo = use_range ? r_lo_ : v_lo_;
+    const float hi = use_range ? r_hi_ : v_hi_;
+    const float span = std::max(hi - lo, 1e-6F);
+    const auto to_px = [&](int64_t t, float val, int64_t* px, int64_t* py) {
+      const float xf = static_cast<float>(t - oldest) /
+                       static_cast<float>(window - 1);
+      const float yf = std::clamp((val - lo) / span, 0.0F, 1.0F);
+      *px = kLeft +
+            static_cast<int64_t>(xf * static_cast<float>(kRight - kLeft));
+      *py = kBottom -
+            static_cast<int64_t>(yf * static_cast<float>(kBottom - kTop));
+    };
+
+    // Detections: filled 3x3 dots.
+    for (const Sample& s : det_hist_) {
+      int64_t px = 0, py = 0;
+      to_px(s.t, use_range ? s.r : s.v, &px, &py);
+      const auto col = bucket_color(s.bucket);
+      for (int64_t dy = -1; dy <= 1; ++dy) {
+        for (int64_t dx = -1; dx <= 1; ++dx) {
+          put_px(&img, px + dx, py + dy, col);
+        }
+      }
+    }
+    // Centroids: a '+' marker (distinct shape), drawn on top.
+    for (const Sample& s : cen_hist_) {
+      int64_t px = 0, py = 0;
+      to_px(s.t, use_range ? s.r : s.v, &px, &py);
+      const auto col = bucket_color(s.bucket);
+      for (int64_t d = -4; d <= 4; ++d) {
+        put_px(&img, px + d, py, col);
+        put_px(&img, px, py + d, col);
+      }
+    }
+
+    auto tensor = radar::make_device_tensor({kH, kW, 4},
+                                            DLDataType{kDLUInt, 8, 1});
+    if (cudaMemcpy(tensor->data(), img.data(), img.size(),
+                   cudaMemcpyHostToDevice) != cudaSuccess) {
+      throw std::runtime_error("RollingPlotOp: plot image H2D upload failed");
+    }
+    return tensor;
+  }
+
+  // Constant top-left title position (x, y, size) in the layer's [0,1] space.
+  static std::shared_ptr<holoscan::Tensor> title_pos() {
+    const std::array<float, 3> pos = {0.03F, 0.02F, 0.05F};
+    auto tensor =
+        radar::make_device_tensor({1, 3}, radar::real_dtype<float>());
+    if (cudaMemcpy(tensor->data(), pos.data(), sizeof(pos),
+                   cudaMemcpyHostToDevice) != cudaSuccess) {
+      throw std::runtime_error("RollingPlotOp: title position H2D failed");
+    }
+    return tensor;
+  }
+
+  std::deque<Sample> det_hist_;
+  std::deque<Sample> cen_hist_;
+  int64_t tick_{0};
+  float r_lo_{0}, r_hi_{1}, v_lo_{0}, v_hi_{1};
+  bool axis_set_{false};
+};
+
 class FmcwSisoApp : public holoscan::Application {
  public:
   AppConfig cfg;  // set before run()
@@ -1031,17 +1352,20 @@ class FmcwSisoApp : public holoscan::Application {
     // Optional live RD-map window (cfg.visualize; main() has already
     // downgraded it with a warning on GUI-less hosts). Turbo-mapped |RD|
     // (range = x, Doppler = y) with the CFAR detections overlaid as crosses
-    // colored by DBSCAN cluster (noise in gray).
+    // colored by DBSCAN cluster (noise in gray). With cfg.plots.enable, the
+    // map shares the window's left viewport and two rolling time-series plots
+    // (range and velocity vs time) stack on the right.
     if (cfg.visualize) {
+      using InputSpec = holoscan::ops::HolovizOp::InputSpec;
+      using InputType = holoscan::ops::HolovizOp::InputType;
       auto to_image = make_operator<RdMapToImageOp>("rd_map_to_image");
       auto overlay = make_operator<ClusterOverlayOp>("cluster_overlay");
 
       // Layer 0 is the turbo LUT image; the cluster/noise CROSSES layers draw
       // on top (higher priority renders last). One CROSSES InputSpec per
       // palette color, named to match ClusterOverlayOp's emitted tensors.
-      std::vector<holoscan::ops::HolovizOp::InputSpec> input_specs;
-      input_specs.emplace_back("rd_map",
-                               holoscan::ops::HolovizOp::InputType::COLOR_LUT);
+      std::vector<InputSpec> input_specs;
+      input_specs.emplace_back("rd_map", InputType::COLOR_LUT);
       const auto palette = cluster_palette();
       if (static_cast<int>(palette.size()) != kNumClusterColors) {
         throw std::runtime_error(
@@ -1049,8 +1373,7 @@ class FmcwSisoApp : public holoscan::Application {
       }
       const auto add_crosses = [&](const std::string& name,
                                    const std::vector<float>& color) {
-        holoscan::ops::HolovizOp::InputSpec spec(
-            name, holoscan::ops::HolovizOp::InputType::CROSSES);
+        InputSpec spec(name, InputType::CROSSES);
         spec.color_ = color;
         spec.line_width_ = 2.0F;
         spec.priority_ = 1;
@@ -1061,12 +1384,53 @@ class FmcwSisoApp : public holoscan::Application {
       }
       add_crosses(kNoiseLayerName, {0.6F, 0.6F, 0.6F, 1.0F});
 
+      // A View maps a layer's [0,1] content into an (offset, size) rectangle
+      // of the window. With plots enabled, the RD map + overlay share the left
+      // viewport so the crosses stay aligned to the shrunk image.
+      const auto make_view = [](float ox, float oy, float w, float h) {
+        InputSpec::View v;
+        v.offset_x_ = ox;
+        v.offset_y_ = oy;
+        v.width_ = w;
+        v.height_ = h;
+        return v;
+      };
+      std::shared_ptr<RollingPlotOp> plot;
+      if (cfg.plots.enable) {
+        const auto left = make_view(0.0F, 0.0F, 0.60F, 1.0F);
+        for (InputSpec& spec : input_specs) {
+          spec.views_ = {left};
+        }
+        // Right column: each plot is an RGBA image (rasterized scatter) with a
+        // TEXT title rendered on top of it.
+        const auto add_plot = [&](const char* img_name, const char* title_name,
+                                  const std::string& title, float oy) {
+          InputSpec image(img_name, InputType::COLOR);
+          image.views_ = {make_view(0.63F, oy, 0.35F, 0.44F)};
+          input_specs.push_back(image);
+          InputSpec text(title_name, InputType::TEXT);
+          text.text_ = {title};
+          text.color_ = {1.0F, 1.0F, 1.0F, 1.0F};
+          text.priority_ = 2;
+          text.views_ = {make_view(0.63F, oy, 0.35F, 0.44F)};
+          input_specs.push_back(text);
+        };
+        add_plot(kRangePlotLayer, kRangeTitleLayer, "Range (m) vs time",
+                 0.04F);
+        add_plot(kVelocityPlotLayer, kVelocityTitleLayer,
+                 "Velocity (m/s) vs time", 0.52F);
+
+        plot = make_operator<RollingPlotOp>("rolling_plot");
+        plot->window = cfg.plots.window;
+      }
+
       auto visualizer = make_operator<holoscan::ops::HolovizOp>(
           "holoviz", holoscan::Arg("tensors", input_specs),
           holoscan::Arg("color_lut", make_turbo_lut()),
           holoscan::Arg("window_title",
                         std::string("FMCW SISO - Range-Doppler + clusters")),
-          holoscan::Arg("width", 800U), holoscan::Arg("height", 600U),
+          holoscan::Arg("width", cfg.plots.enable ? 1200U : 800U),
+          holoscan::Arg("height", 600U),
           holoscan::Arg("headless", cfg.headless));
 
       add_flow(doppler, to_image, {{"rd_maps", "rd_maps"}});
@@ -1077,6 +1441,16 @@ class FmcwSisoApp : public holoscan::Application {
       add_flow(cluster, overlay, {{"labels", "labels"}});
       add_flow(doppler, overlay, {{"rd_maps", "rd_maps"}});
       add_flow(overlay, visualizer, {{"overlay", "receivers"}});
+
+      // Rolling range/velocity plots: fed the same feature matrix + labels as
+      // the clusterer, plus the axis bins that fix each plot's Y extent.
+      if (plot) {
+        add_flow(feature_assembly, plot, {{"points", "points"}});
+        add_flow(cluster, plot, {{"labels", "labels"}});
+        add_flow(range, plot, {{"range_bins", "range_bins"}});
+        add_flow(doppler, plot, {{"velocity_bins", "velocity_bins"}});
+        add_flow(plot, visualizer, {{"plots", "receivers"}});
+      }
     }
   }
 };

@@ -51,16 +51,25 @@ when the block or any key is omitted.
 
 ## Visualization
 
-Set `visualize: true` in the config to open a live Holoviz window showing
-the range-Doppler map (normalized log magnitude, turbo colormap; range along
-x, Doppler along y). The CFAR detections are overlaid as a crosses geometry
-layer, **colored by DBSCAN cluster** (a categorical palette, one color per
-cluster; detections that stayed noise are drawn in gray), so the grouping is
-visible on the map alongside the textual cluster reports. This requires a
-GUI-capable host — a reachable display server and Vulkan. At startup the app
-probes Holoviz directly; if no usable display is found (headless host, or a
-stale `DISPLAY` with no server behind it), it logs a warning and runs
-exactly as if `visualize` were `false`.
+Set `visualize: true` in the config to open a live Holoviz window. On the
+left is the range-Doppler map (normalized log magnitude, turbo colormap;
+range along x, Doppler along y), with the CFAR detections overlaid as a
+crosses geometry layer **colored by DBSCAN cluster** (a categorical palette,
+one color per cluster; detections that stayed noise are drawn in gray), so
+the grouping is visible on the map alongside the textual cluster reports.
+
+On the right (when `plots.enable` is set) two rolling time-series plots
+stack: **range (m) vs time** and **velocity (m/s) vs time**. Each scrolling
+plot shows every detection as a dot colored by its cluster and each cluster's
+centroid as a distinct `+` marker in the same color, over a fixed Y axis (the
+range / velocity bin extents) and a window of the last `plots.window` frames.
+Over a run the moving target traces a rising range and a roughly constant
+velocity. Set `plots.enable: false` to let the RD map fill the window.
+
+This requires a GUI-capable host — a reachable display server and Vulkan. At
+startup the app probes Holoviz directly; if no usable display is found
+(headless host, or a stale `DISPLAY` with no server behind it), it logs a
+warning and runs exactly as if `visualize` were `false`.
 
 Set `headless: true` (with `visualize: true`) to render Holoviz offscreen
 with no window — the startup display probe is skipped, letting the visual

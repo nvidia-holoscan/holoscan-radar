@@ -50,9 +50,9 @@ doppler_processor:
 # os_rank is only required when cfar_variant is OS.
 cfar_detector:
   cfar_variant: CA
-  guard_cells: [1, 1]
-  training_cells: [2, 2]
-  pfa: 1.0e-6
+  guard_cells: [2, 2]
+  training_cells: [4, 4]
+  pfa: 1.0e-7
   os_rank: 0
 
 # Clustering stage (app-parsed like cfar_detector; AssemblyFeature has no
@@ -70,8 +70,8 @@ cfar_detector:
 #                  <= 0 is uncapped.
 clustering:
   features: [range, velocity]
-  epsilon: [3.0, 2.0]
-  min_points: 2
+  epsilon: [30.0, 2.0]
+  min_points: 1
   max_clusters: 0
 
 # ADC data-cube dimensions per coherent processing interval (CPI).
@@ -114,3 +114,14 @@ skip_display_check: false
 # display-less host (CI, headless dev boxes); the startup display probe is
 # skipped when set. Combine with visualize: true.
 headless: false
+
+# Rolling time-series plots drawn to the right of the RD map (only when
+# visualize is on). Two scrolling scatter plots — range (m) vs time and
+# velocity (m/s) vs time — where every detection is a dot colored by its
+# DBSCAN cluster (noise gray) and each cluster's centroid is a '+' marker in
+# the same color. Y axes are fixed to the range/velocity bin extents.
+#   enable — draw the plots (false → RD map fills the window, as before)
+#   window — number of frames retained in the scrolling window (must be > 1)
+plots:
+  enable: true
+  window: 120
