@@ -65,20 +65,18 @@ centroid.
 
 Set `visualize: true` in the config to open a live Holoviz window. On the
 left is the range-Doppler map (normalized log magnitude, turbo colormap;
-range along x, Doppler along y), with the CFAR detections overlaid as a
-crosses geometry layer **colored by DBSCAN cluster** (a categorical palette,
-one color per cluster; detections that stayed noise are drawn in gray), so
-the grouping is visible on the map alongside the textual cluster reports. Each
-cluster's `DetectionReductionOp` representative (its centroid) is marked with a
-larger bold white cross.
+range along x, Doppler along y), with **every CFAR detection** overlaid as a
+cross **colored by DBSCAN cluster** (a categorical palette, one color per
+cluster; detections that stayed noise are drawn in gray), so the grouping is
+visible on the map alongside the textual cluster reports.
 
 On the right (when `plots.enable` is set) two rolling time-series plots
-stack: **range (m) vs time** and **velocity (m/s) vs time**. Each scrolling
-plot shows every detection as a dot colored by its cluster and each cluster's
-centroid — the reduction representative — as a distinct `+` marker in the same
-color, over a fixed Y axis (the range / velocity bin extents, with numeric
-tick labels) and an X axis of the last `plots.window` frames in seconds
-(0 = now).
+stack: **range (m) vs time** and **velocity (m/s) vs time**. These show one
+point per cluster — each cluster's centroid, i.e. the `DetectionReductionOp`
+representative — as a `+` marker colored by cluster, over a fixed Y axis (the
+range / velocity bin extents, with numeric tick labels) and an X axis of the
+last `plots.window` frames in seconds (0 = now). So the map carries the raw
+color-coded detections and the plots carry the distilled per-cluster tracks.
 Over a run the moving target traces a rising range and a roughly constant
 velocity. Set `plots.enable: false` to let the RD map fill the window.
 
