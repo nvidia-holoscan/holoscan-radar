@@ -51,7 +51,11 @@ function(radar_add_statistical_test NAME)
     gtest_discover_tests(${_tgt} PROPERTIES LABELS "statistical")
 endfunction()
 
-radar_add_test(common/test_common)
+radar_add_test(common/test_window)
+radar_add_test(common/test_descriptors)
+radar_add_test(common/test_sdk)
+radar_add_test(common/test_sim)
+radar_add_test(common/test_tensor)
 radar_add_test(fmcw/test_fmcw_range_processor
     holoscan::fmcw_range_processor_op)
 radar_add_test(fmcw/test_clutter_filter
