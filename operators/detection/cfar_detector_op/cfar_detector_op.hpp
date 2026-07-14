@@ -167,6 +167,17 @@ class CFARDetectorOp : public holoscan::Operator {
   bool using_external_alpha_lut_{false};
   bool pfa_ignored_while_alpha_lut_warned_{false};
   bool alpha_lut_cleared_pfa_active_warned_{false};
+  // Cache that external alpha_lut was validated for the current table +
+  // geometry/fold so we skip the O(max_index) checks on unchanged ticks.
+  bool external_alpha_lut_validated_{false};
+  CfarVariant validated_external_variant_{CfarVariant::kCA};
+  int64_t validated_external_fold_{0};
+  int64_t validated_external_num_doppler_{0};
+  int64_t validated_external_num_range_{0};
+  int validated_external_guard_d_{0};
+  int validated_external_guard_r_{0};
+  int validated_external_train_d_{0};
+  int validated_external_train_r_{0};
   std::vector<double> alpha_lut_host_cache_{};
   std::shared_ptr<holoscan::Tensor> alpha_lut_dev_{};
 

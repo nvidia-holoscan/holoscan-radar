@@ -78,9 +78,7 @@ int64_t max_alpha_lut_index(CfarVariant variant, int num_doppler,
 
 void validate_external_alpha_lut(CfarVariant variant, int64_t fold,
                                  const std::vector<double>& lut,
-                                 int64_t max_lut_index, int num_doppler,
-                                 int num_range, int guard_d, int guard_r,
-                                 int train_d, int train_r) {
+                                 int64_t max_lut_index) {
   if (max_lut_index <= 0) {
     return;
   }
@@ -89,9 +87,15 @@ void validate_external_alpha_lut(CfarVariant variant, int64_t fold,
         "CFARDetectorOp: alpha_lut length must exceed the maximum LUT index "
         "for the configured variant, footprint, and map size");
   }
-  // Every slot in 1..max must be finite and non-negative. Zeros are only legal
-  // at unreachable indices of a sparse table (see the positivity checks below);
-  // any negative or non-finite entry is corruption regardless of reachability.
+  // O(max_index) only — do not walk the map for reachability. Sparse offline
+  // tables (GO/SO always; OS when K>1) may leave unreachable slots at zero;
+  // the kernel treats alpha==0 as no detect. CA and OS K=1 are dense and
+  // require every slot in 1..max to be positive.
+  //
+  // Intentional footgun: for sparse variants we do not verify that reachable
+  // indices are positive. A caller-supplied table of all zeros (or zeros on
+  // used indices) validates and yields no detections; supply a correctly
+  // filled LUT (e.g. from build_*_alpha_lut).
   for (int64_t idx = 1; idx <= max_lut_index; ++idx) {
     const double alpha = lut[static_cast<size_t>(idx)];
     if (!std::isfinite(alpha) || alpha < 0.0) {
@@ -100,31 +104,10 @@ void validate_external_alpha_lut(CfarVariant variant, int64_t fold,
           "and non-negative");
     }
   }
-  // Require a positive alpha only at indices the kernel can actually read.
-  // GO/SO always build sparse tables (positive on reachable side-counts, zero
-  // elsewhere); OS builds a sparse table for K>1 (reachable training-cell
-  // counts) but a dense one for K=1. CA is always dense. For the sparse cases
-  // check the reachable set; otherwise require every index positive.
-  auto require_reachable_positive = [&](const std::vector<int64_t>& reachable) {
-    for (int64_t idx : reachable) {
-      if (idx <= 0 || idx > max_lut_index) {
-        continue;
-      }
-      if (lut[static_cast<size_t>(idx)] <= 0.0) {
-        throw std::invalid_argument(
-            "CFARDetectorOp: alpha_lut entries for reachable LUT indices must "
-            "be finite and positive");
-      }
-    }
-  };
-  if (variant == CfarVariant::kGO || variant == CfarVariant::kSO) {
-    require_reachable_positive(detail::reachable_go_lut_indices(
-        num_doppler, num_range, guard_d, guard_r, train_d, train_r));
-    return;
-  }
-  if (variant == CfarVariant::kOS && fold > 1) {
-    require_reachable_positive(detail::reachable_training_cell_counts(
-        num_doppler, num_range, guard_d, guard_r, train_d, train_r));
+  const bool sparse_ok = variant == CfarVariant::kGO ||
+                         variant == CfarVariant::kSO ||
+                         (variant == CfarVariant::kOS && fold > 1);
+  if (sparse_ok) {
     return;
   }
   for (int64_t idx = 1; idx <= max_lut_index; ++idx) {
@@ -375,6 +358,7 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
     pending_lut_key_ = {};
     pending_lut_active_ = false;
     stale_lut_warned_ = false;
+    external_alpha_lut_validated_ = false;
   }
 
   if (pfa_override_changed && has_external_alpha_lut &&
@@ -388,18 +372,40 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
   if (has_external_alpha_lut) {
     // max_alpha_lut_index is closed-form for maps that fit the window (the
     // common case); only needed to validate an externally supplied LUT.
-    const int64_t max_lut_index = max_alpha_lut_index(
-        variant, static_cast<int>(num_doppler), static_cast<int>(num_range),
-        guard_d, guard_r, train_d, train_r);
-    validate_external_alpha_lut(variant, plan.fold, effective_alpha_lut_,
-                                max_lut_index, static_cast<int>(num_doppler),
-                                static_cast<int>(num_range), guard_d, guard_r,
-                                train_d, train_r);
-    using_external_alpha_lut_ = true;
-    if (effective_alpha_lut_ != alpha_lut_host_cache_) {
-      alpha_lut_host_cache_ = effective_alpha_lut_;
-      upload_alpha_lut(alpha_lut_host_cache_);
+    // Re-validate only when the table or CFAR geometry/fold changes — not
+    // every tick.
+    const bool lut_changed = effective_alpha_lut_ != alpha_lut_host_cache_;
+    const bool geometry_changed =
+        !external_alpha_lut_validated_ ||
+        validated_external_variant_ != variant ||
+        validated_external_fold_ != plan.fold ||
+        validated_external_num_doppler_ != num_doppler ||
+        validated_external_num_range_ != num_range ||
+        validated_external_guard_d_ != guard_d ||
+        validated_external_guard_r_ != guard_r ||
+        validated_external_train_d_ != train_d ||
+        validated_external_train_r_ != train_r;
+    if (lut_changed || geometry_changed) {
+      const int64_t max_lut_index = max_alpha_lut_index(
+          variant, static_cast<int>(num_doppler), static_cast<int>(num_range),
+          guard_d, guard_r, train_d, train_r);
+      validate_external_alpha_lut(variant, plan.fold, effective_alpha_lut_,
+                                  max_lut_index);
+      external_alpha_lut_validated_ = true;
+      validated_external_variant_ = variant;
+      validated_external_fold_ = plan.fold;
+      validated_external_num_doppler_ = num_doppler;
+      validated_external_num_range_ = num_range;
+      validated_external_guard_d_ = guard_d;
+      validated_external_guard_r_ = guard_r;
+      validated_external_train_d_ = train_d;
+      validated_external_train_r_ = train_r;
+      if (lut_changed) {
+        alpha_lut_host_cache_ = effective_alpha_lut_;
+        upload_alpha_lut(alpha_lut_host_cache_);
+      }
     }
+    using_external_alpha_lut_ = true;
   } else {
     using_external_alpha_lut_ = false;
     const bool blocking_lut = blocking_alpha_lut_rebuild_.get();

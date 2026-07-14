@@ -183,6 +183,8 @@ std::vector<double> precompute_alpha_lut(const CfarScenario& scen) {
       return hr::detail::build_so_alpha_lut(scen.pfa, k, num_doppler, num_range,
                                           guard_d, guard_r, train_d, train_r);
     case hr::CfarVariant::kOS:
+      // build_os_alpha_lut is dense for K=1 and sparse (reachable N only)
+      // for K>1; operator validate allows those sparse zeros.
       return hr::detail::build_os_alpha_lut(
           scen.pfa, k, scen.os_rank, num_doppler, num_range, guard_d, guard_r,
           train_d, train_r);
@@ -670,6 +672,7 @@ void print_help() {
       "  --sizes all       CA size sweep across the full ladder\n"
       "  --sizes a,b,c     CA size sweep across an explicit subset\n"
       "  --full            Full matrix (all variants/footprints/batch/NCI)\n"
+      "                    plus the default alpha_lut calibration pairs\n"
       "  --stop-after-s S  Stop after first scenario whose wall time exceeds "
       "S seconds\n"
       "  --help            Show this help\n";
@@ -749,6 +752,9 @@ int main(int argc, char** argv) {
   std::vector<CfarScenario> scenarios;
   if (opt.full) {
     scenarios = build_full_matrix();
+    // Keep the curated pfa↔alpha_lut pairs so --full still reports the
+    // calibration-mode comparison (slow MC vs precomputed LUT), not only pfa.
+    tag_and_append_alpha_lut_pairs(&scenarios);
   } else if (opt.sizes_all) {
     std::vector<std::string> all;
     for (const auto& s : size_ladder()) {
