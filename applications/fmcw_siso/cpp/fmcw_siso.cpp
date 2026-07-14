@@ -31,9 +31,11 @@
 //
 // All configuration lives in fmcw_siso.yaml (staged next to the binary;
 // override with a path as the first CLI argument): the per-operator blocks
-// for the signal-processing ops flow through Holoscan's native
-// config()/from_config() path; the CFAR block is parsed into AppConfig (no
-// YAML::convert for CfarVariant in radar_common yet) and applied as Args.
+// (range_processor, clutter_filter, doppler_processor, cfar_detector,
+// cluster_dbscan, reduction) all flow through Holoscan's native
+// config()/from_config() path. Only the synthetic source, run cadence, and
+// visualization toggles are parsed into AppConfig; FeatureAssemblyOp's fixed
+// [range, velocity] layout is applied as an explicit Arg (native-only param).
 //
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/fmcw_siso/cpp/fmcw_siso [config.yaml]
@@ -80,47 +82,6 @@ namespace {
 // index into it directly.
 constexpr size_t kLutSize = 256;
 
-// App-owned configuration: everything the synthetic source and run cadence
-// need (see fmcw_siso.yaml). Operator parameters for the signal-processing
-// ops are NOT parsed here — those YAML blocks flow through Holoscan's
-// from_config() in compose(). CFAR parameters are parsed here because
-// CfarVariant has no radar_common YAML::convert yet.
-struct CfarConfig {
-  radar::CfarVariant variant{radar::CfarVariant::kCA};
-  std::vector<int64_t> guard_cells{1, 1};
-  std::vector<int64_t> training_cells{2, 2};
-  double pfa{1e-4};
-  int64_t os_rank{0};
-};
-
-// Clustering-stage configuration: the FeatureAssemblyOp feature columns plus
-// the ClusterDBSCANOp parameters. Like CfarConfig, this is app-parsed rather
-// than routed through from_config() — AssemblyFeature has no radar_common
-// YAML::convert, so the whole stage is kept as one app-validated block and
-// applied as Args in compose(). The defaults assemble a [range, velocity]
-// matrix (physical units) and cluster it with a per-axis neighborhood.
-struct ClusteringConfig {
-  std::vector<radar::AssemblyFeature> features{
-      radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity};
-  std::vector<double> epsilon{3.0, 2.0};  // per-feature radius: m, m/s
-  int64_t min_points{2};                  // <= 0 → 2*num_features
-  int64_t max_clusters{0};                // <= 0 → uncapped
-};
-
-// DetectionReductionOp configuration: reduces each cluster to one
-// representative CFAR cell. App-parsed (RepresentativePolicy / ScoreMethod
-// have no YAML::convert). The default `medoid` picks the most-central real
-// detection in the [range, velocity] feature space — the centroid-like choice
-// that suits this app's points (peak would rank by range/velocity magnitude,
-// which is meaningless without a score feature). feature_weights defaults to
-// the inverse clustering epsilon so the medoid metric matches DBSCAN's.
-struct ReductionConfig {
-  radar::RepresentativePolicy representative{
-      radar::RepresentativePolicy::kMedoid};
-  radar::ScoreMethod score_method{radar::ScoreMethod::kWeightedSum};
-  std::vector<double> feature_weights;  // empty → derived from epsilon
-};
-
 // Rolling time-series plots drawn beside the RD map (range and velocity vs
 // time). Only consulted when visualize is on; the plots share the Holoviz
 // window via sub-viewports.
@@ -131,9 +92,6 @@ struct PlotsConfig {
 
 struct AppConfig {
   radar::sim::SimScene scene;  // waveform, cube dims, targets, noise
-  CfarConfig cfar;
-  ClusteringConfig clustering;
-  ReductionConfig reduction;
   PlotsConfig plots;
   int64_t num_frames{1};
   double frame_period{0.1};  // s, between emitted cubes (and target motion)
@@ -246,179 +204,11 @@ AppConfig load_config(const std::filesystem::path& path) {
                              std::to_string(cfg.plots.window));
   }
 
-  // CFARDetectorOp parameters (app-parsed; applied as Args in compose()).
-  const YAML::Node cfar = root["cfar_detector"];
-  if (cfar && !cfar.IsNull()) {
-    if (cfar["cfar_variant"]) {
-      const std::string spelling = cfar["cfar_variant"].as<std::string>();
-      bool matched = false;
-      for (radar::CfarVariant v : {radar::CfarVariant::kCA,
-                                   radar::CfarVariant::kGO,
-                                   radar::CfarVariant::kSO,
-                                   radar::CfarVariant::kOS}) {
-        if (spelling == radar::to_string(v)) {
-          cfg.cfar.variant = v;
-          matched = true;
-          break;
-        }
-      }
-      if (!matched) {
-        throw std::runtime_error(
-            "cfar_detector.cfar_variant: unknown value '" + spelling +
-            "' (accepted: CA, GO, SO, OS)");
-      }
-    }
-    if (cfar["guard_cells"]) {
-      cfg.cfar.guard_cells = cfar["guard_cells"].as<std::vector<int64_t>>();
-    }
-    if (cfar["training_cells"]) {
-      cfg.cfar.training_cells =
-          cfar["training_cells"].as<std::vector<int64_t>>();
-    }
-    if (cfar["pfa"]) {
-      cfg.cfar.pfa = cfar["pfa"].as<double>();
-    }
-    if (cfar["os_rank"]) {
-      cfg.cfar.os_rank = cfar["os_rank"].as<int64_t>();
-    }
-  }
-  if (cfg.cfar.guard_cells.size() != 2 || cfg.cfar.training_cells.size() != 2) {
-    throw std::runtime_error(
-        "cfar_detector.guard_cells and training_cells must each have "
-        "exactly 2 entries (doppler, range)");
-  }
-  if (!(cfg.cfar.pfa > 0.0 && cfg.cfar.pfa < 1.0)) {
-    throw std::runtime_error("cfar_detector.pfa must be in (0, 1)");
-  }
-
-  // Clustering stage (app-parsed; applied as Args in compose()). All keys are
-  // optional — the ClusteringConfig defaults hold when a key or the whole
-  // block is omitted.
-  const YAML::Node clustering = root["clustering"];
-  if (clustering && !clustering.IsNull()) {
-    if (clustering["features"]) {
-      std::vector<radar::AssemblyFeature> features;
-      for (const YAML::Node& f : clustering["features"]) {
-        const std::string spelling = f.as<std::string>();
-        bool matched = false;
-        for (radar::AssemblyFeature v :
-             {radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity,
-              radar::AssemblyFeature::kScore, radar::AssemblyFeature::kAz,
-              radar::AssemblyFeature::kEl, radar::AssemblyFeature::kDopplerBin,
-              radar::AssemblyFeature::kRangeBin}) {
-          if (spelling == radar::to_string(v)) {
-            features.push_back(v);
-            matched = true;
-            break;
-          }
-        }
-        if (!matched) {
-          throw std::runtime_error(
-              "clustering.features: unknown token '" + spelling +
-              "' (accepted: range, velocity, score, az, el, doppler_bin, "
-              "range_bin)");
-        }
-      }
-      if (features.empty()) {
-        throw std::runtime_error(
-            "clustering.features must list at least one feature");
-      }
-      cfg.clustering.features = features;
-    }
-    if (clustering["epsilon"]) {
-      cfg.clustering.epsilon =
-          clustering["epsilon"].as<std::vector<double>>();
-    }
-    if (clustering["min_points"]) {
-      cfg.clustering.min_points = clustering["min_points"].as<int64_t>();
-    }
-    if (clustering["max_clusters"]) {
-      cfg.clustering.max_clusters = clustering["max_clusters"].as<int64_t>();
-    }
-  }
-  // epsilon reaches ClusterDBSCANOp, which rejects a bad value mid-graph;
-  // validate here so the offending key surfaces at startup instead. Length
-  // must be 1 (isotropic) or match the feature count (per-axis), and every
-  // value finite and > 0.
-  if (cfg.clustering.epsilon.empty()) {
-    throw std::runtime_error("clustering.epsilon must be non-empty");
-  }
-  if (cfg.clustering.epsilon.size() != 1 &&
-      cfg.clustering.epsilon.size() != cfg.clustering.features.size()) {
-    throw std::runtime_error(
-        "clustering.epsilon must have length 1 or match the number of "
-        "features (" +
-        std::to_string(cfg.clustering.features.size()) + ")");
-  }
-  for (const double e : cfg.clustering.epsilon) {
-    if (!(std::isfinite(e) && e > 0.0)) {
-      throw std::runtime_error(
-          "clustering.epsilon values must be finite and > 0");
-    }
-  }
-
-  // Reduction stage (app-parsed; applied as Args in compose()). All optional.
-  const YAML::Node reduction = root["reduction"];
-  if (reduction && !reduction.IsNull()) {
-    if (reduction["representative"]) {
-      const std::string spelling =
-          reduction["representative"].as<std::string>();
-      bool matched = false;
-      for (radar::RepresentativePolicy v :
-           {radar::RepresentativePolicy::kPeak,
-            radar::RepresentativePolicy::kMedoid,
-            radar::RepresentativePolicy::kFirst}) {
-        if (spelling == radar::to_string(v)) {
-          cfg.reduction.representative = v;
-          matched = true;
-          break;
-        }
-      }
-      if (!matched) {
-        throw std::runtime_error(
-            "reduction.representative: unknown value '" + spelling +
-            "' (accepted: peak, medoid, first)");
-      }
-    }
-    if (reduction["score_method"]) {
-      const std::string spelling = reduction["score_method"].as<std::string>();
-      bool matched = false;
-      for (radar::ScoreMethod v :
-           {radar::ScoreMethod::kWeightedSum, radar::ScoreMethod::kWeightedL2,
-            radar::ScoreMethod::kWeightedMax, radar::ScoreMethod::kCustom}) {
-        if (spelling == radar::to_string(v)) {
-          cfg.reduction.score_method = v;
-          matched = true;
-          break;
-        }
-      }
-      if (!matched) {
-        throw std::runtime_error(
-            "reduction.score_method: unknown value '" + spelling +
-            "' (accepted: weighted_sum, weighted_l2, weighted_max, custom)");
-      }
-    }
-    if (reduction["feature_weights"]) {
-      cfg.reduction.feature_weights =
-          reduction["feature_weights"].as<std::vector<double>>();
-    }
-  }
-  // custom scoring needs a compile-time ScoreFn the app doesn't provide.
-  if (cfg.reduction.score_method == radar::ScoreMethod::kCustom) {
-    throw std::runtime_error(
-        "reduction.score_method: 'custom' is not supported by this app");
-  }
-  // If given, feature_weights must match the feature count; if empty it is
-  // derived from the clustering epsilon in compose().
-  if (!cfg.reduction.feature_weights.empty() &&
-      cfg.reduction.feature_weights.size() !=
-          cfg.clustering.features.size()) {
-    throw std::runtime_error(
-        "reduction.feature_weights length must equal the number of features "
-        "(" +
-        std::to_string(cfg.clustering.features.size()) + ")");
-  }
-
+  // The cfar_detector, cluster_dbscan, and reduction operator blocks are NOT
+  // parsed here — they flow through Holoscan's from_config() in compose(), and
+  // each operator validates its own parameters at initialize(). Only the
+  // synthetic source, run cadence, and visualization toggles above are
+  // app-owned.
   return cfg;
 }
 
@@ -1465,15 +1255,8 @@ class FmcwSisoApp : public holoscan::Application {
         "clutter_filter", from_config("clutter_filter"));
     auto doppler = make_operator<radar::FMCWDopplerProcessorOp<float>>(
         "doppler_processor", from_config("doppler_processor"));
-    // CFAR args are applied explicitly: CfarVariant has no YAML::convert in
-    // radar_common yet (parsed into AppConfig.cfar in load_config()).
     auto cfar = make_operator<radar::CFARDetectorOp<float>>(
-        "cfar_detector",
-        holoscan::Arg("cfar_variant") = cfg.cfar.variant,
-        holoscan::Arg("guard_cells") = cfg.cfar.guard_cells,
-        holoscan::Arg("training_cells") = cfg.cfar.training_cells,
-        holoscan::Arg("pfa") = cfg.cfar.pfa,
-        holoscan::Arg("os_rank") = cfg.cfar.os_rank);
+        "cfar_detector", from_config("cfar_detector"));
     auto sink = make_operator<DetectionReportOp>("detection_report");
     // Every CFAR output needs a receiver or the operator never ticks.
     auto mask_sink = make_operator<NullSinkOp>("detection_mask_sink");
@@ -1481,33 +1264,23 @@ class FmcwSisoApp : public holoscan::Application {
 
     // Clustering branch: assemble a [range, velocity] feature matrix from the
     // CFAR cells (physical units, via the range/Doppler axis outputs) and
-    // density-cluster it. `features` is applied as an Arg (AssemblyFeature has
-    // no YAML::convert, mirroring CFAR); the DBSCAN parameters likewise come
-    // from the app-parsed clustering block.
+    // density-cluster it. `features` is fixed in code — the parameter is
+    // native-only by operator contract, and this app's downstream report /
+    // overlays assume this exact 2-column layout. The DBSCAN parameters flow
+    // natively from the cluster_dbscan YAML block.
+    const std::vector<radar::AssemblyFeature> feature_columns{
+        radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity};
     auto feature_assembly = make_operator<radar::FeatureAssemblyOp<float>>(
-        "feature_assembly",
-        holoscan::Arg("features") = cfg.clustering.features);
+        "feature_assembly", holoscan::Arg("features") = feature_columns);
     auto cluster = make_operator<radar::ClusterDBSCANOp<float>>(
-        "cluster_dbscan",
-        holoscan::Arg("epsilon") = cfg.clustering.epsilon,
-        holoscan::Arg("min_points") = cfg.clustering.min_points,
-        holoscan::Arg("max_clusters") = cfg.clustering.max_clusters);
+        "cluster_dbscan", from_config("cluster_dbscan"));
     auto cluster_report = make_operator<ClusterReportOp>("cluster_report");
-    // Reduce each cluster to one representative cell. feature_weights defaults
-    // to the inverse clustering epsilon so the medoid distance matches the
-    // DBSCAN metric (else range's larger magnitude would dominate velocity).
-    std::vector<double> reduction_weights = cfg.reduction.feature_weights;
-    if (reduction_weights.empty()) {
-      const auto& eps = cfg.clustering.epsilon;
-      for (size_t i = 0; i < cfg.clustering.features.size(); ++i) {
-        reduction_weights.push_back(1.0 / eps[eps.size() == 1 ? 0 : i]);
-      }
-    }
+    // Reduce each cluster to one representative cell. The reduction block
+    // (representative / score_method / feature_weights) flows natively; set
+    // feature_weights ~ 1/epsilon in the YAML so the medoid distance matches
+    // the DBSCAN metric (else range's larger magnitude dominates velocity).
     auto reduction = make_operator<radar::DetectionReductionOp<float>>(
-        "detection_reduction",
-        holoscan::Arg("representative") = cfg.reduction.representative,
-        holoscan::Arg("score_method") = cfg.reduction.score_method,
-        holoscan::Arg("feature_weights") = reduction_weights);
+        "detection_reduction", from_config("reduction"));
 
     add_flow(source, range, {{"adc_cube", "adc_cube"}});
     add_flow(range, clutter, {{"range_profiles", "range_profiles"}});

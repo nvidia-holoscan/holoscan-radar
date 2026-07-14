@@ -5,13 +5,14 @@
 # fmcw_siso (pass a path as the first CLI argument to override; otherwise the
 # copy staged next to the executable is used).
 #
-# The per-operator blocks (range_processor, clutter_filter,
-# doppler_processor) are consumed natively via Holoscan's from_config(): every
-# key is an operator parameter, converted by the YAML::convert<>
-# specializations in radar_common/sdk/yaml_converters.hpp. The cfar_detector
-# block is parsed by the app (no YAML::convert for CfarVariant yet) and
-# applied as Args. The remaining top-level sections (cube, run, targets,
-# noise_snr_db) configure the app's synthetic source and run cadence.
+# The per-operator blocks (range_processor, clutter_filter, doppler_processor,
+# cfar_detector, cluster_dbscan, reduction) are consumed natively via
+# Holoscan's from_config(): every key is an operator parameter, converted by
+# the YAML::convert<> specializations (in radar_common/sdk/yaml_converters.hpp
+# and each operator's own translation unit). FeatureAssemblyOp's `features`
+# is fixed in the app code (native-only param). The remaining top-level
+# sections (cube, run, targets, noise_snr_db) configure the app's synthetic
+# source and run cadence.
 
 # FMCW waveform, anchored so the range and Doppler blocks (and the app's
 # simulator mirror) share one definition. Provide exactly one of `bandwidth`
@@ -47,8 +48,8 @@ doppler_processor:
   waveform: *waveform
   doppler_window: hann
 
-# CFARDetectorOp parameters (app-parsed). guard_cells / training_cells are
-# (doppler, range) half-extents; pfa sets the CA threshold multiplier.
+# CFARDetectorOp parameters (native from_config). guard_cells / training_cells
+# are (doppler, range) half-extents; pfa sets the CA threshold multiplier.
 # os_rank is only required when cfar_variant is OS.
 cfar_detector:
   cfar_variant: CA
@@ -57,36 +58,33 @@ cfar_detector:
   pfa: 1.0e-9
   os_rank: 0
 
-# Clustering stage (app-parsed like cfar_detector; AssemblyFeature has no
-# YAML::convert). FeatureAssemblyOp assembles the `points` matrix, one column
-# per `features` token in order, then ClusterDBSCANOp density-clusters it. The
-# whole block is optional; these values are the app defaults.
-#   features     — column tokens (accepted: range, velocity, score, az, el,
-#                  doppler_bin, range_bin). This app fixes them to
-#                  [range, velocity]; the cluster report assumes that layout.
-#   epsilon      — per-feature neighborhood radius, matching `features` order
+# ClusterDBSCANOp parameters (native from_config). FeatureAssemblyOp assembles
+# the `points` matrix (this app fixes its columns to [range (m), velocity
+# (m/s)] in code), then ClusterDBSCANOp density-clusters it.
+#   epsilon      — per-feature neighborhood radius, matching the feature order
 #                  (here metres, then m/s). Length 1 → isotropic.
 #   min_points   — DBSCAN minPts (neighbors incl. self for a core point);
 #                  <= 0 selects the 2*num_features default.
 #   max_clusters — cap on reported clusters (surplus dropped to noise);
 #                  <= 0 is uncapped.
-clustering:
-  features: [range, velocity]
+cluster_dbscan:
   epsilon: [3.0, 2.0]
   min_points: 1
   max_clusters: 0
 
-# Reduction stage (app-parsed; DetectionReductionOp reduces each cluster to one
-# representative cell, used as the cluster's centroid in the GUI + logs). All
-# keys optional.
-#   representative — medoid | peak | first. Default medoid (the most-central
-#                    real detection); peak needs a score feature this app's
-#                    [range, velocity] points don't provide.
-#   score_method   — weighted_sum | weighted_l2 | weighted_max (peak only).
-#   feature_weights — per-feature weights for the medoid/peak metric; empty →
-#                     derived from the clustering epsilon (1/eps per feature).
+# DetectionReductionOp parameters (native from_config): reduces each cluster to
+# one representative cell, used as the cluster's centroid in the GUI + logs.
+#   representative  — medoid | peak | first. medoid is the most-central real
+#                     detection; peak needs a score feature this app's
+#                     [range, velocity] points don't provide.
+#   score_method    — weighted_sum | weighted_l2 | weighted_max (peak only).
+#   feature_weights — per-feature weights for the medoid metric, [range,
+#                     velocity] order. Set ~ 1/epsilon so the metric matches
+#                     the DBSCAN neighborhood (else range's larger magnitude
+#                     dominates velocity).
 reduction:
   representative: medoid
+  feature_weights: [0.3333, 0.5]
 
 # ADC data-cube dimensions per coherent processing interval (CPI).
 cube:
