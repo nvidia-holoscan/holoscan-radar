@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Performance characterization for ClusterDBSCANOp — brute-force O(N²) DBSCAN
-// over a (num_points, num_features) feature matrix. Every compute run inlines a
-// mid-session [live] override (epsilon / min_points / max_clusters). The
-// workload is compact, well-separated blobs so the connected-components loop
-// converges in a few iterations; the point count drives the quadratic sweep.
-// Measurement tool only: no timing assertions. See
-// docs/planning/OPERATOR_DEVELOPMENT.md.
+// Performance characterization for ClusterDBSCANOp — brute-force O(N²·F)
+// DBSCAN over a (num_points, num_features) feature matrix. Every compute run
+// inlines a mid-session [live] override (epsilon / min_points / max_clusters).
+// The workload is compact, well-separated blobs so the connected-components
+// loop converges in a few iterations; N and F both drive cost (FeatureAssembly
+// layouts are typically F∈{2,3,5}). Measurement tool only: no timing
+// assertions. See docs/planning/OPERATOR_DEVELOPMENT.md.
 
 #include <cuda_runtime_api.h>
 
@@ -75,14 +75,22 @@ struct DbscanScenario {
   int64_t override_max_clusters{0};
 };
 
-// O(N²) sweeps, so the ladder tops out lower than the dense-map operators.
+// O(N² · F) sweeps. N spans compact→dense detection clouds; F spans the
+// FeatureAssembly layouts that actually feed this op (2 = range+vel,
+// 3 = +score pre-angle, 5 = +az+el post-angle). Pairwise distance cost grows
+// with F, so the ladder is intentionally (N, F)-diverse, not N-only.
 const std::vector<SizeSpec>& size_ladder() {
   static const std::vector<SizeSpec> ladder = {
-      {"xs", 256, 2, 8, "small; fast smoke"},
-      {"sm", 1024, 2, 32, "compact detection set"},
-      {"md", 2048, 2, 64, "common mid-scale"},
-      {"lg", 4096, 2, 128, "dense detection cloud"},
-      {"xl", 8192, 2, 256, "upper characterization bound (O(N²))"}};
+      {"xs", 256, 2, 8, "small; fast smoke (R+V)"},
+      {"sm", 1024, 2, 32, "compact 2-feature (R+V)"},
+      {"sm3", 1024, 3, 32, "compact 3-feature (R+V+score)"},
+      {"md", 2048, 2, 64, "mid-scale 2-feature"},
+      {"md3", 2048, 3, 64, "mid-scale 3-feature (pre-angle)"},
+      {"md5", 2048, 5, 64, "mid-scale 5-feature (post-angle)"},
+      {"lg", 4096, 2, 128, "dense 2-feature cloud"},
+      {"lg5", 4096, 5, 128, "dense 5-feature cloud"},
+      {"xl", 8192, 2, 256, "upper N bound (O(N²), 2-feature)"},
+      {"xl5", 8192, 5, 256, "upper N×F bound (O(N²F))"}};
   return ladder;
 }
 
@@ -293,7 +301,8 @@ DbscanScenario make_scenario(const SizeSpec& s,
   sc.max_clusters = 0;
   sc.override_kind = ovr;
   std::ostringstream id;
-  id << "dbscan_" << s.id << "_n" << s.num_points << "_" << override_tag(ovr);
+  id << "dbscan_" << s.id << "_n" << s.num_points << "_f" << s.num_features
+     << "_" << override_tag(ovr);
   sc.id = id.str();
   return sc;
 }
@@ -337,7 +346,10 @@ struct DbscanTraits : perf::PerfDriverDefaults {
 
   static std::vector<DbscanScenario> build_default_matrix() {
     std::vector<DbscanScenario> out;
-    for (const char* sid : {"xs", "sm", "md", "lg"}) {
+    // N ladder at F=2, plus mid-scale F=3/5 and dense F=5 so the default
+    // report covers both axes without the full --sizes all matrix.
+    for (const char* sid :
+         {"xs", "sm", "sm3", "md", "md3", "md5", "lg", "lg5"}) {
       out.push_back(make_scenario(must_find_size(sid)));
     }
     // Distinct live params beyond the default epsilon override.
