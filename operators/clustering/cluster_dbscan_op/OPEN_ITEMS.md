@@ -72,3 +72,59 @@ faithful default plus the question for the team.
   `num_points`, mirroring the CFAR dense-buffer pattern, if profiling shows the
   allocation matters. Deferred.
 - **Status.** `landed with caveat`.
+
+## 5. Border-point assignment is deterministic (lowest-root neighbor)
+
+- **Context.** DBSCAN has an inherent ambiguity: a border point (non-core, but
+  within `epsilon` of a core point) that is reachable from cores in **two
+  different clusters** may validly join either. The contract in
+  [`OPERATOR_API.md`](../../../docs/planning/OPERATOR_API.md) does not pin the
+  tie-break, so the implementation had to choose one.
+- **Current behavior.** Each border point joins the neighboring core with the
+  **numerically smallest component root** (lowest member row index). The result
+  is deterministic and independent of thread / iteration order (`labels` is a
+  pure function of `points`, `epsilon`, `min_points`).
+- **Impact.** The clustering *partition* matches any faithful DBSCAN, but the
+  cluster a given inter-cluster border point lands in can differ from other
+  implementations — e.g. scikit-learn assigns a border point to the first
+  cluster whose expansion reaches it in index order, not the min-root one. Only
+  inter-cluster border points are affected.
+- **Question.** Is min-root the desired rule, or should border points go to the
+  nearest core / the first-reached cluster? Whatever the answer, the contract
+  should pin it so the behavior is not implementation-defined.
+- **Status.** `open` — implemented deterministic min-root; code is ahead of the
+  (silent) contract.
+
+## 6. Cluster-id numbering is ascending-root order
+
+- **Context.** The contract says `labels` are dense with noise `-1` but does not
+  specify the order in which clusters are numbered.
+- **Current behavior.** Clusters are numbered by **ascending component root** —
+  cluster `0` is the component containing the lowest-index clustered point, and
+  `sizes` is row-aligned to that numbering. (When `max_clusters` caps the count,
+  the highest-id clusters are the ones dropped — see item 1.)
+- **Impact.** The integer `labels` / `sizes` ordering differs from
+  discovery-order or size-descending numbering (scikit-learn numbers in
+  discovery order); the partition is identical, only the ids differ. Downstream
+  code must not assume a particular ordering (e.g. "cluster 0 is the largest").
+- **Question.** Is ascending-root the desired convention, or should numbering be
+  by cluster size or discovery order? Pin it in the contract either way.
+- **Status.** `open` — implemented ascending-root; code is ahead of the (silent)
+  contract.
+
+## 7. Scope vs. general-purpose DBSCAN (deliberate non-features)
+
+- **Context.** Relative to general-purpose DBSCAN libraries (e.g.
+  scikit-learn), the operator intentionally omits several features. Recorded so
+  the scope is explicit and a consumer porting from sklearn does not assume
+  parity.
+- **Omissions.** (a) **Single distance metric** — the axis-scaled Euclidean
+  ellipsoid pinned by the contract; no Minkowski-`p`, cosine, or
+  precomputed-distance-matrix metrics. (b) **No `sample_weight`** — every point
+  counts as 1 toward `min_points`. (c) **No core-sample introspection** — only
+  `labels` + `sizes` are emitted; the core / border / noise distinction is not
+  exposed (sklearn's `core_sample_indices_` / `components_` have no equivalent).
+- **Impact.** None for the radar clustering path as contracted; matters only if
+  a future consumer needs one of these.
+- **Status.** `out of scope` — recorded for transparency; revisit per-feature if
+  a consumer requires it (would be a contract change).
