@@ -2,7 +2,7 @@
 
 A SISO FMCW example application demonstrating the signal-processing,
 detection, and clustering chain: a synthetic ADC source (one static clutter
-return + one moving target, analytic dechirped point-target model) feeding
+return + three moving targets, analytic dechirped point-target model) feeding
 
 ```text
 FMCWRangeProcessorOp → ClutterFilterOp → FMCWDopplerProcessorOp
@@ -32,9 +32,11 @@ cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 ```
 
 The clutter filter suppresses the (stronger) static return, so CFAR's
-detections are dominated by the moving target: ~42 m at ~+5.5 m/s. Additive
-noise (`noise_snr_db`) is required — without it the CFAR noise estimate is
-zero and no cells cross threshold.
+detections come from the three moving targets. Their trajectories stay inside
+the unambiguous range (~256 m) and velocity (~±39 m/s) envelope for the
+full 30 s run: ~45→120 m at +2.5 m/s, ~130→175 m at +1.5 m/s, and
+~200→155 m at −1.5 m/s. Additive noise (`noise_snr_db`) is required — without
+it the CFAR noise estimate is zero and no cells cross threshold.
 
 ## Configuration
 
@@ -80,8 +82,9 @@ representative — as a `+` marker colored by cluster, over a fixed Y axis (the
 range / velocity bin extents, with numeric tick labels) and an X axis of the
 last `plots.window` frames in seconds (0 = now). So the map carries the raw
 color-coded detections and the plots carry the distilled per-cluster tracks.
-Over a run the moving target traces a rising range and a roughly constant
-velocity. Set `plots.enable: false` to let the RD map fill the window.
+Over a run each moving target traces its own range/velocity track on the
+rolling plots (one colored cluster per target when DBSCAN separates them).
+Set `plots.enable: false` to let the RD map fill the window.
 
 This requires a GUI-capable host — a reachable display server and Vulkan. At
 startup the app probes Holoviz directly; if no usable display is found

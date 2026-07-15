@@ -99,10 +99,18 @@ run:
 
 # Scene targets. Each is placed along the +x look direction at `range` metres,
 # closing/receding at `velocity` m/s (positive = receding), with a linear
-# `amplitude`.
+# `amplitude`. Mean-subtraction clutter filter suppresses the static return.
+#
+# Trajectories are chosen to stay inside the unambiguous range/velocity
+# envelope for the full run (300 frames × 0.1 s): with these cube dims and
+# waveform, beat-frequency range wraps above ~256 m and |velocity| folds above
+# ~39 m/s. The three movers use modest speeds so every target remains in
+# (0, R_max) for the entire demo while staying separable in [range, velocity].
 targets:
-  - { range: 60.0, velocity: 0.0, amplitude: 1.0 }   # static clutter
-  - { range: 42.0, velocity: 5.5, amplitude: 0.5 }   # moving target
+  - { range: 60.0, velocity: 0.0, amplitude: 1.0 }     # static clutter (suppressed)
+  - { range: 45.0, velocity: 2.5, amplitude: 0.5 }   # receding, near → mid
+  - { range: 130.0, velocity: 1.5, amplitude: 0.45 } # receding, mid → far
+  - { range: 200.0, velocity: -1.5, amplitude: 0.4 } # approaching, far → mid
 
 # Additive complex white Gaussian noise, SNR in dB relative to a unit-amplitude
 # target. Required for CFAR: a noise-free cube yields a zero training-cell
