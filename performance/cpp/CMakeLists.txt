@@ -54,6 +54,16 @@ target_link_libraries(perf_cluster_dbscan PRIVATE
     radar_perf_utils
     holoscan::cluster_dbscan_op)
 
+add_executable(perf_snapshot_gather perf_snapshot_gather.cpp)
+target_link_libraries(perf_snapshot_gather PRIVATE
+    radar_perf_utils
+    holoscan::snapshot_gather_op)
+
+add_executable(perf_beamscan_estimator perf_beamscan_estimator.cpp)
+target_link_libraries(perf_beamscan_estimator PRIVATE
+    radar_perf_utils
+    holoscan::beamscan_estimator_op)
+
 # Optional smoke: runs a tiny scenario subset and verifies a report file is
 # written. No timing thresholds — CI only checks the tool executes and emits.
 if(HOLOSCAN_RADAR_BUILD_TESTING)
@@ -104,5 +114,17 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
         COMMAND perf_cluster_dbscan --sizes xs --warmup 1 --frames 2 --quiet
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_cluster_dbscan_smoke.json)
     set_tests_properties(perf_cluster_dbscan_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_snapshot_gather_smoke
+        COMMAND perf_snapshot_gather --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_snapshot_gather_smoke.json)
+    set_tests_properties(perf_snapshot_gather_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_beamscan_estimator_smoke
+        COMMAND perf_beamscan_estimator --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_beamscan_estimator_smoke.json)
+    set_tests_properties(perf_beamscan_estimator_smoke PROPERTIES
         LABELS "performance")
 endif()

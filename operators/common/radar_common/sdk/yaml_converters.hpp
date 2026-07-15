@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
@@ -69,6 +71,12 @@ inline constexpr ClutterFilterMethod kAllClutterFilterMethods[] = {
     ClutterFilterMethod::kDoubleDelay,
 };
 
+inline constexpr SnapshotEdgeMode kAllSnapshotEdgeModes[] = {
+    SnapshotEdgeMode::kWrap,
+    SnapshotEdgeMode::kClamp,
+    SnapshotEdgeMode::kShift,
+};
+
 inline constexpr RepresentativePolicy kAllRepresentativePolicies[] = {
     RepresentativePolicy::kPeak,
     RepresentativePolicy::kMedoid,
@@ -80,6 +88,40 @@ inline constexpr ScoreMethod kAllScoreMethods[] = {
     ScoreMethod::kWeightedL2,
     ScoreMethod::kWeightedMax,
     ScoreMethod::kCustom,
+};
+
+inline constexpr ArrayGeometryType kAllArrayGeometryTypes[] = {
+    ArrayGeometryType::kUla,
+    ArrayGeometryType::kUra,
+    ArrayGeometryType::kUca,
+    ArrayGeometryType::kConformal,
+};
+
+inline constexpr AngleConventionPreset kAllAngleConventionPresets[] = {
+    AngleConventionPreset::kRadarBoresight,
+    AngleConventionPreset::kRosRep103,
+    AngleConventionPreset::kIso8855Flu,
+    AngleConventionPreset::kAerospaceNed,
+    AngleConventionPreset::kPhysicsSpherical,
+    AngleConventionPreset::kGeodeticEnu,
+    AngleConventionPreset::kGeodeticNed,
+    AngleConventionPreset::kDirectionCosine,
+    AngleConventionPreset::kCustom,
+};
+
+inline constexpr SignedAxis kAllSignedAxes[] = {
+    SignedAxis::kPlusX,  SignedAxis::kMinusX, SignedAxis::kPlusY,
+    SignedAxis::kMinusY, SignedAxis::kPlusZ,  SignedAxis::kMinusZ,
+};
+
+inline constexpr ElevationReference kAllElevationReferences[] = {
+    ElevationReference::kHorizon,
+    ElevationReference::kZenith,
+};
+
+inline constexpr PeakInterpolation kAllPeakInterpolations[] = {
+    PeakInterpolation::kNone,
+    PeakInterpolation::kParabolic,
 };
 
 }  // namespace holoscan::radar::detail
@@ -131,6 +173,22 @@ struct convert<holoscan::radar::ClutterFilterMethod> {
     value = holoscan::radar::detail::parse_enum(
         node.as<std::string>(), "ClutterFilterMethod",
         holoscan::radar::detail::kAllClutterFilterMethods);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::SnapshotEdgeMode> {
+  static Node encode(const holoscan::radar::SnapshotEdgeMode& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node, holoscan::radar::SnapshotEdgeMode& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "SnapshotEdgeMode",
+        holoscan::radar::detail::kAllSnapshotEdgeModes);
     return true;
   }
 };
@@ -268,6 +326,153 @@ struct convert<holoscan::radar::FMCWWaveformDescriptor> {
     // Throws std::invalid_argument naming the offending field on an
     // incomplete or inconsistent waveform block.
     wf = holoscan::radar::FMCWWaveformDescriptor(std::move(spec));
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::ArrayGeometryType> {
+  static Node encode(const holoscan::radar::ArrayGeometryType& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node, holoscan::radar::ArrayGeometryType& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "ArrayGeometryType",
+        holoscan::radar::detail::kAllArrayGeometryTypes);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::AngleConventionPreset> {
+  static Node encode(const holoscan::radar::AngleConventionPreset& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::AngleConventionPreset& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "AngleConventionPreset",
+        holoscan::radar::detail::kAllAngleConventionPresets);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::SignedAxis> {
+  static Node encode(const holoscan::radar::SignedAxis& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node, holoscan::radar::SignedAxis& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "SignedAxis",
+        holoscan::radar::detail::kAllSignedAxes);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::ElevationReference> {
+  static Node encode(const holoscan::radar::ElevationReference& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::ElevationReference& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "ElevationReference",
+        holoscan::radar::detail::kAllElevationReferences);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::PeakInterpolation> {
+  static Node encode(const holoscan::radar::PeakInterpolation& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node, holoscan::radar::PeakInterpolation& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "PeakInterpolation",
+        holoscan::radar::detail::kAllPeakInterpolations);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::ArrayGeometry> {
+  static Node encode(const holoscan::radar::ArrayGeometry& geom) {
+    Node node;
+    node["element_positions"] = geom.element_positions;
+    node["wavelength"] = geom.wavelength;
+    if (geom.geometry_type.has_value()) {
+      node["geometry_type"] = *geom.geometry_type;
+    }
+    return node;
+  }
+  static bool decode(const Node& node, holoscan::radar::ArrayGeometry& geom) {
+    if (!node.IsMap()) {
+      return false;
+    }
+    geom = holoscan::radar::ArrayGeometry{};
+    if (const Node pos = node["element_positions"]) {
+      geom.element_positions = pos.as<std::vector<double>>();
+    }
+    if (const Node wl = node["wavelength"]) {
+      geom.wavelength = wl.as<double>();
+    }
+    if (const Node gt = node["geometry_type"]) {
+      geom.geometry_type = gt.as<holoscan::radar::ArrayGeometryType>();
+    }
+    geom.validate();
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::AngleConvention> {
+  static Node encode(const holoscan::radar::AngleConvention& conv) {
+    Node node;
+    node["preset"] = conv.preset;
+    node["boresight_axis"] = conv.boresight_axis;
+    node["azimuth_positive_axis"] = conv.azimuth_positive_axis;
+    node["elevation_positive_axis"] = conv.elevation_positive_axis;
+    node["elevation_reference"] = conv.elevation_reference;
+    return node;
+  }
+  static bool decode(const Node& node, holoscan::radar::AngleConvention& conv) {
+    if (!node.IsMap()) {
+      return false;
+    }
+    conv = holoscan::radar::AngleConvention{};
+    if (const Node preset = node["preset"]) {
+      conv.preset = preset.as<holoscan::radar::AngleConventionPreset>();
+    }
+    if (const Node bore = node["boresight_axis"]) {
+      conv.boresight_axis = bore.as<holoscan::radar::SignedAxis>();
+    }
+    if (const Node az = node["azimuth_positive_axis"]) {
+      conv.azimuth_positive_axis = az.as<holoscan::radar::SignedAxis>();
+    }
+    if (const Node el = node["elevation_positive_axis"]) {
+      conv.elevation_positive_axis = el.as<holoscan::radar::SignedAxis>();
+    }
+    if (const Node ref = node["elevation_reference"]) {
+      conv.elevation_reference = ref.as<holoscan::radar::ElevationReference>();
+    }
     return true;
   }
 };

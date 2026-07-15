@@ -68,6 +68,8 @@ The standard operator flow graphs the module must support, abbreviated from `hol
 | **MIMO — TDM** | M × N | time-division | virtual array (up to `M·N`) |
 | **MIMO — DDM** | M × N | Doppler-division | virtual array (up to `M·N`) |
 
+Modality acronyms (SISO / SIMO / MIMO) follow the wireless channel convention: **input** = transmit side, **output** = receive side — so SIMO is 1 TX × N RX. See `WORKFLOWS.md` *Modality naming* for the full table and rationale.
+
 Out of scope here. **CDM / BPM** (code-division / binary-phase multiplexing) are **under consideration for a future wave** — architecturally a small extension of the DDM path (all TX on, per-chirp phase code, separated after the Doppler stage), reusing `MIMOCoherentCompensationOp` in a code-correlation mode and the rest of the MIMO chain unchanged — but not implemented here. **FDM** (frequency-division) and **PMCW** (fast-time code division — a different waveform, not FMCW) are excluded.
 
 ### Cross-cutting structure

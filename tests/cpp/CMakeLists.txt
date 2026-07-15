@@ -98,5 +98,9 @@ radar_add_test(detection/test_feature_assembly
     holoscan::feature_assembly_op)
 radar_add_test(clustering/test_cluster_dbscan
     holoscan::cluster_dbscan_op)
+radar_add_test(angle_estimation/test_snapshot_gather
+    holoscan::snapshot_gather_op)
+radar_add_test(angle_estimation/test_beamscan_estimator
+    holoscan::beamscan_estimator_op)
 radar_add_statistical_test(detection/test_cfar_detector_statistical
     holoscan::cfar_detector_op)
