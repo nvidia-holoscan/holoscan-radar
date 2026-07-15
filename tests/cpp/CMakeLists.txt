@@ -17,66 +17,86 @@ target_link_libraries(radar_test_utils INTERFACE
     GTest::gtest)
 
 # One executable per operator (plus the shared-library suite) so the
-# parallel implementation phase owns disjoint test files.
+# parallel implementation phase owns disjoint test files. NAME is a
+# family-relative source path without the extension (e.g. detection/test_cfar);
+# the target name is the flat basename so `ctest -R <name>` stays stable
+# regardless of where the source lives in the family tree.
 function(radar_add_test NAME)
-    add_executable(${NAME} ${NAME}.cpp)
-    target_link_libraries(${NAME} PRIVATE
+    get_filename_component(_tgt ${NAME} NAME_WE)
+    add_executable(${_tgt} ${NAME}.cpp)
+    target_link_libraries(${_tgt} PRIVATE
         radar_test_utils
         GTest::gtest_main
         ${ARGN})
-    gtest_discover_tests(${NAME} PROPERTIES LABELS "unit")
+    gtest_discover_tests(${_tgt} PROPERTIES LABELS "unit")
+endfunction()
+
+function(radar_add_integration_test NAME)
+    get_filename_component(_tgt ${NAME} NAME_WE)
+    add_executable(${_tgt} ${NAME}.cpp)
+    target_link_libraries(${_tgt} PRIVATE
+        radar_test_utils
+        GTest::gtest_main
+        ${ARGN})
+    gtest_discover_tests(${_tgt} PROPERTIES LABELS "integration")
 endfunction()
 
 function(radar_add_statistical_test NAME)
-    add_executable(${NAME} ${NAME}.cpp)
-    target_link_libraries(${NAME} PRIVATE
+    get_filename_component(_tgt ${NAME} NAME_WE)
+    add_executable(${_tgt} ${NAME}.cpp)
+    target_link_libraries(${_tgt} PRIVATE
         radar_test_utils
         GTest::gtest_main
         ${ARGN})
-    gtest_discover_tests(${NAME} PROPERTIES LABELS "statistical")
+    gtest_discover_tests(${_tgt} PROPERTIES LABELS "statistical")
 endfunction()
 
-radar_add_test(test_common)
-radar_add_test(test_fmcw_range_processor
+radar_add_test(common/test_window)
+radar_add_test(common/test_descriptors)
+radar_add_test(common/test_sdk)
+radar_add_test(common/test_sim)
+radar_add_test(common/test_tensor)
+radar_add_test(fmcw/test_fmcw_range_processor
     holoscan::fmcw_range_processor_op)
-radar_add_test(test_clutter_filter
+radar_add_test(fmcw/test_clutter_filter
     holoscan::clutter_filter_op)
-radar_add_test(test_fmcw_doppler_processor
+radar_add_test(fmcw/test_fmcw_doppler_processor
     holoscan::fmcw_doppler_processor_op)
-radar_add_test(test_fmcw_range_doppler_processor
+radar_add_test(fmcw/test_fmcw_range_doppler_processor
     holoscan::fmcw_range_doppler_processor_op
     holoscan::fmcw_range_processor_op
     holoscan::clutter_filter_op
     holoscan::fmcw_doppler_processor_op)
-radar_add_test(test_pipeline
+# Cross-family end-to-end integration test lives at the tests/cpp root.
+radar_add_integration_test(test_pipeline
     holoscan::fmcw_range_processor_op
     holoscan::clutter_filter_op
     holoscan::fmcw_doppler_processor_op
     holoscan::fmcw_range_doppler_processor_op)
-radar_add_test(test_cfar_detector
+radar_add_test(detection/test_cfar_detector
     holoscan::cfar_detector_op)
-radar_add_test(test_cfar_detector_go
+radar_add_test(detection/test_cfar_detector_go
     holoscan::cfar_detector_op)
-radar_add_test(test_cfar_detector_so
+radar_add_test(detection/test_cfar_detector_so
     holoscan::cfar_detector_op)
-radar_add_test(test_cfar_detector_os
+radar_add_test(detection/test_cfar_detector_os
     holoscan::cfar_detector_op)
-radar_add_test(test_cfar_detector_alpha_lut
+radar_add_test(detection/test_cfar_detector_alpha_lut
     holoscan::cfar_detector_op)
 # DetectionReduction: host tests + CUDA TU for compile-time ScoreFn path.
 add_executable(test_detection_reduction
-    test_detection_reduction.cpp
-    test_detection_reduction_custom.cu)
+    detection/test_detection_reduction.cpp
+    detection/test_detection_reduction_custom.cu)
 target_link_libraries(test_detection_reduction PRIVATE
     radar_test_utils
     GTest::gtest_main
     holoscan::detection_reduction_op)
 gtest_discover_tests(test_detection_reduction PROPERTIES LABELS "unit")
-set_source_files_properties(test_detection_reduction_custom.cu
+set_source_files_properties(detection/test_detection_reduction_custom.cu
     PROPERTIES LANGUAGE CUDA)
-radar_add_test(test_feature_assembly
+radar_add_test(detection/test_feature_assembly
     holoscan::feature_assembly_op)
-radar_add_test(test_cluster_dbscan
+radar_add_test(clustering/test_cluster_dbscan
     holoscan::cluster_dbscan_op)
-radar_add_statistical_test(test_cfar_detector_statistical
+radar_add_statistical_test(detection/test_cfar_detector_statistical
     holoscan::cfar_detector_op)
