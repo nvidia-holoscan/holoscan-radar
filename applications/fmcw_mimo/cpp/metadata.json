@@ -1,0 +1,35 @@
+{
+    "$schema": "urn:holohub:application:v1",
+    "application": {
+        "name": "fmcw_mimo",
+        "authors": [
+            {
+                "name": "Holoscan Team",
+                "affiliation": "NVIDIA"
+            }
+        ],
+        "language": ["C++"],
+        "version": "0.1.0",
+        "changelog": {
+            "0.1.0": "Initial MIMO TDM sparse angle-then-cluster demo"
+        },
+        "holoscan_sdk": {
+            "minimum_required_version": "4.3.0",
+            "tested_versions": ["4.3.0"]
+        },
+        "platforms": ["x86_64", "aarch64"],
+        "tags": ["Radar", "Signal Processing", "GPU", "FMCW", "MIMO", "TDM", "Angle"],
+        "ranking": 3,
+        "requirements": {},
+        "default_mode": "default",
+        "modes": {
+            "default": {
+                "description": "Run the C++ FMCW MIMO TDM sparse-path pipeline",
+                "run": {
+                    "command": "<holohub_app_bin>/fmcw_mimo",
+                    "workdir": "holohub_app_bin"
+                }
+            }
+        }
+    }
+}

@@ -130,3 +130,31 @@ Affected paths (each called per tick from the operator's `compute()`):
 
 Keep the existing `fill_*` logic as the cache-fill helper so behavior on a
 miss is unchanged; only the steady-state (cache-hit) path becomes non-blocking.
+
+## 3. MIMO marshaling — imposed assumptions (2026-07-16)
+
+Cross-cutting decisions from landing the TDM + DDM marshaling operators. The
+contract (`OPERATOR_API.md`) was updated where noted; anything still ambiguous
+is pinned per operator:
+
+| Operator | Open items |
+| --- | --- |
+| `MIMODeinterleaveOp` | [`mimo_deinterleave_op/OPEN_ITEMS.md`](fmcw/mimo_deinterleave_op/OPEN_ITEMS.md) |
+| `MIMOCoherentCompensationOp` | [`mimo_coherent_compensation_op/OPEN_ITEMS.md`](fmcw/mimo_coherent_compensation_op/OPEN_ITEMS.md) |
+| `VirtualArrayAssemblyOp` | [`virtual_array_assembly_op/OPEN_ITEMS.md`](fmcw/virtual_array_assembly_op/OPEN_ITEMS.md) |
+
+**Module-level pins (not re-litigated per operator):**
+
+- **Per-TX effective PRI.** `FMCWWaveformDescriptor.chirp_repetition_interval`
+  is the slow-time sample period **per TX** under TDM (`M ×` physical
+  inter-chirp spacing on the wire). Simulators and apps must not feed raw
+  inter-chirp spacing to range/Doppler/compensation unless `M = 1`.
+- **DDM clutter placement.** Slow-time clutter filtering belongs **after**
+  DDM demux in the workflow (`WORKFLOWS.md`); not enforced by operators — a
+  graph wiring concern.
+- **Velocity ÷M ambiguity.** TDM and DDM reduce unambiguous velocity by `M`;
+  disambiguation (staggered PRI, band tricks) is **out of scope** for the
+  first wave — see compensation `OPEN_ITEMS.md` §A.9.
+- **Shared descriptors.** `DDMCodeDescriptor` and `TXSchedule` validation rules
+  (mutually exclusive offset forms, uniform TDM schedule) live with the
+  consuming operator / descriptor code; see operator open items above.

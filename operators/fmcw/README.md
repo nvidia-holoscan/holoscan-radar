@@ -25,6 +25,9 @@ fused:  adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
 | `VirtualArrayAssemblyOp<T>` | `rd_maps` (…, M_tx, N_rx, D, R) → `rd_maps` (…, num_virtual, D, R) + `array_geometry` | MIMO marshaling: flatten separated TX×RX channels into a virtual axis (`p_tx + p_rx`) |
 | `MIMOCoherentCompensationOp<T>` | TDM: `rd_maps` (…, M_tx, N_rx, D, R) → same shape. DDM: `rd_maps` (…, N_rx, D, R) → (…, M_tx, N_rx, D/M−guard, R) | MIMO marshaling: TDM per-Doppler-bin inter-TX phase correction; DDM Doppler-band demux into an explicit TX axis (standard linear-phase; arbitrary codes deferred) |
 
+MIMO marshaling operators document **imposed decisions** (contract pins) and
+deferred slices in each operator's `OPEN_ITEMS.md`.
+
 The optional axis outputs are emitted only when a waveform descriptor
 (`FMCWWaveformDescriptor`) is available; consumers map peaks back to
 physical units through them.
