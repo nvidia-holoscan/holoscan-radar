@@ -71,6 +71,8 @@ radar_add_test(fmcw/test_mimo_deinterleave
     holoscan::mimo_deinterleave_op)
 radar_add_test(fmcw/test_virtual_array_assembly
     holoscan::virtual_array_assembly_op)
+radar_add_test(fmcw/test_mimo_coherent_compensation
+    holoscan::mimo_coherent_compensation_op)
 # Cross-family end-to-end integration test lives at the tests/cpp root.
 radar_add_integration_test(test_pipeline
     holoscan::fmcw_range_processor_op

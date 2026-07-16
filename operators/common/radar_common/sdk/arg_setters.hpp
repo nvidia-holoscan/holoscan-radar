@@ -41,6 +41,8 @@ inline void ensure_radar_arg_setters() {
     ArgumentSetter::ensure_type<SnapshotEdgeMode>();
     ArgumentSetter::ensure_type<PeakInterpolation>();
     ArgumentSetter::ensure_type<OverlapPolicy>();
+    ArgumentSetter::ensure_type<MultiplexingScheme>();
+    ArgumentSetter::ensure_type<DDMCodeDescriptor>();
     ArgumentSetter::ensure_type<RepresentativePolicy>();
     ArgumentSetter::ensure_type<ScoreMethod>();
     return true;

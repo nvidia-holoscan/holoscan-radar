@@ -96,6 +96,12 @@ enum class OverlapPolicy {
   kKeepAll,
 };
 
+// MIMO TX multiplexing scheme for MIMOCoherentCompensationOp.
+enum class MultiplexingScheme {
+  kTdm,
+  kDdm,
+};
+
 // Canonical spellings (lowercase snake_case, for logs and future YAML
 // configs).
 constexpr std::string_view to_string(WindowType type) {
@@ -201,6 +207,14 @@ constexpr std::string_view to_string(OverlapPolicy policy) {
     case OverlapPolicy::kDedup: return "dedup";
     case OverlapPolicy::kAverage: return "average";
     case OverlapPolicy::kKeepAll: return "keep_all";
+  }
+  return "unknown";
+}
+
+constexpr std::string_view to_string(MultiplexingScheme scheme) {
+  switch (scheme) {
+    case MultiplexingScheme::kTdm: return "tdm";
+    case MultiplexingScheme::kDdm: return "ddm";
   }
   return "unknown";
 }

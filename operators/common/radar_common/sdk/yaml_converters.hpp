@@ -13,6 +13,7 @@
 
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
+#include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
@@ -88,6 +89,11 @@ inline constexpr OverlapPolicy kAllOverlapPolicies[] = {
     OverlapPolicy::kDedup,
     OverlapPolicy::kAverage,
     OverlapPolicy::kKeepAll,
+};
+
+inline constexpr MultiplexingScheme kAllMultiplexingSchemes[] = {
+    MultiplexingScheme::kTdm,
+    MultiplexingScheme::kDdm,
 };
 
 inline constexpr ScoreMethod kAllScoreMethods[] = {
@@ -434,6 +440,71 @@ struct convert<holoscan::radar::OverlapPolicy> {
     value = holoscan::radar::detail::parse_enum(
         node.as<std::string>(), "OverlapPolicy",
         holoscan::radar::detail::kAllOverlapPolicies);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::MultiplexingScheme> {
+  static Node encode(const holoscan::radar::MultiplexingScheme& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::MultiplexingScheme& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "MultiplexingScheme",
+        holoscan::radar::detail::kAllMultiplexingSchemes);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::DDMCodeDescriptor> {
+  static Node encode(const holoscan::radar::DDMCodeDescriptor& code) {
+    Node node;
+    node["num_tx"] = code.num_tx;
+    if (!code.phase_codes.empty()) {
+      Node codes = Node(NodeType::Sequence);
+      for (const auto& z : code.phase_codes) {
+        codes.push_back(Node(z.real()));
+        codes.push_back(Node(z.imag()));
+      }
+      node["phase_codes"] = codes;
+    }
+    if (!code.doppler_offsets.empty()) {
+      node["doppler_offsets"] = code.doppler_offsets;
+    }
+    node["guard_bands"] = code.guard_bands;
+    return node;
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::DDMCodeDescriptor& code) {
+    if (!node.IsMap()) {
+      return false;
+    }
+    code = holoscan::radar::DDMCodeDescriptor{};
+    if (const Node n = node["num_tx"]) {
+      code.num_tx = n.as<int64_t>();
+    }
+    if (const Node codes = node["phase_codes"]) {
+      if (!codes.IsSequence()) {
+        return false;
+      }
+      code.phase_codes.reserve(codes.size() / 2);
+      for (size_t i = 0; i + 1 < codes.size(); i += 2) {
+        code.phase_codes.emplace_back(codes[i].as<double>(),
+                                    codes[i + 1].as<double>());
+      }
+    }
+    if (const Node offsets = node["doppler_offsets"]) {
+      code.doppler_offsets = offsets.as<std::vector<double>>();
+    }
+    if (const Node guard = node["guard_bands"]) {
+      code.guard_bands = guard.as<int64_t>();
+    }
     return true;
   }
 };

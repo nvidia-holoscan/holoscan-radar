@@ -75,6 +75,15 @@ does **not** change tensor shapes. On the default perf matrix (xl median
 profile seen on `MIMODeinterleaveOp` xl — defer ping-pong here as well;
 revisit only if profiling flags allocation at target sizes.
 
+`MIMOCoherentCompensationOp` (2026-07-16, TDM slice): same allocate-per-tick
+output path. **Diagnostic (xl, RTX PRO 6000 Blackwell):** kernel ~6.7 ms
+(~1.28 TB/s, nsys) vs harness tick median ~14.5 ms — roughly half the tick is
+`cudaMalloc`/`cudaFree` on the ~4.3 GB output buffer, not compute. Kernel
+launch was fixed (was one block per element with 256 redundant threads);
+remaining gap is the module-wide alloc pattern in §1. Defer ping-pong here;
+intended MIMO-TDM chain is linear (deinterleave → compensation → virtual
+array). `[live]` `waveform` does not change output shape.
+
 Reasons it is reasonable to deploy there when picked up:
 
 - Large perf win at xl (~2.1 ms → ~0.75 ms harness median) with no API
