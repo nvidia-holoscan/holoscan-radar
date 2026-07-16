@@ -89,6 +89,13 @@ enum class PeakInterpolation {
   kParabolic,
 };
 
+// Virtual-element collision handling for VirtualArrayAssemblyOp.
+enum class OverlapPolicy {
+  kDedup,
+  kAverage,
+  kKeepAll,
+};
+
 // Canonical spellings (lowercase snake_case, for logs and future YAML
 // configs).
 constexpr std::string_view to_string(WindowType type) {
@@ -185,6 +192,15 @@ constexpr std::string_view to_string(PeakInterpolation mode) {
   switch (mode) {
     case PeakInterpolation::kNone: return "none";
     case PeakInterpolation::kParabolic: return "parabolic";
+  }
+  return "unknown";
+}
+
+constexpr std::string_view to_string(OverlapPolicy policy) {
+  switch (policy) {
+    case OverlapPolicy::kDedup: return "dedup";
+    case OverlapPolicy::kAverage: return "average";
+    case OverlapPolicy::kKeepAll: return "keep_all";
   }
   return "unknown";
 }

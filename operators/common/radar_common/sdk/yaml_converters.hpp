@@ -84,6 +84,12 @@ inline constexpr RepresentativePolicy kAllRepresentativePolicies[] = {
     RepresentativePolicy::kFirst,
 };
 
+inline constexpr OverlapPolicy kAllOverlapPolicies[] = {
+    OverlapPolicy::kDedup,
+    OverlapPolicy::kAverage,
+    OverlapPolicy::kKeepAll,
+};
+
 inline constexpr ScoreMethod kAllScoreMethods[] = {
     ScoreMethod::kWeightedSum,
     ScoreMethod::kWeightedL2,
@@ -183,7 +189,8 @@ struct convert<holoscan::radar::SnapshotEdgeMode> {
   static Node encode(const holoscan::radar::SnapshotEdgeMode& value) {
     return Node(std::string(holoscan::radar::to_string(value)));
   }
-  static bool decode(const Node& node, holoscan::radar::SnapshotEdgeMode& value) {
+  static bool decode(const Node& node,
+                     holoscan::radar::SnapshotEdgeMode& value) {
     if (!node.IsScalar()) {
       return false;
     }
@@ -336,7 +343,8 @@ struct convert<holoscan::radar::ArrayGeometryType> {
   static Node encode(const holoscan::radar::ArrayGeometryType& value) {
     return Node(std::string(holoscan::radar::to_string(value)));
   }
-  static bool decode(const Node& node, holoscan::radar::ArrayGeometryType& value) {
+  static bool decode(const Node& node,
+                     holoscan::radar::ArrayGeometryType& value) {
     if (!node.IsScalar()) {
       return false;
     }
@@ -402,13 +410,30 @@ struct convert<holoscan::radar::PeakInterpolation> {
   static Node encode(const holoscan::radar::PeakInterpolation& value) {
     return Node(std::string(holoscan::radar::to_string(value)));
   }
-  static bool decode(const Node& node, holoscan::radar::PeakInterpolation& value) {
+  static bool decode(const Node& node,
+                     holoscan::radar::PeakInterpolation& value) {
     if (!node.IsScalar()) {
       return false;
     }
     value = holoscan::radar::detail::parse_enum(
         node.as<std::string>(), "PeakInterpolation",
         holoscan::radar::detail::kAllPeakInterpolations);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::OverlapPolicy> {
+  static Node encode(const holoscan::radar::OverlapPolicy& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node, holoscan::radar::OverlapPolicy& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "OverlapPolicy",
+        holoscan::radar::detail::kAllOverlapPolicies);
     return true;
   }
 };

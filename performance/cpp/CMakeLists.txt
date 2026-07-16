@@ -69,6 +69,11 @@ target_link_libraries(perf_mimo_deinterleave PRIVATE
     radar_perf_utils
     holoscan::mimo_deinterleave_op)
 
+add_executable(perf_virtual_array_assembly perf_virtual_array_assembly.cpp)
+target_link_libraries(perf_virtual_array_assembly PRIVATE
+    radar_perf_utils
+    holoscan::virtual_array_assembly_op)
+
 # Optional smoke: runs a tiny scenario subset and verifies a report file is
 # written. No timing thresholds — CI only checks the tool executes and emits.
 if(HOLOSCAN_RADAR_BUILD_TESTING)
@@ -137,5 +142,12 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
         COMMAND perf_mimo_deinterleave --sizes xs --warmup 1 --frames 2 --quiet
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_mimo_deinterleave_smoke.json)
     set_tests_properties(perf_mimo_deinterleave_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_virtual_array_assembly_smoke
+        COMMAND perf_virtual_array_assembly --sizes xs --warmup 1 --frames 2
+            --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_virtual_array_assembly_smoke.json)
+    set_tests_properties(perf_virtual_array_assembly_smoke PROPERTIES
         LABELS "performance")
 endif()

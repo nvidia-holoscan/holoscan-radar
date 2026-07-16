@@ -22,6 +22,7 @@ fused:  adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
 | `FMCWDopplerProcessorOp<T>` | `range_profiles` → `rd_maps` (…, doppler, range bins) + optional `velocity_bins` axis | Doppler compression: windowed slow-time FFT (`nfft` zero-pad), zero-Doppler centered by default (numpy-style fftshift) |
 | `FMCWRangeDopplerProcessorOp<T>` | `adc_cube` → `rd_maps` + optional `range_bins`/`velocity_bins` | Fused range + optional inline clutter + Doppler in one node; per-axis `nfft_range`/`nfft_doppler` |
 | `MIMODeinterleaveOp<T>` | `adc_cube` (…, N_rx, M·L, samples; complex or real IF) → `adc_cube` (…, M_tx, N_rx, L, samples) | TDM marshaling: split interleaved slow-time into an explicit TX axis via `TXSchedule` gather |
+| `VirtualArrayAssemblyOp<T>` | `rd_maps` (…, M_tx, N_rx, D, R) → `rd_maps` (…, num_virtual, D, R) + `array_geometry` | MIMO marshaling: flatten separated TX×RX channels into a virtual axis (`p_tx + p_rx`) |
 
 The optional axis outputs are emitted only when a waveform descriptor
 (`FMCWWaveformDescriptor`) is available; consumers map peaks back to
