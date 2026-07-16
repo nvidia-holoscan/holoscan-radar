@@ -5,6 +5,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -15,13 +16,16 @@ namespace {
 
 constexpr int64_t kBlock = 256;
 
-__global__ void deinterleave_kernel(const char* input, char* output,
-                                    int64_t batch, int64_t num_rx,
-                                    int64_t slow_time, int64_t samples,
-                                    int64_t num_tx, int64_t chirps_per_tx,
-                                    const int64_t* gather_map,
-                                    size_t elem_bytes) {
-  (void)slow_time;
+// The de-interleave is a pure per-chirp-row permutation. The innermost
+// `samples` axis is copied 1:1 and stays contiguous; the gather map only
+// selects which interleaved slow-time row feeds each (tx, l) output row.
+// Launching one CUDA block per output row avoids per-sample div/mod work and
+// lets the block cooperatively copy the stride-1 fast-time vector.
+template <typename Word>
+__global__ void deinterleave_row_copy_kernel(
+    const Word* input, Word* output, int64_t num_rx, int64_t slow_time,
+    int64_t samples, int64_t num_tx, int64_t chirps_per_tx,
+    const int64_t* gather_map) {
   const int64_t in_plane = slow_time * samples;
   const int64_t out_plane = chirps_per_tx * samples;
   const int64_t in_rx_stride = in_plane;
@@ -29,17 +33,7 @@ __global__ void deinterleave_kernel(const char* input, char* output,
   const int64_t in_batch_stride = num_rx * in_rx_stride;
   const int64_t out_batch_stride = num_tx * num_rx * out_rx_stride;
 
-  const int64_t total =
-      batch * num_tx * num_rx * chirps_per_tx * samples;
-  const int64_t tid =
-      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (tid >= total) {
-    return;
-  }
-
-  int64_t rem = tid;
-  const int64_t s = rem % samples;
-  rem /= samples;
+  int64_t rem = static_cast<int64_t>(blockIdx.x);
   const int64_t l = rem % chirps_per_tx;
   rem /= chirps_per_tx;
   const int64_t rx = rem % num_rx;
@@ -49,18 +43,27 @@ __global__ void deinterleave_kernel(const char* input, char* output,
   const int64_t b = rem;
 
   const int64_t in_slow = gather_map[tx * chirps_per_tx + l];
-  const size_t in_off = static_cast<size_t>(
-      (b * in_batch_stride + rx * in_rx_stride + in_slow * samples + s) *
-      elem_bytes);
-  const size_t out_off = static_cast<size_t>(
-      (b * out_batch_stride + tx * num_rx * out_rx_stride + rx * out_rx_stride +
-       l * samples + s) *
-      elem_bytes);
-  const char* src = input + in_off;
-  char* dst = output + out_off;
-  for (size_t i = 0; i < elem_bytes; ++i) {
-    dst[i] = src[i];
+  const int64_t in_base =
+      b * in_batch_stride + rx * in_rx_stride + in_slow * samples;
+  const int64_t out_base = b * out_batch_stride +
+                           tx * num_rx * out_rx_stride + rx * out_rx_stride +
+                           l * samples;
+  for (int64_t s = static_cast<int64_t>(threadIdx.x); s < samples;
+       s += blockDim.x) {
+    output[out_base + s] = input[in_base + s];
   }
+}
+
+template <typename Word>
+void launch_typed(const void* input, void* output, const AdcCubeLayout& layout,
+                  int64_t num_tx, int64_t chirps_per_tx,
+                  const int64_t* d_gather_map, cudaStream_t stream) {
+  const int64_t rows = layout.batch * num_tx * layout.num_rx * chirps_per_tx;
+  const int grid = static_cast<int>(rows);
+  deinterleave_row_copy_kernel<Word><<<grid, kBlock, 0, stream>>>(
+      static_cast<const Word*>(input), static_cast<Word*>(output),
+      layout.num_rx, layout.slow_time, layout.samples, num_tx, chirps_per_tx,
+      d_gather_map);
 }
 
 }  // namespace
@@ -108,13 +111,28 @@ void run_deinterleave_stage(const void* input, void* output,
                             const AdcCubeLayout& layout, int64_t num_tx,
                             int64_t chirps_per_tx, const int64_t* d_gather_map,
                             size_t elem_bytes, cudaStream_t stream) {
-  const int64_t total = layout.batch * num_tx * layout.num_rx * chirps_per_tx *
-                        layout.samples;
-  const int grid = static_cast<int>((total + kBlock - 1) / kBlock);
-  deinterleave_kernel<<<grid, kBlock, 0, stream>>>(
-      static_cast<const char*>(input), static_cast<char*>(output), layout.batch,
-      layout.num_rx, layout.slow_time, layout.samples, num_tx, chirps_per_tx,
-      d_gather_map, elem_bytes);
+  // One thread copies one sample element as a single word. The four supported
+  // dtypes (complex64/128, float32/64) map onto 4-, 8-, and 16-byte words;
+  // device tensors from make_device_tensor are cudaMalloc-aligned and every
+  // offset here is an element multiple, so the wide loads stay aligned.
+  switch (elem_bytes) {
+    case 4:
+      launch_typed<uint32_t>(input, output, layout, num_tx, chirps_per_tx,
+                             d_gather_map, stream);
+      break;
+    case 8:
+      launch_typed<uint64_t>(input, output, layout, num_tx, chirps_per_tx,
+                             d_gather_map, stream);
+      break;
+    case 16:
+      launch_typed<uint4>(input, output, layout, num_tx, chirps_per_tx,
+                          d_gather_map, stream);
+      break;
+    default:
+      throw std::invalid_argument(
+          "deinterleave stage: unsupported element size " +
+          std::to_string(elem_bytes) + " bytes");
+  }
   if (cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error("deinterleave stage: kernel launch failed");
   }

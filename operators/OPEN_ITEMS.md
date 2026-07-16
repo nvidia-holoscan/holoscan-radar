@@ -10,6 +10,20 @@ commit in the PR).
 **Status:** agreed 2026-07-10, acceptable for now; revisit when latency
 budgets tighten or benchmarking flags it.
 
+**Diagnostic (2026-07-16, `MIMODeinterleaveOp` xl, RTX PRO 6000 Blackwell):**
+per-tick `cudaMalloc`/`cudaFree` via `make_device_tensor` dominates the
+Holoscan-timed path at large output sizes. Standalone row-copy kernel ~
+0.9 ms; harness with allocate-per-tick ~2.1 ms median; **ping-pong output
+reuse (diagnostic only, not landed) ~0.75 ms median** — i.e. most of the
+gap is allocation, not gather bandwidth or framework alone.
+
+A drop-in `cudaMallocAsync`/`cudaFreeAsync` path in `make_device_tensor`
+was also probed (diagnostic only). `cudaMallocAsync` works in isolation but
+failed inside the Holoscan operator tick (`cudaErrorIllegalAddress`, likely
+stale error from stream/pool interaction — needs Holoscan memory-pool /
+stream setup before it is a safe module-wide change). **Defer** until we
+pick an explicit pooling strategy below.
+
 Every operator allocates its emitted output tensors with
 `make_device_tensor` (`radar_common/tensor/dlpack_buffer.hpp`) on every
 `compute()` tick — a synchronous `cudaMalloc`/`cudaFree` pair per output per
@@ -26,15 +40,51 @@ e.g.
 - an optional `holoscan::Allocator` parameter (`BlockMemoryPool` /
   `RMMAllocator`) so the application chooses pooling, matching the pattern
   used by Holoscan SDK operators; or
-- operator-owned recycling: cache output buffers keyed by (shape, dtype) and
-  reuse when the previous tick's tensor has been released (shapes are stable
-  in steady state but can change via nfft/clutter overrides, so keying —
-  not assuming — is required).
+- operator-owned **ping-pong** recycling: two output buffers keyed by
+  (shape, dtype); flip the slot each tick so emitted tensors are not
+  overwritten while a downstream consumer may still hold them (the
+  diagnostic above validated this pattern on `MIMODeinterleaveOp` xl); or
+- module-wide `make_device_tensor` backed by `cudaMallocAsync` once Holoscan
+  stream/memory-pool interaction is understood (not a one-line swap today).
 
 Whichever form, it must stay optional with today's allocate-per-tick
 behavior as the default, and buffer lifetime must remain correct for
 downstream consumers that hold emitted tensors across ticks (the reason the
 naive stream-ordered approach is off the table).
+
+**Per-operator ping-pong (2026-07-16 analysis; not landed):**
+
+Ping-pong does **not** require a team-wide change. Each operator can keep
+two `shared_ptr<holoscan::Tensor>` slots, a `(shape, dtype)` key, and flip
+the write slot each tick — no `make_device_tensor` / `radar_common` change,
+no `OPERATOR_API.md` contract change. `OPERATOR_DEVELOPMENT.md` §3 already
+describes this pattern for emitted outputs.
+
+`MIMODeinterleaveOp` is a strong first candidate: static `tx_schedule`, no
+`[live]` parameters, pure gather (no stale numerical state), and the
+intended MIMO-TDM chain is linear (deinterleave → compensation → virtual
+array). The xl diagnostic above is the evidence; implementation deferred for
+now (allocate-per-tick remains in code).
+
+Reasons it is reasonable to deploy there when picked up:
+
+- Large perf win at xl (~2.1 ms → ~0.75 ms harness median) with no API
+  surface change.
+- Correct in the intended pipeline: one consumer, one frame in flight.
+
+Caveats to respect when implementing (none are blockers for this op in
+steady-state MIMO-TDM, but document them in the operator):
+
+| Concern | Notes |
+| --- | --- |
+| Steady-state memory | Two output buffers resident for the session (~2× output bytes at xl). Acceptable on large GPUs; may want gating on memory-tight targets. |
+| Lifetime assumption | Two slots are safe only if no downstream consumer holds tick *N*'s output past tick *N+2*. Linear Holoscan chains satisfy this; multi-frame buffering or slow fan-out branches do not. |
+| Shape churn | Re-key on `(shape, dtype)` and reallocate both slots on change. Leading batch axes may vary per tick (rank-agnostic batching); ping-pong helps only when geometry is stable. |
+| Tests | Add a two-tick correctness case (distinct payloads, no clobber) and a shape-change re-key case. Existing single-tick tests are not sufficient on their own. |
+
+Module-wide pooling (`cudaMallocAsync` in `make_device_tensor`, Holoscan
+`BlockMemoryPool` / `RMMAllocator`) remains a separate, deferred decision;
+per-operator ping-pong does not commit the module to either path.
 
 ## 2. Cache the axis outputs (range/velocity bins) across ticks
 
