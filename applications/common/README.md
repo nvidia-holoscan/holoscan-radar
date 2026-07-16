@@ -1,7 +1,7 @@
 # Application-support library (`radar_app`)
 
 Shared, app-agnostic building blocks for the FMCW example applications
-(`fmcw_siso`, and the future `fmcw_simo` / `fmcw_mimo`). It exists so those
+(`fmcw_siso`, `fmcw_simo`, and the future `fmcw_mimo`). It exists so those
 apps stay small and readable: each app is mostly a graph-wiring `compose()`,
 not a pile of copy-pasted operators.
 
@@ -12,8 +12,8 @@ The applications are organized around three kinds of component:
    application's own translation unit (e.g. `fmcw_siso/cpp/fmcw_siso.cpp`).
 2. **App-specific operators** — custom to one application, not generalized.
    For the FMCW examples this is essentially just the synthetic ADC source
-   (SISO emits a rank-2 cube; SIMO/MIMO would emit rank-3), so it stays with
-   the app.
+   (`AdcSourceOp` in SISO emits rank-2; `SimoAdcSourceOp` in SIMO emits
+   rank-3), so it stays with the app.
 3. **App-generalized operators / helpers** — reused across applications. These
    live here, in `radar_app`.
 
@@ -27,10 +27,13 @@ layer to share.
 
 ```text
 radar_app/
-  report/report_ops.hpp   DetectionReportOp, ClusterReportOp, NullSinkOp
-  viz/viz.hpp             RdMapToImageOp, ClusterOverlayOp, RollingPlotOp,
-                          the turbo LUT, the cluster palette, and the
-                          overlay / plot layer-name helpers
+  report/report_ops.hpp   DetectionReportOp, ClusterReportOp (2- or 4-column
+                          points), NullSinkOp
+  viz/viz.hpp             RdChannelSliceOp (SIMO per-RX RD slice),
+                          RdMapToImageOp, ClusterOverlayOp, RollingPlotOp,
+                          BoresightViewOp (az/el scatter), the turbo LUT, the
+                          cluster palette, and the overlay / plot layer-name
+                          helpers
   viz/display.hpp         gui_available() — the Holoviz display probe
 ```
 
