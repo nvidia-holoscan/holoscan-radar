@@ -234,10 +234,10 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     return "MIMOCoherentCompensationOp performance characterization";
   }
   static const char* sizes_all_help() {
-    return "TDM correction size sweep across the full ladder";
+    return "TDM + DDM correction size sweep across the full ladder";
   }
   static const char* sizes_subset_help() {
-    return "TDM correction size sweep across an explicit subset";
+    return "TDM + DDM correction size sweep across an explicit subset";
   }
   static const char* full_help() {
     return "Full matrix (sizes + batch axis on md/lg)";
@@ -281,6 +281,7 @@ struct CompensationTraits : perf::PerfDriverDefaults {
         continue;
       }
       out.push_back(make_scenario(*s));
+      out.push_back(make_scenario(*s, hr::MultiplexingScheme::kDdm));
     }
     return out;
   }

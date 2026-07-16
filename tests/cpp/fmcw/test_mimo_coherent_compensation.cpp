@@ -765,6 +765,21 @@ TEST(MIMOCoherentCompensationOp, RejectsEmptyDdmCode) {
   EXPECT_THROW(harness->run_test(), std::invalid_argument);
 }
 
+TEST(MIMOCoherentCompensationOp, RejectsUnspecifiedMultiplexingScheme) {
+  const auto waveform = make_test_waveform();
+  const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
+  const std::vector<std::complex<float>> host(
+      static_cast<size_t>(tensor_count(shape)), {1.0f, 0.0f});
+  auto harness = create_operator_test<MIMOCoherentCompensationOp<float>>(
+      holoscan::Arg("waveform") = waveform);
+  harness->template add_input_port<holoscan::TensorMap>(
+      "rd_maps",
+      {single_map(to_device_tensor(host, shape, complex_dtype<float>()),
+                  "rd_maps")});
+  harness->template add_output_port<holoscan::TensorMap>("rd_maps");
+  EXPECT_THROW(harness->run_test(), std::invalid_argument);
+}
+
 TEST(MIMOCoherentCompensationOp, RejectsInvalidWaveform) {
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
   const std::vector<std::complex<float>> host(

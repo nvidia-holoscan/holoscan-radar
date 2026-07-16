@@ -58,8 +58,6 @@ class MIMOCoherentCompensationOp : public holoscan::Operator {
 
   struct CachedDdmDemux {
     std::shared_ptr<holoscan::Tensor> device_table;
-    int64_t num_tx{0};
-    int64_t num_doppler_per_tx{0};
   };
 
   void run_tdm_compute(OutputContext& op_output,

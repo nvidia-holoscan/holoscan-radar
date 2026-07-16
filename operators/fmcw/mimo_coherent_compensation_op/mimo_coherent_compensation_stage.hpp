@@ -85,8 +85,7 @@ std::vector<int64_t> ddm_output_rd_shape(const DdmRdMapsLayout& in,
 // Doppler axis.
 std::vector<int64_t> build_ddm_demux_table(const std::vector<double>& offsets,
                                            int64_t num_tx, int64_t num_doppler,
-                                           int64_t num_doppler_per_tx,
-                                           int64_t guard_bands);
+                                           int64_t num_doppler_per_tx);
 
 std::string ddm_demux_cache_key(const DDMCodeDescriptor& code,
                                 int64_t num_doppler);

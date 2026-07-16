@@ -98,6 +98,7 @@ enum class OverlapPolicy {
 
 // MIMO TX multiplexing scheme for MIMOCoherentCompensationOp.
 enum class MultiplexingScheme {
+  kUnspecified,  // Holoscan Parameter default only; reject at compute().
   kTdm,
   kDdm,
 };
@@ -213,6 +214,7 @@ constexpr std::string_view to_string(OverlapPolicy policy) {
 
 constexpr std::string_view to_string(MultiplexingScheme scheme) {
   switch (scheme) {
+    case MultiplexingScheme::kUnspecified: return "unspecified";
     case MultiplexingScheme::kTdm: return "tdm";
     case MultiplexingScheme::kDdm: return "ddm";
   }

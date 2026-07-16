@@ -321,9 +321,7 @@ std::vector<int64_t> ddm_output_rd_shape(const DdmRdMapsLayout& in,
 
 std::vector<int64_t> build_ddm_demux_table(const std::vector<double>& offsets,
                                            int64_t num_tx, int64_t num_doppler,
-                                           int64_t num_doppler_per_tx,
-                                           int64_t guard_bands) {
-  (void)guard_bands;
+                                           int64_t num_doppler_per_tx) {
   const int64_t D = num_doppler;
   const int64_t W = num_doppler_per_tx;
   // fftshift centers: fftshift1D maps center-zero index i to fft-order bin

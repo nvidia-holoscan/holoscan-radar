@@ -54,8 +54,8 @@ void MIMOCoherentCompensationOp<T>::setup(OperatorSpec& spec) {
   spec.param(multiplexing_scheme_, "multiplexing_scheme",
              "MIMO multiplexing scheme",
              "TDM: per-Doppler-bin inter-TX phase correction. DDM: band demux "
-             "+ code removal. Static.",
-             MultiplexingScheme::kTdm);
+             "+ code removal. Static. Required.",
+             MultiplexingScheme::kUnspecified);
   spec.param(waveform_, "waveform", "FMCW waveform descriptor",
              "Per-TX PRI and carrier for Doppler-dependent phase math.",
              FMCWWaveformDescriptor{});
@@ -135,11 +135,8 @@ void MIMOCoherentCompensationOp<T>::run_ddm_compute(
   const CachedDdmDemux& cached = demux_cache_.get_or_build(
       cache_key, /*changed=*/false, "DDM demux table", [&] {
         CachedDdmDemux entry;
-        entry.num_tx = num_tx;
-        entry.num_doppler_per_tx = num_doppler_per_tx;
         const auto host = detail::build_ddm_demux_table(
-            offsets, num_tx, layout.num_doppler, num_doppler_per_tx,
-            code.guard_bands);
+            offsets, num_tx, layout.num_doppler, num_doppler_per_tx);
         entry.device_table =
             make_device_tensor({num_tx, num_doppler_per_tx},
                                DLDataType{kDLInt, 64, 1});
@@ -191,14 +188,23 @@ void MIMOCoherentCompensationOp<T>::compute(InputContext& op_input,
 
   cudaStream_t stream = op_input.receive_cuda_stream("rd_maps");
 
-  if (multiplexing_scheme_.get() == MultiplexingScheme::kDdm) {
+  const MultiplexingScheme scheme = multiplexing_scheme_.get();
+  if (scheme == MultiplexingScheme::kUnspecified) {
+    throw std::invalid_argument(std::string(kOpName) +
+                                ": multiplexing_scheme is required "
+                                "(tdm or ddm)");
+  }
+  if (scheme == MultiplexingScheme::kDdm) {
     const detail::DdmRdMapsLayout layout =
         detail::parse_ddm_rd_maps_layout(*input, "rd_maps");
     run_ddm_compute(op_output, layout, input, stream);
-  } else {
+  } else if (scheme == MultiplexingScheme::kTdm) {
     const detail::TdmRdMapsLayout layout =
         detail::parse_tdm_rd_maps_layout(*input, "rd_maps");
     run_tdm_compute(op_output, layout, input, stream, waveform_changed);
+  } else {
+    throw std::invalid_argument(std::string(kOpName) +
+                                ": unknown multiplexing_scheme");
   }
 
   retained_input_ = std::move(input);
