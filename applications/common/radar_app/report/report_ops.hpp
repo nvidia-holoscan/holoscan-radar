@@ -157,13 +157,14 @@ class DetectionReportOp : public holoscan::Operator {
 };
 
 // Reports the DBSCAN clusters formed over the CFAR detections. `points` is the
-// FeatureAssemblyOp feature matrix (this app assembles [range (m),
-// velocity (m/s)]); `labels` is the per-point cluster id (noise = -1,
-// row-aligned with points) and `sizes` the per-cluster point count. For each
-// cluster it logs the size, the mean centroid, and DetectionReductionOp's
-// representative cell (`rep_idx`, row-aligned with clusters) resolved to
-// physical units via the axis bins — so the mean and the chosen real
-// detection can be compared.
+// FeatureAssemblyOp feature matrix ([range, velocity] for SISO; optional az/el
+// for SIMO); `labels` is the per-point cluster id (noise = -1, row-aligned with
+// points) and `sizes` the per-cluster point count. For each cluster it logs the
+// size, the mean centroid, and DetectionReductionOp's representative cell
+// (`rep_idx`, row-aligned with clusters) resolved to physical units via the
+// axis bins — so the mean and the chosen real detection can be compared. When
+// points has az/el columns, pass `detection_idx` so rep az/el can be resolved
+// from the matching detection row.
 class ClusterReportOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(ClusterReportOp)
@@ -176,6 +177,8 @@ class ClusterReportOp : public holoscan::Operator {
     spec.input<holoscan::TensorMap>("rep_idx");
     spec.input<holoscan::TensorMap>("range_bins");
     spec.input<holoscan::TensorMap>("velocity_bins");
+    spec.input<holoscan::TensorMap>("detection_idx")
+        .condition(holoscan::ConditionType::kNone);
   }
 
   void compute(holoscan::InputContext& op_input,
@@ -189,15 +192,19 @@ class ClusterReportOp : public holoscan::Operator {
     auto rep_idx = radar::receive_single(op_input, "rep_idx", who);
     auto range_bins = radar::receive_single(op_input, "range_bins", who);
     auto velocity_bins = radar::receive_single(op_input, "velocity_bins", who);
+    auto detection_idx = radar::receive_optional(op_input, "detection_idx", who);
 
     const auto pshape = points->shape();
-    // This app fixes the FeatureAssemblyOp columns to [range, velocity]; the
-    // centroid reporting below assumes that 2-column layout.
-    if (pshape.size() != 2 || pshape[1] != 2) {
+    const int64_t num_features = pshape.size() == 2 ? pshape[1] : 0;
+    if (pshape.size() != 2 || (num_features != 2 && num_features != 4)) {
       throw std::runtime_error(
-          "ClusterReportOp: points must be (N, 2) [range, velocity], got "
-          "rank " +
+          "ClusterReportOp: points must be (N, 2) or (N, 4), got rank " +
           std::to_string(pshape.size()));
+    }
+    if (num_features == 4 && !detection_idx) {
+      throw std::runtime_error(
+          "ClusterReportOp: detection_idx required when points has az/el "
+          "columns");
     }
     const int64_t num_points = pshape[0];
     const auto lshape = labels->shape();
@@ -221,10 +228,20 @@ class ClusterReportOp : public holoscan::Operator {
     const int64_t num_range = range_bins->shape()[0];
     const int64_t num_doppler = velocity_bins->shape()[0];
 
-    std::vector<float> pts(static_cast<size_t>(num_points * 2));
+    std::vector<float> pts(static_cast<size_t>(num_points * num_features));
     std::vector<int64_t> lab(static_cast<size_t>(num_points));
     std::vector<int64_t> sz(static_cast<size_t>(num_clusters));
     std::vector<int64_t> rep(static_cast<size_t>(num_clusters * 2));
+    std::vector<int64_t> det_idx;
+    if (detection_idx) {
+      const auto dshape = detection_idx->shape();
+      if (dshape.size() != 2 || dshape[1] != 2 || dshape[0] != num_points) {
+        throw std::runtime_error(
+            "ClusterReportOp: detection_idx must be (N, 2) row-aligned with "
+            "points");
+      }
+      det_idx.resize(static_cast<size_t>(num_points * 2));
+    }
     std::vector<float> ranges(static_cast<size_t>(num_range));
     std::vector<float> velocities(static_cast<size_t>(num_doppler));
 
@@ -268,11 +285,20 @@ class ClusterReportOp : public holoscan::Operator {
     copy_d2h("rep_idx", rep.data(), rep_idx);
     copy_d2h("range_bins", ranges.data(), range_bins);
     copy_d2h("velocity_bins", velocities.data(), velocity_bins);
+    if (detection_idx) {
+      copy_d2h("detection_idx", det_idx.data(), detection_idx);
+    }
 
     // Accumulate per-cluster centroids from the points, keyed by label; noise
     // (-1) is counted but excluded from any cluster.
     std::vector<double> sum_range(static_cast<size_t>(num_clusters), 0.0);
     std::vector<double> sum_velocity(static_cast<size_t>(num_clusters), 0.0);
+    std::vector<double> sum_az;
+    std::vector<double> sum_el;
+    if (num_features == 4) {
+      sum_az.assign(static_cast<size_t>(num_clusters), 0.0);
+      sum_el.assign(static_cast<size_t>(num_clusters), 0.0);
+    }
     int64_t noise = 0;
     for (int64_t i = 0; i < num_points; ++i) {
       const int64_t c = lab[static_cast<size_t>(i)];
@@ -284,10 +310,35 @@ class ClusterReportOp : public holoscan::Operator {
         throw std::runtime_error(
             "ClusterReportOp: label out of range for sizes");
       }
-      sum_range[static_cast<size_t>(c)] += pts[static_cast<size_t>(i * 2 + 0)];
+      sum_range[static_cast<size_t>(c)] +=
+          pts[static_cast<size_t>(i * num_features + 0)];
       sum_velocity[static_cast<size_t>(c)] +=
-          pts[static_cast<size_t>(i * 2 + 1)];
+          pts[static_cast<size_t>(i * num_features + 1)];
+      if (num_features == 4) {
+        sum_az[static_cast<size_t>(c)] +=
+            pts[static_cast<size_t>(i * num_features + 2)];
+        sum_el[static_cast<size_t>(c)] +=
+            pts[static_cast<size_t>(i * num_features + 3)];
+      }
     }
+
+    const auto rep_az_el = [&](int64_t c, float* out_az, float* out_el) {
+      if (num_features != 4) {
+        return;
+      }
+      const int64_t rep_dd = rep[static_cast<size_t>(c * 2 + 0)];
+      const int64_t rep_rr = rep[static_cast<size_t>(c * 2 + 1)];
+      for (int64_t i = 0; i < num_points; ++i) {
+        if (det_idx[static_cast<size_t>(i * 2 + 0)] == rep_dd &&
+            det_idx[static_cast<size_t>(i * 2 + 1)] == rep_rr) {
+          *out_az = pts[static_cast<size_t>(i * num_features + 2)];
+          *out_el = pts[static_cast<size_t>(i * num_features + 3)];
+          return;
+        }
+      }
+      *out_az = 0.0F;
+      *out_el = 0.0F;
+    };
 
     HOLOSCAN_LOG_INFO("DBSCAN clusters: {} ({} points, {} noise)",
                       num_clusters, num_points, noise);
@@ -303,13 +354,29 @@ class ClusterReportOp : public holoscan::Operator {
         throw std::runtime_error(
             "ClusterReportOp: rep_idx out of axis bounds");
       }
-      HOLOSCAN_LOG_INFO(
-          "  cluster {}: {} pts, centroid range {:.2f} m, velocity "
-          "{:+.2f} m/s; rep range {:.2f} m, velocity {:+.2f} m/s",
-          c, n, sum_range[static_cast<size_t>(c)] * inv,
-          sum_velocity[static_cast<size_t>(c)] * inv,
-          ranges[static_cast<size_t>(rep_rr)],
-          velocities[static_cast<size_t>(rep_dd)]);
+      if (num_features == 4) {
+        float rep_az = 0.0F;
+        float rep_el = 0.0F;
+        rep_az_el(c, &rep_az, &rep_el);
+        HOLOSCAN_LOG_INFO(
+            "  cluster {}: {} pts, centroid range {:.2f} m, velocity "
+            "{:+.2f} m/s, az {:.3f} rad, el {:.3f} rad; rep range {:.2f} m, "
+            "velocity {:+.2f} m/s, az {:.3f} rad, el {:.3f} rad",
+            c, n, sum_range[static_cast<size_t>(c)] * inv,
+            sum_velocity[static_cast<size_t>(c)] * inv,
+            sum_az[static_cast<size_t>(c)] * inv,
+            sum_el[static_cast<size_t>(c)] * inv,
+            ranges[static_cast<size_t>(rep_rr)],
+            velocities[static_cast<size_t>(rep_dd)], rep_az, rep_el);
+      } else {
+        HOLOSCAN_LOG_INFO(
+            "  cluster {}: {} pts, centroid range {:.2f} m, velocity "
+            "{:+.2f} m/s; rep range {:.2f} m, velocity {:+.2f} m/s",
+            c, n, sum_range[static_cast<size_t>(c)] * inv,
+            sum_velocity[static_cast<size_t>(c)] * inv,
+            ranges[static_cast<size_t>(rep_rr)],
+            velocities[static_cast<size_t>(rep_dd)]);
+      }
     }
     if (num_clusters > kMaxLogged) {
       HOLOSCAN_LOG_INFO("  ... {} more clusters not logged",

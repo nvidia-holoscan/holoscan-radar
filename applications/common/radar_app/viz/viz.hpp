@@ -38,6 +38,62 @@ namespace holoscan::radar::app {
 // index into it directly.
 constexpr size_t kLutSize = 256;
 
+// Extract one RX channel from a per-channel RD map for visualization. SIMO
+// rd_maps are (N_rx, num_doppler, num_range); Holoviz helpers expect rank-2
+// (num_doppler, num_range). Default channel 0 is a debug display only — CFAR
+// may run NCI over all RX.
+class RdChannelSliceOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(RdChannelSliceOp)
+  RdChannelSliceOp() = default;
+
+  int64_t channel{0};
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::TensorMap>("rd_maps");
+    spec.output<holoscan::TensorMap>("rd_map");
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               holoscan::OutputContext& op_output,
+               [[maybe_unused]] holoscan::ExecutionContext& context)
+      override {
+    auto rd_maps = radar::receive_single(op_input, "rd_maps", "RdChannelSliceOp");
+    const auto& shape = rd_maps->shape();
+    if (shape.size() != 3) {
+      throw std::runtime_error(
+          "RdChannelSliceOp: expected rank-3 (N_rx, D, R), got rank " +
+          std::to_string(shape.size()));
+    }
+    const int64_t num_rx = shape[0];
+    const int64_t num_doppler = shape[1];
+    const int64_t num_range = shape[2];
+    if (channel < 0 || channel >= num_rx) {
+      throw std::runtime_error("RdChannelSliceOp: channel out of range");
+    }
+
+    const size_t plane = static_cast<size_t>(num_doppler * num_range);
+    std::vector<std::complex<float>> host(plane);
+    const auto* src = static_cast<const std::complex<float>*>(rd_maps->data());
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+      throw std::runtime_error("RdChannelSliceOp: device synchronize failed");
+    }
+    if (cudaMemcpy(host.data(), src + channel * plane,
+                   plane * sizeof(std::complex<float>),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+      throw std::runtime_error("RdChannelSliceOp: D2H slice failed");
+    }
+
+    auto out = radar::make_device_tensor({num_doppler, num_range},
+                                        radar::complex_dtype<float>());
+    if (cudaMemcpy(out->data(), host.data(), host.size() * sizeof(std::complex<float>),
+                   cudaMemcpyHostToDevice) != cudaSuccess) {
+      throw std::runtime_error("RdChannelSliceOp: H2D upload failed");
+    }
+    radar::emit_single(op_output, "rd_map", out);
+  }
+};
+
 // Converts the complex RD map into a log-magnitude float32 image for
 // Holoviz (rendered through the turbo color lookup table). Per frame:
 // |RD| in dB, mapped between that frame's measured noise floor and its
@@ -311,6 +367,113 @@ inline std::vector<std::vector<float>> cluster_palette() {
   };
 }
 
+// ---- Shared 2D raster plotting helpers (RGBA8 byte canvas) --------------
+// A tiny software rasterizer shared by the side-panel plot operators
+// (RollingPlotOp, BoresightViewOp): per-cluster marker colors, pixel
+// plotting, a 3x5 bitmap font for numeric tick labels, and the constant
+// title-position tensor. Canvas is row-major RGBA8 (W*H*4 bytes), origin
+// top-left.
+constexpr int kPlotFontScale = 2;
+
+// RGBA byte color for a cluster bucket (palette color, or gray for noise).
+inline std::array<uint8_t, 3> plot_bucket_color(int bucket) {
+  if (bucket >= kNumClusterColors) {
+    return {150, 150, 150};  // noise
+  }
+  const auto c = cluster_palette()[static_cast<size_t>(bucket)];
+  return {static_cast<uint8_t>(c[0] * 255.0F),
+          static_cast<uint8_t>(c[1] * 255.0F),
+          static_cast<uint8_t>(c[2] * 255.0F)};
+}
+
+inline void plot_put_px(std::vector<uint8_t>* img, int64_t w, int64_t h,
+                        int64_t x, int64_t y,
+                        const std::array<uint8_t, 3>& c) {
+  if (x < 0 || x >= w || y < 0 || y >= h) {
+    return;
+  }
+  const size_t o = static_cast<size_t>((y * w + x) * 4);
+  (*img)[o + 0] = c[0];
+  (*img)[o + 1] = c[1];
+  (*img)[o + 2] = c[2];
+  (*img)[o + 3] = 255;
+}
+
+// Minimal 3x5 bitmap font for axis tick labels (digits, '-', '.'); each
+// row's low 3 bits are the columns (bit 0 = left). Rendered at kPlotFontScale.
+inline std::array<uint8_t, 5> plot_glyph_rows(char c) {
+  switch (c) {
+    case '0': return {7, 5, 5, 5, 7};
+    case '1': return {2, 3, 2, 2, 7};
+    case '2': return {7, 4, 7, 1, 7};
+    case '3': return {7, 4, 7, 4, 7};
+    case '4': return {5, 5, 7, 4, 4};
+    case '5': return {7, 1, 7, 4, 7};
+    case '6': return {7, 1, 7, 5, 7};
+    case '7': return {7, 4, 2, 2, 2};
+    case '8': return {7, 5, 7, 5, 7};
+    case '9': return {7, 5, 7, 4, 7};
+    case '-': return {0, 0, 7, 0, 0};
+    case '.': return {0, 0, 0, 0, 2};
+    default: return {0, 0, 0, 0, 0};
+  }
+}
+
+inline int64_t plot_text_width(const std::string& s) {
+  return static_cast<int64_t>(s.size()) * 4 * kPlotFontScale;
+}
+
+inline void plot_draw_text(std::vector<uint8_t>* img, int64_t w, int64_t h,
+                           int64_t x, int64_t y, const std::string& s,
+                           const std::array<uint8_t, 3>& col) {
+  int64_t cx = x;
+  for (char c : s) {
+    const auto rows = plot_glyph_rows(c);
+    for (int r = 0; r < 5; ++r) {
+      for (int ci = 0; ci < 3; ++ci) {
+        if ((rows[static_cast<size_t>(r)] >> ci) & 1) {
+          for (int sy = 0; sy < kPlotFontScale; ++sy) {
+            for (int sx = 0; sx < kPlotFontScale; ++sx) {
+              plot_put_px(img, w, h, cx + ci * kPlotFontScale + sx,
+                          y + r * kPlotFontScale + sy, col);
+            }
+          }
+        }
+      }
+    }
+    cx += 4 * kPlotFontScale;
+  }
+}
+
+// Format a tick value with `dec` decimals (0 or 1); no locale / sprintf.
+inline std::string plot_format_tick(float value, int dec) {
+  const bool neg = value < 0.0F;
+  const float av = neg ? -value : value;
+  std::string mag;
+  bool nonzero = false;
+  if (dec <= 0) {
+    const int64_t v = static_cast<int64_t>(av + 0.5F);
+    mag = std::to_string(v);
+    nonzero = v != 0;
+  } else {
+    const int64_t scaled = static_cast<int64_t>(av * 10.0F + 0.5F);
+    mag = std::to_string(scaled / 10) + "." + std::to_string(scaled % 10);
+    nonzero = scaled != 0;
+  }
+  return (neg && nonzero ? "-" : "") + mag;
+}
+
+// Constant top-left title position (x, y, size) in a layer's [0,1] space.
+inline std::shared_ptr<holoscan::Tensor> plot_title_pos() {
+  const std::array<float, 3> pos = {0.03F, 0.02F, 0.05F};
+  auto tensor = radar::make_device_tensor({1, 3}, radar::real_dtype<float>());
+  if (cudaMemcpy(tensor->data(), pos.data(), sizeof(pos),
+                 cudaMemcpyHostToDevice) != cudaSuccess) {
+    throw std::runtime_error("plot_title_pos: title position H2D failed");
+  }
+  return tensor;
+}
+
 // Holoviz layer names for the side plots, shared by RollingPlotOp (emitted
 // tensor keys) and compose() (InputSpec names). Each plot is an RGBA image
 // (the rasterized scatter) plus a TEXT layer for its title.
@@ -444,8 +607,8 @@ class RollingPlotOp : public holoscan::Operator {
     out.insert({kRangePlotLayer, render_plot(/*use_range=*/true, oldest)});
     out.insert(
         {kVelocityPlotLayer, render_plot(/*use_range=*/false, oldest)});
-    out.insert({kRangeTitleLayer, title_pos()});
-    out.insert({kVelocityTitleLayer, title_pos()});
+    out.insert({kRangeTitleLayer, plot_title_pos()});
+    out.insert({kVelocityTitleLayer, plot_title_pos()});
     op_output.emit(out, "plots");
     ++tick_;
   }
@@ -457,91 +620,6 @@ class RollingPlotOp : public holoscan::Operator {
     float v;
     int bucket;  // [0, kNumClusterColors) cluster color, or kNumClusterColors
   };
-
-  // RGBA byte color for a history bucket (cluster color, or gray for noise).
-  static std::array<uint8_t, 3> bucket_color(int bucket) {
-    if (bucket >= kNumClusterColors) {
-      return {150, 150, 150};  // noise
-    }
-    const auto c = cluster_palette()[static_cast<size_t>(bucket)];
-    return {static_cast<uint8_t>(c[0] * 255.0F),
-            static_cast<uint8_t>(c[1] * 255.0F),
-            static_cast<uint8_t>(c[2] * 255.0F)};
-  }
-
-  static void put_px(std::vector<uint8_t>* img, int64_t x, int64_t y,
-                     const std::array<uint8_t, 3>& c) {
-    if (x < 0 || x >= kW || y < 0 || y >= kH) {
-      return;
-    }
-    const size_t o = static_cast<size_t>((y * kW + x) * 4);
-    (*img)[o + 0] = c[0];
-    (*img)[o + 1] = c[1];
-    (*img)[o + 2] = c[2];
-    (*img)[o + 3] = 255;
-  }
-
-  // Minimal 3x5 bitmap font for axis tick labels (digits, '-', '.'); each
-  // row's low 3 bits are the columns (bit 0 = left). Rendered at kFontScale.
-  static constexpr int kFontScale = 2;
-  static std::array<uint8_t, 5> glyph_rows(char c) {
-    switch (c) {
-      case '0': return {7, 5, 5, 5, 7};
-      case '1': return {2, 3, 2, 2, 7};
-      case '2': return {7, 4, 7, 1, 7};
-      case '3': return {7, 4, 7, 4, 7};
-      case '4': return {5, 5, 7, 4, 4};
-      case '5': return {7, 1, 7, 4, 7};
-      case '6': return {7, 1, 7, 5, 7};
-      case '7': return {7, 4, 2, 2, 2};
-      case '8': return {7, 5, 7, 5, 7};
-      case '9': return {7, 5, 7, 4, 7};
-      case '-': return {0, 0, 7, 0, 0};
-      case '.': return {0, 0, 0, 0, 2};
-      default: return {0, 0, 0, 0, 0};
-    }
-  }
-  static int64_t text_width(const std::string& s) {
-    return static_cast<int64_t>(s.size()) * 4 * kFontScale;
-  }
-  static void draw_text(std::vector<uint8_t>* img, int64_t x, int64_t y,
-                        const std::string& s,
-                        const std::array<uint8_t, 3>& col) {
-    int64_t cx = x;
-    for (char c : s) {
-      const auto rows = glyph_rows(c);
-      for (int r = 0; r < 5; ++r) {
-        for (int ci = 0; ci < 3; ++ci) {
-          if ((rows[static_cast<size_t>(r)] >> ci) & 1) {
-            for (int sy = 0; sy < kFontScale; ++sy) {
-              for (int sx = 0; sx < kFontScale; ++sx) {
-                put_px(img, cx + ci * kFontScale + sx,
-                       y + r * kFontScale + sy, col);
-              }
-            }
-          }
-        }
-      }
-      cx += 4 * kFontScale;
-    }
-  }
-  // Format a tick value with `dec` decimals (0 or 1); no locale / sprintf.
-  static std::string format_tick(float value, int dec) {
-    const bool neg = value < 0.0F;
-    const float av = neg ? -value : value;
-    std::string mag;
-    bool nonzero = false;
-    if (dec <= 0) {
-      const int64_t v = static_cast<int64_t>(av + 0.5F);
-      mag = std::to_string(v);
-      nonzero = v != 0;
-    } else {
-      const int64_t scaled = static_cast<int64_t>(av * 10.0F + 0.5F);
-      mag = std::to_string(scaled / 10) + "." + std::to_string(scaled % 10);
-      nonzero = scaled != 0;
-    }
-    return (neg && nonzero ? "-" : "") + mag;
-  }
 
   // Rasterize one plot: use_range picks the range vs velocity axis. Returns a
   // (kH, kW, 4) uint8 RGBA device tensor.
@@ -561,12 +639,12 @@ class RollingPlotOp : public holoscan::Operator {
     constexpr int64_t kLeft = 46, kRight = kW - 12, kTop = 30,
                       kBottom = kH - 26;
     for (int64_t x = kLeft; x <= kRight; ++x) {
-      put_px(&img, x, kTop, kGrid);
-      put_px(&img, x, kBottom, kGrid);
+      plot_put_px(&img, kW, kH, x, kTop, kGrid);
+      plot_put_px(&img, kW, kH, x, kBottom, kGrid);
     }
     for (int64_t y = kTop; y <= kBottom; ++y) {
-      put_px(&img, kLeft, y, kGrid);
-      put_px(&img, kRight, y, kGrid);
+      plot_put_px(&img, kW, kH, kLeft, y, kGrid);
+      plot_put_px(&img, kW, kH, kRight, y, kGrid);
     }
 
     const float lo = use_range ? r_lo_ : v_lo_;
@@ -584,14 +662,14 @@ class RollingPlotOp : public holoscan::Operator {
           kBottom -
           static_cast<int64_t>(f * static_cast<float>(kBottom - kTop));
       for (int64_t x = kLeft + 1; x < kRight; x += 4) {  // dashed gridline
-        put_px(&img, x, y, kGrid);
+        plot_put_px(&img, kW, kH, x, y, kGrid);
       }
       for (int64_t d = 1; d <= 3; ++d) {  // tick mark
-        put_px(&img, kLeft - d, y, kLabel);
+        plot_put_px(&img, kW, kH, kLeft - d, y, kLabel);
       }
-      const std::string s = format_tick(lo + f * span, y_dec);
-      draw_text(&img, kLeft - 4 - text_width(s), y - kFontScale * 2, s,
-                kLabel);
+      const std::string s = plot_format_tick(lo + f * span, y_dec);
+      plot_draw_text(&img, kW, kH, kLeft - 4 - plot_text_width(s),
+                     y - kPlotFontScale * 2, s, kLabel);
     }
     for (int i = 0; i < kTicks; ++i) {
       const float f = static_cast<float>(i) / (kTicks - 1);
@@ -599,12 +677,13 @@ class RollingPlotOp : public holoscan::Operator {
           kLeft +
           static_cast<int64_t>(f * static_cast<float>(kRight - kLeft));
       for (int64_t d = 1; d <= 3; ++d) {  // tick mark
-        put_px(&img, x, kBottom + d, kLabel);
+        plot_put_px(&img, kW, kH, x, kBottom + d, kLabel);
       }
       const float secs = -(1.0F - f) * static_cast<float>(window - 1) *
                          static_cast<float>(frame_period);
-      const std::string s = format_tick(secs, 0);
-      draw_text(&img, x - text_width(s) / 2, kBottom + 5, s, kLabel);
+      const std::string s = plot_format_tick(secs, 0);
+      plot_draw_text(&img, kW, kH, x - plot_text_width(s) / 2, kBottom + 5, s,
+                     kLabel);
     }
 
     const auto to_px = [&](int64_t t, float val, int64_t* px, int64_t* py) {
@@ -621,10 +700,10 @@ class RollingPlotOp : public holoscan::Operator {
     for (const Sample& s : cen_hist_) {
       int64_t px = 0, py = 0;
       to_px(s.t, use_range ? s.r : s.v, &px, &py);
-      const auto col = bucket_color(s.bucket);
+      const auto col = plot_bucket_color(s.bucket);
       for (int64_t d = -4; d <= 4; ++d) {
-        put_px(&img, px + d, py, col);
-        put_px(&img, px, py + d, col);
+        plot_put_px(&img, kW, kH, px + d, py, col);
+        plot_put_px(&img, kW, kH, px, py + d, col);
       }
     }
 
@@ -637,24 +716,194 @@ class RollingPlotOp : public holoscan::Operator {
     return tensor;
   }
 
-  // Constant top-left title position (x, y, size) in the layer's [0,1] space.
-  static std::shared_ptr<holoscan::Tensor> title_pos() {
-    const std::array<float, 3> pos = {0.03F, 0.02F, 0.05F};
-    auto tensor =
-        radar::make_device_tensor({1, 3}, radar::real_dtype<float>());
-    if (cudaMemcpy(tensor->data(), pos.data(), sizeof(pos),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error("RollingPlotOp: title position H2D failed");
-    }
-    return tensor;
-  }
-
   std::deque<Sample> cen_hist_;
   int64_t tick_{0};
   std::vector<float> range_axis_;     // cached range_bins (bin → physical)
   std::vector<float> velocity_axis_;  // cached velocity_bins
   float r_lo_{0}, r_hi_{1}, v_lo_{0}, v_hi_{1};
   bool axis_set_{false};
+};
+
+// Holoviz layer names for the boresight angular-scatter panel.
+constexpr const char* kBoresightPlotLayer = "boresight_plot";
+constexpr const char* kBoresightTitleLayer = "boresight_title";
+
+// Boresight (angular field-of-view) scatter. Each CFAR detection is plotted at
+// its beamscan (azimuth, elevation) estimate — the view looking out along the
+// array boresight, so a marker's screen position is its angular sky position:
+// azimuth left→right (x), elevation bottom→top (y). Markers are colored by
+// DBSCAN cluster (noise gray), matching the RD-map overlay. Axes are labeled in
+// degrees over fixed extents (the beamscan grid, padded when an axis is a
+// single point, e.g. the default el grid), so the panel is a stable reference.
+// Instantaneous (current-frame) scatter — angle barely moves frame-to-frame,
+// so no rolling history is kept.
+//
+// In:  aoa_estimates — float32, (num_points, 2): (az, el) radians per det.
+// In:  labels        — int64, (num_points,): cluster id (noise = -1),
+//                     row-aligned with aoa_estimates.
+// Out: boresight_plot  — uint8 RGBA (H, W, 4) image.
+// Out: boresight_title — float32 (1, 3) TEXT position.
+class BoresightViewOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(BoresightViewOp)
+  BoresightViewOp() = default;
+
+  // Angular extents (radians), set from the beamscan grid before the run.
+  double az_lo{-0.35}, az_hi{0.35}, el_lo{-0.1}, el_hi{0.1};
+
+  static constexpr int64_t kW = 420;
+  static constexpr int64_t kH = 300;
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::TensorMap>("aoa_estimates");
+    spec.input<holoscan::TensorMap>("labels");
+    spec.output<holoscan::TensorMap>("plot");
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               holoscan::OutputContext& op_output,
+               [[maybe_unused]] holoscan::ExecutionContext& context)
+      override {
+    const std::string who = "BoresightViewOp";
+    auto aoa = radar::receive_single(op_input, "aoa_estimates", who);
+    auto labels = radar::receive_single(op_input, "labels", who);
+
+    const auto ashape = aoa->shape();
+    if (ashape.size() != 2 || ashape[1] != 2) {
+      throw std::runtime_error(
+          "BoresightViewOp: aoa_estimates must be (num_points, 2)");
+    }
+    const int64_t n = ashape[0];
+    const auto lshape = labels->shape();
+    if (lshape.size() != 1 || lshape[0] != n) {
+      throw std::runtime_error(
+          "BoresightViewOp: labels must be (num_points,) row-aligned with "
+          "aoa_estimates");
+    }
+
+    std::vector<float> ang(static_cast<size_t>(n * 2));
+    std::vector<int64_t> lab(static_cast<size_t>(n));
+    if (static_cast<size_t>(aoa->nbytes()) != sizeof(float) * ang.size()) {
+      throw std::runtime_error("BoresightViewOp: aoa_estimates must be float32");
+    }
+    if (static_cast<size_t>(labels->nbytes()) != sizeof(int64_t) * lab.size()) {
+      throw std::runtime_error("BoresightViewOp: labels byte size mismatch");
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+      throw std::runtime_error("BoresightViewOp: device synchronize failed");
+    }
+    if (n > 0) {
+      if (cudaMemcpy(ang.data(), aoa->data(),
+                     static_cast<size_t>(aoa->nbytes()),
+                     cudaMemcpyDeviceToHost) != cudaSuccess) {
+        throw std::runtime_error("BoresightViewOp: aoa_estimates D2H failed");
+      }
+      if (cudaMemcpy(lab.data(), labels->data(),
+                     static_cast<size_t>(labels->nbytes()),
+                     cudaMemcpyDeviceToHost) != cudaSuccess) {
+        throw std::runtime_error("BoresightViewOp: labels D2H failed");
+      }
+    }
+
+    holoscan::TensorMap out;
+    out.insert({kBoresightPlotLayer, render(ang, lab, n)});
+    out.insert({kBoresightTitleLayer, plot_title_pos()});
+    op_output.emit(out, "plot");
+  }
+
+ private:
+  std::shared_ptr<holoscan::Tensor> render(const std::vector<float>& ang,
+                                           const std::vector<int64_t>& lab,
+                                           int64_t n) {
+    constexpr std::array<uint8_t, 3> kBg = {20, 20, 28};
+    constexpr std::array<uint8_t, 3> kGrid = {80, 80, 95};
+    constexpr std::array<uint8_t, 3> kLabel = {200, 200, 210};
+    std::vector<uint8_t> img(static_cast<size_t>(kW * kH * 4));
+    for (int64_t p = 0; p < kW * kH; ++p) {
+      img[static_cast<size_t>(p * 4 + 0)] = kBg[0];
+      img[static_cast<size_t>(p * 4 + 1)] = kBg[1];
+      img[static_cast<size_t>(p * 4 + 2)] = kBg[2];
+      img[static_cast<size_t>(p * 4 + 3)] = 255;
+    }
+    constexpr int64_t kLeft = 46, kRight = kW - 12, kTop = 30,
+                      kBottom = kH - 26;
+    for (int64_t x = kLeft; x <= kRight; ++x) {
+      plot_put_px(&img, kW, kH, x, kTop, kGrid);
+      plot_put_px(&img, kW, kH, x, kBottom, kGrid);
+    }
+    for (int64_t y = kTop; y <= kBottom; ++y) {
+      plot_put_px(&img, kW, kH, kLeft, y, kGrid);
+      plot_put_px(&img, kW, kH, kRight, y, kGrid);
+    }
+
+    // Label the axes in degrees; markers map from radians through the same
+    // fixed extents.
+    constexpr double kRad2Deg = 57.29577951308232;
+    const float ax_lo = static_cast<float>(az_lo * kRad2Deg);
+    const float ax_hi = static_cast<float>(az_hi * kRad2Deg);
+    const float ey_lo = static_cast<float>(el_lo * kRad2Deg);
+    const float ey_hi = static_cast<float>(el_hi * kRad2Deg);
+    const float ax_span = std::max(ax_hi - ax_lo, 1e-6F);
+    const float ey_span = std::max(ey_hi - ey_lo, 1e-6F);
+
+    constexpr int kTicks = 5;
+    for (int i = 0; i < kTicks; ++i) {  // elevation (Y)
+      const float f = static_cast<float>(i) / (kTicks - 1);
+      const int64_t y =
+          kBottom - static_cast<int64_t>(f * static_cast<float>(kBottom - kTop));
+      for (int64_t x = kLeft + 1; x < kRight; x += 4) {
+        plot_put_px(&img, kW, kH, x, y, kGrid);
+      }
+      for (int64_t d = 1; d <= 3; ++d) {
+        plot_put_px(&img, kW, kH, kLeft - d, y, kLabel);
+      }
+      const std::string s = plot_format_tick(ey_lo + f * ey_span, 0);
+      plot_draw_text(&img, kW, kH, kLeft - 4 - plot_text_width(s),
+                     y - kPlotFontScale * 2, s, kLabel);
+    }
+    for (int i = 0; i < kTicks; ++i) {  // azimuth (X)
+      const float f = static_cast<float>(i) / (kTicks - 1);
+      const int64_t x =
+          kLeft + static_cast<int64_t>(f * static_cast<float>(kRight - kLeft));
+      for (int64_t d = 1; d <= 3; ++d) {
+        plot_put_px(&img, kW, kH, x, kBottom + d, kLabel);
+      }
+      const std::string s = plot_format_tick(ax_lo + f * ax_span, 0);
+      plot_draw_text(&img, kW, kH, x - plot_text_width(s) / 2, kBottom + 5, s,
+                     kLabel);
+    }
+
+    // One '+' marker per detection at its (az, el), colored by cluster.
+    for (int64_t i = 0; i < n; ++i) {
+      const float az_deg = ang[static_cast<size_t>(i * 2 + 0)] *
+                           static_cast<float>(kRad2Deg);
+      const float el_deg = ang[static_cast<size_t>(i * 2 + 1)] *
+                           static_cast<float>(kRad2Deg);
+      const float xf = (az_deg - ax_lo) / ax_span;
+      const float yf = (el_deg - ey_lo) / ey_span;
+      const int64_t px =
+          kLeft + static_cast<int64_t>(xf * static_cast<float>(kRight - kLeft));
+      const int64_t py =
+          kBottom - static_cast<int64_t>(yf * static_cast<float>(kBottom - kTop));
+      const int64_t label = lab[static_cast<size_t>(i)];
+      const int bucket = label >= 0
+                             ? static_cast<int>(label % kNumClusterColors)
+                             : kNumClusterColors;
+      const auto col = plot_bucket_color(bucket);
+      for (int64_t d = -4; d <= 4; ++d) {
+        plot_put_px(&img, kW, kH, px + d, py, col);
+        plot_put_px(&img, kW, kH, px, py + d, col);
+      }
+    }
+
+    auto tensor =
+        radar::make_device_tensor({kH, kW, 4}, DLDataType{kDLUInt, 8, 1});
+    if (cudaMemcpy(tensor->data(), img.data(), img.size(),
+                   cudaMemcpyHostToDevice) != cudaSuccess) {
+      throw std::runtime_error("BoresightViewOp: plot image H2D upload failed");
+    }
+    return tensor;
+  }
 };
 
 

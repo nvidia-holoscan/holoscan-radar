@@ -15,3 +15,16 @@ add_holohub_application(fmcw_siso
         fmcw_doppler_processor_op
         cfar_detector_op
 )
+
+add_holohub_application(fmcw_simo
+    DEPENDS OPERATORS
+        fmcw_range_processor_op
+        clutter_filter_op
+        fmcw_doppler_processor_op
+        cfar_detector_op
+        snapshot_gather_op
+        beamscan_estimator_op
+        feature_assembly_op
+        detection_reduction_op
+        cluster_dbscan_op
+)
