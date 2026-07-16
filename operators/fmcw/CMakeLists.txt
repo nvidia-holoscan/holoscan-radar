@@ -18,3 +18,4 @@ add_holohub_operator(fmcw_range_doppler_processor_op
 add_holohub_operator(fmcw_range_processor_op)
 add_holohub_operator(clutter_filter_op)
 add_holohub_operator(fmcw_doppler_processor_op)
+add_holohub_operator(mimo_deinterleave_op)

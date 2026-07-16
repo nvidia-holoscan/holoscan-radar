@@ -15,6 +15,7 @@
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/reduce/reduction_enums.hpp"
 
@@ -473,6 +474,38 @@ struct convert<holoscan::radar::AngleConvention> {
     if (const Node ref = node["elevation_reference"]) {
       conv.elevation_reference = ref.as<holoscan::radar::ElevationReference>();
     }
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::TXSchedule> {
+  static Node encode(const holoscan::radar::TXSchedule& schedule) {
+    Node node;
+    node["num_tx"] = schedule.num_tx;
+    if (!schedule.tx_order.empty()) {
+      node["tx_order"] = schedule.tx_order;
+    }
+    if (!schedule.chirp_tx_index.empty()) {
+      node["chirp_tx_index"] = schedule.chirp_tx_index;
+    }
+    return node;
+  }
+  static bool decode(const Node& node, holoscan::radar::TXSchedule& schedule) {
+    if (!node.IsMap()) {
+      return false;
+    }
+    schedule = holoscan::radar::TXSchedule{};
+    if (const Node ntx = node["num_tx"]) {
+      schedule.num_tx = ntx.as<int64_t>();
+    }
+    if (const Node order = node["tx_order"]) {
+      schedule.tx_order = order.as<std::vector<int64_t>>();
+    }
+    if (const Node idx = node["chirp_tx_index"]) {
+      schedule.chirp_tx_index = idx.as<std::vector<int64_t>>();
+    }
+    schedule.validate();
     return true;
   }
 };

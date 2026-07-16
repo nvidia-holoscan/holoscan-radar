@@ -21,6 +21,7 @@ fused:  adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
 | `ClutterFilterOp<T>` | `range_profiles` → `range_profiles` (chirp count preserved / −1 / −2) | Slow-time clutter suppression: `mean_subtraction` (zero-Doppler nulled, no chirp loss) or 1st/2nd-order MTI delay cancellers |
 | `FMCWDopplerProcessorOp<T>` | `range_profiles` → `rd_maps` (…, doppler, range bins) + optional `velocity_bins` axis | Doppler compression: windowed slow-time FFT (`nfft` zero-pad), zero-Doppler centered by default (numpy-style fftshift) |
 | `FMCWRangeDopplerProcessorOp<T>` | `adc_cube` → `rd_maps` + optional `range_bins`/`velocity_bins` | Fused range + optional inline clutter + Doppler in one node; per-axis `nfft_range`/`nfft_doppler` |
+| `MIMODeinterleaveOp<T>` | `adc_cube` (…, N_rx, M·L, samples; complex or real IF) → `adc_cube` (…, M_tx, N_rx, L, samples) | TDM marshaling: split interleaved slow-time into an explicit TX axis via `TXSchedule` gather |
 
 The optional axis outputs are emitted only when a waveform descriptor
 (`FMCWWaveformDescriptor`) is available; consumers map peaks back to

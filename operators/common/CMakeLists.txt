@@ -13,6 +13,7 @@ add_library(radar_common STATIC
     radar_common/dsp/window.cpp
     radar_common/dsp/angle_convention.cpp
     radar_common/dsp/steering_weights.cpp
+    radar_common/descriptors/tx_schedule.cpp
 )
 add_library(holoscan::radar_common ALIAS radar_common)
 

@@ -64,6 +64,11 @@ target_link_libraries(perf_beamscan_estimator PRIVATE
     radar_perf_utils
     holoscan::beamscan_estimator_op)
 
+add_executable(perf_mimo_deinterleave perf_mimo_deinterleave.cpp)
+target_link_libraries(perf_mimo_deinterleave PRIVATE
+    radar_perf_utils
+    holoscan::mimo_deinterleave_op)
+
 # Optional smoke: runs a tiny scenario subset and verifies a report file is
 # written. No timing thresholds — CI only checks the tool executes and emits.
 if(HOLOSCAN_RADAR_BUILD_TESTING)
@@ -126,5 +131,11 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
         COMMAND perf_beamscan_estimator --sizes xs --warmup 1 --frames 2 --quiet
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_beamscan_estimator_smoke.json)
     set_tests_properties(perf_beamscan_estimator_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_mimo_deinterleave_smoke
+        COMMAND perf_mimo_deinterleave --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_mimo_deinterleave_smoke.json)
+    set_tests_properties(perf_mimo_deinterleave_smoke PROPERTIES
         LABELS "performance")
 endif()

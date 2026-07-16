@@ -9,6 +9,7 @@
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
 
@@ -33,6 +34,7 @@ inline void ensure_radar_arg_setters() {
     ArgumentSetter::ensure_type<WindowSpec>();
     ArgumentSetter::ensure_type<FMCWWaveformDescriptor>();
     ArgumentSetter::ensure_type<ArrayGeometry>();
+    ArgumentSetter::ensure_type<TXSchedule>();
     ArgumentSetter::ensure_type<AngleConvention>();
     ArgumentSetter::ensure_type<FftNorm>();
     ArgumentSetter::ensure_type<ClutterFilterMethod>();
