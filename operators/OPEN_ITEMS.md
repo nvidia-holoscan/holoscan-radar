@@ -66,6 +66,15 @@ intended MIMO-TDM chain is linear (deinterleave → compensation → virtual
 array). The xl diagnostic above is the evidence; implementation deferred for
 now (allocate-per-tick remains in code).
 
+`VirtualArrayAssemblyOp` (2026-07-16 review): same allocate-per-tick output
+path via `make_device_tensor`. Realloc is **required** when output element
+count changes tick-to-tick (`num_doppler`, `num_range_bins`, leading batch,
+or `M_tx`/`N_rx` → `num_virtual`); the sole `[live]` param (`wavelength`)
+does **not** change tensor shapes. On the default perf matrix (xl median
+~3.3 ms, setup ~3.5 ms) steady state does **not** show the malloc-dominated
+profile seen on `MIMODeinterleaveOp` xl — defer ping-pong here as well;
+revisit only if profiling flags allocation at target sizes.
+
 Reasons it is reasonable to deploy there when picked up:
 
 - Large perf win at xl (~2.1 ms → ~0.75 ms harness median) with no API

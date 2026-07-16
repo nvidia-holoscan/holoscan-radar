@@ -13,10 +13,11 @@
 #include <cuda_runtime_api.h>
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstdint>
-#include <filesystem>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -264,8 +265,8 @@ class SimoAdcSourceOp : public holoscan::Operator {
     const radar::sim::SimResult sim = radar::sim::simulate(scene);
     if (sim.shape.size() != 3) {
       throw std::runtime_error(
-          "SimoAdcSourceOp: expected rank-3 (N_rx, chirps, samples), got rank " +
-          std::to_string(sim.shape.size()));
+          "SimoAdcSourceOp: expected rank-3 (N_rx, chirps, samples), "
+          "got rank " + std::to_string(sim.shape.size()));
     }
     if (sim.shape[0] < 2) {
       throw std::runtime_error("SimoAdcSourceOp: SIMO requires N_rx >= 2");
@@ -277,7 +278,8 @@ class SimoAdcSourceOp : public holoscan::Operator {
                                     static_cast<float>(sim.cube[i].imag()));
     }
 
-    auto tensor = radar::make_device_tensor(sim.shape, radar::complex_dtype<float>());
+    auto tensor =
+        radar::make_device_tensor(sim.shape, radar::complex_dtype<float>());
     if (cudaMemcpy(tensor->data(), cube.data(),
                    sizeof(std::complex<float>) * cube.size(),
                    cudaMemcpyHostToDevice) != cudaSuccess) {

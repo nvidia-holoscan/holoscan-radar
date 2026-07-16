@@ -5,11 +5,13 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -82,7 +84,8 @@ std::vector<std::complex<double>> make_steering_snapshot(
     double el) {
   const auto dir = holoscan::radar::boundary_to_canonical(conv, az, el);
   const double k = 2.0 * kPi / geom.wavelength;
-  std::vector<std::complex<double>> snap(static_cast<size_t>(geom.num_elements()));
+  std::vector<std::complex<double>> snap(
+      static_cast<size_t>(geom.num_elements()));
   for (int64_t m = 0; m < geom.num_elements(); ++m) {
     const size_t base = static_cast<size_t>(m * 3);
     const double phase = k * (geom.element_positions[base] * dir.x +
@@ -265,7 +268,8 @@ TEST(BeamscanEstimatorOpTest, Accepts3DSnapshotWithOneLook) {
 TEST(BeamscanEstimatorOpTest, RejectsMultiSnapshotInput) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  std::vector<std::complex<double>> host(static_cast<size_t>(kN * 3), {1.0, 0.0});
+  std::vector<std::complex<double>> host(static_cast<size_t>(kN * 3),
+                                         {1.0, 0.0});
   auto snap_t = to_device_tensor(host, {1, kN, 3}, complex_dtype<double>());
   EXPECT_THROW(
       run_beamscan<double>(
@@ -321,7 +325,8 @@ TEST(BeamscanEstimatorOpTest, FloatInstantiationSmoke) {
 TEST(BeamscanEstimatorOpTest, RejectsChannelMismatch) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  std::vector<std::complex<double>> host(static_cast<size_t>(kN - 1), {1.0, 0.0});
+  std::vector<std::complex<double>> host(static_cast<size_t>(kN - 1),
+                                         {1.0, 0.0});
   auto snap_t = to_device_tensor(host, {1, kN - 1}, complex_dtype<double>());
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
@@ -594,8 +599,10 @@ TEST(BeamscanEstimatorOpTest, ParabolicRefinesOffGridDoa) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   const auto snap_host = make_steering_snapshot(geom, conv, kTruthAz, 0.0);
-  auto snap_none = to_device_tensor(snap_host, {1, kN}, complex_dtype<double>());
-  auto snap_para = to_device_tensor(snap_host, {1, kN}, complex_dtype<double>());
+  auto snap_none =
+      to_device_tensor(snap_host, {1, kN}, complex_dtype<double>());
+  auto snap_para =
+      to_device_tensor(snap_host, {1, kN}, complex_dtype<double>());
 
   const auto args = std::make_tuple(
       holoscan::Arg("array_geometry") = geom,
@@ -733,8 +740,8 @@ TEST(BeamscanEstimatorOpTest, MultipleItemsRecoverIndependentDoa) {
   std::vector<std::complex<double>> batch;
   batch.insert(batch.end(), snap0.begin(), snap0.end());
   batch.insert(batch.end(), snap1.begin(), snap1.end());
-  auto snap_t =
-      to_device_tensor(batch, {2, geom.num_elements()}, complex_dtype<double>());
+  auto snap_t = to_device_tensor(batch, {2, geom.num_elements()},
+                                 complex_dtype<double>());
 
   const auto out = run_beamscan<double>(
       snap_t, holoscan::Arg("array_geometry") = geom,
@@ -995,8 +1002,8 @@ TEST(BeamscanEstimatorOpTest, CheckIsValidMaskRejectsFalseBoolDevice) {
 }
 
 TEST(BeamscanEstimatorOpTest, CheckIsValidMaskRejectsShapeMismatch) {
-  auto mask =
-      to_pageable_host_tensor<uint8_t>({1, 1}, {2, 1}, DLDataType{kDLBool, 8, 1});
+  auto mask = to_pageable_host_tensor<uint8_t>(
+      {1, 1}, {2, 1}, DLDataType{kDLBool, 8, 1});
   EXPECT_THROW(check_is_valid_mask(*mask, 1, 1, "test"), std::invalid_argument);
 }
 

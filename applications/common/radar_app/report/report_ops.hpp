@@ -192,7 +192,8 @@ class ClusterReportOp : public holoscan::Operator {
     auto rep_idx = radar::receive_single(op_input, "rep_idx", who);
     auto range_bins = radar::receive_single(op_input, "range_bins", who);
     auto velocity_bins = radar::receive_single(op_input, "velocity_bins", who);
-    auto detection_idx = radar::receive_optional(op_input, "detection_idx", who);
+    auto detection_idx =
+        radar::receive_optional(op_input, "detection_idx", who);
 
     const auto pshape = points->shape();
     const int64_t num_features = pshape.size() == 2 ? pshape[1] : 0;

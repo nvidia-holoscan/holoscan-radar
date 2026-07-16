@@ -116,7 +116,8 @@ void BeamscanEstimatorOp<T>::setup(OperatorSpec& spec) {
 
 template <typename T>
 void BeamscanEstimatorOp<T>::compute(InputContext& op_input,
-                                   OutputContext& op_output, ExecutionContext&) {
+                                   OutputContext& op_output,
+                                   ExecutionContext&) {
   if (!seeded_) {
     effective_geometry_ = array_geometry_.get();
     effective_geometry_.validate();
@@ -134,12 +135,12 @@ void BeamscanEstimatorOp<T>::compute(InputContext& op_input,
   effective_geometry_ = resolve_override_param(
       op_input, "array_geometry", effective_geometry_, &geom_changed);
   effective_geometry_.validate();
-  effective_az_ =
-      resolve_override_param(op_input, "az_angles", effective_az_, &grid_changed);
-  effective_el_ =
-      resolve_override_param(op_input, "el_angles", effective_el_, &grid_changed);
-  effective_taper_ =
-      resolve_override_param(op_input, "array_taper", effective_taper_, &taper_changed);
+  effective_az_ = resolve_override_param(op_input, "az_angles", effective_az_,
+                                         &grid_changed);
+  effective_el_ = resolve_override_param(op_input, "el_angles", effective_el_,
+                                         &grid_changed);
+  effective_taper_ = resolve_override_param(op_input, "array_taper",
+                                            effective_taper_, &taper_changed);
   effective_peak_interp_ = resolve_override_param(
       op_input, "peak_interpolation", effective_peak_interp_, &peak_changed);
   (void)peak_changed;
@@ -158,7 +159,8 @@ void BeamscanEstimatorOp<T>::compute(InputContext& op_input,
   if (shape.size() != 2 && shape.size() != 3) {
     throw std::invalid_argument(
         "BeamscanEstimatorOp: snapshot must have shape "
-        "(num_items, num_channels) or (num_items, num_channels, num_snapshots)");
+        "(num_items, num_channels) or "
+        "(num_items, num_channels, num_snapshots)");
   }
   const int64_t num_items = shape[0];
   const int64_t num_channels = shape[1];
@@ -185,9 +187,9 @@ void BeamscanEstimatorOp<T>::compute(InputContext& op_input,
   auto stream = op_input.receive_cuda_stream("snapshot");
 
   const bool warn_on_build = geom_changed || grid_changed || taper_changed;
-  const std::string cache_key = steering_cache_key(
-      effective_geometry_, angle_convention_.get(), effective_az_, effective_el_,
-      effective_taper_);
+  const std::string cache_key =
+      steering_cache_key(effective_geometry_, angle_convention_.get(),
+                         effective_az_, effective_el_, effective_taper_);
   const CachedSteering& steer = steering_cache_.get_or_build(
       cache_key, warn_on_build, "steering weights", [&] {
         CachedSteering entry;

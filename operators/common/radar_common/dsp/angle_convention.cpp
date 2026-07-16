@@ -3,6 +3,7 @@
 
 #include "radar_common/dsp/angle_convention.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 

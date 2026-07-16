@@ -130,7 +130,8 @@ std::shared_ptr<holoscan::Tensor> make_device_from_host(
   if (!host.empty()) {
     if (cudaMemcpy(tensor->data(), host.data(), sizeof(T) * host.size(),
                    cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error("perf_beamscan_estimator: cudaMemcpy H2D failed");
+      throw std::runtime_error(
+          "perf_beamscan_estimator: cudaMemcpy H2D failed");
     }
   }
   return tensor;
@@ -164,7 +165,8 @@ class BeamscanPerfSourceOp : public holoscan::Operator {
     op_output.emit(snapshot_, "snapshot");
   }
 
-  void configure(perf::TimingCollector* collector, holoscan::TensorMap snapshot) {
+  void configure(perf::TimingCollector* collector,
+                 holoscan::TensorMap snapshot) {
     collector_ = collector;
     snapshot_ = std::move(snapshot);
   }
@@ -230,7 +232,8 @@ void fill_throughput(perf::ResultRow* row, const BeamScenario& scen,
   const double complex_sz = 2.0 * static_cast<double>(sizeof(PerfPrecision));
   const double snap_bytes = n * ch * complex_sz;
   const double weight_bytes = beams * ch * complex_sz;
-  const double spec_bytes = n * beams * static_cast<double>(sizeof(PerfPrecision));
+  const double spec_bytes =
+      n * beams * static_cast<double>(sizeof(PerfPrecision));
   const double aoa_bytes = n * 2.0 * static_cast<double>(sizeof(PerfPrecision));
   row->estimated_effective_gbps =
       (snap_bytes + weight_bytes + spec_bytes + aoa_bytes) / sec / 1e9;

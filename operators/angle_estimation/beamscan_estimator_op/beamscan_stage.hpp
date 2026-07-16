@@ -59,7 +59,7 @@ __device__ inline T& spectrum_at(T* spec, int64_t ia, int64_t ie,
 // (num_az, num_el) spectrum layout, and keeps a running argmax; a block-level
 // reduction (lowest beam index wins ties, matching an ascending serial scan)
 // then selects the peak and (optionally) refines it parabolically.
-// Dynamic shared layout: [power T[blockDim]] followed by [index int64_t[blockDim]].
+// Dynamic shared layout: [power T[blockDim]] then [index int64_t[blockDim]].
 template <typename T>
 __global__ void beamscan_reduce_kernel(
     const cuda::std::complex<T>* __restrict__ beamformed, int64_t num_items,
@@ -173,8 +173,8 @@ template <typename T>
 inline void run_beamscan_stage(const cuda::std::complex<T>* snapshots,
                                int64_t num_items, int64_t num_channels,
                                const cuda::std::complex<T>* weights_ct,
-                               cuda::std::complex<T>* beamformed, int64_t num_az,
-                               int64_t num_el, const T* az_grid,
+                               cuda::std::complex<T>* beamformed,
+                               int64_t num_az, int64_t num_el, const T* az_grid,
                                const T* el_grid, PeakInterpolation peak_interp,
                                T* spectrum, T* aoa, cudaStream_t stream) {
   if (num_items <= 0) {

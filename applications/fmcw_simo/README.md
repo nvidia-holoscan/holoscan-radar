@@ -3,7 +3,7 @@
 Sparse **angle-then-cluster** SIMO pipeline demonstrating the contract path in
 [`docs/planning/WORKFLOWS.md`](../../docs/planning/WORKFLOWS.md) § SIMO:
 
-```
+```text
 SimoAdcSourceOp (N_rx, chirps, samples)
   → Range → Clutter → Doppler → rd_maps (N_rx, D, R)
   → CFAR (nci_axes: [0]) → SnapshotGather → BeamscanEstimator

@@ -103,7 +103,8 @@ void SnapshotGatherOp<T>::compute(InputContext& op_input,
   const SnapshotEdgeMode r_edge = range_edge_.get();
   const int64_t d_half = effective_snapshot_window_[0];
   const int64_t r_half = effective_snapshot_window_[1];
-  const int64_t num_snapshots = num_snapshots_from_window(effective_snapshot_window_);
+  const int64_t num_snapshots =
+      num_snapshots_from_window(effective_snapshot_window_);
 
   auto rd_maps = receive_single(op_input, "rd_maps", kOpName);
   require_cuda_accessible(*rd_maps, "rd_maps", kOpName);

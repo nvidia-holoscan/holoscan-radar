@@ -58,7 +58,8 @@ class RdChannelSliceOp : public holoscan::Operator {
                holoscan::OutputContext& op_output,
                [[maybe_unused]] holoscan::ExecutionContext& context)
       override {
-    auto rd_maps = radar::receive_single(op_input, "rd_maps", "RdChannelSliceOp");
+    auto rd_maps =
+        radar::receive_single(op_input, "rd_maps", "RdChannelSliceOp");
     const auto& shape = rd_maps->shape();
     if (shape.size() != 3) {
       throw std::runtime_error(
@@ -86,7 +87,8 @@ class RdChannelSliceOp : public holoscan::Operator {
 
     auto out = radar::make_device_tensor({num_doppler, num_range},
                                         radar::complex_dtype<float>());
-    if (cudaMemcpy(out->data(), host.data(), host.size() * sizeof(std::complex<float>),
+    if (cudaMemcpy(out->data(), host.data(),
+                   host.size() * sizeof(std::complex<float>),
                    cudaMemcpyHostToDevice) != cudaSuccess) {
       throw std::runtime_error("RdChannelSliceOp: H2D upload failed");
     }
@@ -784,7 +786,8 @@ class BoresightViewOp : public holoscan::Operator {
     std::vector<float> ang(static_cast<size_t>(n * 2));
     std::vector<int64_t> lab(static_cast<size_t>(n));
     if (static_cast<size_t>(aoa->nbytes()) != sizeof(float) * ang.size()) {
-      throw std::runtime_error("BoresightViewOp: aoa_estimates must be float32");
+      throw std::runtime_error(
+          "BoresightViewOp: aoa_estimates must be float32");
     }
     if (static_cast<size_t>(labels->nbytes()) != sizeof(int64_t) * lab.size()) {
       throw std::runtime_error("BoresightViewOp: labels byte size mismatch");
@@ -850,7 +853,8 @@ class BoresightViewOp : public holoscan::Operator {
     for (int i = 0; i < kTicks; ++i) {  // elevation (Y)
       const float f = static_cast<float>(i) / (kTicks - 1);
       const int64_t y =
-          kBottom - static_cast<int64_t>(f * static_cast<float>(kBottom - kTop));
+          kBottom -
+          static_cast<int64_t>(f * static_cast<float>(kBottom - kTop));
       for (int64_t x = kLeft + 1; x < kRight; x += 4) {
         plot_put_px(&img, kW, kH, x, y, kGrid);
       }
@@ -882,9 +886,11 @@ class BoresightViewOp : public holoscan::Operator {
       const float xf = (az_deg - ax_lo) / ax_span;
       const float yf = (el_deg - ey_lo) / ey_span;
       const int64_t px =
-          kLeft + static_cast<int64_t>(xf * static_cast<float>(kRight - kLeft));
+          kLeft +
+          static_cast<int64_t>(xf * static_cast<float>(kRight - kLeft));
       const int64_t py =
-          kBottom - static_cast<int64_t>(yf * static_cast<float>(kBottom - kTop));
+          kBottom -
+          static_cast<int64_t>(yf * static_cast<float>(kBottom - kTop));
       const int64_t label = lab[static_cast<size_t>(i)];
       const int bucket = label >= 0
                              ? static_cast<int>(label % kNumClusterColors)

@@ -6,6 +6,8 @@
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 #include "radar_common/dsp/angle_convention.hpp"
 #include "radar_common/dsp/window.hpp"

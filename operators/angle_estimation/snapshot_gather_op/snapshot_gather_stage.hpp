@@ -130,7 +130,8 @@ __global__ void gather_snapshots_kernel(
       }
       const int64_t plane_offset = d * num_range + r;
       cuda::std::complex<T>* out =
-          snapshot + (row * num_channels * num_snapshots + snap_slot * num_channels);
+          snapshot + (row * num_channels * num_snapshots +
+                      snap_slot * num_channels);
       if (valid) {
         for (int64_t c = 0; c < num_channels; ++c) {
           const int64_t src =

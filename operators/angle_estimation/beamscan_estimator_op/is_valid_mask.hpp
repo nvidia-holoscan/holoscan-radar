@@ -3,9 +3,9 @@
 
 #pragma once
 
-#include <holoscan/core/domain/tensor.hpp>
-
 #include <cstdint>
+
+#include <holoscan/core/domain/tensor.hpp>
 
 namespace holoscan::radar::detail {
 
