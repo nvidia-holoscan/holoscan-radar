@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# FMCW MIMO DDM example (sparse angle-then-cluster path).
+#
+# Chain: Range -> Doppler -> Compensation (DDM demux) -> Clutter -> VAA -> ...
+# waveform.chirp_repetition_interval is the on-wire PRI (all TX fire each chirp).
+
+waveform: &waveform
+  carrier_frequency: 77.0e9
+  bandwidth: 150.0e6
+  chirp_duration: 20.0e-6
+  sample_rate: 12.8e6
+  chirp_repetition_interval: 25.0e-6
+
+mimo_coherent_compensation:
+  multiplexing_scheme: ddm
+  waveform: *waveform
+  ddm_code:
+    num_tx: 2
+    doppler_offsets: [0.0, 0.5]
+    # Discard the top fft-order bins of each band: suppresses inter-band
+    # leakage that otherwise shows up as spurious high-|velocity| detections
+    # at the demuxed-band edges. With 2 adjacent TX bands and Hann Doppler
+    # sidelobes, 4 guard bins clears the leakage entirely (all 3 targets, no
+    # spurious clusters over a 40-frame sweep); 2 left occasional edge hits.
+    guard_bands: 4
+
+virtual_array_assembly:
+  overlap_policy: keep_all
+
+range_processor:
+  waveform: *waveform
+  range_window: hann
+
+clutter_filter:
+  method: mean_subtraction
+
+doppler_processor:
+  waveform: *waveform
+  doppler_window: hann
+
+cfar_detector:
+  cfar_variant: CA
+  guard_cells: [3, 3]
+  training_cells: [3, 3]
+  pfa: 1.0e-9
+  os_rank: 0
+  nci_axes: [0]
+  # Margin above the statistical CFAR threshold. The strong targets score in
+  # the thousands, but their Doppler / demuxed-band sidelobes poke ~1.0-1.2x
+  # over a pfa-only threshold and show up as scattered marginal hits at the
+  # target range bins. A 4x margin rejects those sidelobes while leaving the
+  # true peaks with ample headroom.
+  threshold_scale: 4.0
+
+snapshot_gather:
+  snapshot_window: [0, 0]
+
+beamscan_estimator:
+  angle_convention:
+    preset: radar_boresight
+  az_angles: [-0.3, -0.28, -0.26, -0.24, -0.22, -0.2, -0.18, -0.16, -0.14,
+    -0.12, -0.1, -0.08, -0.06, -0.04, -0.02, 0.0, 0.02, 0.04, 0.06, 0.08,
+    0.1, 0.12, 0.14, 0.16, 0.18, 0.2, 0.22, 0.24, 0.26, 0.28, 0.3]
+  el_angles: [-0.3, -0.28, -0.26, -0.24, -0.22, -0.2, -0.18, -0.16, -0.14,
+    -0.12, -0.1, -0.08, -0.06, -0.04, -0.02, 0.0, 0.02, 0.04, 0.06, 0.08,
+    0.1, 0.12, 0.14, 0.16, 0.18, 0.2, 0.22, 0.24, 0.26, 0.28, 0.3]
+  peak_interpolation: parabolic
+
+# Same clustering as the TDM config: the DDM sidelobe cleanup is handled
+# upstream by ddm_code.guard_bands + cfar_detector.threshold_scale, so no
+# DDM-specific min_points bump is needed.
+cluster_dbscan:
+  epsilon: [3.0, 2.0, 0.05, 0.05]
+  min_points: 1
+  max_clusters: 0
+
+reduction:
+  representative: medoid
+  feature_weights: [0.3333, 0.5, 20.0, 20.0]
+
+cube:
+  num_chirps: 128
+  samples_per_chirp: 256
+
+run:
+  num_frames: 250
+  frame_period: 0.1
+
+tx_array:
+  num_tx: 2
+  spacing: 0.5
+
+rx_array:
+  az_elements: 4
+  el_elements: 4
+  spacing: 0.5
+
+# The velocity bin spacing here is PRF/N * lambda/2 = (40e3/128) * lambda/2
+# ~= 0.61 m/s, so radials are only distinguishable on the velocity chart if
+# they fall in *distinct* Doppler bins. The originals (-1.25 / -0.55 / -0.81)
+# put the mid and far targets in the same bin (-0.61 m/s), overlapping their
+# chart lines. The radials below sit on *bin centers* -3 / -2 / -1
+# (-1.83 / -1.22 / -0.61 m/s) so each reads as a distinct, flicker-free line
+# (an off-center radial near a bin edge lets the cluster medoid hop between two
+# bins frame to frame).
+#
+# The velocities also keep the nearer target the fastest (|radial| decreasing
+# with range), so the range gaps only grow over the 25 s run -- no crossings,
+# no cluster merges, a steady 3 clusters. This also keeps every target well off
+# the mean-subtraction clutter null at DC (the original +0.9 m/s near-range
+# target sat near DC, got attenuated, and dropped in/out).
+targets:
+  - { range: 80.0,  azimuth: 0.15,  elevation: 0.10,  velocity: [-1.79, -0.3, -0.2], amplitude: 0.8 }
+  - { range: 95.0,  azimuth: -0.10, elevation: -0.08, velocity: [-1.18, 0.3, 0.25], amplitude: 0.6 }
+  - { range: 110.0, azimuth: 0.0,   elevation: 0.05,  velocity: [-0.594, 0.4, -0.3], amplitude: 0.7 }
+
+noise_snr_db: 18.0
+
+visualize: true
+skip_display_check: false
+headless: false
+
+plots:
+  enable: true
+  window: 120
+  # The three targets have slow radial velocities (~ -1.83, -1.22, -0.61 m/s)
+  # clustered near zero; zoom the velocity chart so they read as distinct lines
+  # instead of overlapping on the full unambiguous span. Omit to auto-fit the
+  # full velocity axis.
+  velocity_ylim: [-2.1, 0.2]

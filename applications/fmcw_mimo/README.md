@@ -1,20 +1,34 @@
-# FMCW MIMO TDM example application
+# FMCW MIMO example application
 
-Sparse **angle-then-cluster** MIMO-TDM pipeline demonstrating the contract path in
+Sparse **angle-then-cluster** MIMO pipeline (TDM or DDM) selected by
+`mimo_coherent_compensation.multiplexing_scheme` in the YAML config.
+
+## TDM (default)
+
 [`docs/planning/WORKFLOWS.md`](../../docs/planning/WORKFLOWS.md) § MIMO — TDM:
 
 ```text
 MimoTdmAdcSourceOp (N_rx, M·L, samples)
   → MIMODeinterleaveOp → Range → Clutter → Doppler
-  → MIMOCoherentCompensationOp → VirtualArrayAssemblyOp
-  → rd_maps (num_virtual, D, R)
-  → CFAR (nci_axes: [0]) → SnapshotGather → BeamscanEstimator
-  → FeatureAssembly [range, velocity, az, el]
-  → ClusterDBSCAN → DetectionReduction → ClusterReportOp
+  → MIMOCoherentCompensationOp → VirtualArrayAssemblyOp → ...
 ```
 
-`VirtualArrayAssemblyOp.array_geometry` is wired into `BeamscanEstimatorOp` as a
-`[live]` override. Detection runs on a non-coherent sum over virtual channels.
+Config: [`cpp/fmcw_mimo.yaml`](cpp/fmcw_mimo.yaml)
+
+## DDM
+
+[`docs/planning/WORKFLOWS.md`](../../docs/planning/WORKFLOWS.md) § MIMO — DDM:
+
+```text
+MimoDdmAdcSourceOp (N_rx, num_chirps, samples)
+  → Range → Doppler → MIMOCoherentCompensationOp
+  → ClutterFilterOp (post-demux) → VirtualArrayAssemblyOp → ...
+```
+
+Config: [`cpp/fmcw_mimo_ddm.yaml`](cpp/fmcw_mimo_ddm.yaml)
+
+Downstream from virtual-array assembly is identical (CFAR → gather → beamscan
+→ cluster).
 
 ## Build
 
@@ -26,28 +40,25 @@ cmake --build build --target fmcw_mimo
 ## Run
 
 ```bash
+# TDM (default config staged next to the binary)
 ./build/applications/fmcw_mimo/cpp/fmcw_mimo
-# or with a custom config:
-./build/applications/fmcw_mimo/cpp/fmcw_mimo /path/to/fmcw_mimo.yaml
+
+# DDM
+./build/applications/fmcw_mimo/cpp/fmcw_mimo fmcw_mimo_ddm.yaml
+
+# or an absolute path to any config
+./build/applications/fmcw_mimo/cpp/fmcw_mimo /path/to/config.yaml
 ```
 
-Set `headless: true` or `visualize: false` in the YAML for log-only runs on
-hosts without a display.
+Set `visualize: false` or `headless: true` for log-only runs without a display.
 
-## Configuration
+## Configuration notes
 
-[`cpp/fmcw_mimo.yaml`](cpp/fmcw_mimo.yaml) highlights:
+| Topic | TDM (`fmcw_mimo.yaml`) | DDM (`fmcw_mimo_ddm.yaml`) |
+| --- | --- | --- |
+| Slow-time | `cube.chirps_per_tx` per TX; wire length `M·L` | `cube.num_chirps`; all TX every chirp |
+| PRI | `sim.physical_*` for simulator; `waveform.*` = `M × physical` for operators | `waveform.chirp_repetition_interval` = on-wire PRI |
+| Marshaling | `mimo_deinterleave.tx_schedule` | `mimo_coherent_compensation.ddm_code` |
+| Clutter | before Doppler | after compensation (demuxed block) |
 
-- **`tx_array`** — TX count and element spacing (wavelengths) along the azimuth
-  aperture; default is 2 TX separated by half a wavelength.
-- **`rx_array`** — 4×4 RX URA (same convention as `fmcw_simo`).
-- **`sim.physical_chirp_repetition_interval`** — on-wire inter-chirp spacing for
-  the interleaved ADC simulator.
-- **`waveform.chirp_repetition_interval`** — per-TX effective PRI (`M × physical`)
-  passed to range/Doppler/compensation operators.
-- **`mimo_deinterleave.tx_schedule`** — TDM firing pattern (`num_tx` required).
-- **`virtual_array_assembly.overlap_policy: keep_all`** — retain all `M·N` virtual
-  channels for the demo (dedup collapses coincident positions when desired).
-
-The default scenario uses 2 TX × 16 RX → 32 virtual channels and three moving
-point targets.
+Shared: `tx_array`, `rx_array`, targets, beamscan grid, `virtual_array_assembly.overlap_policy: keep_all`.

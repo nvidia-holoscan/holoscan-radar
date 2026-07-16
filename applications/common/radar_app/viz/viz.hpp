@@ -508,6 +508,13 @@ class RollingPlotOp : public holoscan::Operator {
   int64_t window{120};   // set from cfg.plots.window before the graph runs
   double frame_period{0.1};  // s/frame; scales the time-axis tick labels
 
+  // Optional fixed Y-axis extent for the velocity plot. When finite, it
+  // overrides the full-axis min/max derived from velocity_bins — useful to zoom
+  // in when the targets occupy a small part of the unambiguous span (e.g. slow
+  // radial velocities near zero). NaN (default) keeps the full-axis extent.
+  float velocity_ylim_lo{std::numeric_limits<float>::quiet_NaN()};
+  float velocity_ylim_hi{std::numeric_limits<float>::quiet_NaN()};
+
   // Rasterized plot image size (pixels). HolovizOp scales it into its view.
   static constexpr int64_t kW = 420;
   static constexpr int64_t kH = 300;
@@ -568,6 +575,10 @@ class RollingPlotOp : public holoscan::Operator {
       load_axis(range_bins, "range_bins", &range_axis_, &r_lo_, &r_hi_);
       load_axis(velocity_bins, "velocity_bins", &velocity_axis_, &v_lo_,
                 &v_hi_);
+      // Apply the optional fixed velocity Y extent (zoom). Bin→physical
+      // lookups still use the full cached axis; only the plot window changes.
+      apply_ylim(velocity_ylim_lo, velocity_ylim_hi, &v_lo_, &v_hi_,
+                 "velocity");
       axis_set_ = true;
     }
 
@@ -622,6 +633,26 @@ class RollingPlotOp : public holoscan::Operator {
     float v;
     int bucket;  // [0, kNumClusterColors) cluster color, or kNumClusterColors
   };
+
+  // Override the loaded [lo, hi] extent when both limits are finite and
+  // ordered; otherwise keep the full-axis extent. Throws on lo >= hi so a
+  // misconfigured zoom fails loudly rather than rendering a degenerate axis.
+  static void apply_ylim(float lim_lo, float lim_hi, float* lo, float* hi,
+                         const char* name) {
+    if (std::isnan(lim_lo) && std::isnan(lim_hi)) {
+      return;
+    }
+    if (std::isnan(lim_lo) || std::isnan(lim_hi)) {
+      throw std::runtime_error(std::string("RollingPlotOp: ") + name +
+                               " ylim requires both lo and hi");
+    }
+    if (!(lim_lo < lim_hi)) {
+      throw std::runtime_error(std::string("RollingPlotOp: ") + name +
+                               " ylim lo must be < hi");
+    }
+    *lo = lim_lo;
+    *hi = lim_hi;
+  }
 
   // Rasterize one plot: use_range picks the range vs velocity axis. Returns a
   // (kH, kW, 4) uint8 RGBA device tensor.
