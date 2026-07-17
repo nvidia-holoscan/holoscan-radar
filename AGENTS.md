@@ -14,11 +14,18 @@ Read before starting non-trivial work, in this precedence order:
 4. [`docs/planning/CREATE_A_MODULE.md`](docs/planning/CREATE_A_MODULE.md) — how the Holoscan Module scaffolding (build, packaging, bindings) works.
 5. [`docs/planning/NEW_OPERATOR_CHECKLIST.md`](docs/planning/NEW_OPERATOR_CHECKLIST.md) — landing gate; verify before claiming an operator (or variant slice) done.
 6. [`docs/planning/OPERATOR_DEVELOPMENT.md`](docs/planning/OPERATOR_DEVELOPMENT.md) — how to implement well: hot-path discipline, diagnosis, `[live]`/calibration pitfalls, tests, and performance characterization (lessons from landed operators).
+7. [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md) — index of items blocked on a team decision (detail in each operator’s `OPEN_ITEMS.md`).
 
 Rules that follow from "lockdown":
 
 - **Docs first.** Code must match `OPERATOR_API.md` exactly — port names, shapes, dtype pairs, parameter names/defaults, `[live]` tags. To change an interface, change the doc (in the same PR at minimum), call it out as a contract change in the PR description, and get it reviewed as such. Never deviate silently in code.
-- **Do not silently resolve documented open items.** The known ones: the covariance estimators' multi-snapshot / spatial-smoothing input form; where the source count comes from (fixed vs. MDL/AIC vs. CFAR-cluster); ULA/subarray selection for Root-MUSIC/ESPRIT on non-uniform virtual arrays. Surface these for a team decision instead of picking an answer in code.
+- **Do not silently resolve documented open items.** Team-blocked questions are
+  indexed in [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md)
+  (detail in each operator’s `OPEN_ITEMS.md`). Known highlights: the covariance
+  estimators' multi-snapshot / spatial-smoothing input form; where the source
+  count comes from (fixed vs. MDL/AIC vs. CFAR-cluster); ULA/subarray selection
+  for Root-MUSIC/ESPRIT on non-uniform virtual arrays. Surface these for a team
+  decision instead of picking an answer in code.
 - **Checklist + development guidance.** Follow `NEW_OPERATOR_CHECKLIST.md` as the done gate; use `OPERATOR_DEVELOPMENT.md` when designing `compute()`, live overrides, tests, or chasing performance.
 
 ## Design invariants (do not violate)

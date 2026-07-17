@@ -64,6 +64,11 @@ target_link_libraries(perf_beamscan_estimator PRIVATE
     radar_perf_utils
     holoscan::beamscan_estimator_op)
 
+add_executable(perf_mvdr_estimator perf_mvdr_estimator.cpp)
+target_link_libraries(perf_mvdr_estimator PRIVATE
+    radar_perf_utils
+    holoscan::mvdr_estimator_op)
+
 add_executable(perf_phase_shift_beamformer perf_phase_shift_beamformer.cpp)
 target_link_libraries(perf_phase_shift_beamformer PRIVATE
     radar_perf_utils
@@ -146,6 +151,12 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
         COMMAND perf_beamscan_estimator --sizes xs --warmup 1 --frames 2 --quiet
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_beamscan_estimator_smoke.json)
     set_tests_properties(perf_beamscan_estimator_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_mvdr_estimator_smoke
+        COMMAND perf_mvdr_estimator --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_mvdr_estimator_smoke.json)
+    set_tests_properties(perf_mvdr_estimator_smoke PROPERTIES
         LABELS "performance")
 
     add_test(NAME perf_phase_shift_beamformer_smoke

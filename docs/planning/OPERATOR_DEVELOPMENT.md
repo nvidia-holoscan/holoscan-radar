@@ -14,6 +14,7 @@ repeating expensive mistakes.
 | [`TESTING.md`](TESTING.md) | What properties tests must assert. |
 | [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md) | Landing gate — verify before claiming done. |
 | [`STATUS.md`](STATUS.md) | Claim work; record decisions. |
+| [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md) | Index of items blocked on a team decision (detail in operator `OPEN_ITEMS.md`). |
 | [`operators/common/README.md`](../../operators/common/README.md) | Shared conventions and helpers. |
 | This doc | *How* to implement well: hot-path discipline, diagnosis, perf, open items. |
 
@@ -33,8 +34,10 @@ slow?"
    a real gap.
 2. **Do not silently resolve open items.** Ambiguities go in
    `operators/<group>/<op>/OPEN_ITEMS.md` and stay there until the team
-   decides. If code must land ahead of the contract (rare), record that fact
-   in `OPEN_ITEMS.md` with the conflict and the question for the team.
+   decides. Index every *team* block in
+   [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md) as well. If code must land ahead of
+   the contract (rare), record that fact in `OPEN_ITEMS.md` with the conflict
+   and the question for the team.
 3. **Diagnose before guessing.** When something is wrong or slow, run the
    cheapest experiment that distinguishes plausible causes *before* proposing a
    retrain-scale fix (kernel rewrite, dataset regen, architecture change). A

@@ -205,7 +205,8 @@ Exemplar: `performance/cpp/perf_cfar_detector.cpp`.
 
 - [ ] Update **`STATUS.md`** — move claim to done or refresh state.
 - [ ] Add any new **team open items** to `operators/<group>/<operator>/OPEN_ITEMS.md`
-      (create it if needed).
+      (create it if needed) **and** index them in
+      [`docs/planning/TEAM_BLOCKED.md`](TEAM_BLOCKED.md).
 - [ ] PR description notes **contract changes** explicitly if `OPERATOR_API.md`
       changed.
 - [ ] Python bindings — **deferred** module-wide unless this PR is explicitly
