@@ -5,3 +5,4 @@
 # is gated on its own OP_<name> option (defaulting to ${BUILD_ALL}).
 add_holohub_operator(snapshot_gather_op)
 add_holohub_operator(beamscan_estimator_op)
+add_holohub_operator(phase_shift_beamformer_op)

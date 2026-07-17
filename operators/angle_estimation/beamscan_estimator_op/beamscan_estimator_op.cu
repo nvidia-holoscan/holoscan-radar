@@ -17,6 +17,7 @@
 
 #include "angle_estimation/beamscan_estimator_op/beamscan_stage.hpp"
 #include "angle_estimation/beamscan_estimator_op/is_valid_mask.hpp"
+#include "radar_common/dsp/steering_weights_device.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
@@ -37,41 +38,6 @@ std::vector<T> cast_vector(const std::vector<double>& in) {
     out[i] = static_cast<T>(in[i]);
   }
   return out;
-}
-
-// Upload the steering table as the conjugate-transposed GEMM operand Wᶜ,
-// laid out [num_channels, num_beams] with Wᶜ[c, b] = conj(w[b, c]). Casting
-// the beamformer as X · Wᶜ lets the GEMM reuse the table across detections;
-// pre-conjugating here keeps the hot path a plain matmul.
-template <typename T>
-std::shared_ptr<holoscan::Tensor> upload_steering_weights(
-    const SteeringTable& table, cudaStream_t stream) {
-  const int64_t num_beams = table.num_az * table.num_el;
-  const int64_t num_channels =
-      num_beams > 0
-          ? static_cast<int64_t>(table.weights.size()) / num_beams
-          : 0;
-  std::vector<cuda::std::complex<T>> host(
-      static_cast<size_t>(num_beams * num_channels));
-  for (int64_t b = 0; b < num_beams; ++b) {
-    for (int64_t c = 0; c < num_channels; ++c) {
-      const std::complex<double>& w =
-          table.weights[static_cast<size_t>(b * num_channels + c)];
-      host[static_cast<size_t>(c * num_beams + b)] = cuda::std::complex<T>(
-          static_cast<T>(w.real()), static_cast<T>(-w.imag()));
-    }
-  }
-  auto tensor =
-      make_device_tensor({num_channels, num_beams}, complex_dtype<T>());
-  if (!host.empty()) {
-    if (cudaMemcpyAsync(tensor->data(), host.data(),
-                        host.size() * sizeof(cuda::std::complex<T>),
-                        cudaMemcpyHostToDevice, stream) != cudaSuccess) {
-      throw std::runtime_error(
-          "BeamscanEstimatorOp: steering-weight H2D failed");
-    }
-  }
-  return tensor;
 }
 
 }  // namespace
@@ -190,18 +156,20 @@ void BeamscanEstimatorOp<T>::compute(InputContext& op_input,
   const std::string cache_key =
       steering_cache_key(effective_geometry_, angle_convention_.get(),
                          effective_az_, effective_el_, effective_taper_);
-  const CachedSteering& steer = steering_cache_.get_or_build(
-      cache_key, warn_on_build, "steering weights", [&] {
-        CachedSteering entry;
-        entry.table = build_steering_table(
-            effective_geometry_, angle_convention_.get(), effective_az_,
-            effective_el_, effective_taper_);
-        entry.weights = upload_steering_weights<T>(entry.table, stream);
-        return entry;
-      });
+  // Conjugate-transposed weights Wᶜ, built on device, laid out
+  // (num_channels, num_beams) with beams el-major to match the reduce kernel's
+  // beam decode — drops straight into the X · Wᶜ GEMM.
+  const std::shared_ptr<holoscan::Tensor>& weights =
+      steering_cache_.get_or_build(
+          cache_key, warn_on_build, "steering weights", [&] {
+            return build_steering_weights_device<T>(
+                effective_geometry_, angle_convention_.get(), effective_az_,
+                effective_el_, effective_taper_, BeamOrder::kElMajor,
+                SteeringLayout::kChannelMajor, /*conjugate=*/true, stream);
+          });
 
-  const int64_t num_az = steer.table.num_az;
-  const int64_t num_el = steer.table.num_el;
+  const int64_t num_az = static_cast<int64_t>(effective_az_.size());
+  const int64_t num_el = static_cast<int64_t>(effective_el_.size());
   const int64_t num_beams = num_az * num_el;
 
   const auto az_host = cast_vector<T>(effective_az_);
@@ -224,7 +192,7 @@ void BeamscanEstimatorOp<T>::compute(InputContext& op_input,
   auto beamformed =
       make_device_tensor({num_items, num_beams}, complex_dtype<T>());
 
-  if (!steer.weights) {
+  if (!weights) {
     throw std::runtime_error(
         "BeamscanEstimatorOp: internal error: steering weights missing");
   }
@@ -232,7 +200,7 @@ void BeamscanEstimatorOp<T>::compute(InputContext& op_input,
   detail::run_beamscan_stage<T>(
       static_cast<const cuda::std::complex<T>*>(snapshot->data()), num_items,
       num_channels,
-      static_cast<const cuda::std::complex<T>*>(steer.weights->data()),
+      static_cast<const cuda::std::complex<T>*>(weights->data()),
       static_cast<cuda::std::complex<T>*>(beamformed->data()), num_az, num_el,
       static_cast<const T*>(az_grid->data()),
       static_cast<const T*>(el_grid->data()), effective_peak_interp_,

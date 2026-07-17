@@ -79,3 +79,32 @@ install(EXPORT holoscan_radar_common_reduce_targets
     NAMESPACE holoscan::
     DESTINATION lib/cmake/holoscan_radar
 )
+
+# CUDA device steering-weight builder (shared by the angle operators). Keeps
+# the O(num_beams*num_channels) phase evaluation off the serial host path;
+# radar_common stays CUDA-free, so the kernel owns its own .cu target (ODR).
+add_library(radar_common_steering STATIC
+    radar_common/dsp/steering_weights_device.cu)
+add_library(holoscan::radar_common_steering ALIAS radar_common_steering)
+
+target_include_directories(radar_common_steering
+    PUBLIC
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators/common>
+        $<INSTALL_INTERFACE:include>
+)
+
+target_link_libraries(radar_common_steering
+    PUBLIC
+        holoscan::radar_common
+)
+
+set_property(TARGET radar_common_steering PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+install(TARGETS radar_common_steering
+    EXPORT holoscan_radar_common_steering_targets
+)
+
+install(EXPORT holoscan_radar_common_steering_targets
+    NAMESPACE holoscan::
+    DESTINATION lib/cmake/holoscan_radar
+)

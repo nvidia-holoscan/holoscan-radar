@@ -14,6 +14,7 @@ target_link_libraries(beamscan_estimator_op
     PUBLIC
         holoscan::core
         holoscan::radar_common
+        holoscan::radar_common_steering
     PRIVATE
         matx::matx)
 

@@ -15,6 +15,7 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/dsp/steering_weights.hpp"
+#include "radar_common/dsp/steering_weights_device.hpp"
 #include "radar_common/sdk/config_cache.hpp"
 
 namespace holoscan::radar {
@@ -44,11 +45,9 @@ class BeamscanEstimatorOp : public holoscan::Operator {
                ExecutionContext& context) override;
 
  private:
-  struct CachedSteering {
-    std::shared_ptr<holoscan::Tensor> weights;
-    SteeringTable table;
-  };
-
+  // Conjugate-transposed steering weights Wᶜ, built on device, laid out
+  // (num_channels, num_beams) with beams el-major (beam = ie * num_az + ia) to
+  // match the reduce kernel's beam decode. Cached, warn-once on rebuild.
   Parameter<ArrayGeometry> array_geometry_;
   Parameter<AngleConvention> angle_convention_;
   Parameter<std::vector<double>> az_angles_;
@@ -63,7 +62,7 @@ class BeamscanEstimatorOp : public holoscan::Operator {
   PeakInterpolation effective_peak_interp_{PeakInterpolation::kNone};
   bool seeded_{false};
 
-  ConfigCache<CachedSteering> steering_cache_;
+  ConfigCache<std::shared_ptr<holoscan::Tensor>> steering_cache_;
 };
 
 }  // namespace holoscan::radar

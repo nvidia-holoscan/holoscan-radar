@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Configuration for the FMCW SIMO *dense* angle-then-cluster demo. The beam grid
+# is deliberately modest: the dense path forms the full RDA cube
+# (num_az x num_el x num_doppler x num_range), so a fine grid over a full RD map
+# is memory-heavy (see PhaseShiftBeamformerOp OPEN_ITEMS). 13 x 13 beams over a
+# 128 x 256 RD map is a few tens of MB in complex64.
+
+waveform: &waveform
+  carrier_frequency: 77.0e9
+  bandwidth: 150.0e6
+  chirp_duration: 20.0e-6
+  sample_rate: 12.8e6
+  chirp_repetition_interval: 25.0e-6
+
+range_processor:
+  waveform: *waveform
+  range_window: hann
+
+clutter_filter:
+  method: mean_subtraction
+
+doppler_processor:
+  waveform: *waveform
+  doppler_window: hann
+
+# Dense angle path: form an az x el beam for every RD cell -> RDA cube. The
+# Taylor aperture taper suppresses spatial sidelobes so a strong target does not
+# fire CFAR across every beam (untapered ULA sidelobes are only ~-13 dB).
+phase_shift_beamformer:
+  angle_convention:
+    preset: radar_boresight
+  az_angles: [-0.3, -0.25, -0.2, -0.15, -0.1, -0.05, 0.0, 0.05, 0.1, 0.15, 0.2,
+    0.25, 0.3]
+  el_angles: [-0.3, -0.25, -0.2, -0.15, -0.1, -0.05, 0.0, 0.05, 0.1, 0.15, 0.2,
+    0.25, 0.3]
+  array_taper:
+    type: taylor
+    sidelobe_attenuation_db: 35.0
+
+# CFAR runs on the RDA cube: nci_axes = [] leaves the (az, el) axes as batch
+# slices, so detection_idx widens to (az_bin, el_bin, doppler_bin, range_bin).
+cfar_detector:
+  cfar_variant: CA
+  guard_cells: [3, 3]
+  training_cells: [3, 3]
+  pfa: 1.0e-9
+  os_rank: 0
+  nci_axes: []
+
+cluster_dbscan:
+  epsilon: [3.0, 2.0, 0.3, 0.3]
+  min_points: 3
+  max_clusters: 0
+
+reduction:
+  representative: medoid
+  feature_weights: [0.3333, 0.5, 20.0, 20.0]
+
+cube:
+  num_chirps: 128
+  samples_per_chirp: 256
+
+run:
+  num_frames: 250
+  frame_period: 0.1
+
+# Optional Holoviz display: RD map (channel-0 slice) with cluster-colored
+# detection crosses, plus rolling range/velocity plots and a boresight az/el
+# scatter. Set visualize: false for a headless log-only run. If no display is
+# reachable the app auto-falls back to headless (unless skip_display_check is
+# true); headless: true renders offscreen without opening a window.
+visualize: true
+headless: false
+skip_display_check: false
+plots:
+  enable: true
+  window: 120
+  velocity_ylim: [-3.0, 3.0]
+
+# RX URA (uniform rectangular array) in the y-z plane, matching fmcw_simo.
+rx_array:
+  az_elements: 8
+  el_elements: 8
+  spacing: 0.5
+
+targets:
+  - { range: 80.0,  azimuth: 0.15,  elevation: 0.10,  velocity: [1.0, -0.3, -0.2], amplitude: 0.8 }
+  - { range: 95.0,  azimuth: -0.10, elevation: -0.08, velocity: [-0.5, 0.3, 0.25], amplitude: 0.6 }
+  - { range: 110.0, azimuth: 0.0,   elevation: 0.05,  velocity: [-0.8, 0.4, -0.3], amplitude: 0.7 }
+
+noise_snr_db: -28.0

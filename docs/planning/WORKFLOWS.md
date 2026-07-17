@@ -156,6 +156,17 @@ flowchart TD
   class FEAT,CLUS opt
 ```
 
+> **Dense az/el assembly caveat (open).** On this path the `(az, el)` beam
+> indices arrive as the leading *preserved-batch* columns of CFAR's
+> `detection_idx` (`(az_bin, el_bin, doppler_bin, range_bin)`), but
+> `FeatureAssemblyOp` currently sources the `az` / `el` features only from an
+> `aoa_estimates` port (angle *values*, the sparse-path form) — it does not map
+> those batch columns through the beam grid itself. So the diagram's direct
+> `CFAR → FeatureAssemblyOp` edge needs an angle-lookup adapter in between. The
+> `fmcw_dense_simo` app bridges this app-locally (`CubeAoaLookupOp`); whether the
+> mapping becomes a shared operator or a `FeatureAssemblyOp` option is an open
+> contract question — see the `PhaseShiftBeamformerOp` `OPEN_ITEMS.md` §6.
+
 **Sparse angle path — angle-then-cluster:**
 
 ```mermaid

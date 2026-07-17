@@ -26,3 +26,17 @@ graph-test the wired exclusion path via a relay operator. Python consumers of
 scan cost and inline `[live] az_angles` override latency (finer grid → steering
 rebuild). The `perf_beamscan_estimator_smoke` ctest (label `performance`) runs a
 tiny subset and verifies a report is emitted.
+
+## 4. Steering-weight build moved to GPU (landed)
+
+The `O(num_beams·num_channels)` phase evaluation now runs in a kernel via the
+shared `build_steering_weights_device`
+(`radar_common/dsp/steering_weights_device.hpp`,
+`holoscan::radar_common_steering`), replacing the serial host trig loop that
+dominated the `[live]` override spike at scale. Beamscan requests
+`BeamOrder::kElMajor` + `SteeringLayout::kChannelMajor` + `conjugate`, so the
+builder emits `Wᶜ` `(num_channels, num_beams)` with beams el-major — exactly
+the reduce kernel's beam decode and the `X · Wᶜ` GEMM operand, no host reorder.
+See `phase_shift_beamformer_op/OPEN_ITEMS.md` §5.
+
+**Status:** landed — shared with `PhaseShiftBeamformerOp`.

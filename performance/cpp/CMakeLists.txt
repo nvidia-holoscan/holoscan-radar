@@ -64,6 +64,11 @@ target_link_libraries(perf_beamscan_estimator PRIVATE
     radar_perf_utils
     holoscan::beamscan_estimator_op)
 
+add_executable(perf_phase_shift_beamformer perf_phase_shift_beamformer.cpp)
+target_link_libraries(perf_phase_shift_beamformer PRIVATE
+    radar_perf_utils
+    holoscan::phase_shift_beamformer_op)
+
 add_executable(perf_mimo_deinterleave perf_mimo_deinterleave.cpp)
 target_link_libraries(perf_mimo_deinterleave PRIVATE
     radar_perf_utils
@@ -141,6 +146,12 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
         COMMAND perf_beamscan_estimator --sizes xs --warmup 1 --frames 2 --quiet
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_beamscan_estimator_smoke.json)
     set_tests_properties(perf_beamscan_estimator_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_phase_shift_beamformer_smoke
+        COMMAND perf_phase_shift_beamformer --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_phase_shift_beamformer_smoke.json)
+    set_tests_properties(perf_phase_shift_beamformer_smoke PROPERTIES
         LABELS "performance")
 
     add_test(NAME perf_mimo_deinterleave_smoke

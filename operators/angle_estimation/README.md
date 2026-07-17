@@ -13,12 +13,22 @@ Typical sparse-path placement:
   → SnapshotGatherOp → snapshot → ⟨sparse angle estimator⟩ → aoa_estimates
 ```
 
+Typical dense-path placement (angle-then-cluster — angle is formed before
+detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
+
+```text
+… → FMCWDopplerProcessorOp → rd_maps (per-channel)
+  → PhaseShiftBeamformerOp → rda_cube (num_az, num_el, D, R)
+  → CFARDetectorOp (on the RDA cube) → detections
+```
+
 ## Operators
 
 | Operator | In → Out | Function |
 | --- | --- | --- |
 | `SnapshotGatherOp<T>` | `rd_maps` + `detection_idx` → `snapshot`, `is_valid` | Per-detection channel-vector gather from the RD neighborhood around each CFAR cell |
 | `BeamscanEstimatorOp<T>` | `snapshot` [+ `is_valid`] → `aoa_estimates`, `angle_spectrum` | Conventional (Bartlett) sparse-path DOA on a scan grid |
+| `PhaseShiftBeamformerOp<T>` | `rd_maps` → `rda_cube` | Conventional (Bartlett) dense-path beamformer: a beam for every RD cell → Range-Doppler-Angle cube for CFAR's dense path |
 
 ## Implementation status
 
@@ -38,3 +48,17 @@ Typical sparse-path placement:
   characterizes scan cost + the `[live] az_angles` override spike. Open items in
   `beamscan_estimator_op/OPEN_ITEMS.md` (`custom` angle preset, bool `is_valid`
   transport caveat aligned with SnapshotGather).
+- **`PhaseShiftBeamformerOp` (checklist-complete — dpc):** conventional
+  (Bartlett) dense-path beamformer; forms a beam for every range-Doppler cell,
+  replacing the channel axis with the `(num_az, num_el)` grid to build the
+  Range-Doppler-Angle cube CFAR detects on directly (the *only* dense
+  estimator — a dense MVDR/MUSIC cube is prohibitive). Reuses the
+  `ArrayGeometry` / `AngleConvention` / `array_taper` steering machinery from
+  Beamscan (one broadcast complex GEMM per tick); sticky `[live]` overrides for
+  geometry, scan grid, and taper; static `angle_convention`; float/double;
+  rank-agnostic leading batch dims; unit tests (dense DOA-bin recovery,
+  convention relabeling + direction-cosine masking, taper sidelobes, batch,
+  live overrides, error paths); `performance/cpp/perf_phase_shift_beamformer.cpp`
+  characterizes dense beamforming cost + the `[live] az_angles` override spike.
+  Open items in `phase_shift_beamformer_op/OPEN_ITEMS.md` (`custom` angle
+  preset, dense-cube memory footprint).
