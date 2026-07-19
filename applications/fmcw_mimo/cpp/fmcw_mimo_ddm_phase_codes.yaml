@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# FMCW MIMO DDM example — non-linear phase_codes (correlate demux).
+#
+# Same chain as fmcw_mimo_ddm.yaml, but ddm_code uses generate_phase_codes:
+# zadoff_chu (app expands into distinct Zadoff-Chu roots). Codes are non-linear
+# (correlate path). Expect ~-15 dB Doppler pedestal from 2-TX ZC cross-corr at
+# N=64 (fundamental, not a demux bug); RdMapToImageOp column-median normalize
+# keeps Holoviz from painting that as full-height stripes. guard_bands must be 0.
+#
+# waveform.chirp_repetition_interval is the on-wire PRI (all TX fire each chirp).
+
+waveform: &waveform
+  carrier_frequency: 77.0e9
+  bandwidth: 150.0e6
+  chirp_duration: 20.0e-6
+  sample_rate: 12.8e6
+  chirp_repetition_interval: 25.0e-6
+
+mimo_coherent_compensation:
+  multiplexing_scheme: ddm
+  waveform: *waveform
+  ddm_code:
+    num_tx: 2
+    # Demo-only helper (not a DDMCodeDescriptor field): expands to distinct
+    # Zadoff-Chu roots (coprime to num_chirps). Prefer explicit phase_codes
+    # (interleaved re/im) for production configs. Use generate_phase_codes: sin
+    # only to intentionally stress high-crosstalk demux leakage.
+    generate_phase_codes: zadoff_chu
+    guard_bands: 0
+
+virtual_array_assembly:
+  overlap_policy: keep_all
+
+range_processor:
+  waveform: *waveform
+  range_window: hann
+
+clutter_filter:
+  method: mean_subtraction
+
+doppler_processor:
+  waveform: *waveform
+  # Rectangular: Hann before correlate wrecks Zadoff-Chu periodic correlation
+  # and raises a Doppler-wide pedestal. Linear DDM gather tolerates Hann.
+  doppler_window: none
+
+cfar_detector:
+  cfar_variant: CA
+  guard_cells: [3, 3]
+  training_cells: [3, 3]
+  pfa: 1.0e-9
+  os_rank: 0
+  nci_axes: [0]
+  # Correlate demux leaves a higher Doppler pedestal than linear band-gather,
+  # so the linear-DDM margin (4) floods CFAR. 16 keeps the true near-DC
+  # peaks and drops the pedestal false alarms (smoke: ~9 dets vs ~84 at 4).
+  threshold_scale: 16.0
+
+snapshot_gather:
+  snapshot_window: [0, 0]
+
+beamscan_estimator:
+  angle_convention:
+    preset: radar_boresight
+  az_angles: [-0.3, -0.28, -0.26, -0.24, -0.22, -0.2, -0.18, -0.16, -0.14,
+    -0.12, -0.1, -0.08, -0.06, -0.04, -0.02, 0.0, 0.02, 0.04, 0.06, 0.08,
+    0.1, 0.12, 0.14, 0.16, 0.18, 0.2, 0.22, 0.24, 0.26, 0.28, 0.3]
+  el_angles: [-0.3, -0.28, -0.26, -0.24, -0.22, -0.2, -0.18, -0.16, -0.14,
+    -0.12, -0.1, -0.08, -0.06, -0.04, -0.02, 0.0, 0.02, 0.04, 0.06, 0.08,
+    0.1, 0.12, 0.14, 0.16, 0.18, 0.2, 0.22, 0.24, 0.26, 0.28, 0.3]
+  peak_interpolation: parabolic
+
+cluster_dbscan:
+  epsilon: [3.0, 2.0, 0.05, 0.05]
+  min_points: 1
+  max_clusters: 0
+
+reduction:
+  representative: medoid
+  feature_weights: [0.3333, 0.5, 20.0, 20.0]
+
+cube:
+  num_chirps: 128
+  samples_per_chirp: 256
+
+run:
+  num_frames: 250
+  frame_period: 0.1
+  meter_cadence: true
+  meter_log_every: 0
+
+tx_array:
+  num_tx: 2
+  spacing: 0.5
+
+rx_array:
+  az_elements: 4
+  el_elements: 4
+  spacing: 0.5
+
+# Same target set as the linear DDM demo. Correlate keeps full Doppler (N bins
+# at PRF/N), so velocity spacing matches the pre-demux FFT.
+targets:
+  - { range: 80.0,  azimuth: 0.15,  elevation: 0.10,  velocity: [-1.79, -0.3, -0.2], amplitude: 0.8 }
+  - { range: 95.0,  azimuth: -0.10, elevation: -0.08, velocity: [-1.18, 0.3, 0.25], amplitude: 0.6 }
+  - { range: 110.0, azimuth: 0.0,   elevation: 0.05,  velocity: [-0.594, 0.4, -0.3], amplitude: 0.7 }
+
+noise_snr_db: 18.0
+
+visualize: true
+skip_display_check: false
+headless: false
+
+plots:
+  enable: true
+  window: 120
+  velocity_ylim: [-2.1, 0.2]

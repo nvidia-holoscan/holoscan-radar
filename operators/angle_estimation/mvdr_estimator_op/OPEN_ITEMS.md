@@ -88,3 +88,43 @@ resident (they stall). Findings:
 
 - **`is_valid` bool transport (HSDK 4.3).** Shares the CFAR / SnapshotGather
   bool-`DLPack` transport caveat; `is_valid` is accepted as bool or uint8.
+
+## Python teardown double-free / SIGSEGV
+
+**Status:** fixed in-tree.
+
+Two MatX lifetime bugs stacked:
+
+1. **`inv` plans keyed on `(A, A_inv)` device pointers.** Holoscan frees
+   cov/rinv when `compute()` returns; cached plans outlive those keys.
+2. **`MemTracker` leftovers.** Even after `GetCache().Clear`, ~64B of
+   MatX-tracked temps remain. `~MemTracker` frees them with `cudaFreeAsync` at
+   process exit — after CuPy has torn down CUDA under pytest → SIGSEGV
+   (tests already PASSED).
+
+**Fix:** `retire_matx_solver_caches()` at the end of each `run_mvdr_stage`:
+`Clear` eig/inv caches, then drain `matx::GetAllocMap()` while CUDA is still
+valid. `install_matx_cache_atexit()` after `import cupy` remains as backup.
+`tests/python/conftest.py` imports `holoscan.radar` **before** CuPy —
+CuPy-first makes MatX eig `Clear` abort on this stack.
+
+Apps: import `holoscan.radar` **before** CuPy, then call
+`holoscan.radar.install_matx_cache_atexit()` once. Do not register
+`retire_matx_solver_caches()` from C++ `std::atexit`/`~Op` alone — too late
+once CUDA is gone.
+
+## Python mid-run double free in `retire_matx_solver_caches()` (fixed)
+
+**Status:** fixed — was an import-order footgun, not a MatX keying bug.
+
+`performance/python/utils/__init__.py` eagerly imported CuPy-using harness
+modules. Any `from utils.bootstrap import …` therefore loaded **CuPy before
+`holoscan.radar`**, which makes MatX eig/inv `GetCache().Clear` abort with
+`double free or corruption` when the per-tick `retire_matx_solver_caches()`
+runs (same CuPy-first rule as above). Pytest's `conftest.py` imports radar
+before CuPy, so unit tests never hit it; `perf_mvdr_estimator.py` did.
+
+**Fix:** keep `performance/python/utils/__init__.py` free of CuPy/Holoscan
+imports so bootstrap cannot pull CuPy early. Scripts still do
+`import holoscan.radar` then `import cupy` then `install_matx_cache_atexit()`.
+

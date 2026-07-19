@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+include(pybind11_add_holohub_module)
+pybind11_add_holohub_module(
+    CPP_CMAKE_TARGET   clutter_filter_op
+    CLASS_NAME         ClutterFilterOpF32
+    SOURCES            _clutter_filter_op_bindings.cpp
+)
+
+target_include_directories(clutter_filter_op_python PRIVATE
+    ${PROJECT_SOURCE_DIR}/operators
+    ${PROJECT_SOURCE_DIR}/operators/common
+)

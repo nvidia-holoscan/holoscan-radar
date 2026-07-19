@@ -18,9 +18,10 @@
 import holoscan.core
 import holoscan.gxf
 
-# Load the python binding
+# Load the python binding — import * so F32/F64 dual exports work without
+# listing every class name in this generated file.
 try:
-    from ._@MODULE_NAME@ import @MODULE_CLASS_NAME@
+    from ._@MODULE_NAME@ import *  # noqa: F401,F403
 except ImportError as e:
     pybind11_hsdk_err = 'unknown base type "holoscan::'
 
@@ -63,7 +64,7 @@ try:
 
     # register any custom emitter/receiver types with the SDK's registry
     _register_types(io_type_registry)
-except ImportError as e:
+except ImportError:
     # Most extensions will not provide a user-defined `register_types` function, so don't warn or
     # raise an error in that case.
     pass

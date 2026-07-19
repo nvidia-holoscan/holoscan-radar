@@ -29,3 +29,5 @@ include(GNUInstallDirs)
 install(FILES feature_assembly_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/detection
 )
+
+add_subdirectory(python)

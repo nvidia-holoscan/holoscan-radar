@@ -1,0 +1,273 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include <holoscan/core/fragment.hpp>
+#include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
+
+#include "radar_app/report/cadence_meter.hpp"
+#include "radar_app/report/report_ops.hpp"
+#include "radar_app/viz/display.hpp"
+#include "radar_app/viz/viz.hpp"
+#include "radar_common/python/py_operator_utils.hpp"
+#include "radar_common/sdk/arg_setters.hpp"
+
+namespace py = pybind11;
+
+namespace holoscan::radar::app {
+
+namespace {
+
+class PyDetectionReportOp : public DetectionReportOp {
+ public:
+  using DetectionReportOp::DetectionReportOp;
+
+  PyDetectionReportOp(Fragment* fragment, const py::args& args,
+                      const std::string& name = "detection_report")
+      : DetectionReportOp() {
+    name_ = name;
+    fragment_ = fragment;
+    spec_ = std::make_shared<OperatorSpec>(fragment);
+    setup(*spec_);
+    python::add_conditions_and_resources(this, args);
+  }
+};
+
+class PyClusterReportOp : public ClusterReportOp {
+ public:
+  using ClusterReportOp::ClusterReportOp;
+
+  PyClusterReportOp(Fragment* fragment, const py::args& args,
+                    const std::string& name = "cluster_report")
+      : ClusterReportOp() {
+    name_ = name;
+    fragment_ = fragment;
+    spec_ = std::make_shared<OperatorSpec>(fragment);
+    setup(*spec_);
+    python::add_conditions_and_resources(this, args);
+  }
+};
+
+class PyNullSinkOp : public NullSinkOp {
+ public:
+  using NullSinkOp::NullSinkOp;
+
+  PyNullSinkOp(Fragment* fragment, const py::args& args,
+               const std::string& name = "null_sink")
+      : NullSinkOp() {
+    name_ = name;
+    fragment_ = fragment;
+    spec_ = std::make_shared<OperatorSpec>(fragment);
+    setup(*spec_);
+    python::add_conditions_and_resources(this, args);
+  }
+};
+
+class PyRdChannelSliceOp : public RdChannelSliceOp {
+ public:
+  using RdChannelSliceOp::RdChannelSliceOp;
+
+  PyRdChannelSliceOp(Fragment* fragment, const py::args& args,
+                     int64_t channel = 0,
+                     const std::string& name = "rd_channel_slice")
+      : RdChannelSliceOp() {
+    name_ = name;
+    fragment_ = fragment;
+    this->channel = channel;
+    spec_ = std::make_shared<OperatorSpec>(fragment);
+    setup(*spec_);
+    python::add_conditions_and_resources(this, args);
+  }
+};
+
+class PyRdMapToImageOp : public RdMapToImageOp {
+ public:
+  using RdMapToImageOp::RdMapToImageOp;
+
+  PyRdMapToImageOp(Fragment* fragment, const py::args& args,
+                   const std::string& name = "rd_map_to_image")
+      : RdMapToImageOp() {
+    name_ = name;
+    fragment_ = fragment;
+    spec_ = std::make_shared<OperatorSpec>(fragment);
+    setup(*spec_);
+    python::add_conditions_and_resources(this, args);
+  }
+};
+
+class PyClusterOverlayOp : public ClusterOverlayOp {
+ public:
+  using ClusterOverlayOp::ClusterOverlayOp;
+
+  PyClusterOverlayOp(Fragment* fragment, const py::args& args,
+                     const std::string& name = "cluster_overlay")
+      : ClusterOverlayOp() {
+    name_ = name;
+    fragment_ = fragment;
+    spec_ = std::make_shared<OperatorSpec>(fragment);
+    setup(*spec_);
+    python::add_conditions_and_resources(this, args);
+  }
+};
+
+class PyRollingPlotOp : public RollingPlotOp {
+ public:
+  using RollingPlotOp::RollingPlotOp;
+
+  PyRollingPlotOp(Fragment* fragment, const py::args& args,
+                  int64_t window = 120, double frame_period = 0.1,
+                  const std::string& name = "rolling_plot")
+      : RollingPlotOp() {
+    name_ = name;
+    fragment_ = fragment;
+    this->window = window;
+    this->frame_period = frame_period;
+    spec_ = std::make_shared<OperatorSpec>(fragment);
+    setup(*spec_);
+    python::add_conditions_and_resources(this, args);
+  }
+};
+
+class PyBoresightViewOp : public BoresightViewOp {
+ public:
+  using BoresightViewOp::BoresightViewOp;
+
+  PyBoresightViewOp(Fragment* fragment, const py::args& args,
+                    double az_lo = -0.35, double az_hi = 0.35,
+                    double el_lo = -0.1, double el_hi = 0.1,
+                    const std::string& name = "boresight_view")
+      : BoresightViewOp() {
+    name_ = name;
+    fragment_ = fragment;
+    this->az_lo = az_lo;
+    this->az_hi = az_hi;
+    this->el_lo = el_lo;
+    this->el_hi = el_hi;
+    spec_ = std::make_shared<OperatorSpec>(fragment);
+    setup(*spec_);
+    python::add_conditions_and_resources(this, args);
+  }
+};
+
+void bind_radar_app(py::module_& m) {
+  py::class_<CadenceMeter, std::shared_ptr<CadenceMeter>>(
+      m, "CadenceMeter",
+      "Wall-clock source / end-to-end cadence probe for the FMCW demos.")
+      .def(py::init<>())
+      .def_readwrite("frame_period_s", &CadenceMeter::frame_period_s)
+      .def_readwrite("slack_s", &CadenceMeter::slack_s)
+      .def_readwrite("log_every", &CadenceMeter::log_every)
+      .def("effective_slack_s", &CadenceMeter::effective_slack_s)
+      .def("budget_s", &CadenceMeter::budget_s)
+      .def("on_source_emit", &CadenceMeter::on_source_emit)
+      .def("on_sink_done", &CadenceMeter::on_sink_done)
+      .def("log_summary", &CadenceMeter::log_summary)
+      .def_property_readonly("source_ticks", &CadenceMeter::source_ticks)
+      .def_property_readonly("sink_ticks", &CadenceMeter::sink_ticks)
+      .def_property_readonly("overdue_emits", &CadenceMeter::overdue_emits)
+      .def_property_readonly("late_frames", &CadenceMeter::late_frames);
+
+  py::class_<DetectionReportOp, PyDetectionReportOp, Operator,
+             std::shared_ptr<DetectionReportOp>>(
+      m, "DetectionReportOp",
+      "Log CFAR detections in physical units via axis bins.")
+      .def(py::init<Fragment*, const py::args&, const std::string&>(),
+           py::arg("fragment"), py::arg("name") = "detection_report")
+      .def("setup", &DetectionReportOp::setup, py::arg("spec"))
+      .def_readwrite("cadence", &DetectionReportOp::cadence);
+
+  py::class_<ClusterReportOp, PyClusterReportOp, Operator,
+             std::shared_ptr<ClusterReportOp>>(
+      m, "ClusterReportOp",
+      "Log DBSCAN clusters (centroids + representative cells).")
+      .def(py::init<Fragment*, const py::args&, const std::string&>(),
+           py::arg("fragment"), py::arg("name") = "cluster_report")
+      .def("setup", &ClusterReportOp::setup, py::arg("spec"));
+
+  py::class_<NullSinkOp, PyNullSinkOp, Operator, std::shared_ptr<NullSinkOp>>(
+      m, "NullSinkOp",
+      "Drain an input Entity without deserializing as a TensorMap.")
+      .def(py::init<Fragment*, const py::args&, const std::string&>(),
+           py::arg("fragment"), py::arg("name") = "null_sink")
+      .def("setup", &NullSinkOp::setup, py::arg("spec"));
+
+  py::class_<RdChannelSliceOp, PyRdChannelSliceOp, Operator,
+             std::shared_ptr<RdChannelSliceOp>>(
+      m, "RdChannelSliceOp",
+      "Extract one RX channel from a rank-3 RD map for visualization.")
+      .def(py::init<Fragment*, const py::args&, int64_t, const std::string&>(),
+           py::arg("fragment"), py::arg("channel") = 0,
+           py::arg("name") = "rd_channel_slice")
+      .def_readwrite("channel", &RdChannelSliceOp::channel)
+      .def("setup", &RdChannelSliceOp::setup, py::arg("spec"));
+
+  py::class_<RdMapToImageOp, PyRdMapToImageOp, Operator,
+             std::shared_ptr<RdMapToImageOp>>(
+      m, "RdMapToImageOp",
+      "Convert a complex RD map to a log-magnitude float image for Holoviz.")
+      .def(py::init<Fragment*, const py::args&, const std::string&>(),
+           py::arg("fragment"), py::arg("name") = "rd_map_to_image")
+      .def("setup", &RdMapToImageOp::setup, py::arg("spec"));
+
+  py::class_<ClusterOverlayOp, PyClusterOverlayOp, Operator,
+             std::shared_ptr<ClusterOverlayOp>>(
+      m, "ClusterOverlayOp",
+      "Emit Holoviz CROSSES geometry layers for CFAR detections by cluster.")
+      .def(py::init<Fragment*, const py::args&, const std::string&>(),
+           py::arg("fragment"), py::arg("name") = "cluster_overlay")
+      .def("setup", &ClusterOverlayOp::setup, py::arg("spec"));
+
+  py::class_<RollingPlotOp, PyRollingPlotOp, Operator,
+             std::shared_ptr<RollingPlotOp>>(
+      m, "RollingPlotOp",
+      "Rolling range/velocity centroid plots for Holoviz side panels.")
+      .def(py::init<Fragment*, const py::args&, int64_t, double,
+                    const std::string&>(),
+           py::arg("fragment"), py::arg("window") = 120,
+           py::arg("frame_period") = 0.1, py::arg("name") = "rolling_plot")
+      .def_readwrite("window", &RollingPlotOp::window)
+      .def_readwrite("frame_period", &RollingPlotOp::frame_period)
+      .def_readwrite("velocity_ylim_lo", &RollingPlotOp::velocity_ylim_lo)
+      .def_readwrite("velocity_ylim_hi", &RollingPlotOp::velocity_ylim_hi)
+      .def("setup", &RollingPlotOp::setup, py::arg("spec"));
+
+  py::class_<BoresightViewOp, PyBoresightViewOp, Operator,
+             std::shared_ptr<BoresightViewOp>>(
+      m, "BoresightViewOp",
+      "Azimuth/elevation boresight scatter panel for Holoviz.")
+      .def(py::init<Fragment*, const py::args&, double, double, double, double,
+                    const std::string&>(),
+           py::arg("fragment"), py::arg("az_lo") = -0.35,
+           py::arg("az_hi") = 0.35, py::arg("el_lo") = -0.1,
+           py::arg("el_hi") = 0.1, py::arg("name") = "boresight_view")
+      .def_readwrite("az_lo", &BoresightViewOp::az_lo)
+      .def_readwrite("az_hi", &BoresightViewOp::az_hi)
+      .def_readwrite("el_lo", &BoresightViewOp::el_lo)
+      .def_readwrite("el_hi", &BoresightViewOp::el_hi)
+      .def("setup", &BoresightViewOp::setup, py::arg("spec"));
+
+  m.def("gui_available", &gui_available,
+        "Probe whether Holoviz can open a display (safe to call before run).");
+  m.def("make_turbo_lut", &make_turbo_lut,
+        "kLutSize-entry RGBA turbo colormap for HolovizOp color_lut.");
+  m.def("cluster_palette", &cluster_palette,
+        "Categorical RGBA palette for cluster-overlay CROSSES layers.");
+}
+
+}  // namespace
+
+}  // namespace holoscan::radar::app
+
+PYBIND11_MODULE(_radar_app, m) {
+  holoscan::radar::ensure_radar_arg_setters();
+  m.doc() = "radar_app report / viz operator Python bindings";
+  holoscan::radar::app::bind_radar_app(m);
+}

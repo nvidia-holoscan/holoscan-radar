@@ -21,6 +21,7 @@
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <random>
 #include <stdexcept>
@@ -41,6 +42,7 @@
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "fmcw/mimo_coherent_compensation_op/mimo_coherent_compensation_op.hpp"
+#include "fmcw/mimo_coherent_compensation_op/mimo_coherent_compensation_stage.hpp"
 #include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_op.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
@@ -95,6 +97,7 @@ struct AppConfig {
   radar::TXSchedule tx_schedule;
   radar::DDMCodeDescriptor ddm_code;
   std::vector<double> ddm_doppler_offsets;
+  bool ddm_correlate{false};  // non-linear phase_codes → correlate demux
   radar::ArrayGeometry array_geometry;
   std::vector<double> tx_positions_flat;
   std::vector<double> rx_positions_flat;
@@ -102,6 +105,8 @@ struct AppConfig {
   PlotsConfig plots;
   int64_t num_frames{1};
   double frame_period{0.1};
+  bool meter_cadence{true};
+  int64_t meter_log_every{0};
   bool visualize{false};
   bool skip_display_check{false};
   bool headless{false};
@@ -159,21 +164,72 @@ void advance_scene(MimoScene* scene, double dt) {
   }
 }
 
-std::vector<double> uniform_ddm_offsets(int64_t num_tx) {
-  std::vector<double> offsets(static_cast<size_t>(num_tx));
-  for (int64_t m = 0; m < num_tx; ++m) {
-    offsets[static_cast<size_t>(m)] =
-        static_cast<double>(m) / static_cast<double>(num_tx);
+// Demo helpers for generate_phase_codes: expand unit-magnitude codes without
+// dumping N*M complex values into YAML. Codes must be *non-linear* so the
+// operator takes the correlate path (linear-phase ramps reduce to gather).
+
+// High-crosstalk recipe (matches unit-test / perf NL codes). Useful to stress
+// demux leakage; not for a clean Holoviz scene.
+void fill_sin_phase_codes(radar::DDMCodeDescriptor* code, int64_t num_chirps) {
+  if (code == nullptr || code->num_tx < 1 || num_chirps < 1) {
+    throw std::invalid_argument("fill_sin_phase_codes: invalid args");
   }
-  return offsets;
+  code->doppler_offsets.clear();
+  code->guard_bands = 0;
+  code->phase_codes.assign(
+      static_cast<size_t>(code->num_tx * num_chirps), {0.0, 0.0});
+  for (int64_t m = 0; m < code->num_tx; ++m) {
+    for (int64_t k = 0; k < num_chirps; ++k) {
+      const double phase =
+          std::sin(0.7 * static_cast<double>(k) + static_cast<double>(m)) *
+          2.0;
+      code->phase_codes[static_cast<size_t>(m * num_chirps + k)] =
+          std::complex<double>(std::cos(phase), std::sin(phase));
+    }
+  }
 }
 
-std::vector<double> resolve_ddm_offsets(const radar::DDMCodeDescriptor& code) {
-  code.validate();
-  if (!code.doppler_offsets.empty()) {
-    return code.doppler_offsets;
+// Low-crosstalk non-linear codes: distinct Zadoff-Chu roots (coprime to N).
+// Quadratic phase fails the linear-phase classifier; distinct roots keep
+// periodic cross-correlation low so CFAR sees the physical targets.
+void fill_zadoff_chu_phase_codes(radar::DDMCodeDescriptor* code,
+                                 int64_t num_chirps) {
+  if (code == nullptr || code->num_tx < 1 || num_chirps < 1) {
+    throw std::invalid_argument("fill_zadoff_chu_phase_codes: invalid args");
   }
-  return uniform_ddm_offsets(code.num_tx);
+  std::vector<int64_t> roots;
+  roots.reserve(static_cast<size_t>(code->num_tx));
+  for (int64_t u = 1; u < num_chirps &&
+                      static_cast<int64_t>(roots.size()) < code->num_tx;
+       ++u) {
+    if (std::gcd(u, num_chirps) == 1) {
+      roots.push_back(u);
+    }
+  }
+  if (static_cast<int64_t>(roots.size()) < code->num_tx) {
+    throw std::invalid_argument(
+        "fill_zadoff_chu_phase_codes: need num_tx distinct roots coprime to "
+        "num_chirps (try a longer cube.num_chirps)");
+  }
+
+  code->doppler_offsets.clear();
+  code->guard_bands = 0;
+  code->phase_codes.assign(
+      static_cast<size_t>(code->num_tx * num_chirps), {0.0, 0.0});
+  const bool odd_n = (num_chirps % 2) != 0;
+  constexpr double kPi = radar::kPi;
+  for (int64_t m = 0; m < code->num_tx; ++m) {
+    const double u = static_cast<double>(roots[static_cast<size_t>(m)]);
+    for (int64_t k = 0; k < num_chirps; ++k) {
+      const double kd = static_cast<double>(k);
+      const double arg =
+          odd_n ? (-kPi * u * kd * (kd + 1.0) /
+                   static_cast<double>(num_chirps))
+                : (-kPi * u * kd * kd / static_cast<double>(num_chirps));
+      code->phase_codes[static_cast<size_t>(m * num_chirps + k)] =
+          std::complex<double>(std::cos(arg), std::sin(arg));
+    }
+  }
 }
 
 radar::sim::SimResult simulate_mimo_tdm_interleaved(
@@ -329,6 +385,82 @@ radar::sim::SimResult simulate_mimo_ddm_coded(
   return result;
 }
 
+// DDM with arbitrary per-(tx, chirp) unit-magnitude codes (non-linear demux).
+radar::sim::SimResult simulate_mimo_ddm_phase_coded(
+    const MimoScene& scene,
+    const std::vector<std::complex<double>>& phase_codes) {
+  if (scene.tx_positions.empty() || scene.rx_positions.empty()) {
+    throw std::invalid_argument("simulate_mimo_ddm_phase_coded: need TX and RX");
+  }
+  const int64_t num_rx = static_cast<int64_t>(scene.rx_positions.size());
+  const int64_t num_tx = scene.num_tx;
+  const int64_t num_chirps = scene.num_chirps;
+  const int64_t samples = scene.samples_per_chirp;
+  const double pri = scene.waveform.chirp_repetition_interval;
+  const double fs = scene.waveform.sample_rate;
+  const double slope = scene.waveform.slope();
+  const double f_c = scene.waveform.carrier_frequency;
+  const double c = scene.propagation_speed;
+
+  if (static_cast<int64_t>(phase_codes.size()) != num_tx * num_chirps) {
+    throw std::invalid_argument(
+        "simulate_mimo_ddm_phase_coded: phase_codes length must be "
+        "num_tx * num_chirps");
+  }
+
+  radar::sim::SimResult result;
+  result.shape = {num_rx, num_chirps, samples};
+  result.cube.assign(static_cast<size_t>(num_rx * num_chirps * samples),
+                     {0.0, 0.0});
+
+  for (const radar::sim::PointTarget& target : scene.targets) {
+    const radar::sim::TargetTruth truth = radar::sim::derive_truth(target);
+    result.truth.push_back(truth);
+
+    for (int64_t k = 0; k < num_chirps; ++k) {
+      const double range_k =
+          truth.range +
+          truth.radial_velocity * static_cast<double>(k) * pri;
+      for (int64_t rx = 0; rx < num_rx; ++rx) {
+        for (int64_t s = 0; s < samples; ++s) {
+          const double t = static_cast<double>(s) / fs;
+          std::complex<double> acc{0.0, 0.0};
+          for (int64_t tx = 0; tx < num_tx; ++tx) {
+            const radar::sim::Vec3& tx_pos =
+                scene.tx_positions[static_cast<size_t>(tx)];
+            const double aperture =
+                radar::sim::dot(tx_pos, truth.look_direction) +
+                radar::sim::dot(scene.rx_positions[static_cast<size_t>(rx)],
+                                truth.look_direction);
+            const double tau = (2.0 * range_k - aperture) / c;
+            const double beat = slope * tau;
+            const double phase =
+                2.0 * radar::kPi * (beat * t) - 2.0 * radar::kPi * f_c * tau;
+            const auto code =
+                phase_codes[static_cast<size_t>(tx * num_chirps + k)];
+            acc += target.amplitude * code *
+                   std::complex<double>(std::cos(phase), std::sin(phase));
+          }
+          const size_t idx =
+              static_cast<size_t>((rx * num_chirps + k) * samples + s);
+          result.cube[idx] += acc;
+        }
+      }
+    }
+  }
+
+  if (scene.snr_db.has_value()) {
+    const double noise_power = std::pow(10.0, -(*scene.snr_db) / 10.0);
+    const double sigma = std::sqrt(noise_power / 2.0);
+    std::mt19937_64 rng(scene.seed);
+    std::normal_distribution<double> gauss(0.0, sigma);
+    for (auto& v : result.cube) {
+      v += std::complex<double>(gauss(rng), gauss(rng));
+    }
+  }
+  return result;
+}
+
 void load_scene_geometry(AppConfig* cfg, const YAML::Node& root,
                          double wavelength) {
   const YAML::Node tx = root["tx_array"];
@@ -396,6 +528,15 @@ AppConfig load_config(const std::filesystem::path& path) {
 
   cfg.num_frames = root["run"]["num_frames"].as<int64_t>();
   cfg.frame_period = root["run"]["frame_period"].as<double>();
+  if (root["run"]["meter_cadence"]) {
+    cfg.meter_cadence = root["run"]["meter_cadence"].as<bool>();
+  }
+  if (root["run"]["meter_log_every"]) {
+    cfg.meter_log_every = root["run"]["meter_log_every"].as<int64_t>();
+  }
+  if (cfg.meter_log_every < 0) {
+    throw std::runtime_error("run.meter_log_every must be >= 0");
+  }
   cfg.scene.samples_per_chirp = root["cube"]["samples_per_chirp"].as<int64_t>();
 
   const YAML::Node tx = root["tx_array"];
@@ -428,17 +569,53 @@ AppConfig load_config(const std::filesystem::path& path) {
       throw std::runtime_error(
           "fmcw_mimo: ddm_code.num_tx must match tx_array.num_tx");
     }
-    cfg.ddm_doppler_offsets = resolve_ddm_offsets(cfg.ddm_code);
-    if (cfg.scene.num_chirps % cfg.scene.num_tx != 0) {
-      throw std::runtime_error(
-          "fmcw_mimo: cube.num_chirps must be divisible by tx_array.num_tx "
-          "for DDM");
+    // Demo-only: expand generate_phase_codes into explicit phase_codes so YAML
+    // need not list num_tx * num_chirps complex values.
+    if (mcc["ddm_code"]["generate_phase_codes"]) {
+      const std::string kind =
+          mcc["ddm_code"]["generate_phase_codes"].as<std::string>();
+      if (kind == "zadoff_chu" || kind == "zc") {
+        fill_zadoff_chu_phase_codes(&cfg.ddm_code, cfg.scene.num_chirps);
+      } else if (kind == "sin") {
+        fill_sin_phase_codes(&cfg.ddm_code, cfg.scene.num_chirps);
+      } else {
+        throw std::runtime_error(
+            "fmcw_mimo: unsupported generate_phase_codes '" + kind +
+            "' (supported: zadoff_chu, zc, sin)");
+      }
     }
-    const int64_t band = cfg.scene.num_chirps / cfg.scene.num_tx;
-    cfg.report_num_doppler = band - cfg.ddm_code.guard_bands;
-    if (cfg.report_num_doppler <= 0) {
-      throw std::runtime_error(
-          "fmcw_mimo: DDM guard_bands leaves no Doppler bins per TX");
+    cfg.ddm_code.validate();
+    cfg.ddm_correlate =
+        radar::detail::ddm_classify_codes(cfg.ddm_code) ==
+        radar::detail::DdmCodeMode::kNonLinear;
+    if (cfg.ddm_correlate) {
+      if (cfg.ddm_code.guard_bands != 0) {
+        throw std::runtime_error(
+            "fmcw_mimo: non-linear DDM phase_codes require guard_bands == 0");
+      }
+      const int64_t num_chirps_codes =
+          static_cast<int64_t>(cfg.ddm_code.phase_codes.size()) /
+          cfg.ddm_code.num_tx;
+      if (num_chirps_codes != cfg.scene.num_chirps) {
+        throw std::runtime_error(
+            "fmcw_mimo: non-linear phase_codes length/num_tx must equal "
+            "cube.num_chirps");
+      }
+      cfg.report_num_doppler = cfg.scene.num_chirps;
+    } else {
+      cfg.ddm_doppler_offsets =
+          radar::detail::ddm_resolve_offsets(cfg.ddm_code);
+      if (cfg.scene.num_chirps % cfg.scene.num_tx != 0) {
+        throw std::runtime_error(
+            "fmcw_mimo: cube.num_chirps must be divisible by tx_array.num_tx "
+            "for linear DDM");
+      }
+      const int64_t band = cfg.scene.num_chirps / cfg.scene.num_tx;
+      cfg.report_num_doppler = band - cfg.ddm_code.guard_bands;
+      if (cfg.report_num_doppler <= 0) {
+        throw std::runtime_error(
+            "fmcw_mimo: DDM guard_bands leaves no Doppler bins per TX");
+      }
     }
   } else {
     const YAML::Node sim = root["sim"];
@@ -550,8 +727,9 @@ AppConfig load_config(const std::filesystem::path& path) {
 }
 
 // Post-DDM-demux velocity axis for reporting: CFAR / feature assembly run on
-// VirtualArrayAssemblyOp rd_maps whose Doppler width is num_doppler_per_tx,
-// not the pre-demux FMCWDopplerProcessorOp axis.
+// VirtualArrayAssemblyOp rd_maps. Linear DDM keeps W = N/num_tx - guard bins at
+// spacing PRF/N; non-linear correlate keeps the full N-bin Doppler axis at the
+// same spacing.
 class DdmReportVelocityBinsOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(DdmReportVelocityBinsOp)
@@ -630,6 +808,7 @@ class MimoTdmAdcSourceOp : public holoscan::Operator {
   MimoScene scene;
   radar::TXSchedule tx_schedule;
   double frame_period{0.1};
+  std::shared_ptr<CadenceMeter> cadence;
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.output<holoscan::TensorMap>("adc_cube");
@@ -663,6 +842,9 @@ class MimoTdmAdcSourceOp : public holoscan::Operator {
     holoscan::TensorMap out;
     out.insert({"adc_cube", tensor});
     op_output.emit(out, "adc_cube");
+    if (cadence) {
+      cadence->on_source_emit();
+    }
     advance_scene(&scene, frame_period);
   }
 };
@@ -674,7 +856,10 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
 
   MimoScene scene;
   std::vector<double> doppler_offsets;
+  std::vector<std::complex<double>> phase_codes;
+  bool use_phase_codes{false};
   double frame_period{0.1};
+  std::shared_ptr<CadenceMeter> cadence;
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.output<holoscan::TensorMap>("adc_cube");
@@ -685,7 +870,8 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
                [[maybe_unused]] holoscan::ExecutionContext& context)
       override {
     const radar::sim::SimResult sim =
-        simulate_mimo_ddm_coded(scene, doppler_offsets);
+        use_phase_codes ? simulate_mimo_ddm_phase_coded(scene, phase_codes)
+                        : simulate_mimo_ddm_coded(scene, doppler_offsets);
     if (sim.shape.size() != 3) {
       throw std::runtime_error(
           "MimoDdmAdcSourceOp: expected rank-3 (N_rx, num_chirps, samples)");
@@ -708,6 +894,9 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
     holoscan::TensorMap out;
     out.insert({"adc_cube", tensor});
     op_output.emit(out, "adc_cube");
+    if (cadence) {
+      cadence->on_source_emit();
+    }
     advance_scene(&scene, frame_period);
   }
 };
@@ -734,6 +923,7 @@ class TensorMapDiscardOp : public holoscan::Operator {
 class FmcwMimoApp : public holoscan::Application {
  public:
   AppConfig cfg;
+  std::shared_ptr<CadenceMeter> cadence;
 
   void compose() override {
     const bool ddm = cfg.scheme == radar::MultiplexingScheme::kDdm;
@@ -750,12 +940,21 @@ class FmcwMimoApp : public holoscan::Application {
     auto compensation =
         make_operator<radar::MIMOCoherentCompensationOp<float>>(
             "mimo_coherent_compensation",
-            from_config("mimo_coherent_compensation"));
+            from_config("mimo_coherent_compensation"),
+            // Prefer the app-resolved descriptor (may expand
+            // generate_phase_codes: sin into explicit phase_codes).
+            holoscan::Arg("ddm_code") = cfg.ddm_code);
     auto vaa = make_operator<radar::VirtualArrayAssemblyOp<float>>(
         "virtual_array_assembly", from_config("virtual_array_assembly"),
         holoscan::Arg("tx_positions") = cfg.tx_positions_flat,
         holoscan::Arg("rx_positions") = cfg.rx_positions_flat,
         holoscan::Arg("wavelength") = cfg.wavelength);
+
+    if (cfg.meter_cadence) {
+      cadence = std::make_shared<CadenceMeter>();
+      cadence->frame_period_s = cfg.frame_period;
+      cadence->log_every = cfg.meter_log_every;
+    }
 
     if (ddm) {
       auto source = make_operator<MimoDdmAdcSourceOp>(
@@ -765,8 +964,16 @@ class FmcwMimoApp : public holoscan::Application {
           make_condition<holoscan::PeriodicCondition>(
               "frame_rate", static_cast<int64_t>(cfg.frame_period * 1e9)));
       source->scene = cfg.scene;
-      source->doppler_offsets = cfg.ddm_doppler_offsets;
+      source->use_phase_codes = cfg.ddm_correlate;
+      if (cfg.ddm_correlate) {
+        source->phase_codes = cfg.ddm_code.phase_codes;
+      } else {
+        source->doppler_offsets = cfg.ddm_doppler_offsets;
+      }
       source->frame_period = cfg.frame_period;
+      if (cadence) {
+        source->cadence = cadence;
+      }
 
       add_flow(source, range, {{"adc_cube", "adc_cube"}});
       add_flow(range, doppler, {{"range_profiles", "range_profiles"}});
@@ -783,6 +990,9 @@ class FmcwMimoApp : public holoscan::Application {
       source->scene = cfg.scene;
       source->tx_schedule = cfg.tx_schedule;
       source->frame_period = cfg.frame_period;
+      if (cadence) {
+        source->cadence = cadence;
+      }
 
       auto deinterleave = make_operator<radar::MIMODeinterleaveOp<float>>(
           "mimo_deinterleave", from_config("mimo_deinterleave"));
@@ -804,6 +1014,9 @@ class FmcwMimoApp : public holoscan::Application {
         holoscan::Arg("array_geometry") = cfg.array_geometry);
 
     auto det_report = make_operator<DetectionReportOp>("detection_report");
+    if (cadence) {
+      det_report->cadence = cadence;
+    }
     auto mask_sink = make_operator<NullSinkOp>("detection_mask_sink");
     auto noise_sink = make_operator<NullSinkOp>("noise_estimate_sink");
     auto spectrum_sink =
@@ -988,10 +1201,21 @@ class FmcwMimoApp : public holoscan::Application {
 };
 
 std::filesystem::path resolve_config_path(int argc, char** argv) {
+  const auto bin_dir = std::filesystem::path(argv[0]).parent_path();
   if (argc > 1) {
-    return argv[1];
+    std::filesystem::path given(argv[1]);
+    if (std::filesystem::is_regular_file(given)) {
+      return given;
+    }
+    // Bare names like fmcw_mimo_ddm_phase_codes.yaml: try next to the binary
+    // (same place CMake stages the packaged YAMLs).
+    const auto beside_bin = bin_dir / given.filename();
+    if (std::filesystem::is_regular_file(beside_bin)) {
+      return beside_bin;
+    }
+    return given;  // load_config will report the original path
   }
-  return std::filesystem::path(argv[0]).parent_path() / "fmcw_mimo.yaml";
+  return bin_dir / "fmcw_mimo.yaml";
 }
 
 int main(int argc, char** argv) {
@@ -1008,6 +1232,9 @@ int main(int argc, char** argv) {
     }
     app->config(config_path.string());
     app->run();
+    if (app->cadence) {
+      app->cadence->log_summary();
+    }
   } catch (const std::exception& e) {
     HOLOSCAN_LOG_ERROR("fmcw_mimo: {}", e.what());
     return 1;

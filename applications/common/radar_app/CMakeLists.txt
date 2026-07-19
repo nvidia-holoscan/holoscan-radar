@@ -26,3 +26,6 @@ target_link_libraries(radar_app INTERFACE
     holoscan::radar_common
     holoscan::viz
     CUDA::cudart)
+
+# Python bindings live in python/ but are added from operators/CMakeLists.txt
+# after radar_common exists (applications/ is configured before operators/).

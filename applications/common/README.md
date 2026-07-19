@@ -27,6 +27,7 @@ layer to share.
 
 ```text
 radar_app/
+  report/cadence_meter.hpp  CadenceMeter — wall-clock source / e2e probe
   report/report_ops.hpp   DetectionReportOp, ClusterReportOp (2- or 4-column
                           points), NullSinkOp
   viz/viz.hpp             RdChannelSliceOp (SIMO per-RX RD slice),
@@ -39,6 +40,13 @@ radar_app/
 
 Everything is under `namespace holoscan::radar::app` and included as
 `"radar_app/..."`.
+
+`CadenceMeter` is an optional shared probe the demos wire into the ADC source
+(`on_source_emit` after each cube emit) and the terminal report op
+(`on_sink_done` / `DetectionReportOp.cadence`). It warns when source inter-emit
+or end-to-end latency exceeds `frame_period` (+ max(10 ms, 10% of period) slack) and prints a
+summary after `run()`. Toggle with YAML `run.meter_cadence` /
+`run.meter_log_every`.
 
 ## Using it
 

@@ -34,3 +34,5 @@ install(FILES
     detection_reduction_stage.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/detection
 )
+
+add_subdirectory(python)

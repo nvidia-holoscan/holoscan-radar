@@ -993,25 +993,157 @@ TEST(MIMOCoherentCompensationOp, DdmLinearPhaseCodesMatchOffsets) {
   }
 }
 
-TEST(MIMOCoherentCompensationOp, DdmRejectsArbitraryPhaseCodes) {
+TEST(MIMOCoherentCompensationOp, DdmNonLinearPhaseCodesCorrelateRecovers) {
+  // Single-TX forward model in fft-order: Y = val * circshift(C, d0). The
+  // operator expects center-zero Doppler (ifftshift on the way in), so the
+  // peak appears at the fftshifted bin of d0. Correlate demux yields
+  // amplitude val * (||C||^2 / D) = val * D when |c[n]| = 1 and
+  // num_chirps = D (Parseval). Multi-TX non-orthogonal codes leave crosstalk,
+  // so this test uses M_tx = 1 for amplitude recovery.
   const auto waveform = make_test_waveform();
-  const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
-  const std::vector<std::complex<float>> host(
-      static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange), {1.0f, 0.0f});
+  constexpr int64_t kNlTx = 1;
+  constexpr int64_t kNlRx = 2;
+  constexpr int64_t kNlDoppler = 16;
+  constexpr int64_t kNlRange = 3;
+  const int64_t num_chirps = kNlDoppler;
+  constexpr int64_t d0 = 3;
+  constexpr double kPi2 = 2.0 * 3.141592653589793;
+  const int64_t D = kNlDoppler;
+  const int64_t d0_cz = (d0 + D / 2) % D;
+  const std::complex<double> val(1.5, -0.3);
 
-  // Non-linear (random-ish) phase increments: not reducible to a Doppler
-  // offset, so the demux must reject them.
   DDMCodeDescriptor code;
-  code.num_tx = 2;
-  const int64_t num_chirps = kDdmDoppler;
-  code.phase_codes.resize(static_cast<size_t>(2 * num_chirps));
-  for (int64_t m = 0; m < 2; ++m) {
+  code.num_tx = kNlTx;
+  code.guard_bands = 0;
+  code.phase_codes.resize(static_cast<size_t>(kNlTx * num_chirps));
+  for (int64_t k = 0; k < num_chirps; ++k) {
+    const double phase = std::sin(0.7 * static_cast<double>(k)) * 2.0;
+    code.phase_codes[static_cast<size_t>(k)] =
+        std::complex<double>(std::cos(phase), std::sin(phase));
+  }
+
+  std::vector<std::complex<double>> spectrum(static_cast<size_t>(D));
+  const auto* c_m = code.phase_codes.data();
+  for (int64_t k = 0; k < D; ++k) {
+    std::complex<double> sum(0.0, 0.0);
+    for (int64_t n = 0; n < num_chirps; ++n) {
+      const double angle = -kPi2 * static_cast<double>(n) *
+                           static_cast<double>(k) / static_cast<double>(D);
+      sum += c_m[n] * std::complex<double>(std::cos(angle), std::sin(angle));
+    }
+    spectrum[static_cast<size_t>(k)] = sum;
+  }
+
+  std::vector<std::complex<float>> host(
+      static_cast<size_t>(kNlRx * D * kNlRange), {0.0f, 0.0f});
+  for (int64_t rx = 0; rx < kNlRx; ++rx) {
+    for (int64_t r = 0; r < kNlRange; ++r) {
+      for (int64_t k = 0; k < D; ++k) {
+        // fft-order sample, stored at center-zero index (fftshift).
+        const int64_t idx = ((k - d0) % D + D) % D;
+        const auto y = val * spectrum[static_cast<size_t>(idx)];
+        const int64_t d_cz = (k + D / 2) % D;
+        host[static_cast<size_t>((rx * D + d_cz) * kNlRange + r)] =
+            std::complex<float>(static_cast<float>(y.real()),
+                                static_cast<float>(y.imag()));
+      }
+    }
+  }
+
+  const std::vector<int64_t> shape{kNlRx, kNlDoppler, kNlRange};
+  const auto out = run_ddm_from_host<float>(host, shape, code, waveform);
+  ASSERT_EQ(out.shape.size(), 4U);
+  EXPECT_EQ(out.shape[0], kNlTx);
+  EXPECT_EQ(out.shape[1], kNlRx);
+  EXPECT_EQ(out.shape[2], kNlDoppler);
+  EXPECT_EQ(out.shape[3], kNlRange);
+
+  const auto* data = out.as<std::complex<float>>();
+  const std::complex<float> expected(
+      static_cast<float>(val.real() * static_cast<double>(D)),
+      static_cast<float>(val.imag() * static_cast<double>(D)));
+  const float tol = 0.05f * std::abs(expected);
+  for (int64_t rx = 0; rx < kNlRx; ++rx) {
+    for (int64_t r = 0; r < kNlRange; ++r) {
+      float peak = 0.0f;
+      float other = 0.0f;
+      std::complex<float> at_d0{0.0f, 0.0f};
+      for (int64_t d = 0; d < D; ++d) {
+        const auto z =
+            data[static_cast<size_t>(((0 * kNlRx + rx) * D + d) * kNlRange + r)];
+        const float mag = std::abs(z);
+        if (d == d0_cz) {
+          peak = mag;
+          at_d0 = z;
+        } else {
+          other = std::max(other, mag);
+        }
+      }
+      EXPECT_NEAR(at_d0.real(), expected.real(), tol) << "rx=" << rx;
+      EXPECT_NEAR(at_d0.imag(), expected.imag(), tol) << "rx=" << rx;
+      EXPECT_GT(peak, 5.0f * other) << "rx=" << rx;
+    }
+  }
+}
+
+TEST(MIMOCoherentCompensationOp, DdmNonLinearRejectsNonZeroGuardBands) {
+  const auto waveform = make_test_waveform();
+  constexpr int64_t kNlTx = 2;
+  constexpr int64_t kNlDoppler = 16;
+  constexpr int64_t kNlRx = 2;
+  constexpr int64_t kNlRange = 3;
+  const int64_t num_chirps = kNlDoppler;
+
+  DDMCodeDescriptor code;
+  code.num_tx = kNlTx;
+  code.guard_bands = 1;  // non-zero → must reject
+  code.phase_codes.resize(static_cast<size_t>(kNlTx * num_chirps));
+  for (int64_t m = 0; m < kNlTx; ++m) {
     for (int64_t k = 0; k < num_chirps; ++k) {
       const double phase = std::sin(0.7 * static_cast<double>(k) + m) * 2.0;
       code.phase_codes[static_cast<size_t>(m * num_chirps + k)] =
           std::complex<double>(std::cos(phase), std::sin(phase));
     }
   }
+
+  const std::vector<int64_t> shape{kNlRx, kNlDoppler, kNlRange};
+  const std::vector<std::complex<float>> host(
+      static_cast<size_t>(kNlRx * kNlDoppler * kNlRange), {1.0f, 0.0f});
+  auto harness = create_operator_test<MIMOCoherentCompensationOp<float>>(
+      holoscan::Arg("multiplexing_scheme") = MultiplexingScheme::kDdm,
+      holoscan::Arg("waveform") = waveform, holoscan::Arg("ddm_code") = code);
+  harness->template add_input_port<holoscan::TensorMap>(
+      "rd_maps",
+      {single_map(to_device_tensor(host, shape, complex_dtype<float>()),
+                  "rd_maps")});
+  harness->template add_output_port<holoscan::TensorMap>("rd_maps");
+  EXPECT_THROW(harness->run_test(), std::invalid_argument);
+}
+
+TEST(MIMOCoherentCompensationOp, DdmNonLinearRejectsChirpDopplerMismatch) {
+  const auto waveform = make_test_waveform();
+  constexpr int64_t kNlTx = 2;
+  constexpr int64_t kNlDoppler = 16;
+  constexpr int64_t kNlRx = 2;
+  constexpr int64_t kNlRange = 3;
+  // num_chirps != num_doppler (use 8 chirps with 16 Doppler bins)
+  const int64_t num_chirps = 8;
+
+  DDMCodeDescriptor code;
+  code.num_tx = kNlTx;
+  code.guard_bands = 0;
+  code.phase_codes.resize(static_cast<size_t>(kNlTx * num_chirps));
+  for (int64_t m = 0; m < kNlTx; ++m) {
+    for (int64_t k = 0; k < num_chirps; ++k) {
+      const double phase = std::sin(0.7 * static_cast<double>(k) + m) * 2.0;
+      code.phase_codes[static_cast<size_t>(m * num_chirps + k)] =
+          std::complex<double>(std::cos(phase), std::sin(phase));
+    }
+  }
+
+  const std::vector<int64_t> shape{kNlRx, kNlDoppler, kNlRange};
+  const std::vector<std::complex<float>> host(
+      static_cast<size_t>(kNlRx * kNlDoppler * kNlRange), {1.0f, 0.0f});
   auto harness = create_operator_test<MIMOCoherentCompensationOp<float>>(
       holoscan::Arg("multiplexing_scheme") = MultiplexingScheme::kDdm,
       holoscan::Arg("waveform") = waveform, holoscan::Arg("ddm_code") = code);

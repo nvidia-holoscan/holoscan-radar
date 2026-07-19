@@ -31,3 +31,5 @@ include(GNUInstallDirs)
 install(FILES clutter_filter_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw
 )
+
+add_subdirectory(python)

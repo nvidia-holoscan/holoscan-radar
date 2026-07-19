@@ -16,7 +16,8 @@ target_link_libraries(mimo_coherent_compensation_op
         holoscan::core
         holoscan::radar_common
     PRIVATE
-        matx::matx)
+        matx::matx
+        CUDA::cufft)
 
 set_property(TARGET mimo_coherent_compensation_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
@@ -34,3 +35,5 @@ include(GNUInstallDirs)
 install(FILES mimo_coherent_compensation_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw
 )
+
+add_subdirectory(python)

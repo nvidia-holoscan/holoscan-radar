@@ -1,0 +1,76 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Headless smoke config for applications/fmcw_simo/python/fmcw_simo.py.
+
+waveform: &waveform
+  carrier_frequency: 77.0e9
+  bandwidth: 150.0e6
+  chirp_duration: 20.0e-6
+  sample_rate: 12.8e6
+  chirp_repetition_interval: 25.0e-6
+
+range_processor:
+  waveform: *waveform
+  range_window: hann
+
+clutter_filter:
+  method: mean_subtraction
+
+doppler_processor:
+  waveform: *waveform
+  doppler_window: hann
+
+cfar_detector:
+  cfar_variant: CA
+  guard_cells: [3, 3]
+  training_cells: [3, 3]
+  pfa: 1.0e-9
+  os_rank: 0
+  nci_axes: [0]
+
+snapshot_gather:
+  snapshot_window: [0, 0]
+
+beamscan_estimator:
+  angle_convention:
+    preset: radar_boresight
+  az_angles: [-0.2, -0.1, 0.0, 0.1, 0.2]
+  el_angles: [-0.2, -0.1, 0.0, 0.1, 0.2]
+  peak_interpolation: parabolic
+
+cluster_dbscan:
+  epsilon: [3.0, 2.0, 0.05, 0.05]
+  min_points: 1
+  max_clusters: 0
+
+reduction:
+  representative: medoid
+  feature_weights: [0.3333, 0.5, 20.0, 20.0]
+
+cube:
+  num_chirps: 64
+  samples_per_chirp: 256
+
+run:
+  num_frames: 2
+  frame_period: 0.1
+
+rx_array:
+  az_elements: 4
+  el_elements: 4
+  spacing: 0.5
+
+targets:
+  - { range: 80.0,  azimuth: 0.15,  elevation: 0.10,  velocity: [1.0, -0.3, -0.2], amplitude: 0.8 }
+  - { range: 95.0,  azimuth: -0.10, elevation: -0.08, velocity: [-0.5, 0.3, 0.25], amplitude: 0.6 }
+
+noise_snr_db: 18.0
+
+visualize: false
+skip_display_check: false
+headless: false
+
+plots:
+  enable: true
+  window: 120

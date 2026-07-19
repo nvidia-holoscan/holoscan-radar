@@ -98,6 +98,9 @@ struct AppConfig {
   PlotsConfig plots;
   int64_t num_frames{1};
   double frame_period{0.1};  // s, between emitted cubes (and target motion)
+  // Wall-clock cadence probe (source inter-emit + DetectionReport e2e).
+  bool meter_cadence{true};
+  int64_t meter_log_every{0};  // 0 = warn-only + end summary
   bool visualize{false};     // live RD-map window (requires a GUI host)
   // Skip the startup display probe: saves its GLFW + Vulkan init/teardown,
   // but on a host without a usable display the failure then surfaces inside
@@ -133,6 +136,15 @@ AppConfig load_config(const std::filesystem::path& path) {
 
   cfg.num_frames = root["run"]["num_frames"].as<int64_t>();
   cfg.frame_period = root["run"]["frame_period"].as<double>();
+  if (root["run"]["meter_cadence"]) {
+    cfg.meter_cadence = root["run"]["meter_cadence"].as<bool>();
+  }
+  if (root["run"]["meter_log_every"]) {
+    cfg.meter_log_every = root["run"]["meter_log_every"].as<int64_t>();
+  }
+  if (cfg.meter_log_every < 0) {
+    throw std::runtime_error("run.meter_log_every must be >= 0");
+  }
   cfg.scene.num_chirps = root["cube"]["num_chirps"].as<int64_t>();
   cfg.scene.samples_per_chirp = root["cube"]["samples_per_chirp"].as<int64_t>();
 
@@ -238,6 +250,7 @@ class AdcSourceOp : public holoscan::Operator {
 
   radar::sim::SimScene scene;
   double frame_period{0.1};
+  std::shared_ptr<CadenceMeter> cadence;
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.output<holoscan::TensorMap>("adc_cube");
@@ -276,6 +289,9 @@ class AdcSourceOp : public holoscan::Operator {
     holoscan::TensorMap out;
     out.insert({"adc_cube", tensor});
     op_output.emit(out, "adc_cube");
+    if (cadence) {
+      cadence->on_source_emit();
+    }
 
     // Step the scene forward for the next frame.
     advance_scene(&scene, frame_period);
@@ -285,6 +301,7 @@ class AdcSourceOp : public holoscan::Operator {
 class FmcwSisoApp : public holoscan::Application {
  public:
   AppConfig cfg;  // set before run()
+  std::shared_ptr<CadenceMeter> cadence;
 
   void compose() override {
     // Emit cfg.num_frames cubes, one every cfg.frame_period seconds, so the
@@ -312,6 +329,14 @@ class FmcwSisoApp : public holoscan::Application {
     // Every CFAR output needs a receiver or the operator never ticks.
     auto mask_sink = make_operator<NullSinkOp>("detection_mask_sink");
     auto noise_sink = make_operator<NullSinkOp>("noise_estimate_sink");
+
+    if (cfg.meter_cadence) {
+      cadence = std::make_shared<CadenceMeter>();
+      cadence->frame_period_s = cfg.frame_period;
+      cadence->log_every = cfg.meter_log_every;
+      source->cadence = cadence;
+      sink->cadence = cadence;
+    }
 
     // Clustering branch: assemble a [range, velocity] feature matrix from the
     // CFAR cells (physical units, via the range/Doppler axis outputs) and
@@ -505,6 +530,9 @@ int main(int argc, char** argv) {
     // exits cleanly with the message instead of terminating on an uncaught
     // exception, which the runtime reports as a process abort.
     app->run();
+    if (app->cadence) {
+      app->cadence->log_summary();
+    }
   } catch (const std::exception& e) {
     HOLOSCAN_LOG_ERROR("fmcw_siso: {}", e.what());
     return 1;

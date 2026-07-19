@@ -97,13 +97,17 @@ class RdChannelSliceOp : public holoscan::Operator {
 };
 
 // Converts the complex RD map into a log-magnitude float32 image for
-// Holoviz (rendered through the turbo color lookup table). Per frame:
-// |RD| in dB, mapped between that frame's measured noise floor and its
-// peak onto [0, kLutSize - 1] — HolovizOp's LUT is non-normalized, so the
-// pixel value is used as an integer index into the table. Detections and
-// their clusters are drawn separately, as a colored crosses geometry layer
-// on top of this image (see ClusterOverlayOp), so the image stays a clean
-// turbo map.
+// Holoviz (rendered through the turbo color lookup table). Layout is
+// (doppler, range): Holoviz x = range, y = Doppler.
+//
+// Per frame:
+//   1. Divide each range column by its median |RD| — suppresses Doppler
+//      pedestals from MIMO-DDM code crosstalk that otherwise paint full
+//      vertical stripes under a global log stretch (detection math is
+//      unchanged; this is display-only).
+//   2. Convert to dB and map between that frame's median and peak onto
+//      [0, kLutSize - 1] for HolovizOp's non-normalized LUT.
+// Detections/clusters are drawn separately (ClusterOverlayOp).
 class RdMapToImageOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(RdMapToImageOp)
@@ -144,16 +148,27 @@ class RdMapToImageOp : public holoscan::Operator {
       throw std::runtime_error("RdMapToImageOp: rd_map D2H copy failed");
     }
 
-    // Log magnitude, normalized to [0, 1] between this frame's noise floor
-    // and peak. The floor is estimated as the median dB value (the map is
-    // overwhelmingly noise cells, so the median tracks the noise floor and
-    // is insensitive to the few target/clutter cells). Per-frame
-    // normalization keeps the target visible as absolute levels drift.
     std::vector<float> image(rd.size());
+    std::vector<float> col_abs(static_cast<size_t>(num_doppler));
+    std::vector<float> col_sort(static_cast<size_t>(num_doppler));
     float peak_db = -std::numeric_limits<float>::infinity();
-    for (size_t i = 0; i < rd.size(); ++i) {
-      image[i] = 20.0F * std::log10(std::abs(rd[i]) + 1e-20F);
-      peak_db = std::max(peak_db, image[i]);
+    for (int64_t r = 0; r < num_range; ++r) {
+      for (int64_t d = 0; d < num_doppler; ++d) {
+        col_abs[static_cast<size_t>(d)] =
+            std::abs(rd[static_cast<size_t>(d * num_range + r)]);
+      }
+      col_sort = col_abs;
+      std::nth_element(col_sort.begin(),
+                       col_sort.begin() + col_sort.size() / 2, col_sort.end());
+      const float med =
+          std::max(col_sort[col_sort.size() / 2], 1e-20F);
+      for (int64_t d = 0; d < num_doppler; ++d) {
+        const float v =
+            20.0F *
+            std::log10(col_abs[static_cast<size_t>(d)] / med + 1e-20F);
+        image[static_cast<size_t>(d * num_range + r)] = v;
+        peak_db = std::max(peak_db, v);
+      }
     }
     std::vector<float> sorted(image);
     std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2,

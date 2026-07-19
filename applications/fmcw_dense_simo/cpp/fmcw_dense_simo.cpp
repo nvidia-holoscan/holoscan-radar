@@ -67,6 +67,7 @@
 #include "radar_common/sim/point_target_sim.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "radar_app/report/cadence_meter.hpp"
 #include "radar_app/viz/display.hpp"
 #include "radar_app/viz/viz.hpp"
 
@@ -92,6 +93,8 @@ struct AppConfig {
   PlotsConfig plots;
   int64_t num_frames{1};
   double frame_period{0.1};
+  bool meter_cadence{true};
+  int64_t meter_log_every{0};
   bool visualize{false};
   bool skip_display_check{false};
   bool headless{false};
@@ -145,6 +148,15 @@ AppConfig load_config(const std::filesystem::path& path) {
 
   cfg.num_frames = root["run"]["num_frames"].as<int64_t>();
   cfg.frame_period = root["run"]["frame_period"].as<double>();
+  if (root["run"]["meter_cadence"]) {
+    cfg.meter_cadence = root["run"]["meter_cadence"].as<bool>();
+  }
+  if (root["run"]["meter_log_every"]) {
+    cfg.meter_log_every = root["run"]["meter_log_every"].as<int64_t>();
+  }
+  if (cfg.meter_log_every < 0) {
+    throw std::runtime_error("run.meter_log_every must be >= 0");
+  }
   cfg.scene.num_chirps = root["cube"]["num_chirps"].as<int64_t>();
   cfg.scene.samples_per_chirp = root["cube"]["samples_per_chirp"].as<int64_t>();
 
@@ -253,6 +265,7 @@ class SimoAdcSourceOp : public holoscan::Operator {
 
   radar::sim::SimScene scene;
   double frame_period{0.1};
+  std::shared_ptr<CadenceMeter> cadence;
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.output<holoscan::TensorMap>("adc_cube");
@@ -279,6 +292,9 @@ class SimoAdcSourceOp : public holoscan::Operator {
       throw std::runtime_error("SimoAdcSourceOp: H2D upload failed");
     }
     radar::emit_single(op_output, "adc_cube", tensor);
+    if (cadence) {
+      cadence->on_source_emit();
+    }
     advance_scene(&scene, frame_period);
   }
 };
@@ -503,6 +519,7 @@ class DenseClusterReportOp : public holoscan::Operator {
 
   std::vector<double> az_grid;
   std::vector<double> el_grid;
+  std::shared_ptr<CadenceMeter> cadence;
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("points");
@@ -611,6 +628,9 @@ class DenseClusterReportOp : public holoscan::Operator {
           az_grid[static_cast<size_t>(az_bin)],
           el_grid[static_cast<size_t>(el_bin)]);
     }
+    if (cadence) {
+      cadence->on_sink_done();
+    }
   }
 };
 
@@ -694,6 +714,7 @@ class TrailingIdxColumnsOp : public holoscan::Operator {
 class FmcwDenseSimoApp : public holoscan::Application {
  public:
   AppConfig cfg;
+  std::shared_ptr<CadenceMeter> cadence;
 
   void compose() override {
     using holoscan::Arg;
@@ -735,6 +756,14 @@ class FmcwDenseSimoApp : public holoscan::Application {
     auto report = make_operator<DenseClusterReportOp>("dense_cluster_report");
     report->az_grid = cfg.az_angles;
     report->el_grid = cfg.el_angles;
+
+    if (cfg.meter_cadence) {
+      cadence = std::make_shared<CadenceMeter>();
+      cadence->frame_period_s = cfg.frame_period;
+      cadence->log_every = cfg.meter_log_every;
+      source->cadence = cadence;
+      report->cadence = cadence;
+    }
 
     // Front end.
     add_flow(source, range, {{"adc_cube", "adc_cube"}});
@@ -960,6 +989,9 @@ int main(int argc, char** argv) {
     }
     app->config(config_path.string());
     app->run();
+    if (app->cadence) {
+      app->cadence->log_summary();
+    }
   } catch (const std::exception& e) {
     HOLOSCAN_LOG_ERROR("fmcw_dense_simo: {}", e.what());
     return 1;
