@@ -64,6 +64,7 @@ using namespace holoscan::radar::app;  // NOLINT(build/namespaces)
 class FmcwSisoApp : public holoscan::Application {
  public:
   AppConfig cfg;  // set before run()
+  std::shared_ptr<CadenceMeter> cadence;
 
   void compose() override {
     // Emit cfg.num_frames cubes, one every cfg.frame_period seconds, so the
@@ -91,6 +92,13 @@ class FmcwSisoApp : public holoscan::Application {
     auto mask_sink = make_operator<NullSinkOp>("detection_mask_sink");
     auto noise_sink = make_operator<NullSinkOp>("noise_estimate_sink");
 
+    if (cfg.meter_cadence) {
+      cadence = std::make_shared<CadenceMeter>();
+      cadence->frame_period_s = cfg.frame_period;
+      cadence->log_every = cfg.meter_log_every;
+      source->cadence = cadence;
+      sink->cadence = cadence;
+    }
     // Clustering branch: assemble a [range, velocity] feature matrix from the
     // CFAR cells (physical units, via the range/Doppler axis outputs) and
     // density-cluster it. `features` is fixed in code — the parameter is

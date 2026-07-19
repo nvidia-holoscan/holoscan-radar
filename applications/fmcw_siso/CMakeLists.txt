@@ -2,5 +2,5 @@
 # SPDX-License-Identifier: Apache-2.0
 
 add_subdirectory(cpp)
-# The Python variant returns when the Python bindings land (deferred to a
-# later phase).
+# Python demo: applications/fmcw_siso/python/fmcw_siso.py (run via PYTHONPATH /
+# HOLOSCAN_RADAR_BUILD_DIR; no add_subdirectory — same pattern as other apps).

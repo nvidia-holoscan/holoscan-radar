@@ -41,6 +41,9 @@ namespace holoscan::radar::app {
 struct CommonRunConfig {
   int64_t num_frames{1};
   double frame_period{0.1};  // s, between emitted cubes (and target motion)
+  // Wall-clock CadenceMeter (source inter-emit + DetectionReport e2e).
+  bool meter_cadence{true};
+  int64_t meter_log_every{0};  // 0 = warn-only + end summary; N = INFO every N
   bool visualize{false};     // live Holoviz window (requires a GUI host)
   bool skip_display_check{false};  // skip the startup display probe
   bool headless{false};            // render offscreen (no window / display)
@@ -95,13 +98,22 @@ inline void parse_waveform_into_scene(const YAML::Node& root, Scene* scene) {
       waveform.chirp_repetition_interval();
 }
 
-// run.{num_frames, frame_period} + validation.
+// run.{num_frames, frame_period, meter_*} + validation.
 inline void parse_run(const YAML::Node& root, CommonRunConfig* cfg) {
   cfg->num_frames = root["run"]["num_frames"].as<int64_t>();
   cfg->frame_period = root["run"]["frame_period"].as<double>();
   require_positive("run.num_frames", cfg->num_frames);
   require_positive("run.frame_period", cfg->frame_period);
   validate_frame_period(cfg->frame_period);
+  if (root["run"]["meter_cadence"]) {
+    cfg->meter_cadence = root["run"]["meter_cadence"].as<bool>();
+  }
+  if (root["run"]["meter_log_every"]) {
+    cfg->meter_log_every = root["run"]["meter_log_every"].as<int64_t>();
+  }
+  if (cfg->meter_log_every < 0) {
+    throw std::runtime_error("run.meter_log_every must be >= 0");
+  }
 }
 
 // cube.{num_chirps, samples_per_chirp} + validation. `Scene` is any struct with

@@ -21,6 +21,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <atomic>
 #include <cstdint>
 
 #include "radar_common/tensor/matx_utils.hpp"
@@ -32,6 +33,61 @@ namespace holoscan::radar::detail {
 // K < C / single-snapshot case) without dominating a well-conditioned R̂.
 template <typename T>
 inline constexpr T kAutoLoadingFactor = static_cast<T>(1e-2);
+
+// MatX caches inv plans by (A, A_inv) device pointers (eig by shape/stream).
+// Retire after each stage so plans do not outlive Holoscan scratch tensors;
+// atexit Clear alone is too late once other ops have reused the GPU heap.
+// Clear() asserts if that cache type was never created; gate with the flags.
+inline std::atomic<bool>& matx_eig_plans_live_flag() {
+  static std::atomic<bool> live{false};
+  return live;
+}
+inline std::atomic<bool>& matx_inv_plans_live_flag() {
+  static std::atomic<bool> live{false};
+  return live;
+}
+
+inline void mark_matx_solver_caches_live() {
+  matx_eig_plans_live_flag().store(true, std::memory_order_relaxed);
+  matx_inv_plans_live_flag().store(true, std::memory_order_relaxed);
+}
+
+inline void clear_matx_eig_cache() {
+  matx::detail::GetCache().Clear<matx::detail::eig_cuda_cache_t>(
+      matx::detail::GetCacheIdFromType<matx::detail::eig_cuda_cache_t>());
+}
+
+inline void clear_matx_inv_cache() {
+  matx::detail::GetCache().Clear<matx::detail::inv_cache_t>(
+      matx::detail::GetCacheIdFromType<matx::detail::inv_cache_t>());
+}
+
+// Destroy cached eig/inv plans and drain MatX's MemTracker while CUDA is
+// still valid. Called at the end of each MVDR stage (and from Python atexit
+// as backup). Safe no-op if solvers were never used.
+inline void retire_matx_solver_caches() {
+  const bool eig =
+      matx_eig_plans_live_flag().exchange(false, std::memory_order_relaxed);
+  const bool inv =
+      matx_inv_plans_live_flag().exchange(false, std::memory_order_relaxed);
+  if (!eig && !inv) {
+    return;
+  }
+  cudaDeviceSynchronize();
+  if (eig) {
+    clear_matx_eig_cache();
+  }
+  if (inv) {
+    clear_matx_inv_cache();
+  }
+  // Plan Clear can leave small MatX-tracked temps (seen as 64B). ~MemTracker
+  // frees those at process exit via cudaFreeAsync — after CuPy has torn down
+  // CUDA under pytest → SIGSEGV. Drain while the context is still valid.
+  auto& tracker = matx::GetAllocMap();
+  while (tracker.size() > 0) {
+    tracker.deallocate(tracker.allocationMap.begin()->first);
+  }
+}
 
 // One block per item. Forms the sample covariance R̂_i (num_channels ×
 // num_channels, row-major) over the valid snapshots. `mask` (num_items ×
@@ -537,6 +593,14 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots,
   blank_empty_items_kernel<T><<<grid, blank_block, 0, stream>>>(
       k_counts, num_items, num_az, num_el, max_sources, spectrum, aoa,
       doa_multi, source_count);
+
+  // MatX inv plans are cached by (A, A_inv) device pointers. Holoscan frees
+  // those scratch tensors when compute() returns, so the cache would retain
+  // plans whose keys outlive the buffers — and later GPU allocs (other ops /
+  // pytest) then make atexit Clear / MatX's static dtor crash in cudaFreeAsync.
+  // Retire while CUDA is still healthy and before scratch is released.
+  mark_matx_solver_caches_live();
+  retire_matx_solver_caches();
 }
 
 }  // namespace holoscan::radar::detail

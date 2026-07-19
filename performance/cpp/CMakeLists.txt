@@ -49,6 +49,14 @@ target_link_libraries(perf_fmcw_range_doppler_processor PRIVATE
     radar_perf_utils
     holoscan::fmcw_range_doppler_processor_op)
 
+add_executable(perf_fmcw_split_vs_fused perf_fmcw_split_vs_fused.cpp)
+target_link_libraries(perf_fmcw_split_vs_fused PRIVATE
+    radar_perf_utils
+    holoscan::fmcw_range_processor_op
+    holoscan::clutter_filter_op
+    holoscan::fmcw_doppler_processor_op
+    holoscan::fmcw_range_doppler_processor_op)
+
 add_executable(perf_cluster_dbscan perf_cluster_dbscan.cpp)
 target_link_libraries(perf_cluster_dbscan PRIVATE
     radar_perf_utils
@@ -133,6 +141,12 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
             --quiet
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_range_doppler_processor_smoke.json)
     set_tests_properties(perf_fmcw_range_doppler_processor_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_fmcw_split_vs_fused_smoke
+        COMMAND perf_fmcw_split_vs_fused --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_split_vs_fused_smoke.json)
+    set_tests_properties(perf_fmcw_split_vs_fused_smoke PROPERTIES
         LABELS "performance")
 
     add_test(NAME perf_cluster_dbscan_smoke

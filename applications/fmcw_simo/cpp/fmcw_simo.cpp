@@ -44,6 +44,7 @@ using namespace holoscan::radar::app;  // NOLINT(build/namespaces)
 class FmcwSimoApp : public holoscan::Application {
  public:
   AppConfig cfg;
+  std::shared_ptr<CadenceMeter> cadence;
 
   void compose() override {
     auto source = make_operator<SimAdcSourceOp>(
@@ -74,6 +75,13 @@ class FmcwSimoApp : public holoscan::Application {
     auto spectrum_sink =
         make_operator<TensorMapDiscardOp>("angle_spectrum_discard");
 
+    if (cfg.meter_cadence) {
+      cadence = std::make_shared<CadenceMeter>();
+      cadence->frame_period_s = cfg.frame_period;
+      cadence->log_every = cfg.meter_log_every;
+      source->cadence = cadence;
+      det_report->cadence = cadence;
+    }
     const std::vector<radar::AssemblyFeature> feature_columns{
         radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity,
         radar::AssemblyFeature::kAz, radar::AssemblyFeature::kEl};

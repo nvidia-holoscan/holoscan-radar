@@ -29,3 +29,5 @@ include(GNUInstallDirs)
 install(FILES cluster_dbscan_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/clustering
 )
+
+add_subdirectory(python)

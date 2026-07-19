@@ -21,8 +21,11 @@
 #include <stdexcept>
 #include <vector>
 
+#include <memory>
+
 #include <holoscan/holoscan.hpp>
 
+#include "radar_app/report/cadence_meter.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/sim/point_target_sim.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
@@ -37,6 +40,8 @@ class SimAdcSourceOp : public holoscan::Operator {
 
   sim::SimScene scene;        // set from the parsed config before run()
   double frame_period{0.1};   // s, between emitted cubes (and target motion)
+  // Optional shared cadence probe (same instance as DetectionReportOp).
+  std::shared_ptr<CadenceMeter> cadence;
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.output<holoscan::TensorMap>("adc_cube");
@@ -63,6 +68,9 @@ class SimAdcSourceOp : public holoscan::Operator {
     }
 
     emit_single(op_output, "adc_cube", tensor);
+    if (cadence) {
+      cadence->on_source_emit();
+    }
 
     // Step the scene forward for the next frame.
     sim::advance_scene(&scene, frame_period);

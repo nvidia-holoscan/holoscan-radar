@@ -8,9 +8,9 @@
 // mid-session [live] clutter_filter override so the cost of toggling the inline
 // clutter stage is measured. Measurement tool only: no timing assertions.
 //
-// This tool times the fused node alone; to compare against the split
-// range -> [clutter] -> Doppler chain, run perf_fmcw_range_processor,
-// perf_clutter_filter, and perf_fmcw_doppler_processor at matching sizes.
+// This tool times the fused node alone; for an end-to-end split vs fused
+// comparison (range → [clutter] → Doppler vs this op), use
+// perf_fmcw_split_vs_fused — do not sum the three per-operator tools.
 // See docs/planning/OPERATOR_DEVELOPMENT.md.
 
 #include <cuda_runtime_api.h>

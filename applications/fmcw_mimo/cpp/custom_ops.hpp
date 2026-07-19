@@ -20,6 +20,7 @@
 
 #include <holoscan/holoscan.hpp>
 
+#include "radar_app/report/cadence_meter.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
@@ -28,6 +29,7 @@
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace radar = holoscan::radar;
+using holoscan::radar::app::CadenceMeter;
 
 class DdmReportVelocityBinsOp : public holoscan::Operator {
  public:
@@ -107,6 +109,7 @@ class MimoTdmAdcSourceOp : public holoscan::Operator {
   radar::sim::SimScene scene;
   radar::TXSchedule tx_schedule;
   double frame_period{0.1};
+  std::shared_ptr<CadenceMeter> cadence;
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.output<holoscan::TensorMap>("adc_cube");
@@ -140,6 +143,9 @@ class MimoTdmAdcSourceOp : public holoscan::Operator {
     holoscan::TensorMap out;
     out.insert({"adc_cube", tensor});
     op_output.emit(out, "adc_cube");
+    if (cadence) {
+      cadence->on_source_emit();
+    }
     radar::sim::advance_scene(&scene, frame_period);
   }
 };
@@ -151,7 +157,12 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
 
   radar::sim::SimScene scene;
   std::vector<double> doppler_offsets;
+  // When true, emit via simulate_mimo_ddm_phase_coded(phase_codes) instead of
+  // the linear-offset gather path.
+  bool use_phase_codes{false};
+  std::vector<std::complex<double>> phase_codes;
   double frame_period{0.1};
+  std::shared_ptr<CadenceMeter> cadence;
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.output<holoscan::TensorMap>("adc_cube");
@@ -162,7 +173,10 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
                [[maybe_unused]] holoscan::ExecutionContext& context)
       override {
     const radar::sim::SimResult result =
-        radar::sim::simulate_mimo_ddm_coded(scene, doppler_offsets);
+        use_phase_codes ? radar::sim::simulate_mimo_ddm_phase_coded(
+                              scene, phase_codes)
+                        : radar::sim::simulate_mimo_ddm_coded(
+                              scene, doppler_offsets);
     if (result.shape.size() != 3) {
       throw std::runtime_error(
           "MimoDdmAdcSourceOp: expected rank-3 (N_rx, num_chirps, samples)");
@@ -185,6 +199,9 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
     holoscan::TensorMap out;
     out.insert({"adc_cube", tensor});
     op_output.emit(out, "adc_cube");
+    if (cadence) {
+      cadence->on_source_emit();
+    }
     radar::sim::advance_scene(&scene, frame_period);
   }
 };

@@ -14,6 +14,7 @@
 
 #include <holoscan/holoscan.hpp>
 
+#include "radar_app/report/cadence_meter.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 
 // Reusable logging / drain sinks for the FMCW example applications. These read
@@ -31,6 +32,10 @@ class DetectionReportOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(DetectionReportOp)
   DetectionReportOp() = default;
+
+  // Optional shared cadence probe (same instance as the ADC source). When set,
+  // each successful compute marks one end-to-end frame complete.
+  std::shared_ptr<CadenceMeter> cadence;
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("detection_idx");
@@ -141,6 +146,9 @@ class DetectionReportOp : public holoscan::Operator {
       HOLOSCAN_LOG_INFO("  ... {} more detections not logged",
                         num_detections - kMaxLogged);
     }
+    if (cadence) {
+      cadence->on_sink_done();
+    }
   }
 
  private:
@@ -179,6 +187,9 @@ class ClusterReportOp : public holoscan::Operator {
   // the sparse (2-column) path.
   std::vector<double> az_grid;
   std::vector<double> el_grid;
+  // Optional shared cadence probe (same instance as the ADC source). Used when
+  // the app has no DetectionReportOp (e.g. dense SIMO).
+  std::shared_ptr<CadenceMeter> cadence;
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("points");
@@ -432,6 +443,9 @@ class ClusterReportOp : public holoscan::Operator {
     if (num_clusters > kMaxLogged) {
       HOLOSCAN_LOG_INFO("  ... {} more clusters not logged",
                         num_clusters - kMaxLogged);
+    }
+    if (cadence) {
+      cadence->on_sink_done();
     }
   }
 };

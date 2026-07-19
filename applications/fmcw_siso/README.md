@@ -48,6 +48,12 @@ CLI argument to override it. Each target is placed along the +x look direction
 at a given `range` (m) and radial `velocity` (m/s, positive = receding) with a
 linear `amplitude`.
 
+With `run.meter_cadence: true` (default), the app warns when the source
+inter-emit gap or DetectionReport end-to-end latency exceeds `frame_period`
+(+ max(10 ms, 10% of period) slack) — i.e. when the pipeline is not keeping up with the
+`PeriodicCondition` schedule — and prints a cadence summary at exit. Set
+`run.meter_log_every: N` to also log e2e every N frames.
+
 The per-operator blocks (`range_processor`, `clutter_filter`,
 `doppler_processor`, `cfar_detector`, `cluster_dbscan`, `reduction`) are all
 consumed natively through Holoscan's `from_config()` — every key is an operator
@@ -96,5 +102,5 @@ with no window — the startup display probe is skipped, letting the visual
 pipeline run on a display-less host (e.g. CI) provided a Vulkan driver is
 present.
 
-A Python variant will be added when the Python bindings land (deferred to
-a later phase).
+A Python variant with the same graph lives at
+[`python/fmcw_siso.py`](python/fmcw_siso.py); see [`python/README.md`](python/README.md).

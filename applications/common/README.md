@@ -54,6 +54,7 @@ radar_app/
                           load config, display-probe downgrade, config(), run())
   app/holoviz_layout.hpp  HolovizLayout / RightPanel + build_holoviz_input_specs
                           + make_rd_holoviz_op factory + panel presets
+  report/cadence_meter.hpp  CadenceMeter — wall-clock source / e2e probe
   report/report_ops.hpp   DetectionReportOp, ClusterReportOp (2- or 4-column
                           rep_idx), NullSinkOp, TensorMapDiscardOp
   viz/viz.hpp             RdChannelSliceOp (SIMO per-RX RD slice),
@@ -71,6 +72,13 @@ Holoscan/CUDA/Holoviz dependency.
 
 Everything in `radar_app` is under `namespace holoscan::radar::app` and included
 as `"radar_app/..."`.
+
+`CadenceMeter` is an optional shared probe the demos wire into the ADC source
+(`on_source_emit` after each cube emit) and the terminal report op
+(`on_sink_done` / `DetectionReportOp.cadence`). It warns when source inter-emit
+or end-to-end latency exceeds `frame_period` (+ max(10 ms, 10% of period) slack) and prints a
+summary after `run()`. Toggle with YAML `run.meter_cadence` /
+`run.meter_log_every`.
 
 ## Using it
 

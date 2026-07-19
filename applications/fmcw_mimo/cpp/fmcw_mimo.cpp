@@ -47,6 +47,7 @@ using namespace holoscan::radar::app;  // NOLINT(build/namespaces)
 class FmcwMimoApp : public holoscan::Application {
  public:
   AppConfig cfg;
+  std::shared_ptr<CadenceMeter> cadence;
 
   void compose() override {
     const bool ddm = cfg.scheme == radar::MultiplexingScheme::kDdm;
@@ -63,12 +64,21 @@ class FmcwMimoApp : public holoscan::Application {
     auto compensation =
         make_operator<radar::MIMOCoherentCompensationOp<float>>(
             "mimo_coherent_compensation",
-            from_config("mimo_coherent_compensation"));
+            from_config("mimo_coherent_compensation"),
+            // Prefer the app-resolved descriptor (may expand
+            // generate_phase_codes into explicit phase_codes).
+            holoscan::Arg("ddm_code") = cfg.ddm_code);
     auto vaa = make_operator<radar::VirtualArrayAssemblyOp<float>>(
         "virtual_array_assembly", from_config("virtual_array_assembly"),
         holoscan::Arg("tx_positions") = cfg.tx_positions_flat,
         holoscan::Arg("rx_positions") = cfg.rx_positions_flat,
         holoscan::Arg("wavelength") = cfg.wavelength);
+
+    if (cfg.meter_cadence) {
+      cadence = std::make_shared<CadenceMeter>();
+      cadence->frame_period_s = cfg.frame_period;
+      cadence->log_every = cfg.meter_log_every;
+    }
 
     if (ddm) {
       auto source = make_operator<MimoDdmAdcSourceOp>(
@@ -78,8 +88,16 @@ class FmcwMimoApp : public holoscan::Application {
           make_condition<holoscan::PeriodicCondition>(
               "frame_rate", static_cast<int64_t>(cfg.frame_period * 1e9)));
       source->scene = cfg.scene;
-      source->doppler_offsets = cfg.ddm_doppler_offsets;
+      source->use_phase_codes = cfg.ddm_correlate;
+      if (cfg.ddm_correlate) {
+        source->phase_codes = cfg.ddm_code.phase_codes;
+      } else {
+        source->doppler_offsets = cfg.ddm_doppler_offsets;
+      }
       source->frame_period = cfg.frame_period;
+      if (cadence) {
+        source->cadence = cadence;
+      }
 
       add_flow(source, range, {{"adc_cube", "adc_cube"}});
       add_flow(range, doppler, {{"range_profiles", "range_profiles"}});
@@ -96,6 +114,9 @@ class FmcwMimoApp : public holoscan::Application {
       source->scene = cfg.scene;
       source->tx_schedule = cfg.tx_schedule;
       source->frame_period = cfg.frame_period;
+      if (cadence) {
+        source->cadence = cadence;
+      }
 
       auto deinterleave = make_operator<radar::MIMODeinterleaveOp<float>>(
           "mimo_deinterleave", from_config("mimo_deinterleave"));
@@ -117,6 +138,9 @@ class FmcwMimoApp : public holoscan::Application {
         holoscan::Arg("array_geometry") = cfg.array_geometry);
 
     auto det_report = make_operator<DetectionReportOp>("detection_report");
+    if (cadence) {
+      det_report->cadence = cadence;
+    }
     auto mask_sink = make_operator<NullSinkOp>("detection_mask_sink");
     auto noise_sink = make_operator<NullSinkOp>("noise_estimate_sink");
     auto spectrum_sink =

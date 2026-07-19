@@ -84,9 +84,16 @@ cube:
   num_chirps: 128
   samples_per_chirp: 256
 
+# Run cadence. The source emits `num_frames` cubes, one every `frame_period`
+# seconds, advancing the targets through space between frames.
+# meter_cadence — log WARN when source inter-emit or DetectionReport e2e
+#   exceeds frame_period (+ max(10 ms, 10% of period) slack); print a summary at exit (default true).
+# meter_log_every — also INFO e2e every N sink frames (0 = warn/summary only).
 run:
   num_frames: 250
   frame_period: 0.1
+  meter_cadence: true
+  meter_log_every: 0
 
 tx_array:
   num_tx: 2

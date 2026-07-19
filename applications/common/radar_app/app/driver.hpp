@@ -23,14 +23,39 @@
 namespace holoscan::radar::app {
 
 // Resolve the config path: the first CLI argument if given, otherwise
-// `default_yaml` staged next to the executable.
+// `default_yaml` staged next to the executable. Bare names like
+// `fmcw_mimo_ddm.yaml` also resolve beside the binary (CMake-staged YAMLs).
 inline std::filesystem::path resolve_config_path(int argc, char** argv,
                                                   const char* default_yaml) {
+  const auto bin_dir = std::filesystem::path(argv[0]).parent_path();
   if (argc > 1) {
-    return argv[1];
+    std::filesystem::path given(argv[1]);
+    if (std::filesystem::is_regular_file(given)) {
+      return given;
+    }
+    const auto beside_bin = bin_dir / given.filename();
+    if (std::filesystem::is_regular_file(beside_bin)) {
+      return beside_bin;
+    }
+    return given;  // load_config will report the original path
   }
-  return std::filesystem::path(argv[0]).parent_path() / default_yaml;
+  return bin_dir / default_yaml;
 }
+
+namespace detail {
+
+// SFINAE: log CadenceMeter summary when App exposes a `cadence` member.
+template <class App>
+void log_cadence_if_present(App*, ...) {}
+
+template <class App>
+auto log_cadence_if_present(App* app, int) -> decltype(app->cadence, void()) {
+  if (app->cadence) {
+    app->cadence->log_summary();
+  }
+}
+
+}  // namespace detail
 
 // Load config, downgrade visualize on a GUI-less host, then config() + run()
 // under one try/catch. `load_config` is the app's own loader
@@ -63,6 +88,7 @@ int run_fmcw_app(int argc, char** argv, const char* log_prefix,
     // exits cleanly with the message instead of terminating on an uncaught
     // exception, which the runtime reports as a process abort.
     app->run();
+    detail::log_cadence_if_present(app.get(), 0);
   } catch (const std::exception& e) {
     HOLOSCAN_LOG_ERROR("{}: {}", log_prefix, e.what());
     return 1;

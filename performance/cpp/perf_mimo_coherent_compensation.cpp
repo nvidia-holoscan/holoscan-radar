@@ -10,6 +10,7 @@
 #include <cuda_runtime_api.h>
 
 #include <complex>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -58,12 +59,13 @@ struct CompensationScenario {
   std::string id;
   std::string size_id;
   hr::MultiplexingScheme scheme{hr::MultiplexingScheme::kTdm};
-  std::string variant{"tdm"};
+  std::string variant{"tdm"};  // tdm | ddm | ddm_nl
   int64_t num_tx{0};
   int64_t num_rx{0};
   int64_t num_doppler{0};
   int64_t num_range_bins{0};
   int64_t batch{1};
+  bool non_linear_ddm{false};
 };
 
 const std::vector<SizeSpec>& size_ladder() {
@@ -116,8 +118,24 @@ hr::DDMCodeDescriptor make_ddm_code(int64_t num_tx) {
   return code;
 }
 
-// TDM input carries an explicit M_tx axis; DDM input folds the M TX into the
-// Doppler axis, so it has no M_tx axis.
+hr::DDMCodeDescriptor make_ddm_nl_code(int64_t num_tx, int64_t num_doppler) {
+  hr::DDMCodeDescriptor code;
+  code.num_tx = num_tx;
+  code.guard_bands = 0;
+  code.phase_codes.resize(static_cast<size_t>(num_tx * num_doppler));
+  for (int64_t m = 0; m < num_tx; ++m) {
+    for (int64_t k = 0; k < num_doppler; ++k) {
+      const double phase =
+          std::sin(0.7 * static_cast<double>(k) + static_cast<double>(m)) * 2.0;
+      code.phase_codes[static_cast<size_t>(m * num_doppler + k)] =
+          std::complex<double>(std::cos(phase), std::sin(phase));
+    }
+  }
+  return code;
+}
+
+// TDM input carries an explicit M_tx axis; DDM / DDM-NL input folds the M TX
+// into the Doppler axis, so it has no M_tx axis.
 std::vector<int64_t> input_shape(const CompensationScenario& scen) {
   const bool ddm = scen.scheme == hr::MultiplexingScheme::kDdm;
   std::vector<int64_t> shape;
@@ -179,9 +197,10 @@ void fill_throughput(perf::ResultRow* row, const CompensationScenario& scen,
   const double batch = static_cast<double>(scen.batch);
   // Input samples touched: TDM carries M_tx explicitly; DDM folds the M TX
   // into the (already counted) Doppler axis, so it has no M_tx factor.
-  const double tx_factor = scen.scheme == hr::MultiplexingScheme::kDdm
-                               ? 1.0
-                               : static_cast<double>(scen.num_tx);
+  const double tx_factor =
+      scen.scheme == hr::MultiplexingScheme::kDdm
+          ? 1.0
+          : static_cast<double>(scen.num_tx);
   const double elems = batch * tx_factor * static_cast<double>(scen.num_rx) *
                        static_cast<double>(scen.num_doppler) *
                        static_cast<double>(scen.num_range_bins);
@@ -207,11 +226,16 @@ perf::ResultRow base_row(const CompensationScenario& scen) {
 CompensationScenario make_scenario(
     const SizeSpec& s,
     hr::MultiplexingScheme scheme = hr::MultiplexingScheme::kTdm,
-    int64_t batch = 1) {
+    int64_t batch = 1, bool non_linear_ddm = false) {
   CompensationScenario sc;
   sc.size_id = s.id;
   sc.scheme = scheme;
-  sc.variant = scheme == hr::MultiplexingScheme::kDdm ? "ddm" : "tdm";
+  sc.non_linear_ddm = non_linear_ddm;
+  if (scheme == hr::MultiplexingScheme::kDdm) {
+    sc.variant = non_linear_ddm ? "ddm_nl" : "ddm";
+  } else {
+    sc.variant = "tdm";
+  }
   sc.num_tx = s.num_tx;
   sc.num_rx = s.num_rx;
   sc.num_doppler = s.num_doppler;
@@ -234,13 +258,14 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     return "MIMOCoherentCompensationOp performance characterization";
   }
   static const char* sizes_all_help() {
-    return "TDM + DDM correction size sweep across the full ladder";
+    return "TDM + DDM (linear) + DDM-NL (correlate) size sweep across the "
+           "full ladder";
   }
   static const char* sizes_subset_help() {
-    return "TDM + DDM correction size sweep across an explicit subset";
+    return "TDM + DDM (linear) + DDM-NL size sweep across an explicit subset";
   }
   static const char* full_help() {
-    return "Full matrix (sizes + batch axis on md/lg)";
+    return "Full matrix (sizes + batch axis on md/lg + DDM-NL)";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -263,10 +288,14 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     }
     out.push_back(make_scenario(must_find_size("md"),
                                 hr::MultiplexingScheme::kTdm, 4));
-    // DDM variant across a representative subset.
+    // DDM gather (linear) + correlate (non-linear) across a representative
+    // subset.
     for (const char* sid : {"xs", "md", "xl"}) {
       out.push_back(
           make_scenario(must_find_size(sid), hr::MultiplexingScheme::kDdm));
+      out.push_back(make_scenario(must_find_size(sid),
+                                  hr::MultiplexingScheme::kDdm, 1,
+                                  /*non_linear_ddm=*/true));
     }
     return out;
   }
@@ -282,6 +311,8 @@ struct CompensationTraits : perf::PerfDriverDefaults {
       }
       out.push_back(make_scenario(*s));
       out.push_back(make_scenario(*s, hr::MultiplexingScheme::kDdm));
+      out.push_back(make_scenario(*s, hr::MultiplexingScheme::kDdm, 1,
+                                  /*non_linear_ddm=*/true));
     }
     return out;
   }
@@ -297,6 +328,8 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     }
     for (const auto& s : size_ladder()) {
       out.push_back(make_scenario(s, hr::MultiplexingScheme::kDdm));
+      out.push_back(make_scenario(s, hr::MultiplexingScheme::kDdm, 1,
+                                  /*non_linear_ddm=*/true));
     }
     return out;
   }
@@ -319,7 +352,10 @@ struct CompensationTraits : perf::PerfDriverDefaults {
           app->collector = &collector;
           app->frame = std::move(cube);
           app->scheme = scen.scheme;
-          app->ddm_code = make_ddm_code(scen.num_tx);
+          app->ddm_code =
+              scen.non_linear_ddm
+                  ? make_ddm_nl_code(scen.num_tx, scen.num_doppler)
+                  : make_ddm_code(scen.num_tx);
           app->waveform = make_waveform(kDefaultPri);
           app->override_waveform = make_waveform(kOverridePri);
           app->override_at = p.override_at;
@@ -333,17 +369,27 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
-    const bool ddm = scen.scheme == hr::MultiplexingScheme::kDdm;
-    row.notes =
-        ddm ? "DDM per-band Doppler gather (waveform-independent); cold_ms is "
-              "first-frame latency including initial demux-table build; "
-              "median/p90 are steady state; the [live] waveform override is "
-              "inert for DDM; cells/s counts input complex samples read"
-            : "TDM per-bin complex multiply; cold_ms is first-frame latency "
-              "including initial correction-table build; median/p90 are "
-              "pre-override steady state; override_ms is peak latency over the "
-              "3-frame live waveform rebuild window; cells/s counts complex "
-              "samples touched";
+    if (scen.non_linear_ddm) {
+      row.notes =
+          "DDM non-linear phase_codes conjugate-correlation demux "
+          "(waveform-independent); cold_ms includes initial code-spectrum "
+          "build; median/p90 are steady state; [live] waveform override is "
+          "inert; cells/s counts input complex samples read; output keeps "
+          "full Doppler axis";
+    } else if (scen.scheme == hr::MultiplexingScheme::kDdm) {
+      row.notes =
+          "DDM per-band Doppler gather (waveform-independent); cold_ms is "
+          "first-frame latency including initial demux-table build; "
+          "median/p90 are steady state; the [live] waveform override is "
+          "inert for DDM; cells/s counts input complex samples read";
+    } else {
+      row.notes =
+          "TDM per-bin complex multiply; cold_ms is first-frame latency "
+          "including initial correction-table build; median/p90 are "
+          "pre-override steady state; override_ms is peak latency over the "
+          "3-frame live waveform rebuild window; cells/s counts complex "
+          "samples touched";
+    }
     report->results.push_back(row);
   }
 

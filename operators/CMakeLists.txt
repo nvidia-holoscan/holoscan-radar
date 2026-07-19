@@ -30,6 +30,12 @@ add_subdirectory(clustering)
 # Angle-estimation operators (one add_holohub_operator() per operator inside).
 add_subdirectory(angle_estimation)
 
+# radar_app Python bindings — deferred here because applications/ is configured
+# before operators/, and pybind needs the radar_common CMake target.
+add_subdirectory(
+    ${PROJECT_SOURCE_DIR}/applications/common/radar_app/python
+    ${CMAKE_BINARY_DIR}/applications/common/radar_app/python)
+
 # Install the aggregate __init__.py alongside each operator's built module.
 configure_file(
     ${PROJECT_SOURCE_DIR}/python/holoscan/radar/__init__.py
