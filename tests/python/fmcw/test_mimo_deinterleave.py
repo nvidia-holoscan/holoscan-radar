@@ -11,7 +11,6 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from holoscan.radar import MIMODeinterleaveOpF32, MIMODeinterleaveOpF64  # noqa: E402
 from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
 from utils.mimo_helpers import (  # noqa: E402
     K_CHIRPS_PER_TX,
@@ -26,6 +25,8 @@ from utils.mimo_helpers import (  # noqa: E402
     marker_value,
     round_robin_schedule,
 )
+
+from holoscan.radar import MIMODeinterleaveOpF32, MIMODeinterleaveOpF64  # noqa: E402
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -78,10 +79,10 @@ def expect_deinterleaved(out: np.ndarray, shape: tuple[int, ...], *, real: bool 
     for b in range(batch):
         for tx in range(num_tx):
             for rx in range(num_rx):
-                for l in range(chirps_per_tx):
+                for chirp_of_tx in range(chirps_per_tx):
                     for s in range(samples):
-                        idx = b * slice_elems + (((tx * num_rx + rx) * chirps_per_tx + l) * samples + s)
-                        expected = marker_value(b, tx, l, rx, s)
+                        idx = b * slice_elems + (((tx * num_rx + rx) * chirps_per_tx + chirp_of_tx) * samples + s)
+                        expected = marker_value(b, tx, chirp_of_tx, rx, s)
                         if real:
                             assert flat[idx] == pytest.approx(expected, rel=1e-4, abs=1e-4)
                         else:

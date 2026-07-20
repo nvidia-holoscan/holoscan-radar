@@ -17,12 +17,13 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from holoscan.radar import CFARDetectorOpF64, CfarVariant  # noqa: E402
 from utils.harness import (  # noqa: E402
     run_operator_multi,
     single_map,
     to_device_array,
 )
+
+from holoscan.radar import CFARDetectorOpF64, CfarVariant  # noqa: E402
 
 pytestmark = [pytest.mark.requires_gpu, pytest.mark.statistical]
 

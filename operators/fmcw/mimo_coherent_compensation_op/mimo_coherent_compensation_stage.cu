@@ -14,6 +14,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace holoscan::radar::detail {
@@ -442,31 +443,6 @@ std::vector<int64_t> ddm_correlate_output_shape(const DdmRdMapsLayout& in,
   return shape;
 }
 
-std::vector<std::complex<double>> build_ddm_code_spectra(
-    const DDMCodeDescriptor& code, int64_t num_doppler) {
-  code.validate();
-  const int64_t num_tx = code.num_tx;
-  const int64_t num_chirps =
-      static_cast<int64_t>(code.phase_codes.size()) / num_tx;
-  const int64_t D = num_doppler;
-  std::vector<std::complex<double>> spectra(
-      static_cast<size_t>(num_tx * D), std::complex<double>(0.0, 0.0));
-  constexpr double kTwoPi = 2.0 * kPi;
-  for (int64_t m = 0; m < num_tx; ++m) {
-    const auto* c_m = &code.phase_codes[static_cast<size_t>(m * num_chirps)];
-    for (int64_t k = 0; k < D; ++k) {
-      std::complex<double> sum(0.0, 0.0);
-      for (int64_t n = 0; n < num_chirps; ++n) {
-        const double angle = -kTwoPi * static_cast<double>(n) *
-                             static_cast<double>(k) / static_cast<double>(D);
-        sum += c_m[n] * std::complex<double>(std::cos(angle), std::sin(angle));
-      }
-      spectra[static_cast<size_t>(m * D + k)] = sum;
-    }
-  }
-  return spectra;
-}
-
 std::vector<std::complex<double>> build_ddm_corr_weights(
     const DDMCodeDescriptor& code, int64_t num_doppler) {
   code.validate();
@@ -505,7 +481,8 @@ namespace {
 
 // Pack center-zero RD tile (batch_rx, D, R) → contiguous (batch_rx, t, D)
 // in fft-order for cuFFT correlation. Block (b, d_fft); threads walk range.
-// ifftshift: out[..., d_fft] = in[..., (d_fft - D/2) mod D].
+// MatX/numpy ifftshift with c = (D + 1) / 2:
+//   out[..., d_fft] = in[..., (d_fft - c) mod D].
 template <typename T>
 __global__ void pack_rd_tile_kernel(const Complex<T>* in, Complex<T>* out,
                                     int64_t batch_rx, int64_t D, int64_t R,
@@ -515,8 +492,8 @@ __global__ void pack_rd_tile_kernel(const Complex<T>* in, Complex<T>* out,
   if (b >= batch_rx || d_fft >= D) {
     return;
   }
-  const int64_t half = D / 2;
-  const int64_t d_cz = (d_fft - half + D) % D;
+  const int64_t c = (D + 1) / 2;
+  const int64_t d_cz = (d_fft - c + D) % D;
   const Complex<T>* in_row = in + (b * D + d_cz) * R + r0;
   for (int64_t ri = static_cast<int64_t>(threadIdx.x); ri < t;
        ri += static_cast<int64_t>(blockDim.x)) {
@@ -540,7 +517,8 @@ __global__ void mul_corr_weights_kernel(const Complex<T>* y_hat,
 }
 
 // Scatter fft-order (Nrx, t, D) → center-zero (Nrx, D, R). Block (rx, d_fft).
-// fftshift: out[..., (d_fft + D/2) mod D] = corr[..., d_fft].
+// MatX fftshift1D maps fft-order j → center-zero (j - c) mod D with
+// c = (D + 1) / 2 (same map as pack; for even D this equals (j + D/2) mod D).
 template <typename T>
 __global__ void scatter_corr_tile_kernel(const Complex<T>* corr,
                                          Complex<T>* out_m, int64_t Nrx,
@@ -551,13 +529,13 @@ __global__ void scatter_corr_tile_kernel(const Complex<T>* corr,
   if (rx >= Nrx || d_fft >= D) {
     return;
   }
-  const int64_t half = D / 2;
-  const int64_t d_cz = (d_fft + half) % D;
+  const int64_t c = (D + 1) / 2;
+  const int64_t d_cz = (d_fft - c + D) % D;
   Complex<T>* out_row = out_m + (rx * D + d_cz) * R + r0;
-  const Complex<T>* c = corr + rx * t * D + d_fft;
+  const Complex<T>* c_ptr = corr + rx * t * D + d_fft;
   for (int64_t ri = static_cast<int64_t>(threadIdx.x); ri < t;
        ri += static_cast<int64_t>(blockDim.x)) {
-    out_row[ri] = c[ri * D];
+    out_row[ri] = c_ptr[ri * D];
   }
 }
 
@@ -602,16 +580,23 @@ struct CufftPlanCache {
   }
 };
 
-CufftPlanCache& plan_cache() {
-  static thread_local CufftPlanCache cache;
-  return cache;
-}
-
 template <typename T>
 struct TileWorkspace {
   Complex<T>* yhat{nullptr};
   Complex<T>* work{nullptr};
   size_t bytes{0};
+
+  ~TileWorkspace() {
+    if (yhat != nullptr) {
+      cudaFree(yhat);
+      yhat = nullptr;
+    }
+    if (work != nullptr) {
+      cudaFree(work);
+      work = nullptr;
+    }
+    bytes = 0;
+  }
 
   void ensure(size_t need, cudaStream_t stream) {
     if (bytes >= need) {
@@ -640,10 +625,25 @@ struct TileWorkspace {
   }
 };
 
-template <typename T>
-TileWorkspace<T>& tile_workspace() {
-  static thread_local TileWorkspace<T> ws;
-  return ws;
+// Per-operator-instance scratch (keyed by MIMOCoherentCompensationOp*).
+// Not shared across instances so interleaved compute() cannot destroy another
+// op's in-flight cuFFT plan.
+struct CorrelateScratch {
+  CufftPlanCache plan;
+  TileWorkspace<float> ws_f;
+  TileWorkspace<double> ws_d;
+};
+
+std::unordered_map<void*, CorrelateScratch>& correlate_scratch_map() {
+  static thread_local std::unordered_map<void*, CorrelateScratch> map;
+  return map;
+}
+
+CorrelateScratch& scratch_for(void* owner) {
+  if (owner == nullptr) {
+    throw std::invalid_argument("ddm correlate: owner must be non-null");
+  }
+  return correlate_scratch_map()[owner];
 }
 
 template <typename T>
@@ -665,10 +665,18 @@ void cufft_c2c(cufftHandle plan, Complex<T>* data, int direction) {
 
 }  // namespace
 
+void release_ddm_correlate_scratch(void* owner) {
+  if (owner == nullptr) {
+    return;
+  }
+  correlate_scratch_map().erase(owner);
+}
+
 template <typename T>
 void run_ddm_correlate_stage(const void* input, void* output,
                              const DdmRdMapsLayout& layout, int64_t num_tx,
-                             const void* d_corr_weights, cudaStream_t stream) {
+                             const void* d_corr_weights, void* owner,
+                             cudaStream_t stream) {
   const int64_t B = layout.batch;
   const int64_t Nrx = layout.num_rx;
   const int64_t D = layout.num_doppler;
@@ -701,16 +709,24 @@ void run_ddm_correlate_stage(const void* input, void* output,
 
   const size_t tile_bytes =
       static_cast<size_t>(batch_rx * tile_r * D) * sizeof(ComplexT);
-  auto& ws = tile_workspace<T>();
-  ws.ensure(tile_bytes, stream);
-  ComplexT* d_yhat = ws.yhat;
-  ComplexT* d_work = ws.work;
+  CorrelateScratch& scratch = scratch_for(owner);
+  ComplexT* d_yhat = nullptr;
+  ComplexT* d_work = nullptr;
+  if constexpr (sizeof(T) == 4) {
+    scratch.ws_f.ensure(tile_bytes, stream);
+    d_yhat = scratch.ws_f.yhat;
+    d_work = scratch.ws_f.work;
+  } else {
+    scratch.ws_d.ensure(tile_bytes, stream);
+    d_yhat = scratch.ws_d.yhat;
+    d_work = scratch.ws_d.work;
+  }
 
   constexpr int kBlock = 256;
   for (int64_t r0 = 0; r0 < R; r0 += tile_r) {
     const int64_t t = std::min(tile_r, R - r0);
     const int nbatch = static_cast<int>(batch_rx * t);
-    plan_cache().ensure(nbatch, static_cast<int>(D), sizeof(T) == 4, stream);
+    scratch.plan.ensure(nbatch, static_cast<int>(D), sizeof(T) == 4, stream);
 
     {
       dim3 grid(static_cast<unsigned>(batch_rx), static_cast<unsigned>(D));
@@ -718,7 +734,7 @@ void run_ddm_correlate_stage(const void* input, void* output,
       pack_rd_tile_kernel<T><<<grid, threads, 0, stream>>>(
           in, d_yhat, batch_rx, D, R, r0, t);
     }
-    cufft_c2c<T>(plan_cache().plan, d_yhat, CUFFT_FORWARD);
+    cufft_c2c<T>(scratch.plan.plan, d_yhat, CUFFT_FORWARD);
 
     for (int64_t m = 0; m < num_tx; ++m) {
       const int mul_blocks = static_cast<int>(
@@ -727,7 +743,7 @@ void run_ddm_correlate_stage(const void* input, void* output,
                                        kBlock));
       mul_corr_weights_kernel<T><<<mul_blocks, kBlock, 0, stream>>>(
           d_yhat, weights + m * D, d_work, nbatch, D, inv_D);
-      cufft_c2c<T>(plan_cache().plan, d_work, CUFFT_INVERSE);
+      cufft_c2c<T>(scratch.plan.plan, d_work, CUFFT_INVERSE);
 
       for (int64_t b = 0; b < B; ++b) {
         ComplexT* out_bm = out_base + ((b * num_tx + m) * Nrx * D * R);
@@ -748,11 +764,12 @@ template void run_ddm_correlate_stage<float>(const void* input, void* output,
                                              const DdmRdMapsLayout& layout,
                                              int64_t num_tx,
                                              const void* d_corr_weights,
-                                             cudaStream_t stream);
+                                             void* owner, cudaStream_t stream);
 template void run_ddm_correlate_stage<double>(const void* input, void* output,
                                               const DdmRdMapsLayout& layout,
                                               int64_t num_tx,
                                               const void* d_corr_weights,
+                                              void* owner,
                                               cudaStream_t stream);
 
 }  // namespace holoscan::radar::detail

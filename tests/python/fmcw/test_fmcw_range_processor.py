@@ -11,26 +11,32 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from holoscan.radar import (  # noqa: E402
-    FMCWWaveformDescriptor,
-    FMCWWaveformSpec,
-    FMCWRangeProcessorOp,
-    FMCWRangeProcessorOpF32,
-    FMCWRangeProcessorOpF64,
-    WindowSpec,
-    WindowType,
-)
 from utils.bin_model import (  # noqa: E402
     K_C,
     expected_range_axis,
     range_of_bin,
 )
-from utils.harness import run_operator, run_operator_multi, single_map, to_device_array  # noqa: E402
+from utils.harness import (  # noqa: E402
+    run_operator,
+    run_operator_multi,
+    single_map,
+    to_device_array,
+)
 from utils.point_target_sim import (  # noqa: E402
     PointTarget,
     SimScene,
     SimWaveform,
     simulate,
+)
+
+from holoscan.radar import (  # noqa: E402
+    FMCWRangeProcessorOp,
+    FMCWRangeProcessorOpF32,
+    FMCWRangeProcessorOpF64,
+    FMCWWaveformDescriptor,
+    FMCWWaveformSpec,
+    WindowSpec,
+    WindowType,
 )
 
 pytestmark = pytest.mark.requires_gpu

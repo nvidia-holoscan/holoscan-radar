@@ -37,7 +37,9 @@ std::vector<std::complex<T>> cast_correction(
 }  // namespace
 
 template <typename T>
-MIMOCoherentCompensationOp<T>::~MIMOCoherentCompensationOp() = default;
+MIMOCoherentCompensationOp<T>::~MIMOCoherentCompensationOp() {
+  detail::release_ddm_correlate_scratch(this);
+}
 
 template <typename T>
 void MIMOCoherentCompensationOp<T>::initialize() {
@@ -198,10 +200,10 @@ void MIMOCoherentCompensationOp<T>::run_ddm_correlate(
         const auto host_weights =
             detail::build_ddm_corr_weights(code, layout.num_doppler);
         const int64_t D = layout.num_doppler;
-        entry.device_spectra =
+        entry.device_corr_weights =
             make_device_tensor({num_tx, D}, complex_dtype<T>());
         if constexpr (sizeof(T) == 8) {
-          if (cudaMemcpyAsync(entry.device_spectra->data(),
+          if (cudaMemcpyAsync(entry.device_corr_weights->data(),
                               host_weights.data(),
                               host_weights.size() * sizeof(std::complex<double>),
                               cudaMemcpyHostToDevice, stream) != cudaSuccess) {
@@ -215,7 +217,7 @@ void MIMOCoherentCompensationOp<T>::run_ddm_correlate(
                 static_cast<float>(host_weights[i].real()),
                 static_cast<float>(host_weights[i].imag()));
           }
-          if (cudaMemcpyAsync(entry.device_spectra->data(), typed.data(),
+          if (cudaMemcpyAsync(entry.device_corr_weights->data(), typed.data(),
                               typed.size() * sizeof(std::complex<float>),
                               cudaMemcpyHostToDevice, stream) != cudaSuccess) {
             throw std::runtime_error(
@@ -228,8 +230,8 @@ void MIMOCoherentCompensationOp<T>::run_ddm_correlate(
   auto output = make_device_tensor(
       detail::ddm_correlate_output_shape(layout, num_tx), input->dtype());
   detail::run_ddm_correlate_stage<T>(input->data(), output->data(), layout,
-                                     num_tx, cached.device_spectra->data(),
-                                     stream);
+                                     num_tx, cached.device_corr_weights->data(),
+                                     this, stream);
 
   if (stream != cudaStreamDefault) {
     op_output.set_cuda_stream(stream, "rd_maps");

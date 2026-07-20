@@ -35,14 +35,15 @@ _APP_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_APP_ROOT) not in sys.path:
     sys.path.insert(0, str(_APP_ROOT))
 
+import cupy as cp  # noqa: E402  # after holoscan.radar (MatX CUDA cache)
 from common.python.demo_config import (  # noqa: E402
     K_C,
     PlotsConfig,
     grid_extent,
     make_ura_geometry,
     parse_cfar_detector,
-    parse_clutter_filter,
     parse_cluster_dbscan,
+    parse_clutter_filter,
     parse_doppler_processor,
     parse_phase_shift_beamformer,
     parse_plots,
@@ -63,13 +64,13 @@ from holoscan.radar import (  # noqa: E402
     BoresightViewOp,
     CadenceMeter,
     CFARDetectorOp,
-    ClutterFilterOp,
     ClusterDBSCANOp,
     ClusterOverlayOp,
+    ClutterFilterOp,
     DetectionReductionOp,
+    FeatureAssemblyOp,
     FMCWDopplerProcessorOp,
     FMCWRangeProcessorOp,
-    FeatureAssemblyOp,
     NullSinkOp,
     PhaseShiftBeamformerOp,
     RdChannelSliceOp,
@@ -77,11 +78,9 @@ from holoscan.radar import (  # noqa: E402
     RollingPlotOp,
     cluster_palette,
     gui_available,
+    install_matx_cache_atexit,  # noqa: E402
     make_turbo_lut,
 )
-
-import cupy as cp  # noqa: E402  # after holoscan.radar (MatX CUDA cache)
-from holoscan.radar import install_matx_cache_atexit  # noqa: E402
 
 install_matx_cache_atexit()
 
@@ -500,10 +499,6 @@ class DenseClusterReportOp(Operator):
 
         num_points = points.shape[0]
         num_clusters = sizes.shape[0]
-        num_az = len(self.az_grid)
-        num_el = len(self.el_grid)
-        num_range = ranges.shape[0]
-        num_doppler = velocities.shape[0]
 
         noise = int(np.sum(labels < 0))
         logger.info(

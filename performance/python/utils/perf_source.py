@@ -8,8 +8,33 @@ from __future__ import annotations
 from typing import Any
 
 from holoscan.core import Operator, OperatorSpec
-
 from utils.perf_app import TimingCollector, now
+
+
+def _infer_emit_type_name(value: Any) -> str | None:
+    """Map a Python override value to a Holoscan EmitterReceiverRegistry name."""
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int64_t"
+    if isinstance(value, float):
+        return "double"
+    if isinstance(value, str):
+        return "std::string"
+    if isinstance(value, list):
+        if not value:
+            return None
+        if isinstance(value[0], bool):
+            return "std::vector<bool>"
+        if isinstance(value[0], int):
+            return "std::vector<int64_t>"
+        if isinstance(value[0], float):
+            return "std::vector<double>"
+        if isinstance(value[0], str):
+            return "std::vector<std::string>"
+        return None
+    name = type(value).__name__
+    return name or None
 
 
 class PerfTensorSourceOp(Operator):
@@ -77,11 +102,16 @@ class PerfOverrideSourceOp(Operator):
         *args,
         target_tick: int,
         value: Any,
+        emit_type: str | None = None,
         **kwargs,
     ):
         self._target_tick = target_tick
         self._value = value
         self._tick = 0
+        if emit_type is not None:
+            self._emit_type = emit_type
+        else:
+            self._emit_type = _infer_emit_type_name(value)
         super().__init__(fragment, *args, **kwargs)
 
     def setup(self, spec: OperatorSpec) -> None:
@@ -89,5 +119,10 @@ class PerfOverrideSourceOp(Operator):
 
     def compute(self, op_input, op_output, context) -> None:
         if self._tick == self._target_tick:
-            op_output.emit(self._value, "output")
+            if self._emit_type is not None:
+                # 3rd arg selects EmitterReceiverRegistry so C++ receive<T>
+                # gets a real T (matches tests/python/utils/harness.py).
+                op_output.emit(self._value, "output", self._emit_type)
+            else:
+                op_output.emit(self._value, "output")
         self._tick += 1

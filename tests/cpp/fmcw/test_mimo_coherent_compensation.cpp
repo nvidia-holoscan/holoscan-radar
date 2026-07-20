@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -1009,7 +1010,8 @@ TEST(MIMOCoherentCompensationOp, DdmNonLinearPhaseCodesCorrelateRecovers) {
   constexpr int64_t d0 = 3;
   constexpr double kPi2 = 2.0 * 3.141592653589793;
   const int64_t D = kNlDoppler;
-  const int64_t d0_cz = (d0 + D / 2) % D;
+  const int64_t c = fft_center(D);
+  const int64_t d0_cz = ((d0 - c) % D + D) % D;
   const std::complex<double> val(1.5, -0.3);
 
   DDMCodeDescriptor code;
@@ -1042,7 +1044,7 @@ TEST(MIMOCoherentCompensationOp, DdmNonLinearPhaseCodesCorrelateRecovers) {
         // fft-order sample, stored at center-zero index (fftshift).
         const int64_t idx = ((k - d0) % D + D) % D;
         const auto y = val * spectrum[static_cast<size_t>(idx)];
-        const int64_t d_cz = (k + D / 2) % D;
+        const int64_t d_cz = ((k - c) % D + D) % D;
         host[static_cast<size_t>((rx * D + d_cz) * kNlRange + r)] =
             std::complex<float>(static_cast<float>(y.real()),
                                 static_cast<float>(y.imag()));
@@ -1082,6 +1084,125 @@ TEST(MIMOCoherentCompensationOp, DdmNonLinearPhaseCodesCorrelateRecovers) {
       EXPECT_NEAR(at_d0.real(), expected.real(), tol) << "rx=" << rx;
       EXPECT_NEAR(at_d0.imag(), expected.imag(), tol) << "rx=" << rx;
       EXPECT_GT(peak, 5.0f * other) << "rx=" << rx;
+    }
+  }
+}
+
+TEST(MIMOCoherentCompensationOp, DdmNonLinearMultiTxSeparatesPeaks) {
+  // Two-TX non-linear Zadoff-Chu codes: Y = val0*shift(C0,d0)+val1*shift(C1,d1).
+  // Correlate demux should place each TX lane's argmax at that TX's Doppler
+  // (center-zero). Odd D exercises MatX (D+1)/2 pack/scatter centers.
+  const auto waveform = make_test_waveform();
+  constexpr int64_t kNlTx = 2;
+  constexpr int64_t kNlRx = 1;
+  constexpr int64_t kNlDoppler = 15;  // odd
+  constexpr int64_t kNlRange = 2;
+  const int64_t num_chirps = kNlDoppler;
+  constexpr int64_t d0 = 2;
+  constexpr int64_t d1 = 5;
+  constexpr double kPi = 3.141592653589793;
+  constexpr double kPi2 = 2.0 * kPi;
+  const int64_t D = kNlDoppler;
+  const int64_t c = fft_center(D);
+  const int64_t d0_cz = ((d0 - c) % D + D) % D;
+  const int64_t d1_cz = ((d1 - c) % D + D) % D;
+  const std::complex<double> val0(1.2, -0.1);
+  const std::complex<double> val1(-0.8, 0.4);
+
+  // Distinct roots coprime to D (same recipe as the ZC demo helper).
+  std::vector<int64_t> roots;
+  for (int64_t u = 1; u < D && static_cast<int64_t>(roots.size()) < kNlTx;
+       ++u) {
+    if (std::gcd(u, D) == 1) {
+      roots.push_back(u);
+    }
+  }
+  ASSERT_EQ(static_cast<int64_t>(roots.size()), kNlTx);
+
+  DDMCodeDescriptor code;
+  code.num_tx = kNlTx;
+  code.guard_bands = 0;
+  code.phase_codes.resize(static_cast<size_t>(kNlTx * num_chirps));
+  const bool odd_n = (num_chirps % 2) != 0;
+  for (int64_t m = 0; m < kNlTx; ++m) {
+    const double u = static_cast<double>(roots[static_cast<size_t>(m)]);
+    for (int64_t k = 0; k < num_chirps; ++k) {
+      const double kd = static_cast<double>(k);
+      const double arg =
+          odd_n ? (-kPi * u * kd * (kd + 1.0) / static_cast<double>(num_chirps))
+                : (-kPi * u * kd * kd / static_cast<double>(num_chirps));
+      code.phase_codes[static_cast<size_t>(m * num_chirps + k)] =
+          std::complex<double>(std::cos(arg), std::sin(arg));
+    }
+  }
+
+  auto code_spectrum = [&](int64_t m) {
+    std::vector<std::complex<double>> spectrum(static_cast<size_t>(D));
+    const auto* c_m =
+        &code.phase_codes[static_cast<size_t>(m * num_chirps)];
+    for (int64_t k = 0; k < D; ++k) {
+      std::complex<double> sum(0.0, 0.0);
+      for (int64_t n = 0; n < num_chirps; ++n) {
+        const double angle = -kPi2 * static_cast<double>(n) *
+                             static_cast<double>(k) / static_cast<double>(D);
+        sum +=
+            c_m[n] * std::complex<double>(std::cos(angle), std::sin(angle));
+      }
+      spectrum[static_cast<size_t>(k)] = sum;
+    }
+    return spectrum;
+  };
+  const auto spec0 = code_spectrum(0);
+  const auto spec1 = code_spectrum(1);
+
+  std::vector<std::complex<float>> host(
+      static_cast<size_t>(kNlRx * D * kNlRange), {0.0f, 0.0f});
+  for (int64_t rx = 0; rx < kNlRx; ++rx) {
+    for (int64_t r = 0; r < kNlRange; ++r) {
+      for (int64_t k = 0; k < D; ++k) {
+        const int64_t idx0 = ((k - d0) % D + D) % D;
+        const int64_t idx1 = ((k - d1) % D + D) % D;
+        const auto y = val0 * spec0[static_cast<size_t>(idx0)] +
+                       val1 * spec1[static_cast<size_t>(idx1)];
+        const int64_t d_cz = ((k - c) % D + D) % D;
+        host[static_cast<size_t>((rx * D + d_cz) * kNlRange + r)] =
+            std::complex<float>(static_cast<float>(y.real()),
+                                static_cast<float>(y.imag()));
+      }
+    }
+  }
+
+  const std::vector<int64_t> shape{kNlRx, kNlDoppler, kNlRange};
+  const auto out = run_ddm_from_host<float>(host, shape, code, waveform);
+  ASSERT_EQ(out.shape.size(), 4U);
+  EXPECT_EQ(out.shape[0], kNlTx);
+  EXPECT_EQ(out.shape[1], kNlRx);
+  EXPECT_EQ(out.shape[2], kNlDoppler);
+  EXPECT_EQ(out.shape[3], kNlRange);
+
+  const auto* data = out.as<std::complex<float>>();
+  for (int64_t rx = 0; rx < kNlRx; ++rx) {
+    for (int64_t r = 0; r < kNlRange; ++r) {
+      for (int64_t m = 0; m < kNlTx; ++m) {
+        const int64_t expect_cz = (m == 0) ? d0_cz : d1_cz;
+        float peak = 0.0f;
+        float other = 0.0f;
+        int64_t peak_bin = -1;
+        for (int64_t d = 0; d < D; ++d) {
+          const auto z = data[static_cast<size_t>(
+              ((m * kNlRx + rx) * D + d) * kNlRange + r)];
+          const float mag = std::abs(z);
+          if (mag > peak) {
+            peak = mag;
+            peak_bin = d;
+          }
+          if (d != expect_cz) {
+            other = std::max(other, mag);
+          }
+        }
+        EXPECT_EQ(peak_bin, expect_cz) << "m=" << m << " rx=" << rx;
+        EXPECT_GT(peak, other) << "m=" << m << " rx=" << rx;
+      }
     }
   }
 }

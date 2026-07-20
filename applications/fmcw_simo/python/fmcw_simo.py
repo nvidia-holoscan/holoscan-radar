@@ -24,7 +24,6 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy as np
 import yaml
 
 _BUILD_DIR = os.environ.get("HOLOSCAN_RADAR_BUILD_DIR")
@@ -39,6 +38,7 @@ _APP_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_APP_ROOT) not in sys.path:
     sys.path.insert(0, str(_APP_ROOT))
 
+import cupy as cp  # noqa: E402  # after holoscan.radar (MatX CUDA cache)
 from common.python.demo_config import (  # noqa: E402
     K_C,
     PlotsConfig,
@@ -46,8 +46,8 @@ from common.python.demo_config import (  # noqa: E402
     make_ura_geometry,
     parse_beamscan_estimator,
     parse_cfar_detector,
-    parse_clutter_filter,
     parse_cluster_dbscan,
+    parse_clutter_filter,
     parse_doppler_processor,
     parse_plots,
     parse_range_processor,
@@ -67,10 +67,10 @@ from holoscan.radar import (  # noqa: E402
     BoresightViewOp,
     CadenceMeter,
     CFARDetectorOp,
-    ClutterFilterOp,
     ClusterDBSCANOp,
     ClusterOverlayOp,
     ClusterReportOp,
+    ClutterFilterOp,
     DetectionReductionOp,
     DetectionReportOp,
     FeatureAssemblyOp,
@@ -83,11 +83,9 @@ from holoscan.radar import (  # noqa: E402
     SnapshotGatherOp,
     cluster_palette,
     gui_available,
+    install_matx_cache_atexit,  # noqa: E402
     make_turbo_lut,
 )
-
-import cupy as cp  # noqa: E402  # after holoscan.radar (MatX CUDA cache)
-from holoscan.radar import install_matx_cache_atexit  # noqa: E402
 
 install_matx_cache_atexit()
 

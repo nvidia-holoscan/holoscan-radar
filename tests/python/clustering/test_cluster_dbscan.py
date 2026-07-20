@@ -11,8 +11,9 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from holoscan.radar import ClusterDBSCANOpF32, ClusterDBSCANOpF64  # noqa: E402
 from utils.harness import run_operator_multi, single_map, to_device_array  # noqa: E402
+
+from holoscan.radar import ClusterDBSCANOpF32, ClusterDBSCANOpF64  # noqa: E402
 
 pytestmark = pytest.mark.requires_gpu
 

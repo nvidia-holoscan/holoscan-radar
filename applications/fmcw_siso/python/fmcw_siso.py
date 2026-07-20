@@ -29,7 +29,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import yaml
 
 # Extend holoscan.__path__ with the build-tree package when HOLOSCAN_RADAR_BUILD_DIR
@@ -42,17 +41,19 @@ if _BUILD_DIR:
     if _build_holoscan not in _holoscan_pkg.__path__:
         _holoscan_pkg.__path__.insert(0, _build_holoscan)
 
-from holoscan.conditions import CountCondition, PeriodicCondition
-from holoscan.core import Application, Operator, OperatorSpec
-from holoscan.operators import HolovizOp
-from holoscan.radar import (
+import cupy as cp  # noqa: E402  # after holoscan.radar (MatX CUDA cache)
+
+from holoscan.conditions import CountCondition, PeriodicCondition  # noqa: E402
+from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
+from holoscan.operators import HolovizOp  # noqa: E402
+from holoscan.radar import (  # noqa: E402
     AssemblyFeature,
-    CFARDetectorOp,
     CadenceMeter,
-    ClutterFilterOp,
+    CFARDetectorOp,
     ClusterDBSCANOp,
     ClusterOverlayOp,
     ClusterReportOp,
+    ClutterFilterOp,
     DetectionReductionOp,
     DetectionReportOp,
     FeatureAssemblyOp,
@@ -65,11 +66,9 @@ from holoscan.radar import (
     RollingPlotOp,
     cluster_palette,
     gui_available,
+    install_matx_cache_atexit,
     make_turbo_lut,
 )
-
-import cupy as cp  # noqa: E402  # after holoscan.radar (MatX CUDA cache)
-from holoscan.radar import install_matx_cache_atexit  # noqa: E402
 
 install_matx_cache_atexit()
 

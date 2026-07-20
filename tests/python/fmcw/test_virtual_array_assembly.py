@@ -11,20 +11,20 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from holoscan.conditions import CountCondition  # noqa: E402
-from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
-from holoscan.radar import (  # noqa: E402
-    ArrayGeometry,
-    OverlapPolicy,
-    VirtualArrayAssemblyOpF32,
-    VirtualArrayAssemblyOpF64,
-)
 from utils.harness import (  # noqa: E402
     TensorMapCapture,
     single_map,
     to_device_array,
     wire_capture_sink,
     wire_data_source,
+)
+
+from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
+from holoscan.radar import (  # noqa: E402
+    ArrayGeometry,
+    OverlapPolicy,
+    VirtualArrayAssemblyOpF32,
+    VirtualArrayAssemblyOpF64,
 )
 
 pytestmark = pytest.mark.requires_gpu

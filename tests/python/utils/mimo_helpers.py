@@ -72,11 +72,11 @@ def expand_chirp_tx_index(schedule: TXSchedule, slow_time: int) -> list[int]:
     return pattern
 
 
-def marker_value(batch: int, tx: int, l: int, rx: int, sample: int) -> float:
+def marker_value(batch: int, tx: int, chirp_of_tx: int, rx: int, sample: int) -> float:
     return (
         10000.0 * float(batch)
         + 1000.0 * float(tx)
-        + 10.0 * float(l)
+        + 10.0 * float(chirp_of_tx)
         + 0.1 * float(rx)
         + 0.01 * float(sample)
     )
@@ -114,12 +114,12 @@ def build_interleaved_cube(
         seen = [0] * K_NUM_TX
         for k in range(slow_time):
             tx = pattern[k]
-            l = seen[tx]
+            chirp_of_tx = seen[tx]
             seen[tx] += 1
             for rx in range(num_rx):
                 for s in range(samples):
                     idx = b * slice_elems + (rx * slow_time + k) * samples + s
-                    m = marker_value(b, tx, l, rx, s)
+                    m = marker_value(b, tx, chirp_of_tx, rx, s)
                     if real:
                         data[idx] = m
                     else:

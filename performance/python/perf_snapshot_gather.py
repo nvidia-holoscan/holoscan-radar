@@ -23,13 +23,9 @@ _PERF_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PERF_DIR not in sys.path:
     sys.path.insert(0, _PERF_DIR)
 
-from utils.bootstrap import bootstrap_radar_package
+from utils.bootstrap import bootstrap_radar_package  # noqa: E402
 
 bootstrap_radar_package()
-
-from holoscan.conditions import CountCondition  # noqa: E402
-from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
-from holoscan.radar import SnapshotEdgeMode, SnapshotGatherOpF32  # noqa: E402
 
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
@@ -48,6 +44,10 @@ from utils.tensor_factory import (  # noqa: E402
     make_iq_cube_device,
     single_map,
 )
+
+from holoscan.conditions import CountCondition  # noqa: E402
+from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
+from holoscan.radar import SnapshotEdgeMode, SnapshotGatherOpF32  # noqa: E402
 
 # v1 characterizes single precision; complex64 sample size / int64 index size.
 _COMPLEX_BYTES = 8.0

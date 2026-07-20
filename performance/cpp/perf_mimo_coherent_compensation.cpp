@@ -372,7 +372,7 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     if (scen.non_linear_ddm) {
       row.notes =
           "DDM non-linear phase_codes conjugate-correlation demux "
-          "(waveform-independent); cold_ms includes initial code-spectrum "
+          "(waveform-independent); cold_ms includes initial corr-weights "
           "build; median/p90 are steady state; [live] waveform override is "
           "inert; cells/s counts input complex samples read; output keeps "
           "full Doppler axis";

@@ -6,8 +6,8 @@
 from __future__ import annotations
 
 import cupy as cp
-from holoscan.core import Operator, OperatorSpec
 
+from holoscan.core import Operator, OperatorSpec
 from utils.perf_app import TimingCollector, now
 
 
