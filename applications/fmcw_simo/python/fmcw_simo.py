@@ -38,26 +38,8 @@ _APP_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_APP_ROOT) not in sys.path:
     sys.path.insert(0, str(_APP_ROOT))
 
-import cupy as cp  # noqa: E402  # after holoscan.radar (MatX CUDA cache)
-from common.python.demo_config import PlotsConfig  # noqa: E402
-from common.python.demo_config import (
-    K_C,
-    grid_extent,
-    make_ura_geometry,
-    parse_beamscan_estimator,
-    parse_cfar_detector,
-    parse_cluster_dbscan,
-    parse_clutter_filter,
-    parse_doppler_processor,
-    parse_plots,
-    parse_range_processor,
-    parse_reduction,
-    parse_run,
-    parse_snapshot_gather,
-    parse_target,
-    parse_waveform,
-)
-
+# Load holoscan.radar before cupy (MatX CUDA cache / atexit ordering).
+# isort: off
 from holoscan.conditions import CountCondition, PeriodicCondition  # noqa: E402
 from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
 from holoscan.operators import HolovizOp  # noqa: E402
@@ -86,6 +68,28 @@ from holoscan.radar import (
     gui_available,
     make_turbo_lut,
 )
+
+import cupy as cp  # noqa: E402
+from common.python.demo_config import PlotsConfig  # noqa: E402
+from common.python.demo_config import (
+    K_C,
+    grid_extent,
+    make_ura_geometry,
+    parse_beamscan_estimator,
+    parse_cfar_detector,
+    parse_cluster_dbscan,
+    parse_clutter_filter,
+    parse_doppler_processor,
+    parse_plots,
+    parse_range_processor,
+    parse_reduction,
+    parse_run,
+    parse_snapshot_gather,
+    parse_target,
+    parse_waveform,
+)
+
+# isort: on
 
 install_matx_cache_atexit()
 

@@ -41,8 +41,8 @@ if _BUILD_DIR:
     if _build_holoscan not in _holoscan_pkg.__path__:
         _holoscan_pkg.__path__.insert(0, _build_holoscan)
 
-import cupy as cp  # noqa: E402  # after holoscan.radar (MatX CUDA cache)
-
+# Load holoscan.radar before cupy (MatX CUDA cache / atexit ordering).
+# isort: off
 from holoscan.conditions import CountCondition, PeriodicCondition  # noqa: E402
 from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
 from holoscan.operators import HolovizOp  # noqa: E402
@@ -69,6 +69,10 @@ from holoscan.radar import (
     install_matx_cache_atexit,
     make_turbo_lut,
 )
+
+import cupy as cp  # noqa: E402
+
+# isort: on
 
 install_matx_cache_atexit()
 
