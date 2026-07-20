@@ -35,6 +35,7 @@ try:
     #    (atexit is LIFO) while CUDA is still alive.
     try:
         import holoscan.radar  # noqa: E402,F401
+
         try:
             import cupy  # noqa: E402,F401
         except ImportError:

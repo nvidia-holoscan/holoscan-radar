@@ -30,19 +30,16 @@ import numpy as np  # noqa: E402
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings, SizeDef  # noqa: E402
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
 )
 from utils.perf_sink import PerfTerminalSinkOp, make_null_sink  # noqa: E402
-from utils.tensor_factory import (  # noqa: E402
-    make_power_map_device,
-    single_map,
-    to_device_array,
-)
+from utils.tensor_factory import make_power_map_device  # noqa: E402
+from utils.tensor_factory import single_map, to_device_array
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
@@ -357,8 +354,8 @@ def _fill_throughput(row: ResultRow, scen: FeatScenario) -> None:
     aoa_bytes = n * 2.0 * tsz if _pack_needs_aoa(scen.pack) else 0.0
     points_bytes = n * float(len(_pack_features(scen.pack))) * tsz
     row.estimated_effective_gbps = (
-        idx_bytes + bins_bytes + score_bytes + aoa_bytes + points_bytes
-    ) / sec / 1e9
+        (idx_bytes + bins_bytes + score_bytes + aoa_bytes + points_bytes) / sec / 1e9
+    )
 
 
 def run_scenario(scen: FeatScenario, rs: RunSettings, report: PerfReport) -> None:

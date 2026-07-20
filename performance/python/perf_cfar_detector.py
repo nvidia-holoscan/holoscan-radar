@@ -33,16 +33,11 @@ bootstrap_radar_package()
 
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
-from utils.perf_report import (  # noqa: E402
-    AlphaCalibrationRow,
-    PerfReport,
-    ResultRow,
-    RunSettings,
-    SizeDef,
-)
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_report import PerfReport  # noqa: E402
+from utils.perf_report import AlphaCalibrationRow, ResultRow, RunSettings, SizeDef
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
@@ -53,9 +48,9 @@ from utils.tensor_factory import make_power_map_device, single_map  # noqa: E402
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application  # noqa: E402
-from holoscan.radar import (  # noqa: E402
+from holoscan.radar import CfarVariant  # noqa: E402
+from holoscan.radar import (
     CFARDetectorOpF32,
-    CfarVariant,
     build_ca_alpha_lut,
     build_go_alpha_lut,
     build_os_alpha_lut,
@@ -459,8 +454,7 @@ def run_scenario(scen: CfarScenario, rs: RunSettings, report: PerfReport) -> Non
 
 def build_alpha_calibration_summary(report: PerfReport) -> None:
     rows: dict[str, AlphaCalibrationRow] = {
-        pair_id: AlphaCalibrationRow(pair_id=pair_id)
-        for _, pair_id in CALIBRATION_PAIR_SPECS
+        pair_id: AlphaCalibrationRow(pair_id=pair_id) for _, pair_id in CALIBRATION_PAIR_SPECS
     }
     for row in report.results:
         if row.bucket != "compute" or not row.calibration_pair:

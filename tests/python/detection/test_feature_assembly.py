@@ -13,10 +13,7 @@ cupy = pytest.importorskip("cupy")
 
 from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
 
-from holoscan.radar import (  # noqa: E402
-    AssemblyFeature,
-    FeatureAssemblyOpF64,
-)
+from holoscan.radar import AssemblyFeature, FeatureAssemblyOpF64  # noqa: E402
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -46,11 +43,15 @@ def run_assembly(
 
     extra: dict[str, list] = {}
     if range_bins is not None:
-        rb = np.asarray(range_bins, dtype=np.float64 if op_cls is FeatureAssemblyOpF64 else np.float32)
+        rb = np.asarray(
+            range_bins,
+            dtype=np.float64 if op_cls is FeatureAssemblyOpF64 else np.float32,
+        )
         extra["range_bins"] = [single_map(to_device_array(rb), "range_bins")]
     if velocity_bins is not None:
         vb = np.asarray(
-            velocity_bins, dtype=np.float64 if op_cls is FeatureAssemblyOpF64 else np.float32
+            velocity_bins,
+            dtype=np.float64 if op_cls is FeatureAssemblyOpF64 else np.float32,
         )
         extra["velocity_bins"] = [single_map(to_device_array(vb), "velocity_bins")]
     if detection_score is not None:
@@ -58,14 +59,10 @@ def run_assembly(
             detection_score,
             dtype=np.float64 if op_cls is FeatureAssemblyOpF64 else np.float32,
         )
-        extra["detection_score"] = [
-            single_map(to_device_array(sc), "detection_score")
-        ]
+        extra["detection_score"] = [single_map(to_device_array(sc), "detection_score")]
     if aoa_estimates is not None:
         aoa = np.asarray(aoa_estimates, dtype=np.float64)
-        extra["aoa_estimates"] = [
-            single_map(to_device_array(aoa), "aoa_estimates")
-        ]
+        extra["aoa_estimates"] = [single_map(to_device_array(aoa), "aoa_estimates")]
 
     def make_op(app):
         return op_cls(app, features=features, name="op_under_test")
@@ -117,9 +114,7 @@ def test_LooksUpPhysicalRangeVelocityAndScore():
 
 def test_EmptyDetectionIdxEmitsEmptyPoints():
     idx = np.empty((0, 2), dtype=np.int64)
-    points = run_assembly(
-        idx, [AssemblyFeature.DOPPLER_BIN, AssemblyFeature.RANGE_BIN]
-    )
+    points = run_assembly(idx, [AssemblyFeature.DOPPLER_BIN, AssemblyFeature.RANGE_BIN])
     assert points.shape == (0, 2)
 
 

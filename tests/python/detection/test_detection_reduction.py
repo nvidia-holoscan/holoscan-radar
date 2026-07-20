@@ -13,12 +13,8 @@ cupy = pytest.importorskip("cupy")
 
 from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
 
-from holoscan.radar import (  # noqa: E402
-    DetectionReductionOpF32,
-    DetectionReductionOpF64,
-    RepresentativePolicy,
-    ScoreMethod,
-)
+from holoscan.radar import DetectionReductionOpF32  # noqa: E402
+from holoscan.radar import DetectionReductionOpF64, RepresentativePolicy, ScoreMethod
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -69,9 +65,7 @@ def test_FirstSelectsLowestIndexPerCluster():
         [[10, 1], [20, 2], [11, 3], [99, 9]],
         dtype=np.int64,
     )
-    rep = run_reduction(
-        labels, idx, representative=RepresentativePolicy.FIRST
-    )
+    rep = run_reduction(labels, idx, representative=RepresentativePolicy.FIRST)
     assert rep.shape == (2, 2)
     assert rep[0, 0] == 10
     assert rep[0, 1] == 1
@@ -155,9 +149,7 @@ def test_MedoidRespectsFeatureWeights():
 def test_ExcludesNoiseAndEmitsOnePerCluster():
     labels = np.array([-1, 0, -1, 1], dtype=np.int64)
     idx = np.array([[9, 9], [0, 1], [8, 8], [2, 3]], dtype=np.int64)
-    rep = run_reduction(
-        labels, idx, representative=RepresentativePolicy.FIRST
-    )
+    rep = run_reduction(labels, idx, representative=RepresentativePolicy.FIRST)
     assert rep.shape == (2, 2)
     assert rep[0, 0] == 0
     assert rep[0, 1] == 1
@@ -219,9 +211,7 @@ def test_FloatDoubleAgreeOnPeak():
 def test_EmptyInputEmitsZeroClusters():
     labels = np.empty((0,), dtype=np.int64)
     idx = np.empty((0, 2), dtype=np.int64)
-    rep = run_reduction(
-        labels, idx, representative=RepresentativePolicy.FIRST
-    )
+    rep = run_reduction(labels, idx, representative=RepresentativePolicy.FIRST)
     assert rep.shape == (0, 2)
 
 
@@ -351,9 +341,7 @@ def test_LiveScoreMethodStickyOverride():
             "detection_idx": [single_map(idx_t, "detection_idx")] * 3,
             "points": [single_map(pts_t, "points")] * 3,
         },
-        overrides={
-            "score_method": [ScoreMethod.WEIGHTED_SUM, ScoreMethod.WEIGHTED_L2]
-        },
+        overrides={"score_method": [ScoreMethod.WEIGHTED_SUM, ScoreMethod.WEIGHTED_L2]},
     )
     assert outs[0][0, 0] == 10 and outs[0][0, 1] == 1
     assert outs[1][0, 0] == 20 and outs[1][0, 1] == 2

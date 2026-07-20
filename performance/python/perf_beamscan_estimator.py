@@ -28,9 +28,9 @@ bootstrap_radar_package()
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings, SizeDef  # noqa: E402
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
@@ -41,8 +41,8 @@ from utils.tensor_factory import make_iq_cube_device, single_map  # noqa: E402
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application  # noqa: E402
-from holoscan.radar import (  # noqa: E402
-    AngleConvention,
+from holoscan.radar import AngleConvention  # noqa: E402
+from holoscan.radar import (
     AngleConventionPreset,
     ArrayGeometry,
     ArrayGeometryType,
@@ -187,9 +187,7 @@ def _fill_throughput(row: ResultRow, scen: BeamScenario) -> None:
     weight_bytes = beams * ch * _COMPLEX_BYTES
     spec_bytes = n * beams * _FLOAT_BYTES
     aoa_bytes = n * 2.0 * _FLOAT_BYTES
-    row.estimated_effective_gbps = (
-        snap_bytes + weight_bytes + spec_bytes + aoa_bytes
-    ) / sec / 1e9
+    row.estimated_effective_gbps = (snap_bytes + weight_bytes + spec_bytes + aoa_bytes) / sec / 1e9
 
 
 def _run_graph(
@@ -292,8 +290,7 @@ def main() -> int:
         tool_name="perf_beamscan_estimator",
         description="BeamscanEstimatorOp performance characterization (Python)",
         size_ladder_defs=[
-            SizeDef(s.id, [s.num_az, s.num_el], s.num_az * s.num_el, s.role)
-            for s in SIZE_LADDER
+            SizeDef(s.id, [s.num_az, s.num_el], s.num_az * s.num_el, s.role) for s in SIZE_LADDER
         ],
         build_full_matrix=build_full_matrix,
         build_default_matrix=build_default_matrix,

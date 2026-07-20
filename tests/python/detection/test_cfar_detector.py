@@ -13,17 +13,10 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from utils.harness import (  # noqa: E402
-    run_operator_multi,
-    single_map,
-    to_device_array,
-)
+from utils.harness import run_operator_multi, single_map, to_device_array  # noqa: E402
 
-from holoscan.radar import (  # noqa: E402
-    CFARDetectorOpF32,
-    CFARDetectorOpF64,
-    CfarVariant,
-)
+from holoscan.radar import CFARDetectorOpF64  # noqa: E402
+from holoscan.radar import CFARDetectorOpF32, CfarVariant
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -86,11 +79,7 @@ def run_cfar(
     """
     arr = np.asarray(host, dtype=dtype).reshape(shape)
     frame = single_map(to_device_array(arr, dtype=dtype), "rd_maps")
-    kwargs = (
-        dict(op_kwargs)
-        if op_kwargs is not None
-        else _ca_kwargs(pfa, **cfar_kwargs)
-    )
+    kwargs = dict(op_kwargs) if op_kwargs is not None else _ca_kwargs(pfa, **cfar_kwargs)
 
     def make_op(app):
         return op_cls(app, name="op_under_test", **kwargs)
@@ -238,15 +227,11 @@ def test_RealAndComplexPathsAgree():
     dt, rt = 10, 22
     floor, peak = 2.0, 80.0
     real_map = power_map(floor, [(dt, rt)], peak)
-    complex_map = np.full(
-        K_DOPPLER * K_RANGE, np.sqrt(floor) + 0.0j, dtype=np.complex128
-    )
+    complex_map = np.full(K_DOPPLER * K_RANGE, np.sqrt(floor) + 0.0j, dtype=np.complex128)
     complex_map[dt * K_RANGE + rt] = np.sqrt(peak) + 0.0j
 
     out_real = run_cfar(real_map, (K_DOPPLER, K_RANGE), pfa=1e-3)
-    out_complex = run_cfar(
-        complex_map, (K_DOPPLER, K_RANGE), dtype=np.complex128, pfa=1e-3
-    )
+    out_complex = run_cfar(complex_map, (K_DOPPLER, K_RANGE), dtype=np.complex128, pfa=1e-3)
     assert num_detections(out_real["idx"]) == num_detections(out_complex["idx"])
     assert idx_contains(out_real["idx"], dt, rt)
     assert idx_contains(out_complex["idx"], dt, rt)
@@ -344,9 +329,7 @@ def test_NciIntegratesChannelsForDetection():
     k_channels = 8
     dt, rt = 8, 16
     floor, weak_peak = 1.0, 14.0
-    cells = [
-        ((c, dt, rt), weak_peak if c == 0 else floor) for c in range(k_channels)
-    ]
+    cells = [((c, dt, rt), weak_peak if c == 0 else floor) for c in range(k_channels)]
     cube = power_cube((k_channels, K_DOPPLER, K_RANGE), floor, cells)
 
     per_channel = run_cfar(cube, (k_channels, K_DOPPLER, K_RANGE), pfa=1e-6)
@@ -470,9 +453,7 @@ def test_LiveNciAxesOverrideMidStreamAndSticky():
     k_channels = 8
     dt, rt = 8, 16
     floor, weak_peak = 1.0, 14.0
-    cells = [
-        ((c, dt, rt), weak_peak if c == 0 else floor) for c in range(k_channels)
-    ]
+    cells = [((c, dt, rt), weak_peak if c == 0 else floor) for c in range(k_channels)]
     cube = power_cube((k_channels, K_DOPPLER, K_RANGE), floor, cells)
     outs = run_cfar_ticks(
         cube,
@@ -596,9 +577,7 @@ def test_BatchIdxIncludesPreservedAxes():
 def test_NciScoreMatchesDetectionOnIntegratedMap():
     """Score-only stand-in for C++ NciMaskMatchesScoreOnIntegratedMap."""
     k_channels = 4
-    cube = power_cube(
-        (k_channels, K_DOPPLER, K_RANGE), 1.0, [((0, 8, 16), 40.0)]
-    )
+    cube = power_cube((k_channels, K_DOPPLER, K_RANGE), 1.0, [((0, 8, 16), 40.0)])
     out = run_cfar(
         cube,
         (k_channels, K_DOPPLER, K_RANGE),
@@ -649,9 +628,7 @@ _VARIANT_CASES = [
 def test_VariantDetectsSingleTargetRealPath(variant, extra):
     dt, rt = 8, 16
     mp = power_map(1.0, [(dt, rt)], 100.0)
-    out = run_cfar(
-        mp, (K_DOPPLER, K_RANGE), pfa=1e-3, cfar_variant=variant, **extra
-    )
+    out = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-3, cfar_variant=variant, **extra)
     assert num_detections(out["idx"]) == 1
     assert out["idx"][0, 0] == dt
     assert out["idx"][0, 1] == rt
@@ -661,9 +638,7 @@ def test_VariantDetectsSingleTargetRealPath(variant, extra):
 @pytest.mark.parametrize("variant,extra", _VARIANT_CASES)
 def test_VariantNoFalseAlarmsOnFlatMap(variant, extra):
     mp = power_map(1.0, [], 1.0)
-    out = run_cfar(
-        mp, (K_DOPPLER, K_RANGE), pfa=1e-6, cfar_variant=variant, **extra
-    )
+    out = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-6, cfar_variant=variant, **extra)
     assert num_detections(out["idx"]) == 0
 
 
@@ -671,18 +646,14 @@ def test_VariantNoFalseAlarmsOnFlatMap(variant, extra):
 def test_VariantNoiseEstimateTracksFloor(variant, extra):
     floor = 3.5
     mp = power_map(floor, [], floor)
-    out = run_cfar(
-        mp, (K_DOPPLER, K_RANGE), pfa=1e-3, cfar_variant=variant, **extra
-    )
+    out = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-3, cfar_variant=variant, **extra)
     assert out["noise"][8, 16] == pytest.approx(floor, abs=1e-5)
 
 
 @pytest.mark.parametrize("variant,extra", _VARIANT_CASES)
 def test_VariantDetectsTwoTargets(variant, extra):
     mp = power_map(1.0, [(4, 8), (12, 24)], 100.0)
-    out = run_cfar(
-        mp, (K_DOPPLER, K_RANGE), pfa=1e-3, cfar_variant=variant, **extra
-    )
+    out = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-3, cfar_variant=variant, **extra)
     assert num_detections(out["idx"]) == 2
     assert idx_contains(out["idx"], 4, 8)
     assert idx_contains(out["idx"], 12, 24)
@@ -701,9 +672,7 @@ def test_VariantFloatDoubleAgree(variant, extra):
         cfar_variant=variant,
         **extra,
     )
-    out_d = run_cfar(
-        mp, (K_DOPPLER, K_RANGE), pfa=1e-3, cfar_variant=variant, **extra
-    )
+    out_d = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-3, cfar_variant=variant, **extra)
     assert num_detections(out_f["idx"]) == num_detections(out_d["idx"])
     assert out_f["idx"][0, 0] == out_d["idx"][0, 0]
     assert out_f["idx"][0, 1] == out_d["idx"][0, 1]
@@ -733,9 +702,7 @@ def test_VariantNciIntegratesChannelsForDetection(variant, extra, weak_peak):
     )
     assert num_detections(per_channel["idx"]) == 0
 
-    cells = [
-        ((c, dt, rt), weak_peak if c == 0 else floor) for c in range(k_channels)
-    ]
+    cells = [((c, dt, rt), weak_peak if c == 0 else floor) for c in range(k_channels)]
     cube = power_cube((k_channels, K_DOPPLER, K_RANGE), floor, cells)
     integrated = run_cfar(
         cube,
@@ -755,9 +722,7 @@ def test_GoMoreConservativeThanCaWithOneSidedInterferer():
     mp = power_map(1.0, [], 1.0).reshape(K_DOPPLER, K_RANGE)
     mp[dt, rt] = 50.0
     mp[dt, rt + 3] = 10000.0
-    out_ca = run_cfar(
-        mp, (K_DOPPLER, K_RANGE), pfa=1e-3, blocking_alpha_lut_rebuild=True
-    )
+    out_ca = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-3, blocking_alpha_lut_rebuild=True)
     out_go = run_cfar(
         mp,
         (K_DOPPLER, K_RANGE),

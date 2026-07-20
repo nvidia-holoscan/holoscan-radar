@@ -29,9 +29,9 @@ bootstrap_radar_package()
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings, SizeDef  # noqa: E402
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
@@ -42,8 +42,8 @@ from utils.tensor_factory import make_iq_cube_device, single_map  # noqa: E402
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application  # noqa: E402
-from holoscan.radar import (  # noqa: E402
-    AngleConvention,
+from holoscan.radar import AngleConvention  # noqa: E402
+from holoscan.radar import (
     AngleConventionPreset,
     ArrayGeometry,
     ArrayGeometryType,
@@ -131,8 +131,7 @@ class BeamScenario:
 
 def make_scenario(s: SizeSpec) -> BeamScenario:
     sid = (
-        f"beamform_{s.id}_c{s.channels}_g{s.num_az}x{s.num_el}"
-        f"_rd{s.num_doppler}x{s.num_range}"
+        f"beamform_{s.id}_c{s.channels}_g{s.num_az}x{s.num_el}" f"_rd{s.num_doppler}x{s.num_range}"
     )
     return BeamScenario(
         id=sid,
@@ -290,8 +289,7 @@ def main() -> int:
         tool_name="perf_phase_shift_beamformer",
         description="PhaseShiftBeamformerOp performance characterization (Python)",
         size_ladder_defs=[
-            SizeDef(s.id, [s.num_az, s.num_el], s.num_az * s.num_el, s.role)
-            for s in SIZE_LADDER
+            SizeDef(s.id, [s.num_az, s.num_el], s.num_az * s.num_el, s.role) for s in SIZE_LADDER
         ],
         build_full_matrix=build_full_matrix,
         build_default_matrix=build_default_matrix,

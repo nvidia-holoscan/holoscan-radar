@@ -171,7 +171,9 @@ def build_misaligned_rd_host(
             for rx in range(num_rx):
                 for d in range(num_doppler):
                     for r in range(num_range):
-                        idx = b * slice_size + (((tx * num_rx + rx) * num_doppler + d) * num_range + r)
+                        idx = b * slice_size + (
+                            ((tx * num_rx + rx) * num_doppler + d) * num_range + r
+                        )
                         corr = table[tx * num_doppler + d]
                         mag = 1.0 + 0.01 * float(rx) + 0.001 * float(r)
                         misaligned = np.conj(corr) * mag
@@ -204,9 +206,7 @@ def expect_tx_lanes_aligned(
                     ref = b * slice_size + ((0 * num_rx + rx) * num_doppler + d) * num_range + r
                     for tx in range(1, num_tx):
                         other = (
-                            b * slice_size
-                            + ((tx * num_rx + rx) * num_doppler + d) * num_range
-                            + r
+                            b * slice_size + ((tx * num_rx + rx) * num_doppler + d) * num_range + r
                         )
                         assert flat[other].real == pytest.approx(flat[ref].real, abs=tol)
                         assert flat[other].imag == pytest.approx(flat[ref].imag, abs=tol)
@@ -277,5 +277,7 @@ def build_ddm_input_host(
                 for r in range(num_range):
                     idx = b * slice_size + (rx * d + in_cz) * num_range + r
                     host[idx] = ddm_cell_value(m, rx, r)
-    shape = (batch, num_rx, num_doppler, num_range) if batch > 1 else (num_rx, num_doppler, num_range)
+    shape = (
+        (batch, num_rx, num_doppler, num_range) if batch > 1 else (num_rx, num_doppler, num_range)
+    )
     return host.reshape(shape)

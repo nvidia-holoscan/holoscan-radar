@@ -30,9 +30,9 @@ import numpy as np  # noqa: E402
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings  # noqa: E402
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
@@ -43,11 +43,8 @@ from utils.tensor_factory import single_map  # noqa: E402
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
-from holoscan.radar import (  # noqa: E402
-    DetectionReductionOpF32,
-    RepresentativePolicy,
-    ScoreMethod,
-)
+from holoscan.radar import DetectionReductionOpF32  # noqa: E402
+from holoscan.radar import RepresentativePolicy, ScoreMethod
 
 # ---------------------------------------------------------------------------
 # Size ladder — keep aligned with perf_detection_reduction.cpp
@@ -296,9 +293,7 @@ def _fill_throughput(row: ResultRow, scen: RedScenario) -> None:
     # peak/medoid).
     points_bytes = n * float(scen.num_features) * tsz
     rep_bytes = float(scen.num_clusters) * 2.0 * 8.0
-    row.estimated_effective_gbps = (
-        labels_bytes + idx_bytes + points_bytes + rep_bytes
-    ) / sec / 1e9
+    row.estimated_effective_gbps = (labels_bytes + idx_bytes + points_bytes + rep_bytes) / sec / 1e9
 
 
 def _base_row(scen: RedScenario) -> ResultRow:
@@ -444,9 +439,7 @@ def main() -> int:
         exercised_size_ids=lambda scen: scen.size_id,
         process_warmup=_process_warmup,
         full_default=False,
-        full_help=(
-            "Full matrix (policies x sizes + feature_weights/score_method overrides)"
-        ),
+        full_help=("Full matrix (policies x sizes + feature_weights/score_method overrides)"),
     )
 
 

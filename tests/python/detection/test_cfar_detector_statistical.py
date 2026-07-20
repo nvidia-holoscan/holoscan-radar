@@ -17,11 +17,7 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from utils.harness import (  # noqa: E402
-    run_operator_multi,
-    single_map,
-    to_device_array,
-)
+from utils.harness import run_operator_multi, single_map, to_device_array  # noqa: E402
 
 from holoscan.radar import CFARDetectorOpF64, CfarVariant  # noqa: E402
 
@@ -99,9 +95,7 @@ def run_monte_carlo_pfa_k1(
     for _ in range(num_trials):
         # Exponential power with mean 1 (same as C++ exponential_distribution).
         mp = rng.exponential(scale=1.0, size=(num_doppler, num_range))
-        frames.append(
-            single_map(to_device_array(mp, dtype=np.float64), "rd_maps")
-        )
+        frames.append(single_map(to_device_array(mp, dtype=np.float64), "rd_maps"))
 
     def make_op(app):
         return CFARDetectorOpF64(
@@ -138,12 +132,8 @@ def run_monte_carlo_pfa_nci(
     rng = np.random.default_rng(seed)
     frames = []
     for _ in range(num_trials):
-        cube = rng.exponential(
-            scale=1.0, size=(num_channels, num_doppler, num_range)
-        )
-        frames.append(
-            single_map(to_device_array(cube, dtype=np.float64), "rd_maps")
-        )
+        cube = rng.exponential(scale=1.0, size=(num_channels, num_doppler, num_range))
+        frames.append(single_map(to_device_array(cube, dtype=np.float64), "rd_maps"))
 
     def make_op(app):
         return CFARDetectorOpF64(
@@ -179,9 +169,7 @@ def run_monte_carlo_pfa_nci(
 )
 def test_MonteCarloPfaK1(variant, seed, min_tol):
     trials, doppler, ranges, pfa = 30, 64, 64, 1e-2
-    interior, false_alarms = run_monte_carlo_pfa_k1(
-        trials, doppler, ranges, pfa, seed, variant
-    )
+    interior, false_alarms = run_monte_carlo_pfa_k1(trials, doppler, ranges, pfa, seed, variant)
     assert interior > 0
     realized = float(false_alarms) / float(interior)
     expect_realized_pfa_near_configured(realized, pfa, interior, min_tol)

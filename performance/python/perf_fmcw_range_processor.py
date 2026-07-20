@@ -30,9 +30,9 @@ bootstrap_radar_package()
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings, SizeDef  # noqa: E402
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
@@ -43,8 +43,8 @@ from utils.tensor_factory import make_iq_cube_device, single_map  # noqa: E402
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application  # noqa: E402
-from holoscan.radar import (  # noqa: E402
-    FMCWRangeProcessorOpF32,
+from holoscan.radar import FMCWRangeProcessorOpF32  # noqa: E402
+from holoscan.radar import (
     FMCWWaveformDescriptor,
     FMCWWaveformSpec,
     WindowSpec,
@@ -119,9 +119,7 @@ def _cube_shape(scen: RangeScenario) -> tuple[int, ...]:
     return (scen.num_chirps, scen.samples_per_chirp)
 
 
-def make_scenario(
-    window: WindowType, size: SizeDef, channels: int = 1
-) -> RangeScenario:
+def make_scenario(window: WindowType, size: SizeDef, channels: int = 1) -> RangeScenario:
     num_chirps, samples_per_chirp = size.shape
     sid = f"range_{_window_tag(window)}_{size.id}"
     if channels > 1:
@@ -223,9 +221,7 @@ def _run_graph(
             )
             self.add_flow(src, op, {("adc_cube", "adc_cube")})
 
-            profiles_sink = PerfTerminalSinkOp(
-                self, collector=collector, name="profiles_sink"
-            )
+            profiles_sink = PerfTerminalSinkOp(self, collector=collector, name="profiles_sink")
             self.add_flow(op, profiles_sink, {("range_profiles", "input")})
 
             # range_bins is optional but emitted (waveform is set); drain it

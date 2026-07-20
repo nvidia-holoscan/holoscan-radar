@@ -27,9 +27,7 @@ def expected_range_bin(
 def expected_range_axis(
     num_bins: int, slope: float, sample_rate: float, nfft: int, c: float = K_C
 ) -> list[float]:
-    return [
-        range_of_bin(i, slope, sample_rate, nfft, c) for i in range(num_bins)
-    ]
+    return [range_of_bin(i, slope, sample_rate, nfft, c) for i in range(num_bins)]
 
 
 def doppler_frequency(radial_velocity: float, wavelength: float) -> float:

@@ -1,8 +1,8 @@
 # Progress update for Dylan
 
-**Date:** 2026-07-19  
-**Author:** Dan (dpc)  
-**Scope:** Everything developed since you left — currently at tip of `dpc/python-bindings` (includes the full `dpc/integration` stack). ~42 commits ahead of `origin/main` (main is through detection-full, PR #10).  
+**Date:** 2026-07-19
+**Author:** Dan (dpc)
+**Scope:** Everything developed since you left — currently at tip of `dpc/python-bindings` (includes the full `dpc/integration` stack). ~42 commits ahead of `origin/main` (main is through detection-full, PR #10).
 **Status:** Forward development **paused** pending your return. Most of the FMCW SISO→SIMO→MIMO→dense wave is checklist-complete; Python bindings checklist-complete pending PR; one MVDR param and the next subspace estimators wait on team decisions.
 
 ---
@@ -60,7 +60,7 @@ Shared GPU steering: `radar_common_steering` / `build_steering_weights_device` (
 
 ## 3. Notable technical details (worth a skim)
 
-**DDM-NL (`MIMOCoherentCompensationOp`):**  
+**DDM-NL (`MIMOCoherentCompensationOp`):**
 Non-linear `phase_codes` → conjugate correlation; `guard_bands == 0`; `num_chirps == num_doppler`; full Doppler axis out. Linear codes still gather. Imposed rules in operator `OPEN_ITEMS.md` §A.10. Perf: `ddm_nl` (~16 ms `xl` median on RTX PRO 6000 vs ~2 ms gather); remaining wall time mostly per-tick output alloc of large maps — annotated under module `operators/OPEN_ITEMS.md` §1 (**do not land ping-pong without revisit**).
 
 **Try NL demo:**
@@ -105,19 +105,19 @@ L1–L12 in `TEAM_BLOCKED.md` (bool DLPack, CFAR NCI/α/`alpha_lut`/`detection_i
 
 ### Natural next development (after decisions)
 
-1. Land this work on main (integration ± bindings PR strategy is your call).  
-2. Resolve **S1** → finish MVDR.  
-3. Resolve **S2/S3** → MUSIC / Root-MUSIC / ESPRIT wave.  
-4. Resolve **S4** when hardening dense→cluster.  
+1. Land this work on main (integration ± bindings PR strategy is your call).
+2. Resolve **S1** → finish MVDR.
+3. Resolve **S2/S3** → MUSIC / Root-MUSIC / ESPRIT wave.
+4. Resolve **S4** when hardening dense→cluster.
 5. Optional: fused keep/kill from harness numbers; ping-pong only if the team revisits §1.
 
 ---
 
 ## 5. Suggested first actions when you are back
 
-1. Read this + skim [`STATUS.md`](STATUS.md) in-flight table and [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md).  
-2. Decide how to land: one stacked PR from current tip, or integration first then bindings.  
-3. Smoke what you care about (SISO Holoviz, MIMO TDM/DDM/NL, dense SIMO, Python import/pytest).  
+1. Read this + skim [`STATUS.md`](STATUS.md) in-flight table and [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md).
+2. Decide how to land: one stacked PR from current tip, or integration first then bindings.
+3. Smoke what you care about (SISO Holoviz, MIMO TDM/DDM/NL, dense SIMO, Python import/pytest).
 4. Short design sync on **S1–S4** before anyone starts the next angle estimators.
 
 ---
@@ -284,7 +284,7 @@ export HOLOSCAN_RADAR_BUILD_DIR="${HOLOSCAN_RADAR_BUILD_DIR:-./build}"
 ulimit -s 32768
 ```
 
-**Config resolution (C++):** optional YAML path on the CLI. Bare names (e.g. `fmcw_mimo_ddm.yaml`) are tried relative to cwd, then next to the binary (where CMake stages copies). No arg → default YAML beside the binary.  
+**Config resolution (C++):** optional YAML path on the CLI. Bare names (e.g. `fmcw_mimo_ddm.yaml`) are tried relative to cwd, then next to the binary (where CMake stages copies). No arg → default YAML beside the binary.
 **Config resolution (Python):** optional YAML path; default is the matching `applications/.../cpp/*.yaml`. Each app inserts `build/python/lib/holoscan` onto `holoscan.__path__` when `HOLOSCAN_RADAR_BUILD_DIR` is set.
 
 **Display:** full demos use `visualize: true`. No display → warning and log-only (or set `visualize: false` / `headless: true`). `*_smoke.yaml` under `python/` are short headless-friendly configs for CI-style smoke.

@@ -11,8 +11,8 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from utils.angle_helpers import (  # noqa: E402
-    linspace,
+from utils.angle_helpers import linspace  # noqa: E402
+from utils.angle_helpers import (
     make_planar_ura_geometry,
     make_steering_snapshot,
     make_ula_geometry,
@@ -287,12 +287,8 @@ def test_MultiSourceRecoversTwoDoa():
         abs(az_a - az1) < 0.03 and abs(az_b - az0) < 0.03
     )
     assert matched, f"az_a={az_a} az_b={az_b}"
-    assert float(out["doa_multi"][0, 0, 0]) == pytest.approx(
-        float(out["aoa"][0, 0]), abs=1e-9
-    )
-    assert float(out["doa_multi"][0, 0, 1]) == pytest.approx(
-        float(out["aoa"][0, 1]), abs=1e-9
-    )
+    assert float(out["doa_multi"][0, 0, 0]) == pytest.approx(float(out["aoa"][0, 0]), abs=1e-9)
+    assert float(out["doa_multi"][0, 0, 1]) == pytest.approx(float(out["aoa"][0, 1]), abs=1e-9)
 
 
 def test_MaxSourcesCapacityNanFillsUnusedRows():

@@ -11,18 +11,18 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from utils.harness import (  # noqa: E402
+from utils.harness import single_map  # noqa: E402
+from utils.harness import (
     TensorMapCapture,
-    single_map,
     to_device_array,
     wire_capture_sink,
     wire_data_source,
 )
 
 from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
-from holoscan.radar import (  # noqa: E402
+from holoscan.radar import OverlapPolicy  # noqa: E402
+from holoscan.radar import (
     ArrayGeometry,
-    OverlapPolicy,
     VirtualArrayAssemblyOpF32,
     VirtualArrayAssemblyOpF64,
 )
@@ -63,9 +63,7 @@ def analytic_virtual_positions(
     for tx in range(num_tx):
         for rx in range(num_rx):
             for i in range(3):
-                out.append(
-                    tx_positions[tx * 3 + i] + rx_positions[rx * 3 + i]
-                )
+                out.append(tx_positions[tx * 3 + i] + rx_positions[rx * 3 + i])
     return out
 
 
@@ -145,9 +143,7 @@ def run_assembly(
             )
             wire_data_source(self, op, "rd_maps", [frame])
             wire_capture_sink(self, op, "rd_maps", rd_capture)
-            sink = _ArrayGeometryCaptureOp(
-                self, store=geom_capture.frames, name="geom_sink"
-            )
+            sink = _ArrayGeometryCaptureOp(self, store=geom_capture.frames, name="geom_sink")
             self.add_flow(op, sink, {("array_geometry", "input")})
 
     _App().run()
@@ -156,7 +152,9 @@ def run_assembly(
     return rd_capture.frames[0], geom_capture.frames[0]
 
 
-def expect_geometry_positions(geom: ArrayGeometry, expected: list[float], wavelength: float = K_WAVELENGTH):
+def expect_geometry_positions(
+    geom: ArrayGeometry, expected: list[float], wavelength: float = K_WAVELENGTH
+):
     assert len(geom.element_positions) == len(expected)
     for got, exp in zip(geom.element_positions, expected):
         assert got == pytest.approx(exp, abs=1e-9)

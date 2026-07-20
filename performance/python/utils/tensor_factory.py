@@ -66,17 +66,13 @@ def make_iq_cube_device(shape: Sequence[int]) -> cp.ndarray:
     phase1 = (2.0 * math.pi * 5.0) * s / denom
     phase2 = (2.0 * math.pi * 17.0) * s / denom
     tone = cp.empty(n, dtype=cp.complex64)
-    tone.real = (cp.cos(phase1) + 0.5 * cp.cos(phase2) + 0.1).astype(
-        cp.float32, copy=False
-    )
+    tone.real = (cp.cos(phase1) + 0.5 * cp.cos(phase2) + 0.1).astype(cp.float32, copy=False)
     tone.imag = (cp.sin(phase1) + 0.5 * cp.sin(phase2)).astype(cp.float32, copy=False)
     # Broadcast last-axis tone across leading dims (one device alloc for result).
     return cp.broadcast_to(tone, shape_t).copy()
 
 
-def deterministic_detection_idx_host(
-    detections: int, doppler: int, range_bins: int
-) -> np.ndarray:
+def deterministic_detection_idx_host(detections: int, doppler: int, range_bins: int) -> np.ndarray:
     """Deterministic (doppler_bin, range_bin) grid, wrapping across the RD plane."""
     host = np.zeros((max(detections, 0), 2), dtype=np.int64)
     cells = max(doppler * range_bins, 1)

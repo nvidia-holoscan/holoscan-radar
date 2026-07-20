@@ -19,12 +19,8 @@ cupy = pytest.importorskip("cupy")
 
 from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
 
-from holoscan.radar import (  # noqa: E402
-    ClutterFilterMethod,
-    ClutterFilterOp,
-    ClutterFilterOpF32,
-    ClutterFilterOpF64,
-)
+from holoscan.radar import ClutterFilterOp  # noqa: E402
+from holoscan.radar import ClutterFilterMethod, ClutterFilterOpF32, ClutterFilterOpF64
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -225,9 +221,7 @@ def test_MeanSubtractionPreservesMovingTarget():
     both = _simulate(scene)
 
     host = both.cube.astype(np.complex64)
-    out = _run_single(
-        host, both.shape, ClutterFilterMethod.MEAN_SUBTRACTION
-    )
+    out = _run_single(host, both.shape, ClutterFilterMethod.MEAN_SUBTRACTION)
     assert out.shape == both.shape
     e_out = _tensor_energy(out)
     e_moving = float(np.sum(np.abs(moving_only.cube) ** 2))
@@ -263,18 +257,14 @@ def test_MethodConfigurableFromYamlNode(tmp_path):
     ``YAML::convert<ClutterFilterMethod>`` runs at initialize().
     """
     cfg = tmp_path / "clutter_filter.yaml"
-    cfg.write_text(
-        "%YAML 1.2\n---\nclutter_filter:\n  method: single_delay\n"
-    )
+    cfg.write_text("%YAML 1.2\n---\nclutter_filter:\n  method: single_delay\n")
     tone = doppler_tone(K_CHIRPS, K_BINS, 0.19)
     arr = np.asarray(tone).reshape((K_CHIRPS, K_BINS))
     frame = single_map(to_device_array(arr), "range_profiles")
 
     def make_op(app):
         app.config(str(cfg))
-        return ClutterFilterOpF32(
-            app, app.from_config("clutter_filter"), name="op_under_test"
-        )
+        return ClutterFilterOpF32(app, app.from_config("clutter_filter"), name="op_under_test")
 
     outs = run_operator(make_op, frame)
     assert len(outs) == 1
@@ -321,9 +311,7 @@ def test_LeadingBatchAxesPreservedAndIndependent():
     slice1 = doppler_tone(nc, nb, 0.125) + np.complex64(2.0 - 1.0j)
     host = np.stack([slice0, slice1], axis=0)
 
-    out = _run_single(
-        host, (batch, nc, nb), ClutterFilterMethod.MEAN_SUBTRACTION, key="adc"
-    )
+    out = _run_single(host, (batch, nc, nb), ClutterFilterMethod.MEAN_SUBTRACTION, key="adc")
     assert out.shape == (batch, nc, nb)
 
     for b in range(batch):
@@ -331,13 +319,9 @@ def test_LeadingBatchAxesPreservedAndIndependent():
             mean = np.mean(host[b, :, r])
             expected = host[b, :, r] - mean
             got = out[b, :, r]
-            assert np.max(np.abs(got - expected)) < 1e-5, (
-                f"cell batch={b} bin={r}"
-            )
+            assert np.max(np.abs(got - expected)) < 1e-5, f"cell batch={b} bin={r}"
 
-    delayed = _run_single(
-        host, (batch, nc, nb), ClutterFilterMethod.SINGLE_DELAY
-    )
+    delayed = _run_single(host, (batch, nc, nb), ClutterFilterMethod.SINGLE_DELAY)
     assert delayed.shape == (batch, nc - 1, nb)
 
 
@@ -429,12 +413,8 @@ def test_FloatAndDoubleAgree():
         ClutterFilterMethod.SINGLE_DELAY,
         ClutterFilterMethod.DOUBLE_DELAY,
     ):
-        out_f = _run_single(
-            tone_f, (K_CHIRPS, K_BINS), method, op_cls=ClutterFilterOpF32
-        )
-        out_d = _run_single(
-            tone_d, (K_CHIRPS, K_BINS), method, op_cls=ClutterFilterOpF64
-        )
+        out_f = _run_single(tone_f, (K_CHIRPS, K_BINS), method, op_cls=ClutterFilterOpF32)
+        out_d = _run_single(tone_d, (K_CHIRPS, K_BINS), method, op_cls=ClutterFilterOpF64)
         assert out_f.shape == out_d.shape
         scale = max(_max_abs(out_d), 1.0)
         diff = np.abs(out_f.astype(np.complex128) - out_d)

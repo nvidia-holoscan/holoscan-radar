@@ -35,9 +35,9 @@ bootstrap_radar_package()
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings, SizeDef  # noqa: E402
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
@@ -48,8 +48,8 @@ from utils.tensor_factory import make_iq_cube_device, single_map  # noqa: E402
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application  # noqa: E402
-from holoscan.radar import (  # noqa: E402
-    ClutterFilterMethod,
+from holoscan.radar import ClutterFilterMethod  # noqa: E402
+from holoscan.radar import (
     FMCWRangeDopplerProcessorOpF32,
     FMCWWaveformDescriptor,
     FMCWWaveformSpec,
@@ -123,9 +123,7 @@ def _cube_shape(scen: FusedScenario) -> tuple[int, ...]:
     return (scen.num_chirps, scen.samples_per_chirp)
 
 
-def make_scenario(
-    clutter: ClutterFilterMethod, size: SizeDef, channels: int = 1
-) -> FusedScenario:
+def make_scenario(clutter: ClutterFilterMethod, size: SizeDef, channels: int = 1) -> FusedScenario:
     num_chirps, samples_per_chirp = size.shape
     sid = f"rdproc_{_clutter_tag(clutter)}_{size.id}"
     if channels > 1:
@@ -289,17 +287,14 @@ def run_scenario(scen: FusedScenario, rs: RunSettings, report: PerfReport) -> No
 def _process_warmup(_rs: RunSettings) -> None:
     discarded = PerfReport()
     warm = RunSettings(warmup_frames=0, measured_frames=2, repeats=1)
-    run_scenario(
-        make_scenario(ClutterFilterMethod.NONE, _must_find_size("xs")), warm, discarded
-    )
+    run_scenario(make_scenario(ClutterFilterMethod.NONE, _must_find_size("xs")), warm, discarded)
 
 
 def main() -> int:
     return run_perf_matrix_main(
         tool_name="perf_fmcw_range_doppler_processor",
         description=(
-            "FMCWRangeDopplerProcessorOp (fused) performance characterization "
-            "(Python)"
+            "FMCWRangeDopplerProcessorOp (fused) performance characterization " "(Python)"
         ),
         size_ladder_defs=SIZE_LADDER,
         build_full_matrix=build_full_matrix,

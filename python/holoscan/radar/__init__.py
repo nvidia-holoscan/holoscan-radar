@@ -3,12 +3,10 @@
 
 """holoscan.radar — GPU radar signal-processing operators for Holoscan."""
 
-from .beamscan_estimator_op import (  # noqa: F401
-    BeamscanEstimatorOpF32,
-    BeamscanEstimatorOpF64,
-)
-from .cfar_detector_op import (  # noqa: F401
-    CFARDetectorOpF32,
+from .beamscan_estimator_op import BeamscanEstimatorOpF32  # noqa: F401
+from .beamscan_estimator_op import BeamscanEstimatorOpF64
+from .cfar_detector_op import CFARDetectorOpF32  # noqa: F401
+from .cfar_detector_op import (
     CFARDetectorOpF64,
     CfarVariant,
     build_ca_alpha_lut,
@@ -18,20 +16,12 @@ from .cfar_detector_op import (  # noqa: F401
     ca_cfar_alpha,
     ca_cfar_pfa_from_alpha,
 )
-from .cluster_dbscan_op import (  # noqa: F401
-    ClusterDBSCANOpF32,
-    ClusterDBSCANOpF64,
-)
+from .cluster_dbscan_op import ClusterDBSCANOpF32, ClusterDBSCANOpF64  # noqa: F401
 from .clutter_filter_op import ClutterFilterOpF32, ClutterFilterOpF64  # noqa: F401
-from .detection_reduction_op import (  # noqa: F401
-    DetectionReductionOpF32,
-    DetectionReductionOpF64,
-)
-from .feature_assembly_op import (  # noqa: F401
-    AssemblyFeature,
-    FeatureAssemblyOpF32,
-    FeatureAssemblyOpF64,
-)
+from .detection_reduction_op import DetectionReductionOpF32  # noqa: F401
+from .detection_reduction_op import DetectionReductionOpF64
+from .feature_assembly_op import AssemblyFeature  # noqa: F401
+from .feature_assembly_op import FeatureAssemblyOpF32, FeatureAssemblyOpF64
 from .fmcw_doppler_processor_op import (  # noqa: F401
     FMCWDopplerProcessorOpF32,
     FMCWDopplerProcessorOpF64,
@@ -40,30 +30,23 @@ from .fmcw_range_doppler_processor_op import (  # noqa: F401
     FMCWRangeDopplerProcessorOpF32,
     FMCWRangeDopplerProcessorOpF64,
 )
-from .fmcw_range_processor_op import (  # noqa: F401
-    FMCWRangeProcessorOpF32,
-    FMCWRangeProcessorOpF64,
-)
+from .fmcw_range_processor_op import FMCWRangeProcessorOpF32  # noqa: F401
+from .fmcw_range_processor_op import FMCWRangeProcessorOpF64
 from .mimo_coherent_compensation_op import (  # noqa: F401
     MIMOCoherentCompensationOpF32,
     MIMOCoherentCompensationOpF64,
 )
-from .mimo_deinterleave_op import (  # noqa: F401
-    MIMODeinterleaveOpF32,
-    MIMODeinterleaveOpF64,
-)
-from .mvdr_estimator_op import (  # noqa: F401
-    MVDREstimatorOpF32,
-    MVDREstimatorOpF64,
-    retire_matx_solver_caches,
-)
+from .mimo_deinterleave_op import MIMODeinterleaveOpF32  # noqa: F401
+from .mimo_deinterleave_op import MIMODeinterleaveOpF64
+from .mvdr_estimator_op import MVDREstimatorOpF32  # noqa: F401
+from .mvdr_estimator_op import MVDREstimatorOpF64, retire_matx_solver_caches
 from .phase_shift_beamformer_op import (  # noqa: F401
     PhaseShiftBeamformerOpF32,
     PhaseShiftBeamformerOpF64,
 )
-from .radar_app import (  # noqa: F401
+from .radar_app import CadenceMeter  # noqa: F401
+from .radar_app import (
     BoresightViewOp,
-    CadenceMeter,
     ClusterOverlayOp,
     ClusterReportOp,
     DetectionReportOp,
@@ -75,8 +58,8 @@ from .radar_app import (  # noqa: F401
     gui_available,
     make_turbo_lut,
 )
-from .radar_common import (  # noqa: F401
-    DEFAULT_PROPAGATION_SPEED,
+from .radar_common import DEFAULT_PROPAGATION_SPEED  # noqa: F401
+from .radar_common import (
     AngleConvention,
     AngleConventionPreset,
     ArrayGeometry,
@@ -99,10 +82,7 @@ from .radar_common import (  # noqa: F401
     WindowType,
     make_device_tensor,
 )
-from .snapshot_gather_op import (  # noqa: F401
-    SnapshotGatherOpF32,
-    SnapshotGatherOpF64,
-)
+from .snapshot_gather_op import SnapshotGatherOpF32, SnapshotGatherOpF64  # noqa: F401
 from .virtual_array_assembly_op import (  # noqa: F401
     VirtualArrayAssemblyOpF32,
     VirtualArrayAssemblyOpF64,

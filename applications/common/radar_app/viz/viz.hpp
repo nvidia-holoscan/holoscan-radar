@@ -131,7 +131,8 @@ class RdMapToImageOp : public holoscan::Operator {
     const auto shape = rd_map->shape();
     if (shape.size() != 2) {
       throw std::runtime_error(
-          "RdMapToImageOp: expected a rank-2 rd_map (doppler, range), got rank " +
+          "RdMapToImageOp: expected rank-2 rd_map "
+          "(doppler, range), got rank " +
           std::to_string(shape.size()));
     }
     const int64_t num_doppler = shape[0];

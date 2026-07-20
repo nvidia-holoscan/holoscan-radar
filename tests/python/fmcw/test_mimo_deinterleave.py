@@ -12,9 +12,9 @@ holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
 from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
-from utils.mimo_helpers import (  # noqa: E402
+from utils.mimo_helpers import K_NUM_RX  # noqa: E402
+from utils.mimo_helpers import (
     K_CHIRPS_PER_TX,
-    K_NUM_RX,
     K_NUM_TX,
     K_SAMPLES,
     K_SLOW_TIME,
@@ -81,7 +81,9 @@ def expect_deinterleaved(out: np.ndarray, shape: tuple[int, ...], *, real: bool 
             for rx in range(num_rx):
                 for chirp_of_tx in range(chirps_per_tx):
                     for s in range(samples):
-                        idx = b * slice_elems + (((tx * num_rx + rx) * chirps_per_tx + chirp_of_tx) * samples + s)
+                        idx = b * slice_elems + (
+                            ((tx * num_rx + rx) * chirps_per_tx + chirp_of_tx) * samples + s
+                        )
                         expected = marker_value(b, tx, chirp_of_tx, rx, s)
                         if real:
                             assert flat[idx] == pytest.approx(expected, rel=1e-4, abs=1e-4)
@@ -144,12 +146,22 @@ def test_FloatDoubleAgreement():
     host_f = build_interleaved_cube(pattern, shape, dtype=np.complex64)
     host_d = build_interleaved_cube(pattern, shape, dtype=np.complex128)
     out_f = run_deinterleave(
-        host_f, (K_NUM_TX, K_NUM_RX, K_CHIRPS_PER_TX, K_SAMPLES), schedule, op_cls=MIMODeinterleaveOpF32
+        host_f,
+        (K_NUM_TX, K_NUM_RX, K_CHIRPS_PER_TX, K_SAMPLES),
+        schedule,
+        op_cls=MIMODeinterleaveOpF32,
     )
     out_d = run_deinterleave(
-        host_d, (K_NUM_TX, K_NUM_RX, K_CHIRPS_PER_TX, K_SAMPLES), schedule, op_cls=MIMODeinterleaveOpF64
+        host_d,
+        (K_NUM_TX, K_NUM_RX, K_CHIRPS_PER_TX, K_SAMPLES),
+        schedule,
+        op_cls=MIMODeinterleaveOpF64,
     )
     assert out_f.shape == out_d.shape
     for i in range(out_f.size):
-        assert out_f.reshape(-1)[i].real == pytest.approx(float(out_d.reshape(-1)[i].real), abs=1e-4)
-        assert out_f.reshape(-1)[i].imag == pytest.approx(float(out_d.reshape(-1)[i].imag), abs=1e-4)
+        assert out_f.reshape(-1)[i].real == pytest.approx(
+            float(out_d.reshape(-1)[i].real), abs=1e-4
+        )
+        assert out_f.reshape(-1)[i].imag == pytest.approx(
+            float(out_d.reshape(-1)[i].imag), abs=1e-4
+        )

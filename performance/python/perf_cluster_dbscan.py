@@ -33,9 +33,9 @@ import numpy as np  # noqa: E402
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings  # noqa: E402
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
@@ -252,10 +252,7 @@ def _base_row(scen: DbscanScenario) -> ResultRow:
 
 
 def _make_scenario(size: SizeSpec, ovr: OverrideKind = OverrideKind.EPSILON) -> DbscanScenario:
-    sid = (
-        f"dbscan_{size.id}_n{size.num_points}_f{size.num_features}_"
-        f"{_OVERRIDE_TAG[ovr]}"
-    )
+    sid = f"dbscan_{size.id}_n{size.num_points}_f{size.num_features}_" f"{_OVERRIDE_TAG[ovr]}"
     return DbscanScenario(
         id=sid,
         size_id=size.id,
@@ -320,7 +317,8 @@ def run_scenario(scen: DbscanScenario, rs: RunSettings, report: PerfReport) -> N
 
         collector = TimingCollector()
         points = single_map(
-            _make_points(scen.num_points, scen.num_features, scen.num_clusters), "points"
+            _make_points(scen.num_points, scen.num_features, scen.num_clusters),
+            "points",
         )
 
         collector.t_construct = now()

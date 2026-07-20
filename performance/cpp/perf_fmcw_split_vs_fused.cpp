@@ -299,7 +299,11 @@ void print_comparison_table(const perf::PerfReport& report) {
     auto& p = find_or_add(row.calibration_pair);
     p.size_id = row.size_id;
     const auto us = row.variant.find('_');
-    p.clutter = us == std::string::npos ? row.variant : row.variant.substr(0, us);
+    if (us == std::string::npos) {
+      p.clutter = row.variant;
+    } else {
+      p.clutter = row.variant.substr(0, us);
+    }
     if (row.calibration_mode == "split") {
       p.split_ms = row.latency.median_ms;
       p.have_split = true;
@@ -314,9 +318,10 @@ void print_comparison_table(const perf::PerfReport& report) {
   std::cout << "No keep/kill verdict is encoded. Fill OPEN_ITEMS §1 from this "
                "table.\n";
   std::cout << std::left << std::setw(28) << "pair_id" << std::setw(8)
-            << "size" << std::setw(8) << "clutter" << std::right << std::setw(12)
-            << "split_ms" << std::setw(12) << "fused_ms" << std::setw(12)
-            << "delta_ms" << std::setw(12) << "pct_saved" << std::setw(10)
+            << "size" << std::setw(8) << "clutter" << std::right
+            << std::setw(12) << "split_ms" << std::setw(12) << "fused_ms"
+            << std::setw(12) << "delta_ms" << std::setw(12) << "pct_saved"
+            << std::setw(10)
             << "speedup\n";
   for (const auto& p : pairs) {
     if (!p.have_split || !p.have_fused) {

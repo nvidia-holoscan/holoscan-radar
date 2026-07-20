@@ -11,6 +11,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -1071,8 +1072,9 @@ TEST(MIMOCoherentCompensationOp, DdmNonLinearPhaseCodesCorrelateRecovers) {
       float other = 0.0f;
       std::complex<float> at_d0{0.0f, 0.0f};
       for (int64_t d = 0; d < D; ++d) {
-        const auto z =
-            data[static_cast<size_t>(((0 * kNlRx + rx) * D + d) * kNlRange + r)];
+        const size_t idx = static_cast<size_t>(
+            ((0 * kNlRx + rx) * D + d) * kNlRange + r);
+        const auto z = data[idx];
         const float mag = std::abs(z);
         if (d == d0_cz) {
           peak = mag;
@@ -1089,7 +1091,8 @@ TEST(MIMOCoherentCompensationOp, DdmNonLinearPhaseCodesCorrelateRecovers) {
 }
 
 TEST(MIMOCoherentCompensationOp, DdmNonLinearMultiTxSeparatesPeaks) {
-  // Two-TX non-linear Zadoff-Chu codes: Y = val0*shift(C0,d0)+val1*shift(C1,d1).
+  // Two-TX non-linear Zadoff-Chu codes:
+  // Y = val0*shift(C0,d0) + val1*shift(C1,d1).
   // Correlate demux should place each TX lane's argmax at that TX's Doppler
   // (center-zero). Odd D exercises MatX (D+1)/2 pack/scatter centers.
   const auto waveform = make_test_waveform();

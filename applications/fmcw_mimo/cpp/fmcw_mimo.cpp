@@ -390,7 +390,8 @@ radar::sim::SimResult simulate_mimo_ddm_phase_coded(
     const MimoScene& scene,
     const std::vector<std::complex<double>>& phase_codes) {
   if (scene.tx_positions.empty() || scene.rx_positions.empty()) {
-    throw std::invalid_argument("simulate_mimo_ddm_phase_coded: need TX and RX");
+    throw std::invalid_argument(
+        "simulate_mimo_ddm_phase_coded: need TX and RX");
   }
   const int64_t num_rx = static_cast<int64_t>(scene.rx_positions.size());
   const int64_t num_tx = scene.num_tx;

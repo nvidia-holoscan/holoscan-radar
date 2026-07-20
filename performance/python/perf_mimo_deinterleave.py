@@ -26,9 +26,9 @@ bootstrap_radar_package()
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings, SizeDef  # noqa: E402
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
@@ -193,9 +193,7 @@ def _run_graph(
     DeinterleavePerfApp().run()
 
 
-def run_scenario(
-    scen: DeinterleaveScenario, rs: RunSettings, report: PerfReport
-) -> None:
+def run_scenario(scen: DeinterleaveScenario, rs: RunSettings, report: PerfReport) -> None:
     plan = make_run_plan(rs, has_override=False)
 
     def run_rep(_rep: int, run_plan: RunPlan) -> TimingCollector:

@@ -9,7 +9,12 @@ import math
 
 import numpy as np
 
-from holoscan.radar import AngleConvention, AngleConventionPreset, ArrayGeometry, ArrayGeometryType
+from holoscan.radar import (
+    AngleConvention,
+    AngleConventionPreset,
+    ArrayGeometry,
+    ArrayGeometryType,
+)
 
 K_PI = math.pi
 
@@ -32,9 +37,7 @@ def make_ula_geometry(num_elements: int, spacing: float, wavelength: float) -> A
     return geom
 
 
-def make_planar_ura_geometry(
-    ny: int, nz: int, spacing: float, wavelength: float
-) -> ArrayGeometry:
+def make_planar_ura_geometry(ny: int, nz: int, spacing: float, wavelength: float) -> ArrayGeometry:
     geom = ArrayGeometry()
     geom.wavelength = wavelength
     geom.geometry_type = ArrayGeometryType.URA
@@ -57,7 +60,9 @@ def _rotate_z(x: float, y: float, z: float, delta: float) -> tuple[float, float,
     return c * x - s * y, s * x + c * y, z
 
 
-def boundary_to_canonical(conv: AngleConvention, az: float, el: float) -> tuple[float, float, float]:
+def boundary_to_canonical(
+    conv: AngleConvention, az: float, el: float
+) -> tuple[float, float, float]:
     """Mirror of radar_common/dsp/angle_convention.cpp (test fixtures only)."""
     if conv.uses_direction_cosine():
         u, v = az, el
@@ -73,7 +78,10 @@ def boundary_to_canonical(conv: AngleConvention, az: float, el: float) -> tuple[
         AngleConventionPreset.ISO8855_FLU,
     ):
         return _from_canonical_angles(az, el)
-    if preset in (AngleConventionPreset.AEROSPACE_NED, AngleConventionPreset.GEODETIC_NED):
+    if preset in (
+        AngleConventionPreset.AEROSPACE_NED,
+        AngleConventionPreset.GEODETIC_NED,
+    ):
         return _from_canonical_angles(-az, -el)
     if preset == AngleConventionPreset.GEODETIC_ENU:
         return _rotate_z(*_from_canonical_angles(az, el), -K_PI / 2.0)

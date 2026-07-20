@@ -18,22 +18,15 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from utils.bin_model import (  # noqa: E402
-    K_C,
-    expected_doppler_bin,
-    expected_range_bin,
-    range_of_bin,
-)
-from utils.harness import (  # noqa: E402
-    run_operator,
-    run_operator_multi,
-    single_map,
-    to_device_array,
-)
-from utils.point_target_sim import PointTarget, SimScene, SimWaveform, simulate  # noqa: E402
+from utils.bin_model import expected_doppler_bin  # noqa: E402
+from utils.bin_model import K_C, expected_range_bin, range_of_bin
+from utils.harness import run_operator_multi  # noqa: E402
+from utils.harness import run_operator, single_map, to_device_array
+from utils.point_target_sim import SimScene  # noqa: E402
+from utils.point_target_sim import PointTarget, SimWaveform, simulate
 
-from holoscan.radar import (  # noqa: E402
-    ClutterFilterMethod,
+from holoscan.radar import ClutterFilterMethod  # noqa: E402
+from holoscan.radar import (
     ClutterFilterOpF32,
     FMCWDopplerProcessorOpF32,
     FMCWRangeDopplerProcessorOp,
@@ -195,9 +188,7 @@ def _run_split(
         prof_frame = _profiles_frame(profiles)
 
         def make_clutter(app):
-            return ClutterFilterOpF32(
-                app, method=cfg.clutter, name="clutter_op"
-            )
+            return ClutterFilterOpF32(app, method=cfg.clutter, name="clutter_op")
 
         profiles = run_operator(
             make_clutter,
@@ -314,9 +305,7 @@ def test_OptionalOutputsOnlyWithWaveform():
     def make_op(app):
         return FMCWRangeDopplerProcessorOp(app, name="op_under_test")
 
-    rd = run_operator(
-        make_op, frame, input_port="adc_cube", output_port="rd_maps"
-    )[0]
+    rd = run_operator(make_op, frame, input_port="adc_cube", output_port="rd_maps")[0]
     assert rd.shape == (K_CHIRPS, K_SAMPLES)
 
 
@@ -332,9 +321,7 @@ def test_ParityMeanSubtractionSplitChain():
     rel = _max_abs_diff(fused["rd_maps"], split["rd_maps"]) / reference
     assert rel < 1e-5
     np.testing.assert_array_equal(fused["range_bins"], split["range_bins"])
-    np.testing.assert_allclose(
-        fused["velocity_bins"], split["velocity_bins"], rtol=0, atol=0
-    )
+    np.testing.assert_allclose(fused["velocity_bins"], split["velocity_bins"], rtol=0, atol=0)
 
 
 def test_ParityApplyDechirp():
@@ -352,9 +339,7 @@ def test_ApplyDechirpWithoutWaveformErrors():
     frame = _adc_frame(_PARITY_SIM_PRE_MIXER)
 
     def make_op(app):
-        return FMCWRangeDopplerProcessorOp(
-            app, apply_dechirp=True, name="op_under_test"
-        )
+        return FMCWRangeDopplerProcessorOp(app, apply_dechirp=True, name="op_under_test")
 
     with pytest.raises(ValueError):
         run_operator(make_op, frame, input_port="adc_cube", output_port="rd_maps")
@@ -379,9 +364,7 @@ def test_NfftRangeTooSmallErrors():
     frame = _adc_frame(_PARITY_SIM)
 
     def make_op(app):
-        return FMCWRangeDopplerProcessorOp(
-            app, nfft_range=K_SAMPLES // 2, name="op_under_test"
-        )
+        return FMCWRangeDopplerProcessorOp(app, nfft_range=K_SAMPLES // 2, name="op_under_test")
 
     with pytest.raises(ValueError):
         run_operator(make_op, frame, input_port="adc_cube", output_port="rd_maps")
@@ -391,9 +374,7 @@ def test_NfftDopplerTooSmallErrors():
     frame = _adc_frame(_PARITY_SIM)
 
     def make_op(app):
-        return FMCWRangeDopplerProcessorOp(
-            app, nfft_doppler=K_CHIRPS // 2, name="op_under_test"
-        )
+        return FMCWRangeDopplerProcessorOp(app, nfft_doppler=K_CHIRPS // 2, name="op_under_test")
 
     with pytest.raises(ValueError):
         run_operator(make_op, frame, input_port="adc_cube", output_port="rd_maps")
@@ -416,9 +397,7 @@ def test_LiveClutterOverrideChangesShape():
     frames = [frame, frame, frame]
 
     def make_op(app):
-        return FMCWRangeDopplerProcessorOpF32(
-            app, waveform=waveform, name="op_under_test"
-        )
+        return FMCWRangeDopplerProcessorOpF32(app, waveform=waveform, name="op_under_test")
 
     captured = run_operator_multi(
         make_op,

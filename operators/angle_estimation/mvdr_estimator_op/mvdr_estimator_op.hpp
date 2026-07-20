@@ -104,7 +104,6 @@ class MVDREstimatorOp : public holoscan::Operator {
   // (beam = ie * num_az + ia) to match the Capon reduce kernel's decode.
   // Cached, warn-once on rebuild (geometry / scan-grid change).
   ConfigCache<std::shared_ptr<holoscan::Tensor>> steering_cache_;
-
 };
 
 }  // namespace holoscan::radar

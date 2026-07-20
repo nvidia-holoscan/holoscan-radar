@@ -90,9 +90,7 @@ def test_construct_cfar_and_feature_assembly():
 
     class App(Application):
         def compose(self):
-            self.cfar = CFARDetectorOp(
-                self, cfar_variant=CfarVariant.CA, name="cfar"
-            )
+            self.cfar = CFARDetectorOp(self, cfar_variant=CfarVariant.CA, name="cfar")
             self.fa = FeatureAssemblyOp(
                 self,
                 features=[AssemblyFeature.RANGE, AssemblyFeature.VELOCITY],

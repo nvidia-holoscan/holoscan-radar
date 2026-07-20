@@ -46,9 +46,9 @@ import cupy as cp  # noqa: E402  # after holoscan.radar (MatX CUDA cache)
 from holoscan.conditions import CountCondition, PeriodicCondition  # noqa: E402
 from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
 from holoscan.operators import HolovizOp  # noqa: E402
-from holoscan.radar import (  # noqa: E402
+from holoscan.radar import CadenceMeter  # noqa: E402
+from holoscan.radar import (
     AssemblyFeature,
-    CadenceMeter,
     CFARDetectorOp,
     ClusterDBSCANOp,
     ClusterOverlayOp,
@@ -161,9 +161,7 @@ def simulate(scene: SimScene) -> SimResult:
         range_k = rng + v_r * k * pri
         tau = 2.0 * range_k / c
         beat = slope * tau
-        phase = (2.0 * K_PI) * (
-            beat[:, cp.newaxis] * t[cp.newaxis, :] - f_c * tau[:, cp.newaxis]
-        )
+        phase = (2.0 * K_PI) * (beat[:, cp.newaxis] * t[cp.newaxis, :] - f_c * tau[:, cp.newaxis])
         cube += target.amplitude * cp.exp(1j * phase)
 
     if scene.snr_db is not None:
@@ -171,9 +169,7 @@ def simulate(scene: SimScene) -> SimResult:
         noise_power = signal_power / (10.0 ** (scene.snr_db / 10.0))
         sigma = math.sqrt(noise_power / 2.0)
         rng = cp.random.default_rng(scene.seed)
-        cube += sigma * (
-            rng.standard_normal(cube.shape) + 1j * rng.standard_normal(cube.shape)
-        )
+        cube += sigma * (rng.standard_normal(cube.shape) + 1j * rng.standard_normal(cube.shape))
 
     cube64 = cube.astype(cp.complex64, copy=False)
     return SimResult(cube=cube64, shape=tuple(int(d) for d in cube64.shape))
@@ -271,8 +267,7 @@ def load_config(path: Path) -> AppConfig:
     frame_period_ns = frame_period * 1e9
     if frame_period_ns < 1.0 or frame_period_ns > float(2**63 - 1):
         raise ValueError(
-            f"run.frame_period must be within [1 ns, INT64_MAX ns], got "
-            f"{frame_period} s"
+            f"run.frame_period must be within [1 ns, INT64_MAX ns], got " f"{frame_period} s"
         )
 
     for t in root.get("targets", []):
@@ -310,7 +305,6 @@ def load_config(path: Path) -> AppConfig:
         skip_display_check=bool(root.get("skip_display_check", False)),
         headless=bool(root.get("headless", False)),
     )
-
 
 
 def cluster_layer_name(color: int) -> str:
@@ -355,8 +349,7 @@ class AdcSourceOp(Operator):
         result = simulate(self.scene)
         if len(result.shape) != 2:
             raise RuntimeError(
-                "AdcSourceOp: SISO source expects a rank-2 cube, got rank "
-                f"{len(result.shape)}"
+                "AdcSourceOp: SISO source expects a rank-2 cube, got rank " f"{len(result.shape)}"
             )
         op_output.emit({"adc_cube": result.cube}, "adc_cube")
         if self.cadence is not None:
@@ -401,15 +394,11 @@ class FmcwSisoApp(Application):
         range_op = FMCWRangeProcessorOp(
             self, self.from_config("range_processor"), name="range_processor"
         )
-        clutter = ClutterFilterOp(
-            self, self.from_config("clutter_filter"), name="clutter_filter"
-        )
+        clutter = ClutterFilterOp(self, self.from_config("clutter_filter"), name="clutter_filter")
         doppler = FMCWDopplerProcessorOp(
             self, self.from_config("doppler_processor"), name="doppler_processor"
         )
-        cfar = CFARDetectorOp(
-            self, self.from_config("cfar_detector"), name="cfar_detector"
-        )
+        cfar = CFARDetectorOp(self, self.from_config("cfar_detector"), name="cfar_detector")
         det_report = DetectionReportOp(self, name="detection_report")
         if cadence is not None:
             det_report.cadence = cadence
@@ -421,9 +410,7 @@ class FmcwSisoApp(Application):
             features=[AssemblyFeature.RANGE, AssemblyFeature.VELOCITY],
             name="feature_assembly",
         )
-        cluster = ClusterDBSCANOp(
-            self, self.from_config("cluster_dbscan"), name="cluster_dbscan"
-        )
+        cluster = ClusterDBSCANOp(self, self.from_config("cluster_dbscan"), name="cluster_dbscan")
         cluster_report = ClusterReportOp(self, name="cluster_report")
         reduction = DetectionReductionOp(
             self, self.from_config("reduction"), name="detection_reduction"
@@ -442,9 +429,7 @@ class FmcwSisoApp(Application):
 
         self.add_flow(cfar, feature_assembly, {("detection_idx", "detection_idx")})
         self.add_flow(range_op, feature_assembly, {("range_bins", "range_bins")})
-        self.add_flow(
-            doppler, feature_assembly, {("velocity_bins", "velocity_bins")}
-        )
+        self.add_flow(doppler, feature_assembly, {("velocity_bins", "velocity_bins")})
         self.add_flow(feature_assembly, cluster, {("points", "points")})
         self.add_flow(feature_assembly, cluster_report, {("points", "points")})
         self.add_flow(cluster, cluster_report, {("labels", "labels")})
@@ -455,9 +440,7 @@ class FmcwSisoApp(Application):
         self.add_flow(feature_assembly, reduction, {("points", "points")})
         self.add_flow(reduction, cluster_report, {("rep_idx", "rep_idx")})
         self.add_flow(range_op, cluster_report, {("range_bins", "range_bins")})
-        self.add_flow(
-            doppler, cluster_report, {("velocity_bins", "velocity_bins")}
-        )
+        self.add_flow(doppler, cluster_report, {("velocity_bins", "velocity_bins")})
 
         if cfg.visualize:
             to_image = RdMapToImageOp(self, name="rd_map_to_image")
@@ -470,8 +453,7 @@ class FmcwSisoApp(Application):
             palette = cluster_palette()
             if len(palette) != K_NUM_CLUSTER_COLORS:
                 raise RuntimeError(
-                    "fmcw_siso: cluster palette size must equal "
-                    f"{K_NUM_CLUSTER_COLORS}"
+                    "fmcw_siso: cluster palette size must equal " f"{K_NUM_CLUSTER_COLORS}"
                 )
 
             def add_crosses(name: str, color: list[float]) -> None:
@@ -491,15 +473,11 @@ class FmcwSisoApp(Application):
                 for spec in input_specs:
                     spec.views = [left]
 
-                def add_plot(
-                    img_name: str, title_name: str, title: str, oy: float
-                ) -> None:
+                def add_plot(img_name: str, title_name: str, title: str, oy: float) -> None:
                     image = HolovizOp.InputSpec(img_name, HolovizOp.InputType.COLOR)
                     image.views = [make_view(0.63, oy, 0.35, 0.44)]
                     input_specs.append(image)
-                    text = HolovizOp.InputSpec(
-                        title_name, HolovizOp.InputType.TEXT
-                    )
+                    text = HolovizOp.InputSpec(title_name, HolovizOp.InputType.TEXT)
                     text.text = [title]
                     text.color = [1.0, 1.0, 1.0, 1.0]
                     text.priority = 2

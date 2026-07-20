@@ -29,9 +29,9 @@ bootstrap_radar_package()
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings, SizeDef  # noqa: E402
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
@@ -42,8 +42,8 @@ from utils.tensor_factory import make_iq_cube_device, single_map  # noqa: E402
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application  # noqa: E402
-from holoscan.radar import (  # noqa: E402
-    DDMCodeDescriptor,
+from holoscan.radar import DDMCodeDescriptor  # noqa: E402
+from holoscan.radar import (
     FMCWWaveformDescriptor,
     FMCWWaveformSpec,
     MIMOCoherentCompensationOpF32,
@@ -62,9 +62,7 @@ SIZE_LADDER = [
     SizeDef("sm", [4, 8, 64, 256], 4 * 8 * 64 * 256, "compact MIMO"),
     SizeDef("md", [4, 16, 128, 512], 4 * 16 * 128 * 512, "common dev size"),
     SizeDef("lg", [8, 32, 256, 1024], 8 * 32 * 256 * 1024, "moderate MIMO"),
-    SizeDef(
-        "xl", [8, 64, 512, 2048], 8 * 64 * 512 * 2048, "upper characterization bound"
-    ),
+    SizeDef("xl", [8, 64, 512, 2048], 8 * 64 * 512 * 2048, "upper characterization bound"),
 ]
 
 _SIZE_SPECS = {
@@ -180,9 +178,7 @@ def build_default_matrix() -> list[CompensationScenario]:
     out.append(make_scenario("md", MultiplexingScheme.TDM, 4))
     for sid in ("xs", "md", "xl"):
         out.append(make_scenario(sid, MultiplexingScheme.DDM))
-        out.append(
-            make_scenario(sid, MultiplexingScheme.DDM, non_linear_ddm=True)
-        )
+        out.append(make_scenario(sid, MultiplexingScheme.DDM, non_linear_ddm=True))
     return out
 
 
@@ -194,9 +190,7 @@ def build_size_sweep(size_ids: list[str]) -> list[CompensationScenario]:
             continue
         out.append(make_scenario(sid))
         out.append(make_scenario(sid, MultiplexingScheme.DDM))
-        out.append(
-            make_scenario(sid, MultiplexingScheme.DDM, non_linear_ddm=True)
-        )
+        out.append(make_scenario(sid, MultiplexingScheme.DDM, non_linear_ddm=True))
     return out
 
 
@@ -208,9 +202,7 @@ def build_full_matrix() -> list[CompensationScenario]:
         out.append(make_scenario(sid, MultiplexingScheme.TDM, 4))
     for item in SIZE_LADDER:
         out.append(make_scenario(item.id, MultiplexingScheme.DDM))
-        out.append(
-            make_scenario(item.id, MultiplexingScheme.DDM, non_linear_ddm=True)
-        )
+        out.append(make_scenario(item.id, MultiplexingScheme.DDM, non_linear_ddm=True))
     return out
 
 
@@ -296,9 +288,7 @@ def _run_graph(
     CompensationPerfApp().run()
 
 
-def run_scenario(
-    scen: CompensationScenario, rs: RunSettings, report: PerfReport
-) -> None:
+def run_scenario(scen: CompensationScenario, rs: RunSettings, report: PerfReport) -> None:
     plan = make_run_plan(rs, has_override=True)
 
     def run_rep(_rep: int, run_plan: RunPlan) -> TimingCollector:

@@ -11,8 +11,8 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from utils.angle_helpers import (  # noqa: E402
-    aerospace_ned_convention,
+from utils.angle_helpers import aerospace_ned_convention  # noqa: E402
+from utils.angle_helpers import (
     linspace,
     make_planar_ura_geometry,
     make_steering_snapshot,
@@ -22,11 +22,8 @@ from utils.angle_helpers import (  # noqa: E402
 )
 from utils.harness import run_operator_multi, single_map, to_device_array  # noqa: E402
 
-from holoscan.radar import (  # noqa: E402
-    BeamscanEstimatorOpF32,
-    BeamscanEstimatorOpF64,
-    PeakInterpolation,
-)
+from holoscan.radar import BeamscanEstimatorOpF32  # noqa: E402
+from holoscan.radar import BeamscanEstimatorOpF64, PeakInterpolation
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -156,9 +153,7 @@ def test_RecoversKnownDoaPhysicsSpherical():
     polar_el = np.pi / 2.0 - horizon_el
     conv = physics_spherical_convention()
     geom = make_planar_ura_geometry(k_ny, k_nz, 0.5, 1.0)
-    snap = make_steering_snapshot(geom, conv, truth_az, polar_el).reshape(
-        1, geom.num_elements()
-    )
+    snap = make_steering_snapshot(geom, conv, truth_az, polar_el).reshape(1, geom.num_elements())
     out = run_beamscan(
         snap,
         array_geometry=geom,
@@ -176,9 +171,7 @@ def test_RecoversKnownDoaAerospaceNed():
     truth_az, truth_el = -0.1, -0.03
     conv = aerospace_ned_convention()
     geom = make_planar_ura_geometry(k_ny, k_nz, 0.5, 1.0)
-    snap = make_steering_snapshot(geom, conv, truth_az, truth_el).reshape(
-        1, geom.num_elements()
-    )
+    snap = make_steering_snapshot(geom, conv, truth_az, truth_el).reshape(1, geom.num_elements())
     out = run_beamscan(
         snap,
         array_geometry=geom,
@@ -226,12 +219,8 @@ def test_ParabolicRefinesOffGridDoa():
         az_angles=linspace(-0.2, 0.2, 11),
         el_angles=linspace(-0.1, 0.1, 3),
     )
-    out_none = run_beamscan(
-        snap, peak_interpolation=PeakInterpolation.NONE, **kwargs
-    )
-    out_para = run_beamscan(
-        snap, peak_interpolation=PeakInterpolation.PARABOLIC, **kwargs
-    )
+    out_none = run_beamscan(snap, peak_interpolation=PeakInterpolation.NONE, **kwargs)
+    out_para = run_beamscan(snap, peak_interpolation=PeakInterpolation.PARABOLIC, **kwargs)
     assert out_none["aoa"][0, 0] == pytest.approx(0.16, abs=1e-6)
     assert out_para["aoa"][0, 0] == pytest.approx(truth_az, abs=0.02)
     assert abs(out_para["aoa"][0, 0] - out_none["aoa"][0, 0]) > 5e-3

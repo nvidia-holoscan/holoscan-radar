@@ -29,9 +29,9 @@ bootstrap_radar_package()
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings, SizeDef  # noqa: E402
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
@@ -101,9 +101,7 @@ def _profiles_shape(scen: ClutterScenario) -> tuple[int, ...]:
     return (scen.num_chirps, scen.num_range_bins)
 
 
-def make_scenario(
-    method: ClutterFilterMethod, size: SizeDef, channels: int = 1
-) -> ClutterScenario:
+def make_scenario(method: ClutterFilterMethod, size: SizeDef, channels: int = 1) -> ClutterScenario:
     num_chirps, num_range_bins = size.shape
     sid = f"clutter_{_method_tag(method)}_{size.id}"
     if channels > 1:
@@ -122,9 +120,7 @@ def make_scenario(
 def build_default_matrix() -> list[ClutterScenario]:
     out: list[ClutterScenario] = []
     for sid in ("xs", "md", "lg", "xl"):
-        out.append(
-            make_scenario(ClutterFilterMethod.MEAN_SUBTRACTION, _must_find_size(sid))
-        )
+        out.append(make_scenario(ClutterFilterMethod.MEAN_SUBTRACTION, _must_find_size(sid)))
     md = _must_find_size("md")
     out.append(make_scenario(ClutterFilterMethod.SINGLE_DELAY, md))
     out.append(make_scenario(ClutterFilterMethod.DOUBLE_DELAY, md))
@@ -135,9 +131,7 @@ def build_default_matrix() -> list[ClutterScenario]:
 def build_size_sweep(size_ids: list[str]) -> list[ClutterScenario]:
     out: list[ClutterScenario] = []
     for sid in size_ids:
-        out.append(
-            make_scenario(ClutterFilterMethod.MEAN_SUBTRACTION, _must_find_size(sid))
-        )
+        out.append(make_scenario(ClutterFilterMethod.MEAN_SUBTRACTION, _must_find_size(sid)))
     return out
 
 

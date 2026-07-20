@@ -144,25 +144,17 @@ def _row_to_json(row: ResultRow) -> dict[str, Any]:
         "setup_ms": row.setup_ms if _is_num(row.setup_ms) else None,
         "cold_ms": row.cold_ms if _is_num(row.cold_ms) else None,
         "min_ms": row.latency.min_ms if _is_num(row.latency.min_ms) else None,
-        "median_ms": row.latency.median_ms
-        if _is_num(row.latency.median_ms)
-        else None,
+        "median_ms": row.latency.median_ms if _is_num(row.latency.median_ms) else None,
         "p90_ms": row.latency.p90_ms if _is_num(row.latency.p90_ms) else None,
         "p99_ms": row.latency.p99_ms if _is_num(row.latency.p99_ms) else None,
         "max_ms": row.latency.max_ms if _is_num(row.latency.max_ms) else None,
         "override_ms": row.override_ms if _is_num(row.override_ms) else None,
-        "override_delta_ms": row.override_delta_ms
-        if _is_num(row.override_delta_ms)
-        else None,
-        "cells_per_second": row.cells_per_second
-        if _is_num(row.cells_per_second)
-        else None,
-        "slices_per_second": row.slices_per_second
-        if _is_num(row.slices_per_second)
-        else None,
-        "estimated_effective_gbps": row.estimated_effective_gbps
-        if _is_num(row.estimated_effective_gbps)
-        else None,
+        "override_delta_ms": (row.override_delta_ms if _is_num(row.override_delta_ms) else None),
+        "cells_per_second": (row.cells_per_second if _is_num(row.cells_per_second) else None),
+        "slices_per_second": (row.slices_per_second if _is_num(row.slices_per_second) else None),
+        "estimated_effective_gbps": (
+            row.estimated_effective_gbps if _is_num(row.estimated_effective_gbps) else None
+        ),
         "status": row.status,
         "notes": row.notes,
         "calibration_pair": row.calibration_pair,
@@ -230,35 +222,25 @@ def write_text(stream: IO[str], report: PerfReport) -> None:
     stream.write("=== holoscan-radar performance report ===\n")
     dirty = " (dirty)" if report.provenance.git_dirty else " (clean)"
     stream.write(
-        f"commit: {report.provenance.git_commit}{dirty}  "
-        f"{report.provenance.timestamp_utc}\n"
+        f"commit: {report.provenance.git_commit}{dirty}  " f"{report.provenance.timestamp_utc}\n"
     )
     stream.write(
         f"platform: {report.platform.gpu_name} | driver "
         f"{report.platform.gpu_driver} | CUDA {report.platform.cuda_runtime} | "
         f"Holoscan {report.platform.holoscan_version}\n"
     )
-    stream.write(
-        f"          {report.platform.cpu_model} | {report.platform.os_name}\n"
-    )
+    stream.write(f"          {report.platform.cpu_model} | {report.platform.os_name}\n")
     stream.write(
         f"run: warmup={report.run_settings.warmup_frames} "
         f"measured={report.run_settings.measured_frames} "
         f"repeats={report.run_settings.repeats}\n"
     )
-    stream.write(
-        "note: latencies are valid only on the machine/GPU they were captured on.\n"
-    )
+    stream.write("note: latencies are valid only on the machine/GPU they were captured on.\n")
 
     shape_w = _shape_column_width(report)
     if report.sizes:
         stream.write("\n--- sizes ---\n")
-        stream.write(
-            _col("id", 6)
-            + _col("shape (DxR)", shape_w)
-            + _col("cells", 10)
-            + "role\n"
-        )
+        stream.write(_col("id", 6) + _col("shape (DxR)", shape_w) + _col("cells", 10) + "role\n")
         for size in report.sizes:
             stream.write(
                 _col(size.id, 6)
