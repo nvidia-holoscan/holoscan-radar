@@ -51,7 +51,7 @@
 #include "radar_app/app/source.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "radar_app/viz/viz.hpp"
-#include "siso_config.hpp"
+#include "config.hpp"
 
 namespace radar = holoscan::radar;
 

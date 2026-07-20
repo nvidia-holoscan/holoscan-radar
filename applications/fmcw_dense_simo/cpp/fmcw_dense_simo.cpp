@@ -54,8 +54,8 @@
 #include "radar_app/report/report_ops.hpp"
 #include "radar_app/viz/display.hpp"
 #include "radar_app/viz/viz.hpp"
-#include "dense_config.hpp"
-#include "dense_ops.hpp"
+#include "config.hpp"
+#include "custom_ops.hpp"
 
 namespace radar = holoscan::radar;
 using namespace holoscan::radar::app;  // NOLINT(build/namespaces)

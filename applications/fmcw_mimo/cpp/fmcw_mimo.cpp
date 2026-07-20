@@ -37,8 +37,8 @@
 #include "radar_app/report/report_ops.hpp"
 #include "radar_app/viz/display.hpp"
 #include "radar_app/viz/viz.hpp"
-#include "mimo_config.hpp"
-#include "mimo_ops.hpp"
+#include "config.hpp"
+#include "custom_ops.hpp"
 #include "mimo_sim.hpp"
 
 namespace radar = holoscan::radar;
