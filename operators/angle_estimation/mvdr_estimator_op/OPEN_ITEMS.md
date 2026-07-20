@@ -1,7 +1,6 @@
 # MVDREstimatorOp — open items
 
-Status: **NOT checklist-complete — one blocked parameter remains
-(`spatial_smoothing`).** Everything else in the contract
+Status: **checklist-complete.** The full contract
 (`OPERATOR_API.md` → MVDREstimatorOp) is implemented:
 
 - sample covariance with `is_valid` masking, diagonal loading (`auto` / fixed),
@@ -18,24 +17,29 @@ All four optional outputs (`angle_spectrum`, `doa_multi`, `source_count`,
 `aoa_estimates` leaves them unwired without gating scheduling. They are always
 emitted (see the eigenvalues perf note below).
 
-## BLOCKED — team question (do not resolve unilaterally)
+## Spatial smoothing (settled — S1)
 
-**`spatial_smoothing` [live] input form.** The contract lists a `[live]
-spatial_smoothing` param (forward sub-array averaging to decorrelate coherent
-multipath / raise covariance rank), but the input form for smoothing on the
-module's *virtual* arrays is an open team decision — one of the
-covariance-estimator open items flagged in `OPERATOR_API.md`
-§"Covariance estimator open items". It is **not declared**, because declaring or
-honoring it would pick an answer to that team question. When decided, add the
-param + the sub-array covariance path here (it slots in front of the covariance
-kernel; the rest of the pipeline is unchanged).
+`spatial_smoothing` (+ `forward_backward`) is implemented as a front-end
+transform (shared helper `radar_common/dsp/spatial_smoothing`): it detects the
+array lattice, gathers the snapshot into overlapping sub-array looks (forward /
+forward-backward), forms the averaged covariance on the reduced sub-array
+geometry, and the covariance / eig / inverse / Capon path runs unchanged on the
+`L` reduced channels. 1-D (ULA) and 2-D (URA) are both supported; the parameter
+is a per-aperture-axis vector of sub-array **counts** (`[P]` / `[P_az, P_el]`).
+See STATUS.md (S1 settled decision).
 
-This is the sole reason the operator is not checklist-complete. The related
-"where does the source count come from" question (fixed vs. MDL/AIC vs.
-CFAR/cluster seed) does **not** block MVDR: for MVDR `max_sources` is simply the
-number of Capon peaks to report (a reporting capacity, not a model order), so it
-is implemented directly. That shared question still governs MUSIC/ESPRIT's
-`num_sources`.
+- **Non-uniform / holey arrays are rejected** (clear error) — they must be
+  reduced to a uniform sub-array upstream (S3), or a custom smoother can be
+  supplied as an upstream operator emitting a reduced `(snapshot, geometry)`
+  pair.
+- **Two team forks remain for ratification** (do not silently re-resolve): the
+  integer means sub-array **count** (vs. length); and holey arrays route to S3
+  rather than accepting in-operator explicit partitions. See TEAM_BLOCKED (L13).
+
+The related "where does the source count come from" question (fixed vs.
+MDL/AIC vs. CFAR/cluster seed) does **not** affect MVDR: `max_sources` is simply
+the number of Capon peaks to report (a reporting capacity, not a model order).
+That shared question still governs MUSIC/ESPRIT's `num_sources`.
 
 ## Representation notes
 

@@ -257,6 +257,144 @@ std::vector<std::complex<double>> make_block_two(
   return x;
 }
 
+// One item with two fully-COHERENT sources: both share the same per-snapshot
+// gain g_s (e.g. specular multipath), so x[c,s] = (a0 + a1)·g_s + noise and the
+// sample covariance collapses toward rank 1 ((a0+a1)(a0+a1)ᴴ). Plain MVDR
+// cannot separate them; spatial smoothing restores the rank.
+std::vector<std::complex<double>> make_block_two_coherent(
+    const ArrayGeometry& geom, const AngleConvention& conv, double az0,
+    double el0, double az1, double el1, int64_t S, double noise,
+    unsigned seed) {
+  const auto a0 = steering_vector(geom, conv, az0, el0);
+  const auto a1 = steering_vector(geom, conv, az1, el1);
+  const int64_t C = geom.num_elements();
+  std::vector<std::complex<double>> x(static_cast<size_t>(C * S));
+  std::mt19937 rng(seed);
+  std::uniform_real_distribution<double> phase(0.0, 2.0 * kPi);
+  std::normal_distribution<double> n(0.0, noise);
+  for (int64_t s = 0; s < S; ++s) {
+    const double ps = phase(rng);
+    const std::complex<double> g{std::cos(ps), std::sin(ps)};  // shared gain
+    for (int64_t c = 0; c < C; ++c) {
+      std::complex<double> v =
+          (a0[static_cast<size_t>(c)] + a1[static_cast<size_t>(c)]) * g;
+      v += std::complex<double>(n(rng), n(rng));
+      x[static_cast<size_t>(c * S + s)] = v;
+    }
+  }
+  return x;
+}
+
+TEST(MVDREstimatorOpTest, SpatialSmoothingResolvesCoherentSourcesUla) {
+  constexpr int64_t kN = 10;
+  constexpr int64_t kS = 64;
+  constexpr double kAz0 = 0.30;
+  constexpr double kAz1 = -0.30;
+
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block =
+      make_block_two_coherent(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.02, 71u);
+  auto snap = block_to_device<double>(block, {1, kN, kS});
+
+  // Forward-backward smoothing with 4 sub-arrays (L = 7) decorrelates the pair.
+  const auto out = run_mvdr_full<double>(
+      snap, holoscan::Arg("array_geometry") = geom,
+      holoscan::Arg("angle_convention") = conv,
+      holoscan::Arg("az_angles") = linspace(-0.6, 0.6, 241),
+      holoscan::Arg("el_angles") = std::vector<double>{0.0},
+      holoscan::Arg("spatial_smoothing") = std::vector<int64_t>{4},
+      holoscan::Arg("forward_backward") = true,
+      holoscan::Arg("max_sources") = int64_t{2});
+
+  // Smoothing reduces the estimation aperture to L = 7 channels.
+  ASSERT_EQ(out.eigenvalues.shape, (std::vector<int64_t>{1, 7}));
+  EXPECT_EQ(out.source_count.as<int32_t>()[0], 2);
+
+  const double* dm = out.doa_multi.as<double>();
+  const double a = dm[0];
+  const double b = dm[2];
+  const bool matched =
+      (std::abs(a - kAz0) < 0.04 && std::abs(b - kAz1) < 0.04) ||
+      (std::abs(a - kAz1) < 0.04 && std::abs(b - kAz0) < 0.04);
+  EXPECT_TRUE(matched) << "a=" << a << " b=" << b;
+}
+
+TEST(MVDREstimatorOpTest, SpatialSmoothing2DUraRecoversDoa) {
+  constexpr int64_t kNy = 4;
+  constexpr int64_t kNz = 4;
+  constexpr int64_t kS = 32;
+  constexpr double kTruthAz = 0.10;
+  constexpr double kTruthEl = 0.06;
+
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_planar_ura_geometry(kNy, kNz, 0.5, 1.0);
+  const auto block =
+      make_block(geom, conv, kTruthAz, kTruthEl, kS, 0.05, 44u);
+  auto snap = block_to_device<double>(block, {1, geom.num_elements(), kS});
+
+  // 2-D smoothing: 2 sub-arrays per axis → 3x3 reduced sub-array (L = 9).
+  const auto out = run_mvdr<double>(
+      snap, holoscan::Arg("array_geometry") = geom,
+      holoscan::Arg("angle_convention") = conv,
+      holoscan::Arg("az_angles") = linspace(-0.4, 0.4, 81),
+      holoscan::Arg("el_angles") = linspace(-0.3, 0.3, 61),
+      holoscan::Arg("spatial_smoothing") = std::vector<int64_t>{2, 2},
+      holoscan::Arg("forward_backward") = true);
+
+  const double* aoa = out.aoa.as<double>();
+  EXPECT_NEAR(aoa[0], kTruthAz, 0.03);
+  EXPECT_NEAR(aoa[1], kTruthEl, 0.03);
+}
+
+TEST(MVDREstimatorOpTest, SpatialSmoothingReducesEigenvalueChannels) {
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.05, 45u);
+  auto snap = block_to_device<double>(block, {1, kN, kS});
+
+  const auto out = run_mvdr_full<double>(
+      snap, holoscan::Arg("array_geometry") = geom,
+      holoscan::Arg("angle_convention") = conv,
+      holoscan::Arg("az_angles") = linspace(-0.3, 0.3, 61),
+      holoscan::Arg("el_angles") = std::vector<double>{0.0},
+      holoscan::Arg("spatial_smoothing") = std::vector<int64_t>{3},
+      holoscan::Arg("forward_backward") = false);
+
+  // 3 sub-arrays on 8 channels → L = 6 reduced channels.
+  ASSERT_EQ(out.eigenvalues.shape, (std::vector<int64_t>{1, 6}));
+  const double* aoa = out.aoa.as<double>();
+  EXPECT_NEAR(aoa[0], 0.1, 0.03);
+}
+
+TEST(MVDREstimatorOpTest, SpatialSmoothingRejectsNonUniformGeometry) {
+  // Holey ULA (gap between the 3rd and 4th element) — smoothing must reject it.
+  ArrayGeometry geom;
+  geom.wavelength = 1.0;
+  const double ys[4] = {0.0, 0.5, 1.0, 2.0};
+  for (double y : ys) {
+    geom.element_positions.insert(geom.element_positions.end(), {0.0, y, 0.0});
+  }
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto a = steering_vector(geom, conv, 0.0, 0.0);
+  auto snap = block_to_device<double>(a, {1, geom.num_elements()});
+
+  EXPECT_THROW(
+      run_mvdr<double>(
+          snap, holoscan::Arg("array_geometry") = geom,
+          holoscan::Arg("angle_convention") = conv,
+          holoscan::Arg("az_angles") = std::vector<double>{0.0},
+          holoscan::Arg("el_angles") = std::vector<double>{0.0},
+          holoscan::Arg("spatial_smoothing") = std::vector<int64_t>{2}),
+      std::invalid_argument);
+}
+
 TEST(MVDREstimatorOpTest, RecoversKnownDoaUra) {
   constexpr int64_t kNy = 4;
   constexpr int64_t kNz = 4;

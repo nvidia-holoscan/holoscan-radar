@@ -218,7 +218,7 @@ Orthogonal to the antenna/multiplexing modality: whatever produces channel snaps
 
 #### Covariance estimator open items
 
-All covariance estimators share open items: multi-snapshot / spatial-smoothing input form, source-count source (fixed vs. MDL/AIC vs. CFAR-cluster), and — for the gridless pair — a ULA/subarray-selection step on non-uniform virtual arrays.
+All covariance estimators share open items: source-count source (fixed vs. MDL/AIC vs. CFAR-cluster), and — for the gridless pair — a ULA/subarray-selection step on non-uniform virtual arrays. (The multi-snapshot / spatial-smoothing input form is **settled** — forward / forward-backward sub-array averaging on a filled ULA/URA, per-aperture-axis sub-array counts; see STATUS.md.)
 
 ### MIMO marshaling
 
@@ -617,7 +617,8 @@ Per-estimator deviations from the shared contract:
 **Parameters:** shared (`array_geometry`, `angle_convention`, `az_angles`, `el_angles`) plus:
 
 - `diagonal_loading` **[live]** — float or `auto`. Diagonal loading added to the covariance for robustness / invertibility (`R + δI`); `auto` scales δ to a small multiple of the estimated noise floor. Default: auto.
-- `spatial_smoothing` **[live]** — int or none. Forward (sub-array averaging) spatial smoothing to decorrelate coherent multipath and raise the covariance rank, at the cost of effective aperture; requires a uniform sub-array geometry. Default: none.
+- `spatial_smoothing` **[live]** — int-vector or none. Per-aperture-axis sub-array **counts** for forward spatial smoothing on a filled ULA/URA (`[P]` on a ULA, `[P_az, P_el]` on a URA; empty = off). Decorrelates coherent multipath and raises covariance rank at the cost of effective aperture (sub-array length `L_axis = M_axis − P_axis + 1`, so up to `∏P` — or `2∏P` with forward-backward — coherent sources). A non-uniform / holey virtual array must be reduced to a uniform sub-array upstream first (see S3). Default: none.
+- `forward_backward` — bool. Include the conjugate-reversed looks (Pillai/Kwon forward-backward smoothing; needs a centro-symmetric ULA/URA). Applies only when `spatial_smoothing` is set. Default: true.
 - `max_sources` **[live]** — int. Capacity of the optional `doa_multi` output — the number of Capon-spectrum peaks to report (`aoa_estimates` is always the strongest). Overriding reallocates `doa_multi` (minor). Default: 1.
 
 ##### MUSICEstimatorOp
@@ -630,7 +631,8 @@ Per-estimator deviations from the shared contract:
 **Parameters:** shared (`array_geometry`, `angle_convention`, `az_angles`, `el_angles`) plus:
 
 - `num_sources` **[live]** — int or `auto`. Signal-subspace dimension (model order). `auto` estimates it from the covariance eigenvalues (MDL/AIC); an integer fixes it; it may also be seeded from the CFAR/cluster count upstream. Default: auto.
-- `spatial_smoothing` **[live]** — int or none. As MVDR — decorrelates coherent multipath at the cost of aperture; requires a uniform sub-array geometry. Default: none.
+- `spatial_smoothing` **[live]** — int-vector or none. As MVDR — per-aperture-axis sub-array counts on a filled ULA/URA (`[P]` / `[P_az, P_el]`; empty = off); decorrelates coherent multipath at the cost of aperture. Default: none.
+- `forward_backward` — bool. Forward-backward smoothing (needs a centro-symmetric ULA/URA); applies only when `spatial_smoothing` is set. Default: true.
 - `max_sources` **[live]** — int. Capacity of the optional `doa_multi` / `source_count` outputs (holds up to `min(num_sources, max_sources)` DOAs). Default: 4.
 
 ##### RootMUSICEstimatorOp
@@ -642,7 +644,8 @@ Per-estimator deviations from the shared contract:
 **Parameters:** shared `array_geometry` + `angle_convention` (**no scan grid**) plus:
 
 - `num_sources` **[live]** — int or `auto`. Model order (root count); `auto` via MDL/AIC on the covariance eigenvalues. Default: auto.
-- `spatial_smoothing` **[live]** — int or none. Also the standard way to apply Root-MUSIC on a partly-filled / holey virtual array — select uniform sub-arrays. Default: none.
+- `spatial_smoothing` **[live]** — int-vector or none. Per-aperture-axis sub-array counts on a filled ULA/URA (`[P]` / `[P_az, P_el]`; empty = off). A partly-filled / holey virtual array must first be reduced to a uniform sub-array upstream (see S3). Default: none.
+- `forward_backward` — bool. Forward-backward smoothing (needs a centro-symmetric ULA/URA); applies only when `spatial_smoothing` is set. Default: true.
 - `max_sources` **[live]** — int. `doa_multi` / `source_count` capacity. Default: 4.
 
 Requires a ULA / uniform (Vandermonde) geometry; a non-uniform virtual array needs a uniform sub-array selection (or spatial smoothing) first, and native 2-D az/el needs a 2-D-capable variant.
@@ -656,7 +659,8 @@ Requires a ULA / uniform (Vandermonde) geometry; a non-uniform virtual array nee
 **Parameters:** shared `array_geometry` + `angle_convention` (**no scan grid**) plus:
 
 - `num_sources` **[live]** — int or `auto`. Model order; `auto` via MDL/AIC on the covariance eigenvalues. Default: auto.
-- `spatial_smoothing` **[live]** — int or none. Decorrelates coherent multipath at the cost of aperture; requires a uniform sub-array geometry. Default: none.
+- `spatial_smoothing` **[live]** — int-vector or none. Per-aperture-axis sub-array counts on a filled ULA/URA (`[P]` / `[P_az, P_el]`; empty = off); decorrelates coherent multipath at the cost of aperture. Default: none.
+- `forward_backward` — bool. Forward-backward smoothing (needs a centro-symmetric ULA/URA); applies only when `spatial_smoothing` is set. Default: true.
 - `max_sources` **[live]** — int. `doa_multi` / `source_count` capacity. Default: 4.
 - `subarray_spec` — the two shift-invariant sub-arrays / displacement defining the rotational invariance. **Static** (structural). Default: derived from `array_geometry` (maximum-overlap sub-array pair for a ULA).
 
