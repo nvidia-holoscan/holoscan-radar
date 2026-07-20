@@ -33,11 +33,7 @@
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/fmcw_siso/cpp/fmcw_siso [config.yaml]
 
-#include <yaml-cpp/yaml.h>
-
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <memory>
-#include <stdexcept>
 #include <vector>
 
 #include <holoscan/holoscan.hpp>
@@ -50,45 +46,20 @@
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
-#include "radar_app/app/config.hpp"
 #include "radar_app/app/driver.hpp"
 #include "radar_app/app/holoviz_layout.hpp"
 #include "radar_app/app/source.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "radar_app/viz/viz.hpp"
+#include "siso_config.hpp"
 
 namespace radar = holoscan::radar;
 
-// The shared app scaffolding (SimAdcSourceOp, CommonRunConfig, the parse_*
-// helpers, run_fmcw_app, the Holoviz layout builder) and the reusable report /
-// visualization operators all live under holoscan::radar::app; this app pulls
-// them in unqualified and only wires them into its graph.
+// The shared app scaffolding (SimAdcSourceOp, run_fmcw_app, the Holoviz layout
+// builder) and the reusable report / visualization operators live under
+// holoscan::radar::app; this app pulls them in unqualified and only wires them
+// into its graph. The app-owned AppConfig + load_config live in siso_config.hpp.
 using namespace holoscan::radar::app;  // NOLINT(build/namespaces)
-
-namespace {
-
-// SISO config: the shared run/viz/plots fields plus the app's own SimScene.
-struct AppConfig : CommonRunConfig {
-  radar::sim::SimScene scene;  // waveform, cube dims, targets, noise
-};
-
-// Load and validate the app-owned YAML sections only; operator blocks flow
-// through Holoscan's from_config() in compose().
-AppConfig load_config(const std::filesystem::path& path) {
-  if (!std::filesystem::exists(path)) {
-    throw std::runtime_error("config file not found: " + path.string());
-  }
-  const YAML::Node root = YAML::LoadFile(path.string());
-  AppConfig cfg;
-  parse_run_and_cube(root, &cfg, &cfg.scene);  // waveform + run + cube
-  parse_targets_range1d(root, &cfg.scene);
-  parse_noise(root, &cfg.scene);
-  parse_viz_toggles(root, &cfg);
-  parse_plots(root, &cfg);
-  return cfg;
-}
-
-}  // namespace
 
 class FmcwSisoApp : public holoscan::Application {
  public:
