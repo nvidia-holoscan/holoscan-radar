@@ -218,7 +218,7 @@ Orthogonal to the antenna/multiplexing modality: whatever produces channel snaps
 
 #### Covariance estimator open items
 
-All covariance estimators share open items: source-count source (fixed vs. MDL/AIC vs. CFAR-cluster), and — for the gridless pair — a ULA/subarray-selection step on non-uniform virtual arrays. (The multi-snapshot / spatial-smoothing input form is **settled** — forward / forward-backward sub-array averaging on a filled ULA/URA, per-aperture-axis sub-array counts; see STATUS.md.)
+All covariance estimators share one open item: source-count source (fixed vs. MDL/AIC vs. CFAR-cluster). (The ULA/subarray-selection step for non-uniform virtual arrays is **settled** — provided by `SubarraySelectionOp`, which emits a reduced `(snapshot, array_geometry)` pair. The multi-snapshot / spatial-smoothing input form is **settled** — forward / forward-backward sub-array averaging on a filled ULA/URA, per-aperture-axis sub-array counts; see STATUS.md.)
 
 ### MIMO marshaling
 

@@ -55,6 +55,7 @@ radar_add_test(common/test_window)
 radar_add_test(common/test_steering_weights_device
     holoscan::radar_common_steering)
 radar_add_test(common/test_spatial_smoothing)
+radar_add_test(common/test_subarray_selection)
 radar_add_test(common/test_descriptors)
 radar_add_test(common/test_sdk)
 radar_add_test(common/test_sim)
@@ -107,6 +108,8 @@ radar_add_test(detection/test_feature_assembly
     holoscan::feature_assembly_op)
 radar_add_test(clustering/test_cluster_dbscan
     holoscan::cluster_dbscan_op)
+radar_add_test(angle_estimation/test_subarray_selection_op
+    holoscan::subarray_selection_op)
 radar_add_test(angle_estimation/test_snapshot_gather
     holoscan::snapshot_gather_op)
 radar_add_test(angle_estimation/test_beamscan_estimator
