@@ -4,7 +4,9 @@
 // App-specific operators for fmcw_mimo, colocated with the app:
 //   DdmReportVelocityBinsOp — post-DDM-demux velocity axis for reporting
 //   MimoTdmAdcSourceOp / MimoDdmAdcSourceOp — synthetic multiplexed ADC sources
-// These drive the bespoke MIMO simulators (mimo_sim.hpp), so they stay local.
+// These are thin Holoscan wrappers around the shared MIMO simulators
+// (radar_common/sim/mimo_sim.hpp), so they stay local while the signal model
+// lives in radar_common.
 
 #pragma once
 
@@ -21,9 +23,9 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
+#include "radar_common/sim/mimo_sim.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "mimo_sim.hpp"
 
 namespace radar = holoscan::radar;
 
@@ -102,7 +104,7 @@ class MimoTdmAdcSourceOp : public holoscan::Operator {
   HOLOSCAN_OPERATOR_FORWARD_ARGS(MimoTdmAdcSourceOp)
   MimoTdmAdcSourceOp() = default;
 
-  MimoScene scene;
+  radar::sim::SimScene scene;
   radar::TXSchedule tx_schedule;
   double frame_period{0.1};
 
@@ -114,21 +116,21 @@ class MimoTdmAdcSourceOp : public holoscan::Operator {
                holoscan::OutputContext& op_output,
                [[maybe_unused]] holoscan::ExecutionContext& context)
       override {
-    const radar::sim::SimResult sim =
-        simulate_mimo_tdm_interleaved(scene, tx_schedule);
-    if (sim.shape.size() != 3) {
+    const radar::sim::SimResult result =
+        radar::sim::simulate_mimo_tdm_interleaved(scene, tx_schedule);
+    if (result.shape.size() != 3) {
       throw std::runtime_error(
           "MimoTdmAdcSourceOp: expected rank-3 (N_rx, M*L, samples)");
     }
 
-    std::vector<std::complex<float>> cube(sim.cube.size());
-    for (size_t i = 0; i < sim.cube.size(); ++i) {
-      cube[i] = std::complex<float>(static_cast<float>(sim.cube[i].real()),
-                                    static_cast<float>(sim.cube[i].imag()));
+    std::vector<std::complex<float>> cube(result.cube.size());
+    for (size_t i = 0; i < result.cube.size(); ++i) {
+      cube[i] = std::complex<float>(static_cast<float>(result.cube[i].real()),
+                                    static_cast<float>(result.cube[i].imag()));
     }
 
     auto tensor =
-        radar::make_device_tensor(sim.shape, radar::complex_dtype<float>());
+        radar::make_device_tensor(result.shape, radar::complex_dtype<float>());
     if (cudaMemcpy(tensor->data(), cube.data(),
                    sizeof(std::complex<float>) * cube.size(),
                    cudaMemcpyHostToDevice) != cudaSuccess) {
@@ -147,7 +149,7 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
   HOLOSCAN_OPERATOR_FORWARD_ARGS(MimoDdmAdcSourceOp)
   MimoDdmAdcSourceOp() = default;
 
-  MimoScene scene;
+  radar::sim::SimScene scene;
   std::vector<double> doppler_offsets;
   double frame_period{0.1};
 
@@ -159,21 +161,21 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
                holoscan::OutputContext& op_output,
                [[maybe_unused]] holoscan::ExecutionContext& context)
       override {
-    const radar::sim::SimResult sim =
-        simulate_mimo_ddm_coded(scene, doppler_offsets);
-    if (sim.shape.size() != 3) {
+    const radar::sim::SimResult result =
+        radar::sim::simulate_mimo_ddm_coded(scene, doppler_offsets);
+    if (result.shape.size() != 3) {
       throw std::runtime_error(
           "MimoDdmAdcSourceOp: expected rank-3 (N_rx, num_chirps, samples)");
     }
 
-    std::vector<std::complex<float>> cube(sim.cube.size());
-    for (size_t i = 0; i < sim.cube.size(); ++i) {
-      cube[i] = std::complex<float>(static_cast<float>(sim.cube[i].real()),
-                                    static_cast<float>(sim.cube[i].imag()));
+    std::vector<std::complex<float>> cube(result.cube.size());
+    for (size_t i = 0; i < result.cube.size(); ++i) {
+      cube[i] = std::complex<float>(static_cast<float>(result.cube[i].real()),
+                                    static_cast<float>(result.cube[i].imag()));
     }
 
     auto tensor =
-        radar::make_device_tensor(sim.shape, radar::complex_dtype<float>());
+        radar::make_device_tensor(result.shape, radar::complex_dtype<float>());
     if (cudaMemcpy(tensor->data(), cube.data(),
                    sizeof(std::complex<float>) * cube.size(),
                    cudaMemcpyHostToDevice) != cudaSuccess) {

@@ -81,9 +81,10 @@ struct SimScene {
   SimWaveform waveform{};
   int64_t num_chirps{64};
   int64_t samples_per_chirp{256};
-  // Element positions (m, array-local frame). Single TX for SISO/SIMO; the
-  // API is shaped so TDM/DDM multiplexing can be added later.
-  Vec3 tx_position{0.0, 0.0, 0.0};
+  // Element positions (m, array-local frame). simulate() models a single TX
+  // (tx_positions must hold exactly one element); the MIMO simulators
+  // (radar_common/sim/mimo_sim.hpp) consume the full TX set for TDM/DDM.
+  std::vector<Vec3> tx_positions{Vec3{0.0, 0.0, 0.0}};
   std::vector<Vec3> rx_positions{Vec3{0.0, 0.0, 0.0}};
   double propagation_speed{kSimSpeedOfLight};
   // Additive complex white Gaussian noise, relative to a unit-amplitude
@@ -145,6 +146,11 @@ inline SimResult simulate(const SimScene& scene) {
   if (scene.rx_positions.empty()) {
     throw std::invalid_argument("point_target_sim: need >= 1 RX element");
   }
+  if (scene.tx_positions.size() != 1) {
+    throw std::invalid_argument(
+        "point_target_sim: simulate() models a single TX; use the MIMO "
+        "simulators (mimo_sim.hpp) for multi-TX scenes");
+  }
   const int64_t num_rx = static_cast<int64_t>(scene.rx_positions.size());
   const int64_t num_chirps = scene.num_chirps;
   const int64_t samples = scene.samples_per_chirp;
@@ -171,7 +177,7 @@ inline SimResult simulate(const SimScene& scene) {
       // Far-field two-way delay: 2*R_k minus the (tx+rx) aperture
       // projection onto the look direction.
       const double aperture =
-          dot(scene.tx_position, truth.look_direction) +
+          dot(scene.tx_positions[0], truth.look_direction) +
           dot(scene.rx_positions[static_cast<size_t>(rx)],
               truth.look_direction);
       for (int64_t k = 0; k < num_chirps; ++k) {

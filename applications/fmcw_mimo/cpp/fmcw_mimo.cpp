@@ -39,7 +39,6 @@
 #include "radar_app/viz/viz.hpp"
 #include "config.hpp"
 #include "custom_ops.hpp"
-#include "mimo_sim.hpp"
 
 namespace radar = holoscan::radar;
 using namespace holoscan::radar::app;  // NOLINT(build/namespaces)

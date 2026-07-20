@@ -3,12 +3,15 @@
 
 // App-owned configuration for fmcw_mimo: AppConfig plus the scene-geometry and
 // YAML loaders (TDM/DDM branch, virtual array geometry, targets, the
-// boresight-axis mirror of the beamscan grid). Colocated with the app.
+// boresight-axis mirror of the beamscan grid). Colocated with the app. The
+// scene is the shared radar::sim::SimScene (multi-TX); the MIMO simulators live
+// in radar_common/sim/mimo_sim.hpp.
 
 #pragma once
 
 #include <yaml-cpp/yaml.h>
 
+#include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <limits>
 #include <stdexcept>
@@ -21,15 +24,15 @@
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
 #include "radar_common/sim/array_builders.hpp"
+#include "radar_common/sim/mimo_sim.hpp"
 #include "radar_app/app/config.hpp"
-#include "mimo_sim.hpp"
 
 namespace radar = holoscan::radar;
 using namespace holoscan::radar::app;  // NOLINT(build/namespaces)
 
 struct AppConfig : CommonRunConfig {
   radar::MultiplexingScheme scheme{radar::MultiplexingScheme::kTdm};
-  MimoScene scene;
+  radar::sim::SimScene scene;
   radar::TXSchedule tx_schedule;
   radar::DDMCodeDescriptor ddm_code;
   std::vector<double> ddm_doppler_offsets;
@@ -45,16 +48,13 @@ struct AppConfig : CommonRunConfig {
   int64_t report_num_doppler{0};
 };
 
+// Build the TX row + RX URA + the virtual (TX⊕RX) array geometry into the scene.
 inline void load_scene_geometry(AppConfig* cfg, const YAML::Node& root,
-                         double wavelength) {
+                                double wavelength, int64_t num_tx) {
   const YAML::Node tx = root["tx_array"];
   const double tx_spacing = tx["spacing"].as<double>();
-  cfg->scene.tx_positions.clear();
-  cfg->scene.tx_positions.reserve(static_cast<size_t>(cfg->scene.num_tx));
-  for (int64_t itx = 0; itx < cfg->scene.num_tx; ++itx) {
-    cfg->scene.tx_positions.push_back(radar::sim::Vec3{
-        0.0, static_cast<double>(itx) * tx_spacing * wavelength, 0.0});
-  }
+  cfg->scene.tx_positions =
+      radar::sim::make_linear_positions(num_tx, tx_spacing, wavelength);
 
   const YAML::Node rx = root["rx_array"];
   if (!rx) {
@@ -67,16 +67,8 @@ inline void load_scene_geometry(AppConfig* cfg, const YAML::Node& root,
     throw std::runtime_error(
         "MIMO URA requires rx_array.az_elements >= 2 and el_elements >= 2");
   }
-  cfg->scene.rx_positions.clear();
-  cfg->scene.rx_positions.reserve(
-      static_cast<size_t>(az_elements * el_elements));
-  for (int64_t iz = 0; iz < el_elements; ++iz) {
-    for (int64_t iy = 0; iy < az_elements; ++iy) {
-      cfg->scene.rx_positions.push_back(
-          scale_position(static_cast<double>(iy), static_cast<double>(iz),
-                         rx_spacing, wavelength));
-    }
-  }
+  cfg->scene.rx_positions = radar::sim::make_ura_rx_positions(
+      az_elements, el_elements, rx_spacing, wavelength);
 
   cfg->array_geometry = radar::sim::make_virtual_geometry(
       cfg->scene.tx_positions, cfg->scene.rx_positions, wavelength);
@@ -89,8 +81,7 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   const YAML::Node root = YAML::LoadFile(path.string());
   AppConfig cfg;
 
-  const auto waveform =
-      root["waveform"].as<radar::FMCWWaveformDescriptor>();
+  const auto waveform = root["waveform"].as<radar::FMCWWaveformDescriptor>();
   cfg.scene.waveform.carrier_frequency = waveform.carrier_frequency();
   cfg.scene.waveform.bandwidth = waveform.bandwidth();
   cfg.scene.waveform.chirp_duration = waveform.chirp_duration();
@@ -117,14 +108,14 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   if (!tx) {
     throw std::runtime_error("tx_array section is required for MIMO");
   }
-  cfg.scene.num_tx = tx["num_tx"].as<int64_t>();
-  if (cfg.scene.num_tx < 1) {
+  const int64_t num_tx = tx["num_tx"].as<int64_t>();
+  if (num_tx < 1) {
     throw std::runtime_error("tx_array.num_tx must be >= 1");
   }
 
   const double wavelength = cfg.scene.waveform.wavelength();
   cfg.wavelength = wavelength;
-  load_scene_geometry(&cfg, root, wavelength);
+  load_scene_geometry(&cfg, root, wavelength, num_tx);
 
   if (cfg.scheme == radar::MultiplexingScheme::kDdm) {
     cfg.scene.waveform.chirp_repetition_interval =
@@ -139,17 +130,17 @@ inline AppConfig load_config(const std::filesystem::path& path) {
           "fmcw_mimo: mimo_coherent_compensation.ddm_code is required for DDM");
     }
     cfg.ddm_code = mcc["ddm_code"].as<radar::DDMCodeDescriptor>();
-    if (cfg.ddm_code.num_tx != cfg.scene.num_tx) {
+    if (cfg.ddm_code.num_tx != num_tx) {
       throw std::runtime_error(
           "fmcw_mimo: ddm_code.num_tx must match tx_array.num_tx");
     }
-    cfg.ddm_doppler_offsets = resolve_ddm_offsets(cfg.ddm_code);
-    if (cfg.scene.num_chirps % cfg.scene.num_tx != 0) {
+    cfg.ddm_doppler_offsets = radar::sim::resolve_ddm_offsets(cfg.ddm_code);
+    if (cfg.scene.num_chirps % num_tx != 0) {
       throw std::runtime_error(
           "fmcw_mimo: cube.num_chirps must be divisible by tx_array.num_tx "
           "for DDM");
     }
-    const int64_t band = cfg.scene.num_chirps / cfg.scene.num_tx;
+    const int64_t band = cfg.scene.num_chirps / num_tx;
     cfg.report_num_doppler = band - cfg.ddm_code.guard_bands;
     if (cfg.report_num_doppler <= 0) {
       throw std::runtime_error(
@@ -169,17 +160,17 @@ inline AppConfig load_config(const std::filesystem::path& path) {
       throw std::runtime_error(
           "fmcw_mimo: mimo_deinterleave section is required for TDM");
     }
-    cfg.tx_schedule = root["mimo_deinterleave"]["tx_schedule"]
-                          .as<radar::TXSchedule>();
-    if (cfg.tx_schedule.num_tx != cfg.scene.num_tx) {
+    cfg.tx_schedule =
+        root["mimo_deinterleave"]["tx_schedule"].as<radar::TXSchedule>();
+    if (cfg.tx_schedule.num_tx != num_tx) {
       throw std::runtime_error(
           "mimo_deinterleave.tx_schedule.num_tx must match tx_array.num_tx");
     }
     cfg.report_num_doppler = cfg.scene.num_chirps;
   }
 
-  cfg.tx_positions_flat = flatten_positions(cfg.scene.tx_positions);
-  cfg.rx_positions_flat = flatten_positions(cfg.scene.rx_positions);
+  cfg.tx_positions_flat = radar::sim::flatten_positions(cfg.scene.tx_positions);
+  cfg.rx_positions_flat = radar::sim::flatten_positions(cfg.scene.rx_positions);
 
   parse_targets_range_az_el(root, &cfg.scene, "fmcw_mimo");
   parse_noise(root, &cfg.scene);
@@ -207,6 +198,3 @@ inline AppConfig load_config(const std::filesystem::path& path) {
               &cfg.el_lo, &cfg.el_hi);
   return cfg;
 }
-
-// Post-DDM-demux velocity axis for reporting: CFAR / feature assembly run on
-// VirtualArrayAssemblyOp rd_maps whose Doppler width is num_doppler_per_tx,

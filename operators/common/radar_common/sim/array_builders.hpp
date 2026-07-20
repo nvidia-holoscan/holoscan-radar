@@ -93,4 +93,31 @@ inline ArrayGeometry make_virtual_geometry(
   return geom;
 }
 
+// Linear array of `count` elements along the y (azimuth) axis: element i at
+// (0, i * spacing_wl * wavelength, 0). Used for a MIMO TX row.
+inline std::vector<Vec3> make_linear_positions(int64_t count, double spacing_wl,
+                                               double wavelength) {
+  std::vector<Vec3> positions;
+  positions.reserve(static_cast<size_t>(count));
+  for (int64_t i = 0; i < count; ++i) {
+    positions.push_back(
+        Vec3{0.0, static_cast<double>(i) * spacing_wl * wavelength, 0.0});
+  }
+  return positions;
+}
+
+// Flatten a list of element positions to a row-major (N, 3) double array, e.g.
+// for VirtualArrayAssemblyOp's tx_positions / rx_positions parameters.
+inline std::vector<double> flatten_positions(
+    const std::vector<Vec3>& positions) {
+  std::vector<double> flat;
+  flat.reserve(positions.size() * 3);
+  for (const Vec3& p : positions) {
+    flat.push_back(p[0]);
+    flat.push_back(p[1]);
+    flat.push_back(p[2]);
+  }
+  return flat;
+}
+
 }  // namespace holoscan::radar::sim
