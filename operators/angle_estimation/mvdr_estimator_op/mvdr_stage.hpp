@@ -298,16 +298,17 @@ __device__ inline bool mvdr_is_local_max(const T* __restrict__ spec, int64_t ia,
   return true;
 }
 
-// One block per item. Extracts the `max_sources` strongest Capon-spectrum peaks
-// into doa_multi (num_items, max_sources, 2), with source_count (num_items,) the
-// number actually found (≤ max_sources); unused rows are NaN.
+// One block per item. Extracts the `max_sources` strongest Capon-spectrum
+// peaks into doa_multi (num_items, max_sources, 2), with source_count
+// (num_items,) the number actually found (≤ max_sources); unused rows are NaN.
 //
 // Pass 0 is a *global* argmax (same tie-break as capon_reduce_kernel: highest
 // power, lowest beam index) so doa_multi[·,0,·] matches aoa_estimates even on
 // flat plateaus. Passes k≥1 require a strict 2-D local maximum (neighbor ≥ p
 // rejects plateaus) so a single lobe is not double-counted as multiple sources.
 // Cheap relative to the Capon scan — re-reads the resident spectrum. Dynamic
-// shared: [power T[blockDim]] [index int64_t[blockDim]] [sel int64_t[max_sources]].
+// shared: [power T[blockDim]] [index int64_t[blockDim]]
+// [sel int64_t[max_sources]].
 template <typename T>
 __global__ void peak_extract_kernel(const T* __restrict__ spectrum,
                                     int64_t num_items, int64_t num_az,
