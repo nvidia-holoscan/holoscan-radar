@@ -4,21 +4,22 @@
 // SIMO FMCW *dense* angle-then-cluster pipeline (headless-capable, with an
 // optional Holoviz display):
 //
-//   SimoAdcSourceOp -> Range -> Clutter -> Doppler
+//   SimAdcSourceOp -> Range -> Clutter -> Doppler
 //     -> PhaseShiftBeamformerOp (rd_maps -> rda_cube, angle on every RD cell)
 //     -> CFARDetectorOp (on the RDA cube; nci_axes=[] -> az/el ride as batch)
 //     -> AnglePeakPickOp (keep the peak (az,el) beam per detected RD cell)
 //     -> CubeAoaLookupOp (bridge: detection az/el bins -> aoa_estimates)
 //     -> FeatureAssembly [range, velocity, az, el] -> ClusterDBSCAN
-//     -> DetectionReduction -> DenseClusterReportOp (logs clusters)
+//     -> DetectionReduction -> ClusterReportOp (logs clusters)
 //
 // This is a lean demo exercising PhaseShiftBeamformerOp end-to-end; it is kept
-// separate from fmcw_simo (the sparse-path demo) because the dense path
-// diverges in the detect+angle middle *and* the reporting layer (4-column
-// detection_idx / rank-4 detection_score vs. the sparse 2-column layout the
-// shared radar_app report ops assume). See the operator's OPEN_ITEMS for the
-// FeatureAssembly az/el contract gap that the CubeAoaLookupOp bridge works
-// around.
+// separate from fmcw_simo (the sparse-path demo) because the dense path diverges
+// in the detect+angle middle: CFAR runs per-beam on the RDA cube, so the
+// detection_idx / rep_idx carry (az_bin, el_bin) batch columns. The shared
+// ClusterReportOp handles the 4-column rep_idx directly (az/el resolved from the
+// beam grids passed as az_grid/el_grid), so no forked report op is needed. See
+// the operator's OPEN_ITEMS for the FeatureAssembly az/el contract gap that the
+// CubeAoaLookupOp bridge works around.
 //
 // The display reuses the app-agnostic radar_app/viz operators unchanged: the
 // RD-map image + rolling range/velocity plots + boresight az/el scatter. The
@@ -64,9 +65,15 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
+#include "radar_common/sim/array_builders.hpp"
 #include "radar_common/sim/point_target_sim.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "radar_app/app/config.hpp"
+#include "radar_app/app/driver.hpp"
+#include "radar_app/app/holoviz_layout.hpp"
+#include "radar_app/app/source.hpp"
+#include "radar_app/report/report_ops.hpp"
 #include "radar_app/viz/display.hpp"
 #include "radar_app/viz/viz.hpp"
 
@@ -77,56 +84,17 @@ namespace {
 
 using Precision = float;
 
-struct PlotsConfig {
-  bool enable{true};
-  int64_t window{120};
-  float velocity_ylim_lo{std::numeric_limits<float>::quiet_NaN()};
-  float velocity_ylim_hi{std::numeric_limits<float>::quiet_NaN()};
-};
-
-struct AppConfig {
+// Dense config: shared run/viz/plots fields plus the scene, URA geometry, the
+// beamformer angle grids (mirrored for the az/el lookup + report + boresight),
+// and the dense-only velocity-plot Y clamp.
+struct AppConfig : CommonRunConfig {
   radar::sim::SimScene scene;
   radar::ArrayGeometry array_geometry;
   std::vector<double> az_angles;
   std::vector<double> el_angles;
-  PlotsConfig plots;
-  int64_t num_frames{1};
-  double frame_period{0.1};
-  bool visualize{false};
-  bool skip_display_check{false};
-  bool headless{false};
+  float velocity_ylim_lo{std::numeric_limits<float>::quiet_NaN()};
+  float velocity_ylim_hi{std::numeric_limits<float>::quiet_NaN()};
 };
-
-// Uniform rectangular array (URA) in the y-z plane, normal to boresight (+x):
-// element (iy, iz) at (0, iy*spacing, iz*spacing). y resolves azimuth, z
-// elevation. Matches the fmcw_simo geometry so the two demos share a scene.
-radar::ArrayGeometry make_ura_geometry(int64_t az_elements, int64_t el_elements,
-                                       double spacing_wl, double wavelength) {
-  radar::ArrayGeometry geom;
-  geom.wavelength = wavelength;
-  geom.geometry_type = radar::ArrayGeometryType::kUra;
-  geom.element_positions.reserve(
-      static_cast<size_t>(az_elements * el_elements * 3));
-  for (int64_t iz = 0; iz < el_elements; ++iz) {
-    for (int64_t iy = 0; iy < az_elements; ++iy) {
-      geom.element_positions.push_back(0.0);
-      geom.element_positions.push_back(static_cast<double>(iy) * spacing_wl *
-                                       wavelength);
-      geom.element_positions.push_back(static_cast<double>(iz) * spacing_wl *
-                                       wavelength);
-    }
-  }
-  geom.validate();
-  return geom;
-}
-
-void advance_scene(radar::sim::SimScene* scene, double dt) {
-  for (radar::sim::PointTarget& target : scene->targets) {
-    for (int axis = 0; axis < 3; ++axis) {
-      target.position[axis] += target.velocity[axis] * dt;
-    }
-  }
-}
 
 AppConfig load_config(const std::filesystem::path& path) {
   if (!std::filesystem::exists(path)) {
@@ -134,20 +102,10 @@ AppConfig load_config(const std::filesystem::path& path) {
   }
   const YAML::Node root = YAML::LoadFile(path.string());
   AppConfig cfg;
+  parse_run_and_cube(root, &cfg, &cfg.scene);  // waveform + run + cube
 
-  const auto waveform = root["waveform"].as<radar::FMCWWaveformDescriptor>();
-  cfg.scene.waveform.carrier_frequency = waveform.carrier_frequency();
-  cfg.scene.waveform.bandwidth = waveform.bandwidth();
-  cfg.scene.waveform.chirp_duration = waveform.chirp_duration();
-  cfg.scene.waveform.sample_rate = waveform.sample_rate();
-  cfg.scene.waveform.chirp_repetition_interval =
-      waveform.chirp_repetition_interval();
-
-  cfg.num_frames = root["run"]["num_frames"].as<int64_t>();
-  cfg.frame_period = root["run"]["frame_period"].as<double>();
-  cfg.scene.num_chirps = root["cube"]["num_chirps"].as<int64_t>();
-  cfg.scene.samples_per_chirp = root["cube"]["samples_per_chirp"].as<int64_t>();
-
+  // rx_array → URA geometry + simulator RX positions (matches fmcw_simo so the
+  // two demos share a scene).
   const YAML::Node rx = root["rx_array"];
   if (!rx) {
     throw std::runtime_error("rx_array section is required for SIMO");
@@ -160,128 +118,40 @@ AppConfig load_config(const std::filesystem::path& path) {
     throw std::runtime_error(
         "SIMO URA requires rx_array.az_elements >= 2 and el_elements >= 2");
   }
-  cfg.array_geometry =
-      make_ura_geometry(az_elements, el_elements, spacing, wavelength);
-  cfg.scene.rx_positions.clear();
-  cfg.scene.rx_positions.reserve(
-      static_cast<size_t>(az_elements * el_elements));
-  for (int64_t iz = 0; iz < el_elements; ++iz) {
-    for (int64_t iy = 0; iy < az_elements; ++iy) {
-      cfg.scene.rx_positions.push_back(
-          radar::sim::Vec3{0.0, static_cast<double>(iy) * spacing * wavelength,
-                           static_cast<double>(iz) * spacing * wavelength});
-    }
-  }
+  cfg.array_geometry = radar::sim::make_ura_geometry(az_elements, el_elements,
+                                                     spacing, wavelength);
+  cfg.scene.rx_positions = radar::sim::make_ura_rx_positions(
+      az_elements, el_elements, spacing, wavelength);
 
-  // The dense report and the az/el lookup bridge both need the beam grid, so
-  // parse it here (the beamformer itself reads the same block via from_config).
+  // The dense report and the az/el lookup bridge both need the beam grid. This
+  // is a READ-ONLY MIRROR of the phase_shift_beamformer block — the beamformer
+  // still owns az_angles/el_angles via from_config().
   const YAML::Node beam = root["phase_shift_beamformer"];
   if (!beam || !beam["az_angles"] || !beam["el_angles"]) {
     throw std::runtime_error(
         "phase_shift_beamformer.az_angles and el_angles are required");
   }
-  for (const YAML::Node& v : beam["az_angles"]) {
-    cfg.az_angles.push_back(v.as<double>());
-  }
-  for (const YAML::Node& v : beam["el_angles"]) {
-    cfg.el_angles.push_back(v.as<double>());
-  }
+  cfg.az_angles = extract_grid(beam["az_angles"]);
+  cfg.el_angles = extract_grid(beam["el_angles"]);
 
-  for (const YAML::Node& t : root["targets"]) {
-    const double range = t["range"].as<double>();
-    const double azimuth = t["azimuth"].as<double>();
-    const double elevation = t["elevation"].as<double>();
-    const double amplitude = t["amplitude"].as<double>();
-    const YAML::Node vel = t["velocity"];
-    if (!vel || !vel.IsSequence() || vel.size() != 3) {
-      throw std::runtime_error(
-          "fmcw_dense_simo: each target velocity must be a 3-vector [vx, vy, "
-          "vz] m/s (array frame)");
-    }
-    const radar::sim::Vec3 dir{std::cos(elevation) * std::cos(azimuth),
-                               std::cos(elevation) * std::sin(azimuth),
-                               std::sin(elevation)};
-    cfg.scene.targets.push_back(
-        {radar::sim::Vec3{range * dir[0], range * dir[1], range * dir[2]},
-         radar::sim::Vec3{vel[0].as<double>(), vel[1].as<double>(),
-                          vel[2].as<double>()},
-         {amplitude, 0.0}});
-  }
+  parse_targets_range_az_el(root, &cfg.scene, "fmcw_dense_simo");
+  parse_noise(root, &cfg.scene);
+  parse_viz_toggles(root, &cfg);
+  parse_plots(root, &cfg);
 
-  const YAML::Node noise = root["noise_snr_db"];
-  if (noise && !noise.IsNull()) {
-    cfg.scene.snr_db = noise.as<double>();
-  }
-
-  if (root["visualize"]) {
-    cfg.visualize = root["visualize"].as<bool>();
-  }
-  if (root["skip_display_check"]) {
-    cfg.skip_display_check = root["skip_display_check"].as<bool>();
-  }
-  if (root["headless"]) {
-    cfg.headless = root["headless"].as<bool>();
-  }
-  if (const YAML::Node plots = root["plots"]) {
-    if (plots["enable"]) {
-      cfg.plots.enable = plots["enable"].as<bool>();
+  // Dense-only plot knob: optional fixed velocity-plot Y extent.
+  if (const YAML::Node plots = root["plots"]; plots && !plots.IsNull()) {
+    const YAML::Node vy = plots["velocity_ylim"];
+    if (vy && vy.IsSequence() && vy.size() == 2) {
+      cfg.velocity_ylim_lo = vy[0].as<float>();
+      cfg.velocity_ylim_hi = vy[1].as<float>();
     }
-    if (plots["window"]) {
-      cfg.plots.window = plots["window"].as<int64_t>();
-    }
-    if (plots["velocity_ylim"] && plots["velocity_ylim"].IsSequence() &&
-        plots["velocity_ylim"].size() == 2) {
-      cfg.plots.velocity_ylim_lo = plots["velocity_ylim"][0].as<float>();
-      cfg.plots.velocity_ylim_hi = plots["velocity_ylim"][1].as<float>();
-    }
-  }
-  if (cfg.plots.window <= 1) {
-    throw std::runtime_error("plots.window must be > 1");
   }
   return cfg;
 }
 
 }  // namespace
 
-// Emits a simulated SIMO ADC cube (N_rx, num_chirps, samples) per tick and
-// advances the scene. Identical to fmcw_simo's source (kept local to keep the
-// dense demo self-contained).
-class SimoAdcSourceOp : public holoscan::Operator {
- public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(SimoAdcSourceOp)
-  SimoAdcSourceOp() = default;
-
-  radar::sim::SimScene scene;
-  double frame_period{0.1};
-
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.output<holoscan::TensorMap>("adc_cube");
-  }
-
-  void compute([[maybe_unused]] holoscan::InputContext& op_input,
-               holoscan::OutputContext& op_output,
-               [[maybe_unused]] holoscan::ExecutionContext& context) override {
-    const radar::sim::SimResult sim = radar::sim::simulate(scene);
-    if (sim.shape.size() != 3 || sim.shape[0] < 2) {
-      throw std::runtime_error(
-          "SimoAdcSourceOp: expected rank-3 (N_rx>=2, chirps, samples)");
-    }
-    std::vector<std::complex<float>> cube(sim.cube.size());
-    for (size_t i = 0; i < sim.cube.size(); ++i) {
-      cube[i] = std::complex<float>(static_cast<float>(sim.cube[i].real()),
-                                    static_cast<float>(sim.cube[i].imag()));
-    }
-    auto tensor =
-        radar::make_device_tensor(sim.shape, radar::complex_dtype<float>());
-    if (cudaMemcpy(tensor->data(), cube.data(),
-                   sizeof(std::complex<float>) * cube.size(),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error("SimoAdcSourceOp: H2D upload failed");
-    }
-    radar::emit_single(op_output, "adc_cube", tensor);
-    advance_scene(&scene, frame_period);
-  }
-};
 
 // Angle peak-pick: collapse the dense cube's many per-beam detections down to
 // one detection per range-Doppler cell — the (az, el) beam with the largest
@@ -492,147 +362,6 @@ class CubeAoaLookupOp : public holoscan::Operator {
   }
 };
 
-// Dense-aware cluster log. Mirrors radar_app's ClusterReportOp but handles the
-// 4-column dense layout: points = (range, velocity, az, el), rep_idx =
-// (az_bin, el_bin, doppler_bin, range_bin). Kept local because the shared op
-// hard-codes the sparse 2-column detection_idx / rep_idx.
-class DenseClusterReportOp : public holoscan::Operator {
- public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(DenseClusterReportOp)
-  DenseClusterReportOp() = default;
-
-  std::vector<double> az_grid;
-  std::vector<double> el_grid;
-
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.input<holoscan::TensorMap>("points");
-    spec.input<holoscan::TensorMap>("labels");
-    spec.input<holoscan::TensorMap>("sizes");
-    spec.input<holoscan::TensorMap>("rep_idx");
-    spec.input<holoscan::TensorMap>("range_bins");
-    spec.input<holoscan::TensorMap>("velocity_bins");
-  }
-
-  void compute(holoscan::InputContext& op_input,
-               [[maybe_unused]] holoscan::OutputContext& op_output,
-               [[maybe_unused]] holoscan::ExecutionContext& context) override {
-    const char* who = "DenseClusterReportOp";
-    auto points = radar::receive_single(op_input, "points", who);
-    auto labels = radar::receive_single(op_input, "labels", who);
-    auto sizes = radar::receive_single(op_input, "sizes", who);
-    auto rep_idx = radar::receive_single(op_input, "rep_idx", who);
-    auto range_bins = radar::receive_single(op_input, "range_bins", who);
-    auto velocity_bins = radar::receive_single(op_input, "velocity_bins", who);
-
-    const auto pshape = points->shape();
-    if (pshape.size() != 2 || pshape[1] != 4) {
-      throw std::runtime_error(
-          "DenseClusterReportOp: points must be (N, 4) [range, vel, az, el]");
-    }
-    const int64_t num_points = pshape[0];
-    const int64_t num_clusters = sizes->shape()[0];
-    const auto rshape = rep_idx->shape();
-    if (rshape.size() != 2 || rshape[1] != 4 || rshape[0] != num_clusters) {
-      throw std::runtime_error(
-          "DenseClusterReportOp: rep_idx must be (num_clusters, 4)");
-    }
-    const int64_t num_range = range_bins->shape()[0];
-    const int64_t num_doppler = velocity_bins->shape()[0];
-
-    std::vector<float> pts(static_cast<size_t>(num_points * 4));
-    std::vector<int64_t> lab(static_cast<size_t>(num_points));
-    std::vector<int64_t> sz(static_cast<size_t>(num_clusters));
-    std::vector<int64_t> rep(static_cast<size_t>(num_clusters * 4));
-    std::vector<float> ranges(static_cast<size_t>(num_range));
-    std::vector<float> velocities(static_cast<size_t>(num_doppler));
-
-    if (cudaDeviceSynchronize() != cudaSuccess) {
-      throw std::runtime_error("DenseClusterReportOp: device sync failed");
-    }
-    const auto copy_d2h = [](void* dst,
-                             const std::shared_ptr<holoscan::Tensor>& src) {
-      if (src->nbytes() == 0) {
-        return;
-      }
-      if (cudaMemcpy(dst, src->data(), static_cast<size_t>(src->nbytes()),
-                     cudaMemcpyDeviceToHost) != cudaSuccess) {
-        throw std::runtime_error("DenseClusterReportOp: D2H copy failed");
-      }
-    };
-    copy_d2h(pts.data(), points);
-    copy_d2h(lab.data(), labels);
-    copy_d2h(sz.data(), sizes);
-    copy_d2h(rep.data(), rep_idx);
-    copy_d2h(ranges.data(), range_bins);
-    copy_d2h(velocities.data(), velocity_bins);
-
-    std::vector<double> sum_r(static_cast<size_t>(num_clusters), 0.0);
-    std::vector<double> sum_v(static_cast<size_t>(num_clusters), 0.0);
-    std::vector<double> sum_az(static_cast<size_t>(num_clusters), 0.0);
-    std::vector<double> sum_el(static_cast<size_t>(num_clusters), 0.0);
-    int64_t noise = 0;
-    for (int64_t i = 0; i < num_points; ++i) {
-      const int64_t c = lab[static_cast<size_t>(i)];
-      if (c < 0) {
-        ++noise;
-        continue;
-      }
-      sum_r[static_cast<size_t>(c)] += pts[static_cast<size_t>(i * 4 + 0)];
-      sum_v[static_cast<size_t>(c)] += pts[static_cast<size_t>(i * 4 + 1)];
-      sum_az[static_cast<size_t>(c)] += pts[static_cast<size_t>(i * 4 + 2)];
-      sum_el[static_cast<size_t>(c)] += pts[static_cast<size_t>(i * 4 + 3)];
-    }
-
-    const int64_t num_az = static_cast<int64_t>(az_grid.size());
-    const int64_t num_el = static_cast<int64_t>(el_grid.size());
-    HOLOSCAN_LOG_INFO("dense: {} detections -> {} clusters ({} noise)",
-                      num_points, num_clusters, noise);
-    for (int64_t c = 0; c < num_clusters; ++c) {
-      const int64_t n = sz[static_cast<size_t>(c)];
-      const double inv = n > 0 ? 1.0 / static_cast<double>(n) : 0.0;
-      const int64_t az_bin = rep[static_cast<size_t>(c * 4 + 0)];
-      const int64_t el_bin = rep[static_cast<size_t>(c * 4 + 1)];
-      const int64_t dd = rep[static_cast<size_t>(c * 4 + 2)];
-      const int64_t rr = rep[static_cast<size_t>(c * 4 + 3)];
-      if (az_bin < 0 || az_bin >= num_az || el_bin < 0 || el_bin >= num_el ||
-          dd < 0 || dd >= num_doppler || rr < 0 || rr >= num_range) {
-        throw std::runtime_error(
-            "DenseClusterReportOp: rep_idx out of grid/axis bounds");
-      }
-      HOLOSCAN_LOG_INFO(
-          "  cluster {}: {} pts, centroid range {:.2f} m, vel {:+.2f} m/s, "
-          "az {:.3f} rad, el {:.3f} rad; rep range {:.2f} m, vel {:+.2f} m/s, "
-          "az {:.3f} rad, el {:.3f} rad",
-          c, n, sum_r[static_cast<size_t>(c)] * inv,
-          sum_v[static_cast<size_t>(c)] * inv,
-          sum_az[static_cast<size_t>(c)] * inv,
-          sum_el[static_cast<size_t>(c)] * inv,
-          ranges[static_cast<size_t>(rr)], velocities[static_cast<size_t>(dd)],
-          az_grid[static_cast<size_t>(az_bin)],
-          el_grid[static_cast<size_t>(el_bin)]);
-    }
-  }
-};
-
-// Drains an unused output (raw Entity receive) so its transmitter has a
-// downstream and the producer can tick. CFAR always emits detection_mask /
-// detection_score / noise_estimate; the dense demo consumes none of them.
-// Entity receive also sidesteps Holoscan 4.3's bool-DLPack path for the mask.
-class EntityDrainOp : public holoscan::Operator {
- public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(EntityDrainOp)
-  EntityDrainOp() = default;
-
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.input<holoscan::gxf::Entity>("input");
-  }
-
-  void compute(holoscan::InputContext& op_input,
-               [[maybe_unused]] holoscan::OutputContext& op_output,
-               [[maybe_unused]] holoscan::ExecutionContext& context) override {
-    (void)op_input.receive<holoscan::gxf::Entity>("input");
-  }
-};
 
 // Slices the trailing two columns of an int64 index tensor (num_points, C>=2)
 // down to (num_points, 2). The dense CFAR / reduction indices carry the cube's
@@ -697,7 +426,7 @@ class FmcwDenseSimoApp : public holoscan::Application {
 
   void compose() override {
     using holoscan::Arg;
-    auto source = make_operator<SimoAdcSourceOp>(
+    auto source = make_operator<SimAdcSourceOp>(
         "adc_source",
         make_condition<holoscan::CountCondition>("frame_count",
                                                  cfg.num_frames),
@@ -732,7 +461,7 @@ class FmcwDenseSimoApp : public holoscan::Application {
         "cluster_dbscan", from_config("cluster_dbscan"));
     auto reduction = make_operator<radar::DetectionReductionOp<Precision>>(
         "detection_reduction", from_config("reduction"));
-    auto report = make_operator<DenseClusterReportOp>("dense_cluster_report");
+    auto report = make_operator<ClusterReportOp>("cluster_report");
     report->az_grid = cfg.az_angles;
     report->el_grid = cfg.el_angles;
 
@@ -751,8 +480,8 @@ class FmcwDenseSimoApp : public holoscan::Application {
     // bool mask / noise outputs are unused, so drain them so CFAR ticks.
     add_flow(cfar, peak_pick, {{"detection_idx", "detection_idx"},
                                {"detection_score", "detection_score"}});
-    auto mask_sink = make_operator<EntityDrainOp>("detection_mask_sink");
-    auto noise_sink = make_operator<EntityDrainOp>("noise_estimate_sink");
+    auto mask_sink = make_operator<NullSinkOp>("detection_mask_sink");
+    auto noise_sink = make_operator<NullSinkOp>("noise_estimate_sink");
     add_flow(cfar, mask_sink, {{"detection_mask", "input"}});
     add_flow(cfar, noise_sink, {{"noise_estimate", "input"}});
 
@@ -762,7 +491,7 @@ class FmcwDenseSimoApp : public holoscan::Application {
     add_flow(peak_pick, aoa_lookup, {{"detection_idx", "detection_idx"}});
     add_flow(aoa_lookup, feature_assembly,
              {{"aoa_estimates", "aoa_estimates"}});
-    auto row_index_sink = make_operator<EntityDrainOp>("aoa_row_index_sink");
+    auto row_index_sink = make_operator<NullSinkOp>("aoa_row_index_sink");
     add_flow(aoa_lookup, row_index_sink, {{"row_index", "input"}});
 
     // Assemble [range, velocity, az, el] and cluster.
@@ -798,10 +527,6 @@ class FmcwDenseSimoApp : public holoscan::Application {
       const std::shared_ptr<radar::ClusterDBSCANOp<Precision>>& cluster,
       const std::shared_ptr<radar::DetectionReductionOp<Precision>>& reduction,
       const std::shared_ptr<radar::FMCWRangeProcessorOp<Precision>>& range) {
-    using holoscan::Arg;
-    using InputSpec = holoscan::ops::HolovizOp::InputSpec;
-    using InputType = holoscan::ops::HolovizOp::InputType;
-
     auto ch_slice = make_operator<RdChannelSliceOp>("rd_channel_slice");
     ch_slice->channel = 0;
     auto to_image = make_operator<RdMapToImageOp>("rd_map_to_image");
@@ -809,85 +534,41 @@ class FmcwDenseSimoApp : public holoscan::Application {
     // Peaked detection_idx (M, 4) -> (M, 2) trailing (doppler_bin, range_bin).
     auto det_idx_rd = make_operator<TrailingIdxColumnsOp>("det_idx_rd_slice");
 
-    std::vector<InputSpec> input_specs;
-    input_specs.emplace_back("rd_map", InputType::COLOR_LUT);
-    const auto palette = cluster_palette();
-    const auto add_crosses = [&](const std::string& name,
-                                 const std::vector<float>& color) {
-      InputSpec spec(name, InputType::CROSSES);
-      spec.color_ = color;
-      spec.line_width_ = 2.0F;
-      spec.priority_ = 1;
-      input_specs.push_back(spec);
-    };
-    for (int c = 0; c < kNumClusterColors; ++c) {
-      add_crosses(cluster_layer_name(c), palette[static_cast<size_t>(c)]);
+    // radar_app owns the RD-map + panel layout; this app wires the flows.
+    HolovizLayout layout;
+    layout.window_title = "FMCW SIMO dense - RD (ch0) + clusters";
+    layout.width = cfg.plots.enable ? 1200U : 800U;
+    layout.height = cfg.plots.enable ? 760U : 600U;
+    layout.headless = cfg.headless;
+    layout.plots_enabled = cfg.plots.enable;
+    if (cfg.plots.enable) {
+      layout.right_panels = range_velocity_boresight_panels();
     }
-    add_crosses(kNoiseLayerName, {0.6F, 0.6F, 0.6F, 1.0F});
+    auto visualizer = make_rd_holoviz_op(this, "holoviz", layout);
 
-    const auto make_view = [](float ox, float oy, float w, float h) {
-      InputSpec::View v;
-      v.offset_x_ = ox;
-      v.offset_y_ = oy;
-      v.width_ = w;
-      v.height_ = h;
-      return v;
-    };
     std::shared_ptr<RollingPlotOp> plot;
     std::shared_ptr<BoresightViewOp> boresight;
     std::shared_ptr<TrailingIdxColumnsOp> rep_idx_rd;
     std::shared_ptr<CubeAoaLookupOp> rep_aoa;
     if (cfg.plots.enable) {
-      const auto left = make_view(0.0F, 0.0F, 0.60F, 1.0F);
-      for (InputSpec& spec : input_specs) {
-        spec.views_ = {left};
-      }
-      const auto add_plot = [&](const char* img_name, const char* title_name,
-                                const std::string& title, float oy, float h) {
-        InputSpec image(img_name, InputType::COLOR);
-        image.views_ = {make_view(0.63F, oy, 0.35F, h)};
-        input_specs.push_back(image);
-        InputSpec text(title_name, InputType::TEXT);
-        text.text_ = {title};
-        text.color_ = {1.0F, 1.0F, 1.0F, 1.0F};
-        text.priority_ = 2;
-        text.views_ = {make_view(0.63F, oy, 0.35F, h)};
-        input_specs.push_back(text);
-      };
-      constexpr float kPanelH = 0.30F;
-      add_plot(kRangePlotLayer, kRangeTitleLayer, "Range (m) vs time (s)",
-               0.02F, kPanelH);
-      add_plot(kVelocityPlotLayer, kVelocityTitleLayer,
-               "Velocity (m/s) vs time (s)", 0.35F, kPanelH);
-      add_plot(kBoresightPlotLayer, kBoresightTitleLayer,
-               "Boresight az/el (deg)", 0.68F, kPanelH);
       plot = make_operator<RollingPlotOp>("rolling_plot");
       plot->window = cfg.plots.window;
       plot->frame_period = cfg.frame_period;
-      plot->velocity_ylim_lo = cfg.plots.velocity_ylim_lo;
-      plot->velocity_ylim_hi = cfg.plots.velocity_ylim_hi;
+      plot->velocity_ylim_lo = cfg.velocity_ylim_lo;
+      plot->velocity_ylim_hi = cfg.velocity_ylim_hi;
       rep_idx_rd = make_operator<TrailingIdxColumnsOp>("rep_idx_rd_slice");
       rep_aoa = make_operator<CubeAoaLookupOp>("cube_aoa_lookup_rep");
       rep_aoa->az_grid = cfg.az_angles;
       rep_aoa->el_grid = cfg.el_angles;
       boresight = make_operator<BoresightViewOp>("boresight_view");
       double az_lo = 0.0, az_hi = 0.0, el_lo = 0.0, el_hi = 0.0;
-      grid_extent(cfg.az_angles, &az_lo, &az_hi);
-      grid_extent(cfg.el_angles, &el_lo, &el_hi);
+      grid_extent(cfg.az_angles, -0.35, 0.35, &az_lo, &az_hi);
+      grid_extent(cfg.el_angles, -0.35, 0.35, &el_lo, &el_hi);
       boresight->az_lo = az_lo;
       boresight->az_hi = az_hi;
       boresight->el_lo = el_lo;
       boresight->el_hi = el_hi;
     }
-
-    auto visualizer = make_operator<holoscan::ops::HolovizOp>(
-        "holoviz", Arg("tensors", input_specs),
-        Arg("color_lut", make_turbo_lut()),
-        Arg("window_title",
-            std::string("FMCW SIMO dense - RD (ch0) + clusters")),
-        Arg("width", cfg.plots.enable ? 1200U : 800U),
-        Arg("height", cfg.plots.enable ? 760U : 600U),
-        Arg("headless", cfg.headless));
 
     add_flow(doppler, ch_slice, {{"rd_maps", "rd_maps"}});
     add_flow(ch_slice, to_image, {{"rd_map", "rd_maps"}});
@@ -915,54 +596,9 @@ class FmcwDenseSimoApp : public holoscan::Application {
       add_flow(boresight, visualizer, {{"plot", "receivers"}});
     }
   }
-
-  // Min/max of a scan grid, padding a degenerate (single-value) axis so it
-  // renders a visible span in the boresight view.
-  static void grid_extent(const std::vector<double>& grid, double* lo,
-                          double* hi) {
-    if (grid.empty()) {
-      *lo = -0.35;
-      *hi = 0.35;
-    } else {
-      *lo = *std::min_element(grid.begin(), grid.end());
-      *hi = *std::max_element(grid.begin(), grid.end());
-    }
-    if (*hi - *lo < 1e-6) {
-      const double mid = 0.5 * (*lo + *hi);
-      *lo = mid - 0.1;
-      *hi = mid + 0.1;
-    }
-  }
 };
 
-namespace {
-
-std::filesystem::path resolve_config_path(int argc, char** argv) {
-  if (argc > 1) {
-    return argv[1];
-  }
-  return std::filesystem::path(argv[0]).parent_path() / "fmcw_dense_simo.yaml";
-}
-
-}  // namespace
-
 int main(int argc, char** argv) {
-  auto app = holoscan::make_application<FmcwDenseSimoApp>();
-  try {
-    const std::filesystem::path config_path = resolve_config_path(argc, argv);
-    app->cfg = load_config(config_path);
-    if (app->cfg.visualize && !app->cfg.headless &&
-        !app->cfg.skip_display_check && !gui_available()) {
-      HOLOSCAN_LOG_WARN(
-          "fmcw_dense_simo: visualize enabled but no display; running without "
-          "GUI");
-      app->cfg.visualize = false;
-    }
-    app->config(config_path.string());
-    app->run();
-  } catch (const std::exception& e) {
-    HOLOSCAN_LOG_ERROR("fmcw_dense_simo: {}", e.what());
-    return 1;
-  }
-  return 0;
+  return run_fmcw_app<FmcwDenseSimoApp>(argc, argv, "fmcw_dense_simo",
+                                        "fmcw_dense_simo.yaml", load_config);
 }

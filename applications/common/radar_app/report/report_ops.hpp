@@ -157,18 +157,28 @@ class DetectionReportOp : public holoscan::Operator {
 };
 
 // Reports the DBSCAN clusters formed over the CFAR detections. `points` is the
-// FeatureAssemblyOp feature matrix ([range, velocity] for SISO; optional az/el
-// for SIMO); `labels` is the per-point cluster id (noise = -1, row-aligned with
-// points) and `sizes` the per-cluster point count. For each cluster it logs the
-// size, the mean centroid, and DetectionReductionOp's representative cell
-// (`rep_idx`, row-aligned with clusters) resolved to physical units via the
-// axis bins — so the mean and the chosen real detection can be compared. When
-// points has az/el columns, pass `detection_idx` so rep az/el can be resolved
-// from the matching detection row.
+// FeatureAssemblyOp feature matrix ([range, velocity] for SISO; [range,
+// velocity, az, el] for the angle pipelines); `labels` is the per-point cluster
+// id (noise = -1, row-aligned with points) and `sizes` the per-cluster point
+// count. For each cluster it logs the size, the mean centroid, and
+// DetectionReductionOp's representative cell (`rep_idx`, row-aligned with
+// clusters) resolved to physical units via the axis bins.
+//
+// `rep_idx` may be (num_clusters, 2) = (doppler_bin, range_bin) — the sparse
+// SISO/SIMO path — or (num_clusters, 4) = (az_bin, el_bin, doppler_bin,
+// range_bin) — the dense beamforming path. For 4-column points with a 2-column
+// rep_idx, pass `detection_idx` so rep az/el can be resolved from the matching
+// detection row; for a 4-column rep_idx, set `az_grid`/`el_grid` and rep az/el
+// are read straight from the grids (no detection_idx needed).
 class ClusterReportOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(ClusterReportOp)
   ClusterReportOp() = default;
+
+  // Angle grids (radians) for the dense 4-column rep_idx path; leave empty for
+  // the sparse (2-column) path.
+  std::vector<double> az_grid;
+  std::vector<double> el_grid;
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("points");
@@ -202,11 +212,6 @@ class ClusterReportOp : public holoscan::Operator {
           "ClusterReportOp: points must be (N, 2) or (N, 4), got rank " +
           std::to_string(pshape.size()));
     }
-    if (num_features == 4 && !detection_idx) {
-      throw std::runtime_error(
-          "ClusterReportOp: detection_idx required when points has az/el "
-          "columns");
-    }
     const int64_t num_points = pshape[0];
     const auto lshape = labels->shape();
     if (lshape.size() != 1 || lshape[0] != num_points) {
@@ -219,12 +224,34 @@ class ClusterReportOp : public holoscan::Operator {
     }
     const int64_t num_clusters = sshape[0];
 
-    // rep_idx is (num_clusters, 2): (doppler_bin, range_bin) per cluster,
-    // row-aligned with sizes (dense cluster ids).
+    // rep_idx is (num_clusters, rep_cols): rep_cols == 2 → (doppler_bin,
+    // range_bin); rep_cols == 4 → (az_bin, el_bin, doppler_bin, range_bin).
+    // Row-aligned with sizes (dense cluster ids).
     const auto rshape = rep_idx->shape();
-    if (rshape.size() != 2 || rshape[1] != 2 || rshape[0] != num_clusters) {
+    if (rshape.size() != 2 || (rshape[1] != 2 && rshape[1] != 4) ||
+        rshape[0] != num_clusters) {
       throw std::runtime_error(
-          "ClusterReportOp: rep_idx must be (num_clusters, 2)");
+          "ClusterReportOp: rep_idx must be (num_clusters, 2) or "
+          "(num_clusters, 4)");
+    }
+    const int64_t rep_cols = rshape[1];
+    const int64_t num_az = static_cast<int64_t>(az_grid.size());
+    const int64_t num_el = static_cast<int64_t>(el_grid.size());
+    // az/el reporting needs a source: a 4-column rep_idx (read from the grids)
+    // or detection_idx (match the representative sparse cell to a point row).
+    const bool use_det_idx = (num_features == 4 && rep_cols == 2);
+    if (num_features == 4) {
+      if (rep_cols == 4) {
+        if (num_az == 0 || num_el == 0) {
+          throw std::runtime_error(
+              "ClusterReportOp: az_grid/el_grid required for a 4-column "
+              "rep_idx");
+        }
+      } else if (!detection_idx) {
+        throw std::runtime_error(
+            "ClusterReportOp: detection_idx required when points has az/el "
+            "columns and rep_idx is 2-column");
+      }
     }
     const int64_t num_range = range_bins->shape()[0];
     const int64_t num_doppler = velocity_bins->shape()[0];
@@ -232,9 +259,9 @@ class ClusterReportOp : public holoscan::Operator {
     std::vector<float> pts(static_cast<size_t>(num_points * num_features));
     std::vector<int64_t> lab(static_cast<size_t>(num_points));
     std::vector<int64_t> sz(static_cast<size_t>(num_clusters));
-    std::vector<int64_t> rep(static_cast<size_t>(num_clusters * 2));
+    std::vector<int64_t> rep(static_cast<size_t>(num_clusters * rep_cols));
     std::vector<int64_t> det_idx;
-    if (detection_idx) {
+    if (use_det_idx) {
       const auto dshape = detection_idx->shape();
       if (dshape.size() != 2 || dshape[1] != 2 || dshape[0] != num_points) {
         throw std::runtime_error(
@@ -286,7 +313,7 @@ class ClusterReportOp : public holoscan::Operator {
     copy_d2h("rep_idx", rep.data(), rep_idx);
     copy_d2h("range_bins", ranges.data(), range_bins);
     copy_d2h("velocity_bins", velocities.data(), velocity_bins);
-    if (detection_idx) {
+    if (use_det_idx) {
       copy_d2h("detection_idx", det_idx.data(), detection_idx);
     }
 
@@ -323,12 +350,10 @@ class ClusterReportOp : public holoscan::Operator {
       }
     }
 
-    const auto rep_az_el = [&](int64_t c, float* out_az, float* out_el) {
-      if (num_features != 4) {
-        return;
-      }
-      const int64_t rep_dd = rep[static_cast<size_t>(c * 2 + 0)];
-      const int64_t rep_rr = rep[static_cast<size_t>(c * 2 + 1)];
+    // Resolve rep az/el from detection_idx (2-column rep path): find the point
+    // row whose CFAR cell matches the representative (doppler, range).
+    const auto rep_az_el_from_detidx = [&](int64_t rep_dd, int64_t rep_rr,
+                                           double* out_az, double* out_el) {
       for (int64_t i = 0; i < num_points; ++i) {
         if (det_idx[static_cast<size_t>(i * 2 + 0)] == rep_dd &&
             det_idx[static_cast<size_t>(i * 2 + 1)] == rep_rr) {
@@ -337,8 +362,8 @@ class ClusterReportOp : public holoscan::Operator {
           return;
         }
       }
-      *out_az = 0.0F;
-      *out_el = 0.0F;
+      *out_az = 0.0;
+      *out_el = 0.0;
     };
 
     HOLOSCAN_LOG_INFO("DBSCAN clusters: {} ({} points, {} noise)",
@@ -348,17 +373,36 @@ class ClusterReportOp : public holoscan::Operator {
     for (int64_t c = 0; c < n_log; ++c) {
       const int64_t n = sz[static_cast<size_t>(c)];
       const double inv = n > 0 ? 1.0 / static_cast<double>(n) : 0.0;
-      const int64_t rep_dd = rep[static_cast<size_t>(c * 2 + 0)];
-      const int64_t rep_rr = rep[static_cast<size_t>(c * 2 + 1)];
-      if (rep_dd < 0 || rep_dd >= num_doppler || rep_rr < 0 ||
-          rep_rr >= num_range) {
-        throw std::runtime_error(
-            "ClusterReportOp: rep_idx out of axis bounds");
+      int64_t rep_dd = 0;
+      int64_t rep_rr = 0;
+      double rep_az = 0.0;
+      double rep_el = 0.0;
+      if (rep_cols == 4) {
+        const int64_t az_bin = rep[static_cast<size_t>(c * 4 + 0)];
+        const int64_t el_bin = rep[static_cast<size_t>(c * 4 + 1)];
+        rep_dd = rep[static_cast<size_t>(c * 4 + 2)];
+        rep_rr = rep[static_cast<size_t>(c * 4 + 3)];
+        if (az_bin < 0 || az_bin >= num_az || el_bin < 0 || el_bin >= num_el ||
+            rep_dd < 0 || rep_dd >= num_doppler || rep_rr < 0 ||
+            rep_rr >= num_range) {
+          throw std::runtime_error(
+              "ClusterReportOp: rep_idx out of grid/axis bounds");
+        }
+        rep_az = az_grid[static_cast<size_t>(az_bin)];
+        rep_el = el_grid[static_cast<size_t>(el_bin)];
+      } else {
+        rep_dd = rep[static_cast<size_t>(c * 2 + 0)];
+        rep_rr = rep[static_cast<size_t>(c * 2 + 1)];
+        if (rep_dd < 0 || rep_dd >= num_doppler || rep_rr < 0 ||
+            rep_rr >= num_range) {
+          throw std::runtime_error(
+              "ClusterReportOp: rep_idx out of axis bounds");
+        }
+        if (use_det_idx) {
+          rep_az_el_from_detidx(rep_dd, rep_rr, &rep_az, &rep_el);
+        }
       }
       if (num_features == 4) {
-        float rep_az = 0.0F;
-        float rep_el = 0.0F;
-        rep_az_el(c, &rep_az, &rep_el);
         HOLOSCAN_LOG_INFO(
             "  cluster {}: {} pts, centroid range {:.2f} m, velocity "
             "{:+.2f} m/s, az {:.3f} rad, el {:.3f} rad; rep range {:.2f} m, "
@@ -403,6 +447,27 @@ class NullSinkOp : public holoscan::Operator {
                [[maybe_unused]] holoscan::ExecutionContext& context)
       override {
     (void)op_input.receive<holoscan::gxf::Entity>("input");
+  }
+};
+
+// Drain an unused TensorMap output so its transmitter has a downstream and the
+// producer can tick. Distinct from NullSinkOp, which drains a raw gxf::Entity
+// (the bool detection_mask path); this one receives a normal TensorMap (e.g. a
+// beamscan angle_spectrum the app does not consume).
+class TensorMapDiscardOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(TensorMapDiscardOp)
+  TensorMapDiscardOp() = default;
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::TensorMap>("input");
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               [[maybe_unused]] holoscan::OutputContext& op_output,
+               [[maybe_unused]] holoscan::ExecutionContext& context)
+      override {
+    (void)radar::receive_single(op_input, "input", "TensorMapDiscardOp");
   }
 };
 

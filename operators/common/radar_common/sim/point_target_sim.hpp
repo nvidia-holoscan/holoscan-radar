@@ -222,6 +222,20 @@ inline SimResult simulate(const SimScene& scene) {
   return result;
 }
 
+// Advance each target's base position by one frame period (dt seconds). The
+// simulator models chirp-to-chirp motion within a CPI; this carries that motion
+// across CPIs so successive frames see the target at a new position. Templated
+// on the scene type: any struct exposing a `.targets` container of PointTarget
+// works — SimScene here, or an application's own multi-TX scene struct.
+template <class Scene>
+inline void advance_scene(Scene* scene, double dt) {
+  for (PointTarget& target : scene->targets) {
+    for (int axis = 0; axis < 3; ++axis) {
+      target.position[axis] += target.velocity[axis] * dt;
+    }
+  }
+}
+
 // Real-IF variant: the real part of the complex IF cube (exercises the
 // operators' RFFT front-end path).
 inline std::vector<double> to_real_if(const SimResult& sim) {
