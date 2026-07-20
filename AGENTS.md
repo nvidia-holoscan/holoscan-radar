@@ -58,6 +58,36 @@ Rules that follow from "lockdown":
 | `cmake/` | HoloHub CMake helpers (`HoloHubConfigHelpers.cmake`, `pybind11_add_holohub_module.cmake`) |
 | `metadata.json` | Module metadata (schema `urn:holohub:module:v2`); per-operator `metadata.json` under each operator dir |
 
+## Building example applications
+
+The `applications/fmcw_*` examples follow a strict layering so each app's `.cpp`
+reads as the graph, not scaffolding. When adding or changing an app, keep code
+in the right layer:
+
+- **App `.cpp` = the graph.** `compose()` (operators + `add_flow`) plus a
+  one-line `main` that calls `radar_app`'s `run_fmcw_app<App>()`. Nothing else
+  belongs here.
+- **App-owned code is colocated** in the app's `cpp/` dir: `config.hpp`
+  (`AppConfig : app::CommonRunConfig` + `load_config`) and `custom_ops.hpp`
+  (operators specific to one app — e.g. the MIMO ADC sources, the dense-path
+  bridges). Same-dir headers, included bare with `// NOLINT(build/include_subdir)`.
+- **Reusable, Holoscan-aware app helpers → `applications/common/radar_app/`**
+  (see its README): the report/viz operators and the `app/` scaffolding
+  (`CommonRunConfig` + `parse_*`, `run_fmcw_app`, the rank-agnostic
+  `SimAdcSourceOp`, the `HolovizLayout` builder). Header-only (`inline` /
+  in-class); it is not a wrapper around `HolovizOp` — the app keeps its own
+  `add_flow` wiring, `radar_app` supplies data + operators + a factory.
+- **Pure model helpers → `operators/common/radar_common/`**: the analytic
+  simulators and array builders (`sim/`), descriptors, DSP — no Holoscan / CUDA /
+  Holoviz. `point_target_sim.hpp` stays minimal-dependency (STL only); the MIMO
+  TDM/DDM simulators live beside it in `sim/mimo_sim.hpp`.
+
+**The config boundary.** Operator parameters flow natively through Holoscan's
+`from_config()`; apps never parse operator YAML blocks. Apps parse only the
+app-owned sections (`waveform`, `run`, `cube`, `targets`, `plots`, the viz
+toggles, `rx_array`/`tx_array`). Reading an operator block *only* to size a viz
+axis or geometry grid is allowed, but must be commented as a read-only mirror.
+
 ## Build, test, lint
 
 See [`DEVELOPER.md`](DEVELOPER.md) for detail. Quick reference:
@@ -79,11 +109,14 @@ pytest tests/python/ -v
 pre-commit run --all-files
 ```
 
-The lint stack (`.pre-commit-config.yaml`): ruff + isort + black (Python), cpplint (C++), cmakelint, markdownlint, codespell, `metadata.json` schema validation, and NVIDIA SPDX copyright headers on all code/CMake/YAML/Docker files (`check_copyright.py`; markdown is exempt). Every new source file needs the two-line SPDX header — copy it from any existing file of the same type.
+The lint stack (`.pre-commit-config.yaml`): ruff + isort + black (Python), cpplint (C++), cmakelint, markdownlint, codespell, `metadata.json` schema validation, and NVIDIA SPDX copyright headers on all code/CMake/YAML/Docker files (`check_copyright.py`; markdown is exempt). Every new source file needs the two-line SPDX header — copy it from any existing file of the same type. cpplint enforces 80-column lines and include-what-you-use (add the direct `#include` for every type you name, e.g. `<string>` for `std::string`); run it before pushing, not after CI fails.
+
+**Verifying a change.** The analytic simulators (`radar_common/sim/`) are the ground-truth "tautology guard" — assert operator/pipeline output against them, and add sim self-checks (`tests/cpp/common/test_sim.cpp`) when you add or change a signal model. For a behavior-preserving refactor, diff an app's deterministic log output before/after — but exclude the per-cluster representative (`rep_*`) fields: they are non-deterministic run-to-run (a GPU medoid tie-break; see `operators/detection/detection_reduction_op/OPEN_ITEMS.md` item 6), so a naive diff shows false churn. Build and run in the Holoscan container (`./holohub run-container`).
 
 ## Conventions
 
 - C++ namespace `holoscan::radar`; Python package `holoscan.radar`; operator classes CamelCase ending in `Op`; directories snake_case.
+- Include headers by their path from the include root (`#include "group/op/op.hpp"`), never bare — the one exception is a same-dir colocated app-private header (`config.hpp` / `custom_ops.hpp`), tagged `// NOLINT(build/include_subdir)`.
 - Commits: imperative subject, `Area: Summary` prefix style (e.g. `CI: Add linting workflow`, `Operators: ...`).
 - Branches: `<user>/<topic>` (e.g. `deustice/planning`). PRs target `main`; lint CI must pass; contract changes (see Docs first) get called out explicitly.
 

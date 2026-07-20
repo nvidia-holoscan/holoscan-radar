@@ -59,3 +59,36 @@ Steady-state cost includes allocator traffic.
 
 **Status:** accepted for now (push-review dismissed) — pool when a second
 consumer or a hot production path makes it worth the complexity.
+
+---
+
+## 6. Representative `rep_idx` under ties is order-dependent (benign, not a defect)
+
+**This is a known, by-design behavior, not a bug — no fix is required.** It is
+documented here only because it affects bit-exact reproducibility.
+
+**Context.** The per-cluster representative (medoid) is chosen by a device
+reduction (argmin of distance-to-center) over the cluster's real detections.
+When two or more detections are equidistant from the center they are all
+equally-valid medoids, and which one wins the reduction depends on GPU thread /
+reduction order. So under a tie, `rep_idx` — and thus a cluster's reported
+representative range/velocity — can differ by one bin between runs of the
+*same* binary on the same input. Cluster counts, membership, sizes, and
+centroids are unaffected (the centroid is a sum, computed by `ClusterReportOp`,
+not here); only the representative pick flips. Observed while diffing
+example-app output (`fmcw_simo` / `fmcw_mimo`): one cluster's "rep range"
+flipped by a single range bin across repeated runs.
+
+**Why it's not a correctness issue.** The contract is "reduce each cluster to a
+valid representative (medoid)"; under a tie there is more than one valid medoid,
+and returning any of them is contract-correct. The representative is a
+convenience pointer to a real cell for reporting / marking — a one-bin flip
+between two equidistant detections is the same answer. Nothing downstream
+(detection, clustering, the cluster's physical range/velocity story) changes.
+
+**Only surfaces in:** bit-exact reproducibility (golden-file regression diffs,
+pixel-identical screenshots). Mitigation there: compare the deterministic
+fields and exclude the medoid `rep_*` values, or add a deterministic tie-break
+(e.g. keep the lowest linear detection index) to the reduction.
+
+**Status:** accepted / by-design — documented for reproducibility only.
