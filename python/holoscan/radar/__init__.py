@@ -3,6 +3,35 @@
 
 """holoscan.radar — GPU radar signal-processing operators for Holoscan."""
 
+# radar_common must load first: op pybind modules use ArrayGeometry /
+# AngleConvention / WindowSpec / PeakInterpolation as constructor defaults, and
+# pybind11 requires those types to be registered before the op module imports.
+# isort: off
+from .radar_common import (  # noqa: F401
+    DEFAULT_PROPAGATION_SPEED,
+    AngleConvention,
+    AngleConventionPreset,
+    ArrayGeometry,
+    ArrayGeometryType,
+    ClutterFilterMethod,
+    DDMCodeDescriptor,
+    ElevationReference,
+    FftNorm,
+    FMCWWaveformDescriptor,
+    FMCWWaveformSpec,
+    MultiplexingScheme,
+    OverlapPolicy,
+    PeakInterpolation,
+    RepresentativePolicy,
+    ScoreMethod,
+    SignedAxis,
+    SnapshotEdgeMode,
+    TXSchedule,
+    WindowSpec,
+    WindowType,
+    make_device_tensor,
+)
+# isort: on
 from .beamscan_estimator_op import BeamscanEstimatorOpF32  # noqa: F401
 from .beamscan_estimator_op import BeamscanEstimatorOpF64
 from .cfar_detector_op import CFARDetectorOpF32  # noqa: F401
@@ -57,30 +86,6 @@ from .radar_app import (
     cluster_palette,
     gui_available,
     make_turbo_lut,
-)
-from .radar_common import DEFAULT_PROPAGATION_SPEED  # noqa: F401
-from .radar_common import (
-    AngleConvention,
-    AngleConventionPreset,
-    ArrayGeometry,
-    ArrayGeometryType,
-    ClutterFilterMethod,
-    DDMCodeDescriptor,
-    ElevationReference,
-    FftNorm,
-    FMCWWaveformDescriptor,
-    FMCWWaveformSpec,
-    MultiplexingScheme,
-    OverlapPolicy,
-    PeakInterpolation,
-    RepresentativePolicy,
-    ScoreMethod,
-    SignedAxis,
-    SnapshotEdgeMode,
-    TXSchedule,
-    WindowSpec,
-    WindowType,
-    make_device_tensor,
 )
 from .snapshot_gather_op import SnapshotGatherOpF32, SnapshotGatherOpF64  # noqa: F401
 from .virtual_array_assembly_op import (  # noqa: F401
