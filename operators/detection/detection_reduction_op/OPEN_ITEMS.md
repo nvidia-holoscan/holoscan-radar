@@ -59,3 +59,23 @@ Steady-state cost includes allocator traffic.
 
 **Status:** accepted for now (push-review dismissed) — pool when a second
 consumer or a hot production path makes it worth the complexity.
+
+---
+
+## 6. Representative `rep_idx` medoid tie-break is run-to-run non-deterministic
+
+**Context.** The per-cluster representative (medoid) is chosen by a device
+reduction over the cluster's real detections. When two detections are
+equidistant from the centroid, the winner depends on GPU reduction / thread
+order, so `rep_idx` — and thus a cluster's reported representative
+range/velocity — can differ by one bin between runs of the *same* binary on
+the same input. Cluster counts, point counts, and centroids are stable; only
+the representative selection flips. Observed while diffing example-app output
+(`fmcw_simo` / `fmcw_mimo`): a single cluster's "rep range" flipped by one
+range bin across repeated runs.
+
+**Status:** accepted for the representative field — it does not affect
+detection or clustering results. When bit-exact output is needed (e.g.
+regression diffing of the example apps), compare the deterministic fields and
+exclude the medoid `rep_*` values, or add a deterministic tie-break (e.g.
+lowest linear detection index) to the reduction.
