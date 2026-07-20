@@ -42,9 +42,8 @@ starting a dependent operator.
 
 | # | Decision needed | What is stopped | Detail |
 | --- | --- | --- | --- |
-| S1 | **Spatial-smoothing / multi-snapshot input form** on (often non-uniform) virtual arrays | `MVDREstimatorOp` checklist (`spatial_smoothing` not declared); same decision gates MUSIC / Root-MUSIC / ESPRIT when those land | [MVDR OPEN_ITEMS](../../operators/angle_estimation/mvdr_estimator_op/OPEN_ITEMS.md); [`OPERATOR_API.md`](OPERATOR_API.md) § Covariance estimator open items |
 | S2 | **Source-count provenance** — fixed int vs MDL/AIC `auto` vs CFAR/cluster seed | Starting `MUSICEstimatorOp` / `RootMUSICEstimatorOp` / `ESPRITEstimatorOp` (`num_sources`) | Does **not** stop MVDR (`max_sources` = Capon peak capacity, done) |
-| S3 | **ULA / subarray selection** from holey MIMO virtual arrays | Starting `RootMUSICEstimatorOp` / `ESPRITEstimatorOp` on non-uniform virtual arrays | Decide before landing those operators |
+| S3 | **ULA / subarray selection** from holey MIMO virtual arrays — an upstream op emitting a reduced `(snapshot, geometry)` pair (interface now fixed by S1; open work is the *selection algorithm* + 4 forks: auto-vs-explicit, objective, contiguous-vs-sum-set, standalone-op-vs-VAA-mode) | Starting `RootMUSICEstimatorOp` / `ESPRITEstimatorOp` on non-uniform virtual arrays; also the in-module path for spatial smoothing on holey arrays | Interface fixed by S1; decide before landing those operators. [VAA OPEN_ITEMS](../../operators/fmcw/virtual_array_assembly_op/OPEN_ITEMS.md) |
 | S4 | **Dense-path az/el-bin → angle features** — shared op vs extend `FeatureAssemblyOp` | A *shared* dense→clustering bridge (app-local `CubeAoaLookupOp` is a workaround only) | [PhaseShift §6](../../operators/angle_estimation/phase_shift_beamformer_op/OPEN_ITEMS.md) |
 
 ---
@@ -81,3 +80,4 @@ or a deliberate contract change when the team has bandwidth.
 | --- | --- | --- | --- |
 | L11 | **`AngleConvention::kCustom` boundary mapping** | Presets work; **`custom` throws** — operators are checklist-complete without it | [Beamscan §1](../../operators/angle_estimation/beamscan_estimator_op/OPEN_ITEMS.md); [PhaseShift §1](../../operators/angle_estimation/phase_shift_beamformer_op/OPEN_ITEMS.md) |
 | L12 | **Non-uniform / staggered TDM schedules** | **Rejected** today; uniform repeating TDM only — ops checklist-complete for that scope | [MIMODeinterleave §B.1](../../operators/fmcw/mimo_deinterleave_op/OPEN_ITEMS.md) |
+| L13 | **S1 spatial-smoothing forks** — (a) integer means sub-array **count** vs length; (b) holey arrays route to S3 vs. in-operator explicit partitions | **Implemented:** count semantics; holey → error → S3 / upstream custom smoother | [MVDR OPEN_ITEMS](../../operators/angle_estimation/mvdr_estimator_op/OPEN_ITEMS.md) |

@@ -18,6 +18,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | MatX + CUDA build wiring | Wire into the build from the start (not deferred to first kernel) | 2026-07-01 |
 | GPU as a hard dependency | A CUDA-capable NVIDIA GPU is required for operators, apps, and the C++ test suite; no CPU fallbacks, GPU-optional builds, or skip-if-no-GPU test guards (the `RADAR_TEST_SKIP_IF_NO_GPU` machinery was removed). Host-only code exists only where host-only by design (simulator, window generation) | 2026-07-10 |
 | Uniform CUDA-accessible input requirement | All operators reject pageable-host (`kDLCPU`) input with a clear error; the range and fused operators' H2D staging was removed (originally kept because the range processor is potentially first in the chain — ingest operators upload instead). Amends SIGPROC_PLAN decision 7 and the OPERATOR_API memory-space convention | 2026-07-10 |
+| S1 — spatial-smoothing input form | Forward / forward-backward sub-array averaging on a filled ULA/URA (1-D **and** 2-D), parametrized by a per-aperture-axis vector of sub-array **counts** (`spatial_smoothing`) + a `forward_backward` bool; implemented as a front-end transform reducing to the existing covariance path (shared helper `radar_common/dsp/spatial_smoothing`). Non-uniform / holey arrays are rejected → reduced upstream (S3) or via a custom upstream smoother. Two forks left to ratify: count-vs-length; holey→S3 vs in-operator partitions (TEAM_BLOCKED L13) | 2026-07-20 |
 
 ## In-flight work
 

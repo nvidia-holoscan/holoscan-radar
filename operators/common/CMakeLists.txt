@@ -13,6 +13,7 @@ add_library(radar_common STATIC
     radar_common/dsp/window.cpp
     radar_common/dsp/angle_convention.cpp
     radar_common/dsp/steering_weights.cpp
+    radar_common/dsp/spatial_smoothing.cpp
     radar_common/descriptors/tx_schedule.cpp
     radar_common/descriptors/ddm_code_descriptor.cpp
 )
@@ -105,6 +106,38 @@ install(TARGETS radar_common_steering
 )
 
 install(EXPORT holoscan_radar_common_steering_targets
+    NAMESPACE holoscan::
+    DESTINATION lib/cmake/holoscan_radar
+)
+
+# CUDA spatial-smoothing gather (shared by the covariance angle estimators).
+# Materializes sub-array "looks" from the host-planned index tables; the host
+# planning (lattice detection, sub-array enumeration) stays in CUDA-free
+# radar_common, so this target owns only the .cu (ODR).
+add_library(radar_common_spatial_smoothing STATIC
+    radar_common/dsp/spatial_smoothing_device.cu)
+add_library(holoscan::radar_common_spatial_smoothing ALIAS
+    radar_common_spatial_smoothing)
+
+target_include_directories(radar_common_spatial_smoothing
+    PUBLIC
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators/common>
+        $<INSTALL_INTERFACE:include>
+)
+
+target_link_libraries(radar_common_spatial_smoothing
+    PUBLIC
+        holoscan::radar_common
+)
+
+set_property(TARGET radar_common_spatial_smoothing
+    PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+install(TARGETS radar_common_spatial_smoothing
+    EXPORT holoscan_radar_common_spatial_smoothing_targets
+)
+
+install(EXPORT holoscan_radar_common_spatial_smoothing_targets
     NAMESPACE holoscan::
     DESTINATION lib/cmake/holoscan_radar
 )

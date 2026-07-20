@@ -13,3 +13,6 @@ __pycache__/
 *.deb
 uv.lock
 .venv/
+
+# Working per-item planning docs (kept local, not committed)
+docs/planning/S[0-9]*_PLAN.md

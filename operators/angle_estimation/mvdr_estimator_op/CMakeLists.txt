@@ -14,6 +14,7 @@ target_link_libraries(mvdr_estimator_op
         holoscan::core
         holoscan::radar_common
         holoscan::radar_common_steering
+        holoscan::radar_common_spatial_smoothing
     PRIVATE
         matx::matx)
 
