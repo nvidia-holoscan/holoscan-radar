@@ -430,3 +430,33 @@ pytest already covers `pfa` / `alpha_lut` behavior and Monte Carlo Pfa.
 **Status:** accepted / unclosable by design — leave the helpers in
 `detail::`, keep white-box calibration regressions C++-only; do not treat
 missing Python ports of those tests as unfinished bindings work.
+
+---
+
+## 10. Flaky test: `NonBlockingPfaOverrideServesStaleLut` intermittent SEGFAULT
+
+**Observed:** `CFARDetectorAlphaLutTest.NonBlockingPfaOverrideServesStaleLut`
+segfaults **intermittently** — in one run-in-isolation sample it crashed on 2 of
+5 runs and passed on the other 3 (Holoscan 4.3.0 container, `deustice-spatial-
+smoothing` image, 2026-07-20). The full `-L unit` suite therefore fails
+non-deterministically on this one test; all other unit tests are stable.
+
+This test exercises the §7 non-blocking path
+(`blocking_alpha_lut_rebuild=false`) where a `pfa` override serves a **stale
+LUT** while the new table rebuilds in the background — so the likely cause is a
+race between the background rebuild and the tick that reads the LUT (a
+use-after-free / partially-written table, consistent with a SEGFAULT rather than
+a wrong-value assertion failure). Not caused by the S1/S3 angle-estimation work
+landed 2026-07-20 (those touch neither CFAR nor this LUT path); flagged here as a
+pre-existing intermittent crash.
+
+**Questions for the team.**
+
+- Is the background alpha-LUT rebuild properly synchronized against the readers
+  (double-buffer + atomic swap, or a stream/event fence), or can a tick observe
+  a half-built / freed table?
+- Until fixed, should this test be marked flaky / retried, or the non-blocking
+  stale-LUT path be gated behind an explicit opt-in?
+
+**Status:** open — intermittent SEGFAULT reproduced in isolation; root-cause the
+race in the non-blocking LUT rebuild.
