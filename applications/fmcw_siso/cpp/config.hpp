@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// App-owned configuration for fmcw_siso: the AppConfig type and its YAML loader.
+// App-owned config for fmcw_siso: the AppConfig type and its YAML loader.
 // Colocated with the app; the graph wiring lives in fmcw_siso.cpp. Operator
 // blocks are NOT parsed here — they flow through Holoscan's from_config().
 
@@ -11,6 +11,7 @@
 
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <stdexcept>
+#include <string>
 
 #include "radar_app/app/config.hpp"
 #include "radar_common/sim/point_target_sim.hpp"

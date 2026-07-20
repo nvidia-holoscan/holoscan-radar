@@ -12,6 +12,7 @@
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "radar_common/descriptors/array_geometry.hpp"

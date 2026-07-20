@@ -13,10 +13,10 @@
 //     -> DetectionReduction -> ClusterReportOp (logs clusters)
 //
 // This is a lean demo exercising PhaseShiftBeamformerOp end-to-end; it is kept
-// separate from fmcw_simo (the sparse-path demo) because the dense path diverges
+// separate from fmcw_simo (the sparse demo) because the dense path diverges
 // in the detect+angle middle: CFAR runs per-beam on the RDA cube, so the
 // detection_idx / rep_idx carry (az_bin, el_bin) batch columns. The shared
-// ClusterReportOp handles the 4-column rep_idx directly (az/el resolved from the
+// ClusterReportOp handles the 4-column rep_idx directly (az/el from the
 // beam grids passed as az_grid/el_grid), so no forked report op is needed. See
 // the operator's OPEN_ITEMS for the FeatureAssembly az/el contract gap that the
 // CubeAoaLookupOp bridge works around.
@@ -54,8 +54,8 @@
 #include "radar_app/report/report_ops.hpp"
 #include "radar_app/viz/display.hpp"
 #include "radar_app/viz/viz.hpp"
-#include "config.hpp"
-#include "custom_ops.hpp"
+#include "config.hpp"       // NOLINT(build/include_subdir): colocated app header
+#include "custom_ops.hpp"  // NOLINT(build/include_subdir): colocated app header
 
 namespace radar = holoscan::radar;
 using namespace holoscan::radar::app;  // NOLINT(build/namespaces)

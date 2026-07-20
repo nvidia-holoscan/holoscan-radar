@@ -15,6 +15,7 @@
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "radar_common/descriptors/array_geometry.hpp"
@@ -48,7 +49,7 @@ struct AppConfig : CommonRunConfig {
   int64_t report_num_doppler{0};
 };
 
-// Build the TX row + RX URA + the virtual (TX⊕RX) array geometry into the scene.
+// Build the TX row + RX URA + the virtual (TX⊕RX) geometry into the scene.
 inline void load_scene_geometry(AppConfig* cfg, const YAML::Node& root,
                                 double wavelength, int64_t num_tx) {
   const YAML::Node tx = root["tx_array"];

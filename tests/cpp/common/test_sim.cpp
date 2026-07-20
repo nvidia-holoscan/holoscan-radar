@@ -173,6 +173,19 @@ sim::SimScene mimo_scene() {
   return scene;
 }
 
+// Element-wise complex compare. The MIMO simulators and simulate() share the
+// same arithmetic in the single-TX case, but they are separate functions, so
+// compiler FP contraction/reordering can differ by a few ULP — compare with a
+// tight tolerance rather than bit-exact.
+void expect_cubes_near(const std::vector<std::complex<double>>& a,
+                       const std::vector<std::complex<double>>& b, double tol) {
+  ASSERT_EQ(a.size(), b.size());
+  for (size_t i = 0; i < a.size(); ++i) {
+    EXPECT_NEAR(a[i].real(), b[i].real(), tol);
+    EXPECT_NEAR(a[i].imag(), b[i].imag(), tol);
+  }
+}
+
 TEST(MimoSim, TdmCubeShape) {
   const auto scene = mimo_scene();
   rd::TXSchedule schedule;  // round-robin; num_tx is set from the scene
@@ -189,7 +202,7 @@ TEST(MimoSim, TdmSingleTxMatchesSimulate) {
   const auto scene = single_target_scene();  // default: 1 TX, 1 RX
   const auto mimo = sim::simulate_mimo_tdm_interleaved(scene, rd::TXSchedule{});
   const auto base = sim::simulate(scene);
-  EXPECT_EQ(mimo.cube, base.cube);
+  expect_cubes_near(mimo.cube, base.cube, 1e-12);
 }
 
 TEST(MimoSim, DdmCubeShape) {
@@ -206,7 +219,7 @@ TEST(MimoSim, DdmSingleTxNoCodeMatchesSimulate) {
   const auto scene = single_target_scene();  // 1 TX, 1 RX
   const auto mimo = sim::simulate_mimo_ddm_coded(scene, {0.0});
   const auto base = sim::simulate(scene);
-  EXPECT_EQ(mimo.cube, base.cube);
+  expect_cubes_near(mimo.cube, base.cube, 1e-12);
 }
 
 TEST(MimoSim, DdmCodePhaseNullsOddChirps) {

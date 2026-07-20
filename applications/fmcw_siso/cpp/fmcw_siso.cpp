@@ -51,14 +51,14 @@
 #include "radar_app/app/source.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "radar_app/viz/viz.hpp"
-#include "config.hpp"
+#include "config.hpp"  // NOLINT(build/include_subdir): colocated app header
 
 namespace radar = holoscan::radar;
 
 // The shared app scaffolding (SimAdcSourceOp, run_fmcw_app, the Holoviz layout
 // builder) and the reusable report / visualization operators live under
 // holoscan::radar::app; this app pulls them in unqualified and only wires them
-// into its graph. The app-owned AppConfig + load_config live in siso_config.hpp.
+// into its graph. The app-owned AppConfig + load_config live in config.hpp.
 using namespace holoscan::radar::app;  // NOLINT(build/namespaces)
 
 class FmcwSisoApp : public holoscan::Application {
@@ -132,7 +132,7 @@ class FmcwSisoApp : public holoscan::Application {
     add_flow(cluster, cluster_report, {{"labels", "labels"}});
     add_flow(cluster, cluster_report, {{"sizes", "sizes"}});
 
-    // Reduction: one representative cell per cluster (medoid = most-central real
+    // Reduction: one representative cell per cluster (medoid = most-central
     // detection). rep_idx feeds the report (logged in physical units, so the
     // report also needs the axis bins) and, when visualizing, the GUI.
     add_flow(cluster, reduction, {{"labels", "labels"}});

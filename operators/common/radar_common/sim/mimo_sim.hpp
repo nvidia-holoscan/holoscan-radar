@@ -128,7 +128,7 @@ inline SimResult simulate_mimo_tdm_interleaved(const SimScene& scene,
   return result;
 }
 
-// DDM: all TX fire on every chirp simultaneously, each carrying a per-TX Doppler
+// DDM: all TX fire every chirp simultaneously, each carrying a per-TX Doppler
 // code phase (2*pi*offset_m*k over slow time), so the cube is
 // (num_rx, num_chirps, samples_per_chirp) and the TX separate along Doppler.
 // `offsets` are the per-TX offsets (fraction of the PRF); length must equal

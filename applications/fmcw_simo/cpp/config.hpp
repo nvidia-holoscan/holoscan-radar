@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // App-owned configuration for fmcw_simo: the AppConfig type and its YAML loader
-// (URA geometry + 3-D targets + the boresight-axis mirror of the beamscan grid).
+// (URA geometry + 3-D targets + the boresight-axis mirror of the beam grid).
 // Colocated with the app; the graph wiring lives in fmcw_simo.cpp.
 
 #pragma once
@@ -11,6 +11,7 @@
 
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <stdexcept>
+#include <string>
 
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/sim/array_builders.hpp"

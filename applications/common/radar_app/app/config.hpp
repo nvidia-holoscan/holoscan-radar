@@ -35,7 +35,7 @@
 namespace holoscan::radar::app {
 
 // Run cadence + visualization toggles shared by every app. Each app embeds this
-// as a base class of its own AppConfig and adds its scene + app-specific fields;
+// as a base class of AppConfig and adds its scene + app-specific fields;
 // run_fmcw_app() (driver.hpp) reads the visualize/headless/skip_display_check
 // members through the derived cfg.
 struct CommonRunConfig {
@@ -81,9 +81,9 @@ inline void validate_frame_period(double seconds) {
 
 // Decode the shared waveform anchor through the same YAML::convert<> the
 // operators use, then mirror it into the simulator's decoupled SimWaveform. The
-// descriptor derives bandwidth at construction, so a bandwidth- or slope-spelled
-// config maps to the same beat rate. `Scene` is any struct with a `.waveform`
-// of type sim::SimWaveform (SimScene or an app's own scene struct).
+// descriptor derives bandwidth at construction, so a bandwidth- or
+// slope-spelled config maps to the same beat rate. `Scene` is any struct with
+// a `.waveform` of type sim::SimWaveform (SimScene or an app's own scene).
 template <class Scene>
 inline void parse_waveform_into_scene(const YAML::Node& root, Scene* scene) {
   const auto waveform = root["waveform"].as<FMCWWaveformDescriptor>();

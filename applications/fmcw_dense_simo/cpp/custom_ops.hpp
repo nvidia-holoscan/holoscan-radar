@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // App-specific operators for fmcw_dense_simo, colocated with the app:
-//   AnglePeakPickOp   — collapse per-beam cube detections to one peak per RD cell
-//   CubeAoaLookupOp   — bridge (az_bin, el_bin) cube columns to aoa_estimates
-//   TrailingIdxColumnsOp — slice dense 4-column idx down to the RD-plane 2 columns
+//   AnglePeakPickOp — collapse per-beam cube detections to one peak per cell
+//   CubeAoaLookupOp — bridge (az_bin, el_bin) cube columns to aoa_estimates
+//   TrailingIdxColumnsOp — slice dense 4-col idx to the RD-plane 2 cols
 // The dense pipeline diverges from the sparse contract in this middle stage, so
 // these stay local (not generalized into radar_app).
 

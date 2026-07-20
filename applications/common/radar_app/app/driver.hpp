@@ -32,11 +32,11 @@ inline std::filesystem::path resolve_config_path(int argc, char** argv,
   return std::filesystem::path(argv[0]).parent_path() / default_yaml;
 }
 
-// Load config, downgrade visualize on a display-less host, then config() + run()
+// Load config, downgrade visualize on a GUI-less host, then config() + run()
 // under one try/catch. `load_config` is the app's own loader
-// ((const std::filesystem::path&) -> decltype(App::cfg)); `App::cfg` must expose
-// .visualize / .headless / .skip_display_check (satisfied by deriving the app's
-// AppConfig from CommonRunConfig).
+// ((const std::filesystem::path&) -> decltype(App::cfg)); `App::cfg` must
+// expose .visualize / .headless / .skip_display_check (satisfied by deriving
+// the app's AppConfig from CommonRunConfig).
 template <class App, class LoadFn>
 int run_fmcw_app(int argc, char** argv, const char* log_prefix,
                  const char* default_yaml, LoadFn&& load_config) {

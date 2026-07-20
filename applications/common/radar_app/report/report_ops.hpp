@@ -252,6 +252,12 @@ class ClusterReportOp : public holoscan::Operator {
             "ClusterReportOp: detection_idx required when points has az/el "
             "columns and rep_idx is 2-column");
       }
+    } else if (rep_cols == 4) {
+      // 2-column points (range, velocity) paired with a 4-column rep_idx is a
+      // contract mismatch: the az/el rep columns have no matching feature.
+      throw std::runtime_error(
+          "ClusterReportOp: 4-column rep_idx requires 4-column points "
+          "(range, velocity, az, el)");
     }
     const int64_t num_range = range_bins->shape()[0];
     const int64_t num_doppler = velocity_bins->shape()[0];

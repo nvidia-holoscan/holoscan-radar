@@ -6,7 +6,7 @@
 // layer, one CROSSES layer per cluster color + noise, and the right-column
 // image+title panels) is owned here and driven by a small HolovizLayout struct.
 //
-// This deliberately builds only DATA (+ a factory that constructs the HolovizOp)
+// This deliberately builds only DATA (+ a factory that makes the HolovizOp)
 // — it does NOT call add_flow. HolovizOp is already the operator; which tensors
 // feed its multi-receiver `receivers` port is app-specific graph topology, so
 // each app keeps its own flow wiring in compose() and hands this the layout.
@@ -55,8 +55,8 @@ struct HolovizLayout {
 // turbo LUT RD image; the cluster/noise CROSSES layers draw on top (named to
 // match ClusterOverlayOp's emitted tensors). With panels enabled the map +
 // crosses share the left viewport and each panel adds an image + title layer.
-inline std::vector<holoscan::ops::HolovizOp::InputSpec> build_holoviz_input_specs(
-    const HolovizLayout& layout) {
+inline std::vector<holoscan::ops::HolovizOp::InputSpec>
+build_holoviz_input_specs(const HolovizLayout& layout) {
   using InputSpec = holoscan::ops::HolovizOp::InputSpec;
   using InputType = holoscan::ops::HolovizOp::InputType;
 
@@ -105,7 +105,8 @@ inline std::vector<holoscan::ops::HolovizOp::InputSpec> build_holoviz_input_spec
     const float right_w = 1.0F - right_x - 0.02F;
     for (const RightPanel& panel : layout.right_panels) {
       InputSpec image(panel.image_layer, InputType::COLOR);
-      image.views_ = {make_view(right_x, panel.offset_y, right_w, panel.height)};
+      image.views_ = {
+          make_view(right_x, panel.offset_y, right_w, panel.height)};
       input_specs.push_back(image);
       InputSpec text(panel.title_layer, InputType::TEXT);
       text.text_ = {panel.title};
@@ -118,9 +119,9 @@ inline std::vector<holoscan::ops::HolovizOp::InputSpec> build_holoviz_input_spec
   return input_specs;
 }
 
-// Construct the HolovizOp from a layout: the built input specs, the shared turbo
-// LUT, and the window title/size/headless flag. The app wires its own flows into
-// the returned operator's `receivers` port.
+// Construct the HolovizOp from a layout: the built input specs, the shared
+// turbo LUT, and the window title/size/headless flag. The app wires its own
+// flows into the returned operator's `receivers` port.
 inline std::shared_ptr<holoscan::ops::HolovizOp> make_rd_holoviz_op(
     holoscan::Fragment* fragment, const std::string& name,
     const HolovizLayout& layout) {
@@ -137,7 +138,8 @@ inline std::shared_ptr<holoscan::ops::HolovizOp> make_rd_holoviz_op(
 // (the SISO layout).
 inline std::vector<RightPanel> range_velocity_panels() {
   return {
-      {kRangePlotLayer, kRangeTitleLayer, "Range (m) vs time (s)", 0.04F, 0.44F},
+      {kRangePlotLayer, kRangeTitleLayer, "Range (m) vs time (s)", 0.04F,
+       0.44F},
       {kVelocityPlotLayer, kVelocityTitleLayer, "Velocity (m/s) vs time (s)",
        0.52F, 0.44F},
   };
@@ -147,11 +149,12 @@ inline std::vector<RightPanel> range_velocity_panels() {
 // and the boresight az/el scatter (the SIMO/dense/MIMO layout).
 inline std::vector<RightPanel> range_velocity_boresight_panels() {
   return {
-      {kRangePlotLayer, kRangeTitleLayer, "Range (m) vs time (s)", 0.02F, 0.30F},
+      {kRangePlotLayer, kRangeTitleLayer, "Range (m) vs time (s)", 0.02F,
+       0.30F},
       {kVelocityPlotLayer, kVelocityTitleLayer, "Velocity (m/s) vs time (s)",
        0.35F, 0.30F},
-      {kBoresightPlotLayer, kBoresightTitleLayer, "Boresight az/el (deg)", 0.68F,
-       0.30F},
+      {kBoresightPlotLayer, kBoresightTitleLayer, "Boresight az/el (deg)",
+       0.68F, 0.30F},
   };
 }
 
