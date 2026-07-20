@@ -18,11 +18,6 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from holoscan.radar import (  # noqa: E402
-    MIMOCoherentCompensationOpF32,
-    MIMOCoherentCompensationOpF64,
-    MultiplexingScheme,
-)
 from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
 from utils.mimo_helpers import (  # noqa: E402
     K_DDM_DOPPLER,
@@ -37,6 +32,12 @@ from utils.mimo_helpers import (  # noqa: E402
     make_offset_code,
     make_test_waveform,
     uniform_ddm_offsets,
+)
+
+from holoscan.radar import (  # noqa: E402
+    MIMOCoherentCompensationOpF32,
+    MIMOCoherentCompensationOpF64,
+    MultiplexingScheme,
 )
 
 pytestmark = pytest.mark.requires_gpu
@@ -57,7 +58,6 @@ def _require_cuda_device():
 
 def run_compensation(
     host: np.ndarray,
-    shape: tuple[int, ...],
     waveform,
     *,
     op_cls=MIMOCoherentCompensationOpF32,
@@ -86,9 +86,8 @@ def run_compensation(
 
 def test_SingleTxIsIdentity():
     waveform = make_test_waveform()
-    shape = (1, K_NUM_RX, K_DOPPLER, K_RANGE)
     host = build_misaligned_rd_host(waveform, 1, K_NUM_RX, K_DOPPLER, K_RANGE)
-    out = run_compensation(host, shape, waveform)
+    out = run_compensation(host, waveform)
     assert np.allclose(out, host, atol=1e-5)
 
 
@@ -132,44 +131,36 @@ def test_TdmCorrectionTableLayoutMatchesFormula():
 
 def test_TdmRemovesInterTxPhaseAcrossDopplerBins():
     waveform = make_test_waveform()
-    shape = (K_NUM_TX, K_NUM_RX, K_DOPPLER, K_RANGE)
     host = build_misaligned_rd_host(waveform, K_NUM_TX, K_NUM_RX, K_DOPPLER, K_RANGE)
-    out = run_compensation(host, shape, waveform)
+    out = run_compensation(host, waveform)
     expect_tx_lanes_aligned(out, K_NUM_TX, K_NUM_RX, K_DOPPLER, K_RANGE)
 
 
 def test_FourTxLanesAlignAfterCompensation():
     num_tx = 4
     waveform = make_test_waveform()
-    shape = (num_tx, K_NUM_RX, K_DOPPLER, K_RANGE)
     host = build_misaligned_rd_host(waveform, num_tx, K_NUM_RX, K_DOPPLER, K_RANGE)
-    out = run_compensation(host, shape, waveform)
+    out = run_compensation(host, waveform)
     expect_tx_lanes_aligned(out, num_tx, K_NUM_RX, K_DOPPLER, K_RANGE)
 
 
 def test_ComplexFloatDtypePreserved():
     waveform = make_test_waveform()
-    shape = (1, K_NUM_RX, K_DOPPLER, K_RANGE)
     host = build_misaligned_rd_host(waveform, 1, K_NUM_RX, K_DOPPLER, K_RANGE)
-    out = run_compensation(host, shape, waveform)
+    out = run_compensation(host, waveform)
     assert np.iscomplexobj(out)
 
 
 def test_FloatDoubleAgreement():
     waveform = make_test_waveform()
-    shape = (K_NUM_TX, K_NUM_RX, K_DOPPLER, K_RANGE)
     host_f = build_misaligned_rd_host(
         waveform, K_NUM_TX, K_NUM_RX, K_DOPPLER, K_RANGE, dtype=np.complex64
     )
     host_d = build_misaligned_rd_host(
         waveform, K_NUM_TX, K_NUM_RX, K_DOPPLER, K_RANGE, dtype=np.complex128
     )
-    out_f = run_compensation(
-        host_f, shape, waveform, op_cls=MIMOCoherentCompensationOpF32
-    )
-    out_d = run_compensation(
-        host_d, shape, waveform, op_cls=MIMOCoherentCompensationOpF64
-    )
+    out_f = run_compensation(host_f, waveform, op_cls=MIMOCoherentCompensationOpF32)
+    out_d = run_compensation(host_d, waveform, op_cls=MIMOCoherentCompensationOpF64)
     assert out_f.shape == out_d.shape
     np.testing.assert_allclose(out_f.real, out_d.real, atol=1e-4)
     np.testing.assert_allclose(out_f.imag, out_d.imag, atol=1e-4)
@@ -181,7 +172,7 @@ def test_LeadingBatchAxesPreservedAndIndependent():
     host = build_misaligned_rd_host(
         waveform, K_NUM_TX, K_NUM_RX, K_DOPPLER, K_RANGE, batch=2
     )
-    out = run_compensation(host, shape, waveform)
+    out = run_compensation(host, waveform)
     assert out.shape == shape
     expect_tx_lanes_aligned(out, K_NUM_TX, K_NUM_RX, K_DOPPLER, K_RANGE, batch=2)
 
@@ -192,7 +183,9 @@ def test_RejectsUnspecifiedMultiplexingScheme():
     host = np.full(shape, complex(1.0, 0.0), dtype=np.complex64)
 
     def make_op(app):
-        return MIMOCoherentCompensationOpF32(app, waveform=waveform, name="op_under_test")
+        return MIMOCoherentCompensationOpF32(
+            app, waveform=waveform, name="op_under_test"
+        )
 
     frame = single_map(to_device_array(host), "rd_maps")
     with pytest.raises(ValueError):
@@ -210,7 +203,7 @@ def test_RejectsInvalidWaveform():
     shape = (K_NUM_TX, K_NUM_RX, K_DOPPLER, K_RANGE)
     host = np.full(shape, complex(1.0, 0.0), dtype=np.complex64)
     with pytest.raises(ValueError):
-        run_compensation(host, shape, FMCWWaveformDescriptor())
+        run_compensation(host, FMCWWaveformDescriptor())
 
 
 def test_RejectsRealInput():
@@ -242,11 +235,11 @@ def test_DdmDemuxRecoversEachTxIntoBand():
     band = K_DDM_DOPPLER // K_DDM_TX
     p0 = 1
     offsets = uniform_ddm_offsets(K_DDM_TX)
-    host = build_ddm_input_host(offsets, K_DDM_TX, K_DDM_RX, K_DDM_DOPPLER, K_DDM_RANGE, p0)
-    shape = (K_DDM_RX, K_DDM_DOPPLER, K_DDM_RANGE)
+    host = build_ddm_input_host(
+        offsets, K_DDM_TX, K_DDM_RX, K_DDM_DOPPLER, K_DDM_RANGE, p0
+    )
     out = run_compensation(
         host,
-        (K_DDM_TX, K_DDM_RX, band, K_DDM_RANGE),
         waveform,
         scheme=MultiplexingScheme.DDM,
         ddm_code=code,
@@ -279,7 +272,6 @@ def test_DdmGuardBandsReduceWidth():
     )
     out = run_compensation(
         host,
-        (K_DDM_TX, K_DDM_RX, band, K_DDM_RANGE),
         waveform,
         scheme=MultiplexingScheme.DDM,
         ddm_code=code,
@@ -313,7 +305,6 @@ def test_DdmGuardBandDiscardsEdgeBin():
     )
     out = run_compensation(
         host,
-        (K_DDM_TX, K_DDM_RX, band, K_DDM_RANGE),
         waveform,
         scheme=MultiplexingScheme.DDM,
         ddm_code=code,
@@ -364,7 +355,6 @@ def test_DdmNonLinearPhaseCodesCorrelateRecovers():
 
     out = run_compensation(
         host,
-        (num_tx, num_rx, d, num_range),
         waveform,
         scheme=MultiplexingScheme.DDM,
         ddm_code=code,
@@ -397,7 +387,6 @@ def test_DdmNonLinearRejectsNonZeroGuardBands():
     with pytest.raises(ValueError):
         run_compensation(
             host,
-            (num_tx, num_rx, d, num_range),
             waveform,
             scheme=MultiplexingScheme.DDM,
             ddm_code=code,
@@ -412,7 +401,6 @@ def test_DdmNonLinearRejectsChirpDopplerMismatch():
     with pytest.raises(ValueError):
         run_compensation(
             host,
-            (num_tx, num_rx, d, num_range),
             waveform,
             scheme=MultiplexingScheme.DDM,
             ddm_code=code,

@@ -21,16 +21,12 @@ _PERF_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PERF_DIR not in sys.path:
     sys.path.insert(0, _PERF_DIR)
 
-from utils.bootstrap import bootstrap_radar_package
+from utils.bootstrap import bootstrap_radar_package  # noqa: E402
 
 bootstrap_radar_package()
 
 import cupy as cp  # noqa: E402
 import numpy as np  # noqa: E402
-from holoscan.conditions import CountCondition  # noqa: E402
-from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
-from holoscan.radar import AssemblyFeature, FeatureAssemblyOpF32  # noqa: E402
-
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings, SizeDef  # noqa: E402
@@ -47,6 +43,10 @@ from utils.tensor_factory import (  # noqa: E402
     single_map,
     to_device_array,
 )
+
+from holoscan.conditions import CountCondition  # noqa: E402
+from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
+from holoscan.radar import AssemblyFeature, FeatureAssemblyOpF32  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Size ladder — keep aligned with perf_feature_assembly.cpp

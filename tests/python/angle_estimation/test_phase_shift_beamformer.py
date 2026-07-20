@@ -11,7 +11,6 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from holoscan.radar import PhaseShiftBeamformerOpF32, PhaseShiftBeamformerOpF64  # noqa: E402
 from utils.angle_helpers import (  # noqa: E402
     linspace,
     make_planar_ura_geometry,
@@ -20,6 +19,8 @@ from utils.angle_helpers import (  # noqa: E402
     radar_boresight_convention,
 )
 from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
+
+from holoscan.radar import PhaseShiftBeamformerOpF32, PhaseShiftBeamformerOpF64  # noqa: E402
 
 pytestmark = pytest.mark.requires_gpu
 

@@ -13,6 +13,18 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
+from utils.bin_model import (  # noqa: E402
+    expected_doppler_bin,
+    expected_range_bin,
+    expected_velocity_axis,
+)
+from utils.harness import (  # noqa: E402
+    run_operator,
+    run_operator_multi,
+    to_device_array,
+)
+from utils.point_target_sim import PointTarget, SimScene, simulate  # noqa: E402
+
 from holoscan.radar import (  # noqa: E402
     FMCWDopplerProcessorOp,
     FMCWDopplerProcessorOpF32,
@@ -22,13 +34,6 @@ from holoscan.radar import (  # noqa: E402
     WindowSpec,
     WindowType,
 )
-from utils.bin_model import (  # noqa: E402
-    expected_doppler_bin,
-    expected_range_bin,
-    expected_velocity_axis,
-)
-from utils.harness import run_operator, run_operator_multi, single_map, to_device_array  # noqa: E402
-from utils.point_target_sim import PointTarget, SimScene, simulate  # noqa: E402
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -486,7 +491,7 @@ def test_NfftSmallerThanChirpCountRejected():
 def _derive_radial_velocity(target: PointTarget) -> float:
     rng = math.sqrt(sum(x * x for x in target.position))
     look = tuple(x / rng for x in target.position)
-    return sum(v * l for v, l in zip(target.velocity, look, strict=True))
+    return sum(v * lk for v, lk in zip(target.velocity, look, strict=True))
 
 
 def test_SimulatorTargetMapsToTruthVelocity():

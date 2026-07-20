@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, TypeVar
+from typing import TypeVar
 
 from utils.perf_app import TimingCollector
 from utils.perf_report import PerfReport, ResultRow, RunSettings

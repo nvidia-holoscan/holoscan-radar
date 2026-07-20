@@ -3,30 +3,6 @@
 
 """holoscan.radar — GPU radar signal-processing operators for Holoscan."""
 
-from .radar_common import (  # noqa: F401
-    DEFAULT_PROPAGATION_SPEED,
-    AngleConvention,
-    AngleConventionPreset,
-    ArrayGeometry,
-    ArrayGeometryType,
-    ClutterFilterMethod,
-    DDMCodeDescriptor,
-    ElevationReference,
-    FMCWWaveformDescriptor,
-    FMCWWaveformSpec,
-    FftNorm,
-    MultiplexingScheme,
-    OverlapPolicy,
-    PeakInterpolation,
-    RepresentativePolicy,
-    ScoreMethod,
-    SignedAxis,
-    SnapshotEdgeMode,
-    TXSchedule,
-    WindowSpec,
-    WindowType,
-    make_device_tensor,
-)
 from .beamscan_estimator_op import (  # noqa: F401
     BeamscanEstimatorOpF32,
     BeamscanEstimatorOpF64,
@@ -85,14 +61,6 @@ from .phase_shift_beamformer_op import (  # noqa: F401
     PhaseShiftBeamformerOpF32,
     PhaseShiftBeamformerOpF64,
 )
-from .snapshot_gather_op import (  # noqa: F401
-    SnapshotGatherOpF32,
-    SnapshotGatherOpF64,
-)
-from .virtual_array_assembly_op import (  # noqa: F401
-    VirtualArrayAssemblyOpF32,
-    VirtualArrayAssemblyOpF64,
-)
 from .radar_app import (  # noqa: F401
     BoresightViewOp,
     CadenceMeter,
@@ -106,6 +74,38 @@ from .radar_app import (  # noqa: F401
     cluster_palette,
     gui_available,
     make_turbo_lut,
+)
+from .radar_common import (  # noqa: F401
+    DEFAULT_PROPAGATION_SPEED,
+    AngleConvention,
+    AngleConventionPreset,
+    ArrayGeometry,
+    ArrayGeometryType,
+    ClutterFilterMethod,
+    DDMCodeDescriptor,
+    ElevationReference,
+    FftNorm,
+    FMCWWaveformDescriptor,
+    FMCWWaveformSpec,
+    MultiplexingScheme,
+    OverlapPolicy,
+    PeakInterpolation,
+    RepresentativePolicy,
+    ScoreMethod,
+    SignedAxis,
+    SnapshotEdgeMode,
+    TXSchedule,
+    WindowSpec,
+    WindowType,
+    make_device_tensor,
+)
+from .snapshot_gather_op import (  # noqa: F401
+    SnapshotGatherOpF32,
+    SnapshotGatherOpF64,
+)
+from .virtual_array_assembly_op import (  # noqa: F401
+    VirtualArrayAssemblyOpF32,
+    VirtualArrayAssemblyOpF64,
 )
 
 # Convenience aliases: bare name → single precision (matches C++ demo apps).
@@ -237,12 +237,6 @@ def install_matx_cache_atexit() -> None:
     _matx_atexit_installed = True
 
 
-# If the app imported CuPy before holoscan.radar, we cannot safely Clear eig
-# plans (MatX/CuPy interaction). Prefer: import holoscan.radar, then cupy, then
-# install_matx_cache_atexit(). When cupy is already present at radar-import
-# time we still register — works only if the radar .so was loaded first.
-import sys as _sys
-
-if "cupy" in _sys.modules:
-    install_matx_cache_atexit()
-
+# Prefer: import holoscan.radar, then cupy, then install_matx_cache_atexit().
+# Do not auto-register here — CuPy-before-radar import order makes MatX eig
+# Clear abort on teardown; callers (demos, conftest, perf) must opt in.

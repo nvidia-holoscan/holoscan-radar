@@ -27,20 +27,9 @@ _PERF_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PERF_DIR not in sys.path:
     sys.path.insert(0, _PERF_DIR)
 
-from utils.bootstrap import bootstrap_radar_package
+from utils.bootstrap import bootstrap_radar_package  # noqa: E402
 
 bootstrap_radar_package()
-
-from holoscan.conditions import CountCondition  # noqa: E402
-from holoscan.core import Application  # noqa: E402
-from holoscan.radar import (  # noqa: E402
-    CFARDetectorOpF32,
-    CfarVariant,
-    build_ca_alpha_lut,
-    build_go_alpha_lut,
-    build_os_alpha_lut,
-    build_so_alpha_lut,
-)
 
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
@@ -61,6 +50,17 @@ from utils.perf_runner import (  # noqa: E402
 from utils.perf_sink import PerfTerminalSinkOp, make_null_sink  # noqa: E402
 from utils.perf_source import PerfDataSourceOp, PerfOverrideSourceOp  # noqa: E402
 from utils.tensor_factory import make_power_map_device, single_map  # noqa: E402
+
+from holoscan.conditions import CountCondition  # noqa: E402
+from holoscan.core import Application  # noqa: E402
+from holoscan.radar import (  # noqa: E402
+    CFARDetectorOpF32,
+    CfarVariant,
+    build_ca_alpha_lut,
+    build_go_alpha_lut,
+    build_os_alpha_lut,
+    build_so_alpha_lut,
+)
 
 # ---------------------------------------------------------------------------
 # Size ladder / footprints — keep aligned with perf_cfar_detector.cpp

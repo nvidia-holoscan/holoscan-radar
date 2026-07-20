@@ -8,7 +8,8 @@
 # DDM: MimoDdmAdcSourceOp -> Range -> Doppler -> Compensation -> Clutter
 #        -> VirtualArrayAssemblyOp -> ...
 #
-# Configuration is loaded from fmcw_mimo.yaml (default) or fmcw_mimo_ddm.yaml.
+# Configuration is loaded from fmcw_mimo.yaml (default), fmcw_mimo_ddm.yaml,
+# or fmcw_mimo_ddm_phase_codes.yaml (non-linear correlate).
 # Prefer Holoscan ``from_config()`` for operator blocks; some app-level fields
 # are still parsed via ``common.python.demo_config``.
 
@@ -37,31 +38,8 @@ _APP_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_APP_ROOT) not in sys.path:
     sys.path.insert(0, str(_APP_ROOT))
 
-from common.python.demo_config import (  # noqa: E402
-    K_C,
-    PlotsConfig,
-    flatten_positions,
-    grid_extent,
-    make_virtual_geometry,
-    parse_beamscan_estimator,
-    parse_cfar_detector,
-    parse_clutter_filter,
-    parse_cluster_dbscan,
-    parse_ddm_code,
-    parse_doppler_processor,
-    parse_mimo_coherent_compensation,
-    parse_mimo_deinterleave,
-    parse_plots,
-    parse_range_processor,
-    parse_reduction,
-    parse_run,
-    parse_snapshot_gather,
-    parse_target,
-    parse_tx_schedule,
-    parse_virtual_array_assembly,
-    parse_waveform,
-)
-
+# Load holoscan.radar before cupy (MatX CUDA cache / atexit ordering).
+# isort: off
 from holoscan.conditions import CountCondition, PeriodicCondition  # noqa: E402
 from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
 from holoscan.operators import HolovizOp  # noqa: E402
@@ -71,10 +49,10 @@ from holoscan.radar import (  # noqa: E402
     BoresightViewOp,
     CadenceMeter,
     CFARDetectorOp,
-    ClutterFilterOp,
     ClusterDBSCANOp,
     ClusterOverlayOp,
     ClusterReportOp,
+    ClutterFilterOp,
     DetectionReductionOp,
     DetectionReportOp,
     FeatureAssemblyOp,
@@ -92,11 +70,36 @@ from holoscan.radar import (  # noqa: E402
     VirtualArrayAssemblyOp,
     cluster_palette,
     gui_available,
+    install_matx_cache_atexit,
     make_turbo_lut,
 )
 
-import cupy as cp  # noqa: E402  # after holoscan.radar (MatX CUDA cache)
-from holoscan.radar import install_matx_cache_atexit  # noqa: E402
+import cupy as cp  # noqa: E402
+from common.python.demo_config import (  # noqa: E402
+    K_C,
+    PlotsConfig,
+    flatten_positions,
+    grid_extent,
+    make_virtual_geometry,
+    parse_beamscan_estimator,
+    parse_cfar_detector,
+    parse_cluster_dbscan,
+    parse_clutter_filter,
+    parse_ddm_code,
+    parse_doppler_processor,
+    parse_mimo_coherent_compensation,
+    parse_mimo_deinterleave,
+    parse_plots,
+    parse_range_processor,
+    parse_reduction,
+    parse_run,
+    parse_snapshot_gather,
+    parse_target,
+    parse_tx_schedule,
+    parse_virtual_array_assembly,
+    parse_waveform,
+)
+# isort: on
 
 install_matx_cache_atexit()
 
@@ -310,9 +313,7 @@ def resolve_ddm_offsets(code) -> list[float]:
     return offsets
 
 
-def simulate_mimo_tdm_interleaved(
-    scene: MimoScene, schedule: TXSchedule
-) -> SimResult:
+def simulate_mimo_tdm_interleaved(scene: MimoScene, schedule: TXSchedule) -> SimResult:
     """Analytic TDM-interleaved IF cube on GPU (CuPy)."""
     if not scene.tx_positions or not scene.rx_positions:
         raise ValueError("simulate_mimo_tdm_interleaved: need TX and RX positions")
@@ -368,9 +369,7 @@ def simulate_mimo_tdm_interleaved(
     return SimResult(cube=cube64, shape=tuple(int(d) for d in cube64.shape))
 
 
-def simulate_mimo_ddm_coded(
-    scene: MimoScene, offsets: list[float]
-) -> SimResult:
+def simulate_mimo_ddm_coded(scene: MimoScene, offsets: list[float]) -> SimResult:
     """Analytic DDM-coded IF cube on GPU (CuPy)."""
     if not scene.tx_positions or not scene.rx_positions:
         raise ValueError("simulate_mimo_ddm_coded: need TX and RX positions")
@@ -405,9 +404,7 @@ def simulate_mimo_ddm_coded(
         apert_rx = rx_pos @ look
         for tx in range(num_tx):
             tau = (
-                2.0 * range_k[cp.newaxis, :]
-                - apert_tx[tx]
-                - apert_rx[:, cp.newaxis]
+                2.0 * range_k[cp.newaxis, :] - apert_tx[tx] - apert_rx[:, cp.newaxis]
             ) / c
             beat = slope * tau
             code_phase = (2.0 * K_PI) * offsets_arr[tx] * k
@@ -471,9 +468,7 @@ def simulate_mimo_ddm_phase_coded(
         apert_rx = rx_pos @ look
         for tx in range(num_tx):
             tau = (
-                2.0 * range_k[cp.newaxis, :]
-                - apert_tx[tx]
-                - apert_rx[:, cp.newaxis]
+                2.0 * range_k[cp.newaxis, :] - apert_tx[tx] - apert_rx[:, cp.newaxis]
             ) / c
             beat = slope * tau
             phase = (2.0 * K_PI) * (
@@ -509,6 +504,7 @@ def advance_scene(scene: MimoScene, dt: float) -> None:
 
 @dataclass
 class AppConfig:
+    config_path: Path | None = None
     scheme: MultiplexingScheme = MultiplexingScheme.TDM
     scene: MimoScene = field(default_factory=MimoScene)
     tx_schedule: TXSchedule = field(default_factory=TXSchedule)
@@ -585,6 +581,7 @@ def load_config(path: Path) -> AppConfig:
         raise FileNotFoundError(f"config file not found: {path}")
     root = yaml.safe_load(path.read_text())
     cfg = AppConfig()
+    cfg.config_path = path
 
     waveform = parse_waveform(root["waveform"])
     cfg.report_waveform = waveform
@@ -784,7 +781,9 @@ class DdmReportVelocityBinsOp(Operator):
         op_input.receive("sync")
         if self._velocity_bins is None:
             if self.num_doppler <= 0:
-                raise RuntimeError("DdmReportVelocityBinsOp: num_doppler must be positive")
+                raise RuntimeError(
+                    "DdmReportVelocityBinsOp: num_doppler must be positive"
+                )
             if self.bin_spacing_hz <= 0.0:
                 raise RuntimeError(
                     "DdmReportVelocityBinsOp: bin_spacing_hz must be > 0"
@@ -821,7 +820,9 @@ class MimoTdmAdcSourceOp(Operator):
     def compute(self, op_input, op_output, context) -> None:
         result = simulate_mimo_tdm_interleaved(self.scene, self.tx_schedule)
         if len(result.shape) != 3:
-            raise RuntimeError("MimoTdmAdcSourceOp: expected rank-3 (N_rx, M*L, samples)")
+            raise RuntimeError(
+                "MimoTdmAdcSourceOp: expected rank-3 (N_rx, M*L, samples)"
+            )
         # Keep a reference so the DLPack buffer outlives this compute().
         self._adc_cube = result.cube
         op_output.emit({"adc_cube": self._adc_cube}, "adc_cube")
@@ -886,6 +887,9 @@ class FmcwMimoApp(Application):
 
     def compose(self) -> None:
         cfg = self.cfg
+        if cfg.config_path is None:
+            raise RuntimeError("fmcw_mimo: AppConfig.config_path is required")
+        self.config(str(cfg.config_path))
         ddm = cfg.scheme == MultiplexingScheme.DDM
         window_title = (
             "FMCW MIMO DDM - virtual RD + clusters"
@@ -901,18 +905,30 @@ class FmcwMimoApp(Application):
             cadence.log_every = cfg.meter_log_every
             self.cadence = cadence
 
-        range_op = FMCWRangeProcessorOp(self, **cfg.range_processor)
-        clutter = ClutterFilterOp(self, **cfg.clutter_filter)
-        doppler = FMCWDopplerProcessorOp(self, **cfg.doppler_processor)
+        range_op = FMCWRangeProcessorOp(
+            self, self.from_config("range_processor"), name="range_processor"
+        )
+        clutter = ClutterFilterOp(
+            self, self.from_config("clutter_filter"), name="clutter_filter"
+        )
+        doppler = FMCWDopplerProcessorOp(
+            self, self.from_config("doppler_processor"), name="doppler_processor"
+        )
         compensation = MIMOCoherentCompensationOp(
-            self, **cfg.mimo_coherent_compensation
+            self,
+            self.from_config("mimo_coherent_compensation"),
+            # Prefer the app-resolved descriptor (may expand
+            # generate_phase_codes into explicit phase_codes).
+            **({"ddm_code": cfg.ddm_code} if ddm else {}),
+            name="mimo_coherent_compensation",
         )
         vaa = VirtualArrayAssemblyOp(
             self,
+            self.from_config("virtual_array_assembly"),
             tx_positions=cfg.tx_positions_flat,
             rx_positions=cfg.rx_positions_flat,
             wavelength=cfg.wavelength,
-            **cfg.virtual_array_assembly,
+            name="virtual_array_assembly",
         )
 
         if ddm:
@@ -922,9 +938,9 @@ class FmcwMimoApp(Application):
                 PeriodicCondition(self, recess_period=period_ns),
                 scene=cfg.scene,
                 doppler_offsets=cfg.ddm_doppler_offsets,
-                phase_codes=list(cfg.ddm_code.phase_codes)
-                if cfg.ddm_correlate
-                else None,
+                phase_codes=(
+                    list(cfg.ddm_code.phase_codes) if cfg.ddm_correlate else None
+                ),
                 use_phase_codes=cfg.ddm_correlate,
                 frame_period=cfg.frame_period,
                 cadence=cadence,
@@ -946,7 +962,9 @@ class FmcwMimoApp(Application):
                 cadence=cadence,
                 name="adc_source",
             )
-            deinterleave = MIMODeinterleaveOp(self, **cfg.mimo_deinterleave)
+            deinterleave = MIMODeinterleaveOp(
+                self, self.from_config("mimo_deinterleave"), name="mimo_deinterleave"
+            )
             self.add_flow(source, deinterleave, {("adc_cube", "adc_cube")})
             self.add_flow(deinterleave, range_op, {("adc_cube", "adc_cube")})
             self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
@@ -954,12 +972,17 @@ class FmcwMimoApp(Application):
             self.add_flow(doppler, compensation, {("rd_maps", "rd_maps")})
             self.add_flow(compensation, vaa, {("rd_maps", "rd_maps")})
 
-        cfar = CFARDetectorOp(self, **cfg.cfar_detector)
-        gather = SnapshotGatherOp(self, **cfg.snapshot_gather)
+        cfar = CFARDetectorOp(
+            self, self.from_config("cfar_detector"), name="cfar_detector"
+        )
+        gather = SnapshotGatherOp(
+            self, self.from_config("snapshot_gather"), name="snapshot_gather"
+        )
         beamscan = BeamscanEstimatorOp(
             self,
+            self.from_config("beamscan_estimator"),
             array_geometry=cfg.array_geometry,
-            **cfg.beamscan_estimator,
+            name="beamscan_estimator",
         )
 
         det_report = DetectionReportOp(self, name="detection_report")
@@ -979,9 +1002,13 @@ class FmcwMimoApp(Application):
             ],
             name="feature_assembly",
         )
-        cluster = ClusterDBSCANOp(self, **cfg.cluster_dbscan)
+        cluster = ClusterDBSCANOp(
+            self, self.from_config("cluster_dbscan"), name="cluster_dbscan"
+        )
         cluster_report = ClusterReportOp(self, name="cluster_report")
-        reduction = DetectionReductionOp(self, **cfg.reduction)
+        reduction = DetectionReductionOp(
+            self, self.from_config("reduction"), name="reduction"
+        )
 
         ddm_velocity_bins: DdmReportVelocityBinsOp | None = None
         if ddm:
@@ -1000,7 +1027,9 @@ class FmcwMimoApp(Application):
         self.add_flow(vaa, cfar, {("rd_maps", "rd_maps")})
         self.add_flow(vaa, gather, {("rd_maps", "rd_maps")})
         self.add_flow(cfar, gather, {("detection_idx", "detection_idx")})
-        self.add_flow(gather, beamscan, {("snapshot", "snapshot"), ("is_valid", "is_valid")})
+        self.add_flow(
+            gather, beamscan, {("snapshot", "snapshot"), ("is_valid", "is_valid")}
+        )
         self.add_flow(vaa, beamscan, {("array_geometry", "array_geometry")})
         self.add_flow(beamscan, feature_assembly, {("aoa_estimates", "aoa_estimates")})
         self.add_flow(beamscan, spectrum_sink, {("angle_spectrum", "input")})
@@ -1031,7 +1060,9 @@ class FmcwMimoApp(Application):
             )
         self.add_flow(feature_assembly, cluster, {("points", "points")})
         self.add_flow(feature_assembly, cluster_report, {("points", "points")})
-        self.add_flow(cluster, cluster_report, {("labels", "labels"), ("sizes", "sizes")})
+        self.add_flow(
+            cluster, cluster_report, {("labels", "labels"), ("sizes", "sizes")}
+        )
         self.add_flow(cluster, reduction, {("labels", "labels")})
         self.add_flow(cfar, reduction, {("detection_idx", "detection_idx")})
         self.add_flow(feature_assembly, reduction, {("points", "points")})
@@ -1045,9 +1076,7 @@ class FmcwMimoApp(Application):
                 {("velocity_bins", "velocity_bins")},
             )
         else:
-            self.add_flow(
-                doppler, cluster_report, {("velocity_bins", "velocity_bins")}
-            )
+            self.add_flow(doppler, cluster_report, {("velocity_bins", "velocity_bins")})
 
         if cfg.visualize:
             ch_slice = RdChannelSliceOp(self, channel=0, name="rd_channel_slice")
@@ -1157,9 +1186,7 @@ class FmcwMimoApp(Application):
                         ddm_velocity_bins, plot, {("velocity_bins", "velocity_bins")}
                     )
                 else:
-                    self.add_flow(
-                        doppler, plot, {("velocity_bins", "velocity_bins")}
-                    )
+                    self.add_flow(doppler, plot, {("velocity_bins", "velocity_bins")})
                 self.add_flow(plot, visualizer, {("plots", "receivers")})
             if boresight is not None:
                 self.add_flow(beamscan, boresight, {("aoa_estimates", "aoa_estimates")})
@@ -1168,9 +1195,17 @@ class FmcwMimoApp(Application):
 
 
 def resolve_config_path(argv: list[str]) -> Path:
+    """Resolve YAML path like the C++ demo: cwd, then beside the staged cpp/ YAMLs."""
+    cpp_dir = Path(__file__).resolve().parent.parent / "cpp"
     if len(argv) > 1:
-        return Path(argv[1])
-    return Path(__file__).resolve().parent.parent / "cpp" / "fmcw_mimo.yaml"
+        given = Path(argv[1])
+        if given.is_file():
+            return given
+        beside = cpp_dir / given.name
+        if beside.is_file():
+            return beside
+        return given  # load_config reports the original path
+    return cpp_dir / "fmcw_mimo.yaml"
 
 
 def main(argv: list[str] | None = None) -> int:

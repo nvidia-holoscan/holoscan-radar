@@ -108,12 +108,6 @@ void run_ddm_demux_stage(const void* input, void* output,
 std::vector<int64_t> ddm_correlate_output_shape(const DdmRdMapsLayout& in,
                                                 int64_t num_tx);
 
-// Build code spectra on host: DFT(c_m) for each TX m. Returns num_tx *
-// num_doppler complex<double> values, row-major (m, k). Kept for reference /
-// diagnostics; the runtime correlate path caches `build_ddm_corr_weights`.
-std::vector<std::complex<double>> build_ddm_code_spectra(
-    const DDMCodeDescriptor& code, int64_t num_doppler);
-
 // FFT-correlation weights for the non-linear demux. With num_chirps == D,
 //   out = ifft(fft(Y) * W_m)   (MatX/NumPy BACKWARD norms)
 // equals (1/D) * circular conjugate-correlation of Y with C_m = DFT(c_m), and
@@ -126,14 +120,20 @@ std::vector<std::complex<double>> build_ddm_corr_weights(
 std::string ddm_correlate_cache_key(const DDMCodeDescriptor& code,
                                     int64_t num_doppler);
 
+// Release per-operator cuFFT plan / tile workspace owned by `owner`
+// (pass the MIMOCoherentCompensationOp `this` pointer). Safe no-op if absent.
+void release_ddm_correlate_scratch(void* owner);
+
 // Conjugate-correlation DDM demux via FFT:
 //   out[..., m, rx, :, r] = ifft(fft(Y[..., rx, :, r]) * W_m)
 // with W from build_ddm_corr_weights. Equivalent to
 //   out[..., m, rx, d, r] = (1/D) * sum_k Y[..., rx, k, r] *
 //                            conj(C_m[(k-d) mod D]),  C_m = DFT(c_m).
+// `owner` keys per-instance cuFFT/workspace scratch (not shared across ops).
 template <typename T>
 void run_ddm_correlate_stage(const void* input, void* output,
                              const DdmRdMapsLayout& layout, int64_t num_tx,
-                             const void* d_corr_weights, cudaStream_t stream);
+                             const void* d_corr_weights, void* owner,
+                             cudaStream_t stream);
 
 }  // namespace holoscan::radar::detail

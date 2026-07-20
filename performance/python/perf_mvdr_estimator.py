@@ -23,7 +23,7 @@ _PERF_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PERF_DIR not in sys.path:
     sys.path.insert(0, _PERF_DIR)
 
-from utils.bootstrap import bootstrap_radar_package
+from utils.bootstrap import bootstrap_radar_package  # noqa: E402
 
 bootstrap_radar_package()
 
@@ -32,20 +32,11 @@ bootstrap_radar_package()
 # at interpreter exit), then register MatX cache retirement after CuPy so it
 # runs first on exit (atexit is LIFO) while CUDA is still alive. Mirrors
 # tests/python/conftest.py.
-import holoscan.radar  # noqa: E402,F401
 import cupy  # noqa: E402,F401
 
-holoscan.radar.install_matx_cache_atexit()
+import holoscan.radar  # noqa: E402,F401
 
-from holoscan.conditions import CountCondition  # noqa: E402
-from holoscan.core import Application  # noqa: E402
-from holoscan.radar import (  # noqa: E402
-    AngleConvention,
-    AngleConventionPreset,
-    ArrayGeometry,
-    ArrayGeometryType,
-    MVDREstimatorOpF32,
-)
+holoscan.radar.install_matx_cache_atexit()
 
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
@@ -60,6 +51,16 @@ from utils.perf_runner import (  # noqa: E402
 from utils.perf_sink import PerfTerminalSinkOp, make_null_sink  # noqa: E402
 from utils.perf_source import PerfOverrideSourceOp, PerfTensorSourceOp  # noqa: E402
 from utils.tensor_factory import make_iq_cube_device, single_map  # noqa: E402
+
+from holoscan.conditions import CountCondition  # noqa: E402
+from holoscan.core import Application  # noqa: E402
+from holoscan.radar import (  # noqa: E402
+    AngleConvention,
+    AngleConventionPreset,
+    ArrayGeometry,
+    ArrayGeometryType,
+    MVDREstimatorOpF32,
+)
 
 # ---------------------------------------------------------------------------
 # Size ladder — keep aligned with perf_mvdr_estimator.cpp

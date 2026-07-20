@@ -21,20 +21,9 @@ _PERF_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PERF_DIR not in sys.path:
     sys.path.insert(0, _PERF_DIR)
 
-from utils.bootstrap import bootstrap_radar_package
+from utils.bootstrap import bootstrap_radar_package  # noqa: E402
 
 bootstrap_radar_package()
-
-from holoscan.conditions import CountCondition  # noqa: E402
-from holoscan.core import Application  # noqa: E402
-from holoscan.radar import (  # noqa: E402
-    AngleConvention,
-    AngleConventionPreset,
-    ArrayGeometry,
-    ArrayGeometryType,
-    BeamscanEstimatorOpF32,
-    PeakInterpolation,
-)
 
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
@@ -49,6 +38,17 @@ from utils.perf_runner import (  # noqa: E402
 from utils.perf_sink import PerfTerminalSinkOp, make_null_sink  # noqa: E402
 from utils.perf_source import PerfOverrideSourceOp, PerfTensorSourceOp  # noqa: E402
 from utils.tensor_factory import make_iq_cube_device, single_map  # noqa: E402
+
+from holoscan.conditions import CountCondition  # noqa: E402
+from holoscan.core import Application  # noqa: E402
+from holoscan.radar import (  # noqa: E402
+    AngleConvention,
+    AngleConventionPreset,
+    ArrayGeometry,
+    ArrayGeometryType,
+    BeamscanEstimatorOpF32,
+    PeakInterpolation,
+)
 
 # v1 characterizes single precision; complex64 / float32 sample sizes.
 _COMPLEX_BYTES = 8.0

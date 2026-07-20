@@ -11,11 +11,6 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from holoscan.radar import (  # noqa: E402
-    BeamscanEstimatorOpF32,
-    BeamscanEstimatorOpF64,
-    PeakInterpolation,
-)
 from utils.angle_helpers import (  # noqa: E402
     aerospace_ned_convention,
     linspace,
@@ -26,6 +21,12 @@ from utils.angle_helpers import (  # noqa: E402
     radar_boresight_convention,
 )
 from utils.harness import run_operator_multi, single_map, to_device_array  # noqa: E402
+
+from holoscan.radar import (  # noqa: E402
+    BeamscanEstimatorOpF32,
+    BeamscanEstimatorOpF64,
+    PeakInterpolation,
+)
 
 pytestmark = pytest.mark.requires_gpu
 

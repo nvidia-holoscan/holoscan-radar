@@ -164,9 +164,11 @@ M TX transmit simultaneously with per-chirp phase codes placing each TX in a dis
 ADC (N_rx, num_chirps, samples)   [all M TX present every chirp, per-chirp phase codes]
   → FMCWRangeProcessorOp       → (N_rx, num_chirps, num_range)
   → FMCWDopplerProcessorOp     → (N_rx, num_doppler, num_range)               [Doppler holds M TX bands]
-  → MIMOCoherentCompensationOp → (M_tx, N_rx, num_doppler_out, num_range)   [demux bands → TX axis; gather or correlate]
-  → [ClutterFilterOp]          → (M_tx, N_rx, num_doppler_per_tx, num_range)  [after demux]
-  → VirtualArrayAssemblyOp     → (num_virtual, num_doppler, num_range) + virtual element_positions
+  → MIMOCoherentCompensationOp → (M_tx, N_rx, num_doppler_out, num_range)   [demux → TX axis]
+       num_doppler_out = num_doppler_per_tx  (linear gather / doppler_offsets)
+                       = num_doppler         (non-linear phase_codes correlate)
+  → [ClutterFilterOp]          → (M_tx, N_rx, num_doppler_out, num_range)    [after demux]
+  → VirtualArrayAssemblyOp     → (num_virtual, num_doppler_out, num_range) + virtual element_positions
   → angle path (dense or sparse) + CFARDetectorOp
 ```
 

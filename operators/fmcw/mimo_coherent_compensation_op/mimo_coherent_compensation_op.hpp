@@ -61,7 +61,7 @@ class MIMOCoherentCompensationOp : public holoscan::Operator {
   };
 
   struct CachedDdmCorrelate {
-    std::shared_ptr<holoscan::Tensor> device_spectra;
+    std::shared_ptr<holoscan::Tensor> device_corr_weights;
   };
 
   void run_tdm_compute(OutputContext& op_output,

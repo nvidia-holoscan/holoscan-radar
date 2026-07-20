@@ -12,7 +12,7 @@ host buffers and avoid full-cube float64 index temporaries.
 from __future__ import annotations
 
 import math
-from typing import Sequence
+from collections.abc import Sequence
 
 import cupy as cp
 import numpy as np

@@ -17,13 +17,14 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
+from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
+
 from holoscan.radar import (  # noqa: E402
     ClutterFilterMethod,
     ClutterFilterOp,
     ClutterFilterOpF32,
     ClutterFilterOpF64,
 )
-from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
 
 pytestmark = pytest.mark.requires_gpu
 
