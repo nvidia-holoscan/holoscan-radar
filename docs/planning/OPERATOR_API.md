@@ -68,6 +68,8 @@ The standard operator flow graphs the module must support, abbreviated from `hol
 | **MIMO — TDM** | M × N | time-division | virtual array (up to `M·N`) |
 | **MIMO — DDM** | M × N | Doppler-division | virtual array (up to `M·N`) |
 
+Modality acronyms (SISO / SIMO / MIMO) follow the wireless channel convention: **input** = transmit side, **output** = receive side — so SIMO is 1 TX × N RX. See `WORKFLOWS.md` *Modality naming* for the full table and rationale.
+
 Out of scope here. **CDM / BPM** (code-division / binary-phase multiplexing) are **under consideration for a future wave** — architecturally a small extension of the DDM path (all TX on, per-chirp phase code, separated after the Doppler stage), reusing `MIMOCoherentCompensationOp` in a code-correlation mode and the rest of the MIMO chain unchanged — but not implemented here. **FDM** (frequency-division) and **PMCW** (fast-time code division — a different waveform, not FMCW) are excluded.
 
 ### Cross-cutting structure
@@ -755,11 +757,13 @@ Used by: `FMCWRangeProcessorOp` (dechirp reference; slope + sample rate for `ran
 Describes the Doppler-division multiplexing scheme for `MIMOCoherentCompensationOp` (DDM mode) — how the M TX are separated after the Doppler FFT. (The forward-looking CDM/BPM extension would carry its orthogonal code here in a code-correlation mode; out of scope for now.)
 
 - `num_tx` — int. M, the number of TX multiplexed into distinct Doppler sub-bands.
-- `phase_codes` (optional) — float or complex, `(num_tx, num_chirps)`. The per-chirp phase (or unit-magnitude code) applied to each TX; the general form, demuxed by conjugate correlation. Provide this **or** `doppler_offsets`.
-- `doppler_offsets` (optional) — float, `(num_tx,)`. Per-TX Doppler sub-band offset (fraction of `[0, PRF)`, or bins); the compact form for standard linear-phase DDM, from which `phase_codes` are synthesized. Provide this **or** `phase_codes`.
+- `phase_codes` (optional) — float or complex, `(num_tx, num_chirps)`. The per-chirp phase (or unit-magnitude code) applied to each TX; the general form, demuxed by conjugate correlation. Provide this **or** `doppler_offsets`. **Implemented (current slice):** only *linear-phase* codes (a constant per-chirp phase increment per TX) are accepted — they are reduced to the equivalent `doppler_offsets` internally; arbitrary / non-linear codes are rejected (deferred; see the operator's `OPEN_ITEMS.md`).
+- `doppler_offsets` (optional) — float, `(num_tx,)`. Per-TX Doppler sub-band offset **as a fraction of PRF (cycles/chirp) in `[0, 1)`** (e.g. `m/M` for uniform DDM); the compact form for standard linear-phase DDM, from which `phase_codes` are synthesized. Fractions (not bins) are canonical because the descriptor is static config built before `num_doppler` (a runtime shape) is known; the operator converts to a bin offset `round(offset · num_doppler)` per tick. Provide this **or** `phase_codes`.
 - `guard_bands` — int. Guard bins reserved between adjacent TX Doppler bands to keep them separable. Default: 0.
 
 Notes: the `[0, PRF)` Doppler span is shared across the M bands, so unambiguous velocity is reduced by M; band width `num_doppler_per_tx` follows the offset/guard layout. Doppler-ambiguity handling lives in `MIMOCoherentCompensationOp`.
+
+**Imposed layout (current slice):** `num_doppler` must be divisible by `num_tx`; each band is `num_doppler / num_tx` bins wide, and `num_doppler_per_tx = num_doppler / num_tx − guard_bands` (the top `guard_bands` fft-order bins of each band are discarded as the inter-band guard). The demuxed output Doppler axis is center-zero over the reduced `[−PRF/2M, PRF/2M)` span, with every TX lane un-shifted to a common reduced-Doppler axis so the emitted `(tx, rx)` block is coherent. For standard linear-phase DDM this demux is a pure Doppler-bin gather and is **waveform-independent** (the `waveform` parameter is still required for contract parity).
 
 ### TXSchedule
 

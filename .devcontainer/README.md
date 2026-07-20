@@ -41,6 +41,20 @@ Container*) so the `dev` user is recreated with the new ids.
 - **VS Code / Cursor:** *Dev Containers: Reopen in Container* from the command palette.
 - **CLI:** `devcontainer up --workspace-folder .`
 
+## Host display (Holoviz)
+
+Startup forwards the host X11 display into the container so apps like
+`fmcw_siso` with `visualize: true` can open a window:
+
+- `initializeCommand` runs `xhost +local:docker` (or `+local:`) on the **host**
+- `DISPLAY` is copied from the host via `containerEnv`
+- `/tmp/.X11-unix` is bind-mounted
+
+Rebuild/reopen the container after pulling these settings. On a headless host
+(or without `xhost`), startup still succeeds; visualization simply won't work.
+If Holoviz still can't authenticate after a rebuild, also mount the host
+Xauthority cookie (not enabled by default — paths vary by desktop).
+
 ## Data Directory
 
 The in-repo `./data` folder is available at `/workspace/holoscan-radar/data`,

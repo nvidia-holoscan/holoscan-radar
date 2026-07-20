@@ -13,11 +13,11 @@
 #include <string>
 #include <vector>
 
+#include "radar_common/math/constants.hpp"
+
 namespace holoscan::radar {
 
 namespace {
-
-constexpr double kPi = 3.14159265358979323846;
 
 // Generalized cosine window: sum_i (-1)^i a[i] cos(2*pi*i*n / (N-1)).
 std::vector<double> cosine_sum_window(int64_t n,

@@ -37,9 +37,9 @@ throws / sits in `OPEN_ITEMS.md`.
       arg setters, `[live]` override ports where required.
 - [ ] **`compute()` correct** — sticky overrides, rank-agnostic shapes,
       stream-ordered CUDA, clear errors on unsupported paths.
-- [ ] **Tests** — `tests/cpp/test_<operator>.cpp` covers `TESTING.md` unit
-      checks; all output ports wired in harness tests; float/double + error
-      paths where applicable.
+- [ ] **Tests** — `tests/cpp/<group>/test_<operator>.cpp` covers `TESTING.md`
+      unit checks; all output ports wired in harness tests; float/double +
+      error paths where applicable.
 - [ ] **Performance** — `performance/cpp/perf_<operator>.cpp` harness + CMake
       smoke test when a hot path exists (see **Performance** below).
 - [ ] **`ctest -L unit`** and **`pre-commit run --all-files`** pass.
@@ -140,7 +140,8 @@ throws / sits in `OPEN_ITEMS.md`.
 
 ## Tests
 
-- [ ] **C++ unit tests** in `tests/cpp/test_<operator>.cpp`, label `unit`.
+- [ ] **C++ unit tests** in `tests/cpp/<group>/test_<operator>.cpp`, mirroring
+      the operator family tree (`fmcw/`, `detection/`, …), label `unit`.
 - [ ] Use **`create_operator_test`** + `tests/cpp/utils/sdk_harness.hpp`
       (`single_map`, `TensorMapCapture`, `wire_leading_override` for sticky
       `[live]` tests).
@@ -152,7 +153,12 @@ throws / sits in `OPEN_ITEMS.md`.
       per functional override param (not just build-time `Arg`).
 - [ ] **Float and double** instantiation agreement where applicable.
 - [ ] **Error paths:** invalid args, unsupported modes, bad TensorMap shape.
-- [ ] Register the test in **`tests/cpp/CMakeLists.txt`**.
+- [ ] Register the test in **`tests/cpp/CMakeLists.txt`** with the
+      family-relative source path (e.g. `radar_add_test(detection/test_<op> …)`).
+      The three helpers pick the label: `radar_add_test` → `unit`,
+      `radar_add_integration_test` → `integration` (cross-family chains),
+      `radar_add_statistical_test` → `statistical`. The target name stays the
+      flat basename, so `ctest -R test_<operator>` is unaffected by the path.
 - [ ] Run **`ctest -L unit`** and **`pre-commit run --all-files`** before
       push.
 
@@ -199,7 +205,8 @@ Exemplar: `performance/cpp/perf_cfar_detector.cpp`.
 
 - [ ] Update **`STATUS.md`** — move claim to done or refresh state.
 - [ ] Add any new **team open items** to `operators/<group>/<operator>/OPEN_ITEMS.md`
-      (create it if needed).
+      (create it if needed) **and** index them in
+      [`docs/planning/TEAM_BLOCKED.md`](TEAM_BLOCKED.md).
 - [ ] PR description notes **contract changes** explicitly if `OPERATOR_API.md`
       changed.
 - [ ] Python bindings — **deferred** module-wide unless this PR is explicitly

@@ -19,6 +19,19 @@ Antenna configuration × TX multiplexing supported in the first wave:
 | **MIMO — TDM** | M × N | time-division | virtual array (up to `M·N`) |
 | **MIMO — DDM** | M × N | Doppler-division | virtual array (up to `M·N`) |
 
+### Modality naming (SISO / SIMO / MISO / MIMO)
+
+The table uses **`M_tx × N_rx`** (transmit antennas × receive antennas). The acronyms come from the wireless **channel model** — **input** is what is fed **into the propagation channel** (the transmit side), **output** is what emerges **from the channel** (the receive side):
+
+| Acronym | TX | RX |
+| :------ | :- | :- |
+| **SISO** | 1 | 1 |
+| **SIMO** | 1 | N |
+| **MISO** | M | 1 |
+| **MIMO** | M | N |
+
+So **SIMO** (Single Input, Multiple Output) is the standard radar and communications term for **one transmitter, multiple receivers** — not a repo-specific convention. From a signal-processing pipeline perspective it can feel backwards ("one waveform out, many ADC channels in"); the acronym is anchored on the **channel**, not the DSP data flow. This wave implements SISO, SIMO, and MIMO; MISO is not in scope.
+
 **Out of scope (now):**
 
 - **CDM / BPM** (code-division / binary-phase multiplexing). Architecturally a small extension of the DDM path — the same "all TX on, per-chirp phase code, separate after the Doppler stage" flow — differing only in carrying an explicit orthogonal code matrix and demuxing by code correlation instead of reading Doppler bands. When added, it reuses `MIMOCoherentCompensationOp` (code-correlation mode) and the rest of the MIMO chain unchanged. Deliberately deferred to a future wave.
@@ -142,6 +155,17 @@ flowchart TD
   FEAT -->|"points (range, vel, az, el, score)"| CLUS["ClusterDBSCANOp"]
   class FEAT,CLUS opt
 ```
+
+> **Dense az/el assembly caveat (open).** On this path the `(az, el)` beam
+> indices arrive as the leading *preserved-batch* columns of CFAR's
+> `detection_idx` (`(az_bin, el_bin, doppler_bin, range_bin)`), but
+> `FeatureAssemblyOp` currently sources the `az` / `el` features only from an
+> `aoa_estimates` port (angle *values*, the sparse-path form) — it does not map
+> those batch columns through the beam grid itself. So the diagram's direct
+> `CFAR → FeatureAssemblyOp` edge needs an angle-lookup adapter in between. The
+> `fmcw_dense_simo` app bridges this app-locally (`CubeAoaLookupOp`); whether the
+> mapping becomes a shared operator or a `FeatureAssemblyOp` option is an open
+> contract question — see the `PhaseShiftBeamformerOp` `OPEN_ITEMS.md` §6.
 
 **Sparse angle path — angle-then-cluster:**
 

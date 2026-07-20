@@ -24,6 +24,12 @@ add_subdirectory(fmcw)
 # Detection operators (one add_holohub_operator() per operator inside).
 add_subdirectory(detection)
 
+# Clustering operators (one add_holohub_operator() per operator inside).
+add_subdirectory(clustering)
+
+# Angle-estimation operators (one add_holohub_operator() per operator inside).
+add_subdirectory(angle_estimation)
+
 # Install the aggregate __init__.py alongside each operator's built module.
 configure_file(
     ${PROJECT_SOURCE_DIR}/python/holoscan/radar/__init__.py

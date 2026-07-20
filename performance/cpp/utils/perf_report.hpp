@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
@@ -184,6 +185,24 @@ inline std::string sci(double v) {
   return os.str();
 }
 
+// Minimum shape column width for the text table, with trailing padding so a
+// shape that exactly fills the field (e.g. 4x4x16x128x512) does not run into
+// the next numeric column.
+inline int shape_column_width(const PerfReport& r, int min_width = 14) {
+  int width = min_width;
+  auto consider = [&](const std::vector<int64_t>& shape) {
+    width = std::max(width,
+                     static_cast<int>(shape_text(shape).size()) + 2);
+  };
+  for (const auto& s : r.sizes) {
+    consider(s.shape);
+  }
+  for (const auto& row : r.results) {
+    consider(row.input_shape);
+  }
+  return std::min(width, 26);
+}
+
 }  // namespace detail
 
 inline void write_json(std::ostream& os, const PerfReport& r) {
@@ -338,13 +357,14 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
         "on.\n";
 
   // --- sizes (ladder definitions used in this run) ---
+  const int shape_w = detail::shape_column_width(r);
   if (!r.sizes.empty()) {
     os << "\n--- sizes ---\n";
-    os << detail::col("id", 6) << detail::col("shape (DxR)", 14)
+    os << detail::col("id", 6) << detail::col("shape (DxR)", shape_w)
        << detail::col("cells", 10) << "role\n";
     for (const auto& s : r.sizes) {
       os << detail::col(s.id, 6)
-         << detail::col(detail::shape_text(s.shape), 14)
+         << detail::col(detail::shape_text(s.shape), shape_w)
          << detail::col(std::to_string(s.cells), 10) << s.role << "\n";
     }
   }
@@ -368,7 +388,7 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
   // --- compute (steady state + inline live override) ---
   os << "\n--- compute ---\n";
   os << detail::col("scenario", 40) << detail::col("size", 6)
-     << detail::col("shape", 14) << detail::col("cold_ms", 10)
+     << detail::col("shape", shape_w) << detail::col("cold_ms", 10)
      << detail::col("median_ms", 10) << detail::col("p90_ms", 10)
      << detail::col("ovr_ms", 10) << detail::col("ovr_d_ms", 10)
      << detail::col("cells/s", 11) << detail::col("GB/s", 8) << "\n";
@@ -377,7 +397,7 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
       continue;
     }
     os << detail::col(row.scenario_id, 40) << detail::col(row.size_id, 6)
-       << detail::col(detail::shape_text(row.input_shape), 14)
+       << detail::col(detail::shape_text(row.input_shape), shape_w)
        << detail::col(detail::fixed(row.cold_ms, 3), 10)
        << detail::col(detail::fixed(row.latency.median_ms, 3), 10)
        << detail::col(detail::fixed(row.latency.p90_ms, 3), 10)

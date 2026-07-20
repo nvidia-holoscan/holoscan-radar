@@ -5,21 +5,37 @@
 // signal-processing chain
 //
 //   AdcSourceOp -> FMCWRangeProcessorOp -> ClutterFilterOp
-//               -> FMCWDopplerProcessorOp -> PeakReportOp
-//                                         [-> RdMapToImageOp -> HolovizOp]
+//               -> FMCWDopplerProcessorOp -> CFARDetectorOp
+//                                        -> DetectionReportOp
+//                                        -> FeatureAssemblyOp
+//                                             -> ClusterDBSCANOp
+//                                                  -> DetectionReductionOp
+//                                                       -> ClusterReportOp
+//                                         [-> RdMapToImageOp   -> HolovizOp]
+//                                         [-> ClusterOverlayOp -> HolovizOp]
+//                                         [-> RollingPlotOp    -> HolovizOp]
+//                                              (RD map + cluster crosses left;
+//                                               range/velocity-vs-time right)
 //
 // The source synthesizes one static clutter return and one moving target
 // with the shared analytic point-target simulator
 // (radar_common/sim/point_target_sim.hpp), emitting one cube (CPI) per tick
-// and advancing the targets through space between ticks. The sink locates the
-// range-Doppler peak per frame and reports it in physical units via the
-// operators' range_bins / velocity_bins axis outputs, so the moving target's
-// range is seen to sweep over the run.
+// and advancing the targets through space between ticks. CFAR detects on the
+// range-Doppler map; the sink reports each detection in physical units via
+// the operators' range_bins / velocity_bins axis outputs, so the moving
+// target's range is seen to sweep over the run. In parallel, FeatureAssemblyOp
+// gathers a [range, velocity] feature matrix from the CFAR cells (same axis
+// outputs, physical units) and ClusterDBSCANOp density-clusters it, so the
+// adjacent cells lit by one target collapse into a single cluster;
+// ClusterReportOp logs each cluster's size and centroid.
 //
 // All configuration lives in fmcw_siso.yaml (staged next to the binary;
 // override with a path as the first CLI argument): the per-operator blocks
-// flow through Holoscan's native config()/from_config() path, and the
-// cube/run/target sections drive the synthetic source.
+// (range_processor, clutter_filter, doppler_processor, cfar_detector,
+// cluster_dbscan, reduction) all flow through Holoscan's native
+// config()/from_config() path. Only the synthetic source, run cadence, and
+// visualization toggles are parsed into AppConfig; FeatureAssemblyOp's fixed
+// [range, velocity] layout is applied as an explicit Arg (native-only param).
 //
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/fmcw_siso/cpp/fmcw_siso [config.yaml]
@@ -27,7 +43,6 @@
 #include <cuda_runtime_api.h>
 #include <yaml-cpp/yaml.h>
 
-#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -42,29 +57,45 @@
 #include <holoscan/operators/holoviz/holoviz.hpp>
 #include <holoviz/holoviz.hpp>
 
+#include "clustering/cluster_dbscan_op/cluster_dbscan_op.hpp"
+#include "detection/cfar_detector_op/cfar_detector_op.hpp"
+#include "detection/detection_reduction_op/detection_reduction_op.hpp"
+#include "detection/feature_assembly_op/feature_assembly_op.hpp"
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
 #include "radar_common/sim/point_target_sim.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "radar_app/report/report_ops.hpp"
+#include "radar_app/viz/display.hpp"
+#include "radar_app/viz/viz.hpp"
 
 namespace radar = holoscan::radar;
 
+// The reusable report + visualization operators (DetectionReportOp,
+// ClusterReportOp, NullSinkOp, RdMapToImageOp, ClusterOverlayOp,
+// RollingPlotOp), the turbo LUT / cluster palette / overlay + plot layer-name
+// helpers, and the gui_available() display probe all live in the shared
+// radar_app library; this app only wires them into its graph.
+using namespace holoscan::radar::app;  // NOLINT(build/namespaces)
+
 namespace {
 
-// Entry count of the Holoviz color lookup table; the RD-map image values
-// index into it directly.
-constexpr size_t kLutSize = 256;
+// Rolling time-series plots drawn beside the RD map (range and velocity vs
+// time). Only consulted when visualize is on; the plots share the Holoviz
+// window via sub-viewports.
+struct PlotsConfig {
+  bool enable{true};
+  int64_t window{120};  // frames retained in the scrolling window
+};
 
-// App-owned configuration: everything the synthetic source and run cadence
-// need (see fmcw_siso.yaml). Operator parameters are NOT parsed here — the
-// per-operator YAML blocks flow through Holoscan's from_config() in
-// compose(), converted by radar_common/sdk/yaml_converters.hpp.
 struct AppConfig {
   radar::sim::SimScene scene;  // waveform, cube dims, targets, noise
+  PlotsConfig plots;
   int64_t num_frames{1};
   double frame_period{0.1};  // s, between emitted cubes (and target motion)
   bool visualize{false};     // live RD-map window (requires a GUI host)
@@ -72,6 +103,10 @@ struct AppConfig {
   // but on a host without a usable display the failure then surfaces inside
   // the running graph and aborts the process instead of downgrading.
   bool skip_display_check{false};
+  // Render Holoviz offscreen (no window). Lets the visual pipeline run on a
+  // display-less host (CI, headless dev boxes); the startup display probe is
+  // skipped since offscreen rendering needs no display server.
+  bool headless{false};
 };
 
 // Load and validate the app-owned YAML sections.
@@ -154,26 +189,30 @@ AppConfig load_config(const std::filesystem::path& path) {
   if (skip_check && !skip_check.IsNull()) {
     cfg.skip_display_check = skip_check.as<bool>();
   }
-  return cfg;
-}
-
-// Holoviz needs a reachable display server and a Vulkan surface; checking
-// DISPLAY/WAYLAND_DISPLAY is not enough (the variable may be set with no
-// server behind it). Probe by briefly initializing the Holoviz module — the
-// same GLFW + Vulkan stack HolovizOp uses — on the main thread, where the
-// failure is a catchable exception. Inside the running graph the same
-// failure is thrown from a GXF worker thread and terminates the process,
-// which is exactly what this probe exists to avoid.
-bool gui_available() {
-  namespace viz = holoscan::viz;
-  try {
-    viz::Init(64, 64, "fmcw_siso display probe");
-    viz::Shutdown();
-    return true;
-  } catch (const std::exception& e) {
-    HOLOSCAN_LOG_DEBUG("fmcw_siso: display probe failed: {}", e.what());
-    return false;
+  const YAML::Node headless = root["headless"];
+  if (headless && !headless.IsNull()) {
+    cfg.headless = headless.as<bool>();
   }
+  const YAML::Node plots = root["plots"];
+  if (plots && !plots.IsNull()) {
+    if (plots["enable"]) {
+      cfg.plots.enable = plots["enable"].as<bool>();
+    }
+    if (plots["window"]) {
+      cfg.plots.window = plots["window"].as<int64_t>();
+    }
+  }
+  if (cfg.plots.window <= 1) {
+    throw std::runtime_error("plots.window must be > 1, got " +
+                             std::to_string(cfg.plots.window));
+  }
+
+  // The cfar_detector, cluster_dbscan, and reduction operator blocks are NOT
+  // parsed here — they flow through Holoscan's from_config() in compose(), and
+  // each operator validates its own parameters at initialize(). Only the
+  // synthetic source, run cadence, and visualization toggles above are
+  // app-owned.
+  return cfg;
 }
 
 // Advance each target's base position by one frame period. The simulator
@@ -243,218 +282,6 @@ class AdcSourceOp : public holoscan::Operator {
   }
 };
 
-// Locates the range-Doppler peak and reports it in physical units via the
-// upstream operators' axis outputs.
-class PeakReportOp : public holoscan::Operator {
- public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(PeakReportOp)
-  PeakReportOp() = default;
-
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.input<holoscan::TensorMap>("rd_maps");
-    spec.input<holoscan::TensorMap>("range_bins");
-    spec.input<holoscan::TensorMap>("velocity_bins");
-  }
-
-  void compute(holoscan::InputContext& op_input,
-               [[maybe_unused]] holoscan::OutputContext& op_output,
-               [[maybe_unused]] holoscan::ExecutionContext& context)
-      override {
-    auto rd_map = single_tensor(op_input, "rd_maps");
-    auto range_bins = single_tensor(op_input, "range_bins");
-    auto velocity_bins = single_tensor(op_input, "velocity_bins");
-
-    const auto shape = rd_map->shape();
-    // SISO app: the host buffer below is sized from the trailing two axes
-    // while the copy uses nbytes(); a batched (rank > 2) map would overflow
-    // it. Index within the trailing slab when lifting this sink.
-    if (shape.size() != 2) {
-      throw std::runtime_error(
-          "PeakReportOp: SISO sink expects a rank-2 rd_map, got rank " +
-          std::to_string(shape.size()));
-    }
-    const int64_t num_doppler = shape[shape.size() - 2];
-    const int64_t num_range = shape[shape.size() - 1];
-
-    std::vector<std::complex<float>> rd(
-        static_cast<size_t>(num_doppler * num_range));
-    std::vector<float> ranges(static_cast<size_t>(num_range));
-    std::vector<float> velocities(static_cast<size_t>(num_doppler));
-
-    // The copies below use each source tensor's nbytes() into these fixed-size
-    // host buffers, so a tensor whose dtype or element count disagrees with
-    // the rd_map-derived dimensions would overflow the destination. Verify the
-    // exact byte size of each source against its buffer before copying.
-    const auto require_bytes =
-        [](const char* name, const std::shared_ptr<holoscan::Tensor>& t,
-           size_t expected) {
-          if (static_cast<size_t>(t->nbytes()) != expected) {
-            throw std::runtime_error(
-                std::string("PeakReportOp: ") + name +
-                " byte size mismatch (expected " + std::to_string(expected) +
-                ", got " + std::to_string(t->nbytes()) + ")");
-          }
-        };
-    require_bytes("rd_map", rd_map, sizeof(std::complex<float>) * rd.size());
-    require_bytes("range_bins", range_bins, sizeof(float) * ranges.size());
-    require_bytes("velocity_bins", velocity_bins,
-                  sizeof(float) * velocities.size());
-
-    if (cudaDeviceSynchronize() != cudaSuccess) {
-      throw std::runtime_error("PeakReportOp: device synchronize failed");
-    }
-    if (cudaMemcpy(rd.data(), rd_map->data(),
-                   static_cast<size_t>(rd_map->nbytes()),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-      throw std::runtime_error("PeakReportOp: rd_map D2H copy failed");
-    }
-    if (cudaMemcpy(ranges.data(), range_bins->data(),
-                   static_cast<size_t>(range_bins->nbytes()),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-      throw std::runtime_error("PeakReportOp: range_bins D2H copy failed");
-    }
-    if (cudaMemcpy(velocities.data(), velocity_bins->data(),
-                   static_cast<size_t>(velocity_bins->nbytes()),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-      throw std::runtime_error("PeakReportOp: velocity_bins D2H copy failed");
-    }
-
-    // The zero-Doppler column is suppressed by the clutter filter; report
-    // the strongest remaining (moving-target) cell.
-    size_t peak = 0;
-    float peak_mag = 0.0F;
-    for (size_t i = 0; i < rd.size(); ++i) {
-      const float mag = std::abs(rd[i]);
-      if (mag > peak_mag) {
-        peak_mag = mag;
-        peak = i;
-      }
-    }
-    const size_t doppler_bin = peak / static_cast<size_t>(num_range);
-    const size_t range_bin = peak % static_cast<size_t>(num_range);
-    HOLOSCAN_LOG_INFO(
-        "Peak |RD| = {:.1f} at range bin {} ({:.2f} m), Doppler bin {} "
-        "({:+.2f} m/s)",
-        peak_mag, range_bin, ranges[range_bin], doppler_bin,
-        velocities[doppler_bin]);
-  }
-
- private:
-  static std::shared_ptr<holoscan::Tensor> single_tensor(
-      holoscan::InputContext& op_input, const char* port) {
-    auto maybe = op_input.receive<holoscan::TensorMap>(port);
-    if (!maybe || maybe->size() != 1) {
-      throw std::runtime_error(std::string("PeakReportOp: expected one "
-                                           "tensor on port ") + port);
-    }
-    return maybe->begin()->second;
-  }
-};
-
-// Converts the complex RD map into a log-magnitude float32 image for
-// Holoviz (rendered through the turbo color lookup table). Per frame:
-// |RD| in dB, mapped between that frame's measured noise floor and its
-// peak onto [0, kLutSize - 1] — HolovizOp's LUT is non-normalized, so the
-// pixel value is used as an integer index into the table.
-class RdMapToImageOp : public holoscan::Operator {
- public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(RdMapToImageOp)
-  RdMapToImageOp() = default;
-
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.input<holoscan::TensorMap>("rd_maps");
-    spec.output<holoscan::TensorMap>("rd_image");
-  }
-
-  void compute(holoscan::InputContext& op_input,
-               holoscan::OutputContext& op_output,
-               [[maybe_unused]] holoscan::ExecutionContext& context)
-      override {
-    auto maybe = op_input.receive<holoscan::TensorMap>("rd_maps");
-    if (!maybe || maybe->size() != 1) {
-      throw std::runtime_error(
-          "RdMapToImageOp: expected one tensor on port rd_maps");
-    }
-    std::shared_ptr<holoscan::Tensor> rd_map = maybe->begin()->second;
-    const auto shape = rd_map->shape();
-    if (shape.size() != 2) {
-      throw std::runtime_error(
-          "RdMapToImageOp: SISO app expects a rank-2 rd_map, got rank " +
-          std::to_string(shape.size()));
-    }
-    const int64_t num_doppler = shape[0];
-    const int64_t num_range = shape[1];
-
-    std::vector<std::complex<float>> rd(
-        static_cast<size_t>(num_doppler * num_range));
-    cudaDeviceSynchronize();
-    if (cudaMemcpy(rd.data(), rd_map->data(),
-                   static_cast<size_t>(rd_map->nbytes()),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-      throw std::runtime_error("RdMapToImageOp: D2H copy failed");
-    }
-
-    // Log magnitude, normalized to [0, 1] between this frame's noise floor
-    // and peak. The floor is estimated as the median dB value (the map is
-    // overwhelmingly noise cells, so the median tracks the noise floor and
-    // is insensitive to the few target/clutter cells). Per-frame
-    // normalization keeps the target visible as absolute levels drift.
-    std::vector<float> image(rd.size());
-    float peak_db = -std::numeric_limits<float>::infinity();
-    for (size_t i = 0; i < rd.size(); ++i) {
-      image[i] = 20.0F * std::log10(std::abs(rd[i]) + 1e-20F);
-      peak_db = std::max(peak_db, image[i]);
-    }
-    std::vector<float> sorted(image);
-    std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2,
-                     sorted.end());
-    const float floor_db = sorted[sorted.size() / 2];
-    const float span_db = std::max(peak_db - floor_db, 1.0F);
-    for (float& v : image) {
-      v = std::clamp((v - floor_db) / span_db, 0.0F, 1.0F) *
-          static_cast<float>(kLutSize - 1);
-    }
-
-    // Holoviz image layers require a rank-3 (height, width, channels)
-    // tensor, so add an explicit single-channel dimension.
-    auto tensor = radar::make_device_tensor({num_doppler, num_range, 1},
-                                            radar::real_dtype<float>());
-    if (cudaMemcpy(tensor->data(), image.data(),
-                   sizeof(float) * image.size(),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error("RdMapToImageOp: H2D upload failed");
-    }
-    holoscan::TensorMap out;
-    out.insert({"rd_map", tensor});
-    op_output.emit(out, "rd_image");
-  }
-};
-
-// kLutSize-entry RGBA lookup table for the turbo colormap, built from the
-// published 5th-order polynomial fit of the Google turbo palette.
-std::vector<std::vector<float>> make_turbo_lut() {
-  constexpr float kR[6] = {0.13572138F, 4.61539260F, -42.66032258F,
-                           132.13108234F, -152.94239396F, 59.28637943F};
-  constexpr float kG[6] = {0.09140261F, 2.19418839F, 4.84296658F,
-                           -14.18503333F, 4.27729857F, 2.82956604F};
-  constexpr float kB[6] = {0.10667330F, 12.64194608F, -60.58204836F,
-                           110.36276771F, -89.90310912F, 27.34824973F};
-  auto poly = [](const float (&c)[6], float t) {
-    float v = c[5];
-    for (int i = 4; i >= 0; --i) {
-      v = v * t + c[i];
-    }
-    return std::clamp(v, 0.0F, 1.0F);
-  };
-  std::vector<std::vector<float>> lut;
-  lut.reserve(kLutSize);
-  for (size_t i = 0; i < kLutSize; ++i) {
-    const float t = static_cast<float>(i) / (kLutSize - 1);
-    lut.push_back({poly(kR, t), poly(kG, t), poly(kB, t), 1.0F});
-  }
-  return lut;
-}
-
 class FmcwSisoApp : public holoscan::Application {
  public:
   AppConfig cfg;  // set before run()
@@ -479,31 +306,169 @@ class FmcwSisoApp : public holoscan::Application {
         "clutter_filter", from_config("clutter_filter"));
     auto doppler = make_operator<radar::FMCWDopplerProcessorOp<float>>(
         "doppler_processor", from_config("doppler_processor"));
-    auto sink = make_operator<PeakReportOp>("peak_report");
+    auto cfar = make_operator<radar::CFARDetectorOp<float>>(
+        "cfar_detector", from_config("cfar_detector"));
+    auto sink = make_operator<DetectionReportOp>("detection_report");
+    // Every CFAR output needs a receiver or the operator never ticks.
+    auto mask_sink = make_operator<NullSinkOp>("detection_mask_sink");
+    auto noise_sink = make_operator<NullSinkOp>("noise_estimate_sink");
+
+    // Clustering branch: assemble a [range, velocity] feature matrix from the
+    // CFAR cells (physical units, via the range/Doppler axis outputs) and
+    // density-cluster it. `features` is fixed in code — the parameter is
+    // native-only by operator contract, and this app's downstream report /
+    // overlays assume this exact 2-column layout. The DBSCAN parameters flow
+    // natively from the cluster_dbscan YAML block.
+    const std::vector<radar::AssemblyFeature> feature_columns{
+        radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity};
+    auto feature_assembly = make_operator<radar::FeatureAssemblyOp<float>>(
+        "feature_assembly", holoscan::Arg("features") = feature_columns);
+    auto cluster = make_operator<radar::ClusterDBSCANOp<float>>(
+        "cluster_dbscan", from_config("cluster_dbscan"));
+    auto cluster_report = make_operator<ClusterReportOp>("cluster_report");
+    // Reduce each cluster to one representative cell. The reduction block
+    // (representative / score_method / feature_weights) flows natively; set
+    // feature_weights ~ 1/epsilon in the YAML so the medoid distance matches
+    // the DBSCAN metric (else range's larger magnitude dominates velocity).
+    auto reduction = make_operator<radar::DetectionReductionOp<float>>(
+        "detection_reduction", from_config("reduction"));
 
     add_flow(source, range, {{"adc_cube", "adc_cube"}});
     add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
     add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
-    add_flow(doppler, sink, {{"rd_maps", "rd_maps"}});
+    add_flow(doppler, cfar, {{"rd_maps", "rd_maps"}});
+    add_flow(cfar, sink, {{"detection_idx", "detection_idx"}});
+    add_flow(cfar, sink, {{"detection_score", "detection_score"}});
     add_flow(range, sink, {{"range_bins", "range_bins"}});
     add_flow(doppler, sink, {{"velocity_bins", "velocity_bins"}});
+    add_flow(cfar, mask_sink, {{"detection_mask", "input"}});
+    add_flow(cfar, noise_sink, {{"noise_estimate", "input"}});
+
+    // CFAR cells → feature matrix → DBSCAN → report. The range/Doppler axis
+    // outputs feed FeatureAssemblyOp so the columns land in physical units;
+    // its `points` output fans out to both the clusterer and the reporter
+    // (the reporter reads it for centroids).
+    add_flow(cfar, feature_assembly, {{"detection_idx", "detection_idx"}});
+    add_flow(range, feature_assembly, {{"range_bins", "range_bins"}});
+    add_flow(doppler, feature_assembly, {{"velocity_bins", "velocity_bins"}});
+    add_flow(feature_assembly, cluster, {{"points", "points"}});
+    add_flow(feature_assembly, cluster_report, {{"points", "points"}});
+    add_flow(cluster, cluster_report, {{"labels", "labels"}});
+    add_flow(cluster, cluster_report, {{"sizes", "sizes"}});
+
+    // Reduction: one representative cell per cluster (medoid = most-central
+    // real detection). rep_idx feeds the report (logged in physical units, so
+    // the report also needs the axis bins) and, when visualizing, the GUI.
+    add_flow(cluster, reduction, {{"labels", "labels"}});
+    add_flow(cfar, reduction, {{"detection_idx", "detection_idx"}});
+    add_flow(feature_assembly, reduction, {{"points", "points"}});
+    add_flow(reduction, cluster_report, {{"rep_idx", "rep_idx"}});
+    add_flow(range, cluster_report, {{"range_bins", "range_bins"}});
+    add_flow(doppler, cluster_report, {{"velocity_bins", "velocity_bins"}});
 
     // Optional live RD-map window (cfg.visualize; main() has already
-    // downgraded it with a warning on GUI-less hosts). The converter's
-    // single-channel float32 tensor is colored via the turbo LUT.
+    // downgraded it with a warning on GUI-less hosts). Turbo-mapped |RD|
+    // (range = x, Doppler = y) with the CFAR detections overlaid as crosses
+    // colored by DBSCAN cluster (noise in gray). With cfg.plots.enable, the
+    // map shares the window's left viewport and two rolling time-series plots
+    // (range and velocity vs time) stack on the right.
     if (cfg.visualize) {
+      using InputSpec = holoscan::ops::HolovizOp::InputSpec;
+      using InputType = holoscan::ops::HolovizOp::InputType;
       auto to_image = make_operator<RdMapToImageOp>("rd_map_to_image");
-      std::vector<holoscan::ops::HolovizOp::InputSpec> input_specs;
-      input_specs.emplace_back("rd_map",
-                               holoscan::ops::HolovizOp::InputType::COLOR_LUT);
+      auto overlay = make_operator<ClusterOverlayOp>("cluster_overlay");
+
+      // Layer 0 is the turbo LUT image; the cluster/noise CROSSES layers draw
+      // on top (higher priority renders last). One CROSSES InputSpec per
+      // palette color, named to match ClusterOverlayOp's emitted tensors.
+      std::vector<InputSpec> input_specs;
+      input_specs.emplace_back("rd_map", InputType::COLOR_LUT);
+      const auto palette = cluster_palette();
+      if (static_cast<int>(palette.size()) != kNumClusterColors) {
+        throw std::runtime_error(
+            "fmcw_siso: cluster palette size must equal kNumClusterColors");
+      }
+      const auto add_crosses = [&](const std::string& name,
+                                   const std::vector<float>& color) {
+        InputSpec spec(name, InputType::CROSSES);
+        spec.color_ = color;
+        spec.line_width_ = 2.0F;
+        spec.priority_ = 1;
+        input_specs.push_back(spec);
+      };
+      for (int c = 0; c < kNumClusterColors; ++c) {
+        add_crosses(cluster_layer_name(c), palette[static_cast<size_t>(c)]);
+      }
+      add_crosses(kNoiseLayerName, {0.6F, 0.6F, 0.6F, 1.0F});
+
+      // A View maps a layer's [0,1] content into an (offset, size) rectangle
+      // of the window. With plots enabled, the RD map + overlay share the left
+      // viewport so the crosses stay aligned to the shrunk image.
+      const auto make_view = [](float ox, float oy, float w, float h) {
+        InputSpec::View v;
+        v.offset_x_ = ox;
+        v.offset_y_ = oy;
+        v.width_ = w;
+        v.height_ = h;
+        return v;
+      };
+      std::shared_ptr<RollingPlotOp> plot;
+      if (cfg.plots.enable) {
+        const auto left = make_view(0.0F, 0.0F, 0.60F, 1.0F);
+        for (InputSpec& spec : input_specs) {
+          spec.views_ = {left};
+        }
+        // Right column: each plot is an RGBA image (rasterized scatter) with a
+        // TEXT title rendered on top of it.
+        const auto add_plot = [&](const char* img_name, const char* title_name,
+                                  const std::string& title, float oy) {
+          InputSpec image(img_name, InputType::COLOR);
+          image.views_ = {make_view(0.63F, oy, 0.35F, 0.44F)};
+          input_specs.push_back(image);
+          InputSpec text(title_name, InputType::TEXT);
+          text.text_ = {title};
+          text.color_ = {1.0F, 1.0F, 1.0F, 1.0F};
+          text.priority_ = 2;
+          text.views_ = {make_view(0.63F, oy, 0.35F, 0.44F)};
+          input_specs.push_back(text);
+        };
+        add_plot(kRangePlotLayer, kRangeTitleLayer, "Range (m) vs time (s)",
+                 0.04F);
+        add_plot(kVelocityPlotLayer, kVelocityTitleLayer,
+                 "Velocity (m/s) vs time (s)", 0.52F);
+
+        plot = make_operator<RollingPlotOp>("rolling_plot");
+        plot->window = cfg.plots.window;
+        plot->frame_period = cfg.frame_period;
+      }
+
       auto visualizer = make_operator<holoscan::ops::HolovizOp>(
           "holoviz", holoscan::Arg("tensors", input_specs),
           holoscan::Arg("color_lut", make_turbo_lut()),
           holoscan::Arg("window_title",
-                        std::string("FMCW SISO - Range-Doppler")),
-          holoscan::Arg("width", 800U), holoscan::Arg("height", 600U));
+                        std::string("FMCW SISO - Range-Doppler + clusters")),
+          holoscan::Arg("width", cfg.plots.enable ? 1200U : 800U),
+          holoscan::Arg("height", 600U),
+          holoscan::Arg("headless", cfg.headless));
+
       add_flow(doppler, to_image, {{"rd_maps", "rd_maps"}});
       add_flow(to_image, visualizer, {{"rd_image", "receivers"}});
+      // The overlay needs the detector's cells, the cluster labels, and the
+      // map dimensions; its per-color layers fan into the same receiver.
+      add_flow(cfar, overlay, {{"detection_idx", "detection_idx"}});
+      add_flow(cluster, overlay, {{"labels", "labels"}});
+      add_flow(doppler, overlay, {{"rd_maps", "rd_maps"}});
+      add_flow(overlay, visualizer, {{"overlay", "receivers"}});
+
+      // Rolling range/velocity plots: the per-cluster representative
+      // (centroid) from reduction, plus the axis bins that fix each plot's Y
+      // extent and resolve the representative bins to physical units.
+      if (plot) {
+        add_flow(reduction, plot, {{"rep_idx", "rep_idx"}});
+        add_flow(range, plot, {{"range_bins", "range_bins"}});
+        add_flow(doppler, plot, {{"velocity_bins", "velocity_bins"}});
+        add_flow(plot, visualizer, {{"plots", "receivers"}});
+      }
     }
   }
 };
@@ -523,8 +488,9 @@ int main(int argc, char** argv) {
     const std::filesystem::path config_path =
         resolve_config_path(argc, argv);
     app->cfg = load_config(config_path);
-    if (app->cfg.visualize && !app->cfg.skip_display_check &&
-        !gui_available()) {
+    // Headless rendering needs no display server, so the probe is moot there.
+    if (app->cfg.visualize && !app->cfg.headless &&
+        !app->cfg.skip_display_check && !gui_available()) {
       HOLOSCAN_LOG_WARN(
           "fmcw_siso: visualize is enabled but no usable display was "
           "detected (Holoviz could not initialize a window); running "

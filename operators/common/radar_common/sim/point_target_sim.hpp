@@ -42,9 +42,10 @@
 #include <stdexcept>
 #include <vector>
 
+#include "radar_common/math/constants.hpp"
+
 namespace holoscan::radar::sim {
 
-inline constexpr double kSimPi = 3.14159265358979323846;
 inline constexpr double kSimSpeedOfLight = 299792458.0;
 
 using Vec3 = std::array<double, 3>;
@@ -118,7 +119,7 @@ inline std::vector<std::complex<double>> reference_chirp(
   const double slope = waveform.slope();
   for (int64_t s = 0; s < samples_per_chirp; ++s) {
     const double t = static_cast<double>(s) / waveform.sample_rate;
-    const double phase = kSimPi * slope * t * t;
+    const double phase = kPi * slope * t * t;
     ref[s] = std::complex<double>(std::cos(phase), std::sin(phase));
   }
   return ref;
@@ -182,7 +183,7 @@ inline SimResult simulate(const SimScene& scene) {
         for (int64_t s = 0; s < samples; ++s) {
           const double t = static_cast<double>(s) / fs;
           const double phase =
-              2.0 * kSimPi * (beat * t) - 2.0 * kSimPi * f_c * tau;
+              2.0 * kPi * (beat * t) - 2.0 * kPi * f_c * tau;
           const std::complex<double> sample =
               target.amplitude *
               std::complex<double>(std::cos(phase), std::sin(phase));

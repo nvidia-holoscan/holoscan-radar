@@ -49,6 +49,46 @@ target_link_libraries(perf_fmcw_range_doppler_processor PRIVATE
     radar_perf_utils
     holoscan::fmcw_range_doppler_processor_op)
 
+add_executable(perf_cluster_dbscan perf_cluster_dbscan.cpp)
+target_link_libraries(perf_cluster_dbscan PRIVATE
+    radar_perf_utils
+    holoscan::cluster_dbscan_op)
+
+add_executable(perf_snapshot_gather perf_snapshot_gather.cpp)
+target_link_libraries(perf_snapshot_gather PRIVATE
+    radar_perf_utils
+    holoscan::snapshot_gather_op)
+
+add_executable(perf_beamscan_estimator perf_beamscan_estimator.cpp)
+target_link_libraries(perf_beamscan_estimator PRIVATE
+    radar_perf_utils
+    holoscan::beamscan_estimator_op)
+
+add_executable(perf_mvdr_estimator perf_mvdr_estimator.cpp)
+target_link_libraries(perf_mvdr_estimator PRIVATE
+    radar_perf_utils
+    holoscan::mvdr_estimator_op)
+
+add_executable(perf_phase_shift_beamformer perf_phase_shift_beamformer.cpp)
+target_link_libraries(perf_phase_shift_beamformer PRIVATE
+    radar_perf_utils
+    holoscan::phase_shift_beamformer_op)
+
+add_executable(perf_mimo_deinterleave perf_mimo_deinterleave.cpp)
+target_link_libraries(perf_mimo_deinterleave PRIVATE
+    radar_perf_utils
+    holoscan::mimo_deinterleave_op)
+
+add_executable(perf_virtual_array_assembly perf_virtual_array_assembly.cpp)
+target_link_libraries(perf_virtual_array_assembly PRIVATE
+    radar_perf_utils
+    holoscan::virtual_array_assembly_op)
+
+add_executable(perf_mimo_coherent_compensation perf_mimo_coherent_compensation.cpp)
+target_link_libraries(perf_mimo_coherent_compensation PRIVATE
+    radar_perf_utils
+    holoscan::mimo_coherent_compensation_op)
+
 # Optional smoke: runs a tiny scenario subset and verifies a report file is
 # written. No timing thresholds — CI only checks the tool executes and emits.
 if(HOLOSCAN_RADAR_BUILD_TESTING)
@@ -93,5 +133,55 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
             --quiet
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_range_doppler_processor_smoke.json)
     set_tests_properties(perf_fmcw_range_doppler_processor_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_cluster_dbscan_smoke
+        COMMAND perf_cluster_dbscan --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_cluster_dbscan_smoke.json)
+    set_tests_properties(perf_cluster_dbscan_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_snapshot_gather_smoke
+        COMMAND perf_snapshot_gather --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_snapshot_gather_smoke.json)
+    set_tests_properties(perf_snapshot_gather_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_beamscan_estimator_smoke
+        COMMAND perf_beamscan_estimator --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_beamscan_estimator_smoke.json)
+    set_tests_properties(perf_beamscan_estimator_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_mvdr_estimator_smoke
+        COMMAND perf_mvdr_estimator --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_mvdr_estimator_smoke.json)
+    set_tests_properties(perf_mvdr_estimator_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_phase_shift_beamformer_smoke
+        COMMAND perf_phase_shift_beamformer --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_phase_shift_beamformer_smoke.json)
+    set_tests_properties(perf_phase_shift_beamformer_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_mimo_deinterleave_smoke
+        COMMAND perf_mimo_deinterleave --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_mimo_deinterleave_smoke.json)
+    set_tests_properties(perf_mimo_deinterleave_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_virtual_array_assembly_smoke
+        COMMAND perf_virtual_array_assembly --sizes xs --warmup 1 --frames 2
+            --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_virtual_array_assembly_smoke.json)
+    set_tests_properties(perf_virtual_array_assembly_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_mimo_coherent_compensation_smoke
+        COMMAND perf_mimo_coherent_compensation --sizes xs --warmup 1 --frames 2
+            --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_mimo_coherent_compensation_smoke.json)
+    set_tests_properties(perf_mimo_coherent_compensation_smoke PROPERTIES
         LABELS "performance")
 endif()

@@ -14,6 +14,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -42,6 +43,19 @@ std::shared_ptr<holoscan::Tensor> to_device_tensor(
     throw std::runtime_error("to_device_tensor: cudaMemcpy H2D failed");
   }
   return tensor;
+}
+
+// Upload a bool mask as kDLBool on device (uint8_t host values 0/1).
+inline std::shared_ptr<holoscan::Tensor> to_device_bool_tensor(
+    const std::vector<uint8_t>& host, const std::vector<int64_t>& shape) {
+  return to_device_tensor(host, shape, DLDataType{kDLBool, 8, 1});
+}
+
+// Upload a uint8 mask on device (graph-transport workaround for kDLBool on
+// HSDK 4.3 when wiring is_valid into downstream operators).
+inline std::shared_ptr<holoscan::Tensor> to_device_uint8_tensor(
+    const std::vector<uint8_t>& host, const std::vector<int64_t>& shape) {
+  return to_device_tensor(host, shape, DLDataType{kDLUInt, 8, 1});
 }
 
 // Convert the simulator's complex<double> cube to the instantiation
@@ -111,6 +125,57 @@ inline HostTensor to_host(const holoscan::Tensor& tensor) {
     throw std::runtime_error("to_host: cudaMemcpy failed");
   }
   return host;
+}
+
+namespace detail {
+
+struct PageableHostBufferHolder {
+  std::vector<int64_t> shape;
+  std::vector<std::byte> data;
+  DLManagedTensor dl_managed{};
+
+  PageableHostBufferHolder(std::vector<int64_t> shape_in,
+                           std::vector<std::byte> bytes, DLDataType dtype) {
+    shape = std::move(shape_in);
+    data = std::move(bytes);
+    dl_managed.dl_tensor.data = data.data();
+    dl_managed.dl_tensor.device = DLDevice{kDLCPU, 0};
+    dl_managed.dl_tensor.ndim = static_cast<int32_t>(shape.size());
+    dl_managed.dl_tensor.dtype = dtype;
+    dl_managed.dl_tensor.shape = shape.data();
+    dl_managed.dl_tensor.strides = nullptr;
+    dl_managed.dl_tensor.byte_offset = 0;
+    dl_managed.manager_ctx = this;
+    dl_managed.deleter = [](DLManagedTensor* self) {
+      delete static_cast<PageableHostBufferHolder*>(self->manager_ctx);
+    };
+  }
+};
+
+}  // namespace detail
+
+// Wrap pageable (non-pinned) host memory as a holoscan::Tensor. Operators
+// that call require_cuda_accessible must reject this input.
+inline std::shared_ptr<holoscan::Tensor> to_pageable_host_tensor(
+    const std::vector<int64_t>& shape, DLDataType dtype,
+    std::vector<std::byte> bytes) {
+  auto holder = std::make_unique<detail::PageableHostBufferHolder>(
+      shape, std::move(bytes), dtype);
+  auto tensor =
+      std::make_shared<holoscan::Tensor>(&holder->dl_managed);
+  holder.release();
+  return tensor;
+}
+
+template <typename ElementT>
+std::shared_ptr<holoscan::Tensor> to_pageable_host_tensor(
+    const std::vector<ElementT>& host, const std::vector<int64_t>& shape,
+    DLDataType dtype) {
+  std::vector<std::byte> bytes(host.size() * sizeof(ElementT));
+  if (!host.empty()) {
+    std::memcpy(bytes.data(), host.data(), bytes.size());
+  }
+  return to_pageable_host_tensor(shape, dtype, std::move(bytes));
 }
 
 }  // namespace holoscan::radar::testing
