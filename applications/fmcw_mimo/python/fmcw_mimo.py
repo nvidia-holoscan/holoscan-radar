@@ -99,6 +99,7 @@ from common.python.demo_config import (  # noqa: E402
     parse_virtual_array_assembly,
     parse_waveform,
 )
+
 # isort: on
 
 install_matx_cache_atexit()
@@ -201,11 +202,7 @@ def expand_chirp_tx_index(schedule: TXSchedule, slow_time: int) -> list[int]:
             raise ValueError("TXSchedule: chirp_tx_index length must equal slow_time")
         pattern = list(schedule.chirp_tx_index)
     else:
-        cycle = (
-            list(range(schedule.num_tx))
-            if not schedule.tx_order
-            else list(schedule.tx_order)
-        )
+        cycle = list(range(schedule.num_tx)) if not schedule.tx_order else list(schedule.tx_order)
         pattern = [cycle[k % schedule.num_tx] for k in range(slow_time)]
     for tx in pattern:
         if tx < 0 or tx >= schedule.num_tx:
@@ -298,9 +295,7 @@ def resolve_ddm_offsets(code) -> list[float]:
     if not code.phase_codes:
         return uniform_ddm_offsets(code.num_tx)
     if not ddm_codes_are_linear(code):
-        raise ValueError(
-            "resolve_ddm_offsets: phase_codes are non-linear; use correlate path"
-        )
+        raise ValueError("resolve_ddm_offsets: phase_codes are non-linear; use correlate path")
     num_tx = int(code.num_tx)
     num_chirps = len(code.phase_codes) // num_tx
     offsets: list[float] = []
@@ -331,9 +326,7 @@ def simulate_mimo_tdm_interleaved(scene: MimoScene, schedule: TXSchedule) -> Sim
     tx_pos = cp.asarray(scene.tx_positions, dtype=cp.float64)
     rx_pos = cp.asarray(scene.rx_positions, dtype=cp.float64)
     if tx_pos.shape != (num_tx, 3) or rx_pos.shape != (num_rx, 3):
-        raise ValueError(
-            "simulate_mimo_tdm_interleaved: tx/rx positions must be (N, 3)"
-        )
+        raise ValueError("simulate_mimo_tdm_interleaved: tx/rx positions must be (N, 3)")
 
     t = cp.arange(samples, dtype=cp.float64) / fs
     k = cp.arange(slow_time, dtype=cp.float64)
@@ -346,14 +339,11 @@ def simulate_mimo_tdm_interleaved(scene: MimoScene, schedule: TXSchedule) -> Sim
         apert_tx_k = (tx_pos @ look)[pattern]
         apert_rx = rx_pos @ look
         tau = (
-            2.0 * range_k[cp.newaxis, :]
-            - apert_tx_k[cp.newaxis, :]
-            - apert_rx[:, cp.newaxis]
+            2.0 * range_k[cp.newaxis, :] - apert_tx_k[cp.newaxis, :] - apert_rx[:, cp.newaxis]
         ) / c
         beat = slope * tau
         phase = (2.0 * K_PI) * (
-            beat[:, :, cp.newaxis] * t[cp.newaxis, cp.newaxis, :]
-            - f_c * tau[:, :, cp.newaxis]
+            beat[:, :, cp.newaxis] * t[cp.newaxis, cp.newaxis, :] - f_c * tau[:, :, cp.newaxis]
         )
         cube += target.amplitude * cp.exp(1j * phase)
 
@@ -361,9 +351,7 @@ def simulate_mimo_tdm_interleaved(scene: MimoScene, schedule: TXSchedule) -> Sim
         noise_power = 10.0 ** (-scene.snr_db / 10.0)
         sigma = math.sqrt(noise_power / 2.0)
         rng = cp.random.default_rng(scene.seed)
-        cube += sigma * (
-            rng.standard_normal(cube.shape) + 1j * rng.standard_normal(cube.shape)
-        )
+        cube += sigma * (rng.standard_normal(cube.shape) + 1j * rng.standard_normal(cube.shape))
 
     cube64 = cube.astype(cp.complex64, copy=False)
     return SimResult(cube=cube64, shape=tuple(int(d) for d in cube64.shape))
@@ -403,14 +391,11 @@ def simulate_mimo_ddm_coded(scene: MimoScene, offsets: list[float]) -> SimResult
         apert_tx = tx_pos @ look
         apert_rx = rx_pos @ look
         for tx in range(num_tx):
-            tau = (
-                2.0 * range_k[cp.newaxis, :] - apert_tx[tx] - apert_rx[:, cp.newaxis]
-            ) / c
+            tau = (2.0 * range_k[cp.newaxis, :] - apert_tx[tx] - apert_rx[:, cp.newaxis]) / c
             beat = slope * tau
             code_phase = (2.0 * K_PI) * offsets_arr[tx] * k
             phase = (2.0 * K_PI) * (
-                beat[:, :, cp.newaxis] * t[cp.newaxis, cp.newaxis, :]
-                - f_c * tau[:, :, cp.newaxis]
+                beat[:, :, cp.newaxis] * t[cp.newaxis, cp.newaxis, :] - f_c * tau[:, :, cp.newaxis]
             ) + code_phase[cp.newaxis, :, cp.newaxis]
             cube += target.amplitude * cp.exp(1j * phase)
 
@@ -418,17 +403,13 @@ def simulate_mimo_ddm_coded(scene: MimoScene, offsets: list[float]) -> SimResult
         noise_power = 10.0 ** (-scene.snr_db / 10.0)
         sigma = math.sqrt(noise_power / 2.0)
         rng = cp.random.default_rng(scene.seed)
-        cube += sigma * (
-            rng.standard_normal(cube.shape) + 1j * rng.standard_normal(cube.shape)
-        )
+        cube += sigma * (rng.standard_normal(cube.shape) + 1j * rng.standard_normal(cube.shape))
 
     cube64 = cube.astype(cp.complex64, copy=False)
     return SimResult(cube=cube64, shape=tuple(int(d) for d in cube64.shape))
 
 
-def simulate_mimo_ddm_phase_coded(
-    scene: MimoScene, phase_codes: list[complex]
-) -> SimResult:
+def simulate_mimo_ddm_phase_coded(scene: MimoScene, phase_codes: list[complex]) -> SimResult:
     """Analytic DDM phase-coded IF cube on GPU (CuPy) — non-linear codes."""
     if not scene.tx_positions or not scene.rx_positions:
         raise ValueError("simulate_mimo_ddm_phase_coded: need TX and RX positions")
@@ -444,16 +425,13 @@ def simulate_mimo_ddm_phase_coded(
 
     if len(phase_codes) != num_tx * num_chirps:
         raise ValueError(
-            "simulate_mimo_ddm_phase_coded: phase_codes length must be "
-            "num_tx * num_chirps"
+            "simulate_mimo_ddm_phase_coded: phase_codes length must be " "num_tx * num_chirps"
         )
 
     tx_pos = cp.asarray(scene.tx_positions, dtype=cp.float64)
     rx_pos = cp.asarray(scene.rx_positions, dtype=cp.float64)
     if tx_pos.shape != (num_tx, 3) or rx_pos.shape != (num_rx, 3):
-        raise ValueError(
-            "simulate_mimo_ddm_phase_coded: tx/rx positions must be (N, 3)"
-        )
+        raise ValueError("simulate_mimo_ddm_phase_coded: tx/rx positions must be (N, 3)")
     codes = cp.asarray(phase_codes, dtype=cp.complex128).reshape(num_tx, num_chirps)
 
     t = cp.arange(samples, dtype=cp.float64) / fs
@@ -467,27 +445,18 @@ def simulate_mimo_ddm_phase_coded(
         apert_tx = tx_pos @ look
         apert_rx = rx_pos @ look
         for tx in range(num_tx):
-            tau = (
-                2.0 * range_k[cp.newaxis, :] - apert_tx[tx] - apert_rx[:, cp.newaxis]
-            ) / c
+            tau = (2.0 * range_k[cp.newaxis, :] - apert_tx[tx] - apert_rx[:, cp.newaxis]) / c
             beat = slope * tau
             phase = (2.0 * K_PI) * (
-                beat[:, :, cp.newaxis] * t[cp.newaxis, cp.newaxis, :]
-                - f_c * tau[:, :, cp.newaxis]
+                beat[:, :, cp.newaxis] * t[cp.newaxis, cp.newaxis, :] - f_c * tau[:, :, cp.newaxis]
             )
-            cube += (
-                target.amplitude
-                * codes[tx][cp.newaxis, :, cp.newaxis]
-                * cp.exp(1j * phase)
-            )
+            cube += target.amplitude * codes[tx][cp.newaxis, :, cp.newaxis] * cp.exp(1j * phase)
 
     if scene.snr_db is not None:
         noise_power = 10.0 ** (-scene.snr_db / 10.0)
         sigma = math.sqrt(noise_power / 2.0)
         rng = cp.random.default_rng(scene.seed)
-        cube += sigma * (
-            rng.standard_normal(cube.shape) + 1j * rng.standard_normal(cube.shape)
-        )
+        cube += sigma * (rng.standard_normal(cube.shape) + 1j * rng.standard_normal(cube.shape))
 
     cube64 = cube.astype(cp.complex64, copy=False)
     return SimResult(cube=cube64, shape=tuple(int(d) for d in cube64.shape))
@@ -550,8 +519,7 @@ def load_scene_geometry(cfg: AppConfig, root: dict, wavelength: float) -> None:
     tx = root["tx_array"]
     tx_spacing = float(tx["spacing"])
     cfg.scene.tx_positions = [
-        (0.0, float(itx) * tx_spacing * wavelength, 0.0)
-        for itx in range(cfg.scene.num_tx)
+        (0.0, float(itx) * tx_spacing * wavelength, 0.0) for itx in range(cfg.scene.num_tx)
     ]
 
     rx = root.get("rx_array")
@@ -561,9 +529,7 @@ def load_scene_geometry(cfg: AppConfig, root: dict, wavelength: float) -> None:
     el_elements = int(rx["el_elements"])
     rx_spacing = float(rx["spacing"])
     if az_elements < 2 or el_elements < 2:
-        raise ValueError(
-            "MIMO URA requires rx_array.az_elements >= 2 and el_elements >= 2"
-        )
+        raise ValueError("MIMO URA requires rx_array.az_elements >= 2 and el_elements >= 2")
     cfg.scene.rx_positions = []
     for iz in range(el_elements):
         for iy in range(az_elements):
@@ -595,9 +561,7 @@ def load_config(path: Path) -> AppConfig:
 
     mcc = root.get("mimo_coherent_compensation", {})
     if not mcc or "multiplexing_scheme" not in mcc:
-        raise ValueError(
-            "fmcw_mimo: mimo_coherent_compensation.multiplexing_scheme is required"
-        )
+        raise ValueError("fmcw_mimo: mimo_coherent_compensation.multiplexing_scheme is required")
     cfg.scheme = parse_mimo_coherent_compensation(mcc)["multiplexing_scheme"]
     if cfg.scheme not in (MultiplexingScheme.TDM, MultiplexingScheme.DDM):
         raise ValueError("fmcw_mimo: multiplexing_scheme must be tdm or ddm")
@@ -621,18 +585,14 @@ def load_config(path: Path) -> AppConfig:
     load_scene_geometry(cfg, root, wavelength)
 
     if cfg.scheme == MultiplexingScheme.DDM:
-        cfg.scene.waveform.chirp_repetition_interval = (
-            waveform.chirp_repetition_interval()
-        )
+        cfg.scene.waveform.chirp_repetition_interval = waveform.chirp_repetition_interval()
         cube = root["cube"]
         if "num_chirps" in cube:
             cfg.scene.num_chirps = int(cube["num_chirps"])
         else:
             cfg.scene.num_chirps = int(cube["chirps_per_tx"])
         if "ddm_code" not in mcc:
-            raise ValueError(
-                "fmcw_mimo: mimo_coherent_compensation.ddm_code is required for DDM"
-            )
+            raise ValueError("fmcw_mimo: mimo_coherent_compensation.ddm_code is required for DDM")
         cfg.ddm_code = parse_ddm_code(mcc["ddm_code"])
         if cfg.ddm_code.num_tx != cfg.scene.num_tx:
             raise ValueError("fmcw_mimo: ddm_code.num_tx must match tx_array.num_tx")
@@ -651,14 +611,11 @@ def load_config(path: Path) -> AppConfig:
         cfg.ddm_correlate = not ddm_codes_are_linear(cfg.ddm_code)
         if cfg.ddm_correlate:
             if cfg.ddm_code.guard_bands != 0:
-                raise ValueError(
-                    "fmcw_mimo: non-linear DDM phase_codes require guard_bands == 0"
-                )
+                raise ValueError("fmcw_mimo: non-linear DDM phase_codes require guard_bands == 0")
             num_chirps_codes = len(cfg.ddm_code.phase_codes) // cfg.ddm_code.num_tx
             if num_chirps_codes != cfg.scene.num_chirps:
                 raise ValueError(
-                    "fmcw_mimo: non-linear phase_codes length/num_tx must equal "
-                    "cube.num_chirps"
+                    "fmcw_mimo: non-linear phase_codes length/num_tx must equal " "cube.num_chirps"
                 )
             cfg.report_num_doppler = cfg.scene.num_chirps
         else:
@@ -671,9 +628,7 @@ def load_config(path: Path) -> AppConfig:
             band = cfg.scene.num_chirps // cfg.scene.num_tx
             cfg.report_num_doppler = band - cfg.ddm_code.guard_bands
             if cfg.report_num_doppler <= 0:
-                raise ValueError(
-                    "fmcw_mimo: DDM guard_bands leaves no Doppler bins per TX"
-                )
+                raise ValueError("fmcw_mimo: DDM guard_bands leaves no Doppler bins per TX")
     else:
         sim = root.get("sim")
         if not sim or "physical_chirp_repetition_interval" not in sim:
@@ -688,9 +643,7 @@ def load_config(path: Path) -> AppConfig:
             raise ValueError("fmcw_mimo: mimo_deinterleave section is required for TDM")
         cfg.tx_schedule = parse_tx_schedule(root["mimo_deinterleave"]["tx_schedule"])
         if cfg.tx_schedule.num_tx != cfg.scene.num_tx:
-            raise ValueError(
-                "mimo_deinterleave.tx_schedule.num_tx must match tx_array.num_tx"
-            )
+            raise ValueError("mimo_deinterleave.tx_schedule.num_tx must match tx_array.num_tx")
         cfg.report_num_doppler = cfg.scene.num_chirps
 
     cfg.tx_positions_flat = flatten_positions(cfg.scene.tx_positions)
@@ -724,9 +677,7 @@ def load_config(path: Path) -> AppConfig:
     cfg.doppler_processor = parse_doppler_processor(root.get("doppler_processor", {}))
     cfg.cfar_detector = parse_cfar_detector(root.get("cfar_detector", {}))
     cfg.snapshot_gather = parse_snapshot_gather(root.get("snapshot_gather", {}))
-    cfg.beamscan_estimator = parse_beamscan_estimator(
-        root.get("beamscan_estimator", {})
-    )
+    cfg.beamscan_estimator = parse_beamscan_estimator(root.get("beamscan_estimator", {}))
     cfg.cluster_dbscan = parse_cluster_dbscan(root.get("cluster_dbscan", {}))
     cfg.reduction = parse_reduction(root.get("reduction", {}))
     cfg.mimo_deinterleave = parse_mimo_deinterleave(root.get("mimo_deinterleave", {}))
@@ -781,13 +732,9 @@ class DdmReportVelocityBinsOp(Operator):
         op_input.receive("sync")
         if self._velocity_bins is None:
             if self.num_doppler <= 0:
-                raise RuntimeError(
-                    "DdmReportVelocityBinsOp: num_doppler must be positive"
-                )
+                raise RuntimeError("DdmReportVelocityBinsOp: num_doppler must be positive")
             if self.bin_spacing_hz <= 0.0:
-                raise RuntimeError(
-                    "DdmReportVelocityBinsOp: bin_spacing_hz must be > 0"
-                )
+                raise RuntimeError("DdmReportVelocityBinsOp: bin_spacing_hz must be > 0")
             wavelength = self.waveform.wavelength()
             axis = np.zeros(self.num_doppler, dtype=np.float32)
             for i in range(self.num_doppler):
@@ -820,9 +767,7 @@ class MimoTdmAdcSourceOp(Operator):
     def compute(self, op_input, op_output, context) -> None:
         result = simulate_mimo_tdm_interleaved(self.scene, self.tx_schedule)
         if len(result.shape) != 3:
-            raise RuntimeError(
-                "MimoTdmAdcSourceOp: expected rank-3 (N_rx, M*L, samples)"
-            )
+            raise RuntimeError("MimoTdmAdcSourceOp: expected rank-3 (N_rx, M*L, samples)")
         # Keep a reference so the DLPack buffer outlives this compute().
         self._adc_cube = result.cube
         op_output.emit({"adc_cube": self._adc_cube}, "adc_cube")
@@ -861,9 +806,7 @@ class MimoDdmAdcSourceOp(Operator):
         else:
             result = simulate_mimo_ddm_coded(self.scene, self.doppler_offsets)
         if len(result.shape) != 3:
-            raise RuntimeError(
-                "MimoDdmAdcSourceOp: expected rank-3 (N_rx, num_chirps, samples)"
-            )
+            raise RuntimeError("MimoDdmAdcSourceOp: expected rank-3 (N_rx, num_chirps, samples)")
         self._adc_cube = result.cube
         op_output.emit({"adc_cube": self._adc_cube}, "adc_cube")
         if self.cadence is not None:
@@ -908,9 +851,7 @@ class FmcwMimoApp(Application):
         range_op = FMCWRangeProcessorOp(
             self, self.from_config("range_processor"), name="range_processor"
         )
-        clutter = ClutterFilterOp(
-            self, self.from_config("clutter_filter"), name="clutter_filter"
-        )
+        clutter = ClutterFilterOp(self, self.from_config("clutter_filter"), name="clutter_filter")
         doppler = FMCWDopplerProcessorOp(
             self, self.from_config("doppler_processor"), name="doppler_processor"
         )
@@ -938,9 +879,7 @@ class FmcwMimoApp(Application):
                 PeriodicCondition(self, recess_period=period_ns),
                 scene=cfg.scene,
                 doppler_offsets=cfg.ddm_doppler_offsets,
-                phase_codes=(
-                    list(cfg.ddm_code.phase_codes) if cfg.ddm_correlate else None
-                ),
+                phase_codes=(list(cfg.ddm_code.phase_codes) if cfg.ddm_correlate else None),
                 use_phase_codes=cfg.ddm_correlate,
                 frame_period=cfg.frame_period,
                 cadence=cadence,
@@ -972,12 +911,8 @@ class FmcwMimoApp(Application):
             self.add_flow(doppler, compensation, {("rd_maps", "rd_maps")})
             self.add_flow(compensation, vaa, {("rd_maps", "rd_maps")})
 
-        cfar = CFARDetectorOp(
-            self, self.from_config("cfar_detector"), name="cfar_detector"
-        )
-        gather = SnapshotGatherOp(
-            self, self.from_config("snapshot_gather"), name="snapshot_gather"
-        )
+        cfar = CFARDetectorOp(self, self.from_config("cfar_detector"), name="cfar_detector")
+        gather = SnapshotGatherOp(self, self.from_config("snapshot_gather"), name="snapshot_gather")
         beamscan = BeamscanEstimatorOp(
             self,
             self.from_config("beamscan_estimator"),
@@ -1002,13 +937,9 @@ class FmcwMimoApp(Application):
             ],
             name="feature_assembly",
         )
-        cluster = ClusterDBSCANOp(
-            self, self.from_config("cluster_dbscan"), name="cluster_dbscan"
-        )
+        cluster = ClusterDBSCANOp(self, self.from_config("cluster_dbscan"), name="cluster_dbscan")
         cluster_report = ClusterReportOp(self, name="cluster_report")
-        reduction = DetectionReductionOp(
-            self, self.from_config("reduction"), name="reduction"
-        )
+        reduction = DetectionReductionOp(self, self.from_config("reduction"), name="reduction")
 
         ddm_velocity_bins: DdmReportVelocityBinsOp | None = None
         if ddm:
@@ -1027,9 +958,7 @@ class FmcwMimoApp(Application):
         self.add_flow(vaa, cfar, {("rd_maps", "rd_maps")})
         self.add_flow(vaa, gather, {("rd_maps", "rd_maps")})
         self.add_flow(cfar, gather, {("detection_idx", "detection_idx")})
-        self.add_flow(
-            gather, beamscan, {("snapshot", "snapshot"), ("is_valid", "is_valid")}
-        )
+        self.add_flow(gather, beamscan, {("snapshot", "snapshot"), ("is_valid", "is_valid")})
         self.add_flow(vaa, beamscan, {("array_geometry", "array_geometry")})
         self.add_flow(beamscan, feature_assembly, {("aoa_estimates", "aoa_estimates")})
         self.add_flow(beamscan, spectrum_sink, {("angle_spectrum", "input")})
@@ -1038,9 +967,7 @@ class FmcwMimoApp(Application):
         self.add_flow(cfar, det_report, {("detection_score", "detection_score")})
         self.add_flow(range_op, det_report, {("range_bins", "range_bins")})
         if ddm and ddm_velocity_bins is not None:
-            self.add_flow(
-                ddm_velocity_bins, det_report, {("velocity_bins", "velocity_bins")}
-            )
+            self.add_flow(ddm_velocity_bins, det_report, {("velocity_bins", "velocity_bins")})
         else:
             self.add_flow(doppler, det_report, {("velocity_bins", "velocity_bins")})
         self.add_flow(cfar, mask_sink, {("detection_mask", "input")})
@@ -1055,14 +982,10 @@ class FmcwMimoApp(Application):
                 {("velocity_bins", "velocity_bins")},
             )
         else:
-            self.add_flow(
-                doppler, feature_assembly, {("velocity_bins", "velocity_bins")}
-            )
+            self.add_flow(doppler, feature_assembly, {("velocity_bins", "velocity_bins")})
         self.add_flow(feature_assembly, cluster, {("points", "points")})
         self.add_flow(feature_assembly, cluster_report, {("points", "points")})
-        self.add_flow(
-            cluster, cluster_report, {("labels", "labels"), ("sizes", "sizes")}
-        )
+        self.add_flow(cluster, cluster_report, {("labels", "labels"), ("sizes", "sizes")})
         self.add_flow(cluster, reduction, {("labels", "labels")})
         self.add_flow(cfar, reduction, {("detection_idx", "detection_idx")})
         self.add_flow(feature_assembly, reduction, {("points", "points")})
@@ -1084,9 +1007,7 @@ class FmcwMimoApp(Application):
             overlay = ClusterOverlayOp(self, name="cluster_overlay")
 
             input_specs: list[HolovizOp.InputSpec] = []
-            input_specs.append(
-                HolovizOp.InputSpec("rd_map", HolovizOp.InputType.COLOR_LUT)
-            )
+            input_specs.append(HolovizOp.InputSpec("rd_map", HolovizOp.InputType.COLOR_LUT))
             palette = cluster_palette()
 
             def add_crosses(name: str, color: list[float]) -> None:
@@ -1182,9 +1103,7 @@ class FmcwMimoApp(Application):
                 self.add_flow(reduction, plot, {("rep_idx", "rep_idx")})
                 self.add_flow(range_op, plot, {("range_bins", "range_bins")})
                 if ddm and ddm_velocity_bins is not None:
-                    self.add_flow(
-                        ddm_velocity_bins, plot, {("velocity_bins", "velocity_bins")}
-                    )
+                    self.add_flow(ddm_velocity_bins, plot, {("velocity_bins", "velocity_bins")})
                 else:
                     self.add_flow(doppler, plot, {("velocity_bins", "velocity_bins")})
                 self.add_flow(plot, visualizer, {("plots", "receivers")})
@@ -1219,9 +1138,7 @@ def main(argv: list[str] | None = None) -> int:
             and not cfg.skip_display_check
             and not gui_available()
         ):
-            logger.warning(
-                "fmcw_mimo: visualize enabled but no display; running without GUI"
-            )
+            logger.warning("fmcw_mimo: visualize enabled but no display; running without GUI")
             cfg.visualize = False
 
         app = FmcwMimoApp(cfg)

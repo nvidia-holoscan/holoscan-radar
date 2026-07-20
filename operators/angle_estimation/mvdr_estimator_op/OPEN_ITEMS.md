@@ -127,4 +127,3 @@ before CuPy, so unit tests never hit it; `perf_mvdr_estimator.py` did.
 **Fix:** keep `performance/python/utils/__init__.py` free of CuPy/Holoscan
 imports so bootstrap cannot pull CuPy early. Scripts still do
 `import holoscan.radar` then `import cupy` then `install_matx_cache_atexit()`.
-

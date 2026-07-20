@@ -11,26 +11,14 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from utils.bin_model import (  # noqa: E402
-    K_C,
-    expected_range_axis,
-    range_of_bin,
-)
-from utils.harness import (  # noqa: E402
-    run_operator,
-    run_operator_multi,
-    single_map,
-    to_device_array,
-)
-from utils.point_target_sim import (  # noqa: E402
-    PointTarget,
-    SimScene,
-    SimWaveform,
-    simulate,
-)
+from utils.bin_model import K_C, expected_range_axis, range_of_bin  # noqa: E402
+from utils.harness import run_operator_multi  # noqa: E402
+from utils.harness import run_operator, single_map, to_device_array
+from utils.point_target_sim import SimScene  # noqa: E402
+from utils.point_target_sim import PointTarget, SimWaveform, simulate
 
-from holoscan.radar import (  # noqa: E402
-    FMCWRangeProcessorOp,
+from holoscan.radar import FMCWRangeProcessorOp  # noqa: E402
+from holoscan.radar import (
     FMCWRangeProcessorOpF32,
     FMCWRangeProcessorOpF64,
     FMCWWaveformDescriptor,
@@ -113,9 +101,7 @@ def _run_complex(
         return op_cls(app, name="op_under_test", **op_kwargs)
 
     if len(output_ports) == 1:
-        outs = run_operator(
-            make_op, frame, input_port="adc_cube", output_port=output_ports[0]
-        )
+        outs = run_operator(make_op, frame, input_port="adc_cube", output_port=output_ports[0])
         return {output_ports[0]: outs[0]}
     captured = run_operator_multi(
         make_op,
@@ -161,9 +147,7 @@ def test_SingleTargetComplexIfPeakAndRangeAxis():
         K_SAMPLES, waveform.slope(), waveform.sample_rate, K_SAMPLES, K_C
     )
     for i, exp in enumerate(expected):
-        assert bins[i] == pytest.approx(exp, abs=1e-3 + 1e-5 * abs(exp)), (
-            f"bin {i}"
-        )
+        assert bins[i] == pytest.approx(exp, abs=1e-3 + 1e-5 * abs(exp)), f"bin {i}"
 
 
 def test_RealIfPathPeakAtRange():
@@ -284,9 +268,7 @@ def test_NfftOversamplingInterpolatesGrid():
 
     magnitude = _slice_abs(oversampled["range_profiles"], 0, 0)
     peak = _argmax(magnitude)
-    assert oversampled["range_bins"][peak] == pytest.approx(
-        target_range, abs=_bin_width(K_SAMPLES)
-    )
+    assert oversampled["range_bins"][peak] == pytest.approx(target_range, abs=_bin_width(K_SAMPLES))
     assert oversampled["range_bins"][1] == pytest.approx(
         0.5 * base["range_bins"][1], abs=1e-4 * base["range_bins"][1]
     )

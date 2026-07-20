@@ -28,9 +28,9 @@ bootstrap_radar_package()
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings, SizeDef  # noqa: E402
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
@@ -55,9 +55,7 @@ SIZE_LADDER = [
     SizeDef("sm", [4, 8, 64, 256], 4 * 8 * 64 * 256, "compact MIMO"),
     SizeDef("md", [4, 16, 128, 512], 4 * 16 * 128 * 512, "common dev size"),
     SizeDef("lg", [8, 32, 256, 1024], 8 * 32 * 256 * 1024, "moderate MIMO"),
-    SizeDef(
-        "xl", [8, 64, 512, 2048], 8 * 64 * 512 * 2048, "upper characterization bound"
-    ),
+    SizeDef("xl", [8, 64, 512, 2048], 8 * 64 * 512 * 2048, "upper characterization bound"),
 ]
 
 _SIZE_SPECS = {
@@ -200,9 +198,7 @@ def _fill_throughput(row: ResultRow, scen: AssemblyScenario) -> None:
     csz = 8.0  # sizeof(complex64)
     out_virtual = float(scen.num_tx * scen.num_rx)  # dedup upper bound
     in_bytes = elems * csz
-    out_bytes = (
-        batch * out_virtual * float(scen.num_doppler) * float(scen.num_range_bins) * csz
-    )
+    out_bytes = batch * out_virtual * float(scen.num_doppler) * float(scen.num_range_bins) * csz
     row.estimated_effective_gbps = (in_bytes + out_bytes) / sec / 1e9
 
 

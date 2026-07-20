@@ -81,11 +81,7 @@ def to_host_array(tensor_like: Any) -> np.ndarray:
         try:
             if int(np.prod(tuple(shape))) == 0:
                 dt = getattr(tensor_like, "dtype", None)
-                np_dtype = (
-                    _numpy_dtype_from_dlpack(dt)
-                    if dt is not None
-                    else np.float64
-                )
+                np_dtype = _numpy_dtype_from_dlpack(dt) if dt is not None else np.float64
                 return np.empty(tuple(shape), dtype=np_dtype)
         except (TypeError, ValueError):
             pass
@@ -143,9 +139,7 @@ class TensorMapCapture:
 class _TensorMapSourceOp(Operator):
     """Emit one TensorMap (dict) per tick; CountCondition = frame count."""
 
-    def __init__(
-        self, fragment, *args, frames: Sequence[Mapping[str, Any]], **kwargs
-    ):
+    def __init__(self, fragment, *args, frames: Sequence[Mapping[str, Any]], **kwargs):
         self._frames = list(frames)
         self._index = 0
         super().__init__(fragment, *args, **kwargs)
@@ -295,6 +289,7 @@ def wire_leading_override(
     app.add_flow(source, op, {("output", port)})
     return source
 
+
 def wire_capture_sink(
     app: Application,
     op: Operator,
@@ -302,9 +297,7 @@ def wire_capture_sink(
     capture: TensorMapCapture,
 ) -> Operator:
     """Wire a capturing sink onto an output port."""
-    sink = _TensorMapCaptureOp(
-        app, capture=capture, name=f"{port}_sink"
-    )
+    sink = _TensorMapCaptureOp(app, capture=capture, name=f"{port}_sink")
     app.add_flow(op, sink, {(port, "input")})
     return sink
 

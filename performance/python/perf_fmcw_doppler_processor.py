@@ -30,9 +30,9 @@ bootstrap_radar_package()
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings, SizeDef  # noqa: E402
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
@@ -43,8 +43,8 @@ from utils.tensor_factory import make_iq_cube_device, single_map  # noqa: E402
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application  # noqa: E402
-from holoscan.radar import (  # noqa: E402
-    FMCWDopplerProcessorOpF32,
+from holoscan.radar import FMCWDopplerProcessorOpF32  # noqa: E402
+from holoscan.radar import (
     FMCWWaveformDescriptor,
     FMCWWaveformSpec,
     WindowSpec,
@@ -115,9 +115,7 @@ def _profiles_shape(scen: DopplerScenario) -> tuple[int, ...]:
     return (scen.num_chirps, scen.num_range_bins)
 
 
-def make_scenario(
-    window: WindowType, size: SizeDef, channels: int = 1
-) -> DopplerScenario:
+def make_scenario(window: WindowType, size: SizeDef, channels: int = 1) -> DopplerScenario:
     num_chirps, num_range_bins = size.shape
     sid = f"doppler_{_window_tag(window)}_{size.id}"
     if channels > 1:

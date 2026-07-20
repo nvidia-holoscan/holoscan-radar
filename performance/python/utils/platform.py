@@ -32,9 +32,7 @@ class Platform:
 
 def _run_capture(cmd: str) -> str:
     try:
-        out = subprocess.check_output(
-            cmd, shell=True, stderr=subprocess.DEVNULL, text=True
-        )
+        out = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL, text=True)
         return out.strip()
     except (subprocess.CalledProcessError, OSError):
         return ""
@@ -54,7 +52,9 @@ def capture_platform() -> Platform:
     plat = Platform()
     try:
         props = cp.cuda.runtime.getDeviceProperties(0)
-        plat.gpu_name = props["name"].decode() if isinstance(props["name"], bytes) else str(props["name"])
+        plat.gpu_name = (
+            props["name"].decode() if isinstance(props["name"], bytes) else str(props["name"])
+        )
     except Exception:
         pass
 

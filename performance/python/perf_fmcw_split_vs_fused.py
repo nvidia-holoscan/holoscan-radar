@@ -37,9 +37,9 @@ bootstrap_radar_package()
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings, SizeDef  # noqa: E402
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
@@ -50,8 +50,8 @@ from utils.tensor_factory import make_iq_cube_device, single_map  # noqa: E402
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application  # noqa: E402
-from holoscan.radar import (  # noqa: E402
-    ClutterFilterMethod,
+from holoscan.radar import ClutterFilterMethod  # noqa: E402
+from holoscan.radar import (
     ClutterFilterOpF32,
     FMCWDopplerProcessorOpF32,
     FMCWRangeDopplerProcessorOpF32,
@@ -271,12 +271,8 @@ def _run_split_graph(
 ) -> None:
     class SplitCompareApp(Application):
         def compose(self) -> None:
-            range_op = FMCWRangeProcessorOpF32(
-                self, waveform=waveform, name="range"
-            )
-            doppler = FMCWDopplerProcessorOpF32(
-                self, waveform=waveform, name="doppler"
-            )
+            range_op = FMCWRangeProcessorOpF32(self, waveform=waveform, name="range")
+            doppler = FMCWDopplerProcessorOpF32(self, waveform=waveform, name="doppler")
 
             src = PerfTensorSourceOp(
                 self,
@@ -289,19 +285,11 @@ def _run_split_graph(
             self.add_flow(src, range_op, {("adc_cube", "adc_cube")})
 
             if scen.clutter == ClutterFilterMethod.NONE:
-                self.add_flow(
-                    range_op, doppler, {("range_profiles", "range_profiles")}
-                )
+                self.add_flow(range_op, doppler, {("range_profiles", "range_profiles")})
             else:
-                clutter = ClutterFilterOpF32(
-                    self, method=scen.clutter, name="clutter"
-                )
-                self.add_flow(
-                    range_op, clutter, {("range_profiles", "range_profiles")}
-                )
-                self.add_flow(
-                    clutter, doppler, {("range_profiles", "range_profiles")}
-                )
+                clutter = ClutterFilterOpF32(self, method=scen.clutter, name="clutter")
+                self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
+                self.add_flow(clutter, doppler, {("range_profiles", "range_profiles")})
 
             rd_sink = PerfTerminalSinkOp(self, collector=collector, name="rd_sink")
             self.add_flow(doppler, rd_sink, {("rd_maps", "input")})
@@ -394,10 +382,7 @@ def print_comparison_table(report: PerfReport) -> None:
             f"{p.split_ms:12.3f}{p.fused_ms:12.3f}{delta:12.3f}"
             f"{pct:12.3f}{speedup:10.3f}"
         )
-    print(
-        "(delta_ms = split − fused; pct_saved = 100·(1 − fused/split); "
-        "speedup = split/fused)"
-    )
+    print("(delta_ms = split − fused; pct_saved = 100·(1 − fused/split); " "speedup = split/fused)")
     print(
         "Note: do not compare against a naive sum of "
         "perf_fmcw_range + clutter + doppler medians — that omits "
@@ -409,12 +394,8 @@ def _process_warmup(_rs: RunSettings) -> None:
     discarded = PerfReport()
     warm = RunSettings(warmup_frames=0, measured_frames=2, repeats=1)
     xs = _must_find_size("xs")
-    run_scenario(
-        make_scenario(ClutterFilterMethod.NONE, xs, GraphKind.FUSED), warm, discarded
-    )
-    run_scenario(
-        make_scenario(ClutterFilterMethod.NONE, xs, GraphKind.SPLIT), warm, discarded
-    )
+    run_scenario(make_scenario(ClutterFilterMethod.NONE, xs, GraphKind.FUSED), warm, discarded)
+    run_scenario(make_scenario(ClutterFilterMethod.NONE, xs, GraphKind.SPLIT), warm, discarded)
 
 
 def main() -> int:

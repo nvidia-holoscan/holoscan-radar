@@ -30,20 +30,17 @@ bootstrap_radar_package()
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings, SizeDef  # noqa: E402
-from utils.perf_runner import (  # noqa: E402
+from utils.perf_runner import append_setup_row  # noqa: E402
+from utils.perf_runner import (
     RunPlan,
-    append_setup_row,
     collect_scenario_samples,
     fill_compute_row,
     make_run_plan,
 )
 from utils.perf_sink import PerfTerminalSinkOp, make_null_sink  # noqa: E402
 from utils.perf_source import PerfOverrideSourceOp  # noqa: E402
-from utils.tensor_factory import (  # noqa: E402
-    make_detection_idx_device,
-    make_iq_cube_device,
-    single_map,
-)
+from utils.tensor_factory import make_detection_idx_device  # noqa: E402
+from utils.tensor_factory import make_iq_cube_device, single_map
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
@@ -194,8 +191,8 @@ def _fill_throughput(row: ResultRow, scen: SnapScenario) -> None:
     idx_bytes = n * 2.0 * _INT64_BYTES
     valid_bytes = n * snaps  # bool (1 byte/elem)
     row.estimated_effective_gbps = (
-        2.0 * gathered * _COMPLEX_BYTES + valid_bytes + idx_bytes
-    ) / sec / 1e9
+        (2.0 * gathered * _COMPLEX_BYTES + valid_bytes + idx_bytes) / sec / 1e9
+    )
 
 
 # Multi-port source: emits the same preallocated TensorMaps every tick so
@@ -329,8 +326,7 @@ def main() -> int:
         tool_name="perf_snapshot_gather",
         description="SnapshotGatherOp performance characterization (Python)",
         size_ladder_defs=[
-            SizeDef(s.id, [s.doppler, s.range], s.doppler * s.range, s.role)
-            for s in SIZE_LADDER
+            SizeDef(s.id, [s.doppler, s.range], s.doppler * s.range, s.role) for s in SIZE_LADDER
         ],
         build_full_matrix=build_full_matrix,
         build_default_matrix=build_default_matrix,

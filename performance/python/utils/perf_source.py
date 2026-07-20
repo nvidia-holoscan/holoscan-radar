@@ -7,8 +7,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from holoscan.core import Operator, OperatorSpec
 from utils.perf_app import TimingCollector, now
+
+from holoscan.core import Operator, OperatorSpec
 
 
 def _infer_emit_type_name(value: Any) -> str | None:

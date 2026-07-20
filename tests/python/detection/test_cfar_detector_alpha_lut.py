@@ -13,15 +13,11 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from utils.harness import (  # noqa: E402
-    run_operator_multi,
-    single_map,
-    to_device_array,
-)
+from utils.harness import run_operator_multi, single_map, to_device_array  # noqa: E402
 
-from holoscan.radar import (  # noqa: E402
+from holoscan.radar import CFARDetectorOpF64  # noqa: E402
+from holoscan.radar import (
     CFARDetectorOpF32,
-    CFARDetectorOpF64,
     CfarVariant,
     build_ca_alpha_lut,
     build_go_alpha_lut,
@@ -62,25 +58,44 @@ def num_detections(idx: np.ndarray) -> int:
     return 0 if idx.size == 0 else int(idx.shape[0])
 
 
-def build_variant_lut(
-    variant: CfarVariant, pfa: float, fold: int, os_rank: int
-) -> list[float]:
+def build_variant_lut(variant: CfarVariant, pfa: float, fold: int, os_rank: int) -> list[float]:
     if variant == CfarVariant.CA:
         return list(
             build_ca_alpha_lut(
-                pfa, fold, K_DOPPLER, K_RANGE, K_GUARD_D, K_GUARD_R, K_TRAIN_D, K_TRAIN_R
+                pfa,
+                fold,
+                K_DOPPLER,
+                K_RANGE,
+                K_GUARD_D,
+                K_GUARD_R,
+                K_TRAIN_D,
+                K_TRAIN_R,
             )
         )
     if variant == CfarVariant.GO:
         return list(
             build_go_alpha_lut(
-                pfa, fold, K_DOPPLER, K_RANGE, K_GUARD_D, K_GUARD_R, K_TRAIN_D, K_TRAIN_R
+                pfa,
+                fold,
+                K_DOPPLER,
+                K_RANGE,
+                K_GUARD_D,
+                K_GUARD_R,
+                K_TRAIN_D,
+                K_TRAIN_R,
             )
         )
     if variant == CfarVariant.SO:
         return list(
             build_so_alpha_lut(
-                pfa, fold, K_DOPPLER, K_RANGE, K_GUARD_D, K_GUARD_R, K_TRAIN_D, K_TRAIN_R
+                pfa,
+                fold,
+                K_DOPPLER,
+                K_RANGE,
+                K_GUARD_D,
+                K_GUARD_R,
+                K_TRAIN_D,
+                K_TRAIN_R,
             )
         )
     return list(

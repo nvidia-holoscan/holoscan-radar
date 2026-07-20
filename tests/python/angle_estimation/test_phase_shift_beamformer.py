@@ -11,8 +11,8 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from utils.angle_helpers import (  # noqa: E402
-    linspace,
+from utils.angle_helpers import linspace  # noqa: E402
+from utils.angle_helpers import (
     make_planar_ura_geometry,
     make_steering_snapshot,
     make_ula_geometry,
@@ -20,7 +20,8 @@ from utils.angle_helpers import (  # noqa: E402
 )
 from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
 
-from holoscan.radar import PhaseShiftBeamformerOpF32, PhaseShiftBeamformerOpF64  # noqa: E402
+from holoscan.radar import PhaseShiftBeamformerOpF32  # noqa: E402
+from holoscan.radar import PhaseShiftBeamformerOpF64
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -33,7 +34,9 @@ def _require_cuda_device():
         pytest.skip(f"GPU required for PhaseShiftBeamformerOp tests: {exc}")
 
 
-def run_beamformer(snapshot: np.ndarray, *, op_cls=PhaseShiftBeamformerOpF64, **kwargs) -> np.ndarray:
+def run_beamformer(
+    snapshot: np.ndarray, *, op_cls=PhaseShiftBeamformerOpF64, **kwargs
+) -> np.ndarray:
     dtype = np.complex64 if op_cls is PhaseShiftBeamformerOpF32 else np.complex128
     snap = to_device_array(np.asarray(snapshot, dtype=dtype), dtype=dtype)
     frame = single_map(snap, "rd_maps")

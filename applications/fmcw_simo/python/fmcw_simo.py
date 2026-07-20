@@ -39,9 +39,9 @@ if str(_APP_ROOT) not in sys.path:
     sys.path.insert(0, str(_APP_ROOT))
 
 import cupy as cp  # noqa: E402  # after holoscan.radar (MatX CUDA cache)
-from common.python.demo_config import (  # noqa: E402
+from common.python.demo_config import PlotsConfig  # noqa: E402
+from common.python.demo_config import (
     K_C,
-    PlotsConfig,
     grid_extent,
     make_ura_geometry,
     parse_beamscan_estimator,
@@ -61,9 +61,10 @@ from common.python.demo_config import (  # noqa: E402
 from holoscan.conditions import CountCondition, PeriodicCondition  # noqa: E402
 from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
 from holoscan.operators import HolovizOp  # noqa: E402
-from holoscan.radar import (  # noqa: E402
+from holoscan.radar import BeamscanEstimatorOp  # noqa: E402
+from holoscan.radar import install_matx_cache_atexit  # noqa: E402
+from holoscan.radar import (
     AssemblyFeature,
-    BeamscanEstimatorOp,
     BoresightViewOp,
     CadenceMeter,
     CFARDetectorOp,
@@ -83,7 +84,6 @@ from holoscan.radar import (  # noqa: E402
     SnapshotGatherOp,
     cluster_palette,
     gui_available,
-    install_matx_cache_atexit,  # noqa: E402
     make_turbo_lut,
 )
 
@@ -183,8 +183,7 @@ def simulate(scene: SimScene) -> SimResult:
         tau = (2.0 * range_k[cp.newaxis, :] - apert_rx[:, cp.newaxis]) / c
         beat = slope * tau
         phase = (2.0 * K_PI) * (
-            beat[:, :, cp.newaxis] * t[cp.newaxis, cp.newaxis, :]
-            - f_c * tau[:, :, cp.newaxis]
+            beat[:, :, cp.newaxis] * t[cp.newaxis, cp.newaxis, :] - f_c * tau[:, :, cp.newaxis]
         )
         cube += target.amplitude * cp.exp(1j * phase)
 
@@ -193,9 +192,7 @@ def simulate(scene: SimScene) -> SimResult:
         noise_power = signal_power / (10.0 ** (scene.snr_db / 10.0))
         sigma = math.sqrt(noise_power / 2.0)
         rng = cp.random.default_rng(scene.seed)
-        cube += sigma * (
-            rng.standard_normal(cube.shape) + 1j * rng.standard_normal(cube.shape)
-        )
+        cube += sigma * (rng.standard_normal(cube.shape) + 1j * rng.standard_normal(cube.shape))
 
     cube64 = cube.astype(cp.complex64, copy=False)
     return SimResult(cube=cube64, shape=tuple(int(d) for d in cube64.shape))
@@ -263,22 +260,22 @@ def load_config(path: Path) -> AppConfig:
     el_elements = int(rx["el_elements"])
     spacing = float(rx["spacing"])
     if az_elements < 2 or el_elements < 2:
-        raise ValueError(
-            "SIMO URA requires rx_array.az_elements >= 2 and el_elements >= 2"
-        )
+        raise ValueError("SIMO URA requires rx_array.az_elements >= 2 and el_elements >= 2")
     array_geometry = make_ura_geometry(az_elements, el_elements, spacing, wavelength)
     scene.rx_positions = []
     for iz in range(el_elements):
         for iy in range(az_elements):
             scene.rx_positions.append(
-                (0.0, float(iy) * spacing * wavelength, float(iz) * spacing * wavelength)
+                (
+                    0.0,
+                    float(iy) * spacing * wavelength,
+                    float(iz) * spacing * wavelength,
+                )
             )
 
     for t in root.get("targets", []):
         position, velocity, amplitude = parse_target(t, app_name="fmcw_simo")
-        scene.targets.append(
-            PointTarget(position=position, velocity=velocity, amplitude=amplitude)
-        )
+        scene.targets.append(PointTarget(position=position, velocity=velocity, amplitude=amplitude))
 
     noise = root.get("noise_snr_db")
     if noise is not None:
@@ -286,12 +283,8 @@ def load_config(path: Path) -> AppConfig:
 
     plots = parse_plots(root)
     be = root.get("beamscan_estimator", {})
-    az_lo, az_hi = grid_extent(
-        [float(x) for x in be.get("az_angles", [])] or None, -0.35, 0.35
-    )
-    el_lo, el_hi = grid_extent(
-        [float(x) for x in be.get("el_angles", [])] or None, -0.1, 0.1
-    )
+    az_lo, az_hi = grid_extent([float(x) for x in be.get("az_angles", [])] or None, -0.35, 0.35)
+    el_lo, el_hi = grid_extent([float(x) for x in be.get("el_angles", [])] or None, -0.1, 0.1)
 
     return AppConfig(
         scene=scene,
@@ -313,9 +306,7 @@ def load_config(path: Path) -> AppConfig:
         doppler_processor=parse_doppler_processor(root.get("doppler_processor", {})),
         cfar_detector=parse_cfar_detector(root.get("cfar_detector", {})),
         snapshot_gather=parse_snapshot_gather(root.get("snapshot_gather", {})),
-        beamscan_estimator=parse_beamscan_estimator(
-            root.get("beamscan_estimator", {})
-        ),
+        beamscan_estimator=parse_beamscan_estimator(root.get("beamscan_estimator", {})),
         cluster_dbscan=parse_cluster_dbscan(root.get("cluster_dbscan", {})),
         reduction=parse_reduction(root.get("reduction", {})),
     )
@@ -357,9 +348,7 @@ class SimoAdcSourceOp(Operator):
     def compute(self, op_input, op_output, context) -> None:
         result = simulate(self.scene)
         if len(result.shape) != 3:
-            raise RuntimeError(
-                "SimoAdcSourceOp: expected rank-3 (N_rx>=2, chirps, samples)"
-            )
+            raise RuntimeError("SimoAdcSourceOp: expected rank-3 (N_rx>=2, chirps, samples)")
         if result.shape[0] < 2:
             raise RuntimeError("SimoAdcSourceOp: SIMO requires N_rx >= 2")
         op_output.emit({"adc_cube": result.cube}, "adc_cube")
@@ -599,9 +588,7 @@ def main(argv: list[str] | None = None) -> int:
             and not cfg.skip_display_check
             and not gui_available()
         ):
-            logger.warning(
-                "fmcw_simo: visualize enabled but no display; running without GUI"
-            )
+            logger.warning("fmcw_simo: visualize enabled but no display; running without GUI")
             cfg.visualize = False
 
         app = FmcwSimoApp(cfg)

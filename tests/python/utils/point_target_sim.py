@@ -111,9 +111,7 @@ def simulate(scene: SimScene) -> SimResult:
         signal_power = 1.0
         noise_power = signal_power / (10.0 ** (scene.snr_db / 10.0))
         sigma = math.sqrt(noise_power / 2.0)
-        noise = sigma * (
-            np.random.randn(*cube.shape) + 1j * np.random.randn(*cube.shape)
-        )
+        noise = sigma * (np.random.randn(*cube.shape) + 1j * np.random.randn(*cube.shape))
         cube = cube + noise
 
     if num_rx == 1:

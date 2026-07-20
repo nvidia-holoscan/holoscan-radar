@@ -36,9 +36,9 @@ if str(_APP_ROOT) not in sys.path:
     sys.path.insert(0, str(_APP_ROOT))
 
 import cupy as cp  # noqa: E402  # after holoscan.radar (MatX CUDA cache)
-from common.python.demo_config import (  # noqa: E402
+from common.python.demo_config import PlotsConfig  # noqa: E402
+from common.python.demo_config import (
     K_C,
-    PlotsConfig,
     grid_extent,
     make_ura_geometry,
     parse_cfar_detector,
@@ -59,9 +59,10 @@ from common.python.demo_config import (  # noqa: E402
 from holoscan.conditions import CountCondition, PeriodicCondition  # noqa: E402
 from holoscan.core import Application, Operator, OperatorSpec  # noqa: E402
 from holoscan.operators import HolovizOp  # noqa: E402
-from holoscan.radar import (  # noqa: E402
+from holoscan.radar import BoresightViewOp  # noqa: E402
+from holoscan.radar import install_matx_cache_atexit  # noqa: E402
+from holoscan.radar import (
     AssemblyFeature,
-    BoresightViewOp,
     CadenceMeter,
     CFARDetectorOp,
     ClusterDBSCANOp,
@@ -78,7 +79,6 @@ from holoscan.radar import (  # noqa: E402
     RollingPlotOp,
     cluster_palette,
     gui_available,
-    install_matx_cache_atexit,  # noqa: E402
     make_turbo_lut,
 )
 
@@ -178,8 +178,7 @@ def simulate(scene: SimScene) -> SimResult:
         tau = (2.0 * range_k[cp.newaxis, :] - apert_rx[:, cp.newaxis]) / c
         beat = slope * tau
         phase = (2.0 * K_PI) * (
-            beat[:, :, cp.newaxis] * t[cp.newaxis, cp.newaxis, :]
-            - f_c * tau[:, :, cp.newaxis]
+            beat[:, :, cp.newaxis] * t[cp.newaxis, cp.newaxis, :] - f_c * tau[:, :, cp.newaxis]
         )
         cube += target.amplitude * cp.exp(1j * phase)
 
@@ -188,9 +187,7 @@ def simulate(scene: SimScene) -> SimResult:
         noise_power = signal_power / (10.0 ** (scene.snr_db / 10.0))
         sigma = math.sqrt(noise_power / 2.0)
         rng = cp.random.default_rng(scene.seed)
-        cube += sigma * (
-            rng.standard_normal(cube.shape) + 1j * rng.standard_normal(cube.shape)
-        )
+        cube += sigma * (rng.standard_normal(cube.shape) + 1j * rng.standard_normal(cube.shape))
 
     cube64 = cube.astype(cp.complex64, copy=False)
     return SimResult(cube=cube64, shape=tuple(int(d) for d in cube64.shape))
@@ -255,30 +252,28 @@ def load_config(path: Path) -> AppConfig:
     el_elements = int(rx["el_elements"])
     spacing = float(rx["spacing"])
     if az_elements < 2 or el_elements < 2:
-        raise ValueError(
-            "SIMO URA requires rx_array.az_elements >= 2 and el_elements >= 2"
-        )
+        raise ValueError("SIMO URA requires rx_array.az_elements >= 2 and el_elements >= 2")
     array_geometry = make_ura_geometry(az_elements, el_elements, spacing, wavelength)
     scene.rx_positions = []
     for iz in range(el_elements):
         for iy in range(az_elements):
             scene.rx_positions.append(
-                (0.0, float(iy) * spacing * wavelength, float(iz) * spacing * wavelength)
+                (
+                    0.0,
+                    float(iy) * spacing * wavelength,
+                    float(iz) * spacing * wavelength,
+                )
             )
 
     beam = root.get("phase_shift_beamformer", {})
     if not beam or "az_angles" not in beam or "el_angles" not in beam:
-        raise ValueError(
-            "phase_shift_beamformer.az_angles and el_angles are required"
-        )
+        raise ValueError("phase_shift_beamformer.az_angles and el_angles are required")
     az_angles = [float(x) for x in beam["az_angles"]]
     el_angles = [float(x) for x in beam["el_angles"]]
 
     for t in root.get("targets", []):
         position, velocity, amplitude = parse_target(t, app_name="fmcw_dense_simo")
-        scene.targets.append(
-            PointTarget(position=position, velocity=velocity, amplitude=amplitude)
-        )
+        scene.targets.append(PointTarget(position=position, velocity=velocity, amplitude=amplitude))
 
     noise = root.get("noise_snr_db")
     if noise is not None:
@@ -341,9 +336,7 @@ class SimoAdcSourceOp(Operator):
     def compute(self, op_input, op_output, context) -> None:
         result = simulate(self.scene)
         if len(result.shape) != 3:
-            raise RuntimeError(
-                "SimoAdcSourceOp: expected rank-3 (N_rx>=2, chirps, samples)"
-            )
+            raise RuntimeError("SimoAdcSourceOp: expected rank-3 (N_rx>=2, chirps, samples)")
         if result.shape[0] < 2:
             raise RuntimeError("SimoAdcSourceOp: SIMO requires N_rx >= 2")
         op_output.emit({"adc_cube": result.cube}, "adc_cube")
@@ -431,9 +424,7 @@ class CubeAoaLookupOp(Operator):
         idx = port_tensor(op_input.receive("detection_idx"), "detection_idx")
         host_idx = tensor_to_numpy(idx).astype(np.int64, copy=False)
         if host_idx.ndim != 2 or host_idx.shape[1] < 4:
-            raise RuntimeError(
-                "CubeAoaLookupOp: detection_idx must be (num_points, >= 4)"
-            )
+            raise RuntimeError("CubeAoaLookupOp: detection_idx must be (num_points, >= 4)")
         n = host_idx.shape[0]
         num_az = len(self.az_grid)
         num_el = len(self.el_grid)
@@ -443,9 +434,7 @@ class CubeAoaLookupOp(Operator):
             az_bin = int(host_idx[i, 0])
             el_bin = int(host_idx[i, 1])
             if az_bin < 0 or az_bin >= num_az or el_bin < 0 or el_bin >= num_el:
-                raise RuntimeError(
-                    "CubeAoaLookupOp: detection az/el bin out of grid range"
-                )
+                raise RuntimeError("CubeAoaLookupOp: detection az/el bin out of grid range")
             aoa[i, 0] = self.az_grid[az_bin]
             aoa[i, 1] = self.el_grid[el_bin]
         op_output.emit({"aoa_estimates": cp.asarray(aoa)}, "aoa_estimates")
@@ -478,21 +467,21 @@ class DenseClusterReportOp(Operator):
         spec.input("velocity_bins")
 
     def compute(self, op_input, op_output, context) -> None:
-        points = tensor_to_numpy(
-            port_tensor(op_input.receive("points"), "points")
-        ).astype(np.float32, copy=False)
-        labels = tensor_to_numpy(
-            port_tensor(op_input.receive("labels"), "labels")
-        ).astype(np.int64, copy=False)
-        sizes = tensor_to_numpy(
-            port_tensor(op_input.receive("sizes"), "sizes")
-        ).astype(np.int64, copy=False)
-        rep_idx = tensor_to_numpy(
-            port_tensor(op_input.receive("rep_idx"), "rep_idx")
-        ).astype(np.int64, copy=False)
-        ranges = tensor_to_numpy(
-            port_tensor(op_input.receive("range_bins"), "range_bins")
-        ).astype(np.float32, copy=False)
+        points = tensor_to_numpy(port_tensor(op_input.receive("points"), "points")).astype(
+            np.float32, copy=False
+        )
+        labels = tensor_to_numpy(port_tensor(op_input.receive("labels"), "labels")).astype(
+            np.int64, copy=False
+        )
+        sizes = tensor_to_numpy(port_tensor(op_input.receive("sizes"), "sizes")).astype(
+            np.int64, copy=False
+        )
+        rep_idx = tensor_to_numpy(port_tensor(op_input.receive("rep_idx"), "rep_idx")).astype(
+            np.int64, copy=False
+        )
+        ranges = tensor_to_numpy(port_tensor(op_input.receive("range_bins"), "range_bins")).astype(
+            np.float32, copy=False
+        )
         velocities = tensor_to_numpy(
             port_tensor(op_input.receive("velocity_bins"), "velocity_bins")
         ).astype(np.float32, copy=False)
@@ -551,9 +540,7 @@ class TrailingIdxColumnsOp(Operator):
         idx = port_tensor(op_input.receive("idx"), "idx")
         host = tensor_to_numpy(idx).astype(np.int64, copy=False)
         if host.ndim != 2 or host.shape[1] < 2:
-            raise RuntimeError(
-                "TrailingIdxColumnsOp: expected (num_points, >= 2) int64 idx"
-            )
+            raise RuntimeError("TrailingIdxColumnsOp: expected (num_points, >= 2) int64 idx")
         trimmed = host[:, -2:].copy()
         op_output.emit({"idx": cp.asarray(trimmed)}, "idx")
 
@@ -631,7 +618,10 @@ class FmcwDenseSimoApp(Application):
         self.add_flow(
             cfar,
             peak_pick,
-            {("detection_idx", "detection_idx"), ("detection_score", "detection_score")},
+            {
+                ("detection_idx", "detection_idx"),
+                ("detection_score", "detection_score"),
+            },
         )
         mask_sink = NullSinkOp(self, name="detection_mask_sink")
         noise_sink = NullSinkOp(self, name="noise_estimate_sink")
@@ -669,9 +659,7 @@ class FmcwDenseSimoApp(Application):
         det_idx_rd = TrailingIdxColumnsOp(self, name="det_idx_rd_slice")
 
         input_specs: list[HolovizOp.InputSpec] = []
-        input_specs.append(
-            HolovizOp.InputSpec("rd_map", HolovizOp.InputType.COLOR_LUT)
-        )
+        input_specs.append(HolovizOp.InputSpec("rd_map", HolovizOp.InputType.COLOR_LUT))
         palette = cluster_palette()
 
         def add_crosses(name: str, color: list[float]) -> None:
@@ -695,9 +683,7 @@ class FmcwDenseSimoApp(Application):
             for spec in input_specs:
                 spec.views = [left]
 
-            def add_plot(
-                img_name: str, title_name: str, title: str, oy: float, h: float
-            ) -> None:
+            def add_plot(img_name: str, title_name: str, title: str, oy: float, h: float) -> None:
                 image = HolovizOp.InputSpec(img_name, HolovizOp.InputType.COLOR)
                 image.views = [make_view(0.63, oy, 0.35, h)]
                 input_specs.append(image)
@@ -810,8 +796,7 @@ def main(argv: list[str] | None = None) -> int:
             and not gui_available()
         ):
             logger.warning(
-                "fmcw_dense_simo: visualize enabled but no display; "
-                "running without GUI"
+                "fmcw_dense_simo: visualize enabled but no display; " "running without GUI"
             )
             cfg.visualize = False
 

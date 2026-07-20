@@ -13,11 +13,8 @@ cupy = pytest.importorskip("cupy")
 
 from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
 
-from holoscan.radar import (  # noqa: E402
-    SnapshotEdgeMode,
-    SnapshotGatherOpF32,
-    SnapshotGatherOpF64,
-)
+from holoscan.radar import SnapshotEdgeMode  # noqa: E402
+from holoscan.radar import SnapshotGatherOpF32, SnapshotGatherOpF64
 
 pytestmark = pytest.mark.requires_gpu
 

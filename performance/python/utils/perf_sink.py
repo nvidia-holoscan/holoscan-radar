@@ -6,9 +6,9 @@
 from __future__ import annotations
 
 import cupy as cp
+from utils.perf_app import TimingCollector, now
 
 from holoscan.core import Operator, OperatorSpec
-from utils.perf_app import TimingCollector, now
 
 
 class PerfTerminalSinkOp(Operator):

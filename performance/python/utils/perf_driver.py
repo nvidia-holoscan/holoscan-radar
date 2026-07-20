@@ -13,7 +13,6 @@ from collections.abc import Callable, Sequence
 from typing import TypeVar
 
 import cupy as cp
-
 from utils.perf_report import PerfReport, RunSettings, SizeDef, write_json, write_text
 from utils.platform import capture_platform, capture_provenance
 
@@ -28,7 +27,10 @@ def ensure_cuda_device(tool_name: str) -> bool:
     except Exception:
         count = 0
     if count <= 0:
-        print(f"error: no CUDA device available; {tool_name} requires a GPU", file=sys.stderr)
+        print(
+            f"error: no CUDA device available; {tool_name} requires a GPU",
+            file=sys.stderr,
+        )
         return False
     return True
 
@@ -124,9 +126,7 @@ def run_perf_main(
     size_ladder_defs: list[SizeDef],
     run_scenario: Callable[[str, RunSettings, PerfReport], None],
     process_warmup: Callable[[RunSettings], None] | None = None,
-    full_help: str = (
-        "Run the full size ladder (default). Use --no-full with --size / --sizes."
-    ),
+    full_help: str = ("Run the full size ladder (default). Use --no-full with --size / --sizes."),
     full_default: bool = True,
 ) -> int:
     """Size-ladder driver (one scenario family per size id)."""

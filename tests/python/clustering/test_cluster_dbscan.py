@@ -56,9 +56,22 @@ def run_dbscan(
 
 def test_TwoBlobsAndNoise():
     pts = [
-        0.0, 0.0, 0.1, 0.0, 0.0, 0.1, 0.1, 0.1,
-        5.0, 5.0,
-        10.0, 10.0, 10.1, 10.0, 10.0, 10.1,
+        0.0,
+        0.0,
+        0.1,
+        0.0,
+        0.0,
+        0.1,
+        0.1,
+        0.1,
+        5.0,
+        5.0,
+        10.0,
+        10.0,
+        10.1,
+        10.0,
+        10.0,
+        10.1,
     ]
     out = run_dbscan(pts, 8, 2, epsilon=[0.5], min_points=3)
     lab = out["labels"]
@@ -113,13 +126,20 @@ def test_DefaultMinPointsIsTwiceNumFeatures():
 
 def test_MaxClustersCapsAndDropsSurplus():
     pts = [
-        0.0, 0.0, 0.1, 0.0,
-        10.0, 0.0, 10.1, 0.0,
-        20.0, 0.0, 20.1, 0.0,
+        0.0,
+        0.0,
+        0.1,
+        0.0,
+        10.0,
+        0.0,
+        10.1,
+        0.0,
+        20.0,
+        0.0,
+        20.1,
+        0.0,
     ]
-    out = run_dbscan(
-        pts, 6, 2, epsilon=[0.5], min_points=2, max_clusters=2
-    )
+    out = run_dbscan(pts, 6, 2, epsilon=[0.5], min_points=2, max_clusters=2)
     lab = out["labels"]
     assert list(lab) == [0, 0, 1, 1, -1, -1]
     assert list(out["sizes"]) == [2, 2]
@@ -133,13 +153,22 @@ def test_EmptyPointsEmitsEmptyOutputs():
 
 def test_FloatAndDoubleAgree():
     pts = [
-        0.0, 0.0, 0.1, 0.0, 0.0, 0.1,
-        10.0, 10.0, 10.1, 10.0, 10.0, 10.1,
-        5.0, 5.0,
+        0.0,
+        0.0,
+        0.1,
+        0.0,
+        0.0,
+        0.1,
+        10.0,
+        10.0,
+        10.1,
+        10.0,
+        10.0,
+        10.1,
+        5.0,
+        5.0,
     ]
-    of = run_dbscan(
-        pts, 7, 2, op_cls=ClusterDBSCANOpF32, epsilon=[0.5], min_points=3
-    )
+    of = run_dbscan(pts, 7, 2, op_cls=ClusterDBSCANOpF32, epsilon=[0.5], min_points=3)
     od = run_dbscan(pts, 7, 2, epsilon=[0.5], min_points=3)
     assert of["labels"].shape == od["labels"].shape
     assert list(of["labels"]) == list(od["labels"])
@@ -161,9 +190,7 @@ def test_LiveEpsilonStickyOverride():
     frames = [frame, frame, frame]
 
     def make_op(app):
-        return ClusterDBSCANOpF64(
-            app, epsilon=[0.9], min_points=2, name="op_under_test"
-        )
+        return ClusterDBSCANOpF64(app, epsilon=[0.9], min_points=2, name="op_under_test")
 
     outs = run_operator_multi(
         make_op,

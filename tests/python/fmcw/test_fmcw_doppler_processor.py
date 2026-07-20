@@ -13,20 +13,14 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from utils.bin_model import (  # noqa: E402
-    expected_doppler_bin,
-    expected_range_bin,
-    expected_velocity_axis,
-)
-from utils.harness import (  # noqa: E402
-    run_operator,
-    run_operator_multi,
-    to_device_array,
-)
+from utils.bin_model import expected_doppler_bin  # noqa: E402
+from utils.bin_model import expected_range_bin, expected_velocity_axis
+from utils.harness import run_operator_multi  # noqa: E402
+from utils.harness import run_operator, to_device_array
 from utils.point_target_sim import PointTarget, SimScene, simulate  # noqa: E402
 
-from holoscan.radar import (  # noqa: E402
-    FMCWDopplerProcessorOp,
+from holoscan.radar import FMCWDopplerProcessorOp  # noqa: E402
+from holoscan.radar import (
     FMCWDopplerProcessorOpF32,
     FMCWDopplerProcessorOpF64,
     FMCWWaveformDescriptor,
@@ -72,19 +66,25 @@ def _tone_profiles(
     return data
 
 
-def _profiles_frame(data: np.ndarray, key: str = "range_profiles", *, op_cls=FMCWDopplerProcessorOpF32) -> dict:
+def _profiles_frame(
+    data: np.ndarray, key: str = "range_profiles", *, op_cls=FMCWDopplerProcessorOpF32
+) -> dict:
     ctype = np.complex128 if op_cls is FMCWDopplerProcessorOpF64 else np.complex64
     return {key: to_device_array(data.astype(ctype))}
 
 
-def _cell_mag(rd_map: np.ndarray, batch: int, num_doppler: int, num_range: int, d: int, r: int) -> float:
+def _cell_mag(
+    rd_map: np.ndarray, batch: int, num_doppler: int, num_range: int, d: int, r: int
+) -> float:
     arr = np.asarray(rd_map)
     if arr.ndim == 2:
         return float(np.abs(arr[d, r]))
     return float(np.abs(arr[batch, d, r]))
 
 
-def _doppler_argmax(rd_map: np.ndarray, batch: int, num_doppler: int, num_range: int, range_bin: int) -> int:
+def _doppler_argmax(
+    rd_map: np.ndarray, batch: int, num_doppler: int, num_range: int, range_bin: int
+) -> int:
     best = 0
     best_mag = -1.0
     for d in range(num_doppler):
@@ -113,13 +113,13 @@ def _run_rd(
             output_ports=("rd_maps", "velocity_bins"),
         )
         return captured["rd_maps"][0], captured["velocity_bins"][0]
-    outs = run_operator(
-        make_op, frame, input_port="range_profiles", output_port="rd_maps"
-    )
+    outs = run_operator(make_op, frame, input_port="range_profiles", output_port="rd_maps")
     return outs[0], None
 
 
-def _max_doppler_sidelobe(rd_map: np.ndarray, num_chirps: int, num_bins: int, range_bin: int) -> float:
+def _max_doppler_sidelobe(
+    rd_map: np.ndarray, num_chirps: int, num_bins: int, range_bin: int
+) -> float:
     worst = 0.0
     for d in range(num_chirps):
         if 1 <= d <= 8:
@@ -149,9 +149,7 @@ def test_VelocityPeakMatchesTruthCentered():
 
     assert rd_map.shape == (num_chirps, num_bins)
     peak = _doppler_argmax(rd_map, 0, num_chirps, num_bins, range_bin)
-    assert peak == expected_doppler_bin(
-        radial_velocity, wavelength, pri, num_chirps, True
-    )
+    assert peak == expected_doppler_bin(radial_velocity, wavelength, pri, num_chirps, True)
 
     assert bins.shape == (num_chirps,)
     expected = expected_velocity_axis(num_chirps, wavelength, pri, True)
@@ -173,9 +171,7 @@ def test_VelocityAxisUncentered():
     wavelength = waveform.wavelength()
     doppler_hz = -2.0 * radial_velocity / wavelength
 
-    frame = _profiles_frame(
-        _tone_profiles(num_chirps, num_bins, range_bin, doppler_hz, pri)
-    )
+    frame = _profiles_frame(_tone_profiles(num_chirps, num_bins, range_bin, doppler_hz, pri))
     rd_map, bins = _run_rd(
         frame,
         waveform=waveform,
@@ -184,9 +180,7 @@ def test_VelocityAxisUncentered():
     )
 
     peak = _doppler_argmax(rd_map, 0, num_chirps, num_bins, range_bin)
-    assert peak == expected_doppler_bin(
-        radial_velocity, wavelength, pri, num_chirps, False
-    )
+    assert peak == expected_doppler_bin(radial_velocity, wavelength, pri, num_chirps, False)
 
     expected = expected_velocity_axis(num_chirps, wavelength, pri, False)
     np.testing.assert_allclose(
@@ -225,9 +219,7 @@ def test_OddChirpCountFftshiftMatchesNumpy():
     wavelength = waveform.wavelength()
     doppler_hz = 3.0 / (pri * float(num_chirps))
 
-    frame = _profiles_frame(
-        _tone_profiles(num_chirps, num_bins, range_bin, doppler_hz, pri)
-    )
+    frame = _profiles_frame(_tone_profiles(num_chirps, num_bins, range_bin, doppler_hz, pri))
     rd_map, bins = _run_rd(frame, waveform=waveform, capture_velocity=True)
 
     peak = _doppler_argmax(rd_map, 0, num_chirps, num_bins, range_bin)
@@ -304,9 +296,7 @@ def test_NfftInterpolatesVelocityGrid():
     wavelength = waveform.wavelength()
     doppler_hz = -2.0 * radial_velocity / wavelength
 
-    frame = _profiles_frame(
-        _tone_profiles(num_chirps, num_bins, range_bin, doppler_hz, pri)
-    )
+    frame = _profiles_frame(_tone_profiles(num_chirps, num_bins, range_bin, doppler_hz, pri))
     rd_map, bins = _run_rd(frame, waveform=waveform, nfft=nfft, capture_velocity=True)
 
     assert rd_map.shape == (nfft, num_bins)
@@ -357,14 +347,10 @@ def test_LiveOverrideCenterZeroDoppler():
     frames = [frame, frame]
 
     rd_default = _run_rd(frame, waveform=waveform)[0]
-    assert _doppler_argmax(rd_default, 0, num_chirps, num_bins, range_bin) == (
-        num_chirps // 2
-    )
+    assert _doppler_argmax(rd_default, 0, num_chirps, num_bins, range_bin) == (num_chirps // 2)
 
     def make_op(app):
-        return FMCWDopplerProcessorOpF32(
-            app, waveform=waveform, name="op_under_test"
-        )
+        return FMCWDopplerProcessorOpF32(app, waveform=waveform, name="op_under_test")
 
     captured = run_operator_multi(
         make_op,
@@ -397,9 +383,7 @@ def test_LiveOverrideDopplerWindow():
     hann.type = WindowType.HANN
 
     def make_op(app):
-        return FMCWDopplerProcessorOpF32(
-            app, center_zero_doppler=False, name="op_under_test"
-        )
+        return FMCWDopplerProcessorOpF32(app, center_zero_doppler=False, name="op_under_test")
 
     outs = run_operator(
         make_op,
@@ -418,9 +402,7 @@ def test_LiveOverrideDopplerWindow():
 def test_VelocityBinsOnlyEmittedWithWaveform():
     num_chirps = 32
     num_bins = 4
-    frame = _profiles_frame(
-        _tone_profiles(num_chirps, num_bins, 1, 0.0, 25e-6)
-    )
+    frame = _profiles_frame(_tone_profiles(num_chirps, num_bins, 1, 0.0, 25e-6))
 
     rd_map = _run_rd(frame)[0]
     assert rd_map.shape == (num_chirps, num_bins)
@@ -448,9 +430,9 @@ def test_FloatAndDoubleAgree():
         for r in range(num_bins):
             mag_f = _cell_mag(rd_f, 0, num_chirps, num_bins, d, r)
             mag_d = _cell_mag(rd_d, 0, num_chirps, num_bins, d, r)
-            assert mag_f == pytest.approx(mag_d, abs=1e-3 * float(num_chirps)), (
-                f"(doppler={d}, range={r})"
-            )
+            assert mag_f == pytest.approx(
+                mag_d, abs=1e-3 * float(num_chirps)
+            ), f"(doppler={d}, range={r})"
 
 
 def test_RealInputRejected():

@@ -27,7 +27,7 @@
 namespace py = pybind11;
 
 PYBIND11_MODULE(_radar_common, m) {
-  using namespace holoscan::radar;
+  using namespace holoscan::radar;  // NOLINT(build/namespaces)
 
   m.doc() = "holoscan.radar shared descriptors and enums";
 

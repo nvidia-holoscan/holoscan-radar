@@ -203,10 +203,10 @@ void MIMOCoherentCompensationOp<T>::run_ddm_correlate(
         entry.device_corr_weights =
             make_device_tensor({num_tx, D}, complex_dtype<T>());
         if constexpr (sizeof(T) == 8) {
-          if (cudaMemcpyAsync(entry.device_corr_weights->data(),
-                              host_weights.data(),
-                              host_weights.size() * sizeof(std::complex<double>),
-                              cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+          if (cudaMemcpyAsync(
+                  entry.device_corr_weights->data(), host_weights.data(),
+                  host_weights.size() * sizeof(std::complex<double>),
+                  cudaMemcpyHostToDevice, stream) != cudaSuccess) {
             throw std::runtime_error(
                 "MIMOCoherentCompensationOp: corr-weights H2D failed");
           }

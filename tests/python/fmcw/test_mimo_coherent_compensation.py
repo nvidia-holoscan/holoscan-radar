@@ -19,9 +19,9 @@ holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
 from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
-from utils.mimo_helpers import (  # noqa: E402
+from utils.mimo_helpers import K_DDM_RANGE  # noqa: E402
+from utils.mimo_helpers import (
     K_DDM_DOPPLER,
-    K_DDM_RANGE,
     K_DDM_RX,
     K_DDM_TX,
     build_ddm_input_host,
@@ -34,11 +34,8 @@ from utils.mimo_helpers import (  # noqa: E402
     uniform_ddm_offsets,
 )
 
-from holoscan.radar import (  # noqa: E402
-    MIMOCoherentCompensationOpF32,
-    MIMOCoherentCompensationOpF64,
-    MultiplexingScheme,
-)
+from holoscan.radar import MIMOCoherentCompensationOpF32  # noqa: E402
+from holoscan.radar import MIMOCoherentCompensationOpF64, MultiplexingScheme
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -169,9 +166,7 @@ def test_FloatDoubleAgreement():
 def test_LeadingBatchAxesPreservedAndIndependent():
     waveform = make_test_waveform()
     shape = (2, K_NUM_TX, K_NUM_RX, K_DOPPLER, K_RANGE)
-    host = build_misaligned_rd_host(
-        waveform, K_NUM_TX, K_NUM_RX, K_DOPPLER, K_RANGE, batch=2
-    )
+    host = build_misaligned_rd_host(waveform, K_NUM_TX, K_NUM_RX, K_DOPPLER, K_RANGE, batch=2)
     out = run_compensation(host, waveform)
     assert out.shape == shape
     expect_tx_lanes_aligned(out, K_NUM_TX, K_NUM_RX, K_DOPPLER, K_RANGE, batch=2)
@@ -183,9 +178,7 @@ def test_RejectsUnspecifiedMultiplexingScheme():
     host = np.full(shape, complex(1.0, 0.0), dtype=np.complex64)
 
     def make_op(app):
-        return MIMOCoherentCompensationOpF32(
-            app, waveform=waveform, name="op_under_test"
-        )
+        return MIMOCoherentCompensationOpF32(app, waveform=waveform, name="op_under_test")
 
     frame = single_map(to_device_array(host), "rd_maps")
     with pytest.raises(ValueError):
@@ -235,9 +228,7 @@ def test_DdmDemuxRecoversEachTxIntoBand():
     band = K_DDM_DOPPLER // K_DDM_TX
     p0 = 1
     offsets = uniform_ddm_offsets(K_DDM_TX)
-    host = build_ddm_input_host(
-        offsets, K_DDM_TX, K_DDM_RX, K_DDM_DOPPLER, K_DDM_RANGE, p0
-    )
+    host = build_ddm_input_host(offsets, K_DDM_TX, K_DDM_RX, K_DDM_DOPPLER, K_DDM_RANGE, p0)
     out = run_compensation(
         host,
         waveform,
@@ -267,9 +258,7 @@ def test_DdmGuardBandsReduceWidth():
     band = K_DDM_DOPPLER // K_DDM_TX - 1  # W = 3
     p0 = 0
     offsets = uniform_ddm_offsets(K_DDM_TX)
-    host = build_ddm_input_host(
-        offsets, K_DDM_TX, K_DDM_RX, K_DDM_DOPPLER, K_DDM_RANGE, p0
-    )
+    host = build_ddm_input_host(offsets, K_DDM_TX, K_DDM_RX, K_DDM_DOPPLER, K_DDM_RANGE, p0)
     out = run_compensation(
         host,
         waveform,
@@ -300,9 +289,7 @@ def test_DdmGuardBandDiscardsEdgeBin():
     band = K_DDM_DOPPLER // K_DDM_TX - 1  # W = 3
     edge = K_DDM_DOPPLER // K_DDM_TX - 1  # fft bin 3 (guarded)
     offsets = uniform_ddm_offsets(K_DDM_TX)
-    host = build_ddm_input_host(
-        offsets, K_DDM_TX, K_DDM_RX, K_DDM_DOPPLER, K_DDM_RANGE, edge
-    )
+    host = build_ddm_input_host(offsets, K_DDM_TX, K_DDM_RX, K_DDM_DOPPLER, K_DDM_RANGE, edge)
     out = run_compensation(
         host,
         waveform,

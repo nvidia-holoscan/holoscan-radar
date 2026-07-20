@@ -51,8 +51,7 @@ def port_tensor(message: Any, key: str) -> Any:
         if len(message) == 1:
             return next(iter(message.values()))
         raise KeyError(
-            f"port_tensor: key {key!r} not in TensorMap with keys "
-            f"{list(message.keys())}"
+            f"port_tensor: key {key!r} not in TensorMap with keys " f"{list(message.keys())}"
         )
     return message
 
@@ -153,9 +152,7 @@ def parse_window_spec(node: Any) -> WindowSpec:
 def parse_angle_convention(node: Any) -> AngleConvention:
     conv = AngleConvention()
     if isinstance(node, dict) and "preset" in node:
-        conv.preset = parse_enum(
-            AngleConventionPreset, node["preset"], "AngleConventionPreset"
-        )
+        conv.preset = parse_enum(AngleConventionPreset, node["preset"], "AngleConventionPreset")
     return conv
 
 
@@ -179,9 +176,7 @@ def parse_range_processor(block: dict[str, Any]) -> dict[str, Any]:
 def parse_clutter_filter(block: dict[str, Any]) -> dict[str, Any]:
     kwargs: dict[str, Any] = {"name": "clutter_filter"}
     if "method" in block:
-        kwargs["method"] = parse_enum(
-            ClutterFilterMethod, block["method"], "ClutterFilterMethod"
-        )
+        kwargs["method"] = parse_enum(ClutterFilterMethod, block["method"], "ClutterFilterMethod")
     return kwargs
 
 
@@ -203,9 +198,7 @@ def parse_doppler_processor(block: dict[str, Any]) -> dict[str, Any]:
 def parse_cfar_detector(block: dict[str, Any]) -> dict[str, Any]:
     kwargs: dict[str, Any] = {"name": "cfar_detector"}
     if "cfar_variant" in block:
-        kwargs["cfar_variant"] = parse_enum(
-            CfarVariant, block["cfar_variant"], "CfarVariant"
-        )
+        kwargs["cfar_variant"] = parse_enum(CfarVariant, block["cfar_variant"], "CfarVariant")
     if "os_rank" in block:
         kwargs["os_rank"] = int(block["os_rank"])
     if "guard_cells" in block:
@@ -225,9 +218,7 @@ def parse_cfar_detector(block: dict[str, Any]) -> dict[str, Any]:
     if "max_cached_kernels" in block:
         kwargs["max_cached_kernels"] = int(block["max_cached_kernels"])
     if "blocking_alpha_lut_rebuild" in block:
-        kwargs["blocking_alpha_lut_rebuild"] = bool(
-            block["blocking_alpha_lut_rebuild"]
-        )
+        kwargs["blocking_alpha_lut_rebuild"] = bool(block["blocking_alpha_lut_rebuild"])
     return kwargs
 
 
@@ -240,9 +231,7 @@ def parse_snapshot_gather(block: dict[str, Any]) -> dict[str, Any]:
             SnapshotEdgeMode, block["doppler_edge"], "SnapshotEdgeMode"
         )
     if "range_edge" in block:
-        kwargs["range_edge"] = parse_enum(
-            SnapshotEdgeMode, block["range_edge"], "SnapshotEdgeMode"
-        )
+        kwargs["range_edge"] = parse_enum(SnapshotEdgeMode, block["range_edge"], "SnapshotEdgeMode")
     return kwargs
 
 
@@ -294,9 +283,7 @@ def parse_reduction(block: dict[str, Any]) -> dict[str, Any]:
             RepresentativePolicy, block["representative"], "RepresentativePolicy"
         )
     if "score_method" in block:
-        kwargs["score_method"] = parse_enum(
-            ScoreMethod, block["score_method"], "ScoreMethod"
-        )
+        kwargs["score_method"] = parse_enum(ScoreMethod, block["score_method"], "ScoreMethod")
     if "feature_weights" in block:
         kwargs["feature_weights"] = [float(x) for x in block["feature_weights"]]
     return kwargs
@@ -354,12 +341,9 @@ def parse_ddm_code(node: Any) -> DDMCodeDescriptor:
         raw = list(node["phase_codes"])
         # YAML stores interleaved real/imag pairs (matches C++ yaml_converters).
         if len(raw) % 2 != 0:
-            raise ValueError(
-                "ddm_code.phase_codes must be interleaved real/imag pairs"
-            )
+            raise ValueError("ddm_code.phase_codes must be interleaved real/imag pairs")
         code.phase_codes = [
-            complex(float(raw[i]), float(raw[i + 1]))
-            for i in range(0, len(raw), 2)
+            complex(float(raw[i]), float(raw[i + 1])) for i in range(0, len(raw), 2)
         ]
     if "doppler_offsets" in node:
         code.doppler_offsets = [float(x) for x in node["doppler_offsets"]]
@@ -441,9 +425,7 @@ def parse_target(node: dict[str, Any], *, app_name: str) -> tuple[
     amplitude = complex(float(node["amplitude"]), 0.0)
     vel = node.get("velocity")
     if not isinstance(vel, list) or len(vel) != 3:
-        raise ValueError(
-            f"{app_name}: each target's velocity must be a 3-vector [vx, vy, vz]"
-        )
+        raise ValueError(f"{app_name}: each target's velocity must be a 3-vector [vx, vy, vz]")
     direction = (
         math.cos(elevation) * math.cos(azimuth),
         math.cos(elevation) * math.sin(azimuth),
@@ -504,8 +486,7 @@ def parse_run(root: dict[str, Any]) -> RunConfig:
     frame_period_ns = frame_period * 1e9
     if frame_period_ns < 1.0 or frame_period_ns > float(2**63 - 1):
         raise ValueError(
-            f"run.frame_period must be within [1 ns, INT64_MAX ns], got "
-            f"{frame_period} s"
+            f"run.frame_period must be within [1 ns, INT64_MAX ns], got " f"{frame_period} s"
         )
     meter_cadence = bool(run.get("meter_cadence", True))
     meter_log_every = int(run.get("meter_log_every", 0))
