@@ -197,17 +197,16 @@ ascending** order-statistic index:
 `RejectsOsRankOutOfRange`, `LiveOsRankOverrideMidStreamAndSticky`,
 `OsAlphaInvertsMonteCarloPfa`, and `NoiseEstimateMatchesOrderStatistic`.
 
-**Questions for the team.**
+**Resolved (L4, 2026-07-21).** Ratified **0-based, ascending** as the contract
+convention (chosen over 1-based / descending): rank 0 = smallest training-cell
+power, typical interior rank ≈ `floor(0.75·N)`. Matches array indexing and the
+existing MC-validated implementation, so no code change — `OPERATOR_API.md`'s
+`os_rank` bullet now states the convention explicitly. Pinned by
+`test_cfar_detector_os.cpp` (`RejectsOsRankOutOfRange`,
+`NoiseEstimateMatchesOrderStatistic`, `OsAlphaInvertsMonteCarloPfa`, live
+override). See STATUS.md → Settled decisions (L4).
 
-- Confirm **0-based ascending** as the contract convention (rank 0 = smallest
-  training-cell power; typical interior rank ≈ `floor(0.75 * N)` for
-  `N` training cells)?
-- Or adopt 1-based / descending convention and update the implementation to
-  match?
-
-**Status:** open — implementation and tests are consistent with 0-based
-ascending; **`OPERATOR_API.md` must not be changed until the team explicitly
-approves a contract update** in a dedicated PR.
+**Status:** resolved — contract now documents the implemented convention.
 
 ---
 
