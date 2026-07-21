@@ -127,13 +127,17 @@ The risk is a caller reading the contract and expecting eviction/caching
 behavior that isn't there, or a future variant (e.g. OS with a sorted-window
 kernel) that *does* need caching silently diverging from the parameter.
 
-**Questions for the team.**
+**Resolved (L3, 2026-07-21).** Dropped from the contract (chosen over keeping
+it as a forward-looking placeholder). The fused stencil has nothing to cache,
+so the parameter was inert; a hollow knob that implies eviction behavior is
+worse than its absence. The `max_cached_kernels` parameter was removed from
+`OPERATOR_API.md` and from the operator (`cfar_detector_op.{hpp,cu}`) — it was
+declared/registered but never read and no test referenced it, so removal is
+behavior-preserving. If a future variant genuinely needs per-footprint kernel
+caching, re-introduce it as a real, wired parameter then. See STATUS.md →
+Settled decisions (L3).
 
-- Keep the parameter as a documented forward-looking placeholder (status quo)?
-- Or drop it from the contract until a variant actually needs kernel caching?
-
-**Status:** open — parameter accepted and stored but intentionally unused;
-noted so it is not mistaken for wired behavior.
+**Status:** resolved — parameter removed from contract and code.
 
 ---
 

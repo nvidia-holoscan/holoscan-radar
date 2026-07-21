@@ -112,9 +112,9 @@ class CFARDetectorOp : public holoscan::Operator {
                ExecutionContext& context) override;
 
  private:
-  // Parameters per the locked contract. cfar_variant and max_cached_kernels
-  // are static; the rest are overridable (each has a same-named
-  // non-blocking override input port declared in setup()).
+  // Parameters per the locked contract. cfar_variant is static; the rest are
+  // overridable (each has a same-named non-blocking override input port
+  // declared in setup()).
   Parameter<CfarVariant> cfar_variant_;
   Parameter<int64_t> os_rank_;                  // OS only
   Parameter<std::vector<int64_t>> guard_cells_;    // (doppler, range)
@@ -124,10 +124,6 @@ class CFARDetectorOp : public holoscan::Operator {
   Parameter<double> threshold_scale_;
   Parameter<std::vector<int64_t>> nci_axes_;
   Parameter<int64_t> max_detections_;  // <= 0 → uncapped
-  // Contract parameter; the fused stencil has no per-footprint window kernel
-  // to rebuild, so there is nothing costly to cache and this is currently a
-  // no-op (kept for OPERATOR_API compliance).
-  Parameter<int64_t> max_cached_kernels_;
   // When false (default), a [live] LUT-key change serves the previous alpha LUT
   // on that tick while the new table calibrates in the background (one-shot
   // warn). When true, compute() blocks until the new LUT is ready.

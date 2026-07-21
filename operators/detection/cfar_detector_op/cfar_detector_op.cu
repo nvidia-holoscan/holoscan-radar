@@ -185,9 +185,6 @@ void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
              std::vector<int64_t>{});
   spec.param(max_detections_, "max_detections", "Max detections",
              "Cap on emitted detections (<= 0 → uncapped).", int64_t{0});
-  spec.param(max_cached_kernels_, "max_cached_kernels", "Max cached kernels",
-             "Distinct window footprints retained before eviction.",
-             int64_t{4});
   spec.param(blocking_alpha_lut_rebuild_, "blocking_alpha_lut_rebuild",
              "Blocking alpha LUT rebuild",
              "When false, serve the previous LUT while a new one calibrates "

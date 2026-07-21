@@ -57,7 +57,6 @@ or a deliberate contract change when the team has bandwidth.
 | # | Decision needed | Interim stance | Detail |
 | --- | --- | --- | --- |
 | L1 | **Bool mask dtype vs HSDK 4.3 DLPack** — keep `bool` (target HSDK 5), add `uint8` compat, or document C++-only until 5 | Emit/accept `kDLBool`; C++ wiring works with a logged GXF error; **Python bindings drain bool masks via `NullSinkOp` / harness `drain_ports` (no NumPy/`PyTensor` conversion on 4.3)** | [CFAR §1](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md); SnapshotGather / Beamscan / MVDR |
-| L3 | **`max_cached_kernels`** — keep as forward-looking no-op, or drop | Declared, unused (fused stencil) | [CFAR §3](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md) |
 | L4 | **`os_rank` indexing** — confirm 0-based ascending vs 1-based/descending | **Implemented 0-based ascending** | [CFAR §5](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md) |
 | L5 | **PROPOSED `alpha_lut` / calibration block** — adopt, revise, or reject as locked text | **Proposed-but-implemented** (`alpha_lut`, blocking rebuild, …) | [OPERATOR_API.md PROPOSED](OPERATOR_API.md); [CFAR §7](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md) |
 | L6 | **Exact-sized `detection_idx`** — keep (accept sync) or add fixed-capacity / valid-length | Matches locked exact-size contract today | [CFAR §8](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md) |
