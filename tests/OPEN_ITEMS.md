@@ -49,6 +49,26 @@ demo sim” experiment on that side.
 **Status:** open — needs a deliberate pick (likely after a cheap timing
 diagnostic); not a TEAM_BLOCKED contract stop.
 
+## 2. Simulator should regenerate noise each frame
+
+**Status:** open — low-impact change; performance hit needs to be studied before landing.
+
+The host `point_target_sim.hpp` path draws noise once at construction with a
+fixed `mt19937_64` seed, so every frame gets identical noise. For demo realism
+the simulator should reseed or draw fresh noise on each `simulate()` call.
+
+**Constraints before landing.**
+
+- Unit / integration tests depend on bit-identical cubes across runs (fixed
+  seed is a tautology guard; see `TESTING.md`). The fresh-noise path must be
+  opt-in (e.g. a `per_frame_noise` flag or a separate entry point) so the
+  deterministic SoT header is untouched.
+- The Python / CuPy demo path already draws per-frame noise; the concern is
+  the C++ host path only.
+- Measure the host noise-generation cost at demo cube sizes (dense-SIMO / MIMO
+  xl) before landing — noise draw is O(N) random samples and may be negligible
+  relative to upload, or may matter at high frame rates.
+
 <!--
 Recently landed:
 - Mirror the operator tree under `tests/cpp/` (common/, fmcw/, detection/,
