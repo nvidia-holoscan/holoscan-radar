@@ -31,6 +31,7 @@ from .radar_common import (  # noqa: F401
     WindowType,
     make_device_tensor,
 )
+
 # isort: on
 from .beamscan_estimator_op import BeamscanEstimatorOpF32  # noqa: F401
 from .beamscan_estimator_op import BeamscanEstimatorOpF64
