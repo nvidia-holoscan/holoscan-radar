@@ -12,8 +12,8 @@ workloads, sweeps every runtime-mutable (`[live]`) override param, attributes
 time to kernel vs `cudaMalloc`/memcpy/sync vs `compute()` NVTX phases, and emits
 a ranked, evidence-backed perf report.
 
-The `perf-optimize` agent skill (`.claude/skills/perf-optimize/`) drives it;
-this README is the substrate reference.
+The `perf-optimize` agent skill (`skills/perf-optimize/`) drives it; this README is
+the substrate reference.
 
 ## Layout
 
