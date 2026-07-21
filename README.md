@@ -32,13 +32,13 @@ complex64, `double` → complex128).
 | `FMCWDopplerProcessorOp<T>` | C++/CUDA (MatX) | Doppler compression: windowed slow-time FFT, zero-Doppler centering; `velocity_bins` axis output |
 | `FMCWRangeDopplerProcessorOp<T>` | C++/CUDA (MatX) | Fused range + optional clutter + Doppler in one node (bitwise parity with the split chain) |
 
-Python bindings are deferred to a later phase.
+Python bindings are available for the full operator set (see `python/holoscan/radar/`).
 
 ### Namespace
 
 - C++: `holoscan::radar`
 
-- Python: `holoscan.radar` (placeholder until bindings land)
+- Python: `holoscan.radar`
 
 ---
 
@@ -84,6 +84,40 @@ int main() { holoscan::make_application<MyApp>()->run(); }
 See [`applications/fmcw_siso`](applications/fmcw_siso) for the
 complete example, including the synthetic ADC source and peak reporting.
 
+### Python
+
+```python
+from holoscan.radar import (
+    ClutterFilterOp,
+    FMCWDopplerProcessorOp,
+    FMCWRangeProcessorOp,
+    FMCWWaveformDescriptor,
+    FMCWWaveformSpec,
+)
+
+waveform = FMCWWaveformDescriptor(
+    FMCWWaveformSpec(
+        carrier_frequency=77e9,
+        bandwidth=150e6,
+        chirp_duration=20e-6,
+        sample_rate=12.8e6,
+        chirp_repetition_interval=25e-6,
+    )
+)
+
+range_op = FMCWRangeProcessorOp(self, waveform=waveform, name="range")
+clutter = ClutterFilterOp(self, name="clutter")
+doppler = FMCWDopplerProcessorOp(self, waveform=waveform, name="doppler")
+
+# self.add_flow(source, range_op, {("adc_cube", "adc_cube")}); ...
+self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
+self.add_flow(clutter, doppler, {("range_profiles", "range_profiles")})
+```
+
+See [`applications/fmcw_siso/python`](applications/fmcw_siso/python) for the
+complete example. Every `applications/fmcw_*` app has a Python variant with
+the same graph as its C++ counterpart.
+
 ---
 
 ## Building from Source (without HoloHub CLI)
@@ -118,8 +152,12 @@ cmake --build build -j$(nproc)
 # C++ (GTest via CTest)
 ctest --test-dir build --output-on-failure -L unit
 
-# Python (pytest via CTest)
+# Python (pytest via CTest, or directly)
 ctest --test-dir build --output-on-failure -R pytest
+HOLOSCAN_RADAR_BUILD_DIR=build pytest tests/python/ -v
+
+# Optional long-running Monte Carlo statistical tests (CFAR Pfa, DOA vs. CRLB)
+HOLOSCAN_RADAR_BUILD_DIR=build pytest tests/python/ -v -m statistical
 ```
 
 ---

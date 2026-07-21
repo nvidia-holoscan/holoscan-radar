@@ -103,4 +103,5 @@ pipeline run on a display-less host (e.g. CI) provided a Vulkan driver is
 present.
 
 A Python variant with the same graph lives at
-[`python/fmcw_siso.py`](python/fmcw_siso.py); see [`python/README.md`](python/README.md).
+[`python/fmcw_siso.py`](python/fmcw_siso.py) (`config.py` colocated, same
+layering as the C++ side — see [`python/README.md`](python/README.md)).

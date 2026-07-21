@@ -1,9 +1,12 @@
-# Application-support library (`radar_app`)
+# Application-support library (`radar_app` / `python/`)
 
 Shared, app-agnostic building blocks for the FMCW example applications
-(`fmcw_siso`, `fmcw_simo`, `fmcw_dense_simo`, `fmcw_mimo`). It exists so those
-apps stay small and readable: each app is mostly a graph-wiring `compose()` plus
-its own `AppConfig`, not a pile of copy-pasted operators and scaffolding.
+(`fmcw_siso`, `fmcw_simo`, `fmcw_dense_simo`, `fmcw_mimo`), for both the C++
+side (`radar_app/`, this directory's original content) and the Python side
+(`python/`, documented in its own section below — same layering, same
+three-tier breakdown). It exists so those apps stay small and readable: each
+app is mostly a graph-wiring `compose()` plus its own `AppConfig`, not a pile
+of copy-pasted operators and scaffolding.
 
 The applications are organized around three kinds of component:
 
@@ -98,3 +101,79 @@ from a preset and pass it to `make_rd_holoviz_op`, and return
 `run_fmcw_app<MyApp>(...)` from `main`. The app keeps ownership of the graph
 edges — `radar_app` provides the operators, the config vocabulary, and the
 layout data; the app decides how they connect and where they render.
+
+---
+
+## Python (`applications/common/python/`)
+
+The Python demos (`fmcw_siso.py`, `fmcw_simo.py`, `fmcw_dense_simo.py`,
+`fmcw_mimo.py`) mirror the same three-tier breakdown as the C++ side:
+
+1. **Graph / flow wiring** — each app's `FmcwXApp.compose()`, in the app's own
+   `python/fmcw_X.py`. Thin: construct operators, `add_flow`, done.
+2. **App-specific operators / config** — colocated with the app in its own
+   `python/config.py` (`AppConfig` + `load_config`) and, where the app needs
+   truly app-specific operators, `python/custom_ops.py`. SISO and SIMO have no
+   `custom_ops.py` — they use the shared `SimAdcSourceOp` unchanged; dense and
+   MIMO do (dense: the angle bridges + `DenseClusterReportOp`; MIMO: the
+   TDM/DDM ADC sources + `DdmReportVelocityBinsOp`).
+3. **App-generalized operators / helpers** — reused across apps, here in
+   `applications/common/python/`. Most of the viz/report operators are
+   already bound from C++ (`radar_app`'s `ClusterReportOp`, `RollingPlotOp`,
+   `BoresightViewOp`, etc. — imported straight from `holoscan.radar`); this
+   directory covers what is Python-only.
+
+Both `config.py` and `custom_ops.py` are imported bare (`import config`, `from
+custom_ops import ...`) from the app's `fmcw_X.py` — this works because each
+app runs as a script, which puts that script's own directory at
+`sys.path[0]`, the Python analogue of C++'s colocated bare
+`#include "config.hpp"  // NOLINT(build/include_subdir)`. Don't import these
+modules by name from another process: `config` / `custom_ops` are not
+qualified package names, so importing two apps' `config.py` in the same
+interpreter would collide in `sys.modules`.
+
+### Python layout
+
+| Path | Role |
+| --- | --- |
+| `demo_config.py` | `CommonRunConfig` (mirrors `radar_app/app/config.hpp::CommonRunConfig`; every app's `AppConfig` inherits from it via Python dataclass inheritance) + the app-owned YAML parse helpers (`parse_common_run_config`, `parse_target(s)`, `parse_cube_dims`, `parse_noise`, `parse_waveform`, `parse_window_spec`, `parse_angle_convention`, `parse_tx_schedule`, `parse_ddm_code`, geometry builders, `grid_extent`) + `cluster_layer_name` / `make_view` + `port_tensor` / `tensor_to_numpy` |
+| `sim.py` | The point-target simulator: `SimWaveform`, `PointTarget`, `SimScene`, `SimResult`, `simulate()`, `advance_scene()` — mirrors `radar_common/sim/point_target_sim.hpp` |
+| `mimo_sim.py` | MIMO TDM/DDM scene + simulators (`MimoScene`, `derive_truth`, `simulate_mimo_*`, the DDM code helpers) — mirrors `radar_common/sim/mimo_sim.hpp`; reuses `sim.py`'s `SimWaveform` / `PointTarget` / `SimResult` rather than redefining them, same as the C++ header |
+| `ops.py` | `SimAdcSourceOp` — rank-agnostic synthetic ADC source, mirrors `radar_app/app/source.hpp`; `TensorMapDiscardOp` — a Python-only addition (see caveat below) |
+| `driver.py` | `resolve_config_path()` + `run_fmcw_app()` — mirrors `radar_app/app/driver.hpp` |
+
+### The config boundary, Python-specific caveat
+
+The config-boundary rule is the same as the C++ side (see above): operator
+YAML blocks flow through Holoscan's `from_config()`, never manual per-app
+parsing. All four Python demos follow this for every operator block **except
+one**: `fmcw_mimo`'s `mimo_coherent_compensation`, which stays a manual kwargs
+dict (`demo_config.parse_mimo_coherent_compensation`).
+
+The reason is a Python-only pybind11 quirk, not a design choice: Holoscan's
+Python `Operator.__init__` applies `from_config()`'s `ArgList` (arrives as a
+positional arg) **after** all keyword arguments, regardless of the order they
+appear at the call site. In C++, `make_operator<Op>(name, from_config(...),
+Arg("x") = resolved_value)` applies arguments strictly in the order given, so
+a trailing explicit `Arg` overrides `from_config()`. In Python, that ordering
+guarantee does not hold — `from_config()` always wins over a same-named kwarg.
+This only matters when an app must inject a resolved value that shares a YAML
+key with the block (MIMO's `ddm_code`, which the app may expand from
+`generate_phase_codes` into explicit `phase_codes`); it does not matter when
+the injected kwarg has no corresponding YAML key (e.g. `array_geometry` on
+`BeamscanEstimatorOp`, `tx_positions` / `rx_positions` / `wavelength` on
+`VirtualArrayAssemblyOp` — both combine `from_config()` with extra kwargs
+safely).
+
+### Known binding gaps (not fixed here)
+
+- `radar_app::TensorMapDiscardOp` (`report_ops.hpp`) is not exposed to
+  Python, so `ops.TensorMapDiscardOp` is a small Python-only reimplementation.
+- The Python `ClusterReportOp` binding does not expose `az_grid` / `el_grid` /
+  `cadence` as read-write the way the C++ struct fields do, so
+  `fmcw_dense_simo` keeps its own `DenseClusterReportOp` in `custom_ops.py`
+  rather than reusing the shared op the C++ app uses.
+
+Both are candidates for a future pybind11-binding change (touching
+`_radar_app_bindings.cpp` + a rebuild), out of scope for the Python
+application-structure work that landed this section.

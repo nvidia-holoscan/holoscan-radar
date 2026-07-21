@@ -81,3 +81,10 @@ Set `visualize: false` or `headless: true` for log-only runs without a display.
 | Doppler out | per-TX chirps | `N/M − guard` bins | full `N` bins |
 
 Shared: `tx_array`, `rx_array`, targets, beamscan grid, `virtual_array_assembly.overlap_policy: keep_all`.
+
+## Python
+
+A Python variant with the same graph lives at
+[`python/fmcw_mimo.py`](python/fmcw_mimo.py) (`config.py` + `custom_ops.py`
+colocated, same layering as the C++ side — see
+[`python/README.md`](python/README.md)).
