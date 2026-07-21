@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-
 from common.python.demo_config import (
     CommonRunConfig,
     make_ura_geometry,

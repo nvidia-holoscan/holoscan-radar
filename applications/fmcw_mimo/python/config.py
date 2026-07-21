@@ -21,8 +21,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from holoscan.radar import MultiplexingScheme, TXSchedule
-
 from common.python.demo_config import (
     CommonRunConfig,
     flatten_positions,
@@ -45,6 +43,8 @@ from common.python.mimo_sim import (
     fill_zadoff_chu_phase_codes,
     resolve_ddm_offsets,
 )
+
+from holoscan.radar import MultiplexingScheme, TXSchedule
 
 
 @dataclass

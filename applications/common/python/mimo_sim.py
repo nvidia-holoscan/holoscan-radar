@@ -19,10 +19,16 @@ import cmath
 import math
 from dataclasses import dataclass, field
 
-import cupy as cp
+# holoscan.radar must load before cupy / common.python.sim - MatX CUDA cache /
+# atexit ordering, same rule the app entry points follow.
+# isort: off
 from holoscan.radar import TXSchedule
 
+import cupy as cp
+
 from common.python.sim import K_PI, PointTarget, SimResult, SimWaveform
+
+# isort: on
 
 K_C = 299792458.0
 

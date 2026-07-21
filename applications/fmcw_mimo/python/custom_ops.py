@@ -16,9 +16,6 @@ from __future__ import annotations
 
 import cupy as cp
 import numpy as np
-from holoscan.core import Operator, OperatorSpec
-from holoscan.radar import CadenceMeter, TXSchedule
-
 from common.python.mimo_sim import (
     MimoScene,
     advance_scene,
@@ -26,6 +23,9 @@ from common.python.mimo_sim import (
     simulate_mimo_ddm_phase_coded,
     simulate_mimo_tdm_interleaved,
 )
+
+from holoscan.core import Operator, OperatorSpec
+from holoscan.radar import CadenceMeter, TXSchedule
 
 
 class DdmReportVelocityBinsOp(Operator):

@@ -14,10 +14,15 @@ not fixed here) — so the demos keep a small local drain operator instead.
 
 from __future__ import annotations
 
+# holoscan.radar must load before common.python.sim (which imports cupy) -
+# MatX CUDA cache / atexit ordering, same rule the app entry points follow.
+# isort: off
 from holoscan.core import Operator, OperatorSpec
 from holoscan.radar import CadenceMeter
 
 from common.python.sim import SimScene, advance_scene, simulate
+
+# isort: on
 
 
 class SimAdcSourceOp(Operator):

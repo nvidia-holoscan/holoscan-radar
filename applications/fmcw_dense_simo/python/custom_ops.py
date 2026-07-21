@@ -22,10 +22,10 @@ import logging
 
 import cupy as cp
 import numpy as np
+from common.python.demo_config import port_tensor, tensor_to_numpy
+
 from holoscan.core import Operator, OperatorSpec
 from holoscan.radar import CadenceMeter
-
-from common.python.demo_config import port_tensor, tensor_to_numpy
 
 logger = logging.getLogger("fmcw_dense_simo")
 
