@@ -215,6 +215,52 @@ HOLOSCAN_RADAR_BUILD_DIR=build pytest tests/python/ -v -m statistical
 
 ---
 
+## Performance Testing
+
+A measurement-only harness under [`performance/`](performance) — `perf_*`
+binaries/scripts, one per operator, both in C++ and Python (mirrored scenario
+matrices). Each times end-to-end frame latency with a device sync at the
+terminal sink and prints a text report (optional JSON via `--output`); these
+are characterization tools, not pass/fail CI gates (see
+[`performance/cpp/CMakeLists.txt`](performance/cpp/CMakeLists.txt) for the
+tiny smoke tests that *are* wired into CI).
+
+```bash
+# Build (opt-in; requires an existing testing-enabled configure)
+cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_PERFORMANCE=ON
+cmake --build build -j$(nproc)
+
+# C++ — CI-style smoke for every registered perf tool
+ctest --test-dir build --output-on-failure -L performance
+
+# C++ — one operator, default (small) matrix
+./build/performance/cpp/perf_cfar_detector
+
+# C++ — full matrix + artifacts
+./build/performance/cpp/perf_cfar_detector --full \
+  --output perf_results/perf_cfar_detector.full.json \
+  --text   perf_results/perf_cfar_detector.full.txt
+
+# Python — fast smoke of every perf script
+export HOLOSCAN_RADAR_BUILD_DIR=build
+for s in performance/python/perf_*.py; do
+  python "$s" --size xs --repeats 1 --warmup 1 --measured 2 --quiet
+done
+
+# Python — one operator, default matrix (mirrors the C++ script above)
+python performance/python/perf_cfar_detector.py
+```
+
+`--full` runs the large scenario matrix (matches the C++ default); plain
+invocations run the smaller default matrix. Some full-matrix scenarios (e.g.
+GO/SO-CFAR mid/large footprints) trigger a multi-second Monte Carlo α-LUT
+calibration on a cold cache — expected, not a regression; steady-state
+latency stays sub-millisecond regardless. See
+[`performance/python/README.md`](performance/python/README.md) for the full
+CLI and script list.
+
+---
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
