@@ -87,6 +87,19 @@ if(NOT DEFINED HOLOSCAN_RADAR_BUILD_PERFORMANCE)
         CACHE BOOL "Build the radar module's performance characterization suite")
 endif()
 
+# NVTX instrumentation of operator compute() phases (resolve-overrides /
+# obtain-buffers / stage-kernel / emit) for nsys attribution. Off by default so
+# normal and CI builds keep a zero-overhead hot path: the RADAR_NVTX_RANGE
+# macros and radar_common/sdk/nvtx.hpp Phase marker compile to no-ops unless a
+# target is built with the RADAR_NVTX compile definition. Enabling this option
+# adds that definition (and links the header-only CUDA::nvtx3 target when
+# available) to the instrumented operator targets. The perf-optimize harness
+# turns it on alongside -DHOLOSCAN_RADAR_BUILD_PERFORMANCE=ON.
+if(NOT DEFINED HOLOSCAN_RADAR_PERF_NVTX)
+    set(HOLOSCAN_RADAR_PERF_NVTX OFF
+        CACHE BOOL "Instrument operator compute() phases with NVTX ranges for nsys")
+endif()
+
 # ---------------------------------------------------------------------------
 # Python package root in the build tree.
 # PYTHONPATH=${HOLOSCAN_RADAR_PYTHON_ROOT} lets Python find
@@ -118,6 +131,10 @@ endif()
 # without a HoloHub clone.
 list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(HoloHubConfigHelpers)
+
+# radar_enable_perf_nvtx(<target>): opt an operator into NVTX compute()-phase
+# instrumentation, gated by the HOLOSCAN_RADAR_PERF_NVTX option above.
+include(RadarPerfNvtx)
 
 # ---------------------------------------------------------------------------
 # Subprojects

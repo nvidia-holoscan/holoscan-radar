@@ -18,6 +18,10 @@ target_link_libraries(fmcw_range_processor_op
 set_property(TARGET fmcw_range_processor_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
+# Optional NVTX compute()-phase instrumentation (no-op unless
+# -DHOLOSCAN_RADAR_PERF_NVTX=ON). See cmake/RadarPerfNvtx.cmake.
+radar_enable_perf_nvtx(fmcw_range_processor_op)
+
 install(TARGETS fmcw_range_processor_op
     EXPORT holoscan_fmcw_range_processor_op_targets
 )

@@ -12,6 +12,7 @@
 
 #include "fmcw/fmcw_range_processor_op/range_stage.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
+#include "radar_common/sdk/nvtx.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/sdk/override_param.hpp"
@@ -33,6 +34,7 @@ FMCWRangeProcessorOp<T>::~FMCWRangeProcessorOp() = default;
 
 template <typename T>
 void FMCWRangeProcessorOp<T>::initialize() {
+  RADAR_NVTX_RANGE("FMCWRangeProcessorOp::initialize");
   ensure_radar_arg_setters();
   Operator::initialize();
 
@@ -53,6 +55,7 @@ void FMCWRangeProcessorOp<T>::initialize() {
 
 template <typename T>
 void FMCWRangeProcessorOp<T>::setup(OperatorSpec& spec) {
+  RADAR_NVTX_RANGE("FMCWRangeProcessorOp::setup");
   spec.input<holoscan::TensorMap>("adc_cube");
   spec.output<holoscan::TensorMap>("range_profiles");
   // Optional axis output: emitted only when a waveform descriptor is
@@ -107,6 +110,13 @@ void FMCWRangeProcessorOp<T>::compute(InputContext& op_input,
   const std::string who =
       std::string("FMCWRangeProcessorOp<") + precision_name<T>() + ">";
 
+  // NVTX phase marker: splits this tick into resolve-overrides /
+  // classify-validate / stage-kernel / emit so nsys can attribute intra-tick
+  // time (no-op unless built with -DHOLOSCAN_RADAR_PERF_NVTX=ON). The coarse
+  // whole-tick range comes from Holoscan's GXF wrapper.
+  RADAR_NVTX_PHASE_SCOPE();
+  RADAR_NVTX_PHASE("FMCWRangeProcessorOp:resolve-overrides");
+
   // 1. Receive the data input: a single-entry TensorMap, lenient on the
   // key (module convention).
   std::shared_ptr<holoscan::Tensor> input =
@@ -150,6 +160,7 @@ void FMCWRangeProcessorOp<T>::compute(InputContext& op_input,
   }
 
   // 3. Classify and validate the input against the locked contract.
+  RADAR_NVTX_PHASE("FMCWRangeProcessorOp:classify-validate");
   const InputPrecision precision =
       classify_input_dtype<T>(*input, "adc_cube", /*allow_real=*/true);
   const bool complex_input = precision == InputPrecision::kComplex;
@@ -183,7 +194,10 @@ void FMCWRangeProcessorOp<T>::compute(InputContext& op_input,
   // before the processing chain — STATUS.md decision 2026-07-10).
   require_cuda_accessible(*input, "adc_cube", who);
 
-  // 5. Run the range stage into a freshly allocated output tensor.
+  // 5. Run the range stage into a freshly allocated output tensor. The range
+  // bounds the kernel *enqueue*; true GPU duration comes from the CUDA kernel
+  // timeline (nsys), not this NVTX phase wall-time.
+  RADAR_NVTX_PHASE("FMCWRangeProcessorOp:stage-kernel");
   const int64_t num_bins =
       detail::range_num_bins(complex_input, batched.cols, effective_nfft_);
 
@@ -202,6 +216,7 @@ void FMCWRangeProcessorOp<T>::compute(InputContext& op_input,
                              batched.cols, profiles->data(), num_bins,
                              warn_on_rebuild, stream);
 
+  RADAR_NVTX_PHASE("FMCWRangeProcessorOp:emit");
   holoscan::TensorMap profiles_map;
   profiles_map.insert({"range_profiles", profiles});
   op_output.emit(profiles_map, "range_profiles");
