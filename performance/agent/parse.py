@@ -227,7 +227,14 @@ def build_size_analysis(size: str, clean_json: dict, stats: dict, op_name: str) 
         op_name,
     )
 
+    # Compute-tick count: prefer our per-tick NVTX phases; for operators not yet
+    # NVTX-instrumented fall back to Holoscan's GXF tick range, then to the
+    # most-frequent kernel's instance count.
     ticks = _tick_count(ph["phases"])
+    if not ticks and ph["whole_op_tick"]:
+        ticks = ph["whole_op_tick"].get("instances") or 0
+    if not ticks and kern["kernels"]:
+        ticks = max((k["instances"] for k in kern["kernels"]), default=0)
     cats = api["by_category"]
 
     def cat_ns(name):
