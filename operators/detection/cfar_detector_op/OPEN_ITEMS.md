@@ -84,17 +84,18 @@ is a bottleneck. The LUT is tiny (≤ a few hundred doubles), rebuilt only when
 Revisit only if dynamic per-tick window footprints on very large maps make
 the host scan + inversion dominate.
 
-**Questions for the team.**
+**Resolved (L2, 2026-07-21).** Adopt the incomplete-beta relation as the
+pinned CA-CFAR calibration (chosen over reverting to the power-law
+placeholder, which misses target Pfa for `K > 1`). `OPERATOR_API.md`'s locked
+`pfa` and `nci_axes` bullets now state `pfa = I_{1/(1 + α/N)}(N·K, K)`,
+inverted numerically for α per training-cell count `N`, reducing to
+`α = N·(pfa^(−1/N) − 1)` at `K = 1`. The `cfar_alpha.cpp` implementation is
+unchanged (already correct); this ratifies it. Validated by Monte Carlo
+(`test_cfar_detector_statistical`: `CaMonteCarloPfaK1`,
+`CaMonteCarloPfaNciK8`). GO/SO/OS `K > 1` Monte Carlo calibration is a
+separate item (§7 / TEAM_BLOCKED L5). See STATUS.md → Settled decisions (L2).
 
-- Adopt the incomplete-beta relation as the pinned `K > 1` closed form in
-  `OPERATOR_API.md` (signal-processing owner sign-off)?
-- Or revert to the power-law placeholder and gate `nci_axes` until the
-  contract is updated?
-
-**Status:** open — **code is ahead of the contract**; landed preemptively so
-`nci_axes` development and Monte Carlo calibration can continue. Resolve by
-either updating `OPERATOR_API.md` to match the implementation or reverting
-the implementation to match the contract.
+**Status:** resolved — contract updated to match the implementation.
 
 ---
 
