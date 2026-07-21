@@ -1,0 +1,339 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# SIMO FMCW dense angle-then-cluster pipeline (Python):
+#
+#   SimAdcSourceOp -> Range -> Clutter -> Doppler
+#     -> PhaseShiftBeamformerOp -> CFARDetectorOp (RDA cube)
+#     -> AnglePeakPickOp -> CubeAoaLookupOp -> FeatureAssembly [r,v,az,el]
+#     -> ClusterDBSCAN -> DetectionReduction -> DenseClusterReportOp
+#     [-> viz via RdChannelSliceOp, ClusterOverlayOp, RollingPlotOp, BoresightViewOp]
+#
+# Configuration is loaded from fmcw_dense_simo.yaml (default: cpp copy). This
+# file is the graph only - AppConfig / load_config live in config.py, the
+# dense-path bridges in custom_ops.py (both colocated); operator blocks flow
+# through Holoscan's from_config().
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+_BUILD_DIR = os.environ.get("HOLOSCAN_RADAR_BUILD_DIR")
+if _BUILD_DIR:
+    import holoscan as _holoscan_pkg
+
+    _build_holoscan = os.path.join(_BUILD_DIR, "python", "lib", "holoscan")
+    if _build_holoscan not in _holoscan_pkg.__path__:
+        _holoscan_pkg.__path__.insert(0, _build_holoscan)
+
+_APP_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(_APP_ROOT))
+
+# Load holoscan.radar before cupy (MatX CUDA cache / atexit ordering), and
+# before importing config.py (its common.python.sim import pulls in cupy).
+# isort: off
+from holoscan.conditions import CountCondition, PeriodicCondition  # noqa: E402
+from holoscan.core import Application  # noqa: E402
+from holoscan.operators import HolovizOp  # noqa: E402
+from holoscan.radar import BoresightViewOp  # noqa: E402
+from holoscan.radar import install_matx_cache_atexit  # noqa: E402
+from holoscan.radar import (
+    AssemblyFeature,
+    CadenceMeter,
+    CFARDetectorOp,
+    ClusterDBSCANOp,
+    ClusterOverlayOp,
+    ClutterFilterOp,
+    DetectionReductionOp,
+    FeatureAssemblyOp,
+    FMCWDopplerProcessorOp,
+    FMCWRangeProcessorOp,
+    NullSinkOp,
+    PhaseShiftBeamformerOp,
+    RdChannelSliceOp,
+    RdMapToImageOp,
+    RollingPlotOp,
+    cluster_palette,
+    make_turbo_lut,
+)
+
+import cupy as cp  # noqa: E402,F401
+
+import config  # noqa: E402 (colocated, script-local - see config.py docstring)
+import custom_ops  # noqa: E402 (colocated, script-local - see config.py docstring)
+from common.python.demo_config import cluster_layer_name, grid_extent, make_view  # noqa: E402
+from common.python.driver import run_fmcw_app  # noqa: E402
+from common.python.ops import SimAdcSourceOp  # noqa: E402
+
+# isort: on
+
+install_matx_cache_atexit()
+
+K_NUM_CLUSTER_COLORS = 8
+K_NOISE_LAYER_NAME = "noise"
+K_RANGE_PLOT_LAYER = "range_plot"
+K_VELOCITY_PLOT_LAYER = "velocity_plot"
+K_RANGE_TITLE_LAYER = "range_title"
+K_VELOCITY_TITLE_LAYER = "velocity_title"
+K_BORESIGHT_PLOT_LAYER = "boresight_plot"
+K_BORESIGHT_TITLE_LAYER = "boresight_title"
+
+
+class FmcwDenseSimoApp(Application):
+    def __init__(self, cfg: config.AppConfig):
+        super().__init__()
+        self.cfg = cfg
+        self.cadence: CadenceMeter | None = None
+
+    def compose(self) -> None:
+        cfg = self.cfg
+        period_ns = int(cfg.frame_period * 1e9)
+
+        cadence = None
+        if cfg.meter_cadence:
+            cadence = CadenceMeter()
+            cadence.frame_period_s = cfg.frame_period
+            cadence.log_every = cfg.meter_log_every
+            self.cadence = cadence
+
+        source = SimAdcSourceOp(
+            self,
+            CountCondition(self, count=cfg.num_frames),
+            PeriodicCondition(self, recess_period=period_ns),
+            scene=cfg.scene,
+            frame_period=cfg.frame_period,
+            cadence=cadence,
+            name="adc_source",
+        )
+
+        self.config(str(cfg.config_path))
+
+        range_op = FMCWRangeProcessorOp(
+            self, self.from_config("range_processor"), name="range_processor"
+        )
+        clutter = ClutterFilterOp(self, self.from_config("clutter_filter"), name="clutter_filter")
+        doppler = FMCWDopplerProcessorOp(
+            self, self.from_config("doppler_processor"), name="doppler_processor"
+        )
+        beamformer = PhaseShiftBeamformerOp(
+            self,
+            self.from_config("phase_shift_beamformer"),
+            array_geometry=cfg.array_geometry,
+            name="phase_shift_beamformer",
+        )
+        cfar = CFARDetectorOp(self, self.from_config("cfar_detector"), name="cfar_detector")
+        peak_pick = custom_ops.AnglePeakPickOp(self, name="angle_peak_pick")
+        aoa_lookup = custom_ops.CubeAoaLookupOp(
+            self,
+            az_grid=cfg.az_angles,
+            el_grid=cfg.el_angles,
+            name="cube_aoa_lookup",
+        )
+
+        feature_assembly = FeatureAssemblyOp(
+            self,
+            features=[
+                AssemblyFeature.RANGE,
+                AssemblyFeature.VELOCITY,
+                AssemblyFeature.AZ,
+                AssemblyFeature.EL,
+            ],
+            name="feature_assembly",
+        )
+        cluster = ClusterDBSCANOp(self, self.from_config("cluster_dbscan"), name="cluster_dbscan")
+        reduction = DetectionReductionOp(self, self.from_config("reduction"), name="reduction")
+        report = custom_ops.DenseClusterReportOp(
+            self,
+            az_grid=cfg.az_angles,
+            el_grid=cfg.el_angles,
+            cadence=cadence,
+            name="dense_cluster_report",
+        )
+
+        self.add_flow(source, range_op, {("adc_cube", "adc_cube")})
+        self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
+        self.add_flow(clutter, doppler, {("range_profiles", "range_profiles")})
+        self.add_flow(doppler, beamformer, {("rd_maps", "rd_maps")})
+        self.add_flow(beamformer, cfar, {("rda_cube", "rd_maps")})
+
+        self.add_flow(
+            cfar,
+            peak_pick,
+            {
+                ("detection_idx", "detection_idx"),
+                ("detection_score", "detection_score"),
+            },
+        )
+        mask_sink = NullSinkOp(self, name="detection_mask_sink")
+        noise_sink = NullSinkOp(self, name="noise_estimate_sink")
+        self.add_flow(cfar, mask_sink, {("detection_mask", "input")})
+        self.add_flow(cfar, noise_sink, {("noise_estimate", "input")})
+
+        self.add_flow(peak_pick, aoa_lookup, {("detection_idx", "detection_idx")})
+        self.add_flow(aoa_lookup, feature_assembly, {("aoa_estimates", "aoa_estimates")})
+        row_index_sink = NullSinkOp(self, name="aoa_row_index_sink")
+        self.add_flow(aoa_lookup, row_index_sink, {("row_index", "input")})
+
+        self.add_flow(peak_pick, feature_assembly, {("detection_idx", "detection_idx")})
+        self.add_flow(range_op, feature_assembly, {("range_bins", "range_bins")})
+        self.add_flow(doppler, feature_assembly, {("velocity_bins", "velocity_bins")})
+        self.add_flow(feature_assembly, cluster, {("points", "points")})
+
+        self.add_flow(cluster, reduction, {("labels", "labels")})
+        self.add_flow(peak_pick, reduction, {("detection_idx", "detection_idx")})
+        self.add_flow(feature_assembly, reduction, {("points", "points")})
+
+        self.add_flow(feature_assembly, report, {("points", "points")})
+        self.add_flow(cluster, report, {("labels", "labels"), ("sizes", "sizes")})
+        self.add_flow(reduction, report, {("rep_idx", "rep_idx")})
+        self.add_flow(range_op, report, {("range_bins", "range_bins")})
+        self.add_flow(doppler, report, {("velocity_bins", "velocity_bins")})
+
+        if cfg.visualize:
+            self._compose_display(doppler, peak_pick, cluster, reduction, range_op)
+
+    def _compose_display(self, doppler, detections, cluster, reduction, range_op):
+        cfg = self.cfg
+        ch_slice = RdChannelSliceOp(self, channel=0, name="rd_channel_slice")
+        to_image = RdMapToImageOp(self, name="rd_map_to_image")
+        overlay = ClusterOverlayOp(self, name="cluster_overlay")
+        det_idx_rd = custom_ops.TrailingIdxColumnsOp(self, name="det_idx_rd_slice")
+
+        input_specs: list[HolovizOp.InputSpec] = []
+        input_specs.append(HolovizOp.InputSpec("rd_map", HolovizOp.InputType.COLOR_LUT))
+        palette = cluster_palette()
+
+        def add_crosses(name: str, color: list[float]) -> None:
+            spec = HolovizOp.InputSpec(name, HolovizOp.InputType.CROSSES)
+            spec.color = color
+            spec.line_width = 2.0
+            spec.priority = 1
+            input_specs.append(spec)
+
+        for c in range(K_NUM_CLUSTER_COLORS):
+            add_crosses(cluster_layer_name(c), palette[c])
+        add_crosses(K_NOISE_LAYER_NAME, [0.6, 0.6, 0.6, 1.0])
+
+        plot: RollingPlotOp | None = None
+        boresight: BoresightViewOp | None = None
+        rep_idx_rd: custom_ops.TrailingIdxColumnsOp | None = None
+        rep_aoa: custom_ops.CubeAoaLookupOp | None = None
+
+        if cfg.plots.enable:
+            left = make_view(0.0, 0.0, 0.60, 1.0)
+            for spec in input_specs:
+                spec.views = [left]
+
+            def add_plot(img_name: str, title_name: str, title: str, oy: float, h: float) -> None:
+                image = HolovizOp.InputSpec(img_name, HolovizOp.InputType.COLOR)
+                image.views = [make_view(0.63, oy, 0.35, h)]
+                input_specs.append(image)
+                text = HolovizOp.InputSpec(title_name, HolovizOp.InputType.TEXT)
+                text.text = [title]
+                text.color = [1.0, 1.0, 1.0, 1.0]
+                text.priority = 2
+                text.views = [make_view(0.63, oy, 0.35, h)]
+                input_specs.append(text)
+
+            panel_h = 0.30
+            add_plot(
+                K_RANGE_PLOT_LAYER,
+                K_RANGE_TITLE_LAYER,
+                "Range (m) vs time (s)",
+                0.02,
+                panel_h,
+            )
+            add_plot(
+                K_VELOCITY_PLOT_LAYER,
+                K_VELOCITY_TITLE_LAYER,
+                "Velocity (m/s) vs time (s)",
+                0.35,
+                panel_h,
+            )
+            add_plot(
+                K_BORESIGHT_PLOT_LAYER,
+                K_BORESIGHT_TITLE_LAYER,
+                "Boresight az/el (deg)",
+                0.68,
+                panel_h,
+            )
+            plot = RollingPlotOp(
+                self,
+                window=cfg.plots.window,
+                frame_period=cfg.frame_period,
+                name="rolling_plot",
+            )
+            plot.velocity_ylim_lo = cfg.plots.velocity_ylim_lo
+            plot.velocity_ylim_hi = cfg.plots.velocity_ylim_hi
+            rep_idx_rd = custom_ops.TrailingIdxColumnsOp(self, name="rep_idx_rd_slice")
+            rep_aoa = custom_ops.CubeAoaLookupOp(
+                self,
+                az_grid=cfg.az_angles,
+                el_grid=cfg.el_angles,
+                name="cube_aoa_lookup_rep",
+            )
+            az_lo, az_hi = grid_extent(cfg.az_angles, -0.35, 0.35)
+            el_lo, el_hi = grid_extent(cfg.el_angles, -0.1, 0.1)
+            boresight = BoresightViewOp(
+                self,
+                az_lo=az_lo,
+                az_hi=az_hi,
+                el_lo=el_lo,
+                el_hi=el_hi,
+                name="boresight_view",
+            )
+
+        visualizer = HolovizOp(
+            self,
+            tensors=input_specs,
+            color_lut=make_turbo_lut(),
+            window_title="FMCW SIMO dense - RD (ch0) + clusters",
+            width=1200 if cfg.plots.enable else 800,
+            height=760 if cfg.plots.enable else 600,
+            headless=cfg.headless,
+            name="holoviz",
+        )
+
+        self.add_flow(doppler, ch_slice, {("rd_maps", "rd_maps")})
+        self.add_flow(ch_slice, to_image, {("rd_map", "rd_maps")})
+        self.add_flow(to_image, visualizer, {("rd_image", "receivers")})
+        self.add_flow(detections, det_idx_rd, {("detection_idx", "idx")})
+        self.add_flow(det_idx_rd, overlay, {("idx", "detection_idx")})
+        self.add_flow(cluster, overlay, {("labels", "labels")})
+        self.add_flow(ch_slice, overlay, {("rd_map", "rd_maps")})
+        self.add_flow(overlay, visualizer, {("overlay", "receivers")})
+
+        if plot is not None and rep_idx_rd is not None and rep_aoa is not None:
+            self.add_flow(reduction, rep_idx_rd, {("rep_idx", "idx")})
+            self.add_flow(rep_idx_rd, plot, {("idx", "rep_idx")})
+            self.add_flow(range_op, plot, {("range_bins", "range_bins")})
+            self.add_flow(doppler, plot, {("velocity_bins", "velocity_bins")})
+            self.add_flow(plot, visualizer, {("plots", "receivers")})
+        if boresight is not None and rep_aoa is not None:
+            self.add_flow(reduction, rep_aoa, {("rep_idx", "detection_idx")})
+            self.add_flow(
+                rep_aoa,
+                boresight,
+                {("aoa_estimates", "aoa_estimates"), ("row_index", "labels")},
+            )
+            self.add_flow(boresight, visualizer, {("plot", "receivers")})
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = argv if argv is not None else sys.argv
+    cpp_dir = Path(__file__).resolve().parent.parent / "cpp"
+    return run_fmcw_app(
+        FmcwDenseSimoApp,
+        argv,
+        "fmcw_dense_simo",
+        cpp_dir,
+        "fmcw_dense_simo.yaml",
+        config.load_config,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

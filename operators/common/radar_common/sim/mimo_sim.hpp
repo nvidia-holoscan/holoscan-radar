@@ -205,4 +205,80 @@ inline SimResult simulate_mimo_ddm_coded(const SimScene& scene,
   return result;
 }
 
+// DDM with arbitrary per-(tx, chirp) unit-magnitude codes (non-linear demux).
+// `phase_codes` length must be num_tx * num_chirps, row-major (tx, chirp).
+inline SimResult simulate_mimo_ddm_phase_coded(
+    const SimScene& scene,
+    const std::vector<std::complex<double>>& phase_codes) {
+  if (scene.tx_positions.empty() || scene.rx_positions.empty()) {
+    throw std::invalid_argument(
+        "simulate_mimo_ddm_phase_coded: need TX and RX");
+  }
+  const int64_t num_rx = static_cast<int64_t>(scene.rx_positions.size());
+  const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
+  const int64_t num_chirps = scene.num_chirps;
+  const int64_t samples = scene.samples_per_chirp;
+  const double pri = scene.waveform.chirp_repetition_interval;
+  const double fs = scene.waveform.sample_rate;
+  const double slope = scene.waveform.slope();
+  const double f_c = scene.waveform.carrier_frequency;
+  const double c = scene.propagation_speed;
+
+  if (static_cast<int64_t>(phase_codes.size()) != num_tx * num_chirps) {
+    throw std::invalid_argument(
+        "simulate_mimo_ddm_phase_coded: phase_codes length must be "
+        "num_tx * num_chirps");
+  }
+
+  SimResult result;
+  result.shape = {num_rx, num_chirps, samples};
+  result.cube.assign(static_cast<size_t>(num_rx * num_chirps * samples),
+                     {0.0, 0.0});
+
+  for (const PointTarget& target : scene.targets) {
+    const TargetTruth truth = derive_truth(target);
+    result.truth.push_back(truth);
+
+    for (int64_t k = 0; k < num_chirps; ++k) {
+      const double range_k =
+          truth.range + truth.radial_velocity * static_cast<double>(k) * pri;
+      for (int64_t rx = 0; rx < num_rx; ++rx) {
+        for (int64_t s = 0; s < samples; ++s) {
+          const double t = static_cast<double>(s) / fs;
+          std::complex<double> acc{0.0, 0.0};
+          for (int64_t tx = 0; tx < num_tx; ++tx) {
+            const Vec3& tx_pos = scene.tx_positions[static_cast<size_t>(tx)];
+            const double aperture =
+                dot(tx_pos, truth.look_direction) +
+                dot(scene.rx_positions[static_cast<size_t>(rx)],
+                    truth.look_direction);
+            const double tau = (2.0 * range_k - aperture) / c;
+            const double beat = slope * tau;
+            const double phase =
+                2.0 * kPi * (beat * t) - 2.0 * kPi * f_c * tau;
+            const auto code =
+                phase_codes[static_cast<size_t>(tx * num_chirps + k)];
+            acc += target.amplitude * code *
+                   std::complex<double>(std::cos(phase), std::sin(phase));
+          }
+          const size_t idx =
+              static_cast<size_t>((rx * num_chirps + k) * samples + s);
+          result.cube[idx] += acc;
+        }
+      }
+    }
+  }
+
+  if (scene.snr_db.has_value()) {
+    const double noise_power = std::pow(10.0, -(*scene.snr_db) / 10.0);
+    const double sigma = std::sqrt(noise_power / 2.0);
+    std::mt19937_64 rng(scene.seed);
+    std::normal_distribution<double> gauss(0.0, sigma);
+    for (auto& v : result.cube) {
+      v += std::complex<double>(gauss(rng), gauss(rng));
+    }
+  }
+  return result;
+}
+
 }  // namespace holoscan::radar::sim

@@ -29,3 +29,5 @@ include(GNUInstallDirs)
 install(FILES snapshot_gather_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/angle_estimation
 )
+
+add_subdirectory(python)

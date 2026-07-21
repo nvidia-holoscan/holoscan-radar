@@ -18,6 +18,11 @@
 
 namespace holoscan::radar {
 
+// Retire MatX eig/inv plan caches while CUDA is still alive. Implemented
+// in the .cu (MatX headers stay out of the public .hpp / pybind TU).
+// Prefer install_matx_cache_atexit() from Python after importing cupy.
+void retire_matx_solver_caches();
+
 // Adaptive (MVDR / Capon) sparse-path DOA estimator. Contract reference:
 // docs/planning/OPERATOR_API.md → "MVDREstimatorOp".
 //

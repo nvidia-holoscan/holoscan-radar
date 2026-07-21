@@ -60,11 +60,19 @@ struct DdmRdMapsLayout {
 DdmRdMapsLayout parse_ddm_rd_maps_layout(const holoscan::Tensor& tensor,
                                          const char* port_name);
 
+// Classification of DDM code type: linear-phase codes reduce to Doppler
+// offsets (gather path); non-linear codes require conjugate correlation.
+enum class DdmCodeMode { kLinear, kNonLinear };
+
+// Detect whether phase_codes are linear-phase (constant per-chirp increment
+// within 1e-3 rad) or non-linear. Returns kLinear for doppler_offsets form.
+DdmCodeMode ddm_classify_codes(const DDMCodeDescriptor& code);
+
 // Per-TX fractional Doppler offsets (cycles/chirp, i.e. fraction of PRF in
 // [0, 1)) resolved from the descriptor: the `doppler_offsets` compact form is
-// used directly; a linear-phase `phase_codes` form is reduced to offsets;
-// arbitrary / non-linear `phase_codes` are rejected (see OPEN_ITEMS). Requires
-// a validated descriptor.
+// used directly; a linear-phase `phase_codes` form is reduced to offsets.
+// Throws if codes are non-linear (caller must check ddm_classify_codes first).
+// Requires a validated descriptor.
 std::vector<double> ddm_resolve_offsets(const DDMCodeDescriptor& code);
 
 // num_doppler_per_tx = num_doppler / num_tx - guard_bands. Throws if
@@ -95,5 +103,37 @@ void run_ddm_demux_stage(const void* input, void* output,
                          const DdmRdMapsLayout& layout, int64_t num_tx,
                          int64_t num_doppler_per_tx, const int64_t* d_table,
                          cudaStream_t stream);
+
+// DDM non-linear correlate path output shape: full Doppler axis preserved.
+std::vector<int64_t> ddm_correlate_output_shape(const DdmRdMapsLayout& in,
+                                                int64_t num_tx);
+
+// FFT-correlation weights for the non-linear demux. With num_chirps == D,
+//   out = ifft(fft(Y) * W_m)   (MatX/NumPy BACKWARD norms)
+// equals (1/D) * circular conjugate-correlation of Y with C_m = DFT(c_m), and
+// W_m[p] = conj(c_m[(-p) mod D]). Returns num_tx * num_doppler values,
+// row-major (m, p).
+std::vector<std::complex<double>> build_ddm_corr_weights(
+    const DDMCodeDescriptor& code, int64_t num_doppler);
+
+// Cache key for the non-linear correlate path (includes full code content).
+std::string ddm_correlate_cache_key(const DDMCodeDescriptor& code,
+                                    int64_t num_doppler);
+
+// Release per-operator cuFFT plan / tile workspace owned by `owner`
+// (pass the MIMOCoherentCompensationOp `this` pointer). Safe no-op if absent.
+void release_ddm_correlate_scratch(void* owner);
+
+// Conjugate-correlation DDM demux via FFT:
+//   out[..., m, rx, :, r] = ifft(fft(Y[..., rx, :, r]) * W_m)
+// with W from build_ddm_corr_weights. Equivalent to
+//   out[..., m, rx, d, r] = (1/D) * sum_k Y[..., rx, k, r] *
+//                            conj(C_m[(k-d) mod D]),  C_m = DFT(c_m).
+// `owner` keys per-instance cuFFT/workspace scratch (not shared across ops).
+template <typename T>
+void run_ddm_correlate_stage(const void* input, void* output,
+                             const DdmRdMapsLayout& layout, int64_t num_tx,
+                             const void* d_corr_weights, void* owner,
+                             cudaStream_t stream);
 
 }  // namespace holoscan::radar::detail

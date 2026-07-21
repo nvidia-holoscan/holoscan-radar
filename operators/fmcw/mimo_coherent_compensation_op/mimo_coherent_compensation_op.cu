@@ -37,7 +37,9 @@ std::vector<std::complex<T>> cast_correction(
 }  // namespace
 
 template <typename T>
-MIMOCoherentCompensationOp<T>::~MIMOCoherentCompensationOp() = default;
+MIMOCoherentCompensationOp<T>::~MIMOCoherentCompensationOp() {
+  detail::release_ddm_correlate_scratch(this);
+}
 
 template <typename T>
 void MIMOCoherentCompensationOp<T>::initialize() {
@@ -114,17 +116,19 @@ template <typename T>
 void MIMOCoherentCompensationOp<T>::run_ddm_compute(
     OutputContext& op_output, const detail::DdmRdMapsLayout& layout,
     const std::shared_ptr<holoscan::Tensor>& input, cudaStream_t stream) {
-  // waveform is a required parameter on both schemes (contract parity). The
-  // linear-phase DDM demux does not use it, but we still require a valid
-  // descriptor so the contract "required, no default" holds.
   if (!effective_waveform_.is_valid()) {
     throw std::invalid_argument(
         "MIMOCoherentCompensationOp: waveform must be a valid "
         "FMCWWaveformDescriptor (build-time or [live] override)");
   }
   const DDMCodeDescriptor& code = ddm_code_.get();
-  // Resolve + validate the code up front (offsets, or linear-phase codes;
-  // arbitrary codes throw here) so errors surface before any allocation.
+  const auto mode = detail::ddm_classify_codes(code);
+
+  if (mode == detail::DdmCodeMode::kNonLinear) {
+    run_ddm_correlate(op_output, layout, input, stream);
+    return;
+  }
+
   const std::vector<double> offsets = detail::ddm_resolve_offsets(code);
   const int64_t num_tx = code.num_tx;
   const int64_t num_doppler_per_tx = detail::ddm_num_doppler_per_tx(
@@ -155,6 +159,79 @@ void MIMOCoherentCompensationOp<T>::run_ddm_compute(
   detail::run_ddm_demux_stage<T>(
       input->data(), output->data(), layout, num_tx, num_doppler_per_tx,
       static_cast<const int64_t*>(cached.device_table->data()), stream);
+
+  if (stream != cudaStreamDefault) {
+    op_output.set_cuda_stream(stream, "rd_maps");
+  }
+  holoscan::TensorMap out_map;
+  out_map.insert({"rd_maps", output});
+  op_output.emit(out_map, "rd_maps");
+}
+
+template <typename T>
+void MIMOCoherentCompensationOp<T>::run_ddm_correlate(
+    OutputContext& op_output, const detail::DdmRdMapsLayout& layout,
+    const std::shared_ptr<holoscan::Tensor>& input, cudaStream_t stream) {
+  const DDMCodeDescriptor& code = ddm_code_.get();
+  const int64_t num_tx = code.num_tx;
+  const int64_t num_chirps =
+      static_cast<int64_t>(code.phase_codes.size()) / num_tx;
+
+  if (code.guard_bands != 0) {
+    throw std::invalid_argument(
+        "MIMOCoherentCompensationOp: non-linear DDM phase_codes require "
+        "guard_bands = 0 (got " +
+        std::to_string(code.guard_bands) + ")");
+  }
+  if (num_chirps != layout.num_doppler) {
+    throw std::invalid_argument(
+        "MIMOCoherentCompensationOp: non-linear DDM phase_codes imply "
+        "num_chirps = " +
+        std::to_string(num_chirps) +
+        " but input num_doppler = " + std::to_string(layout.num_doppler) +
+        "; these must match for the correlate path");
+  }
+
+  const std::string cache_key =
+      detail::ddm_correlate_cache_key(code, layout.num_doppler);
+  const CachedDdmCorrelate& cached = correlate_cache_.get_or_build(
+      cache_key, /*changed=*/false, "DDM correlate FFT weights", [&] {
+        CachedDdmCorrelate entry;
+        const auto host_weights =
+            detail::build_ddm_corr_weights(code, layout.num_doppler);
+        const int64_t D = layout.num_doppler;
+        entry.device_corr_weights =
+            make_device_tensor({num_tx, D}, complex_dtype<T>());
+        if constexpr (sizeof(T) == 8) {
+          if (cudaMemcpyAsync(
+                  entry.device_corr_weights->data(), host_weights.data(),
+                  host_weights.size() * sizeof(std::complex<double>),
+                  cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+            throw std::runtime_error(
+                "MIMOCoherentCompensationOp: corr-weights H2D failed");
+          }
+        } else {
+          std::vector<std::complex<float>> typed(host_weights.size());
+          for (size_t i = 0; i < host_weights.size(); ++i) {
+            typed[i] = std::complex<float>(
+                static_cast<float>(host_weights[i].real()),
+                static_cast<float>(host_weights[i].imag()));
+          }
+          if (cudaMemcpyAsync(entry.device_corr_weights->data(), typed.data(),
+                              typed.size() * sizeof(std::complex<float>),
+                              cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+            throw std::runtime_error(
+                "MIMOCoherentCompensationOp: corr-weights H2D failed");
+          }
+        }
+        return entry;
+      });
+
+  auto output = make_device_tensor(
+      detail::ddm_correlate_output_shape(layout, num_tx), input->dtype());
+  detail::run_ddm_correlate_stage<T>(input->data(), output->data(), layout,
+                                     num_tx, cached.device_corr_weights->data(),
+                                     this, stream);
 
   if (stream != cudaStreamDefault) {
     op_output.set_cuda_stream(stream, "rd_maps");

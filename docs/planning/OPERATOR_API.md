@@ -164,9 +164,11 @@ M TX transmit simultaneously with per-chirp phase codes placing each TX in a dis
 ADC (N_rx, num_chirps, samples)   [all M TX present every chirp, per-chirp phase codes]
   → FMCWRangeProcessorOp       → (N_rx, num_chirps, num_range)
   → FMCWDopplerProcessorOp     → (N_rx, num_doppler, num_range)               [Doppler holds M TX bands]
-  → MIMOCoherentCompensationOp → (M_tx, N_rx, num_doppler_per_tx, num_range)  [demux bands → TX axis, remove code phase, align]
-  → [ClutterFilterOp]          → (M_tx, N_rx, num_doppler_per_tx, num_range)  [after demux]
-  → VirtualArrayAssemblyOp     → (num_virtual, num_doppler, num_range) + virtual element_positions
+  → MIMOCoherentCompensationOp → (M_tx, N_rx, num_doppler_out, num_range)   [demux → TX axis]
+       num_doppler_out = num_doppler_per_tx  (linear gather / doppler_offsets)
+                       = num_doppler         (non-linear phase_codes correlate)
+  → [ClutterFilterOp]          → (M_tx, N_rx, num_doppler_out, num_range)    [after demux]
+  → VirtualArrayAssemblyOp     → (num_virtual, num_doppler_out, num_range) + virtual element_positions
   → angle path (dense or sparse) + CFARDetectorOp
 ```
 
@@ -678,7 +680,7 @@ Requires a shift-invariant geometry; native 2-D az/el needs a 2-D variant (e.g. 
 #### MIMOCoherentCompensationOp
 
 - **In:** `rd_maps` — complex64 / complex128. **TDM mode:** `(..., M_tx, N_rx, num_doppler, num_range_bins)` (TX axis already explicit from de-interleave). **DDM mode:** `(..., N_rx, num_doppler, num_range_bins)` (the M TX sit in distinct Doppler sub-bands). Rank/interpretation set by the `multiplexing_scheme` parameter.
-- **Out:** `rd_maps` — complex64 / complex128, `(..., M_tx, N_rx, num_doppler_out, num_range_bins)`. Separated, phase-aligned `(tx, rx)` block. `num_doppler_out = num_doppler` (TDM) or `num_doppler_per_tx` (DDM band width).
+- **Out:** `rd_maps` — complex64 / complex128, `(..., M_tx, N_rx, num_doppler_out, num_range_bins)`. Separated, phase-aligned `(tx, rx)` block. `num_doppler_out = num_doppler` (TDM, or DDM non-linear correlate) or `num_doppler_per_tx` (DDM linear-phase band gather).
 
 **Parameters:**
 
@@ -757,7 +759,7 @@ Used by: `FMCWRangeProcessorOp` (dechirp reference; slope + sample rate for `ran
 Describes the Doppler-division multiplexing scheme for `MIMOCoherentCompensationOp` (DDM mode) — how the M TX are separated after the Doppler FFT. (The forward-looking CDM/BPM extension would carry its orthogonal code here in a code-correlation mode; out of scope for now.)
 
 - `num_tx` — int. M, the number of TX multiplexed into distinct Doppler sub-bands.
-- `phase_codes` (optional) — float or complex, `(num_tx, num_chirps)`. The per-chirp phase (or unit-magnitude code) applied to each TX; the general form, demuxed by conjugate correlation. Provide this **or** `doppler_offsets`. **Implemented (current slice):** only *linear-phase* codes (a constant per-chirp phase increment per TX) are accepted — they are reduced to the equivalent `doppler_offsets` internally; arbitrary / non-linear codes are rejected (deferred; see the operator's `OPEN_ITEMS.md`).
+- `phase_codes` (optional) — float or complex, `(num_tx, num_chirps)`. The per-chirp phase (or unit-magnitude code) applied to each TX; the general form, demuxed by conjugate correlation. Provide this **or** `doppler_offsets`. **Implemented:** *linear-phase* codes (constant per-chirp phase increment per TX) are reduced to `doppler_offsets` and demuxed by Doppler-band gather; *non-linear* codes use the correlate path (full Doppler axis out, `guard_bands` must be 0, `num_chirps` must equal `num_doppler`). See the operator's `OPEN_ITEMS.md` §A.5 / §A.10.
 - `doppler_offsets` (optional) — float, `(num_tx,)`. Per-TX Doppler sub-band offset **as a fraction of PRF (cycles/chirp) in `[0, 1)`** (e.g. `m/M` for uniform DDM); the compact form for standard linear-phase DDM, from which `phase_codes` are synthesized. Fractions (not bins) are canonical because the descriptor is static config built before `num_doppler` (a runtime shape) is known; the operator converts to a bin offset `round(offset · num_doppler)` per tick. Provide this **or** `phase_codes`.
 - `guard_bands` — int. Guard bins reserved between adjacent TX Doppler bands to keep them separable. Default: 0.
 

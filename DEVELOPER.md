@@ -80,9 +80,10 @@ ctest --test-dir build --output-on-failure -L unit
 Run Python tests:
 
 ```bash
+# Holoscan SDK must import first; conftest.py then prepends
+# build/python/lib/holoscan onto holoscan.__path__. Do not put
+# build/python/lib alone on PYTHONPATH — that shadows the SDK package.
 HOLOSCAN_RADAR_BUILD_DIR=build \
-# Prepend to PYTHONPATH so that the build directory Python module is importable
-PYTHONPATH=build/python${PYTHONPATH:+:$PYTHONPATH} \
 pytest tests/python/ -v
 ```
 

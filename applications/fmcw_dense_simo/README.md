@@ -125,3 +125,10 @@ cmake --build build --target fmcw_dense_simo -j"$(nproc)"
 Expected: each frame logs `dense: <N> detections -> 3 clusters`, one per target,
 with cluster centroids/representatives near the configured target range,
 velocity, azimuth, and elevation.
+
+## Python
+
+A Python variant with the same graph lives at
+[`python/fmcw_dense_simo.py`](python/fmcw_dense_simo.py) (`config.py` +
+`custom_ops.py` colocated, same layering as the C++ side — see
+[`python/README.md`](python/README.md)).

@@ -33,3 +33,5 @@ configure_file(fmcw_mimo.yaml
     ${CMAKE_CURRENT_BINARY_DIR}/fmcw_mimo.yaml COPYONLY)
 configure_file(fmcw_mimo_ddm.yaml
     ${CMAKE_CURRENT_BINARY_DIR}/fmcw_mimo_ddm.yaml COPYONLY)
+configure_file(fmcw_mimo_ddm_phase_codes.yaml
+    ${CMAKE_CURRENT_BINARY_DIR}/fmcw_mimo_ddm_phase_codes.yaml COPYONLY)

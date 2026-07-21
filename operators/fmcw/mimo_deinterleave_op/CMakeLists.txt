@@ -33,3 +33,5 @@ include(GNUInstallDirs)
 install(FILES mimo_deinterleave_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw
 )
+
+add_subdirectory(python)

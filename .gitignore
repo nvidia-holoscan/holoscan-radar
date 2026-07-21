@@ -8,8 +8,10 @@ data/
 _CPack_Packages/
 __pycache__/
 .cache/
+.cupy/
 .nv/
 .local/
 *.deb
 uv.lock
 .venv/
+core

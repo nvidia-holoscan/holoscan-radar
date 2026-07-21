@@ -11,18 +11,23 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <cmath>
+#include <complex>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "fmcw/mimo_coherent_compensation_op/mimo_coherent_compensation_stage.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
+#include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
 #include "radar_common/sim/array_builders.hpp"
 #include "radar_common/sim/mimo_sim.hpp"
@@ -37,6 +42,8 @@ struct AppConfig : CommonRunConfig {
   radar::TXSchedule tx_schedule;
   radar::DDMCodeDescriptor ddm_code;
   std::vector<double> ddm_doppler_offsets;
+  // True when ddm_code is non-linear → correlate demux + phase-coded sim.
+  bool ddm_correlate{false};
   radar::ArrayGeometry array_geometry;
   std::vector<double> tx_positions_flat;
   std::vector<double> rx_positions_flat;
@@ -48,6 +55,69 @@ struct AppConfig : CommonRunConfig {
   radar::FMCWWaveformDescriptor report_waveform;
   int64_t report_num_doppler{0};
 };
+
+// Demo helpers for generate_phase_codes: expand unit-magnitude codes without
+// dumping N*M complex values into YAML. Codes must be *non-linear* so the
+// operator takes the correlate path (linear-phase ramps reduce to gather).
+
+inline void fill_sin_phase_codes(radar::DDMCodeDescriptor* code,
+                                 int64_t num_chirps) {
+  if (code == nullptr || code->num_tx < 1 || num_chirps < 1) {
+    throw std::invalid_argument("fill_sin_phase_codes: invalid args");
+  }
+  code->doppler_offsets.clear();
+  code->guard_bands = 0;
+  code->phase_codes.assign(
+      static_cast<size_t>(code->num_tx * num_chirps), {0.0, 0.0});
+  for (int64_t m = 0; m < code->num_tx; ++m) {
+    for (int64_t k = 0; k < num_chirps; ++k) {
+      const double phase =
+          std::sin(0.7 * static_cast<double>(k) + static_cast<double>(m)) *
+          2.0;
+      code->phase_codes[static_cast<size_t>(m * num_chirps + k)] =
+          std::complex<double>(std::cos(phase), std::sin(phase));
+    }
+  }
+}
+
+inline void fill_zadoff_chu_phase_codes(radar::DDMCodeDescriptor* code,
+                                        int64_t num_chirps) {
+  if (code == nullptr || code->num_tx < 1 || num_chirps < 1) {
+    throw std::invalid_argument("fill_zadoff_chu_phase_codes: invalid args");
+  }
+  std::vector<int64_t> roots;
+  roots.reserve(static_cast<size_t>(code->num_tx));
+  for (int64_t u = 1; u < num_chirps &&
+                      static_cast<int64_t>(roots.size()) < code->num_tx;
+       ++u) {
+    if (std::gcd(u, num_chirps) == 1) {
+      roots.push_back(u);
+    }
+  }
+  if (static_cast<int64_t>(roots.size()) < code->num_tx) {
+    throw std::invalid_argument(
+        "fill_zadoff_chu_phase_codes: need num_tx distinct roots coprime to "
+        "num_chirps (try a longer cube.num_chirps)");
+  }
+
+  code->doppler_offsets.clear();
+  code->guard_bands = 0;
+  code->phase_codes.assign(
+      static_cast<size_t>(code->num_tx * num_chirps), {0.0, 0.0});
+  const bool odd_n = (num_chirps % 2) != 0;
+  for (int64_t m = 0; m < code->num_tx; ++m) {
+    const double u = static_cast<double>(roots[static_cast<size_t>(m)]);
+    for (int64_t k = 0; k < num_chirps; ++k) {
+      const double kd = static_cast<double>(k);
+      const double arg =
+          odd_n ? (-radar::kPi * u * kd * (kd + 1.0) /
+                   static_cast<double>(num_chirps))
+                : (-radar::kPi * u * kd * kd / static_cast<double>(num_chirps));
+      code->phase_codes[static_cast<size_t>(m * num_chirps + k)] =
+          std::complex<double>(std::cos(arg), std::sin(arg));
+    }
+  }
+}
 
 // Build the TX row + RX URA + the virtual (TX⊕RX) geometry into the scene.
 inline void load_scene_geometry(AppConfig* cfg, const YAML::Node& root,
@@ -135,17 +205,52 @@ inline AppConfig load_config(const std::filesystem::path& path) {
       throw std::runtime_error(
           "fmcw_mimo: ddm_code.num_tx must match tx_array.num_tx");
     }
-    cfg.ddm_doppler_offsets = radar::sim::resolve_ddm_offsets(cfg.ddm_code);
-    if (cfg.scene.num_chirps % num_tx != 0) {
-      throw std::runtime_error(
-          "fmcw_mimo: cube.num_chirps must be divisible by tx_array.num_tx "
-          "for DDM");
+    // Demo-only: expand generate_phase_codes into explicit phase_codes so YAML
+    // need not list num_tx * num_chirps complex values.
+    if (mcc["ddm_code"]["generate_phase_codes"]) {
+      const std::string kind =
+          mcc["ddm_code"]["generate_phase_codes"].as<std::string>();
+      if (kind == "zadoff_chu" || kind == "zc") {
+        fill_zadoff_chu_phase_codes(&cfg.ddm_code, cfg.scene.num_chirps);
+      } else if (kind == "sin") {
+        fill_sin_phase_codes(&cfg.ddm_code, cfg.scene.num_chirps);
+      } else {
+        throw std::runtime_error(
+            "fmcw_mimo: unsupported generate_phase_codes '" + kind +
+            "' (supported: zadoff_chu, zc, sin)");
+      }
     }
-    const int64_t band = cfg.scene.num_chirps / num_tx;
-    cfg.report_num_doppler = band - cfg.ddm_code.guard_bands;
-    if (cfg.report_num_doppler <= 0) {
-      throw std::runtime_error(
-          "fmcw_mimo: DDM guard_bands leaves no Doppler bins per TX");
+    cfg.ddm_code.validate();
+    cfg.ddm_correlate = radar::detail::ddm_classify_codes(cfg.ddm_code) ==
+                        radar::detail::DdmCodeMode::kNonLinear;
+    if (cfg.ddm_correlate) {
+      if (cfg.ddm_code.guard_bands != 0) {
+        throw std::runtime_error(
+            "fmcw_mimo: non-linear DDM phase_codes require guard_bands == 0");
+      }
+      const int64_t num_chirps_codes =
+          static_cast<int64_t>(cfg.ddm_code.phase_codes.size()) /
+          cfg.ddm_code.num_tx;
+      if (num_chirps_codes != cfg.scene.num_chirps) {
+        throw std::runtime_error(
+            "fmcw_mimo: non-linear phase_codes length/num_tx must equal "
+            "cube.num_chirps");
+      }
+      cfg.report_num_doppler = cfg.scene.num_chirps;
+    } else {
+      cfg.ddm_doppler_offsets =
+          radar::detail::ddm_resolve_offsets(cfg.ddm_code);
+      if (cfg.scene.num_chirps % num_tx != 0) {
+        throw std::runtime_error(
+            "fmcw_mimo: cube.num_chirps must be divisible by tx_array.num_tx "
+            "for linear DDM");
+      }
+      const int64_t band = cfg.scene.num_chirps / num_tx;
+      cfg.report_num_doppler = band - cfg.ddm_code.guard_bands;
+      if (cfg.report_num_doppler <= 0) {
+        throw std::runtime_error(
+            "fmcw_mimo: DDM guard_bands leaves no Doppler bins per TX");
+      }
     }
   } else {
     const YAML::Node sim = root["sim"];

@@ -108,3 +108,6 @@ install(EXPORT holoscan_radar_common_steering_targets
     NAMESPACE holoscan::
     DESTINATION lib/cmake/holoscan_radar
 )
+
+# Python bindings for shared descriptors / enums (holoscan.radar.radar_common).
+add_subdirectory(python)

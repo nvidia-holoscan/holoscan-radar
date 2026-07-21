@@ -84,6 +84,16 @@ remaining gap is the module-wide alloc pattern in §1. Defer ping-pong here;
 intended MIMO-TDM chain is linear (deinterleave → compensation → virtual
 array). `[live]` `waveform` does not change output shape.
 
+**Follow-up diagnostic (2026-07-19, DDM-NL `xl`, same GPU):** after the
+tiled cuFFT correlate path, nsys shows GPU kernels ~8.0 ms busy / ~8.0 ms
+span (pack + FFT + mul + IFFT + scatter; inter-kernel gaps ~0.4 ms) vs
+harness median ~15.5 ms. Per tick: `cudaMalloc` of the ~4.3 GB correlate
+output ~2.2–2.4 ms and `cudaFree` of the prior output ~8–10.5 ms — same §1
+alloc pattern, now confirmed on the non-linear DDM path. NCU on the
+correlate kernels (memory-bound; scatter heaviest) is a separate, smaller
+lever once §1 is picked up. Still deferred; do not land ping-pong here
+without revisiting this item.
+
 Reasons it is reasonable to deploy there when picked up:
 
 - Large perf win at xl (~2.1 ms → ~0.75 ms harness median) with no API

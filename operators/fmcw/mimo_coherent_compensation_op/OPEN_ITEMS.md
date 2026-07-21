@@ -76,10 +76,13 @@ Only when `doppler_offsets` is absent:
   rejects both).
 - Requires `num_chirps ≥ 2` per TX to infer a constant per-chirp phase step.
 - Linear-phase test: `arg(code[k+1]·conj(code[k]))` must match the first pair
-  within `1e-3` rad (wrapped) for all chirp pairs; else reject as arbitrary.
-- Accepted codes are **reduced to `doppler_offsets`** internally (`arg(step) /
-  2π`, folded to `[0, 1)`); the gather path is identical to supplying offsets
-  directly.
+  within `1e-3` rad (wrapped) for all chirp pairs; codes passing this test are
+  routed to the **gather path** (§A.3).
+- Codes failing the linear-phase test are routed to the **correlate path**
+  (§A.10) — no longer rejected.
+- Accepted linear codes are **reduced to `doppler_offsets`** internally
+  (`arg(step) / 2π`, folded to `[0, 1)`); the gather path is identical to
+  supplying offsets directly.
 
 ### A.6 Doppler axis convention (both schemes)
 
@@ -91,9 +94,8 @@ this operator to select another ordering.
 ### A.7 `waveform` on DDM (linear-phase slice)
 
 Required and validated (build-time or `[live]` sticky override), but **does
-not affect** the linear-phase gather demux. Kept for TDM parity and the
-deferred arbitrary-code path (§B.1). Overriding `waveform` under DDM does not
-change output.
+not affect** the linear-phase gather demux or the non-linear correlate demux.
+Kept for TDM parity. Overriding `waveform` under DDM does not change output.
 
 ### A.8 `ddm_code` on TDM
 
@@ -107,17 +109,31 @@ not specify disambiguation. **Not implemented** — no staggered-PRI, band-overl
 or explicit velocity folding. Downstream consumers see the aliased per-TX
 velocity axis from `FMCWDopplerProcessorOp` with per-TX effective PRI.
 
+### A.10 DDM non-linear `phase_codes` correlate path
+
+**Imposed for this slice.** Non-linear codes (those failing the 1e-3 rad
+linear-phase test in §A.5) are now handled by a **conjugate-correlation** demux
+instead of being rejected.
+
+| Rule | Implementation |
+| --- | --- |
+| Detection | `ddm_classify_codes()` applies the same 1e-3 rad test; returns `kLinear` (gather path) or `kNonLinear` (correlate path). |
+| Output shape | `(..., M_tx, N_rx, num_doppler, num_range)` — **full** Doppler axis preserved (no band reduction). |
+| `guard_bands` | Must be **0**; correlate path rejects nonzero `guard_bands` with a clear error. |
+| `num_chirps` match | `phase_codes.size() / num_tx` must equal input `num_doppler` at runtime; mismatch is rejected. |
+| Algorithm | FFT circular correlation, range-tiled (~32 MiB persistent workspaces): pack (ifftshift to fft-order) → cuFFT fwd → per-TX (`Ŷ * W * 1/D` + cuFFT inv) → scatter (fftshift to center-zero). `W_m[p] = conj(c_m[(-p) mod D])`. Equivalent to `out[d] = (1/D) * sum_k Y[k] * conj(C_m[(k-d) mod D])` in fft-order. Input/output Doppler axes match `FMCWDopplerProcessorOp` center-zero. |
+| Waveform | Required and validated (contract parity) but **unused** on the correlate path — carried for the same reason as §A.7. |
+| Linear codes | Unchanged: detected automatically, routed to the existing gather path via `doppler_offsets`. |
+
 ---
 
 ## B. Deferred follow-on work
 
-### B.1 DDM arbitrary / non-linear `phase_codes`
+### ~~B.1 DDM arbitrary / non-linear `phase_codes`~~ — **LANDED**
 
-Arbitrary / non-linear codes are **rejected** (§A.5). Their demux is a different
-algorithm — post-Doppler circular convolution / conjugate correlation of the
-code spectrum, not band extraction — and truly non-linear codes do not form
-clean Doppler bands. Needs a separate kernel, tests, and likely uses `waveform`
-and the full `phase_codes` matrix.
+Implemented as the correlate path (§A.10). Non-linear codes are no longer
+rejected; they are demuxed via circular conjugate-correlation of the code
+spectrum.
 
 ### B.2 Unequal DDM band widths
 
@@ -138,3 +154,8 @@ Not operator-specific. See [`operators/OPEN_ITEMS.md`](../../OPEN_ITEMS.md) §1.
 kernel launch bug (one block per element), nsys shows the TDM kernel ~6.7 ms
 vs harness tick median ~14.5 ms — remainder is output `cudaMalloc`/`cudaFree`,
 not kernel bandwidth. Defer ping-pong to the module-wide decision.
+
+**Follow-up (2026-07-19, DDM-NL `xl`):** tiled cuFFT correlate GPU work
+~8.0 ms vs harness median ~15.5 ms; per-tick `cudaMalloc` (~2.2–2.4 ms) +
+`cudaFree` (~8–10.5 ms) on the ~4.3 GB full-Doppler output account for the
+gap. Same §1 deferral — annotate only; no ping-pong landed here.

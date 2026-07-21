@@ -50,10 +50,14 @@ Rules that follow from "lockdown":
 | `operators/` | Operator libraries, one dir per group, gated by `add_holohub_operator()` / `OP_<name>` CMake options |
 | `operators/common/` | Shared `radar_common` library: descriptors, window generation, point-target simulator, config cache, tensor/MatX utilities |
 | `operators/fmcw/` | FMCW signal-processing operators (+ future MIMO marshaling) |
-| `applications/fmcw_siso/` | Example SISO FMCW pipeline app (C++; Python variant returns with the bindings) |
-| `performance/` | Measurement harness (cold vs steady, regression pairs) — not pass/fail tests |
+| `applications/fmcw_siso/` | Example SISO FMCW pipeline (C++ + Python Holoviz) |
+| `applications/fmcw_simo/` | Sparse SIMO angle-then-cluster demo (C++ + Python) |
+| `applications/fmcw_mimo/` | MIMO TDM/DDM demo (C++ + Python) |
+| `applications/fmcw_dense_simo/` | Dense SIMO beamformer demo (C++ + Python) |
+| `applications/common/radar_app/` | Shared report + Holoviz viz operators (C++ header + Python bindings) |
+| `performance/` | Measurement harness (C++ + Python) — cold vs steady, not pass/fail tests |
 | `python/holoscan/radar/` | Python package root; re-exports operators from per-operator pybind11 submodules |
-| `tests/cpp/`, `tests/python/` | GTest and pytest suites |
+| `tests/cpp/`, `tests/python/` | GTest and pytest suites (Python: set `HOLOSCAN_RADAR_BUILD_DIR`) |
 | `pkg/` | Debian/wheel packaging (`add_holohub_package`) |
 | `cmake/` | HoloHub CMake helpers (`HoloHubConfigHelpers.cmake`, `pybind11_add_holohub_module.cmake`) |
 | `metadata.json` | Module metadata (schema `urn:holohub:module:v2`); per-operator `metadata.json` under each operator dir |

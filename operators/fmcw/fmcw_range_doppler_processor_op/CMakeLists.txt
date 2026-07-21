@@ -39,3 +39,5 @@ include(GNUInstallDirs)
 install(FILES fmcw_range_doppler_processor_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw
 )
+
+add_subdirectory(python)

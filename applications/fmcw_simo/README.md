@@ -68,3 +68,9 @@ crosses) on the left, and three stacked panels on the right:
 The default scenario is an 8x8 URA with three targets moving on all three axes;
 their range, azimuth, and elevation all sweep over the run while staying inside
 the beamscan grid.
+
+## Python
+
+A Python variant with the same graph lives at
+[`python/fmcw_simo.py`](python/fmcw_simo.py) (`config.py` colocated, same
+layering as the C++ side — see [`python/README.md`](python/README.md)).

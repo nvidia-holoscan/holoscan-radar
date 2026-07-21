@@ -63,6 +63,7 @@ using namespace holoscan::radar::app;  // NOLINT(build/namespaces)
 class FmcwDenseSimoApp : public holoscan::Application {
  public:
   AppConfig cfg;
+  std::shared_ptr<CadenceMeter> cadence;
 
   void compose() override {
     using holoscan::Arg;
@@ -104,6 +105,14 @@ class FmcwDenseSimoApp : public holoscan::Application {
     auto report = make_operator<ClusterReportOp>("cluster_report");
     report->az_grid = cfg.az_angles;
     report->el_grid = cfg.el_angles;
+
+    if (cfg.meter_cadence) {
+      cadence = std::make_shared<CadenceMeter>();
+      cadence->frame_period_s = cfg.frame_period;
+      cadence->log_every = cfg.meter_log_every;
+      source->cadence = cadence;
+      report->cadence = cadence;
+    }
 
     // Front end.
     add_flow(source, range, {{"adc_cube", "adc_cube"}});

@@ -1,5 +1,5 @@
 """
-SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-FileCopyrightText: Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -123,9 +123,7 @@ def changes_in_file_between(file, b1, b2, filter=None):  # noqa: A002
     current = branch()
     __git("checkout", "--quiet", b1)
     __git("checkout", "--quiet", b2)
-    diffs = __gitdiff(
-        "--ignore-submodules", "-w", "--minimal", "-U0", f"{b1}...{b2}", "--", file
-    )
+    diffs = __gitdiff("--ignore-submodules", "-w", "--minimal", "-U0", f"{b1}...{b2}", "--", file)
     __git("checkout", "--quiet", current)
     return [line for line in diffs.splitlines() if (filter is None or filter(line))]
 

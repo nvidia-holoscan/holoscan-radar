@@ -159,11 +159,7 @@ def check_copyright(f, update_current_year, ignore_year_mismatch=False):
                 )
             )
             # Check if we're updating the entire file content (line_num == 1 and replacement is entire content)
-            if (
-                len(errs_update) == 1
-                and errs_update[0][1] == 1
-                and "\n" in errs_update[0][3]
-            ):
+            if len(errs_update) == 1 and errs_update[0][1] == 1 and "\n" in errs_update[0][3]:
                 # This is a full file content replacement
                 with open(f, "w", encoding="utf-8") as out_file:
                     out_file.write(errs_update[0][3])
@@ -292,22 +288,14 @@ def check_copyright_main():
         target_branch = None
         if args.git_modified_only != "no-target":
             target_branch = args.git_modified_only
-            print(
-                f"Checking copyright headers in modified files between {target_branch} and HEAD"
-            )
+            print(f"Checking copyright headers in modified files between {target_branch} and HEAD")
         modified_files = gitutils.modified_files(target_branch, True)
-        all_files = (
-            list(set(all_files).intersection(modified_files))
-            if dirs
-            else modified_files
-        )
+        all_files = list(set(all_files).intersection(modified_files)) if dirs else modified_files
 
     files = [f for f in all_files if check_this_file(f)]
 
     # Print progress information
-    print(
-        f"Checking copyright headers in {len(files)} files out of {len(all_files)} total files"
-    )
+    print(f"Checking copyright headers in {len(files)} files out of {len(all_files)} total files")
     if len(files) > 0:
         print(f"Example files being checked: {', '.join(files[:3])}")
         if len(files) > 3:

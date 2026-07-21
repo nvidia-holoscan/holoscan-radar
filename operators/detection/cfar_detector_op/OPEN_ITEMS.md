@@ -405,3 +405,28 @@ tensors and does not itself need a count sync.
 
 **Status:** open — current implementation matches the locked exact-size
 contract; alternatives require a contract change.
+
+---
+
+## 9. GO/SO/OS `detail::` α calibration helpers — Python white-box gap (accepted)
+
+**Context.** `cfar_alpha.{hpp,cpp}` under `holoscan::radar::detail` holds the
+host calibration math the operator uses when deriving an `alpha_lut` from
+`pfa` (side counts, `go_cfar_alpha` / SO/OS equivalents, cell-faithful LUT
+slots, etc.). C++ unit tests call these helpers **directly** (white-box
+invertibility / border-slot regressions). Applications never see them: they
+set `pfa` and/or `alpha_lut` on `CFARDetectorOp`.
+
+Python bindings already expose the application-facing surface:
+`alpha_lut` / `[live] alpha_lut`, plus `build_{ca,go,so,os}_alpha_lut` and
+CA’s closed-form `ca_cfar_alpha` / `ca_cfar_pfa_from_alpha`. The finer GO/SO/OS
+`detail::` primitives are **not** pybind-exported.
+
+**Impact.** Those white-box C++ calibration tests have no Python counterpart
+and will not, unless we deliberately widen the public Python API to export
+internal `detail::` symbols (not required for app parity). Operator-level
+pytest already covers `pfa` / `alpha_lut` behavior and Monte Carlo Pfa.
+
+**Status:** accepted / unclosable by design — leave the helpers in
+`detail::`, keep white-box calibration regressions C++-only; do not treat
+missing Python ports of those tests as unfinished bindings work.

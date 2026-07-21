@@ -23,6 +23,11 @@
 
 namespace holoscan::radar {
 
+void retire_matx_solver_caches() {
+  detail::retire_matx_solver_caches();
+}
+
+
 namespace {
 
 constexpr const char* kOpName = "MVDREstimatorOp";

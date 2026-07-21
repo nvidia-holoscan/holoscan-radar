@@ -28,13 +28,13 @@ namespace holoscan::radar {
 //
 // DDM in:  rd_maps — complex64/complex128, (..., N_rx, num_doppler,
 //          num_range_bins); the M TX sit in distinct Doppler sub-bands.
-// DDM out: rd_maps — (..., M_tx, N_rx, num_doppler_per_tx, num_range_bins);
+// DDM out (linear-phase / offsets):
+//          rd_maps — (..., M_tx, N_rx, num_doppler_per_tx, num_range_bins);
 //          each TX demuxed out of its sub-band into an explicit axis, all lanes
-//          aligned to a common reduced-Doppler axis. Standard linear-phase DDM
-//          only (doppler_offsets, or a linear-phase phase_codes reduced to
-//          offsets); the demux is a pure Doppler-bin gather and is
-//          waveform-independent (waveform is carried for contract parity and
-//          the deferred arbitrary-code path). See OPEN_ITEMS.
+//          aligned to a common reduced-Doppler axis.
+// DDM out (non-linear phase_codes):
+//          rd_maps — (..., M_tx, N_rx, num_doppler, num_range_bins);
+//          full Doppler axis preserved; conjugate-correlation demux.
 template <typename T>
 class MIMOCoherentCompensationOp : public holoscan::Operator {
  public:
@@ -60,6 +60,10 @@ class MIMOCoherentCompensationOp : public holoscan::Operator {
     std::shared_ptr<holoscan::Tensor> device_table;
   };
 
+  struct CachedDdmCorrelate {
+    std::shared_ptr<holoscan::Tensor> device_corr_weights;
+  };
+
   void run_tdm_compute(OutputContext& op_output,
                        const detail::TdmRdMapsLayout& layout,
                        const std::shared_ptr<holoscan::Tensor>& input,
@@ -70,6 +74,11 @@ class MIMOCoherentCompensationOp : public holoscan::Operator {
                        const std::shared_ptr<holoscan::Tensor>& input,
                        cudaStream_t stream);
 
+  void run_ddm_correlate(OutputContext& op_output,
+                         const detail::DdmRdMapsLayout& layout,
+                         const std::shared_ptr<holoscan::Tensor>& input,
+                         cudaStream_t stream);
+
   Parameter<MultiplexingScheme> multiplexing_scheme_;
   Parameter<FMCWWaveformDescriptor> waveform_;
   Parameter<DDMCodeDescriptor> ddm_code_;
@@ -77,6 +86,7 @@ class MIMOCoherentCompensationOp : public holoscan::Operator {
   FMCWWaveformDescriptor effective_waveform_{};
   ConfigCache<CachedTdmCorrection> correction_cache_{};
   ConfigCache<CachedDdmDemux> demux_cache_{};
+  ConfigCache<CachedDdmCorrelate> correlate_cache_{};
 
   std::shared_ptr<holoscan::Tensor> retained_input_;
 };
