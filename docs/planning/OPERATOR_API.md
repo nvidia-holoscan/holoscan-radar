@@ -8,7 +8,7 @@ Design conventions (from the workflows doc): plain-tensor ports (bridge with sma
 
 **Precision (all operators).** Every operator supports both **single** (`complex64` / `float32`) and **double** (`complex128` / `float64`) precision floating-point I/O. Precision is fixed at compile time by the operator's template instantiation — it is neither a runtime parameter nor inferred from the data — and an operator's input and output tensors must match that templated precision. The per-operator dtype labels below list both forms (e.g. `complex64 / complex128`, `float32 / float64`); a given operator instance uses one, fixed by its instantiation, and its inputs and outputs share it. Any operator that must fix precision for a qualitative reason is called out in its own Notes.
 
-**Proposed amendments.** Text marked **PROPOSED — needs team review (not locked)** (or tagged **[PROPOSED]**) is a working proposal only. It is not accepted lockdown until the team explicitly adopts it. Today that applies to the `CFARDetectorOp` calibration / `alpha_lut` block under Detection & Clustering.
+**Proposed amendments.** Text marked **PROPOSED — needs team review (not locked)** (or tagged **[PROPOSED]**) is a working proposal only. It is not accepted lockdown until the team explicitly adopts it. No proposed-amendment blocks are currently open. (The `CFARDetectorOp` calibration / `alpha_lut` block was adopted as locked text on 2026-07-21 — see STATUS.md → Settled decisions, L5.)
 
 ---
 
@@ -337,122 +337,29 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 - `os_rank` **[live]** — int. Order-statistic rank into the sorted training cells; used only when `cfar_variant = OS`. **0-based, ascending:** training-cell powers are sorted low→high and the noise estimate is the value at index `os_rank` (rank 0 = smallest power). Must be `≥ 0` and `<` the training-cell count; border cells with fewer training cells clamp to `train_cnt − 1`. Default: none (required when OS; ≈ `floor(0.75·N)` for `N` training cells is typical).
 - `guard_cells` **[live]** — int per axis `(doppler, range)`. Guard extent each side of the cell under test (excluded from the noise estimate). The detection math is a single fused stencil that reads the extents as kernel arguments, so an unseen window footprint needs no kernel rebuild (it may still trigger an α-LUT recalibration — see `pfa` / `alpha_lut`). Default: none (required).
 - `training_cells` **[live]** — int per axis `(doppler, range)`. Training / reference extent each side, for the noise estimate. Also updates the training-cell count `N` (and thus α). Like `guard_cells`, changing the footprint needs no kernel rebuild but may recalibrate the α LUT. Default: none (required).
-- `pfa` **[live]** — float. Probability of false alarm; sets the per-variant threshold multiplier α. For CA-CFAR the exact relation for the Gamma(`K`) integrated statistic over `N` training cells is `pfa = I_{1/(1 + α/N)}(N·K, K)` (regularized incomplete beta), inverted numerically for α; at `K = 1` this reduces in closed form to `α = N·(pfa^(−1/N) − 1)`. Cheap scalar recompute (CA). Default: 1e-6.
-- `threshold_scale` **[live]** — float. Empirical multiplier on top of the Pfa-derived threshold (`threshold = threshold_scale · α · noise_estimate`); `1.0` = pure CFAR. Cheap; hand-tuning without changing the CFAR model. Default: 1.0.
-- `nci_axes` **[live]** — set/vector of leading-axis indices to non-coherently integrate before thresholding; other leading axes stay batched. Changes the output shape (integrated axes reduced — downstream infers) and the integration fold count `K = ∏ sizes of nci_axes`, which sets the cell statistic to Gamma(K); α takes `K` and is recomputed from `pfa`. For CA this is the closed-form incomplete-beta relation above (`pfa = I_{1/(1 + α/N)}(N·K, K)`, inverted numerically per training-cell count `N`; cheap host LUT). Default: `[]` (no integration; `K = 1`, exponential cell statistic). Validated by Monte Carlo (`test_cfar_detector_statistical` — `CaMonteCarloPfaK1`, `CaMonteCarloPfaNciK8`).
+- `pfa` **[live]** — float. Probability of false alarm; sets the per-variant threshold multiplier α **when `alpha_lut` is unset**. For CA-CFAR the exact relation for the Gamma(`K`) integrated statistic over `N` training cells is `pfa = I_{1/(1 + α/N)}(N·K, K)` (regularized incomplete beta), inverted numerically for α; at `K = 1` this reduces in closed form to `α = N·(pfa^(−1/N) − 1)`. **CA, and OS with `K = 1`,** calibrate α by closed-form inversion (cheap). **GO, SO, and OS with `K > 1`** have no closed form and calibrate α by Monte Carlo on a LUT-key cache miss (seconds on large footprints) — supply a precomputed `alpha_lut`, or rely on `blocking_alpha_lut_rebuild = false` to serve a stale LUT while the new table builds. Default: 1e-6.
+- `alpha_lut` **[live]** — optional float vector. Precomputed threshold multiplier LUT. When non-empty, used directly and `pfa` is ignored for α calibration. Indexing matches the runtime stencil:
+  - **CA / OS:** `alpha_lut[n]` where `n` is the in-bounds training-cell count at the cell under test.
+  - **GO / SO:** `alpha_lut[i]`, `i = go_lut_index(range_neg, range_pos, doppler_neg, doppler_pos)` (the GOGO/SOSO stencil's side-count key, `cfar_alpha.hpp`): per axis, `min(neg, pos)` if both half-sides alive else the alive side's count; then `min(range_side, doppler_side)` if both axes alive else the alive axis. Border geometries can alias to one `i`; `pfa`-derived builds store the max α across them so every aliased cell meets the target Pfa. Offline tables must use this `go_lut_index`, not raw per-side length or CA-style `N`.
+
+  Slot 0 is unused. Length must exceed the maximum LUT index for the configured variant, footprint, and map size (`len > max_n`). CA/OS require every index in `1..max_n` to be finite and strictly positive (slot 0 and any past `max_n` may be zero). GO/SO allow zeros at unreachable indices but require every reachable `go_lut_index` to be finite and strictly positive; negative or non-finite entries are always rejected. Cheap: validation and host→device upload only. Default: `[]` (unset → `pfa`-derived calibration). Precedence: `alpha_lut` if provided, else `pfa`-derived calibration.
+- `blocking_alpha_lut_rebuild` — bool. When `true`, a `pfa`-derived LUT cache miss blocks the tick until calibration finishes. When `false` (default), an unseen key starts a background build and the previous LUT is served for the tick (warn once); if no previous LUT exists yet, the tick still blocks on the first build. Has no effect while an external `alpha_lut` is supplied. Static. Default: `false`.
+- `nci_fold` — int. Optional integration fold `K = ∏ sizes of nci_axes`, used only to pre-calibrate the α LUT at `start()` when `nci_axes` is set (the fold is otherwise unknown until the first tick). Ignored when `nci_axes` is empty (`K = 1`). `<= 0` → unset (defer calibration to the first tick). Static. Default: 0.
+- **Start-time pre-calibration (CA / OS).** At `start()` the operator pre-builds the `pfa`-derived α LUT so the first tick does not stall on a Monte Carlo build. **CA and OS only:** their LUTs are indexed by training-cell count `N`, map-size-independent while the RD map is ≥ the CFAR window, so the warm build keys on a canonical window-sized geometry (no RD-map shape needed). **GO / SO** are indexed by the aliased `go_lut_index` and are map-dependent (a window-sized map is non-convergent at low `pfa`), so they are **not** pre-warmed — they calibrate on the first tick (supply `alpha_lut` to avoid the stall). A sub-window CA/OS map, an NCI fold not covered by `nci_fold`, or a `[live]` override falls back to a runtime build. **Any runtime (in-`compute`) calibration warns once per configuration.**
+- `threshold_scale` **[live]** — float. Empirical multiplier on top of the active α source (`alpha_lut` or `pfa`-derived): `threshold = threshold_scale · α · noise_estimate`; `1.0` = pure CFAR. Cheap; hand-tuning without changing the CFAR model. Default: 1.0.
+- `nci_axes` **[live]** — set/vector of leading-axis indices to non-coherently integrate before thresholding; other leading axes stay batched. Changes the output shape (integrated axes reduced — downstream infers) and the integration fold count `K = ∏ sizes of nci_axes`, which sets the cell statistic to Gamma(K); α takes `K` and is recomputed from `pfa` (closed form for CA; Monte Carlo for GO/SO/OS when `K > 1` and `alpha_lut` is unset). Default: `[]` (no integration; `K = 1`, exponential cell statistic). Validated by Monte Carlo (`test_cfar_detector_statistical` — `CaMonteCarloPfaK1`, `CaMonteCarloPfaNciK8`).
 - `max_detections` (optional) **[live]** — int. Upper cap on the number of detections emitted in `detection_idx`; if the scene produces more, the surplus is dropped and a warning raised. `detection_idx` is always sized to the actual count (≤ this cap, reallocated per tick). Unset → no cap (emit all detections). Default: none (uncapped).
 
-> ### PROPOSED — needs team review (not locked)
->
-> The block below is a **proposed contract modification** for `CFARDetectorOp`
-> calibration. It is **not** accepted lockdown text until the team reviews and
-> explicitly adopts it. Implementation on `dpc/detection` already follows this
-> proposal so correctness/perf work can proceed; do not treat presence in this
-> file as approval. Tracking:
-> [`operators/detection/cfar_detector_op/OPEN_ITEMS.md`](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md)
-> §7.
->
-> **What changes if adopted** (replaces / narrows the locked bullets above for
-> the named parameters; adds `alpha_lut`):
->
-> - `pfa` **[live]** **[PROPOSED]** — float. Probability of false alarm; sets
->   the per-variant threshold multiplier α when `alpha_lut` is unset. CA and
->   OS with `K = 1` calibrate α by closed-form inversion (cheap). GO, SO, and
->   OS with `K > 1` may trigger Monte Carlo LUT calibration on cache miss
->   (seconds on large footprints unless a precomputed `alpha_lut` is supplied
->   or `blocking_alpha_lut_rebuild = false` serves a stale LUT while the new
->   table builds). Default: 1e-6.
-> - `alpha_lut` **[live]** **[PROPOSED — new parameter]** — optional float
->   vector. Precomputed threshold multiplier LUT. When non-empty, used
->   directly and `pfa` is ignored for α calibration. Indexing matches the
->   runtime stencil:
->   - **CA / OS:** `alpha_lut[n]` where `n` is the in-bounds training-cell
->     count at the cell under test.
->   - **GO / SO:** `alpha_lut[i]` where `i = go_lut_index(range_neg,
->     range_pos, doppler_neg, doppler_pos)` — the compact side-count key used
->     by the GOGO/SOSO stencil (`cfar_alpha.hpp`). Per axis: if both half-sides
->     are alive use `min(neg, pos)`, else the alive side’s count; then if both
->     axes are alive use `min(range_side, doppler_side)`, else the alive axis.
->     Distinct border geometries can share one `i`; a single α serves all of
->     them (`pfa`-derived builds take the max α across aliased geometries so
->     every cell at that index meets the target Pfa). Offline tables must use
->     this same `go_lut_index` — not raw per-side length and not CA-style `N`.
->   Slot 0 is unused. Length must exceed the maximum LUT index for the
->   configured variant, footprint, and map size (`len > max_n`). CA/OS require
->   every index in `1..max_n` to be finite and strictly positive (slot 0 and
->   any past `max_n` may be zero). GO/SO allow zeros at unreachable indices
->   but require every reachable `go_lut_index` to be finite and strictly
->   positive; negative or non-finite entries are always rejected. Cheap:
->   validation and host→device upload only. Default: `[]` (unset →
->   `pfa`-derived calibration). Precedence: `alpha_lut` if provided, else
->   `pfa`-derived calibration.
-> - `blocking_alpha_lut_rebuild` **[PROPOSED — new parameter]** — bool. When
->   `true`, a `pfa`-derived LUT cache miss blocks the tick until calibration
->   finishes. When `false` (default), an unseen key starts a background build
->   and the previous LUT is served for the tick (warn once); if no previous
->   LUT exists yet, the tick still blocks on the first build. Has no effect
->   while an external `alpha_lut` is supplied. Static. Default: `false`.
-> - `nci_fold` **[PROPOSED — new parameter]** — int. Optional integration fold
->   `K = ∏ sizes of nci_axes`, used only to pre-calibrate the α LUT at
->   `start()` when `nci_axes` is set (the fold is otherwise unknown until the
->   first tick). Ignored when `nci_axes` is empty (`K = 1`). `<= 0` → unset
->   (defer calibration to the first tick). Static. Default: 0.
-> - **Start-time pre-calibration (CA / OS).** At `start()` the operator
->   pre-builds the `pfa`-derived α LUT so the first tick does not stall on a
->   Monte Carlo build. This applies to **CA and OS only**: their LUTs are
->   indexed by training-cell count `N`, which is map-size-independent while the
->   RD map is at least as large as the CFAR window, so the warm build keys on a
->   canonical window-sized geometry (no RD-map shape needed) and every larger
->   map reuses it. **GO / SO** LUTs are indexed by the aliased `go_lut_index`
->   and are genuinely map-dependent (a window-sized map yields a different, and
->   at low `pfa` non-convergent, calibration), so they are **not** pre-warmed —
->   they calibrate on the first tick (supply `alpha_lut` to avoid the stall). A
->   sub-window CA/OS map, an NCI fold not covered by `nci_fold`, or a `[live]`
->   override all fall back to a runtime build. **Any runtime (in-`compute`)
->   calibration warns once per configuration** so a caller can see the operator
->   did not pre-warm that key.
-> - `threshold_scale` **[live]** **[PROPOSED wording]** — float. Empirical
->   multiplier on top of the active α source
->   (`threshold = threshold_scale · α · noise_estimate`); `1.0` = pure CFAR.
->   Cheap; hand-tuning without changing the CFAR model. Default: 1.0.
-> - `nci_axes` **[live]** **[PROPOSED wording]** — set/vector of leading-axis
->   indices to non-coherently integrate before thresholding; other leading
->   axes stay batched. Changes the output shape (integrated axes reduced —
->   downstream infers) and the integration fold count
->   `K = ∏ sizes of nci_axes`, which sets the cell statistic to Gamma(K); α
->   takes `K` and is recomputed from `pfa` (closed form for CA; Monte Carlo
->   for GO/SO/OS when `K > 1` and `alpha_lut` is unset). Default: `[]` (no
->   integration; `K = 1`, exponential cell statistic).
-> - `training_cells` **[live]** **[PROPOSED wording note]** — the locked
->   “cheap scalar recompute” claim for α is false for GO/SO and OS with
->   `K > 1` under `pfa`-derived calibration; adopt the narrowed `pfa` /
->   `alpha_lut` wording above instead.
->
-> **[PROPOSED] Future calibration fast paths.** If `alpha_lut` is adopted as
-> the v1 explicit fast path (same per-index threshold semantics as
-> `pfa`-derived calibration), other user-facing fast paths remain deferred and
-> are **not** part of this proposal:
->
-> - an interior-cell scalar `alpha` for homogeneous maps where border exactness
->   is not required;
-> - scalar `alpha` plus simplified edge-handling modes, such as cropping the
->   CFAR-valid region, treating border cells as non-detections, or accepting
->   approximate border thresholds;
-> - hybrid scalar/table modes, such as using scalar `alpha` for fully
->   in-bounds interior cells and a small border LUT for reduced-`N` edge
->   cells;
-> - hybrid scalar/policy modes, such as scalar `alpha` for the interior plus
->   an explicit edge policy that crops, suppresses, approximates, or
->   delegates border handling to a downstream stage;
-> - helper utilities that generate `alpha_lut` tables offline from
->   `(variant, pfa, K, os_rank, guard_cells, training_cells)`;
-> - domain-specific table packaging or deployment conventions outside the
->   operator API.
->
-> **End proposed block.** Until team review lands, treat the locked parameter
-> bullets above this banner as the contract source of truth for review of
-> non-calibration topics; treat the proposed block as the working text the
-> implementation is targeting.
+**Deferred calibration fast paths (out of scope for v1).** `alpha_lut` is the v1 explicit fast path (same per-index threshold semantics as `pfa`-derived calibration). The following remain deferred and are **not** part of the current contract:
+
+- an interior-cell scalar `alpha` for homogeneous maps where border exactness is not required;
+- scalar `alpha` plus simplified edge-handling modes, such as cropping the CFAR-valid region, treating border cells as non-detections, or accepting approximate border thresholds;
+- hybrid scalar/table modes, such as using scalar `alpha` for fully in-bounds interior cells and a small border LUT for reduced-`N` edge cells;
+- hybrid scalar/policy modes, such as scalar `alpha` for the interior plus an explicit edge policy that crops, suppresses, approximates, or delegates border handling to a downstream stage;
+- helper utilities that generate `alpha_lut` tables offline from `(variant, pfa, K, os_rank, guard_cells, training_cells)`;
+- domain-specific table packaging or deployment conventions outside the operator API.
+
+GO/SO start-time pre-calibration (needs an RD-map shape hint, since their LUTs are map-dependent) is a tracked future enhancement, not part of the v1 contract.
 
 #### ClusterDBSCANOp
 

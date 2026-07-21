@@ -329,12 +329,10 @@ per-index thresholds. A scalar `alpha` alone is a poor fit for 2-D CFAR
 because edge cells use reduced `N`; defer scalar `alpha` unless a
 homogeneous-map shortcut is explicitly needed.
 
-**Proposed contract addition** — now drafted in
+**Contract addition (adopted 2026-07-21)** — now **locked** in
 [`OPERATOR_API.md`](../../../docs/planning/OPERATOR_API.md) under the CFAR
-parameters section as a block headed
-**“PROPOSED — needs team review (not locked)”**. That block is **not**
-accepted lockdown text until the team explicitly adopts it. Summary of the
-proposal:
+parameters section (the PROPOSED banner was dropped on adoption). Summary of
+what was locked:
 
 - `alpha_lut` **[live]** — float vector, optional. When set, used directly as
   the threshold multiplier table; `pfa` is ignored for alpha calibration.
@@ -378,34 +376,18 @@ the operator did not pre-warm that key.
 - Offline LUT-generation tooling (batch MC / design-time bisection helpers
   that emit `alpha_lut` tables from `pfa` without doing it in the realtime
   graph).
-- Team review of the PROPOSED `OPERATOR_API.md` block (adopt as locked text,
-  revise, or reject).
 
-**Questions for the team.**
+**Resolved (L5, adopted 2026-07-21).** The calibration block was **adopted as
+locked contract text** — the PROPOSED banner in `OPERATOR_API.md` is dropped and
+the bullets (`alpha_lut`, `blocking_alpha_lut_rebuild`, `nci_fold`, start-time
+pre-calibration, narrowed `pfa`/`threshold_scale`/`nci_axes` wording) are now the
+contract. `alpha_lut` is the sole v1 fast path (no scalar `alpha`). GO/SO
+start-time pre-warm (needs a map-shape hint) and offline LUT-generation tooling
+are **deferred future enhancements**, not blockers. See STATUS.md → Settled
+decisions (L5).
 
-- Confirm `alpha_lut`-only fast path (no scalar `alpha` in v1)?
-- Should offline tooling document how to generate `alpha_lut` from `pfa` (batch
-  MC / design-time bisection) without doing it in the realtime graph?
-- Adopt the proposed `OPERATOR_API.md` block as locked text (and drop the
-  PROPOSED banner), or revise / reject?
-
-**Status:**
-
-- **Implementation:** landed — `alpha_lut` parameter and `[live]` override
-  port; warn-once for slow `pfa` path; ignored `pfa` while `alpha_lut` is
-  active; `alpha_lut` cleared → `pfa` active transitions. Start-time
-  pre-calibration for CA/OS + `nci_fold` hint + warn-on-runtime-rebuild landed
-  2026-07-21 (GO/SO pre-warm and offline LUT-generation tooling remain
-  follow-ups).
-- **Contract:** **PROPOSED — needs team review.** Text is in
-  `OPERATOR_API.md` behind a clear “not locked” banner; do not treat it as
-  adopted until review.
-- **Scope frozen (2026-07-21):** code and contract-doc modifications for this
-  item are complete — no further changes are planned. The only remaining action
-  is the team's ratify / revise / reject decision. On adopt: drop the PROPOSED
-  banner in `OPERATOR_API.md`, record it in `STATUS.md` → Settled decisions, and
-  remove TEAM_BLOCKED L5. (GO/SO start-time pre-warm and offline LUT-generation
-  tooling are separate future enhancements, not part of ratifying L5.)
+**Status:** resolved — contract adopted; implementation + tests landed and
+verified in-container.
 
 ---
 
