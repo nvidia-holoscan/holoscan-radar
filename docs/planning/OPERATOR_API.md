@@ -392,6 +392,25 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 >   and the previous LUT is served for the tick (warn once); if no previous
 >   LUT exists yet, the tick still blocks on the first build. Has no effect
 >   while an external `alpha_lut` is supplied. Static. Default: `false`.
+> - `nci_fold` **[PROPOSED — new parameter]** — int. Optional integration fold
+>   `K = ∏ sizes of nci_axes`, used only to pre-calibrate the α LUT at
+>   `start()` when `nci_axes` is set (the fold is otherwise unknown until the
+>   first tick). Ignored when `nci_axes` is empty (`K = 1`). `<= 0` → unset
+>   (defer calibration to the first tick). Static. Default: 0.
+> - **Start-time pre-calibration (CA / OS).** At `start()` the operator
+>   pre-builds the `pfa`-derived α LUT so the first tick does not stall on a
+>   Monte Carlo build. This applies to **CA and OS only**: their LUTs are
+>   indexed by training-cell count `N`, which is map-size-independent while the
+>   RD map is at least as large as the CFAR window, so the warm build keys on a
+>   canonical window-sized geometry (no RD-map shape needed) and every larger
+>   map reuses it. **GO / SO** LUTs are indexed by the aliased `go_lut_index`
+>   and are genuinely map-dependent (a window-sized map yields a different, and
+>   at low `pfa` non-convergent, calibration), so they are **not** pre-warmed —
+>   they calibrate on the first tick (supply `alpha_lut` to avoid the stall). A
+>   sub-window CA/OS map, an NCI fold not covered by `nci_fold`, or a `[live]`
+>   override all fall back to a runtime build. **Any runtime (in-`compute`)
+>   calibration warns once per configuration** so a caller can see the operator
+>   did not pre-warm that key.
 > - `threshold_scale` **[live]** **[PROPOSED wording]** — float. Empirical
 >   multiplier on top of the active α source
 >   (`threshold = threshold_scale · α · noise_estimate`); `1.0` = pure CFAR.

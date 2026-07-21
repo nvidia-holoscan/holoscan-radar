@@ -347,8 +347,34 @@ proposal:
   (seconds on large footprints unless `blocking_alpha_lut_rebuild=false` serves
   a stale LUT while the new table builds).
 
+**Start-time pre-calibration (landed 2026-07-21).** To keep a slow Monte Carlo
+build off the data plane, the operator pre-calibrates the `pfa`-derived α LUT in
+`start()` — but only for **CA and OS**. Those LUTs are indexed by training-cell
+count `N`, which is map-size-independent while the RD map is at least as large
+as the CFAR window (a synthetic window-sized map reproduces byte-identical
+tables — verified by `CanonicalWindowLutEqualsLargerMapCaOs`), so the warm build
+keys on a canonical window-sized geometry with no RD-map shape needed.
+
+**GO/SO are NOT pre-warmed — they are genuinely map-dependent.** Empirically,
+`build_so_alpha_lut(pfa=1e-6, K=8, ...)` **succeeds on a 16×32 map but throws
+`mc_polish_alpha: exceeded bump budget` on a 13×13 or 7×7 map**, even though the
+reachable `go_lut_index` set is identical across those sizes. The aliased
+`go_lut_index` calibration (max-α across the border geometries that collapse to
+each index) depends on which geometries a given map actually produces, so a
+window-sized synthetic map changes the values (and can fail to converge at low
+`pfa`). GO/SO therefore keep the **actual map dimensions** in the LUT key and
+calibrate on the first tick; supply `alpha_lut` to avoid the stall, or provide
+the RD-map shape (a future hint) to pre-warm them.
+
+An optional **`nci_fold`** hint lets `start()` pre-warm CA/OS when `nci_axes` is
+set (the fold `K` is otherwise unknown until the first tick). **Every runtime
+(in-`compute`) calibration warns once per configuration** so a caller can see
+the operator did not pre-warm that key.
+
 **Implementation follow-up.**
 
+- GO/SO start-time pre-warm via an optional RD-map shape hint (they cannot use
+  the canonical window-sized geometry — see above).
 - Offline LUT-generation tooling (batch MC / design-time bisection helpers
   that emit `alpha_lut` tables from `pfa` without doing it in the realtime
   graph).
@@ -367,8 +393,10 @@ proposal:
 
 - **Implementation:** landed — `alpha_lut` parameter and `[live]` override
   port; warn-once for slow `pfa` path; ignored `pfa` while `alpha_lut` is
-  active; `alpha_lut` cleared → `pfa` active transitions. Offline
-  LUT-generation tooling remains a follow-up.
+  active; `alpha_lut` cleared → `pfa` active transitions. Start-time
+  pre-calibration for CA/OS + `nci_fold` hint + warn-on-runtime-rebuild landed
+  2026-07-21 (GO/SO pre-warm and offline LUT-generation tooling remain
+  follow-ups).
 - **Contract:** **PROPOSED — needs team review.** Text is in
   `OPERATOR_API.md` behind a clear “not locked” banner; do not treat it as
   adopted until review.

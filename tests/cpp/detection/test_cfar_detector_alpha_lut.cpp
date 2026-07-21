@@ -477,4 +477,69 @@ TEST(CFARDetectorAlphaLutTest, MaxGoLutIndexMatchesBruteForce) {
   }
 }
 
+// CA and OS LUTs are indexed by training-cell COUNT (N), which is
+// map-size-independent while the map is at least as large as the CFAR window:
+// a synthetic window-sized map produces byte-identical tables to any larger
+// map. This is the invariant that lets start() pre-calibrate CA/OS without
+// knowing the RD-map dimensions and reuse the table at runtime with no rebuild.
+// (GO/SO are indexed by the aliased go_lut_index and are genuinely
+// map-dependent, so they are NOT decoupled — see start()/compute().)
+TEST(CFARDetectorAlphaLutTest, CanonicalWindowLutEqualsLargerMapCaOs) {
+  namespace detail = holoscan::radar::detail;
+  const int win_d = 2 * (kGuardD + kTrainD) + 1;
+  const int win_r = 2 * (kGuardR + kTrainR) + 1;
+  const int big_d = static_cast<int>(kDoppler);   // 16 >= win_d
+  const int big_r = static_cast<int>(kRange);      // 32 >= win_r
+  const double pfa = 1e-3;
+
+  const auto expect_eq_vec = [](const std::vector<double>& a,
+                                const std::vector<double>& b,
+                                const char* what) {
+    ASSERT_EQ(a.size(), b.size()) << what << " length";
+    for (size_t i = 0; i < a.size(); ++i) {
+      EXPECT_DOUBLE_EQ(a[i], b[i]) << what << " index " << i;
+    }
+  };
+
+  // N-based reachable set is identical (fast, deterministic — no MC).
+  EXPECT_EQ(detail::max_training_cell_count(win_d, win_r, kGuardD, kGuardR,
+                                            kTrainD, kTrainR),
+            detail::max_training_cell_count(big_d, big_r, kGuardD, kGuardR,
+                                            kTrainD, kTrainR));
+  EXPECT_EQ(detail::reachable_training_cell_counts(win_d, win_r, kGuardD,
+                                                   kGuardR, kTrainD, kTrainR),
+            detail::reachable_training_cell_counts(big_d, big_r, kGuardD,
+                                                   kGuardR, kTrainD, kTrainR));
+
+  // Full table equality for CA (closed form) and OS with K=1 (closed form).
+  expect_eq_vec(detail::build_ca_alpha_lut(pfa, 1, win_d, win_r, kGuardD,
+                                           kGuardR, kTrainD, kTrainR),
+                detail::build_ca_alpha_lut(pfa, 1, big_d, big_r, kGuardD,
+                                           kGuardR, kTrainD, kTrainR),
+                "CA");
+  expect_eq_vec(detail::build_os_alpha_lut(pfa, 1, /*os_rank=*/20, win_d, win_r,
+                                           kGuardD, kGuardR, kTrainD, kTrainR),
+                detail::build_os_alpha_lut(pfa, 1, 20, big_d, big_r, kGuardD,
+                                           kGuardR, kTrainD, kTrainR),
+                "OS");
+}
+
+// A map smaller than the CFAR window falls back to a map-specific LUT (the
+// start-time pre-warm assumes map >= window). Detection must still work: the
+// operator builds the reduced-N table at runtime and thresholds correctly.
+TEST(CFARDetectorAlphaLutTest, SubWindowMapStillDetects) {
+  // Window is 7x7 (guard 1 + train 2 each side). Use a 5x5 map (< window).
+  constexpr int64_t kSmall = 5;
+  std::vector<double> map(static_cast<size_t>(kSmall * kSmall), 1.0);
+  map[static_cast<size_t>(2 * kSmall + 2)] = 100.0;  // strong center target
+  auto input = to_device_tensor(map, {kSmall, kSmall}, real_dtype<double>());
+
+  const auto out = run_cfar_idx<double>(
+      std::move(input), holoscan::Arg("cfar_variant") = CfarVariant::kCA,
+      holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuardD, kGuardR},
+      holoscan::Arg("training_cells") = std::vector<int64_t>{kTrainD, kTrainR},
+      holoscan::Arg("pfa") = 1e-3);
+  EXPECT_GE(num_detections(out.idx), 1);
+}
+
 }  // namespace

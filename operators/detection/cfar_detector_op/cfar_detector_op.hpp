@@ -106,6 +106,11 @@ class CFARDetectorOp : public holoscan::Operator {
   // (radar_common/sdk/arg_setters.hpp, plus the local CfarVariant enum)
   // before the base class processes args.
   void initialize() override;
+  // Pre-calibrates the alpha LUT at startup (before the first tick) so a slow
+  // Monte Carlo build does not stall the data plane on tick one. Assumes the RD
+  // map is at least as large as the CFAR window; a smaller map triggers a
+  // map-specific rebuild in compute() with a warning.
+  void start() override;
 
   void setup(OperatorSpec& spec) override;
   void compute(InputContext& op_input, OutputContext& op_output,
@@ -123,6 +128,11 @@ class CFARDetectorOp : public holoscan::Operator {
   Parameter<std::vector<double>> alpha_lut_;
   Parameter<double> threshold_scale_;
   Parameter<std::vector<int64_t>> nci_axes_;
+  // Optional NCI fold hint (K = product of nci_axes sizes). Static. Only used
+  // to pre-warm the alpha LUT at start() when nci_axes is non-empty (the fold
+  // is otherwise unknown until the first tick). <= 0 → unset (defer to first
+  // tick); ignored when nci_axes is empty (K = 1).
+  Parameter<int64_t> nci_fold_hint_;
   Parameter<int64_t> max_detections_;  // <= 0 → uncapped
   // When false (default), a [live] LUT-key change serves the previous alpha LUT
   // on that tick while the new table calibrates in the background (one-shot
@@ -160,6 +170,14 @@ class CFARDetectorOp : public holoscan::Operator {
   bool pending_lut_active_{false};
   bool stale_lut_warned_{false};
   bool pfa_lut_slow_warned_{false};
+  // Warns once per key transition when a LUT build is forced during compute()
+  // (a runtime rebuild / stall) rather than served from the start-time warm
+  // cache. Reset whenever the effective LUT key changes.
+  bool runtime_build_warned_{false};
+  // Warns once when an RD map smaller than the CFAR window arrives, so the
+  // start-time (map-fits-window) pre-warm does not apply and a map-specific LUT
+  // is built with reduced-N edge thresholds.
+  bool window_exceeds_map_warned_{false};
   bool using_external_alpha_lut_{false};
   bool pfa_ignored_while_alpha_lut_warned_{false};
   bool alpha_lut_cleared_pfa_active_warned_{false};
