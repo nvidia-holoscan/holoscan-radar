@@ -49,34 +49,36 @@ Let `OP` be the operator stem (the binary is `perf_<OP>`, e.g.
    phase ranges (resolve-overrides / classify-validate / stage-kernel / emit)
    visible to nsys; a normal build leaves them as zero-overhead no-ops.
 
-2. **Run** clean + under nsys across small/medium/large + the override sweep:
+2. **Run the analysis pipeline** — one shot (runner → parse → diagnose →
+   report):
 
    ```bash
-   python3 performance/agent/runner.py --operator <OP> \
-     --build-dir build-perf --out-dir performance/agent/runs --sizes xs,md,xl
+   performance/agent/run.sh <OP> xs,md,xl
    ```
 
-   Writes per-size `.nsys-rep` + stat-table JSON, the clean latency JSON, the
-   clean `--sweep-overrides` JSON, and a `runner_manifest.json`.
-
-3. **Parse** the nsys tables + perf JSON into one `analysis.json`:
-
-   ```bash
-   python3 performance/agent/parse.py --run-dir performance/agent/runs/<OP>
-   ```
-
-4. **Diagnose** against the `OPERATOR_DEVELOPMENT.md` rubric:
+   Prints the path to `report.md`. It chains the four stages below; run them
+   individually when you need to inspect an intermediate or re-render without
+   re-profiling:
 
    ```bash
+   python3 performance/agent/runner.py   --operator <OP> \
+       --build-dir build-perf --out-dir performance/agent/runs --sizes xs,md,xl
+   python3 performance/agent/parse.py    --run-dir performance/agent/runs/<OP>
    python3 performance/agent/diagnose.py --run-dir performance/agent/runs/<OP>
-   #   [--peak-gbps <device peak BW>]   # optional roofline note
+   #   diagnose.py takes an optional --peak-gbps <device BW> for a roofline note
+   python3 performance/agent/report.py   --run-dir performance/agent/runs/<OP>
    ```
 
-5. **Report** — render the markdown:
+   `runner.py` writes per-size `.nsys-rep` + stat-table JSON, the clean latency
+   JSON, the clean `--sweep-overrides` JSON, and `runner_manifest.json`;
+   `parse.py` folds them into `analysis.json`; `diagnose.py` emits ranked
+   `diagnosis.json`; `report.py` renders `report.md`.
 
-   ```bash
-   python3 performance/agent/report.py --run-dir performance/agent/runs/<OP>
-   ```
+3. **(Optional) Visualize** — `visualize.ipynb` (or `visualize.py`) renders the
+   run as a dashboard (kernel-vs-shell, latency, host-API composition, NVTX
+   phases, override sweep, findings) plus a cross-operator comparison. Needs
+   `pip install matplotlib`; reads plain JSON, so it runs on the host without a
+   GPU. Offer it when the user wants charts, not just the markdown.
 
 ## Present
 

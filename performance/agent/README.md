@@ -46,6 +46,16 @@ normal build keeps a zero-overhead hot path.
 
 ## Run
 
+One shot (runner → parse → diagnose → report), from the repo root:
+
+```bash
+performance/agent/run.sh fmcw_range_processor xs,md,xl
+# -> performance/agent/runs/fmcw_range_processor/report.md
+```
+
+Or run the stages individually (to inspect an intermediate, or re-render a
+report without re-profiling):
+
 ```bash
 OP=fmcw_range_processor
 python3 performance/agent/runner.py   --operator $OP --build-dir build-perf \
