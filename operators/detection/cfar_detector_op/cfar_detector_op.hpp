@@ -117,9 +117,12 @@ class CFARDetectorOp : public holoscan::Operator {
                ExecutionContext& context) override;
 
  private:
-  // Parameters per the locked contract. cfar_variant is static; the rest are
-  // overridable (each has a same-named non-blocking override input port
-  // declared in setup()).
+  // Parameters per the locked contract. cfar_variant, nci_fold_hint, and
+  // blocking_alpha_lut_rebuild are static; the remaining parameters are
+  // overridable — only those with a setup() override port may be live-wired,
+  // and each has a same-named non-blocking override input port declared there
+  // (os_rank, guard_cells, training_cells, pfa, alpha_lut, threshold_scale,
+  // nci_axes, max_detections).
   Parameter<CfarVariant> cfar_variant_;
   Parameter<int64_t> os_rank_;                  // OS only
   Parameter<std::vector<int64_t>> guard_cells_;    // (doppler, range)
