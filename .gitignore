@@ -5,6 +5,8 @@ build-*/
 data/
 .claude/
 .cursor/
+# perf-optimize harness run artifacts (nsys-rep / sqlite / analysis / report)
+performance/agent/runs/
 _CPack_Packages/
 __pycache__/
 .cache/
