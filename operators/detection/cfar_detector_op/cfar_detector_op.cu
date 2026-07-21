@@ -510,7 +510,16 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
     using_external_alpha_lut_ = false;
     const bool blocking_lut = blocking_alpha_lut_rebuild_.get();
     if (lut_key != alpha_lut_key_) {
-      runtime_build_warned_ = false;  // new key: allow a runtime-rebuild warn.
+      // Reset the warn-once flags only on a genuine key change — NOT on every
+      // tick while the same key's background build is still pending (the
+      // adopted key stays stale until the build completes, so this branch is
+      // re-entered each tick; resetting here would re-fire the runtime-rebuild
+      // warning every tick). Preserve the flags for an in-progress build; clear
+      // them when switching to a different pending key.
+      if (!(pending_lut_active_ && pending_lut_key_ == lut_key)) {
+        runtime_build_warned_ = false;
+        stale_lut_warned_ = false;
+      }
       const auto adopt_ready_lut = [&](std::vector<double> lut) {
         alpha_lut_host_cache_ = std::move(lut);
         alpha_lut_key_ = lut_key;
