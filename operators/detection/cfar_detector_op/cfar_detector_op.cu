@@ -145,6 +145,75 @@ void CFARDetectorOp<T>::initialize() {
 }
 
 template <typename T>
+void CFARDetectorOp<T>::start() {
+  // Pre-calibrate the alpha LUT at startup so the first tick doesn't stall on a
+  // Monte Carlo build. Only the pfa-derived path needs calibration (an external
+  // alpha_lut is used as-is). The map dimensions are unknown here, so this is
+  // limited to CA and OS, whose LUTs are indexed by training-cell count (N) and
+  // are map-size-independent while the map is at least as large as the CFAR
+  // window: a synthetic window-sized map reproduces the identical table. GO and
+  // SO are indexed by the aliased go_lut_index and are genuinely map-dependent,
+  // so they cannot be pre-warmed without the RD-map shape; they calibrate on
+  // the first tick (compute() warns).
+  if (!alpha_lut_.get().empty()) {
+    return;  // external table: no calibration to pre-warm.
+  }
+  const CfarVariant variant = cfar_variant_.get();
+  if (variant != CfarVariant::kCA && variant != CfarVariant::kOS) {
+    HOLOSCAN_LOG_INFO(
+        "CFARDetectorOp: {} calibrates its alpha LUT on the first tick "
+        "(go_lut_index tables are map-dependent and cannot be pre-warmed "
+        "without the RD-map shape); supply alpha_lut to avoid a runtime build.",
+        to_string(variant));
+    return;
+  }
+  const std::vector<int64_t> guard = guard_cells_.get();
+  const std::vector<int64_t> train = training_cells_.get();
+  if (guard.size() != 2 || train.size() != 2) {
+    return;  // invalid/unset footprint: compute() will surface the error.
+  }
+
+  // Fold K: no nci_axes → K = 1; otherwise the fold is only known from the
+  // input leading-axis sizes at tick time, so require the nci_fold hint.
+  int64_t fold = 1;
+  if (!nci_axes_.get().empty()) {
+    const int64_t hint = nci_fold_hint_.get();
+    if (hint <= 0) {
+      HOLOSCAN_LOG_INFO(
+          "CFARDetectorOp: nci_axes is set but nci_fold hint is unset; "
+          "deferring alpha-LUT calibration to the first tick (set nci_fold to "
+          "the integration fold K to pre-warm at start).");
+      return;
+    }
+    fold = hint;
+  }
+
+  const int gd = static_cast<int>(guard[0]);
+  const int gr = static_cast<int>(guard[1]);
+  const int td = static_cast<int>(train[0]);
+  const int tr = static_cast<int>(train[1]);
+  const int win_d = 2 * (gd + td) + 1;
+  const int win_r = 2 * (gr + tr) + 1;
+
+  const AlphaLutKey warm_key{variant, pfa_.get(), fold,  os_rank_.get(), gd, gr,
+                             td,      tr,         win_d, win_r};
+  try {
+    // Blocking build into the process-wide cache; the first tick then finds it
+    // ready (poll) and only uploads — no runtime calibration, no warning.
+    (void)detail::get_cached_alpha_lut(warm_key);
+    HOLOSCAN_LOG_INFO(
+        "CFARDetectorOp: pre-calibrated alpha LUT at start (variant={}, "
+        "pfa={}, K={}).",
+        to_string(variant), pfa_.get(), fold);
+  } catch (const std::exception& e) {
+    HOLOSCAN_LOG_WARN(
+        "CFARDetectorOp: start-time alpha-LUT pre-calibration skipped ({}); "
+        "the first tick will calibrate.",
+        e.what());
+  }
+}
+
+template <typename T>
 void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
   spec.input<holoscan::TensorMap>("rd_maps");
   spec.output<holoscan::TensorMap>("detection_mask");
@@ -183,11 +252,14 @@ void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
              "Leading-axis indices to non-coherently integrate before "
              "thresholding.",
              std::vector<int64_t>{});
+  spec.param(nci_fold_hint_, "nci_fold", "NCI fold hint (K)",
+             "Optional integration fold K = product of nci_axes sizes. Static. "
+             "Used only to pre-calibrate the alpha LUT at start() when "
+             "nci_axes is set (K is unknown until the first tick). <= 0 → "
+             "unset; ignored when nci_axes is empty.",
+             int64_t{0});
   spec.param(max_detections_, "max_detections", "Max detections",
              "Cap on emitted detections (<= 0 → uncapped).", int64_t{0});
-  spec.param(max_cached_kernels_, "max_cached_kernels", "Max cached kernels",
-             "Distinct window footprints retained before eviction.",
-             int64_t{4});
   spec.param(blocking_alpha_lut_rebuild_, "blocking_alpha_lut_rebuild",
              "Blocking alpha LUT rebuild",
              "When false, serve the previous LUT while a new one calibrates "
@@ -313,6 +385,34 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
     }
   }
 
+  // CA and OS LUTs are indexed by training-cell count (N), which is
+  // map-size-independent while the map is at least as large as the CFAR window.
+  // Key those on a canonical window-sized geometry so every such map shares one
+  // cache entry (and the start-time pre-warm). GO and SO are indexed by the
+  // aliased go_lut_index and are genuinely map-dependent (a window-sized map
+  // yields different — and, at low pfa, non-convergent — calibration), so they
+  // keep the actual map dimensions and are not pre-warmed. A sub-window CA/OS
+  // map needs a map-specific table and forces a runtime rebuild — warned below.
+  const bool map_independent_variant =
+      variant == CfarVariant::kCA || variant == CfarVariant::kOS;
+  const int win_d = 2 * (guard_d + train_d) + 1;
+  const int win_r = 2 * (guard_r + train_r) + 1;
+  const bool use_canonical_dims =
+      map_independent_variant && num_doppler >= win_d && num_range >= win_r;
+  if (map_independent_variant && !use_canonical_dims &&
+      !window_exceeds_map_warned_) {
+    HOLOSCAN_LOG_WARN(
+        "CFARDetectorOp: CFAR window ({}x{}) exceeds the RD-map extent "
+        "({}x{}); building a map-specific alpha LUT with reduced-N edge "
+        "thresholds (the start-time pre-warmed table does not apply).",
+        win_d, win_r, num_doppler, num_range);
+    window_exceeds_map_warned_ = true;
+  }
+  const int key_num_doppler =
+      use_canonical_dims ? win_d : static_cast<int>(num_doppler);
+  const int key_num_range =
+      use_canonical_dims ? win_r : static_cast<int>(num_range);
+
   AlphaLutKey lut_key{variant,
                       effective_pfa_,
                       plan.fold,
@@ -321,8 +421,8 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
                       guard_r,
                       train_d,
                       train_r,
-                      static_cast<int>(num_doppler),
-                      static_cast<int>(num_range)};
+                      key_num_doppler,
+                      key_num_range};
 
   auto upload_alpha_lut = [&](const std::vector<double>& host_lut) {
     std::vector<T> lut_t(host_lut.size());
@@ -410,6 +510,15 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
     using_external_alpha_lut_ = false;
     const bool blocking_lut = blocking_alpha_lut_rebuild_.get();
     if (lut_key != alpha_lut_key_) {
+      runtime_build_warned_ = false;  // new key: allow a runtime-rebuild warn.
+      const auto adopt_ready_lut = [&](std::vector<double> lut) {
+        alpha_lut_host_cache_ = std::move(lut);
+        alpha_lut_key_ = lut_key;
+        pending_lut_key_ = {};
+        pending_lut_active_ = false;
+        stale_lut_warned_ = false;
+        upload_alpha_lut(alpha_lut_host_cache_);
+      };
       const auto warn_slow_pfa_lut = [&]() {
         if (pfa_lut_slow_warned_ ||
             !uses_slow_pfa_lut_calibration(lut_key.variant, lut_key.fold)) {
@@ -422,42 +531,43 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
             to_string(lut_key.variant));
         pfa_lut_slow_warned_ = true;
       };
-      if (blocking_lut) {
+      // Fires whenever a build is forced during a tick (a runtime rebuild /
+      // stall) rather than served from the start-time warm cache — the signal
+      // the operator did not pre-calibrate this configuration.
+      const auto warn_runtime_rebuild = [&]() {
+        if (runtime_build_warned_) {
+          return;
+        }
+        HOLOSCAN_LOG_WARN(
+            "CFARDetectorOp: calibrating the alpha LUT at runtime (the "
+            "configuration was not pre-warmed at start — e.g. a [live] "
+            "override, an NCI fold not covered by nci_fold, or a sub-window "
+            "map); this stalls the tick or serves a stale LUT while building.");
+        runtime_build_warned_ = true;
+      };
+      // Poll first: a key pre-warmed at start() (or built on an earlier tick)
+      // is served with no calibration and no runtime-rebuild warning.
+      detail::AlphaLutSnapshot snap = detail::poll_cached_alpha_lut(lut_key);
+      if (snap.ready) {
+        adopt_ready_lut(std::move(snap.lut));
+      } else if (blocking_lut || alpha_lut_host_cache_.empty()) {
+        // Blocking mode, or the first materialization (no previous LUT to
+        // serve): build now and stall this tick.
+        warn_runtime_rebuild();
         warn_slow_pfa_lut();
-        alpha_lut_host_cache_ = detail::get_cached_alpha_lut(lut_key);
-        alpha_lut_key_ = lut_key;
-        pending_lut_key_ = {};
-        pending_lut_active_ = false;
-        stale_lut_warned_ = false;
-        upload_alpha_lut(alpha_lut_host_cache_);
+        adopt_ready_lut(detail::get_cached_alpha_lut(lut_key));
       } else {
-        detail::AlphaLutSnapshot snap = detail::poll_cached_alpha_lut(lut_key);
-        if (snap.ready) {
-          alpha_lut_host_cache_ = std::move(snap.lut);
-          alpha_lut_key_ = lut_key;
-          pending_lut_key_ = {};
-          pending_lut_active_ = false;
-          stale_lut_warned_ = false;
-          upload_alpha_lut(alpha_lut_host_cache_);
-        } else if (!alpha_lut_host_cache_.empty()) {
-          warn_slow_pfa_lut();
-          detail::ensure_alpha_lut_build(lut_key);
-          pending_lut_key_ = lut_key;
-          pending_lut_active_ = true;
-          if (!stale_lut_warned_) {
-            HOLOSCAN_LOG_WARN(
-                "CFARDetectorOp: alpha LUT for the new configuration is still "
-                "calibrating; using the previous LUT for this tick");
-            stale_lut_warned_ = true;
-          }
-        } else {
-          warn_slow_pfa_lut();
-          alpha_lut_host_cache_ = detail::get_cached_alpha_lut(lut_key);
-          alpha_lut_key_ = lut_key;
-          pending_lut_key_ = {};
-          pending_lut_active_ = false;
-          stale_lut_warned_ = false;
-          upload_alpha_lut(alpha_lut_host_cache_);
+        // Non-blocking: serve the previous LUT this tick, build in background.
+        warn_runtime_rebuild();
+        warn_slow_pfa_lut();
+        detail::ensure_alpha_lut_build(lut_key);
+        pending_lut_key_ = lut_key;
+        pending_lut_active_ = true;
+        if (!stale_lut_warned_) {
+          HOLOSCAN_LOG_WARN(
+              "CFARDetectorOp: alpha LUT for the new configuration is still "
+              "calibrating; using the previous LUT for this tick");
+          stale_lut_warned_ = true;
         }
       }
     } else if (pending_lut_active_ && pending_lut_key_ == lut_key) {

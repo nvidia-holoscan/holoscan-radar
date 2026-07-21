@@ -1,0 +1,25 @@
+{
+    "$schema": "urn:holohub:operator:v1",
+    "operator": {
+        "name": "SubarraySelectionOp",
+        "authors": [
+            {
+                "name": "Holoscan Team",
+                "affiliation": "NVIDIA"
+            }
+        ],
+        "language": ["C++"],
+        "version": "0.1.0",
+        "changelog": {
+            "0.1.0": "S3: select the largest filled ULA/URA (or an explicit sub-array) from a holey MIMO virtual array; emit reduced snapshot + array_geometry"
+        },
+        "holoscan_sdk": {
+            "minimum_required_version": "4.3.0",
+            "tested_versions": ["4.3.0"]
+        },
+        "platforms": ["x86_64", "aarch64"],
+        "tags": ["Radar", "Angle", "MIMO", "Subarray", "GPU", "FMCW"],
+        "ranking": 3,
+        "requirements": {}
+    }
+}

@@ -48,9 +48,9 @@ header is the full contract; the current build implements a faithful subset:
   unit + Monte Carlo statistical tests per variant, and the four output ports.
   `detection_score`, `detection_mask`, and `noise_estimate` are dense maps;
   `detection_idx` is compacted per tick on the GPU. Team open items (bool mask
-  transport, K>1 contract wording, `max_cached_kernels` no-op, proposed
-  `alpha_lut` contract) live in
-  [`cfar_detector_op/OPEN_ITEMS.md`](cfar_detector_op/OPEN_ITEMS.md).
+  transport) live in
+  [`cfar_detector_op/OPEN_ITEMS.md`](cfar_detector_op/OPEN_ITEMS.md); the
+  `alpha_lut` / calibration contract was adopted 2026-07-21 (STATUS.md L5).
 - **Staged follow-ups (not contract changes):**
   - ~~Device-side `detection_idx` compaction~~ **landed** — CUB reduce +
     exclusive-scan scatter builds `detection_idx` on the GPU (raster-stable);

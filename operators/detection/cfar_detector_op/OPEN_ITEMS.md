@@ -84,17 +84,18 @@ is a bottleneck. The LUT is tiny (≤ a few hundred doubles), rebuilt only when
 Revisit only if dynamic per-tick window footprints on very large maps make
 the host scan + inversion dominate.
 
-**Questions for the team.**
+**Resolved (L2, 2026-07-21).** Adopt the incomplete-beta relation as the
+pinned CA-CFAR calibration (chosen over reverting to the power-law
+placeholder, which misses target Pfa for `K > 1`). `OPERATOR_API.md`'s locked
+`pfa` and `nci_axes` bullets now state `pfa = I_{1/(1 + α/N)}(N·K, K)`,
+inverted numerically for α per training-cell count `N`, reducing to
+`α = N·(pfa^(−1/N) − 1)` at `K = 1`. The `cfar_alpha.cpp` implementation is
+unchanged (already correct); this ratifies it. Validated by Monte Carlo
+(`test_cfar_detector_statistical`: `CaMonteCarloPfaK1`,
+`CaMonteCarloPfaNciK8`). GO/SO/OS `K > 1` Monte Carlo calibration is a
+separate item (§7 / TEAM_BLOCKED L5). See STATUS.md → Settled decisions (L2).
 
-- Adopt the incomplete-beta relation as the pinned `K > 1` closed form in
-  `OPERATOR_API.md` (signal-processing owner sign-off)?
-- Or revert to the power-law placeholder and gate `nci_axes` until the
-  contract is updated?
-
-**Status:** open — **code is ahead of the contract**; landed preemptively so
-`nci_axes` development and Monte Carlo calibration can continue. Resolve by
-either updating `OPERATOR_API.md` to match the implementation or reverting
-the implementation to match the contract.
+**Status:** resolved — contract updated to match the implementation.
 
 ---
 
@@ -126,13 +127,17 @@ The risk is a caller reading the contract and expecting eviction/caching
 behavior that isn't there, or a future variant (e.g. OS with a sorted-window
 kernel) that *does* need caching silently diverging from the parameter.
 
-**Questions for the team.**
+**Resolved (L3, 2026-07-21).** Dropped from the contract (chosen over keeping
+it as a forward-looking placeholder). The fused stencil has nothing to cache,
+so the parameter was inert; a hollow knob that implies eviction behavior is
+worse than its absence. The `max_cached_kernels` parameter was removed from
+`OPERATOR_API.md` and from the operator (`cfar_detector_op.{hpp,cu}`) — it was
+declared/registered but never read and no test referenced it, so removal is
+behavior-preserving. If a future variant genuinely needs per-footprint kernel
+caching, re-introduce it as a real, wired parameter then. See STATUS.md →
+Settled decisions (L3).
 
-- Keep the parameter as a documented forward-looking placeholder (status quo)?
-- Or drop it from the contract until a variant actually needs kernel caching?
-
-**Status:** open — parameter accepted and stored but intentionally unused;
-noted so it is not mistaken for wired behavior.
+**Status:** resolved — parameter removed from contract and code.
 
 ---
 
@@ -192,17 +197,16 @@ ascending** order-statistic index:
 `RejectsOsRankOutOfRange`, `LiveOsRankOverrideMidStreamAndSticky`,
 `OsAlphaInvertsMonteCarloPfa`, and `NoiseEstimateMatchesOrderStatistic`.
 
-**Questions for the team.**
+**Resolved (L4, 2026-07-21).** Ratified **0-based, ascending** as the contract
+convention (chosen over 1-based / descending): rank 0 = smallest training-cell
+power, typical interior rank ≈ `floor(0.75·N)`. Matches array indexing and the
+existing MC-validated implementation, so no code change — `OPERATOR_API.md`'s
+`os_rank` bullet now states the convention explicitly. Pinned by
+`test_cfar_detector_os.cpp` (`RejectsOsRankOutOfRange`,
+`NoiseEstimateMatchesOrderStatistic`, `OsAlphaInvertsMonteCarloPfa`, live
+override). See STATUS.md → Settled decisions (L4).
 
-- Confirm **0-based ascending** as the contract convention (rank 0 = smallest
-  training-cell power; typical interior rank ≈ `floor(0.75 * N)` for
-  `N` training cells)?
-- Or adopt 1-based / descending convention and update the implementation to
-  match?
-
-**Status:** open — implementation and tests are consistent with 0-based
-ascending; **`OPERATOR_API.md` must not be changed until the team explicitly
-approves a contract update** in a dedicated PR.
+**Status:** resolved — contract now documents the implemented convention.
 
 ---
 
@@ -325,12 +329,10 @@ per-index thresholds. A scalar `alpha` alone is a poor fit for 2-D CFAR
 because edge cells use reduced `N`; defer scalar `alpha` unless a
 homogeneous-map shortcut is explicitly needed.
 
-**Proposed contract addition** — now drafted in
+**Contract addition (adopted 2026-07-21)** — now **locked** in
 [`OPERATOR_API.md`](../../../docs/planning/OPERATOR_API.md) under the CFAR
-parameters section as a block headed
-**“PROPOSED — needs team review (not locked)”**. That block is **not**
-accepted lockdown text until the team explicitly adopts it. Summary of the
-proposal:
+parameters section (the PROPOSED banner was dropped on adoption). Summary of
+what was locked:
 
 - `alpha_lut` **[live]** — float vector, optional. When set, used directly as
   the threshold multiplier table; `pfa` is ignored for alpha calibration.
@@ -343,31 +345,49 @@ proposal:
   (seconds on large footprints unless `blocking_alpha_lut_rebuild=false` serves
   a stale LUT while the new table builds).
 
+**Start-time pre-calibration (landed 2026-07-21).** To keep a slow Monte Carlo
+build off the data plane, the operator pre-calibrates the `pfa`-derived α LUT in
+`start()` — but only for **CA and OS**. Those LUTs are indexed by training-cell
+count `N`, which is map-size-independent while the RD map is at least as large
+as the CFAR window (a synthetic window-sized map reproduces byte-identical
+tables — verified by `CanonicalWindowLutEqualsLargerMapCaOs`), so the warm build
+keys on a canonical window-sized geometry with no RD-map shape needed.
+
+**GO/SO are NOT pre-warmed — they are genuinely map-dependent.** Empirically,
+`build_so_alpha_lut(pfa=1e-6, K=8, ...)` **succeeds on a 16×32 map but throws
+`mc_polish_alpha: exceeded bump budget` on a 13×13 or 7×7 map**, even though the
+reachable `go_lut_index` set is identical across those sizes. The aliased
+`go_lut_index` calibration (max-α across the border geometries that collapse to
+each index) depends on which geometries a given map actually produces, so a
+window-sized synthetic map changes the values (and can fail to converge at low
+`pfa`). GO/SO therefore keep the **actual map dimensions** in the LUT key and
+calibrate on the first tick; supply `alpha_lut` to avoid the stall, or provide
+the RD-map shape (a future hint) to pre-warm them.
+
+An optional **`nci_fold`** hint lets `start()` pre-warm CA/OS when `nci_axes` is
+set (the fold `K` is otherwise unknown until the first tick). **Every runtime
+(in-`compute`) calibration warns once per configuration** so a caller can see
+the operator did not pre-warm that key.
+
 **Implementation follow-up.**
 
+- GO/SO start-time pre-warm via an optional RD-map shape hint (they cannot use
+  the canonical window-sized geometry — see above).
 - Offline LUT-generation tooling (batch MC / design-time bisection helpers
   that emit `alpha_lut` tables from `pfa` without doing it in the realtime
   graph).
-- Team review of the PROPOSED `OPERATOR_API.md` block (adopt as locked text,
-  revise, or reject).
 
-**Questions for the team.**
+**Resolved (L5, adopted 2026-07-21).** The calibration block was **adopted as
+locked contract text** — the PROPOSED banner in `OPERATOR_API.md` is dropped and
+the bullets (`alpha_lut`, `blocking_alpha_lut_rebuild`, `nci_fold`, start-time
+pre-calibration, narrowed `pfa`/`threshold_scale`/`nci_axes` wording) are now the
+contract. `alpha_lut` is the sole v1 fast path (no scalar `alpha`). GO/SO
+start-time pre-warm (needs a map-shape hint) and offline LUT-generation tooling
+are **deferred future enhancements**, not blockers. See STATUS.md → Settled
+decisions (L5).
 
-- Confirm `alpha_lut`-only fast path (no scalar `alpha` in v1)?
-- Should offline tooling document how to generate `alpha_lut` from `pfa` (batch
-  MC / design-time bisection) without doing it in the realtime graph?
-- Adopt the proposed `OPERATOR_API.md` block as locked text (and drop the
-  PROPOSED banner), or revise / reject?
-
-**Status:**
-
-- **Implementation:** landed — `alpha_lut` parameter and `[live]` override
-  port; warn-once for slow `pfa` path; ignored `pfa` while `alpha_lut` is
-  active; `alpha_lut` cleared → `pfa` active transitions. Offline
-  LUT-generation tooling remains a follow-up.
-- **Contract:** **PROPOSED — needs team review.** Text is in
-  `OPERATOR_API.md` behind a clear “not locked” banner; do not treat it as
-  adopted until review.
+**Status:** resolved — contract adopted; implementation + tests landed and
+verified in-container.
 
 ---
 
@@ -430,3 +450,33 @@ pytest already covers `pfa` / `alpha_lut` behavior and Monte Carlo Pfa.
 **Status:** accepted / unclosable by design — leave the helpers in
 `detail::`, keep white-box calibration regressions C++-only; do not treat
 missing Python ports of those tests as unfinished bindings work.
+
+---
+
+## 10. Flaky test: `NonBlockingPfaOverrideServesStaleLut` intermittent SEGFAULT
+
+**Observed:** `CFARDetectorAlphaLutTest.NonBlockingPfaOverrideServesStaleLut`
+segfaults **intermittently** — in one run-in-isolation sample it crashed on 2 of
+5 runs and passed on the other 3 (Holoscan 4.3.0 container, `deustice-spatial-
+smoothing` image, 2026-07-20). The full `-L unit` suite therefore fails
+non-deterministically on this one test; all other unit tests are stable.
+
+This test exercises the §7 non-blocking path
+(`blocking_alpha_lut_rebuild=false`) where a `pfa` override serves a **stale
+LUT** while the new table rebuilds in the background — so the likely cause is a
+race between the background rebuild and the tick that reads the LUT (a
+use-after-free / partially-written table, consistent with a SEGFAULT rather than
+a wrong-value assertion failure). Not caused by the S1/S3 angle-estimation work
+landed 2026-07-20 (those touch neither CFAR nor this LUT path); flagged here as a
+pre-existing intermittent crash.
+
+**Questions for the team.**
+
+- Is the background alpha-LUT rebuild properly synchronized against the readers
+  (double-buffer + atomic swap, or a stream/event fence), or can a tick observe
+  a half-built / freed table?
+- Until fixed, should this test be marked flaky / retried, or the non-blocking
+  stale-LUT path be gated behind an explicit opt-in?
+
+**Status:** open — intermittent SEGFAULT reproduced in isolation; root-cause the
+race in the non-blocking LUT rebuild.

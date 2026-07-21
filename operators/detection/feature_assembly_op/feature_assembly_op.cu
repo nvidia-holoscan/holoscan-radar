@@ -34,6 +34,8 @@ int feature_to_id(AssemblyFeature feature) {
     case AssemblyFeature::kScore: return detail::kFeatScore;
     case AssemblyFeature::kAz: return detail::kFeatAz;
     case AssemblyFeature::kEl: return detail::kFeatEl;
+    case AssemblyFeature::kAzBin: return detail::kFeatAzBin;
+    case AssemblyFeature::kElBin: return detail::kFeatElBin;
     case AssemblyFeature::kDopplerBin: return detail::kFeatDopplerBin;
     case AssemblyFeature::kRangeBin: return detail::kFeatRangeBin;
   }
@@ -60,6 +62,24 @@ bool needs_aoa(const std::vector<AssemblyFeature>& features) {
   return false;
 }
 
+bool needs_az_bin(const std::vector<AssemblyFeature>& features) {
+  for (auto f : features) {
+    if (f == AssemblyFeature::kAzBin) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool needs_el_bin(const std::vector<AssemblyFeature>& features) {
+  for (auto f : features) {
+    if (f == AssemblyFeature::kElBin) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const char* kernel_error_message(int code) {
   switch (code) {
     case detail::kErrBatchCoord:
@@ -72,6 +92,10 @@ const char* kernel_error_message(int code) {
     case detail::kErrScoreCoord:
       return "FeatureAssemblyOp: (doppler_bin, range_bin) out of range for "
              "detection_score";
+    case detail::kErrAzBin:
+      return "FeatureAssemblyOp: az_bin out of range for az_angles";
+    case detail::kErrElBin:
+      return "FeatureAssemblyOp: el_bin out of range for el_angles";
     default:
       return "FeatureAssemblyOp: assemble kernel reported an error";
   }
@@ -122,6 +146,10 @@ void FeatureAssemblyOp<T>::setup(OperatorSpec& spec) {
       .condition(holoscan::ConditionType::kNone);
   spec.input<holoscan::TensorMap>("aoa_estimates")
       .condition(holoscan::ConditionType::kNone);
+  spec.input<holoscan::TensorMap>("az_angles")
+      .condition(holoscan::ConditionType::kNone);
+  spec.input<holoscan::TensorMap>("el_angles")
+      .condition(holoscan::ConditionType::kNone);
 
   spec.output<holoscan::TensorMap>("points");
 
@@ -161,6 +189,8 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
   auto velocity_bins = receive_optional(op_input, "velocity_bins", kOpName);
   auto detection_score = receive_optional(op_input, "detection_score", kOpName);
   auto aoa_estimates = receive_optional(op_input, "aoa_estimates", kOpName);
+  auto az_angles = receive_optional(op_input, "az_angles", kOpName);
+  auto el_angles = receive_optional(op_input, "el_angles", kOpName);
 
   if (needs_score(features) && !detection_score) {
     throw std::invalid_argument(
@@ -174,6 +204,24 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
         std::string(to_string(AssemblyFeature::kAz)) + "'/'" +
         std::string(to_string(AssemblyFeature::kEl)) +
         "' but aoa_estimates input is absent");
+  }
+  if (needs_az_bin(features) && !az_angles) {
+    throw std::invalid_argument(
+        "FeatureAssemblyOp: features includes 'az_bin' but az_angles input is "
+        "absent");
+  }
+  if (needs_el_bin(features) && !el_angles) {
+    throw std::invalid_argument(
+        "FeatureAssemblyOp: features includes 'el_bin' but el_angles input is "
+        "absent");
+  }
+  // Dense az/el bins live in the two preserved-batch columns immediately
+  // before (doppler_bin, range_bin), so at least two preserved columns.
+  if ((needs_az_bin(features) || needs_el_bin(features)) && n_preserved < 2) {
+    throw std::invalid_argument(
+        "FeatureAssemblyOp: 'az_bin'/'el_bin' require detection_idx with at "
+        "least two preserved-batch columns (…, az_bin, el_bin, doppler_bin, "
+        "range_bin)");
   }
 
   int64_t num_range = 0;
@@ -251,6 +299,34 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
     aoa_ptr = static_cast<const T*>(aoa_estimates->data());
   }
 
+  int64_t num_az = 0;
+  const T* az_ptr = nullptr;
+  if (az_angles) {
+    require_cuda_accessible(*az_angles, "az_angles", kOpName);
+    require_contiguous(*az_angles, "az_angles", kOpName);
+    require_dtype(*az_angles, real_dtype<T>(), "az_angles", kOpName);
+    if (az_angles->shape().size() != 1) {
+      throw std::invalid_argument(
+          "FeatureAssemblyOp: az_angles must be rank-1 (num_az,)");
+    }
+    num_az = az_angles->shape()[0];
+    az_ptr = static_cast<const T*>(az_angles->data());
+  }
+
+  int64_t num_el = 0;
+  const T* el_ptr = nullptr;
+  if (el_angles) {
+    require_cuda_accessible(*el_angles, "el_angles", kOpName);
+    require_contiguous(*el_angles, "el_angles", kOpName);
+    require_dtype(*el_angles, real_dtype<T>(), "el_angles", kOpName);
+    if (el_angles->shape().size() != 1) {
+      throw std::invalid_argument(
+          "FeatureAssemblyOp: el_angles must be rank-1 (num_el,)");
+    }
+    num_el = el_angles->shape()[0];
+    el_ptr = static_cast<const T*>(el_angles->data());
+  }
+
   auto stream = op_input.receive_cuda_stream("detection_idx");
 
   auto points = make_device_tensor({num_points, num_features}, real_dtype<T>());
@@ -264,6 +340,8 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
     retained_velocity_bins_ = std::move(velocity_bins);
     retained_score_ = std::move(detection_score);
     retained_aoa_ = std::move(aoa_estimates);
+    retained_az_angles_ = std::move(az_angles);
+    retained_el_angles_ = std::move(el_angles);
     retained_feature_ids_.reset();
     retained_score_offsets_.reset();
     return;
@@ -342,7 +420,7 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
       n_preserved, range_ptr, num_range, range_bins != nullptr, velocity_ptr,
       num_doppler, velocity_bins != nullptr, score_ptr, num_score_doppler,
       num_score_range, score_offsets_ptr, gather_score, aoa_ptr,
-      aoa_estimates != nullptr,
+      aoa_estimates != nullptr, az_ptr, num_az, el_ptr, num_el,
       static_cast<const int*>(retained_feature_ids_->data()), num_features,
       static_cast<T*>(points->data()), error_flag, stream);
 
@@ -370,6 +448,8 @@ void FeatureAssemblyOp<T>::compute(InputContext& op_input,
   retained_velocity_bins_ = std::move(velocity_bins);
   retained_score_ = std::move(detection_score);
   retained_aoa_ = std::move(aoa_estimates);
+  retained_az_angles_ = std::move(az_angles);
+  retained_el_angles_ = std::move(el_angles);
   retained_score_offsets_ = std::move(score_offsets_dev);
 }
 

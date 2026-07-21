@@ -48,6 +48,9 @@ cfar_detector:
   pfa: 1.0e-9
   os_rank: 0
   nci_axes: [0]
+  # nci_fold (K) is derived in the app from array_geometry.num_elements()
+  # (= num_virtual) and passed as an Arg, so it can't drift from num_tx /
+  # rx_array — see fmcw_mimo.cpp.
 
 snapshot_gather:
   snapshot_window: [0, 0]

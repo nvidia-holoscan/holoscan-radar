@@ -129,8 +129,14 @@ class FmcwMimoApp : public holoscan::Application {
       add_flow(compensation, vaa, {{"rd_maps", "rd_maps"}});
     }
 
+    // Derive the CFAR NCI fold (K) from the same virtual array geometry
+    // beamscan consumes (num_virtual = elements after the overlap policy), so
+    // it never drifts from num_tx / rx_array. nci_axes: [0] integrates the full
+    // virtual-channel axis, so K = num_elements; the operator ignores this hint
+    // when nci_axes is empty (K = 1).
     auto cfar = make_operator<radar::CFARDetectorOp<float>>(
-        "cfar_detector", from_config("cfar_detector"));
+        "cfar_detector", from_config("cfar_detector"),
+        holoscan::Arg("nci_fold") = cfg.array_geometry.num_elements());
     auto gather = make_operator<radar::SnapshotGatherOp<float>>(
         "snapshot_gather", from_config("snapshot_gather"));
     auto beamscan = make_operator<radar::BeamscanEstimatorOp<float>>(

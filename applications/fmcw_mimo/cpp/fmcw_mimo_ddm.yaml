@@ -47,6 +47,9 @@ cfar_detector:
   pfa: 1.0e-9
   os_rank: 0
   nci_axes: [0]
+  # nci_fold (K) is derived in the app from array_geometry.num_elements()
+  # (= num_virtual) and passed as an Arg, so it can't drift from num_tx /
+  # rx_array — see fmcw_mimo.cpp.
   # Margin above the statistical CFAR threshold. The strong targets score in
   # the thousands, but their Doppler / demuxed-band sidelobes poke ~1.0-1.2x
   # over a pfa-only threshold and show up as scattered marginal hits at the

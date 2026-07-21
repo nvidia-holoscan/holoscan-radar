@@ -230,9 +230,13 @@ CUB state. Rules from `operators/common/README.md`:
 - Override to an unseen key: warn once, build, cache.
 - Alternating values must not thrash.
 
-If a contract parameter implies caching (`max_cached_kernels`) but the
-implementation has nothing to cache, keep the param for compliance and record
-the no-op in `OPEN_ITEMS.md` — do not pretend eviction works.
+If a contract parameter implies caching but the implementation has nothing to
+cache, do not pretend eviction works: record the no-op in `OPEN_ITEMS.md` as a
+team question (keep-as-placeholder vs drop). Default to dropping a hollow knob
+from both the contract and the code once the team confirms — an inert parameter
+that implies behavior is worse than its absence (see the resolved
+`max_cached_kernels` item, TEAM_BLOCKED L3). Re-introduce it as a real, wired
+parameter if a variant ever needs it.
 
 ### 6. Keep host calibration off the fused kernel
 

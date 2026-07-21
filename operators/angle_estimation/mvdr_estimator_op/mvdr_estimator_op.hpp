@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -12,6 +13,7 @@
 
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/dsp/spatial_smoothing.hpp"
 #include "radar_common/dsp/steering_weights.hpp"
 #include "radar_common/dsp/steering_weights_device.hpp"
 #include "radar_common/sdk/config_cache.hpp"
@@ -61,9 +63,11 @@ void retire_matx_solver_caches();
 // Scope: the MVDR core — covariance + is_valid masking, diagonal loading,
 // batched inverse, Capon spectrum, dominant DOA, the multi-source outputs
 // (max_sources / doa_multi / source_count), and the covariance eigenvalues.
-// The one remaining contract parameter, `spatial_smoothing`, is BLOCKED on a
-// covariance-estimator team decision (see OPEN_ITEMS.md) and is not declared;
-// until it lands this operator is NOT checklist-complete.
+// `spatial_smoothing` (forward / forward-backward sub-array averaging on a
+// filled ULA/URA) is a front-end transform: it gathers the snapshot into
+// overlapping sub-array "looks", forms the averaged covariance on the reduced
+// sub-array geometry, and the covariance/eig/inverse/scan path runs unchanged
+// on the L reduced channels.
 template <typename T>
 class MVDREstimatorOp : public holoscan::Operator {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
@@ -92,18 +96,34 @@ class MVDREstimatorOp : public holoscan::Operator {
   // Capacity of the doa_multi / source_count outputs — the number of Capon
   // peaks to report (aoa_estimates is always the strongest). [live].
   Parameter<int64_t> max_sources_;
+  // Per-aperture-axis sub-array COUNTS for forward spatial smoothing on a
+  // filled ULA/URA: empty → off; [P] on a ULA; [P_az, P_el] on a URA. [live].
+  Parameter<std::vector<int64_t>> spatial_smoothing_;
+  // Include the conjugate-reversed (backward) looks — forward-backward
+  // smoothing (Pillai/Kwon). Needs a centro-symmetric ULA/URA. Default true.
+  Parameter<bool> forward_backward_;
 
   ArrayGeometry effective_geometry_{};
   std::vector<double> effective_az_{};
   std::vector<double> effective_el_{};
   double effective_loading_{-1.0};
   int64_t effective_max_sources_{1};
+  std::vector<int64_t> effective_smoothing_{};
+  bool effective_forward_backward_{true};
   bool seeded_{false};
 
   // Untapered steering manifold a(θ) (num_beams, num_channels), beam el-major
-  // (beam = ie * num_az + ia) to match the Capon reduce kernel's decode.
-  // Cached, warn-once on rebuild (geometry / scan-grid change).
+  // (beam = ie * num_az + ia) to match the Capon reduce kernel's decode. Built
+  // against the reduced sub-array geometry when smoothing is on. Cached,
+  // warn-once on rebuild (geometry / scan-grid / smoothing change).
   ConfigCache<std::shared_ptr<holoscan::Tensor>> steering_cache_;
+
+  // Spatial-smoothing plan + uploaded index tables, rebuilt only when the
+  // geometry / smoothing config changes (keyed by smoothing_key_).
+  SpatialSmoothingPlan smoothing_plan_{};
+  std::string smoothing_key_{};
+  std::shared_ptr<holoscan::Tensor> d_subarray_index_{};
+  std::shared_ptr<holoscan::Tensor> d_fb_flip_{};
 };
 
 }  // namespace holoscan::radar

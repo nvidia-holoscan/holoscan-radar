@@ -8,11 +8,14 @@
 
 #include <cstdint>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "angle_estimation/mvdr_estimator_op/mvdr_stage.hpp"
+#include "radar_common/dsp/spatial_smoothing.hpp"
+#include "radar_common/dsp/spatial_smoothing_device.hpp"
 #include "radar_common/dsp/steering_weights_device.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 #include "radar_common/sdk/override_param.hpp"
@@ -95,6 +98,16 @@ void MVDREstimatorOp<T>::setup(OperatorSpec& spec) {
              "report (aoa_estimates is the strongest)",
              int64_t{1});
   add_override_port<int64_t>(spec, "max_sources");
+  spec.param(spatial_smoothing_, "spatial_smoothing", "Spatial smoothing",
+             "Per-aperture-axis sub-array counts on a filled ULA/URA "
+             "(empty = off; [P] ULA; [P_az, P_el] URA)",
+             std::vector<int64_t>{});
+  add_override_port<std::vector<int64_t>>(spec, "spatial_smoothing");
+  spec.param(forward_backward_, "forward_backward",
+             "Forward-backward smoothing",
+             "Include conjugate-reversed looks (needs a centro-symmetric "
+             "ULA/URA); only applies when spatial_smoothing is set",
+             true);
 }
 
 template <typename T>
@@ -107,6 +120,8 @@ void MVDREstimatorOp<T>::compute(InputContext& op_input,
     effective_el_ = el_angles_.get();
     effective_loading_ = diagonal_loading_.get();
     effective_max_sources_ = max_sources_.get();
+    effective_smoothing_ = spatial_smoothing_.get();
+    effective_forward_backward_ = forward_backward_.get();
     seeded_ = true;
   }
 
@@ -127,6 +142,9 @@ void MVDREstimatorOp<T>::compute(InputContext& op_input,
   effective_max_sources_ = resolve_override_param(
       op_input, "max_sources", effective_max_sources_, &sources_changed);
   (void)sources_changed;
+  bool smoothing_changed = false;
+  effective_smoothing_ = resolve_override_param(
+      op_input, "spatial_smoothing", effective_smoothing_, &smoothing_changed);
 
   if (effective_az_.empty() || effective_el_.empty()) {
     throw std::invalid_argument(
@@ -183,16 +201,113 @@ void MVDREstimatorOp<T>::compute(InputContext& op_input,
 
   auto stream = op_input.receive_cuda_stream("snapshot");
 
-  const bool warn_on_build = geom_changed || grid_changed;
+  // Spatial-smoothing front-end. When enabled, gather the snapshot into
+  // overlapping sub-array looks (forward / forward-backward) and estimate on
+  // the reduced sub-array geometry; the covariance/eig/inverse/scan path
+  // below is unchanged, just on `est_channels` reduced channels. Off (empty
+  // param) → estimate on the full array.
+  const ArrayGeometry* manifold_geom = &effective_geometry_;
+  int64_t est_channels = num_channels;
+  int64_t est_snapshots = num_snapshots;
+  const cuda::std::complex<T>* est_snapshot =
+      static_cast<const cuda::std::complex<T>*>(snapshot->data());
+  const unsigned char* est_mask = mask_ptr;
+  std::shared_ptr<holoscan::Tensor> ss_snapshot;  // keep-alive
+  std::shared_ptr<holoscan::Tensor> ss_mask_t;    // keep-alive
+
+  if (!effective_smoothing_.empty()) {
+    // (Re)build the plan + upload index tables only when the config changes.
+    std::ostringstream ks;
+    ks << effective_geometry_.wavelength << '|';
+    for (double v : effective_geometry_.element_positions) {
+      ks << v << ',';
+    }
+    ks << '|';
+    for (int64_t v : effective_smoothing_) {
+      ks << v << ',';
+    }
+    ks << '|' << (effective_forward_backward_ ? 1 : 0);
+    const std::string key = ks.str();
+    if (key != smoothing_key_) {
+      smoothing_plan_ = build_spatial_smoothing_plan(
+          effective_geometry_, effective_smoothing_,
+          effective_forward_backward_);
+      smoothing_key_ = key;
+      if (smoothing_plan_.enabled) {
+        const int64_t p = smoothing_plan_.num_subarrays;
+        const int64_t l = smoothing_plan_.subarray_size;
+        d_subarray_index_ =
+            make_device_tensor({p * l}, DLDataType{kDLInt, 32, 1});
+        if (cudaMemcpyAsync(
+                d_subarray_index_->data(),
+                smoothing_plan_.subarray_index.data(),
+                smoothing_plan_.subarray_index.size() * sizeof(int32_t),
+                cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+          throw std::runtime_error(
+              "MVDREstimatorOp: spatial-smoothing index H2D failed");
+        }
+        if (smoothing_plan_.forward_backward) {
+          d_fb_flip_ = make_device_tensor({l}, DLDataType{kDLInt, 32, 1});
+          if (cudaMemcpyAsync(d_fb_flip_->data(),
+                              smoothing_plan_.fb_flip.data(),
+                              smoothing_plan_.fb_flip.size() * sizeof(int32_t),
+                              cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+            throw std::runtime_error(
+                "MVDREstimatorOp: spatial-smoothing fb-flip H2D failed");
+          }
+        } else {
+          d_fb_flip_.reset();
+        }
+        HOLOSCAN_LOG_WARN(
+            "MVDREstimatorOp: spatial smoothing on — aperture {}->{} channels, "
+            "{} sub-arrays{}",
+            num_channels, l, p,
+            smoothing_plan_.forward_backward ? " (forward-backward)" : "");
+      }
+    }
+
+    if (smoothing_plan_.enabled) {
+      const int64_t l = smoothing_plan_.subarray_size;
+      const int64_t m = smoothing_plan_.looks_per_snapshot() * num_snapshots;
+      ss_snapshot = make_device_tensor({num_items, l, m}, complex_dtype<T>());
+      if (mask_ptr != nullptr) {
+        ss_mask_t =
+            make_device_tensor({num_items, m}, DLDataType{kDLUInt, 8, 1});
+      }
+      run_spatial_smoothing_gather<T>(
+          static_cast<const cuda::std::complex<T>*>(snapshot->data()), mask_ptr,
+          num_items, num_channels, num_snapshots,
+          static_cast<const int32_t*>(d_subarray_index_->data()),
+          d_fb_flip_ ? static_cast<const int32_t*>(d_fb_flip_->data())
+                     : nullptr,
+          smoothing_plan_.num_subarrays, l, smoothing_plan_.forward_backward,
+          static_cast<cuda::std::complex<T>*>(ss_snapshot->data()),
+          ss_mask_t ? static_cast<unsigned char*>(ss_mask_t->data()) : nullptr,
+          stream);
+      check_cuda("spatial smoothing gather", kOpName);
+
+      manifold_geom = &smoothing_plan_.reduced_geometry;
+      est_channels = l;
+      est_snapshots = m;
+      est_snapshot =
+          static_cast<const cuda::std::complex<T>*>(ss_snapshot->data());
+      est_mask = ss_mask_t
+                     ? static_cast<const unsigned char*>(ss_mask_t->data())
+                     : nullptr;
+    }
+  }
+
+  const bool warn_on_build = geom_changed || grid_changed || smoothing_changed;
   // Untapered manifold (rectangular window): MVDR shapes the beam adaptively.
+  // Built against the reduced sub-array geometry when smoothing is on.
   const std::string cache_key =
-      steering_cache_key(effective_geometry_, angle_convention_.get(),
-                         effective_az_, effective_el_, WindowSpec{});
+      steering_cache_key(*manifold_geom, angle_convention_.get(), effective_az_,
+                         effective_el_, WindowSpec{});
   const std::shared_ptr<holoscan::Tensor>& manifold =
       steering_cache_.get_or_build(
           cache_key, warn_on_build, "steering manifold", [&] {
             return build_steering_weights_device<T>(
-                effective_geometry_, angle_convention_.get(), effective_az_,
+                *manifold_geom, angle_convention_.get(), effective_az_,
                 effective_el_, WindowSpec{}, BeamOrder::kElMajor,
                 SteeringLayout::kBeamMajor, /*conjugate=*/false, stream);
           });
@@ -220,12 +335,13 @@ void MVDREstimatorOp<T>::compute(InputContext& op_input,
       {num_items, effective_max_sources_, 2}, real_dtype<T>());
   auto source_count =
       make_device_tensor({num_items}, DLDataType{kDLInt, 32, 1});
+  // eigenvalues + covariance scratch are sized to the estimation channel count
+  // (reduced sub-array size L when smoothing is on, else the full array).
   auto eigenvalues =
-      make_device_tensor({num_items, num_channels}, real_dtype<T>());
-  // Covariance + inverse scratch, (num_items, num_channels, num_channels).
-  auto cov = make_device_tensor({num_items, num_channels, num_channels},
+      make_device_tensor({num_items, est_channels}, real_dtype<T>());
+  auto cov = make_device_tensor({num_items, est_channels, est_channels},
                                 complex_dtype<T>());
-  auto rinv = make_device_tensor({num_items, num_channels, num_channels},
+  auto rinv = make_device_tensor({num_items, est_channels, est_channels},
                                  complex_dtype<T>());
   auto k_counts =
       make_device_tensor({num_items}, DLDataType{kDLInt, 64, 1});
@@ -236,8 +352,8 @@ void MVDREstimatorOp<T>::compute(InputContext& op_input,
   }
 
   detail::run_mvdr_stage<T>(
-      static_cast<const cuda::std::complex<T>*>(snapshot->data()), mask_ptr,
-      num_items, num_channels, num_snapshots, effective_loading_,
+      est_snapshot, est_mask, num_items, est_channels, est_snapshots,
+      effective_loading_,
       static_cast<const cuda::std::complex<T>*>(manifold->data()), num_az,
       num_el, static_cast<const T*>(az_grid->data()),
       static_cast<const T*>(el_grid->data()), effective_max_sources_,
