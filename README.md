@@ -19,20 +19,73 @@ Holoscan Radar is a **Holoscan Module** — a self-contained, redistributable li
 
 ## Operators
 
-Each operator's header documents its full port/parameter contract; shared
-conventions live in [`operators/common/README.md`](operators/common/README.md)
-and the group overview in [`operators/fmcw/README.md`](operators/fmcw/README.md).
-Precision is fixed per instance by the template parameter (`float` →
-complex64, `double` → complex128).
+All operators below are C++/CUDA (MatX) with **Python bindings for the full
+set** (`holoscan.radar`, generated from the same pybind11-wrapped classes —
+see `python/holoscan/radar/`). Each operator's header documents its full
+port/parameter contract; precision is fixed per instance by the template
+parameter (`float` → complex64, `double` → complex128; Python exposes both as
+explicit `...OpF32` / `...OpF64` classes plus a bare `...Op` alias for `F32`).
 
-| Operator | Implementation | Function |
-| --- | --- | --- |
-| `FMCWRangeProcessorOp<T>` | C++/CUDA (MatX) | Range compression: optional software dechirp, windowed fast-time FFT; `range_bins` axis output |
-| `ClutterFilterOp<T>` | C++/CUDA (MatX) | Slow-time clutter suppression: mean subtraction or 1st/2nd-order MTI delay cancellers |
-| `FMCWDopplerProcessorOp<T>` | C++/CUDA (MatX) | Doppler compression: windowed slow-time FFT, zero-Doppler centering; `velocity_bins` axis output |
-| `FMCWRangeDopplerProcessorOp<T>` | C++/CUDA (MatX) | Fused range + optional clutter + Doppler in one node (bitwise parity with the split chain) |
+### FMCW signal processing + MIMO marshaling
 
-Python bindings are available for the full operator set (see `python/holoscan/radar/`).
+Shared conventions and the full table live in
+[`operators/fmcw/README.md`](operators/fmcw/README.md).
+
+| Operator | Function |
+| --- | --- |
+| `FMCWRangeProcessorOp<T>` | Range compression: optional software dechirp, windowed fast-time FFT; `range_bins` axis output |
+| `ClutterFilterOp<T>` | Slow-time clutter suppression: mean subtraction or 1st/2nd-order MTI delay cancellers |
+| `FMCWDopplerProcessorOp<T>` | Doppler compression: windowed slow-time FFT, zero-Doppler centering; `velocity_bins` axis output |
+| `FMCWRangeDopplerProcessorOp<T>` | Fused range + optional inline clutter + Doppler in one node (bitwise parity with the split chain) |
+| `MIMODeinterleaveOp<T>` | TDM marshaling: split interleaved slow-time into an explicit TX axis via `TXSchedule` gather |
+| `VirtualArrayAssemblyOp<T>` | MIMO marshaling: flatten separated TX×RX channels into a virtual array axis |
+| `MIMOCoherentCompensationOp<T>` | MIMO marshaling: TDM inter-TX phase correction, or DDM Doppler-band demux into an explicit TX axis |
+
+### Detection
+
+Full table in [`operators/detection/README.md`](operators/detection/README.md).
+
+| Operator | Function |
+| --- | --- |
+| `CFARDetectorOp<T>` | 2-D CFAR (CA/GO/SO/OS) on the (Doppler, range) plane; adaptive per-cell threshold from the training-cell noise estimate |
+| `FeatureAssemblyOp<T>` | Gather / bin→physical lookup into the clustering feature matrix |
+| `DetectionReductionOp<T>` | One representative CFAR cell per cluster (`first` / `peak` / `medoid`) |
+
+### Clustering
+
+Full table in [`operators/clustering/README.md`](operators/clustering/README.md).
+
+| Operator | Function |
+| --- | --- |
+| `ClusterDBSCANOp<T>` | Density clustering (DBSCAN) over an N-D feature matrix; noise labeled `-1` |
+
+### Angle estimation
+
+Full table in [`operators/angle_estimation/README.md`](operators/angle_estimation/README.md).
+
+| Operator | Function |
+| --- | --- |
+| `SnapshotGatherOp<T>` | Per-detection channel-vector gather from the RD neighborhood around each CFAR cell |
+| `BeamscanEstimatorOp<T>` | Conventional (Bartlett) sparse-path DOA on a scan grid |
+| `MVDREstimatorOp<T>` | Adaptive (MVDR / Capon) sparse-path DOA; multi-source + eigenvalue diagnostics |
+| `PhaseShiftBeamformerOp<T>` | Conventional (Bartlett) dense-path beamformer: a beam for every RD cell → Range-Doppler-Angle cube |
+
+### Shared config-plane types
+
+`ArrayGeometry`, `AngleConvention`, `WindowSpec`, `FMCWWaveformDescriptor`,
+`DDMCodeDescriptor`, `TXSchedule` — see
+[`operators/common/README.md`](operators/common/README.md). All are
+constructible from Python and flow through Holoscan's `from_config()` on
+either side.
+
+### App-support library (`radar_app`)
+
+Report + Holoviz visualization operators reused across the example apps
+(`ClusterReportOp`, `DetectionReportOp`, `RollingPlotOp`, `BoresightViewOp`,
+`ClusterOverlayOp`, `RdMapToImageOp`, `RdChannelSliceOp`, `NullSinkOp`,
+`CadenceMeter`) — see
+[`applications/common/README.md`](applications/common/README.md). Also bound
+to Python; every `applications/fmcw_*` demo uses them from either language.
 
 ### Namespace
 
