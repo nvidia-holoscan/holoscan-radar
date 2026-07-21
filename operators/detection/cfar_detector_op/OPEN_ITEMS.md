@@ -423,8 +423,26 @@ tensors and does not itself need a count sync.
 - Allow oversized buffers with an explicit valid-length companion and treat
   exact trim as optional / downstream?
 
-**Status:** open — current implementation matches the locked exact-size
-contract; alternatives require a contract change.
+**Resolved (L6, 2026-07-21).** Keep **exact sizing locked** and accept the
+per-tick scalar D2H count sync as the cost of the contract (chosen over adding a
+fixed/max-capacity buffer + `num_detections` port, or oversized + valid-length
+companion). Rationale: the sync moves a single integer, and the exact-size,
+no-companion-count shape is not local to CFAR — the whole downstream chain
+(`SnapshotGatherOp`, `FeatureAssemblyOp`, `DetectionReductionOp`,
+`ClusterDBSCANOp`) is built on "row count *is* `num_detections`, rows 1:1", so
+breaking it is a broad coordinated contract + code change unjustified without a
+measured latency budget the sync violates (the doc has none). Docs-only: the
+locked `detection_idx` contract in `OPERATOR_API.md` is unchanged; this ratifies
+it. See STATUS.md → Settled decisions (L6).
+
+**Deferred optimization (not v1).** If profiling later shows the per-tick D2H
+sync bounds latency, add a fixed/max-capacity `detection_idx` plus a scalar
+`num_detections` port (or valid-length companion) as an **opt-in alternative**
+so the hot path can stay fully device-side — added alongside, not replacing, the
+exact-size default. Tracked here as a future enhancement.
+
+**Status:** resolved — exact sizing ratified; capacity+count-port alternative
+deferred as a tracked optimization.
 
 ---
 

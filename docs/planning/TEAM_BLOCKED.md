@@ -57,7 +57,6 @@ or a deliberate contract change when the team has bandwidth.
 | # | Decision needed | Interim stance | Detail |
 | --- | --- | --- | --- |
 | L1 | **Bool mask dtype vs HSDK 4.3 DLPack** — keep `bool` (target HSDK 5), add `uint8` compat, or document C++-only until 5 | Emit/accept `kDLBool`; C++ wiring works with a logged GXF error; **Python bindings drain bool masks via `NullSinkOp` / harness `drain_ports` (no NumPy/`PyTensor` conversion on 4.3)** | [CFAR §1](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md); SnapshotGather / Beamscan / MVDR |
-| L6 | **Exact-sized `detection_idx`** — keep (accept sync) or add fixed-capacity / valid-length | Matches locked exact-size contract today | [CFAR §8](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md) |
 
 ### Clustering (`ClusterDBSCANOp`)
 
