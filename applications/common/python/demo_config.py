@@ -8,32 +8,33 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+# holoscan.radar must load before common.python.sim (which imports cupy) -
+# MatX CUDA cache / atexit ordering, same rule the app entry points follow.
+# isort: off
+from holoscan.operators import HolovizOp
 from holoscan.radar import (
     AngleConvention,
     AngleConventionPreset,
     ArrayGeometry,
     ArrayGeometryType,
-    CfarVariant,
-    ClutterFilterMethod,
     DDMCodeDescriptor,
-    FftNorm,
     FMCWWaveformDescriptor,
     FMCWWaveformSpec,
     MultiplexingScheme,
-    OverlapPolicy,
-    PeakInterpolation,
-    RepresentativePolicy,
-    ScoreMethod,
-    SnapshotEdgeMode,
     TXSchedule,
     WindowSpec,
     WindowType,
 )
+
+from common.python.sim import PointTarget
+
+# isort: on
 
 K_C = 299792458.0
 
@@ -156,147 +157,18 @@ def parse_angle_convention(node: Any) -> AngleConvention:
     return conv
 
 
-def parse_range_processor(block: dict[str, Any]) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"name": "range_processor"}
-    if "waveform" in block:
-        kwargs["waveform"] = parse_waveform(block["waveform"])
-    if "range_window" in block:
-        kwargs["range_window"] = parse_window_spec(block["range_window"])
-    if "apply_dechirp" in block:
-        kwargs["apply_dechirp"] = bool(block["apply_dechirp"])
-    if "fft_norm" in block:
-        kwargs["fft_norm"] = parse_enum(FftNorm, block["fft_norm"], "FftNorm")
-    if "propagation_speed" in block:
-        kwargs["propagation_speed"] = float(block["propagation_speed"])
-    if "nfft" in block:
-        kwargs["nfft"] = int(block["nfft"])
-    return kwargs
-
-
-def parse_clutter_filter(block: dict[str, Any]) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"name": "clutter_filter"}
-    if "method" in block:
-        kwargs["method"] = parse_enum(ClutterFilterMethod, block["method"], "ClutterFilterMethod")
-    return kwargs
-
-
-def parse_doppler_processor(block: dict[str, Any]) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"name": "doppler_processor"}
-    if "waveform" in block:
-        kwargs["waveform"] = parse_waveform(block["waveform"])
-    if "doppler_window" in block:
-        kwargs["doppler_window"] = parse_window_spec(block["doppler_window"])
-    if "center_zero_doppler" in block:
-        kwargs["center_zero_doppler"] = bool(block["center_zero_doppler"])
-    if "fft_norm" in block:
-        kwargs["fft_norm"] = parse_enum(FftNorm, block["fft_norm"], "FftNorm")
-    if "nfft" in block:
-        kwargs["nfft"] = int(block["nfft"])
-    return kwargs
-
-
-def parse_cfar_detector(block: dict[str, Any]) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"name": "cfar_detector"}
-    if "cfar_variant" in block:
-        kwargs["cfar_variant"] = parse_enum(CfarVariant, block["cfar_variant"], "CfarVariant")
-    if "os_rank" in block:
-        kwargs["os_rank"] = int(block["os_rank"])
-    if "guard_cells" in block:
-        kwargs["guard_cells"] = [int(x) for x in block["guard_cells"]]
-    if "training_cells" in block:
-        kwargs["training_cells"] = [int(x) for x in block["training_cells"]]
-    if "pfa" in block:
-        kwargs["pfa"] = float(block["pfa"])
-    if "alpha_lut" in block:
-        kwargs["alpha_lut"] = [float(x) for x in block["alpha_lut"]]
-    if "threshold_scale" in block:
-        kwargs["threshold_scale"] = float(block["threshold_scale"])
-    if "nci_axes" in block:
-        kwargs["nci_axes"] = [int(x) for x in block["nci_axes"]]
-    if "max_detections" in block:
-        kwargs["max_detections"] = int(block["max_detections"])
-    if "max_cached_kernels" in block:
-        kwargs["max_cached_kernels"] = int(block["max_cached_kernels"])
-    if "blocking_alpha_lut_rebuild" in block:
-        kwargs["blocking_alpha_lut_rebuild"] = bool(block["blocking_alpha_lut_rebuild"])
-    return kwargs
-
-
-def parse_snapshot_gather(block: dict[str, Any]) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"name": "snapshot_gather"}
-    if "snapshot_window" in block:
-        kwargs["snapshot_window"] = [int(x) for x in block["snapshot_window"]]
-    if "doppler_edge" in block:
-        kwargs["doppler_edge"] = parse_enum(
-            SnapshotEdgeMode, block["doppler_edge"], "SnapshotEdgeMode"
-        )
-    if "range_edge" in block:
-        kwargs["range_edge"] = parse_enum(SnapshotEdgeMode, block["range_edge"], "SnapshotEdgeMode")
-    return kwargs
-
-
-def parse_beamscan_estimator(block: dict[str, Any]) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"name": "beamscan_estimator"}
-    if "angle_convention" in block:
-        kwargs["angle_convention"] = parse_angle_convention(block["angle_convention"])
-    if "az_angles" in block:
-        kwargs["az_angles"] = [float(x) for x in block["az_angles"]]
-    if "el_angles" in block:
-        kwargs["el_angles"] = [float(x) for x in block["el_angles"]]
-    if "array_taper" in block:
-        kwargs["array_taper"] = parse_window_spec(block["array_taper"])
-    if "peak_interpolation" in block:
-        kwargs["peak_interpolation"] = parse_enum(
-            PeakInterpolation, block["peak_interpolation"], "PeakInterpolation"
-        )
-    return kwargs
-
-
-def parse_phase_shift_beamformer(block: dict[str, Any]) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"name": "phase_shift_beamformer"}
-    if "angle_convention" in block:
-        kwargs["angle_convention"] = parse_angle_convention(block["angle_convention"])
-    if "az_angles" in block:
-        kwargs["az_angles"] = [float(x) for x in block["az_angles"]]
-    if "el_angles" in block:
-        kwargs["el_angles"] = [float(x) for x in block["el_angles"]]
-    if "array_taper" in block:
-        kwargs["array_taper"] = parse_window_spec(block["array_taper"])
-    return kwargs
-
-
-def parse_cluster_dbscan(block: dict[str, Any]) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"name": "cluster_dbscan"}
-    if "epsilon" in block:
-        kwargs["epsilon"] = [float(x) for x in block["epsilon"]]
-    if "min_points" in block:
-        kwargs["min_points"] = int(block["min_points"])
-    if "max_clusters" in block:
-        kwargs["max_clusters"] = int(block["max_clusters"])
-    return kwargs
-
-
-def parse_reduction(block: dict[str, Any]) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"name": "detection_reduction"}
-    if "representative" in block:
-        kwargs["representative"] = parse_enum(
-            RepresentativePolicy, block["representative"], "RepresentativePolicy"
-        )
-    if "score_method" in block:
-        kwargs["score_method"] = parse_enum(ScoreMethod, block["score_method"], "ScoreMethod")
-    if "feature_weights" in block:
-        kwargs["feature_weights"] = [float(x) for x in block["feature_weights"]]
-    return kwargs
-
-
-def parse_mimo_deinterleave(block: dict[str, Any]) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"name": "mimo_deinterleave"}
-    if "tx_schedule" in block:
-        kwargs["tx_schedule"] = parse_tx_schedule(block["tx_schedule"])
-    return kwargs
-
-
 def parse_mimo_coherent_compensation(block: dict[str, Any]) -> dict[str, Any]:
+    """Extract mimo_coherent_compensation's ``multiplexing_scheme`` / kwargs.
+
+    Kept manual (not routed through ``self.from_config()``): unlike the other
+    operator blocks, ``fmcw_mimo`` must inject an app-resolved ``ddm_code``
+    (which may expand ``generate_phase_codes`` into explicit ``phase_codes``)
+    that shares this block's YAML key. Holoscan's Python ``Operator.__init__``
+    applies ``from_config()``'s ``ArgList`` (a positional arg) *after* all
+    kwargs regardless of call-site order, so ``from_config()`` would always
+    win and silently discard the resolved override. See fmcw_mimo/python/
+    config.py::load_config.
+    """
     kwargs: dict[str, Any] = {"name": "mimo_coherent_compensation"}
     if "multiplexing_scheme" in block:
         kwargs["multiplexing_scheme"] = parse_enum(
@@ -306,15 +178,6 @@ def parse_mimo_coherent_compensation(block: dict[str, Any]) -> dict[str, Any]:
         kwargs["waveform"] = parse_waveform(block["waveform"])
     if "ddm_code" in block:
         kwargs["ddm_code"] = parse_ddm_code(block["ddm_code"])
-    return kwargs
-
-
-def parse_virtual_array_assembly(block: dict[str, Any]) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"name": "virtual_array_assembly"}
-    if "overlap_policy" in block:
-        kwargs["overlap_policy"] = parse_enum(
-            OverlapPolicy, block["overlap_policy"], "OverlapPolicy"
-        )
     return kwargs
 
 
@@ -440,6 +303,47 @@ def parse_target(node: dict[str, Any], *, app_name: str) -> tuple[
     return position, velocity, amplitude
 
 
+def parse_cube_dims(root: dict[str, Any]) -> tuple[int, int]:
+    """cube.{num_chirps, samples_per_chirp} + positivity validation.
+
+    Mirrors ``radar_app/app/config.hpp::parse_cube``. MIMO parses its own
+    cube (``chirps_per_tx`` vs ``num_chirps`` depending on TDM/DDM) and does
+    not use this.
+    """
+    cube = root["cube"]
+    num_chirps = int(cube["num_chirps"])
+    samples_per_chirp = int(cube["samples_per_chirp"])
+    if num_chirps <= 0:
+        raise ValueError(f"cube.num_chirps must be > 0, got {num_chirps}")
+    if samples_per_chirp <= 0:
+        raise ValueError(f"cube.samples_per_chirp must be > 0, got {samples_per_chirp}")
+    return num_chirps, samples_per_chirp
+
+
+def parse_noise(root: dict[str, Any], scene: Any) -> None:
+    """``noise_snr_db`` -> ``scene.snr_db`` (unset leaves it None / noise-free)."""
+    noise = root.get("noise_snr_db")
+    if noise is not None:
+        scene.snr_db = float(noise)
+
+
+def parse_targets_range1d(root: dict[str, Any]) -> list[PointTarget]:
+    """1-D targets (SISO): (range, velocity) along boresight, real amplitude."""
+    targets: list[PointTarget] = []
+    for node in root.get("targets", []):
+        range_m = float(node["range"])
+        velocity = float(node["velocity"])
+        amplitude = float(node["amplitude"])
+        targets.append(
+            PointTarget(
+                position=(range_m, 0.0, 0.0),
+                velocity=(velocity, 0.0, 0.0),
+                amplitude=complex(amplitude, 0.0),
+            )
+        )
+    return targets
+
+
 @dataclass
 class PlotsConfig:
     enable: bool = True
@@ -468,14 +372,34 @@ def parse_plots(root: dict[str, Any]) -> PlotsConfig:
 
 
 @dataclass
-class RunConfig:
-    num_frames: int
-    frame_period: float
+class CommonRunConfig:
+    """Run cadence + visualization toggles shared by every FMCW demo app.
+
+    Python analogue of ``radar_app/app/config.hpp::CommonRunConfig``: each
+    app's ``AppConfig`` inherits from this (dataclass inheritance) and adds
+    its own scene + app-specific fields. ``run_fmcw_app()`` (driver.py) reads
+    ``visualize`` / ``headless`` / ``skip_display_check`` through the derived
+    config.
+    """
+
+    config_path: Path | None = None
+    num_frames: int = 1
+    frame_period: float = 0.1
     meter_cadence: bool = True
     meter_log_every: int = 0
+    visualize: bool = False
+    skip_display_check: bool = False
+    headless: bool = False
+    plots: PlotsConfig = field(default_factory=PlotsConfig)
 
 
-def parse_run(root: dict[str, Any]) -> RunConfig:
+def parse_common_run_config(root: dict[str, Any], config_path: Path) -> CommonRunConfig:
+    """Parse the app-owned run/viz-toggle/plots sections (waveform, cube, and
+    targets are app-specific and stay in each app's own ``load_config``).
+    Mirrors ``radar_app/app/config.hpp``'s ``parse_run`` + ``parse_viz_toggles``
+    + ``parse_plots``, folded into one call (Python prefers returning a value
+    over C++'s in-place mutation of an out-param).
+    """
     run = root["run"]
     num_frames = int(run["num_frames"])
     frame_period = float(run["frame_period"])
@@ -488,13 +412,30 @@ def parse_run(root: dict[str, Any]) -> RunConfig:
         raise ValueError(
             f"run.frame_period must be within [1 ns, INT64_MAX ns], got " f"{frame_period} s"
         )
-    meter_cadence = bool(run.get("meter_cadence", True))
     meter_log_every = int(run.get("meter_log_every", 0))
     if meter_log_every < 0:
         raise ValueError("run.meter_log_every must be >= 0")
-    return RunConfig(
+    return CommonRunConfig(
+        config_path=config_path,
         num_frames=num_frames,
         frame_period=frame_period,
-        meter_cadence=meter_cadence,
+        meter_cadence=bool(run.get("meter_cadence", True)),
         meter_log_every=meter_log_every,
+        visualize=bool(root.get("visualize", False)),
+        skip_display_check=bool(root.get("skip_display_check", False)),
+        headless=bool(root.get("headless", False)),
+        plots=parse_plots(root),
     )
+
+
+def cluster_layer_name(color: int) -> str:
+    return f"cluster_{color}"
+
+
+def make_view(ox: float, oy: float, w: float, h: float) -> HolovizOp.InputSpec.View:
+    view = HolovizOp.InputSpec.View()
+    view.offset_x = ox
+    view.offset_y = oy
+    view.width = w
+    view.height = h
+    return view
