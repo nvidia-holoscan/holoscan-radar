@@ -18,8 +18,10 @@ enum class AssemblyFeature {
   kRange,        // range_bins[range_bin], or raw range_bin if bins absent
   kVelocity,     // velocity_bins[doppler_bin], or raw doppler_bin if absent
   kScore,        // gather detection_score at the cell (input required)
-  kAz,           // aoa_estimates[row, 0] (input required)
-  kEl,           // aoa_estimates[row, 1] (input required)
+  kAz,           // aoa_estimates[row, 0] (sparse path; input required)
+  kEl,           // aoa_estimates[row, 1] (sparse path; input required)
+  kAzBin,        // az_angles[az_bin] (dense path; az_angles input required)
+  kElBin,        // el_angles[el_bin] (dense path; el_angles input required)
   kDopplerBin,   // raw doppler_bin escape hatch
   kRangeBin,     // raw range_bin escape hatch
 };
@@ -31,6 +33,8 @@ constexpr std::string_view to_string(AssemblyFeature feature) {
     case AssemblyFeature::kScore: return "score";
     case AssemblyFeature::kAz: return "az";
     case AssemblyFeature::kEl: return "el";
+    case AssemblyFeature::kAzBin: return "az_bin";
+    case AssemblyFeature::kElBin: return "el_bin";
     case AssemblyFeature::kDopplerBin: return "doppler_bin";
     case AssemblyFeature::kRangeBin: return "range_bin";
   }
@@ -52,7 +56,11 @@ constexpr std::string_view to_string(AssemblyFeature feature) {
 // In:  detection_score — optional float32/float64, (..., num_doppler,
 //                       num_range). Required when `score` is in features.
 // In:  aoa_estimates   — optional float32/float64, (num_points, 2). Required
-//                       when `az` or `el` is in features.
+//                       when `az` or `el` is in features (sparse path).
+// In:  az_angles       — optional float32/float64, (num_az,). Azimuth scan
+//                       grid; required when `az_bin` is in features (dense).
+// In:  el_angles       — optional float32/float64, (num_el,). Elevation scan
+//                       grid; required when `el_bin` is in features (dense).
 // Out: points          — float32/float64, (num_points, num_features). Columns
 //                       in `features` order; rows 1:1 with detection_idx.
 //
@@ -84,6 +92,8 @@ class FeatureAssemblyOp : public holoscan::Operator {
   std::shared_ptr<holoscan::Tensor> retained_velocity_bins_;
   std::shared_ptr<holoscan::Tensor> retained_score_;
   std::shared_ptr<holoscan::Tensor> retained_aoa_;
+  std::shared_ptr<holoscan::Tensor> retained_az_angles_;
+  std::shared_ptr<holoscan::Tensor> retained_el_angles_;
   // Scratch uploads used by the assemble kernel (feature ids, score offsets,
   // score leading dims). Feature ids are static → uploaded once. Leading
   // dims are re-uploaded only when the score-map layout changes.

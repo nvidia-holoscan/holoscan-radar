@@ -83,5 +83,13 @@ sanctioned shared operator (e.g. promote `CubeAoaLookupOp` into
 accept az/el grids and resolve angles from the preserved batch columns itself?
 Either is an `OPERATOR_API.md` contract change — do not resolve silently.
 
-**Status:** open — bridged app-locally in `fmcw_dense_simo`; needs a team
-decision before a shared form lands.
+**Resolved (S4, 2026-07-21).** `FeatureAssemblyOp` was extended (chosen over a
+standalone shared op): new `az_bin` / `el_bin` feature tokens + optional
+`az_angles` / `el_angles` grid inputs resolve az/el from the preserved
+`(az_bin, el_bin)` `detection_idx` columns — symmetric with its existing
+range/velocity bin lookups. The dense path feeds angle features to clustering
+with no per-app adapter; `fmcw_dense_simo` / `fmcw_mimo` can drop their local
+`CubeAoaLookupOp` at leisure (the workaround still works). See STATUS.md S4 and
+`OPERATOR_API.md` → FeatureAssemblyOp.
+
+**Status:** resolved — extended `FeatureAssemblyOp`, implemented + tested.

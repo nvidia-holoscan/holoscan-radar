@@ -36,7 +36,9 @@ HostTensor run_assembly(
     std::shared_ptr<holoscan::Tensor> range_bins = nullptr,
     std::shared_ptr<holoscan::Tensor> velocity_bins = nullptr,
     std::shared_ptr<holoscan::Tensor> detection_score = nullptr,
-    std::shared_ptr<holoscan::Tensor> aoa_estimates = nullptr) {
+    std::shared_ptr<holoscan::Tensor> aoa_estimates = nullptr,
+    std::shared_ptr<holoscan::Tensor> az_angles = nullptr,
+    std::shared_ptr<holoscan::Tensor> el_angles = nullptr) {
   auto harness = create_operator_test<FeatureAssemblyOp<T>>(
       holoscan::Arg("features") = features);
   harness->template add_input_port<holoscan::TensorMap>(
@@ -59,6 +61,14 @@ HostTensor run_assembly(
     harness->template add_input_port<holoscan::TensorMap>(
         "aoa_estimates",
         {single_map(std::move(aoa_estimates), "aoa_estimates")});
+  }
+  if (az_angles) {
+    harness->template add_input_port<holoscan::TensorMap>(
+        "az_angles", {single_map(std::move(az_angles), "az_angles")});
+  }
+  if (el_angles) {
+    harness->template add_input_port<holoscan::TensorMap>(
+        "el_angles", {single_map(std::move(el_angles), "el_angles")});
   }
 
   TensorMapCapture points_cap;
@@ -321,6 +331,86 @@ TEST(FeatureAssemblyOpTest, RejectsNonContiguousDetectionIdx) {
   EXPECT_THROW(
       run_assembly<double>(idx_t, {AssemblyFeature::kDopplerBin,
                                    AssemblyFeature::kRangeBin}),
+      std::invalid_argument);
+}
+
+// --- Dense path: az/el bins → angle features (S4) ---
+
+TEST(FeatureAssemblyOpTest, DenseAzElBinLookup) {
+  // detection_idx (az_bin, el_bin, doppler_bin, range_bin).
+  std::vector<int64_t> idx = {1, 2, 0, 0,
+                              3, 0, 0, 0};
+  auto idx_t = to_device_tensor(idx, {2, 4}, DLDataType{kDLInt, 64, 1});
+  std::vector<double> az = {-0.3, -0.1, 0.1, 0.3};  // num_az = 4
+  std::vector<double> el = {0.0, 0.05, 0.1};        // num_el = 3
+  auto az_t = to_device_tensor(az, {4}, real_dtype<double>());
+  auto el_t = to_device_tensor(el, {3}, real_dtype<double>());
+
+  const auto points = run_assembly<double>(
+      idx_t, {AssemblyFeature::kAzBin, AssemblyFeature::kElBin}, nullptr,
+      nullptr, nullptr, nullptr, az_t, el_t);
+  ASSERT_EQ(points.shape, (std::vector<int64_t>{2, 2}));
+  const double* p = points.as<double>();
+  EXPECT_DOUBLE_EQ(p[0], -0.1);  // az_angles[1]
+  EXPECT_DOUBLE_EQ(p[1], 0.1);   // el_angles[2]
+  EXPECT_DOUBLE_EQ(p[2], 0.3);   // az_angles[3]
+  EXPECT_DOUBLE_EQ(p[3], 0.0);   // el_angles[0]
+}
+
+TEST(FeatureAssemblyOpTest, DenseAzElWithRangeVelocity) {
+  // Full dense feature row: range/velocity from (doppler_bin, range_bin);
+  // az/el from the preserved (az_bin, el_bin) columns.
+  std::vector<int64_t> idx = {2, 1, 3, 4};  // az,el,doppler,range bins
+  auto idx_t = to_device_tensor(idx, {1, 4}, DLDataType{kDLInt, 64, 1});
+  std::vector<double> range_bins = {0, 10, 20, 30, 40, 50};  // range_bin 4 → 40
+  std::vector<double> vel_bins = {-5, -2.5, 0, 2.5};         // doppler 3 → 2.5
+  std::vector<double> az = {-0.2, 0.0, 0.2};                 // az_bin 2 → 0.2
+  std::vector<double> el = {0.0, 0.1};                       // el_bin 1 → 0.1
+  auto rb = to_device_tensor(range_bins, {6}, real_dtype<double>());
+  auto vb = to_device_tensor(vel_bins, {4}, real_dtype<double>());
+  auto az_t = to_device_tensor(az, {3}, real_dtype<double>());
+  auto el_t = to_device_tensor(el, {2}, real_dtype<double>());
+
+  const auto points = run_assembly<double>(
+      idx_t,
+      {AssemblyFeature::kRange, AssemblyFeature::kVelocity,
+       AssemblyFeature::kAzBin, AssemblyFeature::kElBin},
+      rb, vb, nullptr, nullptr, az_t, el_t);
+  ASSERT_EQ(points.shape, (std::vector<int64_t>{1, 4}));
+  const double* p = points.as<double>();
+  EXPECT_DOUBLE_EQ(p[0], 40.0);
+  EXPECT_DOUBLE_EQ(p[1], 2.5);
+  EXPECT_DOUBLE_EQ(p[2], 0.2);
+  EXPECT_DOUBLE_EQ(p[3], 0.1);
+}
+
+TEST(FeatureAssemblyOpTest, RejectsAzBinWithoutGrid) {
+  std::vector<int64_t> idx = {0, 0, 0, 0};
+  auto idx_t = to_device_tensor(idx, {1, 4}, DLDataType{kDLInt, 64, 1});
+  EXPECT_THROW(run_assembly<double>(idx_t, {AssemblyFeature::kAzBin}),
+               std::invalid_argument);
+}
+
+TEST(FeatureAssemblyOpTest, RejectsAzBinWithTooFewPreservedColumns) {
+  // Only (doppler_bin, range_bin) → n_preserved = 0, no az/el columns.
+  std::vector<int64_t> idx = {0, 0};
+  auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
+  std::vector<double> az = {0.0, 0.1};
+  auto az_t = to_device_tensor(az, {2}, real_dtype<double>());
+  EXPECT_THROW(
+      run_assembly<double>(idx_t, {AssemblyFeature::kAzBin}, nullptr, nullptr,
+                           nullptr, nullptr, az_t, nullptr),
+      std::invalid_argument);
+}
+
+TEST(FeatureAssemblyOpTest, RejectsOutOfRangeAzBin) {
+  std::vector<int64_t> idx = {5, 0, 0, 0};  // az_bin 5 ≥ num_az 3
+  auto idx_t = to_device_tensor(idx, {1, 4}, DLDataType{kDLInt, 64, 1});
+  std::vector<double> az = {-0.2, 0.0, 0.2};
+  auto az_t = to_device_tensor(az, {3}, real_dtype<double>());
+  EXPECT_THROW(
+      run_assembly<double>(idx_t, {AssemblyFeature::kAzBin}, nullptr, nullptr,
+                           nullptr, nullptr, az_t, nullptr),
       std::invalid_argument);
 }
 

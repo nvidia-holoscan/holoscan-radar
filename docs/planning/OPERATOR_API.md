@@ -218,7 +218,7 @@ Orthogonal to the antenna/multiplexing modality: whatever produces channel snaps
 
 #### Covariance estimator open items
 
-All covariance estimators share one open item: source-count source (fixed vs. MDL/AIC vs. CFAR-cluster). (The ULA/subarray-selection step for non-uniform virtual arrays is **settled** — provided by `SubarraySelectionOp`, which emits a reduced `(snapshot, array_geometry)` pair. The multi-snapshot / spatial-smoothing input form is **settled** — forward / forward-backward sub-array averaging on a filled ULA/URA, per-aperture-axis sub-array counts; see STATUS.md.)
+The covariance-estimator open items are now **settled** (see STATUS.md): the source-count source (S2 — `num_sources` default `auto` = per-item MDL on the covariance eigenvalues; fixed `int` fixes it; upstream-seed / AIC deferred); the ULA/subarray-selection step for non-uniform virtual arrays (S3 — provided by `SubarraySelectionOp`, emitting a reduced `(snapshot, array_geometry)` pair); and the multi-snapshot / spatial-smoothing input form (S1 — forward / forward-backward sub-array averaging on a filled ULA/URA, per-aperture-axis sub-array counts).
 
 ### MIMO marshaling
 
@@ -456,17 +456,19 @@ Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`
 - **In:** `range_bins` (optional) — float32 / float64, `(num_range,)`. Physical range (m) per range bin (`FMCWRangeProcessorOp.range_bins`); indexed by the `range_bin` column for the range feature. Absent → the raw bin index is used.
 - **In:** `velocity_bins` (optional) — float32 / float64, `(num_doppler,)`. Physical velocity (m/s) per Doppler bin (`FMCWDopplerProcessorOp.velocity_bins`); indexed by `doppler_bin`. Absent → the raw bin index.
 - **In:** `detection_score` (optional) — float32 / float64, `(..., num_doppler, num_range)`. CFAR's per-cell score map; gathered at each detection cell → the strength feature.
-- **In:** `aoa_estimates` (optional) — float32 / float64, `(num_points, 2)`. Per-detection `(az, el)` (post-angle path), row-aligned with `detection_idx`; supplies the angle features.
+- **In:** `aoa_estimates` (optional) — float32 / float64, `(num_points, 2)`. Per-detection `(az, el)` **values** (sparse post-angle path), row-aligned with `detection_idx`; supplies the `az` / `el` features.
+- **In:** `az_angles` (optional) — float32 / float64, `(num_az,)`. Azimuth scan grid (the beamformer's `az_angles`); indexed by the `az_bin` preserved-batch column for the `az_bin` feature (dense path). Required when `az_bin` is selected.
+- **In:** `el_angles` (optional) — float32 / float64, `(num_el,)`. Elevation scan grid; indexed by `el_bin`. Required when `el_bin` is selected.
 - **Out:** `points` — float32 / float64, `(num_points, num_features)`. Assembled feature matrix, columns in the configured order, sized to the detection count. Feeds `ClusterDBSCANOp.points` and `DetectionReductionOp.points`.
 
 **Parameters:**
 
-- `features` — ordered list over {range, velocity, score, az, el} (plus raw {doppler_bin, range_bin} as escape hatches). Selects which columns to assemble and their order, fixing `num_features` and the layout. Each token draws from its matching input (range/velocity from the bin-axis lookups, score from `detection_score`, az/el from `aoa_estimates`); selecting a token whose input is absent is an error. Static (defines the output layout). Default: none (required).
+- `features` — ordered list over {range, velocity, score, az, el, az_bin, el_bin} (plus raw {doppler_bin, range_bin} as escape hatches). Selects which columns to assemble and their order, fixing `num_features` and the layout. Each token draws from its matching input: range/velocity from the bin-axis lookups, score from `detection_score`, `az`/`el` from `aoa_estimates` (sparse path, angle values), `az_bin`/`el_bin` from the `az_angles`/`el_angles` grids indexed by the preserved-batch `(az_bin, el_bin)` columns (dense path). Selecting a token whose input is absent is an error. Static (defines the output layout). Default: none (required).
 
 **Algorithm:**
 
-1. For each `detection_idx` row, read `(doppler_bin, range_bin)`.
-2. Build each configured feature: `range = range_bins[range_bin]` (or the raw bin), `velocity = velocity_bins[doppler_bin]` (or raw), `score =` gather `detection_score` at the cell, `az` / `el` `= aoa_estimates[row]`.
+1. For each `detection_idx` row, read `(doppler_bin, range_bin)` (last two columns); on the dense path the two preserved columns just before them are `(az_bin, el_bin)`.
+2. Build each configured feature: `range = range_bins[range_bin]` (or the raw bin), `velocity = velocity_bins[doppler_bin]` (or raw), `score =` gather `detection_score` at the cell, `az` / `el` `= aoa_estimates[row]`, `az_bin` / `el_bin` `= az_angles[az_bin]` / `el_angles[el_bin]`.
 3. Stack the columns in `features` order → `points`. Pure gather / 1-D
    lookup (custom CUDA; MatX is a poor fit for sparse irregular gathers);
    no scaling.
@@ -475,7 +477,7 @@ Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`
 
 - *Delivery model — mainstream thin operator:* the gather + bin→physical lookup + column stack is mechanical and reusable, so it ships as a **mainstream operator with a configurable `features` list**, reusing the same gather primitive as `SnapshotGatherOp`. It is the most application-specific of the three bridges (which columns to cluster on is a modeling choice), so a per-application implementation remains a reasonable alternative; the configurable op is the default.
 - *No scaling here:* `points` carries raw physical columns; per-axis scaling for clustering / reduction lives in `ClusterDBSCANOp.epsilon` and `DetectionReductionOp.feature_weights`, so mixed units are handled once, downstream — not baked into the matrix.
-- *Placement:* pre-angle (cluster-then-angle) uses `features = [range, velocity, score]` (no `aoa_estimates`); post-angle (angle-then-cluster) adds `[az, el]`. The `features` list + optional `aoa_estimates` cover both without a variant.
+- *Placement:* pre-angle (cluster-then-angle) uses `features = [range, velocity, score]` (no angle inputs); sparse post-angle (angle-then-cluster) adds `[az, el]` from `aoa_estimates`; the **dense** path (RDA-cube CFAR) adds `[az_bin, el_bin]` resolved from the `az_angles`/`el_angles` grids, so it needs no per-app `(az_bin, el_bin) → angle` adapter. The `features` list + the optional angle inputs cover all three without a variant (resolves S4 / PhaseShift §6).
 - *Shared gather primitive:* the same per-detection gather as `SnapshotGatherOp` (which pulls channel vectors); here it pulls scalars and does the 1-D bin-axis lookups. One primitive, two bridges.
 - *Row alignment:* `points` rows are 1:1 with `detection_idx` rows, so `labels` positionally join back and `DetectionReductionOp.rep_idx` resolves to real cells.
 - *Carried over:* plain-tensor ports; precision by template instantiation;
@@ -630,7 +632,7 @@ Per-estimator deviations from the shared contract:
 
 **Parameters:** shared (`array_geometry`, `angle_convention`, `az_angles`, `el_angles`) plus:
 
-- `num_sources` **[live]** — int or `auto`. Signal-subspace dimension (model order). `auto` estimates it from the covariance eigenvalues (MDL/AIC); an integer fixes it; it may also be seeded from the CFAR/cluster count upstream. Default: auto.
+- `num_sources` **[live]** — int or `auto`. Signal-subspace dimension (model order). `auto` = **per-item MDL** on the covariance eigenvalue spectrum (the `eigenvalues` output, computed per item); an integer fixes the order uniformly. Default: auto (per-item MDL). *(Per-item upstream seeding from a CFAR/cluster count — a future per-item data-port variant — and an AIC mode are deferred; see STATUS.md S2.)*
 - `spatial_smoothing` **[live]** — int-vector or none. As MVDR — per-aperture-axis sub-array counts on a filled ULA/URA (`[P]` / `[P_az, P_el]`; empty = off); decorrelates coherent multipath at the cost of aperture. Default: none.
 - `forward_backward` — bool. Forward-backward smoothing (needs a centro-symmetric ULA/URA); applies only when `spatial_smoothing` is set. Default: true.
 - `max_sources` **[live]** — int. Capacity of the optional `doa_multi` / `source_count` outputs (holds up to `min(num_sources, max_sources)` DOAs). Default: 4.
@@ -643,7 +645,7 @@ Per-estimator deviations from the shared contract:
 
 **Parameters:** shared `array_geometry` + `angle_convention` (**no scan grid**) plus:
 
-- `num_sources` **[live]** — int or `auto`. Model order (root count); `auto` via MDL/AIC on the covariance eigenvalues. Default: auto.
+- `num_sources` **[live]** — int or `auto`. Model order (root count); `auto` = per-item MDL on the covariance eigenvalues, or an integer fixes it. Default: auto. *(See MUSICEstimatorOp / STATUS.md S2.)*
 - `spatial_smoothing` **[live]** — int-vector or none. Per-aperture-axis sub-array counts on a filled ULA/URA (`[P]` / `[P_az, P_el]`; empty = off). A partly-filled / holey virtual array must first be reduced to a uniform sub-array upstream (see S3). Default: none.
 - `forward_backward` — bool. Forward-backward smoothing (needs a centro-symmetric ULA/URA); applies only when `spatial_smoothing` is set. Default: true.
 - `max_sources` **[live]** — int. `doa_multi` / `source_count` capacity. Default: 4.
@@ -658,7 +660,7 @@ Requires a ULA / uniform (Vandermonde) geometry; a non-uniform virtual array nee
 
 **Parameters:** shared `array_geometry` + `angle_convention` (**no scan grid**) plus:
 
-- `num_sources` **[live]** — int or `auto`. Model order; `auto` via MDL/AIC on the covariance eigenvalues. Default: auto.
+- `num_sources` **[live]** — int or `auto`. Model order; `auto` = per-item MDL on the covariance eigenvalues, or an integer fixes it. Default: auto. *(See MUSICEstimatorOp / STATUS.md S2.)*
 - `spatial_smoothing` **[live]** — int-vector or none. Per-aperture-axis sub-array counts on a filled ULA/URA (`[P]` / `[P_az, P_el]`; empty = off); decorrelates coherent multipath at the cost of aperture. Default: none.
 - `forward_backward` — bool. Forward-backward smoothing (needs a centro-symmetric ULA/URA); applies only when `spatial_smoothing` is set. Default: true.
 - `max_sources` **[live]** — int. `doa_multi` / `source_count` capacity. Default: 4.

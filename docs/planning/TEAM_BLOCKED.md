@@ -40,10 +40,9 @@ items”) and [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md) § Open items
 These are the only items that should pause or refuse checklist completion /
 starting a dependent operator.
 
-| # | Decision needed | What is stopped | Detail |
-| --- | --- | --- | --- |
-| S2 | **Source-count provenance** — fixed int vs MDL/AIC `auto` vs CFAR/cluster seed | Starting `MUSICEstimatorOp` / `RootMUSICEstimatorOp` / `ESPRITEstimatorOp` (`num_sources`) | Does **not** stop MVDR (`max_sources` = Capon peak capacity, done) |
-| S4 | **Dense-path az/el-bin → angle features** — shared op vs extend `FeatureAssemblyOp` | A *shared* dense→clustering bridge (app-local `CubeAoaLookupOp` is a workaround only) | [PhaseShift §6](../../operators/angle_estimation/phase_shift_beamformer_op/OPEN_ITEMS.md) |
+**None currently.** (S1 spatial-smoothing, S2 source-count, S3 subarray-selection,
+and S4 dense-path angle features are all settled — see STATUS.md → Settled
+decisions; residual ratification forks are under **Needs team look** below.)
 
 ---
 
