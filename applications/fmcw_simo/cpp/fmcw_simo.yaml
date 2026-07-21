@@ -29,11 +29,9 @@ cfar_detector:
   pfa: 1.0e-9
   os_rank: 0
   nci_axes: [0]
-  # Integration fold K = RX channel count (az_elements * el_elements = 8*8).
-  # Lets CFARDetectorOp pre-calibrate the CA alpha LUT at start() instead of on
-  # the first tick. Must match the leading (RX) dim of rd_maps; a stale value
-  # only costs a one-time first-tick rebuild + warning, never wrong detections.
-  nci_fold: 64
+  # nci_fold (K) is derived in the app from array_geometry.num_elements() and
+  # passed as an Arg, so it can't drift from the RX channel count — see
+  # fmcw_simo.cpp.
 
 snapshot_gather:
   snapshot_window: [0, 0]

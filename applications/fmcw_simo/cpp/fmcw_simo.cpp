@@ -61,8 +61,13 @@ class FmcwSimoApp : public holoscan::Application {
         "clutter_filter", from_config("clutter_filter"));
     auto doppler = make_operator<radar::FMCWDopplerProcessorOp<float>>(
         "doppler_processor", from_config("doppler_processor"));
+    // Derive the CFAR NCI fold (K) from the same array geometry beamscan
+    // consumes, so it never drifts from the channel count. nci_axes: [0]
+    // integrates the full channel axis, so K = num_elements; the operator
+    // ignores this hint when nci_axes is empty (K = 1).
     auto cfar = make_operator<radar::CFARDetectorOp<float>>(
-        "cfar_detector", from_config("cfar_detector"));
+        "cfar_detector", from_config("cfar_detector"),
+        holoscan::Arg("nci_fold") = cfg.array_geometry.num_elements());
     auto gather = make_operator<radar::SnapshotGatherOp<float>>(
         "snapshot_gather", from_config("snapshot_gather"));
     auto beamscan = make_operator<radar::BeamscanEstimatorOp<float>>(
