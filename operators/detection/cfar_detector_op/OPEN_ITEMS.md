@@ -400,6 +400,12 @@ the operator did not pre-warm that key.
 - **Contract:** **PROPOSED — needs team review.** Text is in
   `OPERATOR_API.md` behind a clear “not locked” banner; do not treat it as
   adopted until review.
+- **Scope frozen (2026-07-21):** code and contract-doc modifications for this
+  item are complete — no further changes are planned. The only remaining action
+  is the team's ratify / revise / reject decision. On adopt: drop the PROPOSED
+  banner in `OPERATOR_API.md`, record it in `STATUS.md` → Settled decisions, and
+  remove TEAM_BLOCKED L5. (GO/SO start-time pre-warm and offline LUT-generation
+  tooling are separate future enhancements, not part of ratifying L5.)
 
 ---
 
