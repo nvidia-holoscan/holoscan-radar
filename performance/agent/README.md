@@ -23,6 +23,8 @@ this README is the substrate reference.
 | `parse.py` | Folds the nsys tables + the schema-v2 perf JSON into one `analysis.json` per (operator, size, scenario). |
 | `diagnose.py` | Encodes the `docs/planning/OPERATOR_DEVELOPMENT.md` perf rubric + CFAR-lessons table as rules over `analysis.json`; emits ranked `diagnosis.json`. |
 | `report.py` | Renders `analysis.json` + `diagnosis.json` into a markdown perf report. |
+| `visualize.py` | Matplotlib charts of a run (kernel-vs-shell, latency, host-API composition, NVTX phases, override sweep, findings) + a cross-operator comparison. |
+| `visualize.ipynb` | Thin notebook that composes `visualize.py` into a per-operator dashboard. |
 
 ## Prerequisites
 
@@ -52,6 +54,22 @@ python3 performance/agent/parse.py    --run-dir performance/agent/runs/$OP
 python3 performance/agent/diagnose.py --run-dir performance/agent/runs/$OP
 python3 performance/agent/report.py   --run-dir performance/agent/runs/$OP
 # -> performance/agent/runs/$OP/report.md
+```
+
+## Visualize (optional)
+
+`report.md` is the primary deliverable; for charts, open `visualize.ipynb`
+(needs `pip install matplotlib` — not a harness dependency, and the charts read
+plain JSON so this runs on the host, no GPU). Set `RUN` to a run directory and
+run all cells for a dashboard: kernel-vs-shell (is the tick kernel- or
+host-bound), latency by size, host-API composition, `compute()` NVTX phases,
+the `[live]` override sweep, and findings — plus a cross-operator comparison.
+The plotting functions in `visualize.py` are usable directly, e.g.
+
+```python
+import sys; sys.path.insert(0, "performance/agent")
+import visualize as viz
+viz.dashboard("performance/agent/runs/fmcw_range_processor")
 ```
 
 Artifacts (`.nsys-rep`, `.sqlite`, stat JSON, `analysis.json`, `diagnosis.json`,
