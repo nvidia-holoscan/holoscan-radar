@@ -690,6 +690,9 @@ def load_config(path: Path) -> AppConfig:
     cfg.virtual_array_assembly = parse_virtual_array_assembly(
         root.get("virtual_array_assembly", {})
     )
+    cfg.virtual_array_assembly["tx_positions"] = cfg.tx_positions_flat
+    cfg.virtual_array_assembly["rx_positions"] = cfg.rx_positions_flat
+    cfg.virtual_array_assembly["wavelength"] = cfg.wavelength
     return cfg
 
 
@@ -855,21 +858,14 @@ class FmcwMimoApp(Application):
         doppler = FMCWDopplerProcessorOp(
             self, self.from_config("doppler_processor"), name="doppler_processor"
         )
+        # Avoid from_config: it overwrites expanded ddm_code / geometry kwargs.
         compensation = MIMOCoherentCompensationOp(
             self,
-            self.from_config("mimo_coherent_compensation"),
-            # Prefer the app-resolved descriptor (may expand
-            # generate_phase_codes into explicit phase_codes).
-            **({"ddm_code": cfg.ddm_code} if ddm else {}),
-            name="mimo_coherent_compensation",
+            **cfg.mimo_coherent_compensation,
         )
         vaa = VirtualArrayAssemblyOp(
             self,
-            self.from_config("virtual_array_assembly"),
-            tx_positions=cfg.tx_positions_flat,
-            rx_positions=cfg.rx_positions_flat,
-            wavelength=cfg.wavelength,
-            name="virtual_array_assembly",
+            **cfg.virtual_array_assembly,
         )
 
         if ddm:
