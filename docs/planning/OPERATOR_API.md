@@ -218,7 +218,7 @@ Orthogonal to the antenna/multiplexing modality: whatever produces channel snaps
 
 #### Covariance estimator open items
 
-The covariance-estimator open items are now **settled** (see STATUS.md): the source-count source (S2 — `num_sources` default `auto` = per-item MDL on the covariance eigenvalues; fixed `int` fixes it; upstream-seed / AIC deferred); the ULA/subarray-selection step for non-uniform virtual arrays (S3 — provided by `SubarraySelectionOp`, emitting a reduced `(snapshot, array_geometry)` pair); and the multi-snapshot / spatial-smoothing input form (S1 — forward / forward-backward sub-array averaging on a filled ULA/URA, per-aperture-axis sub-array counts).
+The covariance-estimator open items are now **settled** (see STATUS.md): the source-count source (S2 — `num_sources` default `auto` = per-item EFT on the forward-backward-smoothed covariance eigenvalues, clamped to `[1, max_sources]`; fixed `int` fixes it; upstream-seed **rejected**, RMT/AIC deferred); the ULA/subarray-selection step for non-uniform virtual arrays (S3 — provided by `SubarraySelectionOp`, emitting a reduced `(snapshot, array_geometry)` pair); and the multi-snapshot / spatial-smoothing input form (S1 — forward / forward-backward sub-array averaging on a filled ULA/URA, per-aperture-axis sub-array counts).
 
 ### MIMO marshaling
 
@@ -632,10 +632,11 @@ Per-estimator deviations from the shared contract:
 
 **Parameters:** shared (`array_geometry`, `angle_convention`, `az_angles`, `el_angles`) plus:
 
-- `num_sources` **[live]** — int or `auto`. Signal-subspace dimension (model order). `auto` = **per-item MDL** on the covariance eigenvalue spectrum (the `eigenvalues` output, computed per item); an integer fixes the order uniformly. Default: auto (per-item MDL). *(Per-item upstream seeding from a CFAR/cluster count — a future per-item data-port variant — and an AIC mode are deferred; see STATUS.md S2.)*
+- `num_sources` **[live]** — int or `auto`. Signal-subspace dimension (model order). `auto` = per-item **EFT** (Exponential Fitting Test — robust at the low, `M≈N` snapshot counts of automotive radar, where MDL/AIC collapse) on the **forward-backward-smoothed** covariance eigenvalue spectrum (the `eigenvalues` output), clamped to `[1, max_sources]`; an integer fixes the order uniformly. A rank-deficient covariance (smoothing off, `K < channels`) falls back to 1 and warns. Default: auto. *(Seeding from the CFAR/cluster detection count is **rejected** — that is the detection count, not the per-cell angular multiplicity `num_sources` denotes; RMT/Kritchman–Nadler, AIC, and an upstream-seed port are deferred. See STATUS.md S2.)*
+- `source_count_pfa` **[live]** — float. EFT over-estimation (false-alarm) probability for `auto`; higher → more sources admitted. Coherent with CFAR `pfa`. Default: 1e-2.
 - `spatial_smoothing` **[live]** — int-vector or none. As MVDR — per-aperture-axis sub-array counts on a filled ULA/URA (`[P]` / `[P_az, P_el]`; empty = off); decorrelates coherent multipath at the cost of aperture. Default: none.
 - `forward_backward` — bool. Forward-backward smoothing (needs a centro-symmetric ULA/URA); applies only when `spatial_smoothing` is set. Default: true.
-- `max_sources` **[live]** — int. Capacity of the optional `doa_multi` / `source_count` outputs (holds up to `min(num_sources, max_sources)` DOAs). Default: 4.
+- `max_sources` **[live]** — int. Capacity of the optional `doa_multi` / `source_count` outputs (holds up to `min(num_sources, max_sources)` DOAs); also the K_max cap on `auto`. Default: 4.
 
 ##### RootMUSICEstimatorOp
 
@@ -645,7 +646,7 @@ Per-estimator deviations from the shared contract:
 
 **Parameters:** shared `array_geometry` + `angle_convention` (**no scan grid**) plus:
 
-- `num_sources` **[live]** — int or `auto`. Model order (root count); `auto` = per-item MDL on the covariance eigenvalues, or an integer fixes it. Default: auto. *(See MUSICEstimatorOp / STATUS.md S2.)*
+- `num_sources` **[live]** — int or `auto`. Model order (root count); `auto` = per-item EFT on the forward-backward-smoothed covariance eigenvalues, clamped to `[1, max_sources]` (`source_count_pfa` sets the rate); an integer fixes it. Default: auto. *(See MUSICEstimatorOp / STATUS.md S2.)*
 - `spatial_smoothing` **[live]** — int-vector or none. Per-aperture-axis sub-array counts on a filled ULA/URA (`[P]` / `[P_az, P_el]`; empty = off). A partly-filled / holey virtual array must first be reduced to a uniform sub-array upstream (see S3). Default: none.
 - `forward_backward` — bool. Forward-backward smoothing (needs a centro-symmetric ULA/URA); applies only when `spatial_smoothing` is set. Default: true.
 - `max_sources` **[live]** — int. `doa_multi` / `source_count` capacity. Default: 4.
@@ -660,7 +661,7 @@ Requires a ULA / uniform (Vandermonde) geometry; a non-uniform virtual array nee
 
 **Parameters:** shared `array_geometry` + `angle_convention` (**no scan grid**) plus:
 
-- `num_sources` **[live]** — int or `auto`. Model order; `auto` = per-item MDL on the covariance eigenvalues, or an integer fixes it. Default: auto. *(See MUSICEstimatorOp / STATUS.md S2.)*
+- `num_sources` **[live]** — int or `auto`. Model order; `auto` = per-item EFT on the forward-backward-smoothed covariance eigenvalues, clamped to `[1, max_sources]` (`source_count_pfa` sets the rate); an integer fixes it. Default: auto. *(See MUSICEstimatorOp / STATUS.md S2.)*
 - `spatial_smoothing` **[live]** — int-vector or none. Per-aperture-axis sub-array counts on a filled ULA/URA (`[P]` / `[P_az, P_el]`; empty = off); decorrelates coherent multipath at the cost of aperture. Default: none.
 - `forward_backward` — bool. Forward-backward smoothing (needs a centro-symmetric ULA/URA); applies only when `spatial_smoothing` is set. Default: true.
 - `max_sources` **[live]** — int. `doa_multi` / `source_count` capacity. Default: 4.
