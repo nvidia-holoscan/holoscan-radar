@@ -4,9 +4,13 @@
 // Performance characterization for FMCWRangeProcessorOp — windowed FFT along
 // fast-time. Sweeps the (chirps x samples) size ladder, the range window
 // (rectangular / Hann), and a multi-channel batch. Every compute run inlines a
-// mid-session [live] range_window override so the window-coefficient rebuild
-// (warn-once-and-cache) cost is measured. Measurement tool only: no timing
-// assertions. See docs/planning/OPERATOR_DEVELOPMENT.md.
+// mid-session [live] override so the reconfiguration cost is measured. The
+// default/--full matrices exercise the range_window coefficient rebuild
+// (warn-once-and-cache); --sweep-overrides walks every [live] param in turn
+// (range_window, apply_dechirp, waveform, fft_norm, propagation_speed, nfft)
+// and reports a per-param override_delta_ms so the report contrasts negligible
+// sticky flips against rebuild-dominated reconfiguration. Measurement tool
+// only: no timing assertions. See docs/planning/OPERATOR_DEVELOPMENT.md.
 
 #include <cuda_runtime_api.h>
 
@@ -43,6 +47,40 @@ namespace {
 
 using PerfPrecision = float;  // v1 characterizes single precision (complex64).
 
+// The [live] override under measurement in a scenario. One scenario exercises
+// exactly one param so its override_delta_ms isolates that param's
+// reconfiguration cost. A mix of cheap sticky flips (fft_norm,
+// propagation_speed, apply_dechirp) and costly rebuilds (range_window
+// coefficients, waveform dechirp reference, nfft cuFFT plan).
+enum class OverrideKind {
+  kRangeWindow,       // WindowSpec — costly: window-coefficient rebuild
+  kApplyDechirp,      // bool — sticky flip that enables the dechirp path
+  kWaveform,          // FMCWWaveformDescriptor — costly dechirp-ref rebuild
+  kFftNorm,           // FftNorm — cheap sticky flip (scale only)
+  kPropagationSpeed,  // double — cheap sticky flip (range axis only)
+  kNfft,              // int64_t — costly: cuFFT plan rebuild (zero-pad)
+};
+
+const std::vector<OverrideKind>& all_override_kinds() {
+  static const std::vector<OverrideKind> kinds = {
+      OverrideKind::kRangeWindow,      OverrideKind::kApplyDechirp,
+      OverrideKind::kWaveform,         OverrideKind::kFftNorm,
+      OverrideKind::kPropagationSpeed, OverrideKind::kNfft};
+  return kinds;
+}
+
+std::string override_tag(OverrideKind k) {
+  switch (k) {
+    case OverrideKind::kRangeWindow: return "range_window";
+    case OverrideKind::kApplyDechirp: return "apply_dechirp";
+    case OverrideKind::kWaveform: return "waveform";
+    case OverrideKind::kFftNorm: return "fft_norm";
+    case OverrideKind::kPropagationSpeed: return "propagation_speed";
+    case OverrideKind::kNfft: return "nfft";
+  }
+  return "unknown";
+}
+
 struct SizeSpec {
   std::string id;
   int64_t num_chirps;
@@ -57,6 +95,13 @@ struct RangeScenario {
   int64_t samples_per_chirp{0};
   int64_t channels{1};  // leading batch axis (e.g. rx elements)
   hr::WindowType window{hr::WindowType::kNone};  // build-time range window
+  bool apply_dechirp{false};  // build-time dechirp (on for the waveform sweep)
+
+  // Live-override under test. Only the forcing value matching override_kind is
+  // applied; the rest are derived inline in wire_override().
+  OverrideKind override_kind{OverrideKind::kRangeWindow};
+  hr::WindowSpec override_window;  // forcing value for kRangeWindow
+  int64_t override_at{0};
 };
 
 // FFT-friendly powers of two so cuFFT takes its fast path; the ladder spans a
@@ -119,6 +164,18 @@ hr::FMCWWaveformDescriptor make_waveform() {
   return hr::FMCWWaveformDescriptor(spec);
 }
 
+// A different valid waveform (double the bandwidth) so a live waveform override
+// always differs from the build-time descriptor and forces the rebuild path.
+hr::FMCWWaveformDescriptor make_override_waveform() {
+  hr::FMCWWaveformSpec spec;
+  spec.carrier_frequency = 77.0e9;
+  spec.bandwidth = 300.0e6;
+  spec.chirp_duration = 20.0e-6;
+  spec.sample_rate = 12.8e6;
+  spec.chirp_repetition_interval = 25.0e-6;
+  return hr::FMCWWaveformDescriptor(spec);
+}
+
 std::vector<int64_t> cube_shape(const RangeScenario& scen) {
   if (scen.channels > 1) {
     return {scen.channels, scen.num_chirps, scen.samples_per_chirp};
@@ -128,7 +185,7 @@ std::vector<int64_t> cube_shape(const RangeScenario& scen) {
 
 // ---------------------------------------------------------------------------
 // Mini-application: adc_cube source -> range op -> terminal (profiles) + null
-// (bins) sinks + a [live] range_window override source.
+// (bins) sinks + one [live] override source selected by scen->override_kind.
 // ---------------------------------------------------------------------------
 template <typename T>
 class RangePerfApp : public holoscan::Application {
@@ -137,7 +194,6 @@ class RangePerfApp : public holoscan::Application {
   perf::TimingCollector* collector{nullptr};
   holoscan::TensorMap frame;  // adc_cube
   hr::FMCWWaveformDescriptor waveform;
-  hr::WindowSpec override_window;
   int64_t override_at{0};
   int total_frames{25};
 
@@ -145,7 +201,8 @@ class RangePerfApp : public holoscan::Application {
     using holoscan::Arg;
     auto op = make_operator<hr::FMCWRangeProcessorOp<T>>(
         "range", Arg("waveform") = waveform,
-        Arg("range_window") = window_of(scen->window));
+        Arg("range_window") = window_of(scen->window),
+        Arg("apply_dechirp") = scen->apply_dechirp);
 
     auto src = make_operator<perf::PerfTensorSourceOp<perf::AdcCubePort>>(
         "src", make_condition<holoscan::CountCondition>(total_frames));
@@ -161,10 +218,61 @@ class RangePerfApp : public holoscan::Application {
     auto ns = make_operator<perf::PerfNullSinkOp>("bins_sink");
     add_flow(op, ns, {{"range_bins", "input"}});
 
-    auto ovr = make_operator<perf::PerfOverrideSourceOp<hr::WindowSpec>>(
-        "ovr", make_condition<holoscan::CountCondition>(total_frames));
-    ovr->configure(override_at, override_window);
-    add_flow(ovr, op, {{"output", "range_window"}});
+    wire_override(op);
+  }
+
+ private:
+  // Instantiate the one correctly-typed override source for scen->override_kind
+  // and wire it to the matching [live] port, mirroring CFAR's wire_override.
+  // The source emits a single forcing value on tick override_at that always
+  // differs from the effective value, so the operator's override path fires.
+  void wire_override(const std::shared_ptr<holoscan::Operator>& op) {
+    using holoscan::CountCondition;
+    switch (scen->override_kind) {
+      case OverrideKind::kRangeWindow: {
+        auto s = make_operator<perf::PerfOverrideSourceOp<hr::WindowSpec>>(
+            "ovr", make_condition<CountCondition>(total_frames));
+        s->configure(override_at, scen->override_window);
+        add_flow(s, op, {{"output", "range_window"}});
+        break;
+      }
+      case OverrideKind::kApplyDechirp: {
+        auto s = make_operator<perf::PerfOverrideSourceOp<bool>>(
+            "ovr", make_condition<CountCondition>(total_frames));
+        s->configure(override_at, !scen->apply_dechirp);
+        add_flow(s, op, {{"output", "apply_dechirp"}});
+        break;
+      }
+      case OverrideKind::kWaveform: {
+        auto s = make_operator<
+            perf::PerfOverrideSourceOp<hr::FMCWWaveformDescriptor>>(
+            "ovr", make_condition<CountCondition>(total_frames));
+        s->configure(override_at, make_override_waveform());
+        add_flow(s, op, {{"output", "waveform"}});
+        break;
+      }
+      case OverrideKind::kFftNorm: {
+        auto s = make_operator<perf::PerfOverrideSourceOp<hr::FftNorm>>(
+            "ovr", make_condition<CountCondition>(total_frames));
+        s->configure(override_at, hr::FftNorm::kOrtho);
+        add_flow(s, op, {{"output", "fft_norm"}});
+        break;
+      }
+      case OverrideKind::kPropagationSpeed: {
+        auto s = make_operator<perf::PerfOverrideSourceOp<double>>(
+            "ovr", make_condition<CountCondition>(total_frames));
+        s->configure(override_at, hr::kDefaultPropagationSpeed * 0.5);
+        add_flow(s, op, {{"output", "propagation_speed"}});
+        break;
+      }
+      case OverrideKind::kNfft: {
+        auto s = make_operator<perf::PerfOverrideSourceOp<int64_t>>(
+            "ovr", make_condition<CountCondition>(total_frames));
+        s->configure(override_at, 2 * scen->samples_per_chirp);
+        add_flow(s, op, {{"output", "nfft"}});
+        break;
+      }
+    }
   }
 };
 
@@ -197,8 +305,16 @@ perf::ResultRow base_row(const RangeScenario& scen) {
   row.input_shape = cube_shape(scen);
   row.out_batch = scen.channels;
   row.k = scen.samples_per_chirp;  // transform length
-  row.notes = "live_override=range_window";
+  row.notes = "live_override=" + override_tag(scen.override_kind);
   return row;
+}
+
+std::string override_notes(OverrideKind kind) {
+  return "cold_ms is first-frame latency including the initial window/FFT-plan "
+         "build; median/p90 are pre-override steady state; override_ms is peak "
+         "latency over the post-override window and override_delta_ms isolates "
+         "the reconfiguration cost of the live " +
+         override_tag(kind) + " param; cells/s is complex range bins/s";
 }
 
 RangeScenario make_scenario(hr::WindowType window, const SizeSpec& s,
@@ -209,6 +325,8 @@ RangeScenario make_scenario(hr::WindowType window, const SizeSpec& s,
   sc.samples_per_chirp = s.samples_per_chirp;
   sc.channels = channels;
   sc.window = window;
+  sc.override_kind = OverrideKind::kRangeWindow;
+  sc.override_window = window_of(flip_window(window));
   std::ostringstream id;
   id << "range_" << window_tag(window) << "_" << s.id;
   if (channels > 1) {
@@ -219,11 +337,31 @@ RangeScenario make_scenario(hr::WindowType window, const SizeSpec& s,
   return sc;
 }
 
+// One override-sweep scenario: a rect-window single-channel base exercising the
+// single [live] param `kind`. The waveform sweep builds with dechirp on so a
+// waveform change rebuilds the dechirp reference (the costly path); the input
+// cube is complex, which dechirp requires.
+RangeScenario make_override_scenario(OverrideKind kind, const SizeSpec& s) {
+  RangeScenario sc;
+  sc.size_id = s.id;
+  sc.num_chirps = s.num_chirps;
+  sc.samples_per_chirp = s.samples_per_chirp;
+  sc.channels = 1;
+  sc.window = hr::WindowType::kNone;
+  sc.override_kind = kind;
+  sc.override_window = window_of(hr::WindowType::kHann);
+  sc.apply_dechirp = (kind == OverrideKind::kWaveform);
+  std::ostringstream id;
+  id << "range_ovr_" << override_tag(kind) << "_" << s.id << "_compute";
+  sc.id = id.str();
+  return sc;
+}
+
 // ---------------------------------------------------------------------------
 // Traits: the operator-specific surface the shared driver plugs into.
-// FMCWRangeProcessorOp has [live] override ports (range_window exercised inline
-// in run_scenario) and needs no process warmup or post-run summary, so it takes
-// those defaults. It does not emit bool tensors, so no stderr filtering.
+// FMCWRangeProcessorOp has six [live] override ports; the default/--full
+// matrices exercise range_window inline, and --sweep-overrides walks every
+// param (build_override_sweep). It needs no post-run summary or stderr filter.
 // ---------------------------------------------------------------------------
 struct RangeTraits : perf::PerfDriverDefaults {
   using Scenario = RangeScenario;
@@ -240,6 +378,10 @@ struct RangeTraits : perf::PerfDriverDefaults {
   }
   static const char* full_help() {
     return "Full matrix (windows x sizes x channel batch)";
+  }
+  static const char* override_sweep_help() {
+    return "Per-param [live] override sweep (one scenario per param); "
+           "--sizes selects sizes (default sm,md,xl)";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -296,6 +438,29 @@ struct RangeTraits : perf::PerfDriverDefaults {
     return out;
   }
 
+  // --sweep-overrides: one scenario per [live] param at each requested size
+  // (default small/medium/large). Directly answers "cost of changing a
+  // parameter at runtime, after initialization" per param.
+  static std::vector<RangeScenario> build_override_sweep(
+      const std::vector<std::string>& sizes) {
+    std::vector<std::string> use = sizes;
+    if (use.empty()) {
+      use = {"sm", "md", "xl"};
+    }
+    std::vector<RangeScenario> out;
+    for (const auto& sid : use) {
+      const SizeSpec* s = find_size(sid);
+      if (s == nullptr) {
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        continue;
+      }
+      for (auto kind : all_override_kinds()) {
+        out.push_back(make_override_scenario(kind, *s));
+      }
+    }
+    return out;
+  }
+
   static void run_scenario(const RangeScenario& scen,
                            const perf::RunSettings& rs,
                            perf::PerfReport* report) {
@@ -304,7 +469,8 @@ struct RangeTraits : perf::PerfDriverDefaults {
         rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           perf::TimingCollector collector;
           // Preallocate the input before the setup clock so the H2D upload is
-          // not billed as operator setup.
+          // not billed as operator setup. Complex IQ so the dechirp path (used
+          // by the waveform / apply_dechirp overrides) is valid.
           auto cube = perf::single_map(
               perf::make_iq_cube_device<PerfPrecision>(cube_shape(scen)),
               "adc_cube");
@@ -315,7 +481,6 @@ struct RangeTraits : perf::PerfDriverDefaults {
           app->collector = &collector;
           app->frame = std::move(cube);
           app->waveform = make_waveform();
-          app->override_window = window_of(flip_window(scen.window));
           app->override_at = p.override_at;
           app->total_frames = p.total_frames;
           app->run();
@@ -327,11 +492,7 @@ struct RangeTraits : perf::PerfDriverDefaults {
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes =
-        "cold_ms is first-frame latency including initial window/FFT plan "
-        "build; median/p90 are pre-override steady state; override_ms is peak "
-        "latency over the 3-frame live range_window rebuild window; cells/s is "
-        "complex range bins/s";
+    row.notes = override_notes(scen.override_kind);
     report->results.push_back(row);
   }
 

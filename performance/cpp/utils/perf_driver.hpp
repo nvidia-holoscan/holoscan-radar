@@ -32,6 +32,17 @@
 //   void process_warmup(const RunSettings&);  // discarded prime run
 //   void post_run(PerfReport*);               // e.g. calibration summary
 //   bool isolate_failures();                  // try/catch each scenario
+//
+// A consumer may additionally define (detected at compile time; no base-class
+// default because the return type is the consumer's Scenario):
+//
+//   std::vector<Scenario> build_override_sweep(
+//       const std::vector<std::string>& sizes);  // one scenario per [live]
+//                                                 // param, selected by
+//                                                 // --sweep-overrides
+//
+// When present, --sweep-overrides calls it; when absent, --sweep-overrides is
+// rejected for that tool.
 
 #pragma once
 
@@ -44,6 +55,8 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "utils/perf_app.hpp"
@@ -67,6 +80,7 @@ struct Options {
   std::string text;
   bool quiet{false};
   bool full{false};
+  bool sweep_overrides{false};     // one scenario per [live] override param
   std::vector<std::string> sizes;  // empty = tier default
   bool sizes_all{false};
   double stop_after_s{0.0};  // 0 = disabled; per-scenario wall-clock cap
@@ -74,6 +88,23 @@ struct Options {
 };
 
 namespace detail {
+
+// Compile-time detection of an optional Traits::build_override_sweep(sizes)
+// hook. Present on consumers whose operator has [live] override ports and that
+// implement the per-param sweep; absent otherwise. Lets --sweep-overrides be a
+// no-compile-cost opt-in per consumer without a base-class default (which is
+// impossible here — the return type is the consumer's Scenario). A consumer
+// that defines build_override_sweep must also define override_sweep_help()
+// (used verbatim in --help).
+template <typename Traits>
+auto has_override_sweep_probe(int) -> decltype(
+    Traits::build_override_sweep(
+        std::declval<const std::vector<std::string>&>()),
+    std::true_type{});
+template <typename Traits>
+std::false_type has_override_sweep_probe(...);
+template <typename Traits>
+using has_override_sweep = decltype(has_override_sweep_probe<Traits>(0));
 
 inline std::vector<std::string> split_csv(const std::string& s) {
   std::vector<std::string> out;
@@ -102,8 +133,12 @@ void print_help() {
                "(default 1)\n"
             << "  --sizes all       " << Traits::sizes_all_help() << "\n"
             << "  --sizes a,b,c     " << Traits::sizes_subset_help() << "\n"
-            << "  --full            " << Traits::full_help() << "\n"
-            << "  --stop-after-s S  Stop after first scenario whose wall time "
+            << "  --full            " << Traits::full_help() << "\n";
+  if constexpr (has_override_sweep<Traits>::value) {
+    std::cout << "  --sweep-overrides " << Traits::override_sweep_help()
+              << "\n";
+  }
+  std::cout << "  --stop-after-s S  Stop after first scenario whose wall time "
                "exceeds S seconds\n"
                "  --help            Show this help\n";
 }
@@ -130,6 +165,8 @@ bool parse_args(int argc, char** argv, Options* opt) {
       opt->quiet = true;
     } else if (a == "--full") {
       opt->full = true;
+    } else if (a == "--sweep-overrides") {
+      opt->sweep_overrides = true;
     } else if (a == "--warmup") {
       opt->rs.warmup_frames = std::stoi(next("--warmup"));
     } else if (a == "--frames") {
@@ -177,6 +214,22 @@ inline void default_log_level() {
 
 template <typename Traits>
 std::vector<typename Traits::Scenario> select_scenarios(const Options& opt) {
+  if (opt.sweep_overrides) {
+    if constexpr (has_override_sweep<Traits>::value) {
+      std::vector<std::string> sizes = opt.sizes;
+      if (opt.sizes_all) {
+        for (const auto& def : Traits::size_ladder_defs()) {
+          sizes.push_back(def.id);
+        }
+      }
+      return Traits::build_override_sweep(sizes);
+    } else {
+      std::cerr << "error: " << Traits::tool_name()
+                << " does not implement --sweep-overrides (operator has no "
+                   "[live] override params, or the sweep is not yet wired)\n";
+      std::exit(2);
+    }
+  }
   if (opt.full) {
     return Traits::build_full_matrix();
   }
