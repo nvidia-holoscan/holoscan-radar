@@ -20,7 +20,7 @@ Status: **checklist-complete, C++ and Python.** The full contract
 
 All four optional outputs carry `ConditionType::kNone`, matching MVDR.
 
-**Test suite (37 C++ cases in `test_music_estimator.cpp`), including the
+**Test suite (40 C++ cases in `test_music_estimator.cpp`), including the
 gaps found and closed by explicitly diffing against MVDR's 28-test suite
 and `TESTING.md`'s requirements** (an initial 21-test pass was missing
 several real, previously-untested code paths):
@@ -34,11 +34,9 @@ several real, previously-untested code paths):
   Fixed by feeding Beamscan the deterministic in-phase combination
   `a(az0) + a(az1)` (the textbook two-point-source resolution setup)
   instead of a snapshot slice.
-- Live `[live]` overrides for `az_angles` (steering-manifold rebuild —
-  MUSIC's most expensive cached path, shared with MVDR's `ConfigCache`,
-  previously totally untested here), `array_geometry`, and `max_sources`
-  (reallocation + the `min(num_sources, max_sources)` target logic, which
-  is unique to MUSIC and not exercised by porting MVDR's own test).
+- Live `[live]` overrides for both scan axes, geometry (including
+  warn-once/cache reuse), model order/Pfa, spatial smoothing, and output
+  capacity.
 - Multi-item (`num_items > 1`) batch with independent per-item DOAs — the
   kernels are one-block-per-item; a single-item suite can't catch an item-
   indexing bug.
@@ -46,12 +44,9 @@ several real, previously-untested code paths):
   `num_snapshots` axis) and 2-D (URA) + forward-only (no
   backward-look) spatial smoothing — validated code paths that had no
   test exercising them.
+- CUDA-accessible device, pinned-host, and managed input acceptance plus
+  pageable-host rejection; deterministic output across repeated runs.
 - `RejectsEmptyScanGrid`, `RejectsInvalidSnapshotRank`.
-
-Python coverage (`test_music_estimator.py`) is a smaller, deliberate subset
-(14 of the 31 C++ cases) and has not been expanded to match this pass —
-none of the above (super-resolution, the new live overrides, multi-item,
-2-D input/smoothing, the two new error paths) are ported to Python yet.
 
 ## Shared prerequisite: the EFT source-count helper (settled — S2)
 
@@ -137,10 +132,10 @@ latency-bound; see Performance below.
 exactly (`MUSICEstimatorOpF32`/`F64`, `retire_music_matx_caches`,
 re-exported from `python/holoscan/radar/__init__.py`, and registered with
 `install_matx_cache_atexit()` alongside MVDR's cache). `tests/python/
-angle_estimation/test_music_estimator.py` is a **full C++-parity pytest
-port — all 37 of 37 C++ cases**. Landed in the same pass as the C++
-operator (not deferred to the Root-MUSIC/ESPRIT follow-up, as originally
-planned) — bind those two the same way when they land.
+angle_estimation/test_music_estimator.py` has **38 behavioral tests**,
+including deterministic output and all live overrides. The two
+CUDA-memory-space construction checks (pinned host and managed) remain
+C++-only because they validate DLPack transport rather than binding behavior.
 
 The last 7 cases (`SpatialSmoothingRejectsNonUniformGeometry`,
 `RejectsChannelMismatch`, `RejectsSnapshotDtypeMismatch`,
