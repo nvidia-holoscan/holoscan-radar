@@ -511,4 +511,7 @@ pre-existing intermittent crash.
   stale-LUT path be gated behind an explicit opt-in?
 
 **Status:** open — intermittent SEGFAULT reproduced in isolation; root-cause the
-race in the non-blocking LUT rebuild.
+race in the non-blocking LUT rebuild. **Tracked as a team item (TEAM_BLOCKED
+L15):** the fix approach (double-buffer + atomic swap vs. a stream/event fence)
+and whether to gate the non-blocking stale-LUT path behind an explicit opt-in are
+team decisions, not just a mechanical fix.

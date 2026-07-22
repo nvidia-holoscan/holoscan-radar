@@ -52,7 +52,12 @@ Interim stance already chosen (or the capability is explicitly out of current
 scope). Development and checklist completion proceed; these need ratification
 or a deliberate contract change when the team has bandwidth.
 
-**None currently.** All prior items (L1–L14, plus S1–S4) are settled — see
-STATUS.md → Settled decisions. Capabilities deliberately deferred out of the
-current scope (e.g. staggered TDM, sum-set holey subarray smoothing) are tracked
-under STATUS.md → Roadmap, not here.
+Prior items L1–L14 (plus S1–S4) are settled — see STATUS.md → Settled decisions.
+Capabilities deliberately deferred out of the current scope (e.g. staggered TDM,
+sum-set holey subarray smoothing) are tracked under STATUS.md → Roadmap, not here.
+
+### CFAR / detection
+
+| # | Decision needed | Interim stance | Detail |
+| --- | --- | --- | --- |
+| L15 | **Non-blocking alpha-LUT rebuild race** — root-cause the intermittent SEGFAULT in the serve-stale path, pick the fix (double-buffer + atomic swap vs. stream/event fence), and decide whether to gate the non-blocking path behind an explicit opt-in | Non-blocking serve-stale (`blocking_alpha_lut_rebuild=false`, the default) is in code and works most of the time; an intermittent SEGFAULT is reproduced in isolation on the background-rebuild path | [CFAR §10](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md) |

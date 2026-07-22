@@ -25,11 +25,17 @@ directions), round-trips, and rejects degenerate axes. Shared with
 `SnapshotGatherOp` and `CFARDetectorOp` `detection_mask`. See
 `snapshot_gather_op/OPEN_ITEMS.md` §1 for the HSDK 4.3 transport caveat.
 
-**Status:** open — team-wide bool-mask policy. `check_is_valid_mask` copies
-device masks to the host before inspection (required for graph-wired masks).
-`AcceptsValidIsValidMaskOn3DSnapshot` / `RejectsInvalidIsValidMaskOn3DSnapshot`
-graph-test the wired exclusion path via a relay operator. Python consumers of
-`kDLBool` tensors remain at risk until HSDK 5 (see SnapshotGather OPEN_ITEMS).
+**Resolved (L1, 2026-07-22).** The team-wide bool-mask policy is settled: mask
+outputs (`SnapshotGatherOp.is_valid`, `CFARDetectorOp.detection_mask`) now emit
+**`uint8`** (NumPy-visible on HSDK 4.3), and the estimators **accept a `bool`
+*or* `uint8`** `is_valid` (`check_is_valid_mask`) for backward compatibility — so
+a Beamscan consumer is no longer at risk on 4.3. `check_is_valid_mask` copies the
+device mask to the host before inspection; `AcceptsValidIsValidMaskOn3DSnapshot`
+/ `RejectsInvalidIsValidMaskOn3DSnapshot` still pin the wired path. See STATUS.md
+→ Settled decisions (L1).
+
+**Status:** resolved — bool-mask policy settled by L1; Beamscan accepts
+`bool` / `uint8` `is_valid`.
 
 ## 3. Performance harness (landed)
 
