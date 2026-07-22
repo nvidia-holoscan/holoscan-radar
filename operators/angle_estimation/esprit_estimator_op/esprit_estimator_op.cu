@@ -137,11 +137,8 @@ void ESPRITEstimatorOp<T>::compute(InputContext& op_input,
       &smoothing_changed);
   (void)scalar_changed;
 
-  if (angle_convention_.get().preset == AngleConventionPreset::kCustom) {
-    throw std::invalid_argument(
-        "ESPRITEstimatorOp: angle_convention custom mapping is not "
-        "implemented");
-  }
+  const auto device_angle_convention =
+      detail::make_device_angle_convention<T>(angle_convention_.get());
   if (!(effective_pfa_ > 0.0) || !(effective_pfa_ < 1.0)) {
     throw std::invalid_argument(
         "ESPRITEstimatorOp: source_count_pfa must be in (0, 1)");
@@ -393,7 +390,7 @@ void ESPRITEstimatorOp<T>::compute(InputContext& op_input,
       static_cast<T>(subarray_plan_.broadside[0]),
       static_cast<T>(subarray_plan_.broadside[1]),
       static_cast<T>(subarray_plan_.broadside[2]),
-      angle_convention_.get().preset,
+      device_angle_convention,
       static_cast<cuda::std::complex<T>*>(covariance->data()),
       static_cast<cuda::std::complex<T>*>(eigenvectors->data()),
       static_cast<int64_t*>(valid_counts->data()),

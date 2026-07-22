@@ -208,11 +208,8 @@ void RootMUSICEstimatorOp<T>::compute(InputContext& op_input,
       op_input, "spatial_smoothing", effective_smoothing_,
       &smoothing_changed);
 
-  if (angle_convention_.get().preset == AngleConventionPreset::kCustom) {
-    throw std::invalid_argument(
-        "RootMUSICEstimatorOp: angle_convention custom mapping is not "
-        "implemented");
-  }
+  const auto device_angle_convention =
+      detail::make_device_angle_convention<T>(angle_convention_.get());
   if (!(effective_pfa_ > 0.0) || !(effective_pfa_ < 1.0)) {
     throw std::invalid_argument(
         "RootMUSICEstimatorOp: source_count_pfa must be in (0, 1)");
@@ -409,7 +406,7 @@ void RootMUSICEstimatorOp<T>::compute(InputContext& op_input,
       static_cast<T>(ula.axis[0]), static_cast<T>(ula.axis[1]),
       static_cast<T>(ula.axis[2]), static_cast<T>(ula.broadside[0]),
       static_cast<T>(ula.broadside[1]), static_cast<T>(ula.broadside[2]),
-      angle_convention_.get().preset,
+      device_angle_convention,
       static_cast<cuda::std::complex<T>*>(covariance->data()),
       static_cast<cuda::std::complex<T>*>(eigenvectors->data()),
       static_cast<cuda::std::complex<T>*>(projector->data()),
