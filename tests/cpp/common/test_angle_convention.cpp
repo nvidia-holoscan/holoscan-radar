@@ -18,6 +18,8 @@
 #include "radar_common/dsp/angle_convention.hpp"
 
 namespace {
+constexpr double kPi = 3.141592653589793;
+
 using holoscan::radar::AngleConvention;
 using holoscan::radar::AngleConventionPreset;
 using holoscan::radar::boundary_to_canonical;
@@ -147,6 +149,61 @@ TEST(AngleConventionCustomTest, RoundTripsBoundaryCanonicalBoundary) {
       custom(SignedAxis::kPlusX, SignedAxis::kPlusY, SignedAxis::kPlusZ,
              ElevationReference::kZenith),
       {0.3, 0.8, 1.4, 2.0, 2.6});
+}
+
+// Principal azimuth in (−π, π] for the value `a` (period 2π).
+double wrap_to_pi(double a) {
+  const double two_pi = 2.0 * kPi;
+  while (a > kPi) {
+    a -= two_pi;
+  }
+  while (a <= -kPi) {
+    a += two_pi;
+  }
+  return a;
+}
+
+TEST(AngleConventionCustomTest, ForwardPeriodicInAzimuth) {
+  // boundary_to_canonical is built from cos/sin, so az and az ± 2π yield the
+  // identical unit vector — any real azimuth is valid input.
+  const AngleConvention conv =
+      custom(SignedAxis::kMinusY, SignedAxis::kPlusX, SignedAxis::kPlusZ);
+  const double two_pi = 2.0 * kPi;
+  for (double az : az_grid()) {
+    for (double el : el_grid()) {
+      const CanonicalDirection d0 = boundary_to_canonical(conv, az, el);
+      const CanonicalDirection d1 =
+          boundary_to_canonical(conv, az + two_pi, el);
+      const CanonicalDirection d2 =
+          boundary_to_canonical(conv, az - two_pi, el);
+      for (auto* d : {&d1, &d2}) {
+        EXPECT_NEAR(d0.x, d->x, 1e-12) << "az=" << az << " el=" << el;
+        EXPECT_NEAR(d0.y, d->y, 1e-12) << "az=" << az << " el=" << el;
+        EXPECT_NEAR(d0.z, d->z, 1e-12) << "az=" << az << " el=" << el;
+      }
+    }
+  }
+}
+
+TEST(AngleConventionCustomTest, InverseAzimuthWrapsToPrincipalRange) {
+  // canonical_to_boundary uses atan2/asin, so it always returns the principal
+  // azimuth in (−π, π]. An out-of-range input azimuth round-trips to its
+  // wrapped principal value (not the original), and an in-range elevation is
+  // preserved.
+  const AngleConvention conv =
+      custom(SignedAxis::kPlusX, SignedAxis::kPlusY, SignedAxis::kPlusZ);
+  const std::vector<double> wrapped_az{-6.0, -4.0, 3.0, 4.0, 5.5};
+  for (double az : wrapped_az) {
+    for (double el : el_grid()) {
+      const CanonicalDirection dir = boundary_to_canonical(conv, az, el);
+      double az_out = 0.0, el_out = 0.0;
+      canonical_to_boundary(conv, dir, &az_out, &el_out);
+      EXPECT_GT(az_out, -kPi - 1e-9) << "az=" << az;
+      EXPECT_LE(az_out, kPi + 1e-9) << "az=" << az;
+      EXPECT_NEAR(az_out, wrap_to_pi(az), 1e-9) << "az=" << az;
+      EXPECT_NEAR(el_out, el, 1e-9) << "el=" << el;
+    }
+  }
 }
 
 TEST(AngleConventionCustomTest, RejectsDegenerateAxes) {
