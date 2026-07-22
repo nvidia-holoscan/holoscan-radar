@@ -22,14 +22,15 @@ host has neither). The sanctioned entry is **`./holohub run-container`** — ope
 that shell and run every command below from it. `runner.py` preflight asserts
 `nsys` and the built binary are present and fails with guidance if not.
 
-Driving it non-interactively (an agent gets a fresh shell per command and can't
-hold that session) — wrap each command in the image `./holohub` built. **Resolve
-the image; do not pin the SDK-versioned tag** (e.g. `...:ngc-v4.3.0-cuda13` —
-it drifts with the SDK):
+`run-container` is interactive (no one-shot command passthrough), and the image
+it uses is **branch-derived** (`holoscan-radar:<branch>`), so never pin a tag.
+An agent gets a fresh shell per command and can't hold that session — so resolve
+the image `./holohub` would use via `--dryrun` and `docker run` it headless
+(build it once with `./holohub run-container` if it does not exist yet):
 
 ```bash
-IMG=$(docker images --filter=reference='holoscan-radar:*' \
-        --format '{{.Repository}}:{{.Tag}}' | head -1)   # what ./holohub built
+IMG=$(./holohub run-container --no-docker-build --dryrun 2>/dev/null \
+        | grep -oE 'holoscan-radar[^[:space:]]*' | tail -1)   # holohub resolves it
 docker run --rm --runtime nvidia --gpus all --cap-add CAP_SYS_PTRACE --ipc=host \
   --ulimit memlock=-1 --ulimit stack=67108864 --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -v "$PWD":/workspace/holoscan-radar -w /workspace/holoscan-radar \
