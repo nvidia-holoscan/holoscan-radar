@@ -56,5 +56,4 @@ or a deliberate contract change when the team has bandwidth.
 
 | # | Decision needed | Interim stance | Detail |
 | --- | --- | --- | --- |
-| L13 | **S1 spatial-smoothing forks** — (a) integer means sub-array **count** vs length; (b) holey arrays route to S3 vs. in-operator explicit partitions | **Implemented:** count semantics; holey → error → S3 / upstream custom smoother | [MVDR OPEN_ITEMS](../../operators/angle_estimation/mvdr_estimator_op/OPEN_ITEMS.md) |
 | L14 | **S3 subarray-selection forks** — (a) auto vs explicit; (b) objective: max element-count vs aperture; (c) contiguous ULA vs sum-set holey smoothing; (d) standalone op vs `VirtualArrayAssemblyOp` mode | **Implemented (`SubarraySelectionOp`):** auto largest filled ULA/URA + explicit; max element-count, azimuth tie-break; contiguous only; standalone op. Gridless consumers (Root-MUSIC/ESPRIT) not yet built | [SubarraySelection OPEN_ITEMS](../../operators/angle_estimation/subarray_selection_op/OPEN_ITEMS.md) |
