@@ -16,7 +16,12 @@
 //   4. root_flag / scan  — mark component roots, CUB exclusive-sum → dense
 //                         cluster ids in ascending-root order.
 //   5. finalize_labels   — map each point's root to its dense id (noise → -1).
-//   6. histogram         — per-cluster point counts → sizes.
+//   6. renumber          — reorder ids by descending cluster size (tie-break
+//                         ascending root) so cluster 0 is the largest; the host
+//                         argsorts the per-id counts and remap_labels applies
+//                         the permutation. This also makes the max_clusters cap
+//                         (drop highest ids) keep the largest clusters.
+//   7. histogram         — per-cluster point counts → sizes (descending).
 //
 // Include from a .cu that explicitly instantiates the needed specializations.
 
@@ -180,6 +185,21 @@ __global__ inline void finalize_labels_kernel(
                          : static_cast<int64_t>(dense_of_root[root]);
 }
 
+// Renumber cluster ids through a permutation (remap[old id] = new id); noise
+// rows (-1) pass through unchanged. Used to reorder ids by descending size.
+__global__ inline void remap_labels_kernel(int64_t* __restrict__ labels,
+                                           const int64_t* __restrict__ remap,
+                                           int64_t n) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (i >= n) {
+    return;
+  }
+  const int64_t l = labels[i];
+  if (l >= 0) {
+    labels[i] = remap[l];
+  }
+}
+
 // Drop clusters whose dense id is at or beyond the cap → relabel to noise.
 __global__ inline void cap_labels_kernel(int64_t* __restrict__ labels,
                                          int64_t cap, int64_t n) {
@@ -245,6 +265,11 @@ inline void launch_finalize_labels(const int64_t* cc,
                                    cudaStream_t stream) {
   finalize_labels_kernel<<<grid_for(n), 256, 0, stream>>>(cc, dense_of_root,
                                                           labels, n);
+}
+
+inline void launch_remap_labels(int64_t* labels, const int64_t* remap,
+                                int64_t n, cudaStream_t stream) {
+  remap_labels_kernel<<<grid_for(n), 256, 0, stream>>>(labels, remap, n);
 }
 
 inline void launch_cap_labels(int64_t* labels, int64_t cap, int64_t n,

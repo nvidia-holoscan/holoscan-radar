@@ -81,7 +81,7 @@ TEST(ClusterDBSCANOpTest, TwoBlobsAndNoise) {
   ASSERT_EQ(out.labels.shape.size(), 1u);
   ASSERT_EQ(out.labels.shape[0], 8);
   const int64_t* lab = out.labels.as<int64_t>();
-  // Blob A is one cluster (dense id 0 — lowest member row), blob B the next.
+  // Blob A is the larger cluster (4 > 3) → dense id 0; blob B → id 1.
   EXPECT_EQ(lab[0], 0);
   EXPECT_EQ(lab[1], 0);
   EXPECT_EQ(lab[2], 0);
@@ -196,6 +196,52 @@ TEST(ClusterDBSCANOpTest, MaxClustersCapsAndDropsSurplus) {
   ASSERT_EQ(out.sizes.shape[0], 2);
   EXPECT_EQ(out.sizes.as<int64_t>()[0], 2);
   EXPECT_EQ(out.sizes.as<int64_t>()[1], 2);
+}
+
+TEST(ClusterDBSCANOpTest, NumbersClustersByDescendingSize) {
+  // A smaller pair at early rows, a larger triple at later rows. Ascending-root
+  // numbering would label the pair 0 (it owns the lowest row); descending-size
+  // numbering labels the larger triple 0. `sizes` is therefore descending.
+  std::vector<double> pts = {
+      0.0, 0.0,  0.1, 0.0,               // pair (rows 0-1) — smaller, root 0
+      10.0, 0.0, 10.1, 0.0, 10.2, 0.0,   // triple (rows 2-4) — larger, root 2
+  };
+  auto p = points_tensor<double>(pts, 5, 2);
+  const auto out = run_dbscan<double>(
+      p, holoscan::Arg("epsilon") = std::vector<double>{0.5},
+      holoscan::Arg("min_points") = int64_t{2});
+  const int64_t* lab = out.labels.as<int64_t>();
+  EXPECT_EQ(lab[0], 1);  // pair → id 1 (smaller)
+  EXPECT_EQ(lab[1], 1);
+  EXPECT_EQ(lab[2], 0);  // triple → id 0 (larger)
+  EXPECT_EQ(lab[3], 0);
+  EXPECT_EQ(lab[4], 0);
+  ASSERT_EQ(out.sizes.shape[0], 2);
+  EXPECT_EQ(out.sizes.as<int64_t>()[0], 3);  // largest first
+  EXPECT_EQ(out.sizes.as<int64_t>()[1], 2);
+}
+
+TEST(ClusterDBSCANOpTest, MaxClustersKeepsLargest) {
+  // Same smaller-pair-then-larger-triple layout; cap to 1 must keep the larger
+  // cluster (the triple) and drop the pair to noise — a spatially-arbitrary
+  // ascending-root cap would instead have kept the pair.
+  std::vector<double> pts = {
+      0.0, 0.0,  0.1, 0.0,               // pair (rows 0-1)
+      10.0, 0.0, 10.1, 0.0, 10.2, 0.0,   // triple (rows 2-4)
+  };
+  auto p = points_tensor<double>(pts, 5, 2);
+  const auto out = run_dbscan<double>(
+      p, holoscan::Arg("epsilon") = std::vector<double>{0.5},
+      holoscan::Arg("min_points") = int64_t{2},
+      holoscan::Arg("max_clusters") = int64_t{1});
+  const int64_t* lab = out.labels.as<int64_t>();
+  EXPECT_EQ(lab[0], -1);  // pair dropped to noise
+  EXPECT_EQ(lab[1], -1);
+  EXPECT_EQ(lab[2], 0);   // triple kept
+  EXPECT_EQ(lab[3], 0);
+  EXPECT_EQ(lab[4], 0);
+  ASSERT_EQ(out.sizes.shape[0], 1);
+  EXPECT_EQ(out.sizes.as<int64_t>()[0], 3);
 }
 
 TEST(ClusterDBSCANOpTest, EmptyPointsEmitsEmptyOutputs) {
