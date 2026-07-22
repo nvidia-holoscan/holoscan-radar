@@ -54,7 +54,12 @@ namespace holoscan::radar {
 namespace {
 
 constexpr const char* kOpName = "CFARDetectorOp";
-constexpr DLDataType kBoolDtype{kDLBool, 8, 1};
+// detection_mask is emitted as uint8 (0/1), not kDLBool: HSDK 4.3's DLPack
+// message path cannot map kDLBool to a NumPy typestr, so a bool port throws
+// when a Python consumer wraps it. The buffer holds 0/1 bytes (written as bool
+// internally); uint8 is byte-identical, NumPy-visible, and every mask consumer
+// treats any nonzero byte as set.
+constexpr DLDataType kMaskDtype{kDLUInt, 8, 1};
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
 
 // GO/SO always calibrate alpha from Pfa via Monte Carlo; OS uses MC when K>1
@@ -343,7 +348,7 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
   if (!ws_hit) {
     ws.score = make_device_tensor(output_shape, real_dtype<T>());
     ws.noise = make_device_tensor(output_shape, real_dtype<T>());
-    ws.mask = make_device_tensor(output_shape, kBoolDtype);
+    ws.mask = make_device_tensor(output_shape, kMaskDtype);
     ws.power = make_device_tensor({plan.batch_in, num_doppler, num_range},
                                  real_dtype<T>());
     ws.integrated_power = make_device_tensor(

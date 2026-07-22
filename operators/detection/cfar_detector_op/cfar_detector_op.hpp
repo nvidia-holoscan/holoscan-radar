@@ -72,9 +72,11 @@ struct CfarAlphaLutKey {
 //                       CFAR plane is the last two axes; leading axes are
 //                       batched, or non-coherently integrated per nci_axes.
 //                       Path auto-selected by dtype (no parameter).
-// Out: detection_mask  — bool, (..., num_doppler, num_range_bins), with the
-//                       nci_axes reduced. True where detected
-//                       (detection_score > 1).
+// Out: detection_mask  — uint8 (0/1), (..., num_doppler, num_range_bins), with
+//                       the nci_axes reduced. 1 where detected
+//                       (detection_score > 1). uint8 rather than bool so the
+//                       mask is NumPy-visible on HSDK 4.3 (kDLBool has no NumPy
+//                       typestr on the 4.3 message path).
 // Out: detection_score — float32/float64, same shape as detection_mask.
 //                       P / (threshold_scale * alpha * noise_estimate); >1
 //                       ⇔ detected, doubles as the per-detection strength.
