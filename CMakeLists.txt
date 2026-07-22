@@ -93,7 +93,7 @@ endif()
 # macros and radar_common/sdk/nvtx.hpp Phase marker compile to no-ops unless a
 # target is built with the RADAR_NVTX compile definition. Enabling this option
 # adds that definition (and links the header-only CUDA::nvtx3 target when
-# available) to the instrumented operator targets. The perf-optimize harness
+# available) to the instrumented operator targets. The performance-analysis harness
 # turns it on alongside -DHOLOSCAN_RADAR_BUILD_PERFORMANCE=ON.
 if(NOT DEFINED HOLOSCAN_RADAR_PERF_NVTX)
     set(HOLOSCAN_RADAR_PERF_NVTX OFF

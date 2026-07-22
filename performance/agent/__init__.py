@@ -4,7 +4,7 @@
 """Operator performance-optimization harness (nsys attribution + diagnosis).
 
 This package drives the deterministic measurement/analysis substrate the
-``perf-optimize`` agent skill sits on top of:
+``perf-analyze`` agent skill sits on top of:
 
 * ``runner``   — build-aware; runs a ``perf_<op>`` binary clean (accurate
   latency) and under ``nsys`` (attribution), and exports the nsys stat tables.

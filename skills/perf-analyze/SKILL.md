@@ -1,17 +1,19 @@
 ---
-name: perf-optimize
-description: Analyze and optimize a holoscan-radar operator's runtime performance with Nsight Systems. Use when asked to profile, characterize, find bottlenecks in, or optimize a perf_<operator> (e.g. FMCWRangeProcessorOp, CFARDetectorOp) — sweeps small/medium/large sizes plus every [live] override param, attributes time to kernel vs cudaMalloc/memcpy/sync vs compute() NVTX phases, and writes a ranked per-operator perf report. Analyze + recommend only (no autonomous edit loop).
+name: perf-analyze
+description: Analyze a holoscan-radar operator's runtime performance with Nsight Systems and write a ranked bottleneck report. Use when asked to profile, characterize, or find bottlenecks in a perf_<operator> (e.g. FMCWRangeProcessorOp, CFARDetectorOp) — sweeps small/medium/large sizes plus every [live] override param, attributes time to kernel vs cudaMalloc/memcpy/sync vs compute() NVTX phases, and emits report.md + report.html. Read-only: analyze + recommend, never edits code (applying fixes is the separate perf-optimize / perf-autotune skills).
 ---
 
-# perf-optimize — operator performance analysis harness
+# perf-analyze — operator performance analysis harness
 
 Drive the deterministic substrate under `performance/agent/` (runner → parse →
 diagnose → report) to profile one operator and produce a ranked, evidence-backed
 perf report suitable to paste into that operator's `OPEN_ITEMS.md`.
 
-This phase **stops at recommendations** — do not edit operator code, rebuild in a
-keep-if-faster loop, or change any locked contract. Surface findings; let a human
-decide.
+This is the **read-only analysis tier**: profile, diagnose, report — do not edit
+operator code, rebuild in a keep-if-faster loop, or change any locked contract.
+Applying the fixes it recommends is a separate skill (`perf-optimize` — supervised
+single-fix with a byte-equivalence gate; `perf-autotune` — autonomous loop over
+this analysis). Surface findings; let a human decide.
 
 ## Prerequisites (assert first)
 

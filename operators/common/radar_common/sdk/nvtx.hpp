@@ -11,7 +11,7 @@
 // entirely, so not even the phase-name string literals reach the binary. The
 // performance/ harness turns it on with the CMake option
 // HOLOSCAN_RADAR_PERF_NVTX (see cmake/RadarPerfNvtx.cmake, performance/agent/,
-// and the perf-optimize skill).
+// and the perf-analyze skill).
 //
 // Two forms:
 //

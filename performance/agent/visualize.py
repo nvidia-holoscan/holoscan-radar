@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Matplotlib visualizations of the perf-optimize harness outputs.
+"""Matplotlib visualizations of the performance harness outputs.
 
 Reads an ``analysis.json`` + ``diagnosis.json`` run directory (produced by
-``parse.py`` / ``diagnose.py``) and renders the charts the ``visualize.ipynb``
-notebook composes into a dashboard. Each form is chosen by the data's job:
+``parse.py`` / ``diagnose.py``) and renders the charts ``report.py`` embeds into
+``report.html`` (``dashboard()`` composes them all). Each form is chosen by the
+data's job:
 
 * **latency by size** — grouped bars (magnitude across a size ladder);
 * **kernel vs shell** — a stacked bar per size showing what fraction of the
