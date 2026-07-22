@@ -22,7 +22,6 @@
 
 #include "angle_estimation/angle_boundary_device.hpp"
 #include "angle_estimation/music_estimator_op/music_stage.hpp"
-#include "radar_common/descriptors/enums.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 
 namespace holoscan::radar::detail {
@@ -205,6 +204,7 @@ __global__ void root_music_select_kernel(
                                    atan2(selected.imag(), selected.real())) <
             static_cast<T>(1e-4)) {
           duplicate = true;
+          break;
         }
       }
       if (duplicate) {
@@ -350,6 +350,26 @@ inline void run_root_music_stage(
             solver->host_workspace_bytes,
             static_cast<int*>(solver->info->data()) + item),
         "cusolverDnXgeev");
+  }
+  std::vector<int> info_host(
+      static_cast<size_t>(std::max(num_items, int64_t{1})));
+  if (cudaMemcpyAsync(info_host.data(), solver->info->data(),
+                      static_cast<size_t>(num_items) * sizeof(int),
+                      cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
+    throw std::runtime_error(
+        "RootMUSICEstimatorOp: cusolverDnXgeev info download failed");
+  }
+  if (cudaStreamSynchronize(stream) != cudaSuccess) {
+    throw std::runtime_error(
+        "RootMUSICEstimatorOp: cusolverDnXgeev info sync failed");
+  }
+  for (int64_t item = 0; item < num_items; ++item) {
+    const int info = info_host[static_cast<size_t>(item)];
+    if (info != 0) {
+      throw std::runtime_error(
+          "RootMUSICEstimatorOp: cusolverDnXgeev failed for item " +
+          std::to_string(item) + " (info " + std::to_string(info) + ")");
+    }
   }
 
   root_music_select_kernel<T><<<grid, 1, 0, stream>>>(
