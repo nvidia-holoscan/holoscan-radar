@@ -502,16 +502,29 @@ a wrong-value assertion failure). Not caused by the S1/S3 angle-estimation work
 landed 2026-07-20 (those touch neither CFAR nor this LUT path); flagged here as a
 pre-existing intermittent crash.
 
-**Questions for the team.**
+**Root cause (confirmed 2026-07-22).** Not a table-tearing race — a **thread /
+CUDA-context lifetime** bug. `ensure_alpha_lut_build` spawns a **detached**
+thread (`std::thread(...).detach()`); for GO/SO/OS that build runs GPU Monte
+Carlo (`cudaMalloc` / kernel launches / `cudaDeviceSynchronize`). Nothing joined
+it, so when `app->run()` returned and Holoscan tore down the CUDA context while a
+build was still in flight, the background `cuLaunchKernel` hit a **destroyed
+context** → SIGSEGV in the driver. Reproduced 5/20 bare and captured under
+cuda-gdb: the faulting stack is `cuLaunchKernel` ← `goso_mc_at_cell_kernel` ←
+`build_go_alpha_lut` worker ← `std::thread::_M_run`. The reader side was never
+the problem: `poll_cached_alpha_lut` copies the LUT **by value under the cache
+mutex**, so there is no half-built read (the double-buffer theory was a red
+herring).
 
-- Is the background alpha-LUT rebuild properly synchronized against the readers
-  (double-buffer + atomic swap, or a stream/event fence), or can a tick observe
-  a half-built / freed table?
-- Until fixed, should this test be marked flaky / retried, or the non-blocking
-  stale-LUT path be gated behind an explicit opt-in?
+**Resolved (L15, 2026-07-22).** Added `detail::join_inflight_alpha_lut_builds()`
+(waits on all in-flight build futures) and a `CFARDetectorOp::stop()` that calls
+it — Holoscan runs `stop()` after the last `compute()` and before context
+teardown, so no detached build can launch a kernel on a dead context. Blocks at
+shutdown only if a build is still running. The "gate behind an opt-in" question
+is now moot (serve-stale is safe by default). `test_cfar_detector_alpha_lut`'s
+`NonBlockingPfaOverrideServesStaleLut` was retargeted to measure the frame0→frame1
+(tick-1) latency instead of total `run()` time (which now includes the teardown
+join); verified 40/40 runs pass with **0 crashes** (was 5/20). See STATUS.md →
+Settled decisions (L15).
 
-**Status:** open — intermittent SEGFAULT reproduced in isolation; root-cause the
-race in the non-blocking LUT rebuild. **Tracked as a team item (TEAM_BLOCKED
-L15):** the fix approach (double-buffer + atomic swap vs. a stream/event fence)
-and whether to gate the non-blocking stale-LUT path behind an explicit opt-in are
-team decisions, not just a mechanical fix.
+**Status:** resolved — background builds joined at `stop()`; crash fixed + test
+de-flaked (40/40).
