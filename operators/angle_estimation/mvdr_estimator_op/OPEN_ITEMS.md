@@ -131,3 +131,22 @@ before CuPy, so unit tests never hit it; `perf_mvdr_estimator.py` did.
 **Fix:** keep `performance/python/utils/__init__.py` free of CuPy/Holoscan
 imports so bootstrap cannot pull CuPy early. Scripts still do
 `import holoscan.radar` then `import cupy` then `install_matx_cache_atexit()`.
+
+## Regression: isort silently re-broke the import order (fixed again, 2026-07-21)
+
+**Status:** fixed — `perf_mvdr_estimator.py`'s `import cupy` / `import
+holoscan.radar` pair had been swapped back to alphabetical (cupy first) by
+an isort pass, silently reintroducing the exact double-free above (`double
+free or corruption (out)`, `Aborted (core dumped)`, crashing before any
+scenario prints). The script's own comment described the *correct* order
+the whole time; only the code had drifted. Confirmed by re-running with
+the MUSIC bindings' `__init__.py` changes fully reverted — the crash
+persisted, so it predates and is unrelated to that work.
+
+**Fix:** wrapped the `import holoscan.radar` / `import cupy` /
+`install_matx_cache_atexit()` block in `# isort: off` / `# isort: on` (the
+same guard `applications/fmcw_*/python/*.py` and `applications/common/
+python/{demo_config,ops,mimo_sim}.py` already use for this identical
+reason). **Any new script that calls `install_matx_cache_atexit()` must use
+this guard** — plain sequential `import` statements are exactly what isort
+alphabetizes, and alphabetical happens to put `cupy` before `holoscan`.
