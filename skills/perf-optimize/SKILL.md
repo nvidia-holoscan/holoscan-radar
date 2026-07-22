@@ -8,8 +8,8 @@ description: Apply ONE performance fix to a holoscan-radar operator and prove it
 Apply one **behavior-preserving** performance change to an operator and verify it
 against three gates before asking a human to land it. This is the middle tier of
 the trio: [`perf-analyze`](../perf-analyze/SKILL.md) finds bottlenecks (read-only);
-this applies **one** fix under verification; `perf-autotune` (not built yet) is
-the autonomous loop over this.
+this applies **one** fix under verification; [`perf-autotune`](../perf-autotune/SKILL.md)
+is the autonomous loop over this.
 
 **Scope of one invocation: exactly one candidate fix.** Pick it from a
 `perf-analyze` finding (or take it from the user). Never batch changes; never
@@ -45,7 +45,10 @@ loop unattended here.
 ## Prerequisites
 
 Run inside `./holohub run-container` (see `perf-analyze` for the raw `docker run`
-form). The correctness gate needs unit tests, so build with **testing ON** too:
+form, the image-resolution fallback, and — important — the rule that CUDA builds
+and nsys runs exceed the agent shell's 2-minute foreground cap, so **background
+every build/analysis command** or the container is SIGTERM'd mid-build). The
+correctness gate needs unit tests, so build with **testing ON** too:
 
 ```bash
 cmake -S . -B build-opt -DCMAKE_CUDA_ARCHITECTURES=<cc> \
@@ -65,14 +68,24 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
 1. **Baseline.** Capture the numbers the gates compare against, and **save the
    baseline analysis** (the after-run overwrites it):
    ```bash
-   cmake --build $BUILD --target perf_<OP> -j4
+   cmake --build $BUILD --target perf_<OP> -j4                   # background this
    performance/agent/run.sh <OP> xs,md,xl        # perf-analyze: the speed baseline
    cp performance/agent/runs/<OP>/analysis.json \
       performance/agent/runs/<OP>/baseline_analysis.json
    ./$BUILD/performance/cpp/perf_<OP> --sizes md --checksum --warmup 0 \
        --frames 2 --quiet 2>/dev/null | grep output_checksum   # byte baseline
-   ctest --test-dir $BUILD -L unit -R <OP-test-pattern>          # must be green now
+   # Discover the actual unit-test name — ctest -R matches the *gtest suite*
+   # (e.g. FMCWRangeProcessorOpTest), NOT the CMake target (fmcw_range_processor):
+   ctest --test-dir $BUILD -N -L unit | grep -i <OP-keyword>
+   ctest --test-dir $BUILD -L unit -R <SuiteName>                # must be green now
    ```
+
+   **Record a *stable* baseline median now** — you cannot cheaply re-measure it
+   later (step 4 rebuilds over the baseline binary). The harness median has
+   ~2–3× run-to-run variance on this host, so take the median of a few clean runs
+   per size (`--warmup 8 --frames 40`, repeated 3×), not one shot. Note the real
+   `median_ms` is the first non-null `results[]` entry (a single-size clean/
+   checksum run can lead with a null-median calibration entry).
 
 2. **Checkpoint (isolation).** For a supervised single fix, work in place and
    revert with git — it keeps incremental rebuilds fast (touching one `.cu`
@@ -103,8 +116,14 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
    numerics-changing change, which then requires the sim tests to re-pass).
 
 7. **Gate 3 — speed:** re-run `perf-analyze`; compare the steady median to the
-   baseline. Require an improvement clearly beyond noise (use p90−median as the
-   jitter scale; re-run once to confirm it's not a fluke). No real gain → revert.
+   baseline. Require an improvement clearly beyond noise — with ~2–3× run-to-run
+   variance, one run is not enough: confirm the win with a few repeated clean runs
+   per size (as in step 1). **Be skeptical both ways** — reject a close call as
+   noise, but also sanity-check an implausibly *large* delta against the
+   mechanism before believing it (in the first real run a −84% xl delta was real
+   — a 32 MB per-tick `cudaFree` removed from a host-bound tick — but only trust
+   that after repeats confirm it and it matches the change). No real gain →
+   revert.
 
    **Revert** (any gate fails): `git checkout -- <changed files>` and rebuild, so
    the tree is back to baseline.

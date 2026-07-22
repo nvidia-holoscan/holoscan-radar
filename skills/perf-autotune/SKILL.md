@@ -52,17 +52,33 @@ see `perf-optimize` prerequisites and the `perf-analyze` container guidance).
 1. **Baseline.** Build; run `perf-analyze` and **save** its `analysis.json` and
    `diagnosis.json` as the baseline (the diagnosis is your bottleneck queue).
    Record the baseline steady median, output checksum, and green unit tests.
-   Start an empty `session.json` (`mode: "autotune"`).
+   Start an empty `session.json` (`mode: "autotune"`). Two things bite here:
+   **background the build/analysis** (they exceed the 2-min foreground shell cap
+   — see `perf-analyze`), and **capture a *stable* baseline median** (a few
+   repeated clean runs per size), because each kept iteration rebuilds over the
+   binary and the ~2–3× harness variance otherwise poisons every later delta.
 
 2. **Iterate** until a stop condition (below):
-   1. **Pick** the top-severity actionable finding not yet tried this session
-      (skip `info`-level and already-attempted findings).
+   1. **Pick** the top-severity **actionable steady-path** finding not yet tried
+      this session (skip `info`-level and already-attempted findings). Severity
+      alone misleads: a costly `[live]`-override finding (e.g. an `nfft`/plan
+      rebuild) ranks **high** by `override_delta_ms` but is **advisory** — when
+      the rebuild is already cached it has no steady-tick code change to make.
+      Skip those and target the top finding that touches the *steady tick* —
+      per-tick alloc, host/graph-bound, D2H readback. (In the first real run the
+      three top-ranked `high` findings were all advisory `nfft` rebuilds; the
+      genuine win was the `medium` per-tick-alloc finding under them.)
    2. **Apply** the smallest behavior-preserving change implementing its
       recommended pattern (pool/ping-pong, gate unused work, cache a rebuild).
    3. **Gate** (rebuild → unit tests → checksum vs baseline → harness median vs
       current-best). **Keep** only if correctness holds, the checksum is
       identical, and the median improves beyond noise; otherwise `git checkout
-      --` the candidate.
+      --` the candidate. With ~2–3× median variance, "improves beyond noise"
+      means confirmed across a few repeated clean runs, not one — and an
+      implausibly large delta must match the change's mechanism before you trust
+      it. The unit-test filter is the **gtest suite** name (e.g.
+      `FMCWRangeProcessorOpTest`), not the CMake target — discover it with
+      `ctest -N -L unit`, don't guess.
    4. **On keep:** append the change to `session.json` (finding, summary, files,
       diffstat, gates incl. per-size `speed_delta_pct`); update the current-best
       baseline; **re-run `perf-analyze`** so the next pick reflects the new
@@ -111,3 +127,8 @@ grep -rn "PERF-SCRATCH" operators/ performance/   # must return nothing
   `perf-optimize`).
 - Re-analysis each kept iteration is what keeps the loop honest — it chases the
   *current* bottleneck, not a stale finding list.
+- Known rubric wart (candidate for a `diagnose.py` fix): advisory `[live]`-override
+  findings outrank genuinely-actionable steady-path findings by severity. Until
+  `diagnose.py` tags findings `actionable` vs `advisory`, the pick step must read
+  past severity (see step 2.1). A first-run session typically keeps ~1 change per
+  operator this size; don't force iterations to hit the budget — stop on dry.

@@ -31,11 +31,22 @@ the image `./holohub` would use via `--dryrun` and `docker run` it headless
 ```bash
 IMG=$(./holohub run-container --no-docker-build --dryrun 2>/dev/null \
         | grep -oE 'holoscan-radar[^[:space:]]*' | tail -1)   # holohub resolves it
+# Fallback: --dryrun can print nothing (older holohub / no cached image). Then
+# take the branch image if present, else any local holoscan-radar image:
+[ -z "$IMG" ] && IMG=$(docker images --format '{{.Repository}}:{{.Tag}}' \
+        | grep -E '^holoscan-radar:' | head -1)
 docker run --rm --runtime nvidia --gpus all --cap-add CAP_SYS_PTRACE --ipc=host \
   --ulimit memlock=-1 --ulimit stack=67108864 --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -v "$PWD":/workspace/holoscan-radar -w /workspace/holoscan-radar \
   "$IMG" bash -lc '<command>'
 ```
+
+**Build/run wall time > the agent shell's 2-minute foreground cap.** A cold
+CUDA build (and each nsys-profiled size) runs for minutes; a foreground call is
+SIGTERM'd at the timeout mid-build. Launch the build and the analysis pipeline
+as **background** commands (write logs to the mounted tree; poll the log / binary
+mtime), or the container is killed and you rebuild from scratch. Keep `-j4`
+(not `-j$(nproc)` — heavy parallelism truncates captured stdout on this host).
 
 ## Steps
 
@@ -107,6 +118,12 @@ actionable findings in prose, and point them at `report.html` for the embedded
 charts. Note that latencies are machine-specific and that GPU-kernel time and
 host CUDA-API time overlap (they do not sum).
 
+**Steady medians carry real run-to-run variance** (observed ~2–3× on Thor between
+otherwise-identical runs — thermal/clock/scheduling). Don't over-read a single
+run's absolute number or a small cross-size wobble; trust the *shape* (scaling
+trend, kernel-fraction, alloc/tick) over any one median. When a finding hinges on
+a latency delta, say it's approximate.
+
 ## Interpreting findings (the rubric this encodes)
 
 - **cold ≫ steady** → first-tick plan/coefficient build or first-touch. Fine if
@@ -119,6 +136,13 @@ host CUDA-API time overlap (they do not sum).
   GPU.
 - **costly `[live]` override** (large `override_delta_ms`) → a plan/coefficient
   rebuild. Ensure warn-once-and-cache; callers must not sweep it every tick.
+  **This is advisory, not a steady-path optimization target.** It ranks high by
+  `override_delta_ms`, but when the rebuild is already cached (re-selecting a
+  prior config is free) there is no code change to make — it does not touch the
+  steady tick. Flag it for the operator's docs/callers; don't hand it to
+  `perf-optimize`/`perf-autotune` as a fix. (Known rubric wart: these outrank the
+  genuinely-actionable steady-path findings — alloc/tick, host-bound, D2H — by
+  severity; read past them to the top steady-path item.)
 
 ## Temporary instrumentation (must be removed before finishing)
 
