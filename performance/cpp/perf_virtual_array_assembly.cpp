@@ -130,6 +130,7 @@ class VirtualAssemblyPerfApp : public holoscan::Application {
   double override_wavelength{kOverrideWavelength};
   int64_t override_at{0};
   int total_frames{25};
+  bool checksum{false};  // wire the byte-equivalence checksum sink
 
   void compose() override {
     using holoscan::Arg;
@@ -147,6 +148,13 @@ class VirtualAssemblyPerfApp : public holoscan::Application {
     auto rd_sink = make_operator<perf::PerfTerminalSinkOp>("rd_sink");
     rd_sink->configure(collector);
     add_flow(op, rd_sink, {{"rd_maps", "input"}});
+
+    // Byte-equivalence gate: fan the primary output out to a checksum sink too
+    // (prints one output_checksum line on the first, pre-override frame).
+    if (checksum) {
+      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
+      add_flow(op, cs, {{"rd_maps", "input"}});
+    }
 
     auto geom_drain = make_operator<perf::PerfNullSinkOp>("geom_drain");
     add_flow(op, geom_drain, {{"array_geometry", "input"}});
@@ -301,6 +309,7 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
           app->rx_positions = linear_positions(scen.num_rx, 0.5);
           app->override_at = p.override_at;
           app->total_frames = p.total_frames;
+          app->checksum = rs.checksum;
           app->run();
           return collector;
         });

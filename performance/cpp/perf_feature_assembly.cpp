@@ -255,6 +255,7 @@ class FeatAsmPerfApp : public holoscan::Application {
   holoscan::TensorMap score;
   holoscan::TensorMap aoa;
   int total_frames{25};
+  bool checksum{false};  // wire the byte-equivalence checksum sink
 
   void compose() override {
     const auto features = pack_features(scen->pack);
@@ -285,6 +286,13 @@ class FeatAsmPerfApp : public holoscan::Application {
     auto term = make_operator<perf::PerfTerminalSinkOp>("points_sink");
     term->configure(collector);
     add_flow(op, term, {{"points", "input"}});
+
+    // Byte-equivalence gate: fan the primary output out to a checksum sink too
+    // (prints one output_checksum line on the first, pre-override frame).
+    if (checksum) {
+      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
+      add_flow(op, cs, {{"points", "input"}});
+    }
   }
 };
 
@@ -483,6 +491,7 @@ struct FeatTraits : perf::PerfDriverDefaults {
           app->score = std::move(score);
           app->aoa = std::move(aoa);
           app->total_frames = p.total_frames;
+          app->checksum = rs.checksum;
           app->run();
           return collector;
         });

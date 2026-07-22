@@ -173,6 +173,7 @@ class BeamformerPerfApp : public holoscan::Application {
   std::vector<double> az_grid;
   std::vector<double> el_grid;
   int total_frames{25};
+  bool checksum{false};  // wire the byte-equivalence checksum sink
 
   void compose() override {
     auto op = make_operator<hr::PhaseShiftBeamformerOp<T>>(
@@ -189,6 +190,13 @@ class BeamformerPerfApp : public holoscan::Application {
     auto cube_sink = make_operator<perf::PerfTerminalSinkOp>("cube_sink");
     cube_sink->configure(collector);
     add_flow(op, cube_sink, {{"rda_cube", "input"}});
+
+    // Byte-equivalence gate: fan the primary output out to a checksum sink too
+    // (prints one output_checksum line on the first, pre-override frame).
+    if (checksum) {
+      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
+      add_flow(op, cs, {{"rda_cube", "input"}});
+    }
 
     auto ovr = make_operator<perf::PerfOverrideSourceOp<std::vector<double>>>(
         "ovr", make_condition<holoscan::CountCondition>(total_frames));
@@ -331,6 +339,7 @@ struct BeamTraits : perf::PerfDriverDefaults {
           app->az_grid = linspace(-0.5, 0.5, scen.num_az);
           app->el_grid = linspace(-0.3, 0.3, scen.num_el);
           app->total_frames = p.total_frames;
+          app->checksum = rs.checksum;
           app->run();
           return collector;
         });

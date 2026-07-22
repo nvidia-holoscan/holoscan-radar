@@ -188,6 +188,7 @@ class DbscanPerfApp : public holoscan::Application {
   perf::TimingCollector* collector{nullptr};
   holoscan::TensorMap points;
   int total_frames{25};
+  bool checksum{false};  // wire the byte-equivalence checksum sink
 
   void compose() override {
     auto op = make_operator<hr::ClusterDBSCANOp<T>>(
@@ -203,6 +204,13 @@ class DbscanPerfApp : public holoscan::Application {
     auto term = make_operator<perf::PerfTerminalSinkOp>("labels_sink");
     term->configure(collector);
     add_flow(op, term, {{"labels", "input"}});
+
+    // Byte-equivalence gate: fan the primary output out to a checksum sink too
+    // (prints one output_checksum line on the first, pre-override frame).
+    if (checksum) {
+      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
+      add_flow(op, cs, {{"labels", "input"}});
+    }
 
     // sizes must be wired for the op to tick; it is not the timed result.
     auto sizes_drain = make_operator<perf::PerfNullSinkOp>("sizes_drain");
@@ -418,6 +426,7 @@ struct DbscanTraits : perf::PerfDriverDefaults {
           app->collector = &collector;
           app->points = std::move(points);
           app->total_frames = p.total_frames;
+          app->checksum = rs.checksum;
           app->run();
           return collector;
         });

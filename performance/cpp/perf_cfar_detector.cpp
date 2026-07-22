@@ -203,6 +203,7 @@ class CfarPerfApp : public holoscan::Application {
   perf::TimingCollector* collector{nullptr};
   holoscan::TensorMap frame;
   int total_frames{25};
+  bool checksum{false};  // wire the byte-equivalence checksum sink
 
   void compose() override {
     using holoscan::Arg;
@@ -224,6 +225,13 @@ class CfarPerfApp : public holoscan::Application {
     auto term = make_operator<perf::PerfTerminalSinkOp>("idx_sink");
     term->configure(collector);
     add_flow(op, term, {{"detection_idx", "input"}});
+
+    // Byte-equivalence gate: fan the primary output out to a checksum sink too
+    // (prints one output_checksum line on the first, pre-override frame).
+    if (checksum) {
+      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
+      add_flow(op, cs, {{"detection_idx", "input"}});
+    }
 
     // Every output port needs a receiver or the operator never ticks. The
     // null sink drains each dense output as a raw entity (no Tensor
@@ -608,6 +616,7 @@ struct CfarTraits : perf::PerfDriverDefaults {
           app->collector = &collector;
           app->frame = std::move(frame);
           app->total_frames = p.total_frames;
+          app->checksum = rs.checksum;
           perf::suppress_known_hsdk_noise_during([&] { app->run(); });
           return collector;
         });

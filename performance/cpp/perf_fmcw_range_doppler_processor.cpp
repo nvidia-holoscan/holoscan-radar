@@ -142,6 +142,7 @@ class FusedPerfApp : public holoscan::Application {
       hr::ClutterFilterMethod::kMeanSubtraction};
   int64_t override_at{0};
   int total_frames{25};
+  bool checksum{false};  // wire the byte-equivalence checksum sink
 
   void compose() override {
     using holoscan::Arg;
@@ -157,6 +158,13 @@ class FusedPerfApp : public holoscan::Application {
     auto term = make_operator<perf::PerfTerminalSinkOp>("rd_sink");
     term->configure(collector);
     add_flow(op, term, {{"rd_maps", "input"}});
+
+    // Byte-equivalence gate: fan the primary output out to a checksum sink too
+    // (prints one output_checksum line on the first, pre-override frame).
+    if (checksum) {
+      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
+      add_flow(op, cs, {{"rd_maps", "input"}});
+    }
 
     // Optional axes are emitted (waveform is set); drain both so the operator
     // ticks and both axis paths are exercised.
@@ -327,6 +335,7 @@ struct FusedTraits : perf::PerfDriverDefaults {
           app->override_clutter = flip_clutter(scen.clutter);
           app->override_at = p.override_at;
           app->total_frames = p.total_frames;
+          app->checksum = rs.checksum;
           app->run();
           return collector;
         });

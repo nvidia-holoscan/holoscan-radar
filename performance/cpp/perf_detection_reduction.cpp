@@ -208,6 +208,7 @@ class ReductionPerfApp : public holoscan::Application {
   holoscan::TensorMap idx;
   holoscan::TensorMap points;
   int total_frames{25};
+  bool checksum{false};  // wire the byte-equivalence checksum sink
 
   void compose() override {
     // Always supply feature_weights + wire points so a mid-run override to
@@ -229,6 +230,13 @@ class ReductionPerfApp : public holoscan::Application {
     auto term = make_operator<perf::PerfTerminalSinkOp>("rep_sink");
     term->configure(collector);
     add_flow(op, term, {{"rep_idx", "input"}});
+
+    // Byte-equivalence gate: fan the primary output out to a checksum sink too
+    // (prints one output_checksum line on the first, pre-override frame).
+    if (checksum) {
+      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
+      add_flow(op, cs, {{"rep_idx", "input"}});
+    }
 
     wire_override(op);
   }
@@ -478,6 +486,7 @@ struct RedTraits : perf::PerfDriverDefaults {
           app->idx = std::move(idx);
           app->points = std::move(points);
           app->total_frames = p.total_frames;
+          app->checksum = rs.checksum;
           app->run();
           return collector;
         });

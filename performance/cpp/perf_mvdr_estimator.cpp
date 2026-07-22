@@ -175,6 +175,7 @@ class MvdrPerfApp : public holoscan::Application {
   std::vector<double> az_grid;
   std::vector<double> el_grid;
   int total_frames{25};
+  bool checksum{false};  // wire the byte-equivalence checksum sink
 
   void compose() override {
     auto op = make_operator<hr::MVDREstimatorOp<T>>(
@@ -191,6 +192,13 @@ class MvdrPerfApp : public holoscan::Application {
     auto aoa_sink = make_operator<perf::PerfTerminalSinkOp>("aoa_sink");
     aoa_sink->configure(collector);
     add_flow(op, aoa_sink, {{"aoa_estimates", "input"}});
+
+    // Byte-equivalence gate: fan the primary output out to a checksum sink too
+    // (prints one output_checksum line on the first, pre-override frame).
+    if (checksum) {
+      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
+      add_flow(op, cs, {{"aoa_estimates", "input"}});
+    }
 
     auto spec_drain = make_operator<perf::PerfNullSinkOp>("spectrum_drain");
     add_flow(op, spec_drain, {{"angle_spectrum", "input"}});
@@ -326,6 +334,7 @@ struct MvdrTraits : perf::PerfDriverDefaults {
           app->az_grid = linspace(-0.5, 0.5, scen.num_az);
           app->el_grid = linspace(-0.3, 0.3, scen.num_el);
           app->total_frames = p.total_frames;
+          app->checksum = rs.checksum;
           app->run();
           return collector;
         });

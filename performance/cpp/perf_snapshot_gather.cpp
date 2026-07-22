@@ -201,6 +201,7 @@ class SnapGatherPerfApp : public holoscan::Application {
   holoscan::TensorMap rd_maps;
   holoscan::TensorMap idx;
   int total_frames{25};
+  bool checksum{false};  // wire the byte-equivalence checksum sink
 
   void compose() override {
     auto op = make_operator<hr::SnapshotGatherOp<T>>(
@@ -221,6 +222,13 @@ class SnapGatherPerfApp : public holoscan::Application {
     auto term = make_operator<perf::PerfTerminalSinkOp>("snapshot_sink");
     term->configure(collector);
     add_flow(op, term, {{"snapshot", "input"}});
+
+    // Byte-equivalence gate: fan the primary output out to a checksum sink too
+    // (prints one output_checksum line on the first, pre-override frame).
+    if (checksum) {
+      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
+      add_flow(op, cs, {{"snapshot", "input"}});
+    }
 
     auto valid_drain = make_operator<perf::PerfNullSinkOp>("valid_drain");
     add_flow(op, valid_drain, {{"is_valid", "input"}});
@@ -390,6 +398,7 @@ struct SnapTraits : perf::PerfDriverDefaults {
           app->rd_maps = std::move(rd_maps);
           app->idx = std::move(idx);
           app->total_frames = p.total_frames;
+          app->checksum = rs.checksum;
           app->run();
           return collector;
         });

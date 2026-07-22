@@ -100,6 +100,7 @@ class DeinterleavePerfApp : public holoscan::Application {
   perf::TimingCollector* collector{nullptr};
   holoscan::TensorMap frame;
   int total_frames{25};
+  bool checksum{false};  // wire the byte-equivalence checksum sink
 
   void compose() override {
     using holoscan::Arg;
@@ -116,6 +117,13 @@ class DeinterleavePerfApp : public holoscan::Application {
     auto sink = make_operator<perf::PerfTerminalSinkOp>("sink");
     sink->configure(collector);
     add_flow(op, sink, {{"adc_cube", "input"}});
+
+    // Byte-equivalence gate: fan the primary output out to a checksum sink too
+    // (prints one output_checksum line on the first, pre-override frame).
+    if (checksum) {
+      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
+      add_flow(op, cs, {{"adc_cube", "input"}});
+    }
   }
 };
 
@@ -252,6 +260,7 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
           app->collector = &collector;
           app->frame = std::move(cube);
           app->total_frames = p.total_frames;
+          app->checksum = rs.checksum;
           app->run();
           return collector;
         });

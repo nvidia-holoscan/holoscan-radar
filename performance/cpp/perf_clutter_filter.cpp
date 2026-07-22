@@ -126,6 +126,7 @@ class ClutterPerfApp : public holoscan::Application {
       hr::ClutterFilterMethod::kSingleDelay};
   int64_t override_at{0};
   int total_frames{25};
+  bool checksum{false};  // wire the byte-equivalence checksum sink
 
   void compose() override {
     using holoscan::Arg;
@@ -140,6 +141,13 @@ class ClutterPerfApp : public holoscan::Application {
     auto term = make_operator<perf::PerfTerminalSinkOp>("out_sink");
     term->configure(collector);
     add_flow(op, term, {{"range_profiles", "input"}});
+
+    // Byte-equivalence gate: fan the primary output out to a checksum sink too
+    // (prints one output_checksum line on the first, pre-override frame).
+    if (checksum) {
+      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
+      add_flow(op, cs, {{"range_profiles", "input"}});
+    }
 
     auto ovr =
         make_operator<perf::PerfOverrideSourceOp<hr::ClutterFilterMethod>>(
@@ -304,6 +312,7 @@ struct ClutterTraits : perf::PerfDriverDefaults {
           app->override_method = flip_method(scen.method);
           app->override_at = p.override_at;
           app->total_frames = p.total_frames;
+          app->checksum = rs.checksum;
           app->run();
           return collector;
         });

@@ -135,6 +135,7 @@ class DopplerPerfApp : public holoscan::Application {
   hr::WindowSpec override_window;
   int64_t override_at{0};
   int total_frames{25};
+  bool checksum{false};  // wire the byte-equivalence checksum sink
 
   void compose() override {
     using holoscan::Arg;
@@ -150,6 +151,13 @@ class DopplerPerfApp : public holoscan::Application {
     auto term = make_operator<perf::PerfTerminalSinkOp>("rd_sink");
     term->configure(collector);
     add_flow(op, term, {{"rd_maps", "input"}});
+
+    // Byte-equivalence gate: fan the primary output out to a checksum sink too
+    // (prints one output_checksum line on the first, pre-override frame).
+    if (checksum) {
+      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
+      add_flow(op, cs, {{"rd_maps", "input"}});
+    }
 
     auto ns = make_operator<perf::PerfNullSinkOp>("vel_sink");
     add_flow(op, ns, {{"velocity_bins", "input"}});
@@ -309,6 +317,7 @@ struct DopplerTraits : perf::PerfDriverDefaults {
           app->override_window = window_of(flip_window(scen.window));
           app->override_at = p.override_at;
           app->total_frames = p.total_frames;
+          app->checksum = rs.checksum;
           app->run();
           return collector;
         });
