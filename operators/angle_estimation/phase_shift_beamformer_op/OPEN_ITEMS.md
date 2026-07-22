@@ -4,10 +4,16 @@
 
 **Context.** `OPERATOR_API.md` documents a `custom` preset with explicit axis
 fields. `boundary_to_canonical` / `canonical_to_boundary` (used by
-`build_steering_table`) throw `invalid_argument` for `preset=custom` until the
-team defines the mapping rules. Shared with `BeamscanEstimatorOp` OPEN_ITEMS §1.
+`build_steering_table`) threw `invalid_argument` for `preset=custom` until the
+team defined the mapping rules. Shared with `BeamscanEstimatorOp` OPEN_ITEMS §1.
 
-**Status:** open — deferred until a consumer needs non-preset conventions.
+**Resolved (L11, 2026-07-22).** The generic `custom` mapping is implemented in
+`angle_convention.cpp` (see `BeamscanEstimatorOp` OPEN_ITEMS §1 and STATUS.md
+L11); `build_steering_table` now works for `preset=custom`. A degenerate axis
+config throws `invalid_argument` at table-build time. Pinned by
+`test_angle_convention.cpp` (preset-equivalence + round-trip + rejection).
+
+**Status:** resolved — `custom` implemented + tested (shared mapping).
 
 ## 2. Dense RDA-cube memory footprint
 

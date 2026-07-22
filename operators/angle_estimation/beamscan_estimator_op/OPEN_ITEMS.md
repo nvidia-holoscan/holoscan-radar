@@ -3,10 +3,21 @@
 ## 1. `AngleConvention::kCustom` boundary mapping
 
 **Context.** `OPERATOR_API.md` documents a `custom` preset with explicit axis
-fields. `boundary_to_canonical` / `canonical_to_boundary` throw
-`invalid_argument` for `preset=custom` until the team defines the mapping rules.
+fields. `boundary_to_canonical` / `canonical_to_boundary` threw
+`invalid_argument` for `preset=custom` until the team defined the mapping rules.
 
-**Status:** open — deferred until a consumer needs non-preset conventions.
+**Resolved (L11, 2026-07-22).** Implemented the generic mapping (chosen over
+deferring): `custom` builds an orthonormal frame from the signed-axis fields and
+maps `(az, el)` → `cos(el)cos(az)·boresight + cos(el)sin(az)·azimuth +
+sin(el)·elevation` (with the `zenith` polar step), inverted by projection. The
+three axes must be distinct principal axes (mutually orthogonal) — a degenerate
+config throws `invalid_argument` where the steering table is built. Every named
+preset is a specific `custom` config, which is the correctness anchor:
+`test_angle_convention.cpp` asserts `custom` reproduces each preset (both
+directions), round-trips, and rejects degenerate axes. Shared with
+`PhaseShiftBeamformerOp` §1. See STATUS.md → Settled decisions (L11).
+
+**Status:** resolved — `custom` implemented + tested; contract mapping stated.
 
 ## 2. `is_valid` bool dtype vs Holoscan 4.3 transport
 
