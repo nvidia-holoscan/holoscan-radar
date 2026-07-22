@@ -31,7 +31,6 @@ from pathlib import Path
 # --- thresholds (tunable; heuristic, not pass/fail) ------------------------
 COLD_RATIO_WARN = 3.0  # cold_ms > N x median => cold-dominated
 ALLOC_CALLS_PER_TICK_WARN = 1.0  # >= N alloc calls/tick => per-tick allocation
-FREE_HOST_PCT_WARN = 40.0  # free = N% of host-API time => alloc/free churn
 KERNEL_FRACTION_WARN = 0.5  # kernel < N of steady tick => host/graph-bound
 OVERRIDE_COSTLY_MS = 5.0  # override delta > N ms => costly reconfig
 OVERRIDE_HIGH_MS = 20.0  # override delta > N ms => high-severity reconfig
@@ -94,25 +93,46 @@ def diagnose_size(s: dict) -> list:
             )
         )
 
+    # --- kernel fraction of the steady tick (shared signal) ----------------
+    # Kernel time is GPU-side (profiled run); median is the clean steady wall.
+    kern_total = s["gpu"].get("kernel_ns_total") or 0
+    kern_pt_ns = kern_total / ticks if ticks else None
+    steady_ns = median * 1e6 if median else None
+    kern_frac = (kern_pt_ns / steady_ns) if (kern_pt_ns and steady_ns) else None
+    host_bound = kern_frac is not None and kern_frac < KERNEL_FRACTION_WARN
+
     # --- per-tick allocation (ping-pong pitfall) ---------------------------
+    # Trigger on the per-tick alloc *frequency* (robust), not the whole-run
+    # free-time share (which is inflated by one-time teardown frees). Severity
+    # tracks impact: only a real win when the tick is host-bound — if the kernel
+    # dominates, pooling barely moves it, so it drops to low.
     alloc_pt = der.get("alloc_calls_per_tick") or 0
     free_pt = der.get("free_calls_per_tick") or 0
     free_pct = der.get("host_api_pct", {}).get("free", 0.0)
-    if alloc_pt >= ALLOC_CALLS_PER_TICK_WARN or free_pct >= FREE_HOST_PCT_WARN:
+    if alloc_pt >= ALLOC_CALLS_PER_TICK_WARN:
+        sev = "low" if (kern_frac is not None and not host_bound) else "medium"
+        impact = (
+            "a minor cost — the tick is kernel-bound, so pooling is a small win"
+            if sev == "low"
+            else "likely the dominant steady cost"
+        )
         out.append(
             _f(
                 "per_tick_alloc",
-                "medium",
+                sev,
                 size=size,
                 title="Steady path allocates every tick (pool / ping-pong)",
-                detail=f"~{alloc_pt:.1f} cudaMalloc and ~{free_pt:.1f} cudaFree "
-                f"calls per tick; free is {free_pct:.0f}% of host-API "
-                f"time. Allocating the output tensor(s) each tick puts "
-                f"alloc/free on the hot path.",
+                detail=f"~{alloc_pt:.1f} cudaMalloc + ~{free_pt:.1f} cudaFree "
+                f"calls per tick — the output tensor(s) are allocated every "
+                f"frame, so alloc/free sit on the hot path ({impact}).",
                 evidence={
                     "alloc_calls_per_tick": alloc_pt,
                     "free_calls_per_tick": free_pt,
-                    "free_pct_of_host_api": free_pct,
+                    # whole-run share, inflated by teardown — context only.
+                    "free_pct_of_host_api_whole_run": round(free_pct, 1),
+                    "kernel_fraction": (
+                        round(kern_frac, 3) if kern_frac is not None else None
+                    ),
                     "top_api": _top_api(s),
                 },
                 recommendation="Pool the dense output buffers and ping-pong a "
@@ -126,37 +146,33 @@ def diagnose_size(s: dict) -> list:
         )
 
     # --- kernel vs graph/host (distance to speed-of-light) -----------------
-    kern_total = s["gpu"].get("kernel_ns_total") or 0
-    kern_pt_ns = kern_total / ticks if ticks else None
-    steady_ns = median * 1e6 if median else None
-    if kern_pt_ns and steady_ns and steady_ns > 0:
-        frac = kern_pt_ns / steady_ns
-        if frac < KERNEL_FRACTION_WARN:
-            out.append(
-                _f(
-                    "host_bound_tick",
-                    "medium",
-                    size=size,
-                    title="Tick is host/graph-bound, not kernel-bound",
-                    detail=f"GPU kernel time is ~{_ns_ms(kern_pt_ns):.4f} ms/tick "
-                    f"({100 * frac:.0f}% of the {median:.3f} ms steady "
-                    f"tick). The rest is graph/shell/alloc/launch/sync "
-                    f"overhead — optimizing the kernel will not move the "
-                    f"tick.",
-                    evidence={
-                        "kernel_ms_per_tick": _ns_ms(kern_pt_ns),
-                        "steady_median_ms": median,
-                        "kernel_fraction": round(frac, 3),
-                        "kernels": s["gpu"].get("kernels", [])[:3],
-                    },
-                    recommendation="Attack the shell first: pool allocations, cut "
-                    "per-tick syncs, and reduce launch/graph "
-                    "overhead. Do not rewrite the stencil/FFT when "
-                    "it is a minority of the tick.",
-                    rubric_ref="Diagnose: 'kernel fast, graph slow -> shell / "
-                    "alloc / compact / scheduler'",
-                )
+    if host_bound:
+        out.append(
+            _f(
+                "host_bound_tick",
+                "medium",
+                size=size,
+                title="Tick is host/graph-bound, not kernel-bound",
+                detail=f"GPU kernel time is ~{_ns_ms(kern_pt_ns):.4f} ms/tick "
+                f"({100 * kern_frac:.0f}% of the {median:.3f} ms steady "
+                f"tick). The rest is graph/shell/alloc/launch/sync "
+                f"overhead — optimizing the kernel will not move the "
+                f"tick.",
+                evidence={
+                    "kernel_ms_per_tick": _ns_ms(kern_pt_ns),
+                    "steady_median_ms": median,
+                    "kernel_fraction": round(kern_frac, 3),
+                    "kernels": s["gpu"].get("kernels", [])[:3],
+                },
+                recommendation="Attack the shell first: pool allocations (see "
+                "the per-tick allocation finding), cut per-tick "
+                "syncs, and reduce launch/graph overhead. Do not "
+                "rewrite the stencil/FFT when it is a minority of "
+                "the tick.",
+                rubric_ref="Diagnose: 'kernel fast, graph slow -> shell / "
+                "alloc / compact / scheduler'",
             )
+        )
 
     # --- host D2H readback on steady path ----------------------------------
     d2h = s["gpu"].get("memcpy", {}).get("d2h_ns") or 0
@@ -239,19 +255,27 @@ def diagnose_overrides(analysis: dict) -> list:
         )
 
     if cheap:
-        cheapest = min(cheap, key=lambda x: x["override_delta_ms"] or 0)
         params = sorted({o["param"] for o in cheap})
+        # Worst cheap reconfig, clamped: the override cost is a per-window peak,
+        # so sub-ms deltas (including small negatives) are measurement noise,
+        # not real cost — report the bound, not a specific noisy value.
+        worst = max((o.get("override_delta_ms") or 0) for o in cheap)
+        worst = max(worst, 0.0)
         out.append(
             _f(
                 "override_cheap",
                 "info",
-                size=cheapest["size"],
+                size=None,
                 title="Cheap sticky-flip live params (negligible reconfig cost)",
-                detail=f"{', '.join(params)} reconfigure in < "
-                f"{OVERRIDE_COSTLY_MS:.0f} ms (e.g. "
-                f"{cheapest['param']} ~{cheapest['override_delta_ms']:.3f} "
-                f"ms). These are safe to change at runtime frequently.",
-                evidence={"cheap_params": params, "cheapest": cheapest},
+                detail=f"{', '.join(params)} all reconfigure in under "
+                f"{OVERRIDE_COSTLY_MS:.0f} ms (worst ~{worst:.3f} ms) — safe "
+                f"to change at runtime frequently. Sub-millisecond deltas sit "
+                f"near the measurement floor (the override cost is a "
+                f"per-window peak), so treat them as ~0.",
+                evidence={
+                    "cheap_params": params,
+                    "worst_delta_ms": round(worst, 3),
+                },
                 recommendation="No action — these confirm the cheap-flip half of "
                 "the [live] surface is genuinely cheap (contrast "
                 "with the rebuild params above).",
