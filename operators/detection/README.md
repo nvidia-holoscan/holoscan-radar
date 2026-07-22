@@ -104,8 +104,8 @@ header is the full contract; the current build implements a faithful subset:
   (0-based); for `K = 1` α is closed-form, for `K > 1` Monte Carlo. An
   optional external `alpha_lut` bypasses online calibration. For `K = 1` and
   representative `K > 1` NCI cases, all variants are Monte Carlo /
-  closed-form validated. For `K > 1` the code is **ahead of the contract** —
-  see [`cfar_detector_op/OPEN_ITEMS.md`](cfar_detector_op/OPEN_ITEMS.md) §2.
+  closed-form validated. The `K > 1` closed form (incomplete-beta relation) is
+  now pinned in the contract (settled — STATUS.md L2).
   Preserved leading axes stay batched and are recorded in `detection_idx` as
   extra columns before `(doppler_bin, range_bin)`.
 - **Streams.** Work is enqueued on the stream from `receive_cuda_stream()`;

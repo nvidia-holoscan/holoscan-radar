@@ -37,18 +37,18 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   angle path; sticky `[live] snapshot_window`; static `doppler_edge` /
   `range_edge`; float/double complex `rd_maps`; unit tests (edge modes, batch
   dims, error paths, live override); `performance/cpp/perf_snapshot_gather.cpp`
-  characterizes gather cost + the `[live] snapshot_window` override spike. HSDK
-  4.3 bool transport caveat for `is_valid` in `snapshot_gather_op/OPEN_ITEMS.md`
-  §1 (aligned with CFAR `detection_mask`).
+  characterizes gather cost + the `[live] snapshot_window` override spike.
+  `is_valid` emits `uint8` (0/1), NumPy-visible on HSDK 4.3, aligned with CFAR
+  `detection_mask` (settled — STATUS.md L1).
 - **`BeamscanEstimatorOp` (checklist-complete — dpc):** conventional sparse-path
   Bartlett DOA on a scan grid; lands `ArrayGeometry` + `AngleConvention`
   descriptors in `operators/common/`; sticky `[live]` overrides for geometry,
   scan grid, taper, and peak interpolation; float/double; unit tests (2-D DOA
   recovery on a planar URA, 3-D single-look input, direction-cosine masking,
   error paths, live `az_angles` override); `performance/cpp/perf_beamscan_estimator.cpp`
-  characterizes scan cost + the `[live] az_angles` override spike. Open items in
-  `beamscan_estimator_op/OPEN_ITEMS.md` (`custom` angle preset, bool `is_valid`
-  transport caveat aligned with SnapshotGather).
+  characterizes scan cost + the `[live] az_angles` override spike. The `custom`
+  angle preset (STATUS.md L11) and `uint8` `is_valid` transport (STATUS.md L1)
+  are both settled.
 - **`MVDREstimatorOp` (NOT checklist-complete — one blocked param — dpc):**
   adaptive (MVDR / Capon) sparse-path DOA. Implements the per-item sample
   covariance with `is_valid` masking, diagonal loading (`auto` = a small

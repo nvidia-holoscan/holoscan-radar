@@ -32,17 +32,9 @@ See STATUS.md (S1 settled decision).
   reduced to a uniform sub-array upstream (S3), or a custom smoother can be
   supplied as an upstream operator emitting a reduced `(snapshot, geometry)`
   pair.
-- **Both team forks ratified (L13, 2026-07-22):** the `spatial_smoothing`
-  integer is a sub-array **count** per axis (`L_axis = M_axis − P_axis + 1`
-  derived), matching the spatial-smoothing "number of looks" convention; and a
-  holey array is **rejected → reduced upstream via `SubarraySelectionOp` (S3)**
-  rather than accepting in-operator explicit partitions (clean separation — S3
-  owns holey→uniform, the smoother owns filled ULA/URA). Chosen over
-  length-semantics and in-operator partitions (the latter would duplicate S3),
-  with no consumer for either. Docs-only — code, `OPERATOR_API.md`
-  `spatial_smoothing`, and the `test_spatial_smoothing` suite
-  (`UlaForwardEnumeration`, `RejectsHoleyLattice`, `RejectsCountLengthMismatch`,
-  …) already reflect it. See STATUS.md → Settled decisions (L13).
+
+The two forks — **count** semantics (over sub-array length) and **holey→S3**
+(over in-operator partitions) — are settled (STATUS.md L13).
 
 The related "where does the source count come from" question (fixed vs.
 MDL/AIC vs. CFAR/cluster seed) does **not** affect MVDR: `max_sources` is simply

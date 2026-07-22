@@ -15,23 +15,9 @@ single sub-array, no forward-backward).
 - **Explicit:** caller-supplied channel indices, validated to form a filled
   uniform ULA/URA and re-emitted in lattice order.
 
-## Team forks (ratified — L14, 2026-07-22)
-
-All four ratified as the implemented choices (docs-only; no consumer for any
-alternative). See STATUS.md → Settled decisions (L14).
-
-1. **Auto vs. explicit** — ratified **auto default** (largest filled sub-block)
-   with an **explicit** channel-index escape hatch (mirrors the S1
-   count-vs-length ergonomics fork, L13).
-2. **Selection objective** — ratified **max element count** (DOF), ties broken
-   by larger **azimuth aperture** — chosen over max-aperture-first.
-3. **Contiguous ULA vs. sum-set "Harnessing Holes"** — ratified **contiguous
-   only**. Sum-set (non-contiguous, keep holes for aperture when the array is
-   sum-set smoothable) is a **deferred future enhancement** (STATUS.md →
-   Roadmap).
-4. **Standalone op vs. a mode inside `VirtualArrayAssemblyOp`** — ratified
-   **standalone** (both operators exist independently: assembly builds the
-   virtual array, selection reduces it — clean separation).
+The four selection forks (auto-vs-explicit, objective, contiguous-vs-sum-set,
+standalone-vs-`VirtualArrayAssemblyOp` mode) are settled — see STATUS.md →
+Settled decisions (L14).
 
 ## Verifiability caveat
 

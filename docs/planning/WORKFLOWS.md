@@ -163,9 +163,10 @@ flowchart TD
 > `aoa_estimates` port (angle *values*, the sparse-path form) — it does not map
 > those batch columns through the beam grid itself. So the diagram's direct
 > `CFAR → FeatureAssemblyOp` edge needs an angle-lookup adapter in between. The
-> `fmcw_dense_simo` app bridges this app-locally (`CubeAoaLookupOp`); whether the
-> mapping becomes a shared operator or a `FeatureAssemblyOp` option is an open
-> contract question — see the `PhaseShiftBeamformerOp` `OPEN_ITEMS.md` §6.
+> `fmcw_dense_simo` app bridges this app-locally (`CubeAoaLookupOp`); this was
+> settled by extending `FeatureAssemblyOp` with `az_bin`/`el_bin` feature tokens
+> + optional `az_angles`/`el_angles` grids (STATUS.md S4), so the dense path no
+> longer needs the app-local adapter.
 
 **Sparse angle path — angle-then-cluster:**
 
