@@ -12,6 +12,7 @@
 
 #include <holoscan/holoscan.hpp>
 
+#include "angle_estimation/angle_boundary_device.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
@@ -57,6 +58,7 @@ class ESPRITEstimatorOp : public holoscan::Operator {
   bool effective_forward_backward_{true};
   bool seeded_{false};
   bool warned_rank_deficient_{false};
+  detail::DeviceAngleConvention<T> device_angle_convention_{};
 
   SpatialSmoothingPlan smoothing_plan_{};
   std::string smoothing_key_{};

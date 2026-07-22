@@ -3,8 +3,6 @@
 
 #pragma once
 
-#include <cuda_runtime_api.h>
-
 #include <cmath>
 #include <stdexcept>
 
@@ -98,6 +96,7 @@ DeviceAngleConvention<T> make_device_angle_convention(
   return result;
 }
 
+#ifdef __CUDACC__
 template <typename T>
 __device__ inline void angle_canonical_to_boundary(
     const DeviceAngleConvention<T>& convention, T x, T y, T z_coord, T* out0,
@@ -143,5 +142,6 @@ __device__ inline void angle_canonical_to_boundary(
   *out0 = az;
   *out1 = el;
 }
+#endif  // __CUDACC__
 
 }  // namespace holoscan::radar::detail

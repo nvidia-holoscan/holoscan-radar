@@ -116,6 +116,8 @@ void ESPRITEstimatorOp<T>::compute(InputContext& op_input,
     effective_max_sources_ = max_sources_.get();
     effective_smoothing_ = spatial_smoothing_.get();
     effective_forward_backward_ = forward_backward_.get();
+    device_angle_convention_ =
+        detail::make_device_angle_convention<T>(angle_convention_.get());
     seen_geometry_keys_.insert(geometry_key(effective_geometry_));
     seeded_ = true;
   }
@@ -137,8 +139,6 @@ void ESPRITEstimatorOp<T>::compute(InputContext& op_input,
       &smoothing_changed);
   (void)scalar_changed;
 
-  const auto device_angle_convention =
-      detail::make_device_angle_convention<T>(angle_convention_.get());
   if (!(effective_pfa_ > 0.0) || !(effective_pfa_ < 1.0)) {
     throw std::invalid_argument(
         "ESPRITEstimatorOp: source_count_pfa must be in (0, 1)");
@@ -390,7 +390,7 @@ void ESPRITEstimatorOp<T>::compute(InputContext& op_input,
       static_cast<T>(subarray_plan_.broadside[0]),
       static_cast<T>(subarray_plan_.broadside[1]),
       static_cast<T>(subarray_plan_.broadside[2]),
-      device_angle_convention,
+      device_angle_convention_,
       static_cast<cuda::std::complex<T>*>(covariance->data()),
       static_cast<cuda::std::complex<T>*>(eigenvectors->data()),
       static_cast<int64_t*>(valid_counts->data()),

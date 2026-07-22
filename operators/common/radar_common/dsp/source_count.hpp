@@ -59,11 +59,12 @@ namespace holoscan::radar {
 //   the paper's own per-step decomposition, eq. 37). Must be in (0, 1).
 // `max_sources` — clamp on the returned value. Must be >= 1.
 //
-// Returns d in [1, min(max_sources, M-1)]: with M eigenvalues at most M-1 can
-// be signal (at least one must remain to define the noise floor), and the
-// contract clamps the floor at 1 even in the trivial noise-only case (a
-// radar operator reports "at least one" DOA, never "zero sources", from the
-// dominant-eigenvector direction).
+// Returns d clamped to [1, max_sources]. With M eigenvalues at most M-1 can
+// be signal (at least one must remain to define the noise floor), so callers
+// that keep noise_dim >= 1 already satisfy sources <= M-1 before the clamp.
+// The floor at 1 covers the trivial noise-only case (a radar operator reports
+// "at least one" DOA, never "zero sources", from the dominant-eigenvector
+// direction).
 //
 // Does not implement the "rank-deficient covariance (K < num_channels) falls
 // back to 1 and warns" contract clause — callers know K and must apply that

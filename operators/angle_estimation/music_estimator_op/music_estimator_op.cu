@@ -153,6 +153,7 @@ void MUSICEstimatorOp<T>::compute(InputContext& op_input,
   (void)pfa_changed;
   effective_max_sources_ = resolve_override_param(
       op_input, "max_sources", effective_max_sources_, &max_sources_changed);
+  (void)max_sources_changed;
   bool smoothing_changed = false;
   effective_smoothing_ = resolve_override_param(
       op_input, "spatial_smoothing", effective_smoothing_, &smoothing_changed);
