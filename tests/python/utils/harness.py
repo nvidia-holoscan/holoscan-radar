@@ -308,11 +308,13 @@ def wire_capture_sink(
 
 
 def wire_null_sink(app: Application, op: Operator, port: str) -> Operator:
-    """Drain an output port without host conversion (bool masks, unused ports).
+    """Drain an output port without host conversion (unused or bool ports).
 
-    Holoscan SDK 4.3 rejects NumPy/PyTensor conversion of bool tensors; use
-    this (or ``radar_app.NullSinkOp``) instead of ``wire_capture_sink`` for
-    ``detection_mask`` / ``is_valid``.
+    Holoscan SDK 4.3 rejects NumPy/PyTensor conversion of genuine ``kDLBool``
+    tensors, so drain those instead of capturing them. Note the radar mask
+    outputs (``detection_mask`` / ``is_valid``) now emit as ``uint8`` and are
+    directly capturable — draining them is only a convenience for tests that do
+    not assert on them.
     """
     from holoscan.radar import NullSinkOp
 
