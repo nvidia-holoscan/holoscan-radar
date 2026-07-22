@@ -607,7 +607,7 @@ Requires a shift-invariant geometry; native 2-D az/el needs a 2-D variant (e.g. 
 
 **Parameters:**
 
-- `tx_schedule` — TXSchedule. The TDM firing pattern (carries `num_tx`); determines how the interleaved `M·L` slow-time axis splits into `(M_tx, L)`. The split is not inferable from the input alone — the `M·L` axis carries no marker of the boundaries — so this is required; `chirps_per_tx` (L) is then `(M·L)/num_tx`. Static (a fixed waveform / hardware property). TDM only. Default: none (required). The first-wave TDM chain (the downstream per-TX phase compensation) assumes **uniform** per-TX spacing, so a non-uniform / non-round-robin schedule is rejected with an error.
+- `tx_schedule` — TXSchedule. The TDM firing pattern (carries `num_tx`); determines how the interleaved `M·L` slow-time axis splits into `(M_tx, L)`. The split is not inferable from the input alone — the `M·L` axis carries no marker of the boundaries — so this is required; `chirps_per_tx` (L) is then `(M·L)/num_tx`. Static (a fixed waveform / hardware property). TDM only. Default: none (required). The first-wave TDM chain (the downstream per-TX phase compensation) assumes **uniform** per-TX spacing, so a non-uniform / non-round-robin schedule is rejected with an error. Staggered / per-TX-timing TDM (varying TX dwell or count, with a matching compensation model) is a **deferred future enhancement**, out of the v1 scope — see STATUS.md → Roadmap (settled as L12).
 
 #### MIMOCoherentCompensationOp
 

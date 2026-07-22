@@ -25,6 +25,11 @@ namespace holoscan::radar {
 // TDM in:  rd_maps — complex64/complex128, (..., M_tx, N_rx, num_doppler,
 //          num_range_bins).
 // TDM out: rd_maps — same shape; phase-aligned (tx, rx) block.
+// TDM scope: the per-Doppler-bin correction assumes a uniform round-robin
+//          schedule (fixed PRI/M inter-TX offset). Staggered / per-TX-timing
+//          schedules are out of scope — a deferred future enhancement that
+//          would need a generalized compensation model (STATUS.md → Roadmap;
+//          settled as L12).
 //
 // DDM in:  rd_maps — complex64/complex128, (..., N_rx, num_doppler,
 //          num_range_bins); the M TX sit in distinct Doppler sub-bands.

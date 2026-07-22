@@ -62,6 +62,22 @@ Support schedules where TX dwell or count varies, with a matching compensation
 model (or a schedule descriptor that carries per-TX timing). Blocked on a team
 decision for how `MIMOCoherentCompensationOp` should consume non-uniform timing.
 
+**Resolved (L12, 2026-07-22).** **Ratify uniform round-robin as the v1 scope**
+(chosen over building staggered-TDM support now). Non-uniform / staggered
+schedules stay **rejected with a clear error** — there is no consumer (the FMCW
+workflows are uniform TDM), the feature spans a new per-TX-timing descriptor +
+`MIMODeinterleaveOp` + a generalized `MIMOCoherentCompensationOp` model +
+simulator + tests, and that compensation model is itself an unresolved design
+question. Contract, code (`TXSchedule::expand_chirp_tx_index`), and the
+`RejectsNonUniformSchedule` test already enforce this; the operator headers
+(`mimo_deinterleave_op.hpp`, `tx_schedule.hpp`,
+`mimo_coherent_compensation_op.hpp`), the fmcw README, and `OPERATOR_API.md`
+`tx_schedule` now state the scope explicitly. Staggered TDM is carried as a
+**future enhancement** on the STATUS.md roadmap. See STATUS.md → Settled
+decisions (L12).
+
+**Status:** resolved — uniform-only ratified; staggered TDM deferred (roadmap).
+
 ### B.2 Per-tick output allocation (module-wide)
 
 Pure gather, strong ping-pong candidate. See [`operators/OPEN_ITEMS.md`](../../OPEN_ITEMS.md) §1.
