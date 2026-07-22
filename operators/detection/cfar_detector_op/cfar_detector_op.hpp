@@ -113,6 +113,10 @@ class CFARDetectorOp : public holoscan::Operator {
   // map is at least as large as the CFAR window; a smaller map triggers a
   // map-specific rebuild in compute() with a warning.
   void start() override;
+  // Drains any in-flight background alpha-LUT build before Holoscan tears down
+  // the CUDA context, so a detached GPU Monte-Carlo calibration cannot launch
+  // kernels on a destroyed context (fixes the non-blocking-rebuild SEGFAULT).
+  void stop() override;
 
   void setup(OperatorSpec& spec) override;
   void compute(InputContext& op_input, OutputContext& op_output,

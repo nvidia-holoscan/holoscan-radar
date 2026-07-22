@@ -219,6 +219,17 @@ void CFARDetectorOp<T>::start() {
 }
 
 template <typename T>
+void CFARDetectorOp<T>::stop() {
+  // Wait for any background alpha-LUT build (non-blocking serve-stale path) to
+  // finish before Holoscan tears down the CUDA context. A GO/SO/OS build runs
+  // GPU Monte-Carlo kernels on a detached thread; without this drain those
+  // launches can hit a destroyed context and SEGFAULT in the driver. stop()
+  // runs after the last compute() and before teardown, so the context is still
+  // valid here. Blocks only if a build is still running at shutdown.
+  detail::join_inflight_alpha_lut_builds();
+}
+
+template <typename T>
 void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
   spec.input<holoscan::TensorMap>("rd_maps");
   spec.output<holoscan::TensorMap>("detection_mask");
