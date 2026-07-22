@@ -364,14 +364,14 @@ GO/SO start-time pre-calibration (needs an RD-map shape hint, since their LUTs a
 #### ClusterDBSCANOp
 
 - **In:** `points` — float32 / float64, `(num_points, num_features)`. Caller-assembled feature matrix (e.g. `[range, velocity, az, el]`); radar-agnostic.
-- **Out:** `labels` — int, `(num_points,)`. Cluster id per point, noise = `-1`; row-aligned with `points`.
-- **Out:** `sizes` (optional) — int, `(num_clusters,)`. Point count per cluster; sized to the actual cluster count and reallocated per tick. If `max_clusters` is set and exceeded, surplus clusters are dropped and a warning raised.
+- **Out:** `labels` — int, `(num_points,)`. Cluster id per point, noise = `-1`; row-aligned with `points`. Clusters are numbered by **descending point count** (cluster `0` is the largest), ties broken by ascending component root (lowest member row index). Deterministic: `labels` is a pure function of `(points, epsilon, min_points)`.
+- **Out:** `sizes` (optional) — int, `(num_clusters,)`. Point count per cluster, in the same descending order as the ids (so `sizes` is non-increasing); sized to the actual cluster count and reallocated per tick. If `max_clusters` is set and exceeded, the smallest surplus clusters are dropped (their points → noise) and a warning raised.
 
 **Parameters:**
 
 - `epsilon` **[live]** — float scalar or `(num_features,)` vector. Neighborhood radius per feature axis; a per-axis vector gives an axis-aligned (anisotropic) neighborhood — `q` is a neighbor of `p` when `Σ_i ((p_i − q_i) / epsilon_i)² ≤ 1` — which handles mixed-unit features (m, rad, m/s). A scalar applies isotropically. Overridable for runtime tuning. Default: none (required).
 - `min_points` **[live]** — int. Minimum neighbors (including the point itself) for a core point (DBSCAN `minPts`). Overridable. Default: `2 · num_features` (common heuristic).
-- `max_clusters` (optional) **[live]** — int. Upper cap on the number of clusters reported in `sizes`; surplus dropped and a warning raised if exceeded. `sizes` is sized to the actual cluster count (≤ this cap). Unset → no cap. Default: none (uncapped).
+- `max_clusters` (optional) **[live]** — int. Upper cap on the number of clusters reported in `sizes`; if exceeded, the **smallest** clusters are dropped (their points relabeled to noise `-1`, keeping `labels`/`sizes` mutually consistent) and a warning raised. Because ids are numbered by descending size, the kept clusters are the `max_clusters` largest. `sizes` is sized to the actual cluster count (≤ this cap). Unset → no cap. Default: none (uncapped).
 
 #### FeatureAssemblyOp
 

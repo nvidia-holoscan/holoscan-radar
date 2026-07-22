@@ -12,20 +12,25 @@ faithful default plus the question for the team.
   to the actual cluster count (≤ this cap)."* It pins the effect on `sizes` but
   not (a) which clusters are surplus when `num_clusters > max_clusters`, nor
   (b) what `labels` reports for points in dropped clusters.
-- **Current behavior.** Clusters are assigned dense ids `[0, num_clusters)` in
-  ascending component-root (lowest member row index) order. When capped, the
-  clusters with the **highest** dense ids are dropped, and their points are
-  **relabeled to noise (`-1`)** so `labels`, `sizes`, and the reported cluster
-  count stay mutually consistent (`sizes[k]` is valid for every `k` a `label`
-  names).
+- **Current behavior.** Clusters are numbered by **descending point count**
+  (cluster `0` is the largest; ties broken by ascending component root). When
+  capped, the clusters with the **highest** dense ids — now the **smallest** —
+  are dropped, and their points are **relabeled to noise (`-1`)** so `labels`,
+  `sizes`, and the reported cluster count stay mutually consistent (`sizes[k]`
+  is valid for every `k` a `label` names). The cap therefore keeps the
+  `max_clusters` **largest** clusters.
 - **Impact.** Any downstream consumer that indexes `sizes` by `labels`. The
-  "drop highest ids / relabel to noise" choice is deterministic but arbitrary;
-  a "keep the largest clusters" or "keep lowest-id clusters but leave labels
-  untouched" policy would be equally defensible.
-- **Question.** Is drop-highest-id + relabel-to-noise the intended semantics, or
-  should the cap keep the largest clusters (by point count) and/or leave the
-  surplus `labels` populated but simply truncate `sizes`?
-- **Status.** `open` — implemented with the consistent default above.
+  policy is deterministic and keeps the most significant clusters.
+- **Resolved (L7, 2026-07-22).** Keep the **smallest** surplus clusters (drop
+  them to noise) — realized by numbering ids by descending size (see item 6,
+  resolved as L10) so the existing "drop highest ids" cap keeps the largest.
+  Chosen over the previous spatially-arbitrary ascending-root drop, and over
+  "leave surplus `labels` populated / truncate only `sizes`" (rejected — it
+  breaks the `sizes[label]` invariant). Making the *ordering rule* itself a
+  parameter is deferred (see item 8). See STATUS.md → Settled decisions (L7).
+- **Status.** `resolved` — cap keeps largest via descending-size numbering;
+  landed + tested (`NumbersClustersByDescendingSize`, `MaxClustersKeepsLargest`,
+  C++ and Python).
 
 ## 2. `epsilon` scalar-vs-vector encoding / ergonomics
 
@@ -95,22 +100,23 @@ faithful default plus the question for the team.
 - **Status.** `open` — implemented deterministic min-root; code is ahead of the
   (silent) contract.
 
-## 6. Cluster-id numbering is ascending-root order
+## 6. Cluster-id numbering order
 
-- **Context.** The contract says `labels` are dense with noise `-1` but does not
-  specify the order in which clusters are numbered.
-- **Current behavior.** Clusters are numbered by **ascending component root** —
-  cluster `0` is the component containing the lowest-index clustered point, and
-  `sizes` is row-aligned to that numbering. (When `max_clusters` caps the count,
-  the highest-id clusters are the ones dropped — see item 1.)
-- **Impact.** The integer `labels` / `sizes` ordering differs from
-  discovery-order or size-descending numbering (scikit-learn numbers in
-  discovery order); the partition is identical, only the ids differ. Downstream
-  code must not assume a particular ordering (e.g. "cluster 0 is the largest").
-- **Question.** Is ascending-root the desired convention, or should numbering be
-  by cluster size or discovery order? Pin it in the contract either way.
-- **Status.** `open` — implemented ascending-root; code is ahead of the (silent)
-  contract.
+- **Context.** The contract says `labels` are dense with noise `-1` but did not
+  originally specify the order in which clusters are numbered.
+- **Current behavior.** Clusters are numbered by **descending point count**
+  (cluster `0` is the largest), ties broken by ascending component root (lowest
+  member row index). `sizes` is row-aligned to that numbering (non-increasing).
+- **Impact.** "Cluster 0 is the largest" is now guaranteed. Numbering still
+  differs from scikit-learn's discovery order; the partition is identical, only
+  the ids differ. Downstream code must not assume discovery-order ids.
+- **Resolved (L10, 2026-07-22).** Pin **descending-size, ascending-root
+  tie-break** in the contract (`OPERATOR_API.md` `labels`/`sizes`). Chosen over
+  the prior ascending-root numbering — descending size makes the `max_clusters`
+  cap keep the largest clusters (item 1 / L7) for free and gives a useful
+  "cluster 0 is the largest" guarantee. Deterministic. Making the order a
+  parameter is deferred (item 8). See STATUS.md → Settled decisions (L10).
+- **Status.** `resolved` — descending-size numbering landed + tested.
 
 ## 7. Scope vs. general-purpose DBSCAN (deliberate non-features)
 
@@ -128,3 +134,21 @@ faithful default plus the question for the team.
   a future consumer needs one of these.
 - **Status.** `out of scope` — recorded for transparency; revisit per-feature if
   a consumer requires it (would be a contract change).
+
+## 8. Parameterize the cluster-ordering policy (future enhancement)
+
+- **Context.** Cluster ids are numbered by descending size (item 6 / L10), which
+  also fixes which clusters a `max_clusters` cap keeps (item 1 / L7). That single
+  fixed policy covers the current radar path, but the ordering rule is a natural
+  candidate for a parameter once a consumer needs a different one.
+- **Proposal (deferred).** A static `cluster_order` parameter — e.g.
+  `size_desc` (default, current behavior), `root_asc` (the previous
+  ascending-component-root numbering), or `discovery` (scikit-learn-style
+  first-reached order). The cap semantics would follow the chosen order (drop
+  the highest ids), so `size_desc` keeps the largest, `root_asc` keeps the
+  lowest-root, etc. Would need the param, a small host branch selecting the
+  argsort key (size vs. root vs. discovery index), and per-order tests.
+- **Impact.** None today; the fixed `size_desc` policy is contract (L7 / L10).
+  This only matters if a downstream consumer requires a different ordering.
+- **Status.** `deferred` — tracked as a future enhancement; not a blocker and
+  not a contract gap (the current order is pinned).

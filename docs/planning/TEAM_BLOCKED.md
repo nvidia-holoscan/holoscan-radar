@@ -62,10 +62,8 @@ or a deliberate contract change when the team has bandwidth.
 
 | # | Decision needed | Interim stance | Detail |
 | --- | --- | --- | --- |
-| L7 | **`max_clusters` surplus policy** | Drop highest dense ids; surplus → noise (`-1`) | [ClusterDBSCAN §1](../../operators/clustering/cluster_dbscan_op/OPEN_ITEMS.md) |
 | L8 | **`epsilon` scalar-vs-vector encoding** | `std::vector<double>` only (`epsilon: [0.5]` for scalar) | [ClusterDBSCAN §2](../../operators/clustering/cluster_dbscan_op/OPEN_ITEMS.md) |
 | L9 | **Border-point multi-cluster tie-break** | Min-root neighbor | [ClusterDBSCAN §5](../../operators/clustering/cluster_dbscan_op/OPEN_ITEMS.md) |
-| L10 | **Cluster-id numbering order** | Ascending component-root | [ClusterDBSCAN §6](../../operators/clustering/cluster_dbscan_op/OPEN_ITEMS.md) |
 
 ### Angle conventions & MIMO scope
 
