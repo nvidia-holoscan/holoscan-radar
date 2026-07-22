@@ -20,7 +20,7 @@ Status: **checklist-complete, C++ and Python.** The full contract
 
 All four optional outputs carry `ConditionType::kNone`, matching MVDR.
 
-**Test suite (31 C++ cases in `test_music_estimator.cpp`), including the
+**Test suite (37 C++ cases in `test_music_estimator.cpp`), including the
 gaps found and closed by explicitly diffing against MVDR's 28-test suite
 and `TESTING.md`'s requirements** (an initial 21-test pass was missing
 several real, previously-untested code paths):
@@ -138,7 +138,7 @@ exactly (`MUSICEstimatorOpF32`/`F64`, `retire_music_matx_caches`,
 re-exported from `python/holoscan/radar/__init__.py`, and registered with
 `install_matx_cache_atexit()` alongside MVDR's cache). `tests/python/
 angle_estimation/test_music_estimator.py` is a **full C++-parity pytest
-port — all 31 of 31 C++ cases**. Landed in the same pass as the C++
+port — all 37 of 37 C++ cases**. Landed in the same pass as the C++
 operator (not deferred to the Root-MUSIC/ESPRIT follow-up, as originally
 planned) — bind those two the same way when they land.
 
@@ -188,19 +188,23 @@ MVDR's own `OPEN_ITEMS.md`) — turned out not to be, once actually tried:
 
 `performance/cpp/perf_music_estimator.cpp` + `performance/python/
 perf_music_estimator.py` mirror MVDR's harness (same size ladder, inline
-`[live]` `az_angles` override, `perf_music_estimator_smoke` ctest). Both
+`[live]` `az_angles` override, `perf_music_estimator_smoke` ctest). The
+default/full matrices also include an `xs` scenario that overrides every
+functionally distinct live path together: az/el grids, geometry, fixed→auto
+model order plus Pfa, output capacity, and spatial smoothing. Both harnesses
 correctly use the `# isort: off` / `# isort: on` guard around `import
 holoscan.radar` / `import cupy` — see `mvdr_estimator_op/OPEN_ITEMS.md`
 "Regression: isort silently re-broke the import order" for why that guard
 is load-bearing, not cosmetic, whenever a script calls
 `install_matx_cache_atexit()`.
 
-`num_sources` is **fixed at 1** across the whole matrix (both harnesses),
-not `auto` — this keeps the model order, and hence the noise-subspace
-projector's cost, deterministic across repeats, isolating the
-covariance/eig/projector/scan path from the (separately-kernelled, cheap)
-EFT source-count decision. Sweeping `num_sources` itself is a documented
-gap below, not covered by the inline `az_angles` override.
+`num_sources` is **fixed at 1** across the size ladder (both harnesses), not
+`auto` — this keeps the model order, and hence the noise-subspace projector's
+cost, deterministic across repeats, isolating the covariance/eig/projector/
+scan path from the (separately-kernelled, cheap) EFT source-count decision.
+The all-live scenario covers the fixed→auto transition and Pfa override, but
+does not constitute a model-order performance sweep; that remains a documented
+gap below.
 
 ### Getting `nsys` working in a sandboxed/container environment
 

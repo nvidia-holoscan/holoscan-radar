@@ -6,10 +6,12 @@
 // it (batched matx::eig, EigenMode::VECTOR — full eigenvector basis, unlike
 // MVDR's NO_VECTOR), resolves a model order, builds the noise-subspace
 // projector, then scans the (az, el) grid for the MUSIC pseudospectrum.
-// Sweeps detection count, channel count, snapshot count, and scan-grid size,
-// and inlines a mid-session [live] az_angles override (finer grid → steering
-// rebuild), mirroring perf_mvdr_estimator.cpp. Measurement tool only: no
-// timing assertions. See docs/planning/OPERATOR_DEVELOPMENT.md.
+// Sweeps detection count, channel count, snapshot count, and scan-grid size.
+// The size ladder inlines a mid-session az_angles override; the default/full
+// matrices add an xs scenario that overrides every functionally distinct live
+// configuration path together (scan grid, geometry, model-order mode/Pfa,
+// output capacity, and spatial smoothing). Measurement tool only: no timing
+// assertions. See docs/planning/OPERATOR_DEVELOPMENT.md.
 //
 // num_sources is fixed (=1) across the matrix rather than auto: this keeps
 // the model order — and hence the noise-subspace projector's cost —
@@ -72,6 +74,7 @@ struct MusicScenario {
   int64_t num_el{0};
   int64_t override_at{0};
   int64_t override_num_az{0};
+  bool comprehensive_override{false};
 };
 
 const std::vector<SizeSpec>& size_ladder() {
@@ -189,7 +192,9 @@ class MusicPerfApp : public holoscan::Application {
         holoscan::Arg("angle_convention") = convention,
         holoscan::Arg("az_angles") = az_grid,
         holoscan::Arg("el_angles") = el_grid,
-        holoscan::Arg("num_sources") = int64_t{1});
+        holoscan::Arg("num_sources") = int64_t{1},
+        holoscan::Arg("source_count_pfa") = 1e-4,
+        holoscan::Arg("max_sources") = int64_t{4});
 
     auto src = make_operator<MusicPerfSourceOp>(
         "src", make_condition<holoscan::CountCondition>(total_frames));
@@ -215,6 +220,52 @@ class MusicPerfApp : public holoscan::Application {
     ovr->configure(scen->override_at,
                    linspace(-0.5, 0.5, scen->override_num_az));
     add_flow(ovr, op, {{"output", "az_angles"}});
+
+    if (scen->comprehensive_override) {
+      auto el_ovr =
+          make_operator<perf::PerfOverrideSourceOp<std::vector<double>>>(
+              "el_ovr", make_condition<holoscan::CountCondition>(total_frames));
+      el_ovr->configure(scen->override_at,
+                        linspace(-0.25, 0.25, scen->num_el + 4));
+      add_flow(el_ovr, op, {{"output", "el_angles"}});
+
+      auto geometry_ovr =
+          make_operator<perf::PerfOverrideSourceOp<hr::ArrayGeometry>>(
+              "geometry_ovr",
+              make_condition<holoscan::CountCondition>(total_frames));
+      auto changed_geometry = geometry;
+      changed_geometry.wavelength = 0.8;
+      geometry_ovr->configure(scen->override_at,
+                              std::move(changed_geometry));
+      add_flow(geometry_ovr, op, {{"output", "array_geometry"}});
+
+      auto sources_ovr =
+          make_operator<perf::PerfOverrideSourceOp<int64_t>>(
+              "sources_ovr",
+              make_condition<holoscan::CountCondition>(total_frames));
+      sources_ovr->configure(scen->override_at, int64_t{-1});
+      add_flow(sources_ovr, op, {{"output", "num_sources"}});
+
+      auto pfa_ovr = make_operator<perf::PerfOverrideSourceOp<double>>(
+          "pfa_ovr", make_condition<holoscan::CountCondition>(total_frames));
+      pfa_ovr->configure(scen->override_at, 0.5);
+      add_flow(pfa_ovr, op, {{"output", "source_count_pfa"}});
+
+      auto max_sources_ovr =
+          make_operator<perf::PerfOverrideSourceOp<int64_t>>(
+              "max_sources_ovr",
+              make_condition<holoscan::CountCondition>(total_frames));
+      max_sources_ovr->configure(scen->override_at, int64_t{3});
+      add_flow(max_sources_ovr, op, {{"output", "max_sources"}});
+
+      auto smoothing_ovr =
+          make_operator<perf::PerfOverrideSourceOp<std::vector<int64_t>>>(
+              "smoothing_ovr",
+              make_condition<holoscan::CountCondition>(total_frames));
+      smoothing_ovr->configure(scen->override_at,
+                               std::vector<int64_t>{2});
+      add_flow(smoothing_ovr, op, {{"output", "spatial_smoothing"}});
+    }
   }
 };
 
@@ -244,7 +295,8 @@ perf::ResultRow base_row(const MusicScenario& scen) {
   return row;
 }
 
-MusicScenario make_scenario(const SizeSpec& s) {
+MusicScenario make_scenario(const SizeSpec& s,
+                            bool comprehensive_override = false) {
   MusicScenario sc;
   sc.size_id = s.id;
   sc.channels = s.channels;
@@ -253,9 +305,13 @@ MusicScenario make_scenario(const SizeSpec& s) {
   sc.num_az = s.num_az;
   sc.num_el = s.num_el;
   sc.override_num_az = s.num_az + 20;
+  sc.comprehensive_override = comprehensive_override;
   std::ostringstream id;
   id << "music_" << s.id << "_c" << s.channels << "_n" << s.detections << "_s"
      << s.snapshots << "_g" << s.num_az << "x" << s.num_el;
+  if (comprehensive_override) {
+    id << "_all_live";
+  }
   sc.id = id.str();
   return sc;
 }
@@ -268,7 +324,7 @@ struct MusicTraits : perf::PerfDriverDefaults {
     return "MUSICEstimatorOp performance characterization";
   }
   static const char* sizes_all_help() {
-    return "Default size sweep (inline az_angles override)";
+    return "Default size sweep plus all-live override scenario";
   }
   static const char* sizes_subset_help() {
     return "Size sweep across an explicit subset";
@@ -293,6 +349,7 @@ struct MusicTraits : perf::PerfDriverDefaults {
     for (const char* sid : {"xs", "sm", "md"}) {
       out.push_back(make_scenario(must_find_size(sid)));
     }
+    out.push_back(make_scenario(must_find_size("xs"), true));
     return out;
   }
 
@@ -315,6 +372,7 @@ struct MusicTraits : perf::PerfDriverDefaults {
     for (const auto& s : size_ladder()) {
       out.push_back(make_scenario(s));
     }
+    out.push_back(make_scenario(must_find_size("xs"), true));
     return out;
   }
 
@@ -350,12 +408,20 @@ struct MusicTraits : perf::PerfDriverDefaults {
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes =
-        "num_sources fixed=1 (deterministic model order, isolates the "
-        "covariance/eig(VECTOR)/projector/scan path from EFT); cold_ms is "
-        "first-frame latency; median/p90 are pre-override steady state; "
-        "override_ms is peak latency over the live-az_angles (finer grid) "
-        "window; cells/s is detections/s";
+    if (scen.comprehensive_override) {
+      row.notes =
+          "all distinct live paths overridden together: az/el grids, "
+          "array_geometry, num_sources fixed->auto + source_count_pfa, "
+          "max_sources, and spatial_smoothing; override_ms is their combined "
+          "reconfiguration spike";
+    } else {
+      row.notes =
+          "num_sources fixed=1 (deterministic model order, isolates the "
+          "covariance/eig(VECTOR)/projector/scan path from EFT); cold_ms is "
+          "first-frame latency; median/p90 are pre-override steady state; "
+          "override_ms is peak latency over the live-az_angles (finer grid) "
+          "window; cells/s is detections/s";
+    }
     report->results.push_back(row);
   }
 

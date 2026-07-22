@@ -187,6 +187,37 @@ def test_RecoversKnownDoaUlaAzOnlyFixedOneSource():
     assert out["aoa"][0, 1] == pytest.approx(0.0, abs=1e-9)
 
 
+def test_SharedSparseSlotInterchangesWithBeamscan():
+    k_n = 8
+    truth_az = 0.08
+    conv = radar_boresight_convention()
+    geom = make_ula_geometry(k_n, 0.5, 1.0)
+    look = make_steering_snapshot(geom, conv, truth_az, 0.0)
+    snapshot = look.reshape(1, k_n, 1)
+    frame = single_map(to_device_array(snapshot, dtype=np.complex128), "snapshot")
+    kwargs = {
+        "array_geometry": geom,
+        "angle_convention": conv,
+        "az_angles": linspace(-0.3, 0.3, 61),
+        "el_angles": [0.0],
+    }
+
+    def make_beamscan(app):
+        return BeamscanEstimatorOpF64(app, name="op_under_test", **kwargs)
+
+    beamscan = run_operator_multi(
+        make_beamscan,
+        frame,
+        input_port="snapshot",
+        output_ports=["aoa_estimates"],
+        drain_ports=["angle_spectrum"],
+    )
+    music = run_music(snapshot, num_sources=1, **kwargs)
+
+    assert beamscan["aoa_estimates"][0][0, 0] == pytest.approx(truth_az, abs=0.02)
+    assert music["aoa"][0, 0] == pytest.approx(truth_az, abs=0.02)
+
+
 def test_RecoversKnownDoaUraFixedOneSource():
     k_ny, k_nz, k_s = 4, 4, 48
     truth_az, truth_el = 0.12, 0.05
@@ -424,6 +455,28 @@ def test_FloatInstantiationSmoke():
     assert out["aoa"][0, 0] == pytest.approx(0.06, abs=0.03)
 
 
+def test_FloatDoubleAgreeOnDoa():
+    k_n, k_s = 8, 32
+    truth_az = 0.09
+    conv = radar_boresight_convention()
+    geom = make_ula_geometry(k_n, 0.5, 1.0)
+    block = make_block(geom, conv, truth_az, 0.0, k_s, 0.05, 5)
+    kwargs = {
+        "array_geometry": geom,
+        "angle_convention": conv,
+        "az_angles": linspace(-0.3, 0.3, 61),
+        "el_angles": [0.0],
+        "num_sources": 1,
+    }
+    out_f = run_music(
+        block.reshape(1, k_n, k_s).astype(np.complex64),
+        op_cls=MUSICEstimatorOpF32,
+        **kwargs,
+    )
+    out_d = run_music(block.reshape(1, k_n, k_s), **kwargs)
+    assert out_f["aoa"][0, 0] == pytest.approx(float(out_d["aoa"][0, 0]), abs=1e-2)
+
+
 def test_LiveNumSourcesStickyOverride():
     k_n, k_s = 12, 128
     conv = radar_boresight_convention()
@@ -535,6 +588,32 @@ def test_ResolvesCloselySpacedSourcesBeamscanCannot():
     music_peaks = count_prominent_local_maxima_1d(music_spec)
     assert music_peaks >= 2, "MUSIC should resolve two lobes where Beamscan cannot"
     assert int(out["source_count"][0]) == 2
+    dm = out["doa_multi"]
+    matched = (abs(dm[0, 0, 0] - az0) < 0.015 and abs(dm[0, 1, 0] - az1) < 0.015) or (
+        abs(dm[0, 0, 0] - az1) < 0.015 and abs(dm[0, 1, 0] - az0) < 0.015
+    )
+    assert matched, f"dm[0,0,0]={dm[0, 0, 0]} dm[0,1,0]={dm[0, 1, 0]}"
+
+
+def test_AutoNumSourcesResolvesTwoCloselySpacedSources():
+    k_n, k_s = 16, 256
+    az0, az1 = 0.025, -0.025
+    conv = radar_boresight_convention()
+    geom = make_ula_geometry(k_n, 0.5, 1.0)
+    block = make_block_two(geom, conv, az0, 0.0, az1, 0.0, k_s, 0.01, 201)
+    az_grid = linspace(-0.3, 0.3, 241)
+
+    out = run_music_full(
+        block.reshape(1, k_n, k_s),
+        array_geometry=geom,
+        angle_convention=conv,
+        az_angles=az_grid,
+        el_angles=[0.0],
+        max_sources=2,
+    )
+    assert int(out["source_count"][0]) == 2
+    music_spec = out["spectrum"][0, :, 0]
+    assert count_prominent_local_maxima_1d(music_spec) >= 2
     dm = out["doa_multi"]
     matched = (abs(dm[0, 0, 0] - az0) < 0.015 and abs(dm[0, 1, 0] - az1) < 0.015) or (
         abs(dm[0, 0, 0] - az1) < 0.015 and abs(dm[0, 1, 0] - az0) < 0.015
@@ -670,7 +749,82 @@ def test_SpatialSmoothingForwardOnlyReducesEigenvalueChannels():
     assert out["aoa"][0, 0] == pytest.approx(0.1, abs=0.03)
 
 
-# --- Live overrides: az_angles / array_geometry / max_sources ---------------
+# --- Live overrides ---------------------------------------------------------
+
+
+def test_LiveSourceCountPfaStickyOverride():
+    k_n = k_s = 6
+    eigenvalues = np.asarray(
+        [0.8930540251, 0.9468277841, 1.3517214181, 1.6732266229, 9.0798471606, 14.3477610683]
+    )
+    block = np.zeros((k_n, k_s), dtype=np.complex128)
+    for c in range(k_n):
+        block[c, c] = np.sqrt(float(k_s) * eigenvalues[c])
+    snap = to_device_array(block.reshape(1, k_n, k_s), dtype=np.complex128)
+    frame = single_map(snap, "snapshot")
+    geom = make_ula_geometry(k_n, 0.5, 1.0)
+    conv = radar_boresight_convention()
+
+    def make_op(app):
+        return MUSICEstimatorOpF64(
+            app,
+            array_geometry=geom,
+            angle_convention=conv,
+            az_angles=linspace(-0.5, 0.5, 51),
+            el_angles=[0.0],
+            num_sources=-1,
+            source_count_pfa=1e-4,
+            max_sources=4,
+            name="op_under_test",
+        )
+
+    outs = run_operator_multi(
+        make_op,
+        [frame, frame, frame],
+        input_port="snapshot",
+        output_ports=["angle_spectrum"],
+        overrides={"source_count_pfa": [1e-4, 0.5]},
+        drain_ports=["aoa_estimates", "doa_multi", "source_count", "eigenvalues"],
+    )
+    assert len(outs["angle_spectrum"]) == 3
+    tight = float(np.max(outs["angle_spectrum"][0]))
+    loose = float(np.max(outs["angle_spectrum"][1]))
+    assert tight != loose
+    np.testing.assert_array_equal(outs["angle_spectrum"][1], outs["angle_spectrum"][2])
+
+
+def test_LiveSpatialSmoothingStickyOverride():
+    k_n, k_s = 8, 32
+    conv = radar_boresight_convention()
+    geom = make_ula_geometry(k_n, 0.5, 1.0)
+    block = make_block(geom, conv, 0.1, 0.0, k_s, 0.02, 141)
+    snap = to_device_array(block.reshape(1, k_n, k_s), dtype=np.complex128)
+    frame = single_map(snap, "snapshot")
+
+    def make_op(app):
+        return MUSICEstimatorOpF64(
+            app,
+            array_geometry=geom,
+            angle_convention=conv,
+            az_angles=linspace(-0.3, 0.3, 31),
+            el_angles=[0.0],
+            spatial_smoothing=[],
+            num_sources=1,
+            name="op_under_test",
+        )
+
+    outs = run_operator_multi(
+        make_op,
+        [frame, frame, frame],
+        input_port="snapshot",
+        output_ports=["eigenvalues"],
+        overrides={"spatial_smoothing": [[], [2]]},
+        drain_ports=["aoa_estimates", "angle_spectrum", "doa_multi", "source_count"],
+    )
+    assert len(outs["eigenvalues"]) == 3
+    assert outs["eigenvalues"][0].shape == (1, k_n)
+    assert outs["eigenvalues"][1].shape == (1, k_n - 1)
+    assert outs["eigenvalues"][2].shape == outs["eigenvalues"][1].shape
 
 
 def test_LiveAzGridStickyOverride():
@@ -703,6 +857,39 @@ def test_LiveAzGridStickyOverride():
     assert len(outs["angle_spectrum"]) == 2
     assert outs["angle_spectrum"][0].shape[1] == 3
     assert outs["angle_spectrum"][1].shape[1] == 11
+
+
+def test_LiveElGridStickyOverride():
+    k_ny, k_nz, k_s = 4, 4, 48
+    truth_el = 0.06
+    conv = radar_boresight_convention()
+    geom = make_planar_ura_geometry(k_ny, k_nz, 0.5, 1.0)
+    block = make_block(geom, conv, 0.1, truth_el, k_s, 0.02, 151)
+    snap = to_device_array(block.reshape(1, geom.num_elements(), k_s), dtype=np.complex128)
+    frame = single_map(snap, "snapshot")
+
+    def make_op(app):
+        return MUSICEstimatorOpF64(
+            app,
+            array_geometry=geom,
+            angle_convention=conv,
+            az_angles=linspace(-0.3, 0.3, 31),
+            el_angles=[0.0],
+            num_sources=1,
+            name="op_under_test",
+        )
+
+    outs = run_operator_multi(
+        make_op,
+        [frame, frame],
+        input_port="snapshot",
+        output_ports=["angle_spectrum"],
+        overrides={"el_angles": [[0.0], linspace(-0.2, 0.2, 11)]},
+        drain_ports=["aoa_estimates", "doa_multi", "source_count", "eigenvalues"],
+    )
+    assert len(outs["angle_spectrum"]) == 2
+    assert outs["angle_spectrum"][0].shape == (1, 31, 1)
+    assert outs["angle_spectrum"][1].shape == (1, 31, 11)
 
 
 def test_LiveArrayGeometryStickyOverride():
