@@ -53,10 +53,10 @@ faithful default plus the question for the team.
 
 ## 8. Parameterize the cluster-ordering policy (future enhancement)
 
-- **Context.** Cluster ids are numbered by descending size (item 6 / L10), which
-  also fixes which clusters a `max_clusters` cap keeps (item 1 / L7). That single
-  fixed policy covers the current radar path, but the ordering rule is a natural
-  candidate for a parameter once a consumer needs a different one.
+- **Context.** Cluster ids are numbered by descending size (L10), which also
+  fixes which clusters a `max_clusters` cap keeps (L7). That single fixed policy
+  covers the current radar path, but the ordering rule is a natural candidate
+  for a parameter once a consumer needs a different one.
 - **Proposal (deferred).** A static `cluster_order` parameter — e.g.
   `size_desc` (default, current behavior), `root_asc` (the previous
   ascending-component-root numbering), or `discovery` (scikit-learn-style

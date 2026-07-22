@@ -75,9 +75,10 @@ before treating SO Pfa validation as on par with CA/GO/OS.
 
 ## 8. Exact-sized `detection_idx` — deferred device-side fast path
 
-Exact-sized `detection_idx` (and its row-aligned score/noise companions) forces
-a per-tick scalar detection-count device→host sync before allocation (the host
-allocator needs `num_detections` first). Exact sizing is the locked contract and
+Exact-sized `detection_idx` forces a per-tick scalar detection-count device→host
+sync before allocation (the host allocator needs `num_detections` first).
+(`detection_score` / `noise_estimate` are dense maps, not exact-sized — only
+`detection_idx` is compacted to the detection count.) Exact sizing is the locked contract and
 is **ratified** — the whole downstream chain (`SnapshotGatherOp`,
 `FeatureAssemblyOp`, `DetectionReductionOp`, `ClusterDBSCANOp`) positionally
 joins on "row count *is* `num_detections`", so it is not changed lightly

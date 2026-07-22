@@ -40,6 +40,15 @@ rejects it with a clear error. There is no implicit TDM fallback.
   for TDM).
 - Assumes uniform per-TX slow-time spacing; non-uniform schedules are
   rejected upstream by `MIMODeinterleaveOp` / `TXSchedule`.
+- **Known limitation — identity `tx_order` only.** The offset uses the TX
+  **index** `m` as the firing slot, so it is only correct when TX id equals
+  firing slot — i.e. the default round-robin `tx_order`. A non-identity but
+  uniform-repeating `tx_order` permutation is accepted by `MIMODeinterleaveOp`
+  (which orders its output TX axis by TX id), but this operator never receives
+  `tx_order`, so it silently applies the wrong per-TX phase for the permuted
+  case. A correct fix would propagate the firing-slot mapping (the position of
+  each TX id within the `tx_order` cycle) into the correction-table index — a
+  cross-operator change, deferred until a consumer needs non-round-robin TDM.
 - Output shape matches input: `num_doppler` is unchanged.
 
 ### A.3 DDM “code removal” is a band gather, not correlation

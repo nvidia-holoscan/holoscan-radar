@@ -49,7 +49,7 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   characterizes scan cost + the `[live] az_angles` override spike. The `custom`
   angle preset (STATUS.md L11) and `uint8` `is_valid` transport (STATUS.md L1)
   are both settled.
-- **`MVDREstimatorOp` (NOT checklist-complete — one blocked param — dpc):**
+- **`MVDREstimatorOp` (checklist-complete — dpc):**
   adaptive (MVDR / Capon) sparse-path DOA. Implements the per-item sample
   covariance with `is_valid` masking, diagonal loading (`auto` = a small
   multiple of the `trace(R̂)/C` noise-floor proxy, or a fixed absolute δ), a
@@ -68,11 +68,11 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   capacity + NaN fill, rank-one eigenvalue dominance, `is_valid` exclusion /
   all-invalid blanking, live
   overrides incl. `max_sources` realloc, error paths) +
-  `performance/cpp/perf_mvdr_estimator.cpp`. **The one remaining contract
-  parameter, `spatial_smoothing`, is BLOCKED on a covariance-estimator team
-  decision** (not declared); see `mvdr_estimator_op/OPEN_ITEMS.md` (also the
-  `diagonal_loading` float-or-`auto` encoding note and the eigenvalues per-tick
-  cost).
+  `performance/cpp/perf_mvdr_estimator.cpp`. `spatial_smoothing` /
+  `forward_backward` are implemented as a front-end transform (settled — S1,
+  STATUS.md L13); see `mvdr_estimator_op/OPEN_ITEMS.md` for the residual notes
+  (the `diagonal_loading` float-or-`auto` encoding note and the eigenvalues
+  per-tick cost).
 - **`PhaseShiftBeamformerOp` (checklist-complete — dpc):** conventional
   (Bartlett) dense-path beamformer; forms a beam for every range-Doppler cell,
   replacing the channel axis with the `(num_az, num_el)` grid to build the
@@ -85,5 +85,5 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   convention relabeling + direction-cosine masking, taper sidelobes, batch,
   live overrides, error paths); `performance/cpp/perf_phase_shift_beamformer.cpp`
   characterizes dense beamforming cost + the `[live] az_angles` override spike.
-  Open items in `phase_shift_beamformer_op/OPEN_ITEMS.md` (`custom` angle
-  preset, dense-cube memory footprint).
+  Open items in `phase_shift_beamformer_op/OPEN_ITEMS.md` (dense-cube memory
+  footprint).

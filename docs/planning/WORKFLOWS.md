@@ -158,15 +158,13 @@ flowchart TD
 
 > **Dense az/el assembly caveat (open).** On this path the `(az, el)` beam
 > indices arrive as the leading *preserved-batch* columns of CFAR's
-> `detection_idx` (`(az_bin, el_bin, doppler_bin, range_bin)`), but
-> `FeatureAssemblyOp` currently sources the `az` / `el` features only from an
-> `aoa_estimates` port (angle *values*, the sparse-path form) — it does not map
-> those batch columns through the beam grid itself. So the diagram's direct
-> `CFAR → FeatureAssemblyOp` edge needs an angle-lookup adapter in between. The
-> `fmcw_dense_simo` app bridges this app-locally (`CubeAoaLookupOp`); this was
-> settled by extending `FeatureAssemblyOp` with `az_bin`/`el_bin` feature tokens
-> + optional `az_angles`/`el_angles` grids (STATUS.md S4), so the dense path no
-> longer needs the app-local adapter.
+> `detection_idx` (`(az_bin, el_bin, doppler_bin, range_bin)`).
+> `FeatureAssemblyOp` maps those `(az_bin, el_bin)` columns through the beam grid
+> itself via the `az_bin` / `el_bin` feature tokens + optional
+> `az_angles` / `el_angles` grid inputs (settled — STATUS.md S4), so the direct
+> `CFAR → FeatureAssemblyOp` edge carries the dense path with no angle-lookup
+> adapter. (`fmcw_dense_simo`'s app-local `CubeAoaLookupOp` predates S4 and can
+> be dropped at leisure.)
 
 **Sparse angle path — angle-then-cluster:**
 

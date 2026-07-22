@@ -58,7 +58,7 @@ using holoscan::radar::testing::wire_leading_override;
 using holoscan::test::create_operator_test;
 
 using holoscan::radar::kPi;
-constexpr double kSpeedOfLight = 299792458.0;
+using holoscan::radar::kSpeedOfLight;
 
 // Waveform shared by the velocity_bins tests (77 GHz automotive-style).
 FMCWWaveformDescriptor test_waveform() {
