@@ -11,10 +11,15 @@
 #include <stdexcept>
 
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
+#include "radar_common/dsp/shift_invariant_subarray.hpp"
 
 namespace {
 
 using holoscan::radar::FMCWWaveformDescriptor;
+using holoscan::radar::ShiftInvariantSubarrayPair;
+using holoscan::radar::ArrayGeometry;
+using holoscan::radar::ArrayGeometryType;
 
 holoscan::radar::FMCWWaveformSpec test_waveform_spec() {
   holoscan::radar::FMCWWaveformSpec spec;
@@ -102,6 +107,78 @@ TEST(WaveformDescriptor, WavelengthPrecomputedAndDefaultInvalid) {
 
   const FMCWWaveformDescriptor empty;
   EXPECT_FALSE(empty.is_valid());
+}
+
+TEST(ShiftInvariantSubarrayPair, AutoAndExplicitValidation) {
+  const ShiftInvariantSubarrayPair automatic;
+  EXPECT_TRUE(automatic.is_auto());
+  EXPECT_NO_THROW(automatic.validate(8));
+
+  ShiftInvariantSubarrayPair pair;
+  pair.reference_indices = {0, 1, 2};
+  pair.shifted_indices = {1, 2, 3};
+  EXPECT_FALSE(pair.is_auto());
+  EXPECT_NO_THROW(pair.validate());
+  EXPECT_NO_THROW(pair.validate(4));
+}
+
+TEST(ShiftInvariantSubarrayPair, RejectsMalformedIndices) {
+  ShiftInvariantSubarrayPair pair;
+  pair.reference_indices = {0, 1};
+  EXPECT_THROW(pair.validate(), std::invalid_argument);
+
+  pair.shifted_indices = {1};
+  EXPECT_THROW(pair.validate(), std::invalid_argument);
+
+  pair.shifted_indices = {1, 2};
+  pair.reference_indices = {0, 0};
+  EXPECT_THROW(pair.validate(), std::invalid_argument);
+
+  pair.reference_indices = {0, 1};
+  pair.shifted_indices = {1, 1};
+  EXPECT_THROW(pair.validate(), std::invalid_argument);
+
+  pair.shifted_indices = {1, 4};
+  EXPECT_THROW(pair.validate(4), std::invalid_argument);
+}
+
+ArrayGeometry make_test_ula(int64_t channels) {
+  ArrayGeometry geom;
+  geom.wavelength = 1.0;
+  geom.geometry_type = ArrayGeometryType::kUla;
+  for (int64_t channel = 0; channel < channels; ++channel) {
+    geom.element_positions.insert(geom.element_positions.end(),
+                                  {0.0, 0.5 * static_cast<double>(channel),
+                                   0.0});
+  }
+  return geom;
+}
+
+TEST(ShiftInvariantSubarrayPlan, AutoDerivesMaximumOverlapUlaPair) {
+  const auto geom = make_test_ula(6);
+  const auto plan =
+      holoscan::radar::build_shift_invariant_subarray_plan(
+          geom, ShiftInvariantSubarrayPair{});
+  ASSERT_EQ(plan.pair.reference_indices.size(), 5u);
+  ASSERT_EQ(plan.pair.shifted_indices.size(), 5u);
+  EXPECT_EQ(plan.pair.reference_indices.front(), 0);
+  EXPECT_EQ(plan.pair.shifted_indices.back(), 5);
+  EXPECT_NEAR(plan.spacing, 0.5, 1e-9);
+}
+
+TEST(ShiftInvariantSubarrayPlan, RejectsParallelToBoresightUla) {
+  ArrayGeometry geom;
+  geom.wavelength = 1.0;
+  geom.geometry_type = ArrayGeometryType::kUla;
+  for (int64_t channel = 0; channel < 4; ++channel) {
+    geom.element_positions.insert(
+        geom.element_positions.end(),
+        {0.5 * static_cast<double>(channel), 0.0, 0.0});
+  }
+  EXPECT_THROW(
+      holoscan::radar::build_shift_invariant_subarray_plan(
+          geom, ShiftInvariantSubarrayPair{}),
+      std::invalid_argument);
 }
 
 }  // namespace

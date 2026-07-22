@@ -574,6 +574,7 @@ Per-estimator deviations from the shared contract:
 **Parameters:** shared `array_geometry` + `angle_convention` (**no scan grid**) plus:
 
 - `num_sources` **[live]** — int or `auto`. Model order (root count); `auto` = per-item EFT on the forward-backward-smoothed covariance eigenvalues, clamped to `[1, max_sources]` (`source_count_pfa` sets the rate); an integer fixes it. Default: auto. *(See MUSICEstimatorOp / STATUS.md S2.)*
+- `source_count_pfa` **[live]** — float. EFT over-estimation probability for `num_sources: auto`. Default: 1e-2.
 - `spatial_smoothing` **[live]** — int-vector or none. Per-aperture-axis sub-array counts on a filled ULA/URA (`[P]` / `[P_az, P_el]`; empty = off). A partly-filled / holey virtual array must first be reduced to a uniform sub-array upstream (see S3). Default: none.
 - `forward_backward` — bool. Forward-backward smoothing (needs a centro-symmetric ULA/URA); applies only when `spatial_smoothing` is set. Default: true.
 - `max_sources` **[live]** — int. `doa_multi` / `source_count` capacity. Default: 4.
@@ -589,12 +590,15 @@ Requires a ULA / uniform (Vandermonde) geometry; a non-uniform virtual array nee
 **Parameters:** shared `array_geometry` + `angle_convention` (**no scan grid**) plus:
 
 - `num_sources` **[live]** — int or `auto`. Model order; `auto` = per-item EFT on the forward-backward-smoothed covariance eigenvalues, clamped to `[1, max_sources]` (`source_count_pfa` sets the rate); an integer fixes it. Default: auto. *(See MUSICEstimatorOp / STATUS.md S2.)*
+- `source_count_pfa` **[live]** — float. EFT over-estimation probability for `num_sources: auto`. Default: 1e-2.
 - `spatial_smoothing` **[live]** — int-vector or none. Per-aperture-axis sub-array counts on a filled ULA/URA (`[P]` / `[P_az, P_el]`; empty = off); decorrelates coherent multipath at the cost of aperture. Default: none.
 - `forward_backward` — bool. Forward-backward smoothing (needs a centro-symmetric ULA/URA); applies only when `spatial_smoothing` is set. Default: true.
 - `max_sources` **[live]** — int. `doa_multi` / `source_count` capacity. Default: 4.
-- `subarray_spec` — the two shift-invariant sub-arrays / displacement defining the rotational invariance. **Static** (structural). Default: derived from `array_geometry` (maximum-overlap sub-array pair for a ULA).
+- `subarray_spec` — ShiftInvariantSubarrayPair. Ordered corresponding element-index vectors (`reference_indices`, `shifted_indices`) defining the two identical displaced subarrays. Their common displacement is derived and validated against `array_geometry` rather than stored redundantly. **Static** (structural). Empty vectors select `auto`: derive the maximum-overlap pair `[0…M−2]` / `[1…M−1]` for a ULA. Default: auto.
 
 Requires a shift-invariant geometry; native 2-D az/el needs a 2-D variant (e.g. Unitary / 2-D ESPRIT).
+
+An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclusive: smoothing changes the effective aperture and channel indexing. With smoothing enabled, leave `subarray_spec=auto`; the maximum-overlap pair is derived from the reduced uniform aperture each tick.
 
 *(Geometry note: Root-MUSIC and ESPRIT constrain the valid `array_geometry` — the non-uniform / holey virtual arrays from `VirtualArrayAssemblyOp` may need a ULA/subarray-selection or spatial-smoothing step first, and native 2-D az/el needs a 2-D-capable variant. They do not change the port shapes above.)*
 
@@ -650,6 +654,15 @@ Describes the (virtual) antenna array for beamforming and DOA estimation. Shared
 - `element_positions` — float, `(num_elements, 3)`. Element coordinates (meters). General form (ULA / URA / UCA / Conformal). Whatever the channel axis represents: physical RX positions (SIMO) or synthesized virtual positions (`p_tx ⊕ p_rx`, MIMO). `num_elements` must match the operator's `num_channels` axis.
 - `wavelength` — float. Operating wavelength (m), `c / carrier_frequency`. Sets the steering-vector phase per element.
 - `geometry_type` (optional) — enum {ULA, URA, UCA, Conformal}. Informational; enables optimized kernels (e.g. the spatial-FFT fast path).
+
+### ShiftInvariantSubarrayPair
+
+Defines two ordered, corresponding element-index sets with one common nonzero displacement, for ESPRIT and future shift-invariant array methods. Passed as a static parameter, never a data port. The displacement is derived from `ArrayGeometry.element_positions`; storing it separately would permit contradictory geometry.
+
+- `reference_indices` — int vector. Element indices for the reference subarray.
+- `shifted_indices` — int vector of the same length. `shifted_indices[i]` corresponds to `reference_indices[i]`; every position difference must equal the same displacement within geometry tolerance.
+- Both vectors must be nonempty, equal length, unique within each vector, and in range. The two vectors may overlap (the standard ULA maximum-overlap pair does).
+- Both vectors empty is the `auto` sentinel: on a ULA with `M` elements derive `[0, …, M−2]` / `[1, …, M−1]`. `auto` rejects geometry that is not a uniformly spaced line in snapshot channel order.
 
 ### AngleConvention
 

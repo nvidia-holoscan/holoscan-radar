@@ -10,7 +10,7 @@
 namespace holoscan::radar {
 
 // Doppler-division multiplexing layout for MIMOCoherentCompensationOp (DDM
-// mode). Lands in radar_common as one of the six shared descriptor types.
+// mode). Lands in radar_common as one of the seven shared descriptor types.
 struct DDMCodeDescriptor {
   int64_t num_tx{0};
   std::vector<std::complex<double>> phase_codes{};
