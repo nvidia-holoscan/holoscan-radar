@@ -29,6 +29,7 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_common/sim/point_target_sim.hpp"
+#include "radar_common/math/constants.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
@@ -48,7 +49,7 @@ using holoscan::radar::testing::wire_leading_override;
 using holoscan::test::create_operator_test;
 namespace sim = holoscan::radar::sim;
 
-constexpr double kPi = 3.14159265358979323846;
+using holoscan::radar::kPi;
 constexpr int64_t kChirps = 16;
 constexpr int64_t kBins = 64;
 

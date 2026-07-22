@@ -16,16 +16,16 @@
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/dsp/angle_convention.hpp"
+#include "radar_common/math/constants.hpp"
 
 namespace {
-constexpr double kPi = 3.141592653589793;
-
 using holoscan::radar::AngleConvention;
 using holoscan::radar::AngleConventionPreset;
 using holoscan::radar::boundary_to_canonical;
 using holoscan::radar::canonical_to_boundary;
 using holoscan::radar::CanonicalDirection;
 using holoscan::radar::ElevationReference;
+using holoscan::radar::kPi;
 using holoscan::radar::SignedAxis;
 
 AngleConvention preset(AngleConventionPreset p) {
