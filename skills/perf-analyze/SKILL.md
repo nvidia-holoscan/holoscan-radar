@@ -120,6 +120,16 @@ host CUDA-API time overlap (they do not sum).
 - **costly `[live]` override** (large `override_delta_ms`) → a plan/coefficient
   rebuild. Ensure warn-once-and-cache; callers must not sweep it every tick.
 
+## Temporary instrumentation (must be removed before finishing)
+
+This skill is read-only for *permanent* code, but to sharpen an ambiguous
+finding you MAY add **temporary** analysis code — extra NVTX ranges
+(`RADAR_NVTX_PHASE` / `RADAR_NVTX_RANGE` from `radar_common/sdk/nvtx.hpp`),
+scratch timers, debug prints. Mark each with a `// PERF-SCRATCH` comment and
+**remove all of it before this analysis pass ends** — leave the tree exactly as
+you found it. Verify with `grep -rn "PERF-SCRATCH" operators/ performance/`
+(must return nothing) and rebuild.
+
 ## Notes / limits
 
 - Attribution is per-size steady (the steady path is identical across override

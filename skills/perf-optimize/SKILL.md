@@ -62,10 +62,13 @@ need it wired first (one fan-out `add_flow`, mirror the range op).
 
 Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
 
-1. **Baseline.** Capture the numbers the gates compare against:
+1. **Baseline.** Capture the numbers the gates compare against, and **save the
+   baseline analysis** (the after-run overwrites it):
    ```bash
    cmake --build $BUILD --target perf_<OP> -j4
-   perf-analyze  → note the steady median per size (this is the speed baseline)
+   performance/agent/run.sh <OP> xs,md,xl        # perf-analyze: the speed baseline
+   cp performance/agent/runs/<OP>/analysis.json \
+      performance/agent/runs/<OP>/baseline_analysis.json
    ./$BUILD/performance/cpp/perf_<OP> --sizes md --checksum --warmup 0 \
        --frames 2 --quiet 2>/dev/null | grep output_checksum   # byte baseline
    ctest --test-dir $BUILD -L unit -R <OP-test-pattern>          # must be green now
@@ -106,18 +109,43 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
    **Revert** (any gate fails): `git checkout -- <changed files>` and rebuild, so
    the tree is back to baseline.
 
-8. **Present for approval.** If all three gates pass, show the human:
-   - the diff (what changed and why — tie it to the finding);
-   - correctness: tests green; byte-equivalence: identical checksum;
-   - speed: before → after steady median (per size), and the delta.
+8. **Report + present.** If all three gates pass, remove any temporary
+   instrumentation (see below), write a `session.json` recording the change, and
+   render the optimization report:
+   ```bash
+   # session.json: {"operator","mode":"optimize","changes":[{finding,summary,
+   #   files,diffstat,gates:{correctness,byte_equivalent,speed_delta_pct},kept}],
+   #   "notes"}  — see optimize_report.py's docstring for the full schema.
+   python3 performance/agent/optimize_report.py \
+     --baseline performance/agent/runs/<OP>/baseline_analysis.json \
+     --final    performance/agent/runs/<OP>/analysis.json \
+     --session  session.json --out-dir performance/agent/runs/<OP>
+   ```
+   Present to the human: the diff (tie it to the finding), the gate results
+   (tests green, identical checksum, before→after median), and
+   `optimization_report.{md,html}` (before/after per size + chart).
 
    **Stop there.** Do not commit to the feature branch or push until the human
    says to land it.
 
+## Temporary instrumentation (must be removed)
+
+To get finer attribution you MAY add temporary analysis code — extra NVTX ranges
+(`RADAR_NVTX_PHASE` / `RADAR_NVTX_RANGE` from `radar_common/sdk/nvtx.hpp`),
+scratch timers, or debug prints. Mark every such edit with a `// PERF-SCRATCH`
+comment so it is greppable, and **remove all of it before the loop ends** — it is
+analysis scaffolding, never part of the fix. This is a single-fix loop, so "the
+loop" is this one pass: before rendering the report / presenting, assert the tree
+is clean of it and rebuild so the kept state is only the real change:
+
+```bash
+grep -rn "PERF-SCRATCH" operators/ performance/   # must return nothing
+```
+
 ## Notes / limits
 
-- One fix per invocation by design. To chain fixes, run again (or use
-  `perf-autotune` once it exists).
+- One fix per invocation by design. To chain fixes, run again, or use
+  `perf-autotune` for the autonomous loop.
 - Gate 2 (`--checksum`) needs `PerfChecksumSinkOp` wired in the operator's
   `perf_<op>.cpp`; gate 1 needs the operator to have a `-L unit` test target.
 - Byte-equivalence is proven on the harness's fixed input; the unit tests cover
