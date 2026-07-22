@@ -52,8 +52,7 @@ Interim stance already chosen (or the capability is explicitly out of current
 scope). Development and checklist completion proceed; these need ratification
 or a deliberate contract change when the team has bandwidth.
 
-### Angle conventions & MIMO scope
-
-| # | Decision needed | Interim stance | Detail |
-| --- | --- | --- | --- |
-| L14 | **S3 subarray-selection forks** — (a) auto vs explicit; (b) objective: max element-count vs aperture; (c) contiguous ULA vs sum-set holey smoothing; (d) standalone op vs `VirtualArrayAssemblyOp` mode | **Implemented (`SubarraySelectionOp`):** auto largest filled ULA/URA + explicit; max element-count, azimuth tie-break; contiguous only; standalone op. Gridless consumers (Root-MUSIC/ESPRIT) not yet built | [SubarraySelection OPEN_ITEMS](../../operators/angle_estimation/subarray_selection_op/OPEN_ITEMS.md) |
+**None currently.** All prior items (L1–L14, plus S1–S4) are settled — see
+STATUS.md → Settled decisions. Capabilities deliberately deferred out of the
+current scope (e.g. staggered TDM, sum-set holey subarray smoothing) are tracked
+under STATUS.md → Roadmap, not here.
