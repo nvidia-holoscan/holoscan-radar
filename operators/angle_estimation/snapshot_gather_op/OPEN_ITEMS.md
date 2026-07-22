@@ -27,8 +27,15 @@ tensor as a `PyTensor` calls `numpyTypestr()` and **throws**
 - Add a compatibility `uint8` mask port or change the contract dtype?
 - Document a hard "C++ only until HSDK 5" caveat for bool mask outputs?
 
-**Status:** open — aligned with CFAR `detection_mask` policy; not validated on
-a finalized HSDK 5 build in this environment (only 4.3.0 installed).
+**Resolved (L1, 2026-07-22).** Emit `is_valid` as **`uint8` (0/1)**, following
+the same decision as `CFARDetectorOp.detection_mask` (see
+`operators/detection/cfar_detector_op/OPEN_ITEMS.md` §1 and STATUS.md L1). The
+buffer already holds 0/1 bytes (written as `bool` internally); only the emitted
+`DLDataType` changed. The sparse estimators (`is_valid_mask`, MVDR) still accept
+`bool` or `uint8` inputs. NumPy-visible on HSDK 4.3; pinned by
+`test_ClampIsValidMaskUint8Visible` (Python) and the C++ snapshot-gather suite.
+
+**Status:** resolved — `is_valid` emits `uint8`; contract + tests updated.
 
 ## 2. Performance harness (landed)
 

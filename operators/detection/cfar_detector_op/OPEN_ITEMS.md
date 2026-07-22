@@ -35,8 +35,22 @@ the tensor as a `PyTensor` calls `numpyTypestr()` and **throws**
 - Add a compatibility `uint8` mask port or change the contract dtype?
 - Document a hard "C++ only until HSDK 5" caveat for detection outputs?
 
-**Status:** open — not validated on a finalized HSDK 5 build in this
-environment (only 4.3.0 installed).
+**Resolved (L1, 2026-07-22).** **Change the contract dtype of `detection_mask`
+to `uint8` (0/1)** (chosen over keeping `bool` + betting on HSDK 5, and over a
+parallel compat port). Rationale: 4.3 is the installed / supported floor
+(`AGENTS.md`: HSDK ≥ 4.3.0) and HSDK 5's `kDLBool` fix can't be validated here;
+`detection_mask` is a diagnostic output whose value *is* being inspectable; and
+every mask consumer already treats any nonzero byte as set. `uint8` is
+byte-identical to the 0/1 bytes the kernel already writes (`arr.view(bool)`
+recovers a boolean view), so the change is the emitted `DLDataType` only — the
+fused/compaction kernels are untouched. Now NumPy-visible on 4.3 with no
+swallowed GXF error. `SnapshotGatherOp.is_valid` gets the same treatment (its
+§1). Consumers (`is_valid_mask`, MVDR) still **accept** `bool` or `uint8` inputs
+for backward compat. Verified: C++ suites + new Python tests
+`test_DetectionMaskIsUint8AndMatchesScore` / `test_ClampIsValidMaskUint8Visible`
+capture the masks directly (no drain). See STATUS.md → Settled decisions (L1).
+
+**Status:** resolved — `detection_mask` emits `uint8`; contract + tests updated.
 
 ---
 

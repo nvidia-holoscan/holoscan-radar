@@ -52,12 +52,6 @@ Interim stance already chosen (or the capability is explicitly out of current
 scope). Development and checklist completion proceed; these need ratification
 or a deliberate contract change when the team has bandwidth.
 
-### CFAR / detection
-
-| # | Decision needed | Interim stance | Detail |
-| --- | --- | --- | --- |
-| L1 | **Bool mask dtype vs HSDK 4.3 DLPack** — keep `bool` (target HSDK 5), add `uint8` compat, or document C++-only until 5 | Emit/accept `kDLBool`; C++ wiring works with a logged GXF error; **Python bindings drain bool masks via `NullSinkOp` / harness `drain_ports` (no NumPy/`PyTensor` conversion on 4.3)** | [CFAR §1](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md); SnapshotGather / Beamscan / MVDR |
-
 ### Clustering (`ClusterDBSCANOp`)
 
 | # | Decision needed | Interim stance | Detail |
