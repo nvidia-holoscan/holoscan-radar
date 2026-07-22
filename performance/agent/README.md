@@ -23,7 +23,8 @@ the substrate reference.
 | `parse.py` | Folds the nsys tables + the schema-v2 perf JSON into one `analysis.json` per (operator, size, scenario). |
 | `diagnose.py` | Encodes the `docs/planning/OPERATOR_DEVELOPMENT.md` perf rubric + CFAR-lessons table as rules over `analysis.json`; emits ranked `diagnosis.json`. |
 | `report.py` | Renders `report.md` (text) + a self-contained `report.html` with the chart dashboard embedded as a base64 PNG. |
-| `visualize.py` | Matplotlib charts of a run (kernel-vs-shell, latency, host-API composition, NVTX phases, override sweep, findings) + a cross-operator comparison; used by `report.py` and importable directly. |
+| `visualize.py` | Matplotlib charts of a run (kernel-vs-shell, latency, host-API composition, NVTX phases, override sweep, findings, before/after) + a cross-operator comparison; used by `report.py` / `optimize_report.py` and importable directly. |
+| `optimize_report.py` | Before→after optimization report (md + html) for the `perf-optimize` / `perf-autotune` skills: bottlenecks targeted, runtime improvement, changes + gate results, embedded before/after chart. |
 
 ## Prerequisites
 

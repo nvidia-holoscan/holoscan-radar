@@ -324,6 +324,51 @@ def plot_override_sweep(analysis: dict, size=None, ax=None):
     return fig
 
 
+def plot_before_after(baseline: dict, after: dict, ax=None):
+    """Grouped bars: steady median per size, before vs after an optimization,
+    with the per-size % delta labelled. For optimize / autotune reports."""
+    fig, ax = _ensure_ax(ax)
+    bb = {s["size"]: s for s in baseline.get("sizes", [])}
+    aa = {s["size"]: s for s in after.get("sizes", [])}
+    sizes = [s["size"] for s in baseline.get("sizes", []) if s["size"] in aa]
+    x = list(range(len(sizes)))
+    w = 0.4
+    before = [bb[s]["latency_ms"].get("median") or 0 for s in sizes]
+    after_v = [aa[s]["latency_ms"].get("median") or 0 for s in sizes]
+    ax.bar(
+        [xi - w / 2 for xi in x],
+        before,
+        w * 0.92,
+        label="before",
+        color=CATEGORICAL[1],
+        zorder=3,
+    )
+    ax.bar(
+        [xi + w / 2 for xi in x],
+        after_v,
+        w * 0.92,
+        label="after",
+        color=CATEGORICAL[0],
+        zorder=3,
+    )
+    for xi, b, a in zip(x, before, after_v):
+        if b:
+            ax.text(
+                xi,
+                max(b, a),
+                f"{100 * (a - b) / b:+.0f}%",
+                ha="center",
+                va="bottom",
+                color=INK_SECONDARY,
+                fontsize=9,
+            )
+    ax.set_xticks(x)
+    ax.set_xticklabels(sizes)
+    _style_axes(ax, "Steady median: before vs after", ylabel="ms per tick (median)")
+    ax.legend(frameon=False, fontsize=9, labelcolor=INK_SECONDARY)
+    return fig
+
+
 def plot_findings(diagnosis: dict, ax=None):
     """Severity counts of the diagnosis findings."""
     fig, ax = _ensure_ax(ax, figsize=(5, 3))
