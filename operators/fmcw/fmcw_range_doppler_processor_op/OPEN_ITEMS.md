@@ -66,5 +66,4 @@ the split path (and was the gap this tool closes).
   into this section.
 
 Related: the split-vs-fused parity contract and stage-sharing design are
-documented in `docs/planning/SIGPROC_PLAN.md` (item 6) and enforced by
-`tests/cpp/test_fmcw_range_doppler_processor.cpp` (`BitExact*`).
+enforced by `tests/cpp/test_fmcw_range_doppler_processor.cpp` (`BitExact*`).
