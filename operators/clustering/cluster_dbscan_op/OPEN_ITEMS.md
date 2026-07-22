@@ -46,8 +46,18 @@ faithful default plus the question for the team.
 - **Question.** Is the length-1-vector encoding acceptable, or should the
   operator additionally accept a bare scalar `epsilon` (a second parameter or a
   YAML-converter that promotes a scalar to `[scalar]`)?
-- **Status.** `open` — length-1-vector encoding shipped; documented in the
-  header and README.
+- **Resolved (L8, 2026-07-22).** **Ratify the length-1-vector encoding**
+  (`epsilon: [0.5]` for the isotropic case) — chosen over adding a bare-scalar
+  converter. Rationale: the `[list]` idiom is already how every other vector
+  parameter in the suite is written (`guard_cells`, `training_cells`,
+  `nci_axes`, `spatial_smoothing`), so ratifying it is the *consistent* choice;
+  a scalar-vs-vector special case just for `epsilon` would make it the odd one
+  out (and, for consistency, would pull toward the same converter on every
+  vector param — scope creep for a cosmetic YAML gain). Docs-only: the
+  `OPERATOR_API.md` `epsilon` bullet now states the isotropic case is a
+  one-element list. See STATUS.md → Settled decisions (L8).
+- **Status.** `resolved` — length-1-vector encoding ratified; contract wording
+  tightened to match.
 
 ## 3. Brute-force `O(num_points²)` neighbor graph — scaling (perf follow-up)
 

@@ -369,7 +369,7 @@ GO/SO start-time pre-calibration (needs an RD-map shape hint, since their LUTs a
 
 **Parameters:**
 
-- `epsilon` **[live]** — float scalar or `(num_features,)` vector. Neighborhood radius per feature axis; a per-axis vector gives an axis-aligned (anisotropic) neighborhood — `q` is a neighbor of `p` when `Σ_i ((p_i − q_i) / epsilon_i)² ≤ 1` — which handles mixed-unit features (m, rad, m/s). A scalar applies isotropically. Overridable for runtime tuning. Default: none (required).
+- `epsilon` **[live]** — float vector, length `1` (isotropic) or `num_features` (per-axis). Neighborhood radius per feature axis; a per-axis vector gives an axis-aligned (anisotropic) neighborhood — `q` is a neighbor of `p` when `Σ_i ((p_i − q_i) / epsilon_i)² ≤ 1` — which handles mixed-unit features (m, rad, m/s). The isotropic (scalar) case is written as a **one-element list** (`epsilon: [0.5]`), consistent with the other vector parameters (`guard_cells`, `training_cells`, `nci_axes`); a length-1 vector broadcasts to all axes. Overridable for runtime tuning. Default: none (required).
 - `min_points` **[live]** — int. Minimum neighbors (including the point itself) for a core point (DBSCAN `minPts`). Overridable. Default: `2 · num_features` (common heuristic).
 - `max_clusters` (optional) **[live]** — int. Upper cap on the number of clusters reported in `sizes`; if exceeded, the **smallest** clusters are dropped (their points relabeled to noise `-1`, keeping `labels`/`sizes` mutually consistent) and a warning raised. Because ids are numbered by descending size, the kept clusters are the `max_clusters` largest. `sizes` is sized to the actual cluster count (≤ this cap). Unset → no cap. Default: none (uncapped).
 
