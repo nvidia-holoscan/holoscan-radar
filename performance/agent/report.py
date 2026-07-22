@@ -1,26 +1,56 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Render analysis.json + diagnosis.json into a per-operator markdown report.
+"""Render analysis.json + diagnosis.json into a per-operator perf report.
 
-The output is meant to be pasted into an operator's ``OPEN_ITEMS.md`` (or read
-directly): ranked findings with nsys evidence and a recommended fix, followed
-by the supporting per-size latency / attribution tables and the ``[live]``
-override sweep. This is the human-facing end of the harness; it stops at
+Emits two artifacts, both next to the analysis:
+
+* ``report.md`` — ranked findings with nsys evidence + recommended fix, then
+  the per-size latency/attribution tables and the ``[live]`` override sweep.
+  Plain markdown, meant to be pasted into an operator's ``OPEN_ITEMS.md``.
+* ``report.html`` — a self-contained page: the same findings + tables plus the
+  ``visualize.py`` chart dashboard embedded as a base64 PNG (no external files).
+
+The charts need ``matplotlib``; when it is not installed ``report.html`` is
+still written, minus the dashboard image (the harness core stays
+dependency-free). This is the human-facing end of the harness; it stops at
 recommendations (no autonomous edit loop this phase).
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import html
+import io
 import json
 from pathlib import Path
+
+# Charts are optional: import matplotlib (Agg, headless) + visualize.py lazily
+# so a missing matplotlib degrades report.html to text-only instead of failing.
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import visualize as viz  # same directory; on sys.path for CLI use
+
+    _HAVE_VIZ = True
+except Exception:  # pragma: no cover - optional dependency
+    _HAVE_VIZ = False
 
 _SEV_BADGE = {
     "high": "🔴 HIGH",
     "medium": "🟠 MEDIUM",
     "low": "🟡 LOW",
     "info": "🔵 INFO",
+}
+
+# (hex, label) per severity for the HTML badges.
+_SEV_HTML = {
+    "high": ("#d03b3b", "HIGH"),
+    "medium": ("#ec835a", "MEDIUM"),
+    "low": ("#fab219", "LOW"),
+    "info": ("#2a78d6", "INFO"),
 }
 
 
@@ -201,9 +231,184 @@ def _top_api(s: dict, n: int = 5) -> list:
     ]
 
 
+_HTML_STYLE = """
+:root { color-scheme: light; }
+body { background:#f9f9f7; color:#0b0b0b; margin:0; padding:2rem;
+  font-family: system-ui,-apple-system,"Segoe UI",sans-serif; }
+.wrap { max-width:1040px; margin:0 auto; }
+.surface { background:#fcfcfb; border:1px solid rgba(11,11,11,0.10);
+  border-radius:10px; padding:1.25rem 1.5rem; margin-bottom:1.25rem; }
+h1 { font-size:1.4rem; margin:0 0 .5rem; }
+h2 { font-size:1.1rem; margin:1.5rem 0 .75rem; }
+.meta, .muted { color:#52514e; font-size:.9rem; }
+.note { color:#52514e; border-left:3px solid #e1e0d9; padding:.5rem .75rem;
+  margin:.75rem 0; font-size:.9rem; }
+.badge { display:inline-block; color:#fff; font-weight:600; font-size:.72rem;
+  padding:.1rem .5rem; border-radius:6px; letter-spacing:.02em; }
+.finding { border-top:1px solid #e1e0d9; padding:.9rem 0; }
+.finding h3 { font-size:1rem; margin:.25rem 0 .4rem; }
+.finding .rubric { color:#898781; font-size:.82rem; }
+.evidence { font-family: ui-monospace,Menlo,monospace; font-size:.76rem;
+  color:#52514e; word-break:break-all; }
+table { border-collapse:collapse; width:100%; font-size:.86rem;
+  font-variant-numeric:tabular-nums; }
+th,td { text-align:left; padding:.35rem .6rem; border-bottom:1px solid #e1e0d9; }
+th { color:#52514e; font-weight:600; }
+img.dash { width:100%; height:auto; border:1px solid #e1e0d9; border-radius:8px; }
+"""
+
+
+def _fig_to_base64(fig) -> str:
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=110, facecolor=viz.SURFACE, bbox_inches="tight")
+    viz.plt.close(fig)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _dashboard_png(run_dir) -> str | None:
+    """Render the visualize.py dashboard to a base64 PNG, or None if charts are
+    unavailable (matplotlib missing or a rendering error)."""
+    if not _HAVE_VIZ:
+        return None
+    try:
+        return _fig_to_base64(viz.dashboard(str(run_dir)))
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _html_latency_table(analysis: dict) -> str:
+    head = (
+        "<tr><th>size</th><th>shape</th><th>setup</th><th>cold</th>"
+        "<th>median</th><th>p90</th><th>kernel/tick</th><th>alloc/tick</th>"
+        "<th>free/tick</th><th>GB/s</th></tr>"
+    )
+    rows = [head]
+    for s in analysis.get("sizes", []):
+        lat = s["latency_ms"]
+        der = s["derived"]
+        ticks = der.get("ticks") or 0
+        kern_total = s["gpu"].get("kernel_ns_total") or 0
+        kern_pt = (kern_total / ticks / 1e6) if ticks else None
+        shape = "x".join(str(x) for x in (s.get("input_shape") or []))
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(s['size'])}</td><td>{shape}</td>"
+            f"<td>{_ms(lat.get('setup'), 2)}</td><td>{_ms(lat.get('cold'))}</td>"
+            f"<td>{_ms(lat.get('median'))}</td><td>{_ms(lat.get('p90'))}</td>"
+            f"<td>{_ms(kern_pt, 4)}</td>"
+            f"<td>{_ms(der.get('alloc_calls_per_tick'), 1)}</td>"
+            f"<td>{_ms(der.get('free_calls_per_tick'), 1)}</td>"
+            f"<td>{_ms(s['throughput'].get('estimated_effective_gbps'), 2)}</td>"
+            "</tr>"
+        )
+    return "<table>" + "".join(rows) + "</table>"
+
+
+def _html_override_table(analysis: dict) -> str:
+    sweep = analysis.get("override_sweep", [])
+    if not sweep:
+        return ""
+    rows = [
+        "<tr><th>size</th><th>param</th><th>steady median (ms)</th>"
+        "<th>override peak (ms)</th><th>delta (ms)</th></tr>"
+    ]
+    for o in sweep:
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(str(o.get('size')))}</td>"
+            f"<td>{html.escape(str(o.get('param')))}</td>"
+            f"<td>{_ms(o.get('median_ms'))}</td>"
+            f"<td>{_ms(o.get('override_ms'))}</td>"
+            f"<td><b>{_ms(o.get('override_delta_ms'))}</b></td>"
+            "</tr>"
+        )
+    return (
+        "<h2>[live] override sweep (per-param reconfiguration cost)</h2>"
+        "<table>" + "".join(rows) + "</table>"
+    )
+
+
+def render_html(analysis: dict, diagnosis: dict, run_dir) -> str:
+    op = analysis.get("operator", "?")
+    prov = analysis.get("provenance", {})
+    plat = analysis.get("platform", {})
+    nsys = analysis.get("nsys", {})
+    esc = html.escape
+    parts = [
+        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>",
+        f"<title>Performance report — {esc(op)}</title>",
+        f"<style>{_HTML_STYLE}</style></head><body><div class='wrap'>",
+        "<div class='surface'>",
+        f"<h1>Performance report — {esc(op)}</h1>",
+        f"<div class='meta'>{esc(_plat_line(plat))}</div>",
+        f"<div class='meta'>commit <code>{esc(prov.get('git_commit', '?'))}</code>"
+        f"{' (dirty)' if prov.get('git_dirty') else ''} · "
+        f"{esc(prov.get('timestamp_utc', '?'))} · nsys "
+        f"{esc(nsys.get('version', '?'))}</div>",
+        "<div class='note'>Latencies are valid only on the machine/GPU captured "
+        "on. Kernel time is GPU-side; CUDA-API time is host-side wall — they "
+        "overlap, they do not sum. Counts include the discarded process-warmup "
+        "session.</div>",
+        "</div>",
+    ]
+
+    # Findings
+    summary = diagnosis.get("summary", {})
+    parts.append("<div class='surface'><h2>Findings</h2>")
+    parts.append(
+        f"<div class='meta'>{summary.get('high', 0)} high · "
+        f"{summary.get('medium', 0)} medium · {summary.get('low', 0)} low · "
+        f"{summary.get('info', 0)} info</div>"
+    )
+    for i, f in enumerate(diagnosis.get("findings", []), 1):
+        color, label = _SEV_HTML.get(f["severity"], ("#898781", f["severity"]))
+        sz = f" · size <code>{esc(str(f['size']))}</code>" if f.get("size") else ""
+        ev = _prune_evidence(f.get("evidence"))
+        ev_blob = json.dumps(ev, separators=(",", ":")) if ev else ""
+        if len(ev_blob) > 600:
+            ev_blob = ev_blob[:597] + "..."
+        parts.append(
+            "<div class='finding'>"
+            f"<h3><span class='badge' style='background:{color}'>{label}</span> "
+            f"{i}. {esc(f['title'])}{sz}</h3>"
+            f"<div>{esc(f['detail'])}</div>"
+            f"<div class='rec'><b>Recommendation:</b> {esc(f['recommendation'])}"
+            "</div>"
+            f"<div class='rubric'>{esc(f['rubric_ref'])}</div>"
+            + (f"<div class='evidence'>{esc(ev_blob)}</div>" if ev_blob else "")
+            + "</div>"
+        )
+    parts.append("</div>")
+
+    # Charts (embedded)
+    parts.append("<div class='surface'><h2>Dashboard</h2>")
+    png = _dashboard_png(run_dir)
+    if png:
+        parts.append(
+            f"<img class='dash' alt='dashboard' " f"src='data:image/png;base64,{png}'>"
+        )
+    else:
+        parts.append(
+            "<div class='muted'>charts omitted — install matplotlib "
+            "(<code>pip install matplotlib</code>) to embed the dashboard.</div>"
+        )
+    parts.append("</div>")
+
+    # Tables
+    parts.append("<div class='surface'><h2>Per-size latency &amp; attribution" "</h2>")
+    parts.append(_html_latency_table(analysis))
+    ovr = _html_override_table(analysis)
+    if ovr:
+        parts.append(ovr)
+    parts.append("</div>")
+
+    parts.append("</div></body></html>")
+    return "\n".join(parts)
+
+
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Render a markdown perf report from analysis + diagnosis"
+        description="Render markdown + HTML perf reports from analysis + " "diagnosis"
     )
     p.add_argument(
         "--run-dir",
@@ -230,10 +435,19 @@ def main(argv=None) -> int:
         raise SystemExit(f"[perf-report] diagnosis not found: {diagnosis_path}")
     analysis = json.loads(analysis_path.read_text())
     diagnosis = json.loads(diagnosis_path.read_text())
-    md = render(analysis, diagnosis)
-    out = args.out or (args.run_dir / "report.md")
-    out.write_text(md)
-    print(out)
+
+    md_out = args.out or (args.run_dir / "report.md")
+    md_out.write_text(render(analysis, diagnosis))
+    print(md_out)
+
+    html_out = md_out.with_suffix(".html")
+    html_out.write_text(render_html(analysis, diagnosis, args.run_dir))
+    print(html_out)
+    if not _HAVE_VIZ:
+        print(
+            "[perf-report] matplotlib not found — report.html written without "
+            "the chart dashboard (pip install matplotlib to include it)"
+        )
     return 0
 
 

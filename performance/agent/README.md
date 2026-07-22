@@ -22,9 +22,8 @@ the substrate reference.
 | `runner.py` | Runs `perf_<op>` clean (latency) + under `nsys` (attribution); exports the nsys stat tables. Writes `runner_manifest.json`. |
 | `parse.py` | Folds the nsys tables + the schema-v2 perf JSON into one `analysis.json` per (operator, size, scenario). |
 | `diagnose.py` | Encodes the `docs/planning/OPERATOR_DEVELOPMENT.md` perf rubric + CFAR-lessons table as rules over `analysis.json`; emits ranked `diagnosis.json`. |
-| `report.py` | Renders `analysis.json` + `diagnosis.json` into a markdown perf report. |
-| `visualize.py` | Matplotlib charts of a run (kernel-vs-shell, latency, host-API composition, NVTX phases, override sweep, findings) + a cross-operator comparison. |
-| `visualize.ipynb` | Thin notebook that composes `visualize.py` into a per-operator dashboard. |
+| `report.py` | Renders `report.md` (text) + a self-contained `report.html` with the chart dashboard embedded as a base64 PNG. |
+| `visualize.py` | Matplotlib charts of a run (kernel-vs-shell, latency, host-API composition, NVTX phases, override sweep, findings) + a cross-operator comparison; used by `report.py` and importable directly. |
 
 ## Prerequisites
 
@@ -66,20 +65,31 @@ python3 performance/agent/report.py   --run-dir performance/agent/runs/$OP
 # -> performance/agent/runs/$OP/report.md
 ```
 
-## Visualize (optional)
+## Reports (`report.md` + `report.html`)
 
-`report.md` is the primary deliverable; for charts, open `visualize.ipynb`
-(needs `pip install matplotlib` — not a harness dependency, and the charts read
-plain JSON so this runs on the host, no GPU). Set `RUN` to a run directory and
-run all cells for a dashboard: kernel-vs-shell (is the tick kernel- or
-host-bound), latency by size, host-API composition, `compute()` NVTX phases,
-the `[live]` override sweep, and findings — plus a cross-operator comparison.
-The plotting functions in `visualize.py` are usable directly, e.g.
+Every run writes two reports next to the analysis:
+
+- **`report.md`** — text findings + tables, meant to paste into an operator's
+  `OPEN_ITEMS.md`.
+- **`report.html`** — a self-contained page: the same findings + tables with the
+  chart dashboard (kernel-vs-shell, latency, host-API composition, `compute()`
+  NVTX phases, `[live]` override sweep, findings) embedded as a base64 PNG. Open
+  it in any browser — no external files.
+
+Charts need `matplotlib` (`pip install matplotlib` — *not* a harness
+dependency: `runner`/`parse`/`diagnose` stay dependency-free, and `report.py`
+degrades to an image-less `report.html` when it is absent). The charts read
+plain JSON, so rendering runs on the host with no GPU. `visualize.py` is also
+importable directly for ad-hoc plots or a cross-operator comparison:
 
 ```python
 import sys; sys.path.insert(0, "performance/agent")
 import visualize as viz
 viz.dashboard("performance/agent/runs/fmcw_range_processor")
+viz.compare_kernel_fraction([
+    "performance/agent/runs/fmcw_range_processor",
+    "performance/agent/runs/cfar_detector",
+])
 ```
 
 Artifacts (`.nsys-rep`, `.sqlite`, stat JSON, `analysis.json`, `diagnosis.json`,

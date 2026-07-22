@@ -72,21 +72,24 @@ Let `OP` be the operator stem (the binary is `perf_<OP>`, e.g.
    `runner.py` writes per-size `.nsys-rep` + stat-table JSON, the clean latency
    JSON, the clean `--sweep-overrides` JSON, and `runner_manifest.json`;
    `parse.py` folds them into `analysis.json`; `diagnose.py` emits ranked
-   `diagnosis.json`; `report.py` renders `report.md`.
+   `diagnosis.json`; `report.py` renders both `report.md` (text, for pasting
+   into `OPEN_ITEMS.md`) and a self-contained `report.html` (the same findings +
+   tables plus the `visualize.py` chart dashboard embedded as a base64 PNG).
 
-3. **(Optional) Visualize** — `visualize.ipynb` (or `visualize.py`) renders the
-   run as a dashboard (kernel-vs-shell, latency, host-API composition, NVTX
-   phases, override sweep, findings) plus a cross-operator comparison. Needs
-   `pip install matplotlib`; reads plain JSON, so it runs on the host without a
-   GPU. Offer it when the user wants charts, not just the markdown.
+3. **Charts** are embedded in `report.html` automatically when `matplotlib` is
+   installed (`pip install matplotlib`; charts read plain JSON, no GPU). Without
+   matplotlib the pass still writes `report.html`, minus the dashboard image.
+   `visualize.py` is also importable directly (`viz.dashboard(run_dir)`) for
+   ad-hoc plots or a cross-operator comparison.
 
 ## Present
 
-Read `performance/agent/runs/<OP>/report.md` and relay it to the user:
-the ranked findings (severity, evidence, recommended fix pattern) first, then the
-per-size latency/attribution and the `[live]` override sweep. Call out the top
-1–3 actionable findings in prose. Note that latencies are machine-specific and
-that GPU-kernel time and host CUDA-API time overlap (they do not sum).
+Relay `performance/agent/runs/<OP>/report.md` to the user: the ranked findings
+(severity, evidence, recommended fix pattern) first, then the per-size
+latency/attribution and the `[live]` override sweep. Call out the top 1–3
+actionable findings in prose, and point them at `report.html` for the embedded
+charts. Note that latencies are machine-specific and that GPU-kernel time and
+host CUDA-API time overlap (they do not sum).
 
 ## Interpreting findings (the rubric this encodes)
 
