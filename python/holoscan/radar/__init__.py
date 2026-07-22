@@ -24,6 +24,7 @@ from .radar_common import (  # noqa: F401
     PeakInterpolation,
     RepresentativePolicy,
     ScoreMethod,
+    ShiftInvariantSubarrayPair,
     SignedAxis,
     SnapshotEdgeMode,
     TXSchedule,
@@ -50,6 +51,10 @@ from .cluster_dbscan_op import ClusterDBSCANOpF32, ClusterDBSCANOpF64  # noqa: F
 from .clutter_filter_op import ClutterFilterOpF32, ClutterFilterOpF64  # noqa: F401
 from .detection_reduction_op import DetectionReductionOpF32  # noqa: F401
 from .detection_reduction_op import DetectionReductionOpF64
+from .esprit_estimator_op import (  # noqa: F401
+    ESPRITEstimatorOpF32,
+    ESPRITEstimatorOpF64,
+)
 from .feature_assembly_op import AssemblyFeature  # noqa: F401
 from .feature_assembly_op import FeatureAssemblyOpF32, FeatureAssemblyOpF64
 from .fmcw_doppler_processor_op import (  # noqa: F401
@@ -79,10 +84,6 @@ from .phase_shift_beamformer_op import (  # noqa: F401
     PhaseShiftBeamformerOpF32,
     PhaseShiftBeamformerOpF64,
 )
-from .root_music_estimator_op import (  # noqa: F401
-    RootMUSICEstimatorOpF32,
-    RootMUSICEstimatorOpF64,
-)
 from .radar_app import CadenceMeter  # noqa: F401
 from .radar_app import (
     BoresightViewOp,
@@ -96,6 +97,10 @@ from .radar_app import (
     cluster_palette,
     gui_available,
     make_turbo_lut,
+)
+from .root_music_estimator_op import (  # noqa: F401
+    RootMUSICEstimatorOpF32,
+    RootMUSICEstimatorOpF64,
 )
 from .snapshot_gather_op import SnapshotGatherOpF32, SnapshotGatherOpF64  # noqa: F401
 from .virtual_array_assembly_op import (  # noqa: F401
@@ -119,6 +124,7 @@ MUSICEstimatorOp = MUSICEstimatorOpF32
 MVDREstimatorOp = MVDREstimatorOpF32
 PhaseShiftBeamformerOp = PhaseShiftBeamformerOpF32
 RootMUSICEstimatorOp = RootMUSICEstimatorOpF32
+ESPRITEstimatorOp = ESPRITEstimatorOpF32
 SnapshotGatherOp = SnapshotGatherOpF32
 VirtualArrayAssemblyOp = VirtualArrayAssemblyOpF32
 
@@ -196,8 +202,12 @@ __all__ = [
     "RootMUSICEstimatorOp",
     "RootMUSICEstimatorOpF32",
     "RootMUSICEstimatorOpF64",
+    "ESPRITEstimatorOp",
+    "ESPRITEstimatorOpF32",
+    "ESPRITEstimatorOpF64",
     "RollingPlotOp",
     "ScoreMethod",
+    "ShiftInvariantSubarrayPair",
     "SignedAxis",
     "SnapshotEdgeMode",
     "SnapshotGatherOp",

@@ -14,7 +14,7 @@
 namespace holoscan::radar {
 
 // Virtual/physical antenna array for beamforming and DOA estimation. One of
-// the module's six shared config-plane descriptor types.
+// the module's seven shared config-plane descriptor types.
 struct ArrayGeometry {
   // Row-major (num_elements, 3) element positions in the array-local Cartesian
   // frame (meters).

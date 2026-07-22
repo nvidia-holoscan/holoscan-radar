@@ -32,6 +32,7 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
 | `MVDREstimatorOp<T>` | `snapshot` [+ `is_valid`] → `aoa_estimates`, `angle_spectrum`, `doa_multi`, `source_count`, `eigenvalues` | Adaptive (MVDR / Capon) sparse-path DOA on a scan grid (multi-snapshot covariance); multi-source + eigenvalue diagnostics |
 | `MUSICEstimatorOp<T>` | `snapshot` [+ `is_valid`] → `aoa_estimates`, `angle_spectrum`, `doa_multi`, `source_count`, `eigenvalues` | Subspace (MUSIC) sparse-path DOA on a scan grid; per-item model order fixed or auto (EFT); noise-subspace pseudospectrum |
 | `RootMUSICEstimatorOp<T>` | `snapshot` [+ `is_valid`] → `aoa_estimates`, `doa_multi`, `source_count`, `eigenvalues` | Gridless Root-MUSIC on a ULA; polynomial roots (no scan grid / no spectrum) |
+| `ESPRITEstimatorOp<T>` | `snapshot` [+ `is_valid`] → `aoa_estimates`, `doa_multi`, `source_count`, `eigenvalues` | Gridless LS-ESPRIT on shift-invariant geometry (ULA auto-pair or explicit `ShiftInvariantSubarrayPair`) |
 | `PhaseShiftBeamformerOp<T>` | `rd_maps` → `rda_cube` | Conventional (Bartlett) dense-path beamformer: a beam for every RD cell → Range-Doppler-Angle cube for CFAR's dense path |
 
 ## Implementation status
@@ -130,6 +131,16 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   `performance/python/perf_root_music_estimator.py` (inline live overrides for
   geometry, auto/EFT, Pfa, capacity, smoothing). Custom batched device root
   solver tracked in `root_music_estimator_op/OPEN_ITEMS.md`.
+- **`ESPRITEstimatorOp` (checklist-complete, C++ and Python — dpc):**
+  gridless LS-ESPRIT on
+  shift-invariant geometry. Reuses the MUSIC covariance / Hermitian eig / EFT
+  front-end; splits the signal subspace with the global
+  `ShiftInvariantSubarrayPair` descriptor (auto maximum-overlap ULA pair or
+  explicit corresponding indices) and solves the rotational eigenproblem in a
+  per-item CUDA block (no `angle_spectrum`). Float/double; 43 C++ + 39 Python
+  tests; C++/Python perf harnesses cover the full live-override bundle.
+  Explicit `subarray_spec` and `spatial_smoothing` are mutually exclusive. See
+  `esprit_estimator_op/OPEN_ITEMS.md`.
 - **`PhaseShiftBeamformerOp` (checklist-complete — dpc):** conventional
   (Bartlett) dense-path beamformer; forms a beam for every range-Doppler cell,
   replacing the channel axis with the `(num_az, num_el)` grid to build the
