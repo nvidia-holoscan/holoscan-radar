@@ -125,3 +125,9 @@ def aerospace_ned_convention() -> AngleConvention:
     conv = AngleConvention()
     conv.preset = AngleConventionPreset.AEROSPACE_NED
     return conv
+
+
+def direction_cosine_convention() -> AngleConvention:
+    conv = AngleConvention()
+    conv.preset = AngleConventionPreset.DIRECTION_COSINE
+    return conv
