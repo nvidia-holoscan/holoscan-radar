@@ -31,6 +31,7 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
 | `BeamscanEstimatorOp<T>` | `snapshot` [+ `is_valid`] → `aoa_estimates`, `angle_spectrum` | Conventional (Bartlett) sparse-path DOA on a scan grid |
 | `MVDREstimatorOp<T>` | `snapshot` [+ `is_valid`] → `aoa_estimates`, `angle_spectrum`, `doa_multi`, `source_count`, `eigenvalues` | Adaptive (MVDR / Capon) sparse-path DOA on a scan grid (multi-snapshot covariance); multi-source + eigenvalue diagnostics |
 | `MUSICEstimatorOp<T>` | `snapshot` [+ `is_valid`] → `aoa_estimates`, `angle_spectrum`, `doa_multi`, `source_count`, `eigenvalues` | Subspace (MUSIC) sparse-path DOA on a scan grid; per-item model order fixed or auto (EFT); noise-subspace pseudospectrum |
+| `RootMUSICEstimatorOp<T>` | `snapshot` [+ `is_valid`] → `aoa_estimates`, `doa_multi`, `source_count`, `eigenvalues` | Gridless Root-MUSIC on a ULA; polynomial roots (no scan grid / no spectrum) |
 | `PhaseShiftBeamformerOp<T>` | `rd_maps` → `rda_cube` | Conventional (Bartlett) dense-path beamformer: a beam for every RD cell → Range-Doppler-Angle cube for CFAR's dense path |
 
 ## Implementation status
@@ -118,6 +119,17 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   `music_estimator_op/OPEN_ITEMS.md` (EFT fidelity note, denominator-floor
   rationale, the full ncu-driven perf writeup incl. a recorded negative result,
   and the `nsys`-in-a-sandbox workaround).
+- **`RootMUSICEstimatorOp` (checklist-complete, C++ and Python — dpc):**
+  gridless Root-MUSIC on a **ULA** (1-D uniform line in snapshot channel order).
+  Reuses the MUSIC covariance / Hermitian eig / EFT / noise-projector front-end;
+  forms the Root-MUSIC polynomial, solves roots via companion +
+  `cusolverDnXgeev` (one matrix per item), and maps in-unit-circle roots to
+  continuous DOAs (no `angle_spectrum`). `spatial_smoothing` /
+  `forward_backward` match MVDR/MUSIC; float/double; 36 C++ + 33 Python
+  behavioral tests; `performance/cpp/perf_root_music_estimator.cpp` +
+  `performance/python/perf_root_music_estimator.py` (inline live overrides for
+  geometry, auto/EFT, Pfa, capacity, smoothing). Custom batched device root
+  solver tracked in `root_music_estimator_op/OPEN_ITEMS.md`.
 - **`PhaseShiftBeamformerOp` (checklist-complete — dpc):** conventional
   (Bartlett) dense-path beamformer; forms a beam for every range-Doppler cell,
   replacing the channel axis with the `(num_az, num_el)` grid to build the

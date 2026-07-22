@@ -121,6 +121,8 @@ radar_add_test(angle_estimation/test_mvdr_estimator
     holoscan::mvdr_estimator_op)
 radar_add_test(angle_estimation/test_music_estimator
     holoscan::music_estimator_op holoscan::beamscan_estimator_op)
+radar_add_test(angle_estimation/test_root_music_estimator
+    holoscan::root_music_estimator_op)
 radar_add_test(angle_estimation/test_phase_shift_beamformer
     holoscan::phase_shift_beamformer_op)
 radar_add_statistical_test(detection/test_cfar_detector_statistical
