@@ -24,6 +24,7 @@
 #include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/math/constants.hpp"
 #include "radar_common/tensor/matx_utils.hpp"
 #include "radar_common/dsp/window.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
@@ -106,8 +107,6 @@ void fill_range_bins(const RangeStageConfig& cfg, int64_t samples_per_chirp,
 // Implementation
 // ---------------------------------------------------------------------------
 
-inline constexpr double kRangeStagePi = 3.14159265358979323846;
-
 // Exact-round-trip textual form of a double, for canonical cache keys.
 inline std::string range_stage_double_key(double value) {
   char buffer[40];
@@ -174,7 +173,7 @@ inline std::vector<std::complex<double>> host_dechirp_reference(
       static_cast<size_t>(samples_per_chirp));
   for (int64_t s = 0; s < samples_per_chirp; ++s) {
     const double t = static_cast<double>(s) / waveform.sample_rate();
-    const double phase = kRangeStagePi * slope * t * t;
+    const double phase = kPi * slope * t * t;
     host[static_cast<size_t>(s)] =
         std::complex<double>(std::cos(phase), std::sin(phase));
   }

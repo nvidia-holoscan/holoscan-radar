@@ -11,10 +11,12 @@
 #include <utility>
 #include <vector>
 
+#include "radar_common/math/constants.hpp"
+
 namespace holoscan::radar {
 
 // Default wave propagation speed (vacuum speed of light, m/s).
-inline constexpr double kDefaultPropagationSpeed = 299792458.0;
+inline constexpr double kDefaultPropagationSpeed = kSpeedOfLight;
 
 // Construction input for FMCWWaveformDescriptor. Transient: fill the fields
 // (designated initializers work), hand it to the descriptor constructor, and

@@ -7,11 +7,11 @@
 #include <cmath>
 #include <stdexcept>
 
+#include "radar_common/math/constants.hpp"
+
 namespace holoscan::radar {
 
 namespace {
-
-constexpr double kPi = 3.141592653589793;
 
 CanonicalDirection from_canonical_angles(double az, double el) {
   const double cel = std::cos(el);
@@ -103,11 +103,11 @@ CanonicalDirection boundary_to_canonical(const AngleConvention& conv, double az,
       return from_canonical_angles(-az, -el);
     case AngleConventionPreset::kGeodeticEnu:
       // Azimuth clockwise from North (+y): rotate boundary az by −π/2.
-      return rotate_z(from_canonical_angles(az, el), -kPi / 2.0);
+      return rotate_z(from_canonical_angles(az, el), -kHalfPi);
     case AngleConventionPreset::kPhysicsSpherical: {
       // Zenith reference: boundary el is polar angle from +z.
       const double polar = el;
-      const double horizon_el = kPi / 2.0 - polar;
+      const double horizon_el = kHalfPi - polar;
       return from_canonical_angles(az, horizon_el);
     }
     case AngleConventionPreset::kCustom: {
@@ -116,7 +116,7 @@ CanonicalDirection boundary_to_canonical(const AngleConvention& conv, double az,
       // axis; convert to elevation-from-the-azimuth-plane before building.
       const bool zenith =
           conv.elevation_reference == ElevationReference::kZenith;
-      const double el_h = zenith ? kPi / 2.0 - el : el;
+      const double el_h = zenith ? kHalfPi - el : el;
       const double ce = std::cos(el_h);
       const double se = std::sin(el_h);
       const double ca = std::cos(az);
@@ -157,12 +157,12 @@ void canonical_to_boundary(const AngleConvention& conv,
       el = -el;
       break;
     case AngleConventionPreset::kGeodeticEnu: {
-      CanonicalDirection rotated = rotate_z(dir, kPi / 2.0);
+      CanonicalDirection rotated = rotate_z(dir, kHalfPi);
       to_canonical_angles(rotated, &az, &el);
       break;
     }
     case AngleConventionPreset::kPhysicsSpherical:
-      el = kPi / 2.0 - el;
+      el = kHalfPi - el;
       break;
     case AngleConventionPreset::kCustom: {
       // Recover (az, el) by projecting the canonical direction onto the custom
@@ -175,7 +175,7 @@ void canonical_to_boundary(const AngleConvention& conv,
       el = std::asin(std::clamp(ce, -1.0, 1.0));
       az = std::atan2(ca, cb);
       if (conv.elevation_reference == ElevationReference::kZenith) {
-        el = kPi / 2.0 - el;
+        el = kHalfPi - el;
       }
       break;
     }
