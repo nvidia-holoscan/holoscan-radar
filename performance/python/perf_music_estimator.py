@@ -8,9 +8,9 @@ eigendecomposes it (batched matx::eig, EigenMode::VECTOR - full eigenvector
 basis, unlike MVDR's NO_VECTOR), resolves a model order, builds the
 noise-subspace projector, then scans the (az, el) grid for the MUSIC
 pseudospectrum. Sweeps detection count, channel count, snapshot count, and
-scan-grid size, and inlines a mid-session ``[live]`` ``az_angles`` override
-(finer grid -> steering rebuild). Measurement tool only: no timing
-assertions.
+scan-grid size. The size ladder inlines a mid-session ``az_angles`` override;
+the default/full matrices add an xs scenario covering every functionally
+distinct live path together. Measurement tool only: no timing assertions.
 
 Scenario matrix mirrors ``performance/cpp/perf_music_estimator.cpp``.
 ``num_sources`` is fixed (=1) across the matrix — see that file's docstring
@@ -145,10 +145,13 @@ class MusicScenario:
     # Filled per run by run_scenario() for inline live-override measurement.
     override_at: int = 0
     override_num_az: int = 0
+    comprehensive_override: bool = False
 
 
-def make_scenario(s: SizeSpec) -> MusicScenario:
+def make_scenario(s: SizeSpec, comprehensive_override: bool = False) -> MusicScenario:
     sid = f"music_{s.id}_c{s.channels}_n{s.detections}_s{s.snapshots}" f"_g{s.num_az}x{s.num_el}"
+    if comprehensive_override:
+        sid += "_all_live"
     return MusicScenario(
         id=sid,
         size_id=s.id,
@@ -158,11 +161,15 @@ def make_scenario(s: SizeSpec) -> MusicScenario:
         num_az=s.num_az,
         num_el=s.num_el,
         override_num_az=s.num_az + 20,
+        comprehensive_override=comprehensive_override,
     )
 
 
 def build_default_matrix() -> list[MusicScenario]:
-    return [make_scenario(_must_find_size(sid)) for sid in ("xs", "sm", "md")]
+    return [
+        *(make_scenario(_must_find_size(sid)) for sid in ("xs", "sm", "md")),
+        make_scenario(_must_find_size("xs"), comprehensive_override=True),
+    ]
 
 
 def build_size_sweep(size_ids: list[str]) -> list[MusicScenario]:
@@ -177,7 +184,10 @@ def build_size_sweep(size_ids: list[str]) -> list[MusicScenario]:
 
 
 def build_full_matrix() -> list[MusicScenario]:
-    return [make_scenario(s) for s in SIZE_LADDER]
+    return [
+        *(make_scenario(s) for s in SIZE_LADDER),
+        make_scenario(_must_find_size("xs"), comprehensive_override=True),
+    ]
 
 
 def _base_row(scen: MusicScenario) -> ResultRow:
@@ -256,6 +266,26 @@ def _run_graph(
             )
             self.add_flow(override, op, {("output", "az_angles")})
 
+            if scen.comprehensive_override:
+                override_values = {
+                    "el_angles": linspace(-0.25, 0.25, scen.num_el + 4),
+                    "num_sources": -1,
+                    "source_count_pfa": 0.5,
+                    "max_sources": 3,
+                    "spatial_smoothing": [2],
+                }
+                changed_geometry = make_ula_geometry(scen.channels, 0.5, 0.8)
+                override_values["array_geometry"] = changed_geometry
+                for port, value in override_values.items():
+                    source = PerfOverrideSourceOp(
+                        self,
+                        CountCondition(self, count=total_frames),
+                        target_tick=scen.override_at,
+                        value=value,
+                        name=f"{port}_ovr",
+                    )
+                    self.add_flow(source, op, {("output", port)})
+
     MusicPerfApp().run()
 
 
@@ -290,13 +320,21 @@ def run_scenario(scen: MusicScenario, rs: RunSettings, report: PerfReport) -> No
     compute = _base_row(scen)
     fill_compute_row(compute, samples)
     _fill_throughput(compute, scen)
-    compute.notes = (
-        "num_sources fixed=1 (deterministic model order, isolates the "
-        "covariance/eig(VECTOR)/projector/scan path from EFT); cold_ms is "
-        "first-frame latency; median/p90 are pre-override steady state; "
-        "override_ms is peak latency over the live-az_angles (finer grid) "
-        "window; cells/s is detections/s"
-    )
+    if scen.comprehensive_override:
+        compute.notes = (
+            "all distinct live paths overridden together: az/el grids, "
+            "array_geometry, num_sources fixed->auto + source_count_pfa, "
+            "max_sources, and spatial_smoothing; override_ms is their "
+            "combined reconfiguration spike"
+        )
+    else:
+        compute.notes = (
+            "num_sources fixed=1 (deterministic model order, isolates the "
+            "covariance/eig(VECTOR)/projector/scan path from EFT); cold_ms is "
+            "first-frame latency; median/p90 are pre-override steady state; "
+            "override_ms is peak latency over the live-az_angles (finer grid) "
+            "window; cells/s is detections/s"
+        )
     report.results.append(compute)
 
 

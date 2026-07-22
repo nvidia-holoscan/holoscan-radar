@@ -98,13 +98,13 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   - `doa_multi`/`source_count` target `min(num_sources_i, max_sources)`
   peaks (not always `max_sources`, since MUSIC — unlike MVDR — has an actual
   model order) + `eigenvalues`; `spatial_smoothing`/`forward_backward`
-  reused verbatim from MVDR; float/double; 31 C++ unit tests (analytic DOA
+  reused verbatim from MVDR; float/double; 37 C++ unit tests (analytic DOA
   recovery on ULA/URA, super-resolution vs. Beamscan per `TESTING.md`,
   `num_sources` fixed/auto, multi-source + `max_sources` capping, spatial
   smoothing (1-D/2-D, forward/forward-backward), rank-deficient auto
   fallback, `is_valid` masking, multi-item batches, live overrides
   (`num_sources`, `az_angles`, `array_geometry`, `max_sources`), error
-  paths) + a full 31-case Python C++-parity pytest port (including
+  paths) + a full 37-case Python C++-parity pytest port (including
   `is_valid`-as-input, previously assumed HSDK-4.3-blocked — works via
   `uint8`);
   `performance/cpp/perf_music_estimator.cpp` +

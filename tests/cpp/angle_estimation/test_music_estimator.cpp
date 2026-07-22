@@ -13,6 +13,7 @@
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -277,6 +278,44 @@ TEST(MUSICEstimatorOpTest, RecoversKnownDoaUlaAzOnlyFixedOneSource) {
   const double* aoa = out.aoa.as<double>();
   EXPECT_NEAR(aoa[0], kTruthAz, 0.02);
   EXPECT_NEAR(aoa[1], 0.0, 1e-9);
+}
+
+TEST(MUSICEstimatorOpTest, SharedSparseSlotInterchangesWithBeamscan) {
+  constexpr int64_t kN = 8;
+  constexpr double kTruthAz = 0.08;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto look = steering_vector(geom, conv, kTruthAz, 0.0);
+  const auto az_grid = linspace(-0.3, 0.3, 61);
+
+  auto beamscan_harness = create_operator_test<BeamscanEstimatorOp<double>>(
+      holoscan::Arg("array_geometry") = geom,
+      holoscan::Arg("angle_convention") = conv,
+      holoscan::Arg("az_angles") = az_grid,
+      holoscan::Arg("el_angles") = std::vector<double>{0.0});
+  beamscan_harness->add_input_port<holoscan::TensorMap>(
+      "snapshot",
+      {single_map(block_to_device<double>(look, {1, kN, 1}), "snapshot")});
+  TensorMapCapture beamscan_aoa;
+  beamscan_harness->add_output_port<holoscan::TensorMap>(
+      "aoa_estimates", beamscan_aoa.validators());
+  TensorMapCapture beamscan_spectrum;
+  beamscan_harness->add_output_port<holoscan::TensorMap>(
+      "angle_spectrum", beamscan_spectrum.validators());
+  beamscan_harness->run_test();
+
+  const auto music = run_music<double>(
+      block_to_device<double>(look, {1, kN, 1}),
+      holoscan::Arg("array_geometry") = geom,
+      holoscan::Arg("angle_convention") = conv,
+      holoscan::Arg("az_angles") = az_grid,
+      holoscan::Arg("el_angles") = std::vector<double>{0.0},
+      holoscan::Arg("num_sources") = int64_t{1});
+
+  ASSERT_EQ(beamscan_aoa.frames.size(), 1u);
+  EXPECT_NEAR(beamscan_aoa.frames[0].as<double>()[0], kTruthAz, 0.02);
+  EXPECT_NEAR(music.aoa.as<double>()[0], kTruthAz, 0.02);
 }
 
 TEST(MUSICEstimatorOpTest, RecoversKnownDoaUraFixedOneSource) {
@@ -649,6 +688,35 @@ TEST(MUSICEstimatorOpTest, FloatInstantiationSmoke) {
   EXPECT_NEAR(aoa[0], 0.06f, 0.03f);
 }
 
+TEST(MUSICEstimatorOpTest, FloatDoubleAgreeOnDoa) {
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  constexpr double kTruthAz = 0.09;
+
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geom, conv, kTruthAz, 0.0, kS, 0.05, 5u);
+  auto snap_f = block_to_device<float>(block, {1, kN, kS});
+  auto snap_d = block_to_device<double>(block, {1, kN, kS});
+
+  const auto args = std::make_tuple(
+      holoscan::Arg("array_geometry") = geom,
+      holoscan::Arg("angle_convention") = conv,
+      holoscan::Arg("az_angles") = linspace(-0.3, 0.3, 61),
+      holoscan::Arg("el_angles") = std::vector<double>{0.0},
+      holoscan::Arg("num_sources") = int64_t{1});
+
+  const auto out_f = std::apply(
+      [&](auto&&... a) { return run_music<float>(snap_f, a...); }, args);
+  const auto out_d = std::apply(
+      [&](auto&&... a) { return run_music<double>(snap_d, a...); }, args);
+
+  const float* aoa_f = out_f.aoa.as<float>();
+  const double* aoa_d = out_d.aoa.as<double>();
+  EXPECT_NEAR(aoa_f[0], static_cast<float>(aoa_d[0]), 1e-2f);
+}
+
 TEST(MUSICEstimatorOpTest, DirectionCosineMasksInvisibleRegion) {
   constexpr int64_t kN = 4;
   constexpr int64_t kS = 16;
@@ -834,6 +902,133 @@ TEST(MUSICEstimatorOpTest, AllInvalidMaskBlanksDoaAndSpectrum) {
   }
 }
 
+class SourceCountPfaOverrideApp : public holoscan::Application {
+ public:
+  std::vector<holoscan::TensorMap> snapshot_frames;
+  std::vector<double> pfa_overrides;
+  TensorMapCapture* spectrum = nullptr;
+  ArrayGeometry geometry;
+  AngleConvention convention;
+  std::vector<double> az_grid;
+  std::vector<double> el_grid;
+
+  void compose() override {
+    using holoscan::Arg;
+    auto op = make_operator<MUSICEstimatorOp<double>>(
+        "music", Arg("array_geometry") = geometry,
+        Arg("angle_convention") = convention, Arg("az_angles") = az_grid,
+        Arg("el_angles") = el_grid, Arg("num_sources") = int64_t{-1},
+        Arg("source_count_pfa") = pfa_overrides.front(),
+        Arg("max_sources") = int64_t{4});
+    holoscan::radar::testing::wire_data_source(this, op, "snapshot",
+                                               snapshot_frames);
+    holoscan::radar::testing::wire_leading_override(
+        this, op, "source_count_pfa", pfa_overrides);
+    holoscan::radar::testing::wire_capture_sink(this, op, "angle_spectrum",
+                                                spectrum);
+    wire_noop_output(this, op, "aoa_estimates");
+    wire_noop_output(this, op, "doa_multi");
+    wire_noop_output(this, op, "source_count");
+    wire_noop_output(this, op, "eigenvalues");
+  }
+};
+
+TEST(MUSICEstimatorOpTest, LiveSourceCountPfaStickyOverride) {
+  constexpr int64_t kN = 6;
+  constexpr int64_t kS = 6;
+  const std::vector<double> eigenvalues = {
+      0.8930540251, 0.9468277841, 1.3517214181,
+      1.6732266229, 9.0798471606, 14.3477610683};
+  std::vector<std::complex<double>> block(static_cast<size_t>(kN * kS));
+  for (int64_t c = 0; c < kN; ++c) {
+    block[static_cast<size_t>(c * kS + c)] = {
+        std::sqrt(static_cast<double>(kS) *
+                  eigenvalues[static_cast<size_t>(c)]),
+        0.0};
+  }
+  auto snap = block_to_device<double>(block, {1, kN, kS});
+
+  SourceCountPfaOverrideApp app;
+  app.geometry = make_ula_geometry(kN, 0.5, 1.0);
+  app.convention.preset = AngleConventionPreset::kRadarBoresight;
+  app.az_grid = linspace(-0.5, 0.5, 51);
+  app.el_grid = std::vector<double>{0.0};
+  app.snapshot_frames = {single_map(snap, "snapshot"),
+                         single_map(snap, "snapshot"),
+                         single_map(snap, "snapshot")};
+  app.pfa_overrides = {1e-4, 0.5};
+
+  TensorMapCapture spec_cap;
+  app.spectrum = &spec_cap;
+  app.run();
+
+  ASSERT_EQ(spec_cap.frames.size(), 3u);
+  const double tight = spectrum_max(spec_cap.frames[0]);
+  const double loose = spectrum_max(spec_cap.frames[1]);
+  EXPECT_NE(tight, loose);
+  EXPECT_DOUBLE_EQ(loose, spectrum_max(spec_cap.frames[2]));
+}
+
+class SpatialSmoothingOverrideApp : public holoscan::Application {
+ public:
+  std::vector<holoscan::TensorMap> snapshot_frames;
+  std::vector<std::vector<int64_t>> smoothing_overrides;
+  TensorMapCapture* eigenvalues = nullptr;
+  ArrayGeometry geometry;
+  AngleConvention convention;
+  std::vector<double> az_grid;
+  std::vector<double> el_grid;
+
+  void compose() override {
+    using holoscan::Arg;
+    auto op = make_operator<MUSICEstimatorOp<double>>(
+        "music", Arg("array_geometry") = geometry,
+        Arg("angle_convention") = convention, Arg("az_angles") = az_grid,
+        Arg("el_angles") = el_grid,
+        Arg("spatial_smoothing") = smoothing_overrides.front(),
+        Arg("num_sources") = int64_t{1});
+    holoscan::radar::testing::wire_data_source(this, op, "snapshot",
+                                               snapshot_frames);
+    holoscan::radar::testing::wire_leading_override(
+        this, op, "spatial_smoothing", smoothing_overrides);
+    holoscan::radar::testing::wire_capture_sink(this, op, "eigenvalues",
+                                                eigenvalues);
+    wire_noop_output(this, op, "aoa_estimates");
+    wire_noop_output(this, op, "angle_spectrum");
+    wire_noop_output(this, op, "doa_multi");
+    wire_noop_output(this, op, "source_count");
+  }
+};
+
+TEST(MUSICEstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.02, 141u);
+  auto snap = block_to_device<double>(block, {1, kN, kS});
+
+  SpatialSmoothingOverrideApp app;
+  app.geometry = geom;
+  app.convention = conv;
+  app.az_grid = linspace(-0.3, 0.3, 31);
+  app.el_grid = std::vector<double>{0.0};
+  app.snapshot_frames = {single_map(snap, "snapshot"),
+                         single_map(snap, "snapshot"),
+                         single_map(snap, "snapshot")};
+  app.smoothing_overrides = {{}, {2}};
+
+  TensorMapCapture eig_cap;
+  app.eigenvalues = &eig_cap;
+  app.run();
+
+  ASSERT_EQ(eig_cap.frames.size(), 3u);
+  EXPECT_EQ(eig_cap.frames[0].shape, (std::vector<int64_t>{1, kN}));
+  EXPECT_EQ(eig_cap.frames[1].shape, (std::vector<int64_t>{1, kN - 1}));
+  EXPECT_EQ(eig_cap.frames[2].shape, eig_cap.frames[1].shape);
+}
+
 class NumSourcesOverrideApp : public holoscan::Application {
  public:
   std::vector<holoscan::TensorMap> snapshot_frames;
@@ -1000,6 +1195,38 @@ TEST(MUSICEstimatorOpTest, ResolvesCloselySpacedSourcesBeamscanCannot) {
   EXPECT_GE(music_peaks, 2)
       << "MUSIC should resolve two distinct lobes where Beamscan cannot";
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 2);
+  const double* dm = out.doa_multi.as<double>();
+  const bool matched =
+      (std::abs(dm[0] - kAz0) < 0.015 && std::abs(dm[2] - kAz1) < 0.015) ||
+      (std::abs(dm[0] - kAz1) < 0.015 && std::abs(dm[2] - kAz0) < 0.015);
+  EXPECT_TRUE(matched) << "dm[0]=" << dm[0] << " dm[2]=" << dm[2];
+}
+
+TEST(MUSICEstimatorOpTest, AutoNumSourcesResolvesTwoCloselySpacedSources) {
+  constexpr int64_t kN = 16;
+  constexpr int64_t kS = 256;
+  constexpr double kAz0 = 0.025;
+  constexpr double kAz1 = -0.025;
+
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block =
+      make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.01, 201u);
+  const auto az_grid = linspace(-0.3, 0.3, 241);
+
+  auto music_snap = block_to_device<double>(block, {1, kN, kS});
+  const auto out = run_music_full<double>(
+      music_snap, holoscan::Arg("array_geometry") = geom,
+      holoscan::Arg("angle_convention") = conv,
+      holoscan::Arg("az_angles") = az_grid,
+      holoscan::Arg("el_angles") = std::vector<double>{0.0},
+      holoscan::Arg("max_sources") = int64_t{2});
+
+  EXPECT_EQ(out.source_count.as<int32_t>()[0], 2);
+  const int64_t music_peaks = count_prominent_local_maxima_1d(
+      out.spectrum.as<double>(), static_cast<int64_t>(az_grid.size()));
+  EXPECT_GE(music_peaks, 2);
   const double* dm = out.doa_multi.as<double>();
   const bool matched =
       (std::abs(dm[0] - kAz0) < 0.015 && std::abs(dm[2] - kAz1) < 0.015) ||
@@ -1208,6 +1435,64 @@ TEST(MUSICEstimatorOpTest, LiveAzGridStickyOverride) {
   ASSERT_EQ(spec_cap.frames.size(), 2u);
   EXPECT_EQ(spec_cap.frames[0].shape[1], 3);
   EXPECT_EQ(spec_cap.frames[1].shape[1], 11);
+}
+
+class MusicElGridOverrideApp : public holoscan::Application {
+ public:
+  std::vector<holoscan::TensorMap> snapshot_frames;
+  std::vector<std::vector<double>> el_overrides;
+  TensorMapCapture* spectrum = nullptr;
+  ArrayGeometry geometry;
+  AngleConvention convention;
+  std::vector<double> az_grid;
+
+  void compose() override {
+    using holoscan::Arg;
+    auto op = make_operator<MUSICEstimatorOp<double>>(
+        "music", Arg("array_geometry") = geometry,
+        Arg("angle_convention") = convention, Arg("az_angles") = az_grid,
+        Arg("el_angles") = el_overrides.front(),
+        Arg("num_sources") = int64_t{1});
+    holoscan::radar::testing::wire_data_source(this, op, "snapshot",
+                                               snapshot_frames);
+    holoscan::radar::testing::wire_leading_override(this, op, "el_angles",
+                                                    el_overrides);
+    holoscan::radar::testing::wire_capture_sink(this, op, "angle_spectrum",
+                                                spectrum);
+    wire_noop_output(this, op, "aoa_estimates");
+    wire_noop_output(this, op, "doa_multi");
+    wire_noop_output(this, op, "source_count");
+    wire_noop_output(this, op, "eigenvalues");
+  }
+};
+
+TEST(MUSICEstimatorOpTest, LiveElGridStickyOverride) {
+  constexpr int64_t kNy = 4;
+  constexpr int64_t kNz = 4;
+  constexpr int64_t kS = 48;
+  constexpr double kTruthEl = 0.06;
+
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_planar_ura_geometry(kNy, kNz, 0.5, 1.0);
+  const auto block = make_block(geom, conv, 0.1, kTruthEl, kS, 0.02, 151u);
+  auto snap = block_to_device<double>(block, {1, geom.num_elements(), kS});
+
+  MusicElGridOverrideApp app;
+  app.geometry = geom;
+  app.convention = conv;
+  app.az_grid = linspace(-0.3, 0.3, 31);
+  app.el_overrides = {std::vector<double>{0.0}, linspace(-0.2, 0.2, 11)};
+  app.snapshot_frames = {single_map(snap, "snapshot"),
+                         single_map(snap, "snapshot")};
+
+  TensorMapCapture spec_cap;
+  app.spectrum = &spec_cap;
+  app.run();
+
+  ASSERT_EQ(spec_cap.frames.size(), 2u);
+  EXPECT_EQ(spec_cap.frames[0].shape, (std::vector<int64_t>{1, 31, 1}));
+  EXPECT_EQ(spec_cap.frames[1].shape, (std::vector<int64_t>{1, 31, 11}));
 }
 
 class MusicArrayGeometryOverrideApp : public holoscan::Application {

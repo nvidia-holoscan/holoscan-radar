@@ -152,7 +152,7 @@ Common check (all five): `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_e
 
 - **BeamscanEstimatorOp** — single-source recovery; accepts 2-D or 3-D-with-`num_snapshots=1`; errors on 3-D with `num_snapshots ≠ 1`.
 - **MVDREstimatorOp** — multi-snapshot covariance nulls an interferer better than Beamscan; `diagonal_loading` stabilizes the low-snapshot / ill-conditioned case.
-- **MUSICEstimatorOp** — resolves two closely-spaced sources that Beamscan cannot, given the source count (fixed or MDL/AIC `auto`).
+- **MUSICEstimatorOp** — resolves two closely-spaced sources that Beamscan cannot, given the source count (fixed or EFT `auto`).
 - **RootMUSICEstimatorOp / ESPRITEstimatorOp** — gridless DOA on ULA / shift-invariant geometry ≈ truth, with **no** `angle_spectrum` output; on a non-uniform virtual array they either use the subarray/smoothing step or fail predictably.
 - Multi-source estimators fill `doa_multi` / `source_count` up to `max_sources`.
 
