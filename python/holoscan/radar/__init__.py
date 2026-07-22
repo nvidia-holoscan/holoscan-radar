@@ -79,6 +79,10 @@ from .phase_shift_beamformer_op import (  # noqa: F401
     PhaseShiftBeamformerOpF32,
     PhaseShiftBeamformerOpF64,
 )
+from .root_music_estimator_op import (  # noqa: F401
+    RootMUSICEstimatorOpF32,
+    RootMUSICEstimatorOpF64,
+)
 from .radar_app import CadenceMeter  # noqa: F401
 from .radar_app import (
     BoresightViewOp,
@@ -114,6 +118,7 @@ MIMODeinterleaveOp = MIMODeinterleaveOpF32
 MUSICEstimatorOp = MUSICEstimatorOpF32
 MVDREstimatorOp = MVDREstimatorOpF32
 PhaseShiftBeamformerOp = PhaseShiftBeamformerOpF32
+RootMUSICEstimatorOp = RootMUSICEstimatorOpF32
 SnapshotGatherOp = SnapshotGatherOpF32
 VirtualArrayAssemblyOp = VirtualArrayAssemblyOpF32
 
@@ -188,6 +193,9 @@ __all__ = [
     "RdChannelSliceOp",
     "RdMapToImageOp",
     "RepresentativePolicy",
+    "RootMUSICEstimatorOp",
+    "RootMUSICEstimatorOpF32",
+    "RootMUSICEstimatorOpF64",
     "RollingPlotOp",
     "ScoreMethod",
     "SignedAxis",
