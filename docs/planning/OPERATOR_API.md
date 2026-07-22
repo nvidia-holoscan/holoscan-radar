@@ -364,7 +364,7 @@ GO/SO start-time pre-calibration (needs an RD-map shape hint, since their LUTs a
 #### ClusterDBSCANOp
 
 - **In:** `points` — float32 / float64, `(num_points, num_features)`. Caller-assembled feature matrix (e.g. `[range, velocity, az, el]`); radar-agnostic.
-- **Out:** `labels` — int, `(num_points,)`. Cluster id per point, noise = `-1`; row-aligned with `points`. Clusters are numbered by **descending point count** (cluster `0` is the largest), ties broken by ascending component root (lowest member row index). Deterministic: `labels` is a pure function of `(points, epsilon, min_points)`.
+- **Out:** `labels` — int, `(num_points,)`. Cluster id per point, noise = `-1`; row-aligned with `points`. Clusters are numbered by **descending point count** (cluster `0` is the largest), ties broken by ascending component root (lowest member row index). A **border point** reachable from cores in more than one cluster joins the core neighbor with the **numerically smallest component root** (lowest member row index) — the deterministic, order-independent tie-break for DBSCAN's inherent inter-cluster-border ambiguity. (The partition — core structure and noise set — is identical under any faithful DBSCAN; only which cluster a straddling border point joins is pinned here.) Deterministic: `labels` is a pure function of `(points, epsilon, min_points)`.
 - **Out:** `sizes` (optional) — int, `(num_clusters,)`. Point count per cluster, in the same descending order as the ids (so `sizes` is non-increasing); sized to the actual cluster count and reallocated per tick. If `max_clusters` is set and exceeded, the smallest surplus clusters are dropped (their points → noise) and a warning raised.
 
 **Parameters:**

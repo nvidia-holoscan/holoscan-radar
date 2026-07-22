@@ -107,8 +107,18 @@ faithful default plus the question for the team.
 - **Question.** Is min-root the desired rule, or should border points go to the
   nearest core / the first-reached cluster? Whatever the answer, the contract
   should pin it so the behavior is not implementation-defined.
-- **Status.** `open` — implemented deterministic min-root; code is ahead of the
-  (silent) contract.
+- **Resolved (L9, 2026-07-22).** **Ratify min-root** and pin it in the contract
+  (chosen over nearest-core and over scikit-learn's first-reached rule).
+  Rationale: only inter-cluster border points are affected (a rare edge case),
+  the partition is identical either way, and downstream `DetectionReductionOp`
+  is insensitive to which cluster a straddling point joins — while min-root is
+  already deterministic and **order-independent** (preserving the
+  `labels`-is-a-pure-function guarantee). First-reached is order-dependent and
+  cannot be made order-independent on the GPU (rejected); nearest-core adds
+  kernel distance-tracking + a secondary tie-break for no partition-level
+  benefit. Docs-only: the `OPERATOR_API.md` `labels` bullet now states the
+  min-root border rule. See STATUS.md → Settled decisions (L9).
+- **Status.** `resolved` — min-root ratified; contract now pins the tie-break.
 
 ## 6. Cluster-id numbering order
 

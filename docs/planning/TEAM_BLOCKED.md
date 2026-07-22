@@ -52,12 +52,6 @@ Interim stance already chosen (or the capability is explicitly out of current
 scope). Development and checklist completion proceed; these need ratification
 or a deliberate contract change when the team has bandwidth.
 
-### Clustering (`ClusterDBSCANOp`)
-
-| # | Decision needed | Interim stance | Detail |
-| --- | --- | --- | --- |
-| L9 | **Border-point multi-cluster tie-break** | Min-root neighbor | [ClusterDBSCAN §5](../../operators/clustering/cluster_dbscan_op/OPEN_ITEMS.md) |
-
 ### Angle conventions & MIMO scope
 
 | # | Decision needed | Interim stance | Detail |
