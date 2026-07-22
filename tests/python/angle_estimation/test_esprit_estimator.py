@@ -21,9 +21,13 @@ from utils.angle_helpers import (  # noqa: E402
 from utils.harness import run_operator_multi, single_map, to_device_array  # noqa: E402
 
 from holoscan.radar import (  # noqa: E402
+    AngleConvention,
+    AngleConventionPreset,
+    ElevationReference,
     ESPRITEstimatorOpF32,
     ESPRITEstimatorOpF64,
     ShiftInvariantSubarrayPair,
+    SignedAxis,
 )
 
 pytestmark = pytest.mark.requires_gpu
@@ -102,6 +106,63 @@ def test_RecoversKnownDoaUlaFixedOneSource(op_cls):
     assert output["aoa"].shape == (1, 2)
     assert output["aoa"][0, 0] == pytest.approx(0.08, abs=0.03)
     assert output["aoa"][0, 1] == pytest.approx(0.0, abs=1e-8)
+
+
+def test_CustomConventionMapsSignedAxes():
+    geom = make_ula_geometry(8, 0.5, 1.0)
+    radar = radar_boresight_convention()
+    custom = AngleConvention()
+    custom.preset = AngleConventionPreset.CUSTOM
+    custom.boresight_axis = SignedAxis.PLUS_X
+    custom.azimuth_positive_axis = SignedAxis.MINUS_Y
+    custom.elevation_positive_axis = SignedAxis.MINUS_Z
+    block = make_block(geom, radar, 0.18, 0.0, 64, 0.01, 176)
+
+    output = run_esprit(
+        block[None],
+        array_geometry=geom,
+        angle_convention=custom,
+        num_sources=1,
+    )
+
+    assert output["aoa"][0, 0] == pytest.approx(-0.18, abs=0.01)
+    assert output["aoa"][0, 1] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_CustomConventionSupportsZenithReference():
+    geom = make_ula_geometry(8, 0.5, 1.0)
+    radar = radar_boresight_convention()
+    custom = AngleConvention()
+    custom.preset = AngleConventionPreset.CUSTOM
+    custom.elevation_reference = ElevationReference.ZENITH
+    block = make_block(geom, radar, 0.1, 0.0, 64, 0.01, 177)
+
+    output = run_esprit(
+        block[None],
+        array_geometry=geom,
+        angle_convention=custom,
+        num_sources=1,
+    )
+
+    assert output["aoa"][0, 0] == pytest.approx(0.1, abs=0.01)
+    assert output["aoa"][0, 1] == pytest.approx(np.pi / 2.0, abs=1e-9)
+
+
+def test_RejectsDegenerateCustomConvention():
+    geom = make_ula_geometry(4, 0.5, 1.0)
+    radar = radar_boresight_convention()
+    custom = AngleConvention()
+    custom.preset = AngleConventionPreset.CUSTOM
+    custom.azimuth_positive_axis = custom.boresight_axis
+    block = make_block(geom, radar, 0.1, 0.0, 8, 0.01, 178)
+
+    with pytest.raises(ValueError, match="three distinct principal axes"):
+        run_esprit(
+            block[None],
+            array_geometry=geom,
+            angle_convention=custom,
+            num_sources=1,
+        )
 
 
 def test_RecoversTwoSources():

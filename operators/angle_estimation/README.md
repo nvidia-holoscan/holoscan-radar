@@ -126,8 +126,9 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   forms the Root-MUSIC polynomial, solves roots via companion +
   `cusolverDnXgeev` (one matrix per item), and maps in-unit-circle roots to
   continuous DOAs (no `angle_spectrum`). `spatial_smoothing` /
-  `forward_backward` match MVDR/MUSIC; float/double; 36 C++ + 33 Python
-  behavioral tests; `performance/cpp/perf_root_music_estimator.cpp` +
+  `forward_backward` match MVDR/MUSIC; all named and custom angle conventions;
+  float/double; 39 C++ + 36 Python behavioral tests;
+  `performance/cpp/perf_root_music_estimator.cpp` +
   `performance/python/perf_root_music_estimator.py` (inline live overrides for
   geometry, auto/EFT, Pfa, capacity, smoothing). Custom batched device root
   solver tracked in `root_music_estimator_op/OPEN_ITEMS.md`.
@@ -137,8 +138,9 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   front-end; splits the signal subspace with the global
   `ShiftInvariantSubarrayPair` descriptor (auto maximum-overlap ULA pair or
   explicit corresponding indices) and solves the rotational eigenproblem in a
-  per-item CUDA block (no `angle_spectrum`). Float/double; 43 C++ + 39 Python
-  tests; C++/Python perf harnesses cover the full live-override bundle.
+  per-item CUDA block (no `angle_spectrum`). All named and custom angle
+  conventions; float/double; 46 C++ + 42 Python tests; C++/Python perf
+  harnesses cover the full live-override bundle.
   Explicit `subarray_spec` and `spatial_smoothing` are mutually exclusive. See
   `esprit_estimator_op/OPEN_ITEMS.md`.
 - **`PhaseShiftBeamformerOp` (checklist-complete — dpc):** conventional

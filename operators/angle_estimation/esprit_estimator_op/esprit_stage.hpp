@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "angle_estimation/angle_boundary_device.hpp"
 #include "angle_estimation/music_estimator_op/music_stage.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/dsp/source_count_device.hpp"
@@ -30,31 +31,6 @@ template <typename T>
 __device__ inline cuda::std::complex<T> esprit_conj(
     cuda::std::complex<T> value) {
   return {value.real(), -value.imag()};
-}
-
-template <typename T>
-__device__ inline void esprit_canonical_to_boundary(
-    AngleConventionPreset preset, T x, T y, T z_coord, T* out0, T* out1) {
-  if (preset == AngleConventionPreset::kDirectionCosine) {
-    *out0 = y;
-    *out1 = z_coord;
-    return;
-  }
-  T az = atan2(y, x);
-  T el = atan2(z_coord, hypot(x, y));
-  if (preset == AngleConventionPreset::kAerospaceNed ||
-      preset == AngleConventionPreset::kGeodeticNed) {
-    az = -az;
-    el = -el;
-  } else if (preset == AngleConventionPreset::kGeodeticEnu) {
-    az = atan2(x, -y);
-  } else if (preset == AngleConventionPreset::kPhysicsSpherical) {
-    constexpr T kHalfPi =
-        static_cast<T>(1.57079632679489661923132169163975144);
-    el = kHalfPi - el;
-  }
-  *out0 = az;
-  *out1 = el;
 }
 
 template <typename T>
@@ -172,7 +148,7 @@ __global__ void esprit_solve_kernel(
     const int32_t* __restrict__ shifted_indices, int64_t num_items,
     int64_t channels, int64_t pair_size, int64_t workspace_dim,
     T wave_number_spacing, T axis_x, T axis_y, T axis_z, T broadside_x,
-    T broadside_y, T broadside_z, AngleConventionPreset preset,
+    T broadside_y, T broadside_z, DeviceAngleConvention<T> convention,
     cuda::std::complex<T>* __restrict__ matrix_workspace,
     cuda::std::complex<T>* __restrict__ q_workspace,
     cuda::std::complex<T>* __restrict__ r_workspace, T* __restrict__ aoa,
@@ -313,7 +289,7 @@ __global__ void esprit_solve_kernel(
     const T z = projection * axis_z + transverse * broadside_z;
     T out0 = nan;
     T out1 = nan;
-    esprit_canonical_to_boundary(preset, x, y, z, &out0, &out1);
+    angle_canonical_to_boundary(convention, x, y, z, &out0, &out1);
     const int64_t base = (item * max_sources + output) * 2;
     doa_multi[base] = out0;
     doa_multi[base + 1] = out1;
@@ -333,7 +309,8 @@ inline void run_esprit_stage(
     const int32_t* reference_indices, const int32_t* shifted_indices,
     int64_t pair_size, int64_t workspace_dim, T wave_number_spacing, T axis_x,
     T axis_y, T axis_z, T broadside_x, T broadside_y, T broadside_z,
-    AngleConventionPreset preset, cuda::std::complex<T>* covariance,
+    DeviceAngleConvention<T> convention,
+    cuda::std::complex<T>* covariance,
     cuda::std::complex<T>* eigenvectors, int64_t* valid_counts,
     int32_t* model_order, T* eigenvalues,
     cuda::std::complex<T>* matrix_workspace,
@@ -375,8 +352,8 @@ inline void run_esprit_stage(
       eigenvectors, model_order, valid_counts, reference_indices,
       shifted_indices, num_items, channels, pair_size, workspace_dim,
       wave_number_spacing, axis_x, axis_y, axis_z, broadside_x, broadside_y,
-      broadside_z, preset, matrix_workspace, q_workspace, r_workspace, aoa,
-      doa_multi, max_sources, source_count);
+      broadside_z, convention, matrix_workspace, q_workspace, r_workspace,
+      aoa, doa_multi, max_sources, source_count);
 
   mark_music_eig_cache_live();
   retire_music_matx_caches();

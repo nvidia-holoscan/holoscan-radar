@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "angle_estimation/angle_boundary_device.hpp"
 #include "angle_estimation/music_estimator_op/music_stage.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
@@ -145,31 +146,6 @@ __global__ void root_music_companion_kernel(
 }
 
 template <typename T>
-__device__ inline void root_canonical_to_boundary(
-    AngleConventionPreset preset, T x, T y, T z_coord, T* out0, T* out1) {
-  if (preset == AngleConventionPreset::kDirectionCosine) {
-    *out0 = y;
-    *out1 = z_coord;
-    return;
-  }
-  T az = atan2(y, x);
-  T el = atan2(z_coord, hypot(x, y));
-  if (preset == AngleConventionPreset::kAerospaceNed ||
-      preset == AngleConventionPreset::kGeodeticNed) {
-    az = -az;
-    el = -el;
-  } else if (preset == AngleConventionPreset::kGeodeticEnu) {
-    az = atan2(x, -y);
-  } else if (preset == AngleConventionPreset::kPhysicsSpherical) {
-    constexpr T kHalfPi =
-        static_cast<T>(1.57079632679489661923132169163975144);
-    el = kHalfPi - el;
-  }
-  *out0 = az;
-  *out1 = el;
-}
-
-template <typename T>
 __device__ inline T wrapped_phase_distance(T a, T b) {
   constexpr T kTwoPi =
       static_cast<T>(6.28318530717958647692528676655900577);
@@ -184,7 +160,7 @@ __global__ void root_music_select_kernel(
     const int64_t* __restrict__ valid_counts, int64_t num_items,
     int64_t degree, int64_t max_sources, T wave_number_spacing,
     T axis_x, T axis_y, T axis_z, T broadside_x, T broadside_y,
-    T broadside_z, AngleConventionPreset preset, T* __restrict__ aoa,
+    T broadside_z, DeviceAngleConvention<T> convention, T* __restrict__ aoa,
     T* __restrict__ doa_multi, int32_t* __restrict__ source_count) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (threadIdx.x != 0 || item >= num_items) {
@@ -258,7 +234,7 @@ __global__ void root_music_select_kernel(
     const T z = spatial_projection * axis_z + transverse * broadside_z;
     T out0 = nan;
     T out1 = nan;
-    root_canonical_to_boundary(preset, x, y, z, &out0, &out1);
+    angle_canonical_to_boundary(convention, x, y, z, &out0, &out1);
     const int64_t base = (item * max_sources + found) * 2;
     doa_multi[base] = out0;
     doa_multi[base + 1] = out1;
@@ -309,7 +285,7 @@ inline void run_root_music_stage(
     int64_t num_items, int64_t num_channels, int64_t num_snapshots,
     int64_t fixed_num_sources, double pfa, int64_t max_sources,
     T wave_number_spacing, T axis_x, T axis_y, T axis_z, T broadside_x,
-    T broadside_y, T broadside_z, AngleConventionPreset preset,
+    T broadside_y, T broadside_z, DeviceAngleConvention<T> convention,
     cuda::std::complex<T>* covariance, cuda::std::complex<T>* eigenvectors,
     cuda::std::complex<T>* projector, int64_t* valid_counts,
     int32_t* model_order, T* eigenvalues,
@@ -379,7 +355,7 @@ inline void run_root_music_stage(
   root_music_select_kernel<T><<<grid, 1, 0, stream>>>(
       roots, model_order, valid_counts, num_items, degree, max_sources,
       wave_number_spacing, axis_x, axis_y, axis_z, broadside_x, broadside_y,
-      broadside_z, preset, aoa, doa_multi, source_count);
+      broadside_z, convention, aoa, doa_multi, source_count);
 
   mark_music_eig_cache_live();
   retire_music_matx_caches();

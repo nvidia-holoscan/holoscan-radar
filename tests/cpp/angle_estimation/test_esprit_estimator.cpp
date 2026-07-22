@@ -40,8 +40,10 @@ using holoscan::radar::AngleConvention;
 using holoscan::radar::AngleConventionPreset;
 using holoscan::radar::ArrayGeometry;
 using holoscan::radar::ArrayGeometryType;
+using holoscan::radar::ElevationReference;
 using holoscan::radar::ESPRITEstimatorOp;
 using holoscan::radar::ShiftInvariantSubarrayPair;
+using holoscan::radar::SignedAxis;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::testing::HostTensor;
 using holoscan::radar::testing::single_map;
@@ -752,6 +754,71 @@ TEST(ESPRITEstimatorOpTest, DirectionCosineConventionMapsUlaProjection) {
 
   EXPECT_NEAR(out.aoa.as<double>()[0], kTruthU, 0.01);
   EXPECT_NEAR(out.aoa.as<double>()[1], 0.0, 1e-9);
+}
+
+TEST(ESPRITEstimatorOpTest, CustomConventionMapsSignedAxes) {
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 64;
+  constexpr double kCanonicalAz = 0.18;
+  AngleConvention radar;
+  radar.preset = AngleConventionPreset::kRadarBoresight;
+  AngleConvention custom;
+  custom.preset = AngleConventionPreset::kCustom;
+  custom.boresight_axis = SignedAxis::kPlusX;
+  custom.azimuth_positive_axis = SignedAxis::kMinusY;
+  custom.elevation_positive_axis = SignedAxis::kMinusZ;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block =
+      make_block(geom, radar, kCanonicalAz, 0.0, kS, 0.01, 176u);
+
+  const auto out = run_esprit<double>(
+      block_to_device<double>(block, {1, kN, kS}),
+      holoscan::Arg("array_geometry") = geom,
+      holoscan::Arg("angle_convention") = custom,
+      holoscan::Arg("num_sources") = int64_t{1});
+
+  EXPECT_NEAR(out.aoa.as<double>()[0], -kCanonicalAz, 0.01);
+  EXPECT_NEAR(out.aoa.as<double>()[1], 0.0, 1e-9);
+}
+
+TEST(ESPRITEstimatorOpTest, CustomConventionSupportsZenithReference) {
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 64;
+  AngleConvention radar;
+  radar.preset = AngleConventionPreset::kRadarBoresight;
+  AngleConvention custom;
+  custom.preset = AngleConventionPreset::kCustom;
+  custom.elevation_reference = ElevationReference::kZenith;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geom, radar, 0.1, 0.0, kS, 0.01, 177u);
+
+  const auto out = run_esprit<double>(
+      block_to_device<double>(block, {1, kN, kS}),
+      holoscan::Arg("array_geometry") = geom,
+      holoscan::Arg("angle_convention") = custom,
+      holoscan::Arg("num_sources") = int64_t{1});
+
+  EXPECT_NEAR(out.aoa.as<double>()[0], 0.1, 0.01);
+  EXPECT_NEAR(out.aoa.as<double>()[1], kPi / 2.0, 1e-9);
+}
+
+TEST(ESPRITEstimatorOpTest, RejectsDegenerateCustomConvention) {
+  constexpr int64_t kN = 4;
+  AngleConvention radar;
+  radar.preset = AngleConventionPreset::kRadarBoresight;
+  AngleConvention custom;
+  custom.preset = AngleConventionPreset::kCustom;
+  custom.azimuth_positive_axis = custom.boresight_axis;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geom, radar, 0.1, 0.0, 8, 0.01, 178u);
+
+  EXPECT_THROW(
+      run_esprit<double>(
+          block_to_device<double>(block, {1, kN, 8}),
+          holoscan::Arg("array_geometry") = geom,
+          holoscan::Arg("angle_convention") = custom,
+          holoscan::Arg("num_sources") = int64_t{1}),
+      std::invalid_argument);
 }
 
 TEST(ESPRITEstimatorOpTest, DirectionCosineNearEndfirePreservesSign) {
