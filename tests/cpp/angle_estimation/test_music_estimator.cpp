@@ -5,10 +5,13 @@
 
 #include <gtest/gtest.h>
 
+#include <cuda_runtime_api.h>
+
 #include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <random>
 #include <stdexcept>
@@ -47,6 +50,64 @@ using holoscan::radar::testing::to_pageable_host_tensor;
 using holoscan::test::create_operator_test;
 
 constexpr double kPi = 3.141592653589793;
+
+namespace cuda_accessible {
+
+struct BufferHolder {
+  void* data{nullptr};
+  std::vector<int64_t> shape;
+  DLDevice device{kDLCUDA, 0};
+  DLManagedTensor dl{};
+
+  ~BufferHolder() {
+    if (device.device_type == kDLCUDAHost) {
+      cudaFreeHost(data);
+    } else {
+      cudaFree(data);
+    }
+  }
+};
+
+template <typename ElementT>
+std::shared_ptr<holoscan::Tensor> make_tensor(
+    const std::vector<ElementT>& host, const std::vector<int64_t>& shape,
+    DLDataType dtype, DLDeviceType device_type) {
+  auto holder = std::make_unique<BufferHolder>();
+  holder->shape = shape;
+  const size_t nbytes = host.size() * sizeof(ElementT);
+  int device_id = 0;
+  cudaGetDevice(&device_id);
+  holder->device = DLDevice{device_type, device_id};
+  if (device_type == kDLCUDAManaged) {
+    if (cudaMallocManaged(&holder->data, nbytes) != cudaSuccess) {
+      throw std::runtime_error("cuda_accessible: cudaMallocManaged failed");
+    }
+  } else if (device_type == kDLCUDAHost) {
+    if (cudaHostAlloc(&holder->data, nbytes, cudaHostAllocMapped) !=
+        cudaSuccess) {
+      throw std::runtime_error("cuda_accessible: cudaHostAlloc failed");
+    }
+  } else {
+    throw std::invalid_argument("cuda_accessible: unsupported device type");
+  }
+  std::memcpy(holder->data, host.data(), nbytes);
+  holder->dl.dl_tensor.data = holder->data;
+  holder->dl.dl_tensor.device = holder->device;
+  holder->dl.dl_tensor.ndim = static_cast<int32_t>(shape.size());
+  holder->dl.dl_tensor.dtype = dtype;
+  holder->dl.dl_tensor.shape = holder->shape.data();
+  holder->dl.dl_tensor.strides = nullptr;
+  holder->dl.dl_tensor.byte_offset = 0;
+  holder->dl.manager_ctx = holder.get();
+  holder->dl.deleter = [](DLManagedTensor* self) {
+    delete static_cast<BufferHolder*>(self->manager_ctx);
+  };
+  auto tensor = std::make_shared<holoscan::Tensor>(&holder->dl);
+  holder.release();
+  return tensor;
+}
+
+}  // namespace cuda_accessible
 
 ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing,
                                 double wavelength) {
@@ -668,6 +729,48 @@ TEST(MUSICEstimatorOpTest, RejectsPageableHostSnapshot) {
       std::invalid_argument);
 }
 
+TEST(MUSICEstimatorOpTest, AcceptsPinnedHostSnapshot) {
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  constexpr double kTruthAz = 0.08;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto block =
+      make_block(geom, conv, kTruthAz, 0.0, kS, 0.02, 161u);
+  const auto tensor = cuda_accessible::make_tensor(
+      block, {1, kN, kS}, complex_dtype<double>(), kDLCUDAHost);
+
+  const auto out = run_music<double>(
+      tensor, holoscan::Arg("array_geometry") = geom,
+      holoscan::Arg("angle_convention") = conv,
+      holoscan::Arg("az_angles") = linspace(-0.3, 0.3, 61),
+      holoscan::Arg("el_angles") = std::vector<double>{0.0},
+      holoscan::Arg("num_sources") = int64_t{1});
+  EXPECT_NEAR(out.aoa.as<double>()[0], kTruthAz, 0.02);
+}
+
+TEST(MUSICEstimatorOpTest, AcceptsManagedSnapshot) {
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  constexpr double kTruthAz = 0.08;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto block =
+      make_block(geom, conv, kTruthAz, 0.0, kS, 0.02, 162u);
+  const auto tensor = cuda_accessible::make_tensor(
+      block, {1, kN, kS}, complex_dtype<double>(), kDLCUDAManaged);
+
+  const auto out = run_music<double>(
+      tensor, holoscan::Arg("array_geometry") = geom,
+      holoscan::Arg("angle_convention") = conv,
+      holoscan::Arg("az_angles") = linspace(-0.3, 0.3, 61),
+      holoscan::Arg("el_angles") = std::vector<double>{0.0},
+      holoscan::Arg("num_sources") = int64_t{1});
+  EXPECT_NEAR(out.aoa.as<double>()[0], kTruthAz, 0.02);
+}
+
 TEST(MUSICEstimatorOpTest, FloatInstantiationSmoke) {
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;
@@ -715,6 +818,34 @@ TEST(MUSICEstimatorOpTest, FloatDoubleAgreeOnDoa) {
   const float* aoa_f = out_f.aoa.as<float>();
   const double* aoa_d = out_d.aoa.as<double>();
   EXPECT_NEAR(aoa_f[0], static_cast<float>(aoa_d[0]), 1e-2f);
+}
+
+TEST(MUSICEstimatorOpTest, DeterministicAcrossRuns) {
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 64;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto block = make_block(geom, conv, 0.09, 0.0, kS, 0.02, 171u);
+
+  const auto run = [&]() {
+    return run_music_full<double>(
+        block_to_device<double>(block, {1, kN, kS}),
+        holoscan::Arg("array_geometry") = geom,
+        holoscan::Arg("angle_convention") = conv,
+        holoscan::Arg("az_angles") = linspace(-0.3, 0.3, 61),
+        holoscan::Arg("el_angles") = std::vector<double>{0.0},
+        holoscan::Arg("num_sources") = int64_t{1},
+        holoscan::Arg("max_sources") = int64_t{2});
+  };
+  const auto first = run();
+  const auto second = run();
+
+  EXPECT_EQ(first.aoa.data, second.aoa.data);
+  EXPECT_EQ(first.spectrum.data, second.spectrum.data);
+  EXPECT_EQ(first.doa_multi.data, second.doa_multi.data);
+  EXPECT_EQ(first.source_count.data, second.source_count.data);
+  EXPECT_EQ(first.eigenvalues.data, second.eigenvalues.data);
 }
 
 TEST(MUSICEstimatorOpTest, DirectionCosineMasksInvisibleRegion) {
@@ -1538,17 +1669,27 @@ TEST(MUSICEstimatorOpTest, LiveArrayGeometryStickyOverride) {
   app.convention = conv;
   app.az_grid = linspace(-0.2, 0.2, 11);
   app.el_grid = std::vector<double>{0.0};
-  app.geometry_overrides = {geom_a, geom_b};
+  app.geometry_overrides = {geom_a, geom_b, geom_a};
   app.snapshot_frames = {single_map(snap, "snapshot"),
+                         single_map(snap, "snapshot"),
                          single_map(snap, "snapshot")};
 
   TensorMapCapture spec_cap;
   app.spectrum = &spec_cap;
+  testing::internal::CaptureStderr();
   app.run();
+  const std::string logs = testing::internal::GetCapturedStderr();
 
-  ASSERT_EQ(spec_cap.frames.size(), 2u);
+  ASSERT_EQ(spec_cap.frames.size(), 3u);
   EXPECT_EQ(spec_cap.frames[0].shape, spec_cap.frames[1].shape);
   EXPECT_NE(spectrum_max(spec_cap.frames[0]), spectrum_max(spec_cap.frames[1]));
+  EXPECT_EQ(spec_cap.frames[0].data, spec_cap.frames[2].data);
+  const std::string warning =
+      "override selected an unseen steering manifold configuration";
+  const size_t first_warning = logs.find(warning);
+  ASSERT_NE(first_warning, std::string::npos);
+  EXPECT_EQ(logs.find(warning, first_warning + warning.size()),
+            std::string::npos);
 }
 
 class MusicMaxSourcesOverrideApp : public holoscan::Application {

@@ -477,6 +477,25 @@ def test_FloatDoubleAgreeOnDoa():
     assert out_f["aoa"][0, 0] == pytest.approx(float(out_d["aoa"][0, 0]), abs=1e-2)
 
 
+def test_DeterministicAcrossRuns():
+    k_n, k_s = 8, 64
+    conv = radar_boresight_convention()
+    geom = make_ula_geometry(k_n, 0.5, 1.0)
+    block = make_block(geom, conv, 0.09, 0.0, k_s, 0.02, 171)
+    kwargs = {
+        "array_geometry": geom,
+        "angle_convention": conv,
+        "az_angles": linspace(-0.3, 0.3, 61),
+        "el_angles": [0.0],
+        "num_sources": 1,
+        "max_sources": 2,
+    }
+    first = run_music_full(block.reshape(1, k_n, k_s), **kwargs)
+    second = run_music_full(block.reshape(1, k_n, k_s), **kwargs)
+    for port in first:
+        np.testing.assert_array_equal(first[port], second[port])
+
+
 def test_LiveNumSourcesStickyOverride():
     k_n, k_s = 12, 128
     conv = radar_boresight_convention()
@@ -915,15 +934,16 @@ def test_LiveArrayGeometryStickyOverride():
 
     outs = run_operator_multi(
         make_op,
-        [frame, frame],
+        [frame, frame, frame],
         input_port="snapshot",
         output_ports=["angle_spectrum"],
-        overrides={"array_geometry": [geom_a, geom_b]},
+        overrides={"array_geometry": [geom_a, geom_b, geom_a]},
         drain_ports=["aoa_estimates", "doa_multi", "source_count", "eigenvalues"],
     )
-    assert len(outs["angle_spectrum"]) == 2
+    assert len(outs["angle_spectrum"]) == 3
     assert outs["angle_spectrum"][0].shape == outs["angle_spectrum"][1].shape
     assert float(np.max(outs["angle_spectrum"][0])) != float(np.max(outs["angle_spectrum"][1]))
+    np.testing.assert_array_equal(outs["angle_spectrum"][0], outs["angle_spectrum"][2])
 
 
 def test_LiveMaxSourcesStickyOverrideReallocates():
