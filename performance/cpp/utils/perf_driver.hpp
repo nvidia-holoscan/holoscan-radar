@@ -138,7 +138,9 @@ void print_help() {
     std::cout << "  --sweep-overrides " << Traits::override_sweep_help()
               << "\n";
   }
-  std::cout << "  --stop-after-s S  Stop after first scenario whose wall time "
+  std::cout << "  --checksum        Print output_checksum <bytes> <hex> per "
+               "scenario (byte-equivalence gate; where the consumer wires it)\n"
+               "  --stop-after-s S  Stop after first scenario whose wall time "
                "exceeds S seconds\n"
                "  --help            Show this help\n";
 }
@@ -167,6 +169,8 @@ bool parse_args(int argc, char** argv, Options* opt) {
       opt->full = true;
     } else if (a == "--sweep-overrides") {
       opt->sweep_overrides = true;
+    } else if (a == "--checksum") {
+      opt->rs.checksum = true;
     } else if (a == "--warmup") {
       opt->rs.warmup_frames = std::stoi(next("--warmup"));
     } else if (a == "--frames") {

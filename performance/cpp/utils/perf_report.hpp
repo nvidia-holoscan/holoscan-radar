@@ -33,6 +33,10 @@ struct RunSettings {
   bool stopped_early{false};
   int scenarios_planned{0};
   int scenarios_completed{0};
+  // When true, a consumer that wires PerfChecksumSinkOp prints an
+  // output_checksum line per scenario (byte-equivalence gate for the optimizer;
+  // ignored by consumers that do not wire the sink).
+  bool checksum{false};
 };
 
 // Definition of a named size-ladder entry, so a reader knows what an id like

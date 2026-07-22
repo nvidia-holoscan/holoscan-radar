@@ -196,6 +196,7 @@ class RangePerfApp : public holoscan::Application {
   hr::FMCWWaveformDescriptor waveform;
   int64_t override_at{0};
   int total_frames{25};
+  bool checksum{false};  // wire the byte-equivalence checksum sink
 
   void compose() override {
     using holoscan::Arg;
@@ -217,6 +218,13 @@ class RangePerfApp : public holoscan::Application {
     // operator ticks and the axis path is exercised.
     auto ns = make_operator<perf::PerfNullSinkOp>("bins_sink");
     add_flow(op, ns, {{"range_bins", "input"}});
+
+    // Byte-equivalence gate: fan range_profiles out to a checksum sink too (it
+    // prints one output_checksum line on the first, pre-override frame).
+    if (checksum) {
+      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
+      add_flow(op, cs, {{"range_profiles", "input"}});
+    }
 
     wire_override(op);
   }
@@ -483,6 +491,7 @@ struct RangeTraits : perf::PerfDriverDefaults {
           app->waveform = make_waveform();
           app->override_at = p.override_at;
           app->total_frames = p.total_frames;
+          app->checksum = rs.checksum;
           app->run();
           return collector;
         });
