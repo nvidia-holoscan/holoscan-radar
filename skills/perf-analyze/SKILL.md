@@ -17,19 +17,24 @@ this analysis). Surface findings; let a human decide.
 
 ## Prerequisites (assert first)
 
-Everything runs **inside `./holohub run-container`** (base image
-`nvcr.io/nvidia/clara-holoscan/holoscan:v4.3.0-cuda13`); the host has no
-toolchain. Either open that shell, or drive the prebuilt image directly, e.g.
+Everything runs **inside the dev container** (`nsys` + the CUDA toolchain; the
+host has neither). The sanctioned entry is **`./holohub run-container`** — open
+that shell and run every command below from it. `runner.py` preflight asserts
+`nsys` and the built binary are present and fails with guidance if not.
+
+Driving it non-interactively (an agent gets a fresh shell per command and can't
+hold that session) — wrap each command in the image `./holohub` built. **Resolve
+the image; do not pin the SDK-versioned tag** (e.g. `...:ngc-v4.3.0-cuda13` —
+it drifts with the SDK):
 
 ```bash
+IMG=$(docker images --filter=reference='holoscan-radar:*' \
+        --format '{{.Repository}}:{{.Tag}}' | head -1)   # what ./holohub built
 docker run --rm --runtime nvidia --gpus all --cap-add CAP_SYS_PTRACE --ipc=host \
   --ulimit memlock=-1 --ulimit stack=67108864 --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -v "$PWD":/workspace/holoscan-radar -w /workspace/holoscan-radar \
-  holoscan-radar:ngc-v4.3.0-cuda13 bash -lc '<command>'
+  "$IMG" bash -lc '<command>'
 ```
-
-`runner.py` preflight asserts `nsys` and the built binary are present and fails
-with guidance if not.
 
 ## Steps
 
@@ -57,6 +62,14 @@ Let `OP` be the operator stem (the binary is `perf_<OP>`, e.g.
    ```bash
    performance/agent/run.sh <OP> xs,md,xl
    ```
+
+   `xs,md,xl` are small/medium/large representatives of the operator's 5-tier
+   ladder (`xs,sm,md,lg,xl`) — enough to show the scaling trend (e.g. the
+   host-bound → kernel-bound crossover) while keeping the run fast (each size is
+   a clean run + an nsys-profiled run). Pass the full ladder for a finer scaling
+   curve at ~1.7× the wall time; pass a single size for a quick check. (Some
+   operators use extra tiers, e.g. CFAR's `xlw`; see the `perf-analyze` note on
+   ladders or the operator's `perf_<op>.cpp`.)
 
    Prints the path to `report.md`. It chains the four stages below; run them
    individually when you need to inspect an intermediate or re-render without
