@@ -113,3 +113,53 @@ pytest already covers `pfa` / `alpha_lut` behavior and Monte Carlo Pfa.
 **Status:** accepted / unclosable by design — leave the helpers in
 `detail::`, keep white-box calibration regressions C++-only; do not treat
 missing Python ports of those tests as unfinished bindings work.
+
+---
+
+## 10. Optional peak-grouping (`peak_only`) flag — one detection per peak
+
+**Context.** Automotive detection is two stages people often blur: (1) CFAR
+declares *candidate* cells (every cell over its adaptive threshold), then (2) a
+**peak-grouping** / local-maximum test collapses each contiguous above-threshold
+blob to a single cell — effectively non-maximum suppression on the
+range-Doppler magnitude map. Stage 2 is the actual "one peak per target": a
+candidate is retained only if its integrated power is a local maximum versus its
+neighbors (typically the 2 range + 2 Doppler neighbors, or the full 8-cell
+neighborhood); the mainlobe-smear and sidelobe-shoulder cells are discarded.
+TI calls this "peak grouping"; NXP/Bosch have equivalents. It is a **configurable
+flag**, not always on.
+
+**What this operator does today.** `CFARDetectorOp` runs on the (NCI-integrated)
+RD magnitude map and emits the **raw candidate mask** — multiple cells per
+target — and the pipeline pushes merging to `ClusterDBSCANOp` +
+`DetectionReductionOp` (the "centroid the cluster" school). There is no
+local-maximum stage.
+
+**Proposed item.** Add an opt-in `peak_only` (a.k.a. `peak_grouping`) parameter.
+When set, after thresholding, keep a detection cell only if its integrated power
+is a strict local maximum over a configurable neighborhood (2+2 or 8-connected),
+restricted to contiguous above-threshold regions. Off (default) preserves the
+current raw-mask contract. This exposes the "one point per CFAR peak" vs.
+"centroid the cluster" split as a runtime choice rather than a fixed pipeline
+shape.
+
+**Interactions / scope notes.**
+
+- **Downstream contract unchanged in shape.** Output is still exact-sized
+  `detection_idx` (item 8) — `peak_only` only reduces the row count; the
+  positional join across `SnapshotGatherOp` / `FeatureAssemblyOp` /
+  `DetectionReductionOp` / `ClusterDBSCANOp` still holds.
+- **Composes with, does not replace, clustering.** With `peak_only` on, DBSCAN
+  typically sees ~one point per target; it can stay in the graph (clusters of
+  size 1) or be bypassed. Leave that to the app.
+- **Sub-bin interpolation is a separate follow-on.** Once a discrete peak cell
+  is chosen, a 3-point parabolic fit on log-magnitude refines the continuous
+  range/Doppler within that peak — a distinct enhancement (belongs with the
+  detection-state/covariance work), not part of this flag.
+- **Angle-peak search is out of scope here.** Peak grouping is range-Doppler
+  only. The per-peak angle-spectrum local-max search (and multi-peak split of
+  co-located targets) lives in the SIMO/MIMO angle path, not this SISO detector.
+
+**Status:** open / proposed — not yet scheduled. Default-off so it is additive
+to the ratified raw-mask contract; decide neighborhood definition (2+2 vs
+8-connected) and whether ties keep first/all when specifying.
