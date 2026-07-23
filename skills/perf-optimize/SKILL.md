@@ -45,10 +45,11 @@ loop unattended here.
 ## Prerequisites
 
 Run inside `./holohub run-container` (see `perf-analyze` for the raw `docker run`
-form, the image-resolution fallback, and — important — the rule that CUDA builds
-and nsys runs exceed the agent shell's 2-minute foreground cap, so **background
-every build/analysis command** or the container is SIGTERM'd mid-build). The
-correctness gate needs unit tests, so build with **testing ON** too:
+form, the native `--as-root` / `--docker-opts` entry, the image-resolution
+fallback, and — important — the rule that CUDA builds and nsys runs exceed the
+agent shell's 2-minute foreground cap, so **background every build/analysis
+command** or the container is SIGTERM'd mid-build). The correctness gate needs
+unit tests, so build with **testing ON** too:
 
 ```bash
 cmake -S . -B build-opt -DCMAKE_CUDA_ARCHITECTURES=<cc> \
@@ -171,3 +172,8 @@ grep -rn "PERF-SCRATCH" operators/ performance/   # must return nothing
   the broader correctness surface. Together they are the keep/revert decision.
 - The speed number is machine-specific and noisy at the sub-tick scale — trust a
   clear multi-run improvement, not a single close call.
+- **`ncu` is evidence, not a gate.** To understand *why* a change did or didn't
+  help at the kernel level — memory- vs compute-bound, occupancy, roofline — you
+  may run the optional Nsight Compute deep-dive from `perf-analyze` (needs `ncu`
+  installed + `--cap-add SYS_ADMIN`). It only explains a result; it never changes
+  the keep/revert decision — the three gates above are the sole arbiters.

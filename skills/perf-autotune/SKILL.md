@@ -149,3 +149,9 @@ grep -rn "PERF-SCRATCH" operators/ performance/   # must return nothing
   `diagnose.py` tags findings `actionable` vs `advisory`, the pick step must read
   past severity (see step 2.1). A first-run session typically keeps ~1 change per
   operator this size; don't force iterations to hit the budget — stop on dry.
+- **`ncu` deep-dive (optional, evidence-only).** When a pick hinges on whether the
+  dominant *kernel* has headroom (vs the shell), the Nsight Compute deep-dive in
+  `perf-analyze` can sharpen the choice and explain a kept/reverted change —
+  memory- vs compute-bound, occupancy, measured roofline. It needs `ncu` installed
+  + `--cap-add SYS_ADMIN` (see `perf-analyze`) and is **never a gate**: the three
+  gates in step 2.3 remain the only keep/revert arbiters.

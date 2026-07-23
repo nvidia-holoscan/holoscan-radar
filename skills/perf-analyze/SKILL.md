@@ -1,6 +1,6 @@
 ---
 name: perf-analyze
-description: Analyze a holoscan-radar operator's runtime performance with Nsight Systems and write a ranked bottleneck report. Use when asked to profile, characterize, or find bottlenecks in a perf_<operator> (e.g. FMCWRangeProcessorOp, CFARDetectorOp) — sweeps small/medium/large sizes plus every [live] override param, attributes time to kernel vs cudaMalloc/memcpy/sync vs compute() NVTX phases, and emits report.md + report.html. Read-only: analyze + recommend, never edits code (applying fixes is the separate perf-optimize / perf-autotune skills).
+description: Analyze a holoscan-radar operator's runtime performance with Nsight Systems and write a ranked bottleneck report. Use when asked to profile, characterize, or find bottlenecks in a perf_<operator> (e.g. FMCWRangeProcessorOp, CFARDetectorOp) — sweeps small/medium/large sizes plus every [live] override param, attributes time to kernel vs cudaMalloc/memcpy/sync vs compute() NVTX phases, emits report.md + report.html, and can escalate to an optional Nsight Compute (ncu) kernel deep-dive (memory-vs-compute, occupancy, measured roofline) when a kernel dominates the tick. Read-only: analyze + recommend, never edits code (applying fixes is the separate perf-optimize / perf-autotune skills).
 ---
 
 # perf-analyze — operator performance analysis harness
@@ -47,6 +47,19 @@ SIGTERM'd at the timeout mid-build. Launch the build and the analysis pipeline
 as **background** commands (write logs to the mounted tree; poll the log / binary
 mtime), or the container is killed and you rebuild from scratch. Keep `-j4`
 (not `-j$(nproc)` — heavy parallelism truncates captured stdout on this host).
+
+**Native container entry & extra capabilities (for `ncu`).** The headless `docker
+run` above is for the *agent* (a fresh shell per command that can't hold an
+interactive session). When you instead need an **interactive root shell** — e.g.
+to install a tool the base image lacks — use holohub's native flags rather than
+hand-rolling docker: `./holohub run-container --as-root` drops you in as **root**
+(the default mapped user is your non-root host UID with no working sudo, which is
+why plain `apt-get`/`sudo` fail in a normal session), and `--docker-opts='…'`
+forwards arbitrary `docker run` args, e.g. `--docker-opts='--cap-add SYS_ADMIN'`.
+Nsight Compute (`ncu`) needs **both** of these — see [Deep kernel
+dive](#deep-kernel-dive--nsight-compute-ncu) — so install it via `--as-root`, and
+add `--cap-add SYS_ADMIN` next to `CAP_SYS_PTRACE` in the agent's headless `docker
+run` whenever a command actually invokes `ncu`.
 
 ## Steps
 
@@ -156,6 +169,70 @@ a latency delta, say it's approximate.
   `perf-optimize`/`perf-autotune` as a fix. (Known rubric wart: these outrank the
   genuinely-actionable steady-path findings — alloc/tick, host-bound, D2H — by
   severity; read past them to the top steady-path item.)
+
+## Deep kernel dive — Nsight Compute (`ncu`)
+
+**Optional, and one level below nsys.** nsys tells you *where the tick's wall-time
+goes* (kernel vs `cudaMalloc`/memcpy/sync vs host/graph). When that attribution
+says a **kernel dominates** the tick, `ncu` answers the next question: *is that
+kernel near the hardware ceiling, and if not, why?* — Speed-of-Light
+(memory-bound vs compute-bound), achieved occupancy, L1/L2 locality, warp-stall
+reasons, and a **measured** roofline (which supersedes `diagnose.py`'s estimated
+`--peak-gbps` note). Use it to decide whether a kernel rewrite is even worth it,
+or whether the win is in the shell (alloc/launch/D2H) instead. Still read-only —
+this tier analyzes and recommends.
+
+**Not yet in the automated pipeline.** This is a **manual** deep-dive you run on
+the *one* dominant kernel a size's attribution points at; `runner.py` does not
+drive it (a future stage may). So reach for it deliberately, not on every run.
+
+**Availability gate — assert before relying on it.** `ncu` is **not in the base
+image** and needs GPU perf-counter access, so it can be simply unavailable here:
+- **Install** (pick one): interactive+ephemeral — `./holohub run-container
+  --as-root` then `apt-get install --no-install-recommends -y
+  cuda-nsight-compute-13-2` (confirm the exact name with `apt-cache search
+  nsight-compute`); or **persistent** — add that `apt-get` as a `Dockerfile` layer
+  and rebuild once.
+- **Counters:** `ncu` needs `--cap-add SYS_ADMIN` (the harness's headless `docker
+  run` only adds `CAP_SYS_PTRACE`; interactive runs pass it via
+  `--docker-opts='--cap-add SYS_ADMIN'`), plus a permissive host counter policy.
+- **Probe once:** `ncu --version`, then a single-metric run. If it prints
+  `ERR_NVGPUCTRPERM` (or `ncu` is absent), **stay nsys-only and say so** — never
+  fabricate kernel metrics. On Thor/Tegra this counter wall is the real risk.
+
+**Scope it hard or it never finishes.** Kernel replay makes `ncu` 10–100× slower
+*per launch*, so never run it across the size×variant×repeat matrix. Profile
+**one size** (default `md`), the **primary variant only**, a **curated section
+set**, and only a handful of **steady-tick** launches (skip warmup):
+
+```bash
+ncu --target-processes all \
+    --section SpeedOfLight --section Occupancy \
+    --section LaunchStats --section MemoryWorkloadAnalysis \
+    --nvtx --nvtx-include "stage-kernel/" \
+    --launch-skip 20 --launch-count 3 \
+    --export performance/agent/runs/<OP>/<OP>_md.ncu-rep --force-overwrite \
+    ./build-perf/perf_<OP> --sizes md --frames 30 --quiet
+```
+
+`--nvtx-include` + `--launch-skip/--launch-count` restrict capture to a few steady
+kernels (not cold first-touch); `--set full` and multi-size are exactly what turn
+a 5-second run into an hour. Read it back with `ncu --import <…>.ncu-rep --page
+details` (or `--csv --page raw` to parse), and map to the rubric:
+
+- **DRAM% ≈ peak, compute% low** → memory-bound *and* near ceiling: the kernel has
+  little headroom; wins come from the shell or from moving less data, not the
+  stencil/FFT.
+- **compute% ≈ peak** → compute-bound: needs an algorithmic change, not a shell
+  fix.
+- **both low + low occupancy / high stalls** → launch-config or latency problem
+  (block size, registers, shared mem); read LaunchStats + the stall-reason
+  breakdown.
+- The **measured** roofline point supersedes the estimated `--peak-gbps` note.
+
+**Cleanup.** `ncu` writes a `.ncu-rep` (and can drop `report*.ncu-rep` in cwd);
+keep it in the run dir, don't commit it, and leave the tree as you found it —
+same discipline as the temporary instrumentation below.
 
 ## Temporary instrumentation (must be removed before finishing)
 
