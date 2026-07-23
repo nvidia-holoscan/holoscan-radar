@@ -172,8 +172,13 @@ grep -rn "PERF-SCRATCH" operators/ performance/   # must return nothing
   the broader correctness surface. Together they are the keep/revert decision.
 - The speed number is machine-specific and noisy at the sub-tick scale — trust a
   clear multi-run improvement, not a single close call.
-- **`ncu` is evidence, not a gate.** To understand *why* a change did or didn't
-  help at the kernel level — memory- vs compute-bound, occupancy, roofline — you
-  may run the optional Nsight Compute deep-dive from `perf-analyze` (needs `ncu`
-  installed + `--cap-add SYS_ADMIN`). It only explains a result; it never changes
-  the keep/revert decision — the three gates above are the sole arbiters.
+- **`ncu` is evidence, not a gate — and on by default.** To understand *why* a
+  change did or didn't help at the kernel level — memory- vs compute-bound,
+  occupancy, roofline — run the Nsight Compute deep-dive from `perf-analyze`
+  (needs `ncu` installed + `--cap-add SYS_ADMIN`) **by default** once the gates
+  have decided, on the kernel the change touched. Skip it only when the user
+  opted out (e.g. "no ncu" / "nsys-only" — sticky for the session), when `ncu` is
+  unavailable (stay nsys-only and say so), or when the change is purely host-side
+  (pooling/gating/caching) so no kernel changed — then say the dive was
+  uninformative and why. It only ever *explains* a result; it never changes the
+  keep/revert decision — the three gates above are the sole arbiters.

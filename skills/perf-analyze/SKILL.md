@@ -1,6 +1,6 @@
 ---
 name: perf-analyze
-description: Analyze a holoscan-radar operator's runtime performance with Nsight Systems and write a ranked bottleneck report. Use when asked to profile, characterize, or find bottlenecks in a perf_<operator> (e.g. FMCWRangeProcessorOp, CFARDetectorOp) — sweeps small/medium/large sizes plus every [live] override param, attributes time to kernel vs cudaMalloc/memcpy/sync vs compute() NVTX phases, emits report.md + report.html, and can escalate to an optional Nsight Compute (ncu) kernel deep-dive (memory-vs-compute, occupancy, measured roofline) when a kernel dominates the tick. Read-only: analyze + recommend, never edits code (applying fixes is the separate perf-optimize / perf-autotune skills).
+description: Analyze a holoscan-radar operator's runtime performance with Nsight Systems and write a ranked bottleneck report. Use when asked to profile, characterize, or find bottlenecks in a perf_<operator> (e.g. FMCWRangeProcessorOp, CFARDetectorOp) — sweeps small/medium/large sizes plus every [live] override param, attributes time to kernel vs cudaMalloc/memcpy/sync vs compute() NVTX phases, emits report.md + report.html, and by default runs a scoped Nsight Compute (ncu) kernel deep-dive on the dominant kernel (memory-vs-compute, occupancy, measured roofline) — skipped only on user opt-out ("no ncu" / "nsys-only"), when ncu is unavailable, or when the tick is purely host-bound. Read-only: analyze + recommend, never edits code (applying fixes is the separate perf-optimize / perf-autotune skills).
 ---
 
 # perf-analyze — operator performance analysis harness
@@ -135,6 +135,13 @@ Let `OP` be the operator stem (the binary is `perf_<OP>`, e.g.
    `visualize.py` is also importable directly (`viz.dashboard(run_dir)`) for
    ad-hoc plots or a cross-operator comparison.
 
+4. **Deep kernel dive — on by default.** Unless the user opted out or `ncu` is
+   unavailable, run the scoped Nsight Compute dive (see
+   [Deep kernel dive](#deep-kernel-dive--nsight-compute-ncu)) on the dominant
+   steady kernel of size `md` and fold its Speed-of-Light / occupancy / measured
+   roofline into what you relay. If you skip it, state which of the three skip
+   reasons applied.
+
 ## Present
 
 Relay `performance/agent/runs/<OP>/report.md` to the user: the ranked findings
@@ -172,19 +179,30 @@ a latency delta, say it's approximate.
 
 ## Deep kernel dive — Nsight Compute (`ncu`)
 
-**Optional, and one level below nsys.** nsys tells you *where the tick's wall-time
-goes* (kernel vs `cudaMalloc`/memcpy/sync vs host/graph). When that attribution
-says a **kernel dominates** the tick, `ncu` answers the next question: *is that
-kernel near the hardware ceiling, and if not, why?* — Speed-of-Light
-(memory-bound vs compute-bound), achieved occupancy, L1/L2 locality, warp-stall
-reasons, and a **measured** roofline (which supersedes `diagnose.py`'s estimated
-`--peak-gbps` note). Use it to decide whether a kernel rewrite is even worth it,
-or whether the win is in the shell (alloc/launch/D2H) instead. Still read-only —
-this tier analyzes and recommends.
+**On by default; one level below nsys.** nsys tells you *where the tick's wall-time
+goes* (kernel vs `cudaMalloc`/memcpy/sync vs host/graph). `ncu` answers the next
+question: *is the dominant kernel near the hardware ceiling, and if not, why?* —
+Speed-of-Light (memory-bound vs compute-bound), achieved occupancy, L1/L2
+locality, warp-stall reasons, and a **measured** roofline (which supersedes
+`diagnose.py`'s estimated `--peak-gbps` note). Use it to decide whether a kernel
+rewrite is even worth it, or whether the win is in the shell (alloc/launch/D2H)
+instead. Still read-only — this tier analyzes and recommends.
 
-**Not yet in the automated pipeline.** This is a **manual** deep-dive you run on
-the *one* dominant kernel a size's attribution points at; `runner.py` does not
-drive it (a future stage may). So reach for it deliberately, not on every run.
+**Run it by default** on the *one* dominant steady kernel a size's attribution
+points at (default size `md`). There are exactly three reasons to skip it, and
+you must say which one applies:
+1. **User opt-out** — the user asked to skip it (e.g. "no ncu", "skip Nsight
+   Compute", "nsys-only", "don't run ncu"). Their request is sticky for the
+   session; honor it without re-asking.
+2. **Unavailable** — `ncu` is absent or perf counters are locked (see the
+   availability gate below): stay nsys-only and say so.
+3. **No kernel worth profiling** — the tick is so host/graph-bound that no kernel
+   meaningfully contributes (kernel ≪ the tick at every size). Note that the
+   attribution already answered the question (the win is in the shell), so the
+   dive would only confirm a negligible kernel.
+
+`runner.py` does not yet drive it (a future stage may), so it stays a **manual**
+invocation — but a default step of the analysis, not an occasional escalation.
 
 **Availability gate — assert before relying on it.** `ncu` is **not in the base
 image** and needs GPU perf-counter access, so it can be simply unavailable here:

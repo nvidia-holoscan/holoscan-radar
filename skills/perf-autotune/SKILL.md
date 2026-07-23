@@ -149,9 +149,14 @@ grep -rn "PERF-SCRATCH" operators/ performance/   # must return nothing
   `diagnose.py` tags findings `actionable` vs `advisory`, the pick step must read
   past severity (see step 2.1). A first-run session typically keeps ~1 change per
   operator this size; don't force iterations to hit the budget — stop on dry.
-- **`ncu` deep-dive (optional, evidence-only).** When a pick hinges on whether the
-  dominant *kernel* has headroom (vs the shell), the Nsight Compute deep-dive in
-  `perf-analyze` can sharpen the choice and explain a kept/reverted change —
-  memory- vs compute-bound, occupancy, measured roofline. It needs `ncu` installed
-  + `--cap-add SYS_ADMIN` (see `perf-analyze`) and is **never a gate**: the three
-  gates in step 2.3 remain the only keep/revert arbiters.
+- **`ncu` deep-dive (on by default, evidence-only).** By default, run the Nsight
+  Compute deep-dive in `perf-analyze` when a candidate's pick hinges on whether the
+  dominant *kernel* has headroom (vs the shell) or to explain a kept/reverted
+  change — memory- vs compute-bound, occupancy, measured roofline. It needs `ncu`
+  installed + `--cap-add SYS_ADMIN` (see `perf-analyze`). Because the dive is
+  10–100× slower per launch, scope it to those kernel-dominated decision points —
+  do **not** run it on every candidate or measurement in the loop. Skip it
+  entirely when the user opted out (e.g. "no ncu" / "nsys-only" — sticky for the
+  session) or when `ncu` is unavailable (stay nsys-only and say so). It is
+  **never a gate**: the three gates in step 2.3 remain the only keep/revert
+  arbiters.
