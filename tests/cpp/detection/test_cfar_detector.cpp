@@ -268,6 +268,20 @@ double score_at(const HostTensor& score, int64_t doppler, int64_t range) {
   return score.as<double>()[doppler * kRange + range];
 }
 
+// Number of set (nonzero) cells in a uint8 detection_mask.
+int64_t mask_set_count(const HostTensor& mask) {
+  int64_t elems = 1;
+  for (int64_t dim : mask.shape) {
+    elems *= dim;
+  }
+  const auto* bytes = mask.as<uint8_t>();
+  int64_t set = 0;
+  for (int64_t i = 0; i < elems; ++i) {
+    set += (bytes[i] != 0) ? 1 : 0;
+  }
+  return set;
+}
+
 class LiveThresholdScaleApp : public holoscan::Application {
  public:
   std::vector<holoscan::TensorMap> frames;
@@ -1067,4 +1081,109 @@ TEST(CFARDetectorOpTest, CaAlphaK1MatchesContractClosedForm) {
   EXPECT_NEAR(alpha, closed, 1e-6 * closed);
   EXPECT_NEAR(holoscan::radar::detail::ca_cfar_pfa_from_alpha(alpha, kN, 1),
               kPfa, 1e-9);
+}
+
+// --- peak grouping (peak_only) -------------------------------------------
+
+// Off by default (and with peak_only=false) reproduces the raw candidate mask:
+// a contiguous 3-cell strip stays 3 detections either way.
+TEST(CFARDetectorOpTest, PeakOnlyOffMatchesRawMask) {
+  const auto map = power_map(1.0, {{8, 15}, {8, 16}, {8, 17}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
+                                        real_dtype<double>());
+
+  const auto raw = std::apply(
+      [&](auto&&... a) {
+        return run_cfar<double>(input, std::forward<decltype(a)>(a)...);
+      },
+      ca_args(1e-2));
+  const auto off = run_cfar<double>(
+      input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
+      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
+      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
+      holoscan::Arg("pfa") = 1e-2, holoscan::Arg("peak_only") = false);
+
+  EXPECT_EQ(num_detections(raw.idx), 3);
+  EXPECT_EQ(num_detections(off.idx), num_detections(raw.idx));
+  for (const auto r : {15, 16, 17}) {
+    EXPECT_TRUE(idx_contains(off.idx, 8, r));
+  }
+}
+
+// peak_only keeps the single local maximum of an adjacent (guard-separated)
+// pair; the weaker cell is suppressed. detection_mask agrees with the count.
+TEST(CFARDetectorOpTest, PeakOnlyKeepsSingleMax) {
+  // Distinct powers: (8,16)=100 (max), (8,17)=50 (guard-separated neighbor).
+  auto data = power_map(1.0, {}, 1.0);
+  data[static_cast<size_t>(8 * kRange + 16)] = 100.0;
+  data[static_cast<size_t>(8 * kRange + 17)] = 50.0;
+  auto input = to_device_tensor<double>(data, {kDoppler, kRange},
+                                        real_dtype<double>());
+
+  const auto off = run_cfar<double>(
+      input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
+      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
+      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
+      holoscan::Arg("pfa") = 1e-3);
+  const auto on = run_cfar<double>(
+      input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
+      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
+      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
+      holoscan::Arg("pfa") = 1e-3, holoscan::Arg("peak_only") = true);
+
+  EXPECT_EQ(num_detections(off.idx), 2);
+  ASSERT_EQ(num_detections(on.idx), 1);
+  EXPECT_TRUE(idx_contains(on.idx, 8, 16));  // the max, not (8,17)
+  EXPECT_EQ(mask_set_count(on.mask), 1);
+}
+
+// A flat contiguous strip of equal power collapses to its lowest-raster-index
+// cell (raster-order tiebreak); every member detects without peak_only.
+TEST(CFARDetectorOpTest, PeakOnlyCollapsesStripRasterTiebreak) {
+  const auto map = power_map(1.0, {{8, 15}, {8, 16}, {8, 17}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
+                                        real_dtype<double>());
+
+  const auto off = run_cfar<double>(
+      input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
+      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
+      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
+      holoscan::Arg("pfa") = 1e-2);
+  const auto on = run_cfar<double>(
+      input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
+      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
+      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
+      holoscan::Arg("pfa") = 1e-2, holoscan::Arg("peak_only") = true);
+
+  EXPECT_EQ(num_detections(off.idx), 3);
+  ASSERT_EQ(num_detections(on.idx), 1);
+  EXPECT_TRUE(idx_contains(on.idx, 8, 15));  // lowest linear index survives
+  EXPECT_EQ(mask_set_count(on.mask), 1);
+}
+
+// square8 sees a diagonal neighbor (collapses a diagonal equal pair to one);
+// cross4 does not (both survive).
+TEST(CFARDetectorOpTest, PeakOnlyNeighborhoodCross4VsSquare8) {
+  const auto map = power_map(1.0, {{5, 5}, {6, 6}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
+                                        real_dtype<double>());
+
+  const auto square8 = run_cfar<double>(
+      input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
+      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
+      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
+      holoscan::Arg("pfa") = 1e-3, holoscan::Arg("peak_only") = true,
+      holoscan::Arg("peak_neighborhood") =
+          holoscan::radar::CfarPeakNeighborhood::kSquare8);
+  const auto cross4 = run_cfar<double>(
+      input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
+      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
+      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
+      holoscan::Arg("pfa") = 1e-3, holoscan::Arg("peak_only") = true,
+      holoscan::Arg("peak_neighborhood") =
+          holoscan::radar::CfarPeakNeighborhood::kCross4);
+
+  ASSERT_EQ(num_detections(square8.idx), 1);
+  EXPECT_TRUE(idx_contains(square8.idx, 5, 5));  // lower linear index survives
+  EXPECT_EQ(num_detections(cross4.idx), 2);  // diagonal not a cross4 neighbor
 }

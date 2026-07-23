@@ -160,6 +160,30 @@ shape.
   only. The per-peak angle-spectrum local-max search (and multi-peak split of
   co-located targets) lives in the SIMO/MIMO angle path, not this SISO detector.
 
-**Status:** open / proposed — not yet scheduled. Default-off so it is additive
-to the ratified raw-mask contract; decide neighborhood definition (2+2 vs
-8-connected) and whether ties keep first/all when specifying.
+**Resolution (implemented).** Added `peak_only` (bool, default `false`, static)
+plus `peak_neighborhood` (enum `{cross4, square8}`, default `square8`, static).
+When `peak_only` is set, a fused NMS pass (`cfar_peak_suppress_kernel` in
+`cfar_stage.hpp`) refines the raw mask: a detected cell survives iff its CFAR
+statistic (`cfar_power`, the post-NCI integrated power that was thresholded) is a
+local maximum over its neighborhood, **restricted to detected neighbors** (the
+contiguous above-threshold region). Undetected neighbors are ignored, so a
+weaker separate target nearby cannot suppress a real peak. Exact ties break by
+**raster order** (equal power → lower within-plane linear index wins), so a flat
+plateau collapses to one cell; pathological non-convex equal-power plateaus may
+retain more than one (real-valued RD ties are effectively measure-zero).
+
+Decisions made when specifying:
+
+- **Neighborhood:** 8-connected default, `cross4`/`square8` selectable.
+- **Ties:** raster-order tiebreak (first/lowest-index survives).
+- **`detection_mask`:** with `peak_only` on, marks only the retained peak cells
+  (a strict subset of `detection_score > 1`), so it agrees with `detection_idx`;
+  `detection_score` / `noise_estimate` stay the dense per-cell maps.
+
+`peak_mask` shares the ping-ponged dense workspace (stream-ordered lifetime as an
+emitted output). Params are static (like `cfar_variant`); making `peak_only`
+`[live]` would be an additive follow-on.
+
+**Status:** resolved — implemented on branch `deustice/cfar-peak-grouping`
+(off-by-default, additive to the raw-mask contract). Remove this section once the
+branch merges and the decision is reflected in `OPERATOR_API.md` / `STATUS.md`.

@@ -16,7 +16,7 @@ cupy = pytest.importorskip("cupy")
 from utils.harness import run_operator_multi, single_map, to_device_array  # noqa: E402
 
 from holoscan.radar import CFARDetectorOpF64  # noqa: E402
-from holoscan.radar import CFARDetectorOpF32, CfarVariant
+from holoscan.radar import CFARDetectorOpF32, CfarPeakNeighborhood, CfarVariant
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -257,6 +257,69 @@ def test_RealAndComplexPathsAgree():
     assert num_detections(out_real["idx"]) == num_detections(out_complex["idx"])
     assert idx_contains(out_real["idx"], dt, rt)
     assert idx_contains(out_complex["idx"], dt, rt)
+
+
+# ---------------------------------------------------------------------------
+# Peak grouping (peak_only) — port of tests/cpp/detection/test_cfar_detector.cpp
+# ---------------------------------------------------------------------------
+
+
+def test_PeakOnlyOffMatchesRawMask():
+    # Off by default (and peak_only=False) keeps the raw candidate mask: a
+    # contiguous 3-cell strip stays 3 detections either way.
+    mp = power_map(1.0, [(8, 15), (8, 16), (8, 17)], 100.0)
+    raw = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2)
+    off = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2, peak_only=False)
+    assert num_detections(raw["idx"]) == 3
+    assert num_detections(off["idx"]) == num_detections(raw["idx"])
+
+
+def test_PeakOnlyKeepsSingleMax():
+    # Adjacent (guard-separated) pair with distinct power: peak_only keeps the
+    # maximum only; detection_mask agrees with the reduced count.
+    flat = power_map(1.0, [], 1.0).reshape(K_DOPPLER, K_RANGE)
+    flat[8, 16] = 100.0
+    flat[8, 17] = 50.0
+    off = run_cfar(flat, (K_DOPPLER, K_RANGE), pfa=1e-3)
+    on = run_cfar(flat, (K_DOPPLER, K_RANGE), pfa=1e-3, peak_only=True)
+    assert num_detections(off["idx"]) == 2
+    assert num_detections(on["idx"]) == 1
+    assert idx_contains(on["idx"], 8, 16)  # the max, not (8, 17)
+    assert int((on["mask"] != 0).sum()) == 1
+
+
+def test_PeakOnlyCollapsesStripRasterTiebreak():
+    # A flat contiguous strip collapses to its lowest-raster-index cell.
+    mp = power_map(1.0, [(8, 15), (8, 16), (8, 17)], 100.0)
+    off = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2)
+    on = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2, peak_only=True)
+    assert num_detections(off["idx"]) == 3
+    assert num_detections(on["idx"]) == 1
+    assert idx_contains(on["idx"], 8, 15)  # lowest linear index survives
+    assert int((on["mask"] != 0).sum()) == 1
+
+
+def test_PeakOnlyNeighborhoodCross4VsSquare8():
+    # square8 sees a diagonal neighbor (collapses a diagonal equal pair to one);
+    # cross4 does not (both survive).
+    mp = power_map(1.0, [(5, 5), (6, 6)], 100.0)
+    square8 = run_cfar(
+        mp,
+        (K_DOPPLER, K_RANGE),
+        pfa=1e-3,
+        peak_only=True,
+        peak_neighborhood=CfarPeakNeighborhood.SQUARE8,
+    )
+    cross4 = run_cfar(
+        mp,
+        (K_DOPPLER, K_RANGE),
+        pfa=1e-3,
+        peak_only=True,
+        peak_neighborhood=CfarPeakNeighborhood.CROSS4,
+    )
+    assert num_detections(square8["idx"]) == 1
+    assert idx_contains(square8["idx"], 5, 5)  # lower linear index survives
+    assert num_detections(cross4["idx"]) == 2
 
 
 # ---------------------------------------------------------------------------

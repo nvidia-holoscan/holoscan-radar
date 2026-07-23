@@ -344,6 +344,81 @@ __global__ void cfar_os_kernel(const T* power, int64_t batch,
   mask[idx] = s > T{1};
 }
 
+// Peak-grouping (non-maximum suppression) over the (doppler, range) plane.
+//
+// Refines the raw CFAR mask into a "one point per contiguous above-threshold
+// blob" mask: a detected cell survives only if its CFAR statistic (power) is a
+// local maximum over its neighborhood, restricted to *detected* neighbors (the
+// contiguous above-threshold region). Undetected neighbors are ignored, so a
+// separate weaker target nearby cannot suppress a real peak.
+//
+//   full8 = true  → 8-connected neighborhood (the 8 surrounding cells)
+//   full8 = false → 4-connected (2 range + 2 Doppler orthogonal neighbors)
+//
+// Ties are broken by raster order: on exactly-equal power, the lower
+// within-plane linear index (d*num_range + r) wins, so a flat plateau collapses
+// to its lowest-index cell. (Pathological non-convex equal-power plateaus may
+// retain more than one cell; exact ties on a real-valued RD map are effectively
+// measure-zero.)
+//
+// power / mask / peak_mask share the (batch, num_doppler, num_range) contiguous
+// layout; peak_mask must be a distinct buffer from mask (the kernel reads
+// neighbor mask bits, so an in-place refinement would race).
+template <typename T>
+__global__ void cfar_peak_suppress_kernel(const T* power, const bool* mask,
+                                          bool* peak_mask, int64_t batch,
+                                          int64_t num_doppler,
+                                          int64_t num_range, bool full8) {
+  const int64_t r = blockIdx.x * blockDim.x + threadIdx.x;
+  const int64_t d = blockIdx.y * blockDim.y + threadIdx.y;
+  const int64_t b = blockIdx.z;
+  if (r >= num_range || d >= num_doppler || b >= batch) {
+    return;
+  }
+
+  const int64_t plane = num_doppler * num_range;
+  const int64_t lin_c = d * num_range + r;
+  const int64_t idx = b * plane + lin_c;
+  if (!mask[idx]) {
+    peak_mask[idx] = false;
+    return;
+  }
+
+  const T pc = power[idx];
+  bool survive = true;
+  for (int dd = -1; dd <= 1 && survive; ++dd) {
+    const int64_t nd = d + dd;
+    if (nd < 0 || nd >= num_doppler) {
+      continue;
+    }
+    for (int rr = -1; rr <= 1; ++rr) {
+      if (dd == 0 && rr == 0) {
+        continue;
+      }
+      if (!full8 && dd != 0 && rr != 0) {
+        continue;  // 4-connected: skip diagonals.
+      }
+      const int64_t nr = r + rr;
+      if (nr < 0 || nr >= num_range) {
+        continue;
+      }
+      const int64_t neighbor_lin = nd * num_range + nr;
+      const int64_t neighbor_idx = b * plane + neighbor_lin;
+      if (!mask[neighbor_idx]) {
+        continue;  // only compare against detected neighbors.
+      }
+      const T pn = power[neighbor_idx];
+      // Cell loses to a strictly greater neighbor, or to an equal-power neighbor
+      // with a lower raster index (raster tiebreak → one survivor per plateau).
+      if (pn > pc || (pn == pc && neighbor_lin < lin_c)) {
+        survive = false;
+        break;
+      }
+    }
+  }
+  peak_mask[idx] = survive;
+}
+
 // Run the CFAR stage over a collapsed batch of (doppler, range) planes.
 //
 //   in     — device pointer, (batch_in, num_doppler, num_range).
@@ -362,6 +437,13 @@ __global__ void cfar_os_kernel(const T* power, int64_t batch,
 // All outputs are preallocated by the caller. Work is enqueued on `stream`;
 // no synchronization here.
 //
+// When peak_only is set, a peak-grouping (NMS) pass refines the raw mask into
+// peak_mask (a distinct caller-preallocated bool buffer of the same shape as
+// mask): one detection per contiguous above-threshold blob, keeping the
+// local-maximum cell of the CFAR statistic. peak_full8 selects the 8-connected
+// (true) vs 4-connected (false) neighborhood. The raw mask/score/noise outputs
+// are unaffected; only peak_mask reflects the grouping.
+//
 // v1 implements CfarVariant::kCA, kGO, kSO, and kOS.
 template <typename T>
 void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
@@ -371,7 +453,8 @@ void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
                     int64_t nci_fold, const int64_t* batch_in_table_dev,
                     const void* alpha_lut, int64_t alpha_lut_size, void* power,
                     void* integrated_power, void* score, void* noise,
-                    void* mask, cudaStream_t stream) {
+                    void* mask, bool peak_only, bool peak_full8,
+                    void* peak_mask, cudaStream_t stream) {
   if (variant != CfarVariant::kCA && variant != CfarVariant::kGO &&
       variant != CfarVariant::kSO && variant != CfarVariant::kOS) {
     throw std::invalid_argument(
@@ -451,6 +534,25 @@ void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
           alpha_lut_t, alpha_lut_size, static_cast<T*>(score) + b * plane,
           static_cast<T*>(noise) + b * plane,
           static_cast<bool*>(mask) + b * plane);
+    }
+  }
+
+  if (peak_only) {
+    // Non-maximum suppression over cfar_power (the map that was thresholded),
+    // reading the raw mask and writing the refined peak_mask. One launch over
+    // all out_batch planes; peak_mask must be distinct from mask (neighbor
+    // reads would otherwise race).
+    const dim3 peak_grid(
+        static_cast<unsigned>((num_range + block.x - 1) / block.x),
+        static_cast<unsigned>((num_doppler + block.y - 1) / block.y),
+        static_cast<unsigned>(out_batch));
+    cfar_peak_suppress_kernel<T><<<peak_grid, block, 0, stream>>>(
+        cfar_power, static_cast<const bool*>(mask),
+        static_cast<bool*>(peak_mask), out_batch, num_doppler, num_range,
+        peak_full8);
+    if (cudaGetLastError() != cudaSuccess) {
+      throw std::runtime_error("run_cfar_stage: peak-suppress kernel launch "
+                               "failed");
     }
   }
 }

@@ -36,6 +36,22 @@ constexpr std::string_view to_string(CfarVariant variant) {
   return "unknown";
 }
 
+// Neighborhood for the optional peak-grouping (non-maximum-suppression) stage
+// (peak_only). Static per instance. cross4 = the 2 range + 2 Doppler orthogonal
+// neighbors; square8 = the full 8-cell neighborhood.
+enum class CfarPeakNeighborhood {
+  kCross4,   // 4-connected (2 range + 2 Doppler)
+  kSquare8,  // 8-connected (full 3x3 minus the center)
+};
+
+constexpr std::string_view to_string(CfarPeakNeighborhood neighborhood) {
+  switch (neighborhood) {
+    case CfarPeakNeighborhood::kCross4: return "cross4";
+    case CfarPeakNeighborhood::kSquare8: return "square8";
+  }
+  return "unknown";
+}
+
 // Cache key for the host-built per-training-count alpha LUT. Shared between
 // operator instances via detail::get_cached_alpha_lut.
 struct CfarAlphaLutKey {
@@ -76,7 +92,11 @@ struct CfarAlphaLutKey {
 //                       the nci_axes reduced. 1 where detected
 //                       (detection_score > 1). uint8 rather than bool so the
 //                       mask is NumPy-visible on HSDK 4.3 (kDLBool has no NumPy
-//                       typestr on the 4.3 message path).
+//                       typestr on the 4.3 message path). When peak_only is set,
+//                       the mask instead marks only the retained peak cells (a
+//                       strict subset of detection_score > 1), so it agrees with
+//                       detection_idx; detection_score / noise_estimate stay the
+//                       dense per-cell maps.
 // Out: detection_score — float32/float64, same shape as detection_mask.
 //                       P / (threshold_scale * alpha * noise_estimate); >1
 //                       ⇔ detected, doubles as the per-detection strength.
@@ -123,8 +143,9 @@ class CFARDetectorOp : public holoscan::Operator {
                ExecutionContext& context) override;
 
  private:
-  // Parameters per the locked contract. cfar_variant, nci_fold_hint, and
-  // blocking_alpha_lut_rebuild are static; the remaining parameters are
+  // Parameters per the locked contract. cfar_variant, nci_fold_hint,
+  // blocking_alpha_lut_rebuild, peak_only, and peak_neighborhood are static;
+  // the remaining parameters are
   // overridable — only those with a setup() override port may be live-wired,
   // and each has a same-named non-blocking override input port declared there
   // (os_rank, guard_cells, training_cells, pfa, alpha_lut, threshold_scale,
@@ -147,6 +168,13 @@ class CFARDetectorOp : public holoscan::Operator {
   // on that tick while the new table calibrates in the background (one-shot
   // warn). When true, compute() blocks until the new LUT is ready.
   Parameter<bool> blocking_alpha_lut_rebuild_;
+  // Optional peak-grouping (non-maximum-suppression) stage. When false
+  // (default), the raw candidate mask is emitted unchanged (additive to the
+  // ratified raw-mask contract). When true, each contiguous above-threshold
+  // blob is collapsed to its local-maximum cell ("one point per CFAR peak").
+  // Static per instance. peak_neighborhood selects the NMS neighborhood.
+  Parameter<bool> peak_only_;
+  Parameter<CfarPeakNeighborhood> peak_neighborhood_;
 
   // Effective override values as of the last tick (override-aware), used to
   // detect override-triggered window-kernel rebuilds for the
@@ -218,6 +246,9 @@ class CFARDetectorOp : public holoscan::Operator {
     std::shared_ptr<holoscan::Tensor> score;
     std::shared_ptr<holoscan::Tensor> noise;
     std::shared_ptr<holoscan::Tensor> mask;
+    // Peak-grouping refined mask (peak_only). Emitted as detection_mask when
+    // peak_only is set, so it is ping-ponged with the rest of the workspace.
+    std::shared_ptr<holoscan::Tensor> peak_mask;
     std::shared_ptr<holoscan::Tensor> power;
     std::shared_ptr<holoscan::Tensor> integrated_power;
     int64_t batch_in{0};
