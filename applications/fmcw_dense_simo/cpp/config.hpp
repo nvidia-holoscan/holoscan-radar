@@ -76,6 +76,7 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   parse_noise(root, &cfg.scene);
   parse_viz_toggles(root, &cfg);
   parse_plots(root, &cfg);
+  parse_peak_only(root, &cfg);
 
   // Dense-only plot knob: optional fixed velocity-plot Y extent.
   if (const YAML::Node plots = root["plots"]; plots && !plots.IsNull()) {

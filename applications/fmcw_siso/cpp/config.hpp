@@ -35,5 +35,6 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   parse_noise(root, &cfg.scene);
   parse_viz_toggles(root, &cfg);
   parse_plots(root, &cfg);
+  parse_peak_only(root, &cfg);
   return cfg;
 }

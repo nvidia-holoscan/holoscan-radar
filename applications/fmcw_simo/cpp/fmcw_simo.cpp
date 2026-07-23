@@ -67,7 +67,8 @@ class FmcwSimoApp : public holoscan::Application {
     // ignores this hint when nci_axes is empty (K = 1).
     auto cfar = make_operator<radar::CFARDetectorOp<float>>(
         "cfar_detector", from_config("cfar_detector"),
-        holoscan::Arg("nci_fold") = cfg.array_geometry.num_elements());
+        holoscan::Arg("nci_fold") = cfg.array_geometry.num_elements(),
+        holoscan::Arg("peak_only") = cfg.peak_only);
     auto gather = make_operator<radar::SnapshotGatherOp<float>>(
         "snapshot_gather", from_config("snapshot_gather"));
     auto beamscan = make_operator<radar::BeamscanEstimatorOp<float>>(
@@ -87,27 +88,16 @@ class FmcwSimoApp : public holoscan::Application {
       source->cadence = cadence;
       det_report->cadence = cadence;
     }
-    const std::vector<radar::AssemblyFeature> feature_columns{
-        radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity,
-        radar::AssemblyFeature::kAz, radar::AssemblyFeature::kEl};
-    auto feature_assembly = make_operator<radar::FeatureAssemblyOp<float>>(
-        "feature_assembly", holoscan::Arg("features") = feature_columns);
-    auto cluster = make_operator<radar::ClusterDBSCANOp<float>>(
-        "cluster_dbscan", from_config("cluster_dbscan"));
-    auto cluster_report = make_operator<ClusterReportOp>("cluster_report");
-    auto reduction = make_operator<radar::DetectionReductionOp<float>>(
-        "detection_reduction", from_config("reduction"));
-
     add_flow(source, range, {{"adc_cube", "adc_cube"}});
     add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
     add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
     add_flow(doppler, cfar, {{"rd_maps", "rd_maps"}});
 
+    // Angle branch runs in both modes (it is the DOA estimator, not clustering).
     add_flow(doppler, gather, {{"rd_maps", "rd_maps"}});
     add_flow(cfar, gather, {{"detection_idx", "detection_idx"}});
     add_flow(gather, beamscan,
              {{"snapshot", "snapshot"}, {"is_valid", "is_valid"}});
-    add_flow(beamscan, feature_assembly, {{"aoa_estimates", "aoa_estimates"}});
     add_flow(beamscan, spectrum_sink, {{"angle_spectrum", "input"}});
 
     add_flow(cfar, det_report,
@@ -118,20 +108,42 @@ class FmcwSimoApp : public holoscan::Application {
     add_flow(cfar, mask_sink, {{"detection_mask", "input"}});
     add_flow(cfar, noise_sink, {{"noise_estimate", "input"}});
 
-    add_flow(cfar, feature_assembly, {{"detection_idx", "detection_idx"}});
-    add_flow(range, feature_assembly, {{"range_bins", "range_bins"}});
-    add_flow(doppler, feature_assembly, {{"velocity_bins", "velocity_bins"}});
-    add_flow(feature_assembly, cluster, {{"points", "points"}});
-    add_flow(feature_assembly, cluster_report, {{"points", "points"}});
-    add_flow(cluster, cluster_report,
-             {{"labels", "labels"}, {"sizes", "sizes"}});
-    add_flow(cluster, reduction, {{"labels", "labels"}});
-    add_flow(cfar, reduction, {{"detection_idx", "detection_idx"}});
-    add_flow(feature_assembly, reduction, {{"points", "points"}});
-    add_flow(reduction, cluster_report, {{"rep_idx", "rep_idx"}});
-    add_flow(cfar, cluster_report, {{"detection_idx", "detection_idx"}});
-    add_flow(range, cluster_report, {{"range_bins", "range_bins"}});
-    add_flow(doppler, cluster_report, {{"velocity_bins", "velocity_bins"}});
+    // Clustering subgraph — dropped when peak_only is set. In that mode the
+    // per-detection angle is reported through DetectionReportOp's optional
+    // aoa_estimates input instead of via the (removed) cluster report.
+    std::shared_ptr<radar::ClusterDBSCANOp<float>> cluster;
+    std::shared_ptr<radar::DetectionReductionOp<float>> reduction;
+    if (!cfg.peak_only) {
+      const std::vector<radar::AssemblyFeature> feature_columns{
+          radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity,
+          radar::AssemblyFeature::kAz, radar::AssemblyFeature::kEl};
+      auto feature_assembly = make_operator<radar::FeatureAssemblyOp<float>>(
+          "feature_assembly", holoscan::Arg("features") = feature_columns);
+      cluster = make_operator<radar::ClusterDBSCANOp<float>>(
+          "cluster_dbscan", from_config("cluster_dbscan"));
+      auto cluster_report = make_operator<ClusterReportOp>("cluster_report");
+      reduction = make_operator<radar::DetectionReductionOp<float>>(
+          "detection_reduction", from_config("reduction"));
+
+      add_flow(beamscan, feature_assembly,
+               {{"aoa_estimates", "aoa_estimates"}});
+      add_flow(cfar, feature_assembly, {{"detection_idx", "detection_idx"}});
+      add_flow(range, feature_assembly, {{"range_bins", "range_bins"}});
+      add_flow(doppler, feature_assembly, {{"velocity_bins", "velocity_bins"}});
+      add_flow(feature_assembly, cluster, {{"points", "points"}});
+      add_flow(feature_assembly, cluster_report, {{"points", "points"}});
+      add_flow(cluster, cluster_report,
+               {{"labels", "labels"}, {"sizes", "sizes"}});
+      add_flow(cluster, reduction, {{"labels", "labels"}});
+      add_flow(cfar, reduction, {{"detection_idx", "detection_idx"}});
+      add_flow(feature_assembly, reduction, {{"points", "points"}});
+      add_flow(reduction, cluster_report, {{"rep_idx", "rep_idx"}});
+      add_flow(cfar, cluster_report, {{"detection_idx", "detection_idx"}});
+      add_flow(range, cluster_report, {{"range_bins", "range_bins"}});
+      add_flow(doppler, cluster_report, {{"velocity_bins", "velocity_bins"}});
+    } else {
+      add_flow(beamscan, det_report, {{"aoa_estimates", "aoa_estimates"}});
+    }
 
     if (cfg.visualize) {
       auto ch_slice = make_operator<RdChannelSliceOp>("rd_channel_slice");
@@ -166,19 +178,29 @@ class FmcwSimoApp : public holoscan::Application {
       add_flow(doppler, ch_slice, {{"rd_maps", "rd_maps"}});
       add_flow(ch_slice, to_image, {{"rd_map", "rd_maps"}});
       add_flow(to_image, visualizer, {{"rd_image", "receivers"}});
+      // Overlay/plot/boresight color or index by cluster when clustering runs;
+      // in peak_only mode they fall back to the raw CFAR peaks / single color.
       add_flow(cfar, overlay, {{"detection_idx", "detection_idx"}});
-      add_flow(cluster, overlay, {{"labels", "labels"}});
       add_flow(ch_slice, overlay, {{"rd_map", "rd_maps"}});
+      if (!cfg.peak_only) {
+        add_flow(cluster, overlay, {{"labels", "labels"}});
+      }
       add_flow(overlay, visualizer, {{"overlay", "receivers"}});
       if (plot) {
-        add_flow(reduction, plot, {{"rep_idx", "rep_idx"}});
+        if (!cfg.peak_only) {
+          add_flow(reduction, plot, {{"rep_idx", "rep_idx"}});
+        } else {
+          add_flow(cfar, plot, {{"detection_idx", "rep_idx"}});
+        }
         add_flow(range, plot, {{"range_bins", "range_bins"}});
         add_flow(doppler, plot, {{"velocity_bins", "velocity_bins"}});
         add_flow(plot, visualizer, {{"plots", "receivers"}});
       }
       if (boresight) {
         add_flow(beamscan, boresight, {{"aoa_estimates", "aoa_estimates"}});
-        add_flow(cluster, boresight, {{"labels", "labels"}});
+        if (!cfg.peak_only) {
+          add_flow(cluster, boresight, {{"labels", "labels"}});
+        }
         add_flow(boresight, visualizer, {{"plot", "receivers"}});
       }
     }

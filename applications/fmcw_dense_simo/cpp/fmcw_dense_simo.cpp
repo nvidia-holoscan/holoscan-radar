@@ -85,33 +85,23 @@ class FmcwDenseSimoApp : public holoscan::Application {
     auto beamformer = make_operator<radar::PhaseShiftBeamformerOp<Precision>>(
         "phase_shift_beamformer", from_config("phase_shift_beamformer"),
         Arg("array_geometry") = cfg.array_geometry);
+    // peak_only here is applied per-beam (nci_axes=[]); the cross-beam collapse
+    // to one detection per RD cell is still AnglePeakPickOp's job below. When
+    // set, the DBSCAN clustering + reduction stages are dropped.
     auto cfar = make_operator<radar::CFARDetectorOp<Precision>>(
-        "cfar_detector", from_config("cfar_detector"));
+        "cfar_detector", from_config("cfar_detector"),
+        Arg("peak_only") = cfg.peak_only);
 
     auto peak_pick = make_operator<AnglePeakPickOp>("angle_peak_pick");
     auto aoa_lookup = make_operator<CubeAoaLookupOp>("cube_aoa_lookup");
     aoa_lookup->az_grid = cfg.az_angles;
     aoa_lookup->el_grid = cfg.el_angles;
 
-    const std::vector<radar::AssemblyFeature> feature_columns{
-        radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity,
-        radar::AssemblyFeature::kAz, radar::AssemblyFeature::kEl};
-    auto feature_assembly = make_operator<radar::FeatureAssemblyOp<Precision>>(
-        "feature_assembly", Arg("features") = feature_columns);
-    auto cluster = make_operator<radar::ClusterDBSCANOp<Precision>>(
-        "cluster_dbscan", from_config("cluster_dbscan"));
-    auto reduction = make_operator<radar::DetectionReductionOp<Precision>>(
-        "detection_reduction", from_config("reduction"));
-    auto report = make_operator<ClusterReportOp>("cluster_report");
-    report->az_grid = cfg.az_angles;
-    report->el_grid = cfg.el_angles;
-
     if (cfg.meter_cadence) {
       cadence = std::make_shared<CadenceMeter>();
       cadence->frame_period_s = cfg.frame_period;
       cadence->log_every = cfg.meter_log_every;
       source->cadence = cadence;
-      report->cadence = cadence;
     }
 
     // Front end.
@@ -123,10 +113,9 @@ class FmcwDenseSimoApp : public holoscan::Application {
     add_flow(doppler, beamformer, {{"rd_maps", "rd_maps"}});
     add_flow(beamformer, cfar, {{"rda_cube", "rd_maps"}});
 
-    // Collapse the per-beam cube detections to one peak beam per RD cell; this
-    // peaked detection_idx drives the whole downstream (angle, features,
-    // clustering, reduction). CFAR's detection_score feeds the peak-pick; its
-    // bool mask / noise outputs are unused, so drain them so CFAR ticks.
+    // Collapse the per-beam cube detections to one peak beam per RD cell (dense
+    // angle NMS — distinct from CFAR peak_only, which is per-beam); the peaked
+    // detection_idx drives the whole downstream. Drain CFAR's mask / noise.
     add_flow(cfar, peak_pick, {{"detection_idx", "detection_idx"},
                                {"detection_score", "detection_score"}});
     auto mask_sink = make_operator<NullSinkOp>("detection_mask_sink");
@@ -135,29 +124,69 @@ class FmcwDenseSimoApp : public holoscan::Application {
     add_flow(cfar, noise_sink, {{"noise_estimate", "input"}});
 
     // Bridge the peak beam's (az_bin, el_bin) columns to angle values. The
-    // per-detection row_index is unused here (only the rep instance in the
-    // display uses it as a cluster label), so drain it to keep the op ticking.
+    // per-detection row_index is unused on the detection path (only the display
+    // rep uses it as a marker label), so drain it to keep the op ticking.
     add_flow(peak_pick, aoa_lookup, {{"detection_idx", "detection_idx"}});
-    add_flow(aoa_lookup, feature_assembly,
-             {{"aoa_estimates", "aoa_estimates"}});
     auto row_index_sink = make_operator<NullSinkOp>("aoa_row_index_sink");
     add_flow(aoa_lookup, row_index_sink, {{"row_index", "input"}});
 
-    // Assemble [range, velocity, az, el] and cluster.
-    add_flow(peak_pick, feature_assembly, {{"detection_idx", "detection_idx"}});
-    add_flow(range, feature_assembly, {{"range_bins", "range_bins"}});
-    add_flow(doppler, feature_assembly, {{"velocity_bins", "velocity_bins"}});
-    add_flow(feature_assembly, cluster, {{"points", "points"}});
+    // Clustering subgraph — dropped when peak_only is set. In peak_only the
+    // cube peaks (already one per RD cell after AnglePeakPickOp) are reported
+    // directly via DetectionReportOp: CubeAoaLookupOp supplies az/el and the
+    // 4-col detection_idx is sliced to (doppler, range). The dense score is a
+    // rank-4 per-beam cube with no 2-D map, so it is omitted from the report.
+    std::shared_ptr<radar::ClusterDBSCANOp<Precision>> cluster;
+    std::shared_ptr<radar::DetectionReductionOp<Precision>> reduction;
+    if (!cfg.peak_only) {
+      const std::vector<radar::AssemblyFeature> feature_columns{
+          radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity,
+          radar::AssemblyFeature::kAz, radar::AssemblyFeature::kEl};
+      auto feature_assembly =
+          make_operator<radar::FeatureAssemblyOp<Precision>>(
+              "feature_assembly", Arg("features") = feature_columns);
+      cluster = make_operator<radar::ClusterDBSCANOp<Precision>>(
+          "cluster_dbscan", from_config("cluster_dbscan"));
+      reduction = make_operator<radar::DetectionReductionOp<Precision>>(
+          "detection_reduction", from_config("reduction"));
+      auto report = make_operator<ClusterReportOp>("cluster_report");
+      report->az_grid = cfg.az_angles;
+      report->el_grid = cfg.el_angles;
+      if (cadence) {
+        report->cadence = cadence;
+      }
 
-    add_flow(cluster, reduction, {{"labels", "labels"}});
-    add_flow(peak_pick, reduction, {{"detection_idx", "detection_idx"}});
-    add_flow(feature_assembly, reduction, {{"points", "points"}});
+      // Assemble [range, velocity, az, el] and cluster.
+      add_flow(aoa_lookup, feature_assembly,
+               {{"aoa_estimates", "aoa_estimates"}});
+      add_flow(peak_pick, feature_assembly,
+               {{"detection_idx", "detection_idx"}});
+      add_flow(range, feature_assembly, {{"range_bins", "range_bins"}});
+      add_flow(doppler, feature_assembly,
+               {{"velocity_bins", "velocity_bins"}});
+      add_flow(feature_assembly, cluster, {{"points", "points"}});
 
-    add_flow(feature_assembly, report, {{"points", "points"}});
-    add_flow(cluster, report, {{"labels", "labels"}, {"sizes", "sizes"}});
-    add_flow(reduction, report, {{"rep_idx", "rep_idx"}});
-    add_flow(range, report, {{"range_bins", "range_bins"}});
-    add_flow(doppler, report, {{"velocity_bins", "velocity_bins"}});
+      add_flow(cluster, reduction, {{"labels", "labels"}});
+      add_flow(peak_pick, reduction, {{"detection_idx", "detection_idx"}});
+      add_flow(feature_assembly, reduction, {{"points", "points"}});
+
+      add_flow(feature_assembly, report, {{"points", "points"}});
+      add_flow(cluster, report, {{"labels", "labels"}, {"sizes", "sizes"}});
+      add_flow(reduction, report, {{"rep_idx", "rep_idx"}});
+      add_flow(range, report, {{"range_bins", "range_bins"}});
+      add_flow(doppler, report, {{"velocity_bins", "velocity_bins"}});
+    } else {
+      auto det_report = make_operator<DetectionReportOp>("detection_report");
+      if (cadence) {
+        det_report->cadence = cadence;
+      }
+      auto det_idx_rd =
+          make_operator<TrailingIdxColumnsOp>("det_idx_rd_report_slice");
+      add_flow(peak_pick, det_idx_rd, {{"detection_idx", "idx"}});
+      add_flow(det_idx_rd, det_report, {{"idx", "detection_idx"}});
+      add_flow(aoa_lookup, det_report, {{"aoa_estimates", "aoa_estimates"}});
+      add_flow(range, det_report, {{"range_bins", "range_bins"}});
+      add_flow(doppler, det_report, {{"velocity_bins", "velocity_bins"}});
+    }
 
     if (cfg.visualize) {
       compose_display(doppler, peak_pick, cluster, reduction, range);
@@ -224,22 +253,35 @@ class FmcwDenseSimoApp : public holoscan::Application {
     add_flow(to_image, visualizer, {{"rd_image", "receivers"}});
     add_flow(detections, det_idx_rd, {{"detection_idx", "idx"}});
     add_flow(det_idx_rd, overlay, {{"idx", "detection_idx"}});
-    add_flow(cluster, overlay, {{"labels", "labels"}});
     add_flow(ch_slice, overlay, {{"rd_map", "rd_maps"}});
+    // Cluster labels color the crosses when clustering runs; peak_only draws
+    // every peak in a single color (absent labels).
+    if (!cfg.peak_only) {
+      add_flow(cluster, overlay, {{"labels", "labels"}});
+    }
     add_flow(overlay, visualizer, {{"overlay", "receivers"}});
     if (plot) {
-      add_flow(reduction, rep_idx_rd, {{"rep_idx", "idx"}});
+      // Plot the per-cluster representative (clustered) or the raw cube peaks
+      // (peak_only); both carry the 4-col idx sliced to (doppler, range).
+      if (!cfg.peak_only) {
+        add_flow(reduction, rep_idx_rd, {{"rep_idx", "idx"}});
+      } else {
+        add_flow(detections, rep_idx_rd, {{"detection_idx", "idx"}});
+      }
       add_flow(rep_idx_rd, plot, {{"idx", "rep_idx"}});
       add_flow(range, plot, {{"range_bins", "range_bins"}});
       add_flow(doppler, plot, {{"velocity_bins", "velocity_bins"}});
       add_flow(plot, visualizer, {{"plots", "receivers"}});
     }
     if (boresight) {
-      // Centroids-only: plot the per-cluster representative (medoid) angle, not
-      // the raw per-beam detections. rep_idx is one row per cluster (cluster
-      // order), so the rep lookup's row_index is the cluster id used to color
-      // each marker consistently with the RD-plane overlay.
-      add_flow(reduction, rep_aoa, {{"rep_idx", "detection_idx"}});
+      // Clustered: the per-cluster representative (medoid) angle, with the rep
+      // lookup's row_index as the cluster id coloring each marker. peak_only:
+      // the raw per-detection cube peaks (row_index is then a per-detection id).
+      if (!cfg.peak_only) {
+        add_flow(reduction, rep_aoa, {{"rep_idx", "detection_idx"}});
+      } else {
+        add_flow(detections, rep_aoa, {{"detection_idx", "detection_idx"}});
+      }
       add_flow(rep_aoa, boresight, {{"aoa_estimates", "aoa_estimates"},
                                     {"row_index", "labels"}});
       add_flow(boresight, visualizer, {{"plot", "receivers"}});

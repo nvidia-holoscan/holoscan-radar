@@ -228,7 +228,11 @@ class ClusterOverlayOp : public holoscan::Operator {
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("detection_idx");
-    spec.input<holoscan::TensorMap>("labels");
+    // Optional: DBSCAN cluster ids (row-aligned with detection_idx) bucket the
+    // crosses by color. Absent (peak_only, no clustering) → all detections draw
+    // in a single color.
+    spec.input<holoscan::TensorMap>("labels")
+        .condition(holoscan::ConditionType::kNone);
     spec.input<holoscan::TensorMap>("rd_maps");
     spec.output<holoscan::TensorMap>("overlay");
   }
@@ -239,8 +243,9 @@ class ClusterOverlayOp : public holoscan::Operator {
       override {
     const std::string who = "ClusterOverlayOp";
     auto idx = radar::receive_single(op_input, "detection_idx", who);
-    auto labels = radar::receive_single(op_input, "labels", who);
+    auto labels = radar::receive_optional(op_input, "labels", who);
     auto rd_map = radar::receive_single(op_input, "rd_maps", who);
+    const bool have_labels = static_cast<bool>(labels);
 
     // The RD map (only its shape is needed) sizes the normalization; the
     // detection cells index the same Doppler × range grid.
@@ -261,12 +266,14 @@ class ClusterOverlayOp : public holoscan::Operator {
           "ClusterOverlayOp: expected a (num_points, 2) detection_idx");
     }
     const int64_t num_points = idx_shape[0];
-    // labels is int64 (num_points,), row-aligned with detection_idx.
-    const auto lab_shape = labels->shape();
-    if (lab_shape.size() != 1 || lab_shape[0] != num_points) {
-      throw std::runtime_error(
-          "ClusterOverlayOp: labels must be (num_points,) row-aligned with "
-          "detection_idx");
+    // labels (optional) is int64 (num_points,), row-aligned with detection_idx.
+    if (have_labels) {
+      const auto lab_shape = labels->shape();
+      if (lab_shape.size() != 1 || lab_shape[0] != num_points) {
+        throw std::runtime_error(
+            "ClusterOverlayOp: labels must be (num_points,) row-aligned with "
+            "detection_idx");
+      }
     }
 
     std::vector<int64_t> bins(static_cast<size_t>(num_points * 2));
@@ -277,7 +284,8 @@ class ClusterOverlayOp : public holoscan::Operator {
       throw std::runtime_error(
           "ClusterOverlayOp: detection_idx byte size mismatch");
     }
-    if (static_cast<size_t>(labels->nbytes()) != lab_bytes) {
+    if (have_labels &&
+        static_cast<size_t>(labels->nbytes()) != lab_bytes) {
       throw std::runtime_error("ClusterOverlayOp: labels byte size mismatch");
     }
     if (cudaDeviceSynchronize() != cudaSuccess) {
@@ -289,7 +297,8 @@ class ClusterOverlayOp : public holoscan::Operator {
         throw std::runtime_error(
             "ClusterOverlayOp: detection_idx D2H copy failed");
       }
-      if (cudaMemcpy(lab.data(), labels->data(), lab_bytes,
+      if (have_labels &&
+          cudaMemcpy(lab.data(), labels->data(), lab_bytes,
                      cudaMemcpyDeviceToHost) != cudaSuccess) {
         throw std::runtime_error("ClusterOverlayOp: labels D2H copy failed");
       }
@@ -307,7 +316,8 @@ class ClusterOverlayOp : public holoscan::Operator {
         throw std::runtime_error(
             "ClusterOverlayOp: detection_idx out of map bounds");
       }
-      const int64_t label = lab[static_cast<size_t>(i)];
+      // No labels (peak_only): every detection draws in cluster color 0.
+      const int64_t label = have_labels ? lab[static_cast<size_t>(i)] : 0;
       const size_t bucket =
           label >= 0 ? static_cast<size_t>(label % kNumClusterColors)
                      : static_cast<size_t>(kNumClusterColors);
@@ -805,7 +815,10 @@ class BoresightViewOp : public holoscan::Operator {
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("aoa_estimates");
-    spec.input<holoscan::TensorMap>("labels");
+    // Optional: cluster ids (row-aligned with aoa_estimates) color the markers.
+    // Absent (peak_only, no clustering) → all markers draw in a single color.
+    spec.input<holoscan::TensorMap>("labels")
+        .condition(holoscan::ConditionType::kNone);
     spec.output<holoscan::TensorMap>("plot");
   }
 
@@ -815,7 +828,8 @@ class BoresightViewOp : public holoscan::Operator {
       override {
     const std::string who = "BoresightViewOp";
     auto aoa = radar::receive_single(op_input, "aoa_estimates", who);
-    auto labels = radar::receive_single(op_input, "labels", who);
+    auto labels = radar::receive_optional(op_input, "labels", who);
+    const bool have_labels = static_cast<bool>(labels);
 
     const auto ashape = aoa->shape();
     if (ashape.size() != 2 || ashape[1] != 2) {
@@ -823,20 +837,24 @@ class BoresightViewOp : public holoscan::Operator {
           "BoresightViewOp: aoa_estimates must be (num_points, 2)");
     }
     const int64_t n = ashape[0];
-    const auto lshape = labels->shape();
-    if (lshape.size() != 1 || lshape[0] != n) {
-      throw std::runtime_error(
-          "BoresightViewOp: labels must be (num_points,) row-aligned with "
-          "aoa_estimates");
+    if (have_labels) {
+      const auto lshape = labels->shape();
+      if (lshape.size() != 1 || lshape[0] != n) {
+        throw std::runtime_error(
+            "BoresightViewOp: labels must be (num_points,) row-aligned with "
+            "aoa_estimates");
+      }
     }
 
     std::vector<float> ang(static_cast<size_t>(n * 2));
+    // Zero-filled: with no labels every marker maps to cluster color 0.
     std::vector<int64_t> lab(static_cast<size_t>(n));
     if (static_cast<size_t>(aoa->nbytes()) != sizeof(float) * ang.size()) {
       throw std::runtime_error(
           "BoresightViewOp: aoa_estimates must be float32");
     }
-    if (static_cast<size_t>(labels->nbytes()) != sizeof(int64_t) * lab.size()) {
+    if (have_labels &&
+        static_cast<size_t>(labels->nbytes()) != sizeof(int64_t) * lab.size()) {
       throw std::runtime_error("BoresightViewOp: labels byte size mismatch");
     }
     if (cudaDeviceSynchronize() != cudaSuccess) {
@@ -848,7 +866,8 @@ class BoresightViewOp : public holoscan::Operator {
                      cudaMemcpyDeviceToHost) != cudaSuccess) {
         throw std::runtime_error("BoresightViewOp: aoa_estimates D2H failed");
       }
-      if (cudaMemcpy(lab.data(), labels->data(),
+      if (have_labels &&
+          cudaMemcpy(lab.data(), labels->data(),
                      static_cast<size_t>(labels->nbytes()),
                      cudaMemcpyDeviceToHost) != cudaSuccess) {
         throw std::runtime_error("BoresightViewOp: labels D2H failed");

@@ -140,6 +140,14 @@ skip_display_check: false
 # skipped when set. Combine with visualize: true.
 headless: false
 
+# CFAR peak-grouping mode (app-owned flag, forwarded to CFARDetectorOp's
+# peak_only param). false (default) → the pipeline detects with CFAR, then
+# DBSCAN-clusters and reduces to one representative per target. true → CFAR
+# emits one detection per target (non-maximum suppression), so the DBSCAN
+# clustering + reduction stages are dropped from the graph and the CFAR peaks
+# are reported directly (the overlay/plots then show raw detections).
+peak_only: false
+
 # Rolling time-series plots drawn to the right of the RD map (only when
 # visualize is on). Two scrolling scatter plots — range (m) vs time and
 # velocity (m/s) vs time — where every detection is a dot colored by its

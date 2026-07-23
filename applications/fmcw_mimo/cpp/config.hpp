@@ -282,6 +282,7 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   parse_noise(root, &cfg.scene);
   parse_viz_toggles(root, &cfg);
   parse_plots(root, &cfg);
+  parse_peak_only(root, &cfg);
 
   // Optional fixed velocity-plot Y extent (dense/MIMO plot knob).
   if (const YAML::Node plots = root["plots"]; plots && !plots.IsNull()) {

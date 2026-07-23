@@ -65,6 +65,7 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   parse_noise(root, &cfg.scene);
   parse_viz_toggles(root, &cfg);
   parse_plots(root, &cfg);
+  parse_peak_only(root, &cfg);
 
   // Boresight view axes mirror the beamscan estimator's angle grid so the axes
   // match what the estimator can resolve. This is a READ-ONLY MIRROR of an

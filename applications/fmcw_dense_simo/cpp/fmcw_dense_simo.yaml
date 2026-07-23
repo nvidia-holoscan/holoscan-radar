@@ -81,6 +81,13 @@ run:
 visualize: true
 headless: false
 skip_display_check: false
+
+# CFAR peak-grouping (app-owned; forwarded to CFARDetectorOp.peak_only). Applied
+# per-beam on the RDA cube (AnglePeakPickOp still does the cross-beam collapse).
+# true → DBSCAN clustering + reduction dropped; the cube peaks are reported
+# directly via DetectionReportOp (range/velocity/az/el; no per-beam score).
+peak_only: false
+
 plots:
   enable: true
   window: 120

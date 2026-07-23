@@ -85,8 +85,11 @@ class FmcwSisoApp : public holoscan::Application {
         "clutter_filter", from_config("clutter_filter"));
     auto doppler = make_operator<radar::FMCWDopplerProcessorOp<float>>(
         "doppler_processor", from_config("doppler_processor"));
+    // peak_only (app-owned flag) forwarded to CFAR; when set, CFAR emits one
+    // detection per target and the clustering subgraph below is dropped.
     auto cfar = make_operator<radar::CFARDetectorOp<float>>(
-        "cfar_detector", from_config("cfar_detector"));
+        "cfar_detector", from_config("cfar_detector"),
+        holoscan::Arg("peak_only") = cfg.peak_only);
     auto sink = make_operator<DetectionReportOp>("detection_report");
     // Every CFAR output needs a receiver or the operator never ticks.
     auto mask_sink = make_operator<NullSinkOp>("detection_mask_sink");
@@ -99,25 +102,6 @@ class FmcwSisoApp : public holoscan::Application {
       source->cadence = cadence;
       sink->cadence = cadence;
     }
-    // Clustering branch: assemble a [range, velocity] feature matrix from the
-    // CFAR cells (physical units, via the range/Doppler axis outputs) and
-    // density-cluster it. `features` is fixed in code — the parameter is
-    // native-only by operator contract, and this app's downstream report /
-    // overlays assume this exact 2-column layout. The DBSCAN parameters flow
-    // natively from the cluster_dbscan YAML block.
-    const std::vector<radar::AssemblyFeature> feature_columns{
-        radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity};
-    auto feature_assembly = make_operator<radar::FeatureAssemblyOp<float>>(
-        "feature_assembly", holoscan::Arg("features") = feature_columns);
-    auto cluster = make_operator<radar::ClusterDBSCANOp<float>>(
-        "cluster_dbscan", from_config("cluster_dbscan"));
-    auto cluster_report = make_operator<ClusterReportOp>("cluster_report");
-    // Reduce each cluster to one representative cell. The reduction block flows
-    // natively; set feature_weights ~ 1/epsilon in the YAML so the medoid
-    // distance matches the DBSCAN metric.
-    auto reduction = make_operator<radar::DetectionReductionOp<float>>(
-        "detection_reduction", from_config("reduction"));
-
     add_flow(source, range, {{"adc_cube", "adc_cube"}});
     add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
     add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
@@ -129,26 +113,53 @@ class FmcwSisoApp : public holoscan::Application {
     add_flow(cfar, mask_sink, {{"detection_mask", "input"}});
     add_flow(cfar, noise_sink, {{"noise_estimate", "input"}});
 
-    // CFAR cells → feature matrix → DBSCAN → report. The range/Doppler axis
-    // outputs feed FeatureAssemblyOp so the columns land in physical units; its
-    // `points` output fans out to both the clusterer and the reporter.
-    add_flow(cfar, feature_assembly, {{"detection_idx", "detection_idx"}});
-    add_flow(range, feature_assembly, {{"range_bins", "range_bins"}});
-    add_flow(doppler, feature_assembly, {{"velocity_bins", "velocity_bins"}});
-    add_flow(feature_assembly, cluster, {{"points", "points"}});
-    add_flow(feature_assembly, cluster_report, {{"points", "points"}});
-    add_flow(cluster, cluster_report, {{"labels", "labels"}});
-    add_flow(cluster, cluster_report, {{"sizes", "sizes"}});
+    // Clustering subgraph — dropped entirely when peak_only is set (CFAR then
+    // emits one detection per target, so DBSCAN + reduction are redundant and
+    // DetectionReportOp above reports the CFAR peaks directly). `cluster` /
+    // `reduction` stay null in that mode and the viz block below adapts.
+    std::shared_ptr<radar::ClusterDBSCANOp<float>> cluster;
+    std::shared_ptr<radar::DetectionReductionOp<float>> reduction;
+    if (!cfg.peak_only) {
+      // Assemble a [range, velocity] feature matrix from the CFAR cells
+      // (physical units, via the range/Doppler axis outputs) and density-cluster
+      // it. `features` is fixed in code — the parameter is native-only by
+      // operator contract, and this app's downstream report / overlays assume
+      // this exact 2-column layout. The DBSCAN parameters flow natively from the
+      // cluster_dbscan YAML block.
+      const std::vector<radar::AssemblyFeature> feature_columns{
+          radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity};
+      auto feature_assembly = make_operator<radar::FeatureAssemblyOp<float>>(
+          "feature_assembly", holoscan::Arg("features") = feature_columns);
+      cluster = make_operator<radar::ClusterDBSCANOp<float>>(
+          "cluster_dbscan", from_config("cluster_dbscan"));
+      auto cluster_report = make_operator<ClusterReportOp>("cluster_report");
+      // Reduce each cluster to one representative cell. The reduction block
+      // flows natively; set feature_weights ~ 1/epsilon in the YAML so the
+      // medoid distance matches the DBSCAN metric.
+      reduction = make_operator<radar::DetectionReductionOp<float>>(
+          "detection_reduction", from_config("reduction"));
 
-    // Reduction: one representative cell per cluster (medoid = most-central
-    // detection). rep_idx feeds the report (logged in physical units, so the
-    // report also needs the axis bins) and, when visualizing, the GUI.
-    add_flow(cluster, reduction, {{"labels", "labels"}});
-    add_flow(cfar, reduction, {{"detection_idx", "detection_idx"}});
-    add_flow(feature_assembly, reduction, {{"points", "points"}});
-    add_flow(reduction, cluster_report, {{"rep_idx", "rep_idx"}});
-    add_flow(range, cluster_report, {{"range_bins", "range_bins"}});
-    add_flow(doppler, cluster_report, {{"velocity_bins", "velocity_bins"}});
+      // CFAR cells → feature matrix → DBSCAN → report. The range/Doppler axis
+      // outputs feed FeatureAssemblyOp so the columns land in physical units;
+      // its `points` output fans out to both the clusterer and the reporter.
+      add_flow(cfar, feature_assembly, {{"detection_idx", "detection_idx"}});
+      add_flow(range, feature_assembly, {{"range_bins", "range_bins"}});
+      add_flow(doppler, feature_assembly, {{"velocity_bins", "velocity_bins"}});
+      add_flow(feature_assembly, cluster, {{"points", "points"}});
+      add_flow(feature_assembly, cluster_report, {{"points", "points"}});
+      add_flow(cluster, cluster_report, {{"labels", "labels"}});
+      add_flow(cluster, cluster_report, {{"sizes", "sizes"}});
+
+      // Reduction: one representative cell per cluster (medoid = most-central
+      // detection). rep_idx feeds the report (logged in physical units, so the
+      // report also needs the axis bins) and, when visualizing, the GUI.
+      add_flow(cluster, reduction, {{"labels", "labels"}});
+      add_flow(cfar, reduction, {{"detection_idx", "detection_idx"}});
+      add_flow(feature_assembly, reduction, {{"points", "points"}});
+      add_flow(reduction, cluster_report, {{"rep_idx", "rep_idx"}});
+      add_flow(range, cluster_report, {{"range_bins", "range_bins"}});
+      add_flow(doppler, cluster_report, {{"velocity_bins", "velocity_bins"}});
+    }
 
     // Optional live RD-map window (cfg.visualize; the driver has already
     // downgraded it with a warning on GUI-less hosts). Turbo-mapped |RD| with
@@ -180,18 +191,27 @@ class FmcwSisoApp : public holoscan::Application {
 
       add_flow(doppler, to_image, {{"rd_maps", "rd_maps"}});
       add_flow(to_image, visualizer, {{"rd_image", "receivers"}});
-      // The overlay needs the detector's cells, the cluster labels, and the map
-      // dimensions; its per-color layers fan into the same receiver.
+      // The overlay needs the detector's cells and the map dimensions; the
+      // cluster labels color the crosses when clustering runs. In peak_only
+      // mode there are no labels, so the overlay draws every CFAR peak in a
+      // single color (ClusterOverlayOp treats absent labels that way).
       add_flow(cfar, overlay, {{"detection_idx", "detection_idx"}});
-      add_flow(cluster, overlay, {{"labels", "labels"}});
       add_flow(doppler, overlay, {{"rd_maps", "rd_maps"}});
+      if (!cfg.peak_only) {
+        add_flow(cluster, overlay, {{"labels", "labels"}});
+      }
       add_flow(overlay, visualizer, {{"overlay", "receivers"}});
 
       // Rolling range/velocity plots: the per-cluster representative from
-      // reduction, plus the axis bins that fix each plot's Y extent and resolve
-      // the representative bins to physical units.
+      // reduction (clustered) or the raw CFAR peaks (peak_only) — both are
+      // (N, 2) (doppler, range) — plus the axis bins that fix each plot's Y
+      // extent and resolve the bins to physical units.
       if (plot) {
-        add_flow(reduction, plot, {{"rep_idx", "rep_idx"}});
+        if (!cfg.peak_only) {
+          add_flow(reduction, plot, {{"rep_idx", "rep_idx"}});
+        } else {
+          add_flow(cfar, plot, {{"detection_idx", "rep_idx"}});
+        }
         add_flow(range, plot, {{"range_bins", "range_bins"}});
         add_flow(doppler, plot, {{"velocity_bins", "velocity_bins"}});
         add_flow(plot, visualizer, {{"plots", "receivers"}});

@@ -132,6 +132,11 @@ visualize: true
 skip_display_check: false
 headless: false
 
+# CFAR peak-grouping (app-owned; forwarded to CFARDetectorOp.peak_only). true →
+# one CFAR detection per target, DBSCAN clustering + reduction dropped, and
+# per-detection range/velocity/az/el reported directly (angle branch still runs).
+peak_only: false
+
 plots:
   enable: true
   window: 120
