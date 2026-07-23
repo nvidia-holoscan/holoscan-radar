@@ -23,4 +23,3 @@ steering builder (`radar_common/dsp/steering_weights`) is asked for
 `SteeringLayout::kBeamMajor` + `conjugate`, so the weights land directly in
 that order/layout — no host reorder. Recorded here only to explain the beam
 order; not an open decision.
-

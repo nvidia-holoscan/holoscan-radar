@@ -113,4 +113,3 @@ pytest already covers `pfa` / `alpha_lut` behavior and Monte Carlo Pfa.
 **Status:** accepted / unclosable by design — leave the helpers in
 `detail::`, keep white-box calibration regressions C++-only; do not treat
 missing Python ports of those tests as unfinished bindings work.
-
