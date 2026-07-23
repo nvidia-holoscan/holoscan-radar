@@ -5,45 +5,6 @@ locked contract in [`OPERATOR_API.md`](../../../docs/planning/OPERATOR_API.md).
 None of these silently change the contract; they record decisions taken with a
 faithful default plus the question for the team.
 
-## 1. `max_clusters` — which clusters are "surplus", and what happens to their points
-
-- **Context.** The contract says: *"Upper cap on the number of clusters reported
-  in `sizes`; surplus dropped and a warning raised if exceeded. `sizes` is sized
-  to the actual cluster count (≤ this cap)."* It pins the effect on `sizes` but
-  not (a) which clusters are surplus when `num_clusters > max_clusters`, nor
-  (b) what `labels` reports for points in dropped clusters.
-- **Current behavior.** Clusters are assigned dense ids `[0, num_clusters)` in
-  ascending component-root (lowest member row index) order. When capped, the
-  clusters with the **highest** dense ids are dropped, and their points are
-  **relabeled to noise (`-1`)** so `labels`, `sizes`, and the reported cluster
-  count stay mutually consistent (`sizes[k]` is valid for every `k` a `label`
-  names).
-- **Impact.** Any downstream consumer that indexes `sizes` by `labels`. The
-  "drop highest ids / relabel to noise" choice is deterministic but arbitrary;
-  a "keep the largest clusters" or "keep lowest-id clusters but leave labels
-  untouched" policy would be equally defensible.
-- **Question.** Is drop-highest-id + relabel-to-noise the intended semantics, or
-  should the cap keep the largest clusters (by point count) and/or leave the
-  surplus `labels` populated but simply truncate `sizes`?
-- **Status.** `open` — implemented with the consistent default above.
-
-## 2. `epsilon` scalar-vs-vector encoding / ergonomics
-
-- **Context.** The contract types `epsilon` as *"float scalar or
-  `(num_features,)` vector"*. A single `[live]`-overridable Holoscan parameter
-  cannot be both a scalar and a vector, so it is modeled as a
-  `std::vector<double>`: length 1 → isotropic scalar, length `num_features` →
-  per-axis. YAML/`Arg` therefore writes the scalar case as a one-element list
-  (`epsilon: [0.5]`), not a bare `epsilon: 0.5`.
-- **Impact.** Config ergonomics only; functionally complete (both isotropic and
-  anisotropic neighborhoods work, and the override port reuses the proven
-  `std::any` vector path).
-- **Question.** Is the length-1-vector encoding acceptable, or should the
-  operator additionally accept a bare scalar `epsilon` (a second parameter or a
-  YAML-converter that promotes a scalar to `[scalar]`)?
-- **Status.** `open` — length-1-vector encoding shipped; documented in the
-  header and README.
-
 ## 3. Brute-force `O(num_points²)` neighbor graph — scaling (perf follow-up)
 
 - **Context.** Neighbor counting, connected-components propagation, and border
@@ -73,45 +34,6 @@ faithful default plus the question for the team.
   allocation matters. Deferred.
 - **Status.** `landed with caveat`.
 
-## 5. Border-point assignment is deterministic (lowest-root neighbor)
-
-- **Context.** DBSCAN has an inherent ambiguity: a border point (non-core, but
-  within `epsilon` of a core point) that is reachable from cores in **two
-  different clusters** may validly join either. The contract in
-  [`OPERATOR_API.md`](../../../docs/planning/OPERATOR_API.md) does not pin the
-  tie-break, so the implementation had to choose one.
-- **Current behavior.** Each border point joins the neighboring core with the
-  **numerically smallest component root** (lowest member row index). The result
-  is deterministic and independent of thread / iteration order (`labels` is a
-  pure function of `points`, `epsilon`, `min_points`).
-- **Impact.** The clustering *partition* matches any faithful DBSCAN, but the
-  cluster a given inter-cluster border point lands in can differ from other
-  implementations — e.g. scikit-learn assigns a border point to the first
-  cluster whose expansion reaches it in index order, not the min-root one. Only
-  inter-cluster border points are affected.
-- **Question.** Is min-root the desired rule, or should border points go to the
-  nearest core / the first-reached cluster? Whatever the answer, the contract
-  should pin it so the behavior is not implementation-defined.
-- **Status.** `open` — implemented deterministic min-root; code is ahead of the
-  (silent) contract.
-
-## 6. Cluster-id numbering is ascending-root order
-
-- **Context.** The contract says `labels` are dense with noise `-1` but does not
-  specify the order in which clusters are numbered.
-- **Current behavior.** Clusters are numbered by **ascending component root** —
-  cluster `0` is the component containing the lowest-index clustered point, and
-  `sizes` is row-aligned to that numbering. (When `max_clusters` caps the count,
-  the highest-id clusters are the ones dropped — see item 1.)
-- **Impact.** The integer `labels` / `sizes` ordering differs from
-  discovery-order or size-descending numbering (scikit-learn numbers in
-  discovery order); the partition is identical, only the ids differ. Downstream
-  code must not assume a particular ordering (e.g. "cluster 0 is the largest").
-- **Question.** Is ascending-root the desired convention, or should numbering be
-  by cluster size or discovery order? Pin it in the contract either way.
-- **Status.** `open` — implemented ascending-root; code is ahead of the (silent)
-  contract.
-
 ## 7. Scope vs. general-purpose DBSCAN (deliberate non-features)
 
 - **Context.** Relative to general-purpose DBSCAN libraries (e.g.
@@ -128,3 +50,21 @@ faithful default plus the question for the team.
   a future consumer needs one of these.
 - **Status.** `out of scope` — recorded for transparency; revisit per-feature if
   a consumer requires it (would be a contract change).
+
+## 8. Parameterize the cluster-ordering policy (future enhancement)
+
+- **Context.** Cluster ids are numbered by descending size (L10), which also
+  fixes which clusters a `max_clusters` cap keeps (L7). That single fixed policy
+  covers the current radar path, but the ordering rule is a natural candidate
+  for a parameter once a consumer needs a different one.
+- **Proposal (deferred).** A static `cluster_order` parameter — e.g.
+  `size_desc` (default, current behavior), `root_asc` (the previous
+  ascending-component-root numbering), or `discovery` (scikit-learn-style
+  first-reached order). The cap semantics would follow the chosen order (drop
+  the highest ids), so `size_desc` keeps the largest, `root_asc` keeps the
+  lowest-root, etc. Would need the param, a small host branch selecting the
+  argsort key (size vs. root vs. discovery index), and per-order tests.
+- **Impact.** None today; the fixed `size_desc` policy is contract (L7 / L10).
+  This only matters if a downstream consumer requires a different ordering.
+- **Status.** `deferred` — tracked as a future enhancement; not a blocker and
+  not a contract gap (the current order is pinned).

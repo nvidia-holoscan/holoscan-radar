@@ -52,27 +52,7 @@ Interim stance already chosen (or the capability is explicitly out of current
 scope). Development and checklist completion proceed; these need ratification
 or a deliberate contract change when the team has bandwidth.
 
-### CFAR / detection
-
-| # | Decision needed | Interim stance | Detail |
-| --- | --- | --- | --- |
-| L1 | **Bool mask dtype vs HSDK 4.3 DLPack** — keep `bool` (target HSDK 5), add `uint8` compat, or document C++-only until 5 | Emit/accept `kDLBool`; C++ wiring works with a logged GXF error; **Python bindings drain bool masks via `NullSinkOp` / harness `drain_ports` (no NumPy/`PyTensor` conversion on 4.3)** | [CFAR §1](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md); SnapshotGather / Beamscan / MVDR |
-| L6 | **Exact-sized `detection_idx`** — keep (accept sync) or add fixed-capacity / valid-length | Matches locked exact-size contract today | [CFAR §8](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md) |
-
-### Clustering (`ClusterDBSCANOp`)
-
-| # | Decision needed | Interim stance | Detail |
-| --- | --- | --- | --- |
-| L7 | **`max_clusters` surplus policy** | Drop highest dense ids; surplus → noise (`-1`) | [ClusterDBSCAN §1](../../operators/clustering/cluster_dbscan_op/OPEN_ITEMS.md) |
-| L8 | **`epsilon` scalar-vs-vector encoding** | `std::vector<double>` only (`epsilon: [0.5]` for scalar) | [ClusterDBSCAN §2](../../operators/clustering/cluster_dbscan_op/OPEN_ITEMS.md) |
-| L9 | **Border-point multi-cluster tie-break** | Min-root neighbor | [ClusterDBSCAN §5](../../operators/clustering/cluster_dbscan_op/OPEN_ITEMS.md) |
-| L10 | **Cluster-id numbering order** | Ascending component-root | [ClusterDBSCAN §6](../../operators/clustering/cluster_dbscan_op/OPEN_ITEMS.md) |
-
-### Angle conventions & MIMO scope
-
-| # | Decision needed | Interim stance | Detail |
-| --- | --- | --- | --- |
-| L11 | **`AngleConvention::kCustom` boundary mapping** | Presets work; **`custom` throws** — operators are checklist-complete without it | [Beamscan §1](../../operators/angle_estimation/beamscan_estimator_op/OPEN_ITEMS.md); [PhaseShift §1](../../operators/angle_estimation/phase_shift_beamformer_op/OPEN_ITEMS.md) |
-| L12 | **Non-uniform / staggered TDM schedules** | **Rejected** today; uniform repeating TDM only — ops checklist-complete for that scope | [MIMODeinterleave §B.1](../../operators/fmcw/mimo_deinterleave_op/OPEN_ITEMS.md) |
-| L13 | **S1 spatial-smoothing forks** — (a) integer means sub-array **count** vs length; (b) holey arrays route to S3 vs. in-operator explicit partitions | **Implemented:** count semantics; holey → error → S3 / upstream custom smoother | [MVDR OPEN_ITEMS](../../operators/angle_estimation/mvdr_estimator_op/OPEN_ITEMS.md) |
-| L14 | **S3 subarray-selection forks** — (a) auto vs explicit; (b) objective: max element-count vs aperture; (c) contiguous ULA vs sum-set holey smoothing; (d) standalone op vs `VirtualArrayAssemblyOp` mode | **Implemented (`SubarraySelectionOp`):** auto largest filled ULA/URA + explicit; max element-count, azimuth tie-break; contiguous only; standalone op. Gridless consumers (Root-MUSIC/ESPRIT) not yet built | [SubarraySelection OPEN_ITEMS](../../operators/angle_estimation/subarray_selection_op/OPEN_ITEMS.md) |
+**None currently.** All prior items (L1–L15, plus S1–S4) are settled — see
+STATUS.md → Settled decisions. Capabilities deliberately deferred out of the
+current scope (e.g. staggered TDM, sum-set holey subarray smoothing) are tracked
+under STATUS.md → Roadmap, not here.

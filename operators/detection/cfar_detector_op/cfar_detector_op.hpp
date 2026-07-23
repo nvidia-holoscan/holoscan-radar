@@ -72,9 +72,11 @@ struct CfarAlphaLutKey {
 //                       CFAR plane is the last two axes; leading axes are
 //                       batched, or non-coherently integrated per nci_axes.
 //                       Path auto-selected by dtype (no parameter).
-// Out: detection_mask  — bool, (..., num_doppler, num_range_bins), with the
-//                       nci_axes reduced. True where detected
-//                       (detection_score > 1).
+// Out: detection_mask  — uint8 (0/1), (..., num_doppler, num_range_bins), with
+//                       the nci_axes reduced. 1 where detected
+//                       (detection_score > 1). uint8 rather than bool so the
+//                       mask is NumPy-visible on HSDK 4.3 (kDLBool has no NumPy
+//                       typestr on the 4.3 message path).
 // Out: detection_score — float32/float64, same shape as detection_mask.
 //                       P / (threshold_scale * alpha * noise_estimate); >1
 //                       ⇔ detected, doubles as the per-detection strength.
@@ -111,15 +113,22 @@ class CFARDetectorOp : public holoscan::Operator {
   // map is at least as large as the CFAR window; a smaller map triggers a
   // map-specific rebuild in compute() with a warning.
   void start() override;
+  // Drains any in-flight background alpha-LUT build before Holoscan tears down
+  // the CUDA context, so a detached GPU Monte-Carlo calibration cannot launch
+  // kernels on a destroyed context (fixes the non-blocking-rebuild SEGFAULT).
+  void stop() override;
 
   void setup(OperatorSpec& spec) override;
   void compute(InputContext& op_input, OutputContext& op_output,
                ExecutionContext& context) override;
 
  private:
-  // Parameters per the locked contract. cfar_variant is static; the rest are
-  // overridable (each has a same-named non-blocking override input port
-  // declared in setup()).
+  // Parameters per the locked contract. cfar_variant, nci_fold_hint, and
+  // blocking_alpha_lut_rebuild are static; the remaining parameters are
+  // overridable — only those with a setup() override port may be live-wired,
+  // and each has a same-named non-blocking override input port declared there
+  // (os_rank, guard_cells, training_cells, pfa, alpha_lut, threshold_scale,
+  // nci_axes, max_detections).
   Parameter<CfarVariant> cfar_variant_;
   Parameter<int64_t> os_rank_;                  // OS only
   Parameter<std::vector<int64_t>> guard_cells_;    // (doppler, range)

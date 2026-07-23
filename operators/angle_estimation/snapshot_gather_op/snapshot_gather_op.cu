@@ -27,7 +27,11 @@ namespace {
 
 constexpr const char* kOpName = "SnapshotGatherOp";
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
-constexpr DLDataType kBoolDtype{kDLBool, 8, 1};
+// is_valid is emitted as uint8 (0/1), not kDLBool: HSDK 4.3's DLPack message
+// path cannot map kDLBool to a NumPy typestr (a bool port throws in Python).
+// The buffer holds 0/1 bytes (written as bool internally); uint8 is byte-
+// identical, NumPy-visible, and every is_valid consumer treats nonzero as set.
+constexpr DLDataType kMaskDtype{kDLUInt, 8, 1};
 constexpr DLDataType kInt32Dtype{kDLInt, 32, 1};
 
 std::vector<int64_t> normalize_snapshot_window(
@@ -168,7 +172,7 @@ void SnapshotGatherOp<T>::compute(InputContext& op_input,
   auto snapshot = make_device_tensor(
       {num_detections, num_channels, num_snapshots}, complex_dtype<T>());
   auto is_valid =
-      make_device_tensor({num_detections, num_snapshots}, kBoolDtype);
+      make_device_tensor({num_detections, num_snapshots}, kMaskDtype);
 
   if (num_detections == 0) {
     if (stream != cudaStreamDefault) {

@@ -30,6 +30,11 @@ AlphaLutSnapshot poll_cached_alpha_lut(const CfarAlphaLutKey& key);
 // Idempotently queue a background LUT build for key when not cached.
 void ensure_alpha_lut_build(const CfarAlphaLutKey& key);
 
+// Block until every in-flight background alpha-LUT build has finished. Called
+// from CFARDetectorOp::stop() so a detached GPU Monte-Carlo build cannot launch
+// kernels after the operator / CUDA context is torn down (fixes the L15 race).
+void join_inflight_alpha_lut_builds();
+
 // Blocking LUT lookup (first tick or when async rebuild is disabled).
 std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key);
 

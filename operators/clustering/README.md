@@ -28,12 +28,14 @@ detection-group `FeatureAssemblyOp` bridge):
 [`docs/planning/OPERATOR_API.md`](../../docs/planning/OPERATOR_API.md). The
 header is the full contract.
 
-- **Implemented:** anisotropic per-axis `epsilon` (scalar → isotropic, or a
-  `(num_features,)` vector giving the ellipsoidal neighborhood
+- **Implemented:** anisotropic per-axis `epsilon` (length-1 list `[ε]` →
+  isotropic, or a `(num_features,)` vector giving the ellipsoidal neighborhood
   `Σ_i ((p_i − q_i) / ε_i)² ≤ 1`); `min_points` core threshold (default
-  `2·num_features`); optional `max_clusters` cap (surplus clusters dropped with
-  a warn-once); `labels` (noise = `-1`, row-aligned with `points`) and per-tick
-  reallocated `sizes`; all three parameters `[live]`-overridable with sticky
+  `2·num_features`); ids numbered by **descending cluster size** (cluster 0 =
+  largest, tie-break ascending root); optional `max_clusters` cap (drops the
+  **smallest** surplus clusters to noise with a warn-once); `labels`
+  (noise = `-1`, row-aligned with `points`) and per-tick reallocated `sizes`
+  (non-increasing); all three parameters `[live]`-overridable with sticky
   semantics; float and double; empty `points` → empty `labels` / `sizes`. Unit
   tests cover the [`TESTING.md`](../../docs/planning/TESTING.md) clustering
   checks and a `perf_cluster_dbscan` characterization harness measures the
@@ -44,8 +46,9 @@ header is the full contract.
   sees, but a uniform-grid spatial index / atomic union-find upgrade for large
   point clouds is tracked in
   [`cluster_dbscan_op/OPEN_ITEMS.md`](cluster_dbscan_op/OPEN_ITEMS.md), along
-  with the `max_clusters` "which clusters are surplus" contract question and
-  the `epsilon` scalar-encoding ergonomics.
+  with a deferred `cluster_order` parameter (the descending-size numbering /
+  `max_clusters` surplus policy is now settled — STATUS.md L7 / L10). The
+  `epsilon` length-1-list encoding is settled (STATUS.md L8).
 
 ## Shared kernel conventions
 

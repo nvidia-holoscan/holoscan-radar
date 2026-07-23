@@ -11,7 +11,12 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
+from utils.harness import (  # noqa: E402
+    run_operator,
+    run_operator_multi,
+    single_map,
+    to_device_array,
+)
 
 from holoscan.radar import SnapshotEdgeMode  # noqa: E402
 from holoscan.radar import SnapshotGatherOpF32, SnapshotGatherOpF64
@@ -130,9 +135,42 @@ def test_RejectsNegativeSnapshotWindow():
         run_gather(make_rd_maps(), idx, snapshot_window=[-1, 0])
 
 
+def test_ClampIsValidMaskUint8Visible():
+    # L1: is_valid emits as uint8 (0/1), so Python can read it on HSDK 4.3 (a
+    # bool port would throw). Under a corner clamp only slots 4,5,7,8 are valid.
+    idx = np.array([[0, 0]], dtype=np.int64)
+    rd = to_device_array(make_rd_maps(), dtype=np.complex128)
+    id_t = to_device_array(np.asarray(idx, dtype=np.int64), dtype=np.int64)
+
+    def make_op(app):
+        return SnapshotGatherOpF64(
+            app,
+            name="op_under_test",
+            snapshot_window=[1, 1],
+            doppler_edge=SnapshotEdgeMode.CLAMP,
+            range_edge=SnapshotEdgeMode.CLAMP,
+        )
+
+    outs = run_operator_multi(
+        make_op,
+        single_map(rd, "rd_maps"),
+        input_port="rd_maps",
+        output_ports=["snapshot", "is_valid"],
+        extra_inputs={"detection_idx": [single_map(id_t, "detection_idx")]},
+    )
+    valid = outs["is_valid"][0]
+    assert valid.dtype == np.uint8
+    assert valid.shape == (1, 9)
+    assert set(np.unique(valid)).issubset({0, 1})
+    expected = np.zeros((1, 9), dtype=np.uint8)
+    expected[0, [4, 5, 7, 8]] = 1
+    np.testing.assert_array_equal(valid, expected)
+
+
 def test_ClampKeepsInBoundSlots():
     # Corner detection under clamp: only the four in-bound (d,r) slots are
-    # written (buffer is zero-initialized). is_valid is bool / HSDK-4.3-opaque.
+    # written (buffer is zero-initialized); is_valid marks them (see
+    # test_ClampIsValidMaskUint8Visible).
     idx = np.array([[0, 0]], dtype=np.int64)
     snap = run_gather(
         make_rd_maps(),

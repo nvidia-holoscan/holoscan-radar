@@ -58,9 +58,12 @@ physical vs effective PRI.
 
 ### B.1 Non-uniform / staggered TDM schedules
 
-Support schedules where TX dwell or count varies, with a matching compensation
-model (or a schedule descriptor that carries per-TX timing). Blocked on a team
-decision for how `MIMOCoherentCompensationOp` should consume non-uniform timing.
+Staggered / non-uniform TDM (TX dwell or count varies) is **out of the v1 scope**:
+uniform round-robin only, and a non-uniform schedule is rejected with a clear
+error (settled — STATUS.md L12). Supporting it would need a per-TX-timing
+schedule descriptor plus a generalized `MIMOCoherentCompensationOp` compensation
+model (itself an open design question). Tracked as a deferred future enhancement
+on STATUS.md → Roadmap.
 
 ### B.2 Per-tick output allocation (module-wide)
 

@@ -37,19 +37,19 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   angle path; sticky `[live] snapshot_window`; static `doppler_edge` /
   `range_edge`; float/double complex `rd_maps`; unit tests (edge modes, batch
   dims, error paths, live override); `performance/cpp/perf_snapshot_gather.cpp`
-  characterizes gather cost + the `[live] snapshot_window` override spike. HSDK
-  4.3 bool transport caveat for `is_valid` in `snapshot_gather_op/OPEN_ITEMS.md`
-  §1 (aligned with CFAR `detection_mask`).
+  characterizes gather cost + the `[live] snapshot_window` override spike.
+  `is_valid` emits `uint8` (0/1), NumPy-visible on HSDK 4.3, aligned with CFAR
+  `detection_mask` (settled — STATUS.md L1).
 - **`BeamscanEstimatorOp` (checklist-complete — dpc):** conventional sparse-path
   Bartlett DOA on a scan grid; lands `ArrayGeometry` + `AngleConvention`
   descriptors in `operators/common/`; sticky `[live]` overrides for geometry,
   scan grid, taper, and peak interpolation; float/double; unit tests (2-D DOA
   recovery on a planar URA, 3-D single-look input, direction-cosine masking,
   error paths, live `az_angles` override); `performance/cpp/perf_beamscan_estimator.cpp`
-  characterizes scan cost + the `[live] az_angles` override spike. Open items in
-  `beamscan_estimator_op/OPEN_ITEMS.md` (`custom` angle preset, bool `is_valid`
-  transport caveat aligned with SnapshotGather).
-- **`MVDREstimatorOp` (NOT checklist-complete — one blocked param — dpc):**
+  characterizes scan cost + the `[live] az_angles` override spike. The `custom`
+  angle preset (STATUS.md L11) and `uint8` `is_valid` transport (STATUS.md L1)
+  are both settled.
+- **`MVDREstimatorOp` (checklist-complete — dpc):**
   adaptive (MVDR / Capon) sparse-path DOA. Implements the per-item sample
   covariance with `is_valid` masking, diagonal loading (`auto` = a small
   multiple of the `trace(R̂)/C` noise-floor proxy, or a fixed absolute δ), a
@@ -68,11 +68,11 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   capacity + NaN fill, rank-one eigenvalue dominance, `is_valid` exclusion /
   all-invalid blanking, live
   overrides incl. `max_sources` realloc, error paths) +
-  `performance/cpp/perf_mvdr_estimator.cpp`. **The one remaining contract
-  parameter, `spatial_smoothing`, is BLOCKED on a covariance-estimator team
-  decision** (not declared); see `mvdr_estimator_op/OPEN_ITEMS.md` (also the
-  `diagonal_loading` float-or-`auto` encoding note and the eigenvalues per-tick
-  cost).
+  `performance/cpp/perf_mvdr_estimator.cpp`. `spatial_smoothing` /
+  `forward_backward` are implemented as a front-end transform (settled — S1,
+  STATUS.md L13); see `mvdr_estimator_op/OPEN_ITEMS.md` for the residual notes
+  (the `diagonal_loading` float-or-`auto` encoding note and the eigenvalues
+  per-tick cost).
 - **`PhaseShiftBeamformerOp` (checklist-complete — dpc):** conventional
   (Bartlett) dense-path beamformer; forms a beam for every range-Doppler cell,
   replacing the channel axis with the `(num_az, num_el)` grid to build the
@@ -85,5 +85,5 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   convention relabeling + direction-cosine masking, taper sidelobes, batch,
   live overrides, error paths); `performance/cpp/perf_phase_shift_beamformer.cpp`
   characterizes dense beamforming cost + the `[live] az_angles` override spike.
-  Open items in `phase_shift_beamformer_op/OPEN_ITEMS.md` (`custom` angle
-  preset, dense-cube memory footprint).
+  Open items in `phase_shift_beamformer_op/OPEN_ITEMS.md` (dense-cube memory
+  footprint).

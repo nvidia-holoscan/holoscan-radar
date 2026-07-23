@@ -21,6 +21,14 @@ namespace holoscan::radar {
 // In:  adc_cube — complex64/complex128 or float32/float64 (real IF),
 //               (..., N_rx, M·L, samples_per_chirp).
 // Out: adc_cube — same dtype, (..., M_tx, N_rx, L, samples_per_chirp).
+//
+// Scope (v1): uniform round-robin TDM only — each TX fires once per length-M
+// cycle and the cycle repeats identically across all L repetitions (equal
+// per-TX counts, fixed PRI/M inter-TX spacing). Non-uniform / staggered
+// schedules (varying TX dwell or count) are rejected by TXSchedule with an
+// error. Supporting them is a deferred future enhancement (needs a
+// per-TX-timing schedule descriptor plus a matching MIMOCoherentCompensationOp
+// model) — see STATUS.md → Roadmap (settled as L12).
 template <typename T>
 class MIMODeinterleaveOp : public holoscan::Operator {
  public:

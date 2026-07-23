@@ -32,9 +32,9 @@ See STATUS.md (S1 settled decision).
   reduced to a uniform sub-array upstream (S3), or a custom smoother can be
   supplied as an upstream operator emitting a reduced `(snapshot, geometry)`
   pair.
-- **Two team forks remain for ratification** (do not silently re-resolve): the
-  integer means sub-array **count** (vs. length); and holey arrays route to S3
-  rather than accepting in-operator explicit partitions. See TEAM_BLOCKED (L13).
+
+The two forks — **count** semantics (over sub-array length) and **holey→S3**
+(over in-operator partitions) — are settled (STATUS.md L13).
 
 The related "where does the source count come from" question (fixed vs.
 MDL/AIC vs. CFAR/cluster seed) does **not** affect MVDR: `max_sources` is simply

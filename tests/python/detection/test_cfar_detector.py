@@ -72,10 +72,12 @@ def run_cfar(
     op_kwargs: dict | None = None,
     **cfar_kwargs,
 ) -> dict[str, np.ndarray]:
-    """Run CFAR once; always drain detection_mask (bool → HSDK 4.3).
+    """Run CFAR once; capture all four outputs including detection_mask.
 
-    Pass ``op_kwargs`` for a full Arg set without ``_ca_kwargs`` defaults
-    (error-path tests that omit required params).
+    detection_mask is uint8 (0/1) and therefore NumPy-visible on HSDK 4.3 (a
+    kDLBool port throws on the 4.3 message path). Pass ``op_kwargs`` for a full
+    Arg set without ``_ca_kwargs`` defaults (error-path tests that omit required
+    params).
     """
     arr = np.asarray(host, dtype=dtype).reshape(shape)
     frame = single_map(to_device_array(arr, dtype=dtype), "rd_maps")
@@ -88,14 +90,19 @@ def run_cfar(
         make_op,
         frame,
         input_port="rd_maps",
-        output_ports=["detection_score", "noise_estimate", "detection_idx"],
-        drain_ports=["detection_mask"],
+        output_ports=[
+            "detection_score",
+            "noise_estimate",
+            "detection_idx",
+            "detection_mask",
+        ],
     )
     assert len(outs["detection_score"]) == 1
     return {
         "score": outs["detection_score"][0],
         "noise": outs["noise_estimate"][0],
         "idx": outs["detection_idx"][0],
+        "mask": outs["detection_mask"][0],
     }
 
 
@@ -154,6 +161,21 @@ def test_DetectsSingleTargetRealPath():
     assert rows[0, 0] == dt
     assert rows[0, 1] == rt
     assert out["score"][dt, rt] > 1.0
+
+
+def test_DetectionMaskIsUint8AndMatchesScore():
+    # L1: detection_mask emits as uint8 (0/1), so Python can read it on HSDK 4.3
+    # (a bool port would throw). It must equal (detection_score > 1) everywhere.
+    dt, rt = 8, 16
+    mp = power_map(1.0, [(dt, rt)], 100.0)
+    out = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-3)
+
+    mask = out["mask"]
+    assert mask.dtype == np.uint8
+    assert mask.shape == out["score"].shape
+    assert set(np.unique(mask)).issubset({0, 1})
+    np.testing.assert_array_equal(mask != 0, out["score"] > 1.0)
+    assert mask[dt, rt] == 1
 
 
 def test_NoiseEstimateTracksFloor():

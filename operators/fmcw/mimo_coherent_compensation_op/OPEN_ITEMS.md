@@ -40,6 +40,15 @@ rejects it with a clear error. There is no implicit TDM fallback.
   for TDM).
 - Assumes uniform per-TX slow-time spacing; non-uniform schedules are
   rejected upstream by `MIMODeinterleaveOp` / `TXSchedule`.
+- **Known limitation — identity `tx_order` only.** The offset uses the TX
+  **index** `m` as the firing slot, so it is only correct when TX id equals
+  firing slot — i.e. the default round-robin `tx_order`. A non-identity but
+  uniform-repeating `tx_order` permutation is accepted by `MIMODeinterleaveOp`
+  (which orders its output TX axis by TX id), but this operator never receives
+  `tx_order`, so it silently applies the wrong per-TX phase for the permuted
+  case. A correct fix would propagate the firing-slot mapping (the position of
+  each TX id within the `tx_order` cycle) into the correction-table index — a
+  cross-operator change, deferred until a consumer needs non-round-robin TDM.
 - Output shape matches input: `num_doppler` is unchanged.
 
 ### A.3 DDM “code removal” is a band gather, not correlation
@@ -159,3 +168,27 @@ not kernel bandwidth. Defer ping-pong to the module-wide decision.
 ~8.0 ms vs harness median ~15.5 ms; per-tick `cudaMalloc` (~2.2–2.4 ms) +
 `cudaFree` (~8–10.5 ms) on the ~4.3 GB full-Doppler output account for the
 gap. Same §1 deferral — annotate only; no ping-pong landed here.
+
+### B.5 Sparse DDM detect-before-demux (folded CFAR + per-detection recovery)
+
+**Out of wave 1.** An alternate sparse MIMO–DDM recipe seen in reference
+CUDA/MatX pipelines: CFAR on a **pre-demux** power map (often after Rx NCI
+plus a Doppler-alias / “fold” average that shrinks the CFAR plane to
+`num_range × (num_doppler / fold)`), then **per-detection** DDM recovery —
+pick an unfolded Doppler candidate, gather each TX’s bin at
+`(unfolded + doppler_offset[tx])`, apply the code-phase weight, and form the
+virtual-channel snapshot for Bartlett / `BeamscanEstimatorOp`.
+
+This is **not** a mode of `MIMOCoherentCompensationOp`. Wave 1 keeps
+full-cube demux → optional clutter → `VirtualArrayAssemblyOp` → CFAR →
+`SnapshotGatherOp`. The alternate path would mainly touch a DDM-aware
+snapshot bridge (and optionally a fold-NCI preprocessor); COMP stays the
+whole-cube demux.
+
+**Why deferred:** trades detection performance for demux cost. Fold-then-CFAR
+dilutes SNR when empty fold lanes are averaged in, is a different detector
+than demux-first + `nci_axes` over virtual channels (worse Pd @ fixed Pfa in
+the usual sense), and couples to extended Doppler unfold / disambiguation
+already out of scope in §A.9. Worth revisiting only for sparse-path latency /
+reference-parity workloads — see also
+[`WORKFLOWS.md`](../../../docs/planning/WORKFLOWS.md) Notes.

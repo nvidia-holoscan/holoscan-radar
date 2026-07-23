@@ -46,7 +46,7 @@
 
 namespace holoscan::radar::sim {
 
-inline constexpr double kSimSpeedOfLight = 299792458.0;
+inline constexpr double kSimSpeedOfLight = kSpeedOfLight;
 
 using Vec3 = std::array<double, 3>;
 

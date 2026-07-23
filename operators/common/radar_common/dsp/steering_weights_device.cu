@@ -13,14 +13,13 @@
 
 #include "radar_common/dsp/angle_convention.hpp"
 #include "radar_common/dsp/window.hpp"
+#include "radar_common/math/constants.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
 
 namespace {
-
-constexpr double kTwoPi = 6.283185307179586;
 
 // One thread per (beam, element). Computes taper[m]·exp(±j·k·(pₘ·dir_b)) and
 // writes it into the requested layout; invalid beams write zero.

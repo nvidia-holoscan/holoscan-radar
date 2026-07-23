@@ -11,14 +11,9 @@
 
 #include "radar_common/dsp/angle_convention.hpp"
 #include "radar_common/dsp/window.hpp"
+#include "radar_common/math/constants.hpp"
 
 namespace holoscan::radar {
-
-namespace {
-
-constexpr double kTwoPi = 6.283185307179586;
-
-}  // namespace
 
 std::string steering_cache_key(const ArrayGeometry& geometry,
                                const AngleConvention& convention,

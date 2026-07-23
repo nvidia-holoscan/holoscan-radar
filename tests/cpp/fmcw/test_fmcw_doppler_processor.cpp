@@ -34,6 +34,7 @@
 #include "radar_common/descriptors/window_spec.hpp"
 #include "utils/bin_model.hpp"
 #include "radar_common/sim/point_target_sim.hpp"
+#include "radar_common/math/constants.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
@@ -56,8 +57,8 @@ using holoscan::radar::testing::wire_data_source;
 using holoscan::radar::testing::wire_leading_override;
 using holoscan::test::create_operator_test;
 
-constexpr double kTestPi = 3.14159265358979323846;
-constexpr double kSpeedOfLight = 299792458.0;
+using holoscan::radar::kPi;
+using holoscan::radar::kSpeedOfLight;
 
 // Waveform shared by the velocity_bins tests (77 GHz automotive-style).
 FMCWWaveformDescriptor test_waveform() {
@@ -81,7 +82,7 @@ std::vector<std::complex<double>> tone_profiles(int64_t num_chirps,
       static_cast<size_t>(num_chirps * num_bins), {0.0, 0.0});
   for (int64_t k = 0; k < num_chirps; ++k) {
     const double phase =
-        2.0 * kTestPi * doppler_hz * pri * static_cast<double>(k);
+        2.0 * kPi * doppler_hz * pri * static_cast<double>(k);
     data[static_cast<size_t>(k * num_bins + range_bin)] =
         std::complex<double>(std::cos(phase), std::sin(phase));
   }
@@ -766,7 +767,7 @@ TEST(FMCWDopplerProcessorOpTest, SimulatorTargetMapsToTruthVelocity) {
     for (int64_t b = 0; b < samples; ++b) {
       std::complex<double> acc{0.0, 0.0};
       for (int64_t s = 0; s < samples; ++s) {
-        const double phase = -2.0 * kTestPi * static_cast<double>(b) *
+        const double phase = -2.0 * kPi * static_cast<double>(b) *
                              static_cast<double>(s) /
                              static_cast<double>(samples);
         acc += sim.cube[static_cast<size_t>(k * samples + s)] *
