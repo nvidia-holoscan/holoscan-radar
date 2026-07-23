@@ -55,6 +55,26 @@ inline void clear_music_eig_cache() {
       matx::detail::GetCacheIdFromType<matx::detail::eig_cuda_cache_t>());
 }
 
+// Per-tick: clear the eig plan cache (keys are freed-at-return scratch
+// pointers) to bound growth — WITHOUT draining MatX's global MemTracker. The
+// global drain frees every MatX-tracked buffer in the process, including
+// sibling operators' cached cuFFT workspaces (FMCWRange/DopplerProcessorOp),
+// which they reuse next tick → out-of-bounds reads and corrupted output.
+// Leaves the live flag set so the teardown retire still drains. See
+// mvdr_stage.hpp for the identical split.
+inline void clear_music_matx_caches() {
+  const bool live =
+      music_eig_plans_live_flag().load(std::memory_order_relaxed);
+  if (!live) {
+    return;
+  }
+  cudaDeviceSynchronize();
+  clear_music_eig_cache();
+}
+
+// Teardown: clear the eig plan cache and drain MatX's MemTracker while CUDA is
+// still valid. Call once from the operator's stop() (and from Python atexit as
+// backup) — NOT per tick (see clear_music_matx_caches above).
 inline void retire_music_matx_caches() {
   const bool live =
       music_eig_plans_live_flag().exchange(false, std::memory_order_relaxed);
@@ -649,7 +669,7 @@ inline void run_music_stage(const cuda::std::complex<T>* snapshots,
       doa_multi, source_count);
 
   mark_music_eig_cache_live();
-  retire_music_matx_caches();
+  clear_music_matx_caches();
 }
 
 }  // namespace holoscan::radar::detail

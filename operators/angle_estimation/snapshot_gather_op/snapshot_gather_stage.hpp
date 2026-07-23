@@ -129,14 +129,18 @@ __global__ void gather_snapshots_kernel(
         is_valid[row * num_snapshots + snap_slot] = valid;
       }
       const int64_t plane_offset = d * num_range + r;
+      // snapshot is (num_detections, num_channels, num_snapshots) row-major
+      // (channel-major, snapshot-minor), matching the estimators' covariance
+      // indexing xi[c * num_snapshots + s]. Write channel c's slot at
+      // c * num_snapshots + snap_slot — NOT snap_slot * num_channels + c, which
+      // transposes to (num_snapshots, num_channels) and only agrees for K == 1.
       cuda::std::complex<T>* out =
-          snapshot + (row * num_channels * num_snapshots +
-                      snap_slot * num_channels);
+          snapshot + row * num_channels * num_snapshots;
       if (valid) {
         for (int64_t c = 0; c < num_channels; ++c) {
           const int64_t src =
               batch_base + c * (num_doppler * num_range) + plane_offset;
-          out[c] = rd_maps[src];
+          out[c * num_snapshots + snap_slot] = rd_maps[src];
         }
       }
       ++snap_slot;

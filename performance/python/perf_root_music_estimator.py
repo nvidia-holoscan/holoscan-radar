@@ -117,6 +117,24 @@ def make_ula_geometry(num_elements: int, spacing: float, wavelength: float) -> A
     return geom
 
 
+def make_ura_geometry(ny: int, nz: int, spacing: float, wavelength: float) -> ArrayGeometry:
+    geom = ArrayGeometry()
+    geom.wavelength = wavelength
+    geom.geometry_type = ArrayGeometryType.URA
+    positions: list[float] = []
+    for iz in range(nz):
+        for iy in range(ny):
+            positions.extend([0.0, float(iy) * spacing, float(iz) * spacing])
+    geom.element_positions = positions
+    return geom
+
+
+def scenario_geometry(scen: RootMusicScenario, spacing: float, wavelength: float) -> ArrayGeometry:
+    if scen.is_ura:
+        return make_ura_geometry(scen.ny, scen.nz, spacing, wavelength)
+    return make_ula_geometry(scen.channels, spacing, wavelength)
+
+
 def radar_boresight_convention() -> AngleConvention:
     conv = AngleConvention()
     conv.preset = AngleConventionPreset.RADAR_BORESIGHT
@@ -137,6 +155,10 @@ class RootMusicScenario:
     snapshots: int
     # Filled per run by run_scenario() for inline live-override measurement.
     override_at: int = 0
+    # URA exercises the native 2-D az+el rooting path.
+    is_ura: bool = False
+    ny: int = 0
+    nz: int = 0
 
 
 def make_scenario(s: SizeSpec) -> RootMusicScenario:
@@ -150,8 +172,27 @@ def make_scenario(s: SizeSpec) -> RootMusicScenario:
     )
 
 
+def make_ura_scenario(
+    size_id: str, ny: int, nz: int, detections: int, snapshots: int
+) -> RootMusicScenario:
+    sid = f"root_music_ura_{ny}x{nz}_n{detections}_s{snapshots}"
+    return RootMusicScenario(
+        id=sid,
+        size_id=size_id,
+        channels=ny * nz,
+        detections=detections,
+        snapshots=snapshots,
+        is_ura=True,
+        ny=ny,
+        nz=nz,
+    )
+
+
 def build_default_matrix() -> list[RootMusicScenario]:
-    return [make_scenario(_must_find_size(sid)) for sid in ("xs", "sm", "md")]
+    scenarios = [make_scenario(_must_find_size(sid)) for sid in ("xs", "sm", "md")]
+    # Native 2-D az+el path: a compact filled URA (per-axis rooting + pairing).
+    scenarios.append(make_ura_scenario("ura_sm", 6, 6, 128, 96))
+    return scenarios
 
 
 def build_size_sweep(size_ids: list[str]) -> list[RootMusicScenario]:
@@ -166,7 +207,12 @@ def build_size_sweep(size_ids: list[str]) -> list[RootMusicScenario]:
 
 
 def build_full_matrix() -> list[RootMusicScenario]:
-    return [make_scenario(s) for s in SIZE_LADDER]
+    scenarios = [make_scenario(s) for s in SIZE_LADDER]
+    # URA 2-D scenarios: per-axis rooting doubles the per-item geev calls, and
+    # channel counts grow as ny * nz — characterize, don't gate.
+    scenarios.append(make_ura_scenario("ura_sm", 6, 6, 128, 96))
+    scenarios.append(make_ura_scenario("ura_lg", 8, 8, 256, 128))
+    return scenarios
 
 
 def _base_row(scen: RootMusicScenario) -> ResultRow:
@@ -229,12 +275,15 @@ def _run_graph(
             self.add_flow(op, eig_drain, {("eigenvalues", "input")})
 
             override_values = {
-                "array_geometry": make_ula_geometry(scen.channels, 0.55, geometry.wavelength),
+                "array_geometry": scenario_geometry(scen, 0.55, geometry.wavelength),
                 "num_sources": -1,
                 "source_count_pfa": 0.5,
                 "max_sources": 3,
-                "spatial_smoothing": [2],
             }
+            # Spatial smoothing collapses the URA's (iz, iy) lattice out of the
+            # separable order the native 2-D path relies on; ULA-only.
+            if not scen.is_ura:
+                override_values["spatial_smoothing"] = [2]
             for port, value in override_values.items():
                 source = PerfOverrideSourceOp(
                     self,
@@ -256,7 +305,7 @@ def run_scenario(scen: RootMusicScenario, rs: RunSettings, report: PerfReport) -
         collector = TimingCollector()
         snap = make_iq_cube_device([scen.detections, scen.channels, scen.snapshots])
         frame = single_map(snap, "snapshot")
-        geometry = make_ula_geometry(scen.channels, 0.5, 1.0)
+        geometry = scenario_geometry(scen, 0.5, 1.0)
         convention = radar_boresight_convention()
         collector.t_construct = now()
         _run_graph(

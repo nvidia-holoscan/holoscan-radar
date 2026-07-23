@@ -86,9 +86,87 @@ def run_esprit(snapshot, *, op_cls=ESPRITEstimatorOpF64, **kwargs):
     }
 
 
+def make_block_two_azel(geom, conv, az0, el0, az1, el1, snapshots, noise, seed):
+    manifold0 = make_steering_snapshot(geom, conv, az0, el0)
+    manifold1 = make_steering_snapshot(geom, conv, az1, el1)
+    rng = np.random.default_rng(seed)
+    result = np.empty((geom.num_elements(), snapshots), dtype=np.complex128)
+    for sample in range(snapshots):
+        phase0 = rng.uniform(0.0, 2.0 * np.pi)
+        phase1 = rng.uniform(0.0, 2.0 * np.pi)
+        result[:, sample] = manifold0 * np.exp(1j * phase0) + manifold1 * np.exp(1j * phase1)
+        result[:, sample] += rng.normal(0, noise, geom.num_elements())
+        result[:, sample] += 1j * rng.normal(0, noise, geom.num_elements())
+    return result
+
+
 def assert_two(output, expected0, expected1, tolerance):
     actual = np.sort(output["doa_multi"][0, :2, 0])
     np.testing.assert_allclose(actual, np.sort([expected0, expected1]), atol=tolerance)
+
+
+def test_RecoversUraSingleSourceAzEl():
+    k_ny, k_nz, k_s = 6, 6, 256
+    truth_az, truth_el = 0.15, -0.10
+    conv = radar_boresight_convention()
+    geom = make_planar_ura_geometry(k_ny, k_nz, 0.5, 1.0)
+    block = make_block(geom, conv, truth_az, truth_el, k_s, 0.02, 7)
+    out = run_esprit(
+        block.reshape(1, geom.num_elements(), k_s),
+        array_geometry=geom,
+        angle_convention=conv,
+        num_sources=1,
+    )
+    assert out["aoa"].shape == (1, 2)
+    assert out["aoa"][0, 0] == pytest.approx(truth_az, abs=0.03)
+    assert out["aoa"][0, 1] == pytest.approx(truth_el, abs=0.03)
+
+
+def test_RecoversUraTwoSourcesAzElPairing():
+    k_ny, k_nz, k_s = 8, 8, 512
+    # Distinct in BOTH az and el so a mispaired result is detectable.
+    az0, el0 = 0.20, 0.12
+    az1, el1 = -0.15, -0.10
+    conv = radar_boresight_convention()
+    geom = make_planar_ura_geometry(k_ny, k_nz, 0.5, 1.0)
+    block = make_block_two_azel(geom, conv, az0, el0, az1, el1, k_s, 0.01, 79)
+    out = run_esprit(
+        block.reshape(1, geom.num_elements(), k_s),
+        array_geometry=geom,
+        angle_convention=conv,
+        num_sources=2,
+        max_sources=2,
+    )
+    assert out["doa_multi"].shape == (1, 2, 2)
+    assert int(out["source_count"][0]) == 2
+
+    dm = out["doa_multi"][0]
+
+    def near(pair, taz, tel):
+        return abs(pair[0] - taz) < 0.04 and abs(pair[1] - tel) < 0.04
+
+    matched = (near(dm[0], az0, el0) and near(dm[1], az1, el1)) or (
+        near(dm[0], az1, el1) and near(dm[1], az0, el0)
+    )
+    assert matched, f"pair0={dm[0]} pair1={dm[1]}"
+
+
+def test_RecoversUraSingleSourceAzElFloat():
+    k_ny, k_nz, k_s = 6, 6, 256
+    truth_az, truth_el = -0.12, 0.08
+    conv = radar_boresight_convention()
+    geom = make_planar_ura_geometry(k_ny, k_nz, 0.5, 1.0)
+    block = make_block(geom, conv, truth_az, truth_el, k_s, 0.02, 17)
+    out = run_esprit(
+        block.reshape(1, geom.num_elements(), k_s),
+        op_cls=ESPRITEstimatorOpF32,
+        array_geometry=geom,
+        angle_convention=conv,
+        num_sources=1,
+    )
+    assert out["aoa"].shape == (1, 2)
+    assert out["aoa"][0, 0] == pytest.approx(truth_az, abs=0.03)
+    assert out["aoa"][0, 1] == pytest.approx(truth_el, abs=0.03)
 
 
 @pytest.mark.parametrize("op_cls", [ESPRITEstimatorOpF32, ESPRITEstimatorOpF64])
@@ -283,11 +361,6 @@ def test_ExplicitSubarrayPairRecoversTwoSources():
 
 def test_RejectsInvalidAutoGeometry():
     conv = radar_boresight_convention()
-    ura = make_planar_ura_geometry(2, 4, 0.5, 1.0)
-    block = make_block(ura, conv, 0.1, 0.0, 16, 0.02, 7)
-    with pytest.raises(ValueError):
-        run_esprit(block[None], array_geometry=ura, angle_convention=conv)
-
     geom = make_ula_geometry(5, 0.5, 1.0)
     positions = list(geom.element_positions)
     positions[10] = 1.65

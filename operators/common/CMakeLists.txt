@@ -15,6 +15,7 @@ add_library(radar_common STATIC
     radar_common/dsp/steering_weights.cpp
     radar_common/dsp/spatial_smoothing.cpp
     radar_common/dsp/shift_invariant_subarray.cpp
+    radar_common/dsp/planar_aperture.cpp
     radar_common/dsp/subarray_selection.cpp
     radar_common/dsp/source_count.cpp
     radar_common/descriptors/tx_schedule.cpp

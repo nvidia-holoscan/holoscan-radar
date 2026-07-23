@@ -20,19 +20,11 @@ bootstrap_radar_package()
 # isort: off
 import holoscan.radar  # noqa: E402,F401
 import cupy  # noqa: E402,F401
+
 # isort: on
 
 holoscan.radar.install_matx_cache_atexit()
 
-from holoscan.conditions import CountCondition  # noqa: E402
-from holoscan.core import Application  # noqa: E402
-from holoscan.radar import (  # noqa: E402
-    AngleConvention,
-    AngleConventionPreset,
-    ArrayGeometry,
-    ArrayGeometryType,
-    ESPRITEstimatorOpF32,
-)
 from utils.perf_app import TimingCollector, now  # noqa: E402
 from utils.perf_driver import run_perf_matrix_main  # noqa: E402
 from utils.perf_report import PerfReport, ResultRow, RunSettings, SizeDef  # noqa: E402
@@ -46,6 +38,16 @@ from utils.perf_runner import (  # noqa: E402
 from utils.perf_sink import PerfTerminalSinkOp, make_null_sink  # noqa: E402
 from utils.perf_source import PerfOverrideSourceOp, PerfTensorSourceOp  # noqa: E402
 from utils.tensor_factory import make_iq_cube_device, single_map  # noqa: E402
+
+from holoscan.conditions import CountCondition  # noqa: E402
+from holoscan.core import Application  # noqa: E402
+from holoscan.radar import (  # noqa: E402
+    AngleConvention,
+    AngleConventionPreset,
+    ArrayGeometry,
+    ArrayGeometryType,
+    ESPRITEstimatorOpF32,
+)
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,10 @@ class Scenario:
     detections: int
     snapshots: int
     override_at: int = 0
+    # URA exercises the native 2-D dual-invariance path.
+    is_ura: bool = False
+    ny: int = 0
+    nz: int = 0
 
 
 SIZE_LADDER = [
@@ -82,19 +88,33 @@ def make_ula(channels: int, spacing: float) -> ArrayGeometry:
     geometry.wavelength = 1.0
     geometry.geometry_type = ArrayGeometryType.ULA
     geometry.element_positions = [
-        coordinate
-        for channel in range(channels)
-        for coordinate in (0.0, spacing * channel, 0.0)
+        coordinate for channel in range(channels) for coordinate in (0.0, spacing * channel, 0.0)
     ]
     return geometry
 
 
+def make_ura(ny: int, nz: int, spacing: float) -> ArrayGeometry:
+    geometry = ArrayGeometry()
+    geometry.wavelength = 1.0
+    geometry.geometry_type = ArrayGeometryType.URA
+    geometry.element_positions = [
+        coordinate
+        for iz in range(nz)
+        for iy in range(ny)
+        for coordinate in (0.0, spacing * iy, spacing * iz)
+    ]
+    return geometry
+
+
+def scenario_geometry(scenario: Scenario, spacing: float) -> ArrayGeometry:
+    if scenario.is_ura:
+        return make_ura(scenario.ny, scenario.nz, spacing)
+    return make_ula(scenario.channels, spacing)
+
+
 def make_scenario(size: SizeSpec) -> Scenario:
     return Scenario(
-        id=(
-            f"esprit_{size.id}_c{size.channels}_n{size.detections}"
-            f"_s{size.snapshots}"
-        ),
+        id=(f"esprit_{size.id}_c{size.channels}_n{size.detections}" f"_s{size.snapshots}"),
         size_id=size.id,
         channels=size.channels,
         detections=size.detections,
@@ -102,20 +122,37 @@ def make_scenario(size: SizeSpec) -> Scenario:
     )
 
 
+def make_ura_scenario(size_id: str, ny: int, nz: int, detections: int, snapshots: int) -> Scenario:
+    return Scenario(
+        id=f"esprit_ura_{ny}x{nz}_n{detections}_s{snapshots}",
+        size_id=size_id,
+        channels=ny * nz,
+        detections=detections,
+        snapshots=snapshots,
+        is_ura=True,
+        ny=ny,
+        nz=nz,
+    )
+
+
 def build_default_matrix() -> list[Scenario]:
-    return [make_scenario(_SIZE_BY_ID[key]) for key in ("xs", "sm", "md")]
+    scenarios = [make_scenario(_SIZE_BY_ID[key]) for key in ("xs", "sm", "md")]
+    # Native 2-D az+el path: a compact filled URA (dual invariance).
+    scenarios.append(make_ura_scenario("ura_sm", 6, 6, 128, 96))
+    return scenarios
 
 
 def build_size_sweep(size_ids: list[str]) -> list[Scenario]:
-    return [
-        make_scenario(_SIZE_BY_ID[size_id])
-        for size_id in size_ids
-        if size_id in _SIZE_BY_ID
-    ]
+    return [make_scenario(_SIZE_BY_ID[size_id]) for size_id in size_ids if size_id in _SIZE_BY_ID]
 
 
 def build_full_matrix() -> list[Scenario]:
-    return [make_scenario(size) for size in SIZE_LADDER]
+    scenarios = [make_scenario(size) for size in SIZE_LADDER]
+    # URA 2-D scenarios: dual-invariance LS + joint-diagonalization pairing over
+    # an ny * nz channel count — characterize, don't gate.
+    scenarios.append(make_ura_scenario("ura_sm", 6, 6, 128, 96))
+    scenarios.append(make_ura_scenario("ura_lg", 8, 8, 256, 128))
+    return scenarios
 
 
 def base_row(scenario: Scenario) -> ResultRow:
@@ -140,7 +177,7 @@ def run_graph(
     frame: dict,
     total_frames: int,
 ) -> None:
-    geometry = make_ula(scenario.channels, 0.5)
+    geometry = scenario_geometry(scenario, 0.5)
     convention = AngleConvention()
     convention.preset = AngleConventionPreset.RADAR_BORESIGHT
 
@@ -171,12 +208,15 @@ def run_graph(
                 self.add_flow(estimator, drain, {(port, "input")})
 
             overrides = {
-                "array_geometry": make_ula(scenario.channels, 0.55),
+                "array_geometry": scenario_geometry(scenario, 0.55),
                 "num_sources": -1,
                 "source_count_pfa": 0.5,
                 "max_sources": 3,
-                "spatial_smoothing": [2],
             }
+            # Spatial smoothing reshapes the aperture out of the URA's (iz, iy)
+            # lattice the native 2-D derivation depends on; ULA-only.
+            if not scenario.is_ura:
+                overrides["spatial_smoothing"] = [2]
             for port, value in overrides.items():
                 override = PerfOverrideSourceOp(
                     self,
@@ -190,17 +230,13 @@ def run_graph(
     ESPRITPerfApp().run()
 
 
-def run_scenario(
-    scenario: Scenario, settings: RunSettings, report: PerfReport
-) -> None:
+def run_scenario(scenario: Scenario, settings: RunSettings, report: PerfReport) -> None:
     plan = make_run_plan(settings, has_override=True)
 
     def run_repeat(_repeat: int, run_plan: RunPlan) -> TimingCollector:
         run = replace(scenario, override_at=run_plan.override_at)
         collector = TimingCollector()
-        tensor = make_iq_cube_device(
-            [scenario.detections, scenario.channels, scenario.snapshots]
-        )
+        tensor = make_iq_cube_device([scenario.detections, scenario.channels, scenario.snapshots])
         collector.t_construct = now()
         run_graph(
             run,
@@ -215,9 +251,7 @@ def run_scenario(
     row = base_row(scenario)
     fill_compute_row(row, samples)
     if row.latency.median_ms > 0:
-        row.cells_per_second = (
-            scenario.detections / (row.latency.median_ms / 1000.0)
-        )
+        row.cells_per_second = scenario.detections / (row.latency.median_ms / 1000.0)
     row.notes = (
         "fixed one-source steady path; live bundle switches geometry, EFT, "
         "Pfa, capacity, and smoothing"

@@ -81,6 +81,9 @@ struct RootMusicScenario {
   int64_t detections{0};
   int64_t snapshots{0};
   int64_t override_at{0};
+  bool is_ura{false};  // URA exercises the native 2-D az+el rooting path.
+  int64_t ny{0};
+  int64_t nz{0};
 };
 
 const std::vector<SizeSpec>& size_ladder() {
@@ -125,6 +128,30 @@ hr::ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing,
     geom.element_positions.push_back(0.0);
   }
   return geom;
+}
+
+hr::ArrayGeometry make_ura_geometry(int64_t ny, int64_t nz, double spacing,
+                                    double wavelength) {
+  hr::ArrayGeometry geom;
+  geom.wavelength = wavelength;
+  geom.geometry_type = hr::ArrayGeometryType::kUra;
+  geom.element_positions.reserve(static_cast<size_t>(ny * nz * 3));
+  for (int64_t iz = 0; iz < nz; ++iz) {
+    for (int64_t iy = 0; iy < ny; ++iy) {
+      geom.element_positions.push_back(0.0);
+      geom.element_positions.push_back(static_cast<double>(iy) * spacing);
+      geom.element_positions.push_back(static_cast<double>(iz) * spacing);
+    }
+  }
+  return geom;
+}
+
+hr::ArrayGeometry scenario_geometry(const RootMusicScenario& scen,
+                                    double spacing, double wavelength) {
+  if (scen.is_ura) {
+    return make_ura_geometry(scen.ny, scen.nz, spacing, wavelength);
+  }
+  return make_ula_geometry(scen.channels, spacing, wavelength);
 }
 
 template <typename T>
@@ -208,7 +235,7 @@ class RootMusicPerfApp : public holoscan::Application {
             make_condition<holoscan::CountCondition>(total_frames));
     geometry_ovr->configure(
         scen->override_at,
-        make_ula_geometry(scen->channels, 0.55, geometry.wavelength));
+        scenario_geometry(*scen, 0.55, geometry.wavelength));
     add_flow(geometry_ovr, op, {{"output", "array_geometry"}});
 
     auto sources_ovr =
@@ -230,13 +257,17 @@ class RootMusicPerfApp : public holoscan::Application {
     max_sources_ovr->configure(scen->override_at, int64_t{3});
     add_flow(max_sources_ovr, op, {{"output", "max_sources"}});
 
-    auto smoothing_ovr =
-        make_operator<perf::PerfOverrideSourceOp<std::vector<int64_t>>>(
-            "smoothing_ovr",
-            make_condition<holoscan::CountCondition>(total_frames));
-    smoothing_ovr->configure(scen->override_at,
-                             std::vector<int64_t>{2});
-    add_flow(smoothing_ovr, op, {{"output", "spatial_smoothing"}});
+    // Spatial smoothing collapses the URA's (iz, iy) lattice out of the
+    // separable order the native 2-D path derives its invariances from, so it
+    // is exercised only on the ULA (1-D) scenarios.
+    if (!scen->is_ura) {
+      auto smoothing_ovr =
+          make_operator<perf::PerfOverrideSourceOp<std::vector<int64_t>>>(
+              "smoothing_ovr",
+              make_condition<holoscan::CountCondition>(total_frames));
+      smoothing_ovr->configure(scen->override_at, std::vector<int64_t>{2});
+      add_flow(smoothing_ovr, op, {{"output", "spatial_smoothing"}});
+    }
   }
 };
 
@@ -274,6 +305,23 @@ RootMusicScenario make_scenario(const SizeSpec& s) {
   return sc;
 }
 
+RootMusicScenario make_ura_scenario(const char* size_id, int64_t ny, int64_t nz,
+                                    int64_t detections, int64_t snapshots) {
+  RootMusicScenario sc;
+  sc.size_id = size_id;
+  sc.is_ura = true;
+  sc.ny = ny;
+  sc.nz = nz;
+  sc.channels = ny * nz;
+  sc.detections = detections;
+  sc.snapshots = snapshots;
+  std::ostringstream id;
+  id << "root_music_ura_" << ny << "x" << nz << "_n" << detections << "_s"
+     << snapshots;
+  sc.id = id.str();
+  return sc;
+}
+
 struct RootMusicTraits : perf::PerfDriverDefaults {
   using Scenario = RootMusicScenario;
 
@@ -307,6 +355,8 @@ struct RootMusicTraits : perf::PerfDriverDefaults {
     for (const char* sid : {"xs", "sm", "md"}) {
       out.push_back(make_scenario(must_find_size(sid)));
     }
+    // Native 2-D az+el path: a compact filled URA (per-axis rooting + pairing).
+    out.push_back(make_ura_scenario("ura_sm", 6, 6, 128, 96));
     return out;
   }
 
@@ -329,6 +379,10 @@ struct RootMusicTraits : perf::PerfDriverDefaults {
     for (const auto& s : size_ladder()) {
       out.push_back(make_scenario(s));
     }
+    // URA 2-D scenarios: per-axis rooting doubles the per-item geev calls, and
+    // channel counts grow as ny * nz — characterize, don't gate.
+    out.push_back(make_ura_scenario("ura_sm", 6, 6, 128, 96));
+    out.push_back(make_ura_scenario("ura_lg", 8, 8, 256, 128));
     return out;
   }
 
@@ -351,7 +405,7 @@ struct RootMusicTraits : perf::PerfDriverDefaults {
           app->scen = &run_scen;
           app->collector = &collector;
           app->snapshot = perf::single_map(std::move(snap_t), "snapshot");
-          app->geometry = make_ula_geometry(scen.channels, 0.5, 1.0);
+          app->geometry = scenario_geometry(scen, 0.5, 1.0);
           app->convention.preset = hr::AngleConventionPreset::kRadarBoresight;
           app->total_frames = p.total_frames;
           app->run();

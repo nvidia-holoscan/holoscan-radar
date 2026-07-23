@@ -57,12 +57,32 @@ no behavioral gap.
 
 ## 3. 2-D Root-MUSIC variant
 
-**Context:** Contract: native 2-D az/el needs a 2-D-capable variant; v1 accepts
-filled **1-D ULA** only (`array_geometry` with `geometry_type::kUla` or detected
-uniform line). URA / 2-D aperture → `std::invalid_argument`; use
-`SubarraySelectionOp` upstream.
+**Context:** The operator is now geometry-driven (contract change, 2026-07-23):
+a **1-D ULA** (or detected uniform line) resolves azimuth only, exactly as
+before; a **filled URA** (detected via `analyze_planar_aperture`, `(iz` outer,
+`iy` inner) channel order) resolves native (az, el).
 
-**Status:** open — deferred variant, not a v1 blocker.
+**2-D method (deliberate design decision — no canonical 2-D Root-MUSIC exists):**
+*reduced-dimension per-axis rooting with cross-axis pairing.* The full URA
+covariance is row/column subarray-averaged into an `Ny x Ny` (azimuth) and an
+`Nz x Nz` (elevation) covariance; the existing 1-D machinery
+(`root_music_coefficients_kernel` → companion → `cusolverDnXgeev`) roots each to
+candidate direction cosines `u_i`, `v_k`; a small greedy kernel then pairs them
+by evaluating the *full* 2-D noise-subspace (MUSIC) metric at each `(u_i, v_k)`.
+Verified on analytic URA snapshots (single + two-source distinct-az-AND-el
+pairing, float/double) in `tests/{cpp,python}/angle_estimation`.
+
+**Deferred (documented, not blockers):** a true joint 2-D Root-MUSIC (2-D
+polynomial / matrix-pencil), explicit two-pair subarray specs, and pairing
+robustness when two sources share an azimuth or an elevation (bounded by tests,
+degrades gracefully). Non-orthogonal or non-filled apertures stay on the 1-D
+path or fail predictably.
+
+**Perf note:** per-axis rooting issues two `cusolverDnXgeev` sweeps per item
+(see item 1), and URA channel counts grow as `Ny * Nz`; URA scenarios are in the
+perf harness (`ura_sm` 6x6, `ura_lg` 8x8) — characterized, not gated.
+
+**Status:** landed (2026-07-23) — 2-D URA implemented; variants above deferred.
 
 ## 4. MatX eig cache retirement
 

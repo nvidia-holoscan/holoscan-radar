@@ -62,9 +62,33 @@ inline void clear_matx_inv_cache() {
       matx::detail::GetCacheIdFromType<matx::detail::inv_cache_t>());
 }
 
-// Destroy cached eig/inv plans and drain MatX's MemTracker while CUDA is
-// still valid. Called at the end of each MVDR stage (and from Python atexit
-// as backup). Safe no-op if solvers were never used.
+// Per-tick: destroy the cached eig/inv plans (whose keys are this tick's
+// scratch pointers, freed when compute() returns) to bound cache growth —
+// WITHOUT draining MatX's global MemTracker. The global drain frees *every*
+// MatX-tracked buffer in the process, including sibling operators' cached
+// cuFFT workspaces (e.g. FMCWRange/DopplerProcessorOp's windowed FFT), which
+// they reuse next tick → out-of-bounds reads and corrupted output. Leaves the
+// live flags set so the teardown retire below still drains. Safe no-op if
+// solvers were never used.
+inline void clear_matx_solver_plan_caches() {
+  const bool eig = matx_eig_plans_live_flag().load(std::memory_order_relaxed);
+  const bool inv = matx_inv_plans_live_flag().load(std::memory_order_relaxed);
+  if (!eig && !inv) {
+    return;
+  }
+  cudaDeviceSynchronize();
+  if (eig) {
+    clear_matx_eig_cache();
+  }
+  if (inv) {
+    clear_matx_inv_cache();
+  }
+}
+
+// Teardown: destroy cached eig/inv plans and drain MatX's MemTracker while CUDA
+// is still valid. Call once from the operator's stop() (and from Python atexit
+// as backup) — NOT per tick (see clear_matx_solver_plan_caches above). Safe
+// no-op if solvers were never used.
 inline void retire_matx_solver_caches() {
   const bool eig =
       matx_eig_plans_live_flag().exchange(false, std::memory_order_relaxed);
@@ -596,11 +620,12 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots,
 
   // MatX inv plans are cached by (A, A_inv) device pointers. Holoscan frees
   // those scratch tensors when compute() returns, so the cache would retain
-  // plans whose keys outlive the buffers — and later GPU allocs (other ops /
-  // pytest) then make atexit Clear / MatX's static dtor crash in cudaFreeAsync.
-  // Retire while CUDA is still healthy and before scratch is released.
+  // plans whose keys outlive the buffers. Clear the eig/inv plan caches now,
+  // while CUDA is healthy and before scratch is released — but do NOT drain
+  // MatX's global tracker here (that frees sibling ops' cached FFT workspaces);
+  // the operator's stop() does the full drain at teardown.
   mark_matx_solver_caches_live();
-  retire_matx_solver_caches();
+  clear_matx_solver_plan_caches();
 }
 
 }  // namespace holoscan::radar::detail

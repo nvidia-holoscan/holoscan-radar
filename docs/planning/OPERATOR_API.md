@@ -213,8 +213,8 @@ Orthogonal to the antenna/multiplexing modality: whatever produces channel snaps
 - **BeamscanEstimatorOp** — conventional/Bartlett, **sparse** path: one DOA per detection snapshot; the default sparse estimator.
 - **MVDREstimatorOp** — adaptive/Capon beamforming; grid-scan; needs multi-snapshot covariance.
 - **MUSICEstimatorOp** — subspace (spectral); grid-scan; needs covariance + source count.
-- **RootMUSICEstimatorOp** — subspace, gridless (polynomial rooting); ULA/uniform geometry; no scan grid, no spectrum.
-- **ESPRITEstimatorOp** — subspace, gridless (rotational invariance); shift-invariant geometry; closed-form DOAs.
+- **RootMUSICEstimatorOp** — subspace, gridless (polynomial rooting); ULA (azimuth-only) **or** filled URA (native az+el, reduced-dimension per-axis rooting + pairing); no scan grid, no spectrum.
+- **ESPRITEstimatorOp** — subspace, gridless (rotational invariance); shift-invariant geometry — ULA (azimuth-only) **or** filled URA (native az+el, dual-invariance 2-D ESPRIT with automatic pairing); closed-form DOAs.
 
 #### Covariance estimator open items
 
@@ -567,8 +567,8 @@ Per-estimator deviations from the shared contract:
 
 ##### RootMUSICEstimatorOp
 
-- **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`. Requires a ULA / uniform (Vandermonde) array geometry.
-- **Out:** `aoa_estimates` — `(num_items, 2)`. Gridless (DOAs from polynomial roots) — **no `angle_spectrum`**.
+- **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`. Requires a ULA **or** a filled URA (Vandermonde per aperture axis); the geometry is auto-detected from `array_geometry`.
+- **Out:** `aoa_estimates` — `(num_items, 2)`. Gridless (DOAs from polynomial roots) — **no `angle_spectrum`**. A ULA resolves one coordinate (azimuth; elevation degenerate ≈ 0); a URA resolves native `(az, el)`.
 - **Out:** `doa_multi` + `source_count` (optional); `eigenvalues` (optional).
 
 **Parameters:** shared `array_geometry` + `angle_convention` (**no scan grid**) plus:
@@ -579,12 +579,28 @@ Per-estimator deviations from the shared contract:
 - `forward_backward` — bool. Forward-backward smoothing (needs a centro-symmetric ULA/URA); applies only when `spatial_smoothing` is set. Default: true.
 - `max_sources` **[live]** — int. `doa_multi` / `source_count` capacity. Default: 4.
 
-Requires a ULA / uniform (Vandermonde) geometry; a non-uniform virtual array needs a uniform sub-array selection (or spatial smoothing) first, and native 2-D az/el needs a 2-D-capable variant.
+**Algorithm (2-D URA).** A URA (element order `(iz` outer, `iy` inner), the
+`make_ura_geometry` convention) is handled by **reduced-dimension per-axis
+rooting with cross-axis pairing**: the full covariance yields the shared
+noise-subspace projector; row- and column-averaged sub-covariances (an `Ny×Ny`
+azimuth covariance averaged over the `Nz` rows, and an `Nz×Nz` elevation
+covariance averaged over the `Ny` columns) each feed the existing 1-D rooting
+path (coefficients → companion → `cusolverDnXgeev`) to yield candidate azimuth
+cosines `u_i` and elevation cosines `v_k`; candidates are paired by evaluating
+the full 2-D MUSIC subspace metric at each `(u_i, v_k)` and greedily selecting
+the `d` best. There is no canonical single-polynomial 2-D Root-MUSIC; this
+reduced-dimension + pairing method is a deliberate design decision (documented
+in the operator's `OPEN_ITEMS.md`), trading some joint optimality for robustness
+and reuse of the 1-D machinery. A ULA keeps the unchanged single-axis cone path.
+Deferred: a true joint 2-D polynomial formulation and explicit
+non-ULA-per-axis subarray specs.
+
+Requires a ULA or a filled URA; a non-uniform / holey virtual array needs a uniform sub-array selection (or spatial smoothing) first.
 
 ##### ESPRITEstimatorOp
 
-- **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`. Requires a shift-invariant geometry (ULA or two identical displaced subarrays).
-- **Out:** `aoa_estimates` — `(num_items, 2)`. Gridless (closed-form eigenvalue rotation) — **no `angle_spectrum`**.
+- **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`. Requires a shift-invariant geometry: a ULA (or two identical displaced subarrays) for azimuth-only, **or** a filled URA for native az+el; the geometry is auto-detected from `array_geometry`.
+- **Out:** `aoa_estimates` — `(num_items, 2)`. Gridless (closed-form eigenvalue rotation) — **no `angle_spectrum`**. A ULA resolves one coordinate (azimuth; elevation degenerate ≈ 0); a URA resolves native `(az, el)`.
 - **Out:** `doa_multi` + `source_count` (optional); `eigenvalues` (optional).
 
 **Parameters:** shared `array_geometry` + `angle_convention` (**no scan grid**) plus:
@@ -594,13 +610,23 @@ Requires a ULA / uniform (Vandermonde) geometry; a non-uniform virtual array nee
 - `spatial_smoothing` **[live]** — int-vector or none. Per-aperture-axis sub-array counts on a filled ULA/URA (`[P]` / `[P_az, P_el]`; empty = off); decorrelates coherent multipath at the cost of aperture. Default: none.
 - `forward_backward` — bool. Forward-backward smoothing (needs a centro-symmetric ULA/URA); applies only when `spatial_smoothing` is set. Default: true.
 - `max_sources` **[live]** — int. `doa_multi` / `source_count` capacity. Default: 4.
-- `subarray_spec` — ShiftInvariantSubarrayPair. Ordered corresponding element-index vectors (`reference_indices`, `shifted_indices`) defining the two identical displaced subarrays. Their common displacement is derived and validated against `array_geometry` rather than stored redundantly. **Static** (structural). Empty vectors select `auto`: derive the maximum-overlap pair `[0…M−2]` / `[1…M−1]` for a ULA. Default: auto.
+- `subarray_spec` — ShiftInvariantSubarrayPair. Ordered corresponding element-index vectors (`reference_indices`, `shifted_indices`) defining the two identical displaced subarrays. Their common displacement is derived and validated against `array_geometry` rather than stored redundantly. **Static** (structural). Empty vectors select `auto`: derive the maximum-overlap pair `[0…M−2]` / `[1…M−1]` for a ULA, or the two orthogonal maximum-overlap invariances for a URA. Default: auto.
 
-Requires a shift-invariant geometry; native 2-D az/el needs a 2-D variant (e.g. Unitary / 2-D ESPRIT).
+**Algorithm (2-D URA).** On a URA (element order `(iz` outer, `iy` inner)),
+`subarray_spec: auto` derives **two orthogonal shift invariances** — a y-shift
+(azimuth) and a z-shift (elevation) — internally from the lattice. The signal
+subspace yields two rotation operators `Ψ_y`, `Ψ_z` (LS). Because in the
+noiseless model `Ψ_y` and `Ψ_z` share eigenvectors (they commute), the unitary
+Schur basis that triangularizes `Ψ_y` simultaneously triangularizes `Ψ_z`; the
+paired diagonals give azimuth cosine `u_i` and elevation cosine `v_i`
+**automatically paired** (a joint-diagonalization realization — no separate
+assignment step). A ULA (or an explicit single-pair `subarray_spec`) keeps the
+unchanged single-shift 1-D path. Deferred: explicit two-pair 2-D
+`subarray_spec`s and the real-valued Unitary-ESPRIT speedup.
 
-An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclusive: smoothing changes the effective aperture and channel indexing. With smoothing enabled, leave `subarray_spec=auto`; the maximum-overlap pair is derived from the reduced uniform aperture each tick.
+An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclusive: smoothing changes the effective aperture and channel indexing. With smoothing enabled, leave `subarray_spec=auto`; the pair(s) are derived from the reduced uniform aperture each tick.
 
-*(Geometry note: Root-MUSIC and ESPRIT constrain the valid `array_geometry` — the non-uniform / holey virtual arrays from `VirtualArrayAssemblyOp` may need a ULA/subarray-selection or spatial-smoothing step first, and native 2-D az/el needs a 2-D-capable variant. They do not change the port shapes above.)*
+*(Geometry note: Root-MUSIC and ESPRIT constrain the valid `array_geometry` — the non-uniform / holey virtual arrays from `VirtualArrayAssemblyOp` may need a ULA/subarray-selection or spatial-smoothing step first. A ULA resolves azimuth only; a filled URA resolves native `(az, el)`. They do not change the port shapes above.)*
 
 ---
 

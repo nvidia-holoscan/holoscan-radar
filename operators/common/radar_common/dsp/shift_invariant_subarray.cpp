@@ -139,4 +139,31 @@ ShiftInvariantSubarrayPlan build_shift_invariant_subarray_plan(
   return plan;
 }
 
+UraInvariancePairs build_ura_dual_invariance(int64_t ny, int64_t nz) {
+  if (ny < 2 || nz < 2) {
+    throw std::invalid_argument(
+        "build_ura_dual_invariance: a URA needs at least 2x2 elements");
+  }
+  UraInvariancePairs pairs;
+  const size_t y_count = static_cast<size_t>(nz * (ny - 1));
+  const size_t z_count = static_cast<size_t>((nz - 1) * ny);
+  pairs.y_reference.reserve(y_count);
+  pairs.y_shifted.reserve(y_count);
+  pairs.z_reference.reserve(z_count);
+  pairs.z_shifted.reserve(z_count);
+  for (int64_t iz = 0; iz < nz; ++iz) {
+    for (int64_t iy = 0; iy < ny - 1; ++iy) {
+      pairs.y_reference.push_back(iz * ny + iy);
+      pairs.y_shifted.push_back(iz * ny + iy + 1);
+    }
+  }
+  for (int64_t iz = 0; iz < nz - 1; ++iz) {
+    for (int64_t iy = 0; iy < ny; ++iy) {
+      pairs.z_reference.push_back(iz * ny + iy);
+      pairs.z_shifted.push_back((iz + 1) * ny + iy);
+    }
+  }
+  return pairs;
+}
+
 }  // namespace holoscan::radar
