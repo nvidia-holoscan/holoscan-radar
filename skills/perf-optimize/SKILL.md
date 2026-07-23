@@ -175,10 +175,12 @@ grep -rn "PERF-SCRATCH" operators/ performance/   # must return nothing
 - **`ncu` is evidence, not a gate — and on by default.** To understand *why* a
   change did or didn't help at the kernel level — memory- vs compute-bound,
   occupancy, roofline — run the Nsight Compute deep-dive from `perf-analyze`
-  (needs `ncu` installed + `--cap-add SYS_ADMIN`) **by default** once the gates
-  have decided, on the kernel the change touched. Skip it only when the user
-  opted out (e.g. "no ncu" / "nsys-only" — sticky for the session), when `ncu` is
-  unavailable (stay nsys-only and say so), or when the change is purely host-side
-  (pooling/gating/caching) so no kernel changed — then say the dive was
-  uninformative and why. It only ever *explains* a result; it never changes the
+  **by default** once the gates have decided, on the kernel the change touched.
+  `ncu` absent is **not** a skip reason: install it and profile as root with
+  `SYS_ADMIN` per `perf-analyze`'s **Availability gate** (the single source for the
+  install / container / command recipe). Skip it only when the user opted out
+  (e.g. "no ncu" / "nsys-only" — sticky for the session), when `ncu` genuinely
+  can't be installed / its counters stay locked (stay nsys-only and say so), or
+  when the change is purely host-side (pooling/gating/caching) so no kernel
+  changed — then say the dive was uninformative and why. It only ever *explains* a result; it never changes the
   keep/revert decision — the three gates above are the sole arbiters.

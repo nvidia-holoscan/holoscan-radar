@@ -56,10 +56,17 @@ hand-rolling docker: `./holohub run-container --as-root` drops you in as **root*
 (the default mapped user is your non-root host UID with no working sudo, which is
 why plain `apt-get`/`sudo` fail in a normal session), and `--docker-opts='…'`
 forwards arbitrary `docker run` args, e.g. `--docker-opts='--cap-add SYS_ADMIN'`.
-Nsight Compute (`ncu`) needs **both** of these — see [Deep kernel
-dive](#deep-kernel-dive--nsight-compute-ncu) — so install it via `--as-root`, and
-add `--cap-add SYS_ADMIN` next to `CAP_SYS_PTRACE` in the agent's headless `docker
-run` whenever a command actually invokes `ncu`.
+Nsight Compute (`ncu`) needs root **and** `SYS_ADMIN` — see the full recipe under
+[Deep kernel dive → Availability gate](#deep-kernel-dive--nsight-compute-ncu). The
+short version: install `ncu` once into a **derived image**
+(`holoscan-radar:ngc-v4.3.0-cuda13-ncu` — `apt-get update && apt-get install -y
+nsight-compute`, then `docker commit`), then in the agent's headless `docker run`
+point at that image and add **both** `--cap-add SYS_ADMIN` (next to
+`CAP_SYS_PTRACE`) **and** `--user 0:0` whenever a command invokes `ncu`. On this
+host counter access needs root: as the normal mapped non-root user `ncu` fails
+with `ERR_NVGPUCTRPERM` even *with* `SYS_ADMIN` — running as root (`--user 0:0`)
+plus `SYS_ADMIN` is what makes counters collect. Both the install and counter
+collection are **verified working on this Thor host** under that combination.
 
 ## Steps
 
@@ -194,8 +201,11 @@ you must say which one applies:
 1. **User opt-out** — the user asked to skip it (e.g. "no ncu", "skip Nsight
    Compute", "nsys-only", "don't run ncu"). Their request is sticky for the
    session; honor it without re-asking.
-2. **Unavailable** — `ncu` is absent or perf counters are locked (see the
-   availability gate below): stay nsys-only and say so.
+2. **Unavailable *after trying to install it*** — `ncu` absent is **not** a skip
+   reason by itself: install it first (default; see the availability gate below —
+   the base image doesn't ship it but the repos are pre-configured). Only fall
+   back to nsys-only (and say so) if the install genuinely can't be done or the
+   perf counters stay locked (`ERR_NVGPUCTRPERM`) after adding `SYS_ADMIN`.
 3. **No kernel worth profiling** — the tick is so host/graph-bound that no kernel
    meaningfully contributes (kernel ≪ the tick at every size). Note that the
    attribution already answered the question (the win is in the shell), so the
@@ -204,19 +214,58 @@ you must say which one applies:
 `runner.py` does not yet drive it (a future stage may), so it stays a **manual**
 invocation — but a default step of the analysis, not an occasional escalation.
 
-**Availability gate — assert before relying on it.** `ncu` is **not in the base
-image** and needs GPU perf-counter access, so it can be simply unavailable here:
-- **Install** (pick one): interactive+ephemeral — `./holohub run-container
-  --as-root` then `apt-get install --no-install-recommends -y
-  cuda-nsight-compute-13-2` (confirm the exact name with `apt-cache search
-  nsight-compute`); or **persistent** — add that `apt-get` as a `Dockerfile` layer
-  and rebuild once.
-- **Counters:** `ncu` needs `--cap-add SYS_ADMIN` (the harness's headless `docker
-  run` only adds `CAP_SYS_PTRACE`; interactive runs pass it via
-  `--docker-opts='--cap-add SYS_ADMIN'`), plus a permissive host counter policy.
-- **Probe once:** `ncu --version`, then a single-metric run. If it prints
-  `ERR_NVGPUCTRPERM` (or `ncu` is absent), **stay nsys-only and say so** — never
-  fabricate kernel metrics. On Thor/Tegra this counter wall is the real risk.
+**Availability gate — get `ncu`, don't just skip it.** `ncu` is **not in the base
+image**, but the base image already has the NVIDIA apt repos configured
+(`/etc/apt/sources.list.d/nvidia-devtools.list` + `cuda.list`), so installing it
+is a few tested steps — do this by default, don't fall back to nsys-only just
+because `ncu` is missing. **Verified on this Thor host (2026-07-23).**
+
+- **You need root.** The harness's default headless `docker run` maps your
+  non-root host UID (no working sudo), so `apt-get` fails there. Two ways in as
+  root: `./holohub run-container --as-root` (interactive shell), or, for the
+  agent's headless flow, add `--user 0:0` to the `docker run`.
+- **`apt-get update` FIRST — this is the step a fresh run misses.** The repos are
+  listed but the package lists aren't fetched in the base image, so a bare
+  `apt-cache search nsight-compute` / `apt-get install` finds **nothing** and the
+  run wrongly concludes "unavailable." Always `apt-get update` before searching or
+  installing.
+- **Package:** `nsight-compute` (the standalone devtools build; candidate
+  `2026.2.1`, matches the image's nsys era). `cuda-nsight-compute-13-2` also works
+  (CUDA-toolkit-pinned). Install: `apt-get install -y --no-install-recommends
+  nsight-compute`. The CLI lands at `/opt/nvidia/nsight-compute/<ver>/ncu` and is
+  **not on `PATH`** — resolve it: `NCU=$(ls /opt/nvidia/nsight-compute/*/ncu | head -1)`.
+- **Persist it (default) — a `--rm` container throws the install away.** Build a
+  derived image **once** so every later run (and re-runs) skip the reinstall:
+  ```bash
+  cid=$(docker run -d --user 0:0 -e HOME=/tmp \
+    -v "$PWD":/workspace/holoscan-radar -w /workspace/holoscan-radar \
+    holoscan-radar:ngc-v4.3.0-cuda13 bash -lc \
+    'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+       --no-install-recommends nsight-compute && echo DONE_INSTALL_OK && sleep 60')
+  # wait for DONE_INSTALL_OK in `docker logs $cid`, then:
+  docker commit "$cid" holoscan-radar:ngc-v4.3.0-cuda13-ncu
+  docker rm -f "$cid"
+  ```
+  Then run every `ncu` command against `holoscan-radar:ngc-v4.3.0-cuda13-ncu`
+  instead of the base tag. (One-off alternative, no new image: chain
+  `apt-get update && apt-get install -y nsight-compute && "$NCU" …` inside the
+  *same* `docker run` — re-downloads each time, fine for a single dive.)
+- **Counters need `--cap-add SYS_ADMIN` *and* root (`--user 0:0`).** The harness's
+  headless `docker run` only adds `CAP_SYS_PTRACE` and maps a non-root UID; for
+  `ncu` add `--cap-add SYS_ADMIN` **and** `--user 0:0` (interactive:
+  `--docker-opts='--cap-add SYS_ADMIN'`). **Verified on this Thor host:** root +
+  `SYS_ADMIN` collects real Speed-of-Light numbers; the *non-root* mapped user
+  fails with `ERR_NVGPUCTRPERM` **even with `SYS_ADMIN`**, so both are required
+  here. (Unlike profiling, plain nsys and the perf binary run fine as non-root —
+  only `ncu` counters need root.)
+- **Probe once:** `"$NCU" --version`, then a single-metric run. Only if it still
+  prints `ERR_NVGPUCTRPERM` after adding **both** `SYS_ADMIN` and `--user 0:0`
+  should you **stay nsys-only and say so** — never fabricate kernel metrics.
+
+> **NVTX filter gotcha:** `--nvtx-include "stage-kernel/"` can silently match
+> **zero** launches (ncu exits 0 but profiles nothing). Rely on
+> `--launch-skip/--launch-count` for scoping; treat `--nvtx-include` as optional
+> and confirm the run actually reported kernels before trusting an empty result.
 
 **Scope it hard or it never finishes.** Kernel replay makes `ncu` 10–100× slower
 *per launch*, so never run it across the size×variant×repeat matrix. Profile
@@ -224,19 +273,23 @@ image** and needs GPU perf-counter access, so it can be simply unavailable here:
 set**, and only a handful of **steady-tick** launches (skip warmup):
 
 ```bash
-ncu --target-processes all \
+# Inside the -ncu image, run as root with SYS_ADMIN:
+#   docker run ... --cap-add SYS_ADMIN --user 0:0 holoscan-radar:ngc-v4.3.0-cuda13-ncu ...
+NCU=$(ls /opt/nvidia/nsight-compute/*/ncu | head -1)
+"$NCU" --target-processes all \
     --section SpeedOfLight --section Occupancy \
     --section LaunchStats --section MemoryWorkloadAnalysis \
-    --nvtx --nvtx-include "stage-kernel/" \
     --launch-skip 20 --launch-count 3 \
     --export performance/agent/runs/<OP>/<OP>_md.ncu-rep --force-overwrite \
-    ./build-perf/perf_<OP> --sizes md --frames 30 --quiet
+    ./build-perf/performance/cpp/perf_<OP> --sizes md --frames 30 --quiet
 ```
 
-`--nvtx-include` + `--launch-skip/--launch-count` restrict capture to a few steady
-kernels (not cold first-touch); `--set full` and multi-size are exactly what turn
-a 5-second run into an hour. Read it back with `ncu --import <…>.ncu-rep --page
-details` (or `--csv --page raw` to parse), and map to the rubric:
+`--launch-skip/--launch-count` restrict capture to a few steady kernels (not cold
+first-touch); `--set full` and multi-size are exactly what turn a 5-second run
+into an hour. (Add `--nvtx --nvtx-include "…/"` only if you confirm it matches
+launches — see the gotcha above.) Read it back with `"$NCU" --import
+<…>.ncu-rep --page details` (or `--csv --page raw` to parse), and map to the
+rubric:
 
 - **DRAM% ≈ peak, compute% low** → memory-bound *and* near ceiling: the kernel has
   little headroom; wins come from the shell or from moving less data, not the

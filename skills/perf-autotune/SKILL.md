@@ -152,11 +152,13 @@ grep -rn "PERF-SCRATCH" operators/ performance/   # must return nothing
 - **`ncu` deep-dive (on by default, evidence-only).** By default, run the Nsight
   Compute deep-dive in `perf-analyze` when a candidate's pick hinges on whether the
   dominant *kernel* has headroom (vs the shell) or to explain a kept/reverted
-  change — memory- vs compute-bound, occupancy, measured roofline. It needs `ncu`
-  installed + `--cap-add SYS_ADMIN` (see `perf-analyze`). Because the dive is
-  10–100× slower per launch, scope it to those kernel-dominated decision points —
-  do **not** run it on every candidate or measurement in the loop. Skip it
-  entirely when the user opted out (e.g. "no ncu" / "nsys-only" — sticky for the
-  session) or when `ncu` is unavailable (stay nsys-only and say so). It is
+  change — memory- vs compute-bound, occupancy, measured roofline. `ncu` absent is
+  **not** a reason to skip: install it and profile as root with `SYS_ADMIN` per
+  `perf-analyze`'s **Availability gate** (which owns the full install / container /
+  command recipe). Because the dive is 10–100× slower per launch, scope it to
+  those kernel-dominated decision points — do **not** run it on every candidate or
+  measurement in the loop. Skip it entirely only when the user opted out (e.g. "no
+  ncu" / "nsys-only" — sticky for the session) or when `ncu` genuinely can't be
+  installed / its counters stay locked (stay nsys-only and say so). It is
   **never a gate**: the three gates in step 2.3 remain the only keep/revert
   arbiters.
