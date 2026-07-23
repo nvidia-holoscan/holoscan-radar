@@ -57,6 +57,11 @@ void MUSICEstimatorOp<T>::initialize() {
 }
 
 template <typename T>
+void MUSICEstimatorOp<T>::stop() {
+  detail::retire_music_matx_caches();
+}
+
+template <typename T>
 void MUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
   spec.input<holoscan::TensorMap>("snapshot");
   spec.input<holoscan::TensorMap>("is_valid")

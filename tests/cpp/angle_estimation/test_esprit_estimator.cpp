@@ -414,21 +414,91 @@ TEST(ESPRITEstimatorOpTest, AutoNumSourcesRecoversOneSource) {
   EXPECT_NEAR(aoa[0], kTruthAz, 0.02);
 }
 
-TEST(ESPRITEstimatorOpTest, RejectsUraGeometry) {
-  constexpr int64_t kNy = 4;
-  constexpr int64_t kNz = 4;
-  constexpr int64_t kS = 48;
+TEST(ESPRITEstimatorOpTest, RecoversUraSingleSourceAzEl) {
+  constexpr int64_t kNy = 6;
+  constexpr int64_t kNz = 6;
+  constexpr int64_t kS = 256;
+  constexpr double kAz = 0.15;
+  constexpr double kEl = -0.10;
 
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto geom = make_planar_ura_geometry(kNy, kNz, 0.5, 1.0);
-  const auto block = make_block(geom, conv, 0.12, 0.05, kS, 0.02, 7u);
+  const auto block = make_block(geom, conv, kAz, kEl, kS, 0.02, 7u);
   auto snap = block_to_device<double>(block, {1, geom.num_elements(), kS});
 
-  EXPECT_THROW(
-      run_esprit<double>(snap, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv),
-      std::invalid_argument);
+  const auto out = run_esprit<double>(
+      snap, holoscan::Arg("array_geometry") = geom,
+      holoscan::Arg("angle_convention") = conv,
+      holoscan::Arg("num_sources") = int64_t{1});
+
+  ASSERT_EQ(out.aoa.shape, (std::vector<int64_t>{1, 2}));
+  const double* aoa = out.aoa.as<double>();
+  EXPECT_NEAR(aoa[0], kAz, 0.03);
+  EXPECT_NEAR(aoa[1], kEl, 0.03);
+}
+
+TEST(ESPRITEstimatorOpTest, RecoversUraTwoSourcesAzElPairing) {
+  constexpr int64_t kNy = 8;
+  constexpr int64_t kNz = 8;
+  constexpr int64_t kS = 512;
+  // Distinct in BOTH az and el so a mispaired result is detectable.
+  constexpr double kAz0 = 0.20;
+  constexpr double kEl0 = 0.12;
+  constexpr double kAz1 = -0.15;
+  constexpr double kEl1 = -0.10;
+
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_planar_ura_geometry(kNy, kNz, 0.5, 1.0);
+  const auto block =
+      make_block_two(geom, conv, kAz0, kEl0, kAz1, kEl1, kS, 0.01, 79u);
+  auto snap = block_to_device<double>(block, {1, geom.num_elements(), kS});
+
+  const auto out = run_esprit<double>(
+      snap, holoscan::Arg("array_geometry") = geom,
+      holoscan::Arg("angle_convention") = conv,
+      holoscan::Arg("num_sources") = int64_t{2},
+      holoscan::Arg("max_sources") = int64_t{2});
+
+  ASSERT_EQ(out.doa_multi.shape, (std::vector<int64_t>{1, 2, 2}));
+  EXPECT_EQ(out.source_count.as<int32_t>()[0], 2);
+
+  const double* dm = out.doa_multi.as<double>();
+  const auto near_pair = [](double az, double el, double taz, double tel) {
+    return std::abs(az - taz) < 0.04 && std::abs(el - tel) < 0.04;
+  };
+  const bool matched =
+      (near_pair(dm[0], dm[1], kAz0, kEl0) &&
+       near_pair(dm[2], dm[3], kAz1, kEl1)) ||
+      (near_pair(dm[0], dm[1], kAz1, kEl1) &&
+       near_pair(dm[2], dm[3], kAz0, kEl0));
+  EXPECT_TRUE(matched) << "pair0=(" << dm[0] << "," << dm[1] << ") pair1=("
+                       << dm[2] << "," << dm[3] << ")";
+}
+
+TEST(ESPRITEstimatorOpTest, RecoversUraSingleSourceAzElFloat) {
+  constexpr int64_t kNy = 6;
+  constexpr int64_t kNz = 6;
+  constexpr int64_t kS = 256;
+  constexpr double kAz = -0.12;
+  constexpr double kEl = 0.08;
+
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_planar_ura_geometry(kNy, kNz, 0.5, 1.0);
+  const auto block = make_block(geom, conv, kAz, kEl, kS, 0.02, 17u);
+  auto snap = block_to_device<float>(block, {1, geom.num_elements(), kS});
+
+  const auto out = run_esprit<float>(
+      snap, holoscan::Arg("array_geometry") = geom,
+      holoscan::Arg("angle_convention") = conv,
+      holoscan::Arg("num_sources") = int64_t{1});
+
+  ASSERT_EQ(out.aoa.shape, (std::vector<int64_t>{1, 2}));
+  const float* aoa = out.aoa.as<float>();
+  EXPECT_NEAR(aoa[0], kAz, 0.03);
+  EXPECT_NEAR(aoa[1], kEl, 0.03);
 }
 
 TEST(ESPRITEstimatorOpTest, RejectsNonUniformLinearGeometry) {

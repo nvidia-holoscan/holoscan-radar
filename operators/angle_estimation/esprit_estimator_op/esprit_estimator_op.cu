@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "angle_estimation/esprit_estimator_op/esprit_stage.hpp"
+#include "radar_common/dsp/planar_aperture.hpp"
 #include "radar_common/dsp/spatial_smoothing_device.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 #include "radar_common/sdk/override_param.hpp"
@@ -60,6 +61,11 @@ template <typename T>
 void ESPRITEstimatorOp<T>::initialize() {
   ensure_radar_arg_setters();
   Operator::initialize();
+}
+
+template <typename T>
+void ESPRITEstimatorOp<T>::stop() {
+  detail::retire_music_matx_caches();
 }
 
 template <typename T>
@@ -284,6 +290,165 @@ void ESPRITEstimatorOp<T>::compute(InputContext& op_input,
               ? static_cast<const unsigned char*>(smoothed_mask->data())
               : nullptr;
     }
+  }
+
+  // A filled URA with `subarray_spec: auto` takes the native 2-D
+  // dual-invariance path; an explicit subarray pair always stays on the 1-D
+  // path (and must never trigger planar-aperture analysis, which is defined
+  // only for auto derivation).
+  const PlanarAperturePlan planar =
+      requested_pair.is_auto() ? analyze_planar_aperture(*estimation_geometry)
+                               : PlanarAperturePlan{};
+  if (planar.is_ura && requested_pair.is_auto()) {
+    const int64_t y_pairs = planar.nz * (planar.ny - 1);
+    const int64_t z_pairs = (planar.nz - 1) * planar.ny;
+    if (effective_num_sources_ >= 0) {
+      if (effective_num_sources_ > std::min(y_pairs, z_pairs)) {
+        throw std::invalid_argument(
+            "ESPRITEstimatorOp: num_sources must not exceed the URA "
+            "invariance subarray size");
+      }
+      if (effective_num_sources_ >= estimation_channels) {
+        throw std::invalid_argument(
+            "ESPRITEstimatorOp: num_sources must leave at least one "
+            "noise-subspace dimension");
+      }
+    }
+
+    std::ostringstream ura_key;
+    ura_key << geometry_key(*estimation_geometry) << '|' << planar.ny << 'x'
+            << planar.nz;
+    if (ura_key.str() != ura_key_) {
+      const UraInvariancePairs pairs =
+          build_ura_dual_invariance(planar.ny, planar.nz);
+      ura_ny_ = planar.ny;
+      ura_nz_ = planar.nz;
+      ura_y_pairs_ = static_cast<int64_t>(pairs.y_reference.size());
+      ura_z_pairs_ = static_cast<int64_t>(pairs.z_reference.size());
+      const auto upload = [&](const std::vector<int64_t>& src,
+                              std::shared_ptr<holoscan::Tensor>& dst) {
+        dst = make_device_tensor({static_cast<int64_t>(src.size())},
+                                 DLDataType{kDLInt, 32, 1});
+        std::vector<int32_t> host(src.size());
+        for (size_t i = 0; i < src.size(); ++i) {
+          host[i] = static_cast<int32_t>(src[i]);
+        }
+        if (cudaMemcpyAsync(dst->data(), host.data(),
+                            host.size() * sizeof(int32_t),
+                            cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+          throw std::runtime_error(
+              "ESPRITEstimatorOp: URA invariance index upload failed");
+        }
+        if (cudaStreamSynchronize(stream) != cudaSuccess) {
+          throw std::runtime_error(
+              "ESPRITEstimatorOp: URA invariance index sync failed");
+        }
+      };
+      upload(pairs.y_reference, d_y_reference_);
+      upload(pairs.y_shifted, d_y_shifted_);
+      upload(pairs.z_reference, d_z_reference_);
+      upload(pairs.z_shifted, d_z_shifted_);
+      ura_key_ = ura_key.str();
+    }
+
+    if (geometry_changed) {
+      const std::string key = geometry_key(effective_geometry_);
+      if (seen_geometry_keys_.insert(key).second) {
+        HOLOSCAN_LOG_WARN(
+            "ESPRITEstimatorOp: unseen array_geometry override; revalidating "
+            "the URA dual-invariance pairs");
+      }
+    }
+    if (smoothing_changed) {
+      HOLOSCAN_LOG_WARN(
+          "ESPRITEstimatorOp: spatial smoothing override changes the ESPRIT "
+          "aperture and derived subarray pairs");
+    }
+
+    const int64_t model_order_cap = std::min(
+        {effective_max_sources_, ura_y_pairs_, ura_z_pairs_,
+         estimation_channels - 1});
+    const int64_t workspace_dim = std::max<int64_t>(model_order_cap, 1);
+    auto covariance = make_device_tensor(
+        {num_items, estimation_channels, estimation_channels},
+        complex_dtype<T>());
+    auto eigenvectors = make_device_tensor(
+        {num_items, estimation_channels, estimation_channels},
+        complex_dtype<T>());
+    auto eigenvalues =
+        make_device_tensor({num_items, estimation_channels}, real_dtype<T>());
+    auto valid_counts =
+        make_device_tensor({num_items}, DLDataType{kDLInt, 64, 1});
+    auto model_order =
+        make_device_tensor({num_items}, DLDataType{kDLInt, 32, 1});
+    const auto workspace = [&]() {
+      return make_device_tensor({num_items, workspace_dim, workspace_dim},
+                                complex_dtype<T>());
+    };
+    auto psi_y = workspace();
+    auto psi_z = workspace();
+    auto z_ws = workspace();
+    auto q_ws = workspace();
+    auto r_ws = workspace();
+    auto tmp_ws = workspace();
+    auto aoa = make_device_tensor({num_items, 2}, real_dtype<T>());
+    auto doa_multi = make_device_tensor(
+        {num_items, effective_max_sources_, 2}, real_dtype<T>());
+    auto source_count =
+        make_device_tensor({num_items}, DLDataType{kDLInt, 32, 1});
+
+    const double k = kTwoPi / estimation_geometry->wavelength;
+    detail::run_esprit_2d_stage<T>(
+        estimation_data, estimation_mask, num_items, estimation_channels,
+        estimation_snapshots, effective_num_sources_, effective_pfa_,
+        model_order_cap,
+        static_cast<const int32_t*>(d_y_reference_->data()),
+        static_cast<const int32_t*>(d_y_shifted_->data()), ura_y_pairs_,
+        static_cast<const int32_t*>(d_z_reference_->data()),
+        static_cast<const int32_t*>(d_z_shifted_->data()), ura_z_pairs_,
+        workspace_dim, static_cast<T>(k * planar.dy),
+        static_cast<T>(k * planar.dz), static_cast<T>(planar.y_axis[0]),
+        static_cast<T>(planar.y_axis[1]), static_cast<T>(planar.y_axis[2]),
+        static_cast<T>(planar.z_axis[0]), static_cast<T>(planar.z_axis[1]),
+        static_cast<T>(planar.z_axis[2]), static_cast<T>(planar.normal[0]),
+        static_cast<T>(planar.normal[1]), static_cast<T>(planar.normal[2]),
+        device_angle_convention_,
+        static_cast<cuda::std::complex<T>*>(covariance->data()),
+        static_cast<cuda::std::complex<T>*>(eigenvectors->data()),
+        static_cast<int64_t*>(valid_counts->data()),
+        static_cast<int32_t*>(model_order->data()),
+        static_cast<T*>(eigenvalues->data()),
+        static_cast<cuda::std::complex<T>*>(psi_y->data()),
+        static_cast<cuda::std::complex<T>*>(psi_z->data()),
+        static_cast<cuda::std::complex<T>*>(z_ws->data()),
+        static_cast<cuda::std::complex<T>*>(q_ws->data()),
+        static_cast<cuda::std::complex<T>*>(r_ws->data()),
+        static_cast<cuda::std::complex<T>*>(tmp_ws->data()),
+        static_cast<T*>(aoa->data()), static_cast<T*>(doa_multi->data()),
+        effective_max_sources_, static_cast<int32_t*>(source_count->data()),
+        stream);
+    check_cuda("ESPRIT 2-D stage", kOpName);
+
+    if (effective_num_sources_ < 0 && mask == nullptr &&
+        estimation_snapshots < estimation_channels &&
+        !warned_rank_deficient_) {
+      HOLOSCAN_LOG_WARN(
+          "ESPRITEstimatorOp: num_sources=auto with fewer snapshots than "
+          "channels; falling back to one source");
+      warned_rank_deficient_ = true;
+    }
+
+    if (stream != cudaStreamDefault) {
+      op_output.set_cuda_stream(stream, "aoa_estimates");
+      op_output.set_cuda_stream(stream, "doa_multi");
+      op_output.set_cuda_stream(stream, "source_count");
+      op_output.set_cuda_stream(stream, "eigenvalues");
+    }
+    emit_single(op_output, "aoa_estimates", aoa);
+    emit_single(op_output, "doa_multi", doa_multi);
+    emit_single(op_output, "source_count", source_count);
+    emit_single(op_output, "eigenvalues", eigenvalues);
+    return;
   }
 
   const std::string current_pair_key =

@@ -58,6 +58,9 @@ class RootMUSICEstimatorOp : public holoscan::Operator {
   void setup(OperatorSpec& spec) override;
   void compute(InputContext& op_input, OutputContext& op_output,
                ExecutionContext& context) override;
+  // Drain the MatX eig cache + global MemTracker once at graph stop, while CUDA
+  // is still valid (per-tick only clears the plan cache; see music_stage.hpp).
+  void stop() override;
 
  private:
   Parameter<ArrayGeometry> array_geometry_;
@@ -85,6 +88,10 @@ class RootMUSICEstimatorOp : public holoscan::Operator {
   std::shared_ptr<holoscan::Tensor> d_fb_flip_{};
 
   std::shared_ptr<detail::RootMUSICSolverState> solver_state_{};
+  // Second companion-root solver for the URA elevation axis, so the two
+  // per-axis geev configurations (degrees 2*(Ny-1) / 2*(Nz-1)) do not thrash a
+  // single cached workspace when Ny != Nz.
+  std::shared_ptr<detail::RootMUSICSolverState> solver_state_z_{};
 };
 
 }  // namespace holoscan::radar

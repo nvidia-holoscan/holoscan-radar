@@ -39,6 +39,9 @@ class ESPRITEstimatorOp : public holoscan::Operator {
   void setup(OperatorSpec& spec) override;
   void compute(InputContext& op_input, OutputContext& op_output,
                ExecutionContext& context) override;
+  // Drain the MatX eig cache + global MemTracker once at graph stop, while CUDA
+  // is still valid (per-tick only clears the plan cache; see music_stage.hpp).
+  void stop() override;
 
  private:
   Parameter<ArrayGeometry> array_geometry_;
@@ -69,6 +72,18 @@ class ESPRITEstimatorOp : public holoscan::Operator {
   std::shared_ptr<holoscan::Tensor> d_fb_flip_{};
   std::shared_ptr<holoscan::Tensor> d_reference_indices_{};
   std::shared_ptr<holoscan::Tensor> d_shifted_indices_{};
+
+  // URA (2-D) dual-invariance path: the two orthogonal shift pairings uploaded
+  // to the device, keyed by geometry so they rebuild only when it changes.
+  std::string ura_key_{};
+  int64_t ura_ny_{0};
+  int64_t ura_nz_{0};
+  int64_t ura_y_pairs_{0};
+  int64_t ura_z_pairs_{0};
+  std::shared_ptr<holoscan::Tensor> d_y_reference_{};
+  std::shared_ptr<holoscan::Tensor> d_y_shifted_{};
+  std::shared_ptr<holoscan::Tensor> d_z_reference_{};
+  std::shared_ptr<holoscan::Tensor> d_z_shifted_{};
 };
 
 }  // namespace holoscan::radar

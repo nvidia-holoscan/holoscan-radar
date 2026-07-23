@@ -169,14 +169,17 @@ MVDR's own `OPEN_ITEMS.md`) — turned out not to be, once actually tried:
 
 - **`is_valid` bool transport (HSDK 4.3).** Shares the CFAR / SnapshotGather
   bool-`DLPack` transport caveat; `is_valid` is accepted as bool or uint8.
-- **MatX eig plan lifetime.** `retire_music_matx_caches()` (analogous to
-  MVDR's `retire_matx_solver_caches()`) clears the cached `eig` plan and
-  drains MatX's `MemTracker` at the end of each stage, for the same reason
-  (plans keyed on device pointers that do not outlive Holoscan's per-tick
-  scratch) — MUSIC only ever calls `eig` (VECTOR mode), never `inv`, so
-  there is no inverse-plan cache to retire. Not yet exercised end-to-end
-  under a pytest CuPy-import-order test the way MVDR's was; if a Python
-  binding lands, mirror MVDR's `install_matx_cache_atexit()` guidance
+- **MatX eig plan lifetime.** Per tick, `clear_music_matx_caches()` clears the
+  cached `eig` plan (keys are freed-at-return scratch pointers); the full
+  `MemTracker` drain (`retire_music_matx_caches()`) runs once from the
+  operator's `stop()`. MUSIC only ever calls `eig` (VECTOR mode), never `inv`,
+  so there is no inverse-plan cache to retire. Root-MUSIC and ESPRIT reuse this
+  same pair. **Do not** call `retire_music_matx_caches()` per tick: draining the
+  process-global `GetAllocMap()` every tick frees sibling operators' cached FFT
+  workspaces and corrupts them (see MVDR `OPEN_ITEMS.md` → "Per-tick
+  `GetAllocMap()` drain corrupted sibling FFT operators"). Not yet exercised
+  end-to-end under a pytest CuPy-import-order test the way MVDR's was; if a
+  Python binding lands, mirror MVDR's `install_matx_cache_atexit()` guidance
   verbatim.
 
 ## Performance

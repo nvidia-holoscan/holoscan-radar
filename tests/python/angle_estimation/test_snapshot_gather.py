@@ -72,14 +72,15 @@ def run_gather(
 
 
 def snap_at(snap: np.ndarray, item: int, slot: int, channel: int) -> complex:
-    """Index snapshot with kernel layout (item, slot, channel).
+    """Index snapshot with the contract layout (item, channel, slot).
 
-    Tensor shape metadata is (item, channel, slot) per the contract, but the
-    gather kernel writes slot-major / channel-minor — same as the C++ tests.
+    snapshot is (num_detections, num_channels, num_snapshots) row-major
+    (channel-major, snapshot-minor), matching the estimators' covariance
+    indexing xi[c * num_snapshots + s].
     """
-    num_channels = int(snap.shape[1])
+    num_snapshots = int(snap.shape[2])
     flat = snap.reshape(snap.shape[0], -1)
-    return flat[item, slot * num_channels + channel]
+    return flat[item, channel * num_snapshots + slot]
 
 
 def test_SingleCellGather():

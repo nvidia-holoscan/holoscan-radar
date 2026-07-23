@@ -76,7 +76,10 @@ class MUSICEstimatorOp : public holoscan::Operator {
   void initialize() override;
   void setup(OperatorSpec& spec) override;
   void compute(InputContext& op_input, OutputContext& op_output,
-              ExecutionContext& context) override;
+               ExecutionContext& context) override;
+  // Drain the MatX eig cache + global MemTracker once at graph stop, while CUDA
+  // is still valid (per-tick only clears the plan cache; see music_stage.hpp).
+  void stop() override;
 
  private:
   Parameter<ArrayGeometry> array_geometry_;

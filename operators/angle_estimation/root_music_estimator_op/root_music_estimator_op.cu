@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "angle_estimation/root_music_estimator_op/root_music_stage.hpp"
+#include "radar_common/dsp/planar_aperture.hpp"
 #include "radar_common/dsp/spatial_smoothing_device.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 #include "radar_common/sdk/override_param.hpp"
@@ -136,6 +137,11 @@ template <typename T>
 void RootMUSICEstimatorOp<T>::initialize() {
   ensure_radar_arg_setters();
   Operator::initialize();
+}
+
+template <typename T>
+void RootMUSICEstimatorOp<T>::stop() {
+  detail::retire_music_matx_caches();
 }
 
 template <typename T>
@@ -346,29 +352,15 @@ void RootMUSICEstimatorOp<T>::compute(InputContext& op_input,
     }
   }
 
-  const ULAParameters ula = analyze_ula(*estimation_geometry);
-  if (effective_num_sources_ >= 0 &&
-      effective_num_sources_ > estimation_channels - 1) {
-    throw std::invalid_argument(
-        "RootMUSICEstimatorOp: num_sources must leave at least one "
-        "noise-subspace dimension");
-  }
+  const PlanarAperturePlan planar =
+      analyze_planar_aperture(*estimation_geometry);
 
-  if (geometry_changed) {
-    const std::string key = geometry_key(effective_geometry_);
-    if (seen_geometry_keys_.insert(key).second) {
-      HOLOSCAN_LOG_WARN(
-          "RootMUSICEstimatorOp: unseen array_geometry override; "
-          "revalidating ULA and solver dimensions");
-    }
-  }
   if (smoothing_changed) {
     HOLOSCAN_LOG_WARN(
         "RootMUSICEstimatorOp: spatial smoothing override changes the "
         "Root-MUSIC aperture and polynomial degree");
   }
 
-  const int64_t degree = 2 * (estimation_channels - 1);
   auto covariance =
       make_device_tensor({num_items, estimation_channels, estimation_channels},
                          complex_dtype<T>());
@@ -384,40 +376,106 @@ void RootMUSICEstimatorOp<T>::compute(InputContext& op_input,
       make_device_tensor({num_items}, DLDataType{kDLInt, 64, 1});
   auto model_order =
       make_device_tensor({num_items}, DLDataType{kDLInt, 32, 1});
-  auto coefficients =
-      make_device_tensor({num_items, degree + 1}, complex_dtype<T>());
-  auto companion =
-      make_device_tensor({num_items, degree, degree}, complex_dtype<T>());
-  auto roots = make_device_tensor({num_items, degree}, complex_dtype<T>());
   auto aoa = make_device_tensor({num_items, 2}, real_dtype<T>());
   auto doa_multi = make_device_tensor(
       {num_items, effective_max_sources_, 2}, real_dtype<T>());
   auto source_count =
       make_device_tensor({num_items}, DLDataType{kDLInt, 32, 1});
-  if (!solver_state_) {
-    solver_state_ = std::make_shared<detail::RootMUSICSolverState>();
-  }
 
-  detail::run_root_music_stage<T>(
-      estimation_data, estimation_mask, num_items, estimation_channels,
-      estimation_snapshots, effective_num_sources_, effective_pfa_,
-      effective_max_sources_,
-      static_cast<T>(kTwoPi * ula.spacing / estimation_geometry->wavelength),
-      static_cast<T>(ula.axis[0]), static_cast<T>(ula.axis[1]),
-      static_cast<T>(ula.axis[2]), static_cast<T>(ula.broadside[0]),
-      static_cast<T>(ula.broadside[1]), static_cast<T>(ula.broadside[2]),
-      device_angle_convention_,
-      static_cast<cuda::std::complex<T>*>(covariance->data()),
-      static_cast<cuda::std::complex<T>*>(eigenvectors->data()),
-      static_cast<cuda::std::complex<T>*>(projector->data()),
-      static_cast<int64_t*>(valid_counts->data()),
-      static_cast<int32_t*>(model_order->data()),
-      static_cast<T*>(eigenvalues->data()),
-      static_cast<cuda::std::complex<T>*>(coefficients->data()),
-      static_cast<cuda::std::complex<T>*>(companion->data()),
-      static_cast<cuda::std::complex<T>*>(roots->data()),
-      static_cast<T*>(aoa->data()), static_cast<T*>(doa_multi->data()),
-      static_cast<int32_t*>(source_count->data()), solver_state_.get(), stream);
+  if (planar.is_ura) {
+    if (estimation_channels > detail::kRootMusicPairChannelCap) {
+      throw std::invalid_argument(
+          "RootMUSICEstimatorOp: 2-D URA pairing supports at most 64 channels "
+          "(Ny*Nz); reduce the aperture upstream");
+    }
+    const int64_t axis_min = std::min(planar.ny, planar.nz);
+    if (effective_num_sources_ >= 0 &&
+        effective_num_sources_ > axis_min - 1) {
+      throw std::invalid_argument(
+          "RootMUSICEstimatorOp: num_sources must leave at least one "
+          "noise-subspace dimension on each URA aperture axis");
+    }
+    if (geometry_changed) {
+      const std::string key = geometry_key(effective_geometry_);
+      if (seen_geometry_keys_.insert(key).second) {
+        HOLOSCAN_LOG_WARN(
+            "RootMUSICEstimatorOp: unseen array_geometry override; "
+            "revalidating URA aperture and solver dimensions");
+      }
+    }
+    if (!solver_state_) {
+      solver_state_ = std::make_shared<detail::RootMUSICSolverState>();
+    }
+    if (!solver_state_z_) {
+      solver_state_z_ = std::make_shared<detail::RootMUSICSolverState>();
+    }
+    const double k = kTwoPi / estimation_geometry->wavelength;
+    detail::run_root_music_2d_stage<T>(
+        estimation_data, estimation_mask, num_items, planar.ny, planar.nz,
+        estimation_snapshots, effective_num_sources_, effective_pfa_,
+        effective_max_sources_, static_cast<T>(k * planar.dy),
+        static_cast<T>(k * planar.dz), static_cast<T>(planar.y_axis[0]),
+        static_cast<T>(planar.y_axis[1]), static_cast<T>(planar.y_axis[2]),
+        static_cast<T>(planar.z_axis[0]), static_cast<T>(planar.z_axis[1]),
+        static_cast<T>(planar.z_axis[2]), static_cast<T>(planar.normal[0]),
+        static_cast<T>(planar.normal[1]), static_cast<T>(planar.normal[2]),
+        device_angle_convention_,
+        static_cast<cuda::std::complex<T>*>(covariance->data()),
+        static_cast<cuda::std::complex<T>*>(eigenvectors->data()),
+        static_cast<cuda::std::complex<T>*>(projector->data()),
+        static_cast<int64_t*>(valid_counts->data()),
+        static_cast<int32_t*>(model_order->data()),
+        static_cast<T*>(eigenvalues->data()), static_cast<T*>(aoa->data()),
+        static_cast<T*>(doa_multi->data()),
+        static_cast<int32_t*>(source_count->data()), solver_state_.get(),
+        solver_state_z_.get(), stream);
+  } else {
+    const ULAParameters ula = analyze_ula(*estimation_geometry);
+    if (effective_num_sources_ >= 0 &&
+        effective_num_sources_ > estimation_channels - 1) {
+      throw std::invalid_argument(
+          "RootMUSICEstimatorOp: num_sources must leave at least one "
+          "noise-subspace dimension");
+    }
+    if (geometry_changed) {
+      const std::string key = geometry_key(effective_geometry_);
+      if (seen_geometry_keys_.insert(key).second) {
+        HOLOSCAN_LOG_WARN(
+            "RootMUSICEstimatorOp: unseen array_geometry override; "
+            "revalidating ULA and solver dimensions");
+      }
+    }
+    const int64_t degree = 2 * (estimation_channels - 1);
+    auto coefficients =
+        make_device_tensor({num_items, degree + 1}, complex_dtype<T>());
+    auto companion =
+        make_device_tensor({num_items, degree, degree}, complex_dtype<T>());
+    auto roots = make_device_tensor({num_items, degree}, complex_dtype<T>());
+    if (!solver_state_) {
+      solver_state_ = std::make_shared<detail::RootMUSICSolverState>();
+    }
+    detail::run_root_music_stage<T>(
+        estimation_data, estimation_mask, num_items, estimation_channels,
+        estimation_snapshots, effective_num_sources_, effective_pfa_,
+        effective_max_sources_,
+        static_cast<T>(kTwoPi * ula.spacing / estimation_geometry->wavelength),
+        static_cast<T>(ula.axis[0]), static_cast<T>(ula.axis[1]),
+        static_cast<T>(ula.axis[2]), static_cast<T>(ula.broadside[0]),
+        static_cast<T>(ula.broadside[1]), static_cast<T>(ula.broadside[2]),
+        device_angle_convention_,
+        static_cast<cuda::std::complex<T>*>(covariance->data()),
+        static_cast<cuda::std::complex<T>*>(eigenvectors->data()),
+        static_cast<cuda::std::complex<T>*>(projector->data()),
+        static_cast<int64_t*>(valid_counts->data()),
+        static_cast<int32_t*>(model_order->data()),
+        static_cast<T*>(eigenvalues->data()),
+        static_cast<cuda::std::complex<T>*>(coefficients->data()),
+        static_cast<cuda::std::complex<T>*>(companion->data()),
+        static_cast<cuda::std::complex<T>*>(roots->data()),
+        static_cast<T*>(aoa->data()), static_cast<T*>(doa_multi->data()),
+        static_cast<int32_t*>(source_count->data()), solver_state_.get(),
+        stream);
+  }
   check_cuda("root music stage", kOpName);
 
   if (effective_num_sources_ < 0 && mask == nullptr &&

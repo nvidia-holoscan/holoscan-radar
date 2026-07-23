@@ -48,6 +48,9 @@ struct Scenario {
   int64_t detections{0};
   int64_t snapshots{0};
   int64_t override_at{0};
+  bool is_ura{false};  // URA exercises the native 2-D dual-invariance path.
+  int64_t ny{0};
+  int64_t nz{0};
 };
 
 struct SnapshotPort {
@@ -94,6 +97,28 @@ hr::ArrayGeometry make_ula(int64_t channels, double spacing) {
   return geometry;
 }
 
+hr::ArrayGeometry make_ura(int64_t ny, int64_t nz, double spacing) {
+  hr::ArrayGeometry geometry;
+  geometry.wavelength = 1.0;
+  geometry.geometry_type = hr::ArrayGeometryType::kUra;
+  for (int64_t iz = 0; iz < nz; ++iz) {
+    for (int64_t iy = 0; iy < ny; ++iy) {
+      geometry.element_positions.insert(
+          geometry.element_positions.end(),
+          {0.0, spacing * static_cast<double>(iy),
+           spacing * static_cast<double>(iz)});
+    }
+  }
+  return geometry;
+}
+
+hr::ArrayGeometry scenario_geometry(const Scenario& scenario, double spacing) {
+  if (scenario.is_ura) {
+    return make_ura(scenario.ny, scenario.nz, spacing);
+  }
+  return make_ula(scenario.channels, spacing);
+}
+
 Scenario make_scenario(const SizeSpec& size) {
   Scenario scenario;
   scenario.size_id = size.id;
@@ -103,6 +128,23 @@ Scenario make_scenario(const SizeSpec& size) {
   std::ostringstream id;
   id << "esprit_" << size.id << "_c" << size.channels << "_n"
      << size.detections << "_s" << size.snapshots;
+  scenario.id = id.str();
+  return scenario;
+}
+
+Scenario make_ura_scenario(const char* size_id, int64_t ny, int64_t nz,
+                           int64_t detections, int64_t snapshots) {
+  Scenario scenario;
+  scenario.size_id = size_id;
+  scenario.is_ura = true;
+  scenario.ny = ny;
+  scenario.nz = nz;
+  scenario.channels = ny * nz;
+  scenario.detections = detections;
+  scenario.snapshots = snapshots;
+  std::ostringstream id;
+  id << "esprit_ura_" << ny << "x" << nz << "_n" << detections << "_s"
+     << snapshots;
   scenario.id = id.str();
   return scenario;
 }
@@ -118,7 +160,7 @@ class ESPRITPerfApp : public holoscan::Application {
   void compose() override {
     auto estimator = make_operator<hr::ESPRITEstimatorOp<T>>(
         "esprit", holoscan::Arg("array_geometry") =
-                      make_ula(scenario->channels, 0.5),
+                      scenario_geometry(*scenario, 0.5),
         holoscan::Arg("angle_convention") = [] {
           hr::AngleConvention convention;
           convention.preset = hr::AngleConventionPreset::kRadarBoresight;
@@ -147,7 +189,7 @@ class ESPRITPerfApp : public holoscan::Application {
         "geometry_override",
         make_condition<holoscan::CountCondition>(total_frames));
     geometry->configure(scenario->override_at,
-                        make_ula(scenario->channels, 0.55));
+                        scenario_geometry(*scenario, 0.55));
     add_flow(geometry, estimator, {{"output", "array_geometry"}});
 
     auto sources = make_operator<perf::PerfOverrideSourceOp<int64_t>>(
@@ -168,12 +210,17 @@ class ESPRITPerfApp : public holoscan::Application {
     capacity->configure(scenario->override_at, int64_t{3});
     add_flow(capacity, estimator, {{"output", "max_sources"}});
 
-    auto smoothing = make_operator<
-        perf::PerfOverrideSourceOp<std::vector<int64_t>>>(
-        "smoothing_override",
-        make_condition<holoscan::CountCondition>(total_frames));
-    smoothing->configure(scenario->override_at, std::vector<int64_t>{2});
-    add_flow(smoothing, estimator, {{"output", "spatial_smoothing"}});
+    // Spatial smoothing reshapes the aperture out of the URA's (iz, iy) lattice
+    // that the native 2-D dual-invariance derivation depends on, so it is
+    // exercised only on the ULA (1-D) scenarios.
+    if (!scenario->is_ura) {
+      auto smoothing = make_operator<
+          perf::PerfOverrideSourceOp<std::vector<int64_t>>>(
+          "smoothing_override",
+          make_condition<holoscan::CountCondition>(total_frames));
+      smoothing->configure(scenario->override_at, std::vector<int64_t>{2});
+      add_flow(smoothing, estimator, {{"output", "spatial_smoothing"}});
+    }
   }
 };
 
@@ -219,7 +266,9 @@ struct Traits : perf::PerfDriverDefaults {
   static std::vector<Scenario> build_default_matrix() {
     return {make_scenario(must_find_size("xs")),
             make_scenario(must_find_size("sm")),
-            make_scenario(must_find_size("md"))};
+            make_scenario(must_find_size("md")),
+            // Native 2-D az+el path: a compact filled URA (dual invariance).
+            make_ura_scenario("ura_sm", 6, 6, 128, 96)};
   }
 
   static std::vector<Scenario> build_size_sweep(
@@ -238,6 +287,10 @@ struct Traits : perf::PerfDriverDefaults {
     for (const auto& size : size_ladder()) {
       result.push_back(make_scenario(size));
     }
+    // URA 2-D scenarios: dual-invariance LS + joint-diagonalization pairing
+    // over an ny * nz channel count — characterize, don't gate.
+    result.push_back(make_ura_scenario("ura_sm", 6, 6, 128, 96));
+    result.push_back(make_ura_scenario("ura_lg", 8, 8, 256, 128));
     return result;
   }
 

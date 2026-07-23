@@ -1,0 +1,36 @@
+{
+    "$schema": "urn:holohub:application:v1",
+    "application": {
+        "name": "fmcw_aoa_estimators",
+        "authors": [
+            {
+                "name": "Holoscan Team",
+                "affiliation": "NVIDIA"
+            }
+        ],
+        "language": ["C++"],
+        "version": "0.1.0",
+        "changelog": {
+            "0.1.0": "Interchangeable sparse AoA estimators with dynamic-flow selection"
+        },
+        "holoscan_sdk": {
+            "minimum_required_version": "4.3.0",
+            "tested_versions": ["4.3.0"]
+        },
+        "platforms": ["x86_64", "aarch64"],
+        "tags": ["Radar", "Signal Processing", "GPU", "FMCW", "SIMO", "Angle",
+            "Beamforming", "MUSIC", "ESPRIT"],
+        "ranking": 3,
+        "requirements": {},
+        "default_mode": "default",
+        "modes": {
+            "default": {
+                "description": "Run the C++ FMCW interchangeable-AoA-estimator pipeline",
+                "run": {
+                    "command": "<holohub_app_bin>/fmcw_aoa_estimators",
+                    "workdir": "holohub_app_bin"
+                }
+            }
+        }
+    }
+}
