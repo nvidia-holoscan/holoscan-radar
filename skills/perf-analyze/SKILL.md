@@ -44,8 +44,10 @@ docker run --rm --runtime nvidia --gpus all --cap-add CAP_SYS_PTRACE --ipc=host 
 **Build/run wall time > the agent shell's 2-minute foreground cap.** A cold
 CUDA build (and each nsys-profiled size) runs for minutes; a foreground call is
 SIGTERM'd at the timeout mid-build. Launch the build and the analysis pipeline
-as **background** commands (write logs to the mounted tree; poll the log / binary
-mtime), or the container is killed and you rebuild from scratch. Keep `-j4`
+as **background** commands (write logs to a per-run scratch dir,
+`performance/agent/runs/<OP>/_scratch/`, **not** loose in `runs/`; poll the log /
+binary mtime — see [Scratch logs](#scratch-logs-contain-then-clean-up)), or the
+container is killed and you rebuild from scratch. Keep `-j4`
 (not `-j$(nproc)` — heavy parallelism truncates captured stdout on this host).
 
 **The dev image is the dep sandbox (Dockerfile-provisioned).** `./holohub
@@ -301,6 +303,17 @@ rubric:
 **Cleanup.** `ncu` writes a `.ncu-rep` (and can drop `report*.ncu-rep` in cwd);
 keep it in the run dir, don't commit it, and leave the tree as you found it —
 same discipline as the temporary instrumentation below.
+
+## Scratch logs (contain, then clean up)
+
+The backgrounded build/analysis commands write logs to the mounted tree (that's
+how you poll past the 2-minute shell cap). Keep them **contained** in a per-run
+scratch dir — `performance/agent/runs/<OP>/_scratch/` — never loose at the root of
+`runs/`: loose logs pile up across sessions and a stale one can mislead the mtime
+poll. On a **clean finish**, remove `_scratch/`; on a **failure or abort**, keep
+it and tell the user the path — that's the post-mortem trail. The durable outputs
+(`report.{md,html}`, `analysis.json`, `.nsys-rep`/`.ncu-rep`) live in the operator
+subdir and stay.
 
 ## Temporary instrumentation (must be removed before finishing)
 

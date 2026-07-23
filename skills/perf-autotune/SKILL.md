@@ -147,6 +147,13 @@ iterations). Before the final report, assert it is gone and rebuild:
 grep -rn "PERF-SCRATCH" operators/ performance/   # must return nothing
 ```
 
+**Scratch logs.** Write the loop's backgrounded build/gate/analysis logs to
+`performance/agent/runs/<OP>/_scratch/`, never loose in `runs/`. Remove `_scratch/`
+once — at the end of the loop (like the instrumentation above), not per-iteration;
+on a failure or abort, keep it and report the path. Durable outputs (reports,
+`analysis.json`, `session.json`, `.nsys-rep`/`.ncu-rep`) stay in the operator
+subdir.
+
 ## Notes / limits
 
 - Per-candidate mechanics are exactly `perf-optimize`'s; this adds the outer

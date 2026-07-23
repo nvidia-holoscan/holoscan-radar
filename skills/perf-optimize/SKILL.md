@@ -203,6 +203,12 @@ is clean of it and rebuild so the kept state is only the real change:
 grep -rn "PERF-SCRATCH" operators/ performance/   # must return nothing
 ```
 
+**Scratch logs.** Write backgrounded build/gate logs to
+`performance/agent/runs/<OP>/_scratch/`, never loose in `runs/`. Remove `_scratch/`
+on a clean finish (after all gates pass and the report is rendered); on a failure
+or abort, keep it and report the path. Durable outputs (report, `analysis.json`,
+`session.json`, `.nsys-rep`/`.ncu-rep`) stay in the operator subdir.
+
 ## Notes / limits
 
 - One fix per invocation by design. To chain fixes, run again, or use
