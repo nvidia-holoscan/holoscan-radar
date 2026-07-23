@@ -57,6 +57,7 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <fstream>
@@ -237,6 +238,30 @@ inline bool ensure_cuda_device(const char* tool_name) {
   return true;
 }
 
+// Retain the default stream-ordered (cudaMallocAsync) memory pool across the
+// per-tick cudaDeviceSynchronize the terminal sink issues to timestamp latency.
+// The async pool's default release threshold is 0, so that sync releases pooled
+// memory back to the OS every tick — turning an operator's per-tick MatX/CUB
+// async scratch (reduction temp storage, FFT workspace) into a fresh
+// hundreds-of-microseconds allocation each tick. A real pipeline does not
+// synchronize after every operator, so its pool stays warm; raising the
+// threshold makes the harness measure that steady state instead of a per-tick-
+// sync artifact (observed ~5x on a reduction-heavy tick). One-time and
+// best-effort — measurement realism only; it never changes an operator's output
+// bytes. See docs/planning/OPTIMIZATION_LEARNINGS.md (learnings #9, #10).
+inline void configure_measurement_mempool() {
+  int device = 0;
+  if (cudaGetDevice(&device) != cudaSuccess) {
+    return;
+  }
+  cudaMemPool_t pool;
+  if (cudaDeviceGetDefaultMemPool(&pool, device) != cudaSuccess) {
+    return;
+  }
+  uint64_t threshold = UINT64_MAX;
+  cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &threshold);
+}
+
 inline void default_log_level() {
   // Reduce Holoscan log jitter unless the user configured a level. ERROR drops
   // WARN spam (e.g. per-run stack-size advisories) that would clutter progress.
@@ -388,6 +413,9 @@ int perf_main(int argc, char** argv) {
   if (!detail::ensure_cuda_device(Traits::tool_name())) {
     return 1;
   }
+  // Measurement realism: keep the async mempool warm across the terminal sink's
+  // per-tick sync so per-op costs are not inflated by pool-release thrashing.
+  detail::configure_measurement_mempool();
   detail::default_log_level();
 
   std::vector<typename Traits::Scenario> scenarios =
