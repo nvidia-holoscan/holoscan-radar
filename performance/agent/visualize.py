@@ -113,28 +113,94 @@ def _kernel_ms_per_tick(size: dict):
     return (kt / ticks / 1e6) if ticks else None
 
 
+def _whisker(lat: dict):
+    """(lower, upper) asymmetric error from median to min/max; 0 when absent."""
+    m = lat.get("median")
+    if m is None:
+        return 0.0, 0.0
+    lo = m - lat.get("min", m) if lat.get("min") is not None else 0.0
+    hi = lat.get("max", m) - m if lat.get("max") is not None else 0.0
+    return max(0.0, lo), max(0.0, hi)
+
+
+_ERRKW = {"ecolor": INK_SECONDARY, "elinewidth": 1, "capsize": 3}
+
+
 def plot_latency(analysis: dict, ax=None):
-    """Grouped bars: cold / median / p90 latency across the size ladder."""
+    """Grouped latency bars across the size ladder with min–max whiskers. When a
+    primary axis was swept, bars are grouped by variant (color) per size; else
+    the cold/median/p90 triple per size."""
     fig, ax = _ensure_ax(ax)
     sizes = analysis.get("sizes", [])
     labels = [s["size"] for s in sizes]
-    series = [
-        ("cold", CATEGORICAL[1]),
-        ("median", CATEGORICAL[0]),
-        ("p90", CATEGORICAL[2]),
-    ]
-    n = len(series)
-    width = 0.8 / n
     x = list(range(len(labels)))
-    for i, (key, color) in enumerate(series):
-        vals = [(s["latency_ms"].get(key) or 0) for s in sizes]
-        offs = [xi + (i - (n - 1) / 2) * width for xi in x]
-        ax.bar(offs, vals, width * 0.92, label=key, color=color, zorder=3)
+    multi = any(len(s.get("variants", [])) > 1 for s in sizes)
+    if multi:
+        variants = []
+        for s in sizes:
+            for v in s.get("variants", []):
+                if v["variant"] not in variants:
+                    variants.append(v["variant"])
+        n = max(1, len(variants))
+        width = 0.8 / n
+        for i, var in enumerate(variants):
+            meds, los, his = [], [], []
+            for s in sizes:
+                vv = next(
+                    (v for v in s.get("variants", []) if v["variant"] == var), None
+                )
+                lat = vv["latency_ms"] if vv else {}
+                meds.append(lat.get("median") or 0)
+                lo, hi = _whisker(lat)
+                los.append(lo)
+                his.append(hi)
+            offs = [xi + (i - (n - 1) / 2) * width for xi in x]
+            ax.bar(
+                offs,
+                meds,
+                width * 0.92,
+                label=var,
+                color=CATEGORICAL[i % len(CATEGORICAL)],
+                zorder=3,
+                yerr=[los, his],
+                error_kw=_ERRKW,
+            )
+        title = "Median latency by size × variant (whiskers = min–max)"
+        ncol = min(n, 4)
+    else:
+        series = [
+            ("cold", CATEGORICAL[1]),
+            ("median", CATEGORICAL[0]),
+            ("p90", CATEGORICAL[2]),
+        ]
+        n = len(series)
+        width = 0.8 / n
+        for i, (key, color) in enumerate(series):
+            vals = [(s["latency_ms"].get(key) or 0) for s in sizes]
+            offs = [xi + (i - (n - 1) / 2) * width for xi in x]
+            yerr = None
+            if key == "median":
+                lo = [_whisker(s["latency_ms"])[0] for s in sizes]
+                hi = [_whisker(s["latency_ms"])[1] for s in sizes]
+                if any(a or b for a, b in zip(lo, hi)):
+                    yerr = [lo, hi]
+            ax.bar(
+                offs,
+                vals,
+                width * 0.92,
+                label=key,
+                color=color,
+                zorder=3,
+                yerr=yerr,
+                error_kw=_ERRKW if yerr else {},
+            )
+        title = "Latency by size (whiskers = min–max)"
+        ncol = 3
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_yscale("log")
-    _style_axes(ax, "Latency by size", ylabel="ms per tick (log)")
-    ax.legend(frameon=False, fontsize=9, labelcolor=INK_SECONDARY, ncol=3)
+    _style_axes(ax, title, ylabel="ms per tick (log)")
+    ax.legend(frameon=False, fontsize=9, labelcolor=INK_SECONDARY, ncol=ncol)
     return fig
 
 
@@ -335,6 +401,12 @@ def plot_before_after(baseline: dict, after: dict, ax=None):
     w = 0.4
     before = [bb[s]["latency_ms"].get("median") or 0 for s in sizes]
     after_v = [aa[s]["latency_ms"].get("median") or 0 for s in sizes]
+    b_lo = [_whisker(bb[s]["latency_ms"])[0] for s in sizes]
+    b_hi = [_whisker(bb[s]["latency_ms"])[1] for s in sizes]
+    a_lo = [_whisker(aa[s]["latency_ms"])[0] for s in sizes]
+    a_hi = [_whisker(aa[s]["latency_ms"])[1] for s in sizes]
+    b_err = [b_lo, b_hi] if any(b_lo) or any(b_hi) else None
+    a_err = [a_lo, a_hi] if any(a_lo) or any(a_hi) else None
     ax.bar(
         [xi - w / 2 for xi in x],
         before,
@@ -342,6 +414,8 @@ def plot_before_after(baseline: dict, after: dict, ax=None):
         label="before",
         color=CATEGORICAL[1],
         zorder=3,
+        yerr=b_err,
+        error_kw=_ERRKW if b_err else {},
     )
     ax.bar(
         [xi + w / 2 for xi in x],
@@ -350,6 +424,8 @@ def plot_before_after(baseline: dict, after: dict, ax=None):
         label="after",
         color=CATEGORICAL[0],
         zorder=3,
+        yerr=a_err,
+        error_kw=_ERRKW if a_err else {},
     )
     for xi, b, a in zip(x, before, after_v):
         if b:

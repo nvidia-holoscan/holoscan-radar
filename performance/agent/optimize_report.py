@@ -101,6 +101,36 @@ def _overall_rows(baseline: dict, final: dict) -> list:
     return rows
 
 
+def _variant_median(analysis: dict, size: str, variant: str):
+    for s in analysis.get("sizes", []):
+        if s["size"] == size:
+            for v in s.get("variants", []):
+                if v["variant"] == variant:
+                    return v["latency_ms"].get("median")
+    return None
+
+
+def _has_variants(*analyses) -> bool:
+    return any(
+        len(s.get("variants", [])) > 1 for a in analyses for s in a.get("sizes", [])
+    )
+
+
+def _variant_rows(baseline: dict, final: dict) -> list:
+    """[(size, variant, before_ms, after_ms, delta_pct), ...] across the swept
+    primary axis, so a per-variant optimization is verified on every mode."""
+    rows = []
+    for size in _size_order(baseline, final):
+        fin = next((s for s in final.get("sizes", []) if s["size"] == size), {})
+        for v in fin.get("variants", []):
+            var = v["variant"]
+            b = _variant_median(baseline, size, var)
+            a = _variant_median(final, size, var)
+            d = (100 * (a - b) / b) if (b and a is not None) else None
+            rows.append((size, var, b, a, d))
+    return rows
+
+
 def _fmt(v, prec=3):
     return "-" if v is None else f"{v:.{prec}f}"
 
@@ -151,6 +181,16 @@ def render_md(session: dict, baseline: dict, final: dict) -> str:
         dtxt = "-" if d is None else f"{d:+.1f}%"
         lines.append(f"| {size} | {_fmt(b)} | {_fmt(a)} | **{dtxt}** |")
     lines.append("")
+
+    if _has_variants(baseline, final):
+        lines.append("## Runtime improvement by variant (primary axis × size)")
+        lines.append("")
+        lines.append("| size | variant | before (ms) | after (ms) | delta |")
+        lines.append("|---|---|---|---|---|")
+        for size, var, b, a, d in _variant_rows(baseline, final):
+            dtxt = "-" if d is None else f"{d:+.1f}%"
+            lines.append(f"| {size} | {var} | {_fmt(b)} | {_fmt(a)} | **{dtxt}** |")
+        lines.append("")
 
     lines.append("## Changes")
     lines.append("")
@@ -222,6 +262,21 @@ def render_html(session: dict, baseline: dict, final: dict) -> str:
             f"<p><img class='chart' alt='before/after' "
             f"src='data:image/png;base64,{png}'></p>"
         )
+    if _has_variants(baseline, final):
+        p.append("<h3>By variant (primary axis × size)</h3>")
+        p.append(
+            "<table><tr><th>size</th><th>variant</th><th>before (ms)</th>"
+            "<th>after (ms)</th><th>delta</th></tr>"
+        )
+        for size, var, b, a, d in _variant_rows(baseline, final):
+            cls = "win" if (d is not None and d < 0) else ""
+            dtxt = "-" if d is None else f"{d:+.1f}%"
+            p.append(
+                f"<tr><td>{esc(size)}</td><td>{esc(str(var))}</td>"
+                f"<td>{_fmt(b)}</td><td>{_fmt(a)}</td>"
+                f"<td class='{cls}'>{dtxt}</td></tr>"
+            )
+        p.append("</table>")
     p.append("</div>")
 
     # Changes

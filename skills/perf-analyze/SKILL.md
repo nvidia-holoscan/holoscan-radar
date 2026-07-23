@@ -72,16 +72,29 @@ Let `OP` be the operator stem (the binary is `perf_<OP>`, e.g.
    report):
 
    ```bash
-   performance/agent/run.sh <OP> xs,md,xl
+   performance/agent/run.sh <OP>            # full 5-tier ladder (default)
+   performance/agent/run.sh <OP> xs,md,xl   # a fast 3-size subset
    ```
 
-   `xs,md,xl` are small/medium/large representatives of the operator's 5-tier
-   ladder (`xs,sm,md,lg,xl`) — enough to show the scaling trend (e.g. the
-   host-bound → kernel-bound crossover) while keeping the run fast (each size is
-   a clean run + an nsys-profiled run). Pass the full ladder for a finer scaling
-   curve at ~1.7× the wall time; pass a single size for a quick check. (Some
-   operators use extra tiers, e.g. CFAR's `xlw`; see the `perf-analyze` note on
-   ladders or the operator's `perf_<op>.cpp`.)
+   The default now sweeps the **full 5-tier ladder** (`xs,sm,md,lg,xl`) for a
+   complete scaling curve; pass a subset (e.g. `xs,md,xl`) or a single size to go
+   faster. (Some operators use extra tiers, e.g. CFAR's `xlw`; see the operator's
+   `perf_<op>.cpp`.)
+
+   Two things the run does automatically:
+   - **Primary-axis (variant) breakdown.** If the operator has a primary
+     categorical mode (clutter `method`, range `window`, cfar `variant`, …) the
+     clean latency runs sweep it (`--sweep-variants`), so the report breaks
+     runtime out **per variant × size** — not just the default mode. Small tuning
+     knobs (e.g. range's `fft_norm`) stay on the separate one-at-a-time
+     `[live]` override sweep, avoiding a combinatoric blow-up. Size-only
+     operators just report the single mode.
+   - **Adaptive trials + variance.** Each size is timed once, then re-run pooled
+     over an **adaptive repeat count** (aim ~10, scaled by op speed under a
+     wall-time budget — fast ops get more, slow ops fewer) so latency stats carry
+     inter-run variance. The report shows `N` (= frames × repeats) and a
+     `min–max` spread, and the charts draw min–max whiskers. Tune with
+     `--target-repeats` / `--repeat-budget-s` / `--repeats N` (fixed).
 
    Prints the path to `report.md`. It chains the four stages below; run them
    individually when you need to inspect an intermediate or re-render without

@@ -58,6 +58,19 @@ def _ms(v, prec=3):
     return "-" if v is None else f"{v:.{prec}f}"
 
 
+def _span(lat: dict, prec=3) -> str:
+    """ "min–max" observed-spread string for a latency block."""
+    lo, hi = lat.get("min"), lat.get("max")
+    if lo is None or hi is None:
+        return "-"
+    return f"{lo:.{prec}f}–{hi:.{prec}f}"
+
+
+def _has_variants(analysis: dict) -> bool:
+    """True when any size carries more than one primary-axis variant."""
+    return any(len(s.get("variants", [])) > 1 for s in analysis.get("sizes", []))
+
+
 def _fmt_int(v):
     return "-" if v is None else f"{int(v)}"
 
@@ -132,10 +145,10 @@ def render(analysis: dict, diagnosis: dict) -> str:
     a("## Per-size latency & attribution")
     a("")
     a(
-        "| size | shape | setup | cold | median | p90 | kernel/tick | "
-        "alloc/tick | free/tick | GB/s |"
+        "| size | shape | setup | cold | median | min–max | N | p90 | "
+        "kernel/tick | alloc/tick | free/tick | GB/s |"
     )
-    a("|---|---|---|---|---|---|---|---|---|---|")
+    a("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for s in analysis.get("sizes", []):
         lat = s["latency_ms"]
         der = s["derived"]
@@ -146,12 +159,34 @@ def render(analysis: dict, diagnosis: dict) -> str:
         a(
             f"| {s['size']} | {shape} | {_ms(lat.get('setup'), 2)} | "
             f"{_ms(lat.get('cold'))} | {_ms(lat.get('median'))} | "
-            f"{_ms(lat.get('p90'))} | {_ms(kern_pt, 4)} | "
+            f"{_span(lat)} | {lat.get('n') or '-'} | {_ms(lat.get('p90'))} | "
+            f"{_ms(kern_pt, 4)} | "
             f"{_ms(der.get('alloc_calls_per_tick'), 1)} | "
             f"{_ms(der.get('free_calls_per_tick'), 1)} | "
             f"{_ms(s['throughput'].get('estimated_effective_gbps'), 2)} |"
         )
     a("")
+    a(
+        "> Latency = median over N pooled samples (measured_frames × repeats); "
+        "min–max is the observed spread across those samples. Attribution "
+        "columns are size-level (profiled at the primary variant)."
+    )
+    a("")
+
+    # --- per-variant steady latency (only when a primary axis was swept) -----
+    if _has_variants(analysis):
+        a("## Per-variant steady latency (primary axis × size)")
+        a("")
+        a("| size | variant | median (ms) | min–max (ms) | p90 (ms) | N |")
+        a("|---|---|---|---|---|---|")
+        for s in analysis.get("sizes", []):
+            for v in s.get("variants", []):
+                vl = v["latency_ms"]
+                a(
+                    f"| {s['size']} | {v['variant']} | {_ms(vl.get('median'))} | "
+                    f"{_span(vl)} | {_ms(vl.get('p90'))} | {vl.get('n') or '-'} |"
+                )
+        a("")
 
     # --- steady breakdown per size -----------------------------------------
     for s in analysis.get("sizes", []):
@@ -279,7 +314,8 @@ def _dashboard_png(run_dir) -> str | None:
 def _html_latency_table(analysis: dict) -> str:
     head = (
         "<tr><th>size</th><th>shape</th><th>setup</th><th>cold</th>"
-        "<th>median</th><th>p90</th><th>kernel/tick</th><th>alloc/tick</th>"
+        "<th>median</th><th>min–max</th><th>N</th><th>p90</th>"
+        "<th>kernel/tick</th><th>alloc/tick</th>"
         "<th>free/tick</th><th>GB/s</th></tr>"
     )
     rows = [head]
@@ -294,14 +330,39 @@ def _html_latency_table(analysis: dict) -> str:
             "<tr>"
             f"<td>{html.escape(s['size'])}</td><td>{shape}</td>"
             f"<td>{_ms(lat.get('setup'), 2)}</td><td>{_ms(lat.get('cold'))}</td>"
-            f"<td>{_ms(lat.get('median'))}</td><td>{_ms(lat.get('p90'))}</td>"
+            f"<td>{_ms(lat.get('median'))}</td><td>{_span(lat)}</td>"
+            f"<td>{lat.get('n') or '-'}</td><td>{_ms(lat.get('p90'))}</td>"
             f"<td>{_ms(kern_pt, 4)}</td>"
             f"<td>{_ms(der.get('alloc_calls_per_tick'), 1)}</td>"
             f"<td>{_ms(der.get('free_calls_per_tick'), 1)}</td>"
             f"<td>{_ms(s['throughput'].get('estimated_effective_gbps'), 2)}</td>"
             "</tr>"
         )
-    return "<table>" + "".join(rows) + "</table>"
+    table = "<table>" + "".join(rows) + "</table>"
+    if not _has_variants(analysis):
+        return table
+    vrows = [
+        "<tr><th>size</th><th>variant</th><th>median</th><th>min–max</th>"
+        "<th>p90</th><th>N</th></tr>"
+    ]
+    for s in analysis.get("sizes", []):
+        for v in s.get("variants", []):
+            vl = v["latency_ms"]
+            vrows.append(
+                "<tr>"
+                f"<td>{html.escape(s['size'])}</td>"
+                f"<td>{html.escape(str(v['variant']))}</td>"
+                f"<td>{_ms(vl.get('median'))}</td><td>{_span(vl)}</td>"
+                f"<td>{_ms(vl.get('p90'))}</td><td>{vl.get('n') or '-'}</td>"
+                "</tr>"
+            )
+    return (
+        table
+        + "<h3>Per-variant steady latency (primary axis × size)</h3>"
+        + "<table>"
+        + "".join(vrows)
+        + "</table>"
+    )
 
 
 def _html_override_table(analysis: dict) -> str:

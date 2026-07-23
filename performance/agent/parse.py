@@ -198,11 +198,46 @@ def _compute_row(perf_json: dict):
     return None
 
 
+def _compute_rows(perf_json: dict) -> list:
+    """All compute rows — one per primary-axis variant when the clean run swept
+    ``--sweep-variants`` (else a single default-variant row)."""
+    return [r for r in perf_json.get("results", []) if r.get("bucket") == "compute"]
+
+
 def _setup_row(perf_json: dict):
     for r in perf_json.get("results", []):
         if r.get("bucket") == "setup":
             return r
     return None
+
+
+def _n_samples(clean_json: dict) -> int:
+    """Pooled sample count behind each latency stat = frames x repeats."""
+    rs = clean_json.get("run_settings", {})
+    return int(rs.get("measured_frames") or 0) * int(rs.get("repeats") or 1)
+
+
+def _variant_tag(comp: dict) -> str:
+    """Primary-axis label for a compute row (e.g. msub/sdel/ddel); 'default' when
+    the operator has no primary categorical axis."""
+    return comp.get("variant") or "default"
+
+
+def _latency_of(comp: dict, setup: dict, n: int) -> dict:
+    """Latency block for one compute row, carrying the full spread (min/p99/max)
+    and the trial count so the report can draw whiskers and print N."""
+    return {
+        "setup": setup.get("setup_ms"),
+        "cold": comp.get("cold_ms"),
+        "min": comp.get("min_ms"),
+        "median": comp.get("median_ms"),
+        "p90": comp.get("p90_ms"),
+        "p99": comp.get("p99_ms"),
+        "max": comp.get("max_ms"),
+        "n": n,
+        "override": comp.get("override_ms"),
+        "override_delta": comp.get("override_delta_ms"),
+    }
 
 
 def _tick_count(phases: list) -> int:
@@ -215,8 +250,10 @@ def _tick_count(phases: list) -> int:
 
 
 def build_size_analysis(size: str, clean_json: dict, stats: dict, op_name: str) -> dict:
-    comp = _compute_row(clean_json) or {}
+    comps = _compute_rows(clean_json)
+    comp = comps[0] if comps else {}  # primary/default variant (back-compat)
     setup = _setup_row(clean_json) or {}
+    n = _n_samples(clean_json)
 
     kern = parse_kernels(_load(stats.get("cuda_gpu_kern_sum")))
     api = parse_api_sum(_load(stats.get("cuda_api_sum")))
@@ -261,18 +298,29 @@ def build_size_analysis(size: str, clean_json: dict, stats: dict, op_name: str) 
         "host_api_ns_total": host_api_ns,
     }
 
+    # Per-variant latency (one row per primary-axis value the clean run swept).
+    # Attribution (gpu / host_api / phases / derived) is size-level: the profiled
+    # nsys run covers the primary variant only, so it is shared across variants.
+    variants = [
+        {
+            "variant": _variant_tag(c),
+            "map_shape": c.get("map_shape"),
+            "latency_ms": _latency_of(c, setup, n),
+            "throughput": {
+                "cells_per_second": c.get("cells_per_second"),
+                "estimated_effective_gbps": c.get("estimated_effective_gbps"),
+            },
+        }
+        for c in comps
+    ]
+
     return {
         "size": size,
+        "variant": _variant_tag(comp),  # primary/default variant label
+        "n": n,
         "input_shape": comp.get("input_shape"),
         "map_shape": comp.get("map_shape"),
-        "latency_ms": {
-            "setup": setup.get("setup_ms"),
-            "cold": comp.get("cold_ms"),
-            "median": comp.get("median_ms"),
-            "p90": comp.get("p90_ms"),
-            "override": comp.get("override_ms"),
-            "override_delta": comp.get("override_delta_ms"),
-        },
+        "latency_ms": _latency_of(comp, setup, n),  # primary variant (back-compat)
         "throughput": {
             "cells_per_second": comp.get("cells_per_second"),
             "estimated_effective_gbps": comp.get("estimated_effective_gbps"),
@@ -289,6 +337,7 @@ def build_size_analysis(size: str, clean_json: dict, stats: dict, op_name: str) 
         "phases": ph["phases"],
         "whole_op_tick": ph["whole_op_tick"],
         "derived": derived,
+        "variants": variants,
     }
 
 

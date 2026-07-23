@@ -34,6 +34,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -60,6 +61,7 @@ class SizeArtifacts:
     clean_json: str  # schema-v2 perf JSON (latency baseline)
     nsys_rep: str = ""  # .nsys-rep (empty if --no-nsys)
     stats_json: dict = field(default_factory=dict)  # report -> json path
+    repeats: int = 1  # pooled measured sessions (adaptive; N = frames*repeats)
 
 
 @dataclass
@@ -75,6 +77,7 @@ class RunnerManifest:
     trace: str
     clean_override_sweep_json: str
     per_size: list = field(default_factory=list)  # list[SizeArtifacts as dict]
+    variant_mode: bool = False  # clean runs swept the primary categorical axis
     nsys_version: str = ""
     notes: str = ""
 
@@ -133,10 +136,20 @@ def run_clean(
     *,
     sizes=None,
     sweep_overrides: bool = False,
+    sweep_variants: bool = False,
     warmup: int,
     frames: int,
-) -> None:
-    """Run the perf binary without a profiler and capture its schema-v2 JSON."""
+    repeats: int = 1,
+    check: bool = True,
+) -> subprocess.CompletedProcess:
+    """Run the perf binary without a profiler and capture its schema-v2 JSON.
+
+    ``repeats`` pools that many measured sessions per scenario (the binary's
+    ``--repeats``), so latency stats reflect inter-run as well as inter-frame
+    variance. ``sweep_variants`` runs the operator's primary categorical axis
+    (method/window/variant/...) x sizes; ``check=False`` returns the
+    CompletedProcess instead of raising (used to probe optional support).
+    """
     cmd = [
         str(binary),
         "--quiet",
@@ -147,13 +160,36 @@ def run_clean(
         "--frames",
         str(frames),
     ]
+    if repeats and repeats > 1:
+        cmd += ["--repeats", str(repeats)]
     if sweep_overrides:
         cmd.append("--sweep-overrides")
+    if sweep_variants:
+        cmd.append("--sweep-variants")
     if sizes:
         cmd += ["--sizes", ",".join(sizes)]
     _log("clean: " + " ".join(cmd))
     env = dict(os.environ, HOLOSCAN_LOG_LEVEL="ERROR")
-    subprocess.run(cmd, check=True, env=env)
+    return subprocess.run(cmd, check=check, env=env)
+
+
+def _choose_repeats(
+    elapsed_1x: float, *, target: int, budget_s: float, lo: int, hi: int
+) -> int:
+    """Adaptive trial count: aim for ``target`` repeats, but keep the pooled
+    per-size wall time under ``budget_s`` — a slow op runs fewer, a fast op more.
+
+    Scales with the measured single-pass wall time ``elapsed_1x`` (seconds):
+    n ≈ budget_s / elapsed_1x, clamped to [lo, hi] and biased toward ``target``.
+    """
+    if elapsed_1x <= 0:
+        return target
+    n = target
+    if n * elapsed_1x > budget_s:  # too slow at target: shrink to fit the budget
+        n = int(budget_s / elapsed_1x)
+    elif (n + 1) * elapsed_1x <= budget_s:  # fast: grow toward hi within budget
+        n = int(budget_s / elapsed_1x)
+    return max(lo, min(hi, n))
 
 
 def run_profiled(
@@ -225,6 +261,26 @@ def export_stats(rep: Path, reports=DEFAULT_REPORTS) -> dict:
     return out
 
 
+def _probe_variant_support(
+    binary: Path, size: str, op_out: Path, warmup: int, frames: int
+) -> bool:
+    """Return True if the binary implements --sweep-variants (cheap probe)."""
+    probe = op_out / ".variant_probe.json"
+    try:
+        cp = run_clean(
+            binary,
+            probe,
+            sizes=[size],
+            sweep_variants=True,
+            warmup=0,
+            frames=1,
+            check=False,
+        )
+        return cp.returncode == 0
+    finally:
+        probe.unlink(missing_ok=True)
+
+
 def run(
     operator: str,
     build_dir: Path,
@@ -236,9 +292,19 @@ def run(
     frames: int,
     prof_warmup: int,
     prof_frames: int,
+    repeats: int = 0,
+    target_repeats: int = 10,
+    repeat_budget_s: float = 20.0,
+    min_repeats: int = 3,
+    max_repeats: int = 20,
     reports=DEFAULT_REPORTS,
 ) -> Path:
-    """Drive clean + profiled runs for one operator. Returns the manifest path."""
+    """Drive clean + profiled runs for one operator. Returns the manifest path.
+
+    ``repeats`` > 0 pins a fixed trial count; ``repeats`` == 0 (default) picks it
+    adaptively per size to hit ~``target_repeats`` under ``repeat_budget_s`` of
+    pooled wall time (clamped to [``min_repeats``, ``max_repeats``]).
+    """
     binary = build_dir / "performance" / "cpp" / f"perf_{operator}"
     nsys_version = preflight(binary, use_nsys)
 
@@ -269,11 +335,66 @@ def run(
             "skipping the override sweep (per-size attribution only)"
         )
 
+    # Detect --sweep-variants support once (probe the first size). When present,
+    # the clean latency runs sweep the operator's primary categorical axis
+    # (method/window/variant/...) so the report can break latency out per variant.
+    # nsys attribution stays single-variant per size (kernel/shell split is
+    # similar across variants; per-variant profiling would multiply nsys cost).
+    variant_mode = _probe_variant_support(binary, sizes[0], op_out, warmup, frames)
+    _log(
+        "variant sweep supported: clean runs cover the primary axis x sizes"
+        if variant_mode
+        else "no --sweep-variants: single default-variant clean run per size"
+    )
+
     per_size = []
     for size in sizes:
         clean_json = op_out / f"clean_size_{size}.json"
-        run_clean(binary, clean_json, sizes=[size], warmup=warmup, frames=frames)
-        art = SizeArtifacts(size=size, clean_json=str(clean_json))
+        if repeats and repeats > 0:  # fixed trial count
+            reps = repeats
+            run_clean(
+                binary,
+                clean_json,
+                sizes=[size],
+                sweep_variants=variant_mode,
+                warmup=warmup,
+                frames=frames,
+                repeats=reps,
+            )
+        else:  # adaptive: time one pass, then pool enough repeats for the budget
+            t0 = time.time()
+            run_clean(
+                binary,
+                clean_json,
+                sizes=[size],
+                sweep_variants=variant_mode,
+                warmup=warmup,
+                frames=frames,
+                repeats=1,
+            )
+            elapsed_1x = time.time() - t0
+            reps = _choose_repeats(
+                elapsed_1x,
+                target=target_repeats,
+                budget_s=repeat_budget_s,
+                lo=min_repeats,
+                hi=max_repeats,
+            )
+            _log(
+                f"size {size}: 1 pass = {elapsed_1x:.2f}s -> {reps} repeats "
+                f"(N = {frames}x{reps} = {frames * reps} samples/scenario)"
+            )
+            if reps > 1:
+                run_clean(
+                    binary,
+                    clean_json,
+                    sizes=[size],
+                    sweep_variants=variant_mode,
+                    warmup=warmup,
+                    frames=frames,
+                    repeats=reps,
+                )
+        art = SizeArtifacts(size=size, clean_json=str(clean_json), repeats=reps)
         if use_nsys:
             rep = run_profiled(
                 binary,
@@ -296,6 +417,7 @@ def run(
         trace=NSYS_TRACE,
         clean_override_sweep_json=str(sweep_json) if have_sweep else "",
         per_size=per_size,
+        variant_mode=variant_mode,
         nsys_version=nsys_version,
         notes="clean JSON = latency; profiled nsys tables = attribution; "
         "counts include the binary's discarded process-warmup session",
@@ -330,8 +452,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     p.add_argument(
         "--sizes",
-        default="xs,md,xl",
-        help="comma-separated size-ladder ids (small/medium/large)",
+        default="xs,sm,md,lg,xl",
+        help="comma-separated size-ladder ids (default: full 5-tier ladder; "
+        "pass a subset e.g. xs,md,xl to go faster)",
     )
     p.add_argument(
         "--warmup", type=int, default=5, help="clean-run warmup frames (default 5)"
@@ -355,6 +478,31 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument(
         "--no-nsys", action="store_true", help="skip profiling (clean latency only)"
     )
+    p.add_argument(
+        "--repeats",
+        type=int,
+        default=0,
+        help="fixed pooled trial count per scenario (0 = adaptive, the default)",
+    )
+    p.add_argument(
+        "--target-repeats",
+        type=int,
+        default=10,
+        help="adaptive target trials per scenario (default 10; scaled by op speed)",
+    )
+    p.add_argument(
+        "--repeat-budget-s",
+        type=float,
+        default=20.0,
+        help="adaptive per-size pooled wall-time budget in seconds (default 20): "
+        "a slow op runs fewer trials, a fast op more",
+    )
+    p.add_argument(
+        "--min-repeats", type=int, default=3, help="adaptive floor (default 3)"
+    )
+    p.add_argument(
+        "--max-repeats", type=int, default=20, help="adaptive ceiling (default 20)"
+    )
     return p.parse_args(argv)
 
 
@@ -371,6 +519,11 @@ def main(argv=None) -> int:
         frames=args.frames,
         prof_warmup=args.profiled_warmup,
         prof_frames=args.profiled_frames,
+        repeats=args.repeats,
+        target_repeats=args.target_repeats,
+        repeat_budget_s=args.repeat_budget_s,
+        min_repeats=args.min_repeats,
+        max_repeats=args.max_repeats,
     )
     print(manifest)
     return 0

@@ -21,7 +21,7 @@
 set -euo pipefail
 
 OP="${1:?usage: performance/agent/run.sh <operator> [sizes] [runner-args...]}"
-SIZES="${2:-xs,md,xl}"
+SIZES="${2:-xs,sm,md,lg,xl}"  # full 5-tier ladder; pass a subset (e.g. xs,md,xl) to go faster
 shift $(( $# > 2 ? 2 : $# ))  # remaining args pass through to runner.py
 
 BUILD_DIR="${BUILD_DIR:-build-perf}"
