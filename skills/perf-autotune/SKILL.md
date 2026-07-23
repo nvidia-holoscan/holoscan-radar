@@ -1,6 +1,6 @@
 ---
 name: perf-autotune
-description: Autonomously optimize a holoscan-radar operator — loop analyze → apply a fix → re-measure → keep-if-faster-and-byte-equivalent, over multiple bottlenecks, until a stop condition, then present a cumulative optimization report for approval. Use ONLY when the user explicitly asks to autonomously optimize / auto-tune / iteratively speed up a perf_<operator> and accepts multiple unattended code changes. Isolated in a git worktree; every change is gated (unit tests + output checksum + harness); nothing lands without human approval. This edits code in a loop — do not invoke unless explicitly requested.
+description: Autonomously optimize a holoscan-radar operator — loop analyze → apply a fix → re-measure → keep-if-faster-and-byte-equivalent, over multiple bottlenecks, until a stop condition, then present a cumulative optimization report for approval. Use ONLY when the user explicitly asks to autonomously optimize / auto-tune / iteratively speed up a perf_<operator> and accepts multiple unattended code changes. Isolated in a git worktree by default (override to work in place on the current branch by asking to "work locally"); every change is gated (unit tests + output checksum + harness); nothing lands without human approval. This edits code in a loop — do not invoke unless explicitly requested.
 ---
 
 # perf-autotune — autonomous operator optimizer (the loop)
@@ -43,6 +43,23 @@ Within the worktree, apply/gate/keep-or-revert each candidate **in place** (git
 `checkout --` to revert a failed candidate) — incremental rebuilds keep the loop
 fast. (Parallel exploration across multiple worktrees is a future enhancement;
 v0 is sequential.)
+
+**Override — work locally.** If the user explicitly asks to run **in place / on
+the current branch / without a worktree** (e.g. "just work locally"), skip the
+`git worktree add` and run the same loop directly in their checkout. Then:
+
+- **Require a clean tree first** (`git status` — no uncommitted tracked changes),
+  so `git checkout --` reverts of failed candidates are unambiguous and can never
+  clobber the user's own edits. If the tree is dirty, stop and ask them to commit
+  or stash first.
+- Tell the user the loop's build churn and per-candidate edits will land in their
+  working tree (kept changes stay uncommitted for approval, exactly as in the
+  worktree case — still **do not land**).
+- Everything else is identical: same three gates, same keep-or-revert, same
+  cumulative report at the end. There is no worktree to remove on finish.
+
+The worktree remains the default because an unattended multi-change loop should
+not dirty the user's tree unless they opted in.
 
 ## The loop
 
