@@ -120,6 +120,7 @@ The lint stack (`.pre-commit-config.yaml`): ruff + isort + black (Python), cppli
 ## Conventions
 
 - C++ namespace `holoscan::radar`; Python package `holoscan.radar`; operator classes CamelCase ending in `Op`; directories snake_case.
+- Comments explain the *why* (the invariant, hazard, or contract tie-in) and stay terse — a sentence or two at the decision point, not a paragraph narrating what the code already says. Put the durable rationale in one place (usually the header/struct) and cross-reference it rather than restating it at each use.
 - Include headers by their path from the include root (`#include "group/op/op.hpp"`), never bare — the one exception is a same-dir colocated app-private header (`config.hpp` / `custom_ops.hpp`), tagged `// NOLINT(build/include_subdir)`.
 - Commits: imperative subject, `Area: Summary` prefix style (e.g. `CI: Add linting workflow`, `Operators: ...`).
 - Branches: `<user>/<topic>` (e.g. `deustice/planning`). PRs target `main`; lint CI must pass; contract changes (see Docs first) get called out explicitly.
