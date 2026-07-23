@@ -48,25 +48,36 @@ as **background** commands (write logs to the mounted tree; poll the log / binar
 mtime), or the container is killed and you rebuild from scratch. Keep `-j4`
 (not `-j$(nproc)` — heavy parallelism truncates captured stdout on this host).
 
-**Native container entry & extra capabilities (for `ncu`).** The headless `docker
-run` above is for the *agent* (a fresh shell per command that can't hold an
-interactive session). When you instead need an **interactive root shell** — e.g.
-to install a tool the base image lacks — use holohub's native flags rather than
-hand-rolling docker: `./holohub run-container --as-root` drops you in as **root**
-(the default mapped user is your non-root host UID with no working sudo, which is
-why plain `apt-get`/`sudo` fail in a normal session), and `--docker-opts='…'`
-forwards arbitrary `docker run` args, e.g. `--docker-opts='--cap-add SYS_ADMIN'`.
-Nsight Compute (`ncu`) needs root **and** `SYS_ADMIN` — see the full recipe under
-[Deep kernel dive → Availability gate](#deep-kernel-dive--nsight-compute-ncu). The
-short version: install `ncu` once into a **derived image**
-(`holoscan-radar:ngc-v4.3.0-cuda13-ncu` — `apt-get update && apt-get install -y
-nsight-compute`, then `docker commit`), then in the agent's headless `docker run`
-point at that image and add **both** `--cap-add SYS_ADMIN` (next to
-`CAP_SYS_PTRACE`) **and** `--user 0:0` whenever a command invokes `ncu`. On this
-host counter access needs root: as the normal mapped non-root user `ncu` fails
-with `ERR_NVGPUCTRPERM` even *with* `SYS_ADMIN` — running as root (`--user 0:0`)
-plus `SYS_ADMIN` is what makes counters collect. Both the install and counter
-collection are **verified working on this Thor host** under that combination.
+**The dev image is the dep sandbox (Dockerfile-provisioned).** `./holohub
+run-container` builds the dev image from the repo `Dockerfile` (the wrapper points
+holoscan-cli at it via `HOLOSCAN_CLI_DEFAULT_DOCKERFILE`), and both the
+interactive shell **and** the agent's headless `docker run` target that same
+`holoscan-radar:<branch>` tag. So the Dockerfile **is** the skills' dependency
+sandbox — add a dep there, rebuild, and every entry point has it, reproducibly and
+without the staleness of a `docker commit`:
+- **`matplotlib`** (for `report.html` charts) is baked in unconditionally.
+- **Nsight Compute (`ncu`)** is an opt-in layer behind the `INSTALL_NCU` build-arg
+  (OFF by default, ~700 MB). Bake it into the sandbox once:
+  ```bash
+  ./holohub run-container --build-args '--build-arg INSTALL_NCU=1'
+  ```
+  That rebuilds `holoscan-radar:<branch>` with `ncu` present; a plain rebuild
+  leaves it out.
+
+For an **interactive root shell** to poke at the image, prefer holohub's native
+flags over hand-rolling docker: `--as-root` enters as root (the default mapped
+user is your non-root host UID with no working sudo, which is why plain
+`apt-get`/`sudo` fail in a normal session), and `--docker-opts='…'` forwards
+arbitrary `docker run` args, e.g. `--docker-opts='--cap-add SYS_ADMIN'`.
+
+Provisioning `ncu` is necessary but **not sufficient**: its counters need root
+**and** `SYS_ADMIN` *at run time* — see [Deep kernel dive → Availability
+gate](#deep-kernel-dive--nsight-compute-ncu). Short version: build once with
+`INSTALL_NCU=1`, then in the agent's headless `docker run` add **both**
+`--cap-add SYS_ADMIN` (next to `CAP_SYS_PTRACE`) **and** `--user 0:0` whenever a
+command invokes `ncu`. On this host the non-root mapped user fails with
+`ERR_NVGPUCTRPERM` even *with* `SYS_ADMIN`; root (`--user 0:0`) + `SYS_ADMIN` is
+what makes counters collect. **Verified working on this Thor host.**
 
 ## Steps
 
@@ -136,11 +147,12 @@ Let `OP` be the operator stem (the binary is `perf_<OP>`, e.g.
    into `OPEN_ITEMS.md`) and a self-contained `report.html` (the same findings +
    tables plus the `visualize.py` chart dashboard embedded as a base64 PNG).
 
-3. **Charts** are embedded in `report.html` automatically when `matplotlib` is
-   installed (`pip install matplotlib`; charts read plain JSON, no GPU). Without
-   matplotlib the pass still writes `report.html`, minus the dashboard image.
-   `visualize.py` is also importable directly (`viz.dashboard(run_dir)`) for
-   ad-hoc plots or a cross-operator comparison.
+3. **Charts** are embedded in `report.html` automatically — `matplotlib` is baked
+   into the dev image (Dockerfile), so the dashboard renders by default (charts
+   read plain JSON, no GPU). On an older image built before that, the pass still
+   writes `report.html` minus the dashboard; `./holohub run-container` rebuilds to
+   pick it up. `visualize.py` is also importable directly (`viz.dashboard(run_dir)`)
+   for ad-hoc plots or a cross-operator comparison.
 
 4. **Deep kernel dive — on by default.** Unless the user opted out or `ncu` is
    unavailable, run the scoped Nsight Compute dive (see
@@ -201,11 +213,12 @@ you must say which one applies:
 1. **User opt-out** — the user asked to skip it (e.g. "no ncu", "skip Nsight
    Compute", "nsys-only", "don't run ncu"). Their request is sticky for the
    session; honor it without re-asking.
-2. **Unavailable *after trying to install it*** — `ncu` absent is **not** a skip
-   reason by itself: install it first (default; see the availability gate below —
-   the base image doesn't ship it but the repos are pre-configured). Only fall
-   back to nsys-only (and say so) if the install genuinely can't be done or the
-   perf counters stay locked (`ERR_NVGPUCTRPERM`) after adding `SYS_ADMIN`.
+2. **Unavailable *after trying to provision it*** — `ncu` absent is **not** a skip
+   reason by itself: the image just wasn't built with `INSTALL_NCU=1` (see the
+   availability gate below). Rebuild the sandbox with it (or do the one-off
+   in-session install) first. Only fall back to nsys-only (and say so) if it
+   genuinely can't be provisioned or the perf counters stay locked
+   (`ERR_NVGPUCTRPERM`) after adding `SYS_ADMIN` + root.
 3. **No kernel worth profiling** — the tick is so host/graph-bound that no kernel
    meaningfully contributes (kernel ≪ the tick at every size). Note that the
    attribution already answered the question (the win is in the shell), so the
@@ -214,42 +227,26 @@ you must say which one applies:
 `runner.py` does not yet drive it (a future stage may), so it stays a **manual**
 invocation — but a default step of the analysis, not an occasional escalation.
 
-**Availability gate — get `ncu`, don't just skip it.** `ncu` is **not in the base
-image**, but the base image already has the NVIDIA apt repos configured
-(`/etc/apt/sources.list.d/nvidia-devtools.list` + `cuda.list`), so installing it
-is a few tested steps — do this by default, don't fall back to nsys-only just
-because `ncu` is missing. **Verified on this Thor host (2026-07-23).**
+**Availability gate — the image should already have `ncu`.** `ncu` is **not in the
+stock base image**, but the repo Dockerfile installs it behind the `INSTALL_NCU`
+build-arg, so the sanctioned way to have it is to **build the dev sandbox with
+`INSTALL_NCU=1`** (see the dep-sandbox note in Prerequisites) — reproducible,
+survives `--rm`, no `docker commit`. **Verified on this Thor host (2026-07-23).**
 
-- **You need root.** The harness's default headless `docker run` maps your
-  non-root host UID (no working sudo), so `apt-get` fails there. Two ways in as
-  root: `./holohub run-container --as-root` (interactive shell), or, for the
-  agent's headless flow, add `--user 0:0` to the `docker run`.
-- **`apt-get update` FIRST — this is the step a fresh run misses.** The repos are
-  listed but the package lists aren't fetched in the base image, so a bare
-  `apt-cache search nsight-compute` / `apt-get install` finds **nothing** and the
-  run wrongly concludes "unavailable." Always `apt-get update` before searching or
-  installing.
-- **Package:** `nsight-compute` (the standalone devtools build; candidate
-  `2026.2.1`, matches the image's nsys era). `cuda-nsight-compute-13-2` also works
-  (CUDA-toolkit-pinned). Install: `apt-get install -y --no-install-recommends
-  nsight-compute`. The CLI lands at `/opt/nvidia/nsight-compute/<ver>/ncu` and is
-  **not on `PATH`** — resolve it: `NCU=$(ls /opt/nvidia/nsight-compute/*/ncu | head -1)`.
-- **Persist it (default) — a `--rm` container throws the install away.** Build a
-  derived image **once** so every later run (and re-runs) skip the reinstall:
-  ```bash
-  cid=$(docker run -d --user 0:0 -e HOME=/tmp \
-    -v "$PWD":/workspace/holoscan-radar -w /workspace/holoscan-radar \
-    holoscan-radar:ngc-v4.3.0-cuda13 bash -lc \
-    'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-       --no-install-recommends nsight-compute && echo DONE_INSTALL_OK && sleep 60')
-  # wait for DONE_INSTALL_OK in `docker logs $cid`, then:
-  docker commit "$cid" holoscan-radar:ngc-v4.3.0-cuda13-ncu
-  docker rm -f "$cid"
-  ```
-  Then run every `ncu` command against `holoscan-radar:ngc-v4.3.0-cuda13-ncu`
-  instead of the base tag. (One-off alternative, no new image: chain
-  `apt-get update && apt-get install -y nsight-compute && "$NCU" …` inside the
-  *same* `docker run` — re-downloads each time, fine for a single dive.)
+- **Check it's there:** `NCU=$(ls /opt/nvidia/nsight-compute/*/ncu 2>/dev/null |
+  head -1)`. The CLI installs under `/opt/nvidia/nsight-compute/<ver>/ncu` and is
+  **not on `PATH`**, so always resolve it this way. Empty `$NCU` ⇒ the current
+  image wasn't built with `INSTALL_NCU=1`.
+- **If it's missing, provision it:** rebuild the sandbox —
+  `./holohub run-container --build-args '--build-arg INSTALL_NCU=1'` — then re-run.
+  *One-off alternative (no rebuild):* as root in the same container, `apt-get
+  update && apt-get install -y --no-install-recommends nsight-compute`. **`apt-get
+  update` FIRST** — the base lists the NVIDIA repos but hasn't fetched them, so a
+  bare `apt-cache search`/`install` finds nothing and wrongly reads "unavailable."
+  This install is thrown away on `--rm`, so prefer the build-arg.
+- **Package:** `nsight-compute` (standalone devtools build; candidate `2026.2.1`,
+  matches the image's nsys era). `cuda-nsight-compute-13-2` also works
+  (CUDA-toolkit-pinned).
 - **Counters need `--cap-add SYS_ADMIN` *and* root (`--user 0:0`).** The harness's
   headless `docker run` only adds `CAP_SYS_PTRACE` and maps a non-root UID; for
   `ncu` add `--cap-add SYS_ADMIN` **and** `--user 0:0` (interactive:
@@ -273,8 +270,8 @@ because `ncu` is missing. **Verified on this Thor host (2026-07-23).**
 set**, and only a handful of **steady-tick** launches (skip warmup):
 
 ```bash
-# Inside the -ncu image, run as root with SYS_ADMIN:
-#   docker run ... --cap-add SYS_ADMIN --user 0:0 holoscan-radar:ngc-v4.3.0-cuda13-ncu ...
+# Run as root with SYS_ADMIN against the ncu-enabled sandbox (built INSTALL_NCU=1):
+#   docker run ... --cap-add SYS_ADMIN --user 0:0 holoscan-radar:<branch> ...
 NCU=$(ls /opt/nvidia/nsight-compute/*/ncu | head -1)
 "$NCU" --target-processes all \
     --section SpeedOfLight --section Occupancy \

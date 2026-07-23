@@ -49,8 +49,22 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Python tooling: pytest-timeout for tests, build + scikit-build-core for
-# `./holohub package --pkg-generator WHEEL` (drives `python -m build`).
-RUN pip install --no-cache-dir pytest-timeout build scikit-build-core
+# `./holohub package --pkg-generator WHEEL` (drives `python -m build`), matplotlib
+# for the perf harness's report.html chart dashboard (perf-analyze skill). These
+# are small + always wanted, so they are unconditional.
+RUN pip install --no-cache-dir pytest-timeout build scikit-build-core matplotlib
+
+# Nsight Compute (ncu) for the perf-analyze kernel deep-dive. OFF by default
+# (~700 MB); opt in per build without editing this file:
+#   ./holohub run-container --build-args '--build-arg INSTALL_NCU=1'
+# ncu counters additionally need root + --cap-add SYS_ADMIN at *run* time on this
+# Thor host — see the perf-analyze skill's availability gate.
+ARG INSTALL_NCU=0
+RUN if [ "$INSTALL_NCU" = "1" ]; then \
+        apt-get update \
+        && apt-get install --no-install-recommends -y nsight-compute \
+        && rm -rf /var/lib/apt/lists/* \
+    ; fi
 
 # Create the `dev` user with passwordless sudo at UID/GID ${DEV_UID}/${DEV_GID},
 # first freeing those ids if the base image assigned them to another account.
