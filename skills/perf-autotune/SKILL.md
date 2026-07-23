@@ -21,10 +21,19 @@ isolated worktree and stops.
 
 - **Correctness** (unit tests), **byte-equivalence** (output checksum), **speed**
   (harness steady median) — all three must pass to keep a change; else revert it.
-- Never touch the locked contract (`OPERATOR_API.md`) or the signal math;
-  behavior-preserving perf refactors only.
-- Byte-equivalence is the default gate; a numerics-changing change needs explicit
-  user opt-in + sim-test re-validation.
+- **Scope = anything under `operators/**`** — shell *and* compute internals
+  (kernels, staging, DSP), including headers shared across operators.
+  `radar_common/**` and the locked contract (`OPERATOR_API.md`) stay off-limits.
+- **Touch shared code → gate every operator that uses it.** If a candidate edits a
+  file used beyond the operator-under-test (reverse-include across `operators/` —
+  e.g. `range_stage.hpp` is shared by the range and range-doppler processors),
+  correctness + byte-equivalence must pass for **every** consuming operator, not
+  just the one being tuned — each needs a `--checksum` sink + unit tests. This
+  widens the per-candidate gate (more builds/checksums per iteration); that cost is
+  mandatory, not optional. (Mechanics identical to `perf-optimize`'s Steps.)
+- Byte-equivalence is the default gate for every affected operator; a
+  numerics-changing change needs explicit user opt-in + sim-test re-validation
+  (for each affected operator).
 - **Do not land.** End by presenting the kept changes + report; a human commits.
 
 ## Isolation
@@ -88,9 +97,11 @@ see `perf-optimize` prerequisites and the `perf-analyze` container guidance).
    2. **Apply** the smallest behavior-preserving change implementing its
       recommended pattern (pool/ping-pong, gate unused work, cache a rebuild).
    3. **Gate** (rebuild → unit tests → checksum vs baseline → harness median vs
-      current-best). **Keep** only if correctness holds, the checksum is
-      identical, and the median improves beyond noise; otherwise `git checkout
-      --` the candidate. With ~2–3× median variance, "improves beyond noise"
+      current-best) — **for every operator that shares a file the candidate
+      touched**, not just the one being tuned (reverse-include across `operators/`;
+      see the shared-code gate above). **Keep** only if correctness holds, the
+      checksum is identical **for all of them**, and the median improves beyond
+      noise; otherwise `git checkout --` the candidate. With ~2–3× median variance, "improves beyond noise"
       means confirmed across a few repeated clean runs, not one — and an
       implausibly large delta must match the change's mechanism before you trust
       it. The unit-test filter is the **gtest suite** name (e.g.

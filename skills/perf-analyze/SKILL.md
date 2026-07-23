@@ -133,7 +133,7 @@ Let `OP` be the operator stem (the binary is `perf_<OP>`, e.g.
 
    ```bash
    python3 performance/agent/runner.py   --operator <OP> \
-       --build-dir build-perf --out-dir performance/agent/runs --sizes xs,md,xl
+       --build-dir build-perf --out-dir performance/agent/runs --sizes xs,sm,md,lg,xl
    python3 performance/agent/parse.py    --run-dir performance/agent/runs/<OP>
    python3 performance/agent/diagnose.py --run-dir performance/agent/runs/<OP>
    #   diagnose.py takes an optional --peak-gbps <device BW> for a roofline note
@@ -316,6 +316,13 @@ you found it. Verify with `grep -rn "PERF-SCRATCH" operators/ performance/`
 
 - Attribution is per-size steady (the steady path is identical across override
   params); per-param cost rides the clean override sweep's `override_delta_ms`.
+- A hotspot can live in code **shared across operators** (e.g. `range_stage.hpp`
+  is used by both the range and range-doppler processors). That finding is still
+  in scope for `perf-optimize` — but name the sharing operators (reverse-include
+  across `operators/`) so the optimizer knows the full byte-equivalence gate set
+  (every consumer must re-pass its checksum). A hotspot in `radar_common/**` or
+  otherwise outside `operators/` is **surface-only** — optimizing it would need a
+  gate wider than the operator set.
 - nsys stat counts include the binary's discarded process-warmup session.
 - New operators need the NVTX ranges (`RADAR_NVTX_RANGE` / `nvtx::Phase` from
   `radar_common/sdk/nvtx.hpp`) and a `--sweep-overrides` matrix in their

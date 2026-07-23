@@ -18,10 +18,12 @@ loop unattended here.
 ## The three gates (all must pass to keep a change)
 
 1. **Correctness** — the operator's unit tests (`ctest -L unit`). Non-negotiable.
-2. **Byte-equivalence** — the operator's output on the harness's deterministic
-   input is **bit-identical** before and after (`perf_<op> --checksum`). This is
-   the default gate: a pure perf refactor (pooling, gating, caching, removing
-   redundant work) must not change a single output byte.
+2. **Byte-equivalence** — the output on the harness's deterministic input is
+   **bit-identical** before and after (`perf_<op> --checksum`), for the operator
+   under test **and every other operator that shares a file the change touched**
+   (see the shared-code gate in Hard guardrails). A pure perf refactor (pooling,
+   gating, caching, kernel/launch tuning, removing redundant work) must not change
+   a single output byte for any of them.
 3. **Speed** — the steady median (`perf-analyze`) improves beyond run-to-run
    noise. A change that passes 1+2 but isn't measurably faster is not worth
    landing.
@@ -35,10 +37,26 @@ loop unattended here.
 
 - **Never change the locked contract** (`OPERATOR_API.md`: ports, shapes, dtype
   pairs, parameter names/defaults, `[live]` tags). Performance refactors only.
-- **Never touch the signal math** on a byte-equivalence change — pooling/gating/
-  caching only.
-- **Correctness and byte-equivalence are gates, not suggestions.** Fail either →
-  revert, report why, stop.
+- **Scope = anything under `operators/**`.** Fair game: the operator shell **and**
+  its compute internals (kernels, staging, DSP), including headers **shared across
+  operators** (e.g. `range_stage.hpp`, shared by the range and range-doppler
+  processors). Off-limits: `radar_common/**`, generated code, and anything outside
+  `operators/` — a hotspot there is a finding to **surface**, not a file to edit
+  (optimizing it needs a gate wider than the operator set).
+- **Touch shared code → gate every operator that uses it.** The checksum only
+  protects operators you actually run it on, so if a change touches a file used by
+  more than the operator-under-test, **every** consuming operator must pass
+  correctness + byte-equivalence — not just the one you're tuning. Get that
+  consumer set by reverse-include across `operators/` (see Steps); each consumer
+  needs a `--checksum` sink + unit tests, else wire them first or the change is out
+  of scope.
+- **Numerics still need opt-in.** Byte-equivalence is the hard gate for *every*
+  affected operator; changing the math (reordered FP reduction, normalization,
+  precision) needs explicit user opt-in AND analytic-sim re-validation for each
+  affected operator. A byte-preserving change to compute (launch config, fusion,
+  redundant-work removal) does not — the checksum proves it.
+- **Correctness and byte-equivalence are gates, not suggestions.** Fail either on
+  **any** affected operator → revert, report why, stop.
 - **Do not land it yourself.** End by presenting the diff + numbers; a human
   approves before it is committed to the feature branch / pushed.
 
@@ -70,7 +88,9 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
    baseline analysis** (the after-run overwrites it):
    ```bash
    cmake --build $BUILD --target perf_<OP> -j4                   # background this
-   performance/agent/run.sh <OP> xs,md,xl        # perf-analyze: the speed baseline
+   performance/agent/run.sh <OP>                 # perf-analyze speed baseline (full 5-tier
+                                                 # ladder by default; pass e.g. xs,md,xl to
+                                                 # speed up the rebuild loop if needed)
    cp performance/agent/runs/<OP>/analysis.json \
       performance/agent/runs/<OP>/baseline_analysis.json
    ./$BUILD/performance/cpp/perf_<OP> --sizes md --checksum --warmup 0 \
@@ -99,22 +119,42 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
    parallel/unattended isolation; for one supervised change, in-place is faster.)
 
 3. **Apply the fix.** Make the smallest change that implements the finding's
-   recommended pattern (e.g. pool the dense output + ping-pong a workspace keyed
-   on the input geometry). Match surrounding style; do not touch the contract or
-   the math.
-
-4. **Rebuild** the operator + perf binary + its test:
+   recommended pattern (pool + ping-pong a workspace keyed on input geometry; or,
+   in a compute internal, a byte-preserving launch/fusion/redundant-work change).
+   Match surrounding style; stay within `operators/**` and don't touch the
+   contract. **Then compute the affected-operator set** — every operator that uses
+   a file you changed, because they all get gated:
    ```bash
-   cmake --build $BUILD --target perf_<OP> <OP-test-target> -j4
+   git diff --name-only                                  # what you touched
+   # ops whose dir you edited directly, PLUS any op that #includes a changed
+   # header (chase a hop or two — when unsure, gate MORE operators, not fewer):
+   { git diff --name-only | sed -n 's#^\(operators/[^/]*/[^/]*_op\)/.*#\1#p';
+     for h in $(git diff --name-only | xargs -r -n1 basename | grep -E '\.(hpp|cuh)$'); do
+       grep -rl "$h" operators/ --include=*.cu --include=*.hpp --include=*.cuh; done \
+       | sed -n 's#^\(operators/[^/]*/[^/]*_op\)/.*#\1#p'; } | sort -u
+   ```
+   If this lists more than the operator-under-test (touching `range_stage.hpp`
+   lists **both** range and range-doppler), every extra operator is a **mandatory**
+   gate in steps 5–6 — and you must have a byte baseline (step 1) for each. If any
+   affected operator lacks a `--checksum` sink or unit tests, wire them first or
+   abandon the change.
+
+4. **Rebuild** the perf binary + unit test for **every affected operator** (not
+   just the one you're tuning):
+   ```bash
+   cmake --build $BUILD --target perf_<OP> <OP-test-target> \
+       perf_<affected> <affected-test-target> … -j4
    ```
 
-5. **Gate 1 — correctness:** `ctest --test-dir $BUILD -L unit -R <OP-pattern>
-   --output-on-failure`. Any failure → revert (step 7), report, stop.
+5. **Gate 1 — correctness:** run the unit tests for **every affected operator**
+   (`ctest --test-dir $BUILD -L unit -R '<OP|affected|…>' --output-on-failure`).
+   Any failure on any of them → revert (step 7), report, stop.
 
-6. **Gate 2 — byte-equivalence:** re-run the `--checksum` command from step 1 at
-   a couple of sizes; the hash **must match the baseline** exactly. Mismatch →
-   the change altered output → revert (unless the user opted into a
-   numerics-changing change, which then requires the sim tests to re-pass).
+6. **Gate 2 — byte-equivalence:** re-run the `--checksum` command from step 1 at a
+   couple of sizes **for every affected operator**; each hash **must match that
+   operator's baseline** exactly. Any mismatch → the change altered that operator's
+   output → revert (unless the user opted into a numerics-changing change, which
+   then requires the sim tests to re-pass for **each** affected operator).
 
 7. **Gate 3 — speed:** re-run `perf-analyze`; compare the steady median to the
    baseline. Require an improvement clearly beyond noise — with ~2–3× run-to-run
@@ -142,7 +182,8 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
      --session  session.json --out-dir performance/agent/runs/<OP>
    ```
    Present to the human: the diff (tie it to the finding), the gate results
-   (tests green, identical checksum, before→after median), and
+   (tests green + identical checksum **for every affected operator**, before→after
+   median), the affected-operator set if the change touched shared code, and
    `optimization_report.{md,html}` (before/after per size + chart).
 
    **Stop there.** Do not commit to the feature branch or push until the human
