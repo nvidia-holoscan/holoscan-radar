@@ -272,6 +272,25 @@ struct ClutterTraits : perf::PerfDriverDefaults {
     return out;
   }
 
+  static std::vector<ClutterScenario> build_variant_sweep(
+      const std::vector<std::string>& sizes) {
+    std::vector<ClutterScenario> out;
+    const auto methods = {hr::ClutterFilterMethod::kMeanSubtraction,
+                          hr::ClutterFilterMethod::kSingleDelay,
+                          hr::ClutterFilterMethod::kDoubleDelay};
+    for (const auto& sid : sizes) {
+      const SizeSpec* s = find_size(sid);
+      if (s == nullptr) {
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        continue;
+      }
+      for (auto m : methods) {
+        out.push_back(make_scenario(m, *s));
+      }
+    }
+    return out;
+  }
+
   static std::vector<ClutterScenario> build_full_matrix() {
     std::vector<ClutterScenario> out;
     const auto methods = {hr::ClutterFilterMethod::kMeanSubtraction,

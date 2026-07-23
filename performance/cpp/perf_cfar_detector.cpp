@@ -543,6 +543,26 @@ struct CfarTraits : perf::PerfDriverDefaults {
     return out;
   }
 
+  // Cross the primary CFAR-variant axis with the requested sizes only, at the
+  // same small-footprint / no-NCI / pfa defaults build_size_sweep uses (no
+  // footprint, batch, NCI, or calibration extras).
+  static std::vector<CfarScenario> build_variant_sweep(
+      const std::vector<std::string>& sizes) {
+    std::vector<CfarScenario> out;
+    const Footprint fp = footprint_small();
+    for (const auto& sid : sizes) {
+      const SizeSpec* s = find_size(sid);
+      if (s == nullptr) {
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        continue;
+      }
+      for (auto v : all_cfar_variants()) {
+        out.push_back(make_compute_scenario(v, *s, fp, 1));
+      }
+    }
+    return out;
+  }
+
   static std::vector<CfarScenario> build_full_matrix() {
     std::vector<CfarScenario> out;
     const auto& variants = all_cfar_variants();

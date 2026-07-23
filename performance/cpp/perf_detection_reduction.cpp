@@ -430,6 +430,27 @@ struct RedTraits : perf::PerfDriverDefaults {
     return out;
   }
 
+  // Cross the primary representative-policy axis with the requested sizes only,
+  // at the same default representative override build_size_sweep uses (no
+  // feature_weights / score_method extras).
+  static std::vector<RedScenario> build_variant_sweep(
+      const std::vector<std::string>& sizes) {
+    std::vector<RedScenario> out;
+    for (const auto& sid : sizes) {
+      const SizeSpec* s = find_size(sid);
+      if (s == nullptr) {
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        continue;
+      }
+      for (auto p : {hr::RepresentativePolicy::kFirst,
+                     hr::RepresentativePolicy::kPeak,
+                     hr::RepresentativePolicy::kMedoid}) {
+        out.push_back(make_scenario(p, *s));
+      }
+    }
+    return out;
+  }
+
   static std::vector<RedScenario> build_full_matrix() {
     std::vector<RedScenario> out;
     for (const auto& s : size_ladder()) {

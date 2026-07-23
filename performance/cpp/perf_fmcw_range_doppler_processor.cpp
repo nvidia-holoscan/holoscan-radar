@@ -297,6 +297,26 @@ struct FusedTraits : perf::PerfDriverDefaults {
     return out;
   }
 
+  // Cross the primary clutter-mode axis with the requested sizes only (no
+  // channel batch), at the same single-channel default build_size_sweep uses.
+  static std::vector<FusedScenario> build_variant_sweep(
+      const std::vector<std::string>& sizes) {
+    std::vector<FusedScenario> out;
+    for (const auto& sid : sizes) {
+      const SizeSpec* s = find_size(sid);
+      if (s == nullptr) {
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        continue;
+      }
+      for (auto c : {hr::ClutterFilterMethod::kNone,
+                     hr::ClutterFilterMethod::kMeanSubtraction,
+                     hr::ClutterFilterMethod::kSingleDelay}) {
+        out.push_back(make_scenario(c, *s));
+      }
+    }
+    return out;
+  }
+
   static std::vector<FusedScenario> build_full_matrix() {
     std::vector<FusedScenario> out;
     for (const auto& s : size_ladder()) {

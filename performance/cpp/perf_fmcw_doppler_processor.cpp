@@ -280,6 +280,22 @@ struct DopplerTraits : perf::PerfDriverDefaults {
     return out;
   }
 
+  static std::vector<DopplerScenario> build_variant_sweep(
+      const std::vector<std::string>& sizes) {
+    std::vector<DopplerScenario> out;
+    for (const auto& sid : sizes) {
+      const SizeSpec* s = find_size(sid);
+      if (s == nullptr) {
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        continue;
+      }
+      for (auto w : {hr::WindowType::kNone, hr::WindowType::kHann}) {
+        out.push_back(make_scenario(w, *s));
+      }
+    }
+    return out;
+  }
+
   static std::vector<DopplerScenario> build_full_matrix() {
     std::vector<DopplerScenario> out;
     for (const auto& s : size_ladder()) {

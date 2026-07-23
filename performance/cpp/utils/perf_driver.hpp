@@ -41,8 +41,16 @@
 //                                                 // param, selected by
 //                                                 // --sweep-overrides
 //
-// When present, --sweep-overrides calls it; when absent, --sweep-overrides is
-// rejected for that tool.
+//   std::vector<Scenario> build_variant_sweep(
+//       const std::vector<std::string>& sizes);  // primary categorical axis
+//                                                 // (method/window/variant/...)
+//                                                 // x sizes, selected by
+//                                                 // --sweep-variants
+//
+// When present, --sweep-overrides / --sweep-variants call the matching hook;
+// when absent, that flag is rejected for that tool. build_variant_sweep crosses
+// ONLY the operator's single primary axis with the requested sizes (no channel-
+// batch / footprint / calibration secondaries — those stay in --full).
 
 #pragma once
 
@@ -81,6 +89,7 @@ struct Options {
   bool quiet{false};
   bool full{false};
   bool sweep_overrides{false};     // one scenario per [live] override param
+  bool sweep_variants{false};      // primary categorical axis x sizes
   std::vector<std::string> sizes;  // empty = tier default
   bool sizes_all{false};
   double stop_after_s{0.0};  // 0 = disabled; per-scenario wall-clock cap
@@ -105,6 +114,20 @@ template <typename Traits>
 std::false_type has_override_sweep_probe(...);
 template <typename Traits>
 using has_override_sweep = decltype(has_override_sweep_probe<Traits>(0));
+
+// Compile-time detection of an optional Traits::build_variant_sweep(sizes) hook.
+// Present on consumers whose operator has a primary categorical axis (a
+// method/window/variant/policy/pack/scheme mode) worth breaking out per size;
+// absent otherwise. Same no-base-class-default reasoning as the override probe.
+template <typename Traits>
+auto has_variant_sweep_probe(int) -> decltype(
+    Traits::build_variant_sweep(
+        std::declval<const std::vector<std::string>&>()),
+    std::true_type{});
+template <typename Traits>
+std::false_type has_variant_sweep_probe(...);
+template <typename Traits>
+using has_variant_sweep = decltype(has_variant_sweep_probe<Traits>(0));
 
 inline std::vector<std::string> split_csv(const std::string& s) {
   std::vector<std::string> out;
@@ -138,6 +161,10 @@ void print_help() {
     std::cout << "  --sweep-overrides " << Traits::override_sweep_help()
               << "\n";
   }
+  if constexpr (has_variant_sweep<Traits>::value) {
+    std::cout << "  --sweep-variants  Primary categorical axis "
+                 "(method/window/variant/...) x sizes; --sizes selects sizes\n";
+  }
   std::cout << "  --checksum        Print output_checksum <bytes> <hex> per "
                "scenario (byte-equivalence gate; where the consumer wires it)\n"
                "  --stop-after-s S  Stop after first scenario whose wall time "
@@ -169,6 +196,8 @@ bool parse_args(int argc, char** argv, Options* opt) {
       opt->full = true;
     } else if (a == "--sweep-overrides") {
       opt->sweep_overrides = true;
+    } else if (a == "--sweep-variants") {
+      opt->sweep_variants = true;
     } else if (a == "--checksum") {
       opt->rs.checksum = true;
     } else if (a == "--warmup") {
@@ -231,6 +260,22 @@ std::vector<typename Traits::Scenario> select_scenarios(const Options& opt) {
       std::cerr << "error: " << Traits::tool_name()
                 << " does not implement --sweep-overrides (operator has no "
                    "[live] override params, or the sweep is not yet wired)\n";
+      std::exit(2);
+    }
+  }
+  if (opt.sweep_variants) {
+    if constexpr (has_variant_sweep<Traits>::value) {
+      std::vector<std::string> sizes = opt.sizes;
+      if (opt.sizes_all) {
+        for (const auto& def : Traits::size_ladder_defs()) {
+          sizes.push_back(def.id);
+        }
+      }
+      return Traits::build_variant_sweep(sizes);
+    } else {
+      std::cerr << "error: " << Traits::tool_name()
+                << " does not implement --sweep-variants (operator has no "
+                   "primary categorical axis, or the sweep is not yet wired)\n";
       std::exit(2);
     }
   }

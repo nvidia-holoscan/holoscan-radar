@@ -431,6 +431,24 @@ struct FeatTraits : perf::PerfDriverDefaults {
     return out;
   }
 
+  static std::vector<FeatScenario> build_variant_sweep(
+      const std::vector<std::string>& sizes) {
+    std::vector<FeatScenario> out;
+    const std::vector<FeaturePack> packs = {
+        FeaturePack::kBins, FeaturePack::kScore, FeaturePack::kFull};
+    for (const auto& sid : sizes) {
+      const SizeSpec* s = find_size(sid);
+      if (s == nullptr) {
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        continue;
+      }
+      for (auto pack : packs) {
+        out.push_back(make_scenario(pack, *s, 1024));
+      }
+    }
+    return out;
+  }
+
   static std::vector<FeatScenario> build_full_matrix() {
     std::vector<FeatScenario> out;
     const std::vector<int64_t> counts = {0,    64,    256, 1024,

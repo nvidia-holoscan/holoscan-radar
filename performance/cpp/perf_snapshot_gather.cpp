@@ -356,6 +356,22 @@ struct SnapTraits : perf::PerfDriverDefaults {
     return out;
   }
 
+  static std::vector<SnapScenario> build_variant_sweep(
+      const std::vector<std::string>& sizes) {
+    std::vector<SnapScenario> out;
+    for (const auto& sid : sizes) {
+      const SizeSpec* s = find_size(sid);
+      if (s == nullptr) {
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        continue;
+      }
+      for (const Window w : {Window{0, 0}, Window{1, 1}, Window{2, 2}}) {
+        out.push_back(make_scenario(*s, w));
+      }
+    }
+    return out;
+  }
+
   static std::vector<SnapScenario> build_full_matrix() {
     std::vector<SnapScenario> out;
     for (const auto& s : size_ladder()) {

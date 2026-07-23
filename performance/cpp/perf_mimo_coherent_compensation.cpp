@@ -325,6 +325,21 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     return out;
   }
 
+  static std::vector<CompensationScenario> build_variant_sweep(
+      const std::vector<std::string>& sizes) {
+    std::vector<CompensationScenario> out;
+    for (const auto& sid : sizes) {
+      const SizeSpec* s = find_size(sid);
+      if (s == nullptr) {
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        continue;
+      }
+      out.push_back(make_scenario(*s, hr::MultiplexingScheme::kTdm));
+      out.push_back(make_scenario(*s, hr::MultiplexingScheme::kDdm));
+    }
+    return out;
+  }
+
   static std::vector<CompensationScenario> build_full_matrix() {
     std::vector<CompensationScenario> out;
     for (const auto& s : size_ladder()) {

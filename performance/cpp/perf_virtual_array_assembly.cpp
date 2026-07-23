@@ -274,6 +274,24 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
     return out;
   }
 
+  static std::vector<AssemblyScenario> build_variant_sweep(
+      const std::vector<std::string>& sizes) {
+    std::vector<AssemblyScenario> out;
+    for (const auto& sid : sizes) {
+      const SizeSpec* s = find_size(sid);
+      if (s == nullptr) {
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        continue;
+      }
+      for (const hr::OverlapPolicy policy :
+           {hr::OverlapPolicy::kDedup, hr::OverlapPolicy::kAverage,
+            hr::OverlapPolicy::kKeepAll}) {
+        out.push_back(make_scenario(*s, 1, policy));
+      }
+    }
+    return out;
+  }
+
   static std::vector<AssemblyScenario> build_full_matrix() {
     std::vector<AssemblyScenario> out;
     for (const auto& s : size_ladder()) {
