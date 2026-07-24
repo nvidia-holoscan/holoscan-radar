@@ -63,9 +63,9 @@ const std::vector<SizeSpec>& size_ladder() {
   static const std::vector<SizeSpec> ladder = {
       {"xs", 16, 128, "small map; fast smoke"},
       {"sm", 32, 256, "compact sensor / few chirps"},
-      {"md", 64, 512, "common dev size"},
-      {"lg", 128, 1024, "moderate production-scale"},
-      {"xl", 256, 2048, "range-heavy moderate (v1 upper bound)"}};
+      {"md", 128, 512, "common dev size"},
+      {"lg", 256, 2048, "moderate production-scale"},
+      {"xl", 1024, 4096, "large production-scale (upper bound)"}};
   return ladder;
 }
 

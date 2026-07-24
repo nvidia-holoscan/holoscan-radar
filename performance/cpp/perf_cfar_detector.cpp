@@ -90,9 +90,9 @@ const std::vector<SizeSpec>& size_ladder() {
       {"md", 256, 512, "common dev size"},
       {"mdw", 128, 1024, "range-heavy, same cell count as md"},
       {"lgs", 512, 512, "square mid-scale"},
-      {"lg", 512, 1024, "moderate production-scale"},
-      {"xl", 1024, 1024, "large moderate"},
-      {"xlw", 1024, 2048, "range-heavy moderate (v1 upper bound)"}};
+      {"lg", 512, 2048, "moderate production-scale"},
+      {"xl", 1024, 2048, "large moderate"},
+      {"xlw", 1024, 4096, "large production-scale (upper bound)"}};
   return ladder;
 }
 
