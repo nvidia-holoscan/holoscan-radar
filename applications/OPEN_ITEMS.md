@@ -5,22 +5,20 @@ records the intent and the reason it was deferred, so it can be picked up
 without re-litigating the design. Remove items when they land (note the
 commit in the PR).
 
-## 3. CFAR peak_only mode — Python app mirrors + dense score
+## 3. CFAR peak_only mode — dense per-detection score
 
-**Status:** open — C++ landed; Python parity pending.
+**Status:** open — one optional enhancement; the mode itself is complete (C++ +
+Python).
 
 The `peak_only` app mode (forward `CFARDetectorOp.peak_only`; drop the DBSCAN
-clustering + reduction stages and report the CFAR peaks directly) was added to
-the **C++** apps (`fmcw_siso`, `fmcw_simo`, `fmcw_mimo`, `fmcw_dense_simo`) plus
-the shared `radar_app` ops (`DetectionReportOp` optional `detection_score` /
-`aoa_estimates`; optional `labels` on `ClusterOverlayOp` / `BoresightViewOp`).
+clustering + reduction stages and report the CFAR peaks directly) is in all four
+**C++ and Python** apps (`fmcw_siso`, `fmcw_simo`, `fmcw_mimo`,
+`fmcw_dense_simo`), plus the shared `radar_app` ops (`DetectionReportOp` optional
+`detection_score` / `aoa_estimates`; optional `labels` on `ClusterOverlayOp` /
+`BoresightViewOp`).
 
-Follow-ups:
+Remaining optional follow-up:
 
-- **Python mirrors** (`applications/fmcw_*/python/*.py`): replicate the same
-  `if not cfg.peak_only:` graph branching to restore C++/Python parity. The
-  shared C++ report/viz op changes already cover the Python bindings' consumers,
-  so this is app-graph wiring only.
 - **Dense `peak_only` score:** the dense report omits the per-detection score
   because dense CFAR's `detection_score` is a rank-4 per-beam cube with no 2-D
   map to index. If a per-detection score is wanted, extend `AnglePeakPickOp` to

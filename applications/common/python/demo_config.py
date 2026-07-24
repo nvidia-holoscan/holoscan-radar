@@ -390,6 +390,11 @@ class CommonRunConfig:
     visualize: bool = False
     skip_display_check: bool = False
     headless: bool = False
+    # CFAR peak-grouping mode. App-owned top-level key, forwarded to
+    # CFARDetectorOp via peak_only=. When true the CFAR peaks are one-per-target,
+    # so the app drops the DBSCAN clustering + reduction stages and reports the
+    # CFAR detections directly (see each app's compose()).
+    peak_only: bool = False
     plots: PlotsConfig = field(default_factory=PlotsConfig)
 
 
@@ -424,6 +429,7 @@ def parse_common_run_config(root: dict[str, Any], config_path: Path) -> CommonRu
         visualize=bool(root.get("visualize", False)),
         skip_display_check=bool(root.get("skip_display_check", False)),
         headless=bool(root.get("headless", False)),
+        peak_only=bool(root.get("peak_only", False)),
         plots=parse_plots(root),
     )
 

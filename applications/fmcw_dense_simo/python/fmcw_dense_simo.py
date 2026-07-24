@@ -48,6 +48,7 @@ from holoscan.radar import (
     ClusterOverlayOp,
     ClutterFilterOp,
     DetectionReductionOp,
+    DetectionReportOp,
     FeatureAssemblyOp,
     FMCWDopplerProcessorOp,
     FMCWRangeProcessorOp,
@@ -124,33 +125,21 @@ class FmcwDenseSimoApp(Application):
             array_geometry=cfg.array_geometry,
             name="phase_shift_beamformer",
         )
-        cfar = CFARDetectorOp(self, self.from_config("cfar_detector"), name="cfar_detector")
+        # peak_only here is applied per-beam (nci_axes=[]); the cross-beam
+        # collapse to one detection per RD cell is still AnglePeakPickOp's job
+        # below. When set, the DBSCAN clustering + reduction stages are dropped.
+        cfar = CFARDetectorOp(
+            self,
+            self.from_config("cfar_detector"),
+            peak_only=cfg.peak_only,
+            name="cfar_detector",
+        )
         peak_pick = custom_ops.AnglePeakPickOp(self, name="angle_peak_pick")
         aoa_lookup = custom_ops.CubeAoaLookupOp(
             self,
             az_grid=cfg.az_angles,
             el_grid=cfg.el_angles,
             name="cube_aoa_lookup",
-        )
-
-        feature_assembly = FeatureAssemblyOp(
-            self,
-            features=[
-                AssemblyFeature.RANGE,
-                AssemblyFeature.VELOCITY,
-                AssemblyFeature.AZ,
-                AssemblyFeature.EL,
-            ],
-            name="feature_assembly",
-        )
-        cluster = ClusterDBSCANOp(self, self.from_config("cluster_dbscan"), name="cluster_dbscan")
-        reduction = DetectionReductionOp(self, self.from_config("reduction"), name="reduction")
-        report = custom_ops.DenseClusterReportOp(
-            self,
-            az_grid=cfg.az_angles,
-            el_grid=cfg.el_angles,
-            cadence=cadence,
-            name="dense_cluster_report",
         )
 
         self.add_flow(source, range_op, {("adc_cube", "adc_cube")})
@@ -173,24 +162,64 @@ class FmcwDenseSimoApp(Application):
         self.add_flow(cfar, noise_sink, {("noise_estimate", "input")})
 
         self.add_flow(peak_pick, aoa_lookup, {("detection_idx", "detection_idx")})
-        self.add_flow(aoa_lookup, feature_assembly, {("aoa_estimates", "aoa_estimates")})
         row_index_sink = NullSinkOp(self, name="aoa_row_index_sink")
         self.add_flow(aoa_lookup, row_index_sink, {("row_index", "input")})
 
-        self.add_flow(peak_pick, feature_assembly, {("detection_idx", "detection_idx")})
-        self.add_flow(range_op, feature_assembly, {("range_bins", "range_bins")})
-        self.add_flow(doppler, feature_assembly, {("velocity_bins", "velocity_bins")})
-        self.add_flow(feature_assembly, cluster, {("points", "points")})
+        # Clustering subgraph — dropped when peak_only is set. The cube peaks
+        # (already one per RD cell after AnglePeakPickOp) are reported directly
+        # via DetectionReportOp: CubeAoaLookupOp supplies az/el and the 4-col
+        # detection_idx is sliced to (doppler, range). The dense score is a
+        # rank-4 per-beam cube with no 2-D map, so it is omitted from the report.
+        cluster = None
+        reduction = None
+        if not cfg.peak_only:
+            feature_assembly = FeatureAssemblyOp(
+                self,
+                features=[
+                    AssemblyFeature.RANGE,
+                    AssemblyFeature.VELOCITY,
+                    AssemblyFeature.AZ,
+                    AssemblyFeature.EL,
+                ],
+                name="feature_assembly",
+            )
+            cluster = ClusterDBSCANOp(
+                self, self.from_config("cluster_dbscan"), name="cluster_dbscan"
+            )
+            reduction = DetectionReductionOp(self, self.from_config("reduction"), name="reduction")
+            report = custom_ops.DenseClusterReportOp(
+                self,
+                az_grid=cfg.az_angles,
+                el_grid=cfg.el_angles,
+                cadence=cadence,
+                name="dense_cluster_report",
+            )
 
-        self.add_flow(cluster, reduction, {("labels", "labels")})
-        self.add_flow(peak_pick, reduction, {("detection_idx", "detection_idx")})
-        self.add_flow(feature_assembly, reduction, {("points", "points")})
+            self.add_flow(aoa_lookup, feature_assembly, {("aoa_estimates", "aoa_estimates")})
+            self.add_flow(peak_pick, feature_assembly, {("detection_idx", "detection_idx")})
+            self.add_flow(range_op, feature_assembly, {("range_bins", "range_bins")})
+            self.add_flow(doppler, feature_assembly, {("velocity_bins", "velocity_bins")})
+            self.add_flow(feature_assembly, cluster, {("points", "points")})
 
-        self.add_flow(feature_assembly, report, {("points", "points")})
-        self.add_flow(cluster, report, {("labels", "labels"), ("sizes", "sizes")})
-        self.add_flow(reduction, report, {("rep_idx", "rep_idx")})
-        self.add_flow(range_op, report, {("range_bins", "range_bins")})
-        self.add_flow(doppler, report, {("velocity_bins", "velocity_bins")})
+            self.add_flow(cluster, reduction, {("labels", "labels")})
+            self.add_flow(peak_pick, reduction, {("detection_idx", "detection_idx")})
+            self.add_flow(feature_assembly, reduction, {("points", "points")})
+
+            self.add_flow(feature_assembly, report, {("points", "points")})
+            self.add_flow(cluster, report, {("labels", "labels"), ("sizes", "sizes")})
+            self.add_flow(reduction, report, {("rep_idx", "rep_idx")})
+            self.add_flow(range_op, report, {("range_bins", "range_bins")})
+            self.add_flow(doppler, report, {("velocity_bins", "velocity_bins")})
+        else:
+            det_report = DetectionReportOp(self, name="detection_report")
+            if cadence is not None:
+                det_report.cadence = cadence
+            det_idx_rd = custom_ops.TrailingIdxColumnsOp(self, name="det_idx_rd_report_slice")
+            self.add_flow(peak_pick, det_idx_rd, {("detection_idx", "idx")})
+            self.add_flow(det_idx_rd, det_report, {("idx", "detection_idx")})
+            self.add_flow(aoa_lookup, det_report, {("aoa_estimates", "aoa_estimates")})
+            self.add_flow(range_op, det_report, {("range_bins", "range_bins")})
+            self.add_flow(doppler, det_report, {("velocity_bins", "velocity_bins")})
 
         if cfg.visualize:
             self._compose_display(doppler, peak_pick, cluster, reduction, range_op)
@@ -302,18 +331,25 @@ class FmcwDenseSimoApp(Application):
         self.add_flow(to_image, visualizer, {("rd_image", "receivers")})
         self.add_flow(detections, det_idx_rd, {("detection_idx", "idx")})
         self.add_flow(det_idx_rd, overlay, {("idx", "detection_idx")})
-        self.add_flow(cluster, overlay, {("labels", "labels")})
         self.add_flow(ch_slice, overlay, {("rd_map", "rd_maps")})
+        # Cluster labels color the crosses when clustering runs; peak_only draws
+        # every peak in a single color (absent labels).
+        if not cfg.peak_only:
+            self.add_flow(cluster, overlay, {("labels", "labels")})
         self.add_flow(overlay, visualizer, {("overlay", "receivers")})
 
+        # Plot/boresight read the per-cluster representative (clustered) or the
+        # raw cube peaks (peak_only); both carry the 4-col idx.
+        rep_src = reduction if not cfg.peak_only else detections
+        rep_port = "rep_idx" if not cfg.peak_only else "detection_idx"
         if plot is not None and rep_idx_rd is not None and rep_aoa is not None:
-            self.add_flow(reduction, rep_idx_rd, {("rep_idx", "idx")})
+            self.add_flow(rep_src, rep_idx_rd, {(rep_port, "idx")})
             self.add_flow(rep_idx_rd, plot, {("idx", "rep_idx")})
             self.add_flow(range_op, plot, {("range_bins", "range_bins")})
             self.add_flow(doppler, plot, {("velocity_bins", "velocity_bins")})
             self.add_flow(plot, visualizer, {("plots", "receivers")})
         if boresight is not None and rep_aoa is not None:
-            self.add_flow(reduction, rep_aoa, {("rep_idx", "detection_idx")})
+            self.add_flow(rep_src, rep_aoa, {(rep_port, "detection_idx")})
             self.add_flow(
                 rep_aoa,
                 boresight,

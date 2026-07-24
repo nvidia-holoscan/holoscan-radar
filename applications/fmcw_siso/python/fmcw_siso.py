@@ -119,23 +119,19 @@ class FmcwSisoApp(Application):
         doppler = FMCWDopplerProcessorOp(
             self, self.from_config("doppler_processor"), name="doppler_processor"
         )
-        cfar = CFARDetectorOp(self, self.from_config("cfar_detector"), name="cfar_detector")
+        # peak_only (app-owned flag) forwarded to CFAR; when set, CFAR emits one
+        # detection per target and the clustering subgraph below is dropped.
+        cfar = CFARDetectorOp(
+            self,
+            self.from_config("cfar_detector"),
+            peak_only=cfg.peak_only,
+            name="cfar_detector",
+        )
         det_report = DetectionReportOp(self, name="detection_report")
         if cadence is not None:
             det_report.cadence = cadence
         mask_sink = NullSinkOp(self, name="detection_mask_sink")
         noise_sink = NullSinkOp(self, name="noise_estimate_sink")
-
-        feature_assembly = FeatureAssemblyOp(
-            self,
-            features=[AssemblyFeature.RANGE, AssemblyFeature.VELOCITY],
-            name="feature_assembly",
-        )
-        cluster = ClusterDBSCANOp(self, self.from_config("cluster_dbscan"), name="cluster_dbscan")
-        cluster_report = ClusterReportOp(self, name="cluster_report")
-        reduction = DetectionReductionOp(
-            self, self.from_config("reduction"), name="detection_reduction"
-        )
 
         self.add_flow(source, range_op, {("adc_cube", "adc_cube")})
         self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
@@ -148,20 +144,40 @@ class FmcwSisoApp(Application):
         self.add_flow(cfar, mask_sink, {("detection_mask", "input")})
         self.add_flow(cfar, noise_sink, {("noise_estimate", "input")})
 
-        self.add_flow(cfar, feature_assembly, {("detection_idx", "detection_idx")})
-        self.add_flow(range_op, feature_assembly, {("range_bins", "range_bins")})
-        self.add_flow(doppler, feature_assembly, {("velocity_bins", "velocity_bins")})
-        self.add_flow(feature_assembly, cluster, {("points", "points")})
-        self.add_flow(feature_assembly, cluster_report, {("points", "points")})
-        self.add_flow(cluster, cluster_report, {("labels", "labels")})
-        self.add_flow(cluster, cluster_report, {("sizes", "sizes")})
+        # Clustering subgraph — dropped entirely when peak_only is set (CFAR then
+        # emits one detection per target, so DBSCAN + reduction are redundant and
+        # DetectionReportOp above reports the CFAR peaks directly). cluster /
+        # reduction stay None in that mode and the viz block below adapts.
+        cluster = None
+        reduction = None
+        if not cfg.peak_only:
+            feature_assembly = FeatureAssemblyOp(
+                self,
+                features=[AssemblyFeature.RANGE, AssemblyFeature.VELOCITY],
+                name="feature_assembly",
+            )
+            cluster = ClusterDBSCANOp(
+                self, self.from_config("cluster_dbscan"), name="cluster_dbscan"
+            )
+            cluster_report = ClusterReportOp(self, name="cluster_report")
+            reduction = DetectionReductionOp(
+                self, self.from_config("reduction"), name="detection_reduction"
+            )
 
-        self.add_flow(cluster, reduction, {("labels", "labels")})
-        self.add_flow(cfar, reduction, {("detection_idx", "detection_idx")})
-        self.add_flow(feature_assembly, reduction, {("points", "points")})
-        self.add_flow(reduction, cluster_report, {("rep_idx", "rep_idx")})
-        self.add_flow(range_op, cluster_report, {("range_bins", "range_bins")})
-        self.add_flow(doppler, cluster_report, {("velocity_bins", "velocity_bins")})
+            self.add_flow(cfar, feature_assembly, {("detection_idx", "detection_idx")})
+            self.add_flow(range_op, feature_assembly, {("range_bins", "range_bins")})
+            self.add_flow(doppler, feature_assembly, {("velocity_bins", "velocity_bins")})
+            self.add_flow(feature_assembly, cluster, {("points", "points")})
+            self.add_flow(feature_assembly, cluster_report, {("points", "points")})
+            self.add_flow(cluster, cluster_report, {("labels", "labels")})
+            self.add_flow(cluster, cluster_report, {("sizes", "sizes")})
+
+            self.add_flow(cluster, reduction, {("labels", "labels")})
+            self.add_flow(cfar, reduction, {("detection_idx", "detection_idx")})
+            self.add_flow(feature_assembly, reduction, {("points", "points")})
+            self.add_flow(reduction, cluster_report, {("rep_idx", "rep_idx")})
+            self.add_flow(range_op, cluster_report, {("range_bins", "range_bins")})
+            self.add_flow(doppler, cluster_report, {("velocity_bins", "velocity_bins")})
 
         if cfg.visualize:
             to_image = RdMapToImageOp(self, name="rd_map_to_image")
@@ -238,13 +254,22 @@ class FmcwSisoApp(Application):
 
             self.add_flow(doppler, to_image, {("rd_maps", "rd_maps")})
             self.add_flow(to_image, visualizer, {("rd_image", "receivers")})
+            # Cluster labels color the crosses when clustering runs; in peak_only
+            # mode there are no labels, so the overlay draws every CFAR peak in a
+            # single color (ClusterOverlayOp treats absent labels that way).
             self.add_flow(cfar, overlay, {("detection_idx", "detection_idx")})
-            self.add_flow(cluster, overlay, {("labels", "labels")})
             self.add_flow(doppler, overlay, {("rd_maps", "rd_maps")})
+            if not cfg.peak_only:
+                self.add_flow(cluster, overlay, {("labels", "labels")})
             self.add_flow(overlay, visualizer, {("overlay", "receivers")})
 
             if plot is not None:
-                self.add_flow(reduction, plot, {("rep_idx", "rep_idx")})
+                # Rolling plots read the per-cluster representative (clustered) or
+                # the raw CFAR peaks (peak_only); both are (N, 2) (doppler, range).
+                if not cfg.peak_only:
+                    self.add_flow(reduction, plot, {("rep_idx", "rep_idx")})
+                else:
+                    self.add_flow(cfar, plot, {("detection_idx", "rep_idx")})
                 self.add_flow(range_op, plot, {("range_bins", "range_bins")})
                 self.add_flow(doppler, plot, {("velocity_bins", "velocity_bins")})
                 self.add_flow(plot, visualizer, {("plots", "receivers")})

@@ -121,7 +121,12 @@ class FmcwSimoApp(Application):
         doppler = FMCWDopplerProcessorOp(
             self, self.from_config("doppler_processor"), name="doppler_processor"
         )
-        cfar = CFARDetectorOp(self, self.from_config("cfar_detector"), name="cfar_detector")
+        cfar = CFARDetectorOp(
+            self,
+            self.from_config("cfar_detector"),
+            peak_only=cfg.peak_only,
+            name="cfar_detector",
+        )
         gather = SnapshotGatherOp(self, self.from_config("snapshot_gather"), name="snapshot_gather")
         beamscan = BeamscanEstimatorOp(
             self,
@@ -137,29 +142,15 @@ class FmcwSimoApp(Application):
         noise_sink = NullSinkOp(self, name="noise_estimate_sink")
         spectrum_sink = TensorMapDiscardOp(self, name="angle_spectrum_discard")
 
-        feature_assembly = FeatureAssemblyOp(
-            self,
-            features=[
-                AssemblyFeature.RANGE,
-                AssemblyFeature.VELOCITY,
-                AssemblyFeature.AZ,
-                AssemblyFeature.EL,
-            ],
-            name="feature_assembly",
-        )
-        cluster = ClusterDBSCANOp(self, self.from_config("cluster_dbscan"), name="cluster_dbscan")
-        cluster_report = ClusterReportOp(self, name="cluster_report")
-        reduction = DetectionReductionOp(self, self.from_config("reduction"), name="reduction")
-
         self.add_flow(source, range_op, {("adc_cube", "adc_cube")})
         self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
         self.add_flow(clutter, doppler, {("range_profiles", "range_profiles")})
         self.add_flow(doppler, cfar, {("rd_maps", "rd_maps")})
 
+        # Angle branch runs in both modes (it is the DOA estimator, not clustering).
         self.add_flow(doppler, gather, {("rd_maps", "rd_maps")})
         self.add_flow(cfar, gather, {("detection_idx", "detection_idx")})
         self.add_flow(gather, beamscan, {("snapshot", "snapshot"), ("is_valid", "is_valid")})
-        self.add_flow(beamscan, feature_assembly, {("aoa_estimates", "aoa_estimates")})
         self.add_flow(beamscan, spectrum_sink, {("angle_spectrum", "input")})
 
         self.add_flow(cfar, det_report, {("detection_idx", "detection_idx")})
@@ -169,19 +160,44 @@ class FmcwSimoApp(Application):
         self.add_flow(cfar, mask_sink, {("detection_mask", "input")})
         self.add_flow(cfar, noise_sink, {("noise_estimate", "input")})
 
-        self.add_flow(cfar, feature_assembly, {("detection_idx", "detection_idx")})
-        self.add_flow(range_op, feature_assembly, {("range_bins", "range_bins")})
-        self.add_flow(doppler, feature_assembly, {("velocity_bins", "velocity_bins")})
-        self.add_flow(feature_assembly, cluster, {("points", "points")})
-        self.add_flow(feature_assembly, cluster_report, {("points", "points")})
-        self.add_flow(cluster, cluster_report, {("labels", "labels"), ("sizes", "sizes")})
-        self.add_flow(cluster, reduction, {("labels", "labels")})
-        self.add_flow(cfar, reduction, {("detection_idx", "detection_idx")})
-        self.add_flow(feature_assembly, reduction, {("points", "points")})
-        self.add_flow(reduction, cluster_report, {("rep_idx", "rep_idx")})
-        self.add_flow(cfar, cluster_report, {("detection_idx", "detection_idx")})
-        self.add_flow(range_op, cluster_report, {("range_bins", "range_bins")})
-        self.add_flow(doppler, cluster_report, {("velocity_bins", "velocity_bins")})
+        # Clustering subgraph — dropped when peak_only is set. In that mode the
+        # per-detection angle is reported through DetectionReportOp's optional
+        # aoa_estimates input instead of via the (removed) cluster report.
+        cluster = None
+        reduction = None
+        if not cfg.peak_only:
+            feature_assembly = FeatureAssemblyOp(
+                self,
+                features=[
+                    AssemblyFeature.RANGE,
+                    AssemblyFeature.VELOCITY,
+                    AssemblyFeature.AZ,
+                    AssemblyFeature.EL,
+                ],
+                name="feature_assembly",
+            )
+            cluster = ClusterDBSCANOp(
+                self, self.from_config("cluster_dbscan"), name="cluster_dbscan"
+            )
+            cluster_report = ClusterReportOp(self, name="cluster_report")
+            reduction = DetectionReductionOp(self, self.from_config("reduction"), name="reduction")
+
+            self.add_flow(beamscan, feature_assembly, {("aoa_estimates", "aoa_estimates")})
+            self.add_flow(cfar, feature_assembly, {("detection_idx", "detection_idx")})
+            self.add_flow(range_op, feature_assembly, {("range_bins", "range_bins")})
+            self.add_flow(doppler, feature_assembly, {("velocity_bins", "velocity_bins")})
+            self.add_flow(feature_assembly, cluster, {("points", "points")})
+            self.add_flow(feature_assembly, cluster_report, {("points", "points")})
+            self.add_flow(cluster, cluster_report, {("labels", "labels"), ("sizes", "sizes")})
+            self.add_flow(cluster, reduction, {("labels", "labels")})
+            self.add_flow(cfar, reduction, {("detection_idx", "detection_idx")})
+            self.add_flow(feature_assembly, reduction, {("points", "points")})
+            self.add_flow(reduction, cluster_report, {("rep_idx", "rep_idx")})
+            self.add_flow(cfar, cluster_report, {("detection_idx", "detection_idx")})
+            self.add_flow(range_op, cluster_report, {("range_bins", "range_bins")})
+            self.add_flow(doppler, cluster_report, {("velocity_bins", "velocity_bins")})
+        else:
+            self.add_flow(beamscan, det_report, {("aoa_estimates", "aoa_estimates")})
 
         if cfg.visualize:
             ch_slice = RdChannelSliceOp(self, channel=0, name="rd_channel_slice")
@@ -280,19 +296,26 @@ class FmcwSimoApp(Application):
             self.add_flow(doppler, ch_slice, {("rd_maps", "rd_maps")})
             self.add_flow(ch_slice, to_image, {("rd_map", "rd_maps")})
             self.add_flow(to_image, visualizer, {("rd_image", "receivers")})
+            # Overlay/plot/boresight color or index by cluster when clustering
+            # runs; in peak_only mode they fall back to the raw CFAR peaks.
             self.add_flow(cfar, overlay, {("detection_idx", "detection_idx")})
-            self.add_flow(cluster, overlay, {("labels", "labels")})
             self.add_flow(ch_slice, overlay, {("rd_map", "rd_maps")})
+            if not cfg.peak_only:
+                self.add_flow(cluster, overlay, {("labels", "labels")})
             self.add_flow(overlay, visualizer, {("overlay", "receivers")})
 
             if plot is not None:
-                self.add_flow(reduction, plot, {("rep_idx", "rep_idx")})
+                if not cfg.peak_only:
+                    self.add_flow(reduction, plot, {("rep_idx", "rep_idx")})
+                else:
+                    self.add_flow(cfar, plot, {("detection_idx", "rep_idx")})
                 self.add_flow(range_op, plot, {("range_bins", "range_bins")})
                 self.add_flow(doppler, plot, {("velocity_bins", "velocity_bins")})
                 self.add_flow(plot, visualizer, {("plots", "receivers")})
             if boresight is not None:
                 self.add_flow(beamscan, boresight, {("aoa_estimates", "aoa_estimates")})
-                self.add_flow(cluster, boresight, {("labels", "labels")})
+                if not cfg.peak_only:
+                    self.add_flow(cluster, boresight, {("labels", "labels")})
                 self.add_flow(boresight, visualizer, {("plot", "receivers")})
 
 
