@@ -229,6 +229,18 @@ void bind_radar_app(py::module_& m) {
       .def_readwrite("marker_segments", &ClusterOverlayOp::marker_segments)
       .def("setup", &ClusterOverlayOp::setup, py::arg("spec"));
 
+  // Panel placement (window-normalized view rect) for the primitive side panels.
+  py::class_<PanelRect>(m, "PanelRect", "Window-normalized panel view rect.")
+      .def(py::init([](float x, float y, float w, float h) {
+             return PanelRect{x, y, w, h};
+           }),
+           py::arg("x") = 0.0F, py::arg("y") = 0.0F, py::arg("w") = 1.0F,
+           py::arg("h") = 1.0F)
+      .def_readwrite("x", &PanelRect::x)
+      .def_readwrite("y", &PanelRect::y)
+      .def_readwrite("w", &PanelRect::w)
+      .def_readwrite("h", &PanelRect::h);
+
   py::class_<RollingPlotOp, PyRollingPlotOp, Operator,
              std::shared_ptr<RollingPlotOp>>(
       m, "RollingPlotOp",
@@ -241,6 +253,14 @@ void bind_radar_app(py::module_& m) {
       .def_readwrite("frame_period", &RollingPlotOp::frame_period)
       .def_readwrite("velocity_ylim_lo", &RollingPlotOp::velocity_ylim_lo)
       .def_readwrite("velocity_ylim_hi", &RollingPlotOp::velocity_ylim_hi)
+      .def_readwrite("primitive", &RollingPlotOp::primitive)
+      .def_readwrite("range_view", &RollingPlotOp::range_view)
+      .def_readwrite("velocity_view", &RollingPlotOp::velocity_view)
+      .def_readwrite("range_aspect", &RollingPlotOp::range_aspect)
+      .def_readwrite("velocity_aspect", &RollingPlotOp::velocity_aspect)
+      .def_readwrite("marker_radius", &RollingPlotOp::marker_radius)
+      .def_readwrite("marker_outline", &RollingPlotOp::marker_outline)
+      .def_readwrite("marker_segments", &RollingPlotOp::marker_segments)
       .def("setup", &RollingPlotOp::setup, py::arg("spec"));
 
   py::class_<BoresightViewOp, PyBoresightViewOp, Operator,
@@ -256,6 +276,12 @@ void bind_radar_app(py::module_& m) {
       .def_readwrite("az_hi", &BoresightViewOp::az_hi)
       .def_readwrite("el_lo", &BoresightViewOp::el_lo)
       .def_readwrite("el_hi", &BoresightViewOp::el_hi)
+      .def_readwrite("primitive", &BoresightViewOp::primitive)
+      .def_readwrite("view", &BoresightViewOp::view)
+      .def_readwrite("aspect", &BoresightViewOp::aspect)
+      .def_readwrite("marker_radius", &BoresightViewOp::marker_radius)
+      .def_readwrite("marker_outline", &BoresightViewOp::marker_outline)
+      .def_readwrite("marker_segments", &BoresightViewOp::marker_segments)
       .def("setup", &BoresightViewOp::setup, py::arg("spec"));
 
   m.def("gui_available", &gui_available,

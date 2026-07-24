@@ -378,8 +378,8 @@ class VisualizationConfig:
     ``config.hpp::CommonRunConfig::VisualizationConfig``.
     """
 
-    marker_radius: float = 0.007
-    marker_outline: float = 0.0022
+    marker_radius: float = 0.004
+    marker_outline: float = 0.002
     marker_segments: int = 20
 
 

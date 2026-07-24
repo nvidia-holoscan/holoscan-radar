@@ -53,6 +53,7 @@ from holoscan.radar import (
     FMCWDopplerProcessorOp,
     FMCWRangeProcessorOp,
     NullSinkOp,
+    PanelRect,
     PhaseShiftBeamformerOp,
     RdChannelSliceOp,
     RdMapToImageOp,
@@ -255,39 +256,15 @@ class FmcwDenseSimoApp(Application):
             for spec in input_specs:
                 spec.views = [left]
 
-            def add_plot(img_name: str, title_name: str, title: str, oy: float, h: float) -> None:
-                image = HolovizOp.InputSpec(img_name, HolovizOp.InputType.COLOR)
-                image.views = [make_view(0.63, oy, 0.35, h)]
-                input_specs.append(image)
-                text = HolovizOp.InputSpec(title_name, HolovizOp.InputType.TEXT)
-                text.text = [title]
-                text.color = [1.0, 1.0, 1.0, 1.0]
-                text.priority = 2
-                text.views = [make_view(0.63, oy, 0.35, h)]
-                input_specs.append(text)
+            # Side panels are native Holoviz primitives (dynamic InputSpecs);
+            # stacked right-column view rects.
+            range_view = PanelRect(0.63, 0.02, 0.35, 0.30)
+            velocity_view = PanelRect(0.63, 0.35, 0.35, 0.30)
+            boresight_view = PanelRect(0.63, 0.68, 0.35, 0.30)
 
-            panel_h = 0.30
-            add_plot(
-                K_RANGE_PLOT_LAYER,
-                K_RANGE_TITLE_LAYER,
-                "Range (m) vs time (s)",
-                0.02,
-                panel_h,
-            )
-            add_plot(
-                K_VELOCITY_PLOT_LAYER,
-                K_VELOCITY_TITLE_LAYER,
-                "Velocity (m/s) vs time (s)",
-                0.35,
-                panel_h,
-            )
-            add_plot(
-                K_BORESIGHT_PLOT_LAYER,
-                K_BORESIGHT_TITLE_LAYER,
-                "Boresight az/el (deg)",
-                0.68,
-                panel_h,
-            )
+            def panel_aspect(v: PanelRect) -> float:
+                return (v.w * 1200.0) / (v.h * 760.0)
+
             plot = RollingPlotOp(
                 self,
                 window=cfg.plots.window,
@@ -296,6 +273,14 @@ class FmcwDenseSimoApp(Application):
             )
             plot.velocity_ylim_lo = cfg.plots.velocity_ylim_lo
             plot.velocity_ylim_hi = cfg.plots.velocity_ylim_hi
+            plot.primitive = True
+            plot.range_view = range_view
+            plot.velocity_view = velocity_view
+            plot.range_aspect = panel_aspect(range_view)
+            plot.velocity_aspect = panel_aspect(velocity_view)
+            plot.marker_radius = cfg.viz.marker_radius
+            plot.marker_outline = cfg.viz.marker_outline
+            plot.marker_segments = cfg.viz.marker_segments
             rep_idx_rd = custom_ops.TrailingIdxColumnsOp(self, name="rep_idx_rd_slice")
             rep_aoa = custom_ops.CubeAoaLookupOp(
                 self,
@@ -313,6 +298,12 @@ class FmcwDenseSimoApp(Application):
                 el_hi=el_hi,
                 name="boresight_view",
             )
+            boresight.primitive = True
+            boresight.view = boresight_view
+            boresight.aspect = panel_aspect(boresight_view)
+            boresight.marker_radius = cfg.viz.marker_radius
+            boresight.marker_outline = cfg.viz.marker_outline
+            boresight.marker_segments = cfg.viz.marker_segments
 
         visualizer = HolovizOp(
             self,
@@ -368,6 +359,10 @@ class FmcwDenseSimoApp(Application):
                 {("aoa_estimates", "aoa_estimates"), ("row_index", "labels")},
             )
             self.add_flow(boresight, visualizer, {("plot", "receivers")})
+            # Primitive-panel InputSpec chain: rolling specs → boresight →
+            # HolovizOp.input_specs.
+            self.add_flow(plot, boresight, {("plot_specs", "specs_in")})
+            self.add_flow(boresight, visualizer, {("specs_out", "input_specs")})
 
 
 def main(argv: list[str] | None = None) -> int:

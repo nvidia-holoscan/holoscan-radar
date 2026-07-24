@@ -218,9 +218,15 @@ class FmcwDenseSimoApp : public holoscan::Application {
     layout.height = cfg.plots.enable ? 760U : 600U;
     layout.headless = cfg.headless;
     layout.plots_enabled = cfg.plots.enable;
-    if (cfg.plots.enable) {
-      layout.right_panels = range_velocity_boresight_panels();
-    }
+    // Side panels drawn with native Holoviz primitives (dynamic InputSpecs);
+    // stacked right-column view rects.
+    const PanelRect range_view{0.63F, 0.02F, 0.35F, 0.30F};
+    const PanelRect velocity_view{0.63F, 0.35F, 0.35F, 0.30F};
+    const PanelRect boresight_view{0.63F, 0.68F, 0.35F, 0.30F};
+    const auto panel_aspect = [&](const PanelRect& v) {
+      return (v.w * static_cast<float>(layout.width)) /
+             (v.h * static_cast<float>(layout.height));
+    };
     auto visualizer = make_rd_holoviz_op(this, "holoviz", layout);
     overlay->view_aspect = rd_map_view_aspect(layout);
     overlay->marker_radius = cfg.viz.marker_radius;
@@ -237,6 +243,14 @@ class FmcwDenseSimoApp : public holoscan::Application {
       plot->frame_period = cfg.frame_period;
       plot->velocity_ylim_lo = cfg.velocity_ylim_lo;
       plot->velocity_ylim_hi = cfg.velocity_ylim_hi;
+      plot->primitive = true;
+      plot->range_view = range_view;
+      plot->velocity_view = velocity_view;
+      plot->range_aspect = panel_aspect(range_view);
+      plot->velocity_aspect = panel_aspect(velocity_view);
+      plot->marker_radius = cfg.viz.marker_radius;
+      plot->marker_outline = cfg.viz.marker_outline;
+      plot->marker_segments = cfg.viz.marker_segments;
       rep_idx_rd = make_operator<TrailingIdxColumnsOp>("rep_idx_rd_slice");
       rep_aoa = make_operator<CubeAoaLookupOp>("cube_aoa_lookup_rep");
       rep_aoa->az_grid = cfg.az_angles;
@@ -249,6 +263,12 @@ class FmcwDenseSimoApp : public holoscan::Application {
       boresight->az_hi = az_hi;
       boresight->el_lo = el_lo;
       boresight->el_hi = el_hi;
+      boresight->primitive = true;
+      boresight->view = boresight_view;
+      boresight->aspect = panel_aspect(boresight_view);
+      boresight->marker_radius = cfg.viz.marker_radius;
+      boresight->marker_outline = cfg.viz.marker_outline;
+      boresight->marker_segments = cfg.viz.marker_segments;
     }
 
     add_flow(doppler, ch_slice, {{"rd_maps", "rd_maps"}});
@@ -300,6 +320,10 @@ class FmcwDenseSimoApp : public holoscan::Application {
       add_flow(rep_aoa, boresight, {{"aoa_estimates", "aoa_estimates"},
                                     {"row_index", "labels"}});
       add_flow(boresight, visualizer, {{"plot", "receivers"}});
+      // Primitive-panel InputSpec chain: rolling plot specs → boresight →
+      // HolovizOp.input_specs (one connection into the single input_specs port).
+      add_flow(plot, boresight, {{"plot_specs", "specs_in"}});
+      add_flow(boresight, visualizer, {{"specs_out", "input_specs"}});
     }
   }
 };

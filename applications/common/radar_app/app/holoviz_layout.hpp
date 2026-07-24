@@ -100,9 +100,10 @@ build_holoviz_input_specs(const HolovizLayout& layout) {
     return v;
   };
 
-  if (layout.plots_enabled && !layout.right_panels.empty()) {
-    // Shrink the RD map + crosses into the left viewport so the crosses stay
-    // aligned to the image.
+  if (layout.plots_enabled) {
+    // Shrink the RD map + discs into the left viewport (the side panels — static
+    // right_panels here, or dynamic primitive panels emitted by the plot ops —
+    // occupy the right column).
     const auto left = make_view(0.0F, 0.0F, layout.left_width, 1.0F);
     for (InputSpec& spec : input_specs) {
       spec.views_ = {left};

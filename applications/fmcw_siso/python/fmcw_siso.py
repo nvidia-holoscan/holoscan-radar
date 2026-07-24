@@ -57,6 +57,7 @@ from holoscan.radar import (
     FMCWDopplerProcessorOp,
     FMCWRangeProcessorOp,
     NullSinkOp,
+    PanelRect,
     RdMapToImageOp,
     RollingPlotOp,
     cluster_palette,
@@ -206,29 +207,13 @@ class FmcwSisoApp(Application):
                 for spec in input_specs:
                     spec.views = [left]
 
-                def add_plot(img_name: str, title_name: str, title: str, oy: float) -> None:
-                    image = HolovizOp.InputSpec(img_name, HolovizOp.InputType.COLOR)
-                    image.views = [make_view(0.63, oy, 0.35, 0.44)]
-                    input_specs.append(image)
-                    text = HolovizOp.InputSpec(title_name, HolovizOp.InputType.TEXT)
-                    text.text = [title]
-                    text.color = [1.0, 1.0, 1.0, 1.0]
-                    text.priority = 2
-                    text.views = [make_view(0.63, oy, 0.35, 0.44)]
-                    input_specs.append(text)
+                # Side panels are native Holoviz primitives emitted by
+                # RollingPlotOp (dynamic InputSpecs); no static panel layers.
+                range_view = PanelRect(0.63, 0.04, 0.35, 0.44)
+                velocity_view = PanelRect(0.63, 0.52, 0.35, 0.44)
 
-                add_plot(
-                    K_RANGE_PLOT_LAYER,
-                    K_RANGE_TITLE_LAYER,
-                    "Range (m) vs time (s)",
-                    0.04,
-                )
-                add_plot(
-                    K_VELOCITY_PLOT_LAYER,
-                    K_VELOCITY_TITLE_LAYER,
-                    "Velocity (m/s) vs time (s)",
-                    0.52,
-                )
+                def panel_aspect(v: PanelRect) -> float:
+                    return (v.w * 1200.0) / (v.h * 600.0)
 
                 plot = RollingPlotOp(
                     self,
@@ -236,6 +221,14 @@ class FmcwSisoApp(Application):
                     frame_period=cfg.frame_period,
                     name="rolling_plot",
                 )
+                plot.primitive = True
+                plot.range_view = range_view
+                plot.velocity_view = velocity_view
+                plot.range_aspect = panel_aspect(range_view)
+                plot.velocity_aspect = panel_aspect(velocity_view)
+                plot.marker_radius = cfg.viz.marker_radius
+                plot.marker_outline = cfg.viz.marker_outline
+                plot.marker_segments = cfg.viz.marker_segments
 
             visualizer = HolovizOp(
                 self,
@@ -275,6 +268,8 @@ class FmcwSisoApp(Application):
                 self.add_flow(range_op, plot, {("range_bins", "range_bins")})
                 self.add_flow(doppler, plot, {("velocity_bins", "velocity_bins")})
                 self.add_flow(plot, visualizer, {("plots", "receivers")})
+                # Dynamic InputSpecs for the primitive panels → input_specs port.
+                self.add_flow(plot, visualizer, {("plot_specs", "input_specs")})
 
 
 def main(argv: list[str] | None = None) -> int:

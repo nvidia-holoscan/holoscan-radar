@@ -51,9 +51,9 @@ struct CommonRunConfig {
   // Detection-marker geometry for the RD-map overlay (ClusterOverlayOp), as a
   // fraction of the image extent. Parsed from the `visualization:` block.
   struct VisualizationConfig {
-    float marker_radius{0.007F};    // filled-disc radius
-    float marker_outline{0.0022F};  // extra radius of the black outline disc
-    int64_t marker_segments{20};    // triangle-fan segments per disc
+    float marker_radius{0.004F};   // filled-disc radius
+    float marker_outline{0.002F};  // extra radius of the black outline disc
+    int64_t marker_segments{20};   // triangle-fan segments per disc
   } viz;
   // CFAR peak-grouping mode. A native CFARDetectorOp parameter (set through the
   // cfar_detector YAML block via from_config); each app also reads the same key

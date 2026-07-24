@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <holoscan/holoscan.hpp>
+#include <holoscan/operators/holoviz/holoviz.hpp>
 
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
@@ -275,8 +276,8 @@ class ClusterOverlayOp : public holoscan::Operator {
   // extra radius of the black outline disc drawn beneath it, and the triangle-
   // fan segment count. Set by compose() from the visualization config; the
   // defaults are kept small so nearby detections stay distinct.
-  float marker_radius{0.007F};
-  float marker_outline{0.0022F};
+  float marker_radius{0.004F};
+  float marker_outline{0.002F};
   int64_t marker_segments{20};
 
   // Aspect ratio (width / height, in pixels) of the RD-map sub-view. The disc x
@@ -705,6 +706,197 @@ constexpr const char* kVelocityPlotLayer = "velocity_plot";
 constexpr const char* kRangeTitleLayer = "range_title";
 constexpr const char* kVelocityTitleLayer = "velocity_title";
 
+// ---- Holoviz-primitive panel helpers -----------------------------------
+// A side panel can be drawn as native Holoviz layers (geometry + text) instead
+// of a rasterized image. Geometry is in the panel's normalized [0, 1] space
+// (top-left origin, y down), placed on screen by a View. The producing op emits
+// both the data tensors (on `receivers`) and the matching InputSpecs (on the
+// dynamic `input_specs` port), so runtime-derived tick labels and only-used
+// marker colors are handled without a static per-color layer declaration.
+using PlotInputSpec = holoscan::ops::HolovizOp::InputSpec;
+using PlotInputType = holoscan::ops::HolovizOp::InputType;
+
+// Panel placement, window-normalized (mirrors HolovizOp::InputSpec::View).
+struct PanelRect {
+  float x{0.0F}, y{0.0F}, w{1.0F}, h{1.0F};
+};
+
+// Plot box within the panel [0, 1] (leaves margins for title / tick labels).
+constexpr float kBoxL = 0.15F, kBoxR = 0.98F, kBoxT = 0.14F, kBoxB = 0.85F;
+
+// A (rows, comps) float device tensor from host data (rows = size / comps).
+inline std::shared_ptr<holoscan::Tensor> plot_geom_tensor(
+    const std::vector<float>& data, int64_t comps) {
+  const int64_t rows =
+      comps > 0 ? static_cast<int64_t>(data.size()) / comps : 0;
+  auto tensor =
+      radar::make_device_tensor({rows, comps}, radar::real_dtype<float>());
+  if (!data.empty() &&
+      cudaMemcpy(tensor->data(), data.data(), sizeof(float) * data.size(),
+                 cudaMemcpyHostToDevice) != cudaSuccess) {
+    throw std::runtime_error("plot_geom_tensor: H2D upload failed");
+  }
+  return tensor;
+}
+
+// InputSpec for one geometry/text layer of a panel, placed in `rect`.
+inline PlotInputSpec plot_layer_spec(const std::string& name,
+                                     PlotInputType type,
+                                     const std::vector<float>& rgba,
+                                     const PanelRect& rect, int priority) {
+  PlotInputSpec spec(name, type);
+  spec.color_ = rgba;
+  spec.priority_ = priority;
+  PlotInputSpec::View view;
+  view.offset_x_ = rect.x;
+  view.offset_y_ = rect.y;
+  view.width_ = rect.w;
+  view.height_ = rect.h;
+  spec.views_ = {view};
+  return spec;
+}
+
+// Append a filled triangle-fan disc (segments triangles) to a vertex list.
+inline void plot_append_disc(std::vector<float>* v, float cx, float cy,
+                             float rx, float ry, int segments) {
+  const float two_pi = 2.0F * static_cast<float>(M_PI);
+  for (int k = 0; k < segments; ++k) {
+    const float a0 = two_pi * static_cast<float>(k) / segments;
+    const float a1 = two_pi * static_cast<float>(k + 1) / segments;
+    v->push_back(cx);
+    v->push_back(cy);
+    v->push_back(cx + rx * std::cos(a0));
+    v->push_back(cy + ry * std::sin(a0));
+    v->push_back(cx + rx * std::cos(a1));
+    v->push_back(cy + ry * std::sin(a1));
+  }
+}
+
+// A tick: fractional position along its axis ([0,1], 0 = lo/left/bottom) + label.
+struct PanelTick {
+  float frac;
+  std::string label;
+};
+// A marker: data-space position ([0,1] within the plot box) + color bucket.
+struct PanelMarker {
+  float xf;
+  float yf;
+  int bucket;
+};
+
+// Emit one plot panel as native Holoviz layers into `out` (data tensors) and
+// `specs` (matching InputSpecs), all placed in `rect`. Layers back-to-front:
+// dark background, axis frame + gridlines + tick marks, a black outline
+// under-layer + one colored disc layer per marker bucket, tick labels, title.
+// Markers/ticks are in [0,1] box coordinates (y up); marker radius is the RD-
+// map value rescaled by the panel height so a dot matches the RD-map dot size.
+inline void emit_panel(holoscan::TensorMap& out,
+                       std::vector<PlotInputSpec>* specs,
+                       const std::string& prefix, const PanelRect& rect,
+                       float aspect, const std::string& title,
+                       const std::vector<PanelTick>& xticks,
+                       const std::vector<PanelTick>& yticks,
+                       const std::vector<PanelMarker>& markers,
+                       float marker_radius, float marker_outline,
+                       int marker_segments) {
+  const int segments = marker_segments > 2 ? marker_segments : 3;
+  const auto bx = [](float xf) { return kBoxL + xf * (kBoxR - kBoxL); };
+  const auto by = [](float yf) { return kBoxB - yf * (kBoxB - kBoxT); };
+
+  // Background.
+  const std::vector<float> bg = {0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1};
+  out.insert({prefix + "_bg", plot_geom_tensor(bg, 2)});
+  specs->push_back(plot_layer_spec(prefix + "_bg", PlotInputType::TRIANGLES,
+                                   {0.08F, 0.08F, 0.11F, 1.0F}, rect, 3));
+
+  // Axis frame, gridlines at every tick, and short outward tick marks.
+  {
+    std::vector<float> lines;
+    const auto seg = [&lines](float x0, float y0, float x1, float y1) {
+      lines.insert(lines.end(), {x0, y0, x1, y1});
+    };
+    seg(kBoxL, kBoxT, kBoxR, kBoxT);
+    seg(kBoxR, kBoxT, kBoxR, kBoxB);
+    seg(kBoxR, kBoxB, kBoxL, kBoxB);
+    seg(kBoxL, kBoxB, kBoxL, kBoxT);
+    for (const PanelTick& t : yticks) {
+      const float y = by(t.frac);
+      seg(kBoxL, y, kBoxR, y);
+      seg(kBoxL - 0.015F, y, kBoxL, y);
+    }
+    for (const PanelTick& t : xticks) {
+      const float x = bx(t.frac);
+      seg(x, kBoxT, x, kBoxB);
+      seg(x, kBoxB, x, kBoxB + 0.02F);
+    }
+    out.insert({prefix + "_frame", plot_geom_tensor(lines, 2)});
+    specs->push_back(plot_layer_spec(prefix + "_frame", PlotInputType::LINES,
+                                     {0.42F, 0.42F, 0.52F, 1.0F}, rect, 4));
+  }
+
+  // Markers: black outline under-layer + one colored layer per bucket present.
+  {
+    const float ry = marker_radius / std::max(rect.h, 1e-6F);
+    const float rx = ry / std::max(aspect, 1e-6F);
+    const float ory = (marker_radius + marker_outline) / std::max(rect.h, 1e-6F);
+    const float orx = ory / std::max(aspect, 1e-6F);
+    std::vector<float> outline;
+    std::vector<std::vector<float>> by_bucket(kNumClusterColors + 1);
+    for (const PanelMarker& m : markers) {
+      const float x = bx(m.xf), y = by(m.yf);
+      if (marker_outline > 0.0F) {
+        plot_append_disc(&outline, x, y, orx, ory, segments);
+      }
+      plot_append_disc(&by_bucket[static_cast<size_t>(m.bucket)], x, y, rx, ry,
+                       segments);
+    }
+    if (!outline.empty()) {
+      out.insert({prefix + "_moutline", plot_geom_tensor(outline, 2)});
+      specs->push_back(plot_layer_spec(prefix + "_moutline",
+                                       PlotInputType::TRIANGLES,
+                                       {0.0F, 0.0F, 0.0F, 1.0F}, rect, 5));
+    }
+    for (int b = 0; b <= kNumClusterColors; ++b) {
+      auto& verts = by_bucket[static_cast<size_t>(b)];
+      if (verts.empty()) {
+        continue;
+      }
+      const std::string name = prefix + "_m" + std::to_string(b);
+      out.insert({name, plot_geom_tensor(verts, 2)});
+      const auto c = plot_bucket_color(b);
+      specs->push_back(plot_layer_spec(
+          name, PlotInputType::TRIANGLES,
+          {c[0] / 255.0F, c[1] / 255.0F, c[2] / 255.0F, 1.0F}, rect, 6));
+    }
+  }
+
+  // Tick labels: Y ticks in the left margin, X ticks below the box.
+  {
+    std::vector<float> pos;
+    std::vector<std::string> txt;
+    for (const PanelTick& t : yticks) {
+      pos.insert(pos.end(), {0.02F, by(t.frac) - 0.025F, 0.05F});
+      txt.push_back(t.label);
+    }
+    for (const PanelTick& t : xticks) {
+      pos.insert(pos.end(), {bx(t.frac) - 0.02F, kBoxB + 0.035F, 0.05F});
+      txt.push_back(t.label);
+    }
+    out.insert({prefix + "_ticks", plot_geom_tensor(pos, 3)});
+    auto s = plot_layer_spec(prefix + "_ticks", PlotInputType::TEXT,
+                             {0.78F, 0.78F, 0.82F, 1.0F}, rect, 7);
+    s.text_ = std::move(txt);
+    specs->push_back(std::move(s));
+  }
+
+  // Title (top-left of the panel).
+  out.insert({prefix + "_title", plot_geom_tensor({0.03F, 0.02F, 0.06F}, 3)});
+  auto title_spec = plot_layer_spec(prefix + "_title", PlotInputType::TEXT,
+                                    {1.0F, 1.0F, 1.0F, 1.0F}, rect, 8);
+  title_spec.text_ = {title};
+  specs->push_back(std::move(title_spec));
+}
+
 // Rolling time-series plots of the per-cluster centroids. Keeps a scrolling
 // window of the last `window` frames and, each tick, rasterizes two RGBA
 // images (range vs time, velocity vs time): each cluster's centroid — the
@@ -744,6 +936,26 @@ class RollingPlotOp : public holoscan::Operator {
   static constexpr int64_t kW = 420;
   static constexpr int64_t kH = 300;
 
+  // Render the range/velocity panels with native Holoviz primitives (geometry +
+  // dynamic InputSpecs on `plot_specs`) instead of raster images. Set by
+  // compose() along with each panel's view rect and on-screen aspect (for round
+  // markers). Off → the legacy rasterized images.
+  bool primitive{false};
+  PanelRect range_view{};
+  PanelRect velocity_view{};
+  float range_aspect{1.0F};
+  float velocity_aspect{1.0F};
+
+  // Marker geometry, shared with the RD-map overlay (set from cfg.viz). radius
+  // and outline are RD-map values (fractions of the full-height RD view);
+  // they are rescaled by the panel height below so a side-panel dot renders the
+  // same on-screen size as an RD-map dot. The outline is drawn as one under-
+  // layer beneath the colored discs, so the overlapping trail gets a clean dark
+  // border rather than per-dot speckle (marker_outline = 0 disables it).
+  float marker_radius{0.004F};
+  float marker_outline{0.002F};
+  int64_t marker_segments{20};
+
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("rep_idx");
     // Optional: per-detection DBSCAN labels. Only their presence is used, as a
@@ -755,6 +967,9 @@ class RollingPlotOp : public holoscan::Operator {
     spec.input<holoscan::TensorMap>("range_bins");
     spec.input<holoscan::TensorMap>("velocity_bins");
     spec.output<holoscan::TensorMap>("plots");
+    // Dynamic InputSpecs for the primitive panels, fed to HolovizOp's
+    // input_specs port (directly or via a boresight chain). Unused in raster mode.
+    spec.output<std::vector<PlotInputSpec>>("plot_specs");
   }
 
   void compute(holoscan::InputContext& op_input,
@@ -857,13 +1072,23 @@ class RollingPlotOp : public holoscan::Operator {
       cen_hist_.pop_front();
     }
 
-    // Rasterize both plots and emit, plus the (constant) title positions.
+    // Both panels as native Holoviz primitives (geometry on `plots`, specs on
+    // `plot_specs`) or the legacy raster images + constant TEXT titles.
     holoscan::TensorMap out;
-    out.insert({kRangePlotLayer, render_plot(/*use_range=*/true, oldest)});
-    out.insert(
-        {kVelocityPlotLayer, render_plot(/*use_range=*/false, oldest)});
-    out.insert({kRangeTitleLayer, plot_title_pos()});
-    out.insert({kVelocityTitleLayer, plot_title_pos()});
+    if (primitive) {
+      std::vector<PlotInputSpec> specs;
+      render_panel_primitives(out, &specs, oldest, "range", /*use_range=*/true,
+                              range_view, range_aspect, "Range (m) vs time (s)");
+      render_panel_primitives(out, &specs, oldest, "velocity",
+                              /*use_range=*/false, velocity_view,
+                              velocity_aspect, "Velocity (m/s) vs time (s)");
+      op_output.emit(specs, "plot_specs");
+    } else {
+      out.insert({kRangePlotLayer, render_plot(/*use_range=*/true, oldest)});
+      out.insert({kRangeTitleLayer, plot_title_pos()});
+      out.insert({kVelocityPlotLayer, render_plot(/*use_range=*/false, oldest)});
+      out.insert({kVelocityTitleLayer, plot_title_pos()});
+    }
     op_output.emit(out, "plots");
     ++tick_;
   }
@@ -895,6 +1120,45 @@ class RollingPlotOp : public holoscan::Operator {
     *lo = lim_lo;
     *hi = lim_hi;
   }
+
+  // Render one rolling panel (range or velocity vs time) as native Holoviz
+  // primitives: build the axis ticks + marker list and hand off to emit_panel,
+  // which fills `out` (data tensors) and `specs` (matching InputSpecs).
+  void render_panel_primitives(holoscan::TensorMap& out,
+                               std::vector<PlotInputSpec>* specs, int64_t oldest,
+                               const std::string& prefix, bool use_range,
+                               const PanelRect& view, float aspect,
+                               const std::string& title) {
+    const float lo = use_range ? r_lo_ : v_lo_;
+    const float hi = use_range ? r_hi_ : v_hi_;
+    const float span = std::max(hi - lo, 1e-6F);
+    const int y_dec = span < 10.0F ? 1 : 0;
+
+    std::vector<PanelTick> yticks, xticks;
+    for (int i = 0; i < kTicks; ++i) {
+      const float f = static_cast<float>(i) / (kTicks - 1);
+      yticks.push_back({f, plot_format_tick(lo + f * span, y_dec)});
+      const float secs = -(1.0F - f) * static_cast<float>(window - 1) *
+                         static_cast<float>(frame_period);
+      xticks.push_back({f, plot_format_tick(secs, 0)});
+    }
+
+    std::vector<PanelMarker> markers;
+    markers.reserve(cen_hist_.size());
+    for (const Sample& s : cen_hist_) {
+      const float xf = static_cast<float>(s.t - oldest) /
+                       static_cast<float>(window - 1);
+      const float yf =
+          std::clamp(((use_range ? s.r : s.v) - lo) / span, 0.0F, 1.0F);
+      markers.push_back({xf, yf, s.bucket});
+    }
+
+    emit_panel(out, specs, prefix, view, aspect, title, xticks, yticks, markers,
+               marker_radius, marker_outline,
+               static_cast<int>(marker_segments));
+  }
+
+  static constexpr int kTicks = 5;
 
   // Rasterize one plot: use_range picks the range vs velocity axis. Returns a
   // (kH, kW, 4) uint8 RGBA device tensor.
@@ -1028,6 +1292,16 @@ class BoresightViewOp : public holoscan::Operator {
   static constexpr int64_t kW = 420;
   static constexpr int64_t kH = 300;
 
+  // Render the panel with native Holoviz primitives (geometry on `plot`, specs
+  // chained through `specs_in` → `specs_out`) instead of a raster image. Set by
+  // compose() with the panel view rect, on-screen aspect, and marker geometry.
+  bool primitive{false};
+  PanelRect view{};
+  float aspect{1.0F};
+  float marker_radius{0.004F};
+  float marker_outline{0.002F};
+  int64_t marker_segments{20};
+
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("aoa_estimates");
     // Optional: cluster ids (row-aligned with aoa_estimates). Present →
@@ -1041,6 +1315,12 @@ class BoresightViewOp : public holoscan::Operator {
     spec.input<holoscan::TensorMap>("rep_idx")
         .condition(holoscan::ConditionType::kNone);
     spec.output<holoscan::TensorMap>("plot");
+    // Primitive-mode InputSpec chain: upstream panel specs (e.g. the rolling
+    // plots) arrive on specs_in; this op appends its own and emits the combined
+    // list on specs_out → HolovizOp's input_specs port.
+    spec.input<std::vector<PlotInputSpec>>("specs_in")
+        .condition(holoscan::ConditionType::kNone);
+    spec.output<std::vector<PlotInputSpec>>("specs_out");
   }
 
   void compute(holoscan::InputContext& op_input,
@@ -1142,8 +1422,46 @@ class BoresightViewOp : public holoscan::Operator {
     }
 
     holoscan::TensorMap out;
-    out.insert({kBoresightPlotLayer, render(ang, bucket, n)});
-    out.insert({kBoresightTitleLayer, plot_title_pos()});
+    if (primitive) {
+      // Angular extents in degrees; markers map az→x, el→y over the fixed span.
+      constexpr double kRad2Deg = 57.29577951308232;
+      const float ax_lo = static_cast<float>(az_lo * kRad2Deg);
+      const float ax_hi = static_cast<float>(az_hi * kRad2Deg);
+      const float ey_lo = static_cast<float>(el_lo * kRad2Deg);
+      const float ey_hi = static_cast<float>(el_hi * kRad2Deg);
+      const float ax_span = std::max(ax_hi - ax_lo, 1e-6F);
+      const float ey_span = std::max(ey_hi - ey_lo, 1e-6F);
+      std::vector<PanelTick> xticks, yticks;
+      for (int i = 0; i < 5; ++i) {
+        const float f = static_cast<float>(i) / 4.0F;
+        xticks.push_back({f, plot_format_tick(ax_lo + f * ax_span, 0)});
+        yticks.push_back({f, plot_format_tick(ey_lo + f * ey_span, 0)});
+      }
+      std::vector<PanelMarker> markers;
+      markers.reserve(static_cast<size_t>(n));
+      for (int64_t i = 0; i < n; ++i) {
+        const float xf = (static_cast<float>(ang[static_cast<size_t>(i * 2 + 0)] *
+                                             kRad2Deg) - ax_lo) / ax_span;
+        const float yf = (static_cast<float>(ang[static_cast<size_t>(i * 2 + 1)] *
+                                             kRad2Deg) - ey_lo) / ey_span;
+        if (xf < 0.0F || xf > 1.0F || yf < 0.0F || yf > 1.0F) {
+          continue;  // outside the field of view
+        }
+        markers.push_back({xf, yf, bucket[static_cast<size_t>(i)]});
+      }
+      std::vector<PlotInputSpec> specs;
+      auto upstream = op_input.receive<std::vector<PlotInputSpec>>("specs_in");
+      if (upstream) {
+        specs = std::move(upstream.value());
+      }
+      emit_panel(out, &specs, "boresight", view, aspect, "Boresight az/el (deg)",
+                 xticks, yticks, markers, marker_radius, marker_outline,
+                 static_cast<int>(marker_segments));
+      op_output.emit(specs, "specs_out");
+    } else {
+      out.insert({kBoresightPlotLayer, render(ang, bucket, n)});
+      out.insert({kBoresightTitleLayer, plot_title_pos()});
+    }
     op_output.emit(out, "plot");
   }
 

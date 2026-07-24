@@ -176,9 +176,15 @@ class FmcwSisoApp : public holoscan::Application {
       layout.height = 600U;
       layout.headless = cfg.headless;
       layout.plots_enabled = cfg.plots.enable;
-      if (cfg.plots.enable) {
-        layout.right_panels = range_velocity_panels();
-      }
+      // Side panels are drawn with native Holoviz primitives by RollingPlotOp
+      // (dynamic InputSpecs); no static right-panel images are declared. Panel
+      // view rects: right column, stacked range (top) then velocity (bottom).
+      const PanelRect range_view{0.63F, 0.04F, 0.35F, 0.44F};
+      const PanelRect velocity_view{0.63F, 0.52F, 0.35F, 0.44F};
+      const auto panel_aspect = [&](const PanelRect& v) {
+        return (v.w * static_cast<float>(layout.width)) /
+               (v.h * static_cast<float>(layout.height));
+      };
       auto visualizer = make_rd_holoviz_op(this, "holoviz", layout);
       overlay->view_aspect = rd_map_view_aspect(layout);
       overlay->marker_radius = cfg.viz.marker_radius;
@@ -190,6 +196,14 @@ class FmcwSisoApp : public holoscan::Application {
         plot = make_operator<RollingPlotOp>("rolling_plot");
         plot->window = cfg.plots.window;
         plot->frame_period = cfg.frame_period;
+        plot->primitive = true;
+        plot->range_view = range_view;
+        plot->velocity_view = velocity_view;
+        plot->range_aspect = panel_aspect(range_view);
+        plot->velocity_aspect = panel_aspect(velocity_view);
+        plot->marker_radius = cfg.viz.marker_radius;
+        plot->marker_outline = cfg.viz.marker_outline;
+        plot->marker_segments = cfg.viz.marker_segments;
       }
 
       add_flow(doppler, to_image, {{"rd_maps", "rd_maps"}});
@@ -224,6 +238,9 @@ class FmcwSisoApp : public holoscan::Application {
         add_flow(range, plot, {{"range_bins", "range_bins"}});
         add_flow(doppler, plot, {{"velocity_bins", "velocity_bins"}});
         add_flow(plot, visualizer, {{"plots", "receivers"}});
+        // Dynamic InputSpecs for the primitive panels (tick labels + only-used
+        // marker colors) → HolovizOp's input_specs port.
+        add_flow(plot, visualizer, {{"plot_specs", "input_specs"}});
       }
     }
   }
