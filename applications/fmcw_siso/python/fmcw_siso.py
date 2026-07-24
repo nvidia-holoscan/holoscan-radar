@@ -237,6 +237,7 @@ class FmcwSisoApp(Application):
                 window_title="FMCW SISO - Range-Doppler + clusters",
                 width=1200 if cfg.plots.enable else 800,
                 height=600,
+                vsync=cfg.viz.vsync,
                 headless=cfg.headless,
                 name="holoviz",
             )

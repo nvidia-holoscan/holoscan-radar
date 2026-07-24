@@ -54,6 +54,12 @@ struct CommonRunConfig {
     float marker_radius{0.004F};   // filled-disc radius
     float marker_outline{0.002F};  // extra radius of the black outline disc
     int64_t marker_segments{20};   // triangle-fan segments per disc
+    // Vertical sync. true -> HolovizOp uses a FIFO present mode (frame-rate
+    // capped, internally queued); false -> IMMEDIATE (uncapped, may tear).
+    // FIFO issues far fewer swap-chain acquires per window resize, which makes
+    // the resize path markedly more robust against Holoviz's fatal
+    // "Failed to acquire next swap chain image" on an out-of-date surface.
+    bool vsync{true};
   } viz;
   // CFAR peak-grouping mode. A native CFARDetectorOp parameter (set through the
   // cfar_detector YAML block via from_config); each app also reads the same key
@@ -177,6 +183,9 @@ inline void parse_viz_toggles(const YAML::Node& root, CommonRunConfig* cfg) {
     }
     if (v["marker_segments"]) {
       cfg->viz.marker_segments = v["marker_segments"].as<int64_t>();
+    }
+    if (v["vsync"]) {
+      cfg->viz.vsync = v["vsync"].as<bool>();
     }
   } else if (const YAML::Node legacy = root["visualize"];
              legacy && !legacy.IsNull()) {

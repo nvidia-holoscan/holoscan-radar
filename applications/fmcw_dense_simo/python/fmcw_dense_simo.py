@@ -312,6 +312,7 @@ class FmcwDenseSimoApp(Application):
             window_title="FMCW SIMO dense - RD (ch0) + clusters",
             width=1200 if cfg.plots.enable else 800,
             height=760 if cfg.plots.enable else 600,
+            vsync=cfg.viz.vsync,
             headless=cfg.headless,
             name="holoviz",
         )

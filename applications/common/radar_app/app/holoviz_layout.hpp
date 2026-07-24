@@ -47,6 +47,7 @@ struct HolovizLayout {
   uint32_t width{800};
   uint32_t height{600};
   bool headless{false};
+  bool vsync{true};  // FIFO present mode when true (resize-robust); see config
   bool plots_enabled{true};
   float left_width{0.60F};  // RD-map column width when panels are shown
   std::vector<RightPanel> right_panels;
@@ -151,6 +152,7 @@ inline std::shared_ptr<holoscan::ops::HolovizOp> make_rd_holoviz_op(
       holoscan::Arg("window_title", layout.window_title),
       holoscan::Arg("width", layout.width),
       holoscan::Arg("height", layout.height),
+      holoscan::Arg("vsync", layout.vsync),
       holoscan::Arg("headless", layout.headless));
 }
 

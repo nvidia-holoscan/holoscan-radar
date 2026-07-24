@@ -175,6 +175,7 @@ class FmcwSisoApp : public holoscan::Application {
       layout.width = cfg.plots.enable ? 1200U : 800U;
       layout.height = 600U;
       layout.headless = cfg.headless;
+      layout.vsync = cfg.viz.vsync;
       layout.plots_enabled = cfg.plots.enable;
       // Side panels are drawn with native Holoviz primitives by RollingPlotOp
       // (dynamic InputSpecs); no static right-panel images are declared. Panel

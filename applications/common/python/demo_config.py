@@ -381,6 +381,12 @@ class VisualizationConfig:
     marker_radius: float = 0.004
     marker_outline: float = 0.002
     marker_segments: int = 20
+    # Vertical sync. True -> HolovizOp uses a FIFO present mode (frame-rate
+    # capped, internally queued); False -> IMMEDIATE (uncapped, may tear). FIFO
+    # issues far fewer swap-chain acquires per window resize, making the resize
+    # path markedly more robust against Holoviz's fatal "Failed to acquire next
+    # swap chain image" on an out-of-date surface.
+    vsync: bool = True
 
 
 def parse_visualization(root: dict[str, Any]) -> tuple[bool, VisualizationConfig]:
@@ -400,6 +406,8 @@ def parse_visualization(root: dict[str, Any]) -> tuple[bool, VisualizationConfig
             viz.marker_outline = float(node["marker_outline"])
         if "marker_segments" in node:
             viz.marker_segments = int(node["marker_segments"])
+        if "vsync" in node:
+            viz.vsync = bool(node["vsync"])
     else:
         enabled = bool(root.get("visualize", False))  # legacy top-level toggle
     if viz.marker_radius <= 0.0:

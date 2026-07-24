@@ -90,6 +90,11 @@ visualization:
   marker_radius: 0.004
   marker_outline: 0.002
   marker_segments: 20
+  # vsync: true forces a FIFO present mode (frame-rate capped) — far more
+  # robust to window-resize swap-chain errors than IMMEDIATE. Set false for
+  # uncapped / low-latency rendering, at the cost of resize robustness (and
+  # possible tearing).
+  vsync: true
 headless: false
 skip_display_check: false
 

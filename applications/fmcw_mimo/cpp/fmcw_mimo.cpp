@@ -246,6 +246,7 @@ class FmcwMimoApp : public holoscan::Application {
       layout.width = cfg.plots.enable ? 1200U : 800U;
       layout.height = cfg.plots.enable ? 760U : 600U;
       layout.headless = cfg.headless;
+      layout.vsync = cfg.viz.vsync;
       layout.plots_enabled = cfg.plots.enable;
       // Side panels drawn with native Holoviz primitives (dynamic InputSpecs);
       // stacked right-column view rects.

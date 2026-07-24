@@ -157,6 +157,7 @@ class FmcwSimoApp : public holoscan::Application {
       layout.width = cfg.plots.enable ? 1200U : 800U;
       layout.height = cfg.plots.enable ? 760U : 600U;
       layout.headless = cfg.headless;
+      layout.vsync = cfg.viz.vsync;
       layout.plots_enabled = cfg.plots.enable;
       // Side panels (range/velocity/boresight) are drawn with native Holoviz
       // primitives by the plot ops (dynamic InputSpecs); no static right-panel
