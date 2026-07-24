@@ -80,6 +80,9 @@ struct PerfDriverDefaults {
   static void process_warmup(const RunSettings&) {}
   static void post_run(PerfReport*) {}
   static bool isolate_failures() { return false; }
+  // Opt-in for the --live / --sustained run modes (perf_fmcw_split_vs_fused).
+  // Off by default so those flags are rejected for tools that don't wire them.
+  static constexpr bool has_live_modes = false;
 };
 
 // Common CLI shared by every consumer. Operator-specific behavior enters only
@@ -166,6 +169,16 @@ void print_help() {
     std::cout << "  --sweep-variants  Primary categorical axis "
                  "(method/window/variant/...) x sizes; --sizes selects sizes\n";
   }
+  if constexpr (Traits::has_live_modes) {
+    std::cout << "  --live <p>        Live-override A/B on [live] param p "
+                 "(nfft|window|waveform): drive it into both graphs, report "
+                 "override-tick spike + steady\n"
+                 "  --live-rotate     Rotating buffer instead of one-shot "
+                 "(cycles configs to simulate adaptive mode-switching)\n"
+                 "  --rotate-period N Ticks between rotations (default 4)\n"
+                 "  --sustained       Pipeline throughput: run N frames, sync "
+                 "once, report true frames/sec (split vs fused)\n";
+  }
   std::cout << "  --checksum        Print output_checksum <bytes> <hex> per "
                "scenario (byte-equivalence gate; where the consumer wires it)\n"
                "  --stop-after-s S  Stop after first scenario whose wall time "
@@ -199,6 +212,37 @@ bool parse_args(int argc, char** argv, Options* opt) {
       opt->sweep_overrides = true;
     } else if (a == "--sweep-variants") {
       opt->sweep_variants = true;
+    } else if (a == "--live") {
+      const std::string v = next("--live");
+      if constexpr (Traits::has_live_modes) {
+        if (v != "nfft" && v != "window" && v != "waveform") {
+          std::cerr << "error: --live must be one of {nfft, window, waveform}\n";
+          return false;
+        }
+        opt->rs.live_param = v;
+      } else {
+        std::cerr << "error: " << Traits::tool_name()
+                  << " does not support --live\n";
+        return false;
+      }
+    } else if (a == "--live-rotate") {
+      if constexpr (Traits::has_live_modes) {
+        opt->rs.live_rotate = true;
+      } else {
+        std::cerr << "error: " << Traits::tool_name()
+                  << " does not support --live-rotate\n";
+        return false;
+      }
+    } else if (a == "--rotate-period") {
+      opt->rs.rotate_period = std::stoi(next("--rotate-period"));
+    } else if (a == "--sustained") {
+      if constexpr (Traits::has_live_modes) {
+        opt->rs.sustained = true;
+      } else {
+        std::cerr << "error: " << Traits::tool_name()
+                  << " does not support --sustained\n";
+        return false;
+      }
     } else if (a == "--checksum") {
       opt->rs.checksum = true;
     } else if (a == "--warmup") {
@@ -224,6 +268,10 @@ bool parse_args(int argc, char** argv, Options* opt) {
       std::cerr << "error: unknown argument '" << a << "'\n";
       return false;
     }
+  }
+  if (!opt->rs.live_param.empty() && opt->rs.sustained) {
+    std::cerr << "error: --live and --sustained are mutually exclusive\n";
+    return false;
   }
   return true;
 }

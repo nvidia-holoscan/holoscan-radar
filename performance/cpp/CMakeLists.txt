@@ -149,6 +149,27 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
     set_tests_properties(perf_fmcw_split_vs_fused_smoke PROPERTIES
         LABELS "performance")
 
+    add_test(NAME perf_fmcw_split_vs_fused_live_smoke
+        COMMAND perf_fmcw_split_vs_fused --sizes xs --warmup 1 --frames 2
+            --live nfft --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_split_vs_fused_live_smoke.json)
+    set_tests_properties(perf_fmcw_split_vs_fused_live_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_fmcw_split_vs_fused_rotate_smoke
+        COMMAND perf_fmcw_split_vs_fused --sizes xs --warmup 1 --frames 4
+            --live window --live-rotate --rotate-period 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_split_vs_fused_rotate_smoke.json)
+    set_tests_properties(perf_fmcw_split_vs_fused_rotate_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_fmcw_split_vs_fused_sustained_smoke
+        COMMAND perf_fmcw_split_vs_fused --sizes xs --warmup 1 --frames 4
+            --sustained --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_split_vs_fused_sustained_smoke.json)
+    set_tests_properties(perf_fmcw_split_vs_fused_sustained_smoke PROPERTIES
+        LABELS "performance")
+
     add_test(NAME perf_cluster_dbscan_smoke
         COMMAND perf_cluster_dbscan --sizes xs --warmup 1 --frames 2 --quiet
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_cluster_dbscan_smoke.json)

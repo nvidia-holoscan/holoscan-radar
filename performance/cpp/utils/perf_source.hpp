@@ -8,6 +8,9 @@
 //  - PerfOverrideSourceOp<V> emits a single [live] override value on one
 //    chosen tick, then stays silent (sticky-override semantics), so a
 //    scenario can measure the reconfiguration cost on a known frame.
+//  - PerfRotatingOverrideSourceOp<V> cycles through a buffer of [live] values,
+//    emitting the next one every `period` ticks, so a scenario can measure the
+//    steady cost of continuous reconfiguration (adaptive mode-switching).
 
 #pragma once
 
@@ -138,6 +141,46 @@ class PerfOverrideSourceOp : public holoscan::Operator {
   int64_t tick_{0};
   int64_t target_tick_{-1};
   V value_{};
+};
+
+// Emits the next value from a buffer every `period` ticks starting at
+// `start_tick` (values_[k] on tick start + k*period, cycling with modulo),
+// silent between. Combined with the operator's sticky non-blocking override
+// port this drives a rotating reconfiguration schedule, so a scenario can
+// measure the steady-state cost of frequent [live] changes rather than a single
+// spike.
+template <typename V>
+class PerfRotatingOverrideSourceOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(PerfRotatingOverrideSourceOp)
+  PerfRotatingOverrideSourceOp() = default;
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.output<V>("output");
+  }
+
+  void compute(holoscan::InputContext&, holoscan::OutputContext& op_output,
+               holoscan::ExecutionContext&) override {
+    if (!values_.empty() && tick_ >= start_ &&
+        (tick_ - start_) % period_ == 0) {
+      const int64_t k = (tick_ - start_) / period_;
+      op_output.emit(values_[static_cast<size_t>(k % n())], "output");
+    }
+    ++tick_;
+  }
+
+  void configure(std::vector<V> values, int64_t period, int64_t start_tick) {
+    values_ = std::move(values);
+    period_ = period > 0 ? period : 1;
+    start_ = start_tick;
+  }
+
+ private:
+  int64_t n() const { return static_cast<int64_t>(values_.size()); }
+  int64_t tick_{0};
+  int64_t period_{1};
+  int64_t start_{0};
+  std::vector<V> values_;
 };
 
 }  // namespace holoscan::radar::perf

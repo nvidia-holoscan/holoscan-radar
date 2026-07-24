@@ -17,11 +17,13 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cmath>
 #include <complex>
 #include <cstdint>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -36,6 +38,7 @@
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/window_spec.hpp"
 #include "utils/perf_app.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_platform.hpp"
@@ -133,7 +136,104 @@ std::vector<int64_t> cube_shape(const CompareScenario& scen) {
 }
 
 // ---------------------------------------------------------------------------
-// Graphs (no [live] overrides — steady e2e comparison).
+// Live-override + sustained run modes.
+// ---------------------------------------------------------------------------
+enum class LiveParam { kNone, kNfft, kWindow, kWaveform };
+
+LiveParam to_live_param(const std::string& s) {
+  if (s == "nfft") return LiveParam::kNfft;
+  if (s == "window") return LiveParam::kWindow;
+  if (s == "waveform") return LiveParam::kWaveform;
+  return LiveParam::kNone;
+}
+
+std::string live_param_tag(LiveParam p) {
+  switch (p) {
+    case LiveParam::kNfft: return "nfft";
+    case LiveParam::kWindow: return "window";
+    case LiveParam::kWaveform: return "waveform";
+    case LiveParam::kNone: return "none";
+  }
+  return "none";
+}
+
+// A modified waveform for the live-swap experiment: 1.5x bandwidth, so the
+// descriptor compares != the constructed default and forces the operator's
+// warn-once axis/reference rebuild on the override tick.
+hr::FMCWWaveformDescriptor make_waveform_alt() {
+  hr::FMCWWaveformSpec spec;
+  spec.carrier_frequency = 77.0e9;
+  spec.bandwidth = 225.0e6;
+  spec.chirp_duration = 20.0e-6;
+  spec.sample_rate = 12.8e6;
+  spec.chirp_repetition_interval = 25.0e-6;
+  return hr::FMCWWaveformDescriptor(spec);
+}
+
+// Prebuilt [live] override values for one scenario, shared by both graphs so
+// the split/fused comparison stays apples-to-apples. nfft carries distinct
+// per-axis values (2x the input dim); window/waveform share one taper /
+// descriptor across the two stages. One-shot uses index 0; rotate cycles the
+// whole vector.
+struct LiveConfig {
+  LiveParam param{LiveParam::kNone};
+  bool rotate{false};
+  bool sustained{false};
+  int64_t override_at{0};
+  int rotate_period{4};
+  std::vector<int64_t> nfft_range;
+  std::vector<int64_t> nfft_doppler;
+  std::vector<hr::WindowSpec> range_window;
+  std::vector<hr::WindowSpec> doppler_window;
+  std::vector<hr::FMCWWaveformDescriptor> waveform;
+};
+
+LiveConfig build_live_config(const CompareScenario& scen,
+                             const perf::RunSettings& rs) {
+  LiveConfig live;
+  live.param = to_live_param(rs.live_param);
+  live.rotate = rs.live_rotate;
+  live.sustained = rs.sustained;
+  live.rotate_period = rs.rotate_period;
+  const int64_t r = scen.samples_per_chirp;
+  const int64_t d = scen.num_chirps;
+  switch (live.param) {
+    case LiveParam::kNfft:
+      // 2x the input dim — valid (nfft >= dim) and re-keys the output geometry
+      // pool. Rotate toggles back to the 1x default.
+      live.nfft_range = live.rotate ? std::vector<int64_t>{2 * r, r}
+                                    : std::vector<int64_t>{2 * r};
+      live.nfft_doppler = live.rotate ? std::vector<int64_t>{2 * d, d}
+                                      : std::vector<int64_t>{2 * d};
+      break;
+    case LiveParam::kWindow: {
+      hr::WindowSpec hann;
+      hann.type = hr::WindowType::kHann;
+      const hr::WindowSpec rect;  // default rectangular (kNone)
+      live.range_window = live.rotate
+                              ? std::vector<hr::WindowSpec>{hann, rect}
+                              : std::vector<hr::WindowSpec>{hann};
+      live.doppler_window = live.range_window;
+      break;
+    }
+    case LiveParam::kWaveform: {
+      const auto alt = make_waveform_alt();
+      const auto base = make_waveform();
+      live.waveform =
+          live.rotate ? std::vector<hr::FMCWWaveformDescriptor>{alt, base}
+                      : std::vector<hr::FMCWWaveformDescriptor>{alt};
+      break;
+    }
+    case LiveParam::kNone:
+      break;
+  }
+  return live;
+}
+
+// ---------------------------------------------------------------------------
+// Graphs. A default (kNone, non-sustained) LiveConfig reproduces the original
+// static steady comparison; live/sustained modes add override sources / swap
+// the timed sink.
 // ---------------------------------------------------------------------------
 template <typename T>
 class FusedCompareApp : public holoscan::Application {
@@ -143,6 +243,32 @@ class FusedCompareApp : public holoscan::Application {
   holoscan::TensorMap frame;
   hr::FMCWWaveformDescriptor waveform;
   int total_frames{25};
+  LiveConfig live;
+
+  // Wire one override source (one-shot or rotating) into `target`'s [live]
+  // port. Duplicated in SplitCompareApp because the two apps are unrelated
+  // Application subclasses (both need the protected make_operator/add_flow).
+  template <typename V>
+  void wire_override(const std::shared_ptr<holoscan::Operator>& target,
+                     const char* port, const std::vector<V>& values,
+                     const std::string& name) {
+    if (values.empty()) {
+      return;
+    }
+    if (live.rotate) {
+      auto s = make_operator<perf::PerfRotatingOverrideSourceOp<V>>(
+          name + "_ovr",
+          make_condition<holoscan::CountCondition>(total_frames));
+      s->configure(values, live.rotate_period, live.override_at);
+      add_flow(s, target, {{"output", port}});
+    } else {
+      auto s = make_operator<perf::PerfOverrideSourceOp<V>>(
+          name + "_ovr",
+          make_condition<holoscan::CountCondition>(total_frames));
+      s->configure(live.override_at, values.front());
+      add_flow(s, target, {{"output", port}});
+    }
+  }
 
   void compose() override {
     using holoscan::Arg;
@@ -155,14 +281,38 @@ class FusedCompareApp : public holoscan::Application {
     src->configure(collector, frame);
     add_flow(src, op, {{"adc_cube", "adc_cube"}});
 
-    auto term = make_operator<perf::PerfTerminalSinkOp>("rd_sink");
-    term->configure(collector);
-    add_flow(op, term, {{"rd_maps", "input"}});
+    // Timed rd_maps sink: device-syncing terminal in latency/live modes; a
+    // non-syncing null sink in sustained mode so frames pipeline.
+    if (live.sustained) {
+      auto ns = make_operator<perf::PerfNullSinkOp>("rd_sink");
+      add_flow(op, ns, {{"rd_maps", "input"}});
+    } else {
+      auto term = make_operator<perf::PerfTerminalSinkOp>("rd_sink");
+      term->configure(collector);
+      add_flow(op, term, {{"rd_maps", "input"}});
+    }
 
     for (const char* port : {"range_bins", "velocity_bins"}) {
       auto ns =
           make_operator<perf::PerfNullSinkOp>(std::string(port) + "_sink");
       add_flow(op, ns, {{port, "input"}});
+    }
+
+    switch (live.param) {
+      case LiveParam::kNfft:
+        wire_override(op, "nfft_range", live.nfft_range, "nfft_range");
+        wire_override(op, "nfft_doppler", live.nfft_doppler, "nfft_doppler");
+        break;
+      case LiveParam::kWindow:
+        wire_override(op, "range_window", live.range_window, "range_window");
+        wire_override(op, "doppler_window", live.doppler_window,
+                      "doppler_window");
+        break;
+      case LiveParam::kWaveform:
+        wire_override(op, "waveform", live.waveform, "waveform");
+        break;
+      case LiveParam::kNone:
+        break;
     }
   }
 };
@@ -175,6 +325,30 @@ class SplitCompareApp : public holoscan::Application {
   holoscan::TensorMap frame;
   hr::FMCWWaveformDescriptor waveform;
   int total_frames{25};
+  LiveConfig live;
+
+  // See FusedCompareApp::wire_override (duplicated — unrelated subclasses).
+  template <typename V>
+  void wire_override(const std::shared_ptr<holoscan::Operator>& target,
+                     const char* port, const std::vector<V>& values,
+                     const std::string& name) {
+    if (values.empty()) {
+      return;
+    }
+    if (live.rotate) {
+      auto s = make_operator<perf::PerfRotatingOverrideSourceOp<V>>(
+          name + "_ovr",
+          make_condition<holoscan::CountCondition>(total_frames));
+      s->configure(values, live.rotate_period, live.override_at);
+      add_flow(s, target, {{"output", port}});
+    } else {
+      auto s = make_operator<perf::PerfOverrideSourceOp<V>>(
+          name + "_ovr",
+          make_condition<holoscan::CountCondition>(total_frames));
+      s->configure(live.override_at, values.front());
+      add_flow(s, target, {{"output", port}});
+    }
+  }
 
   void compose() override {
     using holoscan::Arg;
@@ -197,9 +371,16 @@ class SplitCompareApp : public holoscan::Application {
       add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
     }
 
-    auto term = make_operator<perf::PerfTerminalSinkOp>("rd_sink");
-    term->configure(collector);
-    add_flow(doppler, term, {{"rd_maps", "input"}});
+    // Timed rd_maps sink: syncing terminal (latency/live) vs non-syncing null
+    // (sustained, so the split chain pipelines across its ops).
+    if (live.sustained) {
+      auto ns = make_operator<perf::PerfNullSinkOp>("rd_sink");
+      add_flow(doppler, ns, {{"rd_maps", "input"}});
+    } else {
+      auto term = make_operator<perf::PerfTerminalSinkOp>("rd_sink");
+      term->configure(collector);
+      add_flow(doppler, term, {{"rd_maps", "input"}});
+    }
 
     auto range_bins_sink =
         make_operator<perf::PerfNullSinkOp>("range_bins_sink");
@@ -207,8 +388,58 @@ class SplitCompareApp : public holoscan::Application {
     auto vel_bins_sink =
         make_operator<perf::PerfNullSinkOp>("velocity_bins_sink");
     add_flow(doppler, vel_bins_sink, {{"velocity_bins", "input"}});
+
+    // [live] override ports differ per graph: the split stages own their own
+    // nfft / window / waveform ports (waveform fanned to both stages).
+    switch (live.param) {
+      case LiveParam::kNfft:
+        wire_override(range, "nfft", live.nfft_range, "nfft_range");
+        wire_override(doppler, "nfft", live.nfft_doppler, "nfft_doppler");
+        break;
+      case LiveParam::kWindow:
+        wire_override(range, "range_window", live.range_window, "range_window");
+        wire_override(doppler, "doppler_window", live.doppler_window,
+                      "doppler_window");
+        break;
+      case LiveParam::kWaveform:
+        wire_override(range, "waveform", live.waveform, "wf_range");
+        wire_override(doppler, "waveform", live.waveform, "wf_doppler");
+        break;
+      case LiveParam::kNone:
+        break;
+    }
   }
 };
+
+// Build and run one graph session for `scen` in the given mode, populating
+// `collector`. Shared by the steady / live / sustained runners so the
+// fused-vs-split branch lives in one place.
+void run_graph_session(const CompareScenario& scen,
+                       perf::TimingCollector* collector, const LiveConfig& live,
+                       int total_frames) {
+  auto cube = perf::single_map(
+      perf::make_iq_cube_device<PerfPrecision>(cube_shape(scen)), "adc_cube");
+  collector->t_construct = perf::Clock::now();
+  if (scen.graph == GraphKind::kFused) {
+    auto app = holoscan::make_application<FusedCompareApp<PerfPrecision>>();
+    app->scen = &scen;
+    app->collector = collector;
+    app->frame = std::move(cube);
+    app->waveform = make_waveform();
+    app->total_frames = total_frames;
+    app->live = live;
+    app->run();
+  } else {
+    auto app = holoscan::make_application<SplitCompareApp<PerfPrecision>>();
+    app->scen = &scen;
+    app->collector = collector;
+    app->frame = std::move(cube);
+    app->waveform = make_waveform();
+    app->total_frames = total_frames;
+    app->live = live;
+    app->run();
+  }
+}
 
 void fill_throughput(perf::ResultRow* row, const CompareScenario& scen,
                      double median_ms) {
@@ -345,8 +576,153 @@ void print_comparison_table(const perf::PerfReport& report) {
                "inter-op Holoscan cost on the split path.\n\n";
 }
 
+// Parse the leading clutter tag out of a "clutter_graph" variant.
+std::string clutter_of_variant(const std::string& variant) {
+  const auto us = variant.find('_');
+  return us == std::string::npos ? variant : variant.substr(0, us);
+}
+
+// Live-override table: per pair, the steady median and the override-tick cost
+// (spike for one-shot; worst rebuild tick for rotate) for both graphs.
+void print_live_table(const perf::PerfReport& report) {
+  struct PairStats {
+    std::string pair_id;
+    std::string size_id;
+    std::string clutter;
+    double s_steady{0.0}, f_steady{0.0};
+    double s_ovr{0.0}, f_ovr{0.0};
+    bool have_split{false}, have_fused{false};
+  };
+  std::vector<PairStats> pairs;
+  auto find_or_add = [&](const std::string& pair_id) -> PairStats& {
+    for (auto& p : pairs) {
+      if (p.pair_id == pair_id) {
+        return p;
+      }
+    }
+    pairs.push_back(PairStats{});
+    pairs.back().pair_id = pair_id;
+    return pairs.back();
+  };
+  for (const auto& row : report.results) {
+    if (row.bucket != "compute" || row.calibration_pair.empty()) {
+      continue;
+    }
+    auto& p = find_or_add(row.calibration_pair);
+    p.size_id = row.size_id;
+    p.clutter = clutter_of_variant(row.variant);
+    if (row.calibration_mode == "split") {
+      p.s_steady = row.latency.median_ms;
+      p.s_ovr = row.override_ms;
+      p.have_split = true;
+    } else if (row.calibration_mode == "fused") {
+      p.f_steady = row.latency.median_ms;
+      p.f_ovr = row.override_ms;
+      p.have_fused = true;
+    }
+  }
+
+  const std::string mode =
+      report.run_settings.live_rotate
+          ? "rotate p=" + std::to_string(report.run_settings.rotate_period)
+          : "one-shot";
+  std::cout << "\n=== split vs fused LIVE override (" << mode << ", param="
+            << report.run_settings.live_param << ") ===\n";
+  std::cout << "steady_ms = post-warmup steady median; ovr_ms = "
+            << (report.run_settings.live_rotate ? "worst rotate tick"
+                                                : "override-tick spike")
+            << "; ovr_d = ovr − steady.\n";
+  std::cout << std::left << std::setw(28) << "pair_id" << std::setw(7) << "size"
+            << std::setw(7) << "clutter" << std::right << std::setw(11)
+            << "s_steady" << std::setw(11) << "f_steady" << std::setw(11)
+            << "s_ovr" << std::setw(11) << "f_ovr" << std::setw(11) << "s_ovr_d"
+            << std::setw(11) << "f_ovr_d\n";
+  for (const auto& p : pairs) {
+    if (!p.have_split || !p.have_fused) {
+      continue;
+    }
+    std::cout << std::left << std::setw(28) << p.pair_id << std::setw(7)
+              << p.size_id << std::setw(7) << p.clutter << std::right
+              << std::fixed << std::setprecision(3) << std::setw(11)
+              << p.s_steady << std::setw(11) << p.f_steady << std::setw(11)
+              << p.s_ovr << std::setw(11) << p.f_ovr << std::setw(11)
+              << (p.s_ovr - p.s_steady) << std::setw(11)
+              << (p.f_ovr - p.f_steady) << "\n";
+  }
+  std::cout << "(ovr_d is the reconfiguration cost paid on the change tick; a "
+               "small ovr_d means the warn-once plan/coeff cache is working)\n\n";
+}
+
+// Sustained-throughput table: true pipelined frames/sec for each graph (single
+// end sync, so the split chain overlaps its stages), plus the fused/split
+// ratio. Contrast these fps against the latency table's 1000/median.
+void print_sustained_table(const perf::PerfReport& report) {
+  struct PairStats {
+    std::string pair_id, size_id, clutter;
+    double s_fps{0.0}, f_fps{0.0};
+    bool have_split{false}, have_fused{false};
+  };
+  std::vector<PairStats> pairs;
+  auto find_or_add = [&](const std::string& pair_id) -> PairStats& {
+    for (auto& p : pairs) {
+      if (p.pair_id == pair_id) {
+        return p;
+      }
+    }
+    pairs.push_back(PairStats{});
+    pairs.back().pair_id = pair_id;
+    return pairs.back();
+  };
+  for (const auto& row : report.results) {
+    if (row.bucket != "compute" || row.calibration_pair.empty()) {
+      continue;
+    }
+    auto& p = find_or_add(row.calibration_pair);
+    p.size_id = row.size_id;
+    p.clutter = clutter_of_variant(row.variant);
+    if (row.calibration_mode == "split") {
+      p.s_fps = row.slices_per_second;
+      p.have_split = true;
+    } else if (row.calibration_mode == "fused") {
+      p.f_fps = row.slices_per_second;
+      p.have_fused = true;
+    }
+  }
+
+  std::cout << "\n=== split vs fused SUSTAINED throughput (pipelined; sync "
+               "once) ===\n";
+  std::cout << "fps = frames/sec over the post-warmup window; fused/split > 1 "
+               "means fused is faster.\n";
+  std::cout << std::left << std::setw(28) << "pair_id" << std::setw(7) << "size"
+            << std::setw(8) << "clutter" << std::right << std::setw(13)
+            << "split_fps" << std::setw(13) << "fused_fps" << std::setw(13)
+            << "fused/split\n";
+  for (const auto& p : pairs) {
+    if (!p.have_split || !p.have_fused) {
+      continue;
+    }
+    const double ratio = p.s_fps > 0.0 ? p.f_fps / p.s_fps : 0.0;
+    std::cout << std::left << std::setw(28) << p.pair_id << std::setw(7)
+              << p.size_id << std::setw(8) << p.clutter << std::right
+              << std::fixed << std::setprecision(1) << std::setw(13) << p.s_fps
+              << std::setw(13) << p.f_fps << std::setprecision(3)
+              << std::setw(13) << ratio << "\n";
+  }
+  std::cout << "(no per-frame sync, so the split ops may overlap; but on a "
+               "single GPU they share the device, so sustained fps tends to "
+               "track 1000/median rather than exceed it — compare to confirm "
+               "per workload)\n\n";
+}
+
 struct CompareTraits : perf::PerfDriverDefaults {
   using Scenario = CompareScenario;
+
+  // Opt into the --live / --sustained run modes (rejected on other tools).
+  static constexpr bool has_live_modes = true;
+
+  // An invalid live param (or an operator rejecting one) throws; isolate it so
+  // one bad scenario cannot abort the whole report.
+  static bool isolate_failures() { return true; }
 
   static const char* tool_name() { return "perf_fmcw_split_vs_fused"; }
   static const char* tool_description() {
@@ -423,34 +799,22 @@ struct CompareTraits : perf::PerfDriverDefaults {
   static void run_scenario(const CompareScenario& scen,
                            const perf::RunSettings& rs,
                            perf::PerfReport* report) {
+    if (rs.sustained) {
+      run_sustained(scen, rs, report);
+      return;
+    }
+    if (!rs.live_param.empty()) {
+      run_live(scen, rs, report);
+      return;
+    }
+    // Default static steady comparison (a kNone LiveConfig wires no override
+    // sources and keeps the device-syncing terminal sink).
     const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
+    const LiveConfig none;
     const auto samples = perf::collect_scenario_samples(
         rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           perf::TimingCollector collector;
-          auto cube = perf::single_map(
-              perf::make_iq_cube_device<PerfPrecision>(cube_shape(scen)),
-              "adc_cube");
-
-          collector.t_construct = perf::Clock::now();
-          if (scen.graph == GraphKind::kFused) {
-            auto app =
-                holoscan::make_application<FusedCompareApp<PerfPrecision>>();
-            app->scen = &scen;
-            app->collector = &collector;
-            app->frame = std::move(cube);
-            app->waveform = make_waveform();
-            app->total_frames = p.total_frames;
-            app->run();
-          } else {
-            auto app =
-                holoscan::make_application<SplitCompareApp<PerfPrecision>>();
-            app->scen = &scen;
-            app->collector = &collector;
-            app->frame = std::move(cube);
-            app->waveform = make_waveform();
-            app->total_frames = p.total_frames;
-            app->run();
-          }
+          run_graph_session(scen, &collector, none, p.total_frames);
           return collector;
         });
 
@@ -458,6 +822,112 @@ struct CompareTraits : perf::PerfDriverDefaults {
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
+    report->results.push_back(row);
+  }
+
+  // One-shot live override: reuse the shared override-spike bucketing (steady
+  // median + peak on the change tick).
+  static void run_live(const CompareScenario& scen, const perf::RunSettings& rs,
+                       perf::PerfReport* report) {
+    if (rs.live_rotate) {
+      run_live_rotate(scen, rs, report);
+      return;
+    }
+    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    LiveConfig live = build_live_config(scen, rs);
+    live.override_at = plan.override_at;
+    const auto samples = perf::collect_scenario_samples(
+        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+          perf::TimingCollector collector;
+          run_graph_session(scen, &collector, live, p.total_frames);
+          return collector;
+        });
+    perf::append_setup_row(base_row(scen), samples, report);
+    perf::ResultRow row = base_row(scen);
+    perf::fill_compute_row(&row, samples);
+    fill_throughput(&row, scen, row.latency.median_ms);
+    row.notes = "live one-shot: " + live_param_tag(live.param);
+    report->results.push_back(row);
+  }
+
+  // Rotating override: the single-window bucketer does not fit continuous
+  // thrash, so take every post-warmup latency — median is the thrash-steady,
+  // max is the worst rebuild tick.
+  static void run_live_rotate(const CompareScenario& scen,
+                              const perf::RunSettings& rs,
+                              perf::PerfReport* report) {
+    LiveConfig live = build_live_config(scen, rs);
+    live.override_at = rs.warmup_frames;  // rotate once warm
+    const int total = rs.warmup_frames + rs.measured_frames;
+    std::vector<double> steady;
+    std::vector<double> setup_ms;
+    double worst = std::numeric_limits<double>::quiet_NaN();
+    for (int rep = 0; rep < rs.repeats; ++rep) {
+      perf::TimingCollector collector;
+      run_graph_session(scen, &collector, live, total);
+      setup_ms.push_back(collector.setup_ms());
+      const auto lat = collector.frame_latencies_ms();
+      for (size_t i = static_cast<size_t>(rs.warmup_frames); i < lat.size();
+           ++i) {
+        steady.push_back(lat[i]);
+        if (std::isnan(worst) || lat[i] > worst) {
+          worst = lat[i];
+        }
+      }
+    }
+    perf::ResultRow setup_row = base_row(scen);
+    setup_row.bucket = "setup";
+    setup_row.setup_ms = perf::summarize(setup_ms).median_ms;
+    report->results.push_back(setup_row);
+
+    perf::ResultRow row = base_row(scen);
+    row.bucket = "compute";
+    row.latency = perf::summarize(steady);
+    row.override_ms = worst;
+    if (!std::isnan(worst) && !std::isnan(row.latency.median_ms)) {
+      row.override_delta_ms = worst - row.latency.median_ms;
+    }
+    fill_throughput(&row, scen, row.latency.median_ms);
+    row.notes = "live rotate p=" + std::to_string(rs.rotate_period) + ": " +
+                live_param_tag(live.param);
+    report->results.push_back(row);
+  }
+
+  // Sustained throughput: run N frames with a single end sync (no per-tick
+  // barrier), so the split chain pipelines across its ops. The reported
+  // median_ms is amortized per frame; slices_per_second is true frames/sec.
+  static void run_sustained(const CompareScenario& scen,
+                            const perf::RunSettings& rs,
+                            perf::PerfReport* report) {
+    LiveConfig live;
+    live.sustained = true;
+    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
+    const int measured = plan.total_frames - rs.warmup_frames;
+    std::vector<double> amort;  // per-rep amortized ms/frame
+    std::vector<double> setup_ms;
+    for (int rep = 0; rep < rs.repeats; ++rep) {
+      perf::TimingCollector collector;
+      run_graph_session(scen, &collector, live, plan.total_frames);
+      cudaDeviceSynchronize();
+      const auto t1 = perf::Clock::now();
+      setup_ms.push_back(collector.setup_ms());
+      if (measured > 0 &&
+          collector.starts.size() > static_cast<size_t>(rs.warmup_frames)) {
+        const double wall_ms = perf::to_ms(
+            t1 - collector.starts[static_cast<size_t>(rs.warmup_frames)]);
+        amort.push_back(wall_ms / measured);
+      }
+    }
+    perf::ResultRow setup_row = base_row(scen);
+    setup_row.bucket = "setup";
+    setup_row.setup_ms = perf::summarize(setup_ms).median_ms;
+    report->results.push_back(setup_row);
+
+    perf::ResultRow row = base_row(scen);
+    row.bucket = "compute";
+    row.latency = perf::summarize(amort);
+    fill_throughput(&row, scen, row.latency.median_ms);
+    row.notes = "sustained (pipeline; sync once); median_ms amortized/frame";
     report->results.push_back(row);
   }
 
@@ -478,7 +948,14 @@ struct CompareTraits : perf::PerfDriverDefaults {
   }
 
   static void post_run(perf::PerfReport* report) {
-    if (report != nullptr) {
+    if (report == nullptr) {
+      return;
+    }
+    if (report->run_settings.sustained) {
+      print_sustained_table(*report);
+    } else if (!report->run_settings.live_param.empty()) {
+      print_live_table(*report);
+    } else {
       print_comparison_table(*report);
     }
   }

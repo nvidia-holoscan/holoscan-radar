@@ -37,6 +37,14 @@ struct RunSettings {
   // output_checksum line per scenario (byte-equivalence gate for the optimizer;
   // ignored by consumers that do not wire the sink).
   bool checksum{false};
+
+  // Live-override + sustained-throughput run modes (perf_fmcw_split_vs_fused;
+  // gated to consumers that set has_live_modes). An empty live_param with
+  // sustained=false is the default static steady comparison.
+  std::string live_param;   // "" | "nfft" | "window" | "waveform"
+  bool live_rotate{false};  // rotating buffer instead of a one-shot override
+  int rotate_period{4};     // ticks between rotations when live_rotate
+  bool sustained{false};    // pipeline throughput: run N frames, sync once
 };
 
 // Definition of a named size-ladder entry, so a reader knows what an id like
@@ -237,6 +245,13 @@ inline void write_json(std::ostream& os, const PerfReport& r) {
   os << "    \"warmup_frames\": " << r.run_settings.warmup_frames << ",\n";
   os << "    \"measured_frames\": " << r.run_settings.measured_frames << ",\n";
   os << "    \"repeats\": " << r.run_settings.repeats << ",\n";
+  os << "    \"live_param\": \""
+     << detail::json_escape(r.run_settings.live_param) << "\",\n";
+  os << "    \"live_rotate\": "
+     << (r.run_settings.live_rotate ? "true" : "false") << ",\n";
+  os << "    \"rotate_period\": " << r.run_settings.rotate_period << ",\n";
+  os << "    \"sustained\": " << (r.run_settings.sustained ? "true" : "false")
+     << ",\n";
   os << "    \"sync_policy\": \""
      << detail::json_escape(r.run_settings.sync_policy) << "\",\n";
   os << "    \"stop_after_s\": "
