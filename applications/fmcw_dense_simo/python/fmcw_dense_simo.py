@@ -65,7 +65,12 @@ import cupy as cp  # noqa: E402,F401
 
 import config  # noqa: E402 (colocated, script-local - see config.py docstring)
 import custom_ops  # noqa: E402 (colocated, script-local - see config.py docstring)
-from common.python.demo_config import cluster_layer_name, grid_extent, make_view  # noqa: E402
+from common.python.demo_config import (  # noqa: E402
+    detection_layer_specs,
+    grid_extent,
+    make_view,
+    rd_map_view_aspect,
+)
 from common.python.driver import run_fmcw_app  # noqa: E402
 from common.python.ops import SimAdcSourceOp  # noqa: E402
 
@@ -73,7 +78,7 @@ from common.python.ops import SimAdcSourceOp  # noqa: E402
 
 install_matx_cache_atexit()
 
-K_NUM_CLUSTER_COLORS = 8
+K_NUM_CLUSTER_COLORS = 30
 K_NOISE_LAYER_NAME = "noise"
 K_RANGE_PLOT_LAYER = "range_plot"
 K_VELOCITY_PLOT_LAYER = "velocity_plot"
@@ -224,22 +229,21 @@ class FmcwDenseSimoApp(Application):
         ch_slice = RdChannelSliceOp(self, channel=0, name="rd_channel_slice")
         to_image = RdMapToImageOp(self, name="rd_map_to_image")
         overlay = ClusterOverlayOp(self, name="cluster_overlay")
+        overlay.view_aspect = rd_map_view_aspect(
+            1200 if cfg.plots.enable else 800,
+            760 if cfg.plots.enable else 600,
+            0.60,
+            cfg.plots.enable,
+        )
+        overlay.marker_radius = cfg.viz.marker_radius
+        overlay.marker_outline = cfg.viz.marker_outline
+        overlay.marker_segments = cfg.viz.marker_segments
         det_idx_rd = custom_ops.TrailingIdxColumnsOp(self, name="det_idx_rd_slice")
 
         input_specs: list[HolovizOp.InputSpec] = []
         input_specs.append(HolovizOp.InputSpec("rd_map", HolovizOp.InputType.COLOR_LUT))
         palette = cluster_palette()
-
-        def add_crosses(name: str, color: list[float]) -> None:
-            spec = HolovizOp.InputSpec(name, HolovizOp.InputType.CROSSES)
-            spec.color = color
-            spec.line_width = 2.0
-            spec.priority = 1
-            input_specs.append(spec)
-
-        for c in range(K_NUM_CLUSTER_COLORS):
-            add_crosses(cluster_layer_name(c), palette[c])
-        add_crosses(K_NOISE_LAYER_NAME, [0.6, 0.6, 0.6, 1.0])
+        input_specs.extend(detection_layer_specs(palette))
 
         plot: RollingPlotOp | None = None
         boresight: BoresightViewOp | None = None
@@ -327,10 +331,15 @@ class FmcwDenseSimoApp(Application):
         self.add_flow(detections, det_idx_rd, {("detection_idx", "idx")})
         self.add_flow(det_idx_rd, overlay, {("idx", "detection_idx")})
         self.add_flow(ch_slice, overlay, {("rd_map", "rd_maps")})
-        # Cluster labels color the crosses when clustering runs; peak_only draws
-        # every peak in a single color (absent labels).
+        # Cluster labels color the dots when clustering runs; peak_only has no
+        # labels, so the overlay colors each peak by its row index instead.
         if not cfg.peak_only:
             self.add_flow(cluster, overlay, {("labels", "labels")})
+            if rep_idx_rd is not None:
+                # Color clusters by their representative RD cell (stable across
+                # frames) via the same sliced rep the plot uses; falls back to
+                # the DBSCAN label when plots are off (rep_idx_rd is None).
+                self.add_flow(rep_idx_rd, overlay, {("idx", "rep_idx")})
         self.add_flow(overlay, visualizer, {("overlay", "receivers")})
 
         # Plot/boresight read the per-cluster representative (clustered) or the
@@ -340,11 +349,19 @@ class FmcwDenseSimoApp(Application):
         if plot is not None and rep_idx_rd is not None and rep_aoa is not None:
             self.add_flow(rep_src, rep_idx_rd, {(rep_port, "idx")})
             self.add_flow(rep_idx_rd, plot, {("idx", "rep_idx")})
+            if not cfg.peak_only:
+                # labels flag clustered mode; the plot then colors each rep by
+                # its RD cell (matching the RD-map / boresight markers).
+                self.add_flow(cluster, plot, {("labels", "labels")})
             self.add_flow(range_op, plot, {("range_bins", "range_bins")})
             self.add_flow(doppler, plot, {("velocity_bins", "velocity_bins")})
             self.add_flow(plot, visualizer, {("plots", "receivers")})
         if boresight is not None and rep_aoa is not None:
             self.add_flow(rep_src, rep_aoa, {(rep_port, "detection_idx")})
+            if not cfg.peak_only and rep_idx_rd is not None:
+                # Match the overlay/plot: color each cluster by its rep RD cell.
+                # row_index (passed as labels) indexes rep_idx_rd row-for-row.
+                self.add_flow(rep_idx_rd, boresight, {("idx", "rep_idx")})
             self.add_flow(
                 rep_aoa,
                 boresight,

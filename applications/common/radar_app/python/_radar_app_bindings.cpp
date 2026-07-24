@@ -220,9 +220,13 @@ void bind_radar_app(py::module_& m) {
   py::class_<ClusterOverlayOp, PyClusterOverlayOp, Operator,
              std::shared_ptr<ClusterOverlayOp>>(
       m, "ClusterOverlayOp",
-      "Emit Holoviz CROSSES geometry layers for CFAR detections by cluster.")
+      "Emit Holoviz filled-disc geometry layers for CFAR detections by cluster.")
       .def(py::init<Fragment*, const py::args&, const std::string&>(),
            py::arg("fragment"), py::arg("name") = "cluster_overlay")
+      .def_readwrite("view_aspect", &ClusterOverlayOp::view_aspect)
+      .def_readwrite("marker_radius", &ClusterOverlayOp::marker_radius)
+      .def_readwrite("marker_outline", &ClusterOverlayOp::marker_outline)
+      .def_readwrite("marker_segments", &ClusterOverlayOp::marker_segments)
       .def("setup", &ClusterOverlayOp::setup, py::arg("spec"));
 
   py::class_<RollingPlotOp, PyRollingPlotOp, Operator,
@@ -259,7 +263,7 @@ void bind_radar_app(py::module_& m) {
   m.def("make_turbo_lut", &make_turbo_lut,
         "kLutSize-entry RGBA turbo colormap for HolovizOp color_lut.");
   m.def("cluster_palette", &cluster_palette,
-        "Categorical RGBA palette for cluster-overlay CROSSES layers.");
+        "Categorical RGBA palette for cluster-overlay disc layers.");
 }
 
 }  // namespace

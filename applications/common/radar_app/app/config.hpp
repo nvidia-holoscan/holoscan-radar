@@ -4,10 +4,10 @@
 // Shared parsing of the app-owned YAML sections for the FMCW example apps.
 //
 // IMPORTANT — the config boundary: these helpers parse ONLY app-owned sections
-// (waveform, run, cube, targets, noise_snr_db, plots, the visualize/headless/
-// skip_display_check toggles). The signal-processing / detection / clustering /
-// reduction operators take their parameters natively through Holoscan's
-// from_config() (backed by the YAML::convert<> specializations in
+// (waveform, run, cube, targets, noise_snr_db, plots, the visualization block +
+// headless/skip_display_check toggles). The signal-processing / detection /
+// clustering / reduction operators take their parameters natively through
+// Holoscan's from_config() (backed by the YAML::convert<> specializations in
 // radar_common), so their blocks are NEVER read here. An app may separately
 // read an operator block purely to *mirror* a value into a viz/geometry grid
 // (e.g. the beamscan angle grids for the boresight axes) — that stays in the
@@ -44,9 +44,17 @@ struct CommonRunConfig {
   // Wall-clock CadenceMeter (source inter-emit + DetectionReport e2e).
   bool meter_cadence{true};
   int64_t meter_log_every{0};  // 0 = warn-only + end summary; N = INFO every N
-  bool visualize{false};     // live Holoviz window (requires a GUI host)
+  bool visualize{false};     // live Holoviz window (requires a GUI host); set
+                             // from visualization.enabled (legacy: `visualize`)
   bool skip_display_check{false};  // skip the startup display probe
   bool headless{false};            // render offscreen (no window / display)
+  // Detection-marker geometry for the RD-map overlay (ClusterOverlayOp), as a
+  // fraction of the image extent. Parsed from the `visualization:` block.
+  struct VisualizationConfig {
+    float marker_radius{0.007F};    // filled-disc radius
+    float marker_outline{0.0022F};  // extra radius of the black outline disc
+    int64_t marker_segments{20};    // triangle-fan segments per disc
+  } viz;
   // CFAR peak-grouping mode. A native CFARDetectorOp parameter (set through the
   // cfar_detector YAML block via from_config); each app also reads the same key
   // as a read-only mirror of that operator block to gate its graph shape (drop
@@ -152,9 +160,37 @@ inline void parse_noise(const YAML::Node& root, Scene* scene) {
   }
 }
 
+// The `visualization:` block (enabled + detection-marker geometry) plus the
+// top-level skip_display_check / headless toggles. `visualization.enabled` is
+// the master live-Holoviz switch; when the block is absent it falls back to the
+// legacy top-level `visualize:` bool.
 inline void parse_viz_toggles(const YAML::Node& root, CommonRunConfig* cfg) {
-  if (const YAML::Node v = root["visualize"]; v && !v.IsNull()) {
-    cfg->visualize = v.as<bool>();
+  if (const YAML::Node v = root["visualization"]; v && !v.IsNull()) {
+    if (v["enabled"]) {
+      cfg->visualize = v["enabled"].as<bool>();
+    }
+    if (v["marker_radius"]) {
+      cfg->viz.marker_radius = v["marker_radius"].as<float>();
+    }
+    if (v["marker_outline"]) {
+      cfg->viz.marker_outline = v["marker_outline"].as<float>();
+    }
+    if (v["marker_segments"]) {
+      cfg->viz.marker_segments = v["marker_segments"].as<int64_t>();
+    }
+  } else if (const YAML::Node legacy = root["visualize"];
+             legacy && !legacy.IsNull()) {
+    cfg->visualize = legacy.as<bool>();  // legacy top-level toggle
+  }
+  if (cfg->viz.marker_radius <= 0.0F) {
+    throw std::runtime_error("visualization.marker_radius must be > 0");
+  }
+  if (cfg->viz.marker_outline < 0.0F) {
+    throw std::runtime_error("visualization.marker_outline must be >= 0");
+  }
+  if (cfg->viz.marker_segments < 3) {
+    throw std::runtime_error("visualization.marker_segments must be >= 3, got " +
+                             std::to_string(cfg->viz.marker_segments));
   }
   if (const YAML::Node v = root["skip_display_check"]; v && !v.IsNull()) {
     cfg->skip_display_check = v.as<bool>();

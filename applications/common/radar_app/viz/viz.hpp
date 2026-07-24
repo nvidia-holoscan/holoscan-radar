@@ -197,23 +197,71 @@ class RdMapToImageOp : public holoscan::Operator {
 };
 
 // Overlay geometry-layer names, shared by ClusterOverlayOp (as emitted tensor
-// keys) and compose() (as HolovizOp InputSpec names). Detections are split
-// across kNumClusterColors CROSSES layers, one per palette color; a detection
-// is assigned to layer (cluster_id % kNumClusterColors), so distinct clusters
-// in a frame get distinct colors (clusters beyond the palette wrap). Noise
-// points (label -1) go to their own muted layer.
-constexpr int kNumClusterColors = 8;
+// keys) and compose() (as HolovizOp InputSpec names). Detections are drawn as
+// filled discs split across kNumClusterColors colored layers, one per palette
+// color; a detection is assigned to layer (cluster_id % kNumClusterColors), so
+// distinct clusters in a frame get distinct colors (clusters beyond the palette
+// wrap). Noise points (label -1) go to their own muted layer. A single outline
+// layer holds a larger black disc under every marker, giving each dot a thin
+// black rim.
+constexpr int kNumClusterColors = 30;
 constexpr const char* kNoiseLayerName = "noise";
+constexpr const char* kDetectionOutlineName = "detection_outline";
 inline std::string cluster_layer_name(int color) {
   return "cluster_" + std::to_string(color);
 }
 
+// Per-cluster color bucket assigned by RANK, not a hash: sort the frame's
+// clusters by representative range bin (Doppler bin as tiebreak, then cluster
+// index for determinism) and hand out palette colors in that order. rep is the
+// (num_clusters, 2) representative cells, columns (doppler_bin, range_bin); the
+// returned vector is row-aligned with rep (bucket[label] = that cluster's
+// color). Two properties this buys over hashing the cell:
+//   - No collisions among coexisting clusters: the first num_clusters palette
+//     entries are used, and cluster_palette() front-loads maximally-distinct
+//     colors (golden-angle hues), so a handful of clusters read very differently.
+//   - Temporal stability: a cluster keeps its color while its range rank holds;
+//     the rank only shifts when clusters actually reorder in range or the set
+//     changes — not from the size-rank reshuffles that made the DBSCAN label
+//     flicker. (Not a tracker: a new nearer target or a range crossing does
+//     shift the colors below it.)
+// All viz ops call this on the same rep_idx, so a cluster shows the same color
+// on the RD map, the rolling plots, and the boresight panel.
+inline std::vector<int> rep_color_ranks(const std::vector<int64_t>& rep,
+                                        int64_t num_clusters) {
+  const size_t n = static_cast<size_t>(std::max<int64_t>(num_clusters, 0));
+  std::vector<int> order(n);
+  for (size_t i = 0; i < n; ++i) {
+    order[i] = static_cast<int>(i);
+  }
+  std::sort(order.begin(), order.end(), [&rep](int a, int b) {
+    const int64_t ra = rep[static_cast<size_t>(a) * 2 + 1];  // range
+    const int64_t rb = rep[static_cast<size_t>(b) * 2 + 1];
+    if (ra != rb) {
+      return ra < rb;
+    }
+    const int64_t da = rep[static_cast<size_t>(a) * 2 + 0];  // doppler tiebreak
+    const int64_t db = rep[static_cast<size_t>(b) * 2 + 0];
+    if (da != db) {
+      return da < db;
+    }
+    return a < b;  // index tiebreak → identical ordering in every op
+  });
+  std::vector<int> bucket(n);
+  for (size_t rank = 0; rank < n; ++rank) {
+    bucket[static_cast<size_t>(order[rank])] =
+        static_cast<int>(rank % kNumClusterColors);
+  }
+  return bucket;
+}
+
 // Turns the CFAR detections and their DBSCAN cluster labels into Holoviz
-// CROSSES geometry layers drawn over the range-Doppler image. Consumes the
+// TRIANGLES geometry layers drawn over the range-Doppler image. Consumes the
 // detector's detection_idx (the (doppler_bin, range_bin) cells), the matching
 // per-point cluster labels, and the RD map (for its dimensions), and emits one
-// cross per detection at the matching image location, bucketed by cluster
-// color. Holoviz geometry is in normalized [0, 1] coordinates: x runs
+// filled disc (a triangle fan) per detection at the matching image location,
+// bucketed by cluster color, plus a larger black disc per detection in a shared
+// outline layer. Holoviz geometry is in normalized [0, 1] coordinates: x runs
 // left→right across the range axis, y top→bottom across the Doppler axis — the
 // same layout RdMapToImageOp gives the image, so the crosses land on their
 // cells. labels are row-aligned with detection_idx (FeatureAssemblyOp keeps
@@ -223,15 +271,31 @@ class ClusterOverlayOp : public holoscan::Operator {
   HOLOSCAN_OPERATOR_FORWARD_ARGS(ClusterOverlayOp)
   ClusterOverlayOp() = default;
 
-  // Half-size of each cross, as a fraction of the image extent.
-  static constexpr float kCrossSize = 0.02F;
+  // Marker geometry, as a fraction of the image extent: filled-disc radius, the
+  // extra radius of the black outline disc drawn beneath it, and the triangle-
+  // fan segment count. Set by compose() from the visualization config; the
+  // defaults are kept small so nearby detections stay distinct.
+  float marker_radius{0.007F};
+  float marker_outline{0.0022F};
+  int64_t marker_segments{20};
+
+  // Aspect ratio (width / height, in pixels) of the RD-map sub-view. The disc x
+  // radius is divided by it so the markers render round despite the view
+  // stretching normalized coordinates to a non-square rectangle. Set by
+  // compose() (see rd_map_view_aspect); 1.0 leaves the discs uncorrected.
+  float view_aspect{1.0F};
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("detection_idx");
-    // Optional: DBSCAN cluster ids (row-aligned with detection_idx) bucket the
-    // crosses by color. Absent (peak_only, no clustering) → all detections draw
-    // in a single color.
+    // Optional: DBSCAN cluster ids (row-aligned with detection_idx). Present →
+    // clustered mode: each detection colors by its cluster. Absent → peak_only:
+    // each detection colors by its own row index.
     spec.input<holoscan::TensorMap>("labels")
+        .condition(holoscan::ConditionType::kNone);
+    // Optional: per-cluster representative RD cell (num_clusters, 2), row c =
+    // cluster label c. When present with labels, clusters color by their rep
+    // cell (stable across frames) instead of the size-rank label.
+    spec.input<holoscan::TensorMap>("rep_idx")
         .condition(holoscan::ConditionType::kNone);
     spec.input<holoscan::TensorMap>("rd_maps");
     spec.output<holoscan::TensorMap>("overlay");
@@ -244,6 +308,7 @@ class ClusterOverlayOp : public holoscan::Operator {
     const std::string who = "ClusterOverlayOp";
     auto idx = radar::receive_single(op_input, "detection_idx", who);
     auto labels = radar::receive_optional(op_input, "labels", who);
+    auto rep_idx = radar::receive_optional(op_input, "rep_idx", who);
     auto rd_map = radar::receive_single(op_input, "rd_maps", who);
     const bool have_labels = static_cast<bool>(labels);
 
@@ -304,10 +369,43 @@ class ClusterOverlayOp : public holoscan::Operator {
       }
     }
 
-    // Bucket detections into the palette layers by cluster id; the last bucket
-    // is noise. Each entry is a cross (x, y, size) in normalized coordinates,
-    // cell centers at (bin + 0.5) / count.
-    std::vector<std::vector<float>> buckets(kNumClusterColors + 1);
+    // Optional per-cluster representative cells (num_clusters, 2): row = label.
+    // When present, clusters color by their range rank (rep_color_ranks) —
+    // stable and collision-free — instead of the flickery size-rank label.
+    std::vector<int64_t> rep;
+    int64_t num_rep = 0;
+    if (rep_idx) {
+      const auto rep_shape = rep_idx->shape();
+      if (rep_shape.size() != 2 || rep_shape[1] != 2) {
+        throw std::runtime_error(
+            "ClusterOverlayOp: rep_idx must be (num_clusters, 2)");
+      }
+      num_rep = rep_shape[0];
+      rep.resize(static_cast<size_t>(num_rep * 2));
+      if (static_cast<size_t>(rep_idx->nbytes()) !=
+          sizeof(int64_t) * rep.size()) {
+        throw std::runtime_error("ClusterOverlayOp: rep_idx byte size mismatch");
+      }
+      if (num_rep > 0 &&
+          cudaMemcpy(rep.data(), rep_idx->data(), sizeof(int64_t) * rep.size(),
+                     cudaMemcpyDeviceToHost) != cudaSuccess) {
+        throw std::runtime_error("ClusterOverlayOp: rep_idx D2H copy failed");
+      }
+    }
+    const bool have_rep = rep_idx && num_rep > 0;
+    // Rank clusters by their rep cell → one color per cluster (see
+    // rep_color_ranks); bucket[label] is that cluster's palette index.
+    const std::vector<int> ranks =
+        have_rep ? rep_color_ranks(rep, num_rep) : std::vector<int>();
+
+    // Bucket detection centers into the palette layers by cluster id; the last
+    // bucket is noise. Each center is (x, y) in normalized coordinates, cell
+    // centers at (bin + 0.5) / count. outline_centers backs the black outline
+    // layer, one larger disc under every marker.
+    std::vector<std::vector<std::array<float, 2>>> centers(kNumClusterColors +
+                                                           1);
+    std::vector<std::array<float, 2>> outline_centers;
+    outline_centers.reserve(static_cast<size_t>(num_points));
     for (int64_t i = 0; i < num_points; ++i) {
       const int64_t doppler_bin = bins[static_cast<size_t>(i * 2 + 0)];
       const int64_t range_bin = bins[static_cast<size_t>(i * 2 + 1)];
@@ -316,39 +414,89 @@ class ClusterOverlayOp : public holoscan::Operator {
         throw std::runtime_error(
             "ClusterOverlayOp: detection_idx out of map bounds");
       }
-      // No labels (peak_only): every detection draws in cluster color 0.
-      const int64_t label = have_labels ? lab[static_cast<size_t>(i)] : 0;
-      const size_t bucket =
-          label >= 0 ? static_cast<size_t>(label % kNumClusterColors)
-                     : static_cast<size_t>(kNumClusterColors);
-      buckets[bucket].push_back((static_cast<float>(range_bin) + 0.5F) /
-                                static_cast<float>(num_range));
-      buckets[bucket].push_back((static_cast<float>(doppler_bin) + 0.5F) /
-                                static_cast<float>(num_doppler));
-      buckets[bucket].push_back(kCrossSize);
+      // Clustered (labels present): color by the cluster's range rank when rep
+      // cells are available (stable, collision-free), else the size-rank label;
+      // noise (-1) → gray. peak_only (no labels): color each detection by its
+      // row index so individual peaks stay distinct and match the side panels.
+      size_t bucket;
+      if (have_labels) {
+        const int64_t label = lab[static_cast<size_t>(i)];
+        if (label < 0) {
+          bucket = static_cast<size_t>(kNumClusterColors);
+        } else if (have_rep && label < num_rep) {
+          bucket = static_cast<size_t>(ranks[static_cast<size_t>(label)]);
+        } else {
+          bucket = static_cast<size_t>(label % kNumClusterColors);
+        }
+      } else {
+        bucket = static_cast<size_t>(i % kNumClusterColors);
+      }
+      const std::array<float, 2> center = {
+          (static_cast<float>(range_bin) + 0.5F) /
+              static_cast<float>(num_range),
+          (static_cast<float>(doppler_bin) + 0.5F) /
+              static_cast<float>(num_doppler)};
+      centers[bucket].push_back(center);
+      outline_centers.push_back(center);
     }
 
-    // Emit every layer each tick (0-row when empty) so the fixed HolovizOp
-    // InputSpec list always has its matching tensor.
-    constexpr int64_t kCrossComponents = 3;
+    // Precompute the unit-disc rim once; each marker is a triangle fan of
+    // marker_segments triangles (center + two adjacent rim points). The x radius
+    // is divided by the view aspect so the discs stay round on screen.
+    const int segments = marker_segments > 2 ? static_cast<int>(marker_segments)
+                                             : 3;
+    std::vector<float> cos_t(static_cast<size_t>(segments) + 1);
+    std::vector<float> sin_t(static_cast<size_t>(segments) + 1);
+    for (int k = 0; k <= segments; ++k) {
+      const float a = 2.0F * static_cast<float>(M_PI) *
+                      static_cast<float>(k) / static_cast<float>(segments);
+      cos_t[static_cast<size_t>(k)] = std::cos(a);
+      sin_t[static_cast<size_t>(k)] = std::sin(a);
+    }
+    const float aspect = view_aspect > 1e-6F ? view_aspect : 1.0F;
+
+    // Emit every layer each tick (0-vertex when empty) so the fixed HolovizOp
+    // InputSpec list always has its matching tensor. Holoviz TRIANGLES want a
+    // (3 * num_triangles, 2) buffer of consecutive vertices.
     holoscan::TensorMap out;
-    const auto emit_crosses = [&](const std::string& name,
-                                  const std::vector<float>& data) {
-      const int64_t n =
-          static_cast<int64_t>(data.size()) / kCrossComponents;
-      auto tensor = radar::make_device_tensor({n, kCrossComponents},
-                                              radar::real_dtype<float>());
-      if (n > 0 && cudaMemcpy(tensor->data(), data.data(),
-                              sizeof(float) * data.size(),
-                              cudaMemcpyHostToDevice) != cudaSuccess) {
-        throw std::runtime_error("ClusterOverlayOp: H2D upload failed");
-      }
-      out.insert({name, tensor});
-    };
+    const auto emit_discs =
+        [&](const std::string& name,
+            const std::vector<std::array<float, 2>>& pts, float radius) {
+          const float rx = radius / aspect;
+          const float ry = radius;
+          std::vector<float> data;
+          data.reserve(pts.size() * static_cast<size_t>(segments) * 6);
+          for (const auto& p : pts) {
+            for (int k = 0; k < segments; ++k) {
+              const size_t k0 = static_cast<size_t>(k);
+              const size_t k1 = static_cast<size_t>(k + 1);
+              data.push_back(p[0]);
+              data.push_back(p[1]);
+              data.push_back(p[0] + rx * cos_t[k0]);
+              data.push_back(p[1] + ry * sin_t[k0]);
+              data.push_back(p[0] + rx * cos_t[k1]);
+              data.push_back(p[1] + ry * sin_t[k1]);
+            }
+          }
+          const int64_t nverts = static_cast<int64_t>(data.size() / 2);
+          auto tensor = radar::make_device_tensor({nverts, 2},
+                                                  radar::real_dtype<float>());
+          if (nverts > 0 && cudaMemcpy(tensor->data(), data.data(),
+                                       sizeof(float) * data.size(),
+                                       cudaMemcpyHostToDevice) != cudaSuccess) {
+            throw std::runtime_error("ClusterOverlayOp: H2D upload failed");
+          }
+          out.insert({name, tensor});
+        };
+
+    // Outline first (larger black disc under every marker), then one colored
+    // layer per cluster bucket drawn on top.
+    emit_discs(kDetectionOutlineName, outline_centers,
+               marker_radius + marker_outline);
     for (int c = 0; c <= kNumClusterColors; ++c) {
-      emit_crosses(
+      emit_discs(
           c < kNumClusterColors ? cluster_layer_name(c) : kNoiseLayerName,
-          buckets[static_cast<size_t>(c)]);
+          centers[static_cast<size_t>(c)], marker_radius);
     }
     op_output.emit(out, "overlay");
   }
@@ -379,20 +527,38 @@ inline std::vector<std::vector<float>> make_turbo_lut() {
   return lut;
 }
 
-// Categorical RGBA palette for the cluster-overlay CROSSES layers, one entry
-// per color (index i colors layer cluster_i). Chosen to read against the
-// turbo image; size must equal kNumClusterColors.
+// Categorical RGBA palette for the cluster-overlay disc layers, one entry per
+// color (index i colors layer cluster_i); size == kNumClusterColors by
+// construction. Generated rather than hand-listed so it scales to any color
+// count: hues step by the golden angle (maximally spread on the wheel even for
+// many entries) and saturation/value alternate across two levels each to keep
+// hue-adjacent colors distinct. High value keeps every dot bright against the
+// turbo image (and each carries a black outline on the RD map).
 inline std::vector<std::vector<float>> cluster_palette() {
-  return {
-      {1.0F, 0.0F, 1.0F, 1.0F},  // magenta
-      {1.0F, 1.0F, 1.0F, 1.0F},  // white
-      {0.0F, 1.0F, 1.0F, 1.0F},  // cyan
-      {1.0F, 0.5F, 0.0F, 1.0F},  // orange
-      {0.6F, 0.2F, 1.0F, 1.0F},  // violet
-      {1.0F, 0.9F, 0.1F, 1.0F},  // yellow
-      {1.0F, 0.3F, 0.6F, 1.0F},  // pink
-      {0.2F, 1.0F, 0.4F, 1.0F},  // green
-  };
+  constexpr float kGolden = 0.61803398875F;  // golden-ratio conjugate
+  std::vector<std::vector<float>> lut;
+  lut.reserve(static_cast<size_t>(kNumClusterColors));
+  for (int i = 0; i < kNumClusterColors; ++i) {
+    const float h6 = std::fmod(static_cast<float>(i) * kGolden, 1.0F) * 6.0F;
+    const float s = 0.70F + 0.30F * static_cast<float>(i % 2);        // .70/1.0
+    const float v = 1.0F - 0.25F * static_cast<float>((i / 2) % 2);   // 1.0/.75
+    const int hi = static_cast<int>(h6) % 6;
+    const float f = h6 - std::floor(h6);
+    const float p = v * (1.0F - s);
+    const float q = v * (1.0F - s * f);
+    const float t = v * (1.0F - s * (1.0F - f));
+    float r = v, g = t, b = p;  // hi == 0
+    switch (hi) {
+      case 1: r = q; g = v; b = p; break;
+      case 2: r = p; g = v; b = t; break;
+      case 3: r = p; g = q; b = v; break;
+      case 4: r = t; g = p; b = v; break;
+      case 5: r = v; g = p; b = q; break;
+      default: break;
+    }
+    lut.push_back({r, g, b, 1.0F});
+  }
+  return lut;
 }
 
 // ---- Shared 2D raster plotting helpers (RGBA8 byte canvas) --------------
@@ -403,12 +569,14 @@ inline std::vector<std::vector<float>> cluster_palette() {
 // top-left.
 constexpr int kPlotFontScale = 2;
 
-// RGBA byte color for a cluster bucket (palette color, or gray for noise).
+// RGBA byte color for a cluster bucket (palette color, or gray for noise). The
+// palette is built once (static local) since this is called per marker.
 inline std::array<uint8_t, 3> plot_bucket_color(int bucket) {
+  static const std::vector<std::vector<float>> pal = cluster_palette();
   if (bucket >= kNumClusterColors) {
     return {150, 150, 150};  // noise
   }
-  const auto c = cluster_palette()[static_cast<size_t>(bucket)];
+  const auto& c = pal[static_cast<size_t>(bucket)];
   return {static_cast<uint8_t>(c[0] * 255.0F),
           static_cast<uint8_t>(c[1] * 255.0F),
           static_cast<uint8_t>(c[2] * 255.0F)};
@@ -425,6 +593,33 @@ inline void plot_put_px(std::vector<uint8_t>* img, int64_t w, int64_t h,
   (*img)[o + 1] = c[1];
   (*img)[o + 2] = c[2];
   (*img)[o + 3] = 255;
+}
+
+// Filled round marker mirroring the RD-map detection dots in the software-
+// rasterized side panels. With `outline` it also draws a black disc of radius
+// (radius + kPlotMarkerOutline) under the colored fill, giving a uniform black
+// rim (used where markers don't overlap, e.g. the boresight scatter). The
+// rolling plots draw a marker per frame, so their dots overlap into a trail —
+// they pass outline=false to keep the band clean rather than speckled.
+constexpr int kPlotMarkerRadius = 3;
+constexpr int kPlotMarkerOutline = 1;
+inline void plot_draw_dot(std::vector<uint8_t>* img, int64_t w, int64_t h,
+                          int64_t cx, int64_t cy,
+                          const std::array<uint8_t, 3>& col,
+                          bool outline = true) {
+  constexpr std::array<uint8_t, 3> kBlack = {0, 0, 0};
+  const int r = kPlotMarkerRadius;
+  const int outer = outline ? r + kPlotMarkerOutline : r;
+  for (int dy = -outer; dy <= outer; ++dy) {
+    for (int dx = -outer; dx <= outer; ++dx) {
+      const int rr = dx * dx + dy * dy;
+      if (rr <= r * r) {
+        plot_put_px(img, w, h, cx + dx, cy + dy, col);
+      } else if (outline && rr <= outer * outer) {
+        plot_put_px(img, w, h, cx + dx, cy + dy, kBlack);
+      }
+    }
+  }
 }
 
 // Minimal 3x5 bitmap font for axis tick labels (digits, '-', '.'); each
@@ -514,14 +709,18 @@ constexpr const char* kVelocityTitleLayer = "velocity_title";
 // window of the last `window` frames and, each tick, rasterizes two RGBA
 // images (range vs time, velocity vs time): each cluster's centroid — the
 // DetectionReductionOp representative cell (`rep_idx`) resolved to physical
-// units — is a '+' marker colored by cluster. The Y axes are fixed to the
+// units — is a round dot colored by cluster. The Y axes are fixed to the
 // physical extents of the range / velocity bins (so absolute level is a stable
 // reference); X is the frame window, newest at the right. HolovizOp places the
 // images in right-side sub-viewports (see compose()). Individual detections
 // are shown on the RD map (ClusterOverlayOp), not here.
 //
 // In:  rep_idx       — int64, (num_clusters, 2): representative cell per
-//                     cluster (doppler_bin, range_bin); the '+' markers.
+//                     cluster (doppler_bin, range_bin); the dot markers.
+// In:  labels        — int64, (num_points,), optional: presence flags clustered
+//                     mode (reps color by their RD cell, matching the RD-map /
+//                     boresight markers); absent → peak_only (color by row
+//                     index). The label values themselves are not read.
 // In:  range_bins    — float32, (num_range,): range plot Y extent + rep lookup.
 // In:  velocity_bins — float32, (num_doppler,): velocity Y extent + rep lookup.
 // Out: range_plot / velocity_plot — uint8 RGBA (H, W, 4) images.
@@ -547,6 +746,12 @@ class RollingPlotOp : public holoscan::Operator {
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("rep_idx");
+    // Optional: per-detection DBSCAN labels. Only their presence is used, as a
+    // mode flag: present → clustered (each rep's trace color keyed off its RD
+    // cell, matching the RD-map / boresight markers); absent → peak_only (color
+    // by rep_idx row index).
+    spec.input<holoscan::TensorMap>("labels")
+        .condition(holoscan::ConditionType::kNone);
     spec.input<holoscan::TensorMap>("range_bins");
     spec.input<holoscan::TensorMap>("velocity_bins");
     spec.output<holoscan::TensorMap>("plots");
@@ -558,6 +763,7 @@ class RollingPlotOp : public holoscan::Operator {
       override {
     const std::string who = "RollingPlotOp";
     auto rep_idx = radar::receive_single(op_input, "rep_idx", who);
+    auto labels = radar::receive_optional(op_input, "labels", who);
     auto range_bins = radar::receive_single(op_input, "range_bins", who);
     auto velocity_bins = radar::receive_single(op_input, "velocity_bins", who);
 
@@ -623,7 +829,16 @@ class RollingPlotOp : public holoscan::Operator {
       throw std::runtime_error("RollingPlotOp: rep_idx D2H failed");
     }
 
-    // Append each cluster's representative cell (the '+' marker, from rep_idx
+    // Clustered (labels present): color each rep by its cluster's range rank
+    // (rep_color_ranks) — the same stable, collision-free key ClusterOverlayOp /
+    // BoresightViewOp use, keeping all three panels in sync. peak_only (no
+    // labels): the "reps" are the raw peaks, so color by row index like the
+    // overlay. labels are only a mode flag here; their values are not read.
+    const bool have_labels = static_cast<bool>(labels);
+    const std::vector<int> ranks =
+        have_labels ? rep_color_ranks(rep, num_clusters) : std::vector<int>();
+
+    // Append each cluster's representative cell (the dot marker, from rep_idx
     // mapped to physical units), then evict frames older than the window.
     for (int64_t c = 0; c < num_clusters; ++c) {
       const int64_t dd = rep[static_cast<size_t>(c * 2 + 0)];
@@ -632,9 +847,10 @@ class RollingPlotOp : public holoscan::Operator {
           rr < 0 || rr >= static_cast<int64_t>(range_axis_.size())) {
         throw std::runtime_error("RollingPlotOp: rep_idx out of axis bounds");
       }
+      const int bucket = have_labels ? ranks[static_cast<size_t>(c)]
+                                     : static_cast<int>(c % kNumClusterColors);
       cen_hist_.push_back({tick_, range_axis_[static_cast<size_t>(rr)],
-                           velocity_axis_[static_cast<size_t>(dd)],
-                           static_cast<int>(c % kNumClusterColors)});
+                           velocity_axis_[static_cast<size_t>(dd)], bucket});
     }
     const int64_t oldest = tick_ - window + 1;
     while (!cen_hist_.empty() && cen_hist_.front().t < oldest) {
@@ -755,15 +971,14 @@ class RollingPlotOp : public holoscan::Operator {
             static_cast<int64_t>(yf * static_cast<float>(kBottom - kTop));
     };
 
-    // Cluster centroids: a '+' marker colored by cluster.
+    // Cluster centroids: a round dot per sample, colored by cluster — the same
+    // marker style as the RD-map overlay. No outline: samples are one-per-frame
+    // and overlap into a trail, so the rim would speckle the band.
     for (const Sample& s : cen_hist_) {
       int64_t px = 0, py = 0;
       to_px(s.t, use_range ? s.r : s.v, &px, &py);
-      const auto col = plot_bucket_color(s.bucket);
-      for (int64_t d = -4; d <= 4; ++d) {
-        plot_put_px(&img, kW, kH, px + d, py, col);
-        plot_put_px(&img, kW, kH, px, py + d, col);
-      }
+      plot_draw_dot(&img, kW, kH, px, py, plot_bucket_color(s.bucket),
+                    /*outline=*/false);
     }
 
     auto tensor = radar::make_device_tensor({kH, kW, 4},
@@ -815,9 +1030,15 @@ class BoresightViewOp : public holoscan::Operator {
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("aoa_estimates");
-    // Optional: cluster ids (row-aligned with aoa_estimates) color the markers.
-    // Absent (peak_only, no clustering) → all markers draw in a single color.
+    // Optional: cluster ids (row-aligned with aoa_estimates). Present →
+    // clustered mode: markers color by their cluster. Absent → peak_only: each
+    // marker colors by its own row index.
     spec.input<holoscan::TensorMap>("labels")
+        .condition(holoscan::ConditionType::kNone);
+    // Optional: per-cluster representative RD cell (num_clusters, 2), row c =
+    // cluster label c. When present with labels, clusters color by their rep
+    // cell (stable across frames) — the same key the RD map / rolling plots use.
+    spec.input<holoscan::TensorMap>("rep_idx")
         .condition(holoscan::ConditionType::kNone);
     spec.output<holoscan::TensorMap>("plot");
   }
@@ -829,6 +1050,7 @@ class BoresightViewOp : public holoscan::Operator {
     const std::string who = "BoresightViewOp";
     auto aoa = radar::receive_single(op_input, "aoa_estimates", who);
     auto labels = radar::receive_optional(op_input, "labels", who);
+    auto rep_idx = radar::receive_optional(op_input, "rep_idx", who);
     const bool have_labels = static_cast<bool>(labels);
 
     const auto ashape = aoa->shape();
@@ -847,7 +1069,6 @@ class BoresightViewOp : public holoscan::Operator {
     }
 
     std::vector<float> ang(static_cast<size_t>(n * 2));
-    // Zero-filled: with no labels every marker maps to cluster color 0.
     std::vector<int64_t> lab(static_cast<size_t>(n));
     if (static_cast<size_t>(aoa->nbytes()) != sizeof(float) * ang.size()) {
       throw std::runtime_error(
@@ -856,6 +1077,22 @@ class BoresightViewOp : public holoscan::Operator {
     if (have_labels &&
         static_cast<size_t>(labels->nbytes()) != sizeof(int64_t) * lab.size()) {
       throw std::runtime_error("BoresightViewOp: labels byte size mismatch");
+    }
+    // Optional per-cluster rep cells (num_clusters, 2): row = label.
+    std::vector<int64_t> rep;
+    int64_t num_rep = 0;
+    if (rep_idx) {
+      const auto rep_shape = rep_idx->shape();
+      if (rep_shape.size() != 2 || rep_shape[1] != 2) {
+        throw std::runtime_error(
+            "BoresightViewOp: rep_idx must be (num_clusters, 2)");
+      }
+      num_rep = rep_shape[0];
+      rep.resize(static_cast<size_t>(num_rep * 2));
+      if (static_cast<size_t>(rep_idx->nbytes()) !=
+          sizeof(int64_t) * rep.size()) {
+        throw std::runtime_error("BoresightViewOp: rep_idx byte size mismatch");
+      }
     }
     if (cudaDeviceSynchronize() != cudaSuccess) {
       throw std::runtime_error("BoresightViewOp: device synchronize failed");
@@ -873,16 +1110,46 @@ class BoresightViewOp : public holoscan::Operator {
         throw std::runtime_error("BoresightViewOp: labels D2H failed");
       }
     }
+    if (num_rep > 0 &&
+        cudaMemcpy(rep.data(), rep_idx->data(), sizeof(int64_t) * rep.size(),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+      throw std::runtime_error("BoresightViewOp: rep_idx D2H failed");
+    }
+    const bool have_rep = rep_idx && num_rep > 0;
+    const std::vector<int> ranks =
+        have_rep ? rep_color_ranks(rep, num_rep) : std::vector<int>();
+
+    // Per-detection color bucket. Clustered (labels present): color by the
+    // cluster's range rank when rep cells are available (stable, collision-
+    // free), else the size-rank label; noise (-1) → gray. peak_only (no labels):
+    // color by row index so peaks stay distinct — matching the RD map / plots.
+    std::vector<int> bucket(static_cast<size_t>(n));
+    for (int64_t i = 0; i < n; ++i) {
+      int b;
+      if (have_labels) {
+        const int64_t label = lab[static_cast<size_t>(i)];
+        if (label < 0) {
+          b = kNumClusterColors;
+        } else if (have_rep && label < num_rep) {
+          b = ranks[static_cast<size_t>(label)];
+        } else {
+          b = static_cast<int>(label % kNumClusterColors);
+        }
+      } else {
+        b = static_cast<int>(i % kNumClusterColors);
+      }
+      bucket[static_cast<size_t>(i)] = b;
+    }
 
     holoscan::TensorMap out;
-    out.insert({kBoresightPlotLayer, render(ang, lab, n)});
+    out.insert({kBoresightPlotLayer, render(ang, bucket, n)});
     out.insert({kBoresightTitleLayer, plot_title_pos()});
     op_output.emit(out, "plot");
   }
 
  private:
   std::shared_ptr<holoscan::Tensor> render(const std::vector<float>& ang,
-                                           const std::vector<int64_t>& lab,
+                                           const std::vector<int>& bucket,
                                            int64_t n) {
     constexpr std::array<uint8_t, 3> kBg = {20, 20, 28};
     constexpr std::array<uint8_t, 3> kGrid = {80, 80, 95};
@@ -943,7 +1210,8 @@ class BoresightViewOp : public holoscan::Operator {
                      kLabel);
     }
 
-    // One '+' marker per detection at its (az, el), colored by cluster.
+    // One round dot per detection at its (az, el), colored by cluster — the
+    // same marker style as the RD-map overlay.
     for (int64_t i = 0; i < n; ++i) {
       const float az_deg = ang[static_cast<size_t>(i * 2 + 0)] *
                            static_cast<float>(kRad2Deg);
@@ -957,15 +1225,8 @@ class BoresightViewOp : public holoscan::Operator {
       const int64_t py =
           kBottom -
           static_cast<int64_t>(yf * static_cast<float>(kBottom - kTop));
-      const int64_t label = lab[static_cast<size_t>(i)];
-      const int bucket = label >= 0
-                             ? static_cast<int>(label % kNumClusterColors)
-                             : kNumClusterColors;
-      const auto col = plot_bucket_color(bucket);
-      for (int64_t d = -4; d <= 4; ++d) {
-        plot_put_px(&img, kW, kH, px + d, py, col);
-        plot_put_px(&img, kW, kH, px, py + d, col);
-      }
+      plot_draw_dot(&img, kW, kH, px, py,
+                    plot_bucket_color(bucket[static_cast<size_t>(i)]));
     }
 
     auto tensor =

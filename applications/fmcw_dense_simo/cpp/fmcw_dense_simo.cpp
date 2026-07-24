@@ -222,6 +222,10 @@ class FmcwDenseSimoApp : public holoscan::Application {
       layout.right_panels = range_velocity_boresight_panels();
     }
     auto visualizer = make_rd_holoviz_op(this, "holoviz", layout);
+    overlay->view_aspect = rd_map_view_aspect(layout);
+    overlay->marker_radius = cfg.viz.marker_radius;
+    overlay->marker_outline = cfg.viz.marker_outline;
+    overlay->marker_segments = cfg.viz.marker_segments;
 
     std::shared_ptr<RollingPlotOp> plot;
     std::shared_ptr<BoresightViewOp> boresight;
@@ -253,10 +257,16 @@ class FmcwDenseSimoApp : public holoscan::Application {
     add_flow(detections, det_idx_rd, {{"detection_idx", "idx"}});
     add_flow(det_idx_rd, overlay, {{"idx", "detection_idx"}});
     add_flow(ch_slice, overlay, {{"rd_map", "rd_maps"}});
-    // Cluster labels color the crosses when clustering runs; peak_only draws
-    // every peak in a single color (absent labels).
+    // Cluster labels color the dots when clustering runs; peak_only has no
+    // labels, so the overlay colors each peak by its row index instead.
     if (!cfg.peak_only) {
       add_flow(cluster, overlay, {{"labels", "labels"}});
+      // Color clusters by their representative RD cell (stable across frames)
+      // via the same sliced rep the plot uses; without plots rep_idx_rd is null
+      // and the overlay falls back to the DBSCAN label.
+      if (rep_idx_rd) {
+        add_flow(rep_idx_rd, overlay, {{"idx", "rep_idx"}});
+      }
     }
     add_flow(overlay, visualizer, {{"overlay", "receivers"}});
     if (plot) {
@@ -264,6 +274,9 @@ class FmcwDenseSimoApp : public holoscan::Application {
       // (peak_only); both carry the 4-col idx sliced to (doppler, range).
       if (!cfg.peak_only) {
         add_flow(reduction, rep_idx_rd, {{"rep_idx", "idx"}});
+        // labels flag clustered mode; the plot then colors each rep by its RD
+        // cell (matching the RD-map / boresight markers).
+        add_flow(cluster, plot, {{"labels", "labels"}});
       } else {
         add_flow(detections, rep_idx_rd, {{"detection_idx", "idx"}});
       }
@@ -278,6 +291,9 @@ class FmcwDenseSimoApp : public holoscan::Application {
       // the raw per-detection cube peaks (row_index is then a per-detection id).
       if (!cfg.peak_only) {
         add_flow(reduction, rep_aoa, {{"rep_idx", "detection_idx"}});
+        // Match the overlay/plot: color each cluster by its representative RD
+        // cell. row_index (passed as labels) indexes rep_idx_rd row-for-row.
+        add_flow(rep_idx_rd, boresight, {{"idx", "rep_idx"}});
       } else {
         add_flow(detections, rep_aoa, {{"detection_idx", "detection_idx"}});
       }

@@ -67,7 +67,11 @@ from holoscan.radar import (
 import cupy as cp  # noqa: E402,F401
 
 import config  # noqa: E402 (colocated, script-local - see config.py docstring)
-from common.python.demo_config import cluster_layer_name, make_view  # noqa: E402
+from common.python.demo_config import (  # noqa: E402
+    detection_layer_specs,
+    make_view,
+    rd_map_view_aspect,
+)
 from common.python.driver import run_fmcw_app  # noqa: E402
 from common.python.ops import SimAdcSourceOp  # noqa: E402
 
@@ -75,7 +79,7 @@ from common.python.ops import SimAdcSourceOp  # noqa: E402
 
 install_matx_cache_atexit()
 
-K_NUM_CLUSTER_COLORS = 8
+K_NUM_CLUSTER_COLORS = 30
 K_NOISE_LAYER_NAME = "noise"
 K_RANGE_PLOT_LAYER = "range_plot"
 K_VELOCITY_PLOT_LAYER = "velocity_plot"
@@ -177,6 +181,12 @@ class FmcwSisoApp(Application):
         if cfg.visualize:
             to_image = RdMapToImageOp(self, name="rd_map_to_image")
             overlay = ClusterOverlayOp(self, name="cluster_overlay")
+            overlay.view_aspect = rd_map_view_aspect(
+                1200 if cfg.plots.enable else 800, 600, 0.60, cfg.plots.enable
+            )
+            overlay.marker_radius = cfg.viz.marker_radius
+            overlay.marker_outline = cfg.viz.marker_outline
+            overlay.marker_segments = cfg.viz.marker_segments
 
             input_specs: list[HolovizOp.InputSpec] = []
             rd_spec = HolovizOp.InputSpec("rd_map", HolovizOp.InputType.COLOR_LUT)
@@ -188,16 +198,7 @@ class FmcwSisoApp(Application):
                     "fmcw_siso: cluster palette size must equal " f"{K_NUM_CLUSTER_COLORS}"
                 )
 
-            def add_crosses(name: str, color: list[float]) -> None:
-                spec = HolovizOp.InputSpec(name, HolovizOp.InputType.CROSSES)
-                spec.color = color
-                spec.line_width = 2.0
-                spec.priority = 1
-                input_specs.append(spec)
-
-            for c in range(K_NUM_CLUSTER_COLORS):
-                add_crosses(cluster_layer_name(c), palette[c])
-            add_crosses(K_NOISE_LAYER_NAME, [0.6, 0.6, 0.6, 1.0])
+            input_specs.extend(detection_layer_specs(palette))
 
             plot: RollingPlotOp | None = None
             if cfg.plots.enable:
@@ -249,13 +250,16 @@ class FmcwSisoApp(Application):
 
             self.add_flow(doppler, to_image, {("rd_maps", "rd_maps")})
             self.add_flow(to_image, visualizer, {("rd_image", "receivers")})
-            # Cluster labels color the crosses when clustering runs; in peak_only
-            # mode there are no labels, so the overlay draws every CFAR peak in a
-            # single color (ClusterOverlayOp treats absent labels that way).
+            # Cluster labels color the dots when clustering runs; in peak_only
+            # mode there are no labels, so the overlay colors each CFAR peak by
+            # its row index (ClusterOverlayOp treats absent labels that way).
             self.add_flow(cfar, overlay, {("detection_idx", "detection_idx")})
             self.add_flow(doppler, overlay, {("rd_maps", "rd_maps")})
             if not cfg.peak_only:
                 self.add_flow(cluster, overlay, {("labels", "labels")})
+                # rep_idx colors each cluster by its representative RD cell
+                # (stable across frames) instead of the flickery size-rank label.
+                self.add_flow(reduction, overlay, {("rep_idx", "rep_idx")})
             self.add_flow(overlay, visualizer, {("overlay", "receivers")})
 
             if plot is not None:
@@ -263,6 +267,9 @@ class FmcwSisoApp(Application):
                 # the raw CFAR peaks (peak_only); both are (N, 2) (doppler, range).
                 if not cfg.peak_only:
                     self.add_flow(reduction, plot, {("rep_idx", "rep_idx")})
+                    # labels flag clustered mode; the plot then colors each rep by
+                    # its RD cell (matching the RD-map / boresight markers).
+                    self.add_flow(cluster, plot, {("labels", "labels")})
                 else:
                     self.add_flow(cfar, plot, {("detection_idx", "rep_idx")})
                 self.add_flow(range_op, plot, {("range_bins", "range_bins")})

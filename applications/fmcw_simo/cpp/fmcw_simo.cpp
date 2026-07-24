@@ -162,6 +162,10 @@ class FmcwSimoApp : public holoscan::Application {
         layout.right_panels = range_velocity_boresight_panels();
       }
       auto visualizer = make_rd_holoviz_op(this, "holoviz", layout);
+      overlay->view_aspect = rd_map_view_aspect(layout);
+      overlay->marker_radius = cfg.viz.marker_radius;
+      overlay->marker_outline = cfg.viz.marker_outline;
+      overlay->marker_segments = cfg.viz.marker_segments;
 
       std::shared_ptr<RollingPlotOp> plot;
       std::shared_ptr<BoresightViewOp> boresight;
@@ -179,17 +183,23 @@ class FmcwSimoApp : public holoscan::Application {
       add_flow(doppler, ch_slice, {{"rd_maps", "rd_maps"}});
       add_flow(ch_slice, to_image, {{"rd_map", "rd_maps"}});
       add_flow(to_image, visualizer, {{"rd_image", "receivers"}});
-      // Overlay/plot/boresight color or index by cluster when clustering runs;
-      // in peak_only mode they fall back to the raw CFAR peaks / single color.
+      // Overlay/plot/boresight color by cluster when clustering runs (keyed on
+      // each cluster's representative RD cell, via rep_idx, so the color is
+      // stable across frames); in peak_only mode there are no labels, so all
+      // three color each peak by its per-detection row index instead.
       add_flow(cfar, overlay, {{"detection_idx", "detection_idx"}});
       add_flow(ch_slice, overlay, {{"rd_map", "rd_maps"}});
       if (!cfg.peak_only) {
         add_flow(cluster, overlay, {{"labels", "labels"}});
+        add_flow(reduction, overlay, {{"rep_idx", "rep_idx"}});
       }
       add_flow(overlay, visualizer, {{"overlay", "receivers"}});
       if (plot) {
         if (!cfg.peak_only) {
           add_flow(reduction, plot, {{"rep_idx", "rep_idx"}});
+          // labels flag clustered mode; the plot then colors each rep by its RD
+          // cell (matching the RD-map / boresight markers).
+          add_flow(cluster, plot, {{"labels", "labels"}});
         } else {
           add_flow(cfar, plot, {{"detection_idx", "rep_idx"}});
         }
@@ -201,6 +211,7 @@ class FmcwSimoApp : public holoscan::Application {
         add_flow(beamscan, boresight, {{"aoa_estimates", "aoa_estimates"}});
         if (!cfg.peak_only) {
           add_flow(cluster, boresight, {{"labels", "labels"}});
+          add_flow(reduction, boresight, {{"rep_idx", "rep_idx"}});
         }
         add_flow(boresight, visualizer, {{"plot", "receivers"}});
       }

@@ -372,6 +372,48 @@ def parse_plots(root: dict[str, Any]) -> PlotsConfig:
 
 
 @dataclass
+class VisualizationConfig:
+    """Detection-marker geometry for the RD-map overlay (ClusterOverlayOp), as a
+    fraction of the image extent. Python analogue of
+    ``config.hpp::CommonRunConfig::VisualizationConfig``.
+    """
+
+    marker_radius: float = 0.007
+    marker_outline: float = 0.0022
+    marker_segments: int = 20
+
+
+def parse_visualization(root: dict[str, Any]) -> tuple[bool, VisualizationConfig]:
+    """Parse the ``visualization:`` block: the ``enabled`` master live-Holoviz
+    switch (falling back to the legacy top-level ``visualize:`` bool when the
+    block is absent) plus the detection-marker geometry. Mirrors the
+    ``visualization`` handling in ``config.hpp::parse_viz_toggles``. Returns
+    ``(enabled, VisualizationConfig)``.
+    """
+    viz = VisualizationConfig()
+    node = root.get("visualization")
+    if isinstance(node, dict):
+        enabled = bool(node.get("enabled", False))
+        if "marker_radius" in node:
+            viz.marker_radius = float(node["marker_radius"])
+        if "marker_outline" in node:
+            viz.marker_outline = float(node["marker_outline"])
+        if "marker_segments" in node:
+            viz.marker_segments = int(node["marker_segments"])
+    else:
+        enabled = bool(root.get("visualize", False))  # legacy top-level toggle
+    if viz.marker_radius <= 0.0:
+        raise ValueError("visualization.marker_radius must be > 0")
+    if viz.marker_outline < 0.0:
+        raise ValueError("visualization.marker_outline must be >= 0")
+    if viz.marker_segments < 3:
+        raise ValueError(
+            f"visualization.marker_segments must be >= 3, got {viz.marker_segments}"
+        )
+    return enabled, viz
+
+
+@dataclass
 class CommonRunConfig:
     """Run cadence + visualization toggles shared by every FMCW demo app.
 
@@ -397,6 +439,7 @@ class CommonRunConfig:
     # its load_config, not by parse_common_run_config below.
     peak_only: bool = False
     plots: PlotsConfig = field(default_factory=PlotsConfig)
+    viz: VisualizationConfig = field(default_factory=VisualizationConfig)
 
 
 def parse_common_run_config(root: dict[str, Any], config_path: Path) -> CommonRunConfig:
@@ -421,21 +464,64 @@ def parse_common_run_config(root: dict[str, Any], config_path: Path) -> CommonRu
     meter_log_every = int(run.get("meter_log_every", 0))
     if meter_log_every < 0:
         raise ValueError("run.meter_log_every must be >= 0")
+    visualize, viz = parse_visualization(root)
     return CommonRunConfig(
         config_path=config_path,
         num_frames=num_frames,
         frame_period=frame_period,
         meter_cadence=bool(run.get("meter_cadence", True)),
         meter_log_every=meter_log_every,
-        visualize=bool(root.get("visualize", False)),
+        visualize=visualize,
         skip_display_check=bool(root.get("skip_display_check", False)),
         headless=bool(root.get("headless", False)),
         plots=parse_plots(root),
+        viz=viz,
     )
 
 
 def cluster_layer_name(color: int) -> str:
     return f"cluster_{color}"
+
+
+K_DETECTION_OUTLINE_LAYER = "detection_outline"
+K_NOISE_LAYER_NAME = "noise"
+
+
+def detection_layer_specs(palette: list[list[float]]) -> list[HolovizOp.InputSpec]:
+    """Holoviz InputSpecs for the CFAR detection markers, matching the tensors
+    ClusterOverlayOp emits. Detections render as filled triangle-fan discs: a
+    single black outline layer of larger discs (priority 1) sits under one
+    colored disc layer per cluster palette color plus a muted noise layer
+    (priority 2). All draw over the RD image (COLOR_LUT, default priority 0)."""
+    specs: list[HolovizOp.InputSpec] = []
+    outline = HolovizOp.InputSpec(
+        K_DETECTION_OUTLINE_LAYER, HolovizOp.InputType.TRIANGLES
+    )
+    outline.color = [0.0, 0.0, 0.0, 1.0]
+    outline.priority = 1
+    specs.append(outline)
+
+    def add_discs(name: str, color: list[float]) -> None:
+        spec = HolovizOp.InputSpec(name, HolovizOp.InputType.TRIANGLES)
+        spec.color = color
+        spec.priority = 2
+        specs.append(spec)
+
+    for c in range(len(palette)):
+        add_discs(cluster_layer_name(c), palette[c])
+    add_discs(K_NOISE_LAYER_NAME, [0.6, 0.6, 0.6, 1.0])
+    return specs
+
+
+def rd_map_view_aspect(
+    width: int, height: int, left_width: float, paneled: bool
+) -> float:
+    """On-screen aspect ratio (width / height in pixels) of the RD-map sub-view:
+    the full window when the map is full-bleed, else the left column shared with
+    the side panels. ClusterOverlayOp divides its disc x radius by this so the
+    detection markers render round rather than stretched."""
+    view_w = (left_width if paneled else 1.0) * float(width)
+    return view_w / float(height)
 
 
 def make_view(ox: float, oy: float, w: float, h: float) -> HolovizOp.InputSpec.View:

@@ -3,8 +3,9 @@
 
 // Declarative Holoviz layout for the FMCW example apps. The ~90-line
 // InputSpec/View construction that every app copy-pasted (the turbo LUT RD-map
-// layer, one CROSSES layer per cluster color + noise, and the right-column
-// image+title panels) is owned here and driven by a small HolovizLayout struct.
+// layer, the detection disc layers — one per cluster color + noise + outline —
+// and the right-column image+title panels) is owned here and driven by a small
+// HolovizLayout struct.
 //
 // This deliberately builds only DATA (+ a factory that makes the HolovizOp)
 // — it does NOT call add_flow. HolovizOp is already the operator; which tensors
@@ -38,7 +39,7 @@ struct RightPanel {
   float height;    // panel height, window-relative
 };
 
-// A full RD-map window: the turbo-mapped |RD| image + cluster CROSSES on the
+// A full RD-map window: the turbo-mapped |RD| image + cluster discs on the
 // left, and an optional stack of right-column panels. `plots_enabled == false`
 // (or no panels) renders the map full-window.
 struct HolovizLayout {
@@ -52,9 +53,9 @@ struct HolovizLayout {
 };
 
 // Build the HolovizOp `tensors` InputSpec vector for a layout. Layer 0 is the
-// turbo LUT RD image; the cluster/noise CROSSES layers draw on top (named to
-// match ClusterOverlayOp's emitted tensors). With panels enabled the map +
-// crosses share the left viewport and each panel adds an image + title layer.
+// turbo LUT RD image; the detection disc layers draw on top (named to match
+// ClusterOverlayOp's emitted tensors). With panels enabled the map + discs
+// share the left viewport and each panel adds an image + title layer.
 inline std::vector<holoscan::ops::HolovizOp::InputSpec>
 build_holoviz_input_specs(const HolovizLayout& layout) {
   using InputSpec = holoscan::ops::HolovizOp::InputSpec;
@@ -69,18 +70,25 @@ build_holoviz_input_specs(const HolovizLayout& layout) {
         "build_holoviz_input_specs: cluster palette size must equal "
         "kNumClusterColors");
   }
-  const auto add_crosses = [&](const std::string& name,
-                               const std::vector<float>& color) {
-    InputSpec spec(name, InputType::CROSSES);
+  // Detections render as filled triangle-fan discs (see ClusterOverlayOp): a
+  // single black outline layer of larger discs sits at priority 1, under one
+  // colored layer per cluster palette color plus a muted noise layer at
+  // priority 2 — both over the RD image (COLOR_LUT, default priority 0).
+  InputSpec outline(kDetectionOutlineName, InputType::TRIANGLES);
+  outline.color_ = {0.0F, 0.0F, 0.0F, 1.0F};
+  outline.priority_ = 1;
+  input_specs.push_back(outline);
+  const auto add_discs = [&](const std::string& name,
+                             const std::vector<float>& color) {
+    InputSpec spec(name, InputType::TRIANGLES);
     spec.color_ = color;
-    spec.line_width_ = 2.0F;
-    spec.priority_ = 1;
+    spec.priority_ = 2;
     input_specs.push_back(spec);
   };
   for (int c = 0; c < kNumClusterColors; ++c) {
-    add_crosses(cluster_layer_name(c), palette[static_cast<size_t>(c)]);
+    add_discs(cluster_layer_name(c), palette[static_cast<size_t>(c)]);
   }
-  add_crosses(kNoiseLayerName, {0.6F, 0.6F, 0.6F, 1.0F});
+  add_discs(kNoiseLayerName, {0.6F, 0.6F, 0.6F, 1.0F});
 
   // A View maps a layer's [0, 1] content into an (offset, size) rectangle.
   const auto make_view = [](float ox, float oy, float w, float h) {
@@ -117,6 +125,17 @@ build_holoviz_input_specs(const HolovizLayout& layout) {
     }
   }
   return input_specs;
+}
+
+// On-screen aspect ratio (width / height in pixels) of the RD-map sub-view: the
+// full window when the map is full-bleed, else the left column shared with the
+// side panels. ClusterOverlayOp divides its disc x radius by this so the
+// detection markers render round rather than stretched.
+inline float rd_map_view_aspect(const HolovizLayout& layout) {
+  const bool paneled = layout.plots_enabled && !layout.right_panels.empty();
+  const float view_w = (paneled ? layout.left_width : 1.0F) *
+                       static_cast<float>(layout.width);
+  return view_w / static_cast<float>(layout.height);
 }
 
 // Construct the HolovizOp from a layout: the built input specs, the shared

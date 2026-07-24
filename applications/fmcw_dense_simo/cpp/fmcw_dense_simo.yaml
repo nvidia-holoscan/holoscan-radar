@@ -79,11 +79,17 @@ run:
   meter_log_every: 0
 
 # Optional Holoviz display: RD map (channel-0 slice) with cluster-colored
-# detection crosses, plus rolling range/velocity plots and a boresight az/el
-# scatter. Set visualize: false for a headless log-only run. If no display is
-# reachable the app auto-falls back to headless (unless skip_display_check is
-# true); headless: true renders offscreen without opening a window.
-visualize: true
+# detection dots, plus rolling range/velocity plots and a boresight az/el
+# scatter. Set visualization.enabled: false for a headless log-only run. If no
+# display is reachable the app auto-falls back to headless (unless
+# skip_display_check is true); headless: true renders offscreen without a window.
+#   marker_radius / marker_outline — dot + outline radius, fractions of the RD
+#     image extent; marker_segments (>= 3) sets dot roundness.
+visualization:
+  enabled: true
+  marker_radius: 0.007
+  marker_outline: 0.0022
+  marker_segments: 20
 headless: false
 skip_display_check: false
 

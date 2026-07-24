@@ -180,6 +180,10 @@ class FmcwSisoApp : public holoscan::Application {
         layout.right_panels = range_velocity_panels();
       }
       auto visualizer = make_rd_holoviz_op(this, "holoviz", layout);
+      overlay->view_aspect = rd_map_view_aspect(layout);
+      overlay->marker_radius = cfg.viz.marker_radius;
+      overlay->marker_outline = cfg.viz.marker_outline;
+      overlay->marker_segments = cfg.viz.marker_segments;
 
       std::shared_ptr<RollingPlotOp> plot;
       if (cfg.plots.enable) {
@@ -191,13 +195,16 @@ class FmcwSisoApp : public holoscan::Application {
       add_flow(doppler, to_image, {{"rd_maps", "rd_maps"}});
       add_flow(to_image, visualizer, {{"rd_image", "receivers"}});
       // The overlay needs the detector's cells and the map dimensions; the
-      // cluster labels color the crosses when clustering runs. In peak_only
-      // mode there are no labels, so the overlay draws every CFAR peak in a
-      // single color (ClusterOverlayOp treats absent labels that way).
+      // cluster labels color the dots when clustering runs. In peak_only mode
+      // there are no labels, so the overlay colors each CFAR peak by its row
+      // index (ClusterOverlayOp treats absent labels that way).
       add_flow(cfar, overlay, {{"detection_idx", "detection_idx"}});
       add_flow(doppler, overlay, {{"rd_maps", "rd_maps"}});
       if (!cfg.peak_only) {
         add_flow(cluster, overlay, {{"labels", "labels"}});
+        // rep_idx colors each cluster by its representative RD cell (stable
+        // across frames) instead of the flickery size-rank DBSCAN label.
+        add_flow(reduction, overlay, {{"rep_idx", "rep_idx"}});
       }
       add_flow(overlay, visualizer, {{"overlay", "receivers"}});
 
@@ -208,6 +215,9 @@ class FmcwSisoApp : public holoscan::Application {
       if (plot) {
         if (!cfg.peak_only) {
           add_flow(reduction, plot, {{"rep_idx", "rep_idx"}});
+          // Per-detection labels let the plot color each rep by its true cluster
+          // (matching the RD-map / boresight markers) rather than by row index.
+          add_flow(cluster, plot, {{"labels", "labels"}});
         } else {
           add_flow(cfar, plot, {{"detection_idx", "rep_idx"}});
         }
