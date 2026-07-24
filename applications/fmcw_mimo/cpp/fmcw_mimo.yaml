@@ -51,7 +51,7 @@ cfar_detector:
   # emits one detection per target. The app also reads this key (a read-only
   # mirror of this block) to drop the DBSCAN clustering + reduction stages and
   # report the CFAR peaks directly (the angle branch still runs).
-  peak_only: true
+  peak_only: false
   nci_axes: [0]
   # nci_fold (K) is derived in the app from array_geometry.num_elements()
   # (= num_virtual) and passed as an Arg, so it can't drift from num_tx /
