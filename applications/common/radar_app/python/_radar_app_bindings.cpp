@@ -224,6 +224,7 @@ void bind_radar_app(py::module_& m) {
       .def(py::init<Fragment*, const py::args&, const std::string&>(),
            py::arg("fragment"), py::arg("name") = "cluster_overlay")
       .def_readwrite("view_aspect", &ClusterOverlayOp::view_aspect)
+      .def_readwrite("frame_period", &ClusterOverlayOp::frame_period)
       .def_readwrite("marker_radius", &ClusterOverlayOp::marker_radius)
       .def_readwrite("marker_outline", &ClusterOverlayOp::marker_outline)
       .def_readwrite("marker_segments", &ClusterOverlayOp::marker_segments)

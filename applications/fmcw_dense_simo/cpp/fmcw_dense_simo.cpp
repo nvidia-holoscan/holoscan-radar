@@ -230,6 +230,7 @@ class FmcwDenseSimoApp : public holoscan::Application {
     };
     auto visualizer = make_rd_holoviz_op(this, "holoviz", layout);
     overlay->view_aspect = rd_map_view_aspect(layout);
+    overlay->frame_period = cfg.frame_period;  // scenario clock
     overlay->marker_radius = cfg.viz.marker_radius;
     overlay->marker_outline = cfg.viz.marker_outline;
     overlay->marker_segments = cfg.viz.marker_segments;
@@ -290,6 +291,14 @@ class FmcwDenseSimoApp : public holoscan::Application {
       }
     }
     add_flow(overlay, visualizer, {{"overlay", "receivers"}});
+    // Scenario clock overlay: its spec heads the primitive-panel InputSpec
+    // chain when panels are on (overlay → rolling plot → boresight →
+    // input_specs), else feeds input_specs directly.
+    if (plot) {
+      add_flow(overlay, plot, {{"time_specs", "specs_in"}});
+    } else {
+      add_flow(overlay, visualizer, {{"time_specs", "input_specs"}});
+    }
     if (plot) {
       // Plot the per-cluster representative (clustered) or the raw cube peaks
       // (peak_only); both carry the 4-col idx sliced to (doppler, range).

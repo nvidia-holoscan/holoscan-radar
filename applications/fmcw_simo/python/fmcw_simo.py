@@ -211,6 +211,7 @@ class FmcwSimoApp(Application):
                 0.60,
                 cfg.plots.enable,
             )
+            overlay.frame_period = cfg.frame_period  # scenario clock
             overlay.marker_radius = cfg.viz.marker_radius
             overlay.marker_outline = cfg.viz.marker_outline
             overlay.marker_segments = cfg.viz.marker_segments
@@ -297,6 +298,13 @@ class FmcwSimoApp(Application):
                 # (stable across frames) instead of the flickery size-rank label.
                 self.add_flow(reduction, overlay, {("rep_idx", "rep_idx")})
             self.add_flow(overlay, visualizer, {("overlay", "receivers")})
+            # Scenario clock overlay: its spec heads the primitive-panel
+            # InputSpec chain when panels are on (overlay → rolling plot →
+            # boresight → input_specs), else feeds input_specs directly.
+            if plot is not None:
+                self.add_flow(overlay, plot, {("time_specs", "specs_in")})
+            else:
+                self.add_flow(overlay, visualizer, {("time_specs", "input_specs")})
 
             if plot is not None:
                 if not cfg.peak_only:

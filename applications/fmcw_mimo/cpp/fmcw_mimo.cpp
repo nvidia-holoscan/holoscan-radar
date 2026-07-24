@@ -259,6 +259,7 @@ class FmcwMimoApp : public holoscan::Application {
       };
       auto visualizer = make_rd_holoviz_op(this, "holoviz", layout);
       overlay->view_aspect = rd_map_view_aspect(layout);
+      overlay->frame_period = cfg.frame_period;  // scenario clock
       overlay->marker_radius = cfg.viz.marker_radius;
       overlay->marker_outline = cfg.viz.marker_outline;
       overlay->marker_segments = cfg.viz.marker_segments;
@@ -306,6 +307,14 @@ class FmcwMimoApp : public holoscan::Application {
         add_flow(reduction, overlay, {{"rep_idx", "rep_idx"}});
       }
       add_flow(overlay, visualizer, {{"overlay", "receivers"}});
+      // Scenario clock overlay: its spec heads the primitive-panel InputSpec
+      // chain when panels are on (overlay → rolling plot → boresight →
+      // input_specs), else feeds input_specs directly.
+      if (plot) {
+        add_flow(overlay, plot, {{"time_specs", "specs_in"}});
+      } else {
+        add_flow(overlay, visualizer, {{"time_specs", "input_specs"}});
+      }
       if (plot) {
         if (!cfg.peak_only) {
           add_flow(reduction, plot, {{"rep_idx", "rep_idx"}});

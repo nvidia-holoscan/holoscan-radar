@@ -236,6 +236,7 @@ class FmcwDenseSimoApp(Application):
             0.60,
             cfg.plots.enable,
         )
+        overlay.frame_period = cfg.frame_period  # scenario clock
         overlay.marker_radius = cfg.viz.marker_radius
         overlay.marker_outline = cfg.viz.marker_outline
         overlay.marker_segments = cfg.viz.marker_segments
@@ -333,6 +334,13 @@ class FmcwDenseSimoApp(Application):
                 # the DBSCAN label when plots are off (rep_idx_rd is None).
                 self.add_flow(rep_idx_rd, overlay, {("idx", "rep_idx")})
         self.add_flow(overlay, visualizer, {("overlay", "receivers")})
+        # Scenario clock overlay: its spec heads the primitive-panel InputSpec
+        # chain when panels are on (overlay → rolling plot → boresight →
+        # input_specs), else feeds input_specs directly.
+        if plot is not None:
+            self.add_flow(overlay, plot, {("time_specs", "specs_in")})
+        else:
+            self.add_flow(overlay, visualizer, {("time_specs", "input_specs")})
 
         # Plot/boresight read the per-cluster representative (clustered) or the
         # raw cube peaks (peak_only); both carry the 4-col idx.

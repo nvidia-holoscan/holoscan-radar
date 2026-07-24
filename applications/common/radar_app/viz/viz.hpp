@@ -39,6 +39,17 @@ namespace holoscan::radar::app {
 // index into it directly.
 constexpr size_t kLutSize = 256;
 
+// Dynamic Holoviz layer spec + type, aliased here (near the top) because both
+// the RD-map overlay (ClusterOverlayOp) and the side-panel helpers below emit
+// them. The panel-primitive helpers that build these specs live further down.
+using PlotInputSpec = holoscan::ops::HolovizOp::InputSpec;
+using PlotInputType = holoscan::ops::HolovizOp::InputType;
+
+// Scenario-clock overlay (defined with the panel helpers below; forward-declared
+// so ClusterOverlayOp, which precedes it, can emit the clock).
+inline void emit_sim_clock(holoscan::TensorMap& out,
+                           std::vector<PlotInputSpec>* specs, double seconds);
+
 // Extract one RX channel from a per-channel RD map for visualization. SIMO
 // rd_maps are (N_rx, num_doppler, num_range); Holoviz helpers expect rank-2
 // (num_doppler, num_range). Default channel 0 is a debug display only — CFAR
@@ -286,6 +297,11 @@ class ClusterOverlayOp : public holoscan::Operator {
   // compose() (see rd_map_view_aspect); 1.0 leaves the discs uncorrected.
   float view_aspect{1.0F};
 
+  // Seconds per frame — turns the internal frame counter into the scenario
+  // clock (current simulated time) drawn over the RD map. Matches the source's
+  // per-tick scene advance, so tick N is labeled t = N * frame_period.
+  double frame_period{0.1};
+
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("detection_idx");
     // Optional: DBSCAN cluster ids (row-aligned with detection_idx). Present →
@@ -300,6 +316,11 @@ class ClusterOverlayOp : public holoscan::Operator {
         .condition(holoscan::ConditionType::kNone);
     spec.input<holoscan::TensorMap>("rd_maps");
     spec.output<holoscan::TensorMap>("overlay");
+    // Scenario-clock InputSpec (the current simulated time as a TEXT layer over
+    // the RD map). Heads the primitive-panel InputSpec chain when panels are on
+    // (→ RollingPlotOp.specs_in), else feeds HolovizOp.input_specs directly. The
+    // matching position/plate tensors ride the `overlay` output above.
+    spec.output<std::vector<PlotInputSpec>>("time_specs");
   }
 
   void compute(holoscan::InputContext& op_input,
@@ -499,8 +520,20 @@ class ClusterOverlayOp : public holoscan::Operator {
           c < kNumClusterColors ? cluster_layer_name(c) : kNoiseLayerName,
           centers[static_cast<size_t>(c)], marker_radius);
     }
+
+    // Scenario clock: the current simulated time = frame_index_ * frame_period.
+    // The plate/label tensors go out with the overlay (→ receivers); the spec
+    // goes out on time_specs (→ input_specs, directly or via the panel chain).
+    std::vector<PlotInputSpec> time_specs;
+    emit_sim_clock(out, &time_specs,
+                   static_cast<double>(frame_index_) * frame_period);
     op_output.emit(out, "overlay");
+    op_output.emit(time_specs, "time_specs");
+    ++frame_index_;
   }
+
+ private:
+  int64_t frame_index_{0};  // ticks since run start → scenario clock
 };
 
 // kLutSize-entry RGBA lookup table for the turbo colormap, built from the
@@ -713,8 +746,7 @@ constexpr const char* kVelocityTitleLayer = "velocity_title";
 // both the data tensors (on `receivers`) and the matching InputSpecs (on the
 // dynamic `input_specs` port), so runtime-derived tick labels and only-used
 // marker colors are handled without a static per-color layer declaration.
-using PlotInputSpec = holoscan::ops::HolovizOp::InputSpec;
-using PlotInputType = holoscan::ops::HolovizOp::InputType;
+// (PlotInputSpec / PlotInputType are aliased near the top of this header.)
 
 // Panel placement, window-normalized (mirrors HolovizOp::InputSpec::View).
 struct PanelRect {
@@ -897,6 +929,34 @@ inline void emit_panel(holoscan::TensorMap& out,
   specs->push_back(std::move(title_spec));
 }
 
+// Append a scenario-clock overlay — the current simulated time (seconds) — to a
+// dynamic InputSpec list (`specs`) and its geometry/position tensors to `out`.
+// Rendered as a small dark plate + white label at the top-left of the whole
+// window (a full-window view), over the RD map. Priorities sit above the panels
+// (which top out at 8) so it always reads on top. The label/plate tensors ride
+// the producing op's data output (→ receivers) while the specs travel the
+// input_specs chain; the layer names must stay unique across the merged
+// HolovizOp spec list.
+inline void emit_sim_clock(holoscan::TensorMap& out,
+                           std::vector<PlotInputSpec>* specs, double seconds) {
+  const PanelRect full{0.0F, 0.0F, 1.0F, 1.0F};
+  // Dark plate (two triangles) for legibility over the bright turbo map.
+  constexpr float x0 = 0.006F, y0 = 0.010F, x1 = 0.170F, y1 = 0.058F;
+  const std::vector<float> bg = {x0, y0, x1, y0, x0, y1,
+                                 x1, y0, x1, y1, x0, y1};
+  out.insert({"sim_clock_bg", plot_geom_tensor(bg, 2)});
+  specs->push_back(plot_layer_spec("sim_clock_bg", PlotInputType::TRIANGLES,
+                                   {0.0F, 0.0F, 0.0F, 0.55F}, full, 9));
+  // White time label; TEXT position is (x, y, size), size = fraction of the
+  // view (window) height.
+  out.insert({"sim_clock", plot_geom_tensor({0.014F, 0.020F, 0.026F}, 3)});
+  auto label = plot_layer_spec("sim_clock", PlotInputType::TEXT,
+                               {1.0F, 1.0F, 1.0F, 1.0F}, full, 10);
+  label.text_ = {"t = " + plot_format_tick(static_cast<float>(seconds), 1) +
+                 " s"};
+  specs->push_back(std::move(label));
+}
+
 // Rolling time-series plots of the per-cluster centroids. Keeps a scrolling
 // window of the last `window` frames and, each tick, rasterizes two RGBA
 // images (range vs time, velocity vs time): each cluster's centroid — the
@@ -967,8 +1027,13 @@ class RollingPlotOp : public holoscan::Operator {
     spec.input<holoscan::TensorMap>("range_bins");
     spec.input<holoscan::TensorMap>("velocity_bins");
     spec.output<holoscan::TensorMap>("plots");
-    // Dynamic InputSpecs for the primitive panels, fed to HolovizOp's
-    // input_specs port (directly or via a boresight chain). Unused in raster mode.
+    // Primitive-mode InputSpec chain: upstream specs (e.g. the scenario clock
+    // from ClusterOverlayOp) arrive on specs_in; this op prepends them to its
+    // own panel specs and emits the combined list on plot_specs, fed to
+    // HolovizOp's input_specs port (directly or via a boresight chain). Unused
+    // in raster mode.
+    spec.input<std::vector<PlotInputSpec>>("specs_in")
+        .condition(holoscan::ConditionType::kNone);
     spec.output<std::vector<PlotInputSpec>>("plot_specs");
   }
 
@@ -1076,7 +1141,13 @@ class RollingPlotOp : public holoscan::Operator {
     // `plot_specs`) or the legacy raster images + constant TEXT titles.
     holoscan::TensorMap out;
     if (primitive) {
+      // Prepend any upstream specs (the scenario clock) so they merge into the
+      // single input_specs stream ahead of this op's panel layers.
       std::vector<PlotInputSpec> specs;
+      auto upstream = op_input.receive<std::vector<PlotInputSpec>>("specs_in");
+      if (upstream) {
+        specs = std::move(upstream.value());
+      }
       render_panel_primitives(out, &specs, oldest, "range", /*use_range=*/true,
                               range_view, range_aspect, "Range (m) vs time (s)");
       render_panel_primitives(out, &specs, oldest, "velocity",

@@ -185,6 +185,7 @@ class FmcwSisoApp(Application):
             overlay.view_aspect = rd_map_view_aspect(
                 1200 if cfg.plots.enable else 800, 600, 0.60, cfg.plots.enable
             )
+            overlay.frame_period = cfg.frame_period  # scenario clock
             overlay.marker_radius = cfg.viz.marker_radius
             overlay.marker_outline = cfg.viz.marker_outline
             overlay.marker_segments = cfg.viz.marker_segments
@@ -255,6 +256,13 @@ class FmcwSisoApp(Application):
                 # (stable across frames) instead of the flickery size-rank label.
                 self.add_flow(reduction, overlay, {("rep_idx", "rep_idx")})
             self.add_flow(overlay, visualizer, {("overlay", "receivers")})
+            # Scenario clock overlay: its spec heads the primitive-panel
+            # InputSpec chain when panels are on (→ rolling plot), else feeds
+            # input_specs directly.
+            if plot is not None:
+                self.add_flow(overlay, plot, {("time_specs", "specs_in")})
+            else:
+                self.add_flow(overlay, visualizer, {("time_specs", "input_specs")})
 
             if plot is not None:
                 # Rolling plots read the per-cluster representative (clustered) or
