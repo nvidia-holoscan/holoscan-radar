@@ -57,6 +57,11 @@ cfar_detector:
   training_cells: [3, 3]
   pfa: 1.0e-9
   os_rank: 0
+  # Peak-grouping (non-maximum suppression). A native CFAR param; true → CFAR
+  # emits one detection per target. The app also reads this key (a read-only
+  # mirror of this block) to drop the DBSCAN clustering + reduction stages and
+  # report the CFAR peaks directly.
+  peak_only: false
 
 # ClusterDBSCANOp parameters (native from_config). FeatureAssemblyOp assembles
 # the `points` matrix (this app fixes its columns to [range (m), velocity
@@ -139,14 +144,6 @@ skip_display_check: false
 # display-less host (CI, headless dev boxes); the startup display probe is
 # skipped when set. Combine with visualize: true.
 headless: false
-
-# CFAR peak-grouping mode (app-owned flag, forwarded to CFARDetectorOp's
-# peak_only param). false (default) → the pipeline detects with CFAR, then
-# DBSCAN-clusters and reduces to one representative per target. true → CFAR
-# emits one detection per target (non-maximum suppression), so the DBSCAN
-# clustering + reduction stages are dropped from the graph and the CFAR peaks
-# are reported directly (the overlay/plots then show raw detections).
-peak_only: false
 
 # Rolling time-series plots drawn to the right of the RD map (only when
 # visualize is on). Two scrolling scatter plots — range (m) vs time and

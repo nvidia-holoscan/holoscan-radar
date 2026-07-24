@@ -85,11 +85,10 @@ class FmcwSisoApp : public holoscan::Application {
         "clutter_filter", from_config("clutter_filter"));
     auto doppler = make_operator<radar::FMCWDopplerProcessorOp<float>>(
         "doppler_processor", from_config("doppler_processor"));
-    // peak_only (app-owned flag) forwarded to CFAR; when set, CFAR emits one
-    // detection per target and the clustering subgraph below is dropped.
+    // peak_only is a native cfar_detector param (applied via from_config); the
+    // app also reads it (cfg.peak_only) to drop the clustering subgraph below.
     auto cfar = make_operator<radar::CFARDetectorOp<float>>(
-        "cfar_detector", from_config("cfar_detector"),
-        holoscan::Arg("peak_only") = cfg.peak_only);
+        "cfar_detector", from_config("cfar_detector"));
     auto sink = make_operator<DetectionReportOp>("detection_report");
     // Every CFAR output needs a receiver or the operator never ticks.
     auto mask_sink = make_operator<NullSinkOp>("detection_mask_sink");

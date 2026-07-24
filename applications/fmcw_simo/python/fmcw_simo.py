@@ -121,12 +121,9 @@ class FmcwSimoApp(Application):
         doppler = FMCWDopplerProcessorOp(
             self, self.from_config("doppler_processor"), name="doppler_processor"
         )
-        cfar = CFARDetectorOp(
-            self,
-            self.from_config("cfar_detector"),
-            peak_only=cfg.peak_only,
-            name="cfar_detector",
-        )
+        # peak_only is a native cfar_detector param (from_config); the app reads
+        # it (cfg.peak_only) to drop the clustering subgraph below.
+        cfar = CFARDetectorOp(self, self.from_config("cfar_detector"), name="cfar_detector")
         gather = SnapshotGatherOp(self, self.from_config("snapshot_gather"), name="snapshot_gather")
         beamscan = BeamscanEstimatorOp(
             self,

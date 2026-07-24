@@ -125,15 +125,10 @@ class FmcwDenseSimoApp(Application):
             array_geometry=cfg.array_geometry,
             name="phase_shift_beamformer",
         )
-        # peak_only here is applied per-beam (nci_axes=[]); the cross-beam
-        # collapse to one detection per RD cell is still AnglePeakPickOp's job
-        # below. When set, the DBSCAN clustering + reduction stages are dropped.
-        cfar = CFARDetectorOp(
-            self,
-            self.from_config("cfar_detector"),
-            peak_only=cfg.peak_only,
-            name="cfar_detector",
-        )
+        # peak_only is a native cfar_detector param (from_config), applied
+        # per-beam (nci_axes=[]); AnglePeakPickOp below still does the cross-beam
+        # collapse. The app reads cfg.peak_only to drop the clustering subgraph.
+        cfar = CFARDetectorOp(self, self.from_config("cfar_detector"), name="cfar_detector")
         peak_pick = custom_ops.AnglePeakPickOp(self, name="angle_peak_pick")
         aoa_lookup = custom_ops.CubeAoaLookupOp(
             self,

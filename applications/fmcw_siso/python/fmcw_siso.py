@@ -119,14 +119,9 @@ class FmcwSisoApp(Application):
         doppler = FMCWDopplerProcessorOp(
             self, self.from_config("doppler_processor"), name="doppler_processor"
         )
-        # peak_only (app-owned flag) forwarded to CFAR; when set, CFAR emits one
-        # detection per target and the clustering subgraph below is dropped.
-        cfar = CFARDetectorOp(
-            self,
-            self.from_config("cfar_detector"),
-            peak_only=cfg.peak_only,
-            name="cfar_detector",
-        )
+        # peak_only is a native cfar_detector param (from_config); the app also
+        # reads it (cfg.peak_only) to drop the clustering subgraph below.
+        cfar = CFARDetectorOp(self, self.from_config("cfar_detector"), name="cfar_detector")
         det_report = DetectionReportOp(self, name="detection_report")
         if cadence is not None:
             det_report.cadence = cadence

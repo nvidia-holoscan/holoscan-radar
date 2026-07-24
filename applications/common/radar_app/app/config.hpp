@@ -47,10 +47,11 @@ struct CommonRunConfig {
   bool visualize{false};     // live Holoviz window (requires a GUI host)
   bool skip_display_check{false};  // skip the startup display probe
   bool headless{false};            // render offscreen (no window / display)
-  // CFAR peak-grouping mode. App-owned top-level key, forwarded to
-  // CFARDetectorOp via an explicit Arg("peak_only"). When true the CFAR peaks
-  // are one-per-target, so the app drops the DBSCAN clustering + reduction
-  // stages and reports the CFAR detections directly (see each app's compose()).
+  // CFAR peak-grouping mode. A native CFARDetectorOp parameter (set through the
+  // cfar_detector YAML block via from_config); each app also reads the same key
+  // as a read-only mirror of that operator block to gate its graph shape (drop
+  // the DBSCAN clustering + reduction stages when set). Populated per app in its
+  // load_config, not by the shared parse helpers below (which stay app-owned).
   bool peak_only{false};
   struct PlotsConfig {
     bool enable{true};
@@ -160,16 +161,6 @@ inline void parse_viz_toggles(const YAML::Node& root, CommonRunConfig* cfg) {
   }
   if (const YAML::Node v = root["headless"]; v && !v.IsNull()) {
     cfg->headless = v.as<bool>();
-  }
-}
-
-// App-owned top-level `peak_only` flag (default false). The app forwards it to
-// CFARDetectorOp via Arg("peak_only") AND uses it to gate the clustering
-// subgraph, so it is an app config key (not read from the cfar_detector
-// operator block, per the config-boundary note above).
-inline void parse_peak_only(const YAML::Node& root, CommonRunConfig* cfg) {
-  if (const YAML::Node v = root["peak_only"]; v && !v.IsNull()) {
-    cfg->peak_only = v.as<bool>();
   }
 }
 

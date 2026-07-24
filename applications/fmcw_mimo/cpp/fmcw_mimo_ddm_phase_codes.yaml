@@ -52,6 +52,11 @@ cfar_detector:
   training_cells: [3, 3]
   pfa: 1.0e-9
   os_rank: 0
+  # Peak-grouping (non-maximum suppression). A native CFAR param; true → CFAR
+  # emits one detection per target. The app also reads this key (a read-only
+  # mirror of this block) to drop the DBSCAN clustering + reduction stages and
+  # report the CFAR peaks directly (the angle branch still runs).
+  peak_only: false
   nci_axes: [0]
   # Correlate demux leaves a higher Doppler pedestal than linear band-gather,
   # so the linear-DDM margin (4) floods CFAR. 16 keeps the true near-DC
@@ -112,11 +117,6 @@ noise_snr_db: 18.0
 visualize: true
 skip_display_check: false
 headless: false
-
-# CFAR peak-grouping (app-owned; forwarded to CFARDetectorOp.peak_only). true →
-# one CFAR detection per target, DBSCAN clustering + reduction dropped, and
-# per-detection range/velocity/az/el reported directly (angle branch still runs).
-peak_only: false
 
 plots:
   enable: true

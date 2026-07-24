@@ -28,6 +28,11 @@ cfar_detector:
   training_cells: [3, 3]
   pfa: 1.0e-9
   os_rank: 0
+  # Peak-grouping (non-maximum suppression). A native CFAR param; true → CFAR
+  # emits one detection per target. The app also reads this key (a read-only
+  # mirror of this block) to drop the DBSCAN clustering + reduction stages and
+  # report the CFAR peaks directly (the angle branch still runs).
+  peak_only: false
   nci_axes: [0]
   # nci_fold (K) is derived in the app from array_geometry.num_elements() and
   # passed as an Arg, so it can't drift from the RX channel count — see
@@ -99,12 +104,6 @@ noise_snr_db: 18.0
 visualize: true
 skip_display_check: false
 headless: false
-
-# CFAR peak-grouping (app-owned; forwarded to CFARDetectorOp.peak_only). true →
-# CFAR emits one detection per target, the DBSCAN clustering + reduction stages
-# are dropped, and per-detection range/velocity/az/el is reported directly (the
-# angle branch — SnapshotGather + Beamscan — still runs).
-peak_only: false
 
 plots:
   enable: true

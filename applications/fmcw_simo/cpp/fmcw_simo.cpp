@@ -65,10 +65,11 @@ class FmcwSimoApp : public holoscan::Application {
     // consumes, so it never drifts from the channel count. nci_axes: [0]
     // integrates the full channel axis, so K = num_elements; the operator
     // ignores this hint when nci_axes is empty (K = 1).
+    // peak_only is a native cfar_detector param (from_config); the app reads it
+    // (cfg.peak_only) to drop the clustering subgraph below.
     auto cfar = make_operator<radar::CFARDetectorOp<float>>(
         "cfar_detector", from_config("cfar_detector"),
-        holoscan::Arg("nci_fold") = cfg.array_geometry.num_elements(),
-        holoscan::Arg("peak_only") = cfg.peak_only);
+        holoscan::Arg("nci_fold") = cfg.array_geometry.num_elements());
     auto gather = make_operator<radar::SnapshotGatherOp<float>>(
         "snapshot_gather", from_config("snapshot_gather"));
     auto beamscan = make_operator<radar::BeamscanEstimatorOp<float>>(

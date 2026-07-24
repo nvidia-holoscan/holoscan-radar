@@ -98,10 +98,14 @@ def load_config(path: Path) -> AppConfig:
     parse_noise(root, scene)
 
     common = parse_common_run_config(root, config_path=path.resolve())
-    return AppConfig(
+    cfg = AppConfig(
         **vars(common),
         scene=scene,
         array_geometry=array_geometry,
         az_angles=az_angles,
         el_angles=el_angles,
     )
+    # READ-ONLY MIRROR of the cfar_detector operator block: peak_only stays a
+    # native CFAR param (from_config); the app reads it only to gate the graph.
+    cfg.peak_only = bool(root.get("cfar_detector", {}).get("peak_only", False))
+    return cfg

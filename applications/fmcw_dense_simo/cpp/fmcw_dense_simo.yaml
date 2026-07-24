@@ -47,6 +47,11 @@ cfar_detector:
   training_cells: [3, 3]
   pfa: 1.0e-9
   os_rank: 0
+  # Peak-grouping (non-maximum suppression), applied per-beam on the RDA cube
+  # (AnglePeakPickOp still does the cross-beam collapse). A native CFAR param;
+  # the app also reads this key (a read-only mirror of this block) to drop the
+  # DBSCAN clustering + reduction stages and report the cube peaks directly.
+  peak_only: false
   nci_axes: []
 
 cluster_dbscan:
@@ -81,12 +86,6 @@ run:
 visualize: true
 headless: false
 skip_display_check: false
-
-# CFAR peak-grouping (app-owned; forwarded to CFARDetectorOp.peak_only). Applied
-# per-beam on the RDA cube (AnglePeakPickOp still does the cross-beam collapse).
-# true → DBSCAN clustering + reduction dropped; the cube peaks are reported
-# directly via DetectionReportOp (range/velocity/az/el; no per-beam score).
-peak_only: false
 
 plots:
   enable: true

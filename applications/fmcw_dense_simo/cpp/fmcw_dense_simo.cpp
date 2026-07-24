@@ -85,12 +85,11 @@ class FmcwDenseSimoApp : public holoscan::Application {
     auto beamformer = make_operator<radar::PhaseShiftBeamformerOp<Precision>>(
         "phase_shift_beamformer", from_config("phase_shift_beamformer"),
         Arg("array_geometry") = cfg.array_geometry);
-    // peak_only here is applied per-beam (nci_axes=[]); the cross-beam collapse
-    // to one detection per RD cell is still AnglePeakPickOp's job below. When
-    // set, the DBSCAN clustering + reduction stages are dropped.
+    // peak_only is a native cfar_detector param (from_config), applied per-beam
+    // (nci_axes=[]); AnglePeakPickOp below still does the cross-beam collapse.
+    // The app reads cfg.peak_only to drop the DBSCAN clustering + reduction.
     auto cfar = make_operator<radar::CFARDetectorOp<Precision>>(
-        "cfar_detector", from_config("cfar_detector"),
-        Arg("peak_only") = cfg.peak_only);
+        "cfar_detector", from_config("cfar_detector"));
 
     auto peak_pick = make_operator<AnglePeakPickOp>("angle_peak_pick");
     auto aoa_lookup = make_operator<CubeAoaLookupOp>("cube_aoa_lookup");
