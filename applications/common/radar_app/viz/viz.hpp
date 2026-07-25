@@ -86,7 +86,8 @@ inline void emit_rd_axes(holoscan::TensorMap& out,
                          const PanelRect& region,
                          const std::vector<PanelTick>& xticks,
                          const std::vector<PanelTick>& yticks,
-                         const std::string& title, float px_height);
+                         const std::string& title, float px_height,
+                         float box_aspect);
 
 // Extract one RX channel from a per-channel RD map for visualization. SIMO
 // rd_maps are (N_rx, num_doppler, num_range); Holoviz helpers expect rank-2
@@ -633,7 +634,7 @@ class ClusterOverlayOp : public holoscan::Operator {
     // time_specs (→ input_specs, directly or via the panel chain).
     std::vector<PlotInputSpec> chrome_specs;
     emit_rd_axes(out, &chrome_specs, rd_region, xticks_, yticks_, rd_title,
-                 rd_view_px_height);
+                 rd_view_px_height, view_aspect);
     emit_sim_clock(out, &chrome_specs,
                    static_cast<double>(frame_index_) * frame_period,
                    rd_view_px_height);
@@ -897,6 +898,59 @@ inline PlotInputSpec plot_layer_spec(const std::string& name,
   return spec;
 }
 
+// Roboto-Bold average glyph advance ≈ 0.5× the pixel height for the short
+// numeric / label strings we render; used only to right-/center-anchor text
+// (Holoviz text is left-anchored at the given position).
+constexpr float kGlyphAdvanceRatio = 0.52F;
+
+// Horizontal text anchor relative to the given position.
+enum class TextAnchor { kLeft, kCenter, kRight };
+struct AbsText {
+  float x, y;  // window-normalized; y is the text top
+  std::string s;
+  TextAnchor anchor;
+};
+
+// Emit a TEXT layer in a FULL-WINDOW view (normalized-square) so Holoviz's
+// window-aspect text correction is exact and glyphs are not stretched by a
+// non-square sub-view (Holoviz corrects text for the window aspect only, then
+// the layer's View re-stretches it — see geometry_layer.cpp). Positions are
+// absolute window-normalized; `size_frac` is the glyph height as a fraction of
+// the window height; right/center anchoring uses a width estimate derived from
+// `window_aspect` (= window width / height). No-op if `items` is empty.
+inline void push_abs_text(holoscan::TensorMap& out,
+                          std::vector<PlotInputSpec>* specs,
+                          const std::string& name,
+                          const std::vector<AbsText>& items, float size_frac,
+                          float window_aspect, const std::vector<float>& rgba,
+                          int priority) {
+  if (items.empty()) {
+    return;
+  }
+  // Glyph advance as a fraction of window width: advance_px / W =
+  // ratio * height_px / W = ratio * size_frac * (H / W) = ratio*size_frac/aspect.
+  const float char_w =
+      kGlyphAdvanceRatio * size_frac / std::max(window_aspect, 1e-3F);
+  std::vector<float> pos;
+  std::vector<std::string> txt;
+  for (const AbsText& it : items) {
+    float x = it.x;
+    const float w = char_w * static_cast<float>(it.s.size());
+    if (it.anchor == TextAnchor::kCenter) {
+      x -= 0.5F * w;
+    } else if (it.anchor == TextAnchor::kRight) {
+      x -= w;
+    }
+    pos.insert(pos.end(), {x, it.y, size_frac});
+    txt.push_back(it.s);
+  }
+  out.insert({name, plot_geom_tensor(pos, 3)});
+  auto s = plot_layer_spec(name, PlotInputType::TEXT, rgba,
+                           PanelRect{0.0F, 0.0F, 1.0F, 1.0F}, priority);
+  s.text_ = std::move(txt);
+  specs->push_back(std::move(s));
+}
+
 // Append a filled triangle-fan disc (segments triangles) to a vertex list.
 inline void plot_append_disc(std::vector<float>* v, float cx, float cy,
                              float rx, float ry, int segments) {
@@ -1007,31 +1061,34 @@ inline void emit_panel(holoscan::TensorMap& out,
     }
   }
 
-  // Tick labels: Y ticks in the left margin, X ticks below the box.
+  // Text (tick labels + title) is drawn in a full-window view via push_abs_text
+  // so it is not stretched by this non-square panel view. Panel-local (lx, ly)
+  // maps to window-absolute (rect.x + lx*rect.w, rect.y + ly*rect.h); the glyph
+  // height as a window fraction is the panel-local size × rect.h.
+  const float win_aspect = aspect * rect.h / std::max(rect.w, 1e-6F);
+  const auto ax = [&](float lx) { return rect.x + lx * rect.w; };
+  const auto ay = [&](float ly) { return rect.y + ly * rect.h; };
+
+  // Tick labels: Y right-anchored just left of the box, X centered below it.
   {
-    std::vector<float> pos;
-    std::vector<std::string> txt;
+    const float sz = 0.05F * rect.h;  // window-height fraction
+    std::vector<AbsText> items;
     for (const PanelTick& t : yticks) {
-      pos.insert(pos.end(), {0.02F, by(t.frac) - 0.025F, 0.05F});
-      txt.push_back(t.label);
+      items.push_back({ax(kBoxL) - 0.006F, ay(by(t.frac)) - 0.5F * sz, t.label,
+                       TextAnchor::kRight});
     }
     for (const PanelTick& t : xticks) {
-      pos.insert(pos.end(), {bx(t.frac) - 0.02F, kBoxB + 0.035F, 0.05F});
-      txt.push_back(t.label);
+      items.push_back(
+          {ax(bx(t.frac)), ay(kBoxB) + 0.006F, t.label, TextAnchor::kCenter});
     }
-    out.insert({prefix + "_ticks", plot_geom_tensor(pos, 3)});
-    auto s = plot_layer_spec(prefix + "_ticks", PlotInputType::TEXT,
-                             {0.78F, 0.78F, 0.82F, 1.0F}, rect, 7);
-    s.text_ = std::move(txt);
-    specs->push_back(std::move(s));
+    push_abs_text(out, specs, prefix + "_ticks", items, sz, win_aspect,
+                  {0.78F, 0.78F, 0.82F, 1.0F}, 7);
   }
 
   // Title (top-left of the panel).
-  out.insert({prefix + "_title", plot_geom_tensor({0.03F, 0.02F, 0.06F}, 3)});
-  auto title_spec = plot_layer_spec(prefix + "_title", PlotInputType::TEXT,
-                                    {1.0F, 1.0F, 1.0F, 1.0F}, rect, 8);
-  title_spec.text_ = {title};
-  specs->push_back(std::move(title_spec));
+  push_abs_text(out, specs, prefix + "_title",
+                {{ax(0.03F), ay(0.02F), title, TextAnchor::kLeft}},
+                0.06F * rect.h, win_aspect, {1.0F, 1.0F, 1.0F, 1.0F}, 8);
 }
 
 // Append a scenario-clock overlay — the current simulated time (seconds) — to a
@@ -1079,16 +1136,26 @@ inline void emit_rd_axes(holoscan::TensorMap& out,
                          const PanelRect& region,
                          const std::vector<PanelTick>& xticks,
                          const std::vector<PanelTick>& yticks,
-                         const std::string& title, float px_height) {
+                         const std::string& title, float px_height,
+                         float box_aspect) {
   const auto bx = [](float xf) { return kBoxL + xf * (kBoxR - kBoxL); };
   const auto by = [](float yf) { return kBoxB - yf * (kBoxB - kBoxT); };
-  // Text size as a fraction of the View height that renders to a fixed pixel
+  // Text size as a fraction of the window height that renders to a fixed pixel
   // target (see kRd*Px), so it stays readable and near the 25 px font atlas.
   const float safe_h = std::max(px_height, 1.0F);
   const float tick_sz = kRdTickPx / safe_h;
   const float title_sz = kRdTitlePx / safe_h;
+  // Window aspect (W/H), derived from the inset box's on-screen aspect: the box
+  // is (kBoxR-kBoxL)*region.w wide and (kBoxB-kBoxT)*region.h tall of the window,
+  // so W/H = box_aspect * boxH_frac / boxW_frac.
+  const float win_aspect = box_aspect * (kBoxB - kBoxT) * region.h /
+                           std::max((kBoxR - kBoxL) * region.w, 1e-6F);
+  // Panel-local (region [0,1]) → window-absolute.
+  const auto ax = [&](float lx) { return region.x + lx * region.w; };
+  const auto ay = [&](float ly) { return region.y + ly * region.h; };
 
-  // Border frame + short outward tick marks (no interior gridlines).
+  // Border frame + short outward tick marks (no interior gridlines). Geometry
+  // stays in the region sub-view so it lands exactly on the image edges.
   {
     std::vector<float> lines;
     const auto seg = [&lines](float x0, float y0, float x1, float y1) {
@@ -1111,46 +1178,37 @@ inline void emit_rd_axes(holoscan::TensorMap& out,
                                      {0.60F, 0.60F, 0.68F, 1.0F}, region, 4));
   }
 
-  // Tick labels: Y in the left margin, X below the box.
-  if (!xticks.empty() || !yticks.empty()) {
-    std::vector<float> pos;
-    std::vector<std::string> txt;
+  // Tick labels (full-window view, un-stretched): Y right-anchored just left of
+  // the box, X centered below it.
+  {
+    std::vector<AbsText> items;
     for (const PanelTick& t : yticks) {
-      pos.insert(pos.end(), {0.015F, by(t.frac) - 0.5F * tick_sz, tick_sz});
-      txt.push_back(t.label);
+      items.push_back({ax(kBoxL) - 0.010F, ay(by(t.frac)) - 0.5F * tick_sz,
+                       t.label, TextAnchor::kRight});
     }
     for (const PanelTick& t : xticks) {
-      pos.insert(pos.end(), {bx(t.frac) - 0.018F, kBoxB + 0.02F, tick_sz});
-      txt.push_back(t.label);
+      items.push_back(
+          {ax(bx(t.frac)), ay(kBoxB) + 0.016F, t.label, TextAnchor::kCenter});
     }
-    out.insert({"rd_ticks", plot_geom_tensor(pos, 3)});
-    auto s = plot_layer_spec("rd_ticks", PlotInputType::TEXT,
-                             {0.85F, 0.85F, 0.88F, 1.0F}, region, 7);
-    s.text_ = std::move(txt);
-    specs->push_back(std::move(s));
+    push_abs_text(out, specs, "rd_ticks", items, tick_sz, win_aspect,
+                  {0.85F, 0.85F, 0.88F, 1.0F}, 7);
   }
 
-  // Axis unit labels ("Range (m)" under the X axis, "Velocity (m/s)" above the
-  // Y axis) + centered title in the top margin.
-  {
-    const float cx = 0.5F * (kBoxL + kBoxR);
-    std::vector<float> pos = {cx - 0.05F, kBoxB + 0.06F,  tick_sz,
-                              0.015F,     kBoxT - 0.035F, tick_sz};
-    out.insert({"rd_axislabels", plot_geom_tensor(pos, 3)});
-    auto s = plot_layer_spec("rd_axislabels", PlotInputType::TEXT,
-                             {0.80F, 0.80F, 0.85F, 1.0F}, region, 7);
-    s.text_ = {"Range (m)", "Velocity (m/s)"};
-    specs->push_back(std::move(s));
+  // Axis unit labels: "Range (m)" centered under the X ticks, "Velocity (m/s)"
+  // left-aligned just above the box (Holoviz can't rotate text).
+  push_abs_text(
+      out, specs, "rd_axislabels",
+      {{ax(0.5F * (kBoxL + kBoxR)), ay(kBoxB) + 0.016F + tick_sz + 0.006F,
+        "Range (m)", TextAnchor::kCenter},
+       {ax(kBoxL), ay(kBoxT) - tick_sz - 0.006F, "Velocity (m/s)",
+        TextAnchor::kLeft}},
+      tick_sz, win_aspect, {0.80F, 0.80F, 0.85F, 1.0F}, 7);
 
-    out.insert({"rd_title",
-                plot_geom_tensor({cx - 0.09F, kBoxT - 0.5F * title_sz - 0.02F,
-                                  title_sz},
-                                 3)});
-    auto ts = plot_layer_spec("rd_title", PlotInputType::TEXT,
-                              {1.0F, 1.0F, 1.0F, 1.0F}, region, 8);
-    ts.text_ = {title};
-    specs->push_back(std::move(ts));
-  }
+  // Title centered in the top margin.
+  push_abs_text(out, specs, "rd_title",
+                {{ax(0.5F * (kBoxL + kBoxR)), ay(kBoxT) - title_sz - 0.012F,
+                  title, TextAnchor::kCenter}},
+                title_sz, win_aspect, {1.0F, 1.0F, 1.0F, 1.0F}, 8);
 }
 
 // Rolling time-series plots of the per-cluster centroids. Keeps a scrolling
