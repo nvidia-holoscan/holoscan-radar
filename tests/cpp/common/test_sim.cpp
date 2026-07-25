@@ -19,7 +19,7 @@
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sim/additives.hpp"
 #include "radar_common/sim/mimo_sim.hpp"
-#include "radar_common/sim/point_target_sim.hpp"
+#include "utils/sim_reference.hpp"
 #include "utils/bin_model.hpp"
 
 namespace {

@@ -13,9 +13,10 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstdio>
 #include <vector>
 
-#include "radar_common/sim/point_target_sim.hpp"
+#include "utils/sim_reference.hpp"
 #include "radar_common/sim/sim_gpu.hpp"
 #include "utils/tensor_fixtures.hpp"
 
@@ -79,6 +80,28 @@ TEST(SimGpu, MatchesCpuPreMixer) {
   auto scene = base_scene();
   scene.dechirped = false;
   EXPECT_LT(max_abs_diff(scene), 1e-3);
+}
+
+TEST(SimGpu, NoiseHasExpectedVariance) {
+  // Pure-noise cube (no targets): E[|z|^2] = 2*sigma^2 = noise_power.
+  auto scene = base_scene();
+  scene.targets.clear();
+  cudaStream_t stream = nullptr;
+  ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
+  auto dev = sim::simulate_gpu(scene, stream);
+  const double snr_db = 10.0;
+  sim::add_thermal_noise_gpu(*dev, snr_db, 0xC0FFEEULL, stream);
+  const auto host = to_host(*dev);
+  const auto* g = host.as<std::complex<float>>();
+  double sumsq = 0.0;
+  const size_t n = static_cast<size_t>(host.size());
+  for (size_t i = 0; i < n; ++i) {
+    sumsq += static_cast<double>(std::norm(g[i]));
+  }
+  const double measured = sumsq / static_cast<double>(n);
+  const double expected = std::pow(10.0, -snr_db / 10.0);
+  cudaStreamDestroy(stream);
+  EXPECT_NEAR(measured, expected, 0.1 * expected);  // ~8k samples → <10%
 }
 
 TEST(SimGpu, ShapeMatchesRank) {

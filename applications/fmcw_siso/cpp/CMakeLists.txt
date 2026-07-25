@@ -16,6 +16,7 @@ target_link_libraries(fmcw_siso PRIVATE
     holoscan::detection_reduction_op
     holoscan::cluster_dbscan_op
     holoscan::radar_app
+    holoscan::radar_common_sim_gpu
     holoscan::radar_common
     holoscan::core
     holoscan::ops::holoviz

@@ -139,4 +139,45 @@ std::shared_ptr<holoscan::Tensor> simulate_gpu(const SimScene& scene,
   return out;
 }
 
+void add_thermal_noise_gpu(holoscan::Tensor& cube,
+                           const std::optional<double>& snr_db, uint64_t seed,
+                           cudaStream_t stream) {
+  if (!snr_db.has_value()) {
+    return;
+  }
+  const auto shape = cube.shape();
+  int64_t num_rx = 1;
+  int64_t num_chirps = 0;
+  int64_t samples = 0;
+  if (shape.size() == 2) {
+    num_chirps = shape[0];
+    samples = shape[1];
+  } else if (shape.size() == 3) {
+    num_rx = shape[0];
+    num_chirps = shape[1];
+    samples = shape[2];
+  } else {
+    throw std::runtime_error(
+        "add_thermal_noise_gpu: expected a rank-2 or rank-3 cube");
+  }
+
+  const double noise_power = std::pow(10.0, -(*snr_db) / 10.0);
+  const float sigma = static_cast<float>(std::sqrt(noise_power / 2.0));
+
+  matx::cudaExecutor exec{stream};
+  // View the complex<float> buffer as real<float> with a doubled last dim:
+  // adding independent N(0, sigma) to each real/imag component yields complex
+  // white Gaussian noise with per-component std sigma (matches the CPU model).
+  auto real_view =
+      make_real_view3<float>(cube.data(), num_rx, num_chirps, 2 * samples);
+  auto noise = matx::make_tensor<float, 3>({num_rx, num_chirps, 2 * samples},
+                                           matx::MATX_DEVICE_MEMORY);
+  (noise = matx::random<float>(noise.Shape(), matx::NORMAL, seed)).run(exec);
+  (real_view = real_view + sigma * noise).run(exec);
+
+  if (cudaStreamSynchronize(stream) != cudaSuccess) {
+    throw std::runtime_error("add_thermal_noise_gpu: stream sync failed");
+  }
+}
+
 }  // namespace holoscan::radar::sim

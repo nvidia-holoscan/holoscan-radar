@@ -1,26 +1,23 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Analytic point-target FMCW signal simulator. A signal model, not an EM
-// solver: each target's closed-form contribution is summed over (rx, chirp,
-// fast-time sample) to produce the clean scatterer response. Thermal noise and
-// any other non-target returns are I/Q additives applied *separately*
-// (radar_common/sim/additives.hpp) on top of the solver output, so the solver
-// stays a pure scatterer processor and additives compose linearly — the caller
-// (source op or test) orchestrates simulate() → additives.
+// Point-target FMCW scene model — the shared, STL-only data types and geometry
+// for the analytic simulator: the waveform/target/scene structs, the derived
+// per-target ground truth (range / radial velocity / look direction), and the
+// per-frame target mover. Consumed by the runtime GPU simulator (sim_gpu.hpp),
+// the MIMO simulators (mimo_sim.hpp), the source operators, and config parsing.
 //
-// A shared radar_common utility: applications use it to synthesize input
-// cubes, and tests use it as the tautology guard (asserting operator outputs
-// against its analytic ground truth). Deliberately independent of the operator
-// implementations (STL-only; no operator or MatX includes) so that the ground
-// truth it produces is derived from the signal model, not from the code under
-// test.
+// The closed-form CPU signal model itself — simulate() / reference_chirp() /
+// to_real_if() — is the analytic ground truth used only by tests, and lives in
+// tests/cpp/utils/sim_reference.hpp. The runtime path synthesizes on the device
+// (sim_gpu.hpp), validated against that CPU reference to tolerance. This header
+// stays STL-only (no operator or MatX includes) so the scene model and the
+// reference derived from it remain independent of the code under test.
 //
-// Modeling assumptions: stop-and-hop (target frozen within a
-// chirp, advances between chirps), ego motion folded into target relative
-// velocity by the caller, far-field plane wave, monostatic, single-slope
-// sweeps, ideal hardware. Aliasing folds naturally through the phase
-// arithmetic. Fixed seed → bit-identical output.
+// Modeling assumptions: stop-and-hop (target frozen within a chirp, advances
+// between chirps), ego motion folded into target relative velocity by the
+// caller, far-field plane wave, monostatic, single-slope sweeps, ideal
+// hardware. Aliasing folds naturally through the phase arithmetic.
 //
 // Sign conventions (must match the operators' locked semantics):
 //  - Dechirped sample: s(k, t) = A * exp(+j*2*pi*f_b(k)*t - j*2*pi*f_c*tau_k)
@@ -115,19 +112,6 @@ struct SimResult {
   std::vector<TargetTruth> truth;
 };
 
-// Baseband reference chirp sample r[s] = exp(+j*pi*slope*t_s^2).
-inline std::vector<std::complex<double>> reference_chirp(
-    const SimWaveform& waveform, int64_t samples_per_chirp) {
-  std::vector<std::complex<double>> ref(samples_per_chirp);
-  const double slope = waveform.slope();
-  for (int64_t s = 0; s < samples_per_chirp; ++s) {
-    const double t = static_cast<double>(s) / waveform.sample_rate;
-    const double phase = kPi * slope * t * t;
-    ref[s] = std::complex<double>(std::cos(phase), std::sin(phase));
-  }
-  return ref;
-}
-
 inline TargetTruth derive_truth(const PointTarget& target) {
   TargetTruth truth;
   truth.range = norm(target.position);
@@ -143,84 +127,6 @@ inline TargetTruth derive_truth(const PointTarget& target) {
   return truth;
 }
 
-// Synthesize the raw ADC cube plus ground truth for a scene.
-inline SimResult simulate(const SimScene& scene) {
-  if (scene.rx_positions.empty()) {
-    throw std::invalid_argument("point_target_sim: need >= 1 RX element");
-  }
-  if (scene.tx_positions.size() != 1) {
-    throw std::invalid_argument(
-        "point_target_sim: simulate() models a single TX; use the MIMO "
-        "simulators (mimo_sim.hpp) for multi-TX scenes");
-  }
-  const int64_t num_rx = static_cast<int64_t>(scene.rx_positions.size());
-  const int64_t num_chirps = scene.num_chirps;
-  const int64_t samples = scene.samples_per_chirp;
-  const double c = scene.propagation_speed;
-  const double fs = scene.waveform.sample_rate;
-  const double slope = scene.waveform.slope();
-  const double f_c = scene.waveform.carrier_frequency;
-  const double pri = scene.waveform.chirp_repetition_interval;
-
-  SimResult result;
-  result.cube.assign(
-      static_cast<size_t>(num_rx * num_chirps * samples), {0.0, 0.0});
-  if (num_rx == 1) {
-    result.shape = {num_chirps, samples};
-  } else {
-    result.shape = {num_rx, num_chirps, samples};
-  }
-
-  for (const PointTarget& target : scene.targets) {
-    const TargetTruth truth = derive_truth(target);
-    result.truth.push_back(truth);
-
-    for (int64_t rx = 0; rx < num_rx; ++rx) {
-      // Far-field two-way delay: 2*R_k minus the (tx+rx) aperture
-      // projection onto the look direction.
-      const double aperture =
-          dot(scene.tx_positions[0], truth.look_direction) +
-          dot(scene.rx_positions[static_cast<size_t>(rx)],
-              truth.look_direction);
-      for (int64_t k = 0; k < num_chirps; ++k) {
-        const double range_k =
-            truth.range +
-            truth.radial_velocity * static_cast<double>(k) * pri;
-        const double tau = (2.0 * range_k - aperture) / c;
-        const double beat = slope * tau;  // Hz
-        for (int64_t s = 0; s < samples; ++s) {
-          const double t = static_cast<double>(s) / fs;
-          const double phase =
-              2.0 * kPi * (beat * t) - 2.0 * kPi * f_c * tau;
-          const std::complex<double> sample =
-              target.amplitude *
-              std::complex<double>(std::cos(phase), std::sin(phase));
-          result.cube[static_cast<size_t>((rx * num_chirps + k) * samples +
-                                          s)] += sample;
-        }
-      }
-    }
-  }
-
-  // Pre-mixer output: multiply the dechirped model back up by the
-  // reference chirp (dechirp = conj(reference) multiplication).
-  if (!scene.dechirped) {
-    const auto ref = reference_chirp(scene.waveform, samples);
-    for (int64_t rx = 0; rx < num_rx; ++rx) {
-      for (int64_t k = 0; k < num_chirps; ++k) {
-        for (int64_t s = 0; s < samples; ++s) {
-          result.cube[static_cast<size_t>((rx * num_chirps + k) * samples +
-                                          s)] *= ref[static_cast<size_t>(s)];
-        }
-      }
-    }
-  }
-
-  // Clean scatterer response — thermal noise and other I/Q additives are a
-  // separate stage the caller applies (radar_common/sim/additives.hpp).
-  return result;
-}
-
 // Advance each target's base position by one frame period (dt seconds). The
 // simulator models chirp-to-chirp motion within a CPI; this carries that motion
 // across CPIs so successive frames see the target at a new position. Templated
@@ -233,16 +139,6 @@ inline void advance_scene(Scene* scene, double dt) {
       target.position[axis] += target.velocity[axis] * dt;
     }
   }
-}
-
-// Real-IF variant: the real part of the complex IF cube (exercises the
-// operators' RFFT front-end path).
-inline std::vector<double> to_real_if(const SimResult& sim) {
-  std::vector<double> real_cube(sim.cube.size());
-  for (size_t i = 0; i < sim.cube.size(); ++i) {
-    real_cube[i] = sim.cube[i].real();
-  }
-  return real_cube;
 }
 
 }  // namespace holoscan::radar::sim

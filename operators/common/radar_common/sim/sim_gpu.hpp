@@ -20,7 +20,9 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 
 #include <holoscan/core/domain/tensor.hpp>
 
@@ -38,5 +40,15 @@ namespace holoscan::radar::sim {
 // enqueued on `stream`.
 std::shared_ptr<holoscan::Tensor> simulate_gpu(const SimScene& scene,
                                                cudaStream_t stream);
+
+// I/Q additive (device): add seeded complex white Gaussian noise in place to a
+// complex<float> cube at `snr_db` relative to a unit-amplitude target — the
+// device counterpart of additives.hpp::add_thermal_noise, so the noisy cube
+// never leaves the GPU. No-op when `snr_db` is unset. Not bit-identical to the
+// CPU additive's realization (device RNG); statistically equivalent. Enqueued on
+// `stream`.
+void add_thermal_noise_gpu(holoscan::Tensor& cube,
+                           const std::optional<double>& snr_db, uint64_t seed,
+                           cudaStream_t stream);
 
 }  // namespace holoscan::radar::sim

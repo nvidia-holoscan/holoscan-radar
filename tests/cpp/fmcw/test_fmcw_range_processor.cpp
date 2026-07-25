@@ -27,7 +27,7 @@
 
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "utils/bin_model.hpp"
-#include "radar_common/sim/point_target_sim.hpp"
+#include "utils/sim_reference.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
