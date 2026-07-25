@@ -60,6 +60,7 @@ radar_add_test(common/test_angle_convention)
 radar_add_test(common/test_descriptors)
 radar_add_test(common/test_sdk)
 radar_add_test(common/test_sim)
+radar_add_test(common/test_sim_gpu holoscan::radar_common_sim_gpu)
 radar_add_test(common/test_tensor)
 radar_add_test(fmcw/test_fmcw_range_processor
     holoscan::fmcw_range_processor_op)
