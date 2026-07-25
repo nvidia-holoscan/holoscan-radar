@@ -112,18 +112,18 @@ install(EXPORT holoscan_radar_common_steering_targets
 )
 
 # GPU-accelerated point-target simulator (MatX). The device counterpart of the
-# STL simulate() in radar_common/sim/point_target_sim.hpp; links MatX privately.
-add_library(radar_common_sim_gpu STATIC
-    radar_common/sim/sim_gpu.cu)
-add_library(holoscan::radar_common_sim_gpu ALIAS radar_common_sim_gpu)
+# STL simulate() in radar_common/sim/scene.hpp; links MatX privately.
+add_library(radar_common_simulator STATIC
+    radar_common/sim/simulator.cu)
+add_library(holoscan::radar_common_simulator ALIAS radar_common_simulator)
 
-target_include_directories(radar_common_sim_gpu
+target_include_directories(radar_common_simulator
     PUBLIC
         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators/common>
         $<INSTALL_INTERFACE:include>
 )
 
-target_link_libraries(radar_common_sim_gpu
+target_link_libraries(radar_common_simulator
     PUBLIC
         holoscan::core
         holoscan::radar_common
@@ -131,13 +131,13 @@ target_link_libraries(radar_common_sim_gpu
         matx::matx
 )
 
-set_property(TARGET radar_common_sim_gpu PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET radar_common_simulator PROPERTY POSITION_INDEPENDENT_CODE ON)
 
-install(TARGETS radar_common_sim_gpu
-    EXPORT holoscan_radar_common_sim_gpu_targets
+install(TARGETS radar_common_simulator
+    EXPORT holoscan_radar_common_simulator_targets
 )
 
-install(EXPORT holoscan_radar_common_sim_gpu_targets
+install(EXPORT holoscan_radar_common_simulator_targets
     NAMESPACE holoscan::
     DESTINATION lib/cmake/holoscan_radar
 )

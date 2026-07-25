@@ -20,7 +20,7 @@
 
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/enums.hpp"
-#include "radar_common/sim/point_target_sim.hpp"
+#include "radar_common/sim/scene.hpp"
 
 namespace holoscan::radar::sim {
 

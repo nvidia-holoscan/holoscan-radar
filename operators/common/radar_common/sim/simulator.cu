@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// MatX implementation of the GPU simulators (declared in sim_gpu.hpp). Mirrors
-// the closed-form model in point_target_sim.hpp: per target, per TX, per
+// MatX implementation of the GPU simulators (declared in simulator.hpp). Mirrors
+// the closed-form model in scene.hpp: per target, per TX, per
 // (rx, slot), a two-way delay tau and beat frequency drive the fast-time phase
 // ramp; contributions (weighted by the per-(tx, slot) excitation) accumulate in
 // double, then cast to the complex<float> ADC cube. The small per-(rx, slot) tau
@@ -14,7 +14,7 @@
 // implementation; the public entry points differ only in output shape (rank-2
 // SISO vs rank-3), the optional pre-mixer multiply, and how the weights are set.
 
-#include "radar_common/sim/sim_gpu.hpp"
+#include "radar_common/sim/simulator.hpp"
 
 #include <cuda/std/complex>
 
@@ -41,7 +41,7 @@ matx::tensor_t<double, 2> upload2d(const std::vector<double>& h, int64_t rows,
   if (cudaMemcpyAsync(d.Data(), h.data(), sizeof(double) * h.size(),
                       cudaMemcpyHostToDevice, stream) != cudaSuccess ||
       cudaStreamSynchronize(stream) != cudaSuccess) {
-    throw std::runtime_error("sim_gpu: H2D copy failed");
+    throw std::runtime_error("simulator: H2D copy failed");
   }
   return d;
 }

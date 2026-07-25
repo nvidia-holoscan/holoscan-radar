@@ -3,7 +3,7 @@
 
 // CPU I/Q additives — the tests-only reference for the non-scatterer returns
 // added linearly on top of a simulator's clean scatterer response. The runtime
-// applies these on the device (sim_gpu.hpp::add_thermal_noise_gpu); this host
+// applies these on the device (simulator.hpp::add_thermal_noise_gpu); this host
 // version is the deterministic oracle used by the tests. Additives operate on a
 // raw complex IQ cube + parameters, not on a SimScene, so this header does NOT
 // depend on the scene/solver headers — additives are independent of how the cube

@@ -30,7 +30,7 @@
 
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
-#include "radar_common/sim/point_target_sim.hpp"
+#include "radar_common/sim/scene.hpp"
 
 namespace holoscan::radar::app {
 

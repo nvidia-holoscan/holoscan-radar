@@ -3,7 +3,7 @@
 
 // Rank-agnostic synthetic ADC source for the FMCW example apps. Emits one
 // complex-IF ADC cube per tick from the GPU point-target simulator
-// (radar_common/sim/sim_gpu.hpp), advancing the targets through space by one
+// (radar_common/sim/simulator.hpp), advancing the targets through space by one
 // frame period between ticks. The cube is synthesized on the device and emitted
 // directly — no host synthesis, no cube H2D. Its shape follows the scene: rank-2
 // (num_chirps, samples_per_chirp) for single-RX SISO, rank-3
@@ -12,7 +12,7 @@
 // simulator that does not fit the single-TX simulate_gpu(SimScene) shape.)
 //
 // Header-only: methods are in-class inline, so multiple app TUs can include it.
-// Apps that use this operator must link holoscan::radar_common_sim_gpu.
+// Apps that use this operator must link holoscan::radar_common_simulator.
 
 #pragma once
 
@@ -25,7 +25,7 @@
 
 #include "radar_app/report/cadence_meter.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
-#include "radar_common/sim/sim_gpu.hpp"
+#include "radar_common/sim/simulator.hpp"
 
 namespace holoscan::radar::app {
 

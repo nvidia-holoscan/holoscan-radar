@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Analytic CPU point-target FMCW simulator — the closed-form ground truth used
-// by the tests. This is the reference the runtime GPU simulator (sim_gpu.hpp) is
+// by the tests. This is the reference the runtime GPU simulator (simulator.hpp) is
 // validated against; it deliberately lives under tests/ (not in the operators
 // tree) and stays STL-only, so it is an implementation-independent oracle for
 // both the GPU sim and the processing operators.
 //
 // The scene model + geometry it builds on (SimScene, PointTarget, derive_truth,
-// …) is the shared, production header radar_common/sim/point_target_sim.hpp.
+// …) is the shared, production header radar_common/sim/scene.hpp.
 //
 // Sign conventions and modeling assumptions are documented on that header; this
 // file is the single-TX synthesis loop that was factored out of it. (The MIMO
@@ -23,7 +23,7 @@
 #include <vector>
 
 #include "radar_common/math/constants.hpp"
-#include "radar_common/sim/point_target_sim.hpp"
+#include "radar_common/sim/scene.hpp"
 
 namespace holoscan::radar::sim {
 
@@ -44,11 +44,11 @@ inline std::vector<std::complex<double>> reference_chirp(
 // reference the GPU simulate_gpu() is checked against.
 inline SimResult simulate(const SimScene& scene) {
   if (scene.rx_positions.empty()) {
-    throw std::invalid_argument("point_target_sim: need >= 1 RX element");
+    throw std::invalid_argument("simulate: need >= 1 RX element");
   }
   if (scene.tx_positions.size() != 1) {
     throw std::invalid_argument(
-        "point_target_sim: simulate() models a single TX; use the MIMO "
+        "simulate: models a single TX; use the MIMO "
         "simulators (mimo_sim.hpp) for multi-TX scenes");
   }
   const int64_t num_rx = static_cast<int64_t>(scene.rx_positions.size());

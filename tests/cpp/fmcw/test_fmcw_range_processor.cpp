@@ -4,7 +4,7 @@
 // Tests for FMCWRangeProcessorOp.
 //
 // The analytic point-target simulator
-// (radar_common/sim/point_target_sim.hpp) provides the input cubes and the
+// (radar_common/sim/scene.hpp) provides the input cubes and the
 // forward bin model (utils/bin_model.hpp) the
 // independent ground truth; assertions are made in the physical domain via
 // the operator's own range_bins output wherever possible. Driven through

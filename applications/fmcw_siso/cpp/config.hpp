@@ -14,7 +14,7 @@
 #include <string>
 
 #include "radar_app/app/config.hpp"
-#include "radar_common/sim/point_target_sim.hpp"
+#include "radar_common/sim/scene.hpp"
 
 namespace radar = holoscan::radar;
 using namespace holoscan::radar::app;  // NOLINT(build/namespaces)

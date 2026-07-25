@@ -19,7 +19,7 @@
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/math/constants.hpp"
 #include "utils/mimo_reference.hpp"
-#include "radar_common/sim/sim_gpu.hpp"
+#include "radar_common/sim/simulator.hpp"
 #include "utils/sim_reference.hpp"
 #include "utils/tensor_fixtures.hpp"
 

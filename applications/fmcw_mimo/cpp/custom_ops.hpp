@@ -6,9 +6,9 @@
 //   MimoTdmAdcSourceOp / MimoDdmAdcSourceOp — synthetic multiplexed ADC sources
 // The source operators build the per-(tx, slot) excitation weights for their
 // multiplexing scheme and drive the unified GPU simulator
-// (radar_common/sim/sim_gpu.hpp::simulate_mimo_gpu), so the cube is synthesized
+// (radar_common/sim/simulator.hpp::simulate_mimo_gpu), so the cube is synthesized
 // on the device and emitted directly — no host synthesis, no cube H2D. Apps
-// using them must link holoscan::radar_common_sim_gpu.
+// using them must link holoscan::radar_common_simulator.
 
 #pragma once
 
@@ -28,7 +28,7 @@
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
-#include "radar_common/sim/sim_gpu.hpp"
+#include "radar_common/sim/simulator.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 

@@ -4,13 +4,13 @@
 // Point-target FMCW scene model — the shared, STL-only data types and geometry
 // for the analytic simulator: the waveform/target/scene structs, the derived
 // per-target ground truth (range / radial velocity / look direction), and the
-// per-frame target mover. Consumed by the runtime GPU simulator (sim_gpu.hpp),
-// the MIMO GPU core (sim_gpu.hpp), the source operators, and config parsing.
+// per-frame target mover. Consumed by the runtime GPU simulator (simulator.hpp),
+// the MIMO GPU core (simulator.hpp), the source operators, and config parsing.
 //
 // The closed-form CPU signal model itself — simulate() / reference_chirp() /
 // to_real_if() — is the analytic ground truth used only by tests, and lives in
 // tests/cpp/utils/sim_reference.hpp. The runtime path synthesizes on the device
-// (sim_gpu.hpp), validated against that CPU reference to tolerance. This header
+// (simulator.hpp), validated against that CPU reference to tolerance. This header
 // stays STL-only (no operator or MatX includes) so the scene model and the
 // reference derived from it remain independent of the code under test.
 //
@@ -83,7 +83,7 @@ struct SimScene {
   int64_t samples_per_chirp{256};
   // Element positions (m, array-local frame). simulate() models a single TX
   // (tx_positions must hold exactly one element); the MIMO simulators
-  // (sim_gpu.hpp::simulate_mimo_gpu) consume the full TX set for TDM/DDM.
+  // (simulator.hpp::simulate_mimo_gpu) consume the full TX set for TDM/DDM.
   std::vector<Vec3> tx_positions{Vec3{0.0, 0.0, 0.0}};
   std::vector<Vec3> rx_positions{Vec3{0.0, 0.0, 0.0}};
   double propagation_speed{kSimSpeedOfLight};
@@ -118,7 +118,7 @@ inline TargetTruth derive_truth(const PointTarget& target) {
   truth.range = norm(target.position);
   if (truth.range <= 0.0) {
     throw std::invalid_argument(
-        "point_target_sim: target at the origin has no defined look "
+        "derive_truth: target at the origin has no defined look "
         "direction");
   }
   truth.look_direction = {target.position[0] / truth.range,

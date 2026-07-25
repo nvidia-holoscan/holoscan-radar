@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // GPU-accelerated point-target FMCW simulator (MatX). The device-resident
-// counterpart of point_target_sim.hpp::simulate(): same closed-form signal
+// counterpart of scene.hpp::simulate(): same closed-form signal
 // model (far-field two-way delay, beat frequency, slow-time carrier phase),
 // synthesized on the device and returned as a complex<float> ADC cube ready to
 // emit — no host synthesis, no H2D of the cube.
@@ -12,7 +12,7 @@
 // remains the analytic ground truth against which this is validated.
 //
 // The host launch wrapper is declared here (CUDA-free, host-includable) and
-// defined in sim_gpu.cu, compiled into holoscan::radar_common_sim_gpu. Link that
+// defined in simulator.cu, compiled into holoscan::radar_common_simulator. Link that
 // library; do not recompile the .cu into another target (ODR). radar_common
 // itself stays CUDA-free.
 
@@ -28,7 +28,7 @@
 
 #include <holoscan/core/domain/tensor.hpp>
 
-#include "radar_common/sim/point_target_sim.hpp"
+#include "radar_common/sim/scene.hpp"
 
 namespace holoscan::radar::sim {
 
