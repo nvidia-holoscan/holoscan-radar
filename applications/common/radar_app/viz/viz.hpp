@@ -62,19 +62,31 @@ struct PanelTick {
 // so ClusterOverlayOp, which precedes it, can label its RD-map axes).
 inline std::string plot_format_tick(float value, int dec);
 
+// Holoviz bakes its font atlas at a fixed 25 px bitmap and scales those glyphs,
+// so text reads crispest at ~25 px on screen and pixelates when scaled far from
+// it (badly when upscaled on a large window). These helpers therefore size text
+// to a fixed pixel target via `px_height` (the on-screen pixel height of the
+// layer's View), keeping it readable and at/below the atlas resolution at any
+// window size. Chosen targets:
+constexpr float kRdTickPx = 20.0F;    // axis tick + unit labels
+constexpr float kRdTitlePx = 25.0F;   // RD-map title
+constexpr float kClockPx = 23.0F;     // scenario clock
+
 // Scenario-clock + RD-map-axes overlays (defined with the panel helpers below;
 // forward-declared so ClusterOverlayOp, which precedes them, can emit them).
 inline void emit_sim_clock(holoscan::TensorMap& out,
-                           std::vector<PlotInputSpec>* specs, double seconds);
+                           std::vector<PlotInputSpec>* specs, double seconds,
+                           float px_height);
 // Frame border + tick marks/labels + title for the RD map, drawn in the margins
 // around the inset image (View = `region`; the image occupies the shared kBox
-// sub-rect). xticks/yticks may be empty (frame + title still drawn).
+// sub-rect). xticks/yticks may be empty (frame + title still drawn). px_height
+// is the region View's on-screen pixel height, for pixel-locked text sizing.
 inline void emit_rd_axes(holoscan::TensorMap& out,
                          std::vector<PlotInputSpec>* specs,
                          const PanelRect& region,
                          const std::vector<PanelTick>& xticks,
                          const std::vector<PanelTick>& yticks,
-                         const std::string& title);
+                         const std::string& title, float px_height);
 
 // Extract one RX channel from a per-channel RD map for visualization. SIMO
 // rd_maps are (N_rx, num_doppler, num_range); Holoviz helpers expect rank-2
@@ -334,6 +346,10 @@ class ClusterOverlayOp : public holoscan::Operator {
   // view). Default full-window is a sane fallback when unset.
   PanelRect rd_region{0.0F, 0.0F, 1.0F, 1.0F};
   std::string rd_title{"Range–Doppler"};
+  // On-screen pixel height of the RD region View (= window height, since the
+  // region spans the full height). Drives pixel-locked chrome text sizing so it
+  // reads crisply against Holoviz's fixed 25 px font atlas. Set by the app.
+  float rd_view_px_height{600.0F};
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("detection_idx");
@@ -616,9 +632,11 @@ class ClusterOverlayOp : public holoscan::Operator {
     // tensors go out with the overlay (→ receivers); the specs go out on
     // time_specs (→ input_specs, directly or via the panel chain).
     std::vector<PlotInputSpec> chrome_specs;
-    emit_rd_axes(out, &chrome_specs, rd_region, xticks_, yticks_, rd_title);
+    emit_rd_axes(out, &chrome_specs, rd_region, xticks_, yticks_, rd_title,
+                 rd_view_px_height);
     emit_sim_clock(out, &chrome_specs,
-                   static_cast<double>(frame_index_) * frame_period);
+                   static_cast<double>(frame_index_) * frame_period,
+                   rd_view_px_height);
     op_output.emit(out, "overlay");
     op_output.emit(chrome_specs, "time_specs");
     ++frame_index_;
@@ -1025,10 +1043,15 @@ inline void emit_panel(holoscan::TensorMap& out,
 // input_specs chain; the layer names must stay unique across the merged
 // HolovizOp spec list.
 inline void emit_sim_clock(holoscan::TensorMap& out,
-                           std::vector<PlotInputSpec>* specs, double seconds) {
+                           std::vector<PlotInputSpec>* specs, double seconds,
+                           float px_height) {
   const PanelRect full{0.0F, 0.0F, 1.0F, 1.0F};
-  // Dark plate (two triangles) for legibility over the bright turbo map.
-  constexpr float x0 = 0.006F, y0 = 0.010F, x1 = 0.170F, y1 = 0.058F;
+  // Pixel-locked label size (see kClockPx) so it stays crisp at any window size.
+  const float sz = kClockPx / std::max(px_height, 1.0F);
+  const float ty = 0.012F;  // text top, window-normalized
+  // Dark plate (two triangles) sized to bracket the text, for legibility over
+  // the bright turbo map.
+  const float x0 = 0.006F, y0 = ty - 0.004F, x1 = 0.190F, y1 = ty + sz + 0.006F;
   const std::vector<float> bg = {x0, y0, x1, y0, x0, y1,
                                  x1, y0, x1, y1, x0, y1};
   out.insert({"sim_clock_bg", plot_geom_tensor(bg, 2)});
@@ -1036,7 +1059,7 @@ inline void emit_sim_clock(holoscan::TensorMap& out,
                                    {0.0F, 0.0F, 0.0F, 0.55F}, full, 9));
   // White time label; TEXT position is (x, y, size), size = fraction of the
   // view (window) height.
-  out.insert({"sim_clock", plot_geom_tensor({0.014F, 0.020F, 0.026F}, 3)});
+  out.insert({"sim_clock", plot_geom_tensor({0.014F, ty, sz}, 3)});
   auto label = plot_layer_spec("sim_clock", PlotInputType::TEXT,
                                {1.0F, 1.0F, 1.0F, 1.0F}, full, 10);
   label.text_ = {"t = " + plot_format_tick(static_cast<float>(seconds), 1) +
@@ -1056,9 +1079,14 @@ inline void emit_rd_axes(holoscan::TensorMap& out,
                          const PanelRect& region,
                          const std::vector<PanelTick>& xticks,
                          const std::vector<PanelTick>& yticks,
-                         const std::string& title) {
+                         const std::string& title, float px_height) {
   const auto bx = [](float xf) { return kBoxL + xf * (kBoxR - kBoxL); };
   const auto by = [](float yf) { return kBoxB - yf * (kBoxB - kBoxT); };
+  // Text size as a fraction of the View height that renders to a fixed pixel
+  // target (see kRd*Px), so it stays readable and near the 25 px font atlas.
+  const float safe_h = std::max(px_height, 1.0F);
+  const float tick_sz = kRdTickPx / safe_h;
+  const float title_sz = kRdTitlePx / safe_h;
 
   // Border frame + short outward tick marks (no interior gridlines).
   {
@@ -1088,11 +1116,11 @@ inline void emit_rd_axes(holoscan::TensorMap& out,
     std::vector<float> pos;
     std::vector<std::string> txt;
     for (const PanelTick& t : yticks) {
-      pos.insert(pos.end(), {0.015F, by(t.frac) - 0.009F, 0.017F});
+      pos.insert(pos.end(), {0.015F, by(t.frac) - 0.5F * tick_sz, tick_sz});
       txt.push_back(t.label);
     }
     for (const PanelTick& t : xticks) {
-      pos.insert(pos.end(), {bx(t.frac) - 0.018F, kBoxB + 0.02F, 0.017F});
+      pos.insert(pos.end(), {bx(t.frac) - 0.018F, kBoxB + 0.02F, tick_sz});
       txt.push_back(t.label);
     }
     out.insert({"rd_ticks", plot_geom_tensor(pos, 3)});
@@ -1106,16 +1134,18 @@ inline void emit_rd_axes(holoscan::TensorMap& out,
   // Y axis) + centered title in the top margin.
   {
     const float cx = 0.5F * (kBoxL + kBoxR);
-    std::vector<float> pos = {cx - 0.05F, kBoxB + 0.055F, 0.019F,
-                              0.015F,     kBoxT - 0.045F, 0.019F};
+    std::vector<float> pos = {cx - 0.05F, kBoxB + 0.06F,  tick_sz,
+                              0.015F,     kBoxT - 0.035F, tick_sz};
     out.insert({"rd_axislabels", plot_geom_tensor(pos, 3)});
     auto s = plot_layer_spec("rd_axislabels", PlotInputType::TEXT,
                              {0.80F, 0.80F, 0.85F, 1.0F}, region, 7);
     s.text_ = {"Range (m)", "Velocity (m/s)"};
     specs->push_back(std::move(s));
 
-    out.insert(
-        {"rd_title", plot_geom_tensor({cx - 0.09F, kBoxT - 0.09F, 0.026F}, 3)});
+    out.insert({"rd_title",
+                plot_geom_tensor({cx - 0.09F, kBoxT - 0.5F * title_sz - 0.02F,
+                                  title_sz},
+                                 3)});
     auto ts = plot_layer_spec("rd_title", PlotInputType::TEXT,
                               {1.0F, 1.0F, 1.0F, 1.0F}, region, 8);
     ts.text_ = {title};

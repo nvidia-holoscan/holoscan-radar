@@ -191,6 +191,7 @@ class FmcwSisoApp(Application):
             overlay.rd_region = PanelRect(
                 *rd_map_region(cfg.plots.enable, 0.60)
             )  # axes/frame/title region
+            overlay.rd_view_px_height = 600.0
             overlay.marker_radius = cfg.viz.marker_radius
             overlay.marker_outline = cfg.viz.marker_outline
             overlay.marker_segments = cfg.viz.marker_segments

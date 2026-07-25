@@ -189,6 +189,7 @@ class FmcwSisoApp : public holoscan::Application {
       auto visualizer = make_rd_holoviz_op(this, "holoviz", layout);
       overlay->view_aspect = rd_map_view_aspect(layout);
       overlay->rd_region = rd_map_region(layout);  // axes/frame/title region
+      overlay->rd_view_px_height = static_cast<float>(layout.height);
       overlay->frame_period = cfg.frame_period;    // scenario clock
       overlay->marker_radius = cfg.viz.marker_radius;
       overlay->marker_outline = cfg.viz.marker_outline;
