@@ -5,7 +5,7 @@
 // for the analytic simulator: the waveform/target/scene structs, the derived
 // per-target ground truth (range / radial velocity / look direction), and the
 // per-frame target mover. Consumed by the runtime GPU simulator (sim_gpu.hpp),
-// the MIMO simulators (mimo_sim.hpp), the source operators, and config parsing.
+// the MIMO GPU core (sim_gpu.hpp), the source operators, and config parsing.
 //
 // The closed-form CPU signal model itself — simulate() / reference_chirp() /
 // to_real_if() — is the analytic ground truth used only by tests, and lives in
@@ -82,7 +82,7 @@ struct SimScene {
   int64_t samples_per_chirp{256};
   // Element positions (m, array-local frame). simulate() models a single TX
   // (tx_positions must hold exactly one element); the MIMO simulators
-  // (radar_common/sim/mimo_sim.hpp) consume the full TX set for TDM/DDM.
+  // (sim_gpu.hpp::simulate_mimo_gpu) consume the full TX set for TDM/DDM.
   std::vector<Vec3> tx_positions{Vec3{0.0, 0.0, 0.0}};
   std::vector<Vec3> rx_positions{Vec3{0.0, 0.0, 0.0}};
   double propagation_speed{kSimSpeedOfLight};

@@ -4,14 +4,17 @@
 // App-specific operators for fmcw_mimo, colocated with the app:
 //   DdmReportVelocityBinsOp — post-DDM-demux velocity axis for reporting
 //   MimoTdmAdcSourceOp / MimoDdmAdcSourceOp — synthetic multiplexed ADC sources
-// These are thin Holoscan wrappers around the shared MIMO simulators
-// (radar_common/sim/mimo_sim.hpp), so they stay local while the signal model
-// lives in radar_common.
+// The source operators build the per-(tx, slot) excitation weights for their
+// multiplexing scheme and drive the unified GPU simulator
+// (radar_common/sim/sim_gpu.hpp::simulate_mimo_gpu), so the cube is synthesized
+// on the device and emitted directly — no host synthesis, no cube H2D. Apps
+// using them must link holoscan::radar_common_sim_gpu.
 
 #pragma once
 
 #include <cuda_runtime_api.h>
 
+#include <cmath>
 #include <complex>
 #include <cstdint>
 #include <memory>
@@ -23,9 +26,9 @@
 #include "radar_app/report/cadence_meter.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
+#include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
-#include "radar_common/sim/additives.hpp"
-#include "radar_common/sim/mimo_sim.hpp"
+#include "radar_common/sim/sim_gpu.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
@@ -116,33 +119,39 @@ class MimoTdmAdcSourceOp : public holoscan::Operator {
     spec.output<holoscan::TensorMap>("adc_cube");
   }
 
+  void start() override {
+    if (cudaStreamCreate(&stream_) != cudaSuccess) {
+      throw std::runtime_error("MimoTdmAdcSourceOp: cudaStreamCreate failed");
+    }
+  }
+  void stop() override {
+    if (stream_ != nullptr) {
+      cudaStreamDestroy(stream_);
+      stream_ = nullptr;
+    }
+  }
+
   void compute([[maybe_unused]] holoscan::InputContext& op_input,
                holoscan::OutputContext& op_output,
                [[maybe_unused]] holoscan::ExecutionContext& context)
       override {
-    radar::sim::SimResult result =
-        radar::sim::simulate_mimo_tdm_interleaved(scene, tx_schedule);
-    if (result.shape.size() != 3) {
-      throw std::runtime_error(
-          "MimoTdmAdcSourceOp: expected rank-3 (N_rx, M*L, samples)");
-    }
-    // Apply I/Q additives (thermal noise) on top of the clean solver response.
-    radar::sim::add_thermal_noise(result.cube, scene.snr_db, scene.seed);
-
-    std::vector<std::complex<float>> cube(result.cube.size());
-    for (size_t i = 0; i < result.cube.size(); ++i) {
-      cube[i] = std::complex<float>(static_cast<float>(result.cube[i].real()),
-                                    static_cast<float>(result.cube[i].imag()));
-    }
-
-    auto tensor =
-        radar::make_device_tensor(result.shape, radar::complex_dtype<float>());
-    if (cudaMemcpy(tensor->data(), cube.data(),
-                   sizeof(std::complex<float>) * cube.size(),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error("MimoTdmAdcSourceOp: H2D upload failed");
+    // TDM excitation: one TX active per interleaved slow-time slot. Build the
+    // one-hot (tx, slot) weight matrix, then synthesize on the device.
+    const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
+    const int64_t slow = num_tx * scene.num_chirps;
+    radar::TXSchedule sched = tx_schedule;
+    sched.num_tx = num_tx;
+    const auto pattern = sched.expand_chirp_tx_index(slow);
+    std::vector<std::complex<double>> weights(
+        static_cast<size_t>(num_tx * slow), {0.0, 0.0});
+    for (int64_t k = 0; k < slow; ++k) {
+      weights[static_cast<size_t>(pattern[static_cast<size_t>(k)] * slow + k)] =
+          {1.0, 0.0};
     }
 
+    auto tensor = radar::sim::simulate_mimo_gpu(scene, weights, slow, stream_);
+    radar::sim::add_thermal_noise_gpu(*tensor, scene.snr_db, scene.seed,
+                                      stream_);
     holoscan::TensorMap out;
     out.insert({"adc_cube", tensor});
     op_output.emit(out, "adc_cube");
@@ -151,6 +160,9 @@ class MimoTdmAdcSourceOp : public holoscan::Operator {
     }
     radar::sim::advance_scene(&scene, frame_period);
   }
+
+ private:
+  cudaStream_t stream_{nullptr};
 };
 
 class MimoDdmAdcSourceOp : public holoscan::Operator {
@@ -171,36 +183,54 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
     spec.output<holoscan::TensorMap>("adc_cube");
   }
 
+  void start() override {
+    if (cudaStreamCreate(&stream_) != cudaSuccess) {
+      throw std::runtime_error("MimoDdmAdcSourceOp: cudaStreamCreate failed");
+    }
+  }
+  void stop() override {
+    if (stream_ != nullptr) {
+      cudaStreamDestroy(stream_);
+      stream_ = nullptr;
+    }
+  }
+
   void compute([[maybe_unused]] holoscan::InputContext& op_input,
                holoscan::OutputContext& op_output,
                [[maybe_unused]] holoscan::ExecutionContext& context)
       override {
-    radar::sim::SimResult result =
-        use_phase_codes ? radar::sim::simulate_mimo_ddm_phase_coded(
-                              scene, phase_codes)
-                        : radar::sim::simulate_mimo_ddm_coded(
-                              scene, doppler_offsets);
-    if (result.shape.size() != 3) {
-      throw std::runtime_error(
-          "MimoDdmAdcSourceOp: expected rank-3 (N_rx, num_chirps, samples)");
+    // DDM excitation: all TX fire every chirp. The (tx, chirp) weight is either
+    // the explicit unit-magnitude phase code, or the linear Doppler offset
+    // exp(i*2*pi*offset_tx*k). slow_time = num_chirps.
+    const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
+    const int64_t slow = scene.num_chirps;
+    std::vector<std::complex<double>> weights;
+    if (use_phase_codes) {
+      if (static_cast<int64_t>(phase_codes.size()) != num_tx * slow) {
+        throw std::runtime_error(
+            "MimoDdmAdcSourceOp: phase_codes must be (num_tx * num_chirps)");
+      }
+      weights = phase_codes;  // row-major (tx, chirp)
+    } else {
+      if (static_cast<int64_t>(doppler_offsets.size()) != num_tx) {
+        throw std::runtime_error(
+            "MimoDdmAdcSourceOp: doppler_offsets length must equal num_tx");
+      }
+      weights.assign(static_cast<size_t>(num_tx * slow), {0.0, 0.0});
+      for (int64_t tx = 0; tx < num_tx; ++tx) {
+        for (int64_t k = 0; k < slow; ++k) {
+          const double ph = 2.0 * radar::kPi *
+                            doppler_offsets[static_cast<size_t>(tx)] *
+                            static_cast<double>(k);
+          weights[static_cast<size_t>(tx * slow + k)] = {std::cos(ph),
+                                                         std::sin(ph)};
+        }
+      }
     }
-    // Apply I/Q additives (thermal noise) on top of the clean solver response.
-    radar::sim::add_thermal_noise(result.cube, scene.snr_db, scene.seed);
 
-    std::vector<std::complex<float>> cube(result.cube.size());
-    for (size_t i = 0; i < result.cube.size(); ++i) {
-      cube[i] = std::complex<float>(static_cast<float>(result.cube[i].real()),
-                                    static_cast<float>(result.cube[i].imag()));
-    }
-
-    auto tensor =
-        radar::make_device_tensor(result.shape, radar::complex_dtype<float>());
-    if (cudaMemcpy(tensor->data(), cube.data(),
-                   sizeof(std::complex<float>) * cube.size(),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error("MimoDdmAdcSourceOp: H2D upload failed");
-    }
-
+    auto tensor = radar::sim::simulate_mimo_gpu(scene, weights, slow, stream_);
+    radar::sim::add_thermal_noise_gpu(*tensor, scene.snr_db, scene.seed,
+                                      stream_);
     holoscan::TensorMap out;
     out.insert({"adc_cube", tensor});
     op_output.emit(out, "adc_cube");
@@ -209,4 +239,7 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
     }
     radar::sim::advance_scene(&scene, frame_period);
   }
+
+ private:
+  cudaStream_t stream_{nullptr};
 };

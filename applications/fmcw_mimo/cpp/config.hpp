@@ -4,8 +4,8 @@
 // App-owned configuration for fmcw_mimo: AppConfig plus the scene-geometry and
 // YAML loaders (TDM/DDM branch, virtual array geometry, targets, the
 // boresight-axis mirror of the beamscan grid). Colocated with the app. The
-// scene is the shared radar::sim::SimScene (multi-TX); the MIMO simulators live
-// in radar_common/sim/mimo_sim.hpp.
+// scene is the shared radar::sim::SimScene (multi-TX); the source operators
+// synthesize the multiplexed cube on the device (sim_gpu.hpp::simulate_mimo_gpu).
 
 #pragma once
 
@@ -30,7 +30,6 @@
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
 #include "radar_common/sim/array_builders.hpp"
-#include "radar_common/sim/mimo_sim.hpp"
 #include "radar_app/app/config.hpp"
 
 namespace radar = holoscan::radar;

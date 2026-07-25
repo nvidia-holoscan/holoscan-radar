@@ -1,18 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// I/Q additives — the non-scatterer returns added linearly on top of a
-// simulator's clean scatterer response. This is a distinct stage from the
-// solvers (point_target_sim.hpp / mimo_sim.hpp): those are pure scatterer
-// processors, and the caller (source op or test) composes their output with the
-// additives here. Additives operate on a raw complex IQ cube + parameters, not
-// on a SimScene, so this header deliberately does NOT depend on the scene/solver
-// headers — additives are interchangeable and independent of how the cube was
-// generated.
+// CPU I/Q additives — the tests-only reference for the non-scatterer returns
+// added linearly on top of a simulator's clean scatterer response. The runtime
+// applies these on the device (sim_gpu.hpp::add_thermal_noise_gpu); this host
+// version is the deterministic oracle used by the tests. Additives operate on a
+// raw complex IQ cube + parameters, not on a SimScene, so this header does NOT
+// depend on the scene/solver headers — additives are independent of how the cube
+// was generated.
 //
-// Today this holds thermal noise; future non-target returns (clutter as a
-// pre-baked cube, CW/interference tones, DC / IF leakage) belong here too, each
-// as an add_*(cube, ...) that composes linearly.
+// Today this holds thermal noise; future non-target returns (clutter, CW /
+// interference tones, DC / IF leakage) would follow the same add_*(cube, ...)
+// shape that composes linearly.
 
 #pragma once
 

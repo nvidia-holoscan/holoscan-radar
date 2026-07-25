@@ -139,6 +139,104 @@ std::shared_ptr<holoscan::Tensor> simulate_gpu(const SimScene& scene,
   return out;
 }
 
+std::shared_ptr<holoscan::Tensor> simulate_mimo_gpu(
+    const SimScene& scene, const std::vector<std::complex<double>>& weights,
+    int64_t slow_time, cudaStream_t stream) {
+  if (scene.rx_positions.empty() || scene.tx_positions.empty()) {
+    throw std::invalid_argument("simulate_mimo_gpu: need >= 1 TX and RX");
+  }
+  const int64_t num_rx = static_cast<int64_t>(scene.rx_positions.size());
+  const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
+  const int64_t samples = scene.samples_per_chirp;
+  if (static_cast<int64_t>(weights.size()) != num_tx * slow_time) {
+    throw std::invalid_argument(
+        "simulate_mimo_gpu: weights must be (num_tx * slow_time)");
+  }
+  const double c = scene.propagation_speed;
+  const double fs = scene.waveform.sample_rate;
+  const double slope = scene.waveform.slope();
+  const double f_c = scene.waveform.carrier_frequency;
+  const double pri = scene.waveform.chirp_repetition_interval;
+  const double two_pi = 2.0 * kPi;
+
+  auto out = make_device_tensor({num_rx, slow_time, samples},
+                                complex_dtype<float>());
+  matx::cudaExecutor exec{stream};
+
+  const auto upload2d = [&](const std::vector<double>& h, int64_t rows,
+                            int64_t cols) {
+    auto d = matx::make_tensor<double, 2>({rows, cols}, matx::MATX_DEVICE_MEMORY);
+    if (cudaMemcpyAsync(d.Data(), h.data(), sizeof(double) * h.size(),
+                        cudaMemcpyHostToDevice, stream) != cudaSuccess ||
+        cudaStreamSynchronize(stream) != cudaSuccess) {
+      throw std::runtime_error("simulate_mimo_gpu: H2D copy failed");
+    }
+    return d;
+  };
+
+  std::vector<double> t_host(static_cast<size_t>(samples));
+  for (int64_t s = 0; s < samples; ++s) {
+    t_host[static_cast<size_t>(s)] = static_cast<double>(s) / fs;
+  }
+  auto t_dev = upload_coefficients<double>(t_host, stream);
+
+  auto acc = matx::make_tensor<cuda::std::complex<double>, 3>(
+      {num_rx, slow_time, samples}, matx::MATX_DEVICE_MEMORY);
+  (acc = cuda::std::complex<double>(0.0, 0.0)).run(exec);
+
+  const cuda::std::complex<double> kI(0.0, 1.0);
+  for (const PointTarget& target : scene.targets) {
+    const TargetTruth truth = derive_truth(target);
+    const cuda::std::complex<double> amp(target.amplitude.real(),
+                                         target.amplitude.imag());
+    for (int64_t tx = 0; tx < num_tx; ++tx) {
+      // Per-(rx, slot) beat frequency + slow-time carrier phase for this TX.
+      std::vector<double> beat_host(static_cast<size_t>(num_rx * slow_time));
+      std::vector<double> slow_host(static_cast<size_t>(num_rx * slow_time));
+      for (int64_t rx = 0; rx < num_rx; ++rx) {
+        const double aperture =
+            dot(scene.tx_positions[static_cast<size_t>(tx)],
+                truth.look_direction) +
+            dot(scene.rx_positions[static_cast<size_t>(rx)],
+                truth.look_direction);
+        for (int64_t k = 0; k < slow_time; ++k) {
+          const double range_k =
+              truth.range + truth.radial_velocity * static_cast<double>(k) * pri;
+          const double tau = (2.0 * range_k - aperture) / c;
+          const size_t idx = static_cast<size_t>(rx * slow_time + k);
+          beat_host[idx] = slope * tau;
+          slow_host[idx] = -two_pi * f_c * tau;
+        }
+      }
+      auto beat_rk = upload2d(beat_host, num_rx, slow_time);
+      auto slow_rk = upload2d(slow_host, num_rx, slow_time);
+
+      // This TX's excitation weight per slot (broadcast over rx and samples).
+      std::vector<std::complex<double>> w_host(
+          weights.begin() + tx * slow_time,
+          weights.begin() + (tx + 1) * slow_time);
+      auto w_dev = upload_complex_coefficients<double>(w_host, stream);
+
+      auto beat3 = matx::clone<3>(
+          beat_rk, {matx::matxKeepDim, matx::matxKeepDim, samples});
+      auto slow3 = matx::clone<3>(
+          slow_rk, {matx::matxKeepDim, matx::matxKeepDim, samples});
+      auto t3 = matx::clone<3>(t_dev, {num_rx, slow_time, matx::matxKeepDim});
+      auto w3 = matx::clone<3>(w_dev, {num_rx, matx::matxKeepDim, samples});
+      auto phase = two_pi * beat3 * t3 + slow3;
+      (acc = acc + amp * w3 * matx::exp(kI * phase)).run(exec);
+    }
+  }
+
+  auto out_view =
+      make_complex_view3<float>(out->data(), num_rx, slow_time, samples);
+  (out_view = matx::as_type<cuda::std::complex<float>>(acc)).run(exec);
+  if (cudaStreamSynchronize(stream) != cudaSuccess) {
+    throw std::runtime_error("simulate_mimo_gpu: final stream sync failed");
+  }
+  return out;
+}
+
 void add_thermal_noise_gpu(holoscan::Tensor& cube,
                            const std::optional<double>& snr_db, uint64_t seed,
                            cudaStream_t stream) {

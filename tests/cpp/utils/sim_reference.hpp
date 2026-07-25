@@ -12,8 +12,7 @@
 //
 // Sign conventions and modeling assumptions are documented on that header; this
 // file is the single-TX synthesis loop that was factored out of it. (The MIMO
-// reference solvers still live in radar_common/sim/mimo_sim.hpp until the MIMO
-// runtime path is moved to the GPU.)
+// reference solvers are the sibling utils/mimo_reference.hpp.)
 
 #pragma once
 

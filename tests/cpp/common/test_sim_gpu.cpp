@@ -16,8 +16,11 @@
 #include <cstdio>
 #include <vector>
 
-#include "utils/sim_reference.hpp"
+#include "radar_common/descriptors/tx_schedule.hpp"
+#include "radar_common/math/constants.hpp"
+#include "utils/mimo_reference.hpp"
 #include "radar_common/sim/sim_gpu.hpp"
+#include "utils/sim_reference.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -102,6 +105,100 @@ TEST(SimGpu, NoiseHasExpectedVariance) {
   const double expected = std::pow(10.0, -snr_db / 10.0);
   cudaStreamDestroy(stream);
   EXPECT_NEAR(measured, expected, 0.1 * expected);  // ~8k samples → <10%
+}
+
+// --- MIMO GPU core (simulate_mimo_gpu) vs the CPU mimo_sim solvers ---
+
+namespace rd = holoscan::radar;
+using holoscan::radar::kPi;
+
+sim::SimScene mimo_scene() {
+  auto scene = base_scene();
+  scene.targets = {{sim::Vec3{0.0, 40.0, 0.0}, sim::Vec3{0.0, 5.0, 0.0},
+                    {1.0, 0.0}}};
+  const double lambda = scene.waveform.wavelength();
+  scene.tx_positions = {sim::Vec3{0.0, 0.0, 0.0},
+                        sim::Vec3{0.0, 2.0 * lambda, 0.0}};
+  scene.rx_positions = {sim::Vec3{0.0, 0.0, 0.0},
+                        sim::Vec3{0.0, 0.5 * lambda, 0.0}};
+  return scene;
+}
+
+double cube_diff(const std::shared_ptr<holoscan::Tensor>& dev,
+                 const std::vector<std::complex<double>>& cpu) {
+  const auto host = to_host(*dev);
+  EXPECT_EQ(static_cast<size_t>(host.size()), cpu.size());
+  const auto* g = host.as<std::complex<float>>();
+  double worst = 0.0;
+  for (size_t i = 0; i < cpu.size(); ++i) {
+    const std::complex<float> ref(static_cast<float>(cpu[i].real()),
+                                  static_cast<float>(cpu[i].imag()));
+    worst = std::max(worst, static_cast<double>(std::abs(g[i] - ref)));
+  }
+  std::fprintf(stderr, "[sim_gpu_mimo] max|gpu-cpu| = %.3e\n", worst);
+  return worst;
+}
+
+TEST(SimGpuMimo, TdmMatchesCpu) {
+  const auto scene = mimo_scene();
+  const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
+  const int64_t slow = num_tx * scene.num_chirps;
+  rd::TXSchedule sched;
+  sched.num_tx = num_tx;
+  const auto pattern = sched.expand_chirp_tx_index(slow);
+  std::vector<std::complex<double>> w(static_cast<size_t>(num_tx * slow),
+                                      {0.0, 0.0});
+  for (int64_t k = 0; k < slow; ++k) {
+    w[static_cast<size_t>(pattern[static_cast<size_t>(k)] * slow + k)] = {1.0,
+                                                                          0.0};
+  }
+  cudaStream_t stream = nullptr;
+  ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
+  auto dev = sim::simulate_mimo_gpu(scene, w, slow, stream);
+  const auto cpu = sim::simulate_mimo_tdm_interleaved(scene, sched);
+  cudaStreamDestroy(stream);
+  EXPECT_LT(cube_diff(dev, cpu.cube), 1e-3);
+}
+
+TEST(SimGpuMimo, DdmCodedMatchesCpu) {
+  const auto scene = mimo_scene();
+  const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
+  const int64_t slow = scene.num_chirps;
+  const auto offsets = sim::uniform_ddm_offsets(num_tx);
+  std::vector<std::complex<double>> w(static_cast<size_t>(num_tx * slow));
+  for (int64_t tx = 0; tx < num_tx; ++tx) {
+    for (int64_t k = 0; k < slow; ++k) {
+      const double ph = 2.0 * kPi * offsets[static_cast<size_t>(tx)] *
+                        static_cast<double>(k);
+      w[static_cast<size_t>(tx * slow + k)] = {std::cos(ph), std::sin(ph)};
+    }
+  }
+  cudaStream_t stream = nullptr;
+  ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
+  auto dev = sim::simulate_mimo_gpu(scene, w, slow, stream);
+  const auto cpu = sim::simulate_mimo_ddm_coded(scene, offsets);
+  cudaStreamDestroy(stream);
+  EXPECT_LT(cube_diff(dev, cpu.cube), 1e-3);
+}
+
+TEST(SimGpuMimo, DdmPhaseCodedMatchesCpu) {
+  const auto scene = mimo_scene();
+  const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
+  const int64_t slow = scene.num_chirps;
+  std::vector<std::complex<double>> codes(static_cast<size_t>(num_tx * slow));
+  for (int64_t tx = 0; tx < num_tx; ++tx) {
+    for (int64_t k = 0; k < slow; ++k) {
+      const double ph = 0.3 * static_cast<double>(tx) +
+                        0.11 * static_cast<double>(k);
+      codes[static_cast<size_t>(tx * slow + k)] = {std::cos(ph), std::sin(ph)};
+    }
+  }
+  cudaStream_t stream = nullptr;
+  ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
+  auto dev = sim::simulate_mimo_gpu(scene, codes, slow, stream);
+  const auto cpu = sim::simulate_mimo_ddm_phase_coded(scene, codes);
+  cudaStreamDestroy(stream);
+  EXPECT_LT(cube_diff(dev, cpu.cube), 1e-3);
 }
 
 TEST(SimGpu, ShapeMatchesRank) {
