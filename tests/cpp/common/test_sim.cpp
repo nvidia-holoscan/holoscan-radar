@@ -57,11 +57,16 @@ TEST(PointTargetSim, GroundTruthDerivation) {
 TEST(PointTargetSim, Deterministic) {
   auto scene = single_target_scene();
   scene.snr_db = 20.0;
-  const auto a = sim::simulate(scene);
-  const auto b = sim::simulate(scene);
+  // simulate() is a pure function of the scene; the noise additive is seeded, so
+  // the composed (solver + add_thermal_noise) output is bit-identical for a
+  // fixed seed and differs when the seed changes.
+  auto a = sim::simulate(scene);
+  sim::add_thermal_noise(a.cube, scene.snr_db, scene.seed);
+  auto b = sim::simulate(scene);
+  sim::add_thermal_noise(b.cube, scene.snr_db, scene.seed);
   EXPECT_EQ(a.cube, b.cube);
-  scene.seed += 1;
-  const auto c = sim::simulate(scene);
+  auto c = sim::simulate(scene);
+  sim::add_thermal_noise(c.cube, scene.snr_db, scene.seed + 1);
   EXPECT_NE(a.cube, c.cube);
 }
 
@@ -248,11 +253,14 @@ TEST(MimoSim, TdmDeterministic) {
   auto scene = mimo_scene();
   scene.snr_db = 20.0;
   const rd::TXSchedule sched;
-  const auto a = sim::simulate_mimo_tdm_interleaved(scene, sched);
-  const auto b = sim::simulate_mimo_tdm_interleaved(scene, sched);
+  // Noise is a seeded additive applied on top of the clean solver response.
+  auto a = sim::simulate_mimo_tdm_interleaved(scene, sched);
+  sim::add_thermal_noise(a.cube, scene.snr_db, scene.seed);
+  auto b = sim::simulate_mimo_tdm_interleaved(scene, sched);
+  sim::add_thermal_noise(b.cube, scene.snr_db, scene.seed);
   EXPECT_EQ(a.cube, b.cube);
-  scene.seed += 1;
-  const auto c = sim::simulate_mimo_tdm_interleaved(scene, sched);
+  auto c = sim::simulate_mimo_tdm_interleaved(scene, sched);
+  sim::add_thermal_noise(c.cube, scene.snr_db, scene.seed + 1);
   EXPECT_NE(a.cube, c.cube);
 }
 

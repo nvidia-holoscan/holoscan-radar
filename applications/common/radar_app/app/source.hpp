@@ -53,7 +53,10 @@ class SimAdcSourceOp : public holoscan::Operator {
     // The simulator computes in double precision; cast to the float ADC sample
     // type before upload. The cube rank follows scene.rx_positions (rank-2 for
     // one RX, rank-3 for many); allocate straight from sim.shape.
-    const sim::SimResult result = sim::simulate(scene);
+    // Solver produces the clean scatterer response; apply I/Q additives
+    // (thermal noise here) on top before uploading — see add_thermal_noise.
+    sim::SimResult result = sim::simulate(scene);
+    sim::add_thermal_noise(result.cube, scene.snr_db, scene.seed);
     std::vector<std::complex<float>> cube(result.cube.size());
     for (size_t i = 0; i < result.cube.size(); ++i) {
       cube[i] = std::complex<float>(static_cast<float>(result.cube[i].real()),

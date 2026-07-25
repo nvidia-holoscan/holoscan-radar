@@ -119,12 +119,14 @@ class MimoTdmAdcSourceOp : public holoscan::Operator {
                holoscan::OutputContext& op_output,
                [[maybe_unused]] holoscan::ExecutionContext& context)
       override {
-    const radar::sim::SimResult result =
+    radar::sim::SimResult result =
         radar::sim::simulate_mimo_tdm_interleaved(scene, tx_schedule);
     if (result.shape.size() != 3) {
       throw std::runtime_error(
           "MimoTdmAdcSourceOp: expected rank-3 (N_rx, M*L, samples)");
     }
+    // Apply I/Q additives (thermal noise) on top of the clean solver response.
+    radar::sim::add_thermal_noise(result.cube, scene.snr_db, scene.seed);
 
     std::vector<std::complex<float>> cube(result.cube.size());
     for (size_t i = 0; i < result.cube.size(); ++i) {
@@ -172,7 +174,7 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
                holoscan::OutputContext& op_output,
                [[maybe_unused]] holoscan::ExecutionContext& context)
       override {
-    const radar::sim::SimResult result =
+    radar::sim::SimResult result =
         use_phase_codes ? radar::sim::simulate_mimo_ddm_phase_coded(
                               scene, phase_codes)
                         : radar::sim::simulate_mimo_ddm_coded(
@@ -181,6 +183,8 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
       throw std::runtime_error(
           "MimoDdmAdcSourceOp: expected rank-3 (N_rx, num_chirps, samples)");
     }
+    // Apply I/Q additives (thermal noise) on top of the clean solver response.
+    radar::sim::add_thermal_noise(result.cube, scene.snr_db, scene.seed);
 
     std::vector<std::complex<float>> cube(result.cube.size());
     for (size_t i = 0; i < result.cube.size(); ++i) {

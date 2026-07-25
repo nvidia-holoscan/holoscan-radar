@@ -18,7 +18,6 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
-#include <random>
 #include <stdexcept>
 #include <vector>
 
@@ -116,15 +115,8 @@ inline SimResult simulate_mimo_tdm_interleaved(const SimScene& scene,
     }
   }
 
-  if (scene.snr_db.has_value()) {
-    const double noise_power = std::pow(10.0, -(*scene.snr_db) / 10.0);
-    const double sigma = std::sqrt(noise_power / 2.0);
-    std::mt19937_64 rng(scene.seed);
-    std::normal_distribution<double> gauss(0.0, sigma);
-    for (auto& v : result.cube) {
-      v += std::complex<double>(gauss(rng), gauss(rng));
-    }
-  }
+  // Clean scatterer response; the caller applies sim::add_thermal_noise (and any
+  // other I/Q additives) to the cube.
   return result;
 }
 
@@ -193,15 +185,8 @@ inline SimResult simulate_mimo_ddm_coded(const SimScene& scene,
     }
   }
 
-  if (scene.snr_db.has_value()) {
-    const double noise_power = std::pow(10.0, -(*scene.snr_db) / 10.0);
-    const double sigma = std::sqrt(noise_power / 2.0);
-    std::mt19937_64 rng(scene.seed);
-    std::normal_distribution<double> gauss(0.0, sigma);
-    for (auto& v : result.cube) {
-      v += std::complex<double>(gauss(rng), gauss(rng));
-    }
-  }
+  // Clean scatterer response; the caller applies sim::add_thermal_noise (and any
+  // other I/Q additives) to the cube.
   return result;
 }
 
@@ -269,15 +254,8 @@ inline SimResult simulate_mimo_ddm_phase_coded(
     }
   }
 
-  if (scene.snr_db.has_value()) {
-    const double noise_power = std::pow(10.0, -(*scene.snr_db) / 10.0);
-    const double sigma = std::sqrt(noise_power / 2.0);
-    std::mt19937_64 rng(scene.seed);
-    std::normal_distribution<double> gauss(0.0, sigma);
-    for (auto& v : result.cube) {
-      v += std::complex<double>(gauss(rng), gauss(rng));
-    }
-  }
+  // Clean scatterer response; the caller applies sim::add_thermal_noise (and any
+  // other I/Q additives) to the cube.
   return result;
 }
 

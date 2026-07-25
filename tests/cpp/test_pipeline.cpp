@@ -108,7 +108,9 @@ struct ChainResult {
 };
 
 ChainResult run_split_chain(const psim::SimScene& scene) {
-  const auto sim = psim::simulate(scene);
+  auto sim = psim::simulate(scene);
+  // Thermal noise is now a separate additive on the clean solver response.
+  psim::add_thermal_noise(sim.cube, scene.snr_db, scene.seed);
   auto cube = rt::complex_cube_to_device<float>(sim.cube, sim.shape);
 
   rt::TensorMapCapture rd_maps;
