@@ -113,6 +113,9 @@ class MimoTdmAdcSourceOp : public holoscan::Operator {
   radar::sim::SimScene scene;
   radar::TXSchedule tx_schedule;
   double frame_period{0.1};
+  // Per-frame scene-evolution strategy (see sim::SceneMover); unset → default
+  // constant-velocity advance.
+  radar::sim::SceneMover mover;
   std::shared_ptr<CadenceMeter> cadence;
 
   void setup(holoscan::OperatorSpec& spec) override {
@@ -159,7 +162,11 @@ class MimoTdmAdcSourceOp : public holoscan::Operator {
     if (cadence) {
       cadence->on_source_emit();
     }
-    radar::sim::advance_scene(&scene, frame_period);
+    if (mover) {
+      mover(scene, frame_period);
+    } else {
+      radar::sim::advance_scene(&scene, frame_period);
+    }
     ++frame_index_;
   }
 
@@ -180,6 +187,9 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
   bool use_phase_codes{false};
   std::vector<std::complex<double>> phase_codes;
   double frame_period{0.1};
+  // Per-frame scene-evolution strategy (see sim::SceneMover); unset → default
+  // constant-velocity advance.
+  radar::sim::SceneMover mover;
   std::shared_ptr<CadenceMeter> cadence;
 
   void setup(holoscan::OperatorSpec& spec) override {
@@ -241,7 +251,11 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
     if (cadence) {
       cadence->on_source_emit();
     }
-    radar::sim::advance_scene(&scene, frame_period);
+    if (mover) {
+      mover(scene, frame_period);
+    } else {
+      radar::sim::advance_scene(&scene, frame_period);
+    }
     ++frame_index_;
   }
 

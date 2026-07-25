@@ -36,6 +36,10 @@ class SimAdcSourceOp : public holoscan::Operator {
 
   sim::SimScene scene;        // set from the parsed config before run()
   double frame_period{0.1};   // s, between emitted cubes (and target motion)
+  // Per-frame scene-evolution strategy (see sim::SceneMover). Unset → the
+  // default constant-velocity mover; set a custom one for orbits/maneuvers or a
+  // procedural target source, without touching the simulator.
+  sim::SceneMover mover;
   // Optional shared cadence probe (same instance as DetectionReportOp).
   std::shared_ptr<CadenceMeter> cadence;
 
@@ -75,8 +79,13 @@ class SimAdcSourceOp : public holoscan::Operator {
       cadence->on_source_emit();
     }
 
-    // Step the scene forward for the next frame.
-    sim::advance_scene(&scene, frame_period);
+    // Step the scene forward for the next frame via the configured mover
+    // (default: constant-velocity advance).
+    if (mover) {
+      mover(scene, frame_period);
+    } else {
+      sim::advance_scene(&scene, frame_period);
+    }
     ++frame_index_;
   }
 

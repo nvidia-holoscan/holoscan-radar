@@ -166,7 +166,33 @@ TEST(PointTargetSim, SimoCubeHasRxLeadingAxis) {
   }
 }
 
-// --- MIMO simulators (mimo_sim.hpp) ---
+// --- SceneMover seam (pluggable per-frame target evolution) ---
+
+TEST(SceneMover, LinearMoverMatchesAdvanceScene) {
+  auto a = single_target_scene();
+  auto b = single_target_scene();
+  const sim::SceneMover mover = sim::linear_mover();
+  for (int i = 0; i < 5; ++i) {
+    mover(a, 0.1);
+    sim::advance_scene(&b, 0.1);
+  }
+  EXPECT_EQ(a.targets[0].position, b.targets[0].position);
+}
+
+TEST(SceneMover, CustomMoverIsHonored) {
+  // A custom mover can move targets non-linearly or regenerate them entirely;
+  // here it pins every target to a fixed range each frame.
+  auto scene = single_target_scene();
+  const sim::SceneMover pin = [](sim::SimScene& s, double) {
+    for (auto& t : s.targets) {
+      t.position = sim::Vec3{0.0, 25.0, 0.0};
+    }
+  };
+  pin(scene, 0.1);
+  EXPECT_DOUBLE_EQ(scene.targets[0].position[1], 25.0);
+}
+
+// --- MIMO simulators (mimo_reference.hpp) ---
 
 // Two-TX, two-RX scene sharing the single-target waveform/target.
 sim::SimScene mimo_scene() {

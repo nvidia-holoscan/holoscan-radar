@@ -37,6 +37,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -131,7 +132,8 @@ inline TargetTruth derive_truth(const PointTarget& target) {
 // simulator models chirp-to-chirp motion within a CPI; this carries that motion
 // across CPIs so successive frames see the target at a new position. Templated
 // on the scene type: any struct exposing a `.targets` container of PointTarget
-// works — SimScene here, or an application's own multi-TX scene struct.
+// works — SimScene here, or an application's own multi-TX scene struct. This is
+// the default mover (see SceneMover).
 template <class Scene>
 inline void advance_scene(Scene* scene, double dt) {
   for (PointTarget& target : scene->targets) {
@@ -139,6 +141,19 @@ inline void advance_scene(Scene* scene, double dt) {
       target.position[axis] += target.velocity[axis] * dt;
     }
   }
+}
+
+// Per-frame scene-evolution strategy (the mover / target-source seam): given the
+// scene and the frame period, mutate it for the next frame. The default
+// (linear_mover) moves each target along its velocity; a custom mover can
+// implement orbits/maneuvers, or clear-and-regenerate scene.targets entirely (a
+// procedural "scatterer source"). The source operators call the configured mover
+// each tick, so the motion model is swappable without touching the solver.
+using SceneMover = std::function<void(SimScene&, double dt)>;
+
+// The default constant-velocity mover, as a SceneMover.
+inline SceneMover linear_mover() {
+  return [](SimScene& scene, double dt) { advance_scene(&scene, dt); };
 }
 
 }  // namespace holoscan::radar::sim
