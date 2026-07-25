@@ -1072,7 +1072,7 @@ inline void emit_panel(holoscan::TensorMap& out,
 
   // Tick labels: Y right-anchored just left of the box, X centered below it.
   {
-    const float sz = 0.05F * rect.h;  // window-height fraction
+    const float sz = 0.062F * rect.h;  // window-height fraction
     std::vector<AbsText> items;
     for (const PanelTick& t : yticks) {
       items.push_back({ax(kBoxL) - 0.006F, ay(by(t.frac)) - 0.5F * sz, t.label,
@@ -1089,7 +1089,7 @@ inline void emit_panel(holoscan::TensorMap& out,
   // Title (top-left of the panel).
   push_abs_text(out, specs, prefix + "_title",
                 {{ax(0.03F), ay(0.02F), title, TextAnchor::kLeft}},
-                0.06F * rect.h, win_aspect, {1.0F, 1.0F, 1.0F, 1.0F}, 8);
+                0.075F * rect.h, win_aspect, {1.0F, 1.0F, 1.0F, 1.0F}, 8);
 }
 
 // Append a scenario-clock overlay — the current simulated time (seconds) — to a
