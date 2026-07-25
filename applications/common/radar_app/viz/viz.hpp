@@ -45,10 +45,36 @@ constexpr size_t kLutSize = 256;
 using PlotInputSpec = holoscan::ops::HolovizOp::InputSpec;
 using PlotInputType = holoscan::ops::HolovizOp::InputType;
 
-// Scenario-clock overlay (defined with the panel helpers below; forward-declared
-// so ClusterOverlayOp, which precedes it, can emit the clock).
+// Panel placement, window-normalized (mirrors HolovizOp::InputSpec::View).
+// Hoisted here because the RD-map overlay (ClusterOverlayOp) and the side-panel
+// helpers below both use it.
+struct PanelRect {
+  float x{0.0F}, y{0.0F}, w{1.0F}, h{1.0F};
+};
+
+// A tick: fractional position along its axis ([0,1], 0 = lo/left/bottom) + label.
+struct PanelTick {
+  float frac;
+  std::string label;
+};
+
+// Tick-value formatter (defined with the panel helpers below; forward-declared
+// so ClusterOverlayOp, which precedes it, can label its RD-map axes).
+inline std::string plot_format_tick(float value, int dec);
+
+// Scenario-clock + RD-map-axes overlays (defined with the panel helpers below;
+// forward-declared so ClusterOverlayOp, which precedes them, can emit them).
 inline void emit_sim_clock(holoscan::TensorMap& out,
                            std::vector<PlotInputSpec>* specs, double seconds);
+// Frame border + tick marks/labels + title for the RD map, drawn in the margins
+// around the inset image (View = `region`; the image occupies the shared kBox
+// sub-rect). xticks/yticks may be empty (frame + title still drawn).
+inline void emit_rd_axes(holoscan::TensorMap& out,
+                         std::vector<PlotInputSpec>* specs,
+                         const PanelRect& region,
+                         const std::vector<PanelTick>& xticks,
+                         const std::vector<PanelTick>& yticks,
+                         const std::string& title);
 
 // Extract one RX channel from a per-channel RD map for visualization. SIMO
 // rd_maps are (N_rx, num_doppler, num_range); Holoviz helpers expect rank-2
@@ -302,6 +328,13 @@ class ClusterOverlayOp : public holoscan::Operator {
   // per-tick scene advance, so tick N is labeled t = N * frame_period.
   double frame_period{0.1};
 
+  // RD-map outer region (window-normalized) for the axes/frame/title chrome. The
+  // inset RD image + detection discs occupy the shared kBox sub-rect of this
+  // region (set by the app from the layout; see holoviz_layout.hpp's image
+  // view). Default full-window is a sane fallback when unset.
+  PanelRect rd_region{0.0F, 0.0F, 1.0F, 1.0F};
+  std::string rd_title{"Range–Doppler"};
+
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("detection_idx");
     // Optional: DBSCAN cluster ids (row-aligned with detection_idx). Present →
@@ -315,11 +348,18 @@ class ClusterOverlayOp : public holoscan::Operator {
     spec.input<holoscan::TensorMap>("rep_idx")
         .condition(holoscan::ConditionType::kNone);
     spec.input<holoscan::TensorMap>("rd_maps");
+    // Optional physical axis bins (constant per run) for the RD-map tick labels:
+    // range_bins (num_range,) → X axis, velocity_bins (num_doppler,) → Y axis.
+    // Absent → the frame + title still draw, without numeric tick labels.
+    spec.input<holoscan::TensorMap>("range_bins")
+        .condition(holoscan::ConditionType::kNone);
+    spec.input<holoscan::TensorMap>("velocity_bins")
+        .condition(holoscan::ConditionType::kNone);
     spec.output<holoscan::TensorMap>("overlay");
-    // Scenario-clock InputSpec (the current simulated time as a TEXT layer over
-    // the RD map). Heads the primitive-panel InputSpec chain when panels are on
-    // (→ RollingPlotOp.specs_in), else feeds HolovizOp.input_specs directly. The
-    // matching position/plate tensors ride the `overlay` output above.
+    // RD-map chrome InputSpecs (scenario clock + axes frame/ticks/title as TEXT
+    // and LINES layers). Heads the primitive-panel InputSpec chain when panels
+    // are on (→ RollingPlotOp.specs_in), else feeds HolovizOp.input_specs
+    // directly. The matching geometry/position tensors ride the `overlay` output.
     spec.output<std::vector<PlotInputSpec>>("time_specs");
   }
 
@@ -333,6 +373,56 @@ class ClusterOverlayOp : public holoscan::Operator {
     auto rep_idx = radar::receive_optional(op_input, "rep_idx", who);
     auto rd_map = radar::receive_single(op_input, "rd_maps", who);
     const bool have_labels = static_cast<bool>(labels);
+
+    // Cache the RD-map axis extents once (constant per run) from the optional
+    // physical bin tensors, then build the tick label lists. X spans the range
+    // axis left→right; Y spans the velocity axis, with the image's Doppler bin 0
+    // at the top (so the top edge = velocity_bins[0], the bottom edge = the
+    // last bin). See emit_rd_axes for the tick placement.
+    if (!axes_set_) {
+      auto range_bins = radar::receive_optional(op_input, "range_bins", who);
+      auto velocity_bins =
+          radar::receive_optional(op_input, "velocity_bins", who);
+      if (range_bins && velocity_bins) {
+        const auto ends = [&](const std::shared_ptr<holoscan::Tensor>& t,
+                              const char* name, float* first, float* last) {
+          const auto sh = t->shape();
+          if (sh.size() != 1 || sh[0] < 1) {
+            throw std::runtime_error(std::string("ClusterOverlayOp: ") + name +
+                                     " must be a non-empty rank-1 tensor");
+          }
+          std::vector<float> host(static_cast<size_t>(sh[0]));
+          if (static_cast<size_t>(t->nbytes()) != sizeof(float) * host.size()) {
+            throw std::runtime_error(std::string("ClusterOverlayOp: ") + name +
+                                     " must be float32");
+          }
+          if (cudaMemcpy(host.data(), t->data(),
+                         static_cast<size_t>(t->nbytes()),
+                         cudaMemcpyDeviceToHost) != cudaSuccess) {
+            throw std::runtime_error(std::string("ClusterOverlayOp: ") + name +
+                                     " D2H copy failed");
+          }
+          *first = host.front();
+          *last = host.back();
+        };
+        if (cudaDeviceSynchronize() != cudaSuccess) {
+          throw std::runtime_error("ClusterOverlayOp: device synchronize failed");
+        }
+        float r0, r1, v_first, v_last;
+        ends(range_bins, "range_bins", &r0, &r1);
+        ends(velocity_bins, "velocity_bins", &v_first, &v_last);
+        // Y: frac 0 = bottom = last bin, frac 1 = top = first bin.
+        for (int i = 0; i < 5; ++i) {
+          const float f = static_cast<float>(i) / 4.0F;
+          xticks_.push_back({f, plot_format_tick(r0 + f * (r1 - r0), 0)});
+          yticks_.push_back(
+              {f, plot_format_tick(v_last + f * (v_first - v_last), 1)});
+        }
+        // Latch only once the ticks are built; if the bins are not wired the
+        // frame + title still draw (labels stay empty) and we retry cheaply.
+        axes_set_ = true;
+      }
+    }
 
     // The RD map (only its shape is needed) sizes the normalization; the
     // detection cells index the same Doppler × range grid.
@@ -521,19 +611,24 @@ class ClusterOverlayOp : public holoscan::Operator {
           centers[static_cast<size_t>(c)], marker_radius);
     }
 
-    // Scenario clock: the current simulated time = frame_index_ * frame_period.
-    // The plate/label tensors go out with the overlay (→ receivers); the spec
-    // goes out on time_specs (→ input_specs, directly or via the panel chain).
-    std::vector<PlotInputSpec> time_specs;
-    emit_sim_clock(out, &time_specs,
+    // RD-map chrome: axes frame/ticks/title, then the scenario clock (current
+    // simulated time = frame_index_ * frame_period). Their geometry/label
+    // tensors go out with the overlay (→ receivers); the specs go out on
+    // time_specs (→ input_specs, directly or via the panel chain).
+    std::vector<PlotInputSpec> chrome_specs;
+    emit_rd_axes(out, &chrome_specs, rd_region, xticks_, yticks_, rd_title);
+    emit_sim_clock(out, &chrome_specs,
                    static_cast<double>(frame_index_) * frame_period);
     op_output.emit(out, "overlay");
-    op_output.emit(time_specs, "time_specs");
+    op_output.emit(chrome_specs, "time_specs");
     ++frame_index_;
   }
 
  private:
   int64_t frame_index_{0};  // ticks since run start → scenario clock
+  bool axes_set_{false};    // RD-map axis ticks built once from the bin tensors
+  std::vector<PanelTick> xticks_;
+  std::vector<PanelTick> yticks_;
 };
 
 // kLutSize-entry RGBA lookup table for the turbo colormap, built from the
@@ -746,12 +841,8 @@ constexpr const char* kVelocityTitleLayer = "velocity_title";
 // both the data tensors (on `receivers`) and the matching InputSpecs (on the
 // dynamic `input_specs` port), so runtime-derived tick labels and only-used
 // marker colors are handled without a static per-color layer declaration.
-// (PlotInputSpec / PlotInputType are aliased near the top of this header.)
-
-// Panel placement, window-normalized (mirrors HolovizOp::InputSpec::View).
-struct PanelRect {
-  float x{0.0F}, y{0.0F}, w{1.0F}, h{1.0F};
-};
+// (PlotInputSpec / PlotInputType / PanelRect / PanelTick are declared near the
+// top of this header.)
 
 // Plot box within the panel [0, 1] (leaves margins for title / tick labels).
 constexpr float kBoxL = 0.15F, kBoxR = 0.98F, kBoxT = 0.14F, kBoxB = 0.85F;
@@ -804,11 +895,7 @@ inline void plot_append_disc(std::vector<float>* v, float cx, float cy,
   }
 }
 
-// A tick: fractional position along its axis ([0,1], 0 = lo/left/bottom) + label.
-struct PanelTick {
-  float frac;
-  std::string label;
-};
+// (PanelTick is declared near the top of this header.)
 // A marker: data-space position ([0,1] within the plot box) + color bucket.
 struct PanelMarker {
   float xf;
@@ -955,6 +1042,85 @@ inline void emit_sim_clock(holoscan::TensorMap& out,
   label.text_ = {"t = " + plot_format_tick(static_cast<float>(seconds), 1) +
                  " s"};
   specs->push_back(std::move(label));
+}
+
+// RD-map axes chrome: a border frame + outward tick marks + tick labels + axis
+// unit labels + a centered title, drawn in the margins around the inset RD
+// image. All geometry is in the region's [0, 1] space (View = `region`), using
+// the shared kBox sub-rect so the frame lands exactly on the image edges (the
+// image View is that same sub-rect; see holoviz_layout.hpp). No gridlines are
+// drawn — they would obscure the map. Text sizes are small fractions of the
+// region height (which spans the full window), so they read like the panels'.
+inline void emit_rd_axes(holoscan::TensorMap& out,
+                         std::vector<PlotInputSpec>* specs,
+                         const PanelRect& region,
+                         const std::vector<PanelTick>& xticks,
+                         const std::vector<PanelTick>& yticks,
+                         const std::string& title) {
+  const auto bx = [](float xf) { return kBoxL + xf * (kBoxR - kBoxL); };
+  const auto by = [](float yf) { return kBoxB - yf * (kBoxB - kBoxT); };
+
+  // Border frame + short outward tick marks (no interior gridlines).
+  {
+    std::vector<float> lines;
+    const auto seg = [&lines](float x0, float y0, float x1, float y1) {
+      lines.insert(lines.end(), {x0, y0, x1, y1});
+    };
+    seg(kBoxL, kBoxT, kBoxR, kBoxT);
+    seg(kBoxR, kBoxT, kBoxR, kBoxB);
+    seg(kBoxR, kBoxB, kBoxL, kBoxB);
+    seg(kBoxL, kBoxB, kBoxL, kBoxT);
+    for (const PanelTick& t : yticks) {
+      const float y = by(t.frac);
+      seg(kBoxL - 0.012F, y, kBoxL, y);
+    }
+    for (const PanelTick& t : xticks) {
+      const float x = bx(t.frac);
+      seg(x, kBoxB, x, kBoxB + 0.012F);
+    }
+    out.insert({"rd_frame", plot_geom_tensor(lines, 2)});
+    specs->push_back(plot_layer_spec("rd_frame", PlotInputType::LINES,
+                                     {0.60F, 0.60F, 0.68F, 1.0F}, region, 4));
+  }
+
+  // Tick labels: Y in the left margin, X below the box.
+  if (!xticks.empty() || !yticks.empty()) {
+    std::vector<float> pos;
+    std::vector<std::string> txt;
+    for (const PanelTick& t : yticks) {
+      pos.insert(pos.end(), {0.015F, by(t.frac) - 0.009F, 0.017F});
+      txt.push_back(t.label);
+    }
+    for (const PanelTick& t : xticks) {
+      pos.insert(pos.end(), {bx(t.frac) - 0.018F, kBoxB + 0.02F, 0.017F});
+      txt.push_back(t.label);
+    }
+    out.insert({"rd_ticks", plot_geom_tensor(pos, 3)});
+    auto s = plot_layer_spec("rd_ticks", PlotInputType::TEXT,
+                             {0.85F, 0.85F, 0.88F, 1.0F}, region, 7);
+    s.text_ = std::move(txt);
+    specs->push_back(std::move(s));
+  }
+
+  // Axis unit labels ("Range (m)" under the X axis, "Velocity (m/s)" above the
+  // Y axis) + centered title in the top margin.
+  {
+    const float cx = 0.5F * (kBoxL + kBoxR);
+    std::vector<float> pos = {cx - 0.05F, kBoxB + 0.055F, 0.019F,
+                              0.015F,     kBoxT - 0.045F, 0.019F};
+    out.insert({"rd_axislabels", plot_geom_tensor(pos, 3)});
+    auto s = plot_layer_spec("rd_axislabels", PlotInputType::TEXT,
+                             {0.80F, 0.80F, 0.85F, 1.0F}, region, 7);
+    s.text_ = {"Range (m)", "Velocity (m/s)"};
+    specs->push_back(std::move(s));
+
+    out.insert(
+        {"rd_title", plot_geom_tensor({cx - 0.09F, kBoxT - 0.09F, 0.026F}, 3)});
+    auto ts = plot_layer_spec("rd_title", PlotInputType::TEXT,
+                              {1.0F, 1.0F, 1.0F, 1.0F}, region, 8);
+    ts.text_ = {title};
+    specs->push_back(std::move(ts));
+  }
 }
 
 // Rolling time-series plots of the per-cluster centroids. Keeps a scrolling

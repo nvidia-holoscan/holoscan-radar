@@ -53,6 +53,26 @@ struct HolovizLayout {
   std::vector<RightPanel> right_panels;
 };
 
+// RD-map outer region (window-normalized): the left column when the side panels
+// are shown, else the full window. The axes/frame/title chrome (ClusterOverlayOp
+// via emit_rd_axes) is drawn across this region.
+inline PanelRect rd_map_region(const HolovizLayout& layout) {
+  if (layout.plots_enabled) {
+    return {0.0F, 0.0F, layout.left_width, 1.0F};
+  }
+  return {0.0F, 0.0F, 1.0F, 1.0F};
+}
+
+// The inset RD image box within the region, using the shared panel margins
+// (kBox*) so the image is framed exactly like the side-panel plot boxes and no
+// longer stretches to the window edge. The RD image + detection disc layers use
+// this as their View; emit_rd_axes draws the frame on its edges.
+inline PanelRect rd_map_box(const HolovizLayout& layout) {
+  const PanelRect r = rd_map_region(layout);
+  return {r.x + kBoxL * r.w, r.y + kBoxT * r.h, (kBoxR - kBoxL) * r.w,
+          (kBoxB - kBoxT) * r.h};
+}
+
 // Build the HolovizOp `tensors` InputSpec vector for a layout. Layer 0 is the
 // turbo LUT RD image; the detection disc layers draw on top (named to match
 // ClusterOverlayOp's emitted tensors). With panels enabled the map + discs
@@ -101,14 +121,17 @@ build_holoviz_input_specs(const HolovizLayout& layout) {
     return v;
   };
 
+  // Inset the RD image + discs into the framed box (left column when panels are
+  // shown, else the full window), leaving margins for the axes/frame/title that
+  // ClusterOverlayOp draws (emit_rd_axes). The image no longer stretches to the
+  // window edge.
+  const PanelRect box = rd_map_box(layout);
+  const auto box_view = make_view(box.x, box.y, box.w, box.h);
+  for (InputSpec& spec : input_specs) {
+    spec.views_ = {box_view};
+  }
+
   if (layout.plots_enabled) {
-    // Shrink the RD map + discs into the left viewport (the side panels — static
-    // right_panels here, or dynamic primitive panels emitted by the plot ops —
-    // occupy the right column).
-    const auto left = make_view(0.0F, 0.0F, layout.left_width, 1.0F);
-    for (InputSpec& spec : input_specs) {
-      spec.views_ = {left};
-    }
     // Right column starts just past the map with a small gutter, and runs to a
     // matching right margin.
     const float right_x = layout.left_width + 0.03F;
@@ -129,15 +152,13 @@ build_holoviz_input_specs(const HolovizLayout& layout) {
   return input_specs;
 }
 
-// On-screen aspect ratio (width / height in pixels) of the RD-map sub-view: the
-// full window when the map is full-bleed, else the left column shared with the
-// side panels. ClusterOverlayOp divides its disc x radius by this so the
-// detection markers render round rather than stretched.
+// On-screen aspect ratio (width / height in pixels) of the inset RD-map image
+// box (see rd_map_box). ClusterOverlayOp divides its disc x radius by this so
+// the detection markers render round rather than stretched.
 inline float rd_map_view_aspect(const HolovizLayout& layout) {
-  const bool paneled = layout.plots_enabled && !layout.right_panels.empty();
-  const float view_w = (paneled ? layout.left_width : 1.0F) *
-                       static_cast<float>(layout.width);
-  return view_w / static_cast<float>(layout.height);
+  const PanelRect box = rd_map_box(layout);
+  return (box.w * static_cast<float>(layout.width)) /
+         (box.h * static_cast<float>(layout.height));
 }
 
 // Construct the HolovizOp from a layout: the built input specs, the shared

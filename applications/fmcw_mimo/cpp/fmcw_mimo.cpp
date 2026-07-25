@@ -259,7 +259,8 @@ class FmcwMimoApp : public holoscan::Application {
       };
       auto visualizer = make_rd_holoviz_op(this, "holoviz", layout);
       overlay->view_aspect = rd_map_view_aspect(layout);
-      overlay->frame_period = cfg.frame_period;  // scenario clock
+      overlay->rd_region = rd_map_region(layout);  // axes/frame/title region
+      overlay->frame_period = cfg.frame_period;    // scenario clock
       overlay->marker_radius = cfg.viz.marker_radius;
       overlay->marker_outline = cfg.viz.marker_outline;
       overlay->marker_segments = cfg.viz.marker_segments;
@@ -302,6 +303,15 @@ class FmcwMimoApp : public holoscan::Application {
       // three color each peak by its per-detection row index instead.
       add_flow(cfar, overlay, {{"detection_idx", "detection_idx"}});
       add_flow(ch_slice, overlay, {{"rd_map", "rd_maps"}});
+      // Physical axis bins for the RD-map tick labels (range X, velocity Y); the
+      // velocity axis comes from the DDM report bins in DDM mode, matching the
+      // rolling plot's source.
+      add_flow(range, overlay, {{"range_bins", "range_bins"}});
+      if (ddm) {
+        add_flow(ddm_velocity_bins, overlay, {{"velocity_bins", "velocity_bins"}});
+      } else {
+        add_flow(doppler, overlay, {{"velocity_bins", "velocity_bins"}});
+      }
       if (!cfg.peak_only) {
         add_flow(cluster, overlay, {{"labels", "labels"}});
         add_flow(reduction, overlay, {{"rep_idx", "rep_idx"}});

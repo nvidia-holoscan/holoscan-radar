@@ -230,7 +230,8 @@ class FmcwDenseSimoApp : public holoscan::Application {
     };
     auto visualizer = make_rd_holoviz_op(this, "holoviz", layout);
     overlay->view_aspect = rd_map_view_aspect(layout);
-    overlay->frame_period = cfg.frame_period;  // scenario clock
+    overlay->rd_region = rd_map_region(layout);  // axes/frame/title region
+    overlay->frame_period = cfg.frame_period;    // scenario clock
     overlay->marker_radius = cfg.viz.marker_radius;
     overlay->marker_outline = cfg.viz.marker_outline;
     overlay->marker_segments = cfg.viz.marker_segments;
@@ -279,6 +280,9 @@ class FmcwDenseSimoApp : public holoscan::Application {
     add_flow(detections, det_idx_rd, {{"detection_idx", "idx"}});
     add_flow(det_idx_rd, overlay, {{"idx", "detection_idx"}});
     add_flow(ch_slice, overlay, {{"rd_map", "rd_maps"}});
+    // Physical axis bins for the RD-map tick labels (range X, velocity Y).
+    add_flow(range, overlay, {{"range_bins", "range_bins"}});
+    add_flow(doppler, overlay, {{"velocity_bins", "velocity_bins"}});
     // Cluster labels color the dots when clustering runs; peak_only has no
     // labels, so the overlay colors each peak by its row index instead.
     if (!cfg.peak_only) {

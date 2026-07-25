@@ -71,6 +71,8 @@ import config  # noqa: E402 (colocated, script-local - see config.py docstring)
 from common.python.demo_config import (  # noqa: E402
     detection_layer_specs,
     make_view,
+    rd_map_box,
+    rd_map_region,
     rd_map_view_aspect,
 )
 from common.python.driver import run_fmcw_app  # noqa: E402
@@ -212,6 +214,9 @@ class FmcwSimoApp(Application):
                 cfg.plots.enable,
             )
             overlay.frame_period = cfg.frame_period  # scenario clock
+            overlay.rd_region = PanelRect(
+                *rd_map_region(cfg.plots.enable, 0.60)
+            )  # axes/frame/title region
             overlay.marker_radius = cfg.viz.marker_radius
             overlay.marker_outline = cfg.viz.marker_outline
             overlay.marker_segments = cfg.viz.marker_segments
@@ -228,13 +233,15 @@ class FmcwSimoApp(Application):
 
             input_specs.extend(detection_layer_specs(palette))
 
+            # Inset the RD image + discs into the framed box (leaving margins for
+            # the axes/frame/title that ClusterOverlayOp draws).
+            box = make_view(*rd_map_box(cfg.plots.enable, 0.60))
+            for spec in input_specs:
+                spec.views = [box]
+
             plot: RollingPlotOp | None = None
             boresight: BoresightViewOp | None = None
             if cfg.plots.enable:
-                left = make_view(0.0, 0.0, 0.60, 1.0)
-                for spec in input_specs:
-                    spec.views = [left]
-
                 # Side panels are native Holoviz primitives (dynamic InputSpecs);
                 # stacked right-column view rects.
                 range_view = PanelRect(0.63, 0.02, 0.35, 0.30)
@@ -292,6 +299,9 @@ class FmcwSimoApp(Application):
             # runs; in peak_only mode they fall back to the raw CFAR peaks.
             self.add_flow(cfar, overlay, {("detection_idx", "detection_idx")})
             self.add_flow(ch_slice, overlay, {("rd_map", "rd_maps")})
+            # Physical axis bins for the RD-map tick labels (range X, velocity Y).
+            self.add_flow(range_op, overlay, {("range_bins", "range_bins")})
+            self.add_flow(doppler, overlay, {("velocity_bins", "velocity_bins")})
             if not cfg.peak_only:
                 self.add_flow(cluster, overlay, {("labels", "labels")})
                 # rep_idx colors each cluster by its representative RD cell

@@ -70,6 +70,8 @@ from common.python.demo_config import (  # noqa: E402
     detection_layer_specs,
     grid_extent,
     make_view,
+    rd_map_box,
+    rd_map_region,
     rd_map_view_aspect,
 )
 from common.python.driver import run_fmcw_app  # noqa: E402
@@ -237,6 +239,9 @@ class FmcwDenseSimoApp(Application):
             cfg.plots.enable,
         )
         overlay.frame_period = cfg.frame_period  # scenario clock
+        overlay.rd_region = PanelRect(
+            *rd_map_region(cfg.plots.enable, 0.60)
+        )  # axes/frame/title region
         overlay.marker_radius = cfg.viz.marker_radius
         overlay.marker_outline = cfg.viz.marker_outline
         overlay.marker_segments = cfg.viz.marker_segments
@@ -252,11 +257,13 @@ class FmcwDenseSimoApp(Application):
         rep_idx_rd: custom_ops.TrailingIdxColumnsOp | None = None
         rep_aoa: custom_ops.CubeAoaLookupOp | None = None
 
-        if cfg.plots.enable:
-            left = make_view(0.0, 0.0, 0.60, 1.0)
-            for spec in input_specs:
-                spec.views = [left]
+        # Inset the RD image + discs into the framed box (leaving margins for the
+        # axes/frame/title that ClusterOverlayOp draws).
+        box = make_view(*rd_map_box(cfg.plots.enable, 0.60))
+        for spec in input_specs:
+            spec.views = [box]
 
+        if cfg.plots.enable:
             # Side panels are native Holoviz primitives (dynamic InputSpecs);
             # stacked right-column view rects.
             range_view = PanelRect(0.63, 0.02, 0.35, 0.30)
@@ -324,6 +331,9 @@ class FmcwDenseSimoApp(Application):
         self.add_flow(detections, det_idx_rd, {("detection_idx", "idx")})
         self.add_flow(det_idx_rd, overlay, {("idx", "detection_idx")})
         self.add_flow(ch_slice, overlay, {("rd_map", "rd_maps")})
+        # Physical axis bins for the RD-map tick labels (range X, velocity Y).
+        self.add_flow(range_op, overlay, {("range_bins", "range_bins")})
+        self.add_flow(doppler, overlay, {("velocity_bins", "velocity_bins")})
         # Cluster labels color the dots when clustering runs; peak_only has no
         # labels, so the overlay colors each peak by its row index instead.
         if not cfg.peak_only:

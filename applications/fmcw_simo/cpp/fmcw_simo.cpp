@@ -171,7 +171,8 @@ class FmcwSimoApp : public holoscan::Application {
       };
       auto visualizer = make_rd_holoviz_op(this, "holoviz", layout);
       overlay->view_aspect = rd_map_view_aspect(layout);
-      overlay->frame_period = cfg.frame_period;  // scenario clock
+      overlay->rd_region = rd_map_region(layout);  // axes/frame/title region
+      overlay->frame_period = cfg.frame_period;    // scenario clock
       overlay->marker_radius = cfg.viz.marker_radius;
       overlay->marker_outline = cfg.viz.marker_outline;
       overlay->marker_segments = cfg.viz.marker_segments;
@@ -212,6 +213,9 @@ class FmcwSimoApp : public holoscan::Application {
       // three color each peak by its per-detection row index instead.
       add_flow(cfar, overlay, {{"detection_idx", "detection_idx"}});
       add_flow(ch_slice, overlay, {{"rd_map", "rd_maps"}});
+      // Physical axis bins for the RD-map tick labels (range X, velocity Y).
+      add_flow(range, overlay, {{"range_bins", "range_bins"}});
+      add_flow(doppler, overlay, {{"velocity_bins", "velocity_bins"}});
       if (!cfg.peak_only) {
         add_flow(cluster, overlay, {{"labels", "labels"}});
         add_flow(reduction, overlay, {{"rep_idx", "rep_idx"}});

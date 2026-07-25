@@ -521,15 +521,43 @@ def detection_layer_specs(palette: list[list[float]]) -> list[HolovizOp.InputSpe
     return specs
 
 
+# Shared panel-box margins (mirror kBoxL/R/T/B in viz.hpp): the fraction of a
+# panel/region occupied by the plot box, leaving margins for title + tick labels.
+K_BOX_L, K_BOX_R, K_BOX_T, K_BOX_B = 0.15, 0.98, 0.14, 0.85
+
+
+def rd_map_region(
+    paneled: bool, left_width: float
+) -> tuple[float, float, float, float]:
+    """RD-map outer region (window-normalized): the left column when the side
+    panels are shown, else the full window. Mirrors holoviz_layout.hpp."""
+    return (0.0, 0.0, left_width, 1.0) if paneled else (0.0, 0.0, 1.0, 1.0)
+
+
+def rd_map_box(
+    paneled: bool, left_width: float
+) -> tuple[float, float, float, float]:
+    """The inset RD image box within the region, using the shared kBox margins so
+    the image is framed like the side-panel plot boxes rather than stretching to
+    the window edge. The RD image + detection discs use this as their View;
+    emit_rd_axes draws the frame on its edges. Mirrors holoviz_layout.hpp."""
+    x, y, w, h = rd_map_region(paneled, left_width)
+    return (
+        x + K_BOX_L * w,
+        y + K_BOX_T * h,
+        (K_BOX_R - K_BOX_L) * w,
+        (K_BOX_B - K_BOX_T) * h,
+    )
+
+
 def rd_map_view_aspect(
     width: int, height: int, left_width: float, paneled: bool
 ) -> float:
-    """On-screen aspect ratio (width / height in pixels) of the RD-map sub-view:
-    the full window when the map is full-bleed, else the left column shared with
-    the side panels. ClusterOverlayOp divides its disc x radius by this so the
-    detection markers render round rather than stretched."""
-    view_w = (left_width if paneled else 1.0) * float(width)
-    return view_w / float(height)
+    """On-screen aspect ratio (width / height in pixels) of the inset RD-map image
+    box (see rd_map_box). ClusterOverlayOp divides its disc x radius by this so
+    the detection markers render round rather than stretched."""
+    _, _, bw, bh = rd_map_box(paneled, left_width)
+    return (bw * float(width)) / (bh * float(height))
 
 
 def make_view(ox: float, oy: float, w: float, h: float) -> HolovizOp.InputSpec.View:
