@@ -63,9 +63,12 @@ class SimAdcSourceOp : public holoscan::Operator {
                [[maybe_unused]] holoscan::ExecutionContext& context) override {
     // Synthesize the clean scatterer response on the device, then apply the
     // thermal-noise I/Q additive in place — both stream-ordered on stream_ and
-    // synchronized before the tensor is emitted.
+    // synchronized before the tensor is emitted. The noise seed advances per
+    // frame so each tick draws a fresh, independent realization (deterministic
+    // per run); a constant seed would freeze the same noise across all frames.
     auto tensor = sim::simulate_gpu(scene, stream_);
-    sim::add_thermal_noise_gpu(*tensor, scene.snr_db, scene.seed, stream_);
+    sim::add_thermal_noise_gpu(*tensor, scene.snr_db, scene.seed + frame_index_,
+                               stream_);
 
     emit_single(op_output, "adc_cube", tensor);
     if (cadence) {
@@ -74,10 +77,12 @@ class SimAdcSourceOp : public holoscan::Operator {
 
     // Step the scene forward for the next frame.
     sim::advance_scene(&scene, frame_period);
+    ++frame_index_;
   }
 
  private:
   cudaStream_t stream_{nullptr};
+  uint64_t frame_index_{0};  // advances the per-frame noise seed
 };
 
 }  // namespace holoscan::radar::app

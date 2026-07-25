@@ -150,8 +150,9 @@ class MimoTdmAdcSourceOp : public holoscan::Operator {
     }
 
     auto tensor = radar::sim::simulate_mimo_gpu(scene, weights, slow, stream_);
-    radar::sim::add_thermal_noise_gpu(*tensor, scene.snr_db, scene.seed,
-                                      stream_);
+    // Per-frame noise seed → a fresh realization each tick (see SimAdcSourceOp).
+    radar::sim::add_thermal_noise_gpu(*tensor, scene.snr_db,
+                                      scene.seed + frame_index_, stream_);
     holoscan::TensorMap out;
     out.insert({"adc_cube", tensor});
     op_output.emit(out, "adc_cube");
@@ -159,10 +160,12 @@ class MimoTdmAdcSourceOp : public holoscan::Operator {
       cadence->on_source_emit();
     }
     radar::sim::advance_scene(&scene, frame_period);
+    ++frame_index_;
   }
 
  private:
   cudaStream_t stream_{nullptr};
+  uint64_t frame_index_{0};  // advances the per-frame noise seed
 };
 
 class MimoDdmAdcSourceOp : public holoscan::Operator {
@@ -229,8 +232,9 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
     }
 
     auto tensor = radar::sim::simulate_mimo_gpu(scene, weights, slow, stream_);
-    radar::sim::add_thermal_noise_gpu(*tensor, scene.snr_db, scene.seed,
-                                      stream_);
+    // Per-frame noise seed → a fresh realization each tick (see SimAdcSourceOp).
+    radar::sim::add_thermal_noise_gpu(*tensor, scene.snr_db,
+                                      scene.seed + frame_index_, stream_);
     holoscan::TensorMap out;
     out.insert({"adc_cube", tensor});
     op_output.emit(out, "adc_cube");
@@ -238,8 +242,10 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
       cadence->on_source_emit();
     }
     radar::sim::advance_scene(&scene, frame_period);
+    ++frame_index_;
   }
 
  private:
   cudaStream_t stream_{nullptr};
+  uint64_t frame_index_{0};  // advances the per-frame noise seed
 };
