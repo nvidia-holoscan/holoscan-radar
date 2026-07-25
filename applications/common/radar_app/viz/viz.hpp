@@ -346,7 +346,8 @@ class ClusterOverlayOp : public holoscan::Operator {
   // region (set by the app from the layout; see holoviz_layout.hpp's image
   // view). Default full-window is a sane fallback when unset.
   PanelRect rd_region{0.0F, 0.0F, 1.0F, 1.0F};
-  std::string rd_title{"Range–Doppler"};
+  std::string rd_title{"Range-Doppler"};  // ASCII hyphen; the baked font atlas
+                                           // lacks the en-dash glyph
   // On-screen pixel height of the RD region View (= window height, since the
   // region spans the full height). Drives pixel-locked chrome text sizing so it
   // reads crisply against Holoviz's fixed 25 px font atlas. Set by the app.
