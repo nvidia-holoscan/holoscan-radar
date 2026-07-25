@@ -24,6 +24,7 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
+#include "radar_common/sim/additives.hpp"
 #include "radar_common/sim/mimo_sim.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"

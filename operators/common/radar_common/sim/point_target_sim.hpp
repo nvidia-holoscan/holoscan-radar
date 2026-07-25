@@ -4,10 +4,10 @@
 // Analytic point-target FMCW signal simulator. A signal model, not an EM
 // solver: each target's closed-form contribution is summed over (rx, chirp,
 // fast-time sample) to produce the clean scatterer response. Thermal noise and
-// any other non-target returns are I/Q additives applied *separately* (see
-// add_thermal_noise) on top of the solver output, so the solver stays a pure
-// scatterer processor and additives compose linearly — the caller (source op or
-// test) orchestrates simulate() → additives.
+// any other non-target returns are I/Q additives applied *separately*
+// (radar_common/sim/additives.hpp) on top of the solver output, so the solver
+// stays a pure scatterer processor and additives compose linearly — the caller
+// (source op or test) orchestrates simulate() → additives.
 //
 // A shared radar_common utility: applications use it to synthesize input
 // cubes, and tests use it as the tautology guard (asserting operator outputs
@@ -41,7 +41,6 @@
 #include <complex>
 #include <cstdint>
 #include <optional>
-#include <random>
 #include <stdexcept>
 #include <vector>
 
@@ -217,31 +216,9 @@ inline SimResult simulate(const SimScene& scene) {
     }
   }
 
-  // Clean scatterer response — noise/additives are applied by the caller (see
-  // add_thermal_noise).
+  // Clean scatterer response — thermal noise and other I/Q additives are a
+  // separate stage the caller applies (radar_common/sim/additives.hpp).
   return result;
-}
-
-// I/Q additive: seeded complex white Gaussian noise added linearly to a solver
-// cube at `snr_db` relative to a unit-amplitude target (no-op when unset). Kept
-// separate from the solvers (simulate / simulate_mimo_*) so additive returns
-// compose on top of the clean scatterer response — the caller applies this (and
-// any future non-target additives, e.g. clutter) to the simulator output. Same
-// (seed, snr_db) → a bit-identical realization; the same seed each call means a
-// static realization across frames unless the caller varies the seed.
-inline void add_thermal_noise(std::vector<std::complex<double>>& cube,
-                              const std::optional<double>& snr_db,
-                              uint64_t seed) {
-  if (!snr_db.has_value()) {
-    return;
-  }
-  const double noise_power = std::pow(10.0, -(*snr_db) / 10.0);
-  const double sigma = std::sqrt(noise_power / 2.0);
-  std::mt19937_64 rng(seed);
-  std::normal_distribution<double> gauss(0.0, sigma);
-  for (auto& v : cube) {
-    v += std::complex<double>(gauss(rng), gauss(rng));
-  }
 }
 
 // Advance each target's base position by one frame period (dt seconds). The

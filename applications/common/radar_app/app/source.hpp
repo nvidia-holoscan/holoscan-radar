@@ -27,6 +27,7 @@
 
 #include "radar_app/report/cadence_meter.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
+#include "radar_common/sim/additives.hpp"
 #include "radar_common/sim/point_target_sim.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"

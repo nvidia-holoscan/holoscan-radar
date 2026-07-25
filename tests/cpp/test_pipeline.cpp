@@ -26,6 +26,7 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "utils/bin_model.hpp"
+#include "radar_common/sim/additives.hpp"
 #include "radar_common/sim/point_target_sim.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"

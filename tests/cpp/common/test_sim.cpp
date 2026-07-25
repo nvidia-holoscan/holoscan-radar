@@ -17,6 +17,7 @@
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/math/constants.hpp"
+#include "radar_common/sim/additives.hpp"
 #include "radar_common/sim/mimo_sim.hpp"
 #include "radar_common/sim/point_target_sim.hpp"
 #include "utils/bin_model.hpp"
