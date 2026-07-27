@@ -91,6 +91,7 @@ Link: `target_link_libraries(<you> PRIVATE holoscan::radar_common_simulator)`
 std::shared_ptr<holoscan::Tensor>
 simulate_gpu(const SimScene& scene, cudaStream_t stream);
 ```
+
 Single-TX (SISO/SIMO). Requires exactly one `tx_positions` element. Returns a
 device `complex<float>` cube (see Output contract).
 
@@ -100,6 +101,7 @@ simulate_mimo_gpu(const SimScene& scene,
                   const std::vector<std::complex<double>>& weights,
                   int64_t slow_time, cudaStream_t stream);
 ```
+
 Multi-TX. The multiplexing scheme is captured **entirely** by `weights` — a
 row-major `(num_tx, slow_time)` matrix of the per-`(tx, slot)` excitation:
 
@@ -119,6 +121,7 @@ void add_thermal_noise_gpu(holoscan::Tensor& cube,
                            const std::optional<double>& snr_db,
                            uint64_t seed, cudaStream_t stream);
 ```
+
 Adds seeded complex white Gaussian noise **in place** on the device (no-op when
 `snr_db` is unset). Advance `seed` per frame for a fresh realization each tick.
 
