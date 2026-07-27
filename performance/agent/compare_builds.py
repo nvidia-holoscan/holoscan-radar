@@ -40,6 +40,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import statistics
 import subprocess
@@ -506,7 +507,8 @@ def compare_operator(
     op: str,
     before_bin: Path,
     after_bin: Path,
-    args: list[str],
+    before_args: list[str],
+    after_args: list[str],
     rounds: int,
     checksum: bool,
     progress: _Progress | None = None,
@@ -520,7 +522,7 @@ def compare_operator(
     """
     if cached_before is not None:
         return _compare_with_cached_before(
-            op, after_bin, args, rounds, checksum, progress, cached_before
+            op, after_bin, after_args, rounds, checksum, progress, cached_before
         )
 
     before_med: dict[str, list[float]] = {}
@@ -548,8 +550,8 @@ def compare_operator(
     #    median across launches is the robust summary; the per-side spread is
     #    reported next to it so a delta inside the noise band reads as such.
     for r in range(rounds + 1):
-        bm, br, bs = _measure(before_bin, args, 1, checksum, progress)
-        am, ar, as_ = _measure(after_bin, args, 1, checksum, progress)
+        bm, br, bs = _measure(before_bin, before_args, 1, checksum, progress)
+        am, ar, as_ = _measure(after_bin, after_args, 1, checksum, progress)
         if r == 0:
             continue  # discarded warm-up pair
         for sid, v in bm.items():
@@ -746,6 +748,15 @@ def render_markdown(result: dict) -> str:
         f"`{result['before_commit']}`",
         f"* **after** — `{result['after_build']}` @ "
         f"`{result['after_commit']}`",
+        *(
+            [
+                "* **side-specific flags** — before: "
+                f"`{' '.join(result.get('before_args') or []) or '(none)'}`, "
+                f"after: `{' '.join(result.get('after_args') or []) or '(none)'}`"
+            ]
+            if (result.get("before_args") or result.get("after_args"))
+            else []
+        ),
         f"* harness args — `{' '.join(result['args']) or '(defaults)'}`, "
         f"{result['rounds']} scored round(s) + 1 discarded warm-up",
         f"* GPU — {result.get('gpu', 'unknown')}",
@@ -858,6 +869,19 @@ def main(argv=None) -> int:
         "scored passes. This is the knob that tightens the noise band — "
         "raise it in preference to --frames or --repeats (default 5)",
     )
+    ap.add_argument(
+        "--before-args",
+        default="",
+        help="extra perf-binary flags for the BEFORE side only (e.g. "
+        "\"--allocator stream_ordered\"). Lets one build be A/B'd against "
+        "itself under two configurations by pointing both --before-build and "
+        "--after-build at the same tree",
+    )
+    ap.add_argument(
+        "--after-args",
+        default="",
+        help="extra perf-binary flags for the AFTER side only",
+    )
     ap.add_argument("--sweep-variants", action="store_true")
     ap.add_argument("--sweep-overrides", action="store_true")
     ap.add_argument(
@@ -933,6 +957,8 @@ def main(argv=None) -> int:
         args += ["--repeats", str(a.repeats)]
     if a.sizes:
         args += ["--sizes", a.sizes]
+    before_extra = shlex.split(a.before_args)
+    after_extra = shlex.split(a.after_args)
     sweep_flags = []
     if a.sweep_variants:
         sweep_flags.append("--sweep-variants")
@@ -951,7 +977,10 @@ def main(argv=None) -> int:
     cache_dir = Path(a.cache_dir)
     machine = _machine_fingerprint()
     keys = {
-        op: _cache_key(before_bins[op], args, a.rounds, machine) for op in ops
+        op: _cache_key(
+            before_bins[op], args + before_extra, a.rounds, machine
+        )
+        for op in ops
     }
     cached: dict[str, dict] = {}
     if not a.no_cache:
@@ -994,7 +1023,7 @@ def main(argv=None) -> int:
         probed, probe_secs = _probe_operators(
             unknown,
             before_bins,
-            sweep_flags,
+            sweep_flags + before_extra,
             a.sizes,
             a.warmup,
             a.frames,
@@ -1045,7 +1074,8 @@ def main(argv=None) -> int:
                 op,
                 before_bins[op],
                 after_bins[op],
-                args,
+                args + before_extra,
+                args + after_extra,
                 a.rounds,
                 a.checksum,
                 prog,
@@ -1118,6 +1148,8 @@ def main(argv=None) -> int:
         "before_commit": _git_describe(_source_dir(before_build)),
         "after_commit": _git_describe(_source_dir(after_build)),
         "args": args,
+        "before_args": before_extra,
+        "after_args": after_extra,
         "rounds": a.rounds,
         "gpu": gpu,
         "operators": results,
