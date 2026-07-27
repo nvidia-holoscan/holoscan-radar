@@ -43,6 +43,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | Work item | Owner | Branch | State |
 | --- | --- | --- | --- |
 | `CFARDetectorOp` optional peak-grouping (`peak_only`) | deustice | `deustice/cfar-peak-grouping` | in progress — opt-in NMS stage ([CFAR OPEN_ITEMS §10](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md)): `peak_only` (bool, default off) + `peak_neighborhood` (`{cross4, square8}`, default `square8`), both static. Collapses each contiguous above-threshold blob to its local-maximum cell (`cfar_power`), restricted to detected neighbors, raster-order tiebreak; `detection_mask` then marks the retained peaks (subset of `score>1`), `detection_idx` reduced. Additive to the exact-sized `detection_idx` / raw-mask contract — off-by-default is byte-identical. C++ + Python tests; `OPERATOR_API.md` updated |
+| `perf_cfar_detector` peak_only coverage | dpc | `dpc/cfar-peak-only-perf` | in progress — extend C++/Python CFAR perf matrices with `peak_only` NMS rows (CA×sizes×`{square8,cross4}`; `--full` adds GO/SO/OS at md) |
 | Fill out `AGENTS.md` + this status file | deustice | `deustice/planning` | in review |
 | Signal-processing operators (`common/` + range, clutter, Doppler, fused) with MatX/CUDA wiring, simulator + test harness | deustice | `deustice/sigproc-ops` | **merged** (PR #8) |
 | Detection operators (`CFARDetectorOp` + FeatureAssembly + DetectionReduction) | dpc | `dpc/detection-full` | **merged** (PR #10) |
