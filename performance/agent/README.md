@@ -25,6 +25,8 @@ the substrate reference.
 | `report.py` | Renders `report.md` (text) + a self-contained `report.html` with the chart dashboard embedded as a base64 PNG. |
 | `visualize.py` | Matplotlib charts of a run (kernel-vs-shell, latency, host-API composition, NVTX phases, override sweep, findings, before/after) + a cross-operator comparison; used by `report.py` / `optimize_report.py` and importable directly. |
 | `optimize_report.py` | Before→after optimization report (md + html) for the `perf-optimize` / `perf-autotune` skills: bottlenecks targeted, runtime improvement, changes + gate results, embedded before/after chart. |
+| `setup_before_build.sh` | Materializes the pre-optimization "before" tree (`build-before/`) — baseline operators + *current* harness — and builds its perf binaries. |
+| `compare_builds.py` | Runs the perf binaries out of two build trees with identical args and diffs the steady-state medians; writes `compare.md` + `compare.json`. |
 
 ## Prerequisites
 
@@ -64,6 +66,90 @@ python3 performance/agent/parse.py    --run-dir performance/agent/runs/$OP
 python3 performance/agent/diagnose.py --run-dir performance/agent/runs/$OP
 python3 performance/agent/report.py   --run-dir performance/agent/runs/$OP
 # -> performance/agent/runs/$OP/report.md
+```
+
+## Branch-level before/after (`build-before/`)
+
+`runner.py` characterizes *one* build. To ask "what did this optimization
+branch actually buy us", build the pre-optimization tree once and diff the two:
+
+```bash
+performance/agent/setup_before_build.sh          # ~15 min, one time
+python3 performance/agent/compare_builds.py --sizes sm,md,xl --checksum
+# -> performance/agent/runs/_compare/compare.md
+```
+
+The setup script checks out the last pre-optimization commit into a git
+worktree at `build-before/src`, then overlays the **current** `performance/`
+and `skills/` on top before configuring `build-before/build`. That overlay is
+the whole point: this branch changed the harness as well as the operators (size
+ladders, live/sustained modes, and the async-mempool retain that alone moved
+measurements ~5x on reduction-heavy ticks). Comparing a raw old checkout would
+fold harness changes into the operator delta. After the overlay the harness
+sources are byte-identical on both sides, so only the operator implementations
+differ — the script hard-fails if that invariant does not hold.
+
+`--checksum` additionally asserts both builds emit identical output bytes, which
+is the correctness gate for a "pure speedup" claim. Re-point either side with
+`--before-build` / `--after-build` to compare any two trees (e.g. two candidate
+fixes).
+
+### Measurement noise (read before believing a number)
+
+On Thor the dominant variance is **between processes**, not between frames: two
+launches of the *same* binary on the same scenario measured 0.367 vs 0.280 ms,
+even though each launch already medians 90 frames internally. Raising
+`--frames` does not tighten this; raising `--rounds` (more launches) does.
+
+Two biases were found and fixed by running the script in **identity mode**
+(`--before-build build --after-build build`, where the true delta is 0 by
+construction):
+
+* a fixed before-then-after order gave the second side a systematic **~10%**
+  advantage (ramped clocks, warm page cache);
+* ABBA-style alternation was *worse* (**~24%**) — it lets the middle side run
+  back-to-back and inherit its own warm state.
+
+So the script measures and discards one warm-up round, then reports the
+**median** across scored rounds (not the min, which just rewards the luckiest
+launch). Each row carries a `±noise %` — the launch-to-launch spread of the
+noisier side — and any Δ inside that band is marked `_(noise)_`.
+
+Residual noise floor at the defaults is roughly **±5%** per scenario, with some
+(e.g. `cfar_CA_xl`) as high as **±18%**. Treat anything under ~10% as
+unproven and re-run it with more `--rounds`. Re-validate the floor any time the
+machine or settings change:
+
+#### Why `--repeats` defaults to 1
+
+`--repeats` pools more frames *inside a single launch*; `--rounds` adds more
+launches. Since the variance that matters is between processes, in-process
+repeats buy very little and cost a lot: `--repeats 3` triples the frame count
+per scenario to shrink a component that was never the bottleneck. The same wall
+time spent on `--rounds` samples the distribution that actually moves.
+
+| setting | frames/scenario | launches/op | rel. cost | samples vs noise |
+| --- | ---: | ---: | ---: | ---: |
+| `--repeats 3 --rounds 3` | 95 | 8 | 1.00x | 3 |
+| `--repeats 1 --rounds 5` (default) | 35 | 12 | **0.55x** | **5** |
+
+So the default is both roughly half the wall time *and* a tighter band. Raise
+`--frames`/`--repeats` only when you specifically care about within-launch
+frame-to-frame jitter.
+
+#### Cost is not uniform across operators
+
+`perf_mimo_coherent_compensation` is the outlier: `--sizes` gives it **three**
+scenarios per size (`tdm`, `ddm`, `ddm_nl`) where most operators get one, and
+its cube is Tx x Rx x Doppler x Range, so `xl` is 537M cells — 16,384x its `xs`
+and 8x its `lg`. One launch of it measured **374 s** against 1-9 s for every
+other operator. If you only need a quick signal, exclude it
+(`--operators` accepts an explicit list) and run it separately.
+
+```bash
+python3 performance/agent/compare_builds.py \
+    --before-build build --after-build build --sizes sm,md,xl
+# every row should read _(noise)_ and geomean should sit near 1.00x
 ```
 
 ## Reports (`report.md` + `report.html`)

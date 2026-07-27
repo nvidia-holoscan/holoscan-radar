@@ -1,0 +1,971 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Before/after runtime comparison across two build trees.
+
+Runs the same ``perf_<operator>`` binaries out of two different build
+directories with byte-identical arguments and diffs their steady-state
+latency, scenario by scenario. Intended for "what did this optimization
+branch actually buy us" — not for bottleneck attribution (that is
+``runner.py`` + ``diagnose.py``, which need nsys).
+
+The premise is that both build trees carry the *same* harness sources, so
+the scenario ladders, sync policy and measurement mempool settings match;
+only the operator implementations differ. ``setup_before_build.sh`` builds
+such a tree. If the two reports disagree on which scenarios exist, the
+mismatched ones are reported as ``missing`` rather than silently dropped.
+
+Each round runs both sides back to back, and one extra round is measured and
+discarded up front so the cold-clock / cold-page-cache ramp lands outside the
+statistic. The per-scenario figure is the *median* of the per-launch medians
+across scored rounds, reported next to the launch-to-launch spread; a delta
+inside that spread is flagged as noise rather than presented as a result. See
+``compare_operator`` for why this shape, and the README for the identity-run
+measurements that forced it.
+
+Usage::
+
+    python performance/agent/compare_builds.py \\
+        --before-build build-before/build --after-build build \\
+        --operators fmcw_range_processor,cfar_detector --sizes sm,md,xl
+
+Writes ``compare.json`` + ``compare.md`` under ``--out-dir`` and prints a
+table to stdout.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+# Scenario rows are emitted once per bucket; steady-state latency lives on the
+# "compute" row (setup/teardown rows carry null timings).
+_COMPUTE_BUCKET = "compute"
+
+_CHECKSUM_RE = re.compile(r"output_checksum\s+(\d+)\s+([0-9a-fA-F]+)")
+
+
+# --------------------------------------------------------------------------
+# Before-side cache
+#
+# The "before" tree is pinned to a commit and its binaries never change, so
+# re-measuring it every run is pure waste — about half the wall clock. But a
+# cached baseline is, by definition, measured in a *different session* from the
+# "after" side it is compared against, and cross-session comparison is exactly
+# what the interleaving exists to avoid: identity runs showed ~10% bias for a
+# fixed order and ~24% for ABBA alternation. Reusing a baseline from a machine
+# in a different thermal/clock state silently reintroduces that.
+#
+# Hence the canary: every cached run re-measures the cheapest operators on both
+# sides and checks the fresh baseline still agrees with the cached one. If it
+# does not, the machine has moved and the cache is dropped for that run. This
+# converts a silent bias into a detected one, at a cost of a few seconds.
+#
+# The key deliberately hashes the *binary*, not the commit SHA: a dirty tree,
+# different cmake flags or a different toolchain all change timings without
+# changing the SHA.
+# --------------------------------------------------------------------------
+
+_CACHE_VERSION = 2
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _cache_key(binary: Path, args: list[str], rounds: int, machine: str) -> str:
+    h = hashlib.sha256()
+    h.update(f"v{_CACHE_VERSION}\0".encode())
+    h.update(_file_sha256(binary).encode())
+    h.update("\0".join(args).encode())
+    h.update(f"\0rounds={rounds}\0{machine}".encode())
+    return h.hexdigest()[:20]
+
+
+def _machine_fingerprint() -> str:
+    """GPU name + driver — enough to invalidate across hosts."""
+    if not shutil.which("nvidia-smi"):
+        return "unknown"
+    p = subprocess.run(
+        ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    out = p.stdout.strip().splitlines()
+    return out[0].strip() if out else "unknown"
+
+
+def _cache_load(cache_dir: Path, op: str, key: str) -> dict | None:
+    path = cache_dir / f"{op}.{key}.json"
+    if not path.is_file():
+        return None
+    try:
+        entry = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if entry.get("cache_version") != _CACHE_VERSION:
+        return None
+    return entry
+
+
+def _cache_store(cache_dir: Path, op: str, key: str, entry: dict) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / f"{op}.{key}.json"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(entry, indent=2))
+    tmp.replace(path)  # atomic, so a killed run cannot leave a torn entry
+
+
+def _concurrent_runs() -> list[tuple[int, str]]:
+    """Other live compare_builds.py processes, as (pid, command line).
+
+    Two of these running at once is worse than a clobbered output directory:
+    they contend for the same GPU, and on a box whose launch-to-launch noise
+    floor is already 5-18% that contention silently swamps the effect being
+    measured. Best effort — /proc only, and a no-op elsewhere.
+    """
+    me = os.getpid()
+    hits: list[tuple[int, str]] = []
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return hits
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == me:
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue  # process exited, or not ours to read
+        parts = [c for c in raw.decode("utf-8", "replace").split("\0") if c]
+        # Match the script as an argv element, so shell wrappers that merely
+        # quote the whole pipeline in one arg do not count as a second run.
+        if any(c.endswith("compare_builds.py") for c in parts):
+            hits.append((pid, " ".join(parts)))
+    return hits
+
+
+def _warn_concurrent(out_dir: Path) -> None:
+    """Loudly flag other live runs. Warn-only: never blocks the caller."""
+    for pid, cmd in _concurrent_runs():
+        # A run with no explicit --out-dir lands on the same default as this
+        # one, so the two will also overwrite each other's report.
+        shares_out = "--out-dir" not in cmd or str(out_dir) in cmd
+        lines = [
+            f"WARNING: another compare_builds.py is already running "
+            f"(pid {pid}):",
+            f"           {cmd[:160]}",
+            "         Both runs share this GPU. Contended timings are not",
+            "         comparable, and on this box the noise floor is already",
+            "         5-18%, so the contention can swamp the effect.",
+        ]
+        if shares_out:
+            lines.append(
+                f"         They also both write {out_dir} — last writer wins."
+            )
+        lines.append("         Proceeding anyway (warn-only).")
+        print("\n".join(lines), file=sys.stderr, flush=True)
+
+
+def _fmt_dur(seconds: float) -> str:
+    """Compact duration: 45s, 12m04s, 1h07m."""
+    s = int(round(seconds))
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m{s % 60:02d}s"
+    return f"{s // 3600}h{(s % 3600) // 60:02d}m"
+
+
+class _Progress:
+    """Launch-granular progress + self-correcting ETA.
+
+    The unit of work is one perf-binary launch, and the total is known up
+    front: ``operators x (rounds + 1 warm-up) x 2 sides``. That makes a real
+    bar and a real ETA possible, rather than just naming the current operator.
+
+    The ETA is *not* a flat mean over all launches — operators differ by well
+    over an order of magnitude (a split-vs-fused scenario matrix dwarfs a
+    deinterleave). Remaining launches for the operator in flight are costed
+    from that operator's own observed launches; operators not yet started are
+    costed from the global mean. Early estimates are rough and tighten as
+    operators complete.
+    """
+
+    def __init__(self, plan: list[tuple[str, int]], style: str):
+        # plan is [(operator, launches)] — launches vary because a cached
+        # baseline halves an operator's work.
+        self.plan = plan
+        self.total_ops = len(plan)
+        self.per_op = plan[0][1] if plan else 0
+        self.total = sum(n for _, n in plan)
+        self.done = 0
+        self.t0 = time.monotonic()
+        self.op_times: list[float] = []  # current operator's launch durations
+        self.all_times: list[float] = []
+        self.op_name = ""
+        self.op_index = 0
+        self.style = style
+        self._dirty = False
+
+    # -- estimation --------------------------------------------------------
+    def _eta(self) -> float | None:
+        if not self.all_times:
+            return None
+        global_mean = statistics.fmean(self.all_times)
+        op_mean = statistics.fmean(self.op_times) if self.op_times else None
+        # Launches left on the operator currently in flight, costed from its
+        # own observed rate.
+        left_here = self.per_op - len(self.op_times)
+        # Launches belonging to operators not yet started, costed from the
+        # global mean — the estimator has no per-operator prior for those, so
+        # a heavily skewed workload is under-estimated until it is reached.
+        left_after = sum(n for _, n in self.plan[self.op_index :])
+        return (left_here * (op_mean or global_mean)) + (
+            left_after * global_mean
+        )
+
+    # -- reporting ---------------------------------------------------------
+    def _line(self) -> str:
+        frac = self.done / self.total if self.total else 1.0
+        bar_w = 22
+        filled = int(round(frac * bar_w))
+        bar = "█" * filled + "░" * (bar_w - filled)
+        eta = self._eta()
+        eta_s = f"eta ~{_fmt_dur(eta)}" if eta is not None else "eta --"
+        return (
+            f"[{self.done:>3}/{self.total}] {bar} {frac * 100:3.0f}% | "
+            f"{self.op_name} {len(self.op_times)}/{self.per_op} "
+            f"(op {self.op_index}/{self.total_ops}) | "
+            f"elapsed {_fmt_dur(time.monotonic() - self.t0)} | {eta_s}"
+        )
+
+    def _emit(self, final: bool = False) -> None:
+        if self.style == "none":
+            return
+        if self.style == "bar":
+            sys.stdout.write("\r\033[2K" + self._line())
+            if final:
+                sys.stdout.write("\n")
+            sys.stdout.flush()
+            self._dirty = not final
+        else:  # plain — one line per event, safe for log files
+            print(self._line(), flush=True)
+
+    def start_operator(self, index: int) -> None:
+        """Begin the 1-based index'th operator of the plan."""
+        self.op_name, self.per_op = self.plan[index - 1]
+        self.op_index = index
+        self.op_times = []
+        self._emit()
+
+    def launch_done(self, seconds: float) -> None:
+        self.done += 1
+        self.op_times.append(seconds)
+        self.all_times.append(seconds)
+        self._emit()
+
+    def drop_operator(self, launches_skipped: int) -> None:
+        """An operator failed; shrink the denominator so the bar stays honest."""
+        self.total = max(self.done, self.total - launches_skipped)
+        self._emit()
+
+    def revise_plan(self, plan: list[tuple[str, int]]) -> None:
+        """Replace the remaining plan (e.g. the canary invalidated the cache)."""
+        self.plan = plan
+        self.total_ops = len(plan)
+        self.total = sum(n for _, n in plan)
+
+    def note(self, msg: str) -> None:
+        """Print a message without clobbering an in-place bar."""
+        if self.style == "bar" and self._dirty:
+            sys.stdout.write("\r\033[2K")
+            self._dirty = False
+        print(msg, flush=True)
+
+    def finish(self) -> None:
+        self._emit(final=True)
+
+
+def _perf_binaries(build_dir: Path) -> dict[str, Path]:
+    """Map operator name -> perf binary under ``build_dir``."""
+    cpp = build_dir / "performance" / "cpp"
+    if not cpp.is_dir():
+        return {}
+    out = {}
+    for p in sorted(cpp.glob("perf_*")):
+        if p.is_file() and p.stat().st_mode & 0o111:
+            out[p.name[len("perf_") :]] = p
+    return out
+
+
+def _run_one(binary: Path, args: list[str], checksum: bool) -> tuple[dict, list]:
+    """Run one perf binary; return (parsed JSON report, checksum list)."""
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "report.json"
+        cmd = [str(binary), "--quiet", "--output", str(out), *args]
+        if checksum:
+            cmd.append("--checksum")
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, check=False
+        )
+        if proc.returncode != 0 or not out.exists():
+            raise RuntimeError(
+                f"{binary.name} failed (exit {proc.returncode}):\n"
+                f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
+            )
+        report = json.loads(out.read_text())
+    sums = [
+        (int(m.group(1)), m.group(2).lower())
+        for m in _CHECKSUM_RE.finditer(proc.stdout)
+    ]
+    return report, sums
+
+
+def _compute_rows(report: dict) -> dict[str, dict]:
+    """Index the compute-bucket result rows by scenario_id."""
+    rows = {}
+    for r in report.get("results", []):
+        if r.get("bucket") != _COMPUTE_BUCKET:
+            continue
+        if r.get("status") != "ok" or r.get("median_ms") is None:
+            continue
+        rows[r["scenario_id"]] = r
+    return rows
+
+
+def _measure(
+    binary: Path,
+    args: list[str],
+    rounds: int,
+    checksum: bool,
+    progress: _Progress | None = None,
+) -> tuple[dict[str, list[float]], dict[str, dict], list]:
+    """Return (scenario -> [median_ms per round], scenario -> last row, sums)."""
+    medians: dict[str, list[float]] = {}
+    last_rows: dict[str, dict] = {}
+    sums: list = []
+    for _ in range(rounds):
+        t0 = time.monotonic()
+        try:
+            report, s = _run_one(binary, args, checksum)
+        finally:
+            # Count the launch even when it failed: the wall time was spent,
+            # and the caller drops the operator's remaining launches instead.
+            if progress is not None:
+                progress.launch_done(time.monotonic() - t0)
+        sums = s or sums
+        for sid, row in _compute_rows(report).items():
+            medians.setdefault(sid, []).append(row["median_ms"])
+            last_rows[sid] = row
+    return medians, last_rows, sums
+
+
+def _geomean(values: list[float]) -> float:
+    return statistics.geometric_mean(values) if values else float("nan")
+
+
+def compare_operator(
+    op: str,
+    before_bin: Path,
+    after_bin: Path,
+    args: list[str],
+    rounds: int,
+    checksum: bool,
+    progress: _Progress | None = None,
+    cached_before: dict | None = None,
+) -> dict:
+    """Run one operator on both builds and diff the compute-bucket medians.
+
+    ``cached_before`` supplies a previously measured baseline; when present the
+    before binary is not launched at all and only the after side runs. The
+    result is marked ``before_cached`` so the report can say so.
+    """
+    if cached_before is not None:
+        return _compare_with_cached_before(
+            op, after_bin, args, rounds, checksum, progress, cached_before
+        )
+
+    before_med: dict[str, list[float]] = {}
+    after_med: dict[str, list[float]] = {}
+    before_rows: dict[str, dict] = {}
+    after_rows: dict[str, dict] = {}
+    before_sums: list = []
+    after_sums: list = []
+
+    # Measurement methodology, all three points established empirically by
+    # running this script with --before-build == --after-build (identity runs,
+    # where the true delta is 0 by construction; see README).
+    #
+    # 1. The dominant variance is *between processes*, not between frames: two
+    #    launches of the same binary measured 0.367 vs 0.280 ms on the same
+    #    scenario, while each launch already medians 90 frames internally. More
+    #    --frames therefore does not tighten the comparison; more launches does.
+    # 2. The first launch pair is systematically slow (cold clocks, cold page
+    #    cache). Round 0 is measured and discarded so the ramp lands outside the
+    #    statistic instead of inside whichever side happened to run first — a
+    #    fixed before-then-after order without this showed a ~10% bias, and
+    #    ABBA-style alternation was worse (~24%) because it lets the middle side
+    #    run back-to-back and inherit its own warm state.
+    # 3. min-across-rounds rewards whichever side got the luckiest launch. The
+    #    median across launches is the robust summary; the per-side spread is
+    #    reported next to it so a delta inside the noise band reads as such.
+    for r in range(rounds + 1):
+        bm, br, bs = _measure(before_bin, args, 1, checksum, progress)
+        am, ar, as_ = _measure(after_bin, args, 1, checksum, progress)
+        if r == 0:
+            continue  # discarded warm-up pair
+        for sid, v in bm.items():
+            before_med.setdefault(sid, []).extend(v)
+        for sid, v in am.items():
+            after_med.setdefault(sid, []).extend(v)
+        before_rows.update(br)
+        after_rows.update(ar)
+        before_sums = bs or before_sums
+        after_sums = as_ or after_sums
+
+    return _summarize(
+        op,
+        before_med,
+        after_med,
+        before_rows,
+        after_rows,
+        before_sums,
+        after_sums,
+        checksum,
+        before_cached=False,
+    )
+
+
+def _spread_pct(vals: list[float]) -> float:
+    """Peak-to-peak spread of a side's per-launch medians, as % of median."""
+    if len(vals) < 2:
+        return 0.0
+    return (max(vals) - min(vals)) / statistics.median(vals) * 100.0
+
+
+def _summarize(
+    op: str,
+    before_med: dict[str, list[float]],
+    after_med: dict[str, list[float]],
+    before_rows: dict[str, dict],
+    after_rows: dict[str, dict],
+    before_sums: list,
+    after_sums: list,
+    checksum: bool,
+    before_cached: bool,
+) -> dict:
+    """Fold both sides' per-launch medians into the per-scenario verdicts."""
+    scenarios = []
+    ratios = []
+    for sid in sorted(set(before_med) | set(after_med)):
+        b = statistics.median(before_med[sid]) if sid in before_med else None
+        a = statistics.median(after_med[sid]) if sid in after_med else None
+        row = after_rows.get(sid) or before_rows.get(sid) or {}
+        entry = {
+            "scenario_id": sid,
+            "size_id": row.get("size_id"),
+            "variant": row.get("variant"),
+            "before_ms": b,
+            "after_ms": a,
+        }
+        if b is None or a is None:
+            entry["status"] = "missing_before" if b is None else "missing_after"
+        else:
+            entry["status"] = "ok"
+            entry["delta_ms"] = a - b
+            entry["delta_pct"] = (a - b) / b * 100.0
+            entry["speedup"] = b / a
+            # Noise band: the larger per-side launch-to-launch spread. A delta
+            # inside it is not evidence of a change in either direction.
+            noise = max(
+                _spread_pct(before_med[sid]), _spread_pct(after_med[sid])
+            )
+            entry["noise_pct"] = noise
+            entry["significant"] = abs(entry["delta_pct"]) > noise
+            ratios.append(b / a)
+            # Cold (first-frame) latency often carries the plan/alloc cost the
+            # optimization targeted; surface it but don't fold it into the
+            # steady-state summary.
+            cb = before_rows.get(sid, {}).get("cold_ms")
+            ca = after_rows.get(sid, {}).get("cold_ms")
+            if cb and ca:
+                entry["cold_before_ms"] = cb
+                entry["cold_after_ms"] = ca
+                entry["cold_delta_pct"] = (ca - cb) / cb * 100.0
+        scenarios.append(entry)
+
+    checksum_match = None
+    if checksum and (before_sums or after_sums):
+        checksum_match = before_sums == after_sums
+
+    return {
+        "operator": op,
+        "scenarios": scenarios,
+        "geomean_speedup": _geomean(ratios),
+        "checksum_match": checksum_match,
+        "checksums_before": before_sums if checksum else None,
+        "checksums_after": after_sums if checksum else None,
+        # True when the baseline came from a previous session rather than
+        # being interleaved with the after side in this one.
+        "before_cached": before_cached,
+        "_before_med": before_med,
+        "_before_rows": before_rows,
+        "_before_sums": before_sums,
+    }
+
+
+def _canary_verdict(fresh: dict, cached: dict, floor_pct: float = 10.0) -> dict:
+    """Does a freshly measured baseline still match the cached one?
+
+    Compares per-scenario medians. The tolerance is the scenario's own cached
+    launch-to-launch spread, floored at ``floor_pct`` so a scenario that
+    happened to be quiet in the cached run does not produce a hair-trigger.
+    Any scenario outside tolerance condemns the whole cache: a shifted machine
+    shifts every operator, so a single clear disagreement is enough.
+    """
+    worst_sid, worst = None, 0.0
+    checked = 0
+    cached_med = cached.get("medians", {})
+    for s in fresh["scenarios"]:
+        sid = s["scenario_id"]
+        vals = cached_med.get(sid)
+        if s.get("status") != "ok" or not vals or s.get("before_ms") is None:
+            continue
+        base = statistics.median(vals)
+        if base <= 0:
+            continue
+        checked += 1
+        delta = abs(s["before_ms"] - base) / base * 100.0
+        tol = max(_spread_pct(vals), floor_pct)
+        if delta - tol > worst:
+            worst, worst_sid = delta - tol, sid
+    if checked == 0:
+        return {
+            "ok": False,
+            "message": "no comparable scenarios in cache — treating as stale",
+        }
+    if worst_sid is None:
+        return {
+            "ok": True,
+            "message": f"fresh baseline matches cache across {checked} "
+            f"scenario(s); reusing cached baselines",
+        }
+    return {
+        "ok": False,
+        "message": f"fresh baseline disagrees with cache on {worst_sid} "
+        f"by {worst:.1f}pp beyond tolerance — machine state has moved",
+    }
+
+
+def _compare_with_cached_before(
+    op: str,
+    after_bin: Path,
+    args: list[str],
+    rounds: int,
+    checksum: bool,
+    progress: _Progress | None,
+    cached: dict,
+) -> dict:
+    """Measure only the after side; take the baseline from ``cached``.
+
+    Same statistic as the interleaved path, so the two are comparable — the
+    difference is solely that the baseline was not measured in this session.
+    """
+    after_med: dict[str, list[float]] = {}
+    after_rows: dict[str, dict] = {}
+    after_sums: list = []
+    for r in range(rounds + 1):
+        am, ar, as_ = _measure(after_bin, args, 1, checksum, progress)
+        if r == 0:
+            continue  # discarded warm-up, same as the interleaved path
+        for sid, v in am.items():
+            after_med.setdefault(sid, []).extend(v)
+        after_rows.update(ar)
+        after_sums = as_ or after_sums
+
+    return _summarize(
+        op,
+        {k: list(v) for k, v in cached["medians"].items()},
+        after_med,
+        cached.get("rows", {}),
+        after_rows,
+        [tuple(c) for c in cached.get("checksums", [])],
+        after_sums,
+        checksum,
+        before_cached=True,
+    )
+
+
+def _fmt(v, spec="{:.3f}"):
+    return "—" if v is None else spec.format(v)
+
+
+def render_markdown(result: dict) -> str:
+    lines = [
+        "# Before/after runtime comparison",
+        "",
+        f"* **before** — `{result['before_build']}` @ "
+        f"`{result['before_commit']}`",
+        f"* **after** — `{result['after_build']}` @ "
+        f"`{result['after_commit']}`",
+        f"* harness args — `{' '.join(result['args']) or '(defaults)'}`, "
+        f"{result['rounds']} scored round(s) + 1 discarded warm-up",
+        f"* GPU — {result.get('gpu', 'unknown')}",
+        "",
+        "Metric is the compute-bucket `median_ms` (steady-state per-frame "
+        "latency), median across rounds; one extra warm-up round is measured "
+        "and discarded. Negative Δ% is faster. `±noise %` is the "
+        "launch-to-launch spread of the noisier side — a Δ inside it is "
+        "marked _(noise)_ and is not evidence of a change.",
+        "",
+    ]
+    n_cached = sum(1 for o in result["operators"] if o.get("before_cached"))
+    if n_cached:
+        lines += [
+            f"> **{n_cached} of {len(result['operators'])} operators used a "
+            "cached baseline** (marked `[cached baseline]`). Those before/after "
+            "pairs were *not* measured in the same session, so their delta can "
+            "absorb machine drift that the interleaved pairs cancel. A canary "
+            "operator was re-measured on both sides and agreed with the cache, "
+            "but the `±noise %` column still only reflects within-session "
+            "spread. Re-run with `--no-cache` to confirm anything surprising.",
+            "",
+        ]
+    for op in result["operators"]:
+        gm = op["geomean_speedup"]
+        head = f"## {op['operator']} — geomean speedup {gm:.2f}x"
+        if op.get("before_cached"):
+            head += "  [cached baseline]"
+        if op["checksum_match"] is not None:
+            head += (
+                "  (outputs byte-identical)"
+                if op["checksum_match"]
+                else "  (**outputs DIFFER**)"
+            )
+        lines += [head, ""]
+        lines += [
+            "| scenario | before ms | after ms | Δ ms | Δ % | ±noise % | "
+            "speedup |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for s in op["scenarios"]:
+            if s["status"] != "ok":
+                lines.append(
+                    f"| `{s['scenario_id']}` | — | — | — | — | — | "
+                    f"{s['status']} |"
+                )
+                continue
+            mark = "" if s["significant"] else " _(noise)_"
+            lines.append(
+                f"| `{s['scenario_id']}` | {_fmt(s['before_ms'])} | "
+                f"{_fmt(s['after_ms'])} | {_fmt(s['delta_ms'], '{:+.3f}')} | "
+                f"{_fmt(s['delta_pct'], '{:+.1f}')}{mark} | "
+                f"{_fmt(s['noise_pct'], '{:.1f}')} | "
+                f"{_fmt(s['speedup'], '{:.2f}x')} |"
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _git_describe(path: Path) -> str:
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(path), "log", "-1", "--format=%h %s"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return out.stdout.strip()
+    except Exception:
+        return "unknown"
+
+
+def _source_dir(build_dir: Path) -> Path:
+    cache = build_dir / "CMakeCache.txt"
+    if cache.exists():
+        for line in cache.read_text().splitlines():
+            if line.startswith("CMAKE_HOME_DIRECTORY:INTERNAL="):
+                return Path(line.split("=", 1)[1])
+    return build_dir
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--before-build", default="build-before/build")
+    ap.add_argument("--after-build", default="build")
+    ap.add_argument(
+        "--operators",
+        default="",
+        help="comma-separated operator names (default: every perf binary "
+        "present in both builds)",
+    )
+    ap.add_argument("--sizes", default="sm,md,xl")
+    ap.add_argument("--warmup", type=int, default=5)
+    ap.add_argument("--frames", type=int, default=30)
+    ap.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="pooled repeats *inside* one launch. Defaults to 1 on purpose: "
+        "the dominant variance here is between processes, so extra in-process "
+        "repeats cost wall time without tightening the comparison. Spend the "
+        "budget on --rounds instead (default 1)",
+    )
+    ap.add_argument(
+        "--rounds",
+        type=int,
+        default=5,
+        help="scored before/after passes; one extra warm-up pass is always "
+        "measured and discarded. Per-scenario stat is the median across "
+        "scored passes. This is the knob that tightens the noise band — "
+        "raise it in preference to --frames or --repeats (default 5)",
+    )
+    ap.add_argument("--sweep-variants", action="store_true")
+    ap.add_argument("--sweep-overrides", action="store_true")
+    ap.add_argument(
+        "--checksum",
+        action="store_true",
+        help="also assert the two builds emit identical output checksums",
+    )
+    ap.add_argument(
+        "--progress",
+        choices=("auto", "bar", "plain", "none"),
+        default="auto",
+        help="'bar' redraws one line in place (needs a TTY), 'plain' prints "
+        "one line per launch (safe to redirect to a log), 'auto' picks by "
+        "isatty (default)",
+    )
+    ap.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="always re-measure the before side in this session. Slower, but "
+        "every number is same-session and interleaved",
+    )
+    ap.add_argument(
+        "--cache-dir",
+        default="performance/agent/runs/_cache",
+        help="where cached before-side results live",
+    )
+    ap.add_argument(
+        "--canary-ops",
+        type=int,
+        default=2,
+        help="how many of the cheapest operators to re-measure fresh on both "
+        "sides to validate a cached baseline (default 2, 0 disables the "
+        "check — not recommended)",
+    )
+    ap.add_argument("--out-dir", default="performance/agent/runs/_compare")
+    a = ap.parse_args(argv)
+
+    _warn_concurrent(Path(a.out_dir))
+
+    before_build = Path(a.before_build).resolve()
+    after_build = Path(a.after_build).resolve()
+    before_bins = _perf_binaries(before_build)
+    after_bins = _perf_binaries(after_build)
+    if not before_bins:
+        print(f"error: no perf binaries under {before_build}", file=sys.stderr)
+        return 1
+    if not after_bins:
+        print(f"error: no perf binaries under {after_build}", file=sys.stderr)
+        return 1
+
+    if a.operators:
+        ops = [o.strip() for o in a.operators.split(",") if o.strip()]
+    else:
+        ops = sorted(set(before_bins) & set(after_bins))
+    missing = [o for o in ops if o not in before_bins or o not in after_bins]
+    if missing:
+        print(
+            f"error: not built in both trees: {', '.join(missing)}",
+            file=sys.stderr,
+        )
+        return 1
+
+    args = ["--warmup", str(a.warmup), "--frames", str(a.frames)]
+    if a.repeats > 1:
+        args += ["--repeats", str(a.repeats)]
+    if a.sizes:
+        args += ["--sizes", a.sizes]
+    if a.sweep_variants:
+        args.append("--sweep-variants")
+    if a.sweep_overrides:
+        args.append("--sweep-overrides")
+
+    style = a.progress
+    if style == "auto":
+        style = "bar" if sys.stdout.isatty() else "plain"
+
+    both_sides = (a.rounds + 1) * 2
+    after_only = a.rounds + 1
+
+    # --- cache lookup -----------------------------------------------------
+    cache_dir = Path(a.cache_dir)
+    machine = _machine_fingerprint()
+    keys = {
+        op: _cache_key(before_bins[op], args, a.rounds, machine) for op in ops
+    }
+    cached: dict[str, dict] = {}
+    if not a.no_cache:
+        for op in ops:
+            entry = _cache_load(cache_dir, op, keys[op])
+            if entry is not None:
+                cached[op] = entry
+
+    # Canary operators are re-measured fresh on both sides even though they
+    # have a cached baseline, so the cache can be checked against reality.
+    # Pick the cheapest by recorded launch cost — validation should be nearly
+    # free relative to the run it is protecting.
+    canaries: list[str] = []
+    if cached and a.canary_ops > 0:
+        canaries = sorted(
+            cached, key=lambda o: cached[o].get("launch_seconds", 0.0)
+        )[: a.canary_ops]
+
+    # Canaries run first so the verdict is known before the cached operators.
+    ordered = canaries + [o for o in ops if o not in canaries]
+
+    def _launches(op: str) -> int:
+        return after_only if (op in cached and op not in canaries) else both_sides
+
+    plan = [(op, _launches(op)) for op in ordered]
+    total_launches = sum(n for _, n in plan)
+    saved = len(ops) * both_sides - total_launches
+    cache_note = f"      cache: {len(cached)}/{len(ops)} baselines reused"
+    if saved:
+        cache_note += f" ({saved} launches saved)"
+    if canaries:
+        cache_note += f", canary={', '.join(canaries)}"
+    elif not cached:
+        cache_note += " (cold cache — measuring both sides)"
+    print(
+        f"plan: {len(ops)} operators, {total_launches} launches "
+        f"({a.rounds} scored rounds + 1 warm-up)\n"
+        f"      sizes={a.sizes} warmup={a.warmup} frames={a.frames} "
+        f"repeats={a.repeats}\n"
+        f"{cache_note}\n"
+        f"      ETA appears once the first launch completes.",
+        flush=True,
+    )
+
+    prog = _Progress(plan, style)
+    results: list[dict] = []
+    cache_invalidated = False
+    for i, op in enumerate(ordered, start=1):
+        prog.start_operator(i)
+        use_cached = op in cached and op not in canaries and not cache_invalidated
+        t_op = time.monotonic()
+        try:
+            res = compare_operator(
+                op,
+                before_bins[op],
+                after_bins[op],
+                args,
+                a.rounds,
+                a.checksum,
+                prog,
+                cached[op] if use_cached else None,
+            )
+        except RuntimeError as exc:
+            prog.drop_operator(prog.per_op - len(prog.op_times))
+            prog.note(f"[compare] {op}: SKIPPED — {exc}")
+            continue
+        results.append(res)
+
+        if not res["before_cached"]:
+            # Freshly measured baseline: persist it, and if this was a canary,
+            # check the cached copy still agrees with reality.
+            if op in canaries and not cache_invalidated:
+                verdict = _canary_verdict(res, cached[op])
+                prog.note(f"[canary] {op}: {verdict['message']}")
+                if not verdict["ok"]:
+                    cache_invalidated = True
+                    cached = {}
+                    plan = [
+                        (o, both_sides if j >= i else n)
+                        for j, (o, n) in enumerate(plan, start=1)
+                    ]
+                    prog.revise_plan(plan)
+                    prog.note(
+                        "[canary] cache dropped for this run — remaining "
+                        "operators will re-measure both sides."
+                    )
+            _cache_store(
+                cache_dir,
+                op,
+                keys[op],
+                {
+                    "cache_version": _CACHE_VERSION,
+                    "operator": op,
+                    "key": keys[op],
+                    "machine": machine,
+                    "args": args,
+                    "rounds": a.rounds,
+                    "before_build": str(before_build),
+                    "before_commit": _git_describe(_source_dir(before_build)),
+                    "launch_seconds": (time.monotonic() - t_op)
+                    / max(1, prog.per_op),
+                    "medians": res["_before_med"],
+                    "rows": res["_before_rows"],
+                    "checksums": res["_before_sums"],
+                },
+            )
+    prog.finish()
+
+    # Private measurement detail — useful for caching, noise for the report.
+    for res in results:
+        for k in ("_before_med", "_before_rows", "_before_sums"):
+            res.pop(k, None)
+
+    gpu = "unknown"
+    if shutil.which("nvidia-smi"):
+        p = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        gpu = p.stdout.strip().splitlines()[0] if p.stdout.strip() else gpu
+
+    payload = {
+        "before_build": str(before_build),
+        "after_build": str(after_build),
+        "before_commit": _git_describe(_source_dir(before_build)),
+        "after_commit": _git_describe(_source_dir(after_build)),
+        "args": args,
+        "rounds": a.rounds,
+        "gpu": gpu,
+        "operators": results,
+    }
+
+    out_dir = Path(a.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "compare.json").write_text(json.dumps(payload, indent=2))
+    md = render_markdown(payload)
+    (out_dir / "compare.md").write_text(md)
+    print()
+    print(md)
+    print(f"wrote {out_dir / 'compare.json'} and {out_dir / 'compare.md'}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
