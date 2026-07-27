@@ -233,6 +233,8 @@ def _run_graph(
                 az_angles=list(az_grid),
                 el_angles=list(el_grid),
                 num_sources=1,
+                source_count_pfa=1e-4,
+                max_sources=4,
                 name="music",
             )
             src = PerfTensorSourceOp(

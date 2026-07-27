@@ -283,7 +283,9 @@ inline void configure_root_solver(
 // One companion-matrix eigen-solve per item on the operator stream (see the
 // serial-hybrid note in OPEN_ITEMS.md). Configures/reuses the cuSolver
 // workspace, runs cusolverDnXgeev per item, then downloads and checks the
-// per-item info codes (synchronizes `stream`).
+// per-item info codes (synchronizes `stream`). A per-item non-convergence
+// (info > 0, e.g. a degenerate NaN companion matrix) blanks that item's roots
+// so the selection kernels skip it; only an illegal argument (info < 0) throws.
 template <typename T>
 inline void solve_companion_roots(RootMUSICSolverState* solver, int64_t degree,
                                   cuda::std::complex<T>* companion,
@@ -324,10 +326,29 @@ inline void solve_companion_roots(RootMUSICSolverState* solver, int64_t degree,
   }
   for (int64_t item = 0; item < num_items; ++item) {
     const int info = info_host[static_cast<size_t>(item)];
-    if (info != 0) {
+    if (info < 0) {
+      // info < 0: the |info|-th argument to geev was illegal -- a programming
+      // error in how we drive the solver, not data-dependent. Fail loudly.
       throw std::runtime_error(
-          "RootMUSICEstimatorOp: cusolverDnXgeev failed for item " +
+          "RootMUSICEstimatorOp: cusolverDnXgeev illegal argument for item " +
           std::to_string(item) + " (info " + std::to_string(info) + ")");
+    }
+    if (info > 0) {
+      // info > 0: QR failed to converge for this item -- the expected outcome
+      // for a numerically degenerate companion matrix (e.g. root_music_
+      // companion_kernel deliberately writes a NaN matrix when the leading
+      // coefficient underflows). Blank just this item's roots with an
+      // all-ones bit pattern (a NaN for both float and double); the selection
+      // kernels skip non-finite roots and emit zero sources for it, so one bad
+      // item no longer aborts the whole tick.
+      if (cudaMemsetAsync(roots + item * degree, 0xFF,
+                          static_cast<size_t>(degree) *
+                              sizeof(cuda::std::complex<T>),
+                          stream) != cudaSuccess) {
+        throw std::runtime_error(
+            "RootMUSICEstimatorOp: failed to blank degenerate roots for item " +
+            std::to_string(item));
+      }
     }
   }
 }

@@ -181,6 +181,25 @@ MVDR's own `OPEN_ITEMS.md`) — turned out not to be, once actually tried:
   end-to-end under a pytest CuPy-import-order test the way MVDR's was; if a
   Python binding lands, mirror MVDR's `install_matx_cache_atexit()` guidance
   verbatim.
+- **The teardown drain is process-global, and that is only safe at true
+  teardown.** `retire_music_matx_caches()` empties the entire
+  `matx::GetAllocMap()`, not just this operator's buffers — the same
+  process-wide MemTracker every MatX consumer shares. This is intentional (it
+  is the one point where CUDA is still valid and no operator is mid-compute)
+  and correct for the current single-fragment usage, where Holoscan calls
+  every operator's `stop()` at graph teardown with no further `compute()` on
+  any operator and the Python `atexit` backup fires at interpreter shutdown
+  (after `run()` returns). It is **not** safe if operators can stop at
+  staggered times while siblings keep ticking — a multi-fragment graph whose
+  fragments tear down independently, or an early `atexit`/manual `stop()` on
+  one estimator while another still runs — because the first `stop()` would
+  free the still-live siblings' cached workspaces (the exact per-tick failure
+  mode the split above avoids, just moved to teardown). If such a topology is
+  ever built, scope the drain to this operator's own allocations (track them
+  explicitly) or reference-count the drain across live MatX consumers rather
+  than emptying the global map on the first `stop()`. Flagged by CodeRabbit
+  review on the fmcw_aoa_estimators PR; left as-is for the current single-
+  fragment app because no staggered-stop topology exists yet.
 
 ## Performance
 
