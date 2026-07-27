@@ -51,9 +51,10 @@ from utils.tensor_factory import make_power_map_device, single_map  # noqa: E402
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application  # noqa: E402
-from holoscan.radar import CfarPeakNeighborhood, CfarVariant  # noqa: E402
-from holoscan.radar import (
+from holoscan.radar import (  # noqa: E402
     CFARDetectorOpF32,
+    CfarPeakNeighborhood,
+    CfarVariant,
     build_ca_alpha_lut,
     build_go_alpha_lut,
     build_os_alpha_lut,
@@ -337,9 +338,7 @@ def build_default_matrix() -> list[CfarScenario]:
             out.append(make_nci_scenario(variant, size, 8))
     tag_and_append_alpha_lut_pairs(out)
     # peak_only NMS characterization (CA × default sizes × both neighborhoods).
-    append_peak_only_scenarios(
-        out, ["xs", "md", "lg", "xlw"], all_variants_at_md=False
-    )
+    append_peak_only_scenarios(out, ["xs", "md", "lg", "xlw"], all_variants_at_md=False)
     return out
 
 
