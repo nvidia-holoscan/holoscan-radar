@@ -31,12 +31,15 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "radar_common/math/constants.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
 
 using holoscan::radar::DDMCodeDescriptor;
+using holoscan::radar::kPi;
+using holoscan::radar::kTwoPi;
 using holoscan::radar::FMCWWaveformDescriptor;
 using holoscan::radar::FMCWWaveformSpec;
 using holoscan::radar::MIMOCoherentCompensationOp;
@@ -972,7 +975,7 @@ TEST(MIMOCoherentCompensationOp, DdmLinearPhaseCodesMatchOffsets) {
   code.phase_codes.resize(static_cast<size_t>(kDdmTx * num_chirps));
   for (int64_t m = 0; m < kDdmTx; ++m) {
     for (int64_t k = 0; k < num_chirps; ++k) {
-      const double phase = 2.0 * 3.141592653589793 *
+      const double phase = kTwoPi *
                            (static_cast<double>(m) /
                             static_cast<double>(kDdmTx)) *
                            static_cast<double>(k);
@@ -1009,7 +1012,6 @@ TEST(MIMOCoherentCompensationOp, DdmNonLinearPhaseCodesCorrelateRecovers) {
   constexpr int64_t kNlRange = 3;
   const int64_t num_chirps = kNlDoppler;
   constexpr int64_t d0 = 3;
-  constexpr double kPi2 = 2.0 * 3.141592653589793;
   const int64_t D = kNlDoppler;
   const int64_t c = fft_center(D);
   const int64_t d0_cz = ((d0 - c) % D + D) % D;
@@ -1030,7 +1032,7 @@ TEST(MIMOCoherentCompensationOp, DdmNonLinearPhaseCodesCorrelateRecovers) {
   for (int64_t k = 0; k < D; ++k) {
     std::complex<double> sum(0.0, 0.0);
     for (int64_t n = 0; n < num_chirps; ++n) {
-      const double angle = -kPi2 * static_cast<double>(n) *
+      const double angle = -kTwoPi * static_cast<double>(n) *
                            static_cast<double>(k) / static_cast<double>(D);
       sum += c_m[n] * std::complex<double>(std::cos(angle), std::sin(angle));
     }
@@ -1103,8 +1105,6 @@ TEST(MIMOCoherentCompensationOp, DdmNonLinearMultiTxSeparatesPeaks) {
   const int64_t num_chirps = kNlDoppler;
   constexpr int64_t d0 = 2;
   constexpr int64_t d1 = 5;
-  constexpr double kPi = 3.141592653589793;
-  constexpr double kPi2 = 2.0 * kPi;
   const int64_t D = kNlDoppler;
   const int64_t c = fft_center(D);
   const int64_t d0_cz = ((d0 - c) % D + D) % D;
@@ -1146,7 +1146,7 @@ TEST(MIMOCoherentCompensationOp, DdmNonLinearMultiTxSeparatesPeaks) {
     for (int64_t k = 0; k < D; ++k) {
       std::complex<double> sum(0.0, 0.0);
       for (int64_t n = 0; n < num_chirps; ++n) {
-        const double angle = -kPi2 * static_cast<double>(n) *
+        const double angle = -kTwoPi * static_cast<double>(n) *
                              static_cast<double>(k) / static_cast<double>(D);
         sum +=
             c_m[n] * std::complex<double>(std::cos(angle), std::sin(angle));

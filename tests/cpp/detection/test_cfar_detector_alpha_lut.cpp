@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <tuple>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -373,6 +374,10 @@ struct LivePfaRebuildApp : public holoscan::Application {
   std::vector<double> pfa_overrides;
   TensorMapCapture* idx_capture = nullptr;
   bool blocking_rebuild = false;
+  // Wall-clock stamp when each detection_idx frame is emitted, so a test can
+  // measure per-tick (data-plane) latency independently of teardown, which
+  // now joins any in-flight background LUT build in stop().
+  std::vector<std::chrono::steady_clock::time_point>* frame_stamps = nullptr;
 
   void compose() override {
     auto op = make_operator<CFARDetectorOp<double>>(
@@ -383,7 +388,19 @@ struct LivePfaRebuildApp : public holoscan::Application {
         holoscan::Arg("blocking_alpha_lut_rebuild") = blocking_rebuild);
     wire_data_source(this, op, "rd_maps", frames);
     wire_leading_override<double>(this, op, "pfa", pfa_overrides);
-    wire_capture_sink(this, op, "detection_idx", idx_capture);
+    // Capture detection_idx and stamp each frame's arrival (data-plane time).
+    auto sink = make_operator<
+        holoscan::test::TestHarnessSinkOp<holoscan::TensorMap>>(
+        "detection_idx_sink");
+    auto validators = idx_capture->validators();
+    if (frame_stamps != nullptr) {
+      auto* stamps = frame_stamps;
+      validators.push_back([stamps](const holoscan::TensorMap&) {
+        stamps->push_back(std::chrono::steady_clock::now());
+      });
+    }
+    sink->set_validators(std::move(validators));
+    add_flow(op, sink, {{"detection_idx", "input"}});
     wire_noop_cfar_output_sinks(this, op, /*capture_score=*/false);
   }
 };
@@ -399,40 +416,55 @@ TEST(CFARDetectorAlphaLutTest, NonBlockingPfaOverrideServesStaleLut) {
       to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>()),
       "rd_maps");
 
+  // Measure the frame0→frame1 gap (the second tick's data-plane latency), not
+  // total run() time: stop() now joins any in-flight background LUT build, so
+  // total wall time no longer distinguishes the paths. The non-blocking path's
+  // benefit is a *fast second tick* (serve stale) vs. the blocking path's
+  // inline rebuild stall on tick 1.
   auto run_pair = [&](bool blocking, double pfa_a, double pfa_b) {
     TensorMapCapture capture;
+    std::vector<std::chrono::steady_clock::time_point> stamps;
     auto app = holoscan::make_application<LivePfaRebuildApp>();
     app->frames = {frame, frame};
     app->pfa_overrides = {pfa_a, pfa_b};
     app->blocking_rebuild = blocking;
     app->idx_capture = &capture;
-    const auto t0 = std::chrono::steady_clock::now();
+    app->frame_stamps = &stamps;
     app->run();
-    const double elapsed_ms =
-        std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - t0)
-            .count();
-    return std::make_pair(elapsed_ms, std::move(capture));
+    double gap01_ms = 0.0;
+    if (stamps.size() == 2) {
+      gap01_ms = std::chrono::duration<double, std::milli>(
+                     stamps[1] - stamps[0])
+                     .count();
+    }
+    return std::make_tuple(gap01_ms, std::move(capture), stamps.size());
   };
 
   // Disjoint pfa pairs so neither run can inherit the other's LUT cache
   // (including a background build started by the non-blocking path).
-  const auto [block_ms, block_cap] = run_pair(true, 2.7e-3, 4.1e-6);
+  const auto [block_gap_ms, block_cap, block_n] =
+      run_pair(true, 2.7e-3, 4.1e-6);
+  ASSERT_EQ(block_n, 2u);
   ASSERT_EQ(block_cap.frames.size(), 2u);
   EXPECT_GE(num_detections(block_cap.frames[0]), 1);
   EXPECT_GE(num_detections(block_cap.frames[1]), 1);
 
-  const auto [nonblock_ms, nonblock_cap] = run_pair(false, 3.3e-3, 5.2e-6);
+  const auto [nonblock_gap_ms, nonblock_cap, nonblock_n] =
+      run_pair(false, 3.3e-3, 5.2e-6);
+  ASSERT_EQ(nonblock_n, 2u);
   ASSERT_EQ(nonblock_cap.frames.size(), 2u);
   EXPECT_GE(num_detections(nonblock_cap.frames[0]), 1);
   EXPECT_GE(num_detections(nonblock_cap.frames[1]), 1);
 
-  // Non-blocking total should stay well below blocking (one GO MC rebuild
-  // vs two). Require a clear gap so a regression to blocking on frame 1 fails.
-  EXPECT_LT(nonblock_ms, 0.75 * block_ms)
-      << "nonblock_ms=" << nonblock_ms << " block_ms=" << block_ms;
-  EXPECT_GT(block_ms - nonblock_ms, 20.0)
-      << "nonblock_ms=" << nonblock_ms << " block_ms=" << block_ms
+  // Tick 1 stalls on the inline GO MC rebuild when blocking, but is served the
+  // stale LUT (fast) when non-blocking. Require a clear gap so a regression to
+  // blocking on frame 1 fails.
+  EXPECT_LT(nonblock_gap_ms, 0.75 * block_gap_ms)
+      << "nonblock_gap_ms=" << nonblock_gap_ms
+      << " block_gap_ms=" << block_gap_ms;
+  EXPECT_GT(block_gap_ms - nonblock_gap_ms, 20.0)
+      << "nonblock_gap_ms=" << nonblock_gap_ms
+      << " block_gap_ms=" << block_gap_ms
       << " (gap too small to distinguish stale vs blocking)";
 }
 

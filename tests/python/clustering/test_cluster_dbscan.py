@@ -145,6 +145,23 @@ def test_MaxClustersCapsAndDropsSurplus():
     assert list(out["sizes"]) == [2, 2]
 
 
+def test_NumbersClustersByDescendingSize():
+    # Smaller pair at early rows, larger triple later: descending-size numbering
+    # labels the triple 0, so `sizes` is descending.
+    pts = [0.0, 0.0, 0.1, 0.0, 10.0, 0.0, 10.1, 0.0, 10.2, 0.0]
+    out = run_dbscan(pts, 5, 2, epsilon=[0.5], min_points=2)
+    assert list(out["labels"]) == [1, 1, 0, 0, 0]
+    assert list(out["sizes"]) == [3, 2]
+
+
+def test_MaxClustersKeepsLargest():
+    # Cap to 1 keeps the larger cluster (the triple) and drops the pair.
+    pts = [0.0, 0.0, 0.1, 0.0, 10.0, 0.0, 10.1, 0.0, 10.2, 0.0]
+    out = run_dbscan(pts, 5, 2, epsilon=[0.5], min_points=2, max_clusters=1)
+    assert list(out["labels"]) == [-1, -1, 0, 0, 0]
+    assert list(out["sizes"]) == [3]
+
+
 def test_EmptyPointsEmitsEmptyOutputs():
     out = run_dbscan([], 0, 2, epsilon=[0.5], min_points=2)
     assert out["labels"].shape == (0,)

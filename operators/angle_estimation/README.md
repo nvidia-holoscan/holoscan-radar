@@ -41,27 +41,27 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   angle path; sticky `[live] snapshot_window`; static `doppler_edge` /
   `range_edge`; float/double complex `rd_maps`; unit tests (edge modes, batch
   dims, error paths, live override); `performance/cpp/perf_snapshot_gather.cpp`
-  characterizes gather cost + the `[live] snapshot_window` override spike. HSDK
-  4.3 bool transport caveat for `is_valid` in `snapshot_gather_op/OPEN_ITEMS.md`
-  §1 (aligned with CFAR `detection_mask`).
+  characterizes gather cost + the `[live] snapshot_window` override spike.
+  `is_valid` emits `uint8` (0/1), NumPy-visible on HSDK 4.3, aligned with CFAR
+  `detection_mask` (settled — STATUS.md L1).
 - **`BeamscanEstimatorOp` (checklist-complete — dpc):** conventional sparse-path
   Bartlett DOA on a scan grid; lands `ArrayGeometry` + `AngleConvention`
   descriptors in `operators/common/`; sticky `[live]` overrides for geometry,
   scan grid, taper, and peak interpolation; float/double; unit tests (2-D DOA
   recovery on a planar URA, 3-D single-look input, direction-cosine masking,
   error paths, live `az_angles` override); `performance/cpp/perf_beamscan_estimator.cpp`
-  characterizes scan cost + the `[live] az_angles` override spike. Open items in
-  `beamscan_estimator_op/OPEN_ITEMS.md` (`custom` angle preset, bool `is_valid`
-  transport caveat aligned with SnapshotGather).
+  characterizes scan cost + the `[live] az_angles` override spike. The `custom`
+  angle preset (STATUS.md L11) and `uint8` `is_valid` transport (STATUS.md L1)
+  are both settled.
 - **`SubarraySelectionOp` (checklist-complete — deustice):** selects a uniform
   ULA/URA sub-array from a (possibly holey) MIMO virtual array (S3) — auto
   picks the largest filled sub-block (holey-lattice detection + maximal
   rectangle) or an explicit index set is validated; re-emits a reduced
   `(snapshot, array_geometry)` pair. Unblocks the gridless subspace
   estimators (Root-MUSIC/ESPRIT) and the holey-array path for spatial
-  smoothing. Four forks left to ratify (see `TEAM_BLOCKED.md` L14); gridless
-  consumers not yet built, so verified end-to-end only through MVDR on a
-  reduced array. See `subarray_selection_op/OPEN_ITEMS.md`.
+  smoothing. All four forks ratified (settled — STATUS.md L14); consumed by the
+  gridless Root-MUSIC / ESPRIT estimators and by MVDR on a reduced array. See
+  `subarray_selection_op/OPEN_ITEMS.md`.
 - **`MVDREstimatorOp` (checklist-complete — dpc):**
   adaptive (MVDR / Capon) sparse-path DOA. Implements the per-item sample
   covariance with `is_valid` masking, diagonal loading (`auto` = a small
@@ -81,11 +81,11 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   capacity + NaN fill, rank-one eigenvalue dominance, `is_valid` exclusion /
   all-invalid blanking, live
   overrides incl. `max_sources` realloc, error paths) +
-  `performance/cpp/perf_mvdr_estimator.cpp`. `spatial_smoothing` (S1) landed
-  (1-D + 2-D forward/forward-backward sub-array averaging on a filled
-  ULA/URA); two ratification forks remain but do not block completion — see
-  `mvdr_estimator_op/OPEN_ITEMS.md` (also the `diagonal_loading`
-  float-or-`auto` encoding note and the eigenvalues per-tick cost).
+  `performance/cpp/perf_mvdr_estimator.cpp`. `spatial_smoothing` /
+  `forward_backward` are implemented as a front-end transform (settled — S1,
+  STATUS.md L13); see `mvdr_estimator_op/OPEN_ITEMS.md` for the residual notes
+  (the `diagonal_loading` float-or-`auto` encoding note and the eigenvalues
+  per-tick cost).
 - **`MUSICEstimatorOp` (checklist-complete, C++ and Python — dpc):** subspace
   (MUSIC) sparse-path DOA. Forms the per-item sample covariance, a batched
   Hermitian eigendecomposition (`matx::eig`, `EigenMode::VECTOR` — ascending
@@ -121,27 +121,34 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   rationale, the full ncu-driven perf writeup incl. a recorded negative result,
   and the `nsys`-in-a-sandbox workaround).
 - **`RootMUSICEstimatorOp` (checklist-complete, C++ and Python — dpc):**
-  gridless Root-MUSIC on a **ULA** (1-D uniform line in snapshot channel order).
-  Reuses the MUSIC covariance / Hermitian eig / EFT / noise-projector front-end;
-  forms the Root-MUSIC polynomial, solves roots via companion +
-  `cusolverDnXgeev` (one matrix per item), and maps in-unit-circle roots to
-  continuous DOAs (no `angle_spectrum`). `spatial_smoothing` /
-  `forward_backward` match MVDR/MUSIC; all named and custom angle conventions;
-  float/double; 39 C++ + 36 Python behavioral tests;
+  gridless Root-MUSIC on a **ULA or filled URA**. A ULA resolves azimuth
+  (single-axis cone, one polynomial); a URA resolves native `(az, el)` via
+  reduced-dimension per-axis rooting on row/column-averaged sub-covariances,
+  paired across axes by the full-subspace 2-D MUSIC metric. Reuses the MUSIC
+  covariance / Hermitian eig / EFT / noise-projector front-end; solves each
+  polynomial via companion + `cusolverDnXgeev` (one matrix per item) and maps
+  in-unit-circle roots to continuous DOAs (no `angle_spectrum`). **Contract
+  change:** geometry relaxed from ULA-only to ULA-or-URA (`OPERATOR_API.md`).
+  `spatial_smoothing` / `forward_backward` match MVDR/MUSIC; all named and
+  custom angle conventions; float/double; 41 C++ + 38 Python behavioral tests
+  (1-D ULA + 2-D URA recovery and cross-axis pairing);
   `performance/cpp/perf_root_music_estimator.cpp` +
   `performance/python/perf_root_music_estimator.py` (inline live overrides for
   geometry, auto/EFT, Pfa, capacity, smoothing). Custom batched device root
   solver tracked in `root_music_estimator_op/OPEN_ITEMS.md`.
 - **`ESPRITEstimatorOp` (checklist-complete, C++ and Python — dpc):**
-  gridless LS-ESPRIT on
-  shift-invariant geometry. Reuses the MUSIC covariance / Hermitian eig / EFT
-  front-end; splits the signal subspace with the global
-  `ShiftInvariantSubarrayPair` descriptor (auto maximum-overlap ULA pair or
-  explicit corresponding indices) and solves the rotational eigenproblem in a
-  per-item CUDA block (no `angle_spectrum`). All named and custom angle
-  conventions; float/double; 46 C++ + 42 Python tests; C++/Python perf
-  harnesses cover the full live-override bundle.
-  Explicit `subarray_spec` and `spatial_smoothing` are mutually exclusive. See
+  gridless ESPRIT on a **ULA or filled URA**. A ULA uses a single-shift
+  LS-ESPRIT split via the global `ShiftInvariantSubarrayPair` descriptor (auto
+  maximum-overlap ULA pair or explicit corresponding indices); a URA uses
+  dual-invariance 2-D ESPRIT with automatic joint-diagonalization pairing
+  (`subarray_spec: auto` derives the two orthogonal invariances). Reuses the
+  MUSIC covariance / Hermitian eig / EFT front-end; the rotation eigenproblems
+  are solved in a per-item CUDA block (no `angle_spectrum`). **Contract
+  change:** geometry relaxed from shift-invariant-line to ULA-or-URA
+  (`OPERATOR_API.md`). All named and custom angle conventions; float/double;
+  48 C++ + 36 Python tests (1-D + 2-D az/el recovery and pairing); C++/Python
+  perf harnesses cover the full live-override bundle. Explicit `subarray_spec`
+  and `spatial_smoothing` are mutually exclusive. See
   `esprit_estimator_op/OPEN_ITEMS.md`.
 - **`PhaseShiftBeamformerOp` (checklist-complete — dpc):** conventional
   (Bartlett) dense-path beamformer; forms a beam for every range-Doppler cell,
@@ -155,5 +162,5 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   convention relabeling + direction-cosine masking, taper sidelobes, batch,
   live overrides, error paths); `performance/cpp/perf_phase_shift_beamformer.cpp`
   characterizes dense beamforming cost + the `[live] az_angles` override spike.
-  Open items in `phase_shift_beamformer_op/OPEN_ITEMS.md` (`custom` angle
-  preset, dense-cube memory footprint).
+  Open items in `phase_shift_beamformer_op/OPEN_ITEMS.md` (dense-cube memory
+  footprint).

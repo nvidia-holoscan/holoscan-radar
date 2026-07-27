@@ -57,6 +57,7 @@ radar_add_test(common/test_steering_weights_device
 radar_add_test(common/test_spatial_smoothing)
 radar_add_test(common/test_subarray_selection)
 radar_add_test(common/test_source_count)
+radar_add_test(common/test_angle_convention)
 radar_add_test(common/test_descriptors)
 radar_add_test(common/test_sdk)
 radar_add_test(common/test_sim)

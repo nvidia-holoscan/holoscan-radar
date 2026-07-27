@@ -17,12 +17,13 @@
 #include <unordered_map>
 #include <vector>
 
+#include "radar_common/math/constants.hpp"
+
 namespace holoscan::radar::detail {
 
 namespace {
 
 constexpr int64_t kBlock = 256;
-constexpr double kPi = 3.141592653589793;
 
 template <typename T>
 using Complex = cuda::std::complex<T>;
@@ -244,7 +245,6 @@ DdmCodeMode ddm_classify_codes(const DDMCodeDescriptor& code) {
   if (num_chirps < 2) {
     return DdmCodeMode::kNonLinear;
   }
-  constexpr double kTwoPi = 2.0 * kPi;
   for (int64_t m = 0; m < num_tx; ++m) {
     const auto* code_m =
         &code.phase_codes[static_cast<size_t>(m * num_chirps)];
@@ -284,7 +284,6 @@ std::vector<double> ddm_resolve_offsets(const DDMCodeDescriptor& code) {
           "DDMCodeDescriptor: phase_codes need >= 2 chirps per TX to infer a "
           "linear-phase Doppler offset");
     }
-    constexpr double kTwoPi = 2.0 * kPi;
     for (int64_t m = 0; m < num_tx; ++m) {
       const auto* code_m =
           &code.phase_codes[static_cast<size_t>(m * num_chirps)];

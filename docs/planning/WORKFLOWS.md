@@ -158,14 +158,13 @@ flowchart TD
 
 > **Dense az/el assembly caveat (open).** On this path the `(az, el)` beam
 > indices arrive as the leading *preserved-batch* columns of CFAR's
-> `detection_idx` (`(az_bin, el_bin, doppler_bin, range_bin)`), but
-> `FeatureAssemblyOp` currently sources the `az` / `el` features only from an
-> `aoa_estimates` port (angle *values*, the sparse-path form) — it does not map
-> those batch columns through the beam grid itself. So the diagram's direct
-> `CFAR → FeatureAssemblyOp` edge needs an angle-lookup adapter in between. The
-> `fmcw_dense_simo` app bridges this app-locally (`CubeAoaLookupOp`); whether the
-> mapping becomes a shared operator or a `FeatureAssemblyOp` option is an open
-> contract question — see the `PhaseShiftBeamformerOp` `OPEN_ITEMS.md` §6.
+> `detection_idx` (`(az_bin, el_bin, doppler_bin, range_bin)`).
+> `FeatureAssemblyOp` maps those `(az_bin, el_bin)` columns through the beam grid
+> itself via the `az_bin` / `el_bin` feature tokens + optional
+> `az_angles` / `el_angles` grid inputs (settled — STATUS.md S4), so the direct
+> `CFAR → FeatureAssemblyOp` edge carries the dense path with no angle-lookup
+> adapter. (`fmcw_dense_simo`'s app-local `CubeAoaLookupOp` predates S4 and can
+> be dropped at leisure.)
 
 **Sparse angle path — angle-then-cluster:**
 
@@ -278,4 +277,5 @@ Three operators, one per responsibility, span TX separation through virtual-arra
 - **Detection before or after virtual assembly:** detection uses non-coherent power, so it can run on the per-channel RD maps (with `nci_axes` over the channel set) or on the assembled cube; only the *angle* path requires the coherent compensation + virtual assembly. The chains show assembly first for a single clear ordering.
 - **Velocity ambiguity (TDM and DDM):** both reduce unambiguous velocity by `M`. Extended-velocity / disambiguation schemes (e.g. staggered PRI, band-overlap tricks) are out of scope for the first wave.
 - **CDM / BPM (future):** reuses this exact MIMO chain — `MIMOCoherentCompensationOp` gains a code-correlation demux mode (carrying an explicit orthogonal code matrix), while de-interleave (none) and virtual assembly are unchanged. Fast-time / PMCW code division remains excluded (different waveform).
+- **Sparse DDM detect-before-demux (future):** an alternate sparse MIMO–DDM recipe — CFAR on a **pre-demux** map (Rx NCI, optionally with a Doppler-alias “fold” average), then **per-detection** DDM recovery (unfold → gather each TX bin → code-phase weight → virtual snapshot → `BeamscanEstimatorOp`). Wave 1 keeps demux → [clutter] → VAA → CFAR → `SnapshotGatherOp`. The alternate path is a different detector (typically worse Pd @ fixed Pfa than demux-first + channel NCI) that trades detection performance for demux cost on sparse scenes; it is **not** a `MIMOCoherentCompensationOp` mode. Deferred detail: [`mimo_coherent_compensation_op/OPEN_ITEMS.md`](../../operators/fmcw/mimo_coherent_compensation_op/OPEN_ITEMS.md) §B.5.
 - **Covariance-estimator open items:** shared across `MVDR` / `MUSIC` / `RootMUSIC` / `ESPRIT` — the multi-snapshot / spatial-smoothing input form, the source-count source (fixed vs. MDL/AIC vs. CFAR-cluster), and — for the gridless pair — the ULA/subarray-selection step on non-uniform virtual arrays.

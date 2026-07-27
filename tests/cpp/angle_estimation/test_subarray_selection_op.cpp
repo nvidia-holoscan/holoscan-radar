@@ -43,8 +43,9 @@ ArrayGeometry make_linear(const std::vector<int>& iy) {
   return g;
 }
 
-// snapshot (num_items, N, K) with value[item,c,s] = (c, s) encoded; only the
-// shape and emitted geometry are asserted here.
+// snapshot (num_items, N, K) with value[item,c,s] = (c, s) encoded — the real
+// part carries the channel index and the imag part the snapshot index, so tests
+// can assert the gathered payload holds the expected source channels.
 std::shared_ptr<holoscan::Tensor> make_snapshot(int64_t items, int64_t n,
                                                 int64_t k) {
   std::vector<std::complex<double>> x(
@@ -90,6 +91,25 @@ std::set<double> y_set(const ArrayGeometry& g) {
   return s;
 }
 
+// Assert the gathered snapshot payload holds exactly the selected original
+// channels (make_snapshot encodes value[it,c,s] = {channel c, snapshot s}, so
+// the real part of each gathered cell must equal the source channel index).
+void expect_channels(const HostTensor& snapshot,
+                     const std::vector<int64_t>& channels, int64_t num_snap) {
+  const int64_t l = static_cast<int64_t>(channels.size());
+  ASSERT_EQ(snapshot.shape, (std::vector<int64_t>{1, l, num_snap}));
+  const auto* snap = snapshot.as<std::complex<double>>();
+  for (int64_t j = 0; j < l; ++j) {
+    for (int64_t s = 0; s < num_snap; ++s) {
+      const auto& got = snap[static_cast<size_t>(j * num_snap + s)];
+      EXPECT_NEAR(got.real(), static_cast<double>(channels[j]), 1e-6)
+          << "out channel " << j << " snapshot " << s;
+      EXPECT_NEAR(got.imag(), static_cast<double>(s), 1e-6)
+          << "out channel " << j << " snapshot " << s;
+    }
+  }
+}
+
 TEST(SubarraySelectionOpTest, HoleyUlaSelectsLongestRun) {
   const auto geom = make_linear({0, 1, 2, 3, 5, 6});  // longest run 0..3 → L=4
   auto snap = make_snapshot(1, 6, 8);
@@ -100,6 +120,7 @@ TEST(SubarraySelectionOpTest, HoleyUlaSelectsLongestRun) {
   EXPECT_EQ(out.geometry.num_elements(), 4);
   EXPECT_EQ(y_set(out.geometry),
             (std::set<double>{0.0, kD, 2 * kD, 3 * kD}));
+  expect_channels(out.snapshot, {0, 1, 2, 3}, 8);
 }
 
 TEST(SubarraySelectionOpTest, FilledUlaPassesThrough) {
@@ -119,6 +140,7 @@ TEST(SubarraySelectionOpTest, ExplicitSubarray) {
   EXPECT_EQ(out.snapshot.shape, (std::vector<int64_t>{1, 4, 3}));
   EXPECT_EQ(y_set(out.geometry),
             (std::set<double>{2 * kD, 3 * kD, 4 * kD, 5 * kD}));
+  expect_channels(out.snapshot, {2, 3, 4, 5}, 3);
 }
 
 }  // namespace

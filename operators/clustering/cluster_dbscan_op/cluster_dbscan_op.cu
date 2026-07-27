@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -263,8 +264,62 @@ void ClusterDBSCANOp<T>::compute(InputContext& op_input,
                              stream);
   check_cuda("finalize_labels", kOpName);
 
-  // Apply the max_clusters cap: drop surplus clusters (highest dense ids) to
-  // noise and report only the first `max_clusters`.
+  // Renumber clusters by descending point count (tie-break: ascending root id)
+  // so cluster 0 is the largest. The host argsorts the per-id counts and
+  // remap_labels applies the permutation on the GPU; the count array is tiny
+  // (num_clusters entries) and the op already syncs per iteration, so the extra
+  // D2H is negligible. This ordering is what makes the max_clusters cap below
+  // (drop the highest ids) keep the *largest* clusters. Determinism holds:
+  // `labels` stays a pure function of (points, epsilon, min_points).
+  if (num_clusters > 1) {
+    auto sizes_all = make_device_tensor({num_clusters}, kInt64Dtype);
+    if (cudaMemsetAsync(sizes_all->data(), 0, sizeof(int64_t) * num_clusters,
+                        stream) != cudaSuccess) {
+      throw std::runtime_error("ClusterDBSCANOp: size-histogram clear failed");
+    }
+    cd::launch_histogram(static_cast<const int64_t*>(labels->data()),
+                         static_cast<int64_t*>(sizes_all->data()), num_points,
+                         stream);
+    check_cuda("size_histogram", kOpName);
+
+    std::vector<int64_t> host_sizes(static_cast<size_t>(num_clusters));
+    if (cudaMemcpyAsync(host_sizes.data(), sizes_all->data(),
+                        sizeof(int64_t) * num_clusters, cudaMemcpyDeviceToHost,
+                        stream) != cudaSuccess) {
+      throw std::runtime_error("ClusterDBSCANOp: size D2H failed");
+    }
+    if (cudaStreamSynchronize(stream) != cudaSuccess) {
+      throw std::runtime_error("ClusterDBSCANOp: size sync failed");
+    }
+
+    // order[r] = ascending-root id ranked r-th by (size desc, id asc); the
+    // stable sort over the ascending iota breaks size ties by ascending id.
+    std::vector<int64_t> order(static_cast<size_t>(num_clusters));
+    std::iota(order.begin(), order.end(), int64_t{0});
+    std::stable_sort(order.begin(), order.end(),
+                     [&host_sizes](int64_t a, int64_t b) {
+                       return host_sizes[static_cast<size_t>(a)] >
+                              host_sizes[static_cast<size_t>(b)];
+                     });
+    std::vector<int64_t> remap(static_cast<size_t>(num_clusters));
+    for (int64_t r = 0; r < num_clusters; ++r) {
+      remap[static_cast<size_t>(order[static_cast<size_t>(r)])] = r;
+    }
+    auto remap_dev = make_device_tensor({num_clusters}, kInt64Dtype);
+    if (cudaMemcpyAsync(remap_dev->data(), remap.data(),
+                        sizeof(int64_t) * num_clusters, cudaMemcpyHostToDevice,
+                        stream) != cudaSuccess) {
+      throw std::runtime_error("ClusterDBSCANOp: remap H2D failed");
+    }
+    cd::launch_remap_labels(static_cast<int64_t*>(labels->data()),
+                            static_cast<const int64_t*>(remap_dev->data()),
+                            num_points, stream);
+    check_cuda("remap_labels", kOpName);
+  }
+
+  // Apply the max_clusters cap: drop surplus clusters (highest dense ids —
+  // now the smallest, after the descending-size renumber above) to noise and
+  // report only the first `max_clusters` (the largest).
   int64_t reported_clusters = num_clusters;
   if (max_clusters > 0 && num_clusters > max_clusters) {
     if (!warned_max_clusters_) {

@@ -12,6 +12,13 @@ namespace holoscan::radar {
 
 // TDM slow-time firing pattern for MIMODeinterleaveOp. Describes how an
 // interleaved (M·L) chirp axis splits into explicit (M_tx, L) axes.
+//
+// v1 scope: uniform round-robin only — the length-M firing cycle repeats
+// identically L times with equal per-TX counts. Non-uniform / staggered
+// schedules (varying TX dwell or count) are rejected (expand_chirp_tx_index
+// throws), because the downstream TDM compensation models a fixed PRI/M
+// inter-TX offset. Staggered TDM is a deferred future enhancement (STATUS.md
+// → Roadmap; settled as L12).
 struct TXSchedule {
   int64_t num_tx{0};
   // TX firing order within one repetition cycle; repeats L times. Empty →

@@ -1,34 +1,12 @@
 # SnapshotGatherOp open items
 
-## 1. `is_valid` bool dtype vs Holoscan 4.3 transport
+## 1. `is_valid` mask dtype vs Holoscan DLPack transport (settled)
 
-**Context.** `OPERATOR_API.md` specifies `is_valid` as `bool`. The operator
-emits `kDLBool` to match `CFARDetectorOp` `detection_mask` (see
-`operators/detection/cfar_detector_op/OPEN_ITEMS.md` §1). On HSDK 4.3,
-emitting the mask through the graph logs:
-
-```text
-[error] [tensor.cpp:820] Unsupported DLPack data type (code: 6, bits: 8, lanes: 1)
-```
-
-(`kDLBool`). GXF cannot map `kDLBool` to a numpy typestr on the C++ message
-path; the error is logged and swallowed, so **C++-to-C++ port wiring and
-host capture via raw `cudaMemcpy` still work**.
-
-**Impact.** Any **Python** consumer of `is_valid` is at risk: wrapping the
-tensor as a `PyTensor` calls `numpyTypestr()` and **throws**
-(`Unable to determine NumPy dtype from DLPack tensor` in
-`python/holoscan/core/dl_converter.cpp`). A Python pipeline that reads
-`is_valid` can fail on HSDK 4.3.
-
-**Questions for the team** (team-wide policy — defer until full team present):
-
-- Keep `bool` in the contract and treat HSDK 5 as the validation target?
-- Add a compatibility `uint8` mask port or change the contract dtype?
-- Document a hard "C++ only until HSDK 5" caveat for bool mask outputs?
-
-**Status:** open — aligned with CFAR `detection_mask` policy; not validated on
-a finalized HSDK 5 build in this environment (only 4.3.0 installed).
+`is_valid` now emits `uint8` (0/1), byte-identical to the mask the kernel
+already writes and NumPy-visible on HSDK 4.3 — aligned with
+`CFARDetectorOp.detection_mask` (settled — STATUS.md L1). The prior `kDLBool`
+port threw in Python on 4.3 (GXF has no numpy typestr for `code: 6, bits: 8`,
+so `numpyTypestr()` failed); consumers still accept `bool` or `uint8`.
 
 ## 2. Multi-look snapshot axis transposition (fixed)
 

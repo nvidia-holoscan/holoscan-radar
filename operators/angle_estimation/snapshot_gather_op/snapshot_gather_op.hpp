@@ -25,11 +25,12 @@ namespace holoscan::radar {
 //                       (…preserved_batch, doppler_bin, range_bin).
 // Out: snapshot       — complex64/complex128,
 //                       (num_detections, num_channels, num_snapshots).
-// Out: is_valid       — bool, (num_detections, num_snapshots). Per-detection
-//                       mask of usable snapshot slots (ragged under clamp).
-//                       See snapshot_gather_op/OPEN_ITEMS.md §1 for HSDK 4.3
-//                       bool transport caveat (same class as CFAR
-//                       detection_mask).
+// Out: is_valid       — uint8 (0/1), (num_detections, num_snapshots). Per-
+//                       detection mask of usable snapshot slots (ragged under
+//                       clamp); 1 = valid. uint8 rather than bool so the mask
+//                       is NumPy-visible on HSDK 4.3 (kDLBool has no NumPy
+//                       typestr on the 4.3 message path). Consumers accept bool
+//                       or uint8.
 //
 // Precision is fixed at compile time (T = float | double).
 template <typename T>

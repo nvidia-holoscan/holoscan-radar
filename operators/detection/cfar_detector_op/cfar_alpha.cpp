@@ -1386,4 +1386,26 @@ std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key) {
   return future.get();
 }
 
+void join_inflight_alpha_lut_builds() {
+  // Snapshot the in-flight futures under the lock, then wait without holding it
+  // (the builder needs the lock to commit its result). Each future is satisfied
+  // only after run_lut_build finishes — i.e. after the background build's GPU
+  // Monte-Carlo work has completed — so on return no detached build can still
+  // launch a kernel. wait() (not get()) so a failed build's stored exception is
+  // not rethrown into a teardown path.
+  std::vector<AlphaLutFuture> futures;
+  {
+    std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
+    futures.reserve(g_alpha_lut_in_flight.size());
+    for (const auto& entry : g_alpha_lut_in_flight) {
+      futures.push_back(entry.second);
+    }
+  }
+  for (AlphaLutFuture& future : futures) {
+    if (future.valid()) {
+      future.wait();
+    }
+  }
+}
+
 }  // namespace holoscan::radar::detail

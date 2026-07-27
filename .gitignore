@@ -18,6 +18,3 @@ core
 
 # Generated performance-run dumps (measurement output, not source)
 perf_results/
-
-# Working per-item planning docs (kept local, not committed)
-docs/planning/S[0-9]*_PLAN.md

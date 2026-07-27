@@ -25,6 +25,15 @@ namespace holoscan::radar {
 // TDM in:  rd_maps — complex64/complex128, (..., M_tx, N_rx, num_doppler,
 //          num_range_bins).
 // TDM out: rd_maps — same shape; phase-aligned (tx, rx) block.
+// TDM scope: the per-Doppler-bin correction uses a fixed PRI/M inter-TX offset
+//          and indexes it by TX id — i.e. it assumes the **default identity
+//          round-robin** `tx_order` (TX id == firing slot). A non-identity
+//          `tx_order` permutation (still uniform-repeating, so accepted by
+//          `MIMODeinterleaveOp`) is NOT compensated correctly: each lane would
+//          need the correction for its actual firing slot, and this operator
+//          does not receive `tx_order`. Known limitation — see `OPEN_ITEMS.md`.
+//          Staggered / per-TX-timing schedules are separately out of scope
+//          (STATUS.md → Roadmap; settled as L12).
 //
 // DDM in:  rd_maps — complex64/complex128, (..., N_rx, num_doppler,
 //          num_range_bins); the M TX sit in distinct Doppler sub-bands.

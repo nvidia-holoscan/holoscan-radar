@@ -54,7 +54,12 @@ namespace holoscan::radar {
 namespace {
 
 constexpr const char* kOpName = "CFARDetectorOp";
-constexpr DLDataType kBoolDtype{kDLBool, 8, 1};
+// detection_mask is emitted as uint8 (0/1), not kDLBool: HSDK 4.3's DLPack
+// message path cannot map kDLBool to a NumPy typestr, so a bool port throws
+// when a Python consumer wraps it. The buffer holds 0/1 bytes (written as bool
+// internally); uint8 is byte-identical, NumPy-visible, and every mask consumer
+// treats any nonzero byte as set.
+constexpr DLDataType kMaskDtype{kDLUInt, 8, 1};
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
 
 // GO/SO always calibrate alpha from Pfa via Monte Carlo; OS uses MC when K>1
@@ -214,6 +219,17 @@ void CFARDetectorOp<T>::start() {
 }
 
 template <typename T>
+void CFARDetectorOp<T>::stop() {
+  // Wait for any background alpha-LUT build (non-blocking serve-stale path) to
+  // finish before Holoscan tears down the CUDA context. A GO/SO/OS build runs
+  // GPU Monte-Carlo kernels on a detached thread; without this drain those
+  // launches can hit a destroyed context and SEGFAULT in the driver. stop()
+  // runs after the last compute() and before teardown, so the context is still
+  // valid here. Blocks only if a build is still running at shutdown.
+  detail::join_inflight_alpha_lut_builds();
+}
+
+template <typename T>
 void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
   spec.input<holoscan::TensorMap>("rd_maps");
   spec.output<holoscan::TensorMap>("detection_mask");
@@ -343,7 +359,7 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
   if (!ws_hit) {
     ws.score = make_device_tensor(output_shape, real_dtype<T>());
     ws.noise = make_device_tensor(output_shape, real_dtype<T>());
-    ws.mask = make_device_tensor(output_shape, kBoolDtype);
+    ws.mask = make_device_tensor(output_shape, kMaskDtype);
     ws.power = make_device_tensor({plan.batch_in, num_doppler, num_range},
                                  real_dtype<T>());
     ws.integrated_power = make_device_tensor(
@@ -510,7 +526,16 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
     using_external_alpha_lut_ = false;
     const bool blocking_lut = blocking_alpha_lut_rebuild_.get();
     if (lut_key != alpha_lut_key_) {
-      runtime_build_warned_ = false;  // new key: allow a runtime-rebuild warn.
+      // Reset the warn-once flags only on a genuine key change — NOT on every
+      // tick while the same key's background build is still pending (the
+      // adopted key stays stale until the build completes, so this branch is
+      // re-entered each tick; resetting here would re-fire the runtime-rebuild
+      // warning every tick). Preserve the flags for an in-progress build; clear
+      // them when switching to a different pending key.
+      if (!(pending_lut_active_ && pending_lut_key_ == lut_key)) {
+        runtime_build_warned_ = false;
+        stale_lut_warned_ = false;
+      }
       const auto adopt_ready_lut = [&](std::vector<double> lut) {
         alpha_lut_host_cache_ = std::move(lut);
         alpha_lut_key_ = lut_key;

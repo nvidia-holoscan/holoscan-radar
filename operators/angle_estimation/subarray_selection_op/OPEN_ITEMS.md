@@ -1,6 +1,6 @@
 # SubarraySelectionOp — open items
 
-Status: **first pass — resolves the S3 interface; four team forks open.**
+Status: **settled — S3 interface resolved; all four team forks ratified (L14).**
 
 Selects a uniform ULA/URA sub-array from a (possibly holey) MIMO virtual array
 and re-emits a reduced `(snapshot, array_geometry)` pair, so the gridless
@@ -15,17 +15,9 @@ single sub-array, no forward-backward).
 - **Explicit:** caller-supplied channel indices, validated to form a filled
   uniform ULA/URA and re-emitted in lattice order.
 
-## BLOCKED — team forks (do not resolve unilaterally)
-
-1. **Auto vs. explicit** as the primary interface (auto default, explicit escape
-   hatch — mirrors the S1 count-vs-length ergonomics fork).
-2. **Selection objective** — max element count (DOF) vs. max aperture
-   (resolution) when sub-blocks compete. **Implemented:** element count,
-   azimuth-aperture tie-break.
-3. **Contiguous ULA now vs. sum-set "Harnessing Holes"** (keep holes for
-   aperture when the array is sum-set smoothable). **Deferred.**
-4. **Standalone op vs. a mode inside `VirtualArrayAssemblyOp`.** **Implemented:**
-   standalone.
+The four selection forks (auto-vs-explicit, objective, contiguous-vs-sum-set,
+standalone-vs-`VirtualArrayAssemblyOp` mode) are settled — see STATUS.md →
+Settled decisions (L14).
 
 ## Verifiability caveat
 

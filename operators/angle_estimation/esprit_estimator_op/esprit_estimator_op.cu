@@ -18,6 +18,7 @@
 #include "angle_estimation/esprit_estimator_op/esprit_stage.hpp"
 #include "radar_common/dsp/planar_aperture.hpp"
 #include "radar_common/dsp/spatial_smoothing_device.hpp"
+#include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
@@ -30,7 +31,6 @@ namespace {
 
 constexpr const char* kOpName = "ESPRITEstimatorOp";
 constexpr int64_t kMaxSourcesCap = 64;
-constexpr double kTwoPi = 6.28318530717958647692528676655900577;
 
 std::string geometry_key(const ArrayGeometry& geometry) {
   std::ostringstream key;
