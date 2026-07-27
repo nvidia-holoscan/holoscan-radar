@@ -431,11 +431,55 @@ def _perf_binaries(build_dir: Path) -> dict[str, Path]:
     return out
 
 
+# Set by main() from --pin-cpus. Prefixed onto every perf-binary launch, so
+# both sides are pinned identically. Measured effect on this box (strict
+# alternation, warm-up dropped): IQR 5.24% -> 2.63%, peak-to-peak 64.8% ->
+# 11.2%. It also makes the run ~4.6% faster in absolute terms, so it is part of
+# the cache key: a cached unpinned baseline must not be compared against a
+# pinned after-side.
+_PIN_PREFIX: list[str] = []
+
+
+def _validate_pin(cpus: str) -> list[str]:
+    """Return a taskset prefix for `cpus`, or [] with a warning if unusable."""
+    if not cpus:
+        return []
+    if not shutil.which("taskset"):
+        print("warning: --pin-cpus given but taskset not found; not pinning",
+              file=sys.stderr)
+        return []
+    # Refuse to pin outside the cgroup's cpuset, where taskset would just fail
+    # per launch and every measurement would die.
+    try:
+        allowed = Path("/sys/fs/cgroup/cpuset.cpus.effective").read_text().strip()
+    except OSError:
+        allowed = ""
+    if allowed:
+        def expand(spec):
+            out = set()
+            for part in spec.split(","):
+                if "-" in part:
+                    a, b = part.split("-")
+                    out |= set(range(int(a), int(b) + 1))
+                elif part:
+                    out.add(int(part))
+            return out
+        try:
+            if not expand(cpus) <= expand(allowed):
+                print(f"warning: --pin-cpus {cpus} is outside the cgroup "
+                      f"cpuset {allowed}; not pinning", file=sys.stderr)
+                return []
+        except ValueError:
+            pass
+    return ["taskset", "-c", cpus]
+
+
 def _run_one(binary: Path, args: list[str], checksum: bool) -> tuple[dict, list]:
     """Run one perf binary; return (parsed JSON report, checksum list)."""
     with tempfile.TemporaryDirectory() as td:
         out = Path(td) / "report.json"
-        cmd = [str(binary), "--quiet", "--output", str(out), *args]
+        cmd = [*_PIN_PREFIX, str(binary), "--quiet",
+               "--output", str(out), *args]
         if checksum:
             cmd.append("--checksum")
         proc = subprocess.run(
@@ -601,6 +645,7 @@ def compare_operator(
     progress: _Progress | None = None,
     cached_before: dict | None = None,
     thermal: tuple[float, float] | None = None,
+    warmup_rounds: int = 2,
 ) -> dict:
     """Run one operator on both builds and diff the compute-bucket medians.
 
@@ -611,7 +656,7 @@ def compare_operator(
     if cached_before is not None:
         return _compare_with_cached_before(
             op, after_bin, after_args, rounds, checksum, progress,
-            cached_before, thermal
+            cached_before, thermal, warmup_rounds
         )
 
     before_med: dict[str, list[float]] = {}
@@ -638,13 +683,13 @@ def compare_operator(
     # 3. min-across-rounds rewards whichever side got the luckiest launch. The
     #    median across launches is the robust summary; the per-side spread is
     #    reported next to it so a delta inside the noise band reads as such.
-    for r in range(rounds + 1):
+    for r in range(rounds + warmup_rounds):
         bm, br, bs = _measure(
             before_bin, before_args, 1, checksum, progress, thermal)
         am, ar, as_ = _measure(
             after_bin, after_args, 1, checksum, progress, thermal)
-        if r == 0:
-            continue  # discarded warm-up pair
+        if r < warmup_rounds:
+            continue  # discarded warm-up pair(s)
         for sid, v in bm.items():
             before_med.setdefault(sid, []).extend(v)
         for sid, v in am.items():
@@ -668,10 +713,30 @@ def compare_operator(
 
 
 def _spread_pct(vals: list[float]) -> float:
-    """Peak-to-peak spread of a side's per-launch medians, as % of median."""
+    """Robust spread of a side's per-launch medians, as % of median.
+
+    Interquartile range, not peak-to-peak. Measured on this box, 20 consecutive
+    launches of one binary had an IQR of 2.2% and a peak-to-peak of 113.6%: the
+    distribution is tight with rare outliers (the CPU governor leaves cores at
+    972 MHz after an idle gap and takes a launch or two to reach 2601 MHz).
+    Peak-to-peak lets a single such launch define the whole band, which is what
+    produced the +/-636% noise figures — and since the significance test
+    compares against this band, it was suppressing real effects.
+
+    Falls back to peak-to-peak below four samples, where quartiles are
+    meaningless.
+    """
     if len(vals) < 2:
         return 0.0
-    return (max(vals) - min(vals)) / statistics.median(vals) * 100.0
+    med = statistics.median(vals)
+    if med <= 0:
+        return 0.0
+    v = sorted(vals)
+    if len(v) < 4:
+        return (v[-1] - v[0]) / med * 100.0
+    q1 = v[int(0.25 * (len(v) - 1))]
+    q3 = v[int(0.75 * (len(v) - 1))]
+    return (q3 - q1) / med * 100.0
 
 
 def _summarize(
@@ -713,6 +778,11 @@ def _summarize(
             )
             entry["noise_pct"] = noise
             entry["significant"] = abs(entry["delta_pct"]) > noise
+            # Raw per-launch medians, so a question about the noise (outlier vs
+            # broad spread, positional vs random) can be answered from a saved
+            # report instead of requiring a fresh multi-hour run.
+            entry["before_launches"] = [round(v, 6) for v in before_med[sid]]
+            entry["after_launches"] = [round(v, 6) for v in after_med[sid]]
             ratios.append(b / a)
             # Cold (first-frame) latency often carries the plan/alloc cost the
             # optimization targeted; surface it but don't fold it into the
@@ -807,6 +877,7 @@ def _compare_with_cached_before(
     progress: _Progress | None,
     cached: dict,
     thermal: tuple[float, float] | None = None,
+    warmup_rounds: int = 2,
 ) -> dict:
     """Measure only the after side; take the baseline from ``cached``.
 
@@ -816,11 +887,11 @@ def _compare_with_cached_before(
     after_med: dict[str, list[float]] = {}
     after_rows: dict[str, dict] = {}
     after_sums: list = []
-    for r in range(rounds + 1):
+    for r in range(rounds + warmup_rounds):
         am, ar, as_ = _measure(
             after_bin, args, 1, checksum, progress, thermal)
-        if r == 0:
-            continue  # discarded warm-up, same as the interleaved path
+        if r < warmup_rounds:
+            continue  # discarded, same as the interleaved path
         for sid, v in am.items():
             after_med.setdefault(sid, []).extend(v)
         after_rows.update(ar)
@@ -861,7 +932,8 @@ def render_markdown(result: dict) -> str:
             else []
         ),
         f"* harness args — `{' '.join(result['args']) or '(defaults)'}`, "
-        f"{result['rounds']} scored round(s) + 1 discarded warm-up",
+        f"{result['rounds']} scored round(s) + "
+        f"{result.get('warmup_rounds', 1)} discarded warm-up",
         f"* GPU — {result.get('gpu', 'unknown')}",
         *(
             [
@@ -1106,6 +1178,23 @@ def main(argv=None) -> int:
         "isatty (default)",
     )
     ap.add_argument(
+        "--pin-cpus",
+        default="2-5",
+        help="taskset CPU list for every perf-binary launch. The CPU governor "
+        "is the dominant noise source here (idle cores sit at 972MHz and take "
+        "a launch or two to reach 2601MHz); concentrating load on a fixed set "
+        "measurably tightens the spread. Empty string disables (default 2-5)",
+    )
+    ap.add_argument(
+        "--warmup-rounds",
+        type=int,
+        default=2,
+        help="rounds measured and discarded before scoring begins. The "
+        "governor ramp contaminates roughly the first two launches after an "
+        "idle gap, so 1 was leaving a ~2x outlier in the scored set "
+        "(default 2)",
+    )
+    ap.add_argument(
         "--max-temp",
         type=float,
         default=60.0,
@@ -1152,6 +1241,9 @@ def main(argv=None) -> int:
     ap.add_argument("--out-dir", default="performance/agent/runs/_compare")
     a = ap.parse_args(argv)
 
+    global _PIN_PREFIX
+    _PIN_PREFIX = _validate_pin(a.pin_cpus)
+
     _warn_concurrent(Path(a.out_dir))
 
     before_build = Path(a.before_build).resolve()
@@ -1195,15 +1287,18 @@ def main(argv=None) -> int:
     if style == "auto":
         style = "bar" if sys.stdout.isatty() else "plain"
 
-    both_sides = (a.rounds + 1) * 2
-    after_only = a.rounds + 1
+    both_sides = (a.rounds + a.warmup_rounds) * 2
+    after_only = a.rounds + a.warmup_rounds
 
     # --- cache lookup -----------------------------------------------------
     cache_dir = Path(a.cache_dir)
     machine = _machine_fingerprint()
     keys = {
         op: _cache_key(
-            before_bins[op], args + before_extra, a.rounds, machine
+            before_bins[op],
+            args + before_extra + _PIN_PREFIX,
+            a.rounds,
+            machine,
         )
         for op in ops
     }
@@ -1279,7 +1374,7 @@ def main(argv=None) -> int:
         est_note = "      ETA appears once the first launch completes."
     print(
         f"plan: {len(ops)} operators, {total_launches} launches "
-        f"({a.rounds} scored rounds + 1 warm-up)\n"
+        f"({a.rounds} scored rounds + {a.warmup_rounds} warm-up)\n"
         f"      sizes={a.sizes} warmup={a.warmup} frames={a.frames} "
         f"repeats={a.repeats}\n"
         f"{cache_note}\n"
@@ -1306,6 +1401,7 @@ def main(argv=None) -> int:
                 prog,
                 cached[op] if use_cached else None,
                 (a.max_temp, a.max_temp_wait),
+                a.warmup_rounds,
             )
         except RuntimeError as exc:
             prog.drop_operator(prog.per_op - len(prog.op_times))
@@ -1374,6 +1470,8 @@ def main(argv=None) -> int:
         "before_commit": _git_describe(_source_dir(before_build)),
         "after_commit": _git_describe(_source_dir(after_build)),
         "args": args,
+        "warmup_rounds": a.warmup_rounds,
+        "pin_cpus": a.pin_cpus or None,
         "before_args": before_extra,
         "after_args": after_extra,
         "rounds": a.rounds,
