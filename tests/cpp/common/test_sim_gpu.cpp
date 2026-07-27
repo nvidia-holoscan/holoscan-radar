@@ -14,6 +14,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 #include "radar_common/descriptors/tx_schedule.hpp"

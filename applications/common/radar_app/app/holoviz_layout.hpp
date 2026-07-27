@@ -54,7 +54,8 @@ struct HolovizLayout {
 };
 
 // RD-map outer region (window-normalized): the left column when the side panels
-// are shown, else the full window. The axes/frame/title chrome (ClusterOverlayOp
+// are shown, else the full window. The
+// axes/frame/title chrome (ClusterOverlayOp
 // via emit_rd_axes) is drawn across this region.
 inline PanelRect rd_map_region(const HolovizLayout& layout) {
   if (layout.plots_enabled) {

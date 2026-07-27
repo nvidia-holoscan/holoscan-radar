@@ -6,7 +6,8 @@
 // applies these on the device (simulator.hpp::add_thermal_noise_gpu); this host
 // version is the deterministic oracle used by the tests. Additives operate on a
 // raw complex IQ cube + parameters, not on a SimScene, so this header does NOT
-// depend on the scene/solver headers — additives are independent of how the cube
+// depend on the scene/solver headers —
+// additives are independent of how the cube
 // was generated.
 //
 // Today this holds thermal noise; future non-target returns (clutter, CW /

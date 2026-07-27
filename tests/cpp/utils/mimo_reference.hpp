@@ -5,7 +5,8 @@
 // single-TX reference in sim_reference.hpp, sharing the same physics (far-field
 // two-way delay, beat frequency, slow-time carrier phase). The three schemes —
 // TDM interleaving, DDM Doppler coding, DDM phase coding — are the ground truth
-// the unified GPU core (simulator.hpp::simulate_mimo_gpu) is validated against, and
+// the unified GPU core (simulator.hpp::simulate_mimo_gpu)
+// is validated against, and
 // the tautology guard for the deinterleave / coherent-compensation /
 // virtual-array operators.
 //
@@ -116,7 +117,8 @@ inline SimResult simulate_mimo_tdm_interleaved(const SimScene& scene,
     }
   }
 
-  // Clean scatterer response; the caller applies sim::add_thermal_noise (and any
+  // Clean scatterer response; the caller
+  // applies sim::add_thermal_noise (and any
   // other I/Q additives) to the cube.
   return result;
 }
@@ -186,7 +188,8 @@ inline SimResult simulate_mimo_ddm_coded(const SimScene& scene,
     }
   }
 
-  // Clean scatterer response; the caller applies sim::add_thermal_noise (and any
+  // Clean scatterer response; the caller
+  // applies sim::add_thermal_noise (and any
   // other I/Q additives) to the cube.
   return result;
 }
@@ -255,7 +258,8 @@ inline SimResult simulate_mimo_ddm_phase_coded(
     }
   }
 
-  // Clean scatterer response; the caller applies sim::add_thermal_noise (and any
+  // Clean scatterer response; the caller
+  // applies sim::add_thermal_noise (and any
   // other I/Q additives) to the cube.
   return result;
 }

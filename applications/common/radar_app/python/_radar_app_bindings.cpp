@@ -220,7 +220,7 @@ void bind_radar_app(py::module_& m) {
   py::class_<ClusterOverlayOp, PyClusterOverlayOp, Operator,
              std::shared_ptr<ClusterOverlayOp>>(
       m, "ClusterOverlayOp",
-      "Emit Holoviz filled-disc geometry layers for CFAR detections by cluster.")
+      "Emit Holoviz filled-disc layers for CFAR detections by cluster.")
       .def(py::init<Fragment*, const py::args&, const std::string&>(),
            py::arg("fragment"), py::arg("name") = "cluster_overlay")
       .def_readwrite("view_aspect", &ClusterOverlayOp::view_aspect)
@@ -233,7 +233,8 @@ void bind_radar_app(py::module_& m) {
       .def_readwrite("marker_segments", &ClusterOverlayOp::marker_segments)
       .def("setup", &ClusterOverlayOp::setup, py::arg("spec"));
 
-  // Panel placement (window-normalized view rect) for the primitive side panels.
+  // Panel placement (window-normalized view
+  // rect) for the primitive side panels.
   py::class_<PanelRect>(m, "PanelRect", "Window-normalized panel view rect.")
       .def(py::init([](float x, float y, float w, float h) {
              return PanelRect{x, y, w, h};

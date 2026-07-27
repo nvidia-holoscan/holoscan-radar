@@ -408,7 +408,8 @@ __global__ void cfar_peak_suppress_kernel(const T* power, const bool* mask,
         continue;  // only compare against detected neighbors.
       }
       const T pn = power[neighbor_idx];
-      // Cell loses to a strictly greater neighbor, or to an equal-power neighbor
+      // Cell loses to a strictly greater
+      // neighbor, or to an equal-power neighbor
       // with a lower raster index (raster tiebreak → one survivor per plateau).
       if (pn > pc || (pn == pc && neighbor_lin < lin_c)) {
         survive = false;

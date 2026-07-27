@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Analytic CPU point-target FMCW simulator — the closed-form ground truth used
-// by the tests. This is the reference the runtime GPU simulator (simulator.hpp) is
+// by the tests. This is the reference the
+// runtime GPU simulator (simulator.hpp) is
 // validated against; it deliberately lives under tests/ (not in the operators
 // tree) and stays STL-only, so it is an implementation-independent oracle for
 // both the GPU sim and the processing operators.

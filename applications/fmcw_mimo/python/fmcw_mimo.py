@@ -381,9 +381,7 @@ class FmcwMimoApp(Application):
             # velocity comes from the DDM report bins in DDM mode, like the plot.
             self.add_flow(range_op, overlay, {("range_bins", "range_bins")})
             if ddm and ddm_velocity_bins is not None:
-                self.add_flow(
-                    ddm_velocity_bins, overlay, {("velocity_bins", "velocity_bins")}
-                )
+                self.add_flow(ddm_velocity_bins, overlay, {("velocity_bins", "velocity_bins")})
             else:
                 self.add_flow(doppler, overlay, {("velocity_bins", "velocity_bins")})
             if not cfg.peak_only:

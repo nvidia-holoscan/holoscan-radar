@@ -23,7 +23,7 @@ to mitigate it at the app level, and the proposed upstream fix.
 
 Dragging / resizing the live Holoviz window crashes the whole application:
 
-```
+```text
 [info]  [framebuffer_sequence.cpp:385] Using present mode 'Immediate'
 [error] [gxf_wrapper.cpp:158] Exception occurred for operator: 'holoviz' - Failed to acquire next swap chain image.
 [error] [entity_executor.cpp:770] Failed to tick codelet holoviz in entity: holoviz code: GXF_FAILURE
@@ -171,7 +171,7 @@ independently removes the crash regardless of this coupling.
 ## Quick reference
 
 | | Issue 1 (resize crash) | Issue 2 (low-rate sluggishness) |
-|---|---|---|
+| --- | --- | --- |
 | Trigger | Resizing / dragging the window | Low `run.frame_period` (low data cadence) |
 | Mechanism | `acquire()` throws on out-of-date swapchain | Event polling tied to `compute()` tick rate |
 | Key SDK refs | `framebuffer_sequence.cpp:474`, `vulkan_app.cpp:1054,1407`, `gxf_wrapper.cpp:158` | `holoviz.cpp:187`, `glfw_window.cpp:703` |

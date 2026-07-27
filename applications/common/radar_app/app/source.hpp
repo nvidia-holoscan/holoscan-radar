@@ -5,7 +5,8 @@
 // complex-IF ADC cube per tick from the GPU point-target simulator
 // (radar_common/sim/simulator.hpp), advancing the targets through space by one
 // frame period between ticks. The cube is synthesized on the device and emitted
-// directly — no host synthesis, no cube H2D. Its shape follows the scene: rank-2
+// directly — no host synthesis, no cube
+// H2D. Its shape follows the scene: rank-2
 // (num_chirps, samples_per_chirp) for single-RX SISO, rank-3
 // (num_rx, num_chirps, samples_per_chirp) for SIMO — so one operator serves
 // both. (MIMO drives its own sources: TDM/DDM multiplexing needs a bespoke

@@ -5,7 +5,8 @@
 // YAML loaders (TDM/DDM branch, virtual array geometry, targets, the
 // boresight-axis mirror of the beamscan grid). Colocated with the app. The
 // scene is the shared radar::sim::SimScene (multi-TX); the source operators
-// synthesize the multiplexed cube on the device (simulator.hpp::simulate_mimo_gpu).
+// synthesize the multiplexed cube on the
+// device (simulator.hpp::simulate_mimo_gpu).
 
 #pragma once
 

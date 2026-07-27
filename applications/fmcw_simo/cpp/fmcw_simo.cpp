@@ -94,7 +94,8 @@ class FmcwSimoApp : public holoscan::Application {
     add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
     add_flow(doppler, cfar, {{"rd_maps", "rd_maps"}});
 
-    // Angle branch runs in both modes (it is the DOA estimator, not clustering).
+    // Angle branch runs in both modes (it
+    // is the DOA estimator, not clustering).
     add_flow(doppler, gather, {{"rd_maps", "rd_maps"}});
     add_flow(cfar, gather, {{"detection_idx", "detection_idx"}});
     add_flow(gather, beamscan,
@@ -251,7 +252,8 @@ class FmcwSimoApp : public holoscan::Application {
         }
         add_flow(boresight, visualizer, {{"plot", "receivers"}});
         // Primitive-panel InputSpec chain: rolling plot specs → boresight →
-        // HolovizOp.input_specs (one connection into the single input_specs port).
+        // HolovizOp.input_specs (one connection
+        // into the single input_specs port).
         add_flow(plot, boresight, {{"plot_specs", "specs_in"}});
         add_flow(boresight, visualizer, {{"specs_out", "input_specs"}});
       }

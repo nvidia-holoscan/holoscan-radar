@@ -15,6 +15,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <holoscan/holoscan.hpp>
@@ -52,7 +53,8 @@ struct PanelRect {
   float x{0.0F}, y{0.0F}, w{1.0F}, h{1.0F};
 };
 
-// A tick: fractional position along its axis ([0,1], 0 = lo/left/bottom) + label.
+// A tick: fractional position along its
+// axis ([0,1], 0 = lo/left/bottom) + label.
 struct PanelTick {
   float frac;
   std::string label;
@@ -270,7 +272,8 @@ inline std::string cluster_layer_name(int color) {
 // color). Two properties this buys over hashing the cell:
 //   - No collisions among coexisting clusters: the first num_clusters palette
 //     entries are used, and cluster_palette() front-loads maximally-distinct
-//     colors (golden-angle hues), so a handful of clusters read very differently.
+//     colors (golden-angle hues), so a handful of clusters read very
+//     differently.
 //   - Temporal stability: a cluster keeps its color while its range rank holds;
 //     the rank only shifts when clusters actually reorder in range or the set
 //     changes — not from the size-rank reshuffles that made the DBSCAN label
@@ -341,7 +344,8 @@ class ClusterOverlayOp : public holoscan::Operator {
   // per-tick scene advance, so tick N is labeled t = N * frame_period.
   double frame_period{0.1};
 
-  // RD-map outer region (window-normalized) for the axes/frame/title chrome. The
+  // RD-map outer region (window-normalized)
+  // for the axes/frame/title chrome. The
   // inset RD image + detection discs occupy the shared kBox sub-rect of this
   // region (set by the app from the layout; see holoviz_layout.hpp's image
   // view). Default full-window is a sane fallback when unset.
@@ -366,7 +370,8 @@ class ClusterOverlayOp : public holoscan::Operator {
     spec.input<holoscan::TensorMap>("rep_idx")
         .condition(holoscan::ConditionType::kNone);
     spec.input<holoscan::TensorMap>("rd_maps");
-    // Optional physical axis bins (constant per run) for the RD-map tick labels:
+    // Optional physical axis bins (constant
+    // per run) for the RD-map tick labels:
     // range_bins (num_range,) → X axis, velocity_bins (num_doppler,) → Y axis.
     // Absent → the frame + title still draw, without numeric tick labels.
     spec.input<holoscan::TensorMap>("range_bins")
@@ -377,7 +382,8 @@ class ClusterOverlayOp : public holoscan::Operator {
     // RD-map chrome InputSpecs (scenario clock + axes frame/ticks/title as TEXT
     // and LINES layers). Heads the primitive-panel InputSpec chain when panels
     // are on (→ RollingPlotOp.specs_in), else feeds HolovizOp.input_specs
-    // directly. The matching geometry/position tensors ride the `overlay` output.
+    // directly. The matching geometry/position
+    // tensors ride the `overlay` output.
     spec.output<std::vector<PlotInputSpec>>("time_specs");
   }
 
@@ -394,7 +400,8 @@ class ClusterOverlayOp : public holoscan::Operator {
 
     // Cache the RD-map axis extents once (constant per run) from the optional
     // physical bin tensors, then build the tick label lists. X spans the range
-    // axis left→right; Y spans the velocity axis, with the image's Doppler bin 0
+    // axis left→right; Y spans the velocity
+    // axis, with the image's Doppler bin 0
     // at the top (so the top edge = velocity_bins[0], the bottom edge = the
     // last bin). See emit_rd_axes for the tick placement.
     if (!axes_set_) {
@@ -424,7 +431,7 @@ class ClusterOverlayOp : public holoscan::Operator {
           *last = host.back();
         };
         if (cudaDeviceSynchronize() != cudaSuccess) {
-          throw std::runtime_error("ClusterOverlayOp: device synchronize failed");
+          throw std::runtime_error("ClusterOverlayOp: device sync failed");
         }
         float r0, r1, v_first, v_last;
         ends(range_bins, "range_bins", &r0, &r1);
@@ -514,7 +521,7 @@ class ClusterOverlayOp : public holoscan::Operator {
       rep.resize(static_cast<size_t>(num_rep * 2));
       if (static_cast<size_t>(rep_idx->nbytes()) !=
           sizeof(int64_t) * rep.size()) {
-        throw std::runtime_error("ClusterOverlayOp: rep_idx byte size mismatch");
+        throw std::runtime_error("ClusterOverlayOp: rep_idx size mismatch");
       }
       if (num_rep > 0 &&
           cudaMemcpy(rep.data(), rep_idx->data(), sizeof(int64_t) * rep.size(),
@@ -571,7 +578,8 @@ class ClusterOverlayOp : public holoscan::Operator {
     }
 
     // Precompute the unit-disc rim once; each marker is a triangle fan of
-    // marker_segments triangles (center + two adjacent rim points). The x radius
+    // marker_segments triangles (center +
+    // two adjacent rim points). The x radius
     // is divided by the view aspect so the discs stay round on screen.
     const int segments = marker_segments > 2 ? static_cast<int>(marker_segments)
                                              : 3;
@@ -929,7 +937,8 @@ inline void push_abs_text(holoscan::TensorMap& out,
     return;
   }
   // Glyph advance as a fraction of window width: advance_px / W =
-  // ratio * height_px / W = ratio * size_frac * (H / W) = ratio*size_frac/aspect.
+  // ratio * height_px / W = ratio * size_frac
+  // * (H / W) = ratio*size_frac/aspect.
   const float char_w =
       kGlyphAdvanceRatio * size_frac / std::max(window_aspect, 1e-3F);
   std::vector<float> pos;
@@ -1030,7 +1039,8 @@ inline void emit_panel(holoscan::TensorMap& out,
   {
     const float ry = marker_radius / std::max(rect.h, 1e-6F);
     const float rx = ry / std::max(aspect, 1e-6F);
-    const float ory = (marker_radius + marker_outline) / std::max(rect.h, 1e-6F);
+    const float ory =
+        (marker_radius + marker_outline) / std::max(rect.h, 1e-6F);
     const float orx = ory / std::max(aspect, 1e-6F);
     std::vector<float> outline;
     std::vector<std::vector<float>> by_bucket(kNumClusterColors + 1);
@@ -1104,7 +1114,8 @@ inline void emit_sim_clock(holoscan::TensorMap& out,
                            std::vector<PlotInputSpec>* specs, double seconds,
                            float px_height) {
   const PanelRect full{0.0F, 0.0F, 1.0F, 1.0F};
-  // Pixel-locked label size (see kClockPx) so it stays crisp at any window size.
+  // Pixel-locked label size (see kClockPx)
+  // so it stays crisp at any window size.
   const float sz = kClockPx / std::max(px_height, 1.0F);
   const float ty = 0.012F;  // text top, window-normalized
   // Dark plate (two triangles) sized to bracket the text, for legibility over
@@ -1147,7 +1158,8 @@ inline void emit_rd_axes(holoscan::TensorMap& out,
   const float tick_sz = kRdTickPx / safe_h;
   const float title_sz = kRdTitlePx / safe_h;
   // Window aspect (W/H), derived from the inset box's on-screen aspect: the box
-  // is (kBoxR-kBoxL)*region.w wide and (kBoxB-kBoxT)*region.h tall of the window,
+  // is (kBoxR-kBoxL)*region.w wide and
+  // (kBoxB-kBoxT)*region.h tall of the window,
   // so W/H = box_aspect * boxH_frac / boxW_frac.
   const float win_aspect = box_aspect * (kBoxB - kBoxT) * region.h /
                            std::max((kBoxR - kBoxL) * region.w, 1e-6F);
@@ -1365,7 +1377,8 @@ class RollingPlotOp : public holoscan::Operator {
     }
 
     // Clustered (labels present): color each rep by its cluster's range rank
-    // (rep_color_ranks) — the same stable, collision-free key ClusterOverlayOp /
+    // (rep_color_ranks) — the same stable,
+    // collision-free key ClusterOverlayOp /
     // BoresightViewOp use, keeping all three panels in sync. peak_only (no
     // labels): the "reps" are the raw peaks, so color by row index like the
     // overlay. labels are only a mode flag here; their values are not read.
@@ -1404,7 +1417,8 @@ class RollingPlotOp : public holoscan::Operator {
         specs = std::move(upstream.value());
       }
       render_panel_primitives(out, &specs, oldest, "range", /*use_range=*/true,
-                              range_view, range_aspect, "Range (m) vs time (s)");
+                              range_view, range_aspect,
+                              "Range (m) vs time (s)");
       render_panel_primitives(out, &specs, oldest, "velocity",
                               /*use_range=*/false, velocity_view,
                               velocity_aspect, "Velocity (m/s) vs time (s)");
@@ -1412,7 +1426,8 @@ class RollingPlotOp : public holoscan::Operator {
     } else {
       out.insert({kRangePlotLayer, render_plot(/*use_range=*/true, oldest)});
       out.insert({kRangeTitleLayer, plot_title_pos()});
-      out.insert({kVelocityPlotLayer, render_plot(/*use_range=*/false, oldest)});
+      out.insert(
+          {kVelocityPlotLayer, render_plot(/*use_range=*/false, oldest)});
       out.insert({kVelocityTitleLayer, plot_title_pos()});
     }
     op_output.emit(out, "plots");
@@ -1451,7 +1466,8 @@ class RollingPlotOp : public holoscan::Operator {
   // primitives: build the axis ticks + marker list and hand off to emit_panel,
   // which fills `out` (data tensors) and `specs` (matching InputSpecs).
   void render_panel_primitives(holoscan::TensorMap& out,
-                               std::vector<PlotInputSpec>* specs, int64_t oldest,
+                               std::vector<PlotInputSpec>* specs,
+                               int64_t oldest,
                                const std::string& prefix, bool use_range,
                                const PanelRect& view, float aspect,
                                const std::string& title) {
@@ -1637,7 +1653,8 @@ class BoresightViewOp : public holoscan::Operator {
         .condition(holoscan::ConditionType::kNone);
     // Optional: per-cluster representative RD cell (num_clusters, 2), row c =
     // cluster label c. When present with labels, clusters color by their rep
-    // cell (stable across frames) — the same key the RD map / rolling plots use.
+    // cell (stable across frames) — the same
+    // key the RD map / rolling plots use.
     spec.input<holoscan::TensorMap>("rep_idx")
         .condition(holoscan::ConditionType::kNone);
     spec.output<holoscan::TensorMap>("plot");
@@ -1727,7 +1744,8 @@ class BoresightViewOp : public holoscan::Operator {
 
     // Per-detection color bucket. Clustered (labels present): color by the
     // cluster's range rank when rep cells are available (stable, collision-
-    // free), else the size-rank label; noise (-1) → gray. peak_only (no labels):
+    // free), else the size-rank label; noise
+    // (-1) → gray. peak_only (no labels):
     // color by row index so peaks stay distinct — matching the RD map / plots.
     std::vector<int> bucket(static_cast<size_t>(n));
     for (int64_t i = 0; i < n; ++i) {
@@ -1766,10 +1784,11 @@ class BoresightViewOp : public holoscan::Operator {
       std::vector<PanelMarker> markers;
       markers.reserve(static_cast<size_t>(n));
       for (int64_t i = 0; i < n; ++i) {
-        const float xf = (static_cast<float>(ang[static_cast<size_t>(i * 2 + 0)] *
-                                             kRad2Deg) - ax_lo) / ax_span;
-        const float yf = (static_cast<float>(ang[static_cast<size_t>(i * 2 + 1)] *
-                                             kRad2Deg) - ey_lo) / ey_span;
+        const size_t ai = static_cast<size_t>(i * 2);
+        const float xf =
+            (static_cast<float>(ang[ai] * kRad2Deg) - ax_lo) / ax_span;
+        const float yf =
+            (static_cast<float>(ang[ai + 1] * kRad2Deg) - ey_lo) / ey_span;
         if (xf < 0.0F || xf > 1.0F || yf < 0.0F || yf > 1.0F) {
           continue;  // outside the field of view
         }
@@ -1780,7 +1799,8 @@ class BoresightViewOp : public holoscan::Operator {
       if (upstream) {
         specs = std::move(upstream.value());
       }
-      emit_panel(out, &specs, "boresight", view, aspect, "Boresight az/el (deg)",
+      emit_panel(out, &specs, "boresight", view, aspect,
+                 "Boresight az/el (deg)",
                  xticks, yticks, markers, marker_radius, marker_outline,
                  static_cast<int>(marker_segments));
       op_output.emit(specs, "specs_out");

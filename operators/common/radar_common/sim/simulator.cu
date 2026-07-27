@@ -1,18 +1,22 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// MatX implementation of the GPU simulators (declared in simulator.hpp). Mirrors
+// MatX implementation of the GPU simulators
+// (declared in simulator.hpp). Mirrors
 // the closed-form model in scene.hpp: per target, per TX, per
 // (rx, slot), a two-way delay tau and beat frequency drive the fast-time phase
 // ramp; contributions (weighted by the per-(tx, slot) excitation) accumulate in
-// double, then cast to the complex<float> ADC cube. The small per-(rx, slot) tau
-// factors are computed host-side (cheap, convention-dependent) and uploaded; the
+// double, then cast to the complex<float>
+// ADC cube. The small per-(rx, slot) tau
+// factors are computed host-side (cheap,
+// convention-dependent) and uploaded; the
 // O(rx*slow*samples) synthesis runs on the device.
 //
 // Single-TX and MIMO share one accumulate kernel (accumulate_scene): single-TX
 // is just num_tx == 1 with a unit weight, so there is a single physics
 // implementation; the public entry points differ only in output shape (rank-2
-// SISO vs rank-3), the optional pre-mixer multiply, and how the weights are set.
+// SISO vs rank-3), the optional pre-mixer
+// multiply, and how the weights are set.
 
 #include "radar_common/sim/simulator.hpp"
 
@@ -21,6 +25,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -94,7 +99,8 @@ void accumulate_scene(matx::tensor_t<cuda::std::complex<double>, 3>& acc,
                 truth.look_direction);
         for (int64_t k = 0; k < slow_time; ++k) {
           const double range_k =
-              truth.range + truth.radial_velocity * static_cast<double>(k) * pri;
+              truth.range +
+              truth.radial_velocity * static_cast<double>(k) * pri;
           const double tau = (2.0 * range_k - aperture) / c;
           const size_t idx = static_cast<size_t>(rx * slow_time + k);
           beat_host[idx] = slope * tau;
@@ -166,7 +172,8 @@ std::shared_ptr<holoscan::Tensor> simulate_gpu(const SimScene& scene,
       ref_host[static_cast<size_t>(s)] = {std::cos(ph), std::sin(ph)};
     }
     auto ref_dev = upload_complex_coefficients<double>(ref_host, stream);
-    auto ref3 = matx::clone<3>(ref_dev, {num_rx, num_chirps, matx::matxKeepDim});
+    auto ref3 =
+        matx::clone<3>(ref_dev, {num_rx, num_chirps, matx::matxKeepDim});
     (acc = acc * ref3).run(exec);
   }
 

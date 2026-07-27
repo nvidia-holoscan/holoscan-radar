@@ -6,7 +6,8 @@
 //   MimoTdmAdcSourceOp / MimoDdmAdcSourceOp — synthetic multiplexed ADC sources
 // The source operators build the per-(tx, slot) excitation weights for their
 // multiplexing scheme and drive the unified GPU simulator
-// (radar_common/sim/simulator.hpp::simulate_mimo_gpu), so the cube is synthesized
+// (radar_common/sim/simulator.hpp::simulate_mimo_gpu),
+// so the cube is synthesized
 // on the device and emitted directly — no host synthesis, no cube H2D. Apps
 // using them must link holoscan::radar_common_simulator.
 
@@ -153,7 +154,8 @@ class MimoTdmAdcSourceOp : public holoscan::Operator {
     }
 
     auto tensor = radar::sim::simulate_mimo_gpu(scene, weights, slow, stream_);
-    // Per-frame noise seed → a fresh realization each tick (see SimAdcSourceOp).
+    // Per-frame noise seed → a fresh realization
+    // each tick (see SimAdcSourceOp).
     radar::sim::add_thermal_noise_gpu(*tensor, scene.snr_db,
                                       scene.seed + frame_index_, stream_);
     holoscan::TensorMap out;
@@ -242,7 +244,8 @@ class MimoDdmAdcSourceOp : public holoscan::Operator {
     }
 
     auto tensor = radar::sim::simulate_mimo_gpu(scene, weights, slow, stream_);
-    // Per-frame noise seed → a fresh realization each tick (see SimAdcSourceOp).
+    // Per-frame noise seed → a fresh realization
+    // each tick (see SimAdcSourceOp).
     radar::sim::add_thermal_noise_gpu(*tensor, scene.snr_db,
                                       scene.seed + frame_index_, stream_);
     holoscan::TensorMap out;

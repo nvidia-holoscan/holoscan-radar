@@ -64,7 +64,8 @@ struct CommonRunConfig {
   // CFAR peak-grouping mode. A native CFARDetectorOp parameter (set through the
   // cfar_detector YAML block via from_config); each app also reads the same key
   // as a read-only mirror of that operator block to gate its graph shape (drop
-  // the DBSCAN clustering + reduction stages when set). Populated per app in its
+  // the DBSCAN clustering + reduction stages
+  // when set). Populated per app in its
   // load_config, not by the shared parse helpers below (which stay app-owned).
   bool peak_only{false};
   struct PlotsConfig {
@@ -198,8 +199,9 @@ inline void parse_viz_toggles(const YAML::Node& root, CommonRunConfig* cfg) {
     throw std::runtime_error("visualization.marker_outline must be >= 0");
   }
   if (cfg->viz.marker_segments < 3) {
-    throw std::runtime_error("visualization.marker_segments must be >= 3, got " +
-                             std::to_string(cfg->viz.marker_segments));
+    throw std::runtime_error(
+        "visualization.marker_segments must be >= 3, got " +
+        std::to_string(cfg->viz.marker_segments));
   }
   if (const YAML::Node v = root["skip_display_check"]; v && !v.IsNull()) {
     cfg->skip_display_check = v.as<bool>();

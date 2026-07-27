@@ -120,10 +120,12 @@ class FmcwSisoApp : public holoscan::Application {
     std::shared_ptr<radar::DetectionReductionOp<float>> reduction;
     if (!cfg.peak_only) {
       // Assemble a [range, velocity] feature matrix from the CFAR cells
-      // (physical units, via the range/Doppler axis outputs) and density-cluster
+      // (physical units, via the range/Doppler
+      // axis outputs) and density-cluster
       // it. `features` is fixed in code — the parameter is native-only by
       // operator contract, and this app's downstream report / overlays assume
-      // this exact 2-column layout. The DBSCAN parameters flow natively from the
+      // this exact 2-column layout. The DBSCAN
+      // parameters flow natively from the
       // cluster_dbscan YAML block.
       const std::vector<radar::AssemblyFeature> feature_columns{
           radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity};
@@ -243,7 +245,8 @@ class FmcwSisoApp : public holoscan::Application {
       if (plot) {
         if (!cfg.peak_only) {
           add_flow(reduction, plot, {{"rep_idx", "rep_idx"}});
-          // Per-detection labels let the plot color each rep by its true cluster
+          // Per-detection labels let the plot
+          // color each rep by its true cluster
           // (matching the RD-map / boresight markers) rather than by row index.
           add_flow(cluster, plot, {{"labels", "labels"}});
         } else {

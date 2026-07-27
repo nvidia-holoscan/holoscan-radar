@@ -187,7 +187,8 @@ class FmcwMimoApp : public holoscan::Application {
     add_flow(cfar, noise_sink, {{"noise_estimate", "input"}});
 
     // Clustering subgraph — dropped when peak_only is set. The angle branch
-    // (gather/beamscan) still runs; in peak_only its aoa feeds DetectionReportOp
+    // (gather/beamscan) still runs; in
+    // peak_only its aoa feeds DetectionReportOp
     // (optional aoa_estimates) instead of the removed feature_assembly.
     std::shared_ptr<radar::ClusterDBSCANOp<float>> cluster;
     std::shared_ptr<radar::DetectionReductionOp<float>> reduction;
@@ -304,12 +305,14 @@ class FmcwMimoApp : public holoscan::Application {
       // three color each peak by its per-detection row index instead.
       add_flow(cfar, overlay, {{"detection_idx", "detection_idx"}});
       add_flow(ch_slice, overlay, {{"rd_map", "rd_maps"}});
-      // Physical axis bins for the RD-map tick labels (range X, velocity Y); the
+      // Physical axis bins for the RD-map
+      // tick labels (range X, velocity Y); the
       // velocity axis comes from the DDM report bins in DDM mode, matching the
       // rolling plot's source.
       add_flow(range, overlay, {{"range_bins", "range_bins"}});
       if (ddm) {
-        add_flow(ddm_velocity_bins, overlay, {{"velocity_bins", "velocity_bins"}});
+        add_flow(ddm_velocity_bins, overlay,
+                 {{"velocity_bins", "velocity_bins"}});
       } else {
         add_flow(doppler, overlay, {{"velocity_bins", "velocity_bins"}});
       }
@@ -352,7 +355,8 @@ class FmcwMimoApp : public holoscan::Application {
         }
         add_flow(boresight, visualizer, {{"plot", "receivers"}});
         // Primitive-panel InputSpec chain: rolling plot specs → boresight →
-        // HolovizOp.input_specs (one connection into the single input_specs port).
+        // HolovizOp.input_specs (one connection
+        // into the single input_specs port).
         add_flow(plot, boresight, {{"plot_specs", "specs_in"}});
         add_flow(boresight, visualizer, {{"specs_out", "input_specs"}});
       }

@@ -323,7 +323,8 @@ class FmcwDenseSimoApp : public holoscan::Application {
     if (boresight) {
       // Clustered: the per-cluster representative (medoid) angle, with the rep
       // lookup's row_index as the cluster id coloring each marker. peak_only:
-      // the raw per-detection cube peaks (row_index is then a per-detection id).
+      // the raw per-detection cube peaks
+      // (row_index is then a per-detection id).
       if (!cfg.peak_only) {
         add_flow(reduction, rep_aoa, {{"rep_idx", "detection_idx"}});
         // Match the overlay/plot: color each cluster by its representative RD
@@ -336,7 +337,8 @@ class FmcwDenseSimoApp : public holoscan::Application {
                                     {"row_index", "labels"}});
       add_flow(boresight, visualizer, {{"plot", "receivers"}});
       // Primitive-panel InputSpec chain: rolling plot specs → boresight →
-      // HolovizOp.input_specs (one connection into the single input_specs port).
+      // HolovizOp.input_specs (one connection
+      // into the single input_specs port).
       add_flow(plot, boresight, {{"plot_specs", "specs_in"}});
       add_flow(boresight, visualizer, {{"specs_out", "input_specs"}});
     }

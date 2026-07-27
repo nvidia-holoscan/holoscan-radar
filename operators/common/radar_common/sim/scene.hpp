@@ -4,13 +4,15 @@
 // Point-target FMCW scene model — the shared, STL-only data types and geometry
 // for the analytic simulator: the waveform/target/scene structs, the derived
 // per-target ground truth (range / radial velocity / look direction), and the
-// per-frame target mover. Consumed by the runtime GPU simulator (simulator.hpp),
+// per-frame target mover. Consumed by the
+// runtime GPU simulator (simulator.hpp),
 // the MIMO GPU core (simulator.hpp), the source operators, and config parsing.
 //
 // The closed-form CPU signal model itself — simulate() / reference_chirp() /
 // to_real_if() — is the analytic ground truth used only by tests, and lives in
 // tests/cpp/utils/sim_reference.hpp. The runtime path synthesizes on the device
-// (simulator.hpp), validated against that CPU reference to tolerance. This header
+// (simulator.hpp), validated against that
+// CPU reference to tolerance. This header
 // stays STL-only (no operator or MatX includes) so the scene model and the
 // reference derived from it remain independent of the code under test.
 //
@@ -143,11 +145,13 @@ inline void advance_scene(Scene* scene, double dt) {
   }
 }
 
-// Per-frame scene-evolution strategy (the mover / target-source seam): given the
+// Per-frame scene-evolution strategy (the
+// mover / target-source seam): given the
 // scene and the frame period, mutate it for the next frame. The default
 // (linear_mover) moves each target along its velocity; a custom mover can
 // implement orbits/maneuvers, or clear-and-regenerate scene.targets entirely (a
-// procedural "scatterer source"). The source operators call the configured mover
+// procedural "scatterer source"). The
+// source operators call the configured mover
 // each tick, so the motion model is swappable without touching the solver.
 using SceneMover = std::function<void(SimScene&, double dt)>;
 

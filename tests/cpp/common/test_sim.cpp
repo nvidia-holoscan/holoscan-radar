@@ -58,7 +58,8 @@ TEST(PointTargetSim, GroundTruthDerivation) {
 TEST(PointTargetSim, Deterministic) {
   auto scene = single_target_scene();
   scene.snr_db = 20.0;
-  // simulate() is a pure function of the scene; the noise additive is seeded, so
+  // simulate() is a pure function of the
+  // scene; the noise additive is seeded, so
   // the composed (solver + add_thermal_noise) output is bit-identical for a
   // fixed seed and differs when the seed changes.
   auto a = sim::simulate(scene);

@@ -13,7 +13,7 @@ phase) is summed over `(rx, slot, fast-time sample)`.
 ## Files
 
 | File | Role |
-|---|---|
+| --- | --- |
 | `scene.hpp` | Scene model — `SimScene`, `PointTarget`, `SimWaveform`, `derive_truth`, the `SceneMover` seam. STL-only, header-only. |
 | `simulator.hpp` / `simulator.cu` | GPU solvers (`simulate_gpu`, `simulate_mimo_gpu`) + the noise additive (`add_thermal_noise_gpu`). Compiled into `holoscan::radar_common_simulator`. |
 | `array_builders.hpp` | Array-geometry helpers (URA / virtual / linear element positions). |
@@ -23,7 +23,7 @@ phase) is summed over `(rx, slot, fast-time sample)`.
 
 ## Pipeline
 
-```
+```text
  SimScene ─────────────►  simulate_gpu / simulate_mimo_gpu  ──►  add_thermal_noise_gpu  ──►  device cube
  (targets, waveform,          (clean scatterer response,          (I/Q additive, in place)     (complex<float>
   array geometry, snr,          double → complex<float>)                                        holoscan::Tensor)
@@ -67,7 +67,7 @@ Link: `target_link_libraries(<you> PRIVATE holoscan::radar_common_simulator)`
 **`SimScene`** — the full description you fill in:
 
 | Field | Type | Meaning / units |
-|---|---|---|
+| --- | --- | --- |
 | `targets` | `vector<PointTarget>` | The point scatterers. |
 | `waveform` | `SimWaveform` | FMCW waveform (below). |
 | `num_chirps` | `int64_t` | Slow-time length (pulses per CPI). |
@@ -104,7 +104,7 @@ Multi-TX. The multiplexing scheme is captured **entirely** by `weights` — a
 row-major `(num_tx, slow_time)` matrix of the per-`(tx, slot)` excitation:
 
 | Scheme | `slow_time` | `weights[tx, slot]` |
-|---|---|---|
+| --- | --- | --- |
 | TDM | `num_tx * num_chirps` | `1` on the slot's active TX, `0` otherwise |
 | DDM (Doppler-coded) | `num_chirps` | `exp(i·2π·offset_tx·k)` |
 | DDM (phase-coded) | `num_chirps` | the arbitrary unit-magnitude `(tx, k)` code |

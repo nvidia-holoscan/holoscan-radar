@@ -415,9 +415,7 @@ def parse_visualization(root: dict[str, Any]) -> tuple[bool, VisualizationConfig
     if viz.marker_outline < 0.0:
         raise ValueError("visualization.marker_outline must be >= 0")
     if viz.marker_segments < 3:
-        raise ValueError(
-            f"visualization.marker_segments must be >= 3, got {viz.marker_segments}"
-        )
+        raise ValueError(f"visualization.marker_segments must be >= 3, got {viz.marker_segments}")
     return enabled, viz
 
 
@@ -502,9 +500,7 @@ def detection_layer_specs(palette: list[list[float]]) -> list[HolovizOp.InputSpe
     colored disc layer per cluster palette color plus a muted noise layer
     (priority 2). All draw over the RD image (COLOR_LUT, default priority 0)."""
     specs: list[HolovizOp.InputSpec] = []
-    outline = HolovizOp.InputSpec(
-        K_DETECTION_OUTLINE_LAYER, HolovizOp.InputType.TRIANGLES
-    )
+    outline = HolovizOp.InputSpec(K_DETECTION_OUTLINE_LAYER, HolovizOp.InputType.TRIANGLES)
     outline.color = [0.0, 0.0, 0.0, 1.0]
     outline.priority = 1
     specs.append(outline)
@@ -526,17 +522,13 @@ def detection_layer_specs(palette: list[list[float]]) -> list[HolovizOp.InputSpe
 K_BOX_L, K_BOX_R, K_BOX_T, K_BOX_B = 0.15, 0.98, 0.14, 0.85
 
 
-def rd_map_region(
-    paneled: bool, left_width: float
-) -> tuple[float, float, float, float]:
+def rd_map_region(paneled: bool, left_width: float) -> tuple[float, float, float, float]:
     """RD-map outer region (window-normalized): the left column when the side
     panels are shown, else the full window. Mirrors holoviz_layout.hpp."""
     return (0.0, 0.0, left_width, 1.0) if paneled else (0.0, 0.0, 1.0, 1.0)
 
 
-def rd_map_box(
-    paneled: bool, left_width: float
-) -> tuple[float, float, float, float]:
+def rd_map_box(paneled: bool, left_width: float) -> tuple[float, float, float, float]:
     """The inset RD image box within the region, using the shared kBox margins so
     the image is framed like the side-panel plot boxes rather than stretching to
     the window edge. The RD image + detection discs use this as their View;
@@ -550,9 +542,7 @@ def rd_map_box(
     )
 
 
-def rd_map_view_aspect(
-    width: int, height: int, left_width: float, paneled: bool
-) -> float:
+def rd_map_view_aspect(width: int, height: int, left_width: float, paneled: bool) -> float:
     """On-screen aspect ratio (width / height in pixels) of the inset RD-map image
     box (see rd_map_box). ClusterOverlayOp divides its disc x radius by this so
     the detection markers render round rather than stretched."""
