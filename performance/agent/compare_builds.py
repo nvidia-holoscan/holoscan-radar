@@ -895,47 +895,133 @@ def render_markdown(result: dict) -> str:
             "spread. Re-run with `--no-cache` to confirm anything surprising.",
             "",
         ]
-    for op in result["operators"]:
-        gm = op["geomean_speedup"]
-        head = f"## {op['operator']} — geomean speedup {gm:.2f}x"
-        if op.get("n_significant"):
-            head += (
-                f" (significant-only {op['geomean_significant']:.2f}x "
-                f"over {op['n_significant']} scenario(s))"
+    lines += _tiered_table(result["operators"])
+    return "\n".join(lines)
+
+
+# Ladder order, so sizes read small-to-large rather than alphabetically.
+_SIZE_ORDER = ["xs", "sm", "md", "lg", "xl"]
+
+
+def _size_key(size_id: str) -> tuple[int, str]:
+    try:
+        return (_SIZE_ORDER.index(size_id), "")
+    except ValueError:
+        return (len(_SIZE_ORDER), size_id)
+
+
+def _rollup(scenarios: list[dict]) -> dict:
+    """Aggregate a group of leaf scenarios into one summary row.
+
+    Two different questions, so two different numbers. Summed before/after ms
+    answers "how much wall time did this group cost", which is dominated by the
+    largest size — that is the point, it is where the time actually goes. The
+    geomean speedup answers "how much did a typical scenario move", weighting
+    every size equally. Reporting only one of them misleads.
+    """
+    ok = [s for s in scenarios if s.get("status") == "ok"]
+    if not ok:
+        return {}
+    b = sum(s["before_ms"] for s in ok)
+    a = sum(s["after_ms"] for s in ok)
+    sig = [s for s in ok if s.get("significant")]
+    return {
+        "before_ms": b,
+        "after_ms": a,
+        "delta_pct": (a - b) / b * 100.0 if b else None,
+        "geomean": _geomean([s["before_ms"] / s["after_ms"] for s in ok]),
+        "geomean_sig": (
+            _geomean([s["before_ms"] / s["after_ms"] for s in sig])
+            if sig
+            else None
+        ),
+        "n_sig": len(sig),
+        "n": len(ok),
+    }
+
+
+def _tiered_table(operators: list[dict]) -> list[str]:
+    """Operator -> scenario -> size, one table, coarsest tier first."""
+    out = [
+        "## Results",
+        "",
+        "Three tiers per operator: the operator as a whole, each scenario "
+        "variant, then each size. Rollup rows sum the timings of their "
+        "children and carry a geomean; `sig` counts scenarios whose delta "
+        "cleared their own noise band, and only those are evidence.",
+        "",
+        "| operator | scenario | size | before ms | after ms | Δ % | "
+        "±noise % | speedup | sig |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | :--: |",
+    ]
+    # Most-improved first so real wins surface; ties fall back to name.
+    def order(op):
+        r = _rollup(op["scenarios"])
+        return (-(r.get("geomean_sig") or 0.0), op["operator"])
+
+    for op in sorted(operators, key=order):
+        ok = [s for s in op["scenarios"] if s.get("status") == "ok"]
+        top = _rollup(op["scenarios"])
+        if not top:
+            out.append(
+                f"| **{op['operator']}** | — | — | — | — | — | — | — | — |"
             )
-        else:
-            head += " — **no scenario cleared its noise band**"
+            continue
+        flag = ""
+        if op.get("checksum_match") is False:
+            flag = " ⚠"
         if op.get("before_cached"):
-            head += "  [cached baseline]"
-        if op["checksum_match"] is not None:
-            head += (
-                "  (outputs byte-identical)"
-                if op["checksum_match"]
-                else "  (**outputs DIFFER**)"
-            )
-        lines += [head, ""]
-        lines += [
-            "| scenario | before ms | after ms | Δ ms | Δ % | ±noise % | "
-            "speedup |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
-        ]
+            flag += " ᶜ"
+        gsig = (
+            f"**{top['geomean_sig']:.2f}x**"
+            if top["geomean_sig"]
+            else f"{top['geomean']:.2f}x"
+        )
+        out.append(
+            f"| **{op['operator']}**{flag} | **(all)** | **(all)** | "
+            f"{_fmt(top['before_ms'])} | {_fmt(top['after_ms'])} | "
+            f"{_fmt(top['delta_pct'], '{:+.1f}')} | | {gsig} | "
+            f"**{top['n_sig']}/{top['n']}** |"
+        )
+
+        variants = sorted({s.get("variant") or "—" for s in ok})
+        for v in variants:
+            grp = [s for s in ok if (s.get("variant") or "—") == v]
+            r = _rollup(grp)
+            # Collapse the middle tier when it would just restate the operator
+            # row: one variant covering every scenario adds a row and no
+            # information.
+            if len(variants) > 1:
+                out.append(
+                    f"| | **{v}** | (all) | {_fmt(r['before_ms'])} | "
+                    f"{_fmt(r['after_ms'])} | "
+                    f"{_fmt(r['delta_pct'], '{:+.1f}')} | | "
+                    f"{r['geomean']:.2f}x | {r['n_sig']}/{r['n']} |"
+                )
+            for s in sorted(grp, key=lambda s: _size_key(s.get("size_id") or "")):
+                mark = "" if s["significant"] else " _(noise)_"
+                out.append(
+                    f"| | | {s.get('size_id') or '—'} | "
+                    f"{_fmt(s['before_ms'])} | {_fmt(s['after_ms'])} | "
+                    f"{_fmt(s['delta_pct'], '{:+.1f}')}{mark} | "
+                    f"{_fmt(s['noise_pct'], '{:.1f}')} | "
+                    f"{_fmt(s['speedup'], '{:.2f}x')} | "
+                    f"{'YES' if s['significant'] else '·'} |"
+                )
+        # Scenarios the run could not pair up are reported, never dropped.
         for s in op["scenarios"]:
-            if s["status"] != "ok":
-                lines.append(
-                    f"| `{s['scenario_id']}` | — | — | — | — | — | "
+            if s.get("status") != "ok":
+                out.append(
+                    f"| | `{s['scenario_id']}` | — | — | — | — | — | — | "
                     f"{s['status']} |"
                 )
-                continue
-            mark = "" if s["significant"] else " _(noise)_"
-            lines.append(
-                f"| `{s['scenario_id']}` | {_fmt(s['before_ms'])} | "
-                f"{_fmt(s['after_ms'])} | {_fmt(s['delta_ms'], '{:+.3f}')} | "
-                f"{_fmt(s['delta_pct'], '{:+.1f}')}{mark} | "
-                f"{_fmt(s['noise_pct'], '{:.1f}')} | "
-                f"{_fmt(s['speedup'], '{:.2f}x')} |"
-            )
-        lines.append("")
-    return "\n".join(lines)
+    out.append("")
+    out.append(
+        "⚠ outputs differ between builds · ᶜ baseline came from cache"
+    )
+    out.append("")
+    return out
+
 
 
 def _git_describe(path: Path) -> str:
