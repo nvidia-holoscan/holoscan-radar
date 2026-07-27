@@ -59,5 +59,5 @@ def load_config(path: Path) -> AppConfig:
     cfg = AppConfig(**vars(common), scene=scene)
     # READ-ONLY MIRROR of the cfar_detector operator block: peak_only stays a
     # native CFAR param (from_config); the app reads it only to gate the graph.
-    cfg.peak_only = bool(root.get("cfar_detector", {}).get("peak_only", False))
+    cfg.peak_only = bool((root.get("cfar_detector") or {}).get("peak_only", False))
     return cfg

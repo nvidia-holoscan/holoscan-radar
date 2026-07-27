@@ -151,7 +151,7 @@ visualization:
 # Saves the probe's startup cost on hosts known to have a working display,
 # but if none is available the app aborts mid-graph instead of falling back
 # to running without the window.
-skip_display_check: true
+skip_display_check: false
 
 # Render Holoviz offscreen (no window). Lets the visual pipeline run on a
 # display-less host (CI, headless dev boxes); the startup display probe is

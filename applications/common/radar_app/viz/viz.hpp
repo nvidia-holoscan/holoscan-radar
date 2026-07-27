@@ -396,6 +396,11 @@ class ClusterOverlayOp : public holoscan::Operator {
     auto labels = radar::receive_optional(op_input, "labels", who);
     auto rep_idx = radar::receive_optional(op_input, "rep_idx", who);
     auto rd_map = radar::receive_single(op_input, "rd_maps", who);
+    // Drain the physical-bin queues every tick (upstream emits them each
+    // frame); they are only *consumed* once, to build the axis ticks below.
+    auto range_bins = radar::receive_optional(op_input, "range_bins", who);
+    auto velocity_bins =
+        radar::receive_optional(op_input, "velocity_bins", who);
     const bool have_labels = static_cast<bool>(labels);
 
     // Cache the RD-map axis extents once (constant per run) from the optional
@@ -405,9 +410,6 @@ class ClusterOverlayOp : public holoscan::Operator {
     // at the top (so the top edge = velocity_bins[0], the bottom edge = the
     // last bin). See emit_rd_axes for the tick placement.
     if (!axes_set_) {
-      auto range_bins = radar::receive_optional(op_input, "range_bins", who);
-      auto velocity_bins =
-          radar::receive_optional(op_input, "velocity_bins", who);
       if (range_bins && velocity_bins) {
         const auto ends = [&](const std::shared_ptr<holoscan::Tensor>& t,
                               const char* name, float* first, float* last) {

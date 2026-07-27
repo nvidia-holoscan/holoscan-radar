@@ -139,6 +139,9 @@ class DetectionReportOp : public holoscan::Operator {
     const auto copy_d2h =
         [](const char* name, void* dst,
            const std::shared_ptr<holoscan::Tensor>& t) {
+          if (t->nbytes() == 0) {
+            return;
+          }
           if (cudaMemcpy(dst, t->data(), static_cast<size_t>(t->nbytes()),
                          cudaMemcpyDeviceToHost) != cudaSuccess) {
             throw std::runtime_error(std::string("DetectionReportOp: ") + name +

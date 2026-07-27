@@ -5,26 +5,6 @@ records the intent and the reason it was deferred, so it can be picked up
 without re-litigating the design. Remove items when they land (note the
 commit in the PR).
 
-## 3. CFAR peak_only mode — dense per-detection score
-
-**Status:** open — one optional enhancement; the mode itself is complete (C++ +
-Python).
-
-The `peak_only` app mode (forward `CFARDetectorOp.peak_only`; drop the DBSCAN
-clustering + reduction stages and report the CFAR peaks directly) is in all four
-**C++ and Python** apps (`fmcw_siso`, `fmcw_simo`, `fmcw_mimo`,
-`fmcw_dense_simo`), plus the shared `radar_app` ops (`DetectionReportOp` optional
-`detection_score` / `aoa_estimates`; optional `labels` on `ClusterOverlayOp` /
-`BoresightViewOp`).
-
-Remaining optional follow-up:
-
-- **Dense `peak_only` score:** the dense report omits the per-detection score
-  because dense CFAR's `detection_score` is a rank-4 per-beam cube with no 2-D
-  map to index. If a per-detection score is wanted, extend `AnglePeakPickOp` to
-  emit the peak beam's score `(M,)` and teach `DetectionReportOp` to accept a
-  per-detection score vector.
-
 ## 1. GUI visual refinement
 
 **Status:** open — low-priority polish; agreed to defer until core signal
@@ -64,3 +44,23 @@ Candidate approaches (not chosen):
 Whichever approach, the dynamic-range policy should be configurable via YAML
 and shared across apps via `radar_app` so it does not need to be re-implemented
 per demo.
+
+## 3. CFAR peak_only mode — dense per-detection score
+
+**Status:** open — one optional enhancement; the mode itself is complete (C++ +
+Python).
+
+The `peak_only` app mode (forward `CFARDetectorOp.peak_only`; drop the DBSCAN
+clustering + reduction stages and report the CFAR peaks directly) is in all four
+**C++ and Python** apps (`fmcw_siso`, `fmcw_simo`, `fmcw_mimo`,
+`fmcw_dense_simo`), plus the shared `radar_app` ops (`DetectionReportOp` optional
+`detection_score` / `aoa_estimates`; optional `labels` on `ClusterOverlayOp` /
+`BoresightViewOp`).
+
+Remaining optional follow-up:
+
+- **Dense `peak_only` score:** the dense report omits the per-detection score
+  because dense CFAR's `detection_score` is a rank-4 per-beam cube with no 2-D
+  map to index. If a per-detection score is wanted, extend `AnglePeakPickOp` to
+  emit the peak beam's score `(M,)` and teach `DetectionReportOp` to accept a
+  per-detection score vector.

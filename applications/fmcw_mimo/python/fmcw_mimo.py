@@ -88,7 +88,6 @@ from common.python.ops import TensorMapDiscardOp  # noqa: E402
 
 install_matx_cache_atexit()
 
-K_NUM_CLUSTER_COLORS = 30
 K_NOISE_LAYER_NAME = "noise"
 K_RANGE_PLOT_LAYER = "range_plot"
 K_VELOCITY_PLOT_LAYER = "velocity_plot"
