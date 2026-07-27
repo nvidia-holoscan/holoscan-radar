@@ -102,6 +102,16 @@ struct CfarAlphaLutKey {
 //                       ⇔ detected, doubles as the per-detection strength.
 // Out: noise_estimate  — float32/float64, same shape as detection_mask.
 //                       Per-cell training-cell noise (N cells).
+// Out: cfar_power      — float32/float64, same shape as detection_mask. The
+//                       exact surface the threshold is applied to: the
+//                       post-NCI integrated power sum_k |x_k|^2 over the
+//                       nci_axes fold, or the plain square-law power map
+//                       |x|^2 when nci_axes is empty. Power, not amplitude,
+//                       and NOT noise-normalized (that is detection_score).
+//                       Emitted as the operator's own workspace buffer with
+//                       no copy, so a consumer must treat it as read-only and
+//                       valid only for the current tick — it is ping-ponged
+//                       and overwritten two ticks later.
 // Out: detection_idx   — int64, (num_detections, 2 [+ n_batch]),
 //                       (doppler_bin, range_bin) per row. Always emitted,
 //                       sized to the detection count and reallocated per

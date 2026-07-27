@@ -440,10 +440,10 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
     }
 
     if (cfg.visualize) {
-      // NCI over the RX axis: display the same surface CFAR
-      // thresholds (nci_axes: [0]), so the picture and the overlaid
-      // detections come from the same data.
-      auto rd_nci = make_operator<RdNciOp>("rd_nci");
+      // The RD display is CFAR's own thresholded surface (cfar_power:
+      // post-NCI integrated power here), so the picture and the overlaid
+      // detections are literally the same data — no re-derivation that
+      // could drift from the detector's nci_axes / nci_fold.
       auto to_image = make_operator<RdMapToImageOp>("rd_map_to_image");
       auto overlay = make_operator<ClusterOverlayOp>("cluster_overlay");
 
@@ -534,8 +534,7 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
         boresight->marker_segments = cfg.viz.marker_segments;
       }
 
-      add_flow(doppler, rd_nci, {{"rd_maps", "rd_maps"}});
-      add_flow(rd_nci, to_image, {{"rd_map", "rd_maps"}});
+      add_flow(cfar, to_image, {{"cfar_power", "rd_maps"}});
       add_flow(to_image, visualizer, {{"rd_image", "receivers"}});
       // The active-estimator caption: its text position rides `receivers`; its
       // spec closes the input_specs chain assembled below.
@@ -547,7 +546,7 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
       // stable across frames); in peak_only mode there are no labels, so all
       // three color each peak by its per-detection row index instead.
       add_flow(cfar, overlay, {{"detection_idx", "detection_idx"}});
-      add_flow(rd_nci, overlay, {{"rd_map", "rd_maps"}});
+      add_flow(cfar, overlay, {{"cfar_power", "rd_maps"}});
       // Physical axis bins for the RD-map tick labels (range X, velocity Y).
       add_flow(range, overlay, {{"range_bins", "range_bins"}});
       add_flow(doppler, overlay, {{"velocity_bins", "velocity_bins"}});

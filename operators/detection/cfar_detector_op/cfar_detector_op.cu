@@ -256,6 +256,19 @@ void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
   spec.output<holoscan::TensorMap>("detection_score");
   spec.output<holoscan::TensorMap>("noise_estimate");
   spec.output<holoscan::TensorMap>("detection_idx");
+  // The exact surface the threshold is applied to: the post-NCI integrated
+  // power when nci_axes is non-empty, else the plain square-law power map.
+  // Emitted every tick (the workspace buffer, no copy) so consumers such as
+  // the demo apps' RD display can show what the detector actually saw rather
+  // than re-deriving it.
+  //
+  // kNone drops the default DownstreamReceptiveSchedulingTerm, which is what
+  // makes this port genuinely optional: with the default term an unconnected
+  // output stops the operator from ever ticking ("No receiver connected to
+  // transmitter ... The entity will never tick"), so adding a mandatory output
+  // would break every existing consumer that does not drain it.
+  spec.output<holoscan::TensorMap>("cfar_power")
+      .condition(holoscan::ConditionType::kNone);
 
   spec.param(cfar_variant_, "cfar_variant", "CFAR variant",
              "Noise-estimation rule {CA, GO, SO, OS}. Static: selects the "
@@ -393,10 +406,19 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
     ws.noise = make_device_tensor(output_shape, real_dtype<T>());
     ws.mask = make_device_tensor(output_shape, kMaskDtype);
     ws.peak_mask = make_device_tensor(output_shape, kMaskDtype);
-    ws.power = make_device_tensor({plan.batch_in, num_doppler, num_range},
-                                 real_dtype<T>());
-    ws.integrated_power = make_device_tensor(
-        {plan.out_batch, num_doppler, num_range}, real_dtype<T>());
+    // Both buffers are written flat as (batch, doppler, range), so the
+    // declared shape is free — give whichever one carries the emitted
+    // cfar_power the full-rank output_shape so the port matches
+    // detection_score. When fold == 1 the CFAR surface is `power` itself
+    // (out_batch == batch_in is enforced by run_cfar_stage); when fold > 1 it
+    // is `integrated_power`. Emitting the buffer directly keeps the port
+    // zero-copy either way.
+    ws.power = make_device_tensor(
+        plan.fold > 1
+            ? std::vector<int64_t>{plan.batch_in, num_doppler, num_range}
+            : output_shape,
+        real_dtype<T>());
+    ws.integrated_power = make_device_tensor(output_shape, real_dtype<T>());
     ws.batch_in = plan.batch_in;
     ws.out_batch = plan.out_batch;
     ws.num_doppler = num_doppler;
@@ -711,7 +733,12 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
     op_output.set_cuda_stream(stream, "detection_score");
     op_output.set_cuda_stream(stream, "noise_estimate");
     op_output.set_cuda_stream(stream, "detection_idx");
+    op_output.set_cuda_stream(stream, "cfar_power");
   }
+  // The thresholded surface: integrated_power when the NCI fold ran, else the
+  // raw square-law power map (see the workspace allocation above).
+  emit_single(op_output, "cfar_power",
+              plan.fold > 1 ? integrated_power : power);
   emit_single(op_output, "detection_mask", det_mask_tensor);
   emit_single(op_output, "detection_score", score);
   emit_single(op_output, "noise_estimate", noise);

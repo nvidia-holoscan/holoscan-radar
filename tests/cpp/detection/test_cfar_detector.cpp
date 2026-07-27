@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -47,6 +48,7 @@ struct CfarOutputs {
   HostTensor score;
   HostTensor noise;
   HostTensor idx;
+  HostTensor power;  // cfar_power: the surface the threshold is applied to
 };
 
 // A flat power map at `floor` with optional (doppler, range) peaks at `peak`.
@@ -68,7 +70,7 @@ std::vector<double> power_map(
   return power_map(kDoppler, kRange, floor, targets, peak);
 }
 
-// Run the detector once over a prepared frame and capture all four outputs.
+// Run the detector once over a prepared frame and capture all five outputs.
 template <typename T, typename... Args>
 CfarOutputs run_cfar(std::shared_ptr<holoscan::Tensor> input, Args&&... args) {
   auto harness = create_operator_test<CFARDetectorOp<T>>(
@@ -80,6 +82,7 @@ CfarOutputs run_cfar(std::shared_ptr<holoscan::Tensor> input, Args&&... args) {
   TensorMapCapture score_cap;
   TensorMapCapture noise_cap;
   TensorMapCapture idx_cap;
+  TensorMapCapture power_cap;
   harness->template add_output_port<holoscan::TensorMap>(
       "detection_mask", mask_cap.validators());
   harness->template add_output_port<holoscan::TensorMap>(
@@ -88,6 +91,8 @@ CfarOutputs run_cfar(std::shared_ptr<holoscan::Tensor> input, Args&&... args) {
       "noise_estimate", noise_cap.validators());
   harness->template add_output_port<holoscan::TensorMap>(
       "detection_idx", idx_cap.validators());
+  harness->template add_output_port<holoscan::TensorMap>(
+      "cfar_power", power_cap.validators());
 
   harness->run_test();
 
@@ -95,10 +100,12 @@ CfarOutputs run_cfar(std::shared_ptr<holoscan::Tensor> input, Args&&... args) {
   EXPECT_EQ(score_cap.frames.size(), 1u);
   EXPECT_EQ(noise_cap.frames.size(), 1u);
   EXPECT_EQ(idx_cap.frames.size(), 1u);
+  EXPECT_EQ(power_cap.frames.size(), 1u);
   return {std::move(mask_cap.frames.front()),
           std::move(score_cap.frames.front()),
           std::move(noise_cap.frames.front()),
-          std::move(idx_cap.frames.front())};
+          std::move(idx_cap.frames.front()),
+          std::move(power_cap.frames.front())};
 }
 
 // Common CA arguments: guard (1,1), training (2,2).
@@ -388,6 +395,79 @@ TEST(CFARDetectorOpTest, ComplexInputFormsPower) {
   EXPECT_EQ(rows[1], rt);
   const auto* noise = out.noise.as<double>();
   EXPECT_NEAR(noise[0], 1.0, 1e-9);
+}
+
+// --- cfar_power: the emitted thresholded surface --------------------------
+
+// With nci_axes empty the surface is the plain square-law power map, so
+// cfar_power must equal |x|^2 cell for cell.
+TEST(CFARDetectorOpTest, CfarPowerIsSquareLawPowerWithoutNci) {
+  const int64_t dt = 5;
+  const int64_t rt = 20;
+  std::vector<std::complex<double>> cube(
+      static_cast<size_t>(kDoppler * kRange), std::complex<double>(1.0, 0.0));
+  cube[static_cast<size_t>(dt * kRange + rt)] = std::complex<double>(3.0, 4.0);
+  auto input = to_device_tensor<std::complex<double>>(
+      cube, {kDoppler, kRange}, complex_dtype<double>());
+
+  const auto out = std::apply(
+      [&](auto&&... a) {
+        return run_cfar<double>(input, std::forward<decltype(a)>(a)...);
+      },
+      ca_args(1e-3));
+
+  ASSERT_EQ(out.power.shape, (std::vector<int64_t>{kDoppler, kRange}));
+  ASSERT_EQ(out.power.shape, out.score.shape);  // contract: same as the maps
+  const auto* p = out.power.as<double>();
+  for (int64_t i = 0; i < kDoppler * kRange; ++i) {
+    EXPECT_NEAR(p[i], std::norm(cube[static_cast<size_t>(i)]), 1e-9) << i;
+  }
+  EXPECT_NEAR(p[dt * kRange + rt], 25.0, 1e-9);  // |3+4i|^2
+}
+
+// With nci_axes = [0] over a rank-3 cube, the surface is the NCI sum, and the
+// channel axis is folded away — cfar_power is rank-2 and equals sum_k |x_k|^2.
+TEST(CFARDetectorOpTest, CfarPowerIsNciSumOverFold) {
+  constexpr int64_t kChannels = 4;
+  const int64_t dt = 5;
+  const int64_t rt = 20;
+  // Channel k has a constant background of (k + 1), so the NCI sum is a known
+  // closed form: sum_k (k + 1)^2 = 1 + 4 + 9 + 16 = 30.
+  std::vector<std::complex<double>> cube(
+      static_cast<size_t>(kChannels * kDoppler * kRange));
+  for (int64_t k = 0; k < kChannels; ++k) {
+    for (int64_t i = 0; i < kDoppler * kRange; ++i) {
+      cube[static_cast<size_t>(k * kDoppler * kRange + i)] =
+          std::complex<double>(static_cast<double>(k + 1), 0.0);
+    }
+    cube[static_cast<size_t>(k * kDoppler * kRange + dt * kRange + rt)] =
+        std::complex<double>(10.0, 0.0);
+  }
+  auto input = to_device_tensor<std::complex<double>>(
+      cube, {kChannels, kDoppler, kRange}, complex_dtype<double>());
+
+  const auto out = run_cfar<double>(
+      input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
+      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
+      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
+      holoscan::Arg("pfa") = 1e-3,
+      holoscan::Arg("nci_axes") = std::vector<int64_t>{0},
+      holoscan::Arg("nci_fold") = kChannels);
+
+  // The folded axis is gone: rank-2, matching the other dense maps.
+  ASSERT_EQ(out.power.shape, (std::vector<int64_t>{kDoppler, kRange}));
+  ASSERT_EQ(out.power.shape, out.score.shape);
+  const auto* p = out.power.as<double>();
+  EXPECT_NEAR(p[0], 30.0, 1e-9);                        // background NCI sum
+  EXPECT_NEAR(p[dt * kRange + rt], 400.0, 1e-9);        // 4 * |10|^2
+
+  // And it is the surface the detector thresholded: the detection cell is the
+  // cfar_power maximum.
+  ASSERT_EQ(num_detections(out.idx), 1);
+  const int64_t peak =
+      static_cast<int64_t>(std::max_element(p, p + kDoppler * kRange) - p);
+  const auto* rows = out.idx.as<int64_t>();
+  EXPECT_EQ(peak, rows[0] * kRange + rows[1]);
 }
 
 // --- max_detections cap ---------------------------------------------------
