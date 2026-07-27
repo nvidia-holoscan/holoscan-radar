@@ -137,6 +137,38 @@ So the default is both roughly half the wall time *and* a tighter band. Raise
 `--frames`/`--repeats` only when you specifically care about within-launch
 frame-to-frame jitter.
 
+#### Runtime pre-estimate (the probe)
+
+Before measuring, the script probes each operator once at `--warmup 1
+--frames 2` and predicts its per-launch cost, so the plan line carries an
+`estimated runtime` and the ETA is meaningful from the first launch instead of
+after the first surprise. Disable with `--no-probe`.
+
+The prediction is analytic, not an extrapolation of the probe's wall time. A
+launch costs `Σ_scenarios(setup + (warmup + frames×repeats) × per_frame)`, and
+the probe's own report already separates `setup_ms` from `median_ms`. Two
+corrections were needed to make it usable:
+
+* **Process overhead.** CUDA context init, graph construction and teardown
+  never appear in the report and dominate cheap operators. Ignoring them
+  under-predicted by ~4x. The probe measures its own wall time, subtracts what
+  the report accounts for, and carries the remainder as a per-launch constant.
+* **Cold `median_ms`.** The probe measures per-frame cost cold, so it runs
+  high. A running `median(actual / predicted)` over completed operators
+  calibrates the remaining estimates.
+
+Measured against a full 16-operator run: 13 of 16 predictions within ±25%, and
+the expensive operator correctly ranked first (73 s/launch predicted vs 41 s
+for the runner-up) *before* it ran. Whole-run prediction was 32 min against
+43 min actual — good enough for pacing, not a promise.
+
+**Cost is ~4.7% of a cold run** (122 s of a 43 min sweep) and zero once the
+cache is warm, since cached entries carry their own `launch_seconds`. Two
+things keep it honest: only one side is probed (round 0 is discarded, so the
+warming asymmetry is absorbed before anything is scored), and `--warmup 1` is
+the floor — at `--warmup 0` a single cold frame measured 6.96 ms against a
+0.25 ms steady state.
+
 #### Cost is not uniform across operators
 
 `perf_mimo_coherent_compensation` is the outlier: `--sizes` gives it **three**

@@ -209,14 +209,20 @@ class _Progress:
     operators complete.
     """
 
-    def __init__(self, plan: list[tuple[str, int]], style: str):
-        # plan is [(operator, launches)] — launches vary because a cached
-        # baseline halves an operator's work.
+    def __init__(self, plan: list[tuple[str, int, float | None]], style: str):
+        # plan is [(operator, launches, est_seconds_per_launch|None)].
+        # Launches vary because a cached baseline halves an operator's work;
+        # est comes from the probe pass or the cache, and is None when neither
+        # had anything to say.
         self.plan = plan
         self.total_ops = len(plan)
         self.per_op = plan[0][1] if plan else 0
-        self.total = sum(n for _, n in plan)
+        self.total = sum(n for _, n, _e in plan)
         self.done = 0
+        # (predicted, actual) per completed operator, for calibrating the
+        # estimates: the probe measures per-frame cost cold, so it tends to
+        # run high, and a single global factor corrects most of that.
+        self._calib: list[tuple[float, float]] = []
         self.t0 = time.monotonic()
         self.op_times: list[float] = []  # current operator's launch durations
         self.all_times: list[float] = []
@@ -231,16 +237,34 @@ class _Progress:
             return None
         global_mean = statistics.fmean(self.all_times)
         op_mean = statistics.fmean(self.op_times) if self.op_times else None
-        # Launches left on the operator currently in flight, costed from its
-        # own observed rate.
+        k = self._calibration()
+        # Launches left on the operator currently in flight: prefer its own
+        # observed rate, fall back to its calibrated estimate.
         left_here = self.per_op - len(self.op_times)
-        # Launches belonging to operators not yet started, costed from the
-        # global mean — the estimator has no per-operator prior for those, so
-        # a heavily skewed workload is under-estimated until it is reached.
-        left_after = sum(n for _, n in self.plan[self.op_index :])
-        return (left_here * (op_mean or global_mean)) + (
-            left_after * global_mean
+        here_rate = op_mean or self._rate(self.op_index, k, global_mean)
+        # Operators not yet started are costed from their probe/cache estimate
+        # where one exists; without it there is no per-operator prior and a
+        # skewed workload is under-estimated until it is reached.
+        left_after = sum(
+            n * self._rate(i, k, global_mean)
+            for i, (_o, n, _e) in enumerate(
+                self.plan[self.op_index :], start=self.op_index + 1
+            )
         )
+        return left_here * here_rate + left_after
+
+    def _rate(self, index: int, k: float, fallback: float) -> float:
+        """Calibrated per-launch estimate for the 1-based index'th operator."""
+        if 1 <= index <= len(self.plan):
+            est = self.plan[index - 1][2]
+            if est:
+                return est * k
+        return fallback
+
+    def _calibration(self) -> float:
+        """median(actual / predicted) over completed operators; 1.0 if none."""
+        ratios = [a / p for p, a in self._calib if p > 0 and a > 0]
+        return statistics.median(ratios) if ratios else 1.0
 
     # -- reporting ---------------------------------------------------------
     def _line(self) -> str:
@@ -271,10 +295,17 @@ class _Progress:
 
     def start_operator(self, index: int) -> None:
         """Begin the 1-based index'th operator of the plan."""
-        self.op_name, self.per_op = self.plan[index - 1]
+        self._close_operator()
+        self.op_name, self.per_op, self._op_est = self.plan[index - 1]
         self.op_index = index
         self.op_times = []
         self._emit()
+
+    def _close_operator(self) -> None:
+        """Feed the operator just finished into the calibration sample."""
+        est = getattr(self, "_op_est", None)
+        if est and self.op_times:
+            self._calib.append((est, statistics.fmean(self.op_times)))
 
     def launch_done(self, seconds: float) -> None:
         self.done += 1
@@ -287,11 +318,11 @@ class _Progress:
         self.total = max(self.done, self.total - launches_skipped)
         self._emit()
 
-    def revise_plan(self, plan: list[tuple[str, int]]) -> None:
+    def revise_plan(self, plan: list[tuple[str, int, float | None]]) -> None:
         """Replace the remaining plan (e.g. the canary invalidated the cache)."""
         self.plan = plan
         self.total_ops = len(plan)
-        self.total = sum(n for _, n in plan)
+        self.total = sum(n for _, n, _e in plan)
 
     def note(self, msg: str) -> None:
         """Print a message without clobbering an in-place bar."""
@@ -301,6 +332,7 @@ class _Progress:
         print(msg, flush=True)
 
     def finish(self) -> None:
+        self._close_operator()
         self._emit(final=True)
 
 
@@ -376,6 +408,94 @@ def _measure(
             medians.setdefault(sid, []).append(row["median_ms"])
             last_rows[sid] = row
     return medians, last_rows, sums
+
+
+def _predict_launch_seconds(
+    report: dict, warmup: int, frames: int, repeats: int
+) -> float:
+    """Predict the *measured* part of a launch from a cheap probe's report.
+
+    Extrapolating the probe's wall time would be wrong: a launch costs
+    ``sum_scenarios(setup + (warmup + frames*repeats) * per_frame)``, and setup
+    (FFT plan builds, allocations) is a fixed per-scenario cost that dominates a
+    2-frame probe. So predict analytically instead — the probe's report already
+    carries ``setup_ms`` and ``median_ms`` per scenario, which is exactly the
+    decomposition needed. Only ``median_ms`` is rough (measured cold), and that
+    is calibrated out against observed launches as the run proceeds.
+
+    This covers only what the report accounts for. Process overhead — CUDA
+    context init, Holoscan graph construction, teardown — never appears in the
+    report and dominates cheap operators (ignoring it under-predicted by ~4x on
+    a 4-operator xs,sm,md run), so the caller measures and adds it separately.
+    """
+    setup: dict[str, float] = {}
+    per_frame: dict[str, float] = {}
+    for r in report.get("results", []):
+        sid = r.get("scenario_id")
+        if sid is None:
+            continue
+        if r.get("setup_ms") is not None:
+            setup[sid] = setup.get(sid, 0.0) + r["setup_ms"]
+        if r.get("bucket") == _COMPUTE_BUCKET and r.get("median_ms") is not None:
+            per_frame[sid] = r["median_ms"]
+    n = warmup + frames * max(1, repeats)
+    total_ms = sum(
+        setup.get(sid, 0.0) + n * per_frame.get(sid, 0.0)
+        for sid in set(setup) | set(per_frame)
+    )
+    return total_ms / 1000.0
+
+
+def _probe_operators(
+    ops: list[str],
+    probe_bins: dict[str, Path],
+    sweep_flags: list[str],
+    sizes: str,
+    warmup: int,
+    frames: int,
+    repeats: int,
+) -> tuple[dict[str, float], float]:
+    """Cheap pre-pass estimating each operator's per-launch cost.
+
+    Probes with the *same* ``--sizes`` as the real run, so the scenario x size
+    structure that makes some operators expensive is preserved — a cheap
+    ``--sizes xs`` probe would miss exactly that.
+
+    Only one side is probed, which halves the cost. That is safe despite the
+    asymmetry it appears to introduce: round 0 is measured and discarded, so
+    every scored launch of *either* binary is already preceded by a launch of
+    that same binary in this session, and the probe's extra warming is absorbed
+    before anything counts. GPU-side state (clocks, persistence) is global and
+    affects both sides regardless.
+
+    ``--warmup 1 --frames 2`` is close to the accuracy floor: at ``--warmup 0``
+    a single cold frame measured 6.96 ms where steady state was 0.25 ms, which
+    would over-predict by more than an order of magnitude.
+    """
+    probe_args = ["--warmup", "1", "--frames", "2"]
+    if sizes:
+        probe_args += ["--sizes", sizes]
+    probe_args += sweep_flags
+
+    est: dict[str, float] = {}
+    t0 = time.monotonic()
+    for op in ops:
+        t_probe = time.monotonic()
+        try:
+            report, _ = _run_one(probe_bins[op], probe_args, checksum=False)
+        except RuntimeError:
+            continue  # unprobeable operator falls back to the global mean
+        wall = time.monotonic() - t_probe
+        # Whatever the probe's wall time exceeds its own accounted-for work by
+        # is process overhead (context init, graph build, teardown). That is a
+        # per-launch constant, so carry it into the prediction rather than
+        # scaling it with frame count.
+        accounted = _predict_launch_seconds(report, 1, 2, 1)
+        overhead = max(0.0, wall - accounted)
+        est[op] = overhead + _predict_launch_seconds(
+            report, warmup, frames, repeats
+        )
+    return est, time.monotonic() - t0
 
 
 def _geomean(values: list[float]) -> float:
@@ -754,6 +874,14 @@ def main(argv=None) -> int:
         "isatty (default)",
     )
     ap.add_argument(
+        "--no-probe",
+        action="store_true",
+        help="skip the cheap pre-pass that estimates each operator's cost. "
+        "The pass costs ~1%% of the run and makes the ETA meaningful from the "
+        "first launch; without it, a skewed workload is under-estimated until "
+        "the expensive operator is reached",
+    )
+    ap.add_argument(
         "--no-cache",
         action="store_true",
         help="always re-measure the before side in this session. Slower, but "
@@ -805,10 +933,12 @@ def main(argv=None) -> int:
         args += ["--repeats", str(a.repeats)]
     if a.sizes:
         args += ["--sizes", a.sizes]
+    sweep_flags = []
     if a.sweep_variants:
-        args.append("--sweep-variants")
+        sweep_flags.append("--sweep-variants")
     if a.sweep_overrides:
-        args.append("--sweep-overrides")
+        sweep_flags.append("--sweep-overrides")
+    args += sweep_flags
 
     style = a.progress
     if style == "auto":
@@ -846,8 +976,35 @@ def main(argv=None) -> int:
     def _launches(op: str) -> int:
         return after_only if (op in cached and op not in canaries) else both_sides
 
-    plan = [(op, _launches(op)) for op in ordered]
-    total_launches = sum(n for _, n in plan)
+    # --- per-operator cost estimates --------------------------------------
+    # A cached entry already knows what its operator costs; probe only what is
+    # left. With a fully warm cache the probe pass is skipped entirely.
+    est: dict[str, float] = {
+        op: e["launch_seconds"]
+        for op, e in cached.items()
+        if e.get("launch_seconds")
+    }
+    probe_secs = 0.0
+    unknown = [o for o in ordered if o not in est]
+    if unknown and not a.no_probe:
+        print(
+            f"probing {len(unknown)} operator(s) to estimate runtime ...",
+            flush=True,
+        )
+        probed, probe_secs = _probe_operators(
+            unknown,
+            before_bins,
+            sweep_flags,
+            a.sizes,
+            a.warmup,
+            a.frames,
+            a.repeats,
+        )
+        est.update(probed)
+
+    plan = [(op, _launches(op), est.get(op)) for op in ordered]
+    total_launches = sum(n for _, n, _e in plan)
+    predicted = sum(n * est[o] for o, n, _e in plan if o in est)
     saved = len(ops) * both_sides - total_launches
     cache_note = f"      cache: {len(cached)}/{len(ops)} baselines reused"
     if saved:
@@ -856,13 +1013,23 @@ def main(argv=None) -> int:
         cache_note += f", canary={', '.join(canaries)}"
     elif not cached:
         cache_note += " (cold cache — measuring both sides)"
+    if predicted > 0:
+        covered = sum(1 for o, _n, _e in plan if o in est)
+        est_note = (
+            f"      estimated runtime ~{_fmt_dur(predicted)} "
+            f"({covered}/{len(plan)} operators estimated"
+            + (f", probe cost {_fmt_dur(probe_secs)}" if probe_secs else "")
+            + ")"
+        )
+    else:
+        est_note = "      ETA appears once the first launch completes."
     print(
         f"plan: {len(ops)} operators, {total_launches} launches "
         f"({a.rounds} scored rounds + 1 warm-up)\n"
         f"      sizes={a.sizes} warmup={a.warmup} frames={a.frames} "
         f"repeats={a.repeats}\n"
         f"{cache_note}\n"
-        f"      ETA appears once the first launch completes.",
+        f"{est_note}",
         flush=True,
     )
 
@@ -900,8 +1067,8 @@ def main(argv=None) -> int:
                     cache_invalidated = True
                     cached = {}
                     plan = [
-                        (o, both_sides if j >= i else n)
-                        for j, (o, n) in enumerate(plan, start=1)
+                        (o, both_sides if j >= i else n, e)
+                        for j, (o, n, e) in enumerate(plan, start=1)
                     ]
                     prog.revise_plan(plan)
                     prog.note(
