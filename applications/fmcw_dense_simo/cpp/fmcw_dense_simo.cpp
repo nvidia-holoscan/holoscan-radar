@@ -33,7 +33,10 @@
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/fmcw_dense_simo/cpp/fmcw_dense_simo [config.yaml]
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <vector>
 
@@ -59,6 +62,24 @@
 
 namespace radar = holoscan::radar;
 using namespace holoscan::radar::app;  // NOLINT(build/namespaces)
+
+namespace {
+
+// Index of the grid angle closest to boresight (0 rad). Ties go to the lower
+// index; an empty grid can't happen (config.hpp requires both grids) but 0 is
+// a safe fallback.
+int64_t nearest_boresight(const std::vector<double>& angles) {
+  if (angles.empty()) {
+    return 0;
+  }
+  const auto best = std::min_element(
+      angles.begin(), angles.end(), [](double a, double b) {
+        return std::abs(a) < std::abs(b);
+      });
+  return static_cast<int64_t>(std::distance(angles.begin(), best));
+}
+
+}  // namespace
 
 class FmcwDenseSimoApp : public holoscan::Application {
  public:
@@ -188,7 +209,7 @@ class FmcwDenseSimoApp : public holoscan::Application {
     }
 
     if (cfg.visualize) {
-      compose_display(doppler, peak_pick, cluster, reduction, range);
+      compose_display(doppler, peak_pick, cluster, reduction, range, cfar);
     }
   }
 
@@ -203,9 +224,28 @@ class FmcwDenseSimoApp : public holoscan::Application {
       const std::shared_ptr<AnglePeakPickOp>& detections,
       const std::shared_ptr<radar::ClusterDBSCANOp<Precision>>& cluster,
       const std::shared_ptr<radar::DetectionReductionOp<Precision>>& reduction,
-      const std::shared_ptr<radar::FMCWRangeProcessorOp<Precision>>& range) {
+      const std::shared_ptr<radar::FMCWRangeProcessorOp<Precision>>& range,
+      const std::shared_ptr<radar::CFARDetectorOp<Precision>>& cfar) {
+    // Display CFAR's own thresholded surface (cfar_power) rather than a raw
+    // pre-beamforming RD map. On this path nci_axes is empty, so cfar_power is
+    // the per-beam power cube (num_az, num_el, num_doppler, num_range) — still
+    // one plane per beam, so pick the beam looking straight ahead: the grid
+    // cell nearest boresight in both axes.
+    //
+    // Caveat worth knowing when reading the display: AnglePeakPickOp collapses
+    // each detected RD cell to its *peak* beam, so the overlaid detections are
+    // a max-over-beams projection while the image is one fixed beam. An
+    // off-boresight target is therefore drawn over a cell attenuated by the
+    // beam pattern. For this 8x8 half-wavelength array with the Taylor 35 dB
+    // taper that costs 0.3-4.4 dB across the demo's three targets (all inside
+    // the mainlobe; the first null is at 0.253 rad), so they stay clearly
+    // visible — but a target out near the +/-0.3 rad grid edge would sit in
+    // the null and effectively vanish from the image while still being
+    // detected. Showing max-over-beams instead would match the detections
+    // exactly, at the cost of no longer being a physical beam.
     auto ch_slice = make_operator<RdChannelSliceOp>("rd_channel_slice");
-    ch_slice->channel = 0;
+    ch_slice->leading_index = {nearest_boresight(cfg.az_angles),
+                               nearest_boresight(cfg.el_angles)};
     auto to_image = make_operator<RdMapToImageOp>("rd_map_to_image");
     auto overlay = make_operator<ClusterOverlayOp>("cluster_overlay");
     // Peaked detection_idx (M, 4) -> (M, 2) trailing (doppler_bin, range_bin).
@@ -275,7 +315,7 @@ class FmcwDenseSimoApp : public holoscan::Application {
       boresight->marker_segments = cfg.viz.marker_segments;
     }
 
-    add_flow(doppler, ch_slice, {{"rd_maps", "rd_maps"}});
+    add_flow(cfar, ch_slice, {{"cfar_power", "rd_maps"}});
     add_flow(ch_slice, to_image, {{"rd_map", "rd_maps"}});
     add_flow(to_image, visualizer, {{"rd_image", "receivers"}});
     add_flow(detections, det_idx_rd, {{"detection_idx", "idx"}});

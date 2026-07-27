@@ -202,11 +202,15 @@ void bind_radar_app(py::module_& m) {
   py::class_<RdChannelSliceOp, PyRdChannelSliceOp, Operator,
              std::shared_ptr<RdChannelSliceOp>>(
       m, "RdChannelSliceOp",
-      "Extract one RX channel from a rank-3 RD map for visualization.")
+      "Slice one rank-2 (doppler, range) plane out of a batched map. Use "
+      "`channel` for a rank-3 (N_ch, D, R) input, or `leading_index` (one "
+      "entry per leading axis) for higher ranks such as the dense path's "
+      "(az, el, D, R) cube.")
       .def(py::init<Fragment*, const py::args&, int64_t, const std::string&>(),
            py::arg("fragment"), py::arg("channel") = 0,
            py::arg("name") = "rd_channel_slice")
       .def_readwrite("channel", &RdChannelSliceOp::channel)
+      .def_readwrite("leading_index", &RdChannelSliceOp::leading_index)
       .def("setup", &RdChannelSliceOp::setup, py::arg("spec"));
 
   py::class_<RdMapToImageOp, PyRdMapToImageOp, Operator,

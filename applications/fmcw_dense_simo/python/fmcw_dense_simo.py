@@ -91,6 +91,14 @@ K_BORESIGHT_PLOT_LAYER = "boresight_plot"
 K_BORESIGHT_TITLE_LAYER = "boresight_title"
 
 
+def _nearest_boresight(angles: list[float]) -> int:
+    """Index of the grid angle closest to boresight (0 rad); ties take the lower
+    index. Mirrors nearest_boresight() in the C++ app."""
+    if not angles:
+        return 0
+    return min(range(len(angles)), key=lambda i: abs(angles[i]))
+
+
 class FmcwDenseSimoApp(Application):
     def __init__(self, cfg: config.AppConfig):
         super().__init__()
@@ -225,11 +233,29 @@ class FmcwDenseSimoApp(Application):
             self.add_flow(doppler, det_report, {("velocity_bins", "velocity_bins")})
 
         if cfg.visualize:
-            self._compose_display(doppler, peak_pick, cluster, reduction, range_op)
+            self._compose_display(doppler, peak_pick, cluster, reduction, range_op, cfar)
 
-    def _compose_display(self, doppler, detections, cluster, reduction, range_op):
+    def _compose_display(self, doppler, detections, cluster, reduction, range_op, cfar):
         cfg = self.cfg
-        ch_slice = RdChannelSliceOp(self, channel=0, name="rd_channel_slice")
+        # Display CFAR's own thresholded surface (cfar_power) rather than a raw
+        # pre-beamforming RD map. nci_axes is empty on this path, so cfar_power
+        # is the per-beam power cube (num_az, num_el, num_doppler, num_range) —
+        # still one plane per beam, so pick the beam looking straight ahead: the
+        # grid cell nearest boresight in both axes.
+        #
+        # Caveat worth knowing when reading the display: AnglePeakPickOp
+        # collapses each detected RD cell to its *peak* beam, so the overlaid
+        # detections are a max-over-beams projection while the image is one
+        # fixed beam. An off-boresight target is drawn over a cell attenuated by
+        # the beam pattern - 0.3-4.4 dB for the demo's three targets on this
+        # 8x8 array (all inside the mainlobe; first null at 0.253 rad), but a
+        # target near the +/-0.3 rad grid edge would sit in the null and vanish
+        # from the image while still being detected.
+        ch_slice = RdChannelSliceOp(self, name="rd_channel_slice")
+        ch_slice.leading_index = [
+            _nearest_boresight(cfg.az_angles),
+            _nearest_boresight(cfg.el_angles),
+        ]
         to_image = RdMapToImageOp(self, name="rd_map_to_image")
         overlay = ClusterOverlayOp(self, name="cluster_overlay")
         overlay.view_aspect = rd_map_view_aspect(
@@ -326,7 +352,7 @@ class FmcwDenseSimoApp(Application):
             name="holoviz",
         )
 
-        self.add_flow(doppler, ch_slice, {("rd_maps", "rd_maps")})
+        self.add_flow(cfar, ch_slice, {("cfar_power", "rd_maps")})
         self.add_flow(ch_slice, to_image, {("rd_map", "rd_maps")})
         self.add_flow(to_image, visualizer, {("rd_image", "receivers")})
         self.add_flow(detections, det_idx_rd, {("detection_idx", "idx")})

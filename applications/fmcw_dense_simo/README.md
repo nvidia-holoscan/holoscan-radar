@@ -43,10 +43,20 @@ With `visualization.enabled: true` (and a reachable display, or `headless: true`
 offscreen rendering) the app opens a Holoviz window reusing the app-agnostic
 `radar_app/viz` operators unchanged:
 
-- **Left:** the channel-0 range–Doppler map (turbo colormap) with CFAR
-  detections drawn as cluster-colored dots. Note this app detects on the
-  *beamformed* RDA cube (`nci_axes: []`), so the displayed map is not the
-  surface the detections came from — see the open item below.
+- **Left:** the range–Doppler map (turbo colormap) with CFAR detections drawn
+  as cluster-colored dots. This app detects on the *beamformed* RDA cube
+  (`nci_axes: []`), so `CFARDetectorOp.cfar_power` is a per-beam power cube
+  `(num_az, num_el, num_doppler, num_range)` rather than a single map. The
+  display takes the beam nearest boresight — the grid cell closest to 0 rad in
+  both axes — so it is the detector's own power domain, looking straight ahead.
+  Because `AnglePeakPickOp` collapses each detected RD cell to its *peak* beam,
+  the overlaid detections are a max-over-beams projection while the image is
+  one fixed beam: an off-boresight target is drawn over a cell attenuated by
+  the beam pattern. On this 8×8 half-wavelength array with the Taylor 35 dB
+  taper that is 0.3–4.4 dB for the demo's three targets (all well inside the
+  mainlobe — the first null is at 0.253 rad), but a target out near the ±0.3
+  rad grid edge would sit in the null and disappear from the image while still
+  being detected.
 - **Right (stacked):** range-vs-time and velocity-vs-time rolling plots of the
   per-cluster representative, and a boresight azimuth/elevation scatter of those
   same per-cluster representatives (the angle information the dense path adds) —

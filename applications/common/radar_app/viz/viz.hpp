@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -91,18 +92,32 @@ inline void emit_rd_axes(holoscan::TensorMap& out,
                          const std::string& title, float px_height,
                          float box_aspect);
 
-// Extract one RX channel from a per-channel RD map for visualization. SIMO
-// rd_maps are (N_rx, num_doppler, num_range); Holoviz helpers expect rank-2
-// (num_doppler, num_range). A single channel is a debug display only, and it
-// does NOT match what the detector sees when CFAR integrates over the channel
-// axis. Prefer feeding RdMapToImageOp from CFARDetectorOp's `cfar_power`
-// output, which is the thresholded surface itself, whatever nci_axes says.
+// Slice one rank-2 (num_doppler, num_range) plane out of a batched map for
+// visualization — Holoviz helpers want rank-2 while the pipeline carries a
+// leading batch. Rank-agnostic in both the leading rank and the dtype: the
+// trailing plane is contiguous, so this is an offset plus a straight D2D copy
+// of `plane` elements, whatever the element type.
+//
+//   rank-3 (N_ch, D, R)      — pick an RX / virtual channel: `channel`.
+//   rank-N (..., D, R)       — pick any leading cell: `leading_index`, one
+//                              entry per leading axis (e.g. {i_az, i_el} on the
+//                              dense path's (az, el, D, R) cube).
+//
+// `leading_index` wins when non-empty; `channel` is the rank-3 shorthand.
+//
+// A single plane is one look at the data. When the detector integrates or
+// collapses across the leading axes, this is NOT what it saw — prefer
+// CFARDetectorOp's `cfar_power` output, which is the thresholded surface
+// itself. (Slicing `cfar_power` is still a single beam/channel of it, but at
+// least it is the detector's own power domain: see the dense app, where the
+// beam nearest boresight is chosen deliberately.)
 class RdChannelSliceOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(RdChannelSliceOp)
   RdChannelSliceOp() = default;
 
   int64_t channel{0};
+  std::vector<int64_t> leading_index;  // one index per leading axis
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("rd_maps");
@@ -116,36 +131,49 @@ class RdChannelSliceOp : public holoscan::Operator {
     auto rd_maps =
         radar::receive_single(op_input, "rd_maps", "RdChannelSliceOp");
     const auto& shape = rd_maps->shape();
-    if (shape.size() != 3) {
+    if (shape.size() < 3) {
       throw std::runtime_error(
-          "RdChannelSliceOp: expected rank-3 (N_rx, D, R), got rank " +
+          "RdChannelSliceOp: expected rank >= 3 (..., D, R), got rank " +
           std::to_string(shape.size()));
     }
-    const int64_t num_rx = shape[0];
-    const int64_t num_doppler = shape[1];
-    const int64_t num_range = shape[2];
-    if (channel < 0 || channel >= num_rx) {
-      throw std::runtime_error("RdChannelSliceOp: channel out of range");
+    const size_t n_leading = shape.size() - 2;
+    const int64_t num_doppler = shape[shape.size() - 2];
+    const int64_t num_range = shape[shape.size() - 1];
+
+    const std::vector<int64_t> index =
+        leading_index.empty() ? std::vector<int64_t>{channel} : leading_index;
+    if (index.size() != n_leading) {
+      throw std::runtime_error(
+          "RdChannelSliceOp: leading_index has " +
+          std::to_string(index.size()) + " entries, input has " +
+          std::to_string(n_leading) + " leading axes");
+    }
+    // Row-major fold of the leading multi-index into a plane number.
+    int64_t linear = 0;
+    for (size_t i = 0; i < n_leading; ++i) {
+      if (index[i] < 0 || index[i] >= shape[i]) {
+        throw std::runtime_error(
+            "RdChannelSliceOp: leading index " + std::to_string(index[i]) +
+            " out of range for axis " + std::to_string(i) + " (extent " +
+            std::to_string(shape[i]) + ")");
+      }
+      linear = linear * shape[i] + index[i];
     }
 
-    const size_t plane = static_cast<size_t>(num_doppler * num_range);
-    std::vector<std::complex<float>> host(plane);
-    const auto* src = static_cast<const std::complex<float>*>(rd_maps->data());
+    const DLDataType dtype = rd_maps->dtype();
+    const size_t elem_size =
+        static_cast<size_t>(dtype.bits) / 8u * static_cast<size_t>(dtype.lanes);
+    const size_t plane_bytes =
+        static_cast<size_t>(num_doppler * num_range) * elem_size;
     if (cudaDeviceSynchronize() != cudaSuccess) {
       throw std::runtime_error("RdChannelSliceOp: device synchronize failed");
     }
-    if (cudaMemcpy(host.data(), src + channel * plane,
-                   plane * sizeof(std::complex<float>),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-      throw std::runtime_error("RdChannelSliceOp: D2H slice failed");
-    }
-
-    auto out = radar::make_device_tensor({num_doppler, num_range},
-                                        radar::complex_dtype<float>());
-    if (cudaMemcpy(out->data(), host.data(),
-                   host.size() * sizeof(std::complex<float>),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error("RdChannelSliceOp: H2D upload failed");
+    auto out = radar::make_device_tensor({num_doppler, num_range}, dtype);
+    const auto* src = static_cast<const std::byte*>(rd_maps->data()) +
+                      static_cast<size_t>(linear) * plane_bytes;
+    if (cudaMemcpy(out->data(), src, plane_bytes,
+                   cudaMemcpyDeviceToDevice) != cudaSuccess) {
+      throw std::runtime_error("RdChannelSliceOp: D2D slice copy failed");
     }
     radar::emit_single(op_output, "rd_map", out);
   }
