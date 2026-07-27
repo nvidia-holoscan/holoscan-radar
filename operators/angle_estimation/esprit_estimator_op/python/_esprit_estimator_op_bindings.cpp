@@ -90,6 +90,8 @@ void bind_esprit_estimator(py::module_& module, const char* class_name) {
 PYBIND11_MODULE(_esprit_estimator_op, module) {
   holoscan::radar::ensure_radar_arg_setters();
   module.doc() = "ESPRITEstimatorOp Python bindings";
-  holoscan::radar::bind_esprit_estimator<float>(module, "ESPRITEstimatorOpF32");
-  holoscan::radar::bind_esprit_estimator<double>(module, "ESPRITEstimatorOpF64");
+  holoscan::radar::bind_esprit_estimator<float>(
+      module, "ESPRITEstimatorOpF32");
+  holoscan::radar::bind_esprit_estimator<double>(
+      module, "ESPRITEstimatorOpF64");
 }
