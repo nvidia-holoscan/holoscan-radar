@@ -440,13 +440,15 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
     }
 
     if (cfg.visualize) {
-      auto ch_slice = make_operator<RdChannelSliceOp>("rd_channel_slice");
-      ch_slice->channel = 0;
+      // NCI over the RX axis: display the same surface CFAR
+      // thresholds (nci_axes: [0]), so the picture and the overlaid
+      // detections come from the same data.
+      auto rd_nci = make_operator<RdNciOp>("rd_nci");
       auto to_image = make_operator<RdMapToImageOp>("rd_map_to_image");
       auto overlay = make_operator<ClusterOverlayOp>("cluster_overlay");
 
       HolovizLayout layout;
-      layout.window_title = "FMCW AoA estimators - RD (ch0) + clusters";
+      layout.window_title = "FMCW AoA estimators - RD (NCI) + clusters";
       layout.width = cfg.plots.enable ? 1200U : 800U;
       layout.height = cfg.plots.enable ? 760U : 600U;
       layout.headless = cfg.headless;
@@ -493,7 +495,6 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
       overlay->view_aspect = rd_map_view_aspect(layout);
       overlay->rd_region = rd_map_region(layout);  // axes/frame/title region
       overlay->rd_view_px_height = static_cast<float>(layout.height);
-      overlay->rd_title = "Range-Doppler (ch0)";
       overlay->frame_period = cfg.frame_period;    // scenario clock
       overlay->marker_radius = cfg.viz.marker_radius;
       overlay->marker_outline = cfg.viz.marker_outline;
@@ -533,8 +534,8 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
         boresight->marker_segments = cfg.viz.marker_segments;
       }
 
-      add_flow(doppler, ch_slice, {{"rd_maps", "rd_maps"}});
-      add_flow(ch_slice, to_image, {{"rd_map", "rd_maps"}});
+      add_flow(doppler, rd_nci, {{"rd_maps", "rd_maps"}});
+      add_flow(rd_nci, to_image, {{"rd_map", "rd_maps"}});
       add_flow(to_image, visualizer, {{"rd_image", "receivers"}});
       // The active-estimator caption: its text position rides `receivers`; its
       // spec closes the input_specs chain assembled below.
@@ -546,7 +547,7 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
       // stable across frames); in peak_only mode there are no labels, so all
       // three color each peak by its per-detection row index instead.
       add_flow(cfar, overlay, {{"detection_idx", "detection_idx"}});
-      add_flow(ch_slice, overlay, {{"rd_map", "rd_maps"}});
+      add_flow(rd_nci, overlay, {{"rd_map", "rd_maps"}});
       // Physical axis bins for the RD-map tick labels (range X, velocity Y).
       add_flow(range, overlay, {{"range_bins", "range_bins"}});
       add_flow(doppler, overlay, {{"velocity_bins", "velocity_bins"}});

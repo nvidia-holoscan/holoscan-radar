@@ -88,6 +88,21 @@ class PyRdChannelSliceOp : public RdChannelSliceOp {
   }
 };
 
+class PyRdNciOp : public RdNciOp {
+ public:
+  using RdNciOp::RdNciOp;
+
+  PyRdNciOp(Fragment* fragment, const py::args& args,
+            const std::string& name = "rd_nci")
+      : RdNciOp() {
+    name_ = name;
+    fragment_ = fragment;
+    spec_ = std::make_shared<OperatorSpec>(fragment);
+    setup(*spec_);
+    python::add_conditions_and_resources(this, args);
+  }
+};
+
 class PyRdMapToImageOp : public RdMapToImageOp {
  public:
   using RdMapToImageOp::RdMapToImageOp;
@@ -209,10 +224,19 @@ void bind_radar_app(py::module_& m) {
       .def_readwrite("channel", &RdChannelSliceOp::channel)
       .def("setup", &RdChannelSliceOp::setup, py::arg("spec"));
 
+  py::class_<RdNciOp, PyRdNciOp, Operator, std::shared_ptr<RdNciOp>>(
+      m, "RdNciOp",
+      "Non-coherently integrate a rank-3 RD map over its channel axis into "
+      "the rank-2 amplitude surface CFAR thresholds.")
+      .def(py::init<Fragment*, const py::args&, const std::string&>(),
+           py::arg("fragment"), py::arg("name") = "rd_nci")
+      .def("setup", &RdNciOp::setup, py::arg("spec"));
+
   py::class_<RdMapToImageOp, PyRdMapToImageOp, Operator,
              std::shared_ptr<RdMapToImageOp>>(
       m, "RdMapToImageOp",
-      "Convert a complex RD map to a log-magnitude float image for Holoviz.")
+      "Convert a complex or real RD map to a log-magnitude float image for "
+      "Holoviz.")
       .def(py::init<Fragment*, const py::args&, const std::string&>(),
            py::arg("fragment"), py::arg("name") = "rd_map_to_image")
       .def("setup", &RdMapToImageOp::setup, py::arg("spec"));

@@ -68,7 +68,10 @@ cmake --build build --target fmcw_mimo
 ./build/applications/fmcw_mimo/cpp/fmcw_mimo /path/to/config.yaml
 ```
 
-Set `visualize: false` or `headless: true` for log-only runs without a display.
+Set `visualization.enabled: false` or `headless: true` for log-only runs without
+a display. When visualization is on, the RD map shown is the non-coherent
+integration over the virtual-channel axis — the surface CFAR thresholds
+(`nci_axes: [0]`) — not a single virtual channel.
 
 ## Configuration notes
 

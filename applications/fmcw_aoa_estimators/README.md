@@ -232,7 +232,10 @@ primitives — no software-rasterized panel images:
   frame, so you can see at a glance which one is active as the router advances.
   The label is a dynamic Holoviz TEXT layer re-emitted each frame by a small
   app-local op (`EstimatorLabelOp`) that reads the current selection.
-- **Left:** the channel-0 range–Doppler map (turbo colormap), framed with a
+- **Left:** the non-coherently integrated range–Doppler map (turbo colormap) —
+  the same surface CFAR thresholds, since it runs `nci_axes: [0]` over the RX
+  axis, so the picture and the overlaid detections come from the same data —
+  framed with a
   border, axes, tick labels and a title, with CFAR detections drawn as filled
   cluster-colored dots. Colors are assigned by range rank, so a target keeps its
   color across frames and matches its markers in the side panels. The dark

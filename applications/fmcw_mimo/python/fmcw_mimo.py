@@ -60,8 +60,8 @@ from holoscan.radar import (  # noqa: E402
     MultiplexingScheme,
     NullSinkOp,
     PanelRect,
-    RdChannelSliceOp,
     RdMapToImageOp,
+    RdNciOp,
     RollingPlotOp,
     SnapshotGatherOp,
     VirtualArrayAssemblyOp,
@@ -285,7 +285,10 @@ class FmcwMimoApp(Application):
             self.add_flow(beamscan, det_report, {("aoa_estimates", "aoa_estimates")})
 
         if cfg.visualize:
-            ch_slice = RdChannelSliceOp(self, channel=0, name="rd_channel_slice")
+            # NCI over the virtual-channel axis: display the same surface
+            # CFAR thresholds (nci_axes: [0]), so the picture and the
+            # overlaid detections come from the same data.
+            rd_nci = RdNciOp(self, name="rd_nci")
             to_image = RdMapToImageOp(self, name="rd_map_to_image")
             overlay = ClusterOverlayOp(self, name="cluster_overlay")
             overlay.view_aspect = rd_map_view_aspect(
@@ -369,13 +372,13 @@ class FmcwMimoApp(Application):
                 name="holoviz",
             )
 
-            self.add_flow(vaa, ch_slice, {("rd_maps", "rd_maps")})
-            self.add_flow(ch_slice, to_image, {("rd_map", "rd_maps")})
+            self.add_flow(vaa, rd_nci, {("rd_maps", "rd_maps")})
+            self.add_flow(rd_nci, to_image, {("rd_map", "rd_maps")})
             self.add_flow(to_image, visualizer, {("rd_image", "receivers")})
             # Overlay/plot/boresight color or index by cluster when clustering
             # runs; in peak_only mode they fall back to the raw CFAR peaks.
             self.add_flow(cfar, overlay, {("detection_idx", "detection_idx")})
-            self.add_flow(ch_slice, overlay, {("rd_map", "rd_maps")})
+            self.add_flow(rd_nci, overlay, {("rd_map", "rd_maps")})
             # Physical axis bins for the RD-map tick labels (range X, velocity Y);
             # velocity comes from the DDM report bins in DDM mode, like the plot.
             self.add_flow(range_op, overlay, {("range_bins", "range_bins")})

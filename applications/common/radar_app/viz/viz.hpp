@@ -93,8 +93,9 @@ inline void emit_rd_axes(holoscan::TensorMap& out,
 
 // Extract one RX channel from a per-channel RD map for visualization. SIMO
 // rd_maps are (N_rx, num_doppler, num_range); Holoviz helpers expect rank-2
-// (num_doppler, num_range). Default channel 0 is a debug display only — CFAR
-// may run NCI over all RX.
+// (num_doppler, num_range). A single channel is a debug display only, and it
+// does NOT match what the detector sees when CFAR runs NCI over the channel
+// axis — prefer RdNciOp below in that case.
 class RdChannelSliceOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(RdChannelSliceOp)
@@ -149,9 +150,104 @@ class RdChannelSliceOp : public holoscan::Operator {
   }
 };
 
-// Converts the complex RD map into a log-magnitude float32 image for
-// Holoviz (rendered through the turbo color lookup table). Layout is
-// (doppler, range): Holoviz x = range, y = Doppler.
+// Non-coherently integrate a per-channel RD map down to the rank-2 surface the
+// detector actually thresholds. rd_maps are (N_ch, num_doppler, num_range);
+// this emits (num_doppler, num_range) float32 NCI *amplitude*,
+//
+//   a[d][r] = sqrt( sum_k |x[k][d][r]|^2 ),
+//
+// which is the square root of CFARDetectorOp's integrated power — its
+// square-law detector (matx::abs2) summed over the NCI fold, see
+// cfar_stage.hpp's nci_sum_kernel. Feeding this to RdMapToImageOp (which plots
+// 20*log10(amp / median)) therefore renders exactly the dB surface CFAR
+// thresholds on, so the picture and the overlaid detections come from the same
+// data rather than two different maps.
+//
+// Use this instead of RdChannelSliceOp whenever the detector runs with nci_axes
+// covering the channel axis. What this does and does not change:
+//   - It does NOT improve contrast. Integrating amplitude scales targets and
+//     noise alike (both ~sqrt(N_ch)), so peak-to-median is essentially the same
+//     as a single channel's — measured 61.2 dB vs 60.0 dB on the AoA demo
+//     scene (N_ch = 64).
+//   - It DOES smooth the noise floor, which is the point: |x|^2 summed over
+//     N_ch channels fluctuates far less than one channel's, so the displayed
+//     speckle matches the statistics CFAR's threshold was set against
+//     (noise coefficient of variation roughly halved on that same scene).
+//   - Correctness aside from statistics: one channel is one realization. A
+//     target faded in that channel, or an interferer/dead element present only
+//     there, makes the display disagree with the detections. The NCI surface
+//     cannot disagree, because it is the detector's own input.
+class RdNciOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(RdNciOp)
+  RdNciOp() = default;
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::TensorMap>("rd_maps");
+    spec.output<holoscan::TensorMap>("rd_map");
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               holoscan::OutputContext& op_output,
+               [[maybe_unused]] holoscan::ExecutionContext& context)
+      override {
+    auto rd_maps = radar::receive_single(op_input, "rd_maps", "RdNciOp");
+    const auto& shape = rd_maps->shape();
+    if (shape.size() != 3) {
+      throw std::runtime_error(
+          "RdNciOp: expected rank-3 (N_ch, D, R), got rank " +
+          std::to_string(shape.size()));
+    }
+    const int64_t num_ch = shape[0];
+    const int64_t num_doppler = shape[1];
+    const int64_t num_range = shape[2];
+
+    // Host-side, matching the rest of this display path (RdChannelSliceOp /
+    // RdMapToImageOp both round-trip): one D2H of the whole cube per frame.
+    const size_t plane = static_cast<size_t>(num_doppler * num_range);
+    std::vector<std::complex<float>> host(plane *
+                                          static_cast<size_t>(num_ch));
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+      throw std::runtime_error("RdNciOp: device synchronize failed");
+    }
+    if (cudaMemcpy(host.data(), rd_maps->data(),
+                   host.size() * sizeof(std::complex<float>),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+      throw std::runtime_error("RdNciOp: rd_maps D2H copy failed");
+    }
+
+    std::vector<float> amp(plane, 0.0F);
+    for (int64_t k = 0; k < num_ch; ++k) {
+      const std::complex<float>* src =
+          host.data() + static_cast<size_t>(k) * plane;
+      for (size_t i = 0; i < plane; ++i) {
+        // std::norm is |z|^2 without the sqrt — the square-law power CFAR
+        // integrates.
+        amp[i] += std::norm(src[i]);
+      }
+    }
+    for (float& v : amp) {
+      v = std::sqrt(v);
+    }
+
+    auto out = radar::make_device_tensor({num_doppler, num_range},
+                                        radar::real_dtype<float>());
+    if (cudaMemcpy(out->data(), amp.data(), amp.size() * sizeof(float),
+                   cudaMemcpyHostToDevice) != cudaSuccess) {
+      throw std::runtime_error("RdNciOp: H2D upload failed");
+    }
+    radar::emit_single(op_output, "rd_map", out);
+  }
+};
+
+// Converts an RD map into a log-magnitude float32 image for Holoviz (rendered
+// through the turbo color lookup table). Layout is (doppler, range): Holoviz
+// x = range, y = Doppler.
+//
+// Accepts either dtype a producer upstream may hand it: complex64 (a raw RD
+// map, e.g. RdChannelSliceOp — magnitude is taken here) or float32 (an already
+// real-valued amplitude surface, e.g. RdNciOp). Both then follow the identical
+// median/peak dB mapping below, so the two displays are directly comparable.
 //
 // Per frame:
 //   1. Divide each range column by its median |RD| — suppresses Doppler
@@ -190,26 +286,47 @@ class RdMapToImageOp : public holoscan::Operator {
     }
     const int64_t num_doppler = shape[0];
     const int64_t num_range = shape[1];
+    const size_t plane = static_cast<size_t>(num_doppler * num_range);
 
-    std::vector<std::complex<float>> rd(
-        static_cast<size_t>(num_doppler * num_range));
+    // Fold either accepted dtype down to one magnitude plane up front; the dB
+    // mapping below is then dtype-agnostic.
+    const DLDataType dtype = rd_map->dtype();
+    const bool is_complex =
+        radar::dldatatype_equals(dtype, radar::complex_dtype<float>());
+    if (!is_complex &&
+        !radar::dldatatype_equals(dtype, radar::real_dtype<float>())) {
+      throw std::runtime_error(
+          "RdMapToImageOp: expected complex64 or float32 rd_map, got " +
+          radar::dldatatype_name(dtype));
+    }
+    std::vector<float> mag(plane);
     if (cudaDeviceSynchronize() != cudaSuccess) {
       throw std::runtime_error("RdMapToImageOp: device synchronize failed");
     }
-    if (cudaMemcpy(rd.data(), rd_map->data(),
-                   static_cast<size_t>(rd_map->nbytes()),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+    if (is_complex) {
+      std::vector<std::complex<float>> rd(plane);
+      if (cudaMemcpy(rd.data(), rd_map->data(),
+                     static_cast<size_t>(rd_map->nbytes()),
+                     cudaMemcpyDeviceToHost) != cudaSuccess) {
+        throw std::runtime_error("RdMapToImageOp: rd_map D2H copy failed");
+      }
+      for (size_t i = 0; i < plane; ++i) {
+        mag[i] = std::abs(rd[i]);
+      }
+    } else if (cudaMemcpy(mag.data(), rd_map->data(),
+                          static_cast<size_t>(rd_map->nbytes()),
+                          cudaMemcpyDeviceToHost) != cudaSuccess) {
       throw std::runtime_error("RdMapToImageOp: rd_map D2H copy failed");
     }
 
-    std::vector<float> image(rd.size());
+    std::vector<float> image(plane);
     std::vector<float> col_abs(static_cast<size_t>(num_doppler));
     std::vector<float> col_sort(static_cast<size_t>(num_doppler));
     float peak_db = -std::numeric_limits<float>::infinity();
     for (int64_t r = 0; r < num_range; ++r) {
       for (int64_t d = 0; d < num_doppler; ++d) {
         col_abs[static_cast<size_t>(d)] =
-            std::abs(rd[static_cast<size_t>(d * num_range + r)]);
+            mag[static_cast<size_t>(d * num_range + r)];
       }
       col_sort = col_abs;
       std::nth_element(col_sort.begin(),

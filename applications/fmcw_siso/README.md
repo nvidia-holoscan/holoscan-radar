@@ -74,7 +74,7 @@ centroid. Each operator validates its own parameters at startup.
 
 ## Visualization
 
-Set `visualize: true` in the config to open a live Holoviz window. On the
+Set `visualization.enabled: true` in the config to open a live Holoviz window. On the
 left is the range-Doppler map (normalized log magnitude, turbo colormap;
 range along x, Doppler along y), with **every CFAR detection** overlaid as a
 cross **colored by DBSCAN cluster** (a categorical palette, one color per
@@ -95,9 +95,10 @@ Set `plots.enable: false` to let the RD map fill the window.
 This requires a GUI-capable host — a reachable display server and Vulkan. At
 startup the app probes Holoviz directly; if no usable display is found
 (headless host, or a stale `DISPLAY` with no server behind it), it logs a
-warning and runs exactly as if `visualize` were `false`.
+warning and runs exactly as if `visualization.enabled` were `false`.
 
-Set `headless: true` (with `visualize: true`) to render Holoviz offscreen
+Set `headless: true` (with `visualization.enabled: true`) to render Holoviz
+offscreen
 with no window — the startup display probe is skipped, letting the visual
 pipeline run on a display-less host (e.g. CI) provided a Vulkan driver is
 present.

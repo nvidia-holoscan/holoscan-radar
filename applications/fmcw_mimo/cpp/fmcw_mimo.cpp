@@ -237,8 +237,10 @@ class FmcwMimoApp : public holoscan::Application {
     }
 
     if (cfg.visualize) {
-      auto ch_slice = make_operator<RdChannelSliceOp>("rd_channel_slice");
-      ch_slice->channel = 0;
+      // NCI over the virtual-channel axis: display the same surface CFAR
+      // thresholds (nci_axes: [0]), so the picture and the overlaid
+      // detections come from the same data.
+      auto rd_nci = make_operator<RdNciOp>("rd_nci");
       auto to_image = make_operator<RdMapToImageOp>("rd_map_to_image");
       auto overlay = make_operator<ClusterOverlayOp>("cluster_overlay");
 
@@ -296,15 +298,15 @@ class FmcwMimoApp : public holoscan::Application {
         boresight->marker_segments = cfg.viz.marker_segments;
       }
 
-      add_flow(vaa, ch_slice, {{"rd_maps", "rd_maps"}});
-      add_flow(ch_slice, to_image, {{"rd_map", "rd_maps"}});
+      add_flow(vaa, rd_nci, {{"rd_maps", "rd_maps"}});
+      add_flow(rd_nci, to_image, {{"rd_map", "rd_maps"}});
       add_flow(to_image, visualizer, {{"rd_image", "receivers"}});
       // Overlay/plot/boresight color by cluster when clustering runs (keyed on
       // each cluster's representative RD cell, via rep_idx, so the color is
       // stable across frames); in peak_only mode there are no labels, so all
       // three color each peak by its per-detection row index instead.
       add_flow(cfar, overlay, {{"detection_idx", "detection_idx"}});
-      add_flow(ch_slice, overlay, {{"rd_map", "rd_maps"}});
+      add_flow(rd_nci, overlay, {{"rd_map", "rd_maps"}});
       // Physical axis bins for the RD-map
       // tick labels (range X, velocity Y); the
       // velocity axis comes from the DDM report bins in DDM mode, matching the

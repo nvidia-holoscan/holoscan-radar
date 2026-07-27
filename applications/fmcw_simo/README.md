@@ -30,14 +30,16 @@ cmake --build build --target fmcw_simo
 ./build/applications/fmcw_simo/cpp/fmcw_simo /path/to/fmcw_simo.yaml
 ```
 
-Set `headless: true` or `visualize: false` in the YAML for log-only runs on
-hosts without a display.
+Set `headless: true` or `visualization.enabled: false` in the YAML for log-only
+runs on hosts without a display.
 
 ## Display
 
-With `visualize: true` and `plots.enable: true` the Holoviz window shows the
-channel-0 range-Doppler map (with CFAR detections overlaid as cluster-colored
-crosses) on the left, and three stacked panels on the right:
+With `visualization.enabled: true` and `plots.enable: true` the Holoviz window
+shows the non-coherently integrated range-Doppler map on the left — the same
+surface CFAR thresholds, since it runs `nci_axes: [0]` over the RX axis, so the
+picture and the overlaid detections come from the same data — with CFAR
+detections drawn as cluster-colored dots, and three stacked panels on the right:
 
 - **Range (m) vs time** and **Velocity (m/s) vs time** — rolling per-cluster
   representative tracks.

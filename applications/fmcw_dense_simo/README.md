@@ -39,12 +39,14 @@ downstream on every port and is scheduled.
 
 ## Display
 
-With `visualize: true` (and a reachable display, or `headless: true` for
+With `visualization.enabled: true` (and a reachable display, or `headless: true` for
 offscreen rendering) the app opens a Holoviz window reusing the app-agnostic
 `radar_app/viz` operators unchanged:
 
 - **Left:** the channel-0 range–Doppler map (turbo colormap) with CFAR
-  detections drawn as cluster-colored crosses.
+  detections drawn as cluster-colored dots. Note this app detects on the
+  *beamformed* RDA cube (`nci_axes: []`), so the displayed map is not the
+  surface the detections came from — see the open item below.
 - **Right (stacked):** range-vs-time and velocity-vs-time rolling plots of the
   per-cluster representative, and a boresight azimuth/elevation scatter of those
   same per-cluster representatives (the angle information the dense path adds) —
@@ -60,7 +62,8 @@ boresight scatter reuses `CubeAoaLookupOp` on the reduction's `rep_idx` (one row
 per cluster): its angles feed the scatter and its `row_index` output doubles as
 the per-marker cluster label, so the boresight shows one centroid per cluster.
 
-If `visualize: true` but no display is reachable, the app logs a warning and
+If visualization is enabled but no display is reachable, the app logs a warning
+and
 runs headless automatically (disable that probe with `skip_display_check:
 true`). The `DenseClusterReportOp` cluster log runs in both modes.
 

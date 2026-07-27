@@ -6,7 +6,7 @@
 #   SimAdcSourceOp -> Range -> Clutter -> Doppler -> CFAR (NCI over RX)
 #     -> SnapshotGather -> BeamscanEstimator -> FeatureAssembly [r,v,az,el]
 #     -> ClusterDBSCAN -> DetectionReduction -> ClusterReportOp
-#     [-> RdChannelSliceOp -> RdMapToImageOp -> HolovizOp]
+#     [-> RdNciOp -> RdMapToImageOp -> HolovizOp]
 #     [-> ClusterOverlayOp -> HolovizOp]
 #     [-> RollingPlotOp / BoresightViewOp -> HolovizOp]
 #
@@ -57,8 +57,8 @@ from holoscan.radar import (
     FMCWRangeProcessorOp,
     NullSinkOp,
     PanelRect,
-    RdChannelSliceOp,
     RdMapToImageOp,
+    RdNciOp,
     RollingPlotOp,
     SnapshotGatherOp,
     cluster_palette,
@@ -204,7 +204,10 @@ class FmcwSimoApp(Application):
             self.add_flow(beamscan, det_report, {("aoa_estimates", "aoa_estimates")})
 
         if cfg.visualize:
-            ch_slice = RdChannelSliceOp(self, channel=0, name="rd_channel_slice")
+            # NCI over the RX axis: display the same surface CFAR
+            # thresholds (nci_axes: [0]), so the picture and the overlaid
+            # detections come from the same data.
+            rd_nci = RdNciOp(self, name="rd_nci")
             to_image = RdMapToImageOp(self, name="rd_map_to_image")
             overlay = ClusterOverlayOp(self, name="cluster_overlay")
             overlay.view_aspect = rd_map_view_aspect(
@@ -285,7 +288,7 @@ class FmcwSimoApp(Application):
                 self,
                 tensors=input_specs,
                 color_lut=make_turbo_lut(),
-                window_title="FMCW SIMO - RD (ch0) + clusters",
+                window_title="FMCW SIMO - RD (NCI) + clusters",
                 width=1200 if cfg.plots.enable else 800,
                 height=760 if cfg.plots.enable else 600,
                 vsync=cfg.viz.vsync,
@@ -293,13 +296,13 @@ class FmcwSimoApp(Application):
                 name="holoviz",
             )
 
-            self.add_flow(doppler, ch_slice, {("rd_maps", "rd_maps")})
-            self.add_flow(ch_slice, to_image, {("rd_map", "rd_maps")})
+            self.add_flow(doppler, rd_nci, {("rd_maps", "rd_maps")})
+            self.add_flow(rd_nci, to_image, {("rd_map", "rd_maps")})
             self.add_flow(to_image, visualizer, {("rd_image", "receivers")})
             # Overlay/plot/boresight color or index by cluster when clustering
             # runs; in peak_only mode they fall back to the raw CFAR peaks.
             self.add_flow(cfar, overlay, {("detection_idx", "detection_idx")})
-            self.add_flow(ch_slice, overlay, {("rd_map", "rd_maps")})
+            self.add_flow(rd_nci, overlay, {("rd_map", "rd_maps")})
             # Physical axis bins for the RD-map tick labels (range X, velocity Y).
             self.add_flow(range_op, overlay, {("range_bins", "range_bins")})
             self.add_flow(doppler, overlay, {("velocity_bins", "velocity_bins")})
