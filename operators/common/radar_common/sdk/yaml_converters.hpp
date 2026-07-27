@@ -16,6 +16,7 @@
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/reduce/reduction_enums.hpp"
@@ -535,6 +536,33 @@ struct convert<holoscan::radar::ArrayGeometry> {
       geom.geometry_type = gt.as<holoscan::radar::ArrayGeometryType>();
     }
     geom.validate();
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::ShiftInvariantSubarrayPair> {
+  static Node encode(
+      const holoscan::radar::ShiftInvariantSubarrayPair& pair) {
+    Node node;
+    node["reference_indices"] = pair.reference_indices;
+    node["shifted_indices"] = pair.shifted_indices;
+    return node;
+  }
+  static bool decode(
+      const Node& node,
+      holoscan::radar::ShiftInvariantSubarrayPair& pair) {
+    if (!node.IsMap()) {
+      return false;
+    }
+    pair = holoscan::radar::ShiftInvariantSubarrayPair{};
+    if (const Node reference = node["reference_indices"]) {
+      pair.reference_indices = reference.as<std::vector<int64_t>>();
+    }
+    if (const Node shifted = node["shifted_indices"]) {
+      pair.shifted_indices = shifted.as<std::vector<int64_t>>();
+    }
+    pair.validate();
     return true;
   }
 };

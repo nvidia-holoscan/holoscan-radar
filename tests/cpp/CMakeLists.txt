@@ -56,6 +56,7 @@ radar_add_test(common/test_steering_weights_device
     holoscan::radar_common_steering)
 radar_add_test(common/test_spatial_smoothing)
 radar_add_test(common/test_subarray_selection)
+radar_add_test(common/test_source_count)
 radar_add_test(common/test_angle_convention)
 radar_add_test(common/test_descriptors)
 radar_add_test(common/test_sdk)
@@ -117,6 +118,12 @@ radar_add_test(angle_estimation/test_beamscan_estimator
     holoscan::beamscan_estimator_op)
 radar_add_test(angle_estimation/test_mvdr_estimator
     holoscan::mvdr_estimator_op)
+radar_add_test(angle_estimation/test_music_estimator
+    holoscan::music_estimator_op holoscan::beamscan_estimator_op)
+radar_add_test(angle_estimation/test_root_music_estimator
+    holoscan::root_music_estimator_op)
+radar_add_test(angle_estimation/test_esprit_estimator
+    holoscan::esprit_estimator_op)
 radar_add_test(angle_estimation/test_phase_shift_beamformer
     holoscan::phase_shift_beamformer_op)
 radar_add_statistical_test(detection/test_cfar_detector_statistical

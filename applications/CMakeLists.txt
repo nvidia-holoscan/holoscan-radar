@@ -41,6 +41,23 @@ add_holohub_application(fmcw_dense_simo
         cluster_dbscan_op
 )
 
+add_holohub_application(fmcw_aoa_estimators
+    DEPENDS OPERATORS
+        fmcw_range_processor_op
+        clutter_filter_op
+        fmcw_doppler_processor_op
+        cfar_detector_op
+        snapshot_gather_op
+        beamscan_estimator_op
+        mvdr_estimator_op
+        music_estimator_op
+        root_music_estimator_op
+        esprit_estimator_op
+        feature_assembly_op
+        detection_reduction_op
+        cluster_dbscan_op
+)
+
 add_holohub_application(fmcw_mimo
     DEPENDS OPERATORS
         mimo_deinterleave_op

@@ -6,10 +6,13 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
@@ -18,6 +21,7 @@ namespace {
 
 using holoscan::radar::ConfigCache;
 using holoscan::radar::FMCWWaveformDescriptor;
+using holoscan::radar::ShiftInvariantSubarrayPair;
 using holoscan::radar::WindowSpec;
 using holoscan::radar::WindowType;
 
@@ -130,6 +134,21 @@ TEST(YamlConverters, WaveformDecodesBothSpellingsAndValidates) {
   EXPECT_EQ(YAML::convert<FMCWWaveformDescriptor>::encode(by_bandwidth)
                 .as<FMCWWaveformDescriptor>(),
             by_bandwidth);
+}
+
+TEST(YamlConverters, ShiftInvariantSubarrayPairRoundTrips) {
+  const auto pair =
+      YAML::Load("{reference_indices: [0, 1, 2], shifted_indices: [1, 2, 3]}")
+          .as<ShiftInvariantSubarrayPair>();
+  EXPECT_EQ(pair.reference_indices, (std::vector<int64_t>{0, 1, 2}));
+  EXPECT_EQ(pair.shifted_indices, (std::vector<int64_t>{1, 2, 3}));
+  EXPECT_EQ(YAML::convert<ShiftInvariantSubarrayPair>::encode(pair)
+                .as<ShiftInvariantSubarrayPair>(),
+            pair);
+
+  EXPECT_THROW(YAML::Load("{reference_indices: [0, 1]}").
+                   as<ShiftInvariantSubarrayPair>(),
+               std::invalid_argument);
 }
 
 }  // namespace

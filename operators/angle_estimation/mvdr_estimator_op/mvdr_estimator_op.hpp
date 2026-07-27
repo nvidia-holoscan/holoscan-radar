@@ -82,6 +82,10 @@ class MVDREstimatorOp : public holoscan::Operator {
   void setup(OperatorSpec& spec) override;
   void compute(InputContext& op_input, OutputContext& op_output,
                ExecutionContext& context) override;
+  // Drain MatX solver plan caches + the global MemTracker once at graph stop,
+  // while CUDA is still valid (per-tick only clears plan caches; see
+  // mvdr_stage.hpp).
+  void stop() override;
 
  private:
   Parameter<ArrayGeometry> array_geometry_;

@@ -14,7 +14,10 @@ add_library(radar_common STATIC
     radar_common/dsp/angle_convention.cpp
     radar_common/dsp/steering_weights.cpp
     radar_common/dsp/spatial_smoothing.cpp
+    radar_common/dsp/shift_invariant_subarray.cpp
+    radar_common/dsp/planar_aperture.cpp
     radar_common/dsp/subarray_selection.cpp
+    radar_common/dsp/source_count.cpp
     radar_common/descriptors/tx_schedule.cpp
     radar_common/descriptors/ddm_code_descriptor.cpp
 )
@@ -142,6 +145,38 @@ install(TARGETS radar_common_spatial_smoothing
 )
 
 install(EXPORT holoscan_radar_common_spatial_smoothing_targets
+    NAMESPACE holoscan::
+    DESTINATION lib/cmake/holoscan_radar
+)
+
+# CUDA source-count (EFT) kernel (shared by the subspace angle estimators:
+# MUSIC / Root-MUSIC / ESPRIT). Batched per-item model-order decision from the
+# eigenvalues matx::eig already produced on the GPU, with no host round trip;
+# radar_common stays CUDA-free, so this target owns the .cu (ODR).
+add_library(radar_common_source_count STATIC
+    radar_common/dsp/source_count_device.cu)
+add_library(holoscan::radar_common_source_count ALIAS
+    radar_common_source_count)
+
+target_include_directories(radar_common_source_count
+    PUBLIC
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators/common>
+        $<INSTALL_INTERFACE:include>
+)
+
+target_link_libraries(radar_common_source_count
+    PUBLIC
+        holoscan::radar_common
+)
+
+set_property(TARGET radar_common_source_count
+    PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+install(TARGETS radar_common_source_count
+    EXPORT holoscan_radar_common_source_count_targets
+)
+
+install(EXPORT holoscan_radar_common_source_count_targets
     NAMESPACE holoscan::
     DESTINATION lib/cmake/holoscan_radar
 )
