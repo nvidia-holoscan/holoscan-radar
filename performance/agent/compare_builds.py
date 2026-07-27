@@ -185,6 +185,79 @@ def _warn_concurrent(out_dir: Path) -> None:
         print("\n".join(lines), file=sys.stderr, flush=True)
 
 
+# --------------------------------------------------------------------------
+# Thermal guard
+#
+# Measured on this Thor box: two minutes of sustained mimo lg/xl load moved the
+# GPU from 36 C to a 38.9 C peak and it settled back to 37 C. So thermal
+# throttling is NOT the source of the launch-to-launch variance here, and the
+# default threshold below is set high enough never to fire on this machine.
+#
+# It is kept anyway because it is nearly free and the harness is meant to be
+# portable: a passively cooled or enclosed unit can absolutely throttle, and
+# there the guard turns a silent 20% clock drop into a visible wait. Every
+# launch records its temperature either way, so the question is answerable from
+# the report instead of assumed.
+#
+# nvidia-smi reports temperature.gpu on Tegra, but clocks.current.sm and
+# clocks_throttle_reasons.active both come back [N/A] — so throttle state cannot
+# be read directly and temperature is the only available proxy. The sysfs
+# thermal zones are cheaper (no subprocess) and are tried first.
+# --------------------------------------------------------------------------
+
+_THERMAL_ZONES = Path("/sys/devices/virtual/thermal")
+
+
+def _gpu_temp_c() -> float | None:
+    """Current GPU temperature in Celsius, or None if unreadable."""
+    if _THERMAL_ZONES.is_dir():
+        for zone in sorted(_THERMAL_ZONES.glob("thermal_zone*")):
+            try:
+                if (zone / "type").read_text().strip() != "gpu-thermal":
+                    continue
+                return int((zone / "temp").read_text().strip()) / 1000.0
+            except (OSError, ValueError):
+                continue
+    if shutil.which("nvidia-smi"):
+        p = subprocess.run(
+            ["nvidia-smi", "--query-gpu=temperature.gpu",
+             "--format=csv,noheader"],
+            capture_output=True, text=True, check=False,
+        )
+        try:
+            return float(p.stdout.strip().splitlines()[0])
+        except (ValueError, IndexError):
+            return None
+    return None
+
+
+def _await_cool(max_temp: float, timeout_s: float, note) -> float:
+    """Block until the GPU is at or below max_temp. Returns seconds waited.
+
+    Bounded by timeout_s so an unreadable sensor or a genuinely hot room can
+    never hang a run indefinitely — it proceeds and says so, because a warm
+    measurement is more useful than no measurement.
+    """
+    if max_temp <= 0:
+        return 0.0
+    t0 = time.monotonic()
+    warned = False
+    while True:
+        t = _gpu_temp_c()
+        if t is None or t <= max_temp:
+            break
+        waited = time.monotonic() - t0
+        if waited >= timeout_s:
+            note(f"[thermal] still {t:.0f}C after {_fmt_dur(waited)} "
+                 f"(limit {max_temp:.0f}C) — proceeding anyway")
+            break
+        if not warned:
+            note(f"[thermal] {t:.0f}C > {max_temp:.0f}C, waiting to cool ...")
+            warned = True
+        time.sleep(2.0)
+    return time.monotonic() - t0
+
+
 def _fmt_dur(seconds: float) -> str:
     """Compact duration: 45s, 12m04s, 1h07m."""
     s = int(round(seconds))
@@ -224,6 +297,8 @@ class _Progress:
         # estimates: the probe measures per-frame cost cold, so it tends to
         # run high, and a single global factor corrects most of that.
         self._calib: list[tuple[float, float]] = []
+        self.temps: list[float] = []   # GPU temp sampled per launch
+        self.cool_s = 0.0              # total seconds spent waiting to cool
         self.t0 = time.monotonic()
         self.op_times: list[float] = []  # current operator's launch durations
         self.all_times: list[float] = []
@@ -325,6 +400,13 @@ class _Progress:
         self.total_ops = len(plan)
         self.total = sum(n for _, n, _e in plan)
 
+    def record_temp(self, t: float | None) -> None:
+        if t is not None:
+            self.temps.append(t)
+
+    def cooled(self, seconds: float) -> None:
+        self.cool_s += seconds
+
     def note(self, msg: str) -> None:
         """Print a message without clobbering an in-place bar."""
         if self.style == "bar" and self._dirty:
@@ -390,12 +472,17 @@ def _measure(
     rounds: int,
     checksum: bool,
     progress: _Progress | None = None,
+    thermal: tuple[float, float] | None = None,
 ) -> tuple[dict[str, list[float]], dict[str, dict], list]:
     """Return (scenario -> [median_ms per round], scenario -> last row, sums)."""
     medians: dict[str, list[float]] = {}
     last_rows: dict[str, dict] = {}
     sums: list = []
     for _ in range(rounds):
+        if thermal is not None and progress is not None:
+            progress.cooled(_await_cool(thermal[0], thermal[1], progress.note))
+        if progress is not None:
+            progress.record_temp(_gpu_temp_c())
         t0 = time.monotonic()
         try:
             report, s = _run_one(binary, args, checksum)
@@ -513,6 +600,7 @@ def compare_operator(
     checksum: bool,
     progress: _Progress | None = None,
     cached_before: dict | None = None,
+    thermal: tuple[float, float] | None = None,
 ) -> dict:
     """Run one operator on both builds and diff the compute-bucket medians.
 
@@ -522,7 +610,8 @@ def compare_operator(
     """
     if cached_before is not None:
         return _compare_with_cached_before(
-            op, after_bin, after_args, rounds, checksum, progress, cached_before
+            op, after_bin, after_args, rounds, checksum, progress,
+            cached_before, thermal
         )
 
     before_med: dict[str, list[float]] = {}
@@ -550,8 +639,10 @@ def compare_operator(
     #    median across launches is the robust summary; the per-side spread is
     #    reported next to it so a delta inside the noise band reads as such.
     for r in range(rounds + 1):
-        bm, br, bs = _measure(before_bin, before_args, 1, checksum, progress)
-        am, ar, as_ = _measure(after_bin, after_args, 1, checksum, progress)
+        bm, br, bs = _measure(
+            before_bin, before_args, 1, checksum, progress, thermal)
+        am, ar, as_ = _measure(
+            after_bin, after_args, 1, checksum, progress, thermal)
         if r == 0:
             continue  # discarded warm-up pair
         for sid, v in bm.items():
@@ -638,10 +729,20 @@ def _summarize(
     if checksum and (before_sums or after_sums):
         checksum_match = before_sums == after_sums
 
+    # Geomean over *significant* scenarios only. The plain geomean folds in
+    # scenarios whose delta is inside their own noise band, which on a 3-size
+    # run is enough to make an untouched operator read as 0.80x or 1.43x.
+    sig_ratios = [
+        s["before_ms"] / s["after_ms"]
+        for s in scenarios
+        if s.get("status") == "ok" and s.get("significant")
+    ]
     return {
         "operator": op,
         "scenarios": scenarios,
         "geomean_speedup": _geomean(ratios),
+        "geomean_significant": _geomean(sig_ratios) if sig_ratios else None,
+        "n_significant": len(sig_ratios),
         "checksum_match": checksum_match,
         "checksums_before": before_sums if checksum else None,
         "checksums_after": after_sums if checksum else None,
@@ -705,6 +806,7 @@ def _compare_with_cached_before(
     checksum: bool,
     progress: _Progress | None,
     cached: dict,
+    thermal: tuple[float, float] | None = None,
 ) -> dict:
     """Measure only the after side; take the baseline from ``cached``.
 
@@ -715,7 +817,8 @@ def _compare_with_cached_before(
     after_rows: dict[str, dict] = {}
     after_sums: list = []
     for r in range(rounds + 1):
-        am, ar, as_ = _measure(after_bin, args, 1, checksum, progress)
+        am, ar, as_ = _measure(
+            after_bin, args, 1, checksum, progress, thermal)
         if r == 0:
             continue  # discarded warm-up, same as the interleaved path
         for sid, v in am.items():
@@ -760,6 +863,18 @@ def render_markdown(result: dict) -> str:
         f"* harness args — `{' '.join(result['args']) or '(defaults)'}`, "
         f"{result['rounds']} scored round(s) + 1 discarded warm-up",
         f"* GPU — {result.get('gpu', 'unknown')}",
+        *(
+            [
+                "* thermal — observed "
+                f"{result['thermal']['observed_min_c']:.0f}-"
+                f"{result['thermal']['observed_max_c']:.0f}C across "
+                f"{result['thermal']['samples']} launches, limit "
+                f"{result['thermal']['max_temp_c']:.0f}C, "
+                f"{result['thermal']['cooldown_seconds']:.0f}s spent cooling"
+            ]
+            if result.get("thermal", {}).get("observed_max_c") is not None
+            else []
+        ),
         "",
         "Metric is the compute-bucket `median_ms` (steady-state per-frame "
         "latency), median across rounds; one extra warm-up round is measured "
@@ -783,6 +898,13 @@ def render_markdown(result: dict) -> str:
     for op in result["operators"]:
         gm = op["geomean_speedup"]
         head = f"## {op['operator']} — geomean speedup {gm:.2f}x"
+        if op.get("n_significant"):
+            head += (
+                f" (significant-only {op['geomean_significant']:.2f}x "
+                f"over {op['n_significant']} scenario(s))"
+            )
+        else:
+            head += " — **no scenario cleared its noise band**"
         if op.get("before_cached"):
             head += "  [cached baseline]"
         if op["checksum_match"] is not None:
@@ -896,6 +1018,23 @@ def main(argv=None) -> int:
         help="'bar' redraws one line in place (needs a TTY), 'plain' prints "
         "one line per launch (safe to redirect to a log), 'auto' picks by "
         "isatty (default)",
+    )
+    ap.add_argument(
+        "--max-temp",
+        type=float,
+        default=60.0,
+        help="wait before each launch until the GPU is at or below this "
+        "temperature (C), so thermal state is comparable across launches. "
+        "Measured on Thor: sustained load peaks ~39C, so the default never "
+        "fires there; it exists for hardware that does throttle. 0 disables "
+        "(default 60)",
+    )
+    ap.add_argument(
+        "--max-temp-wait",
+        type=float,
+        default=120.0,
+        help="give up waiting to cool after this many seconds and proceed "
+        "anyway, so an unreadable sensor cannot hang a run (default 120)",
     )
     ap.add_argument(
         "--no-probe",
@@ -1080,6 +1219,7 @@ def main(argv=None) -> int:
                 a.checksum,
                 prog,
                 cached[op] if use_cached else None,
+                (a.max_temp, a.max_temp_wait),
             )
         except RuntimeError as exc:
             prog.drop_operator(prog.per_op - len(prog.op_times))
@@ -1152,6 +1292,13 @@ def main(argv=None) -> int:
         "after_args": after_extra,
         "rounds": a.rounds,
         "gpu": gpu,
+        "thermal": {
+            "max_temp_c": a.max_temp,
+            "observed_min_c": min(prog.temps) if prog.temps else None,
+            "observed_max_c": max(prog.temps) if prog.temps else None,
+            "cooldown_seconds": round(prog.cool_s, 1),
+            "samples": len(prog.temps),
+        },
         "operators": results,
     }
 
