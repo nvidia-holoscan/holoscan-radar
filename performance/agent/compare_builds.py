@@ -1128,6 +1128,14 @@ def main(argv=None) -> int:
         help="comma-separated operator names (default: every perf binary "
         "present in both builds)",
     )
+    ap.add_argument(
+        "--skip-operators",
+        default="",
+        help="comma-separated operators to exclude. Useful for dropping the "
+        "expensive ones from a quick pass: mimo_coherent_compensation runs "
+        "three scenarios per size against a 537M-cell xl cube and alone "
+        "accounted for ~27 of 53 minutes in a full sweep",
+    )
     ap.add_argument("--sizes", default="sm,md,xl")
     ap.add_argument("--warmup", type=int, default=5)
     ap.add_argument("--frames", type=int, default=30)
@@ -1268,6 +1276,27 @@ def main(argv=None) -> int:
             file=sys.stderr,
         )
         return 1
+
+    if a.skip_operators:
+        skip = {o.strip() for o in a.skip_operators.split(",") if o.strip()}
+        # A typo in a skip list would otherwise pass silently and run the very
+        # operator the caller meant to drop.
+        unknown = sorted(skip - set(ops))
+        if unknown:
+            print(
+                f"warning: --skip-operators names nothing in this run: "
+                f"{', '.join(unknown)}",
+                file=sys.stderr,
+            )
+        dropped = [o for o in ops if o in skip]
+        ops = [o for o in ops if o not in skip]
+        if not ops:
+            print("error: --skip-operators excluded every operator",
+                  file=sys.stderr)
+            return 1
+        if dropped:
+            print(f"skipping {len(dropped)} operator(s): "
+                  f"{', '.join(dropped)}")
 
     args = ["--warmup", str(a.warmup), "--frames", str(a.frames)]
     if a.repeats > 1:
