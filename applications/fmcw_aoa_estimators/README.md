@@ -152,7 +152,7 @@ on change).
 ## Pipeline
 
 ```text
-SimAdcSourceOp                 (simulated SIMO ADC cube: N_rx, chirps, samples)
+SimAdcSourceOp                 (GPU-simulated SIMO ADC cube: N_rx, chirps, samples)
   -> FMCWRangeProcessorOp
   -> ClutterFilterOp             (single_delay MTI: notches the zero-Doppler column)
   -> FMCWDopplerProcessorOp      (rd_maps: N_rx, doppler, range)
@@ -165,6 +165,12 @@ SimAdcSourceOp                 (simulated SIMO ADC cube: N_rx, chirps, samples)
   -> DetectionReductionOp        (medoid representative per cluster)
   -> ClusterReportOp             (logs cluster centroids + representatives)
 ```
+
+Setting `cfar_detector.peak_only: true` drops the clustering tail (FeatureAssembly
+/ DBSCAN / Reduction / ClusterReport): CFAR already emits one detection per
+target, so the per-detection angle is logged straight from `DetectionReportOp`
+instead. The estimator branch is unaffected — it is the DOA stage, not
+clustering.
 
 ## Two realizations: C++ and Python
 
@@ -216,25 +222,34 @@ the same rotate/hold/file policy.
 
 ## Display
 
-With `visualize: true` (and a reachable display, or `headless: true` for
-offscreen rendering) the app opens a Holoviz window built from the app-agnostic
-`radar_app/viz` operators:
+With `visualization.enabled: true` (and a reachable display, or `headless: true`
+for offscreen rendering) the app opens a Holoviz window built from the
+app-agnostic `radar_app/viz` operators. Everything is drawn with native Holoviz
+primitives — no software-rasterized panel images:
 
-- **Top-left caption:** a live `Estimator: <NAME>` label (amber, over the RD
-  map) naming the estimator running this frame, so you can see at a glance which
-  one is active as the router advances. It is a dynamic Holoviz TEXT layer
-  re-emitted each frame by a small app-local op (`EstimatorLabelOp`) that reads
-  the current selection.
-- **Left:** the channel-0 range–Doppler map (turbo colormap) with CFAR
-  detections drawn as cluster-colored crosses. The dark vertical stripe at
-  Doppler 0 is the `single_delay` MTI clutter notch (expected).
+- **Top strip:** the scenario clock (`t = <n> s`, current simulated time) beside
+  a live `Estimator: <NAME>` label (amber) naming the estimator running this
+  frame, so you can see at a glance which one is active as the router advances.
+  The label is a dynamic Holoviz TEXT layer re-emitted each frame by a small
+  app-local op (`EstimatorLabelOp`) that reads the current selection.
+- **Left:** the channel-0 range–Doppler map (turbo colormap), framed with a
+  border, axes, tick labels and a title, with CFAR detections drawn as filled
+  cluster-colored dots. Colors are assigned by range rank, so a target keeps its
+  color across frames and matches its markers in the side panels. The dark
+  vertical stripe at Doppler 0 is the `single_delay` MTI clutter notch
+  (expected).
 - **Right (stacked):** range-vs-time and velocity-vs-time rolling plots of the
   per-cluster representative, plus a boresight azimuth/elevation scatter fed by
   whichever estimator ran this frame — so as the router advances you watch each
   estimator's DOA estimates land on the same targets in turn.
 
-If `visualize: true` but no display is reachable, the app logs a warning and
-runs headless automatically (disable that probe with
+The `visualization:` block also carries the detection-marker geometry
+(`marker_radius`, `marker_outline`, `marker_segments`) and `vsync`, which
+selects a FIFO present mode (frame-rate capped, but far more robust to
+window-resize swap-chain errors than IMMEDIATE).
+
+If visualization is enabled but no display is reachable, the app logs a warning
+and runs headless automatically (disable that probe with
 `skip_display_check: true`). The cluster report log runs in both modes. Set
 `AOA_CAPTURE_DIR=<dir>` (with `headless: true`) to dump composited frames for
 offline inspection (PPM in C++, PNG in Python).

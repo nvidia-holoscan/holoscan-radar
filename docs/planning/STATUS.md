@@ -6,6 +6,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 - **2026-07-01** — Planning docs (`OPERATOR_API.md`, `WORKFLOWS.md`, `TESTING.md`) written; FMCW API lockdown specified. No operator code yet beyond the `radar_op` template placeholder.
 - **2026-07-23** — **Contract change** (`dpc/aoa-operators`): `RootMUSICEstimatorOp` and `ESPRITEstimatorOp` geometry constraints relaxed from ULA/shift-invariant-line-only to **ULA-or-URA** — a filled URA now resolves native `(az, el)`. Root-MUSIC uses reduced-dimension per-axis rooting + 2-D MUSIC-metric pairing; ESPRIT uses dual-invariance 2-D ESPRIT with automatic joint-diagonalization pairing. `OPERATOR_API.md` RootMUSIC/ESPRIT sections + operator enumeration updated; port shapes unchanged.
+- **2026-07-27** — `dpc/aoa-operators` pre-merged into `deustice/gui` (no textual conflicts) and `applications/fmcw_aoa_estimators` brought to parity with the other four apps: the GPU simulator (links `radar_common_simulator`), the `visualization:` config block, framed RD axes + scenario clock, native primitive side panels, and `cfar_detector.peak_only` graph gating. The app-local `EstimatorLabelOp` gained a `specs_in` port so its caption tails the shared Holoviz `input_specs` chain (that port accepts one connection, and the primitive panels now use it).
 
 ## Settled decisions
 

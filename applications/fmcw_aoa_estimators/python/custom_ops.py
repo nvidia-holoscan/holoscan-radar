@@ -31,8 +31,14 @@ import os
 
 import cupy as cp
 
-from holoscan.core import Operator, OperatorSpec
+from holoscan.core import ConditionType, Operator, OperatorSpec
 from holoscan.operators import HolovizOp
+
+# Pixel target for the estimator caption, mirroring viz.hpp's kClockPx so the
+# caption is sized exactly like the scenario clock it sits beside. Holoviz bakes
+# its font atlas at a fixed 25 px and scales those glyphs, so text reads crispest
+# at or just under that size.
+K_CLOCK_PX = 23.0
 
 logger = logging.getLogger("fmcw_aoa_estimators")
 
@@ -114,6 +120,11 @@ class EstimatorLabelOp(Operator):
     tensor (on label_pos -> receivers). HolovizOp appends dynamic input_specs to
     the compose-time layers and matches the position tensor to the spec by name,
     so this draws a top-left caption that updates as the rotation advances.
+
+    HolovizOp has a single input_specs port, so this op is the TAIL of the shared
+    spec chain: the RD-map chrome (ClusterOverlayOp's scenario clock + axes) and
+    the primitive side panels arrive on specs_in, and this op appends its caption
+    before emitting the combined list.
     """
 
     def __init__(
@@ -122,14 +133,21 @@ class EstimatorLabelOp(Operator):
         *args,
         selector: EstimatorSelector,
         display_names: list[str],
+        view_px_height: float = 600.0,
         **kwargs,
     ):
         self._selector = selector
         self._display_names = display_names
+        # On-screen pixel height of the (full-window) caption view, for
+        # pixel-locked text sizing against Holoviz's fixed font atlas.
+        self._view_px_height = view_px_height
         super().__init__(fragment, *args, **kwargs)
 
     def setup(self, spec: OperatorSpec) -> None:
         spec.input("rd_maps")
+        # Upstream chrome/panel specs (overlay -> rolling plot -> boresight ->
+        # here). Optional so the op still works with no panels in the graph.
+        spec.input("specs_in").condition(ConditionType.NONE)
         spec.output("input_specs")
         spec.output("label_pos")
 
@@ -145,11 +163,19 @@ class EstimatorLabelOp(Operator):
         spec.priority = 10  # draw above the RD image
         # No View: render in full-window [0, 1] space so glyph advance isn't
         # squished by an anisotropic sub-view (which clipped the estimator name).
-        op_output.emit([spec], "input_specs")
+        # Append to the upstream chrome/panel specs so the whole chain reaches
+        # HolovizOp's single input_specs port.
+        specs = list(op_input.receive("specs_in") or [])
+        specs.append(spec)
+        op_output.emit(specs, "input_specs")
 
         # Text (x, y, size) in full-window [0, 1] space; size is the glyph
-        # height as a fraction of the window height.
-        pos = cp.asarray([[0.012, 0.03, 0.03]], dtype=cp.float32)
+        # height as a fraction of the window height, pixel-locked to the same
+        # target as the scenario clock. Sits on the clock's line, just past its
+        # plate (which ends at x = 0.19), so the two read as one top status
+        # strip and neither collides with the RD-map title in the margin below.
+        size = K_CLOCK_PX / max(self._view_px_height, 1.0)
+        pos = cp.asarray([[0.205, 0.012, size]], dtype=cp.float32)
         op_output.emit({"estimator_label": pos}, "label_pos")
 
 

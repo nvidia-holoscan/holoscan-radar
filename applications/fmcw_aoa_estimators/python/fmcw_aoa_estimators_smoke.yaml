@@ -29,6 +29,11 @@ cfar_detector:
   training_cells: [3, 3]
   pfa: 1.0e-9
   os_rank: 0
+  # Peak-grouping (non-maximum suppression). A native CFAR param; true → CFAR
+  # emits one detection per target. The app also reads this key (a read-only
+  # mirror of this block) to drop the DBSCAN clustering + reduction stages and
+  # report the CFAR peaks directly (the angle branch still runs).
+  peak_only: false
   nci_axes: [0]
 
 snapshot_gather:
@@ -106,7 +111,18 @@ targets:
 
 noise_snr_db: 18.0
 
-visualize: false
+# Live RD-map visualization with CFAR detections overlaid as filled dots colored
+# by DBSCAN cluster. enabled is the master switch; marker_radius / marker_outline
+# are fractions of the RD image extent and marker_segments (>= 3) sets dot
+# roundness. Off here — this is the headless smoke config.
+visualization:
+  enabled: false
+  marker_radius: 0.004
+  marker_outline: 0.002
+  marker_segments: 20
+  # vsync: true forces a FIFO present mode (frame-rate capped) — far more
+  # robust to window-resize swap-chain errors than IMMEDIATE.
+  vsync: true
 headless: false
 skip_display_check: false
 

@@ -119,7 +119,7 @@ def load_config(path: Path) -> AppConfig:
     el_lo, el_hi = grid_extent([float(x) for x in be.get("el_angles", [])] or None, -0.35, 0.35)
 
     common = parse_common_run_config(root, config_path=path.resolve())
-    return AppConfig(
+    cfg = AppConfig(
         **vars(common),
         scene=scene,
         array_geometry=array_geometry,
@@ -129,3 +129,7 @@ def load_config(path: Path) -> AppConfig:
         el_lo=el_lo,
         el_hi=el_hi,
     )
+    # READ-ONLY MIRROR of the cfar_detector operator block: peak_only stays a
+    # native CFAR param (from_config); the app reads it only to gate the graph.
+    cfg.peak_only = bool((root.get("cfar_detector") or {}).get("peak_only", False))
+    return cfg
