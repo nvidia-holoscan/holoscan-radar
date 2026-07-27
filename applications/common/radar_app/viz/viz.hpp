@@ -22,6 +22,7 @@
 #include <holoscan/holoscan.hpp>
 #include <holoscan/operators/holoviz/holoviz.hpp>
 
+#include "radar_app/viz/viz_kernels.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -231,10 +232,10 @@ class RdMapToImageOp : public holoscan::Operator {
     }
     const int64_t num_doppler = shape[0];
     const int64_t num_range = shape[1];
-    const size_t plane = static_cast<size_t>(num_doppler * num_range);
+    const int64_t count = num_doppler * num_range;
 
-    // Fold either accepted dtype down to one magnitude plane up front; the dB
-    // mapping below is then dtype-agnostic.
+    // Amplitude (complex) vs power (real) only changes the dB factor:
+    // 20*log10(|x|) == 10*log10(|x|^2).
     const DLDataType dtype = rd_map->dtype();
     const bool is_complex =
         radar::dldatatype_equals(dtype, radar::complex_dtype<float>());
@@ -244,73 +245,62 @@ class RdMapToImageOp : public holoscan::Operator {
           "RdMapToImageOp: expected complex64 or float32 rd_map, got " +
           radar::dldatatype_name(dtype));
     }
-    // 20*log10(amplitude) == 10*log10(power); the factor tracks the units.
-    const float db_factor = is_complex ? 20.0F : 10.0F;
-    std::vector<float> mag(plane);
-    if (cudaDeviceSynchronize() != cudaSuccess) {
-      throw std::runtime_error("RdMapToImageOp: device synchronize failed");
-    }
-    if (is_complex) {
-      std::vector<std::complex<float>> rd(plane);
-      if (cudaMemcpy(rd.data(), rd_map->data(),
-                     static_cast<size_t>(rd_map->nbytes()),
-                     cudaMemcpyDeviceToHost) != cudaSuccess) {
-        throw std::runtime_error("RdMapToImageOp: rd_map D2H copy failed");
-      }
-      for (size_t i = 0; i < plane; ++i) {
-        mag[i] = std::abs(rd[i]);
-      }
-    } else if (cudaMemcpy(mag.data(), rd_map->data(),
-                          static_cast<size_t>(rd_map->nbytes()),
-                          cudaMemcpyDeviceToHost) != cudaSuccess) {
-      throw std::runtime_error("RdMapToImageOp: rd_map D2H copy failed");
-    }
 
-    std::vector<float> image(plane);
-    std::vector<float> col_abs(static_cast<size_t>(num_doppler));
-    std::vector<float> col_sort(static_cast<size_t>(num_doppler));
-    float peak_db = -std::numeric_limits<float>::infinity();
-    for (int64_t r = 0; r < num_range; ++r) {
-      for (int64_t d = 0; d < num_doppler; ++d) {
-        col_abs[static_cast<size_t>(d)] =
-            mag[static_cast<size_t>(d * num_range + r)];
-      }
-      col_sort = col_abs;
-      std::nth_element(col_sort.begin(),
-                       col_sort.begin() + col_sort.size() / 2, col_sort.end());
-      const float med =
-          std::max(col_sort[col_sort.size() / 2], 1e-20F);
-      for (int64_t d = 0; d < num_doppler; ++d) {
-        const float v =
-            db_factor *
-            std::log10(col_abs[static_cast<size_t>(d)] / med + 1e-20F);
-        image[static_cast<size_t>(d * num_range + r)] = v;
-        peak_db = std::max(peak_db, v);
-      }
-    }
-    std::vector<float> sorted(image);
-    std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2,
-                     sorted.end());
-    const float floor_db = sorted[sorted.size() / 2];
-    const float span_db = std::max(peak_db - floor_db, 1.0F);
-    for (float& v : image) {
-      v = std::clamp((v - floor_db) / span_db, 0.0F, 1.0F) *
-          static_cast<float>(kLutSize - 1);
-    }
+    // Inherit the producer's stream: receive_cuda_stream also orders this
+    // operator's work behind the producer, so the whole mapping stays
+    // stream-ordered and no device-wide barrier is needed.
+    cudaStream_t stream = op_input.receive_cuda_stream("rd_maps");
 
-    // Holoviz image layers require a rank-3 (height, width, channels)
-    // tensor, so add an explicit single-channel dimension.
+    // Holoviz image layers require a rank-3 (height, width, channels) tensor,
+    // so add an explicit single-channel dimension. This doubles as the
+    // kernels' working buffer.
     auto tensor = radar::make_device_tensor({num_doppler, num_range, 1},
                                             radar::real_dtype<float>());
-    if (cudaMemcpy(tensor->data(), image.data(),
-                   sizeof(float) * image.size(),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error("RdMapToImageOp: H2D upload failed");
-    }
+    ensure_scratch(count, num_range);
+    rd_map_to_lut_image(rd_map->data(), is_complex, num_doppler, num_range,
+                        is_complex ? 20.0F : 10.0F,
+                        static_cast<float>(kLutSize - 1),
+                        static_cast<float*>(tensor->data()),
+                        static_cast<float*>(col_median_->data()),
+                        static_cast<float*>(sorted_->data()),
+                        sort_scratch_ ? sort_scratch_->data() : nullptr,
+                        sort_scratch_bytes_, stream);
+
     holoscan::TensorMap out;
     out.insert({"rd_map", tensor});
+    if (stream != cudaStreamDefault) {
+      op_output.set_cuda_stream(stream, "rd_image");
+    }
     op_output.emit(out, "rd_image");
   }
+
+ private:
+  // Persistent per-shape scratch, so the render path does no allocation beyond
+  // the emitted image itself.
+  void ensure_scratch(int64_t count, int64_t num_range) {
+    if (scratch_count_ == count && scratch_range_ == num_range) {
+      return;
+    }
+    col_median_ =
+        radar::make_device_tensor({num_range}, radar::real_dtype<float>());
+    sorted_ = radar::make_device_tensor({count}, radar::real_dtype<float>());
+    sort_scratch_bytes_ = rd_lut_image_sort_scratch_bytes(count);
+    sort_scratch_ =
+        sort_scratch_bytes_ > 0
+            ? radar::make_device_tensor(
+                  {static_cast<int64_t>(sort_scratch_bytes_)},
+                  DLDataType{kDLUInt, 8, 1})
+            : nullptr;
+    scratch_count_ = count;
+    scratch_range_ = num_range;
+  }
+
+  std::shared_ptr<holoscan::Tensor> col_median_;
+  std::shared_ptr<holoscan::Tensor> sorted_;
+  std::shared_ptr<holoscan::Tensor> sort_scratch_;
+  size_t sort_scratch_bytes_{0};
+  int64_t scratch_count_{0};
+  int64_t scratch_range_{0};
 };
 
 // Overlay geometry-layer names, shared by ClusterOverlayOp (as emitted tensor
