@@ -166,14 +166,15 @@ class RdChannelSliceOp : public holoscan::Operator {
         static_cast<size_t>(dtype.bits) / 8u * static_cast<size_t>(dtype.lanes);
     const size_t plane_bytes =
         static_cast<size_t>(num_doppler * num_range) * elem_size;
-    if (cudaDeviceSynchronize() != cudaSuccess) {
-      throw std::runtime_error("RdChannelSliceOp: device synchronize failed");
-    }
+    // Stream-scoped: receive_cuda_stream orders this op behind the producer
+    // with events, so the copy needs no host-side wait at all — and no
+    // device-wide barrier, which would stall every other branch of the graph.
+    cudaStream_t stream = op_input.receive_cuda_stream("rd_maps");
     auto out = radar::make_device_tensor({num_doppler, num_range}, dtype);
     const auto* src = static_cast<const std::byte*>(rd_maps->data()) +
                       static_cast<size_t>(linear) * plane_bytes;
-    if (cudaMemcpy(out->data(), src, plane_bytes,
-                   cudaMemcpyDeviceToDevice) != cudaSuccess) {
+    if (cudaMemcpyAsync(out->data(), src, plane_bytes,
+                        cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
       throw std::runtime_error("RdChannelSliceOp: D2D slice copy failed");
     }
     radar::emit_single(op_output, "rd_map", out);
@@ -457,6 +458,26 @@ class ClusterOverlayOp : public holoscan::Operator {
         radar::receive_optional(op_input, "velocity_bins", who);
     const bool have_labels = static_cast<bool>(labels);
 
+    // One operator stream, ordered behind every producer whose *data* (not
+    // just shape) this op reads back. receive_cuda_stream returns the same
+    // internal stream each call and adds an event wait per port, so the copies
+    // below need only a stream sync — never a device-wide barrier, which would
+    // stall the simulator / range / Doppler / CFAR / estimator branches too.
+    // rd_maps is omitted deliberately: only its shape is used.
+    cudaStream_t stream = op_input.receive_cuda_stream("detection_idx");
+    if (have_labels) {
+      op_input.receive_cuda_stream("labels");
+    }
+    if (rep_idx) {
+      op_input.receive_cuda_stream("rep_idx");
+    }
+    if (range_bins) {
+      op_input.receive_cuda_stream("range_bins");
+    }
+    if (velocity_bins) {
+      op_input.receive_cuda_stream("velocity_bins");
+    }
+
     // Cache the RD-map axis extents once (constant per run) from the optional
     // physical bin tensors, then build the tick label lists. X spans the range
     // axis left→right; Y spans the velocity
@@ -477,18 +498,16 @@ class ClusterOverlayOp : public holoscan::Operator {
             throw std::runtime_error(std::string("ClusterOverlayOp: ") + name +
                                      " must be float32");
           }
-          if (cudaMemcpy(host.data(), t->data(),
-                         static_cast<size_t>(t->nbytes()),
-                         cudaMemcpyDeviceToHost) != cudaSuccess) {
+          if (cudaMemcpyAsync(host.data(), t->data(),
+                              static_cast<size_t>(t->nbytes()),
+                              cudaMemcpyDeviceToHost, stream) != cudaSuccess ||
+              cudaStreamSynchronize(stream) != cudaSuccess) {
             throw std::runtime_error(std::string("ClusterOverlayOp: ") + name +
                                      " D2H copy failed");
           }
           *first = host.front();
           *last = host.back();
         };
-        if (cudaDeviceSynchronize() != cudaSuccess) {
-          throw std::runtime_error("ClusterOverlayOp: device sync failed");
-        }
         float r0, r1, v_first, v_last;
         ends(range_bins, "range_bins", &r0, &r1);
         ends(velocity_bins, "velocity_bins", &v_first, &v_last);
@@ -546,19 +565,19 @@ class ClusterOverlayOp : public holoscan::Operator {
         static_cast<size_t>(labels->nbytes()) != lab_bytes) {
       throw std::runtime_error("ClusterOverlayOp: labels byte size mismatch");
     }
-    if (cudaDeviceSynchronize() != cudaSuccess) {
-      throw std::runtime_error("ClusterOverlayOp: device synchronize failed");
-    }
     if (num_points > 0) {
-      if (cudaMemcpy(bins.data(), idx->data(), idx_bytes,
-                     cudaMemcpyDeviceToHost) != cudaSuccess) {
+      if (cudaMemcpyAsync(bins.data(), idx->data(), idx_bytes,
+                          cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
         throw std::runtime_error(
             "ClusterOverlayOp: detection_idx D2H copy failed");
       }
       if (have_labels &&
-          cudaMemcpy(lab.data(), labels->data(), lab_bytes,
-                     cudaMemcpyDeviceToHost) != cudaSuccess) {
+          cudaMemcpyAsync(lab.data(), labels->data(), lab_bytes,
+                          cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
         throw std::runtime_error("ClusterOverlayOp: labels D2H copy failed");
+      }
+      if (cudaStreamSynchronize(stream) != cudaSuccess) {
+        throw std::runtime_error("ClusterOverlayOp: stream sync failed");
       }
     }
 
@@ -580,8 +599,10 @@ class ClusterOverlayOp : public holoscan::Operator {
         throw std::runtime_error("ClusterOverlayOp: rep_idx size mismatch");
       }
       if (num_rep > 0 &&
-          cudaMemcpy(rep.data(), rep_idx->data(), sizeof(int64_t) * rep.size(),
-                     cudaMemcpyDeviceToHost) != cudaSuccess) {
+          (cudaMemcpyAsync(rep.data(), rep_idx->data(),
+                           sizeof(int64_t) * rep.size(),
+                           cudaMemcpyDeviceToHost, stream) != cudaSuccess ||
+           cudaStreamSynchronize(stream) != cudaSuccess)) {
         throw std::runtime_error("ClusterOverlayOp: rep_idx D2H copy failed");
       }
     }
@@ -1370,6 +1391,12 @@ class RollingPlotOp : public holoscan::Operator {
     auto range_bins = radar::receive_single(op_input, "range_bins", who);
     auto velocity_bins = radar::receive_single(op_input, "velocity_bins", who);
 
+    // One operator stream ordered behind each producer whose data is read back
+    // (see ClusterOverlayOp): a stream sync instead of a device-wide barrier.
+    cudaStream_t stream = op_input.receive_cuda_stream("rep_idx");
+    op_input.receive_cuda_stream("range_bins");
+    op_input.receive_cuda_stream("velocity_bins");
+
     const auto rshape = rep_idx->shape();
     if (rshape.size() != 2 || rshape[1] != 2) {
       throw std::runtime_error(
@@ -1381,8 +1408,9 @@ class RollingPlotOp : public holoscan::Operator {
     // extents and resolve rep_idx bins to physical range / velocity.
     if (!axis_set_) {
       const auto load_axis =
-          [](const std::shared_ptr<holoscan::Tensor>& t, const char* name,
-             std::vector<float>* out, float* lo, float* hi) {
+          [s = stream](const std::shared_ptr<holoscan::Tensor>& t,
+                       const char* name, std::vector<float>* out, float* lo,
+                       float* hi) {
             const auto sh = t->shape();
             if (sh.size() != 1 || sh[0] < 1) {
               throw std::runtime_error(std::string("RollingPlotOp: ") + name +
@@ -1394,9 +1422,10 @@ class RollingPlotOp : public holoscan::Operator {
               throw std::runtime_error(std::string("RollingPlotOp: ") + name +
                                        " must be float32");
             }
-            if (cudaMemcpy(out->data(), t->data(),
-                           static_cast<size_t>(t->nbytes()),
-                           cudaMemcpyDeviceToHost) != cudaSuccess) {
+            if (cudaMemcpyAsync(out->data(), t->data(),
+                                static_cast<size_t>(t->nbytes()),
+                                cudaMemcpyDeviceToHost, s) != cudaSuccess ||
+                cudaStreamSynchronize(s) != cudaSuccess) {
               throw std::runtime_error(std::string("RollingPlotOp: ") + name +
                                        " D2H copy failed");
             }
@@ -1404,9 +1433,6 @@ class RollingPlotOp : public holoscan::Operator {
             *lo = *mm.first;
             *hi = *mm.second;
           };
-      if (cudaDeviceSynchronize() != cudaSuccess) {
-        throw std::runtime_error("RollingPlotOp: device synchronize failed");
-      }
       load_axis(range_bins, "range_bins", &range_axis_, &r_lo_, &r_hi_);
       load_axis(velocity_bins, "velocity_bins", &velocity_axis_, &v_lo_,
                 &v_hi_);
@@ -1422,13 +1448,11 @@ class RollingPlotOp : public holoscan::Operator {
         sizeof(int64_t) * rep.size()) {
       throw std::runtime_error("RollingPlotOp: rep_idx dtype/size mismatch");
     }
-    if (cudaDeviceSynchronize() != cudaSuccess) {
-      throw std::runtime_error("RollingPlotOp: device synchronize failed");
-    }
     if (num_clusters > 0 &&
-        cudaMemcpy(rep.data(), rep_idx->data(),
-                   static_cast<size_t>(rep_idx->nbytes()),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+        (cudaMemcpyAsync(rep.data(), rep_idx->data(),
+                         static_cast<size_t>(rep_idx->nbytes()),
+                         cudaMemcpyDeviceToHost, stream) != cudaSuccess ||
+         cudaStreamSynchronize(stream) != cudaSuccess)) {
       throw std::runtime_error("RollingPlotOp: rep_idx D2H failed");
     }
 
@@ -1732,6 +1756,16 @@ class BoresightViewOp : public holoscan::Operator {
     auto rep_idx = radar::receive_optional(op_input, "rep_idx", who);
     const bool have_labels = static_cast<bool>(labels);
 
+    // One operator stream ordered behind each producer whose data is read back
+    // (see ClusterOverlayOp): a stream sync instead of a device-wide barrier.
+    cudaStream_t stream = op_input.receive_cuda_stream("aoa_estimates");
+    if (have_labels) {
+      op_input.receive_cuda_stream("labels");
+    }
+    if (rep_idx) {
+      op_input.receive_cuda_stream("rep_idx");
+    }
+
     const auto ashape = aoa->shape();
     if (ashape.size() != 2 || ashape[1] != 2) {
       throw std::runtime_error(
@@ -1773,26 +1807,29 @@ class BoresightViewOp : public holoscan::Operator {
         throw std::runtime_error("BoresightViewOp: rep_idx byte size mismatch");
       }
     }
-    if (cudaDeviceSynchronize() != cudaSuccess) {
-      throw std::runtime_error("BoresightViewOp: device synchronize failed");
-    }
     if (n > 0) {
-      if (cudaMemcpy(ang.data(), aoa->data(),
-                     static_cast<size_t>(aoa->nbytes()),
-                     cudaMemcpyDeviceToHost) != cudaSuccess) {
+      if (cudaMemcpyAsync(ang.data(), aoa->data(),
+                          static_cast<size_t>(aoa->nbytes()),
+                          cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
         throw std::runtime_error("BoresightViewOp: aoa_estimates D2H failed");
       }
       if (have_labels &&
-          cudaMemcpy(lab.data(), labels->data(),
-                     static_cast<size_t>(labels->nbytes()),
-                     cudaMemcpyDeviceToHost) != cudaSuccess) {
+          cudaMemcpyAsync(lab.data(), labels->data(),
+                          static_cast<size_t>(labels->nbytes()),
+                          cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
         throw std::runtime_error("BoresightViewOp: labels D2H failed");
       }
     }
     if (num_rep > 0 &&
-        cudaMemcpy(rep.data(), rep_idx->data(), sizeof(int64_t) * rep.size(),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+        cudaMemcpyAsync(rep.data(), rep_idx->data(),
+                        sizeof(int64_t) * rep.size(), cudaMemcpyDeviceToHost,
+                        stream) != cudaSuccess) {
       throw std::runtime_error("BoresightViewOp: rep_idx D2H failed");
+    }
+    // One wait covering every copy above.
+    if ((n > 0 || num_rep > 0) &&
+        cudaStreamSynchronize(stream) != cudaSuccess) {
+      throw std::runtime_error("BoresightViewOp: stream sync failed");
     }
     const bool have_rep = rep_idx && num_rep > 0;
     const std::vector<int> ranks =
