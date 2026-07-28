@@ -77,6 +77,21 @@ target_link_libraries(perf_mvdr_estimator PRIVATE
     radar_perf_utils
     holoscan::mvdr_estimator_op)
 
+add_executable(perf_music_estimator perf_music_estimator.cpp)
+target_link_libraries(perf_music_estimator PRIVATE
+    radar_perf_utils
+    holoscan::music_estimator_op)
+
+add_executable(perf_root_music_estimator perf_root_music_estimator.cpp)
+target_link_libraries(perf_root_music_estimator PRIVATE
+    radar_perf_utils
+    holoscan::root_music_estimator_op)
+
+add_executable(perf_esprit_estimator perf_esprit_estimator.cpp)
+target_link_libraries(perf_esprit_estimator PRIVATE
+    radar_perf_utils
+    holoscan::esprit_estimator_op)
+
 add_executable(perf_phase_shift_beamformer perf_phase_shift_beamformer.cpp)
 target_link_libraries(perf_phase_shift_beamformer PRIVATE
     radar_perf_utils
@@ -192,6 +207,24 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
         COMMAND perf_mvdr_estimator --sizes xs --warmup 1 --frames 2 --quiet
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_mvdr_estimator_smoke.json)
     set_tests_properties(perf_mvdr_estimator_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_music_estimator_smoke
+        COMMAND perf_music_estimator --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_music_estimator_smoke.json)
+    set_tests_properties(perf_music_estimator_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_root_music_estimator_smoke
+        COMMAND perf_root_music_estimator --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_root_music_estimator_smoke.json)
+    set_tests_properties(perf_root_music_estimator_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_esprit_estimator_smoke
+        COMMAND perf_esprit_estimator --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_esprit_estimator_smoke.json)
+    set_tests_properties(perf_esprit_estimator_smoke PROPERTIES
         LABELS "performance")
 
     add_test(NAME perf_phase_shift_beamformer_smoke

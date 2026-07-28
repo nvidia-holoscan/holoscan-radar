@@ -41,7 +41,7 @@ jobs:
         github.actor == 'wyli' ||
         github.actor == 'jjomier' ||
         github.actor == 'dylan-eustice' ||
-        github.actor == 'cliffburdick'
+        github.actor == 'danpcampbell'
       )
 
     steps:

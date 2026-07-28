@@ -142,10 +142,12 @@ TEST(SnapshotGatherOpTest, WindowGatherPreservesChannelAxis) {
 
   ASSERT_EQ(out.snapshot.shape, (std::vector<int64_t>{1, kC, 3}));
   const auto* snap = out.snapshot.as<std::complex<double>>();
-  for (int64_t slot = 0; slot < 3; ++slot) {
+  constexpr int64_t kK = 3;
+  for (int64_t slot = 0; slot < kK; ++slot) {
     const int64_t d = 2 + slot;  // centers 3 with half=1 under wrap
     for (int64_t c = 0; c < kC; ++c) {
-      const auto& got = snap[static_cast<size_t>(slot * kC + c)];
+      // (num_detections, num_channels, num_snapshots) row-major.
+      const auto& got = snap[static_cast<size_t>(c * kK + slot)];
       const auto exp = cell_value(c, d, 5);
       EXPECT_NEAR(got.real(), exp.real(), 1e-6)
           << "slot " << slot << " ch " << c;
@@ -187,8 +189,10 @@ TEST(SnapshotGatherOpTest, ShiftKeepsSnapshotCount) {
     EXPECT_EQ(valid[static_cast<size_t>(i)], 1);
   }
   const auto* snap = out.snapshot.as<std::complex<double>>();
+  // (num_detections, num_channels, num_snapshots): channel 0's slot 0 and last
+  // slot (8) are at c*K + slot = 0 and 8 for K == 9.
   EXPECT_NEAR(snap[0].real(), cell_value(0, 0, 0).real(), 1e-6);
-  EXPECT_NEAR(snap[static_cast<size_t>(8 * kC)].real(),
+  EXPECT_NEAR(snap[static_cast<size_t>(8)].real(),
               cell_value(0, 2, 2).real(), 1e-6);
 }
 
@@ -267,10 +271,12 @@ TEST(SnapshotGatherOpTest, DopplerWrapAtBoundary) {
 
   ASSERT_EQ(out.snapshot.shape, (std::vector<int64_t>{1, kC, 3}));
   const auto* snap = out.snapshot.as<std::complex<double>>();
+  constexpr int64_t kK = 3;
   const int64_t d_bins[] = {7, 0, 1};
-  for (int slot = 0; slot < 3; ++slot) {
+  for (int slot = 0; slot < kK; ++slot) {
     for (int64_t c = 0; c < kC; ++c) {
-      const auto& got = snap[static_cast<size_t>(slot * kC + c)];
+      // (num_detections, num_channels, num_snapshots) row-major.
+      const auto& got = snap[static_cast<size_t>(c * kK + slot)];
       const auto exp = cell_value(c, d_bins[slot], 5);
       EXPECT_NEAR(got.real(), exp.real(), 1e-6)
           << "slot " << slot << " ch " << c;

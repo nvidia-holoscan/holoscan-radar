@@ -18,6 +18,7 @@
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/reduce/reduction_enums.hpp"
@@ -135,6 +136,17 @@ PYBIND11_MODULE(_radar_common, m) {
       .def_readwrite("geometry_type", &ArrayGeometry::geometry_type)
       .def("num_elements", &ArrayGeometry::num_elements)
       .def("validate", &ArrayGeometry::validate);
+
+  py::class_<ShiftInvariantSubarrayPair>(m, "ShiftInvariantSubarrayPair")
+      .def(py::init<>())
+      .def_readwrite("reference_indices",
+                     &ShiftInvariantSubarrayPair::reference_indices)
+      .def_readwrite("shifted_indices",
+                     &ShiftInvariantSubarrayPair::shifted_indices)
+      .def("is_auto", &ShiftInvariantSubarrayPair::is_auto)
+      .def("validate",
+           py::overload_cast<>(&ShiftInvariantSubarrayPair::validate,
+                               py::const_));
 
   py::class_<AngleConvention>(m, "AngleConvention")
       .def(py::init<>())

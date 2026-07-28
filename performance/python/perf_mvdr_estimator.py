@@ -31,10 +31,15 @@ bootstrap_radar_package()
 # compiled modules before CuPy (CuPy-first makes MatX eig cache Clear() abort
 # at interpreter exit), then register MatX cache retirement after CuPy so it
 # runs first on exit (atexit is LIFO) while CUDA is still alive. Mirrors
-# tests/python/conftest.py.
+# tests/python/conftest.py. isort would otherwise alphabetize cupy back
+# ahead of holoscan.radar (that regression is what caused the crash this
+# guard fixes) - keep this block isort-off.
+# isort: off
+import holoscan.radar  # noqa: E402,F401
+
 import cupy  # noqa: E402,F401
 
-import holoscan.radar  # noqa: E402,F401
+# isort: on
 
 holoscan.radar.install_matx_cache_atexit()
 

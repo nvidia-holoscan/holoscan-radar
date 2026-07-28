@@ -17,3 +17,6 @@ __pycache__/
 uv.lock
 .venv/
 core
+
+# Generated performance-run dumps (measurement output, not source)
+perf_results/

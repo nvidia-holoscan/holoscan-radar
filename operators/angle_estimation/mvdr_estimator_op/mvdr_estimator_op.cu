@@ -57,6 +57,11 @@ void MVDREstimatorOp<T>::initialize() {
 }
 
 template <typename T>
+void MVDREstimatorOp<T>::stop() {
+  detail::retire_matx_solver_caches();
+}
+
+template <typename T>
 void MVDREstimatorOp<T>::setup(OperatorSpec& spec) {
   spec.input<holoscan::TensorMap>("snapshot");
   spec.input<holoscan::TensorMap>("is_valid")

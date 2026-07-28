@@ -24,6 +24,7 @@ from .radar_common import (  # noqa: F401
     PeakInterpolation,
     RepresentativePolicy,
     ScoreMethod,
+    ShiftInvariantSubarrayPair,
     SignedAxis,
     SnapshotEdgeMode,
     TXSchedule,
@@ -50,6 +51,10 @@ from .cluster_dbscan_op import ClusterDBSCANOpF32, ClusterDBSCANOpF64  # noqa: F
 from .clutter_filter_op import ClutterFilterOpF32, ClutterFilterOpF64  # noqa: F401
 from .detection_reduction_op import DetectionReductionOpF32  # noqa: F401
 from .detection_reduction_op import DetectionReductionOpF64
+from .esprit_estimator_op import (  # noqa: F401
+    ESPRITEstimatorOpF32,
+    ESPRITEstimatorOpF64,
+)
 from .feature_assembly_op import AssemblyFeature  # noqa: F401
 from .feature_assembly_op import FeatureAssemblyOpF32, FeatureAssemblyOpF64
 from .fmcw_doppler_processor_op import (  # noqa: F401
@@ -68,6 +73,11 @@ from .mimo_coherent_compensation_op import (  # noqa: F401
 )
 from .mimo_deinterleave_op import MIMODeinterleaveOpF32  # noqa: F401
 from .mimo_deinterleave_op import MIMODeinterleaveOpF64
+from .music_estimator_op import MUSICEstimatorOpF32  # noqa: F401
+from .music_estimator_op import (
+    MUSICEstimatorOpF64,
+    retire_music_matx_caches,
+)
 from .mvdr_estimator_op import MVDREstimatorOpF32  # noqa: F401
 from .mvdr_estimator_op import MVDREstimatorOpF64, retire_matx_solver_caches
 from .phase_shift_beamformer_op import (  # noqa: F401
@@ -88,6 +98,10 @@ from .radar_app import (
     gui_available,
     make_turbo_lut,
 )
+from .root_music_estimator_op import (  # noqa: F401
+    RootMUSICEstimatorOpF32,
+    RootMUSICEstimatorOpF64,
+)
 from .snapshot_gather_op import SnapshotGatherOpF32, SnapshotGatherOpF64  # noqa: F401
 from .virtual_array_assembly_op import (  # noqa: F401
     VirtualArrayAssemblyOpF32,
@@ -106,8 +120,11 @@ FMCWRangeDopplerProcessorOp = FMCWRangeDopplerProcessorOpF32
 FMCWRangeProcessorOp = FMCWRangeProcessorOpF32
 MIMOCoherentCompensationOp = MIMOCoherentCompensationOpF32
 MIMODeinterleaveOp = MIMODeinterleaveOpF32
+MUSICEstimatorOp = MUSICEstimatorOpF32
 MVDREstimatorOp = MVDREstimatorOpF32
 PhaseShiftBeamformerOp = PhaseShiftBeamformerOpF32
+RootMUSICEstimatorOp = RootMUSICEstimatorOpF32
+ESPRITEstimatorOp = ESPRITEstimatorOpF32
 SnapshotGatherOp = SnapshotGatherOpF32
 VirtualArrayAssemblyOp = VirtualArrayAssemblyOpF32
 
@@ -163,10 +180,14 @@ __all__ = [
     "MIMODeinterleaveOp",
     "MIMODeinterleaveOpF32",
     "MIMODeinterleaveOpF64",
+    "MUSICEstimatorOp",
+    "MUSICEstimatorOpF32",
+    "MUSICEstimatorOpF64",
     "MVDREstimatorOp",
     "MVDREstimatorOpF32",
     "MVDREstimatorOpF64",
     "retire_matx_solver_caches",
+    "retire_music_matx_caches",
     "install_matx_cache_atexit",
     "MultiplexingScheme",
     "NullSinkOp",
@@ -178,8 +199,15 @@ __all__ = [
     "RdChannelSliceOp",
     "RdMapToImageOp",
     "RepresentativePolicy",
+    "RootMUSICEstimatorOp",
+    "RootMUSICEstimatorOpF32",
+    "RootMUSICEstimatorOpF64",
+    "ESPRITEstimatorOp",
+    "ESPRITEstimatorOpF32",
+    "ESPRITEstimatorOpF64",
     "RollingPlotOp",
     "ScoreMethod",
+    "ShiftInvariantSubarrayPair",
     "SignedAxis",
     "SnapshotEdgeMode",
     "SnapshotGatherOp",
@@ -220,6 +248,7 @@ def install_matx_cache_atexit() -> None:
     import atexit
 
     atexit.register(retire_matx_solver_caches)
+    atexit.register(retire_music_matx_caches)
     _matx_atexit_installed = True
 
 
