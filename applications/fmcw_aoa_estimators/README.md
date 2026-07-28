@@ -306,23 +306,45 @@ centroids/representatives land near the configured target range, velocity, and
 `(az, el)` **regardless of which estimator is active** — which is the whole
 point: five different methods, one graph, one switch, same answer.
 
+### Target motion
+
+Four of the five targets move **non-radially**: each carries a transverse
+velocity component of 0.32–0.46 m/s on top of its radial one, so its azimuth and
+elevation sweep over the run rather than staying pinned. Target 3 is the single
+purely radial reference, holding az = 0.000 / el = 0.080 throughout — useful as
+a fixed point to read the others against.
+
+The sweeps are substantial: target 1 crosses 0.150 → 0.013 rad in azimuth
+(7 grid cells) as it closes from 245 m to 83 m, and targets 2 and 4 each move
+~0.04 rad in elevation. Both inbound targets deliberately sweep *toward*
+boresight — an inbound target's angular rate goes as `v_t / r`, so one sweeping
+outward would run off the ±0.3 rad scan grid before the run ended.
+
+Transverse motion is small next to these ranges, so each target's radial rate
+drifts by under 0.2 Doppler bins across the whole run. That is what lets the
+range/Doppler geometry below survive non-radial motion intact.
+
 ### The two close passes
 
-Three of the five targets are well separated in speed (−9 / +1.5 / +9 m/s); the
-other two each shadow one of them through a close pass, so you can see what the
-angle stage does as two objects converge in range and Doppler. Both run 1.5 m/s
-faster than the target they shadow — 2.5 velocity bins, still inside the 2.0 m/s
-`cluster_dbscan.epsilon` so the pair can merge — closing a ~20 m range gap,
-coinciding, and reopening it.
+Three of the five targets are well separated in speed (−6.5 / +1.5 / +9 m/s);
+the other two each shadow one of them through a close pass, so you can see what
+the angle stage does as two objects converge in range and Doppler. Both run
+1.5 m/s faster than the target they shadow — 2.5 velocity bins, still inside the
+2.0 m/s `cluster_dbscan.epsilon` so the pair can merge — closing a 15–27 m range
+gap to under 0.05 m, then reopening it.
 
 - **Pair A** (target 4 shadows target 2, coinciding at t = 10 s) is separated by
-  0.300 rad in azimuth, past the array's 0.253 rad first null. It stays two
-  clusters in 247 of 250 frames — angle alone carries it through the crossing.
+  0.318 rad in azimuth at closest approach, past the array's 0.253 rad first
+  null — angle alone should carry it through the crossing.
 - **Pair B** (target 5 shadows target 1, coinciding at t = 18 s) differs by only
-  0.020 rad in azimuth, so no estimator on this array can split it; every cell
-  reports a blended angle. Elevation differs by 0.060 rad, just past the
-  clustering epsilon, leaving it resolved for 202 frames and merged into one
-  object for the ~5 s around closest approach.
+  0.025 rad in azimuth, so no estimator on this array can split it; every cell
+  reports a blended angle. Elevation differs by 0.057 rad, just past the
+  clustering epsilon, so whether it merges around closest approach depends on how
+  far the detection cloud spreads.
+
+Note `mvdr_estimator` / `music_estimator` are configured `max_sources: 1`, so
+they report one DOA per cell even where the geometry would allow two — raising
+that is the natural next experiment.
 
 Note `mvdr_estimator` / `music_estimator` are configured `max_sources: 1`, so
 they report one DOA per cell even where the geometry would allow two — raising

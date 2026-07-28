@@ -128,14 +128,17 @@ See [`cpp/fmcw_dense_simo.yaml`](cpp/fmcw_dense_simo.yaml).
   (grid-snapped).
 - **`targets`** — the same five-target scene as
   [`fmcw_aoa_estimators`](../fmcw_aoa_estimators/README.md), so the dense and
-  sparse paths can be compared on identical input. Velocity is purely radial,
-  so each target holds its angle for the whole 25 s run. Three are well
-  separated in speed (−9 / +1.5 / +9 m/s); the other two each shadow one of
+  sparse paths can be compared on identical input. Four of the five move
+  non-radially (transverse velocity 0.32–0.46 m/s), so their az/el sweep over
+  the 25 s run; target 3 is the single purely radial reference. Three are well
+  separated in speed (−6.5 / +1.5 / +9 m/s); the other two each shadow one of
   them through a close pass, 1.5 m/s faster than the target they shadow,
   coinciding at t ≈ 10 s and t ≈ 18 s. Note that the wide 0.3 rad angular
-  epsilon above is the same order as the 0.300 rad azimuth split of the first
+  epsilon above is the same order as the 0.318 rad azimuth split of the first
   pair, so this app is expected to merge close passes that the sparse apps keep
-  apart — the clustering radius, not the array, is the limit here.
+  apart — the clustering radius, not the array, is the limit here. The sweeping
+  angles also mean a target crosses beam-grid cells during the run, so its
+  grid-snapped representative steps rather than holding one cell.
 
 ## Build & run
 

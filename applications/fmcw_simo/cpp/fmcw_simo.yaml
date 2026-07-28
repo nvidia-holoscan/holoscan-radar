@@ -89,14 +89,18 @@ rx_array:
   el_elements: 8
   spacing: 0.5
 
-# Position = range * dir(az, el); velocity is purely radial = speed * dir(az, el),
-# so each target holds its angle for the whole run. See the README for the scene.
+# Position = range * dir(az, el). Four of the five targets carry a transverse
+# velocity component (0.32-0.46 m/s) on top of the radial one, so their az/el
+# sweep over the run; target 3 is the one purely radial reference. The
+# transverse motion is small next to the ranges here, so each target's radial
+# rate drifts by under 0.2 Doppler bins and the two close passes still coincide
+# in range and Doppler. See the README for the scene.
 targets:
-  - { range: 245.0,  azimuth: 0.15,  elevation: 0.10,  velocity: [-8.8546, -1.3382, -0.8985], amplitude: 0.8 }
-  - { range: 132.0,  azimuth: -0.10, elevation: -0.12, velocity: [1.4818, -0.1487, -0.1796],  amplitude: 0.6 }
+  - { range: 245.0,  azimuth: 0.15,  elevation: 0.10,  velocity: [-6.3375, -1.4129, -0.5494], amplitude: 0.8 }
+  - { range: 132.0,  azimuth: -0.10, elevation: -0.12, velocity: [1.5025, -0.3015, 0.1183],   amplitude: 0.6 }
   - { range: 22.0,   azimuth: 0.0,   elevation: 0.08,  velocity: [8.9712, 0.0, 0.7192],       amplitude: 0.7 }
-  - { range: 117.0,  azimuth: 0.20,  elevation: 0.10,  velocity: [2.9255, 0.5930, 0.2995],    amplitude: 0.55 }
-  - { range: 218.0,  azimuth: 0.17,  elevation: 0.04,  velocity: [-7.3860, -1.2679, -0.2999], amplitude: 0.7 }
+  - { range: 117.0,  azimuth: 0.20,  elevation: 0.10,  velocity: [2.9310, 0.7166, 0.0010],    amplitude: 0.55 }
+  - { range: 218.0,  azimuth: 0.17,  elevation: 0.04,  velocity: [-4.8577, -1.2600, -0.0800], amplitude: 0.7 }
 
 noise_snr_db: 18.0
 
