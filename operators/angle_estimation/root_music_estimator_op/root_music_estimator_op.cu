@@ -18,6 +18,7 @@
 
 #include "angle_estimation/root_music_estimator_op/root_music_stage.hpp"
 #include "radar_common/dsp/planar_aperture.hpp"
+#include "radar_common/math/constants.hpp"
 #include "radar_common/dsp/spatial_smoothing_device.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 #include "radar_common/sdk/override_param.hpp"
@@ -32,7 +33,6 @@ namespace {
 
 constexpr const char* kOpName = "RootMUSICEstimatorOp";
 constexpr int64_t kMaxSourcesCap = 64;
-constexpr double kTwoPi = 6.28318530717958647692528676655900577;
 
 struct ULAParameters {
   double spacing{0.0};
