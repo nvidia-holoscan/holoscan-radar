@@ -34,11 +34,12 @@ import cupy as cp
 from holoscan.core import ConditionType, Operator, OperatorSpec
 from holoscan.operators import HolovizOp
 
-# Pixel target for the estimator caption, mirroring viz.hpp's kClockPx so the
-# caption is sized exactly like the scenario clock it sits beside. Holoviz bakes
-# its font atlas at a fixed 25 px and scales those glyphs, so text reads crispest
-# at or just under that size.
-K_CLOCK_PX = 23.0
+# Pixel target for the RD-map title, mirroring viz.hpp's kRdTitlePx, and the
+# glyph advance ratio its push_abs_text uses for centring (kGlyphAdvanceRatio).
+# Holoviz bakes its font atlas at a fixed 25 px and scales those glyphs, so text
+# reads crispest at or just under that size.
+K_RD_TITLE_PX = 25.0
+K_GLYPH_ADVANCE_RATIO = 0.52
 
 logger = logging.getLogger("fmcw_aoa_estimators")
 
@@ -114,12 +115,13 @@ class FrameCaptureOp(Operator):
 
 
 class EstimatorLabelOp(Operator):
-    """Live estimator caption for the Holoviz overlay. Ticks once per frame off
-    rd_maps and re-emits a single TEXT InputSpec (on input_specs) whose string is
-    the selector's current estimator, plus that layer's (1, 3) text-position
+    """Live RD-map title for the Holoviz overlay. Ticks once per frame off
+    rd_maps and re-emits a single TEXT InputSpec (on input_specs) reading
+    ``Range-Doppler - <ESTIMATOR>``, plus that layer's (1, 3) text-position
     tensor (on label_pos -> receivers). HolovizOp appends dynamic input_specs to
     the compose-time layers and matches the position tensor to the spec by name,
-    so this draws a top-left caption that updates as the rotation advances.
+    so the plot's own heading names the estimator running this frame. The app
+    blanks ClusterOverlayOp.rd_title so this is the only title drawn.
 
     HolovizOp has a single input_specs port, so this op is the TAIL of the shared
     spec chain: the RD-map chrome (ClusterOverlayOp's scenario clock + axes) and
@@ -134,13 +136,23 @@ class EstimatorLabelOp(Operator):
         selector: EstimatorSelector,
         display_names: list[str],
         view_px_height: float = 600.0,
+        window_aspect: float = 1.0,
+        title_center_x: float = 0.5,
+        title_top_y: float = 0.0,
+        base_title: str = "Range-Doppler",
         **kwargs,
     ):
         self._selector = selector
         self._display_names = display_names
-        # On-screen pixel height of the (full-window) caption view, for
-        # pixel-locked text sizing against Holoviz's fixed font atlas.
+        # On-screen pixel height of the (full-window) view, for pixel-locked
+        # text sizing against Holoviz's fixed font atlas.
         self._view_px_height = view_px_height
+        # Window aspect + the title anchor emit_rd_axes would have used: the
+        # centre of the inset image box, one title height above its top edge.
+        self._window_aspect = window_aspect
+        self._title_center_x = title_center_x
+        self._title_top_y = title_top_y
+        self._base_title = base_title
         super().__init__(fragment, *args, **kwargs)
 
     def setup(self, spec: OperatorSpec) -> None:
@@ -157,10 +169,11 @@ class EstimatorLabelOp(Operator):
         name = self._display_names[idx] if 0 <= idx < len(self._display_names) else "?"
         caption = name.replace("_", "-").upper()
 
+        text = f"{self._base_title} - {caption}"
         spec = HolovizOp.InputSpec("estimator_label", HolovizOp.InputType.TEXT)
-        spec.text = [f"Estimator: {caption}"]
-        spec.color = [1.0, 0.95, 0.2, 1.0]  # amber, reads over the turbo map
-        spec.priority = 10  # draw above the RD image
+        spec.text = [text]
+        spec.color = [1.0, 1.0, 1.0, 1.0]  # styled like the chrome it replaces
+        spec.priority = 8
         # No View: render in full-window [0, 1] space so glyph advance isn't
         # squished by an anisotropic sub-view (which clipped the estimator name).
         # Append to the upstream chrome/panel specs so the whole chain reaches
@@ -170,12 +183,13 @@ class EstimatorLabelOp(Operator):
         op_output.emit(specs, "input_specs")
 
         # Text (x, y, size) in full-window [0, 1] space; size is the glyph
-        # height as a fraction of the window height, pixel-locked to the same
-        # target as the scenario clock. Sits on the clock's line, just past its
-        # plate (which ends at x = 0.19), so the two read as one top status
-        # strip and neither collides with the RD-map title in the margin below.
-        size = K_CLOCK_PX / max(self._view_px_height, 1.0)
-        pos = cp.asarray([[0.205, 0.012, size]], dtype=cp.float32)
+        # height as a fraction of the window height, pixel-locked to the title
+        # target. Holoviz anchors TEXT at its left edge, so centre it by hand
+        # the way viz.hpp's push_abs_text does.
+        size = K_RD_TITLE_PX / max(self._view_px_height, 1.0)
+        char_w = K_GLYPH_ADVANCE_RATIO * size / max(self._window_aspect, 1e-3)
+        x = self._title_center_x - 0.5 * char_w * len(text)
+        pos = cp.asarray([[x, self._title_top_y, size]], dtype=cp.float32)
         op_output.emit({"estimator_label": pos}, "label_pos")
 
 

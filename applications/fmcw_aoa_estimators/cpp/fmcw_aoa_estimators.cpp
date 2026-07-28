@@ -109,10 +109,19 @@ class EstimatorLabelOp : public holoscan::Operator {
   EstimatorLabelOp() = default;
 
   const EstimatorRouterOp* router{nullptr};
-  // On-screen pixel height of the (full-window) caption view. Drives
-  // pixel-locked text sizing so the caption stays crisp against Holoviz's fixed
-  // 25 px font atlas, exactly like the RD-map chrome. Set by the app.
+  // On-screen pixel height of the (full-window) view. Drives pixel-locked text
+  // sizing so the title stays crisp against Holoviz's fixed 25 px font atlas,
+  // exactly like the rest of the RD-map chrome. Set by the app.
   float view_px_height{600.0F};
+  // Window aspect (width / height in pixels) for glyph-advance centering.
+  float window_aspect{1.0F};
+  // Where the RD-map title goes, in full-window coordinates: the horizontal
+  // centre of the inset image box and the top of the title line. The app
+  // derives both from the layout (see rd_map_region / kBox*) and blanks
+  // ClusterOverlayOp::rd_title, so this op owns the whole title line.
+  float title_center_x{0.5F};
+  float title_top_y{0.0F};
+  std::string base_title{"Range-Doppler"};
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("rd_maps");
@@ -139,36 +148,23 @@ class EstimatorLabelOp : public holoscan::Operator {
             : std::string("?");
 
     using InputSpec = holoscan::ops::HolovizOp::InputSpec;
-    using InputType = holoscan::ops::HolovizOp::InputType;
-    InputSpec label(kLabelLayer, InputType::TEXT);
-    label.text_ = {"Estimator: " + display_caption(name)};
-    label.color_ = {1.0F, 0.95F, 0.2F, 1.0F};  // amber, reads over turbo
-    label.priority_ = 10;                       // draw above the RD image
-    // No View: render in full-window [0, 1] space so glyph advance isn't
-    // squished by an anisotropic sub-view (which clipped the estimator name).
-    // Append to the upstream chrome/panel specs so the whole chain reaches
-    // HolovizOp's single input_specs port.
+    // The estimator name rides in the RD-map title rather than a separate
+    // caption, so it reads as the heading of the plot it describes. Styled
+    // exactly like the title ClusterOverlayOp would have drawn (white,
+    // pixel-locked to kRdTitlePx, centred on the image box); the app blanks
+    // rd_title so this is the only title on screen.
+    const float sz = kRdTitlePx / std::max(view_px_height, 1.0F);
+    holoscan::TensorMap out;
     std::vector<InputSpec> specs;
     if (auto upstream = op_input.receive<std::vector<InputSpec>>("specs_in")) {
       specs = std::move(upstream.value());
     }
-    specs.push_back(std::move(label));
+    push_abs_text(out, &specs, kLabelLayer,
+                  {{title_center_x, title_top_y,
+                    base_title + " - " + display_caption(name),
+                    TextAnchor::kCenter}},
+                  sz, window_aspect, {1.0F, 1.0F, 1.0F, 1.0F}, 8);
     op_output.emit(specs, "input_specs");
-
-    // Text (x, y, size) in full-window [0, 1] space; size is the glyph height
-    // as a fraction of the window height, pixel-locked to the same target as
-    // the scenario clock. Sits on the clock's line, just past its plate (which
-    // ends at x = 0.19), so the two read as one top status strip and neither
-    // collides with the RD-map title in the top margin below.
-    const float sz = kClockPx / std::max(view_px_height, 1.0F);
-    const std::array<float, 3> pos = {0.205F, 0.012F, sz};
-    auto tensor = radar::make_device_tensor({1, 3}, radar::real_dtype<float>());
-    if (cudaMemcpy(tensor->data(), pos.data(), sizeof(pos),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error("EstimatorLabelOp: label position H2D failed");
-    }
-    holoscan::TensorMap out;
-    out.insert({kLabelLayer, tensor});
     op_output.emit(out, "label_pos");
   }
 
@@ -495,6 +491,9 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
       overlay->view_aspect = rd_map_view_aspect(layout);
       overlay->rd_region = rd_map_region(layout);  // axes/frame/title region
       overlay->rd_view_px_height = static_cast<float>(layout.height);
+      // EstimatorLabelOp draws the title (it carries the live estimator
+      // name), so suppress the overlay's own.
+      overlay->rd_title = "";
       overlay->frame_period = cfg.frame_period;    // scenario clock
       overlay->marker_radius = cfg.viz.marker_radius;
       overlay->marker_outline = cfg.viz.marker_outline;
@@ -506,6 +505,16 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
       auto label = make_operator<EstimatorLabelOp>("estimator_label");
       label->router = router.get();
       label->view_px_height = static_cast<float>(layout.height);
+      label->window_aspect = static_cast<float>(layout.width) /
+                             static_cast<float>(layout.height);
+      // Same anchor emit_rd_axes would have used: centred on the inset image
+      // box, one title height above its top edge.
+      const PanelRect rd_region = rd_map_region(layout);
+      const float title_sz = kRdTitlePx / static_cast<float>(layout.height);
+      label->title_center_x =
+          rd_region.x + 0.5F * (kBoxL + kBoxR) * rd_region.w;
+      label->title_top_y =
+          rd_region.y + kBoxT * rd_region.h - title_sz - 0.012F;
 
       std::shared_ptr<RollingPlotOp> plot;
       std::shared_ptr<BoresightViewOp> boresight;

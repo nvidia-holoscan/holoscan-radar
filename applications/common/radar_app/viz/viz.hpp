@@ -1296,10 +1296,14 @@ inline void emit_rd_axes(holoscan::TensorMap& out,
       tick_sz, win_aspect, {0.80F, 0.80F, 0.85F, 1.0F}, 7);
 
   // Title centered in the top margin.
-  push_abs_text(out, specs, "rd_title",
-                {{ax(0.5F * (kBoxL + kBoxR)), ay(kBoxT) - title_sz - 0.012F,
-                  title, TextAnchor::kCenter}},
-                title_sz, win_aspect, {1.0F, 1.0F, 1.0F, 1.0F}, 8);
+  // Empty title → draw none, so an app that renders its own heading (e.g. one
+  // carrying a live mode name) is not stacked on top of this one.
+  if (!title.empty()) {
+    push_abs_text(out, specs, "rd_title",
+                  {{ax(0.5F * (kBoxL + kBoxR)), ay(kBoxT) - title_sz - 0.012F,
+                    title, TextAnchor::kCenter}},
+                  title_sz, win_aspect, {1.0F, 1.0F, 1.0F, 1.0F}, 8);
+  }
 }
 
 // Rolling time-series plots of the per-cluster centroids. Keeps a scrolling

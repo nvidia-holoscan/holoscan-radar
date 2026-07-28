@@ -227,11 +227,12 @@ for offscreen rendering) the app opens a Holoviz window built from the
 app-agnostic `radar_app/viz` operators. Everything is drawn with native Holoviz
 primitives — no software-rasterized panel images:
 
-- **Top strip:** the scenario clock (`t = <n> s`, current simulated time) beside
-  a live `Estimator: <NAME>` label (amber) naming the estimator running this
-  frame, so you can see at a glance which one is active as the router advances.
-  The label is a dynamic Holoviz TEXT layer re-emitted each frame by a small
-  app-local op (`EstimatorLabelOp`) that reads the current selection.
+- **Map title:** reads `Range-Doppler - <ESTIMATOR>`, naming the estimator
+  running this frame, so you can see at a glance which one is active as the
+  router advances. It is a dynamic Holoviz TEXT layer re-emitted each frame by a
+  small app-local op (`EstimatorLabelOp`) that reads the current selection and
+  draws it where `ClusterOverlayOp` would otherwise put the plain title.
+- **Top-left:** the scenario clock (`t = <n> s`, current simulated time).
 - **Left:** the non-coherently integrated range–Doppler map (turbo colormap) —
   the same surface CFAR thresholds, since it runs `nci_axes: [0]` over the RX
   axis, so the picture and the overlaid detections come from the same data —

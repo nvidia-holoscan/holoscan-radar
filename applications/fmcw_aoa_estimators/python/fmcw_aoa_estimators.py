@@ -79,6 +79,9 @@ import cupy as cp  # noqa: E402,F401
 
 import config  # noqa: E402 (colocated, script-local - see config.py docstring)
 from common.python.demo_config import (  # noqa: E402
+    K_BOX_L,
+    K_BOX_R,
+    K_BOX_T,
     detection_layer_specs,
     make_view,
     rd_map_box,
@@ -87,7 +90,12 @@ from common.python.demo_config import (  # noqa: E402
 )
 from common.python.driver import run_fmcw_app  # noqa: E402
 from common.python.ops import SimAdcSourceOp, TensorMapDiscardOp  # noqa: E402
-from custom_ops import EstimatorLabelOp, EstimatorSelector, FrameCaptureOp  # noqa: E402
+from custom_ops import (  # noqa: E402
+    K_RD_TITLE_PX,
+    EstimatorLabelOp,
+    EstimatorSelector,
+    FrameCaptureOp,
+)
 
 # isort: on
 
@@ -341,6 +349,9 @@ class FmcwAoaEstimatorsApp(Application):
             *rd_map_region(cfg.plots.enable, K_LEFT_WIDTH)
         )  # axes/frame/title region
         overlay.rd_view_px_height = float(height)
+        # EstimatorLabelOp draws the title (it carries the live estimator
+        # name), so suppress the overlay's own.
+        overlay.rd_title = ""
         overlay.marker_radius = cfg.viz.marker_radius
         overlay.marker_outline = cfg.viz.marker_outline
         overlay.marker_segments = cfg.viz.marker_segments
@@ -432,11 +443,18 @@ class FmcwAoaEstimatorsApp(Application):
         # Live caption of the active estimator, drawn over the top of the RD map
         # (a dynamic TEXT layer appended to Holoviz's compose-time specs). It is
         # the tail of the InputSpec chain - see the wiring below.
+        # Same anchor emit_rd_axes would have used: centred on the inset image
+        # box, one title height above its top edge.
+        _rx, _ry, _rw, _rh = rd_map_region(cfg.plots.enable, K_LEFT_WIDTH)
+        _title_sz = K_RD_TITLE_PX / float(height)
         label = EstimatorLabelOp(
             self,
             selector=selector,
             display_names=DISPLAY_NAMES,
             view_px_height=float(height),
+            window_aspect=float(width) / float(height),
+            title_center_x=_rx + 0.5 * (K_BOX_L + K_BOX_R) * _rw,
+            title_top_y=_ry + K_BOX_T * _rh - _title_sz - 0.012,
             name="estimator_label",
         )
 
