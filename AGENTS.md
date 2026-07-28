@@ -2,7 +2,9 @@
 
 GPU radar signal-processing operator library for the NVIDIA Holoscan SDK: Holoscan operators implemented in C++/CUDA on [MatX](https://github.com/NVIDIA/MatX), composed into pipelines purely by port connections — no glue code between operators.
 
-**Current phase: FMCW implementation.** The operator contracts (ports, shapes, dtypes, parameters) are fully specified in `docs/planning/`; implementation lands against them. The signal-processing group (`operators/fmcw/`: range, clutter, Doppler, fused range-Doppler) and the shared `operators/common/` library are implemented; detection, clustering, angle estimation, and MIMO marshaling are next.
+**Current phase: FMCW implementation, plus SAR contract design.** The operator contracts (ports, shapes, dtypes, parameters) are fully specified in `docs/planning/`; implementation lands against them. The signal-processing group (`operators/fmcw/`: range, clutter, Doppler, fused range-Doppler) and the shared `operators/common/` library are implemented; detection, clustering, angle estimation, and MIMO marshaling are next.
+
+**SAR** is a second modality whose contract is specified in [`docs/planning/SAR/`](docs/planning/SAR/) and is **in review, not yet locked**. No SAR operator code exists. See the Scope guardrail below for what that permits.
 
 ## Source of truth
 
@@ -15,6 +17,7 @@ Read before starting non-trivial work, in this precedence order:
 5. [`docs/planning/NEW_OPERATOR_CHECKLIST.md`](docs/planning/NEW_OPERATOR_CHECKLIST.md) — landing gate; verify before claiming an operator (or variant slice) done.
 6. [`docs/planning/OPERATOR_DEVELOPMENT.md`](docs/planning/OPERATOR_DEVELOPMENT.md) — how to implement well: hot-path discipline, diagnosis, `[live]`/calibration pitfalls, tests, and performance characterization (lessons from landed operators).
 7. [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md) — index of items blocked on a team decision (detail in each operator’s `OPEN_ITEMS.md`).
+8. [`docs/planning/SAR/`](docs/planning/SAR/) — the SAR modality's own `OPERATOR_API.md` / `WORKFLOWS.md` / `TESTING.md` / `SIGPROC_PLAN.md`, mirroring 1–3 one level down. **Proposed, in review** — read it for SAR work, and treat items 1–7 as governing wherever the two overlap until the SAR contract is accepted.
 
 Rules that follow from "lockdown":
 
@@ -39,7 +42,11 @@ Rules that follow from "lockdown":
 7. **Industry-standard operator names** over internal schemes.
 8. **A CUDA-capable NVIDIA GPU is a hard dependency** — for the operators, the apps, and the C++ test suite (decided 2026-07-10). Do not add CPU fallback compute paths, skip-if-no-GPU test guards, or GPU-optional build modes; the only host-only code is deliberately host-only by design (the analytic simulator, window generation).
 
-**Scope guardrail:** this wave is FMCW SISO/SIMO/MIMO-TDM/MIMO-DDM only. Do not add Pulse-Doppler, SAR, or PVA operators; CDM/BPM is deferred to a future wave; FDM and PMCW are excluded outright.
+The invariants above are **unamended and govern all current code**. The proposed SAR contract asks to change three of them (2 — an eighth descriptor plus a rename; 3 — an orthogonal internal-arithmetic axis on one operator; 4 — output shape from declared geometry rather than an input tensor) and to add a cross-tick accumulation convention. Those are proposals under review in [`docs/planning/SAR/OPERATOR_API.md`](docs/planning/SAR/OPERATOR_API.md) → *Contract changes against the locked invariants*, not accepted amendments.
+
+**Scope guardrail:** the *implementation* wave is FMCW SISO/SIMO/MIMO-TDM/MIMO-DDM only. Do not add Pulse-Doppler or PVA operators; CDM/BPM is deferred to a future wave; FDM and PMCW are excluded outright.
+
+**SAR** is now a specified modality rather than an excluded one, but the contract in [`docs/planning/SAR/`](docs/planning/SAR/) is **in review**. Design and documentation work against it is in scope; **SAR operator code is not**, until the contract is accepted and its invariant amendments (descriptor set, `precision_mode`, cross-tick accumulation) are reviewed as contract changes. Its own scope guardrail applies within it: stripmap and spotlight, monostatic, single-pol, time-domain backprojection — no frequency-domain formation, interferometry, polarimetry, ScanSAR, or SAR detection.
 
 ## Repo map
 
@@ -47,6 +54,7 @@ Rules that follow from "lockdown":
 | --- | --- |
 | `docs/planning/` | The specs above — the work queue and contract source of truth |
 | `docs/planning/OPERATOR_DEVELOPMENT.md` | Agent/human guidance for implementing operators (hot path, diagnosis, perf) |
+| `docs/planning/SAR/` | SAR modality contract (proposed, in review): API, workflows, testing, build plan |
 | `operators/` | Operator libraries, one dir per group, gated by `add_holohub_operator()` / `OP_<name>` CMake options |
 | `operators/common/` | Shared `radar_common` library: descriptors, window generation, point-target simulator, config cache, tensor/MatX utilities |
 | `operators/fmcw/` | FMCW signal-processing operators (+ future MIMO marshaling) |
