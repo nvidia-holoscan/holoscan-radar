@@ -10,13 +10,12 @@ import math
 import numpy as np
 
 from holoscan.radar import (
+    K_PI,
     AngleConvention,
     AngleConventionPreset,
     ArrayGeometry,
     ArrayGeometryType,
 )
-
-K_PI = math.pi
 
 
 def linspace(start: float, stop: float, n: int) -> list[float]:

@@ -20,8 +20,8 @@ from dataclasses import dataclass, field
 
 import cupy as cp
 
-K_C = 299792458.0
-K_PI = math.pi
+from holoscan.radar import K_PI
+from holoscan.radar import K_SPEED_OF_LIGHT as K_C
 
 
 @dataclass

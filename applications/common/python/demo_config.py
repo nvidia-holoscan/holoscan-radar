@@ -36,8 +36,6 @@ from common.python.sim import PointTarget
 
 # isort: on
 
-K_C = 299792458.0
-
 
 def port_tensor(message: Any, key: str) -> Any:
     """Extract a tensor from a Holoscan port message (TensorMap or bare tensor).

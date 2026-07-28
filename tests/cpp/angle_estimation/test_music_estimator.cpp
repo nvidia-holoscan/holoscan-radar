@@ -29,6 +29,7 @@
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/dsp/angle_convention.hpp"
+#include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/sdk_harness.hpp"
@@ -38,6 +39,7 @@ namespace {
 using holoscan::radar::AngleConvention;
 using holoscan::radar::AngleConventionPreset;
 using holoscan::radar::ArrayGeometry;
+using holoscan::radar::kPi;
 using holoscan::radar::BeamscanEstimatorOp;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::MUSICEstimatorOp;
@@ -49,7 +51,6 @@ using holoscan::radar::testing::to_device_tensor;
 using holoscan::radar::testing::to_pageable_host_tensor;
 using holoscan::test::create_operator_test;
 
-constexpr double kPi = 3.141592653589793;
 
 namespace cuda_accessible {
 

@@ -79,7 +79,6 @@ void accumulate_scene(matx::tensor_t<cuda::std::complex<double>, 3>& acc,
   const double slope = scene.waveform.slope();
   const double f_c = scene.waveform.carrier_frequency;
   const double pri = scene.waveform.chirp_repetition_interval;
-  const double two_pi = 2.0 * kPi;
   const cuda::std::complex<double> kI(0.0, 1.0);
 
   for (const PointTarget& target : scene.targets) {
@@ -104,7 +103,7 @@ void accumulate_scene(matx::tensor_t<cuda::std::complex<double>, 3>& acc,
           const double tau = (2.0 * range_k - aperture) / c;
           const size_t idx = static_cast<size_t>(rx * slow_time + k);
           beat_host[idx] = slope * tau;
-          slow_host[idx] = -two_pi * f_c * tau;
+          slow_host[idx] = -kTwoPi * f_c * tau;
         }
       }
       auto beat_rk = upload2d(beat_host, num_rx, slow_time, stream);
@@ -123,7 +122,7 @@ void accumulate_scene(matx::tensor_t<cuda::std::complex<double>, 3>& acc,
           slow_rk, {matx::matxKeepDim, matx::matxKeepDim, samples});
       auto t3 = matx::clone<3>(t_dev, {num_rx, slow_time, matx::matxKeepDim});
       auto w3 = matx::clone<3>(w_dev, {num_rx, matx::matxKeepDim, samples});
-      auto phase = two_pi * beat3 * t3 + slow3;
+      auto phase = kTwoPi * beat3 * t3 + slow3;
       (acc = acc + amp * w3 * matx::exp(kI * phase)).run(exec);
     }
   }

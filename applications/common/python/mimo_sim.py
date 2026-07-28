@@ -24,13 +24,13 @@ from dataclasses import dataclass, field
 # isort: off
 from holoscan.radar import TXSchedule
 
+from holoscan.radar import K_PI, K_SPEED_OF_LIGHT as K_C
+
 import cupy as cp
 
-from common.python.sim import K_PI, PointTarget, SimResult, SimWaveform
+from common.python.sim import PointTarget, SimResult, SimWaveform
 
 # isort: on
-
-K_C = 299792458.0
 
 
 @dataclass

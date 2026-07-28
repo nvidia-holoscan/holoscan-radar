@@ -18,8 +18,8 @@
 
 #include "angle_estimation/root_music_estimator_op/root_music_stage.hpp"
 #include "radar_common/dsp/planar_aperture.hpp"
-#include "radar_common/math/constants.hpp"
 #include "radar_common/dsp/spatial_smoothing_device.hpp"
+#include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"

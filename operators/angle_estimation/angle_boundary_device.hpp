@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 #include "radar_common/descriptors/angle_convention.hpp"
+#include "radar_common/math/constants.hpp"
 
 namespace holoscan::radar::detail {
 
@@ -117,9 +118,7 @@ __device__ inline void angle_canonical_to_boundary(
     az = atan2(x, -y);
   } else if (convention.preset ==
              AngleConventionPreset::kPhysicsSpherical) {
-    constexpr T kHalfPi =
-        static_cast<T>(1.57079632679489661923132169163975144);
-    el = kHalfPi - el;
+    el = static_cast<T>(kHalfPi) - el;
   } else if (convention.preset == AngleConventionPreset::kCustom) {
     const T boresight = x * convention.boresight_x +
                         y * convention.boresight_y +
@@ -134,9 +133,7 @@ __device__ inline void angle_canonical_to_boundary(
     az = atan2(azimuth, boresight);
     el = asin(elevation);
     if (convention.elevation_reference == ElevationReference::kZenith) {
-      constexpr T kHalfPi =
-          static_cast<T>(1.57079632679489661923132169163975144);
-      el = kHalfPi - el;
+      el = static_cast<T>(kHalfPi) - el;
     }
   }
   *out0 = az;

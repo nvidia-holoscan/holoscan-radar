@@ -20,6 +20,8 @@
 #include <string>
 #include <vector>
 
+#include "radar_common/math/constants.hpp"
+
 #include "angle_estimation/angle_boundary_device.hpp"
 #include "angle_estimation/music_estimator_op/music_stage.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
@@ -147,10 +149,9 @@ __global__ void root_music_companion_kernel(
 
 template <typename T>
 __device__ inline T wrapped_phase_distance(T a, T b) {
-  constexpr T kTwoPi =
-      static_cast<T>(6.28318530717958647692528676655900577);
+  const T two_pi = static_cast<T>(kTwoPi);
   T d = fabs(a - b);
-  return d > kTwoPi - d ? kTwoPi - d : d;
+  return d > two_pi - d ? two_pi - d : d;
 }
 
 template <typename T>

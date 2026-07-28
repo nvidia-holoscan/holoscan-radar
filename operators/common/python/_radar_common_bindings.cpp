@@ -21,6 +21,7 @@
 #include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
+#include "radar_common/math/constants.hpp"
 #include "radar_common/reduce/reduction_enums.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
@@ -208,6 +209,17 @@ PYBIND11_MODULE(_radar_common, m) {
            py::return_value_policy::reference_internal);
 
   m.attr("DEFAULT_PROPAGATION_SPEED") = kDefaultPropagationSpeed;
+
+  // The canonical math/physics constants from radar_common/math/constants.hpp,
+  // so Python demo apps, sim models, and test helpers share one definition with
+  // the C++ operators instead of each re-typing the literal.
+  // DEFAULT_PROPAGATION_SPEED above stays separate: it is the waveform
+  // descriptor's *default* (currently equal to K_SPEED_OF_LIGHT), not the
+  // physical constant itself.
+  m.attr("K_SPEED_OF_LIGHT") = kSpeedOfLight;
+  m.attr("K_PI") = kPi;
+  m.attr("K_TWO_PI") = kTwoPi;
+  m.attr("K_HALF_PI") = kHalfPi;
 
   // Allocate a CUDA holoscan::Tensor (including zero-size shapes). Python's
   // CuPy→TensorMap path labels empty arrays as kDLCPU; operators reject that.

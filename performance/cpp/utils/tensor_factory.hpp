@@ -26,6 +26,7 @@
 #include <holoscan/core/domain/tensor.hpp>
 #include <holoscan/core/domain/tensor_map.hpp>
 
+#include "radar_common/math/constants.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
@@ -90,14 +91,13 @@ std::vector<std::complex<T>> deterministic_iq_host(
   std::vector<std::complex<T>> host(static_cast<size_t>(count));
   // Two coprime-ish tone indices plus a small DC term; the pattern repeats
   // every `n` elements so each row along the transform axis is identical.
-  const double two_pi = 6.283185307179586;
   const double k1 = 5.0;
   const double k2 = 17.0;
   for (int64_t i = 0; i < count; ++i) {
     const int64_t s = (n > 0) ? (i % n) : 0;
-    const double phase1 = two_pi * k1 * static_cast<double>(s) /
+    const double phase1 = kTwoPi * k1 * static_cast<double>(s) /
                           static_cast<double>(n > 0 ? n : 1);
-    const double phase2 = two_pi * k2 * static_cast<double>(s) /
+    const double phase2 = kTwoPi * k2 * static_cast<double>(s) /
                           static_cast<double>(n > 0 ? n : 1);
     const double re = std::cos(phase1) + 0.5 * std::cos(phase2) + 0.1;
     const double im = std::sin(phase1) + 0.5 * std::sin(phase2);

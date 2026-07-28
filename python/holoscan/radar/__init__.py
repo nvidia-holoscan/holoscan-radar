@@ -9,6 +9,10 @@
 # isort: off
 from .radar_common import (  # noqa: F401
     DEFAULT_PROPAGATION_SPEED,
+    K_HALF_PI,
+    K_PI,
+    K_SPEED_OF_LIGHT,
+    K_TWO_PI,
     AngleConvention,
     AngleConventionPreset,
     ArrayGeometry,
@@ -132,6 +136,10 @@ VirtualArrayAssemblyOp = VirtualArrayAssemblyOpF32
 
 __all__ = [
     "DEFAULT_PROPAGATION_SPEED",
+    "K_HALF_PI",
+    "K_PI",
+    "K_SPEED_OF_LIGHT",
+    "K_TWO_PI",
     "AngleConvention",
     "AngleConventionPreset",
     "ArrayGeometry",

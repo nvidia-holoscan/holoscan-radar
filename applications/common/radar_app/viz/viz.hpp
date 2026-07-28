@@ -23,6 +23,7 @@
 #include <holoscan/operators/holoviz/holoviz.hpp>
 
 #include "radar_app/viz/viz_kernels.hpp"
+#include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -663,7 +664,7 @@ class ClusterOverlayOp : public holoscan::Operator {
     std::vector<float> cos_t(static_cast<size_t>(segments) + 1);
     std::vector<float> sin_t(static_cast<size_t>(segments) + 1);
     for (int k = 0; k <= segments; ++k) {
-      const float a = 2.0F * static_cast<float>(M_PI) *
+      const float a = static_cast<float>(radar::kTwoPi) *
                       static_cast<float>(k) / static_cast<float>(segments);
       cos_t[static_cast<size_t>(k)] = std::cos(a);
       sin_t[static_cast<size_t>(k)] = std::sin(a);
@@ -1041,7 +1042,7 @@ inline void push_abs_text(holoscan::TensorMap& out,
 // Append a filled triangle-fan disc (segments triangles) to a vertex list.
 inline void plot_append_disc(std::vector<float>* v, float cx, float cy,
                              float rx, float ry, int segments) {
-  const float two_pi = 2.0F * static_cast<float>(M_PI);
+  const float two_pi = static_cast<float>(radar::kTwoPi);
   for (int k = 0; k < segments; ++k) {
     const float a0 = two_pi * static_cast<float>(k) / segments;
     const float a1 = two_pi * static_cast<float>(k + 1) / segments;
