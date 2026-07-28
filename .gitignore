@@ -3,6 +3,7 @@
 build/
 build-*/
 data/
+perf_results/
 .claude/
 .cursor/
 _CPack_Packages/

@@ -48,7 +48,7 @@ Availability of a reference implementation informs **sequencing and risk, not sc
 
 Three consequences worth stating rather than re-deriving:
 
-**The risk is not where "wrapped spine" suggests.** `BackprojectionOp` sits on a reference implementation, so its risk is *contract* rather than *math*: cross-tick accumulation, the coordinate-frame boundary, the `positions`-port conventions, and the precision-mode selection. None of those is something a reference implementation validates — a correct kernel fed a wrong-convention trajectory produces a plausible image. That is where the test effort goes.
+**Wrapping a reference implementation moves the risk rather than removing it.** `BackprojectionOp` sits on a reference implementation, so its risk is *contract* rather than *math*: cross-tick accumulation, the coordinate-frame boundary, the `positions`-port conventions, and the precision-mode selection. None of those is something a reference implementation validates — a correct kernel fed a wrong-convention trajectory produces a plausible image. That is where the test effort goes.
 
 **`AutofocusOp` holds the most correctness risk in wave one.** It is written from scratch with nothing to diff against, and its failure mode is a subtly worse image rather than an error. `MultilookOp` and `GeocodeOp` are in the same position but fall in a later wave.
 
@@ -93,7 +93,7 @@ operators/sar/
     python/
   backprojection_op/
     ...                             # same five-part split
-    backprojection_stage.hpp        # wraps the matx::sar_bp seam
+    backprojection_stage.hpp        # wraps the matx::experimental::sar_bp seam
     OPEN_ITEMS.md                   # emit policy, aperture state, precision modes
   autofocus_op/
     ...

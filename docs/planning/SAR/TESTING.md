@@ -230,7 +230,7 @@ The anchor, and the operator with the most contract surface.
 
 #### TensorDumpOp
 
-- Round-trips shape, dtype and values for both `npy` and `raw`.
+- `npy` round-trips shape, dtype and values. `raw` round-trips values only, checked against the shape and dtype the test supplied, since the format carries neither.
 - `every_n` and `max_files` throttle as configured.
 
 ---

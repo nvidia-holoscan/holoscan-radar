@@ -102,7 +102,7 @@ Each chain below appears twice: as a `text` block showing how tensor shapes evol
 
 Cross-cutting wiring facts, which apply across the diagrams:
 
-- **`positions` bypasses range compression.** It runs from the ingress source directly to `BackprojectionOp`, since nothing between them touches geometry. Every chain therefore has two parallel edges out of ingress, and forgetting the geometry one is the most common wiring mistake.
+- **`positions` bypasses range compression.** It runs from the ingress source directly to `BackprojectionOp`, since nothing between them touches geometry. Every chain therefore has two parallel *paths* out of ingress — the signal path through range compression, and the geometry path carrying `positions` and `reference_range` straight to formation — and forgetting the geometry one is the most common wiring mistake.
 - **`reference_range` travels with `positions`**, for the same reason and to the same consumer.
 - **`range_bins`** is the optional third edge: wiring `SARRangeCompressionOp.range_bins → BackprojectionOp.range_bins` makes the two stages' range axes consistent by construction, and supersedes `range_bin_spacing` / `range_bin_origin`. Leaving it unconnected means the caller mirrors `nfft` by hand. `CPHDReaderOp.sample_axis` is **not** a substitute: it is the stored-sample axis (frequency or time of arrival), not a range axis, and it has the same length as `range_bins` whenever `nfft` is unset — so the mis-wiring is shape-legal and shows up only as a displaced image.
 - **`sample_points`** is present only in points mode; in grid mode the geometry is parameters and there is no edge at all.
@@ -181,7 +181,7 @@ flowchart TD
   READ -->|"positions (num_pulses, 3)"| BP["BackprojectionOp"]
   READ -->|"reference_range (num_pulses)"| BP
   RC -->|"range_profiles (num_pulses, num_range_bins)"| BP
-  RC -.->|"range_bins → BackprojectionOp.range_bins"| BP
+  RC -.->|"range_bins"| BP
   GEOM["sample_points (num_points, 3) — points mode only"] -.->|"sample_points"| BP
   BP -->|"image (num_v, num_u)"| AF["AutofocusOp"]
   AF -->|"image"| SLC["SLC image"]
@@ -241,7 +241,7 @@ The term covers three different things in the SAR literature, and only one survi
 2. **Kinematics: navigation solution → phase-center positions.** Real computation, and backprojection's accuracy is bounded entirely by it. It produces a *trajectory*, not a phase correction. This is the application's job (see *Application responsibilities*).
 3. **Deramp reference bookkeeping.** If the front end deramped against a tracking reference point, the range-bin-to-absolute-range mapping varies per pulse. CPHD carries this, which is why the CPHD path appears free of it; on a live deramped radar it is live work, and it belongs to the deramped branch alongside RVP removal.
 
-On navigation *uncertainty* specifically: an unknown position error cannot be compensated, only **estimated** — which is autofocus — or **reduced upstream** with a better navigation solution. So uncertainty does not create a stage. It sets a quality bar on (2), and it is why (autofocus) exists.
+On navigation *uncertainty* specifically: an unknown position error cannot be compensated, only **estimated** — which is autofocus — or **reduced upstream** with a better navigation solution. So uncertainty does not create a stage. It sets a quality bar on (2), and it is why `AutofocusOp` exists.
 
 ## Why FMCW detection does not carry over
 
