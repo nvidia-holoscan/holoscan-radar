@@ -253,8 +253,13 @@ class EstimatorSelector:
             return max(0, min(self.hold_index, n - 1))
         if self.mode == "rotate":
             return rotated
+        # A recognized value sticks until the next recognized value; an
+        # absent/empty/unrecognized poll leaves the prior latch in place (so a
+        # one-shot ``echo music > path`` persists). Rotation is the fallback
+        # only until the first override latches.
         requested = self._poll_control_file()
-        self._latched = requested if requested >= 0 else -1
+        if requested >= 0:
+            self._latched = requested
         return self._latched if self._latched >= 0 else rotated
 
     def _log(self) -> None:

@@ -689,7 +689,7 @@ Defines two ordered, corresponding element-index sets with one common nonzero di
 - `reference_indices` — int vector. Element indices for the reference subarray.
 - `shifted_indices` — int vector of the same length. `shifted_indices[i]` corresponds to `reference_indices[i]`; every position difference must equal the same displacement within geometry tolerance.
 - Both vectors must be nonempty, equal length, unique within each vector, and in range. The two vectors may overlap (the standard ULA maximum-overlap pair does).
-- Both vectors empty is the `auto` sentinel: on a ULA with `M` elements derive `[0, …, M−2]` / `[1, …, M−1]`. `auto` rejects geometry that is not a uniformly spaced line in snapshot channel order.
+- Both vectors empty is the `auto` sentinel. For a **single** shift-invariant pair (the generic case, and the 1-D ESPRIT path) `auto` derives `[0, …, M−2]` / `[1, …, M−1]` on a ULA with `M` elements, and rejects geometry that is not a uniformly spaced line in snapshot channel order. `ESPRITEstimatorOp` additionally accepts `auto` on a filled URA, where it derives the *two* orthogonal maximum-overlap invariances (y-shift and z-shift) from the lattice rather than a single pair — see the ESPRITEstimatorOp algorithm note. An explicit (nonempty) `subarray_spec` always specifies exactly one pair.
 
 ### AngleConvention
 

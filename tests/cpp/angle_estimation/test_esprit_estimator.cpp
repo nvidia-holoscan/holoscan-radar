@@ -30,9 +30,9 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
 #include "radar_common/dsp/angle_convention.hpp"
-#include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "utils/estimator_test_fixtures.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
@@ -40,7 +40,6 @@ namespace {
 using holoscan::radar::AngleConvention;
 using holoscan::radar::AngleConventionPreset;
 using holoscan::radar::ArrayGeometry;
-using holoscan::radar::kPi;
 using holoscan::radar::ArrayGeometryType;
 using holoscan::radar::ElevationReference;
 using holoscan::radar::ESPRITEstimatorOp;
@@ -55,180 +54,17 @@ using holoscan::radar::testing::to_device_tensor;
 using holoscan::radar::testing::to_pageable_host_tensor;
 using holoscan::test::create_operator_test;
 
-
-namespace cuda_accessible {
-
-struct BufferHolder {
-  void* data{nullptr};
-  std::vector<int64_t> shape;
-  DLDevice device{kDLCUDA, 0};
-  DLManagedTensor dl{};
-
-  ~BufferHolder() {
-    if (device.device_type == kDLCUDAHost) {
-      cudaFreeHost(data);
-    } else {
-      cudaFree(data);
-    }
-  }
-};
-
-template <typename ElementT>
-std::shared_ptr<holoscan::Tensor> make_tensor(
-    const std::vector<ElementT>& host, const std::vector<int64_t>& shape,
-    DLDataType dtype, DLDeviceType device_type) {
-  auto holder = std::make_unique<BufferHolder>();
-  holder->shape = shape;
-  const size_t nbytes = host.size() * sizeof(ElementT);
-  int device_id = 0;
-  cudaGetDevice(&device_id);
-  holder->device = DLDevice{device_type, device_id};
-  if (device_type == kDLCUDAManaged) {
-    if (cudaMallocManaged(&holder->data, nbytes) != cudaSuccess) {
-      throw std::runtime_error("cuda_accessible: cudaMallocManaged failed");
-    }
-  } else if (device_type == kDLCUDAHost) {
-    if (cudaHostAlloc(&holder->data, nbytes, cudaHostAllocMapped) !=
-        cudaSuccess) {
-      throw std::runtime_error("cuda_accessible: cudaHostAlloc failed");
-    }
-  } else {
-    throw std::invalid_argument("cuda_accessible: unsupported device type");
-  }
-  std::memcpy(holder->data, host.data(), nbytes);
-  holder->dl.dl_tensor.data = holder->data;
-  holder->dl.dl_tensor.device = holder->device;
-  holder->dl.dl_tensor.ndim = static_cast<int32_t>(shape.size());
-  holder->dl.dl_tensor.dtype = dtype;
-  holder->dl.dl_tensor.shape = holder->shape.data();
-  holder->dl.dl_tensor.strides = nullptr;
-  holder->dl.dl_tensor.byte_offset = 0;
-  holder->dl.manager_ctx = holder.get();
-  holder->dl.deleter = [](DLManagedTensor* self) {
-    delete static_cast<BufferHolder*>(self->manager_ctx);
-  };
-  auto tensor = std::make_shared<holoscan::Tensor>(&holder->dl);
-  holder.release();
-  return tensor;
-}
-
-}  // namespace cuda_accessible
-
-ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing,
-                                double wavelength) {
-  ArrayGeometry geom;
-  geom.wavelength = wavelength;
-  geom.geometry_type = ArrayGeometryType::kUla;
-  geom.element_positions.reserve(static_cast<size_t>(num_elements * 3));
-  for (int64_t m = 0; m < num_elements; ++m) {
-    geom.element_positions.push_back(0.0);
-    geom.element_positions.push_back(static_cast<double>(m) * spacing);
-    geom.element_positions.push_back(0.0);
-  }
-  return geom;
-}
-
-ArrayGeometry make_planar_ura_geometry(int64_t ny, int64_t nz, double spacing,
-                                       double wavelength) {
-  ArrayGeometry geom;
-  geom.wavelength = wavelength;
-  geom.geometry_type = ArrayGeometryType::kUra;
-  geom.element_positions.reserve(static_cast<size_t>(ny * nz * 3));
-  for (int64_t iz = 0; iz < nz; ++iz) {
-    for (int64_t iy = 0; iy < ny; ++iy) {
-      geom.element_positions.push_back(0.0);
-      geom.element_positions.push_back(static_cast<double>(iy) * spacing);
-      geom.element_positions.push_back(static_cast<double>(iz) * spacing);
-    }
-  }
-  return geom;
-}
-
-std::vector<std::complex<double>> steering_vector(const ArrayGeometry& geom,
-                                                  const AngleConvention& conv,
-                                                  double az, double el) {
-  const auto dir = holoscan::radar::boundary_to_canonical(conv, az, el);
-  const double k = 2.0 * kPi / geom.wavelength;
-  std::vector<std::complex<double>> a(
-      static_cast<size_t>(geom.num_elements()));
-  for (int64_t m = 0; m < geom.num_elements(); ++m) {
-    const size_t base = static_cast<size_t>(m * 3);
-    const double phase = k * (geom.element_positions[base] * dir.x +
-                            geom.element_positions[base + 1] * dir.y +
-                            geom.element_positions[base + 2] * dir.z);
-    a[static_cast<size_t>(m)] = {std::cos(phase), std::sin(phase)};
-  }
-  return a;
-}
-
-std::vector<std::complex<double>> make_block(const ArrayGeometry& geom,
-                                             const AngleConvention& conv,
-                                             double az, double el, int64_t S,
-                                             double noise, unsigned seed) {
-  const auto a = steering_vector(geom, conv, az, el);
-  const int64_t C = geom.num_elements();
-  std::vector<std::complex<double>> x(static_cast<size_t>(C * S));
-  std::mt19937 rng(seed);
-  std::normal_distribution<double> n(0.0, noise);
-  for (int64_t s = 0; s < S; ++s) {
-    const double gp =
-        2.0 * kPi * static_cast<double>(s) / static_cast<double>(S);
-    const std::complex<double> g{std::cos(gp), std::sin(gp)};
-    for (int64_t c = 0; c < C; ++c) {
-      std::complex<double> v = a[static_cast<size_t>(c)] * g;
-      v += std::complex<double>(n(rng), n(rng));
-      x[static_cast<size_t>(c * S + s)] = v;
-    }
-  }
-  return x;
-}
-
-std::vector<std::complex<double>> make_block_two(
-    const ArrayGeometry& geom, const AngleConvention& conv, double az0,
-    double el0, double az1, double el1, int64_t S, double noise,
-    unsigned seed) {
-  const auto a0 = steering_vector(geom, conv, az0, el0);
-  const auto a1 = steering_vector(geom, conv, az1, el1);
-  const int64_t C = geom.num_elements();
-  std::vector<std::complex<double>> x(static_cast<size_t>(C * S));
-  std::mt19937 rng(seed);
-  std::uniform_real_distribution<double> phase(0.0, 2.0 * kPi);
-  std::normal_distribution<double> n(0.0, noise);
-  for (int64_t s = 0; s < S; ++s) {
-    const double p0 = phase(rng);
-    const double p1 = phase(rng);
-    const std::complex<double> g0{std::cos(p0), std::sin(p0)};
-    const std::complex<double> g1{std::cos(p1), std::sin(p1)};
-    for (int64_t c = 0; c < C; ++c) {
-      std::complex<double> v =
-          a0[static_cast<size_t>(c)] * g0 + a1[static_cast<size_t>(c)] * g1;
-      v += std::complex<double>(n(rng), n(rng));
-      x[static_cast<size_t>(c * S + s)] = v;
-    }
-  }
-  return x;
-}
-
-template <typename T>
-std::shared_ptr<holoscan::Tensor> block_to_device(
-    const std::vector<std::complex<double>>& host,
-    const std::vector<int64_t>& shape) {
-  std::vector<std::complex<T>> cast(host.size());
-  for (size_t i = 0; i < host.size(); ++i) {
-    cast[i] = {static_cast<T>(host[i].real()), static_cast<T>(host[i].imag())};
-  }
-  return to_device_tensor(cast, shape, complex_dtype<T>());
-}
-
-void wire_noop_output(holoscan::Fragment* app,
-                      const std::shared_ptr<holoscan::Operator>& op,
-                      const std::string& port) {
-  const auto noop = [](const holoscan::TensorMap&) {};
-  auto sink = app->make_operator<
-      holoscan::test::TestHarnessSinkOp<holoscan::TensorMap>>(port + "_noop");
-  sink->set_validators({noop});
-  app->add_flow(op, sink, {{port, "input"}});
-}
+// Snapshot builders, geometries, and CUDA-accessible tensor wrappers are
+// shared across the MUSIC / Root-MUSIC / ESPRIT tests; see the header.
+namespace cuda_accessible = holoscan::radar::testing::cuda_accessible;
+using holoscan::radar::testing::block_to_device;
+using holoscan::radar::testing::kPi;
+using holoscan::radar::testing::make_block;
+using holoscan::radar::testing::make_block_two;
+using holoscan::radar::testing::make_planar_ura_geometry;
+using holoscan::radar::testing::make_ula_geometry;
+using holoscan::radar::testing::steering_vector;
+using holoscan::radar::testing::wire_noop_output;
 
 struct EspritOutputs {
   HostTensor aoa;

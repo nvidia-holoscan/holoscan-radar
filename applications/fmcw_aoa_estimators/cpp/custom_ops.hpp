@@ -217,12 +217,13 @@ class EstimatorRouterOp : public holoscan::Operator {
     if (mode == RouterMode::kRotate) {
       return rotated;
     }
-    // kFile: poll and latch; fall back to rotation when unset.
+    // kFile: poll and latch. A recognized value sticks until the next
+    // recognized value; an absent/empty/unrecognized poll leaves the prior
+    // latch in place (so a one-shot `echo music > path` persists). Rotation is
+    // the fallback only until the first override latches.
     const int64_t requested = poll_control_file();
     if (requested >= 0) {
       latched_index_ = requested;
-    } else {
-      latched_index_ = -1;
     }
     return latched_index_ >= 0 ? latched_index_ : rotated;
   }
