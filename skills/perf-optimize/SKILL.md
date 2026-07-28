@@ -218,7 +218,9 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
    believing it. No real gain → revert.
 
    **Revert** (any gate fails): `git checkout -- <changed files>` and rebuild, so
-   the tree is back to baseline.
+   the tree is back to baseline. That restores the whole file, so if it also
+   carried uncommitted work you meant to keep, check the diff afterwards and
+   re-apply what went with it.
 
 8. **Report + present.** If all three gates pass, remove any temporary
    instrumentation (see below), write a `session.json` recording the change, and

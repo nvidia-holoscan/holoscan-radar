@@ -54,6 +54,14 @@ Within the worktree, apply/gate/keep-or-revert each candidate **in place** (git
 fast. (Parallel exploration across multiple worktrees is a future enhancement;
 v0 is sequential.)
 
+> **`git checkout -- <file>` reverts the whole file, not your candidate.** From
+> iteration 2 on, a candidate often lands in a file that already carries an
+> earlier *kept* change — reverting it that way silently discards the kept work
+> too, and the loop carries on measuring against a baseline it no longer has.
+> Either commit each kept change as you go (so `checkout --` restores to it), or
+> diff against the expected kept state after every revert and re-apply what was
+> lost. Confirm the tree before the next build, not after the next gate.
+
 **Override — work locally.** If the user explicitly asks to run **in place / on
 the current branch / without a worktree** (e.g. "just work locally"), skip the
 `git worktree add` and run the same loop directly in their checkout. Then:
