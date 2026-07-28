@@ -650,7 +650,8 @@ void print_live_table(const perf::PerfReport& report) {
               << (p.f_ovr - p.f_steady) << "\n";
   }
   std::cout << "(ovr_d is the reconfiguration cost paid on the change tick; a "
-               "small ovr_d means the warn-once plan/coeff cache is working)\n\n";
+               "small ovr_d means the warn-once plan/coeff cache is "
+               "working)\n\n";
 }
 
 // Sustained-throughput table: true pipelined frames/sec for each graph (single

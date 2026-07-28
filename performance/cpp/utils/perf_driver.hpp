@@ -42,10 +42,9 @@
 //                                                 // --sweep-overrides
 //
 //   std::vector<Scenario> build_variant_sweep(
-//       const std::vector<std::string>& sizes);  // primary categorical axis
-//                                                 // (method/window/variant/...)
-//                                                 // x sizes, selected by
-//                                                 // --sweep-variants
+//       const std::vector<std::string>& sizes);
+//       // Primary categorical axis (method/window/variant/...) x sizes,
+//       // selected by --sweep-variants.
 //
 // When present, --sweep-overrides / --sweep-variants call the matching hook;
 // when absent, that flag is rejected for that tool. build_variant_sweep crosses
@@ -124,7 +123,8 @@ std::false_type has_override_sweep_probe(...);
 template <typename Traits>
 using has_override_sweep = decltype(has_override_sweep_probe<Traits>(0));
 
-// Compile-time detection of an optional Traits::build_variant_sweep(sizes) hook.
+// Compile-time detection of an optional
+// Traits::build_variant_sweep(sizes) hook.
 // Present on consumers whose operator has a primary categorical axis (a
 // method/window/variant/policy/pack/scheme mode) worth breaking out per size;
 // absent otherwise. Same no-base-class-default reasoning as the override probe.
@@ -243,7 +243,8 @@ bool parse_args(int argc, char** argv, Options* opt) {
       const std::string v = next("--live");
       if constexpr (Traits::has_live_modes) {
         if (v != "nfft" && v != "window" && v != "waveform") {
-          std::cerr << "error: --live must be one of {nfft, window, waveform}\n";
+          std::cerr
+              << "error: --live must be one of {nfft, window, waveform}\n";
           return false;
         }
         opt->rs.live_param = v;
