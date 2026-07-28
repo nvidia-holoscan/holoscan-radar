@@ -249,6 +249,29 @@ def _tick_count(phases: list) -> int:
     return max(per_tick) if per_tick else 0
 
 
+
+# A tick is one compute() call. Work that does not recur once per tick -- a
+# one-time plan/LUT build, a process-teardown free, or a detached background
+# thread's GPU work overlapping the measured window -- must be kept out of the
+# per-tick figures, or a single large one-time cost is smeared across every
+# frame and reported as steady-state.
+#
+# The discriminator is launch count against tick count, because it survives the
+# cases NVTX range membership cannot: CFAR's GO/SO alpha-LUT calibration runs on
+# a detached thread whose kernels genuinely overlap the tick ranges in time, so
+# projecting GPU time onto those ranges still attributes it to ticks. A callable
+# invoked ~once per tick (allowing a few launches per tick for batched work) is
+# steady; anything far above or below that is not.
+MAX_LAUNCHES_PER_TICK = 16
+
+
+def _is_steady(count: int, ticks: int) -> bool:
+    """True if `count` invocations look like once-or-a-few per tick."""
+    if not ticks or not count:
+        return False
+    return ticks <= count <= ticks * MAX_LAUNCHES_PER_TICK
+
+
 def build_size_analysis(size: str, clean_json: dict, stats: dict, op_name: str) -> dict:
     comps = _compute_rows(clean_json)
     comp = comps[0] if comps else {}  # primary/default variant (back-compat)
@@ -274,22 +297,58 @@ def build_size_analysis(size: str, clean_json: dict, stats: dict, op_name: str) 
         ticks = max((k["instances"] for k in kern["kernels"]), default=0)
     cats = api["by_category"]
 
+    # Split both the kernels and the host API into steady (per-tick) and
+    # non-steady (one-time setup, teardown, or concurrent background work).
+    # Only the steady half feeds the per-tick figures; the rest is reported
+    # separately so it stays visible instead of being silently dropped.
+    steady_kernel_ns = sum(
+        k["ns"] for k in kern["kernels"] if _is_steady(k["instances"], ticks)
+    )
+    non_steady_kernels = [
+        {"name": k["name"], "ns": k["ns"], "instances": k["instances"]}
+        for k in kern["kernels"]
+        if not _is_steady(k["instances"], ticks)
+    ]
+    steady_cats: dict = {}
+    non_steady_api = []
+    for nm, v in api["by_name"].items():
+        bucket = steady_cats.setdefault(v["category"], {"ns": 0, "calls": 0})
+        if _is_steady(v["calls"], ticks):
+            bucket["ns"] += v["ns"]
+            bucket["calls"] += v["calls"]
+        else:
+            non_steady_api.append(
+                {"name": nm, "ns": v["ns"], "calls": v["calls"],
+                 "category": v["category"]}
+            )
+    non_steady_api.sort(key=lambda a: a["ns"], reverse=True)
+
     def cat_ns(name):
         return cats.get(name, {}).get("ns", 0)
 
-    def cat_calls(name):
-        return cats.get(name, {}).get("calls", 0)
+    def steady_ns(name):
+        return steady_cats.get(name, {}).get("ns", 0)
 
-    alloc_free_ns = cat_ns("alloc") + cat_ns("free")
+    def steady_calls(name):
+        return steady_cats.get(name, {}).get("calls", 0)
+
+    alloc_free_ns = steady_ns("alloc") + steady_ns("free")
     host_api_ns = sum(c.get("ns", 0) for c in cats.values())
     derived = {
         "ticks": ticks,
-        "kernel_ns_per_tick": kern["kernel_ns_total"] / ticks if ticks else None,
+        "kernel_ns_per_tick": steady_kernel_ns / ticks if ticks else None,
         "alloc_free_ns_per_tick": alloc_free_ns / ticks if ticks else None,
-        "alloc_calls_per_tick": cat_calls("alloc") / ticks if ticks else None,
-        "free_calls_per_tick": cat_calls("free") / ticks if ticks else None,
-        "memcpy_calls_per_tick": cat_calls("memcpy") / ticks if ticks else None,
-        "sync_calls_per_tick": cat_calls("sync") / ticks if ticks else None,
+        "alloc_calls_per_tick": steady_calls("alloc") / ticks if ticks else None,
+        "free_calls_per_tick": steady_calls("free") / ticks if ticks else None,
+        "memcpy_calls_per_tick": steady_calls("memcpy") / ticks if ticks else None,
+        "sync_calls_per_tick": steady_calls("sync") / ticks if ticks else None,
+        # Excluded from every per-tick figure above. Non-empty here is worth
+        # reading: a large one-time build is a cold-start cost, while a
+        # high-count entry is background work concurrent with the measurement
+        # and may be perturbing the steady median itself.
+        "non_steady_kernels": non_steady_kernels,
+        "non_steady_api": non_steady_api[:10],
+        "non_steady_kernel_ns": kern["kernel_ns_total"] - steady_kernel_ns,
         # Host-API time share (whole run) — where non-kernel time goes.
         "host_api_pct": {
             k: (100.0 * v.get("ns", 0) / host_api_ns) if host_api_ns else 0.0

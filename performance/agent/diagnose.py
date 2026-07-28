@@ -32,6 +32,10 @@ from pathlib import Path
 COLD_RATIO_WARN = 3.0  # cold_ms > N x median => cold-dominated
 ALLOC_CALLS_PER_TICK_WARN = 1.0  # >= N alloc calls/tick => per-tick allocation
 KERNEL_FRACTION_WARN = 0.5  # kernel < N of steady tick => host/graph-bound
+# kernel >= N of steady tick => the kernel IS the tick. Without this the rubric
+# could only ever say "do not optimize the kernel" (host_bound_tick) and never
+# the converse, so a kernel-dominated operator produced no kernel finding at all.
+KERNEL_FRACTION_DOMINANT = 0.7
 OVERRIDE_COSTLY_MS = 5.0  # override delta > N ms => costly reconfig
 OVERRIDE_HIGH_MS = 20.0  # override delta > N ms => high-severity reconfig
 
@@ -95,11 +99,21 @@ def diagnose_size(s: dict) -> list:
 
     # --- kernel fraction of the steady tick (shared signal) ----------------
     # Kernel time is GPU-side (profiled run); median is the clean steady wall.
-    kern_total = s["gpu"].get("kernel_ns_total") or 0
-    kern_pt_ns = kern_total / ticks if ticks else None
+    # Use parse.py's steady-only per-tick kernel time, not the whole-run total:
+    # the latter includes one-time builds, teardown, and any background work
+    # overlapping the measured window, and dividing that by tick count reports
+    # a per-tick cost that never happened per tick.
+    kern_pt_ns = der.get("kernel_ns_per_tick")
     steady_ns = median * 1e6 if median else None
     kern_frac = (kern_pt_ns / steady_ns) if (kern_pt_ns and steady_ns) else None
+    # kern_frac mixes measurement domains -- nsys-profiled kernel time over a
+    # clean wall-clock median -- and nsys inflates kernel time. Above 1.0 the
+    # ratio is not physically meaningful (a tick cannot spend longer on the GPU
+    # than it takes), so treat it as kernel-dominated but do not report the
+    # number as a literal share.
+    domain_mismatch = kern_frac is not None and kern_frac > 1.0
     host_bound = kern_frac is not None and kern_frac < KERNEL_FRACTION_WARN
+    kernel_bound = kern_frac is not None and kern_frac >= KERNEL_FRACTION_DOMINANT
 
     # --- per-tick allocation (ping-pong pitfall) ---------------------------
     # Trigger on the per-tick alloc *frequency* (robust), not the whole-run
@@ -171,6 +185,48 @@ def diagnose_size(s: dict) -> list:
                 "the tick.",
                 rubric_ref="Diagnose: 'kernel fast, graph slow -> shell / "
                 "alloc / compact / scheduler'",
+            )
+        )
+
+    # --- kernel dominates the tick (the converse of host_bound_tick) -------
+    if kernel_bound:
+        share = (
+            "at or above the whole tick (nsys inflates kernel time, so read "
+            "this as kernel-dominated rather than a literal share)"
+            if domain_mismatch
+            else f"{100 * kern_frac:.0f}% of the {median:.3f} ms steady tick"
+        )
+        out.append(
+            _f(
+                "kernel_bound_tick",
+                "high" if domain_mismatch else "medium",
+                size=size,
+                title="Tick is kernel-bound — the kernel is the target",
+                detail=f"Steady GPU kernel time is ~{_ns_ms(kern_pt_ns):.4f} "
+                f"ms/tick, {share}. Shell-level fixes (pooling, gating "
+                f"allocations) cannot move this tick; the win has to come "
+                f"from the kernel itself.",
+                evidence={
+                    "kernel_ms_per_tick": _ns_ms(kern_pt_ns),
+                    "steady_median_ms": median,
+                    "kernel_fraction": (
+                        round(kern_frac, 3) if kern_frac is not None else None
+                    ),
+                    "domain_mismatch": domain_mismatch,
+                    "top_kernels": [
+                        {"name": k["name"], "ns": k["ns"]}
+                        for k in (s["gpu"].get("kernels") or [])[:3]
+                    ],
+                },
+                recommendation="Attack the kernel: hoist per-cell work fixed "
+                "by geometry rather than data (counts, bounds, "
+                "branches) into closed form or loop structure; "
+                "avoid materialising a buffer a streaming "
+                "formulation never needs; check "
+                "`cuobjdump -res-usage` for a per-thread stack "
+                "frame before assuming registers.",
+                rubric_ref="CFAR lessons: kernel-bound tick -> hoist "
+                "geometry-determined work; stream instead of materialise",
             )
         )
 
