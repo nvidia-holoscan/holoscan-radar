@@ -107,8 +107,12 @@ class PerfChecksumSinkOp : public holoscan::Operator {
       }
       total_bytes += n;
     }
+    // Trailing operator name disambiguates multiple checksum sinks in one
+    // graph (e.g. same-sized detection_score / noise_estimate maps). Appended
+    // last so the existing "output_checksum <bytes> <hash>" parsers still
+    // match.
     std::cout << "output_checksum " << total_bytes << " " << std::hex << h
-              << std::dec << "\n"
+              << std::dec << " " << name() << "\n"
               << std::flush;
     printed_ = true;
   }

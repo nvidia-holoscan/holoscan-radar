@@ -226,22 +226,35 @@ class CfarPerfApp : public holoscan::Application {
     term->configure(collector);
     add_flow(op, term, {{"detection_idx", "input"}});
 
-    // Byte-equivalence gate: fan the primary output out to a checksum sink too
-    // (prints one output_checksum line on the first, pre-override frame).
-    if (checksum) {
-      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
-      add_flow(op, cs, {{"detection_idx", "input"}});
-    }
-
-    // Every output port needs a receiver or the operator never ticks. The
-    // null sink drains each dense output as a raw entity (no Tensor
-    // deserialization), which also sidesteps the SDK's inability to
-    // round-trip the bool detection_mask through a TensorMap receive.
+    // Byte-equivalence gate: fan the outputs out to checksum sinks too (each
+    // prints one output_checksum line on the first, pre-override frame).
+    //
+    // detection_idx alone is not enough to gate a change to the CFAR kernel:
+    // it encodes *which* cells fired but none of the per-cell arithmetic. The
+    // float dense maps carry that, so score and noise each get their own sink.
+    // detection_mask needs none — uncapped, detection_idx is exactly the list
+    // of set mask cells in raster order, so the mask is covered transitively
+    // (and bool does not round-trip a TensorMap receive on HSDK 4.3 anyway).
+    const bool checksummed_port[] = {false, true, true};
+    int port_i = 0;
+    // Every output port needs a receiver or the operator never ticks. Ports
+    // without a checksum sink get the null sink, which drains the dense output
+    // as a raw entity (no Tensor deserialization).
     for (const char* port :
          {"detection_mask", "detection_score", "noise_estimate"}) {
+      if (checksum && checksummed_port[port_i++]) {
+        auto cs = make_operator<perf::PerfChecksumSinkOp>(
+            std::string(port) + "_checksum_sink");
+        add_flow(op, cs, {{port, "input"}});
+        continue;
+      }
       auto ns =
           make_operator<perf::PerfNullSinkOp>(std::string(port) + "_sink");
       add_flow(op, ns, {{port, "input"}});
+    }
+    if (checksum) {
+      auto cs = make_operator<perf::PerfChecksumSinkOp>("checksum_sink");
+      add_flow(op, cs, {{"detection_idx", "input"}});
     }
 
     wire_override(op);
