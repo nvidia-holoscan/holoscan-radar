@@ -308,20 +308,20 @@ point: five different methods, one graph, one switch, same answer.
 ### The two close passes
 
 Three of the five targets are well separated in speed (−9 / +1.5 / +9 m/s); the
-other two each shadow one of them through a close pass, putting a second
-scatterer inside one range-Doppler cell so you can see what the angle stage does
-when range and Doppler can no longer separate two objects. Both run at +0.3 m/s
-relative radial speed — half a velocity bin — so the pair holds one Doppler bin
-while its range gap closes and reopens.
+other two each shadow one of them through a close pass, so you can see what the
+angle stage does as two objects converge in range and Doppler. Both run 1.5 m/s
+faster than the target they shadow — 2.5 velocity bins, still inside the 2.0 m/s
+`cluster_dbscan.epsilon` so the pair can merge — closing a ~20 m range gap,
+coinciding, and reopening it.
 
-- **Pair A** (target 4 shadows target 2, coinciding at t = 12.5 s) is separated
-  by 0.300 rad in azimuth, past the array's 0.253 rad first null. It stays two
-  clusters in all 250 frames — angle alone carries it through.
-- **Pair B** (target 5 shadows target 1, coinciding at t = 18.0 s) differs by
-  only 0.020 rad in azimuth, so no estimator on this array can split it; every
-  cell reports a blended angle. Elevation differs by 0.060 rad, just past the
-  0.05 rad clustering epsilon, which resolves it in 97 of 250 frames and merges
-  it in the rest.
+- **Pair A** (target 4 shadows target 2, coinciding at t = 10 s) is separated by
+  0.300 rad in azimuth, past the array's 0.253 rad first null. It stays two
+  clusters in 247 of 250 frames — angle alone carries it through the crossing.
+- **Pair B** (target 5 shadows target 1, coinciding at t = 18 s) differs by only
+  0.020 rad in azimuth, so no estimator on this array can split it; every cell
+  reports a blended angle. Elevation differs by 0.060 rad, just past the
+  clustering epsilon, leaving it resolved for 202 frames and merged into one
+  object for the ~5 s around closest approach.
 
 Note `mvdr_estimator` / `music_estimator` are configured `max_sources: 1`, so
 they report one DOA per cell even where the geometry would allow two — raising
