@@ -123,6 +123,16 @@ see `perf-optimize` prerequisites and the `perf-analyze` container guidance).
       diffstat, gates incl. per-size `speed_delta_pct`); update the current-best
       baseline; **re-run `perf-analyze`** so the next pick reflects the new
       bottleneck landscape (a fix often shifts what dominates).
+
+      **Then assert the re-analysis is live.** Diff one nsys-derived counter in
+      the fresh `analysis.json` against the previous iteration's — if the kept
+      change removed work, the matching count *must* drop (a per-tick memcpy or
+      alloc call count is the easiest check). **Attribution identical to the
+      previous iteration means stale tables, not a converged operator**, and the
+      next pick would be made against a landscape that no longer exists. Note
+      latency alone is not the check: it refreshes independently of attribution,
+      so the two can disagree. If they are frozen, fix the pipeline before
+      picking again — do not iterate on stale findings.
    5. **On revert:** mark that finding tried-no-win; continue.
 
 3. **Finish.** Remove all temporary instrumentation (see below), do a final
@@ -176,12 +186,18 @@ subdir.
   the rest of the operator ungated, and every later iteration inherits that
   blind spot. Widen it first; it is cheap then and worthless after.
 - Re-analysis each kept iteration is what keeps the loop honest — it chases the
-  *current* bottleneck, not a stale finding list.
+  *current* bottleneck, not a stale finding list. That only holds if the
+  attribution actually refreshes, so verify it (step 2.4) rather than assume it.
 - Known rubric wart (candidate for a `diagnose.py` fix): advisory `[live]`-override
   findings outrank genuinely-actionable steady-path findings by severity. Until
   `diagnose.py` tags findings `actionable` vs `advisory`, the pick step must read
   past severity (see step 2.1). A first-run session typically keeps ~1 change per
   operator this size; don't force iterations to hit the budget — stop on dry.
+- **A finding that survives a fix is a stale-data suspect first, a rubric wart
+  second.** Before concluding `diagnose.py` misattributed something (e.g.
+  `per_tick_alloc` persisting after the allocation was provably pooled), confirm
+  the attribution refreshed at all. Frozen stat tables reproduce exactly that
+  symptom and are the cheaper explanation.
 - **`ncu` deep-dive (on by default, evidence-only).** By default, run the Nsight
   Compute deep-dive in `perf-analyze` when a candidate's pick hinges on whether the
   dominant *kernel* has headroom (vs the shell) or to explain a kept/reverted
