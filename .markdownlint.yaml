@@ -19,3 +19,5 @@ MD013:
   heading_line_length: 800
 MD046:
   style: fenced
+MD024:
+  siblings_only: true

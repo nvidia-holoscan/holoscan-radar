@@ -16,7 +16,7 @@ cupy = pytest.importorskip("cupy")
 from utils.harness import run_operator_multi, single_map, to_device_array  # noqa: E402
 
 from holoscan.radar import CFARDetectorOpF64  # noqa: E402
-from holoscan.radar import CFARDetectorOpF32, CfarVariant
+from holoscan.radar import CFARDetectorOpF32, CfarPeakNeighborhood, CfarVariant
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -72,7 +72,7 @@ def run_cfar(
     op_kwargs: dict | None = None,
     **cfar_kwargs,
 ) -> dict[str, np.ndarray]:
-    """Run CFAR once; capture all four outputs including detection_mask.
+    """Run CFAR once; capture all five outputs including detection_mask.
 
     detection_mask is uint8 (0/1) and therefore NumPy-visible on HSDK 4.3 (a
     kDLBool port throws on the 4.3 message path). Pass ``op_kwargs`` for a full
@@ -95,6 +95,7 @@ def run_cfar(
             "noise_estimate",
             "detection_idx",
             "detection_mask",
+            "cfar_power",
         ],
     )
     assert len(outs["detection_score"]) == 1
@@ -103,6 +104,7 @@ def run_cfar(
         "noise": outs["noise_estimate"][0],
         "idx": outs["detection_idx"][0],
         "mask": outs["detection_mask"][0],
+        "power": outs["cfar_power"][0],
     }
 
 
@@ -257,6 +259,113 @@ def test_RealAndComplexPathsAgree():
     assert num_detections(out_real["idx"]) == num_detections(out_complex["idx"])
     assert idx_contains(out_real["idx"], dt, rt)
     assert idx_contains(out_complex["idx"], dt, rt)
+
+
+# ---------------------------------------------------------------------------
+# cfar_power — port of tests/cpp/detection/test_cfar_detector.cpp
+# ---------------------------------------------------------------------------
+
+
+def test_CfarPowerIsSquareLawPowerWithoutNci():
+    # nci_axes empty: the thresholded surface is the plain square-law power map.
+    cube = np.full((K_DOPPLER, K_RANGE), 1.0 + 0.0j, dtype=np.complex128)
+    cube[5, 20] = 3.0 + 4.0j
+    out = run_cfar(cube, (K_DOPPLER, K_RANGE), dtype=np.complex128, pfa=1e-3)
+    assert out["power"].shape == (K_DOPPLER, K_RANGE)
+    assert out["power"].shape == out["score"].shape  # contract: same as the maps
+    np.testing.assert_allclose(out["power"], np.abs(cube) ** 2, rtol=0, atol=1e-9)
+    assert out["power"][5, 20] == pytest.approx(25.0)  # |3+4i|^2
+
+
+def test_CfarPowerIsNciSumOverFold():
+    # nci_axes=[0] over a rank-3 cube: the channel axis folds away and the
+    # surface is sum_k |x_k|^2. Channel k has background (k+1), so the
+    # background sum is 1 + 4 + 9 + 16 = 30.
+    n_ch = 4
+    cube = np.empty((n_ch, K_DOPPLER, K_RANGE), dtype=np.complex128)
+    for k in range(n_ch):
+        cube[k] = float(k + 1) + 0.0j
+        cube[k, 5, 20] = 10.0 + 0.0j
+    out = run_cfar(
+        cube,
+        (n_ch, K_DOPPLER, K_RANGE),
+        dtype=np.complex128,
+        pfa=1e-3,
+        nci_axes=[0],
+        # nci_fold is not exposed by the Python binding (it is only an alpha-LUT
+        # pre-warm hint); the operator derives the fold from the channel axis.
+    )
+    assert out["power"].shape == (K_DOPPLER, K_RANGE)  # folded axis is gone
+    assert out["power"].shape == out["score"].shape
+    assert out["power"][0, 0] == pytest.approx(30.0)
+    assert out["power"][5, 20] == pytest.approx(400.0)  # 4 * |10|^2
+    # It is the surface the detector thresholded: the detection is its maximum.
+    assert num_detections(out["idx"]) == 1
+    peak = np.unravel_index(np.argmax(out["power"]), out["power"].shape)
+    assert idx_contains(out["idx"], int(peak[0]), int(peak[1]))
+
+
+# ---------------------------------------------------------------------------
+# Peak grouping (peak_only) — port of tests/cpp/detection/test_cfar_detector.cpp
+# ---------------------------------------------------------------------------
+
+
+def test_PeakOnlyOffMatchesRawMask():
+    # Off by default (and peak_only=False) keeps the raw candidate mask: a
+    # contiguous 3-cell strip stays 3 detections either way.
+    mp = power_map(1.0, [(8, 15), (8, 16), (8, 17)], 100.0)
+    raw = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2)
+    off = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2, peak_only=False)
+    assert num_detections(raw["idx"]) == 3
+    assert num_detections(off["idx"]) == num_detections(raw["idx"])
+
+
+def test_PeakOnlyKeepsSingleMax():
+    # Adjacent (guard-separated) pair with distinct power: peak_only keeps the
+    # maximum only; detection_mask agrees with the reduced count.
+    flat = power_map(1.0, [], 1.0).reshape(K_DOPPLER, K_RANGE)
+    flat[8, 16] = 100.0
+    flat[8, 17] = 50.0
+    off = run_cfar(flat, (K_DOPPLER, K_RANGE), pfa=1e-3)
+    on = run_cfar(flat, (K_DOPPLER, K_RANGE), pfa=1e-3, peak_only=True)
+    assert num_detections(off["idx"]) == 2
+    assert num_detections(on["idx"]) == 1
+    assert idx_contains(on["idx"], 8, 16)  # the max, not (8, 17)
+    assert int((on["mask"] != 0).sum()) == 1
+
+
+def test_PeakOnlyCollapsesStripRasterTiebreak():
+    # A flat contiguous strip collapses to its lowest-raster-index cell.
+    mp = power_map(1.0, [(8, 15), (8, 16), (8, 17)], 100.0)
+    off = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2)
+    on = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2, peak_only=True)
+    assert num_detections(off["idx"]) == 3
+    assert num_detections(on["idx"]) == 1
+    assert idx_contains(on["idx"], 8, 15)  # lowest linear index survives
+    assert int((on["mask"] != 0).sum()) == 1
+
+
+def test_PeakOnlyNeighborhoodCross4VsSquare8():
+    # square8 sees a diagonal neighbor (collapses a diagonal equal pair to one);
+    # cross4 does not (both survive).
+    mp = power_map(1.0, [(5, 5), (6, 6)], 100.0)
+    square8 = run_cfar(
+        mp,
+        (K_DOPPLER, K_RANGE),
+        pfa=1e-3,
+        peak_only=True,
+        peak_neighborhood=CfarPeakNeighborhood.SQUARE8,
+    )
+    cross4 = run_cfar(
+        mp,
+        (K_DOPPLER, K_RANGE),
+        pfa=1e-3,
+        peak_only=True,
+        peak_neighborhood=CfarPeakNeighborhood.CROSS4,
+    )
+    assert num_detections(square8["idx"]) == 1
+    assert idx_contains(square8["idx"], 5, 5)  # lower linear index survives
+    assert num_detections(cross4["idx"]) == 2
 
 
 # ---------------------------------------------------------------------------

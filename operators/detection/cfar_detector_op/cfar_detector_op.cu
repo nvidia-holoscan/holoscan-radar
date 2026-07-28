@@ -47,6 +47,25 @@ struct convert<holoscan::radar::CfarVariant> {
     return true;
   }
 };
+
+template <>
+struct convert<holoscan::radar::CfarPeakNeighborhood> {
+  static Node encode(const holoscan::radar::CfarPeakNeighborhood& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::CfarPeakNeighborhood& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    static constexpr holoscan::radar::CfarPeakNeighborhood kAll[] = {
+        holoscan::radar::CfarPeakNeighborhood::kCross4,
+        holoscan::radar::CfarPeakNeighborhood::kSquare8};
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "CfarPeakNeighborhood", kAll);
+    return true;
+  }
+};
 }  // namespace YAML
 
 namespace holoscan::radar {
@@ -146,6 +165,7 @@ template <typename T>
 void CFARDetectorOp<T>::initialize() {
   ensure_radar_arg_setters();
   ArgumentSetter::ensure_type<CfarVariant>();
+  ArgumentSetter::ensure_type<CfarPeakNeighborhood>();
   Operator::initialize();
 }
 
@@ -236,6 +256,19 @@ void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
   spec.output<holoscan::TensorMap>("detection_score");
   spec.output<holoscan::TensorMap>("noise_estimate");
   spec.output<holoscan::TensorMap>("detection_idx");
+  // The exact surface the threshold is applied to: the post-NCI integrated
+  // power when nci_axes is non-empty, else the plain square-law power map.
+  // Emitted every tick (the workspace buffer, no copy) so consumers such as
+  // the demo apps' RD display can show what the detector actually saw rather
+  // than re-deriving it.
+  //
+  // kNone drops the default DownstreamReceptiveSchedulingTerm, which is what
+  // makes this port genuinely optional: with the default term an unconnected
+  // output stops the operator from ever ticking ("No receiver connected to
+  // transmitter ... The entity will never tick"), so adding a mandatory output
+  // would break every existing consumer that does not drain it.
+  spec.output<holoscan::TensorMap>("cfar_power")
+      .condition(holoscan::ConditionType::kNone);
 
   spec.param(cfar_variant_, "cfar_variant", "CFAR variant",
              "Noise-estimation rule {CA, GO, SO, OS}. Static: selects the "
@@ -282,6 +315,18 @@ void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
              "after a [live] config change; when true, block compute() until "
              "the new LUT is ready.",
              false);
+  spec.param(peak_only_, "peak_only", "Peak grouping (one point per peak)",
+             "When true, collapse each contiguous above-threshold blob to its "
+             "local-maximum cell (non-maximum suppression) so detection_idx / "
+             "detection_mask carry one point per CFAR peak. Static. Off "
+             "(default) emits the raw candidate mask.",
+             false);
+  spec.param(peak_neighborhood_, "peak_neighborhood",
+             "Peak-grouping neighborhood",
+             "Neighborhood for the peak_only NMS test: {cross4, square8}. "
+             "cross4 = 2 range + 2 Doppler neighbors; square8 = full 8-cell. "
+             "Static; used only when peak_only is set.",
+             CfarPeakNeighborhood::kSquare8);
 
   add_override_port<int64_t>(spec, "os_rank");
   add_override_port<std::vector<int64_t>>(spec, "guard_cells");
@@ -360,10 +405,20 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
     ws.score = make_device_tensor(output_shape, real_dtype<T>());
     ws.noise = make_device_tensor(output_shape, real_dtype<T>());
     ws.mask = make_device_tensor(output_shape, kMaskDtype);
-    ws.power = make_device_tensor({plan.batch_in, num_doppler, num_range},
-                                 real_dtype<T>());
-    ws.integrated_power = make_device_tensor(
-        {plan.out_batch, num_doppler, num_range}, real_dtype<T>());
+    ws.peak_mask = make_device_tensor(output_shape, kMaskDtype);
+    // Both buffers are written flat as (batch, doppler, range), so the
+    // declared shape is free — give whichever one carries the emitted
+    // cfar_power the full-rank output_shape so the port matches
+    // detection_score. When fold == 1 the CFAR surface is `power` itself
+    // (out_batch == batch_in is enforced by run_cfar_stage); when fold > 1 it
+    // is `integrated_power`. Emitting the buffer directly keeps the port
+    // zero-copy either way.
+    ws.power = make_device_tensor(
+        plan.fold > 1
+            ? std::vector<int64_t>{plan.batch_in, num_doppler, num_range}
+            : output_shape,
+        real_dtype<T>());
+    ws.integrated_power = make_device_tensor(output_shape, real_dtype<T>());
     ws.batch_in = plan.batch_in;
     ws.out_batch = plan.out_batch;
     ws.num_doppler = num_doppler;
@@ -372,8 +427,13 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
   auto& score = ws.score;
   auto& noise = ws.noise;
   auto& mask = ws.mask;
+  auto& peak_mask = ws.peak_mask;
   auto& power = ws.power;
   auto& integrated_power = ws.integrated_power;
+
+  const bool peak_only = peak_only_.get();
+  const bool peak_full8 =
+      peak_neighborhood_.get() == CfarPeakNeighborhood::kSquare8;
 
   const int guard_d = static_cast<int>(effective_guard_cells_[0]);
   const int guard_r = static_cast<int>(effective_guard_cells_[1]);
@@ -632,7 +692,12 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
       nci_table_dev_ptr, alpha_lut_dev_->data(),
       static_cast<int64_t>(alpha_lut_host_cache_.size()), power->data(),
       integrated_power->data(), score->data(), noise->data(), mask->data(),
-      stream);
+      peak_only, peak_full8, peak_only ? peak_mask->data() : nullptr, stream);
+
+  // With peak_only, downstream (count / compact / detection_mask) consumes the
+  // NMS-refined peak_mask; otherwise the raw candidate mask.
+  const auto& det_mask_tensor = peak_only ? peak_mask : mask;
+  const bool* det_mask = static_cast<const bool*>(det_mask_tensor->data());
 
   const int64_t plane = num_doppler * num_range;
   const int64_t out_elems = plan.out_batch * plane;
@@ -643,8 +708,7 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
         std::make_shared<detail::DetectionIdxCompactState>();
   }
   const int64_t total_detections = detail::count_mask_detections(
-      static_cast<const bool*>(mask->data()), out_elems,
-      detection_idx_compact_.get(), stream);
+      det_mask, out_elems, detection_idx_compact_.get(), stream);
 
   const bool capped = effective_max_detections_ > 0;
   const int64_t num_detections =
@@ -660,9 +724,8 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
   auto detection_idx =
       make_device_tensor({num_detections, idx_cols}, kInt64Dtype);
   detail::compact_detection_idx(
-      static_cast<const bool*>(mask->data()), out_elems, num_doppler,
-      num_range, plan.preserved_dims, num_detections,
-      static_cast<int64_t*>(detection_idx->data()),
+      det_mask, out_elems, num_doppler, num_range, plan.preserved_dims,
+      num_detections, static_cast<int64_t*>(detection_idx->data()),
       detection_idx_compact_.get(), stream);
 
   if (stream != cudaStreamDefault) {
@@ -670,8 +733,13 @@ void CFARDetectorOp<T>::compute(InputContext& op_input,
     op_output.set_cuda_stream(stream, "detection_score");
     op_output.set_cuda_stream(stream, "noise_estimate");
     op_output.set_cuda_stream(stream, "detection_idx");
+    op_output.set_cuda_stream(stream, "cfar_power");
   }
-  emit_single(op_output, "detection_mask", mask);
+  // The thresholded surface: integrated_power when the NCI fold ran, else the
+  // raw square-law power map (see the workspace allocation above).
+  emit_single(op_output, "cfar_power",
+              plan.fold > 1 ? integrated_power : power);
+  emit_single(op_output, "detection_mask", det_mask_tensor);
   emit_single(op_output, "detection_score", score);
   emit_single(op_output, "noise_estimate", noise);
   emit_single(op_output, "detection_idx", detection_idx);

@@ -113,3 +113,77 @@ pytest already covers `pfa` / `alpha_lut` behavior and Monte Carlo Pfa.
 **Status:** accepted / unclosable by design — leave the helpers in
 `detail::`, keep white-box calibration regressions C++-only; do not treat
 missing Python ports of those tests as unfinished bindings work.
+
+---
+
+## 10. Optional peak-grouping (`peak_only`) flag — one detection per peak
+
+**Context.** Automotive detection is two stages people often blur: (1) CFAR
+declares *candidate* cells (every cell over its adaptive threshold), then (2) a
+**peak-grouping** / local-maximum test collapses each contiguous above-threshold
+blob to a single cell — effectively non-maximum suppression on the
+range-Doppler magnitude map. Stage 2 is the actual "one peak per target": a
+candidate is retained only if its integrated power is a local maximum versus its
+neighbors (typically the 2 range + 2 Doppler neighbors, or the full 8-cell
+neighborhood); the mainlobe-smear and sidelobe-shoulder cells are discarded.
+TI calls this "peak grouping"; NXP/Bosch have equivalents. It is a **configurable
+flag**, not always on.
+
+**What this operator does today.** `CFARDetectorOp` runs on the (NCI-integrated)
+RD magnitude map and emits the **raw candidate mask** — multiple cells per
+target — and the pipeline pushes merging to `ClusterDBSCANOp` +
+`DetectionReductionOp` (the "centroid the cluster" school). There is no
+local-maximum stage.
+
+**Proposed item.** Add an opt-in `peak_only` (a.k.a. `peak_grouping`) parameter.
+When set, after thresholding, keep a detection cell only if its integrated power
+is a strict local maximum over a configurable neighborhood (2+2 or 8-connected),
+restricted to contiguous above-threshold regions. Off (default) preserves the
+current raw-mask contract. This exposes the "one point per CFAR peak" vs.
+"centroid the cluster" split as a runtime choice rather than a fixed pipeline
+shape.
+
+**Interactions / scope notes.**
+
+- **Downstream contract unchanged in shape.** Output is still exact-sized
+  `detection_idx` (item 8) — `peak_only` only reduces the row count; the
+  positional join across `SnapshotGatherOp` / `FeatureAssemblyOp` /
+  `DetectionReductionOp` / `ClusterDBSCANOp` still holds.
+- **Composes with, does not replace, clustering.** With `peak_only` on, DBSCAN
+  typically sees ~one point per target; it can stay in the graph (clusters of
+  size 1) or be bypassed. Leave that to the app.
+- **Sub-bin interpolation is a separate follow-on.** Once a discrete peak cell
+  is chosen, a 3-point parabolic fit on log-magnitude refines the continuous
+  range/Doppler within that peak — a distinct enhancement (belongs with the
+  detection-state/covariance work), not part of this flag.
+- **Angle-peak search is out of scope here.** Peak grouping is range-Doppler
+  only. The per-peak angle-spectrum local-max search (and multi-peak split of
+  co-located targets) lives in the SIMO/MIMO angle path, not this SISO detector.
+
+**Resolution (implemented).** Added `peak_only` (bool, default `false`, static)
+plus `peak_neighborhood` (enum `{cross4, square8}`, default `square8`, static).
+When `peak_only` is set, a fused NMS pass (`cfar_peak_suppress_kernel` in
+`cfar_stage.hpp`) refines the raw mask: a detected cell survives iff its CFAR
+statistic (`cfar_power`, the post-NCI integrated power that was thresholded) is a
+local maximum over its neighborhood, **restricted to detected neighbors** (the
+contiguous above-threshold region). Undetected neighbors are ignored, so a
+weaker separate target nearby cannot suppress a real peak. Exact ties break by
+**raster order** (equal power → lower within-plane linear index wins), so a flat
+plateau collapses to one cell; pathological non-convex equal-power plateaus may
+retain more than one (real-valued RD ties are effectively measure-zero).
+
+Decisions made when specifying:
+
+- **Neighborhood:** 8-connected default, `cross4`/`square8` selectable.
+- **Ties:** raster-order tiebreak (first/lowest-index survives).
+- **`detection_mask`:** with `peak_only` on, marks only the retained peak cells
+  (a strict subset of `detection_score > 1`), so it agrees with `detection_idx`;
+  `detection_score` / `noise_estimate` stay the dense per-cell maps.
+
+`peak_mask` shares the ping-ponged dense workspace (stream-ordered lifetime as an
+emitted output). Params are static (like `cfar_variant`); making `peak_only`
+`[live]` would be an additive follow-on.
+
+**Status:** resolved — implemented on branch `deustice/cfar-peak-grouping`
+(off-by-default, additive to the raw-mask contract). Remove this section once the
+branch merges and the decision is reflected in `OPERATOR_API.md` / `STATUS.md`.

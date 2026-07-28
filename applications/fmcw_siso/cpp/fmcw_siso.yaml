@@ -57,6 +57,11 @@ cfar_detector:
   training_cells: [3, 3]
   pfa: 1.0e-9
   os_rank: 0
+  # Peak-grouping (non-maximum suppression). A native CFAR param; true → CFAR
+  # emits one detection per target. The app also reads this key (a read-only
+  # mirror of this block) to drop the DBSCAN clustering + reduction stages and
+  # report the CFAR peaks directly.
+  peak_only: false
 
 # ClusterDBSCANOp parameters (native from_config). FeatureAssemblyOp assembles
 # the `points` matrix (this app fixes its columns to [range (m), velocity
@@ -109,13 +114,21 @@ run:
 # Trajectories are chosen to stay inside the unambiguous range/velocity
 # envelope for the full run (300 frames × 0.1 s): with these cube dims and
 # waveform, beat-frequency range wraps above ~256 m and |velocity| folds above
-# ~39 m/s. The three movers use modest speeds so every target remains in
-# (0, R_max) for the entire demo while staying separable in [range, velocity].
+# ~39 m/s. Every radial sits on a Doppler bin center (a multiple of the
+# ~0.6083 m/s bin) so the velocity chart reads as flicker-free lines.
+#
+# Three well-separated speed lines (-6.7 / +1.2 / +6.7 m/s) plus two close-pass
+# partners, each 3 bins (1.83 m/s) off its target: resolvable in Doppler, but
+# inside the 2.0 m/s clustering epsilon, so DBSCAN can merge the pair while the
+# ranges cross. SISO has no angle axis, so both passes are genuinely
+# unresolvable at closest approach -- the merges are the point. See the README.
 targets:
-  - { range: 60.0, velocity: 0.0, amplitude: 1.0 }     # static clutter (suppressed)
-  - { range: 45.0, velocity: 2.5, amplitude: 0.5 }   # receding, near → mid
-  - { range: 130.0, velocity: 1.5, amplitude: 0.45 } # receding, mid → far
-  - { range: 200.0, velocity: -1.5, amplitude: 0.4 } # approaching, far → mid
+  - { range: 60.0,  velocity: 0.0,     amplitude: 1.0 }  # static clutter (suppressed)
+  - { range: 235.0, velocity: -6.6918, amplitude: 0.8 }  # fast approaching, far → near
+  - { range: 130.0, velocity: 1.2167,  amplitude: 0.6 }  # slow receding
+  - { range: 20.0,  velocity: 6.6918,  amplitude: 0.7 }  # fast receding, near → far
+  - { range: 112.0, velocity: 3.0417,  amplitude: 0.55 } # close pass on the slow target (~10 s)
+  - { range: 208.0, velocity: -4.8668, amplitude: 0.7 }  # close pass on the fast approacher (~15 s)
 
 # Additive complex white Gaussian noise, SNR in dB relative to a unit-amplitude
 # target. Required for CFAR: a noise-free cube yields a zero training-cell
@@ -124,10 +137,23 @@ targets:
 noise_snr_db: 20.0
 
 # Live RD-map visualization (Holoviz turbo-colormapped image of the
-# log-magnitude map, with the CFAR detections overlaid as crosses colored by
-# DBSCAN cluster). Requires a GUI-capable host; when no display is detected
-# the app warns and runs as if this were false.
-visualize: true
+# log-magnitude map, with the CFAR detections overlaid as filled dots colored
+# by DBSCAN cluster). Requires a GUI-capable host; when no display is detected
+# the app warns and runs as if disabled.
+#   enabled         — master switch for the live Holoviz window
+#   marker_radius   — detection-dot radius, as a fraction of the RD image extent
+#   marker_outline  — extra radius of each dot's black outline ring (same units)
+#   marker_segments — triangle-fan segments per dot (roundness; must be >= 3)
+visualization:
+  enabled: true
+  marker_radius: 0.004
+  marker_outline: 0.002
+  marker_segments: 20
+  # vsync: true forces a FIFO present mode (frame-rate capped) — far more
+  # robust to window-resize swap-chain errors than IMMEDIATE. Set false for
+  # uncapped / low-latency rendering, at the cost of resize robustness (and
+  # possible tearing).
+  vsync: true
 
 # Skip the startup display probe (a brief Holoviz window init/teardown).
 # Saves the probe's startup cost on hosts known to have a working display,
@@ -137,11 +163,11 @@ skip_display_check: false
 
 # Render Holoviz offscreen (no window). Lets the visual pipeline run on a
 # display-less host (CI, headless dev boxes); the startup display probe is
-# skipped when set. Combine with visualize: true.
+# skipped when set. Combine with visualization.enabled: true.
 headless: false
 
 # Rolling time-series plots drawn to the right of the RD map (only when
-# visualize is on). Two scrolling scatter plots — range (m) vs time and
+# visualization is enabled). Two scrolling scatter plots — range (m) vs time and
 # velocity (m/s) vs time — where every detection is a dot colored by its
 # DBSCAN cluster (noise gray) and each cluster's centroid is a '+' marker in
 # the same color. Y axes are fixed to the range/velocity bin extents.

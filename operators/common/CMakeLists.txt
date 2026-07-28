@@ -114,6 +114,37 @@ install(EXPORT holoscan_radar_common_steering_targets
     DESTINATION lib/cmake/holoscan_radar
 )
 
+# GPU-accelerated point-target simulator (MatX). The device counterpart of the
+# STL simulate() in radar_common/sim/scene.hpp; links MatX privately.
+add_library(radar_common_simulator STATIC
+    radar_common/sim/simulator.cu)
+add_library(holoscan::radar_common_simulator ALIAS radar_common_simulator)
+
+target_include_directories(radar_common_simulator
+    PUBLIC
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators/common>
+        $<INSTALL_INTERFACE:include>
+)
+
+target_link_libraries(radar_common_simulator
+    PUBLIC
+        holoscan::core
+        holoscan::radar_common
+    PRIVATE
+        matx::matx
+)
+
+set_property(TARGET radar_common_simulator PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+install(TARGETS radar_common_simulator
+    EXPORT holoscan_radar_common_simulator_targets
+)
+
+install(EXPORT holoscan_radar_common_simulator_targets
+    NAMESPACE holoscan::
+    DESTINATION lib/cmake/holoscan_radar
+)
+
 # Python bindings for shared descriptors / enums (holoscan.radar.radar_common).
 add_subdirectory(python)
 

@@ -28,7 +28,7 @@
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "radar_common/sim/point_target_sim.hpp"
+#include "utils/sim_reference.hpp"
 #include "radar_common/math/constants.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"

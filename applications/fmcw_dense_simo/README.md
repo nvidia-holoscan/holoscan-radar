@@ -39,12 +39,35 @@ downstream on every port and is scheduled.
 
 ## Display
 
-With `visualize: true` (and a reachable display, or `headless: true` for
+With `visualization.enabled: true` (and a reachable display, or `headless: true` for
 offscreen rendering) the app opens a Holoviz window reusing the app-agnostic
 `radar_app/viz` operators unchanged:
 
-- **Left:** the channel-0 range–Doppler map (turbo colormap) with CFAR
-  detections drawn as cluster-colored crosses.
+- **Left:** the range–Doppler map (turbo colormap) with CFAR detections drawn
+  as cluster-colored dots. This app detects on the *beamformed* RDA cube
+  (`nci_axes: []`), so `CFARDetectorOp.cfar_power` is a per-beam power cube
+  `(num_az, num_el, num_doppler, num_range)` rather than a single map.
+  `RdAngleMaxOp` collapses the beam grid by taking each RD cell's **max over
+  all beams**, so the image is the detector's own power domain projected the
+  same way the detections are: `AnglePeakPickOp` collapses each detected RD
+  cell to its *peak* beam, so the overlay is already a max-over-beams
+  projection. Both therefore live in the same domain, and a target anywhere on
+  the grid is drawn over the cell that actually detected it.
+
+  Slicing one fixed beam (`RdChannelSliceOp` with `leading_index` set to the
+  grid cell nearest boresight) was the previous behavior. It kept the image a
+  physical beam, but put it in a different projection from the overlay, so an
+  off-boresight target was drawn over a cell the beam pattern had attenuated —
+  and a target out near the ±0.3 rad grid edge sat in the null and vanished
+  from the image while still being detected. `RdChannelSliceOp` is still the
+  right choice when you specifically want one beam.
+
+  The cost of the max is a higher noise floor: the max of N beams of noise sits
+  above one beam's mean. For an n-beam grid of exponential-distributed power
+  the rise is about `10·log10(H_n)` dB — ~7.6 dB at 13×13 — though less in
+  practice, since adjacent beams are correlated across the mainlobe.
+  `RdMapToImageOp`'s per-column median normalization absorbs part of it,
+  because the median rises too.
 - **Right (stacked):** range-vs-time and velocity-vs-time rolling plots of the
   per-cluster representative, and a boresight azimuth/elevation scatter of those
   same per-cluster representatives (the angle information the dense path adds) —
@@ -60,7 +83,8 @@ boresight scatter reuses `CubeAoaLookupOp` on the reduction's `rep_idx` (one row
 per cluster): its angles feed the scatter and its `row_index` output doubles as
 the per-marker cluster label, so the boresight shows one centroid per cluster.
 
-If `visualize: true` but no display is reachable, the app logs a warning and
+If visualization is enabled but no display is reachable, the app logs a warning
+and
 runs headless automatically (disable that probe with `skip_display_check:
 true`). The `DenseClusterReportOp` cluster log runs in both modes.
 
@@ -112,6 +136,19 @@ See [`cpp/fmcw_dense_simo.yaml`](cpp/fmcw_dense_simo.yaml).
   range/velocity, spread across neighboring beams) collapses into one cluster.
   The medoid representative then lands on the true direction of arrival
   (grid-snapped).
+- **`targets`** — the same five-target scene as
+  [`fmcw_aoa_estimators`](../fmcw_aoa_estimators/README.md), so the dense and
+  sparse paths can be compared on identical input. Four of the five move
+  non-radially (transverse velocity 0.32–0.46 m/s), so their az/el sweep over
+  the 25 s run; target 3 is the single purely radial reference. Three are well
+  separated in speed (−6.5 / +1.5 / +9 m/s); the other two each shadow one of
+  them through a close pass, 1.5 m/s faster than the target they shadow,
+  coinciding at t ≈ 10 s and t ≈ 18 s. Note that the wide 0.3 rad angular
+  epsilon above is the same order as the 0.318 rad azimuth split of the first
+  pair, so this app is expected to merge close passes that the sparse apps keep
+  apart — the clustering radius, not the array, is the limit here. The sweeping
+  angles also mean a target crosses beam-grid cells during the run, so its
+  grid-snapped representative steps rather than holding one cell.
 
 ## Build & run
 

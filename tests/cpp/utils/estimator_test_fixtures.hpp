@@ -30,12 +30,15 @@
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/dsp/angle_convention.hpp"
+#include "radar_common/math/constants.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace holoscan::radar::testing {
 
-inline constexpr double kPi = 3.141592653589793;
+// Re-exported so the estimator tests can keep saying `testing::kPi`; the single
+// definition lives in radar_common/math/constants.hpp.
+using holoscan::radar::kPi;
 
 // Owns a CUDA-accessible (managed or pinned-host) buffer for the lifetime of
 // the holoscan::Tensor that wraps it; freed by the DLPack deleter.

@@ -15,6 +15,7 @@ target_link_libraries(fmcw_dense_simo PRIVATE
     holoscan::detection_reduction_op
     holoscan::cluster_dbscan_op
     holoscan::radar_app
+    holoscan::radar_common_simulator
     holoscan::radar_common
     holoscan::core
     holoscan::ops::holoviz

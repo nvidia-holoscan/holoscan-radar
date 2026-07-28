@@ -78,6 +78,13 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   parse_noise(root, &cfg.scene);
   parse_viz_toggles(root, &cfg);
   parse_plots(root, &cfg);
+  // READ-ONLY MIRROR of the cfar_detector operator block: peak_only stays a
+  // native CFAR param (applied via from_config); the app reads it here only to
+  // decide the graph shape (drop clustering when set).
+  if (const YAML::Node cd = root["cfar_detector"];
+      cd && cd["peak_only"] && !cd["peak_only"].IsNull()) {
+    cfg.peak_only = cd["peak_only"].as<bool>();
+  }
 
   if (const YAML::Node er = root["estimator_router"]; er && !er.IsNull()) {
     if (er["mode"]) {

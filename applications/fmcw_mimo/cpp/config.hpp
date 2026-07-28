@@ -4,8 +4,9 @@
 // App-owned configuration for fmcw_mimo: AppConfig plus the scene-geometry and
 // YAML loaders (TDM/DDM branch, virtual array geometry, targets, the
 // boresight-axis mirror of the beamscan grid). Colocated with the app. The
-// scene is the shared radar::sim::SimScene (multi-TX); the MIMO simulators live
-// in radar_common/sim/mimo_sim.hpp.
+// scene is the shared radar::sim::SimScene (multi-TX); the source operators
+// synthesize the multiplexed cube on the
+// device (simulator.hpp::simulate_mimo_gpu).
 
 #pragma once
 
@@ -30,7 +31,6 @@
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
 #include "radar_common/sim/array_builders.hpp"
-#include "radar_common/sim/mimo_sim.hpp"
 #include "radar_app/app/config.hpp"
 
 namespace radar = holoscan::radar;
@@ -282,6 +282,13 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   parse_noise(root, &cfg.scene);
   parse_viz_toggles(root, &cfg);
   parse_plots(root, &cfg);
+  // READ-ONLY MIRROR of the cfar_detector operator block: peak_only stays a
+  // native CFAR param (applied via from_config); the app reads it here only to
+  // decide the graph shape (drop clustering when set).
+  if (const YAML::Node cd = root["cfar_detector"];
+      cd && cd["peak_only"] && !cd["peak_only"].IsNull()) {
+    cfg.peak_only = cd["peak_only"].as<bool>();
+  }
 
   // Optional fixed velocity-plot Y extent (dense/MIMO plot knob).
   if (const YAML::Node plots = root["plots"]; plots && !plots.IsNull()) {

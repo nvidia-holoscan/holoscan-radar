@@ -26,7 +26,8 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "utils/bin_model.hpp"
-#include "radar_common/sim/point_target_sim.hpp"
+#include "utils/additives_reference.hpp"
+#include "utils/sim_reference.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
@@ -108,7 +109,9 @@ struct ChainResult {
 };
 
 ChainResult run_split_chain(const psim::SimScene& scene) {
-  const auto sim = psim::simulate(scene);
+  auto sim = psim::simulate(scene);
+  // Thermal noise is now a separate additive on the clean solver response.
+  psim::add_thermal_noise(sim.cube, scene.snr_db, scene.seed);
   auto cube = rt::complex_cube_to_device<float>(sim.cube, sim.shape);
 
   rt::TensorMapCapture rd_maps;

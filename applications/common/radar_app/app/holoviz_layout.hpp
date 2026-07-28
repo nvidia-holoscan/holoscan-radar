@@ -3,8 +3,9 @@
 
 // Declarative Holoviz layout for the FMCW example apps. The ~90-line
 // InputSpec/View construction that every app copy-pasted (the turbo LUT RD-map
-// layer, one CROSSES layer per cluster color + noise, and the right-column
-// image+title panels) is owned here and driven by a small HolovizLayout struct.
+// layer, the detection disc layers — one per cluster color + noise + outline —
+// and the right-column image+title panels) is owned here and driven by a small
+// HolovizLayout struct.
 //
 // This deliberately builds only DATA (+ a factory that makes the HolovizOp)
 // — it does NOT call add_flow. HolovizOp is already the operator; which tensors
@@ -38,7 +39,7 @@ struct RightPanel {
   float height;    // panel height, window-relative
 };
 
-// A full RD-map window: the turbo-mapped |RD| image + cluster CROSSES on the
+// A full RD-map window: the turbo-mapped |RD| image + cluster discs on the
 // left, and an optional stack of right-column panels. `plots_enabled == false`
 // (or no panels) renders the map full-window.
 struct HolovizLayout {
@@ -46,15 +47,37 @@ struct HolovizLayout {
   uint32_t width{800};
   uint32_t height{600};
   bool headless{false};
+  bool vsync{true};  // FIFO present mode when true (resize-robust); see config
   bool plots_enabled{true};
   float left_width{0.60F};  // RD-map column width when panels are shown
   std::vector<RightPanel> right_panels;
 };
 
+// RD-map outer region (window-normalized): the left column when the side panels
+// are shown, else the full window. The
+// axes/frame/title chrome (ClusterOverlayOp
+// via emit_rd_axes) is drawn across this region.
+inline PanelRect rd_map_region(const HolovizLayout& layout) {
+  if (layout.plots_enabled) {
+    return {0.0F, 0.0F, layout.left_width, 1.0F};
+  }
+  return {0.0F, 0.0F, 1.0F, 1.0F};
+}
+
+// The inset RD image box within the region, using the shared panel margins
+// (kBox*) so the image is framed exactly like the side-panel plot boxes and no
+// longer stretches to the window edge. The RD image + detection disc layers use
+// this as their View; emit_rd_axes draws the frame on its edges.
+inline PanelRect rd_map_box(const HolovizLayout& layout) {
+  const PanelRect r = rd_map_region(layout);
+  return {r.x + kBoxL * r.w, r.y + kBoxT * r.h, (kBoxR - kBoxL) * r.w,
+          (kBoxB - kBoxT) * r.h};
+}
+
 // Build the HolovizOp `tensors` InputSpec vector for a layout. Layer 0 is the
-// turbo LUT RD image; the cluster/noise CROSSES layers draw on top (named to
-// match ClusterOverlayOp's emitted tensors). With panels enabled the map +
-// crosses share the left viewport and each panel adds an image + title layer.
+// turbo LUT RD image; the detection disc layers draw on top (named to match
+// ClusterOverlayOp's emitted tensors). With panels enabled the map + discs
+// share the left viewport and each panel adds an image + title layer.
 inline std::vector<holoscan::ops::HolovizOp::InputSpec>
 build_holoviz_input_specs(const HolovizLayout& layout) {
   using InputSpec = holoscan::ops::HolovizOp::InputSpec;
@@ -69,18 +92,25 @@ build_holoviz_input_specs(const HolovizLayout& layout) {
         "build_holoviz_input_specs: cluster palette size must equal "
         "kNumClusterColors");
   }
-  const auto add_crosses = [&](const std::string& name,
-                               const std::vector<float>& color) {
-    InputSpec spec(name, InputType::CROSSES);
+  // Detections render as filled triangle-fan discs (see ClusterOverlayOp): a
+  // single black outline layer of larger discs sits at priority 1, under one
+  // colored layer per cluster palette color plus a muted noise layer at
+  // priority 2 — both over the RD image (COLOR_LUT, default priority 0).
+  InputSpec outline(kDetectionOutlineName, InputType::TRIANGLES);
+  outline.color_ = {0.0F, 0.0F, 0.0F, 1.0F};
+  outline.priority_ = 1;
+  input_specs.push_back(outline);
+  const auto add_discs = [&](const std::string& name,
+                             const std::vector<float>& color) {
+    InputSpec spec(name, InputType::TRIANGLES);
     spec.color_ = color;
-    spec.line_width_ = 2.0F;
-    spec.priority_ = 1;
+    spec.priority_ = 2;
     input_specs.push_back(spec);
   };
   for (int c = 0; c < kNumClusterColors; ++c) {
-    add_crosses(cluster_layer_name(c), palette[static_cast<size_t>(c)]);
+    add_discs(cluster_layer_name(c), palette[static_cast<size_t>(c)]);
   }
-  add_crosses(kNoiseLayerName, {0.6F, 0.6F, 0.6F, 1.0F});
+  add_discs(kNoiseLayerName, {0.6F, 0.6F, 0.6F, 1.0F});
 
   // A View maps a layer's [0, 1] content into an (offset, size) rectangle.
   const auto make_view = [](float ox, float oy, float w, float h) {
@@ -92,13 +122,17 @@ build_holoviz_input_specs(const HolovizLayout& layout) {
     return v;
   };
 
-  if (layout.plots_enabled && !layout.right_panels.empty()) {
-    // Shrink the RD map + crosses into the left viewport so the crosses stay
-    // aligned to the image.
-    const auto left = make_view(0.0F, 0.0F, layout.left_width, 1.0F);
-    for (InputSpec& spec : input_specs) {
-      spec.views_ = {left};
-    }
+  // Inset the RD image + discs into the framed box (left column when panels are
+  // shown, else the full window), leaving margins for the axes/frame/title that
+  // ClusterOverlayOp draws (emit_rd_axes). The image no longer stretches to the
+  // window edge.
+  const PanelRect box = rd_map_box(layout);
+  const auto box_view = make_view(box.x, box.y, box.w, box.h);
+  for (InputSpec& spec : input_specs) {
+    spec.views_ = {box_view};
+  }
+
+  if (layout.plots_enabled) {
     // Right column starts just past the map with a small gutter, and runs to a
     // matching right margin.
     const float right_x = layout.left_width + 0.03F;
@@ -119,6 +153,15 @@ build_holoviz_input_specs(const HolovizLayout& layout) {
   return input_specs;
 }
 
+// On-screen aspect ratio (width / height in pixels) of the inset RD-map image
+// box (see rd_map_box). ClusterOverlayOp divides its disc x radius by this so
+// the detection markers render round rather than stretched.
+inline float rd_map_view_aspect(const HolovizLayout& layout) {
+  const PanelRect box = rd_map_box(layout);
+  return (box.w * static_cast<float>(layout.width)) /
+         (box.h * static_cast<float>(layout.height));
+}
+
 // Construct the HolovizOp from a layout: the built input specs, the shared
 // turbo LUT, and the window title/size/headless flag. The app wires its own
 // flows into the returned operator's `receivers` port.
@@ -131,6 +174,7 @@ inline std::shared_ptr<holoscan::ops::HolovizOp> make_rd_holoviz_op(
       holoscan::Arg("window_title", layout.window_title),
       holoscan::Arg("width", layout.width),
       holoscan::Arg("height", layout.height),
+      holoscan::Arg("vsync", layout.vsync),
       holoscan::Arg("headless", layout.headless));
 }
 

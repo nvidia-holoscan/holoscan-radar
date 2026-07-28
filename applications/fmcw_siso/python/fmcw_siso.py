@@ -57,6 +57,7 @@ from holoscan.radar import (
     FMCWDopplerProcessorOp,
     FMCWRangeProcessorOp,
     NullSinkOp,
+    PanelRect,
     RdMapToImageOp,
     RollingPlotOp,
     cluster_palette,
@@ -67,7 +68,13 @@ from holoscan.radar import (
 import cupy as cp  # noqa: E402,F401
 
 import config  # noqa: E402 (colocated, script-local - see config.py docstring)
-from common.python.demo_config import cluster_layer_name, make_view  # noqa: E402
+from common.python.demo_config import (  # noqa: E402
+    detection_layer_specs,
+    make_view,
+    rd_map_box,
+    rd_map_region,
+    rd_map_view_aspect,
+)
 from common.python.driver import run_fmcw_app  # noqa: E402
 from common.python.ops import SimAdcSourceOp  # noqa: E402
 
@@ -75,7 +82,7 @@ from common.python.ops import SimAdcSourceOp  # noqa: E402
 
 install_matx_cache_atexit()
 
-K_NUM_CLUSTER_COLORS = 8
+K_NUM_CLUSTER_COLORS = 30
 K_NOISE_LAYER_NAME = "noise"
 K_RANGE_PLOT_LAYER = "range_plot"
 K_VELOCITY_PLOT_LAYER = "velocity_plot"
@@ -119,23 +126,14 @@ class FmcwSisoApp(Application):
         doppler = FMCWDopplerProcessorOp(
             self, self.from_config("doppler_processor"), name="doppler_processor"
         )
+        # peak_only is a native cfar_detector param (from_config); the app also
+        # reads it (cfg.peak_only) to drop the clustering subgraph below.
         cfar = CFARDetectorOp(self, self.from_config("cfar_detector"), name="cfar_detector")
         det_report = DetectionReportOp(self, name="detection_report")
         if cadence is not None:
             det_report.cadence = cadence
         mask_sink = NullSinkOp(self, name="detection_mask_sink")
         noise_sink = NullSinkOp(self, name="noise_estimate_sink")
-
-        feature_assembly = FeatureAssemblyOp(
-            self,
-            features=[AssemblyFeature.RANGE, AssemblyFeature.VELOCITY],
-            name="feature_assembly",
-        )
-        cluster = ClusterDBSCANOp(self, self.from_config("cluster_dbscan"), name="cluster_dbscan")
-        cluster_report = ClusterReportOp(self, name="cluster_report")
-        reduction = DetectionReductionOp(
-            self, self.from_config("reduction"), name="detection_reduction"
-        )
 
         self.add_flow(source, range_op, {("adc_cube", "adc_cube")})
         self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
@@ -148,24 +146,55 @@ class FmcwSisoApp(Application):
         self.add_flow(cfar, mask_sink, {("detection_mask", "input")})
         self.add_flow(cfar, noise_sink, {("noise_estimate", "input")})
 
-        self.add_flow(cfar, feature_assembly, {("detection_idx", "detection_idx")})
-        self.add_flow(range_op, feature_assembly, {("range_bins", "range_bins")})
-        self.add_flow(doppler, feature_assembly, {("velocity_bins", "velocity_bins")})
-        self.add_flow(feature_assembly, cluster, {("points", "points")})
-        self.add_flow(feature_assembly, cluster_report, {("points", "points")})
-        self.add_flow(cluster, cluster_report, {("labels", "labels")})
-        self.add_flow(cluster, cluster_report, {("sizes", "sizes")})
+        # Clustering subgraph — dropped entirely when peak_only is set (CFAR then
+        # emits one detection per target, so DBSCAN + reduction are redundant and
+        # DetectionReportOp above reports the CFAR peaks directly). cluster /
+        # reduction stay None in that mode and the viz block below adapts.
+        cluster = None
+        reduction = None
+        if not cfg.peak_only:
+            feature_assembly = FeatureAssemblyOp(
+                self,
+                features=[AssemblyFeature.RANGE, AssemblyFeature.VELOCITY],
+                name="feature_assembly",
+            )
+            cluster = ClusterDBSCANOp(
+                self, self.from_config("cluster_dbscan"), name="cluster_dbscan"
+            )
+            cluster_report = ClusterReportOp(self, name="cluster_report")
+            reduction = DetectionReductionOp(
+                self, self.from_config("reduction"), name="detection_reduction"
+            )
 
-        self.add_flow(cluster, reduction, {("labels", "labels")})
-        self.add_flow(cfar, reduction, {("detection_idx", "detection_idx")})
-        self.add_flow(feature_assembly, reduction, {("points", "points")})
-        self.add_flow(reduction, cluster_report, {("rep_idx", "rep_idx")})
-        self.add_flow(range_op, cluster_report, {("range_bins", "range_bins")})
-        self.add_flow(doppler, cluster_report, {("velocity_bins", "velocity_bins")})
+            self.add_flow(cfar, feature_assembly, {("detection_idx", "detection_idx")})
+            self.add_flow(range_op, feature_assembly, {("range_bins", "range_bins")})
+            self.add_flow(doppler, feature_assembly, {("velocity_bins", "velocity_bins")})
+            self.add_flow(feature_assembly, cluster, {("points", "points")})
+            self.add_flow(feature_assembly, cluster_report, {("points", "points")})
+            self.add_flow(cluster, cluster_report, {("labels", "labels")})
+            self.add_flow(cluster, cluster_report, {("sizes", "sizes")})
+
+            self.add_flow(cluster, reduction, {("labels", "labels")})
+            self.add_flow(cfar, reduction, {("detection_idx", "detection_idx")})
+            self.add_flow(feature_assembly, reduction, {("points", "points")})
+            self.add_flow(reduction, cluster_report, {("rep_idx", "rep_idx")})
+            self.add_flow(range_op, cluster_report, {("range_bins", "range_bins")})
+            self.add_flow(doppler, cluster_report, {("velocity_bins", "velocity_bins")})
 
         if cfg.visualize:
             to_image = RdMapToImageOp(self, name="rd_map_to_image")
             overlay = ClusterOverlayOp(self, name="cluster_overlay")
+            overlay.view_aspect = rd_map_view_aspect(
+                1200 if cfg.plots.enable else 800, 600, 0.60, cfg.plots.enable
+            )
+            overlay.frame_period = cfg.frame_period  # scenario clock
+            overlay.rd_region = PanelRect(
+                *rd_map_region(cfg.plots.enable, 0.60)
+            )  # axes/frame/title region
+            overlay.rd_view_px_height = 600.0
+            overlay.marker_radius = cfg.viz.marker_radius
+            overlay.marker_outline = cfg.viz.marker_outline
+            overlay.marker_segments = cfg.viz.marker_segments
 
             input_specs: list[HolovizOp.InputSpec] = []
             rd_spec = HolovizOp.InputSpec("rd_map", HolovizOp.InputType.COLOR_LUT)
@@ -177,46 +206,23 @@ class FmcwSisoApp(Application):
                     "fmcw_siso: cluster palette size must equal " f"{K_NUM_CLUSTER_COLORS}"
                 )
 
-            def add_crosses(name: str, color: list[float]) -> None:
-                spec = HolovizOp.InputSpec(name, HolovizOp.InputType.CROSSES)
-                spec.color = color
-                spec.line_width = 2.0
-                spec.priority = 1
-                input_specs.append(spec)
+            input_specs.extend(detection_layer_specs(palette))
 
-            for c in range(K_NUM_CLUSTER_COLORS):
-                add_crosses(cluster_layer_name(c), palette[c])
-            add_crosses(K_NOISE_LAYER_NAME, [0.6, 0.6, 0.6, 1.0])
+            # Inset the RD image + discs into the framed box (leaving margins for
+            # the axes/frame/title that ClusterOverlayOp draws).
+            box = make_view(*rd_map_box(cfg.plots.enable, 0.60))
+            for spec in input_specs:
+                spec.views = [box]
 
             plot: RollingPlotOp | None = None
             if cfg.plots.enable:
-                left = make_view(0.0, 0.0, 0.60, 1.0)
-                for spec in input_specs:
-                    spec.views = [left]
+                # Side panels are native Holoviz primitives emitted by
+                # RollingPlotOp (dynamic InputSpecs); no static panel layers.
+                range_view = PanelRect(0.63, 0.04, 0.35, 0.44)
+                velocity_view = PanelRect(0.63, 0.52, 0.35, 0.44)
 
-                def add_plot(img_name: str, title_name: str, title: str, oy: float) -> None:
-                    image = HolovizOp.InputSpec(img_name, HolovizOp.InputType.COLOR)
-                    image.views = [make_view(0.63, oy, 0.35, 0.44)]
-                    input_specs.append(image)
-                    text = HolovizOp.InputSpec(title_name, HolovizOp.InputType.TEXT)
-                    text.text = [title]
-                    text.color = [1.0, 1.0, 1.0, 1.0]
-                    text.priority = 2
-                    text.views = [make_view(0.63, oy, 0.35, 0.44)]
-                    input_specs.append(text)
-
-                add_plot(
-                    K_RANGE_PLOT_LAYER,
-                    K_RANGE_TITLE_LAYER,
-                    "Range (m) vs time (s)",
-                    0.04,
-                )
-                add_plot(
-                    K_VELOCITY_PLOT_LAYER,
-                    K_VELOCITY_TITLE_LAYER,
-                    "Velocity (m/s) vs time (s)",
-                    0.52,
-                )
+                def panel_aspect(v: PanelRect) -> float:
+                    return (v.w * 1200.0) / (v.h * 600.0)
 
                 plot = RollingPlotOp(
                     self,
@@ -224,6 +230,14 @@ class FmcwSisoApp(Application):
                     frame_period=cfg.frame_period,
                     name="rolling_plot",
                 )
+                plot.primitive = True
+                plot.range_view = range_view
+                plot.velocity_view = velocity_view
+                plot.range_aspect = panel_aspect(range_view)
+                plot.velocity_aspect = panel_aspect(velocity_view)
+                plot.marker_radius = cfg.viz.marker_radius
+                plot.marker_outline = cfg.viz.marker_outline
+                plot.marker_segments = cfg.viz.marker_segments
 
             visualizer = HolovizOp(
                 self,
@@ -232,22 +246,50 @@ class FmcwSisoApp(Application):
                 window_title="FMCW SISO - Range-Doppler + clusters",
                 width=1200 if cfg.plots.enable else 800,
                 height=600,
+                vsync=cfg.viz.vsync,
                 headless=cfg.headless,
                 name="holoviz",
             )
 
             self.add_flow(doppler, to_image, {("rd_maps", "rd_maps")})
             self.add_flow(to_image, visualizer, {("rd_image", "receivers")})
+            # Cluster labels color the dots when clustering runs; in peak_only
+            # mode there are no labels, so the overlay colors each CFAR peak by
+            # its row index (ClusterOverlayOp treats absent labels that way).
             self.add_flow(cfar, overlay, {("detection_idx", "detection_idx")})
-            self.add_flow(cluster, overlay, {("labels", "labels")})
             self.add_flow(doppler, overlay, {("rd_maps", "rd_maps")})
+            # Physical axis bins for the RD-map tick labels (range X, velocity Y).
+            self.add_flow(range_op, overlay, {("range_bins", "range_bins")})
+            self.add_flow(doppler, overlay, {("velocity_bins", "velocity_bins")})
+            if not cfg.peak_only:
+                self.add_flow(cluster, overlay, {("labels", "labels")})
+                # rep_idx colors each cluster by its representative RD cell
+                # (stable across frames) instead of the flickery size-rank label.
+                self.add_flow(reduction, overlay, {("rep_idx", "rep_idx")})
             self.add_flow(overlay, visualizer, {("overlay", "receivers")})
+            # Scenario clock overlay: its spec heads the primitive-panel
+            # InputSpec chain when panels are on (→ rolling plot), else feeds
+            # input_specs directly.
+            if plot is not None:
+                self.add_flow(overlay, plot, {("time_specs", "specs_in")})
+            else:
+                self.add_flow(overlay, visualizer, {("time_specs", "input_specs")})
 
             if plot is not None:
-                self.add_flow(reduction, plot, {("rep_idx", "rep_idx")})
+                # Rolling plots read the per-cluster representative (clustered) or
+                # the raw CFAR peaks (peak_only); both are (N, 2) (doppler, range).
+                if not cfg.peak_only:
+                    self.add_flow(reduction, plot, {("rep_idx", "rep_idx")})
+                    # labels flag clustered mode; the plot then colors each rep by
+                    # its RD cell (matching the RD-map / boresight markers).
+                    self.add_flow(cluster, plot, {("labels", "labels")})
+                else:
+                    self.add_flow(cfar, plot, {("detection_idx", "rep_idx")})
                 self.add_flow(range_op, plot, {("range_bins", "range_bins")})
                 self.add_flow(doppler, plot, {("velocity_bins", "velocity_bins")})
                 self.add_flow(plot, visualizer, {("plots", "receivers")})
+                # Dynamic InputSpecs for the primitive panels → input_specs port.
+                self.add_flow(plot, visualizer, {("plot_specs", "input_specs")})
 
 
 def main(argv: list[str] | None = None) -> int:

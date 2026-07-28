@@ -152,7 +152,7 @@ on change).
 ## Pipeline
 
 ```text
-SimAdcSourceOp                 (simulated SIMO ADC cube: N_rx, chirps, samples)
+SimAdcSourceOp                 (GPU-simulated SIMO ADC cube: N_rx, chirps, samples)
   -> FMCWRangeProcessorOp
   -> ClutterFilterOp             (single_delay MTI: notches the zero-Doppler column)
   -> FMCWDopplerProcessorOp      (rd_maps: N_rx, doppler, range)
@@ -165,6 +165,12 @@ SimAdcSourceOp                 (simulated SIMO ADC cube: N_rx, chirps, samples)
   -> DetectionReductionOp        (medoid representative per cluster)
   -> ClusterReportOp             (logs cluster centroids + representatives)
 ```
+
+Setting `cfar_detector.peak_only: true` drops the clustering tail (FeatureAssembly
+/ DBSCAN / Reduction / ClusterReport): CFAR already emits one detection per
+target, so the per-detection angle is logged straight from `DetectionReportOp`
+instead. The estimator branch is unaffected — it is the DOA stage, not
+clustering.
 
 ## Two realizations: C++ and Python
 
@@ -216,25 +222,38 @@ the same rotate/hold/file policy.
 
 ## Display
 
-With `visualize: true` (and a reachable display, or `headless: true` for
-offscreen rendering) the app opens a Holoviz window built from the app-agnostic
-`radar_app/viz` operators:
+With `visualization.enabled: true` (and a reachable display, or `headless: true`
+for offscreen rendering) the app opens a Holoviz window built from the
+app-agnostic `radar_app/viz` operators. Everything is drawn with native Holoviz
+primitives — no software-rasterized panel images:
 
-- **Top-left caption:** a live `Estimator: <NAME>` label (amber, over the RD
-  map) naming the estimator running this frame, so you can see at a glance which
-  one is active as the router advances. It is a dynamic Holoviz TEXT layer
-  re-emitted each frame by a small app-local op (`EstimatorLabelOp`) that reads
-  the current selection.
-- **Left:** the channel-0 range–Doppler map (turbo colormap) with CFAR
-  detections drawn as cluster-colored crosses. The dark vertical stripe at
-  Doppler 0 is the `single_delay` MTI clutter notch (expected).
+- **Map title:** reads `Range-Doppler - <ESTIMATOR>`, naming the estimator
+  running this frame, so you can see at a glance which one is active as the
+  router advances. It is a dynamic Holoviz TEXT layer re-emitted each frame by a
+  small app-local op (`EstimatorLabelOp`) that reads the current selection and
+  draws it where `ClusterOverlayOp` would otherwise put the plain title.
+- **Top-left:** the scenario clock (`t = <n> s`, current simulated time).
+- **Left:** the non-coherently integrated range–Doppler map (turbo colormap) —
+  the same surface CFAR thresholds, since it runs `nci_axes: [0]` over the RX
+  axis, so the picture and the overlaid detections come from the same data —
+  framed with a
+  border, axes, tick labels and a title, with CFAR detections drawn as filled
+  cluster-colored dots. Colors are assigned by range rank, so a target keeps its
+  color across frames and matches its markers in the side panels. The dark
+  vertical stripe at Doppler 0 is the `single_delay` MTI clutter notch
+  (expected).
 - **Right (stacked):** range-vs-time and velocity-vs-time rolling plots of the
   per-cluster representative, plus a boresight azimuth/elevation scatter fed by
   whichever estimator ran this frame — so as the router advances you watch each
   estimator's DOA estimates land on the same targets in turn.
 
-If `visualize: true` but no display is reachable, the app logs a warning and
-runs headless automatically (disable that probe with
+The `visualization:` block also carries the detection-marker geometry
+(`marker_radius`, `marker_outline`, `marker_segments`) and `vsync`, which
+selects a FIFO present mode (frame-rate capped, but far more robust to
+window-resize swap-chain errors than IMMEDIATE).
+
+If visualization is enabled but no display is reachable, the app logs a warning
+and runs headless automatically (disable that probe with
 `skip_display_check: true`). The cluster report log runs in both modes. Set
 `AOA_CAPTURE_DIR=<dir>` (with `headless: true`) to dump composited frames for
 offline inspection (PPM in C++, PNG in Python).
@@ -286,3 +305,47 @@ Each frame logs its CFAR detections and `N clusters`, and the selector logs
 centroids/representatives land near the configured target range, velocity, and
 `(az, el)` **regardless of which estimator is active** — which is the whole
 point: five different methods, one graph, one switch, same answer.
+
+### Target motion
+
+Four of the five targets move **non-radially**: each carries a transverse
+velocity component of 0.32–0.46 m/s on top of its radial one, so its azimuth and
+elevation sweep over the run rather than staying pinned. Target 3 is the single
+purely radial reference, holding az = 0.000 / el = 0.080 throughout — useful as
+a fixed point to read the others against.
+
+The sweeps are substantial: target 1 crosses 0.150 → 0.013 rad in azimuth
+(7 grid cells) as it closes from 245 m to 83 m, and targets 2 and 4 each move
+~0.04 rad in elevation. Both inbound targets deliberately sweep *toward*
+boresight — an inbound target's angular rate goes as `v_t / r`, so one sweeping
+outward would run off the ±0.3 rad scan grid before the run ended.
+
+Transverse motion is small next to these ranges, so each target's radial rate
+drifts by under 0.2 Doppler bins across the whole run. That is what lets the
+range/Doppler geometry below survive non-radial motion intact.
+
+### The two close passes
+
+Three of the five targets are well separated in speed (−6.5 / +1.5 / +9 m/s);
+the other two each shadow one of them through a close pass, so you can see what
+the angle stage does as two objects converge in range and Doppler. Both run
+1.5 m/s faster than the target they shadow — 2.5 velocity bins, still inside the
+2.0 m/s `cluster_dbscan.epsilon` so the pair can merge — closing a 15–27 m range
+gap to under 0.05 m, then reopening it.
+
+- **Pair A** (target 4 shadows target 2, coinciding at t = 10 s) is separated by
+  0.318 rad in azimuth at closest approach, past the array's 0.253 rad first
+  null — angle alone should carry it through the crossing.
+- **Pair B** (target 5 shadows target 1, coinciding at t = 18 s) differs by only
+  0.025 rad in azimuth, so no estimator on this array can split it; every cell
+  reports a blended angle. Elevation differs by 0.057 rad, just past the
+  clustering epsilon, so whether it merges around closest approach depends on how
+  far the detection cloud spreads.
+
+Note `mvdr_estimator` / `music_estimator` are configured `max_sources: 1`, so
+they report one DOA per cell even where the geometry would allow two — raising
+that is the natural next experiment.
+
+Note `mvdr_estimator` / `music_estimator` are configured `max_sources: 1`, so
+they report one DOA per cell even where the geometry would allow two — raising
+that is the natural next experiment.

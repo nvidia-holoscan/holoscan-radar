@@ -9,6 +9,10 @@
 # isort: off
 from .radar_common import (  # noqa: F401
     DEFAULT_PROPAGATION_SPEED,
+    K_HALF_PI,
+    K_PI,
+    K_SPEED_OF_LIGHT,
+    K_TWO_PI,
     AngleConvention,
     AngleConventionPreset,
     ArrayGeometry,
@@ -39,6 +43,7 @@ from .beamscan_estimator_op import BeamscanEstimatorOpF64
 from .cfar_detector_op import CFARDetectorOpF32  # noqa: F401
 from .cfar_detector_op import (
     CFARDetectorOpF64,
+    CfarPeakNeighborhood,
     CfarVariant,
     build_ca_alpha_lut,
     build_go_alpha_lut,
@@ -91,6 +96,8 @@ from .radar_app import (
     ClusterReportOp,
     DetectionReportOp,
     NullSinkOp,
+    PanelRect,
+    RdAngleMaxOp,
     RdChannelSliceOp,
     RdMapToImageOp,
     RollingPlotOp,
@@ -130,6 +137,10 @@ VirtualArrayAssemblyOp = VirtualArrayAssemblyOpF32
 
 __all__ = [
     "DEFAULT_PROPAGATION_SPEED",
+    "K_HALF_PI",
+    "K_PI",
+    "K_SPEED_OF_LIGHT",
+    "K_TWO_PI",
     "AngleConvention",
     "AngleConventionPreset",
     "ArrayGeometry",
@@ -143,6 +154,7 @@ __all__ = [
     "CFARDetectorOpF32",
     "CFARDetectorOpF64",
     "CadenceMeter",
+    "CfarPeakNeighborhood",
     "CfarVariant",
     "ClusterDBSCANOp",
     "ClusterDBSCANOpF32",
@@ -192,10 +204,12 @@ __all__ = [
     "MultiplexingScheme",
     "NullSinkOp",
     "OverlapPolicy",
+    "PanelRect",
     "PeakInterpolation",
     "PhaseShiftBeamformerOp",
     "PhaseShiftBeamformerOpF32",
     "PhaseShiftBeamformerOpF64",
+    "RdAngleMaxOp",
     "RdChannelSliceOp",
     "RdMapToImageOp",
     "RepresentativePolicy",

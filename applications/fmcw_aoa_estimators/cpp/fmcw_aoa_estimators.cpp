@@ -27,6 +27,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstdint>
@@ -38,6 +39,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gxf/multimedia/video.hpp>
@@ -96,15 +98,37 @@ RouterMode parse_router_mode(const std::string& mode) {
 // spec by name, so this draws a top-left caption that updates as the router
 // advances. Reads the router's active_index directly — a one-frame lag versus
 // the estimator that actually ran is immaterial for a caption.
+//
+// HolovizOp has a single input_specs port, so this op is the TAIL of the shared
+// spec chain: the RD-map chrome (ClusterOverlayOp's scenario clock + axes) and
+// the primitive side panels arrive on specs_in, and this op appends its caption
+// before emitting the combined list.
 class EstimatorLabelOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(EstimatorLabelOp)
   EstimatorLabelOp() = default;
 
   const EstimatorRouterOp* router{nullptr};
+  // On-screen pixel height of the (full-window) view. Drives pixel-locked text
+  // sizing so the title stays crisp against Holoviz's fixed 25 px font atlas,
+  // exactly like the rest of the RD-map chrome. Set by the app.
+  float view_px_height{600.0F};
+  // Window aspect (width / height in pixels) for glyph-advance centering.
+  float window_aspect{1.0F};
+  // Where the RD-map title goes, in full-window coordinates: the horizontal
+  // centre of the inset image box and the top of the title line. The app
+  // derives both from the layout (see rd_map_region / kBox*) and blanks
+  // ClusterOverlayOp::rd_title, so this op owns the whole title line.
+  float title_center_x{0.5F};
+  float title_top_y{0.0F};
+  std::string base_title{"Range-Doppler"};
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("rd_maps");
+    // Upstream chrome/panel specs (overlay → rolling plot → boresight → here).
+    // Optional so the op still works when the viz graph has no panels.
+    spec.input<std::vector<holoscan::ops::HolovizOp::InputSpec>>("specs_in")
+        .condition(holoscan::ConditionType::kNone);
     spec.output<std::vector<holoscan::ops::HolovizOp::InputSpec>>(
         "input_specs");
     spec.output<holoscan::TensorMap>("label_pos");
@@ -124,26 +148,23 @@ class EstimatorLabelOp : public holoscan::Operator {
             : std::string("?");
 
     using InputSpec = holoscan::ops::HolovizOp::InputSpec;
-    using InputType = holoscan::ops::HolovizOp::InputType;
-    InputSpec label(kLabelLayer, InputType::TEXT);
-    label.text_ = {"Estimator: " + display_caption(name)};
-    label.color_ = {1.0F, 0.95F, 0.2F, 1.0F};  // amber, reads over turbo
-    label.priority_ = 10;                       // draw above the RD image
-    // No View: render in full-window [0, 1] space so glyph advance isn't
-    // squished by an anisotropic sub-view (which clipped the estimator name).
-    std::vector<InputSpec> specs{label};
-    op_output.emit(specs, "input_specs");
-
-    // Text (x, y, size) in full-window [0, 1] space; size is the glyph height
-    // as a fraction of the window height.
-    const std::array<float, 3> pos = {0.012F, 0.03F, 0.03F};
-    auto tensor = radar::make_device_tensor({1, 3}, radar::real_dtype<float>());
-    if (cudaMemcpy(tensor->data(), pos.data(), sizeof(pos),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error("EstimatorLabelOp: label position H2D failed");
-    }
+    // The estimator name rides in the RD-map title rather than a separate
+    // caption, so it reads as the heading of the plot it describes. Styled
+    // exactly like the title ClusterOverlayOp would have drawn (white,
+    // pixel-locked to kRdTitlePx, centred on the image box); the app blanks
+    // rd_title so this is the only title on screen.
+    const float sz = kRdTitlePx / std::max(view_px_height, 1.0F);
     holoscan::TensorMap out;
-    out.insert({kLabelLayer, tensor});
+    std::vector<InputSpec> specs;
+    if (auto upstream = op_input.receive<std::vector<InputSpec>>("specs_in")) {
+      specs = std::move(upstream.value());
+    }
+    push_abs_text(out, &specs, kLabelLayer,
+                  {{title_center_x, title_top_y,
+                    base_title + " - " + display_caption(name),
+                    TextAnchor::kCenter}},
+                  sz, window_aspect, {1.0F, 1.0F, 1.0F, 1.0F}, 8);
+    op_output.emit(specs, "input_specs");
     op_output.emit(out, "label_pos");
   }
 
@@ -322,17 +343,6 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
       source->cadence = cadence;
       det_report->cadence = cadence;
     }
-    const std::vector<radar::AssemblyFeature> feature_columns{
-        radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity,
-        radar::AssemblyFeature::kAz, radar::AssemblyFeature::kEl};
-    auto feature_assembly = make_operator<radar::FeatureAssemblyOp<float>>(
-        "feature_assembly", holoscan::Arg("features") = feature_columns);
-    auto cluster = make_operator<radar::ClusterDBSCANOp<float>>(
-        "cluster_dbscan", from_config("cluster_dbscan"));
-    auto cluster_report = make_operator<ClusterReportOp>("cluster_report");
-    auto reduction = make_operator<radar::DetectionReductionOp<float>>(
-        "detection_reduction", from_config("reduction"));
-
     add_flow(source, range, {{"adc_cube", "adc_cube"}});
     add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
     add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
@@ -354,16 +364,13 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
     add_flow(slice, beamscan,
              {{"snapshot", "snapshot"}, {"is_valid", "is_valid"}});
 
-    // Each estimator feeds the same aoa_estimates input; only the selected one
-    // emits per tick, so FeatureAssembly sees exactly one estimate each frame.
-    add_flow(beamscan, feature_assembly, {{"aoa_estimates", "aoa_estimates"}});
-    add_flow(mvdr, feature_assembly, {{"aoa_estimates", "aoa_estimates"}});
-    add_flow(music, feature_assembly, {{"aoa_estimates", "aoa_estimates"}});
-    add_flow(root_music, feature_assembly,
-             {{"aoa_estimates", "aoa_estimates"}});
-    add_flow(esprit, feature_assembly, {{"aoa_estimates", "aoa_estimates"}});
     // Beamscan's angle_spectrum is a required output; drain it.
     add_flow(beamscan, spectrum_sink, {{"angle_spectrum", "input"}});
+    // Every estimator branch, for the fan-ins below. Only the router-selected
+    // one emits per tick, so each downstream aoa_estimates input sees exactly
+    // one estimate per frame.
+    const std::vector<std::shared_ptr<holoscan::Operator>> estimators{
+        beamscan, mvdr, music, root_music, esprit};
 
     // Activate only the selected estimator's edges each tick. compute() has
     // already advanced the policy and set active_target().
@@ -387,36 +394,72 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
     add_flow(cfar, mask_sink, {{"detection_mask", "input"}});
     add_flow(cfar, noise_sink, {{"noise_estimate", "input"}});
 
-    add_flow(cfar, feature_assembly, {{"detection_idx", "detection_idx"}});
-    add_flow(range, feature_assembly, {{"range_bins", "range_bins"}});
-    add_flow(doppler, feature_assembly, {{"velocity_bins", "velocity_bins"}});
-    add_flow(feature_assembly, cluster, {{"points", "points"}});
-    add_flow(feature_assembly, cluster_report, {{"points", "points"}});
-    add_flow(cluster, cluster_report,
-             {{"labels", "labels"}, {"sizes", "sizes"}});
-    add_flow(cluster, reduction, {{"labels", "labels"}});
-    add_flow(cfar, reduction, {{"detection_idx", "detection_idx"}});
-    add_flow(feature_assembly, reduction, {{"points", "points"}});
-    add_flow(reduction, cluster_report, {{"rep_idx", "rep_idx"}});
-    add_flow(cfar, cluster_report, {{"detection_idx", "detection_idx"}});
-    add_flow(range, cluster_report, {{"range_bins", "range_bins"}});
-    add_flow(doppler, cluster_report, {{"velocity_bins", "velocity_bins"}});
+    // Clustering subgraph — dropped when peak_only is set. In that mode CFAR
+    // already emits one detection per target, so the per-detection angle is
+    // reported through DetectionReportOp's optional aoa_estimates input instead
+    // of via the (removed) cluster report.
+    std::shared_ptr<radar::ClusterDBSCANOp<float>> cluster;
+    std::shared_ptr<radar::DetectionReductionOp<float>> reduction;
+    if (!cfg.peak_only) {
+      const std::vector<radar::AssemblyFeature> feature_columns{
+          radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity,
+          radar::AssemblyFeature::kAz, radar::AssemblyFeature::kEl};
+      auto feature_assembly = make_operator<radar::FeatureAssemblyOp<float>>(
+          "feature_assembly", holoscan::Arg("features") = feature_columns);
+      cluster = make_operator<radar::ClusterDBSCANOp<float>>(
+          "cluster_dbscan", from_config("cluster_dbscan"));
+      auto cluster_report = make_operator<ClusterReportOp>("cluster_report");
+      reduction = make_operator<radar::DetectionReductionOp<float>>(
+          "detection_reduction", from_config("reduction"));
+
+      for (const auto& est : estimators) {
+        add_flow(est, feature_assembly, {{"aoa_estimates", "aoa_estimates"}});
+      }
+      add_flow(cfar, feature_assembly, {{"detection_idx", "detection_idx"}});
+      add_flow(range, feature_assembly, {{"range_bins", "range_bins"}});
+      add_flow(doppler, feature_assembly, {{"velocity_bins", "velocity_bins"}});
+      add_flow(feature_assembly, cluster, {{"points", "points"}});
+      add_flow(feature_assembly, cluster_report, {{"points", "points"}});
+      add_flow(cluster, cluster_report,
+               {{"labels", "labels"}, {"sizes", "sizes"}});
+      add_flow(cluster, reduction, {{"labels", "labels"}});
+      add_flow(cfar, reduction, {{"detection_idx", "detection_idx"}});
+      add_flow(feature_assembly, reduction, {{"points", "points"}});
+      add_flow(reduction, cluster_report, {{"rep_idx", "rep_idx"}});
+      add_flow(cfar, cluster_report, {{"detection_idx", "detection_idx"}});
+      add_flow(range, cluster_report, {{"range_bins", "range_bins"}});
+      add_flow(doppler, cluster_report, {{"velocity_bins", "velocity_bins"}});
+    } else {
+      for (const auto& est : estimators) {
+        add_flow(est, det_report, {{"aoa_estimates", "aoa_estimates"}});
+      }
+    }
 
     if (cfg.visualize) {
-      auto ch_slice = make_operator<RdChannelSliceOp>("rd_channel_slice");
-      ch_slice->channel = 0;
+      // The RD display is CFAR's own thresholded surface (cfar_power:
+      // post-NCI integrated power here), so the picture and the overlaid
+      // detections are literally the same data — no re-derivation that
+      // could drift from the detector's nci_axes / nci_fold.
       auto to_image = make_operator<RdMapToImageOp>("rd_map_to_image");
       auto overlay = make_operator<ClusterOverlayOp>("cluster_overlay");
 
       HolovizLayout layout;
-      layout.window_title = "FMCW AoA estimators - RD (ch0) + clusters";
+      layout.window_title = "FMCW AoA estimators - RD (NCI) + clusters";
       layout.width = cfg.plots.enable ? 1200U : 800U;
       layout.height = cfg.plots.enable ? 760U : 600U;
       layout.headless = cfg.headless;
+      layout.vsync = cfg.viz.vsync;
       layout.plots_enabled = cfg.plots.enable;
-      if (cfg.plots.enable) {
-        layout.right_panels = range_velocity_boresight_panels();
-      }
+      // Side panels (range/velocity/boresight) are drawn with native Holoviz
+      // primitives by the plot ops (dynamic InputSpecs); no static right-panel
+      // images. Stacked right-column view rects:
+      const PanelRect range_view{0.63F, 0.02F, 0.35F, 0.30F};
+      const PanelRect velocity_view{0.63F, 0.35F, 0.35F, 0.30F};
+      const PanelRect boresight_view{0.63F, 0.68F, 0.35F, 0.30F};
+      const auto panel_aspect = [&](const PanelRect& v) {
+        return (v.w * static_cast<float>(layout.width)) /
+               (v.h * static_cast<float>(layout.height));
+      };
       // Diagnostic headless frame capture: AOA_CAPTURE_DIR enables Holoviz's
       // render_buffer_output and dumps composited frames to PPM (off by
       // default; requires headless so the buffer is produced).
@@ -430,6 +473,7 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
             holoscan::Arg("window_title", layout.window_title),
             holoscan::Arg("width", layout.width),
             holoscan::Arg("height", layout.height),
+            holoscan::Arg("vsync", layout.vsync),
             holoscan::Arg("headless", layout.headless),
             holoscan::Arg("enable_render_buffer_output", true),
             holoscan::Arg("allocator",
@@ -444,10 +488,33 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
         visualizer = make_rd_holoviz_op(this, "holoviz", layout);
       }
 
+      overlay->view_aspect = rd_map_view_aspect(layout);
+      overlay->rd_region = rd_map_region(layout);  // axes/frame/title region
+      overlay->rd_view_px_height = static_cast<float>(layout.height);
+      // EstimatorLabelOp draws the title (it carries the live estimator
+      // name), so suppress the overlay's own.
+      overlay->rd_title = "";
+      overlay->frame_period = cfg.frame_period;    // scenario clock
+      overlay->marker_radius = cfg.viz.marker_radius;
+      overlay->marker_outline = cfg.viz.marker_outline;
+      overlay->marker_segments = cfg.viz.marker_segments;
+
       // Live caption of the active estimator, drawn over the top of the RD map
-      // (a dynamic TEXT layer appended to Holoviz's compose-time specs).
+      // (a dynamic TEXT layer appended to Holoviz's compose-time specs). It is
+      // the tail of the InputSpec chain — see the wiring below.
       auto label = make_operator<EstimatorLabelOp>("estimator_label");
       label->router = router.get();
+      label->view_px_height = static_cast<float>(layout.height);
+      label->window_aspect = static_cast<float>(layout.width) /
+                             static_cast<float>(layout.height);
+      // Same anchor emit_rd_axes would have used: centred on the inset image
+      // box, one title height above its top edge.
+      const PanelRect rd_region = rd_map_region(layout);
+      const float title_sz = kRdTitlePx / static_cast<float>(layout.height);
+      label->title_center_x =
+          rd_region.x + 0.5F * (kBoxL + kBoxR) * rd_region.w;
+      label->title_top_y =
+          rd_region.y + kBoxT * rd_region.h - title_sz - 0.012F;
 
       std::shared_ptr<RollingPlotOp> plot;
       std::shared_ptr<BoresightViewOp> boresight;
@@ -455,39 +522,82 @@ class FmcwAoaEstimatorsApp : public holoscan::Application {
         plot = make_operator<RollingPlotOp>("rolling_plot");
         plot->window = cfg.plots.window;
         plot->frame_period = cfg.frame_period;
+        plot->primitive = true;
+        plot->range_view = range_view;
+        plot->velocity_view = velocity_view;
+        plot->range_aspect = panel_aspect(range_view);
+        plot->velocity_aspect = panel_aspect(velocity_view);
+        plot->marker_radius = cfg.viz.marker_radius;
+        plot->marker_outline = cfg.viz.marker_outline;
+        plot->marker_segments = cfg.viz.marker_segments;
         boresight = make_operator<BoresightViewOp>("boresight_view");
         boresight->az_lo = cfg.az_lo;
         boresight->az_hi = cfg.az_hi;
         boresight->el_lo = cfg.el_lo;
         boresight->el_hi = cfg.el_hi;
+        boresight->primitive = true;
+        boresight->view = boresight_view;
+        boresight->aspect = panel_aspect(boresight_view);
+        boresight->marker_radius = cfg.viz.marker_radius;
+        boresight->marker_outline = cfg.viz.marker_outline;
+        boresight->marker_segments = cfg.viz.marker_segments;
       }
 
-      add_flow(doppler, ch_slice, {{"rd_maps", "rd_maps"}});
-      add_flow(ch_slice, to_image, {{"rd_map", "rd_maps"}});
+      add_flow(cfar, to_image, {{"cfar_power", "rd_maps"}});
       add_flow(to_image, visualizer, {{"rd_image", "receivers"}});
-      // The active-estimator caption: its dynamic spec + text position.
+      // The active-estimator caption: its text position rides `receivers`; its
+      // spec closes the input_specs chain assembled below.
       add_flow(doppler, label, {{"rd_maps", "rd_maps"}});
       add_flow(label, visualizer, {{"input_specs", "input_specs"}});
       add_flow(label, visualizer, {{"label_pos", "receivers"}});
+      // Overlay/plot/boresight color by cluster when clustering runs (keyed on
+      // each cluster's representative RD cell, via rep_idx, so the color is
+      // stable across frames); in peak_only mode there are no labels, so all
+      // three color each peak by its per-detection row index instead.
       add_flow(cfar, overlay, {{"detection_idx", "detection_idx"}});
-      add_flow(cluster, overlay, {{"labels", "labels"}});
-      add_flow(ch_slice, overlay, {{"rd_map", "rd_maps"}});
+      add_flow(cfar, overlay, {{"cfar_power", "rd_maps"}});
+      // Physical axis bins for the RD-map tick labels (range X, velocity Y).
+      add_flow(range, overlay, {{"range_bins", "range_bins"}});
+      add_flow(doppler, overlay, {{"velocity_bins", "velocity_bins"}});
+      if (!cfg.peak_only) {
+        add_flow(cluster, overlay, {{"labels", "labels"}});
+        add_flow(reduction, overlay, {{"rep_idx", "rep_idx"}});
+      }
       add_flow(overlay, visualizer, {{"overlay", "receivers"}});
+      // HolovizOp has one input_specs port, so every dynamic-spec producer is
+      // chained into a single stream that terminates at the caption:
+      //   overlay → rolling plot → boresight → estimator label → input_specs
+      // (without panels: overlay → estimator label → input_specs).
       if (plot) {
-        add_flow(reduction, plot, {{"rep_idx", "rep_idx"}});
+        add_flow(overlay, plot, {{"time_specs", "specs_in"}});
+      } else {
+        add_flow(overlay, label, {{"time_specs", "specs_in"}});
+      }
+      if (plot) {
+        if (!cfg.peak_only) {
+          add_flow(reduction, plot, {{"rep_idx", "rep_idx"}});
+          // labels flag clustered mode; the plot then colors each rep by its RD
+          // cell (matching the RD-map / boresight markers).
+          add_flow(cluster, plot, {{"labels", "labels"}});
+        } else {
+          add_flow(cfar, plot, {{"detection_idx", "rep_idx"}});
+        }
         add_flow(range, plot, {{"range_bins", "range_bins"}});
         add_flow(doppler, plot, {{"velocity_bins", "velocity_bins"}});
         add_flow(plot, visualizer, {{"plots", "receivers"}});
       }
       if (boresight) {
         // Boresight az/el is fed by whichever estimator ran this frame.
-        add_flow(beamscan, boresight, {{"aoa_estimates", "aoa_estimates"}});
-        add_flow(mvdr, boresight, {{"aoa_estimates", "aoa_estimates"}});
-        add_flow(music, boresight, {{"aoa_estimates", "aoa_estimates"}});
-        add_flow(root_music, boresight, {{"aoa_estimates", "aoa_estimates"}});
-        add_flow(esprit, boresight, {{"aoa_estimates", "aoa_estimates"}});
-        add_flow(cluster, boresight, {{"labels", "labels"}});
+        for (const auto& est : estimators) {
+          add_flow(est, boresight, {{"aoa_estimates", "aoa_estimates"}});
+        }
+        if (!cfg.peak_only) {
+          add_flow(cluster, boresight, {{"labels", "labels"}});
+          add_flow(reduction, boresight, {{"rep_idx", "rep_idx"}});
+        }
         add_flow(boresight, visualizer, {{"plot", "receivers"}});
+        add_flow(plot, boresight, {{"plot_specs", "specs_in"}});
+        add_flow(boresight, label, {{"specs_out", "specs_in"}});
       }
     }
   }

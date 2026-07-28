@@ -88,6 +88,21 @@ class PyRdChannelSliceOp : public RdChannelSliceOp {
   }
 };
 
+class PyRdAngleMaxOp : public RdAngleMaxOp {
+ public:
+  using RdAngleMaxOp::RdAngleMaxOp;
+
+  PyRdAngleMaxOp(Fragment* fragment, const py::args& args,
+                 const std::string& name = "rd_angle_max")
+      : RdAngleMaxOp() {
+    name_ = name;
+    fragment_ = fragment;
+    spec_ = std::make_shared<OperatorSpec>(fragment);
+    setup(*spec_);
+    python::add_conditions_and_resources(this, args);
+  }
+};
+
 class PyRdMapToImageOp : public RdMapToImageOp {
  public:
   using RdMapToImageOp::RdMapToImageOp;
@@ -202,17 +217,34 @@ void bind_radar_app(py::module_& m) {
   py::class_<RdChannelSliceOp, PyRdChannelSliceOp, Operator,
              std::shared_ptr<RdChannelSliceOp>>(
       m, "RdChannelSliceOp",
-      "Extract one RX channel from a rank-3 RD map for visualization.")
+      "Slice one rank-2 (doppler, range) plane out of a batched map. Use "
+      "`channel` for a rank-3 (N_ch, D, R) input, or `leading_index` (one "
+      "entry per leading axis) for higher ranks such as the dense path's "
+      "(az, el, D, R) cube.")
       .def(py::init<Fragment*, const py::args&, int64_t, const std::string&>(),
            py::arg("fragment"), py::arg("channel") = 0,
            py::arg("name") = "rd_channel_slice")
       .def_readwrite("channel", &RdChannelSliceOp::channel)
+      .def_readwrite("leading_index", &RdChannelSliceOp::leading_index)
       .def("setup", &RdChannelSliceOp::setup, py::arg("spec"));
+
+  py::class_<RdAngleMaxOp, PyRdAngleMaxOp, Operator,
+             std::shared_ptr<RdAngleMaxOp>>(
+      m, "RdAngleMaxOp",
+      "Max-project a (..., D, R) cube down all its leading axes to one "
+      "(D, R) float32 power plane. Drop-in alternative to RdChannelSliceOp "
+      "for the dense path, where the leading axes are a beam grid: it matches "
+      "the max-over-beams projection AnglePeakPickOp already applies to the "
+      "detections, at the cost of a higher noise floor.")
+      .def(py::init<Fragment*, const py::args&, const std::string&>(),
+           py::arg("fragment"), py::arg("name") = "rd_angle_max")
+      .def("setup", &RdAngleMaxOp::setup, py::arg("spec"));
 
   py::class_<RdMapToImageOp, PyRdMapToImageOp, Operator,
              std::shared_ptr<RdMapToImageOp>>(
       m, "RdMapToImageOp",
-      "Convert a complex RD map to a log-magnitude float image for Holoviz.")
+      "Convert a complex RD map or a real power surface (CFAR cfar_power) "
+      "to a log-magnitude float image for Holoviz.")
       .def(py::init<Fragment*, const py::args&, const std::string&>(),
            py::arg("fragment"), py::arg("name") = "rd_map_to_image")
       .def("setup", &RdMapToImageOp::setup, py::arg("spec"));
@@ -220,10 +252,31 @@ void bind_radar_app(py::module_& m) {
   py::class_<ClusterOverlayOp, PyClusterOverlayOp, Operator,
              std::shared_ptr<ClusterOverlayOp>>(
       m, "ClusterOverlayOp",
-      "Emit Holoviz CROSSES geometry layers for CFAR detections by cluster.")
+      "Emit Holoviz filled-disc layers for CFAR detections by cluster.")
       .def(py::init<Fragment*, const py::args&, const std::string&>(),
            py::arg("fragment"), py::arg("name") = "cluster_overlay")
+      .def_readwrite("view_aspect", &ClusterOverlayOp::view_aspect)
+      .def_readwrite("frame_period", &ClusterOverlayOp::frame_period)
+      .def_readwrite("rd_region", &ClusterOverlayOp::rd_region)
+      .def_readwrite("rd_title", &ClusterOverlayOp::rd_title)
+      .def_readwrite("rd_view_px_height", &ClusterOverlayOp::rd_view_px_height)
+      .def_readwrite("marker_radius", &ClusterOverlayOp::marker_radius)
+      .def_readwrite("marker_outline", &ClusterOverlayOp::marker_outline)
+      .def_readwrite("marker_segments", &ClusterOverlayOp::marker_segments)
       .def("setup", &ClusterOverlayOp::setup, py::arg("spec"));
+
+  // Panel placement (window-normalized view
+  // rect) for the primitive side panels.
+  py::class_<PanelRect>(m, "PanelRect", "Window-normalized panel view rect.")
+      .def(py::init([](float x, float y, float w, float h) {
+             return PanelRect{x, y, w, h};
+           }),
+           py::arg("x") = 0.0F, py::arg("y") = 0.0F, py::arg("w") = 1.0F,
+           py::arg("h") = 1.0F)
+      .def_readwrite("x", &PanelRect::x)
+      .def_readwrite("y", &PanelRect::y)
+      .def_readwrite("w", &PanelRect::w)
+      .def_readwrite("h", &PanelRect::h);
 
   py::class_<RollingPlotOp, PyRollingPlotOp, Operator,
              std::shared_ptr<RollingPlotOp>>(
@@ -237,6 +290,14 @@ void bind_radar_app(py::module_& m) {
       .def_readwrite("frame_period", &RollingPlotOp::frame_period)
       .def_readwrite("velocity_ylim_lo", &RollingPlotOp::velocity_ylim_lo)
       .def_readwrite("velocity_ylim_hi", &RollingPlotOp::velocity_ylim_hi)
+      .def_readwrite("primitive", &RollingPlotOp::primitive)
+      .def_readwrite("range_view", &RollingPlotOp::range_view)
+      .def_readwrite("velocity_view", &RollingPlotOp::velocity_view)
+      .def_readwrite("range_aspect", &RollingPlotOp::range_aspect)
+      .def_readwrite("velocity_aspect", &RollingPlotOp::velocity_aspect)
+      .def_readwrite("marker_radius", &RollingPlotOp::marker_radius)
+      .def_readwrite("marker_outline", &RollingPlotOp::marker_outline)
+      .def_readwrite("marker_segments", &RollingPlotOp::marker_segments)
       .def("setup", &RollingPlotOp::setup, py::arg("spec"));
 
   py::class_<BoresightViewOp, PyBoresightViewOp, Operator,
@@ -252,6 +313,12 @@ void bind_radar_app(py::module_& m) {
       .def_readwrite("az_hi", &BoresightViewOp::az_hi)
       .def_readwrite("el_lo", &BoresightViewOp::el_lo)
       .def_readwrite("el_hi", &BoresightViewOp::el_hi)
+      .def_readwrite("primitive", &BoresightViewOp::primitive)
+      .def_readwrite("view", &BoresightViewOp::view)
+      .def_readwrite("aspect", &BoresightViewOp::aspect)
+      .def_readwrite("marker_radius", &BoresightViewOp::marker_radius)
+      .def_readwrite("marker_outline", &BoresightViewOp::marker_outline)
+      .def_readwrite("marker_segments", &BoresightViewOp::marker_segments)
       .def("setup", &BoresightViewOp::setup, py::arg("spec"));
 
   m.def("gui_available", &gui_available,
@@ -259,7 +326,7 @@ void bind_radar_app(py::module_& m) {
   m.def("make_turbo_lut", &make_turbo_lut,
         "kLutSize-entry RGBA turbo colormap for HolovizOp color_lut.");
   m.def("cluster_palette", &cluster_palette,
-        "Categorical RGBA palette for cluster-overlay CROSSES layers.");
+        "Categorical RGBA palette for cluster-overlay disc layers.");
 }
 
 }  // namespace

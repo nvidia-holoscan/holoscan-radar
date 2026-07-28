@@ -21,6 +21,7 @@ from utils.point_target_sim import PointTarget, SimScene, simulate  # noqa: E402
 
 from holoscan.radar import FMCWDopplerProcessorOp  # noqa: E402
 from holoscan.radar import (
+    K_PI,
     FMCWDopplerProcessorOpF32,
     FMCWDopplerProcessorOpF64,
     FMCWWaveformDescriptor,
@@ -30,8 +31,6 @@ from holoscan.radar import (
 )
 
 pytestmark = pytest.mark.requires_gpu
-
-K_PI = math.pi
 
 
 @pytest.fixture(scope="module", autouse=True)

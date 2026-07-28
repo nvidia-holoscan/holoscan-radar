@@ -36,8 +36,6 @@ from common.python.sim import PointTarget
 
 # isort: on
 
-K_C = 299792458.0
-
 
 def port_tensor(message: Any, key: str) -> Any:
     """Extract a tensor from a Holoscan port message (TensorMap or bare tensor).
@@ -372,6 +370,54 @@ def parse_plots(root: dict[str, Any]) -> PlotsConfig:
 
 
 @dataclass
+class VisualizationConfig:
+    """Detection-marker geometry for the RD-map overlay (ClusterOverlayOp), as a
+    fraction of the image extent. Python analogue of
+    ``config.hpp::CommonRunConfig::VisualizationConfig``.
+    """
+
+    marker_radius: float = 0.004
+    marker_outline: float = 0.002
+    marker_segments: int = 20
+    # Vertical sync. True -> HolovizOp uses a FIFO present mode (frame-rate
+    # capped, internally queued); False -> IMMEDIATE (uncapped, may tear). FIFO
+    # issues far fewer swap-chain acquires per window resize, making the resize
+    # path markedly more robust against Holoviz's fatal "Failed to acquire next
+    # swap chain image" on an out-of-date surface.
+    vsync: bool = True
+
+
+def parse_visualization(root: dict[str, Any]) -> tuple[bool, VisualizationConfig]:
+    """Parse the ``visualization:`` block: the ``enabled`` master live-Holoviz
+    switch (falling back to the legacy top-level ``visualize:`` bool when the
+    block is absent) plus the detection-marker geometry. Mirrors the
+    ``visualization`` handling in ``config.hpp::parse_viz_toggles``. Returns
+    ``(enabled, VisualizationConfig)``.
+    """
+    viz = VisualizationConfig()
+    node = root.get("visualization")
+    if isinstance(node, dict):
+        enabled = bool(node.get("enabled", False))
+        if "marker_radius" in node:
+            viz.marker_radius = float(node["marker_radius"])
+        if "marker_outline" in node:
+            viz.marker_outline = float(node["marker_outline"])
+        if "marker_segments" in node:
+            viz.marker_segments = int(node["marker_segments"])
+        if "vsync" in node:
+            viz.vsync = bool(node["vsync"])
+    else:
+        enabled = bool(root.get("visualize", False))  # legacy top-level toggle
+    if viz.marker_radius <= 0.0:
+        raise ValueError("visualization.marker_radius must be > 0")
+    if viz.marker_outline < 0.0:
+        raise ValueError("visualization.marker_outline must be >= 0")
+    if viz.marker_segments < 3:
+        raise ValueError(f"visualization.marker_segments must be >= 3, got {viz.marker_segments}")
+    return enabled, viz
+
+
+@dataclass
 class CommonRunConfig:
     """Run cadence + visualization toggles shared by every FMCW demo app.
 
@@ -390,7 +436,14 @@ class CommonRunConfig:
     visualize: bool = False
     skip_display_check: bool = False
     headless: bool = False
+    # CFAR peak-grouping mode. A native CFARDetectorOp parameter (set through the
+    # cfar_detector YAML block via from_config); each app also reads the same key
+    # as a read-only mirror of that operator block to gate its graph shape (drop
+    # the DBSCAN clustering + reduction stages when set). Populated per app in
+    # its load_config, not by parse_common_run_config below.
+    peak_only: bool = False
     plots: PlotsConfig = field(default_factory=PlotsConfig)
+    viz: VisualizationConfig = field(default_factory=VisualizationConfig)
 
 
 def parse_common_run_config(root: dict[str, Any], config_path: Path) -> CommonRunConfig:
@@ -415,21 +468,84 @@ def parse_common_run_config(root: dict[str, Any], config_path: Path) -> CommonRu
     meter_log_every = int(run.get("meter_log_every", 0))
     if meter_log_every < 0:
         raise ValueError("run.meter_log_every must be >= 0")
+    visualize, viz = parse_visualization(root)
     return CommonRunConfig(
         config_path=config_path,
         num_frames=num_frames,
         frame_period=frame_period,
         meter_cadence=bool(run.get("meter_cadence", True)),
         meter_log_every=meter_log_every,
-        visualize=bool(root.get("visualize", False)),
+        visualize=visualize,
         skip_display_check=bool(root.get("skip_display_check", False)),
         headless=bool(root.get("headless", False)),
         plots=parse_plots(root),
+        viz=viz,
     )
 
 
 def cluster_layer_name(color: int) -> str:
     return f"cluster_{color}"
+
+
+K_DETECTION_OUTLINE_LAYER = "detection_outline"
+K_NOISE_LAYER_NAME = "noise"
+
+
+def detection_layer_specs(palette: list[list[float]]) -> list[HolovizOp.InputSpec]:
+    """Holoviz InputSpecs for the CFAR detection markers, matching the tensors
+    ClusterOverlayOp emits. Detections render as filled triangle-fan discs: a
+    single black outline layer of larger discs (priority 1) sits under one
+    colored disc layer per cluster palette color plus a muted noise layer
+    (priority 2). All draw over the RD image (COLOR_LUT, default priority 0)."""
+    specs: list[HolovizOp.InputSpec] = []
+    outline = HolovizOp.InputSpec(K_DETECTION_OUTLINE_LAYER, HolovizOp.InputType.TRIANGLES)
+    outline.color = [0.0, 0.0, 0.0, 1.0]
+    outline.priority = 1
+    specs.append(outline)
+
+    def add_discs(name: str, color: list[float]) -> None:
+        spec = HolovizOp.InputSpec(name, HolovizOp.InputType.TRIANGLES)
+        spec.color = color
+        spec.priority = 2
+        specs.append(spec)
+
+    for c in range(len(palette)):
+        add_discs(cluster_layer_name(c), palette[c])
+    add_discs(K_NOISE_LAYER_NAME, [0.6, 0.6, 0.6, 1.0])
+    return specs
+
+
+# Shared panel-box margins (mirror kBoxL/R/T/B in viz.hpp): the fraction of a
+# panel/region occupied by the plot box, leaving margins for title + tick labels.
+K_BOX_L, K_BOX_R, K_BOX_T, K_BOX_B = 0.15, 0.98, 0.14, 0.85
+
+
+def rd_map_region(paneled: bool, left_width: float) -> tuple[float, float, float, float]:
+    """RD-map outer region (window-normalized): the left column when the side
+    panels are shown, else the full window. Mirrors holoviz_layout.hpp."""
+    return (0.0, 0.0, left_width, 1.0) if paneled else (0.0, 0.0, 1.0, 1.0)
+
+
+def rd_map_box(paneled: bool, left_width: float) -> tuple[float, float, float, float]:
+    """The inset RD image box within the region, using the shared kBox margins so
+    the image is framed like the side-panel plot boxes rather than stretching to
+    the window edge. The RD image + detection discs use this as their View;
+    emit_rd_axes draws the frame on its edges. Mirrors holoviz_layout.hpp."""
+    x, y, w, h = rd_map_region(paneled, left_width)
+    return (
+        x + K_BOX_L * w,
+        y + K_BOX_T * h,
+        (K_BOX_R - K_BOX_L) * w,
+        (K_BOX_B - K_BOX_T) * h,
+    )
+
+
+def rd_map_view_aspect(width: int, height: int, left_width: float, paneled: bool) -> float:
+    """On-screen aspect ratio (width / height in pixels) of the inset RD-map image
+    box (see rd_map_box). ClusterOverlayOp divides its disc x radius by this so
+    the detection markers render round rather than stretched."""
+    _, _, bw, bh = rd_map_box(paneled, left_width)
+    return (bw * float(width)) / (bh * float(height))
 
 
 def make_view(ox: float, oy: float, w: float, h: float) -> HolovizOp.InputSpec.View:

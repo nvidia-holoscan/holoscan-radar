@@ -26,6 +26,7 @@ using holoscan::radar::canonical_to_boundary;
 using holoscan::radar::CanonicalDirection;
 using holoscan::radar::ElevationReference;
 using holoscan::radar::kPi;
+using holoscan::radar::kTwoPi;
 using holoscan::radar::SignedAxis;
 
 AngleConvention preset(AngleConventionPreset p) {
@@ -153,12 +154,11 @@ TEST(AngleConventionCustomTest, RoundTripsBoundaryCanonicalBoundary) {
 
 // Principal azimuth in (−π, π] for the value `a` (period 2π).
 double wrap_to_pi(double a) {
-  const double two_pi = 2.0 * kPi;
   while (a > kPi) {
-    a -= two_pi;
+    a -= kTwoPi;
   }
   while (a <= -kPi) {
-    a += two_pi;
+    a += kTwoPi;
   }
   return a;
 }
@@ -168,14 +168,13 @@ TEST(AngleConventionCustomTest, ForwardPeriodicInAzimuth) {
   // identical unit vector — any real azimuth is valid input.
   const AngleConvention conv =
       custom(SignedAxis::kMinusY, SignedAxis::kPlusX, SignedAxis::kPlusZ);
-  const double two_pi = 2.0 * kPi;
   for (double az : az_grid()) {
     for (double el : el_grid()) {
       const CanonicalDirection d0 = boundary_to_canonical(conv, az, el);
       const CanonicalDirection d1 =
-          boundary_to_canonical(conv, az + two_pi, el);
+          boundary_to_canonical(conv, az + kTwoPi, el);
       const CanonicalDirection d2 =
-          boundary_to_canonical(conv, az - two_pi, el);
+          boundary_to_canonical(conv, az - kTwoPi, el);
       for (auto* d : {&d1, &d2}) {
         EXPECT_NEAR(d0.x, d->x, 1e-12) << "az=" << az << " el=" << el;
         EXPECT_NEAR(d0.y, d->y, 1e-12) << "az=" << az << " el=" << el;

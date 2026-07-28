@@ -17,8 +17,9 @@
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/math/constants.hpp"
-#include "radar_common/sim/mimo_sim.hpp"
-#include "radar_common/sim/point_target_sim.hpp"
+#include "utils/additives_reference.hpp"
+#include "utils/mimo_reference.hpp"
+#include "utils/sim_reference.hpp"
 #include "utils/bin_model.hpp"
 
 namespace {
@@ -57,11 +58,17 @@ TEST(PointTargetSim, GroundTruthDerivation) {
 TEST(PointTargetSim, Deterministic) {
   auto scene = single_target_scene();
   scene.snr_db = 20.0;
-  const auto a = sim::simulate(scene);
-  const auto b = sim::simulate(scene);
+  // simulate() is a pure function of the
+  // scene; the noise additive is seeded, so
+  // the composed (solver + add_thermal_noise) output is bit-identical for a
+  // fixed seed and differs when the seed changes.
+  auto a = sim::simulate(scene);
+  sim::add_thermal_noise(a.cube, scene.snr_db, scene.seed);
+  auto b = sim::simulate(scene);
+  sim::add_thermal_noise(b.cube, scene.snr_db, scene.seed);
   EXPECT_EQ(a.cube, b.cube);
-  scene.seed += 1;
-  const auto c = sim::simulate(scene);
+  auto c = sim::simulate(scene);
+  sim::add_thermal_noise(c.cube, scene.snr_db, scene.seed + 1);
   EXPECT_NE(a.cube, c.cube);
 }
 
@@ -160,7 +167,33 @@ TEST(PointTargetSim, SimoCubeHasRxLeadingAxis) {
   }
 }
 
-// --- MIMO simulators (mimo_sim.hpp) ---
+// --- SceneMover seam (pluggable per-frame target evolution) ---
+
+TEST(SceneMover, LinearMoverMatchesAdvanceScene) {
+  auto a = single_target_scene();
+  auto b = single_target_scene();
+  const sim::SceneMover mover = sim::linear_mover();
+  for (int i = 0; i < 5; ++i) {
+    mover(a, 0.1);
+    sim::advance_scene(&b, 0.1);
+  }
+  EXPECT_EQ(a.targets[0].position, b.targets[0].position);
+}
+
+TEST(SceneMover, CustomMoverIsHonored) {
+  // A custom mover can move targets non-linearly or regenerate them entirely;
+  // here it pins every target to a fixed range each frame.
+  auto scene = single_target_scene();
+  const sim::SceneMover pin = [](sim::SimScene& s, double) {
+    for (auto& t : s.targets) {
+      t.position = sim::Vec3{0.0, 25.0, 0.0};
+    }
+  };
+  pin(scene, 0.1);
+  EXPECT_DOUBLE_EQ(scene.targets[0].position[1], 25.0);
+}
+
+// --- MIMO simulators (mimo_reference.hpp) ---
 
 // Two-TX, two-RX scene sharing the single-target waveform/target.
 sim::SimScene mimo_scene() {
@@ -248,11 +281,14 @@ TEST(MimoSim, TdmDeterministic) {
   auto scene = mimo_scene();
   scene.snr_db = 20.0;
   const rd::TXSchedule sched;
-  const auto a = sim::simulate_mimo_tdm_interleaved(scene, sched);
-  const auto b = sim::simulate_mimo_tdm_interleaved(scene, sched);
+  // Noise is a seeded additive applied on top of the clean solver response.
+  auto a = sim::simulate_mimo_tdm_interleaved(scene, sched);
+  sim::add_thermal_noise(a.cube, scene.snr_db, scene.seed);
+  auto b = sim::simulate_mimo_tdm_interleaved(scene, sched);
+  sim::add_thermal_noise(b.cube, scene.snr_db, scene.seed);
   EXPECT_EQ(a.cube, b.cube);
-  scene.seed += 1;
-  const auto c = sim::simulate_mimo_tdm_interleaved(scene, sched);
+  auto c = sim::simulate_mimo_tdm_interleaved(scene, sched);
+  sim::add_thermal_noise(c.cube, scene.snr_db, scene.seed + 1);
   EXPECT_NE(a.cube, c.cube);
 }
 

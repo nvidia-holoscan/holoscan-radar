@@ -1,31 +1,32 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Analytic MIMO FMCW simulators — the multi-TX generalization of the shared
-// point-target simulator (point_target_sim.hpp). Multiplexing (TDM interleaving
-// or DDM Doppler coding) needs the full TX set and a scheme descriptor, so it
-// lives here as a sibling of simulate() rather than in point_target_sim.hpp
-// (which stays a minimal, single-TX signal model). Both share the same physics:
-// far-field two-way delay, beat frequency, and slow-time carrier phase.
+// Analytic MIMO FMCW simulators (CPU) — the multi-TX generalization of the
+// single-TX reference in sim_reference.hpp, sharing the same physics (far-field
+// two-way delay, beat frequency, slow-time carrier phase). The three schemes —
+// TDM interleaving, DDM Doppler coding, DDM phase coding — are the ground truth
+// the unified GPU core (simulator.hpp::simulate_mimo_gpu)
+// is validated against, and
+// the tautology guard for the deinterleave / coherent-compensation /
+// virtual-array operators.
 //
-// A radar_common utility (like point_target_sim): the MIMO example app drives
-// it to synthesize input cubes, and the MIMO tests use it as the ground-truth
-// tautology guard for the deinterleave / coherent-compensation / virtual-array
-// operators.
+// A tests-only reference (like sim_reference.hpp): the runtime MIMO source
+// operators synthesize on the device via simulate_mimo_gpu; this lives under
+// tests/ so the oracle stays implementation-independent. Builds on the shared
+// scene model radar_common/sim/scene.hpp.
 
 #pragma once
 
 #include <cmath>
 #include <complex>
 #include <cstdint>
-#include <random>
 #include <stdexcept>
 #include <vector>
 
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/math/constants.hpp"
-#include "radar_common/sim/point_target_sim.hpp"
+#include "radar_common/sim/scene.hpp"
 
 namespace holoscan::radar::sim {
 
@@ -116,15 +117,9 @@ inline SimResult simulate_mimo_tdm_interleaved(const SimScene& scene,
     }
   }
 
-  if (scene.snr_db.has_value()) {
-    const double noise_power = std::pow(10.0, -(*scene.snr_db) / 10.0);
-    const double sigma = std::sqrt(noise_power / 2.0);
-    std::mt19937_64 rng(scene.seed);
-    std::normal_distribution<double> gauss(0.0, sigma);
-    for (auto& v : result.cube) {
-      v += std::complex<double>(gauss(rng), gauss(rng));
-    }
-  }
+  // Clean scatterer response; the caller
+  // applies sim::add_thermal_noise (and any
+  // other I/Q additives) to the cube.
   return result;
 }
 
@@ -193,15 +188,9 @@ inline SimResult simulate_mimo_ddm_coded(const SimScene& scene,
     }
   }
 
-  if (scene.snr_db.has_value()) {
-    const double noise_power = std::pow(10.0, -(*scene.snr_db) / 10.0);
-    const double sigma = std::sqrt(noise_power / 2.0);
-    std::mt19937_64 rng(scene.seed);
-    std::normal_distribution<double> gauss(0.0, sigma);
-    for (auto& v : result.cube) {
-      v += std::complex<double>(gauss(rng), gauss(rng));
-    }
-  }
+  // Clean scatterer response; the caller
+  // applies sim::add_thermal_noise (and any
+  // other I/Q additives) to the cube.
   return result;
 }
 
@@ -269,15 +258,9 @@ inline SimResult simulate_mimo_ddm_phase_coded(
     }
   }
 
-  if (scene.snr_db.has_value()) {
-    const double noise_power = std::pow(10.0, -(*scene.snr_db) / 10.0);
-    const double sigma = std::sqrt(noise_power / 2.0);
-    std::mt19937_64 rng(scene.seed);
-    std::normal_distribution<double> gauss(0.0, sigma);
-    for (auto& v : result.cube) {
-      v += std::complex<double>(gauss(rng), gauss(rng));
-    }
-  }
+  // Clean scatterer response; the caller
+  // applies sim::add_thermal_noise (and any
+  // other I/Q additives) to the cube.
   return result;
 }
 

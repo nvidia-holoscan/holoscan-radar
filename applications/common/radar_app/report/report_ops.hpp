@@ -39,9 +39,19 @@ class DetectionReportOp : public holoscan::Operator {
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("detection_idx");
-    spec.input<holoscan::TensorMap>("detection_score");
+    // Optional: the sparse (RD-map) CFAR path supplies a rank-2 (num_doppler,
+    // num_range) score to log per detection. The dense (per-beam) path has a
+    // rank-4 score with no 2-D map to look up, so peak_only dense reports
+    // without a score.
+    spec.input<holoscan::TensorMap>("detection_score")
+        .condition(holoscan::ConditionType::kNone);
     spec.input<holoscan::TensorMap>("range_bins");
     spec.input<holoscan::TensorMap>("velocity_bins");
+    // Optional per-detection (az, el) in radians, row-aligned with
+    // detection_idx (the peak_only angle path). When present, az/el are logged
+    // per row.
+    spec.input<holoscan::TensorMap>("aoa_estimates")
+        .condition(holoscan::ConditionType::kNone);
   }
 
   void compute(holoscan::InputContext& op_input,
@@ -49,32 +59,55 @@ class DetectionReportOp : public holoscan::Operator {
                [[maybe_unused]] holoscan::ExecutionContext& context)
       override {
     auto detection_idx = single_tensor(op_input, "detection_idx");
-    auto detection_score = single_tensor(op_input, "detection_score");
     auto range_bins = single_tensor(op_input, "range_bins");
     auto velocity_bins = single_tensor(op_input, "velocity_bins");
+    auto detection_score =
+        radar::receive_optional(op_input, "detection_score",
+                                "DetectionReportOp");
+    auto aoa_estimates =
+        radar::receive_optional(op_input, "aoa_estimates",
+                                "DetectionReportOp");
 
     const auto idx_shape = detection_idx->shape();
-    const auto score_shape = detection_score->shape();
     if (idx_shape.size() != 2 || idx_shape[1] != 2) {
       throw std::runtime_error(
           "DetectionReportOp: detection_idx must be (N, 2), got rank " +
           std::to_string(idx_shape.size()));
     }
-    if (score_shape.size() != 2) {
-      throw std::runtime_error(
-          "DetectionReportOp: SISO expects a rank-2 detection_score, got "
-          "rank " +
-          std::to_string(score_shape.size()));
-    }
     const int64_t num_detections = idx_shape[0];
-    const int64_t num_doppler = score_shape[0];
-    const int64_t num_range = score_shape[1];
+    // Map dimensions come from the axis bins (range_bins length = num_range,
+    // velocity_bins length = num_doppler), so a rank-2 detection_score is not
+    // required to size the report.
+    const int64_t num_range = range_bins->shape()[0];
+    const int64_t num_doppler = velocity_bins->shape()[0];
+    const bool have_score = static_cast<bool>(detection_score);
+    const bool have_aoa = static_cast<bool>(aoa_estimates);
 
     std::vector<int64_t> idx(static_cast<size_t>(num_detections * 2));
-    std::vector<float> scores(
-        static_cast<size_t>(num_doppler * num_range));
     std::vector<float> ranges(static_cast<size_t>(num_range));
     std::vector<float> velocities(static_cast<size_t>(num_doppler));
+    std::vector<float> scores;
+    std::vector<float> aoa;
+    if (have_score) {
+      const auto score_shape = detection_score->shape();
+      if (score_shape.size() != 2 || score_shape[0] != num_doppler ||
+          score_shape[1] != num_range) {
+        throw std::runtime_error(
+            "DetectionReportOp: detection_score must be (num_doppler, "
+            "num_range) matching the axis bins");
+      }
+      scores.resize(static_cast<size_t>(num_doppler * num_range));
+    }
+    if (have_aoa) {
+      const auto aoa_shape = aoa_estimates->shape();
+      if (aoa_shape.size() != 2 || aoa_shape[1] != 2 ||
+          aoa_shape[0] != num_detections) {
+        throw std::runtime_error(
+            "DetectionReportOp: aoa_estimates must be (N, 2) row-aligned with "
+            "detection_idx");
+      }
+      aoa.resize(static_cast<size_t>(num_detections * 2));
+    }
 
     const auto require_bytes =
         [](const char* name, const std::shared_ptr<holoscan::Tensor>& t,
@@ -88,39 +121,41 @@ class DetectionReportOp : public holoscan::Operator {
         };
     require_bytes("detection_idx", detection_idx,
                   sizeof(int64_t) * idx.size());
-    require_bytes("detection_score", detection_score,
-                  sizeof(float) * scores.size());
     require_bytes("range_bins", range_bins, sizeof(float) * ranges.size());
     require_bytes("velocity_bins", velocity_bins,
                   sizeof(float) * velocities.size());
+    if (have_score) {
+      require_bytes("detection_score", detection_score,
+                    sizeof(float) * scores.size());
+    }
+    if (have_aoa) {
+      require_bytes("aoa_estimates", aoa_estimates, sizeof(float) * aoa.size());
+    }
 
     if (cudaDeviceSynchronize() != cudaSuccess) {
       throw std::runtime_error(
           "DetectionReportOp: device synchronize failed");
     }
-    if (cudaMemcpy(idx.data(), detection_idx->data(),
-                   static_cast<size_t>(detection_idx->nbytes()),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-      throw std::runtime_error(
-          "DetectionReportOp: detection_idx D2H copy failed");
+    const auto copy_d2h =
+        [](const char* name, void* dst,
+           const std::shared_ptr<holoscan::Tensor>& t) {
+          if (t->nbytes() == 0) {
+            return;
+          }
+          if (cudaMemcpy(dst, t->data(), static_cast<size_t>(t->nbytes()),
+                         cudaMemcpyDeviceToHost) != cudaSuccess) {
+            throw std::runtime_error(std::string("DetectionReportOp: ") + name +
+                                     " D2H copy failed");
+          }
+        };
+    copy_d2h("detection_idx", idx.data(), detection_idx);
+    copy_d2h("range_bins", ranges.data(), range_bins);
+    copy_d2h("velocity_bins", velocities.data(), velocity_bins);
+    if (have_score) {
+      copy_d2h("detection_score", scores.data(), detection_score);
     }
-    if (cudaMemcpy(scores.data(), detection_score->data(),
-                   static_cast<size_t>(detection_score->nbytes()),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-      throw std::runtime_error(
-          "DetectionReportOp: detection_score D2H copy failed");
-    }
-    if (cudaMemcpy(ranges.data(), range_bins->data(),
-                   static_cast<size_t>(range_bins->nbytes()),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-      throw std::runtime_error(
-          "DetectionReportOp: range_bins D2H copy failed");
-    }
-    if (cudaMemcpy(velocities.data(), velocity_bins->data(),
-                   static_cast<size_t>(velocity_bins->nbytes()),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-      throw std::runtime_error(
-          "DetectionReportOp: velocity_bins D2H copy failed");
+    if (have_aoa) {
+      copy_d2h("aoa_estimates", aoa.data(), aoa_estimates);
     }
 
     HOLOSCAN_LOG_INFO("CFAR detections: {}", num_detections);
@@ -134,13 +169,34 @@ class DetectionReportOp : public holoscan::Operator {
         throw std::runtime_error(
             "DetectionReportOp: detection_idx out of map bounds");
       }
+      const float rng = ranges[static_cast<size_t>(range_bin)];
+      const float vel = velocities[static_cast<size_t>(doppler_bin)];
       const float score =
-          scores[static_cast<size_t>(doppler_bin * num_range + range_bin)];
-      HOLOSCAN_LOG_INFO(
-          "  [{}] score={:.2f} range bin {} ({:.2f} m), Doppler bin {} "
-          "({:+.2f} m/s)",
-          i, score, range_bin, ranges[static_cast<size_t>(range_bin)],
-          doppler_bin, velocities[static_cast<size_t>(doppler_bin)]);
+          have_score
+              ? scores[static_cast<size_t>(doppler_bin * num_range + range_bin)]
+              : 0.0f;
+      const float az = have_aoa ? aoa[static_cast<size_t>(i * 2 + 0)] : 0.0f;
+      const float el = have_aoa ? aoa[static_cast<size_t>(i * 2 + 1)] : 0.0f;
+      if (have_score && have_aoa) {
+        HOLOSCAN_LOG_INFO(
+            "  [{}] score={:.2f} range bin {} ({:.2f} m), Doppler bin {} "
+            "({:+.2f} m/s), az {:.3f} rad, el {:.3f} rad",
+            i, score, range_bin, rng, doppler_bin, vel, az, el);
+      } else if (have_score) {
+        HOLOSCAN_LOG_INFO(
+            "  [{}] score={:.2f} range bin {} ({:.2f} m), Doppler bin {} "
+            "({:+.2f} m/s)",
+            i, score, range_bin, rng, doppler_bin, vel);
+      } else if (have_aoa) {
+        HOLOSCAN_LOG_INFO(
+            "  [{}] range bin {} ({:.2f} m), Doppler bin {} ({:+.2f} m/s), "
+            "az {:.3f} rad, el {:.3f} rad",
+            i, range_bin, rng, doppler_bin, vel, az, el);
+      } else {
+        HOLOSCAN_LOG_INFO(
+            "  [{}] range bin {} ({:.2f} m), Doppler bin {} ({:+.2f} m/s)", i,
+            range_bin, rng, doppler_bin, vel);
+      }
     }
     if (num_detections > kMaxLogged) {
       HOLOSCAN_LOG_INFO("  ... {} more detections not logged",

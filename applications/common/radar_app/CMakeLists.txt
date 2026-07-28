@@ -16,6 +16,22 @@
 add_library(radar_app INTERFACE)
 add_library(holoscan::radar_app ALIAS radar_app)
 
+# The one exception to header-only: RdMapToImageOp's dB mapping needs a
+# per-column median, a global median and a global max, which ran on the host
+# behind a device-wide cudaDeviceSynchronize plus a D2H/H2D round trip every
+# frame. Those kernels need nvcc, so they live in a small static library that
+# radar_app links transitively — apps keep linking only holoscan::radar_app.
+add_library(radar_app_viz_kernels STATIC viz/viz_kernels.cu)
+add_library(holoscan::radar_app_viz_kernels ALIAS radar_app_viz_kernels)
+
+target_include_directories(radar_app_viz_kernels
+    PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/applications/common>)
+
+target_link_libraries(radar_app_viz_kernels PUBLIC CUDA::cudart)
+
+set_property(TARGET radar_app_viz_kernels
+    PROPERTY POSITION_INDEPENDENT_CODE ON)
+
 # "radar_app/..." resolves from applications/common; the radar_common include
 # root arrives transitively through holoscan::radar_common below.
 target_include_directories(radar_app INTERFACE
@@ -24,6 +40,7 @@ target_include_directories(radar_app INTERFACE
 target_link_libraries(radar_app INTERFACE
     holoscan::core
     holoscan::radar_common
+    holoscan::radar_app_viz_kernels
     holoscan::viz
     CUDA::cudart)
 

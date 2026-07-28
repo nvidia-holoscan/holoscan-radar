@@ -37,7 +37,7 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "utils/bin_model.hpp"
-#include "radar_common/sim/point_target_sim.hpp"
+#include "utils/sim_reference.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 

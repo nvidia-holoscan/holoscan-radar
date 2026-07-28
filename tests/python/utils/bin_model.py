@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 
-K_C = 299792458.0
+from holoscan.radar import K_SPEED_OF_LIGHT as K_C
 
 
 def range_of_bin(

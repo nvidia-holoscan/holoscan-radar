@@ -47,6 +47,11 @@ cfar_detector:
   training_cells: [3, 3]
   pfa: 1.0e-9
   os_rank: 0
+  # Peak-grouping (non-maximum suppression), applied per-beam on the RDA cube
+  # (AnglePeakPickOp still does the cross-beam collapse). A native CFAR param;
+  # the app also reads this key (a read-only mirror of this block) to drop the
+  # DBSCAN clustering + reduction stages and report the cube peaks directly.
+  peak_only: false
   nci_axes: []
 
 cluster_dbscan:
@@ -74,17 +79,28 @@ run:
   meter_log_every: 0
 
 # Optional Holoviz display: RD map (channel-0 slice) with cluster-colored
-# detection crosses, plus rolling range/velocity plots and a boresight az/el
-# scatter. Set visualize: false for a headless log-only run. If no display is
-# reachable the app auto-falls back to headless (unless skip_display_check is
-# true); headless: true renders offscreen without opening a window.
-visualize: true
+# detection dots, plus rolling range/velocity plots and a boresight az/el
+# scatter. Set visualization.enabled: false for a headless log-only run. If no
+# display is reachable the app auto-falls back to headless (unless
+# skip_display_check is true); headless: true renders offscreen without a window.
+#   marker_radius / marker_outline — dot + outline radius, fractions of the RD
+#     image extent; marker_segments (>= 3) sets dot roundness.
+visualization:
+  enabled: true
+  marker_radius: 0.004
+  marker_outline: 0.002
+  marker_segments: 20
+  # vsync: true forces a FIFO present mode (frame-rate capped) — far more
+  # robust to window-resize swap-chain errors than IMMEDIATE. Set false for
+  # uncapped / low-latency rendering, at the cost of resize robustness (and
+  # possible tearing).
+  vsync: true
 headless: false
 skip_display_check: false
+
 plots:
   enable: true
   window: 120
-  velocity_ylim: [-3.0, 3.0]
 
 # RX URA (uniform rectangular array) in the y-z plane, matching fmcw_simo.
 rx_array:
@@ -92,9 +108,17 @@ rx_array:
   el_elements: 8
   spacing: 0.5
 
+# Position = range * dir(az, el). Four of the five targets carry a transverse
+# velocity component (0.32-0.46 m/s) on top of the radial one, so their az/el
+# sweep over the run; target 3 is the one purely radial reference. The
+# transverse motion is small next to the ranges here, so each target's radial
+# rate drifts by under 0.2 Doppler bins and the two close passes still coincide
+# in range and Doppler. See the README for the scene.
 targets:
-  - { range: 80.0,  azimuth: 0.15,  elevation: 0.10,  velocity: [1.0, -0.3, -0.2], amplitude: 0.8 }
-  - { range: 95.0,  azimuth: -0.10, elevation: -0.08, velocity: [-0.5, 0.3, 0.25], amplitude: 0.6 }
-  - { range: 110.0, azimuth: 0.0,   elevation: 0.05,  velocity: [-0.8, 0.4, -0.3], amplitude: 0.7 }
+  - { range: 245.0,  azimuth: 0.15,  elevation: 0.10,  velocity: [-6.3375, -1.4129, -0.5494], amplitude: 0.8 }
+  - { range: 132.0,  azimuth: -0.10, elevation: -0.12, velocity: [1.5025, -0.3015, 0.1183],   amplitude: 0.6 }
+  - { range: 22.0,   azimuth: 0.0,   elevation: 0.08,  velocity: [8.9712, 0.0, 0.7192],       amplitude: 0.7 }
+  - { range: 117.0,  azimuth: 0.20,  elevation: 0.10,  velocity: [2.9310, 0.7166, 0.0010],    amplitude: 0.55 }
+  - { range: 218.0,  azimuth: 0.17,  elevation: 0.04,  velocity: [-4.8577, -1.2600, -0.0800], amplitude: 0.7 }
 
 noise_snr_db: -28.0

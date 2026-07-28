@@ -19,15 +19,15 @@ cupy = pytest.importorskip("cupy")
 
 from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
 
+from holoscan.radar import K_PI  # noqa: E402
 from holoscan.radar import ClutterFilterOp  # noqa: E402
+from holoscan.radar import K_SPEED_OF_LIGHT as K_C  # noqa: E402
 from holoscan.radar import ClutterFilterMethod, ClutterFilterOpF32, ClutterFilterOpF64
 
 pytestmark = pytest.mark.requires_gpu
 
 K_CHIRPS = 16
 K_BINS = 64
-K_PI = math.pi
-K_C = 299792458.0
 
 
 # ---------------------------------------------------------------------------
