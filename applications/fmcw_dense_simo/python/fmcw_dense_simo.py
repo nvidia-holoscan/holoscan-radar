@@ -7,7 +7,7 @@
 #     -> PhaseShiftBeamformerOp -> CFARDetectorOp (RDA cube)
 #     -> AnglePeakPickOp -> CubeAoaLookupOp -> FeatureAssembly [r,v,az,el]
 #     -> ClusterDBSCAN -> DetectionReduction -> DenseClusterReportOp
-#     [-> viz via RdChannelSliceOp, ClusterOverlayOp, RollingPlotOp, BoresightViewOp]
+#     [-> viz via RdAngleMaxOp, ClusterOverlayOp, RollingPlotOp, BoresightViewOp]
 #
 # Configuration is loaded from fmcw_dense_simo.yaml (default: cpp copy). This
 # file is the graph only - AppConfig / load_config live in config.py, the
@@ -55,7 +55,7 @@ from holoscan.radar import (
     NullSinkOp,
     PanelRect,
     PhaseShiftBeamformerOp,
-    RdChannelSliceOp,
+    RdAngleMaxOp,
     RdMapToImageOp,
     RollingPlotOp,
     cluster_palette,
@@ -89,14 +89,6 @@ K_RANGE_TITLE_LAYER = "range_title"
 K_VELOCITY_TITLE_LAYER = "velocity_title"
 K_BORESIGHT_PLOT_LAYER = "boresight_plot"
 K_BORESIGHT_TITLE_LAYER = "boresight_title"
-
-
-def _nearest_boresight(angles: list[float]) -> int:
-    """Index of the grid angle closest to boresight (0 rad); ties take the lower
-    index. Mirrors nearest_boresight() in the C++ app."""
-    if not angles:
-        return 0
-    return min(range(len(angles)), key=lambda i: abs(angles[i]))
 
 
 class FmcwDenseSimoApp(Application):
@@ -239,23 +231,21 @@ class FmcwDenseSimoApp(Application):
         cfg = self.cfg
         # Display CFAR's own thresholded surface (cfar_power) rather than a raw
         # pre-beamforming RD map. nci_axes is empty on this path, so cfar_power
-        # is the per-beam power cube (num_az, num_el, num_doppler, num_range) —
-        # still one plane per beam, so pick the beam looking straight ahead: the
-        # grid cell nearest boresight in both axes.
+        # is the per-beam power cube (num_az, num_el, num_doppler, num_range),
+        # and RdAngleMaxOp collapses the beam grid by taking each RD cell's max
+        # over all beams.
         #
-        # Caveat worth knowing when reading the display: AnglePeakPickOp
-        # collapses each detected RD cell to its *peak* beam, so the overlaid
-        # detections are a max-over-beams projection while the image is one
-        # fixed beam. An off-boresight target is drawn over a cell attenuated by
-        # the beam pattern - 0.3-4.4 dB for the demo's three targets on this
-        # 8x8 array (all inside the mainlobe; first null at 0.253 rad), but a
-        # target near the +/-0.3 rad grid edge would sit in the null and vanish
-        # from the image while still being detected.
-        ch_slice = RdChannelSliceOp(self, name="rd_channel_slice")
-        ch_slice.leading_index = [
-            _nearest_boresight(cfg.az_angles),
-            _nearest_boresight(cfg.el_angles),
-        ]
+        # Max rather than a single beam because AnglePeakPickOp collapses each
+        # detected RD cell to its *peak* beam: the overlaid detections are
+        # already a max-over-beams projection, so this puts the image in the
+        # same domain. Slicing one fixed beam (the previous behavior) left the
+        # two in different projections, drawing an off-boresight target over a
+        # cell the beam pattern had attenuated - invisible near the +/-0.3 rad
+        # grid edge, where a target sits in the null while still being
+        # detected. The trade is a higher noise floor (the max of 13x13 beams
+        # of noise sits above one beam's mean) and an image that is no longer a
+        # physical beam.
+        angle_max = RdAngleMaxOp(self, name="rd_angle_max")
         to_image = RdMapToImageOp(self, name="rd_map_to_image")
         overlay = ClusterOverlayOp(self, name="cluster_overlay")
         overlay.view_aspect = rd_map_view_aspect(
@@ -352,12 +342,12 @@ class FmcwDenseSimoApp(Application):
             name="holoviz",
         )
 
-        self.add_flow(cfar, ch_slice, {("cfar_power", "rd_maps")})
-        self.add_flow(ch_slice, to_image, {("rd_map", "rd_maps")})
+        self.add_flow(cfar, angle_max, {("cfar_power", "rd_maps")})
+        self.add_flow(angle_max, to_image, {("rd_map", "rd_maps")})
         self.add_flow(to_image, visualizer, {("rd_image", "receivers")})
         self.add_flow(detections, det_idx_rd, {("detection_idx", "idx")})
         self.add_flow(det_idx_rd, overlay, {("idx", "detection_idx")})
-        self.add_flow(ch_slice, overlay, {("rd_map", "rd_maps")})
+        self.add_flow(angle_max, overlay, {("rd_map", "rd_maps")})
         # Physical axis bins for the RD-map tick labels (range X, velocity Y).
         self.add_flow(range_op, overlay, {("range_bins", "range_bins")})
         self.add_flow(doppler, overlay, {("velocity_bins", "velocity_bins")})

@@ -94,6 +94,44 @@ int64_t grid_for(int64_t count) {
   return (count + kBlock - 1) / kBlock;
 }
 
+// One block per (doppler, range) cell: each thread strides the plane axis, then
+// the block reduces in shared memory. Reading with a stride of num_doppler *
+// num_range keeps consecutive threads on consecutive cells within a plane, so
+// the loads coalesce.
+__global__ void max_over_planes_kernel(const void* cube, bool input_is_complex,
+                                       int64_t num_planes, int64_t plane_count,
+                                       float* out) {
+  __shared__ float partial[kBlock];
+  const int64_t cell = blockIdx.x;
+  if (cell >= plane_count) {
+    return;
+  }
+  float best = 0.0F;  // power is non-negative, so 0 is a safe identity
+  for (int64_t p = threadIdx.x; p < num_planes; p += blockDim.x) {
+    const int64_t i = p * plane_count + cell;
+    float v;
+    if (input_is_complex) {
+      const float2 z = static_cast<const float2*>(cube)[i];
+      v = z.x * z.x + z.y * z.y;
+    } else {
+      v = static_cast<const float*>(cube)[i];
+    }
+    best = fmaxf(best, v);
+  }
+  partial[threadIdx.x] = best;
+  __syncthreads();
+  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (threadIdx.x < stride) {
+      partial[threadIdx.x] = fmaxf(partial[threadIdx.x],
+                                   partial[threadIdx.x + stride]);
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    out[cell] = partial[0];
+  }
+}
+
 }  // namespace
 
 size_t rd_lut_image_sort_scratch_bytes(int64_t count) {
@@ -141,6 +179,19 @@ void rd_map_to_lut_image(const void* rd_map, bool input_is_complex,
 
   if (cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error("rd_map_to_lut_image: kernel launch failed");
+  }
+}
+
+void rd_map_max_over_planes(const void* cube, bool input_is_complex,
+                            int64_t num_planes, int64_t num_doppler,
+                            int64_t num_range, float* out,
+                            cudaStream_t stream) {
+  const int64_t plane_count = num_doppler * num_range;
+  max_over_planes_kernel<<<static_cast<unsigned>(plane_count), kBlock, 0,
+                           stream>>>(cube, input_is_complex, num_planes,
+                                     plane_count, out);
+  if (cudaGetLastError() != cudaSuccess) {
+    throw std::runtime_error("rd_map_max_over_planes: kernel launch failed");
   }
 }
 

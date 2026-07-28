@@ -54,4 +54,22 @@ void rd_map_to_lut_image(const void* rd_map, bool input_is_complex,
 // Shared-memory bound on the column length the median kernel can stage.
 constexpr int64_t kRdLutMaxDoppler = 8192;
 
+// Max-project a (num_planes, num_doppler, num_range) cube down its leading
+// axes, emitting the (num_doppler, num_range) plane of per-cell maxima as
+// float32 power. `num_planes` is the product of every leading axis, so this
+// covers a dense path's (num_az, num_el, D, R) as one flattened reduction.
+//
+// Complex input is reduced on |z|^2 (power, so the result is directly
+// comparable to CFARDetectorOp's real cfar_power surface and both feed
+// rd_map_to_lut_image with db_factor = 10). Real input is already power and is
+// reduced as-is.
+//
+// One block per output cell, strided over planes then warp/block-reduced, so
+// cost is one pass over the cube with no scratch. Enqueued on `stream`; never
+// synchronizes.
+void rd_map_max_over_planes(const void* cube, bool input_is_complex,
+                            int64_t num_planes, int64_t num_doppler,
+                            int64_t num_range, float* out,
+                            cudaStream_t stream);
+
 }  // namespace holoscan::radar::app

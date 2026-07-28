@@ -88,6 +88,21 @@ class PyRdChannelSliceOp : public RdChannelSliceOp {
   }
 };
 
+class PyRdAngleMaxOp : public RdAngleMaxOp {
+ public:
+  using RdAngleMaxOp::RdAngleMaxOp;
+
+  PyRdAngleMaxOp(Fragment* fragment, const py::args& args,
+                 const std::string& name = "rd_angle_max")
+      : RdAngleMaxOp() {
+    name_ = name;
+    fragment_ = fragment;
+    spec_ = std::make_shared<OperatorSpec>(fragment);
+    setup(*spec_);
+    python::add_conditions_and_resources(this, args);
+  }
+};
+
 class PyRdMapToImageOp : public RdMapToImageOp {
  public:
   using RdMapToImageOp::RdMapToImageOp;
@@ -212,6 +227,18 @@ void bind_radar_app(py::module_& m) {
       .def_readwrite("channel", &RdChannelSliceOp::channel)
       .def_readwrite("leading_index", &RdChannelSliceOp::leading_index)
       .def("setup", &RdChannelSliceOp::setup, py::arg("spec"));
+
+  py::class_<RdAngleMaxOp, PyRdAngleMaxOp, Operator,
+             std::shared_ptr<RdAngleMaxOp>>(
+      m, "RdAngleMaxOp",
+      "Max-project a (..., D, R) cube down all its leading axes to one "
+      "(D, R) float32 power plane. Drop-in alternative to RdChannelSliceOp "
+      "for the dense path, where the leading axes are a beam grid: it matches "
+      "the max-over-beams projection AnglePeakPickOp already applies to the "
+      "detections, at the cost of a higher noise floor.")
+      .def(py::init<Fragment*, const py::args&, const std::string&>(),
+           py::arg("fragment"), py::arg("name") = "rd_angle_max")
+      .def("setup", &RdAngleMaxOp::setup, py::arg("spec"));
 
   py::class_<RdMapToImageOp, PyRdMapToImageOp, Operator,
              std::shared_ptr<RdMapToImageOp>>(

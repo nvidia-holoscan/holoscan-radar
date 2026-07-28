@@ -182,6 +182,76 @@ class RdChannelSliceOp : public holoscan::Operator {
   }
 };
 
+// Max-projects a (..., D, R) cube down ALL its leading axes, emitting the
+// (D, R) plane of per-cell maxima as float32 power. Drop-in alternative to
+// RdChannelSliceOp — same `rd_maps` -> `rd_map` ports — for the dense path,
+// where the leading axes are a beam grid rather than physical channels.
+//
+// Why prefer it there: AnglePeakPickOp collapses each detected RD cell to its
+// *peak* beam, so the detections drawn over the map are already a max-over-
+// beams projection. Slicing one fixed beam leaves the image in a different
+// projection from the overlay, and an off-boresight target ends up drawn over a
+// cell the beam pattern attenuated. Max-projecting puts both in the same
+// domain.
+//
+// The cost is a higher noise floor: the max of N beams of noise sits above the
+// mean of one. For an n-beam grid of exponential-distributed power the rise is
+// ~10*log10(H_n) dB (~7.6 dB at 13x13), less in practice since adjacent beams
+// are correlated across the mainlobe. RdMapToImageOp's per-column median
+// normalization absorbs part of it, because the median rises too.
+//
+// Unlike RdChannelSliceOp this is not a byte copy: it interprets values, so
+// complex input is reduced on |z|^2 to stay in the same power domain as a real
+// cfar_power surface. Either way the output is float32 power and
+// RdMapToImageOp maps it with db_factor = 10.
+class RdAngleMaxOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(RdAngleMaxOp)
+  RdAngleMaxOp() = default;
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::TensorMap>("rd_maps");
+    spec.output<holoscan::TensorMap>("rd_map");
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               holoscan::OutputContext& op_output,
+               [[maybe_unused]] holoscan::ExecutionContext& context)
+      override {
+    auto rd_maps = radar::receive_single(op_input, "rd_maps", "RdAngleMaxOp");
+    const auto& shape = rd_maps->shape();
+    if (shape.size() < 3) {
+      throw std::runtime_error(
+          "RdAngleMaxOp: expected rank >= 3 (..., D, R), got rank " +
+          std::to_string(shape.size()));
+    }
+    const int64_t num_doppler = shape[shape.size() - 2];
+    const int64_t num_range = shape[shape.size() - 1];
+    int64_t num_planes = 1;
+    for (size_t i = 0; i + 2 < shape.size(); ++i) {
+      num_planes *= shape[i];
+    }
+
+    const DLDataType dtype = rd_maps->dtype();
+    const bool is_complex =
+        radar::dldatatype_equals(dtype, radar::complex_dtype<float>());
+    if (!is_complex &&
+        !radar::dldatatype_equals(dtype, radar::real_dtype<float>())) {
+      throw std::runtime_error(
+          "RdAngleMaxOp: expected complex64 or float32 rd_maps, got " +
+          radar::dldatatype_name(dtype));
+    }
+
+    cudaStream_t stream = op_input.receive_cuda_stream("rd_maps");
+    auto out = radar::make_device_tensor({num_doppler, num_range},
+                                         radar::real_dtype<float>());
+    app::rd_map_max_over_planes(rd_maps->data(), is_complex, num_planes,
+                                num_doppler, num_range,
+                                static_cast<float*>(out->data()), stream);
+    radar::emit_single(op_output, "rd_map", out);
+  }
+};
+
 // Converts an RD map into a log-magnitude float32 image for Holoviz (rendered
 // through the turbo color lookup table). Layout is (doppler, range): Holoviz
 // x = range, y = Doppler.

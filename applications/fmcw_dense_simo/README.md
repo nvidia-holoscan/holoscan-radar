@@ -46,18 +46,28 @@ offscreen rendering) the app opens a Holoviz window reusing the app-agnostic
 - **Left:** the range–Doppler map (turbo colormap) with CFAR detections drawn
   as cluster-colored dots. This app detects on the *beamformed* RDA cube
   (`nci_axes: []`), so `CFARDetectorOp.cfar_power` is a per-beam power cube
-  `(num_az, num_el, num_doppler, num_range)` rather than a single map. The
-  display takes the beam nearest boresight — the grid cell closest to 0 rad in
-  both axes — so it is the detector's own power domain, looking straight ahead.
-  Because `AnglePeakPickOp` collapses each detected RD cell to its *peak* beam,
-  the overlaid detections are a max-over-beams projection while the image is
-  one fixed beam: an off-boresight target is drawn over a cell attenuated by
-  the beam pattern. On this 8×8 half-wavelength array with the Taylor 35 dB
-  taper that is a mild penalty for the demo's five targets — the furthest sits
-  at 0.20 rad azimuth / 0.12 rad elevation, well inside the mainlobe, since the
-  first null is at 0.253 rad — but a target out near the ±0.3 rad grid edge
-  would sit in the null and disappear from the image while still being
-  detected.
+  `(num_az, num_el, num_doppler, num_range)` rather than a single map.
+  `RdAngleMaxOp` collapses the beam grid by taking each RD cell's **max over
+  all beams**, so the image is the detector's own power domain projected the
+  same way the detections are: `AnglePeakPickOp` collapses each detected RD
+  cell to its *peak* beam, so the overlay is already a max-over-beams
+  projection. Both therefore live in the same domain, and a target anywhere on
+  the grid is drawn over the cell that actually detected it.
+
+  Slicing one fixed beam (`RdChannelSliceOp` with `leading_index` set to the
+  grid cell nearest boresight) was the previous behavior. It kept the image a
+  physical beam, but put it in a different projection from the overlay, so an
+  off-boresight target was drawn over a cell the beam pattern had attenuated —
+  and a target out near the ±0.3 rad grid edge sat in the null and vanished
+  from the image while still being detected. `RdChannelSliceOp` is still the
+  right choice when you specifically want one beam.
+
+  The cost of the max is a higher noise floor: the max of N beams of noise sits
+  above one beam's mean. For an n-beam grid of exponential-distributed power
+  the rise is about `10·log10(H_n)` dB — ~7.6 dB at 13×13 — though less in
+  practice, since adjacent beams are correlated across the mainlobe.
+  `RdMapToImageOp`'s per-column median normalization absorbs part of it,
+  because the median rises too.
 - **Right (stacked):** range-vs-time and velocity-vs-time rolling plots of the
   per-cluster representative, and a boresight azimuth/elevation scatter of those
   same per-cluster representatives (the angle information the dense path adds) —
