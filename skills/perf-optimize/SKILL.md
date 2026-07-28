@@ -86,8 +86,25 @@ cmake -S . -B build-opt -DCMAKE_CUDA_ARCHITECTURES=<cc> \
 ```
 
 The operator's `perf_<op>.cpp` must wire `PerfChecksumSinkOp` (a `--checksum`
-line) for gate 2 — currently done for `fmcw_range_processor`; other operators
-need it wired first (one fan-out `add_flow`, mirror the range op).
+line) for gate 2 — other operators need it wired first (one fan-out `add_flow`,
+mirror an operator that has it).
+
+**Audit *which ports* it covers — "a sink exists" is the wrong check.** A sink
+wired to one output while the rest go to `PerfNullSinkOp` passes a
+does-it-exist check while being blind to most of the operator. Before trusting
+gate 2, confirm the checksummed set spans the **blast radius of your change**:
+if you are touching compute, the outputs carrying that arithmetic must be
+covered. (CFAR shipped with a sink on `detection_idx` alone — which encodes
+*which* cells fired but no per-cell value — so a kernel numerics change would
+have passed unchecked until `detection_score` / `noise_estimate` were added.)
+
+Coverage can be transitive, so you do not always need a sink per port: an
+index output that is exactly the set cells of a mask, in a defined order,
+covers that mask. Prefer that reasoning to blanket fan-out — some dtypes do not
+round-trip a `TensorMap` receive (bool does not on HSDK 4.3). When you do wire
+several sinks, make sure the emitted lines are distinguishable: same-shaped
+outputs have identical byte counts, so label them (the sink appends its
+operator name).
 
 ## Steps
 

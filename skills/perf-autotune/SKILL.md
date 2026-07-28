@@ -171,7 +171,10 @@ subdir.
 - Per-candidate mechanics are exactly `perf-optimize`'s; this adds the outer
   loop, candidate selection, re-analysis, and the cumulative report.
 - Needs the operator's `--checksum` sink + a `-L unit` test target wired (as
-  `perf-optimize`).
+  `perf-optimize`). **Audit which ports that sink covers before iteration 1** —
+  a sink on one output of several passes a does-it-exist check while leaving
+  the rest of the operator ungated, and every later iteration inherits that
+  blind spot. Widen it first; it is cheap then and worthless after.
 - Re-analysis each kept iteration is what keeps the loop honest — it chases the
   *current* bottleneck, not a stale finding list.
 - Known rubric wart (candidate for a `diagnose.py` fix): advisory `[live]`-override
