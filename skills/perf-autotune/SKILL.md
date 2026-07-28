@@ -20,7 +20,8 @@ isolated worktree and stops.
 ## Gates & guardrails (inherited from perf-optimize, non-negotiable)
 
 - **Correctness** (unit tests), **byte-equivalence** (output checksum), **speed**
-  (harness steady median) — all three must pass to keep a change; else revert it.
+  (interleaved A/B via `compare_builds.py`) — all three must pass to keep a
+  change; else revert it.
 - **Scope = anything under `operators/**`** — shell *and* compute internals
   (kernels, staging, DSP), including headers shared across operators.
   `radar_common/**` and the locked contract (`OPERATOR_API.md`) stay off-limits.
@@ -80,9 +81,11 @@ see `perf-optimize` prerequisites and the `perf-analyze` container guidance).
    Record the baseline steady median, output checksum, and green unit tests.
    Start an empty `session.json` (`mode: "autotune"`). Two things bite here:
    **background the build/analysis** (they exceed the 2-min foreground shell cap
-   — see `perf-analyze`), and **capture a *stable* baseline median** (a few
-   repeated clean runs per size), because each kept iteration rebuilds over the
-   binary and the ~2–3× harness variance otherwise poisons every later delta.
+   — see `perf-analyze`), and **snapshot the baseline binary** to a directory
+   mirroring `<dir>/performance/cpp/perf_<OP>`, because each kept iteration
+   rebuilds over it and gate 3 needs both sides present at once to interleave
+   them. Re-snapshot after every kept iteration — the "before" side of the next
+   gate is the *current best*, not the original baseline.
 
 2. **Iterate** until a stop condition (below):
    1. **Pick** the top-severity **actionable steady-path** finding not yet tried
@@ -96,15 +99,24 @@ see `perf-optimize` prerequisites and the `perf-analyze` container guidance).
       genuine win was the `medium` per-tick-alloc finding under them.)
    2. **Apply** the smallest behavior-preserving change implementing its
       recommended pattern (pool/ping-pong, gate unused work, cache a rebuild).
-   3. **Gate** (rebuild → unit tests → checksum vs baseline → harness median vs
-      current-best) — **for every operator that shares a file the candidate
-      touched**, not just the one being tuned (reverse-include across `operators/`;
-      see the shared-code gate above). **Keep** only if correctness holds, the
-      checksum is identical **for all of them**, and the median improves beyond
-      noise; otherwise `git checkout --` the candidate. With ~2–3× median variance, "improves beyond noise"
-      means confirmed across a few repeated clean runs, not one — and an
-      implausibly large delta must match the change's mechanism before you trust
-      it. The unit-test filter is the **gtest suite** name (e.g.
+   3. **Gate** (rebuild → unit tests → interleaved A/B vs current-best) — **for
+      every operator that shares a file the candidate touched**, not just the one
+      being tuned (reverse-include across `operators/`; see the shared-code gate
+      above). **Keep** only if correctness holds, the checksum is identical **for
+      all of them**, and the delta clears its own noise band; otherwise
+      `git checkout --` the candidate.
+
+      Gates 2+3 come from one `compare_builds.py --checksum` run (see
+      `perf-optimize` step 7 for the invocation). **`--frames 200` is
+      load-bearing** — at the default `--frames 30` the large tiers band at
+      30–55% and a real single-digit win reads as 0/N significant, i.e. it gets
+      reverted. `--rounds` does not fix that; `±noise` is the launch IQR, not the
+      standard error of the median. Near the noise floor, confirm with a
+      structural count from the profile (a memcpy row going to 0, an alloc count
+      dropping per tick) so "too small to measure" is never mistaken for "didn't
+      happen". An implausibly large delta must likewise match the mechanism.
+
+      The unit-test filter is the **gtest suite** name (e.g.
       `FMCWRangeProcessorOpTest`), not the CMake target — discover it with
       `ctest -N -L unit`, don't guess.
    4. **On keep:** append the change to `session.json` (finding, summary, files,

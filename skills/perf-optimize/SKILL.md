@@ -24,9 +24,18 @@ loop unattended here.
    (see the shared-code gate in Hard guardrails). A pure perf refactor (pooling,
    gating, caching, kernel/launch tuning, removing redundant work) must not change
    a single output byte for any of them.
-3. **Speed** — the steady median (`perf-analyze`) improves beyond run-to-run
-   noise. A change that passes 1+2 but isn't measurably faster is not worth
-   landing.
+3. **Speed** — the steady median improves beyond run-to-run noise, measured
+   with `compare_builds.py` (interleaved A/B; see Steps for the invocation and
+   why `--frames` matters). A change that passes 1+2 but isn't measurably
+   faster is not worth landing.
+
+> **Near the noise floor, pair the timing with a structural measurement.** A
+> deterministic count from the profile — a memcpy row that goes 15 calls → 0,
+> an alloc count that drops by one per tick — proves the change did what it
+> claims, independent of the timer, and distinguishes "too small to measure"
+> from "didn't happen". Timing and mechanism agreeing is what makes a small
+> delta trustworthy:
+> `nsys stats --report cuda_gpu_mem_time_sum --format csv <rep>.nsys-rep`
 
 > A change that *intends* to alter numerics (e.g. reordering a floating-point
 > reduction) will fail gate 2 by design. That requires **explicit opt-in** from
@@ -101,10 +110,14 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
    ctest --test-dir $BUILD -L unit -R <SuiteName>                # must be green now
    ```
 
-   **Record a *stable* baseline median now** — you cannot cheaply re-measure it
-   later (step 4 rebuilds over the baseline binary). The harness median has
-   ~2–3× run-to-run variance on this host, so take the median of a few clean runs
-   per size (`--warmup 8 --frames 40`, repeated 3×), not one shot. Note the real
+   **Snapshot the baseline *binary* now** — step 4 rebuilds over it, and gate 3
+   needs both sides present at once to interleave them:
+   ```bash
+   mkdir -p .gate/before/performance/cpp
+   cp $BUILD/performance/cpp/perf_<OP> .gate/before/performance/cpp/
+   ```
+   (Any directory mirroring `<dir>/performance/cpp/perf_<OP>` works —
+   `compare_builds.py` takes build *dirs*, not binary paths.) Note the real
    `median_ms` is the first non-null `results[]` entry (a single-size clean/
    checksum run can lead with a null-median calibration entry).
 
@@ -156,15 +169,36 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
    output → revert (unless the user opted into a numerics-changing change, which
    then requires the sim tests to re-pass for **each** affected operator).
 
-7. **Gate 3 — speed:** re-run `perf-analyze`; compare the steady median to the
-   baseline. Require an improvement clearly beyond noise — with ~2–3× run-to-run
-   variance, one run is not enough: confirm the win with a few repeated clean runs
-   per size (as in step 1). **Be skeptical both ways** — reject a close call as
-   noise, but also sanity-check an implausibly *large* delta against the
-   mechanism before believing it (in the first real run a −84% xl delta was real
-   — a 32 MB per-tick `cudaFree` removed from a host-bound tick — but only trust
-   that after repeats confirm it and it matches the change). No real gain →
-   revert.
+7. **Gate 3 — speed:** use `compare_builds.py`, **not** hand-rolled repeated
+   runs. It interleaves before/after launches, pins CPUs (`taskset`), discards
+   warm-up rounds, gates on GPU temperature, and scores each scenario against
+   its own noise band — all of which a sequential "measure baseline, then
+   measure candidate" loop gets wrong:
+   ```bash
+   python3 performance/agent/compare_builds.py \
+     --before-build .gate/before --after-build $BUILD \
+     --operators <OP> --sizes <ladder> \
+     --frames 200 --rounds 15 --warmup-rounds 3 --checksum --no-cache \
+     --out-dir performance/agent/runs/<OP>/compare_<n>
+   ```
+   Keep only if `sig` counts real wins (a scenario whose Δ cleared its own
+   `±noise` band). `--checksum` makes this cover gate 2 as well — read
+   `checksum_match` from the emitted `compare.json`; do **not** parse the
+   markdown, whose trailing `⚠ outputs differ between builds` is an
+   unconditional *legend* line, not a warning.
+
+   **`--frames 200` is load-bearing.** The perf harnesses count only the
+   pre-override window as steady state, so usable samples per launch are
+   ~`frames/2`; at the tool's default `--frames 30` the large tiers show noise
+   bands of 30–55% and nothing under ~10% can be proven. Raising frames
+   collapses those bands to a few percent. **Raising `--rounds` does not fix
+   this** — `±noise` is the launch-to-launch IQR, not the standard error of the
+   median, so it does not shrink with rounds (measured: 7 → 25 rounds made the
+   bands slightly *worse*). This overrides `--rounds`' own help text.
+
+   **Be skeptical both ways** — reject a close call as noise, but also
+   sanity-check an implausibly *large* delta against the mechanism before
+   believing it. No real gain → revert.
 
    **Revert** (any gate fails): `git checkout -- <changed files>` and rebuild, so
    the tree is back to baseline.
