@@ -25,7 +25,6 @@ the substrate reference.
 | `report.py` | Renders `report.md` (text) + a self-contained `report.html` with the chart dashboard embedded as a base64 PNG. |
 | `visualize.py` | Matplotlib charts of a run (kernel-vs-shell, latency, host-API composition, NVTX phases, override sweep, findings, before/after) + a cross-operator comparison; used by `report.py` / `optimize_report.py` and importable directly. |
 | `optimize_report.py` | Before→after optimization report (md + html) for the `perf-optimize` / `perf-autotune` skills: bottlenecks targeted, runtime improvement, changes + gate results, embedded before/after chart. |
-| `setup_before_build.sh` | Materializes the pre-optimization "before" tree (`build-before/`) — baseline operators + *current* harness — and builds its perf binaries. |
 | `compare_builds.py` | Runs the perf binaries out of two build trees with identical args and diffs the steady-state medians; writes `compare.md` + `compare.json`. |
 
 ## Prerequisites
@@ -74,20 +73,27 @@ python3 performance/agent/report.py   --run-dir performance/agent/runs/$OP
 branch actually buy us", build the pre-optimization tree once and diff the two:
 
 ```bash
-performance/agent/setup_before_build.sh          # ~15 min, one time
-python3 performance/agent/compare_builds.py --sizes sm,md,xl --checksum
+# Build a baseline tree first (see below), then:
+python3 performance/agent/compare_builds.py \
+    --before-build <baseline build dir> --after-build build \
+    --sizes sm,md,xl --checksum
 # -> performance/agent/runs/_compare/compare.md
 ```
 
-The setup script checks out the last pre-optimization commit into a git
-worktree at `build-before/src`, then overlays the **current** `performance/`
-and `skills/` on top before configuring `build-before/build`. That overlay is
-the whole point: this branch changed the harness as well as the operators (size
-ladders, live/sustained modes, and the async-mempool retain that alone moved
-measurements ~5x on reduction-heavy ticks). Comparing a raw old checkout would
-fold harness changes into the operator delta. After the overlay the harness
-sources are byte-identical on both sides, so only the operator implementations
-differ — the script hard-fails if that invariant does not hold.
+Building the baseline side has one non-obvious requirement: **overlay the
+current `performance/` onto the baseline checkout before configuring it.** Any
+branch that changes the harness as well as the operators (size ladders,
+live/sustained modes, the async-mempool retain that alone moved measurements
+~5x on reduction-heavy ticks) would otherwise fold harness changes into the
+operator delta. With the overlay the harness sources are byte-identical on both
+sides, so only the operator implementations differ — worth asserting explicitly,
+because a silent violation looks exactly like an optimization.
+
+In practice that means: check the baseline commit out into a git worktree,
+`git checkout <current-ref> -- performance/` inside it, configure and build its
+`perf_*` targets, then point `--before-build` at the result. A scripted version
+of this lives on the `deustice/compare` branch, which is not part of this
+tree.
 
 `--checksum` additionally asserts both builds emit identical output bytes, which
 is the correctness gate for a "pure speedup" claim. Re-point either side with

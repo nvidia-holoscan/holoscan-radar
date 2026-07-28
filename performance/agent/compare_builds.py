@@ -11,9 +11,11 @@ branch actually buy us" — not for bottleneck attribution (that is
 
 The premise is that both build trees carry the *same* harness sources, so
 the scenario ladders, sync policy and measurement mempool settings match;
-only the operator implementations differ. ``setup_before_build.sh`` builds
-such a tree. If the two reports disagree on which scenarios exist, the
-mismatched ones are reported as ``missing`` rather than silently dropped.
+only the operator implementations differ. Build the baseline side by
+overlaying the current ``performance/`` onto the baseline checkout before
+configuring it (see the README). If the two reports disagree on which
+scenarios exist, the mismatched ones are reported as ``missing`` rather than
+silently dropped.
 
 Each round runs both sides back to back, and one extra round is measured and
 discarded up front so the cold-clock / cold-page-cache ramp lands outside the
