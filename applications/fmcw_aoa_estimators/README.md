@@ -307,33 +307,22 @@ point: five different methods, one graph, one switch, same answer.
 
 ### The two close passes
 
-Three of the five targets are well separated in speed (−9 / +1.5 / +9 m/s). The
-other two exist to put a second scatterer inside one range-Doppler cell, so you
-can watch what the angle stage does when range and Doppler can no longer tell
-two objects apart. Each shadows an existing target at +0.3 m/s relative radial
-speed — half a velocity bin — so the pair holds the same Doppler bin while its
-range gap closes, hits zero, and reopens. See the `targets:` comment in the YAML
-for the geometry. Measured over the default 250-frame run:
+Three of the five targets are well separated in speed (−9 / +1.5 / +9 m/s); the
+other two each shadow one of them through a close pass, putting a second
+scatterer inside one range-Doppler cell so you can see what the angle stage does
+when range and Doppler can no longer separate two objects. Both run at +0.3 m/s
+relative radial speed — half a velocity bin — so the pair holds one Doppler bin
+while its range gap closes and reopens.
 
-| pair | separated by | resolved as 2 clusters |
-| --- | --- | --- |
-| **A** — target 4 shadows target 2, coincide at t = 12.5 s | azimuth, 0.300 rad (1.19x the array's first null) | **250 / 250 frames**, including all 51 around coincidence |
-| **B** — target 5 shadows target 1, coincide at t = 18.0 s | elevation, 0.060 rad (0.24x the first null; azimuth only 0.020 rad) | **97 / 250 frames** — merged into one cluster in 140, split into a spurious third in 13; only 11 / 51 around coincidence |
+- **Pair A** (target 4 shadows target 2, coinciding at t = 12.5 s) is separated
+  by 0.300 rad in azimuth, past the array's 0.253 rad first null. It stays two
+  clusters in all 250 frames — angle alone carries it through.
+- **Pair B** (target 5 shadows target 1, coinciding at t = 18.0 s) differs by
+  only 0.020 rad in azimuth, so no estimator on this array can split it; every
+  cell reports a blended angle. Elevation differs by 0.060 rad, just past the
+  0.05 rad clustering epsilon, which resolves it in 97 of 250 frames and merges
+  it in the rest.
 
-Pair A is the encouraging case: a full range-and-Doppler coincidence costs
-nothing, because 0.3 rad of azimuth is past the aperture's resolution limit and
-the estimators simply report two angles. Pair B is the instructive one. Its two
-targets are 0.02 rad apart in azimuth — a tenth of the first null, so no
-estimator on an 8x8 array can separate them, and every detection cell reports a
-blended angle roughly midway between. True elevations differ by 0.060 rad, more
-than `cluster_dbscan.epsilon`'s 0.05 rad, but that only splits the cluster when
-the per-cell angle estimates happen to land on either side of the blend; most
-frames they do not, and the pair reads as one object. The 13 three-cluster
-frames are the other failure mode — a blended angle wandering far enough to seed
-a ghost.
-
-Worth knowing when reading pair B: `mvdr_estimator` and `music_estimator` are
-configured with `max_sources: 1` (and MUSIC with `num_sources: 1`), so they are
-asked for a single DOA per detection cell and cannot report two even when the
-geometry would allow it. Raising those is the natural next experiment — pair A
-is the case where it should pay off.
+Note `mvdr_estimator` / `music_estimator` are configured `max_sources: 1`, so
+they report one DOA per cell even where the geometry would allow two — raising
+that is the natural next experiment.
