@@ -69,7 +69,6 @@ def diagnose_size(s: dict) -> list:
     der = s["derived"]
     cold = lat.get("cold")
     median = lat.get("median")
-    ticks = der.get("ticks") or 0
 
     # --- cold vs steady ----------------------------------------------------
     if cold and median and median > 0 and cold > COLD_RATIO_WARN * median:
