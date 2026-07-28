@@ -79,6 +79,11 @@ struct CfarScenario {
   std::string calibration_pair;
   bool use_alpha_lut{false};
   std::vector<double> alpha_lut;
+  // Optional peak-grouping (NMS) stage — static; off by default matches the
+  // operator contract. When set, scenario ids carry `_peak_<neighborhood>`.
+  bool peak_only{false};
+  hr::CfarPeakNeighborhood peak_neighborhood{
+      hr::CfarPeakNeighborhood::kSquare8};
 };
 
 // --- size ladder (docs/planning WORKFLOWS moderate application scale) -----
@@ -214,7 +219,9 @@ class CfarPerfApp : public holoscan::Application {
         Arg("nci_axes") = scen->nci_axes, Arg("os_rank") = scen->os_rank,
         Arg("max_detections") = int64_t{0},
         Arg("blocking_alpha_lut_rebuild") = scen->blocking_rebuild,
-        Arg("alpha_lut") = scen->alpha_lut);
+        Arg("alpha_lut") = scen->alpha_lut,
+        Arg("peak_only") = scen->peak_only,
+        Arg("peak_neighborhood") = scen->peak_neighborhood);
 
     auto src = make_operator<perf::PerfDataSourceOp>(
         "src", make_condition<holoscan::CountCondition>(total_frames));
@@ -359,6 +366,62 @@ CfarScenario make_nci_scenario(hr::CfarVariant v, const SizeSpec& s,
   return sc;
 }
 
+// peak_only compute scenario: same shape/footprint as make_compute_scenario
+// with out_batch=1, plus the NMS stage. Id inserts `_peak_<nb>` before
+// `_compute` so off-by-default rows stay distinguishable in the report.
+CfarScenario make_peak_scenario(hr::CfarVariant v, const SizeSpec& s,
+                                const Footprint& fp,
+                                hr::CfarPeakNeighborhood nb) {
+  CfarScenario sc = make_compute_scenario(v, s, fp, /*out_batch=*/1);
+  sc.peak_only = true;
+  sc.peak_neighborhood = nb;
+  const std::string suffix = "_compute";
+  const std::string insert =
+      std::string("_peak_") + std::string(hr::to_string(nb));
+  if (sc.id.size() > suffix.size() &&
+      sc.id.compare(sc.id.size() - suffix.size(), suffix.size(), suffix) ==
+          0) {
+    sc.id.insert(sc.id.size() - suffix.size(), insert);
+  } else {
+    sc.id += insert;
+  }
+  return sc;
+}
+
+const std::vector<hr::CfarPeakNeighborhood>& all_peak_neighborhoods() {
+  static const std::vector<hr::CfarPeakNeighborhood> nbs = {
+      hr::CfarPeakNeighborhood::kSquare8,
+      hr::CfarPeakNeighborhood::kCross4};
+  return nbs;
+}
+
+// Curated peak_only rows: CA × sizes × both neighborhoods (cheap LUT path).
+// When `all_variants_at_md` is set, also add GO/SO/OS at md (NMS cost after
+// threshold; variant mainly changes which cells fire on the fixed map).
+void append_peak_only_scenarios(std::vector<CfarScenario>* out,
+                                const std::vector<std::string>& sizes,
+                                bool all_variants_at_md) {
+  const Footprint fp = footprint_small();
+  for (const auto& sid : sizes) {
+    const SizeSpec& s = must_find_size(sid);
+    for (auto nb : all_peak_neighborhoods()) {
+      out->push_back(make_peak_scenario(hr::CfarVariant::kCA, s, fp, nb));
+    }
+  }
+  if (!all_variants_at_md) {
+    return;
+  }
+  const SizeSpec& md = must_find_size("md");
+  for (auto v : all_cfar_variants()) {
+    if (v == hr::CfarVariant::kCA) {
+      continue;  // already covered above when "md" is in sizes
+    }
+    for (auto nb : all_peak_neighborhoods()) {
+      out->push_back(make_peak_scenario(v, md, fp, nb));
+    }
+  }
+}
+
 struct CalibrationPairSpec {
   std::string slow_id;
   std::string pair_id;
@@ -478,7 +541,8 @@ struct CfarTraits : perf::PerfDriverDefaults {
   }
   static const char* full_help() {
     return "Full matrix (all variants/footprints/batch/NCI) plus the default "
-           "alpha_lut calibration pairs";
+           "alpha_lut calibration pairs and peak_only NMS rows "
+           "(CA×ladder×{square8,cross4}; GO/SO/OS at md)";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -517,6 +581,9 @@ struct CfarTraits : perf::PerfDriverDefaults {
     // Keep the curated pfa<->alpha_lut pairs so the default matrix reports the
     // calibration-mode comparison (slow MC vs precomputed LUT), not only pfa.
     tag_and_append_alpha_lut_pairs(&out);
+    // peak_only NMS characterization (CA × default sizes × both neighborhoods).
+    append_peak_only_scenarios(&out, {"xs", "md", "lg", "xlw"},
+                               /*all_variants_at_md=*/false);
     return out;
   }
 
@@ -524,6 +591,7 @@ struct CfarTraits : perf::PerfDriverDefaults {
       const std::vector<std::string>& sizes) {
     std::vector<CfarScenario> out;
     const Footprint fp = footprint_small();
+    std::vector<std::string> known;
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
       if (s == nullptr) {
@@ -531,7 +599,11 @@ struct CfarTraits : perf::PerfDriverDefaults {
         continue;
       }
       out.push_back(make_compute_scenario(hr::CfarVariant::kCA, *s, fp, 1));
+      known.push_back(sid);
     }
+    // Include peak_only NMS on the same CA×sizes subset so --sizes / CI smoke
+    // exercises the new stage (both neighborhoods).
+    append_peak_only_scenarios(&out, known, /*all_variants_at_md=*/false);
     return out;
   }
 
@@ -562,6 +634,13 @@ struct CfarTraits : perf::PerfDriverDefaults {
     }
     // --full keeps the same pfa<->alpha_lut calibration pairs as the default.
     tag_and_append_alpha_lut_pairs(&out);
+    // peak_only: CA across the full size ladder × both neighborhoods, plus
+    // GO/SO/OS at md (NMS after threshold; denser detection mix per variant).
+    std::vector<std::string> all_sizes;
+    for (const auto& s : size_ladder()) {
+      all_sizes.push_back(s.id);
+    }
+    append_peak_only_scenarios(&out, all_sizes, /*all_variants_at_md=*/true);
     return out;
   }
 
@@ -629,6 +708,11 @@ struct CfarTraits : perf::PerfDriverDefaults {
           "calibration; median/p90 are pre-override steady state; "
           "override_ms is peak latency over the 3-frame blocking pfa "
           "reconfig window inline in the same run";
+    }
+    if (scen.peak_only) {
+      row.notes +=
+          "; peak_only NMS enabled (neighborhood=" +
+          std::string(hr::to_string(scen.peak_neighborhood)) + ")";
     }
     report->results.push_back(row);
   }

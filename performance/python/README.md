@@ -31,7 +31,7 @@ If unset, scripts default to `../../build` relative to this directory.
 
 | Script | Operator | Default matrix notes |
 | --- | --- | --- |
-| `perf_cfar_detector.py` | `CFARDetectorOp` | Curated variants×sizes; mid/large MC only with `--full` |
+| `perf_cfar_detector.py` | `CFARDetectorOp` | Curated variants×sizes; mid/large MC only with `--full`; includes `peak_only` NMS rows (CA×sizes×`{square8,cross4}`) |
 | `perf_clutter_filter.py` | `ClutterFilterOp` | methods × sizes × channel batch |
 | `perf_fmcw_range_processor.py` | `FMCWRangeProcessorOp` | windows × sizes × channels |
 | `perf_fmcw_doppler_processor.py` | `FMCWDopplerProcessorOp` | windows × sizes × channels |
@@ -65,7 +65,9 @@ Default CLI (no flags): `--warmup 5`, `--measured 20`, `--repeats 1`,
 
 - **`--size` / `--sizes`**: size-sweep subset (operator-specific default variant).
 - **`perf_cfar_detector`**: mid/large GO/SO/OS footprints are Monte Carlo–heavy;
-  only in `--full`. Curated pfa↔lut calibration pairs are included.
+  only in `--full`. Curated pfa↔lut calibration pairs are included. Default and
+  `--full` also include `peak_only` NMS characterization rows
+  (`_peak_square8` / `_peak_cross4` scenario ids).
 - Import order: load `holoscan.radar` **before** CuPy (the package
   `utils/__init__.py` stays import-light so `utils.bootstrap` cannot pull CuPy
   early — that footgun aborted MVDR MatX cache retirement).

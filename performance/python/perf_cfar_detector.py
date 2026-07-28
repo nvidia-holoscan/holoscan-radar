@@ -13,6 +13,9 @@ C++/Python matrix sync is an open question — see
 Default CLI matches C++ (default matrix, not ``--full``): mid/large GO/SO/OS
 footprints are Monte Carlo–heavy (~tens of seconds cold) and are only in
 ``--full``. Curated pfa↔alpha_lut calibration pairs are included in both.
+Default also includes ``peak_only`` NMS rows (CA × default sizes ×
+``{square8, cross4}``); ``--full`` extends those across the size ladder and
+adds GO/SO/OS at ``md``.
 """
 
 from __future__ import annotations
@@ -48,9 +51,10 @@ from utils.tensor_factory import make_power_map_device, single_map  # noqa: E402
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application  # noqa: E402
-from holoscan.radar import CfarVariant  # noqa: E402
-from holoscan.radar import (
+from holoscan.radar import (  # noqa: E402
     CFARDetectorOpF32,
+    CfarPeakNeighborhood,
+    CfarVariant,
     build_ca_alpha_lut,
     build_go_alpha_lut,
     build_os_alpha_lut,
@@ -75,6 +79,11 @@ SIZE_LADDER = [
 _SIZE_BY_ID = {item.id: item for item in SIZE_LADDER}
 
 ALL_VARIANTS = (CfarVariant.CA, CfarVariant.GO, CfarVariant.SO, CfarVariant.OS)
+
+ALL_PEAK_NEIGHBORHOODS = (
+    CfarPeakNeighborhood.SQUARE8,
+    CfarPeakNeighborhood.CROSS4,
+)
 
 CALIBRATION_PAIR_SPECS = (
     ("cfar_GO_xlw_small_k1_compute", "GO_xlw_k1"),
@@ -113,6 +122,9 @@ class CfarScenario:
     use_alpha_lut: bool = False
     alpha_lut: list[float] = field(default_factory=list)
     calibration_pair: str = ""
+    # Optional peak-grouping (NMS) stage — static; off by default.
+    peak_only: bool = False
+    peak_neighborhood: CfarPeakNeighborhood = CfarPeakNeighborhood.SQUARE8
     # Filled per run for live-override wiring.
     override_at: int = 0
     override_pfa: float = 1e-6
@@ -178,6 +190,54 @@ def make_compute_scenario(
         footprint=fp,
         os_rank=os_rank,
     )
+
+
+def _peak_neighborhood_tag(nb: CfarPeakNeighborhood) -> str:
+    name = getattr(nb, "name", None)
+    if isinstance(name, str) and name:
+        # CROSS4 / SQUARE8 → cross4 / square8 (match C++ to_string)
+        return name.lower()
+    return str(nb).rsplit(".", maxsplit=1)[-1].lower()
+
+
+def make_peak_scenario(
+    variant: CfarVariant,
+    size: SizeDef,
+    fp: Footprint,
+    neighborhood: CfarPeakNeighborhood,
+) -> CfarScenario:
+    """Compute scenario with peak_only NMS; id inserts ``_peak_<nb>``."""
+    sc = make_compute_scenario(variant, size, fp, out_batch=1)
+    sc.peak_only = True
+    sc.peak_neighborhood = neighborhood
+    insert = f"_peak_{_peak_neighborhood_tag(neighborhood)}"
+    if sc.id.endswith("_compute"):
+        sc.id = sc.id[: -len("_compute")] + insert + "_compute"
+    else:
+        sc.id += insert
+    return sc
+
+
+def append_peak_only_scenarios(
+    scenarios: list[CfarScenario],
+    size_ids: list[str],
+    *,
+    all_variants_at_md: bool,
+) -> None:
+    """Mirror C++ append_peak_only_scenarios."""
+    fp = FOOTPRINT_SMALL
+    for sid in size_ids:
+        size = _must_find_size(sid)
+        for nb in ALL_PEAK_NEIGHBORHOODS:
+            scenarios.append(make_peak_scenario(CfarVariant.CA, size, fp, nb))
+    if not all_variants_at_md:
+        return
+    md = _must_find_size("md")
+    for variant in ALL_VARIANTS:
+        if variant == CfarVariant.CA:
+            continue
+        for nb in ALL_PEAK_NEIGHBORHOODS:
+            scenarios.append(make_peak_scenario(variant, md, fp, nb))
 
 
 def make_nci_scenario(variant: CfarVariant, size: SizeDef, channels: int) -> CfarScenario:
@@ -277,15 +337,22 @@ def build_default_matrix() -> list[CfarScenario]:
         for variant in ALL_VARIANTS:
             out.append(make_nci_scenario(variant, size, 8))
     tag_and_append_alpha_lut_pairs(out)
+    # peak_only NMS characterization (CA × default sizes × both neighborhoods).
+    append_peak_only_scenarios(out, ["xs", "md", "lg", "xlw"], all_variants_at_md=False)
     return out
 
 
 def build_size_sweep(size_ids: list[str]) -> list[CfarScenario]:
     out: list[CfarScenario] = []
     fp = FOOTPRINT_SMALL
+    known: list[str] = []
     for sid in size_ids:
         size = _must_find_size(sid)
         out.append(make_compute_scenario(CfarVariant.CA, size, fp, 1))
+        known.append(sid)
+    # Include peak_only NMS on the same CA×sizes subset so --size(s) / smoke
+    # exercises the new stage (both neighborhoods).
+    append_peak_only_scenarios(out, known, all_variants_at_md=False)
     return out
 
 
@@ -306,6 +373,12 @@ def build_full_matrix() -> list[CfarScenario]:
         for variant in ALL_VARIANTS:
             out.append(make_nci_scenario(variant, size, 8))
     tag_and_append_alpha_lut_pairs(out)
+    # peak_only: CA × full ladder × both neighborhoods; GO/SO/OS at md.
+    append_peak_only_scenarios(
+        out,
+        [item.id for item in SIZE_LADDER],
+        all_variants_at_md=True,
+    )
     return out
 
 
@@ -363,6 +436,8 @@ def _run_graph(
                 os_rank=scen.os_rank,
                 max_detections=0,
                 blocking_alpha_lut_rebuild=scen.blocking_rebuild,
+                peak_only=scen.peak_only,
+                peak_neighborhood=scen.peak_neighborhood,
                 name="cfar",
             )
             src = PerfDataSourceOp(
@@ -449,6 +524,9 @@ def run_scenario(scen: CfarScenario, rs: RunSettings, report: PerfReport) -> Non
             "median/p90 are pre-override steady state; override_ms is peak "
             "latency over the blocking pfa reconfig window"
         )
+    if scen.peak_only:
+        nb = _peak_neighborhood_tag(scen.peak_neighborhood)
+        compute.notes += f"; peak_only NMS enabled (neighborhood={nb})"
     report.results.append(compute)
 
 
@@ -508,7 +586,8 @@ def main() -> int:
         full_default=False,
         full_help=(
             "Full matrix: all variants/footprints/batch/NCI (includes mid/large "
-            "GO/SO/OS Monte Carlo cold builds — same cost class as C++ --full)."
+            "GO/SO/OS Monte Carlo cold builds — same cost class as C++ --full) "
+            "plus peak_only NMS rows (CA×ladder×{square8,cross4}; GO/SO/OS at md)."
         ),
     )
 
