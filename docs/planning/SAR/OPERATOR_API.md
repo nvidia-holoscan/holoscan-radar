@@ -10,7 +10,7 @@ Two conventions are **extended** and are specified here rather than assumed: pre
 
 **Precision (all operators).** Every operator supports both **single** (`complex64` / `float32`) and **double** (`complex128` / `float64`) precision floating-point I/O. Precision is fixed at compile time by the operator's template instantiation — neither a runtime parameter nor inferred from the data — and an instance's inputs and outputs match that precision. The per-operator dtype labels list both forms. SAR adds a second, **orthogonal** axis on `BackprojectionOp` alone: the internal arithmetic strategy for the range computation, which is not a binary and is not the same question as the I/O dtype. See `BackprojectionOp.precision_mode`.
 
-**Proposed amendments.** Text marked **[PROPOSED]** is a working proposal, not accepted lockdown. Every open question in this document is enumerated in § *Open items* with its class, and the team-blocked ones are indexed in [`TEAM_BLOCKED.md`](../TEAM_BLOCKED.md) as R1–R5.
+**Proposed amendments.** Text marked **[PROPOSED]** is a working proposal, not accepted lockdown. Every open question in this document is enumerated in § *Open items* with its class, and the team-blocked ones are indexed in [`TEAM_BLOCKED.md`](../TEAM_BLOCKED.md) as R1–R6.
 
 ---
 
@@ -75,6 +75,8 @@ Two chain inputs are **application responsibilities** with no library operator: 
 
 The operators the SAR workflows require, grouped by function — a one-line map; full contracts are under *Operator APIs*. Build order and per-operator risk are in [`SIGPROC_PLAN.md`](SIGPROC_PLAN.md), deliberately not here: this document states the contract, not the plan.
 
+The grouping below is **functional, and does not match the directory layout.** `SIGPROC_PLAN.md` assigns each operator its CMake group, where both readers join the writers in `operators/io/` — they are ingress by function but carry the same XML and NITF dependencies those `OP_<name>` gates exist to contain.
+
 ### Ingress
 
 - **`CPHDReaderOp`** — reads a CPHD collection into phase history plus the per-pulse geometry that rides with it. Core, not an optional tap: it is the ingress the simulator and real collections both use.
@@ -108,7 +110,7 @@ Library-provided sources and sinks at chain boundaries, **never inline stages**.
 - **`SIDDWriterOp`** — writes the multilooked or geocoded detected product. Not gated behind target detection: SIDD's "detected" means *amplitude* detection.
 - **`TensorDumpOp`** — a generic tensor dump at any port boundary.
 
-Fifteen operators in total: two ingress, four signal-processing, two image-formation, two products, five I/O.
+Fifteen operators in total: two ingress, four signal-processing, two image-formation, two products, five standard-format sinks — the functional split, not the directory one.
 
 ### Two deliberate non-operators
 
@@ -154,6 +156,12 @@ Whether `BackprojectionOp` publishes its aperture state on an output port is the
 
 Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a dtype + shape; every parameter carries a `Default:` (required shown as `Default: none (required)`) and is tagged **[live]** or **Static**. Each port lists both precision forms; an instance uses one, fixed by its template instantiation. Leading `...` axes are opaque, preserved batch dims.
 
+**Per-axis vector parameters are given in tensor-shape order** — slowest-varying axis first, matching the axis order of the tensor they describe. This is the FMCW convention (`guard_cells` and `training_cells` are `(doppler, range)` against a `(num_doppler, num_range_bins)` plane), and it is restated here because SAR's grids invite the opposite reading: an image is indexed `(v, u)`, so `grid_counts` is `(num_v, num_u)` even though the axes are *named* `u` and `v`. The same rule makes `GeocodeOp`'s output parameters `(northing, easting)` and `MultilookOp.looks` `(v, u)`.
+
+**Two distinct fast-time axes exist, and only one of them is `range_bins`.** `CPHDReaderOp.sample_axis` describes the *stored* samples — frequency or time of arrival, depending on the file's domain — while `range_bins` (emitted by `SARRangeCompressionOp`, consumed by `BackprojectionOp`) is the *compressed* range axis in metres. They carry separate names because their lengths coincide whenever `nfft` is unset, so wiring the reader's axis into `BackprojectionOp` would otherwise be shape-legal and would surface only as a displaced or defocused image — the same silent-failure class `CoordinateFrame` exists to close. Nothing in the contract converts between them: the reader's axis is metadata for the writers, and the range axis is produced by compression.
+
+**`LFMWaveformDescriptor` names a proposed type.** It appears below as the waveform descriptor on every operator that needs a chirp. The rename from `FMCWWaveformDescriptor` is part of R1 and is not accepted — see *Supporting data structures*. Parameter entries name the proposed type rather than tagging each occurrence, so a reader should treat every `LFMWaveformDescriptor` mention as carrying that proposal.
+
 **Parameter override convention.** Unchanged from the FMCW doc: parameters are build-time configuration; a **[live]** parameter may additionally be overridden in-flight via a same-named non-blocking input port; overrides are **sticky**; output shapes are re-inferred downstream, so a shape-changing override is legal; a costly override warns once per new configuration and caches prior ones; genuinely structural parameters are **Static** and vary only by instantiating separate operators. SAR adds one rule: **a [live] override that changes an accumulating operator's output geometry forces a reset** (see *Cross-tick accumulation*).
 
 ### Ingress Operators
@@ -164,8 +172,8 @@ Reads a CPHD collection and emits phase history together with the per-pulse geom
 
 - **Out:** `phase_history` — complex64 / complex128, `(num_pulses, num_samples)`. `num_pulses = pulses_per_tick`, except on the final tick where it is the remainder.
 - **Out:** `positions` — float32 / float64, `(num_pulses, 3)`. Per-pulse Aperture Reference Point positions in `coordinate_frame`. CPHD stores these natively, which is why this path needs no trajectory computation.
-- **Out:** `reference_range` — float32 / float64, `(num_pulses,)`. Per-pulse range from the phase centre to the point that phase-history sample zero is referenced against (the CPHD SRP range).
-- **Out:** `range_bins` (optional) — float32 / float64, `(num_samples,)`. The range axis implied by the file's sample spacing, before range compression re-grids it. Emitted for the writers and for diagnostics.
+- **Out:** `reference_range` — float32 / float64, `(num_pulses,)`. Per-pulse range from the phase centre to the point the phase history is referenced against — the CPHD SRP range. **This is the canonical definition of `reference_range` for the module**; every downstream port carrying that name means this quantity, and range axes are expressed as offsets relative to it.
+- **Out:** `sample_axis` (optional) — float32 / float64, `(num_samples,)`. The file's fast-time sample axis: frequency (Hz) for an FX-domain collection, time of arrival (s) for a TOA-domain collection, per the domain the file declares. Emitted for the writers and for diagnostics. **Deliberately not named `range_bins`** — it is not a range axis and is not interchangeable with the port of that name (see the note on the two fast-time axes above).
 - **Out:** `pulse_times` (optional) — float64, `(num_pulses,)`. Seconds from the collection epoch, always double regardless of the instantiated precision, since single precision cannot hold a collection-relative timestamp to useful accuracy.
 - **Out:** `velocities` (optional) — float32 / float64, `(num_pulses, 3)`. Per-pulse phase-center velocity, where the file carries it.
 
@@ -191,31 +199,34 @@ Reads a CPHD collection and emits phase history together with the per-pulse geom
 
 #### CRSDReaderOp
 
-Reads recorded uncompensated signal data, feeding the deramped branch. Same shape of contract as `CPHDReaderOp` — `path`, `coordinate_frame`, `pulses_per_tick`, `channel`, the same termination semantics — differing in that its `signal_data` output is **not** phase history: it still carries residual video phase and deramp reference bookkeeping, so it must pass through `RVPRemovalOp` and `BandEqualizationOp` first.
+Reads recorded uncompensated signal data, feeding the deramped branch. Same shape of contract as `CPHDReaderOp` — `path`, `coordinate_frame`, `pulses_per_tick`, `channel`, the same termination semantics — differing in its output:
 
-Full port list is deferred with the branch (see *Open items*, I2).
+- **Out:** `signal_data` — complex64 / complex128, `(num_pulses, num_samples)`. Deramped, uncompensated returns. **Not** phase history: it still carries residual video phase and deramp reference bookkeeping, so it must pass through `RVPRemovalOp` and `BandEqualizationOp` first. This one port name is pinned now because [`WORKFLOWS.md`](WORKFLOWS.md) wires it in the later-wave diagrams.
+
+The remaining ports — the per-pulse geometry and the deramp reference record the branch needs — are deferred with the branch (see *Open items*, I2).
 
 ### Signal-Processing Operators
 
 #### SARRangeCompressionOp
 
-- **In:** `phase_history` — complex64 / complex128, `(..., num_pulses, num_samples)`. Compression along the last (fast-time) axis.
-- **Out:** `range_profiles` — complex64 / complex128, `(..., num_pulses, num_range_bins)`. `num_range_bins = num_samples`, growing to `nfft` when set. No range-axis `fftshift`.
+- **In:** `phase_history` — complex64 / complex128, `(..., num_pulses, num_samples)`. Compression along the last (fast-time) axis. Phase history is the **frequency-domain** form, so compression here is an **inverse** transform — the opposite direction from FMCW's `FMCWRangeProcessorOp`, whose dechirped input is already a time-domain beat signal.
+- **Out:** `range_profiles` — complex64 / complex128, `(..., num_pulses, num_range_bins)`. `num_range_bins = num_samples`, growing to `nfft` when set. No range-axis `fftshift`, so bin zero is the zero-offset bin: `range_bins[0] = 0`, meaning `reference_range` itself, and bin index increases with range.
 - **Out:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`. Per-bin range (m) relative to `reference_range`, uniform. Wire it into `BackprojectionOp.range_bins` to keep the two stages' range axes consistent by construction; emitted only when `waveform` is available.
 
 **Parameters:**
 
 - `range_window` **[live]** — WindowSpec, coherent-gain normalized. Window applied along fast-time before the transform; the dominant control on impulse-response sidelobes, and so on what a bright scatterer does to its neighbours. An unseen window rebuilds its coefficients and warns once; prior windows are cached. Default: none (rectangular — best resolution, ~−13 dB sidelobes).
-- `waveform` **[live]** — LFM waveform descriptor. Source for the `range_bins` axis. Default: none (required when `range_bins` is used; unused otherwise).
-- `fft_norm` **[live]** — enum {backward, ortho, forward}. FFT normalization; `backward` is the radar-standard, keeping coherent-integration gain visible. Default: backward.
+- `waveform` **[live]** — `LFMWaveformDescriptor`. Source for the `range_bins` axis. Default: none (required when `range_bins` is used; unused otherwise).
+- `fft_norm` **[live]** — enum {backward, ortho, forward}. Which transform direction carries the `1/N` factor, on the NumPy/MatX convention: `backward` scales the inverse, `forward` scales the forward, `ortho` splits it as `1/sqrt(N)` each way. **Because this stage's transform is the inverse one, `backward` applies the `1/N` here** — the same spelling that leaves the FMCW range stage's output unscaled. The default is therefore a radiometric choice rather than a spelling detail, and it is not settled: see *Open items*, I5. Default: backward.
 - `nfft` **[live]** — int, ≥ `num_samples`. Fast-time transform length; larger zero-pads for a finer interpolated range grid over the same span, and is the escape hatch for a large-prime `num_samples`. The output bin count follows it (downstream infers). An unseen length builds a new plan and warns; seen lengths reuse the MatX plan cache. Default: none (= `num_samples`, exact N-point).
 - `propagation_speed` **[live]** — float. Wave speed for the frequency → range conversion (`range_bins` only). Default: speed of light ≈ 2.998e8 m/s.
 
 **Algorithm:**
 
 1. Apply `range_window` along fast-time.
-2. Zero-pad to `nfft` when set, and transform along fast-time under `fft_norm`.
-3. Derive `range_bins` from `waveform` bandwidth, `nfft`, and `propagation_speed`.
+2. Zero-pad to `nfft` when set.
+3. Inverse-transform along fast-time under `fft_norm`, taking phase history to range profiles.
+4. Derive `range_bins` from `waveform` bandwidth, `nfft`, and `propagation_speed`.
 
 **Notes:**
 
@@ -225,19 +236,19 @@ Full port list is deferred with the branch (see *Open items*, I2).
 #### RangeMatchedFilterOp (direct-sampled branch)
 
 - **In:** `pulses` — complex64 / complex128, `(..., num_pulses, num_samples)`. Direct-sampled returns at full bandwidth.
-- **Out:** `phase_history` — complex64 / complex128, `(..., num_pulses, num_samples_out)`. Feeds the shared phase-history node. `num_samples_out = num_samples` under the default `mode = same`; under `mode = valid` it is `num_samples − replica_length + 1`, the fully-overlapped support.
+- **Out:** `phase_history` — complex64 / complex128, `(..., num_pulses, nfft)`. The matched-filtered spectrum, feeding the shared phase-history node. Its length is the **transform** length, not the input sample count: this operator emits a frequency-domain product without inverting, so it has no time-domain support to crop to (see Notes).
 
 **Parameters:**
 
-- `waveform` **[live]** — LFM waveform descriptor. Supplies the transmitted chirp from which the replica spectrum is synthesized. Default: none (required unless `replica` is given).
+- `waveform` **[live]** — `LFMWaveformDescriptor`. Supplies the transmitted chirp from which the replica spectrum is synthesized. Default: none (required unless `replica` is given).
 - `replica` **[live]** — complex vector, `(replica_length,)`. An explicit measured replica, overriding the synthesized one; the measured form matters when the transmitter is non-ideal. Default: none (synthesize from `waveform`).
-- `mode` — enum {same, valid}. Whether the output keeps the input sample count or is cropped to the fully-overlapped support. Static (fixes the output-length rule). Default: same.
-- `nfft` **[live]** — int. Transform length for the multiply, ≥ `num_samples + replica_length − 1` to avoid circular wrap. Default: none (next fast length above that bound).
+- `nfft` **[live]** — int. Transform length for the multiply, ≥ `num_samples + replica_length − 1` to avoid circular wrap. It sets the output length, so downstream re-infers when it changes. Default: none (next fast length above that bound).
 
 **Algorithm:** transform along fast-time, multiply by the conjugate replica spectrum, and emit without inverting — the shared range compression supplies the inverse transform.
 
 **Notes:**
 
+- *There is deliberately no `same`/`valid` output mode, and its absence follows from the split.* Those crops select from a time-domain correlation, which this operator never forms: it emits the un-inverted product, whose length is `nfft`. The fully-overlapped-support crop therefore belongs on the **range** axis after `SARRangeCompressionOp` inverts — where the wrap-guard bins the `nfft` bound introduces are also the bins to discard. Whether that crop becomes an explicit parameter on range compression or stays the caller's slice is deferred (see *Open items*, I4).
 - *The apparent round trip is deliberate.* Direct-sampled pulses are time-domain, get matched-filtered into frequency-domain phase history, and are then transformed back to the range domain downstream. The alternative — a fused direct-sample-to-range-profile operator — saves one buffer and forfeits the standard-format interchange point at the phase-history node. The buffer is the cheaper of the two.
 - *The name is provisional.* See *Open items*, I3: the literature calls the whole FFT-multiply-IFFT sequence "range compression", which leaves this truncated form without a settled industry name.
 
@@ -260,10 +271,10 @@ Time-domain image formation. **Accumulating across ticks** — see *Cross-tick a
   - **Ordering** — row `i` corresponds to pulse `i` of `range_profiles`, with matching leading batch axes.
   - **Instant** — the phase centre at the pulse's **transmit** instant, under the stop-and-hop assumption. Receive instants or midpoints introduce a systematic along-track shift.
   - **Point** — the *antenna phase centre*, not the IMU and not the platform centre of mass. Lever-arm correction is the caller's.
-- **In:** `reference_range` — float32 / float64, `(..., num_pulses)`. Per-pulse range from the phase centre to the point that range bin zero is referenced against.
-- **In:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`. The range axis from `SARRangeCompressionOp`. When connected it **supersedes** `range_bin_spacing` and `range_bin_origin`, which are read from its first element and uniform step; this is the wiring that keeps the two stages' range axes consistent without the caller mirroring `nfft`. Non-uniform input is an error.
+- **In:** `reference_range` — float32 / float64, `(..., num_pulses)`. Per-pulse reference range as defined by `CPHDReaderOp.reference_range`, carried through unchanged — range compression does not transform it. Range bin zero is *not* this range unless `range_bin_origin` is zero: the active range axis (the `range_bins` port, or `range_bin_spacing` / `range_bin_origin`) supplies bin offsets relative to it.
+- **In:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`. The **compressed** range axis from `SARRangeCompressionOp`, in metres — not `CPHDReaderOp.sample_axis`, whose length can coincide with it. When connected it **supersedes** `range_bin_spacing` and `range_bin_origin`, which are read from its first element and uniform step; this is the wiring that keeps the two stages' range axes consistent without the caller mirroring `nfft`. Non-uniform input is an error.
 - **In:** `sample_points` (optional) — float32 / float64, `(num_points, 3)`. Explicit sample locations in `coordinate_frame`. Present only when `sample_geometry_mode = points`. **No leading batch axes**: the geometry is shared across the batch. Treated as configuration that happens to need a tensor, so a change forces an accumulator reset.
-- **In:** `initial_image` (optional) — complex64 / complex128, matching the output shape. Seeds the accumulator, so a caller can resume or composite.
+- **In:** `initial_image` (optional) — complex64 / complex128, matching the output shape. Seeds the accumulator, so a caller can resume or composite. **Consumed on the tick it arrives, before that tick's pulses are accumulated**, and it *replaces* the accumulator contents rather than adding to them. The expected use is one message per aperture, so an arrival mid-aperture discards the partial sums accumulated so far and warns — the same treatment a geometry change gets, and for the same reason. A shape disagreeing with the active sample geometry is an error, not a resize.
 - **Out:** `image` — complex64 / complex128, `(..., num_v, num_u)` in grid mode or `(..., num_points)` in points mode. Leading batch axes are **preserved**, one independent accumulator per batch element (see Notes). Emitted per the aperture policy, not per tick.
 
 **Parameters:**
@@ -272,8 +283,8 @@ Time-domain image formation. **Accumulating across ticks** — see *Cross-tick a
 - `sample_geometry_mode` — enum {grid, points}. Where sample locations come from. Static: the modes differ in output **rank**, not merely shape. Default: grid.
 - `grid_origin` **[live]** — float, `(3,)`. Position of sample `(0, 0)`. Grid mode. Changing it resets the accumulator. Default: none (required in grid mode).
 - `grid_axis_u`, `grid_axis_v` **[live]** — float, `(3,)` each. Unit vectors along the two grid axes; they need not be axis-aligned or horizontal, which is what lets a caller form onto a slant plane or a tilted facet. Non-orthogonal axes are permitted (a sheared grid) but not normalized for the caller. Changing either resets the accumulator. Default: none (required in grid mode).
-- `grid_spacing` **[live]** — float, `(2,)`. Metres per sample along `u` and `v`. Resets the accumulator. Default: none (required in grid mode).
-- `grid_counts` **[live]** — int, `(2,)`. `(num_u, num_v)`; sets the output shape. Resets the accumulator and reallocates. Default: none (required in grid mode).
+- `grid_spacing` **[live]** — float, `(2,)`. Metres per sample, `(v, u)` in shape order. Resets the accumulator. Default: none (required in grid mode).
+- `grid_counts` **[live]** — int, `(2,)`. `(num_v, num_u)`, matching the output shape. Resets the accumulator and reallocates. Default: none (required in grid mode).
 - `range_bin_spacing` **[live]** — float. Metres per range bin in `range_profiles`. Ignored when the `range_bins` port is connected. Default: none (required when that port is unconnected).
 - `range_bin_origin` **[live]** — float. Range (m) of bin zero relative to `reference_range`. Ignored when `range_bins` is connected. Default: 0.
 - `interpolation` **[live]** — enum {nearest, linear, sinc}. Range-profile interpolation at the computed range: `nearest` is a speed floor that costs impulse-response quality, `linear` the usual choice, `sinc` the accuracy ceiling. Default: linear.
@@ -294,6 +305,10 @@ Time-domain image formation. **Accumulating across ticks** — see *Cross-tick a
 - *Batch semantics.* Leading axes are preserved as independent images, each with its own accumulator — the rank-agnostic reading of invariant 4, and what a caller wants for independent sub-collections. To integrate **across** a leading axis instead, flatten it into the pulse axis upstream; the operator will not guess which is meant. Accumulator memory scales with the batch, so a wide batch of large images is a real footprint.
 - *Precision is not a binary, and that is the substantive departure from invariant 3.* The right mode is platform-dependent, not a speed/accuracy preference. The third-order Taylor term is an airborne requirement rather than an optimization. Plain FP32 is decorrelated from truth at spaceborne ranges — the range magnitude is large enough that single precision cannot resolve a wavelength-scale phase difference — while often being adequate at a few kilometres.
 - *Sliding windows are exact.* Backprojection is linear in pulses, so removing an outgoing block means re-forming and subtracting exactly that block. There is no accumulated drift to bound and no periodic re-form needed for correctness.
+- **[PROPOSED] No aperture (azimuth) weighting, and that is team-blocked (R6).** There is no `azimuth_window` parameter, so cross-range sidelobes are whatever an unweighted aperture gives — roughly −13 dB, the rectangular figure. That is a gap rather than a decision, and the reason it is not a one-line addition is that an aperture taper does not compose with a streaming accumulator: the weight a pulse should receive depends on where it sits within the *finished* aperture, which is not known when the pulse arrives. Until it resolves, `SICDWriterOp` cannot populate SICD's azimuth impulse-response fields and [`TESTING.md`](TESTING.md)'s cross-range sidelobe assertions are written against an unweighted aperture. Three resolutions, none free:
+  - (a) weight only in emit-and-reset mode, where the aperture extent is known at reset — leaves stripmap unweighted;
+  - (b) accumulate unweighted and apply a separable azimuth weighting to the emitted image, which is exact only when the image azimuth axis is the aperture axis — the same conjugacy assumption R4 turns on;
+  - (c) buffer the aperture's pulses and form on emit, which forfeits the incremental accumulation this operator is built around.
 - *Geometry is not inferred from an input tensor*, the departure from invariant 4's second clause: the output shape comes from the caller's sample geometry. Legal here because that geometry is declared — parameters, or a port whose change forces a reset — so it is still never a hidden assumption.
 - *Arbitrary points are the native interface*; a grid is what the caller materializes. That ordering matters because it is what makes forming directly onto DEM-derived map points a first-class case rather than a workaround.
 - *Backend seam.* The kernel is expected to sit on `matx::experimental::sar_bp`, whose interface already covers arbitrary sample points, initial-image accumulation, and a comparable precision matrix. It is in the experimental namespace with an API subject to change, so the operator wraps it behind a seam rather than exposing it.
@@ -369,12 +384,19 @@ Resamples to a map grid. **Optional in a backprojection chain** — see the note
 - `coordinate_frame` — CoordinateFrame. The input geometry's frame; `origin_llh` is required on it here, since a `scene_local` frame without a geodetic anchor cannot be geolocated. Static. Default: none (required).
 - `input_grid_origin`, `input_grid_axis_u`, `input_grid_axis_v`, `input_grid_spacing` — the formation geometry the input was produced on, mirroring `BackprojectionOp`'s grid parameters. Static. Default: none (required). *A read-only mirror of the formation stage's configuration — see the note on why this is not a shared descriptor.*
 - `projection` — string. Output projection as an EPSG code or PROJ string. Static. Default: none (required).
-- `output_origin` — float, `(2,)`. Northing/easting of the output sample `(0, 0)` in `projection`. Static. Default: none (required).
-- `output_spacing` — float, `(2,)`. Metres per output sample. Static. Default: none (required).
-- `output_counts` — int, `(2,)`. `(num_easting, num_northing)`. Static. Default: none (required).
+- `output_origin` — float, `(2,)`. `(northing, easting)` of the output sample `(0, 0)` in `projection`. Static. Default: none (required).
+- `output_spacing` — float, `(2,)`. Metres per output sample, `(northing, easting)`. Static. Default: none (required).
+- `output_counts` — int, `(2,)`. `(num_northing, num_easting)`, matching the output shape. Static. Default: none (required).
 - `interpolation` **[live]** — enum {nearest, bilinear}. Default: bilinear.
 - `no_data_value` **[live]** — float. Fill for output samples outside the input footprint. Default: NaN.
 - `dem_geotransform` (optional) — float, `(6,)`. Affine mapping from `dem` indices to projected coordinates, when the DEM is not already on the output grid. Static. Default: none (DEM assumed co-registered with the output grid).
+
+**Algorithm:**
+
+1. For each output sample, form its projected `(northing, easting)` from `output_origin` and `output_spacing`, and its height from `dem` (via `dem_geotransform` where the DEM is not co-registered) or from the reference surface where no DEM is supplied.
+2. Convert that projected, heighted point into `coordinate_frame` using `origin_llh` and `ellipsoid` — the one place in the chain that performs a geodetic conversion.
+3. Project it onto the input formation grid using the `input_grid_*` mirror, giving a fractional `(v, u)` input index.
+4. Interpolate the input per `interpolation`; samples whose index falls outside the input extent take `no_data_value`.
 
 **Notes:**
 
@@ -393,7 +415,7 @@ Sinks and sources at chain boundaries, never inline. Each is optional; the chain
 - **In:** `phase_history` — complex64 / complex128, `(..., num_pulses, num_samples)`.
 - **In:** `positions` — float32 / float64, `(..., num_pulses, 3)`.
 - **In:** `reference_range` — float32 / float64, `(..., num_pulses)`.
-- **In:** `pulse_times` (optional) — float64, `(num_pulses,)`.
+- **In:** `pulse_times` (optional) — float64, `(..., num_pulses)`. Always double, matching the reader's port, regardless of the instantiated precision.
 - **In:** `velocities` (optional) — float32 / float64, `(..., num_pulses, 3)`.
 - No outputs — a sink.
 
@@ -401,9 +423,16 @@ Sinks and sources at chain boundaries, never inline. Each is optional; the chain
 
 - `path` — string. Output file path, or a pattern containing `{index}` when `max_pulses_per_file` is set. Static. Default: none (required).
 - `coordinate_frame` — CoordinateFrame, with `origin_llh` required. Declares what the recorded geometry means. Static. Default: none (required).
-- `waveform` — LFM waveform descriptor. Supplies the collection-level fields CPHD requires and the tensors do not carry. Static. Default: none (required).
+- `waveform` — `LFMWaveformDescriptor`. Supplies the collection-level fields CPHD requires and the tensors do not carry. Static. Default: none (required).
 - `sample_type` — enum {cf32, ci16, ci8}. CPHD sample representation. `ci16` with per-vector scale factors is the common recorded form and roughly halves file size against `cf32`. Static. Default: cf32.
 - `max_pulses_per_file` (optional) — int. Roll to a new file after this many pulses, for collections too long for one file. Static. Default: none (single file).
+
+**Algorithm:**
+
+1. At `start()`, open the file and reserve the header region; the XML cannot be written yet because the pulse count is not known until the collection ends.
+2. Per tick, convert the pulse block to `sample_type` (deriving per-vector scale factors for the integer forms), copy it to host memory, and append it to the signal-array region. Accumulate the per-pulse geometry in host memory.
+3. Roll to the next `{index}` file when `max_pulses_per_file` is reached, finalizing the current one.
+4. At `stop()`, write the per-pulse geometry arrays and the XML header for the pulses actually received, then close.
 
 **Notes:**
 
@@ -423,13 +452,20 @@ One file per emitted image — the image is the product, so there is nothing to 
 - `path` — string. Output path pattern; `{index}` is substituted with the emitted-image counter. Static. Default: none (required).
 - `coordinate_frame` — CoordinateFrame, with `origin_llh` required. Static. Default: none (required).
 - `grid_origin`, `grid_axis_u`, `grid_axis_v`, `grid_spacing` — the formation geometry, needed for SICD's grid and geolocation fields. A read-only mirror of `BackprojectionOp`'s configuration. Static. Default: none (required).
-- `waveform` — LFM waveform descriptor. Source for the collection and radiometric fields. Static. Default: none (required).
-- `range_window`, `azimuth_window` — WindowSpec. The weightings applied upstream, which SICD records as the impulse-response description. Mirrors of the range-compression and formation configuration. Static. Default: none (rectangular).
+- `waveform` — `LFMWaveformDescriptor`. Source for the collection and radiometric fields. Static. Default: none (required).
+- `range_window` — WindowSpec. The weighting applied upstream, which SICD records as the range impulse-response description. A read-only mirror of `SARRangeCompressionOp.range_window`. Static. Default: none (rectangular).
 - `sample_type` — enum {cf32, ci16, amp8phs8}. SICD pixel representation. Static. Default: cf32.
+
+**Algorithm:**
+
+1. Per emitted image, derive SICD's grid and geolocation fields from the `grid_*` mirror and `coordinate_frame`, and its collection and radiometric fields from `waveform`.
+2. Derive the range impulse-response description from `range_window`; leave the azimuth description unweighted (see Notes and R6).
+3. Convert the image to `sample_type`, wrap it in the NITF container with the XML metadata, and write to the `{index}`-substituted path. One file per image, so there is no accumulation and nothing pending at `stop()`.
 
 **Notes:**
 
-- *Mirrored configuration is the metadata-plane symptom.* The four grid parameters and the two window parameters exist only because the operator must describe processing it did not perform, and each is a place where a caller can silently disagree with the upstream stage. That is the concrete cost of having no metadata plane, and the argument for R5.
+- *Mirrored configuration is the metadata-plane symptom.* The four grid parameters and `range_window` exist only because the operator must describe processing it did not perform, and each is a place where a caller can silently disagree with the upstream stage. That is the concrete cost of having no metadata plane, and the argument for R5.
+- *SICD's azimuth impulse-response fields cannot be populated, because nothing in this contract applies an azimuth weighting.* There is deliberately no `azimuth_window` mirror here: it would mirror a parameter that does not exist. See `BackprojectionOp` → *Notes* and **R6**; whichever way that resolves determines whether this operator gains the parameter or records the field as unweighted.
 - *NITF container.* SICD and SIDD are NITF-wrapped, so this operator brings that dependency into the `io` group.
 
 #### TensorDumpOp
@@ -444,6 +480,13 @@ One file per emitted image — the image is the product, so there is nothing to 
 - `every_n` **[live]** — int. Write only every nth message, for long runs. Default: 1.
 - `max_files` (optional) — int. Stop writing after this many files and warn once. Static. Default: none (unlimited).
 
+**Algorithm:** on every `every_n`th message, copy the tensor to host memory and write it to the `{index}`-substituted path, emitting the shape and dtype header for `npy`. Stop writing once `max_files` is reached, warning once.
+
+**Notes:**
+
+- *Deliberately untyped.* It accepts any dtype and any rank because its purpose is inspecting a port whose contract is under construction — constraining it would defeat that. It is the one operator in the module with no dtype pairing.
+- *Not a product writer.* `npy` is chosen so the Python tests can read a dump directly; it carries no geometry, no frame, and no collection metadata, so it is a debugging tap rather than an interchange format.
+
 #### CRSDWriterOp and SIDDWriterOp
 
 `CRSDWriterOp` records uncompensated signal data near ingress; `SIDDWriterOp` records the detected (amplitude) product after multilook or geocode. Their contracts follow `CPHDWriterOp` and `SICDWriterOp` respectively — accumulating pulse sink and per-product sink — and are deferred with the seams they attach to, neither of which exists in wave one. See *Open items*, I2.
@@ -452,9 +495,9 @@ One file per emitted image — the image is the product, so there is nothing to 
 
 ## Supporting data structures
 
-[`AGENTS.md`](../../../AGENTS.md) invariant 2 locks **exactly seven** shared config-plane descriptor types: `ArrayGeometry`, `ShiftInvariantSubarrayPair`, `AngleConvention`, `WindowSpec`, `FMCWWaveformDescriptor`, `DDMCodeDescriptor`, `TXSchedule`. SAR reuses `WindowSpec` unchanged, needs one addition, and proposes one rename. Both changes need review as contract changes (R1).
+[`AGENTS.md`](../../../AGENTS.md) invariant 2 locks **exactly six** shared config-plane descriptor types: `ArrayGeometry`, `AngleConvention`, `WindowSpec`, `FMCWWaveformDescriptor`, `DDMCodeDescriptor`, `TXSchedule`. SAR reuses `WindowSpec` unchanged, needs one addition, and proposes one rename. Both changes need review as contract changes (R1).
 
-Six of those seven exist today in `operators/common/radar_common/descriptors/`. The seventh, `ShiftInvariantSubarrayPair`, arrives with `ESPRITEstimatorOp` — specified in the FMCW contract but not yet landed — which is why the FMCW [`OPERATOR_API.md`](../OPERATOR_API.md) → *Supporting data structures* documents six and carries that type only as ESPRIT's `subarray_spec` parameter. Invariant 2 states a **bound**, not an inventory, so seven is the number SAR's addition applies to.
+All six exist today in `operators/common/radar_common/descriptors/`, and the FMCW [`OPERATOR_API.md`](../OPERATOR_API.md) → *Supporting data structures* documents the same six. One prospective seventh is worth naming because it would move the bound independently of SAR: `ESPRITEstimatorOp` — specified in the FMCW contract, not yet landed — takes a `subarray_spec` parameter describing a shift-invariant sub-array pair, and nothing yet settles whether that becomes a shared descriptor type or stays an operator-local parameter. Invariant 2 states a **bound**, not an inventory, so the count SAR's addition applies to is whichever is locked when R1 is decided.
 
 ### CoordinateFrame (new)
 
@@ -473,7 +516,7 @@ Rationale for a new type rather than a field on an existing one: it is required 
 
 SAR needs the transmitted chirp for the range axis, the matched-filter replica, and the writers' collection fields. `FMCWWaveformDescriptor` already carries precisely the right fields — carrier frequency, bandwidth or slope, duration, sample rate, pulse repetition interval, and an optional measured reference — because FMCW and SAR both transmit **linear-FM chirps**. The type is FMCW only in its name.
 
-**Proposal: rename it `LFMWaveformDescriptor`** and use it unchanged from both modalities, rather than adding an eighth type duplicating every field. That keeps the count at **eight** (the seven plus `CoordinateFrame`) and forecloses the drift two near-identical waveform types would invite. The cost is a mechanical rename across the FMCW operators. Alternatives: keep the FMCW name and use it from SAR (accurate fields, misleading name at every SAR call site), or add a parallel type (drift).
+**Proposal: rename it `LFMWaveformDescriptor`** and use it unchanged from both modalities, rather than adding a second waveform type duplicating every field. That keeps the count at **seven** — the six plus `CoordinateFrame`, where a parallel SAR waveform type would make eight — and forecloses the drift two near-identical waveform types would invite. The cost is a mechanical rename across the FMCW operators. Alternatives: keep the FMCW name and use it from SAR (accurate fields, misleading name at every SAR call site), or add a parallel type (drift).
 
 One field needs a SAR reading: `chirp_repetition_interval` is the pulse repetition interval, and for SAR it is the inter-pulse time along the aperture — the same quantity, but the FMCW doc describes it in terms of per-TX effective spacing for MIMO. The rename should generalize that wording.
 
@@ -489,10 +532,10 @@ One field needs a SAR reading: `chirp_repetition_interval` is the pulse repetiti
 
 Each is an explicit change to the invariants in [`AGENTS.md`](../../../AGENTS.md) and needs review as one. Collectively they are R1.
 
-- **Invariant 2, bounded descriptors.** Seven becomes eight, plus a rename (`FMCWWaveformDescriptor` → `LFMWaveformDescriptor`). See *Supporting data structures*.
+- **Invariant 2, bounded descriptors.** Six becomes seven, plus a rename (`FMCWWaveformDescriptor` → `LFMWaveformDescriptor`). See *Supporting data structures*.
 - **Invariant 3, precision by template instantiation.** Unchanged for I/O dtype. Extended by `BackprojectionOp.precision_mode`, an orthogonal internal-arithmetic selection with no FMCW analogue, because the right choice is platform-dependent rather than a preference.
 - **Invariant 4, rank-agnostic batching.** Leading axes stay opaque and preserved, so the first clause holds. The second — infer shapes from the tensors each tick — does not: `BackprojectionOp` takes its output shape from the caller's declared sample geometry. Legal because that geometry is declared rather than assumed, and shape-changing overrides still force downstream re-inference.
-- **Invariant 5, `[live]` overrides.** Adds one rule: a live override that changes an accumulating operator's output geometry forces a reset. Static-structural here: `coordinate_frame`, `sample_geometry_mode`, `precision_mode`, `algorithm`, `azimuth_axis`, `mode`, `remainder`, and every writer's format and geometry-mirror parameter.
+- **Invariant 5, `[live]` overrides.** Adds one rule: a live override that changes an accumulating operator's output geometry forces a reset. Static-structural here: `coordinate_frame`, `sample_geometry_mode`, `precision_mode`, `algorithm`, `azimuth_axis`, `remainder`, and every writer's format and geometry-mirror parameter.
 - **A new convention.** Cross-tick accumulation — the module had none, and SAR cannot be specified without one.
 
 ---
@@ -508,9 +551,12 @@ Every unresolved question in this document, in the two classes [`TEAM_BLOCKED.md
 - **R3 — whether `BackprojectionOp` publishes aperture state** on an output port. Dependent on R2.
 - **R4 — `AutofocusOp` grid conjugacy.** Three resolutions; determines whether autofocus is a downstream stage, a feedback loop, or geometry-restricted.
 - **R5 — whether a metadata plane is in scope.** Forced by the writers, whose mirrored geometry and window parameters are the symptom. Cross-cutting, so it belongs in the contract or is explicitly deferred, never discovered during implementation.
+- **R6 — aperture (azimuth) weighting.** Nothing in the chain applies one, so cross-range sidelobes are the unweighted ~−13 dB. Not a one-line addition, because a taper does not compose with a streaming accumulator. Three resolutions, in `BackprojectionOp` → *Notes*; it also gates `SICDWriterOp`'s azimuth impulse-response fields.
 
 **Implementation-time** — settled by writing the code, not by a team decision:
 
 - **I1 — `matx::experimental::sar_bp` release status.** Experimental namespace, API subject to change, and absent from the MatX the Holoscan SDK bundles here. Confirm before depending on it; do not bump MatX in this wave.
 - **I2 — the deferred branches' full port lists:** `CRSDReaderOp`, `RVPRemovalOp`, `BandEqualizationOp`, `CRSDWriterOp`, `SIDDWriterOp`. Evidence-gated on real raw data and on the seams existing.
 - **I3 — `RangeMatchedFilterOp`'s name.** The literature calls the whole FFT-multiply-IFFT sequence "range compression", leaving the truncated form unnamed. Settle against invariant 7 (industry-standard names) before the operator lands.
+- **I4 — where the fully-overlapped-support crop lives** on the direct-sampled branch. `RangeMatchedFilterOp` cannot apply it, since it emits an un-inverted spectrum, so the wrap-guard bins the `nfft` bound introduces survive into the range profiles. Either range compression gains a crop parameter or the caller slices the range axis; settled by writing the branch.
+- **I5 — the range-compression normalization default.** With the transform direction now stated as inverse, `fft_norm = backward` means this stage applies the `1/N`, which scales absolute amplitude and so reaches SICD's radiometric fields. Confirm the default against the SICD convention and against what an independent reader expects, rather than inheriting FMCW's spelling for a transform running the other way.

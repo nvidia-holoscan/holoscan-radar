@@ -39,7 +39,7 @@ It exists today in Python, outside this repository, and writes CPHD. This sectio
 ### Outputs it must produce
 
 - **A CPHD file** carrying the phase history, per-pulse positions, reference ranges, pulse times, and the collection metadata a reader needs. This is the only interface to the operators.
-- **Ground truth alongside it** (a sidecar, not inside the CPHD): each target's Cartesian position; its slant range at aperture centre; the **predicted image-quality metrics** for the configured collection — range resolution `≈ c / (2·B)`, cross-range resolution `≈ λ / (2·Δθ)` for the subtended aperture angle `Δθ`, and the PSLR and ISLR the configured window implies; the true trajectory where an error was injected; and the injected phase error where one was applied.
+- **Ground truth alongside it** (a sidecar, not inside the CPHD): each target's Cartesian position; its slant range at aperture centre; the **predicted image-quality metrics** for the configured collection — range resolution `≈ c / (2·B)`, cross-range resolution `≈ λ / (2·Δθ)` for the subtended aperture angle `Δθ`, the range PSLR and ISLR the configured range window implies, and the cross-range PSLR and ISLR of an unweighted aperture (see R6); the true trajectory where an error was injected; and the injected phase error where one was applied.
   - **Not pixel indices.** Those depend on the formation configuration — grid origin, spacing, axes, `nfft` — which the simulator does not know.
   - Tests therefore assert in the **physical domain**: map an image peak back to a position through the formation grid parameters and compare to ground truth within a fraction of a resolution cell. That also validates the grid parameters themselves.
   - The predicted metrics are what make the assertions non-circular: they come from the collection parameters, not from a previous run of the pipeline.
@@ -77,7 +77,7 @@ EM propagation and scattering; multipath; layover and shadow; distributed surfac
 
 - **Aliasing modeled.** Targets beyond the unambiguous range must fold correctly, and azimuth ambiguities from PRF under-sampling must appear, so both can be tested rather than assumed absent.
 - **Determinism.** A fixed seed reproduces the file bit-for-bit.
-- **Guard against tautology.** The signal model must be derived **independently of the operator implementations**, and canonical cases cross-checked against an independent reference — a textbook closed form for the point-target response, or an established external SAR simulator. Tests assert against **analytic predictions** (a target at a known position, imaged at the resolution the bandwidth and aperture imply, with the sidelobe levels the window implies), never merely that the generator round-trips through the pipeline.
+- **Guard against tautology.** The signal model must be derived **independently of the operator implementations**, and canonical cases cross-checked against an independent reference — a textbook closed form for the point-target response, or an established external SAR simulator. Tests assert against **analytic predictions** (a target at a known position, imaged at the resolution the bandwidth and aperture imply, with the range sidelobe levels the range window implies), never merely that the generator round-trips through the pipeline.
 - **A kinematic driver is required.** FMCW's `TESTING.md` defers a time-stepping driver, noting it waits for "a frame-spanning consumer (a tracker, multi-frame integration, or clutter-map CFAR — all out of scope now)". **SAR is that consumer**: an aperture spans many pulse batches by construction, so the trajectory must evolve across ticks. This is the wave that adds it, and it is required rather than optional.
 - **Versioned and self-tested.** The simulator is a first-class test dependency living outside this repository, so the repo must **pin a version** and its self-checks must ship with it. The committed CPHD fixture used by integration tests must be regenerable from that pinned version, and regeneration must reproduce it bit-for-bit — otherwise a silent simulator change becomes a silent change in what the module is validated against.
 
@@ -109,6 +109,8 @@ The convention leg. Real data is where frame, sign, epoch and reference-point co
 
 Each operator lists the I/O-level properties to validate. Unless noted, all also carry the module-wide checks in *Cross-cutting tests*.
 
+Ten of the fifteen contracted operators appear below. The five omitted — `CRSDReaderOp`, `RVPRemovalOp`, `BandEqualizationOp`, `CRSDWriterOp`, `SIDDWriterOp` — have deferred port lists ([`OPERATOR_API.md`](OPERATOR_API.md) → *Open items*, I2), so there is nothing yet to write assertions against; their test requirements land with their contracts. The deramped pair additionally cannot be satisfied synthetically at all, which is a sequencing constraint rather than a testing one — see [`SIGPROC_PLAN.md`](SIGPROC_PLAN.md).
+
 ### Ingress
 
 #### CPHDReaderOp
@@ -120,20 +122,23 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - `pulse_range` selects the requested subset; an out-of-bounds range errors.
 - A truncated or malformed file fails with a clear error rather than emitting partial garbage.
 - `ci16` and `cf32` sample types both decode, with the per-vector scale factors applied.
+- `sample_axis` matches the file's declared fast-time domain and sample spacing — frequency for an FX-domain collection, time of arrival for a TOA-domain one — and is distinct by construction from the compressed `range_bins` axis it must not be confused with.
 
 ### Signal processing
 
 #### SARRangeCompressionOp
 
 - Single point target → the `range_profiles` peak maps, via `range_bins`, to the target's differential range within one bin; `range_bins` itself matches the analytic axis for the configured bandwidth, `nfft` and `propagation_speed`.
-- Windowing lowers peak sidelobe level against rectangular by the amount the window's theoretical PSLR predicts; coherent gain is preserved under the chosen `fft_norm`.
+- **Transform direction and bin-zero sense.** A target at a positive differential range appears at an increasing bin index, and a target at `reference_range` peaks at bin zero. This is the assertion that catches an inverted transform or an unintended `fftshift` — both of which pass a magnitude-only resolution test.
+- **Normalization.** Absolute output amplitude matches the analytic prediction for each `fft_norm` value, so the `1/N` lands on the direction the contract says it does (I5).
+- Windowing lowers peak sidelobe level against rectangular by the amount the window's theoretical PSLR predicts.
 - `nfft` oversampling adds bins and interpolates the peak — no added resolution, no added extent.
 - Leading batch axes preserved and processed independently.
 
 #### RangeMatchedFilterOp
 
 - A direct-sampled pulse containing a delayed replica → after the matched filter and the downstream range compression, a peak at the delay's range.
-- `mode = same` and `mode = valid` produce the documented output lengths; `valid` contains no wrap contamination.
+- The output length is `nfft`, and an `nfft` below the wrap-free bound is rejected rather than silently producing circular contamination.
 - An explicit `replica` overrides the synthesized one, and a deliberately mismatched replica degrades the peak as predicted.
 
 ### Image formation
@@ -146,7 +151,8 @@ The anchor, and the operator with the most contract surface.
 
 - Point target → peak at the correct sample point, within a fraction of a resolution cell.
 - Peak **phase** matches the analytic two-way path. This is the assertion that catches range-computation errors a magnitude-only test passes over.
-- Resolution, PSLR and ISLR match the simulator's predicted metrics for the configured bandwidth, aperture and window.
+- Range resolution, PSLR and ISLR match the simulator's predicted metrics for the configured bandwidth and `range_window`.
+- Cross-range resolution matches the prediction for the subtended aperture angle, and cross-range sidelobes match the **unweighted** aperture — there is no azimuth weighting in the contract (R6). Asserting a weighted figure here would be asserting a parameter that does not exist; when R6 resolves, this assertion changes with it.
 - Multiple targets superpose linearly.
 - A target beyond the unambiguous range folds where predicted rather than vanishing.
 
@@ -168,7 +174,7 @@ The anchor, and the operator with the most contract surface.
 - Emit-and-continue: a sliding window emits repeatedly, and each emitted image equals a from-scratch formation over the same pulse set. Because backprojection is linear in pulses, this is exact to numerical tolerance rather than approximate.
 - Emit-and-reset: the accumulator clears; the next image carries no contribution from the previous aperture.
 - A `[live]` geometry override (`grid_origin`, `grid_axis_*`, `grid_spacing`, `grid_counts`, or `sample_points`) **forces a reset** and warns; partial sums from the old geometry never leak into the new image.
-- `initial_image` seeds the accumulator: seeding with a prior result and adding the next block equals forming both blocks together.
+- `initial_image` seeds the accumulator: seeding with a prior result and adding the next block equals forming both blocks together. Arriving mid-aperture **replaces** the partial sums rather than adding to them, and warns; a shape disagreeing with the active sample geometry errors.
 - **Termination flush:** a collection ending mid-aperture still emits its partial image rather than dropping it.
 - The emitted buffer is independent of the accumulator — mutating the accumulator after emit does not alter the emitted image.
 - **Batch semantics:** leading axes produce independent images, each with its own accumulator, and a batched run equals the same batches run separately.
@@ -219,7 +225,7 @@ The anchor, and the operator with the most contract surface.
 
 - The product opens in an independent reader (SarPy) and its geometry fields match the configured formation geometry.
 - Where autofocus ran, the recorded correction matches `phase_correction`.
-- Each `sample_type` round-trips through that independent reader.
+- Each `sample_type` reads back through that independent reader at the fidelity the representation allows: `cf32` bit-exact, `ci16` and `amp8phs8` within their quantization, which the test states as a tolerance rather than calling a lossy representation a round trip.
 - A geometry mirror disagreeing with the upstream formation configuration is **not** detectable by this operator — which is the concrete demonstration of the R5 metadata-plane gap, and is asserted as a known limitation rather than a passing behaviour.
 
 #### TensorDumpOp
@@ -237,7 +243,7 @@ The anchor, and the operator with the most contract surface.
 - **Precision.** Single and double instantiations agree within their tolerances — a separate axis from `precision_mode`.
 - **Memory spaces.** Operators accept device, managed and pinned-host tensors and reject pageable host input with a clear error; outputs are device memory. `CPHDReaderOp` is the sanctioned exception, reading host memory and producing device memory.
 - **Determinism.** A fixed seed and a fixed pulse batching reproduce identical images. This is stronger than the FMCW requirement, because accumulation order is a new way to lose it: batching the same aperture differently must not change the result beyond floating-point reassociation.
-- **Coordinate-frame rejection.** Every operator carrying a `CoordinateFrame` rejects an incompatible pairing at build time — the check the descriptor exists for.
+- **Coordinate-frame rejection**, which is three different checks rather than one, because most operators hold only a single frame and so have nothing to pair it against. `BackprojectionOp` is the only operator holding two geometries at once, and it rejects a mismatch between `positions` and `sample_points` at build time. `CPHDReaderOp` rejects a `coordinate_frame` disagreeing with the frame the file declares. `GeocodeOp` and every writer reject a frame lacking the `origin_llh` they need to geolocate — a `scene_local` frame with no anchor is legal upstream and rejected there. Each is tested where it lives; there is no blanket pairing check.
 
 ---
 
