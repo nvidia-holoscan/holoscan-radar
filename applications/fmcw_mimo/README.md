@@ -85,6 +85,29 @@ integration over the virtual-channel axis — the surface CFAR thresholds
 
 Shared: `tx_array`, `rx_array`, targets, beamscan grid, `virtual_array_assembly.overlap_policy: keep_all`.
 
+### Scene
+
+All three configs use the same five targets, mirroring the
+[`fmcw_aoa_estimators`](../fmcw_aoa_estimators/README.md) scene. Velocity is
+purely radial (`speed * dir(az, el)`), so each target holds its angle for the
+whole 25 s run. Three are well separated in speed (−8.5 / +1.2 / +8.5 m/s); the
+other two each shadow one of them through a close pass, 1.83 m/s faster than
+the target they shadow — resolvable in Doppler, but inside the 2.0 m/s
+`cluster_dbscan.epsilon`, so the pair can merge. One closes a 15 m gap and
+coincides near t ≈ 8 s, the other a 27 m gap near t ≈ 15 s. The first pair is
+split by 0.300 rad in azimuth, the second by only 0.020 rad — so one pass is
+separable by angle and the other is not.
+
+Two constraints differ from the SIMO apps and set the speeds:
+
+- Every radial sits on a **Doppler bin center** (a multiple of the ~0.6083 m/s
+  bin), so cluster representatives do not hop between adjacent bins frame to
+  frame and the velocity chart reads as clean lines.
+- The **unambiguous velocity span is halved**. TDM stretches the effective PRI
+  by `num_tx`; DDM splits the 128-bin Doppler axis into one 64-bin band per TX
+  (less `ddm_code.guard_bands` at each edge). Both land at ±19.5 m/s, so the
+  ±14-bin (±8.5 m/s) ladder stays well clear of the fold.
+
 ## Python
 
 A Python variant with the same graph lives at

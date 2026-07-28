@@ -53,10 +53,11 @@ offscreen rendering) the app opens a Holoviz window reusing the app-agnostic
   the overlaid detections are a max-over-beams projection while the image is
   one fixed beam: an off-boresight target is drawn over a cell attenuated by
   the beam pattern. On this 8×8 half-wavelength array with the Taylor 35 dB
-  taper that is 0.3–4.4 dB for the demo's three targets (all well inside the
-  mainlobe — the first null is at 0.253 rad), but a target out near the ±0.3
-  rad grid edge would sit in the null and disappear from the image while still
-  being detected.
+  taper that is a mild penalty for the demo's five targets — the furthest sits
+  at 0.20 rad azimuth / 0.12 rad elevation, well inside the mainlobe, since the
+  first null is at 0.253 rad — but a target out near the ±0.3 rad grid edge
+  would sit in the null and disappear from the image while still being
+  detected.
 - **Right (stacked):** range-vs-time and velocity-vs-time rolling plots of the
   per-cluster representative, and a boresight azimuth/elevation scatter of those
   same per-cluster representatives (the angle information the dense path adds) —
@@ -125,6 +126,16 @@ See [`cpp/fmcw_dense_simo.yaml`](cpp/fmcw_dense_simo.yaml).
   range/velocity, spread across neighboring beams) collapses into one cluster.
   The medoid representative then lands on the true direction of arrival
   (grid-snapped).
+- **`targets`** — the same five-target scene as
+  [`fmcw_aoa_estimators`](../fmcw_aoa_estimators/README.md), so the dense and
+  sparse paths can be compared on identical input. Velocity is purely radial,
+  so each target holds its angle for the whole 25 s run. Three are well
+  separated in speed (−9 / +1.5 / +9 m/s); the other two each shadow one of
+  them through a close pass, 1.5 m/s faster than the target they shadow,
+  coinciding at t ≈ 10 s and t ≈ 18 s. Note that the wide 0.3 rad angular
+  epsilon above is the same order as the 0.300 rad azimuth split of the first
+  pair, so this app is expected to merge close passes that the sparse apps keep
+  apart — the clustering radius, not the array, is the limit here.
 
 ## Build & run
 

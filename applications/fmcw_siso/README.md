@@ -2,7 +2,7 @@
 
 A SISO FMCW example application demonstrating the signal-processing,
 detection, and clustering chain: a synthetic ADC source (one static clutter
-return + three moving targets, analytic dechirped point-target model) feeding
+return + five moving targets, analytic dechirped point-target model) feeding
 
 ```text
 FMCWRangeProcessorOp → ClutterFilterOp → FMCWDopplerProcessorOp
@@ -32,11 +32,22 @@ cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 ```
 
 The clutter filter suppresses the (stronger) static return, so CFAR's
-detections come from the three moving targets. Their trajectories stay inside
-the unambiguous range (~256 m) and velocity (~±39 m/s) envelope for the
-full 30 s run: ~45→120 m at +2.5 m/s, ~130→175 m at +1.5 m/s, and
-~200→155 m at −1.5 m/s. Additive noise (`noise_snr_db`) is required — without
-it the CFAR noise estimate is zero and no cells cross threshold.
+detections come from the five moving targets. Their trajectories stay inside
+the unambiguous range (~256 m) and velocity (~±39 m/s) envelope for the full
+30 s run. Three are well separated in speed (−6.7 / +1.2 / +6.7 m/s); the other
+two each shadow one of them through a close pass, so you can watch two objects
+converge in range and Doppler and then separate again. Every radial sits on a
+Doppler bin center (a multiple of the ~0.6083 m/s bin) so the velocity chart
+reads as flicker-free lines.
+
+Each close-pass partner runs 1.83 m/s (3 bins) faster than the target it
+shadows — resolvable in Doppler, but inside the 2.0 m/s
+`cluster_dbscan.epsilon`, so the pair can merge. One closes an 18 m gap and
+coincides near t ≈ 10 s, the other a 27 m gap near t ≈ 15 s. SISO has no angle
+axis, so at closest approach nothing distinguishes the pair and the two
+clusters collapse into one — that merge, and the recovery afterwards, is what
+the scene is there to show. Additive noise (`noise_snr_db`) is required —
+without it the CFAR noise estimate is zero and no cells cross threshold.
 
 ## Configuration
 

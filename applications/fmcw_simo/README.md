@@ -67,9 +67,23 @@ detections drawn as cluster-colored dots, and three stacked panels on the right:
 - **`cfar_detector.nci_axes: [0]`** — integrate RX before thresholding.
 - **`cluster_dbscan.epsilon`** — four values for `[range, velocity, az, el]`.
 
-The default scenario is an 8x8 URA with three targets moving on all three axes;
-their range, azimuth, and elevation all sweep over the run while staying inside
-the beamscan grid.
+The default scenario is an 8x8 URA with five targets, matching the
+[`fmcw_aoa_estimators`](../fmcw_aoa_estimators/README.md) scene so the two apps
+are directly comparable. Velocity is purely radial (`speed * dir(az, el)`), so
+each target holds its angle for the whole 25 s run.
+
+Three are well separated in speed (−9 / +1.5 / +9 m/s); the other two each
+shadow one of them through a close pass, 1.5 m/s faster than the target they
+shadow — 2.5 velocity bins, still inside the 2.0 m/s `cluster_dbscan.epsilon`,
+so the pair can merge:
+
+- **Pair A** (target 4 shadows target 2, coinciding at t ≈ 10 s) is separated by
+  0.300 rad in azimuth, past the array's 0.253 rad first null — angle alone can
+  carry it through the crossing.
+- **Pair B** (target 5 shadows target 1, coinciding at t ≈ 18 s) differs by only
+  0.020 rad in azimuth, far inside the first null, so this array cannot split it
+  and every cell reports a blended angle. Elevation differs by 0.060 rad, just
+  past the clustering epsilon.
 
 ## Python
 

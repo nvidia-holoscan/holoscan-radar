@@ -22,8 +22,9 @@ mimo_coherent_compensation:
     # Discard the top fft-order bins of each band: suppresses inter-band
     # leakage that otherwise shows up as spurious high-|velocity| detections
     # at the demuxed-band edges. With 2 adjacent TX bands and Hann Doppler
-    # sidelobes, 4 guard bins clears the leakage entirely (all 3 targets, no
-    # spurious clusters over a 40-frame sweep); 2 left occasional edge hits.
+    # sidelobes, 4 guard bins clears the leakage entirely; 2 left occasional
+    # edge hits. (Measured on the earlier 3-target, near-DC scene; the current
+    # scene reaches +/-14 bins, still well inside the 32-bin half-band.)
     guard_bands: 4
 
 virtual_array_assembly:
@@ -112,24 +113,27 @@ rx_array:
   el_elements: 4
   spacing: 0.5
 
-# The velocity bin spacing here is PRF/N * lambda/2 = (40e3/128) * lambda/2
-# ~= 0.61 m/s, so radials are only distinguishable on the velocity chart if
-# they fall in *distinct* Doppler bins. The originals (-1.25 / -0.55 / -0.81)
-# put the mid and far targets in the same bin (-0.61 m/s), overlapping their
-# chart lines. The radials below sit on *bin centers* -3 / -2 / -1
-# (-1.83 / -1.22 / -0.61 m/s) so each reads as a distinct, flicker-free line
-# (an off-center radial near a bin edge lets the cluster medoid hop between two
-# bins frame to frame).
+# Position = range * dir(az, el); velocity is purely radial = speed * dir(az, el),
+# so each target holds its angle for the whole run. See the README for the scene.
 #
-# The velocities also keep the nearer target the fastest (|radial| decreasing
-# with range), so the range gaps only grow over the 25 s run -- no crossings,
-# no cluster merges, a steady 3 clusters. This also keeps every target well off
-# the mean-subtraction clutter null at DC (the original +0.9 m/s near-range
-# target sat near DC, got attenuated, and dropped in/out).
+# The velocity bin spacing here is PRF/N * lambda/2 = (40e3/128) * lambda/2
+# ~= 0.6083 m/s, so radials are only distinguishable on the velocity chart if
+# they fall in *distinct* Doppler bins. Every radial below sits on a *bin
+# center* (-14 / +2 / +14 / +5 / -11 bins) so each reads as a flicker-free line
+# (an off-center radial near a bin edge lets the cluster medoid hop between two
+# bins frame to frame). The two close-pass partners are deliberately only 3
+# bins (1.83 m/s) from their target -- resolvable in Doppler, but inside the
+# 2.0 m/s clustering epsilon, so DBSCAN can merge them while the ranges cross.
+#
+# DDM splits the 128-bin Doppler axis into one 64-bin band per TX, so the
+# per-TX unambiguous span is +/-19.5 m/s (less ddm_code.guard_bands at each
+# band edge). +/-14 bins (+/-8.52 m/s) stays well clear of both edges.
 targets:
-  - { range: 80.0,  azimuth: 0.15,  elevation: 0.10,  velocity: [-1.79, -0.3, -0.2], amplitude: 0.8 }
-  - { range: 95.0,  azimuth: -0.10, elevation: -0.08, velocity: [-1.18, 0.3, 0.25], amplitude: 0.6 }
-  - { range: 110.0, azimuth: 0.0,   elevation: 0.05,  velocity: [-0.594, 0.4, -0.3], amplitude: 0.7 }
+  - { range: 245.0,  azimuth: 0.15,  elevation: 0.10,  velocity: [-8.3791, -1.2664, -0.8503], amplitude: 0.8 }
+  - { range: 132.0,  azimuth: -0.10, elevation: -0.12, velocity: [1.2019, -0.1206, -0.1457],  amplitude: 0.6 }
+  - { range: 22.0,   azimuth: 0.0,   elevation: 0.08,  velocity: [8.4896, 0.0, 0.6806],       amplitude: 0.7 }
+  - { range: 117.0,  azimuth: 0.20,  elevation: 0.10,  velocity: [2.9662, 0.6013, 0.3037],    amplitude: 0.55 }
+  - { range: 218.0,  azimuth: 0.17,  elevation: 0.04,  velocity: [-6.5901, -1.1312, -0.2676], amplitude: 0.7 }
 
 noise_snr_db: 18.0
 
@@ -153,8 +157,3 @@ headless: false
 plots:
   enable: true
   window: 120
-  # The three targets have slow radial velocities (~ -1.83, -1.22, -0.61 m/s)
-  # clustered near zero; zoom the velocity chart so they read as distinct lines
-  # instead of overlapping on the full unambiguous span. Omit to auto-fit the
-  # full velocity axis.
-  velocity_ylim: [-2.1, 0.2]
