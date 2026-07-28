@@ -235,6 +235,15 @@ def export_stats(rep: Path, reports=DEFAULT_REPORTS) -> dict:
     Uses ``nsys stats --output <base>`` (not stdout): the file is pure JSON,
     whereas stdout is prefixed with "Generating SQLite / Processing" progress
     lines that themselves contain '[' and would defeat naive parsing.
+
+    ``--force-overwrite`` is required for a re-run over an existing run-dir to
+    be correct. Without it nsys prints "SKIPPED: output file ... exists" for
+    every report whose JSON is already on disk **and still exits 0**, so
+    ``check=True`` does not catch it: the .nsys-rep and .sqlite are
+    regenerated and clean-run latency updates, but every nsys-derived number
+    in analysis.json (kernel times, host_api categories, NVTX phases) stays
+    frozen at the first profile. ``--force-export`` only covers the SQLite
+    step, not these outputs.
     """
     base = rep.with_suffix("")  # <dir>/prof_size_md
     cmd = ["nsys", "stats"]
@@ -246,6 +255,8 @@ def export_stats(rep: Path, reports=DEFAULT_REPORTS) -> dict:
         "--output",
         str(base),
         "--force-export",
+        "true",
+        "--force-overwrite",
         "true",
         str(rep),
     ]
