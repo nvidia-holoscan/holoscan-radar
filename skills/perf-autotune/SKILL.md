@@ -145,11 +145,13 @@ see `perf-optimize` prerequisites and the `perf-analyze` container guidance).
 
 3. **Finish.** Remove all temporary instrumentation (see below), do a final
    `perf-analyze`, and render the cumulative report:
+
    ```bash
    python3 performance/agent/optimize_report.py \
      --baseline <baseline analysis.json> --final <final analysis.json> \
      --session session.json --out-dir <run-dir>
    ```
+
    Present the batch of kept changes + `optimization_report.{md,html}`
    (before→after per size, per-change gates, the before/after chart) for
    approval. **Do not land.**

@@ -29,13 +29,12 @@ loop unattended here.
    why `--frames` matters). A change that passes 1+2 but isn't measurably
    faster is not worth landing.
 
-> **Near the noise floor, pair the timing with a structural measurement.** A
-> deterministic count from the profile — a memcpy row that goes 15 calls → 0,
-> an alloc count that drops by one per tick — proves the change did what it
-> claims, independent of the timer, and distinguishes "too small to measure"
-> from "didn't happen". Timing and mechanism agreeing is what makes a small
-> delta trustworthy:
-> `nsys stats --report cuda_gpu_mem_time_sum --format csv <rep>.nsys-rep`
+**Near the noise floor, pair the timing with a structural measurement.** A
+deterministic count from the profile — a memcpy row that goes 15 calls → 0, an
+alloc count that drops by one per tick — proves the change did what it claims,
+independent of the timer, and distinguishes "too small to measure" from "didn't
+happen". Timing and mechanism agreeing is what makes a small delta trustworthy:
+`nsys stats --report cuda_gpu_mem_time_sum --format csv <rep>.nsys-rep`
 
 > A change that *intends* to alter numerics (e.g. reordering a floating-point
 > reduction) will fail gate 2 by design. That requires **explicit opt-in** from
@@ -112,6 +111,7 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
 
 1. **Baseline.** Capture the numbers the gates compare against, and **save the
    baseline analysis** (the after-run overwrites it):
+
    ```bash
    cmake --build $BUILD --target perf_<OP> -j4                   # background this
    performance/agent/run.sh <OP>                 # perf-analyze speed baseline (full 5-tier
@@ -129,10 +129,12 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
 
    **Snapshot the baseline *binary* now** — step 4 rebuilds over it, and gate 3
    needs both sides present at once to interleave them:
+
    ```bash
    mkdir -p .gate/before/performance/cpp
    cp $BUILD/performance/cpp/perf_<OP> .gate/before/performance/cpp/
    ```
+
    (Any directory mirroring `<dir>/performance/cpp/perf_<OP>` works —
    `compare_builds.py` takes build *dirs*, not binary paths.) Note the real
    `median_ms` is the first non-null `results[]` entry (a single-size clean/
@@ -141,10 +143,12 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
 2. **Checkpoint (isolation).** For a supervised single fix, work in place and
    revert with git — it keeps incremental rebuilds fast (touching one `.cu`
    recompiles that TU only):
+
    ```bash
    git stash list; git status         # ensure a clean tree first
    # ... you will `git checkout -- <files>` to revert if a gate fails ...
    ```
+
    (The autonomous `perf-autotune` tier uses a `git worktree` per candidate for
    parallel/unattended isolation; for one supervised change, in-place is faster.)
 
@@ -154,6 +158,7 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
    Match surrounding style; stay within `operators/**` and don't touch the
    contract. **Then compute the affected-operator set** — every operator that uses
    a file you changed, because they all get gated:
+
    ```bash
    git diff --name-only                                  # what you touched
    # ops whose dir you edited directly, PLUS any op that #includes a changed
@@ -163,6 +168,7 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
        grep -rl "$h" operators/ --include=*.cu --include=*.hpp --include=*.cuh; done \
        | sed -n 's#^\(operators/[^/]*/[^/]*_op\)/.*#\1#p'; } | sort -u
    ```
+
    If this lists more than the operator-under-test (touching `range_stage.hpp`
    lists **both** range and range-doppler), every extra operator is a **mandatory**
    gate in steps 5–6 — and you must have a byte baseline (step 1) for each. If any
@@ -171,6 +177,7 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
 
 4. **Rebuild** the perf binary + unit test for **every affected operator** (not
    just the one you're tuning):
+
    ```bash
    cmake --build $BUILD --target perf_<OP> <OP-test-target> \
        perf_<affected> <affected-test-target> … -j4
@@ -191,6 +198,7 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
    warm-up rounds, gates on GPU temperature, and scores each scenario against
    its own noise band — all of which a sequential "measure baseline, then
    measure candidate" loop gets wrong:
+
    ```bash
    python3 performance/agent/compare_builds.py \
      --before-build .gate/before --after-build $BUILD \
@@ -198,6 +206,7 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
      --frames 200 --rounds 15 --warmup-rounds 3 --checksum --no-cache \
      --out-dir performance/agent/runs/<OP>/compare_<n>
    ```
+
    Keep only if `sig` counts real wins (a scenario whose Δ cleared its own
    `±noise` band). `--checksum` makes this cover gate 2 as well — read
    `checksum_match` from the emitted `compare.json`; do **not** parse the
@@ -225,6 +234,7 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
 8. **Report + present.** If all three gates pass, remove any temporary
    instrumentation (see below), write a `session.json` recording the change, and
    render the optimization report:
+
    ```bash
    # session.json: {"operator","mode":"optimize","changes":[{finding,summary,
    #   files,diffstat,gates:{correctness,byte_equivalent,speed_delta_pct},kept}],
@@ -234,6 +244,7 @@ Let `OP` be the operator stem (`fmcw_range_processor`) and `BUILD=build-opt`.
      --final    performance/agent/runs/<OP>/analysis.json \
      --session  session.json --out-dir performance/agent/runs/<OP>
    ```
+
    Present to the human: the diff (tie it to the finding), the gate results
    (tests green + identical checksum **for every affected operator**, before→after
    median), the affected-operator set if the change touched shared code, and

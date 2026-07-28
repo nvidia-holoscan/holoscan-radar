@@ -57,12 +57,15 @@ interactive shell **and** the agent's headless `docker run` target that same
 `holoscan-radar:<branch>` tag. So the Dockerfile **is** the skills' dependency
 sandbox — add a dep there, rebuild, and every entry point has it, reproducibly and
 without the staleness of a `docker commit`:
+
 - **`matplotlib`** (for `report.html` charts) is baked in unconditionally.
 - **Nsight Compute (`ncu`)** is an opt-in layer behind the `INSTALL_NCU` build-arg
   (OFF by default, ~700 MB). Bake it into the sandbox once:
+
   ```bash
   ./holohub run-container --build-args '--build-arg INSTALL_NCU=1'
   ```
+
   That rebuilds `holoscan-radar:<branch>` with `ncu` present; a plain rebuild
   leaves it out.
 
@@ -212,6 +215,7 @@ instead. Still read-only — this tier analyzes and recommends.
 **Run it by default** on the *one* dominant steady kernel a size's attribution
 points at (default size `md`). There are exactly three reasons to skip it, and
 you must say which one applies:
+
 1. **User opt-out** — the user asked to skip it (e.g. "no ncu", "skip Nsight
    Compute", "nsys-only", "don't run ncu"). Their request is sticky for the
    session; honor it without re-asking.
@@ -341,4 +345,3 @@ you found it. Verify with `grep -rn "PERF-SCRATCH" operators/ performance/`
   `radar_common/sdk/nvtx.hpp`) and a `--sweep-overrides` matrix in their
   `perf_<op>.cpp` before this skill gives full per-phase + per-param detail;
   without them it still reports kernel/alloc/memcpy attribution and latency.
-```

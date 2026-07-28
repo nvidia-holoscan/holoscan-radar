@@ -188,9 +188,9 @@ python3 performance/agent/compare_builds.py \
 
 Every run writes two reports next to the analysis:
 
-- **`report.md`** — text findings + tables, meant to paste into an operator's
+* **`report.md`** — text findings + tables, meant to paste into an operator's
   `OPEN_ITEMS.md`.
-- **`report.html`** — a self-contained page: the same findings + tables with the
+* **`report.html`** — a self-contained page: the same findings + tables with the
   chart dashboard (kernel-vs-shell, latency, host-API composition, `compute()`
   NVTX phases, `[live]` override sweep, findings) embedded as a base64 PNG. Open
   it in any browser — no external files.
@@ -217,17 +217,17 @@ mounted repo tree, so they persist on the host.
 
 ## How attribution works (and its limits)
 
-- **Latency** always comes from the **clean** run; **attribution** always from
+* **Latency** always comes from the **clean** run; **attribution** always from
   the **profiled** run. nsys perturbs timing, so the two are never mixed.
-- A `compute()` NVTX phase range bounds the kernel **enqueue**, not the async GPU
+* A `compute()` NVTX phase range bounds the kernel **enqueue**, not the async GPU
   execution. `parse.py` therefore joins the phases with the CUDA GPU timeline via
   `nvtx_gpu_proj_sum` (per-phase GPU-*projected* time), never treating NVTX
   wall-time as GPU time.
-- Attribution is **per-size steady** (the steady path is identical across
+* Attribution is **per-size steady** (the steady path is identical across
   override params); per-param reconfiguration cost rides the clean
   `--sweep-overrides` `override_delta_ms`.
-- nsys stat counts include the binary's **discarded process-warmup** session.
-- Kernel time is GPU-side; CUDA-API time (`cudaMalloc`/`cudaFree`/sync) is
+* nsys stat counts include the binary's **discarded process-warmup** session.
+* Kernel time is GPU-side; CUDA-API time (`cudaMalloc`/`cudaFree`/sync) is
   host-side wall. They **overlap**, they do not sum.
 
 ## nsys report tables consumed
@@ -251,4 +251,3 @@ per-param detail a new operator needs, in its own PR:
 
 Without those, the harness still reports kernel/alloc/memcpy attribution and
 latency — only the per-phase and per-param columns are empty.
-```
