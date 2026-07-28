@@ -309,6 +309,7 @@ def run(
     min_repeats: int = 3,
     max_repeats: int = 20,
     reports=DEFAULT_REPORTS,
+    sweep_variants: bool = True,
 ) -> Path:
     """Drive clean + profiled runs for one operator. Returns the manifest path.
 
@@ -351,12 +352,21 @@ def run(
     # (method/window/variant/...) so the report can break latency out per variant.
     # nsys attribution stays single-variant per size (kernel/shell split is
     # similar across variants; per-variant profiling would multiply nsys cost).
-    variant_mode = _probe_variant_support(binary, sizes[0], op_out, warmup, frames)
-    _log(
-        "variant sweep supported: clean runs cover the primary axis x sizes"
-        if variant_mode
-        else "no --sweep-variants: single default-variant clean run per size"
+    # ``sweep_variants=False`` (--no-sweep-variants) pins the clean runs to the
+    # binary's default variant even when the sweep is supported — for tuning one
+    # variant at a time, where the other variants' numbers are noise in the
+    # report and 4x the clean-run wall time per re-analysis.
+    variant_mode = sweep_variants and _probe_variant_support(
+        binary, sizes[0], op_out, warmup, frames
     )
+    if not sweep_variants:
+        _log("--no-sweep-variants: clean runs pinned to the default variant")
+    else:
+        _log(
+            "variant sweep supported: clean runs cover the primary axis x sizes"
+            if variant_mode
+            else "no --sweep-variants: single default-variant clean run per size"
+        )
 
     per_size = []
     for size in sizes:
@@ -514,6 +524,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument(
         "--max-repeats", type=int, default=20, help="adaptive ceiling (default 20)"
     )
+    p.add_argument(
+        "--no-sweep-variants",
+        action="store_true",
+        help="pin clean runs to the binary's default variant instead of sweeping "
+        "the primary categorical axis (use when tuning one variant at a time)",
+    )
     return p.parse_args(argv)
 
 
@@ -535,6 +551,7 @@ def main(argv=None) -> int:
         repeat_budget_s=args.repeat_budget_s,
         min_repeats=args.min_repeats,
         max_repeats=args.max_repeats,
+        sweep_variants=not args.no_sweep_variants,
     )
     print(manifest)
     return 0
