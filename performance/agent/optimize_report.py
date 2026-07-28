@@ -111,9 +111,7 @@ def _variant_median(analysis: dict, size: str, variant: str):
 
 
 def _has_variants(*analyses) -> bool:
-    return any(
-        len(s.get("variants", [])) > 1 for a in analyses for s in a.get("sizes", [])
-    )
+    return any(len(s.get("variants", [])) > 1 for a in analyses for s in a.get("sizes", []))
 
 
 def _variant_rows(baseline: dict, final: dict) -> list:
@@ -167,8 +165,7 @@ def render_md(session: dict, baseline: dict, final: dict) -> str:
         f"{plat.get('holoscan_version', '?')}"
     )
     lines.append(
-        f"- **Commit:** `{prov.get('git_commit', '?')}` — "
-        f"{prov.get('timestamp_utc', '?')}"
+        f"- **Commit:** `{prov.get('git_commit', '?')}` — " f"{prov.get('timestamp_utc', '?')}"
     )
     lines.append(f"- **Changes kept:** {len(kept)}")
     lines.append("")
@@ -199,9 +196,7 @@ def render_md(session: dict, baseline: dict, final: dict) -> str:
         lines.append("")
         lines.append(f"- **Bottleneck:** {c.get('finding', '?')}")
         if c.get("files"):
-            lines.append(
-                f"- **Files:** {', '.join(c['files'])}" f" ({c.get('diffstat', '')})"
-            )
+            lines.append(f"- **Files:** {', '.join(c['files'])}" f" ({c.get('diffstat', '')})")
         g = c.get("gates", {})
         se = g.get("speed_delta_pct", {})
         se_txt = ", ".join(f"{k} {v:+.1f}%" for k, v in se.items())
@@ -232,8 +227,7 @@ def render_html(session: dict, baseline: dict, final: dict) -> str:
         f"<title>Optimization report — {esc(op)}</title>",
         f"<style>{_HTML_STYLE}</style></head><body><div class='wrap'>",
         "<div class='surface'>",
-        f"<h1>Optimization report — {esc(op)} <span class='muted'>({esc(mode)})"
-        "</span></h1>",
+        f"<h1>Optimization report — {esc(op)} <span class='muted'>({esc(mode)})" "</span></h1>",
         f"<div class='meta'>{esc(plat.get('gpu_name', '?'))} · CUDA "
         f"{esc(plat.get('cuda_runtime', '?'))} · Holoscan "
         f"{esc(plat.get('holoscan_version', '?'))} · commit "
@@ -245,8 +239,7 @@ def render_html(session: dict, baseline: dict, final: dict) -> str:
     # Runtime improvement table + chart
     p.append("<div class='surface'><h2>Runtime improvement (steady median)</h2>")
     p.append(
-        "<table><tr><th>size</th><th>before (ms)</th><th>after (ms)</th>"
-        "<th>delta</th></tr>"
+        "<table><tr><th>size</th><th>before (ms)</th><th>after (ms)</th>" "<th>delta</th></tr>"
     )
     for size, b, a, d in _overall_rows(baseline, final):
         cls = "win" if (d is not None and d < 0) else ""
@@ -259,8 +252,7 @@ def render_html(session: dict, baseline: dict, final: dict) -> str:
     png = _chart_png(baseline, final)
     if png:
         p.append(
-            f"<p><img class='chart' alt='before/after' "
-            f"src='data:image/png;base64,{png}'></p>"
+            f"<p><img class='chart' alt='before/after' " f"src='data:image/png;base64,{png}'></p>"
         )
     if _has_variants(baseline, final):
         p.append("<h3>By variant (primary axis × size)</h3>")

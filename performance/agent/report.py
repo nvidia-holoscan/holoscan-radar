@@ -209,10 +209,7 @@ def render(analysis: dict, diagnosis: dict) -> str:
             a("| api | ms | calls | category |")
             a("|---|---|---|---|")
             for t in top:
-                a(
-                    f"| {t['name']} | {_ms(t['ms'])} | {t['calls']} | "
-                    f"{t['category']} |"
-                )
+                a(f"| {t['name']} | {_ms(t['ms'])} | {t['calls']} | " f"{t['category']} |")
             a("")
         mem = s["gpu"].get("memcpy", {})
         a(
@@ -226,10 +223,7 @@ def render(analysis: dict, diagnosis: dict) -> str:
     if sweep:
         a("## [live] override sweep (per-param reconfiguration cost)")
         a("")
-        a(
-            "| size | param | steady median (ms) | override peak (ms) | "
-            "**delta (ms)** |"
-        )
+        a("| size | param | steady median (ms) | override peak (ms) | " "**delta (ms)** |")
         a("|---|---|---|---|---|")
         for o in sweep:
             a(
@@ -445,9 +439,7 @@ def render_html(analysis: dict, diagnosis: dict, run_dir) -> str:
     parts.append("<div class='surface'><h2>Dashboard</h2>")
     png = _dashboard_png(run_dir)
     if png:
-        parts.append(
-            f"<img class='dash' alt='dashboard' " f"src='data:image/png;base64,{png}'>"
-        )
+        parts.append(f"<img class='dash' alt='dashboard' " f"src='data:image/png;base64,{png}'>")
     else:
         parts.append(
             "<div class='muted'>charts omitted — install matplotlib "

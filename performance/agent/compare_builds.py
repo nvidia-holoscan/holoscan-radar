@@ -170,17 +170,14 @@ def _warn_concurrent(out_dir: Path) -> None:
         # one, so the two will also overwrite each other's report.
         shares_out = "--out-dir" not in cmd or str(out_dir) in cmd
         lines = [
-            f"WARNING: another compare_builds.py is already running "
-            f"(pid {pid}):",
+            f"WARNING: another compare_builds.py is already running " f"(pid {pid}):",
             f"           {cmd[:160]}",
             "         Both runs share this GPU. Contended timings are not",
             "         comparable, and on this box the noise floor is already",
             "         5-18%, so the contention can swamp the effect.",
         ]
         if shares_out:
-            lines.append(
-                f"         They also both write {out_dir} — last writer wins."
-            )
+            lines.append(f"         They also both write {out_dir} — last writer wins.")
         lines.append("         Proceeding anyway (warn-only).")
         print("\n".join(lines), file=sys.stderr, flush=True)
 
@@ -220,9 +217,10 @@ def _gpu_temp_c() -> float | None:
                 continue
     if shutil.which("nvidia-smi"):
         p = subprocess.run(
-            ["nvidia-smi", "--query-gpu=temperature.gpu",
-             "--format=csv,noheader"],
-            capture_output=True, text=True, check=False,
+            ["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            check=False,
         )
         try:
             return float(p.stdout.strip().splitlines()[0])
@@ -248,8 +246,10 @@ def _await_cool(max_temp: float, timeout_s: float, note) -> float:
             break
         waited = time.monotonic() - t0
         if waited >= timeout_s:
-            note(f"[thermal] still {t:.0f}C after {_fmt_dur(waited)} "
-                 f"(limit {max_temp:.0f}C) — proceeding anyway")
+            note(
+                f"[thermal] still {t:.0f}C after {_fmt_dur(waited)} "
+                f"(limit {max_temp:.0f}C) — proceeding anyway"
+            )
             break
         if not warned:
             note(f"[thermal] {t:.0f}C > {max_temp:.0f}C, waiting to cool ...")
@@ -297,8 +297,8 @@ class _Progress:
         # estimates: the probe measures per-frame cost cold, so it tends to
         # run high, and a single global factor corrects most of that.
         self._calib: list[tuple[float, float]] = []
-        self.temps: list[float] = []   # GPU temp sampled per launch
-        self.cool_s = 0.0              # total seconds spent waiting to cool
+        self.temps: list[float] = []  # GPU temp sampled per launch
+        self.cool_s = 0.0  # total seconds spent waiting to cool
         self.t0 = time.monotonic()
         self.op_times: list[float] = []  # current operator's launch durations
         self.all_times: list[float] = []
@@ -323,9 +323,7 @@ class _Progress:
         # skewed workload is under-estimated until it is reached.
         left_after = sum(
             n * self._rate(i, k, global_mean)
-            for i, (_o, n, _e) in enumerate(
-                self.plan[self.op_index :], start=self.op_index + 1
-            )
+            for i, (_o, n, _e) in enumerate(self.plan[self.op_index :], start=self.op_index + 1)
         )
         return left_here * here_rate + left_after
 
@@ -445,8 +443,7 @@ def _validate_pin(cpus: str) -> list[str]:
     if not cpus:
         return []
     if not shutil.which("taskset"):
-        print("warning: --pin-cpus given but taskset not found; not pinning",
-              file=sys.stderr)
+        print("warning: --pin-cpus given but taskset not found; not pinning", file=sys.stderr)
         return []
     # Refuse to pin outside the cgroup's cpuset, where taskset would just fail
     # per launch and every measurement would die.
@@ -455,6 +452,7 @@ def _validate_pin(cpus: str) -> list[str]:
     except OSError:
         allowed = ""
     if allowed:
+
         def expand(spec):
             out = set()
             for part in spec.split(","):
@@ -464,10 +462,14 @@ def _validate_pin(cpus: str) -> list[str]:
                 elif part:
                     out.add(int(part))
             return out
+
         try:
             if not expand(cpus) <= expand(allowed):
-                print(f"warning: --pin-cpus {cpus} is outside the cgroup "
-                      f"cpuset {allowed}; not pinning", file=sys.stderr)
+                print(
+                    f"warning: --pin-cpus {cpus} is outside the cgroup "
+                    f"cpuset {allowed}; not pinning",
+                    file=sys.stderr,
+                )
                 return []
         except ValueError:
             pass
@@ -478,23 +480,17 @@ def _run_one(binary: Path, args: list[str], checksum: bool) -> tuple[dict, list]
     """Run one perf binary; return (parsed JSON report, checksum list)."""
     with tempfile.TemporaryDirectory() as td:
         out = Path(td) / "report.json"
-        cmd = [*_PIN_PREFIX, str(binary), "--quiet",
-               "--output", str(out), *args]
+        cmd = [*_PIN_PREFIX, str(binary), "--quiet", "--output", str(out), *args]
         if checksum:
             cmd.append("--checksum")
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, check=False
-        )
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if proc.returncode != 0 or not out.exists():
             raise RuntimeError(
                 f"{binary.name} failed (exit {proc.returncode}):\n"
                 f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
             )
         report = json.loads(out.read_text())
-    sums = [
-        (int(m.group(1)), m.group(2).lower())
-        for m in _CHECKSUM_RE.finditer(proc.stdout)
-    ]
+    sums = [(int(m.group(1)), m.group(2).lower()) for m in _CHECKSUM_RE.finditer(proc.stdout)]
     return report, sums
 
 
@@ -542,9 +538,7 @@ def _measure(
     return medians, last_rows, sums
 
 
-def _predict_launch_seconds(
-    report: dict, warmup: int, frames: int, repeats: int
-) -> float:
+def _predict_launch_seconds(report: dict, warmup: int, frames: int, repeats: int) -> float:
     """Predict the *measured* part of a launch from a cheap probe's report.
 
     Extrapolating the probe's wall time would be wrong: a launch costs
@@ -572,8 +566,7 @@ def _predict_launch_seconds(
             per_frame[sid] = r["median_ms"]
     n = warmup + frames * max(1, repeats)
     total_ms = sum(
-        setup.get(sid, 0.0) + n * per_frame.get(sid, 0.0)
-        for sid in set(setup) | set(per_frame)
+        setup.get(sid, 0.0) + n * per_frame.get(sid, 0.0) for sid in set(setup) | set(per_frame)
     )
     return total_ms / 1000.0
 
@@ -624,9 +617,7 @@ def _probe_operators(
         # scaling it with frame count.
         accounted = _predict_launch_seconds(report, 1, 2, 1)
         overhead = max(0.0, wall - accounted)
-        est[op] = overhead + _predict_launch_seconds(
-            report, warmup, frames, repeats
-        )
+        est[op] = overhead + _predict_launch_seconds(report, warmup, frames, repeats)
     return est, time.monotonic() - t0
 
 
@@ -655,8 +646,15 @@ def compare_operator(
     """
     if cached_before is not None:
         return _compare_with_cached_before(
-            op, after_bin, after_args, rounds, checksum, progress,
-            cached_before, thermal, warmup_rounds
+            op,
+            after_bin,
+            after_args,
+            rounds,
+            checksum,
+            progress,
+            cached_before,
+            thermal,
+            warmup_rounds,
         )
 
     before_med: dict[str, list[float]] = {}
@@ -684,10 +682,8 @@ def compare_operator(
     #    median across launches is the robust summary; the per-side spread is
     #    reported next to it so a delta inside the noise band reads as such.
     for r in range(rounds + warmup_rounds):
-        bm, br, bs = _measure(
-            before_bin, before_args, 1, checksum, progress, thermal)
-        am, ar, as_ = _measure(
-            after_bin, after_args, 1, checksum, progress, thermal)
+        bm, br, bs = _measure(before_bin, before_args, 1, checksum, progress, thermal)
+        am, ar, as_ = _measure(after_bin, after_args, 1, checksum, progress, thermal)
         if r < warmup_rounds:
             continue  # discarded warm-up pair(s)
         for sid, v in bm.items():
@@ -773,9 +769,7 @@ def _summarize(
             entry["speedup"] = b / a
             # Noise band: the larger per-side launch-to-launch spread. A delta
             # inside it is not evidence of a change in either direction.
-            noise = max(
-                _spread_pct(before_med[sid]), _spread_pct(after_med[sid])
-            )
+            noise = max(_spread_pct(before_med[sid]), _spread_pct(after_med[sid]))
             entry["noise_pct"] = noise
             entry["significant"] = abs(entry["delta_pct"]) > noise
             # Raw per-launch medians, so a question about the noise (outlier vs
@@ -888,8 +882,7 @@ def _compare_with_cached_before(
     after_rows: dict[str, dict] = {}
     after_sums: list = []
     for r in range(rounds + warmup_rounds):
-        am, ar, as_ = _measure(
-            after_bin, args, 1, checksum, progress, thermal)
+        am, ar, as_ = _measure(after_bin, args, 1, checksum, progress, thermal)
         if r < warmup_rounds:
             continue  # discarded, same as the interleaved path
         for sid, v in am.items():
@@ -918,10 +911,8 @@ def render_markdown(result: dict) -> str:
     lines = [
         "# Before/after runtime comparison",
         "",
-        f"* **before** — `{result['before_build']}` @ "
-        f"`{result['before_commit']}`",
-        f"* **after** — `{result['after_build']}` @ "
-        f"`{result['after_commit']}`",
+        f"* **before** — `{result['before_build']}` @ " f"`{result['before_commit']}`",
+        f"* **after** — `{result['after_build']}` @ " f"`{result['after_commit']}`",
         *(
             [
                 "* **side-specific flags** — before: "
@@ -1002,11 +993,7 @@ def _rollup(scenarios: list[dict]) -> dict:
         "after_ms": a,
         "delta_pct": (a - b) / b * 100.0 if b else None,
         "geomean": _geomean([s["before_ms"] / s["after_ms"] for s in ok]),
-        "geomean_sig": (
-            _geomean([s["before_ms"] / s["after_ms"] for s in sig])
-            if sig
-            else None
-        ),
+        "geomean_sig": (_geomean([s["before_ms"] / s["after_ms"] for s in sig]) if sig else None),
         "n_sig": len(sig),
         "n": len(ok),
     }
@@ -1022,10 +1009,10 @@ def _tiered_table(operators: list[dict]) -> list[str]:
         "children and carry a geomean; `sig` counts scenarios whose delta "
         "cleared their own noise band, and only those are evidence.",
         "",
-        "| operator | scenario | size | before ms | after ms | Δ % | "
-        "±noise % | speedup | sig |",
+        "| operator | scenario | size | before ms | after ms | Δ % | " "±noise % | speedup | sig |",
         "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | :--: |",
     ]
+
     # Most-improved first so real wins surface; ties fall back to name.
     def order(op):
         r = _rollup(op["scenarios"])
@@ -1035,20 +1022,14 @@ def _tiered_table(operators: list[dict]) -> list[str]:
         ok = [s for s in op["scenarios"] if s.get("status") == "ok"]
         top = _rollup(op["scenarios"])
         if not top:
-            out.append(
-                f"| **{op['operator']}** | — | — | — | — | — | — | — | — |"
-            )
+            out.append(f"| **{op['operator']}** | — | — | — | — | — | — | — | — |")
             continue
         flag = ""
         if op.get("checksum_match") is False:
             flag = " ⚠"
         if op.get("before_cached"):
             flag += " ᶜ"
-        gsig = (
-            f"**{top['geomean_sig']:.2f}x**"
-            if top["geomean_sig"]
-            else f"{top['geomean']:.2f}x"
-        )
+        gsig = f"**{top['geomean_sig']:.2f}x**" if top["geomean_sig"] else f"{top['geomean']:.2f}x"
         out.append(
             f"| **{op['operator']}**{flag} | **(all)** | **(all)** | "
             f"{_fmt(top['before_ms'])} | {_fmt(top['after_ms'])} | "
@@ -1084,16 +1065,12 @@ def _tiered_table(operators: list[dict]) -> list[str]:
         for s in op["scenarios"]:
             if s.get("status") != "ok":
                 out.append(
-                    f"| | `{s['scenario_id']}` | — | — | — | — | — | — | "
-                    f"{s['status']} |"
+                    f"| | `{s['scenario_id']}` | — | — | — | — | — | — | " f"{s['status']} |"
                 )
     out.append("")
-    out.append(
-        "⚠ outputs differ between builds · ᶜ baseline came from cache"
-    )
+    out.append("⚠ outputs differ between builds · ᶜ baseline came from cache")
     out.append("")
     return out
-
 
 
 def _git_describe(path: Path) -> str:
@@ -1161,7 +1138,7 @@ def main(argv=None) -> int:
         "--before-args",
         default="",
         help="extra perf-binary flags for the BEFORE side only (e.g. "
-        "\"--allocator stream_ordered\"). Lets one build be A/B'd against "
+        '"--allocator stream_ordered"). Lets one build be A/B\'d against '
         "itself under two configurations by pointing both --before-build and "
         "--after-build at the same tree",
     )
@@ -1284,19 +1261,16 @@ def main(argv=None) -> int:
         unknown = sorted(skip - set(ops))
         if unknown:
             print(
-                f"warning: --skip-operators names nothing in this run: "
-                f"{', '.join(unknown)}",
+                f"warning: --skip-operators names nothing in this run: " f"{', '.join(unknown)}",
                 file=sys.stderr,
             )
         dropped = [o for o in ops if o in skip]
         ops = [o for o in ops if o not in skip]
         if not ops:
-            print("error: --skip-operators excluded every operator",
-                  file=sys.stderr)
+            print("error: --skip-operators excluded every operator", file=sys.stderr)
             return 1
         if dropped:
-            print(f"skipping {len(dropped)} operator(s): "
-                  f"{', '.join(dropped)}")
+            print(f"skipping {len(dropped)} operator(s): " f"{', '.join(dropped)}")
 
     args = ["--warmup", str(a.warmup), "--frames", str(a.frames)]
     if a.repeats > 1:
@@ -1344,9 +1318,9 @@ def main(argv=None) -> int:
     # free relative to the run it is protecting.
     canaries: list[str] = []
     if cached and a.canary_ops > 0:
-        canaries = sorted(
-            cached, key=lambda o: cached[o].get("launch_seconds", 0.0)
-        )[: a.canary_ops]
+        canaries = sorted(cached, key=lambda o: cached[o].get("launch_seconds", 0.0))[
+            : a.canary_ops
+        ]
 
     # Canaries run first so the verdict is known before the cached operators.
     ordered = canaries + [o for o in ops if o not in canaries]
@@ -1358,9 +1332,7 @@ def main(argv=None) -> int:
     # A cached entry already knows what its operator costs; probe only what is
     # left. With a fully warm cache the probe pass is skipped entirely.
     est: dict[str, float] = {
-        op: e["launch_seconds"]
-        for op, e in cached.items()
-        if e.get("launch_seconds")
+        op: e["launch_seconds"] for op, e in cached.items() if e.get("launch_seconds")
     }
     probe_secs = 0.0
     unknown = [o for o in ordered if o not in est]
@@ -1469,8 +1441,7 @@ def main(argv=None) -> int:
                     "rounds": a.rounds,
                     "before_build": str(before_build),
                     "before_commit": _git_describe(_source_dir(before_build)),
-                    "launch_seconds": (time.monotonic() - t_op)
-                    / max(1, prog.per_op),
+                    "launch_seconds": (time.monotonic() - t_op) / max(1, prog.per_op),
                     "medians": res["_before_med"],
                     "rows": res["_before_rows"],
                     "checksums": res["_before_sums"],

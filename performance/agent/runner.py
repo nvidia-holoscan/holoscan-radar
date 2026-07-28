@@ -118,15 +118,11 @@ def preflight(binary: Path, use_nsys: bool) -> str:
                     text=True,
                     check=False,
                 )
-                nsys_version = (
-                    out.stdout.strip().splitlines()[-1] if out.stdout.strip() else ""
-                )
+                nsys_version = out.stdout.strip().splitlines()[-1] if out.stdout.strip() else ""
             except OSError as exc:  # pragma: no cover - defensive
                 problems.append(f"nsys --version failed: {exc}")
     if problems:
-        raise SystemExit(
-            "[perf-runner] preflight failed:\n  - " + "\n  - ".join(problems)
-        )
+        raise SystemExit("[perf-runner] preflight failed:\n  - " + "\n  - ".join(problems))
     return nsys_version
 
 
@@ -176,9 +172,7 @@ def run_clean(
     return subprocess.run(cmd, check=check, env=env)
 
 
-def _choose_repeats(
-    elapsed_1x: float, *, target: int, budget_s: float, lo: int, hi: int
-) -> int:
+def _choose_repeats(elapsed_1x: float, *, target: int, budget_s: float, lo: int, hi: int) -> int:
     """Adaptive trial count: aim for ``target`` repeats, but keep the pooled
     per-size wall time under ``budget_s`` — a slow op runs fewer, a fast op more.
 
@@ -284,9 +278,7 @@ def export_stats(rep: Path, reports=DEFAULT_REPORTS) -> dict:
     return out
 
 
-def _probe_variant_support(
-    binary: Path, size: str, op_out: Path, warmup: int, frames: int
-) -> bool:
+def _probe_variant_support(binary: Path, size: str, op_out: Path, warmup: int, frames: int) -> bool:
     """Return True if the binary implements --sweep-variants (cheap probe)."""
     probe = op_out / ".variant_probe.json"
     try:
@@ -375,8 +367,10 @@ def run(
         and _probe_variant_support(binary, sizes[0], op_out, warmup, frames)
     )
     if variants:
-        _log(f"--variants {','.join(variants)}: clean AND profiled runs pinned "
-             "to that subset (attribution describes it, not the default)")
+        _log(
+            f"--variants {','.join(variants)}: clean AND profiled runs pinned "
+            "to that subset (attribution describes it, not the default)"
+        )
     elif not sweep_variants:
         _log("--no-sweep-variants: clean runs pinned to the default variant")
     else:
@@ -499,12 +493,8 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="comma-separated size-ladder ids (default: full 5-tier ladder; "
         "pass a subset e.g. xs,md,xl to go faster)",
     )
-    p.add_argument(
-        "--warmup", type=int, default=5, help="clean-run warmup frames (default 5)"
-    )
-    p.add_argument(
-        "--frames", type=int, default=20, help="clean-run measured frames (default 20)"
-    )
+    p.add_argument("--warmup", type=int, default=5, help="clean-run warmup frames (default 5)")
+    p.add_argument("--frames", type=int, default=20, help="clean-run measured frames (default 20)")
     p.add_argument(
         "--profiled-warmup",
         type=int,
@@ -515,12 +505,9 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--profiled-frames",
         type=int,
         default=12,
-        help="profiled-run measured frames (default 12; smaller "
-        "keeps the trace bounded)",
+        help="profiled-run measured frames (default 12; smaller " "keeps the trace bounded)",
     )
-    p.add_argument(
-        "--no-nsys", action="store_true", help="skip profiling (clean latency only)"
-    )
+    p.add_argument("--no-nsys", action="store_true", help="skip profiling (clean latency only)")
     p.add_argument(
         "--repeats",
         type=int,
@@ -540,12 +527,8 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="adaptive per-size pooled wall-time budget in seconds (default 20): "
         "a slow op runs fewer trials, a fast op more",
     )
-    p.add_argument(
-        "--min-repeats", type=int, default=3, help="adaptive floor (default 3)"
-    )
-    p.add_argument(
-        "--max-repeats", type=int, default=20, help="adaptive ceiling (default 20)"
-    )
+    p.add_argument("--min-repeats", type=int, default=3, help="adaptive floor (default 3)")
+    p.add_argument("--max-repeats", type=int, default=20, help="adaptive ceiling (default 20)")
     p.add_argument(
         "--variants",
         default="",

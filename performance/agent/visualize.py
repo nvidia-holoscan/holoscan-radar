@@ -146,9 +146,7 @@ def plot_latency(analysis: dict, ax=None):
         for i, var in enumerate(variants):
             meds, los, his = [], [], []
             for s in sizes:
-                vv = next(
-                    (v for v in s.get("variants", []) if v["variant"] == var), None
-                )
+                vv = next((v for v in s.get("variants", []) if v["variant"] == var), None)
                 lat = vv["latency_ms"] if vv else {}
                 meds.append(lat.get("median") or 0)
                 lo, hi = _whisker(lat)

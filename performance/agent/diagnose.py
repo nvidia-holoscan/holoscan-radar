@@ -42,9 +42,7 @@ OVERRIDE_HIGH_MS = 20.0  # override delta > N ms => high-severity reconfig
 _SEV_RANK = {"high": 0, "medium": 1, "low": 2, "info": 3}
 
 
-def _f(
-    finding_id, severity, title, detail, evidence, recommendation, rubric_ref, size=None
-):
+def _f(finding_id, severity, title, detail, evidence, recommendation, rubric_ref, size=None):
     return {
         "id": finding_id,
         "severity": severity,
@@ -77,8 +75,7 @@ def diagnose_size(s: dict) -> list:
                 "cold_dominated",
                 "info",
                 size=size,
-                title="Cold frame dominates (calibration / plan build / "
-                "first-touch)",
+                title="Cold frame dominates (calibration / plan build / " "first-touch)",
                 detail=f"cold {cold:.3f} ms is {cold / median:.1f}x the steady "
                 f"median {median:.3f} ms. First-tick cost is the FFT-plan "
                 f"build / window build / first-touch, not steady work.",
@@ -143,9 +140,7 @@ def diagnose_size(s: dict) -> list:
                     "free_calls_per_tick": free_pt,
                     # whole-run share, inflated by teardown — context only.
                     "free_pct_of_host_api_whole_run": round(free_pct, 1),
-                    "kernel_fraction": (
-                        round(kern_frac, 3) if kern_frac is not None else None
-                    ),
+                    "kernel_fraction": (round(kern_frac, 3) if kern_frac is not None else None),
                     "top_api": _top_api(s),
                 },
                 recommendation="Pool the dense output buffers and ping-pong a "
@@ -208,9 +203,7 @@ def diagnose_size(s: dict) -> list:
                 evidence={
                     "kernel_ms_per_tick": _ns_ms(kern_pt_ns),
                     "steady_median_ms": median,
-                    "kernel_fraction": (
-                        round(kern_frac, 3) if kern_frac is not None else None
-                    ),
+                    "kernel_fraction": (round(kern_frac, 3) if kern_frac is not None else None),
                     "domain_mismatch": domain_mismatch,
                     "top_kernels": [
                         {"name": k["name"], "ns": k["ns"]}
@@ -275,9 +268,7 @@ def diagnose_overrides(analysis: dict) -> list:
         return out
 
     # Representative steady median (smallest size) for the thrash comparison.
-    costly = [
-        o for o in sweep if (o.get("override_delta_ms") or 0) >= OVERRIDE_COSTLY_MS
-    ]
+    costly = [o for o in sweep if (o.get("override_delta_ms") or 0) >= OVERRIDE_COSTLY_MS]
     cheap = [o for o in sweep if (o.get("override_delta_ms") or 0) < OVERRIDE_COSTLY_MS]
     for o in sorted(costly, key=lambda x: -(x["override_delta_ms"] or 0)):
         sev = "high" if (o["override_delta_ms"] or 0) >= OVERRIDE_HIGH_MS else "medium"
@@ -377,8 +368,7 @@ def diagnose(analysis_path: Path, peak_gbps: float | None = None) -> Path:
                         recommendation="Low % with a host-bound tick means the "
                         "shell, not memory bandwidth, is the limit "
                         "— see the host-bound finding.",
-                        rubric_ref="Goals: judge distance to architectural "
-                        "speed-of-light",
+                        rubric_ref="Goals: judge distance to architectural " "speed-of-light",
                     )
                 )
 
@@ -399,9 +389,7 @@ def diagnose(analysis_path: Path, peak_gbps: float | None = None) -> Path:
 
 
 def parse_args(argv=None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Diagnose analysis.json against the perf rubric"
-    )
+    p = argparse.ArgumentParser(description="Diagnose analysis.json against the perf rubric")
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--analysis", type=Path, help="analysis.json path")
     g.add_argument("--run-dir", type=Path, help="directory holding analysis.json")

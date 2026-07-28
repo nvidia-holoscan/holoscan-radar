@@ -243,11 +243,8 @@ def _latency_of(comp: dict, setup: dict, n: int) -> dict:
 def _tick_count(phases: list) -> int:
     """Compute-tick count = max instances among the per-tick compute phases
     (setup/initialize run ~once, so they are excluded by the max)."""
-    per_tick = [
-        p["instances"] for p in phases if p["phase"] not in ("setup", "initialize")
-    ]
+    per_tick = [p["instances"] for p in phases if p["phase"] not in ("setup", "initialize")]
     return max(per_tick) if per_tick else 0
-
 
 
 # A tick is one compute() call. Work that does not recur once per tick -- a
@@ -301,9 +298,7 @@ def build_size_analysis(size: str, clean_json: dict, stats: dict, op_name: str) 
     # non-steady (one-time setup, teardown, or concurrent background work).
     # Only the steady half feeds the per-tick figures; the rest is reported
     # separately so it stays visible instead of being silently dropped.
-    steady_kernel_ns = sum(
-        k["ns"] for k in kern["kernels"] if _is_steady(k["instances"], ticks)
-    )
+    steady_kernel_ns = sum(k["ns"] for k in kern["kernels"] if _is_steady(k["instances"], ticks))
     non_steady_kernels = [
         {"name": k["name"], "ns": k["ns"], "instances": k["instances"]}
         for k in kern["kernels"]
@@ -318,8 +313,7 @@ def build_size_analysis(size: str, clean_json: dict, stats: dict, op_name: str) 
             bucket["calls"] += v["calls"]
         else:
             non_steady_api.append(
-                {"name": nm, "ns": v["ns"], "calls": v["calls"],
-                 "category": v["category"]}
+                {"name": nm, "ns": v["ns"], "calls": v["calls"], "category": v["category"]}
             )
     non_steady_api.sort(key=lambda a: a["ns"], reverse=True)
 
@@ -449,9 +443,7 @@ def analyze(manifest_path: Path) -> Path:
     sizes = []
     for ps in manifest.get("per_size", []):
         clean = json.loads(Path(ps["clean_json"]).read_text())
-        sizes.append(
-            build_size_analysis(ps["size"], clean, ps.get("stats_json", {}), op_name)
-        )
+        sizes.append(build_size_analysis(ps["size"], clean, ps.get("stats_json", {}), op_name))
 
     sweep = {}
     swp = manifest.get("clean_override_sweep_json")
@@ -482,16 +474,10 @@ def analyze(manifest_path: Path) -> Path:
 
 
 def parse_args(argv=None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Fold nsys tables + perf JSON into analysis.json"
-    )
+    p = argparse.ArgumentParser(description="Fold nsys tables + perf JSON into analysis.json")
     g = p.add_mutually_exclusive_group(required=True)
-    g.add_argument(
-        "--manifest", type=Path, help="runner_manifest.json produced by runner.py"
-    )
-    g.add_argument(
-        "--run-dir", type=Path, help="directory holding runner_manifest.json"
-    )
+    g.add_argument("--manifest", type=Path, help="runner_manifest.json produced by runner.py")
+    g.add_argument("--run-dir", type=Path, help="directory holding runner_manifest.json")
     return p.parse_args(argv)
 
 
