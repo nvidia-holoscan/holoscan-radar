@@ -12,6 +12,7 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -558,9 +559,35 @@ struct CfarTraits : perf::PerfDriverDefaults {
 
   // Cross the primary CFAR-variant axis with the requested sizes only, at the
   // same small-footprint / no-NCI / pfa defaults build_size_sweep uses (no
-  // footprint, batch, NCI, or calibration extras).
+  // footprint, batch, NCI, or calibration extras). `variants` (from --variants)
+  // restricts the axis to a named subset, case-insensitively; empty runs all of
+  // it.
   static std::vector<CfarScenario> build_variant_sweep(
-      const std::vector<std::string>& sizes) {
+      const std::vector<std::string>& sizes,
+      const std::vector<std::string>& variants = {}) {
+    std::vector<hr::CfarVariant> axis;
+    if (variants.empty()) {
+      axis = all_cfar_variants();
+    } else {
+      for (const auto& name : variants) {
+        std::string upper;
+        for (const char c : name) {
+          upper.push_back(
+              static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+        }
+        const auto& all = all_cfar_variants();
+        const auto it = std::find_if(all.begin(), all.end(), [&](auto v) {
+          return upper == hr::to_string(v);
+        });
+        if (it == all.end()) {
+          std::cerr << "error: unknown variant '" << name
+                    << "'; expected one of CA, GO, SO, OS\n";
+          std::exit(2);
+        }
+        axis.push_back(*it);
+      }
+    }
+
     std::vector<CfarScenario> out;
     const Footprint fp = footprint_small();
     for (const auto& sid : sizes) {
@@ -569,7 +596,7 @@ struct CfarTraits : perf::PerfDriverDefaults {
         std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
         continue;
       }
-      for (auto v : all_cfar_variants()) {
+      for (auto v : axis) {
         out.push_back(make_compute_scenario(v, *s, fp, 1));
       }
     }

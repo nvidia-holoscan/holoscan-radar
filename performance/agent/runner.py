@@ -137,6 +137,7 @@ def run_clean(
     sizes=None,
     sweep_overrides: bool = False,
     sweep_variants: bool = False,
+    variants=None,
     warmup: int,
     frames: int,
     repeats: int = 1,
@@ -164,7 +165,9 @@ def run_clean(
         cmd += ["--repeats", str(repeats)]
     if sweep_overrides:
         cmd.append("--sweep-overrides")
-    if sweep_variants:
+    if variants:
+        cmd += ["--variants", ",".join(variants)]
+    elif sweep_variants:
         cmd.append("--sweep-variants")
     if sizes:
         cmd += ["--sizes", ",".join(sizes)]
@@ -200,8 +203,15 @@ def run_profiled(
     warmup: int,
     frames: int,
     trace: str = NSYS_TRACE,
+    variants=None,
 ) -> Path:
-    """Run the perf binary under nsys for one size. Returns the .nsys-rep path."""
+    """Run the perf binary under nsys for one size. Returns the .nsys-rep path.
+
+    ``variants`` pins the profiled run to a subset of the operator's primary
+    categorical axis. Attribution is single-scenario per size, so when tuning
+    one variant this must name it -- otherwise the profile describes the
+    binary's *default* variant and every finding is about the wrong kernel.
+    """
     rep = rep_base.with_suffix(".nsys-rep")
     cmd = [
         "nsys",
@@ -223,6 +233,8 @@ def run_profiled(
         "--frames",
         str(frames),
     ]
+    if variants:
+        cmd += ["--variants", ",".join(variants)]
     _log("profiled: " + " ".join(cmd))
     env = dict(os.environ, HOLOSCAN_LOG_LEVEL="ERROR")
     subprocess.run(cmd, check=True, env=env)
@@ -310,6 +322,7 @@ def run(
     max_repeats: int = 20,
     reports=DEFAULT_REPORTS,
     sweep_variants: bool = True,
+    variants=None,
 ) -> Path:
     """Drive clean + profiled runs for one operator. Returns the manifest path.
 
@@ -356,10 +369,15 @@ def run(
     # binary's default variant even when the sweep is supported — for tuning one
     # variant at a time, where the other variants' numbers are noise in the
     # report and 4x the clean-run wall time per re-analysis.
-    variant_mode = sweep_variants and _probe_variant_support(
-        binary, sizes[0], op_out, warmup, frames
+    variant_mode = (
+        not variants
+        and sweep_variants
+        and _probe_variant_support(binary, sizes[0], op_out, warmup, frames)
     )
-    if not sweep_variants:
+    if variants:
+        _log(f"--variants {','.join(variants)}: clean AND profiled runs pinned "
+             "to that subset (attribution describes it, not the default)")
+    elif not sweep_variants:
         _log("--no-sweep-variants: clean runs pinned to the default variant")
     else:
         _log(
@@ -378,6 +396,7 @@ def run(
                 clean_json,
                 sizes=[size],
                 sweep_variants=variant_mode,
+                variants=variants,
                 warmup=warmup,
                 frames=frames,
                 repeats=reps,
@@ -389,6 +408,7 @@ def run(
                 clean_json,
                 sizes=[size],
                 sweep_variants=variant_mode,
+                variants=variants,
                 warmup=warmup,
                 frames=frames,
                 repeats=1,
@@ -411,6 +431,7 @@ def run(
                     clean_json,
                     sizes=[size],
                     sweep_variants=variant_mode,
+                    variants=variants,
                     warmup=warmup,
                     frames=frames,
                     repeats=reps,
@@ -423,6 +444,7 @@ def run(
                 size=size,
                 warmup=prof_warmup,
                 frames=prof_frames,
+                variants=variants,
             )
             art.nsys_rep = str(rep)
             art.stats_json = export_stats(rep, reports)
@@ -525,6 +547,14 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--max-repeats", type=int, default=20, help="adaptive ceiling (default 20)"
     )
     p.add_argument(
+        "--variants",
+        default="",
+        help="restrict the operator's primary categorical axis to this subset "
+        "(e.g. 'go'). Pins the profiled run too, so attribution describes the "
+        "named variant rather than the binary's default -- required when "
+        "tuning one variant at a time",
+    )
+    p.add_argument(
         "--no-sweep-variants",
         action="store_true",
         help="pin clean runs to the binary's default variant instead of sweeping "
@@ -552,6 +582,7 @@ def main(argv=None) -> int:
         min_repeats=args.min_repeats,
         max_repeats=args.max_repeats,
         sweep_variants=not args.no_sweep_variants,
+        variants=[v for v in args.variants.split(",") if v],
     )
     print(manifest)
     return 0

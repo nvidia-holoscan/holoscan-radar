@@ -94,6 +94,11 @@ struct Options {
   bool full{false};
   bool sweep_overrides{false};     // one scenario per [live] override param
   bool sweep_variants{false};      // primary categorical axis x sizes
+  // Subset of the primary categorical axis to run (empty = all of it). Implies
+  // the variant sweep, so `--variants go` alone pins the run to that one mode —
+  // which is what tuning a single variant needs, both to profile it and to A/B
+  // it without the other modes' scenarios in the way.
+  std::vector<std::string> variants;
   std::vector<std::string> sizes;  // empty = tier default
   bool sizes_all{false};
   double stop_after_s{0.0};  // 0 = disabled; per-scenario wall-clock cap
@@ -133,6 +138,22 @@ std::false_type has_variant_sweep_probe(...);
 template <typename Traits>
 using has_variant_sweep = decltype(has_variant_sweep_probe<Traits>(0));
 
+// Detection of the two-argument Traits::build_variant_sweep(sizes, variants)
+// form, which additionally filters the axis to a named subset (--variants). A
+// consumer opts in by giving its hook a defaulted second parameter, so the
+// one-argument probe above still matches and consumers that never added it are
+// unaffected.
+template <typename Traits>
+auto has_variant_filter_probe(int) -> decltype(
+    Traits::build_variant_sweep(
+        std::declval<const std::vector<std::string>&>(),
+        std::declval<const std::vector<std::string>&>()),
+    std::true_type{});
+template <typename Traits>
+std::false_type has_variant_filter_probe(...);
+template <typename Traits>
+using has_variant_filter = decltype(has_variant_filter_probe<Traits>(0));
+
 inline std::vector<std::string> split_csv(const std::string& s) {
   std::vector<std::string> out;
   std::stringstream ss(s);
@@ -168,6 +189,10 @@ void print_help() {
   if constexpr (has_variant_sweep<Traits>::value) {
     std::cout << "  --sweep-variants  Primary categorical axis "
                  "(method/window/variant/...) x sizes; --sizes selects sizes\n";
+    if constexpr (has_variant_filter<Traits>::value) {
+      std::cout << "  --variants a,b    Restrict that axis to a subset; "
+                   "implies --sweep-variants\n";
+    }
   }
   if constexpr (Traits::has_live_modes) {
     std::cout << "  --live <p>        Live-override A/B on [live] param p "
@@ -212,6 +237,8 @@ bool parse_args(int argc, char** argv, Options* opt) {
       opt->sweep_overrides = true;
     } else if (a == "--sweep-variants") {
       opt->sweep_variants = true;
+    } else if (a == "--variants") {
+      opt->variants = split_csv(next("--variants"));
     } else if (a == "--live") {
       const std::string v = next("--live");
       if constexpr (Traits::has_live_modes) {
@@ -336,12 +363,22 @@ std::vector<typename Traits::Scenario> select_scenarios(const Options& opt) {
       std::exit(2);
     }
   }
-  if (opt.sweep_variants) {
+  if (opt.sweep_variants || !opt.variants.empty()) {
     if constexpr (has_variant_sweep<Traits>::value) {
       std::vector<std::string> sizes = opt.sizes;
       if (opt.sizes_all) {
         for (const auto& def : Traits::size_ladder_defs()) {
           sizes.push_back(def.id);
+        }
+      }
+      if (!opt.variants.empty()) {
+        if constexpr (has_variant_filter<Traits>::value) {
+          return Traits::build_variant_sweep(sizes, opt.variants);
+        } else {
+          std::cerr << "error: " << Traits::tool_name()
+                    << " does not implement --variants (its variant sweep "
+                       "takes no subset filter)\n";
+          std::exit(2);
         }
       }
       return Traits::build_variant_sweep(sizes);
