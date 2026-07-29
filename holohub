@@ -11,6 +11,7 @@
 #   ./holohub run-container
 #   ./holohub build fmcw_siso
 #   ./holohub run   fmcw_siso --language python
+#   ./holohub test
 #   ./holohub --help
 #
 # Optional overrides (rarely needed):
@@ -60,6 +61,26 @@ export HOLOSCAN_CLI_DATA_DIR="${HOLOSCAN_CLI_DATA_DIR:-${SCRIPT_DIR}/data}"
 # ==============================================================================
 
 export CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
+
+# ==============================================================================
+# Test defaults
+# ==============================================================================
+
+# CTest driver for `./holohub test`. The CLI's bundled driver resolves its
+# source directory inside the pip install tree, so a bare `./holohub test`
+# never sees this repo; ci/container.ctest fixes that (see the file header).
+#
+# Keep this RELATIVE: the CLI emits it as a literal `ctest -S <path>`, and it
+# has to resolve both in-container (cwd /workspace/holoscan-radar) and under
+# `--local` (cwd = repo root). An absolute host path would not exist in the
+# container.
+#
+# Note the in-container resolution differs by CLI version: 4.5.0rc2+ emits a
+# shell default, `-S "${HOLOSCAN_CLI_CTEST_SCRIPT:-$(python3 -c ...)}"`, and
+# uses this value directly; older releases always resolved it by importing the
+# in-container package. Either way holoscan-cli forwards this variable into the
+# container, which is what makes the relative path work.
+export HOLOSCAN_CLI_CTEST_SCRIPT="${HOLOSCAN_CLI_CTEST_SCRIPT:-ci/container.ctest}"
 
 # ==============================================================================
 # holoscan-cli bootstrap + exec
