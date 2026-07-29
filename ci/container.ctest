@@ -1,0 +1,190 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# CTest driver for `./holohub test` — the module test entrypoint.
+#
+# Why this file exists: the driver bundled with holoscan-cli
+# (holoscan_cli/testing/container.ctest) derives CTEST_SOURCE_DIRECTORY from
+# its own location, which resolves inside the pip install tree
+# (.../site-packages), not this repo. A bare `./holohub test` therefore never
+# sees the module. The `holohub` wrapper points HOLOSCAN_CLI_CTEST_SCRIPT at
+# this file instead; the CLI renders it as a literal `ctest -S <path>`, and a
+# relative path resolves because the container's working directory is the
+# repo root.
+#
+# Invoke via the wrapper (recommended):
+#   ./holohub test
+#
+# Or directly:
+#   ctest -S ci/container.ctest -VV
+#
+# CTest -D variables (mirrors the stock driver so CLI flags keep working):
+#   APP / OP / PKG / EXT   Optional single-subproject selector; omit for a
+#                          repository-wide build (the primary path here)
+#   TAG                    Image tag / branch identifier (default: "latest")
+#   CTEST_SITE             CDash site name (default: "SITE_NA")
+#   PLATFORM_NAME          Platform portion of the build name (default: "linux")
+#   BUILD_NAME_PREFIX      Leading token in the CTest build name
+#   CONFIGURE_OPTIONS      Semicolon-separated list of extra cmake -D flags
+#                          (holoscan-cli passes --cmake-options through here)
+#   CTEST_SUBMIT_URL       CDash submit URL; omit to skip submission
+#   EXCLUDE_LABELS         Label regex NOT to run (default: performance)
+#   INCLUDE_LABELS         Optional label regex to narrow to one tier, e.g.
+#                          -DINCLUDE_LABELS=statistical
+#   DASHBOARD_MODEL        Nightly | Experimental | Continuous
+#   TEST_FAILURES_FILE     If defined, write the test exit code here instead of
+#                          calling FATAL_ERROR
+
+set(PROJ_PREFIX APP)
+set(PROJ_NAME "")
+
+if(OP)
+    set(PROJ_NAME ${OP})
+    set(PROJ_PREFIX OP)
+elseif(PKG)
+    set(PROJ_NAME ${PKG})
+    set(PROJ_PREFIX PKG)
+elseif(EXT)
+    set(PROJ_NAME ${EXT})
+    set(PROJ_PREFIX EXT)
+elseif(APP)
+    set(PROJ_NAME ${APP})
+else()
+    message(STATUS "No APP/OP/PKG/EXT provided; running repository-wide tests")
+endif()
+
+if(NOT TAG)
+    set(TAG latest)
+endif()
+
+# The repo root is the parent of ci/ — unlike the stock driver, which lands in
+# site-packages.
+get_filename_component(CTEST_SOURCE_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/.."
+                       ABSOLUTE)
+
+# A dedicated tree: ctest_empty_binary_directory() wipes this on every run, so
+# it must never be a developer's own build/ directory.
+set(CTEST_BINARY_DIRECTORY "${CTEST_SOURCE_DIRECTORY}/build-test")
+
+if(NOT CTEST_SITE)
+    set(CTEST_SITE "SITE_NA")
+endif()
+
+if(NOT PLATFORM_NAME)
+    set(PLATFORM_NAME linux)
+endif()
+
+if(NOT BUILD_NAME_PREFIX)
+    set(BUILD_NAME_PREFIX "holoscan-radar")
+endif()
+
+set(CTEST_BUILD_NAME "${BUILD_NAME_PREFIX}-${PLATFORM_NAME}-${PROJ_NAME}-${TAG}")
+
+set(CTEST_UPDATE_COMMAND "git")
+set(CTEST_CMAKE_GENERATOR "Ninja")
+
+ctest_empty_binary_directory(${CTEST_BINARY_DIRECTORY})
+
+# Compiler-cache store. build-test/ is wiped on every run (above), so the cache
+# must live outside it; .cache/ is gitignored and sits in the bind-mounted tree,
+# so it survives both the wipe and container restarts. Set here rather than in
+# the holohub wrapper: this is a property of how *this driver* builds, and the
+# wrapper only carries defaults the CLI itself consumes.
+#
+# NOTE: holoscan-cli has first-class sccache support — HOLOSCAN_CLI_ENABLE_SCCACHE=true
+# makes `holoscan build` set these same three launchers, and `holoscan setup`
+# installs the RAPIDS sccache. That path does not apply here (this driver calls
+# ctest_configure directly, not `holoscan build`), hence the local wiring. Worth
+# revisiting: sccache supports remote/shared caches, which is the missing piece
+# for caching across ephemeral CI pods.
+if(NOT DEFINED ENV{CCACHE_DIR})
+    set(ENV{CCACHE_DIR} "${CTEST_SOURCE_DIRECTORY}/.cache/ccache")
+endif()
+
+set(configure_options
+    ${CONFIGURE_OPTIONS}
+    -D HOLOSCAN_RADAR_BUILD_TESTING:BOOL=ON
+    -D CMAKE_BUILD_TYPE=RelWithDebInfo
+    # Installing ccache is not enough — it only takes effect as a compiler
+    # launcher. CCACHE_DIR is set above, outside the wiped build tree.
+    -D CMAKE_C_COMPILER_LAUNCHER=ccache
+    -D CMAKE_CXX_COMPILER_LAUNCHER=ccache
+    -D CMAKE_CUDA_COMPILER_LAUNCHER=ccache
+)
+
+if(PROJ_NAME)
+    list(APPEND configure_options "-D${PROJ_PREFIX}_${PROJ_NAME}=ON")
+endif()
+
+# Developer-invoked runs are experiments, not scheduled dashboard builds; the
+# stock driver's "Nightly" default carries a fixed nightly start time that does
+# not describe this.
+if(NOT DASHBOARD_MODEL)
+    set(DASHBOARD_MODEL "Experimental")
+endif()
+
+# Run everything except the performance suite, which has its own invocation
+# (it measures rather than asserts, and only exists when
+# -DHOLOSCAN_RADAR_BUILD_PERFORMANCE=ON).
+#
+# Exclude-only ON PURPOSE. An include list silently drops any label nobody
+# remembered to enumerate — that is precisely how the `integration` label went
+# unrun in CI for the entire life of the suite, taking the only cross-family
+# end-to-end test with it. Excluding by default means a new tier is visible
+# the day it is added, and the failure mode is a too-slow run rather than
+# silent loss of coverage.
+#
+# This includes the Monte Carlo `statistical` tier. Measured 2026-07-29: the
+# 8 C++ CFAR Pfa tests take ~7.9 s and `pytest_statistical` ~5 s, against a
+# ~207 s suite. Cheap enough that deferring them to a scheduled job would buy
+# nothing and cost per-PR signal.
+if(NOT EXCLUDE_LABELS)
+    set(EXCLUDE_LABELS "performance")
+endif()
+
+# INCLUDE_LABELS is an optional narrowing knob for running one tier by hand,
+# e.g. -DINCLUDE_LABELS=statistical. Unset means "everything not excluded".
+if(INCLUDE_LABELS)
+    set(_label_args INCLUDE_LABEL "${INCLUDE_LABELS}" EXCLUDE_LABEL "${EXCLUDE_LABELS}")
+else()
+    set(_label_args EXCLUDE_LABEL "${EXCLUDE_LABELS}")
+endif()
+
+ctest_start(${DASHBOARD_MODEL})
+
+# Check configure and build explicitly so a failure in either reports itself.
+# Neither silently passes today, but the configure case misreports: execution
+# continues into ctest_test, which finds an empty binary directory and fails
+# with "No tests were found!!!" — pointing at the test selection rather than at
+# the configure error further up the log. (A build failure already halts the
+# script here.)
+#
+# These stay FATAL_ERROR rather than routing through TEST_FAILURES_FILE: that
+# file exists to let a caller tell test failures from infrastructure failures,
+# and a broken configure or build is the latter.
+ctest_configure(OPTIONS "${configure_options}" RETURN_VALUE configure_result)
+if(configure_result)
+    message(FATAL_ERROR "Configure failed with return value: ${configure_result}")
+endif()
+
+ctest_build(RETURN_VALUE build_result)
+if(build_result)
+    message(FATAL_ERROR "Build failed with return value: ${build_result}")
+endif()
+
+ctest_test(
+    RETURN_VALUE test_result
+    ${_label_args}
+    OUTPUT_JUNIT "${CTEST_BINARY_DIRECTORY}/test-results.xml")
+
+if(CTEST_SUBMIT_URL)
+    ctest_submit()
+endif()
+
+if(test_result)
+    if(DEFINED TEST_FAILURES_FILE)
+        file(WRITE "${TEST_FAILURES_FILE}" "${test_result}")
+    else()
+        message(FATAL_ERROR "Tests failed with return value: ${test_result}")
+    endif()
+endif()

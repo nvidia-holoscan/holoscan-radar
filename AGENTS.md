@@ -103,10 +103,11 @@ cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
 cmake --build build -j"$(nproc)"
 
 # C++ tests
-ctest --test-dir build --output-on-failure -L unit
+ctest --test-dir build --output-on-failure -LE performance
 
 # Python tests (conftest.py wires in the build tree; set HOLOSCAN_RADAR_BUILD_DIR
-# if your build dir is not ./build). Skips cleanly (exit 5) if holoscan isn't importable.
+# if your build dir is not ./build). An unimportable holoscan is a FAILURE, not a
+# skip — build and test in the container (GPU is a hard dependency).
 pytest tests/python/ -v
 
 # Lint — CI runs exactly this on every PR; run it before pushing

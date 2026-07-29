@@ -40,12 +40,26 @@ RUN if ! python3 -m holoscan_cli --help 2>/dev/null | grep -qw build; then \
     ; fi
 
 # TODO: add module-specific runtime / build dependencies below.
+#
+# The last three serve `./holohub test` (ci/container.ctest):
+#   ninja-build — the driver's CMake generator
+#   xvfb        — holoscan-cli wraps ctest in `xvfb-run -a` unless --no-xvfb.
+#                 This satisfies that wrapper; it does NOT make Holoviz work
+#                 headlessly (that needs Vulkan), so smoke runs keep
+#                 visualization disabled.
+#   ccache      — compiler cache; the driver wires it in via
+#                 CMAKE_<LANG>_COMPILER_LAUNCHER and the holohub wrapper points
+#                 CCACHE_DIR at the gitignored .cache/, so it survives the
+#                 build-test/ wipe.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         libgtest-dev \
         clang-format \
         pybind11-dev \
         sudo \
+        ninja-build \
+        xvfb \
+        ccache \
     && rm -rf /var/lib/apt/lists/*
 
 # Python tooling: pytest-timeout for tests, build + scikit-build-core for

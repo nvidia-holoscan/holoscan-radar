@@ -1,0 +1,12 @@
+# Lint toolchain pin — single source of truth for every path that lints.
+#
+# holoscan-cli looks for this exact path (utilities/requirements.lint.txt) in
+# `holoscan lint --install-dependencies`; without it the CLI installs bare
+# `pre-commit`, i.e. whatever is latest. That is how the GitHub Actions lint
+# (which pinned inline) and the GPU pipeline's lint (which did not) ended up on
+# different versions of the same tool. .github/workflows/check_lint.yml now
+# installs from this file too, so both agree by construction.
+#
+# Only pre-commit itself is pinned here. Each hook pins its own version in
+# .pre-commit-config.yaml; keep them there, not in this file.
+pre-commit==4.5.1

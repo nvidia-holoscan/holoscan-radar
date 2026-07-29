@@ -203,13 +203,14 @@ cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING:BOOL=ON
 cmake --build build -j$(nproc)
 
 # C++ (GTest via CTest)
-ctest --test-dir build --output-on-failure -L unit
+ctest --test-dir build --output-on-failure -LE performance
 
 # Python (pytest via CTest, or directly)
 ctest --test-dir build --output-on-failure -R pytest
 HOLOSCAN_RADAR_BUILD_DIR=build pytest tests/python/ -v
 
-# Optional long-running Monte Carlo statistical tests (CFAR Pfa, DOA vs. CRLB)
+# Monte Carlo statistical tests alone (CFAR Pfa, DOA vs. CRLB); the ctest
+# invocation above already covers the C++ half
 HOLOSCAN_RADAR_BUILD_DIR=build pytest tests/python/ -v -m statistical
 ```
 

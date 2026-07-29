@@ -52,6 +52,7 @@ defaults. On first run it installs `holoscan-cli` via pip if it isn't already im
 | `./holohub run-container` | Build and start the development container |
 | `./holohub build fmcw_siso` | Configure and build the example pipeline inside the container |
 | `./holohub run fmcw_siso` | Configure, build, and run the example pipeline inside the container |
+| `./holohub test` | Configure, build, and run the test suite inside the container |
 | `./holohub install --dev` | Install a `.pth` hook so `import holoscan.radar` works in any shell |
 | `./holohub package holoscan-radar` | Build a native Debian package with Holoscan Radar operators |
 | `./holohub package holoscan-radar --pkg-generator=WHEEL` | Build a native Python 3.12 package with Holoscan Radar operators |
@@ -74,7 +75,7 @@ cmake --build build -j"$(nproc)"
 Run C++ tests:
 
 ```bash
-ctest --test-dir build --output-on-failure -L unit
+ctest --test-dir build --output-on-failure -LE performance
 ```
 
 Run Python tests:
@@ -86,6 +87,51 @@ Run Python tests:
 HOLOSCAN_RADAR_BUILD_DIR=build \
 pytest tests/python/ -v
 ```
+
+---
+
+## Running the full suite with `./holohub test`
+
+`./holohub test` configures, builds, and tests inside the development container in one
+step — the containerized equivalent of the manual sequence above.
+
+```bash
+./holohub test                    # build the image if needed, then configure/build/test
+./holohub test --no-docker-build  # reuse the existing image (faster)
+./holohub test --dryrun --verbose # print the commands without running them
+```
+
+What it does, and where to change it:
+
+- Runs [`ci/container.ctest`](ci/container.ctest), this module's CTest driver. The wrapper
+  points `HOLOSCAN_CLI_CTEST_SCRIPT` at it; the driver bundled with `holoscan-cli` resolves
+  its source directory inside the pip install tree and cannot see this repo.
+- Builds into **`build-test/`**, a dedicated tree. The driver wipes it on every run, which
+  is why it is deliberately not your `build/` directory.
+- Runs every tier except `performance`, which has its own invocation. That includes the
+  Monte Carlo `statistical` tests — they cost ~13 s against a ~207 s suite, so there is
+  nothing to gain by deferring them. Narrow to one tier with
+  `--ctest-options='-DINCLUDE_LABELS=statistical'`, or widen the exclusion with
+  `-DEXCLUDE_LABELS='performance|statistical'`.
+- The selection is **exclude-based on purpose**: an include list silently drops any label
+  nobody remembered to add, which is how the `integration` tier went unrun in CI for the
+  life of the suite. A new tier now runs the day it is added.
+- Writes JUnit results to `build-test/test-results.xml`.
+- Uses `ccache` (`CCACHE_DIR` defaults to the gitignored `.cache/ccache`), so repeat runs
+  reuse compiled objects despite the wipe. The first run is a full cold build.
+
+Useful escapes:
+
+| Flag | Effect |
+| --- | --- |
+| `--no-xvfb` | Skip the default `xvfb-run -a` wrapper |
+| `--cmake-options OPT` | Append a CMake configure flag (repeatable) |
+| `--ctest-options OPT` | Append a raw ctest argument (repeatable) |
+| `--local` | Run on the host instead of in the container |
+
+A note on `xvfb`: it satisfies the CLI's default wrapper but does **not** make Holoviz
+render headlessly — that needs Vulkan support. Application smoke runs keep visualization
+disabled.
 
 ---
 
