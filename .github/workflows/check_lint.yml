@@ -42,8 +42,12 @@ jobs:
         with:
           python-version: '3.13'
 
+      # Pinned in utilities/requirements.lint.txt rather than inline, because
+      # holoscan-cli reads that exact path in `holoscan lint
+      # --install-dependencies`. Installing from the same file here keeps this
+      # workflow and any CLI-driven lint on one version of pre-commit.
       - name: Install pre-commit
-        run: pip install pre-commit==4.5.1
+        run: pip install -r utilities/requirements.lint.txt
 
       # The check-copyright pre-commit hook uses --git-modified-only with no
       # ref, which finds zero uncommitted files in a clean CI checkout (no-op).
