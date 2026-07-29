@@ -14,13 +14,24 @@ add_test(
 # ${CMAKE_BINARY_DIR}/python/lib/holoscan onto holoscan.__path__ after the
 # SDK package is imported. Do NOT put HOLOSCAN_RADAR_PYTHON_ROOT on
 # PYTHONPATH — a partial holoscan/ tree there would shadow the SDK package.
-# SKIP_RETURN_CODE 5 is the safety net when holoscan isn't importable
-# (pytest collects zero items / importorskip, exits 5).
+#
+# No SKIP_RETURN_CODE: pytest exits 5 when it collects zero items, which is
+# what an unimportable ``holoscan`` looks like. Treating that as a skip made
+# CTest report success for a run that tested nothing — a broken Python
+# staging step went green. A CUDA-capable GPU and an importable SDK are hard
+# dependencies for this module (see the "GPU as a hard dependency" settled
+# decision), so exit 5 is a genuine failure. Build and test in the container.
+#
+# This is a DELIBERATE DEVIATION from the standard Holoscan module
+# scaffolding, which ships SKIP_RETURN_CODE 5 so the same test invocation is
+# valid on both GPU and CPU-only hosts. That is right for a template targeting
+# GPU-optional modules and wrong for this one. If that guidance appears to
+# contradict this file, this comment is the answer.
+#
 # Default pytest.ini excludes ``statistical`` (Monte Carlo); mirror C++
 # ``ctest -L statistical`` with a dedicated target.
 set_tests_properties(pytest PROPERTIES
     ENVIRONMENT "HOLOSCAN_RADAR_BUILD_DIR=${CMAKE_BINARY_DIR}"
-    SKIP_RETURN_CODE 5
     LABELS "python;unit")
 
 add_test(
@@ -30,5 +41,4 @@ add_test(
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 set_tests_properties(pytest_statistical PROPERTIES
     ENVIRONMENT "HOLOSCAN_RADAR_BUILD_DIR=${CMAKE_BINARY_DIR}"
-    SKIP_RETURN_CODE 5
     LABELS "python;statistical")
