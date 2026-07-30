@@ -7,7 +7,7 @@
 // expression entry point below, fed the single-source clutter expression
 // (clutter_stage.hpp with_clutter_expr) — which is what guarantees the
 // split-vs-fused parity property by construction, at expression
-// granularity, and it is enforced by the BitExact parity tests. The
+// granularity, and it is enforced by the UlpParity tests. The
 // signatures below are the stable stage API: extend via additive overloads.
 //
 // Includes <matx.h> (via matx_utils.hpp): include only from .cu files.

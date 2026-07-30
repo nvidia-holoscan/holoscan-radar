@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -315,25 +316,36 @@ void expect_parity(const ChainOutputs& fused, const ChainOutputs& split,
                        label + " velocity_bins");
 }
 
-// Bit-exact parity: the fused operator composes the single-source clutter
-// expression into the Doppler pre-FFT pass instead of materializing it, and
-// that fusion must not change a single bit relative to the split chain (the
-// rounding chain is identical; see the fused op's step 8+9 comment). The
-// capture/reupload path is raw copies, so operator-level bit comparison is
-// valid. memcmp per element: exact bits, including signed zeros.
+// Tight parity: the fused operator composes the single-source clutter
+// expression into the Doppler pre-FFT pass instead of materializing it. That
+// fusion must not change the result beyond the last couple of bits.
+//
+// This was a bit-exact `memcmp` until #20, on the reasoning that the
+// rounding chain is identical between the two paths. That holds only where the
+// chain is elementwise. `mean_subtraction` reduces over the chirp axis
+// (`matx::mean`, see clutter_stage.hpp), and a GPU reduction's summation order
+// depends on the launch decomposition, which the two paths need not share.
+// Floating-point addition is not associative, so the last bits may differ —
+// and did, on one CI node but not another, at ~2 ULP in one element of one
+// configuration. Bit-exactness was holding by luck, not by construction.
+//
+// The bound below is peak-normalized like expect_parity, but scaled to a few
+// ULP rather than a fixed tolerance, so it stays roughly four orders of
+// magnitude tighter than the 1e-12 double parity test while tolerating
+// reduction-order differences. The axes are still compared exactly: they are
+// computed the same way on both paths and involve no reduction.
+constexpr double kParityUlps = 8.0;
+
 template <typename T>
-void expect_parity_bitexact(const ChainOutputs& fused,
-                            const ChainOutputs& split,
-                            const std::string& label) {
+void expect_parity_ulp(const ChainOutputs& fused, const ChainOutputs& split,
+                       const std::string& label) {
   ASSERT_EQ(fused.rd.shape, split.rd.shape) << label;
-  const auto* pf = fused.rd.as<std::complex<T>>();
-  const auto* ps = split.rd.as<std::complex<T>>();
-  for (int64_t i = 0; i < fused.rd.size(); ++i) {
-    ASSERT_EQ(std::memcmp(&pf[i], &ps[i], sizeof(std::complex<T>)), 0)
-        << label << " element " << i << ": fused=(" << pf[i].real() << ","
-        << pf[i].imag() << ") split=(" << ps[i].real() << ","
-        << ps[i].imag() << ")";
-  }
+  const double reference = max_abs<T>(split.rd);
+  ASSERT_GT(reference, 0.0) << label;
+  const double delta = max_abs_diff<T>(fused.rd, split.rd) / reference;
+  const double tol = kParityUlps * std::numeric_limits<T>::epsilon();
+  EXPECT_LT(delta, tol)
+      << label << ": rel delta = " << delta << ", tolerance = " << tol;
   expect_axis_exact<T>(fused.range_bins, split.range_bins,
                        label + " range_bins");
   expect_axis_exact<T>(fused.velocity_bins, split.velocity_bins,
@@ -341,7 +353,7 @@ void expect_parity_bitexact(const ChainOutputs& fused,
 }
 
 template <typename T>
-void bitexact_all_clutter_filters() {
+void ulp_parity_all_clutter_filters() {
   const auto waveform = to_descriptor(SimWaveform{});
   const auto factory = complex_factory<T>(parity_sim());
   const ClutterFilterMethod methods[] = {
@@ -356,7 +368,7 @@ void bitexact_all_clutter_filters() {
       }
       const auto fused = run_fused<T>(factory, cfg, waveform);
       const auto split = run_split<T>(factory, cfg, waveform);
-      expect_parity_bitexact<T>(
+      expect_parity_ulp<T>(
           fused, split,
           std::string("clutter=") + std::string(to_string(method)) +
               ",dopwin=" + (windowed ? "hamming" : "none"));
@@ -386,17 +398,17 @@ TEST(FMCWRangeDopplerProcessorOpTest, ParityAllClutterFiltersFloat) {
   parity_all_clutter_filters<float>(1e-5);
 }
 
-TEST(FMCWRangeDopplerProcessorOpTest, BitExactParityAllClutterFiltersFloat) {
-  bitexact_all_clutter_filters<float>();
+TEST(FMCWRangeDopplerProcessorOpTest, UlpParityAllClutterFiltersFloat) {
+  ulp_parity_all_clutter_filters<float>();
 }
 
-TEST(FMCWRangeDopplerProcessorOpTest, BitExactParityAllClutterFiltersDouble) {
-  bitexact_all_clutter_filters<double>();
+TEST(FMCWRangeDopplerProcessorOpTest, UlpParityAllClutterFiltersDouble) {
+  ulp_parity_all_clutter_filters<double>();
 }
 
 // The FFT grow path (nfft_doppler > post-clutter chirps) with an operator
 // input on both sides of the comparison.
-TEST(FMCWRangeDopplerProcessorOpTest, BitExactParityNfftDoppler) {
+TEST(FMCWRangeDopplerProcessorOpTest, UlpParityNfftDoppler) {
   const auto waveform = to_descriptor(SimWaveform{});
   const auto factory = complex_factory<float>(parity_sim());
   ParityConfig cfg;
@@ -404,11 +416,11 @@ TEST(FMCWRangeDopplerProcessorOpTest, BitExactParityNfftDoppler) {
   cfg.nfft_doppler = 2 * kChirps;
   const auto fused = run_fused<float>(factory, cfg, waveform);
   const auto split = run_split<float>(factory, cfg, waveform);
-  expect_parity_bitexact<float>(fused, split, "nfft_doppler=2x");
+  expect_parity_ulp<float>(fused, split, "nfft_doppler=2x");
 }
 
 // The r2c range front end feeding the fused clutter expression.
-TEST(FMCWRangeDopplerProcessorOpTest, BitExactParityRealIf) {
+TEST(FMCWRangeDopplerProcessorOpTest, UlpParityRealIf) {
   const auto waveform = to_descriptor(SimWaveform{});
   const SimResult& sim = parity_sim();
   const std::vector<double> real_cube = to_real_if(sim);
@@ -419,7 +431,7 @@ TEST(FMCWRangeDopplerProcessorOpTest, BitExactParityRealIf) {
   cfg.clutter = ClutterFilterMethod::kMeanSubtraction;
   const auto fused = run_fused<float>(factory, cfg, waveform);
   const auto split = run_split<float>(factory, cfg, waveform);
-  expect_parity_bitexact<float>(fused, split, "real-IF input");
+  expect_parity_ulp<float>(fused, split, "real-IF input");
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, ParityAllClutterFiltersDouble) {

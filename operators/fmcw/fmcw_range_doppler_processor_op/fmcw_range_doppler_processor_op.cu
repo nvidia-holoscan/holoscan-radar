@@ -321,8 +321,9 @@ void FMCWRangeDopplerProcessorOp<T>::compute(InputContext& op_input,
   // fused pass that materializes the FFT input — no post-clutter cube
   // write+read or extra kernel launch. kNone passes `profiles` through
   // unchanged (zero added kernels), matching the split chain omitting
-  // ClutterFilterOp. Byte-identity with the split chain is enforced by the
-  // BitExact parity tests. Everything is enqueued inside the visitor, so
+  // ClutterFilterOp. Agreement with the split chain — numerical parity to
+  // within the permitted ULP bound, not byte identity — is enforced by the
+  // UlpParity tests. Everything is enqueued inside the visitor, so
   // `profiles` outlives the kernels via its stream-ordered free.
   auto rd_maps = make_device_tensor(
       full_rank_shape(batched, num_doppler, num_range_bins),
