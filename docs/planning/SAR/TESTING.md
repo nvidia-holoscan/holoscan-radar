@@ -150,7 +150,7 @@ The anchor, and the operator with the most contract surface.
 **Image quality, against the simulator:**
 
 - Point target → peak at the correct sample point, within a fraction of a resolution cell.
-- Peak **phase** matches the analytic two-way path. This is the assertion that catches range-computation errors a magnitude-only test passes over.
+- Peak **phase** matches the analytic two-way path. This is the assertion that catches range-computation errors a magnitude-only test passes over, and it is also the one that polices **phase-controlled interpolation**: the contract's case for two-tap interpolation rests on the carrier phase being applied from the exact computed range rather than being carried through the interpolator. An implementation that interpolates the complex samples directly still produces a plausible-looking image, and this assertion is what fails on it.
 - Range resolution, PSLR and ISLR match the simulator's predicted metrics for the configured bandwidth and `range_window`.
 - Cross-range resolution matches the prediction for the subtended aperture angle, and cross-range sidelobes match the **unweighted** aperture — there is no azimuth weighting in the contract (R6). Asserting a weighted figure here would be asserting a parameter that does not exist; when R6 resolves, this assertion changes with it.
 - Multiple targets superpose linearly.
@@ -161,6 +161,7 @@ The anchor, and the operator with the most contract surface.
 - Grid mode and points mode produce the same values at the same physical locations — the modes differ in output rank, not in the answer.
 - A grid on a tilted, non-axis-aligned plane forms correctly; a sheared (non-orthogonal-axis) grid forms correctly.
 - The `range_bins` port, when connected, supersedes `range_bin_spacing` / `range_bin_origin`, and the two wirings agree; a non-uniform `range_bins` errors.
+- `interpolation = nearest` and `interpolation = sinc` are **rejected with an error**, not quietly serviced as `linear`. Asserting the rejection is what keeps the deferral honest — a silent fallback would let a caller believe they had bought impulse-response quality they did not get. Same pattern as the non-uniform TDM schedule rejection (L12).
 - **Positions-port convention assertions.** Each pinned property gets a test that *fails when it is violated*, because no library operator encodes them and the specification is the only defense. The simulator's separable trajectory-error input is what makes these constructible:
   - a frame mismatch between `positions` and `sample_points` is rejected at build, not silently formed;
   - a length-unit error produces a detectably wrong scale;

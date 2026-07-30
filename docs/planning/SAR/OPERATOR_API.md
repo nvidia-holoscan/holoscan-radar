@@ -10,7 +10,7 @@ Two conventions are **extended** and are specified here rather than assumed: pre
 
 **Precision (all operators).** Every operator supports both **single** (`complex64` / `float32`) and **double** (`complex128` / `float64`) precision floating-point I/O. Precision is fixed at compile time by the operator's template instantiation — neither a runtime parameter nor inferred from the data — and an instance's inputs and outputs match that precision. The per-operator dtype labels list both forms. SAR adds a second, **orthogonal** axis on `BackprojectionOp` alone: the internal arithmetic strategy for the range computation, which is not a binary and is not the same question as the I/O dtype. See `BackprojectionOp.precision_mode`.
 
-**Proposed amendments.** Text marked **[PROPOSED]** is a working proposal, not accepted lockdown. Every open question in this document is enumerated in § *Open items* with its class, and the team-blocked ones are indexed in [`TEAM_BLOCKED.md`](../TEAM_BLOCKED.md) as R1–R6.
+**Proposed amendments.** Text marked **[PROPOSED]** is a working proposal, not accepted lockdown. Every open question in this document is enumerated in § *Open items* with its class, and the team-blocked ones are indexed in [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md) as R1–R6.
 
 ---
 
@@ -287,8 +287,7 @@ Time-domain image formation. **Accumulating across ticks** — see *Cross-tick a
 - `grid_counts` **[live]** — int, `(2,)`. `(num_v, num_u)`, matching the output shape. Resets the accumulator and reallocates. Default: none (required in grid mode).
 - `range_bin_spacing` **[live]** — float. Metres per range bin in `range_profiles`. Ignored when the `range_bins` port is connected. Default: none (required when that port is unconnected).
 - `range_bin_origin` **[live]** — float. Range (m) of bin zero relative to `reference_range`. Ignored when `range_bins` is connected. Default: 0.
-- `interpolation` **[live]** — enum {nearest, linear, sinc}. Range-profile interpolation at the computed range: `nearest` is a speed floor that costs impulse-response quality, `linear` the usual choice, `sinc` the accuracy ceiling. Default: linear.
-- `sinc_taps` **[live]** — int, odd. Kernel length when `interpolation = sinc`. Default: 8.
+- `interpolation` **[live]** — enum {nearest, linear, sinc}. Range-profile interpolation at the computed range. **Only `linear` is implemented in this wave**; `nearest` and `sinc` are named in the contract so the enum does not have to grow later, and are **rejected with an error** rather than silently falling back — see *Notes* and STATUS.md → Roadmap. Default: linear.
 - `precision_mode` — enum {fp32, mixed, float_float, taylor}. The **internal** arithmetic strategy for the range computation, orthogonal to the I/O dtype. `fp32` is fully single-precision; `mixed` computes ranges in FP64 and accumulates in FP32; `float_float` uses compensated double-single arithmetic; `taylor` expands about a per-block reference. Static (selects the kernel). Default: mixed.
 - `emit_policy`, `reset_policy` — **[PROPOSED]**, team-blocked (R2). See *Cross-tick accumulation*; deliberately not specified here as though settled.
 
@@ -304,6 +303,8 @@ Time-domain image formation. **Accumulating across ticks** — see *Cross-tick a
 
 - *Batch semantics.* Leading axes are preserved as independent images, each with its own accumulator — the rank-agnostic reading of invariant 4, and what a caller wants for independent sub-collections. To integrate **across** a leading axis instead, flatten it into the pulse axis upstream; the operator will not guess which is meant. Accumulator memory scales with the batch, so a wide batch of large images is a real footprint.
 - *Precision is not a binary, and that is the substantive departure from invariant 3.* The right mode is platform-dependent, not a speed/accuracy preference. The third-order Taylor term is an airborne requirement rather than an optimization. Plain FP32 is decorrelated from truth at spaceborne ranges — the range magnitude is large enough that single precision cannot resolve a wavelength-scale phase difference — while often being adequate at a few kilometres.
+- *Linear interpolation is the wave-one scope, and the reason is empirical rather than expedient.* The reference implementation this operator wraps spans roughly 48 tuned kernel variants covering a full precision-versus-throughput campaign, and every one of them interpolates with two taps — no sinc, cubic or spline anywhere. The optimization effort went into phase accuracy instead, which is where the error actually lives.
+- *Two taps suffice because the interpolation is phase-controlled.* The baseband envelope is interpolated while the carrier phase is applied separately from the exact computed range, so a two-tap envelope error never becomes a phase error. `SARRangeCompressionOp.nfft` then buys impulse-response quality by oversampling the range profile, which is the conventional place to pay for it — adding taps to the interpolator is the expensive way to fix a problem oversampling fixes upstream. `nearest` and `sinc` stay named-and-rejected on the L12 precedent, so implementing either later is a behavior change on a value that previously errored, not a contract break.
 - *Sliding windows are exact.* Backprojection is linear in pulses, so removing an outgoing block means re-forming and subtracting exactly that block. There is no accumulated drift to bound and no periodic re-form needed for correctness.
 - **[PROPOSED] No aperture (azimuth) weighting, and that is team-blocked (R6).** There is no `azimuth_window` parameter, so cross-range sidelobes are whatever an unweighted aperture gives — roughly −13 dB, the rectangular figure. That is a gap rather than a decision, and the reason it is not a one-line addition is that an aperture taper does not compose with a streaming accumulator: the weight a pulse should receive depends on where it sits within the *finished* aperture, which is not known when the pulse arrives. Until it resolves, `SICDWriterOp` cannot populate SICD's azimuth impulse-response fields and [`TESTING.md`](TESTING.md)'s cross-range sidelobe assertions are written against an unweighted aperture. Three resolutions, none free:
   - (a) weight only in emit-and-reset mode, where the aperture extent is known at reset — leaves stripmap unweighted;
@@ -542,7 +543,7 @@ Each is an explicit change to the invariants in [`AGENTS.md`](../../../AGENTS.md
 
 ## Open items
 
-Every unresolved question in this document, in the two classes [`TEAM_BLOCKED.md`](../TEAM_BLOCKED.md) uses. Nothing here may be resolved in code.
+Every unresolved question in this document, in the two classes [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md) uses. Nothing here may be resolved in code.
 
 **Team-blocked** — need a decision before the contract is accepted:
 

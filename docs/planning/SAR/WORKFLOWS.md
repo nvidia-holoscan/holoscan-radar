@@ -98,7 +98,15 @@ Because no operator encodes the convention, **the port specification carries the
 
 ## Notation & wiring notes
 
-Each chain below appears twice: as a `text` block showing how tensor shapes evolve, and as a **Mermaid flowchart** where nodes are operators and each edge is a Holoscan port connection **labeled with the tensor it carries** (e.g. `range_profiles`, `positions`). Where the producer's output port and the consumer's input port differ, the label shows `out → in`. **Dashed** nodes and edges are optional. Shapes appear in a label where they change. `[...]` in the text blocks marks an optional stage.
+Each chain below appears twice: as a `text` block showing how tensor shapes evolve, and as a **Mermaid flowchart** where each edge is a Holoscan port connection **labeled with the tensor it carries** (e.g. `range_profiles`, `positions`).
+
+**Node shape carries meaning here**, unlike in the FMCW diagrams, where every node is an operator except a single external ADC source that the notation names in prose. These chains have too many non-operator nodes for that to work — an application-supplied input, an intermediate product, and the edge a record tap hangs off are all things a reader must not mistake for a stage:
+
+- **Rectangles are operators** — a library operator with a contract in [`OPERATOR_API.md`](OPERATOR_API.md).
+- **Rounded nodes are data**, not stages: an intermediate product, or the edge a tap attaches to.
+- **Circles are the application's to supply**, with no library operator behind them — the image sample geometry (see *Application responsibilities*), a live radar front end, a DEM.
+
+Where the producer's output port and the consumer's input port differ, the label shows `out → in`. **Dashed** nodes and edges are optional. Tensor shapes appear in a label where they change. `[...]` in the text blocks marks an optional stage.
 
 Cross-cutting wiring facts, which apply across the diagrams:
 
@@ -182,9 +190,9 @@ flowchart TD
   READ -->|"reference_range (num_pulses)"| BP
   RC -->|"range_profiles (num_pulses, num_range_bins)"| BP
   RC -.->|"range_bins"| BP
-  GEOM["sample_points (num_points, 3) — points mode only"] -.->|"sample_points"| BP
+  GEOM(("app-owned sample<br>geometry")) -.->|"sample_points OR<br>grid lattice parameters"| BP
   BP -->|"image (num_v, num_u)"| AF["AutofocusOp"]
-  AF -->|"image"| SLC["SLC image"]
+  AF -->|"image"| SLC(["SLC image"])
   BP -->|"image (autofocus bypassed)"| SLC
   AF -.->|"phase_correction (num_azimuth)"| SICD["SICDWriterOp"]
   SLC -->|"image"| SICD
@@ -196,16 +204,16 @@ Later-wave ingress branches and product stages:
 ```mermaid
 flowchart TD
   classDef opt stroke-dasharray:4 3
-  LIVE["live radar (app source)"] -->|"signal_data"| RVP["RVPRemovalOp"]
+  LIVE(("live radar<br>front end")) -->|"signal_data"| RVP["RVPRemovalOp"]
   LIVE -->|"pulses"| RMF["RangeMatchedFilterOp"]
   RVP -->|"signal_data"| BEQ["BandEqualizationOp"]
-  BEQ -->|"phase_history"| PH["shared phase-history node"]
+  BEQ -->|"phase_history"| PH(["shared phase-history node"])
   RMF -->|"phase_history"| PH
-  SLC["SLC image"] -->|"image"| ML["MultilookOp"]
+  SLC(["SLC image"]) -->|"image"| ML["MultilookOp"]
   ML -->|"multilook (num_v', num_u')"| GC["GeocodeOp"]
-  GC -->|"product (num_northing, num_easting)"| DISP["display-ready product"]
+  GC -->|"product (num_northing, num_easting)"| DISP(["display-ready product"])
   ML -->|"multilook (geocode bypassed)"| DISP
-  DEM["dem"] -.->|"dem"| GC
+  DEM(("app-owned<br>DEM")) -.->|"dem"| GC
   class GC,DEM opt
 ```
 
@@ -213,11 +221,11 @@ Record taps, which attach to existing edges without consuming them:
 
 ```mermaid
 flowchart LR
-  PH["phase-history edge"] -.->|"phase_history + positions"| CW["CPHDWriterOp"]
-  SIG["signal-data edge"] -.->|"signal_data"| CRW["CRSDWriterOp"]
-  IMG["image edge"] -.->|"image"| SIC["SICDWriterOp"]
-  PROD["product edge"] -.->|"product"| SID["SIDDWriterOp"]
-  ANY["any edge"] -.->|"tensor"| TD["TensorDumpOp"]
+  PH(["phase-history edge"]) -.->|"phase_history + positions"| CW["CPHDWriterOp"]
+  SIG(["signal-data edge"]) -.->|"signal_data"| CRW["CRSDWriterOp"]
+  IMG(["image edge"]) -.->|"image"| SIC["SICDWriterOp"]
+  PROD(["product edge"]) -.->|"product"| SID["SIDDWriterOp"]
+  ANY(["any edge"]) -.->|"tensor"| TD["TensorDumpOp"]
 ```
 
 ---
@@ -229,7 +237,7 @@ flowchart LR
 - **Emit policy** — when an image comes out. Candidate declarative rules are a pulse count, the integration angle subtended, the along-track aperture length, or a target cross-range resolution. The last is the term users specify requirements in, and all four are derivable from the trajectory the operator already holds.
 - **Reset policy** — what happens to the accumulator afterwards. *Emit-and-continue* is the sliding window (stripmap); *emit-and-reset* is a block aperture (spotlight, or a strip cut into independent scenes).
 
-**The mechanism by which an application supplies the emit decision is team-blocked (R2)** — see [`OPERATOR_API.md`](OPERATOR_API.md) → *Cross-tick accumulation* for the surveyed options and [`TEAM_BLOCKED.md`](../TEAM_BLOCKED.md) for the index entry. The chains above are written so that any candidate mechanism drops in without rewiring.
+**The mechanism by which an application supplies the emit decision is team-blocked (R2)** — see [`OPERATOR_API.md`](OPERATOR_API.md) → *Cross-tick accumulation* for the surveyed options and [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md) for the index entry. The chains above are written so that any candidate mechanism drops in without rewiring.
 
 Drift is not something the policy has to work around: backprojection is linear in pulses, so a sliding window is exact — the outgoing block is re-formed and subtracted rather than approximated away.
 

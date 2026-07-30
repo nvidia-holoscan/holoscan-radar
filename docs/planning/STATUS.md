@@ -5,7 +5,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 ## Where the project stands
 
 - **2026-07-01** — Planning docs (`OPERATOR_API.md`, `WORKFLOWS.md`, `TESTING.md`) written; FMCW API lockdown specified. No operator code yet beyond the `radar_op` template placeholder.
-- **2026-07-27** — SAR proposed as a second modality. Contract drafted in [`SAR/`](SAR/) (`OPERATOR_API.md`, `WORKFLOWS.md`, `TESTING.md`, `SIGPROC_PLAN.md`); **in review, not locked**. No SAR operator code. Six team-blocked items indexed as R1–R6 in [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md), plus five implementation-time items (I1–I5) in [`SAR/OPERATOR_API.md`](SAR/OPERATOR_API.md) → Open items.
+- **2026-07-27** — SAR proposed as a second modality. Contract drafted in [`SAR/`](SAR/) (`OPERATOR_API.md`, `WORKFLOWS.md`, `TESTING.md`, `SIGPROC_PLAN.md`); **in review, not locked**. No SAR operator code. Six team-blocked items indexed as R1–R6 in [`SAR/TEAM_BLOCKED.md`](SAR/TEAM_BLOCKED.md), plus five implementation-time items (I1–I5) in [`SAR/OPERATOR_API.md`](SAR/OPERATOR_API.md) → Open items.
 
 ## Settled decisions
 
@@ -104,11 +104,13 @@ needs it.
 | --- | --- | --- |
 | **Staggered / non-uniform TDM schedules** (varying TX dwell or count) | Needs a per-TX-timing schedule descriptor **and** a generalized `MIMOCoherentCompensationOp` model (the compensation for arbitrary timing is an open design question). Uniform round-robin covers the FMCW workflows; non-uniform is rejected with a clear error today. Settled L12 | [MIMODeinterleave OPEN_ITEMS B.1](../../operators/fmcw/mimo_deinterleave_op/OPEN_ITEMS.md) |
 | **Sum-set ("Harnessing Holes") holey subarray smoothing** | S3 selects a contiguous filled ULA/URA today; a sum-set decomposition (`S_b + S_c`, keeping holes for aperture when the array is sum-set smoothable) would recover more DOF / aperture from holey MIMO co-arrays. Research item — no consumer, and the gridless estimators (Root-MUSIC/ESPRIT) aren't built yet. Settled L14 (fork 3) | [SubarraySelection OPEN_ITEMS](../../operators/angle_estimation/subarray_selection_op/OPEN_ITEMS.md) |
+| **`sinc` / `nearest` backprojection interpolation** | `BackprojectionOp` implements `linear` only. The reference implementation spans ~48 tuned kernel variants and every one interpolates with two taps, because the interpolation is phase-controlled (envelope interpolated, carrier phase applied from the exact range) and `SARRangeCompressionOp.nfft` oversampling already buys impulse-response quality upstream. Both values are named in the enum and rejected with a clear error today, so implementing either later is a behavior change on a previously-erroring value rather than a contract break | [SAR/OPERATOR_API.md](SAR/OPERATOR_API.md) → BackprojectionOp → Notes |
 
 ## Open items for team review
 
 Contract, SDK, and signal-processing questions that need a team decision are
-indexed in [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md). Per-operator detail stays in
+indexed in [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md), and the SAR modality's own in
+[`SAR/TEAM_BLOCKED.md`](SAR/TEAM_BLOCKED.md). Per-operator detail stays in
 each operator’s `OPEN_ITEMS.md` (for example,
 [`CFARDetectorOp open items`](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md)).
 New operators should follow [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md)
