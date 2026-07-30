@@ -26,7 +26,7 @@ A frame mismatch therefore neither throws nor produces noise. It produces a defo
 
 - **One declared Cartesian frame, right-handed, metres.** Phase-center positions, sample points, and any DEM-derived geometry are all expressed in it.
 - **The frame is explicit at the API boundary** via a shared `CoordinateFrame` descriptor (see *Supporting data structures*), a **required parameter with no default** on every operator that consumes or emits positions or sample geometry. Never silently inherited — the same rule and rationale as `AngleConvention`.
-- **It is a label, not a transform.** Operators do not convert between frames. The descriptor lets the boundary reject a mismatch and lets the writers record what the geometry means; frame-to-frame conversion is the caller's job, done upstream with standard geodesy.
+- **It is a label, not a transform.** Operators do not convert between frames. The descriptor lets a reader reject a file whose declared frame disagrees, lets the writers record what the geometry means, and everywhere else makes the frame an explicit, inspectable declaration rather than an assumption. Frame-to-frame conversion is the caller's job, done upstream with standard geodesy.
 - **The formation kernels ignore it.** Only boundary validation, `GeocodeOp`, and the writers read it.
 
 ### Frame landscape
@@ -38,7 +38,9 @@ A frame mismatch therefore neither throws nor produces noise. It produces a defo
 | **NED** | geodetic anchor | North / East / Down | aerospace navigation | `+z` down; the sign trap FMCW's aerospace preset also carries |
 | **scene-local** | scene reference point | caller-defined | simulation, unit tests | no geodetic meaning; writers cannot geolocate |
 
-### High-risk silent mismatches the descriptor must prevent
+### High-risk silent mismatches the descriptor is aimed at
+
+None of these is mechanically rejectable in the general case. The one place a real check exists is a reader comparing its `coordinate_frame` against the frame its *file* declares, which catches the first two when the geometry comes from CPHD. Everywhere else the descriptor's contribution is that the assumption is *written down at every boundary*, so a mismatch is findable by reading the configuration rather than only by looking at the image — see the compatibility rule under *Supporting data structures* for exactly which checks exist and which do not.
 
 - **ENU/NED z-sign flip:** `+z` up versus down places the platform below the scene, or inverts terrain height. Identical in kind to the FMCW aerospace-preset hazard.
 - **ECEF versus local:** positions read from a CPHD file are ECEF; sample points built by a test fixture or a scene-planning tool are usually local. Both are metres, so the mismatch surfaces only as image quality.
@@ -179,11 +181,11 @@ Reads a CPHD collection and emits phase history together with the per-pulse geom
 
 **Parameters:**
 
-- `path` — string. CPHD file path. Static. Default: none (required).
+- `path` — string or string vector. A single CPHD file, a directory of them, or an explicit ordered list. A directory is enumerated in lexicographic order; an explicit list is read in the order given, which is the form to use when lexicographic order is not collection order. Static. Default: none (required).
 - `coordinate_frame` — CoordinateFrame. The frame the emitted positions are expressed in. Where the file declares a frame, a disagreement is an **error**, not a silent reinterpretation. Static. Default: none (required).
 - `pulses_per_tick` — int. Batch size along the pulse axis; sets the granularity at which the accumulating formation stage sees the aperture. Static. Default: none (required).
-- `channel` — int. Which CPHD channel to read, for multi-channel collections. Static. Default: 0.
-- `pulse_range` (optional) — int, `(2,)`. Half-open `[first, last)` pulse range to read, for processing a subset of a long collection. Static. Default: none (whole collection).
+- `channel` — int. Which CPHD channel to read, for multi-channel collections. One channel per instance is deliberate — see Notes. Static. Default: 0.
+- `pulse_range` (optional) — int, `(2,)`. Half-open `[first, last)` pulse range to read, for processing a subset of a long collection. Applies **per file**, since each file is its own collection. Static. Default: none (whole collection).
 
 **Algorithm:**
 
@@ -193,7 +195,9 @@ Reads a CPHD collection and emits phase history together with the per-pulse geom
 
 **Notes:**
 
-- *Termination.* The operator emits until the selected pulse range is exhausted, then signals end-of-stream and stops the graph. The **final batch may be short** (`num_pulses < pulses_per_tick`), so every downstream operator must infer the pulse count from the tensor rather than the parameter. A short final batch is also what makes the accumulation convention's *termination flushes* rule load-bearing: without it, the tail of the aperture is silently dropped.
+- *Termination.* The operator emits until the selected pulse range of the last file is exhausted, then signals end-of-stream and stops the graph. The **final batch of each file may be short** (`num_pulses < pulses_per_tick`), so every downstream operator must infer the pulse count from the tensor rather than the parameter. A short final batch is also what makes the accumulation convention's *termination flushes* rule load-bearing: without it, the tail of the aperture is silently dropped.
+- *A file boundary is a collection boundary.* With a multi-file `path`, advancing to the next file starts a new collection — new geometry, new reference point, and in general a new scene. The accumulating formation stage must therefore flush and reset at that seam rather than integrating pulses from two collections into one image. This is the same flush-and-reset mechanism **R2** is deciding, arrived at from a second direction: until R2 settles, a multi-file `path` and a single accumulated image are not both expressible, and the reader cannot signal the seam it knows about.
+- *One channel per instance, deliberately.* CPHD 1.x makes `Data/Channels` a required list in which each channel carries its own `TxPol`/`RcvPol`, `TxAPCId`/`RcvAPCId`, and `NumVectors`/`NumSamples`. Because per-channel pulse and sample counts may differ, channels do not stack into one rectangular tensor, so emitting them on a leading batch axis fails in the general case rather than in a corner. Polarimetry — the main reason to want several channels at once — is already out of scope. A collection whose channels *are* homogeneous is served by instantiating N readers against the same file, which costs a parameter each and keeps the port shapes honest.
 - *Ingest uploads.* As the first operator in the chain it reads host memory and produces device memory, which is the sanctioned exception to the module's CUDA-accessible-input rule (the same role the FMCW apps' ADC sources play).
 - *Round-trip.* Pairing with `CPHDWriterOp` gives a read-write-compare test that validates field interpretation without an independent implementation to diff against.
 
@@ -204,6 +208,8 @@ Reads recorded uncompensated signal data, feeding the deramped branch. Same shap
 - **Out:** `signal_data` — complex64 / complex128, `(num_pulses, num_samples)`. Deramped, uncompensated returns. **Not** phase history: it still carries residual video phase and deramp reference bookkeeping, so it must pass through `RVPRemovalOp` and `BandEqualizationOp` first. This one port name is pinned now because [`WORKFLOWS.md`](WORKFLOWS.md) wires it in the later-wave diagrams.
 
 The remaining ports — the per-pulse geometry and the deramp reference record the branch needs — are deferred with the branch (see *Open items*, I2).
+
+*Why this is a separate operator rather than a `format` flag on `CPHDReaderOp`.* Invariant 5 makes a format selector exactly the kind of structural parameter that varies by instantiation rather than by value. The two also feed different chains: CRSD output must pass through `RVPRemovalOp` and `BandEqualizationOp` before it reaches the phase-history node, while CPHD output arrives there directly. A shared operator with a flag would have one output port meaning two different things.
 
 ### Signal-Processing Operators
 
@@ -384,7 +390,7 @@ Resamples to a map grid. **Optional in a backprojection chain** — see the note
 
 - `coordinate_frame` — CoordinateFrame. The input geometry's frame; `origin_llh` is required on it here, since a `scene_local` frame without a geodetic anchor cannot be geolocated. Static. Default: none (required).
 - `input_grid_origin`, `input_grid_axis_u`, `input_grid_axis_v`, `input_grid_spacing` — the formation geometry the input was produced on, mirroring `BackprojectionOp`'s grid parameters. Static. Default: none (required). *A read-only mirror of the formation stage's configuration — see the note on why this is not a shared descriptor.*
-- `projection` — string. Output projection as an EPSG code or PROJ string. Static. Default: none (required).
+- `projection` — string. Output projection as an EPSG code or PROJ string. **Must be a projected CRS with metre units**, and a geographic CRS is rejected at build. `output_origin` and `output_spacing` are defined in metres, so degrees would be read as metres and displace the product by orders of magnitude while producing a perfectly well-formed file. Static. Default: none (required).
 - `output_origin` — float, `(2,)`. `(northing, easting)` of the output sample `(0, 0)` in `projection`. Static. Default: none (required).
 - `output_spacing` — float, `(2,)`. Metres per output sample, `(northing, easting)`. Static. Default: none (required).
 - `output_counts` — int, `(2,)`. `(num_northing, num_easting)`, matching the output shape. Static. Default: none (required).
@@ -416,6 +422,7 @@ Sinks and sources at chain boundaries, never inline. Each is optional; the chain
 - **In:** `phase_history` — complex64 / complex128, `(..., num_pulses, num_samples)`.
 - **In:** `positions` — float32 / float64, `(..., num_pulses, 3)`.
 - **In:** `reference_range` — float32 / float64, `(..., num_pulses)`.
+- **In:** `sample_axis` (optional) — float32 / float64, `(num_samples,)`. The fast-time sample axis to record, as emitted by `CPHDReaderOp.sample_axis` — frequency (Hz) under `sample_domain = fx`, time of arrival (s) under `toa`. Wire it from the reader for a faithful round trip.
 - **In:** `pulse_times` (optional) — float64, `(..., num_pulses)`. Always double, matching the reader's port, regardless of the instantiated precision.
 - **In:** `velocities` (optional) — float32 / float64, `(..., num_pulses, 3)`.
 - No outputs — a sink.
@@ -426,6 +433,7 @@ Sinks and sources at chain boundaries, never inline. Each is optional; the chain
 - `coordinate_frame` — CoordinateFrame, with `origin_llh` required. Declares what the recorded geometry means. Static. Default: none (required).
 - `waveform` — `LFMWaveformDescriptor`. Supplies the collection-level fields CPHD requires and the tensors do not carry. Static. Default: none (required).
 - `sample_type` — enum {cf32, ci16, ci8}. CPHD sample representation. `ci16` with per-vector scale factors is the common recorded form and roughly halves file size against `cf32`. Static. Default: cf32.
+- `sample_domain` — enum {fx, toa}. The fast-time domain the stored samples are in, written to CPHD's declared domain type: `fx` is frequency, `toa` is time of arrival. The `sample_axis` input, where connected, must agree with it — Hz for `fx`, seconds for `toa` — and because a units disagreement is not detectable from the values, the domain is **declared rather than inferred**. Static. Default: fx.
 - `max_pulses_per_file` (optional) — int. Roll to a new file after this many pulses, for collections too long for one file. Static. Default: none (single file).
 
 **Algorithm:**
@@ -439,6 +447,7 @@ Sinks and sources at chain boundaries, never inline. Each is optional; the chain
 
 - *Buffering cost is real.* Phase history for a long collection does not fit in device memory, so the writer stages to host memory and appends to the file incrementally, keeping only the XML header pending until close.
 - *Flush on stop.* Per the accumulation convention, `stop()` finalizes the header and closes the file. A crash mid-collection leaves an unfinalized file, which is the accepted failure mode.
+- *The stored domain has to round-trip, which is why `sample_axis` and `sample_domain` are here.* `CPHDReaderOp` reports the domain its file declares; without the matching pair on this side, a read-write-compare cycle silently rewrites an FX-domain collection as a TOA-domain one, or the reverse. Since round-tripping against the reader is this writer's only stated validation strategy (see `CPHDReaderOp` → Notes), the omission would have invalidated the test rather than merely dropping a metadata field.
 
 #### SICDWriterOp
 
@@ -465,6 +474,7 @@ One file per emitted image — the image is the product, so there is nothing to 
 
 **Notes:**
 
+- *Not every formation geometry is describable, and the undescribable ones are rejected.* SICD's grid metadata describes a **uniform planar** grid: an origin, two axis vectors, and a constant spacing along each. A formation geometry that is not one cannot be recorded faithfully, so this writer rejects it at build rather than emitting a product whose metadata disagrees with its own pixels. The case that matters is an explicitly-supplied sample geometry that is warped or DEM-conformal — a legitimate and deliberately first-class `BackprojectionOp` configuration (forming straight onto map points is the whole argument for `GeocodeOp` being optional), and simply not a thing SICD can express. Uniformity is the test.
 - *Mirrored configuration is the metadata-plane symptom.* The four grid parameters and `range_window` exist only because the operator must describe processing it did not perform, and each is a place where a caller can silently disagree with the upstream stage. That is the concrete cost of having no metadata plane, and the argument for R5.
 - *SICD's azimuth impulse-response fields cannot be populated, because nothing in this contract applies an azimuth weighting.* There is deliberately no `azimuth_window` mirror here: it would mirror a parameter that does not exist. See `BackprojectionOp` → *Notes* and **R6**; whichever way that resolves determines whether this operator gains the parameter or records the field as unweighted.
 - *NITF container.* SICD and SIDD are NITF-wrapped, so this operator brings that dependency into the `io` group.
@@ -478,7 +488,7 @@ One file per emitted image — the image is the product, so there is nothing to 
 
 - `path` — string. Output path pattern; `{index}` is substituted with the tick counter. Static. Default: none (required).
 - `format` — enum {npy, raw}. `npy` carries shape and dtype and is directly readable from the Python tests; `raw` is bytes only. Static. Default: npy.
-- `every_n` **[live]** — int. Write only every nth message, for long runs. Default: 1.
+- `every_n` **[live]** — int, ≥ 1. Write only every nth message, for long runs. Zero and negative values are **rejected**, not silently coerced to 1: a zero here reads as "write nothing", which is what `max_files = 0` would mean, and guessing between the two is worse than an error. Default: 1.
 - `max_files` (optional) — int. Stop writing after this many files and warn once. Static. Default: none (unlimited).
 
 **Algorithm:** on every `every_n`th message, copy the tensor to host memory and write it to the `{index}`-substituted path, emitting the shape and dtype header for `npy`. Stop writing once `max_files` is reached, warning once.
@@ -506,10 +516,15 @@ Declares the Cartesian frame that positions and sample geometry are expressed in
 
 - `frame` — enum {ecef, enu, ned, scene_local}. The frame family. Default: none (required).
 - `origin_llh` (optional) — float, `(3,)`. Geodetic anchor as (latitude °, longitude °, height m above the ellipsoid) for the local frames. **Geodetic, not geocentric, latitude.** Required by `GeocodeOp` and every writer; ignored by the formation kernels. A `scene_local` frame without one has no geodetic meaning — legal for simulation and unit tests, rejected by the writers.
-- `epoch` (optional) — float64, seconds since a stated reference. The time reference the frame is realized at; meaningful for `ecef` over long apertures, where the frame rotates relative to inertial space.
+- `epoch` (optional) — float64, seconds since a stated reference. The time reference the frame is realized at; meaningful for `ecef` over long apertures, where the frame rotates relative to inertial space. Compared only for `ecef` — see the compatibility rule below.
 - `ellipsoid` — enum {wgs84}. The reference ellipsoid `origin_llh` is expressed against. Default: wgs84.
 
-Two frames are **compatible** when `frame`, `origin_llh` and `ellipsoid` all match; an operator holding positions and sample geometry from incompatible frames rejects them at build time. That check is the descriptor's whole purpose.
+Two frames are **compatible** when `frame`, `origin_llh`, `ellipsoid`, and — for `frame = ecef`, where either side sets it — `epoch` all match. Scoping `epoch` to `ecef` is deliberate: comparing it unconditionally would reject perfectly valid local and `scene_local` configurations, where the field carries no meaning and is routinely left unset on one side.
+
+**Where that comparison can actually happen is narrower than it first appears, and the contract should not promise more.** `coordinate_frame` is a *single* parameter per operator, and `positions` and `sample_points` are plain tensors carrying no frame identity (invariant 1). An operator therefore has no *second* frame to compare its parameter against, and there is no in-operator mismatch for it to reject. Two checks are real:
+
+- **A reader validates against its file.** `CPHDReaderOp` and `CRSDReaderOp` compare `coordinate_frame` against the frame the file declares and error on disagreement. This is a genuine build-time check precisely because the file supplies the second frame.
+- **Cross-operator agreement is the application's responsibility.** That `BackprojectionOp`, `GeocodeOp` and `SICDWriterOp` were all configured with the same frame cannot be checked by any of them in isolation. This is a concrete instance of **R5**: a metadata plane is exactly the mechanism that would carry frame identity alongside the data and make the check possible. Until then the descriptor's value is that the frame is *stated* at every boundary rather than assumed — which is what makes a mismatch findable by inspection instead of only by looking at a defocused image.
 
 Rationale for a new type rather than a field on an existing one: it is required by operators sharing no other descriptor (`BackprojectionOp` and `GeocodeOp` have almost nothing else in common), and it is exactly the `AngleConvention` pattern — a required, no-default, boundary-only declaration guarding a silent-failure mode.
 
@@ -548,9 +563,9 @@ Every unresolved question in this document, in the two classes [`TEAM_BLOCKED.md
 **Team-blocked** — need a decision before the contract is accepted:
 
 - **R1 — contract acceptance**, including the invariant amendments above.
-- **R2 — the aperture emit-decision mechanism** for `BackprojectionOp`. Three verified-viable options; two ruled out with reasons.
-- **R3 — whether `BackprojectionOp` publishes aperture state** on an output port. Dependent on R2.
-- **R4 — `AutofocusOp` grid conjugacy.** Three resolutions; determines whether autofocus is a downstream stage, a feedback loop, or geometry-restricted.
+- **R2 — the aperture emit-decision mechanism** for `BackprojectionOp`. Three verified-viable options; two ruled out with reasons. See *Cross-tick accumulation* → *[PROPOSED] How the application supplies the emit decision* for the options and the verification behind each.
+- **R3 — whether `BackprojectionOp` publishes aperture state** on an output port. Dependent on R2; stated at the end of that same subsection.
+- **R4 — `AutofocusOp` grid conjugacy.** Three resolutions; determines whether autofocus is a downstream stage, a feedback loop, or geometry-restricted. See `AutofocusOp` → *Notes* for the resolutions and what each costs.
 - **R5 — whether a metadata plane is in scope.** Forced by the writers, whose mirrored geometry and window parameters are the symptom. Cross-cutting, so it belongs in the contract or is explicitly deferred, never discovered during implementation.
 - **R6 — aperture (azimuth) weighting.** Nothing in the chain applies one, so cross-range sidelobes are the unweighted ~−13 dB. Not a one-line addition, because a taper does not compose with a streaming accumulator. Three resolutions, in `BackprojectionOp` → *Notes*; it also gates `SICDWriterOp`'s azimuth impulse-response fields.
 

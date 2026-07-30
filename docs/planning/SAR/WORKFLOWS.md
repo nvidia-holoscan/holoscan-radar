@@ -221,7 +221,7 @@ Record taps, which attach to existing edges without consuming them:
 
 ```mermaid
 flowchart LR
-  PH(["phase-history edge"]) -.->|"phase_history + positions"| CW["CPHDWriterOp"]
+  PH(["phase-history edge"]) -.->|"phase_history + positions<br>+ reference_range [+ sample_axis]"| CW["CPHDWriterOp"]
   SIG(["signal-data edge"]) -.->|"signal_data"| CRW["CRSDWriterOp"]
   IMG(["image edge"]) -.->|"image"| SIC["SICDWriterOp"]
   PROD(["product edge"]) -.->|"product"| SID["SIDDWriterOp"]
@@ -265,8 +265,12 @@ The same argument applies to `ClusterDBSCANOp` only in part: clustering over a f
 | Positions from | the file | the file | the application | the application |
 | Aperture | sliding | one block | sliding | sliding |
 | Reset policy | emit-and-continue | emit-and-reset | emit-and-continue | emit-and-continue |
-| Sample geometry | advances with the platform | fixed for the collection | advances | advances |
+| Sample geometry | steps at aperture boundaries | fixed for the collection | steps at boundaries | steps at boundaries |
 | Autofocus | usually (airborne) | usually (airborne) | usually | platform-dependent |
+
+**How an advancing scene coexists with a sliding accumulator.** Those two rows interact, and the interaction is easy to misread as a contradiction. A `[live]` change to the sample geometry forces an accumulator reset (see [`OPERATOR_API.md`](OPERATOR_API.md) → *Cross-tick accumulation*), so the scene cannot drift continuously underneath a running sum.
+
+What stripmap does instead is hold the geometry fixed for the span of one aperture and **step it at an aperture boundary**, which is where a reset is happening regardless. The advance is therefore free: it coincides with an emit and discards no partial sum the emit was not already ending. A geometry change landing mid-aperture would throw away exactly the pulses accumulated so far — which is why the scene step and the aperture boundary are one event rather than two, and why "advances" in that row means *steps*, not *drifts*.
 
 Everything from the shared phase-history node downstream is identical across all four. Only the ingress branch and the source of positions differ, which is the property that makes the alternate ingress work additive rather than a second pipeline.
 
