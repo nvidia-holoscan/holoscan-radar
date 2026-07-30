@@ -59,7 +59,7 @@ Modes in scope: **stripmap** (continuously advancing aperture — the streaming 
 CPHD file
   → CPHDReaderOp           → phase_history   (num_pulses, num_samples)
                            + positions       (num_pulses, 3)
-                           + reference_range (num_pulses)
+                           + reference_position (num_pulses, 3)
   → SARRangeCompressionOp  → range_profiles (num_pulses, num_range_bins)
   → BackprojectionOp       → image          (num_v, num_u)      [accumulating]
   → [AutofocusOp]          → image          + phase_correction
@@ -174,7 +174,7 @@ Reads a CPHD collection and emits phase history together with the per-pulse geom
 
 - **Out:** `phase_history` — complex64 / complex128, `(num_pulses, num_samples)`. `num_pulses = pulses_per_tick`, except on the final tick where it is the remainder.
 - **Out:** `positions` — float32 / float64, `(num_pulses, 3)`. Per-pulse Aperture Reference Point positions in `coordinate_frame`. CPHD stores these natively, which is why this path needs no trajectory computation.
-- **Out:** `reference_range` — float32 / float64, `(num_pulses,)`. Per-pulse range from the phase centre to the point the phase history is referenced against — the CPHD SRP range. **This is the canonical definition of `reference_range` for the module**; every downstream port carrying that name means this quantity, and range axes are expressed as offsets relative to it.
+- **Out:** `reference_position` — float32 / float64, `(num_pulses, 3)`. Per-pulse position of the point the phase history is referenced against — the CPHD Stabilization Reference Point — in `coordinate_frame`, passed through unconverted. **This is the canonical definition of the module's reference point**; every downstream port carrying that name means this quantity. The per-pulse **reference range** is the distance from the phase centre to it, derived rather than transported; range axes are expressed as offsets relative to that derived range. A position rather than a distance because one of the two viable precision strategies needs the point itself — see `BackprojectionOp`.
 - **Out:** `sample_axis` (optional) — float32 / float64, `(num_samples,)`. The file's fast-time sample axis: frequency (Hz) for an FX-domain collection, time of arrival (s) for a TOA-domain collection, per the domain the file declares. Emitted for the writers and for diagnostics. **Deliberately not named `range_bins`** — it is not a range axis and is not interchangeable with the port of that name (see the note on the two fast-time axes above).
 - **Out:** `pulse_times` (optional) — float64, `(num_pulses,)`. Seconds from the collection epoch, always double regardless of the instantiated precision, since single precision cannot hold a collection-relative timestamp to useful accuracy.
 - **Out:** `velocities` (optional) — float32 / float64, `(num_pulses, 3)`. Per-pulse phase-center velocity, where the file carries it.
@@ -216,8 +216,8 @@ The remaining ports — the per-pulse geometry and the deramp reference record t
 #### SARRangeCompressionOp
 
 - **In:** `phase_history` — complex64 / complex128, `(..., num_pulses, num_samples)`. Compression along the last (fast-time) axis. Phase history is the **frequency-domain** form, so compression here is an **inverse** transform — the opposite direction from FMCW's `FMCWRangeProcessorOp`, whose dechirped input is already a time-domain beat signal.
-- **Out:** `range_profiles` — complex64 / complex128, `(..., num_pulses, num_range_bins)`. `num_range_bins = num_samples`, growing to `nfft` when set. No range-axis `fftshift`, so bin zero is the zero-offset bin: `range_bins[0] = 0`, meaning `reference_range` itself, and bin index increases with range.
-- **Out:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`. Per-bin range (m) relative to `reference_range`, uniform. Wire it into `BackprojectionOp.range_bins` to keep the two stages' range axes consistent by construction; emitted only when `waveform` is available.
+- **Out:** `range_profiles` — complex64 / complex128, `(..., num_pulses, num_range_bins)`. `num_range_bins = num_samples`, growing to `nfft` when set. The range axis is **centred**: a range-axis `fftshift` puts zero differential range at bin `N/2` for `N = num_range_bins`, so bins below it are nearer than the reference point and bins above it are farther, and bin index increases with range across the whole array. See *Notes* for why centring is not cosmetic.
+- **Out:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`. Per-bin range (m) relative to the derived reference range, uniform, spanning `−(N/2)·Δr` through `+(N/2 − 1)·Δr`. Wire it into `BackprojectionOp.range_bins` to keep the two stages' range axes consistent by construction; emitted only when `waveform` is available.
 
 **Parameters:**
 
@@ -232,12 +232,16 @@ The remaining ports — the per-pulse geometry and the deramp reference record t
 1. Apply `range_window` along fast-time.
 2. Zero-pad to `nfft` when set.
 3. Inverse-transform along fast-time under `fft_norm`, taking phase history to range profiles.
-4. Derive `range_bins` from `waveform` bandwidth, `nfft`, and `propagation_speed`.
+4. `fftshift` the range axis, placing zero differential range at bin `N/2`.
+5. Derive `range_bins` from `waveform` bandwidth, `nfft`, and `propagation_speed`, on the same centred convention.
 
 **Notes:**
 
 - *This is the digital stage, and hardware does not make it redundant.* Analog deramp-on-receive is bandwidth reduction, not compression; the transform stays digital and downstream, which is why CPHD phase history is stored pre-transform.
 - *Window choice is a product decision, not a tuning knob.* It sets the impulse response the SICD product records and the resolution/sidelobe trade a downstream analyst sees, so it is one of the few parameters whose value belongs in the collection's metadata.
+- *The centred range axis is a correctness requirement, not a presentation choice.* An unshifted inverse transform puts zero differential range at bin 0 and wraps negative differential ranges to the top of the array. Read as a linearly increasing range axis — which is what `BackprojectionOp` does — every sample nearer than the reference then computes a negative bin index and is dropped by the bounds check, while its data sits unread at the far end. The CPHD SRP normally sits at scene centre, so that would be roughly half the swath contributing nothing.
+- *Centring is also what makes a plain bounds check the right out-of-range policy.* It puts the transform's circular seam at the array edges, far from the scene, so discarding out-of-range bins discards nothing real. Both reference implementations centre, for this reason.
+- *`N/2`, not `(N − 1)/2`.* The two spellings differ by half a bin for even `N`, and a half-bin range offset is a phase error that a magnitude-only test will not catch. `N/2` is what an `fftshift` actually produces, so it is the value that keeps this stage and `BackprojectionOp` consistent by construction; a backend kernel that bakes in `(N − 1)/2` owes a half-bin compensation at the seam.
 
 #### RangeMatchedFilterOp (direct-sampled branch)
 
@@ -277,8 +281,8 @@ Time-domain image formation. **Accumulating across ticks** — see *Cross-tick a
   - **Ordering** — row `i` corresponds to pulse `i` of `range_profiles`, with matching leading batch axes.
   - **Instant** — the phase centre at the pulse's **transmit** instant, under the stop-and-hop assumption. Receive instants or midpoints introduce a systematic along-track shift.
   - **Point** — the *antenna phase centre*, not the IMU and not the platform centre of mass. Lever-arm correction is the caller's.
-- **In:** `reference_range` — float32 / float64, `(..., num_pulses)`. Per-pulse reference range as defined by `CPHDReaderOp.reference_range`, carried through unchanged — range compression does not transform it. Range bin zero is *not* this range unless `range_bin_origin` is zero: the active range axis (the `range_bins` port, or `range_bin_spacing` / `range_bin_origin`) supplies bin offsets relative to it.
-- **In:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`. The **compressed** range axis from `SARRangeCompressionOp`, in metres — not `CPHDReaderOp.sample_axis`, whose length can coincide with it. When connected it **supersedes** `range_bin_spacing` and `range_bin_origin`, which are read from its first element and uniform step; this is the wiring that keeps the two stages' range axes consistent without the caller mirroring `nfft`. Non-uniform input is an error.
+- **In:** `reference_position` — float32 / float64, `(..., num_pulses, 3)`. Per-pulse reference **point** in `coordinate_frame`, as defined by `CPHDReaderOp.reference_position` and carried through unchanged — range compression does not transform it. The operator derives the per-pulse reference *range* from it, once per pulse rather than per pixel, and anchors the range axis to that derived range. Bin zero is *not* the derived reference range under the default centred axis: the active range axis (the `range_bins` port, or `range_bin_spacing` / `range_bin_origin`) supplies bin offsets relative to it. A position rather than a distance because one of the two precision strategies cannot be reconstructed from a distance — see *Notes*.
+- **In:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`. The **compressed** range axis from `SARRangeCompressionOp`, in metres — not `CPHDReaderOp.sample_axis`, whose length can coincide with it. When connected it **supersedes** `range_bin_spacing` and `range_bin_origin`, which are read from its first element and uniform step; this is the wiring that keeps the two stages' range axes consistent without the caller mirroring `nfft`. The port is an **explicit-axis convenience, not a non-uniform capability**: the axis is reduced to a scalar spacing and origin in one pass, and a non-uniform axis is an error.
 - **In:** `sample_points` (optional) — float32 / float64, `(num_points, 3)`. Explicit sample locations in `coordinate_frame`. Present only when `sample_geometry_mode = points`. **No leading batch axes**: the geometry is shared across the batch. Treated as configuration that happens to need a tensor, so a change forces an accumulator reset.
 - **In:** `initial_image` (optional) — complex64 / complex128, matching the output shape. Seeds the accumulator, so a caller can resume or composite. **Consumed on the tick it arrives, before that tick's pulses are accumulated**, and it *replaces* the accumulator contents rather than adding to them. The expected use is one message per aperture, so an arrival mid-aperture discards the partial sums accumulated so far and warns — the same treatment a geometry change gets, and for the same reason. A shape disagreeing with the active sample geometry is an error, not a resize.
 - **Out:** `image` — complex64 / complex128, `(..., num_v, num_u)` in grid mode or `(..., num_points)` in points mode. Leading batch axes are **preserved**, one independent accumulator per batch element (see Notes). Emitted per the aperture policy, not per tick.
@@ -292,7 +296,7 @@ Time-domain image formation. **Accumulating across ticks** — see *Cross-tick a
 - `grid_spacing` **[live]** — float, `(2,)`. Metres per sample, `(v, u)` in shape order. Resets the accumulator. Default: none (required in grid mode).
 - `grid_counts` **[live]** — int, `(2,)`. `(num_v, num_u)`, matching the output shape. Resets the accumulator and reallocates. Default: none (required in grid mode).
 - `range_bin_spacing` **[live]** — float. Metres per range bin in `range_profiles`. Ignored when the `range_bins` port is connected. Default: none (required when that port is unconnected).
-- `range_bin_origin` **[live]** — float. Range (m) of bin zero relative to `reference_range`. Ignored when `range_bins` is connected. Default: 0.
+- `range_bin_origin` **[live]** — float. Range (m) of bin zero relative to the derived reference range. Ignored when `range_bins` is connected. Setting it explicitly is what a range-cropped window needs, where bin zero is the crop's near edge. Default: **centred**, resolved per tick as `−⌊N/2⌋ · range_bin_spacing` from the observed bin count, matching `SARRangeCompressionOp`'s centred output. The default is computed rather than constant because `N` is not known until the tensor arrives.
 - `interpolation` **[live]** — enum {nearest, linear, sinc}. Range-profile interpolation at the computed range. **Only `linear` is implemented in this wave**; `nearest` and `sinc` are named in the contract so the enum does not have to grow later, and are **rejected with an error** rather than silently falling back — see *Notes* and STATUS.md → Roadmap. Default: linear.
 - `precision_mode` — enum {fp32, mixed, float_float, taylor}. The **internal** arithmetic strategy for the range computation, orthogonal to the I/O dtype. `fp32` is fully single-precision; `mixed` computes ranges in FP64 and accumulates in FP32; `float_float` uses compensated double-single arithmetic; `taylor` expands about a per-block reference. Static (selects the kernel). Default: mixed.
 - `emit_policy`, `reset_policy` — **[PROPOSED]**, team-blocked (R2). See *Cross-tick accumulation*; deliberately not specified here as though settled.
@@ -300,15 +304,19 @@ Time-domain image formation. **Accumulating across ticks** — see *Cross-tick a
 **Algorithm:**
 
 1. Expand the sample geometry to a point list once (grid mode materializes it via a `radar_common` host helper), so both modes reach one kernel path.
-2. For each sample point and each pulse in the batch, compute the two-way range from the phase-center position to the point under `precision_mode`.
-3. Convert to a fractional range-bin index from `reference_range` and the active range axis, and interpolate the complex range profile there per `interpolation`.
-4. Multiply by the matched phase term for that range and accumulate into the image.
-5. Emit per the aperture policy, copying out of the accumulator; reset per the reset policy.
+2. Derive the per-pulse reference range from `reference_position` in double precision — once per pulse, not per pixel.
+3. For each sample point and each pulse in the batch, compute the differential range between the phase-center position and the point under `precision_mode`.
+4. Convert to a fractional range-bin index using the active range axis, and interpolate the complex range profile there per `interpolation`.
+5. Multiply by the matched phase term for that range, formed from the waveform's **centre** frequency, and accumulate into the image.
+6. Emit per the aperture policy, copying out of the accumulator; reset per the reset policy.
 
 **Notes:**
 
 - *Batch semantics.* Leading axes are preserved as independent images, each with its own accumulator — the rank-agnostic reading of invariant 4, and what a caller wants for independent sub-collections. To integrate **across** a leading axis instead, flatten it into the pulse axis upstream; the operator will not guess which is meant. Accumulator memory scales with the batch, so a wide batch of large images is a real footprint.
 - *Precision is not a binary, and that is the substantive departure from invariant 3.* The right mode is platform-dependent, not a speed/accuracy preference. The third-order Taylor term is an airborne requirement rather than an optimization. Plain FP32 is decorrelated from truth at spaceborne ranges — the range magnitude is large enough that single precision cannot resolve a wavelength-scale phase difference — while often being adequate at a few kilometres.
+- *Why the reference crosses as a position rather than a distance.* Two numerical strategies exist for the differential range and they need different inputs. One **spends precision**: form `‖x − a‖` in double and subtract the reference range. The other **reformulates** so the cancelling subtraction never happens, computing `(‖x − m‖² + 2·(x − m)·(m − a)) / (‖x − a‖ + R₀)` — algebraically the same quantity, but `‖x − a‖ − R₀` destroys most of its significant digits when both are kilometres and the answer is metres.
+- *A scalar reference would foreclose that second strategy.* Both terms of the reformulated numerator use the reference as a **point**, and neither is reconstructible from a distance. Accepting only a distance would rule out that whole kernel family — the one that makes single precision viable at long range — so the port carries the position and the operator derives the range, at a cost of one double-precision `sqrt` per pulse.
+- *The phase reference is the waveform's centre frequency.* The phase term applied at the interpolated range is proportional to `f_c · ΔR`, with `f_c` the **centre** of the transmitted band rather than its lower edge. Stated explicitly because getting it wrong produces a plausible image rather than an error: a band-edge reference leaves a residual phase ramp across the aperture that reads as mild defocus, which is indistinguishable from a marginal autofocus result.
 - *Linear interpolation is the wave-one scope, and the reason is empirical rather than expedient.* The reference implementation this operator wraps spans roughly 48 tuned kernel variants covering a full precision-versus-throughput campaign, and every one of them interpolates with two taps — no sinc, cubic or spline anywhere. The optimization effort went into phase accuracy instead, which is where the error actually lives.
 - *Two taps suffice because the interpolation is phase-controlled.* The baseband envelope is interpolated while the carrier phase is applied separately from the exact computed range, so a two-tap envelope error never becomes a phase error. `SARRangeCompressionOp.nfft` then buys impulse-response quality by oversampling the range profile, which is the conventional place to pay for it — adding taps to the interpolator is the expensive way to fix a problem oversampling fixes upstream. `nearest` and `sinc` stay named-and-rejected on the L12 precedent, so implementing either later is a behavior change on a value that previously errored, not a contract break.
 - *Sliding windows are exact.* Backprojection is linear in pulses, so removing an outgoing block means re-forming and subtracting exactly that block. There is no accumulated drift to bound and no periodic re-form needed for correctness.
@@ -421,7 +429,7 @@ Sinks and sources at chain boundaries, never inline. Each is optional; the chain
 
 - **In:** `phase_history` — complex64 / complex128, `(..., num_pulses, num_samples)`.
 - **In:** `positions` — float32 / float64, `(..., num_pulses, 3)`.
-- **In:** `reference_range` — float32 / float64, `(..., num_pulses)`.
+- **In:** `reference_position` — float32 / float64, `(..., num_pulses, 3)`.
 - **In:** `sample_axis` (optional) — float32 / float64, `(num_samples,)`. The fast-time sample axis to record, as emitted by `CPHDReaderOp.sample_axis` — frequency (Hz) under `sample_domain = fx`, time of arrival (s) under `toa`. Wire it from the reader for a faithful round trip.
 - **In:** `pulse_times` (optional) — float64, `(..., num_pulses)`. Always double, matching the reader's port, regardless of the instantiated precision.
 - **In:** `velocities` (optional) — float32 / float64, `(..., num_pulses, 3)`.

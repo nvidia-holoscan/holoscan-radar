@@ -110,8 +110,8 @@ Where the producer's output port and the consumer's input port differ, the label
 
 Cross-cutting wiring facts, which apply across the diagrams:
 
-- **`positions` bypasses range compression.** It runs from the ingress source directly to `BackprojectionOp`, since nothing between them touches geometry. Every chain therefore has two parallel *paths* out of ingress — the signal path through range compression, and the geometry path carrying `positions` and `reference_range` straight to formation — and forgetting the geometry one is the most common wiring mistake.
-- **`reference_range` travels with `positions`**, for the same reason and to the same consumer.
+- **`positions` bypasses range compression.** It runs from the ingress source directly to `BackprojectionOp`, since nothing between them touches geometry. Every chain therefore has two parallel *paths* out of ingress — the signal path through range compression, and the geometry path carrying `positions` and `reference_position` straight to formation — and forgetting the geometry one is the most common wiring mistake.
+- **`reference_position` travels with `positions`**, for the same reason and to the same consumer. It carries the reference *point*, not a distance; the per-pulse reference range is derived from it inside `BackprojectionOp`.
 - **`range_bins`** is the optional third edge: wiring `SARRangeCompressionOp.range_bins → BackprojectionOp.range_bins` makes the two stages' range axes consistent by construction, and supersedes `range_bin_spacing` / `range_bin_origin`. Leaving it unconnected means the caller mirrors `nfft` by hand. `CPHDReaderOp.sample_axis` is **not** a substitute: it is the stored-sample axis (frequency or time of arrival), not a range axis, and it has the same length as `range_bins` whenever `nfft` is unset — so the mis-wiring is shape-legal and shows up only as a displaced image.
 - **`sample_points`** is present only in points mode; in grid mode the geometry is parameters and there is no edge at all.
 - **`AutofocusOp` is in-place on the data plane** — `image` in, `image` out, same shape — so it can be inserted or removed without rewiring its neighbours. Its `phase_correction` output goes to `SICDWriterOp`, not to the next processing stage.
@@ -129,7 +129,7 @@ The streaming case. Pulses arrive continuously, the aperture advances, and image
 CPHD file
   → CPHDReaderOp           → phase_history  (num_pulses, num_samples)
                            + positions      (num_pulses, 3)
-                           + reference_range (num_pulses)
+                           + reference_position (num_pulses, 3)
   → SARRangeCompressionOp  → range_profiles (num_pulses, num_range_bins)
   → BackprojectionOp       → image          (num_v, num_u)          [accumulating]
   → [AutofocusOp]          → image          (num_v, num_u)          [+ phase_correction]
@@ -145,7 +145,7 @@ Structurally identical. The difference is entirely in the aperture policy and th
 
 ```text
 CPHD file
-  → CPHDReaderOp           → phase_history, positions, reference_range
+  → CPHDReaderOp           → phase_history, positions, reference_position
   → SARRangeCompressionOp  → range_profiles
   → BackprojectionOp       → image                       [one aperture, emit at completion]
   → [AutofocusOp]          → image
@@ -162,7 +162,7 @@ live radar (app source)   → signal_data (num_pulses, num_samples)
   → RVPRemovalOp           → signal_data    [residual video phase removed]
   → BandEqualizationOp     → phase_history
   → SARRangeCompressionOp  → range_profiles
-  → BackprojectionOp       ← positions, reference_range  (app-computed, per pulse)
+  → BackprojectionOp       ← positions, reference_position  (app-computed, per pulse)
                            → image
 ```
 
@@ -172,7 +172,7 @@ live radar (app source)   → signal_data (num_pulses, num_samples)
 live radar (app source)   → pulses (num_pulses, num_samples)
   → RangeMatchedFilterOp   → phase_history
   → SARRangeCompressionOp  → range_profiles
-  → BackprojectionOp       ← positions, reference_range  (app-computed)
+  → BackprojectionOp       ← positions, reference_position  (app-computed)
                            → image
 ```
 
@@ -187,7 +187,7 @@ flowchart TD
   classDef opt stroke-dasharray:4 3
   READ["CPHDReaderOp"] -->|"phase_history (num_pulses, num_samples)"| RC["SARRangeCompressionOp"]
   READ -->|"positions (num_pulses, 3)"| BP["BackprojectionOp"]
-  READ -->|"reference_range (num_pulses)"| BP
+  READ -->|"reference_position (num_pulses, 3)"| BP
   RC -->|"range_profiles (num_pulses, num_range_bins)"| BP
   RC -.->|"range_bins"| BP
   GEOM(("app-owned sample<br>geometry")) -.->|"sample_points OR<br>grid lattice parameters"| BP
@@ -221,7 +221,7 @@ Record taps, which attach to existing edges without consuming them:
 
 ```mermaid
 flowchart LR
-  PH(["phase-history edge"]) -.->|"phase_history + positions<br>+ reference_range [+ sample_axis]"| CW["CPHDWriterOp"]
+  PH(["phase-history edge"]) -.->|"phase_history + positions<br>+ reference_position [+ sample_axis]"| CW["CPHDWriterOp"]
   SIG(["signal-data edge"]) -.->|"signal_data"| CRW["CRSDWriterOp"]
   IMG(["image edge"]) -.->|"image"| SIC["SICDWriterOp"]
   PROD(["product edge"]) -.->|"product"| SID["SIDDWriterOp"]
