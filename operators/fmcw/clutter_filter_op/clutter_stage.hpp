@@ -8,8 +8,9 @@
 // the fused FMCWRangeDopplerProcessorOp (composed into the Doppler pre-FFT
 // expression) — which is what guarantees the split-vs-fused parity property
 // by construction, at expression granularity. The signatures below are the
-// stable stage API: extend via additive overloads; byte-identical
-// fused-vs-split behavior is enforced by the BitExact parity tests.
+// stable stage API: extend via additive overloads; fused-vs-split
+// agreement to within the permitted ULP bound is enforced by the
+// UlpParity tests.
 //
 // Includes <matx.h> (via matx_utils.hpp): include only from .cu files.
 

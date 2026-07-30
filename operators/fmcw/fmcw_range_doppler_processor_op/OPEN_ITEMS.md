@@ -20,7 +20,7 @@ win is expected to be modest.
 
 What it costs to keep: a third operator to maintain (union-of-parameters
 API surface, override plumbing, its own test suite including the
-`BitExact*` parity gates), and the expression-overload machinery exists
+`UlpParity*` gates), and the expression-overload machinery exists
 primarily for its benefit.
 
 ### Decision aid (run this; do not treat as an automatic gate)
@@ -66,4 +66,7 @@ the split path (and was the gap this tool closes).
   into this section.
 
 Related: the split-vs-fused parity contract and stage-sharing design are
-enforced by `tests/cpp/test_fmcw_range_doppler_processor.cpp` (`BitExact*`).
+enforced by `tests/cpp/fmcw/test_fmcw_range_doppler_processor.cpp`
+(`UlpParity*`, agreement to a few ULP rather than bit-exact — the
+`mean_subtraction` reduction's summation order is not guaranteed to match
+between the two paths).
