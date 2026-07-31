@@ -4,7 +4,9 @@ Contract / design questions that need a **team decision**. Individuals must
 not silently resolve these in code.
 
 Per-operator detail lives in each operator’s
-[OPEN_ITEMS.md](../../operators/). This file is the roll-up. When a decision
+[OPEN_ITEMS.md](../../operators/). This file is the roll-up. Before a modality
+has operator directories, its planning docs hold that detail instead — see
+*Per-modality files* below. When a decision
 lands, record it in [STATUS.md](STATUS.md) → Settled decisions, then remove
 or archive the operator section *and* the matching row here.
 
@@ -32,7 +34,7 @@ for where detail lives before any operator directory exists.
 
 | Action | Do this |
 | --- | --- |
-| Discover a new team question | Write it in `operators/<group>/<op>/OPEN_ITEMS.md`, then add a row in the **correct class** below |
+| Discover a new team question | Write it in `operators/<group>/<op>/OPEN_ITEMS.md` — or, before that directory exists, in the planning doc that raised it (see *Per-modality files*) — then add a row in the **correct class** below |
 | Land code ahead of the contract | Record the conflict in `OPEN_ITEMS.md`; put the row under **Needs team look** (unless it truly stops checklist completion) |
 | Resolve | Team decision → `STATUS.md` Settled decisions → delete/archive both places |
 

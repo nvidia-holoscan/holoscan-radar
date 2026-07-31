@@ -27,8 +27,9 @@ Rules that follow from "lockdown":
   for FMCW, [`docs/planning/SAR/TEAM_BLOCKED.md`](docs/planning/SAR/TEAM_BLOCKED.md)
   for SAR — with detail in each operator’s `OPEN_ITEMS.md`. **FMCW has none open**
   (L1–L15 and S1–S4 are all settled; see `STATUS.md` → Settled decisions). The
-  live ones are SAR's **R1–R6**, and none may be resolved in code. Read the index
-  rather than this list, and surface a new open item for a team decision instead
+  live ones are all SAR's `R`-numbered rows, and none may be resolved in code.
+  Take the current set from that index rather than from any list here, since rows
+  close as decisions land, and surface a new open item for a team decision instead
   of picking an answer.
 - **Checklist + development guidance.** Follow `NEW_OPERATOR_CHECKLIST.md` as the done gate; use `OPERATOR_DEVELOPMENT.md` when designing `compute()`, live overrides, tests, or chasing performance.
 

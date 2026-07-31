@@ -288,6 +288,7 @@ Two things vary independently, so this is two tables rather than one. **Ingress 
 | :--- | :--- | :--- | :--- |
 | Scene | steps per tile | fixed for the collection | fixed for the collection |
 | `max_aperture_pulses` | 0 | 0 | `N`, or ≥ longest with `evict` |
+| `emit_interval_pulses` | `N`, one tile's worth | 0, emits on request | `< N`, or 0 with `evict` |
 | `emit_mode` | reset | reset | continue |
 | App ports | — | `control` | `control`, plus `evict` where the app owns the length |
 
