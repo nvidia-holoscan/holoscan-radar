@@ -9,13 +9,13 @@ repeating expensive mistakes.
 
 | Doc | Role |
 | --- | --- |
-| [`OPERATOR_API.md`](OPERATOR_API.md) | Locked contract — ports, shapes, dtypes, params. Source of truth for *what*. |
-| [`WORKFLOWS.md`](WORKFLOWS.md) | How operators chain; dtype/port wiring across modalities. |
-| [`TESTING.md`](TESTING.md) | What properties tests must assert. |
-| [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md) | Landing gate — verify before claiming done. |
-| [`STATUS.md`](STATUS.md) | Claim work; record decisions. |
-| [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md) | Index of items blocked on a team decision (detail in operator `OPEN_ITEMS.md`). |
-| [`operators/common/README.md`](../../operators/common/README.md) | Shared conventions and helpers. |
+| [OPERATOR_API.md](OPERATOR_API.md) | Locked contract — ports, shapes, dtypes, params. Source of truth for *what*. |
+| [WORKFLOWS.md](WORKFLOWS.md) | How operators chain; dtype/port wiring across modalities. |
+| [TESTING.md](TESTING.md) | What properties tests must assert. |
+| [NEW_OPERATOR_CHECKLIST.md](NEW_OPERATOR_CHECKLIST.md) | Landing gate — verify before claiming done. |
+| [STATUS.md](STATUS.md) | Claim work; record decisions. |
+| [TEAM_BLOCKED.md](TEAM_BLOCKED.md) | Index of items blocked on a team decision (detail in operator `OPEN_ITEMS.md`). |
+| [operators/common/README.md](../../operators/common/README.md) | Shared conventions and helpers. |
 | This doc | *How* to implement well: hot-path discipline, diagnosis, perf, open items. |
 
 Follow the checklist to land. Read this when designing `compute()`, choosing
@@ -35,7 +35,7 @@ slow?"
 2. **Do not silently resolve open items.** Ambiguities go in
    `operators/<group>/<op>/OPEN_ITEMS.md` and stay there until the team
    decides. Index every *team* block in
-   [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md) as well. If code must land ahead of
+   [TEAM_BLOCKED.md](TEAM_BLOCKED.md) as well. If code must land ahead of
    the contract (rare), record that fact in `OPEN_ITEMS.md` with the conflict
    and the question for the team.
 3. **Diagnose before guessing.** When something is wrong or slow, run the
@@ -43,13 +43,13 @@ slow?"
    retrain-scale fix (kernel rewrite, dataset regen, architecture change). A
    five-minute reversible change is fine as a diagnostic; a multi-hour rebuild
    of calibration tables is not a first guess.
-4. **Design invariants** in [`AGENTS.md`](../../AGENTS.md) — plain-tensor ports,
+4. **Design invariants** in [AGENTS.md](../../AGENTS.md) — plain-tensor ports,
    bounded descriptors, template precision, rank-agnostic batching, `[live]`
    convention, convention-free kernels. Do not invent new shared message types
    or descriptor ports without a contract change.
 5. **Checklist means the whole operator.** Vertical slices are fine for
    progress, but
-   [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md) clears only when
+   [NEW_OPERATOR_CHECKLIST.md](NEW_OPERATOR_CHECKLIST.md) clears only when
    the full `OPERATOR_API.md` contract is implemented. Do not call an
    operator ready / checklist-complete while contract features remain staged.
 

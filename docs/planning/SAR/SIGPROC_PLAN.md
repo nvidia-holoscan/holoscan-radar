@@ -2,25 +2,26 @@
 
 ## Purpose
 
-What lands in the first SAR wave, in what order, and where the code goes. The contract lives in [`OPERATOR_API.md`](OPERATOR_API.md) and the chains in [`WORKFLOWS.md`](WORKFLOWS.md); this document is the sequencing.
+What lands in the first SAR wave, in what order, and where the code goes. The contract lives in [OPERATOR_API.md](OPERATOR_API.md) and the chains in [WORKFLOWS.md](WORKFLOWS.md); this document is the sequencing.
 
-There is no FMCW analogue of this file — the FMCW wave tracked its build order in [`STATUS.md`](../STATUS.md) → *Up next*. SAR gets a dedicated one because the wave has a genuine dependency structure and a scope boundary worth writing down once, rather than re-deriving from a claims table.
+There is no FMCW analogue of this file — the FMCW wave tracked its build order in [STATUS.md](../STATUS.md) → *Up next*. SAR gets a dedicated one because the wave has a genuine dependency structure and a scope boundary worth writing down once, rather than re-deriving from a claims table.
 
 ## Wave one
 
-**Wave one is everything inside the single-look complex image formation box, plus three writers.** Seven operators:
+**Wave one is everything inside the single-look complex image formation box, plus three writers.** Eight operators:
 
 | Operator | Group | Reference in hand | Role |
 | :--- | :--- | :--- | :--- |
 | `CPHDReaderOp` | `io` | yes | the only ingress; every test and demo runs through it |
 | `SARRangeCompressionOp` | `sar` | yes | phase history → range profiles |
+| `ApertureManagerOp` | `sar` | no | aperture membership and emit decisions; no kernel, no GPU |
 | `BackprojectionOp` | `sar` | yes | the anchor |
 | `AutofocusOp` | `sar` | **no** | PGA; phase-correction vector + corrected image |
 | `CPHDWriterOp` | `io` | partial | pairs with the reader for a round-trip test |
 | `SICDWriterOp` | `io` | partial | the SLC product |
 | `TensorDumpOp` | `io` | n/a | intermediate inspection while the rest is built |
 
-Per-pulse phase-center positions are an **application responsibility** — no library operator computes them. On the CPHD path they come out of the reader; on a live platform the app supplies them. See [`OPERATOR_API.md`](OPERATOR_API.md) → *Two deliberate non-operators*.
+Per-pulse phase-center positions are an **application responsibility** — no library operator computes them. On the CPHD path they come out of the reader; on a live platform the app supplies them. See [OPERATOR_API.md](OPERATOR_API.md) → *Two deliberate non-operators*.
 
 ### Two things this scope buys beyond the obvious
 
@@ -30,12 +31,13 @@ Per-pulse phase-center positions are an **application responsibility** — no li
 
 ## Reference availability and where assertion effort goes
 
-Availability of a reference implementation informs **sequencing and risk, not scope** — every operator in [`OPERATOR_API.md`](OPERATOR_API.md) is contracted whether or not code exists for it. What it does determine is how much of [`TESTING.md`](TESTING.md)'s effort each operator deserves, because an operator with nothing to diff against carries its correctness entirely in its tests.
+Availability of a reference implementation informs **sequencing and risk, not scope** — every operator in [OPERATOR_API.md](OPERATOR_API.md) is contracted whether or not code exists for it. What it does determine is how much of [TESTING.md](TESTING.md)'s effort each operator deserves, because an operator with nothing to diff against carries its correctness entirely in its tests.
 
 | Operator | Reference | Dominant risk | Assertion weight |
 | :--- | :--- | :--- | :--- |
 | `CPHDReaderOp` | yes | field interpretation | high — round trip plus batching edges |
 | `SARRangeCompressionOp` | yes | little; closed-form checkable | low |
+| `ApertureManagerOp` | no | bookkeeping off-by-ones | medium — but CPU-only, so cheap to cover |
 | `RangeMatchedFilterOp` | no | replica and output-length conventions | medium |
 | `RVPRemovalOp`, `BandEqualizationOp` | no | **sign and reference conventions** | high, and **not satisfiable synthetically** |
 | `BackprojectionOp` | yes | **contract, not math** | high — see below |
@@ -48,7 +50,7 @@ Availability of a reference implementation informs **sequencing and risk, not sc
 
 Three consequences worth stating rather than re-deriving:
 
-**Wrapping a reference implementation moves the risk rather than removing it.** `BackprojectionOp` sits on a reference implementation, so its risk is *contract* rather than *math*: cross-tick accumulation, the coordinate-frame boundary, the `positions`-port conventions, and the precision-mode selection. None of those is something a reference implementation validates — a correct kernel fed a wrong-convention trajectory produces a plausible image. That is where the test effort goes.
+**Wrapping a reference implementation moves the risk rather than removing it, but it does not remove the math either.** `BackprojectionOp` carries contract risk — the coordinate-frame boundary, the `positions`-port conventions, the arithmetic-strategy selection — none of which a reference implementation validates, since a correct kernel fed a wrong-convention trajectory produces a plausible image. It also carries real numerical risk: the tuned kernels exist as portable CUDA C, so the work is *porting a selected two or three* and reproducing their accuracy, not calling a library and trusting it. Splitting retention into `ApertureManagerOp` deliberately moves the cross-tick accumulation risk out of this operator and onto one that can be tested without a GPU.
 
 **`AutofocusOp` holds the most correctness risk in wave one.** It is written from scratch with nothing to diff against, and its failure mode is a subtly worse image rather than an error. `MultilookOp` and `GeocodeOp` are in the same position but fall in a later wave.
 
@@ -61,11 +63,12 @@ Dependency and risk ordering. Nothing here is conditional on the step before suc
 1. **Group scaffolding and `CPHDReaderOp`.** Stand up `operators/sar/` and `operators/io/`, then the reader. It gates everything else, because without it there is no data to test with.
 2. **`CPHDWriterOp` and `TensorDumpOp`.** Immediately after the reader, so the round-trip test exists before anything depends on the reader being right, and so intermediates are inspectable for the rest of the wave. This is deliberately early: it is cheap and it de-risks everything downstream.
 3. **`SARRangeCompressionOp`.** A windowed transform with a closed-form check. Low risk, and it makes the first half of the chain real.
-4. **`BackprojectionOp`.** The anchor, and the bulk of the work. Sub-order within it: grid mode with a fixed aperture first (no accumulation), then the accumulator and its reset semantics, then points mode, then the precision modes. Getting a correct static image before adding statefulness means an accumulation bug cannot hide behind a formation bug.
-5. **`SICDWriterOp`.** Needs a formed image, so it follows. Brings the NITF container dependency with it.
-6. **`AutofocusOp`.** Depends only on an image existing, so it is *independent of step 5* — the ordering between them is resourcing, not dependency. **Blocked on the grid-conjugacy open item** resolving, since that decides whether it is a downstream stage, a feedback loop through `BackprojectionOp`, or a geometry-restricted operator.
+4. **`BackprojectionOp`.** The anchor, and the bulk of the work. Sub-order within it: a uniform `SampleGeometry` lattice over a single batch of pulses first, then signed weights and the accumulator's reset semantics, then explicit lattices, then the remaining arithmetic strategies. Getting a correct static image before adding statefulness means an accumulation bug cannot hide behind a formation bug.
+5. **`ApertureManagerOp`.** Independent of step 4 and cheap — no kernel, no GPU — so it can be written and fully tested in parallel, then wired in to turn the static formation of step 4 into a streaming one.
+6. **`SICDWriterOp`.** Needs a formed image, so it follows. Brings the NITF container dependency with it.
+7. **`AutofocusOp`.** Depends only on an image existing, so it is *independent of step 6* — the ordering between them is resourcing, not dependency. **Blocked on the grid-conjugacy open item** resolving, since that decides whether it is a downstream stage, a feedback loop through `BackprojectionOp`, or a geometry-restricted operator.
 
-The demo application is built alongside step 4 and finished after step 6.
+The demo application is built alongside step 4 and finished after step 7.
 
 ## Later waves
 
@@ -94,7 +97,7 @@ operators/sar/
   backprojection_op/
     ...                             # same five-part split
     backprojection_stage.hpp        # wraps the matx::experimental::sar_bp seam
-    OPEN_ITEMS.md                   # emit policy, aperture state, precision modes
+    OPEN_ITEMS.md                   # control payload, aperture state, arithmetic strategy
   autofocus_op/
     ...
     OPEN_ITEMS.md                   # grid conjugacy
@@ -124,11 +127,11 @@ The CPHD-driven app is the default demo, since the simulator and the real collec
 
 ## Landing gate
 
-Each operator follows [`NEW_OPERATOR_CHECKLIST.md`](../NEW_OPERATOR_CHECKLIST.md). Wave-specific additions:
+Each operator follows [NEW_OPERATOR_CHECKLIST.md](../NEW_OPERATOR_CHECKLIST.md). Wave-specific additions:
 
 - **Accumulation tests are part of the gate** for `BackprojectionOp`, not an afterthought: multi-tick equivalence, reset on geometry change, and emitted-buffer independence. This is a new test pattern in the module.
-- **Do not resolve the team-blocked items in code.** The emit-decision mechanism, the autofocus grid-conjugacy question, and the aperture-weighting gap are indexed in [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md); an operator that quietly picks an answer is not checklist-complete.
-- **The performance harness needs two of its required fields redefined for an accumulating operator.** The checklist and [`OPERATOR_DEVELOPMENT.md`](../OPERATOR_DEVELOPMENT.md) → *Performance characterization* were written against operators where one tick produces one complete result, which `BackprojectionOp` is not. Nothing about the gate is a numeric threshold — it is a measurement harness — but two prescribed report fields are ill-defined here and must be stated rather than improvised:
+- **Do not resolve the team-blocked items in code.** The emit-decision mechanism, the autofocus grid-conjugacy question, and the aperture-weighting gap are indexed in [TEAM_BLOCKED.md](TEAM_BLOCKED.md); an operator that quietly picks an answer is not checklist-complete.
+- **The performance harness needs two of its required fields redefined for an accumulating operator.** The checklist and [OPERATOR_DEVELOPMENT.md](../OPERATOR_DEVELOPMENT.md) → *Performance characterization* were written against operators where one tick produces one complete result, which `BackprojectionOp` is not. Nothing about the gate is a numeric threshold — it is a measurement harness — but two prescribed report fields are ill-defined here and must be stated rather than improvised:
   - **`cold_ms`** ("first timed frame after config") has two distinct meanings once an accumulator exists: the first tick of the process, and the first tick after a reset. Report both, named separately, and report **time-to-emit** for a full aperture alongside per-tick steady state, since that is the figure a caller sizes a system against.
   - **`override_delta_ms`** (post-override peak against pre-override median) assumes an override perturbs and resumes. Every `BackprojectionOp` grid parameter instead *resets*, discarding work, so the two windows are not comparable states. Measure and label the reset cost as its own quantity rather than reporting it as an override delta. That leaves no non-resetting live parameter to measure under the ordinary rule: `interpolation` is the only candidate, and with `linear` its sole implemented value this wave, an override of it cannot change state. Report it as not applicable rather than fabricating a measurement.
   - The size ladder is the pulses × pixels product rather than one tensor's dimensions, so pick a small matrix over both axes instead of a single sweep. `CPHDReaderOp` and the writers are **out of harness scope** for this wave: their cost is disk bandwidth, not GPU time, and the harness has no vocabulary for it.

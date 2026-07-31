@@ -1,11 +1,11 @@
 # Project Status & Work Coordination
 
-The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) → Team workflow). Before starting non-trivial work, check the claims table and add a row; update it in the PR that lands the work.
+The coordination point for in-flight work (see [AGENTS.md](../../AGENTS.md) → Team workflow). Before starting non-trivial work, check the claims table and add a row; update it in the PR that lands the work.
 
 ## Where the project stands
 
 - **2026-07-01** — Planning docs (`OPERATOR_API.md`, `WORKFLOWS.md`, `TESTING.md`) written; FMCW API lockdown specified. No operator code yet beyond the `radar_op` template placeholder.
-- **2026-07-27** — SAR proposed as a second modality. Contract drafted in [`SAR/`](SAR/) (`OPERATOR_API.md`, `WORKFLOWS.md`, `TESTING.md`, `SIGPROC_PLAN.md`); **in review, not locked**. No SAR operator code. Six team-blocked items indexed as R1–R6 in [`SAR/TEAM_BLOCKED.md`](SAR/TEAM_BLOCKED.md), plus five implementation-time items (I1–I5) in [`SAR/OPERATOR_API.md`](SAR/OPERATOR_API.md) → Open items.
+- **2026-07-27** — SAR proposed as a second modality. Contract drafted in [SAR/](SAR/) (`OPERATOR_API.md`, `WORKFLOWS.md`, `TESTING.md`, `SIGPROC_PLAN.md`); **in review, not locked**. No SAR operator code. Five team-blocked items indexed as R1, R2, R4, R5 and R7 in [SAR/TEAM_BLOCKED.md](SAR/TEAM_BLOCKED.md), which also carries D1–D17 (decided, review requested), plus implementation-time items I1–I7 in [SAR/OPERATOR_API.md](SAR/OPERATOR_API.md) → Open items.
 
 ## Settled decisions
 
@@ -62,7 +62,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | Python bindings wave (all landed ops + radar_app + tests/perf + demo apps) | dpc | `dpc/python-bindings` | **checklist-complete (pending PR)** — all 15 ops + descriptors + `radar_app` viz (F32/F64; bare `*Op` → F32); C++-parity pytest (bool `detection_mask`/`is_valid` drained via `NullSinkOp` on HSDK 4.3 — cannot inspect as NumPy until HSDK 5 / `uint8` contract); all 15 `performance/python/perf_*.py` drivers; Holoviz Python demos for SISO/SIMO/MIMO(TDM+DDM)/dense SIMO. CFAR Python covers CA leftovers + GO/SO/OS matrix/unique cases + `alpha_lut` + Monte Carlo (`pytest -m statistical`). **Accepted gap:** GO/SO/OS `detail::` α calibration white-box tests stay C++-only ([CFAR OPEN_ITEMS §9](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md)) |
 | Fused vs split RD e2e perf harness | dpc | `dpc/python-bindings` | **landed (no keep/kill verdict)** — `perf_fmcw_split_vs_fused` (C++ + Python) times end-to-end Holoscan graphs (split range→[clutter]→Doppler vs fused) and prints comparison table for [OPEN_ITEMS §1](../../operators/fmcw/fmcw_range_doppler_processor_op/OPEN_ITEMS.md); team decides keep/retire from the table |
 | DDM non-linear `phase_codes` (correlate demux) | dpc | `dpc/python-bindings` | **landed** — C++ correlate path + unit/perf; demo YAML `fmcw_mimo_ddm_phase_codes.yaml` (`generate_phase_codes: zadoff_chu` low-crosstalk NL codes; `sin` retained for crosstalk stress); Python bindings + pytest + perf `ddm_nl` + Python demo/smoke |
-| SAR modality contract (`docs/planning/SAR/`) | dpc | `dpc/sar-plan` | **in review** — four docs drafted. `WORKFLOWS.md`: stripmap + spotlight, three ingress forms converging at phase history; frequency-domain formation, InSAR, polarimetry, ScanSAR and SAR detection deferred with rationale. `OPERATOR_API.md`: `CoordinateFrame` boundary descriptor, fifteen operators across new `sar` + `io` groups, a module-wide cross-tick accumulation convention. `TESTING.md`: the Python simulator writes CPHD and is never wired in-process — a departure from the FMCW `point_target_sim.hpp` pattern. `SIGPROC_PLAN.md`: seven-operator wave one. **No** trajectory operator — per-pulse phase-center positions are an application responsibility, so the `positions` port spec carries that burden. Blocked on R1–R6 |
+| SAR modality contract (`docs/planning/SAR/`) | dpc | `dpc/sar-plan` | **in review** — four docs drafted. `WORKFLOWS.md`: stripmap + spotlight, three ingress forms converging at phase history; frequency-domain formation, InSAR, polarimetry, ScanSAR and SAR detection deferred with rationale. `OPERATOR_API.md`: `CoordinateFrame` + `SampleGeometry` descriptors, sixteen operators, a cross-tick accumulation convention with single-owner reset; retention, emission and configuration timing split into `ApertureManagerOp`. `TESTING.md`: the Python simulator writes CPHD and is never wired in-process. `SIGPROC_PLAN.md`: eight-operator wave one. **No** trajectory operator — per-pulse phase-center positions are an application responsibility. Blocked on R1, R2, R4, R5, R7; D1–D17 for review |
 
 ### Landed on `dpc/detection`
 
@@ -70,7 +70,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
   stencil, `[live]` overrides with sticky semantics, `nci_axes` non-coherent
   integration (Gamma(`K`) threshold via host incomplete-beta LUT), batch-widened
   `detection_idx`, unit + Monte Carlo statistical tests. Team open items in
-  [`CFARDetectorOp open items`](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md).
+  [CFARDetectorOp open items](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md).
 - **`CFARDetectorOp` GO slice** — 2-D GOGO greatest-of stencil (range GO ×
   Doppler GO), host Monte Carlo `alpha` LUT (CA-seeded bracket), full GO
   contract test matrix + `GoMonteCarloPfaK1` / `GoMonteCarloPfaNciK8`
@@ -110,9 +110,9 @@ needs it.
 ## Open items for team review
 
 Contract, SDK, and signal-processing questions that need a team decision are
-indexed in [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md), and the SAR modality's own in
-[`SAR/TEAM_BLOCKED.md`](SAR/TEAM_BLOCKED.md). Per-operator detail stays in
+indexed in [TEAM_BLOCKED.md](TEAM_BLOCKED.md), and the SAR modality's own in
+[SAR/TEAM_BLOCKED.md](SAR/TEAM_BLOCKED.md). Per-operator detail stays in
 each operator’s `OPEN_ITEMS.md` (for example,
-[`CFARDetectorOp open items`](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md)).
-New operators should follow [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md)
-and [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md).
+[CFARDetectorOp open items](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md)).
+New operators should follow [NEW_OPERATOR_CHECKLIST.md](NEW_OPERATOR_CHECKLIST.md)
+and [OPERATOR_DEVELOPMENT.md](OPERATOR_DEVELOPMENT.md).

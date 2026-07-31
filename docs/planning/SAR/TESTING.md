@@ -2,12 +2,12 @@
 
 ## Purpose
 
-Defines what the SAR operators must be tested against: (1) the **point-target simulator** — an analytic signal model that produces phase history with known ground truth — and (2) the **high-level, I/O-level tests** each operator must pass. Like the FMCW [`TESTING.md`](../TESTING.md) one level up, this document stays at the interface level: it specifies *what property* each test asserts, not the fixtures, tolerances, or framework. Lower-level unit tests (kernel internals, numerical tolerances, boundary indexing) are deferred.
+Defines what the SAR operators must be tested against: (1) the **point-target simulator** — an analytic signal model that produces phase history with known ground truth — and (2) the **high-level, I/O-level tests** each operator must pass. Like the FMCW [TESTING.md](../TESTING.md) one level up, this document stays at the interface level: it specifies *what property* each test asserts, not the fixtures, tolerances, or framework. Lower-level unit tests (kernel internals, numerical tolerances, boundary indexing) are deferred.
 
 Two things differ structurally from the FMCW pass, and both change how tests are wired:
 
 - **The simulator never feeds an operator in-process.** It always writes CPHD first.
-- **Several operators have no reference implementation to diff against**, so assertion effort is deliberately unbalanced toward them. The per-operator weighting is in [`SIGPROC_PLAN.md`](SIGPROC_PLAN.md), since it is a planning concern.
+- **Several operators have no reference implementation to diff against**, so assertion effort is deliberately unbalanced toward them. The per-operator weighting is in [SIGPROC_PLAN.md](SIGPROC_PLAN.md), since it is a planning concern.
 
 ## Test tiers
 
@@ -39,7 +39,7 @@ It exists today in Python, outside this repository, and writes CPHD. This sectio
 ### Outputs it must produce
 
 - **A CPHD file** carrying the phase history, per-pulse positions, reference ranges, pulse times, and the collection metadata a reader needs. This is the only interface to the operators.
-- **Ground truth alongside it** (a sidecar, not inside the CPHD): each target's Cartesian position; its slant range at aperture centre; the **predicted image-quality metrics** for the configured collection — range resolution `≈ c / (2·B)`, cross-range resolution `≈ λ / (2·Δθ)` for the subtended aperture angle `Δθ`, the range PSLR and ISLR the configured range window implies, and the cross-range PSLR and ISLR of an unweighted aperture (see R6); the true trajectory where an error was injected; and the injected phase error where one was applied.
+- **Ground truth alongside it** (a sidecar, not inside the CPHD): each target's Cartesian position; its slant range at aperture centre; the **predicted image-quality metrics** for the configured collection — range resolution `≈ c / (2·B)`, cross-range resolution `≈ λ / (2·Δθ)` for the subtended aperture angle `Δθ`, the range PSLR and ISLR the configured range window implies, and the cross-range PSLR and ISLR for both an unweighted aperture and the configured `aperture_window`; the true trajectory where an error was injected; and the injected phase error where one was applied.
   - **Not pixel indices.** Those depend on the formation configuration — grid origin, spacing, axes, `nfft` — which the simulator does not know.
   - Tests therefore assert in the **physical domain**: map an image peak back to a position through the formation grid parameters and compare to ground truth within a fraction of a resolution cell. That also validates the grid parameters themselves.
   - The predicted metrics are what make the assertions non-circular: they come from the collection parameters, not from a previous run of the pipeline.
@@ -109,7 +109,7 @@ The convention leg. Real data is where frame, sign, epoch and reference-point co
 
 Each operator lists the I/O-level properties to validate. Unless noted, all also carry the module-wide checks in *Cross-cutting tests*.
 
-Ten of the fifteen contracted operators appear below. The five omitted — `CRSDReaderOp`, `RVPRemovalOp`, `BandEqualizationOp`, `CRSDWriterOp`, `SIDDWriterOp` — have deferred port lists ([`OPERATOR_API.md`](OPERATOR_API.md) → *Open items*, I2), so there is nothing yet to write assertions against; their test requirements land with their contracts. The deramped pair additionally cannot be satisfied synthetically at all, which is a sequencing constraint rather than a testing one — see [`SIGPROC_PLAN.md`](SIGPROC_PLAN.md).
+Eleven of the sixteen contracted operators appear below. The five omitted — `CRSDReaderOp`, `RVPRemovalOp`, `BandEqualizationOp`, `CRSDWriterOp`, `SIDDWriterOp` — have deferred port lists ([OPERATOR_API.md](OPERATOR_API.md) → *Open items*, I2), so there is nothing yet to write assertions against; their test requirements land with their contracts. The deramped pair additionally cannot be satisfied synthetically at all, which is a sequencing constraint rather than a testing one — see [SIGPROC_PLAN.md](SIGPROC_PLAN.md).
 
 ### Ingress
 
@@ -147,6 +147,34 @@ Ten of the fifteen contracted operators appear below. The five omitted — `CRSD
 
 ### Image formation
 
+#### ApertureManagerOp
+
+**The one operator in this modality that is fully testable without a GPU**, which is most of the reason it exists as a separate stage: aperture bookkeeping is where off-by-one errors live, and here they are caught by asserting on emitted pulse identities and weights rather than by looking at an image. These run in the CPU-only tier.
+
+- **Membership under manager-owned eviction.** With `max_aperture_pulses = N` and `evict` unconnected, the first `N` admitted pulses produce no evictions; from pulse `N + 1` onward every tick evicts exactly as many as it admits, and the evicted pulse is the oldest resident one. With `max_aperture_pulses = 0` nothing is ever evicted.
+- **No retention exists when the capacity is zero.** With `max_aperture_pulses = 0` the operator holds no pulse handles at all across a long run — asserted on retained-buffer occupancy, not on output, since the symptom of getting this wrong is unbounded memory growth over a collection rather than a wrong image.
+- **Membership under application-owned eviction.** With `evict` connected, a count of `k` retires exactly the `k` oldest pulses and no others; a count of `0`, or no message at all, retires nothing; and the manager never retires a pulse on its own no matter how full the buffer is.
+- **Eviction precedes admission.** A count arriving on the same tick as new pulses retires from the pre-admission buffer, so "oldest" never includes a pulse admitted on that tick. Asserted on pulse identities, because the two orderings differ only when the count approaches the occupancy — which is exactly when an application is at its aperture limit.
+- **Capacity overflow errors rather than dropping.** With `evict` connected, admitting past `max_aperture_pulses` without a retiring command fails loudly. The competing behaviour — dropping the oldest — leaves a running graph whose aperture is quietly not what the application believes, so the test asserts the failure, not a recovery.
+- **Weights and ordering.** Admitted pulses carry `+1`, departing pulses `−1`, and both appear in one batch per tick, so a consumer never has to reason about the order of two messages.
+- **Departing pulses carry the geometry they were admitted with**, not the current tick's. This is the assertion that makes eviction exact; re-emitting current geometry would subtract a contribution that was never added, and the resulting image error is subtle enough to survive casual inspection.
+- **Emit cadence.** A control message appears after exactly `emit_interval_pulses` admissions since the previous one, carries the value `emit_mode` selects, and appears on no other tick.
+- **`emit_interval_pulses = 0` emits on no count at all** — no control message appears until an upstream flush request or end of stream, which is the single-image-per-collection configuration and must not require knowing the collection length.
+- **The five configurations each produce the documented behaviour**, asserted on emitted weights and control messages: one image at end of stream, disjoint blocks, a growing aperture, a fixed-length sliding window, and an application-length sliding window. The sliding and block rows are additionally checked to give identical images when configured for the same pulse sets, since the two paths reach the same sum differently.
+- **`emit_interval_pulses ≥ max_aperture_pulses` warns** under manager-owned eviction, because consecutive images then share no pulses and the cheaper `max_aperture_pulses = 0` path would produce the same result.
+- **A variable-length aperture stays exact.** Driving `evict` with a varying count — the orbiting-spotlight case, where pulses per degree changes with ground speed — leaves each emitted image containing exactly the pulses the application intended, asserted against a directly formed image over that same pulse set. This is the assertion that the application's accounting and the manager's buffer cannot drift apart.
+- **Termination.** A collection ending mid-aperture is flushed rather than dropped **when end of stream is announced** on the `control` input. The manager is also asserted *not* to invent a flush of its own, since it cannot detect end of stream — `stop()` has no `OutputContext`. Paired with `BackprojectionOp`'s termination-flush test, which is the other half of the same guarantee.
+- **Short final batch.** A batch shorter than the rest is admitted and accounted normally, since a file-backed source runs out mid-batch.
+- **Conservation.** Over a whole run, every admitted pulse is eventually either evicted, dropped by a reset, or still resident at termination — the invariant that catches a leak or a double-eviction regardless of which rule produced it.
+- **Reset drops retention silently.** An upstream `control` request, or a staged geometry change, makes the manager clear its retained pulses and emit **no** eviction weights for them. The distinction between dropping and evicting is the single most error-prone thing in this operator, so it is asserted directly rather than inferred from an image.
+- **Geometry is held and released at a boundary.** A `sample_geometry` or `sample_points` arriving mid-aperture is not forwarded until the aperture ends, and is then forwarded on the same tick as the control message — one producer, one tick, so downstream never sees one without the other.
+- **Tapering.** With `aperture_window` set on a block aperture, the emitted weights are the window sampled over the aperture's known length, in slot order. Under `emit_mode = reform` the same weights appear on the replayed batch, computed against the membership as it stood at the boundary rather than as it stood when each pulse was admitted — the distinction that makes the taper exact.
+- **Tapering an unformable configuration is refused at initialization.** `aperture_window` set on a sliding or growing aperture without `emit_mode = reform` fails, rather than silently tapering against a membership that was not final when the weights were computed.
+- **Re-form replaces rather than supplements.** Under `emit_mode = reform` no pulse batch is emitted between boundaries, and the boundary batch is the entire retained set with *reset-then-emit*. A re-formed image is asserted bit-comparable, to tolerance, against forming the same pulse set directly.
+- **Control phases.** *reset-without-emit* and *reset-then-emit* clear before the tick's pulses are accumulated, so those pulses survive into the new aperture; *emit-and-reset* clears after the emit, so the tick's pulses appear in the image that comes out. Asserted on which pulses land in which image, because getting the phase backwards produces an image short or long by one tick's worth of pulses — a defect too subtle to see.
+- **Geometry lands in its reset's phase.** A geometry change accompanying *emit-and-reset* does not resize the accumulator until after that tick's image is emitted. This is the assertion for the latent bug the phase model fixed.
+- **Build-time wiring.** A graph with `BackprojectionOp.control` unconnected fails at initialization with a message naming the port, rather than running and silently emitting nothing. Connecting both `sample_geometry` and `sample_points` fails the same way, as does connecting `evict` with `max_aperture_pulses = 0`.
+
 #### BackprojectionOp
 
 The anchor, and the operator with the most contract surface.
@@ -156,13 +184,14 @@ The anchor, and the operator with the most contract surface.
 - Point target → peak at the correct sample point, within a fraction of a resolution cell.
 - Peak **phase** matches the analytic two-way path. This is the assertion that catches range-computation errors a magnitude-only test passes over, and it is also the one that polices **phase-controlled interpolation**: the contract's case for two-tap interpolation rests on the carrier phase being applied from the exact computed range rather than being carried through the interpolator. An implementation that interpolates the complex samples directly still produces a plausible-looking image, and this assertion is what fails on it.
 - Range resolution, PSLR and ISLR match the simulator's predicted metrics for the configured bandwidth and `range_window`.
-- Cross-range resolution matches the prediction for the subtended aperture angle, and cross-range sidelobes match the **unweighted** aperture — there is no azimuth weighting in the contract (R6). Asserting a weighted figure here would be asserting a parameter that does not exist; when R6 resolves, this assertion changes with it.
+- Cross-range resolution matches the prediction for the subtended aperture angle. Cross-range sidelobes match the **unweighted** aperture where no taper is supplied, and match the figure a configured `aperture_window` predicts where one is — asserted both for a block aperture, where the manager stamps weights at admission, and for a re-formed aperture, where it computes them at the boundary. An incrementally-slid window is asserted to be unweighted, since that is the decided behaviour rather than a gap.
 - Multiple targets superpose linearly.
 - A target beyond the unambiguous range folds where predicted rather than vanishing.
 
 **Geometry and conventions:**
 
-- Grid mode and points mode produce the same values at the same physical locations — the modes differ in output rank, not in the answer.
+- The two geometry modes produce the same values at the same physical locations, **and the same output shape**: handing `sample_points` a lattice that reproduces the `sample_geometry` descriptor gives an identical image, since the modes differ only in how positions are specified. Connecting both is a build-time error.
+- **The lattice locality check fires and stays silent in the right cases.** A deliberately scattered `(num_v, num_u, 3)` lattice warns when a Taylor variant is selected; a spatially coherent one does not; and no check runs for a uniform lattice or under an exact-range variant. Both directions are asserted so the check cannot rot unnoticed, and the warning is never an error — a caller who does not care about sub-wavelength phase still gets an image.
 - A grid on a tilted, non-axis-aligned plane forms correctly; a sheared (non-orthogonal-axis) grid forms correctly.
 - The `range_bins` port, when connected, supersedes `range_bin_spacing` / `range_bin_origin`, and the two wirings agree; a non-uniform `range_bins` errors.
 - **The default range-bin origin is centred.** With `range_bins` unconnected and `range_bin_origin` unset, bin zero sits at `−⌊N/2⌋ · range_bin_spacing`, so a scene straddling the reference point forms **completely** — the regression being that an uncentred default drops everything nearer than the reference. An explicit `range_bin_origin` overrides it, which is the range-cropped case.
@@ -179,9 +208,16 @@ The anchor, and the operator with the most contract surface.
 **Accumulation (a new test pattern in this module):**
 
 - Multi-tick: forming one aperture in `N` batches equals forming it in one batch, within tolerance.
-- Emit-and-continue: a sliding window emits repeatedly, and each emitted image equals a from-scratch formation over the same pulse set. Because backprojection is linear in pulses, this is exact to numerical tolerance rather than approximate.
-- Emit-and-reset: the accumulator clears; the next image carries no contribution from the previous aperture.
-- A `[live]` geometry override (`grid_origin`, `grid_axis_*`, `grid_spacing`, `grid_counts`, or `sample_points`) **forces a reset** and warns; partial sums from the old geometry never leak into the new image.
+- **Signed weights are the eviction mechanism.** Accumulating a pulse at `+1` and later at `−1` returns the accumulator to where it was, to numerical tolerance; a weight of `0` contributes nothing; and a fractional weight scales the contribution linearly. This is the assertion the whole sliding-window story rests on.
+- Emit-and-continue: a sliding window driven by the manager emits repeatedly, and each emitted image equals a from-scratch formation over the pulse set then resident. Exact to numerical tolerance rather than approximate, because backprojection is linear in pulses.
+- **The floating-point drift bound is checked, not assumed.** A long add-then-subtract run is compared against periodic re-formation, and the divergence is asserted to grow no faster than the `sqrt(N)·eps` random walk the contract predicts. The contract previously claimed sliding windows had no drift to bound; this test is what stops that claim returning.
+- Emit-and-reset: a *reset* control message clears the accumulator; the next image carries no contribution from the previous aperture. A *reset-without-emit* message clears it and emits nothing.
+- An absent `control` message emits nothing, and an absent `weight` port is equivalent to all-`+1`.
+- **A geometry change without a reset errors.** A `sample_geometry` or `sample_points` override arriving on a tick with no resetting control message is rejected, naming the missing message — it is not deferred, not applied silently, and not allowed to produce an image of the wrong scene. This is the assertion that keeps the co-emission protocol honest.
+- **A geometry change with a reset applies within the tick**, and partial sums from the old lattice never leak into the new image. Sending the two in either order produces bit-identical results, which is what keeps the design independent of message ordering.
+- **The operator holds no pending configuration.** After a rejected change, the next accumulation still uses the original geometry — asserted so a future implementation cannot quietly reintroduce buffering.
+- **`BackprojectionOp` never resets on its own.** Overriding geometry with no reset following produces no reset — asserted directly, because the regression it guards against silently corrupts a sliding window rather than failing.
+- **A reset drops the manager's retention without evicting.** Across a reset the manager emits no `−1` weights for the pulses it was holding, and the next image contains no phantom subtraction. Asserted on emitted weights rather than on the image, since the image symptom is a mild defocus that a loose tolerance would pass.
 - `initial_image` seeds the accumulator: seeding with a prior result and adding the next block equals forming both blocks together. Arriving mid-aperture **replaces** the partial sums rather than adding to them, and warns; a shape disagreeing with the active sample geometry errors.
 - **Termination flush:** a collection ending mid-aperture still emits its partial image rather than dropping it.
 - The emitted buffer is independent of the accumulator — mutating the accumulator after emit does not alter the emitted image.
@@ -201,7 +237,7 @@ The anchor, and the operator with the most contract surface.
 - The `sharpness` output improves monotonically across iterations on a defocused input, and is flat on a focused one.
 - Fewer than `min_scatterers` strong scatterers → pass through, zero `phase_correction`, warn. An estimate exceeding `max_correction` → pass through and warn.
 - `azimuth_axis` is required: omitting it errors at build. Naming the wrong axis produces a detectably worse image, which is the regression that justifies the parameter having no default.
-- `sample_geometry_mode = points` upstream → build-time error, since there is no azimuth axis to name.
+- An explicit `sample_points` lattice upstream is **not** rejected on rank — it has nameable axes. Rejection turns on whether the named axis is the Fourier conjugate of slow-time (R4), and the test asserts against whichever geometries that resolves to allow.
 - **The grid-conjugacy assumption is tested explicitly, whichever way R4 resolves** — either a non-conjugate geometry is rejected with a clear error, or the chosen alternative is shown to work on one. What must not happen is silently producing a wrong answer on an arbitrary ground grid.
 
 ### Products

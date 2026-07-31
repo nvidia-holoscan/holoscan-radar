@@ -4,8 +4,8 @@ Contract / design questions that need a **team decision**. Individuals must
 not silently resolve these in code.
 
 Per-operator detail lives in each operator’s
-[`OPEN_ITEMS.md`](../../operators/). This file is the roll-up. When a decision
-lands, record it in [`STATUS.md`](STATUS.md) → Settled decisions, then remove
+[OPEN_ITEMS.md](../../operators/). This file is the roll-up. When a decision
+lands, record it in [STATUS.md](STATUS.md) → Settled decisions, then remove
 or archive the operator section *and* the matching row here.
 
 Items fall into **two classes**. Keep that distinction sharp when adding rows:
@@ -23,7 +23,7 @@ two classes below).
 **Per-modality files.** A modality whose contract is still under review keeps
 its own roll-up alongside its planning docs, and this file indexes it rather
 than restating its rows. Today that is
-[`SAR/TEAM_BLOCKED.md`](SAR/TEAM_BLOCKED.md), which also carries the convention
+[SAR/TEAM_BLOCKED.md](SAR/TEAM_BLOCKED.md), which also carries the convention
 for where detail lives before any operator directory exists.
 
 ---
@@ -36,8 +36,8 @@ for where detail lives before any operator directory exists.
 | Land code ahead of the contract | Record the conflict in `OPEN_ITEMS.md`; put the row under **Needs team look** (unless it truly stops checklist completion) |
 | Resolve | Team decision → `STATUS.md` Settled decisions → delete/archive both places |
 
-Agents: [`AGENTS.md`](../../AGENTS.md) (“Do not silently resolve documented open
-items”) and [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md) § Open items.
+Agents: [AGENTS.md](../../AGENTS.md) (“Do not silently resolve documented open
+items”) and [OPERATOR_DEVELOPMENT.md](OPERATOR_DEVELOPMENT.md) § Open items.
 
 ---
 
@@ -63,7 +63,10 @@ Settled decisions. Capabilities deliberately deferred out of the current scope
 (e.g. staggered TDM, sum-set holey subarray smoothing) are tracked under
 STATUS.md → Roadmap, not here.
 
-**None currently for FMCW.** The six open SAR items (R1–R6) are indexed in
-[`SAR/TEAM_BLOCKED.md`](SAR/TEAM_BLOCKED.md). They do **not** stop development,
+**None currently for FMCW.** The five open SAR items (R1, R2, R4, R5, R7) are indexed in
+[SAR/TEAM_BLOCKED.md](SAR/TEAM_BLOCKED.md). They do **not** stop development,
 because no SAR operator code exists yet; they must be answered before the SAR
-contract is accepted, and none of them may be resolved in code.
+contract is accepted, and none of them may be resolved in code. That file also
+carries D1–D17: contract calls that already have an answer and do not gate
+acceptance, enumerated so focused review reaches them rather than relying on a
+reviewer finding them in seven hundred lines of contract.

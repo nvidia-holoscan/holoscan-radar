@@ -1,14 +1,14 @@
 # New Operator Checklist
 
 Checklist for landing a new operator in **holoscan-radar**. The locked contract
-lives in [`OPERATOR_API.md`](OPERATOR_API.md); tests in
-[`TESTING.md`](TESTING.md); module conventions in
-[`AGENTS.md`](../../AGENTS.md) and
-[`operators/common/README.md`](../../operators/common/README.md).
+lives in [OPERATOR_API.md](OPERATOR_API.md); tests in
+[TESTING.md](TESTING.md); module conventions in
+[AGENTS.md](../../AGENTS.md) and
+[operators/common/README.md](../../operators/common/README.md).
 
 For *how* to implement well (hot-path discipline, diagnosis, `[live]` /
 calibration pitfalls, performance characterization — lessons from landed
-operators), see [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md).
+operators), see [OPERATOR_DEVELOPMENT.md](OPERATOR_DEVELOPMENT.md).
 
 Use **Before you're done** as the final gate; the sections below are the
 detailed how-to if you need them.
@@ -167,7 +167,7 @@ throws / sits in `OPEN_ITEMS.md`.
 ## Performance
 
 Measurement harness (not pass/fail thresholds). See
-[`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md) → Performance
+[OPERATOR_DEVELOPMENT.md](OPERATOR_DEVELOPMENT.md) → Performance
 characterization. Skip only if the operator has no GPU/hot path yet; say so
 in `OPEN_ITEMS.md`.
 
@@ -206,7 +206,7 @@ Exemplar: `performance/cpp/perf_cfar_detector.cpp`.
 - [ ] Update **`STATUS.md`** — move claim to done or refresh state.
 - [ ] Add any new **team open items** to `operators/<group>/<operator>/OPEN_ITEMS.md`
       (create it if needed) **and** index them in
-      [`docs/planning/TEAM_BLOCKED.md`](TEAM_BLOCKED.md).
+      [docs/planning/TEAM_BLOCKED.md](TEAM_BLOCKED.md).
 - [ ] PR description notes **contract changes** explicitly if `OPERATOR_API.md`
       changed.
 - [ ] Python bindings — **deferred** module-wide unless this PR is explicitly
