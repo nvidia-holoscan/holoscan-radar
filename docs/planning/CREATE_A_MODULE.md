@@ -481,13 +481,13 @@ mkdir -p modules/holoscan-my-sensor
 
 ### 4.2 **Add `metadata.json`** using schema `urn:holohub:module:v2`
 
-Refer to the schema at [module.schema.json](/utilities/metadata/module.schema.json) to get started.
+Refer to the schema at [module.schema.json](https://github.com/nvidia-holoscan/holohub/blob/main/utilities/metadata/module.schema.json) to get started.
 
 The key differences from the external-module case:
 
 - Omit `source_repository`. The resolver uses the absence of a `source` block in a
   consumer's dependency entry to detect HoloHub-hosted modules and look them up here.
-- Set `operators` to the folder names in the [operators directory](/operators/) you want this module to
+- Set `operators` to the folder names in the [operators directory](../../operators/) you want this module to
   collect.
 - Reference `dockerfile` and `documentation.readme` with paths relative to the project root, i.e.:
 
@@ -500,7 +500,7 @@ The key differences from the external-module case:
 
 ### 4.3. **Register the descriptor in CMake**
 
-Add a one-line `add_holohub_module` call in [modules/CMakeLists.txt](/modules/CMakeLists.txt).
+Add a one-line `add_holohub_module` call in [modules/CMakeLists.txt](https://github.com/nvidia-holoscan/holohub/blob/main/modules/CMakeLists.txt).
 This will tell the HoloHub CMake build system about the module, define the `-DMODULE_<my_name>` flag,
 and enable dependency handling for any applications or operators this module covers.
 
@@ -535,7 +535,7 @@ wheel.packages = []
 ### 4.5 (Optional) Enable Debian packaging
 
 Add a `holohub_configure_deb(...)` call in `modules/holoscan-my-sensor/CMakeLists.txt` to enable Debian
-packaging. See the function description in [cmake/HoloHubConfigHelpers.cmake](/cmake/HoloHubConfigHelpers.cmake)
+packaging. See the function description in [cmake/HoloHubConfigHelpers.cmake](../../cmake/HoloHubConfigHelpers.cmake)
 for parameters, including package dependency handling.
 
 For advanced cases such as various target platforms and development stacks, dynamically update
@@ -609,6 +609,6 @@ CTest treats this as *Skipped* via `SKIP_RETURN_CODE 5`.
 - Review `modules/holoscan-gstreamer/` as a HoloHub-hosted module reference, including how
   it declares system-package requirements and points its `pyproject.toml` at the
   HoloHub root for selective builds.
-- Refer to the full [CLI Reference Guide](/utilities/cli/cli_reference.md).
+- Refer to the full [CLI Reference Guide](https://github.com/nvidia-holoscan/holohub/blob/main/utilities/cli/cli_reference.md).
 
 Happy Holocoding!

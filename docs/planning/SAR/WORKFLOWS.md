@@ -12,16 +12,14 @@ The goal is to cover the large majority of real SAR deployments with a small, co
 
 ## Scope
 
-Collection modes supported in the first SAR wave:
+Collection modes supported in the first SAR wave. Modes that are *not* supported are named individually under *Out of scope (now)* below, each with the capability it would need; the table lists only what the chain forms. **Aperture** here means the one behind a single image, not the extent of the collection — a distinction that matters, since both modes collect over far more angle than any one image uses.
 
-| Mode | Beam behavior | Aperture | Azimuth resolution | Supported |
-| :--- | :------------ | :------- | :----------------- | :-------- |
-| **Stripmap** | fixed relative to the platform | continuously advancing | ≈ `D_az / 2`, range-independent | ✔ |
-| **Spotlight** | steered to dwell on one patch | bounded per scene | set by the dwell angle span | ✔ |
-| **ScanSAR / TOPS** | stepped across sub-swaths | bursted | coarser, traded for swath | — |
-| **Circular** | continuous orbit about a scene | 360° | non-standard PSF | — |
+| Mode | Beam behavior | Aperture | Azimuth resolution |
+| :--- | :------------ | :------- | :----------------- |
+| **Stripmap** | fixed relative to the platform | bounded by the beam dwell, stepping tile to tile | ≈ `D_az / 2`, range-independent |
+| **Spotlight** | steered to dwell on one patch | bounded by the dwell, fixed or sliding | set by the dwell angle span |
 
-**Stripmap is the mode that drives the architecture.** A continuously advancing aperture is the genuine streaming case: pulses arrive indefinitely, images must come out while collection continues, and the chain is therefore stateful across ticks — retention in `ApertureManagerOp`, an image accumulator in `BackprojectionOp`. Spotlight would be well served by batch formation over a fixed pulse set; it is supported because it is nearly free once stripmap works, not because it forces anything.
+**Streaming drives the architecture, and the two modes force different halves of it.** Pulses arrive indefinitely and images must come out while collection continues, so the chain is stateful across ticks — retention in `ApertureManagerOp`, an image accumulator in `BackprojectionOp`. A dwelling collection with a sliding aperture — video SAR, and the orbiting case behind the `evict` port — forces the retention, the signed-weight eviction, and an aperture length only the application knows. Stripmap forces the moving scene, and with it geometry staging and manager-owned reset. Spotlight formed as a single block is the degenerate case that falls out of both for free.
 
 ### Cross-cutting scope
 
@@ -71,7 +69,7 @@ These hold across every workflow, and are consistent with [OPERATOR_API.md](OPER
 - **Tensor layout.** Phase history is `(..., num_pulses, num_samples)`; range profiles `(..., num_pulses, num_range_bins)`; per-pulse phase-center positions `(..., num_pulses, 3)`. Images are `(..., num_v, num_u)` in **both** sample-geometry modes; an explicit sample geometry is a `(num_v, num_u, 3)` lattice of positions, one per pixel, so the modes differ in how positions are specified rather than in rank. Leading `...` axes are opaque batch dimensions, preserved as independent images through formation.
 - **The pulse axis is the aperture axis**, and it is the axis that accumulates across ticks. Everything up to `ApertureManagerOp` is stateless and per-batch; the manager is where the tick boundary stops being invisible, and formation downstream of it holds an accumulator but no aperture.
 - **One Cartesian frame, declared.** Phase-center positions and image sample points must be in the *same* right-handed metres frame. The backprojection kernel only takes norms of position differences, so it is inherently frame-free — which is exactly why a mismatch is silent. The `CoordinateFrame` descriptor is a required, no-default parameter making the frame explicit at the boundary, in the same spirit and for the same reason as FMCW's `AngleConvention`.
-- **The final pulse batch may be short.** A file-backed source runs out mid-batch, so every stage infers the pulse count from the tensor rather than from a configured batch size, and the accumulator flushes its partial result at termination.
+- **The final pulse batch may be short.** A file-backed source runs out mid-batch, so every stage infers the pulse count from the tensor rather than from a configured batch size. The trailing partial aperture is **not** flushed automatically — `Operator::stop()` has no `OutputContext`, so end of stream has to be announced on the `control` path by the operator that knows the stream ended, and an unconnected `control` discards that tail silently. Which operator sends it is open as R7.
 - **Two things the application supplies, not the library.** Per-pulse phase-center positions and the image sample geometry. See *Application responsibilities*.
 
 ## Ingress: three data forms, one convergence point
@@ -92,7 +90,11 @@ Two inputs to the chain are deliberately **not** library operators.
 
 Because no operator encodes the convention, **the port specification carries the whole burden** — frame, epoch and time reference, units, ordering, and which instant each position denotes. Getting any of those wrong degrades the image plausibly rather than failing loudly. See [OPERATOR_API.md](OPERATOR_API.md) → `BackprojectionOp` and [TESTING.md](TESTING.md).
 
-**Image sample geometry.** A regular grid is a handful of scalars and rides as ordinary `BackprojectionOp` parameters. An explicit geometry is a `(num_v, num_u, 3)` lattice on an optional input port, because a DEM-derived list of positions cannot live in YAML. Neither needs a library operator to produce it. The lattice's positions are arbitrary, but they must be **locally coherent** — a compact tile of pixels should correspond to a compact region of space — because the Taylor formation variants expand about a per-block reference. A DEM raster satisfies this naturally; a deliberately scattered lattice does not, and the operator warns.
+**Image sample geometry.** A uniform grid is one `SampleGeometry` descriptor — origin, both axes, spacing, and counts as a single atomic value, since they only make sense changing together. An explicit geometry is a `(num_v, num_u, 3)` lattice on an optional input port, because a DEM-derived set of positions cannot live in YAML. Neither needs a library operator to produce it.
+
+Either form goes to `ApertureManagerOp` rather than to formation: the manager holds it and forwards it with the reset that ends the current aperture, so the application never has to time the change against an emit — see *How an advancing scene coexists with a sliding accumulator*.
+
+The lattice's positions are arbitrary, but they must be **locally coherent** — a compact tile of pixels should correspond to a compact region of space — because the Taylor formation variants expand about a per-block reference. A DEM raster satisfies this naturally; a deliberately scattered lattice does not, and the operator warns.
 
 ---
 
@@ -151,12 +153,12 @@ Structurally identical. The difference is entirely in the manager's configuratio
 CPHD file
   → CPHDReaderOp           → phase_history, positions, reference_position
   → SARRangeCompressionOp  → range_profiles
-  → ApertureManagerOp   → range_profiles + weight + control  [no eviction; emit at completion]
+  → ApertureManagerOp   → range_profiles + weight + control  [no eviction; emit on announced end of stream]
   → BackprojectionOp       → image                       [one aperture]
   → [AutofocusOp]          → image
 ```
 
-Spotlight is *typically* the case where the manager never evicts (`max_aperture_pulses = 0`, `emit_interval_pulses = 0`) and emits once at end of stream, where reset semantics are trivial because there is only one aperture. It is not restricted to that: a fixed scene with a sliding aperture is **video SAR**, and it uses the same chain with the manager configured as stripmap's. Bounded aperture is a common spotlight *configuration*, not a property of the collection mode. It is the useful smoke test for the accumulation convention: it exercises the boundary conditions — seeding, termination flush — without the sliding-window complexity.
+Spotlight is *typically* the case where the manager never evicts (`max_aperture_pulses = 0`, `emit_interval_pulses = 0`) and emits once when end of stream is announced, where reset semantics are trivial because there is only one aperture. It is not restricted to that: a fixed scene with a sliding aperture is **video SAR**, and it uses the same chain with the manager configured as stripmap's. Bounded aperture is a common spotlight *configuration*, not a property of the collection mode. It is the useful smoke test for the accumulation convention: it exercises the boundary conditions — seeding, and the announced end-of-stream flush — without the sliding-window complexity.
 
 ### Live radar, deramped front end
 
@@ -201,12 +203,14 @@ flowchart TD
   AC -.->|"control"| BP
   RC -.->|"range_bins"| BP
   GEOM(("app-owned sample<br>geometry")) -.->|"sample_points OR<br>sample_geometry"| AC
+  POL(("app-owned emit /<br>eviction policy")) -.->|"control"| AC
+  POL -.->|"evict"| AC
   BP -->|"image (num_v, num_u)"| AF["AutofocusOp"]
   AF -->|"image"| SLC(["SLC image"])
   BP -->|"image (autofocus bypassed)"| SLC
   AF -.->|"phase_correction (num_azimuth)"| SICD["SICDWriterOp"]
   SLC -->|"image"| SICD
-  class AF,GEOM,SICD opt
+  class AF,GEOM,POL,SICD opt
 ```
 
 Later-wave ingress branches and product stages:
@@ -245,11 +249,11 @@ flowchart LR
 Retention and the emit decision belong to `ApertureManagerOp`, not to formation. The two axes are still real; they are now manager configuration rather than formation parameters.
 
 - **Aperture membership** — which pulses are in. `max_aperture_pulses` is the retention capacity: `0` means no retention, so nothing evicts and the aperture grows or blocks. With a capacity and no `evict` port wired, the manager runs a trailing-N sliding window — each newly admitted pulse displaces the oldest, which leaves on the same tick. Wiring `evict` hands that choice to the application, which is what an aperture defined by angle subtended rather than by pulse count requires: at constant PRF, a varying ground speed means a varying number of pulses per degree of orbit, and only the application knows it.
-- **Emit and reset** — when an image comes out and what happens next. `emit_interval_pulses` sets the cadence, or `0` defers entirely to end of stream and upstream flush requests; `emit_mode` picks *emit-and-continue*, which the sliding window uses, *emit-and-reset*, which gives block apertures, or *reform*, which replays the retained aperture at each boundary and is what a cross-range taper requires. The four resulting behaviours, and the fact that collection mode is orthogonal to all of them, are tabulated in [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp`.
+- **Emit and reset** — when an image comes out and what happens next. `emit_interval_pulses` sets the cadence, or `0` defers entirely to end of stream and upstream flush requests; `emit_mode` picks *emit-and-continue*, which the sliding window uses, *emit-and-reset*, which gives block apertures, or *reform*, which replays the retained aperture at each boundary and is what a cross-range taper requires. The five resulting configurations, and the fact that collection mode is orthogonal to all of them, are tabulated in [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp`.
 
 **Both reach formation as data rather than configuration** — a per-pulse signed `weight` and a `control` message. That is what makes stripmap and spotlight the same graph with different YAML instead of two pipelines, and it is why an application needing a rule we did not anticipate (angle-subtended, quality-gated, externally triggered) writes its own manager against the same ports rather than asking for another enum value.
 
-**R2 is correspondingly narrower.** The mechanism is settled; only what the control message carries beyond emit-and-continue, emit-and-reset, and reset-without-emit is open — see [OPERATOR_API.md](OPERATOR_API.md) → *Cross-tick accumulation* and [TEAM_BLOCKED.md](TEAM_BLOCKED.md).
+**R2 is correspondingly narrower.** The mechanism is settled; only what the control message carries beyond emit-and-continue, emit-and-reset, reset-without-emit, and reset-then-emit is open — see [OPERATOR_API.md](OPERATOR_API.md) → *Cross-tick accumulation* and [TEAM_BLOCKED.md](TEAM_BLOCKED.md).
 
 **Eviction is accumulation with the opposite sign.** Backprojection is linear in pulses, so subtracting a departing pulse's contribution is exactly re-accumulating it at weight `−1`; there is no separate eviction path and nothing approximated away. In exact arithmetic a sliding window is therefore exact. In floating point it is not quite — repeated add-then-subtract random-walks the accumulator at roughly `sqrt(N)·eps`, reaching near −80 dB after a million ticks, which is inside the band the precision modes exist to defend. A long-running sliding window wants a periodic re-form for **numerical** reasons, not algebraic ones.
 
@@ -271,22 +275,31 @@ The same argument applies to `ClusterDBSCANOp` only in part: clustering over a f
 
 ## Workflow comparison
 
-| | Stripmap | Spotlight | Live deramped | Live direct-sampled |
-| :--- | :--- | :--- | :--- | :--- |
-| Ingress | `CPHDReaderOp` | `CPHDReaderOp` | app source + RVP/equalization | app source + matched filter |
-| Positions from | the file | the file | the application | the application |
-| Aperture (`max_aperture_pulses`) | sliding, `N` | one block, `0` | sliding, `N` | sliding, `N` |
-| Emit mode (`emit_mode`) | continue | reset | continue | continue |
-| Sample geometry | steps at aperture boundaries | fixed for the collection | steps at boundaries | steps at boundaries |
-| Autofocus | usually (airborne) | usually (airborne) | usually | platform-dependent |
+Two things vary independently, so this is two tables rather than one. **Ingress branch** decides everything ahead of the shared phase-history node; **collection mode** decides everything after it, and all of that is manager configuration. Any branch composes with any mode.
 
-**How an advancing scene coexists with a sliding accumulator.** Those two rows interact, and the interaction is easy to misread as a contradiction. Partial sums computed against one set of sample points mean nothing against another, so the scene cannot drift continuously underneath a running sum.
+| Ingress branch | CPHD file | Live deramped | Live direct-sampled |
+| :--- | :--- | :--- | :--- |
+| Source | `CPHDReaderOp` | app source | app source |
+| Branch-entry stages | none | `RVPRemovalOp` → `BandEqualizationOp` | `RangeMatchedFilterOp` |
+| Positions from | the file | the application | the application |
+| Can announce a boundary | the reader, at file end (R7) | nothing to announce | nothing to announce |
+
+| Collection mode | Stripmap | Spotlight, single block | Video SAR (dwelling) |
+| :--- | :--- | :--- | :--- |
+| Scene | steps per tile | fixed for the collection | fixed for the collection |
+| `max_aperture_pulses` | 0 | 0 | `N`, or ≥ longest with `evict` |
+| `emit_mode` | reset | reset | continue |
+| App ports | — | `control` | `control`, plus `evict` where the app owns the length |
+
+**How an advancing scene coexists with an accumulator.** The scene row and the aperture rows interact, and the interaction is easy to misread as a contradiction. Partial sums computed against one set of sample points mean nothing against another, so the scene cannot drift continuously underneath a running sum.
 
 The resolution is that **the application does not time the step; the manager does**. A new `sample_geometry` goes to the manager, which holds it, keeps admitting pulses into the aperture in flight, and forwards it to formation together with a reset when that aperture ends (see [OPERATOR_API.md](OPERATOR_API.md) → *Who owns reset*). So an app pushes a new scene whenever it likes and never has to reason about where it lands relative to an emit; the change takes effect at the next boundary by construction. Formation itself buffers nothing — a geometry change reaching it without a reset is an error, which is what stops a mis-behaving manager from quietly forming the wrong scene. That is why "advances" in that row means *steps*, not *drifts*.
 
-What remains a real design choice is how *often* to step. Stepping every aperture makes every image a fresh scene and forfeits the sliding window's incremental saving; stepping rarely, by a scene's worth at a time, is what stripmap actually does.
+What remains a real design choice is how *often* to step. Stepping every aperture makes every image a fresh scene and forfeits any incremental saving, which is why stripmap steps by a tile at a time and why sliding pays only where the scene is fixed.
 
-Everything from the shared phase-history node downstream is identical across all four — the same operators in the same order, differing only in two manager parameters. Only the ingress branch and the source of positions genuinely vary, which is the property that makes the alternate ingress work additive rather than a second pipeline, and moving retention into the manager is what reduced the stripmap/spotlight distinction to a pair of YAML values.
+**Stripmap tiles are disjoint in pixels but overlap in pulses, and that overlap is not yet expressible.** A tile's edge pixels are illuminated for a full synthetic aperture length, so the pulse set a tile needs extends past the tile itself and consecutive tiles' sets overlap by that length. `CPHDReaderOp` emits each pulse once and a reset drops the manager's retention, so a tile boundary discards exactly the pulses the next tile's leading edge wants, and those pixels form at degraded azimuth resolution — a seam, not a failure. The mechanism that would close it already exists in another guise: `reform`'s replay of a retained set, applied across a geometry step rather than within one geometry. Tracked as **R9**.
+
+Everything from the shared phase-history node downstream is the same operators in the same order, whichever branch fed it and whichever mode is configured. That is what makes alternate ingress additive rather than a second pipeline, and what reduces the mode distinction to a pair of YAML values.
 
 Autofocus is not a column in the sense the FMCW comparison uses columns: like clustering there, it is orthogonal to the mode and attaches wherever an image exists.
 

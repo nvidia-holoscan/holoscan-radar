@@ -41,7 +41,7 @@ It exists today in Python, outside this repository, and writes CPHD. This sectio
 - **A CPHD file** carrying the phase history, per-pulse positions, reference ranges, pulse times, and the collection metadata a reader needs. This is the only interface to the operators.
 - **Ground truth alongside it** (a sidecar, not inside the CPHD): each target's Cartesian position; its slant range at aperture centre; the **predicted image-quality metrics** for the configured collection — range resolution `≈ c / (2·B)`, cross-range resolution `≈ λ / (2·Δθ)` for the subtended aperture angle `Δθ`, the range PSLR and ISLR the configured range window implies, and the cross-range PSLR and ISLR for both an unweighted aperture and the configured `aperture_window`; the true trajectory where an error was injected; and the injected phase error where one was applied.
   - **Not pixel indices.** Those depend on the formation configuration — grid origin, spacing, axes, `nfft` — which the simulator does not know.
-  - Tests therefore assert in the **physical domain**: map an image peak back to a position through the formation grid parameters and compare to ground truth within a fraction of a resolution cell. That also validates the grid parameters themselves.
+  - Tests therefore assert in the **physical domain**: map an image peak back to a position through the formation sample geometry and compare to ground truth within a fraction of a resolution cell. That also validates the sample geometry itself.
   - The predicted metrics are what make the assertions non-circular: they come from the collection parameters, not from a previous run of the pipeline.
 
 ### The signal model (per target, summed)
