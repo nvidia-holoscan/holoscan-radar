@@ -28,6 +28,12 @@ than restating its rows. Today that is
 [SAR/TEAM_BLOCKED.md](SAR/TEAM_BLOCKED.md), which also carries the convention
 for where detail lives before any operator directory exists.
 
+**Questions for upstream.** Where a blocked item turns on Holoscan SDK intent
+rather than on a call this team can make, the question is drafted in
+[SDK_QUESTIONS.md](SDK_QUESTIONS.md) and referenced from the row it blocks.
+Asking upstream is a resolution path, not a detour: an item resolved that way
+is recorded in [STATUS.md](STATUS.md) like any other.
+
 ---
 
 ## How to use

@@ -744,10 +744,10 @@ Every unresolved question in this document, in the two classes [TEAM_BLOCKED.md]
 
 - **R1 — contract acceptance**, including the invariant amendments above.
 - **R2 — what the `control` message contains.** Narrowed: the mechanism is settled as `ApertureManagerOp` driving a non-blocking `control` port, and what is left is the message's payload beyond the four settled values. See *Cross-tick accumulation* → *[PROPOSED] How the application supplies the emit decision*.
-- **R7 — who announces a collection boundary.** Split out of R2: the contract needs an end-of-stream and file-boundary announcement on the `control` path, and no operator declares a `control` output able to produce one. See `CPHDReaderOp` → *Notes*.
+- **R7 — who announces a collection boundary.** Split out of R2: the contract needs an end-of-stream and file-boundary announcement on the `control` path, and no operator declares a `control` output able to produce one. See `CPHDReaderOp` → *Notes*, and [SDK_QUESTIONS.md](../SDK_QUESTIONS.md) for the upstream half — whether the announcement belongs on a port at all, or rides the data as metadata.
 - **R9 — stripmap tile overlap.** Tiles are disjoint in pixels but overlap in pulses by a synthetic aperture length, and nothing in the contract can re-present a pulse to a second geometry, so tile seams form at degraded azimuth resolution. See [WORKFLOWS.md](WORKFLOWS.md) → *Workflow comparison*.
 - **R4 — `AutofocusOp` grid conjugacy.** Three resolutions; determines whether autofocus is a downstream stage, a feedback loop, or geometry-restricted. See `AutofocusOp` → *Notes* for the resolutions and what each costs.
-- **R5 — whether a metadata plane is in scope.** Forced by the writers, whose mirrored geometry and window parameters are the symptom. Cross-cutting, so it belongs in the contract or is explicitly deferred, never discovered during implementation.
+- **R5 — whether a metadata plane is in scope.** Forced by the writers, whose mirrored geometry and window parameters are the symptom. Cross-cutting, so it belongs in the contract or is explicitly deferred, never discovered during implementation. Whether Holoscan's metadata dictionary can serve is asked upstream in [SDK_QUESTIONS.md](../SDK_QUESTIONS.md): its policy is per operator rather than per key, so a stage that legitimately redefines a key cannot be distinguished from two stages accidentally disagreeing — which is the failure this item exists to prevent.
 
 **Implementation-time** — settled by writing the code, not by a team decision:
 
