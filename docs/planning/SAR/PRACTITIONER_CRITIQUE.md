@@ -12,6 +12,12 @@ level up and the SAR proposal under review.
 This is review input for contract acceptance (R1), not a substitute for
 [TEAM_BLOCKED.md](TEAM_BLOCKED.md). Open items named here map to that index.
 
+**The text below is left as written.** One item it raises has since been
+answered: **R9**, the stripmap tile overlap of § 2, is closed as **D18** — a
+strip now scrolls rather than being tiled, so the seams the critique objects to
+do not arise. Every other item named here is still open, and the critique's own
+severity ranking still stands for them.
+
 **Audience assumed here.** First target is **satellite / spaceborne**; the goal
 is still to appeal to as many practitioners as is feasible (airborne,
 spotlight, video SAR, live front ends) without letting secondary cases dictate
@@ -279,7 +285,7 @@ the docs lead with the simple file-backed recipe.
 **Breadth / honest optional autofocus (do not advertise AF-on-any-lattice
 until done):**
 
-4. **R4** — prefer wave-one **(a) hard reject** on non-conjugate grids for PGA,
+1. **R4** — prefer wave-one **(a) hard reject** on non-conjugate grids for PGA,
    document no-AF spaceborne + conjugate-grid PGA as the two supported AF
    shapes, and schedule (b) or (c) when airborne / residual-POD demand
    requires AF on ground or DEM lattices.
