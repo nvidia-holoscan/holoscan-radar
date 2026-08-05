@@ -18,13 +18,13 @@ It is a shortened, re-aimed version of [WORKFLOWS.md](WORKFLOWS.md), which carri
 - **Phase history in, complex image out.** CPHD is the input format; the single-look complex image is the primary product, written as SICD.
 - **It forms onto arbitrary sample positions.** You can give it a uniform lattice, or a position per pixel. A DEM-conformal or map-projected grid is therefore formed *directly*, at the geometry you want, rather than formed in radar geometry and resampled afterwards. Geocoding is available but optional, and skipping it costs you one interpolation loss you would otherwise pay.
 
-Airborne and spaceborne are not different modes. They differ in navigation quality, in range scale, and therefore in which internal arithmetic is required and whether you need autofocus — all of which are settings.
+Airborne and spaceborne are not different modes. They differ in navigation quality, in range scale, and therefore in which internal arithmetic is required — all of which are settings. Autofocus is a separate opt-in (off by default); see *What you get, and what it costs*.
 
 ---
 
 ## The pipeline
 
-Data flows one way, each stage is independent, and three of them are optional.
+Data flows one way, each stage is independent, and multilook / geocode are optional. **Autofocus is off on this diagram** — that is the default. The usual product is formed directly onto ground / DEM sample geometry you supply.
 
 ```mermaid
 flowchart TD
@@ -33,17 +33,17 @@ flowchart TD
   RC --> AM["aperture management<br>(which pulses, and when an image comes out)"]
   AM --> BP["image formation<br>(backprojection)"]
   NAV(("per-pulse phase-centre<br>positions")) --> AM
-  GEOM(("image sample geometry")) --> AM
-  BP --> AF["autofocus"]
-  AF --> SLC(["SLC image → SICD"])
-  BP --> SLC
+  GEOM(("image sample geometry<br>(typically ground / DEM)")) --> AM
+  BP --> SLC(["SLC image → SICD"])
   SLC --> ML["multilook"]
   ML --> GC["geocode"]
   GC --> PROD(["detected product"])
   ML --> PROD
   DEM(("DEM")) -.-> GC
-  class AF,ML,GC,DEM opt
+  class ML,GC,DEM opt
 ```
+
+**Autofocus, when you opt in.** For a ground / DEM product, PGA cannot estimate on the image you deliver: you form a small radar-geometry image only to estimate from, apply the resulting phase-per-pulse to the pulses, then form the product once. That is two formations, not a loop, and not the default path. In-place autofocus exists only when you deliberately deliver a radar-geometry product. See *What you get, and what it costs*.
 
 **Circles are yours to supply; dashed boxes are optional.** Two of the circles matter a great deal and are covered under *What you supply* below.
 
@@ -173,7 +173,13 @@ Two inputs are deliberately yours, and both are places where a mistake degrades 
 
 **Range interpolation is two-tap, and that is a considered choice rather than a limitation.** The envelope is interpolated while the carrier phase is applied separately from the exact computed range, so a two-tap envelope error never becomes a phase error. Impulse-response quality is bought by oversampling the range profile during compression, which is the conventional place to pay for it.
 
-**Autofocus is available, with one caveat that matters here.** Phase gradient autofocus is the first-wave algorithm, and PGA assumes the image's azimuth axis is the Fourier conjugate of slow time. That holds for a polar or range-Doppler grid. **It does not hold for an image backprojected onto an arbitrary ground grid or DEM**, which is precisely the case this processor exists to serve well, so the two features are in tension and how that resolves is still open. Map drift and minimum-entropy are the candidates for the geometry-agnostic case and are not built.
+**Autofocus is off by default**, and that matches this processor's usual product: form straight onto a ground / DEM lattice. Phase gradient autofocus is wave one's opt-in estimator when residual phase requires it — not the standard mode. PGA assumes the image's azimuth axis is the Fourier conjugate of slow time, which is true of a polar or range-Doppler grid and false of a ground / DEM image, so it cannot estimate on the product this processor exists to form.
+
+When you opt in on a map product: the processor retains the aperture, forms a small radar-geometry image from that full aperture only to estimate on, publishes a **phase per pulse**, applies it to those same pulses, then forms the real product once — on one replay of the aperture, not as pulses trickle in. That costs aperture-sized memory retention plus a few percent of formation for the small estimation image. This is a whole-aperture sequence, not a sliding incremental update. In-place autofocus is a footnote for when you deliberately deliver a radar-geometry SLC instead.
+
+Two consequences you should price in if you opt in. **You have to build that second, conjugate geometry** — it is derivable from the trajectory you already supply, but it is more than handing over a DEM, and nothing can verify you got it right: the estimator sees an image and no geometry, so a wrongly declared azimuth axis yields a plausible wrong correction rather than an error.
+
+And **autofocus costs absolute geolocation**, on any route: the estimate is ambiguous up to a linear and constant phase, which is an image shift, and PGA discards those terms rather than recovering them. That trade is sharpest here, because forming straight onto a DEM is itself a geolocation claim — which is why omitting autofocus is the default answer rather than a gap. Map drift and minimum-entropy would estimate on any geometry and skip the auxiliary image entirely; both are wanted and neither is built.
 
 **Seams and margins are visible in strip products.** A tiled strip has under-integrated pixels at every tile join. A continuous strip has an under-integrated leading margin instead, and consecutive sections overlap, so the rule is to prefer the later section where two overlap — a pixel that was short of pulses in one is complete in the next. Both ends of a collection are short in the same way, and a strip that scrolls its buffer too shallowly for the dwell loses azimuth resolution uniformly rather than failing.
 
@@ -213,7 +219,7 @@ Standard formats: **CPHD** read and write in the first wave, **SICD** write in t
 Stated plainly, because these are the points worth arguing with.
 
 - **Operational strip products want a tapered seam-free strip**, and you must currently choose seams or sidelobes.
-- **PGA and arbitrary ground geometry pull against each other**, and forming directly onto a DEM is the headline capability that puts them in tension.
+- **Opting into autofocus on a ground or DEM product costs you a second geometry to build and some absolute geolocation**, and nothing can check that you built the estimation grid correctly. The default path skips autofocus.
 - **The first wave is CPHD in, SICD out.** A raw or live front end is a later wave, and the front end itself would be yours regardless.
 - **Trajectory accuracy is entirely yours** and is the dominant error term for the image. Nothing in the chain can check it, and every way of getting it wrong looks like a marginal collection.
 - **Wide swath and sub-aperture looks stop one stage short** of the product you would actually deliver.

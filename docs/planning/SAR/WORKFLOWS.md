@@ -8,11 +8,16 @@ The two halves are written for two readers. *Image-formation modes* names each m
 
 This is the SAR analogue of the FMCW [WORKFLOWS.md](../WORKFLOWS.md) one level up, and it plays the same role: the operators in [OPERATOR_API.md](OPERATOR_API.md) are **derived from these chains**, not the other way round. If a chain does not need an operator, that operator does not exist.
 
-**Autofocus (**`AutofocusOp`**)** is an optional stage with one pluggable algorithm slot, described once in *Autofocus algorithms* below and shown inline where it applies. Like FMCW's angle-estimator slot it is orthogonal to the collection mode, so it never fans out per workflow.
+**Autofocus is off by default.** The module's usual product is a ground / DEM backprojection; omitting autofocus is the first-class path for that product. When autofocus is wanted, wave one offers PGA as a constrained estimator — not as the standard mode — wired in Figure 2 (map/DEM products) or Figure 3 (radar-geometry products). The algorithm slot and its alternatives are described once in *Autofocus algorithms*; like FMCW's angle-estimator slot it is orthogonal to the collection mode, so it never fans out per workflow.
 
 The goal is to cover the large majority of real SAR deployments with a small, composable operator set — not to enumerate every corner case.
 
-**[PRACTITIONER_OVERVIEW.md](PRACTITIONER_OVERVIEW.md) is a derivative of this document** for a SAR practitioner outside the project: the same modes and the same scope, with every operator, port and parameter removed, and the image-quality consequences collected into one place. It is the version to hand to a reviewer who will not touch the implementation. This document remains the source of truth — when the mode inventory, the deferred list or a quality claim changes here, regenerate it there in the same pass, from the prompt in *Appendix — prompt for regenerating the practitioner overview* at the end of this document.
+**Two audience derivatives** of this document (regenerate from the *Appendix* prompts when modes, deferred list, quality claims, or mode→config mapping change — do not hand-patch):
+
+- [PRACTITIONER_OVERVIEW.md](PRACTITIONER_OVERVIEW.md) — SAR expert outside the project; no operators/ports; judges coverage and image quality.
+- [DEVELOPER_OVERVIEW.md](DEVELOPER_OVERVIEW.md) — software engineer who will build this stack; keeps operator names and wiring; translates collection-mode jargon into graph/config terms.
+
+This document remains the source of truth for modes and chains; [OPERATOR_API.md](OPERATOR_API.md) remains the source of truth for contracts.
 
 ---
 
@@ -147,7 +152,7 @@ Most modes above are named for the collection that produces them, so a reader ar
 
 ## The operators, in one line each
 
-The chains below are built from sixteen operators, introduced here so the rest of the document can name them freely. These are one-line summaries for orientation only — [OPERATOR_API.md](OPERATOR_API.md) holds the contracts, and is the authority wherever the two read differently.
+The chains below are built from seventeen operators, introduced here so the rest of the document can name them freely. These are one-line summaries for orientation only — [OPERATOR_API.md](OPERATOR_API.md) holds the contracts, and is the authority wherever the two read differently.
 
 **Ingress — where data enters.** A live radar source is not among them: it is sensor-specific and app-supplied, following the FMCW `custom_ops.hpp` pattern.
 
@@ -160,12 +165,13 @@ The chains below are built from sixteen operators, introduced here so the rest o
 - `BandEqualizationOp` — corrects amplitude and phase taper across the band, completing phase history.
 - `RangeMatchedFilterOp` — turns direct-sampled pulses into phase history.
 - `SARRangeCompressionOp` — phase history to range profiles. Every branch reaches it.
+- `PhaseCorrectionOp` — applies a per-pulse phase to range profiles. Optional and stateless; how an autofocus estimate reaches a formation on a different geometry.
 
 **Image formation — range profiles to an image.** The two-operator split here is the central design decision of the chain, and *Chains* explains why.
 
 - `ApertureManagerOp` — optional operator encapsulating geometry, range-profile, and image-emission management, simplifying application development for certain modes.
 - `BackprojectionOp` — forms the image, summing what it is handed across ticks. Owns an accumulator, not an aperture.
-- `AutofocusOp` — estimates and applies a residual phase correction. An omittable stage, not a mode inside formation.
+- `AutofocusOp` — estimates a per-pulse residual phase correction, and applies it in-image where the product is itself on a conjugate grid. An omittable stage, not a mode inside formation.
 
 **Products — after the image exists.**
 
@@ -178,7 +184,7 @@ The chains below are built from sixteen operators, introduced here so the rest o
 - `SICDWriterOp` / `SIDDWriterOp` — write the complex image, and the detected product after multilook or geocode.
 - `TensorDumpOp` — dumps any tensor at any port boundary.
 
-**Half of them are wave one:** `CPHDReaderOp`, `SARRangeCompressionOp`, `ApertureManagerOp`, `BackprojectionOp`, `AutofocusOp`, `CPHDWriterOp`, `SICDWriterOp` and `TensorDumpOp`. The other eight are deferred with the seams they attach to — the two alternate ingress branches, the raw reader and its writer, `SIDDWriterOp`, and both product stages. See [SIGPROC_PLAN.md](SIGPROC_PLAN.md). Note that the chains below dash what is *optional*, which is a different thing — `AutofocusOp` is wave one and dashed, the deferred branches are drawn solid in the chains they define.
+**Nine of the seventeen are wave one:** `CPHDReaderOp`, `SARRangeCompressionOp`, `PhaseCorrectionOp`, `ApertureManagerOp`, `BackprojectionOp`, `AutofocusOp`, `CPHDWriterOp`, `SICDWriterOp` and `TensorDumpOp`. The other eight are deferred with the seams they attach to — the two alternate ingress branches, the raw reader and its writer, `SIDDWriterOp`, and both product stages. See [SIGPROC_PLAN.md](SIGPROC_PLAN.md). Autofocus operators are wave one but **off the default spine** (Figure 1); they appear only in the opt-in Figures 2–3. Dashed nodes elsewhere still mark optional stages; deferred branches are drawn solid in the chains they define.
 
 ---
 
@@ -220,7 +226,7 @@ The lattice's positions are arbitrary, but they must be **locally coherent** —
 
 ## Notation & wiring notes
 
-Chains appear as a `text` block showing how tensor shapes evolve, and — where the wiring differs rather than merely omitting an optional operator — as a **Mermaid flowchart** in which each edge is a Holoscan port connection **labeled with the tensor it carries** (e.g. `range_profiles`, `positions`). The flowcharts are numbered **Figure 1** through **Figure 3** under *Port-level wiring*, so they can be cited by number.
+Chains appear as a `text` block showing how tensor shapes evolve, and — where the wiring differs rather than merely omitting an optional operator — as a **Mermaid flowchart** in which each edge is a Holoscan port connection **labeled with the tensor it carries** (e.g. `range_profiles`, `positions`). The flowcharts are numbered **Figure 1** through **Figure 5** under *Port-level wiring*, so they can be cited by number.
 
 **Node shape carries meaning here**, unlike in the FMCW diagrams, where every node is an operator except a single external ADC source that the notation names in prose. These chains have too many non-operator nodes for that to work — an application-supplied input, an intermediate product, and the edge a record tap hangs off are all things a reader must not mistake for a stage:
 
@@ -237,7 +243,9 @@ Cross-cutting wiring facts, which apply across the diagrams:
 - `range_bins` is the optional third edge: wiring `SARRangeCompressionOp.range_bins → BackprojectionOp.range_bins` makes the two stages' range axes consistent by construction, and supersedes `range_bin_spacing` / `range_bin_origin`. Leaving it unconnected means the caller mirrors `nfft` by hand. `CPHDReaderOp.sample_axis` is **not** a substitute: it is the stored-sample axis (frequency or time of arrival), not a range axis, and it has the same length as `range_bins` whenever `nfft` is unset — so the mis-wiring is shape-legal and shows up only as a displaced image.
 - `sample_points` carries an explicit lattice, and connecting it is what selects that mode; a uniform lattice rides the `sample_geometry` descriptor instead and has no tensor edge. Either way the image comes out `(..., num_v, num_u)`, and either way the geometry reaches formation through the manager so that a change and the reset it needs arrive together — except under `geometry_change = scroll`, where geometry goes directly to formation and `sample_points` carries only the entering rows after the first message.
 - `weight` **and** `control` are the manager's edges into formation. `weight` carries `+1` for pulses entering the aperture and `−1` for those leaving it, which is the whole eviction mechanism; `control` says when an image comes out. Both are what used to be `BackprojectionOp` parameters. Two matching *inputs* run the other way, from the application into the manager — `evict` and `control` — for the cases where the application owns those decisions rather than configuring them. Under `geometry_change = scroll` formation rejects a connected `weight`, so a manager there — if one is present at all — emits `control` and nothing else, which is a job the application or the reader does equally well.
-- `AutofocusOp` **is in-place on the data plane** — `image` in, `image` out, same shape — so it can be inserted or removed without rewiring its neighbours. Its `phase_correction` output goes to `SICDWriterOp`, not to the next processing stage.
+- **Autofocus is not on the default spine.** Figure 1 ends at the SLC. PGA attaches only when an application opts in: Figure 2 for the usual ground / DEM product, Figure 3 when the product itself is already on a radar-geometry (conjugate) lattice. Both paths emit `phase_correction` indexed by **pulse**. It goes to `SICDWriterOp` as metadata and, in Figure 2, into `PhaseCorrectionOp` on the pulse path — never along the image path into multilook or other product stages.
+- **Figure 2 requires a retained aperture replay.** Configure `ApertureManagerOp` with `max_aperture_pulses > 0` and `emit_mode = reform` (or an app-owned equivalent). On that reform tick: conjugate-grid auxiliary `BackprojectionOp` → `AutofocusOp`; `PhaseCorrectionOp` corrects the **same replayed pulses**; product `BackprojectionOp` forms the DEM image — in graph dependency order within the tick. Product geometry stages through the manager; the auxiliary conjugate lattice is on the aux instance alone. Not for `emit_mode = continue` or scroll. See [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp` → *Autofocus on a ground / DEM product*.
+- `PhaseCorrectionOp` **is in-place on the data plane** — `range_profiles` in, same out — and appears only in Figure 2, **after** the aperture source and **before** the product formation. Its `phase_correction` is required/blocking and comes from `AutofocusOp` on the replay tick: two formations, not a loop.
 - **Writers and dumps are taps.** They attach to an existing edge without consuming it, so they never appear between two processing stages.
 
 ---
@@ -248,11 +256,11 @@ Cross-cutting wiring facts, which apply across the diagrams:
 
 `ApertureManagerOp` is the operator whose presence varies most visibly, since it is optional everywhere (see *How the modes reach the operator chain*) and mode 4 never has one. Leaving it out is not a different chain: geometry then goes straight from the application to formation, and `control` comes from whatever the graph already has — usually the reader, or a small app-owned operator.
 
-The listings below are the **shape view**: operators in order, with the tensor each hands on and how its shape evolves. They are deliberately not diagrams — the port-level wire diagrams are Figures 1 through 3 under *Port-level wiring*, and carry the Holoscan port name on every edge. Read a listing to see what the data becomes, a figure to see what connects to what.
+The listings below are the **shape view**: operators in order, with the tensor each hands on and how its shape evolves. They are deliberately not diagrams — the port-level wire diagrams are Figures 1 through 5 under *Port-level wiring*, and carry the Holoscan port name on every edge. Read a listing to see what the data becomes, a figure to see what connects to what.
 
 ### CPHD file — the wave-one chain
 
-Pulses arrive continuously, the manager decides which are in the current aperture and when an image comes out, and formation sums what it is handed.
+Pulses arrive continuously, the manager decides which are in the current aperture and when an image comes out, and formation sums what it is handed. Autofocus is omitted here — that is the default; Figures 2 and 3 show how it attaches when opted in.
 
 ```text
 CPHD file
@@ -264,7 +272,6 @@ CPHD file
                            + weight         (num_emitted)           [+1 entering, -1 leaving]
                            + control                                [when to emit]
   → BackprojectionOp       → image          (num_v, num_u)          [accumulating]
-  → [AutofocusOp]          → image          (num_v, num_u)          [+ phase_correction]
   → [MultilookOp]          → multilook      (num_v', num_u')
   → [GeocodeOp]            → product        (num_northing, num_easting)
 ```
@@ -302,7 +309,7 @@ live radar (app source)   → pulses (num_pulses, num_samples)
 
 ## Port-level wiring
 
-**Figure 1 — The wave-one chain**, serving every mode. Dashed nodes and edges are optional. `ApertureManagerOp` is drawn where it sits *when used*; it is solid because the edges through it always exist, not because the operator is mandatory. An application owning its own apertures produces `weight` and `control` itself and the manager leaves the graph. Mode 4 is the case with least left for it to do — scroll mode requires `weight` unconnected and retains nothing — but nothing forbids one there either, driving `control` alone on a cadence.
+**Figure 1 — The wave-one chain (autofocus off)**, the default path, serving every mode. The usual product is a ground / DEM lattice (`sample_points` or `sample_geometry`); nothing here requires a radar-geometry grid. Dashed nodes/edges are optional. `ApertureManagerOp` is drawn where used (solid because its edges exist when present, not because it is mandatory). An app owning apertures supplies `weight`/`control` itself. Mode 4 may drive `control` alone. Autofocus is omitted unless the app opts into Figure 2 or 3.
 
 ```mermaid
 flowchart TD
@@ -315,18 +322,70 @@ flowchart TD
   AC -->|"weight (num_emitted)"| BP
   AC -.->|"control"| BP
   RC -.->|"range_bins"| BP
-  GEOM(("app-owned sample<br>geometry")) -.->|"sample_points OR<br>sample_geometry"| AC
+  GEOM(("app-owned sample<br>geometry<br>(typically ground / DEM)")) -.->|"sample_points OR<br>sample_geometry"| AC
+  POL(("app-owned emit /<br>eviction policy")) -.->|"control"| AC
+  POL -.->|"evict"| AC
+  BP -->|"image (num_v, num_u)"| SLC(["SLC image"])
+  SLC -->|"image"| SICD["SICDWriterOp"]
+  class GEOM,POL,SICD opt
+```
+
+**Figure 2 — PGA on a ground / DEM product** (D20), Figure 1 with the autofocus splice. **Required:** `max_aperture_pulses > 0` and `emit_mode = reform` (AF-off `max_aperture_pulses = 0` cannot replay after AF). On the reform tick the manager replays the aperture once → aux conjugate `BackprojectionOp` → `AutofocusOp` → `PhaseCorrectionOp` → product `BackprojectionOp`, in dependency order within the tick. Product geometry stages through the manager; conjugate lattice is on the aux instance only. Not sliding or scroll. PGA is opt-in; conjugacy is declared, not checked; estimate costs some absolute geolocation. Prefer Figure 1 when nav is good enough. Detail: [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp` → *Autofocus on a ground / DEM product*.
+
+```mermaid
+flowchart TD
+  classDef opt stroke-dasharray:4 3
+  READ["CPHDReaderOp"] -->|"phase_history (num_pulses, num_samples)"| RC["SARRangeCompressionOp"]
+  READ -->|"positions (num_pulses, 3)"| AC["ApertureManagerOp (retain + reform)"]
+  READ -->|"reference_position (num_pulses, 3)"| AC
+  RC -->|"range_profiles (num_pulses, num_range_bins)"| AC
+  AC -->|"range_profiles + positions +<br>reference_position (full aperture replay)"| BPA["BackprojectionOp<br>(auxiliary, conjugate)"]
+  AC -->|"weight"| BPA
+  AC -.->|"control (reset-then-emit)"| BPA
+  CONJ(("app-owned conjugate<br>estimation geometry")) -->|"sample_geometry<br>(aux instance only)"| BPA
+  BPA -->|"image (small, conjugate)"| AF["AutofocusOp"]
+  AF -->|"phase_correction (num_pulses)"| PC["PhaseCorrectionOp"]
+  AC -->|"range_profiles (same replay)"| PC
+  PC -->|"range_profiles (corrected)"| BPP["BackprojectionOp<br>(product, ground / DEM)"]
+  AC -->|"positions + reference_position"| BPP
+  AC -->|"weight"| BPP
+  AC -.->|"control (reset-then-emit)"| BPP
+  AC -.->|"sample_geometry OR<br>sample_points (product)"| BPP
+  RC -.->|"range_bins"| BPA
+  RC -.->|"range_bins"| BPP
+  GEOM(("app-owned product<br>geometry — DEM or ground")) -.->|"sample_points OR<br>sample_geometry"| AC
+  POL(("app-owned emit /<br>eviction policy")) -.->|"control"| AC
+  POL -.->|"evict"| AC
+  BPP -->|"image (num_v, num_u)"| SLC(["SLC image"])
+  SLC -->|"image"| SICD["SICDWriterOp"]
+  AF -.->|"phase_correction"| SICD
+  class CONJ,GEOM,POL,SICD opt
+```
+
+**Figure 3 — In-place PGA on a radar-geometry product**, the same chain as Figure 1 with `AutofocusOp` after formation. A footnote rather than the main path: when the delivered SLC is itself on a conjugate lattice (polar / range-Doppler-style — a real product class, but not this module's usual DEM path), autofocus corrects that image in place and `PhaseCorrectionOp` is absent. `phase_correction` still goes to `SICDWriterOp` as metadata.
+
+```mermaid
+flowchart TD
+  classDef opt stroke-dasharray:4 3
+  READ["CPHDReaderOp"] -->|"phase_history (num_pulses, num_samples)"| RC["SARRangeCompressionOp"]
+  READ -->|"positions (num_pulses, 3)"| AC["ApertureManagerOp"]
+  READ -->|"reference_position (num_pulses, 3)"| AC
+  RC -->|"range_profiles (num_pulses, num_range_bins)"| AC
+  AC -->|"range_profiles + positions +<br>reference_position (num_emitted, ...)"| BP["BackprojectionOp<br>(product already conjugate)"]
+  AC -->|"weight (num_emitted)"| BP
+  AC -.->|"control"| BP
+  RC -.->|"range_bins"| BP
+  GEOM(("app-owned conjugate<br>sample geometry")) -.->|"sample_points OR<br>sample_geometry"| AC
   POL(("app-owned emit /<br>eviction policy")) -.->|"control"| AC
   POL -.->|"evict"| AC
   BP -->|"image (num_v, num_u)"| AF["AutofocusOp"]
   AF -->|"image"| SLC(["SLC image"])
-  BP -->|"image (autofocus bypassed)"| SLC
-  AF -.->|"phase_correction (num_azimuth)"| SICD["SICDWriterOp"]
+  AF -.->|"phase_correction (num_pulses)"| SICD["SICDWriterOp"]
   SLC -->|"image"| SICD
   class AF,GEOM,POL,SICD opt
 ```
 
-**Figure 2 — Later-wave ingress branches and product stages.**
+**Figure 4 — Later-wave ingress branches and product stages.**
 
 ```mermaid
 flowchart TD
@@ -344,7 +403,7 @@ flowchart TD
   class GC,DEM opt
 ```
 
-**Figure 3 — Record taps**, which attach to existing edges without consuming them.
+**Figure 5 — Record taps**, which attach to existing edges without consuming them.
 
 ```mermaid
 flowchart LR
@@ -405,7 +464,7 @@ Retention and the emit decision belong to `ApertureManagerOp`, not to formation.
 
 ## Autofocus algorithms
 
-The autofocus algorithm is **orthogonal to the collection mode** (as FMCW's angle estimator is orthogonal to the antenna configuration): whatever formed the image, any algorithm below fills the same slot. `AutofocusOp`'s `algorithm` parameter selects it; PGA is the only value in the first wave.
+Autofocus is **orthogonal to the collection mode** and **off by default** on the formation spine (Figure 1). When an application opts in, `AutofocusOp`'s `algorithm` parameter selects the estimator; PGA is the only value in the first wave — a constrained P0 option for that slot, not the module's standard operating mode. For this module's usual ground / DEM product the matching wiring is Figure 2; Figure 3 is only when the delivered product is already radar-geometry.
 
 They differ along three axes: **what the scene must contain**, **what order of phase error they can estimate**, and — the one that matters most here — **what image geometry they assume**.
 
@@ -418,10 +477,13 @@ They differ along three axes: **what the scene must contain**, **what order of p
 
 Consequences for the operator interface:
 
-- **PGA's geometry constraint is the binding one, and it is why R4 exists.** PGA estimates the phase in the domain conjugate to the image's azimuth axis, so it presumes that axis *is* the Fourier conjugate of slow-time. That holds for a polar or range-Doppler grid; it does not hold for an image backprojected onto an arbitrary ground grid or point set. This is a constraint on the *chain*, not just on the operator — so it is recorded here as well as in the operator's contract.
-- **Minimum entropy is the geometry-agnostic escape hatch.** Because it optimizes a scalar image metric rather than exploiting a transform relationship, it works on whatever geometry formation produced. That makes it the natural resolution of R4 option (c), at the cost of being iterative and needing re-formation inside the loop.
+- **PGA is wave one's estimator, not the default product path.** The module's usual product is ground / DEM backprojection (Figure 1, autofocus off). PGA cannot estimate on that product; Figure 2 is the opt-in when airborne residual phase requires it, and it **requires** aperture retention plus `emit_mode = reform` (or an app-owned equivalent) so the corrected product pass has pulses to replay — see [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp`. Geometry-agnostic algorithms (map drift, minimum entropy) would attach more naturally to DEM products when they land — they are the better long-term "AF on any lattice" story, and PGA should not be read as standing in for them.
+- **PGA's geometry constraint binds the estimate, never the product (D20).** PGA presumes the image's azimuth axis *is* the Fourier conjugate of slow-time, which holds for a polar or range-Doppler grid and not for an image backprojected onto an arbitrary ground grid or point set. Form a small conjugate-grid image to estimate on, and carry the resulting per-pulse phase into the real formation through `PhaseCorrectionOp`. The constraint is real and unchanged; it binds a cheap auxiliary formation instead of the product.
+- **The correction is indexed by pulse, and that is what makes the split work.** A residual phase error is a property of the platform and the atmosphere — one number per pulse — while azimuth is merely where the estimator can see it. Publishing in pulse index makes the estimate portable between geometries; publishing it in azimuth bins would tie it to the image it came from.
+- **Minimum entropy is the geometry-agnostic alternative.** It optimizes a scalar image metric instead of exploiting a transform relationship, so it estimates on whatever geometry formation produced and skips the auxiliary image entirely. Worth having later, at the cost of being iterative and needing re-formation inside the loop.
 - **Estimation order sets what a failure looks like.** Map drift recovers only low-order phase, so a high-order error passes through as residual defocus rather than an error. PGA and minimum entropy can chase arbitrary order and so can also chase noise — which is what `min_scatterers` and `max_correction` guard against.
-- **All of them emit a phase vector plus a corrected image**, which is why the slot's output contract (`image` + `phase_correction`, indexed along the azimuth-conjugate axis) is shared rather than per-algorithm.
+- **All of them emit a per-pulse phase vector plus a corrected image**, which is why the slot's output contract (`image` + `phase_correction`) is shared rather than per-algorithm. The corrected image is meaningful only where the estimation image is the product (Figure 3); otherwise the phase vector is the output that matters (Figure 2).
+- **Every algorithm here trades absolute geolocation for focus.** The estimate is ambiguous up to a linear and constant phase — an image shift — which these algorithms discard rather than recover. That cost is sharpest on exactly the product this module is built to make, since forming straight onto a DEM is a geolocation claim, and it is why omitting autofocus is the default answer rather than a gap.
 
 ---
 
@@ -468,25 +530,27 @@ The cost is at the joins. A tile's edge pixels are illuminated for a full synthe
 
 Everything from the shared phase-history node downstream is the same operators in the same order, whichever branch fed it and whichever mode is configured — save that `ApertureManagerOp` may or may not be among them, which is a per-application choice everywhere and a settled omission in mode 4. That is what makes alternate ingress additive rather than a second pipeline, and what reduces most of the mode distinction to a handful of YAML values.
 
-Autofocus is not a column in the sense the FMCW comparison uses columns: like clustering there, it is orthogonal to the mode and attaches wherever an image exists.
+Autofocus is not a column in the sense the FMCW comparison uses columns: like clustering there, it is orthogonal to the mode. It is off in Figure 1; when opted in it attaches as Figure 2 or Figure 3, not as a per-mode variant.
 
 ## Notes & open items
 
-- **Wave one is the SLC formation box plus three writers** — `CPHDReaderOp`, `SARRangeCompressionOp`, `ApertureManagerOp`, `BackprojectionOp`, `AutofocusOp`, `CPHDWriterOp`, `SICDWriterOp`, `TensorDumpOp`. Build order and per-operator risk are in [SIGPROC_PLAN.md](SIGPROC_PLAN.md).
+- **Wave one is the SLC formation box plus three writers** — `CPHDReaderOp`, `SARRangeCompressionOp`, `PhaseCorrectionOp`, `ApertureManagerOp`, `BackprojectionOp`, `AutofocusOp`, `CPHDWriterOp`, `SICDWriterOp`, `TensorDumpOp`. Build order and per-operator risk are in [SIGPROC_PLAN.md](SIGPROC_PLAN.md).
 - **Geocoding is optional here, unlike in a frequency-domain chain.** Backprojection forms onto whatever sample points it is given, so DEM-derived points on a projected grid yield a geocoded image directly, with no resampling stage and no second interpolation loss. `GeocodeOp` exists for the caller who wants a radar-geometry SLC *and* a map product from the same formation pass.
 - **Standard-format I/O operators are sources and sinks at chain boundaries, never inline stages**, which is why they appear in their own tap diagram rather than in the flow.
 - **A tapered aperture re-forms; an incrementally-slid one is unweighted.** The cross-range taper reaches formation as per-pulse values on `weight`, from whoever owns aperture membership — `ApertureManagerOp.aperture_window` where a manager does, the application directly where it hands over whole apertures itself. It can be stamped at admission only for a block aperture whose length is known in advance, which is the ordinary case for a single image over a planned collection.
 - Every other configuration defers the weights to the aperture boundary and replays the retained pulses (`emit_mode = reform`). Applying a taper to an incrementally-slid window is refused rather than approximated, because it would cost as much as re-forming; a scrolling strip is refused for the same reason with no re-forming available to it.
 - Where no taper is applied, cross-range sidelobes are the unweighted ~−13 dB. See [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp` → *Notes*.
-- **Open items** — the control message's payload (R2), who announces a collection boundary (R7), PGA's grid-conjugacy constraint (R4), and the metadata plane (R5) are all team-blocked; the full list is in [OPERATOR_API.md](OPERATOR_API.md) → *Open items*.
+- **Open items** — the control message's payload (R2), who announces a collection boundary (R7), and the metadata plane (R5) are team-blocked; the full list is in [OPERATOR_API.md](OPERATOR_API.md) → *Open items*. PGA's grid-conjugacy constraint was R4 and is closed as **D20**, above.
 
 ---
 
-## Appendix — prompt for regenerating the practitioner overview
+## Appendix — prompts for regenerating audience derivatives
 
-[PRACTITIONER_OVERVIEW.md](PRACTITIONER_OVERVIEW.md) is derived from this document, so when the mode inventory, the deferred list, or a quality claim changes here, that file should be **regenerated from the prompt below rather than hand-patched** — patching is how a derivative drifts from its source while continuing to look maintained. Diff the regenerated file against the previous version and confirm every change traces to a change made here.
+[PRACTITIONER_OVERVIEW.md](PRACTITIONER_OVERVIEW.md) and [DEVELOPER_OVERVIEW.md](DEVELOPER_OVERVIEW.md) are derived from this document (and, for the developer overview, from [OPERATOR_API.md](OPERATOR_API.md) for contracts and mechanisms). When the mode inventory, the deferred list, a quality claim, or the mode→configuration mapping changes here, **regenerate the affected derivative(s) from the prompt(s) below rather than hand-patching** — patching is how a derivative drifts from its source while continuing to look maintained. Diff each regenerated file against the previous version and confirm every change traces to a change in the sources.
 
-The prompt lives on this side of the pair deliberately. The overview is written to be handed to someone outside the project, and a set of instructions for producing it is not something that reader has any use for.
+The prompts live on this side of the pair deliberately. Neither overview is written to carry regeneration instructions for its reader.
+
+### Prompt A — practitioner overview
 
 ```text
 Regenerate docs/planning/SAR/PRACTITIONER_OVERVIEW.md from the current state of
@@ -541,13 +605,15 @@ SYNTHESIZE. These are not sections in either source and must be assembled:
   geometry forms with the local-coherence caveat on explicit positions.
 - What you get, and what it costs — where a cross-range taper is available and
   where it is refused, numerical precision with the actual figures, range
-  interpolation, autofocus and its grid-conjugacy tension with arbitrary ground
-  geometry, seams and under-integrated margins, and sliding-window drift.
+  interpolation, autofocus (off by default; PGA as a constrained opt-in with
+  grid-conjugacy cost on ground / DEM products), seams and under-integrated
+  margins, and sliding-window drift.
 - Where this is most likely to fall short for you — the honest weakness list.
 
 RULES.
 - Say plainly, near the top, that nothing described is built yet.
-- Name WORKFLOWS.md as the source of truth and link it.
+- Name WORKFLOWS.md as the source of truth and link it. Mention
+  DEVELOPER_OVERVIEW.md only as the sibling aimed at implementers, if at all.
 - Follow the source's mode numbering and inventory exactly. If the source has
   gained, lost or renumbered a mode, follow it — do not preserve the previous
   version of the overview's list.
@@ -566,6 +632,9 @@ RULES.
   What the STRIP rule removes is the names and the decomposition argument, not
   the stages themselves: a reader who thinks in dataflow is worse served by a
   graph with a stage missing than by one more box.
+- Default pipeline diagram is autofocus off (ground/DEM product). Autofocus is
+  described in prose as an opt-in with Figure-2-style constraints, not drawn as
+  the main path.
 - Emit no appendix and no regeneration instructions into the overview. This
   prompt lives in WORKFLOWS.md; if these instructions need to change, change
   them there in the same pass as the regeneration.
@@ -574,4 +643,90 @@ RULES.
   finishing.
 - Check that WORKFLOWS.md's pointer to the overview still describes it, and
   update that pointer if it does not.
+```
+
+### Prompt B — developer overview
+
+```text
+Regenerate docs/planning/SAR/DEVELOPER_OVERVIEW.md from the current state of the
+sources below. Read the sources first; do not work from this prompt's summary.
+
+SOURCES, in precedence order. Invent nothing absent from them.
+1. SAR/WORKFLOWS.md — primary for modes, chains, figures, mode→config mapping,
+   autofocus framing, application responsibilities, deferred/foreclosed.
+2. SAR/OPERATOR_API.md — primary for contracts that implementers must obey:
+   cross-tick accumulation, ApertureManagerOp / BackprojectionOp split,
+   PhaseCorrectionOp / AutofocusOp constraints (especially Figure 2 = reform +
+   retention), [live] rules, precision_mode. Do not paste full port tables;
+   summarize and link.
+3. SAR/SIGPROC_PLAN.md — wave-one operator list and build-order pointer only.
+4. SAR/TEAM_BLOCKED.md / docs/planning/SDK_QUESTIONS.md — name open R-items that
+   block implementation choices; do not resolve them.
+
+AUDIENCE. An expert software developer who will implement or extend this module.
+Comfortable with Holoscan-style operator graphs, C++/CUDA libraries, and tests.
+Knows SAR basics (range, synthetic aperture, complex images) but is NOT a SAR
+expert: explain collection-mode jargon in plain language and map every jargon
+term to what changes in the graph or config. Do not assume they know what
+"spotlight", "video SAR", "ScanSAR/TOPS", "conjugate grid", or "PGA" imply for
+software. They ARE building the software — keep operator class names, key ports,
+figure numbers, and parameter names.
+
+PURPOSE. Onboard an implementer: mental model, vocabulary bridge, which
+operators exist, which mechanisms are load-bearing, how modes collapse to
+configs, autofocus constraints, and the pitfalls that look like radar physics
+but are wiring/state bugs. Point them at OPERATOR_API / SIGPROC_PLAN /
+TESTING / NEW_OPERATOR_CHECKLIST / OPERATOR_DEVELOPMENT for depth — this file
+is the map, not the contract.
+
+SECTION ORDER (headings may be tightened but keep this arc).
+1. About this document (derivative disclaimer; link WORKFLOWS + OPERATOR_API;
+   link PRACTITIONER_OVERVIEW as the non-implementer sibling; say nothing is
+   built yet; "read next" list).
+2. What we are building (scope table: in / out).
+3. Mental model: one graph, modes are configuration (one simple Mermaid of the
+   default AF-off spine WITH operator names).
+4. SAR vocabulary → software meaning (table: jargon | plain meaning | what
+   changes in our graph). Cover at least: aperture, spotlight, video SAR,
+   stripmap/strip, tiled vs continuous strip, ScanSAR/TOPS, sub-aperture looks,
+   circular SAR, tomography, range compression, phase history, SLC, DEM/ground
+   grid, radar-geometry/conjugate grid, autofocus/PGA, classical motion
+   compensation. Note supported/deferred/foreclosed ≠ wave scheduling.
+5. The operator chain (wave one) — short groups; emphasize aperture-manager vs
+   backprojection split and the positions bypass.
+6. Cross-cutting mechanisms — accumulation, [live], app-owned inputs, precision.
+7. Modes → what you configure — three configurations table + manager knob
+   examples including Figure 2 reform requirement.
+8. Autofocus for implementers — default off; Figure 2 vs 3; reform+retention;
+   declared conjugacy; geolocation cost.
+9. Pitfalls that look like radar but are wiring/state.
+10. What is absent / team-blocked pointers.
+11. Build slice pointer to SIGPROC_PLAN + checklist.
+
+KEEP (translated or summarized, not stripped):
+- Operator and class names, important ports (range_profiles, positions,
+  weight, control, sample_geometry/sample_points, phase_correction).
+- Figure numbers from WORKFLOWS when citing wiring.
+- Mode numbers and the three-configuration collapse.
+- Quantitative limits that affect implementation (e.g. unweighted ~−13 dB,
+  scroll axis = v, Figure 2 memory = aperture retention).
+- Autofocus off by default; Figure 2 requires max_aperture_pulses > 0 and
+  emit_mode = reform.
+
+STRIP / AVOID:
+- Full port-by-port contract dumps (link OPERATOR_API instead).
+- Long practitioner-only product advocacy.
+- Resolving R2/R5/R7 in prose — name and link only.
+- Regeneration prompts or appendix text inside the overview.
+- Assuming SAR jargon without a vocabulary-table entry on first use.
+
+RULES.
+- Complete sentences and prose; tables where they beat paragraphs.
+- One primary Mermaid (default AF-off chain with operator names). Optional
+  second small diagram only if it clarifies aperture vs accumulator — do not
+  reproduce all five WORKFLOWS figures.
+- Say plainly that nothing is built yet.
+- Lint: markdownlint MD013 at 800; no SPDX on markdown. Run pre-commit on the
+  file before finishing.
+- Update WORKFLOWS.md's derivative pointer if the overview's role changed.
 ```

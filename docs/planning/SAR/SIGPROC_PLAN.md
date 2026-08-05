@@ -8,15 +8,16 @@ There is no FMCW analogue of this file — the FMCW wave tracked its build order
 
 ## Wave one
 
-**Wave one is everything inside the single-look complex image formation box, plus three writers.** Eight operators:
+**Wave one is everything inside the single-look complex image formation box, plus three writers.** Nine operators:
 
 | Operator | Group | Reference in hand | Role |
 | :--- | :--- | :--- | :--- |
 | `CPHDReaderOp` | `io` | yes | the only ingress; every test and demo runs through it |
 | `SARRangeCompressionOp` | `sar` | yes | phase history → range profiles |
+| `PhaseCorrectionOp` | `sar` | n/a | applies a per-pulse phase; the second half of D20 |
 | `ApertureManagerOp` | `sar` | no | aperture membership and emit decisions; no kernel, no GPU |
 | `BackprojectionOp` | `sar` | yes | the anchor |
-| `AutofocusOp` | `sar` | **no** | PGA; phase-correction vector + corrected image |
+| `AutofocusOp` | `sar` | **no** | PGA; per-pulse phase-correction vector + corrected image |
 | `CPHDWriterOp` | `io` | partial | pairs with the reader for a round-trip test |
 | `SICDWriterOp` | `io` | partial | the SLC product |
 | `TensorDumpOp` | `io` | n/a | intermediate inspection while the rest is built |
@@ -37,6 +38,7 @@ Availability of a reference implementation informs **sequencing and risk, not sc
 | :--- | :--- | :--- | :--- |
 | `CPHDReaderOp` | yes | field interpretation | high — round trip plus batching edges |
 | `SARRangeCompressionOp` | yes | little; closed-form checkable | low |
+| `PhaseCorrectionOp` | n/a | the `sense` sign, which is unverifiable from data | low — but assert it against an injected error of known sign |
 | `ApertureManagerOp` | no | bookkeeping off-by-ones | medium — but CPU-only, so cheap to cover |
 | `RangeMatchedFilterOp` | no | replica and output-length conventions | medium |
 | `RVPRemovalOp`, `BandEqualizationOp` | no | **sign and reference conventions** | high, and **not satisfiable synthetically** |
@@ -66,7 +68,7 @@ Dependency and risk ordering. Nothing here is conditional on the step before suc
 4. **`BackprojectionOp`.** The anchor, and the bulk of the work. Sub-order within it: a uniform `SampleGeometry` lattice over a single batch of pulses first, then signed weights and the accumulator's reset semantics, then explicit lattices, then the remaining arithmetic strategies. Getting a correct static image before adding statefulness means an accumulation bug cannot hide behind a formation bug.
 5. **`ApertureManagerOp`.** Independent of step 4 and cheap — no kernel, no GPU — so it can be written and fully tested in parallel, then wired in to turn the static formation of step 4 into a streaming one.
 6. **`SICDWriterOp`.** Needs a formed image, so it follows. Brings the NITF container dependency with it.
-7. **`AutofocusOp`.** Depends only on an image existing, so it is *independent of step 6* — the ordering between them is resourcing, not dependency. **Blocked on the grid-conjugacy open item** resolving, since that decides whether it is a downstream stage, a feedback loop through `BackprojectionOp`, or a geometry-restricted operator.
+7. **`AutofocusOp` and `PhaseCorrectionOp`.** Depend only on an image existing, so they are *independent of step 6* — the ordering between them is resourcing, not dependency. No longer blocked: the grid-conjugacy question closed as **D20**, which makes `AutofocusOp` an estimator restricted to conjugate geometries and `PhaseCorrectionOp` the stage that carries its per-pulse estimate into a formation on any geometry. Write `PhaseCorrectionOp` first — it is a broadcast multiply, and having it in hand means the autofocus tests can inject a known phase error through the real operator rather than through test scaffolding.
 
 The demo application is built alongside step 4 and finished after step 7.
 
@@ -98,9 +100,10 @@ operators/sar/
     ...                             # same five-part split
     backprojection_stage.hpp        # wraps the matx::experimental::sar_bp seam
     OPEN_ITEMS.md                   # control payload, aperture state, arithmetic strategy
+  phase_correction_op/
+    ...                             # broadcast multiply; no OPEN_ITEMS.md
   autofocus_op/
     ...
-    OPEN_ITEMS.md                   # grid conjugacy
 
 operators/io/
   CMakeLists.txt
@@ -130,7 +133,7 @@ The CPHD-driven app is the default demo, since the simulator and the real collec
 Each operator follows [NEW_OPERATOR_CHECKLIST.md](../NEW_OPERATOR_CHECKLIST.md). Wave-specific additions:
 
 - **Accumulation tests are part of the gate** for `BackprojectionOp`, not an afterthought: multi-tick equivalence, reset on geometry change, and emitted-buffer independence. This is a new test pattern in the module.
-- **Do not resolve the team-blocked items in code.** The emit-decision mechanism, the autofocus grid-conjugacy question, and the aperture-weighting gap are indexed in [TEAM_BLOCKED.md](TEAM_BLOCKED.md); an operator that quietly picks an answer is not checklist-complete.
+- **Do not resolve the team-blocked items in code.** The emit-decision mechanism, who announces a collection boundary, and the metadata plane are indexed in [TEAM_BLOCKED.md](TEAM_BLOCKED.md); an operator that quietly picks an answer is not checklist-complete. The autofocus grid-conjugacy question was on this list and is closed as D20.
 - **The performance harness needs two of its required fields redefined for an accumulating operator.** The checklist and [OPERATOR_DEVELOPMENT.md](../OPERATOR_DEVELOPMENT.md) → *Performance characterization* were written against operators where one tick produces one complete result, which `BackprojectionOp` is not. Nothing about the gate is a numeric threshold — it is a measurement harness — but two prescribed report fields are ill-defined here and must be stated rather than improvised:
   - **`cold_ms`** ("first timed frame after config") has two distinct meanings once an accumulator exists: the first tick of the process, and the first tick after a reset. Report both, named separately, and report **time-to-emit** for a full aperture alongside per-tick steady state, since that is the figure a caller sizes a system against.
   - **`override_delta_ms`** (post-override peak against pre-override median) assumes an override perturbs and resumes. Every `BackprojectionOp` grid parameter instead *resets*, discarding work, so the two windows are not comparable states. Measure and label the reset cost as its own quantity rather than reporting it as an override delta. That leaves no non-resetting live parameter to measure under the ordinary rule: `interpolation` is the only candidate, and with `linear` its sole implemented value this wave, an override of it cannot change state. Report it as not applicable rather than fabricating a measurement.

@@ -10,7 +10,7 @@ Two conventions are **extended** and are specified here rather than assumed: pre
 
 **Precision (all operators).** Every operator supports both **single** (`complex64` / `float32`) and **double** (`complex128` / `float64`) precision floating-point I/O. Precision is fixed at compile time by the operator's template instantiation — neither a runtime parameter nor inferred from the data — and an instance's inputs and outputs match that precision. The per-operator dtype labels list both forms. SAR adds a second, **orthogonal** axis on `BackprojectionOp` alone: the internal arithmetic strategy for the range computation, which is not a binary and is not the same question as the I/O dtype. See `BackprojectionOp.precision_mode`.
 
-**Proposed amendments.** Text marked **[PROPOSED]** is a working proposal, not accepted lockdown. Every open question in this document is enumerated in § *Open items* with its class, and the team-blocked ones are indexed in [TEAM_BLOCKED.md](TEAM_BLOCKED.md) as R1, R2, R4, R5 and R7.
+**Proposed amendments.** Text marked **[PROPOSED]** is a working proposal, not accepted lockdown. Every open question in this document is enumerated in § *Open items* with its class, and the team-blocked ones are indexed in [TEAM_BLOCKED.md](TEAM_BLOCKED.md) as R1, R2, R5 and R7.
 
 ---
 
@@ -63,10 +63,11 @@ CPHD file
   → SARRangeCompressionOp  → range_profiles (num_pulses, num_range_bins)
   → [ApertureManagerOp]    → range_profiles + weight + control  [retains pulses]
   → BackprojectionOp       → image          (num_v, num_u)      [accumulating]
-  → [AutofocusOp]          → image          + phase_correction
   → [MultilookOp]          → multilook
   → [GeocodeOp]            → product
 ```
+
+Autofocus is **off on this spine** — the default for the usual ground / DEM product. When opted in on that product (WORKFLOWS Figure 2): the aperture source retains the aperture and replays it once (`ApertureManagerOp` with `emit_mode = reform` and `max_aperture_pulses > 0`, or an app-owned equivalent); a conjugate-grid auxiliary `BackprojectionOp` forms from that replay; `AutofocusOp` estimates; `PhaseCorrectionOp` applies the estimate to the same replayed pulses; the product `BackprojectionOp` forms the DEM image — all on the replay tick, in graph dependency order. Figure 3 places `AutofocusOp` after formation only when the product itself is already conjugate. See `ApertureManagerOp` → *Notes* (*Autofocus on a ground / DEM product*) and `AutofocusOp` → *Notes* (D20).
 
 Three ingress forms converge at **phase history**: recorded or live deramped data (via `RVPRemovalOp` + `BandEqualizationOp`), CPHD (directly), and direct-sampled pulses (via `RangeMatchedFilterOp`). Everything downstream of that node is shared.
 
@@ -92,12 +93,13 @@ The grouping below is **functional, and does not match the directory layout.** `
 - **[RVPRemovalOp](#deramped-branch-entry-stages)** — deramped branch: removes the residual video phase term deramp-on-receive leaves behind, and undoes deramp reference bookkeeping.
 - **[BandEqualizationOp](#deramped-branch-entry-stages)** — deramped branch: corrects amplitude and phase taper across the band, producing phase history proper.
 - **[RangeMatchedFilterOp](#rangematchedfilterop-direct-sampled-branch)** — direct-sampled branch: FFT along fast-time and multiply by the conjugate chirp-replica spectrum. Emits **phase history**, so the shared range compression supplies the inverse transform; a branch-entry stage symmetric with `RVPRemovalOp`, not a peer of range compression.
+- **[PhaseCorrectionOp](#phasecorrectionop)** — applies a per-pulse phase to range profiles. Optional, stateless; the stage that carries an autofocus estimate into a formation on a different geometry (D20).
 
 ### Image formation
 
 - **[ApertureManagerOp](#aperturemanagerop)** — **[PROPOSED]**. Holds pulses, decides aperture membership, and decides when an image comes out; emits pulses with signed weights plus a control message. No kernel, no image. **Optional in every mode** — it is where retention is worth not writing twice, not a stage the chain requires.
 - **[BackprojectionOp](#backprojectionop)** — time-domain image formation. Accumulating across ticks; consumes weighted range profiles, per-pulse phase-center positions, and sample geometry; emits the complex image. Owns an accumulator, not an aperture.
-- **[AutofocusOp](#autofocusop)** — estimates and applies residual phase correction. A separate, omittable stage, not a mode inside image formation.
+- **[AutofocusOp](#autofocusop)** — estimates residual phase correction. A separate, omittable stage — **off by default** — not a mode inside image formation. On a ground / DEM product its estimate reaches formation through `PhaseCorrectionOp` (WORKFLOWS Figure 2); it corrects in-image only when the product is itself conjugate (Figure 3).
 
 ### Products
 
@@ -114,7 +116,7 @@ Library-provided sources and sinks at chain boundaries, **never inline stages**.
 - **[SIDDWriterOp](#crsdwriterop-and-siddwriterop)** — writes the multilooked or geocoded detected product. Not gated behind target detection: SIDD's "detected" means *amplitude* detection.
 - **[TensorDumpOp](#tensordumpop)** — a generic tensor dump at any port boundary.
 
-Sixteen operators in total: two ingress, four signal-processing, three image-formation, two products, five standard-format sinks — the functional split, not the directory one.
+Seventeen operators in total: two ingress, five signal-processing, three image-formation, two products, five standard-format sinks — the functional split, not the directory one.
 
 ### Two deliberate non-operators
 
@@ -169,6 +171,7 @@ Three consequences:
 - **Configuration reaches an accumulating operator through whatever drives its resets**, not around it. That is what lets a configuration change and the reset it requires be emitted together, by one producer, on one tick — and it is why the accumulating operator can treat their separation as an error rather than a case to handle.
 - **A reset is a full stop, not a partial one.** Every operator holding state tied to the accumulated quantity clears it — the manager drops its retained pulses *without* emitting evictions for them, because those pulses are not leaving an aperture; the aperture has ceased to exist. Eviction and retention-drop look similar and behave oppositely, which is the bug this sentence exists to prevent.
 - **Anything that knows an aperture must end says so on the control path**, rather than acting locally: a reader at a file boundary or end of stream, an application changing scene. One announcement, one owner deciding what to do about it.
+- **A multi-operator chain on one reform tick is the same assumption, extended.** WORKFLOWS Figure 2 runs auxiliary formation → autofocus → phase correction → product formation against a single aperture replay. That requires Holoscan to honour DAG order within the tick so each stage sees the upstream outputs of that replay before the next stage runs — not a second control handshake and not state held inside `PhaseCorrectionOp` across ticks. If that delivery property fails, Figure 2 is not implementable on top of these operators; see `ApertureManagerOp` → *Autofocus on a ground / DEM product*.
 
 ### Build-time wiring validation
 
@@ -310,6 +313,29 @@ The remaining ports — the per-pulse geometry and the deramp reference record t
 - *There is deliberately no `same`/`valid` output mode, and its absence follows from the split.* Those crops select from a time-domain correlation, which this operator never forms: it emits the un-inverted product, whose length is `nfft`. The fully-overlapped-support crop therefore belongs on the **range** axis after `SARRangeCompressionOp` inverts — where the wrap-guard bins the `nfft` bound introduces are also the bins to discard. Whether that crop becomes an explicit parameter on range compression or stays the caller's slice is deferred (see *Open items*, I4).
 - *The apparent round trip is deliberate.* Direct-sampled pulses are time-domain, get matched-filtered into frequency-domain phase history, and are then transformed back to the range domain downstream. The alternative — a fused direct-sample-to-range-profile operator — saves one buffer and forfeits the standard-format interchange point at the phase-history node. The buffer is the cheaper of the two.
 - *The name is provisional.* See *Open items*, I3: the literature calls the whole FFT-multiply-IFFT sequence "range compression", which leaves this truncated form without a settled industry name.
+
+#### PhaseCorrectionOp
+
+Applies a per-pulse phase correction to range profiles ahead of **product** formation. The
+second half of D20's autofocus split: `AutofocusOp` estimates on a conjugate
+geometry, this applies the result so a formation on any geometry sees corrected pulses.
+
+- **In:** `range_profiles` — complex64 / complex128, `(..., num_pulses, num_range_bins)`. On the Figure 2 path, the aperture replay from `ApertureManagerOp` (or the app-owned aperture source) — the same pulse set the auxiliary formation just consumed.
+- **In:** `phase_correction` — float32 / float64, `(..., num_pulses)`. Radians, matching the pulse axis above. **Required** (blocking): this operator does not run until both inputs are present on the tick. Ordinarily driven by `AutofocusOp.phase_correction` on the same scheduler tick as the aperture replay (see `ApertureManagerOp` → *Autofocus on a ground / DEM product*); an application with an external phase model drives it directly.
+- **Out:** `range_profiles` — complex64 / complex128, same shape as the input.
+
+**Parameters:**
+
+- `sense` — enum {subtract, add}. Whether the correction is removed from the data (`subtract`, multiplying by `exp(−iφ)`) or impressed onto it (`add`, `exp(+iφ)`). **Static** and **required with no default**: both are one sign apart, neither is checkable from the values, and guessing wrong doubles the error instead of removing it — the same reasoning that makes `azimuth_axis` required. `add` exists because injecting a known error is how [TESTING.md](TESTING.md) builds its ground truth. Default: none (required).
+
+**Algorithm:** broadcast the per-pulse phase across the range axis and multiply. Stateless, in-place-able, one pass.
+
+**Notes:**
+
+- *Why this is an operator and not a widening of `BackprojectionOp.weight`.* A per-pulse correction is dimensionally a complex weight, so the alternative was making `weight` complex and letting the manager or the application carry the phase there. Rejected: `weight` is real and **signed**, and D6, D7 and D15 all reason about it that way — `+1` admits, `−1` evicts, intermediate values taper, and the taper is applied by pre-scaling profiles outside an unweighted kernel. Making it complex would put an eviction and a phase correction in one number, where a sign error is a silent mis-eviction rather than a type error. A separate multiply keeps both meanings legible at the cost of one stateless stage.
+- *Why not leave it to the application, as trajectory and scene geometry are left under D13.* Those are excluded because a library operator could only guess at deployment-specific conventions. This one has no convention to guess: the correction's units, its indexing and its sign are all fixed by this contract, and `sense` names the only choice. It is also the stage that makes autofocus usable on the geometries this module exists to form on, so leaving it out would ship the D20 resolution with its second half missing.
+- *Where it sits on the Figure 2 path: after the aperture source, before the product formation.* It consumes the retained aperture's replay and `AutofocusOp.phase_correction`, and feeds the product `BackprojectionOp`. It does **not** sit on the hot path between range compression and the manager: mid-aperture ticks have no estimate yet, and a pass-through manager (`max_aperture_pulses = 0`) has nothing left to correct after AF runs. A per-pulse phase still commutes with a fast-time transform, so placing it after range compression remains correct; the aperture boundary is the sequencing constraint, not the DSP one.
+- *Both inputs must co-arrive on the replay tick.* `phase_correction` is not optional and is not buffered across ticks. The graph edge `AutofocusOp → PhaseCorrectionOp` is what orders estimation before correction; see the same-tick assumption under `ApertureManagerOp`.
 
 ### Deramped-branch entry stages
 
@@ -501,8 +527,9 @@ Such an application wires control from an operator it already has, typically the
 | Growing aperture, progressive images | 0 | N | continue | — |
 | Sliding window, fixed length | N | < N | continue | — |
 | Sliding window, application-chosen length | ≥ longest | 0 | continue | `evict`, `control` |
+| **Ground/DEM product with PGA (Figure 2)** | **≥ aperture length** | N, or 0 with `control` | **`reform`** | `control` where length is not known in advance |
 
-`emit_mode = reform` is absent because it is a modifier rather than a behaviour: it overlays any row that retains, replacing that row's emit with a tapered replay. On the three rows with `max_aperture_pulses = 0` it is rejected, so tapering those means giving them a capacity — see the notes.
+`emit_mode = reform` is otherwise a modifier rather than a behaviour: it overlays any retaining row, replacing that row's emit with a tapered replay. On the three rows with `max_aperture_pulses = 0` it is rejected, so tapering — **and Figure 2 autofocus** — means giving them a capacity. The Figure 2 row is spelled out because the AF-off spotlight spelling (`max_aperture_pulses = 0`) cannot feed a corrected second pass: there is nothing left to replay after `AutofocusOp` runs. See *Autofocus on a ground / DEM product* below.
 
 - *A request says when and whether; `emit_mode` says how.* The sender chooses whether the aperture ends and whether an image is wanted, but not how that image is formed — so a request ending a `reform`-configured aperture is served by the step 5a replay and goes downstream as *reset-then-emit*, whatever value asked for it. Honouring the request verbatim would emit from an accumulator that mode deliberately leaves empty, making it a black image rather than an untapered one. The same split is why *emit-and-continue* remains meaningful under `reform`: the manager replays with taper weights and resets the accumulator, while its own retention — the aperture — survives untouched.
 - *Tapering is free only where the aperture's length is known at admission; otherwise it costs a re-form, which is what `emit_mode = reform` exists for.* A taper is a function of a pulse's slot within the aperture, so it can be stamped at admission only when final membership is known — a block aperture with `emit_interval_pulses = N` and no retention. **A single image over a collection qualifies whenever its length is known**, which is the ordinary case rather than the exception, and it is spelled by giving `N` rather than `0`.
@@ -535,22 +562,30 @@ Such an application wires control from an operator it already has, typically the
 - *Only a pulse count is offered as a **built-in**, and that is a scope choice worth naming.* The surveyed policies included integration angle subtended, along-track aperture length, and target cross-range resolution — the terms users actually state requirements in. All three are computable from the `positions` this operator already holds, so their absence is a first-wave convenience decision rather than a capability limit: an application states them today through `evict` and `control`, and the natural place to absorb them later is here.
 - *Memory, and why the bound is required rather than inferred.* Retention pins `max_aperture_pulses` range profiles for the life of the aperture — 4096 pulses at 8192 bins in complex64 is about 256 MiB — which for a long sliding window is the dominant allocation in the chain. Naming it is what lets the ring be allocated once at initialization instead of grown mid-collection, and under application-owned eviction it is sized for the *longest* aperture the application will ask for: the slowest ground speed it will fly, which is the memory that must be budgeted anyway.
 - *Incremental update does not always beat re-forming, and the crossover is worth knowing.* Because the aperture's pulses are retained anyway, forming from scratch at each emit is always available: it costs `max_aperture_pulses` pulse-formations per emit, against roughly `2 × emit_interval_pulses` for the incremental add-and-subtract. Incremental therefore wins only for heavily overlapped apertures — `2 × emit_interval_pulses < max_aperture_pulses` — which is the video-SAR regime. At modest overlap it is slower *and* carries the floating-point drift described under `BackprojectionOp`.
+- **Autofocus on a ground / DEM product (WORKFLOWS Figure 2) is a supported configuration of this operator, with hard requirements.** PGA needs the whole aperture before it can estimate, and the product needs those same pulses again after correction. The shipped spelling is:
+  1. **`max_aperture_pulses > 0`** sized for the aperture (or an upper bound when length is learned only at the end).
+  2. **`emit_mode = reform`**, so steps 3–4 send no pulses between boundaries and step 5a replays the **entire** retained set once, with *reset-then-emit*.
+  3. Graph wiring on that replay tick: `range_profiles` / `positions` / `reference_position` / `weight` / `control` fan out to the **auxiliary** `BackprojectionOp` and (via `PhaseCorrectionOp` for profiles) to the **product** `BackprojectionOp`; `AutofocusOp` sits on the auxiliary image and drives `PhaseCorrectionOp.phase_correction`.
+  4. **Same-tick dependency order.** The reform replay is one batch on one tick. Holoscan must execute `auxiliary BackprojectionOp → AutofocusOp → PhaseCorrectionOp → product BackprojectionOp` in that order within the tick so `PhaseCorrectionOp` receives both the replayed profiles and the estimate before the product accumulates. This is the same class of assumption as co-delivery of a geometry/reset pair from one producer (see *Cross-tick accumulation* → *Who owns reset*): one producer, one tick, downstream DAG order. It is **not** a multi-tick handshake and not a control-path feedback loop into this manager.
+  5. **Dual geometry.** This operator has one geometry forward path. Wire `sample_geometry` / `sample_points` **only to the product** `BackprojectionOp`, so product-lattice changes still co-arrive with the reset. The auxiliary conjugate lattice is configured on the auxiliary instance alone (`sample_geometry` parameter or its own `sample_points` port) and never through this operator — two lattices cannot share one staging slot.
+  6. **What is refused.** `emit_mode = continue` (incremental sliding) and `BackprojectionOp.geometry_change = scroll` are not Figure 2 configurations: there is no whole-aperture replay to estimate from and correct. An application that owns aperture buffering without this operator must still present the full aperture once, then again corrected — the same protocol, different host.
+  7. **Memory.** Figure 2 pays the reform retention cost (profiles × aperture length) even when no taper is configured; that is the price of having pulses left to correct after AF. The AF-off spotlight row (`max_aperture_pulses = 0`) remains the default when autofocus is omitted.
 
 ---
 
 #### AutofocusOp
 
-Estimates and applies a residual phase correction along the azimuth-conjugate axis. A separate, omittable stage: airborne collections generally need it, spaceborne collections with good ephemeris generally do not.
+Estimates a residual phase correction along the azimuth-conjugate axis, and applies it in-image only when that image is the product. A separate, omittable stage — **absent from the default spine**: the usual product is ground / DEM backprojection without autofocus. Airborne residual phase is the usual reason to opt in (WORKFLOWS Figure 2); spaceborne collections with good ephemeris generally stay on Figure 1.
 
 - **In:** `image` — complex64 / complex128, `(..., num_v, num_u)`. The formed SLC image.
 - **Out:** `image` — complex64 / complex128, same shape. The corrected image.
-- **Out:** `phase_correction` (optional) — float32 / float64, `(..., num_azimuth)`. The estimated phase along the azimuth-conjugate axis, where `num_azimuth` is the length of the image axis named by `azimuth_axis`. Emitted separately so it is composable, testable in isolation, and available to `SICDWriterOp` as metadata.
+- **Out:** `phase_correction` (optional) — float32 / float64, `(..., num_pulses)`. The estimated residual phase, **indexed by pulse**, which is the domain the error physically lives in. Emitted separately so it is composable, testable in isolation, available to `SICDWriterOp` as metadata, and — the reason the indexing matters — applicable to a *different* formation than the one it was estimated from. See *Notes*.
 - **Out:** `sharpness` (optional) — float32 / float64, `(..., num_iterations + 1)`. The focus metric before each iteration and after the last, so a caller can see whether the estimate converged rather than inferring it from the image.
 
 **Parameters:**
 
-- `algorithm` — enum {pga}. Phase gradient autofocus. Static (selects the kernel). See [WORKFLOWS.md](WORKFLOWS.md) → *Autofocus algorithms* for the alternatives and why PGA is the default. Default: pga.
-- `azimuth_axis` — enum {u, v}. Which image axis is the azimuth (slow-time-conjugate) axis. **Static** and **required with no default**: PGA is meaningless on the wrong axis, and unlike a frame mismatch this one is not even dimensionally checkable, so it is never inferred. Default: none (required).
+- `algorithm` — enum {pga}. Phase gradient autofocus. Static (selects the kernel). Wave one's only estimator — a constrained opt-in for the algorithm slot, not the module's default product path. See [WORKFLOWS.md](WORKFLOWS.md) → *Autofocus algorithms*. Default: pga (sole value; the *stage* defaults to absent).
+- `azimuth_axis` — enum {u, v}. Which image axis is the azimuth (slow-time-conjugate) axis. **Static** and **required with no default**: PGA is meaningless on the wrong axis, and unlike a frame mismatch this one is not even dimensionally checkable, so it is never inferred. Naming an axis here is also **the assertion that the image is on a conjugate geometry at all** — the D20 precondition — which is why no separate parameter declares it. Default: none (required).
 - `num_iterations` **[live]** — int. Refinement iterations. Default: 4.
 - `window_fraction` **[live]** — float in `(0, 1]`. Fraction of the azimuth extent retained in the first window; shrinks geometrically across iterations. Default: 0.5.
 - `min_scatterers` **[live]** — int. Minimum strong scatterers required. Below it the estimate is not trustworthy: the operator passes the image through unchanged, emits a zero `phase_correction`, and warns. Default: 16.
@@ -567,12 +602,16 @@ Estimates and applies a residual phase correction along the azimuth-conjugate ax
 
 **Notes:**
 
-- **[PROPOSED] — the grid-conjugacy requirement is team-blocked (R4).** PGA assumes the image's azimuth axis is the Fourier conjugate of slow-time. That holds for a polar or range-Doppler grid; it does **not** hold in general for an image backprojected onto an arbitrary ground grid or point set, so this operator cannot be appended after an arbitrary `BackprojectionOp` configuration. Three resolutions, for the team to pick rather than discover:
-  - (a) restrict to a uniform lattice with a declared azimuth-conjugate axis and reject other geometries — the narrowest, and what `azimuth_axis` already assumes;
-  - (b) emit only `phase_correction` and re-form through `BackprojectionOp`, making autofocus a feedback loop rather than a downstream stage — the most faithful to the physics and the most expensive;
-  - (c) implement a backprojection-domain autofocus operating on the actual sample geometry.
-- *Why `phase_correction` is indexed by azimuth, not by pulse.* The image-domain estimate lives on the azimuth-conjugate axis, whose length is an image dimension. It equals `num_pulses` only when the image was formed on a conjugate grid at one azimuth sample per pulse. A general azimuth-to-pulse mapping is exactly what resolution (b) would have to define, which is why this port is not specified as `(num_pulses,)` today.
-- *An explicit lattice is no longer rejected on rank, and the real constraint is R4.* It is `(num_v, num_u, 3)` with an image of `(..., num_v, num_u)`, so `azimuth_axis` has axes to name and the earlier reason — that there was no azimuth axis — no longer holds. What actually governs is whether the named axis is the Fourier conjugate of slow-time, which is a property of the *geometry* rather than of the mode, and is exactly R4. Until R4 resolves the operator restricts to geometries where that conjugacy is declared, in either mode.
+- **The grid-conjugacy question is closed as D20: estimate on a conjugate grid, correct the pulses, form the product wherever you like.** PGA assumes the image's azimuth axis is the Fourier conjugate of slow-time, which holds for a polar or range-Doppler grid and does **not** hold for an image backprojected onto an arbitrary ground grid or DEM. The resolution separates the two things that assumption was constraining at once. What PGA *estimates* is bound to a conjugate geometry, and this operator estimates from nothing else. What it *produces* is a per-pulse phase, which is bound to nothing — so it applies to a formation on any geometry, through `PhaseCorrectionOp` ahead of `BackprojectionOp`.
+- *The precondition is declared, not checked, and that is a limit worth stating plainly.* This operator receives an `image` and nothing else; whether a lattice is conjugate to slow-time is a fact about the geometry and the aperture, not about the pixels, so there is no tensor here to test it against. Requiring `azimuth_axis` is the assertion, and a caller who declares it wrongly gets the silent-plausible failure the rest of this contract works to close — a correction that is not obviously wrong. That is the residual hazard D20 accepts, and it is why [TESTING.md](TESTING.md) carries the assertion on the estimate rather than on a rejection.
+- *The error is per-pulse; only the estimator is per-geometry, and conflating the two is what made this look unresolvable.* A residual phase error comes from trajectory error, clock error or atmospheric path delay: one number per pulse, common to the scene under PGA's isoplanatic assumption. Azimuth is merely where the estimator can see it — a slow-time error appears along the conjugate axis as a blur PGA can invert. Publishing the estimate in azimuth bins therefore encoded the estimator's coordinate system in the port, and it was that encoding, not the physics, that made a correction non-transferable between geometries.
+- *There is no unknown azimuth-to-pulse mapping, which an earlier draft gave as the reason not to index by pulse.* On any geometry where PGA is legal the two axes are related by the conjugacy that makes it legal: one azimuth bin per pulse in the simple case, a known transform-length resampling where the grid was padded or decimated. The mapping is unknown only on geometries where there is no estimate to map, because the estimator was refused.
+- **The recommended pattern when autofocus is opted in on a ground / DEM product is an auxiliary estimation image over a retained, replayed aperture.** It costs a few percent of formation plus aperture-sized retention. Configure `ApertureManagerOp` with `max_aperture_pulses > 0` and `emit_mode = reform` (or an app-owned source that presents the full aperture once for estimation and again corrected). On the reform tick: form a small conjugate-grid image from the replay for estimation only; take `phase_correction`; apply it through `PhaseCorrectionOp` to the same replay; form the product once on the DEM or ground lattice (WORKFLOWS Figure 2).
+- *Auxiliary sizing and the AF-off spotlight spelling.* PGA needs the full azimuth extent (that carries the error) but only range bins with strong scatterers — so the auxiliary can be a few hundred range bins against a product's thousands. `max_aperture_pulses = 0` cannot do this: nothing left to replay after the estimate. Re-forming the *product* alone (no auxiliary lattice) doubles product formation cost. Same-tick ordering and dual-geometry wiring: see `ApertureManagerOp` → *Autofocus on a ground / DEM product*.
+- *What this asks of the application is a second geometry, and that is the honest cost.* Constructing a lattice whose azimuth axis is conjugate to the aperture's sampling is collection knowledge — angular extent, centre, slant plane. It is derivable from the `positions` the application already supplies under D13, but it is more than handing over a DEM, and an application unwilling to build one should omit autofocus rather than reach for it. That lattice is set on the **auxiliary** `BackprojectionOp` only; product geometry still stages through the manager when one is used.
+- **Autofocus costs absolute geolocation, on every route, and that bites hardest here.** A PGA estimate is ambiguous up to a linear and a constant phase term — an image shift — and the algorithm removes those terms rather than recovering them, which is why [TESTING.md](TESTING.md) asserts recovery only up to them. So autofocusing a product formed directly onto a DEM trades away part of the geolocation accuracy that motivated forming onto the DEM. Not caused by the auxiliary pattern and not fixed by avoiding it; it is a property of the algorithm, and it is the strongest argument for the spaceborne no-autofocus default being a first-class product rather than a hedge.
+- *The in-image path is a footnote for radar-geometry products (WORKFLOWS Figure 3).* PGA applies its correction in the image between iterations regardless, so emitting the corrected `image` is free, and where the product **is** the conjugate grid that image is the finished answer — no `PhaseCorrectionOp`, no second formation. That is not this module's usual DEM path; only a conjugate-grid product uses it.
+- *An explicit lattice is not rejected on rank, and never was the constraint.* It is `(num_v, num_u, 3)` against an image of `(..., num_v, num_u)`, so `azimuth_axis` has axes to name. What governs is whether the named axis is conjugate to slow-time, which is a property of the geometry rather than of the mode — so the guard applies identically in both geometry modes, and a points-mode lattice that *is* conjugate is a legal thing to estimate from.
 
 ### Product Operators
 
@@ -678,7 +717,7 @@ Sinks and sources at chain boundaries, never inline. Each is optional; the chain
 One file per emitted image — the image is the product, so there is nothing to accumulate.
 
 - **In:** `image` — complex64 / complex128, `(..., num_v, num_u)`.
-- **In:** `phase_correction` (optional) — float32 / float64, `(..., num_azimuth)`. Recorded where autofocus ran.
+- **In:** `phase_correction` (optional) — float32 / float64, `(..., num_pulses)`. Recorded where autofocus ran. Per pulse, matching `AutofocusOp`'s output (D20), so what is recorded is the correction applied to the collection rather than a resampling of it onto this product's azimuth axis.
 - No outputs — a sink.
 
 **Parameters:**
@@ -813,7 +852,6 @@ Every unresolved question in this document, in the two classes [TEAM_BLOCKED.md]
 - **R1 — contract acceptance**, including the invariant amendments above.
 - **R2 — what the `control` message contains.** Narrowed: the mechanism is settled as `ApertureManagerOp` driving a non-blocking `control` port, and what is left is the message's payload beyond the four settled values. See *Cross-tick accumulation* → *[PROPOSED] How the application supplies the emit decision*.
 - **R7 — who announces a collection boundary.** Split out of R2: the contract needs an end-of-stream and file-boundary announcement on the `control` path, and no operator declares a `control` output able to produce one. See `CPHDReaderOp` → *Notes*, and [SDK_QUESTIONS.md](../SDK_QUESTIONS.md) for the upstream half — whether the announcement belongs on a port at all, or rides the data as metadata.
-- **R4 — `AutofocusOp` grid conjugacy.** Three resolutions; determines whether autofocus is a downstream stage, a feedback loop, or geometry-restricted. See `AutofocusOp` → *Notes* for the resolutions and what each costs.
 - **R5 — whether a metadata plane is in scope.** Forced by the writers, whose mirrored geometry and window parameters are the symptom. Cross-cutting, so it belongs in the contract or is explicitly deferred, never discovered during implementation. Whether Holoscan's metadata dictionary can serve is asked upstream in [SDK_QUESTIONS.md](../SDK_QUESTIONS.md): its policy is per operator rather than per key, so a stage that legitimately redefines a key cannot be distinguished from two stages accidentally disagreeing — which is the failure this item exists to prevent.
 
 **Implementation-time** — settled by writing the code, not by a team decision:

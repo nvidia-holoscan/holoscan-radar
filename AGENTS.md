@@ -56,7 +56,7 @@ The invariants above are **unamended and govern all current code**. The proposed
 | --- | --- |
 | `docs/planning/` | The specs above — the work queue and contract source of truth |
 | `docs/planning/OPERATOR_DEVELOPMENT.md` | Agent/human guidance for implementing operators (hot path, diagnosis, perf) |
-| `docs/planning/SAR/` | SAR modality contract (proposed, in review): API, workflows, testing, build plan |
+| `docs/planning/SAR/` | SAR modality contract (proposed, in review): API, workflows, testing, build plan; audience derivatives `PRACTITIONER_OVERVIEW.md` / `DEVELOPER_OVERVIEW.md` |
 | `operators/` | Operator libraries, one dir per group, gated by `add_holohub_operator()` / `OP_<name>` CMake options |
 | `operators/common/` | Shared `radar_common` library: descriptors, window generation, point-target simulator, config cache, tensor/MatX utilities |
 | `operators/fmcw/` | FMCW signal-processing operators (+ future MIMO marshaling) |

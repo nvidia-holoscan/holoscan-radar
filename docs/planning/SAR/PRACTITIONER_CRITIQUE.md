@@ -12,11 +12,19 @@ level up and the SAR proposal under review.
 This is review input for contract acceptance (R1), not a substitute for
 [TEAM_BLOCKED.md](TEAM_BLOCKED.md). Open items named here map to that index.
 
-**The text below is left as written.** One item it raises has since been
-answered: **R9**, the stripmap tile overlap of § 2, is closed as **D18** — a
+**The text below is left as written.** Two items it raises have since been
+answered. **R9**, the stripmap tile overlap of § 2, is closed as **D18** — a
 strip now scrolls rather than being tiled, so the seams the critique objects to
-do not arise. Every other item named here is still open, and the critique's own
-severity ranking still stands for them.
+do not arise, though a scrolled strip cannot be cross-range tapered and the
+tapered seam-free strip this section really wants remains deferred. **R4**, the
+autofocus / grid-conjugacy wound of § 4, is closed as **D20** along a line this
+critique did not consider: the correction is published **per pulse** rather than
+per azimuth bin, which lets PGA estimate on a small auxiliary conjugate-grid
+image while the product is formed once on the ground or DEM lattice. That is
+nearest to the critique's option (b), at a few percent of formation cost rather
+than the doubling it assumed, and it does not force option (a)'s sacrifice of
+the map-lattice story. The remaining items are still open, and the critique's
+own severity ranking still stands for them.
 
 **Audience assumed here.** First target is **satellite / spaceborne**; the goal
 is still to appeal to as many practitioners as is feasible (airborne,

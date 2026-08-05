@@ -71,10 +71,10 @@ Settled decisions. Capabilities deliberately deferred out of the current scope
 (e.g. staggered TDM, sum-set holey subarray smoothing) are tracked under
 STATUS.md → Roadmap, not here.
 
-**None currently for FMCW.** The five open SAR items (R1, R2, R4, R5, R7) are indexed in
+**None currently for FMCW.** The four open SAR items (R1, R2, R5, R7) are indexed in
 [SAR/TEAM_BLOCKED.md](SAR/TEAM_BLOCKED.md). They do **not** stop development,
 because no SAR operator code exists yet; they must be answered before the SAR
 contract is accepted, and none of them may be resolved in code. That file also
-carries D1–D19: contract calls that already have an answer and do not gate
+carries D1–D20: contract calls that already have an answer and do not gate
 acceptance, enumerated so focused review reaches them rather than relying on a
 reviewer finding them in seven hundred lines of contract.
