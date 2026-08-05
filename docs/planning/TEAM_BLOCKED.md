@@ -32,7 +32,11 @@ for where detail lives before any operator directory exists.
 rather than on a call this team can make, the question is drafted in
 [SDK_QUESTIONS.md](SDK_QUESTIONS.md) and referenced from the row it blocks.
 Asking upstream is a resolution path, not a detour: an item resolved that way
-is recorded in [STATUS.md](STATUS.md) like any other.
+is recorded in [STATUS.md](STATUS.md) like any other. Nothing there currently
+blocks a row — D21, D22 and D23 were decided without waiting on it — so that
+file now carries one design question we would rather not answer alone (a
+value-aware alternative to the `kRaise` metadata policy) plus a record of the
+conclusions we reached ourselves, for correction.
 
 ---
 
@@ -71,10 +75,17 @@ Settled decisions. Capabilities deliberately deferred out of the current scope
 (e.g. staggered TDM, sum-set holey subarray smoothing) are tracked under
 STATUS.md → Roadmap, not here.
 
-**None currently for FMCW.** The four open SAR items (R1, R2, R5, R7) are indexed in
+**None currently for FMCW.** The two open SAR items (R1, R10) are indexed in
 [SAR/TEAM_BLOCKED.md](SAR/TEAM_BLOCKED.md). They do **not** stop development,
 because no SAR operator code exists yet; they must be answered before the SAR
-contract is accepted, and none of them may be resolved in code. That file also
-carries D1–D20: contract calls that already have an answer and do not gate
+contract is accepted, and neither may be resolved in code. That file also
+carries D1–D23: contract calls that already have an answer and do not gate
 acceptance, enumerated so focused review reaches them rather than relying on a
-reviewer finding them in seven hundred lines of contract.
+reviewer finding them in nine hundred lines of contract.
+
+**One of the two reaches beyond SAR, and FMCW owners should see it.** R10 asks
+whether the metadata key namespace D22 introduces — `holoscan.radar.<key>`,
+with `stream_boundary` as its only key — belongs at the module level or under a
+`sar` tier. It is proposed module-wide because the cross-tick accumulation
+convention it serves is module-wide and a finite FMCW source loses its tail the
+same way, which makes it a decision about FMCW taken in a SAR document.

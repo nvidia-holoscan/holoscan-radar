@@ -110,11 +110,15 @@ Some operators integrate across Holoscan ticks and emit less often than they con
 
 - Emit and reset are separate; reset has a **phase** (before vs after this tick’s data).
 - **One owner of reset** — never the accumulator guessing. Geometry changes travel **with** the reset that admits them.
-- End-of-stream flush cannot use `Operator::stop()` (no `OutputContext`). Something must announce on `control` (open item R7).
+- End-of-stream flush cannot use `Operator::stop()` (no `OutputContext`), so a finite source **announces** it as message metadata — `holoscan.radar.stream_boundary`, valued `end_of_stream` or `collection_boundary` (**D22**) — and whoever drives `control` translates that into a flush. `ApertureManagerOp` reads it itself. Metadata, not a port, because a port cannot stay aligned with its data across a stage that coalesces ticks, which the manager does.
+- Two things this puts on the application: enable metadata on the fragment with policy `kUpdate` (`kRaise` throws where a consumer takes several ports from one producer), and if you own the control operator, feed it from the source — metadata arrives only through `receive()`, so a policy operator wired as a pure source never hears the boundary. `BackprojectionOp` warns at `stop()` if it is still holding an unemitted image, which is how you find out.
+- The control message carries the four values and nothing else (**D23**): no aperture id, no sequence number, no reason code.
 
 ### `[live]` overrides
 
-Parameters are build-time by default. Marked `[live]` may be overridden via a same-named non-blocking input. Costly overrides warn once and cache. Structural choices (`emit_mode`, `algorithm`, `geometry_change`, …) stay static — instantiate another operator to vary them.
+Parameters are build-time by default. Marked `[live]` may be overridden via a same-named non-blocking input. Costly overrides warn once and cache. Structural choices (`emit_mode`, `algorithm`, `geometry_change`, …) stay static — instantiate another operator to vary them. Where a port is wired **and** its parameter set, the port wins and a disagreement warns once.
+
+That mechanism is also the answer to the writers' mirrored configuration (**D21**), so there is no descriptive metadata plane to look for. Three optional descriptor *outputs* — `CPHDReaderOp.coordinate_frame`, `SARRangeCompressionOp.range_window`, `BackprojectionOp.sample_geometry` — wire into the same-named `[live]` override on `GeocodeOp` and the writers, whose mirrors are `[live]` for that purpose. Wiring them is optional and mirroring by hand stays legal; the edge worth wiring is `sample_geometry` into `GeocodeOp`, where a disagreement misplaces the whole raster while producing a well-formed file.
 
 ### Application-owned inputs (no library operator)
 
@@ -185,7 +189,10 @@ PGA discards constant/linear phase (image shift). Conjugacy is **declared** (`az
 - Manager resets while still emitting `−1` evictions for dropped retention (phantom subtractions).
 - Incremental sliding window + azimuth taper (refused; use `reform`).
 - Figure 2 autofocus on `emit_mode = continue` or scroll.
-- Assuming `stop()` flushes the last aperture.
+- Assuming `stop()` flushes the last aperture (it warns instead — see D22).
+- Forgetting `is_metadata_enabled(true)` / `metadata_policy(kUpdate)` on the fragment: the boundary announcement is dropped and the final aperture is lost, or `kRaise` throws on a multi-port receive from one producer.
+- An app-owned control operator wired as a pure source: it can never hear the boundary, because metadata arrives only through `receive()`.
+- Mirroring `sample_geometry` into `GeocodeOp` or `SICDWriterOp` by hand and letting it drift from formation. Legal, and the ordinary path, but the D21 override port removes the failure mode entirely.
 
 ---
 
@@ -193,7 +200,7 @@ PGA discards constant/linear phase (image shift). Conjugacy is **declared** (`az
 
 No `MotionCompensationOp` for straight-track phase (backprojection uses measured trajectory). No bistatic ports. No first-wave frequency-domain formation. No mosaicking / look-combination / SAR CFAR in this modality’s wave one. Detection lessons from FMCW do **not** carry over to SAR clutter statistics.
 
-Team-blocked items that affect implementation: control-message payload (**R2**), end-of-stream announcement (**R7**), metadata plane (**R5**) — see [TEAM_BLOCKED.md](TEAM_BLOCKED.md) and [../SDK_QUESTIONS.md](../SDK_QUESTIONS.md).
+Team-blocked items that affect implementation: contract acceptance itself (**R1**) and the scope of the metadata key namespace (**R10** — whether `holoscan.radar.stream_boundary` sits module-wide or under a `sar` tier). Everything else you would have found here is decided: the control-message payload as **D23**, the end-of-stream announcement as **D22**, and the metadata plane as **D21**, which declined it. See [TEAM_BLOCKED.md](TEAM_BLOCKED.md); [../SDK_QUESTIONS.md](../SDK_QUESTIONS.md) now holds one upstream design question rather than anything blocking.
 
 ---
 

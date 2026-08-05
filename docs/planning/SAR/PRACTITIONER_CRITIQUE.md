@@ -12,9 +12,15 @@ level up and the SAR proposal under review.
 This is review input for contract acceptance (R1), not a substitute for
 [TEAM_BLOCKED.md](TEAM_BLOCKED.md). Open items named here map to that index.
 
-**The text below is left as written.** Two items it raises have since been
-answered. **R9**, the stripmap tile overlap of § 2, is closed as **D18** — a
-strip now scrolls rather than being tiled, so the seams the critique objects to
+**Editorial note — added by the contract authors, not by the critic; last
+extended 2026-08-05.** Everything from *Audience assumed here* onward is the
+critique **exactly as written**, and nothing in it has been altered in place.
+This note is the only reply, so where a section below reads as an open
+objection, check it against the closures listed here first.
+
+Five items the critique raises have since been answered. **R9**, the stripmap
+tile overlap of § 2, is closed as **D18** — a strip now scrolls rather than
+being tiled, so the seams the critique objects to
 do not arise, though a scrolled strip cannot be cross-range tapered and the
 tapered seam-free strip this section really wants remains deferred. **R4**, the
 autofocus / grid-conjugacy wound of § 4, is closed as **D20** along a line this
@@ -23,8 +29,21 @@ per azimuth bin, which lets PGA estimate on a small auxiliary conjugate-grid
 image while the product is formed once on the ground or DEM lattice. That is
 nearest to the critique's option (b), at a few percent of formation cost rather
 than the doubling it assumed, and it does not force option (a)'s sacrifice of
-the map-lattice story. The remaining items are still open, and the critique's
-own severity ranking still stands for them.
+the map-lattice story.
+
+Three more closed together as **D21**, **D22** and **D23**, and the distinction
+between them matters when reading the sections below. D22 is a fix: the
+end-of-stream and file-boundary announcement now has a producer — a source stamps
+`holoscan.radar.stream_boundary` as message metadata and whoever drives `control`
+translates it — so the dropped-tail objection no longer applies. D23 is a
+narrowing: the control message carries the four emit/reset values and nothing
+else. **D21 is a declination**, and the one to read with care: the metadata plane
+this critique wants for the writers' mirrored geometry is **not** in scope, and
+the mirroring hazard is accepted under invariant 5 rather than removed. What is
+offered instead is optional — three descriptor output ports a caller may wire to
+get agreement by construction — so the objection is answered by making it
+avoidable rather than by making it impossible. The remaining items are still
+open, and the critique's own severity ranking still stands for them.
 
 **Audience assumed here.** First target is **satellite / spaceborne**; the goal
 is still to appeal to as many practitioners as is feasible (airborne,
