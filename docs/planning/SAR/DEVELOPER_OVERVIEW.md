@@ -8,7 +8,7 @@ Onboarding for someone who will **implement or extend** this SAR stack: expert a
 
 It is a derivative of [WORKFLOWS.md](WORKFLOWS.md) (modes + wiring) with contracts from [OPERATOR_API.md](OPERATOR_API.md). Where this disagrees with those, **they win**. Regenerate from the prompt in WORKFLOWS.md → *Appendix*, do not hand-patch. The sibling [PRACTITIONER_OVERVIEW.md](PRACTITIONER_OVERVIEW.md) is the same scope stripped of software detail for external SAR reviewers.
 
-**Read next after this:** [OPERATOR_API.md](OPERATOR_API.md) (locked contracts), [SIGPROC_PLAN.md](SIGPROC_PLAN.md) (build order), [TESTING.md](TESTING.md), [../NEW_OPERATOR_CHECKLIST.md](../NEW_OPERATOR_CHECKLIST.md), [../OPERATOR_DEVELOPMENT.md](../OPERATOR_DEVELOPMENT.md).
+**Read next after this:** [OPERATOR_API.md](OPERATOR_API.md) (the contracts in full — a proposal pending **R1**, not locked text, unlike the FMCW contract one level up), [SIGPROC_PLAN.md](SIGPROC_PLAN.md) (build order), [TESTING.md](TESTING.md), [../NEW_OPERATOR_CHECKLIST.md](../NEW_OPERATOR_CHECKLIST.md), [../OPERATOR_DEVELOPMENT.md](../OPERATOR_DEVELOPMENT.md).
 
 ---
 
@@ -37,6 +37,8 @@ There is **one** operator chain. Collection “modes” (spotlight, video SAR, s
 
 Almost everything that looks like a special mode is “independent images” with different geometry scheduling. The software consequence: implement `ApertureManagerOp` + `BackprojectionOp` correctly once; modes are YAML and wiring, not forks.
 
+**The split has one asymmetry worth learning before you read the diagram.** Formation never decides when an image comes out, so *something* must tell it — that is the emit decision, and it is mandatory in every graph. `ApertureManagerOp` is the operator we ship to make it, and everything else it does is convenience. So the operator is optional and its central job is not.
+
 ```mermaid
 flowchart TD
   classDef opt stroke-dasharray:4 3
@@ -49,7 +51,7 @@ flowchart TD
   class AC,GEOM opt
 ```
 
-Default product path: **autofocus off**, form onto ground/DEM geometry the app supplies. That is WORKFLOWS Figure 1.
+Default product path: **autofocus off**, form onto ground/DEM geometry the app supplies. That is WORKFLOWS Figure 1. `ApertureManagerOp` is dashed as an **operator**, not as an edge — `control` is required whether or not this box exists, and in a graph without it a small app-owned operator occupies the same slot.
 
 ---
 
@@ -59,7 +61,7 @@ Use this when reading mode names in WORKFLOWS or talking to radar folks.
 
 | Term you will hear | Plain meaning | What changes in *our* graph |
 | --- | --- | --- |
-| **Aperture** | The set of pulses coherently combined into **one** image (not the whole collect) | Membership + when to emit (`ApertureManagerOp` / `control` / `weight`) |
+| **Aperture** | The set of pulses coherently combined into **one** image (not the whole collect) | Membership (`weight`) plus when to emit (`control`, required); both usually from `ApertureManagerOp` |
 | **Spotlight** | Radar stares at one patch; usually one image at end | Per-aperture formation; one geometry; flush at end of stream |
 | **Video SAR** | Same patch, images emitted repeatedly while collecting | Overlapping apertures: retain pulses, `weight = −1` to evict |
 | **Stripmap / strip** | Platform flies past; ground scrolls under the beam | Tiled products (mode 3) or one scrolling product (mode 4) |
@@ -91,8 +93,17 @@ Orientation only — contracts are in OPERATOR_API.
 
 **Aperture vs image (the important split).**
 
-- `ApertureManagerOp` — optional. Retains pulses, decides membership, emits `weight` (`+1` admit, `−1` evict) and `control` (when to emit / reset). Holds **no** image.
-- `BackprojectionOp` — accumulates into an image. Holds **no** aperture. Only sums what it is handed when `control` says to emit.
+- `ApertureManagerOp` — optional operator, **one mandatory job**: drive `control`, which tells `BackprojectionOp` when an image comes out. Formation never decides that itself, so some operator does it in every graph. Everything else it offers is convenience — staging a geometry change to the aperture boundary, buffering pulses, deciding membership and its `aperture_window` taper, and turning the D22 boundary announcement into a flush. Of those, **retention is the only one an app cannot assemble from operators it already has**; the rest replace a counter or a window function. Emits `weight` (`+1` admit, `−1` evict) alongside `control`. Holds **no** image.
+- `BackprojectionOp` — accumulates into an image. Holds **no** aperture. Only sums what it is handed, and emits only when `control` says to.
+
+**The two edges into formation are not equally optional**, which is what decides how much you take on by omitting the manager. `weight` defaults to `+1` per pulse when unconnected, so an untapered aperture needs nothing. `control` is a **required connection**: an unconnected `control` describes a graph that can never emit an image and is rejected at initialization ([OPERATOR_API.md](OPERATOR_API.md) → *Build-time wiring validation*).
+
+**Running without a manager** is legal in every mode, and is how mode 4 is normally built, since scroll leaves a manager nothing to do but the emit cadence. It transfers four things to the application. Three fail loudly; the second does not.
+
+1. The `control` connection itself, caught at initialization.
+2. **Reachability.** Your control operator needs at least one input fed, directly or transitively, by the source, because metadata arrives only through `receive()`. Wired as a pure source it never hears `holoscan.radar.stream_boundary` and the final aperture is silently lost. `ApertureManagerOp` cannot have this bug — its inputs are the pulses.
+3. Emitting a geometry change **and** the resetting `control` that admits it on one tick; a geometry arriving without one errors rather than buffering. Scroll excepted.
+4. Your own `weight` values if you want a cross-range taper, computed over the aperture's final membership.
 
 Forgetting to wire `positions` / `reference_position` around range compression is the classic bug: shapes still look fine.
 
@@ -123,7 +134,8 @@ That mechanism is also the answer to the writers' mirrored configuration (**D21*
 ### Application-owned inputs (no library operator)
 
 1. **Per-pulse antenna phase-centre positions** (and `reference_position`) — CPHD reader supplies them on file path; live apps derive from nav. Wrong frame/units/time → plausible bad image, not a throw. Formation requires `coordinate_frame` (`CoordinateFrame`) with **no default** — same frame as `sample_points` / positions.
-2. **Image sample geometry** — `SampleGeometry` descriptor or `(num_v, num_u, 3)` `sample_points`. Usually staged through the manager so a lattice change co-arrives with reset. Scroll mode sends geometry straight to formation.
+2. **Image sample geometry** — `SampleGeometry` descriptor or `(num_v, num_u, 3)` `sample_points`. Usually staged through the manager so a lattice change co-arrives with reset. Scroll mode and manager-free graphs send geometry straight to formation, which is where obligation 3 above lands on you.
+3. **A `control` producer, wherever there is no `ApertureManagerOp`** — a small operator in `custom_ops.hpp` or in your live-sensor source. Not `CPHDReaderOp`, which declares no `control` output by design (**D22**): it announces boundaries on the metadata plane and leaves the emit vocabulary to whoever owns the aperture. Unlike items 1 and 2 this one is conditional, but it is a required *connection* — see the four obligations under *The operator chain*.
 
 ### `PhaseCorrectionOp.sense`
 
@@ -142,19 +154,23 @@ Nine named modes collapse to **three** software configurations:
 | Configuration | Modes | Software essence |
 | --- | --- | --- |
 | **Per-aperture** | 1, 3, 5, 6†, 7 (disjoint), 8, 9† | Each pulse in one image; reset at boundary; manager optional |
-| **Overlapping** | 2, 7 (overlapping looks) | Retain pulses; `weight −1` eviction; manager **recommended** |
-| **Scrolling** | 4 | `geometry_change = scroll`; translate lattice along `v`; no `weight` |
+| **Overlapping** | 2, 7 (overlapping looks) | Retain pulses; `weight −1` eviction; the one place manager retention **earns its keep** |
+| **Scrolling** | 4 | `geometry_change = scroll`; translate lattice along `v`; no `weight`; a manager here is reduced to the emit cadence |
 
 † Modes 6 and 9 are **N instances** of the per-aperture pattern (sub-swaths or height planes).
+
+"Manager optional" throughout means the *operator*, never the emit decision: `control` is driven in every column, and only the identity of the producer changes.
 
 Typical manager knobs (see OPERATOR_API table for full matrix):
 
 | Goal | `max_aperture_pulses` | `emit_mode` | Notes |
 | --- | --- | --- | --- |
-| One image, AF off | `0` | `reset` | Pass-through; `control` at EOS |
+| One image, AF off | `0` | `reset` | Pass-through; `control` at the announced boundary |
 | Video / sliding window | `N` | `continue` | Incremental add/subtract |
 | Tapered block aperture | `> 0` | `reform` | Replay full aperture at boundary |
 | **DEM product + PGA (Fig. 2)** | `≥ aperture length` | **`reform`** | Required — see below |
+
+Five of the six configurations in OPERATOR_API's table are a pure YAML edit with no application-owned ports wired at all, which is what D22's boundary announcement bought: only the application-chosen sliding window still needs an operator of your own, because only you know the count you put on `evict`.
 
 Mode 3 seams and mode 4 “no taper / buffer depth” are **product physics**, not missing operators. Do not “fix” them in formation.
 
@@ -185,7 +201,8 @@ PGA discards constant/linear phase (image shift). Conjugacy is **declared** (`az
 
 - Positions not wired past range compression.
 - `CPHDReaderOp.sample_axis` used as `range_bins` (shape-legal, image wrong).
-- Geometry change without a resetting `control` (must error, not soft-buffer).
+- Geometry change without a resetting `control` (must error, not soft-buffer). Easy to hit the moment you drop the manager, since staging the change was its job.
+- Dropping the manager and expecting its edges to drop with it. `control` is a required connection, so the graph fails at initialization — the loud one of the four obligations, and the reason to read them before assuming a manager-free chain is a subtraction.
 - Manager resets while still emitting `−1` evictions for dropped retention (phantom subtractions).
 - Incremental sliding window + azimuth taper (refused; use `reform`).
 - Figure 2 autofocus on `emit_mode = continue` or scroll.

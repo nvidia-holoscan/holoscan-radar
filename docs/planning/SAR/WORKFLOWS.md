@@ -12,7 +12,7 @@ This is the SAR analogue of the FMCW [WORKFLOWS.md](../WORKFLOWS.md) one level u
 
 The goal is to cover the large majority of real SAR deployments with a small, composable operator set — not to enumerate every corner case.
 
-**Two audience derivatives** of this document (regenerate from the *Appendix* prompts when modes, deferred list, quality claims, or mode→config mapping change — do not hand-patch):
+**Two audience derivatives** of this document (regenerate from the *Appendix* prompts when modes, deferred list, quality claims, mode→config mapping, or *Application responsibilities* change — do not hand-patch):
 
 - [PRACTITIONER_OVERVIEW.md](PRACTITIONER_OVERVIEW.md) — SAR expert outside the project; no operators/ports; judges coverage and image quality.
 - [DEVELOPER_OVERVIEW.md](DEVELOPER_OVERVIEW.md) — software engineer who will build this stack; keeps operator names and wiring; translates collection-mode jargon into graph/config terms.
@@ -114,8 +114,8 @@ It is mode 5 run once per height plane over the same pulses — the same repetit
 Closing each is an **addition** that conflicts with nothing already decided, and **both are deferred for the same reason**: each needs the caller to supply information this contract has no established way to express, and settling that now — with no implementation to check it against — would add contract surface we would probably get wrong. Neither is deferred because it is out of reach or because the arithmetic is unclear. What is unsettled in both is the **interface**, not the algorithm, which is also why neither conflicts with anything: an addition made later against a working kernel is a better addition than one guessed at now.
 
 - **Tapered seam-free strip.** The strip operational processors ship — continuous, no joins, cross-range weighted. Modes 3 and 4 each reach for it and give up a different half. What is missing is each pixel's own illumination interval: in a strip no two pixels along track share an aperture, so a pulse sits at a different point in the interval of every row it touches, and the weighting is a function of *(pulse, pixel)* rather than of pulse alone.
-  It is exactly computable as pulses arrive — the interval is fixed by geometry, so unlike a tapered aperture it needs no deferral, no retention and no re-forming — but computing it means telling the formation stage the along-track aperture length, and under squint the pointing as well.
-  That is collection-geometry knowledge the rest of this design deliberately keeps out of formation, so where those values belong is the open question, not whether the result is right. Its absence is the most likely reason a practitioner judges this library not ready for operational strip work.
+It is exactly computable as pulses arrive — the interval is fixed by geometry, so unlike a tapered aperture it needs no deferral, no retention and no re-forming — but computing it means telling the formation stage the along-track aperture length, and under squint the pointing as well.
+That is collection-geometry knowledge the rest of this design deliberately keeps out of formation, so where those values belong is the open question, not whether the result is right. Its absence is the most likely reason a practitioner judges this library not ready for operational strip work.
 - **Frequency-domain image formation** — PFA, range-Doppler, chirp scaling, omega-k. What is missing is a second kind of image geometry. Everything here says where a pixel is by giving its position, which is what makes forming straight onto a DEM natural; these methods form in a radar-geometry grid and resample afterwards, which makes geocoding mandatory rather than optional, and each additionally needs a nominal track to correct to (see *What "motion compensation" means here*). Carrying both kinds of grid in one contract is the unsettled part, and it is not worth settling before a frequency-domain kernel exists to constrain it.
 
 ---
@@ -169,7 +169,7 @@ The chains below are built from seventeen operators, introduced here so the rest
 
 **Image formation — range profiles to an image.** The two-operator split here is the central design decision of the chain, and *Chains* explains why.
 
-- `ApertureManagerOp` — optional operator encapsulating geometry, range-profile, and image-emission management, simplifying application development for certain modes.
+- `ApertureManagerOp` — optional in every mode, because it implements a job rather than being a stage the data must pass through. Its **one mandatory job is telling `BackprojectionOp` when to emit an image**: formation never decides that itself, so some operator has to drive `control` in every graph, and this is the one we ship. Everything else is convenience that turns modes into configuration rather than code — staging a geometry change until the aperture boundary, buffering pulses, deciding membership and its taper — plus turning the end-of-stream announcement into a flush (**D22**). **Retention is the convenience worth the most**, being the only one an application cannot assemble from operators it already has. See *Application responsibilities* for what leaving it out transfers.
 - `BackprojectionOp` — forms the image, summing what it is handed across ticks. Owns an accumulator, not an aperture.
 - `AutofocusOp` — estimates a per-pulse residual phase correction, and applies it in-image where the product is itself on a conjugate grid. An omittable stage, not a mode inside formation.
 
@@ -196,7 +196,7 @@ These hold across every workflow, and are consistent with [OPERATOR_API.md](OPER
 - **The pulse axis is the aperture axis**, and it is the axis that accumulates across ticks. Everything ahead of formation is stateless and per-batch except retention: `ApertureManagerOp`, where one is present, is where the tick boundary stops being invisible, and formation holds an accumulator but no aperture.
 - **One Cartesian frame, declared.** Phase-center positions and image sample points must be in the *same* right-handed metres frame. The backprojection kernel only takes norms of position differences, so it is inherently frame-free — which is exactly why a mismatch is silent. The `CoordinateFrame` descriptor is a required, no-default parameter making the frame explicit at the boundary, in the same spirit and for the same reason as FMCW's `AngleConvention`.
 - **The final pulse batch may be short.** A file-backed source runs out mid-batch, so every stage infers the pulse count from the tensor rather than from a configured batch size. The trailing partial aperture is not flushed by the accumulator on its own — `Operator::stop()` has no `OutputContext` — so end of stream is *announced* by the operator that knows: the reader stamps `holoscan.radar.stream_boundary` as message metadata (**D22**), and whoever drives `control` turns it into a flush. `ApertureManagerOp` reads it directly. An application-owned control operator must be fed by the source to hear it, and `BackprojectionOp` warns at `stop()` if it is still holding an unemitted image, so a tail lost this way is visible rather than silent.
-- **Two things the application supplies, not the library.** Per-pulse phase-center positions and the image sample geometry. See *Application responsibilities*.
+- **Two things the application supplies, not the library**, and a third where there is no `ApertureManagerOp`. Per-pulse phase-center positions and the image sample geometry always; the `control` source that tells formation when an image comes out whenever no manager is in the graph, that connection being required rather than optional. See *Application responsibilities*.
 
 ## Ingress: three data forms, one convergence point
 
@@ -210,7 +210,7 @@ The third case looks circular: direct-sampled pulses are time-domain, get matche
 
 ## Application responsibilities
 
-Two inputs to the chain are deliberately **not** library operators, and one piece of fragment configuration is the application's to set.
+Two inputs to the chain are deliberately **not** library operators, a third becomes the application's wherever there is no `ApertureManagerOp`, and one piece of fragment configuration is the application's to set in every graph.
 
 **Per-pulse phase-center positions.** On the CPHD path these come out of the reader — CPHD stores position and velocity for the Aperture Reference Point, which is effectively the antenna phase centre. On a live platform the application derives them from IMU and GPS through lever-arm correction, attitude application, and time alignment to pulse instants. That derivation is specific to the airframe and the navigation hardware, so it belongs in the app's `custom_ops.hpp` alongside the live-radar source. `BackprojectionOp` sees one port either way and does not know which source filled it.
 
@@ -218,9 +218,20 @@ Because no operator encodes the convention, **the port specification carries the
 
 **Image sample geometry.** A uniform grid is one `SampleGeometry` descriptor — origin, both axes, spacing, and counts as a single atomic value, since they only make sense changing together. An explicit geometry is a `(num_v, num_u, 3)` lattice on an optional input port, because a DEM-derived set of positions cannot live in YAML. Neither needs a library operator to produce it.
 
-Either form goes to `ApertureManagerOp` rather than to formation: the manager holds it and forwards it with the reset that ends the current aperture, so the application never has to time the change against an emit — see *How a moving scene coexists with an accumulator*. Mode 4 is the exception and sends the geometry straight to formation, having no aperture to end. Either form works there; an explicit lattice sends only the rows entering the leading edge after the first message, so a DEM-conformal strip costs one slab of positions per advance rather than a whole re-send.
+Either form goes to `ApertureManagerOp` where one is in the graph, rather than to formation: the manager holds it and forwards it with the reset that ends the current aperture, so the application never has to time the change against an emit — see *How a moving scene coexists with an accumulator*. Two cases bypass that. Mode 4 sends the geometry straight to formation, having no aperture to end; either form works there, and an explicit lattice sends only the rows entering the leading edge after the first message, so a DEM-conformal strip costs one slab of positions per advance rather than a whole re-send. A graph with no manager sends it straight to formation too, at which point that timing becomes the application's — see the control-source obligations below.
 
 The lattice's positions are arbitrary, but they must be **locally coherent** — a compact tile of pixels should correspond to a compact region of space — because the Taylor formation variants expand about a per-block reference. A DEM raster satisfies this naturally; a deliberately scattered lattice does not, and the operator warns.
+
+**A control source, wherever there is no `ApertureManagerOp`.** Telling formation when an image comes out is the manager's one mandatory job — mandatory because nothing else does it, `BackprojectionOp` never deciding for itself. The manager is optional; that job is not. `BackprojectionOp.control` is a **required connection**, and a graph leaving it unconnected is rejected at initialization rather than running quietly and never emitting an image. An application omitting the manager therefore owns a small control operator of its own, in `custom_ops.hpp` or in its live-sensor source where it has one. Not `CPHDReaderOp`, which declares no `control` output by design (**D22**): it announces boundaries on the metadata plane and leaves the emit vocabulary to whoever owns the aperture.
+
+Four things transfer along with that edge. Three of them fail loudly, at initialization or on the tick; the second does not, which is why it is the one to check first.
+
+1. **The connection itself**, checked at initialization — see [OPERATOR_API.md](OPERATOR_API.md) → *Build-time wiring validation*.
+2. **Reachability.** At least one of that operator's inputs must be fed, directly or transitively, by the sensor source, because metadata arrives only through `receive()`. An operator wired as a pure source never hears `holoscan.radar.stream_boundary`, so the collection's final aperture is never flushed — and nothing says so except `BackprojectionOp`'s `stop()` warning. `ApertureManagerOp` satisfies this by construction, its own inputs being the pulses.
+3. **Timing a geometry change.** With no manager holding a new lattice until the aperture ends, the application emits the geometry and the resetting control message that admits it **on the same tick**; a geometry arriving without one is an error rather than a buffered request. Scroll is the exception — a pure translation along `v` invalidates nothing and needs no reset. See *How a moving scene coexists with an accumulator*.
+4. **Weights, if a taper is wanted.** `weight` is genuinely optional and defaults to `+1` for every pulse, so an untapered aperture costs nothing to give up. A cross-range taper means computing the window across the aperture's final membership and driving `weight` directly, which an application handing over whole apertures can do because it knows every pulse's slot. Under `geometry_change = scroll` the port is rejected outright and a strip cannot taper at all.
+
+Nothing is given up by owning these — tapering included — and the manager reaches nothing an application cannot. What is taken on is the bookkeeping, and in one configuration that bookkeeping is a stateful retention operator rather than a counter: see *How the modes reach the operator chain*.
 
 **Metadata must be enabled on the fragment**, with `metadata_policy` set to `kUpdate`: `Fragment::is_metadata_enabled(true)` and `Fragment::metadata_policy(MetadataPolicy::kUpdate)`. This is one line each and easy to skip, but D22's boundary announcement travels on the metadata plane, so without it a file-backed collection silently loses its final aperture — `BackprojectionOp`'s `stop()` warning is what surfaces that. An operator anywhere between the source and the control owner that has metadata disabled drops the announcement.
 
@@ -246,7 +257,9 @@ Cross-cutting wiring facts, which apply across the diagrams:
 - `reference_position` **travels with** `positions`, for the same reason and to the same consumer. It carries the reference *point*, not a distance; the per-pulse reference range is derived from it inside `BackprojectionOp`.
 - `range_bins` is the optional third edge: wiring `SARRangeCompressionOp.range_bins → BackprojectionOp.range_bins` makes the two stages' range axes consistent by construction, and supersedes `range_bin_spacing` / `range_bin_origin`. Leaving it unconnected means the caller mirrors `nfft` by hand. `CPHDReaderOp.sample_axis` is **not** a substitute: it is the stored-sample axis (frequency or time of arrival), not a range axis, and it has the same length as `range_bins` whenever `nfft` is unset — so the mis-wiring is shape-legal and shows up only as a displaced image.
 - `sample_points` carries an explicit lattice, and connecting it is what selects that mode; a uniform lattice rides the `sample_geometry` descriptor instead and has no tensor edge. Either way the image comes out `(..., num_v, num_u)`, and either way the geometry reaches formation through the manager so that a change and the reset it needs arrive together — except under `geometry_change = scroll`, where geometry goes directly to formation and `sample_points` carries only the entering rows after the first message.
-- `weight` **and** `control` are the manager's edges into formation. `weight` carries `+1` for pulses entering the aperture and `−1` for those leaving it, which is the whole eviction mechanism; `control` says when an image comes out. Both are what used to be `BackprojectionOp` parameters. Two matching *inputs* run the other way, from the application into the manager — `evict` and `control` — for the cases where the application owns those decisions rather than configuring them. Under `geometry_change = scroll` formation rejects a connected `weight`, so a manager there — if one is present at all — emits `control` and nothing else, which is a job a small app-owned operator does equally well provided it is fed by the source, since that is how it hears a boundary.
+- `weight` **and** `control` are the manager's two edges into formation, and they are **not** equally optional — which is worth knowing before deciding to do without a manager. Both were once `BackprojectionOp` parameters.
+- `weight` is the optional one. It carries `+1` for pulses entering the aperture and `−1` for those leaving, which is the whole eviction mechanism, and it defaults to `+1` per pulse when nothing drives it — so an application content with an untapered aperture need not drive it at all. Under `geometry_change = scroll` formation rejects a connected `weight` outright. The matching *input* running the other way is `evict`, for an application owning the window length rather than configuring it.
+- `control` is **required to be connected**. It says when an image comes out, and some producer must own it whether or not a manager exists; an unconnected `control` is rejected at initialization. A manager under scroll — if one is present at all — emits `control` and nothing else, which a small app-owned operator does equally well provided it is fed by the source. The matching `control` *input* runs the other way, for an application driving the cadence itself.
 - **Autofocus is not on the default spine.** Figure 1 ends at the SLC. PGA attaches only when an application opts in: Figure 2 for the usual ground / DEM product, Figure 3 when the product itself is already on a radar-geometry (conjugate) lattice. Both paths emit `phase_correction` indexed by **pulse**. It goes to `SICDWriterOp`, which records it among the product's own metadata fields, and, in Figure 2, into `PhaseCorrectionOp` on the pulse path — never along the image path into multilook or other product stages.
 - **Figure 2 requires a retained aperture replay.** Configure `ApertureManagerOp` with `max_aperture_pulses > 0` and `emit_mode = reform` (or an app-owned equivalent). On that reform tick: conjugate-grid auxiliary `BackprojectionOp` → `AutofocusOp`; `PhaseCorrectionOp` corrects the **same replayed pulses**; product `BackprojectionOp` forms the DEM image — in graph dependency order within the tick. Product geometry stages through the manager; the auxiliary conjugate lattice is on the aux instance alone. Not for `emit_mode = continue` or scroll. See [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp` → *Autofocus on a ground / DEM product*.
 - `PhaseCorrectionOp` **is in-place on the data plane** — `range_profiles` in, same out — and appears only in Figure 2, **after** the aperture source and **before** the product formation. Its `phase_correction` is required/blocking and comes from `AutofocusOp` on the replay tick: two formations, not a loop.
@@ -258,7 +271,9 @@ Cross-cutting wiring facts, which apply across the diagrams:
 
 **One chain serves every mode.** Ingress, range compression, formation, and the optional product stages are the same operators in the same order throughout; what varies is which optional operators are present and how a handful of parameters are set. The subsections below are therefore ingress branches, not chain variants.
 
-`ApertureManagerOp` is the operator whose presence varies most visibly, since it is optional everywhere (see *How the modes reach the operator chain*) and mode 4 never has one. Leaving it out is not a different chain: geometry then goes straight from the application to formation, and `control` comes from a small app-owned operator. Not from `CPHDReaderOp`, which has no `control` output — it announces boundaries as metadata (**D22**) and leaves the vocabulary to whoever owns the aperture, so that app-owned operator has to take an input from the source in order to hear one.
+`ApertureManagerOp` is the operator whose presence varies most visibly, since it is optional everywhere (see *How the modes reach the operator chain*) and mode 4 leaves nothing for it to do but the emit cadence, so that mode usually does without one.
+
+Leaving it out is not a different chain — the same operators in the same order, geometry going straight to formation — but it is not free either: the emit decision has to come from somewhere, and `BackprojectionOp.control` is a required connection, so a small app-owned operator takes its place rather than the edge disappearing. Not `CPHDReaderOp`, which has no `control` output — it announces boundaries as metadata (**D22**) and leaves the vocabulary to whoever owns the aperture, so that operator must take an input from the source to hear one. *Application responsibilities* enumerates the four things that transfer.
 
 The listings below are the **shape view**: operators in order, with the tensor each hands on and how its shape evolves. They are deliberately not diagrams — the port-level wire diagrams are Figures 1 through 5 under *Port-level wiring*, and carry the Holoscan port name on every edge. Read a listing to see what the data becomes, a figure to see what connects to what.
 
@@ -280,9 +295,9 @@ CPHD file
   → [GeocodeOp]            → product        (num_northing, num_easting)
 ```
 
-**Two nodes are stateful, and they hold different things.** `ApertureManagerOp` retains pulses and decides membership and emission; `BackprojectionOp` holds an image accumulator and sums whatever it is handed, signed by `weight`. Splitting them is what lets the sliding window be a manager configuration rather than a formation mode — see *Aperture and emit policy*.
+**Two nodes are stateful, and they hold different things.** `ApertureManagerOp` decides membership and emission, and retains pulses where it is configured to — with `max_aperture_pulses = 0` it holds nothing and only the emission decision is left; `BackprojectionOp` holds an image accumulator and sums whatever it is handed, signed by `weight`. Splitting them is what lets the sliding window be a manager configuration rather than a formation mode — see *Aperture and emit policy*.
 
-**Every mode is this graph with different YAML.** A spotlight image (mode 1) never evicts and emits once when end of stream is announced, which makes it the useful smoke test for the accumulation convention — it exercises seeding and the announced flush without the sliding window. Video SAR (mode 2) adds retention and eviction on the same fixed geometry. A tiled strip (mode 3) steps the geometry at each aperture boundary and re-forms if it wants a taper. A continuous strip (mode 4) sets `geometry_change = scroll`, translates the lattice instead of stepping it, and drops the manager. Modes 5 through 9 differ only in what geometry the application supplies and how many formation instances run over the one pulse stream. Across all nine, the only operator that comes and goes is the manager.
+**Every mode is this graph with different YAML.** A spotlight image (mode 1) never evicts and emits once when end of stream is announced, which makes it the useful smoke test for the accumulation convention: seeding and the announced flush, without the sliding window. Video SAR (mode 2) adds retention and eviction on the same geometry. A tiled strip (mode 3) steps the geometry at each boundary and re-forms if it wants a taper. A continuous strip (mode 4) sets `geometry_change = scroll`, translates the lattice instead of stepping it, and drops the manager — but not its `control` edge. Modes 5 through 9 differ only in the geometry the application supplies and how many formation instances run over the one pulse stream. Across all nine, the only operator that comes and goes is the manager.
 
 ### Live radar, deramped front end
 
@@ -313,7 +328,7 @@ live radar (app source)   → pulses (num_pulses, num_samples)
 
 ## Port-level wiring
 
-**Figure 1 — The wave-one chain (autofocus off)**, the default path, serving every mode. The usual product is a ground / DEM lattice (`sample_points` or `sample_geometry`); nothing here requires a radar-geometry grid. Dashed nodes/edges are optional. `ApertureManagerOp` is drawn where used (solid because its edges exist when present, not because it is mandatory). An app owning apertures supplies `weight`/`control` itself. Mode 4 may drive `control` alone. Autofocus is omitted unless the app opts into Figure 2 or 3.
+**Figure 1 — The wave-one chain (autofocus off)**, the default path, serving every mode. The usual product is a ground / DEM lattice (`sample_points` or `sample_geometry`); nothing here requires a radar-geometry grid. Dashed nodes/edges are optional. `ApertureManagerOp` is drawn where used (solid because its edges exist when present, not because it is mandatory). An app owning apertures drives `control` itself — that connection is required whether or not a manager exists — and drives `weight` only if it wants a taper, `+1` being the default. Mode 4 drives `control` alone, scroll rejecting `weight`. Autofocus is omitted unless the app opts into Figure 2 or 3.
 
 Two groups of dashed edges are worth reading deliberately, because both were added by decisions rather than by the signal path.
 
@@ -438,9 +453,9 @@ The nine supported modes are named for what a practitioner collects. This sectio
 
 **Per-aperture formation** — modes 1, 3, 5, 6, 7 (disjoint looks), 8 and 9. An application-supplied scene geometry, an image per aperture, a reset at each boundary, and every pulse belonging to exactly one aperture. This is Figure 1 as drawn, and the differences between these seven modes are entirely in what geometry the application supplies and how many formation instances run.
 
-**Overlapping apertures** — mode 2, and sub-aperture looks where the looks overlap. Consecutive images share pulses, so the accumulator is not only added to: a pulse that has left the aperture has to be subtracted back out of it, and subtracting a pulse means still holding it long after the image it was admitted for was emitted. **This is the configuration** `ApertureManagerOp` **exists for.** Nothing makes the operator mandatory — an application can retain the profiles itself and re-emit them at weight `−1` — but here that means writing a stateful retention operator, where everywhere else the manager stands in for a pulse counter or a window function the application already has.
+**Overlapping apertures** — mode 2, and sub-aperture looks where the looks overlap. Consecutive images share pulses, so the accumulator is not only added to: a pulse that has left the aperture has to be subtracted back out of it, and subtracting a pulse means still holding it long after the image it was admitted for was emitted. **This is the one configuration where the manager's retention earns its keep.** Nothing makes the operator mandatory — an application can retain the profiles itself and re-emit them at weight `−1` — but here that means writing a stateful retention operator, where everywhere else it stands in for a pulse counter or a window function the application already has.
 
-**Scrolling accumulation** — mode 4 alone. The lattice translates rather than being replaced, and the accumulator translates with it, so no partial sum is ever invalidated and there is no boundary to reset at. It looks like a second chain and is not: this is Figure 1 with `BackprojectionOp.geometry_change = scroll` set and nothing left for the manager to do, which changes what the accumulator is made of and nothing about what connects to what.
+**Scrolling accumulation** — mode 4 alone. The lattice translates rather than being replaced, and the accumulator translates with it, so no partial sum is ever invalidated and there is no boundary to reset at. It looks like a second chain and is not: this is Figure 1 with `BackprojectionOp.geometry_change = scroll` set and nothing left for a manager to do but the emit cadence, which changes what the accumulator is made of and nothing about what connects to what.
 
 | Mode                 | Configuration                | What the application supplies                              | What it runs into                                                                                                                                                                                                                                     |
 | -------------------- | ---------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -457,7 +472,7 @@ The nine supported modes are named for what a practitioner collects. This sectio
 Three consequences worth reading before choosing:
 
 - **Mode 4's constraints are real and are not settings.** The strip must run along the image's `v` axis, and a taper is refused rather than approximated. Either sample-geometry form works, and a DEM-conformal lattice is the case the mode most wants to serve. See [OPERATOR_API.md](OPERATOR_API.md) → `BackprojectionOp` → *Scrolling accumulation*.
-- **The manager is optional everywhere, and worth using in one place.** Outside the overlapping configuration an aperture's length is usually known before it ends, so its taper is stamped as pulses are admitted and nothing is retained — which leaves the operator supplying a pulse counter that an application already producing geometry and control has by construction. Where the length is genuinely not known in advance — an adaptive dwell, a preemptible collect — a taper defers to the boundary and replays (`emit_mode = reform`), which is buffering rather than retention, and buys an application out of writing a small buffering operator rather than reaching something it could not. See [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp` → *Optional by design*.
+- **The emit decision is needed in every graph; only the operator is optional.** Something has to tell formation when an image comes out, so the question is who drives `control`, never whether. Outside the overlapping configuration an aperture's length is usually known before it ends, so its taper is stamped at admission and nothing is retained — leaving the operator to supply a pulse counter the application has by construction. Where the length is not known in advance — an adaptive dwell, a preemptible collect — a taper defers to the boundary and replays (`emit_mode = reform`), which is buffering rather than retention, and buys an application out of a small buffering operator rather than a capability. See [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp` → *Optional by design*.
 - **Fan-out is what rescues the modes that looked blocked.** Wide swath, sub-aperture looks and tomographic volumes are all several formation instances over one pulse stream, each selecting its pulses with weights and forming onto its own geometry. That is why only bistatic geometry is foreclosed: it is the one case no arrangement of instances and weights can express.
 - **Wide swath is the only one of those that wants separate instances.** Its sub-swaths close their apertures at different pulses, and a single `control` port cannot say that one sub-swath's tile is done while another's continues. Tomographic planes differ in geometry alone — same pulses, same weights, same boundaries — so they are separate instances only because the geometry ports carry no batch axis, not because the mode needs them to be.
 
@@ -517,12 +532,12 @@ On navigation *uncertainty* specifically: an unknown position error cannot be co
 
 Two things vary independently, so this is two tables rather than one. **Ingress branch** decides everything ahead of the shared phase-history node; **mode** decides everything after it. Any branch composes with any mode. This is the parameter-level view of *How the modes reach the operator chain* above, which gives the structural picture; the second table covers modes 1 through 4, where the configurations actually differ.
 
-| Ingress branch          | CPHD file                    | Live deramped                         | Live direct-sampled    |
-| ----------------------- | ---------------------------- | ------------------------------------- | ---------------------- |
-| Source                  | `CPHDReaderOp`               | app source                            | app source             |
-| Branch-entry stages     | none                         | `RVPRemovalOp` → `BandEqualizationOp` | `RangeMatchedFilterOp` |
-| Positions from          | the file                     | the application                       | the application        |
-| Announces a boundary    | file end + end of stream     | only where the source knows one       | same                   |
+| Ingress branch       | CPHD file                | Live deramped                         | Live direct-sampled    |
+| -------------------- | ------------------------ | ------------------------------------- | ---------------------- |
+| Source               | `CPHDReaderOp`           | app source                            | app source             |
+| Branch-entry stages  | none                     | `RVPRemovalOp` → `BandEqualizationOp` | `RangeMatchedFilterOp` |
+| Positions from       | the file                 | the application                       | the application        |
+| Announces a boundary | file end + end of stream | only where the source knows one       | same                   |
 
 The boundary announcement is the reader's job on the CPHD path and is stamped as message metadata (**D22**); a live source announces only if it has a boundary to announce, which an unbounded radar does not.
 
@@ -536,7 +551,7 @@ The boundary announcement is the reader's job on the CPHD path and is stamped as
 | `emit_mode`            | reset                    | continue                                              | reset                                                  | —                                                    |
 | App ports              | `control`                | `control`, plus `evict` where the app owns the length | `sample_geometry` per tile; `control` at end of stream | `sample_geometry` and `control`, both into formation |
 
-Modes 5 through 9 are not columns because they are not distinct configurations — each replicates one of the above across geometries, so a column would repeat its neighbour. *How the modes reach the operator chain* gives the mapping. The manager rows are how a column is spelled **if** a manager is used, which outside mode 2 it need not be.
+Modes 5 through 9 are not columns because they are not distinct configurations — each replicates one of the above across geometries, so a column would repeat its neighbour. *How the modes reach the operator chain* gives the mapping. The manager rows are how a column is spelled **if** a manager is used, which outside mode 2 it need not be. The `control` entry in the last row is **not** conditional in the same way: that connection is required in every column, and only who drives it changes.
 
 **How a moving scene coexists with an accumulator.** The scene row and the aperture rows interact, and the interaction is easy to misread as a contradiction. Partial sums computed against one set of sample points mean nothing against another, so the scene cannot drift arbitrarily underneath a running sum. The two moving-scene columns resolve that differently, and the difference is the whole distinction between modes 3 and 4.
 
@@ -546,7 +561,7 @@ The cost is at the joins. A tile's edge pixels are illuminated for a full synthe
 
 **Mode 4 translates, and nothing needs timing at all.** A pure translation along `v` by a whole number of pixels leaves every pixel still in view holding sums that remain correct for it, so there is nothing to invalidate and no reset to arrange: the accumulator advances with the lattice, each pixel accumulates from the moment it enters the beam until it leaves, and no pulse is formed twice. The general rule survives intact, because it is about invalidation rather than about geometry, and this is the one change that invalidates nothing. What the mode gives up is the taper, for D15's reason — deferring weights to an aperture boundary needs a boundary, and there is none.
 
-Everything from the shared phase-history node downstream is the same operators in the same order, whichever branch fed it and whichever mode is configured — save that `ApertureManagerOp` may or may not be among them, which is a per-application choice everywhere and a settled omission in mode 4. That is what makes alternate ingress additive rather than a second pipeline, and what reduces most of the mode distinction to a handful of YAML values.
+Everything from the shared phase-history node downstream is the same operators in the same order, whichever branch fed it and whichever mode is configured — save that `ApertureManagerOp` may or may not be among them, which is a per-application choice everywhere and the usual omission in mode 4. That is what makes alternate ingress additive rather than a second pipeline, and what reduces most of the mode distinction to a handful of YAML values.
 
 Autofocus is not a column in the sense the FMCW comparison uses columns: like clustering there, it is orthogonal to the mode. It is off in Figure 1; when opted in it attaches as Figure 2 or Figure 3, not as a per-mode variant.
 
@@ -564,7 +579,11 @@ Autofocus is not a column in the sense the FMCW comparison uses columns: like cl
 
 ## Appendix — prompts for regenerating audience derivatives
 
-[PRACTITIONER_OVERVIEW.md](PRACTITIONER_OVERVIEW.md) and [DEVELOPER_OVERVIEW.md](DEVELOPER_OVERVIEW.md) are derived from this document (and, for the developer overview, from [OPERATOR_API.md](OPERATOR_API.md) for contracts and mechanisms). When the mode inventory, the deferred list, a quality claim, or the mode→configuration mapping changes here, **regenerate the affected derivative(s) from the prompt(s) below rather than hand-patching** — patching is how a derivative drifts from its source while continuing to look maintained. Diff each regenerated file against the previous version and confirm every change traces to a change in the sources.
+[PRACTITIONER_OVERVIEW.md](PRACTITIONER_OVERVIEW.md) and [DEVELOPER_OVERVIEW.md](DEVELOPER_OVERVIEW.md) are derived from this document (and, for the developer overview, from [OPERATOR_API.md](OPERATOR_API.md) for contracts and mechanisms). When the mode inventory, the deferred list, a quality claim, the mode→configuration mapping, or *Application responsibilities* changes here, **regenerate the affected derivative(s) from the prompt(s) below rather than hand-patching** — patching is how a derivative drifts from its source while continuing to look maintained. Diff each regenerated file against the previous version and confirm every change traces to a change in the sources.
+
+**Both derivatives are current as of 2026-08-05**, regenerated after the manager's two-tier framing landed here — one **mandatory** job, telling formation when to emit, with everything else convenience. Both prompts gained a matching instruction in the same pass so a later regeneration cannot quietly drop it: Prompt B's KEEP list carries the two tiers and the four no-manager obligations, and Prompt A's *What you supply* item carries the boundary as a practitioner-facing declaration, named without the operator or the port.
+
+**Upstream came into line in the same pass.** [OPERATOR_API.md](OPERATOR_API.md) was already correct on the facts, but its `ApertureManagerOp` opening enumerated the three jobs co-equally; the emit decision now leads there, with membership and configuration timing following as convenience, and *Optional by design* opens by saying that it is the operator which is optional and never the emit decision. An editing pass for consistency — no port, parameter, shape or default moved.
 
 The prompts live on this side of the pair deliberately. Neither overview is written to carry regeneration instructions for its reader.
 
@@ -582,12 +601,18 @@ SOURCES, in precedence order. Invent nothing absent from both.
    the reader must meet, and the image-quality consequences they inherit. Never
    for interface detail.
 
-AUDIENCE. An existing expert SAR practitioner: computing-aware, has implemented
-image formation pipelines, and dealt with optimization of them; comfortable with
-dataflow programming, not an expert in the framework underneath, and not
-involved in the implementation at all. Assume full SAR expertise — never explain
-anything about SAR unless you are using a term that is outside the norm.
-Assume zero knowledge of this codebase.
+AUDIENCE. **Expert** SAR practitioners — very possibly more expert in SAR than
+the authors of this contract. Write to them as peers reviewing our work, never
+as readers being taught it. They are computing-aware, having implemented image
+formation pipelines and optimized them, and are comfortable with dataflow
+programming, while not expert in the framework underneath and not involved in
+this implementation at all. Assume complete SAR expertise: never explain a SAR
+concept, never define a standard term, and never justify why a standard
+technique works. What does get explained is a term this project uses outside
+its normal meaning, and the places our own decomposition shows through in what
+they receive. The mode entries are not an exception — they state each mode's
+defining property so a reader can locate theirs, which is identification rather
+than instruction. Assume zero knowledge of this codebase.
 
 PURPOSE. Let them judge whether this processor covers their work, what they
 would have to supply, what image quality they would get, and where it stops. It
@@ -619,8 +644,12 @@ SYNTHESIZE. These are not sections in either source and must be assembled:
 - What you supply — the conventions on per-pulse phase-centre positions that no
   check can catch (frame and units, ordering, transmit instant under
   stop-and-hop, antenna phase centre rather than IMU or centre of mass,
-  positions at their own pulse times in an Earth-fixed frame), and both sample
-  geometry forms with the local-coherence caveat on explicit positions.
+  positions at their own pulse times in an Earth-fixed frame); both sample
+  geometry forms with the local-coherence caveat on explicit positions; and the
+  aperture boundary, which is declared rather than inferred — nothing decides
+  where one image's pulses end and the next's begin except a cadence you set or
+  a boundary you signal, with one image per collection the degenerate case.
+  Name it without naming the operator or the port that carries it.
 - What you get, and what it costs — where a cross-range taper is available and
   where it is refused, numerical precision with the actual figures, range
   interpolation, autofocus (off by default; PGA as a constrained opt-in with
@@ -735,6 +764,17 @@ KEEP (translated or summarized, not stripped):
   app-owned control operator must be fed by the source to hear it, and the
   app must enable metadata with policy kUpdate. Wiring an implementer can get
   wrong silently, so it belongs in the pitfalls section too.
+- ApertureManagerOp's two tiers, and lead with the first. Its one MANDATORY job
+  is telling BackprojectionOp when to emit an image; everything else it does is
+  convenience (staging geometry to the aperture boundary, buffering pulses,
+  deciding membership and taper), of which retention is the only one an app
+  cannot assemble from operators it already has. The operator is optional in
+  every mode; that job is not, BackprojectionOp.control being a REQUIRED
+  connection. So state what an app leaving the manager out takes on: the
+  connection itself, source reachability so it hears the boundary, emitting a
+  geometry change with its reset on one tick, and its own weights for a taper.
+  Do not describe the manager by listing its jobs co-equally — that is the
+  framing this bullet exists to prevent.
 
 STRIP / AVOID:
 - Full port-by-port contract dumps (link OPERATOR_API instead).
@@ -746,6 +786,10 @@ STRIP / AVOID:
 
 RULES.
 - Complete sentences and prose; tables where they beat paragraphs.
+- Never call the SAR OPERATOR_API locked or accepted text. R1 *is* its
+  acceptance and nothing in it is locked yet, which inverts the FMCW contract
+  one level up — that one is locked, and its [PROPOSED] tag marks the
+  exceptions. Cite the SAR contract as the contract, and as a proposal.
 - One primary Mermaid (default AF-off chain with operator names). Optional
   second small diagram only if it clarifies aperture vs accumulator — do not
   reproduce all five WORKFLOWS figures.

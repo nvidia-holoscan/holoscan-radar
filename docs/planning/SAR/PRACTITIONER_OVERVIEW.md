@@ -149,7 +149,7 @@ A **stack of image planes at different heights** rather than one surface, which 
 
 ## What you supply
 
-Two inputs are deliberately yours, and both are places where a mistake degrades the image plausibly rather than failing loudly.
+Three things are deliberately yours. The first two are inputs, and both are places where a mistake degrades the image plausibly rather than failing loudly; the third is a decision that nothing in the pipeline will make for you.
 
 **Per-pulse phase-centre positions.** From a CPHD file these come with the data. On a live platform you derive them from IMU and GPS through lever-arm correction, attitude application, and time alignment to pulse instants — which is specific to your airframe and navigation hardware, and is why no component here attempts it. Five things are pinned and none of them is checkable from the values:
 
@@ -160,6 +160,10 @@ Two inputs are deliberately yours, and both are places where a mistake degrades 
 - for an Earth-fixed frame, positions at their own pulse times, since the frame rotates.
 
 **Image sample geometry.** Either a uniform lattice — an origin, two axis directions, a spacing and a count — or an explicit position per pixel, which is how a DEM-conformal or map-projected image is formed. Explicit positions are unconstrained in where they sit, with one practical caveat: a compact block of pixels should correspond to a compact region of space, since some of the faster internal arithmetic expands about a per-block reference. A DEM raster satisfies this naturally; a deliberately scattered set of positions does not, and you get a warning.
+
+**Where each aperture ends.** Formation holds no opinion about where one image's pulses stop and the next's begin, so that boundary is declared rather than inferred — usually as a cadence you configure once, in pulses per image, and otherwise by signalling one when something outside the radar decides it, a commanded scene change being the case to picture. The degenerate case is one image per collection, where the end of the data is the boundary and the recording announces it; even then, saying the pulse count up front is worth doing, because it is what makes the taper below free.
+
+Two conveniences follow from a cadence that do not follow from signalling: a cross-range taper becomes free, since an aperture whose length is known as pulses arrive can be weighted as they arrive rather than replayed at the end, and a scene change can be handed over whenever it suits you and held until the boundary.
 
 **The frame is declared, never inferred.** Positions and sample points must be in the same frame, and the arithmetic cannot tell you when they are not — it takes norms of position differences, which are invariant under rigid transforms, so a mismatch produces a defocused or displaced image rather than an error. Both are labelled explicitly at every boundary for exactly this reason. Frame conversion is yours to do upstream.
 
