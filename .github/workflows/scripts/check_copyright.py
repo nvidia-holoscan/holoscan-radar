@@ -1,5 +1,5 @@
 """
-SPDX-FileCopyrightText: Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-FileCopyrightText: Copyright (c) 2022-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,16 +40,19 @@ FilesToCheck = [
 ]
 ExemptFiles = []
 
+# Require the full NVIDIA entity; bare "NVIDIA" must not pass.
+_NVIDIA_ENTITY = r"NVIDIA CORPORATION & AFFILIATES(?:\. All rights reserved)?"
+
 CheckSPDXWithCopyright = re.compile(
-    r"(^|\s*[#*/*]\s*)?SPDX-FileCopyrightText: Copyright(?: \(c\))? *(\d{4})(?:-(\d{4}))?,? ([\w\s&.,'-]+)\.?",
+    rf"(^|\s*[#*/*]\s*)?SPDX-FileCopyrightText: Copyright(?: \(c\))? *(\d{{4}})(?:-(\d{{4}}))?,? ({_NVIDIA_ENTITY})\.?",
     re.MULTILINE | re.DOTALL | re.IGNORECASE,
 )
 CheckSPDXREUSE = re.compile(
-    r"(^|\s*[#*/*]\s*)?SPDX-FileCopyrightText: *(\d{4})(?:-(\d{4}))? ([\w\s&.,@<>'-]+)",
+    rf"(^|\s*[#*/*]\s*)?SPDX-FileCopyrightText: *(\d{{4}})(?:-(\d{{4}}))? ({_NVIDIA_ENTITY})",
     re.MULTILINE | re.DOTALL | re.IGNORECASE,
 )
 CheckNonSPDX = re.compile(
-    r"(^|\s*[#*/*]\s*)?Copyright(?: \(c\))? *(\d{4})(?:-(\d{4}))?,? ([\w\s&.,'-]+)\.?",
+    rf"(^|\s*[#*/*]\s*)?Copyright(?: \(c\))? *(\d{{4}})(?:-(\d{{4}}))?,? ({_NVIDIA_ENTITY})\.?",
     re.MULTILINE | re.DOTALL | re.IGNORECASE,
 )
 
