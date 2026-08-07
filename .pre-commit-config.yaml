@@ -75,7 +75,7 @@ repos:
     rev: 2.0.2
     hooks:
       - id: cpplint
-        args: [--quiet, --filter=-readability/todo]
+        args: [--quiet, --linelength=100, --filter=-readability/todo]
         exclude: ^applications/holoviz/template/cookiecutter
 
   # Markdown: markdownlint
@@ -91,6 +91,7 @@ repos:
         name: validate metadata.json files against schemas
         entry: python .github/workflows/scripts/validate_metadata.py
         language: python
+        language_version: python3.13
         additional_dependencies: ["holoscan-cli[create]==4.3.0"]
         files: '(^|/)metadata\.json$'
         exclude: '^(build|\.local|_CPack_Packages)/'
