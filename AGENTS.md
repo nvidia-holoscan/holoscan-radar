@@ -22,18 +22,33 @@ Read before starting non-trivial work, in this precedence order:
 Rules that follow from "lockdown":
 
 - **Docs first.** Code must match `OPERATOR_API.md` exactly — port names, shapes, dtype pairs, parameter names/defaults, `[live]` tags. To change an interface, change the doc (in the same PR at minimum), call it out as a contract change in the PR description, and get it reviewed as such. Never deviate silently in code.
-- **The SAR contract may be changed while implementing it; say so every time.**
-  SAR is in active implementation against an accepted contract, so revising it is
-  expected rather than exceptional — but a change is never silent. Tag it in place,
-  log it in [`docs/planning/SAR/OPERATOR_API.md`](docs/planning/SAR/OPERATOR_API.md)
-  → *Contract changes since approval*, and **tell the developer in the reply that a
-  contract change was made**. A change that reaches **beyond SAR** — the invariants
-  below, the shared descriptor set, `operators/common/`, the `holoscan.radar` public
-  Python API, FMCW code, the metadata key namespace, or anything a second modality
-  would inherit — is a higher bar: it needs the developer's explicit agreement
-  *before* it lands, plus a row in
-  [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md) so FMCW owners
-  see it. Prefer the SAR-scoped option where both exist.
+- **Never change the SAR contract without the developer's approval in the chat
+  session — ask first, edit after.** SAR is in active implementation against an
+  accepted contract, so *proposing* revisions is expected rather than exceptional.
+  Landing one unasked is not. This applies to every contract change, SAR-scoped
+  ones included: **stop, present it, and wait for an explicit answer.** Do not
+  edit the contract and report it afterwards, and do not write code that assumes
+  a change you have not had approved — if implementation reveals the need for one,
+  that is the moment to stop and ask, not to proceed and reconcile later.
+  - **What to present**, in the chat, before touching anything: what the change
+    is, exactly which ports / parameters / shapes / conventions move, why the
+    contract as written does not work, what it breaks or invalidates, and the
+    alternative you considered and rejected. Offer it as a decision to accept or
+    decline, not as a notification.
+  - **After approval:** tag it at the point of change, and append it to the log in
+    [`docs/planning/SAR/OPERATOR_API.md`](docs/planning/SAR/OPERATOR_API.md)
+    → *Contract changes since approval*.
+  - **Beyond SAR is the same gate plus two obligations** — the invariants below,
+    the shared descriptor set, `operators/common/`, the `holoscan.radar` public
+    Python API, FMCW code, the metadata key namespace, or anything a second
+    modality would inherit. Say plainly that it reaches beyond SAR when asking,
+    mark it in the document so reviewers see it, and add a row in
+    [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md) so FMCW owners
+    see it without reading SAR docs. Prefer the SAR-scoped option where both exist.
+  - **Not a contract change**, so no approval needed: typos, broken links, clearer
+    prose, or a doc fix that makes the text match what the contract already says.
+    The rule covers changes to the *interface or behaviour* — port names, shapes,
+    dtypes, parameters, defaults, `[live]` tags, algorithms, conventions.
 - **Do not silently resolve documented open items.** Team-blocked questions are
   indexed per modality — [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md)
   for FMCW, [`docs/planning/SAR/TEAM_BLOCKED.md`](docs/planning/SAR/TEAM_BLOCKED.md)

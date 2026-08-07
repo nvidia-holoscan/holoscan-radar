@@ -92,9 +92,10 @@ SAR will use the **`sar` tier**, which commits FMCW to nothing and leaves
 promotion a one-constant change.
 
 **SAR contract changes now reach this file by rule.** Acceptance came with the
-condition that the SAR contract may be revised during implementation but never
-silently, and that a revision reaching beyond SAR — these invariants, the shared
-descriptors, `operators/common/`, the `holoscan.radar` Python API, FMCW code, or
-the key namespace — gets a row here as well as agreement before it lands. So
-this file is where FMCW owners will see SAR work that touches them, without
-having to follow the SAR docs.
+condition that the SAR contract may be revised during implementation, but that
+**every revision is approved by the developer before it is made**. A revision
+reaching beyond SAR — these invariants, the shared descriptors,
+`operators/common/`, the `holoscan.radar` Python API, FMCW code, or the key
+namespace — additionally gets a row here and a marker in the SAR document for
+reviewers. So this file is where FMCW owners will see SAR work that touches
+them, without having to follow the SAR docs.

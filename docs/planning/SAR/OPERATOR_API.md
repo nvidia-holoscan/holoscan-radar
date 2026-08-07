@@ -909,14 +909,18 @@ Each is an explicit change to the invariants in [AGENTS.md](../../../AGENTS.md).
 
 ## Contract changes since approval
 
-The contract was accepted on 2026-08-07 with implementation to follow, and it may be **revised freely as implementation teaches us things** — that was part of the same decision. What is not allowed is revising it quietly. This section is the running log, so a reviewer can see every post-approval change without diffing the branch.
+The contract was accepted on 2026-08-07 with implementation to follow, and revising it as implementation teaches us things is expected — that was part of the same decision. **Every such revision is approved by the developer, in the chat session, before it is made.** Proposing is routine; landing one unasked is not, and that holds for SAR-scoped changes as much as for the rest. This section is the running log of what was approved, so a reviewer sees every post-approval change without diffing the branch.
 
-**Two tiers, because they carry different risk.**
+**Ask before editing.** The proposal states what the change is, exactly which ports, parameters, shapes or conventions move, why the contract as written does not work, what it breaks, and the alternative rejected — offered as a decision to take or decline. Code that assumes an unapproved change does not get written either: the moment implementation reveals the need is the moment to stop and ask.
+
+**Two tiers, because they carry different blast radius. Both need approval; the second needs more than approval.**
 
 | Tier | What it covers | What it requires |
 | :--- | :--- | :--- |
-| **SAR-scoped** | Anything inside `docs/planning/SAR/` and `operators/sar/` — ports, shapes, parameter names and defaults, algorithms, the SAR-only descriptors | Tag in place, log here, and say so in the reply to the developer |
-| **Beyond SAR** | The [AGENTS.md](../../../AGENTS.md) invariants, the shared descriptor set, `operators/common/` / `radar_common`, the `holoscan.radar` public Python API, FMCW code, the metadata key namespace, build defaults another group inherits | All of the above **plus** the developer's explicit agreement *before* landing, and a row in the module-wide [TEAM_BLOCKED.md](../TEAM_BLOCKED.md) so FMCW owners see it |
+| **SAR-scoped** | Anything inside `docs/planning/SAR/` and `operators/sar/` — ports, shapes, parameter names and defaults, algorithms, the SAR-only descriptors | Developer approval in chat **before the edit**; then tag in place and log here |
+| **Beyond SAR** | The [AGENTS.md](../../../AGENTS.md) invariants, the shared descriptor set, `operators/common/` / `radar_common`, the `holoscan.radar` public Python API, FMCW code, the metadata key namespace, build defaults another group inherits | All of the above, **said plainly to be beyond SAR when asking**, marked in the document for reviewers, and given a row in the module-wide [TEAM_BLOCKED.md](../TEAM_BLOCKED.md) so FMCW owners see it |
+
+**Not a contract change, and not gated:** typos, broken links, clearer prose, or a fix making the text match what the contract already says. The gate covers the *interface and behaviour* — port names, shapes, dtypes, parameters, defaults, `[live]` tags, algorithms, conventions.
 
 **The tag, written at the point of change** so a reader of the contract meets it in context rather than only in this log:
 
@@ -925,13 +929,13 @@ The contract was accepted on 2026-08-07 with implementation to follow, and it ma
 
 Where both a SAR-scoped and a beyond-SAR option would solve the same problem, **take the SAR-scoped one** unless there is a stated reason not to. D24 is the worked example: renaming `FMCWWaveformDescriptor` and adding `LFMWaveformDescriptor` both gave SAR a waveform type, and the additive one was chosen precisely because it reached nothing outside SAR.
 
-Rename a parameter or move a port and the same rules apply — the contract being accepted makes changes *visible*, not *rare*.
+Rename a parameter or move a port and the same gate applies — the contract being accepted makes changes *deliberate*, not *rare*.
 
 ### Log
 
-| Date | Change | Tier |
-| :--- | :--- | :--- |
-| *(none yet)* | Post-approval changes are appended here | — |
+| Date | Change | Tier | Approved by |
+| :--- | :--- | :--- | :--- |
+| *(none yet)* | Approved post-approval changes are appended here | — | — |
 
 Two changes landed on 2026-08-06, immediately **before** approval, and are recorded in [STATUS.md](../STATUS.md) rather than here: D24 (`LFMWaveformDescriptor` added instead of renaming the FMCW type) and the `precision_mode` → `backend` rename. They are part of what was approved.
 

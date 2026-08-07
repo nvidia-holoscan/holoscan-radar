@@ -51,9 +51,11 @@ cheaper default.
 The team accepted the contract as a whole, with implementation to begin against
 it. The amendments below are therefore **in force**, not proposed. Two conditions
 came with acceptance, and they are the live constraint now that the question
-itself is settled: the contract may be **revised freely** as implementation
-teaches us things, but no revision is silent, and a revision reaching **beyond
-SAR** needs explicit agreement before it lands. Both are specified in
+itself is settled. Revising the contract during implementation is expected, but
+**every revision is approved by the developer in the chat session before it is
+made** — SAR-scoped ones included. A revision reaching **beyond SAR** clears the
+same gate and additionally is marked for reviewers and rowed in the module-wide
+[TEAM_BLOCKED.md](../TEAM_BLOCKED.md). Both are specified in
 [OPERATOR_API.md](OPERATOR_API.md) → *Contract changes since approval*.
 
 Kept here rather than moved to the decided list because what was accepted is the
@@ -127,8 +129,9 @@ down. Each entry states the decision, the alternative it beat, and where the
 reasoning lives.
 
 Revising any one of them is now a **contract change** under
-[OPERATOR_API.md](OPERATOR_API.md) → *Contract changes since approval*: allowed,
-logged, declared, and — where it reaches outside SAR — agreed first.
+[OPERATOR_API.md](OPERATOR_API.md) → *Contract changes since approval*: proposed
+to the developer and approved before the edit, then tagged and logged — and
+where it reaches outside SAR, marked for reviewers and rowed one level up.
 
 ### D1 — Single-owner reset
 
