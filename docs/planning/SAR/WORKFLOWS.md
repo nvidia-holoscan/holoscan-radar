@@ -233,9 +233,11 @@ Four things transfer along with that edge. Three of them fail loudly, at initial
 
 Nothing is given up by owning these — tapering included — and the manager reaches nothing an application cannot. What is taken on is the bookkeeping, and in one configuration that bookkeeping is a stateful retention operator rather than a counter: see *How the modes reach the operator chain*.
 
-**Metadata must be enabled on the fragment**, with `metadata_policy` set to `kUpdate`: `Fragment::is_metadata_enabled(true)` and `Fragment::metadata_policy(MetadataPolicy::kUpdate)`. This is one line each and easy to skip, but D22's boundary announcement travels on the metadata plane, so without it a file-backed collection silently loses its final aperture — `BackprojectionOp`'s `stop()` warning is what surfaces that. An operator anywhere between the source and the control owner that has metadata disabled drops the announcement.
+**The metadata plane costs the application nothing to set up.** Metadata is enabled by default in the SDK (`kDefaultMetadataEnabled = true`), and `kUpdate` is an **operator-level** setting: `Operator::metadata_policy` takes precedence over the fragment default, so the operator that needs it sets it on itself. There is no fragment-wide line to remember and no application-level precondition.
 
-`kUpdate` rather than the SDK's default `kRaise` because the default cannot work here: a producer holds one dictionary for all its output ports, so a consumer taking several ports from the same producer merges identical content several times, and `kRaise` fires on a key being present rather than on two values disagreeing.
+`kUpdate` rather than the SDK's default `kRaise` because the default cannot work for a consumer that merges: a producer holds one dictionary for all its output ports, so a consumer taking several ports from the same producer merges identical content several times, and `kRaise` fires on a key being present rather than on two values disagreeing. In wave one that consumer is `BackprojectionOp`, which takes five or six ports from the manager.
+
+What can still go wrong is a foreign operator between the source and the control owner that has metadata **explicitly disabled** — it drops the announcement, and a file-backed collection then silently loses its final aperture. `BackprojectionOp`'s `stop()` warning is what surfaces that. This is a hazard to know about rather than a setting to remember.
 
 ---
 
@@ -483,7 +485,7 @@ Three consequences worth reading before choosing:
 Retention and the emit decision belong to `ApertureManagerOp`, not to formation. The two axes are still real; they are now manager configuration rather than formation parameters. Mode 4 is outside this section entirely — a scrolling accumulator has no aperture, so neither axis has anything to configure.
 
 - **Aperture membership** — which pulses are in. `max_aperture_pulses` is the retention capacity: `0` means no retention, so nothing evicts and the aperture grows or blocks. With a capacity and no `evict` port wired, the manager runs a trailing-N sliding window — each newly admitted pulse displaces the oldest, which leaves on the same tick. Wiring `evict` hands that choice to the application, which is what an aperture defined by angle subtended rather than by pulse count requires: at constant PRF, a varying ground speed means a varying number of pulses per degree of orbit, and only the application knows it.
-- **Emit and reset** — when an image comes out and what happens next. `emit_interval_pulses` sets the cadence, or `0` defers entirely to end of stream and upstream flush requests; `emit_mode` picks `continue`, which sends *emit-and-continue* and is what the sliding window uses, `reset`, which sends *emit-and-reset* and gives block apertures, or `reform`, which replays the retained aperture at each boundary under *reset-then-emit* and is what a cross-range taper requires where the length is not known at admission. The six resulting configurations are tabulated in [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp`, and collection mode is orthogonal to all of them. Five of the six are a YAML edit with no application-owned ports wired at all, which is what D22's boundary announcement bought.
+- **Emit and reset** — when an image comes out and what happens next. `emit_interval_pulses` sets the cadence, or `0` defers entirely to end of stream and upstream flush requests; `emit_mode` picks `continue`, which sends *emit-and-continue* and is what the sliding window uses, `reset`, which sends *emit-and-reset* and gives block apertures, or `reform`, which replays the retained aperture at each boundary under *reset-then-emit* and is what a cross-range taper requires where the length is not known at admission. The six configurations are tabulated in [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp`, and collection mode is orthogonal to all of them. Five are a YAML edit with no application-owned ports wired, which is what D22's announcement bought.
 
 **Both reach formation as data rather than configuration** — a per-pulse signed `weight` and a `control` message. That is what makes modes 1, 2, 3 and 5 through 9 the same graph with different YAML instead of eight pipelines, and it is why an application needing a rule we did not anticipate (angle-subtended, quality-gated, externally triggered) writes its own manager against the same ports rather than asking for another enum value.
 
@@ -761,8 +763,10 @@ KEEP (translated or summarized, not stripped):
   emit_mode = reform.
 - The boundary announcement (D22): the source stamps
   holoscan.radar.stream_boundary, whoever drives control translates it, an
-  app-owned control operator must be fed by the source to hear it, and the
-  app must enable metadata with policy kUpdate. Wiring an implementer can get
+  app-owned control operator must be fed by the source to hear it. The app
+  needs no metadata setup: metadata is on by default and kUpdate is set
+  per-operator by the merging consumer. The residual hazard is a foreign
+  operator with metadata explicitly disabled. Wiring an implementer can get
   wrong silently, so it belongs in the pitfalls section too.
 - ApertureManagerOp's two tiers, and lead with the first. Its one MANDATORY job
   is telling BackprojectionOp when to emit an image; everything else it does is

@@ -2,9 +2,15 @@
 
 ## Purpose
 
-What lands in the first SAR wave, in what order, and where the code goes. The contract lives in [OPERATOR_API.md](OPERATOR_API.md) and the chains in [WORKFLOWS.md](WORKFLOWS.md); this document is the sequencing.
+What lands in the first SAR wave, in what order, where the code goes, and what it runs on. The contract lives in [OPERATOR_API.md](OPERATOR_API.md) and the chains in [WORKFLOWS.md](WORKFLOWS.md); the data is in [INPUT_DATA.md](INPUT_DATA.md); the assertions are in [TESTING.md](TESTING.md). This document is the sequencing and the application.
 
 There is no FMCW analogue of this file — the FMCW wave tracked its build order in [STATUS.md](../STATUS.md) → *Up next*. SAR gets a dedicated one because the wave has a genuine dependency structure and a scope boundary worth writing down once, rather than re-deriving from a claims table.
+
+## Gate before code
+
+**No SAR operator code until R1 accepts the invariant amendments.** R1 (contract acceptance) and R10 (the scope of the metadata key namespace) are open in [TEAM_BLOCKED.md](TEAM_BLOCKED.md), and per [AGENTS.md](../../../AGENTS.md) an operator that quietly picks an answer is not checklist-complete.
+
+What is *not* gated: design and documentation work against the contract, and the whole of [INPUT_DATA.md](INPUT_DATA.md) — the simulator, the recipes, and the public pull tooling are Python that no operator links against, so they can be built and validated while the contract is in review. Doing so is the point of the phase numbering below, which starts the data work before the operator work.
 
 ## Wave one
 
@@ -16,7 +22,7 @@ There is no FMCW analogue of this file — the FMCW wave tracked its build order
 | `SARRangeCompressionOp` | `sar` | yes | phase history → range profiles |
 | `PhaseCorrectionOp` | `sar` | n/a | applies a per-pulse phase; the second half of D20 |
 | `ApertureManagerOp` | `sar` | no | aperture membership and emit decisions; no kernel, no GPU |
-| `BackprojectionOp` | `sar` | yes | the anchor |
+| `BackprojectionOp` | `sar` | yes, offline only | the anchor |
 | `AutofocusOp` | `sar` | **no** | PGA; per-pulse phase-correction vector + corrected image |
 | `CPHDWriterOp` | `io` | partial | pairs with the reader for a round-trip test |
 | `SICDWriterOp` | `io` | partial | the SLC product |
@@ -26,9 +32,17 @@ Per-pulse phase-center positions are an **application responsibility** — no li
 
 ### Two things this scope buys beyond the obvious
 
-**Reading and writing CPHD in the same wave gives a round-trip test.** Read a collection, write it back, compare. That validates the reader's field interpretation without needing an independent implementation to diff against, which is otherwise a hard thing to get confidence in.
+**Reading and writing CPHD in the same wave gives a round-trip test.** Read a collection, write it back, compare. That validates the reader's field interpretation without needing an independent implementation to diff against, which is otherwise a hard thing to get confidence in. `sarpy` on the Python side ([INPUT_DATA.md](INPUT_DATA.md) → *Policy*) supplies a second opinion the round trip alone cannot.
 
 **`TensorDumpOp` earns its place early.** It is what makes intermediate stages inspectable while the rest is being built, so it is infrastructure for the wave rather than a nicety at the end of it.
+
+## First-ship scope
+
+**Applications, recipes and public demos ship for modes 1–5 only** — spotlight, video SAR, tiled strip, continuous strip, independent images. That is [WORKFLOWS.md](WORKFLOWS.md)'s common products plus the general case. Modes **6–9** (wide swath, sub-aperture looks, circular, tomography) stay expressible in the API and lose nothing by waiting; what they need is app packaging and recipes, not contract or operators.
+
+**Autofocus is in wave one but is not a sixth mode.** `AutofocusOp` and `PhaseCorrectionOp` ship as operators, exercised as an opt-in configuration on mode 1 per [WORKFLOWS.md](WORKFLOWS.md) Figures 2 and 3. The default spine is autofocus off.
+
+The scope split is about *packaging*, not capability: nothing in modes 6–9 needs an operator or a parameter that modes 1–5 do not already force us to build. Mode 6 and mode 9 need `N` formation instances fanned out in `compose()`, mode 7 needs sub-aperture windows cut from a mode-1 collect, and mode 8 needs a circular trajectory in the recipe. All three are application and data work on a finished operator set.
 
 ## Reference availability and where assertion effort goes
 
@@ -42,7 +56,7 @@ Availability of a reference implementation informs **sequencing and risk, not sc
 | `ApertureManagerOp` | no | bookkeeping off-by-ones | medium — but CPU-only, so cheap to cover |
 | `RangeMatchedFilterOp` | no | replica and output-length conventions | medium |
 | `RVPRemovalOp`, `BandEqualizationOp` | no | **sign and reference conventions** | high, and **not satisfiable synthetically** |
-| `BackprojectionOp` | yes | **contract, not math** | high — see below |
+| `BackprojectionOp` | yes, offline only | **contract, not math** | high — see below |
 | `AutofocusOp` | **no** | the algorithm itself | **highest in wave one** |
 | `MultilookOp` | no | low; statistical assertion needs a clutter field | medium |
 | `GeocodeOp` | no | datum and projection conventions | medium |
@@ -58,27 +72,81 @@ Three consequences worth stating rather than re-deriving:
 
 **The deramped-branch operators are evidence-gated, not merely reference-free.** Real raw data is what pins their sign and reference conventions, and a synthetic test generated under the same assumption as the implementation validates the assumption into existence rather than the code. That is a sequencing constraint on the branch, not a reason to leave it out of the contract.
 
-## Build order within wave one
+## Build order and delivery phases
 
-Dependency and risk ordering. Nothing here is conditional on the step before succeeding, except where a genuine dependency is stated.
+Two orderings are in play and they are not the same thing. **Operator build order** is dependency and risk. **Phases** are deliverable slices that pair operators with the application and the data they need to be exercised. The phases are numbered so that phase *N* never blocks on phase *N+1*; phase 5 is deliberately skipped so "phase 5" is never confused with "mode 5".
 
-1. **Group scaffolding and `CPHDReaderOp`.** Stand up `operators/sar/` and `operators/io/`, then the reader. It gates everything else, because without it there is no data to test with.
-2. **`CPHDWriterOp` and `TensorDumpOp`.** Immediately after the reader, so the round-trip test exists before anything depends on the reader being right, and so intermediates are inspectable for the rest of the wave. This is deliberately early: it is cheap and it de-risks everything downstream.
-3. **`SARRangeCompressionOp`.** A windowed transform with a closed-form check. Low risk, and it makes the first half of the chain real.
-4. **`BackprojectionOp`.** The anchor, and the bulk of the work. Sub-order within it: a uniform `SampleGeometry` lattice over a single batch of pulses first, then signed weights and the accumulator's reset semantics, then explicit lattices, then the remaining arithmetic strategies. Getting a correct static image before adding statefulness means an accumulation bug cannot hide behind a formation bug.
-5. **`ApertureManagerOp`.** Independent of step 4 and cheap — no kernel, no GPU — so it can be written and fully tested in parallel, then wired in to turn the static formation of step 4 into a streaming one.
-6. **`SICDWriterOp`.** Needs a formed image, so it follows. Brings the NITF container dependency with it.
-7. **`AutofocusOp` and `PhaseCorrectionOp`.** Depend only on an image existing, so they are *independent of step 6* — the ordering between them is resourcing, not dependency. No longer blocked: the grid-conjugacy question closed as **D20**, which makes `AutofocusOp` an estimator restricted to conjugate geometries and `PhaseCorrectionOp` the stage that carries its per-pulse estimate into a formation on any geometry. Write `PhaseCorrectionOp` first — it is a broadcast multiply, and having it in hand means the autofocus tests can inject a known phase error through the real operator rather than through test scaffolding.
+| Phase | Operators | Application | Data ([INPUT_DATA.md](INPUT_DATA.md)) |
+| :--- | :--- | :--- | :--- |
+| **0** | `CoordinateFrame` / `SampleGeometry` / `LFMWaveformDescriptor` descriptors (all three new — D24 renames nothing), the `dsp/` grid-expansion helper, `operators/sar` + `operators/io` CMake scaffolding | — | simulator skeleton, CLI, `mode01` recipe |
+| **1** | `CPHDReaderOp`, `CPHDWriterOp`, `TensorDumpOp`, `SARRangeCompressionOp` | — | generated `mode01`, then the four real pins |
+| **2** | `BackprojectionOp` | `sar_formation` + `mode01` smoke, end to end against the sidecar | **subsetter**; Atlanta 1° frame against the MatX golden |
+| **3** | `ApertureManagerOp` | modes **2, 3, 5** YAMLs; accumulation tests | Houston subset, the Capella tiled-strip collect |
+| **4** | `BackprojectionOp` scroll accumulation | mode **4** YAML; ring-wrap test — **first-ship modes 1–5 complete** | Capella continuous-strip subset |
+| **6** | `PhaseCorrectionOp`, `AutofocusOp` | AF opt-in YAMLs on mode 1 | injected-phase recipes |
+| **7** | `SICDWriterOp` | Holoviz, demo polish, performance harness | pull tooling hardened: key re-probe self-check, useful failure on a moved object |
+| **Later** | — | modes **6–9** packaging: `compose()` N-instance fan-out, circular recipes, sub-aperture looks | recipes for 6–9 |
 
-The demo application is built alongside step 4 and finished after step 7.
+The dependency reasoning behind that ordering, which the table compresses. Deliberately unnumbered: these are constraints, and the phase numbers above are the schedule that satisfies them — the two do not correspond one to one, most visibly for the writers and autofocus.
 
-## Later waves
+- **Group scaffolding and `CPHDReaderOp` come first.** Stand up `operators/sar/` and `operators/io/`, then the reader. It gates everything else, because without it there is no data to test with.
+- **`CPHDWriterOp` and `TensorDumpOp` follow immediately**, so the round-trip test exists before anything depends on the reader being right, and so intermediates are inspectable for the rest of the wave. This is deliberately early: it is cheap and it de-risks everything downstream.
+- **`SARRangeCompressionOp`** is a windowed transform with a closed-form check. Low risk, and it makes the first half of the chain real.
+- **`BackprojectionOp`** is the anchor, and the bulk of the work. Sub-order within it: a uniform `SampleGeometry` lattice over a single batch of pulses first, then signed weights and the accumulator's reset semantics, then explicit lattices, then the remaining arithmetic strategies. Getting a correct static image before adding statefulness means an accumulation bug cannot hide behind a formation bug.
+- **`ApertureManagerOp` is independent of `BackprojectionOp`** and cheap — no kernel, no GPU — so it can be written and fully tested in parallel, then wired in to turn the static formation into a streaming one.
+- **`SICDWriterOp` needs a formed image**, so it cannot precede backprojection. It brings the NITF container dependency with it.
+- **`AutofocusOp` and `PhaseCorrectionOp` depend only on an image existing**, so they are *independent of `SICDWriterOp`* — the ordering between the two is resourcing, not dependency, and the phases spend it on autofocus first because it carries the wave's highest correctness risk. No longer blocked: the grid-conjugacy question closed as **D20**, which makes `AutofocusOp` an estimator restricted to conjugate geometries and `PhaseCorrectionOp` the stage that carries its per-pulse estimate into a formation on any geometry. Write `PhaseCorrectionOp` first — it is a broadcast multiply, and having it in hand means the autofocus tests can inject a known phase error through the real operator rather than through test scaffolding.
 
-Still in the contract, deferred on sequencing.
+**Phase 1 is where the real collections earn their keep.** The four pinned collections in [INPUT_DATA.md](INPUT_DATA.md) — two Umbra, two Capella — were chosen so that between them they force every reader path: `CF8` and `CI4` sample decoding, `AmpSF` present and absent, two CPHD minor versions, per-file PVP field discovery (the field set and `NumBytesPVP` both vary), frozen versus travelling `SRPPos`, `SC0`/`SCSS` constancy validation, the Tx/Rcv phase-centre convention, and `pulse_range` subsetting. A from-scratch fixture set would have let every one of those be skipped silently. Mode 5 needs no collection of its own: it re-runs the mode 1 and mode 3 collections as two apertures.
 
-- **Products.** `MultilookOp`, then `GeocodeOp`, which together unblock `SIDDWriterOp`. Geocode trails on datum and DEM decisions, and is optional besides — backprojection can form directly onto DEM-derived map points.
-- **Alternate ingress.** `CRSDReaderOp`, `RVPRemovalOp` and `BandEqualizationOp` for the deramped uncompensated form; `RangeMatchedFilterOp` for direct-sampled; `CRSDWriterOp` at that seam. Evidence-gated — though less so than it looks, since Sentinel-1 Level-0 is freely available and is exactly the direct-sampled form.
-- **SAR detection.** Its own wave, with its own clutter model. Not a reuse of `CFARDetectorOp`.
+The Capella half of that coverage — every `CI4` and every `AmpSF` path — rides on two keys that are **identified but not yet re-verified**, open item 3 in [INPUT_DATA.md](INPUT_DATA.md). Re-probe and transcribe them before phase 1 starts, not during it.
+
+## Demo application
+
+**One executable**, `applications/sar_formation/`, with a YAML per shipped mode — the [`fmcw_mimo`](../../../applications/fmcw_mimo/) pattern rather than an executable per mode. Modes 1–5 are three chain configurations of one spine, so separate executables would be the same `compose()` copied five times with different parameters.
+
+*This supersedes the earlier `applications/sar_backprojection/` naming.* The app forms images in several modes; only one of them is a plain spotlight backprojection.
+
+| Choice | Rationale |
+| :--- | :--- |
+| Single executable | Modes 1–5 are three chain configurations of one spine |
+| A smoke and a demo YAML per shipped mode | Same graph; the difference is `cphd_path` and scale |
+| Autofocus as extra YAMLs | Orthogonal to mode, off by default |
+| Defer modes 6–9 packaging | N-instance, circular and looks demos are not in the first ship |
+
+The spine is `CPHDReaderOp` → `SARRangeCompressionOp` → `ApertureManagerOp` → `BackprojectionOp` → sinks, with positions bypassing range compression. The app does no metadata setup for D22 — metadata is on by default and `BackprojectionOp` sets its own `kUpdate`. `compose()` has three shapes in the first ship: the single-formation path (modes 1, 2, 3, 5), scroll wiring (mode 4), and the optional Figure 2 / 3 autofocus splice on mode 1. The N-instance fan-out that modes 6 and 9 need is the fourth, deferred.
+
+### Mode to YAML
+
+Autofocus off. First-ship modes in bold.
+
+| Mode | Manager | Formation | What the app supplies |
+| :--- | :--- | :--- | :--- |
+| **1 Spotlight** | `max_aperture_pulses = 0`, `emit_mode = reset` | reset accumulation | one geometry; end of stream via reader metadata |
+| **2 Video SAR** | retention `N`, `emit_mode = continue` | overlapping apertures | geometry; `evict` where the app owns the window |
+| **3 Tiled strip** | per-tile reset | reset on geometry step | geometry per tile, staged through the manager |
+| **4 Continuous strip** | optional, cadence only | `geometry_change = scroll` | lattice on `v`; no `weight` |
+| **5 Independent images** | reset per aperture | reset | geometry per aperture |
+| 6 Wide swath | per sub-swath instance | **N** formation instances | zero-weight foreign bursts |
+| 7 Sub-aperture looks | as mode 5 or mode 2 | same | fixed geometry |
+| 8 Circular | as spotlight | same | circular trajectory, in the collection |
+| 9 Tomography | shared control and weights | **N** formation instances | one lattice per height plane |
+
+Figure 2 autofocus, opt-in on mode 1: `emit_mode = reform` with retention, and the conjugate lattice on the auxiliary instance only.
+
+### Layering
+
+The three-tier layering the FMCW apps use, per [AGENTS.md](../../../AGENTS.md) → *Building example applications*:
+
+- **`cpp/sar_formation.cpp`** — `compose()` as the graph, plus a one-line `main` calling `radar_app`'s runner. Nothing else.
+- **`cpp/config.hpp`** — `AppConfig : app::CommonRunConfig` plus `load_config`, parsing only the app-owned YAML sections. Operator parameters flow natively through `from_config()`; the app never parses operator blocks.
+- **`cpp/custom_ops.hpp`** — app-specific operators. For wave one that is the image display bridge; when the live-radar path lands in a later wave, the **phase-center trajectory computation goes here**, which is the concrete form of the "application responsibility" decision.
+
+A `run_sar_app` runner joins `run_fmcw_app` under [`applications/common/radar_app/`](../../../applications/common/radar_app/). There is no `SimAdcSourceOp` equivalent: SAR ingress is always a file, because the simulator writes CPHD rather than feeding the graph in process.
+
+**Every demo reads a local CPHD.** The app streams through `CPHDReaderOp` and never reaches for the network, so each public-data demo depends on the subsetter having written a local file first. The mode 2 demo is the largest such prerequisite in the first ship: about 7 GB subset out of a 110 GiB collect, pulled once and cached rather than per run. That makes the subsetter a dependency of the first phase that reads a public collection — phase 2, for Atlanta — rather than late polish, which is the one place the natural "tooling last" instinct would put the wave behind schedule.
+
+Holoviz display reuses the `radar_app` layout builder. A complex image needs a magnitude-and-log-scale rasterization step the FMCW apps do not have, which is the one genuinely new piece of viz. The video SAR demo additionally wants a **median-subtracted residual view** — on the Houston collect the movers are legible only against a removed static background, per [INPUT_DATA.md](INPUT_DATA.md) → *What the demo shows*.
 
 ## File layout
 
@@ -118,26 +186,64 @@ operators/io/
 
 Shared, non-Holoscan helpers go in `operators/common/radar_common/` as usual: the `CoordinateFrame` descriptor beside the other descriptors, and the grid-to-point-list expansion helper under `dsp/`.
 
-## Demo application
+The application, with YAMLs flat in `cpp/` per the FMCW precedent:
 
-`applications/sar_backprojection/`, following the three-tier layering the FMCW apps use:
+```text
+applications/sar_formation/
+  CMakeLists.txt
+  README.md
+  cpp/
+    CMakeLists.txt
+    metadata.json
+    sar_formation.cpp
+    config.hpp
+    custom_ops.hpp
+    sar_formation_mode01.yaml          # demo
+    sar_formation_mode01_smoke.yaml    # smoke
+    ...                                # modes 02-05, same pairing
+    sar_formation_mode01_af_fig2.yaml  # autofocus, opt-in
+  python/
+```
 
-- **`sar_backprojection.cpp`** — `compose()` as the graph, plus a one-line `main` calling `radar_app`'s runner. Nothing else.
-- **`cpp/config.hpp`** — `AppConfig : app::CommonRunConfig` plus `load_config`, parsing only the app-owned YAML sections. Operator parameters flow natively through `from_config()`; the app never parses operator blocks.
-- **`cpp/custom_ops.hpp`** — app-specific operators. For wave one that is the image display bridge; when the live-radar path lands in a later wave, the **phase-center trajectory computation goes here**, which is the concrete form of the "application responsibility" decision.
+That is twelve YAML files for the first ship, more than any FMCW app carries flat. Keep them flat anyway to start; if it becomes unwieldy, moving to a `yaml/` subdirectory is a deviation from the precedent and should be proposed as one rather than done quietly.
 
-The CPHD-driven app is the default demo, since the simulator and the real collections both arrive that way. Holoviz display reuses the `radar_app` layout builder; a complex image needs a magnitude-and-log-scale rasterization step that the FMCW apps do not have, which is the one genuinely new piece of viz.
+## Testing tiers
+
+Mirrors [TESTING.md](TESTING.md), with the data each tier draws on named.
+
+| Tier | Input | Asserts |
+| :--- | :--- | :--- |
+| Unit | Inline tensors | Closed-form; no simulator involved |
+| Integration | Generated smoke CPHD | Metrics against the analytic sidecar |
+| Demo | Capped synthetic scene, or a public pull | Visual, and SICD geometry sanity |
+| Validation | Real collections — the Atlanta 1° frame against the offline MatX golden | Conventions, and `precision_mode` accuracy |
+
+Smoke stays fully synthetic and generates in seconds; no CI job pulls public data by default. The validation tier is where the parity golden lives, and it is the only tier that answers "is this right" rather than "is this consistent with itself".
 
 ## Landing gate
 
 Each operator follows [NEW_OPERATOR_CHECKLIST.md](../NEW_OPERATOR_CHECKLIST.md). Wave-specific additions:
 
-- **Accumulation tests are part of the gate** for `BackprojectionOp`, not an afterthought: multi-tick equivalence, reset on geometry change, and emitted-buffer independence. This is a new test pattern in the module.
+- **Accumulation tests are part of the gate** for `BackprojectionOp`, not an afterthought: multi-tick equivalence, reset on geometry change, and emitted-buffer independence. This is a new test pattern in the module. An independent-re-formation golden now exists to diff incremental accumulation against — see [INPUT_DATA.md](INPUT_DATA.md) → *The offline reference path*.
 - **Do not resolve the team-blocked items in code.** Two remain, indexed in [TEAM_BLOCKED.md](TEAM_BLOCKED.md): contract acceptance itself (R1) and the scope of the metadata key namespace (R10). An operator that quietly picks an answer is not checklist-complete. Closed since this list was written: the autofocus grid-conjugacy question (D20), the metadata plane (D21 — declined, with optional descriptor override ports offered instead), who announces a collection boundary (D22 — a source, as message metadata), and the control message's payload (D23 — the four values only).
 - **The boundary announcement lands early, in the reader and the manager, and is easy to get wrong.** `CPHDReaderOp` must stamp the key on the batch that *is* a collection's last rather than on the first of the next, and `ApertureManagerOp` must treat the announcement and an explicit `control` request identically. Both belong to the first slice, because the spotlight smoke test depends on the flush; both are cheap to implement and cheap to get subtly wrong.
+- **`CPHDReaderOp` validates per-vector PVP rather than trusting it.** Not a hypothetical: the pinned Houston collect carries two vectors out of 208,753 whose `TOA1`/`TOA2` are an order of magnitude wrong while their `SIGNAL` flag reads valid. Anything deriving a global quantity from an unguarded min or max over a PVP field gets a nonsense answer from a clean, public, otherwise unremarkable file.
 - **The performance harness needs two of its required fields redefined for an accumulating operator.** The checklist and [OPERATOR_DEVELOPMENT.md](../OPERATOR_DEVELOPMENT.md) → *Performance characterization* were written against operators where one tick produces one complete result, which `BackprojectionOp` is not. Nothing about the gate is a numeric threshold — it is a measurement harness — but two prescribed report fields are ill-defined here and must be stated rather than improvised:
   - **`cold_ms`** ("first timed frame after config") has two distinct meanings once an accumulator exists: the first tick of the process, and the first tick after a reset. Report both, named separately, and report **time-to-emit** for a full aperture alongside per-tick steady state, since that is the figure a caller sizes a system against.
   - **`override_delta_ms`** (post-override peak against pre-override median) assumes an override perturbs and resumes. Every `BackprojectionOp` grid parameter instead *resets*, discarding work, so the two windows are not comparable states. Measure and label the reset cost as its own quantity rather than reporting it as an override delta. That leaves no non-resetting live parameter to measure under the ordinary rule: `interpolation` is the only candidate, and with `linear` its sole implemented value this wave, an override of it cannot change state. Report it as not applicable rather than fabricating a measurement.
   - The size ladder is the pulses × pixels product rather than one tensor's dimensions, so pick a small matrix over both axes instead of a single sweep. `CPHDReaderOp` and the writers are **out of harness scope** for this wave: their cost is disk bandwidth, not GPU time, and the harness has no vocabulary for it.
-- **Confirm the `matx::experimental::sar_bp` release status** before any code depends on it. It is in the experimental namespace with an API subject to change, and the MatX version bundled with the Holoscan SDK here lacks it entirely. Do not bump MatX as part of this wave.
+- **Do not depend on `matx::experimental::sar_bp`, and do not bump MatX to get it.** Confirmed rather than assumed: it is in the experimental namespace with an API subject to change, and the MatX bundled with the Holoscan SDK this module builds against lacks it entirely. It stays an offline golden-image path (item I1 in [OPERATOR_API.md](OPERATOR_API.md) → *Open items*), which is enough to give `BackprojectionOp` a cross-implementation reference without putting it in the build.
 - **Contract changes get called out explicitly in the PR description** — the descriptor-set change, the precision-mode extension, and the new accumulation convention are all amendments to locked invariants.
+
+## Later waves
+
+Still in the contract, deferred on sequencing.
+
+- **Modes 6–9 packaging.** Application and recipe work on a finished operator set: the `compose()` N-instance fan-out for wide swath and tomography, a circular trajectory recipe for mode 8, and sub-aperture windows cut from the mode-1 collect for mode 7.
+- **Products.** `MultilookOp`, then `GeocodeOp`, which together unblock `SIDDWriterOp`. Geocode trails on datum and DEM decisions, and is optional besides — backprojection can form directly onto DEM-derived map points.
+- **Alternate ingress.** `CRSDReaderOp`, `RVPRemovalOp` and `BandEqualizationOp` for the deramped uncompensated form; `RangeMatchedFilterOp` for direct-sampled; `CRSDWriterOp` at that seam. Evidence-gated — though less so than it looks, since Sentinel-1 Level-0 is freely available and is exactly the direct-sampled form.
+- **SAR detection.** Its own wave, with its own clutter model. Not a reuse of `CFARDetectorOp`.
+
+## Claim and coordination
+
+Update [STATUS.md](../STATUS.md) when claiming a phase or a data slice, and again in the PR that lands it. Contract-change PRs call out their amendments as such. Leave R1 and R10 unresolved in code.

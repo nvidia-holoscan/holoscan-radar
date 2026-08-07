@@ -145,10 +145,13 @@ boundaries, a CPHD → SLC chain is not finished.
 > flag races a batch still in flight, and blocking, FIFO alignment holds only
 > through strictly 1:1 stages — which the manager is not.
 >
-> Two residuals a spaceborne reader should note. The application must enable
-> metadata on the fragment with policy `kUpdate`, and an application that owns
-> its own control operator must feed that operator from the source or it never
-> hears the boundary. `BackprojectionOp` warns at `stop()` if it is still holding
+> One residual a spaceborne reader should note — corrected 2026-08-06, this
+> response originally listed two, the other being fragment-level metadata setup.
+> That was wrong: metadata is enabled by default and `kUpdate` is set
+> per-operator by the one consumer that merges several ports from a producer, so
+> the application configures nothing. The real residual is that an application
+> owning its own control operator must feed that operator from the source or it
+> never hears the boundary. `BackprojectionOp` warns at `stop()` if it is still holding
 > an unemitted image, which converts a silent tail loss into a noisy one — the
 > best available, since no build-time check can see whether a source is finite.
 
@@ -257,8 +260,10 @@ once R7 exists).
 > `control` output by design, so the reader-driven `control` this paragraph waits
 > on never arrives. Instead a manager in the graph handles the flush from the
 > metadata announcement with no application-owned ports wired at all. The cost is
-> one line of fragment setup — metadata enabled, policy `kUpdate` — whose omission
-> loses the final aperture, so the recipe must state it.
+> nothing — corrected 2026-08-06, this response originally claimed one line of
+> fragment setup (metadata enabled, policy `kUpdate`) whose omission loses the
+> final aperture. Metadata is on by default and `kUpdate` is per-operator, so the
+> recipe carries no setup step at all.
 
 **External Python simulator.** Correct that it writes CPHD and is never wired
 in-process; correctness of the module still hangs on an out-of-repo, pinned,

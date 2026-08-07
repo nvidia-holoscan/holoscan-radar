@@ -122,7 +122,7 @@ Some operators integrate across Holoscan ticks and emit less often than they con
 - Emit and reset are separate; reset has a **phase** (before vs after this tick’s data).
 - **One owner of reset** — never the accumulator guessing. Geometry changes travel **with** the reset that admits them.
 - End-of-stream flush cannot use `Operator::stop()` (no `OutputContext`), so a finite source **announces** it as message metadata — `holoscan.radar.stream_boundary`, valued `end_of_stream` or `collection_boundary` (**D22**) — and whoever drives `control` translates that into a flush. `ApertureManagerOp` reads it itself. Metadata, not a port, because a port cannot stay aligned with its data across a stage that coalesces ticks, which the manager does.
-- Two things this puts on the application: enable metadata on the fragment with policy `kUpdate` (`kRaise` throws where a consumer takes several ports from one producer), and if you own the control operator, feed it from the source — metadata arrives only through `receive()`, so a policy operator wired as a pure source never hears the boundary. `BackprojectionOp` warns at `stop()` if it is still holding an unemitted image, which is how you find out.
+- **One** thing this puts on the application, not two: if you own the control operator, feed it from the source — metadata arrives only through `receive()`, so a policy operator wired as a pure source never hears the boundary. There is no metadata setup to do: it is enabled by default, and `kUpdate` (needed because `kRaise` throws where a consumer takes several ports from one producer) is set per-operator by that consumer, `Operator::metadata_policy` taking precedence over the fragment default. `BackprojectionOp` warns at `stop()` if it is still holding an unemitted image, which is how you find out either way.
 - The control message carries the four values and nothing else (**D23**): no aperture id, no sequence number, no reason code.
 
 ### `[live]` overrides
@@ -207,7 +207,7 @@ PGA discards constant/linear phase (image shift). Conjugacy is **declared** (`az
 - Incremental sliding window + azimuth taper (refused; use `reform`).
 - Figure 2 autofocus on `emit_mode = continue` or scroll.
 - Assuming `stop()` flushes the last aperture (it warns instead — see D22).
-- Forgetting `is_metadata_enabled(true)` / `metadata_policy(kUpdate)` on the fragment: the boundary announcement is dropped and the final aperture is lost, or `kRaise` throws on a multi-port receive from one producer.
+- Disabling metadata on an operator between the source and the control owner: the boundary announcement is dropped and the final aperture is lost. (You do not have to *enable* anything — it is on by default.)
 - An app-owned control operator wired as a pure source: it can never hear the boundary, because metadata arrives only through `receive()`.
 - Mirroring `sample_geometry` into `GeocodeOp` or `SICDWriterOp` by hand and letting it drift from formation. Legal, and the ordinary path, but the D21 override port removes the failure mode entirely.
 

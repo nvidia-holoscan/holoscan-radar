@@ -23,7 +23,7 @@ There is no separate statistical tier as in FMCW, where Monte-Carlo false-alarm 
 
 The simulator is a **signal model, not a physics or EM solver**: it synthesizes phase history by summing each point target's closed-form contribution over (pulse, fast-time sample), then adds noise. Cheap, deterministic, and its own correctness is easy to reason about.
 
-It exists today in Python, outside this repository, and writes CPHD. This section specifies what it must do, because every quantitative assertion in the module depends on it and none of the repo's own tests can police it.
+It lives in Python **in this repository** and writes CPHD via `sarpy`. This section specifies what it must do, because every quantitative assertion in the module depends on it. Its being in-repo is a policy decision rather than a convenience: users are expected to generate their own input, which an out-of-repo simulator cannot support. See [INPUT_DATA.md](INPUT_DATA.md) → *Policy*.
 
 ### Inputs it must accept
 
@@ -76,10 +76,10 @@ EM propagation and scattering; multipath; layover and shadow; distributed surfac
 ### Cross-cutting simulator requirements
 
 - **Aliasing modeled.** Targets beyond the unambiguous range must fold correctly, and azimuth ambiguities from PRF under-sampling must appear, so both can be tested rather than assumed absent.
-- **Determinism.** A fixed seed reproduces the file bit-for-bit.
+- **Determinism, and the limit of it.** A fixed seed on a fixed toolchain reproduces the file bit-for-bit, which is what a regeneration check on one machine may assert. **Across platforms it is not claimed**: floating-point and library differences make cross-platform reproduction a bar to be established rather than assumed, and what "stable enough" means for a generated fixture is open question 4 in [INPUT_DATA.md](INPUT_DATA.md). Until that settles, a test consuming a generated fixture asserts **analytic properties within tolerances** and never a checksum of the file.
 - **Guard against tautology.** The signal model must be derived **independently of the operator implementations**, and canonical cases cross-checked against an independent reference — a textbook closed form for the point-target response, or an established external SAR simulator. Tests assert against **analytic predictions** (a target at a known position, imaged at the resolution the bandwidth and aperture imply, with the range sidelobe levels the range window implies), never merely that the generator round-trips through the pipeline.
 - **A kinematic driver is required.** FMCW's `TESTING.md` defers a time-stepping driver, noting it waits for "a frame-spanning consumer (a tracker, multi-frame integration, or clutter-map CFAR — all out of scope now)". **SAR is that consumer**: an aperture spans many pulse batches by construction, so the trajectory must evolve across ticks. This is the wave that adds it, and it is required rather than optional.
-- **Versioned and self-tested.** The simulator is a first-class test dependency living outside this repository, so the repo must **pin a version** and its self-checks must ship with it. The committed CPHD fixture used by integration tests must be regenerable from that pinned version, and regeneration must reproduce it bit-for-bit — otherwise a silent simulator change becomes a silent change in what the module is validated against.
+- **Self-tested, and versioned with the repository.** Its self-checks ship with it, in `tests/` alongside the operator suites, and a change to the signal model is a change to this repository reviewed like any other. *Amended 2026-08-06:* this requirement previously demanded a **pinned version** of an out-of-repo simulator and a committed CPHD fixture regenerable from it **bit-for-bit**. Both existed to contain an external-dependency hazard that no longer exists — the simulator is in-repo and no CPHD is committed ([INPUT_DATA.md](INPUT_DATA.md) → *Policy*). The version pin is therefore dropped outright. What replaces bit-for-bit is below.
 
 ---
 
@@ -88,6 +88,8 @@ EM propagation and scattering; multipath; layover and shadow; distributed surfac
 The convention leg. Real data is where frame, sign, epoch and reference-point conventions are pinned, because those are exactly what a simulator cannot catch: a simulator sharing an assumption with the operator under test validates the assumption into existence.
 
 **Umbra CPHD collections are in hand.** Matching SICD products are also available and are **authoritative for geometry** — scene centre, grid vectors, spacings — making them the reference for whether the image is in the right place at the right scale.
+
+Which collections, their keys, headers and pull cost are in [INPUT_DATA.md](INPUT_DATA.md) → *Public collections, per mode*; they are credential-free and pinned per first-ship mode rather than chosen per test.
 
 **SICD is not usable as a pixel-level golden reference.** The provider's image-formation chain includes autofocus corrections not recoverable from the delivered product, so a pixel comparison would measure the difference between two focus solutions rather than the module's correctness. Used that way it would produce a test that fails for the wrong reason and gets tuned until it passes.
 
@@ -318,13 +320,13 @@ The anchor, and the operator with the most contract surface.
 - **Determinism.** A fixed seed and a fixed pulse batching reproduce identical images. This is stronger than the FMCW requirement, because accumulation order is a new way to lose it: batching the same aperture differently must not change the result beyond floating-point reassociation.
 - **Coordinate-frame rejection is narrower than it first looks**, and is tested only where a second frame genuinely exists. **An operator holds two frames only where one arrives on a port:** `coordinate_frame` is otherwise one parameter, and `positions` and `sample_points` are plain tensors carrying no frame identity (invariant 1), so there is no in-operator pairing to check and none is asserted.
 - **The three real frame checks**, each tested where it lives. `CPHDReaderOp` — and later `CRSDReaderOp` — rejects a `coordinate_frame` disagreeing with the frame its file declares, the file being the second frame that makes the check possible. `GeocodeOp` and every writer reject a frame lacking the `origin_llh` they need to geolocate, so a `scene_local` frame with no anchor is legal upstream and rejected there. And where D21's frame edge is wired, the consumer has a second frame at last and warns when its own parameter disagrees. Agreement between operators whose frames are *both* parameters stays the application's responsibility and is asserted as a known gap, never as a passing behaviour — including `BackprojectionOp`, which D21's edges deliberately do not reach.
-- **The metadata plane's application-level preconditions**, asserted once here rather than per operator: a fragment with `is_metadata_enabled(false)` loses the boundary announcement, and the SDK-default `kRaise` policy throws where a consumer takes several ports from one producer. Both are conditions of composing with this module (D22), so a test is what keeps them from being discovered by a user instead.
+- **The metadata plane's two failure modes**, asserted once here rather than per operator. Neither is an application precondition — metadata is enabled by default and `kUpdate` is set per-operator by the merging consumer (D22) — so what is under test is that the module configures itself correctly and degrades visibly when something external interferes. First, an operator merging several ports from one producer must not throw, which is the assertion that fails if `BackprojectionOp` ever loses its own `kUpdate`. Second, metadata *explicitly* disabled on an intervening operator loses the boundary announcement, and the resulting dropped final aperture must surface as `BackprojectionOp`'s `stop()` warning rather than as silently missing output.
 
 ---
 
 ## CI notes
 
-- Unit tests are fast, deterministic and per-commit. Integration tests need a CPHD fixture: a small simulator-generated collection, committed with the pinned simulator version recorded beside it and regenerable bit-for-bit.
+- Unit tests are fast, deterministic and per-commit. Integration tests need a CPHD fixture, which CI **generates from a committed recipe** as a build step rather than checking out — no CPHD binary is in git ([INPUT_DATA.md](INPUT_DATA.md) → *Policy*). The point-target recipes generate in seconds, which is what makes generating rather than committing affordable per-commit.
 - **Real-collection validation runs out of band**, not per-commit — the files are large and are not repository content. It runs as a periodic or pre-release check.
 - The independent-reader checks (SarPy) are a Python-side test dependency, so the SICD assertions live in `tests/python/` even though the writer is C++.
-- The simulator's own self-checks run wherever it lives, not here; what this repo owns is the pinned version and the regeneration check.
+- The simulator's own self-checks run **here**, with the rest of the suite, since it is now repository content. What this repo owns is therefore the signal model itself, the recipes, and the fixture-generation step ahead of the integration tests — not, as previously written, a pinned external version and a regeneration check against it.

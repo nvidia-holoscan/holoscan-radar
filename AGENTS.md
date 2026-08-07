@@ -44,7 +44,9 @@ Rules that follow from "lockdown":
 7. **Industry-standard operator names** over internal schemes.
 8. **A CUDA-capable NVIDIA GPU is a hard dependency** — for the operators, the apps, and the C++ test suite (decided 2026-07-10). Do not add CPU fallback compute paths, skip-if-no-GPU test guards, or GPU-optional build modes; the only host-only code is deliberately host-only by design (the analytic simulator, window generation).
 
-The invariants above are **unamended and govern all current code**. The proposed SAR contract asks to change three of them (2 — a seventh descriptor plus a rename; 3 — an orthogonal internal-arithmetic axis on one operator; 4 — output shape from declared geometry rather than an input tensor) and to add a cross-tick accumulation convention. Those are proposals under review in [`docs/planning/SAR/OPERATOR_API.md`](docs/planning/SAR/OPERATOR_API.md) → *Contract changes against the locked invariants*, not accepted amendments.
+The invariants above are **unamended and govern all current code**. The proposed SAR contract asks to change four of them and to add two conventions — proposals under review in [`docs/planning/SAR/OPERATOR_API.md`](docs/planning/SAR/OPERATOR_API.md) → *Contract changes against the locked invariants*, not accepted amendments.
+
+Invariant **2**, twice over: six descriptors become **nine** (`CoordinateFrame`, `SampleGeometry`, `LFMWaveformDescriptor`), and sanctioned descriptor-carrying *output* ports go from one to four. **3**: an orthogonal internal-arithmetic axis on one operator. **4**: output shape from declared geometry rather than an input tensor. **5**: a `[live]` geometry override on an accumulating operator forces a reset, and a wired override port beats its parameter. The two conventions are cross-tick accumulation and a one-key metadata plane. Every descriptor change is **additive** — the SAR contract renames nothing in landed FMCW code (D24).
 
 **Scope guardrail:** the *implementation* wave is FMCW SISO/SIMO/MIMO-TDM/MIMO-DDM only. Do not add Pulse-Doppler or PVA operators; CDM/BPM is deferred to a future wave; FDM and PMCW are excluded outright.
 

@@ -79,7 +79,7 @@ STATUS.md → Roadmap, not here.
 [SAR/TEAM_BLOCKED.md](SAR/TEAM_BLOCKED.md). They do **not** stop development,
 because no SAR operator code exists yet; they must be answered before the SAR
 contract is accepted, and neither may be resolved in code. That file also
-carries D1–D23: contract calls that already have an answer and do not gate
+carries D1–D24: contract calls that already have an answer and do not gate
 acceptance, enumerated so focused review reaches them rather than relying on a
 reviewer finding them in nine hundred lines of contract.
 
