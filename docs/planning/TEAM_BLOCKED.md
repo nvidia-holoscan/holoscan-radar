@@ -75,17 +75,26 @@ Settled decisions. Capabilities deliberately deferred out of the current scope
 (e.g. staggered TDM, sum-set holey subarray smoothing) are tracked under
 STATUS.md → Roadmap, not here.
 
-**None currently for FMCW.** The two open SAR items (R1, R10) are indexed in
-[SAR/TEAM_BLOCKED.md](SAR/TEAM_BLOCKED.md). They do **not** stop development,
-because no SAR operator code exists yet; they must be answered before the SAR
-contract is accepted, and neither may be resolved in code. That file also
-carries D1–D24: contract calls that already have an answer and do not gate
-acceptance, enumerated so focused review reaches them rather than relying on a
-reviewer finding them in nine hundred lines of contract.
+**None currently for FMCW.** **R1 closed on 2026-08-07 — the SAR contract was
+accepted and SAR is now in implementation**, which ratified D1–D24 with it.
+[SAR/TEAM_BLOCKED.md](SAR/TEAM_BLOCKED.md) keeps that list, enumerated so
+focused review reaches the two dozen places the call could have gone the other
+way rather than relying on a reviewer finding them in nine hundred lines.
 
-**One of the two reaches beyond SAR, and FMCW owners should see it.** R10 asks
-whether the metadata key namespace D22 introduces — `holoscan.radar.<key>`,
-with `stream_boundary` as its only key — belongs at the module level or under a
-`sar` tier. It is proposed module-wide because the cross-tick accumulation
-convention it serves is module-wide and a finite FMCW source loses its tail the
-same way, which makes it a decision about FMCW taken in a SAR document.
+**One open SAR item remains, and it is the one that reaches beyond SAR, so FMCW
+owners should see it.** R10 asks whether the metadata key namespace D22
+introduces — `holoscan.radar.<key>`, with `stream_boundary` as its only key —
+belongs at the module level or under a `sar` tier. It is proposed module-wide
+because the cross-tick accumulation convention it serves is module-wide and a
+finite FMCW source loses its tail the same way, which makes it a decision about
+FMCW taken in a SAR document. It may not be resolved in code. Pending an answer,
+SAR will use the **`sar` tier**, which commits FMCW to nothing and leaves
+promotion a one-constant change.
+
+**SAR contract changes now reach this file by rule.** Acceptance came with the
+condition that the SAR contract may be revised during implementation but never
+silently, and that a revision reaching beyond SAR — these invariants, the shared
+descriptors, `operators/common/`, the `holoscan.radar` Python API, FMCW code, or
+the key namespace — gets a row here as well as agreement before it lands. So
+this file is where FMCW owners will see SAR work that touches them, without
+having to follow the SAR docs.

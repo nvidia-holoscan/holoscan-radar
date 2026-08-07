@@ -17,20 +17,35 @@ Read before starting non-trivial work, in this precedence order:
 5. [`docs/planning/NEW_OPERATOR_CHECKLIST.md`](docs/planning/NEW_OPERATOR_CHECKLIST.md) — landing gate; verify before claiming an operator (or variant slice) done.
 6. [`docs/planning/OPERATOR_DEVELOPMENT.md`](docs/planning/OPERATOR_DEVELOPMENT.md) — how to implement well: hot-path discipline, diagnosis, `[live]`/calibration pitfalls, tests, and performance characterization (lessons from landed operators).
 7. [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md) — index of items blocked on a team decision (detail in each operator’s `OPEN_ITEMS.md`).
-8. [`docs/planning/SAR/`](docs/planning/SAR/) — the SAR modality's own `OPERATOR_API.md` / `WORKFLOWS.md` / `TESTING.md` / `SIGPROC_PLAN.md` / `TEAM_BLOCKED.md`, mirroring 1–3 and 7 one level down. **Proposed, in review** — read it for SAR work, and treat items 1–7 as governing wherever the two overlap until the SAR contract is accepted.
+8. [`docs/planning/SAR/`](docs/planning/SAR/) — the SAR modality's own `OPERATOR_API.md` / `WORKFLOWS.md` / `TESTING.md` / `SIGPROC_PLAN.md` / `TEAM_BLOCKED.md`, mirroring 1–3 and 7 one level down. **Accepted 2026-08-07** and now governing for SAR work, on the same footing as 1–7 rather than subordinate to them.
 
 Rules that follow from "lockdown":
 
 - **Docs first.** Code must match `OPERATOR_API.md` exactly — port names, shapes, dtype pairs, parameter names/defaults, `[live]` tags. To change an interface, change the doc (in the same PR at minimum), call it out as a contract change in the PR description, and get it reviewed as such. Never deviate silently in code.
+- **The SAR contract may be changed while implementing it; say so every time.**
+  SAR is in active implementation against an accepted contract, so revising it is
+  expected rather than exceptional — but a change is never silent. Tag it in place,
+  log it in [`docs/planning/SAR/OPERATOR_API.md`](docs/planning/SAR/OPERATOR_API.md)
+  → *Contract changes since approval*, and **tell the developer in the reply that a
+  contract change was made**. A change that reaches **beyond SAR** — the invariants
+  below, the shared descriptor set, `operators/common/`, the `holoscan.radar` public
+  Python API, FMCW code, the metadata key namespace, or anything a second modality
+  would inherit — is a higher bar: it needs the developer's explicit agreement
+  *before* it lands, plus a row in
+  [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md) so FMCW owners
+  see it. Prefer the SAR-scoped option where both exist.
 - **Do not silently resolve documented open items.** Team-blocked questions are
   indexed per modality — [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md)
   for FMCW, [`docs/planning/SAR/TEAM_BLOCKED.md`](docs/planning/SAR/TEAM_BLOCKED.md)
   for SAR — with detail in each operator’s `OPEN_ITEMS.md`. **FMCW has none open**
-  (L1–L15 and S1–S4 are all settled; see `STATUS.md` → Settled decisions). The
-  live ones are all SAR's `R`-numbered rows, and none may be resolved in code.
-  Take the current set from that index rather than from any list here, since rows
-  close as decisions land, and surface a new open item for a team decision instead
-  of picking an answer.
+  (L1–L15 and S1–S4 are all settled; see `STATUS.md` → Settled decisions). **SAR
+  has one: R10**, the metadata key namespace, which survived contract acceptance
+  because it is a decision about FMCW taken in a SAR document. It may not be
+  resolved in code. Take the current set from that index rather than from any list
+  here, since rows close as decisions land, and surface a new open item for a team
+  decision instead of picking an answer. Note the distinction from the bullet
+  above: revising the accepted SAR contract is allowed and merely has to be
+  declared, whereas an open `R` item is a question nobody has answered yet.
 - **Checklist + development guidance.** Follow `NEW_OPERATOR_CHECKLIST.md` as the done gate; use `OPERATOR_DEVELOPMENT.md` when designing `compute()`, live overrides, tests, or chasing performance.
 
 ## Design invariants (do not violate)
@@ -44,13 +59,15 @@ Rules that follow from "lockdown":
 7. **Industry-standard operator names** over internal schemes.
 8. **A CUDA-capable NVIDIA GPU is a hard dependency** — for the operators, the apps, and the C++ test suite (decided 2026-07-10). Do not add CPU fallback compute paths, skip-if-no-GPU test guards, or GPU-optional build modes; the only host-only code is deliberately host-only by design (the analytic simulator, window generation).
 
-The invariants above are **unamended and govern all current code**. The proposed SAR contract asks to change four of them and to add two conventions — proposals under review in [`docs/planning/SAR/OPERATOR_API.md`](docs/planning/SAR/OPERATOR_API.md) → *Contract changes against the locked invariants*, not accepted amendments.
+The invariants above govern all current code, and are **amended for SAR as of 2026-08-07** by the accepted contract in [`docs/planning/SAR/OPERATOR_API.md`](docs/planning/SAR/OPERATOR_API.md) → *Contract changes against the locked invariants*. Four invariants are amended and two conventions added. Landed FMCW code is unaffected: every change is additive and the contract renames nothing (D24).
 
-Invariant **2**, twice over: six descriptors become **nine** (`CoordinateFrame`, `SampleGeometry`, `LFMWaveformDescriptor`), and sanctioned descriptor-carrying *output* ports go from one to four. **3**: an orthogonal internal-arithmetic axis on one operator. **4**: output shape from declared geometry rather than an input tensor. **5**: a `[live]` geometry override on an accumulating operator forces a reset, and a wired override port beats its parameter. The two conventions are cross-tick accumulation and a one-key metadata plane. Every descriptor change is **additive** — the SAR contract renames nothing in landed FMCW code (D24).
+Invariant **2**, twice over: six descriptors become **nine** (`CoordinateFrame`, `SampleGeometry`, `LFMWaveformDescriptor`), and sanctioned descriptor-carrying *output* ports go from one to four. **3**: an orthogonal internal-arithmetic axis on one operator. **4**: output shape from declared geometry rather than an input tensor. **5**: a `[live]` geometry override on an accumulating operator forces a reset, and a wired override port beats its parameter. The two conventions are cross-tick accumulation and a one-key metadata plane.
+
+Amending an invariant **further** is a beyond-SAR contract change: see the *Docs first* rules above, and get explicit agreement before landing it.
 
 **Scope guardrail:** the *implementation* wave is FMCW SISO/SIMO/MIMO-TDM/MIMO-DDM only. Do not add Pulse-Doppler or PVA operators; CDM/BPM is deferred to a future wave; FDM and PMCW are excluded outright.
 
-**SAR** is now a specified modality rather than an excluded one, but the contract in [`docs/planning/SAR/`](docs/planning/SAR/) is **in review**. Design and documentation work against it is in scope; **SAR operator code is not**, until the contract is accepted and its invariant amendments (descriptor set, `BackprojectionOp.backend`, cross-tick accumulation) are reviewed as contract changes. Its own scope guardrail applies within it: stripmap and spotlight, monostatic, single-pol, time-domain backprojection — no frequency-domain formation, interferometry, polarimetry, ScanSAR, or SAR detection.
+**SAR is in implementation.** The contract in [`docs/planning/SAR/`](docs/planning/SAR/) was accepted on 2026-08-07, so **SAR operator code is in scope** — the earlier gate holding it back until R1 closed is lifted. Build against [`docs/planning/SAR/SIGPROC_PLAN.md`](docs/planning/SAR/SIGPROC_PLAN.md)'s phases. Its own scope guardrail applies within it: stripmap and spotlight, monostatic, single-pol, time-domain backprojection — no frequency-domain formation, interferometry, polarimetry, ScanSAR, or SAR detection. First ship is modes 1–5 plus opt-in autofocus; modes 6–9 are deferred packaging.
 
 ## Repo map
 

@@ -894,7 +894,7 @@ Two fields read differently between the modalities, in comments only. `chirp_rep
 
 ## Contract changes against the locked invariants
 
-Each is an explicit change to the invariants in [AGENTS.md](../../../AGENTS.md) and needs review as one. Collectively they are R1.
+Each is an explicit change to the invariants in [AGENTS.md](../../../AGENTS.md). Collectively they were R1, **accepted 2026-08-07** — so this section is now the record of what acceptance covered rather than a review request. Changes made *after* that date are logged in the next section, not here.
 
 - **Invariant 2, bounded descriptors.** Six becomes **nine** — `CoordinateFrame`, `SampleGeometry` and `LFMWaveformDescriptor`. Purely additive: D24 withdrew the rename that would have touched landed FMCW code, accepting a ninth type and a duplicated field set in exchange for the SAR contract reaching nothing outside SAR. See *Supporting data structures*.
 - **Invariant 2, descriptor-carrying output ports.** The invariant sanctions exactly one — `VirtualArrayAssemblyOp.array_geometry` — and D21 adds **three**: `CPHDReaderOp.coordinate_frame`, `SARRangeCompressionOp.range_window`, `BackprojectionOp.sample_geometry`. All optional, all the same mechanism as the sanctioned one, and each is the alternative to the metadata plane R5 asked for rather than an addition to it. Worth reviewing as a set, because it changes a one-off exception into a general pattern for cross-stage agreement. See *Standard-Format I/O Operators*.
@@ -904,6 +904,36 @@ Each is an explicit change to the invariants in [AGENTS.md](../../../AGENTS.md) 
 - **Invariant 5, `[live]` overrides.** Adds one rule: a live override that changes an accumulating operator's output geometry forces a reset — with the single exception of a pure translation under `geometry_change = scroll`, which is the one such change that invalidates nothing. Adds a second: where an override port and its parameter are both supplied, the port wins and a disagreement warns once — see *Parameter override convention*. Static-structural here: `backend`, `geometry_change`, `algorithm`, `azimuth_axis`, `remainder`, `emit_mode`, every writer's format parameter, and `coordinate_frame` on the operators that declare what their own inputs mean. The writers' and `GeocodeOp`'s frame and geometry mirrors are `[live]` instead, which is what makes D21's optional edges possible.
 - **A new convention.** Cross-tick accumulation — the module had none, and SAR cannot be specified without one.
 - **A new operator with no FMCW analogue.** `ApertureManagerOp` exists to keep retention and emission policy out of the operator that owns the kernel. It is called out here because it is the one place this contract adds a stage whose job is *control* rather than signal processing, and because a reviewer should agree that the split is worth a stage on the spine of the chain — optional in every mode, and load-bearing in one.
+
+---
+
+## Contract changes since approval
+
+The contract was accepted on 2026-08-07 with implementation to follow, and it may be **revised freely as implementation teaches us things** — that was part of the same decision. What is not allowed is revising it quietly. This section is the running log, so a reviewer can see every post-approval change without diffing the branch.
+
+**Two tiers, because they carry different risk.**
+
+| Tier | What it covers | What it requires |
+| :--- | :--- | :--- |
+| **SAR-scoped** | Anything inside `docs/planning/SAR/` and `operators/sar/` — ports, shapes, parameter names and defaults, algorithms, the SAR-only descriptors | Tag in place, log here, and say so in the reply to the developer |
+| **Beyond SAR** | The [AGENTS.md](../../../AGENTS.md) invariants, the shared descriptor set, `operators/common/` / `radar_common`, the `holoscan.radar` public Python API, FMCW code, the metadata key namespace, build defaults another group inherits | All of the above **plus** the developer's explicit agreement *before* landing, and a row in the module-wide [TEAM_BLOCKED.md](../TEAM_BLOCKED.md) so FMCW owners see it |
+
+**The tag, written at the point of change** so a reader of the contract meets it in context rather than only in this log:
+
+- `**[CONTRACT CHANGE 2026-mm-dd]**` — SAR-scoped.
+- `**[CONTRACT CHANGE — BEYOND SAR, 2026-mm-dd]**` — reaches outside SAR.
+
+Where both a SAR-scoped and a beyond-SAR option would solve the same problem, **take the SAR-scoped one** unless there is a stated reason not to. D24 is the worked example: renaming `FMCWWaveformDescriptor` and adding `LFMWaveformDescriptor` both gave SAR a waveform type, and the additive one was chosen precisely because it reached nothing outside SAR.
+
+Rename a parameter or move a port and the same rules apply — the contract being accepted makes changes *visible*, not *rare*.
+
+### Log
+
+| Date | Change | Tier |
+| :--- | :--- | :--- |
+| *(none yet)* | Post-approval changes are appended here | — |
+
+Two changes landed on 2026-08-06, immediately **before** approval, and are recorded in [STATUS.md](../STATUS.md) rather than here: D24 (`LFMWaveformDescriptor` added instead of renaming the FMCW type) and the `precision_mode` → `backend` rename. They are part of what was approved.
 
 ---
 

@@ -31,22 +31,35 @@ addition pushed rows further past markdownlint's 800-character line cap.
 
 ## Stops development
 
-**None currently.** No SAR operator code exists, so nothing here can pause a
-checklist or block a dependent operator from starting.
+**None currently.** R1 closed on 2026-08-07 (accepted), which was the entry that
+gated SAR operator code, so implementation is under way and nothing open pauses
+a checklist.
 
-That classification carries one qualification that the two-class scheme does
-not express: every entry below **must be answered before the SAR contract is
-accepted** (R1 *is* that acceptance). They do not stop today's work only
-because there is no SAR work in flight to stop.
+**R10 is the one survivor**, and it needs an answer sooner than its "needs team
+look" class suggests: `D22`'s `stream_boundary` key cannot be written without
+choosing the namespace it sits in, so `CPHDReaderOp` and `ApertureManagerOp`
+reach it early. It is not reclassified as development-stopping, because the
+SAR-tier option resolves it inside SAR — see the entry for why that is the
+cheaper default.
 
 ---
 
 ## Needs team look
 
-### R1 — SAR contract acceptance
+### R1 — SAR contract acceptance — **CLOSED 2026-08-07: accepted**
 
-Accept, revise, or reject the proposed SAR modality contract as a whole,
-including its **five** amendments to the locked invariants:
+The team accepted the contract as a whole, with implementation to begin against
+it. The amendments below are therefore **in force**, not proposed. Two conditions
+came with acceptance, and they are the live constraint now that the question
+itself is settled: the contract may be **revised freely** as implementation
+teaches us things, but no revision is silent, and a revision reaching **beyond
+SAR** needs explicit agreement before it lands. Both are specified in
+[OPERATOR_API.md](OPERATOR_API.md) → *Contract changes since approval*.
+
+Kept here rather than moved to the decided list because what was accepted is the
+whole contract, and this is where a reviewer looks for the scope of that.
+
+What acceptance covered — **five** amendments to the locked invariants:
 
 - descriptor set 6→**9**, adding `CoordinateFrame`, `SampleGeometry` and
   `LFMWaveformDescriptor` — purely additive, touching no landed FMCW code,
@@ -61,8 +74,9 @@ Plus **two** new conventions — cross-tick accumulation, and a one-key metadata
 plane (D22) — and one new operator whose job is control rather than signal
 processing.
 
-Review input: a practitioner critique ranking these items against a spaceborne
-CPHD → SICD chain is in [PRACTITIONER_CRITIQUE.md](PRACTITIONER_CRITIQUE.md).
+Review input that fed the decision: a practitioner critique ranking these items
+against a spaceborne CPHD → SICD chain, in
+[PRACTITIONER_CRITIQUE.md](PRACTITIONER_CRITIQUE.md).
 
 **Detail:** [OPERATOR_API.md](OPERATOR_API.md) → Contract changes
 
@@ -80,6 +94,17 @@ whose owners have not weighed in, and a key prefix becomes a public composition
 surface the moment anything outside this module reads it. Narrow, but not
 resolvable in code.
 
+**Sharpened by contract acceptance, 2026-08-07.** The two options are no longer
+symmetric. Module-level placement is a **beyond-SAR** change under the rules in
+[OPERATOR_API.md](OPERATOR_API.md) → *Contract changes since approval*, since it
+commits a namespace FMCW inherits; the `sar` tier is SAR-scoped and needs no one
+else's agreement. The standing preference is therefore the `sar` tier by default
+— `holoscan.radar.sar.stream_boundary` — with promotion to the module level when
+a finite FMCW source actually wants it, which costs one constant. That is a
+recommendation, not a resolution: the team may still prefer module-level, and
+until it says so the implementation should keep the key behind a single named
+constant so either answer stays a one-line change.
+
 **Detail:** [OPERATOR_API.md](OPERATOR_API.md) → Stream boundary announcement →
 Key namespace
 
@@ -93,14 +118,17 @@ open items") and [OPERATOR_DEVELOPMENT.md](../OPERATOR_DEVELOPMENT.md)
 
 ## Decided — focused review requested
 
-Same **Needs team look** class as the entries above, listed separately because
-they differ in disposition rather than in kind: each already has an answer, so
-none of them gates R1. Accepting the contract ratifies them by default, which
-is exactly why they are enumerated — a reviewer should not have to read nine
-hundred lines to find the two dozen places where the call could reasonably have
-gone the other way. Each entry states the decision, the alternative that was
-rejected, and where the reasoning lives. Revising any one of them is a contract
-change, not a code change.
+Each already had an answer, so none of them gated R1 — and R1's acceptance on
+2026-08-07 **ratified all of them**. They stay enumerated because that is still
+what they are for: a reviewer should not have to read nine hundred lines to find
+the two dozen places where the call could reasonably have gone the other way,
+and revisiting one later is far cheaper with the rejected alternative written
+down. Each entry states the decision, the alternative it beat, and where the
+reasoning lives.
+
+Revising any one of them is now a **contract change** under
+[OPERATOR_API.md](OPERATOR_API.md) → *Contract changes since approval*: allowed,
+logged, declared, and — where it reaches outside SAR — agreed first.
 
 ### D1 — Single-owner reset
 

@@ -6,11 +6,13 @@ What lands in the first SAR wave, in what order, where the code goes, and what i
 
 There is no FMCW analogue of this file — the FMCW wave tracked its build order in [STATUS.md](../STATUS.md) → *Up next*. SAR gets a dedicated one because the wave has a genuine dependency structure and a scope boundary worth writing down once, rather than re-deriving from a claims table.
 
-## Gate before code
+## Status: accepted, implementing
 
-**No SAR operator code until R1 accepts the invariant amendments.** R1 (contract acceptance) and R10 (the scope of the metadata key namespace) are open in [TEAM_BLOCKED.md](TEAM_BLOCKED.md), and per [AGENTS.md](../../../AGENTS.md) an operator that quietly picks an answer is not checklist-complete.
+**The contract was accepted on 2026-08-07 and the gate that held back operator code is lifted.** R1 is closed; build against the phases below.
 
-What is *not* gated: design and documentation work against the contract, and the whole of [INPUT_DATA.md](INPUT_DATA.md) — the simulator, the recipes, and the public pull tooling are Python that no operator links against, so they can be built and validated while the contract is in review. Doing so is the point of the phase numbering below, which starts the data work before the operator work.
+Two conditions came with acceptance and apply to everything here. The contract may be **revised freely** as implementation teaches us things — but every revision is tagged in place, logged in [OPERATOR_API.md](OPERATOR_API.md) → *Contract changes since approval*, and stated plainly to the developer. A revision reaching **beyond SAR** needs explicit agreement before it lands and a row in the module-wide [TEAM_BLOCKED.md](../TEAM_BLOCKED.md).
+
+**One open item, and it lands early.** R10 (the metadata key namespace) survived acceptance because it is a decision about FMCW taken in a SAR document, and it may not be resolved in code. `CPHDReaderOp` and `ApertureManagerOp` need the `stream_boundary` key in phases 1 and 3, so until the team answers, use the SAR tier — `holoscan.radar.sar.stream_boundary` — behind a single named constant, which keeps either answer a one-line change and commits FMCW to nothing.
 
 ## Wave one
 
