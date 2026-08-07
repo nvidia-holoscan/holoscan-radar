@@ -706,7 +706,7 @@ SOURCES, in precedence order. Invent nothing absent from them.
 2. SAR/OPERATOR_API.md — primary for contracts that implementers must obey:
    cross-tick accumulation, ApertureManagerOp / BackprojectionOp split,
    PhaseCorrectionOp / AutofocusOp constraints (especially Figure 2 = reform +
-   retention), [live] rules, precision_mode. Do not paste full port tables;
+   retention), [live] rules, backend. Do not paste full port tables;
    summarize and link.
 3. SAR/SIGPROC_PLAN.md — wave-one operator list and build-order pointer only.
 4. SAR/TEAM_BLOCKED.md / docs/planning/SDK_QUESTIONS.md — name open R-items that

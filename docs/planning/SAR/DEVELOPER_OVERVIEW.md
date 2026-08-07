@@ -143,7 +143,7 @@ Static, **required, no default** (`subtract` vs `add`). Wrong sign doubles the p
 
 ### Precision
 
-I/O dtype is a compile-time template (single or double). `BackprojectionOp.precision_mode` is a **separate** internal-arithmetic strategy (spaceborne ranges need more than naive FP32). See OPERATOR_API notes and TESTING.
+I/O dtype is a compile-time template (single or double). `BackprojectionOp.backend` is a **separate** internal-arithmetic strategy (spaceborne ranges need more than naive FP32). See OPERATOR_API notes and TESTING.
 
 ---
 

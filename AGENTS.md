@@ -50,7 +50,7 @@ Invariant **2**, twice over: six descriptors become **nine** (`CoordinateFrame`,
 
 **Scope guardrail:** the *implementation* wave is FMCW SISO/SIMO/MIMO-TDM/MIMO-DDM only. Do not add Pulse-Doppler or PVA operators; CDM/BPM is deferred to a future wave; FDM and PMCW are excluded outright.
 
-**SAR** is now a specified modality rather than an excluded one, but the contract in [`docs/planning/SAR/`](docs/planning/SAR/) is **in review**. Design and documentation work against it is in scope; **SAR operator code is not**, until the contract is accepted and its invariant amendments (descriptor set, `precision_mode`, cross-tick accumulation) are reviewed as contract changes. Its own scope guardrail applies within it: stripmap and spotlight, monostatic, single-pol, time-domain backprojection — no frequency-domain formation, interferometry, polarimetry, ScanSAR, or SAR detection.
+**SAR** is now a specified modality rather than an excluded one, but the contract in [`docs/planning/SAR/`](docs/planning/SAR/) is **in review**. Design and documentation work against it is in scope; **SAR operator code is not**, until the contract is accepted and its invariant amendments (descriptor set, `BackprojectionOp.backend`, cross-tick accumulation) are reviewed as contract changes. Its own scope guardrail applies within it: stripmap and spotlight, monostatic, single-pol, time-domain backprojection — no frequency-domain formation, interferometry, polarimetry, ScanSAR, or SAR detection.
 
 ## Repo map
 

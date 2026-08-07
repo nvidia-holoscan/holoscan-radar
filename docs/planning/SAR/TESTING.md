@@ -53,7 +53,7 @@ Phase history is the deramped, frequency-domain form CPHD stores. With `p_k` the
 - an optional **injected per-pulse phase** `exp(j·φ_k)`;
 - an optional scalar **antenna-pattern weighting** as a function of the pulse's look direction to the target.
 
-Sum over targets, add noise. **Ranges are computed in double precision** so the simulator is never the accuracy limit in a `precision_mode` comparison.
+Sum over targets, add noise. **Ranges are computed in double precision** so the simulator is never the accuracy limit in a `backend` comparison.
 
 ### Scene frame and coordinate conventions
 
@@ -243,7 +243,7 @@ The anchor, and the operator with the most contract surface.
 
 **Precision:**
 
-- The `precision_mode` values agree with one another within expected tolerances at short (airborne) ranges.
+- The `backend` values agree with one another within expected tolerances at short (airborne) ranges.
 - At spaceborne ranges, `fp32` is demonstrably degraded while `mixed` and `float_float` hold. This test exists to make the platform dependence *visible* rather than folklore, so a caller choosing `fp32` for speed at long range sees it fail rather than shipping a quietly defocused product.
 - `taylor` matches `mixed` at airborne geometry and is exercised at the aperture extent where its expansion is least accurate.
 
@@ -315,7 +315,7 @@ The anchor, and the operator with the most contract surface.
 - **End-to-end, simulator.** A scene of known point targets → CPHD → the full wave-one chain → an image whose targets sit at the right places with the predicted impulse responses.
 - **End-to-end, real data.** An Umbra collection → the chain → an image whose geometry matches the delivered SICD. Asserts convention correctness, not pixel equality.
 - **`[live]` override behavior.** Overriding a live parameter mid-stream changes the output accordingly and warns only on a genuine rebuild, reusing cached configurations. Geometry overrides additionally reset the accumulator.
-- **Precision.** Single and double instantiations agree within their tolerances — a separate axis from `precision_mode`.
+- **Precision.** Single and double instantiations agree within their tolerances — a separate axis from `backend`.
 - **Memory spaces.** Operators accept device, managed and pinned-host tensors and reject pageable host input with a clear error; outputs are device memory. `CPHDReaderOp` is the sanctioned exception, reading host memory and producing device memory.
 - **Determinism.** A fixed seed and a fixed pulse batching reproduce identical images. This is stronger than the FMCW requirement, because accumulation order is a new way to lose it: batching the same aperture differently must not change the result beyond floating-point reassociation.
 - **Coordinate-frame rejection is narrower than it first looks**, and is tested only where a second frame genuinely exists. **An operator holds two frames only where one arrives on a port:** `coordinate_frame` is otherwise one parameter, and `positions` and `sample_points` are plain tensors carrying no frame identity (invariant 1), so there is no in-operator pairing to check and none is asserted.

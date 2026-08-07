@@ -216,7 +216,7 @@ Mirrors [TESTING.md](TESTING.md), with the data each tier draws on named.
 | Unit | Inline tensors | Closed-form; no simulator involved |
 | Integration | Generated smoke CPHD | Metrics against the analytic sidecar |
 | Demo | Capped synthetic scene, or a public pull | Visual, and SICD geometry sanity |
-| Validation | Real collections — the Atlanta 1° frame against the offline MatX golden | Conventions, and `precision_mode` accuracy |
+| Validation | Real collections — the Atlanta 1° frame against the offline MatX golden | Conventions, and `backend` accuracy |
 
 Smoke stays fully synthetic and generates in seconds; no CI job pulls public data by default. The validation tier is where the parity golden lives, and it is the only tier that answers "is this right" rather than "is this consistent with itself".
 
