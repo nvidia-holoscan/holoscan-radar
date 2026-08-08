@@ -10,12 +10,13 @@ are wrong, every downstream assertion is wrong in the same direction and all
 of them still pass.
 
 So the assertion here is not that the simulator is self-consistent — it is
-that an *independent* implementation, the reference backprojector below,
-finds the targets where the sidecar says they are. That is the analytic
-tautology guard `TESTING.md` asks for, applied to the simulator itself, and
-it is also the reference `BackprojectionOp` will be measured against.
+that an *independent* implementation finds the targets where the sidecar says
+they are. That implementation is `tools/sar_image`, which shares no code with
+the simulator; it is the analytic tautology guard `TESTING.md` asks for,
+applied to the simulator itself, and the reference `BackprojectionOp` will be
+measured against.
 
-Host-only and GPU-free: none of this touches Holoscan.
+Uses the GPU through the reference backprojector, but touches no Holoscan.
 """
 
 from __future__ import annotations
@@ -27,20 +28,22 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-_SIM_ROOT = Path(__file__).resolve().parents[3] / "tools" / "sar_sim"
-if str(_SIM_ROOT) not in sys.path:
-    sys.path.insert(0, str(_SIM_ROOT))
+_TOOLS = Path(__file__).resolve().parents[3] / "tools"
+for _tool in (_TOOLS / "sar_sim", _TOOLS / "sar_image"):
+    if str(_tool) not in sys.path:
+        sys.path.insert(0, str(_tool))
 
 # sarpy/sarkit and pyyaml are confined to the generate path and are not
 # module runtime dependencies, so skip rather than fail where they are absent.
 pytest.importorskip("yaml", reason="sar_sim recipes are YAML")
+pytest.importorskip("cupy", reason="synthesis and formation both run on the GPU")
 skcphd = pytest.importorskip("sarkit.cphd", reason="sar_sim writes CPHD via sarkit")
 
+from sar_image import backproject  # noqa: E402
 from sar_sim import generate, load_recipe  # noqa: E402
-from sar_sim.geometry import SPEED_OF_LIGHT  # noqa: E402
 
-SMOKE_RECIPE = _SIM_ROOT / "recipes" / "mode01_smoke.yaml"
-DEMO_RECIPE = _SIM_ROOT / "recipes" / "mode01.yaml"
+SMOKE_RECIPE = _TOOLS / "sar_sim" / "recipes" / "mode01_smoke.yaml"
+DEMO_RECIPE = _TOOLS / "sar_sim" / "recipes" / "mode01.yaml"
 
 
 @pytest.fixture(scope="module")
@@ -58,54 +61,6 @@ def read_cphd(path: Path):
         reader = skcphd.Reader(handle)
         channel_id = reader.metadata.xmltree.findtext("{*}Data/{*}Channel/{*}Identifier")
         return reader.read_signal(channel_id), reader.read_pvps(channel_id)
-
-
-def backproject(signal, pvps, lattice, *, oversample=8):
-    """A plain time-domain backprojector, written to be obviously correct.
-
-    Deliberately not the operator's algorithm and deliberately not fast: it
-    exists to be an independent statement of the same geometry, so it stays
-    a literal transcription of "compress in range, then sum each pulse's
-    contribution at the delay each pixel implies".
-    """
-    num_samples = signal.shape[1]
-    padded = num_samples * oversample
-    # Matching the simulator's convention: the positive-exponent transform,
-    # which numpy spells ifft. Using fft here mirrors the image.
-    compressed = np.fft.ifft(signal, n=padded, axis=1) * padded
-
-    sc0 = float(pvps["SC0"][0])
-    range_step = SPEED_OF_LIGHT / (2.0 * padded * float(pvps["SCSS"][0]))
-
-    origin = np.array(lattice["origin"])
-    axis_v = np.array(lattice["axis_v"])
-    axis_u = np.array(lattice["axis_u"])
-    spacing_v, spacing_u = lattice["spacing"]
-    num_v, num_u = lattice["counts"]
-
-    grid_v = np.arange(num_v)[:, None, None] * spacing_v * axis_v[None, None, :]
-    grid_u = np.arange(num_u)[None, :, None] * spacing_u * axis_u[None, None, :]
-    pixels = (origin + grid_v + grid_u).reshape(-1, 3)
-
-    image = np.zeros(pixels.shape[0], dtype=complex)
-    for pulse in range(signal.shape[0]):
-        apc = pvps["TxPos"][pulse]
-        srp = pvps["SRPPos"][pulse]
-        delta_r = np.linalg.norm(pixels - apc, axis=1) - np.linalg.norm(srp - apc)
-        index = delta_r / range_step
-        low = np.floor(index).astype(int)
-        frac = index - low
-        sample = (
-            compressed[pulse][low % padded] * (1.0 - frac)
-            + compressed[pulse][(low + 1) % padded] * frac
-        )
-        # Undo the carrier phase factored out by the range transform. The
-        # demodulation frequency is SC0, the first sample's frequency, not
-        # the band centre — that pairing is set by the frequency axis the
-        # transform ran over.
-        image += sample * np.exp(1j * 4.0 * np.pi * sc0 * delta_r / SPEED_OF_LIGHT)
-
-    return image.reshape(num_v, num_u)
 
 
 def test_recipes_load_and_are_consistent():
@@ -174,8 +129,7 @@ def test_backprojection_finds_targets_where_the_sidecar_says(smoke_fixture):
         offset = np.unravel_index(int(np.argmax(patch)), patch.shape)
         found = (v0 + offset[0], u0 + offset[1])
         assert found == (expected_v, expected_u), (
-            f"{target['name']} peaked at {found}, sidecar predicted "
-            f"{(expected_v, expected_u)}"
+            f"{target['name']} peaked at {found}, sidecar predicted " f"{(expected_v, expected_u)}"
         )
 
     # Relative brightness tracks the authored amplitudes. The tolerance is

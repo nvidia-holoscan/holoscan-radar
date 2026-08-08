@@ -4,7 +4,7 @@
 
 """Generate a CPHD fixture and its ground-truth sidecar from a recipe.
 
-    python3 generate_cphd.py recipes/mode01_smoke.yaml -o /tmp/sar_fixtures
+python3 generate_cphd.py recipes/mode01_smoke.yaml -o /tmp/sar_fixtures
 """
 
 from __future__ import annotations

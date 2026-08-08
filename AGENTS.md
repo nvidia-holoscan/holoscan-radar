@@ -97,6 +97,7 @@ Amending an invariant **further** is a beyond-SAR contract change: see the *Docs
 | `operators/sar/` | SAR image-formation operators (backprojection, autofocus) — scaffolded, filling in demo order |
 | `operators/io/` | Standard-format readers/writers (CPHD, SICD) + `TensorDumpOp`; separate group so the XML/NITF deps sit behind their own `OP_<name>` gates |
 | `tools/sar_sim/` | In-repo public SAR simulator: recipes → CPHD + ground-truth sidecar. Python-only; `sarpy`/`sarkit` are confined here and nothing in the build links against them |
+| `tools/sar_image/` | Reference cupy backprojector + offline PNG renderer. Shares no code with `sar_sim` on purpose — it is the independent implementation the sidecar's predicted pixels are checked against |
 | `applications/fmcw_siso/` | Example SISO FMCW pipeline (C++ + Python Holoviz) |
 | `applications/fmcw_simo/` | Sparse SIMO angle-then-cluster demo (C++ + Python) |
 | `applications/fmcw_mimo/` | MIMO TDM/DDM demo (C++ + Python) |

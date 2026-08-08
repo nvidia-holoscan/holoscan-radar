@@ -55,8 +55,9 @@ Two things guard it, and it is worth knowing what each does *not* cover:
 - **The generate-time self-check** compresses one pulse and confirms each
   target lands at its predicted delay. It catches a disagreement between the
   phase model and the declared `SGN` — an internal inconsistency.
-- **`tests/python/sar/test_sar_sim.py`** backprojects the fixture with an
-  independent reference implementation and asserts the targets land on the
+- **`tests/python/sar/test_sar_sim.py`** backprojects the fixture with
+  [`tools/sar_image`](../sar_image/README.md), an independent implementation
+  sharing no code with this one, and asserts the targets land on the
   sidecar's predicted pixels. That covers the whole chain: phase sign, `SGN`,
   image axes, and the ground-range projection.
 
@@ -81,6 +82,21 @@ tools/sar_sim/
 
 `sarpy` / `sarkit` are confined to this directory. No operator, test binary,
 or application links against them.
+
+## GPU
+
+Phase-history synthesis runs on the GPU through cupy, which is what makes a
+2048-pulse collection a sub-second job. The generate-time self-check stays on
+the host deliberately: it costs milliseconds either way, and checking a GPU
+result with a host implementation means a fault in one stack is not
+reproduced by the other.
+
+The fixtures are unchanged by this — synthesis accumulates in float64 and
+casts to `complex64` once at the end, which rounds away the last-ulp
+differences between host and device transcendentals, so a fixture generated
+either way is bit-identical. `test_regeneration_is_deterministic` still
+holds, and cross-platform stability remains the open question it already was
+in [`INPUT_DATA.md`](../../docs/planning/SAR/INPUT_DATA.md).
 
 ## Not here yet
 

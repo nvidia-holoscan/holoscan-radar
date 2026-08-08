@@ -168,9 +168,7 @@ def build_geometry(
     # timestamps are shifted.
     tx_time = np.arange(num_pulses, dtype=float) * pri_s
     time_from_closest_approach = tx_time - 0.5 * (num_pulses - 1) * pri_s
-    apc_ecef = closest_approach + np.outer(
-        time_from_closest_approach * velocity_m_s, track_axis
-    )
+    apc_ecef = closest_approach + np.outer(time_from_closest_approach * velocity_m_s, track_axis)
     apc_velocity = np.tile(velocity_m_s * track_axis, (num_pulses, 1))
 
     return CollectionGeometry(

@@ -7,6 +7,10 @@
 # sarpy pulls in sarkit, which is what actually writes the CPHD; sarpy is
 # named because it is the library the data plan committed to and the one the
 # subsetter will use for the public collections.
+#
+# cupy is not pinned here: pick the wheel matching your CUDA major version
+# (cupy-cuda12x / cupy-cuda13x). It is already present in the Holoscan
+# container, and a CUDA-capable GPU is a hard dependency of this module.
 numpy>=1.24
 pyyaml>=6.0
 sarpy>=2.0

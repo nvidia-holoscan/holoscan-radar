@@ -28,10 +28,16 @@ target lands at its predicted delay bin, which catches an internal
 inconsistency between this model and the declared ``SGN``. Agreement with the
 *outside world* is not something a self-consistent simulator can establish,
 and is left to the phase 2 comparison against a real collection.
+
+Synthesis runs on the GPU; the self-check deliberately does not. It is one
+pulse and costs milliseconds either way, and running it on a different array
+stack than the thing it checks means a fault in one is not reproduced by the
+other.
 """
 
 from __future__ import annotations
 
+import cupy as cp
 import numpy as np
 
 from .geometry import SPEED_OF_LIGHT, CollectionGeometry
@@ -40,7 +46,7 @@ from .recipe import Recipe
 # Pulses per synthesis chunk. Bounds the (pulses x targets x samples)
 # intermediate; the chunk size only trades memory for loop overhead and
 # changes no result.
-_PULSE_CHUNK = 256
+_PULSE_CHUNK = 1024
 
 
 def frequency_axis(recipe: Recipe) -> np.ndarray:
@@ -72,13 +78,15 @@ def target_reflectivity(recipe: Recipe) -> np.ndarray:
     return amplitude * np.exp(1j * phase)
 
 
-def differential_range(
-    apc_ecef: np.ndarray, srp_ecef: np.ndarray, targets_ecef: np.ndarray
-) -> np.ndarray:
-    """Per-pulse, per-target differential range in metres, (pulses, targets)."""
-    to_target = targets_ecef[np.newaxis, :, :] - apc_ecef[:, np.newaxis, :]
+def differential_range(apc_ecef, srp_ecef, targets_ecef, xp=np):
+    """Per-pulse, per-target differential range in metres, (pulses, targets).
+
+    Array-module agnostic so the GPU synthesis path and the host self-check
+    below can share one statement of the geometry.
+    """
+    to_target = targets_ecef[None, :, :] - apc_ecef[:, None, :]
     to_srp = srp_ecef - apc_ecef
-    return np.linalg.norm(to_target, axis=2) - np.linalg.norm(to_srp, axis=1)[:, np.newaxis]
+    return xp.linalg.norm(to_target, axis=2) - xp.linalg.norm(to_srp, axis=1)[:, None]
 
 
 def synthesize(
@@ -86,17 +94,23 @@ def synthesize(
 ) -> np.ndarray:
     """Synthesize the (num_pulses, num_samples) phase-history array.
 
+    Runs on the GPU: the work is one complex exponential per
+    (pulse, target, sample), which is millions of independent transcendentals
+    and nothing else. Returned as a host array because the CPHD writer takes
+    one.
+
     Phase is accumulated in float64 and cast once at the end: the argument
     reaches tens of thousands of radians for a realistic X-band geometry, and
     a float32 accumulation there loses the fractional part that carries all
     the information.
     """
-    freqs = frequency_axis(recipe)
-    targets = target_positions_ecef(recipe, geometry)
-    reflectivity = target_reflectivity(recipe)
+    freqs = cp.asarray(frequency_axis(recipe))
+    targets = cp.asarray(target_positions_ecef(recipe, geometry))
+    reflectivity = cp.asarray(target_reflectivity(recipe))
     # Spotlight: the antenna stares at the IARP, so the SRP is fixed for the
     # whole collection. That is what makes `SRPFixed = true` honest.
-    srp = geometry.iarp_ecef
+    srp = cp.asarray(geometry.iarp_ecef)
+    apc = cp.asarray(geometry.apc_ecef)
 
     num_pulses = geometry.num_pulses
     signal = np.zeros((num_pulses, freqs.size), dtype=dtype)
@@ -104,10 +118,10 @@ def synthesize(
 
     for start in range(0, num_pulses, _PULSE_CHUNK):
         stop = min(start + _PULSE_CHUNK, num_pulses)
-        delta_r = differential_range(geometry.apc_ecef[start:stop], srp, targets)
-        phase = scale * delta_r[:, :, np.newaxis] * freqs[np.newaxis, np.newaxis, :]
-        chunk = np.exp(1j * phase) * reflectivity[np.newaxis, :, np.newaxis]
-        signal[start:stop] = chunk.sum(axis=1).astype(dtype)
+        delta_r = differential_range(apc[start:stop], srp, targets, xp=cp)
+        phase = scale * delta_r[:, :, None] * freqs[None, None, :]
+        chunk = cp.exp(1j * phase) * reflectivity[None, :, None]
+        signal[start:stop] = cp.asnumpy(chunk.sum(axis=1).astype(dtype))
 
     return signal
 

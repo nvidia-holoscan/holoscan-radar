@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Reference-formation path only. Nothing here is a runtime dependency of the
+# operators, the applications, or the C++ test suite.
+#
+# cupy is not pinned: pick the wheel matching your CUDA major version
+# (cupy-cuda12x / cupy-cuda13x). It is already present in the Holoscan
+# container, and a CUDA-capable GPU is a hard dependency of this module.
+#
+# sarkit reads the CPHD; matplotlib only renders the PNG.
+matplotlib>=3.7
+numpy>=1.24
+sarkit>=1.0

@@ -98,8 +98,12 @@ def build_pvps(recipe: Recipe, geometry: CollectionGeometry) -> np.ndarray:
     # Monostatic and idealized: transmit and receive share the phase centre
     # and the pulse time. A recipe that wanted a bistatic or
     # stop-and-go-violating collection would have to say so, and none does.
-    dtype = np.dtype([(name, "f8" if fmt != "I8" else "i8", (words,) if words > 1 else ())
-                      for name, words, fmt in _PVP_LAYOUT])
+    dtype = np.dtype(
+        [
+            (name, "f8" if fmt != "I8" else "i8", (words,) if words > 1 else ())
+            for name, words, fmt in _PVP_LAYOUT
+        ]
+    )
     pvps = np.zeros(num_pulses, dtype=dtype)
 
     pvps["TxTime"] = geometry.tx_time
@@ -136,7 +140,6 @@ def build_pvps(recipe: Recipe, geometry: CollectionGeometry) -> np.ndarray:
 
 def build_xmltree(recipe: Recipe, geometry: CollectionGeometry) -> lxml.etree.ElementTree:
     """Construct the CPHD 1.1.0 XML for a synthetic collection."""
-    waveform = recipe.waveform
     freqs = frequency_axis(recipe)
     fx1, fx2 = float(freqs[0]), float(freqs[-1])
     sample_spacing = float(freqs[1] - freqs[0])
