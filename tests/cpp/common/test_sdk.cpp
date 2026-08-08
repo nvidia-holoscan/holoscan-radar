@@ -2,14 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // SDK glue (radar_common/sdk): the build-once config cache and the YAML
-// converters for enums, window specs, and waveform descriptors.
+// converters for enums, window specs, waveform descriptors, and the SAR
+// coordinate-frame and sample-geometry descriptors.
 
 #include <gtest/gtest.h>
 
 #include <stdexcept>
 #include <string>
 
+#include "radar_common/descriptors/coordinate_frame.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/lfm_waveform_descriptor.hpp"
+#include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
@@ -17,7 +21,12 @@
 namespace {
 
 using holoscan::radar::ConfigCache;
+using holoscan::radar::CoordinateFrame;
+using holoscan::radar::CoordinateFrameType;
+using holoscan::radar::Ellipsoid;
 using holoscan::radar::FMCWWaveformDescriptor;
+using holoscan::radar::LFMWaveformDescriptor;
+using holoscan::radar::SampleGeometry;
 using holoscan::radar::WindowSpec;
 using holoscan::radar::WindowType;
 
@@ -130,6 +139,92 @@ TEST(YamlConverters, WaveformDecodesBothSpellingsAndValidates) {
   EXPECT_EQ(YAML::convert<FMCWWaveformDescriptor>::encode(by_bandwidth)
                 .as<FMCWWaveformDescriptor>(),
             by_bandwidth);
+}
+
+TEST(YamlConverters, CoordinateFrameScalarShorthandMapAndRoundTrip) {
+  // The scalar shorthand is what a simulation or unit-test config writes:
+  // a scene_local frame with no geodetic anchor has nothing else to say.
+  const auto shorthand = YAML::Load("scene_local").as<CoordinateFrame>();
+  EXPECT_TRUE(shorthand.is_valid());
+  EXPECT_EQ(shorthand.frame(), CoordinateFrameType::kSceneLocal);
+  EXPECT_FALSE(shorthand.origin_llh().has_value());
+  EXPECT_EQ(shorthand.ellipsoid(), Ellipsoid::kWgs84);
+
+  const auto full = YAML::Load(
+                        "frame: ecef\n"
+                        "origin_llh: [33.6407, -84.4277, 313.0]\n"
+                        "epoch: 1234.5\n"
+                        "ellipsoid: wgs84\n")
+                        .as<CoordinateFrame>();
+  ASSERT_TRUE(full.origin_llh().has_value());
+  EXPECT_DOUBLE_EQ((*full.origin_llh())[1], -84.4277);
+  EXPECT_DOUBLE_EQ(*full.epoch(), 1234.5);
+  EXPECT_EQ(YAML::convert<CoordinateFrame>::encode(full).as<CoordinateFrame>(),
+            full);
+
+  // The frame family is required, and kUnspecified is not spellable.
+  EXPECT_THROW(YAML::Load("ellipsoid: wgs84").as<CoordinateFrame>(),
+               std::invalid_argument);
+  EXPECT_THROW(YAML::Load("unspecified").as<CoordinateFrame>(),
+               std::invalid_argument);
+  EXPECT_THROW(YAML::Load("frame: enu\norigin_llh: [0.0, 0.0]\n")
+                   .as<CoordinateFrame>(),
+               std::invalid_argument);
+}
+
+TEST(YamlConverters, SampleGeometryRequiresEveryFieldAndRoundTrips) {
+  const char* config =
+      "origin: [100.0, 200.0, 0.0]\n"
+      "axis_u: [1.0, 0.0, 0.0]\n"
+      "axis_v: [0.0, 1.0, 0.0]\n"
+      "spacing: [0.5, 0.25]\n"
+      "counts: [8, 4]\n";
+  const auto geometry = YAML::Load(config).as<SampleGeometry>();
+  EXPECT_TRUE(geometry.is_valid());
+  EXPECT_EQ(geometry.num_v(), 8);
+  EXPECT_EQ(geometry.num_u(), 4);
+  EXPECT_EQ(
+      YAML::convert<SampleGeometry>::encode(geometry).as<SampleGeometry>(),
+      geometry);
+
+  // There is no sensible default image lattice, so every field is required
+  // and a wrong-length sequence is named rather than silently padded. Both
+  // report as std::invalid_argument naming the field, not as yaml-cpp's
+  // zombie-node error.
+  EXPECT_THROW(YAML::Load("origin: [0.0, 0.0, 0.0]").as<SampleGeometry>(),
+               std::invalid_argument);
+  EXPECT_THROW(YAML::Load(
+                   "origin: [100.0, 200.0, 0.0]\n"
+                   "axis_u: [1.0, 0.0, 0.0]\n"
+                   "axis_v: [0.0, 1.0, 0.0]\n"
+                   "spacing: [0.5, 0.25]\n"
+                   "counts: [8]\n")
+                   .as<SampleGeometry>(),
+               std::invalid_argument);
+}
+
+TEST(YamlConverters, LFMWaveformMatchesTheFMCWConverter) {
+  // D24 keeps the two chirp descriptors separate but intends them to merge,
+  // so the converters must agree too — the same YAML must decode the same
+  // way through both.
+  const char* config =
+      "carrier_frequency: 9.6e9\n"
+      "bandwidth: 600.0e6\n"
+      "chirp_duration: 20.0e-6\n"
+      "sample_rate: 750.0e6\n"
+      "chirp_repetition_interval: 500.0e-6\n";
+  const auto lfm = YAML::Load(config).as<LFMWaveformDescriptor>();
+  const auto fmcw = YAML::Load(config).as<FMCWWaveformDescriptor>();
+  EXPECT_TRUE(lfm.is_valid());
+  EXPECT_DOUBLE_EQ(lfm.slope(), fmcw.slope());
+  EXPECT_DOUBLE_EQ(lfm.wavelength(), fmcw.wavelength());
+  EXPECT_EQ(YAML::convert<LFMWaveformDescriptor>::encode(lfm)
+                .as<LFMWaveformDescriptor>(),
+            lfm);
+
+  EXPECT_THROW(YAML::Load("carrier_frequency: 9.6e9\nchirp_duration: 20.0e-6")
+                   .as<LFMWaveformDescriptor>(),
+               std::invalid_argument);
 }
 
 }  // namespace

@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Mode 1 CI smoke fixture: the mode01 geometry and waveform, shrunk.
+#
+# Deliberately the same collection with smaller counts rather than a
+# different scene. A smoke fixture that differs in convention from the demo
+# fixture tests a pipeline nobody runs; this one exercises every axis, sign
+# and field the demo does, in under a second and a few megabytes.
+#
+# The coarse azimuth resolution (3 m, from the short 51 m aperture) is the
+# deliberate cost. Range resolution is unchanged at 0.25 m.
+
+name: mode01_smoke
+description: >-
+  Three-point smoke scene for CI. Same conventions as mode01 at 1/32 the
+  pulses and 1/4 the samples.
+
+waveform:
+  carrier_frequency: 9.6e9
+  bandwidth: 600.0e6
+  chirp_duration: 20.0e-6
+  sample_rate: 750.0e6
+  chirp_repetition_interval: 2.0e-3
+
+geometry:
+  iarp_lat_deg: 33.6407
+  iarp_lon_deg: -84.4277
+  iarp_hae_m: 313.0
+  slant_range_m: 10000.0
+  graze_deg: 30.0
+  heading_deg: 90.0
+  velocity_m_s: 100.0
+
+collection:
+  num_pulses: 256                 # 0.51 s dwell -> 51 m aperture
+  num_samples: 512                # 128 m unambiguous slant-range swath
+
+image_oversample: 2.0
+image_half_extent_m: 20.0
+
+targets:
+  - {name: origin, east_m: 0.0, north_m: 0.0, amplitude: 1.0}
+  - {name: range_pos, east_m: 0.0, north_m: 8.0, amplitude: 0.8}
+  - {name: azimuth_pos, east_m: 12.0, north_m: -6.0, amplitude: 0.5, phase_deg: 45.0}

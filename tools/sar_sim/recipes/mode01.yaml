@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Mode 1 (spotlight image) point-target fixture.
+#
+# An airborne X-band spotlight collection: broadside, right-looking, staring
+# at a fixed reference point. Airborne rather than spaceborne so the pulse
+# count, PRF and aperture length are all simultaneously realistic at a
+# fixture-sized collection — a satellite geometry needs either a six-figure
+# pulse count or an implausible PRF to reach the same integration angle.
+#
+# Resolutions this resolves to: 0.25 m slant range, 0.38 m azimuth. See the
+# generated sidecar for the exact figures and the lattice they imply.
+
+name: mode01
+description: >-
+  Five-point spotlight scene for mode 1 bring-up. Targets are placed off
+  centre on both image axes so a mirrored range or azimuth axis is visible
+  rather than plausible.
+
+waveform:
+  carrier_frequency: 9.6e9        # X-band, 3.12 cm
+  bandwidth: 600.0e6              # -> 0.25 m slant-range resolution
+  chirp_duration: 20.0e-6
+  sample_rate: 750.0e6
+  chirp_repetition_interval: 2.0e-3   # 500 Hz PRF
+
+geometry:
+  # Hartsfield-Jackson Atlanta, so this fixture and the pinned mode 1 public
+  # collection share a scene frame and the demo YAML can be reused.
+  iarp_lat_deg: 33.6407
+  iarp_lon_deg: -84.4277
+  iarp_hae_m: 313.0
+  slant_range_m: 10000.0
+  graze_deg: 30.0
+  heading_deg: 90.0               # flying east, looking south
+  velocity_m_s: 100.0
+
+collection:
+  num_pulses: 2048                # 4.09 s dwell -> 409 m aperture
+  num_samples: 2048               # 511 m unambiguous slant-range swath
+
+image_oversample: 2.0
+image_half_extent_m: 50.0
+
+targets:
+  # On the reference point: focuses to the exact centre pixel, which is the
+  # cheapest assertion in the fixture and the first one to break.
+  - {name: origin, east_m: 0.0, north_m: 0.0, amplitude: 1.0}
+  # Pure ground-range offset (north is the IAX direction for this heading).
+  - {name: range_pos, east_m: 0.0, north_m: 20.0, amplitude: 0.8}
+  # Pure azimuth offset.
+  - {name: azimuth_pos, east_m: 15.0, north_m: 0.0, amplitude: 0.8}
+  # Off-axis in both, and in the opposite quadrant, so a sign flip on either
+  # axis moves it somewhere no other target occupies.
+  - {name: off_axis, east_m: -25.0, north_m: -10.0, amplitude: 0.6}
+  # Non-unit amplitude and non-zero phase: the only target that can fail an
+  # assertion about complex reflectivity rather than about position.
+  - {name: dim_phased, east_m: 30.0, north_m: -35.0, amplitude: 0.25, phase_deg: 45.0}

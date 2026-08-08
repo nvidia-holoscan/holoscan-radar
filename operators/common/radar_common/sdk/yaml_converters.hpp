@@ -5,6 +5,9 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -13,9 +16,12 @@
 
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
+#include "radar_common/descriptors/coordinate_frame.hpp"
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/lfm_waveform_descriptor.hpp"
+#include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/reduce/reduction_enums.hpp"
@@ -95,6 +101,47 @@ inline constexpr MultiplexingScheme kAllMultiplexingSchemes[] = {
     MultiplexingScheme::kTdm,
     MultiplexingScheme::kDdm,
 };
+
+// kUnspecified is deliberately absent: it is the spec/Parameter default
+// that construction rejects, so it must not be spellable in YAML.
+inline constexpr CoordinateFrameType kAllCoordinateFrameTypes[] = {
+    CoordinateFrameType::kEcef,
+    CoordinateFrameType::kEnu,
+    CoordinateFrameType::kNed,
+    CoordinateFrameType::kSceneLocal,
+};
+
+inline constexpr Ellipsoid kAllEllipsoids[] = {
+    Ellipsoid::kWgs84,
+};
+
+// Decode a fixed-length YAML sequence into std::array, rejecting a missing
+// key or the wrong length by name. The descriptors' (3,) and (2,) fields are
+// arrays rather than vectors, so their length is a type invariant and not
+// something each decode site should re-check by hand.
+//
+// The IsDefined() check comes first because yaml-cpp's absent-key node is a
+// zombie that throws YAML::InvalidNode on almost any inspection, including
+// IsSequence(). Reaching it would report "invalid node; first invalid key"
+// instead of naming the descriptor and the field the config is missing.
+template <typename T, size_t N>
+std::array<T, N> decode_fixed(const YAML::Node& node, const char* type_name,
+                              const char* field) {
+  if (!node.IsDefined()) {
+    throw std::invalid_argument(std::string(type_name) + ": " + field +
+                                " is required");
+  }
+  if (!node.IsSequence() || node.size() != N) {
+    throw std::invalid_argument(std::string(type_name) + ": " + field +
+                                " must be a sequence of length " +
+                                std::to_string(N));
+  }
+  std::array<T, N> values{};
+  for (size_t i = 0; i < N; ++i) {
+    values[i] = node[i].as<T>();
+  }
+  return values;
+}
 
 inline constexpr ScoreMethod kAllScoreMethods[] = {
     ScoreMethod::kWeightedSum,
@@ -602,6 +649,178 @@ struct convert<holoscan::radar::TXSchedule> {
       schedule.chirp_tx_index = idx.as<std::vector<int64_t>>();
     }
     schedule.validate();
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::CoordinateFrameType> {
+  static Node encode(const holoscan::radar::CoordinateFrameType& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::CoordinateFrameType& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "CoordinateFrameType",
+        holoscan::radar::detail::kAllCoordinateFrameTypes);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::Ellipsoid> {
+  static Node encode(const holoscan::radar::Ellipsoid& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node, holoscan::radar::Ellipsoid& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "Ellipsoid",
+        holoscan::radar::detail::kAllEllipsoids);
+    return true;
+  }
+};
+
+// CoordinateFrame accepts either a bare frame-family scalar
+// (`coordinate_frame: ecef`) or a map. The scalar shorthand covers the
+// simulation and unit-test case, where scene_local carries no geodetic
+// anchor and there is nothing else to say.
+template <>
+struct convert<holoscan::radar::CoordinateFrame> {
+  static Node encode(const holoscan::radar::CoordinateFrame& frame) {
+    Node node;
+    node["frame"] = frame.frame();
+    if (frame.origin_llh().has_value()) {
+      node["origin_llh"] = std::vector<double>(frame.origin_llh()->begin(),
+                                               frame.origin_llh()->end());
+    }
+    if (frame.epoch().has_value()) {
+      node["epoch"] = *frame.epoch();
+    }
+    node["ellipsoid"] = frame.ellipsoid();
+    return node;
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::CoordinateFrame& frame) {
+    holoscan::radar::CoordinateFrameSpec spec;
+    if (node.IsScalar()) {
+      spec.frame = node.as<holoscan::radar::CoordinateFrameType>();
+      frame = holoscan::radar::CoordinateFrame(std::move(spec));
+      return true;
+    }
+    if (!node.IsMap()) {
+      return false;
+    }
+    if (const Node family = node["frame"]) {
+      spec.frame = family.as<holoscan::radar::CoordinateFrameType>();
+    }
+    if (const Node llh = node["origin_llh"]) {
+      spec.origin_llh = holoscan::radar::detail::decode_fixed<double, 3>(
+          llh, "CoordinateFrame", "origin_llh");
+    }
+    if (const Node epoch = node["epoch"]) {
+      if (!epoch.IsNull()) {
+        spec.epoch = epoch.as<double>();
+      }
+    }
+    if (const Node ellipsoid = node["ellipsoid"]) {
+      spec.ellipsoid = ellipsoid.as<holoscan::radar::Ellipsoid>();
+    }
+    // Throws std::invalid_argument naming the offending field on a frame
+    // block that omits `frame` or puts origin_llh out of range.
+    frame = holoscan::radar::CoordinateFrame(std::move(spec));
+    return true;
+  }
+};
+
+// SampleGeometry decodes through SampleGeometrySpec, so axis normalization
+// and the positive spacing / count checks apply to YAML configs identically
+// to native construction. Every field is required: there is no sensible
+// default image lattice.
+template <>
+struct convert<holoscan::radar::SampleGeometry> {
+  static Node encode(const holoscan::radar::SampleGeometry& geometry) {
+    Node node;
+    node["origin"] =
+        std::vector<double>(geometry.origin().begin(), geometry.origin().end());
+    node["axis_u"] =
+        std::vector<double>(geometry.axis_u().begin(), geometry.axis_u().end());
+    node["axis_v"] =
+        std::vector<double>(geometry.axis_v().begin(), geometry.axis_v().end());
+    node["spacing"] = std::vector<double>(geometry.spacing().begin(),
+                                          geometry.spacing().end());
+    node["counts"] = std::vector<int64_t>(geometry.counts().begin(),
+                                          geometry.counts().end());
+    return node;
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::SampleGeometry& geometry) {
+    if (!node.IsMap()) {
+      return false;
+    }
+    holoscan::radar::SampleGeometrySpec spec;
+    spec.origin = holoscan::radar::detail::decode_fixed<double, 3>(
+        node["origin"], "SampleGeometry", "origin");
+    spec.axis_u = holoscan::radar::detail::decode_fixed<double, 3>(
+        node["axis_u"], "SampleGeometry", "axis_u");
+    spec.axis_v = holoscan::radar::detail::decode_fixed<double, 3>(
+        node["axis_v"], "SampleGeometry", "axis_v");
+    spec.spacing = holoscan::radar::detail::decode_fixed<double, 2>(
+        node["spacing"], "SampleGeometry", "spacing");
+    spec.counts = holoscan::radar::detail::decode_fixed<int64_t, 2>(
+        node["counts"], "SampleGeometry", "counts");
+    geometry = holoscan::radar::SampleGeometry(std::move(spec));
+    return true;
+  }
+};
+
+// LFMWaveformDescriptor decodes through LFMWaveformSpec, mirroring the
+// FMCWWaveformDescriptor converter above field for field — the two types
+// are intended to converge (D24), and the converters diverging would be a
+// second thing to merge.
+template <>
+struct convert<holoscan::radar::LFMWaveformDescriptor> {
+  static Node encode(const holoscan::radar::LFMWaveformDescriptor& wf) {
+    Node node;
+    node["carrier_frequency"] = wf.carrier_frequency();
+    node["bandwidth"] = wf.bandwidth();
+    node["chirp_duration"] = wf.chirp_duration();
+    node["sample_rate"] = wf.sample_rate();
+    node["chirp_repetition_interval"] = wf.chirp_repetition_interval();
+    return node;
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::LFMWaveformDescriptor& wf) {
+    if (!node.IsMap()) {
+      return false;
+    }
+    holoscan::radar::LFMWaveformSpec spec;
+    if (const Node fc = node["carrier_frequency"]) {
+      spec.carrier_frequency = fc.as<double>();
+    }
+    if (const Node bw = node["bandwidth"]) {
+      spec.bandwidth = bw.as<double>();
+    }
+    if (const Node slope = node["chirp_slope"]) {
+      spec.chirp_slope = slope.as<double>();
+    }
+    if (const Node duration = node["chirp_duration"]) {
+      spec.chirp_duration = duration.as<double>();
+    }
+    if (const Node rate = node["sample_rate"]) {
+      spec.sample_rate = rate.as<double>();
+    }
+    if (const Node cri = node["chirp_repetition_interval"]) {
+      spec.chirp_repetition_interval = cri.as<double>();
+    }
+    // Throws std::invalid_argument naming the offending field on an
+    // incomplete or inconsistent waveform block.
+    wf = holoscan::radar::LFMWaveformDescriptor(std::move(spec));
     return true;
   }
 };

@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# SAR formation operators (see README.md in this directory). Each operator is
+# gated on its own OP_<name> option (defaulting to ${BUILD_ALL}).
+#
+# Empty for now: the group is scaffolded in phase 0 so that phase 1 adds
+# operators rather than build system. The standard-format readers and writers
+# are deliberately NOT here — they live in operators/io/ behind their own
+# gates, so a build that wants only the formation chain pays nothing for the
+# XML and NITF dependencies.

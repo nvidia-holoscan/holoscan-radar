@@ -52,6 +52,13 @@ struct FMCWWaveformSpec {
 // descriptor types (see operators/common/README.md). Precision-agnostic:
 // all scalars are double.
 //
+// CONVERGENCE NOTE (D24). LFMWaveformDescriptor carries these same fields
+// for the SAR chain, because FMCW and SAR both transmit linear-FM chirps
+// and this type is FMCW only in its name. The two are intended to merge
+// onto that name once the FMCW call sites can be migrated. Until then, a
+// field added here should be added there too, or the divergence recorded —
+// nothing fails to compile to announce it.
+//
 // Immutable value type: every derived quantity (slope <-> bandwidth,
 // wavelength) is computed and validated once at construction, so all
 // accessors are plain non-throwing reads and a constructed descriptor can

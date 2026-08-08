@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Generate-path only. Nothing here is a runtime dependency of the operators,
+# the applications, or the C++ test suite — see tools/sar_sim/README.md.
+#
+# sarpy pulls in sarkit, which is what actually writes the CPHD; sarpy is
+# named because it is the library the data plan committed to and the one the
+# subsetter will use for the public collections.
+numpy>=1.24
+pyyaml>=6.0
+sarpy>=2.0

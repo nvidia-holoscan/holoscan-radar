@@ -90,10 +90,13 @@ Amending an invariant **further** is a beyond-SAR contract change: see the *Docs
 | --- | --- |
 | `docs/planning/` | The specs above — the work queue and contract source of truth |
 | `docs/planning/OPERATOR_DEVELOPMENT.md` | Agent/human guidance for implementing operators (hot path, diagnosis, perf) |
-| `docs/planning/SAR/` | SAR modality contract (proposed, in review): API, workflows, testing, build plan; audience derivatives `PRACTITIONER_OVERVIEW.md` / `DEVELOPER_OVERVIEW.md` |
+| `docs/planning/SAR/` | SAR modality contract (accepted 2026-08-07): API, workflows, testing, build plan; audience derivatives `PRACTITIONER_OVERVIEW.md` / `DEVELOPER_OVERVIEW.md` |
 | `operators/` | Operator libraries, one dir per group, gated by `add_holohub_operator()` / `OP_<name>` CMake options |
 | `operators/common/` | Shared `radar_common` library: descriptors, window generation, point-target simulator, config cache, tensor/MatX utilities |
 | `operators/fmcw/` | FMCW signal-processing operators (+ future MIMO marshaling) |
+| `operators/sar/` | SAR image-formation operators (backprojection, autofocus) — scaffolded, filling in demo order |
+| `operators/io/` | Standard-format readers/writers (CPHD, SICD) + `TensorDumpOp`; separate group so the XML/NITF deps sit behind their own `OP_<name>` gates |
+| `tools/sar_sim/` | In-repo public SAR simulator: recipes → CPHD + ground-truth sidecar. Python-only; `sarpy`/`sarkit` are confined here and nothing in the build links against them |
 | `applications/fmcw_siso/` | Example SISO FMCW pipeline (C++ + Python Holoviz) |
 | `applications/fmcw_simo/` | Sparse SIMO angle-then-cluster demo (C++ + Python) |
 | `applications/fmcw_mimo/` | MIMO TDM/DDM demo (C++ + Python) |

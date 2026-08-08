@@ -103,6 +103,21 @@ enum class MultiplexingScheme {
   kDdm,
 };
 
+// Cartesian frame family declared by CoordinateFrame. The frame is a
+// boundary declaration only: formation kernels never read it.
+enum class CoordinateFrameType {
+  kUnspecified,  // Spec/Parameter default only; rejected at construction.
+  kEcef,
+  kEnu,
+  kNed,
+  kSceneLocal,
+};
+
+// Reference ellipsoid that CoordinateFrame::origin_llh is expressed against.
+enum class Ellipsoid {
+  kWgs84,
+};
+
 // Canonical spellings (lowercase snake_case, for logs and future YAML
 // configs).
 constexpr std::string_view to_string(WindowType type) {
@@ -217,6 +232,24 @@ constexpr std::string_view to_string(MultiplexingScheme scheme) {
     case MultiplexingScheme::kUnspecified: return "unspecified";
     case MultiplexingScheme::kTdm: return "tdm";
     case MultiplexingScheme::kDdm: return "ddm";
+  }
+  return "unknown";
+}
+
+constexpr std::string_view to_string(CoordinateFrameType frame) {
+  switch (frame) {
+    case CoordinateFrameType::kUnspecified: return "unspecified";
+    case CoordinateFrameType::kEcef: return "ecef";
+    case CoordinateFrameType::kEnu: return "enu";
+    case CoordinateFrameType::kNed: return "ned";
+    case CoordinateFrameType::kSceneLocal: return "scene_local";
+  }
+  return "unknown";
+}
+
+constexpr std::string_view to_string(Ellipsoid ellipsoid) {
+  switch (ellipsoid) {
+    case Ellipsoid::kWgs84: return "wgs84";
   }
   return "unknown";
 }

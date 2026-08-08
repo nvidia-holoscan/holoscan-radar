@@ -7,8 +7,11 @@
 
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
+#include "radar_common/descriptors/coordinate_frame.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/lfm_waveform_descriptor.hpp"
+#include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
@@ -45,6 +48,11 @@ inline void ensure_radar_arg_setters() {
     ArgumentSetter::ensure_type<DDMCodeDescriptor>();
     ArgumentSetter::ensure_type<RepresentativePolicy>();
     ArgumentSetter::ensure_type<ScoreMethod>();
+    ArgumentSetter::ensure_type<CoordinateFrame>();
+    ArgumentSetter::ensure_type<CoordinateFrameType>();
+    ArgumentSetter::ensure_type<Ellipsoid>();
+    ArgumentSetter::ensure_type<SampleGeometry>();
+    ArgumentSetter::ensure_type<LFMWaveformDescriptor>();
     return true;
   }();
   (void)registered;

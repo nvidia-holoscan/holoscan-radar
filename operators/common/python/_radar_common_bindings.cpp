@@ -5,6 +5,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <array>
 #include <complex>
 #include <cstdint>
 #include <optional>
@@ -15,9 +16,12 @@
 
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/coordinate_frame.hpp"
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/lfm_waveform_descriptor.hpp"
+#include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/reduce/reduction_enums.hpp"
@@ -104,6 +108,17 @@ PYBIND11_MODULE(_radar_common, m) {
       .value("UNSPECIFIED", MultiplexingScheme::kUnspecified)
       .value("TDM", MultiplexingScheme::kTdm)
       .value("DDM", MultiplexingScheme::kDdm);
+
+  // UNSPECIFIED is exposed because it is the CoordinateFrameSpec default a
+  // Python caller starts from; constructing a CoordinateFrame from it raises.
+  py::enum_<CoordinateFrameType>(m, "CoordinateFrameType")
+      .value("UNSPECIFIED", CoordinateFrameType::kUnspecified)
+      .value("ECEF", CoordinateFrameType::kEcef)
+      .value("ENU", CoordinateFrameType::kEnu)
+      .value("NED", CoordinateFrameType::kNed)
+      .value("SCENE_LOCAL", CoordinateFrameType::kSceneLocal);
+
+  py::enum_<Ellipsoid>(m, "Ellipsoid").value("WGS84", Ellipsoid::kWgs84);
 
   py::enum_<RepresentativePolicy>(m, "RepresentativePolicy")
       .value("PEAK", RepresentativePolicy::kPeak)
@@ -195,6 +210,78 @@ PYBIND11_MODULE(_radar_common, m) {
       .def("reference_samples", &FMCWWaveformDescriptor::reference_samples,
            py::return_value_policy::reference_internal);
 
+  py::class_<CoordinateFrameSpec>(m, "CoordinateFrameSpec")
+      .def(py::init<>())
+      .def_readwrite("frame", &CoordinateFrameSpec::frame)
+      .def_readwrite("origin_llh", &CoordinateFrameSpec::origin_llh)
+      .def_readwrite("epoch", &CoordinateFrameSpec::epoch)
+      .def_readwrite("ellipsoid", &CoordinateFrameSpec::ellipsoid);
+
+  py::class_<CoordinateFrame>(m, "CoordinateFrame")
+      .def(py::init<>())
+      .def(py::init<CoordinateFrameSpec>(), py::arg("spec"))
+      .def("is_valid", &CoordinateFrame::is_valid)
+      .def("frame", &CoordinateFrame::frame)
+      .def("origin_llh", &CoordinateFrame::origin_llh)
+      .def("epoch", &CoordinateFrame::epoch)
+      .def("ellipsoid", &CoordinateFrame::ellipsoid)
+      .def("compatible_with", &CoordinateFrame::compatible_with,
+           py::arg("other"));
+
+  py::class_<SampleGeometrySpec>(m, "SampleGeometrySpec")
+      .def(py::init<>())
+      .def_readwrite("origin", &SampleGeometrySpec::origin)
+      .def_readwrite("axis_u", &SampleGeometrySpec::axis_u)
+      .def_readwrite("axis_v", &SampleGeometrySpec::axis_v)
+      .def_readwrite("spacing", &SampleGeometrySpec::spacing)
+      .def_readwrite("counts", &SampleGeometrySpec::counts);
+
+  py::class_<SampleGeometry>(m, "SampleGeometry")
+      .def(py::init<>())
+      .def(py::init<SampleGeometrySpec>(), py::arg("spec"))
+      .def("is_valid", &SampleGeometry::is_valid)
+      .def("origin", &SampleGeometry::origin)
+      .def("axis_u", &SampleGeometry::axis_u)
+      .def("axis_v", &SampleGeometry::axis_v)
+      .def("spacing", &SampleGeometry::spacing)
+      .def("counts", &SampleGeometry::counts)
+      .def("num_v", &SampleGeometry::num_v)
+      .def("num_u", &SampleGeometry::num_u)
+      .def("num_samples", &SampleGeometry::num_samples)
+      .def("sample_position", &SampleGeometry::sample_position, py::arg("iv"),
+           py::arg("iu"));
+
+  py::class_<LFMWaveformSpec>(m, "LFMWaveformSpec")
+      .def(py::init<>())
+      .def_readwrite("carrier_frequency", &LFMWaveformSpec::carrier_frequency)
+      .def_readwrite("bandwidth", &LFMWaveformSpec::bandwidth)
+      .def_readwrite("chirp_slope", &LFMWaveformSpec::chirp_slope)
+      .def_readwrite("chirp_duration", &LFMWaveformSpec::chirp_duration)
+      .def_readwrite("sample_rate", &LFMWaveformSpec::sample_rate)
+      .def_readwrite("chirp_repetition_interval",
+                     &LFMWaveformSpec::chirp_repetition_interval)
+      .def_readwrite("reference_samples", &LFMWaveformSpec::reference_samples);
+
+  py::class_<LFMWaveformDescriptor>(m, "LFMWaveformDescriptor")
+      .def(py::init<>())
+      .def(py::init<LFMWaveformSpec>(), py::arg("spec"))
+      .def("is_valid", &LFMWaveformDescriptor::is_valid)
+      .def("carrier_frequency", &LFMWaveformDescriptor::carrier_frequency)
+      .def("bandwidth", &LFMWaveformDescriptor::bandwidth)
+      .def("slope", &LFMWaveformDescriptor::slope)
+      .def("chirp_duration", &LFMWaveformDescriptor::chirp_duration)
+      .def("sample_rate", &LFMWaveformDescriptor::sample_rate)
+      .def("chirp_repetition_interval",
+           &LFMWaveformDescriptor::chirp_repetition_interval)
+      .def("wavelength",
+           py::overload_cast<>(&LFMWaveformDescriptor::wavelength, py::const_))
+      .def("wavelength",
+           py::overload_cast<double>(&LFMWaveformDescriptor::wavelength,
+                                     py::const_),
+           py::arg("propagation_speed"))
+      .def("reference_samples", &LFMWaveformDescriptor::reference_samples,
+           py::return_value_policy::reference_internal);
+
   m.attr("DEFAULT_PROPAGATION_SPEED") = kDefaultPropagationSpeed;
 
   // Allocate a CUDA holoscan::Tensor (including zero-size shapes). Python's
@@ -258,5 +345,9 @@ PYBIND11_MODULE(_radar_common, m) {
     registry.add_emitter_receiver<RepresentativePolicy>(
         "RepresentativePolicy", true);
     registry.add_emitter_receiver<ScoreMethod>("ScoreMethod", true);
+    registry.add_emitter_receiver<CoordinateFrame>("CoordinateFrame", true);
+    registry.add_emitter_receiver<SampleGeometry>("SampleGeometry", true);
+    registry.add_emitter_receiver<LFMWaveformDescriptor>(
+        "LFMWaveformDescriptor", true);
   });
 }

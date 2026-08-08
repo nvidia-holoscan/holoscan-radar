@@ -12,6 +12,8 @@
 #   fmcw/             — FMCW signal processing (+ future MIMO marshaling)
 #   clustering/       — (future) clustering operators
 #   angle_estimation/ — (future) angle estimation operators
+#   sar/              — SAR image formation (backprojection, autofocus)
+#   io/               — standard-format readers/writers (CPHD, SICD) + dumps
 
 # The shared library is not gated: every operator group links against it.
 add_subdirectory(common)
@@ -29,6 +31,13 @@ add_subdirectory(clustering)
 
 # Angle-estimation operators (one add_holohub_operator() per operator inside).
 add_subdirectory(angle_estimation)
+
+# SAR formation operators (one add_holohub_operator() per operator inside).
+add_subdirectory(sar)
+
+# Standard-format I/O operators. Separate from sar/ so the XML and NITF
+# dependencies sit behind their own OP_<name> gates.
+add_subdirectory(io)
 
 # radar_app Python bindings — deferred here because applications/ is configured
 # before operators/, and pybind needs the radar_common CMake target.
