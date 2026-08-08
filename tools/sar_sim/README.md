@@ -106,5 +106,7 @@ in [`INPUT_DATA.md`](../../docs/planning/SAR/INPUT_DATA.md).
 - **Recipes for modes 2-5.** Mode 1 only, following the minimum-per-demo rule
   in [`SIGPROC_PLAN.md`](../../docs/planning/SAR/SIGPROC_PLAN.md).
 - **The public-collection subsetter**, which will live beside this tool and
-  share the `sarpy` dependency. It is a mode 1 demo prerequisite, not late
-  tooling, because the applications only ever read a local file.
+  share the `sarpy` dependency. It is a **mode 2** prerequisite: every
+  application reads a local file, and Houston at 110 GiB cannot be pulled
+  whole. Atlanta can — 28.59 GiB, read with `CPHDReaderOp.pulse_range` — so
+  mode 1 needs no pull tooling.
