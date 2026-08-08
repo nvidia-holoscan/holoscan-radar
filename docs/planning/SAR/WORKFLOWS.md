@@ -163,7 +163,7 @@ The chains below are built from seventeen operators, introduced here so the rest
 
 - `RVPRemovalOp` — removes the residual video phase that deramp-on-receive leaves behind.
 - `BandEqualizationOp` — corrects amplitude and phase taper across the band, completing phase history.
-- `RangeMatchedFilterOp` — turns direct-sampled pulses into phase history.
+- `RangeReferenceMultiplyOp` — turns direct-sampled pulses into phase history.
 - `SARRangeCompressionOp` — phase history to range profiles. Every branch reaches it.
 - `PhaseCorrectionOp` — applies a per-pulse phase to range profiles. Optional and stateless; how an autofocus estimate reaches a formation on a different geometry.
 
@@ -204,7 +204,7 @@ SAR data reaches the chain in one of three forms. They converge at **phase histo
 
 - **Deramped signal data** — a live radar that deramps on receive, or a recorded CRSD-like capture. Still carries residual video phase and any deramp reference bookkeeping, so it needs `RVPRemovalOp` and `BandEqualizationOp` before it is phase history.
 - **Phase history** — the compensated, deramped form. This is what CPHD files store and what the point-target simulator writes, so it is the **only ingress in wave one** and the one every test and demo runs through.
-- **Direct-sampled pulses** — a front end that digitizes the full return bandwidth rather than deramping. Common on spaceborne systems, where the range swath is large enough that deramp buys less. `RangeMatchedFilterOp` turns these into phase history.
+- **Direct-sampled pulses** — a front end that digitizes the full return bandwidth rather than deramping. Common on spaceborne systems, where the range swath is large enough that deramp buys less. `RangeReferenceMultiplyOp` turns these into phase history.
 
 The third case looks circular: direct-sampled pulses are time-domain, get matched-filtered into phase history, and are then transformed back to the range domain by range compression. The apparent round trip is not wasted work — the matched filter is naturally expressed in the frequency domain, and materialising phase history between the two is what makes the CPHD record tap available at that seam. The alternative, a fused direct-sample-to-range-profile operator, saves one buffer and forfeits the standard-format interchange point; the buffer is the cheaper of the two.
 
@@ -319,7 +319,7 @@ live radar (app source)   → signal_data (num_pulses, num_samples)
 
 ```text
 live radar (app source)   → pulses (num_pulses, num_samples)
-  → RangeMatchedFilterOp   → phase_history
+  → RangeReferenceMultiplyOp   → phase_history
   → SARRangeCompressionOp  → range_profiles
   → [ApertureManagerOp]    ← positions, reference_position  (app-computed)
                            → range_profiles + weight + control
@@ -424,7 +424,7 @@ flowchart TD
 flowchart TD
   classDef opt stroke-dasharray:4 3
   LIVE(("live radar<br>front end")) -->|"signal_data"| RVP["RVPRemovalOp"]
-  LIVE -->|"pulses"| RMF["RangeMatchedFilterOp"]
+  LIVE -->|"pulses"| RMF["RangeReferenceMultiplyOp"]
   RVP -->|"signal_data"| BEQ["BandEqualizationOp"]
   BEQ -->|"phase_history"| PH(["shared phase-history node"])
   RMF -->|"phase_history"| PH
@@ -534,12 +534,12 @@ On navigation *uncertainty* specifically: an unknown position error cannot be co
 
 Two things vary independently, so this is two tables rather than one. **Ingress branch** decides everything ahead of the shared phase-history node; **mode** decides everything after it. Any branch composes with any mode. This is the parameter-level view of *How the modes reach the operator chain* above, which gives the structural picture; the second table covers modes 1 through 4, where the configurations actually differ.
 
-| Ingress branch       | CPHD file                | Live deramped                         | Live direct-sampled    |
-| -------------------- | ------------------------ | ------------------------------------- | ---------------------- |
-| Source               | `CPHDReaderOp`           | app source                            | app source             |
-| Branch-entry stages  | none                     | `RVPRemovalOp` → `BandEqualizationOp` | `RangeMatchedFilterOp` |
-| Positions from       | the file                 | the application                       | the application        |
-| Announces a boundary | file end + end of stream | only where the source knows one       | same                   |
+| Ingress branch       | CPHD file                | Live deramped                         | Live direct-sampled        |
+| -------------------- | ------------------------ | ------------------------------------- | -------------------------- |
+| Source               | `CPHDReaderOp`           | app source                            | app source                 |
+| Branch-entry stages  | none                     | `RVPRemovalOp` → `BandEqualizationOp` | `RangeReferenceMultiplyOp` |
+| Positions from       | the file                 | the application                       | the application            |
+| Announces a boundary | file end + end of stream | only where the source knows one       | same                       |
 
 The boundary announcement is the reader's job on the CPHD path and is stamped as message metadata (**D22**); a live source announces only if it has a boundary to announce, which an unbounded radar does not.
 

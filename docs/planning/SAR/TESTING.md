@@ -143,7 +143,7 @@ Twelve of the seventeen contracted operators appear below. The five omitted — 
 - `nfft` oversampling adds bins and interpolates the peak — no added resolution, no added extent.
 - Leading batch axes preserved and processed independently.
 
-#### RangeMatchedFilterOp
+#### RangeReferenceMultiplyOp
 
 - A direct-sampled pulse containing a delayed replica → after the matched filter and the downstream range compression, a peak at the delay's range.
 - The output length is `nfft`, and an `nfft` below the wrap-free bound is rejected rather than silently producing circular contamination.

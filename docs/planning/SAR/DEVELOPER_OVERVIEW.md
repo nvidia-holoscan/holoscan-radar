@@ -89,7 +89,7 @@ Orientation only — contracts are in OPERATOR_API.
 
 **Ingress.** `CPHDReaderOp` → `phase_history`, `positions`, `reference_position` (+ optional `sample_axis` for writers). Live radar and CRSD are later waves.
 
-**To range profiles.** `SARRangeCompressionOp`. Optional later: deramp branch (`RVPRemovalOp`, `BandEqualizationOp`) or direct-sample (`RangeMatchedFilterOp`) into the same phase-history node.
+**To range profiles.** `SARRangeCompressionOp`. Optional later: deramp branch (`RVPRemovalOp`, `BandEqualizationOp`) or direct-sample (`RangeReferenceMultiplyOp`) into the same phase-history node.
 
 **Aperture vs image (the important split).**
 
