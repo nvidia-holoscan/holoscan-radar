@@ -33,6 +33,9 @@ throws / sits in `OPEN_ITEMS.md`.
       remains unfinished.
 - [ ] **Build wired** — group + operator `CMakeLists.txt`, `metadata.json`,
       group `README.md`, SPDX on all new files.
+- [ ] **New external dependency?** — license recorded and confirmed
+      Apache-2.0 compatible, gated, and declared (see **External
+      dependencies**). Most operators add none; skip if so.
 - [ ] **`setup()` complete** — single-entry `TensorMap` ports, `initialize()`
       arg setters, `[live]` override ports where required.
 - [ ] **`compute()` correct** — sticky overrides, rank-agnostic shapes,
@@ -135,6 +138,44 @@ throws / sits in `OPEN_ITEMS.md`.
       (implemented vs staged).
 - [ ] **Root `operators/CMakeLists.txt`** — enable the group/operator option.
 - [ ] **SPDX header** on every new source, CMake, and metadata file.
+
+---
+
+## External dependencies
+
+Applies only when an operator needs a library the module does not already
+link — `holoscan::core`, `radar_common`, and MatX are wired already, so most
+operators skip this section entirely.
+
+**This is a human gate.** CI runs only `pre-commit`, which lints our own
+sources and validates `metadata.json`; nothing inspects the terms of what we
+link, and the repo states no policy beyond its own Apache-2.0 `LICENSE`.
+
+- [ ] **Record the license** in the group `README.md` next to the install
+      command, and confirm it is compatible with our Apache-2.0 outbound
+      license. Permissive terms (Apache-2.0, MIT, BSD, zlib) are fine.
+- [ ] **Copyleft (GPL / LGPL) is a team decision before it lands** — it can
+      constrain how the module is distributed, so raise it in `OPEN_ITEMS.md`
+      and `TEAM_BLOCKED.md` rather than settling it in the build. Check what
+      the terms actually cover: a Debian `copyright` file often licenses its
+      own `debian/*` packaging under GPL while the library it packages is
+      permissive, and only the library's terms bind us.
+- [ ] **Gate it** behind the operator's `OP_<name>` option and link it
+      `PRIVATE`, naming it in no public header, so a build that leaves the
+      operator off never searches for it.
+- [ ] **Fail with a usable message** when it is absent — name the package to
+      install *and* the option to build without it. Bare
+      `find_path(... REQUIRED)` reports only the variable it could not set,
+      which tells a new developer neither.
+- [ ] **Debian package** — only if the operator is listed in
+      `pkg/CMakeLists.txt`, add the runtime library to `DEPENDS` in
+      `pkg/holoscan-radar/CMakeLists.txt`. Extend it as one comma-separated
+      string: `DEPENDS` is a single-value argument passed straight to
+      `CPACK_DEBIAN_PACKAGE_DEPENDS`, so a second quoted argument is silently
+      dropped and the `.deb` ships missing exactly what you meant to add.
+
+Exemplar: `operators/io/cphd_reader_op` — tinyxml2 under the zlib license, and
+the reason the `io` group exists behind its own gate.
 
 ---
 
