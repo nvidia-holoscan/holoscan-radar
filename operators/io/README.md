@@ -17,11 +17,26 @@ The grouping is by dependency, not by function: `CPHDReaderOp` is ingress and
 `CPHDWriterOp` is egress, and they are neighbors here because they parse and
 emit the same XML.
 
+**Build dependency: `tinyxml2`** (`apt-get install libtinyxml2-dev`), required
+only when `OP_cphd_reader_op` is on. It is linked `PRIVATE` and named by no
+public header, so it does not propagate to consumers.
+
+**When one of these operators joins the Debian package, add its library to
+`DEPENDS`.** `pkg/CMakeLists.txt` currently lists four FMCW operators and
+`fmcw_siso`, so nothing here ships today and
+`pkg/holoscan-radar/CMakeLists.txt` correctly declares only Holoscan. Adding
+`cphd_reader_op` to the package without adding `libtinyxml2-10` beside it
+would produce a `.deb` that installs and then fails to link — noted here
+because the two files are far apart and nothing connects them automatically.
+
+Extend it as one comma-separated string, `DEPENDS "holoscan (>= 4.3.0),
+libtinyxml2-10"`. `holohub_configure_deb` takes `DEPENDS` as a single-value
+argument and passes it straight to `CPACK_DEBIAN_PACKAGE_DEPENDS`, so a second
+quoted argument would be silently dropped rather than appended.
+
 ## Operators
 
-Nothing has landed yet. The group is scaffolded so that the first
-implementation phase adds operators rather than build system. Planned
-contents, contracted in
+`CPHDReaderOp` has landed; the rest are planned. Contracted in
 [`docs/planning/SAR/OPERATOR_API.md`](../../docs/planning/SAR/OPERATOR_API.md):
 
 | Operator | In → Out | Function |
@@ -33,11 +48,23 @@ contents, contracted in
 
 ## Implementation status
 
-Empty. `CPHDReaderOp` and `TensorDumpOp` land first — the reader gates
-everything downstream, since without it there is no data to test with, and the
-dump operator is how intermediates are inspected while the rest is built (and
-is the mode 1 demo's first sink). `CPHDWriterOp` and the round-trip test it
-enables are deliberately deferred; see
+**`CPHDReaderOp` — landed, for the mode 1 subset.** All seven output ports,
+`pulse_range` selection, short final batches, and the `end_of_stream`
+announcement work; the host-side parser (`cphd_reader_op/cphd_file.hpp`) reads
+the ASCII header, the XML metadata, the declared PVP layout, and the signal
+block. Per `SIGPROC_PLAN.md`'s minimum-per-demo rule it implements only what
+the mode 1 collection needs — a single file, one channel, `CF8` samples, no
+`AmpSF`, FX domain. **A reader that reads one collection is not a reader that
+reads CPHD**: multi-file `path`, `CI4`/`CI2`, `AmpSF` and TOA domain are mode 3
+obligations, and each throws a clear error rather than guessing until then. See
+[`cphd_reader_op/OPEN_ITEMS.md`](cphd_reader_op/OPEN_ITEMS.md).
+
+`TensorDumpOp` is next — it is how intermediates are inspected while the rest
+is built, and it is the mode 1 demo's first sink. `CPHDWriterOp` and the
+round-trip test it enables are deliberately deferred; see
 [`SIGPROC_PLAN.md`](../../docs/planning/SAR/SIGPROC_PLAN.md) →
 *Work no demo forces* for what that costs and what triggers pulling it
 forward.
+
+Python bindings are not written yet. The mode 1 demo is a C++ application, so
+nothing forces them; they land with the first Python consumer.

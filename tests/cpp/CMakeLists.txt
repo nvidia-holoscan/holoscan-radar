@@ -51,6 +51,23 @@ function(radar_add_statistical_test NAME)
     gtest_discover_tests(${_tgt} PROPERTIES LABELS "statistical")
 endfunction()
 
+# The SAR fixtures are generated, never committed
+# (docs/planning/SAR/INPUT_DATA.md -> Policy), so generating them is a CTest
+# setup fixture rather than a build step: a missing Python dependency then
+# fails one visible test instead of breaking the build for everyone, and the
+# tests that need the file are held back rather than silently skipped.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(SAR_FIXTURE_DIR ${CMAKE_CURRENT_BINARY_DIR}/sar_fixtures)
+add_test(NAME sar_generate_fixtures
+    COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${PROJECT_SOURCE_DIR}/tools/sar_sim
+        ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tools/sar_sim/generate_cphd.py
+        ${PROJECT_SOURCE_DIR}/tools/sar_sim/recipes/mode01_smoke.yaml
+        --output-dir ${SAR_FIXTURE_DIR})
+set_tests_properties(sar_generate_fixtures PROPERTIES
+    FIXTURES_SETUP sar_fixtures
+    LABELS "unit")
+
 radar_add_test(common/test_window)
 radar_add_test(common/test_steering_weights_device
     holoscan::radar_common_steering)
@@ -80,6 +97,19 @@ radar_add_test(fmcw/test_virtual_array_assembly
     holoscan::virtual_array_assembly_op)
 radar_add_test(fmcw/test_mimo_coherent_compensation
     holoscan::mimo_coherent_compensation_op)
+# Declared explicitly rather than via radar_add_test: it needs the generated
+# fixture's location as a compile definition and the CTest fixture dependency
+# that produces it.
+add_executable(test_cphd_reader io/test_cphd_reader.cpp)
+target_link_libraries(test_cphd_reader PRIVATE
+    radar_test_utils
+    GTest::gtest_main
+    holoscan::cphd_reader_op)
+target_compile_definitions(test_cphd_reader PRIVATE
+    SAR_FIXTURE_DIR="${SAR_FIXTURE_DIR}")
+gtest_discover_tests(test_cphd_reader PROPERTIES
+    LABELS "unit"
+    FIXTURES_REQUIRED sar_fixtures)
 # Cross-family end-to-end integration test lives at the tests/cpp root.
 radar_add_integration_test(test_pipeline
     holoscan::fmcw_range_processor_op
