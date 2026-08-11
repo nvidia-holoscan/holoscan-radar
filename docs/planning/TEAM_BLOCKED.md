@@ -75,7 +75,30 @@ Settled decisions. Capabilities deliberately deferred out of the current scope
 (e.g. staggered TDM, sum-set holey subarray smoothing) are tracked under
 STATUS.md → Roadmap, not here.
 
-**None currently for FMCW.** **R1 closed on 2026-08-07 — the SAR contract was
+**One FMCW-visible item, from SAR work: `TensorDumpOp` is not a class
+template.** Landed 2026-08-10 and **accepted by the developer in session**, so
+it blocks nothing; it is here because the convention it departs from is
+module-wide and this is where FMCW owners see such things. Every other operator
+is `template <typename T>` with `T ∈ {float, double}`, as
+[NEW_OPERATOR_CHECKLIST.md](NEW_OPERATOR_CHECKLIST.md) → *`setup()`* states
+flatly. `TensorDumpOp` is a plain class because
+[SAR/OPERATOR_API.md](SAR/OPERATOR_API.md) → *TensorDumpOp* calls it
+"deliberately untyped … the one operator in the module with no dtype pairing":
+it is a sink, so invariant 3's precision pairing has nothing to pair, and the
+dtype is read off the arriving tensor to write into the `npy` header rather than
+assumed. Templating it anyway would let `TensorDumpOp<float>` write a
+`complex128` dump perfectly well — a type argument that lies. **What the team is
+being asked to ratify is the general rule, not this operator:** the proposed
+reading is that invariant 3 binds operators that *emit* tensors, and a pure sink
+with no dtype constraint is outside it. If the team prefers the invariant read
+literally, the fix is a vestigial template parameter here, not a contract
+change. Detail in
+[tensor_dump_op/OPEN_ITEMS.md](../../operators/io/tensor_dump_op/OPEN_ITEMS.md)
+item 1. (The same operator also has no `<op>_stage.hpp`; that is not an
+exception — the three-file split is specified for GPU operators and this one has
+no kernels, only a `cudaMemcpyAsync`.)
+
+**R1 closed on 2026-08-07 — the SAR contract was
 accepted and SAR is now in implementation**, which ratified D1–D24 with it.
 [SAR/TEAM_BLOCKED.md](SAR/TEAM_BLOCKED.md) keeps that list, enumerated so
 focused review reaches the two dozen places the call could have gone the other

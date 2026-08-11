@@ -93,7 +93,12 @@ throws / sits in `OPEN_ITEMS.md`.
 - [ ] **Data ports:** single-entry `holoscan::TensorMap` in/out; port name is
       the contract (see `operators/common/README.md`).
 - [ ] **Precision:** `template <typename T>` with `T ∈ {float, double}` only;
-      `static_assert` in the header.
+      `static_assert` in the header. **One sanctioned exception exists** —
+      `TensorDumpOp`, a pure sink the contract calls *deliberately untyped*, is
+      a plain class. Do not read that as the rule being optional: it applies
+      because there is no output for the precision to pair with. Any second
+      exception needs the same route — contract text asking for it, plus a row
+      in [TEAM_BLOCKED.md](TEAM_BLOCKED.md).
 - [ ] **Parameters** match `OPERATOR_API.md` names, types, and defaults.
 - [ ] **`[live]` parameters:** declare with `spec.param(...)`, then
       `add_override_port<T>(spec, "name")` from `override_param.hpp`.

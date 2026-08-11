@@ -36,7 +36,8 @@ quoted argument would be silently dropped rather than appended.
 
 ## Operators
 
-`CPHDReaderOp` has landed; the rest are planned. Contracted in
+`CPHDReaderOp` and `TensorDumpOp` have landed; the rest are planned.
+Contracted in
 [`docs/planning/SAR/OPERATOR_API.md`](../../docs/planning/SAR/OPERATOR_API.md):
 
 | Operator | In → Out | Function |
@@ -44,23 +45,68 @@ quoted argument would be silently dropped rather than appended.
 | `CPHDReaderOp<T>` | — → `phase_history`, `positions`, `reference_position` (+ optional descriptors) | Streams pulses from a CPHD file, announcing the stream boundary |
 | `CPHDWriterOp<T>` | `phase_history`, `positions` → — | Records phase history; paired with the reader it gives a round-trip test |
 | `SICDWriterOp<T>` | `image` → — | Writes the formed image as a SICD product |
-| `TensorDumpOp<T>` | any tensor → — | Dumps a tensor to disk for offline inspection |
+| `TensorDumpOp` | any tensor → — | Dumps a tensor to disk for offline inspection |
+
+**`TensorDumpOp` carries no `<T>`, and it is the only operator here that
+does not.** The contract calls it *deliberately untyped* — "the one operator in
+the module with no dtype pairing" — because it exists to inspect a port whose
+contract is still being written, and it reads the dtype off the tensor to
+record in the `npy` header. A precision template would have nothing to pair
+(there is no output) and would let `TensorDumpOp<float>` write a `complex128`
+dump correctly, which is a worse lie than no template. This table said
+`TensorDumpOp<T>` before the operator was implemented; that was a planning
+placeholder, not a second reading of the contract.
 
 ## Implementation status
 
-**`CPHDReaderOp` — landed, for the mode 1 subset.** All seven output ports,
-`pulse_range` selection, short final batches, and the `end_of_stream`
-announcement work; the host-side parser (`cphd_reader_op/cphd_file.hpp`) reads
-the ASCII header, the XML metadata, the declared PVP layout, and the signal
-block. Per `SIGPROC_PLAN.md`'s minimum-per-demo rule it implements only what
-the mode 1 collection needs — a single file, one channel, `CF8` samples, no
-`AmpSF`, FX domain. **A reader that reads one collection is not a reader that
-reads CPHD**: multi-file `path`, `CI4`/`CI2`, `AmpSF` and TOA domain are mode 3
-obligations, and each throws a clear error rather than guessing until then. See
-[`cphd_reader_op/OPEN_ITEMS.md`](cphd_reader_op/OPEN_ITEMS.md).
+**`CPHDReaderOp` — landed, contract-complete.** All seven output ports, all
+five parameters, `pulse_range` selection, short final batches, and both halves
+of the boundary announcement (`collection_boundary` at a file seam,
+`end_of_stream` at the last). The host-side parser
+(`cphd_reader_op/cphd_file.hpp`) reads the ASCII header, the XML metadata, the
+declared PVP layout, and the signal block in `CF8`, `CI4` and `CI2` with
+per-vector `AmpSF` applied, in either the `FX` or `TOA` domain.
 
-`TensorDumpOp` is next — it is how intermediates are inspected while the rest
-is built, and it is the mode 1 demo's first sink. `CPHDWriterOp` and the
+It reached that state by going past `SIGPROC_PLAN.md`'s minimum-per-demo rule
+rather than by following it. Mode 1 needs one file, one channel, `CF8`, no
+`AmpSF`, FX — and the rule scheduled the rest into mode 3, two demos later,
+which is where the maxim *a reader that reads one collection is not a reader
+that reads CPHD* came from. The checklist gate is the stronger claim: a
+vertical slice never clears it. So the deferred paths were pulled forward, and
+the concrete payoff is that all 229 surveyed public collections now read
+instead of 115 — every Capella file needed `CI4` *and* `AmpSF` together, so
+neither alone unlocked any of them. See
+[`cphd_reader_op/OPEN_ITEMS.md`](cphd_reader_op/OPEN_ITEMS.md) for the
+conventions and measured costs that remain.
+
+`performance/cpp/perf_cphd_reader.cpp` measures it across batch size and sample
+format. The reader was written up as out of harness scope for this wave — its
+cost being disk rather than GPU — but a harness that reports bytes decoded and
+uploaded per second says something useful about a source, and it is what found
+that per-tick device allocation, not the read, sets the floor at small batches.
+
+**`TensorDumpOp` — landed, contract-complete.** Both formats, both throttles,
+and the `[live]` `every_n` override port. `npy` is written by
+`tensor_dump_op/npy_writer.hpp`, a v1.0 writer with no Holoscan or CUDA in it,
+so the format is testable without a graph; `raw` is the element bytes and
+nothing else. A tick copies the tensor device-to-host on the received stream,
+synchronizes, and writes — the sink has to see the producer's finished data,
+so the wait is unavoidable and is part of what a dump costs.
+
+Its own test cannot check the format, only that our writer and our parser
+agree, so `tests/cpp/io/npy_readback.py` loads the dumps in NumPy as a second
+CTest and asserts the values against a formula both sides compute
+independently.
+
+`performance/cpp/perf_tensor_dump.cpp` answers the question a caller actually
+has — what does leaving a dump wired in cost? On an RTX PRO 6000, an 8 MiB
+tensor takes ~8.7 ms per tick to a file and ~1.1 ms to `/dev/null`, so the
+**filesystem is roughly seven eighths of it** and the device-to-host copy runs
+at 7–15 GB/s. `npy` and `raw` are indistinguishable, the header being 128
+bytes. A tick that `every_n` skips costs ~10 µs, which is the number that says
+a throttled dump can stay wired in.
+
+`CPHDWriterOp` and the
 round-trip test it enables are deliberately deferred; see
 [`SIGPROC_PLAN.md`](../../docs/planning/SAR/SIGPROC_PLAN.md) →
 *Work no demo forces* for what that costs and what triggers pulling it
