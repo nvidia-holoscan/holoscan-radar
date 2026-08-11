@@ -28,6 +28,15 @@ struct RunSettings {
   int warmup_frames{5};
   int measured_frames{20};
   int repeats{1};
+  // Whether the caller named these on the command line. Most harnesses
+  // synthesize their input and can run as many frames as asked, so they ignore
+  // both. A harness reading a finite source cannot: the collection caps the
+  // achievable frame count, and it needs to know whether a plan that does not
+  // fit may be reduced to one that does (defaults, so fitting is a courtesy)
+  // or must be honoured and the scenario skipped (pinned, so silently
+  // measuring something else would misreport what was run).
+  bool warmup_pinned{false};
+  bool frames_pinned{false};
   std::string sync_policy{"device_sync_at_terminal_sink"};
   double stop_after_s{0.0};  // 0 = disabled; wall-clock cap per scenario
   bool stopped_early{false};
@@ -73,6 +82,12 @@ struct ResultRow {
   double estimated_effective_gbps{std::numeric_limits<double>::quiet_NaN()};
 
   std::string status{"ok"};  // "ok" | "skipped" | "timeout"
+  // Set when a row measured successfully but under conditions the reader has
+  // to know about -- e.g. a frame plan reduced to fit a short collection.
+  // Separate from `status`, which answers whether the scenario measured at all:
+  // a consumer filtering on status == "ok" must still see these rows, and a
+  // human must still be told the plan was not the one printed in the header.
+  std::string qualifier;
   std::string notes;
   std::string calibration_pair;   // paired slow/fast id, empty if none
   std::string calibration_mode;   // "pfa" | "alpha_lut"
@@ -91,6 +106,34 @@ struct AlphaCalibrationRow {
   double ovr_speedup{std::numeric_limits<double>::quiet_NaN()};
 };
 
+// One measured [live]-override transition, sampled across whole graph sessions
+// rather than read off a single tick.
+//
+// The compute table's `ovr_ms` is the worst frame in one short spike window, so
+// it answers "is this override cheap or expensive" and nothing finer. When an
+// override is the *point* of the measurement -- a costly rebuild a caller might
+// do mid-mission -- one noisy sample is not enough, and this row is the longer
+// answer: one sample per session, summarized.
+//
+// `first_ms` is separated from the rest on purpose. Process-global caches (the
+// cuFFT plan cache above all) survive a session, so the first session pays a
+// genuinely cold build and later ones do not, and pooling them would report a
+// cost nobody experiences. The pair is the real range: cold build vs. warm
+// process.
+struct OverrideProbeRow {
+  std::string scenario_id;
+  std::string op_name;
+  std::string size_id;
+  std::string parameter;   // which [live] parameter moved
+  std::string transition;  // e.g. "miss_2x", "hit_return"
+  std::string from_to;     // human-readable value change
+  double first_ms{std::numeric_limits<double>::quiet_NaN()};
+  LatencyStats later;      // override tick, sessions after the first
+  double steady_before_ms{std::numeric_limits<double>::quiet_NaN()};
+  double steady_after_ms{std::numeric_limits<double>::quiet_NaN()};
+  std::string notes;
+};
+
 struct PerfReport {
   Provenance provenance;
   Platform platform;
@@ -98,6 +141,13 @@ struct PerfReport {
   std::vector<SizeDef> sizes;
   std::vector<ResultRow> results;
   std::vector<AlphaCalibrationRow> alpha_calibration;
+  std::vector<OverrideProbeRow> override_probe;
+  // Text that applies to the whole run -- how to read a column, what the
+  // throughput model counts -- printed once below the tables. A harness whose
+  // explanation is the same for every scenario belongs here rather than in each
+  // row's notes, where N copies of one paragraph bury the per-row detail that
+  // actually differs.
+  std::vector<std::string> footnotes;
 };
 
 namespace detail {
@@ -174,6 +224,30 @@ inline std::string fixed(double v, int prec) {
   std::ostringstream os;
   os << std::fixed << std::setprecision(prec) << v;
   return os.str();
+}
+
+// Close a table row: a bracket tag for anything that is not a plain successful
+// measurement, then the row's note on an indented continuation line.
+//
+// A skipped or timed-out row is otherwise indistinguishable from a failure --
+// every measured column reads "-" either way -- and the reason a harness
+// recorded is the whole difference between "this input cannot support this
+// scenario" and "something broke". A qualified row is worse: it carries real
+// numbers, so nothing about it looks unusual, and the caveat has to be printed
+// or it is lost. The note lands on its own line rather than inline because the
+// notes run to a sentence and would push the row past any terminal width, and
+// because a run with many tagged rows stays scannable when the columns keep
+// their alignment.
+inline void end_row(std::ostream& os, const std::string& status,
+                    const std::string& qualifier, const std::string& notes) {
+  const std::string tag = status != "ok" ? status : qualifier;
+  if (!tag.empty()) {
+    os << " [" << tag << "]";
+  }
+  os << "\n";
+  if (!tag.empty() && !notes.empty()) {
+    os << "    " << notes << "\n";
+  }
 }
 
 inline std::string sci(double v) {
@@ -295,6 +369,8 @@ inline void write_json(std::ostream& os, const PerfReport& r) {
     os << "      \"estimated_effective_gbps\": "
        << detail::num_or_null(row.estimated_effective_gbps) << ",\n";
     os << "      \"status\": \"" << row.status << "\",\n";
+    os << "      \"qualifier\": \"" << detail::json_escape(row.qualifier)
+       << "\",\n";
     os << "      \"notes\": \"" << detail::json_escape(row.notes) << "\",\n";
     os << "      \"calibration_pair\": \""
        << detail::json_escape(row.calibration_pair) << "\",\n";
@@ -326,6 +402,43 @@ inline void write_json(std::ostream& os, const PerfReport& r) {
     os << "      \"ovr_speedup\": " << detail::num_or_null(row.ovr_speedup)
        << "\n";
     os << "    }" << (i + 1 < r.alpha_calibration.size() ? "," : "") << "\n";
+  }
+  os << "  ],\n";
+  os << "  \"override_probe\": [\n";
+  for (size_t i = 0; i < r.override_probe.size(); ++i) {
+    const auto& row = r.override_probe[i];
+    os << "    {\n";
+    os << "      \"scenario_id\": \"" << detail::json_escape(row.scenario_id)
+       << "\",\n";
+    os << "      \"op_name\": \"" << detail::json_escape(row.op_name)
+       << "\",\n";
+    os << "      \"size_id\": \"" << row.size_id << "\",\n";
+    os << "      \"parameter\": \"" << detail::json_escape(row.parameter)
+       << "\",\n";
+    os << "      \"transition\": \"" << detail::json_escape(row.transition)
+       << "\",\n";
+    os << "      \"from_to\": \"" << detail::json_escape(row.from_to)
+       << "\",\n";
+    os << "      \"first_ms\": " << detail::num_or_null(row.first_ms) << ",\n";
+    os << "      \"later_samples\": " << row.later.samples << ",\n";
+    os << "      \"later_median_ms\": "
+       << detail::num_or_null(row.later.median_ms) << ",\n";
+    os << "      \"later_p90_ms\": " << detail::num_or_null(row.later.p90_ms)
+       << ",\n";
+    os << "      \"later_max_ms\": " << detail::num_or_null(row.later.max_ms)
+       << ",\n";
+    os << "      \"steady_before_ms\": "
+       << detail::num_or_null(row.steady_before_ms) << ",\n";
+    os << "      \"steady_after_ms\": "
+       << detail::num_or_null(row.steady_after_ms) << ",\n";
+    os << "      \"notes\": \"" << detail::json_escape(row.notes) << "\"\n";
+    os << "    }" << (i + 1 < r.override_probe.size() ? "," : "") << "\n";
+  }
+  os << "  ],\n";
+  os << "  \"footnotes\": [\n";
+  for (size_t i = 0; i < r.footnotes.size(); ++i) {
+    os << "    \"" << detail::json_escape(r.footnotes[i]) << "\""
+       << (i + 1 < r.footnotes.size() ? "," : "") << "\n";
   }
   os << "  ]\n";
   os << "}\n";
@@ -379,10 +492,7 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
     }
     os << detail::col(row.scenario_id, 40) << detail::col(row.size_id, 6)
        << detail::col(detail::fixed(row.setup_ms, 2), 10);
-    if (row.status != "ok") {
-      os << " [" << row.status << "]";
-    }
-    os << "\n";
+    detail::end_row(os, row.status, row.qualifier, row.notes);
   }
 
   // --- compute (steady state + inline live override) ---
@@ -405,10 +515,7 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
        << detail::col(detail::fixed(row.override_delta_ms, 3), 10)
        << detail::col(detail::sci(row.cells_per_second), 11)
        << detail::col(detail::fixed(row.estimated_effective_gbps, 1), 8);
-    if (row.status != "ok") {
-      os << " [" << row.status << "]";
-    }
-    os << "\n";
+    detail::end_row(os, row.status, row.qualifier, row.notes);
   }
 
   if (!r.alpha_calibration.empty()) {
@@ -427,6 +534,37 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
          << detail::col(detail::fixed(row.slow_ovr_ms, 3), 10)
          << detail::col(detail::fixed(row.fast_ovr_ms, 3), 10)
          << detail::col(detail::fixed(row.ovr_speedup, 2), 8) << "\n";
+    }
+  }
+
+  if (!r.override_probe.empty()) {
+    os << "\n--- live override probe (one sample per session) ---\n";
+    os << detail::col("scenario", 34) << detail::col("param", 8)
+       << detail::col("transition", 12) << detail::col("from -> to", 16)
+       << detail::col("n", 4) << detail::col("first_ms", 10)
+       << detail::col("med_ms", 10) << detail::col("p90_ms", 10)
+       << detail::col("before_ms", 10) << detail::col("after_ms", 10) << "\n";
+    for (const auto& row : r.override_probe) {
+      os << detail::col(row.scenario_id, 34) << detail::col(row.parameter, 8)
+         << detail::col(row.transition, 12) << detail::col(row.from_to, 16)
+         << detail::col(std::to_string(row.later.samples + 1), 4)
+         << detail::col(detail::fixed(row.first_ms, 3), 10)
+         << detail::col(detail::fixed(row.later.median_ms, 3), 10)
+         << detail::col(detail::fixed(row.later.p90_ms, 3), 10)
+         << detail::col(detail::fixed(row.steady_before_ms, 3), 10)
+         << detail::col(detail::fixed(row.steady_after_ms, 3), 10);
+      if (row.notes.empty()) {
+        os << "\n";
+      } else {
+        os << "  " << row.notes << "\n";
+      }
+    }
+  }
+
+  if (!r.footnotes.empty()) {
+    os << "\n--- notes ---\n";
+    for (const auto& note : r.footnotes) {
+      os << "  " << note << "\n";
     }
   }
   os << "\n";

@@ -12,6 +12,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
@@ -19,6 +20,7 @@
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sim/mimo_sim.hpp"
 #include "radar_common/sim/point_target_sim.hpp"
+#include "radar_common/sim/sar_phase_history_sim.hpp"
 #include "utils/bin_model.hpp"
 
 namespace {
@@ -254,6 +256,101 @@ TEST(MimoSim, TdmDeterministic) {
   scene.seed += 1;
   const auto c = sim::simulate_mimo_tdm_interleaved(scene, sched);
   EXPECT_NE(a.cube, c.cube);
+}
+
+// The SAR phase-history model's own tautology guard: the phase sign and the
+// frequency axis are two statements of one convention, and nothing else in the
+// chain notices when they disagree. Compressing one pulse on the host and
+// asking where the target landed costs microseconds and catches a flipped
+// sign, a missing factor of two, and a reversed frequency axis — the same
+// check tools/sar_sim/sar_sim/signal.py runs on the Python side.
+TEST(SarPhaseHistorySim, CompressesToThePredictedDelayBin) {
+  sim::SarPhaseHistoryConfig cfg;
+  cfg.num_pulses = 1;
+  cfg.num_samples = 64;
+
+  const double spacing = sim::sar_range_bin_spacing(cfg, cfg.num_samples);
+  sim::SarPointTarget target;
+  target.differential_range = 9.0 * spacing;
+  const auto signal = sim::sar_phase_history(cfg, {target});
+  ASSERT_EQ(signal.size(), static_cast<size_t>(cfg.num_samples));
+
+  // A brute-force inverse DFT, exp(+2*pi*i*k*n/N): the positive-exponent
+  // kernel the model's phase sign pairs with. Its conjugate would put the
+  // target at the negative of its true delay, which is the mirrored image
+  // this check exists to catch.
+  const int64_t n = cfg.num_samples;
+  int64_t peak = 0;
+  double peak_magnitude = -1.0;
+  for (int64_t bin = 0; bin < n; ++bin) {
+    std::complex<double> sum;
+    for (int64_t k = 0; k < n; ++k) {
+      const double phase = 2.0 * kPi * static_cast<double>(k * bin) /
+                           static_cast<double>(n);
+      sum += signal[static_cast<size_t>(k)] *
+             std::complex<double>(std::cos(phase), std::sin(phase));
+    }
+    if (std::abs(sum) > peak_magnitude) {
+      peak_magnitude = std::abs(sum);
+      peak = bin;
+    }
+  }
+  // Unshifted, so a farther target sits at a positive bin index near zero
+  // rather than wrapping to the top of the array.
+  EXPECT_EQ(peak, 9);
+  EXPECT_NEAR(peak_magnitude, static_cast<double>(n), 1e-6 * n);
+
+  // A nearer target is the mirror case, and wraps.
+  sim::SarPointTarget nearer;
+  nearer.differential_range = -9.0 * spacing;
+  const auto near_signal = sim::sar_phase_history(cfg, {nearer});
+  std::complex<double> sum;
+  for (int64_t k = 0; k < n; ++k) {
+    const double phase = 2.0 * kPi * static_cast<double>(k * (n - 9)) /
+                         static_cast<double>(n);
+    sum += near_signal[static_cast<size_t>(k)] *
+           std::complex<double>(std::cos(phase), std::sin(phase));
+  }
+  EXPECT_NEAR(std::abs(sum), static_cast<double>(n), 1e-6 * n);
+}
+
+TEST(SarPhaseHistorySim, FrequencyAxisSpansTheBandFirstSampleToLast) {
+  sim::SarPhaseHistoryConfig cfg;
+  cfg.num_samples = 8;
+  const auto freqs = sim::sar_frequency_axis(cfg);
+  ASSERT_EQ(freqs.size(), 8u);
+  // N samples divide the band into N-1 steps, and the band is centred on the
+  // carrier: the CPHD FxBand / SCSS reading, not bandwidth/N.
+  // Not DOUBLE_EQ: differencing frequencies ~1e10 apart spends the low bits,
+  // and the convention under test is a part in N, not a part in 1e16.
+  const double tolerance = 1e-6;
+  EXPECT_NEAR(freqs.front(), cfg.carrier_frequency - 0.5 * cfg.bandwidth,
+              tolerance);
+  EXPECT_NEAR(freqs.back(), cfg.carrier_frequency + 0.5 * cfg.bandwidth,
+              tolerance);
+  EXPECT_NEAR(freqs[1] - freqs[0], cfg.bandwidth / 7.0, tolerance);
+}
+
+TEST(SarPhaseHistorySim, PerPulseRangeOverridesTheConstant) {
+  sim::SarPhaseHistoryConfig cfg;
+  cfg.num_pulses = 3;
+  cfg.num_samples = 4;
+  sim::SarPointTarget target;
+  target.differential_range = 100.0;  // ignored when the per-pulse list is set
+  target.differential_range_per_pulse = {0.0, 0.0, 5.0};
+
+  const auto signal = sim::sar_phase_history(cfg, {target});
+  // Zero differential range leaves the samples at the reflectivity itself.
+  for (int64_t k = 0; k < cfg.num_samples; ++k) {
+    EXPECT_NEAR(std::abs(signal[static_cast<size_t>(k)] - 1.0), 0.0, 1e-12);
+  }
+  EXPECT_GT(std::abs(signal[static_cast<size_t>(2 * cfg.num_samples)] - 1.0),
+            1e-6);
+
+  sim::SarPointTarget mismatched;
+  mismatched.differential_range_per_pulse = {0.0, 1.0};
+  EXPECT_THROW(sim::sar_phase_history(cfg, {mismatched}),
+               std::invalid_argument);
 }
 
 TEST(MimoSim, ResolveDdmOffsets) {

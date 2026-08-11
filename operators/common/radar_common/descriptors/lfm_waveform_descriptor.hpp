@@ -11,6 +11,10 @@
 #include <utility>
 #include <vector>
 
+// kDefaultPropagationSpeed lives in the FMCW descriptor header rather than in
+// constants.hpp; included here so this header compiles standalone. It moves
+// with the D24 merge of the two descriptors.
+#include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/math/constants.hpp"
 
 namespace holoscan::radar {

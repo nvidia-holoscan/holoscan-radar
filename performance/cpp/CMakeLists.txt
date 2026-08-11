@@ -108,6 +108,11 @@ target_link_libraries(perf_cphd_reader PRIVATE
 target_compile_definitions(perf_cphd_reader PRIVATE
     SAR_FIXTURE_DIR="${PROJECT_BINARY_DIR}/tests/cpp/sar_fixtures")
 
+add_executable(perf_sar_range_compression perf_sar_range_compression.cpp)
+target_link_libraries(perf_sar_range_compression PRIVATE
+    radar_perf_utils
+    holoscan::sar_range_compression_op)
+
 add_executable(perf_tensor_dump perf_tensor_dump.cpp)
 target_link_libraries(perf_tensor_dump PRIVATE
     radar_perf_utils
@@ -223,6 +228,13 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
     set_tests_properties(perf_cphd_reader_smoke PROPERTIES
         LABELS "performance"
         FIXTURES_REQUIRED sar_fixtures)
+
+    add_test(NAME perf_sar_range_compression_smoke
+        COMMAND perf_sar_range_compression --sizes xs --warmup 1 --frames 2
+            --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_sar_range_compression_smoke.json)
+    set_tests_properties(perf_sar_range_compression_smoke PROPERTIES
+        LABELS "performance")
 
     # Writes its dumps under the build tree rather than /tmp so a CI runner
     # with a small tmpfs is not where the harness discovers its size limits.
