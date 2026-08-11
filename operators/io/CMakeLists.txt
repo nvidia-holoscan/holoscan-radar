@@ -5,3 +5,4 @@
 # operator is gated on its own OP_<name> option (defaulting to ${BUILD_ALL}).
 #
 add_holohub_operator(cphd_reader_op)
+add_holohub_operator(tensor_dump_op)

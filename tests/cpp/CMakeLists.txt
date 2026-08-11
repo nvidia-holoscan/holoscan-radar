@@ -117,6 +117,27 @@ target_compile_definitions(test_cphd_reader PRIVATE
 gtest_discover_tests(test_cphd_reader PROPERTIES
     LABELS "unit"
     FIXTURES_REQUIRED sar_fixtures)
+# Also declared explicitly: it writes artifacts into a known directory that a
+# second test loads with NumPy, which is the only independent check available
+# on a format we write ourselves.
+set(TENSOR_DUMP_ARTIFACT_DIR ${CMAKE_CURRENT_BINARY_DIR}/tensor_dump_artifacts)
+add_executable(test_tensor_dump io/test_tensor_dump.cpp)
+target_link_libraries(test_tensor_dump PRIVATE
+    radar_test_utils
+    GTest::gtest_main
+    holoscan::tensor_dump_op)
+target_compile_definitions(test_tensor_dump PRIVATE
+    TENSOR_DUMP_ARTIFACT_DIR="${TENSOR_DUMP_ARTIFACT_DIR}")
+gtest_discover_tests(test_tensor_dump PROPERTIES
+    LABELS "unit"
+    FIXTURES_SETUP tensor_dump_artifacts)
+add_test(NAME test_tensor_dump_npy_readback
+    COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/io/npy_readback.py
+        ${TENSOR_DUMP_ARTIFACT_DIR})
+set_tests_properties(test_tensor_dump_npy_readback PROPERTIES
+    LABELS "unit"
+    FIXTURES_REQUIRED tensor_dump_artifacts)
 # Cross-family end-to-end integration test lives at the tests/cpp root.
 radar_add_integration_test(test_pipeline
     holoscan::fmcw_range_processor_op

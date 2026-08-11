@@ -108,6 +108,11 @@ target_link_libraries(perf_cphd_reader PRIVATE
 target_compile_definitions(perf_cphd_reader PRIVATE
     SAR_FIXTURE_DIR="${PROJECT_BINARY_DIR}/tests/cpp/sar_fixtures")
 
+add_executable(perf_tensor_dump perf_tensor_dump.cpp)
+target_link_libraries(perf_tensor_dump PRIVATE
+    radar_perf_utils
+    holoscan::tensor_dump_op)
+
 # Optional smoke: runs a tiny scenario subset and verifies a report file is
 # written. No timing thresholds — CI only checks the tool executes and emits.
 if(HOLOSCAN_RADAR_BUILD_TESTING)
@@ -219,4 +224,13 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
         LABELS "performance"
         FIXTURES_REQUIRED sar_fixtures)
 
+    # Writes its dumps under the build tree rather than /tmp so a CI runner
+    # with a small tmpfs is not where the harness discovers its size limits.
+    add_test(NAME perf_tensor_dump_smoke
+        COMMAND perf_tensor_dump --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_tensor_dump_smoke.json)
+    set_tests_properties(perf_tensor_dump_smoke PROPERTIES
+        LABELS "performance"
+        ENVIRONMENT
+            "HOLOSCAN_RADAR_PERF_DUMP_DIR=${CMAKE_CURRENT_BINARY_DIR}")
 endif()
