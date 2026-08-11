@@ -8,9 +8,12 @@ is more code, but the fields a synthetic collection needs are exactly the
 fields `CPHDReaderOp` will parse, and building them here means every one has
 a stated origin instead of an inherited value nobody chose.
 
-Written as ``CF8`` with no ``AmpSF``, matching the pinned Atlanta collection,
-so the reader implements one decode path for both the fixture and the first
-real collect.
+``CF8`` with no ``AmpSF`` by default, matching the pinned Atlanta collection,
+so the reader takes one decode path for both the fixture and the first real
+collect. A recipe may instead ask for ``CI4`` or ``CI2``, which is how the
+integer-sample and per-vector-scale paths get covered in CI: the real
+collections that use them (Capella) are gigabytes and cannot be fetched by a
+test.
 """
 
 from __future__ import annotations
@@ -33,8 +36,10 @@ CHANNEL_ID = "sim_channel_0"
 FOURIER_SIGN = -1
 
 # PVP fields, in the order they are laid out. Each entry is
-# (name, num_words, format string). One 8-byte word per scalar.
-_PVP_LAYOUT: list[tuple[str, int, str]] = [
+# (name, num_words, format string). One 8-byte word per scalar. The order
+# follows the schema's own sequence, which is where AmpSF belongs when a
+# recipe asks for an integer format.
+_PVP_BASE: list[tuple[str, int, str]] = [
     ("TxTime", 1, "F8"),
     ("TxPos", 3, "X=F8;Y=F8;Z=F8;"),
     ("TxVel", 3, "X=F8;Y=F8;Z=F8;"),
@@ -42,6 +47,7 @@ _PVP_LAYOUT: list[tuple[str, int, str]] = [
     ("RcvPos", 3, "X=F8;Y=F8;Z=F8;"),
     ("RcvVel", 3, "X=F8;Y=F8;Z=F8;"),
     ("SRPPos", 3, "X=F8;Y=F8;Z=F8;"),
+    ("AmpSF", 1, "F8"),
     ("aFDOP", 1, "F8"),
     ("aFRR1", 1, "F8"),
     ("aFRR2", 1, "F8"),
@@ -54,6 +60,41 @@ _PVP_LAYOUT: list[tuple[str, int, str]] = [
     ("SCSS", 1, "F8"),
     ("SIGNAL", 1, "I8"),
 ]
+
+
+def pvp_layout(recipe: Recipe) -> list[tuple[str, int, str]]:
+    """The PVP fields this recipe's file declares.
+
+    AmpSF is present only for the integer formats. Emitting it as a constant 1
+    for ``CF8`` would be legal but would hide a reader that ignores it, since
+    ignoring a factor of one is indistinguishable from applying it.
+    """
+    if recipe.storage.is_integer:
+        return list(_PVP_BASE)
+    return [entry for entry in _PVP_BASE if entry[0] != "AmpSF"]
+
+
+def quantize(signal: np.ndarray, recipe: Recipe) -> tuple[np.ndarray, np.ndarray]:
+    """Scale each pulse into the integer range, returning samples and AmpSF.
+
+    One scale factor per pulse, chosen so the loudest sample in that pulse
+    lands at full scale — which is what a real sensor's AGC produces, and what
+    makes AmpSF worth storing. Reading the file back and multiplying by AmpSF
+    must return the original signal to within half a quantization step.
+    """
+    peak = recipe.storage.quantization_peak
+    magnitude = np.maximum(np.abs(signal.real), np.abs(signal.imag))
+    per_pulse = magnitude.max(axis=-1)
+    # A silent pulse has no scale to derive; 1.0 keeps the record finite and
+    # the samples zero either way.
+    amp_sf = np.where(per_pulse > 0.0, per_pulse / peak, 1.0)
+    scaled = np.rint(signal / amp_sf[:, None])
+    dtype = np.int16 if recipe.storage.signal_format == "CI4" else np.int8
+    # Field names are sarkit's, which is what its writer matches against.
+    quantized = np.empty(signal.shape, dtype=np.dtype([("real", dtype), ("imag", dtype)]))
+    quantized["real"] = np.clip(scaled.real, -peak, peak).astype(dtype)
+    quantized["imag"] = np.clip(scaled.imag, -peak, peak).astype(dtype)
+    return quantized, amp_sf
 
 
 def _element(parent, tag: str, text: str | None = None, **attrib):
@@ -88,7 +129,11 @@ def image_area_axes(geometry: CollectionGeometry) -> tuple[np.ndarray, np.ndarra
     return iax / np.linalg.norm(iax), iay / np.linalg.norm(iay)
 
 
-def build_pvps(recipe: Recipe, geometry: CollectionGeometry) -> np.ndarray:
+def build_pvps(
+    recipe: Recipe,
+    geometry: CollectionGeometry,
+    amp_sf: np.ndarray | None = None,
+) -> np.ndarray:
     """The per-vector parameter array, one record per pulse."""
     freqs = frequency_axis(recipe)
     fx1, fx2 = float(freqs[0]), float(freqs[-1])
@@ -98,13 +143,21 @@ def build_pvps(recipe: Recipe, geometry: CollectionGeometry) -> np.ndarray:
     # Monostatic and idealized: transmit and receive share the phase centre
     # and the pulse time. A recipe that wanted a bistatic or
     # stop-and-go-violating collection would have to say so, and none does.
+    layout = pvp_layout(recipe)
     dtype = np.dtype(
         [
             (name, "f8" if fmt != "I8" else "i8", (words,) if words > 1 else ())
-            for name, words, fmt in _PVP_LAYOUT
+            for name, words, fmt in layout
         ]
     )
     pvps = np.zeros(num_pulses, dtype=dtype)
+    if recipe.storage.is_integer:
+        if amp_sf is None:
+            raise ValueError(
+                f"{recipe.storage.signal_format} needs the per-pulse AmpSF from "
+                "quantize(); writing the field as zero would zero the collection"
+            )
+        pvps["AmpSF"] = amp_sf
 
     pvps["TxTime"] = geometry.tx_time
     pvps["RcvTime"] = geometry.tx_time
@@ -138,7 +191,11 @@ def build_pvps(recipe: Recipe, geometry: CollectionGeometry) -> np.ndarray:
     return pvps
 
 
-def build_xmltree(recipe: Recipe, geometry: CollectionGeometry) -> lxml.etree.ElementTree:
+def build_xmltree(
+    recipe: Recipe,
+    geometry: CollectionGeometry,
+    amp_sf: np.ndarray | None = None,
+) -> lxml.etree.ElementTree:
     """Construct the CPHD 1.1.0 XML for a synthetic collection."""
     freqs = frequency_axis(recipe)
     fx1, fx2 = float(freqs[0]), float(freqs[-1])
@@ -200,9 +257,10 @@ def build_xmltree(recipe: Recipe, geometry: CollectionGeometry) -> lxml.etree.El
         corner_lat, corner_lon, _ = ecef_to_llh(corner_ecef)
         _latlon(corners, "IACP", corner_lat, corner_lon, index=str(index))
 
-    num_bytes_pvp = 8 * sum(words for _, words, _ in _PVP_LAYOUT)
+    layout = pvp_layout(recipe)
+    num_bytes_pvp = 8 * sum(words for _, words, _ in layout)
     data = _element(root, "Data")
-    _element(data, "SignalArrayFormat", "CF8")
+    _element(data, "SignalArrayFormat", recipe.storage.signal_format)
     _element(data, "NumBytesPVP", str(num_bytes_pvp))
     _element(data, "NumCPHDChannels", "1")
     channel_data = _element(data, "Channel")
@@ -239,7 +297,7 @@ def build_xmltree(recipe: Recipe, geometry: CollectionGeometry) -> lxml.etree.El
 
     pvp = _element(root, "PVP")
     offset = 0
-    for name, words, fmt in _PVP_LAYOUT:
+    for name, words, fmt in layout:
         node = _element(pvp, name)
         _element(node, "Offset", str(offset))
         _element(node, "Size", str(words))
@@ -259,8 +317,11 @@ def build_xmltree(recipe: Recipe, geometry: CollectionGeometry) -> lxml.etree.El
     xmltree = lxml.etree.ElementTree(root)
     # sarkit derives every ReferenceGeometry angle from the metadata above
     # plus the PVPs, which keeps a dozen trigonometric fields from being a
-    # dozen chances to disagree with the geometry actually written.
-    root.append(skcphd.compute_reference_geometry(xmltree, build_pvps(recipe, geometry)))
+    # dozen chances to disagree with the geometry actually written. It reads
+    # only positions and times, so a placeholder AmpSF is enough here.
+    if amp_sf is None:
+        amp_sf = np.ones(num_pulses)
+    root.append(skcphd.compute_reference_geometry(xmltree, build_pvps(recipe, geometry, amp_sf)))
     return xmltree
 
 
@@ -292,13 +353,18 @@ def write_cphd(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    xmltree = build_xmltree(recipe, geometry)
+    if recipe.storage.is_integer:
+        samples, amp_sf = quantize(signal, recipe)
+    else:
+        samples, amp_sf = np.ascontiguousarray(signal, dtype=np.complex64), None
+
+    xmltree = build_xmltree(recipe, geometry, amp_sf)
     validate_xmltree(xmltree)
-    pvps = build_pvps(recipe, geometry)
+    pvps = build_pvps(recipe, geometry, amp_sf)
 
     metadata = skcphd.Metadata(xmltree=xmltree)
     with path.open("wb") as handle, skcphd.Writer(handle, metadata) as writer:
-        writer.write_signal(CHANNEL_ID, np.ascontiguousarray(signal, dtype=np.complex64))
+        writer.write_signal(CHANNEL_ID, np.ascontiguousarray(samples))
         writer.write_pvp(CHANNEL_ID, pvps)
     return path
 

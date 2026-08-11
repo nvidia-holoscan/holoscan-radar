@@ -122,7 +122,7 @@ def build_sidecar(
         "collection": {
             "num_pulses": geometry.num_pulses,
             "num_samples": recipe.collection.num_samples,
-            "signal_array_format": "CF8",
+            "signal_array_format": recipe.storage.signal_format,
             "domain_type": "FX",
             "fourier_sign": FOURIER_SIGN,
             "fx_min_hz": float(freqs[0]),

@@ -11,6 +11,7 @@
 
 #include <holoscan/holoscan.hpp>
 
+#include "io/cphd_reader_op/collection_paths.hpp"
 #include "radar_common/descriptors/coordinate_frame.hpp"
 
 namespace holoscan::radar {
@@ -43,11 +44,14 @@ class CphdFile;  // host-side file reading; defined in cphd_file.hpp
 // pulse_times is float64 in both, since single precision cannot hold a
 // collection-relative timestamp to useful accuracy.
 //
-// Scope note (SIGPROC_PLAN.md's minimum-per-demo rule): this slice reads
-// what the mode 1 collection needs — a single file, one channel, `CF8`
-// samples, no `AmpSF`, FX domain. The contract's remaining paths (multi-file
-// `path`, `CI4`/`CI2`, `AmpSF`, TOA domain) throw a clear error rather than
-// guessing, and land with the mode 3 milestone whose collections force them.
+// One channel per instance is deliberate, not a gap: CPHD channels may carry
+// different pulse and sample counts, so they do not stack into one tensor.
+// See OPERATOR_API.md.
+//
+// A `path` naming several files reads them in sequence as separate
+// collections, announcing `collection_boundary` at each seam and
+// `end_of_stream` at the last. `pulse_range` applies to each file
+// independently, each being its own collection.
 template <typename T>
 class CPHDReaderOp : public holoscan::Operator {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
@@ -71,7 +75,7 @@ class CPHDReaderOp : public holoscan::Operator {
  private:
   // Parameters per the contract. All static: a reader's file, frame and
   // batching are build-time configuration, not in-flight overrides.
-  Parameter<std::string> path_;
+  Parameter<CollectionPaths> path_;
   Parameter<CoordinateFrame> coordinate_frame_;
   Parameter<int64_t> pulses_per_tick_;
   Parameter<int64_t> channel_;
@@ -85,10 +89,21 @@ class CPHDReaderOp : public holoscan::Operator {
 
   std::unique_ptr<cphd::CphdFile> file_;
 
-  // Resolved at start() from pulse_range_ and the file's vector count.
+  // The collections to read, in order: the parameter with any directory
+  // expanded. Resolved and validated in full at start() so that a bad file
+  // late in the list fails before the first pulse rather than an hour in.
+  std::vector<std::string> files_;
+  size_t file_index_{0};
+
+  // Opens files_[file_index_] and resolves the pulse range within it.
+  void open_current_file();
+
+  // Resolved per file from pulse_range_ and that file's vector count.
   int64_t first_pulse_{0};
   int64_t last_pulse_{0};  // exclusive
   int64_t next_pulse_{0};
+  // Reset at each collection: the descriptor is emitted once per collection,
+  // not once per instance, because a new file may bring a new frame.
   bool frame_emitted_{false};
   // Real collections carry occasional non-finite ephemeris; warned about
   // once per instance rather than per tick.

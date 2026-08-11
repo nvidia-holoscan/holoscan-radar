@@ -19,14 +19,14 @@
 // work be tested against a fixture without standing up a graph -- and file
 // parsing is where the fiddly, high-bug-density work in this operator is.
 //
-// Scope is what the mode 1 collection needs (SIGPROC_PLAN.md's
-// minimum-per-demo rule): one channel, `CF8` samples, no `AmpSF`. The paths
-// this does not implement throw rather than guess; mode 3 adds `CI4`,
-// `AmpSF`, and the second CPHD minor version.
+// All three CPHD 1.x sample formats decode, and a collection that scales its
+// samples per vector (`AmpSF`) is scaled on the way out. What is still
+// deliberately absent is signal compression, which no surveyed collection
+// uses and which the header would have to declare.
 namespace holoscan::radar::cphd {
 
-// Sample storage format, from Data/SignalArrayFormat. Only kCF8 decodes
-// today; the others are named so the error can say what it found.
+// Sample storage format, from Data/SignalArrayFormat: 8-byte complex float,
+// or complex pairs of 16- and 8-bit signed integers.
 enum class SampleFormat { kCF8, kCI4, kCI2 };
 
 // Fast-time domain of the stored samples, from Global/DomainType. Decides
@@ -107,6 +107,11 @@ class CphdFile {
     return pvp_fields_.count(name) != 0;
   }
 
+  // Whether the stored samples are per-vector scaled. When true, reading the
+  // signal without supplying the covering PvpBlock is an error rather than a
+  // quietly unscaled read -- see read_signal_into.
+  bool has_amp_sf() const { return has_pvp_field("AmpSF"); }
+
   // The per-vector parameter records for `count` vectors starting at
   // `first`, read in one go. Prefer this wherever more than one field is
   // wanted from the same span, which is the usual case.
@@ -121,19 +126,28 @@ class CphdFile {
                                int64_t components) const;
 
   // Signal samples for `count` vectors starting at `first`, row-major
-  // (count, num_samples), in host byte order and at the caller's precision.
-  // `out` must have room for count * num_samples elements.
+  // (count, num_samples), decoded to the caller's precision and scaled by the
+  // file's per-vector amplitude factors where it has them. `out` must have
+  // room for count * num_samples elements.
   //
   // Writes into the caller's buffer rather than returning one so that no
   // intermediate copy exists: for `T = float` the stored CF8 samples are
   // bit-for-bit big-endian `std::complex<float>`, so the bytes land directly
   // in `out` and are byte-swapped in place.
+  //
+  // `pvp` must cover exactly this span when has_amp_sf(); it is where the
+  // scale factors are read from, and the caller already holds it. Required
+  // rather than fetched internally so that omitting it is a loud error
+  // instead of a silent factor-of-AmpSF error in the image -- and so that a
+  // tick still costs one parameter-block read.
   template <typename T>
   void read_signal_into(int64_t channel_index, int64_t first, int64_t count,
-                        std::complex<T>* out) const;
+                        std::complex<T>* out,
+                        const PvpBlock* pvp = nullptr) const;
 
-  // Convenience wrapper allocating its own buffer. Used by tests; the
-  // operator uses read_signal_into to avoid the copy.
+  // Convenience wrapper allocating its own buffer, and reading the parameter
+  // block itself where scale factors are needed. Used by tests and tools; the
+  // operator uses read_signal_into to avoid both the copy and the extra read.
   std::vector<std::complex<float>> read_signal(int64_t channel_index,
                                                int64_t first,
                                                int64_t count) const;
@@ -148,6 +162,9 @@ class CphdFile {
   // Shared validation for the two signal entry points.
   const ChannelInfo& check_signal_request(int64_t channel_index, int64_t first,
                                           int64_t count) const;
+  // The per-vector scale factors for a span, or empty when the file has none.
+  std::vector<double> amplitude_scale(const PvpBlock* pvp,
+                                      int64_t count) const;
 
   std::string path_;
   std::string version_;

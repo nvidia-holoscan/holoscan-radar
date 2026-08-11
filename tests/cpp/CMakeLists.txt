@@ -56,17 +56,24 @@ endfunction()
 # setup fixture rather than a build step: a missing Python dependency then
 # fails one visible test instead of breaking the build for everyone, and the
 # tests that need the file are held back rather than silently skipped.
+#
+# One recipe per storage format the reader decodes. The integer formats are
+# the same collection as mode01_smoke in a different container, so a test can
+# difference them; the real CI4 collections are Capella's and are gigabytes.
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(SAR_FIXTURE_DIR ${CMAKE_CURRENT_BINARY_DIR}/sar_fixtures)
-add_test(NAME sar_generate_fixtures
-    COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${PROJECT_SOURCE_DIR}/tools/sar_sim
-        ${Python3_EXECUTABLE}
-        ${PROJECT_SOURCE_DIR}/tools/sar_sim/generate_cphd.py
-        ${PROJECT_SOURCE_DIR}/tools/sar_sim/recipes/mode01_smoke.yaml
-        --output-dir ${SAR_FIXTURE_DIR})
-set_tests_properties(sar_generate_fixtures PROPERTIES
-    FIXTURES_SETUP sar_fixtures
-    LABELS "unit")
+set(SAR_FIXTURE_RECIPES mode01_smoke mode01_ci4 mode01_ci2)
+foreach(_recipe IN LISTS SAR_FIXTURE_RECIPES)
+    add_test(NAME sar_generate_${_recipe}
+        COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${PROJECT_SOURCE_DIR}/tools/sar_sim
+            ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tools/sar_sim/generate_cphd.py
+            ${PROJECT_SOURCE_DIR}/tools/sar_sim/recipes/${_recipe}.yaml
+            --output-dir ${SAR_FIXTURE_DIR})
+    set_tests_properties(sar_generate_${_recipe} PROPERTIES
+        FIXTURES_SETUP sar_fixtures
+        LABELS "unit")
+endforeach()
 
 radar_add_test(common/test_window)
 radar_add_test(common/test_steering_weights_device

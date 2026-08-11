@@ -1,8 +1,10 @@
 # CPHDReaderOp — open items
 
-Items this operator carries. None of them block the mode 1 demo; each is a
-place where the landed slice is narrower than the contract, or where a
-convention was chosen that real collections have not yet tested.
+Items this operator carries. **The contract surface is complete** as of
+2026-08-09 — item 2, the one entry that recorded a landed slice narrower than
+`OPERATOR_API.md`, is closed. What remains is conventions the contract permits
+several readings of, costs measured and consciously not paid, and paths no
+available collection exercises. None block the mode 1 demo.
 
 Team-blocked questions belong in
 [`docs/planning/SAR/TEAM_BLOCKED.md`](../../../docs/planning/SAR/TEAM_BLOCKED.md);
@@ -38,22 +40,41 @@ and see which focuses. Worth doing when `BackprojectionOp` can form an image,
 since focus quality is the only test that discriminates. Still a contract
 clarification rather than a bug, since the contract permits any of the three.
 
-## 2. The paths deferred to mode 3, and what each does instead
+## 2. The paths deferred to mode 3 — closed, pulled forward to clear the checklist
 
-Every one throws with a message naming what it found, rather than reading the
-file under an assumption that would produce a plausible wrong image:
+*Closed 2026-08-09.* All four landed together, ahead of the mode 3 slice
+[`SIGPROC_PLAN.md`](../../../docs/planning/SAR/SIGPROC_PLAN.md) scheduled them
+into. The minimum-per-demo rule says implement what the next demo forces; the
+[new-operator checklist](../../../docs/planning/NEW_OPERATOR_CHECKLIST.md) says
+a vertical slice never clears the gate. Both are right and they point opposite
+ways here, so the reader was carried to full contract rather than being called
+done at the mode 1 subset. What each now does:
 
-- **Multi-file `path`.** `path` is a single string. The directory and ordered
-  list forms, and with them the `collection_boundary` half of the boundary
-  announcement, land when a demo reads more than one file. Only
-  `end_of_stream` is emitted today.
-- **`CI4` and `CI2` sample decoding.** The parser recognises the formats and
-  reports them by name; only `CF8` decodes.
-- **`AmpSF`.** A file carrying per-vector amplitude scale factors is refused
-  outright. Reading it while ignoring them would understate amplitudes
-  silently, which is worse than not reading it.
-- **TOA-domain collections.** Refused. `sample_axis` is built as a frequency
-  axis from `SC0`/`SCSS`, which is the FX-domain reading.
+- **Multi-file `path`.** A single file, a directory (lexicographic), or an
+  explicit ordered list. Each file is its own collection: `pulse_range` applies
+  per file, the frame is validated per file, the `coordinate_frame` descriptor
+  is re-emitted at each collection's first tick, and the seam is announced as
+  `collection_boundary` with `end_of_stream` reserved for the last. Every file
+  is opened and checked at `start()`, so an unreadable third file fails before
+  the first pulse rather than after two collections have been formed.
+- **`CI4` and `CI2` sample decoding.** Both decode. `CF8` keeps its
+  no-intermediate-copy path (item 6); the integer formats convert per sample,
+  which is why `CI2` is the slowest per byte in the harness despite moving the
+  fewest.
+- **`AmpSF`.** Applied per vector. The scale factors live in the parameter
+  block, so `read_signal_into` **requires** the `PvpBlock` to be handed to it
+  whenever the file declares `AmpSF` and throws if it is missing or is the
+  wrong batch. Making the caller supply it is what stops a silently unscaled
+  read, which is the failure the old outright refusal was protecting against.
+- **TOA-domain collections.** Read. `SC0`/`SCSS` define the sample axis in both
+  domains — Hz and Hz/sample under `FX`, seconds and seconds/sample under
+  `TOA` — so the arithmetic never differed and only the unit the contract
+  ascribes to the port does. Untested against a real file: no public collection
+  found in item 9's survey is TOA, and the simulator emits FX.
+
+This closes the reader's contract surface. It does **not** close item 9's
+coverage gap by itself — see the amended table there for what the survey says
+now.
 
 ## 3. Frequency-axis constancy is enforced per batch, not per collection
 
@@ -107,14 +128,44 @@ signal bytes untouched. The reader's output is **identical** to the original
 file's, field for field including signal energy. `local_name_is` does what it
 claims, and the branch is no longer untested.
 
-## 6. Remaining hot-path cost: synchronous default-stream uploads
+## 6. Remaining hot-path cost — now measured, and it was not what was assumed
 
-The tick's four to five `cudaMemcpy` calls are synchronous on the default
-stream rather than async on the operator's own. Defensible for a source whose
-cost is the read, but it serializes against downstream work, and once
-`BackprojectionOp` is doing real work per tick that will show. Left until the
-reader reaches the performance harness, since a change here wants a
-measurement of the whole chain rather than of the reader alone.
+The tick's five `cudaMemcpy` calls are synchronous on the default stream rather
+than async on the operator's own, and each of the five output tensors is a
+fresh device allocation. This entry previously named the synchronous copies as
+the cost and deferred judgement to the performance harness. The harness
+(`performance/cpp/perf_cphd_reader.cpp`) now exists, and attributing the tick
+puts the ranking the other way round at small batches:
+
+| pulses x 512 | pvp read | signal read | 5x `cudaMalloc` | 5x H2D |
+| --- | --- | --- | --- | --- |
+| 4 | 0.006 | 0.013 | **0.090** | 0.028 |
+| 32 | 0.004 | 0.034 | **0.089** | 0.047 |
+| 256 | 0.011 | **0.243** | 0.085 | 0.193 |
+
+(ms, median of 200 reps, page-cache-warm, RTX PRO 6000.)
+
+Three readings, none of which the original entry would have predicted:
+
+- **Allocation is a flat ~0.09 ms per tick, independent of batch size**, so it
+  is half the tick at four pulses and 16% at 256. That is the per-tick-alloc
+  red flag the checklist says to look for, and it is the reason the harness
+  reports 0.3 GB/s at `xs` against 2.9 GB/s at `lg` — the small batches are
+  measuring the allocator, not the reader.
+- **The copies run at ~5.5 GB/s**, which is pageable-host-memory H2D speed
+  almost exactly. Pinned staging buffers are worth roughly 3-4x on that line;
+  going async on the operator's stream is worth nothing on its own, since
+  nothing else is contending yet.
+- **The read is not the bottleneck it was assumed to be** at these sizes —
+  4.1 GB/s with the file in page cache. On a cold 28 GiB Atlanta pull the disk
+  will dominate all three columns and none of this will matter.
+
+Left unfixed deliberately. The two available wins — a pooled allocator and
+pinned staging — are worth having, but their value is only visible against a
+downstream consumer that the flat 0.09 ms would serialize against, and
+`BackprojectionOp` does not exist yet. Revisit when the mode 1 chain runs end
+to end, with the whole-chain measurement this entry originally asked for and
+now has the harness to take.
 
 *Two costs closed, both measured rather than assumed:*
 
@@ -255,13 +306,24 @@ What the survey says about coverage, which is the more consequential finding:
 | Signal format | `CI4`, all 111 | `CF8` 116, `CI2` 2 |
 | `AmpSF` present | all 111 | 2 of 118 |
 | `SGN` | `+1` | `-1` |
-| Accepted by the mode 1 operator | **0** | **115** |
+| Accepted at the mode 1 subset | 0 | 115 |
+| Accepted now (item 2 closed) | **111** | **118** |
 
-Two things follow. **Umbra open data is directly usable now** — 115 collections
-need no mode 3 work at all, which means the reader can be demonstrated on real
-public data rather than only on simulator output. **Capella is entirely gated
-behind mode 3**, and not marginally: every file needs both `CI4` decoding and
-`AmpSF`, so neither alone unlocks any of it.
+*Table amended 2026-08-09*, when item 2 closed. The survey's sharpest finding
+was that **Capella was entirely gated**, and not marginally — every one of its
+111 files needs both `CI4` decoding and `AmpSF`, so neither alone unlocked any
+of it. That is what made deferring both to mode 3 expensive: it left half the
+credential-free CPHD world unreadable while the reader was being called done.
+All 229 now read.
+
+`CI4` + `AmpSF` was re-verified numerically after the fact rather than assumed
+from the fixtures: Capella collections were decoded three ways from the same
+local bytes — our reader, `sarpy` (which applies `AmpSF` itself), and a manual
+decode applying scale factors read by `sarkit` — and all three agree. The
+generated `CI4` and `CI2` fixtures round-trip against the `CF8` collection they
+were quantized from to within an LSB, which pins the decode; the three-way
+check is what pins the *scaling*, since a fixture we quantized ourselves would
+have agreed with our own convention either way.
 
 `SGN` also splits cleanly by vendor, `-1` for Umbra and `+1` for Capella. The
 reader reports it correctly in both cases; it is flagged because our simulator

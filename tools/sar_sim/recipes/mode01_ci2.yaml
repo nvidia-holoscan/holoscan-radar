@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The mode01 smoke collection stored as CI2 with per-vector AmpSF.
+#
+# The companion to mode01_ci4.yaml, and the only coverage CI2 has anywhere:
+# no public collection in the surveyed Capella or Umbra catalogues uses it, so
+# without this file the 8-bit branch of the reader's decode would ship having
+# never run. Byte-wide samples also isolate a specific trap, since a decode
+# that treats the stored bytes as unsigned still produces a plausible image.
+#
+# 8 bits of quantization is coarse — around -42 dB against full scale — so a
+# test comparing against the CF8 file must budget for that, not for CI4's
+# tolerance.
+
+name: mode01_ci2
+description: >-
+  mode01_smoke stored as 8-bit integer pairs with per-pulse amplitude scale
+  factors, covering the reader's CI2 path.
+
+storage:
+  signal_format: CI2
+
+waveform:
+  carrier_frequency: 9.6e9
+  bandwidth: 600.0e6
+  chirp_duration: 20.0e-6
+  sample_rate: 750.0e6
+  chirp_repetition_interval: 2.0e-3
+
+geometry:
+  iarp_lat_deg: 33.6407
+  iarp_lon_deg: -84.4277
+  iarp_hae_m: 313.0
+  slant_range_m: 10000.0
+  graze_deg: 30.0
+  heading_deg: 90.0
+  velocity_m_s: 100.0
+
+collection:
+  num_pulses: 256
+  num_samples: 512
+
+image_oversample: 2.0
+image_half_extent_m: 20.0
+
+targets:
+  - {name: origin, east_m: 0.0, north_m: 0.0, amplitude: 1.0}
+  - {name: range_pos, east_m: 0.0, north_m: 8.0, amplitude: 0.8}
+  - {name: azimuth_pos, east_m: 12.0, north_m: -6.0, amplitude: 0.5, phase_deg: 45.0}

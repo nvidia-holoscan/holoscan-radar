@@ -9,9 +9,11 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include "io/cphd_reader_op/cphd_file.hpp"
@@ -38,6 +40,45 @@ constexpr const char* precision_name() {
 // had already been contaminated.
 constexpr const char* kStreamBoundaryKey = "holoscan.radar.stream_boundary";
 constexpr const char* kEndOfStream = "end_of_stream";
+constexpr const char* kCollectionBoundary = "collection_boundary";
+
+// Expand the `path` parameter into the ordered list of collections to read.
+// A directory contributes its `.cphd` entries in lexicographic order, which
+// is what the contract specifies; anything else is taken as a file and passed
+// through, so an explicit list keeps the order it was written in even when
+// that is not lexicographic.
+std::vector<std::string> resolve_paths(const CollectionPaths& parameter,
+                                       const std::string& who) {
+  std::vector<std::string> files;
+  for (const std::string& entry : parameter.entries) {
+    std::error_code error;
+    if (!std::filesystem::exists(entry, error)) {
+      throw std::runtime_error(who + ": path '" + entry + "' does not exist");
+    }
+    if (!std::filesystem::is_directory(entry, error)) {
+      files.push_back(entry);
+      continue;
+    }
+    std::vector<std::string> found;
+    for (const auto& item : std::filesystem::directory_iterator(entry)) {
+      if (item.is_regular_file() && item.path().extension() == ".cphd") {
+        found.push_back(item.path().string());
+      }
+    }
+    if (found.empty()) {
+      throw std::runtime_error(who + ": directory '" + entry +
+                               "' contains no .cphd files");
+    }
+    // directory_iterator order is unspecified, so the contract's
+    // lexicographic promise has to be imposed here rather than assumed.
+    std::sort(found.begin(), found.end());
+    files.insert(files.end(), found.begin(), found.end());
+  }
+  if (files.empty()) {
+    throw std::runtime_error(who + ": path selects no files");
+  }
+  return files;
+}
 
 // Copy a host buffer to a freshly allocated device tensor of `shape`.
 template <typename Element>
@@ -72,6 +113,10 @@ CPHDReaderOp<T>::~CPHDReaderOp() = default;
 template <typename T>
 void CPHDReaderOp<T>::initialize() {
   ensure_radar_arg_setters();
+  // `path` is the reader's own parameter type rather than a shared
+  // descriptor, so it registers its setter here rather than in the common
+  // list. Registration is idempotent.
+  ArgumentSetter::ensure_type<CollectionPaths>();
 
   // The scheduling term this operator disables once the selected range is
   // exhausted. Created here rather than by the application so terminating is
@@ -98,9 +143,10 @@ void CPHDReaderOp<T>::setup(OperatorSpec& spec) {
   spec.output<CoordinateFrame>("coordinate_frame")
       .condition(ConditionType::kNone);
 
-  spec.param(path_, "path", "CPHD file path",
-             "Path to a single CPHD file. The directory and ordered-list "
-             "forms land with multi-file support (mode 3).");
+  spec.param(path_, "path", "CPHD collection path",
+             "A single CPHD file, a directory of them, or an explicit "
+             "ordered list. A directory is read in lexicographic order; a "
+             "list is read in the order given.");
 
   spec.param(coordinate_frame_, "coordinate_frame", "Coordinate frame",
              "Frame the emitted positions are expressed in. A frame "
@@ -122,74 +168,94 @@ void CPHDReaderOp<T>::setup(OperatorSpec& spec) {
              ParameterFlag::kOptional);
 }
 
+// Opens files_[file_index_] and resolves the pulse range within it. Called
+// once per collection: at start(), and again at each file seam.
 template <typename T>
-void CPHDReaderOp<T>::start() {
+void CPHDReaderOp<T>::open_current_file() {
   const std::string who =
       std::string("CPHDReaderOp<") + precision_name<T>() + ">";
+  const std::string& path = files_[file_index_];
 
-  file_ = std::make_unique<cphd::CphdFile>(path_.get());
+  file_ = std::make_unique<cphd::CphdFile>(path);
   const cphd::ChannelInfo& info = file_->channel(channel_.get());
 
   // CPHD carries positions in the earth-centred fixed frame, so anything
   // else the caller asks for would be a reinterpretation of the file's
-  // numbers rather than a conversion of them.
+  // numbers rather than a conversion of them. Checked per file: a list may
+  // mix collections, and only the file being read can be validated against.
   const CoordinateFrame& frame = coordinate_frame_.get();
-  if (!frame.is_valid()) {
-    throw std::runtime_error(who + ": coordinate_frame is not valid");
-  }
   if (frame.frame() != CoordinateFrameType::kEcef) {
     throw std::runtime_error(
-        who + ": file '" + path_.get() +
+        who + ": file '" + path +
         "' declares its positions in ECF, but coordinate_frame is " +
         std::string(to_string(frame.frame())) +
         ". CPHD positions are ECEF; conversion is a downstream concern.");
-  }
-
-  if (file_->sample_domain() != cphd::SampleDomain::kFX) {
-    throw std::runtime_error(
-        who + ": file '" + path_.get() + "' is a " +
-        to_string(file_->sample_domain()) +
-        "-domain collection; only FX is implemented (TOA lands with the "
-        "collections that force it)");
-  }
-  if (file_->has_pvp_field("AmpSF")) {
-    throw std::runtime_error(
-        who + ": file '" + path_.get() +
-        "' carries per-vector amplitude scale factors (AmpSF), which are "
-        "not applied yet (mode 3); reading it would understate amplitudes");
-  }
-
-  if (pulses_per_tick_.get() <= 0) {
-    throw std::runtime_error(who + ": pulses_per_tick must be positive, got " +
-                             std::to_string(pulses_per_tick_.get()));
   }
 
   first_pulse_ = 0;
   last_pulse_ = info.num_vectors;
   const auto range = pulse_range_.try_get();
   if (range.has_value()) {
-    if (range->size() != 2) {
-      throw std::runtime_error(who + ": pulse_range needs 2 entries, got " +
-                               std::to_string(range->size()));
-    }
+    // Per file, per the contract: each file is its own collection, so the
+    // same window is taken from each rather than the range running across
+    // the concatenation.
     first_pulse_ = (*range)[0];
     last_pulse_ = (*range)[1];
     if (first_pulse_ < 0 || last_pulse_ > info.num_vectors ||
         first_pulse_ >= last_pulse_) {
       throw std::runtime_error(
           who + ": pulse_range [" + std::to_string(first_pulse_) + ", " +
-          std::to_string(last_pulse_) + ") is out of range; the channel has " +
-          std::to_string(info.num_vectors) + " pulses");
+          std::to_string(last_pulse_) + ") is out of range for '" + path +
+          "'; its channel has " + std::to_string(info.num_vectors) +
+          " pulses");
     }
   }
   next_pulse_ = first_pulse_;
   frame_emitted_ = false;
 
   HOLOSCAN_LOG_INFO(
-      "{}: '{}' channel {} ({}): {} pulses x {} samples, reading [{}, {}) in "
-      "batches of {}",
-      who, path_.get(), channel_.get(), info.identifier, info.num_vectors,
-      info.num_samples, first_pulse_, last_pulse_, pulses_per_tick_.get());
+      "{}: '{}' ({} of {}) channel {} ({}): {} pulses x {} samples, {}, "
+      "reading [{}, {}) in batches of {}",
+      who, path, file_index_ + 1, files_.size(), channel_.get(),
+      info.identifier, info.num_vectors, info.num_samples,
+      to_string(file_->sample_format()), first_pulse_, last_pulse_,
+      pulses_per_tick_.get());
+}
+
+template <typename T>
+void CPHDReaderOp<T>::start() {
+  const std::string who =
+      std::string("CPHDReaderOp<") + precision_name<T>() + ">";
+
+  const CoordinateFrame& frame = coordinate_frame_.get();
+  if (!frame.is_valid()) {
+    throw std::runtime_error(who + ": coordinate_frame is not valid");
+  }
+  if (pulses_per_tick_.get() <= 0) {
+    throw std::runtime_error(who + ": pulses_per_tick must be positive, got " +
+                             std::to_string(pulses_per_tick_.get()));
+  }
+  const auto range = pulse_range_.try_get();
+  if (range.has_value() && range->size() != 2) {
+    throw std::runtime_error(who + ": pulse_range needs 2 entries, got " +
+                             std::to_string(range->size()));
+  }
+
+  files_ = resolve_paths(path_.get(), who);
+  file_index_ = 0;
+
+  // Every file is opened and checked before the first pulse is emitted.
+  // Opening costs only the header and XML, whereas discovering an
+  // unreadable third file after two collections have been formed wastes the
+  // run and leaves a partial product.
+  if (files_.size() > 1) {
+    for (size_t index = 0; index < files_.size(); ++index) {
+      file_index_ = index;
+      open_current_file();
+    }
+    file_index_ = 0;
+  }
+  open_current_file();
 }
 
 template <typename T>
@@ -207,21 +273,25 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   const int64_t count =
       std::min(pulses_per_tick_.get(), last_pulse_ - next_pulse_);
   const int64_t first = next_pulse_;
+  // Final for this collection, which is not the same as final overall once
+  // path names more than one file.
   const bool is_final = (first + count >= last_pulse_);
+  const bool is_last_file = (file_index_ + 1 == files_.size());
 
-  // 1. Phase history, read straight into the staging buffer at this
-  // instance's precision. A single-precision instance makes no copy beyond
-  // this one: CF8 is big-endian complex<float>, so the bytes land here and
-  // are swapped in place.
-  std::vector<std::complex<T>> history(
-      static_cast<size_t>(count * num_samples));
-  file_->read_signal_into(channel_.get(), first, count, history.data());
-
-  // 2. Per-pulse geometry. Every field this tick needs comes out of one read
+  // 1. Per-pulse geometry. Every field this tick needs comes out of one read
   // of the parameter block: the records are interleaved, so reading eight
-  // fields separately would be eight passes over the same bytes.
+  // fields separately would be eight passes over the same bytes. Read first
+  // because the signal decode needs the amplitude scale factors from it.
   const cphd::PvpBlock pvp =
       file_->read_pvp_block(channel_.get(), first, count);
+
+  // 2. Phase history, read straight into the staging buffer at this
+  // instance's precision. A single-precision instance reading CF8 makes no
+  // copy beyond this one: CF8 is big-endian complex<float>, so the bytes land
+  // here and are swapped in place.
+  std::vector<std::complex<T>> history(
+      static_cast<size_t>(count * num_samples));
+  file_->read_signal_into(channel_.get(), first, count, history.data(), &pvp);
 
   // The aperture phase centre is the midpoint of the transmit and receive
   // phase centres, which reduces to either one for the monostatic
@@ -262,11 +332,15 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
     }
   }
 
-  // 3. The fast-time sample axis. SC0 and SCSS are per-vector fields, but
-  // the axis is one shared row, so their constancy over the batch is a
-  // precondition rather than an assumption -- a collection that steps its
-  // start frequency would otherwise be read at the wrong frequencies and
-  // produce a plausible, wrong image.
+  // 3. The fast-time sample axis. SC0 and SCSS carry it in both domains --
+  // Hz and Hz per sample for an FX collection, seconds and seconds per sample
+  // for a TOA one -- so the arithmetic is the same and only the unit the
+  // contract ascribes to the port differs.
+  //
+  // They are per-vector fields while the axis is one shared row, so their
+  // constancy over the batch is a precondition rather than an assumption: a
+  // collection that steps its start frequency would otherwise be read at the
+  // wrong frequencies and produce a plausible, wrong image.
   const std::vector<double> sc0 = pvp.field("SC0", 1);
   const std::vector<double> scss = pvp.field("SCSS", 1);
   for (int64_t pulse = 1; pulse < count; ++pulse) {
@@ -274,8 +348,8 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
       throw std::runtime_error(
           who + ": SC0/SCSS vary across pulses (pulse " +
           std::to_string(first + pulse) +
-          " differs from the batch's first); a per-pulse frequency axis is "
-          "not supported");
+          " differs from the batch's first); a per-pulse sample axis is not "
+          "supported");
     }
   }
   std::vector<T> axis(static_cast<size_t>(num_samples));
@@ -285,9 +359,13 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   }
 
   // 4. Emit. The boundary key is stamped before the emits so it rides the
-  // messages of this batch rather than the next one.
+  // messages of this batch rather than the next one -- a seam reported one
+  // batch late would already have let the next collection's pulses into the
+  // closing aperture.
   if (is_final && is_metadata_enabled()) {
-    metadata()->set(kStreamBoundaryKey, std::string(kEndOfStream));
+    metadata()->set(kStreamBoundaryKey, std::string(is_last_file
+                                                        ? kEndOfStream
+                                                        : kCollectionBoundary));
   }
 
   const std::vector<int64_t> pulse_shape{count, 3};
@@ -330,11 +408,22 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   }
 
   next_pulse_ = first + count;
-  if (is_final) {
-    HOLOSCAN_LOG_INFO("{}: end of stream after {} pulses", who,
-                      last_pulse_ - first_pulse_);
-    stop_condition_->disable_tick();
+  if (!is_final) {
+    return;
   }
+  if (is_last_file) {
+    HOLOSCAN_LOG_INFO("{}: end of stream after {} pulses of '{}'", who,
+                      last_pulse_ - first_pulse_, files_[file_index_]);
+    stop_condition_->disable_tick();
+    return;
+  }
+  // Advance to the next collection. The seam has already been announced on
+  // the batch just emitted, so the consumer's flush and reset happen before
+  // any pulse of the next file reaches it.
+  HOLOSCAN_LOG_INFO("{}: collection boundary after {} pulses of '{}'", who,
+                    last_pulse_ - first_pulse_, files_[file_index_]);
+  ++file_index_;
+  open_current_file();
 }
 
 template class CPHDReaderOp<float>;

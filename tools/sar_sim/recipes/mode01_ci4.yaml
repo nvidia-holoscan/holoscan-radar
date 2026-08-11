@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The mode01 smoke collection stored as CI4 with per-vector AmpSF.
+#
+# Every physical field below is identical to mode01_smoke.yaml, and that is
+# the point rather than laziness: the two files hold the same signal in two
+# containers, so reading both and differencing them measures the reader's
+# integer decode and AmpSF scaling against a known answer. Any disagreement
+# beyond half a quantization step is a decode bug.
+#
+# This is the CI stand-in for the Capella collections, which are the real CI4
+# and AmpSF data and are far too large for a test to fetch.
+
+name: mode01_ci4
+description: >-
+  mode01_smoke stored as 16-bit integer pairs with per-pulse amplitude scale
+  factors, covering the reader's CI4 and AmpSF paths.
+
+storage:
+  signal_format: CI4
+
+waveform:
+  carrier_frequency: 9.6e9
+  bandwidth: 600.0e6
+  chirp_duration: 20.0e-6
+  sample_rate: 750.0e6
+  chirp_repetition_interval: 2.0e-3
+
+geometry:
+  iarp_lat_deg: 33.6407
+  iarp_lon_deg: -84.4277
+  iarp_hae_m: 313.0
+  slant_range_m: 10000.0
+  graze_deg: 30.0
+  heading_deg: 90.0
+  velocity_m_s: 100.0
+
+collection:
+  num_pulses: 256
+  num_samples: 512
+
+image_oversample: 2.0
+image_half_extent_m: 20.0
+
+targets:
+  - {name: origin, east_m: 0.0, north_m: 0.0, amplitude: 1.0}
+  - {name: range_pos, east_m: 0.0, north_m: 8.0, amplitude: 0.8}
+  - {name: azimuth_pos, east_m: 12.0, north_m: -6.0, amplitude: 0.5, phase_deg: 45.0}

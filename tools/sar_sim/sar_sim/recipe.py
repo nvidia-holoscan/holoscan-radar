@@ -100,6 +100,36 @@ class PointTarget:
 
 
 @dataclass(frozen=True)
+class Storage:
+    """How the synthesized samples are laid down in the file.
+
+    Separate from the collection because it changes nothing physical: the same
+    scene, geometry and signal are written in a different container. That is
+    what makes it useful for fixtures — an integer-format file read back and
+    rescaled must reproduce the ``CF8`` one to within quantization error, so
+    the reader's decode is checked against a known answer rather than against
+    its own output.
+    """
+
+    signal_format: str = "CF8"
+
+    @property
+    def is_integer(self) -> bool:
+        return self.signal_format in ("CI4", "CI2")
+
+    @property
+    def quantization_peak(self) -> int:
+        """Largest magnitude the stored integer type holds."""
+        return 32767 if self.signal_format == "CI4" else 127
+
+    def validate(self) -> None:
+        if self.signal_format not in ("CF8", "CI4", "CI2"):
+            raise ValueError(
+                "storage.signal_format must be CF8, CI4 or CI2, got " f"{self.signal_format!r}"
+            )
+
+
+@dataclass(frozen=True)
 class Collection:
     """Sampling extent: how many pulses and how many frequency samples."""
 
@@ -122,6 +152,7 @@ class Recipe:
     waveform: Waveform
     geometry: Geometry
     collection: Collection
+    storage: Storage = field(default_factory=Storage)
     targets: list[PointTarget] = field(default_factory=list)
     # Oversampling of the formed image relative to the intrinsic resolution.
     # Drives only the suggested SampleGeometry in the sidecar, never the
@@ -136,6 +167,7 @@ class Recipe:
         self.waveform.validate()
         self.geometry.validate()
         self.collection.validate()
+        self.storage.validate()
         if not self.targets:
             raise ValueError("recipe.targets must name at least one point target")
         if not self.image_oversample > 0.0:
@@ -206,6 +238,9 @@ def parse_recipe(raw: dict[str, Any], *, source: str = "<recipe>") -> Recipe:
         collection=Collection(
             num_pulses=int(_require(collection_raw, "num_pulses", "collection")),
             num_samples=int(_require(collection_raw, "num_samples", "collection")),
+        ),
+        storage=Storage(
+            signal_format=str(raw.get("storage", {}).get("signal_format", "CF8")),
         ),
         targets=[
             PointTarget(

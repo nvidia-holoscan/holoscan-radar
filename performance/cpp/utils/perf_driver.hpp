@@ -132,8 +132,10 @@ bool parse_args(int argc, char** argv, Options* opt) {
       opt->full = true;
     } else if (a == "--warmup") {
       opt->rs.warmup_frames = std::stoi(next("--warmup"));
+      opt->rs.warmup_pinned = true;
     } else if (a == "--frames") {
       opt->rs.measured_frames = std::stoi(next("--frames"));
+      opt->rs.frames_pinned = true;
     } else if (a == "--repeats") {
       opt->rs.repeats = std::stoi(next("--repeats"));
     } else if (a == "--stop-after-s") {

@@ -43,6 +43,13 @@ std::string fixture_path() {
   return std::string(SAR_FIXTURE_DIR) + "/mode01_smoke.cphd";
 }
 
+// The same collection stored as integer pairs with per-vector scale factors.
+// Generated from a recipe identical to mode01_smoke's but for the storage
+// section, which is what lets the two be differenced.
+std::string fixture_path(const char* recipe) {
+  return std::string(SAR_FIXTURE_DIR) + "/" + recipe + ".cphd";
+}
+
 CoordinateFrame ecef_frame() {
   CoordinateFrameSpec spec;
   spec.frame = CoordinateFrameType::kEcef;
@@ -72,9 +79,11 @@ TEST(CphdFile, ReadsHeaderAndXmlMetadataOfTheSmokeFixture) {
   EXPECT_TRUE(file.has_pvp_field("TxPos"));
   EXPECT_TRUE(file.has_pvp_field("SRPPos"));
   EXPECT_TRUE(file.has_pvp_field("SC0"));
-  // The mode 1 collection carries no amplitude scale factors; the reader
-  // refuses files that do rather than understating their amplitudes.
+  // A CF8 collection declares no amplitude scale factors. The recipe leaves
+  // the field out rather than writing a constant 1, so that a reader which
+  // ignored AmpSF entirely could not pass by reading this file.
   EXPECT_FALSE(file.has_pvp_field("AmpSF"));
+  EXPECT_FALSE(file.has_amp_sf());
 }
 
 TEST(CphdFile, PvpFieldsMatchTheGeometryTheRecipeDescribes) {
@@ -264,6 +273,73 @@ TEST(CphdFile, SinglePrecisionAndDoublePrecisionReadsAgreeExactly) {
   }
 }
 
+// The integer formats carry the same collection as the CF8 fixture, so
+// decoding them correctly means reproducing it. That is a far stronger
+// assertion than "the samples look plausible": a wrong integer width, a
+// missed byte swap, an unsigned read, or an unapplied AmpSF each move the
+// result by orders of magnitude, while a correct decode lands inside one
+// quantization step. Capella's real CI4 collections check the same paths
+// against sarpy, but they are gigabytes and cannot be fetched by a test.
+TEST(CphdFile, IntegerFormatsRoundTripToTheFloatCollection) {
+  const CphdFile reference(fixture_path());
+  const int64_t count = 12;
+  const int64_t samples = reference.channel(0).num_samples;
+  const std::vector<std::complex<float>> expected =
+      reference.read_signal(0, 0, count);
+
+  double peak = 0.0;
+  for (const std::complex<float>& sample : expected) {
+    peak = std::max(peak, static_cast<double>(std::abs(sample)));
+  }
+  ASSERT_GT(peak, 0.0);
+
+  // One least-significant bit of the stored type, as a fraction of full
+  // scale. Half of that is the ideal rounding bound; the margin absorbs the
+  // per-pulse scaling, since a quiet pulse is quantized against its own peak.
+  for (const auto& [recipe, lsb] : std::vector<std::pair<const char*, double>>{
+           {"mode01_ci4", 1.0 / 32767.0}, {"mode01_ci2", 1.0 / 127.0}}) {
+    const CphdFile file(fixture_path(recipe));
+    EXPECT_TRUE(file.has_amp_sf()) << recipe;
+    EXPECT_EQ(file.channel(0).num_samples, samples) << recipe;
+
+    const std::vector<std::complex<float>> actual = file.read_signal(0, 0,
+                                                                     count);
+    ASSERT_EQ(actual.size(), expected.size()) << recipe;
+    double worst = 0.0;
+    for (size_t i = 0; i < actual.size(); ++i) {
+      worst = std::max(worst,
+                       static_cast<double>(std::abs(actual[i] - expected[i])));
+    }
+    EXPECT_LT(worst / peak, lsb) << recipe << ": decoded signal is "
+                                 << worst / peak
+                                 << " of full scale away from the CF8 "
+                                    "collection, more than one quantization "
+                                    "step";
+  }
+}
+
+// Reading a scaled collection without the parameter block it is scaled by
+// would return samples smaller by a factor of AmpSF -- smooth, plausible, and
+// wrong. The signature makes that unrepresentable rather than unlikely.
+TEST(CphdFile, ReadingAScaledCollectionWithoutItsScaleFactorsIsRefused) {
+  const CphdFile file(fixture_path("mode01_ci4"));
+  ASSERT_TRUE(file.has_amp_sf());
+
+  std::vector<std::complex<float>> samples(
+      static_cast<size_t>(file.channel(0).num_samples * 4));
+  EXPECT_THROW(file.read_signal_into(0, 0, 4, samples.data()),
+               std::runtime_error);
+
+  // A block covering the wrong vectors is the subtler version of the same
+  // mistake, and is refused for the same reason.
+  const cphd::PvpBlock mismatched = file.read_pvp_block(0, 0, 3);
+  EXPECT_THROW(file.read_signal_into(0, 0, 4, samples.data(), &mismatched),
+               std::runtime_error);
+
+  const cphd::PvpBlock matching = file.read_pvp_block(0, 0, 4);
+  EXPECT_NO_THROW(file.read_signal_into(0, 0, 4, samples.data(), &matching));
+}
+
 TEST(CphdFile, MalformedRequestsFailWithAClearError) {
   EXPECT_THROW(CphdFile("/nonexistent/path/to.cphd"), std::runtime_error);
   // A file that is not CPHD at all must be rejected on its first line rather
@@ -408,13 +484,15 @@ class CaptureSinkOp : public holoscan::Operator {
 class ReaderApp : public holoscan::Application {
  public:
   ReaderApp(ReaderCapture* capture, int64_t pulses_per_tick,
-            std::vector<int64_t> pulse_range)
+            std::vector<int64_t> pulse_range,
+            CollectionPaths paths = CollectionPaths(fixture_path()))
       : capture_(capture),
         pulses_per_tick_(pulses_per_tick),
-        pulse_range_(std::move(pulse_range)) {}
+        pulse_range_(std::move(pulse_range)),
+        paths_(std::move(paths)) {}
 
   void compose() override {
-    holoscan::ArgList args{holoscan::Arg("path", fixture_path()),
+    holoscan::ArgList args{holoscan::Arg("path", paths_),
                            holoscan::Arg("coordinate_frame", ecef_frame()),
                            holoscan::Arg("pulses_per_tick", pulses_per_tick_)};
     if (!pulse_range_.empty()) {
@@ -444,6 +522,7 @@ class ReaderApp : public holoscan::Application {
   ReaderCapture* capture_;
   int64_t pulses_per_tick_;
   std::vector<int64_t> pulse_range_;
+  CollectionPaths paths_;
 };
 
 TEST(CPHDReaderOp, BatchingCoversTheCollectionWithAShortFinalTick) {
@@ -619,6 +698,97 @@ TEST(CPHDReaderOp, RejectsAnOutOfBoundsPulseRange) {
                std::runtime_error);
 }
 
+// A path naming several files reads them as separate collections, back to
+// back. The seam is what makes this more than concatenation: the accumulating
+// formation stage downstream must flush and reset there rather than
+// integrating two scenes into one image, and the only way it learns of the
+// seam is this key.
+TEST(CPHDReaderOp, MultipleFilesReadInOrderAndAnnounceEachSeam) {
+  const CphdFile first_file(fixture_path());
+  const CphdFile second_file(fixture_path("mode01_ci4"));
+  const int64_t pulses = first_file.channel(0).num_vectors;
+  ASSERT_EQ(second_file.channel(0).num_vectors, pulses);
+
+  // A short window per file keeps the test quick and, more usefully, pins
+  // that pulse_range applies per file rather than across the concatenation.
+  const int64_t first = 0;
+  const int64_t last = 64;
+  const int64_t per_tick = 32;
+
+  ReaderCapture capture;
+  ReaderApp(&capture, per_tick, {first, last},
+            CollectionPaths(std::vector<std::string>{
+                fixture_path(), fixture_path("mode01_ci4")}))
+      .run();
+
+  int64_t total = 0;
+  for (const int64_t count : capture.pulse_counts) {
+    total += count;
+  }
+  EXPECT_EQ(total, 2 * (last - first)) << "pulse_range applies to each file";
+
+  // Two ticks per file, and the boundary lands on the last tick of each: the
+  // first seam is a collection boundary, the last is the end of the stream.
+  ASSERT_EQ(capture.boundaries.size(), 4u);
+  EXPECT_EQ(capture.boundaries[0], "");
+  EXPECT_EQ(capture.boundaries[1], "collection_boundary");
+  EXPECT_EQ(capture.boundaries[2], "");
+  EXPECT_EQ(capture.boundaries[3], "end_of_stream");
+
+  // The frame descriptor is emitted once per collection, not once per
+  // instance: a new file may declare a new frame, and the consumer's
+  // override is sticky until replaced.
+  EXPECT_EQ(capture.frames.size(), 2u);
+
+  // The data is each file's own, in order, and the second file's samples are
+  // its dequantized ones rather than the first file's repeated.
+  const std::vector<std::complex<float>> expected_first =
+      first_file.read_signal(0, first, last - first);
+  const std::vector<std::complex<float>> expected_second =
+      second_file.read_signal(0, first, last - first);
+  ASSERT_EQ(capture.samples.size(),
+            expected_first.size() + expected_second.size());
+  for (size_t i = 0; i < expected_first.size(); ++i) {
+    ASSERT_EQ(capture.samples[i], expected_first[i]) << "first file, " << i;
+  }
+  for (size_t i = 0; i < expected_second.size(); ++i) {
+    ASSERT_EQ(capture.samples[expected_first.size() + i], expected_second[i])
+        << "second file, " << i;
+  }
+}
+
+// A directory stands in for the list, enumerated lexicographically. The
+// fixture directory holds all three generated collections, so this also
+// covers the reader opening CI2, CI4 and CF8 in one run.
+TEST(CPHDReaderOp, ADirectoryIsReadInLexicographicOrder) {
+  ReaderCapture capture;
+  ReaderApp(&capture, 64, {0, 64}, CollectionPaths(std::string(
+                                       SAR_FIXTURE_DIR)))
+      .run();
+
+  // mode01_ci2, mode01_ci4, mode01_smoke -- one tick each at this window.
+  ASSERT_EQ(capture.boundaries.size(), 3u);
+  EXPECT_EQ(capture.boundaries[0], "collection_boundary");
+  EXPECT_EQ(capture.boundaries[1], "collection_boundary");
+  EXPECT_EQ(capture.boundaries[2], "end_of_stream");
+
+  const CphdFile ci2(fixture_path("mode01_ci2"));
+  const std::vector<std::complex<float>> expected = ci2.read_signal(0, 0, 64);
+  ASSERT_GE(capture.samples.size(), expected.size());
+  for (size_t i = 0; i < expected.size(); ++i) {
+    ASSERT_EQ(capture.samples[i], expected[i])
+        << "lexicographically first file, sample " << i;
+  }
+}
+
+TEST(CPHDReaderOp, RejectsAPathThatSelectsNothing) {
+  ReaderCapture capture;
+  EXPECT_THROW(ReaderApp(&capture, 32, {},
+                         CollectionPaths(std::string("/nonexistent/dir")))
+                   .run(),
+               std::runtime_error);
+}
+
 // A frame disagreeing with the file is an error, not a silent
 // reinterpretation of the same numbers under a different meaning.
 TEST(CPHDReaderOp, RejectsACoordinateFrameTheFileDoesNotDeclare) {
@@ -629,7 +799,7 @@ TEST(CPHDReaderOp, RejectsACoordinateFrameTheFileDoesNotDeclare) {
       spec.frame = CoordinateFrameType::kEnu;
       spec.origin_llh = std::array<double, 3>{33.64, -84.43, 300.0};
       auto reader = make_operator<CPHDReaderOp<float>>(
-          "reader", holoscan::Arg("path", fixture_path()),
+          "reader", holoscan::Arg("path", CollectionPaths(fixture_path())),
           holoscan::Arg("coordinate_frame", CoordinateFrame(spec)),
           holoscan::Arg("pulses_per_tick", static_cast<int64_t>(32)));
       add_operator(reader);

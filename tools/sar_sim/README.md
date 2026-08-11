@@ -21,7 +21,7 @@ That writes two files into the output directory:
 
 | File | What it is |
 | --- | --- |
-| `<name>.cphd` | CPHD 1.1.0, `CF8`, no `AmpSF` — the same decode path as the pinned Atlanta collection |
+| `<name>.cphd` | CPHD 1.1.0 in the recipe's `storage.signal_format` — `CF8` by default, the same decode path as the pinned Atlanta collection |
 | `<name>_truth.json` | Ground truth: target positions, resolutions, and the image lattice the fixture expects to be formed on |
 
 Current recipes:
@@ -30,6 +30,27 @@ Current recipes:
 | --- | --- | --- | --- |
 | `mode01_smoke.yaml` | 1.1 MiB, 256 x 512 | < 1 s | CI; every convention the demo exercises, shrunk |
 | `mode01.yaml` | 32 MiB, 2048 x 2048 | ~1 s | Mode 1 bring-up and the spotlight demo |
+| `mode01_ci4.yaml` | 0.6 MiB, 256 x 512 | < 1 s | CI; `mode01_smoke` stored as `CI4` with `AmpSF` |
+| `mode01_ci2.yaml` | 0.3 MiB, 256 x 512 | < 1 s | CI; the same, stored as `CI2` |
+
+### The `storage` section
+
+`storage.signal_format` picks how samples are written: `CF8` (big-endian
+`complex<float>`, the default), `CI4` (two big-endian `int16`) or `CI2` (two
+`int8`). The integer formats are **quantized per vector** — each pulse is
+scaled so its peak reaches `storage.quantization_peak` of full scale, and the
+reciprocal is written to that vector's `AmpSF` parameter, exactly as the
+Capella collections do it. A reader that ignores `AmpSF` gets amplitudes that
+are wrong per pulse rather than uniformly wrong, so it cannot be caught by
+eyeballing an image.
+
+That is the point of these two recipes: they let CI cover the integer decode
+and scaling paths without a network fetch, and because they are quantized from
+the same synthesis `mode01_smoke` uses, they can be asserted against it to
+within an LSB. What they cannot do is validate the *convention* — a fixture we
+scaled ourselves would agree with our own reading of `AmpSF` whether or not it
+matches the standard. Real Capella files are what pins that; see the reader's
+[`OPEN_ITEMS.md`](../../operators/io/cphd_reader_op/OPEN_ITEMS.md) item 9.
 
 ## Why the sidecar matters
 

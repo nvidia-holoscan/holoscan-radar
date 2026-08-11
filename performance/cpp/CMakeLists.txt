@@ -97,6 +97,17 @@ target_link_libraries(perf_mimo_coherent_compensation PRIVATE
     radar_perf_utils
     holoscan::mimo_coherent_compensation_op)
 
+# The reader characterizes against a file, so it needs to know where the
+# generated fixtures land. Same directory the C++ tests use, since the same
+# CTest setup fixture produces them; HOLOSCAN_RADAR_PERF_CPHD overrides it at
+# run time for measuring against a real collection.
+add_executable(perf_cphd_reader perf_cphd_reader.cpp)
+target_link_libraries(perf_cphd_reader PRIVATE
+    radar_perf_utils
+    holoscan::cphd_reader_op)
+target_compile_definitions(perf_cphd_reader PRIVATE
+    SAR_FIXTURE_DIR="${PROJECT_BINARY_DIR}/tests/cpp/sar_fixtures")
+
 # Optional smoke: runs a tiny scenario subset and verifies a report file is
 # written. No timing thresholds — CI only checks the tool executes and emits.
 if(HOLOSCAN_RADAR_BUILD_TESTING)
@@ -198,4 +209,14 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_mimo_coherent_compensation_smoke.json)
     set_tests_properties(perf_mimo_coherent_compensation_smoke PROPERTIES
         LABELS "performance")
+
+    # The only smoke here that needs a data file, hence the fixture
+    # dependency the others do not carry.
+    add_test(NAME perf_cphd_reader_smoke
+        COMMAND perf_cphd_reader --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_cphd_reader_smoke.json)
+    set_tests_properties(perf_cphd_reader_smoke PROPERTIES
+        LABELS "performance"
+        FIXTURES_REQUIRED sar_fixtures)
+
 endif()

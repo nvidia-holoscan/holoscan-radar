@@ -52,6 +52,15 @@ uint32_t byteswap32(uint32_t value) {
          ((value & 0x00ff0000U) >> 8) | ((value & 0xff000000U) >> 24);
 }
 
+int16_t read_be_int16(const char* bytes) {
+  uint16_t raw = 0;
+  std::memcpy(&raw, bytes, sizeof(raw));
+  raw = static_cast<uint16_t>((raw << 8) | (raw >> 8));
+  int16_t value = 0;
+  std::memcpy(&value, &raw, sizeof(value));
+  return value;
+}
+
 double read_be_double(const char* bytes) {
   uint64_t raw = 0;
   std::memcpy(&raw, bytes, sizeof(raw));
@@ -515,12 +524,6 @@ const ChannelInfo& CphdFile::check_signal_request(int64_t channel_index,
                                                   int64_t first,
                                                   int64_t count) const {
   const ChannelInfo& info = channel(channel_index);
-  if (sample_format_ != SampleFormat::kCF8) {
-    throw std::runtime_error(
-        std::string("CphdFile: ") + path_ + ": sample format " +
-        to_string(sample_format_) +
-        " is not implemented yet (only CF8; CI4 and CI2 arrive with mode 3)");
-  }
   if (first < 0 || count < 0 || first + count > info.num_vectors) {
     throw std::runtime_error(
         "CphdFile: " + path_ + ": signal vectors [" + std::to_string(first) +
@@ -530,48 +533,117 @@ const ChannelInfo& CphdFile::check_signal_request(int64_t channel_index,
   return info;
 }
 
+std::vector<double> CphdFile::amplitude_scale(const PvpBlock* pvp,
+                                              int64_t count) const {
+  if (!has_amp_sf()) {
+    return {};
+  }
+  // Refusing here is the point of taking the block as an argument: a
+  // collection whose samples are stored as small integers is off by orders of
+  // magnitude without its scale factors, and wrong by a smooth factor, which
+  // forms a perfectly focused image at the wrong amplitude.
+  if (pvp == nullptr) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ +
+        ": this collection scales its samples per vector (AmpSF), so reading "
+        "the signal needs the PVP block covering the same vectors");
+  }
+  if (pvp->count() != count) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ + ": the PVP block covers " +
+        std::to_string(pvp->count()) + " vectors but " +
+        std::to_string(count) + " were asked for; the AmpSF factors would be "
+        "applied to the wrong pulses");
+  }
+  return pvp->field("AmpSF", 1);
+}
+
 template <typename T>
 void CphdFile::read_signal_into(int64_t channel_index, int64_t first,
-                                int64_t count, std::complex<T>* out) const {
+                                int64_t count, std::complex<T>* out,
+                                const PvpBlock* pvp) const {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "CphdFile reads into float or double precision only");
   const ChannelInfo& info = check_signal_request(channel_index, first, count);
+  const std::vector<double> amp = amplitude_scale(pvp, count);
+
   const int64_t row_bytes = info.num_samples * signal_bytes_per_sample();
   const int64_t bytes = count * row_bytes;
-  const int64_t words = 2 * count * info.num_samples;  // one per real scalar
+  const int64_t total = count * info.num_samples;
   const int64_t base =
       signal_block_offset_ + info.signal_byte_offset + first * row_bytes;
 
+  bool decoded = false;
   if constexpr (std::is_same_v<T, float>) {
-    // CF8 *is* std::complex<float>, big-endian: same size, same layout. So
-    // the bytes go straight into the caller's buffer and the swap happens in
-    // place, which is why a single-precision instance makes no copy at all.
-    char* destination = reinterpret_cast<char*>(out);
-    read_at(base, destination, bytes, "signal block");
-    for (int64_t word = 0; word < words; ++word) {
-      uint32_t raw = 0;
-      std::memcpy(&raw, destination + word * sizeof(uint32_t), sizeof(raw));
-      raw = byteswap32(raw);
-      std::memcpy(destination + word * sizeof(uint32_t), &raw, sizeof(raw));
+    if (sample_format_ == SampleFormat::kCF8) {
+      // CF8 *is* std::complex<float>, big-endian: same size, same layout. So
+      // the bytes go straight into the caller's buffer and the swap happens
+      // in place, which is why this case makes no copy at all.
+      char* destination = reinterpret_cast<char*>(out);
+      read_at(base, destination, bytes, "signal block");
+      for (int64_t word = 0; word < 2 * total; ++word) {
+        uint32_t raw = 0;
+        std::memcpy(&raw, destination + word * sizeof(uint32_t), sizeof(raw));
+        raw = byteswap32(raw);
+        std::memcpy(destination + word * sizeof(uint32_t), &raw, sizeof(raw));
+      }
+      decoded = true;
     }
-  } else {
-    // Widening to double needs somewhere to put the narrow input, so this
-    // path keeps one scratch buffer. Same bit patterns, same values as the
-    // float path -- asserted in the tests.
+  }
+
+  if (!decoded) {
+    // Anything narrower than the output, or wider, needs somewhere to put the
+    // stored form. One scratch buffer, one pass. The integer formats are
+    // plain signed pairs -- no offset, no normalisation -- so the conversion
+    // is a cast, and any scaling a collection needs is what AmpSF carries.
     std::vector<char> scratch(static_cast<size_t>(bytes));
     read_at(base, scratch.data(), bytes, "signal block");
-    for (int64_t sample = 0; sample < count * info.num_samples; ++sample) {
-      const char* pair = scratch.data() + sample * 2 * sizeof(float);
-      out[sample] = std::complex<T>(read_be_float(pair),
-                                    read_be_float(pair + sizeof(float)));
+    const char* source = scratch.data();
+    for (int64_t sample = 0; sample < total; ++sample) {
+      switch (sample_format_) {
+        case SampleFormat::kCF8: {
+          const char* pair = source + sample * 2 * sizeof(float);
+          out[sample] = std::complex<T>(read_be_float(pair),
+                                        read_be_float(pair + sizeof(float)));
+          break;
+        }
+        case SampleFormat::kCI4: {
+          const char* pair = source + sample * 2 * sizeof(int16_t);
+          out[sample] = std::complex<T>(
+              static_cast<T>(read_be_int16(pair)),
+              static_cast<T>(read_be_int16(pair + sizeof(int16_t))));
+          break;
+        }
+        case SampleFormat::kCI2: {
+          // Single bytes have no byte order to get wrong; the only trap is
+          // signedness, since plain char is unsigned on aarch64.
+          const char* pair = source + sample * 2;
+          out[sample] = std::complex<T>(
+              static_cast<T>(static_cast<int8_t>(pair[0])),
+              static_cast<T>(static_cast<int8_t>(pair[1])));
+          break;
+        }
+      }
+    }
+  }
+
+  if (!amp.empty()) {
+    for (int64_t pulse = 0; pulse < count; ++pulse) {
+      const T scale = static_cast<T>(amp[static_cast<size_t>(pulse)]);
+      std::complex<T>* row = out + pulse * info.num_samples;
+      for (int64_t sample = 0; sample < info.num_samples; ++sample) {
+        row[sample] *= scale;
+      }
     }
   }
 }
 
 template void CphdFile::read_signal_into<float>(int64_t, int64_t, int64_t,
-                                                std::complex<float>*) const;
+                                                std::complex<float>*,
+                                                const PvpBlock*) const;
 template void CphdFile::read_signal_into<double>(int64_t, int64_t, int64_t,
-                                                 std::complex<double>*) const;
+                                                 std::complex<double>*,
+                                                 const PvpBlock*) const;
 
 std::vector<std::complex<float>> CphdFile::read_signal(int64_t channel_index,
                                                        int64_t first,
@@ -579,7 +651,12 @@ std::vector<std::complex<float>> CphdFile::read_signal(int64_t channel_index,
   const ChannelInfo& info = check_signal_request(channel_index, first, count);
   std::vector<std::complex<float>> samples(
       static_cast<size_t>(count * info.num_samples));
-  read_signal_into(channel_index, first, count, samples.data());
+  if (has_amp_sf()) {
+    const PvpBlock pvp = read_pvp_block(channel_index, first, count);
+    read_signal_into(channel_index, first, count, samples.data(), &pvp);
+  } else {
+    read_signal_into(channel_index, first, count, samples.data());
+  }
   return samples;
 }
 
