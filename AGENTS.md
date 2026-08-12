@@ -12,6 +12,14 @@ until the public HSDK 5 release; see
 [`.devcontainer/README.md`](.devcontainer/README.md) for build, `holohub`, and
 cleanup instructions.
 
+For SDK APIs and migration behavior on this branch, use the
+[HSDK 5 preview documentation](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/introduction/overview.md)
+as the source of truth; prefer each page's `.md` form, and use the
+[documentation index](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/llms.txt)
+to find applicable pages. Do not infer HSDK 5 behavior from HSDK 4.x code.
+Repository planning documents remain authoritative for this library's operator
+contracts. Record durable migration decisions there rather than in this file.
+
 Before merging the HSDK 5 port into `main` for the public release, search the
 entire repository for `[EA HSDK5 ONLY]` and remove every marked workaround,
 including this section. Do not rely on conversation context when performing
