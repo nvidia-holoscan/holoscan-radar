@@ -15,7 +15,7 @@
 // producer's finished data, so it waits on the stream, and that wait is part
 // of what a dump costs.
 
-#include <cuda_runtime_api.h>
+#include <unistd.h>
 
 #include <complex>
 #include <cstdint>
@@ -33,7 +33,6 @@
 #include "io/tensor_dump_op/tensor_dump_op.hpp"
 #include "utils/perf_app.hpp"
 #include "utils/perf_driver.hpp"
-#include "utils/perf_platform.hpp"
 #include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
@@ -131,7 +130,13 @@ class ScratchDir {
   ScratchDir(const ScratchDir&) = delete;
   ScratchDir& operator=(const ScratchDir&) = delete;
 
-  std::string pattern() const { return (path_ / "dump_{index}.bin").string(); }
+  // The extension follows the format so an npy run does not leave a directory
+  // of .bin files that no NumPy loader will look at.
+  std::string pattern(hr::TensorDumpFormat format) const {
+    const char* extension =
+        format == hr::TensorDumpFormat::kNpy ? ".npy" : ".bin";
+    return (path_ / ("dump_{index}" + std::string(extension))).string();
+  }
 
  private:
   fs::path path_;
@@ -331,7 +336,7 @@ struct DumpTraits : perf::PerfDriverDefaults {
     ScratchDir scratch;
     const std::string path = scen.destination == Destination::kNull
                                  ? std::string("/dev/null")
-                                 : scratch.pattern();
+                                 : scratch.pattern(scen.format);
 
     const auto samples = perf::collect_scenario_samples(
         rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {

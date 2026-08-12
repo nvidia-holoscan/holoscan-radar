@@ -13,7 +13,7 @@
 
 name: mode01_smoke
 description: >-
-  Three-point smoke scene for CI. Same conventions as mode01 at 1/32 the
+  Three-point smoke scene for CI. Same conventions as mode01 at 1/8 the
   pulses and 1/4 the samples.
 
 waveform:

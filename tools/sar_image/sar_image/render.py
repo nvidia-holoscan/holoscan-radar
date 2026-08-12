@@ -64,7 +64,7 @@ def render(
             )
 
     axes.set_xlabel("azimuth sample (u)")
-    axes.set_ylabel("slant range sample (v)")
+    axes.set_ylabel("ground range sample (v)")
     if title:
         axes.set_title(title)
     figure.tight_layout()

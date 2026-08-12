@@ -547,7 +547,12 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
     for (const auto& row : r.override_probe) {
       os << detail::col(row.scenario_id, 34) << detail::col(row.parameter, 8)
          << detail::col(row.transition, 12) << detail::col(row.from_to, 16)
-         << detail::col(std::to_string(row.later.samples + 1), 4)
+         // The first session counts only when it produced a sample: it is
+         // dropped when the session was too short, and adding it
+         // unconditionally then reports one more session than was measured.
+         << detail::col(std::to_string(row.later.samples +
+                                       (std::isfinite(row.first_ms) ? 1 : 0)),
+                        4)
          << detail::col(detail::fixed(row.first_ms, 3), 10)
          << detail::col(detail::fixed(row.later.median_ms, 3), 10)
          << detail::col(detail::fixed(row.later.p90_ms, 3), 10)

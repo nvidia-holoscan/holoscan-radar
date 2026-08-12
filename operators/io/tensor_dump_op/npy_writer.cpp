@@ -3,6 +3,8 @@
 
 #include "io/tensor_dump_op/npy_writer.hpp"
 
+#include <dlpack/dlpack.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -10,9 +12,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-
-#include <dlpack/dlpack.h>
-
 namespace holoscan::radar::npy {
 
 namespace {

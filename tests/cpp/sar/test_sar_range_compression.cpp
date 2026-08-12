@@ -18,6 +18,7 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -131,6 +132,13 @@ double minus_3db_width_bins(const std::vector<double>& magnitude) {
   const double half_power =
       magnitude[static_cast<size_t>(peak)] / std::sqrt(2.0);
   const auto crossing = [&](int64_t inside, int64_t outside) {
+    // A lobe that runs to the array edge has no outside sample to interpolate
+    // against. Current callers keep the peak well inside, but reading the
+    // neighbour unguarded is an out-of-bounds access the moment nfft or the
+    // target placement changes.
+    if (outside < 0 || outside >= static_cast<int64_t>(magnitude.size())) {
+      return static_cast<double>(inside);
+    }
     const double a = magnitude[static_cast<size_t>(inside)];
     const double b = magnitude[static_cast<size_t>(outside)];
     const double fraction = (a - half_power) / (a - b);
@@ -225,7 +233,14 @@ RunOutputs run_frame(const std::vector<std::complex<double>>& history,
       "range_bins", bins.validators());
   harness->template add_output_port<WindowSpec>("range_window");
   harness->run_test();
-  EXPECT_EQ(profiles.frames.size(), 1u);
+  // Throw rather than EXPECT: front() on an empty frame list is undefined
+  // behaviour, and this helper returns a value so it cannot use ASSERT. GTest
+  // reports the exception as a clean failure instead of crashing the binary.
+  if (profiles.frames.size() != 1u) {
+    throw std::runtime_error("run_frame: expected exactly 1 range_profiles "
+                             "frame, got " +
+                             std::to_string(profiles.frames.size()));
+  }
   RunOutputs out;
   out.profiles = std::move(profiles.frames.front());
   if (!bins.frames.empty()) {

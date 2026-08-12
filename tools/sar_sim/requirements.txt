@@ -4,13 +4,16 @@
 # Generate-path only. Nothing here is a runtime dependency of the operators,
 # the applications, or the C++ test suite — see tools/sar_sim/README.md.
 #
-# sarpy pulls in sarkit, which is what actually writes the CPHD; sarpy is
-# named because it is the library the data plan committed to and the one the
-# subsetter will use for the public collections.
+# sarpy is named because it is the library the data plan committed to and the
+# one the subsetter will use for the public collections. sarkit and lxml are
+# named separately rather than left to arrive through sarpy, because this tool
+# imports both directly and would break if sarpy ever dropped either.
 #
 # cupy is not pinned here: pick the wheel matching your CUDA major version
 # (cupy-cuda12x / cupy-cuda13x). It is already present in the Holoscan
 # container, and a CUDA-capable GPU is a hard dependency of this module.
+lxml>=6.1
 numpy>=1.24
 pyyaml>=6.0
+sarkit>=1.10
 sarpy>=2.0

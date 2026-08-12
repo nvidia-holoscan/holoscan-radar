@@ -3,11 +3,11 @@
 
 #pragma once
 
+#include <yaml-cpp/yaml.h>
+
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <yaml-cpp/yaml.h>
 
 // The `path` parameter of the standard-format readers, which OPERATOR_API.md
 // defines as "a single CPHD file, a directory of them, or an explicit ordered

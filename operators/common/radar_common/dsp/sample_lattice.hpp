@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -23,7 +24,7 @@
 
 namespace holoscan::radar {
 
-// Number of doubles in the expanded lattice, num_v * num_u * 3. Throws
+// Number of elements in the expanded lattice, num_v * num_u * 3. Throws
 // std::invalid_argument when that product overflows int64_t, which a
 // caller-supplied count pair can do long before the allocation would fail.
 inline int64_t sample_lattice_size(const SampleGeometry& geometry) {

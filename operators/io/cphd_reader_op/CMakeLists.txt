@@ -44,6 +44,9 @@ install(EXPORT holoscan_cphd_reader_op_targets
 )
 
 include(GNUInstallDirs)
-install(FILES cphd_reader_op.hpp
+# collection_paths.hpp travels with the operator header, which includes it --
+# installing one without the other leaves an installed header that cannot
+# compile.
+install(FILES cphd_reader_op.hpp collection_paths.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/io
 )

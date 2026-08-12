@@ -5,7 +5,6 @@
 
 #include <tinyxml2.h>
 
-#include <algorithm>
 #include <complex>
 #include <cstdint>
 #include <cstring>
@@ -328,6 +327,17 @@ void CphdFile::parse_xml(const std::string& xml) {
       to_int(required_text(root, "Global/SGN", path_), "Global/SGN", path_));
   num_bytes_pvp_ = to_int(required_text(root, "Data/NumBytesPVP", path_),
                           "Data/NumBytesPVP", path_);
+  // The PVP record stride sizes every allocation and every field read below,
+  // so a nonsensical value has to fail here rather than as an out-of-bounds
+  // read later: zero would alias every vector onto the first, and a negative
+  // wraps when it reaches the unsigned allocation size.
+  if (num_bytes_pvp_ <= 0 ||
+      num_bytes_pvp_ % static_cast<int64_t>(sizeof(double)) != 0) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ + ": Data/NumBytesPVP is " +
+        std::to_string(num_bytes_pvp_) +
+        "; expected a positive multiple of 8 (PVP words are 8 bytes)");
+  }
 
   const tinyxml2::XMLElement* data = first_child(root, "Data");
   for (const tinyxml2::XMLElement* node = data->FirstChildElement();
@@ -347,6 +357,20 @@ void CphdFile::parse_xml(const std::string& xml) {
     info.pvp_byte_offset = to_int(
         required_text(node, "PVPArrayByteOffset", path_), "PVPArrayByteOffset",
         path_);
+    // These four size and locate every read of the channel. A non-positive
+    // count reaches an empty vector that callers index unconditionally, and a
+    // negative count or offset wraps at the cast to an unsigned size.
+    if (info.num_vectors <= 0 || info.num_samples <= 0) {
+      throw std::runtime_error(
+          "CphdFile: " + path_ + ": channel '" + info.identifier + "' declares "
+          "NumVectors " + std::to_string(info.num_vectors) + " and NumSamples "
+          + std::to_string(info.num_samples) + "; both must be positive");
+    }
+    if (info.signal_byte_offset < 0 || info.pvp_byte_offset < 0) {
+      throw std::runtime_error(
+          "CphdFile: " + path_ + ": channel '" + info.identifier +
+          "' declares a negative array byte offset");
+    }
     channels_.push_back(info);
   }
   if (channels_.empty()) {
@@ -368,8 +392,28 @@ void CphdFile::parse_xml(const std::string& xml) {
       continue;  // AddedPVP wrappers and similar; not a field record.
     }
     PvpField field;
-    field.offset_words = to_int(offset->GetText(), "PVP Offset", path_);
-    field.size_words = to_int(size->GetText(), "PVP Size", path_);
+    // Through required_text rather than GetText(): an empty <Offset/> returns
+    // a null pointer, and building the std::string parameter from it is
+    // undefined behaviour rather than the parse error it should be.
+    field.offset_words =
+        to_int(required_text(node, "Offset", path_), "PVP Offset", path_);
+    field.size_words =
+        to_int(required_text(node, "Size", path_), "PVP Size", path_);
+    // Bound the field against the record it is read from. field() checks the
+    // requested component count against size_words but never the declared
+    // offset, so without this a field placed past the end of the record is an
+    // out-of-bounds read on every vector of every block.
+    if (field.offset_words < 0 || field.size_words <= 0 ||
+        (field.offset_words + field.size_words) *
+                static_cast<int64_t>(sizeof(double)) >
+            num_bytes_pvp_) {
+      throw std::runtime_error(
+          "CphdFile: " + path_ + ": PVP field '" + node->Name() +
+          "' declares offset " + std::to_string(field.offset_words) +
+          " size " + std::to_string(field.size_words) +
+          " words, which does not fit in the " +
+          std::to_string(num_bytes_pvp_) + "-byte record");
+    }
     const tinyxml2::XMLElement* format_node = first_child(node, "Format");
     if (format_node != nullptr && format_node->GetText() != nullptr) {
       field.format = format_node->GetText();

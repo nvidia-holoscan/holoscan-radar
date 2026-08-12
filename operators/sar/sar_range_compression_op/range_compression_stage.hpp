@@ -7,7 +7,8 @@
 
 #pragma once
 
-#include <cmath>
+#include <cuda_runtime.h>
+
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -15,6 +16,7 @@
 #include <vector>
 
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/lfm_waveform_descriptor.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/dsp/window.hpp"

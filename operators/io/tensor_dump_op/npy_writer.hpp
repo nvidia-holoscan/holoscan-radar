@@ -3,12 +3,12 @@
 
 #pragma once
 
+#include <dlpack/dlpack.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
-
-#include <dlpack/dlpack.h>
 
 namespace holoscan::radar::npy {
 

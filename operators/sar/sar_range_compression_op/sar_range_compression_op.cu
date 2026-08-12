@@ -172,6 +172,13 @@ void SARRangeCompressionOp<T>::compute(InputContext& op_input,
                                    profiles->data(), num_bins, warn_on_rebuild,
                                    stream);
 
+  // receive_cuda_stream already configures outputs to carry the internal
+  // stream; set_cuda_stream additionally covers manual-stream setups. It
+  // only accepts Holoscan-managed streams, so skip the default stream
+  // (no stream pool and no upstream stream this tick).
+  if (stream != cudaStreamDefault) {
+    op_output.set_cuda_stream(stream, "range_profiles");
+  }
   holoscan::TensorMap profiles_map;
   profiles_map.insert({"range_profiles", profiles});
   op_output.emit(profiles_map, "range_profiles");
@@ -182,6 +189,9 @@ void SARRangeCompressionOp<T>::compute(InputContext& op_input,
     detail::fill_compressed_range_bins<T>(cfg, batched.cols, num_bins,
                                           static_cast<T*>(bins->data()),
                                           stream);
+    if (stream != cudaStreamDefault) {
+      op_output.set_cuda_stream(stream, "range_bins");
+    }
     holoscan::TensorMap bins_map;
     bins_map.insert({"range_bins", bins});
     op_output.emit(bins_map, "range_bins");

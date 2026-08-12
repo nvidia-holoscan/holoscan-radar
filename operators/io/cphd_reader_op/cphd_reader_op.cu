@@ -38,7 +38,12 @@ constexpr const char* precision_name() {
 // the messages of the batch that *is* the last one -- announcing on the
 // following batch would be a boundary reported after the closing aperture
 // had already been contaminated.
-constexpr const char* kStreamBoundaryKey = "holoscan.radar.stream_boundary";
+//
+// The SAR tier is the interim value R10 prescribes: the namespace scope is a
+// team decision that may not be settled in code, so the key sits under `sar`
+// until it is answered, committing FMCW to nothing. Promotion to the module
+// level is then a change to this one constant. See SAR/SIGPROC_PLAN.md.
+constexpr const char* kStreamBoundaryKey = "holoscan.radar.sar.stream_boundary";
 constexpr const char* kEndOfStream = "end_of_stream";
 constexpr const char* kCollectionBoundary = "collection_boundary";
 

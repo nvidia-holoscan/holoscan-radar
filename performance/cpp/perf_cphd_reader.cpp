@@ -25,9 +25,9 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <limits>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -609,7 +609,7 @@ struct ReaderTraits : perf::PerfDriverDefaults {
   // Pay the first-Application CUDA and Holoscan costs before scenario #1, so
   // its cold_ms is comparable with the rows after it.
   static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([&] {
+    perf::run_process_warmup([] {
       perf::PerfReport discarded;
       perf::RunSettings warm_rs;
       warm_rs.warmup_frames = 0;

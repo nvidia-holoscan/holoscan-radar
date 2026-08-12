@@ -9,9 +9,11 @@
 #include <cstring>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -84,10 +86,20 @@ struct NpyParts {
 };
 
 NpyParts split_npy(const std::vector<uint8_t>& bytes) {
-  EXPECT_GE(bytes.size(), 10u);
-  EXPECT_EQ(std::memcmp(bytes.data(), "\x93NUMPY", 6), 0);
+  // Throw rather than EXPECT: the indexing below is undefined on a short file,
+  // and this helper returns a value so it cannot use ASSERT. GTest turns the
+  // exception into a clean failure.
+  if (bytes.size() < 10u || std::memcmp(bytes.data(), "\x93NUMPY", 6) != 0) {
+    throw std::runtime_error("split_npy: not a .npy file (" +
+                             std::to_string(bytes.size()) + " bytes)");
+  }
   const size_t length = static_cast<size_t>(bytes[8]) |
                         (static_cast<size_t>(bytes[9]) << 8);
+  if (bytes.size() < 10u + length) {
+    throw std::runtime_error("split_npy: header claims " +
+                             std::to_string(length) +
+                             " bytes, past the end of the file");
+  }
   NpyParts parts;
   parts.header.assign(reinterpret_cast<const char*>(bytes.data()) + 10,
                       length);
@@ -180,7 +192,8 @@ TEST(NpyWriter, RefusesDtypesTheFormatCannotExpress) {
 TEST(NpyWriter, HeaderIsPaddedToASixtyFourByteBoundary) {
   for (const std::vector<int64_t>& shape :
        {std::vector<int64_t>{}, std::vector<int64_t>{7},
-        std::vector<int64_t>{2, 3}, std::vector<int64_t>{1, 2, 3, 4, 5, 6, 7}}) {
+        std::vector<int64_t>{2, 3},
+        std::vector<int64_t>{1, 2, 3, 4, 5, 6, 7}}) {
     const std::string header =
         npy::header(DLDataType{kDLComplex, 64, 1}, shape);
     EXPECT_EQ(header.size() % 64, 0u) << "rank " << shape.size();

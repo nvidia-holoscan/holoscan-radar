@@ -23,12 +23,14 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <holoscan/holoscan.hpp>
 
+#include "io/cphd_reader_op/collection_paths.hpp"
 #include "io/cphd_reader_op/cphd_file.hpp"
 #include "io/cphd_reader_op/cphd_reader_op.hpp"
 #include "radar_common/descriptors/coordinate_frame.hpp"
@@ -477,7 +479,7 @@ class CaptureSinkOp : public holoscan::Operator {
     }
 
     capture->boundaries.push_back(metadata()->get<std::string>(
-        "holoscan.radar.stream_boundary", std::string()));
+        "holoscan.radar.sar.stream_boundary", std::string()));
   }
 };
 
