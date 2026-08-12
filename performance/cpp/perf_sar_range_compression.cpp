@@ -514,13 +514,26 @@ struct CompressionTraits : perf::PerfDriverDefaults {
     out.push_back(make_scenario(hr::WindowType::kHann, md));
     // The axes this operator has that the FMCW range stage does not: what
     // zero-padding costs, and what emitting the range axis costs.
-    out.push_back(make_scenario(hr::WindowType::kNone, md, 1, 2));
     out.push_back(make_scenario(hr::WindowType::kNone, md, 4));
     out.push_back(make_scenario(hr::WindowType::kNone, md, 1, 1,
                                 OverrideKind::kWindow, /*emit_axis=*/false));
+
+    // ORDER IS LOAD-BEARING. The probes measure what an unseen transform
+    // length costs, and cuFFT's plan cache is process-global, so a probe
+    // measures a miss only if nothing earlier in this process built the same
+    // plan. The pad2 scenario below builds exactly the plan miss_2x moves to
+    // -- same length (2 * md) and same batch -- so running it first made
+    // miss_2x report a hit under a miss's name: its first session cost the
+    // same as its later ones, where miss_4x (whose 4 * md length nothing else
+    // runs at this batch) showed the ~2x first-session penalty a real miss
+    // has. The plain size rows above are deliberately still ahead of the
+    // probes: they warm the *base* length, which is what steady_before is
+    // supposed to measure against. lg and xl share the probe targets' lengths
+    // but not their batch, so they build different plans and do not collide.
     for (auto kind : nfft_transitions()) {
       out.push_back(make_scenario(hr::WindowType::kNone, md, 1, 1, kind));
     }
+    out.push_back(make_scenario(hr::WindowType::kNone, md, 1, 2));
     return out;
   }
 

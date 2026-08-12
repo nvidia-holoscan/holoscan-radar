@@ -46,6 +46,15 @@ constexpr const char* precision_name() {
 // until it is answered, committing FMCW to nothing. Promotion to the module
 // level is then a change to this one constant. See SAR/SIGPROC_PLAN.md.
 constexpr const char* kStreamBoundaryKey = "holoscan.radar.sar.stream_boundary";
+
+// MID-IMPLEMENTATION, and not the contract's encoding. OPERATOR_API.md
+// specifies a uint8 enum named in radar_common, sharing the encoding the
+// `control` port uses for its four values -- and that encoding does not exist
+// yet, because ApertureManagerOp does not. Choosing the numbering here would
+// commit the half of a shared vocabulary whose other half is unwritten, so
+// these strings stand in until both land together. Nothing reads the key yet,
+// which is what makes that safe. Do not write a consumer against these
+// values. See OPEN_ITEMS.md item 11.
 constexpr const char* kEndOfStream = "end_of_stream";
 constexpr const char* kCollectionBoundary = "collection_boundary";
 

@@ -93,6 +93,9 @@ class PointTarget:
 
     east_m: float
     north_m: float
+    # Must be 0. The field is kept so recipes need not change when layover
+    # lands, but a non-zero value is refused today rather than silently given
+    # a wrong predicted pixel -- see `Recipe._validate_target_placement`.
     up_m: float = 0.0
     amplitude: float = 1.0
     phase_deg: float = 0.0
@@ -222,6 +225,20 @@ class Recipe:
         sample_spacing = self.waveform.bandwidth / (self.collection.num_samples - 1)
         half_swath = 0.5 * SPEED_OF_LIGHT / (2.0 * sample_spacing)
         for target in self.targets:
+            # An elevated target lays over: its slant range matches a ground
+            # pixel h*tan(graze) nearer the radar, and it does not focus
+            # cleanly on a ground plane at all, since its range history
+            # matches no ground pixel exactly. `truth.py` models neither --
+            # it projects onto the ground-plane axes, which predicts the
+            # pixel directly below the target. Refused rather than predicted
+            # wrongly; see README.md -> Not here yet.
+            if target.up_m != 0.0:
+                raise ValueError(
+                    f"target {target.name!r} has up_m={target.up_m:.1f}, and "
+                    "elevated targets are not supported: the sidecar would "
+                    "predict the pixel below the target rather than the one "
+                    "it lays over onto. Place targets on the ground plane"
+                )
             ground_range_m = -cos_heading * target.east_m + sin_heading * target.north_m
             azimuth_m = -sin_heading * target.east_m - cos_heading * target.north_m
             if max(abs(ground_range_m), abs(azimuth_m)) > self.image_half_extent_m:

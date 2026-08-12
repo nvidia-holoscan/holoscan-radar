@@ -9,6 +9,8 @@
 
 #include <cuda_runtime.h>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -46,22 +48,46 @@ struct RangeCompressionConfig {
 // ~0.09 ms flat, which the CPHDReaderOp harness measured and which would
 // dominate this stage at small apertures.
 //
-// One entry, not a ConfigCache, unlike the two caches beside it. Those retain
-// deliberately -- a window or a transform plan is expensive to rebuild and
-// cheap to hold, so revisiting a prior nfft should be free. The staging buffer
-// is the opposite: it is written and read within a single tick and never read
-// again, so retaining one per shape would pin a full (batch, pulses, nfft)
-// buffer for every nfft a `[live]` override ever visits while only the current
-// one is reachable. A sweep across transform lengths would exhaust the device.
-// Replacing the entry on a shape change costs an implicit device
-// synchronize inside cudaFree, which is a per-override cost, not a per-tick
-// one.
+// Bounded to two entries, not a ConfigCache, unlike the two caches beside it.
+// Those retain without limit and should: a window or a transform plan is
+// expensive to rebuild and cheap to hold. A staging buffer is neither -- it is
+// written and read within one tick and never read again, so retaining one per
+// shape pins a full (batch, pulses, nfft) buffer for every nfft a `[live]`
+// override ever visits while only the current one is reachable, and a sweep
+// across lengths would exhaust the device.
+//
+// Two rather than one because the measured cost of getting it wrong is
+// asymmetric. A single entry bounds memory just as well, but it turns the
+// A -> B -> A override pattern into a reallocation on every leg: the harness
+// measured a return to an already-run length rising from 0.085 ms to 0.25 ms,
+// which is the very transition OPEN_ITEMS item 5 cites as the evidence that
+// caching works. Two entries hold that pattern -- the common one, since an
+// override usually toggles rather than sweeps -- while still bounding the
+// worst case at twice the largest buffer. A genuine sweep evicts, paying an
+// implicit device synchronize inside cudaFree per new length, which is a
+// per-override cost rather than a per-tick one.
+// A fixed array of optionals, and the slots never move. MatX overloads
+// tensor_t::operator= to build a lazy assignment *expression* -- that is what
+// makes `(scratch = matx::ifft(...)).run(exec)` a kernel launch rather than a
+// rebind -- so any container operation that assigns an element (vector insert
+// or erase, std::rotate, std::swap) silently produces an expression instead of
+// moving the tensor, and the slot keeps its old shape. Emplacing into a fixed
+// slot is the way to hold these; the victim is chosen round-robin, which for
+// two entries keeps the toggling case resident.
+inline constexpr size_t kScratchCacheEntries = 2;
+
+template <typename T>
+struct ScratchSlot {
+  std::string key;
+  std::optional<matx::tensor_t<cuda::std::complex<T>, 3>> buffer;
+};
+
 template <typename T>
 struct RangeCompressionState {
   ConfigCache<matx::tensor_t<T, 1>> windows;
   ConfigCache<bool> seen_fft_keys;
-  std::string scratch_key;
-  std::optional<matx::tensor_t<cuda::std::complex<T>, 3>> scratch;
+  std::array<ScratchSlot<T>, kScratchCacheEntries> scratch;
+  size_t scratch_victim{0};
 };
 
 // Output bin count: the transform length, defaulting to the input's fast-time
@@ -199,13 +225,24 @@ void run_range_compression(const RangeCompressionConfig& cfg,
   // that allocated it and is freed when the operator is destroyed, by which
   // time the Holoscan stream this tick ran on is gone. A stream-ordered
   // allocation would free itself on that dead stream.
-  if (!state.scratch.has_value() || state.scratch_key != scratch_key) {
-    state.scratch.reset();
-    state.scratch.emplace(matx::make_tensor<cuda::std::complex<T>>(
-        {batch, num_pulses, num_bins}, matx::MATX_DEVICE_MEMORY));
-    state.scratch_key = scratch_key;
+  size_t slot = kScratchCacheEntries;
+  for (size_t i = 0; i < kScratchCacheEntries; ++i) {
+    if (state.scratch[i].buffer.has_value() &&
+        state.scratch[i].key == scratch_key) {
+      slot = i;
+      break;
+    }
   }
-  auto& scratch = *state.scratch;
+  if (slot == kScratchCacheEntries) {
+    slot = state.scratch_victim;
+    state.scratch_victim = (state.scratch_victim + 1) % kScratchCacheEntries;
+    state.scratch[slot].buffer.reset();
+    state.scratch[slot].buffer.emplace(
+        matx::make_tensor<cuda::std::complex<T>>(
+            {batch, num_pulses, num_bins}, matx::MATX_DEVICE_MEMORY));
+    state.scratch[slot].key = scratch_key;
+  }
+  auto& scratch = *state.scratch[slot].buffer;
 
   const bool apply_window = cfg.window.type != WindowType::kNone;
   const uint64_t fft_size = static_cast<uint64_t>(nfft);

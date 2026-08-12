@@ -1,10 +1,13 @@
 # CPHDReaderOp — open items
 
-Items this operator carries. **The contract surface is complete** as of
-2026-08-09 — item 2, the one entry that recorded a landed slice narrower than
-`OPERATOR_API.md`, is closed. What remains is conventions the contract permits
-several readings of, costs measured and consciously not paid, and paths no
-available collection exercises. None block the mode 1 demo.
+Items this operator carries. The contract surface is complete **except for the
+boundary announcement's encoding (item 11), which is mid-implementation and
+does not match `OPERATOR_API.md` yet** — it cannot until the operator that
+defines the shared encoding exists. Item 2, the entry that recorded a landed
+slice narrower than `OPERATOR_API.md`, is closed. What otherwise remains is
+conventions the contract permits several readings of, costs measured and
+consciously not paid, and paths no available collection exercises. None block
+the mode 1 demo.
 
 Team-blocked questions belong in
 [`docs/planning/SAR/TEAM_BLOCKED.md`](../../../docs/planning/SAR/TEAM_BLOCKED.md);
@@ -349,3 +352,40 @@ check this infrequent.
 
 Every FMCW operator has a `python/` submodule; this one does not yet. Nothing
 in the mode 1 path needs it, so it is left for the first Python consumer.
+
+## 11. The boundary value is a string, not the contract's `uint8` — mid-implementation
+
+**This one is a live deviation from `OPERATOR_API.md`, not a reading of it.**
+The D22 table specifies the value as `uint8`, an enum
+`{end_of_stream, collection_boundary}` "named in `radar_common` so C++ and
+Python agree, on the same `uint8_t` encoding the `control` port uses for its
+four values". The reader currently writes the two names as a `std::string`.
+
+**It cannot be implemented as written yet.** The binding clause is the last
+one: the boundary values share `control`'s encoding. That vocabulary —
+*emit-and-continue*, *emit-and-reset*, *reset-without-emit*, *reset-then-emit*
+(D23) — has no enum in `radar_common` either, because `ApertureManagerOp` and
+`BackprojectionOp` are not implemented. Adding a `StreamBoundary` enum now
+would mean choosing the shared numbering before the operator that owns the
+other half of it exists, and then hoping the two agree. That is a guess
+dressed as conformance.
+
+**Treat the current encoding as invalid until then.** It is a placeholder
+chosen so the announcement is testable end to end, not a value any consumer
+should be written against. It is safe to change precisely because nothing
+reads it: the reader is the only writer, its intended consumer does not exist,
+and no test asserts the wire format beyond the reader's own round trip.
+
+**What closes this:** land the `control` enum with `ApertureManagerOp`, add
+`StreamBoundary` beside it in `radar_common/descriptors/enums.hpp` on the same
+`uint8_t` encoding, bind both for Python, switch this operator's `metadata()`
+write from `std::string` to the enum's `uint8_t`, and update
+`test_cphd_reader.cpp`, which reads the key back as a string today. Doing all
+of that in one change is the point — it is what makes the two vocabularies
+consistent by construction rather than by review.
+
+Note this is separate from **R10**, the open team question about the key's
+*namespace*. That is why the key sits at the SAR tier
+(`holoscan.radar.sar.stream_boundary`) per
+[`SIGPROC_PLAN.md`](../../../docs/planning/SAR/SIGPROC_PLAN.md). R10 governs
+the prefix; this item governs the value.

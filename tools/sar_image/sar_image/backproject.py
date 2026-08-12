@@ -27,13 +27,45 @@ import numpy as np
 SPEED_OF_LIGHT = 299792458.0
 
 
+def _as_complex(signal) -> np.ndarray:
+    """CPHD signal samples as complex128, in whichever container they arrive.
+
+    A CF8 collection reads back as complex floats, but CI2 and CI4 read back
+    as a *structured* pair of signed integers, which numpy refuses to cast to
+    complex at all. They are plain signed values -- no offset, no
+    normalisation -- so the conversion is a cast, and whatever scaling the
+    collection needs is what AmpSF carries.
+    """
+    array = np.asarray(signal)
+    if array.dtype.names is None:
+        return array.astype(np.complex128)
+    return array["real"].astype(np.float64) + 1j * array["imag"].astype(np.float64)
+
+
+def _amplitude_scale(pvps, num_pulses: int) -> np.ndarray | None:
+    """The per-pulse AmpSF column, or None when the collection declares none.
+
+    Omitting it forms a perfectly focused image at the wrong brightness --
+    wrong by a smooth per-pulse factor, so nothing about the image looks
+    broken.
+    """
+    names = getattr(pvps.dtype, "names", None)
+    if names is None or "AmpSF" not in names:
+        return None
+    return np.asarray(pvps["AmpSF"], dtype=float).reshape(num_pulses, 1)
+
+
 def backproject(signal, pvps, lattice, *, oversample: int = 8) -> np.ndarray:
     """Form a complex image on ``lattice`` from CPHD signal and PVP arrays.
 
     ``lattice`` is the sidecar's ``sample_geometry`` mapping: ``origin``,
     ``axis_v``, ``axis_u``, ``spacing`` and ``counts``.
     """
-    signal = cp.asarray(np.ascontiguousarray(signal).astype(np.complex128))
+    samples = _as_complex(signal)
+    scale = _amplitude_scale(pvps, samples.shape[0])
+    if scale is not None:
+        samples = samples * scale
+    signal = cp.asarray(np.ascontiguousarray(samples))
     num_samples = signal.shape[1]
     padded = num_samples * oversample
     # The positive-exponent transform, which numpy and cupy both spell ifft.

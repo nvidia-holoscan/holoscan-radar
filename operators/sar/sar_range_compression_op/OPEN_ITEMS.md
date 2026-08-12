@@ -111,14 +111,25 @@ On an RTX PRO 6000 Blackwell at `md` (64×2048), against a 0.067 ms steady tick:
 
 | Transition | first session | later sessions (median) |
 | --- | --- | --- |
-| `2048 → 4096` (unseen, radix) | 0.36 ms | 0.35 ms |
-| `2048 → 8192` (unseen, radix) | 0.81 ms | 0.35 ms |
-| `2048 → 4099+` (unseen **prime**, fresh each session) | 4.9 ms | 3.4 ms |
-| `4096 → 2048` (a length this instance already ran) | 0.086 ms | 0.085 ms |
+| `2048 → 4096` (unseen, radix) | 0.83 ms | 0.36 ms |
+| `2048 → 8192` (unseen, radix) | 0.84 ms | 0.37 ms |
+| `2048 → 4099+` (unseen **prime**, fresh each session) | 5.2 ms | 3.5 ms |
+| `4096 → 2048` (a length this instance already ran) | 0.088 ms | 0.088 ms |
+
+**The 2x first-session figure was re-measured**, and it replaces an earlier
+0.36 ms that was not a miss at all. The cuFFT plan cache is process-global, and
+the harness ran a zero-padded scenario at 2 × `md` — the same length *and* the
+same batch the 2x probe moves to — before the probe, so the "miss" measured a
+warm plan. Reordering so the probes precede the padded scenario moved it to
+0.83 ms. The 4x row was never affected: nothing else in the matrix runs 8192 at
+this batch, and `lg`/`xl` reach those lengths only at their own pulse counts,
+which are different plans. The correction changes the conclusion — the first
+visit to an unseen length costs about the same at 2x and 4x, so the cost is a
+plan build rather than anything that scales with length.
 
 Two of those rows matter.
 
-**The cached return costs 0.085 ms against a 0.069 ms steady tick**, so the
+**The cached return costs 0.088 ms against a 0.073 ms steady tick**, so the
 warn-once-and-cache rule delivers what it claims: re-entering a length the
 instance has already run rebuilds nothing measurable. That is the only direct
 check of the caching claim anywhere, unit tests included — they assert the
@@ -142,6 +153,20 @@ prime row is 0.27 ms, ordinary steady state for that size).
 Nothing is fixed here: the operator honours the length it is given, which is
 correct. If it should *warn* when handed a slow length, that is a contract
 question about the `[live]` warning surface, not a bug.
+
+**The scratch buffer holds two shapes, and that bound is what this table
+measures.** The staging buffer used to be cached per shape without limit,
+which pinned a full `(batch, pulses, nfft)` buffer for every length an
+override ever visited. Bounding it to one entry fixed the memory but cost the
+row above: a return to an already-run length reallocated, and went from
+0.085 ms to 0.25 ms. Two entries hold the A → B → A pattern an override
+usually follows while still bounding the worst case, which is why the return
+row reads 0.088 ms rather than 0.25 ms. A genuine sweep across many lengths
+evicts and pays a reallocation per length — a per-override cost, not a
+per-tick one. Note the slots are a fixed array of `std::optional`, not a
+vector: MatX overloads `tensor_t::operator=` to build a lazy assignment
+expression, so any container operation that assigns an element leaves the slot
+holding its old shape instead of the new tensor.
 
 ## 6. Emitting the range axis costs ~18 µs a tick, and blocks the host
 

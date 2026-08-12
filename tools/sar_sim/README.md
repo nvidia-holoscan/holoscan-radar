@@ -121,6 +121,20 @@ in [`INPUT_DATA.md`](../../docs/planning/SAR/INPUT_DATA.md).
 
 ## Not here yet
 
+- **Elevated targets (layover).** `Target.up_m` must be 0, and a non-zero
+  value is refused at recipe validation. The signal model handles height
+  correctly — the phase history of an elevated target is right — but
+  `truth.py` does not: it projects the target's ECEF offset onto the
+  ground-plane lattice axes, which predicts the pixel *directly below* the
+  target. What a ground-plane image actually shows is the pixel the target
+  lays over onto, `h * tan(graze)` nearer the radar, and even that is
+  first-order: an elevated point's range history matches no ground pixel
+  exactly, so it lands slightly defocused rather than as a clean peak. A
+  sidecar that predicts the wrong pixel is worse than one that refuses,
+  because every assertion written against it passes for the wrong reason.
+  Closing this means applying the layover shift in `truth.py`, deciding how
+  much defocus the prediction is allowed to ignore, and adding an
+  elevated-target recipe to cover it.
 - **The image-derived scene mode**, for demos that need to look like
   something. Point targets are for metric assertions; a demo wants a scene
   with a reflector-count cap chosen against measured generation time.
