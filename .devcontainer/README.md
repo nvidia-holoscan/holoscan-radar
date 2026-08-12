@@ -60,8 +60,53 @@ Xauthority cookie (not enabled by default — paths vary by desktop).
 The in-repo `./data` folder is available at `/workspace/holoscan-radar/data`,
 the same path the `holohub` wrapper uses for `HOLOSCAN_CLI_DATA_DIR`.
 
-## Overriding the base image
+## [EA HSDK5 ONLY] Build the SDK base image
 
-The container is pinned to the SDK version in the [`Dockerfile`](../Dockerfile)
-(`BASE_IMAGE`). To build against a different Holoscan SDK image, pass a
-different `BASE_IMAGE` build arg in `devcontainer.json`.
+This temporary workflow creates a devcontainer with HSDK 5 installed. It does
+not build or update the radar module, which is expected to remain incompatible
+until it is ported from HSDK 4.3.
+
+On the host, from the root of this repository, run:
+
+```bash
+./.devcontainer/build-hsdk5-ea-image.sh
+```
+
+The script clones the internal HSDK repository at `v5.0.0.1` into the ignored
+`.cache/` directory, builds the SDK, and creates the local image already named
+in [`devcontainer.json`](devcontainer.json). It requires internal GitLab SSH
+access and Docker.
+
+After it completes, rebuild and reopen the devcontainer. Re-run the script only
+when the pinned HSDK build needs to be recreated.
+
+### Using `./holohub`
+
+The devcontainer configuration does not change the image selected by
+`./holohub`, which continues to default to HSDK 4.3. To launch its container
+against the EA image from the host, run:
+
+```bash
+./holohub run-container \
+  --base-img holoscan-radar-hsdk5-ea:v5.0.0.1
+```
+
+Inside the EA devcontainer, use local execution so `holohub` uses the HSDK 5
+installation already present instead of starting another 4.3 container:
+
+```bash
+./holohub build fmcw_siso --local
+./holohub run fmcw_siso --local
+./holohub test --local
+```
+
+### [EA HSDK5 ONLY] Removal before GA
+
+All temporary EA integration is marked `[EA HSDK5 ONLY]`. Before merging the
+HSDK 5 port into `main` for the public release:
+
+1. Delete `build-hsdk5-ea-image.sh` and `sdk-installed.Dockerfile`.
+2. Remove the marked `build.args.BASE_IMAGE` block from `devcontainer.json`.
+3. Remove this marked section from the devcontainer README.
+4. Search the repository for `[EA HSDK5 ONLY]` and remove any remaining
+   temporary paths.
