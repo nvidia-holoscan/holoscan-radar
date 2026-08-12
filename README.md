@@ -8,6 +8,22 @@ Holoscan Radar is a **Holoscan Module** — a self-contained, redistributable li
 
 ---
 
+## [EA HSDK5 ONLY] Build the development image first
+
+This branch uses a locally built HSDK 5 EA image for both the devcontainer and
+the EA `./holohub run-container --base-img ...` path. Before using either path,
+build the image once on the host:
+
+```bash
+./.devcontainer/build-hsdk5-ea-image.sh
+```
+
+Re-run the script only when the pinned HSDK build must be recreated. See
+[`.devcontainer/README.md`](.devcontainer/README.md) for prerequisites,
+devcontainer startup, `holohub` commands, and the required pre-GA cleanup.
+
+---
+
 ## Quick Start
 
 ```bash
