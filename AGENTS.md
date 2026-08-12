@@ -4,6 +4,19 @@ GPU radar signal-processing operator library for the NVIDIA Holoscan SDK: Holosc
 
 **Current phase: FMCW implementation.** The operator contracts (ports, shapes, dtypes, parameters) are fully specified in `docs/planning/`; implementation lands against them. The signal-processing group (`operators/fmcw/`: range, clutter, Doppler, fused range-Doppler) and the shared `operators/common/` library are implemented; detection, clustering, angle estimation, and MIMO marshaling are next.
 
+## [EA HSDK5 ONLY] Temporary development environment
+
+The `hsdk-5.0` branch temporarily builds HSDK 5 EA from the internal repository
+and installs it into a local devcontainer base image. This workflow exists only
+until the public HSDK 5 release; see
+[`.devcontainer/README.md`](.devcontainer/README.md) for build, `holohub`, and
+cleanup instructions.
+
+Before merging the HSDK 5 port into `main` for the public release, search the
+entire repository for `[EA HSDK5 ONLY]` and remove every marked workaround,
+including this section. Do not rely on conversation context when performing
+that cleanup.
+
 ## Source of truth
 
 Read before starting non-trivial work, in this precedence order:
