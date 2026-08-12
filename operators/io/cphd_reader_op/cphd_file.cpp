@@ -204,19 +204,33 @@ CphdFile::CphdFile(const std::string& path) : path_(path) {
 
   parse_ascii_header(&stream_);
 
-  if (xml_block_size_ <= 0) {
+  // The declared XML size sizes the string below and comes from an ASCII
+  // header a malformed file is free to lie in, so it is bounded by the file's
+  // real length first: a header claiming a 4 GiB block would otherwise have
+  // it allocated before the read discovered the file is 20 kB long.
+  stream_.clear();
+  stream_.seekg(0, std::ios::end);
+  const int64_t file_size = static_cast<int64_t>(stream_.tellg());
+  if (file_size < 0) {
     throw std::runtime_error("CphdFile: " + path_ +
-                             ": header declares no XML block");
+                             ": cannot determine the file size");
+  }
+  // Compared without forming offset + size, which overflows for a header
+  // declaring values near the range of the type.
+  if (xml_block_size_ <= 0 || xml_block_offset_ < 0 ||
+      xml_block_size_ > file_size ||
+      xml_block_offset_ > file_size - xml_block_size_) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ + ": header declares a " +
+        std::to_string(xml_block_size_) + "-byte XML block at offset " +
+        std::to_string(xml_block_offset_) + ", which does not fit in the " +
+        std::to_string(file_size) + "-byte file");
   }
   std::string xml(static_cast<size_t>(xml_block_size_), '\0');
-  stream_.seekg(xml_block_offset_);
-  stream_.read(xml.data(), xml_block_size_);
-  if (stream_.gcount() != xml_block_size_) {
-    throw std::runtime_error("CphdFile: " + path_ +
-                             ": truncated XML block (wanted " +
-                             std::to_string(xml_block_size_) + " bytes, got " +
-                             std::to_string(stream_.gcount()) + ")");
-  }
+  // Through read_at like every other read, so that resetting the stream state
+  // before seeking happens in one place rather than depending on getline
+  // having left eofbit rather than failbit here.
+  read_at(xml_block_offset_, xml.data(), xml_block_size_, "XML block");
   parse_xml(xml);
 }
 
@@ -538,10 +552,15 @@ std::vector<double> PvpBlock::field(const std::string& name,
 PvpBlock CphdFile::read_pvp_block(int64_t channel_index, int64_t first,
                                   int64_t count) const {
   const ChannelInfo& info = channel(channel_index);
-  if (first < 0 || count < 0 || first + count > info.num_vectors) {
+  // Bounded without forming first + count anywhere, including in the message:
+  // this is a public entry point taking caller-supplied values, and the sum
+  // of two large ones overflows, which is undefined rather than merely wrong.
+  if (first < 0 || count < 0 || count > info.num_vectors ||
+      first > info.num_vectors - count) {
     throw std::runtime_error(
-        "CphdFile: " + path_ + ": PVP vectors [" + std::to_string(first) +
-        ", " + std::to_string(first + count) + ") out of range (channel has " +
+        "CphdFile: " + path_ + ": " + std::to_string(count) +
+        " PVP vectors from " + std::to_string(first) +
+        " are out of range (channel has " +
         std::to_string(info.num_vectors) + ")");
   }
 
@@ -568,10 +587,14 @@ const ChannelInfo& CphdFile::check_signal_request(int64_t channel_index,
                                                   int64_t first,
                                                   int64_t count) const {
   const ChannelInfo& info = channel(channel_index);
-  if (first < 0 || count < 0 || first + count > info.num_vectors) {
+  // Ordered as in read_pvp_block, and for the same reason: first + count is
+  // never formed, because a caller passing two large values would overflow it.
+  if (first < 0 || count < 0 || count > info.num_vectors ||
+      first > info.num_vectors - count) {
     throw std::runtime_error(
-        "CphdFile: " + path_ + ": signal vectors [" + std::to_string(first) +
-        ", " + std::to_string(first + count) + ") out of range (channel has " +
+        "CphdFile: " + path_ + ": " + std::to_string(count) +
+        " signal vectors from " + std::to_string(first) +
+        " are out of range (channel has " +
         std::to_string(info.num_vectors) + ")");
   }
   return info;

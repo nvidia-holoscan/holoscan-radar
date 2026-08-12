@@ -106,15 +106,29 @@ class CoordinateFrame {
   Ellipsoid ellipsoid() const { return ellipsoid_; }
 
   // True when both frames describe the same spatial reference, so positions
-  // expressed in one may be consumed as the other.
+  // expressed in one may be consumed as the other. An empty descriptor is
+  // compatible with nothing, itself included: two default-constructed frames
+  // agree on every field while stating no reference at all, which is the
+  // mismatch this check exists to catch.
   //
   // epoch is compared only for ecef, and only where either side sets it.
   // Comparing it unconditionally would reject perfectly valid local and
   // scene_local configurations, where the field carries no meaning and is
   // routinely left unset on one side.
+  //
+  // origin_llh is compared only where both sides state one, for the same
+  // reason: omitting the anchor is legal (see CoordinateFrameSpec), so a
+  // simulation frame is routinely paired with an anchored one describing the
+  // same reference.
   bool compatible_with(const CoordinateFrame& other) const {
-    if (frame_ != other.frame_ || origin_llh_ != other.origin_llh_ ||
-        ellipsoid_ != other.ellipsoid_) {
+    if (!valid_ || !other.valid_) {
+      return false;
+    }
+    if (frame_ != other.frame_ || ellipsoid_ != other.ellipsoid_) {
+      return false;
+    }
+    if (origin_llh_.has_value() && other.origin_llh_.has_value() &&
+        !anchors_agree(*origin_llh_, *other.origin_llh_)) {
       return false;
     }
     if (frame_ == CoordinateFrameType::kEcef &&
@@ -134,6 +148,21 @@ class CoordinateFrame {
   }
 
  private:
+  // Two anchors agree when they differ by less than the smallest difference
+  // that could describe a different reference point. 1e-9 degrees is about
+  // 0.1 mm of ground distance and 1e-6 m is a micrometre — well below any
+  // surveyed anchor's own accuracy, and well above the last-bit disagreement
+  // an anchor picks up from a YAML round trip or a degree/radian conversion.
+  // Exact equality would call those distinct frames.
+  static bool anchors_agree(const std::array<double, 3>& a,
+                            const std::array<double, 3>& b) {
+    constexpr double kAngleToleranceDeg = 1e-9;
+    constexpr double kHeightToleranceM = 1e-6;
+    return std::abs(a[0] - b[0]) <= kAngleToleranceDeg &&
+           std::abs(a[1] - b[1]) <= kAngleToleranceDeg &&
+           std::abs(a[2] - b[2]) <= kHeightToleranceM;
+  }
+
   bool valid_{false};
   CoordinateFrameType frame_{CoordinateFrameType::kUnspecified};
   std::optional<std::array<double, 3>> origin_llh_{};

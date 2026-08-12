@@ -43,10 +43,14 @@ import numpy as np
 from .geometry import SPEED_OF_LIGHT, CollectionGeometry
 from .recipe import Recipe
 
-# Pulses per synthesis chunk. Bounds the (pulses x targets x samples)
-# intermediate; the chunk size only trades memory for loop overhead and
-# changes no result.
-_PULSE_CHUNK = 1024
+# Device memory the (pulses x targets x samples) intermediate may occupy, and
+# the measured cost of one of its elements: a float64 phase, its complex128
+# exponential and the reflectivity-scaled copy coexist, which comes to about
+# 72 bytes. Budgeting elements rather than fixing a pulse count is what bounds
+# the working set in all three dimensions -- a fixed chunk of 1024 pulses is
+# 720 MiB for a 5-target scene and 7.2 GiB for a 50-target one.
+_MEMORY_BUDGET_BYTES = 512 * 1024**2
+_BYTES_PER_ELEMENT = 72
 
 
 def frequency_axis(recipe: Recipe) -> np.ndarray:
@@ -89,6 +93,22 @@ def differential_range(apc_ecef, srp_ecef, targets_ecef, xp=np):
     return xp.linalg.norm(to_target, axis=2) - xp.linalg.norm(to_srp, axis=1)[:, None]
 
 
+def _chunk_shape(num_targets: int, num_samples: int) -> tuple[int, int]:
+    """Pulses and targets per synthesis chunk, within the memory budget.
+
+    Pulses are split first, and targets only when a single pulse row does not
+    fit on its own. That order matters: splitting the target axis regroups the
+    sum over it, and a regrouped float64 sum differs from the whole-axis one
+    in its last bits. Fixtures are regenerated and compared byte for byte, so
+    the grouping is held fixed for every collection that has a choice.
+    """
+    budget = max(_MEMORY_BUDGET_BYTES // _BYTES_PER_ELEMENT, 1)
+    per_pulse = num_targets * num_samples
+    if per_pulse <= budget:
+        return max(budget // per_pulse, 1), num_targets
+    return 1, max(budget // num_samples, 1)
+
+
 def synthesize(
     recipe: Recipe, geometry: CollectionGeometry, *, dtype: str = "complex64"
 ) -> np.ndarray:
@@ -113,15 +133,25 @@ def synthesize(
     apc = cp.asarray(geometry.apc_ecef)
 
     num_pulses = geometry.num_pulses
+    num_targets = int(targets.shape[0])
     signal = np.zeros((num_pulses, freqs.size), dtype=dtype)
     scale = -4.0 * np.pi / SPEED_OF_LIGHT
+    pulse_chunk, target_chunk = _chunk_shape(num_targets, freqs.size)
 
-    for start in range(0, num_pulses, _PULSE_CHUNK):
-        stop = min(start + _PULSE_CHUNK, num_pulses)
+    for start in range(0, num_pulses, pulse_chunk):
+        stop = min(start + pulse_chunk, num_pulses)
         delta_r = differential_range(apc[start:stop], srp, targets, xp=cp)
-        phase = scale * delta_r[:, :, None] * freqs[None, None, :]
-        chunk = cp.exp(1j * phase) * reflectivity[None, :, None]
-        signal[start:stop] = cp.asnumpy(chunk.sum(axis=1).astype(dtype))
+        # Seeded from the first block rather than from zeros so that the
+        # single-block case — every recipe whose target axis fits the budget —
+        # is the same reduction it always was, down to the sign of a zero.
+        accumulated = None
+        for first in range(0, num_targets, target_chunk):
+            last = min(first + target_chunk, num_targets)
+            phase = scale * delta_r[:, first:last, None] * freqs[None, None, :]
+            block = cp.exp(1j * phase) * reflectivity[None, first:last, None]
+            partial = block.sum(axis=1)
+            accumulated = partial if accumulated is None else accumulated + partial
+        signal[start:stop] = cp.asnumpy(accumulated.astype(dtype))
 
     return signal
 

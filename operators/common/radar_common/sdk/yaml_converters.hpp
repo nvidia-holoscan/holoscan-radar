@@ -540,6 +540,14 @@ struct convert<holoscan::radar::DDMCodeDescriptor> {
       if (!codes.IsSequence()) {
         return false;
       }
+      // The sequence is flat re, im pairs, so an odd length means a code the
+      // config meant to state is half missing. Dropping the stray element
+      // would decode successfully into a shorter code table.
+      if (codes.size() % 2 != 0) {
+        throw std::invalid_argument(
+            "DDMCodeDescriptor: phase_codes must be a flat sequence of "
+            "interleaved re, im pairs (even length)");
+      }
       code.phase_codes.reserve(codes.size() / 2);
       for (size_t i = 0; i + 1 < codes.size(); i += 2) {
         code.phase_codes.emplace_back(codes[i].as<double>(),
@@ -552,6 +560,7 @@ struct convert<holoscan::radar::DDMCodeDescriptor> {
     if (const Node guard = node["guard_bands"]) {
       code.guard_bands = guard.as<int64_t>();
     }
+    code.validate();
     return true;
   }
 };

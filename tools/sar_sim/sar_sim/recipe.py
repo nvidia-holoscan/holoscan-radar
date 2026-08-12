@@ -129,6 +129,18 @@ class Storage:
             )
 
 
+# Upper bounds on the sampling extent. A collection is num_pulses x
+# num_samples complex samples, so the product is what sizes the host array,
+# the synthesis intermediates and the file: 2^26 samples is 512 MiB as
+# complex64, held more than once at a time, which is already far past any
+# fixture worth committing a recipe for. Bounding it turns a typo'd exponent
+# into a message instead of an out-of-memory kill. The per-axis cap is the
+# same guard for a collection whose product still fits but whose shape is
+# nonsense.
+_MAX_AXIS_LENGTH = 1 << 20
+_MAX_TOTAL_SAMPLES = 1 << 26
+
+
 @dataclass(frozen=True)
 class Collection:
     """Sampling extent: how many pulses and how many frequency samples."""
@@ -141,6 +153,18 @@ class Collection:
             raise ValueError("collection.num_pulses must be at least 2")
         if self.num_samples < 2:
             raise ValueError("collection.num_samples must be at least 2")
+        for name in ("num_pulses", "num_samples"):
+            value = getattr(self, name)
+            if value > _MAX_AXIS_LENGTH:
+                raise ValueError(
+                    f"collection.{name} must be at most {_MAX_AXIS_LENGTH}, got {value}"
+                )
+        total = self.num_pulses * self.num_samples
+        if total > _MAX_TOTAL_SAMPLES:
+            raise ValueError(
+                "collection.num_pulses * collection.num_samples must be at most "
+                f"{_MAX_TOTAL_SAMPLES} samples, got {total}"
+            )
 
 
 @dataclass(frozen=True)
@@ -174,6 +198,53 @@ class Recipe:
             raise ValueError("recipe.image_oversample must be > 0")
         if not self.image_half_extent_m > 0.0:
             raise ValueError("recipe.image_half_extent_m must be > 0")
+        self._validate_target_placement()
+
+    def _validate_target_placement(self) -> None:
+        """Reject targets the sidecar could not honestly predict a pixel for.
+
+        Both failures are silent otherwise. A target outside the image area
+        gets a predicted pixel the lattice does not contain; a target outside
+        the unambiguous slant-range swath aliases to some other delay while
+        the sidecar keeps predicting the unaliased one, which is a test oracle
+        that is confidently wrong.
+        """
+        # Image-area axes are the ENU horizontal pair rotated by the heading
+        # (`cphd.image_area_axes`): IAX is ground range, away from the ground
+        # track, and IAY is azimuth. A pure rotation, so this is the exact
+        # projection rather than a small-offset approximation, and the up
+        # component is out of the plane and does not enter it.
+        heading = math.radians(self.geometry.heading_deg)
+        cos_heading, sin_heading = math.cos(heading), math.sin(heading)
+        # Half the unambiguous slant-range extent. Restated from
+        # `cphd.slant_range_swath` rather than imported because that module
+        # imports this one.
+        sample_spacing = self.waveform.bandwidth / (self.collection.num_samples - 1)
+        half_swath = 0.5 * SPEED_OF_LIGHT / (2.0 * sample_spacing)
+        for target in self.targets:
+            ground_range_m = -cos_heading * target.east_m + sin_heading * target.north_m
+            azimuth_m = -sin_heading * target.east_m - cos_heading * target.north_m
+            if max(abs(ground_range_m), abs(azimuth_m)) > self.image_half_extent_m:
+                raise ValueError(
+                    f"target {target.name!r} sits at {ground_range_m:.1f} m ground "
+                    f"range, {azimuth_m:.1f} m azimuth, outside the "
+                    f"{self.image_half_extent_m:.1f} m recipe.image_half_extent_m "
+                    "the suggested image lattice covers"
+                )
+            # |dR| <= |p - SRP| whatever the platform position (triangle
+            # inequality), so the target's distance from the IARP bounds its
+            # differential range over the whole aperture, with no need for the
+            # track. Conservative on purpose: a target far in azimuth but
+            # close in slant range would not in fact alias, and is refused
+            # anyway rather than have the check depend on the track.
+            distance_m = math.sqrt(target.east_m**2 + target.north_m**2 + target.up_m**2)
+            if distance_m > half_swath:
+                raise ValueError(
+                    f"target {target.name!r} is {distance_m:.1f} m from the IARP, "
+                    f"beyond the {half_swath:.1f} m half-width of the unambiguous "
+                    "slant-range swath; raise collection.num_samples or move the "
+                    "target"
+                )
 
     @property
     def azimuth_resolution(self) -> float:

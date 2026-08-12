@@ -165,12 +165,19 @@ optimization. The FMCW range stage has the identical pattern in
 ## 7. A window override re-announces; an `nfft` override does not
 
 `range_window` is emitted "whenever the window changes, including once at the
-first tick", which is implemented literally against the *effective* window: an
-override that sets the window to a value equal to the current one still counts
-as a change and re-announces. The alternative — comparing values and staying
-silent — was rejected because the port exists so a writer can record what was
-applied, and a redundant announcement is cheap while a missed one is a
-mislabelled product.
+first tick", implemented against the *value* of the effective window: an
+override that sets the window to a value equal to the current one is not a
+change and does not re-announce. This is the contract read literally — an
+override carrying the window already in force leaves nothing for a writer to
+relabel — and it is what `resolve_override_param` reports, so the behaviour is
+shared with every other `[live]` parameter in the module rather than special
+here.
+
+The alternative — re-announcing on every override message whatever its value,
+on the grounds that a redundant announcement is cheap while a missed one is a
+mislabelled product — would need this operator to bypass the shared helper,
+since the helper compares values for all of its callers. Worth revisiting only
+alongside a case where a writer actually missed a relabel.
 
 Nothing else re-announces. `nfft` changes the output shape, which downstream
 re-infers from the tensor, so there is no descriptor to re-emit.

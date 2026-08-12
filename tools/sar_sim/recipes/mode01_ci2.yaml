@@ -3,14 +3,15 @@
 
 # The mode01 smoke collection stored as CI2 with per-vector AmpSF.
 #
-# The companion to mode01_ci4.yaml, and the only coverage CI2 has anywhere:
-# no public collection in the surveyed Capella or Umbra catalogues uses it, so
-# without this file the 8-bit branch of the reader's decode would ship having
-# never run. Byte-wide samples also isolate a specific trap, since a decode
-# that treats the stored bytes as unsigned still produces a plausible image.
+# The companion to mode01_ci4.yaml, and the only CI2 data available at all:
+# no public collection in the surveyed Capella or Umbra catalogues uses the
+# format, so synthesizing it is the only way the 8-bit branch of a reader's
+# decode can be given anything to read. Byte-wide samples also isolate a
+# specific trap, since a decode that treats the stored bytes as unsigned still
+# produces a plausible image.
 #
 # 8 bits of quantization is coarse — around -42 dB against full scale — so a
-# test comparing against the CF8 file must budget for that, not for CI4's
+# comparison against the CF8 file has to budget for that, not for CI4's
 # tolerance.
 
 name: mode01_ci2

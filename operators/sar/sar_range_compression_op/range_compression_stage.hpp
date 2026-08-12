@@ -45,11 +45,23 @@ struct RangeCompressionConfig {
 // Cached by shape rather than allocated per tick: a per-tick cudaMalloc costs
 // ~0.09 ms flat, which the CPHDReaderOp harness measured and which would
 // dominate this stage at small apertures.
+//
+// One entry, not a ConfigCache, unlike the two caches beside it. Those retain
+// deliberately -- a window or a transform plan is expensive to rebuild and
+// cheap to hold, so revisiting a prior nfft should be free. The staging buffer
+// is the opposite: it is written and read within a single tick and never read
+// again, so retaining one per shape would pin a full (batch, pulses, nfft)
+// buffer for every nfft a `[live]` override ever visits while only the current
+// one is reachable. A sweep across transform lengths would exhaust the device.
+// Replacing the entry on a shape change costs an implicit device
+// synchronize inside cudaFree, which is a per-override cost, not a per-tick
+// one.
 template <typename T>
 struct RangeCompressionState {
   ConfigCache<matx::tensor_t<T, 1>> windows;
   ConfigCache<bool> seen_fft_keys;
-  ConfigCache<matx::tensor_t<cuda::std::complex<T>, 3>> scratch;
+  std::string scratch_key;
+  std::optional<matx::tensor_t<cuda::std::complex<T>, 3>> scratch;
 };
 
 // Output bin count: the transform length, defaulting to the input's fast-time
@@ -76,6 +88,16 @@ inline double frequency_spacing(const LFMWaveformDescriptor& waveform,
     throw std::invalid_argument(
         "range compression stage: the range axis needs at least 2 fast-time "
         "samples to have a frequency spacing");
+  }
+  // LFMWaveformDescriptor admits a negative chirp slope, and so a negative
+  // bandwidth, but this stage has no down-chirp convention: the sign would
+  // flow straight into range_bin_spacing and hand downstream a descending
+  // range axis that still looks well-formed. Refuse rather than mislabel.
+  if (waveform.bandwidth() <= 0.0) {
+    throw std::invalid_argument(
+        "range compression stage: bandwidth must be positive (a down-chirp "
+        "is not supported); got " +
+        std::to_string(waveform.bandwidth()));
   }
   return waveform.bandwidth() / static_cast<double>(num_samples - 1);
 }
@@ -165,17 +187,19 @@ void run_range_compression(const RangeCompressionConfig& cfg,
   const std::string scratch_key = "b=" + std::to_string(batch) + ";p=" +
                                   std::to_string(num_pulses) + ";n=" +
                                   std::to_string(num_bins);
-  // Not warn-worthy: this is our own staging buffer, not a configuration the
-  // caller chose, so it is cached silently.
-  // Plain device memory, not stream-ordered: the cache outlives every tick
-  // and is freed when the operator is destroyed, by which time the Holoscan
-  // stream this tick ran on is gone. A stream-ordered allocation would free
-  // itself on that dead stream.
-  auto& scratch = const_cast<matx::tensor_t<cuda::std::complex<T>, 3>&>(
-      state.scratch.get_or_build(scratch_key, false, "range scratch", [&] {
-        return matx::make_tensor<cuda::std::complex<T>>(
-            {batch, num_pulses, num_bins}, matx::MATX_DEVICE_MEMORY);
-      }));
+  // Silent, unlike the caches above: this is our own staging buffer, not a
+  // configuration the caller chose.
+  // Plain device memory, not stream-ordered: the buffer outlives the tick
+  // that allocated it and is freed when the operator is destroyed, by which
+  // time the Holoscan stream this tick ran on is gone. A stream-ordered
+  // allocation would free itself on that dead stream.
+  if (!state.scratch.has_value() || state.scratch_key != scratch_key) {
+    state.scratch.reset();
+    state.scratch.emplace(matx::make_tensor<cuda::std::complex<T>>(
+        {batch, num_pulses, num_bins}, matx::MATX_DEVICE_MEMORY));
+    state.scratch_key = scratch_key;
+  }
+  auto& scratch = *state.scratch;
 
   const bool apply_window = cfg.window.type != WindowType::kNone;
   const uint64_t fft_size = static_cast<uint64_t>(nfft);

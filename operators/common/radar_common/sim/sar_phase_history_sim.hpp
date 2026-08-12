@@ -74,10 +74,19 @@ struct SarPointTarget {
   std::complex<double> amplitude{1.0, 0.0};
 
   double range_at(int64_t pulse) const {
-    return differential_range_per_pulse.empty()
-               ? differential_range
-               : differential_range_per_pulse[
-                     static_cast<size_t>(pulse)];
+    if (differential_range_per_pulse.empty()) {
+      return differential_range;
+    }
+    // Only sar_phase_history() has checked the length against num_pulses, so
+    // a direct caller reaching past the end would otherwise read whatever
+    // sits after the vector and hand it back as ground truth.
+    if (pulse < 0 ||
+        static_cast<size_t>(pulse) >= differential_range_per_pulse.size()) {
+      throw std::invalid_argument(
+          "sar_phase_history_sim: pulse index is outside "
+          "differential_range_per_pulse");
+    }
+    return differential_range_per_pulse[static_cast<size_t>(pulse)];
   }
 };
 
@@ -114,6 +123,15 @@ inline std::vector<double> sar_frequency_axis(
 // test can predict where a target lands without asking the operator.
 inline double sar_range_bin_spacing(const SarPhaseHistoryConfig& cfg,
                                     int64_t nfft) {
+  if (cfg.num_samples < 2) {
+    throw std::invalid_argument(
+        "sar_phase_history_sim: num_samples must be >= 2 for the frequency "
+        "axis to have a spacing");
+  }
+  if (nfft <= 0) {
+    throw std::invalid_argument(
+        "sar_phase_history_sim: nfft must be positive");
+  }
   const double df =
       cfg.bandwidth / static_cast<double>(cfg.num_samples - 1);
   return cfg.propagation_speed / (2.0 * static_cast<double>(nfft) * df);
@@ -133,6 +151,26 @@ inline double sar_range_resolution(const SarPhaseHistoryConfig& cfg) {
 inline std::vector<std::complex<double>> sar_phase_history(
     const SarPhaseHistoryConfig& cfg,
     const std::vector<SarPointTarget>& targets) {
+  if (cfg.num_pulses <= 0) {
+    throw std::invalid_argument(
+        "sar_phase_history_sim: num_pulses must be positive");
+  }
+  if (cfg.num_samples <= 0) {
+    throw std::invalid_argument(
+        "sar_phase_history_sim: num_samples must be positive");
+  }
+  if (!std::isfinite(cfg.bandwidth) || cfg.bandwidth <= 0.0) {
+    throw std::invalid_argument(
+        "sar_phase_history_sim: bandwidth must be finite and > 0");
+  }
+  if (!std::isfinite(cfg.carrier_frequency) || cfg.carrier_frequency <= 0.0) {
+    throw std::invalid_argument(
+        "sar_phase_history_sim: carrier_frequency must be finite and > 0");
+  }
+  if (!std::isfinite(cfg.propagation_speed) || cfg.propagation_speed <= 0.0) {
+    throw std::invalid_argument(
+        "sar_phase_history_sim: propagation_speed must be finite and > 0");
+  }
   const std::vector<double> freqs = sar_frequency_axis(cfg);
   for (const auto& target : targets) {
     if (!target.differential_range_per_pulse.empty() &&

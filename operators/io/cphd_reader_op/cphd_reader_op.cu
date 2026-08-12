@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -91,7 +92,21 @@ std::shared_ptr<holoscan::Tensor> upload(const std::vector<Element>& host,
                                          const std::vector<int64_t>& shape,
                                          DLDataType dtype, const char* who) {
   auto tensor = make_device_tensor(shape, dtype);
-  if (cudaMemcpy(tensor->data(), host.data(), sizeof(Element) * host.size(),
+  const size_t bytes = sizeof(Element) * host.size();
+  // The shape sizes the allocation while the vector sizes the copy, so a
+  // disagreement between the two writes past the device buffer rather than
+  // merely emitting a wrongly shaped tensor.
+  if (bytes != static_cast<size_t>(tensor->nbytes())) {
+    throw std::runtime_error(
+        std::string(who) + ": H2D upload of " + std::to_string(bytes) +
+        " host bytes into a " + std::to_string(tensor->nbytes()) +
+        "-byte device tensor");
+  }
+  // Synchronous by design, not an oversight. The host source is one of this
+  // tick's locals, so the copy has to complete before this returns; that also
+  // means the data is visible to every stream by the time the tensor is
+  // emitted, so no stream ordering against the consumer is needed.
+  if (cudaMemcpy(tensor->data(), host.data(), bytes,
                  cudaMemcpyHostToDevice) != cudaSuccess) {
     throw std::runtime_error(std::string(who) + ": H2D upload failed");
   }
@@ -197,6 +212,28 @@ void CPHDReaderOp<T>::open_current_file() {
         ". CPHD positions are ECEF; conversion is a downstream concern.");
   }
 
+  // Every field a tick reads unconditionally, checked here rather than left
+  // to the first read: start() opens each file up front precisely so a
+  // collection that cannot be read fails before any pulse is emitted.
+  // TxVel/RcvVel and AmpSF are deliberately absent -- the operator reads
+  // those only from a file that declares them.
+  constexpr const char* kRequiredPvpFields[] = {"TxTime", "TxPos", "RcvPos",
+                                                "SRPPos", "SC0",   "SCSS"};
+  std::string missing;
+  for (const char* field : kRequiredPvpFields) {
+    if (!file_->has_pvp_field(field)) {
+      if (!missing.empty()) {
+        missing += ", ";
+      }
+      missing += field;
+    }
+  }
+  if (!missing.empty()) {
+    throw std::runtime_error(who + ": file '" + path +
+                             "' does not declare the PVP field(s) " + missing +
+                             ", which every batch reads");
+  }
+
   first_pulse_ = 0;
   last_pulse_ = info.num_vectors;
   const auto range = pulse_range_.try_get();
@@ -246,6 +283,21 @@ void CPHDReaderOp<T>::start() {
                              std::to_string(range->size()));
   }
 
+  // The boundary announcement (D22) rides the metadata plane, so with metadata
+  // disabled there is nowhere to put it and a consumer never learns where a
+  // collection ends -- it would simply stop receiving pulses. Not fatal, since
+  // a consumer that forms one image per run needs no seam, but not silent
+  // either. Said here rather than at the seam because the setting cannot
+  // change in flight, so warning once means warning before the first pulse
+  // rather than after the last.
+  if (!is_metadata_enabled()) {
+    HOLOSCAN_LOG_WARN(
+        "{}: metadata is disabled, so the end-of-collection announcement "
+        "('{}') cannot be emitted; a consumer will not be told where a "
+        "collection ends. Enable metadata on the fragment to receive it.",
+        who, kStreamBoundaryKey);
+  }
+
   files_ = resolve_paths(path_.get(), who);
   file_index_ = 0;
 
@@ -287,7 +339,11 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   // of the parameter block: the records are interleaved, so reading eight
   // fields separately would be eight passes over the same bytes. Read first
   // because the signal decode needs the amplitude scale factors from it.
-  const cphd::PvpBlock pvp =
+  //
+  // Optional because the block borrows its layout and path from the file that
+  // produced it, and the tail of this function may replace that file: the
+  // borrow has to be given up before the reopen, not merely left unused.
+  std::optional<cphd::PvpBlock> pvp =
       file_->read_pvp_block(channel_.get(), first, count);
 
   // 2. Phase history, read straight into the staging buffer at this
@@ -296,20 +352,21 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   // here and are swapped in place.
   std::vector<std::complex<T>> history(
       static_cast<size_t>(count * num_samples));
-  file_->read_signal_into(channel_.get(), first, count, history.data(), &pvp);
+  file_->read_signal_into(channel_.get(), first, count, history.data(),
+                          &pvp.value());
 
   // The aperture phase centre is the midpoint of the transmit and receive
   // phase centres, which reduces to either one for the monostatic
   // collections this wave covers. Which of the three readings the contract
   // means is a convention still to be pinned against the mode 3 collections
   // -- see this operator's OPEN_ITEMS.md.
-  const std::vector<double> tx_pos = pvp.field("TxPos", 3);
-  const std::vector<double> rcv_pos = pvp.field("RcvPos", 3);
+  const std::vector<double> tx_pos = pvp->field("TxPos", 3);
+  const std::vector<double> rcv_pos = pvp->field("RcvPos", 3);
   std::vector<double> apc(tx_pos.size());
   for (size_t i = 0; i < apc.size(); ++i) {
     apc[i] = 0.5 * (tx_pos[i] + rcv_pos[i]);
   }
-  const std::vector<double> srp = pvp.field("SRPPos", 3);
+  const std::vector<double> srp = pvp->field("SRPPos", 3);
 
   // Public collections do carry non-finite ephemeris on a minority of
   // vectors -- one surveyed Umbra file has NaN Tx fields on 32 of 4844, with
@@ -346,15 +403,25 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   // constancy over the batch is a precondition rather than an assumption: a
   // collection that steps its start frequency would otherwise be read at the
   // wrong frequencies and produce a plausible, wrong image.
-  const std::vector<double> sc0 = pvp.field("SC0", 1);
-  const std::vector<double> scss = pvp.field("SCSS", 1);
+  //
+  // Tolerantly, though: these are doubles decoded per vector from the file,
+  // and a collection holding one start frequency across the aperture still
+  // shows last-place jitter between records. A genuinely stepped axis moves by
+  // parts in a million or more, which this still refuses.
+  const std::vector<double> sc0 = pvp->field("SC0", 1);
+  const std::vector<double> scss = pvp->field("SCSS", 1);
+  constexpr double kConstantRelTol = 1e-12;
+  const auto differs = [&](double value, double reference) {
+    return std::abs(value - reference) >
+           kConstantRelTol * std::max(std::abs(value), std::abs(reference));
+  };
   for (int64_t pulse = 1; pulse < count; ++pulse) {
-    if (sc0[pulse] != sc0[0] || scss[pulse] != scss[0]) {
+    if (differs(sc0[pulse], sc0[0]) || differs(scss[pulse], scss[0])) {
       throw std::runtime_error(
-          who + ": SC0/SCSS vary across pulses (pulse " +
-          std::to_string(first + pulse) +
-          " differs from the batch's first); a per-pulse sample axis is not "
-          "supported");
+          who + ": SC0/SCSS vary across pulses by more than floating-point "
+          "jitter (pulse " + std::to_string(first + pulse) +
+          " differs from the batch's first by more than a relative 1e-12); a "
+          "per-pulse sample axis is not supported");
     }
   }
   std::vector<T> axis(static_cast<size_t>(num_samples));
@@ -374,27 +441,27 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   }
 
   const std::vector<int64_t> pulse_shape{count, 3};
-  emit_single(op_output, "phase_history",
-              upload(history, {count, num_samples}, complex_dtype<T>(),
-                     who.c_str()));
-  emit_single(op_output, "positions",
-              upload(narrow<T>(apc), pulse_shape, real_dtype<T>(),
-                     who.c_str()));
-  emit_single(op_output, "reference_position",
-              upload(narrow<T>(srp), pulse_shape, real_dtype<T>(),
-                     who.c_str()));
+  emit_single(
+      op_output, "phase_history",
+      upload(history, {count, num_samples}, complex_dtype<T>(), who.c_str()));
+  emit_single(
+      op_output, "positions",
+      upload(narrow<T>(apc), pulse_shape, real_dtype<T>(), who.c_str()));
+  emit_single(
+      op_output, "reference_position",
+      upload(narrow<T>(srp), pulse_shape, real_dtype<T>(), who.c_str()));
   emit_single(op_output, "sample_axis",
               upload(axis, {num_samples}, real_dtype<T>(), who.c_str()));
 
   // Pulse times stay float64 in both instantiations: a collection-relative
   // timestamp does not survive single precision to useful accuracy.
-  const std::vector<double> times = pvp.field("TxTime", 1);
+  const std::vector<double> times = pvp->field("TxTime", 1);
   emit_single(op_output, "pulse_times",
               upload(times, {count}, real_dtype<double>(), who.c_str()));
 
-  if (pvp.has("TxVel") && pvp.has("RcvVel")) {
-    const std::vector<double> tx_vel = pvp.field("TxVel", 3);
-    const std::vector<double> rcv_vel = pvp.field("RcvVel", 3);
+  if (pvp->has("TxVel") && pvp->has("RcvVel")) {
+    const std::vector<double> tx_vel = pvp->field("TxVel", 3);
+    const std::vector<double> rcv_vel = pvp->field("RcvVel", 3);
     std::vector<double> velocity(tx_vel.size());
     for (size_t i = 0; i < velocity.size(); ++i) {
       velocity[i] = 0.5 * (tx_vel[i] + rcv_vel[i]);
@@ -427,6 +494,9 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   // any pulse of the next file reaches it.
   HOLOSCAN_LOG_INFO("{}: collection boundary after {} pulses of '{}'", who,
                     last_pulse_ - first_pulse_, files_[file_index_]);
+  // Released before the file it points into is replaced: the block holds the
+  // old file's PVP layout and path by pointer.
+  pvp.reset();
   ++file_index_;
   open_current_file();
 }
