@@ -53,7 +53,6 @@ class TempDir {
   std::string pattern(const std::string& leaf) const {
     return (path_ / leaf).string();
   }
-  const fs::path& path() const { return path_; }
 
   int file_count() const {
     int count = 0;
@@ -269,7 +268,7 @@ TEST(TensorDumpOp, RawDumpsADtypeNpyCannotSpell) {
 }
 
 TEST(TensorDumpOp, IndexNamesTheTickNotThePositionInTheSeries) {
-  TempDir dir("every_n");
+  TempDir dir("index_names_tick");
   auto tensor = testing::to_device_tensor(complex_ramp(8), {8},
                                           complex_dtype<float>());
 

@@ -9,9 +9,11 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -78,6 +80,14 @@ int64_t read_be_int64(const char* bytes) {
   return value;
 }
 
+std::string_view trimmed(std::string_view text) {
+  const size_t begin = text.find_first_not_of(" \t\r\n");
+  if (begin == std::string_view::npos) {
+    return {};
+  }
+  return text.substr(begin, text.find_last_not_of(" \t\r\n") - begin + 1);
+}
+
 // The declared format of one PVP word. CPHD writes each field's type in the
 // XML, and the same eight bytes mean different numbers depending on it: the
 // integer 1 read as a double is 5e-324, not 1.0.
@@ -86,13 +96,24 @@ enum class WordType { kFloat, kSignedInt, kUnsignedInt };
 // `format` is the XML's Format text -- "F8", "I8", "U8", or a compound like
 // "X=F8;Y=F8;Z=F8;". Compound forms are homogeneous in every collection seen,
 // so the first component decides.
-WordType word_type_of(const std::string& format) {
-  const size_t equals = format.find('=');
-  const size_t start = equals == std::string::npos ? 0 : equals + 1;
-  const char code = start < format.size() ? format[start] : 'F';
-  if (code == 'I') return WordType::kSignedInt;
-  if (code == 'U') return WordType::kUnsignedInt;
-  return WordType::kFloat;
+//
+// Anything else yields nothing rather than a float: the schema's format
+// grammar also admits narrower and complex codes (F4, CI2, CF8, S16) on an
+// added field, and eight bytes read as a double would turn those into noise
+// that looks like data. An absent Format element is the exception -- it leaves
+// the string empty, and every defined field the schema fixes a format for is
+// F8 but SIGNAL.
+std::optional<WordType> word_type_of(const std::string& format) {
+  const std::string_view text(format);
+  const size_t equals = text.find('=');
+  const std::string_view component =
+      equals == std::string_view::npos ? text : text.substr(equals + 1);
+  const std::string_view code =
+      trimmed(component.substr(0, component.find(';')));
+  if (code.empty() || code == "F8") return WordType::kFloat;
+  if (code == "I8") return WordType::kSignedInt;
+  if (code == "U8") return WordType::kUnsignedInt;
+  return std::nullopt;
 }
 
 float read_be_float(const char* bytes) {
@@ -105,18 +126,25 @@ float read_be_float(const char* bytes) {
 }
 
 // tinyxml2 has no namespace handling, so a document using a prefix reports
-// element names as "cphd:Data". Matching on the local name accepts both that
-// and the default-namespace form CPHD files normally use.
-bool local_name_is(const tinyxml2::XMLElement* element, const char* name) {
-  const char* value = element->Name();
-  if (value == nullptr) {
-    return false;
+// element names as "cphd:Data". The local name accepts both that and the
+// default-namespace form CPHD files normally use.
+std::string_view local_name(const char* qualified) {
+  if (qualified == nullptr) {
+    return {};
   }
-  const char* colon = std::strrchr(value, ':');
-  const char* local = (colon == nullptr) ? value : colon + 1;
-  return std::strcmp(local, name) == 0;
+  const std::string_view name(qualified);
+  const size_t colon = name.rfind(':');
+  return colon == std::string_view::npos ? name : name.substr(colon + 1);
 }
 
+bool local_name_is(const tinyxml2::XMLElement* element, const char* name) {
+  return local_name(element->Name()) == name;
+}
+
+// Matched on the local name alone, so two namespaces sharing one would be
+// indistinguishable here. Deliberate: tinyxml2 resolves no prefixes, so the
+// URI is not available to compare against, and a CPHD document carries one
+// namespace for the whole tree.
 const tinyxml2::XMLElement* first_child(const tinyxml2::XMLElement* parent,
                                         const char* name) {
   if (parent == nullptr) {
@@ -432,9 +460,7 @@ void CphdFile::parse_xml(const std::string& xml) {
     if (format_node != nullptr && format_node->GetText() != nullptr) {
       field.format = format_node->GetText();
     }
-    const char* name = node->Name();
-    const char* colon = std::strrchr(name, ':');
-    pvp_fields_[(colon == nullptr) ? name : colon + 1] = field;
+    pvp_fields_[std::string(local_name(node->Name()))] = field;
   }
   if (pvp_fields_.empty()) {
     throw std::runtime_error("CphdFile: " + path_ +
@@ -499,7 +525,13 @@ std::vector<double> PvpBlock::field(const std::string& name,
   // a double reinterprets the bit pattern rather than converting it, so
   // SIGNAL's 1 becomes 5e-324 -- wrong in a way that looks like a tiny number
   // rather than like an error.
-  const WordType type = word_type_of(layout.format);
+  const std::optional<WordType> type = word_type_of(layout.format);
+  if (!type.has_value()) {
+    throw std::runtime_error(
+        "CphdFile: " + *path_ + ": PVP field '" + name + "' declares format '" +
+        layout.format + "', which this reader does not decode; a PVP word is "
+        "8 bytes, so only F8, I8, U8 and compounds of them are readable");
+  }
 
   // Integers wider than the mantissa cannot round-trip through a double, so
   // this refuses rather than returning a quietly rounded value. No field in
@@ -524,7 +556,7 @@ std::vector<double> PvpBlock::field(const std::string& name,
       const char* word =
           record + (layout.offset_words + component) * sizeof(double);
       double value = 0.0;
-      switch (type) {
+      switch (*type) {
         case WordType::kFloat:
           value = read_be_double(word);
           break;

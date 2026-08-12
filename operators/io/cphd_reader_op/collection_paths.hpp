@@ -21,6 +21,12 @@
 // spelling rather than a shared descriptor -- invariant 2 bounds that set
 // deliberately. `CRSDReaderOp` takes the same parameter and should share this
 // when it lands, at which point the io group grows a common header.
+//
+// An empty sequence (`path: []`) decodes successfully, to no entries. It is
+// the reader that refuses it, at `start()`, naming the parameter -- deciding
+// here instead would cost that message: a converter can only report failure
+// as a YAML conversion error, which surfaces as an unset required parameter
+// rather than as an empty list.
 namespace holoscan::radar {
 
 struct CollectionPaths {

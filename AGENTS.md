@@ -148,7 +148,10 @@ See [`DEVELOPER.md`](DEVELOPER.md) for detail. Quick reference:
 # Configure + build (requires Holoscan SDK >= 4.3.0 discoverable via find_package;
 # `pip install holoscan` gives a CPU-capable config, or use `./holohub run-container`)
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
-cmake --build build -j"$(nproc)"
+# Not -j"$(nproc)": a MatX translation unit costs a few GB in cicc, so the job
+# count is bounded by RAM, not cores. Over-subscribing gets compilers OOM-killed
+# ("cicc died due to signal 9") and can time out gtest discovery. See DEVELOPER.md.
+cmake --build build -j8
 
 # C++ tests
 ctest --test-dir build --output-on-failure -L unit

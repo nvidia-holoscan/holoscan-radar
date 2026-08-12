@@ -71,6 +71,10 @@ struct SarPointTarget {
   // real range walk is described without giving this header a trajectory.
   std::vector<double> differential_range_per_pulse{};
 
+  // Complex reflectivity as a linear *amplitude*, not a power or RCS
+  // quantity: it multiplies the phasor directly, so |amplitude| scales the
+  // compressed peak one-for-one and arg(amplitude) is a constant phase offset
+  // on top of the range term. A target twice as bright in power is 1.414 here.
   std::complex<double> amplitude{1.0, 0.0};
 
   double range_at(int64_t pulse) const {

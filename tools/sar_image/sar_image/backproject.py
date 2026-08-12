@@ -57,6 +57,10 @@ def backproject(signal, pvps, lattice, *, oversample: int = 8) -> np.ndarray:
     srp_pos = cp.asarray(np.asarray(pvps["SRPPos"], dtype=float))
 
     image = cp.zeros(pixels.shape[0], dtype=complex)
+    # One kernel launch per pulse, chosen for clarity over speed: the loop
+    # reads as the sum it implements. Batching the pulses would be faster, but
+    # it is the kind of rewrite that lands this on the same approximations
+    # `BackprojectionOp` makes, and agreement reached that way is not evidence.
     for pulse in range(signal.shape[0]):
         apc = tx_pos[pulse]
         delta_r = cp.linalg.norm(pixels - apc, axis=1) - cp.linalg.norm(srp_pos[pulse] - apc)

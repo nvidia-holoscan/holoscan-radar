@@ -437,6 +437,12 @@ TEST(SARRangeCompressionOpTest, NfftInterpolatesWithoutAddingResolution) {
   const float* base_axis = base.bins.as<float>();
 
   // More bins over the same extent: spacing divides by 4, span is unchanged.
+  //
+  // The axis is float32, which is why the second tolerance is a fraction of
+  // the *span* rather than of a bin, and why neither should be tightened:
+  // differencing two neighbouring bins at the array edge cancels values of
+  // order span/2, leaving ~1e-7 of the span as rounding error, and multiplying
+  // that difference back up by nfft restores the error at that size.
   EXPECT_NEAR(fine_axis[1] - fine_axis[0],
               0.25 * (base_axis[1] - base_axis[0]),
               1e-4 * (base_axis[1] - base_axis[0]));

@@ -120,6 +120,11 @@ struct AlphaCalibrationRow {
 // genuinely cold build and later ones do not, and pooling them would report a
 // cost nobody experiences. The pair is the real range: cold build vs. warm
 // process.
+//
+// It stays NaN when the first session produced no sample -- one too short to
+// catch the transition -- and every NaN field here reaches JSON as `null` and
+// text as "-". A null is "not collected", never zero: read it as a cost and
+// the cold build that did not get measured becomes a free one.
 struct OverrideProbeRow {
   std::string scenario_id;
   std::string op_name;
@@ -276,6 +281,29 @@ inline int shape_column_width(const PerfReport& r, int min_width = 14) {
   }
   return std::min(width, 26);
 }
+
+// Text-table column widths. Each table's header and its data rows are written
+// by separate statements, so a width left as a literal in both is one a later
+// edit can change in only one of them, and the table silently loses alignment.
+// Widths that several tables share are named once: the millisecond columns are
+// all one width, and the setup and compute tables share their leading columns.
+constexpr int kSizeW = 6;
+constexpr int kCellsW = 10;
+constexpr int kScenarioW = 40;
+constexpr int kMsW = 10;
+constexpr int kCellRateW = 11;
+constexpr int kGbpsW = 8;
+constexpr int kPairW = 14;
+constexpr int kVariantW = 6;
+constexpr int kKW = 4;
+constexpr int kSpeedupW = 8;
+// The probe table carries more columns than the others, so its scenario field
+// is narrower than the setup and compute tables'.
+constexpr int kProbeScenarioW = 34;
+constexpr int kParamW = 8;
+constexpr int kTransitionW = 12;
+constexpr int kFromToW = 16;
+constexpr int kProbeSamplesW = 4;
 
 }  // namespace detail
 
@@ -473,91 +501,116 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
   const int shape_w = detail::shape_column_width(r);
   if (!r.sizes.empty()) {
     os << "\n--- sizes ---\n";
-    os << detail::col("id", 6) << detail::col("shape (DxR)", shape_w)
-       << detail::col("cells", 10) << "role\n";
+    os << detail::col("id", detail::kSizeW)
+       << detail::col("shape (DxR)", shape_w)
+       << detail::col("cells", detail::kCellsW) << "role\n";
     for (const auto& s : r.sizes) {
-      os << detail::col(s.id, 6)
+      os << detail::col(s.id, detail::kSizeW)
          << detail::col(detail::shape_text(s.shape), shape_w)
-         << detail::col(std::to_string(s.cells), 10) << s.role << "\n";
+         << detail::col(std::to_string(s.cells), detail::kCellsW) << s.role
+         << "\n";
     }
   }
 
   // --- setup ---
   os << "\n--- setup ---\n";
-  os << detail::col("scenario", 40) << detail::col("size", 6)
-     << detail::col("setup_ms", 10) << "\n";
+  os << detail::col("scenario", detail::kScenarioW)
+     << detail::col("size", detail::kSizeW)
+     << detail::col("setup_ms", detail::kMsW) << "\n";
   for (const auto& row : r.results) {
     if (row.bucket != "setup") {
       continue;
     }
-    os << detail::col(row.scenario_id, 40) << detail::col(row.size_id, 6)
-       << detail::col(detail::fixed(row.setup_ms, 2), 10);
+    os << detail::col(row.scenario_id, detail::kScenarioW)
+       << detail::col(row.size_id, detail::kSizeW)
+       << detail::col(detail::fixed(row.setup_ms, 2), detail::kMsW);
     detail::end_row(os, row.status, row.qualifier, row.notes);
   }
 
   // --- compute (steady state + inline live override) ---
   os << "\n--- compute ---\n";
-  os << detail::col("scenario", 40) << detail::col("size", 6)
-     << detail::col("shape", shape_w) << detail::col("cold_ms", 10)
-     << detail::col("median_ms", 10) << detail::col("p90_ms", 10)
-     << detail::col("ovr_ms", 10) << detail::col("ovr_d_ms", 10)
-     << detail::col("cells/s", 11) << detail::col("GB/s", 8) << "\n";
+  os << detail::col("scenario", detail::kScenarioW)
+     << detail::col("size", detail::kSizeW)
+     << detail::col("shape", shape_w)
+     << detail::col("cold_ms", detail::kMsW)
+     << detail::col("median_ms", detail::kMsW)
+     << detail::col("p90_ms", detail::kMsW)
+     << detail::col("ovr_ms", detail::kMsW)
+     << detail::col("ovr_d_ms", detail::kMsW)
+     << detail::col("cells/s", detail::kCellRateW)
+     << detail::col("GB/s", detail::kGbpsW) << "\n";
   for (const auto& row : r.results) {
     if (row.bucket != "compute") {
       continue;
     }
-    os << detail::col(row.scenario_id, 40) << detail::col(row.size_id, 6)
+    os << detail::col(row.scenario_id, detail::kScenarioW)
+       << detail::col(row.size_id, detail::kSizeW)
        << detail::col(detail::shape_text(row.input_shape), shape_w)
-       << detail::col(detail::fixed(row.cold_ms, 3), 10)
-       << detail::col(detail::fixed(row.latency.median_ms, 3), 10)
-       << detail::col(detail::fixed(row.latency.p90_ms, 3), 10)
-       << detail::col(detail::fixed(row.override_ms, 3), 10)
-       << detail::col(detail::fixed(row.override_delta_ms, 3), 10)
-       << detail::col(detail::sci(row.cells_per_second), 11)
-       << detail::col(detail::fixed(row.estimated_effective_gbps, 1), 8);
+       << detail::col(detail::fixed(row.cold_ms, 3), detail::kMsW)
+       << detail::col(detail::fixed(row.latency.median_ms, 3), detail::kMsW)
+       << detail::col(detail::fixed(row.latency.p90_ms, 3), detail::kMsW)
+       << detail::col(detail::fixed(row.override_ms, 3), detail::kMsW)
+       << detail::col(detail::fixed(row.override_delta_ms, 3), detail::kMsW)
+       << detail::col(detail::sci(row.cells_per_second), detail::kCellRateW)
+       << detail::col(detail::fixed(row.estimated_effective_gbps, 1),
+                      detail::kGbpsW);
     detail::end_row(os, row.status, row.qualifier, row.notes);
   }
 
   if (!r.alpha_calibration.empty()) {
     os << "--- alpha calibration ---\n";
-    os << detail::col("pair", 14) << detail::col("variant", 6)
-       << detail::col("size", 6) << detail::col("k", 4)
-       << detail::col("slow_cold", 10) << detail::col("fast_cold", 10)
-       << detail::col("cold_x", 8) << detail::col("slow_ovr", 10)
-       << detail::col("fast_ovr", 10) << detail::col("ovr_x", 8) << "\n";
+    os << detail::col("pair", detail::kPairW)
+       << detail::col("variant", detail::kVariantW)
+       << detail::col("size", detail::kSizeW) << detail::col("k", detail::kKW)
+       << detail::col("slow_cold", detail::kMsW)
+       << detail::col("fast_cold", detail::kMsW)
+       << detail::col("cold_x", detail::kSpeedupW)
+       << detail::col("slow_ovr", detail::kMsW)
+       << detail::col("fast_ovr", detail::kMsW)
+       << detail::col("ovr_x", detail::kSpeedupW) << "\n";
     for (const auto& row : r.alpha_calibration) {
-      os << detail::col(row.pair_id, 14) << detail::col(row.variant, 6)
-         << detail::col(row.size_id, 6) << detail::col(std::to_string(row.k), 4)
-         << detail::col(detail::fixed(row.slow_cold_ms, 3), 10)
-         << detail::col(detail::fixed(row.fast_cold_ms, 3), 10)
-         << detail::col(detail::fixed(row.cold_speedup, 2), 8)
-         << detail::col(detail::fixed(row.slow_ovr_ms, 3), 10)
-         << detail::col(detail::fixed(row.fast_ovr_ms, 3), 10)
-         << detail::col(detail::fixed(row.ovr_speedup, 2), 8) << "\n";
+      os << detail::col(row.pair_id, detail::kPairW)
+         << detail::col(row.variant, detail::kVariantW)
+         << detail::col(row.size_id, detail::kSizeW)
+         << detail::col(std::to_string(row.k), detail::kKW)
+         << detail::col(detail::fixed(row.slow_cold_ms, 3), detail::kMsW)
+         << detail::col(detail::fixed(row.fast_cold_ms, 3), detail::kMsW)
+         << detail::col(detail::fixed(row.cold_speedup, 2), detail::kSpeedupW)
+         << detail::col(detail::fixed(row.slow_ovr_ms, 3), detail::kMsW)
+         << detail::col(detail::fixed(row.fast_ovr_ms, 3), detail::kMsW)
+         << detail::col(detail::fixed(row.ovr_speedup, 2), detail::kSpeedupW)
+         << "\n";
     }
   }
 
   if (!r.override_probe.empty()) {
     os << "\n--- live override probe (one sample per session) ---\n";
-    os << detail::col("scenario", 34) << detail::col("param", 8)
-       << detail::col("transition", 12) << detail::col("from -> to", 16)
-       << detail::col("n", 4) << detail::col("first_ms", 10)
-       << detail::col("med_ms", 10) << detail::col("p90_ms", 10)
-       << detail::col("before_ms", 10) << detail::col("after_ms", 10) << "\n";
+    os << detail::col("scenario", detail::kProbeScenarioW)
+       << detail::col("param", detail::kParamW)
+       << detail::col("transition", detail::kTransitionW)
+       << detail::col("from -> to", detail::kFromToW)
+       << detail::col("n", detail::kProbeSamplesW)
+       << detail::col("first_ms", detail::kMsW)
+       << detail::col("med_ms", detail::kMsW)
+       << detail::col("p90_ms", detail::kMsW)
+       << detail::col("before_ms", detail::kMsW)
+       << detail::col("after_ms", detail::kMsW) << "\n";
     for (const auto& row : r.override_probe) {
-      os << detail::col(row.scenario_id, 34) << detail::col(row.parameter, 8)
-         << detail::col(row.transition, 12) << detail::col(row.from_to, 16)
+      os << detail::col(row.scenario_id, detail::kProbeScenarioW)
+         << detail::col(row.parameter, detail::kParamW)
+         << detail::col(row.transition, detail::kTransitionW)
+         << detail::col(row.from_to, detail::kFromToW)
          // The first session counts only when it produced a sample: it is
          // dropped when the session was too short, and adding it
          // unconditionally then reports one more session than was measured.
          << detail::col(std::to_string(row.later.samples +
                                        (std::isfinite(row.first_ms) ? 1 : 0)),
-                        4)
-         << detail::col(detail::fixed(row.first_ms, 3), 10)
-         << detail::col(detail::fixed(row.later.median_ms, 3), 10)
-         << detail::col(detail::fixed(row.later.p90_ms, 3), 10)
-         << detail::col(detail::fixed(row.steady_before_ms, 3), 10)
-         << detail::col(detail::fixed(row.steady_after_ms, 3), 10);
+                        detail::kProbeSamplesW)
+         << detail::col(detail::fixed(row.first_ms, 3), detail::kMsW)
+         << detail::col(detail::fixed(row.later.median_ms, 3), detail::kMsW)
+         << detail::col(detail::fixed(row.later.p90_ms, 3), detail::kMsW)
+         << detail::col(detail::fixed(row.steady_before_ms, 3), detail::kMsW)
+         << detail::col(detail::fixed(row.steady_after_ms, 3), detail::kMsW);
       if (row.notes.empty()) {
         os << "\n";
       } else {

@@ -68,8 +68,17 @@ checkout for host-side CLI development.
 
 ```bash
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
-cmake --build build -j"$(nproc)"
+cmake --build build -j8
 ```
+
+**On the job count.** Prefer a fixed, modest `-j` over `-j"$(nproc)"`. Each
+`nvcc` translation unit that includes `<matx.h>` costs a few GB of resident
+memory in `cicc`, so parallelism is bounded by RAM rather than by cores: on a
+32-core / 62 GB host, `-j"$(nproc)"` gets several compilers killed by the OOM
+killer, which surfaces as `nvcc error : '"$CICC_PATH/cicc"' died due to signal
+9` rather than as a compile error. It can also time out the post-build
+`gtest_discover_tests` step, which then deletes the test binary it could not
+run. Roughly 2 GB per job is a reasonable budget.
 
 Run C++ tests:
 

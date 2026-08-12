@@ -115,6 +115,12 @@ inline double range_bin_spacing(const RangeCompressionConfig& cfg,
 
 // Run range compression over a collapsed batch view.
 //
+// **The caller preallocates `out`** at (batch, num_pulses, num_bins); this
+// stage writes into it and never allocates it. `num_bins` is therefore not a
+// request but a restatement of compression_num_bins(num_samples, cfg.nfft),
+// and is checked against it — sizing the buffer from num_samples while an
+// nfft override is in force is the mistake that check catches.
+//
 //   in       — device pointer, (batch, num_pulses, num_samples),
 //              cuda::std::complex<T>.
 //   out      — device pointer, (batch, num_pulses, num_bins),

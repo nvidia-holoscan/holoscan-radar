@@ -61,6 +61,10 @@ void expand_sample_lattice(const SampleGeometry& geometry, T* out) {
   const int64_t num_v = geometry.num_v();
   const int64_t num_u = geometry.num_u();
   int64_t index = 0;
+  // v outermost and the three components innermost, so the writes are
+  // sequential across a row-major (num_v, num_u, 3) buffer -- the same layout
+  // BackprojectionOp's `sample_points` tensor arrives in, which is what lets
+  // the kernel index either geometry mode identically.
   for (int64_t iv = 0; iv < num_v; ++iv) {
     for (int64_t iu = 0; iu < num_u; ++iu) {
       const auto position = geometry.sample_position(iv, iu);

@@ -44,6 +44,23 @@ class CphdFile;  // host-side file reading; defined in cphd_file.hpp
 // pulse_times is float64 in both, since single precision cannot hold a
 // collection-relative timestamp to useful accuracy.
 //
+// Parameters:
+//   path             — a single CPHD file, a directory of them, or an
+//                      explicit ordered list. A directory is enumerated
+//                      lexicographically rather than numerically, so indexed
+//                      names want zero-padding; an explicit list keeps the
+//                      order given. Static, required.
+//   coordinate_frame — frame the emitted positions are expressed in. A frame
+//                      disagreeing with the one the file declares is an
+//                      error. Static, required.
+//   pulses_per_tick  — batch size along the pulse axis. Static, required.
+//   channel          — which CPHD channel to read. Static, default 0.
+//   pulse_range      — half-open [first, last) pulse range, applied per file.
+//                      Static, default the whole collection.
+//
+// **No parameter is [live]**, so none has an override input port: a reader's
+// file, frame and batching are build-time configuration.
+//
 // One channel per instance is deliberate, not a gap: CPHD channels may carry
 // different pulse and sample counts, so they do not stack into one tensor.
 // See OPERATOR_API.md.

@@ -200,8 +200,11 @@ void TensorDumpOp::compute(InputContext& op_input,
   host_.resize(nbytes);
   if (nbytes > 0) {
     cudaStream_t stream = op_input.receive_cuda_stream("tensor");
-    // Stream-ordered, then synchronized: the producer's kernels are queued on
-    // this stream and a plain cudaMemcpy would race them for device memory.
+    // Stream-ordered, then synchronized, and both are load-bearing: the copy
+    // orders itself behind the producer's kernels on this stream, which a
+    // plain cudaMemcpy would race for device memory, and the synchronize is
+    // what makes host_ safe to read -- the async copy has only been queued
+    // by the time it returns.
     const cudaError_t copied =
         cudaMemcpyAsync(host_.data(), tensor->data(), nbytes,
                         cudaMemcpyDefault, stream);

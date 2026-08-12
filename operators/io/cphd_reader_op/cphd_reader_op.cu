@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <type_traits>
 #include <vector>
 
 #include "io/cphd_reader_op/cphd_file.hpp"
@@ -48,6 +49,27 @@ constexpr const char* kStreamBoundaryKey = "holoscan.radar.sar.stream_boundary";
 constexpr const char* kEndOfStream = "end_of_stream";
 constexpr const char* kCollectionBoundary = "collection_boundary";
 
+// Whether `path` ends in the CPHD extension, compared without ASCII case:
+// a directory holding SCENE.CPHD would otherwise contribute nothing, and the
+// extension is the only thing that selects a collection.
+bool has_cphd_extension(const std::filesystem::path& path) {
+  const std::string extension = path.extension().string();
+  constexpr char kExpected[] = ".cphd";
+  if (extension.size() != sizeof(kExpected) - 1) {
+    return false;
+  }
+  for (size_t index = 0; index < extension.size(); ++index) {
+    const char character = extension[index];
+    const char lowered = (character >= 'A' && character <= 'Z')
+                             ? static_cast<char>(character - 'A' + 'a')
+                             : character;
+    if (lowered != kExpected[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // Expand the `path` parameter into the ordered list of collections to read.
 // A directory contributes its `.cphd` entries in lexicographic order, which
 // is what the contract specifies; anything else is taken as a file and passed
@@ -67,7 +89,7 @@ std::vector<std::string> resolve_paths(const CollectionPaths& parameter,
     }
     std::vector<std::string> found;
     for (const auto& item : std::filesystem::directory_iterator(entry)) {
-      if (item.is_regular_file() && item.path().extension() == ".cphd") {
+      if (item.is_regular_file() && has_cphd_extension(item.path())) {
         found.push_back(item.path().string());
       }
     }
@@ -77,6 +99,11 @@ std::vector<std::string> resolve_paths(const CollectionPaths& parameter,
     }
     // directory_iterator order is unspecified, so the contract's
     // lexicographic promise has to be imposed here rather than assumed.
+    //
+    // Lexicographic by the whole path string, which is the defined collection
+    // order and is not numeric: `pulse_10.cphd` precedes `pulse_2.cphd`. A
+    // directory whose names carry an index needs them zero-padded to a fixed
+    // width; an explicit list is the way to read any other order.
     std::sort(found.begin(), found.end());
     files.insert(files.end(), found.begin(), found.end());
   }
@@ -116,13 +143,22 @@ std::shared_ptr<holoscan::Tensor> upload(const std::vector<Element>& host,
 // Narrow the file's doubles to the instantiated precision. PVP records are
 // always float64 on disk; single-precision instances pay the cast here so
 // the rest of the chain sees one dtype.
+//
+// A double-precision instance returns the caller's vector by reference rather
+// than copying it, the cast being the identity. Every call site hands the
+// result straight to upload() and owns a local that outlives that call, so the
+// reference cannot outlive what it names.
 template <typename T>
-std::vector<T> narrow(const std::vector<double>& values) {
-  std::vector<T> narrowed(values.size());
-  for (size_t i = 0; i < values.size(); ++i) {
-    narrowed[i] = static_cast<T>(values[i]);
+decltype(auto) narrow(const std::vector<double>& values) {
+  if constexpr (std::is_same_v<T, double>) {
+    return values;
+  } else {
+    std::vector<T> narrowed(values.size());
+    for (size_t i = 0; i < values.size(); ++i) {
+      narrowed[i] = static_cast<T>(values[i]);
+    }
+    return narrowed;
   }
-  return narrowed;
 }
 
 }  // namespace
@@ -484,8 +520,11 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
     return;
   }
   if (is_last_file) {
-    HOLOSCAN_LOG_INFO("{}: end of stream after {} pulses of '{}'", who,
-                      last_pulse_ - first_pulse_, files_[file_index_]);
+    HOLOSCAN_LOG_INFO(
+        "{}: end of stream: {} pulses read from the final collection '{}' "
+        "({} of {})",
+        who, last_pulse_ - first_pulse_, files_[file_index_], file_index_ + 1,
+        files_.size());
     stop_condition_->disable_tick();
     return;
   }

@@ -52,6 +52,14 @@ std::string fixture_path(const char* recipe) {
   return std::string(SAR_FIXTURE_DIR) + "/" + recipe + ".cphd";
 }
 
+// One least-significant bit of a signed integer sample type saturating at
+// `saturation`, as a fraction of full scale. Half of it is the ideal rounding
+// bound; the whole step is the margin the per-pulse scaling needs, since a
+// quiet pulse is quantized against its own peak rather than the collection's.
+constexpr double quantization_step(double saturation) {
+  return 1.0 / saturation;
+}
+
 CoordinateFrame ecef_frame() {
   CoordinateFrameSpec spec;
   spec.frame = CoordinateFrameType::kEcef;
@@ -295,11 +303,12 @@ TEST(CphdFile, IntegerFormatsRoundTripToTheFloatCollection) {
   }
   ASSERT_GT(peak, 0.0);
 
-  // One least-significant bit of the stored type, as a fraction of full
-  // scale. Half of that is the ideal rounding bound; the margin absorbs the
-  // per-pulse scaling, since a quiet pulse is quantized against its own peak.
-  for (const auto& [recipe, lsb] : std::vector<std::pair<const char*, double>>{
-           {"mode01_ci4", 1.0 / 32767.0}, {"mode01_ci2", 1.0 / 127.0}}) {
+  // Saturation points of the two stored types, which are the simulator's
+  // quantization peaks: int16 for CI4, int8 for CI2.
+  for (const auto& [recipe, saturation] :
+       std::vector<std::pair<const char*, double>>{{"mode01_ci4", 32767.0},
+                                                   {"mode01_ci2", 127.0}}) {
+    const double lsb = quantization_step(saturation);
     const CphdFile file(fixture_path(recipe));
     EXPECT_TRUE(file.has_amp_sf()) << recipe;
     EXPECT_EQ(file.channel(0).num_samples, samples) << recipe;

@@ -101,7 +101,9 @@ std::string header(DLDataType dtype, const std::vector<int64_t>& shape) {
 
   std::string text = dict.str();
   // Magic (6) + version (2) + header length (2) = 10 bytes precede the text,
-  // and the format requires the data that follows to start 64-byte aligned.
+  // and the data that follows must begin on an aligned boundary. 64 rather
+  // than the 16 older NumPy writers used: 64 is numpy.lib.format's
+  // ARRAY_ALIGN, so a dump is byte-identical to one numpy.save would write.
   constexpr size_t kPreamble = 10;
   constexpr size_t kAlign = 64;
   const size_t unpadded = kPreamble + text.size() + 1;  // +1 for the newline

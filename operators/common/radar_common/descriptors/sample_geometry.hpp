@@ -17,6 +17,15 @@ namespace holoscan::radar {
 // let validation and axis normalization happen there.
 struct SampleGeometrySpec {
   // Position of sample (0, 0) in the declared CoordinateFrame, in meters.
+  //
+  // The lattice *corner*, which is not how a scene is usually described. The
+  // in-repo simulator's `image_half_extent_m` is a half-extent about the
+  // image reference point, so its sidecar reaches this field by backing off
+  // (counts / 2) * spacing along each axis and forcing both counts odd, which
+  // is what puts the reference point on a pixel centre rather than between
+  // four (tools/sar_sim/sar_sim/truth.py → suggested_sample_geometry). A
+  // centre handed straight to this field offsets the whole image by half its
+  // extent.
   std::array<double, 3> origin{};
 
   // Vectors along the two lattice axes. They need not be axis-aligned,

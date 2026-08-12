@@ -26,6 +26,16 @@ constexpr const char* precision_name() {
   return std::is_same_v<T, float> ? "float" : "double";
 }
 
+// The prefix every diagnostic from this operator carries. It depends only on
+// the instantiation, so it is built once per precision rather than assembled
+// on each tick for the error paths that almost never fire.
+template <typename T>
+const std::string& op_name() {
+  static const std::string name =
+      std::string("SARRangeCompressionOp<") + precision_name<T>() + ">";
+  return name;
+}
+
 }  // namespace
 
 template <typename T>
@@ -98,8 +108,7 @@ void SARRangeCompressionOp<T>::compute(InputContext& op_input,
                                        OutputContext& op_output,
                                        [[maybe_unused]] ExecutionContext&
                                            context) {
-  const std::string who =
-      std::string("SARRangeCompressionOp<") + precision_name<T>() + ">";
+  const std::string& who = op_name<T>();
 
   std::shared_ptr<holoscan::Tensor> input =
       receive_single(op_input, "phase_history", who);
