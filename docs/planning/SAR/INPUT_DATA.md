@@ -113,7 +113,7 @@ The practical impact here is nil. The value is as evidence: this is a real, publ
 
 The MatX `sar_bp` example was used to form every frame described above: a `.sarbp` file per frame, written directly from the range-read subband, formed at 34 ms per 2048 x 2048 frame (440 Gbp/s, `fltflt` precision, `pixel-z zero`, RTX PRO 6000 Blackwell).
 
-**This is a golden-image path, not a build dependency.** `matx::experimental::sar_bp` is experimental and is absent from the MatX bundled with the Holoscan SDK this module builds against, which item I1 in [OPERATOR_API.md](OPERATOR_API.md) already records; nothing in the wave may depend on it. Two consequences:
+**This is a golden-image path, not a build dependency.** `matx::experimental::sar_bp` is experimental and is absent from the MatX bundled with the Holoscan SDK this module builds against, which item I1 in [OPERATOR_API.md](OPERATOR_API.md) already records; nothing in the wave may depend on it. Unchanged by the 2026-08-12 measurement under I1: a newer MatX has it, but pulling one in is paused until the Holoscan 5.0 conversion lands, and it stays in the `experimental` namespace there regardless. Two consequences:
 
 **The shipped application does not use `.sarbp` or a pulse store at all.** It streams a CPHD through `CPHDReaderOp`. Since it cannot stream the 110 GiB original, the demo needs a **local subset CPHD** written by the subsetter — about 7 GB for the full Houston collect at 4.09 m, versus about 2.3 GB had we taken an 8 s excerpt. That is the real cost of the full-collect decision, and it is a one-time cached pull rather than a per-run one.
 
