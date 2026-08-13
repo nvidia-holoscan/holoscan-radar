@@ -46,6 +46,7 @@ using holoscan::radar::detail::check_is_valid_mask;
 using holoscan::radar::kPi;
 using holoscan::radar::testing::DualIOGraphRunResult;
 using holoscan::radar::testing::HostTensor;
+using holoscan::radar::testing::run_dual_io_operator_graph_result;
 using holoscan::radar::testing::run_single_in_dual_out_operator_graph_result;
 using holoscan::radar::testing::to_device_bool_tensor;
 using holoscan::radar::testing::to_device_tensor;
@@ -146,6 +147,20 @@ void wire_beamscan(holoscan::Graph& graph, const Source& source, OpRef& op,
   graph.add_flow(op->angle_spectrum, sink1->in, q);
 }
 
+// Dual-input wiring for optional is_valid (DualTensorSourceOp out0/out1).
+// Graph-level is_valid tests are still GTEST_SKIP'd on EA (HSDK5_PORT §1);
+// this keeps the deferred helper compile-clean when instantiated.
+template <typename Source, typename OpRef, typename Sink0, typename Sink1>
+void wire_beamscan_with_is_valid(holoscan::Graph& graph, const Source& source,
+                                 OpRef& op, const Sink0& sink0,
+                                 const Sink1& sink1) {
+  const holoscan::ConnectionOptions q{.queue_depth = 4U};
+  graph.add_flow(source->out0, op->snapshot, q);
+  graph.add_flow(source->out1, op->is_valid, q);
+  graph.add_flow(op->aoa_estimates, sink0->in, q);
+  graph.add_flow(op->angle_spectrum, sink1->in, q);
+}
+
 BeamscanParams make_params(ArrayGeometry geom, AngleConvention conv,
                            std::vector<double> az, std::vector<double> el,
                            PeakInterpolation peak = PeakInterpolation::kNone,
@@ -211,6 +226,11 @@ DualIOGraphRunResult run_beamscan_with_mask_result(
         wire_beamscan_with_is_valid(graph, source, op, sink0, sink1);
       });
 }
+
+// Instantiate while Graph is_valid tests remain GTEST_SKIP'd so the deferred
+// dual-input helper stays type-checked.
+[[maybe_unused]] auto* const kForceBeamscanMaskHelper =
+    &run_beamscan_with_mask_result<double>;  // NOLINT(whitespace/indent_namespace)
 
 TEST(BeamscanEstimatorOpTest, RecoversKnownDoa2D) {
   constexpr int64_t kNy = 4;
@@ -641,20 +661,20 @@ TEST(BeamscanEstimatorOpTest, RejectsInvalidIsValidMaskOn3DSnapshot) {
                   "(HSDK5_PORT.md §1 / OPEN_ITEMS.md §3)";
 }
 
-TEST(BeamscanEstimatorOpTest, CheckIsValidMaskAcceptsTrueBoolHost) {
-  auto mask =
-      to_pageable_host_tensor<uint8_t>({1}, {1, 1}, DLDataType{kDLBool, 8, 1});
+TEST(BeamscanEstimatorOpTest, CheckIsValidMaskAcceptsTrueBoolDevice) {
+  auto mask = to_device_bool_tensor({1}, {1, 1});
   EXPECT_NO_THROW(check_is_valid_mask(*mask, 1, 1, "test"));
 }
 
-TEST(BeamscanEstimatorOpTest, CheckIsValidMaskRejectsFalseBoolHost) {
-  auto mask =
-      to_pageable_host_tensor<uint8_t>({0}, {1, 1}, DLDataType{kDLBool, 8, 1});
-  EXPECT_THROW(check_is_valid_mask(*mask, 1, 1, "test"), std::invalid_argument);
+TEST(BeamscanEstimatorOpTest, CheckIsValidMaskAcceptsFalseBoolDevice) {
+  // Zero slots are legal (unused snapshot); the estimator blanks those items.
+  auto mask = to_device_bool_tensor({0}, {1, 1});
+  EXPECT_NO_THROW(check_is_valid_mask(*mask, 1, 1, "test"));
 }
 
-TEST(BeamscanEstimatorOpTest, CheckIsValidMaskRejectsFalseBoolDevice) {
-  auto mask = to_device_bool_tensor({0}, {1, 1});
+TEST(BeamscanEstimatorOpTest, CheckIsValidMaskRejectsPageableHost) {
+  auto mask =
+      to_pageable_host_tensor<uint8_t>({1}, {1, 1}, DLDataType{kDLBool, 8, 1});
   EXPECT_THROW(check_is_valid_mask(*mask, 1, 1, "test"), std::invalid_argument);
 }
 

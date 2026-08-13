@@ -205,4 +205,53 @@ inline void run_beamscan_stage(const cuda::std::complex<T>* snapshots,
       peak_interp_id(peak_interp), spectrum, aoa);
 }
 
+// Blank AOA / spectrum for items with no valid snapshot slots (K_i == 0).
+// `mask` is (num_items, num_snapshots) uint8/bool; nullptr is a no-op.
+// Matches OPERATOR_API.md: estimators restrict to marked slots; empty items
+// must not report a DOA from garbage covariance / beamforming.
+template <typename T>
+__global__ void blank_empty_beamscan_items_kernel(
+    const unsigned char* __restrict__ mask, int64_t num_items,
+    int64_t num_snapshots, int64_t num_beams, T* __restrict__ spectrum,
+    T* __restrict__ aoa) {
+  const int64_t item = static_cast<int64_t>(blockIdx.x) *
+                           static_cast<int64_t>(blockDim.x) +
+                       static_cast<int64_t>(threadIdx.x);
+  if (item >= num_items) {
+    return;
+  }
+  int64_t k = 0;
+  for (int64_t s = 0; s < num_snapshots; ++s) {
+    if (mask[item * num_snapshots + s] != 0) {
+      ++k;
+    }
+  }
+  if (k != 0) {
+    return;
+  }
+  const T nan = T{0} / T{0};
+  aoa[item * 2] = nan;
+  aoa[item * 2 + 1] = nan;
+  T* spec = spectrum + item * num_beams;
+  for (int64_t b = 0; b < num_beams; ++b) {
+    spec[b] = T{0};
+  }
+}
+
+template <typename T>
+inline void blank_empty_beamscan_items(const unsigned char* mask,
+                                       int64_t num_items,
+                                       int64_t num_snapshots, int64_t num_beams,
+                                       T* spectrum, T* aoa,
+                                       cudaStream_t stream) {
+  if (mask == nullptr || num_items <= 0) {
+    return;
+  }
+  constexpr int block = 256;
+  const int grid =
+      static_cast<int>((num_items + block - 1) / block);
+  blank_empty_beamscan_items_kernel<T><<<grid, block, 0, stream>>>(
+      mask, num_items, num_snapshots, num_beams, spectrum, aoa);
+}
+
 }  // namespace holoscan::radar::detail

@@ -235,22 +235,37 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
   auto emit_empty = [&]() -> expected<void, Error> {
     // Estimation channel count equals full aperture when smoothing is off
     // (empty items never exercise the smoothing front-end).
+    // Prepare every loan before any publish so a late allocate/commit
+    // failure cannot leave a sibling port already downstream.
     const std::vector<int64_t> eig_shape = {num_items, num_channels};
-    HOLOSCAN_TRY(emit_device_tensor(
-        aoa_estimates, context, aoa_shape, out_dtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
-    HOLOSCAN_TRY(emit_device_tensor(
-        angle_spectrum, context, spec_shape, out_dtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
-    HOLOSCAN_TRY(emit_device_tensor(
-        doa_multi, context, doa_shape, out_dtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
-    HOLOSCAN_TRY(emit_device_tensor(
-        source_count, context, count_shape, i32_dtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
-    HOLOSCAN_TRY(emit_device_tensor(
-        eigenvalues, context, eig_shape, out_dtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
+    auto noop = [](void*, std::size_t) -> expected<void, Error> {
+      return {};
+    };
+    HOLOSCAN_TRY(auto aoa_loan,
+                 prepare_device_tensor(aoa_estimates, context, aoa_shape,
+                                      out_dtype, noop));
+    HOLOSCAN_TRY(auto spec_loan,
+                 prepare_device_tensor(angle_spectrum, context, spec_shape,
+                                      out_dtype, noop));
+    HOLOSCAN_TRY(auto doa_loan,
+                 prepare_device_tensor(doa_multi, context, doa_shape,
+                                      out_dtype, noop));
+    HOLOSCAN_TRY(auto cnt_loan,
+                 prepare_device_tensor(source_count, context, count_shape,
+                                      i32_dtype, noop));
+    HOLOSCAN_TRY(auto eig_loan,
+                 prepare_device_tensor(eigenvalues, context, eig_shape,
+                                      out_dtype, noop));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(aoa_estimates, context, std::move(aoa_loan)));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(angle_spectrum, context, std::move(spec_loan)));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(doa_multi, context, std::move(doa_loan)));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(source_count, context, std::move(cnt_loan)));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(eigenvalues, context, std::move(eig_loan)));
     return {};
   };
 

@@ -308,13 +308,22 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
               "RootMUSICEstimatorOp: no CUDA compute stream"});
   }
 
-  // Seed only after the activation has passed validation so a failed first
-  // tick does not lock the static convention.
+  // Tick-local convention until the first successful emit locks the static
+  // seed — geometry / subspace validation below can still fail this tick.
+  detail::DeviceAngleConvention<T> tick_convention{};
+  const detail::DeviceAngleConvention<T>* convention =
+      &device_angle_convention_;
   if (!seeded_angle_convention_.has_value()) {
-    device_angle_convention_ =
+    tick_convention =
         detail::make_device_angle_convention<T>(pinned.angle_convention);
-    seeded_angle_convention_ = pinned.angle_convention;
+    convention = &tick_convention;
   }
+  auto seed_angle_convention_after_emit = [&]() {
+    if (!seeded_angle_convention_.has_value()) {
+      device_angle_convention_ = *convention;
+      seeded_angle_convention_ = pinned.angle_convention;
+    }
+  };
 
   const DLDataType out_dtype = real_dtype<T>();
   const DLDataType cplx_dtype = complex_dtype<T>();
@@ -327,24 +336,38 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
   auto emit_empty = [&]() -> expected<void, Error> {
     // Estimation channel count equals full aperture when smoothing is off
     // (empty items never exercise the smoothing front-end).
+    // Prepare every loan before any publish so a late allocate/commit
+    // failure cannot leave a sibling port already downstream.
     const std::vector<int64_t> eig_shape = {num_items, num_channels};
-    HOLOSCAN_TRY(emit_device_tensor(
-        aoa_estimates, context, aoa_shape, out_dtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
-    HOLOSCAN_TRY(emit_device_tensor(
-        doa_multi, context, doa_shape, out_dtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
-    HOLOSCAN_TRY(emit_device_tensor(
-        source_count, context, count_shape, i32_dtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
-    HOLOSCAN_TRY(emit_device_tensor(
-        eigenvalues, context, eig_shape, out_dtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
+    auto noop = [](void*, std::size_t) -> expected<void, Error> {
+      return {};
+    };
+    HOLOSCAN_TRY(auto aoa_loan,
+                 prepare_device_tensor(aoa_estimates, context, aoa_shape,
+                                      out_dtype, noop));
+    HOLOSCAN_TRY(auto doa_loan,
+                 prepare_device_tensor(doa_multi, context, doa_shape,
+                                      out_dtype, noop));
+    HOLOSCAN_TRY(auto cnt_loan,
+                 prepare_device_tensor(source_count, context, count_shape,
+                                      i32_dtype, noop));
+    HOLOSCAN_TRY(auto eig_loan,
+                 prepare_device_tensor(eigenvalues, context, eig_shape,
+                                      out_dtype, noop));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(aoa_estimates, context, std::move(aoa_loan)));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(doa_multi, context, std::move(doa_loan)));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(source_count, context, std::move(cnt_loan)));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(eigenvalues, context, std::move(eig_loan)));
     return {};
   };
 
   if (num_items == 0) {
     HOLOSCAN_TRY(emit_empty());
+    seed_angle_convention_after_emit();
     retained_snapshot_ = std::move(snap);
     if (maybe_valid.has_value()) {
       retained_is_valid_ = std::move(*maybe_valid);
@@ -554,7 +577,7 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
           static_cast<T>(planar.z_axis[0]), static_cast<T>(planar.z_axis[1]),
           static_cast<T>(planar.z_axis[2]), static_cast<T>(planar.normal[0]),
           static_cast<T>(planar.normal[1]), static_cast<T>(planar.normal[2]),
-          device_angle_convention_,
+          *convention,
           static_cast<cuda::std::complex<T>*>(cov_ptr),
           static_cast<cuda::std::complex<T>*>(evec_ptr),
           static_cast<cuda::std::complex<T>*>(proj_ptr),
@@ -611,7 +634,7 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
           static_cast<T>(ula.axis[0]), static_cast<T>(ula.axis[1]),
           static_cast<T>(ula.axis[2]), static_cast<T>(ula.broadside[0]),
           static_cast<T>(ula.broadside[1]), static_cast<T>(ula.broadside[2]),
-          device_angle_convention_,
+          *convention,
           static_cast<cuda::std::complex<T>*>(cov_ptr),
           static_cast<cuda::std::complex<T>*>(evec_ptr),
           static_cast<cuda::std::complex<T>*>(proj_ptr),
@@ -677,6 +700,7 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
     return make_unexpected(std::move(eig_emitted).error());
   }
 
+  seed_angle_convention_after_emit();
   retained_snapshot_ = std::move(snap);
   if (maybe_valid.has_value()) {
     retained_is_valid_ = std::move(*maybe_valid);

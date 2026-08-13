@@ -5,11 +5,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include <holoscan/core/domain/tensor.hpp>
 #include <holoscan/core/errors.hpp>
@@ -120,20 +121,30 @@ expected<void, Error> emit_device_tensor(Output<Tensor>& port,
   return emit_prepared_tensor(port, context, std::move(loan));
 }
 
-// Convenience: byte span for a compact row-major tensor of the given shape.
+// Byte span for a compact row-major tensor of the given shape. Matches
+// make_device_tensor: reject negative dims and int64 / size_t overflow
+// rather than wrapping to an undersized allocation size.
 inline std::size_t tensor_byte_span(std::span<const int64_t> shape,
                                     DLDataType dtype) {
-  std::size_t count = 1;
+  int64_t count = 1;
   for (const int64_t dim : shape) {
-    if (dim < 0) {
-      return 0;
+    if (dim < 0 ||
+        (dim != 0 && count > std::numeric_limits<int64_t>::max() / dim)) {
+      throw std::invalid_argument(
+          "tensor_byte_span: invalid or overflowing shape");
     }
-    count *= static_cast<std::size_t>(dim);
+    count *= dim;
   }
   const std::size_t bytes_per_element =
       ((static_cast<std::size_t>(dtype.bits) + 7) / 8) *
       static_cast<std::size_t>(dtype.lanes);
-  return count * bytes_per_element;
+  if (bytes_per_element == 0 ||
+      static_cast<std::size_t>(count) >
+          std::numeric_limits<std::size_t>::max() / bytes_per_element) {
+    throw std::invalid_argument(
+        "tensor_byte_span: invalid or overflowing shape");
+  }
+  return static_cast<std::size_t>(count) * bytes_per_element;
 }
 
 }  // namespace holoscan::radar

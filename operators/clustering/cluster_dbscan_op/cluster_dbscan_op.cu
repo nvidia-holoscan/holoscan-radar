@@ -168,13 +168,22 @@ expected<void, Error> ClusterDBSCANOp<T>::compute(ExecutionContext& context) {
 
   // Empty input → empty outputs (a valid pipeline state).
   if (num_points == 0) {
+    // Prepare both loans before any publish so a late allocate/commit
+    // failure cannot leave a sibling port already downstream.
     const std::vector<int64_t> empty_shape = {0};
-    HOLOSCAN_TRY(emit_device_tensor(
-        labels, context, empty_shape, kInt64Dtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
-    HOLOSCAN_TRY(emit_device_tensor(
-        sizes, context, empty_shape, kInt64Dtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
+    auto noop = [](void*, std::size_t) -> expected<void, Error> {
+      return {};
+    };
+    HOLOSCAN_TRY(auto labels_loan,
+                 prepare_device_tensor(labels, context, empty_shape,
+                                      kInt64Dtype, noop));
+    HOLOSCAN_TRY(auto sizes_loan,
+                 prepare_device_tensor(sizes, context, empty_shape,
+                                      kInt64Dtype, noop));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(labels, context, std::move(labels_loan)));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(sizes, context, std::move(sizes_loan)));
     retained_points_ = std::move(points_in);
     return {};
   }

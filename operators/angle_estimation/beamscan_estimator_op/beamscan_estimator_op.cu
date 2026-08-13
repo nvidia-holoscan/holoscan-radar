@@ -164,17 +164,16 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
   }
 
   HOLOSCAN_TRY(auto maybe_valid, receive_optional_value(is_valid));
-  // A 2-D snapshot is the num_snapshots == 1 case, so the mask contract
-  // (num_items, num_snapshots) applies to both ranks.
+  // Shape/dtype only — zero slots mean unused snapshots (OPERATOR_API.md).
+  const unsigned char* mask_ptr = nullptr;
   if (maybe_valid.has_value()) {
     try {
       detail::check_is_valid_mask(*maybe_valid, num_items, num_snapshots,
                                   kOpName);
     } catch (const std::invalid_argument& e) {
       return fail_invalid(e.what());
-    } catch (const std::runtime_error& e) {
-      return fail_runtime(e.what());
     }
+    mask_ptr = static_cast<const unsigned char*>(maybe_valid->data());
   }
 
   cudaStream_t stream = context.cuda_stream().get();
@@ -277,6 +276,10 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
         static_cast<cuda::std::complex<T>*>(beam_ptr), num_az, num_el,
         static_cast<const T*>(az_grid->data()),
         static_cast<const T*>(el_grid->data()), peak_interp,
+        static_cast<T*>(spec_writer->data()),
+        static_cast<T*>(aoa_writer->data()), stream);
+    detail::blank_empty_beamscan_items(
+        mask_ptr, num_items, num_snapshots, num_beams,
         static_cast<T*>(spec_writer->data()),
         static_cast<T*>(aoa_writer->data()), stream);
     check_cuda("beamscan stage", kOpName);
