@@ -108,8 +108,8 @@ static_assert(holoscan::param_schema_availability<FeatureAssemblyParams>() ==
 
 // Admission bounds for the device output pool.
 inline constexpr std::uint32_t kFeatureAssemblyMaxRank = 8U;
-inline constexpr std::size_t kFeatureAssemblyMaxByteSpan =
-    256ULL * 1024ULL * 1024ULL;  // 256 MiB
+// 256 MiB
+inline constexpr std::size_t kFeatureAssemblyMaxByteSpan = 256ULL << 20;
 
 template <typename T>
 class FeatureAssemblyOp : public holoscan::Operator<FeatureAssemblyParams> {

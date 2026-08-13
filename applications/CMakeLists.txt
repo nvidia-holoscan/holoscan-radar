@@ -8,6 +8,11 @@ add_subdirectory(common)
 
 # Each application is gated on its own APP_<name> option, defaulting to
 # ${BUILD_ALL}, and additionally requires Holoviz.
+#
+# [EA HSDK5 ONLY] holoscan_radar_add_application() additionally skips any app
+# whose operator dependencies are not on the HSDK 5 port allow-list; Holoviz
+# alone is not a sufficient gate because DEPENDS OPERATORS would FORCE OP_*=ON
+# for targets holoscan_radar_add_operator() never creates.
 if(NOT HOLOSCAN_RADAR_HAS_HOLOVIZ)
     message(STATUS
         "Skipping demo applications (fmcw_*); Holoviz is not available")
@@ -16,7 +21,7 @@ endif()
 
 # Add one add_holohub_application() call per application; declare operator
 # dependencies via DEPENDS OPERATORS so they auto-enable when the app is built.
-add_holohub_application(fmcw_siso
+holoscan_radar_add_application(fmcw_siso
     DEPENDS OPERATORS
         fmcw_range_processor_op
         clutter_filter_op
@@ -24,7 +29,7 @@ add_holohub_application(fmcw_siso
         cfar_detector_op
 )
 
-add_holohub_application(fmcw_simo
+holoscan_radar_add_application(fmcw_simo
     DEPENDS OPERATORS
         fmcw_range_processor_op
         clutter_filter_op
@@ -37,7 +42,7 @@ add_holohub_application(fmcw_simo
         cluster_dbscan_op
 )
 
-add_holohub_application(fmcw_dense_simo
+holoscan_radar_add_application(fmcw_dense_simo
     DEPENDS OPERATORS
         fmcw_range_processor_op
         clutter_filter_op
@@ -49,7 +54,7 @@ add_holohub_application(fmcw_dense_simo
         cluster_dbscan_op
 )
 
-add_holohub_application(fmcw_aoa_estimators
+holoscan_radar_add_application(fmcw_aoa_estimators
     DEPENDS OPERATORS
         fmcw_range_processor_op
         clutter_filter_op
@@ -66,7 +71,7 @@ add_holohub_application(fmcw_aoa_estimators
         cluster_dbscan_op
 )
 
-add_holohub_application(fmcw_mimo
+holoscan_radar_add_application(fmcw_mimo
     DEPENDS OPERATORS
         mimo_deinterleave_op
         mimo_coherent_compensation_op

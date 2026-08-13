@@ -89,8 +89,8 @@ static_assert(
     "HOLOSCAN_PARAM_SCHEMA must be in SubarraySelectionParams's namespace");
 
 inline constexpr std::uint32_t kSubarraySelectionMaxRank = 8U;
-inline constexpr std::size_t kSubarraySelectionMaxByteSpan =
-    256ULL * 1024ULL * 1024ULL;  // 256 MiB
+// 256 MiB
+inline constexpr std::size_t kSubarraySelectionMaxByteSpan = 256ULL << 20;
 
 template <typename T>
 class SubarraySelectionOp

@@ -28,7 +28,7 @@ here when the root cause is HSDK 5 / EA.
 Holoscan 5 — operators as `Operator<Params>` with typed Tensor ports,
 exercised on the Graph runtime — without keeping a 4.x shim.
 
-**In scope for the EA branch**
+The EA branch covers, in dependency order:
 
 1. Foundation (container / CMake / MatX / Holoviz feature probes).
 2. Shared `radar_common/sdk/` helpers and the Graph C++ test harness.
@@ -413,12 +413,20 @@ descriptor type.
 
 ## Open — deferred port work
 
-### 5. Allow-list: remaining operators and C++ tests
+### 5. Allow-list: FMCW Range / Doppler / fused RD + MIMO marshaling
 
 **Class:** Our deferred work.
 
+These six operators are the remaining C++ ports; angle, clustering,
+detection, and clutter have landed (see **Port progress**).
+
 Unported ops are skipped via `holoscan_radar_add_operator()` with a
-STATUS message. `tests/cpp/CMakeLists.txt` registers common helpers +
+STATUS message. Because a skipped name is never created as a target,
+anything that would `FORCE OP_<name>=ON` has to consult the allow-list
+too: `holoscan_radar_add_application()` skips demo apps with unported
+dependencies, and `pkg/CMakeLists.txt` packages
+`${HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS}` plus only the apps whose
+chains are ported. `tests/cpp/CMakeLists.txt` registers common helpers +
 ported ops (`test_clutter_filter`, `test_snapshot_gather`,
 `test_phase_shift_beamformer`, `test_beamscan_estimator`,
 `test_subarray_selection_op`, `test_cluster_dbscan`,
@@ -443,10 +451,13 @@ detection C++ ports are largely done — see **Port progress**.
 
 **Class:** Our deferred work.
 
-`HOLOSCAN_RADAR_BUILD_PYTHON` is forced off until a fuller EA/GA Python
-operator surface + `holoscan::pybind11` are available (current EA
-`holoscan.core` is Tensor-only). Demo apps that need Holoviz are gated when
-Holoviz is absent. Shared `performance/cpp/utils` still has HSDK 4.x
+`HOLOSCAN_RADAR_BUILD_PYTHON` is forced off (`FORCE` cache set, so a stale
+cache cannot resurrect it) until a fuller EA/GA Python operator surface +
+`holoscan::pybind11` are available (current EA `holoscan.core` is
+Tensor-only); `tests/CMakeLists.txt` therefore does not register the
+pytest suites, and `python/holoscan/radar/__init__.py` imports the
+unported operator modules optionally. Demo apps are gated on Holoviz **and**
+ported dependencies (§5). Shared `performance/cpp/utils` still has HSDK 4.x
 Application helpers for unported ops. CMake gates drivers via
 `HOLOSCAN_RADAR_HSDK5_PORTED_PERF` in `performance/cpp/CMakeLists.txt`
 (currently only `clutter_filter` — see §8); operator allow-list alone is
@@ -457,7 +468,7 @@ not enough because most `perf_*.cpp` files remain 4.x Application /
 
 ---
 
-### 7. Generic Graph test harness beyond ClutterFilter
+### 7. Graph test harness: generalize to the remaining port shapes
 
 **Class:** Our deferred work (+ depends on item 1 for live-override
 coverage).
@@ -482,7 +493,8 @@ Dual-/triple-in single-out runners
 generalize as more multi-port ops land; restore mid-stream sticky override
 coverage once item 1 is fixed.
 
-**Status:** open.
+**Status:** open — runners for every landed port shape exist; remaining
+work is the FMCW/MIMO shapes and the §1 live-override cases.
 
 ---
 
@@ -511,6 +523,9 @@ ported ops when `HOLOSCAN_RADAR_BUILD_PERFORMANCE=ON`).
 | Stream | `context.cuda_stream()` only — no `receive_cuda_stream` / `set_cuda_stream` |
 | Emit | Pool loan → write → commit → emit (`emit_device_tensor`) |
 | Sticky helper | Operator-owned `std::optional` + `resolve_sticky_override` (not experimental `runtime_mutable`) |
+| Optional receives | Only `kInputUndeclared` / `kInputEmpty` / `kInputNotSelected` / `kNotReady` mean "absent" (`is_absent_input_error`); every other receive error propagates instead of degrading to the Params seed |
+| Empty tensors | `receive_tensor` rejects a null `data()` only when `nbytes() > 0` — a zero-element tensor legitimately carries no allocation |
+| Static params | Root-MUSIC / ESPRIT reject a mid-session `angle_convention` change rather than silently reusing the seeded device relabeling |
 | Harness error-path wait | Poll diagnostics at 25 ms inside the deadline (`sdk_harness.hpp`) — avoids false 15s “hangs” when the sink never captures |
 
 ---

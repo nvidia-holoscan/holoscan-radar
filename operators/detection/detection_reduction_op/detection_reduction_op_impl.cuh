@@ -104,11 +104,10 @@ Contract DetectionReductionOp<T, ScoreFn>::contract() const {
   // unwired, and omitting it while wiring yields a missed sample (same family
   // as FeatureAssembly OPEN_ITEMS §1). Graph tests always wire points (dummy
   // for first); see OPEN_ITEMS.
-  using namespace std::chrono_literals;
   Contract result;
   result
       .trigger(OnAligned{.ports = ports(labels, detection_idx, points),
-                         .window = 0ns})
+                         .window = std::chrono::nanoseconds{0}})
       .input(labels, Exact{})
       .input(detection_idx, Exact{})
       .input(points, Exact{});

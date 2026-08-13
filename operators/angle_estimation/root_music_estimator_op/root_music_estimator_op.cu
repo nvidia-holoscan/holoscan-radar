@@ -236,10 +236,15 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
   const std::vector<int64_t>& smoothing = pinned.spatial_smoothing;
   const bool forward_backward = pinned.forward_backward;
 
-  if (!angle_convention_seeded_) {
+  if (!seeded_angle_convention_.has_value()) {
     device_angle_convention_ =
         detail::make_device_angle_convention<T>(pinned.angle_convention);
-    angle_convention_seeded_ = true;
+    seeded_angle_convention_ = pinned.angle_convention;
+  } else if (*seeded_angle_convention_ != pinned.angle_convention) {
+    return fail_invalid(
+        "RootMUSICEstimatorOp: angle_convention is static and cannot change "
+        "after the first activation; instantiate a separate operator per "
+        "convention");
   }
 
   if (!(effective_pfa > 0.0) || !(effective_pfa < 1.0)) {

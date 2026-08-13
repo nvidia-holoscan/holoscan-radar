@@ -120,11 +120,10 @@ Contract SnapshotGatherOp<T>::contract() const {
   // device binding is still rough — sticky live-override coverage is
   // exercised via Params + operator sticky state when a sample does arrive).
   // [EA HSDK5 ONLY] see docs/planning/HSDK5_PORT.md §1.
-  using namespace std::chrono_literals;
   Contract result;
   result
       .trigger(OnAligned{.ports = ports(rd_maps, detection_idx),
-                         .window = 0ns})
+                         .window = std::chrono::nanoseconds{0}})
       .input(rd_maps, Exact{})
       .input(detection_idx, Exact{});
   return result;

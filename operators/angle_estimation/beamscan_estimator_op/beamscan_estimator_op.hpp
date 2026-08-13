@@ -84,8 +84,8 @@ static_assert(holoscan::param_schema_availability<BeamscanParams>() ==
 
 // Admission bounds for the device output pools.
 inline constexpr std::uint32_t kBeamscanEstimatorMaxRank = 8U;
-inline constexpr std::size_t kBeamscanEstimatorMaxByteSpan =
-    256ULL * 1024ULL * 1024ULL;  // 256 MiB
+// 256 MiB
+inline constexpr std::size_t kBeamscanEstimatorMaxByteSpan = 256ULL << 20;
 
 template <typename T>
 class BeamscanEstimatorOp : public holoscan::Operator<BeamscanParams> {

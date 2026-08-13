@@ -47,8 +47,11 @@ namespace holoscan::radar::testing {
 
 namespace detail {
 
-inline constexpr std::chrono::nanoseconds kHarnessTick =
-    std::chrono::milliseconds{5};
+inline constexpr auto kHarnessTick = std::chrono::milliseconds{5};
+// How long a runner waits for the expected captures (or a diagnostic), and how
+// often it re-checks while waiting.
+inline constexpr auto kHarnessDeadline = std::chrono::seconds{15};
+inline constexpr auto kHarnessPoll = std::chrono::milliseconds{25};
 
 struct FrameBank {
   static void reset() {
@@ -627,7 +630,6 @@ template <typename OpT, typename ParamsT, typename WireFn>
 GraphRunResult run_single_io_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
     const char* out_port, WireFn&& wire) {
-  using namespace std::chrono_literals;
   GraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBank::input_frames = std::move(inputs);
@@ -657,12 +659,12 @@ GraphRunResult run_single_io_operator_graph_result(
     {
       // A run diagnostic raises no FrameBank notification, so poll for it
       // instead of waiting once on the full deadline.
-      const auto deadline = std::chrono::steady_clock::now() + 15s;
+      const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
       std::unique_lock lock(detail::FrameBank::mutex);
       while (detail::FrameBank::captured.size() < expected &&
              session.diagnostics().empty() &&
              std::chrono::steady_clock::now() < deadline) {
-        detail::FrameBank::ready.wait_for(lock, 25ms);
+        detail::FrameBank::ready.wait_for(lock, detail::kHarnessPoll);
       }
     }
     session.request_stop();
@@ -752,7 +754,6 @@ DualIOGraphRunResult run_single_in_dual_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
     const char* out0_port, const char* out1_port, WireFn&& wire,
     std::initializer_list<const char*> extra_op_out_ports = {}) {
-  using namespace std::chrono_literals;
   DualIOGraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -790,7 +791,7 @@ DualIOGraphRunResult run_single_in_dual_out_operator_graph_result(
 
     holoscan::RunSession session = holoscan::run_async(plan);
     {
-      const auto deadline = std::chrono::steady_clock::now() + 15s;
+      const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
       while (session.diagnostics().empty() &&
              std::chrono::steady_clock::now() < deadline) {
         std::size_t n0 = 0;
@@ -806,7 +807,7 @@ DualIOGraphRunResult run_single_in_dual_out_operator_graph_result(
         if (n0 >= expected && n1 >= expected) {
           break;
         }
-        std::this_thread::sleep_for(25ms);
+        std::this_thread::sleep_for(detail::kHarnessPoll);
       }
     }
     session.request_stop();
@@ -838,7 +839,6 @@ FourOutGraphRunResult run_single_in_four_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
     const char* out0_port, const char* out1_port, const char* out2_port,
     const char* out3_port, WireFn&& wire) {
-  using namespace std::chrono_literals;
   FourOutGraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -874,7 +874,7 @@ FourOutGraphRunResult run_single_in_four_out_operator_graph_result(
 
     holoscan::RunSession session = holoscan::run_async(plan);
     {
-      const auto deadline = std::chrono::steady_clock::now() + 15s;
+      const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
       while (session.diagnostics().empty() &&
              std::chrono::steady_clock::now() < deadline) {
         std::size_t n0 = 0;
@@ -901,7 +901,7 @@ FourOutGraphRunResult run_single_in_four_out_operator_graph_result(
             n3 >= expected) {
           break;
         }
-        std::this_thread::sleep_for(25ms);
+        std::this_thread::sleep_for(detail::kHarnessPoll);
       }
     }
     session.request_stop();
@@ -942,7 +942,6 @@ FiveOutGraphRunResult run_single_in_five_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
     const char* out0_port, const char* out1_port, const char* out2_port,
     const char* out3_port, const char* out4_port, WireFn&& wire) {
-  using namespace std::chrono_literals;
   FiveOutGraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -981,7 +980,7 @@ FiveOutGraphRunResult run_single_in_five_out_operator_graph_result(
 
     holoscan::RunSession session = holoscan::run_async(plan);
     {
-      const auto deadline = std::chrono::steady_clock::now() + 15s;
+      const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
       while (session.diagnostics().empty() &&
              std::chrono::steady_clock::now() < deadline) {
         std::size_t n0 = 0;
@@ -1013,7 +1012,7 @@ FiveOutGraphRunResult run_single_in_five_out_operator_graph_result(
             n3 >= expected && n4 >= expected) {
           break;
         }
-        std::this_thread::sleep_for(25ms);
+        std::this_thread::sleep_for(detail::kHarnessPoll);
       }
     }
     session.request_stop();
@@ -1055,7 +1054,6 @@ DualIOGraphRunResult run_dual_io_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs1, ParamsT params,
     const char* out0_port, const char* out1_port, WireFn&& wire) {
-  using namespace std::chrono_literals;
   DualIOGraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -1091,7 +1089,7 @@ DualIOGraphRunResult run_dual_io_operator_graph_result(
 
     holoscan::RunSession session = holoscan::run_async(plan);
     {
-      const auto deadline = std::chrono::steady_clock::now() + 15s;
+      const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
       while (session.diagnostics().empty() &&
              std::chrono::steady_clock::now() < deadline) {
         std::size_t n0 = 0;
@@ -1107,7 +1105,7 @@ DualIOGraphRunResult run_dual_io_operator_graph_result(
         if (n0 >= expected && n1 >= expected) {
           break;
         }
-        std::this_thread::sleep_for(25ms);
+        std::this_thread::sleep_for(detail::kHarnessPoll);
       }
     }
     session.request_stop();
@@ -1140,7 +1138,6 @@ GraphRunResult run_dual_in_single_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs1, ParamsT params,
     const char* out_port, WireFn&& wire) {
-  using namespace std::chrono_literals;
   GraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -1175,12 +1172,12 @@ GraphRunResult run_dual_in_single_out_operator_graph_result(
 
     holoscan::RunSession session = holoscan::run_async(plan);
     {
-      const auto deadline = std::chrono::steady_clock::now() + 15s;
+      const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
       std::unique_lock lock(detail::FrameBank::mutex);
       while (detail::FrameBank::captured.size() < expected &&
              session.diagnostics().empty() &&
              std::chrono::steady_clock::now() < deadline) {
-        detail::FrameBank::ready.wait_for(lock, 25ms);
+        detail::FrameBank::ready.wait_for(lock, detail::kHarnessPoll);
       }
     }
     session.request_stop();
@@ -1209,7 +1206,6 @@ GraphRunResult run_triple_in_single_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs1,
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs2, ParamsT params,
     const char* out_port, WireFn&& wire) {
-  using namespace std::chrono_literals;
   GraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -1247,12 +1243,12 @@ GraphRunResult run_triple_in_single_out_operator_graph_result(
 
     holoscan::RunSession session = holoscan::run_async(plan);
     {
-      const auto deadline = std::chrono::steady_clock::now() + 15s;
+      const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
       std::unique_lock lock(detail::FrameBank::mutex);
       while (detail::FrameBank::captured.size() < expected &&
              session.diagnostics().empty() &&
              std::chrono::steady_clock::now() < deadline) {
-        detail::FrameBank::ready.wait_for(lock, 25ms);
+        detail::FrameBank::ready.wait_for(lock, detail::kHarnessPoll);
       }
     }
     session.request_stop();

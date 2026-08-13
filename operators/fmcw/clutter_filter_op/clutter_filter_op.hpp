@@ -61,8 +61,8 @@ static_assert(holoscan::param_schema_availability<ClutterFilterParams>() ==
 
 // Admission bounds for the device output pool (rank-agnostic batching).
 inline constexpr std::uint32_t kClutterFilterMaxRank = 8U;
-inline constexpr std::size_t kClutterFilterMaxByteSpan =
-    256ULL * 1024ULL * 1024ULL;  // 256 MiB
+// 256 MiB
+inline constexpr std::size_t kClutterFilterMaxByteSpan = 256ULL << 20;
 
 template <typename T>
 class ClutterFilterOp : public holoscan::Operator<ClutterFilterParams> {

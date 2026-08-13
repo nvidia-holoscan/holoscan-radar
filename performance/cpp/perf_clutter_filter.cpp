@@ -60,8 +60,7 @@ namespace {
 
 using PerfPrecision = float;  // v1 characterizes single precision (complex64).
 
-inline constexpr std::chrono::nanoseconds kPerfTick =
-    std::chrono::milliseconds{1};
+inline constexpr auto kPerfTick = std::chrono::milliseconds{1};
 
 struct SizeSpec {
   std::string id;
@@ -266,7 +265,6 @@ void bind_device_pools(holoscan::CompileOptions& options) {
 
 perf::TimingCollector run_clutter_graph(
     const ClutterScenario& scen, int total_frames) {
-  using namespace std::chrono_literals;
   perf::TimingCollector collector;
   collector.t_construct = perf::Clock::now();
 
@@ -299,12 +297,13 @@ perf::TimingCollector run_clutter_graph(
 
   holoscan::RunSession session = holoscan::run_async(plan);
   {
-    const auto deadline = std::chrono::steady_clock::now() + 60s;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds{60};
     std::unique_lock lock(PerfFrameBank::mutex);
     while (PerfFrameBank::captured < total_frames &&
            session.diagnostics().empty() &&
            std::chrono::steady_clock::now() < deadline) {
-      PerfFrameBank::ready.wait_for(lock, 25ms);
+      PerfFrameBank::ready.wait_for(lock, std::chrono::milliseconds{25});
     }
   }
   session.request_stop();

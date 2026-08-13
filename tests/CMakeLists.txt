@@ -3,6 +3,17 @@
 
 add_subdirectory(cpp)
 
+# [EA HSDK5 ONLY] The pytest suites exercise the Python bindings, so they only
+# make sense when those are built. Registering them unconditionally made a
+# bare `ctest` fail on the EA image (no operator bindings to import) and forced
+# every caller to remember `-E pytest`.
+if(NOT HOLOSCAN_RADAR_BUILD_PYTHON)
+    message(STATUS
+        "[EA HSDK5 ONLY] Skipping pytest suites "
+        "(HOLOSCAN_RADAR_BUILD_PYTHON=OFF)")
+    return()
+endif()
+
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 add_test(

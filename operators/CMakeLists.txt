@@ -10,8 +10,8 @@
 #   common/           — shared radar_common library (descriptors, windows, utils)
 #   detection/        — detection operators (CFAR)
 #   fmcw/             — FMCW signal processing (+ future MIMO marshaling)
-#   clustering/       — (future) clustering operators
-#   angle_estimation/ — (future) angle estimation operators
+#   clustering/       — clustering operators (DBSCAN)
+#   angle_estimation/ — angle estimation operators (beamformers, subspace DOA)
 
 # The shared library is not gated: every operator group links against it.
 add_subdirectory(common)

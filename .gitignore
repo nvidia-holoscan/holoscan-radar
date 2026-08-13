@@ -2,6 +2,9 @@
 .holohub/
 build/
 build-*/
+# In-source `cmake -S . -B .` leftovers — never source.
+CMakeFiles/
+CMakeCache.txt
 data/
 .claude/
 .cursor/

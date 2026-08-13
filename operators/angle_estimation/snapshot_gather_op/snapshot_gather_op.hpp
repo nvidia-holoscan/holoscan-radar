@@ -117,8 +117,8 @@ static_assert(holoscan::param_schema_availability<SnapshotGatherParams>() ==
 
 // Admission bounds for the device output pools (rank-agnostic batching).
 inline constexpr std::uint32_t kSnapshotGatherMaxRank = 8U;
-inline constexpr std::size_t kSnapshotGatherMaxByteSpan =
-    256ULL * 1024ULL * 1024ULL;  // 256 MiB
+// 256 MiB
+inline constexpr std::size_t kSnapshotGatherMaxByteSpan = 256ULL << 20;
 
 template <typename T>
 class SnapshotGatherOp : public holoscan::Operator<SnapshotGatherParams> {
