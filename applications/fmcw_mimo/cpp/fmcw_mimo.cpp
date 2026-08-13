@@ -102,7 +102,7 @@ class FmcwMimoApp : public holoscan::Application {
       add_flow(source, range, {{"adc_cube", "adc_cube"}});
       add_flow(range, doppler, {{"range_profiles", "range_profiles"}});
       add_flow(doppler, compensation, {{"rd_maps", "rd_maps"}});
-      add_flow(compensation, clutter, {{"rd_maps", "range_profiles"}});
+      add_flow(compensation, clutter, {{"rd_maps_out", "range_profiles"}});
       add_flow(clutter, vaa, {{"range_profiles_out", "rd_maps"}});
     } else {
       auto source = make_operator<MimoTdmAdcSourceOp>(
@@ -122,11 +122,11 @@ class FmcwMimoApp : public holoscan::Application {
           "mimo_deinterleave", from_config("mimo_deinterleave"));
 
       add_flow(source, deinterleave, {{"adc_cube", "adc_cube"}});
-      add_flow(deinterleave, range, {{"adc_cube", "adc_cube"}});
+      add_flow(deinterleave, range, {{"adc_cube_out", "adc_cube"}});
       add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
       add_flow(clutter, doppler, {{"range_profiles_out", "range_profiles"}});
       add_flow(doppler, compensation, {{"rd_maps", "rd_maps"}});
-      add_flow(compensation, vaa, {{"rd_maps", "rd_maps"}});
+      add_flow(compensation, vaa, {{"rd_maps_out", "rd_maps"}});
     }
 
     // Derive the CFAR NCI fold (K) from the same virtual array geometry
@@ -166,8 +166,8 @@ class FmcwMimoApp : public holoscan::Application {
       add_flow(range, ddm_velocity_bins, {{"range_bins", "sync"}});
     }
 
-    add_flow(vaa, cfar, {{"rd_maps", "rd_maps"}});
-    add_flow(vaa, gather, {{"rd_maps", "rd_maps"}});
+    add_flow(vaa, cfar, {{"rd_maps_out", "rd_maps"}});
+    add_flow(vaa, gather, {{"rd_maps_out", "rd_maps"}});
     add_flow(cfar, gather, {{"detection_idx", "detection_idx"}});
     add_flow(gather, beamscan, {{"snapshot", "snapshot"},
                                 {"is_valid", "is_valid"}});

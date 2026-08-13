@@ -207,13 +207,13 @@ The M TX fire in separate time slots, so their chirps are **interleaved along sl
 flowchart TD
   classDef opt stroke-dasharray:4 3
   ADC["ADC cube (N_rx, M·L, samples)"] -->|"adc_cube"| DEINT["MIMODeinterleaveOp"]
-  DEINT -->|"adc_cube (M_tx, N_rx, L, samples)"| RANGE["FMCWRangeProcessorOp"]
+  DEINT -->|"adc_cube_out (M_tx, N_rx, L, samples)"| RANGE["FMCWRangeProcessorOp"]
   RANGE -->|"range_profiles"| CLUT["ClutterFilterOp"]
   CLUT -->|"range_profiles_out"| DOPP["FMCWDopplerProcessorOp"]
   DOPP -->|"rd_maps (M_tx, N_rx, num_doppler, num_range)"| COMP["MIMOCoherentCompensationOp"]
-  COMP -->|"rd_maps"| VAA["VirtualArrayAssemblyOp"]
-  VAA -->|"rd_maps (num_virtual, num_doppler, num_range)"| ANGLE["angle path (dense or sparse) + CFARDetectorOp"]
-  VAA -->|"array_geometry → ⟨angle op⟩.array_geometry (override port)"| ANGLE
+  COMP -->|"rd_maps_out"| VAA["VirtualArrayAssemblyOp"]
+  VAA -->|"rd_maps_out (num_virtual, num_doppler, num_range)"| ANGLE["angle path (dense or sparse) + CFARDetectorOp"]
+  VAA -->|"array_geometry (packed Tensor) → ⟨angle op⟩.array_geometry"| ANGLE
   class CLUT opt
 ```
 
@@ -232,10 +232,10 @@ flowchart TD
   ADC["ADC cube (N_rx, num_chirps, samples)"] -->|"adc_cube"| RANGE["FMCWRangeProcessorOp"]
   RANGE -->|"range_profiles"| DOPP["FMCWDopplerProcessorOp"]
   DOPP -->|"rd_maps (N_rx, num_doppler, num_range)"| COMP["MIMOCoherentCompensationOp"]
-  COMP -->|"rd_maps → ClutterFilterOp.range_profiles † (M_tx, N_rx, num_doppler_per_tx, num_range)"| CLUT["ClutterFilterOp (post-demux)"]
+  COMP -->|"rd_maps_out → ClutterFilterOp.range_profiles † (M_tx, N_rx, num_doppler_per_tx, num_range)"| CLUT["ClutterFilterOp (post-demux)"]
   CLUT -->|"range_profiles_out"| VAA["VirtualArrayAssemblyOp"]
-  VAA -->|"rd_maps (num_virtual, num_doppler, num_range)"| ANGLE["angle path (dense or sparse) + CFARDetectorOp"]
-  VAA -->|"array_geometry → ⟨angle op⟩.array_geometry (override port)"| ANGLE
+  VAA -->|"rd_maps_out (num_virtual, num_doppler, num_range)"| ANGLE["angle path (dense or sparse) + CFARDetectorOp"]
+  VAA -->|"array_geometry (packed Tensor) → ⟨angle op⟩.array_geometry"| ANGLE
   class CLUT opt
 ```
 

@@ -652,7 +652,7 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 #### MIMODeinterleaveOp
 
 - **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(..., N_rx, M·L, samples_per_chirp)`. Slow-time interleaves the M TX per the TX schedule.
-- **Out:** `adc_cube` — complex64 / complex128 / float32 / float64 (dtype preserved), `(..., M_tx, N_rx, L, samples_per_chirp)`. TX split into an explicit axis. Pure marshaling (strided reshape/gather).
+- **Out:** `adc_cube_out` — complex64 / complex128 / float32 / float64 (dtype preserved), `(..., M_tx, N_rx, L, samples_per_chirp)`. TX split into an explicit axis. Pure marshaling (strided reshape/gather). HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `adc_cube_out` rather than repeating `adc_cube` ([EA HSDK5 ONLY] — same pattern as ClutterFilterOp `range_profiles_out`).
 
 **Parameters:**
 
@@ -661,12 +661,12 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 #### MIMOCoherentCompensationOp
 
 - **In:** `rd_maps` — complex64 / complex128. **TDM mode:** `(..., M_tx, N_rx, num_doppler, num_range_bins)` (TX axis already explicit from de-interleave). **DDM mode:** `(..., N_rx, num_doppler, num_range_bins)` (the M TX sit in distinct Doppler sub-bands). Rank/interpretation set by the `multiplexing_scheme` parameter.
-- **Out:** `rd_maps` — complex64 / complex128, `(..., M_tx, N_rx, num_doppler_out, num_range_bins)`. Separated, phase-aligned `(tx, rx)` block. `num_doppler_out = num_doppler` (TDM, or DDM non-linear correlate) or `num_doppler_per_tx` (DDM linear-phase band gather).
+- **Out:** `rd_maps_out` — complex64 / complex128, `(..., M_tx, N_rx, num_doppler_out, num_range_bins)`. Separated, phase-aligned `(tx, rx)` block. `num_doppler_out = num_doppler` (TDM, or DDM non-linear correlate) or `num_doppler_per_tx` (DDM linear-phase band gather). [EA HSDK5 ONLY] unique in/out port names required; logical output channel remains `rd_maps`.
 
 **Parameters:**
 
 - `multiplexing_scheme` — enum {TDM, DDM}. Selects the compensation path — TDM: per-Doppler-bin inter-TX phase correction; DDM: Doppler-band demux + per-chirp code removal + alignment — and how the `rd_maps` input rank is interpreted. Static (selects the kernel; instantiate separate ops to switch). Default: none (required).
-- `waveform` **[live]** — FMCWWaveformDescriptor. Per-TX PRI and carrier frequency for the Doppler-dependent phase math (the inter-TX correction under TDM; band alignment under DDM). Default: none (required).
+- `waveform` **[live]** — FMCWWaveformDescriptor. Per-TX PRI and carrier frequency for the Doppler-dependent phase math (the inter-TX correction under TDM; band alignment under DDM). Default: none (required). [EA HSDK5 ONLY] Params-only on EA (HSDK5_PORT §9: FMCWWaveformDescriptor owns vectors); live Input deferred.
 - `ddm_code` — DDMCodeDescriptor. The Doppler-band / phase-code layout to demux (carries `num_tx`). Static. Default: none (required for DDM; unused for TDM).
 
 *(No array/element geometry is needed here — this is a phase/demux operation, not a spatial one; `element_positions` enter only downstream at VirtualArrayAssemblyOp. `num_tx` is not a separate parameter — TDM reads it from the input's `M_tx` axis, DDM from `ddm_code`; anything sized by `num_tx` (e.g. the TDM per-Doppler-bin correction table) is built lazily on the first tick and cached, as with FFT plans, so it needs no init-time `num_tx`. TDM assumes uniform per-TX spacing; a non-uniform schedule is rejected upstream (see MIMODeinterleaveOp). Doppler-ambiguity / ÷M velocity handling lives here.)*
@@ -674,8 +674,8 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 #### VirtualArrayAssemblyOp
 
 - **In:** `rd_maps` — complex64 / complex128, `(..., M_tx, N_rx, num_doppler, num_range_bins)`. Separated `(tx, rx)` block. (TX/RX element positions are parameters.)
-- **Out:** `rd_maps` — complex64 / complex128, `(..., num_virtual, num_doppler, num_range_bins)`. `(tx, rx)` flattened to a single virtual channel axis (`c = tx·N_rx + rx`), overlapped virtual elements deduped, so `num_virtual ≤ M·N`.
-- **Out:** `array_geometry` — ArrayGeometry on an output port (a descriptor exception, since the virtual geometry is computed at runtime): virtual `element_positions` (`p_virtual = p_tx + p_rx`) + wavelength, wired directly into the angle operator's `array_geometry` override port (same descriptor type).
+- **Out:** `rd_maps_out` — complex64 / complex128, `(..., num_virtual, num_doppler, num_range_bins)`. `(tx, rx)` flattened to a single virtual channel axis (`c = tx·N_rx + rx`), overlapped virtual elements deduped, so `num_virtual ≤ M·N`. [EA HSDK5 ONLY] physical port name `rd_maps_out` (unique in/out namespace).
+- **Out:** `array_geometry` — float64 Tensor, shape `(num_virtual + 1, 3)`: packed ArrayGeometry via `array_geometry_tensor.hpp` (HSDK5_PORT §10). Virtual `element_positions` (`p_virtual = p_tx + p_rx`) + wavelength in the metadata row; consumers unpack with `unpack_array_geometry`. [EA HSDK5 ONLY] `Output<ArrayGeometry>` is not a PublishedPayload; serialized Tensor interim.
 
 **Parameters:**
 

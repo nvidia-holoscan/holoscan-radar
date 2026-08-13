@@ -594,6 +594,18 @@ struct DualIOGraphRunResult {
   std::vector<std::string> diagnostics;
 };
 
+// 1-in / 3-out Graph result (e.g. FMCWRangeDopplerProcessorOp: rd_maps,
+// range_bins, velocity_bins — all emitted / bound in tests).
+struct ThreeOutGraphRunResult {
+  std::vector<HostTensor> frames0;
+  std::vector<HostTensor> frames1;
+  std::vector<HostTensor> frames2;
+  bool plan_ok{true};
+  std::string plan_json;
+  holoscan::RunTermination termination{holoscan::RunTermination::kStopped};
+  std::vector<std::string> diagnostics;
+};
+
 // 1-in / 4-out Graph result (RootMUSIC / ESPRIT: aoa, doa_multi, source_count,
 // eigenvalues — always emitted / bound in tests; no angle_spectrum).
 struct FourOutGraphRunResult {
@@ -623,11 +635,14 @@ struct FiveOutGraphRunResult {
 
 // 1-in / 1-out Graph runner. `WireFn` receives (graph, source, op, sink) and
 // must add_flow source->out → op input and op output → sink->in. Device binds
-// use source/out plus op/`out_port`.
+// use source/out plus op/`out_port`. `extra_op_out_ports` binds additional
+// device Tensor outputs that are declared but unwired (e.g. optional range_bins)
+// — unbound device producers fail compile with IMPLICIT_DEVICE_ZERO_REJECTED.
 template <typename OpT, typename ParamsT, typename WireFn>
 GraphRunResult run_single_io_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
-    const char* out_port, WireFn&& wire) {
+    const char* out_port, WireFn&& wire,
+    std::initializer_list<const char*> extra_op_out_ports = {}) {
   GraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBank::input_frames = std::move(inputs);
@@ -643,6 +658,9 @@ GraphRunResult run_single_io_operator_graph_result(
 
   holoscan::CompileOptions options;
   detail::bind_single_io_device_pools(options, out_port);
+  for (const char* port : extra_op_out_ports) {
+    detail::bind_op_device_output(options, port);
+  }
 
   try {
     const holoscan::ExecutionPlan plan =
@@ -823,6 +841,103 @@ DualIOGraphRunResult run_single_in_dual_out_operator_graph_result(
   {
     const std::lock_guard lock(detail::FrameBankB::mutex);
     result.frames1 = std::move(detail::FrameBankB::captured);
+  }
+  return result;
+}
+
+// 1-in / 3-out Graph runner (e.g. FMCWRangeDopplerProcessorOp). `WireFn`
+// receives (graph, source, op, sink0, sink1, sink2) and must add_flow
+// source->out plus all three op outputs. Device binds cover source/out
+// and every named op port. `extra_op_out_ports` binds additional device
+// Tensor outputs that are declared but unwired.
+template <typename OpT, typename ParamsT, typename WireFn>
+ThreeOutGraphRunResult run_single_in_three_out_operator_graph_result(
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
+    const char* out0_port, const char* out1_port, const char* out2_port,
+    WireFn&& wire,
+    std::initializer_list<const char*> extra_op_out_ports = {}) {
+  ThreeOutGraphRunResult result;
+  detail::FrameBank::reset();
+  detail::FrameBankB::reset();
+  detail::FrameBankC::reset();
+  detail::FrameBank::input_frames = std::move(inputs);
+  const std::size_t expected = detail::FrameBank::input_frames.size();
+
+  holoscan::Graph graph{"single-in-three-out-harness"};
+  const auto source = graph.op<detail::TensorSourceOp>("source");
+  auto op = graph.op<OpT>("op");
+  op.set_params(std::move(params));
+  const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
+  const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
+  const auto sink2 = graph.op<detail::TensorCaptureCOp>("sink2");
+  wire(graph, source, op, sink0, sink1, sink2);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  detail::bind_single_in_dual_out_device_pools(options, out0_port, out1_port);
+  detail::bind_op_device_output(options, out2_port);
+  for (const char* port : extra_op_out_ports) {
+    detail::bind_op_device_output(options, port);
+  }
+
+  try {
+    const holoscan::ExecutionPlan plan =
+        holoscan::compile(graph, std::move(options));
+    result.plan_ok = plan.ok();
+    result.plan_json = plan.json();
+    if (!plan.ok()) {
+      return result;
+    }
+
+    holoscan::RunSession session = holoscan::run_async(plan);
+    {
+      const auto deadline =
+          std::chrono::steady_clock::now() + detail::kHarnessDeadline;
+      while (session.diagnostics().empty() &&
+             std::chrono::steady_clock::now() < deadline) {
+        std::size_t n0 = 0;
+        std::size_t n1 = 0;
+        std::size_t n2 = 0;
+        {
+          const std::lock_guard lock0(detail::FrameBank::mutex);
+          n0 = detail::FrameBank::captured.size();
+        }
+        {
+          const std::lock_guard lock1(detail::FrameBankB::mutex);
+          n1 = detail::FrameBankB::captured.size();
+        }
+        {
+          const std::lock_guard lock2(detail::FrameBankC::mutex);
+          n2 = detail::FrameBankC::captured.size();
+        }
+        if (n0 >= expected && n1 >= expected && n2 >= expected) {
+          break;
+        }
+        std::this_thread::sleep_for(detail::kHarnessPoll);
+      }
+    }
+    session.request_stop();
+    session.wait();
+    result.termination = session.termination();
+    for (const auto& d : session.diagnostics()) {
+      result.diagnostics.push_back(std::string(d.token));
+    }
+  } catch (const holoscan::RuntimeError& e) {
+    result.plan_ok = false;
+    result.plan_json = std::string("RuntimeError: ") + e.what();
+    return result;
+  }
+  {
+    const std::lock_guard lock(detail::FrameBank::mutex);
+    result.frames0 = std::move(detail::FrameBank::captured);
+  }
+  {
+    const std::lock_guard lock(detail::FrameBankB::mutex);
+    result.frames1 = std::move(detail::FrameBankB::captured);
+  }
+  {
+    const std::lock_guard lock(detail::FrameBankC::mutex);
+    result.frames2 = std::move(detail::FrameBankC::captured);
   }
   return result;
 }

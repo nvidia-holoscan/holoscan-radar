@@ -58,6 +58,12 @@ set(HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS
     cfar_detector_op
     root_music_estimator_op
     esprit_estimator_op
+    mimo_deinterleave_op
+    mimo_coherent_compensation_op
+    virtual_array_assembly_op
+    fmcw_doppler_processor_op
+    fmcw_range_processor_op
+    fmcw_range_doppler_processor_op
 )
 
 # Wrapper around add_holohub_operator that skips unported operators.

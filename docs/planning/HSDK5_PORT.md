@@ -97,11 +97,9 @@ HSDK 4.x `InputContext` / `TensorMap` / `HOLOSCAN_OPERATOR_FORWARD_ARGS`.
 7. **Record** progress in the table below, durable deltas under **Open**
    or **Resolved**, and a `STATUS.md` line when claiming or landing.
 
-**Suggested remaining C++ order:** FMCW Range → Doppler → fused RD → MIMO
-marshaling (`MIMODeinterleave` / `VirtualArrayAssembly` / coherent
-compensation). Angle, clustering, and detection C++ ports are largely
-landed (see progress table); finish deferred Graph suites (CFAR
-GO/SO/OS/…) and Graph perf as capacity allows.
+**C++ operator first-pass:** complete (all 19 operators allow-listed). Remaining
+C++ work is deferred Graph suites (CFAR GO/SO/OS/alpha_lut/statistical), Graph
+perf for most ops, and EA gaps in §§1/9/10 — see progress table.
 
 ---
 
@@ -168,7 +166,12 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `FeatureAssemblyOp` F32/F64 + Graph C++ tests (1-in/1-out; optional gathers) | landed; optional gather Inputs omitted from contract (§1 / Beamscan `is_valid` pattern); Graph optional wiring deferred — stage kernel coverage; no `[live]` params; Graph perf deferred |
 | `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; `representative`/`score_method` sticky Inputs (Graph live deferred §1); `feature_weights` Params-only (§9 unbounded vector); Graph perf deferred |
 | `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA suite) | landed; always emits all 5 outs (incl. `cfar_power`); sticky `pfa`/`threshold_scale`/`os_rank`/`max_detections` Inputs (Graph live deferred §1); `guard_cells`/`training_cells`/`nci_axes`/`alpha_lut` Params-only (§9); GO/SO/OS/alpha_lut/statistical Graph suites deferred; Graph perf deferred |
-| Range / Doppler / fused RD / MIMO marshaling | gated (unported) |
+| `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph sticky/`TXSchedule` live N/A (Params-only schedule); Graph perf deferred |
+| `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` Params-only (§9); Graph live tests skipped; Graph perf deferred |
+| `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); sticky `wavelength` Input (Graph mid-stream sticky deferred §1); Graph perf deferred |
+| `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; sticky POD lives; `range_window`/`waveform` Params-only (§9); Graph live window skipped (§1/§9); Graph perf deferred |
+| `FMCWDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `velocity_bins` only with waveform; sticky POD lives; `doppler_window`/`waveform` Params-only (§9); Graph live skipped (§1/§9); Graph perf deferred |
+| `FMCWRangeDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–3-out) | landed; optional axis outs with waveform; sticky POD lives incl. `clutter_filter`; windows/`waveform` Params-only (§9); UlpParity vs split chain preserved; Graph live skipped; Graph perf deferred |
 | Python bindings / Holoviz demos / apps / Graph perf (most ops) | deferred |
 
 ---
@@ -407,43 +410,27 @@ admission for owning containers) shared with VirtualArrayAssembly; restore
 typed `Output<ArrayGeometry>` when available. Do not invent a second
 descriptor type.
 
-**Status:** open — SubarraySelection Tensor pack landed; VAA still unported.
+**Status:** open — SubarraySelection + VirtualArrayAssembly Tensor pack
+landed; restore typed `Output<ArrayGeometry>` when the SDK admits owning
+containers / a durable ChannelPod schema.
 
 ---
 
 ## Open — deferred port work
 
-### 5. Allow-list: FMCW Range / Doppler / fused RD + MIMO marshaling
+### 5. Allow-list: C++ operator first-pass complete
 
-**Class:** Our deferred work.
+**Class:** Our deferred work (allow-list retained until EA cleanup).
 
-These six operators are the remaining C++ ports; angle, clustering,
-detection, and clutter have landed (see **Port progress**).
+All 19 operators are on `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS`. The
+allow-list remains until public HSDK 5 / cleanup gate so apps, packaging,
+and unported Graph suites stay gated intentionally. Demo apps still need
+Holoviz (§6) and Graph-port of remaining app scaffolding; CFAR GO/SO/OS /
+alpha_lut / statistical binaries are still unregistered (see
+`cfar_detector_op/OPEN_ITEMS.md` §5). Perf drivers remain on the separate
+`HOLOSCAN_RADAR_HSDK5_PORTED_PERF` list (today: clutter only).
 
-Unported ops are skipped via `holoscan_radar_add_operator()` with a
-STATUS message. Because a skipped name is never created as a target,
-anything that would `FORCE OP_<name>=ON` has to consult the allow-list
-too: `holoscan_radar_add_application()` skips demo apps with unported
-dependencies, and `pkg/CMakeLists.txt` packages
-`${HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS}` plus only the apps whose
-chains are ported. `tests/cpp/CMakeLists.txt` registers common helpers +
-ported ops (`test_clutter_filter`, `test_snapshot_gather`,
-`test_phase_shift_beamformer`, `test_beamscan_estimator`,
-`test_subarray_selection_op`, `test_cluster_dbscan`,
-`test_mvdr_estimator`, `test_music_estimator`,
-`test_root_music_estimator`, `test_esprit_estimator`,
-`test_feature_assembly`, `test_detection_reduction`,
-`test_cfar_detector`) until each family’s
-harness/port lands. CFAR GO/SO/OS / alpha_lut / statistical binaries are
-still unregistered (see `cfar_detector_op/OPEN_ITEMS.md` §5).
-
-**Suggested order:** FMCW Range → Doppler → fused RD → MIMO marshaling.
-Reuse pilot I/O + sticky helpers and the Graph harness runners already
-landed for multi-port ops; do not reintroduce 4.x `InputContext` /
-`TensorMap` / `HOLOSCAN_OPERATOR_FORWARD_ARGS`. Angle / clustering /
-detection C++ ports are largely done — see **Port progress**.
-
-**Status:** open.
+**Status:** C++ first-pass landed; allow-list kept for EA gating / cleanup.
 
 ---
 
