@@ -289,7 +289,7 @@ def _run_split_graph(
             else:
                 clutter = ClutterFilterOpF32(self, method=scen.clutter, name="clutter")
                 self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
-                self.add_flow(clutter, doppler, {("range_profiles", "range_profiles")})
+                self.add_flow(clutter, doppler, {("range_profiles_out", "range_profiles")})
 
             rd_sink = PerfTerminalSinkOp(self, collector=collector, name="rd_sink")
             self.add_flow(doppler, rd_sink, {("rd_maps", "input")})

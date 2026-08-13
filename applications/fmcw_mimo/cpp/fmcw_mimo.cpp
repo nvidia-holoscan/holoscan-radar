@@ -103,7 +103,7 @@ class FmcwMimoApp : public holoscan::Application {
       add_flow(range, doppler, {{"range_profiles", "range_profiles"}});
       add_flow(doppler, compensation, {{"rd_maps", "rd_maps"}});
       add_flow(compensation, clutter, {{"rd_maps", "range_profiles"}});
-      add_flow(clutter, vaa, {{"range_profiles", "rd_maps"}});
+      add_flow(clutter, vaa, {{"range_profiles_out", "rd_maps"}});
     } else {
       auto source = make_operator<MimoTdmAdcSourceOp>(
           "adc_source",
@@ -124,7 +124,7 @@ class FmcwMimoApp : public holoscan::Application {
       add_flow(source, deinterleave, {{"adc_cube", "adc_cube"}});
       add_flow(deinterleave, range, {{"adc_cube", "adc_cube"}});
       add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
-      add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
+      add_flow(clutter, doppler, {{"range_profiles_out", "range_profiles"}});
       add_flow(doppler, compensation, {{"rd_maps", "rd_maps"}});
       add_flow(compensation, vaa, {{"rd_maps", "rd_maps"}});
     }
