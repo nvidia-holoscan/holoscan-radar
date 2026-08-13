@@ -23,28 +23,22 @@
 # contain. `holoscan package` configures with -DBUILD_ALL=OFF, so anything
 # absent here is never enabled, never built, and never installed — it simply
 # does not appear in the .deb. Nothing warns about the omission.
+#
+# Demo applications require Holoviz; omit them when it is gated off
+# ([EA HSDK5 ONLY]).
+set(_HOLOSCAN_RADAR_PKG_APPLICATIONS)
+if(HOLOSCAN_RADAR_HAS_HOLOVIZ)
+    list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS
+        fmcw_aoa_estimators
+        fmcw_dense_simo
+        fmcw_mimo
+        fmcw_simo
+        fmcw_siso)
+endif()
+
+# [EA HSDK5 ONLY] Package only HSDK-5-ported operators so FORCE OP_* does
+# not require unported targets. Expand with HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS.
 add_holohub_package(holoscan-radar
-                    OPERATORS    beamscan_estimator_op
-                                 cfar_detector_op
-                                 cluster_dbscan_op
-                                 clutter_filter_op
-                                 detection_reduction_op
-                                 esprit_estimator_op
-                                 feature_assembly_op
-                                 fmcw_doppler_processor_op
-                                 fmcw_range_doppler_processor_op
-                                 fmcw_range_processor_op
-                                 mimo_coherent_compensation_op
-                                 mimo_deinterleave_op
-                                 music_estimator_op
-                                 mvdr_estimator_op
-                                 phase_shift_beamformer_op
-                                 root_music_estimator_op
-                                 snapshot_gather_op
-                                 subarray_selection_op
-                                 virtual_array_assembly_op
-                    APPLICATIONS fmcw_aoa_estimators
-                                 fmcw_dense_simo
-                                 fmcw_mimo
-                                 fmcw_simo
-                                 fmcw_siso)
+                    OPERATORS    clutter_filter_op
+                    APPLICATIONS ${_HOLOSCAN_RADAR_PKG_APPLICATIONS})
+

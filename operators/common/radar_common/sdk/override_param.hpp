@@ -3,78 +3,62 @@
 
 #pragma once
 
-#include <any>
+#include <chrono>
 #include <optional>
 #include <utility>
 
-#include <holoscan/holoscan.hpp>
-#include <holoscan/core/type_traits.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/expected.hpp>
+#include <holoscan/core/expected_macros.hpp>
+#include <holoscan/core/port.hpp>
+#include <holoscan/core/temporal_contract.hpp>
+
+#include "radar_common/sdk/tensor_io.hpp"
 
 namespace holoscan::radar {
 
-// Helpers implementing the module's parameter override convention (see
-// operators/common/README.md): an overridable parameter may
-// additionally be overridden in-flight via a same-named non-blocking input
-// port. Overrides are sticky — the parameter seeds the initial effective
-// value and an arriving override remains effective until the next override
-// (callers resolve against the previous effective value each tick).
-
-// Declare the non-blocking override input port for an overridable
-// parameter. Call from setup(), after the spec.param() declaration of the
-// same name.
-template <typename T>
-void add_override_port(holoscan::OperatorSpec& spec, const char* name) {
-  spec.input<T>(name).condition(holoscan::ConditionType::kNone);
-}
-
-// Receive an override if one arrived this tick. Returns std::nullopt when
-// the port is unconnected or carried no message, in which case the current
-// effective value stands.
+// HSDK 5 mapping of the module's sticky [live] override convention
+// (OPERATOR_API.md).
 //
-// Vector overrides use the std::any receive path: Holoscan's
-// receive<std::vector<T>>() treats a same-named Parameter as a legacy
-// receivers list (vector<IOSpec*>) and rejects ordinary vector parameters.
+// Contract: LatestWithin admits a fresh override when present; on_missing
+// SafeDefault lets the activation proceed when the port is unconnected or
+// silent (ReuseLast alone would suppress compute() before the first sample,
+// which breaks Params-seeded defaults). Sticky retention across silent ticks
+// is held in an operator-owned std::optional updated by
+// resolve_sticky_override — not experimental runtime_mutable (scalars-only).
+//
+// LatestWithin still needs a positive max_age; use a century-scale bound so a
+// queued override is not aged out mid-session.
+
+inline constexpr std::chrono::nanoseconds kStickyOverrideMaxAge =
+    std::chrono::years{100};
+
 template <typename T>
-std::optional<T> receive_override(holoscan::InputContext& op_input,
-                                  const char* name) {
-  if constexpr (holoscan::is_vector_v<T>) {
-    auto maybe = op_input.receive<std::any>(name);
-    if (!maybe) {
-      return std::nullopt;
-    }
-    try {
-      return std::optional<T>(std::any_cast<T>(maybe.value()));
-    } catch (const std::bad_any_cast&) {
-      return std::nullopt;
-    }
-  } else {
-    auto maybe = op_input.receive<T>(name);
-    if (maybe) {
-      return std::optional<T>(std::move(maybe.value()));
-    }
-    return std::nullopt;
-  }
+void add_sticky_override_to_contract(Contract& contract, const Input<T>& port) {
+  contract.input(port, LatestWithin{.max_age = kStickyOverrideMaxAge})
+      .on_missing(port, SafeDefault{});
 }
 
-// Resolve the effective value of an overridable parameter for this tick:
-// the override when one arrived, else `current` (the previous effective
-// value, seeded from the parameter on the first tick). `changed` is set
-// when an override arrived and differs from `current` (used to trigger the
-// warn-once-and-cache path for costly rebuilds).
+// Resolve the effective value for this activation: update `sticky` when a
+// fresh sample arrives, then return sticky (or `seed` when never overridden).
 template <typename T>
-T resolve_override_param(holoscan::InputContext& op_input, const char* name,
-                         const T& current, bool* changed) {
-  auto override_value = receive_override<T>(op_input, name);
-  if (override_value.has_value()) {
-    if (changed != nullptr) {
-      *changed = !(*override_value == current);
+expected<T, Error> resolve_sticky_override(Input<T>& port, const T& seed,
+                                           std::optional<T>& sticky) {
+  // Unconnected / silent override ports must not fail the activation.
+  auto maybe = receive_optional_value(port);
+  if (!maybe) {
+    if (sticky.has_value()) {
+      return *sticky;
     }
-    return std::move(*override_value);
+    return seed;
   }
-  if (changed != nullptr) {
-    *changed = false;
+  if (maybe->has_value()) {
+    sticky = std::move(*maybe).value();
   }
-  return current;
+  if (sticky.has_value()) {
+    return *sticky;
+  }
+  return seed;
 }
 
 }  // namespace holoscan::radar

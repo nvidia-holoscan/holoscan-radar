@@ -1,11 +1,19 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Shared application-support library (radar_app), linked by the apps below.
-# Added before the applications so its target exists when they link it.
+# Shared application-support library (radar_app). Report sinks are always
+# available; Holoviz-backed viz helpers and the demo apps that need them are
+# gated on HOLOSCAN_RADAR_HAS_HOLOVIZ ([EA HSDK5 ONLY]).
 add_subdirectory(common)
 
-# Each application is gated on its own APP_<name> option, defaulting to ${BUILD_ALL}.
+# Each application is gated on its own APP_<name> option, defaulting to
+# ${BUILD_ALL}, and additionally requires Holoviz.
+if(NOT HOLOSCAN_RADAR_HAS_HOLOVIZ)
+    message(STATUS
+        "Skipping demo applications (fmcw_*); Holoviz is not available")
+    return()
+endif()
+
 # Add one add_holohub_application() call per application; declare operator
 # dependencies via DEPENDS OPERATORS so they auto-enable when the app is built.
 add_holohub_application(fmcw_siso

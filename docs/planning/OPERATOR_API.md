@@ -280,7 +280,7 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 #### ClutterFilterOp
 
 - **In:** `range_profiles` — complex64 / complex128, `(..., num_chirps, num_range_bins)`. Slow-time (chirp) axis second-to-last.
-- **Out:** `range_profiles` — complex64 / complex128, `(..., num_chirps_out, num_range_bins)`. `num_chirps_out = num_chirps` (`mean_subtraction`), `num_chirps − 1` (`single_delay`), `num_chirps − 2` (`double_delay`).
+- **Out:** `range_profiles_out` — complex64 / complex128, `(..., num_chirps_out, num_range_bins)`. `num_chirps_out = num_chirps` (`mean_subtraction`), `num_chirps − 1` (`single_delay`), `num_chirps − 2` (`double_delay`). HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `range_profiles_out` rather than repeating `range_profiles` ([EA HSDK5 ONLY] — same pattern will apply to other operators that previously reused an input name on the output).
 
 **Parameters:**
 
@@ -494,6 +494,22 @@ Gathers, for each detection, the per-channel complex snapshot(s) from the RD map
 - *Sizing:* `snapshot` (and `is_valid`) are sized to the actual `num_detections` and reallocated per tick — no fixed-capacity padding, no valid-count companion. `num_detections` is just the row count of the incoming `detection_idx`.
 - *Beamscan:* the default `(0, 0)` window yields `num_snapshots = 1`, which Beamscan accepts (its 2D-or-3D-with-`num_snapshots=1` rule).
 - *Carried over:* plain-tensor ports; precision by template instantiation; MatX + MatX memory spaces.
+
+#### SubarraySelectionOp
+
+Selects a uniform ULA/URA sub-array from a (possibly holey) MIMO virtual array and re-emits a reduced `(snapshot, array_geometry)` pair (S3) so gridless estimators and holey-array spatial smoothing can run. Host-planned selection is cached; the per-tick channel gather reuses the S1 gather (`P=1`, no forward-backward).
+
+- **In:** `snapshot` — complex64 / complex128, `(num_items, N_virtual)` or `(num_items, N_virtual, num_snapshots)`. Holey virtual-array snapshot from `SnapshotGatherOp`; `N_virtual` must match `array_geometry.num_elements`.
+- **In:** `is_valid` (optional) — bool or uint8, `(num_items, num_snapshots)`. Forwarded unchanged when present (channel selection leaves the mask intact).
+- **Out:** `snapshot_out` — complex64 / complex128, `(num_items, L[, num_snapshots])`. Selected-channel snapshot (`L` = sub-array size). HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `snapshot_out` rather than repeating `snapshot` ([EA HSDK5 ONLY]).
+- **Out:** `array_geometry` — reduced geometry for the estimator. Logical type is `ArrayGeometry`; on HSDK 5 EA the physical port is a float64 Tensor of shape `(L + 1, 3)` packing positions + wavelength + optional `geometry_type` ([EA HSDK5 ONLY] — `Output<ArrayGeometry>` is not a PublishedPayload because the descriptor owns `std::vector` / `std::optional`; see `array_geometry_tensor.hpp` / HSDK5_PORT.md §10). Must be emitted each tick (Params side-channel is not acceptable).
+- **Out:** `is_valid_out` (optional) — the input mask, forwarded. Physical name `is_valid_out` ([EA HSDK5 ONLY] unique in/out names).
+
+**Parameters:**
+
+- `array_geometry` **[live]** — ArrayGeometry (holey virtual positions + wavelength). Required. On HSDK 5 EA the live Input is Params-only (descriptor owns vectors — HSDK5_PORT.md §9).
+- `subarray` **[live]** — int64 vector of explicit channel indices; empty → auto (largest filled ULA/URA). On HSDK 5 EA Params-only (unbounded vector — §9).
+- `min_subarray_size` — int64. Auto-selection errors below this many channels. Static. Default: 2.
 
 #### Sparse angle estimators (shared slot)
 

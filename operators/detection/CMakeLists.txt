@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Detection operators (see README.md in this directory). Each operator is
-# gated on its own OP_<name> option (defaulting to ${BUILD_ALL}).
-add_holohub_operator(cfar_detector_op)
-add_holohub_operator(detection_reduction_op)
-add_holohub_operator(feature_assembly_op)
+# Detection operators (see README.md in this directory).
+# [EA HSDK5 ONLY] Only HSDK-5-ported operators are added (see
+# HoloscanRadarOptionalFeatures.cmake).
+holoscan_radar_add_operator(cfar_detector_op)
+holoscan_radar_add_operator(detection_reduction_op)
+holoscan_radar_add_operator(feature_assembly_op)

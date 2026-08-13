@@ -3,14 +3,27 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <unordered_set>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
+#include <holoscan/core/domain/dlpack.hpp>
+#include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/expected.hpp>
+#include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
+#include <holoscan/core/parameter.hpp>
+#include <holoscan/core/parameter_schema.hpp>
+#include <holoscan/core/port.hpp>
+#include <holoscan/core/temporal_contract.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
 
 #include "angle_estimation/angle_boundary_device.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
@@ -24,62 +37,118 @@ struct RootMUSICSolverState;
 }  // namespace detail
 
 // Gridless Root-MUSIC sparse-path DOA estimator. Contract reference:
-// docs/planning/OPERATOR_API.md -> "RootMUSICEstimatorOp".
+// docs/planning/OPERATOR_API.md → "RootMUSICEstimatorOp".
 //
-// The covariance, Hermitian eigendecomposition, fixed/EFT source-count
-// selection, and noise-subspace projector are the same front-end used by
-// MUSICEstimatorOp. For the required uniform linear array, Root-MUSIC sums the
-// projector diagonals into its conjugate-reciprocal polynomial, finds roots
-// with a companion-matrix eigensolve, and maps the roots inside the unit
-// circle that are closest to it to continuous (gridless) DOAs.
+// Covariance / Hermitian eig / fixed-or-EFT source count / noise-subspace
+// projector match MUSICEstimatorOp. On a ULA, Root-MUSIC roots the
+// conjugate-reciprocal polynomial; on a filled URA, reduced-dimension
+// per-axis rooting + 2-D MUSIC-metric pairing yields native (az, el).
 //
-// In:  snapshot       - complex64/complex128,
+// In:  snapshot       — complex64/complex128,
 //                       (num_items, num_channels, num_snapshots).
-// In:  is_valid       - optional bool/uint8,
-//                       (num_items, num_snapshots).
-// Out: aoa_estimates  - float32/float64, (num_items, 2). The root closest to
-//                       the unit circle; equals doa_multi[., 0, .].
-// Out: doa_multi      - float32/float64,
-//                       (num_items, max_sources, 2), unused rows NaN.
-// Out: source_count   - int32, (num_items,), roots resolved.
-// Out: eigenvalues    - float32/float64,
-//                       (num_items, post-smoothing num_channels), ascending.
+// In:  is_valid       — optional bool/uint8, (num_items, num_snapshots).
+//                       Omitted from the temporal contract when unconnected
+//                       (HSDK5_PORT §1).
+// Out: aoa_estimates  — float32/float64, (num_items, 2). Always emitted.
+// Out: doa_multi      — float32/float64, (num_items, max_sources, 2).
+//                       Always emitted (optional in OPERATOR_API.md).
+// Out: source_count   — int32, (num_items,). Always emitted.
+// Out: eigenvalues    — float32/float64,
+//                       (num_items, post-smoothing num_channels). Always
+//                       emitted. No angle_spectrum (gridless).
+//
+// [EA HSDK5 ONLY] Sticky Input for POD [live] scalars (num_sources,
+// source_count_pfa, max_sources). array_geometry / spatial_smoothing are
+// Params-only (HSDK5_PORT.md §9). angle_convention and forward_backward stay
+// Params-only (STATIC / not [live]).
+
+struct RootMUSICParams {
+  ArrayGeometry array_geometry{};
+  AngleConvention angle_convention{};
+  // Negative → auto (per-item EFT); non-negative → fixed order. Default -1.
+  int64_t num_sources{-1};
+  double source_count_pfa{1e-2};
+  int64_t max_sources{4};
+  // Empty → off; [P] ULA; [P_az, P_el] URA. Params-only on EA (§9).
+  std::vector<int64_t> spatial_smoothing{};
+  bool forward_backward{true};
+};
+
+HOLOSCAN_PARAM_SCHEMA(
+    RootMUSICParams,
+    holoscan::param_schema("com.nvidia.holoscan.radar.RootMUSICParams", 1),
+    holoscan::field<&RootMUSICParams::array_geometry>("array_geometry")
+        .description(
+            "ULA or filled URA positions and wavelength; num_elements must "
+            "match snapshot channels"),
+    holoscan::field<&RootMUSICParams::angle_convention>("angle_convention")
+        .description(
+            "Static AER labeling for the gridless DOA output "
+            "(no live port)"),
+    holoscan::field<&RootMUSICParams::num_sources>("num_sources")
+        .description(
+            "Signal-subspace dimension; negative selects per-item EFT auto"),
+    holoscan::field<&RootMUSICParams::source_count_pfa>("source_count_pfa")
+        .description(
+            "EFT over-estimation probability for num_sources: auto"),
+    holoscan::field<&RootMUSICParams::max_sources>("max_sources")
+        .description(
+            "doa_multi / source_count capacity and auto source-count cap"),
+    holoscan::field<&RootMUSICParams::spatial_smoothing>("spatial_smoothing")
+        .description(
+            "Per-aperture-axis sub-array counts on a filled ULA/URA "
+            "(empty = off)"),
+    holoscan::field<&RootMUSICParams::forward_backward>("forward_backward")
+        .description(
+            "Include conjugate-reversed looks when spatial_smoothing is set"));
+
+static_assert(holoscan::param_schema_availability<RootMUSICParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in RootMUSICParams's namespace");
+
+inline constexpr std::uint32_t kRootMUSICEstimatorMaxRank = 8U;
+inline constexpr std::size_t kRootMUSICEstimatorMaxByteSpan =
+    256ULL * 1024ULL * 1024ULL;  // 256 MiB
+
 template <typename T>
-class RootMUSICEstimatorOp : public holoscan::Operator {
+class RootMUSICEstimatorOp : public holoscan::Operator<RootMUSICParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "RootMUSICEstimatorOp supports float and double precision");
 
  public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(RootMUSICEstimatorOp)
-
   RootMUSICEstimatorOp() = default;
 
-  void initialize() override;
   void setup(OperatorSpec& spec) override;
-  void compute(InputContext& op_input, OutputContext& op_output,
-               ExecutionContext& context) override;
-  // Drain the MatX eig cache + global MemTracker once at graph stop, while CUDA
-  // is still valid (per-tick only clears the plan cache; see music_stage.hpp).
+  [[nodiscard]] Contract contract() const override;
+  [[nodiscard]] expected<void, Error> compute(
+      ExecutionContext& context) override;
+  // Drain MatX eig plan caches + global MemTracker once at graph stop, while
+  // CUDA is still valid. HSDK 5 still exposes OperatorBase::stop().
   void stop() override;
 
- private:
-  Parameter<ArrayGeometry> array_geometry_;
-  Parameter<AngleConvention> angle_convention_;
-  Parameter<int64_t> num_sources_;
-  Parameter<double> source_count_pfa_;
-  Parameter<int64_t> max_sources_;
-  Parameter<std::vector<int64_t>> spatial_smoothing_;
-  Parameter<bool> forward_backward_;
+  Input<Tensor> snapshot{"snapshot"};
+  // Optional; unconnected graphs omit it from the temporal contract.
+  Input<Tensor> is_valid{"is_valid"};
+  Output<Tensor> aoa_estimates{"aoa_estimates"};
+  Output<Tensor> doa_multi{"doa_multi"};
+  Output<Tensor> source_count{"source_count"};
+  Output<Tensor> eigenvalues{"eigenvalues"};
+  // [live] sticky POD overrides (OPERATOR_API.md). Vector / descriptor live
+  // params stay Params-only on HSDK 5 EA — see OPEN_ITEMS.md / HSDK5_PORT §9.
+  Input<int64_t> num_sources{"num_sources"};
+  Input<double> source_count_pfa{"source_count_pfa"};
+  Input<int64_t> max_sources{"max_sources"};
 
-  ArrayGeometry effective_geometry_{};
-  int64_t effective_num_sources_{-1};
-  double effective_pfa_{1e-2};
-  int64_t effective_max_sources_{4};
-  std::vector<int64_t> effective_smoothing_{};
-  bool effective_forward_backward_{true};
-  bool seeded_{false};
+ private:
+  Tensor retained_snapshot_;
+  Tensor retained_is_valid_;
+  std::optional<int64_t> sticky_num_sources_;
+  std::optional<double> sticky_source_count_pfa_;
+  std::optional<int64_t> sticky_max_sources_;
+
   bool warned_rank_deficient_{false};
   detail::DeviceAngleConvention<T> device_angle_convention_{};
+  bool angle_convention_seeded_{false};
 
   SpatialSmoothingPlan smoothing_plan_{};
   std::string smoothing_key_{};
@@ -88,10 +157,11 @@ class RootMUSICEstimatorOp : public holoscan::Operator {
   std::shared_ptr<holoscan::Tensor> d_fb_flip_{};
 
   std::shared_ptr<detail::RootMUSICSolverState> solver_state_{};
-  // Second companion-root solver for the URA elevation axis, so the two
-  // per-axis geev configurations (degrees 2*(Ny-1) / 2*(Nz-1)) do not thrash a
-  // single cached workspace when Ny != Nz.
+  // Second companion-root solver for the URA elevation axis.
   std::shared_ptr<detail::RootMUSICSolverState> solver_state_z_{};
 };
+
+extern template class RootMUSICEstimatorOp<float>;
+extern template class RootMUSICEstimatorOp<double>;
 
 }  // namespace holoscan::radar

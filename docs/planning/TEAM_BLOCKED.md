@@ -18,7 +18,8 @@ Items fall into **two classes**. Keep that distinction sharp when adding rows:
 **Not in this file:** perf follow-ups, encoding notes pending bindings, deferred
 algorithm slices that are simply out of scope, and SDK caveats that are only
 documented (unless they need a product policy — then they belong in one of the
-two classes below).
+two classes below). HSDK 5 / EA migration friction lives in
+[`HSDK5_PORT.md`](HSDK5_PORT.md).
 
 ---
 

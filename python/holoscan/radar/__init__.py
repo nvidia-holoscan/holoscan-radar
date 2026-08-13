@@ -90,21 +90,7 @@ from .phase_shift_beamformer_op import (  # noqa: F401
     PhaseShiftBeamformerOpF64,
 )
 from .radar_app import CadenceMeter  # noqa: F401
-from .radar_app import (
-    BoresightViewOp,
-    ClusterOverlayOp,
-    ClusterReportOp,
-    DetectionReportOp,
-    NullSinkOp,
-    PanelRect,
-    RdAngleMaxOp,
-    RdChannelSliceOp,
-    RdMapToImageOp,
-    RollingPlotOp,
-    cluster_palette,
-    gui_available,
-    make_turbo_lut,
-)
+from .radar_app import ClusterReportOp, DetectionReportOp, NullSinkOp
 from .root_music_estimator_op import (  # noqa: F401
     RootMUSICEstimatorOpF32,
     RootMUSICEstimatorOpF64,
@@ -114,6 +100,33 @@ from .virtual_array_assembly_op import (  # noqa: F401
     VirtualArrayAssemblyOpF32,
     VirtualArrayAssemblyOpF64,
 )
+
+# Holoviz-backed radar_app symbols are absent when Holoviz is gated off
+# ([EA HSDK5 ONLY]); report sinks above still import.
+try:
+    from .radar_app import BoresightViewOp  # noqa: F401
+    from .radar_app import (
+        ClusterOverlayOp,
+        PanelRect,
+        RdAngleMaxOp,
+        RdChannelSliceOp,
+        RdMapToImageOp,
+        RollingPlotOp,
+        cluster_palette,
+        gui_available,
+        make_turbo_lut,
+    )
+except ImportError:  # pragma: no cover - Holoviz-gated EA builds
+    BoresightViewOp = None  # type: ignore[misc, assignment]
+    ClusterOverlayOp = None  # type: ignore[misc, assignment]
+    PanelRect = None  # type: ignore[misc, assignment]
+    RdAngleMaxOp = None  # type: ignore[misc, assignment]
+    RdChannelSliceOp = None  # type: ignore[misc, assignment]
+    RdMapToImageOp = None  # type: ignore[misc, assignment]
+    RollingPlotOp = None  # type: ignore[misc, assignment]
+    cluster_palette = None  # type: ignore[misc, assignment]
+    gui_available = None  # type: ignore[misc, assignment]
+    make_turbo_lut = None  # type: ignore[misc, assignment]
 
 # Convenience aliases: bare name → single precision (matches C++ demo apps).
 BeamscanEstimatorOp = BeamscanEstimatorOpF32

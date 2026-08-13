@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// PhaseShiftBeamformerOp contract tests (conventional dense-path Bartlett
-// beamforming: rd_maps -> rda_cube).
+// PhaseShiftBeamformerOp contract tests (HSDK 5 Graph harness): conventional
+// dense-path Bartlett beamforming (rd_maps → rda_cube), Params coverage, and
+// error paths. Live Graph sticky overrides deferred (HSDK5_PORT.md §1 / §9).
 
 #include <gtest/gtest.h>
 
@@ -16,34 +17,34 @@
 #include <utility>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
-#include <holoscan/test/test_harness.hpp>
+#include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/graph.hpp>
 
 #include "angle_estimation/phase_shift_beamformer_op/phase_shift_beamformer_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/dsp/angle_convention.hpp"
-#include "radar_common/sdk/tensor_io.hpp"
-#include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_common/math/constants.hpp"
+#include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
+
 using holoscan::radar::AngleConvention;
 using holoscan::radar::AngleConventionPreset;
 using holoscan::radar::ArrayGeometry;
 using holoscan::radar::PhaseShiftBeamformerOp;
+using holoscan::radar::PhaseShiftBeamformerParams;
 using holoscan::radar::WindowSpec;
 using holoscan::radar::WindowType;
 using holoscan::radar::complex_dtype;
+using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::single_map;
-using holoscan::radar::testing::TensorMapCapture;
+using holoscan::radar::testing::run_single_io_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
-using holoscan::radar::testing::to_pageable_host_tensor;
-using holoscan::test::create_operator_test;
 
 using holoscan::radar::kPi;
 
@@ -154,21 +155,61 @@ std::pair<int64_t, int64_t> peak_beam_at(const HostTensor& cube, int64_t num_az,
   return arg;
 }
 
-template <typename T, typename... ExtraArgs>
+PhaseShiftBeamformerParams make_params(ArrayGeometry geom,
+                                       AngleConvention conv,
+                                       std::vector<double> az,
+                                       std::vector<double> el,
+                                       WindowSpec taper = {}) {
+  PhaseShiftBeamformerParams params;
+  params.array_geometry = std::move(geom);
+  params.angle_convention = conv;
+  params.az_angles = std::move(az);
+  params.el_angles = std::move(el);
+  params.array_taper = std::move(taper);
+  return params;
+}
+
+template <typename Source, typename OpRef, typename Sink>
+void wire_beamformer(holoscan::Graph& graph, const Source& source, OpRef& op,
+                     const Sink& sink) {
+  const holoscan::ConnectionOptions q{.queue_depth = 4U};
+  graph.add_flow(source->out, op->rd_maps, q);
+  graph.add_flow(op->rda_cube, sink->in, q);
+}
+
+template <typename T>
+GraphRunResult run_beamformer_result(
+    std::shared_ptr<holoscan::Tensor> rd_maps,
+    PhaseShiftBeamformerParams params) {
+  return run_single_io_operator_graph_result<PhaseShiftBeamformerOp<T>>(
+      {std::move(rd_maps)}, std::move(params), "rda_cube",
+      [](holoscan::Graph& graph, const auto& source, auto& op,
+         const auto& sink) { wire_beamformer(graph, source, op, sink); });
+}
+
+template <typename T>
 HostTensor run_beamformer(std::shared_ptr<holoscan::Tensor> rd_maps,
-                          ExtraArgs&&... extra_args) {
-  auto harness = create_operator_test<PhaseShiftBeamformerOp<T>>(
-      std::forward<ExtraArgs>(extra_args)...);
-  harness->template add_input_port<holoscan::TensorMap>(
-      "rd_maps", {single_map(std::move(rd_maps), "rd_maps")});
-  TensorMapCapture cube_cap;
-  harness->template add_output_port<holoscan::TensorMap>("rda_cube",
-                                                         cube_cap.validators());
-  harness->run_test();
-  if (cube_cap.frames.size() != 1u) {
-    throw std::runtime_error("PhaseShiftBeamformerOp test: expected one frame");
+                          PhaseShiftBeamformerParams params) {
+  GraphRunResult result =
+      run_beamformer_result<T>(std::move(rd_maps), std::move(params));
+  if (!result.plan_ok) {
+    throw std::runtime_error(std::string("compile failed: ") +
+                             result.plan_json);
   }
-  return cube_cap.frames.front();
+  if (!result.diagnostics.empty()) {
+    std::string msg = "run diagnostics:";
+    for (const auto& d : result.diagnostics) {
+      msg += " ";
+      msg += d;
+    }
+    throw std::runtime_error(msg);
+  }
+  if (result.frames.size() != 1U) {
+    throw std::runtime_error(
+        "PhaseShiftBeamformerOp test: expected one frame, got " +
+        std::to_string(result.frames.size()));
+  }
+  return std::move(result.frames.front());
 }
 
 TEST(PhaseShiftBeamformerOpTest, RecoversKnownBeamBin2D) {
@@ -186,9 +227,7 @@ TEST(PhaseShiftBeamformerOpTest, RecoversKnownBeamBin2D) {
   const auto az = linspace(-0.5, 0.5, 101);
   const auto el = linspace(-0.3, 0.3, 61);
   const auto cube = run_beamformer<double>(
-      rd, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("az_angles") = az, holoscan::Arg("el_angles") = el);
+      rd, make_params(geom, conv, az, el));
 
   ASSERT_EQ(cube.shape, (std::vector<int64_t>{101, 61, 1, 1}));
   const auto [ia, ie] = peak_beam_at<double>(cube, 101, 61, 1, 1, 0, 0);
@@ -208,10 +247,7 @@ TEST(PhaseShiftBeamformerOpTest, RecoversKnownBeamAzOnly1DScan) {
 
   const auto az = linspace(-0.3, 0.3, 61);
   const auto cube = run_beamformer<double>(
-      rd, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("az_angles") = az,
-      holoscan::Arg("el_angles") = std::vector<double>{0.0});
+      rd, make_params(geom, conv, az, std::vector<double>{0.0}));
 
   ASSERT_EQ(cube.shape, (std::vector<int64_t>{61, 1, 1, 1}));
   const auto [ia, ie] = peak_beam_at<double>(cube, 61, 1, 1, 1, 0, 0);
@@ -237,9 +273,7 @@ TEST(PhaseShiftBeamformerOpTest, ConventionRelabelsSamePhysicalDirection) {
     const auto az = linspace(-0.5, 0.5, 101);
     const auto el = linspace(-0.3, 0.3, 61);
     const auto cube = run_beamformer<double>(
-        rd, holoscan::Arg("array_geometry") = geom,
-        holoscan::Arg("angle_convention") = conv,
-        holoscan::Arg("az_angles") = az, holoscan::Arg("el_angles") = el);
+        rd, make_params(geom, conv, az, el));
     const auto [ia, ie] = peak_beam_at<double>(cube, 101, 61, 1, 1, 0, 0);
     EXPECT_NEAR(az[static_cast<size_t>(ia)], kTruthAz, 0.02);
     EXPECT_NEAR(el[static_cast<size_t>(ie)], kTruthEl, 0.02);
@@ -257,9 +291,7 @@ TEST(PhaseShiftBeamformerOpTest, DirectionCosineMasksInvisibleRegion) {
   const auto uu = linspace(-1.2, 1.2, 5);
   const auto vv = linspace(-1.2, 1.2, 5);
   const auto cube = run_beamformer<double>(
-      rd, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("az_angles") = uu, holoscan::Arg("el_angles") = vv);
+      rd, make_params(geom, conv, uu, vv));
 
   // Corner (u,v)=(-1.2,-1.2): u^2+v^2 > 1 -> invisible -> zero weight -> zero.
   EXPECT_NEAR(cube_power<double>(cube, 0, 0, 0, 0, 5, 1, 1), 0.0, 1e-9);
@@ -279,10 +311,7 @@ TEST(PhaseShiftBeamformerOpTest, ArrayTaperLowersSidelobes) {
   const auto peak_and_sidelobe = [&](const WindowSpec& taper) {
     auto rd = vector_to_rd_maps<double>(vec, {kN, 1, 1});
     const auto cube = run_beamformer<double>(
-        rd, holoscan::Arg("array_geometry") = geom,
-        holoscan::Arg("angle_convention") = conv,
-        holoscan::Arg("az_angles") = az, holoscan::Arg("el_angles") = el,
-        holoscan::Arg("array_taper") = taper);
+        rd, make_params(geom, conv, az, el, taper));
     double peak = 0.0;
     double sidelobe = 0.0;
     for (int64_t ia = 0; ia < 201; ++ia) {
@@ -338,10 +367,7 @@ TEST(PhaseShiftBeamformerOpTest, PreservesRangeDopplerPlanePerCell) {
 
   const auto az = linspace(-0.4, 0.4, 81);
   const auto cube = run_beamformer<double>(
-      rd, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("az_angles") = az,
-      holoscan::Arg("el_angles") = std::vector<double>{0.0});
+      rd, make_params(geom, conv, az, std::vector<double>{0.0}));
 
   ASSERT_EQ(cube.shape, (std::vector<int64_t>{81, 1, kD, kR}));
   const auto [ia0, ie0] = peak_beam_at<double>(cube, 81, 1, kD, kR, 0, 0);
@@ -376,10 +402,7 @@ TEST(PhaseShiftBeamformerOpTest, BatchLeadingDimsRecoverIndependentDoa) {
 
   const auto az = linspace(-0.4, 0.4, 81);
   const auto cube = run_beamformer<double>(
-      rd, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("az_angles") = az,
-      holoscan::Arg("el_angles") = std::vector<double>{0.0});
+      rd, make_params(geom, conv, az, std::vector<double>{0.0}));
 
   ASSERT_EQ(cube.shape, (std::vector<int64_t>{kBatch, 81, 1, 1, 1}));
   // Peak beam per batch slice (each slice is 81*1*1*1 elements).
@@ -413,21 +436,63 @@ TEST(PhaseShiftBeamformerOpTest, FloatDoubleAgreeOnPeakBeam) {
 
   auto rd_f = vector_to_rd_maps<float>(vec, {kN, 1, 1});
   auto rd_d = vector_to_rd_maps<double>(vec, {kN, 1, 1});
-  const auto cube_f = run_beamformer<float>(
-      rd_f, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("az_angles") = az,
-      holoscan::Arg("el_angles") = std::vector<double>{0.0});
-  const auto cube_d = run_beamformer<double>(
-      rd_d, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("az_angles") = az,
-      holoscan::Arg("el_angles") = std::vector<double>{0.0});
+  const auto params =
+      make_params(geom, conv, az, std::vector<double>{0.0});
+  const auto cube_f = run_beamformer<float>(rd_f, params);
+  const auto cube_d = run_beamformer<double>(rd_d, params);
 
   const auto [ia_f, ie_f] = peak_beam_at<float>(cube_f, 61, 1, 1, 1, 0, 0);
   const auto [ia_d, ie_d] = peak_beam_at<double>(cube_d, 61, 1, 1, 1, 0, 0);
   EXPECT_EQ(ia_f, ia_d);
   EXPECT_EQ(ie_f, ie_d);
+}
+
+TEST(PhaseShiftBeamformerOpTest, ScanGridConfigurableFromParams) {
+  // Authoring Params (set_params) must configure az/el grid sizes.
+  constexpr int64_t kN = 4;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto vec = make_steering_vector(geom, conv, 0.0, 0.0);
+  auto rd = vector_to_rd_maps<double>(vec, {kN, 1, 1});
+  const auto cube = run_beamformer<double>(
+      rd, make_params(geom, conv, linspace(-0.1, 0.1, 7),
+                      std::vector<double>{0.0, 0.05}));
+  ASSERT_EQ(cube.shape, (std::vector<int64_t>{7, 2, 1, 1}));
+}
+
+TEST(PhaseShiftBeamformerOpTest, ArrayTaperConfigurableFromParams) {
+  constexpr int64_t kN = 8;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto vec = make_steering_vector(geom, conv, 0.0, 0.0);
+  const auto az = linspace(-1.0, 1.0, 201);
+  WindowSpec hann;
+  hann.type = WindowType::kHann;
+  auto rd_rect = vector_to_rd_maps<double>(vec, {kN, 1, 1});
+  auto rd_hann = vector_to_rd_maps<double>(vec, {kN, 1, 1});
+  const auto rect = run_beamformer<double>(
+      rd_rect, make_params(geom, conv, az, std::vector<double>{0.0}));
+  const auto tapered = run_beamformer<double>(
+      rd_hann,
+      make_params(geom, conv, az, std::vector<double>{0.0}, hann));
+  const auto sidelobe_ratio = [](const HostTensor& cube,
+                                 const std::vector<double>& grid) {
+    double peak = 0.0;
+    double sidelobe = 0.0;
+    const auto* data = cube.as<std::complex<double>>();
+    for (int64_t ia = 0; ia < 201; ++ia) {
+      const auto v = data[static_cast<size_t>(ia)];
+      const double p = v.real() * v.real() + v.imag() * v.imag();
+      peak = std::max(peak, p);
+      if (std::abs(grid[static_cast<size_t>(ia)]) > 0.65) {
+        sidelobe = std::max(sidelobe, p);
+      }
+    }
+    return sidelobe / peak;
+  };
+  EXPECT_LT(sidelobe_ratio(tapered, az), sidelobe_ratio(rect, az));
 }
 
 TEST(PhaseShiftBeamformerOpTest, RejectsRankTooLow) {
@@ -437,14 +502,12 @@ TEST(PhaseShiftBeamformerOpTest, RejectsRankTooLow) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   std::vector<std::complex<double>> host(static_cast<size_t>(kN), {1.0, 0.0});
   auto rd = to_device_tensor(host, {kN, 1}, complex_dtype<double>());
-  EXPECT_THROW(
-      run_beamformer<double>(rd, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv,
-                             holoscan::Arg("az_angles") =
-                                 std::vector<double>{0.0},
-                             holoscan::Arg("el_angles") =
-                                 std::vector<double>{0.0}),
-      std::invalid_argument);
+  const GraphRunResult result = run_beamformer_result<double>(
+      rd, make_params(geom, conv, std::vector<double>{0.0},
+                      std::vector<double>{0.0}));
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, RejectsChannelMismatch) {
@@ -455,14 +518,12 @@ TEST(PhaseShiftBeamformerOpTest, RejectsChannelMismatch) {
   std::vector<std::complex<double>> host(static_cast<size_t>(kN - 1),
                                          {1.0, 0.0});
   auto rd = to_device_tensor(host, {kN - 1, 1, 1}, complex_dtype<double>());
-  EXPECT_THROW(
-      run_beamformer<double>(rd, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv,
-                             holoscan::Arg("az_angles") =
-                                 std::vector<double>{0.0},
-                             holoscan::Arg("el_angles") =
-                                 std::vector<double>{0.0}),
-      std::invalid_argument);
+  const GraphRunResult result = run_beamformer_result<double>(
+      rd, make_params(geom, conv, std::vector<double>{0.0},
+                      std::vector<double>{0.0}));
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, RejectsEmptyScanGrid) {
@@ -472,14 +533,12 @@ TEST(PhaseShiftBeamformerOpTest, RejectsEmptyScanGrid) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   std::vector<std::complex<double>> host(static_cast<size_t>(kN), {1.0, 0.0});
   auto rd = to_device_tensor(host, {kN, 1, 1}, complex_dtype<double>());
-  EXPECT_THROW(
-      run_beamformer<double>(rd, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv,
-                             holoscan::Arg("az_angles") =
-                                 std::vector<double>{},
-                             holoscan::Arg("el_angles") =
-                                 std::vector<double>{0.0}),
-      std::invalid_argument);
+  const GraphRunResult result = run_beamformer_result<double>(
+      rd, make_params(geom, conv, std::vector<double>{},
+                      std::vector<double>{0.0}));
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, RejectsDtypeMismatch) {
@@ -489,253 +548,47 @@ TEST(PhaseShiftBeamformerOpTest, RejectsDtypeMismatch) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto vec = make_steering_vector(geom, conv, 0.0, 0.0);
   auto rd_f = vector_to_rd_maps<float>(vec, {kN, 1, 1});
-  EXPECT_THROW(
-      run_beamformer<double>(rd_f, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv,
-                             holoscan::Arg("az_angles") =
-                                 std::vector<double>{0.0},
-                             holoscan::Arg("el_angles") =
-                                 std::vector<double>{0.0}),
-      std::invalid_argument);
+  const GraphRunResult result = run_beamformer_result<double>(
+      rd_f, make_params(geom, conv, std::vector<double>{0.0},
+                        std::vector<double>{0.0}));
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, RejectsPageableHostInput) {
-  constexpr int64_t kN = 4;
-  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  AngleConvention conv;
-  conv.preset = AngleConventionPreset::kRadarBoresight;
-  std::vector<std::complex<double>> host(static_cast<size_t>(kN), {1.0, 0.0});
-  auto rd_cpu =
-      to_pageable_host_tensor(host, {kN, 1, 1}, complex_dtype<double>());
-  EXPECT_THROW(
-      run_beamformer<double>(rd_cpu, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv,
-                             holoscan::Arg("az_angles") =
-                                 std::vector<double>{0.0},
-                             holoscan::Arg("el_angles") =
-                                 std::vector<double>{0.0}),
-      std::invalid_argument);
+  // [EA HSDK5 ONLY] Graph harness TensorSourceOp always allocates a device
+  // loan and memcpy's into it (bind_tensor_output_device), so the operator
+  // never observes a pageable-host Tensor. require_cuda_accessible remains
+  // in compute(); restore a direct-injection check if the harness gains a
+  // host-producer path.
+  GTEST_SKIP() << "HSDK 5 EA: pageable-host rejection not exercisable via "
+                  "device-bound Graph harness";
 }
 
-// ---- [live] sticky overrides -------------------------------------------
-
-class AzGridOverrideApp : public holoscan::Application {
- public:
-  std::vector<holoscan::TensorMap> rd_frames;
-  std::vector<std::vector<double>> az_overrides;
-  TensorMapCapture* cube = nullptr;
-  ArrayGeometry geometry;
-  AngleConvention convention;
-  std::vector<double> el_grid;
-
-  void compose() override {
-    using holoscan::Arg;
-    auto op = make_operator<PhaseShiftBeamformerOp<double>>(
-        "beamformer", Arg("array_geometry") = geometry,
-        Arg("angle_convention") = convention,
-        Arg("az_angles") = az_overrides.front(), Arg("el_angles") = el_grid);
-    holoscan::radar::testing::wire_data_source(this, op, "rd_maps", rd_frames);
-    holoscan::radar::testing::wire_leading_override(this, op, "az_angles",
-                                                    az_overrides);
-    holoscan::radar::testing::wire_capture_sink(this, op, "rda_cube", cube);
-  }
-};
+// ---- [live] sticky overrides (Graph harness deferred) --------------------
 
 TEST(PhaseShiftBeamformerOpTest, LiveAzGridStickyOverride) {
-  constexpr int64_t kN = 4;
-  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  AngleConvention conv;
-  conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto vec = make_steering_vector(geom, conv, 0.05, 0.0);
-  auto rd = vector_to_rd_maps<double>(vec, {kN, 1, 1});
-
-  AzGridOverrideApp app;
-  app.geometry = geom;
-  app.convention = conv;
-  app.el_grid = {0.0};
-  app.rd_frames = {single_map(rd, "rd_maps"), single_map(rd, "rd_maps")};
-  app.az_overrides = {std::vector<double>{-0.1, 0.0, 0.1},
-                      linspace(-0.2, 0.2, 11)};
-
-  TensorMapCapture cube_cap;
-  app.cube = &cube_cap;
-  app.run();
-
-  ASSERT_EQ(cube_cap.frames.size(), 2u);
-  EXPECT_EQ(cube_cap.frames[0].shape, (std::vector<int64_t>{3, 1, 1, 1}));
-  EXPECT_EQ(cube_cap.frames[1].shape, (std::vector<int64_t>{11, 1, 1, 1}));
+  // [EA HSDK5 ONLY] See docs/planning/HSDK5_PORT.md §1 / §9 — live az_angles
+  // is unbounded std::vector (not PublishedPayload); Params authoring covers
+  // grid selection (ScanGridConfigurableFromParams).
+  GTEST_SKIP() << "HSDK 5 EA: live az_angles override deferred "
+                  "(HSDK5_PORT.md §1 / §9)";
 }
-
-class ElGridOverrideApp : public holoscan::Application {
- public:
-  std::vector<holoscan::TensorMap> rd_frames;
-  std::vector<std::vector<double>> el_overrides;
-  TensorMapCapture* cube = nullptr;
-  ArrayGeometry geometry;
-  AngleConvention convention;
-  std::vector<double> az_grid;
-
-  void compose() override {
-    using holoscan::Arg;
-    auto op = make_operator<PhaseShiftBeamformerOp<double>>(
-        "beamformer", Arg("array_geometry") = geometry,
-        Arg("angle_convention") = convention, Arg("az_angles") = az_grid,
-        Arg("el_angles") = el_overrides.front());
-    holoscan::radar::testing::wire_data_source(this, op, "rd_maps", rd_frames);
-    holoscan::radar::testing::wire_leading_override(this, op, "el_angles",
-                                                    el_overrides);
-    holoscan::radar::testing::wire_capture_sink(this, op, "rda_cube", cube);
-  }
-};
 
 TEST(PhaseShiftBeamformerOpTest, LiveElGridStickyOverride) {
-  constexpr int64_t kNy = 4;
-  constexpr int64_t kNz = 4;
-  const auto geom = make_planar_ura_geometry(kNy, kNz, 0.5, 1.0);
-  AngleConvention conv;
-  conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto vec = make_steering_vector(geom, conv, 0.1, 0.05);
-  auto rd = vector_to_rd_maps<double>(vec, {geom.num_elements(), 1, 1});
-
-  ElGridOverrideApp app;
-  app.geometry = geom;
-  app.convention = conv;
-  app.az_grid = linspace(-0.3, 0.3, 31);
-  app.el_overrides = {std::vector<double>{0.0}, linspace(-0.2, 0.2, 11)};
-  app.rd_frames = {single_map(rd, "rd_maps"), single_map(rd, "rd_maps")};
-
-  TensorMapCapture cube_cap;
-  app.cube = &cube_cap;
-  app.run();
-
-  ASSERT_EQ(cube_cap.frames.size(), 2u);
-  EXPECT_EQ(cube_cap.frames[0].shape, (std::vector<int64_t>{31, 1, 1, 1}));
-  EXPECT_EQ(cube_cap.frames[1].shape, (std::vector<int64_t>{31, 11, 1, 1}));
+  GTEST_SKIP() << "HSDK 5 EA: live el_angles override deferred "
+                  "(HSDK5_PORT.md §1 / §9)";
 }
-
-class ArrayGeometryOverrideApp : public holoscan::Application {
- public:
-  std::vector<holoscan::TensorMap> rd_frames;
-  std::vector<ArrayGeometry> geometry_overrides;
-  TensorMapCapture* cube = nullptr;
-  AngleConvention convention;
-  std::vector<double> az_grid;
-  std::vector<double> el_grid;
-
-  void compose() override {
-    using holoscan::Arg;
-    auto op = make_operator<PhaseShiftBeamformerOp<double>>(
-        "beamformer", Arg("array_geometry") = geometry_overrides.front(),
-        Arg("angle_convention") = convention, Arg("az_angles") = az_grid,
-        Arg("el_angles") = el_grid);
-    holoscan::radar::testing::wire_data_source(this, op, "rd_maps", rd_frames);
-    holoscan::radar::testing::wire_leading_override(this, op, "array_geometry",
-                                                    geometry_overrides);
-    holoscan::radar::testing::wire_capture_sink(this, op, "rda_cube", cube);
-  }
-};
 
 TEST(PhaseShiftBeamformerOpTest, LiveArrayGeometryStickyOverride) {
-  constexpr int64_t kN = 4;
-  const auto geom_a = make_ula_geometry(kN, 0.5, 1.0);
-  auto geom_b = make_ula_geometry(kN, 0.5, 1.0);
-  geom_b.wavelength = 0.8;
-  AngleConvention conv;
-  conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto vec = make_steering_vector(geom_a, conv, 0.05, 0.0);
-  auto rd = vector_to_rd_maps<double>(vec, {kN, 1, 1});
-
-  ArrayGeometryOverrideApp app;
-  app.convention = conv;
-  app.az_grid = linspace(-0.2, 0.2, 11);
-  app.el_grid = {0.0};
-  app.geometry_overrides = {geom_a, geom_b};
-  app.rd_frames = {single_map(rd, "rd_maps"), single_map(rd, "rd_maps")};
-
-  TensorMapCapture cube_cap;
-  app.cube = &cube_cap;
-  app.run();
-
-  ASSERT_EQ(cube_cap.frames.size(), 2u);
-  EXPECT_EQ(cube_cap.frames[0].shape, cube_cap.frames[1].shape);
-  // A changed wavelength rebuilds the steering weights -> a different cube.
-  const auto* a = cube_cap.frames[0].as<std::complex<double>>();
-  const auto* b = cube_cap.frames[1].as<std::complex<double>>();
-  double max_abs_diff = 0.0;
-  for (int64_t i = 0; i < cube_cap.frames[0].size(); ++i) {
-    max_abs_diff = std::max(max_abs_diff,
-                            std::abs(a[static_cast<size_t>(i)] -
-                                     b[static_cast<size_t>(i)]));
-  }
-  EXPECT_GT(max_abs_diff, 1e-6);
+  GTEST_SKIP() << "HSDK 5 EA: live array_geometry override deferred "
+                  "(HSDK5_PORT.md §1 / §9)";
 }
 
-class ArrayTaperOverrideApp : public holoscan::Application {
- public:
-  std::vector<holoscan::TensorMap> rd_frames;
-  std::vector<WindowSpec> taper_overrides;
-  TensorMapCapture* cube = nullptr;
-  ArrayGeometry geometry;
-  AngleConvention convention;
-  std::vector<double> az_grid;
-  std::vector<double> el_grid;
-
-  void compose() override {
-    using holoscan::Arg;
-    auto op = make_operator<PhaseShiftBeamformerOp<double>>(
-        "beamformer", Arg("array_geometry") = geometry,
-        Arg("angle_convention") = convention, Arg("az_angles") = az_grid,
-        Arg("el_angles") = el_grid,
-        Arg("array_taper") = taper_overrides.front());
-    holoscan::radar::testing::wire_data_source(this, op, "rd_maps", rd_frames);
-    holoscan::radar::testing::wire_leading_override(this, op, "array_taper",
-                                                    taper_overrides);
-    holoscan::radar::testing::wire_capture_sink(this, op, "rda_cube", cube);
-  }
-};
-
 TEST(PhaseShiftBeamformerOpTest, LiveArrayTaperStickyOverride) {
-  constexpr int64_t kN = 8;
-  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  AngleConvention conv;
-  conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto vec = make_steering_vector(geom, conv, 0.0, 0.0);
-  auto rd = vector_to_rd_maps<double>(vec, {kN, 1, 1});
-
-  WindowSpec hann;
-  hann.type = WindowType::kHann;
-
-  ArrayTaperOverrideApp app;
-  app.geometry = geom;
-  app.convention = conv;
-  app.az_grid = linspace(-1.0, 1.0, 201);
-  app.el_grid = {0.0};
-  app.taper_overrides = {WindowSpec{}, hann};
-  app.rd_frames = {single_map(rd, "rd_maps"), single_map(rd, "rd_maps")};
-
-  TensorMapCapture cube_cap;
-  app.cube = &cube_cap;
-  app.run();
-
-  ASSERT_EQ(cube_cap.frames.size(), 2u);
-  const auto sidelobe_ratio = [](const HostTensor& cube,
-                                 const std::vector<double>& az) {
-    double peak = 0.0;
-    double sidelobe = 0.0;
-    const auto* data = cube.as<std::complex<double>>();
-    for (int64_t ia = 0; ia < 201; ++ia) {
-      const auto v = data[static_cast<size_t>(ia)];
-      const double p = v.real() * v.real() + v.imag() * v.imag();
-      peak = std::max(peak, p);
-      if (std::abs(az[static_cast<size_t>(ia)]) > 0.65) {
-        sidelobe = std::max(sidelobe, p);
-      }
-    }
-    return sidelobe / peak;
-  };
-  const double rect_ratio = sidelobe_ratio(cube_cap.frames[0], app.az_grid);
-  const double hann_ratio = sidelobe_ratio(cube_cap.frames[1], app.az_grid);
-  EXPECT_LT(hann_ratio, rect_ratio);
+  GTEST_SKIP() << "HSDK 5 EA: live array_taper override deferred "
+                  "(HSDK5_PORT.md §1 / §9)";
 }
 
 }  // namespace

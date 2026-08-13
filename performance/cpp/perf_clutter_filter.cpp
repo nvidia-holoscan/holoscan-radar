@@ -4,24 +4,44 @@
 // Performance characterization for ClutterFilterOp — slow-time static-clutter
 // suppression (mean subtraction / 1st- / 2nd-order delay-line MTI). Sweeps the
 // (chirps x range_bins) size ladder, the suppression method, and a
-// multi-channel batch. Every compute run inlines a mid-session [live] method
-// override so the method-switch cost (and output chirp-count change) is
-// measured. Measurement tool only: no timing assertions. See
-// docs/planning/OPERATOR_DEVELOPMENT.md.
+// multi-channel batch.
+//
+// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
+// Mid-session [live] method override measurement is deferred until
+// docs/planning/HSDK5_PORT.md §1 (EA partition / device binding). Params
+// still select the method under test. Measurement tool only: no timing
+// assertions. See docs/planning/OPERATOR_DEVELOPMENT.md.
 
 #include <cuda_runtime_api.h>
 
+#include <chrono>
 #include <complex>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
+#include <holoscan/core/compile.hpp>
+#include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/expected.hpp>
+#include <holoscan/core/graph.hpp>
+#include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
+#include <holoscan/core/payload_options.hpp>
+#include <holoscan/core/run.hpp>
+#include <holoscan/core/temporal_contract.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/time/realtime_clock.hpp>
 
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
@@ -31,8 +51,6 @@
 #include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
-#include "utils/perf_sink.hpp"
-#include "utils/perf_source.hpp"
 #include "utils/tensor_factory.hpp"
 
 namespace hr = holoscan::radar;
@@ -41,6 +59,9 @@ namespace perf = holoscan::radar::perf;
 namespace {
 
 using PerfPrecision = float;  // v1 characterizes single precision (complex64).
+
+inline constexpr std::chrono::nanoseconds kPerfTick =
+    std::chrono::milliseconds{1};
 
 struct SizeSpec {
   std::string id;
@@ -86,7 +107,6 @@ const SizeSpec& must_find_size(const std::string& id) {
   return *s;
 }
 
-// Short tags so the report's variant column (width 6) stays aligned.
 std::string method_tag(hr::ClutterFilterMethod m) {
   switch (m) {
     case hr::ClutterFilterMethod::kMeanSubtraction: return "msub";
@@ -97,14 +117,6 @@ std::string method_tag(hr::ClutterFilterMethod m) {
   return "unk";
 }
 
-// Flip to a different valid method so a live override always changes the kernel
-// path (and the output chirp count). kNone is invalid for this operator.
-hr::ClutterFilterMethod flip_method(hr::ClutterFilterMethod m) {
-  return m == hr::ClutterFilterMethod::kMeanSubtraction
-             ? hr::ClutterFilterMethod::kSingleDelay
-             : hr::ClutterFilterMethod::kMeanSubtraction;
-}
-
 std::vector<int64_t> profiles_shape(const ClutterScenario& scen) {
   if (scen.channels > 1) {
     return {scen.channels, scen.num_chirps, scen.num_range_bins};
@@ -113,41 +125,205 @@ std::vector<int64_t> profiles_shape(const ClutterScenario& scen) {
 }
 
 // ---------------------------------------------------------------------------
-// Mini-application: range_profiles source -> clutter op -> terminal sink +
-// a [live] method override source.
+// Graph source / terminal sink with TimingCollector hooks.
 // ---------------------------------------------------------------------------
-template <typename T>
-class ClutterPerfApp : public holoscan::Application {
- public:
-  const ClutterScenario* scen{nullptr};
-  perf::TimingCollector* collector{nullptr};
-  holoscan::TensorMap frame;  // range_profiles
-  hr::ClutterFilterMethod override_method{
-      hr::ClutterFilterMethod::kSingleDelay};
-  int64_t override_at{0};
-  int total_frames{25};
-
-  void compose() override {
-    using holoscan::Arg;
-    auto op = make_operator<hr::ClutterFilterOp<T>>(
-        "clutter", Arg("method") = scen->method);
-
-    auto src = make_operator<perf::PerfTensorSourceOp<perf::RangeProfilesPort>>(
-        "src", make_condition<holoscan::CountCondition>(total_frames));
-    src->configure(collector, frame);
-    add_flow(src, op, {{"range_profiles", "range_profiles"}});
-
-    auto term = make_operator<perf::PerfTerminalSinkOp>("out_sink");
-    term->configure(collector);
-    add_flow(op, term, {{"range_profiles", "input"}});
-
-    auto ovr =
-        make_operator<perf::PerfOverrideSourceOp<hr::ClutterFilterMethod>>(
-            "ovr", make_condition<holoscan::CountCondition>(total_frames));
-    ovr->configure(override_at, override_method);
-    add_flow(ovr, op, {{"output", "method"}});
+struct PerfFrameBank {
+  static void reset(std::shared_ptr<holoscan::Tensor> frame, int count,
+                    perf::TimingCollector* collector) {
+    const std::lock_guard lock(mutex);
+    input_frame = std::move(frame);
+    frames_remaining = count;
+    captured = 0;
+    collector_ = collector;
   }
+
+  static inline std::mutex mutex;
+  static inline std::condition_variable ready;
+  static inline std::shared_ptr<holoscan::Tensor> input_frame;
+  static inline int frames_remaining{0};
+  static inline int captured{0};
+  static inline perf::TimingCollector* collector_{nullptr};
 };
+
+class PerfTensorSourceOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorPortLayout kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice,
+        .dtype = std::nullopt,
+        .rank = std::nullopt,
+    };
+    spec.output(out, "out")
+        .produces_tensor(kDevice)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL});
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{.period = kPerfTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    std::shared_ptr<holoscan::Tensor> frame;
+    {
+      const std::lock_guard lock(PerfFrameBank::mutex);
+      if (PerfFrameBank::frames_remaining <= 0 ||
+          PerfFrameBank::input_frame == nullptr) {
+        return {};
+      }
+      --PerfFrameBank::frames_remaining;
+      frame = PerfFrameBank::input_frame;
+      if (PerfFrameBank::collector_ != nullptr) {
+        if (!PerfFrameBank::collector_->first_tick_set) {
+          PerfFrameBank::collector_->t_first_tick = perf::Clock::now();
+          PerfFrameBank::collector_->first_tick_set = true;
+        }
+        PerfFrameBank::collector_->starts.push_back(perf::Clock::now());
+      }
+    }
+
+    const auto shape = frame->shape();
+    const DLDataType dtype = frame->dtype();
+    auto loan = out.allocate_tensor(
+        holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
+    if (!loan) {
+      return holoscan::make_unexpected(std::move(loan).error());
+    }
+    auto writer = loan->write(context.cuda_stream());
+    if (!writer) {
+      return holoscan::make_unexpected(std::move(writer).error());
+    }
+    cudaStream_t stream = context.cuda_stream().get();
+    if (cudaMemcpyAsync(writer->data(), frame->data(), writer->byte_size(),
+                        cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
+      return holoscan::make_unexpected(
+          holoscan::Error{holoscan::ErrorCode::kFailure,
+                          "PerfTensorSourceOp: cudaMemcpyAsync failed"});
+    }
+    auto committed = std::move(*writer).commit();
+    if (!committed) {
+      return holoscan::make_unexpected(std::move(committed).error());
+    }
+    return out.emit(
+        std::move(*loan),
+        holoscan::EmitOptions{.capture_time = context.activation_time()});
+  }
+
+  holoscan::Output<holoscan::Tensor> out{"out"};
+};
+
+class PerfTerminalSinkOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input(in, "in").queue_depth(8U);
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnEach{in});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext&) override {
+    auto sample = in.receive_data();
+    if (!sample) {
+      return holoscan::make_unexpected(std::move(sample).error());
+    }
+    // Include all GPU work the operator enqueued for this frame.
+    cudaDeviceSynchronize();
+    {
+      const std::lock_guard lock(PerfFrameBank::mutex);
+      if (PerfFrameBank::collector_ != nullptr) {
+        PerfFrameBank::collector_->ends.push_back(perf::Clock::now());
+      }
+      ++PerfFrameBank::captured;
+    }
+    PerfFrameBank::ready.notify_all();
+    return {};
+  }
+
+  holoscan::Input<holoscan::Tensor> in{"in"};
+};
+
+void bind_device_pools(holoscan::CompileOptions& options) {
+  options.deployment.bind_tensor_output_device(
+      holoscan::TensorOutputDevicePlacement{
+          .operator_path = "src",
+          .output_port = "out",
+          .device = holoscan::DeviceId{0},
+      });
+  options.deployment.bind_tensor_output_device(
+      holoscan::TensorOutputDevicePlacement{
+          .operator_path = "clutter",
+          .output_port = "range_profiles_out",
+          .device = holoscan::DeviceId{0},
+      });
+}
+
+perf::TimingCollector run_clutter_graph(
+    const ClutterScenario& scen, int total_frames) {
+  using namespace std::chrono_literals;
+  perf::TimingCollector collector;
+  collector.t_construct = perf::Clock::now();
+
+  auto cube =
+      perf::make_iq_cube_device<PerfPrecision>(profiles_shape(scen));
+  PerfFrameBank::reset(std::move(cube), total_frames, &collector);
+
+  holoscan::Graph graph{"clutter-perf"};
+  const auto src = graph.op<PerfTensorSourceOp>("src");
+  auto op = graph.op<hr::ClutterFilterOp<PerfPrecision>>("clutter");
+  hr::ClutterFilterParams params;
+  params.method = scen.method;
+  op.set_params(std::move(params));
+  const auto sink = graph.op<PerfTerminalSinkOp>("out_sink");
+  graph.add_flow(src->out, op->range_profiles,
+                 holoscan::ConnectionOptions{.queue_depth = 4U});
+  graph.add_flow(op->range_profiles_out, sink->in,
+                 holoscan::ConnectionOptions{.queue_depth = 4U});
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  bind_device_pools(options);
+  const holoscan::ExecutionPlan plan =
+      holoscan::compile(graph, std::move(options));
+  if (!plan.ok()) {
+    throw std::runtime_error(
+        std::string("clutter perf compile failed: ") +
+        std::string(plan.json()));
+  }
+
+  holoscan::RunSession session = holoscan::run_async(plan);
+  {
+    const auto deadline = std::chrono::steady_clock::now() + 60s;
+    std::unique_lock lock(PerfFrameBank::mutex);
+    while (PerfFrameBank::captured < total_frames &&
+           session.diagnostics().empty() &&
+           std::chrono::steady_clock::now() < deadline) {
+      PerfFrameBank::ready.wait_for(lock, 25ms);
+    }
+  }
+  session.request_stop();
+  session.wait();
+  if (!session.diagnostics().empty()) {
+    std::string msg = "clutter perf run diagnostics:";
+    for (const auto& d : session.diagnostics()) {
+      msg += " ";
+      msg += std::string(d.token);
+    }
+    throw std::runtime_error(msg);
+  }
+  if (collector.ends.size() < static_cast<size_t>(total_frames)) {
+    throw std::runtime_error(
+        "clutter perf: expected " + std::to_string(total_frames) +
+        " frames, got " + std::to_string(collector.ends.size()));
+  }
+  return collector;
+}
 
 void fill_throughput(perf::ResultRow* row, const ClutterScenario& scen,
                      double median_ms) {
@@ -158,13 +334,11 @@ void fill_throughput(perf::ResultRow* row, const ClutterScenario& scen,
   const double batch = static_cast<double>(scen.channels);
   const double chirps = static_cast<double>(scen.num_chirps);
   const double bins = static_cast<double>(scen.num_range_bins);
-  row->cells_per_second = batch * chirps * bins / sec;  // complex cells/s
-  row->slices_per_second = batch * bins / sec;  // slow-time columns/s
+  row->cells_per_second = batch * chirps * bins / sec;
+  row->slices_per_second = batch * bins / sec;
 
   const double csz = sizeof(std::complex<PerfPrecision>);
-  // Output chirp count varies by method (msub: N, sdel: N-1, ddel: N-2); use N
-  // for a stable order-of-magnitude bandwidth estimate.
-  const double bytes = 2.0 * batch * chirps * bins * csz;  // in + out
+  const double bytes = 2.0 * batch * chirps * bins * csz;
   row->estimated_effective_gbps = bytes / sec / 1e9;
 }
 
@@ -178,7 +352,8 @@ perf::ResultRow base_row(const ClutterScenario& scen) {
   row.input_shape = profiles_shape(scen);
   row.out_batch = scen.channels;
   row.k = scen.num_chirps;
-  row.notes = "live_override=method";
+  // [EA HSDK5 ONLY] live override timing deferred — HSDK5_PORT.md §1.
+  row.notes = "live_override=deferred_ea";
   return row;
 }
 
@@ -200,17 +375,12 @@ ClutterScenario make_scenario(hr::ClutterFilterMethod method, const SizeSpec& s,
   return sc;
 }
 
-// ---------------------------------------------------------------------------
-// Traits. ClutterFilterOp has a [live] method override exercised inline in
-// run_scenario; no waveform, no optional outputs, no process warmup or post-run
-// summary, and no bool tensors — so it takes the driver defaults.
-// ---------------------------------------------------------------------------
 struct ClutterTraits : perf::PerfDriverDefaults {
   using Scenario = ClutterScenario;
 
   static const char* tool_name() { return "perf_clutter_filter"; }
   static const char* tool_description() {
-    return "ClutterFilterOp performance characterization";
+    return "ClutterFilterOp performance characterization (HSDK 5 Graph)";
   }
   static const char* sizes_all_help() {
     return "Mean-subtraction size sweep across the full ladder";
@@ -219,7 +389,8 @@ struct ClutterTraits : perf::PerfDriverDefaults {
     return "Mean-subtraction size sweep across an explicit subset";
   }
   static const char* full_help() {
-    return "Full matrix (methods x sizes x channel batch)";
+    return "Full matrix (methods x sizes x channel batch); live-override "
+           "timing deferred on HSDK 5 EA (HSDK5_PORT.md §1)";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -287,25 +458,11 @@ struct ClutterTraits : perf::PerfDriverDefaults {
   static void run_scenario(const ClutterScenario& scen,
                            const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    // No mid-session live override until HSDK5_PORT.md §1 is closed.
+    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
     const auto samples = perf::collect_scenario_samples(
         rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
-          perf::TimingCollector collector;
-          auto cube = perf::single_map(
-              perf::make_iq_cube_device<PerfPrecision>(profiles_shape(scen)),
-              "range_profiles");
-
-          collector.t_construct = perf::Clock::now();
-          auto app =
-              holoscan::make_application<ClutterPerfApp<PerfPrecision>>();
-          app->scen = &scen;
-          app->collector = &collector;
-          app->frame = std::move(cube);
-          app->override_method = flip_method(scen.method);
-          app->override_at = p.override_at;
-          app->total_frames = p.total_frames;
-          app->run();
-          return collector;
+          return run_clutter_graph(scen, p.total_frames);
         });
 
     perf::append_setup_row(base_row(scen), samples, report);
@@ -314,15 +471,12 @@ struct ClutterTraits : perf::PerfDriverDefaults {
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
     row.notes =
-        "cold_ms is first-frame latency; median/p90 are pre-override steady "
-        "state; override_ms is peak latency over the 3-frame live method "
-        "switch (changes the kernel path and output chirp count); cells/s is "
-        "complex cells/s";
+        "cold_ms is first-frame latency; median/p90 are post-warmup steady "
+        "state; live method-override timing deferred (HSDK5_PORT.md §1); "
+        "cells/s is complex cells/s";
     report->results.push_back(row);
   }
 
-  // Pay CUDA + Holoscan first-Application costs on a discarded xs run so
-  // scenario #1 cold_ms is not inflated by process init.
   static void process_warmup(const perf::RunSettings&) {
     perf::run_process_warmup([] {
       perf::PerfReport discarded;

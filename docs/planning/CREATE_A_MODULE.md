@@ -106,7 +106,7 @@ Please install the appropriate dependencies before continuing.
 ### Local Approach
 
 - **Holoscan SDK >= 4.2.0**
-- **CMake >= 3.24** and a C++17-capable toolchain (GCC recommended).
+- **CMake >= 3.24** and a C++20-capable toolchain (GCC recommended).
 - **For C++ modules:** `pybind11-dev`, `libgtest-dev`, `clang-format`.
 
 ## 3. Create an External Module
