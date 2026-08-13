@@ -19,7 +19,6 @@
 #include "fmcw/fmcw_range_processor_op/range_stage.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
-#include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -114,6 +113,7 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
 
   try {
     require_cuda_accessible(input, "adc_cube", kOpName);
+    require_contiguous(input, "adc_cube", kOpName);
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
