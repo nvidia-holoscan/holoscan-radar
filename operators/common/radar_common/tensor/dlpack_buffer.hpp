@@ -15,8 +15,6 @@
 #include <holoscan/core/domain/dlpack.hpp>
 #include <holoscan/core/domain/tensor.hpp>
 
-#include "radar_common/tensor/tensor_utils.hpp"
-
 namespace holoscan::radar {
 
 namespace detail {

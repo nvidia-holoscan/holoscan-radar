@@ -191,12 +191,22 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
   const std::vector<int64_t> spec_shape = {num_items, num_az, num_el};
 
   if (num_items == 0) {
-    HOLOSCAN_TRY(emit_device_tensor(
-        aoa_estimates, context, aoa_shape, out_dtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
-    HOLOSCAN_TRY(emit_device_tensor(
-        angle_spectrum, context, spec_shape, out_dtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
+    HOLOSCAN_TRY(auto aoa_loan,
+                 prepare_device_tensor(
+                     aoa_estimates, context, aoa_shape, out_dtype,
+                     [](void*, std::size_t) -> expected<void, Error> {
+                       return {};
+                     }));
+    HOLOSCAN_TRY(auto spec_loan,
+                 prepare_device_tensor(
+                     angle_spectrum, context, spec_shape, out_dtype,
+                     [](void*, std::size_t) -> expected<void, Error> {
+                       return {};
+                     }));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(aoa_estimates, context, std::move(aoa_loan)));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(angle_spectrum, context, std::move(spec_loan)));
     retained_snapshot_ = std::move(snap);
     if (maybe_valid.has_value()) {
       retained_is_valid_ = std::move(*maybe_valid);

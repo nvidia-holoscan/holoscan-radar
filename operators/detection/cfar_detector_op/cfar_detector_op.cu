@@ -121,12 +121,11 @@ expected<void, Error> require_pair(const std::vector<int64_t>& v,
   return {};
 }
 
-expected<void, Error> emit_copy_device(Output<Tensor>& port,
-                                       ExecutionContext& context,
-                                       std::span<const int64_t> shape,
-                                       DLDataType dtype, const void* src,
-                                       cudaStream_t stream) {
-  return emit_device_tensor(
+expected<TensorOutputLoan, Error> prepare_copy_device(
+    Output<Tensor>& port, ExecutionContext& context,
+    std::span<const int64_t> shape, DLDataType dtype, const void* src,
+    cudaStream_t stream) {
+  return prepare_device_tensor(
       port, context, shape, dtype,
       [&](void* dst, std::size_t bytes) -> expected<void, Error> {
         if (bytes == 0) {
@@ -646,6 +645,8 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
   }
 
   const std::vector<int64_t> idx_shape = {num_detections, idx_cols};
+  // Prepare every output loan (allocate / fill / commit) before any emit so a
+  // late fill failure cannot leave detection_idx already published.
   auto idx_loan = detection_idx.allocate_tensor(
       TensorLoanRequest{.shape = idx_shape, .dtype = kInt64Dtype});
   if (!idx_loan) {
@@ -667,23 +668,32 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
   if (!idx_committed) {
     return make_unexpected(std::move(idx_committed).error());
   }
-  auto idx_emitted = detection_idx.emit(
-      std::move(*idx_loan),
-      EmitOptions{.capture_time = context.activation_time()});
-  if (!idx_emitted) {
-    return make_unexpected(std::move(idx_emitted).error());
-  }
 
   const void* power_src =
       plan.fold > 1 ? integrated_power->data() : power->data();
-  HOLOSCAN_TRY(emit_copy_device(cfar_power, context, output_shape,
-                                real_dtype<T>(), power_src, stream));
-  HOLOSCAN_TRY(emit_copy_device(detection_mask, context, output_shape,
-                                kMaskDtype, det_mask_src, stream));
-  HOLOSCAN_TRY(emit_copy_device(detection_score, context, output_shape,
-                                real_dtype<T>(), score->data(), stream));
-  HOLOSCAN_TRY(emit_copy_device(noise_estimate, context, output_shape,
-                                real_dtype<T>(), noise->data(), stream));
+  HOLOSCAN_TRY(auto power_loan,
+               prepare_copy_device(cfar_power, context, output_shape,
+                                  real_dtype<T>(), power_src, stream));
+  HOLOSCAN_TRY(auto mask_loan,
+               prepare_copy_device(detection_mask, context, output_shape,
+                                  kMaskDtype, det_mask_src, stream));
+  HOLOSCAN_TRY(auto score_loan,
+               prepare_copy_device(detection_score, context, output_shape,
+                                  real_dtype<T>(), score->data(), stream));
+  HOLOSCAN_TRY(auto noise_loan,
+               prepare_copy_device(noise_estimate, context, output_shape,
+                                  real_dtype<T>(), noise->data(), stream));
+
+  HOLOSCAN_TRY(
+      emit_prepared_tensor(detection_idx, context, std::move(*idx_loan)));
+  HOLOSCAN_TRY(
+      emit_prepared_tensor(cfar_power, context, std::move(power_loan)));
+  HOLOSCAN_TRY(
+      emit_prepared_tensor(detection_mask, context, std::move(mask_loan)));
+  HOLOSCAN_TRY(
+      emit_prepared_tensor(detection_score, context, std::move(score_loan)));
+  HOLOSCAN_TRY(
+      emit_prepared_tensor(noise_estimate, context, std::move(noise_loan)));
 
   retained_input_ = std::move(input);
   return {};

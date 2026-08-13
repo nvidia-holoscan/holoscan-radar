@@ -16,6 +16,7 @@
 #include <holoscan/core/execution_context.hpp>
 #include <holoscan/core/expected.hpp>
 #include <holoscan/core/expected_macros.hpp>
+#include <holoscan/core/payload_options.hpp>
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 
@@ -69,14 +70,15 @@ expected<std::optional<T>, Error> receive_optional_value(Input<T>& port) {
   return std::optional<T>{std::move(*sample)};
 }
 
-// Allocate a device Tensor loan, run `fill` with a writable device pointer on
-// the runtime compute stream, commit, and emit. `fill` must enqueue only
-// stream-ordered device work (no host sync).
+// Allocate a device Tensor loan, run `fill` on the runtime compute stream,
+// and commit — but do **not** emit. Use this when a tick publishes several
+// outputs: prepare every loan first so a fill/commit failure cannot leave a
+// sibling port already published, then emit the prepared loans together.
+// `fill` must enqueue only stream-ordered device work (no host sync).
 template <typename FillFn>
-expected<void, Error> emit_device_tensor(Output<Tensor>& port,
-                                         ExecutionContext& context,
-                                         std::span<const int64_t> shape,
-                                         DLDataType dtype, FillFn&& fill) {
+expected<TensorOutputLoan, Error> prepare_device_tensor(
+    Output<Tensor>& port, ExecutionContext& context,
+    std::span<const int64_t> shape, DLDataType dtype, FillFn&& fill) {
   auto loan = port.allocate_tensor(
       TensorLoanRequest{.shape = shape, .dtype = dtype});
   if (!loan) {
@@ -94,8 +96,28 @@ expected<void, Error> emit_device_tensor(Output<Tensor>& port,
   if (!committed) {
     return make_unexpected(std::move(committed).error());
   }
-  return port.emit(std::move(*loan),
+  return std::move(*loan);
+}
+
+inline expected<void, Error> emit_prepared_tensor(
+    Output<Tensor>& port, ExecutionContext& context, TensorOutputLoan loan) {
+  return port.emit(std::move(loan),
                    EmitOptions{.capture_time = context.activation_time()});
+}
+
+// Allocate a device Tensor loan, run `fill` with a writable device pointer on
+// the runtime compute stream, commit, and emit. `fill` must enqueue only
+// stream-ordered device work (no host sync). Prefer prepare_device_tensor +
+// emit_prepared_tensor when a tick publishes more than one output.
+template <typename FillFn>
+expected<void, Error> emit_device_tensor(Output<Tensor>& port,
+                                         ExecutionContext& context,
+                                         std::span<const int64_t> shape,
+                                         DLDataType dtype, FillFn&& fill) {
+  HOLOSCAN_TRY(auto loan,
+               prepare_device_tensor(port, context, shape, dtype,
+                                    std::forward<FillFn>(fill)));
+  return emit_prepared_tensor(port, context, std::move(loan));
 }
 
 // Convenience: byte span for a compact row-major tensor of the given shape.

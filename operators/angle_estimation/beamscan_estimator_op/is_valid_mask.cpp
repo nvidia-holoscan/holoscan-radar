@@ -50,10 +50,14 @@ void check_is_valid_mask(const holoscan::Tensor& is_valid, int64_t num_items,
   }
 
   for (int64_t i = 0; i < num_items; ++i) {
-    if (host_mask[static_cast<size_t>(i)] == 0) {
-      throw std::invalid_argument(
-          std::string(who) +
-          ": is_valid marks an invalid snapshot slot");
+    for (int64_t s = 0; s < num_snapshots; ++s) {
+      const size_t idx =
+          static_cast<size_t>(i * num_snapshots + s);
+      if (host_mask[idx] == 0) {
+        throw std::invalid_argument(
+            std::string(who) +
+            ": is_valid marks an invalid snapshot slot");
+      }
     }
   }
 }

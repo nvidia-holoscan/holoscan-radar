@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -154,7 +155,9 @@ class FeatureAssemblyOp : public holoscan::Operator<FeatureAssemblyParams> {
   std::shared_ptr<holoscan::Tensor> retained_score_leading_;
   std::shared_ptr<holoscan::Tensor> retained_error_flag_;
   std::vector<int64_t> cached_score_leading_;
-  bool feature_ids_ready_{false};
+  // features is contract-static; lock the column map after the first upload
+  // and reject a later Params permute that would silently reuse stale ids.
+  std::optional<std::vector<int>> seeded_feature_ids_{};
 };
 
 extern template class FeatureAssemblyOp<float>;

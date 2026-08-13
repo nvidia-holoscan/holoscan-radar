@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -209,25 +210,29 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
   const DLDataType cplx = complex_dtype<T>();
   const std::size_t snap_bytes = tensor_byte_span(out_shape, cplx);
 
-  if (!selection_.reduced) {
-    // Already a filled ULA/URA — pass through (device copy into the pool).
-    HOLOSCAN_TRY(emit_device_tensor(
-        snapshot_out, context, out_shape, cplx,
-        [&](void* dst, std::size_t nbytes) -> expected<void, Error> {
-          if (nbytes != snap_bytes) {
-            return fail_runtime(
-                "SubarraySelectionOp: snapshot pass-through size mismatch");
-          }
-          if (cudaMemcpyAsync(dst, snap.data(), nbytes,
-                              cudaMemcpyDeviceToDevice, stream) !=
-              cudaSuccess) {
-            return fail_runtime(
-                "SubarraySelectionOp: snapshot pass-through D2D failed");
-          }
-          return {};
-        }));
-  } else {
-    HOLOSCAN_TRY(emit_device_tensor(
+  // Prepare every output loan before any emit so a late fill failure cannot
+  // leave snapshot_out / array_geometry already published.
+  // TensorOutputLoan is move-only — prepare via a local lambda, not a
+  // default-constructed expected<>.
+  auto prepare_snap = [&]() -> expected<TensorOutputLoan, Error> {
+    if (!selection_.reduced) {
+      return prepare_device_tensor(
+          snapshot_out, context, out_shape, cplx,
+          [&](void* dst, std::size_t nbytes) -> expected<void, Error> {
+            if (nbytes != snap_bytes) {
+              return fail_runtime(
+                  "SubarraySelectionOp: snapshot pass-through size mismatch");
+            }
+            if (cudaMemcpyAsync(dst, snap.data(), nbytes,
+                                cudaMemcpyDeviceToDevice, stream) !=
+                cudaSuccess) {
+              return fail_runtime(
+                  "SubarraySelectionOp: snapshot pass-through D2D failed");
+            }
+            return {};
+          });
+    }
+    return prepare_device_tensor(
         snapshot_out, context, out_shape, cplx,
         [&](void* dst, std::size_t) -> expected<void, Error> {
           try {
@@ -244,49 +249,64 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
             return fail_runtime(e.what());
           }
           return {};
-        }));
-  }
+        });
+  };
+  HOLOSCAN_TRY(auto snap_loan, prepare_snap());
 
-  // Emit packed ArrayGeometry (must emit — Params side-channel is not OK).
   const std::vector<double> packed = pack_array_geometry(out_geometry);
   const std::vector<int64_t> geom_shape =
       array_geometry_tensor_shape(out_geometry);
   const DLDataType f64 = real_dtype<double>();
-  HOLOSCAN_TRY(emit_device_tensor(
-      array_geometry, context, geom_shape, f64,
-      [&](void* dst, std::size_t nbytes) -> expected<void, Error> {
-        if (nbytes != packed.size() * sizeof(double)) {
-          return fail_runtime(
-              "SubarraySelectionOp: array_geometry size mismatch");
-        }
-        if (cudaMemcpyAsync(dst, packed.data(), nbytes, cudaMemcpyHostToDevice,
-                            stream) != cudaSuccess) {
-          return fail_runtime(
-              "SubarraySelectionOp: array_geometry H2D failed");
-        }
-        return {};
-      }));
+  HOLOSCAN_TRY(auto geom_loan,
+               prepare_device_tensor(
+                   array_geometry, context, geom_shape, f64,
+                   [&](void* dst, std::size_t nbytes) -> expected<void, Error> {
+                     if (nbytes != packed.size() * sizeof(double)) {
+                       return fail_runtime(
+                           "SubarraySelectionOp: array_geometry size mismatch");
+                     }
+                     if (cudaMemcpyAsync(dst, packed.data(), nbytes,
+                                         cudaMemcpyHostToDevice, stream) !=
+                         cudaSuccess) {
+                       return fail_runtime(
+                           "SubarraySelectionOp: array_geometry H2D failed");
+                     }
+                     return {};
+                   }));
 
+  std::optional<TensorOutputLoan> valid_loan;
   if (maybe_valid.has_value()) {
     const auto& valid = *maybe_valid;
     const auto& vshape = valid.shape();
     const DLDataType vdtype = valid.dtype();
     const std::size_t vbytes = tensor_byte_span(vshape, vdtype);
-    HOLOSCAN_TRY(emit_device_tensor(
-        is_valid_out, context, vshape, vdtype,
-        [&](void* dst, std::size_t nbytes) -> expected<void, Error> {
-          if (nbytes != vbytes) {
-            return fail_runtime(
-                "SubarraySelectionOp: is_valid forward size mismatch");
-          }
-          if (cudaMemcpyAsync(dst, valid.data(), nbytes,
-                              cudaMemcpyDeviceToDevice, stream) !=
-              cudaSuccess) {
-            return fail_runtime(
-                "SubarraySelectionOp: is_valid forward D2D failed");
-          }
-          return {};
-        }));
+    HOLOSCAN_TRY(auto prepared,
+                 prepare_device_tensor(
+                     is_valid_out, context, vshape, vdtype,
+                     [&](void* dst, std::size_t nbytes) -> expected<void, Error> {
+                       if (nbytes != vbytes) {
+                         return fail_runtime(
+                             "SubarraySelectionOp: is_valid forward size "
+                             "mismatch");
+                       }
+                       if (cudaMemcpyAsync(dst, valid.data(), nbytes,
+                                           cudaMemcpyDeviceToDevice, stream) !=
+                           cudaSuccess) {
+                         return fail_runtime(
+                             "SubarraySelectionOp: is_valid forward D2D failed");
+                       }
+                       return {};
+                     }));
+    valid_loan.emplace(std::move(prepared));
+  }
+
+  HOLOSCAN_TRY(
+      emit_prepared_tensor(snapshot_out, context, std::move(snap_loan)));
+  HOLOSCAN_TRY(
+      emit_prepared_tensor(array_geometry, context, std::move(geom_loan)));
+  if (valid_loan.has_value()) {
+    HOLOSCAN_TRY(emit_prepared_tensor(is_valid_out, context,
+                                      std::move(*valid_loan)));
     retained_is_valid_ = std::move(*maybe_valid);
   }
 

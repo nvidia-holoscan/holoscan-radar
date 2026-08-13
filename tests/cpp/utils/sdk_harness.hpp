@@ -13,7 +13,6 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
-#include <fstream>
 #include <initializer_list>
 #include <memory>
 #include <mutex>
@@ -40,7 +39,6 @@
 #include <holoscan/time/realtime_clock.hpp>
 
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
-#include "radar_common/descriptors/enums.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace holoscan::radar::testing {
@@ -739,9 +737,6 @@ HostTensor run_operator_once(
   return std::move(frames.front());
 }
 
-// 2-in / 2-out Graph runner. `WireFn` receives (graph, source, op, sink0,
-// sink1) and must add_flow the four edges from source->out0/out1. Device
-// binds use out0/out1 port names on "op" plus source out0/out1.
 // 1-in / 2-out Graph runner (e.g. BeamscanEstimatorOp). `WireFn` receives
 // (graph, source, op, sink0, sink1) and must add_flow source->out plus both
 // op outputs. Device binds use source/out and the named op output ports.
@@ -1049,6 +1044,9 @@ FiveOutGraphRunResult run_single_in_five_out_operator_graph_result(
   return result;
 }
 
+// 2-in / 2-out Graph runner (e.g. SnapshotGatherOp). `WireFn` receives
+// (graph, source, op, sink0, sink1) and must add_flow source->out0/out1 plus
+// both op outputs. Device binds use the named ports on "source" and "op".
 template <typename OpT, typename ParamsT, typename WireFn>
 DualIOGraphRunResult run_dual_io_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
