@@ -6,21 +6,21 @@
 #include <cuda/std/complex>
 #include <cuda_runtime_api.h>
 
-#include <complex>
 #include <cstdint>
 #include <memory>
-#include <numeric>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include <holoscan/core/expected_macros.hpp>
+#include <holoscan/core/payload_options.hpp>
+
 #include "angle_estimation/phase_shift_beamformer_op/phase_shift_beamformer_stage.hpp"
+#include "radar_common/dsp/steering_weights.hpp"
 #include "radar_common/dsp/steering_weights_device.hpp"
-#include "radar_common/sdk/arg_setters.hpp"
-#include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
-#include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -29,79 +29,80 @@ namespace {
 
 constexpr const char* kOpName = "PhaseShiftBeamformerOp";
 
+expected<void, Error> fail_invalid(const std::string& message) {
+  return make_unexpected(Error{ErrorCode::kInvalidArgument, message});
+}
+
+expected<void, Error> fail_runtime(const std::string& message) {
+  return make_unexpected(Error{ErrorCode::kFailure, message});
+}
+
 }  // namespace
 
 template <typename T>
-void PhaseShiftBeamformerOp<T>::initialize() {
-  ensure_radar_arg_setters();
-  Operator::initialize();
-}
-
-template <typename T>
 void PhaseShiftBeamformerOp<T>::setup(OperatorSpec& spec) {
-  spec.input<holoscan::TensorMap>("rd_maps");
-  spec.output<holoscan::TensorMap>("rda_cube");
-
-  spec.param(array_geometry_, "array_geometry", "Array geometry",
-             "Element positions and wavelength", ArrayGeometry{});
-  add_override_port<ArrayGeometry>(spec, "array_geometry");
-
-  spec.param(angle_convention_, "angle_convention", "Angle convention",
-             "Boundary AER labeling for scan grid and beam axes",
-             AngleConvention{});
-  spec.param(az_angles_, "az_angles", "Azimuth scan grid",
-             "Azimuth grid (or u grid under direction_cosine)",
-             std::vector<double>{});
-  add_override_port<std::vector<double>>(spec, "az_angles");
-  spec.param(el_angles_, "el_angles", "Elevation scan grid",
-             "Elevation grid (or v grid under direction_cosine)",
-             std::vector<double>{});
-  add_override_port<std::vector<double>>(spec, "el_angles");
-  spec.param(array_taper_, "array_taper", "Array taper",
-             "Amplitude taper across elements", WindowSpec{});
-  add_override_port<WindowSpec>(spec, "array_taper");
+  // Declare device storage only; dtype is enforced in compute() so one
+  // operator binary still serves F32/F64 and the harness can feed either.
+  constexpr TensorPortLayout kDevice{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = std::nullopt,
+      .rank = std::nullopt,  // rank-agnostic batching
+  };
+  spec.input(rd_maps).queue_depth(2U).expects_tensor(kDevice);
+  spec.output(rda_cube)
+      .produces_tensor(kDevice)
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = kPhaseShiftBeamformerMaxRank,
+          .max_byte_span = kPhaseShiftBeamformerMaxByteSpan});
+  // [EA HSDK5 ONLY] No [live] Input ports — ArrayGeometry / WindowSpec /
+  // unbounded az/el vectors are not PublishedPayload (HSDK5_PORT.md §9).
+  // Selection is via Params (set_params); sticky live Inputs deferred.
 }
 
 template <typename T>
-void PhaseShiftBeamformerOp<T>::compute(InputContext& op_input,
-                                        OutputContext& op_output,
-                                        ExecutionContext&) {
-  if (!seeded_) {
-    effective_geometry_ = array_geometry_.get();
-    effective_geometry_.validate();
-    effective_az_ = az_angles_.get();
-    effective_el_ = el_angles_.get();
-    effective_taper_ = array_taper_.get();
-    seeded_ = true;
+Contract PhaseShiftBeamformerOp<T>::contract() const {
+  Contract result;
+  result.trigger(OnEach{rd_maps});
+  return result;
+}
+
+template <typename T>
+expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
+    ExecutionContext& context) {
+  HOLOSCAN_TRY(auto rd, receive_tensor(rd_maps, kOpName));
+
+  const PhaseShiftBeamformerParams& pinned =
+      context.params<PhaseShiftBeamformerParams>();
+  // Params-only effective values (live Inputs deferred — OPEN_ITEMS / §9).
+  ArrayGeometry geometry = pinned.array_geometry;
+  const AngleConvention& convention = pinned.angle_convention;
+  const std::vector<double>& az = pinned.az_angles;
+  const std::vector<double>& el = pinned.el_angles;
+  const WindowSpec& taper = pinned.array_taper;
+
+  try {
+    geometry.validate();
+  } catch (const std::invalid_argument& e) {
+    return fail_invalid(e.what());
   }
-
-  bool geom_changed = false;
-  bool grid_changed = false;
-  bool taper_changed = false;
-  effective_geometry_ = resolve_override_param(
-      op_input, "array_geometry", effective_geometry_, &geom_changed);
-  effective_geometry_.validate();
-  effective_az_ = resolve_override_param(op_input, "az_angles", effective_az_,
-                                         &grid_changed);
-  effective_el_ = resolve_override_param(op_input, "el_angles", effective_el_,
-                                         &grid_changed);
-  effective_taper_ = resolve_override_param(op_input, "array_taper",
-                                            effective_taper_, &taper_changed);
-
-  if (effective_az_.empty() || effective_el_.empty()) {
-    throw std::invalid_argument(
+  if (az.empty() || el.empty()) {
+    return fail_invalid(
         "PhaseShiftBeamformerOp: az_angles and el_angles must be non-empty");
   }
 
-  auto rd_maps = receive_single(op_input, "rd_maps", kOpName);
-  require_cuda_accessible(*rd_maps, "rd_maps", kOpName);
-  require_contiguous(*rd_maps, "rd_maps", kOpName);
-  require_dtype(*rd_maps, complex_dtype<T>(), "rd_maps", kOpName);
+  try {
+    classify_input_dtype<T>(rd, "rd_maps", /*allow_real=*/false);
+    require_cuda_accessible(rd, "rd_maps", kOpName);
+    require_contiguous(rd, "rd_maps", kOpName);
+    require_dtype(rd, complex_dtype<T>(), "rd_maps", kOpName);
+  } catch (const std::invalid_argument& e) {
+    return fail_invalid(e.what());
+  }
 
-  const auto& shape = rd_maps->shape();
+  const auto& shape = rd.shape();
   const int64_t rank = static_cast<int64_t>(shape.size());
   if (rank < 3) {
-    throw std::invalid_argument(
+    return fail_invalid(
         "PhaseShiftBeamformerOp: rd_maps must have shape "
         "(..., num_channels, num_doppler, num_range_bins) with rank >= 3");
   }
@@ -114,31 +115,39 @@ void PhaseShiftBeamformerOp<T>::compute(InputContext& op_input,
   }
   const int64_t num_cells = num_doppler * num_range;
 
-  if (num_channels != effective_geometry_.num_elements()) {
-    throw std::invalid_argument(
+  if (num_channels != geometry.num_elements()) {
+    return fail_invalid(
         "PhaseShiftBeamformerOp: rd_maps num_channels must match "
         "array_geometry.num_elements");
   }
 
-  auto stream = op_input.receive_cuda_stream("rd_maps");
+  cudaStream_t stream = context.cuda_stream().get();
+  if (stream == nullptr) {
+    return make_unexpected(
+        Error{ErrorCode::kNotSupported,
+              "PhaseShiftBeamformerOp: no CUDA compute stream"});
+  }
 
-  const bool warn_on_build = geom_changed || grid_changed || taper_changed;
   const std::string cache_key =
-      steering_cache_key(effective_geometry_, angle_convention_.get(),
-                         effective_az_, effective_el_, effective_taper_);
+      steering_cache_key(geometry, convention, az, el, taper);
   // Conjugated weights, built on device, az-major beams in a
   // (num_beams, num_channels) layout — drops straight into the GEMM.
+  // warn_on_build stays false while live Inputs are deferred (Params-only);
+  // cache still dedupes identical keys across ticks.
   const std::shared_ptr<holoscan::Tensor>& weights =
       steering_cache_.get_or_build(
-          cache_key, warn_on_build, "steering weights", [&] {
+          cache_key, /*warn_on_build=*/false, "steering weights", [&] {
             return build_steering_weights_device<T>(
-                effective_geometry_, angle_convention_.get(), effective_az_,
-                effective_el_, effective_taper_, BeamOrder::kAzMajor,
+                geometry, convention, az, el, taper, BeamOrder::kAzMajor,
                 SteeringLayout::kBeamMajor, /*conjugate=*/true, stream);
           });
+  if (!weights) {
+    return fail_runtime(
+        "PhaseShiftBeamformerOp: internal error: steering weights missing");
+  }
 
-  const int64_t num_az = static_cast<int64_t>(effective_az_.size());
-  const int64_t num_el = static_cast<int64_t>(effective_el_.size());
+  const int64_t num_az = static_cast<int64_t>(az.size());
+  const int64_t num_el = static_cast<int64_t>(el.size());
   const int64_t num_beams = num_az * num_el;
 
   // Output cube: original leading (batch) dims, then the beam grid, then the
@@ -153,25 +162,31 @@ void PhaseShiftBeamformerOp<T>::compute(InputContext& op_input,
   out_shape.push_back(num_el);
   out_shape.push_back(num_doppler);
   out_shape.push_back(num_range);
-  auto rda_cube = make_device_tensor(out_shape, complex_dtype<T>());
+  const DLDataType dtype = complex_dtype<T>();
 
-  if (!weights) {
-    throw std::runtime_error(
-        "PhaseShiftBeamformerOp: internal error: steering weights missing");
-  }
+  const void* input_ptr = rd.data();
+  const void* weights_ptr = weights->data();
+  HOLOSCAN_TRY(emit_device_tensor(
+      rda_cube, context, out_shape, dtype,
+      [&](void* out_ptr, std::size_t) -> expected<void, Error> {
+        try {
+          detail::run_phase_shift_beamform_stage<T>(
+              static_cast<const cuda::std::complex<T>*>(input_ptr),
+              static_cast<cuda::std::complex<T>*>(out_ptr), batch,
+              num_channels, num_cells,
+              static_cast<const cuda::std::complex<T>*>(weights_ptr),
+              num_beams, stream);
+          check_cuda("phase-shift beamform stage", kOpName);
+        } catch (const std::invalid_argument& e) {
+          return fail_invalid(e.what());
+        } catch (const std::runtime_error& e) {
+          return fail_runtime(e.what());
+        }
+        return {};
+      }));
 
-  detail::run_phase_shift_beamform_stage<T>(
-      static_cast<const cuda::std::complex<T>*>(rd_maps->data()),
-      static_cast<cuda::std::complex<T>*>(rda_cube->data()), batch,
-      num_channels, num_cells,
-      static_cast<const cuda::std::complex<T>*>(weights->data()), num_beams,
-      stream);
-  check_cuda("phase-shift beamform stage", kOpName);
-
-  if (stream != cudaStreamDefault) {
-    op_output.set_cuda_stream(stream, "rda_cube");
-  }
-  emit_single(op_output, "rda_cube", rda_cube);
+  retained_input_ = std::move(rd);
+  return {};
 }
 
 template class PhaseShiftBeamformerOp<float>;

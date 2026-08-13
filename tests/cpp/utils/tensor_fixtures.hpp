@@ -38,7 +38,18 @@ std::shared_ptr<holoscan::Tensor> to_device_tensor(
     throw std::invalid_argument("to_device_tensor: shape/size mismatch");
   }
   auto tensor = holoscan::radar::make_device_tensor(shape, dtype);
-  if (cudaMemcpy(tensor->data(), host.data(), sizeof(ElementT) * host.size(),
+  if (host.empty()) {
+    // Zero-element tensors leave data == nullptr (no cudaMalloc); that is a
+    // valid pipeline state (e.g. zero detections) and needs no upload.
+    return tensor;
+  }
+  auto mut = tensor->mutable_data();
+  if (!mut) {
+    throw std::runtime_error(
+        std::string("to_device_tensor: output tensor is not writable: ") +
+        mut.error().message);
+  }
+  if (cudaMemcpy(mut.value(), host.data(), sizeof(ElementT) * host.size(),
                  cudaMemcpyHostToDevice) != cudaSuccess) {
     throw std::runtime_error("to_device_tensor: cudaMemcpy H2D failed");
   }

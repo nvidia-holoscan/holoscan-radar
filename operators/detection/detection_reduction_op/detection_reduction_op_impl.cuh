@@ -10,6 +10,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -18,8 +19,10 @@
 #include <utility>
 #include <vector>
 
+#include <holoscan/core/expected_macros.hpp>
+#include <holoscan/core/payload_options.hpp>
+
 #include "detection/detection_reduction_op/detection_reduction_stage.hpp"
-#include "radar_common/sdk/arg_setters.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
@@ -29,297 +32,418 @@
 namespace holoscan::radar {
 
 namespace detection_reduction_op_detail {
+
 constexpr const char* kOpName = "DetectionReductionOp";
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
+
+expected<void, Error> fail_invalid(const std::string& message) {
+  return make_unexpected(Error{ErrorCode::kInvalidArgument, message});
+}
+
+expected<void, Error> fail_runtime(const std::string& message) {
+  return make_unexpected(Error{ErrorCode::kFailure, message});
+}
+
+expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
+                                    const char* what) {
+  auto mut = tensor.mutable_data();
+  if (!mut) {
+    return make_unexpected(Error{
+        ErrorCode::kFailure,
+        std::string(kOpName) + ": " + what + " is not writable: " +
+            mut.error().message});
+  }
+  return *mut;
+}
+
 }  // namespace detection_reduction_op_detail
 
+using detection_reduction_op_detail::fail_invalid;
+using detection_reduction_op_detail::fail_runtime;
 using detection_reduction_op_detail::kInt64Dtype;
 using detection_reduction_op_detail::kOpName;
-
-template <typename T, typename ScoreFn>
-void DetectionReductionOp<T, ScoreFn>::initialize() {
-  // RepresentativePolicy / ScoreMethod are shared radar_common types
-  // registered centrally; std::vector<double> is an SDK built-in.
-  ensure_radar_arg_setters();
-  Operator::initialize();
-}
+using detection_reduction_op_detail::writable_ptr;
 
 template <typename T, typename ScoreFn>
 void DetectionReductionOp<T, ScoreFn>::setup(OperatorSpec& spec) {
-  spec.input<holoscan::TensorMap>("labels");
-  spec.input<holoscan::TensorMap>("detection_idx");
-  spec.input<holoscan::TensorMap>("points")
-      .condition(holoscan::ConditionType::kNone);
-
-  spec.output<holoscan::TensorMap>("rep_idx");
-
-  spec.param(representative_, "representative", "Representative policy",
-             "peak | medoid | first", RepresentativePolicy::kPeak);
-  spec.param(score_method_, "score_method", "Peak score method",
-             "weighted_sum | weighted_l2 | weighted_max | custom",
-             ScoreMethod::kWeightedSum);
-  spec.param(feature_weights_, "feature_weights", "Feature weights",
-             "Per-feature weights for peak/medoid (required for those "
-             "policies unless peak+custom)",
-             {});
-
-  add_override_port<RepresentativePolicy>(spec, "representative");
-  add_override_port<ScoreMethod>(spec, "score_method");
-  add_override_port<std::vector<double>>(spec, "feature_weights");
+  // Declare device storage only; dtype is enforced in compute() so one
+  // operator binary still serves F32/F64 and the harness can feed either.
+  constexpr TensorPortLayout kDevice{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = std::nullopt,
+      .rank = std::nullopt,
+  };
+  spec.input(labels).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(detection_idx).queue_depth(2U).expects_tensor(kDevice);
+  // Optional points: SafeDefault / omitted from contract so unconnected
+  // graphs compile (required at runtime unless representative == first).
+  spec.input(points).queue_depth(2U).expects_tensor(kDevice);
+  spec.output(rep_idx)
+      .produces_tensor(kDevice)
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = kDetectionReductionMaxRank,
+          .max_byte_span = kDetectionReductionMaxByteSpan});
+  // [live] POD enum override ports. Wired graphs may push samples; the
+  // operator caches the last value (sticky). Leaving them unconnected is
+  // legal — compute() seeds from Params. feature_weights is Params-only
+  // (HSDK5_PORT §9).
+  spec.input(representative).queue_depth(2U);
+  spec.input(score_method).queue_depth(2U);
 }
 
 template <typename T, typename ScoreFn>
-void DetectionReductionOp<T, ScoreFn>::compute(InputContext& op_input,
-                                               OutputContext& op_output,
-                                               ExecutionContext&) {
-  if (!seeded_) {
-    effective_representative_ = representative_.get();
-    effective_score_method_ = score_method_.get();
-    effective_feature_weights_ = feature_weights_.get();
-    seeded_ = true;
-  }
-  effective_representative_ = resolve_override_param(
-      op_input, "representative", effective_representative_, nullptr);
-  effective_score_method_ = resolve_override_param(
-      op_input, "score_method", effective_score_method_, nullptr);
-  effective_feature_weights_ = resolve_override_param(
-      op_input, "feature_weights", effective_feature_weights_, nullptr);
+Contract DetectionReductionOp<T, ScoreFn>::contract() const {
+  // Trigger when labels + detection_idx + points share an aligned event time.
+  // [live] representative / score_method are intentionally omitted from the
+  // temporal contract so unconnected override ports do not yield
+  // TEMPORAL_INPUT_UNCONNECTED (HSDK5_PORT.md §1).
+  //
+  // [EA HSDK5 ONLY] points is Exact in the contract even though OPERATOR_API
+  // marks it optional for representative=first. SafeDefault / LatestWithin
+  // on an optional Tensor Input still yields TEMPORAL_INPUT_UNCONNECTED when
+  // unwired, and omitting it while wiring yields a missed sample (same family
+  // as FeatureAssembly OPEN_ITEMS §1). Graph tests always wire points (dummy
+  // for first); see OPEN_ITEMS.
+  using namespace std::chrono_literals;
+  Contract result;
+  result
+      .trigger(OnAligned{.ports = ports(labels, detection_idx, points),
+                         .window = 0ns})
+      .input(labels, Exact{})
+      .input(detection_idx, Exact{})
+      .input(points, Exact{});
+  return result;
+}
 
-  if (effective_representative_ == RepresentativePolicy::kPeak &&
-      effective_score_method_ == ScoreMethod::kCustom &&
+template <typename T, typename ScoreFn>
+expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
+    ExecutionContext& context) {
+  HOLOSCAN_TRY(auto labels_in, receive_tensor(labels, kOpName));
+  HOLOSCAN_TRY(auto idx_in, receive_tensor(detection_idx, kOpName));
+  HOLOSCAN_TRY(auto maybe_points, receive_optional_value(points));
+
+  const DetectionReductionParams& pinned =
+      context.params<DetectionReductionParams>();
+  // Best-effort sticky overrides: if the port is wired and a sample is
+  // waiting, absorb it; otherwise keep sticky / fall back to Params.
+  // feature_weights is Params-only (unbounded vector — HSDK5_PORT §9).
+  HOLOSCAN_TRY(auto effective_representative,
+               resolve_sticky_override(representative, pinned.representative,
+                                       sticky_representative_));
+  HOLOSCAN_TRY(auto effective_score_method,
+               resolve_sticky_override(score_method, pinned.score_method,
+                                       sticky_score_method_));
+  const std::vector<double>& feature_weights = pinned.feature_weights;
+
+  if (effective_representative == RepresentativePolicy::kPeak &&
+      effective_score_method == ScoreMethod::kCustom &&
       std::is_same_v<ScoreFn, NoCustomScore>) {
-    throw std::invalid_argument(
+    return fail_invalid(
         "DetectionReductionOp: score_method=custom requires a compile-time "
         "ScoreFn template argument (DetectionReductionOp<T, ScoreFn>)");
   }
 
-  auto labels = receive_single(op_input, "labels", kOpName);
-  auto detection_idx = receive_single(op_input, "detection_idx", kOpName);
-  auto points = receive_optional(op_input, "points", kOpName);
+  try {
+    require_cuda_accessible(labels_in, "labels", kOpName);
+    require_contiguous(labels_in, "labels", kOpName);
+    require_dtype(labels_in, kInt64Dtype, "labels", kOpName);
+    require_cuda_accessible(idx_in, "detection_idx", kOpName);
+    require_contiguous(idx_in, "detection_idx", kOpName);
+    require_dtype(idx_in, kInt64Dtype, "detection_idx", kOpName);
+  } catch (const std::invalid_argument& e) {
+    return fail_invalid(e.what());
+  }
 
-  require_cuda_accessible(*labels, "labels", kOpName);
-  require_contiguous(*labels, "labels", kOpName);
-  require_dtype(*labels, kInt64Dtype, "labels", kOpName);
-  require_cuda_accessible(*detection_idx, "detection_idx", kOpName);
-  require_contiguous(*detection_idx, "detection_idx", kOpName);
-  require_dtype(*detection_idx, kInt64Dtype, "detection_idx", kOpName);
-
-  if (labels->shape().size() != 1) {
-    throw std::invalid_argument(
+  if (labels_in.shape().size() != 1) {
+    return fail_invalid(
         "DetectionReductionOp: labels must have shape (num_points,)");
   }
-  const auto& idx_shape = detection_idx->shape();
+  const auto& idx_shape = idx_in.shape();
   if (idx_shape.size() != 2 || idx_shape[1] < 2) {
-    throw std::invalid_argument(
+    return fail_invalid(
         "DetectionReductionOp: detection_idx must have shape "
         "(num_points, 2 [+ n_batch])");
   }
-  const int64_t num_points = labels->shape()[0];
+  const int64_t num_points = labels_in.shape()[0];
   if (idx_shape[0] != num_points) {
-    throw std::invalid_argument(
+    return fail_invalid(
         "DetectionReductionOp: labels and detection_idx row counts must "
         "match");
   }
   const int64_t idx_cols = idx_shape[1];
 
   const bool needs_points =
-      effective_representative_ != RepresentativePolicy::kFirst;
+      effective_representative != RepresentativePolicy::kFirst;
   const bool needs_weights =
-      effective_representative_ == RepresentativePolicy::kMedoid ||
-      (effective_representative_ == RepresentativePolicy::kPeak &&
-       effective_score_method_ != ScoreMethod::kCustom);
+      effective_representative == RepresentativePolicy::kMedoid ||
+      (effective_representative == RepresentativePolicy::kPeak &&
+       effective_score_method != ScoreMethod::kCustom);
 
-  if (needs_points && !points) {
-    throw std::invalid_argument(
+  if (needs_points && !maybe_points.has_value()) {
+    return fail_invalid(
         std::string("DetectionReductionOp: points required for "
                     "representative='") +
-        std::string(to_string(effective_representative_)) + "'");
+        std::string(to_string(effective_representative)) + "'");
   }
 
   int64_t num_features = 0;
   const T* points_ptr = nullptr;
-  if (points) {
-    require_cuda_accessible(*points, "points", kOpName);
-    require_contiguous(*points, "points", kOpName);
-    require_dtype(*points, real_dtype<T>(), "points", kOpName);
-    if (points->shape().size() != 2 || points->shape()[0] != num_points) {
-      throw std::invalid_argument(
+  if (maybe_points.has_value()) {
+    try {
+      require_cuda_accessible(*maybe_points, "points", kOpName);
+      require_contiguous(*maybe_points, "points", kOpName);
+      require_dtype(*maybe_points, real_dtype<T>(), "points", kOpName);
+    } catch (const std::invalid_argument& e) {
+      return fail_invalid(e.what());
+    }
+    if (maybe_points->shape().size() != 2 ||
+        maybe_points->shape()[0] != num_points) {
+      return fail_invalid(
           "DetectionReductionOp: points must have shape "
           "(num_points, num_features)");
     }
-    num_features = points->shape()[1];
-    points_ptr = static_cast<const T*>(points->data());
+    num_features = maybe_points->shape()[1];
+    points_ptr = static_cast<const T*>(maybe_points->data());
   }
 
   if (needs_weights) {
-    if (static_cast<int64_t>(effective_feature_weights_.size()) !=
-        num_features) {
-      throw std::invalid_argument(
+    if (static_cast<int64_t>(feature_weights.size()) != num_features) {
+      return fail_invalid(
           "DetectionReductionOp: feature_weights length must equal "
           "num_features");
     }
   }
 
-  auto stream = op_input.receive_cuda_stream("labels");
+  cudaStream_t stream = context.cuda_stream().get();
+  if (stream == nullptr) {
+    return make_unexpected(Error{ErrorCode::kNotSupported,
+                                 "DetectionReductionOp: no CUDA compute "
+                                 "stream"});
+  }
+
+  auto emit_empty = [&]() -> expected<void, Error> {
+    const std::vector<int64_t> empty_shape = {0, idx_cols};
+    HOLOSCAN_TRY(emit_device_tensor(
+        rep_idx, context, empty_shape, kInt64Dtype,
+        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
+    retained_labels_ = std::move(labels_in);
+    retained_idx_ = std::move(idx_in);
+    if (maybe_points.has_value()) {
+      retained_points_ = std::move(*maybe_points);
+    }
+    retained_weights_.reset();
+    return {};
+  };
 
   if (num_points == 0) {
-    auto rep = make_device_tensor({0, idx_cols}, kInt64Dtype);
-    if (stream != cudaStreamDefault) {
-      op_output.set_cuda_stream(stream, "rep_idx");
-    }
-    emit_single(op_output, "rep_idx", rep);
-    retained_labels_ = std::move(labels);
-    retained_idx_ = std::move(detection_idx);
-    retained_points_ = std::move(points);
-    retained_weights_.reset();
-    return;
+    return emit_empty();
   }
 
   // Discover max label → slot count.
   auto max_label_t = make_device_tensor({1}, kInt64Dtype);
   auto any_cluster_t =
       make_device_tensor({1}, DLDataType{kDLInt, 32, 1});
+  HOLOSCAN_TRY(auto max_label_ptr, writable_ptr(*max_label_t, "max_label"));
+  HOLOSCAN_TRY(auto any_cluster_ptr,
+               writable_ptr(*any_cluster_t, "any_cluster"));
   {
     const int64_t zero = 0;
     const int zero_i = 0;
-    cudaMemcpyAsync(max_label_t->data(), &zero, sizeof(int64_t),
-                    cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(any_cluster_t->data(), &zero_i, sizeof(int),
-                    cudaMemcpyHostToDevice, stream);
+    if (cudaMemcpyAsync(max_label_ptr, &zero, sizeof(int64_t),
+                        cudaMemcpyHostToDevice, stream) != cudaSuccess ||
+        cudaMemcpyAsync(any_cluster_ptr, &zero_i, sizeof(int),
+                        cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+      return fail_runtime("DetectionReductionOp: max-label clear failed");
+    }
   }
-  detail::launch_find_max_label(
-      static_cast<const int64_t*>(labels->data()), num_points,
-      static_cast<int64_t*>(max_label_t->data()),
-      static_cast<int*>(any_cluster_t->data()), stream);
-  check_cuda("find_max_label", kOpName);
+  try {
+    detail::launch_find_max_label(
+        static_cast<const int64_t*>(labels_in.data()), num_points,
+        static_cast<int64_t*>(max_label_ptr),
+        static_cast<int*>(any_cluster_ptr), stream);
+    check_cuda("find_max_label", kOpName);
+  } catch (const std::runtime_error& e) {
+    return fail_runtime(e.what());
+  }
 
   int64_t max_label = 0;
   int any_cluster = 0;
-  cudaMemcpyAsync(&max_label, max_label_t->data(), sizeof(int64_t),
-                  cudaMemcpyDeviceToHost, stream);
-  cudaMemcpyAsync(&any_cluster, any_cluster_t->data(), sizeof(int),
-                  cudaMemcpyDeviceToHost, stream);
-  cudaStreamSynchronize(stream);
+  if (cudaMemcpyAsync(&max_label, max_label_ptr, sizeof(int64_t),
+                      cudaMemcpyDeviceToHost, stream) != cudaSuccess ||
+      cudaMemcpyAsync(&any_cluster, any_cluster_ptr, sizeof(int),
+                      cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
+    return fail_runtime("DetectionReductionOp: max-label D2H failed");
+  }
+  if (cudaStreamSynchronize(stream) != cudaSuccess) {
+    return fail_runtime("DetectionReductionOp: max-label sync failed");
+  }
   if (any_cluster == 0) {
-    // All noise.
-    auto rep = make_device_tensor({0, idx_cols}, kInt64Dtype);
-    if (stream != cudaStreamDefault) {
-      op_output.set_cuda_stream(stream, "rep_idx");
-    }
-    emit_single(op_output, "rep_idx", rep);
-    retained_labels_ = std::move(labels);
-    retained_idx_ = std::move(detection_idx);
-    retained_points_ = std::move(points);
-    retained_weights_.reset();
-    return;
+    return emit_empty();
   }
   const int64_t n_slots = max_label + 1;
   constexpr int64_t kMaxSlots = 1 << 20;
   if (n_slots > kMaxSlots) {
-    throw std::invalid_argument(
+    return fail_invalid(
         "DetectionReductionOp: max cluster label exceeds supported range "
         "(expected DBSCAN-style dense labels)");
   }
 
   auto best_rows = make_device_tensor({n_slots}, kInt64Dtype);
-  detail::launch_init_i64(static_cast<int64_t*>(best_rows->data()), n_slots,
-                          detail::kEmptyRow, stream);
+  HOLOSCAN_TRY(auto best_rows_ptr, writable_ptr(*best_rows, "best_rows"));
+  try {
+    detail::launch_init_i64(static_cast<int64_t*>(best_rows_ptr), n_slots,
+                            detail::kEmptyRow, stream);
+  } catch (const std::runtime_error& e) {
+    return fail_runtime(e.what());
+  }
 
   std::shared_ptr<holoscan::Tensor> weights_dev;
   if (needs_weights) {
     std::vector<T> host_w(static_cast<size_t>(num_features));
     for (int64_t f = 0; f < num_features; ++f) {
       host_w[static_cast<size_t>(f)] =
-          static_cast<T>(effective_feature_weights_[static_cast<size_t>(f)]);
+          static_cast<T>(feature_weights[static_cast<size_t>(f)]);
     }
     weights_dev = make_device_tensor({num_features}, real_dtype<T>());
-    cudaMemcpyAsync(weights_dev->data(), host_w.data(),
-                    sizeof(T) * host_w.size(), cudaMemcpyHostToDevice, stream);
+    HOLOSCAN_TRY(auto weights_ptr, writable_ptr(*weights_dev, "weights"));
+    if (cudaMemcpyAsync(weights_ptr, host_w.data(),
+                        sizeof(T) * host_w.size(), cudaMemcpyHostToDevice,
+                        stream) != cudaSuccess) {
+      return fail_runtime("DetectionReductionOp: feature_weights H2D failed");
+    }
   }
 
-  if (effective_representative_ == RepresentativePolicy::kFirst) {
-    detail::launch_select_first(static_cast<const int64_t*>(labels->data()),
-                                num_points,
-                                static_cast<int64_t*>(best_rows->data()),
-                                stream);
-  } else if (effective_representative_ == RepresentativePolicy::kPeak) {
-    auto best_score =
-        make_device_tensor({n_slots}, DLDataType{kDLUInt, 64, 1});
-    detail::launch_init_u64(static_cast<detail::cuda_u64*>(best_score->data()),
-                            n_slots, 0ull, stream);
-    if (effective_score_method_ == ScoreMethod::kCustom) {
-      if constexpr (!std::is_same_v<ScoreFn, NoCustomScore>) {
-        detail::launch_peak_select_custom<T, ScoreFn>(
-            static_cast<const int64_t*>(labels->data()), points_ptr,
-            num_points, num_features, ScoreFn{},
-            static_cast<detail::cuda_u64*>(best_score->data()),
-            static_cast<int64_t*>(best_rows->data()), stream);
+  try {
+    if (effective_representative == RepresentativePolicy::kFirst) {
+      detail::launch_select_first(
+          static_cast<const int64_t*>(labels_in.data()), num_points,
+          static_cast<int64_t*>(best_rows_ptr), stream);
+    } else if (effective_representative == RepresentativePolicy::kPeak) {
+      auto best_score =
+          make_device_tensor({n_slots}, DLDataType{kDLUInt, 64, 1});
+      HOLOSCAN_TRY(auto best_score_ptr,
+                   writable_ptr(*best_score, "best_score"));
+      detail::launch_init_u64(
+          static_cast<detail::cuda_u64*>(best_score_ptr), n_slots, 0ull,
+          stream);
+      if (effective_score_method == ScoreMethod::kCustom) {
+        if constexpr (!std::is_same_v<ScoreFn, NoCustomScore>) {
+          detail::launch_peak_select_custom<T, ScoreFn>(
+              static_cast<const int64_t*>(labels_in.data()), points_ptr,
+              num_points, num_features, ScoreFn{},
+              static_cast<detail::cuda_u64*>(best_score_ptr),
+              static_cast<int64_t*>(best_rows_ptr), stream);
+        }
+      } else {
+        detail::launch_peak_select<T>(
+            static_cast<const int64_t*>(labels_in.data()), points_ptr,
+            static_cast<const T*>(weights_dev->data()), num_points,
+            num_features, effective_score_method,
+            static_cast<detail::cuda_u64*>(best_score_ptr),
+            static_cast<int64_t*>(best_rows_ptr), stream);
       }
     } else {
-      detail::launch_peak_select<T>(
-          static_cast<const int64_t*>(labels->data()), points_ptr,
-          static_cast<const T*>(weights_dev->data()), num_points, num_features,
-          effective_score_method_,
-          static_cast<detail::cuda_u64*>(best_score->data()),
-          static_cast<int64_t*>(best_rows->data()), stream);
+      // medoid
+      auto counts = make_device_tensor({n_slots}, kInt64Dtype);
+      auto sum_feat =
+          make_device_tensor({n_slots * num_features}, real_dtype<T>());
+      HOLOSCAN_TRY(auto counts_ptr, writable_ptr(*counts, "counts"));
+      HOLOSCAN_TRY(auto sum_feat_ptr, writable_ptr(*sum_feat, "sum_feat"));
+      if (cudaMemsetAsync(counts_ptr, 0, sizeof(int64_t) * n_slots, stream) !=
+          cudaSuccess) {
+        return fail_runtime("DetectionReductionOp: medoid counts clear failed");
+      }
+      detail::launch_init_t_zero<T>(static_cast<T*>(sum_feat_ptr),
+                                    n_slots * num_features, stream);
+      auto best_score =
+          make_device_tensor({n_slots}, DLDataType{kDLUInt, 64, 1});
+      HOLOSCAN_TRY(auto best_score_ptr,
+                   writable_ptr(*best_score, "best_score"));
+      detail::launch_init_u64(
+          static_cast<detail::cuda_u64*>(best_score_ptr), n_slots, 0ull,
+          stream);
+      detail::launch_medoid_select<T>(
+          static_cast<const int64_t*>(labels_in.data()), points_ptr,
+          static_cast<const T*>(weights_dev->data()),
+          static_cast<T*>(sum_feat_ptr), static_cast<int64_t*>(counts_ptr),
+          num_points, n_slots, num_features,
+          static_cast<detail::cuda_u64*>(best_score_ptr),
+          static_cast<int64_t*>(best_rows_ptr), stream);
     }
-  } else {
-    // medoid
-    auto counts = make_device_tensor({n_slots}, kInt64Dtype);
-    auto sum_feat =
-        make_device_tensor({n_slots * num_features}, real_dtype<T>());
-    cudaMemsetAsync(counts->data(), 0, sizeof(int64_t) * n_slots, stream);
-    detail::launch_init_t_zero<T>(static_cast<T*>(sum_feat->data()),
-                                  n_slots * num_features, stream);
-    auto best_score =
-        make_device_tensor({n_slots}, DLDataType{kDLUInt, 64, 1});
-    detail::launch_init_u64(static_cast<detail::cuda_u64*>(best_score->data()),
-                            n_slots, 0ull, stream);
-    detail::launch_medoid_select<T>(
-        static_cast<const int64_t*>(labels->data()), points_ptr,
-        static_cast<const T*>(weights_dev->data()),
-        static_cast<T*>(sum_feat->data()),
-        static_cast<int64_t*>(counts->data()), num_points, n_slots,
-        num_features, static_cast<detail::cuda_u64*>(best_score->data()),
-        static_cast<int64_t*>(best_rows->data()), stream);
+    check_cuda("select_representative", kOpName);
+  } catch (const std::runtime_error& e) {
+    return fail_runtime(e.what());
   }
-  check_cuda("select_representative", kOpName);
 
   auto cluster_count_t = make_device_tensor({1}, kInt64Dtype);
+  HOLOSCAN_TRY(auto cluster_count_ptr,
+               writable_ptr(*cluster_count_t, "cluster_count"));
   {
     const int64_t zero = 0;
-    cudaMemcpyAsync(cluster_count_t->data(), &zero, sizeof(int64_t),
-                    cudaMemcpyHostToDevice, stream);
+    if (cudaMemcpyAsync(cluster_count_ptr, &zero, sizeof(int64_t),
+                        cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+      return fail_runtime("DetectionReductionOp: cluster-count clear failed");
+    }
   }
-  detail::launch_count_occupied(static_cast<const int64_t*>(best_rows->data()),
-                                n_slots,
-                                static_cast<int64_t*>(cluster_count_t->data()),
-                                stream);
-  check_cuda("count_occupied", kOpName);
+  try {
+    detail::launch_count_occupied(
+        static_cast<const int64_t*>(best_rows_ptr), n_slots,
+        static_cast<int64_t*>(cluster_count_ptr), stream);
+    check_cuda("count_occupied", kOpName);
+  } catch (const std::runtime_error& e) {
+    return fail_runtime(e.what());
+  }
   int64_t num_clusters = 0;
-  cudaMemcpyAsync(&num_clusters, cluster_count_t->data(), sizeof(int64_t),
-                  cudaMemcpyDeviceToHost, stream);
-  cudaStreamSynchronize(stream);
+  if (cudaMemcpyAsync(&num_clusters, cluster_count_ptr, sizeof(int64_t),
+                      cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
+    return fail_runtime("DetectionReductionOp: cluster-count D2H failed");
+  }
+  if (cudaStreamSynchronize(stream) != cudaSuccess) {
+    return fail_runtime("DetectionReductionOp: cluster-count sync failed");
+  }
 
-  auto rep_idx =
-      make_device_tensor({num_clusters, idx_cols}, kInt64Dtype);
+  const std::vector<int64_t> rep_shape = {num_clusters, idx_cols};
+  auto rep_loan = rep_idx.allocate_tensor(
+      TensorLoanRequest{.shape = rep_shape, .dtype = kInt64Dtype});
+  if (!rep_loan) {
+    return make_unexpected(std::move(rep_loan).error());
+  }
+  auto rep_writer = rep_loan->write(context.cuda_stream());
+  if (!rep_writer) {
+    return make_unexpected(std::move(rep_writer).error());
+  }
+  int64_t* rep_ptr = static_cast<int64_t*>(rep_writer->data());
+
   if (num_clusters > 0) {
-    detail::launch_compact_and_gather(
-        static_cast<const int64_t*>(best_rows->data()),
-        static_cast<const int64_t*>(detection_idx->data()), n_slots, idx_cols,
-        static_cast<int64_t*>(rep_idx->data()), stream);
-    check_cuda("compact_and_gather", kOpName);
+    try {
+      detail::launch_compact_and_gather(
+          static_cast<const int64_t*>(best_rows_ptr),
+          static_cast<const int64_t*>(idx_in.data()), n_slots, idx_cols,
+          rep_ptr, stream);
+      check_cuda("compact_and_gather", kOpName);
+    } catch (const std::runtime_error& e) {
+      return fail_runtime(e.what());
+    }
   }
 
-  if (stream != cudaStreamDefault) {
-    op_output.set_cuda_stream(stream, "rep_idx");
+  auto rep_committed = std::move(*rep_writer).commit();
+  if (!rep_committed) {
+    return make_unexpected(std::move(rep_committed).error());
   }
-  emit_single(op_output, "rep_idx", rep_idx);
+  auto rep_emitted = rep_idx.emit(
+      std::move(*rep_loan),
+      EmitOptions{.capture_time = context.activation_time()});
+  if (!rep_emitted) {
+    return make_unexpected(std::move(rep_emitted).error());
+  }
 
-  retained_labels_ = std::move(labels);
-  retained_idx_ = std::move(detection_idx);
-  retained_points_ = std::move(points);
+  retained_labels_ = std::move(labels_in);
+  retained_idx_ = std::move(idx_in);
+  if (maybe_points.has_value()) {
+    retained_points_ = std::move(*maybe_points);
+  }
   retained_weights_ = std::move(weights_dev);
+  return {};
 }
 
 }  // namespace holoscan::radar

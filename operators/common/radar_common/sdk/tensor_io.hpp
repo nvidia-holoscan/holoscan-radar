@@ -3,77 +3,104 @@
 
 #pragma once
 
-#include <memory>
-#include <stdexcept>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
 #include <string>
 #include <utility>
+#include <vector>
 
-#include <holoscan/holoscan.hpp>
+#include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/expected.hpp>
+#include <holoscan/core/expected_macros.hpp>
+#include <holoscan/core/port.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
 
 namespace holoscan::radar {
 
-// Single-entry TensorMap I/O helpers implementing the module convention that a
-// port carries exactly one tensor and the port name — not the map key — is the
-// contract (see operators/common/README.md). Each operator passes its own name
-// as `who` so error messages stay specific.
+// HSDK 5 Tensor port helpers. Ports carry a plain holoscan::Tensor (no
+// TensorMap). Receive/emit return expected<>; callers propagate with
+// HOLOSCAN_TRY. The runtime compute stream is context.cuda_stream().
 
-// Receive the single tensor on a required input port. Throws when no message
-// arrived, when the map does not hold exactly one entry, or when that entry is
-// a null tensor. The returned pointer is always non-null.
-inline std::shared_ptr<holoscan::Tensor> receive_single(
-    holoscan::InputContext& op_input, const char* port,
-    const std::string& who) {
-  auto maybe = op_input.receive<holoscan::TensorMap>(port);
-  if (!maybe) {
-    throw std::runtime_error(
-        who + ": no message received on input port '" + port + "'");
+inline expected<Tensor, Error> receive_tensor(Input<Tensor>& port,
+                                              const std::string& who) {
+  auto sample = port.receive_data();
+  if (!sample) {
+    return make_unexpected(std::move(sample).error());
   }
-  holoscan::TensorMap& map = maybe.value();
-  if (map.size() != 1) {
-    throw std::invalid_argument(
-        who + ": input port '" + port +
-        "' expects a single-entry TensorMap, got " +
-        std::to_string(map.size()) + " entries");
+  if (sample->data() == nullptr) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        who + ": received a null tensor on input port '" +
+            std::string(port.name()) + "'"});
   }
-  std::shared_ptr<holoscan::Tensor> tensor = map.begin()->second;
-  if (!tensor) {
-    throw std::runtime_error(
-        who + ": received a null tensor on input port '" + port + "'");
-  }
-  return tensor;
+  return std::move(*sample);
 }
 
-// Receive the single tensor on an optional (non-blocking) input port. Returns
-// nullptr when the port is unconnected or carried no tensor this tick; throws
-// only when a message arrived with more than one entry. Callers guard the
-// result with `if (tensor)`.
-inline std::shared_ptr<holoscan::Tensor> receive_optional(
-    holoscan::InputContext& op_input, const char* port,
-    const std::string& who) {
-  auto maybe = op_input.receive<holoscan::TensorMap>(port);
-  if (!maybe) {
-    return nullptr;
+// Optional sticky-override receive: success with a value when the port has
+// a selected/reused sample; nullopt on SafeDefault / absent / never-seen.
+template <typename T>
+expected<std::optional<T>, Error> receive_optional_value(Input<T>& port) {
+  if (port.is_missing()) {
+    return std::optional<T>{};
   }
-  holoscan::TensorMap& map = maybe.value();
-  if (map.empty()) {
-    return nullptr;
+  auto sample = port.receive_data();
+  if (!sample) {
+    if (sample.error().code == ErrorCode::kNotReady ||
+        sample.error().code == ErrorCode::kReceiveError) {
+      return std::optional<T>{};
+    }
+    return make_unexpected(std::move(sample).error());
   }
-  if (map.size() != 1) {
-    throw std::invalid_argument(
-        who + ": input port '" + port +
-        "' expects a single-entry TensorMap, got " +
-        std::to_string(map.size()) + " entries");
-  }
-  return map.begin()->second;
+  return std::optional<T>{std::move(*sample)};
 }
 
-// Emit a single tensor on an output port as a one-entry TensorMap keyed by the
-// port name.
-inline void emit_single(holoscan::OutputContext& op_output, const char* port,
-                        std::shared_ptr<holoscan::Tensor> tensor) {
-  holoscan::TensorMap map;
-  map.insert({port, std::move(tensor)});
-  op_output.emit(map, port);
+// Allocate a device Tensor loan, run `fill` with a writable device pointer on
+// the runtime compute stream, commit, and emit. `fill` must enqueue only
+// stream-ordered device work (no host sync).
+template <typename FillFn>
+expected<void, Error> emit_device_tensor(Output<Tensor>& port,
+                                         ExecutionContext& context,
+                                         std::span<const int64_t> shape,
+                                         DLDataType dtype, FillFn&& fill) {
+  auto loan = port.allocate_tensor(
+      TensorLoanRequest{.shape = shape, .dtype = dtype});
+  if (!loan) {
+    return make_unexpected(std::move(loan).error());
+  }
+
+  auto writer = loan->write(context.cuda_stream());
+  if (!writer) {
+    return make_unexpected(std::move(writer).error());
+  }
+
+  HOLOSCAN_TRY(std::forward<FillFn>(fill)(writer->data(), writer->byte_size()));
+
+  auto committed = std::move(*writer).commit();
+  if (!committed) {
+    return make_unexpected(std::move(committed).error());
+  }
+  return port.emit(std::move(*loan),
+                   EmitOptions{.capture_time = context.activation_time()});
+}
+
+// Convenience: byte span for a compact row-major tensor of the given shape.
+inline std::size_t tensor_byte_span(std::span<const int64_t> shape,
+                                    DLDataType dtype) {
+  std::size_t count = 1;
+  for (const int64_t dim : shape) {
+    if (dim < 0) {
+      return 0;
+    }
+    count *= static_cast<std::size_t>(dim);
+  }
+  const std::size_t bytes_per_element =
+      ((static_cast<std::size_t>(dtype.bits) + 7) / 8) *
+      static_cast<std::size_t>(dtype.lanes);
+  return count * bytes_per_element;
 }
 
 }  // namespace holoscan::radar

@@ -196,7 +196,7 @@ the same graph as its C++ counterpart.
 | Holoscan SDK | ≥ 4.3.0 |
 | CUDA Toolkit | 13.x |
 | CMake | ≥ 3.31 |
-| C++ compiler | ≥ C++17 (GCC 11+) |
+| C++ compiler | ≥ C++20 (GCC 11+) |
 | pybind11 | ≥ 2.11 |
 | Python | 3.10 - 3.13 |
 

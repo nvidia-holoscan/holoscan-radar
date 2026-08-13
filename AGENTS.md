@@ -19,11 +19,14 @@ as the source of truth; prefer each page's `.md` form, and use the
 to find applicable pages. Do not infer HSDK 5 behavior from HSDK 4.x code.
 Repository planning documents remain authoritative for this library's operator
 contracts. Record durable migration decisions there rather than in this file.
+Track HSDK 5 / EA port friction in
+[`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md) (not
+`TEAM_BLOCKED.md`).
 
 Before merging the HSDK 5 port into `main` for the public release, search the
 entire repository for `[EA HSDK5 ONLY]` and remove every marked workaround,
-including this section. Do not rely on conversation context when performing
-that cleanup.
+including this section and `HSDK5_PORT.md`. Do not rely on conversation
+context when performing that cleanup.
 
 ## Source of truth
 
@@ -36,6 +39,7 @@ Read before starting non-trivial work, in this precedence order:
 5. [`docs/planning/NEW_OPERATOR_CHECKLIST.md`](docs/planning/NEW_OPERATOR_CHECKLIST.md) — landing gate; verify before claiming an operator (or variant slice) done.
 6. [`docs/planning/OPERATOR_DEVELOPMENT.md`](docs/planning/OPERATOR_DEVELOPMENT.md) — how to implement well: hot-path discipline, diagnosis, `[live]`/calibration pitfalls, tests, and performance characterization (lessons from landed operators).
 7. [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md) — index of items blocked on a team decision (detail in each operator’s `OPEN_ITEMS.md`).
+8. [`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md) — **[EA HSDK5 ONLY]** HSDK 5 / EA migration issues (SDK gaps, durable API changes, deferred port work).
 
 Rules that follow from "lockdown":
 

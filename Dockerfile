@@ -54,9 +54,16 @@ RUN if ! python3 -m holoscan_cli --help 2>/dev/null | grep -qw build; then \
 #                 CMAKE_<LANG>_COMPILER_LAUNCHER and the holohub wrapper points
 #                 CCACHE_DIR at the gitignored .cache/, so it survives the
 #                 build-test/ wipe.
+#   libyaml-cpp-dev — demo apps parse YAML configs with yaml-cpp. HSDK 4.x
+#                 exported it from the SDK install; HSDK 5 keeps yaml-cpp
+#                 private to config_io, so the apps need the system package.
+#   openssh-client — git-over-SSH and host tooling (dotfiles clone, remotes);
+#                 the HSDK 5 EA base image does not ship ssh.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         libgtest-dev \
+        libyaml-cpp-dev \
+        openssh-client \
         clang-format \
         pybind11-dev \
         sudo \

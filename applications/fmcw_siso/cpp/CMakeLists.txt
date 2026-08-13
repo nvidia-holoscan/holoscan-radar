@@ -3,8 +3,7 @@
 
 add_executable(fmcw_siso fmcw_siso.cpp)
 
-# yaml-cpp ships with the Holoscan SDK (found transitively via
-# find_package(holoscan)); the app parses its runtime config with it.
+# App YAML configs; system libyaml-cpp-dev (HSDK 5 no longer exports yaml-cpp).
 find_package(yaml-cpp REQUIRED)
 
 target_link_libraries(fmcw_siso PRIVATE

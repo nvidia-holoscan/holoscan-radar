@@ -23,9 +23,9 @@ project(holoscan_radar
 )
 
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -33,12 +33,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ---------------------------------------------------------------------------
 # Dependencies
 # ---------------------------------------------------------------------------
-# The Holoscan SDK install tree bundles MatX and holoscan-config.cmake chains
-# find_dependency(MATX ...), so find_package(holoscan) also provides the
-# matx::matx target used by the operator kernels.
+# HSDK 4.x re-exported MatX from find_package(holoscan) via find_dependency.
+# HSDK 5 keeps MatX in the SDK install tree but does not pull it in
+# transitively — find it explicitly.
 
 find_package(CUDAToolkit REQUIRED)
 find_package(holoscan REQUIRED COMPONENTS core)
+find_package(matx REQUIRED)
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +119,10 @@ endif()
 # without a HoloHub clone.
 list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(HoloHubConfigHelpers)
+
+# Optional SDK features (Holoviz, …) — see HoloscanRadarOptionalFeatures.cmake.
+# [EA HSDK5 ONLY] until domain operator modules ship with the public release.
+include(HoloscanRadarOptionalFeatures)
 
 # ---------------------------------------------------------------------------
 # Subprojects

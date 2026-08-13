@@ -4,6 +4,13 @@
 # Reusable harness headers (utils/) plus thin per-operator consumers. Shared
 # code lives in utils/ as an INTERFACE library; only the scenario matrix is
 # operator-specific.
+#
+# [EA HSDK5 ONLY] Operator allow-list alone is not enough: most perf_*.cpp
+# drivers are still HSDK 4.x Application / TensorMap code and will not
+# compile. Only build Graph-ported perf binaries listed in
+# HOLOSCAN_RADAR_HSDK5_PORTED_PERF (expand as each driver is rewritten —
+# see docs/planning/HSDK5_PORT.md §8).
+
 add_library(radar_perf_utils INTERFACE)
 target_include_directories(radar_perf_utils INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -13,222 +20,96 @@ target_link_libraries(radar_perf_utils INTERFACE
     holoscan::radar_common
     CUDA::cudart)
 
-add_executable(perf_cfar_detector perf_cfar_detector.cpp)
-target_link_libraries(perf_cfar_detector PRIVATE
-    radar_perf_utils
-    holoscan::cfar_detector_op)
+# Perf drivers rewritten for HSDK 5 Graph (not the same as the operator
+# allow-list — an op can be ported while its perf_*.cpp remains 4.x).
+set(HOLOSCAN_RADAR_HSDK5_PORTED_PERF
+    clutter_filter
+)
 
-add_executable(perf_detection_reduction perf_detection_reduction.cpp)
-target_link_libraries(perf_detection_reduction PRIVATE
-    radar_perf_utils
-    holoscan::detection_reduction_op)
+function(radar_add_perf NAME)
+    set(_op_target ${ARGN})
+    if(NOT "${NAME}" IN_LIST HOLOSCAN_RADAR_HSDK5_PORTED_PERF)
+        message(STATUS
+            "[EA HSDK5 ONLY] Skipping perf_${NAME} "
+            "(driver not Graph-ported yet)")
+        return()
+    endif()
+    if(NOT TARGET ${_op_target})
+        message(STATUS
+            "[EA HSDK5 ONLY] Skipping perf_${NAME} (missing ${_op_target})")
+        return()
+    endif()
+    add_executable(perf_${NAME} perf_${NAME}.cpp)
+    target_link_libraries(perf_${NAME} PRIVATE
+        radar_perf_utils
+        ${_op_target})
+endfunction()
 
-add_executable(perf_feature_assembly perf_feature_assembly.cpp)
-target_link_libraries(perf_feature_assembly PRIVATE
-    radar_perf_utils
-    holoscan::feature_assembly_op)
-
-add_executable(perf_fmcw_range_processor perf_fmcw_range_processor.cpp)
-target_link_libraries(perf_fmcw_range_processor PRIVATE
-    radar_perf_utils
-    holoscan::fmcw_range_processor_op)
-
-add_executable(perf_fmcw_doppler_processor perf_fmcw_doppler_processor.cpp)
-target_link_libraries(perf_fmcw_doppler_processor PRIVATE
-    radar_perf_utils
-    holoscan::fmcw_doppler_processor_op)
-
-add_executable(perf_clutter_filter perf_clutter_filter.cpp)
-target_link_libraries(perf_clutter_filter PRIVATE
-    radar_perf_utils
-    holoscan::clutter_filter_op)
-
-add_executable(perf_fmcw_range_doppler_processor
-    perf_fmcw_range_doppler_processor.cpp)
-target_link_libraries(perf_fmcw_range_doppler_processor PRIVATE
-    radar_perf_utils
+radar_add_perf(cfar_detector holoscan::cfar_detector_op)
+radar_add_perf(detection_reduction holoscan::detection_reduction_op)
+radar_add_perf(feature_assembly holoscan::feature_assembly_op)
+radar_add_perf(fmcw_range_processor holoscan::fmcw_range_processor_op)
+radar_add_perf(fmcw_doppler_processor holoscan::fmcw_doppler_processor_op)
+radar_add_perf(clutter_filter holoscan::clutter_filter_op)
+radar_add_perf(fmcw_range_doppler_processor
     holoscan::fmcw_range_doppler_processor_op)
 
-add_executable(perf_fmcw_split_vs_fused perf_fmcw_split_vs_fused.cpp)
-target_link_libraries(perf_fmcw_split_vs_fused PRIVATE
-    radar_perf_utils
-    holoscan::fmcw_range_processor_op
-    holoscan::clutter_filter_op
-    holoscan::fmcw_doppler_processor_op
-    holoscan::fmcw_range_doppler_processor_op)
+# Multi-op fused/split harness needs every constituent driver Graph-ported.
+if("fmcw_split_vs_fused" IN_LIST HOLOSCAN_RADAR_HSDK5_PORTED_PERF
+   AND TARGET holoscan::fmcw_range_processor_op
+   AND TARGET holoscan::clutter_filter_op
+   AND TARGET holoscan::fmcw_doppler_processor_op
+   AND TARGET holoscan::fmcw_range_doppler_processor_op)
+    add_executable(perf_fmcw_split_vs_fused perf_fmcw_split_vs_fused.cpp)
+    target_link_libraries(perf_fmcw_split_vs_fused PRIVATE
+        radar_perf_utils
+        holoscan::fmcw_range_processor_op
+        holoscan::clutter_filter_op
+        holoscan::fmcw_doppler_processor_op
+        holoscan::fmcw_range_doppler_processor_op)
+else()
+    message(STATUS
+        "[EA HSDK5 ONLY] Skipping perf_fmcw_split_vs_fused "
+        "(driver not Graph-ported / missing deps)")
+endif()
 
-add_executable(perf_cluster_dbscan perf_cluster_dbscan.cpp)
-target_link_libraries(perf_cluster_dbscan PRIVATE
-    radar_perf_utils
-    holoscan::cluster_dbscan_op)
-
-add_executable(perf_snapshot_gather perf_snapshot_gather.cpp)
-target_link_libraries(perf_snapshot_gather PRIVATE
-    radar_perf_utils
-    holoscan::snapshot_gather_op)
-
-add_executable(perf_beamscan_estimator perf_beamscan_estimator.cpp)
-target_link_libraries(perf_beamscan_estimator PRIVATE
-    radar_perf_utils
-    holoscan::beamscan_estimator_op)
-
-add_executable(perf_mvdr_estimator perf_mvdr_estimator.cpp)
-target_link_libraries(perf_mvdr_estimator PRIVATE
-    radar_perf_utils
-    holoscan::mvdr_estimator_op)
-
-add_executable(perf_music_estimator perf_music_estimator.cpp)
-target_link_libraries(perf_music_estimator PRIVATE
-    radar_perf_utils
-    holoscan::music_estimator_op)
-
-add_executable(perf_root_music_estimator perf_root_music_estimator.cpp)
-target_link_libraries(perf_root_music_estimator PRIVATE
-    radar_perf_utils
-    holoscan::root_music_estimator_op)
-
-add_executable(perf_esprit_estimator perf_esprit_estimator.cpp)
-target_link_libraries(perf_esprit_estimator PRIVATE
-    radar_perf_utils
-    holoscan::esprit_estimator_op)
-
-add_executable(perf_phase_shift_beamformer perf_phase_shift_beamformer.cpp)
-target_link_libraries(perf_phase_shift_beamformer PRIVATE
-    radar_perf_utils
-    holoscan::phase_shift_beamformer_op)
-
-add_executable(perf_mimo_deinterleave perf_mimo_deinterleave.cpp)
-target_link_libraries(perf_mimo_deinterleave PRIVATE
-    radar_perf_utils
-    holoscan::mimo_deinterleave_op)
-
-add_executable(perf_virtual_array_assembly perf_virtual_array_assembly.cpp)
-target_link_libraries(perf_virtual_array_assembly PRIVATE
-    radar_perf_utils
-    holoscan::virtual_array_assembly_op)
-
-add_executable(perf_mimo_coherent_compensation perf_mimo_coherent_compensation.cpp)
-target_link_libraries(perf_mimo_coherent_compensation PRIVATE
-    radar_perf_utils
+radar_add_perf(cluster_dbscan holoscan::cluster_dbscan_op)
+radar_add_perf(snapshot_gather holoscan::snapshot_gather_op)
+radar_add_perf(beamscan_estimator holoscan::beamscan_estimator_op)
+radar_add_perf(mvdr_estimator holoscan::mvdr_estimator_op)
+radar_add_perf(music_estimator holoscan::music_estimator_op)
+radar_add_perf(root_music_estimator holoscan::root_music_estimator_op)
+radar_add_perf(esprit_estimator holoscan::esprit_estimator_op)
+radar_add_perf(phase_shift_beamformer holoscan::phase_shift_beamformer_op)
+radar_add_perf(mimo_deinterleave holoscan::mimo_deinterleave_op)
+radar_add_perf(virtual_array_assembly holoscan::virtual_array_assembly_op)
+radar_add_perf(mimo_coherent_compensation
     holoscan::mimo_coherent_compensation_op)
 
 # Optional smoke: runs a tiny scenario subset and verifies a report file is
 # written. No timing thresholds — CI only checks the tool executes and emits.
+# [EA HSDK5 ONLY] Only register smokes for Graph-ported perf targets.
 if(HOLOSCAN_RADAR_BUILD_TESTING)
-    add_test(NAME perf_cfar_detector_smoke
-        COMMAND perf_cfar_detector --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_smoke.json)
-    set_tests_properties(perf_cfar_detector_smoke PROPERTIES
-        LABELS "performance")
+    function(radar_add_perf_smoke NAME)
+        if(NOT TARGET perf_${NAME})
+            return()
+        endif()
+        add_test(NAME perf_${NAME}_smoke
+            COMMAND perf_${NAME} --sizes xs --warmup 1 --frames 2 --quiet
+                --output ${CMAKE_CURRENT_BINARY_DIR}/perf_${NAME}_smoke.json)
+        set_tests_properties(perf_${NAME}_smoke PROPERTIES
+            LABELS "performance")
+    endfunction()
 
-    add_test(NAME perf_detection_reduction_smoke
-        COMMAND perf_detection_reduction --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_detection_reduction_smoke.json)
-    set_tests_properties(perf_detection_reduction_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_feature_assembly_smoke
-        COMMAND perf_feature_assembly --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_feature_assembly_smoke.json)
-    set_tests_properties(perf_feature_assembly_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_fmcw_range_processor_smoke
-        COMMAND perf_fmcw_range_processor --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_range_processor_smoke.json)
-    set_tests_properties(perf_fmcw_range_processor_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_fmcw_doppler_processor_smoke
-        COMMAND perf_fmcw_doppler_processor --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_doppler_processor_smoke.json)
-    set_tests_properties(perf_fmcw_doppler_processor_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_clutter_filter_smoke
-        COMMAND perf_clutter_filter --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_clutter_filter_smoke.json)
-    set_tests_properties(perf_clutter_filter_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_fmcw_range_doppler_processor_smoke
-        COMMAND perf_fmcw_range_doppler_processor --sizes xs --warmup 1 --frames 2
-            --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_range_doppler_processor_smoke.json)
-    set_tests_properties(perf_fmcw_range_doppler_processor_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_fmcw_split_vs_fused_smoke
-        COMMAND perf_fmcw_split_vs_fused --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_fmcw_split_vs_fused_smoke.json)
-    set_tests_properties(perf_fmcw_split_vs_fused_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_cluster_dbscan_smoke
-        COMMAND perf_cluster_dbscan --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_cluster_dbscan_smoke.json)
-    set_tests_properties(perf_cluster_dbscan_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_snapshot_gather_smoke
-        COMMAND perf_snapshot_gather --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_snapshot_gather_smoke.json)
-    set_tests_properties(perf_snapshot_gather_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_beamscan_estimator_smoke
-        COMMAND perf_beamscan_estimator --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_beamscan_estimator_smoke.json)
-    set_tests_properties(perf_beamscan_estimator_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_mvdr_estimator_smoke
-        COMMAND perf_mvdr_estimator --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_mvdr_estimator_smoke.json)
-    set_tests_properties(perf_mvdr_estimator_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_music_estimator_smoke
-        COMMAND perf_music_estimator --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_music_estimator_smoke.json)
-    set_tests_properties(perf_music_estimator_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_root_music_estimator_smoke
-        COMMAND perf_root_music_estimator --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_root_music_estimator_smoke.json)
-    set_tests_properties(perf_root_music_estimator_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_esprit_estimator_smoke
-        COMMAND perf_esprit_estimator --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_esprit_estimator_smoke.json)
-    set_tests_properties(perf_esprit_estimator_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_phase_shift_beamformer_smoke
-        COMMAND perf_phase_shift_beamformer --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_phase_shift_beamformer_smoke.json)
-    set_tests_properties(perf_phase_shift_beamformer_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_mimo_deinterleave_smoke
-        COMMAND perf_mimo_deinterleave --sizes xs --warmup 1 --frames 2 --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_mimo_deinterleave_smoke.json)
-    set_tests_properties(perf_mimo_deinterleave_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_virtual_array_assembly_smoke
-        COMMAND perf_virtual_array_assembly --sizes xs --warmup 1 --frames 2
-            --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_virtual_array_assembly_smoke.json)
-    set_tests_properties(perf_virtual_array_assembly_smoke PROPERTIES
-        LABELS "performance")
-
-    add_test(NAME perf_mimo_coherent_compensation_smoke
-        COMMAND perf_mimo_coherent_compensation --sizes xs --warmup 1 --frames 2
-            --quiet
-            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_mimo_coherent_compensation_smoke.json)
-    set_tests_properties(perf_mimo_coherent_compensation_smoke PROPERTIES
-        LABELS "performance")
+    foreach(_perf_name IN LISTS HOLOSCAN_RADAR_HSDK5_PORTED_PERF)
+        radar_add_perf_smoke(${_perf_name})
+    endforeach()
+    if(TARGET perf_fmcw_split_vs_fused)
+        add_test(NAME perf_fmcw_split_vs_fused_smoke
+            COMMAND perf_fmcw_split_vs_fused --sizes xs --warmup 1 --frames 2
+                --quiet
+                --output ${CMAKE_CURRENT_BINARY_DIR}/perf_split_vs_fused_smoke.json)
+        set_tests_properties(perf_fmcw_split_vs_fused_smoke PROPERTIES
+            LABELS "performance")
+    endif()
 endif()
