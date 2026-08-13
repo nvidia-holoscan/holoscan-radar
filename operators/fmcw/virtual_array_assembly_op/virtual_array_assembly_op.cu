@@ -73,12 +73,15 @@ void VirtualArrayAssemblyOp<T>::setup(OperatorSpec& spec) {
   const TensorAllocationBounds bounds{
       .max_rank = kVirtualArrayAssemblyMaxRank,
       .max_byte_span = kVirtualArrayAssemblyMaxByteSpan};
+  const TensorAllocationBounds geom_bounds{
+      .max_rank = 2U,
+      .max_byte_span = kVirtualArrayAssemblyGeomMaxByteSpan};
   spec.input(rd_maps).queue_depth(2U).expects_tensor(kDevice);
   spec.output(rd_maps_out).produces_tensor(kDevice).tensor_allocation(bounds);
   // Packed ArrayGeometry (host-planned; H2D each tick).
   spec.output(array_geometry)
       .produces_tensor(kDevice)
-      .tensor_allocation(bounds);
+      .tensor_allocation(geom_bounds);
   // [live] POD sticky override. Leaving unconnected is legal — compute()
   // seeds from Params. Descriptor / vector live params are Params-only (§9).
   spec.input(wavelength).queue_depth(2U);

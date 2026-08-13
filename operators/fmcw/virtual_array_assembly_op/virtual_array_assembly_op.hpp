@@ -76,8 +76,10 @@ static_assert(
     "namespace");
 
 inline constexpr std::uint32_t kVirtualArrayAssemblyMaxRank = 8U;
-// 256 MiB
+// 256 MiB — rd_maps_out data plane
 inline constexpr std::size_t kVirtualArrayAssemblyMaxByteSpan = 256ULL << 20;
+// Packed ArrayGeometry is (num_virtual + 1, 3) float64 — tiny vs the cube.
+inline constexpr std::size_t kVirtualArrayAssemblyGeomMaxByteSpan = 64ULL << 10;
 
 template <typename T>
 class VirtualArrayAssemblyOp

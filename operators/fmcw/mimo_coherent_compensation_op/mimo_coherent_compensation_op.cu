@@ -305,9 +305,12 @@ expected<void, Error> MIMOCoherentCompensationOp<T>::compute(
   // waveform is [live] in OPERATOR_API.md but Params-only on EA
   // (HSDK5_PORT §9: FMCWWaveformDescriptor owns vectors). Read from
   // Params each tick; track changes for TDM correction-table cache
-  // invalidation.
+  // warn-once (initial Params seed is silent — ConfigCache contract).
   bool waveform_changed = false;
-  if (!(pinned.waveform == effective_waveform_)) {
+  if (!waveform_seeded_) {
+    effective_waveform_ = pinned.waveform;
+    waveform_seeded_ = true;
+  } else if (!(pinned.waveform == effective_waveform_)) {
     waveform_changed = true;
     effective_waveform_ = pinned.waveform;
   }

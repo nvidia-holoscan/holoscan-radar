@@ -10,6 +10,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -21,7 +22,6 @@
 #include "fmcw/fmcw_range_processor_op/range_stage.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
-#include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -34,7 +34,7 @@ expected<void, Error> fail_invalid(const std::string& message) {
 
 template <typename T>
 constexpr const char* precision_name() {
-  return sizeof(T) == 4 ? "float" : "double";
+  return std::is_same_v<T, float> ? "float" : "double";
 }
 
 }  // namespace
@@ -147,6 +147,7 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
 
   try {
     require_cuda_accessible(input, "adc_cube", op_name);
+    require_contiguous(input, "adc_cube", op_name);
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }

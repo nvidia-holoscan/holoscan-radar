@@ -9,7 +9,6 @@
 #include <optional>
 #include <type_traits>
 
-#include <holoscan/core/domain/dlpack.hpp>
 #include <holoscan/core/domain/tensor.hpp>
 #include <holoscan/core/errors.hpp>
 #include <holoscan/core/execution_context.hpp>

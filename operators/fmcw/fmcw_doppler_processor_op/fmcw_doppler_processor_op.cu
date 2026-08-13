@@ -10,6 +10,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -31,7 +32,7 @@ expected<void, Error> fail_invalid(const std::string& message) {
 
 template <typename T>
 constexpr const char* precision_name() {
-  return sizeof(T) == 4 ? "float" : "double";
+  return std::is_same_v<T, float> ? "float" : "double";
 }
 
 }  // namespace
@@ -109,6 +110,7 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
   try {
     classify_input_dtype<T>(input, "range_profiles", /*allow_real=*/false);
     require_cuda_accessible(input, "range_profiles", op_name);
+    require_contiguous(input, "range_profiles", op_name);
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
