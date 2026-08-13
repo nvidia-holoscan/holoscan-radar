@@ -3,12 +3,8 @@
 
 #include "angle_estimation/beamscan_estimator_op/is_valid_mask.hpp"
 
-#include <cuda_runtime_api.h>
-
-#include <cstring>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 #include "radar_common/tensor/tensor_utils.hpp"
 
@@ -16,6 +12,9 @@ namespace holoscan::radar::detail {
 
 void check_is_valid_mask(const holoscan::Tensor& is_valid, int64_t num_items,
                          int64_t num_snapshots, const char* who) {
+  // Shape / dtype only. Zero slots are legal: OPERATOR_API.md says is_valid
+  // marks which snapshot slots to use (clamp/ragged); the estimator must
+  // restrict itself to marked slots, not fail the activation.
   const DLDataType dtype = is_valid.dtype();
   const bool is_bool =
       dtype.code == kDLBool && dtype.bits == 8 && dtype.lanes == 1;
@@ -34,32 +33,8 @@ void check_is_valid_mask(const holoscan::Tensor& is_valid, int64_t num_items,
         ": is_valid must have shape (num_items, num_snapshots) matching "
         "snapshot");
   }
-
-  const int64_t mask_elems = num_items * num_snapshots;
-  std::vector<uint8_t> host_mask(static_cast<size_t>(mask_elems));
-  if (mask_elems > 0) {
-    const cudaMemcpyKind kind =
-        is_cuda_accessible(is_valid) ? cudaMemcpyDeviceToHost
-                                     : cudaMemcpyHostToHost;
-    if (cudaMemcpy(host_mask.data(), is_valid.data(),
-                   static_cast<size_t>(mask_elems) * sizeof(uint8_t),
-                   kind) != cudaSuccess) {
-      throw std::runtime_error(
-          std::string(who) + ": is_valid mask copy failed");
-    }
-  }
-
-  for (int64_t i = 0; i < num_items; ++i) {
-    for (int64_t s = 0; s < num_snapshots; ++s) {
-      const size_t idx =
-          static_cast<size_t>(i * num_snapshots + s);
-      if (host_mask[idx] == 0) {
-        throw std::invalid_argument(
-            std::string(who) +
-            ": is_valid marks an invalid snapshot slot");
-      }
-    }
-  }
+  require_cuda_accessible(is_valid, "is_valid", who);
+  require_contiguous(is_valid, "is_valid", who);
 }
 
 }  // namespace holoscan::radar::detail

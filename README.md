@@ -152,7 +152,7 @@ class MyApp : public holoscan::Application {
 
     // add_flow(source, range, {{"adc_cube", "adc_cube"}}); ...
     add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
-    add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
+    add_flow(clutter, doppler, {{"range_profiles_out", "range_profiles"}});
   }
 };
 
@@ -189,7 +189,7 @@ doppler = FMCWDopplerProcessorOp(self, waveform=waveform, name="doppler")
 
 # self.add_flow(source, range_op, {("adc_cube", "adc_cube")}); ...
 self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
-self.add_flow(clutter, doppler, {("range_profiles", "range_profiles")})
+self.add_flow(clutter, doppler, {("range_profiles_out", "range_profiles")})
 ```
 
 See [`applications/fmcw_siso/python`](applications/fmcw_siso/python) for the

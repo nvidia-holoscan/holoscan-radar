@@ -38,7 +38,8 @@ namespace holoscan::radar {
 // In:  snapshot        — complex64/complex128, (num_items, num_channels) or
 //                       (num_items, num_channels, 1).
 // In:  is_valid        — optional bool/uint8, (num_items, num_snapshots);
-//                       validated when present and snapshot is 3-D.
+//                       validated when present (num_snapshots is 1 for the
+//                       2-D snapshot form).
 // Out: aoa_estimates   — float32/float64, (num_items, 2).
 // Out: angle_spectrum  — float32/float64, (num_items, num_az, num_el).
 //

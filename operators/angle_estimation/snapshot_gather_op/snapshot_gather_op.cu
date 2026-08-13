@@ -228,12 +228,21 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
   const DLDataType snap_dtype = complex_dtype<T>();
 
   if (num_detections == 0) {
-    HOLOSCAN_TRY(emit_device_tensor(
-        snapshot, context, snap_shape, snap_dtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
-    HOLOSCAN_TRY(emit_device_tensor(
-        is_valid, context, valid_shape, kMaskDtype,
-        [](void*, std::size_t) -> expected<void, Error> { return {}; }));
+    // Prepare both loans before any publish so a late allocate/commit
+    // failure cannot leave a sibling port already downstream.
+    auto noop = [](void*, std::size_t) -> expected<void, Error> {
+      return {};
+    };
+    HOLOSCAN_TRY(auto snap_loan,
+                 prepare_device_tensor(snapshot, context, snap_shape,
+                                      snap_dtype, noop));
+    HOLOSCAN_TRY(auto valid_loan,
+                 prepare_device_tensor(is_valid, context, valid_shape,
+                                      kMaskDtype, noop));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(snapshot, context, std::move(snap_loan)));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(is_valid, context, std::move(valid_loan)));
     retained_rd_maps_ = std::move(rd);
     retained_detection_idx_ = std::move(idx);
     return {};

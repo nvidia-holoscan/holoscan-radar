@@ -120,9 +120,9 @@ ctest --test-dir build -L unit --output-on-failure
 ctest --test-dir build -L performance --output-on-failure
 ```
 
-Bare `ctest` without `-E pytest` fails on this EA image (Python stub /
-`as_tensor`). Unported `perf_*` binaries must not enter the build — that
-is what `HOLOSCAN_RADAR_HSDK5_PORTED_PERF` enforces.
+Pytest is unregistered while Python is forced off, so bare `ctest` is fine
+for C++ unit/perf labels. Unported `perf_*` binaries must not enter the
+build — that is what `HOLOSCAN_RADAR_HSDK5_PORTED_PERF` enforces.
 
 ---
 

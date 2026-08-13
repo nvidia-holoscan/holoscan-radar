@@ -430,6 +430,9 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
         "first successful activation; instantiate a separate operator per "
         "column layout");
   }
+  // Upload device ids before the assemble kernel, but lock
+  // seeded_feature_ids_ only after a successful points emit so a failed
+  // first tick does not freeze the static features layout.
   if (!seeded_feature_ids_.has_value() || !retained_feature_ids_ ||
       retained_feature_ids_->shape()[0] != num_features) {
     retained_feature_ids_ = make_device_tensor({num_features}, kInt32Dtype);
@@ -440,7 +443,6 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
                         cudaMemcpyHostToDevice, stream) != cudaSuccess) {
       return fail_runtime("FeatureAssemblyOp: feature id H2D copy failed");
     }
-    seeded_feature_ids_ = feature_ids;
   }
 
   if (!retained_error_flag_) {
@@ -546,6 +548,9 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
       EmitOptions{.capture_time = context.activation_time()});
   if (!points_emitted) {
     return make_unexpected(std::move(points_emitted).error());
+  }
+  if (!seeded_feature_ids_.has_value()) {
+    seeded_feature_ids_ = feature_ids;
   }
 
   retained_idx_ = std::move(detection_idx_in);
