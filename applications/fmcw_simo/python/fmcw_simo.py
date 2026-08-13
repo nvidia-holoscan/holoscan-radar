@@ -147,7 +147,7 @@ class FmcwSimoApp(Application):
 
         self.add_flow(source, range_op, {("adc_cube", "adc_cube")})
         self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
-        self.add_flow(clutter, doppler, {("range_profiles", "range_profiles")})
+        self.add_flow(clutter, doppler, {("range_profiles_out", "range_profiles")})
         self.add_flow(doppler, cfar, {("rd_maps", "rd_maps")})
 
         # Angle branch runs in both modes (it is the DOA estimator, not clustering).

@@ -103,7 +103,7 @@ class FmcwSisoApp : public holoscan::Application {
     }
     add_flow(source, range, {{"adc_cube", "adc_cube"}});
     add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
-    add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
+    add_flow(clutter, doppler, {{"range_profiles_out", "range_profiles"}});
     add_flow(doppler, cfar, {{"rd_maps", "rd_maps"}});
     add_flow(cfar, sink, {{"detection_idx", "detection_idx"}});
     add_flow(cfar, sink, {{"detection_score", "detection_score"}});

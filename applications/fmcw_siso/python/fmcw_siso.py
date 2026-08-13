@@ -137,7 +137,7 @@ class FmcwSisoApp(Application):
 
         self.add_flow(source, range_op, {("adc_cube", "adc_cube")})
         self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
-        self.add_flow(clutter, doppler, {("range_profiles", "range_profiles")})
+        self.add_flow(clutter, doppler, {("range_profiles_out", "range_profiles")})
         self.add_flow(doppler, cfar, {("rd_maps", "rd_maps")})
         self.add_flow(cfar, det_report, {("detection_idx", "detection_idx")})
         self.add_flow(cfar, det_report, {("detection_score", "detection_score")})

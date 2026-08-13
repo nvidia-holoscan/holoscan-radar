@@ -194,7 +194,7 @@ class SplitCompareApp : public holoscan::Application {
       auto clutter = make_operator<hr::ClutterFilterOp<T>>(
           "clutter", Arg("method") = scen->clutter);
       add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
-      add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
+      add_flow(clutter, doppler, {{"range_profiles_out", "range_profiles"}});
     }
 
     auto term = make_operator<perf::PerfTerminalSinkOp>("rd_sink");

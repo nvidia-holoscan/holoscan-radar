@@ -107,7 +107,7 @@ class FmcwDenseSimoApp : public holoscan::Application {
     // Front end.
     add_flow(source, range, {{"adc_cube", "adc_cube"}});
     add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
-    add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
+    add_flow(clutter, doppler, {{"range_profiles_out", "range_profiles"}});
 
     // Dense angle path: beamform every RD cell, detect on the cube.
     add_flow(doppler, beamformer, {{"rd_maps", "rd_maps"}});

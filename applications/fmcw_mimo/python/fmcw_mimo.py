@@ -159,7 +159,7 @@ class FmcwMimoApp(Application):
             self.add_flow(range_op, doppler, {("range_profiles", "range_profiles")})
             self.add_flow(doppler, compensation, {("rd_maps", "rd_maps")})
             self.add_flow(compensation, clutter, {("rd_maps", "range_profiles")})
-            self.add_flow(clutter, vaa, {("range_profiles", "rd_maps")})
+            self.add_flow(clutter, vaa, {("range_profiles_out", "rd_maps")})
         else:
             source = custom_ops.MimoTdmAdcSourceOp(
                 self,
@@ -177,7 +177,7 @@ class FmcwMimoApp(Application):
             self.add_flow(source, deinterleave, {("adc_cube", "adc_cube")})
             self.add_flow(deinterleave, range_op, {("adc_cube", "adc_cube")})
             self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
-            self.add_flow(clutter, doppler, {("range_profiles", "range_profiles")})
+            self.add_flow(clutter, doppler, {("range_profiles_out", "range_profiles")})
             self.add_flow(doppler, compensation, {("rd_maps", "rd_maps")})
             self.add_flow(compensation, vaa, {("rd_maps", "rd_maps")})
 

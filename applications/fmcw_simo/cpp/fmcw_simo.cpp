@@ -91,7 +91,7 @@ class FmcwSimoApp : public holoscan::Application {
     }
     add_flow(source, range, {{"adc_cube", "adc_cube"}});
     add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
-    add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
+    add_flow(clutter, doppler, {{"range_profiles_out", "range_profiles"}});
     add_flow(doppler, cfar, {{"rd_maps", "rd_maps"}});
 
     // Angle branch runs in both modes (it
