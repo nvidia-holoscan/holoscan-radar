@@ -1,24 +1,24 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// alpha_lut fast-path contract tests for CFARDetectorOp.
+// alpha_lut fast-path contract tests for CFARDetectorOp on the HSDK 5
+// Graph harness.
+// Live mid-stream sticky Graph coverage deferred (HSDK5_PORT.md §1 / §9).
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
-#include <chrono>
-#include <tuple>
-#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
-#include <holoscan/test/test_harness.hpp>
+#include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/graph.hpp>
 
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
@@ -27,34 +27,15 @@
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
+
 using holoscan::radar::CFARDetectorOp;
+using holoscan::radar::CFARParams;
 using holoscan::radar::CfarVariant;
 using holoscan::radar::real_dtype;
+using holoscan::radar::testing::FiveOutGraphRunResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::single_map;
-using holoscan::radar::testing::TensorMapCapture;
+using holoscan::radar::testing::run_single_in_five_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
-using holoscan::radar::testing::wire_capture_sink;
-using holoscan::radar::testing::wire_data_source;
-using holoscan::radar::testing::wire_leading_override;
-using holoscan::test::create_operator_test;
-
-void wire_noop_cfar_output_sinks(holoscan::Fragment* app,
-                                 const std::shared_ptr<holoscan::Operator>& op,
-                                 bool capture_score) {
-  const auto noop = [](const holoscan::TensorMap&) {};
-  for (const char* port :
-       {"detection_mask", "detection_score", "noise_estimate"}) {
-    if (capture_score && std::string(port) == "detection_score") {
-      continue;
-    }
-    auto sink = app->make_operator<
-        holoscan::test::TestHarnessSinkOp<holoscan::TensorMap>>(
-        std::string(port) + "_sink");
-    sink->set_validators({noop});
-    app->add_flow(op, sink, {{port, "input"}});
-  }
-}
 
 constexpr int64_t kDoppler = 16;
 constexpr int64_t kRange = 32;
@@ -64,14 +45,19 @@ constexpr int kTrainD = 2;
 constexpr int kTrainR = 2;
 
 struct CfarOutputs {
+  HostTensor mask;
+  HostTensor score;
+  HostTensor noise;
   HostTensor idx;
+  HostTensor power;
 };
 
 std::vector<double> power_map(double floor,
                               const std::vector<std::pair<int64_t, int64_t>>&
                                   targets,
                               double peak) {
-  std::vector<double> map(static_cast<size_t>(kDoppler * kRange), floor);
+  std::vector<double> map(
+      static_cast<size_t>(kDoppler * kRange), floor);
   for (const auto& [d, r] : targets) {
     map[static_cast<size_t>(d * kRange + r)] = peak;
   }
@@ -82,28 +68,73 @@ int64_t num_detections(const HostTensor& idx) {
   return idx.shape.empty() ? 0 : idx.shape[0];
 }
 
-template <typename T, typename... Args>
-CfarOutputs run_cfar_idx(std::shared_ptr<holoscan::Tensor> input,
-                         Args&&... args) {
-  auto harness = create_operator_test<CFARDetectorOp<T>>(
-      std::forward<Args>(args)...);
-  harness->template add_input_port<holoscan::TensorMap>(
-      "rd_maps", {single_map(std::move(input), "rd_maps")});
+CFARParams base_params(CfarVariant variant, double pfa) {
+  CFARParams p{};
+  p.cfar_variant = variant;
+  p.guard_cells = {kGuardD, kGuardR};
+  p.training_cells = {kTrainD, kTrainR};
+  p.pfa = pfa;
+  return p;
+}
 
-  TensorMapCapture idx_cap;
-  const auto noop = [](const holoscan::TensorMap&) {};
-  harness->template add_output_port<holoscan::TensorMap>(
-      "detection_idx", idx_cap.validators());
-  harness->template add_output_port<holoscan::TensorMap>(
-      "detection_mask", {noop});
-  harness->template add_output_port<holoscan::TensorMap>(
-      "detection_score", {noop});
-  harness->template add_output_port<holoscan::TensorMap>(
-      "noise_estimate", {noop});
+// cpplint misreads the wrapped template header as an indented declaration
+// inside the anonymous namespace; the parameter list cannot fit one line.
+template <typename Source, typename OpRef, typename S0, typename S1,
+          typename S2, typename S3, typename S4>  // NOLINT(whitespace/indent_namespace)
+void wire_cfar(holoscan::Graph& graph, const Source& source, OpRef& op,
+               const S0& sink0, const S1& sink1, const S2& sink2,
+               const S3& sink3, const S4& sink4) {
+  const holoscan::ConnectionOptions q{.queue_depth = 4U};
+  graph.add_flow(source->out, op->rd_maps, q);
+  graph.add_flow(op->detection_mask, sink0->in, q);
+  graph.add_flow(op->detection_score, sink1->in, q);
+  graph.add_flow(op->noise_estimate, sink2->in, q);
+  graph.add_flow(op->detection_idx, sink3->in, q);
+  graph.add_flow(op->cfar_power, sink4->in, q);
+}
 
-  harness->run_test();
-  EXPECT_EQ(idx_cap.frames.size(), 1u);
-  return {std::move(idx_cap.frames.front())};
+template <typename T>
+FiveOutGraphRunResult run_cfar_result(
+    std::shared_ptr<holoscan::Tensor> input,
+    CFARParams params) {
+  return run_single_in_five_out_operator_graph_result<CFARDetectorOp<T>>(
+      {std::move(input)}, std::move(params), "detection_mask",
+      "detection_score", "noise_estimate", "detection_idx", "cfar_power",
+      [](holoscan::Graph& graph, const auto& source, auto& op,
+         const auto& sink0, const auto& sink1, const auto& sink2,
+         const auto& sink3, const auto& sink4) {
+        wire_cfar(graph, source, op, sink0, sink1, sink2, sink3, sink4);
+      });
+}
+
+template <typename T>
+CfarOutputs run_cfar(std::shared_ptr<holoscan::Tensor> input,
+                     CFARParams params) {
+  FiveOutGraphRunResult result =
+      run_cfar_result<T>(std::move(input), std::move(params));
+  if (!result.plan_ok) {
+    throw std::runtime_error(std::string("compile failed: ") +
+                             result.plan_json);
+  }
+  if (!result.diagnostics.empty()) {
+    std::string msg = "run diagnostics:";
+    for (const auto& d : result.diagnostics) {
+      msg += " ";
+      msg += d;
+    }
+    throw std::runtime_error(msg);
+  }
+  if (result.frames0.size() != 1U || result.frames1.size() != 1U ||
+      result.frames2.size() != 1U || result.frames3.size() != 1U ||
+      result.frames4.size() != 1U) {
+    throw std::runtime_error(
+        "alpha_lut test: expected one output frame set");
+  }
+  return {std::move(result.frames0.front()),
+          std::move(result.frames1.front()),
+          std::move(result.frames2.front()),
+          std::move(result.frames3.front()),
+          std::move(result.frames4.front())};
 }
 
 std::vector<double> build_variant_lut(CfarVariant variant, double pfa,
@@ -111,20 +142,25 @@ std::vector<double> build_variant_lut(CfarVariant variant, double pfa,
   switch (variant) {
     case CfarVariant::kCA:
       return holoscan::radar::detail::build_ca_alpha_lut(
-          pfa, fold, static_cast<int>(kDoppler), static_cast<int>(kRange),
+          pfa, fold, static_cast<int>(kDoppler),
+          static_cast<int>(kRange),
           kGuardD, kGuardR, kTrainD, kTrainR);
     case CfarVariant::kGO:
       return holoscan::radar::detail::build_go_alpha_lut(
-          pfa, fold, static_cast<int>(kDoppler), static_cast<int>(kRange),
+          pfa, fold, static_cast<int>(kDoppler),
+          static_cast<int>(kRange),
           kGuardD, kGuardR, kTrainD, kTrainR);
     case CfarVariant::kSO:
       return holoscan::radar::detail::build_so_alpha_lut(
-          pfa, fold, static_cast<int>(kDoppler), static_cast<int>(kRange),
+          pfa, fold, static_cast<int>(kDoppler),
+          static_cast<int>(kRange),
           kGuardD, kGuardR, kTrainD, kTrainR);
     case CfarVariant::kOS:
       return holoscan::radar::detail::build_os_alpha_lut(
-          pfa, fold, os_rank, static_cast<int>(kDoppler),
-          static_cast<int>(kRange), kGuardD, kGuardR, kTrainD, kTrainR);
+          pfa, fold, os_rank,
+          static_cast<int>(kDoppler),
+          static_cast<int>(kRange),
+          kGuardD, kGuardR, kTrainD, kTrainR);
   }
   return {};
 }
@@ -140,336 +176,199 @@ std::vector<double> inflated_lut(const std::vector<double>& lut,
 
 TEST(CFARDetectorAlphaLutTest, AlphaLutPrecedenceOverPfaCA) {
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
-  const auto input =
-      to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
+  const auto input = to_device_tensor<double>(
+      map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto pfa_lut = build_variant_lut(CfarVariant::kCA, 1e-3, 1, 0);
+  const auto pfa_lut =
+      build_variant_lut(CfarVariant::kCA, 1e-3, 1, 0);
   const auto huge_lut = inflated_lut(pfa_lut, 1e6);
 
-  const auto with_pfa = run_cfar_idx<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
-  EXPECT_GE(num_detections(with_pfa.idx), 1);
+  CFARParams with_pfa = base_params(CfarVariant::kCA, 1e-3);
+  with_pfa.blocking_alpha_lut_rebuild = true;
+  EXPECT_GE(
+      num_detections(run_cfar<double>(input, with_pfa).idx),
+      1);
 
-  const auto with_lut = run_cfar_idx<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("alpha_lut") = huge_lut);
-  EXPECT_EQ(num_detections(with_lut.idx), 0);
+  CFARParams with_lut = base_params(CfarVariant::kCA, 1e-3);
+  with_lut.alpha_lut = huge_lut;
+  EXPECT_EQ(
+      num_detections(run_cfar<double>(input, with_lut).idx),
+      0);
 }
 
 TEST(CFARDetectorAlphaLutTest, AlphaLutPrecedenceOverPfaGO) {
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
-  const auto input =
-      to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
+  const auto input = to_device_tensor<double>(
+      map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto pfa_lut = build_variant_lut(CfarVariant::kGO, 1e-3, 1, 0);
+  const auto pfa_lut =
+      build_variant_lut(CfarVariant::kGO, 1e-3, 1, 0);
   const auto huge_lut = inflated_lut(pfa_lut, 1e6);
 
-  const auto with_pfa = run_cfar_idx<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
-  EXPECT_GE(num_detections(with_pfa.idx), 1);
+  CFARParams with_pfa = base_params(CfarVariant::kGO, 1e-3);
+  with_pfa.blocking_alpha_lut_rebuild = true;
+  EXPECT_GE(
+      num_detections(run_cfar<double>(input, with_pfa).idx),
+      1);
 
-  const auto with_lut = run_cfar_idx<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("alpha_lut") = huge_lut);
-  EXPECT_EQ(num_detections(with_lut.idx), 0);
+  CFARParams with_lut = base_params(CfarVariant::kGO, 1e-3);
+  with_lut.alpha_lut = huge_lut;
+  EXPECT_EQ(
+      num_detections(run_cfar<double>(input, with_lut).idx),
+      0);
 }
 
 TEST(CFARDetectorAlphaLutTest, AlphaLutPrecedenceOverPfaSO) {
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
-  const auto input =
-      to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
+  const auto input = to_device_tensor<double>(
+      map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto pfa_lut = build_variant_lut(CfarVariant::kSO, 1e-3, 1, 0);
+  const auto pfa_lut =
+      build_variant_lut(CfarVariant::kSO, 1e-3, 1, 0);
   const auto huge_lut = inflated_lut(pfa_lut, 1e6);
 
-  const auto with_pfa = run_cfar_idx<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kSO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
-  EXPECT_GE(num_detections(with_pfa.idx), 1);
+  CFARParams with_pfa = base_params(CfarVariant::kSO, 1e-3);
+  with_pfa.blocking_alpha_lut_rebuild = true;
+  EXPECT_GE(
+      num_detections(run_cfar<double>(input, with_pfa).idx),
+      1);
 
-  const auto with_lut = run_cfar_idx<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kSO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("alpha_lut") = huge_lut);
-  EXPECT_EQ(num_detections(with_lut.idx), 0);
+  CFARParams with_lut = base_params(CfarVariant::kSO, 1e-3);
+  with_lut.alpha_lut = huge_lut;
+  EXPECT_EQ(
+      num_detections(run_cfar<double>(input, with_lut).idx),
+      0);
 }
 
 TEST(CFARDetectorAlphaLutTest, AlphaLutPrecedenceOverPfaOS) {
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
-  const auto input =
-      to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
+  const auto input = to_device_tensor<double>(
+      map, {kDoppler, kRange}, real_dtype<double>());
 
   constexpr int64_t kOsRank = 18;
-  const auto pfa_lut = build_variant_lut(CfarVariant::kOS, 1e-3, 1, kOsRank);
+  const auto pfa_lut =
+      build_variant_lut(CfarVariant::kOS, 1e-3, 1, kOsRank);
   const auto huge_lut = inflated_lut(pfa_lut, 1e6);
 
-  const auto with_pfa = run_cfar_idx<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kOS,
-      holoscan::Arg("os_rank") = kOsRank,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
-  EXPECT_GE(num_detections(with_pfa.idx), 1);
+  CFARParams with_pfa = base_params(CfarVariant::kOS, 1e-3);
+  with_pfa.os_rank = kOsRank;
+  with_pfa.blocking_alpha_lut_rebuild = true;
+  EXPECT_GE(
+      num_detections(run_cfar<double>(input, with_pfa).idx),
+      1);
 
-  const auto with_lut = run_cfar_idx<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kOS,
-      holoscan::Arg("os_rank") = kOsRank,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("alpha_lut") = huge_lut);
-  EXPECT_EQ(num_detections(with_lut.idx), 0);
+  CFARParams with_lut = base_params(CfarVariant::kOS, 1e-3);
+  with_lut.os_rank = kOsRank;
+  with_lut.alpha_lut = huge_lut;
+  EXPECT_EQ(
+      num_detections(run_cfar<double>(input, with_lut).idx),
+      0);
 }
 
 TEST(CFARDetectorAlphaLutTest, RejectsTooShortAlphaLut) {
   const auto map = power_map(1.0, {}, 1.0);
-  const auto input =
-      to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
-
-  EXPECT_THROW(
-      run_cfar_idx<double>(
-          input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
-          holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-          holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-          holoscan::Arg("pfa") = 1e-3,
-          holoscan::Arg("alpha_lut") = std::vector<double>{0.0, 1.0}),
-      std::invalid_argument);
+  auto input = to_device_tensor<double>(
+      map, {kDoppler, kRange}, real_dtype<double>());
+  CFARParams params = base_params(CfarVariant::kCA, 1e-3);
+  params.alpha_lut = {0.0, 1.0};
+  const FiveOutGraphRunResult result =
+      run_cfar_result<double>(input, params);
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames0.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(CFARDetectorAlphaLutTest, RejectsZeroAlphaLutEntry) {
   const auto map = power_map(1.0, {}, 1.0);
-  const auto input =
-      to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
-  auto lut = build_variant_lut(CfarVariant::kCA, 1e-3, 1, 0);
+  auto input = to_device_tensor<double>(
+      map, {kDoppler, kRange}, real_dtype<double>());
+  auto lut =
+      build_variant_lut(CfarVariant::kCA, 1e-3, 1, 0);
   ASSERT_GT(lut.size(), 1u);
   lut[1] = 0.0;
-
-  EXPECT_THROW(
-      run_cfar_idx<double>(
-          input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
-          holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-          holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-          holoscan::Arg("alpha_lut") = lut),
-      std::invalid_argument);
+  CFARParams params = base_params(CfarVariant::kCA, 1e-3);
+  params.alpha_lut = lut;
+  const FiveOutGraphRunResult result =
+      run_cfar_result<double>(input, params);
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames0.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(CFARDetectorAlphaLutTest, RejectsNonFiniteAlphaLutEntry) {
   const auto map = power_map(1.0, {}, 1.0);
-  const auto input =
-      to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
-  auto lut = build_variant_lut(CfarVariant::kCA, 1e-3, 1, 0);
+  auto input = to_device_tensor<double>(
+      map, {kDoppler, kRange}, real_dtype<double>());
+  auto lut =
+      build_variant_lut(CfarVariant::kCA, 1e-3, 1, 0);
   ASSERT_GT(lut.size(), 1u);
   lut[1] = std::numeric_limits<double>::quiet_NaN();
-
-  EXPECT_THROW(
-      run_cfar_idx<double>(
-          input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
-          holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-          holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-          holoscan::Arg("alpha_lut") = lut),
-      std::invalid_argument);
+  CFARParams params = base_params(CfarVariant::kCA, 1e-3);
+  params.alpha_lut = lut;
+  const FiveOutGraphRunResult result =
+      run_cfar_result<double>(input, params);
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames0.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(CFARDetectorAlphaLutTest, FloatDoubleAgreeWithExternalAlphaLut) {
+TEST(CFARDetectorAlphaLutTest,
+     FloatDoubleAgreeWithExternalAlphaLut) {
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
-  const auto lut = build_variant_lut(CfarVariant::kCA, 1e-3, 1, 0);
+  const auto lut =
+      build_variant_lut(CfarVariant::kCA, 1e-3, 1, 0);
   std::vector<float> mapf(map.begin(), map.end());
 
-  const auto f_out = run_cfar_idx<float>(
-      to_device_tensor(mapf, {kDoppler, kRange}, real_dtype<float>()),
-      holoscan::Arg("cfar_variant") = CfarVariant::kCA,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("alpha_lut") = lut);
-  const auto d_out = run_cfar_idx<double>(
-      to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>()),
-      holoscan::Arg("cfar_variant") = CfarVariant::kCA,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("alpha_lut") = lut);
+  CFARParams params = base_params(CfarVariant::kCA, 1e-3);
+  params.alpha_lut = lut;
+  const auto f_out = run_cfar<float>(
+      to_device_tensor<float>(
+          mapf, {kDoppler, kRange}, real_dtype<float>()),
+      params);
+  const auto d_out = run_cfar<double>(
+      to_device_tensor<double>(
+          map, {kDoppler, kRange}, real_dtype<double>()),
+      params);
 
-  EXPECT_EQ(num_detections(f_out.idx), num_detections(d_out.idx));
+  EXPECT_EQ(num_detections(f_out.idx),
+            num_detections(d_out.idx));
 }
 
-TEST(CFARDetectorAlphaLutTest, PfaIgnoredWhileExternalAlphaLutActive) {
+TEST(CFARDetectorAlphaLutTest,
+     PfaIgnoredWhileExternalAlphaLutActive) {
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
-  const auto input =
-      to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
-  const auto pfa_lut = build_variant_lut(CfarVariant::kCA, 1e-3, 1, 0);
+  const auto input = to_device_tensor<double>(
+      map, {kDoppler, kRange}, real_dtype<double>());
+  const auto pfa_lut =
+      build_variant_lut(CfarVariant::kCA, 1e-3, 1, 0);
   const auto huge_lut = inflated_lut(pfa_lut, 1e6);
 
-  // Loose pfa would detect on this map, but the huge external LUT must win.
-  const auto with_loose_pfa = run_cfar_idx<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 0.5,
-      holoscan::Arg("alpha_lut") = huge_lut);
-  EXPECT_EQ(num_detections(with_loose_pfa.idx), 0);
+  CFARParams params = base_params(CfarVariant::kCA, 0.5);
+  params.alpha_lut = huge_lut;
+  EXPECT_EQ(
+      num_detections(
+          run_cfar<double>(input, params).idx),
+      0);
 }
 
-struct LiveAlphaLutApp : public holoscan::Application {
-  std::vector<holoscan::TensorMap> frames;
-  std::vector<std::vector<double>> alpha_lut_overrides;
-  TensorMapCapture* idx_capture = nullptr;
-
-  void compose() override {
-    auto op = make_operator<CFARDetectorOp<double>>(
-        "op_under_test", holoscan::Arg("cfar_variant") = CfarVariant::kCA,
-        holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-        holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-        holoscan::Arg("pfa") = 1e-3);
-    wire_data_source(this, op, "rd_maps", frames);
-    wire_leading_override<std::vector<double>>(this, op, "alpha_lut",
-                                               alpha_lut_overrides);
-    wire_capture_sink(this, op, "detection_idx", idx_capture);
-    wire_noop_cfar_output_sinks(this, op, /*capture_score=*/false);
-  }
-};
-
-TEST(CFARDetectorAlphaLutTest, LiveAlphaLutOverrideStickyAndClearing) {
-  const auto map = power_map(1.0, {{8, 16}}, 100.0);
-  const auto pfa_lut = build_variant_lut(CfarVariant::kCA, 1e-3, 1, 0);
-  const auto huge_lut = inflated_lut(pfa_lut, 1e6);
-
-  holoscan::TensorMap frame = single_map(
-      to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>()),
-      "rd_maps");
-
-  TensorMapCapture capture;
-  auto app = holoscan::make_application<LiveAlphaLutApp>();
-  app->frames = {frame, frame, frame};
-  app->alpha_lut_overrides = {huge_lut, huge_lut, std::vector<double>()};
-  app->idx_capture = &capture;
-  app->run();
-
-  ASSERT_EQ(capture.frames.size(), 3u);
-  EXPECT_EQ(num_detections(capture.frames[0]), 0);
-  EXPECT_EQ(num_detections(capture.frames[1]), 0);
-  EXPECT_GE(num_detections(capture.frames[2]), 1);
+TEST(CFARDetectorAlphaLutTest,
+     LiveAlphaLutOverrideStickyAndClearing) {
+  GTEST_SKIP()
+      << "[EA HSDK5 ONLY] vector live Params-only "
+         "(HSDK5_PORT.md §9)";
 }
 
-struct LivePfaRebuildApp : public holoscan::Application {
-  std::vector<holoscan::TensorMap> frames;
-  std::vector<double> pfa_overrides;
-  TensorMapCapture* idx_capture = nullptr;
-  bool blocking_rebuild = false;
-  // Wall-clock stamp when each detection_idx frame is emitted, so a test can
-  // measure per-tick (data-plane) latency independently of teardown, which
-  // now joins any in-flight background LUT build in stop().
-  std::vector<std::chrono::steady_clock::time_point>* frame_stamps = nullptr;
-
-  void compose() override {
-    auto op = make_operator<CFARDetectorOp<double>>(
-        "op_under_test", holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-        holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-        holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-        holoscan::Arg("pfa") = pfa_overrides.empty() ? 1e-3 : pfa_overrides[0],
-        holoscan::Arg("blocking_alpha_lut_rebuild") = blocking_rebuild);
-    wire_data_source(this, op, "rd_maps", frames);
-    wire_leading_override<double>(this, op, "pfa", pfa_overrides);
-    // Capture detection_idx and stamp each frame's arrival (data-plane time).
-    auto sink = make_operator<
-        holoscan::test::TestHarnessSinkOp<holoscan::TensorMap>>(
-        "detection_idx_sink");
-    auto validators = idx_capture->validators();
-    if (frame_stamps != nullptr) {
-      auto* stamps = frame_stamps;
-      validators.push_back([stamps](const holoscan::TensorMap&) {
-        stamps->push_back(std::chrono::steady_clock::now());
-      });
-    }
-    sink->set_validators(std::move(validators));
-    add_flow(op, sink, {{"detection_idx", "input"}});
-    wire_noop_cfar_output_sinks(this, op, /*capture_score=*/false);
-  }
-};
-
-// After a warm LUT exists, a non-blocking pfa change must serve the previous
-// LUT immediately instead of waiting for a second GO MC rebuild. Compare
-// against an otherwise identical blocking run on a disjoint pfa pair: absolute
-// timing is vacuous on small maps (warm GO LUT is ~100 ms here, not
-// multi-second), but blocking does two cold builds while non-blocking does one.
-TEST(CFARDetectorAlphaLutTest, NonBlockingPfaOverrideServesStaleLut) {
-  const auto map = power_map(1.0, {{8, 16}}, 100.0);
-  holoscan::TensorMap frame = single_map(
-      to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>()),
-      "rd_maps");
-
-  // Measure the frame0→frame1 gap (the second tick's data-plane latency), not
-  // total run() time: stop() now joins any in-flight background LUT build, so
-  // total wall time no longer distinguishes the paths. The non-blocking path's
-  // benefit is a *fast second tick* (serve stale) vs. the blocking path's
-  // inline rebuild stall on tick 1.
-  auto run_pair = [&](bool blocking, double pfa_a, double pfa_b) {
-    TensorMapCapture capture;
-    std::vector<std::chrono::steady_clock::time_point> stamps;
-    auto app = holoscan::make_application<LivePfaRebuildApp>();
-    app->frames = {frame, frame};
-    app->pfa_overrides = {pfa_a, pfa_b};
-    app->blocking_rebuild = blocking;
-    app->idx_capture = &capture;
-    app->frame_stamps = &stamps;
-    app->run();
-    double gap01_ms = 0.0;
-    if (stamps.size() == 2) {
-      gap01_ms = std::chrono::duration<double, std::milli>(
-                     stamps[1] - stamps[0])
-                     .count();
-    }
-    return std::make_tuple(gap01_ms, std::move(capture), stamps.size());
-  };
-
-  // Disjoint pfa pairs so neither run can inherit the other's LUT cache
-  // (including a background build started by the non-blocking path).
-  const auto [block_gap_ms, block_cap, block_n] =
-      run_pair(true, 2.7e-3, 4.1e-6);
-  ASSERT_EQ(block_n, 2u);
-  ASSERT_EQ(block_cap.frames.size(), 2u);
-  EXPECT_GE(num_detections(block_cap.frames[0]), 1);
-  EXPECT_GE(num_detections(block_cap.frames[1]), 1);
-
-  const auto [nonblock_gap_ms, nonblock_cap, nonblock_n] =
-      run_pair(false, 3.3e-3, 5.2e-6);
-  ASSERT_EQ(nonblock_n, 2u);
-  ASSERT_EQ(nonblock_cap.frames.size(), 2u);
-  EXPECT_GE(num_detections(nonblock_cap.frames[0]), 1);
-  EXPECT_GE(num_detections(nonblock_cap.frames[1]), 1);
-
-  // Tick 1 stalls on the inline GO MC rebuild when blocking, but is served the
-  // stale LUT (fast) when non-blocking. Require a clear gap so a regression to
-  // blocking on frame 1 fails.
-  EXPECT_LT(nonblock_gap_ms, 0.75 * block_gap_ms)
-      << "nonblock_gap_ms=" << nonblock_gap_ms
-      << " block_gap_ms=" << block_gap_ms;
-  EXPECT_GT(block_gap_ms - nonblock_gap_ms, 20.0)
-      << "nonblock_gap_ms=" << nonblock_gap_ms
-      << " block_gap_ms=" << block_gap_ms
-      << " (gap too small to distinguish stale vs blocking)";
+TEST(CFARDetectorAlphaLutTest,
+     NonBlockingPfaOverrideServesStaleLut) {
+  GTEST_SKIP()
+      << "[EA HSDK5 ONLY] Graph mid-stream sticky "
+         "live harness deferred (HSDK5_PORT.md §1)";
 }
 
-int64_t brute_max_go_lut_index(int num_doppler, int num_range, int guard_d,
-                               int guard_r, int train_d, int train_r) {
+int64_t brute_max_go_lut_index(int num_doppler,
+                               int num_range, int guard_d,
+                               int guard_r, int train_d,
+                               int train_r) {
   int64_t max_idx = 0;
   for (int d = 0; d < num_doppler; ++d) {
     for (int r = 0; r < num_range; ++r) {
@@ -478,18 +377,23 @@ int64_t brute_max_go_lut_index(int num_doppler, int num_range, int guard_d,
       int64_t dn = 0;
       int64_t dp = 0;
       holoscan::radar::detail::go_training_side_counts(
-          d, r, num_doppler, num_range, guard_d, guard_r, train_d, train_r, &rn,
-          &rp, &dn, &dp);
+          d, r, num_doppler, num_range,
+          guard_d, guard_r, train_d, train_r,
+          &rn, &rp, &dn, &dp);
       max_idx = std::max(
-          max_idx, holoscan::radar::detail::go_lut_index(rn, rp, dn, dp));
+          max_idx,
+          holoscan::radar::detail::go_lut_index(
+              rn, rp, dn, dp));
     }
   }
   return max_idx;
 }
 
-TEST(CFARDetectorAlphaLutTest, MaxGoLutIndexMatchesBruteForce) {
+TEST(CFARDetectorAlphaLutTest,
+     MaxGoLutIndexMatchesBruteForce) {
   const std::vector<std::array<int, 4>> footprints = {
-      {1, 1, 2, 2}, {2, 2, 4, 4}, {1, 1, 1, 4}, {0, 0, 3, 3}, {1, 0, 2, 0}};
+      {1, 1, 2, 2}, {2, 2, 4, 4}, {1, 1, 1, 4},
+      {0, 0, 3, 3}, {1, 0, 2, 0}};
   for (const auto& fp : footprints) {
     const int gd = fp[0];
     const int gr = fp[1];
@@ -497,80 +401,90 @@ TEST(CFARDetectorAlphaLutTest, MaxGoLutIndexMatchesBruteForce) {
     const int tr = fp[3];
     const int win_d = 2 * (gd + td) + 1;
     const int win_r = 2 * (gr + tr) + 1;
-    for (int D : {win_d, win_d + 3, std::max(1, win_d - 1), 3}) {
-      for (int R : {win_r, win_r + 3, std::max(1, win_r - 1), 3}) {
-        EXPECT_EQ(holoscan::radar::detail::max_go_lut_index(D, R, gd, gr, td,
-                                                            tr),
-                  brute_max_go_lut_index(D, R, gd, gr, td, tr))
-            << "fp=(" << gd << "," << gr << "," << td << "," << tr
+    for (int D :
+         {win_d, win_d + 3, std::max(1, win_d - 1), 3}) {
+      for (int R :
+           {win_r, win_r + 3, std::max(1, win_r - 1), 3}) {
+        const auto formula =
+            holoscan::radar::detail::max_go_lut_index(
+                D, R, gd, gr, td, tr);
+        const auto brute =
+            brute_max_go_lut_index(
+                D, R, gd, gr, td, tr);
+        EXPECT_EQ(formula, brute)
+            << "fp=(" << gd << "," << gr << ","
+            << td << "," << tr
             << ") map=" << D << "x" << R;
       }
     }
   }
 }
 
-// CA and OS LUTs are indexed by training-cell COUNT (N), which is
-// map-size-independent while the map is at least as large as the CFAR window:
-// a synthetic window-sized map produces byte-identical tables to any larger
-// map. This is the invariant that lets start() pre-calibrate CA/OS without
-// knowing the RD-map dimensions and reuse the table at runtime with no rebuild.
-// (GO/SO are indexed by the aliased go_lut_index and are genuinely
-// map-dependent, so they are NOT decoupled — see start()/compute().)
-TEST(CFARDetectorAlphaLutTest, CanonicalWindowLutEqualsLargerMapCaOs) {
+TEST(CFARDetectorAlphaLutTest,
+     CanonicalWindowLutEqualsLargerMapCaOs) {
   namespace detail = holoscan::radar::detail;
   const int win_d = 2 * (kGuardD + kTrainD) + 1;
   const int win_r = 2 * (kGuardR + kTrainR) + 1;
-  const int big_d = static_cast<int>(kDoppler);   // 16 >= win_d
-  const int big_r = static_cast<int>(kRange);      // 32 >= win_r
+  const int big_d = static_cast<int>(kDoppler);
+  const int big_r = static_cast<int>(kRange);
   const double pfa = 1e-3;
 
-  const auto expect_eq_vec = [](const std::vector<double>& a,
-                                const std::vector<double>& b,
-                                const char* what) {
-    ASSERT_EQ(a.size(), b.size()) << what << " length";
-    for (size_t i = 0; i < a.size(); ++i) {
-      EXPECT_DOUBLE_EQ(a[i], b[i]) << what << " index " << i;
-    }
-  };
+  const auto expect_eq_vec =
+      [](const std::vector<double>& a,
+         const std::vector<double>& b,
+         const char* what) {
+        ASSERT_EQ(a.size(), b.size())
+            << what << " length";
+        for (size_t i = 0; i < a.size(); ++i) {
+          EXPECT_DOUBLE_EQ(a[i], b[i])
+              << what << " index " << i;
+        }
+      };
 
-  // N-based reachable set is identical (fast, deterministic — no MC).
-  EXPECT_EQ(detail::max_training_cell_count(win_d, win_r, kGuardD, kGuardR,
-                                            kTrainD, kTrainR),
-            detail::max_training_cell_count(big_d, big_r, kGuardD, kGuardR,
-                                            kTrainD, kTrainR));
-  EXPECT_EQ(detail::reachable_training_cell_counts(win_d, win_r, kGuardD,
-                                                   kGuardR, kTrainD, kTrainR),
-            detail::reachable_training_cell_counts(big_d, big_r, kGuardD,
-                                                   kGuardR, kTrainD, kTrainR));
+  EXPECT_EQ(
+      detail::max_training_cell_count(
+          win_d, win_r, kGuardD, kGuardR,
+          kTrainD, kTrainR),
+      detail::max_training_cell_count(
+          big_d, big_r, kGuardD, kGuardR,
+          kTrainD, kTrainR));
+  EXPECT_EQ(
+      detail::reachable_training_cell_counts(
+          win_d, win_r, kGuardD,
+          kGuardR, kTrainD, kTrainR),
+      detail::reachable_training_cell_counts(
+          big_d, big_r, kGuardD,
+          kGuardR, kTrainD, kTrainR));
 
-  // Full table equality for CA (closed form) and OS with K=1 (closed form).
-  expect_eq_vec(detail::build_ca_alpha_lut(pfa, 1, win_d, win_r, kGuardD,
-                                           kGuardR, kTrainD, kTrainR),
-                detail::build_ca_alpha_lut(pfa, 1, big_d, big_r, kGuardD,
-                                           kGuardR, kTrainD, kTrainR),
-                "CA");
-  expect_eq_vec(detail::build_os_alpha_lut(pfa, 1, /*os_rank=*/20, win_d, win_r,
-                                           kGuardD, kGuardR, kTrainD, kTrainR),
-                detail::build_os_alpha_lut(pfa, 1, 20, big_d, big_r, kGuardD,
-                                           kGuardR, kTrainD, kTrainR),
-                "OS");
+  expect_eq_vec(
+      detail::build_ca_alpha_lut(
+          pfa, 1, win_d, win_r,
+          kGuardD, kGuardR, kTrainD, kTrainR),
+      detail::build_ca_alpha_lut(
+          pfa, 1, big_d, big_r,
+          kGuardD, kGuardR, kTrainD, kTrainR),
+      "CA");
+  expect_eq_vec(
+      detail::build_os_alpha_lut(
+          pfa, 1, /*os_rank=*/20, win_d, win_r,
+          kGuardD, kGuardR, kTrainD, kTrainR),
+      detail::build_os_alpha_lut(
+          pfa, 1, 20, big_d, big_r,
+          kGuardD, kGuardR, kTrainD, kTrainR),
+      "OS");
 }
 
-// A map smaller than the CFAR window falls back to a map-specific LUT (the
-// start-time pre-warm assumes map >= window). Detection must still work: the
-// operator builds the reduced-N table at runtime and thresholds correctly.
 TEST(CFARDetectorAlphaLutTest, SubWindowMapStillDetects) {
-  // Window is 7x7 (guard 1 + train 2 each side). Use a 5x5 map (< window).
   constexpr int64_t kSmall = 5;
-  std::vector<double> map(static_cast<size_t>(kSmall * kSmall), 1.0);
-  map[static_cast<size_t>(2 * kSmall + 2)] = 100.0;  // strong center target
-  auto input = to_device_tensor(map, {kSmall, kSmall}, real_dtype<double>());
+  std::vector<double> map(
+      static_cast<size_t>(kSmall * kSmall), 1.0);
+  map[static_cast<size_t>(2 * kSmall + 2)] = 100.0;
+  auto input = to_device_tensor<double>(
+      map, {kSmall, kSmall}, real_dtype<double>());
 
-  const auto out = run_cfar_idx<double>(
-      std::move(input), holoscan::Arg("cfar_variant") = CfarVariant::kCA,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuardD, kGuardR},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{kTrainD, kTrainR},
-      holoscan::Arg("pfa") = 1e-3);
+  CFARParams params = base_params(CfarVariant::kCA, 1e-3);
+  const auto out =
+      run_cfar<double>(std::move(input), params);
   EXPECT_GE(num_detections(out.idx), 1);
 }
 

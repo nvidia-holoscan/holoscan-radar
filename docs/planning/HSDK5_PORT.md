@@ -84,7 +84,7 @@ new EA/team items added there). Typical work:
 | --- | --- |
 | **EA limitation** (e.g. §1 mid-stream sticky Graph, §8 live-override perf) | Re-probe on newer EA / GA; restore `contract()` sticky policy + unskip Graph tests; document the working harness recipe — or reclassify as durable if the SDK will not support it |
 | **Durable HSDK 5** (e.g. §2 unique in/out names, §9 vector/descriptor lives, §10 `ArrayGeometry` Tensor pack) | Team decision: keep the interim as the locked contract (update `OPERATOR_API.md`) **or** restore typed live/descriptor ports when the SDK admits them; drop dual “logical vs physical” naming notes once settled |
-| **Our deferred work blocked on the above** (CFAR GO/SO/OS Graph suites, optional-mask Graph wiring, Params-only → live Inputs) | Land only after the matching EA/team item is closed; do not silently pick a contract answer in code |
+| **Our deferred work blocked on the above** (optional-mask Graph wiring, Params-only → live Inputs, Graph sticky unskips) | Land only after the matching EA/team item is closed; do not silently pick a contract answer in code |
 
 Phase 5 is **not** for new algorithm contracts (those stay
 [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md) / per-op `OPEN_ITEMS.md`). It **is**
@@ -123,9 +123,10 @@ HSDK 4.x `InputContext` / `TensorMap` / `HOLOSCAN_OPERATOR_FORWARD_ARGS`.
 7. **Record** progress in the table below, durable deltas under **Open**
    or **Resolved**, and a `STATUS.md` line when claiming or landing.
 
-**C++ operator first-pass:** complete (all 19 operators allow-listed). Remaining
-C++ work is deferred Graph suites (CFAR GO/SO/OS/alpha_lut/statistical), Graph
-perf for most ops, and EA gaps in §§1/9/10 — see progress table.
+**C++ operator first-pass:** complete (all 19 operators allow-listed). CFAR
+GO/SO/OS/alpha_lut Graph unit suites + statistical MC (`ctest -L statistical`)
+landed. Remaining C++ work is Graph perf (phase 3), apps/Python (phase 4),
+and EA gaps in §§1/9/10 (phase 5) — see progress table.
 
 ---
 
@@ -191,7 +192,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); sticky `num_sources`/`source_count_pfa`/`max_sources` Inputs (Graph live deferred §1); geometry/`spatial_smoothing`/`subarray_spec` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX retire preserved; Graph perf deferred |
 | `FeatureAssemblyOp` F32/F64 + Graph C++ tests (1-in/1-out; optional gathers) | landed; optional gather Inputs omitted from contract (§1 / Beamscan `is_valid` pattern); Graph optional wiring deferred — stage kernel coverage; no `[live]` params; Graph perf deferred |
 | `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; `representative`/`score_method` sticky Inputs (Graph live deferred §1); `feature_weights` Params-only (§9 unbounded vector); Graph perf deferred |
-| `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA suite) | landed; always emits all 5 outs (incl. `cfar_power`); sticky `pfa`/`threshold_scale`/`os_rank`/`max_detections` Inputs (Graph live deferred §1); `guard_cells`/`training_cells`/`nci_axes`/`alpha_lut` Params-only (§9); GO/SO/OS/alpha_lut/statistical Graph suites deferred; Graph perf deferred |
+| `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; sticky POD lives (Graph live deferred §1); vector lives Params-only (§9); statistical MC suite on label `statistical`; Graph perf deferred |
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph sticky/`TXSchedule` live N/A (Params-only schedule); Graph perf deferred |
 | `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` Params-only (§9); Graph live tests skipped; Graph perf deferred |
 | `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); sticky `wavelength` Input (Graph mid-stream sticky deferred §1); Graph perf deferred |
@@ -450,13 +451,14 @@ containers / a durable ChannelPod schema.
 
 All 19 operators are on `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS`. The
 allow-list remains until public HSDK 5 / cleanup gate so apps, packaging,
-and unported Graph suites stay gated intentionally. Demo apps still need
-Holoviz (§6) and Graph-port of remaining app scaffolding; CFAR GO/SO/OS /
-alpha_lut / statistical binaries are still unregistered (see
-`cfar_detector_op/OPEN_ITEMS.md` §5). Perf drivers remain on the separate
+and unported Graph perf stay gated intentionally. Demo apps still need
+Holoviz (§6) and Graph-port of remaining app scaffolding. CFAR GO/SO/OS /
+alpha_lut Graph unit suites and the `statistical`-labeled MC suite have
+landed (phase-2 unit coverage). Perf drivers remain on the separate
 `HOLOSCAN_RADAR_HSDK5_PORTED_PERF` list (today: clutter only).
 
-**Status:** C++ first-pass landed; allow-list kept for EA gating / cleanup.
+**Status:** C++ first-pass + CFAR variant Graph units landed; allow-list
+kept for EA gating / cleanup.
 
 ---
 
