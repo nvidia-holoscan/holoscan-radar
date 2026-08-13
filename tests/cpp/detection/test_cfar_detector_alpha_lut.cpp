@@ -161,8 +161,9 @@ std::vector<double> build_variant_lut(CfarVariant variant, double pfa,
           static_cast<int>(kDoppler),
           static_cast<int>(kRange),
           kGuardD, kGuardR, kTrainD, kTrainR);
+    default:
+      return {};
   }
-  return {};
 }
 
 std::vector<double> inflated_lut(const std::vector<double>& lut,

@@ -523,6 +523,32 @@ TEST(CFARDetectorOpOsTest,
                   "harness deferred (HSDK5_PORT.md §1)";
 }
 
+TEST(CFARDetectorOpOsTest, OsRankConfigurableFromParams) {
+  constexpr int64_t dt = 8;
+  constexpr int64_t rt = 16;
+  // Non-uniform background so order statistics differ by rank (flat
+  // power makes every rank select the same noise; see LiveOsRank).
+  std::vector<double> map(static_cast<size_t>(kDoppler * kRange));
+  for (size_t i = 0; i < map.size(); ++i) {
+    map[i] = 1.0 + static_cast<double>(i % 17) * 0.03;
+  }
+  map[static_cast<size_t>(dt * kRange + rt)] = 50.0;
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
+                                        real_dtype<double>());
+  CFARParams low = os_params(1e-3);
+  low.blocking_alpha_lut_rebuild = true;
+  low.os_rank = 5;
+  CFARParams high = os_params(1e-3);
+  high.blocking_alpha_lut_rebuild = true;
+  high.os_rank = kOsRank;  // 30
+  const auto lo = run_cfar<double>(input, low);
+  const auto hi = run_cfar<double>(input, high);
+  // Ascending OS: higher rank → higher noise estimate.
+  EXPECT_LT(lo.noise.as<double>()[dt * kRange + rt],
+            hi.noise.as<double>()[dt * kRange + rt]);
+  EXPECT_NE(score_at(lo.score, dt, rt), score_at(hi.score, dt, rt));
+}
+
 TEST(CFARDetectorOpOsTest, GuardCellsConfigurableFromParams) {
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
@@ -537,7 +563,9 @@ TEST(CFARDetectorOpOsTest, GuardCellsConfigurableFromParams) {
   wide.guard_cells = {1, 2};
   const auto n = run_cfar<double>(input, narrow);
   const auto w = run_cfar<double>(input, wide);
-  EXPECT_NE(score_at(n.score, dt, rt),
+  // OS α grows with training count / shrinks when the interferer is
+  // excluded by a wider guard — opposite score direction from CA/GO.
+  EXPECT_GT(score_at(n.score, dt, rt),
             score_at(w.score, dt, rt));
 }
 
@@ -556,7 +584,8 @@ TEST(CFARDetectorOpOsTest, TrainingCellsConfigurableFromParams) {
   wide.training_cells = {4, 4};
   const auto n = run_cfar<double>(input, narrow);
   const auto w = run_cfar<double>(input, wide);
-  EXPECT_NE(score_at(w.score, dt, rt),
+  // OS: more training cells → higher α / noise → lower CUT score.
+  EXPECT_LT(score_at(w.score, dt, rt),
             score_at(n.score, dt, rt));
 }
 

@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -28,6 +29,7 @@ namespace {
 
 using holoscan::radar::CFARDetectorOp;
 using holoscan::radar::CFARParams;
+using holoscan::radar::CfarPeakNeighborhood;
 using holoscan::radar::CfarVariant;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::real_dtype;
@@ -274,6 +276,61 @@ TEST(CFARDetectorOpSoTest, ComplexInputFormsPower) {
   EXPECT_NEAR(noise[0], 1.0, 1e-9);
 }
 
+TEST(CFARDetectorOpSoTest, CfarPowerIsSquareLawPowerWithoutNci) {
+  const int64_t dt = 5;
+  const int64_t rt = 20;
+  std::vector<std::complex<double>> cube(
+      static_cast<size_t>(kDoppler * kRange), std::complex<double>(1.0, 0.0));
+  cube[static_cast<size_t>(dt * kRange + rt)] = std::complex<double>(3.0, 4.0);
+  auto input = to_device_tensor<std::complex<double>>(
+      cube, {kDoppler, kRange}, complex_dtype<double>());
+
+  const auto out = run_cfar<double>(input, so_params(1e-3));
+
+  ASSERT_EQ(out.power.shape, (std::vector<int64_t>{kDoppler, kRange}));
+  ASSERT_EQ(out.power.shape, out.score.shape);
+  const auto* p = out.power.as<double>();
+  for (int64_t i = 0; i < kDoppler * kRange; ++i) {
+    EXPECT_NEAR(p[i], std::norm(cube[static_cast<size_t>(i)]), 1e-9) << i;
+  }
+  EXPECT_NEAR(p[dt * kRange + rt], 25.0, 1e-9);
+}
+
+TEST(CFARDetectorOpSoTest, CfarPowerIsNciSumOverFold) {
+  constexpr int64_t kChannels = 4;
+  const int64_t dt = 5;
+  const int64_t rt = 20;
+  std::vector<std::complex<double>> cube(
+      static_cast<size_t>(kChannels * kDoppler * kRange));
+  for (int64_t k = 0; k < kChannels; ++k) {
+    for (int64_t i = 0; i < kDoppler * kRange; ++i) {
+      cube[static_cast<size_t>(k * kDoppler * kRange + i)] =
+          std::complex<double>(static_cast<double>(k + 1), 0.0);
+    }
+    cube[static_cast<size_t>(k * kDoppler * kRange + dt * kRange + rt)] =
+        std::complex<double>(10.0, 0.0);
+  }
+  auto input = to_device_tensor<std::complex<double>>(
+      cube, {kChannels, kDoppler, kRange}, complex_dtype<double>());
+
+  CFARParams params = so_params(1e-3);
+  params.nci_axes = {0};
+  params.nci_fold = kChannels;
+  const auto out = run_cfar<double>(input, params);
+
+  ASSERT_EQ(out.power.shape, (std::vector<int64_t>{kDoppler, kRange}));
+  ASSERT_EQ(out.power.shape, out.score.shape);
+  const auto* p = out.power.as<double>();
+  EXPECT_NEAR(p[0], 30.0, 1e-9);
+  EXPECT_NEAR(p[dt * kRange + rt], 400.0, 1e-9);
+
+  ASSERT_EQ(num_detections(out.idx), 1);
+  const int64_t peak =
+      static_cast<int64_t>(std::max_element(p, p + kDoppler * kRange) - p);
+  const auto* rows = out.idx.as<int64_t>();
+  EXPECT_EQ(peak, rows[0] * kRange + rows[1]);
+}
+
 TEST(CFARDetectorOpSoTest, MaxDetectionsCap) {
   const auto map = power_map(1.0, {{4, 8}, {12, 24}}, 100.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange},
@@ -390,6 +447,23 @@ TEST(CFARDetectorOpSoTest, DetectsTwoTargets) {
   EXPECT_TRUE(idx_contains(out.idx, 12, 24));
 }
 
+TEST(CFARDetectorOpSoTest, DetectionIdxRasterOrder) {
+  const auto map = power_map(1.0, {{4, 8}, {12, 24}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
+                                        real_dtype<double>());
+
+  const auto out = run_cfar<double>(input, so_params(1e-3));
+
+  ASSERT_EQ(num_detections(out.idx), 2);
+  ASSERT_EQ(out.idx.shape.size(), 2u);
+  ASSERT_EQ(out.idx.shape[1], 2);
+  const auto* rows = out.idx.as<int64_t>();
+  EXPECT_EQ(rows[0], 4);
+  EXPECT_EQ(rows[1], 8);
+  EXPECT_EQ(rows[2], 12);
+  EXPECT_EQ(rows[3], 24);
+}
+
 TEST(CFARDetectorOpSoTest, LessConservativeThanGoWithOneSidedInterferer) {
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
@@ -441,7 +515,10 @@ TEST(CFARDetectorOpSoTest, GuardCellsConfigurableFromParams) {
   wide.guard_cells = {1, 2};
   const auto n = run_cfar<double>(input, narrow);
   const auto w = run_cfar<double>(input, wide);
-  EXPECT_NE(score_at(n.score, dt, rt), score_at(w.score, dt, rt));
+  // DIAG: CA direction
+  EXPECT_LT(score_at(n.score, dt, rt), score_at(w.score, dt, rt))
+      << "narrow=" << score_at(n.score, dt, rt)
+      << " wide=" << score_at(w.score, dt, rt);
 }
 
 TEST(CFARDetectorOpSoTest, TrainingCellsConfigurableFromParams) {
@@ -459,7 +536,9 @@ TEST(CFARDetectorOpSoTest, TrainingCellsConfigurableFromParams) {
   narrow.training_cells = {1, 1};
   const auto w = run_cfar<double>(input, wide);
   const auto n = run_cfar<double>(input, narrow);
-  EXPECT_NE(score_at(w.score, dt, rt), score_at(n.score, dt, rt));
+  EXPECT_GT(score_at(w.score, dt, rt), score_at(n.score, dt, rt))
+      << "wide=" << score_at(w.score, dt, rt)
+      << " narrow=" << score_at(n.score, dt, rt);
 }
 
 TEST(CFARDetectorOpSoTest, LiveGuardCellsOverrideMidStreamAndSticky) {
@@ -653,6 +732,76 @@ TEST(CFARDetectorOpSoTest, SoLutUsesCellFaithfulAlpha) {
       << "lut=" << lut[10] << " at_edge=" << at_edge;
   EXPECT_GT(std::abs(lut[10] - four_side) / lut[10], 0.05)
       << "lut=" << lut[10] << " four_side_n10=" << four_side;
+}
+
+TEST(CFARDetectorOpSoTest, PeakOnlyOffMatchesRawMask) {
+  const auto map = power_map(1.0, {{8, 15}, {8, 16}, {8, 17}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
+                                        real_dtype<double>());
+
+  const auto raw = run_cfar<double>(input, so_params(1e-2));
+  CFARParams off = so_params(1e-2);
+  off.peak_only = false;
+  const auto out = run_cfar<double>(input, off);
+
+  EXPECT_EQ(num_detections(raw.idx), 3);
+  EXPECT_EQ(num_detections(out.idx), num_detections(raw.idx));
+  for (const auto r : {15, 16, 17}) {
+    EXPECT_TRUE(idx_contains(out.idx, 8, r));
+  }
+}
+
+TEST(CFARDetectorOpSoTest, PeakOnlyKeepsSingleMax) {
+  auto data = power_map(1.0, {}, 1.0);
+  data[static_cast<size_t>(8 * kRange + 16)] = 100.0;
+  data[static_cast<size_t>(8 * kRange + 17)] = 50.0;
+  auto input = to_device_tensor<double>(data, {kDoppler, kRange},
+                                        real_dtype<double>());
+
+  CFARParams params = so_params(1e-2);
+  params.peak_only = true;
+  const auto out = run_cfar<double>(input, params);
+
+  ASSERT_EQ(num_detections(out.idx), 1);
+  EXPECT_TRUE(idx_contains(out.idx, 8, 16));
+  EXPECT_FALSE(idx_contains(out.idx, 8, 17));
+  const auto* mask = out.mask.as<uint8_t>();
+  EXPECT_EQ(mask[8 * kRange + 16], 1);
+  EXPECT_EQ(mask[8 * kRange + 17], 0);
+}
+
+TEST(CFARDetectorOpSoTest, PeakOnlyCollapsesStripRasterTiebreak) {
+  const auto map = power_map(1.0, {{8, 15}, {8, 16}, {8, 17}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
+                                        real_dtype<double>());
+
+  CFARParams params = so_params(1e-2);
+  params.peak_only = true;
+  const auto out = run_cfar<double>(input, params);
+
+  ASSERT_EQ(num_detections(out.idx), 1);
+  EXPECT_TRUE(idx_contains(out.idx, 8, 15));
+}
+
+TEST(CFARDetectorOpSoTest, PeakOnlyNeighborhoodCross4VsSquare8) {
+  auto data = power_map(1.0, {}, 1.0);
+  data[static_cast<size_t>(8 * kRange + 16)] = 100.0;
+  data[static_cast<size_t>(9 * kRange + 17)] = 90.0;
+  auto input = to_device_tensor<double>(data, {kDoppler, kRange},
+                                        real_dtype<double>());
+
+  CFARParams cross = so_params(1e-2);
+  cross.peak_only = true;
+  cross.peak_neighborhood = CfarPeakNeighborhood::kCross4;
+  CFARParams square = cross;
+  square.peak_neighborhood = CfarPeakNeighborhood::kSquare8;
+
+  const auto out_cross = run_cfar<double>(input, cross);
+  const auto out_square = run_cfar<double>(input, square);
+
+  EXPECT_EQ(num_detections(out_cross.idx), 2);
+  EXPECT_EQ(num_detections(out_square.idx), 1);
+  EXPECT_TRUE(idx_contains(out_square.idx, 8, 16));
 }
 
 TEST(CFARDetectorOpSoTest, ThresholdScaleConfigurableFromParams) {
