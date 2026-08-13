@@ -11,6 +11,7 @@
 #include <stdexcept>
 
 #include "radar_common/tensor/dlpack_buffer.hpp"
+#include "radar_common/tensor/tensor_utils.hpp"
 
 namespace {
 

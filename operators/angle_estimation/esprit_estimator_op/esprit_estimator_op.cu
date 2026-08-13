@@ -156,15 +156,12 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
-  if (!seeded_angle_convention_.has_value()) {
-    device_angle_convention_ =
-        detail::make_device_angle_convention<T>(pinned.angle_convention);
-    seeded_angle_convention_ = pinned.angle_convention;
-  } else if (*seeded_angle_convention_ != pinned.angle_convention) {
+  if (seeded_angle_convention_.has_value() &&
+      *seeded_angle_convention_ != pinned.angle_convention) {
     return fail_invalid(
         "ESPRITEstimatorOp: angle_convention is static and cannot change "
-        "after the first activation; instantiate a separate operator per "
-        "convention");
+        "after the first successful activation; instantiate a separate "
+        "operator per convention");
   }
   const std::vector<int64_t>& smoothing = pinned.spatial_smoothing;
   const bool forward_backward = pinned.forward_backward;
@@ -246,6 +243,14 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
   if (stream == nullptr) {
     return make_unexpected(Error{ErrorCode::kNotSupported,
                                  "ESPRITEstimatorOp: no CUDA compute stream"});
+  }
+
+  // Seed only after the activation has passed validation so a failed first
+  // tick does not lock the static convention.
+  if (!seeded_angle_convention_.has_value()) {
+    device_angle_convention_ =
+        detail::make_device_angle_convention<T>(pinned.angle_convention);
+    seeded_angle_convention_ = pinned.angle_convention;
   }
 
   const DLDataType out_dtype = real_dtype<T>();

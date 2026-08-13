@@ -113,8 +113,8 @@ cmake -S . -B build \
   -DHOLOSCAN_RADAR_BUILD_PERFORMANCE=ON
 cmake --build build -j"$(nproc)"
 
-# Ported C++ units (skip pytest while Python is forced off)
-ctest --test-dir build -L unit -E 'pytest' --output-on-failure
+# Ported C++ units (pytest is unregistered while Python is forced off)
+ctest --test-dir build -L unit --output-on-failure
 
 # Graph-ported perf smokes only (today: clutter)
 ctest --test-dir build -L performance --output-on-failure
@@ -521,7 +521,7 @@ ported ops when `HOLOSCAN_RADAR_BUILD_PERFORMANCE=ON`).
 | --- | --- |
 | Params schema | Ported ops use `Operator<Params>` + `HOLOSCAN_PARAM_SCHEMA`; drop `ArgumentSetter` / `ensure_radar_arg_setters` for those |
 | Stream | `context.cuda_stream()` only — no `receive_cuda_stream` / `set_cuda_stream` |
-| Emit | Pool loan → write → commit → emit (`emit_device_tensor`) |
+| Emit | `prepare_device_tensor` then `emit_prepared_tensor` for multi-out ticks (fill/commit all loans before any publish); single-out may still use `emit_device_tensor` |
 | Sticky helper | Operator-owned `std::optional` + `resolve_sticky_override` (not experimental `runtime_mutable`) |
 | Optional receives | Only `kInputUndeclared` / `kInputEmpty` / `kInputNotSelected` / `kNotReady` mean "absent" (`is_absent_input_error`); every other receive error propagates instead of degrading to the Params seed |
 | Empty tensors | `receive_tensor` rejects a null `data()` only when `nbytes() > 0` — a zero-element tensor legitimately carries no allocation |

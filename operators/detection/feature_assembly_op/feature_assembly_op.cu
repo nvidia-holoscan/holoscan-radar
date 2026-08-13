@@ -409,6 +409,8 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
     }
     retained_feature_ids_.reset();
     retained_score_offsets_.reset();
+    // Keep seeded_feature_ids_ — empty ticks must not unlock a mid-session
+    // features permute.
     return {};
   }
 
@@ -421,7 +423,14 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
-  if (!feature_ids_ready_ || !retained_feature_ids_ ||
+  if (seeded_feature_ids_.has_value() &&
+      *seeded_feature_ids_ != feature_ids) {
+    return fail_invalid(
+        "FeatureAssemblyOp: features is static and cannot change after the "
+        "first successful activation; instantiate a separate operator per "
+        "column layout");
+  }
+  if (!seeded_feature_ids_.has_value() || !retained_feature_ids_ ||
       retained_feature_ids_->shape()[0] != num_features) {
     retained_feature_ids_ = make_device_tensor({num_features}, kInt32Dtype);
     HOLOSCAN_TRY(auto feat_mut,
@@ -431,7 +440,7 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
                         cudaMemcpyHostToDevice, stream) != cudaSuccess) {
       return fail_runtime("FeatureAssemblyOp: feature id H2D copy failed");
     }
-    feature_ids_ready_ = true;
+    seeded_feature_ids_ = feature_ids;
   }
 
   if (!retained_error_flag_) {
