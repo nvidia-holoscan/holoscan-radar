@@ -37,6 +37,11 @@ The EA branch covers, in dependency order:
    stable.
 5. Python bindings, Holoviz demos, and example apps once EA exposes a
    usable Python operator surface / Holoviz (or we accept a C++-only path).
+6. Close issues deferred on the EA SDK and/or team decisions (sticky live
+   Graph, durable port/descriptor API deltas, restore or ratify interim
+   Params-only / Tensor-pack workarounds).
+7. Cleanup before `main` (drop allow-lists, `[EA HSDK5 ONLY]` fences, and
+   this file).
 
 **Out of scope here:** changing radar algorithm contracts for non-SDK
 reasons (that is `OPERATOR_API.md` + team review), Pulse-Doppler / SAR /
@@ -60,10 +65,31 @@ Work proceeds in layers so unported code does not break the tree:
 | **2 — Operator wave** | Rewrite ops to `Operator<Params>` + typed ports; Graph unit tests; allow-list each name | `ctest -L unit` green for ported ops (intentional skips OK) |
 | **3 — Perf wave** | Rewrite `perf_*.cpp` to Graph; add names to `HOLOSCAN_RADAR_HSDK5_PORTED_PERF` | `ctest -L performance` smokes pass |
 | **4 — Apps / Python** | Demo apps + bindings when Holoviz / Python EA surface exists | App smoke / pytest |
-| **5 — Cleanup** | Drop allow-lists, `[EA HSDK5 ONLY]` fences, and this file before `main` | See **Cleanup gate** |
+| **5 — Close deferred** | Re-probe EA gaps; settle durable HSDK 5 API deltas with the team; restore Graph sticky / live descriptor ports / typed geometry outs where ratified; unskip deferred suites | Every **Open — SDK / EA** item closed or moved to durable docs; no intentional EA `GTEST_SKIP` left unexplained |
+| **6 — Cleanup** | Drop allow-lists, `[EA HSDK5 ONLY]` fences, and this file before `main` | See **Cleanup gate** |
 
 Phases 2–3 are per-operator and may interleave (an op can be checklist-near
-complete in C++ while its Graph perf driver is still deferred).
+complete in C++ while its Graph perf driver is still deferred). Phase 4 may
+start once enough ops are stable for an app chain; it does **not** clear
+phase-5 EA / team debt. Phase 5 is the dedicated close-out for everything
+parked under **Open — SDK / EA** (and the deferred Graph suites that depend
+on those answers) before cleanup is allowed to strip the fences.
+
+### Phase 5 — what “close deferred” means
+
+Inventory is the numbered sections under **Open — SDK / EA** (and any
+new EA/team items added there). Typical work:
+
+| Class | Close by |
+| --- | --- |
+| **EA limitation** (e.g. §1 mid-stream sticky Graph, §8 live-override perf) | Re-probe on newer EA / GA; restore `contract()` sticky policy + unskip Graph tests; document the working harness recipe — or reclassify as durable if the SDK will not support it |
+| **Durable HSDK 5** (e.g. §2 unique in/out names, §9 vector/descriptor lives, §10 `ArrayGeometry` Tensor pack) | Team decision: keep the interim as the locked contract (update `OPERATOR_API.md`) **or** restore typed live/descriptor ports when the SDK admits them; drop dual “logical vs physical” naming notes once settled |
+| **Our deferred work blocked on the above** (CFAR GO/SO/OS Graph suites, optional-mask Graph wiring, Params-only → live Inputs) | Land only after the matching EA/team item is closed; do not silently pick a contract answer in code |
+
+Phase 5 is **not** for new algorithm contracts (those stay
+[`TEAM_BLOCKED.md`](TEAM_BLOCKED.md) / per-op `OPEN_ITEMS.md`). It **is**
+for every interim that exists only because of EA friction or an unsettled
+HSDK 5 API shape.
 
 ---
 
@@ -518,6 +544,10 @@ ported ops when `HOLOSCAN_RADAR_BUILD_PERFORMANCE=ON`).
 ---
 
 ## Cleanup gate (before `main`)
+
+Prerequisite: **phase 5 (Close deferred)** is done — every **Open — SDK /
+EA** item is closed or moved into durable docs, and intentional EA test
+skips are gone or explicitly reclassified as permanent contract.
 
 1. Search the repo for `[EA HSDK5 ONLY]` and remove every marked workaround,
    including the temporary section in [`AGENTS.md`](../../AGENTS.md).
