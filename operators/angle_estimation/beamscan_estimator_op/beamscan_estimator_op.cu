@@ -164,7 +164,9 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
   }
 
   HOLOSCAN_TRY(auto maybe_valid, receive_optional_value(is_valid));
-  if (maybe_valid.has_value() && shape.size() == 3) {
+  // A 2-D snapshot is the num_snapshots == 1 case, so the mask contract
+  // (num_items, num_snapshots) applies to both ranks.
+  if (maybe_valid.has_value()) {
     try {
       detail::check_is_valid_mask(*maybe_valid, num_items, num_snapshots,
                                   kOpName);

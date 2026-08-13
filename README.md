@@ -31,13 +31,22 @@ devcontainer startup, `holohub` commands, and the required pre-GA cleanup.
 ./holohub run fmcw_siso
 ```
 
+**[EA HSDK5 ONLY]** On this branch the demo applications do not build: they
+need Holoviz (absent from the EA package) and the FMCW range/Doppler operators,
+which are not ported yet. Build and run the C++ test suite instead — see
+[`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md) for the port state
+and the working `cmake` / `ctest` invocations.
+
 ---
 
 ## Operators
 
 All operators below are C++/CUDA (MatX) with **Python bindings for the full
 set** (`holoscan.radar`, generated from the same pybind11-wrapped classes —
-see `python/holoscan/radar/`). Each operator's header documents its full
+see `python/holoscan/radar/`). **[EA HSDK5 ONLY]** The bindings are disabled on
+this branch (`HOLOSCAN_RADAR_BUILD_PYTHON=OFF`) until the EA/GA package ships a
+full Python operator surface; C++ is the only supported path here. Each
+operator's header documents its full
 port/parameter contract; precision is fixed per instance by the template
 parameter (`float` → complex64, `double` → complex128; Python exposes both as
 explicit `...OpF32` / `...OpF64` classes plus a bare `...Op` alias for `F32`).
@@ -190,6 +199,10 @@ the same graph as its C++ counterpart.
 ---
 
 ## Building from Source (without HoloHub CLI)
+
+**[EA HSDK5 ONLY]** This branch requires Holoscan SDK 5.x (the EA image built
+by `./.devcontainer/build-hsdk5-ea-image.sh`) and MatX discoverable via
+`find_package(matx)`; the 4.3 floor below applies to `main`.
 
 | Requirement | Version |
 | --- | --- |

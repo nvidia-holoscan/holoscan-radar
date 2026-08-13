@@ -62,9 +62,12 @@ the same path the `holohub` wrapper uses for `HOLOSCAN_CLI_DATA_DIR`.
 
 ## [EA HSDK5 ONLY] Build the SDK base image
 
-This temporary workflow creates a devcontainer with HSDK 5 installed. It does
-not build or update the radar module, which is expected to remain incompatible
-until it is ported from HSDK 4.3.
+This temporary workflow creates a devcontainer with HSDK 5 installed; it does
+not build the radar module. The module is **partially** ported: the allow-listed
+operators and their C++ tests build and run, while the FMCW range/Doppler and
+MIMO marshaling operators, the Python bindings, and the demo applications are
+still gated off. See [`../docs/planning/HSDK5_PORT.md`](../docs/planning/HSDK5_PORT.md)
+for the current state.
 
 On the host, from the root of this repository, run:
 

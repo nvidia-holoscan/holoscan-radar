@@ -94,8 +94,8 @@ static_assert(
 
 // Admission bounds for the device output pool.
 inline constexpr std::uint32_t kDetectionReductionMaxRank = 8U;
-inline constexpr std::size_t kDetectionReductionMaxByteSpan =
-    256ULL * 1024ULL * 1024ULL;  // 256 MiB
+// 256 MiB
+inline constexpr std::size_t kDetectionReductionMaxByteSpan = 256ULL << 20;
 
 template <typename T, typename ScoreFn = NoCustomScore>
 class DetectionReductionOp

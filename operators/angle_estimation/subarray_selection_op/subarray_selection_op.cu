@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -127,6 +128,31 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
   }
 
   HOLOSCAN_TRY(auto maybe_valid, receive_optional_value(is_valid));
+  if (maybe_valid.has_value()) {
+    // The mask is forwarded verbatim, so only its transport shape matters
+    // here; slot contents are the consuming estimator's business.
+    const DLDataType vdtype = maybe_valid->dtype();
+    const bool mask_dtype_ok =
+        vdtype.lanes == 1 && vdtype.bits == 8 &&
+        (vdtype.code == kDLBool || vdtype.code == kDLUInt);
+    if (!mask_dtype_ok) {
+      return fail_invalid(
+          "SubarraySelectionOp: is_valid must have dtype bool or uint8");
+    }
+    const auto& vshape = maybe_valid->shape();
+    if (vshape.size() != 2 || vshape[0] != num_items ||
+        vshape[1] != num_snapshots) {
+      return fail_invalid(
+          "SubarraySelectionOp: is_valid must have shape (num_items, "
+          "num_snapshots) matching snapshot");
+    }
+    try {
+      require_cuda_accessible(*maybe_valid, "is_valid", kOpName);
+      require_contiguous(*maybe_valid, "is_valid", kOpName);
+    } catch (const std::invalid_argument& e) {
+      return fail_invalid(e.what());
+    }
+  }
 
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {

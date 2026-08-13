@@ -30,8 +30,7 @@ namespace holoscan::radar {
 // LatestWithin still needs a positive max_age; use a century-scale bound so a
 // queued override is not aged out mid-session.
 
-inline constexpr std::chrono::nanoseconds kStickyOverrideMaxAge =
-    std::chrono::years{100};
+inline constexpr auto kStickyOverrideMaxAge = std::chrono::years{100};
 
 template <typename T>
 void add_sticky_override_to_contract(Contract& contract, const Input<T>& port) {
@@ -44,16 +43,11 @@ void add_sticky_override_to_contract(Contract& contract, const Input<T>& port) {
 template <typename T>
 expected<T, Error> resolve_sticky_override(Input<T>& port, const T& seed,
                                            std::optional<T>& sticky) {
-  // Unconnected / silent override ports must not fail the activation.
-  auto maybe = receive_optional_value(port);
-  if (!maybe) {
-    if (sticky.has_value()) {
-      return *sticky;
-    }
-    return seed;
-  }
-  if (maybe->has_value()) {
-    sticky = std::move(*maybe).value();
+  // Unconnected / silent override ports must not fail the activation, but a
+  // genuine transport failure has to surface rather than degrade to the seed.
+  HOLOSCAN_TRY(auto maybe, receive_optional_value(port));
+  if (maybe.has_value()) {
+    sticky = std::move(*maybe);
   }
   if (sticky.has_value()) {
     return *sticky;

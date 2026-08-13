@@ -156,10 +156,15 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
-  if (!angle_convention_seeded_) {
+  if (!seeded_angle_convention_.has_value()) {
     device_angle_convention_ =
         detail::make_device_angle_convention<T>(pinned.angle_convention);
-    angle_convention_seeded_ = true;
+    seeded_angle_convention_ = pinned.angle_convention;
+  } else if (*seeded_angle_convention_ != pinned.angle_convention) {
+    return fail_invalid(
+        "ESPRITEstimatorOp: angle_convention is static and cannot change "
+        "after the first activation; instantiate a separate operator per "
+        "convention");
   }
   const std::vector<int64_t>& smoothing = pinned.spatial_smoothing;
   const bool forward_backward = pinned.forward_backward;

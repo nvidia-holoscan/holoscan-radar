@@ -61,7 +61,8 @@ ported. Params side-channel is not acceptable.
 **Class:** HSDK 5 EA limitation (HSDK5_PORT §1 / Beamscan §3).
 
 Port registered in `setup()`; omitted from `contract()`; `receive_optional_value`
-+ forward to `is_valid_out` when present. Connected Graph paths deferred
+
+- forward to `is_valid_out` when present. Connected Graph paths deferred
 (`RUNTIME_OPERATOR_REPLAY_MISMATCH` risk).
 
 ### 4. Physical output renames (`snapshot_out` / `is_valid_out`)

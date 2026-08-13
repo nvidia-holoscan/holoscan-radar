@@ -62,22 +62,6 @@ from .esprit_estimator_op import (  # noqa: F401
 )
 from .feature_assembly_op import AssemblyFeature  # noqa: F401
 from .feature_assembly_op import FeatureAssemblyOpF32, FeatureAssemblyOpF64
-from .fmcw_doppler_processor_op import (  # noqa: F401
-    FMCWDopplerProcessorOpF32,
-    FMCWDopplerProcessorOpF64,
-)
-from .fmcw_range_doppler_processor_op import (  # noqa: F401
-    FMCWRangeDopplerProcessorOpF32,
-    FMCWRangeDopplerProcessorOpF64,
-)
-from .fmcw_range_processor_op import FMCWRangeProcessorOpF32  # noqa: F401
-from .fmcw_range_processor_op import FMCWRangeProcessorOpF64
-from .mimo_coherent_compensation_op import (  # noqa: F401
-    MIMOCoherentCompensationOpF32,
-    MIMOCoherentCompensationOpF64,
-)
-from .mimo_deinterleave_op import MIMODeinterleaveOpF32  # noqa: F401
-from .mimo_deinterleave_op import MIMODeinterleaveOpF64
 from .music_estimator_op import MUSICEstimatorOpF32  # noqa: F401
 from .music_estimator_op import (
     MUSICEstimatorOpF64,
@@ -96,10 +80,65 @@ from .root_music_estimator_op import (  # noqa: F401
     RootMUSICEstimatorOpF64,
 )
 from .snapshot_gather_op import SnapshotGatherOpF32, SnapshotGatherOpF64  # noqa: F401
-from .virtual_array_assembly_op import (  # noqa: F401
-    VirtualArrayAssemblyOpF32,
-    VirtualArrayAssemblyOpF64,
-)
+
+# [EA HSDK5 ONLY] The FMCW range/Doppler/fused-RD and MIMO marshaling operators
+# are not on the HSDK 5 port allow-list, so their extension modules are absent
+# from an EA build. Import each optionally — one missing module must not take
+# down `import holoscan.radar` for the operators that did port. Missing names
+# are None, as in the Holoviz block below.
+try:
+    from .fmcw_doppler_processor_op import (  # noqa: F401
+        FMCWDopplerProcessorOpF32,
+        FMCWDopplerProcessorOpF64,
+    )
+except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+    FMCWDopplerProcessorOpF32 = None  # type: ignore[misc, assignment]
+    FMCWDopplerProcessorOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .fmcw_range_doppler_processor_op import (  # noqa: F401
+        FMCWRangeDopplerProcessorOpF32,
+        FMCWRangeDopplerProcessorOpF64,
+    )
+except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+    FMCWRangeDopplerProcessorOpF32 = None  # type: ignore[misc, assignment]
+    FMCWRangeDopplerProcessorOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .fmcw_range_processor_op import (  # noqa: F401
+        FMCWRangeProcessorOpF32,
+        FMCWRangeProcessorOpF64,
+    )
+except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+    FMCWRangeProcessorOpF32 = None  # type: ignore[misc, assignment]
+    FMCWRangeProcessorOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .mimo_coherent_compensation_op import (  # noqa: F401
+        MIMOCoherentCompensationOpF32,
+        MIMOCoherentCompensationOpF64,
+    )
+except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+    MIMOCoherentCompensationOpF32 = None  # type: ignore[misc, assignment]
+    MIMOCoherentCompensationOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .mimo_deinterleave_op import (  # noqa: F401
+        MIMODeinterleaveOpF32,
+        MIMODeinterleaveOpF64,
+    )
+except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+    MIMODeinterleaveOpF32 = None  # type: ignore[misc, assignment]
+    MIMODeinterleaveOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .virtual_array_assembly_op import (  # noqa: F401
+        VirtualArrayAssemblyOpF32,
+        VirtualArrayAssemblyOpF64,
+    )
+except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+    VirtualArrayAssemblyOpF32 = None  # type: ignore[misc, assignment]
+    VirtualArrayAssemblyOpF64 = None  # type: ignore[misc, assignment]
 
 # Holoviz-backed radar_app symbols are absent when Holoviz is gated off
 # ([EA HSDK5 ONLY]); report sinks above still import.

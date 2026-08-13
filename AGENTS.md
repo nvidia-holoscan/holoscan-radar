@@ -2,7 +2,7 @@
 
 GPU radar signal-processing operator library for the NVIDIA Holoscan SDK: Holoscan operators implemented in C++/CUDA on [MatX](https://github.com/NVIDIA/MatX), composed into pipelines purely by port connections — no glue code between operators.
 
-**Current phase: FMCW implementation.** The operator contracts (ports, shapes, dtypes, parameters) are fully specified in `docs/planning/`; implementation lands against them. The signal-processing group (`operators/fmcw/`: range, clutter, Doppler, fused range-Doppler) and the shared `operators/common/` library are implemented; detection, clustering, angle estimation, and MIMO marshaling are next.
+**Current phase: FMCW implementation.** The operator contracts (ports, shapes, dtypes, parameters) are fully specified in `docs/planning/`; implementation lands against them. The signal-processing (`operators/fmcw/`: range, clutter, Doppler, fused range-Doppler), detection, clustering, and angle-estimation groups plus the shared `operators/common/` library are implemented; MIMO marshaling is next. **[EA HSDK5 ONLY]** On this branch, "implemented" and "ported to HSDK 5" differ — see the allow-list and progress table in [`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md).
 
 ## [EA HSDK5 ONLY] Temporary development environment
 

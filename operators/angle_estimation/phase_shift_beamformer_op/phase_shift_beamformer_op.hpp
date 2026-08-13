@@ -93,8 +93,8 @@ static_assert(
 
 // Admission bounds for the device output pool (rank-agnostic batching).
 inline constexpr std::uint32_t kPhaseShiftBeamformerMaxRank = 8U;
-inline constexpr std::size_t kPhaseShiftBeamformerMaxByteSpan =
-    256ULL * 1024ULL * 1024ULL;  // 256 MiB
+// 256 MiB
+inline constexpr std::size_t kPhaseShiftBeamformerMaxByteSpan = 256ULL << 20;
 
 template <typename T>
 class PhaseShiftBeamformerOp

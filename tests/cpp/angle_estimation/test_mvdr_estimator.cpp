@@ -196,8 +196,10 @@ struct MvdrOutputs {
   HostTensor eigenvalues;
 };
 
+// cpplint misreads the wrapped template header as an indented declaration
+// inside the anonymous namespace; the parameter list cannot fit on one line.
 template <typename Source, typename OpRef, typename S0, typename S1,
-          typename S2, typename S3, typename S4>
+          typename S2, typename S3, typename S4>  // NOLINT(whitespace/indent_namespace)
 void wire_mvdr(holoscan::Graph& graph, const Source& source, OpRef& op,
                const S0& sink0, const S1& sink1, const S2& sink2,
                const S3& sink3, const S4& sink4) {

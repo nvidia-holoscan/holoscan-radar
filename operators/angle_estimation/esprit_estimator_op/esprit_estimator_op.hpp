@@ -110,8 +110,8 @@ static_assert(holoscan::param_schema_availability<ESPRITParams>() ==
               "HOLOSCAN_PARAM_SCHEMA must be in ESPRITParams's namespace");
 
 inline constexpr std::uint32_t kESPRITEstimatorMaxRank = 8U;
-inline constexpr std::size_t kESPRITEstimatorMaxByteSpan =
-    256ULL * 1024ULL * 1024ULL;  // 256 MiB
+// 256 MiB
+inline constexpr std::size_t kESPRITEstimatorMaxByteSpan = 256ULL << 20;
 
 template <typename T>
 class ESPRITEstimatorOp : public holoscan::Operator<ESPRITParams> {
@@ -151,7 +151,9 @@ class ESPRITEstimatorOp : public holoscan::Operator<ESPRITParams> {
 
   bool warned_rank_deficient_{false};
   detail::DeviceAngleConvention<T> device_angle_convention_{};
-  bool angle_convention_seeded_{false};
+  // The convention the device relabeling was built from; angle_convention is
+  // contract-static, so a later change is rejected rather than ignored.
+  std::optional<AngleConvention> seeded_angle_convention_{};
 
   SpatialSmoothingPlan smoothing_plan_{};
   std::string smoothing_key_{};

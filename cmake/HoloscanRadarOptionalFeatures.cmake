@@ -27,9 +27,12 @@ else()
 endif()
 
 # Python bindings need holoscan::pybind11 (ABI helper) and a ported operator
-# surface. Keep them off for the HSDK 5 pilot until pybind is restored.
+# surface. Keep them off for the HSDK 5 pilot until pybind is restored. FORCE:
+# the EA package cannot build them at all, so a stale cache (or a -D from a
+# 4.x-era script) must not resurrect a configuration that fails to build.
+# Re-enabling is a deliberate edit to this file, not a cache flip.
 set(HOLOSCAN_RADAR_BUILD_PYTHON FALSE CACHE BOOL
-    "Build holoscan.radar Python bindings (off during HSDK 5 EA pilot)")
+    "Build holoscan.radar Python bindings (off during HSDK 5 EA pilot)" FORCE)
 if(HOLOSCAN_RADAR_BUILD_PYTHON)
     message(STATUS "Python bindings: enabled")
 else()
@@ -65,4 +68,32 @@ function(holoscan_radar_add_operator NAME)
         return()
     endif()
     add_holohub_operator(${NAME} ${ARGN})
+endfunction()
+
+# Set <out_var> TRUE when every named operator is on the port allow-list.
+function(holoscan_radar_operators_ported out_var)
+    foreach(_op IN LISTS ARGN)
+        if(NOT "${_op}" IN_LIST HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS)
+            set(${out_var} FALSE PARENT_SCOPE)
+            return()
+        endif()
+    endforeach()
+    set(${out_var} TRUE PARENT_SCOPE)
+endfunction()
+
+# Wrapper around add_holohub_application that skips apps whose operator
+# dependencies are unported. DEPENDS OPERATORS FORCEs OP_<dep>=ON, but
+# holoscan_radar_add_operator() still skips unported names, so the app would
+# link against a target that was never created.
+function(holoscan_radar_add_application NAME)
+    set(_deps ${ARGN})
+    list(REMOVE_ITEM _deps DEPENDS OPERATORS)
+    holoscan_radar_operators_ported(_deps_ported ${_deps})
+    if(NOT _deps_ported)
+        message(STATUS
+            "[EA HSDK5 ONLY] Skipping application ${NAME} "
+            "(unported operator dependencies)")
+        return()
+    endif()
+    add_holohub_application(${NAME} ${ARGN})
 endfunction()

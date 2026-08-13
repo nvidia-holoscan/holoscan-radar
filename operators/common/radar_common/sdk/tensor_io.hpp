@@ -31,13 +31,25 @@ inline expected<Tensor, Error> receive_tensor(Input<Tensor>& port,
   if (!sample) {
     return make_unexpected(std::move(sample).error());
   }
-  if (sample->data() == nullptr) {
+  // An empty tensor legitimately carries no allocation; only a sized tensor
+  // without storage is malformed.
+  if (sample->nbytes() > 0 && sample->data() == nullptr) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
         who + ": received a null tensor on input port '" +
             std::string(port.name()) + "'"});
   }
   return std::move(*sample);
+}
+
+// True for the receive errors that mean "this activation has no value here"
+// (port unconnected / omitted from the contract, nothing selected yet). Every
+// other code is a real transport or materialization failure and must surface —
+// silently substituting a default would hide miswired graphs.
+inline bool is_absent_input_error(ErrorCode code) {
+  return code == ErrorCode::kInputUndeclared ||
+         code == ErrorCode::kInputEmpty ||
+         code == ErrorCode::kInputNotSelected || code == ErrorCode::kNotReady;
 }
 
 // Optional sticky-override receive: success with a value when the port has
@@ -49,8 +61,7 @@ expected<std::optional<T>, Error> receive_optional_value(Input<T>& port) {
   }
   auto sample = port.receive_data();
   if (!sample) {
-    if (sample.error().code == ErrorCode::kNotReady ||
-        sample.error().code == ErrorCode::kReceiveError) {
+    if (is_absent_input_error(sample.error().code)) {
       return std::optional<T>{};
     }
     return make_unexpected(std::move(sample).error());
