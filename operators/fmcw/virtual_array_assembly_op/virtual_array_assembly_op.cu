@@ -6,22 +6,33 @@
 #include <cuda_runtime_api.h>
 
 #include <cmath>
-#include <memory>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <holoscan/core/expected_macros.hpp>
+#include <holoscan/core/payload_options.hpp>
+
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_stage.hpp"
-#include "radar_common/sdk/arg_setters.hpp"
+#include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/array_geometry_tensor.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
-#include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
 
 namespace {
+
+expected<void, Error> fail_invalid(const std::string& message) {
+  return make_unexpected(Error{ErrorCode::kInvalidArgument, message});
+}
+
+expected<void, Error> fail_runtime(const std::string& message) {
+  return make_unexpected(Error{ErrorCode::kFailure, message});
+}
 
 bool plan_key_changed(const std::vector<double>& tx,
                       const std::vector<double>& rx, OverlapPolicy policy,
@@ -53,32 +64,31 @@ VirtualArrayAssemblyOp<T>::~VirtualArrayAssemblyOp() {
 }
 
 template <typename T>
-void VirtualArrayAssemblyOp<T>::initialize() {
-  ensure_radar_arg_setters();
-  Operator::initialize();
-  effective_wavelength_ = wavelength_.get();
+void VirtualArrayAssemblyOp<T>::setup(OperatorSpec& spec) {
+  constexpr TensorPortLayout kDevice{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = std::nullopt,
+      .rank = std::nullopt,
+  };
+  const TensorAllocationBounds bounds{
+      .max_rank = kVirtualArrayAssemblyMaxRank,
+      .max_byte_span = kVirtualArrayAssemblyMaxByteSpan};
+  spec.input(rd_maps).queue_depth(2U).expects_tensor(kDevice);
+  spec.output(rd_maps_out).produces_tensor(kDevice).tensor_allocation(bounds);
+  // Packed ArrayGeometry (host-planned; H2D each tick).
+  spec.output(array_geometry)
+      .produces_tensor(kDevice)
+      .tensor_allocation(bounds);
+  // [live] POD sticky override. Leaving unconnected is legal — compute()
+  // seeds from Params. Descriptor / vector live params are Params-only (§9).
+  spec.input(wavelength).queue_depth(2U);
 }
 
 template <typename T>
-void VirtualArrayAssemblyOp<T>::setup(OperatorSpec& spec) {
-  spec.input<holoscan::TensorMap>("rd_maps");
-  spec.output<holoscan::TensorMap>("rd_maps");
-  spec.output<ArrayGeometry>("array_geometry");
-
-  spec.param(tx_positions_, "tx_positions", "TX element positions",
-             "TX element positions (m), row-major (num_tx, 3). Static.",
-             std::vector<double>{});
-  spec.param(rx_positions_, "rx_positions", "RX element positions",
-             "RX element positions (m), row-major (num_rx, 3). Static.",
-             std::vector<double>{});
-  spec.param(wavelength_, "wavelength", "Operating wavelength",
-             "Operating wavelength (m) for the emitted array_geometry.",
-             0.0);
-  add_override_port<double>(spec, "wavelength");
-  spec.param(overlap_policy_, "overlap_policy", "Virtual overlap policy",
-             "How coincident virtual elements are handled: dedup, average, "
-             "or keep_all.",
-             OverlapPolicy::kDedup);
+Contract VirtualArrayAssemblyOp<T>::contract() const {
+  Contract result;
+  result.trigger(OnEach{rd_maps});
+  return result;
 }
 
 template <typename T>
@@ -121,8 +131,8 @@ void VirtualArrayAssemblyOp<T>::ensure_device_plan(
   }
   if (!plan.member_offsets.empty()) {
     if (cudaMemcpyAsync(d_member_offsets_, plan.member_offsets.data(),
-                        offset_count * sizeof(int64_t), cudaMemcpyHostToDevice,
-                        stream) != cudaSuccess) {
+                        offset_count * sizeof(int64_t),
+                        cudaMemcpyHostToDevice, stream) != cudaSuccess) {
       throw std::runtime_error(
           "VirtualArrayAssemblyOp: member_offsets H2D failed");
     }
@@ -143,8 +153,8 @@ void VirtualArrayAssemblyOp<T>::ensure_device_plan(
   }
   if (!plan.member_indices.empty()) {
     if (cudaMemcpyAsync(d_member_indices_, plan.member_indices.data(),
-                        index_count * sizeof(int64_t), cudaMemcpyHostToDevice,
-                        stream) != cudaSuccess) {
+                        index_count * sizeof(int64_t),
+                        cudaMemcpyHostToDevice, stream) != cudaSuccess) {
       throw std::runtime_error(
           "VirtualArrayAssemblyOp: member_indices H2D failed");
     }
@@ -152,35 +162,40 @@ void VirtualArrayAssemblyOp<T>::ensure_device_plan(
 }
 
 template <typename T>
-void VirtualArrayAssemblyOp<T>::compute(InputContext& op_input,
-                                      OutputContext& op_output,
-                                      ExecutionContext& context) {
-  (void)context;
+expected<void, Error> VirtualArrayAssemblyOp<T>::compute(
+    ExecutionContext& context) {
   constexpr const char* kOpName = "VirtualArrayAssemblyOp";
 
-  std::shared_ptr<holoscan::Tensor> input =
-      receive_single(op_input, "rd_maps", kOpName);
+  HOLOSCAN_TRY(auto input, receive_tensor(rd_maps, kOpName));
 
-  classify_input_dtype<T>(*input, "rd_maps", /*allow_real=*/false);
-  require_cuda_accessible(*input, "rd_maps", kOpName);
-  require_contiguous(*input, "rd_maps", kOpName);
+  try {
+    classify_input_dtype<T>(input, "rd_maps", /*allow_real=*/false);
+    require_cuda_accessible(input, "rd_maps", kOpName);
+    require_contiguous(input, "rd_maps", kOpName);
+  } catch (const std::invalid_argument& e) {
+    return fail_invalid(e.what());
+  }
 
-  effective_wavelength_ =
-      resolve_override_param(op_input, "wavelength", effective_wavelength_,
-                             /*changed=*/nullptr);
-  if (!(effective_wavelength_ > 0.0) ||
-      !std::isfinite(effective_wavelength_)) {
-    throw std::invalid_argument(std::string(kOpName) +
-                                ": wavelength must be a positive finite "
-                                "scalar (build-time or [live] override)");
+  const VirtualArrayAssemblyParams& pinned =
+      context.params<VirtualArrayAssemblyParams>();
+
+  HOLOSCAN_TRY(auto effective_wavelength,
+               resolve_sticky_override(wavelength, pinned.wavelength,
+                                       sticky_wavelength_));
+
+  if (!(effective_wavelength > 0.0) || !std::isfinite(effective_wavelength)) {
+    return fail_invalid(
+        std::string(kOpName) +
+        ": wavelength must be a positive finite "
+        "scalar (build-time or [live] override)");
   }
 
   const detail::RdMapsLayout layout =
-      detail::parse_rd_maps_layout(*input, "rd_maps");
+      detail::parse_rd_maps_layout(input, "rd_maps");
 
-  const std::vector<double> tx_positions = tx_positions_.get();
-  const std::vector<double> rx_positions = rx_positions_.get();
-  const OverlapPolicy policy = overlap_policy_.get();
+  const std::vector<double>& tx_positions = pinned.tx_positions;
+  const std::vector<double>& rx_positions = pinned.rx_positions;
+  const OverlapPolicy policy = pinned.overlap_policy;
 
   if (plan_key_changed(tx_positions, rx_positions, policy, layout.num_tx,
                        layout.num_rx, cached_tx_positions_,
@@ -196,29 +211,71 @@ void VirtualArrayAssemblyOp<T>::compute(InputContext& op_input,
         layout.num_rx, cached_policy_);
   }
 
-  cudaStream_t stream = op_input.receive_cuda_stream("rd_maps");
-  ensure_device_plan(cached_plan_, stream);
-
-  const DLDataType dtype = input->dtype();
-  auto output = make_device_tensor(
-      detail::assembled_rd_shape(layout, cached_plan_.num_virtual), dtype);
-
-  detail::run_virtual_assembly_stage<T>(
-      input->data(), output->data(), layout, cached_plan_, d_src_channel_,
-      d_member_offsets_, d_member_indices_, stream);
-
-  if (stream != cudaStreamDefault) {
-    op_output.set_cuda_stream(stream, "rd_maps");
+  cudaStream_t stream = context.cuda_stream().get();
+  if (stream == nullptr) {
+    return make_unexpected(
+        Error{ErrorCode::kNotSupported,
+              "VirtualArrayAssemblyOp: no CUDA compute stream"});
   }
-  holoscan::TensorMap out_map;
-  out_map.insert({"rd_maps", output});
-  op_output.emit(out_map, "rd_maps");
 
-  const ArrayGeometry geometry =
-      detail::make_array_geometry(cached_plan_, effective_wavelength_);
-  op_output.emit(geometry, "array_geometry");
+  try {
+    ensure_device_plan(cached_plan_, stream);
+  } catch (const std::runtime_error& e) {
+    return fail_runtime(e.what());
+  }
+
+  const DLDataType dtype = input.dtype();
+  const std::vector<int64_t> out_shape =
+      detail::assembled_rd_shape(layout, cached_plan_.num_virtual);
+
+  // Prepare both output loans before either emit so a late fill failure
+  // cannot leave one port already published.
+  const void* input_ptr = input.data();
+  HOLOSCAN_TRY(
+      auto rd_loan,
+      prepare_device_tensor(
+          rd_maps_out, context, out_shape, dtype,
+          [&](void* out_ptr, std::size_t) -> expected<void, Error> {
+            try {
+              detail::run_virtual_assembly_stage<T>(
+                  input_ptr, out_ptr, layout, cached_plan_, d_src_channel_,
+                  d_member_offsets_, d_member_indices_, stream);
+            } catch (const std::invalid_argument& e) {
+              return fail_invalid(e.what());
+            }
+            return {};
+          }));
+
+  const ArrayGeometry geom =
+      detail::make_array_geometry(cached_plan_, effective_wavelength);
+  const std::vector<double> packed = pack_array_geometry(geom);
+  const std::vector<int64_t> geom_shape = array_geometry_tensor_shape(geom);
+  const DLDataType f64 = real_dtype<double>();
+  HOLOSCAN_TRY(
+      auto geom_loan,
+      prepare_device_tensor(
+          array_geometry, context, geom_shape, f64,
+          [&](void* dst, std::size_t nbytes) -> expected<void, Error> {
+            if (nbytes != packed.size() * sizeof(double)) {
+              return fail_runtime(
+                  "VirtualArrayAssemblyOp: array_geometry size mismatch");
+            }
+            if (cudaMemcpyAsync(dst, packed.data(), nbytes,
+                                cudaMemcpyHostToDevice,
+                                stream) != cudaSuccess) {
+              return fail_runtime(
+                  "VirtualArrayAssemblyOp: array_geometry H2D failed");
+            }
+            return {};
+          }));
+
+  HOLOSCAN_TRY(emit_prepared_tensor(rd_maps_out, context,
+                                    std::move(rd_loan)));
+  HOLOSCAN_TRY(emit_prepared_tensor(array_geometry, context,
+                                    std::move(geom_loan)));
 
   retained_input_ = std::move(input);
+  return {};
 }
 
 template class VirtualArrayAssemblyOp<float>;

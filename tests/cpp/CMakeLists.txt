@@ -59,6 +59,21 @@ radar_add_test(common/test_sim_gpu holoscan::radar_common_simulator)
 radar_add_test(common/test_tensor)
 radar_add_test(fmcw/test_clutter_filter
     holoscan::clutter_filter_op)
+radar_add_test(fmcw/test_mimo_deinterleave
+    holoscan::mimo_deinterleave_op)
+radar_add_test(fmcw/test_mimo_coherent_compensation
+    holoscan::mimo_coherent_compensation_op)
+radar_add_test(fmcw/test_virtual_array_assembly
+    holoscan::virtual_array_assembly_op)
+radar_add_test(fmcw/test_fmcw_doppler_processor
+    holoscan::fmcw_doppler_processor_op)
+radar_add_test(fmcw/test_fmcw_range_processor
+    holoscan::fmcw_range_processor_op)
+radar_add_test(fmcw/test_fmcw_range_doppler_processor
+    holoscan::fmcw_range_doppler_processor_op
+    holoscan::fmcw_range_processor_op
+    holoscan::clutter_filter_op
+    holoscan::fmcw_doppler_processor_op)
 radar_add_test(angle_estimation/test_snapshot_gather
     holoscan::snapshot_gather_op)
 radar_add_test(angle_estimation/test_beamscan_estimator

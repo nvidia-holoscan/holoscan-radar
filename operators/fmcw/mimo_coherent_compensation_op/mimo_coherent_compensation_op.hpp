@@ -6,9 +6,19 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <string>
+#include <type_traits>
 
-#include <holoscan/holoscan.hpp>
+#include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/expected.hpp>
+#include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
+#include <holoscan/core/parameter.hpp>
+#include <holoscan/core/parameter_schema.hpp>
+#include <holoscan/core/port.hpp>
+#include <holoscan/core/temporal_contract.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
 
 #include "fmcw/mimo_coherent_compensation_op/mimo_coherent_compensation_stage.hpp"
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
@@ -24,7 +34,8 @@ namespace holoscan::radar {
 //
 // TDM in:  rd_maps — complex64/complex128, (..., M_tx, N_rx, num_doppler,
 //          num_range_bins).
-// TDM out: rd_maps — same shape; phase-aligned (tx, rx) block.
+// TDM out: rd_maps_out — same shape; phase-aligned (tx, rx) block.
+//          [EA HSDK5 ONLY] unique in/out port names required.
 // TDM scope: the per-Doppler-bin correction uses a fixed PRI/M inter-TX offset
 //          and indexes it by TX id — i.e. it assumes the **default identity
 //          round-robin** `tx_order` (TX id == firing slot). A non-identity
@@ -38,27 +49,69 @@ namespace holoscan::radar {
 // DDM in:  rd_maps — complex64/complex128, (..., N_rx, num_doppler,
 //          num_range_bins); the M TX sit in distinct Doppler sub-bands.
 // DDM out (linear-phase / offsets):
-//          rd_maps — (..., M_tx, N_rx, num_doppler_per_tx, num_range_bins);
-//          each TX demuxed out of its sub-band into an explicit axis, all lanes
-//          aligned to a common reduced-Doppler axis.
+//          rd_maps_out — (..., M_tx, N_rx, num_doppler_per_tx,
+//          num_range_bins); each TX demuxed out of its sub-band into an
+//          explicit axis, all lanes aligned to a common reduced-Doppler axis.
 // DDM out (non-linear phase_codes):
-//          rd_maps — (..., M_tx, N_rx, num_doppler, num_range_bins);
+//          rd_maps_out — (..., M_tx, N_rx, num_doppler, num_range_bins);
 //          full Doppler axis preserved; conjugate-correlation demux.
+
+struct MIMOCoherentCompensationParams {
+  MultiplexingScheme multiplexing_scheme{MultiplexingScheme::kUnspecified};
+  FMCWWaveformDescriptor waveform{};
+  DDMCodeDescriptor ddm_code{};
+};
+
+HOLOSCAN_PARAM_SCHEMA(
+    MIMOCoherentCompensationParams,
+    holoscan::param_schema(
+        "com.nvidia.holoscan.radar.MIMOCoherentCompensationParams", 1),
+    holoscan::field<&MIMOCoherentCompensationParams::multiplexing_scheme>(
+        "multiplexing_scheme")
+        .description(
+            "MIMO multiplexing scheme {tdm, ddm}. TDM: per-Doppler-bin "
+            "inter-TX phase correction. DDM: band demux + code removal. "
+            "Static. Required."),
+    holoscan::field<&MIMOCoherentCompensationParams::waveform>("waveform")
+        .description(
+            "Per-TX PRI and carrier for Doppler-dependent phase math. "
+            "[live] in API but Params-only on EA (HSDK5_PORT §9)."),
+    holoscan::field<&MIMOCoherentCompensationParams::ddm_code>("ddm_code")
+        .description(
+            "Doppler-band / phase-code layout for DDM mode. Unused for "
+            "TDM. Static."));
+
+static_assert(
+    holoscan::param_schema_availability<MIMOCoherentCompensationParams>() ==
+        holoscan::ParamSchemaAvailability::kDeclared,
+    "HOLOSCAN_PARAM_SCHEMA must be in "
+    "MIMOCoherentCompensationParams's namespace");
+
+inline constexpr std::uint32_t kMIMOCoherentCompMaxRank = 8U;
+// 256 MiB
+inline constexpr std::size_t kMIMOCoherentCompMaxByteSpan = 256ULL << 20;
+
 template <typename T>
-class MIMOCoherentCompensationOp : public holoscan::Operator {
- public:
-  static_assert(sizeof(T) == 4 || sizeof(T) == 8,
+class MIMOCoherentCompensationOp
+    : public holoscan::Operator<MIMOCoherentCompensationParams> {
+  static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "MIMOCoherentCompensationOp supports float and double only");
 
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(MIMOCoherentCompensationOp)
-
+ public:
   MIMOCoherentCompensationOp() = default;
   ~MIMOCoherentCompensationOp() override;
 
-  void initialize() override;
   void setup(OperatorSpec& spec) override;
-  void compute(InputContext& op_input, OutputContext& op_output,
-               ExecutionContext& context) override;
+  [[nodiscard]] Contract contract() const override;
+  [[nodiscard]] expected<void, Error> compute(
+      ExecutionContext& context) override;
+
+  Input<Tensor> rd_maps{"rd_maps"};
+  // HSDK 5 requires unique port names within an operator (inputs and
+  // outputs share one namespace). OPERATOR_API.md's logical output channel
+  // remains "rd_maps"; the physical port name is rd_maps_out.
+  // [EA HSDK5 ONLY] revisit naming once the full port is settled.
+  Output<Tensor> rd_maps_out{"rd_maps_out"};
 
  private:
   struct CachedTdmCorrection {
@@ -73,31 +126,27 @@ class MIMOCoherentCompensationOp : public holoscan::Operator {
     std::shared_ptr<holoscan::Tensor> device_corr_weights;
   };
 
-  void run_tdm_compute(OutputContext& op_output,
-                       const detail::TdmRdMapsLayout& layout,
-                       const std::shared_ptr<holoscan::Tensor>& input,
-                       cudaStream_t stream, bool waveform_changed);
+  expected<void, Error> run_tdm_compute(
+      ExecutionContext& context, const detail::TdmRdMapsLayout& layout,
+      const Tensor& input, cudaStream_t stream, bool waveform_changed);
 
-  void run_ddm_compute(OutputContext& op_output,
-                       const detail::DdmRdMapsLayout& layout,
-                       const std::shared_ptr<holoscan::Tensor>& input,
-                       cudaStream_t stream);
+  expected<void, Error> run_ddm_compute(
+      ExecutionContext& context, const detail::DdmRdMapsLayout& layout,
+      const Tensor& input, cudaStream_t stream);
 
-  void run_ddm_correlate(OutputContext& op_output,
-                         const detail::DdmRdMapsLayout& layout,
-                         const std::shared_ptr<holoscan::Tensor>& input,
-                         cudaStream_t stream);
-
-  Parameter<MultiplexingScheme> multiplexing_scheme_;
-  Parameter<FMCWWaveformDescriptor> waveform_;
-  Parameter<DDMCodeDescriptor> ddm_code_;
+  expected<void, Error> run_ddm_correlate(
+      ExecutionContext& context, const detail::DdmRdMapsLayout& layout,
+      const Tensor& input, cudaStream_t stream);
 
   FMCWWaveformDescriptor effective_waveform_{};
   ConfigCache<CachedTdmCorrection> correction_cache_{};
   ConfigCache<CachedDdmDemux> demux_cache_{};
   ConfigCache<CachedDdmCorrelate> correlate_cache_{};
 
-  std::shared_ptr<holoscan::Tensor> retained_input_;
+  Tensor retained_input_;
 };
+
+extern template class MIMOCoherentCompensationOp<float>;
+extern template class MIMOCoherentCompensationOp<double>;
 
 }  // namespace holoscan::radar
