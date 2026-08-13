@@ -91,21 +91,22 @@ question remains when that suite is re-enabled.
 
 ---
 
-## 5. Variant / alpha_lut / statistical Graph test suites deferred
+## 5. Variant / alpha_lut / statistical Graph test suites
 
-**Blocks checklist:** full GO/SO/OS matrix + alpha_lut + Monte Carlo Pfa on
-Graph.
+**Blocks checklist:** none — Graph suites landed.
 
-**Class:** Our deferred work (sequencing).
+**Class:** Was our deferred work (sequencing); now closed on HSDK 5.
 
-**Interim.** Core CA Graph suite (`test_cfar_detector.cpp`) is ported and
-registered. `test_cfar_detector_{go,so,os,alpha_lut,statistical}.cpp` still
-use the HSDK 4.x OperatorTestHarness / Application helpers and are **not**
-registered in `tests/cpp/CMakeLists.txt` until ported. Prefer porting the
-variant matrices next (same five-out harness); statistical MC can stay
-host-driven if it does not need Application, or remain deferred.
+**Landed.** `test_cfar_detector_{go,so,os,alpha_lut}.cpp` rewritten to the
+Graph five-out harness (`CFARParams` + `run_single_in_five_out_operator_graph_result`);
+registered next to the CA suite with label `unit`. Live mid-stream sticky /
+vector-live Graph cases remain `GTEST_SKIP` under HSDK5_PORT §1 / §9 (same
+as CA). `test_cfar_detector_statistical.cpp` uses the same Graph harness
+with multi-frame inputs and is registered with label `statistical` only
+(`ctest -L statistical`; excluded from `ctest -L unit`).
 
-**Status:** open — CA Graph green is the landing gate; variants next.
+**Status:** closed for phase-2 Graph unit coverage; §1/§9 skips stay until
+phase 5.
 
 ---
 

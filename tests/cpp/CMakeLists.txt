@@ -24,9 +24,12 @@ target_link_libraries(radar_test_utils INTERFACE
 # Optional EXT overrides the source extension (default .cpp); use .cu when
 # the suite includes device stage kernels (e.g. FeatureAssembly).
 function(radar_add_test NAME)
-    cmake_parse_arguments(_RAT "" "EXT" "" ${ARGN})
+    cmake_parse_arguments(_RAT "" "EXT;LABELS" "" ${ARGN})
     if(NOT _RAT_EXT)
         set(_RAT_EXT ".cpp")
+    endif()
+    if(NOT _RAT_LABELS)
+        set(_RAT_LABELS "unit")
     endif()
     get_filename_component(_tgt ${NAME} NAME_WE)
     add_executable(${_tgt} ${NAME}${_RAT_EXT})
@@ -34,7 +37,7 @@ function(radar_add_test NAME)
         radar_test_utils
         GTest::gtest_main
         ${_RAT_UNPARSED_ARGUMENTS})
-    gtest_discover_tests(${_tgt} PROPERTIES LABELS "unit")
+    gtest_discover_tests(${_tgt} PROPERTIES LABELS "${_RAT_LABELS}")
 endfunction()
 
 # [EA HSDK5 ONLY] Only register tests for radar_common helpers that do not
@@ -111,4 +114,15 @@ radar_add_test(detection/test_feature_assembly
     EXT .cu
     holoscan::feature_assembly_op)
 radar_add_test(detection/test_cfar_detector
+    holoscan::cfar_detector_op)
+radar_add_test(detection/test_cfar_detector_alpha_lut
+    holoscan::cfar_detector_op)
+radar_add_test(detection/test_cfar_detector_os
+    holoscan::cfar_detector_op)
+radar_add_test(detection/test_cfar_detector_so
+    holoscan::cfar_detector_op)
+radar_add_test(detection/test_cfar_detector_go
+    holoscan::cfar_detector_op)
+radar_add_test(detection/test_cfar_detector_statistical
+    LABELS statistical
     holoscan::cfar_detector_op)

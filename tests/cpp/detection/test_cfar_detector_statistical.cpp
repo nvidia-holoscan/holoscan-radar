@@ -4,6 +4,10 @@
 // Monte-Carlo false-alarm calibration tests for CFARDetectorOp (TESTING.md
 // statistical requirements). Labeled "statistical" — excluded from per-commit
 // CI (`ctest -L unit`); run nightly via `ctest -L statistical`.
+//
+// Uses the HSDK 5 Graph harness: builds a vector of noise-map tensors, passes
+// them to run_single_in_five_out_operator_graph_result (one graph run
+// processes all frames), and collects detection_score tensors from frames1.
 
 #include <gtest/gtest.h>
 
@@ -12,12 +16,13 @@
 #include <cstdint>
 #include <memory>
 #include <random>
-#include <tuple>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
-#include <holoscan/test/test_harness.hpp>
+#include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/graph.hpp>
 
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -25,14 +30,15 @@
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
+
 using holoscan::radar::CFARDetectorOp;
+using holoscan::radar::CFARParams;
 using holoscan::radar::CfarVariant;
 using holoscan::radar::real_dtype;
+using holoscan::radar::testing::FiveOutGraphRunResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::single_map;
-using holoscan::radar::testing::TensorMapCapture;
+using holoscan::radar::testing::run_single_in_five_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
-using holoscan::test::create_operator_test;
 
 constexpr int64_t kGuard = 1;
 constexpr int64_t kTrain = 2;
@@ -43,97 +49,57 @@ struct PfaTrialResult {
   int64_t false_alarms{0};
 };
 
-struct CfarOutputs {
-  HostTensor score;
-};
-
-template <typename T, typename... Args>
-CfarOutputs run_cfar_score(std::shared_ptr<holoscan::Tensor> input,
-                           Args&&... args) {
-  auto harness = create_operator_test<CFARDetectorOp<T>>(
-      std::forward<Args>(args)...);
-  harness->template add_input_port<holoscan::TensorMap>(
-      "rd_maps", {single_map(std::move(input), "rd_maps")});
-
-  TensorMapCapture mask_cap;
-  TensorMapCapture score_cap;
-  TensorMapCapture noise_cap;
-  TensorMapCapture idx_cap;
-  harness->template add_output_port<holoscan::TensorMap>(
-      "detection_mask", mask_cap.validators());
-  harness->template add_output_port<holoscan::TensorMap>(
-      "detection_score", score_cap.validators());
-  harness->template add_output_port<holoscan::TensorMap>(
-      "noise_estimate", noise_cap.validators());
-  harness->template add_output_port<holoscan::TensorMap>(
-      "detection_idx", idx_cap.validators());
-
-  harness->run_test();
-
-  EXPECT_EQ(score_cap.frames.size(), 1u);
-  return {std::move(score_cap.frames.front())};
+CFARParams ca_params(double pfa) {
+  CFARParams p{};
+  p.cfar_variant = CfarVariant::kCA;
+  p.guard_cells = {kGuard, kGuard};
+  p.training_cells = {kTrain, kTrain};
+  p.pfa = pfa;
+  return p;
 }
 
-template <typename T, typename... Args>
-std::vector<HostTensor> run_cfar_scores(std::vector<holoscan::TensorMap> frames,
-                                        Args&&... args) {
-  auto harness = create_operator_test<CFARDetectorOp<T>>(
-      std::forward<Args>(args)...);
-  harness->template add_input_port<holoscan::TensorMap>("rd_maps",
-                                                        std::move(frames));
-
-  TensorMapCapture mask_cap;
-  TensorMapCapture score_cap;
-  TensorMapCapture noise_cap;
-  TensorMapCapture idx_cap;
-  harness->template add_output_port<holoscan::TensorMap>(
-      "detection_mask", mask_cap.validators());
-  harness->template add_output_port<holoscan::TensorMap>(
-      "detection_score", score_cap.validators());
-  harness->template add_output_port<holoscan::TensorMap>(
-      "noise_estimate", noise_cap.validators());
-  harness->template add_output_port<holoscan::TensorMap>(
-      "detection_idx", idx_cap.validators());
-
-  harness->run_test();
-
-  EXPECT_EQ(mask_cap.frames.size(), score_cap.frames.size());
-  EXPECT_EQ(noise_cap.frames.size(), score_cap.frames.size());
-  EXPECT_EQ(idx_cap.frames.size(), score_cap.frames.size());
-  return std::move(score_cap.frames);
+CFARParams go_params(double pfa) {
+  CFARParams p{};
+  p.cfar_variant = CfarVariant::kGO;
+  p.guard_cells = {kGuard, kGuard};
+  p.training_cells = {kTrain, kTrain};
+  p.pfa = pfa;
+  return p;
 }
 
-auto ca_args(double pfa) {
-  return std::make_tuple(
-      holoscan::Arg("cfar_variant") = CfarVariant::kCA,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
-      holoscan::Arg("pfa") = pfa);
+CFARParams so_params(double pfa) {
+  CFARParams p{};
+  p.cfar_variant = CfarVariant::kSO;
+  p.guard_cells = {kGuard, kGuard};
+  p.training_cells = {kTrain, kTrain};
+  p.pfa = pfa;
+  return p;
 }
 
-auto go_args(double pfa) {
-  return std::make_tuple(
-      holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
-      holoscan::Arg("pfa") = pfa);
+CFARParams os_params(double pfa) {
+  CFARParams p{};
+  p.cfar_variant = CfarVariant::kOS;
+  p.os_rank = 30;
+  p.guard_cells = {kGuard, kGuard};
+  p.training_cells = {kTrain, kTrain};
+  p.pfa = pfa;
+  return p;
 }
 
-auto so_args(double pfa) {
-  return std::make_tuple(
-      holoscan::Arg("cfar_variant") = CfarVariant::kSO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
-      holoscan::Arg("pfa") = pfa);
-}
-
-auto os_args(double pfa) {
-  return std::make_tuple(
-      holoscan::Arg("cfar_variant") = CfarVariant::kOS,
-      holoscan::Arg("os_rank") = int64_t{30},
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
-      holoscan::Arg("pfa") = pfa);
+// cpplint misreads the wrapped template header as an indented declaration
+// inside the anonymous namespace; the parameter list cannot fit on one line.
+template <typename Source, typename OpRef, typename S0, typename S1,
+          typename S2, typename S3, typename S4>  // NOLINT(whitespace/indent_namespace)
+void wire_cfar(holoscan::Graph& graph, const Source& source, OpRef& op,
+               const S0& sink0, const S1& sink1, const S2& sink2,
+               const S3& sink3, const S4& sink4) {
+  const holoscan::ConnectionOptions q{.queue_depth = 4U};
+  graph.add_flow(source->out, op->rd_maps, q);
+  graph.add_flow(op->detection_mask, sink0->in, q);
+  graph.add_flow(op->detection_score, sink1->in, q);
+  graph.add_flow(op->noise_estimate, sink2->in, q);
+  graph.add_flow(op->detection_idx, sink3->in, q);
+  graph.add_flow(op->cfar_power, sink4->in, q);
 }
 
 std::vector<double> exponential_power_map(int64_t num_doppler,
@@ -199,50 +165,48 @@ void expect_realized_pfa_near_configured(double realized, double configured,
       << " total_interior_cells=" << total_cells;
 }
 
+std::vector<HostTensor> run_cfar_scores(
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
+    CFARParams params) {
+  FiveOutGraphRunResult result =
+      run_single_in_five_out_operator_graph_result<CFARDetectorOp<double>>(
+          std::move(inputs), std::move(params), "detection_mask",
+          "detection_score", "noise_estimate", "detection_idx", "cfar_power",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1, const auto& sink2,
+             const auto& sink3, const auto& sink4) {
+            wire_cfar(graph, source, op, sink0, sink1, sink2, sink3, sink4);
+          });
+  if (!result.plan_ok) {
+    throw std::runtime_error(std::string("compile failed: ") +
+                             result.plan_json);
+  }
+  if (!result.diagnostics.empty()) {
+    std::string msg = "run diagnostics:";
+    for (const auto& d : result.diagnostics) {
+      msg += " ";
+      msg += d;
+    }
+    throw std::runtime_error(msg);
+  }
+  return std::move(result.frames1);
+}
+
 PfaTrialResult run_monte_carlo_pfa_k1(int num_trials, int64_t num_doppler,
                                       int64_t num_range, double configured_pfa,
-                                      uint64_t seed, CfarVariant variant) {
+                                      uint64_t seed, CFARParams params) {
   PfaTrialResult aggregate;
   std::mt19937_64 rng(seed);
-  std::vector<holoscan::TensorMap> frames;
-  frames.reserve(static_cast<size_t>(num_trials));
+  std::vector<std::shared_ptr<holoscan::Tensor>> inputs;
+  inputs.reserve(static_cast<size_t>(num_trials));
   for (int trial = 0; trial < num_trials; ++trial) {
     const auto map =
         exponential_power_map(num_doppler, num_range, 1.0, rng);
-    auto input = to_device_tensor<double>(map, {num_doppler, num_range},
-                                          real_dtype<double>());
-    frames.push_back(single_map(std::move(input), "rd_maps"));
+    inputs.push_back(to_device_tensor<double>(map, {num_doppler, num_range},
+                                              real_dtype<double>()));
   }
-  std::vector<HostTensor> scores;
-  if (variant == CfarVariant::kGO) {
-    scores = std::apply(
-        [&](auto&&... a) {
-          return run_cfar_scores<double>(std::move(frames),
-                                         std::forward<decltype(a)>(a)...);
-        },
-        go_args(configured_pfa));
-  } else if (variant == CfarVariant::kSO) {
-    scores = std::apply(
-        [&](auto&&... a) {
-          return run_cfar_scores<double>(std::move(frames),
-                                         std::forward<decltype(a)>(a)...);
-        },
-        so_args(configured_pfa));
-  } else if (variant == CfarVariant::kOS) {
-    scores = std::apply(
-        [&](auto&&... a) {
-          return run_cfar_scores<double>(std::move(frames),
-                                         std::forward<decltype(a)>(a)...);
-        },
-        os_args(configured_pfa));
-  } else {
-    scores = std::apply(
-        [&](auto&&... a) {
-          return run_cfar_scores<double>(std::move(frames),
-                                         std::forward<decltype(a)>(a)...);
-        },
-        ca_args(configured_pfa));
-  }
+  const std::vector<HostTensor> scores =
+      run_cfar_scores(std::move(inputs), std::move(params));
   for (const HostTensor& score : scores) {
     const PfaTrialResult trial_result =
         count_interior_false_alarms<double>(score, num_doppler, num_range);
@@ -255,49 +219,20 @@ PfaTrialResult run_monte_carlo_pfa_k1(int num_trials, int64_t num_doppler,
 PfaTrialResult run_monte_carlo_pfa_nci(int num_trials, int64_t num_channels,
                                        int64_t num_doppler, int64_t num_range,
                                        double configured_pfa, uint64_t seed,
-                                       CfarVariant variant) {
+                                       CFARParams params) {
   PfaTrialResult aggregate;
   std::mt19937_64 rng(seed);
-  std::vector<holoscan::TensorMap> frames;
-  frames.reserve(static_cast<size_t>(num_trials));
+  params.nci_axes = {0};
+  std::vector<std::shared_ptr<holoscan::Tensor>> inputs;
+  inputs.reserve(static_cast<size_t>(num_trials));
   for (int trial = 0; trial < num_trials; ++trial) {
     const auto cube = exponential_power_cube(
         {num_channels, num_doppler, num_range}, 1.0, rng);
-    auto input = to_device_tensor<double>(
-        cube, {num_channels, num_doppler, num_range}, real_dtype<double>());
-    frames.push_back(single_map(std::move(input), "rd_maps"));
+    inputs.push_back(to_device_tensor<double>(
+        cube, {num_channels, num_doppler, num_range}, real_dtype<double>()));
   }
-  std::vector<HostTensor> scores;
-  if (variant == CfarVariant::kGO) {
-    scores = run_cfar_scores<double>(
-        std::move(frames), holoscan::Arg("cfar_variant") = variant,
-        holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
-        holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
-        holoscan::Arg("pfa") = configured_pfa,
-        holoscan::Arg("nci_axes") = std::vector<int64_t>{0});
-  } else if (variant == CfarVariant::kSO) {
-    scores = run_cfar_scores<double>(
-        std::move(frames), holoscan::Arg("cfar_variant") = variant,
-        holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
-        holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
-        holoscan::Arg("pfa") = configured_pfa,
-        holoscan::Arg("nci_axes") = std::vector<int64_t>{0});
-  } else if (variant == CfarVariant::kOS) {
-    scores = run_cfar_scores<double>(
-        std::move(frames), holoscan::Arg("cfar_variant") = variant,
-        holoscan::Arg("os_rank") = int64_t{30},
-        holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
-        holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
-        holoscan::Arg("pfa") = configured_pfa,
-        holoscan::Arg("nci_axes") = std::vector<int64_t>{0});
-  } else {
-    scores = run_cfar_scores<double>(
-        std::move(frames), holoscan::Arg("cfar_variant") = variant,
-        holoscan::Arg("guard_cells") = std::vector<int64_t>{kGuard, kGuard},
-        holoscan::Arg("training_cells") = std::vector<int64_t>{kTrain, kTrain},
-        holoscan::Arg("pfa") = configured_pfa,
-        holoscan::Arg("nci_axes") = std::vector<int64_t>{0});
-  }
+  const std::vector<HostTensor> scores =
+      run_cfar_scores(std::move(inputs), std::move(params));
   for (const HostTensor& score : scores) {
     const PfaTrialResult trial_result =
         count_interior_false_alarms<double>(score, num_doppler, num_range);
@@ -317,7 +252,7 @@ TEST(CFARDetectorOpStatisticalTest, CaMonteCarloPfaK1) {
 
   const PfaTrialResult result = run_monte_carlo_pfa_k1(
       kTrials, kMapDoppler, kMapRange, kPfa, 0xCAFEBABE0001ULL,
-      CfarVariant::kCA);
+      ca_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
       static_cast<double>(result.false_alarms) /
@@ -333,7 +268,7 @@ TEST(CFARDetectorOpStatisticalTest, GoMonteCarloPfaK1) {
 
   const PfaTrialResult result = run_monte_carlo_pfa_k1(
       kTrials, kMapDoppler, kMapRange, kPfa, 0x474F434641520001ULL,
-      CfarVariant::kGO);
+      go_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
       static_cast<double>(result.false_alarms) /
@@ -350,7 +285,7 @@ TEST(CFARDetectorOpStatisticalTest, CaMonteCarloPfaNciK8) {
 
   const PfaTrialResult result = run_monte_carlo_pfa_nci(
       kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0xCAFEBABE0002ULL,
-      CfarVariant::kCA);
+      ca_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
       static_cast<double>(result.false_alarms) /
@@ -367,7 +302,7 @@ TEST(CFARDetectorOpStatisticalTest, GoMonteCarloPfaNciK8) {
 
   const PfaTrialResult result = run_monte_carlo_pfa_nci(
       kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0x474F434641520002ULL,
-      CfarVariant::kGO);
+      go_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
       static_cast<double>(result.false_alarms) /
@@ -383,7 +318,7 @@ TEST(CFARDetectorOpStatisticalTest, SoMonteCarloPfaK1) {
 
   const PfaTrialResult result = run_monte_carlo_pfa_k1(
       kTrials, kMapDoppler, kMapRange, kPfa, 0x534F434641520001ULL,
-      CfarVariant::kSO);
+      so_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
       static_cast<double>(result.false_alarms) /
@@ -403,7 +338,7 @@ TEST(CFARDetectorOpStatisticalTest, SoMonteCarloPfaNciK8) {
 
   const PfaTrialResult result = run_monte_carlo_pfa_nci(
       kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0x534F434641520002ULL,
-      CfarVariant::kSO);
+      so_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
       static_cast<double>(result.false_alarms) /
@@ -420,7 +355,7 @@ TEST(CFARDetectorOpStatisticalTest, OsMonteCarloPfaK1) {
 
   const PfaTrialResult result = run_monte_carlo_pfa_k1(
       kTrials, kMapDoppler, kMapRange, kPfa, 0x4F53434641520001ULL,
-      CfarVariant::kOS);
+      os_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
       static_cast<double>(result.false_alarms) /
@@ -437,7 +372,7 @@ TEST(CFARDetectorOpStatisticalTest, OsMonteCarloPfaNciK8) {
 
   const PfaTrialResult result = run_monte_carlo_pfa_nci(
       kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0x4F53434641520002ULL,
-      CfarVariant::kOS);
+      os_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
       static_cast<double>(result.false_alarms) /
