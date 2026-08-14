@@ -24,6 +24,24 @@ target_link_libraries(radar_perf_utils INTERFACE
 # allow-list — an op can be ported while its perf_*.cpp remains 4.x).
 set(HOLOSCAN_RADAR_HSDK5_PORTED_PERF
     clutter_filter
+    mimo_deinterleave
+    phase_shift_beamformer
+    mimo_coherent_compensation
+    virtual_array_assembly
+    fmcw_range_processor
+    fmcw_doppler_processor
+    fmcw_range_doppler_processor
+    fmcw_split_vs_fused
+    cluster_dbscan
+    beamscan_estimator
+    mvdr_estimator
+    music_estimator
+    root_music_estimator
+    esprit_estimator
+    cfar_detector
+    snapshot_gather
+    detection_reduction
+    feature_assembly
 )
 
 function(radar_add_perf NAME)
@@ -104,12 +122,4 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
     foreach(_perf_name IN LISTS HOLOSCAN_RADAR_HSDK5_PORTED_PERF)
         radar_add_perf_smoke(${_perf_name})
     endforeach()
-    if(TARGET perf_fmcw_split_vs_fused)
-        add_test(NAME perf_fmcw_split_vs_fused_smoke
-            COMMAND perf_fmcw_split_vs_fused --sizes xs --warmup 1 --frames 2
-                --quiet
-                --output ${CMAKE_CURRENT_BINARY_DIR}/perf_split_vs_fused_smoke.json)
-        set_tests_properties(perf_fmcw_split_vs_fused_smoke PROPERTIES
-            LABELS "performance")
-    endif()
 endif()

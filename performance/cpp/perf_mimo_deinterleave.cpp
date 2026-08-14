@@ -4,8 +4,8 @@
 // Performance characterization for MIMODeinterleaveOp — TDM slow-time gather
 // into an explicit TX axis. Sweeps (M_tx, N_rx, L, samples) and a leading
 // batch axis. No [live] parameters. Measurement tool only.
-
-#include <cuda_runtime_api.h>
+//
+// [EA HSDK5 ONLY] Graph rewrite; drains adc_cube_out (§2 unique out name).
 
 #include <complex>
 #include <cstdint>
@@ -17,18 +17,17 @@
 #include <utility>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
+#include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/graph.hpp>
 
 #include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
-#include "utils/perf_app.hpp"
 #include "utils/perf_driver.hpp"
+#include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
-#include "utils/perf_sink.hpp"
-#include "utils/perf_source.hpp"
 #include "utils/tensor_factory.hpp"
 
 namespace hr = holoscan::radar;
@@ -93,31 +92,26 @@ std::vector<int64_t> interleaved_shape(const DeinterleaveScenario& scen) {
   return {scen.num_rx, slow, scen.samples};
 }
 
-template <typename T>
-class DeinterleavePerfApp : public holoscan::Application {
- public:
-  const DeinterleaveScenario* scen{nullptr};
-  perf::TimingCollector* collector{nullptr};
-  holoscan::TensorMap frame;
-  int total_frames{25};
-
-  void compose() override {
-    using holoscan::Arg;
-    hr::TXSchedule schedule;
-    schedule.num_tx = scen->num_tx;
-    auto op = make_operator<hr::MIMODeinterleaveOp<T>>(
-        "deinterleave", Arg("tx_schedule") = schedule);
-
-    auto src = make_operator<perf::PerfTensorSourceOp<perf::AdcCubePort>>(
-        "src", make_condition<holoscan::CountCondition>(total_frames));
-    src->configure(collector, frame);
-    add_flow(src, op, {{"adc_cube", "adc_cube"}});
-
-    auto sink = make_operator<perf::PerfTerminalSinkOp>("sink");
-    sink->configure(collector);
-    add_flow(op, sink, {{"adc_cube", "input"}});
-  }
-};
+perf::TimingCollector run_deinterleave_graph(const DeinterleaveScenario& scen,
+                                             int total_frames) {
+  auto cube = perf::make_iq_cube_device<PerfPrecision>(
+      interleaved_shape(scen));
+  return perf::run_perf_graph(
+      std::move(cube), total_frames, "deinterleave-perf",
+      [&](holoscan::Graph& graph, const auto& src,
+          holoscan::CompileOptions& options) {
+        auto op =
+            graph.op<hr::MIMODeinterleaveOp<PerfPrecision>>("deinterleave");
+        hr::MIMODeinterleaveParams params;
+        params.tx_schedule.num_tx = scen.num_tx;
+        op.set_params(std::move(params));
+        const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
+        const holoscan::ConnectionOptions q{.queue_depth = 4U};
+        graph.add_flow(src->out, op->adc_cube, q);
+        graph.add_flow(op->adc_cube_out, sink->in, q);
+        perf::bind_tensor_out(options, "deinterleave", "adc_cube_out");
+      });
+}
 
 void fill_throughput(perf::ResultRow* row, const DeinterleaveScenario& scen,
                      double median_ms) {
@@ -174,7 +168,7 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
 
   static const char* tool_name() { return "perf_mimo_deinterleave"; }
   static const char* tool_description() {
-    return "MIMODeinterleaveOp performance characterization";
+    return "MIMODeinterleaveOp performance characterization (HSDK 5 Graph)";
   }
   static const char* sizes_all_help() {
     return "Round-robin TDM gather across the full ladder";
@@ -240,20 +234,7 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
     const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
     const auto samples = perf::collect_scenario_samples(
         rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
-          perf::TimingCollector collector;
-          auto cube = perf::single_map(
-              perf::make_iq_cube_device<PerfPrecision>(interleaved_shape(scen)),
-              "adc_cube");
-
-          collector.t_construct = perf::Clock::now();
-          auto app =
-              holoscan::make_application<DeinterleavePerfApp<PerfPrecision>>();
-          app->scen = &scen;
-          app->collector = &collector;
-          app->frame = std::move(cube);
-          app->total_frames = p.total_frames;
-          app->run();
-          return collector;
+          return run_deinterleave_graph(scen, p.total_frames);
         });
 
     perf::append_setup_row(base_row(scen), samples, report);
