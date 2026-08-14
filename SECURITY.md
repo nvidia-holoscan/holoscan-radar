@@ -23,7 +23,7 @@ Detailed reports help NVIDIA PSIRT validate severity, develop fixes, and publish
 
 ## Security Architecture & Context
 
-**Holoscan Radar** is a Holoscan Module: a C++/CUDA (MatX) and Python (`holoscan.radar`) library of radar signal-processing operators (FMCW range/Doppler, clutter, MIMO marshaling, CFAR detection, clustering, angle estimation) plus example applications and Holoviz-oriented visualization helpers under `applications/`.
+**Holoscan Radar** is a Holoscan Module: a C++/CUDA (MatX) and Python (`holoscan.radar`) library of radar signal-processing operators plus example applications and visualization helpers under `applications/`.
 
 **Classification:** Library / SDK (Holoscan Module), with optional local demo applications.
 
