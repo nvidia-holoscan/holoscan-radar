@@ -3,8 +3,12 @@
 
 // Performance characterization for ESPRITEstimatorOp. Measures the shared
 // covariance/Hermitian-eig/EFT front-end plus the device LS rotation solve.
-// Includes a mid-session live bundle for geometry, model order, Pfa, capacity,
-// and spatial smoothing. Measurement only: no timing assertions.
+// Measurement only: no timing assertions.
+//
+// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
+// Mid-session [live] override measurement is deferred until
+// docs/planning/HSDK5_PORT.md §1 (EA partition / device binding). Params
+// still select array_geometry, num_sources, etc. under test.
 
 #include <cstdint>
 #include <cstdlib>
@@ -15,23 +19,26 @@
 #include <utility>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
+#include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/graph.hpp>
 
 #include "angle_estimation/esprit_estimator_op/esprit_estimator_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "utils/perf_driver.hpp"
+#include "utils/perf_graph.hpp"
+#include "utils/perf_platform.hpp"
 #include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
-#include "utils/perf_sink.hpp"
-#include "utils/perf_source.hpp"
 #include "utils/tensor_factory.hpp"
 
 namespace hr = holoscan::radar;
 namespace perf = holoscan::radar::perf;
 
 namespace {
+
+using PerfPrecision = float;
 
 struct SizeSpec {
   std::string id;
@@ -47,14 +54,9 @@ struct Scenario {
   int64_t channels{0};
   int64_t detections{0};
   int64_t snapshots{0};
-  int64_t override_at{0};
-  bool is_ura{false};  // URA exercises the native 2-D dual-invariance path.
+  bool is_ura{false};
   int64_t ny{0};
   int64_t nz{0};
-};
-
-struct SnapshotPort {
-  static constexpr const char* kName = "snapshot";
 };
 
 const std::vector<SizeSpec>& size_ladder() {
@@ -112,11 +114,11 @@ hr::ArrayGeometry make_ura(int64_t ny, int64_t nz, double spacing) {
   return geometry;
 }
 
-hr::ArrayGeometry scenario_geometry(const Scenario& scenario, double spacing) {
-  if (scenario.is_ura) {
-    return make_ura(scenario.ny, scenario.nz, spacing);
+hr::ArrayGeometry scenario_geometry(const Scenario& s, double spacing) {
+  if (s.is_ura) {
+    return make_ura(s.ny, s.nz, spacing);
   }
-  return make_ula(scenario.channels, spacing);
+  return make_ula(s.channels, spacing);
 }
 
 Scenario make_scenario(const SizeSpec& size) {
@@ -143,86 +145,53 @@ Scenario make_ura_scenario(const char* size_id, int64_t ny, int64_t nz,
   scenario.detections = detections;
   scenario.snapshots = snapshots;
   std::ostringstream id;
-  id << "esprit_ura_" << ny << "x" << nz << "_n" << detections << "_s"
-     << snapshots;
+  id << "esprit_ura_" << ny << "x" << nz << "_n" << detections
+     << "_s" << snapshots;
   scenario.id = id.str();
   return scenario;
 }
 
-template <typename T>
-class ESPRITPerfApp : public holoscan::Application {
- public:
-  const Scenario* scenario{nullptr};
-  perf::TimingCollector* collector{nullptr};
-  holoscan::TensorMap snapshot;
-  int total_frames{0};
+perf::TimingCollector run_esprit_graph(const Scenario& scen,
+                                       int total_frames) {
+  auto cube = perf::make_iq_cube_device<PerfPrecision>(
+      {scen.detections, scen.channels, scen.snapshots});
+  return perf::run_perf_graph(
+      std::move(cube), total_frames, "esprit-perf",
+      [&](holoscan::Graph& graph, const auto& src,
+          holoscan::CompileOptions& options) {
+        auto op =
+            graph.op<hr::ESPRITEstimatorOp<PerfPrecision>>("esprit");
+        hr::ESPRITParams params;
+        params.array_geometry = scenario_geometry(scen, 0.5);
+        params.angle_convention.preset =
+            hr::AngleConventionPreset::kRadarBoresight;
+        params.num_sources = 1;
+        params.source_count_pfa = 1e-4;
+        params.max_sources = 4;
+        op.set_params(std::move(params));
 
-  void compose() override {
-    auto estimator = make_operator<hr::ESPRITEstimatorOp<T>>(
-        "esprit", holoscan::Arg("array_geometry") =
-                      scenario_geometry(*scenario, 0.5),
-        holoscan::Arg("angle_convention") = [] {
-          hr::AngleConvention convention;
-          convention.preset = hr::AngleConventionPreset::kRadarBoresight;
-          return convention;
-        }(),
-        holoscan::Arg("num_sources") = int64_t{1},
-        holoscan::Arg("source_count_pfa") = 1e-4,
-        holoscan::Arg("max_sources") = int64_t{4});
+        const auto aoa_sink =
+            graph.op<perf::PerfTerminalSinkOp>("aoa_sink");
+        const auto doa_drain =
+            graph.op<perf::PerfNullSinkOp>("doa_drain");
+        const auto sc_drain =
+            graph.op<perf::PerfNullSinkOp>("sc_drain");
+        const auto eig_drain =
+            graph.op<perf::PerfNullSinkOp>("eig_drain");
+        const holoscan::ConnectionOptions q{.queue_depth = 4U};
 
-    auto source = make_operator<perf::PerfTensorSourceOp<SnapshotPort>>(
-        "source", make_condition<holoscan::CountCondition>(total_frames));
-    source->configure(collector, snapshot);
-    add_flow(source, estimator, {{"snapshot", "snapshot"}});
+        graph.add_flow(src->out, op->snapshot, q);
+        graph.add_flow(op->aoa_estimates, aoa_sink->in, q);
+        graph.add_flow(op->doa_multi, doa_drain->in, q);
+        graph.add_flow(op->source_count, sc_drain->in, q);
+        graph.add_flow(op->eigenvalues, eig_drain->in, q);
 
-    auto sink = make_operator<perf::PerfTerminalSinkOp>("sink");
-    sink->configure(collector);
-    add_flow(estimator, sink, {{"aoa_estimates", "input"}});
-    for (const char* port : {"doa_multi", "source_count", "eigenvalues"}) {
-      auto drain = make_operator<perf::PerfNullSinkOp>(
-          std::string(port) + "_drain");
-      add_flow(estimator, drain, {{port, "input"}});
-    }
-
-    auto geometry = make_operator<
-        perf::PerfOverrideSourceOp<hr::ArrayGeometry>>(
-        "geometry_override",
-        make_condition<holoscan::CountCondition>(total_frames));
-    geometry->configure(scenario->override_at,
-                        scenario_geometry(*scenario, 0.55));
-    add_flow(geometry, estimator, {{"output", "array_geometry"}});
-
-    auto sources = make_operator<perf::PerfOverrideSourceOp<int64_t>>(
-        "sources_override",
-        make_condition<holoscan::CountCondition>(total_frames));
-    sources->configure(scenario->override_at, int64_t{-1});
-    add_flow(sources, estimator, {{"output", "num_sources"}});
-
-    auto pfa = make_operator<perf::PerfOverrideSourceOp<double>>(
-        "pfa_override",
-        make_condition<holoscan::CountCondition>(total_frames));
-    pfa->configure(scenario->override_at, 0.5);
-    add_flow(pfa, estimator, {{"output", "source_count_pfa"}});
-
-    auto capacity = make_operator<perf::PerfOverrideSourceOp<int64_t>>(
-        "capacity_override",
-        make_condition<holoscan::CountCondition>(total_frames));
-    capacity->configure(scenario->override_at, int64_t{3});
-    add_flow(capacity, estimator, {{"output", "max_sources"}});
-
-    // Spatial smoothing reshapes the aperture out of the URA's (iz, iy) lattice
-    // that the native 2-D dual-invariance derivation depends on, so it is
-    // exercised only on the ULA (1-D) scenarios.
-    if (!scenario->is_ura) {
-      auto smoothing = make_operator<
-          perf::PerfOverrideSourceOp<std::vector<int64_t>>>(
-          "smoothing_override",
-          make_condition<holoscan::CountCondition>(total_frames));
-      smoothing->configure(scenario->override_at, std::vector<int64_t>{2});
-      add_flow(smoothing, estimator, {{"output", "spatial_smoothing"}});
-    }
-  }
-};
+        perf::bind_tensor_out(options, "esprit", "aoa_estimates");
+        perf::bind_tensor_out(options, "esprit", "doa_multi");
+        perf::bind_tensor_out(options, "esprit", "source_count");
+        perf::bind_tensor_out(options, "esprit", "eigenvalues");
+      });
+}
 
 perf::ResultRow base_row(const Scenario& scenario) {
   perf::ResultRow row;
@@ -234,6 +203,7 @@ perf::ResultRow base_row(const Scenario& scenario) {
                      scenario.snapshots};
   row.out_batch = scenario.detections;
   row.k = scenario.channels;
+  row.notes = "live_override=deferred_ea";
   return row;
 }
 
@@ -242,20 +212,27 @@ struct Traits : perf::PerfDriverDefaults {
 
   static const char* tool_name() { return "perf_esprit_estimator"; }
   static const char* tool_description() {
-    return "ESPRITEstimatorOp performance characterization";
+    return "ESPRITEstimatorOp performance characterization "
+           "(HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() { return "Default ESPRIT size sweep"; }
+  static const char* sizes_all_help() {
+    return "Default ESPRIT size sweep";
+  }
   static const char* sizes_subset_help() {
     return "ESPRIT sweep across an explicit subset";
   }
-  static const char* full_help() { return "Full ESPRIT size ladder"; }
+  static const char* full_help() {
+    return "Full ESPRIT size ladder; live-override timing deferred on "
+           "HSDK 5 EA (HSDK5_PORT.md §1)";
+  }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
     std::vector<perf::SizeDef> result;
     for (const auto& size : size_ladder()) {
       perf::SizeDef definition;
       definition.id = size.id;
-      definition.shape = {size.channels, size.detections, size.snapshots};
+      definition.shape = {size.channels, size.detections,
+                          size.snapshots};
       definition.cells = size.detections;
       definition.role = size.role;
       result.push_back(definition);
@@ -267,7 +244,6 @@ struct Traits : perf::PerfDriverDefaults {
     return {make_scenario(must_find_size("xs")),
             make_scenario(must_find_size("sm")),
             make_scenario(must_find_size("md")),
-            // Native 2-D az+el path: a compact filled URA (dual invariance).
             make_ura_scenario("ura_sm", 6, 6, 128, 96)};
   }
 
@@ -277,6 +253,9 @@ struct Traits : perf::PerfDriverDefaults {
     for (const auto& id : ids) {
       if (const SizeSpec* size = find_size(id)) {
         result.push_back(make_scenario(*size));
+      } else {
+        std::cerr << "warning: unknown size id '" << id
+                  << "', skipping\n";
       }
     }
     return result;
@@ -287,32 +266,20 @@ struct Traits : perf::PerfDriverDefaults {
     for (const auto& size : size_ladder()) {
       result.push_back(make_scenario(size));
     }
-    // URA 2-D scenarios: dual-invariance LS + joint-diagonalization pairing
-    // over an ny * nz channel count — characterize, don't gate.
     result.push_back(make_ura_scenario("ura_sm", 6, 6, 128, 96));
-    result.push_back(make_ura_scenario("ura_lg", 8, 8, 256, 128));
+    result.push_back(
+        make_ura_scenario("ura_lg", 8, 8, 256, 128));
     return result;
   }
 
   static void run_scenario(const Scenario& scenario,
                            const perf::RunSettings& settings,
                            perf::PerfReport* report) {
-    const auto plan = perf::make_run_plan(settings, true);
+    const auto plan =
+        perf::make_run_plan(settings, /*has_override=*/false);
     const auto samples = perf::collect_scenario_samples(
         settings, plan, [&](int, const perf::RunPlan& run_plan) {
-          Scenario run = scenario;
-          run.override_at = run_plan.override_at;
-          perf::TimingCollector collector;
-          auto tensor = perf::make_iq_cube_device<float>(
-              {scenario.detections, scenario.channels, scenario.snapshots});
-          collector.t_construct = perf::Clock::now();
-          auto app = holoscan::make_application<ESPRITPerfApp<float>>();
-          app->scenario = &run;
-          app->collector = &collector;
-          app->snapshot = perf::single_map(std::move(tensor), "snapshot");
-          app->total_frames = run_plan.total_frames;
-          app->run();
-          return collector;
+          return run_esprit_graph(scenario, run_plan.total_frames);
         });
     perf::append_setup_row(base_row(scenario), samples, report);
     perf::ResultRow row = base_row(scenario);
@@ -322,8 +289,8 @@ struct Traits : perf::PerfDriverDefaults {
           scenario.detections / (row.latency.median_ms / 1000.0);
     }
     row.notes =
-        "fixed one-source steady path; live bundle switches geometry, EFT, "
-        "Pfa, capacity, and smoothing";
+        "fixed one-source steady path; live bundle deferred "
+        "(HSDK5_PORT.md §1)";
     report->results.push_back(row);
   }
 
@@ -334,7 +301,8 @@ struct Traits : perf::PerfDriverDefaults {
       settings.warmup_frames = 0;
       settings.measured_frames = 2;
       settings.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs")), settings, &discarded);
+      run_scenario(make_scenario(must_find_size("xs")), settings,
+                   &discarded);
     });
   }
 };
