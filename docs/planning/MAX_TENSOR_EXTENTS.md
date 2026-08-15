@@ -107,7 +107,8 @@ struct MaxTensorExtents {
   // ...
 };
 
-// App-chosen names / groupings (YAML keys are app-local, not module contract)
+// Parent / grouping keys (after_range, for_beamscan) are app-local.
+// Keys *inside* each node match MaxTensorExtents fields (max_channels, …).
 const auto after_range = MaxTensorExtents::from_yaml(root["after_range"]);
 const auto for_beamscan = MaxTensorExtents::from_yaml(root["for_beamscan"]);
 
@@ -127,9 +128,9 @@ App fills MaxTensorExtents (from YAML or cfg)
 
 | Fixed by module contract | App-flexible |
 | --- | --- |
-| Extent **field names** on `MaxTensorExtents` | YAML key names / how extents are grouped |
-| Which fields each **operator** requires (per-op docs) | Which instance is passed into which `op()` |
-| Ctor-capture injection (not Params) | Deriving values from `cube` / grids / custom YAML |
+| Extent **field names** on `MaxTensorExtents` (and the same keys under any node passed to `from_yaml`) | Which YAML **parent/group** nodes exist (`after_range`, `for_beamscan`, …) and which node is passed into which `op()` |
+| Which fields each **operator** requires (per-op docs) | Filling extents without YAML (e.g. from `cfg` / cube / grids into the struct) |
+| Ctor-capture injection (not Params) | Deriving the numeric values from scene config |
 | No opaque leading batch on data ports | App-level multi-item composition |
 
 ### Config YAML timing
