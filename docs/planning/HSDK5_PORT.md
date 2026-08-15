@@ -18,7 +18,7 @@ here when the root cause is HSDK 5 / EA.
 | [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md) | Done gate once an op is on HSDK 5 (adapt 4.x checklist wording to Graph / `Operator<Params>`) |
 | [`operators/common/README.md`](../../operators/common/README.md) | Pilot patterns: Tensor I/O, sticky `[live]`, Graph harness |
 | [`STATUS.md`](STATUS.md) | Who owns what; claim / land coordination |
-| [`PIPELINE_TENSOR_BOUNDS.md`](PIPELINE_TENSOR_BOUNDS.md) | Tentative: module `PipelineTensorBounds` ctor-capture for Tensor pool sizing (Dylan buy-in) |
+| [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md) | Tentative: module `MaxTensorExtents` ctor-capture for Tensor pool sizing (Dylan buy-in) |
 | This file | Migration process + open HSDK 5 / EA friction |
 
 ---
