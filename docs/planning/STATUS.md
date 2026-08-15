@@ -145,4 +145,4 @@ New operators should follow [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST
 and [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md).
 
 HSDK 5 Tensor pool sizing proposal (awaiting Dylan buy-in; do not implement
-yet): [`PIPELINE_TENSOR_BOUNDS.md`](PIPELINE_TENSOR_BOUNDS.md).
+yet): [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md).
