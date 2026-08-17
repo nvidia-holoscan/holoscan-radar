@@ -21,6 +21,7 @@
 #include <holoscan/core/graph.hpp>
 
 #include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
@@ -53,7 +54,6 @@ struct DeinterleaveScenario {
   int64_t num_rx{0};
   int64_t chirps_per_tx{0};
   int64_t samples{0};
-  int64_t batch{1};
 };
 
 const std::vector<SizeSpec>& size_ladder() {
@@ -84,11 +84,11 @@ const SizeSpec& must_find_size(const std::string& id) {
   return *s;
 }
 
+// The contract input is exactly (N_rx, slow_time, samples). There is no
+// leading batch rung: an extra leading dim is opaque batch, which the operator
+// rejects (see MIMODeinterleaveOp.RejectsOpaqueLeadingBatch).
 std::vector<int64_t> interleaved_shape(const DeinterleaveScenario& scen) {
   const int64_t slow = scen.num_tx * scen.chirps_per_tx;
-  if (scen.batch > 1) {
-    return {scen.batch, scen.num_rx, slow, scen.samples};
-  }
   return {scen.num_rx, slow, scen.samples};
 }
 
@@ -100,8 +100,14 @@ perf::TimingCollector run_deinterleave_graph(const DeinterleaveScenario& scen,
       std::move(cube), total_frames, "deinterleave-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_tx = scen.num_tx;
+        extents.max_rx = scen.num_rx;
+        extents.max_chirps = scen.chirps_per_tx;
+        extents.max_samples_per_chirp = scen.samples;
         auto op =
-            graph.op<hr::MIMODeinterleaveOp<PerfPrecision>>("deinterleave");
+            graph.op<hr::MIMODeinterleaveOp<PerfPrecision>>(
+                "deinterleave", extents);
         hr::MIMODeinterleaveParams params;
         params.tx_schedule.num_tx = scen.num_tx;
         op.set_params(std::move(params));
@@ -119,8 +125,7 @@ void fill_throughput(perf::ResultRow* row, const DeinterleaveScenario& scen,
     return;
   }
   const double sec = median_ms / 1000.0;
-  const double batch = static_cast<double>(scen.batch);
-  const double elems = batch * static_cast<double>(scen.num_tx) *
+  const double elems = static_cast<double>(scen.num_tx) *
                        static_cast<double>(scen.num_rx) *
                        static_cast<double>(scen.chirps_per_tx) *
                        static_cast<double>(scen.samples);
@@ -128,7 +133,7 @@ void fill_throughput(perf::ResultRow* row, const DeinterleaveScenario& scen,
   const double csz = sizeof(std::complex<PerfPrecision>);
   const double slow = static_cast<double>(scen.num_tx * scen.chirps_per_tx);
   const double in_bytes =
-      batch * static_cast<double>(scen.num_rx) * slow *
+      static_cast<double>(scen.num_rx) * slow *
       static_cast<double>(scen.samples) * csz;
   const double out_bytes = elems * csz;
   row->estimated_effective_gbps = (in_bytes + out_bytes) / sec / 1e9;
@@ -138,27 +143,22 @@ perf::ResultRow base_row(const DeinterleaveScenario& scen) {
   perf::ResultRow row;
   row.scenario_id = scen.id;
   row.op_name = "MIMODeinterleaveOp";
-  row.variant = scen.batch > 1 ? "batch" : "rr";
+  row.variant = "rr";
   row.size_id = scen.size_id;
   row.input_shape = interleaved_shape(scen);
-  row.out_batch = scen.batch;
   row.k = scen.chirps_per_tx;
   return row;
 }
 
-DeinterleaveScenario make_scenario(const SizeSpec& s, int64_t batch = 1) {
+DeinterleaveScenario make_scenario(const SizeSpec& s) {
   DeinterleaveScenario sc;
   sc.size_id = s.id;
   sc.num_tx = s.num_tx;
   sc.num_rx = s.num_rx;
   sc.chirps_per_tx = s.chirps_per_tx;
   sc.samples = s.samples;
-  sc.batch = batch;
   std::ostringstream id;
   id << "deinterleave_rr_" << s.id;
-  if (batch > 1) {
-    id << "_b" << batch;
-  }
   sc.id = id.str();
   return sc;
 }
@@ -177,7 +177,7 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
     return "Round-robin TDM gather across an explicit subset";
   }
   static const char* full_help() {
-    return "Full matrix (sizes + batch axis on md/lg)";
+    return "Round-robin TDM gather across the full ladder";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -199,7 +199,6 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
     for (const char* sid : {"xs", "md", "lg", "xl"}) {
       out.push_back(make_scenario(must_find_size(sid)));
     }
-    out.push_back(make_scenario(must_find_size("md"), 4));
     return out;
   }
 
@@ -221,9 +220,6 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
     std::vector<DeinterleaveScenario> out;
     for (const auto& s : size_ladder()) {
       out.push_back(make_scenario(s));
-    }
-    for (const char* sid : {"md", "lg"}) {
-      out.push_back(make_scenario(must_find_size(sid), 4));
     }
     return out;
   }

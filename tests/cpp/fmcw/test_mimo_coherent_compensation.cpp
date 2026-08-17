@@ -5,8 +5,8 @@
 // TDM: per-Doppler-bin inter-TX phase correction, waveform configurable from
 // Params. DDM: standard linear-phase Doppler-band demux into an explicit TX
 // axis (offsets + linear-phase codes, guard bands); non-linear
-// conjugate-correlation path. Plus rank-agnostic batching and cross-cutting
-// input validation.
+// conjugate-correlation path. Opaque leading-batch rejection and
+// cross-cutting input validation.
 
 #include <gtest/gtest.h>
 
@@ -460,17 +460,18 @@ TEST(MIMOCoherentCompensationOp, SingleTxIsIdentity) {
   }
 }
 
-TEST(MIMOCoherentCompensationOp, LeadingBatchAxesPreservedAndIndependent) {
+TEST(MIMOCoherentCompensationOp, RejectsOpaqueLeadingBatch) {
+  // TDM contract is (M_tx, N_rx, D, R); an extra leading dim is opaque batch.
   const auto waveform = make_test_waveform();
   const std::vector<int64_t> shape{2, kNumTx, kNumRx, kDoppler, kRange};
   const auto host = build_misaligned_rd_host<float>(
       waveform, kNumTx, kNumRx, kDoppler, kRange, 2);
-  const auto out = run_compensation<float>(host, shape, waveform);
-  ASSERT_EQ(out.shape.size(), shape.size());
-  for (size_t i = 0; i < shape.size(); ++i) {
-    EXPECT_EQ(out.shape[i], shape[i]);
-  }
-  expect_tx_lanes_aligned<float>(out, kNumTx, kNumRx, kDoppler, kRange, 2);
+  const GraphRunResult result = run_tdm_result<float>(
+      {to_device_tensor(host, shape, complex_dtype<float>())},
+      tdm_params(waveform));
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(MIMOCoherentCompensationOp, WaveformConfigurableFromParams) {
@@ -641,25 +642,22 @@ TEST(MIMOCoherentCompensationOp, DdmSingleTxIsIdentity) {
   }
 }
 
-TEST(MIMOCoherentCompensationOp, DdmLeadingBatchAxesPreserved) {
+TEST(MIMOCoherentCompensationOp, DdmRejectsOpaqueLeadingBatch) {
+  // DDM input contract is (N_rx, D, R); an extra leading dim is opaque batch.
   const auto waveform = make_test_waveform();
   const auto code = make_offset_code(kDdmTx);
-  const int64_t band = kDdmDoppler / kDdmTx;
   const int64_t p0 = 0;
   const int64_t batch = 2;
   const auto offsets = uniform_offsets(kDdmTx);
   const auto host = build_ddm_input_host<float>(
       offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0, batch);
   const std::vector<int64_t> shape{batch, kDdmRx, kDdmDoppler, kDdmRange};
-  const auto out = run_ddm_from_host<float>(host, shape, code, waveform);
-  ASSERT_EQ(out.shape.size(), 5U);
-  EXPECT_EQ(out.shape[0], batch);
-  EXPECT_EQ(out.shape[1], kDdmTx);
-  EXPECT_EQ(out.shape[2], kDdmRx);
-  EXPECT_EQ(out.shape[3], band);
-  EXPECT_EQ(out.shape[4], kDdmRange);
-  expect_ddm_recovered<float>(
-      out, kDdmTx, kDdmRx, band, kDdmRange, p0, batch);
+  const GraphRunResult result = run_ddm_result<float>(
+      {to_device_tensor(host, shape, complex_dtype<float>())},
+      ddm_params(waveform, code));
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(MIMOCoherentCompensationOp, DdmLinearPhaseCodesMatchOffsets) {

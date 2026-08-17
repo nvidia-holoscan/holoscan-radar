@@ -3,8 +3,8 @@
 
 // Performance characterization for MIMOCoherentCompensationOp — TDM
 // per-Doppler inter-TX phase correction and DDM band-demux / correlate on
-// separated RD maps. Sweeps (M_tx, N_rx, num_doppler, num_range_bins), a
-// leading batch axis, and TDM / DDM / DDM-NL variants. Measurement tool
+// separated RD maps. Sweeps (M_tx, N_rx, num_doppler, num_range_bins) and
+// TDM / DDM / DDM-NL variants. Measurement tool
 // only: no timing assertions. See docs/planning/OPERATOR_DEVELOPMENT.md.
 //
 // [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
@@ -30,6 +30,7 @@
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
@@ -65,7 +66,6 @@ struct CompensationScenario {
   int64_t num_rx{0};
   int64_t num_doppler{0};
   int64_t num_range_bins{0};
-  int64_t batch{1};
   bool non_linear_ddm{false};
 };
 
@@ -147,10 +147,9 @@ std::vector<int64_t> input_shape(
     const CompensationScenario& scen) {
   const bool ddm =
       scen.scheme == hr::MultiplexingScheme::kDdm;
+  // No leading batch rung: an extra leading dim is opaque batch, which the
+  // operator rejects (see MIMOCoherentCompensationOp.RejectsOpaqueLeadingBatch).
   std::vector<int64_t> shape;
-  if (scen.batch > 1) {
-    shape.push_back(scen.batch);
-  }
   if (!ddm) {
     shape.push_back(scen.num_tx);
   }
@@ -168,9 +167,14 @@ perf::TimingCollector run_compensation_graph(
       std::move(cube), total_frames, "compensation-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_tx = scen.num_tx;
+        extents.max_rx = scen.num_rx;
+        extents.max_doppler_bins = scen.num_doppler;
+        extents.max_range_bins = scen.num_range_bins;
         auto op = graph.op<
             hr::MIMOCoherentCompensationOp<PerfPrecision>>(
-            "compensation");
+            "compensation", extents);
         hr::MIMOCoherentCompensationParams params;
         params.multiplexing_scheme = scen.scheme;
         params.waveform = make_waveform(kDefaultPri);
@@ -198,13 +202,12 @@ void fill_throughput(perf::ResultRow* row,
     return;
   }
   const double sec = median_ms / 1000.0;
-  const double batch = static_cast<double>(scen.batch);
   const double tx_factor =
       scen.scheme == hr::MultiplexingScheme::kDdm
           ? 1.0
           : static_cast<double>(scen.num_tx);
   const double elems =
-      batch * tx_factor *
+      tx_factor *
       static_cast<double>(scen.num_rx) *
       static_cast<double>(scen.num_doppler) *
       static_cast<double>(scen.num_range_bins);
@@ -222,7 +225,6 @@ perf::ResultRow base_row(const CompensationScenario& scen) {
   row.variant = scen.variant;
   row.size_id = scen.size_id;
   row.input_shape = input_shape(scen);
-  row.out_batch = scen.batch;
   row.k = scen.num_doppler;
   // [EA HSDK5 ONLY] live override timing deferred — HSDK5_PORT.md §1/§9.
   row.notes = "live_override=deferred_ea";
@@ -232,7 +234,7 @@ perf::ResultRow base_row(const CompensationScenario& scen) {
 CompensationScenario make_scenario(
     const SizeSpec& s,
     hr::MultiplexingScheme scheme = hr::MultiplexingScheme::kTdm,
-    int64_t batch = 1, bool non_linear_ddm = false) {
+    bool non_linear_ddm = false) {
   CompensationScenario sc;
   sc.size_id = s.id;
   sc.scheme = scheme;
@@ -246,12 +248,8 @@ CompensationScenario make_scenario(
   sc.num_rx = s.num_rx;
   sc.num_doppler = s.num_doppler;
   sc.num_range_bins = s.num_range_bins;
-  sc.batch = batch;
   std::ostringstream id;
   id << "compensation_" << sc.variant << "_" << s.id;
-  if (batch > 1) {
-    id << "_b" << batch;
-  }
   sc.id = id.str();
   return sc;
 }
@@ -275,8 +273,8 @@ struct CompensationTraits : perf::PerfDriverDefaults {
            "an explicit subset";
   }
   static const char* full_help() {
-    return "Full matrix (sizes + batch axis on md/lg + "
-           "DDM-NL); live-override timing deferred on "
+    return "Full matrix (sizes + DDM-NL); live-override "
+           "timing deferred on "
            "HSDK 5 EA (HSDK5_PORT.md §1/§9)";
   }
 
@@ -301,16 +299,13 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     for (const char* sid : {"xs", "md", "lg", "xl"}) {
       out.push_back(make_scenario(must_find_size(sid)));
     }
-    out.push_back(make_scenario(
-        must_find_size("md"),
-        hr::MultiplexingScheme::kTdm, 4));
     for (const char* sid : {"xs", "md", "xl"}) {
       out.push_back(make_scenario(
           must_find_size(sid),
           hr::MultiplexingScheme::kDdm));
       out.push_back(make_scenario(
           must_find_size(sid),
-          hr::MultiplexingScheme::kDdm, 1,
+          hr::MultiplexingScheme::kDdm,
           /*non_linear_ddm=*/true));
     }
     return out;
@@ -330,7 +325,7 @@ struct CompensationTraits : perf::PerfDriverDefaults {
       out.push_back(make_scenario(
           *s, hr::MultiplexingScheme::kDdm));
       out.push_back(make_scenario(
-          *s, hr::MultiplexingScheme::kDdm, 1,
+          *s, hr::MultiplexingScheme::kDdm,
           /*non_linear_ddm=*/true));
     }
     return out;
@@ -342,16 +337,11 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     for (const auto& s : size_ladder()) {
       out.push_back(make_scenario(s));
     }
-    for (const char* sid : {"md", "lg"}) {
-      out.push_back(make_scenario(
-          must_find_size(sid),
-          hr::MultiplexingScheme::kTdm, 4));
-    }
     for (const auto& s : size_ladder()) {
       out.push_back(make_scenario(
           s, hr::MultiplexingScheme::kDdm));
       out.push_back(make_scenario(
-          s, hr::MultiplexingScheme::kDdm, 1,
+          s, hr::MultiplexingScheme::kDdm,
           /*non_linear_ddm=*/true));
     }
     return out;

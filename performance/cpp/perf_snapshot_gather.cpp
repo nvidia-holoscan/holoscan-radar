@@ -28,6 +28,7 @@
 
 #include "angle_estimation/snapshot_gather_op/snapshot_gather_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/perf_driver.hpp"
@@ -162,8 +163,12 @@ perf::TimingCollector run_snapshot_graph(const SnapScenario& scen,
       std::move(rd), std::move(idx), total_frames, "snapshot-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_detections = scen.detections;
+        extents.max_channels = scen.channels;
+        extents.max_snapshots = snapshots_for(scen.window);
         auto op = graph.op<hr::SnapshotGatherOp<PerfPrecision>>(
-            "gather");
+            "gather", extents);
         hr::SnapshotGatherParams params;
         params.snapshot_window = {scen.window.wd, scen.window.wr};
         params.doppler_edge = hr::SnapshotEdgeMode::kWrap;

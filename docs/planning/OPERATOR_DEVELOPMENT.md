@@ -44,8 +44,9 @@ slow?"
    five-minute reversible change is fine as a diagnostic; a multi-hour rebuild
    of calibration tables is not a first guess.
 4. **Design invariants** in [`AGENTS.md`](../../AGENTS.md) — plain-tensor ports,
-   bounded descriptors, template precision, rank-agnostic batching, `[live]`
-   convention, convention-free kernels. Do not invent new shared message types
+   bounded descriptors, template precision, named axes (no opaque leading
+   batch), `[live]` convention, convention-free kernels. Do not invent new
+   shared message types
    or descriptor ports without a contract change.
 5. **Checklist means the whole operator.** Vertical slices are fine for
    progress, but
@@ -138,12 +139,15 @@ plus optional same-named override ports.
 `template <typename T>` with `T ∈ {float, double}`; explicit instantiations in
 the `.cu`. Inputs and outputs of an instance match that precision.
 
-### Rank-agnostic trailing axes
+### Named trailing axes (no opaque leading batch)
 
-Infer `D`, `R`, FFT lengths, etc. from the tensor each tick. Leading `...` are
-opaque batch. Shape-changing `[live]` overrides are legal because downstream
-re-infers — never bake fixed leading dims into the operator state except as a
-*cache key* for pooled buffers.
+Infer `D`, `R`, FFT lengths, etc. from the tensor each tick. Contract axes are
+**named** (including named leading axes such as `N_rx` / `M_tx`); do not admit
+an open-ended opaque leading `...` batch at the module level — multi-item
+throughput is an app concern. Shape-changing `[live]` overrides remain legal
+because downstream re-infers named extents. Fat Tensor outs take
+`MaxTensorExtents` at `graph.op()` so HSDK 5 pools can be sized before arm
+(see [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md)).
 
 ### Streams and lifetimes
 

@@ -23,6 +23,7 @@
 
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_stage.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 
 namespace holoscan::radar {
 
@@ -75,12 +76,6 @@ static_assert(
     "HOLOSCAN_PARAM_SCHEMA must be in VirtualArrayAssemblyParams's "
     "namespace");
 
-inline constexpr std::uint32_t kVirtualArrayAssemblyMaxRank = 8U;
-// 256 MiB — rd_maps_out data plane
-inline constexpr std::size_t kVirtualArrayAssemblyMaxByteSpan = 256ULL << 20;
-// Packed ArrayGeometry is (num_virtual + 1, 3) float64 — tiny vs the cube.
-inline constexpr std::size_t kVirtualArrayAssemblyGeomMaxByteSpan = 64ULL << 10;
-
 template <typename T>
 class VirtualArrayAssemblyOp
     : public holoscan::Operator<VirtualArrayAssemblyParams> {
@@ -88,7 +83,7 @@ class VirtualArrayAssemblyOp
                 "VirtualArrayAssemblyOp supports float and double precision");
 
  public:
-  VirtualArrayAssemblyOp() = default;
+  explicit VirtualArrayAssemblyOp(const MaxTensorExtents& extents);
   ~VirtualArrayAssemblyOp() override;
 
   void setup(OperatorSpec& spec) override;
@@ -127,6 +122,11 @@ class VirtualArrayAssemblyOp
   size_t d_member_offsets_capacity_{0};
   int64_t* d_member_indices_{nullptr};
   size_t d_member_indices_capacity_{0};
+
+  MaxTensorExtents extents_;
+  std::uint32_t max_rank_{3U};
+  std::size_t max_byte_span_{0U};
+  std::size_t geom_byte_span_{0U};
 };
 
 extern template class VirtualArrayAssemblyOp<float>;

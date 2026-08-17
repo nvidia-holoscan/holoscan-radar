@@ -24,6 +24,7 @@
 #include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/dsp/subarray_selection.hpp"
 
 namespace holoscan::radar {
@@ -88,10 +89,6 @@ static_assert(
         holoscan::ParamSchemaAvailability::kDeclared,
     "HOLOSCAN_PARAM_SCHEMA must be in SubarraySelectionParams's namespace");
 
-inline constexpr std::uint32_t kSubarraySelectionMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kSubarraySelectionMaxByteSpan = 256ULL << 20;
-
 template <typename T>
 class SubarraySelectionOp
     : public holoscan::Operator<SubarraySelectionParams> {
@@ -99,7 +96,7 @@ class SubarraySelectionOp
                 "SubarraySelectionOp supports float and double precision");
 
  public:
-  SubarraySelectionOp() = default;
+  explicit SubarraySelectionOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -116,6 +113,12 @@ class SubarraySelectionOp
   Output<Tensor> is_valid_out{"is_valid_out"};
 
  private:
+  MaxTensorExtents extents_;
+  std::uint32_t max_rank_{3U};
+  std::size_t snapshot_max_byte_span_{0U};
+  std::size_t geom_max_byte_span_{0U};
+  std::size_t is_valid_max_byte_span_{0U};
+
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
 

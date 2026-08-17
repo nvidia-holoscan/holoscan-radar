@@ -6,6 +6,7 @@
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,6 +17,8 @@
 #include "fmcw/clutter_filter_op/clutter_stage.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
+#include "radar_common/tensor/extents_layout.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -29,20 +32,40 @@ expected<void, Error> fail_invalid(const std::string& message) {
 }  // namespace
 
 template <typename T>
+ClutterFilterOp<T>::ClutterFilterOp(const MaxTensorExtents& extents) {
+  const char* who = "ClutterFilterOp";
+  const std::int64_t max_chirps =
+      require_extent(extents.max_chirps, "max_chirps", who);
+  const std::int64_t max_range_bins =
+      require_extent(extents.max_range_bins, "max_range_bins", who);
+  std::int64_t max_tx = 1;
+  std::int64_t max_rx = 1;
+  require_tx_rx_pool_extents(extents, who, &max_tx, &max_rx);
+  extents_ = extents;
+  max_rank_ =
+      static_cast<std::uint32_t>(2U + named_tx_rx_leading_rank(extents_));
+  max_byte_span_ = byte_span_complex_cube<T>(
+      {max_tx, max_rx, max_chirps, max_range_bins}, who);
+}
+
+template <typename T>
 void ClutterFilterOp<T>::setup(OperatorSpec& spec) {
   // Declare device storage only; dtype is enforced in compute() so one
   // operator binary still serves F32/F64 and the harness can feed either.
+  // layout.rank stays unset (exact-rank optional); max_rank on allocation
+  // admits the named-axis ceiling from extents. Opaque leading batch is
+  // rejected in compute().
   constexpr TensorPortLayout kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
-      .rank = std::nullopt,  // rank-agnostic batching
+      .rank = std::nullopt,
   };
   spec.input(range_profiles).queue_depth(2U).expects_tensor(kDevice);
   spec.output(range_profiles_out)
       .produces_tensor(kDevice)
       .tensor_allocation(TensorAllocationBounds{
-          .max_rank = kClutterFilterMaxRank,
-          .max_byte_span = kClutterFilterMaxByteSpan});
+          .max_rank = max_rank_,
+          .max_byte_span = max_byte_span_});
   // [live] method override port. Wired graphs may push ClutterFilterMethod
   // samples; the operator caches the last value (sticky). Leaving the port
   // unconnected is legal — compute() seeds from Params.
@@ -92,6 +115,25 @@ expected<void, Error> ClutterFilterOp<T>::compute(ExecutionContext& context) {
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
+
+  const std::size_t max_leading = named_tx_rx_leading_rank(extents_);
+  if (batched.leading.size() > max_leading) {
+    return fail_invalid(unexpected_leading_message(
+        "ClutterFilterOp", batched.leading.size(), max_leading));
+  }
+  const std::int64_t max_rx = extent_rx_or_channels(extents_);
+  const std::int64_t max_tx = extent_or_one(extents_.max_tx);
+  if (batched.batch > max_tx * max_rx) {
+    return fail_invalid(
+        "ClutterFilterOp: leading product " + std::to_string(batched.batch) +
+        " exceeds max_tx*max_rx from MaxTensorExtents");
+  }
+  if (batched.rows > *extents_.max_chirps ||
+      batched.cols > *extents_.max_range_bins) {
+    return fail_invalid(
+        "ClutterFilterOp: input chirps/range_bins exceed MaxTensorExtents");
+  }
+
   const int64_t num_chirps = batched.rows;
   if (method_value == ClutterFilterMethod::kSingleDelay && num_chirps < 2) {
     return fail_invalid(

@@ -22,6 +22,7 @@
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -85,6 +86,35 @@ expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
 }  // namespace
 
 template <typename T>
+SnapshotGatherOp<T>::SnapshotGatherOp(
+    const MaxTensorExtents& extents)
+    : extents_(extents) {
+  const bool has_det = extents.max_detections.has_value() ||
+                       extents.max_items.has_value();
+  if (!has_det && !extents.max_channels.has_value() &&
+      !extents.max_snapshots.has_value()) {
+    return;  // Python / non-pooled: leave byte spans at 0.
+  }
+  const char* who = "SnapshotGatherOp";
+  const std::int64_t max_det =
+      extents.max_detections.has_value()
+          ? require_extent(extents.max_detections,
+                           "max_detections", who)
+          : require_extent(extents.max_items,
+                           "max_items", who);
+  const std::int64_t max_ch =
+      require_extent(extents.max_channels,
+                     "max_channels", who);
+  const std::int64_t max_snap =
+      require_extent(extents.max_snapshots,
+                     "max_snapshots", who);
+  snapshot_max_byte_span_ = byte_span_complex_cube<T>(
+      {max_det, max_ch, max_snap}, who);
+  is_valid_max_byte_span_ = byte_span_elems(
+      product_extents({max_det, max_snap}, who), 1U, who);
+}
+
+template <typename T>
 void SnapshotGatherOp<T>::setup(OperatorSpec& spec) {
   // Declare device storage only; dtype is enforced in compute() so one
   // operator binary still serves F32/F64 and the harness can feed either.
@@ -98,13 +128,13 @@ void SnapshotGatherOp<T>::setup(OperatorSpec& spec) {
   spec.output(snapshot)
       .produces_tensor(kDevice)
       .tensor_allocation(TensorAllocationBounds{
-          .max_rank = kSnapshotGatherMaxRank,
-          .max_byte_span = kSnapshotGatherMaxByteSpan});
+          .max_rank = snapshot_max_rank_,
+          .max_byte_span = snapshot_max_byte_span_});
   spec.output(is_valid)
       .produces_tensor(kDevice)
       .tensor_allocation(TensorAllocationBounds{
-          .max_rank = kSnapshotGatherMaxRank,
-          .max_byte_span = kSnapshotGatherMaxByteSpan});
+          .max_rank = snapshot_max_rank_,
+          .max_byte_span = is_valid_max_byte_span_});
   // [live] snapshot_window override port. Wired graphs may push window
   // samples; the operator caches the last value (sticky). Leaving the port
   // unconnected is legal — compute() seeds from Params.
@@ -186,6 +216,15 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
         "(num_detections, 2 [+ n_batch])");
   }
   const int64_t num_detections = idx_shape[0];
+  const int64_t max_det_cap =
+      extents_.max_detections.value_or(extents_.max_items.value_or(-1));
+  if (max_det_cap >= 0 && num_detections > max_det_cap) {
+    return fail_invalid(
+        "SnapshotGatherOp: detection_idx rows (" +
+        std::to_string(num_detections) +
+        ") exceed MaxTensorExtents max_detections/max_items (" +
+        std::to_string(max_det_cap) + ")");
+  }
   const int64_t idx_cols = idx_shape[1];
   const int64_t n_preserved = idx_cols - 2;
 

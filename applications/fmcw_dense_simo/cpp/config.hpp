@@ -1,38 +1,95 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// App-owned configuration for fmcw_dense_simo: the AppConfig type and its YAML
-// loader (URA geometry + beamformer angle-grid mirror + 3-D targets). Colocated
-// with the app; the graph wiring lives in fmcw_dense_simo.cpp.
+// App-owned config for fmcw_dense_simo: AppConfig + YAML loader.
+// [EA HSDK5 ONLY] Operator blocks are parsed into Params structs (Graph has
+// no from_config()).
 
 #pragma once
 
 #include <yaml-cpp/yaml.h>
 
+#include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
-#include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-#include "radar_common/descriptors/array_geometry.hpp"
-#include "radar_common/sim/array_builders.hpp"
 #include "radar_app/app/config.hpp"
+#include "radar_app/app/graph_params.hpp"
+#include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/sim/array_builders.hpp"
+#include "radar_common/sim/scene.hpp"
 
 namespace radar = holoscan::radar;
 using namespace holoscan::radar::app;  // NOLINT(build/namespaces)
 
-// Dense config: shared run/viz/plots fields plus the scene, URA geometry, the
-// beamformer angle grids (mirrored for the az/el lookup + report + boresight),
-// and the dense-only velocity-plot Y clamp.
 struct AppConfig : CommonRunConfig {
   radar::sim::SimScene scene;
   radar::ArrayGeometry array_geometry;
-  std::vector<double> az_angles;
-  std::vector<double> el_angles;
-  float velocity_ylim_lo{std::numeric_limits<float>::quiet_NaN()};
-  float velocity_ylim_hi{std::numeric_limits<float>::quiet_NaN()};
+  radar::FMCWRangeProcessorParams range_params;
+  radar::ClutterFilterParams clutter_params;
+  radar::FMCWDopplerProcessorParams doppler_params;
+  radar::PhaseShiftBeamformerParams beamformer_params;
+  radar::CFARParams cfar_params;
+  radar::ClusterDBSCANParams dbscan_params;
+  radar::DetectionReductionParams reduction_params;
+  radar::MaxTensorExtents extents;
+  // Dense CFAR on (az, el, D, R) needs leading-rank-2 pool sizing via
+  // max_tx/max_rx standing in for max_az/max_el (named_tx_rx_leading_rank).
+  radar::MaxTensorExtents cfar_extents;
+  // Boresight panel axes, from the beamformer scan grid.
+  double az_lo{-0.35}, az_hi{0.35}, el_lo{-0.1}, el_hi{0.1};
 };
+
+inline radar::MaxTensorExtents make_dense_simo_extents(const AppConfig& cfg) {
+  radar::MaxTensorExtents e;
+  const int64_t n_rx = cfg.array_geometry.num_elements();
+  const int64_t chirps = cfg.scene.num_chirps;
+  const int64_t samples = cfg.scene.samples_per_chirp;
+  const int64_t range_bins =
+      cfg.range_params.nfft > 0 ? cfg.range_params.nfft : samples;
+  const int64_t doppler_bins =
+      cfg.doppler_params.nfft > 0 ? cfg.doppler_params.nfft : chirps;
+  const int64_t num_az =
+      static_cast<int64_t>(cfg.beamformer_params.az_angles.size());
+  const int64_t num_el =
+      static_cast<int64_t>(cfg.beamformer_params.el_angles.size());
+  const int64_t map_cells = doppler_bins * range_bins;
+  const int64_t beam_cells = (num_az > 0 ? num_az : 1) *
+                             (num_el > 0 ? num_el : 1) * map_cells;
+
+  e.max_rx = n_rx;
+  e.max_chirps = chirps;
+  e.max_samples_per_chirp = samples;
+  e.max_range_bins = range_bins;
+  e.max_doppler_bins = doppler_bins;
+  e.max_channels = num_az * num_el;
+  e.max_az = num_az > 0 ? num_az : 1;
+  e.max_el = num_el > 0 ? num_el : 1;
+  e.max_detections = beam_cells;
+  e.max_items = beam_cells;
+  e.max_points = beam_cells;
+  e.max_features = 4;
+  const int64_t cluster_cap = cfg.dbscan_params.max_clusters > 0
+                                  ? cfg.dbscan_params.max_clusters
+                                  : beam_cells;
+  e.max_clusters = cluster_cap;
+  return e;
+}
+
+// CFAR on the RDA cube: (az, el) leading rank must be 2. Reuse max_tx/max_rx
+// as az/el pool dims so named_tx_rx_leading_rank reports 2 and idx_cols=4.
+inline radar::MaxTensorExtents make_dense_cfar_extents(
+    const radar::MaxTensorExtents& base) {
+  radar::MaxTensorExtents e = base;
+  e.max_tx = base.max_az;
+  e.max_rx = base.max_el;
+  e.max_channels = std::nullopt;
+  return e;
+}
 
 inline AppConfig load_config(const std::filesystem::path& path) {
   if (!std::filesystem::exists(path)) {
@@ -40,10 +97,8 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   }
   const YAML::Node root = YAML::LoadFile(path.string());
   AppConfig cfg;
-  parse_run_and_cube(root, &cfg, &cfg.scene);  // waveform + run + cube
+  parse_run_and_cube(root, &cfg, &cfg.scene);
 
-  // rx_array → URA geometry + simulator RX positions (matches fmcw_simo so the
-  // two demos share a scene).
   const YAML::Node rx = root["rx_array"];
   if (!rx) {
     throw std::runtime_error("rx_array section is required for SIMO");
@@ -56,41 +111,44 @@ inline AppConfig load_config(const std::filesystem::path& path) {
     throw std::runtime_error(
         "SIMO URA requires rx_array.az_elements >= 2 and el_elements >= 2");
   }
-  cfg.array_geometry = radar::sim::make_ura_geometry(az_elements, el_elements,
-                                                     spacing, wavelength);
+  cfg.array_geometry = radar::sim::make_ura_geometry(
+      az_elements, el_elements, spacing, wavelength);
   cfg.scene.rx_positions = radar::sim::make_ura_rx_positions(
       az_elements, el_elements, spacing, wavelength);
-
-  // The dense report and the az/el lookup bridge both need the beam grid. This
-  // is a READ-ONLY MIRROR of the phase_shift_beamformer block — the beamformer
-  // still owns az_angles/el_angles via from_config().
-  const YAML::Node beam = root["phase_shift_beamformer"];
-  if (!beam || !beam["az_angles"] || !beam["el_angles"]) {
-    throw std::runtime_error(
-        "phase_shift_beamformer.az_angles and el_angles are required");
-  }
-  cfg.az_angles = extract_grid(beam["az_angles"]);
-  cfg.el_angles = extract_grid(beam["el_angles"]);
 
   parse_targets_range_az_el(root, &cfg.scene, "fmcw_dense_simo");
   parse_noise(root, &cfg.scene);
   parse_viz_toggles(root, &cfg);
   parse_plots(root, &cfg);
-  // READ-ONLY MIRROR of the cfar_detector operator block: peak_only stays a
-  // native CFAR param (applied via from_config); the app reads it here only to
-  // decide the graph shape (drop clustering when set).
-  if (const YAML::Node cd = root["cfar_detector"];
-      cd && cd["peak_only"] && !cd["peak_only"].IsNull()) {
-    cfg.peak_only = cd["peak_only"].as<bool>();
-  }
 
-  // Dense-only plot knob: optional fixed velocity-plot Y extent.
-  if (const YAML::Node plots = root["plots"]; plots && !plots.IsNull()) {
-    const YAML::Node vy = plots["velocity_ylim"];
-    if (vy && vy.IsSequence() && vy.size() == 2) {
-      cfg.velocity_ylim_lo = vy[0].as<float>();
-      cfg.velocity_ylim_hi = vy[1].as<float>();
-    }
+  load_range_params(root["range_processor"], &cfg.range_params);
+  load_clutter_params(root["clutter_filter"], &cfg.clutter_params);
+  load_doppler_params(root["doppler_processor"], &cfg.doppler_params);
+  load_phase_shift_beamformer_params(root["phase_shift_beamformer"],
+                                     &cfg.beamformer_params);
+  cfg.beamformer_params.array_geometry = cfg.array_geometry;
+  if (cfg.beamformer_params.az_angles.empty() ||
+      cfg.beamformer_params.el_angles.empty()) {
+    throw std::runtime_error(
+        "phase_shift_beamformer.az_angles and el_angles are required");
   }
+  load_cfar_params(root["cfar_detector"], &cfg.cfar_params);
+  // Dense path: nci_axes empty so az/el ride as batch columns on
+  // detection_idx.
+  if (!cfg.cfar_params.nci_axes.empty()) {
+    throw std::runtime_error(
+        "fmcw_dense_simo: cfar_detector.nci_axes must be empty (dense RDA "
+        "path)");
+  }
+  load_dbscan_params(root["cluster_dbscan"], &cfg.dbscan_params);
+  load_reduction_params(root["reduction"], &cfg.reduction_params);
+
+  cfg.peak_only = cfg.cfar_params.peak_only;
+  grid_extent(cfg.beamformer_params.az_angles, -0.35, 0.35, &cfg.az_lo,
+              &cfg.az_hi);
+  grid_extent(cfg.beamformer_params.el_angles, -0.1, 0.1, &cfg.el_lo,
+              &cfg.el_hi);
+  cfg.extents = make_dense_simo_extents(cfg);
+  cfg.cfar_extents = make_dense_cfar_extents(cfg.extents);
   return cfg;
 }

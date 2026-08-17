@@ -4,6 +4,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -15,6 +16,7 @@
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/python/py_operator_utils.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 
@@ -31,12 +33,26 @@ class PyMIMOCoherentCompensationOp : public MIMOCoherentCompensationOp<T> {
 
   PyMIMOCoherentCompensationOp(
       Fragment* fragment, const py::args& args,
+      std::int64_t max_tx = 8,
+      std::int64_t max_rx = 16,
+      std::int64_t max_doppler_bins = 512,
+      std::int64_t max_range_bins = 4096,
       MultiplexingScheme multiplexing_scheme =
           MultiplexingScheme::kUnspecified,
-      const FMCWWaveformDescriptor& waveform = FMCWWaveformDescriptor{},
-      const DDMCodeDescriptor& ddm_code = DDMCodeDescriptor{},
-      const std::string& name = "mimo_coherent_compensation")
-      : MIMOCoherentCompensationOp<T>() {
+      const FMCWWaveformDescriptor& waveform =
+          FMCWWaveformDescriptor{},
+      const DDMCodeDescriptor& ddm_code =
+          DDMCodeDescriptor{},
+      const std::string& name =
+          "mimo_coherent_compensation")
+      : MIMOCoherentCompensationOp<T>([&] {
+          MaxTensorExtents extents;
+          extents.max_tx = max_tx;
+          extents.max_rx = max_rx;
+          extents.max_doppler_bins = max_doppler_bins;
+          extents.max_range_bins = max_range_bins;
+          return extents;
+        }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -58,18 +74,33 @@ void bind_mimo_coherent_compensation(py::module_& m, const char* class_name) {
       "MIMO coherent compensation (TDM phase / DDM demux).\n\n"
       "Parameters\n----------\n"
       "fragment : holoscan.core.Fragment\n"
+      "max_tx : int, optional\n"
+      "max_rx : int, optional\n"
+      "max_doppler_bins : int, optional\n"
+      "max_range_bins : int, optional\n"
       "multiplexing_scheme : MultiplexingScheme, optional\n"
       "waveform : FMCWWaveformDescriptor, optional\n"
       "ddm_code : DDMCodeDescriptor, optional\n"
       "name : str, optional\n")
-      .def(py::init<Fragment*, const py::args&, MultiplexingScheme,
-                    const FMCWWaveformDescriptor&, const DDMCodeDescriptor&,
+      .def(py::init<Fragment*, const py::args&,
+                    std::int64_t, std::int64_t,
+                    std::int64_t, std::int64_t,
+                    MultiplexingScheme,
+                    const FMCWWaveformDescriptor&,
+                    const DDMCodeDescriptor&,
                     const std::string&>(),
            py::arg("fragment"),
-           py::arg("multiplexing_scheme") = MultiplexingScheme::kUnspecified,
-           py::arg("waveform") = FMCWWaveformDescriptor{},
+           py::arg("max_tx") = 8,
+           py::arg("max_rx") = 16,
+           py::arg("max_doppler_bins") = 512,
+           py::arg("max_range_bins") = 4096,
+           py::arg("multiplexing_scheme") =
+               MultiplexingScheme::kUnspecified,
+           py::arg("waveform") =
+               FMCWWaveformDescriptor{},
            py::arg("ddm_code") = DDMCodeDescriptor{},
-           py::arg("name") = "mimo_coherent_compensation")
+           py::arg("name") =
+               "mimo_coherent_compensation")
       .def("setup", &Op::setup, py::arg("spec"));
 }
 

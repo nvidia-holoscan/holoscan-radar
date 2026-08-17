@@ -30,6 +30,7 @@
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -159,6 +160,31 @@ ULAParameters analyze_ula(const ArrayGeometry& geometry) {
 }  // namespace
 
 template <typename T>
+RootMUSICEstimatorOp<T>::RootMUSICEstimatorOp(
+    const MaxTensorExtents& extents)
+    : extents_(extents) {
+  if (!extents.max_items.has_value() &&
+      !extents.max_sources.has_value()) {
+    return;
+  }
+  const char* who = "RootMUSICEstimatorOp";
+  const auto max_items =
+      require_extent(extents.max_items, "max_items", who);
+  const auto max_sources =
+      require_extent(extents.max_sources, "max_sources", who);
+  const auto max_channels =
+      require_extent(extents.max_channels, "max_channels", who);
+  aoa_max_byte_span_ =
+      byte_span_real_cube<T>({max_items, 2}, who);
+  doa_max_byte_span_ =
+      byte_span_real_cube<T>({max_items, max_sources, 2}, who);
+  count_max_byte_span_ = byte_span_elems(
+      static_cast<std::size_t>(max_items), 4U, who);
+  eig_max_byte_span_ =
+      byte_span_real_cube<T>({max_items, max_channels}, who);
+}
+
+template <typename T>
 void RootMUSICEstimatorOp<T>::stop() {
   detail::retire_music_matx_caches();
 }
@@ -172,26 +198,32 @@ void RootMUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  const TensorAllocationBounds bounds{
-      .max_rank = kRootMUSICEstimatorMaxRank,
-      .max_byte_span = kRootMUSICEstimatorMaxByteSpan};
+  constexpr std::uint32_t kMaxRank = 3U;
   spec.input(snapshot).queue_depth(2U).expects_tensor(kDevice);
   // Optional is_valid: omitted from contract so unconnected graphs compile.
   spec.input(is_valid).queue_depth(2U).expects_tensor(kDevice);
   spec.output(aoa_estimates)
       .produces_tensor(kDevice)
-      .tensor_allocation(bounds);
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = kMaxRank,
+          .max_byte_span = aoa_max_byte_span_});
   // Optional in OPERATOR_API.md — always emitted so unwired consumers do not
   // need Connectivity gating; no angle_spectrum (gridless).
   spec.output(doa_multi)
       .produces_tensor(kDevice)
-      .tensor_allocation(bounds);
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = kMaxRank,
+          .max_byte_span = doa_max_byte_span_});
   spec.output(source_count)
       .produces_tensor(kDevice)
-      .tensor_allocation(bounds);
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = kMaxRank,
+          .max_byte_span = count_max_byte_span_});
   spec.output(eigenvalues)
       .produces_tensor(kDevice)
-      .tensor_allocation(bounds);
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = kMaxRank,
+          .max_byte_span = eig_max_byte_span_});
   // [live] POD sticky overrides. Leaving unconnected is legal — compute()
   // seeds from Params. Descriptor / vector live params are Params-only (§9).
   spec.input(num_sources).queue_depth(2U);

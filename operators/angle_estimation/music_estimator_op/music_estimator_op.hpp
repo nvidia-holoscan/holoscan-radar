@@ -26,6 +26,7 @@
 
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/dsp/spatial_smoothing.hpp"
 #include "radar_common/sdk/config_cache.hpp"
 
@@ -134,18 +135,13 @@ static_assert(holoscan::param_schema_availability<MUSICParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
               "HOLOSCAN_PARAM_SCHEMA must be in MUSICParams's namespace");
 
-// Admission bounds for the device output pools.
-inline constexpr std::uint32_t kMUSICEstimatorMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kMUSICEstimatorMaxByteSpan = 256ULL << 20;
-
 template <typename T>
 class MUSICEstimatorOp : public holoscan::Operator<MUSICParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "MUSICEstimatorOp supports float and double precision");
 
  public:
-  MUSICEstimatorOp() = default;
+  explicit MUSICEstimatorOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -171,6 +167,13 @@ class MUSICEstimatorOp : public holoscan::Operator<MUSICParams> {
   Input<int64_t> max_sources{"max_sources"};
 
  private:
+  MaxTensorExtents extents_;
+  std::size_t spectrum_max_byte_span_{0U};
+  std::size_t aoa_max_byte_span_{0U};
+  std::size_t doa_max_byte_span_{0U};
+  std::size_t count_max_byte_span_{0U};
+  std::size_t eig_max_byte_span_{0U};
+
   // Keep the previous activation's inputs alive across ticks so async device
   // reads cannot outlive the buffers.
   Tensor retained_snapshot_;

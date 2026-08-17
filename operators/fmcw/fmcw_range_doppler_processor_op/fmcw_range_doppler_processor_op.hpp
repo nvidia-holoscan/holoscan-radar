@@ -23,6 +23,7 @@
 
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/math/constants.hpp"
 
@@ -133,10 +134,6 @@ static_assert(
     "HOLOSCAN_PARAM_SCHEMA must be in "
     "FMCWRangeDopplerProcessorParams's namespace");
 
-inline constexpr std::uint32_t kRangeDopplerProcessorMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kRangeDopplerProcessorMaxByteSpan = 256ULL << 20;
-
 template <typename T>
 class FMCWRangeDopplerProcessorOp
     : public holoscan::Operator<FMCWRangeDopplerProcessorParams> {
@@ -145,7 +142,8 @@ class FMCWRangeDopplerProcessorOp
                 "precision");
 
  public:
-  FMCWRangeDopplerProcessorOp() = default;
+  explicit FMCWRangeDopplerProcessorOp(
+      const MaxTensorExtents& extents);
   ~FMCWRangeDopplerProcessorOp() override;
 
   void setup(OperatorSpec& spec) override;
@@ -184,6 +182,12 @@ class FMCWRangeDopplerProcessorOp
   // Kernel-side caches for the two FFT stages.
   std::shared_ptr<detail::RangeStageState<T>> range_state_;
   std::shared_ptr<detail::DopplerStageState<T>> doppler_state_;
+
+  MaxTensorExtents extents_;
+  std::uint32_t max_rank_{2U};
+  std::size_t max_byte_span_{0U};
+  std::size_t range_bins_byte_span_{0U};
+  std::size_t velocity_bins_byte_span_{0U};
 };
 
 // Explicit instantiations live in fmcw_range_doppler_processor_op.cu.

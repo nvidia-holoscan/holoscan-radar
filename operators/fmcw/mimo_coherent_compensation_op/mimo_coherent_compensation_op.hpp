@@ -24,6 +24,7 @@
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/sdk/config_cache.hpp"
 
 namespace holoscan::radar {
@@ -87,10 +88,6 @@ static_assert(
     "HOLOSCAN_PARAM_SCHEMA must be in "
     "MIMOCoherentCompensationParams's namespace");
 
-inline constexpr std::uint32_t kMIMOCoherentCompMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kMIMOCoherentCompMaxByteSpan = 256ULL << 20;
-
 template <typename T>
 class MIMOCoherentCompensationOp
     : public holoscan::Operator<MIMOCoherentCompensationParams> {
@@ -98,7 +95,8 @@ class MIMOCoherentCompensationOp
                 "MIMOCoherentCompensationOp supports float and double only");
 
  public:
-  MIMOCoherentCompensationOp() = default;
+  explicit MIMOCoherentCompensationOp(
+      const MaxTensorExtents& extents);
   ~MIMOCoherentCompensationOp() override;
 
   void setup(OperatorSpec& spec) override;
@@ -147,6 +145,10 @@ class MIMOCoherentCompensationOp
   ConfigCache<CachedDdmCorrelate> correlate_cache_{};
 
   Tensor retained_input_;
+
+  MaxTensorExtents extents_;
+  std::uint32_t max_rank_{4U};
+  std::size_t max_byte_span_{0U};
 };
 
 extern template class MIMOCoherentCompensationOp<float>;

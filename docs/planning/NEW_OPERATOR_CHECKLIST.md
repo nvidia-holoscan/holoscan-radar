@@ -108,9 +108,11 @@ throws / sits in `OPEN_ITEMS.md`.
 - [ ] **Sticky overrides:** seed `effective_*` from parameters on the first
       tick; each tick call `resolve_override_param()` (pass `changed` when
       costly rebuilds use `ConfigCache`).
-- [ ] **Rank-agnostic batching:** infer trailing axes from input tensors;
-      use `collapse_batch` / `full_rank_shape` or a dedicated layout helper;
-      reject non-contiguous inputs if unsupported.
+- [ ] **Named axes / no opaque batch:** infer trailing (and any named
+      leading) axes from input tensors; use `collapse_batch` /
+      `full_rank_shape` only as a MatX layout helper over **named** axes;
+      reject unexpected extra leading dims. Fat outs take
+      `MaxTensorExtents` at `graph.op()` (see `MAX_TENSOR_EXTENTS.md`).
 - [ ] **Output shapes** follow the contract when `[live]` params change
       leading dimensions (downstream re-infers).
 - [ ] **CUDA stream:** `receive_cuda_stream()` on the primary data input;

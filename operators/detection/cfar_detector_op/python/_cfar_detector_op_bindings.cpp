@@ -4,6 +4,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -15,6 +16,7 @@
 
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/python/py_operator_utils.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 
@@ -44,8 +46,26 @@ class PyCFARDetectorOp : public CFARDetectorOp<T> {
       bool blocking_alpha_lut_rebuild = false,
       bool peak_only = false,
       CfarPeakNeighborhood peak_neighborhood = CfarPeakNeighborhood::kSquare8,
+      int64_t max_doppler_bins = 512,
+      int64_t max_range_bins = 4096,
+      int64_t max_det = 8192,
+      int64_t max_rx = 1,
+      int64_t max_tx = 0,
       const std::string& name = "cfar_detector")
-      : CFARDetectorOp<T>() {
+      : CFARDetectorOp<T>([&] {
+          MaxTensorExtents extents;
+          extents.max_doppler_bins = max_doppler_bins;
+          extents.max_range_bins = max_range_bins;
+          extents.max_detections = max_det;
+          if (max_rx > 1) {
+            extents.max_rx = max_rx;
+          }
+          if (max_tx > 0) {
+            extents.max_tx = max_tx;
+            extents.max_rx = std::max(max_rx, int64_t{1});
+          }
+          return extents;
+        }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -93,10 +113,13 @@ void bind_cfar_detector(py::module_& m, const char* class_name) {
       "peak_neighborhood : CfarPeakNeighborhood, optional\n"
       "name : str, optional\n")
       .def(py::init<Fragment*, const py::args&, CfarVariant, int64_t,
-                    const std::vector<int64_t>&, const std::vector<int64_t>&,
-                    double, const std::vector<double>&, double,
-                    const std::vector<int64_t>&, int64_t, int64_t, bool, bool,
-                    CfarPeakNeighborhood, const std::string&>(),
+                    const std::vector<int64_t>&,
+                    const std::vector<int64_t>&, double,
+                    const std::vector<double>&, double,
+                    const std::vector<int64_t>&, int64_t, int64_t,
+                    bool, bool, CfarPeakNeighborhood, int64_t,
+                    int64_t, int64_t, int64_t, int64_t,
+                    const std::string&>(),
            py::arg("fragment"),
            py::arg("cfar_variant") = CfarVariant::kCA,
            py::arg("os_rank") = int64_t{0},
@@ -110,7 +133,13 @@ void bind_cfar_detector(py::module_& m, const char* class_name) {
            py::arg("max_cached_kernels") = int64_t{4},
            py::arg("blocking_alpha_lut_rebuild") = false,
            py::arg("peak_only") = false,
-           py::arg("peak_neighborhood") = CfarPeakNeighborhood::kSquare8,
+           py::arg("peak_neighborhood") =
+               CfarPeakNeighborhood::kSquare8,
+           py::arg("max_doppler_bins") = int64_t{512},
+           py::arg("max_range_bins") = int64_t{4096},
+           py::arg("max_det") = int64_t{8192},
+           py::arg("max_rx") = int64_t{1},
+           py::arg("max_tx") = int64_t{0},
            py::arg("name") = "cfar_detector")
       .def("setup", &Op::setup, py::arg("spec"));
 }

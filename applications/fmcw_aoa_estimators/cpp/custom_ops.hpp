@@ -1,20 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// App-specific operators for fmcw_aoa_estimators, colocated with the app:
-//   SnapshotK1SliceOp  - center-slice a (N, C, K) snapshot to (N, C, 1) for the
-//                        single-snapshot Beamscan branch.
-//   EstimatorRouterOp  - pass-through of snapshot/is_valid that owns the
-//                        estimator-selection policy. Its selection is read each
-//                        tick by the app's set_dynamic_flows() callback, which
-//                        activates exactly one downstream estimator path, so
-//                        only the selected estimator ticks.
+// App-local Graph operators for fmcw_aoa_estimators:
+//   SnapshotK1SliceOp  — center-slice (N, C, K) → (N, C, 1) for Beamscan
+//   EstimatorRouterOp  — policy + N snapshot outs; emit only the selected one
+//   AoaMergeOp         — OnAnyInput fan-in of five aoa_estimates → one out
 //
-// The router separates the selection *policy* (rotate / hold / file) from the
-// *transport*: with no external signal it rotates on a fixed dwell (headless,
-// deterministic); a control file/FIFO latches a live override (real-time,
-// still unattended-capable). Kept app-local (plain-tensor-ports invariant),
-// not a shared operator or contract change.
+// Replaces Application set_dynamic_flows(): idle estimators never receive a
+// snapshot (OnEach), and the merge reacts to whichever aoa port fires.
 
 #pragma once
 
@@ -24,203 +17,271 @@
 #include <cctype>
 #include <cstdint>
 #include <fstream>  // NOLINT(build/include_order)
-#include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
+#include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/expected.hpp>
+#include <holoscan/core/expected_macros.hpp>
+#include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
+#include <holoscan/core/port.hpp>
+#include <holoscan/core/temporal_contract.hpp>
+#include <holoscan/logger/logger.hpp>
 
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
-#include "radar_common/tensor/dlpack_buffer.hpp"
+#include "radar_common/tensor/tensor_utils.hpp"
 
 namespace radar = holoscan::radar;
 
-// Center-slice the trailing snapshot axis: (num_items, num_channels,
-// num_snapshots) -> (num_items, num_channels, 1), taking the center look
-// (k = num_snapshots / 2). Beamscan is single-snapshot only, so the multi-look
-// gather feeding the covariance/gridless estimators is narrowed to one look
-// here. is_valid (num_items, num_snapshots) is sliced the same way. A snapshot
-// that is already single-look (rank 2, or trailing dim 1) is forwarded as-is.
-class SnapshotK1SliceOp : public holoscan::Operator {
- public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(SnapshotK1SliceOp)
-  SnapshotK1SliceOp() = default;
+// Async D2D from `src` into a new loan. Caller must keep `src` alive until the
+// next tick (retained_input_ pattern) — the fill only enqueues on the stream.
+inline holoscan::expected<holoscan::TensorOutputLoan, holoscan::Error>
+prepare_tensor_copy(holoscan::Output<holoscan::Tensor>& port,
+                    holoscan::ExecutionContext& context,
+                    const holoscan::Tensor& src, const char* who) {
+  return radar::prepare_device_tensor(
+      port, context, src.shape(), src.dtype(),
+      [&](void* dst, std::size_t bytes)
+          -> holoscan::expected<void, holoscan::Error> {
+        if (bytes != static_cast<std::size_t>(src.nbytes())) {
+          return holoscan::make_unexpected(holoscan::Error{
+              holoscan::ErrorCode::kFailure,
+              std::string(who) + ": loan size mismatch"});
+        }
+        if (bytes == 0) {
+          return {};
+        }
+        if (cudaMemcpyAsync(dst, src.data(), bytes, cudaMemcpyDeviceToDevice,
+                            context.cuda_stream().get()) != cudaSuccess) {
+          return holoscan::make_unexpected(holoscan::Error{
+              holoscan::ErrorCode::kFailure,
+              std::string(who) + ": D2D copy failed"});
+        }
+        return {};
+      });
+}
 
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.input<holoscan::TensorMap>("snapshot");
-    spec.input<holoscan::TensorMap>("is_valid")
-        .condition(holoscan::ConditionType::kNone);
-    spec.output<holoscan::TensorMap>("snapshot");
-    spec.output<holoscan::TensorMap>("is_valid")
-        .condition(holoscan::ConditionType::kNone);
+inline holoscan::expected<void, holoscan::Error> emit_tensor_copy(
+    holoscan::Output<holoscan::Tensor>& port, holoscan::ExecutionContext& context,
+    const holoscan::Tensor& src, const char* who) {
+  HOLOSCAN_TRY(auto loan, prepare_tensor_copy(port, context, src, who));
+  return radar::emit_prepared_tensor(port, context, std::move(loan));
+}
+
+// Center-slice the trailing snapshot axis for single-look Beamscan.
+class SnapshotK1SliceOp : public holoscan::Operator<> {
+ public:
+  explicit SnapshotK1SliceOp(const radar::MaxTensorExtents& extents) {
+    const int64_t max_items =
+        radar::require_extent(extents.max_items, "max_items",
+                              "SnapshotK1SliceOp");
+    const int64_t max_ch =
+        radar::require_extent(extents.max_channels, "max_channels",
+                              "SnapshotK1SliceOp");
+    max_byte_span_ = radar::tensor_byte_span(
+        std::vector<int64_t>{max_items, max_ch, 1},
+        radar::complex_dtype<float>());
   }
 
-  void compute(holoscan::InputContext& op_input,
-               holoscan::OutputContext& op_output,
-               [[maybe_unused]] holoscan::ExecutionContext& context) override {
-    const char* who = "SnapshotK1SliceOp";
-    auto snapshot = radar::receive_single(op_input, "snapshot", who);
-    auto is_valid = radar::receive_optional(op_input, "is_valid", who);
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorPortLayout kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice,
+        .dtype = std::nullopt,
+        .rank = std::nullopt,
+    };
+    spec.input(snapshot_in).queue_depth(2U).expects_tensor(kDevice);
+    spec.output(snapshot_out)
+        .produces_tensor(kDevice)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 3U, .max_byte_span = max_byte_span_});
+  }
 
-    const auto& shape = snapshot->shape();
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnEach{snapshot_in});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    const char* who = "SnapshotK1SliceOp";
+    HOLOSCAN_TRY(auto snapshot, radar::receive_tensor(snapshot_in, who));
+    // Keep the source alive past compute(); emit only enqueues the D2D.
+    retained_input_ = snapshot;
+    const auto& shape = snapshot.shape();
     if (shape.size() != 2 && shape.size() != 3) {
-      throw std::runtime_error(
-          "SnapshotK1SliceOp: snapshot must be (num_items, num_channels) or "
-          "(num_items, num_channels, num_snapshots)");
+      return holoscan::make_unexpected(holoscan::Error{
+          holoscan::ErrorCode::kInvalidArgument,
+          "SnapshotK1SliceOp: snapshot must be (N, C) or (N, C, K)"});
     }
     const int64_t num_items = shape[0];
     const int64_t num_channels = shape[1];
     const int64_t num_snapshots = (shape.size() == 3) ? shape[2] : 1;
-
     if (num_snapshots <= 1) {
-      // Already single-look: forward unchanged (still one entry per port).
-      radar::emit_single(op_output, "snapshot", snapshot);
-      if (is_valid) {
-        radar::emit_single(op_output, "is_valid", is_valid);
-      }
-      return;
+      return emit_tensor_copy(snapshot_out, context, retained_input_, who);
     }
 
     const int64_t center = num_snapshots / 2;
-    auto sliced = slice_center(*snapshot, num_items * num_channels,
-                               num_snapshots, center, who, "snapshot");
-    radar::emit_single(op_output, "snapshot", sliced);
-
-    if (is_valid) {
-      const auto& vshape = is_valid->shape();
-      if (vshape.size() == 2 && vshape[1] == num_snapshots) {
-        auto vsliced = slice_center(*is_valid, vshape[0], num_snapshots, center,
-                                    who, "is_valid");
-        radar::emit_single(op_output, "is_valid", vsliced);
-      } else {
-        radar::emit_single(op_output, "is_valid", is_valid);
-      }
-    }
+    const DLDataType dtype = retained_input_.dtype();
+    const std::size_t elem_bytes =
+        static_cast<std::size_t>(dtype.bits / 8) *
+        static_cast<std::size_t>(dtype.lanes);
+    const std::vector<int64_t> out_shape{num_items, num_channels, 1};
+    const int64_t rows = num_items * num_channels;
+    return radar::emit_device_tensor(
+        snapshot_out, context, out_shape, dtype,
+        [&](void* dst, std::size_t bytes)
+            -> holoscan::expected<void, holoscan::Error> {
+          if (bytes != static_cast<std::size_t>(rows) * elem_bytes) {
+            return holoscan::make_unexpected(holoscan::Error{
+                holoscan::ErrorCode::kFailure,
+                "SnapshotK1SliceOp: sliced loan size mismatch"});
+          }
+          if (rows <= 0) {
+            return {};
+          }
+          const auto* base =
+              static_cast<const char*>(retained_input_.data());
+          if (cudaMemcpy2DAsync(
+                  dst, elem_bytes,
+                  base + static_cast<std::size_t>(center) * elem_bytes,
+                  static_cast<std::size_t>(num_snapshots) * elem_bytes,
+                  elem_bytes, static_cast<std::size_t>(rows),
+                  cudaMemcpyDeviceToDevice,
+                  context.cuda_stream().get()) != cudaSuccess) {
+            return holoscan::make_unexpected(holoscan::Error{
+                holoscan::ErrorCode::kFailure,
+                "SnapshotK1SliceOp: center-slice D2D failed"});
+          }
+          return {};
+        });
   }
+
+  holoscan::Input<holoscan::Tensor> snapshot_in{"snapshot_in"};
+  holoscan::Output<holoscan::Tensor> snapshot_out{"snapshot_out"};
 
  private:
-  // Gather element `center` out of each length-`inner` contiguous row of a
-  // rank-collapsed (rows, inner) tensor into a contiguous (rows, 1) tensor, on
-  // device, preserving dtype. rows = product of leading dims.
-  static std::shared_ptr<holoscan::Tensor> slice_center(
-      const holoscan::Tensor& src, int64_t rows, int64_t inner, int64_t center,
-      const char* who, const char* what) {
-    const DLDataType dtype = src.dtype();
-    const size_t elem_bytes =
-        static_cast<size_t>(dtype.bits / 8) * static_cast<size_t>(dtype.lanes);
-    std::vector<int64_t> out_shape;
-    for (auto d : src.shape()) {
-      out_shape.push_back(d);
-    }
-    out_shape.back() = 1;
-    auto out = radar::make_device_tensor(out_shape, dtype);
-    if (rows > 0) {
-      const auto* base = static_cast<const char*>(src.data());
-      const cudaError_t err = cudaMemcpy2D(
-          out->data(), elem_bytes, base + static_cast<size_t>(center) *
-                                              elem_bytes,
-          static_cast<size_t>(inner) * elem_bytes, elem_bytes,
-          static_cast<size_t>(rows), cudaMemcpyDeviceToDevice);
-      if (err != cudaSuccess) {
-        throw std::runtime_error(std::string(who) + ": " + what +
-                                 " center-slice D2D failed");
-      }
-    }
-    return out;
-  }
+  std::size_t max_byte_span_{0U};
+  holoscan::Tensor retained_input_;
 };
 
-// Estimator selection policy for the dynamic-flow router. Structural (chosen at
-// build time); the *which* it yields per tick is what varies.
 enum class RouterMode { kRotate, kHold, kFile };
 
-// Pass-through router that decides which single downstream estimator runs each
-// tick. compute() forwards snapshot/is_valid unchanged and advances the policy;
-// the app's set_dynamic_flows() callback reads active_target() and activates
-// only that estimator's edges. The selection sources, in resolution order:
-//   kHold   - a fixed estimator (hold_index), ignores external input.
-//   kRotate - fixed dwell: active = (tick / rotate_period) % N.
-//   kFile   - poll control_path each tick; a recognized name latches (sticky)
-//             until changed; an absent/empty/unrecognized file falls back to
-//             the rotation. Headless- and SSH-friendly ("echo music > path").
-class EstimatorRouterOp : public holoscan::Operator {
- public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(EstimatorRouterOp)
-  EstimatorRouterOp() = default;
-
-  // Configured by the app in compose() (plain members, not Holoscan params, so
-  // the same object is visible to the dynamic-flow callback).
+struct EstimatorRouterConfig {
   RouterMode mode{RouterMode::kRotate};
   int64_t rotate_period{40};
   int64_t hold_index{0};
-  int64_t log_every{0};  // 0 = log only when the active estimator changes
+  int64_t log_every{0};
   std::string control_path{};
-  std::vector<std::string> display_names{};  // human names, index-aligned
-  std::vector<std::string> target_op_names{};  // downstream op names, aligned
+  // Index-aligned human names: beamscan, mvdr, music, root_music, esprit.
+  std::vector<std::string> display_names{
+      "beamscan", "mvdr", "music", "root_music", "esprit"};
+};
 
-  const std::string& active_target() const {
-    return target_op_names[static_cast<size_t>(active_index_)];
+// Pass-through router: five snapshot outputs, emit only the selected branch.
+class EstimatorRouterOp : public holoscan::Operator<> {
+ public:
+  static constexpr int kNumEstimators = 5;
+
+  EstimatorRouterOp(const radar::MaxTensorExtents& extents,
+                    EstimatorRouterConfig config)
+      : cfg_(std::move(config)) {
+    const int64_t max_items =
+        radar::require_extent(extents.max_items, "max_items",
+                              "EstimatorRouterOp");
+    const int64_t max_ch =
+        radar::require_extent(extents.max_channels, "max_channels",
+                              "EstimatorRouterOp");
+    const int64_t max_snaps =
+        radar::require_extent(extents.max_snapshots, "max_snapshots",
+                              "EstimatorRouterOp");
+    max_byte_span_ = radar::tensor_byte_span(
+        std::vector<int64_t>{max_items, max_ch, max_snaps},
+        radar::complex_dtype<float>());
+    if (cfg_.display_names.size() != static_cast<size_t>(kNumEstimators)) {
+      throw std::runtime_error(
+          "EstimatorRouterOp: display_names must have 5 entries");
+    }
   }
-
-  // The estimator selected on the most recent tick (index into display_names /
-  // target_op_names). Read by the viz label each frame; a one-frame lag versus
-  // the estimator that actually ran is immaterial for a status label.
-  int64_t active_index() const { return active_index_; }
 
   void setup(holoscan::OperatorSpec& spec) override {
-    spec.input<holoscan::TensorMap>("snapshot");
-    spec.input<holoscan::TensorMap>("is_valid")
-        .condition(holoscan::ConditionType::kNone);
-    spec.output<holoscan::TensorMap>("snapshot");
-    spec.output<holoscan::TensorMap>("is_valid")
-        .condition(holoscan::ConditionType::kNone);
+    constexpr holoscan::TensorPortLayout kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice,
+        .dtype = std::nullopt,
+        .rank = std::nullopt,
+    };
+    spec.input(snapshot_in).queue_depth(2U).expects_tensor(kDevice);
+    auto declare_out = [&](holoscan::Output<holoscan::Tensor>& port) {
+      spec.output(port)
+          .produces_tensor(kDevice)
+          .tensor_allocation(holoscan::TensorAllocationBounds{
+              .max_rank = 3U, .max_byte_span = max_byte_span_});
+    };
+    declare_out(snapshot_beamscan);
+    declare_out(snapshot_mvdr);
+    declare_out(snapshot_music);
+    declare_out(snapshot_root_music);
+    declare_out(snapshot_esprit);
   }
 
-  void compute(holoscan::InputContext& op_input,
-               holoscan::OutputContext& op_output,
-               [[maybe_unused]] holoscan::ExecutionContext& context) override {
-    const char* who = "EstimatorRouterOp";
-    if (target_op_names.empty()) {
-      throw std::runtime_error(
-          "EstimatorRouterOp: no estimator targets configured");
-    }
-    auto snapshot = radar::receive_single(op_input, "snapshot", who);
-    auto is_valid = radar::receive_optional(op_input, "is_valid", who);
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnEach{snapshot_in});
+    return result;
+  }
 
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    const char* who = "EstimatorRouterOp";
+    HOLOSCAN_TRY(auto snapshot, radar::receive_tensor(snapshot_in, who));
+    retained_input_ = snapshot;
     active_index_ = resolve_selection();
 
-    radar::emit_single(op_output, "snapshot", snapshot);
-    if (is_valid) {
-      radar::emit_single(op_output, "is_valid", is_valid);
-    }
+    holoscan::Output<holoscan::Tensor>* outs[kNumEstimators] = {
+        &snapshot_beamscan, &snapshot_mvdr, &snapshot_music,
+        &snapshot_root_music, &snapshot_esprit};
+    HOLOSCAN_RETURN_IF_ERROR(
+        emit_tensor_copy(*outs[active_index_], context, retained_input_, who));
 
     const bool changed = (active_index_ != last_logged_index_);
     const bool periodic =
-        log_every > 0 && (tick_ % log_every == 0);
+        cfg_.log_every > 0 && (tick_ % cfg_.log_every == 0);
     if (changed || periodic) {
       HOLOSCAN_LOG_INFO("EstimatorRouterOp: frame {} -> {} estimator", tick_,
-                        display_names[static_cast<size_t>(active_index_)]);
+                        cfg_.display_names[static_cast<size_t>(active_index_)]);
       last_logged_index_ = active_index_;
     }
     ++tick_;
+    return {};
   }
+
+  int64_t active_index() const { return active_index_; }
+
+  holoscan::Input<holoscan::Tensor> snapshot_in{"snapshot"};
+  holoscan::Output<holoscan::Tensor> snapshot_beamscan{"snapshot_beamscan"};
+  holoscan::Output<holoscan::Tensor> snapshot_mvdr{"snapshot_mvdr"};
+  holoscan::Output<holoscan::Tensor> snapshot_music{"snapshot_music"};
+  holoscan::Output<holoscan::Tensor> snapshot_root_music{
+      "snapshot_root_music"};
+  holoscan::Output<holoscan::Tensor> snapshot_esprit{"snapshot_esprit"};
 
  private:
   int64_t resolve_selection() {
-    const int64_t n = static_cast<int64_t>(target_op_names.size());
-    const int64_t period = rotate_period > 0 ? rotate_period : 1;
+    const int64_t n = kNumEstimators;
+    const int64_t period = cfg_.rotate_period > 0 ? cfg_.rotate_period : 1;
     const int64_t rotated = (tick_ / period) % n;
-    if (mode == RouterMode::kHold) {
-      return clamp_index(hold_index, n);
+    if (cfg_.mode == RouterMode::kHold) {
+      return clamp_index(cfg_.hold_index, n);
     }
-    if (mode == RouterMode::kRotate) {
+    if (cfg_.mode == RouterMode::kRotate) {
       return rotated;
     }
-    // kFile: poll and latch. A recognized value sticks until the next
-    // recognized value; an absent/empty/unrecognized poll leaves the prior
-    // latch in place (so a one-shot `echo music > path` persists). Rotation is
-    // the fallback only until the first override latches.
     const int64_t requested = poll_control_file();
     if (requested >= 0) {
       latched_index_ = requested;
@@ -238,14 +299,11 @@ class EstimatorRouterOp : public holoscan::Operator {
     return idx;
   }
 
-  // Read the first whitespace-delimited token from control_path and map it to
-  // an estimator index. Returns -1 when the file is absent, empty, or does not
-  // name a known estimator (1-based digits are also accepted).
   int64_t poll_control_file() {
-    if (control_path.empty()) {
+    if (cfg_.control_path.empty()) {
       return -1;
     }
-    std::ifstream in(control_path);
+    std::ifstream in(cfg_.control_path);
     if (!in) {
       return -1;
     }
@@ -260,12 +318,12 @@ class EstimatorRouterOp : public holoscan::Operator {
       if (c == '-' || c == '_') {
         continue;
       }
-      norm.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(
-          c))));
+      norm.push_back(static_cast<char>(
+          std::tolower(static_cast<unsigned char>(c))));
     }
-    for (size_t i = 0; i < display_names.size(); ++i) {
+    for (size_t i = 0; i < cfg_.display_names.size(); ++i) {
       std::string cand;
-      for (char c : display_names[i]) {
+      for (char c : cfg_.display_names[i]) {
         if (c == '-' || c == '_') {
           continue;
         }
@@ -277,17 +335,128 @@ class EstimatorRouterOp : public holoscan::Operator {
       }
     }
     if (norm.size() == 1 && norm[0] >= '1' &&
-        norm[0] <= '9') {  // 1-based digit
-      const int64_t idx = norm[0] - '1';
-      if (idx < static_cast<int64_t>(display_names.size())) {
-        return idx;
-      }
+        norm[0] <= static_cast<char>('0' + kNumEstimators)) {
+      return static_cast<int64_t>(norm[0] - '1');
     }
     return -1;
   }
 
+  EstimatorRouterConfig cfg_{};
+  std::size_t max_byte_span_{0U};
+  holoscan::Tensor retained_input_;
   int64_t tick_{0};
   int64_t active_index_{0};
-  int64_t latched_index_{-1};
   int64_t last_logged_index_{-1};
+  int64_t latched_index_{-1};
+};
+
+// Fan-in of five aoa_estimates ports. Default OnAnyInput: one activation per
+// accepted sample on any port; receive only the selected port and forward.
+class AoaMergeOp : public holoscan::Operator<> {
+ public:
+  explicit AoaMergeOp(const radar::MaxTensorExtents& extents) {
+    const int64_t max_items =
+        radar::require_extent(extents.max_items, "max_items", "AoaMergeOp");
+    max_byte_span_ = radar::tensor_byte_span(
+        std::vector<int64_t>{max_items, 2}, radar::real_dtype<float>());
+  }
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorPortLayout kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice,
+        .dtype = std::nullopt,
+        .rank = std::nullopt,
+    };
+    auto declare_in = [&](holoscan::Input<holoscan::Tensor>& port) {
+      spec.input(port).queue_depth(2U).expects_tensor(kDevice);
+    };
+    declare_in(aoa_beamscan);
+    declare_in(aoa_mvdr);
+    declare_in(aoa_music);
+    declare_in(aoa_root_music);
+    declare_in(aoa_esprit);
+    spec.output(aoa_estimates)
+        .produces_tensor(kDevice)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 2U, .max_byte_span = max_byte_span_});
+    spec.output(estimator_idx)
+        .produces_tensor(kDevice)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 1U, .max_byte_span = sizeof(int64_t)});
+  }
+
+  // Empty contract → synthesized OnAnyInput (HSDK 5 default for inputful ops).
+  [[nodiscard]] holoscan::Contract contract() const override {
+    return holoscan::Contract{};
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    const char* who = "AoaMergeOp";
+    holoscan::Input<holoscan::Tensor>* ports[5] = {
+        &aoa_beamscan, &aoa_mvdr, &aoa_music, &aoa_root_music, &aoa_esprit};
+    holoscan::Input<holoscan::Tensor>* selected = nullptr;
+    for (int64_t i = 0; i < 5; ++i) {
+      auto* p = ports[i];
+      if (!p->is_missing()) {
+        if (selected != nullptr) {
+          return holoscan::make_unexpected(holoscan::Error{
+              holoscan::ErrorCode::kFailure,
+              "AoaMergeOp: more than one aoa port selected"});
+        }
+        selected = p;
+        host_index_ = i;
+      }
+    }
+    if (selected == nullptr) {
+      return holoscan::make_unexpected(holoscan::Error{
+          holoscan::ErrorCode::kFailure,
+          "AoaMergeOp: no aoa port selected for this activation"});
+    }
+    HOLOSCAN_TRY(auto aoa, radar::receive_tensor(*selected, who));
+    retained_input_ = aoa;
+    HOLOSCAN_TRY(auto aoa_loan,
+                 prepare_tensor_copy(aoa_estimates, context, retained_input_,
+                                     who));
+    // Which estimator produced this frame, for the viewer's header label.
+    // host_index_ is a member so the pageable H2D source outlives the copy.
+    const std::vector<int64_t> idx_shape{1};
+    HOLOSCAN_TRY(
+        auto idx_loan,
+        radar::prepare_device_tensor(
+            estimator_idx, context, idx_shape, DLDataType{kDLInt, 64, 1},
+            [&](void* dst, std::size_t bytes)
+                -> holoscan::expected<void, holoscan::Error> {
+              if (bytes != sizeof(int64_t)) {
+                return holoscan::make_unexpected(holoscan::Error{
+                    holoscan::ErrorCode::kFailure,
+                    "AoaMergeOp: estimator_idx loan size mismatch"});
+              }
+              if (cudaMemcpyAsync(dst, &host_index_, bytes,
+                                  cudaMemcpyHostToDevice,
+                                  context.cuda_stream().get()) != cudaSuccess) {
+                return holoscan::make_unexpected(holoscan::Error{
+                    holoscan::ErrorCode::kFailure,
+                    "AoaMergeOp: estimator_idx H2D failed"});
+              }
+              return {};
+            }));
+    HOLOSCAN_TRY(radar::emit_prepared_tensor(aoa_estimates, context,
+                                             std::move(aoa_loan)));
+    return radar::emit_prepared_tensor(estimator_idx, context,
+                                       std::move(idx_loan));
+  }
+
+  holoscan::Input<holoscan::Tensor> aoa_beamscan{"aoa_beamscan"};
+  holoscan::Input<holoscan::Tensor> aoa_mvdr{"aoa_mvdr"};
+  holoscan::Input<holoscan::Tensor> aoa_music{"aoa_music"};
+  holoscan::Input<holoscan::Tensor> aoa_root_music{"aoa_root_music"};
+  holoscan::Input<holoscan::Tensor> aoa_esprit{"aoa_esprit"};
+  holoscan::Output<holoscan::Tensor> aoa_estimates{"aoa_estimates"};
+  holoscan::Output<holoscan::Tensor> estimator_idx{"estimator_idx"};
+
+ private:
+  std::size_t max_byte_span_{0U};
+  holoscan::Tensor retained_input_;
+  int64_t host_index_{0};
 };

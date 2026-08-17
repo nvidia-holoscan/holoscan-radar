@@ -19,6 +19,8 @@
 
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
+#include "radar_common/tensor/extents_layout.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -43,6 +45,26 @@ std::vector<std::complex<T>> cast_correction(
 }  // namespace
 
 template <typename T>
+MIMOCoherentCompensationOp<T>::MIMOCoherentCompensationOp(
+    const MaxTensorExtents& extents) {
+  const char* who = "MIMOCoherentCompensationOp";
+  const std::int64_t max_tx =
+      require_extent(extents.max_tx, "max_tx", who);
+  const std::int64_t max_rx =
+      require_extent(extents.max_rx, "max_rx", who);
+  const std::int64_t max_doppler =
+      require_extent(extents.max_doppler_bins,
+                     "max_doppler_bins", who);
+  const std::int64_t max_range =
+      require_extent(extents.max_range_bins,
+                     "max_range_bins", who);
+  extents_ = extents;
+  max_rank_ = 4U;
+  max_byte_span_ = byte_span_complex_cube<T>(
+      {max_tx, max_rx, max_doppler, max_range}, who);
+}
+
+template <typename T>
 MIMOCoherentCompensationOp<T>::~MIMOCoherentCompensationOp() {
   detail::release_ddm_correlate_scratch(this);
 }
@@ -58,8 +80,8 @@ void MIMOCoherentCompensationOp<T>::setup(OperatorSpec& spec) {
   spec.output(rd_maps_out)
       .produces_tensor(kDevice)
       .tensor_allocation(TensorAllocationBounds{
-          .max_rank = kMIMOCoherentCompMaxRank,
-          .max_byte_span = kMIMOCoherentCompMaxByteSpan});
+          .max_rank = max_rank_,
+          .max_byte_span = max_byte_span_});
 }
 
 template <typename T>

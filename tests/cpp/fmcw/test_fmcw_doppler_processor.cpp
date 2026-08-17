@@ -486,8 +486,10 @@ TEST(FMCWDopplerProcessorOpTest, NfftInterpolatesVelocityGrid) {
               original_bin_width + 1e-9);
 }
 
-TEST(FMCWDopplerProcessorOpTest, LeadingBatchAxesProcessedIndependently) {
-  const int64_t batch = 2;
+TEST(FMCWDopplerProcessorOpTest, NamedRxAxisProcessedIndependently) {
+  // Rank-3 leading dim is the named N_rx axis (SIMO), not opaque batch.
+  // default_test_extents() sets max_rx so the leading axis is admitted.
+  const int64_t num_rx = 2;
   const int64_t num_chirps = 32;
   const int64_t num_bins = 8;
   const double pri = 25e-6;
@@ -500,10 +502,10 @@ TEST(FMCWDopplerProcessorOpTest, LeadingBatchAxesProcessedIndependently) {
   FMCWDopplerProcessorParams params;
   params.center_zero_doppler = false;
   const HostTensor rd_map = run_rd_single<float>(
-      make_input<float>(cube, {batch, num_chirps, num_bins}), params);
+      make_input<float>(cube, {num_rx, num_chirps, num_bins}), params);
 
   ASSERT_EQ(rd_map.shape,
-            (std::vector<int64_t>{batch, num_chirps, num_bins}));
+            (std::vector<int64_t>{num_rx, num_chirps, num_bins}));
   EXPECT_EQ(doppler_argmax<float>(rd_map, 0, num_chirps, num_bins, 2), 3);
   EXPECT_EQ(doppler_argmax<float>(rd_map, 1, num_chirps, num_bins, 6), 10);
   EXPECT_LT(cell_mag<float>(rd_map, 0, num_chirps, num_bins, 10, 6), 1e-3);

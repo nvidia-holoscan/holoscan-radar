@@ -28,6 +28,7 @@
 #include "angle_estimation/mvdr_estimator_op/mvdr_estimator_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
@@ -137,9 +138,15 @@ perf::TimingCollector run_mvdr_graph(
       std::move(snap), total_frames, "mvdr-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_items = scen.detections;
+        extents.max_az = scen.num_az;
+        extents.max_el = scen.num_el;
+        extents.max_sources = 4;
+        extents.max_channels = scen.channels;
         auto op =
             graph.op<hr::MVDREstimatorOp<PerfPrecision>>(
-                "mvdr");
+                "mvdr", extents);
         hr::MVDRParams params;
         params.array_geometry =
             make_ula_geometry(scen.channels, 0.5, 1.0);

@@ -180,11 +180,15 @@ void wire_beamformer(holoscan::Graph& graph, const Source& source, OpRef& op,
 template <typename T>
 GraphRunResult run_beamformer_result(
     std::shared_ptr<holoscan::Tensor> rd_maps,
-    PhaseShiftBeamformerParams params) {
+    PhaseShiftBeamformerParams params,
+    const holoscan::radar::MaxTensorExtents& extents =
+        holoscan::radar::testing::default_test_extents()) {
   return run_single_io_operator_graph_result<PhaseShiftBeamformerOp<T>>(
       {std::move(rd_maps)}, std::move(params), "rda_cube",
       [](holoscan::Graph& graph, const auto& source, auto& op,
-         const auto& sink) { wire_beamformer(graph, source, op, sink); });
+         const auto& sink) { wire_beamformer(graph, source, op, sink); },
+      {},
+      extents);
 }
 
 template <typename T>
@@ -382,7 +386,10 @@ TEST(PhaseShiftBeamformerOpTest, PreservesRangeDopplerPlanePerCell) {
   EXPECT_NEAR(empty, 0.0, 1e-9);
 }
 
-TEST(PhaseShiftBeamformerOpTest, BatchLeadingDimsRecoverIndependentDoa) {
+TEST(PhaseShiftBeamformerOpTest,
+     RejectsOpaqueLeadingBatchWhenExtentsOmitRxTx) {
+  // Contract is (num_channels, D, R); an extra leading dim is opaque batch.
+  // Omit max_rx / max_tx / max_channels so named leading rank is 0.
   constexpr int64_t kN = 8;
   constexpr int64_t kBatch = 2;
   constexpr double kAz0 = 0.12;
@@ -394,35 +401,24 @@ TEST(PhaseShiftBeamformerOpTest, BatchLeadingDimsRecoverIndependentDoa) {
   const auto v0 = make_steering_vector(geom, conv, kAz0, 0.0);
   const auto v1 = make_steering_vector(geom, conv, kAz1, 0.0);
 
-  // (batch, channel, doppler=1, range=1).
   std::vector<std::complex<double>> host;
   host.insert(host.end(), v0.begin(), v0.end());
   host.insert(host.end(), v1.begin(), v1.end());
-  auto rd = to_device_tensor(host, {kBatch, kN, 1, 1}, complex_dtype<double>());
+  auto rd = to_device_tensor(host, {kBatch, kN, 1, 1},
+                             complex_dtype<double>());
+
+  holoscan::radar::MaxTensorExtents extents =
+      holoscan::radar::testing::default_test_extents();
+  extents.max_rx.reset();
+  extents.max_tx.reset();
+  extents.max_channels.reset();
 
   const auto az = linspace(-0.4, 0.4, 81);
-  const auto cube = run_beamformer<double>(
-      rd, make_params(geom, conv, az, std::vector<double>{0.0}));
-
-  ASSERT_EQ(cube.shape, (std::vector<int64_t>{kBatch, 81, 1, 1, 1}));
-  // Peak beam per batch slice (each slice is 81*1*1*1 elements).
-  const auto peak_in_slice = [&](int64_t b) {
-    double best = -1.0;
-    int64_t arg = -1;
-    const auto* data = cube.as<std::complex<double>>();
-    for (int64_t ia = 0; ia < 81; ++ia) {
-      const int64_t idx = b * 81 + ia;
-      const auto v = data[static_cast<size_t>(idx)];
-      const double p = v.real() * v.real() + v.imag() * v.imag();
-      if (p > best) {
-        best = p;
-        arg = ia;
-      }
-    }
-    return arg;
-  };
-  EXPECT_NEAR(az[static_cast<size_t>(peak_in_slice(0))], kAz0, 0.02);
-  EXPECT_NEAR(az[static_cast<size_t>(peak_in_slice(1))], kAz1, 0.02);
+  const GraphRunResult result = run_beamformer_result<double>(
+      rd, make_params(geom, conv, az, std::vector<double>{0.0}), extents);
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, FloatDoubleAgreeOnPeakBeam) {

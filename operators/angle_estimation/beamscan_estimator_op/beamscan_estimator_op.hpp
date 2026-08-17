@@ -26,6 +26,7 @@
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/sdk/config_cache.hpp"
 
@@ -83,18 +84,14 @@ static_assert(holoscan::param_schema_availability<BeamscanParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
               "HOLOSCAN_PARAM_SCHEMA must be in BeamscanParams's namespace");
 
-// Admission bounds for the device output pools.
-inline constexpr std::uint32_t kBeamscanEstimatorMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kBeamscanEstimatorMaxByteSpan = 256ULL << 20;
-
 template <typename T>
 class BeamscanEstimatorOp : public holoscan::Operator<BeamscanParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "BeamscanEstimatorOp supports float and double precision");
 
  public:
-  BeamscanEstimatorOp() = default;
+  // Required: sizes the output Tensor pools at setup().
+  explicit BeamscanEstimatorOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -113,15 +110,20 @@ class BeamscanEstimatorOp : public holoscan::Operator<BeamscanParams> {
   Input<PeakInterpolation> peak_interpolation{"peak_interpolation"};
 
  private:
-  // Keep the previous activation's inputs alive across ticks so async device
-  // reads cannot outlive the buffers.
+  MaxTensorExtents extents_;
+  std::uint32_t max_rank_{3U};
+  std::size_t spectrum_max_byte_span_{0U};
+  std::size_t aoa_max_byte_span_{0U};
+
+  // Keep the previous activation's inputs alive across ticks so async
+  // device reads cannot outlive the buffers.
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
   // Sticky [live] peak_interpolation: last override wins until the next.
   std::optional<PeakInterpolation> sticky_peak_interpolation_;
-  // Conjugate-transposed steering weights Wᶜ, built on device, laid out
-  // (num_channels, num_beams) with beams el-major. Cached; warn-once on
-  // rebuild.
+  // Conjugate-transposed steering weights Wᶜ, built on device, laid
+  // out (num_channels, num_beams) with beams el-major. Cached;
+  // warn-once on rebuild.
   ConfigCache<std::shared_ptr<holoscan::Tensor>> steering_cache_;
 };
 

@@ -28,6 +28,7 @@
 #include "angle_estimation/angle_boundary_device.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
 #include "radar_common/dsp/shift_invariant_subarray.hpp"
 #include "radar_common/dsp/spatial_smoothing.hpp"
@@ -109,17 +110,14 @@ static_assert(holoscan::param_schema_availability<ESPRITParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
               "HOLOSCAN_PARAM_SCHEMA must be in ESPRITParams's namespace");
 
-inline constexpr std::uint32_t kESPRITEstimatorMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kESPRITEstimatorMaxByteSpan = 256ULL << 20;
-
 template <typename T>
 class ESPRITEstimatorOp : public holoscan::Operator<ESPRITParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "ESPRITEstimatorOp supports float and double precision");
 
  public:
-  ESPRITEstimatorOp() = default;
+  // Required: sizes the fat Tensor output pools at setup().
+  explicit ESPRITEstimatorOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -143,6 +141,12 @@ class ESPRITEstimatorOp : public holoscan::Operator<ESPRITParams> {
   Input<int64_t> max_sources{"max_sources"};
 
  private:
+  MaxTensorExtents extents_;
+  std::size_t aoa_max_byte_span_{0U};
+  std::size_t doa_max_byte_span_{0U};
+  std::size_t count_max_byte_span_{0U};
+  std::size_t eig_max_byte_span_{0U};
+
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
   std::optional<int64_t> sticky_num_sources_;

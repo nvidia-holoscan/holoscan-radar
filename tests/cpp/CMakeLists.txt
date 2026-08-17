@@ -54,12 +54,17 @@ radar_add_test(common/test_subarray_selection)
 radar_add_test(common/test_source_count)
 radar_add_test(common/test_angle_convention)
 radar_add_test(common/test_descriptors)
-# yaml_converters.hpp is header-only; HSDK 5 no longer re-exports yaml-cpp.
+# yaml_converters.hpp / max_tensor_extents_yaml.hpp are header-only; HSDK 5
+# no longer re-exports yaml-cpp.
 find_package(yaml-cpp REQUIRED)
 radar_add_test(common/test_sdk yaml-cpp)
+radar_add_test(common/test_max_tensor_extents yaml-cpp)
 radar_add_test(common/test_sim)
 radar_add_test(common/test_sim_gpu holoscan::radar_common_simulator)
 radar_add_test(common/test_tensor)
+# Holoscan EA reproducer for mid-stream scalar override + device Tensor path
+# (HSDK5_PORT.md §1). Not in the default `unit` label — run with -L ea_repro.
+radar_add_test(utils/test_live_override_repro LABELS ea_repro)
 radar_add_test(fmcw/test_clutter_filter
     holoscan::clutter_filter_op)
 radar_add_test(fmcw/test_mimo_deinterleave
@@ -126,3 +131,10 @@ radar_add_test(detection/test_cfar_detector_go
 radar_add_test(detection/test_cfar_detector_statistical
     LABELS statistical
     holoscan::cfar_detector_op)
+
+# [EA HSDK5 ONLY] Interim X11 live RD viewer (HSDK5_PORT.md §6). Skips itself
+# when no display is reachable; needs the radar_app viz headers + kernels.
+if(HOLOSCAN_RADAR_HAS_X11)
+    radar_add_test(app/test_x11_rd_viewer
+        holoscan::radar_app)
+endif()

@@ -24,6 +24,8 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 
+#include "radar_common/descriptors/max_tensor_extents.hpp"
+
 namespace holoscan::radar {
 
 namespace detail {
@@ -201,10 +203,12 @@ static_assert(holoscan::param_schema_availability<CFARParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
               "HOLOSCAN_PARAM_SCHEMA must be in CFARParams's namespace");
 
-// Admission bounds for the device output pools.
-inline constexpr std::uint32_t kCFARDetectorMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kCFARDetectorMaxByteSpan = 256ULL << 20;
+// 2-D CFAR detector on the (Doppler, range) plane. Fat map outputs
+// (detection_mask/score/noise/cfar_power) are sized from
+// MaxTensorExtents at graph.op() (ctor capture); detection_idx uses
+// max_detections. Dense path may include named leading az/el axes.
+//
+// Precision is fixed at compile time (T = float | double).
 
 template <typename T>
 class CFARDetectorOp : public holoscan::Operator<CFARParams> {
@@ -212,7 +216,8 @@ class CFARDetectorOp : public holoscan::Operator<CFARParams> {
                 "CFARDetectorOp supports float and double precision");
 
  public:
-  CFARDetectorOp() = default;
+  // Required: sizes the output Tensor pools at setup().
+  explicit CFARDetectorOp(const MaxTensorExtents& extents);
   ~CFARDetectorOp() override;
 
   // Pre-calibrates the alpha LUT at startup (before the first tick) so a slow
@@ -243,6 +248,12 @@ class CFARDetectorOp : public holoscan::Operator<CFARParams> {
   Input<int64_t> max_detections{"max_detections"};
 
  private:
+  MaxTensorExtents extents_;
+  std::uint32_t max_map_rank_{2U};
+  std::size_t max_map_byte_span_{0U};
+  std::size_t max_idx_byte_span_{0U};
+  std::size_t max_leading_{0U};
+
   using AlphaLutKey = CfarAlphaLutKey;
 
   // Sticky [live] POD scalars: last override wins until the next.

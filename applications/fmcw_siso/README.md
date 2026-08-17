@@ -85,20 +85,30 @@ centroid. Each operator validates its own parameters at startup.
 
 ## Visualization
 
-Set `visualization.enabled: true` in the config to open a live Holoviz window. On the
-left is the range-Doppler map (normalized log magnitude, turbo colormap;
-range along x, Doppler along y), with **every CFAR detection** overlaid as a
-cross **colored by DBSCAN cluster** (a categorical palette, one color per
-cluster; detections that stayed noise are drawn in gray), so the grouping is
-visible on the map alongside the textual cluster reports.
+Set `visualization.enabled: true` in the config to open a live window sized by
+`visualization.window_width` / `window_height` (default 1280x720, resizable).
+On the left is the range-Doppler map (normalized log magnitude, turbo
+colormap; range along x, Doppler along y) inside framed axes labeled with the
+physical range / velocity bin values, with **every CFAR detection** overlaid
+as an outlined dot **colored by DBSCAN cluster** (a categorical palette, one
+color per cluster; detections that stayed noise are drawn in gray) and each
+cluster's `DetectionReductionOp` representative crosshaired in the same color,
+so the grouping is visible on the map alongside the textual cluster reports.
+The header carries the scenario clock and the detection / cluster counts, and
+a legend below the map lists each cluster's representative range and velocity,
+ordered nearest-first. Both are laid out on a fixed grid with padded numbers:
+cluster colors and legend columns follow the clusters' **range order**, not
+their DBSCAN label — labels are size-ranked, so they name a different physical
+cluster whenever two clusters trade point counts, which would make the strip
+swap columns every few frames.
 
 On the right (when `plots.enable` is set) two rolling time-series plots
-stack: **range (m) vs time** and **velocity (m/s) vs time**. These show one
-point per cluster — each cluster's centroid, i.e. the `DetectionReductionOp`
-representative — as a `+` marker colored by cluster, over a fixed Y axis (the
-range / velocity bin extents, with numeric tick labels) and an X axis of the
-last `plots.window` frames in seconds (0 = now). So the map carries the raw
-color-coded detections and the plots carry the distilled per-cluster tracks.
+stack: **range (m) vs time** and **velocity (m/s) vs time**. Every detection
+is a dot colored by its cluster and each cluster's representative is a `+`
+marker in the same color, over a fixed Y axis (the range / velocity bin
+extents, with numeric tick labels) and an X axis of the last `plots.window`
+frames in seconds. So the map carries the per-frame detections and the plots
+carry the distilled per-cluster tracks.
 Over a run each moving target traces its own range/velocity track on the
 rolling plots (one colored cluster per target when DBSCAN separates them).
 Set `plots.enable: false` to let the RD map fill the window.
@@ -107,6 +117,13 @@ This requires a GUI-capable host — a reachable display server and Vulkan. At
 startup the app probes Holoviz directly; if no usable display is found
 (headless host, or a stale `DISPLAY` with no server behind it), it logs a
 warning and runs exactly as if `visualization.enabled` were `false`.
+
+**[EA HSDK5 ONLY]** On the `hsdk-5.0` branch Holoviz is absent from the EA
+package, so the same window is drawn by the Xlib stand-in `X11RdViewerOp`
+(`radar_app/viz/`): X11 only, no Vulkan, and an `Xvfb` `DISPLAY` is enough.
+The overlays above are all present; the viewer presents on the Holoscan
+compute thread, so it is a live-look tool rather than a performance
+reference. See [`HSDK5_PORT.md`](../../docs/planning/HSDK5_PORT.md) §6.
 
 Set `headless: true` (with `visualization.enabled: true`) to render Holoviz
 offscreen

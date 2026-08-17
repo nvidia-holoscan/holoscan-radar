@@ -4,6 +4,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -14,6 +15,7 @@
 
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/python/py_operator_utils.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 
@@ -30,12 +32,28 @@ class PyVirtualArrayAssemblyOp : public VirtualArrayAssemblyOp<T> {
 
   PyVirtualArrayAssemblyOp(
       Fragment* fragment, const py::args& args,
+      std::int64_t max_tx, std::int64_t max_rx,
+      std::int64_t max_virtual_channels,
+      std::int64_t max_doppler_bins,
+      std::int64_t max_range_bins,
       const std::vector<double>& tx_positions = {},
       const std::vector<double>& rx_positions = {},
       double wavelength = 0.0,
       OverlapPolicy overlap_policy = OverlapPolicy::kDedup,
       const std::string& name = "virtual_array_assembly")
-      : VirtualArrayAssemblyOp<T>() {
+      : VirtualArrayAssemblyOp<T>([&] {
+          MaxTensorExtents extents;
+          if (max_virtual_channels > 0) {
+            extents.max_virtual_channels =
+                max_virtual_channels;
+          } else {
+            extents.max_tx = max_tx;
+            extents.max_rx = max_rx;
+          }
+          extents.max_doppler_bins = max_doppler_bins;
+          extents.max_range_bins = max_range_bins;
+          return extents;
+        }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -58,20 +76,40 @@ void bind_virtual_array_assembly(py::module_& m, const char* class_name) {
       "Flatten (tx, rx) RD maps into a virtual channel axis.\n\n"
       "Parameters\n----------\n"
       "fragment : holoscan.core.Fragment\n"
+      "max_tx : int, optional\n"
+      "max_rx : int, optional\n"
+      "max_virtual_channels : int, optional\n"
+      "max_doppler_bins : int, optional\n"
+      "max_range_bins : int, optional\n"
       "tx_positions : list[float], optional\n"
       "rx_positions : list[float], optional\n"
       "wavelength : float, optional\n"
       "overlap_policy : OverlapPolicy, optional\n"
       "name : str, optional\n")
-      .def(py::init<Fragment*, const py::args&, const std::vector<double>&,
-                    const std::vector<double>&, double, OverlapPolicy,
-                    const std::string&>(),
+      .def(py::init<Fragment*, const py::args&,
+                    std::int64_t, std::int64_t, std::int64_t,
+                    std::int64_t, std::int64_t,
+                    const std::vector<double>&,
+                    const std::vector<double>&, double,
+                    OverlapPolicy, const std::string&>(),
            py::arg("fragment"),
-           py::arg("tx_positions") = std::vector<double>{},
-           py::arg("rx_positions") = std::vector<double>{},
+           py::arg("max_tx") = std::int64_t{8},
+           py::arg("max_rx") = std::int64_t{16},
+           py::arg("max_virtual_channels") =
+               std::int64_t{0},
+           py::arg("max_doppler_bins") =
+               std::int64_t{512},
+           py::arg("max_range_bins") =
+               std::int64_t{4096},
+           py::arg("tx_positions") =
+               std::vector<double>{},
+           py::arg("rx_positions") =
+               std::vector<double>{},
            py::arg("wavelength") = 0.0,
-           py::arg("overlap_policy") = OverlapPolicy::kDedup,
-           py::arg("name") = "virtual_array_assembly")
+           py::arg("overlap_policy") =
+               OverlapPolicy::kDedup,
+           py::arg("name") =
+               "virtual_array_assembly")
       .def("setup", &Op::setup, py::arg("spec"));
 }
 

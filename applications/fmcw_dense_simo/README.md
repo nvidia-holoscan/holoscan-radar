@@ -83,6 +83,15 @@ boresight scatter reuses `CubeAoaLookupOp` on the reduction's `rep_idx` (one row
 per cluster): its angles feed the scatter and its `row_index` output doubles as
 the per-marker cluster label, so the boresight shows one centroid per cluster.
 
+**[EA HSDK5 ONLY]** On the `hsdk-5.0` branch Holoviz is absent from the EA
+package, so the window is drawn by the Xlib stand-in `X11RdViewerOp`
+(`radar_app/viz/`) — same RD map, overlays, legend, rolling plots, and
+boresight panel, X11 only and satisfied by an `Xvfb` `DISPLAY`. One deliberate
+difference: the X11 boresight plots *every* detection (cluster-colored, like
+the RD overlay) from `CubeAoaLookupOp`'s per-detection angles, rather than one
+marker per cluster representative. See
+[`HSDK5_PORT.md`](../../docs/planning/HSDK5_PORT.md) §6.
+
 If visualization is enabled but no display is reachable, the app logs a warning
 and
 runs headless automatically (disable that probe with `skip_display_check:

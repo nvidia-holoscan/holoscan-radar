@@ -28,6 +28,7 @@
 #include "angle_estimation/angle_boundary_device.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/dsp/spatial_smoothing.hpp"
 
 namespace holoscan::radar {
@@ -106,17 +107,14 @@ static_assert(holoscan::param_schema_availability<RootMUSICParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
               "HOLOSCAN_PARAM_SCHEMA must be in RootMUSICParams's namespace");
 
-inline constexpr std::uint32_t kRootMUSICEstimatorMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kRootMUSICEstimatorMaxByteSpan = 256ULL << 20;
-
 template <typename T>
 class RootMUSICEstimatorOp : public holoscan::Operator<RootMUSICParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "RootMUSICEstimatorOp supports float and double precision");
 
  public:
-  RootMUSICEstimatorOp() = default;
+  // Required: sizes the fat Tensor output pools at setup().
+  explicit RootMUSICEstimatorOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -140,6 +138,12 @@ class RootMUSICEstimatorOp : public holoscan::Operator<RootMUSICParams> {
   Input<int64_t> max_sources{"max_sources"};
 
  private:
+  MaxTensorExtents extents_;
+  std::size_t aoa_max_byte_span_{0U};
+  std::size_t doa_max_byte_span_{0U};
+  std::size_t count_max_byte_span_{0U};
+  std::size_t eig_max_byte_span_{0U};
+
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
   std::optional<int64_t> sticky_num_sources_;

@@ -24,6 +24,7 @@
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -64,6 +65,22 @@ expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
 }  // namespace
 
 template <typename T>
+BeamscanEstimatorOp<T>::BeamscanEstimatorOp(
+    const MaxTensorExtents& extents) {
+  const std::int64_t items =
+      require_extent(extents.max_items, "max_items", kOpName);
+  const std::int64_t az =
+      require_extent(extents.max_az, "max_az", kOpName);
+  const std::int64_t el =
+      require_extent(extents.max_el, "max_el", kOpName);
+  extents_ = extents;
+  spectrum_max_byte_span_ =
+      byte_span_real_cube<T>({items, az, el}, kOpName);
+  aoa_max_byte_span_ =
+      byte_span_real_cube<T>({items, 2}, kOpName);
+}
+
+template <typename T>
 void BeamscanEstimatorOp<T>::setup(OperatorSpec& spec) {
   // Declare device storage only; dtype is enforced in compute() so one
   // operator binary still serves F32/F64 and the harness can feed either.
@@ -72,19 +89,20 @@ void BeamscanEstimatorOp<T>::setup(OperatorSpec& spec) {
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  const TensorAllocationBounds bounds{
-      .max_rank = kBeamscanEstimatorMaxRank,
-      .max_byte_span = kBeamscanEstimatorMaxByteSpan};
   spec.input(snapshot).queue_depth(2U).expects_tensor(kDevice);
   // Optional is_valid: SafeDefault / omitted from contract so unconnected
   // graphs compile and activate.
   spec.input(is_valid).queue_depth(2U).expects_tensor(kDevice);
   spec.output(aoa_estimates)
       .produces_tensor(kDevice)
-      .tensor_allocation(bounds);
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = 2U,
+          .max_byte_span = aoa_max_byte_span_});
   spec.output(angle_spectrum)
       .produces_tensor(kDevice)
-      .tensor_allocation(bounds);
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = max_rank_,
+          .max_byte_span = spectrum_max_byte_span_});
   // [live] peak_interpolation override. Leaving the port unconnected is
   // legal — compute() seeds from Params.
   spec.input(peak_interpolation).queue_depth(2U);

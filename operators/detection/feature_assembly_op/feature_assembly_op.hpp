@@ -24,6 +24,8 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 
+#include "radar_common/descriptors/max_tensor_extents.hpp"
+
 namespace holoscan::radar {
 
 // Column tokens for FeatureAssemblyOp.features (static; defines output layout).
@@ -107,18 +109,14 @@ static_assert(holoscan::param_schema_availability<FeatureAssemblyParams>() ==
               "HOLOSCAN_PARAM_SCHEMA must be in FeatureAssemblyParams's "
               "namespace");
 
-// Admission bounds for the device output pool.
-inline constexpr std::uint32_t kFeatureAssemblyMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kFeatureAssemblyMaxByteSpan = 256ULL << 20;
-
 template <typename T>
 class FeatureAssemblyOp : public holoscan::Operator<FeatureAssemblyParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "FeatureAssemblyOp supports float and double precision");
 
  public:
-  FeatureAssemblyOp() = default;
+  // Required: sizes the points Tensor pool at setup().
+  explicit FeatureAssemblyOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -138,6 +136,9 @@ class FeatureAssemblyOp : public holoscan::Operator<FeatureAssemblyParams> {
   Output<Tensor> points{"points"};
 
  private:
+  MaxTensorExtents extents_;
+  std::size_t max_byte_span_{0U};
+
   // Keep the previous activation's inputs alive across ticks so async device
   // reads cannot outlive the buffers.
   Tensor retained_idx_;

@@ -16,6 +16,8 @@
 
 #include "fmcw/mimo_deinterleave_op/mimo_deinterleave_stage.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
+#include "radar_common/tensor/extents_layout.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -31,6 +33,26 @@ size_t elem_bytes_for(DLDataType dtype) {
 }
 
 }  // namespace
+
+template <typename T>
+MIMODeinterleaveOp<T>::MIMODeinterleaveOp(
+    const MaxTensorExtents& extents) {
+  const char* who = "MIMODeinterleaveOp";
+  const std::int64_t max_tx =
+      require_extent(extents.max_tx, "max_tx", who);
+  const std::int64_t max_rx =
+      require_extent(extents.max_rx, "max_rx", who);
+  const std::int64_t max_chirps =
+      require_extent(
+          extents.max_chirps, "max_chirps", who);
+  const std::int64_t max_samples =
+      require_extent(extents.max_samples_per_chirp,
+                     "max_samples_per_chirp", who);
+  extents_ = extents;
+  max_rank_ = 4U;
+  max_byte_span_ = byte_span_complex_cube<T>(
+      {max_tx, max_rx, max_chirps, max_samples}, who);
+}
 
 template <typename T>
 MIMODeinterleaveOp<T>::~MIMODeinterleaveOp() {
@@ -51,8 +73,8 @@ void MIMODeinterleaveOp<T>::setup(OperatorSpec& spec) {
   spec.output(adc_cube_out)
       .produces_tensor(kDevice)
       .tensor_allocation(TensorAllocationBounds{
-          .max_rank = kMIMODeinterleaveMaxRank,
-          .max_byte_span = kMIMODeinterleaveMaxByteSpan});
+          .max_rank = max_rank_,
+          .max_byte_span = max_byte_span_});
 }
 
 template <typename T>

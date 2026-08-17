@@ -29,6 +29,7 @@
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
@@ -125,12 +126,18 @@ perf::TimingCollector run_beamformer_graph(
     const BeamScenario& scen, int total_frames) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(
       {scen.channels, scen.num_doppler, scen.num_range});
+  hr::MaxTensorExtents extents;
+  extents.max_az = scen.num_az;
+  extents.max_el = scen.num_el;
+  extents.max_doppler_bins = scen.num_doppler;
+  extents.max_range_bins = scen.num_range;
   return perf::run_perf_graph(
       std::move(cube), total_frames, "beamformer-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
-        auto op = graph.op<hr::PhaseShiftBeamformerOp<PerfPrecision>>(
-            "beamformer");
+        auto op =
+            graph.op<hr::PhaseShiftBeamformerOp<PerfPrecision>>(
+                "beamformer", extents);
         hr::PhaseShiftBeamformerParams params;
         params.array_geometry =
             make_ula_geometry(scen.channels, 0.5, 1.0);

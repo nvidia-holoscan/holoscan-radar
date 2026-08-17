@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -39,6 +40,7 @@
 #include <holoscan/time/realtime_clock.hpp>
 
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace holoscan::radar::testing {
@@ -577,6 +579,43 @@ inline void bind_triple_in_single_out_device_pools(
 
 }  // namespace detail
 
+// Unit-test MaxTensorExtents: large enough for Graph suites, small enough
+// that fat ops (e.g. CFAR with max_tx×max_rx×D×R map pools) do not OOM at
+// cold materialization. Callers with larger scenarios pass explicit extents.
+inline MaxTensorExtents default_test_extents() {
+  MaxTensorExtents extents;
+  extents.max_samples_per_chirp = 512;
+  extents.max_chirps = 256;
+  extents.max_range_bins = 512;
+  extents.max_doppler_bins = 256;
+  extents.max_rx = 8;
+  extents.max_tx = 4;
+  extents.max_interleaved_chirps = 256;
+  extents.max_virtual_channels = 64;
+  extents.max_channels = 64;
+  extents.max_az = 64;
+  extents.max_el = 32;
+  extents.max_detections = 4096;
+  extents.max_points = 4096;
+  extents.max_items = 4096;
+  extents.max_snapshots = 16;
+  extents.max_features = 16;
+  extents.max_sources = 8;
+  extents.max_clusters = 256;
+  extents.max_subarray_channels = 32;
+  return extents;
+}
+
+template <typename OpT>
+auto emplace_harness_op(holoscan::Graph& graph,
+                        const MaxTensorExtents& extents) {
+  if constexpr (std::is_constructible_v<OpT, const MaxTensorExtents&>) {
+    return graph.op<OpT>("op", extents);
+  } else {
+    return graph.op<OpT>("op");
+  }
+}
+
 struct GraphRunResult {
   std::vector<HostTensor> frames;
   bool plan_ok{true};
@@ -642,7 +681,8 @@ template <typename OpT, typename ParamsT, typename WireFn>
 GraphRunResult run_single_io_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
     const char* out_port, WireFn&& wire,
-    std::initializer_list<const char*> extra_op_out_ports = {}) {
+    std::initializer_list<const char*> extra_op_out_ports = {},
+    const MaxTensorExtents& extents = default_test_extents()) {
   GraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBank::input_frames = std::move(inputs);
@@ -650,7 +690,7 @@ GraphRunResult run_single_io_operator_graph_result(
 
   holoscan::Graph graph{"single-io-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = graph.op<OpT>("op");
+  auto op = emplace_harness_op<OpT>(graph, extents);
   op.set_params(std::move(params));
   const auto sink = graph.op<detail::TensorCaptureOp>("sink");
   wire(graph, source, op, sink);
@@ -704,7 +744,8 @@ GraphRunResult run_single_io_operator_graph_result(
 template <typename OpT>
 GraphRunResult run_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
-    ClutterFilterParams params = {}) {
+    ClutterFilterParams params = {},
+    const MaxTensorExtents& extents = default_test_extents()) {
   return run_single_io_operator_graph_result<OpT>(
       std::move(inputs), std::move(params), "range_profiles_out",
       [](holoscan::Graph& graph, const auto& source, auto& op,
@@ -712,16 +753,19 @@ GraphRunResult run_operator_graph_result(
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
         graph.add_flow(source->out, op->range_profiles, q);
         graph.add_flow(op->range_profiles_out, sink->in, q);
-      });
+      },
+      {},
+      extents);
 }
 
 template <typename OpT>
 std::vector<HostTensor> run_operator_graph(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
-    ClutterFilterParams params = {}) {
+    ClutterFilterParams params = {},
+    const MaxTensorExtents& extents = default_test_extents()) {
   const std::size_t expected = inputs.size();
-  GraphRunResult result =
-      run_operator_graph_result<OpT>(std::move(inputs), std::move(params));
+  GraphRunResult result = run_operator_graph_result<OpT>(
+      std::move(inputs), std::move(params), extents);
   if (!result.plan_ok) {
     throw std::runtime_error(std::string("compile failed: ") +
                              result.plan_json);
@@ -745,8 +789,10 @@ std::vector<HostTensor> run_operator_graph(
 template <typename OpT>
 HostTensor run_operator_once(
     std::shared_ptr<holoscan::Tensor> input,
-    ClutterFilterParams params = {}) {
-  auto frames = run_operator_graph<OpT>({std::move(input)}, std::move(params));
+    ClutterFilterParams params = {},
+    const MaxTensorExtents& extents = default_test_extents()) {
+  auto frames = run_operator_graph<OpT>(
+      {std::move(input)}, std::move(params), extents);
   if (frames.size() != 1U) {
     throw std::runtime_error(
         "expected exactly one captured output frame, got " +
@@ -766,7 +812,8 @@ template <typename OpT, typename ParamsT, typename WireFn>
 DualIOGraphRunResult run_single_in_dual_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
     const char* out0_port, const char* out1_port, WireFn&& wire,
-    std::initializer_list<const char*> extra_op_out_ports = {}) {
+    std::initializer_list<const char*> extra_op_out_ports = {},
+    const MaxTensorExtents& extents = default_test_extents()) {
   DualIOGraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -775,7 +822,7 @@ DualIOGraphRunResult run_single_in_dual_out_operator_graph_result(
 
   holoscan::Graph graph{"single-in-dual-out-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = graph.op<OpT>("op");
+  auto op = emplace_harness_op<OpT>(graph, extents);
   op.set_params(std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
@@ -855,7 +902,8 @@ ThreeOutGraphRunResult run_single_in_three_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
     const char* out0_port, const char* out1_port, const char* out2_port,
     WireFn&& wire,
-    std::initializer_list<const char*> extra_op_out_ports = {}) {
+    std::initializer_list<const char*> extra_op_out_ports = {},
+    const MaxTensorExtents& extents = default_test_extents()) {
   ThreeOutGraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -865,7 +913,7 @@ ThreeOutGraphRunResult run_single_in_three_out_operator_graph_result(
 
   holoscan::Graph graph{"single-in-three-out-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = graph.op<OpT>("op");
+  auto op = emplace_harness_op<OpT>(graph, extents);
   op.set_params(std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
@@ -948,7 +996,8 @@ template <typename OpT, typename ParamsT, typename WireFn>
 FourOutGraphRunResult run_single_in_four_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
     const char* out0_port, const char* out1_port, const char* out2_port,
-    const char* out3_port, WireFn&& wire) {
+    const char* out3_port, WireFn&& wire,
+    const MaxTensorExtents& extents = default_test_extents()) {
   FourOutGraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -959,7 +1008,7 @@ FourOutGraphRunResult run_single_in_four_out_operator_graph_result(
 
   holoscan::Graph graph{"single-in-four-out-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = graph.op<OpT>("op");
+  auto op = emplace_harness_op<OpT>(graph, extents);
   op.set_params(std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
@@ -1051,7 +1100,8 @@ template <typename OpT, typename ParamsT, typename WireFn>
 FiveOutGraphRunResult run_single_in_five_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
     const char* out0_port, const char* out1_port, const char* out2_port,
-    const char* out3_port, const char* out4_port, WireFn&& wire) {
+    const char* out3_port, const char* out4_port, WireFn&& wire,
+    const MaxTensorExtents& extents = default_test_extents()) {
   FiveOutGraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -1063,7 +1113,7 @@ FiveOutGraphRunResult run_single_in_five_out_operator_graph_result(
 
   holoscan::Graph graph{"single-in-five-out-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = graph.op<OpT>("op");
+  auto op = emplace_harness_op<OpT>(graph, extents);
   op.set_params(std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
@@ -1166,7 +1216,8 @@ template <typename OpT, typename ParamsT, typename WireFn>
 DualIOGraphRunResult run_dual_io_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs1, ParamsT params,
-    const char* out0_port, const char* out1_port, WireFn&& wire) {
+    const char* out0_port, const char* out1_port, WireFn&& wire,
+    const MaxTensorExtents& extents = default_test_extents()) {
   DualIOGraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -1181,7 +1232,7 @@ DualIOGraphRunResult run_dual_io_operator_graph_result(
 
   holoscan::Graph graph{"dual-io-harness"};
   const auto source = graph.op<detail::DualTensorSourceOp>("source");
-  auto op = graph.op<OpT>("op");
+  auto op = emplace_harness_op<OpT>(graph, extents);
   op.set_params(std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
@@ -1250,7 +1301,8 @@ template <typename OpT, typename ParamsT, typename WireFn>
 GraphRunResult run_dual_in_single_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs1, ParamsT params,
-    const char* out_port, WireFn&& wire) {
+    const char* out_port, WireFn&& wire,
+    const MaxTensorExtents& extents = default_test_extents()) {
   GraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -1265,7 +1317,7 @@ GraphRunResult run_dual_in_single_out_operator_graph_result(
 
   holoscan::Graph graph{"dual-in-single-out-harness"};
   const auto source = graph.op<detail::DualTensorSourceOp>("source");
-  auto op = graph.op<OpT>("op");
+  auto op = emplace_harness_op<OpT>(graph, extents);
   op.set_params(std::move(params));
   const auto sink = graph.op<detail::TensorCaptureOp>("sink");
   wire(graph, source, op, sink);
@@ -1318,7 +1370,8 @@ GraphRunResult run_triple_in_single_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs1,
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs2, ParamsT params,
-    const char* out_port, WireFn&& wire) {
+    const char* out_port, WireFn&& wire,
+    const MaxTensorExtents& extents = default_test_extents()) {
   GraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -1336,7 +1389,7 @@ GraphRunResult run_triple_in_single_out_operator_graph_result(
 
   holoscan::Graph graph{"triple-in-single-out-harness"};
   const auto source = graph.op<detail::TripleTensorSourceOp>("source");
-  auto op = graph.op<OpT>("op");
+  auto op = emplace_harness_op<OpT>(graph, extents);
   op.set_params(std::move(params));
   const auto sink = graph.op<detail::TensorCaptureOp>("sink");
   wire(graph, source, op, sink);
