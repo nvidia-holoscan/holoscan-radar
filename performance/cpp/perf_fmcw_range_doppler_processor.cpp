@@ -32,6 +32,7 @@
 
 #include "fmcw/fmcw_range_doppler_processor_op/fmcw_range_doppler_processor_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "utils/perf_driver.hpp"
@@ -139,9 +140,15 @@ perf::TimingCollector run_fused_graph(
       std::move(cube), total_frames, "rdproc-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_chirps = scen.num_chirps;
+        extents.max_range_bins = scen.samples_per_chirp;
+        if (scen.channels > 1) {
+          extents.max_rx = scen.channels;
+        }
         auto op =
             graph.op<hr::FMCWRangeDopplerProcessorOp<
-                PerfPrecision>>("fused");
+                PerfPrecision>>("fused", extents);
         hr::FMCWRangeDopplerProcessorParams params;
         params.waveform = make_waveform();
         params.clutter_filter = scen.clutter;

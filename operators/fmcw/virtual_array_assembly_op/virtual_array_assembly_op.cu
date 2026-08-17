@@ -20,6 +20,8 @@
 #include "radar_common/descriptors/array_geometry_tensor.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
+#include "radar_common/tensor/extents_layout.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -48,6 +50,30 @@ bool plan_key_changed(const std::vector<double>& tx,
 }  // namespace
 
 template <typename T>
+VirtualArrayAssemblyOp<T>::VirtualArrayAssemblyOp(
+    const MaxTensorExtents& extents) {
+  const char* who = "VirtualArrayAssemblyOp";
+  const std::int64_t max_virtual =
+      extents.max_virtual_channels.has_value()
+          ? require_extent(extents.max_virtual_channels,
+                           "max_virtual_channels", who)
+          : require_extent(extents.max_tx, "max_tx", who) *
+                require_extent(extents.max_rx, "max_rx", who);
+  const std::int64_t max_doppler =
+      require_extent(extents.max_doppler_bins,
+                     "max_doppler_bins", who);
+  const std::int64_t max_range =
+      require_extent(extents.max_range_bins,
+                     "max_range_bins", who);
+  extents_ = extents;
+  max_rank_ = 3U;
+  max_byte_span_ = byte_span_complex_cube<T>(
+      {max_virtual, max_doppler, max_range}, who);
+  geom_byte_span_ = static_cast<std::size_t>(
+      (max_virtual + 1) * 3) * sizeof(double);
+}
+
+template <typename T>
 VirtualArrayAssemblyOp<T>::~VirtualArrayAssemblyOp() {
   if (d_src_channel_ != nullptr) {
     cudaFree(d_src_channel_);
@@ -71,11 +97,11 @@ void VirtualArrayAssemblyOp<T>::setup(OperatorSpec& spec) {
       .rank = std::nullopt,
   };
   const TensorAllocationBounds bounds{
-      .max_rank = kVirtualArrayAssemblyMaxRank,
-      .max_byte_span = kVirtualArrayAssemblyMaxByteSpan};
+      .max_rank = max_rank_,
+      .max_byte_span = max_byte_span_};
   const TensorAllocationBounds geom_bounds{
       .max_rank = 2U,
-      .max_byte_span = kVirtualArrayAssemblyGeomMaxByteSpan};
+      .max_byte_span = geom_byte_span_};
   spec.input(rd_maps).queue_depth(2U).expects_tensor(kDevice);
   spec.output(rd_maps_out).produces_tensor(kDevice).tensor_allocation(bounds);
   // Packed ArrayGeometry (host-planned; H2D each tick).

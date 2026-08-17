@@ -28,6 +28,7 @@
 #include <holoscan/core/graph.hpp>
 
 #include "detection/feature_assembly_op/feature_assembly_op.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/perf_driver.hpp"
@@ -141,8 +142,14 @@ perf::TimingCollector run_feat_graph(const FeatScenario& scen,
       std::move(idx_t), total_frames, "feat-asm-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_points = std::max<int64_t>(
+            scen.num_detections, 1);
+        extents.max_features = static_cast<int64_t>(
+            pack_features().size());
         auto op =
-            graph.op<hr::FeatureAssemblyOp<PerfPrecision>>("feat");
+            graph.op<hr::FeatureAssemblyOp<PerfPrecision>>(
+                "feat", extents);
         hr::FeatureAssemblyParams params;
         params.features = pack_features();
         op.set_params(std::move(params));

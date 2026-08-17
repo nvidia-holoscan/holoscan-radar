@@ -18,7 +18,7 @@ here when the root cause is HSDK 5 / EA.
 | [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md) | Done gate once an op is on HSDK 5 (adapt 4.x checklist wording to Graph / `Operator<Params>`) |
 | [`operators/common/README.md`](../../operators/common/README.md) | Pilot patterns: Tensor I/O, sticky `[live]`, Graph harness |
 | [`STATUS.md`](STATUS.md) | Who owns what; claim / land coordination |
-| [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md) | Tentative: module `MaxTensorExtents` ctor-capture for Tensor pool sizing (Dylan buy-in) |
+| [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md) | **C++ landed:** module `MaxTensorExtents` ctor-capture for Tensor pool sizing + drop opaque leading batch; apps/Python phase 4; pinned [`MAX_TENSOR_EXTENTS_2026-08-15.md`](MAX_TENSOR_EXTENTS_2026-08-15.md) |
 | This file | Migration process + open HSDK 5 / EA friction |
 
 ---
@@ -197,11 +197,11 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; sticky POD lives (Graph live deferred §1); vector lives Params-only (§9); statistical MC suite on label `statistical`; Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph sticky/`TXSchedule` live N/A (Params-only schedule); Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` Params-only (§9); Graph live tests skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); sticky `wavelength` Input (Graph mid-stream sticky deferred §1); Graph perf cold/steady landed (live deferred §1/§8/§9) |
+| `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); sticky `wavelength` Input (Graph mid-stream sticky deferred §1); Graph perf cold/steady landed (live deferred §1/§8/§9); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
 | `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; sticky POD lives; `range_window`/`waveform` Params-only (§9); Graph live window skipped (§1/§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `FMCWDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `velocity_bins` only with waveform; sticky POD lives; `doppler_window`/`waveform` Params-only (§9); Graph live skipped (§1/§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `FMCWRangeDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–3-out) | landed; optional axis outs with waveform; sticky POD lives incl. `clutter_filter`; windows/`waveform` Params-only (§9); UlpParity vs split chain preserved; Graph live skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| Python bindings / Holoviz demos / apps | deferred (phase 4) |
+| Python bindings / Holoviz demos / apps | deferred (phase 4); X11 RD + Graph demos siso/simo/dense/mimo/aoa landed (§6) |
 
 ---
 
@@ -217,11 +217,13 @@ operator keeps the typed `Input<>` and resolves via
 `resolve_sticky_override` in `compute()`.
 
 **What fails on EA.** Wiring a second OnClock / multi-partition enum
-source beside a device-Tensor path fails at runtime with
-`RUNTIME_PORT_BINDING_UNAVAILABLE` and/or
-`RUNTIME_EXECUTION_LANE_PLAN_INVALID`. Putting an enum `Output` on the
-same op as a device `Output<Tensor>` also failed binding. Separate
-partitions compiled in some trials but did not run cleanly.
+source beside a device-Tensor path fails at compile with
+`PARTITION_MANUAL_AUTHORING_REQUIRED`, or at runtime with
+`RUNTIME_PORT_BINDING_UNAVAILABLE` /
+`RUNTIME_EXECUTION_LANE_PLAN_INVALID` /
+`RUNTIME_OPERATOR_REPLAY_MISMATCH` (co-emit of Tensor + scalar from one
+OnClock source). Putting an enum `Output` on the same op as a device
+`Output<Tensor>` also failed binding in earlier probes.
 
 **Interim.**
 
@@ -234,7 +236,15 @@ partitions compiled in some trials but did not run cleanly.
 - `ClutterFilterOpTest.LiveMethodOverrideMidStreamAndSticky` and
   `SnapshotGatherOpTest.LiveSnapshotWindowStickyOverride` are
   `GTEST_SKIP`’d. `BeamscanEstimatorOpTest.LivePeakInterpolationStickyOverride`
-  is likewise skipped (enum live Input kept). `PhaseShiftBeamformerOp` /
+  is likewise skipped (enum live Input kept). **Runnable minimal Graph
+  reproducer** (no radar domain logic):
+  [`tests/cpp/utils/test_live_override_repro.cpp`](../../tests/cpp/utils/test_live_override_repro.cpp)
+  — label `ea_repro`, not part of default `unit`:
+  `ctest --test-dir build -L ea_repro --output-on-failure`
+  or `./build/tests/cpp/test_live_override_repro`. Control (tensor-only)
+  passes; dual-OnClock / co-emit / sticky-contract wirings fail with
+  compile rejection or runtime diagnostics (see test stdout +
+  `/tmp/live_override_repro_*.json`). `PhaseShiftBeamformerOp` /
   Beamscan geometry/grid/taper live Graph tests are also skipped; those
   ops have no live Inputs for non-POD descriptors yet (§9 /
   Params-only). `ClusterDBSCANOpTest.LiveMinPointsStickyOverride` /
@@ -293,6 +303,13 @@ partitions compiled in some trials but did not run cleanly.
 working partition/binding recipe in `sdk_harness.hpp`.
 
 **Status:** open — EA harness gap; sticky contract still required.
+Pending Holoscan maintainer answer on whether a single runnable graph that
+mixes a device GPU tensor path with a mid-run scalar/enum override input is
+supported (EA bug / missing recipe) or intentionally unsupported. Observed
+tokens: `RUNTIME_PORT_BINDING_UNAVAILABLE` /
+`RUNTIME_EXECUTION_LANE_PLAN_INVALID`. Until answered, keep ports + Params
+coverage, leave Graph live / override-timing harness skipped, and do not
+reclassify as durable.
 
 ---
 
@@ -326,6 +343,15 @@ contract change. Decide module-wide naming once enough ops are ported
 **Symptom.** Skipping
 `CompileOptions.deployment.bind_tensor_output_device(...)` for a device
 Tensor producer yields `RUNTIME_PORT_BINDING_UNAVAILABLE` at run time.
+The same diagnostic fires when a bound producer publishes a Tensor that
+is **not** from that port’s pool loan — e.g. HSDK 4–style zero-copy
+republish of a pre-staged device buffer via `Output::emit(Tensor)`.
+Probed 2026-08-17 on `perf_virtual_array_assembly` xl
+(`PerfPublishMode::kZeroCopy` in `perf_graph.hpp`): run fails at
+warmup; `emit` of `allocate_tensor` + D2D into the loan succeeds.
+Reusing one operator-owned buffer across ticks is also disallowed:
+`emit(TensorOutputLoan)` consumes the loan each publish, and a foreign
+`emit(Tensor)` hits the same binding diagnostic.
 
 **Interim.** Graph harness helper `bind_device_pools` in
 `tests/cpp/utils/sdk_harness.hpp` binds `source`/`out` and
@@ -336,10 +362,28 @@ outputs. Single-in dual-out graphs use
 outputs (e.g. `SubarraySelectionOp.is_valid_out`) must still be bound
 via the harness `extra_op_out_ports` argument or compile fails with
 `IMPLICIT_DEVICE_ZERO_REJECTED`. Apps/tests that emit device tensors
-must do the same for every such producer path.
+must do the same for every such producer path. Perf drivers select the
+source publish path via `PerfPublishMode` on `run_perf_graph*`
+(default `kCopy` = D2D into the bound pool). `kFillInPlace` (loan +
+write; currently zero-fill) is legal and used by
+`perf_virtual_array_assembly` because VAA gather/average is
+value-agnostic. `kZeroCopy` remains only to re-probe GA.
+
+**Accepted comparison artifact (2026-08-17).** HSDK 4’s perf source
+republished one staged device handle every tick with no memcpy
+(`perf_source.hpp`). Graph end-to-end medians therefore include a
+mandatory per-tick publish write/copy that 4.x did not. Against
+`perf_results/perf_virtual_array_assembly.json` (Holoscan 4.3.0) with
+`kFillInPlace`: `virtual_dedup_lg` ≈ **1.04×** (+0.025 ms),
+`virtual_dedup_xl` ≈ **1.31×** (+1.01 ms). With default `kCopy` the xl
+gap was ≈ **2.28×**. This is accepted as a Graph harness / pool
+publish-path regression, not a VAA kernel regression — no further chase
+unless GA allows foreign-handle publish or loan reuse.
 
 **Status:** open — document per new harness/app as they port; confirm
-whether public GA softens discovery or keeps explicit bind.
+whether public GA softens discovery or keeps explicit bind; re-probe
+zero-copy republish if pool semantics change. VAA 4.x→5.x large-rung
+gap accepted as above.
 
 ---
 
@@ -473,13 +517,125 @@ cache cannot resurrect it) until a fuller EA/GA Python operator surface +
 `holoscan::pybind11` are available (current EA `holoscan.core` is
 Tensor-only); `tests/CMakeLists.txt` therefore does not register the
 pytest suites, and `python/holoscan/radar/__init__.py` imports the
-unported operator modules optionally. Demo apps are gated on Holoviz **and**
-ported dependencies (§5). Shared `performance/cpp/utils/perf_graph.hpp` is the Graph harness;
+unported operator modules optionally. Demo apps remain gated on Holoviz
+**and** ported dependencies (§5) until Graph-ported; Holoviz itself is
+still absent from the EA package.
+
+**Interim live RD path (2026-08-17).** When `libX11` is present,
+`HOLOSCAN_RADAR_HAS_X11` enables a Holoviz-free Graph viewer:
+`RdMapToImageOp` (LUT indices) → `X11RdViewerOp` (Xlib + turbo).
+No Dockerfile change. Smoke: `ctest -R X11RdViewer` (skips without
+`DISPLAY`) — a raster-only graph plus an overlay graph wiring all eight
+ports (detections, bins, cluster labels/representatives, aoa_estimates,
+label_idx).
+
+Overlays (2026-08-17, same day): the viewer now draws the Holoviz demo's
+information layers itself, so nothing on the RD path waits on Holoviz.
+Window size comes from `visualization.window_width/window_height`
+(default 1280x720, resizable) and the frame is composited into a Pixmap
+back buffer: nearest-neighbor-scaled turbo raster, framed axes with
+physical range / velocity ticks read from the bin tensors, CFAR
+detections as outlined dots colored by DBSCAN cluster (noise gray), each
+cluster's `rep_idx` crosshaired, a per-cluster range/velocity legend
+(fixed-width slots in **range-rank** order — the DBSCAN label is
+size-ranked, so a label-ordered strip swapped columns on ~23% of frames
+on the SISO scene; counters and readouts are space-padded so a digit
+gained or lost cannot shift the line), a
+scenario clock + detection/cluster counters, and the rolling
+range-vs-time / velocity-vs-time panels under `plots.enable` (detection
+dots plus each cluster's representative as a `+`). Cluster
+colors use the Holoviz path's rank-based assignment, duplicated into the
+Holoviz-free `radar_app/viz/overlay_style.hpp` (fold back at cleanup —
+`viz.hpp` cannot be included without Holoviz). Text is `XDrawString`
+(Latin-1, ASCII titles only) and presents on the compute thread. The
+boresight panel followed (same day): `overlay_boresight` + the `az_lo` /
+`az_hi` / `el_lo` / `el_hi` extents add a third right-column panel — an
+instantaneous az/el scatter of the wired `aoa_estimates`, degrees on both
+axes over the estimator's scan grid, markers colored by the same cluster
+buckets as the RD map (SIMO / dense / MIMO; SISO has no angle stage). Panel
+titles sit above their frames, since a trace riding the top of an axis draws
+straight through a title placed inside. All Holoviz demo chrome is now
+reproduced.
+
+A header variant label followed: `overlay_label` + `label_caption` +
+`label_names` add a leading status field naming the algorithm variant a
+frame came from, fed by a `label_idx` port carrying an int64 `(1,)` index
+into `label_names` (`fmcw_aoa_estimators`: `AoaMergeOp` emits the index of
+whichever estimator port fired, beside `aoa_estimates`). A device tensor
+rather than a scalar port on purpose — mid-stream Graph scalar/enum sources
+are EA-open (§1) — and the name is right-padded to the widest configured
+name so the rest of the right-aligned status line does not slide when the
+variant changes.
+
+Overlay ports are wired per config (`X11RdViewerConfig`): the contract is
+`OnAligned`/`Exact` over exactly the wired set (rd_image +
+detection_idx/range_bins/velocity_bins, plus labels/rep_idx outside
+`peak_only`, plus aoa_estimates with the boresight panel and label_idx with
+the variant label), since on EA a
+registered-but-unwired port must stay out of `contract()` and a wired one
+must be in it (§1). Alignment across `RdMapToImageOp`, CFAR, DBSCAN,
+reduction, and beamscan/aoa outputs holds at window 0 — they share the
+source activation time, even where members sit at different hop counts from
+CFAR.
+
+**EA gap: an operator with no wired port kills auto-partitioning.** The
+angle demos created a `cfar_power_sink` `NullSinkOp` and then skipped wiring
+it when the viewer consumed `cfar_power` instead. That isolated vertex makes
+compile fail with `PARTITION_MANUAL_AUTHORING_REQUIRED` (the
+`holoscan.partition.exact_cover/v1` rule declines; the only alternative is
+authoring `graph.partition()` sets covering every operator exactly once).
+The diagnostic names no vertex, so it reads as an unrelated temporal /
+contract failure — it is not. Fix: always drain the port (fan-out to the
+sink alongside the viewer) rather than conditionally constructing sinks.
+Recheck after EA: auto-partitioning should tolerate an unreachable
+operator, or the diagnostic should name it.
+
+**`fmcw_siso` Graph pilot (2026-08-17).** Builds under
+`HOLOSCAN_RADAR_HAS_RD_LIVE` (X11 and/or Holoviz). Application scaffolding
+→ Graph: `SimAdcSourceOp`, report/null sinks, `run_fmcw_graph_app`, YAML →
+`Params` + `MaxTensorExtents` (no `from_config()`). Optional X11 RD window
+with the full overlay set when `visualization.enabled`. **EA workaround:**
+`FeatureAssemblyOp`
+optional `range_bins`/`velocity_bins` wiring is deferred (§1 /
+OPEN_ITEMS) — SISO uses app-local `PhysicalRangeVelocityPointsOp`
+(required OnAligned Exact) for physical `[range, velocity]` points.
+Smoke: `./fmcw_siso fmcw_siso_smoke.yaml` (log-only) or enable
+visualization under a real/`Xvfb` `DISPLAY`.
+
+**Graph demo wave (2026-08-17, same day).** The same X11 overlay path
+extends to the remaining sparse/dense FMCW demos under
+`HOLOSCAN_RADAR_HAS_RD_LIVE`:
+
+| App | Notes |
+| --- | --- |
+| `fmcw_simo` | Sparse SIMO: SnapshotGather → Beamscan; `PhysicalRangeVelocityAzElPointsOp` (4-feat); `cfar_power` → RD image; boresight from `beamscan.aoa_estimates` |
+| `fmcw_dense_simo` | Dense: PhaseShiftBeamformer + Graph `AnglePeakPick`/`CubeAoaLookup`/`TrailingIdxColumns`/`RdAngleMaxOp`; 4-col `rep_idx` ClusterReport with az/el grids; boresight from `CubeAoaLookupOp` |
+| `fmcw_mimo` | Graph `MimoTdm`/`MimoDdm` sources + `DdmReportVelocityBinsOp`; TDM/DDM compose branches; same sparse tail as SIMO; boresight over the virtual-array scan grid |
+| `fmcw_aoa_estimators` | Five sparse estimators behind Graph `EstimatorRouterOp` (N snapshot outs) + `AoaMergeOp` (`OnAnyInput`); rotates beamscan/MVDR/MUSIC/Root-MUSIC/ESPRIT; X11 overlays + boresight + the active estimator's name in the header (`AoaMergeOp.estimator_idx` → viewer `label_idx`, also always drained) |
+
+Shared helpers: `radar_app/app/graph_params.hpp` (YAML → Params),
+`PhysicalRangeVelocityAzElPointsOp`, DetectionReport/ClusterReport
+`Config` flags (`report_aoa` / `report_detection_idx`) so optional ports
+enter `contract()` only when wired. Beamscan `is_valid` stays unwired
+(§1). Smoke YAMLs: `*_smoke.yaml` (+ `fmcw_mimo_ddm_smoke.yaml`) — note
+these run log-only, so also run each app's default YAML under a real /
+`Xvfb` `DISPLAY`: the viz subgraph is where the partitioning gap above
+surfaced.
+
+**Deferred:** ~~`fmcw_aoa_estimators` — Application `set_dynamic_flows()`
+has no Graph equivalent~~ **landed (Graph-native, 2026-08-17):**
+`EstimatorRouterOp` emits on one of five `snapshot_*` outs; idle estimators
+never receive (`OnEach`); `AoaMergeOp` uses synthesized `OnAnyInput` over
+five `aoa_*` ports and forwards the selected sample. Same X11 overlay path
+as the other Graph demos. Holoviz / Python bindings remain deferred.
+
+Shared `performance/cpp/utils/perf_graph.hpp` is the Graph harness;
 legacy `perf_source.hpp` / `perf_sink.hpp` remain for reference only.
 CMake gates drivers via `HOLOSCAN_RADAR_HSDK5_PORTED_PERF` (all drivers
 listed — see §8). Python perf drivers stay deferred with bindings.
 
-**Status:** open — apps / Holoviz / Python (phase 4); C++ Graph perf cold/steady done.
+**Status:** open — phase 4: Graph demos landed for siso/simo/dense/mimo/aoa
+(+ X11 overlays); Holoviz / Python still deferred; C++ Graph perf done.
 
 ---
 
@@ -520,10 +676,20 @@ work is the FMCW/MIMO shapes and the §1 live-override cases.
 All `perf_*.cpp` drivers are Graph-ported on HSDK 5 (setup / cold /
 steady, process warmup, smoke via `ctest -L performance`) and listed in
 `HOLOSCAN_RADAR_HSDK5_PORTED_PERF`. Shared source/sink/runner lives in
-`performance/cpp/utils/perf_graph.hpp`. Inline mid-session `[live]`
+`performance/cpp/utils/perf_graph.hpp`. `run_async` has no HSDK 4
+`CountCondition` equivalent, so the runner owns the stop condition; it waits on
+*lack of progress* (`kPerfStall`, reset by every captured frame) rather than a
+fixed wall-clock budget, since per-frame cost is hardware-dependent and spans
+milliseconds to seconds (a fixed 60 s deadline previously aborted
+`perf_root_music_estimator --full` at the `xl` rung, which needs ~150 s here).
+Use `--stop-after-s` to cap total runtime. Inline mid-session `[live]`
 `override_ms` is **not** measured until §1 is fixed — checklist
 Performance → live-override coverage remains open (see per-op
-`OPEN_ITEMS.md` and clutter §1).
+`OPEN_ITEMS.md` and clutter §1). Per-tick source publish is a fresh
+pool loan (§3); vs HSDK 4’s free handle republish this is an
+**accepted** end-to-end comparison artifact on large inputs (VAA
+`virtual_dedup_lg`/`_xl` — see §3). Drivers pick `PerfPublishMode`
+explicitly; default remains `kCopy`.
 
 **Status:** open — cold/steady landed for all drivers; override timing blocked on §1.
 

@@ -4,8 +4,8 @@
 // Tests for MIMODeinterleaveOp (HSDK 5 Graph harness):
 // TDM slow-time gather into an explicit TX axis (round-robin, custom
 // tx_order, explicit chirp_tx_index), non-uniform schedule rejection,
-// dtype preservation, leading batch axes, cross-cutting input validation,
-// and float/double agreement.
+// dtype preservation, opaque leading-batch rejection, cross-cutting input
+// validation, and float/double agreement.
 
 #include <gtest/gtest.h>
 
@@ -315,17 +315,20 @@ TEST(MIMODeinterleaveOp, RealDoublePreserved) {
   expect_deinterleaved<double>(out, out.shape);
 }
 
-TEST(MIMODeinterleaveOp, LeadingBatchAxesPreservedAndIndependent) {
+TEST(MIMODeinterleaveOp, RejectsOpaqueLeadingBatch) {
+  // Contract is (N_rx, slow_time, samples); an extra leading dim is opaque
+  // batch (Part B), not a named axis.
   const std::vector<int64_t> shape = {2, kNumRx, kSlowTime, kSamples};
   const TXSchedule schedule = round_robin_schedule();
   const auto pattern = pattern_for(schedule);
   const auto host =
       build_interleaved_cube<std::complex<float>>(pattern, shape);
-  const HostTensor out = run_deinterleave<float>(
-      host, shape, complex_dtype<float>(), schedule);
-  ASSERT_EQ(out.shape.size(), 5U);
-  EXPECT_EQ(out.shape[0], 2);
-  expect_deinterleaved<std::complex<float>>(out, out.shape);
+  const GraphRunResult result = run_deinterleave_result<float>(
+      {to_device_tensor(host, shape, complex_dtype<float>())},
+      MIMODeinterleaveParams{.tx_schedule = schedule});
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(MIMODeinterleaveOp, RejectsNonUniformSchedule) {

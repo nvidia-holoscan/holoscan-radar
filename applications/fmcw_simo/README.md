@@ -49,6 +49,15 @@ detections drawn as cluster-colored dots, and three stacked panels on the right:
   `beamscan_estimator` grid; a single-value elevation grid is padded so the axis
   is visible.
 
+**[EA HSDK5 ONLY]** On the `hsdk-5.0` branch Holoviz is absent from the EA
+package, so the same window — RD map, axes, cluster-colored detections and
+representative crosshairs, legend, the two rolling plots, and the boresight
+scatter — is drawn by the Xlib stand-in `X11RdViewerOp` (`radar_app/viz/`):
+X11 only, no Vulkan, and an `Xvfb` `DISPLAY` is enough. The viewer presents on
+the Holoscan compute thread, so it is a live-look tool rather than a
+performance reference. See
+[`HSDK5_PORT.md`](../../docs/planning/HSDK5_PORT.md) §6.
+
 ## Configuration
 
 [`cpp/fmcw_simo.yaml`](cpp/fmcw_simo.yaml) defines:

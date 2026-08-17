@@ -22,6 +22,7 @@
 #include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 
 namespace holoscan::radar {
 
@@ -31,15 +32,17 @@ namespace holoscan::radar {
 // conventions live in operators/common/README.md.
 //
 // In:  range_profiles — complex64/complex128,
-//                       (..., num_chirps, num_range_bins).
+//                       (num_chirps, num_range_bins) or with named leading
+//                       N_rx / (M_tx, N_rx) axes (no opaque leading batch).
 // Out: range_profiles_out — complex64/complex128,
-//                       (..., num_chirps_out, num_range_bins), where
+//                       same leading + (num_chirps_out, num_range_bins), where
 //                       num_chirps_out = num_chirps (mean_subtraction),
 //                       num_chirps - 1 (single_delay), or
 //                       num_chirps - 2 (double_delay).
 //                       [EA HSDK5 ONLY] unique in/out port names required.
 //
 // Precision is fixed at compile time by the template instantiation.
+// Fat output pool sizing requires MaxTensorExtents at graph.op() (ctor).
 
 struct ClutterFilterParams {
   ClutterFilterMethod method{ClutterFilterMethod::kMeanSubtraction};
@@ -59,18 +62,14 @@ static_assert(holoscan::param_schema_availability<ClutterFilterParams>() ==
               "HOLOSCAN_PARAM_SCHEMA must be in ClutterFilterParams's "
               "namespace");
 
-// Admission bounds for the device output pool (rank-agnostic batching).
-inline constexpr std::uint32_t kClutterFilterMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kClutterFilterMaxByteSpan = 256ULL << 20;
-
 template <typename T>
 class ClutterFilterOp : public holoscan::Operator<ClutterFilterParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "ClutterFilterOp supports float and double precision");
 
  public:
-  ClutterFilterOp() = default;
+  // Required: sizes the range_profiles_out Tensor pool at setup().
+  explicit ClutterFilterOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -87,6 +86,10 @@ class ClutterFilterOp : public holoscan::Operator<ClutterFilterParams> {
   Input<ClutterFilterMethod> method{"method"};
 
  private:
+  MaxTensorExtents extents_;
+  std::uint32_t max_rank_{2U};
+  std::size_t max_byte_span_{0U};
+
   // Keep the previous activation's input alive across ticks so async device
   // reads cannot outlive the buffer.
   Tensor retained_input_;

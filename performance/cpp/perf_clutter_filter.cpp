@@ -107,11 +107,18 @@ perf::TimingCollector run_clutter_graph(const ClutterScenario& scen,
                                         int total_frames) {
   auto cube =
       perf::make_iq_cube_device<PerfPrecision>(profiles_shape(scen));
+  hr::MaxTensorExtents extents;
+  extents.max_chirps = scen.num_chirps;
+  extents.max_range_bins = scen.num_range_bins;
+  if (scen.channels > 1) {
+    extents.max_rx = scen.channels;
+  }
   return perf::run_perf_graph(
       std::move(cube), total_frames, "clutter-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
-        auto op = graph.op<hr::ClutterFilterOp<PerfPrecision>>("clutter");
+        auto op = graph.op<hr::ClutterFilterOp<PerfPrecision>>(
+            "clutter", extents);
         hr::ClutterFilterParams params;
         params.method = scen.method;
         op.set_params(std::move(params));

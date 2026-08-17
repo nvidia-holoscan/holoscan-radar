@@ -4,7 +4,9 @@
 
 An **FMCW-focused** operator API lockdown. Scope is derived from the FMCW workflows doc: the operators here are exactly those the SISO / SIMO / MIMO-TDM / MIMO-DDM chains require, plus the MIMO data-marshaling operators and the I/O bridges those chains lean on. Each operator is specified by its **Inputs / Outputs / Parameters / Algorithm / Notes**.
 
-Design conventions (from the workflows doc): plain-tensor ports (bridge with small explicit add-on operators, never shared record/struct message types); precision fixed by compile-time template instantiation (single + double), not a runtime flag or dtype inference; MatX implementation accepting tensors in any CUDA-accessible memory space (device, managed, pinned host — pageable-host input is rejected; amended 2026-07-10) and producing device memory; rank-agnostic batching (operate on the meaningful axes, treat leading axes as opaque batch dims, infer shapes from tensors); industry-standard operator names; and angle operators that make the az/el convention explicit at the API boundary (required, no default).
+Design conventions (from the workflows doc): plain-tensor ports (bridge with small explicit add-on operators, never shared record/struct message types); precision fixed by compile-time template instantiation (single + double), not a runtime flag or dtype inference; MatX implementation accepting tensors in any CUDA-accessible memory space (device, managed, pinned host — pageable-host input is rejected; amended 2026-07-10) and producing device memory; **named contract axes with no opaque leading `...` batch** (multi-item throughput is an application concern; see [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md)); industry-standard operator names; and angle operators that make the az/el convention explicit at the API boundary (required, no default).
+
+Fat Tensor outputs take `MaxTensorExtents` at `graph.op()` for HSDK 5 pool sizing.
 
 **Precision (all operators).** Every operator supports both **single** (`complex64` / `float32`) and **double** (`complex128` / `float64`) precision floating-point I/O. Precision is fixed at compile time by the operator's template instantiation — it is neither a runtime parameter nor inferred from the data — and an operator's input and output tensors must match that templated precision. The per-operator dtype labels below list both forms (e.g. `complex64 / complex128`, `float32 / float64`); a given operator instance uses one, fixed by its instantiation, and its inputs and outputs share it. Any operator that must fix precision for a qualitative reason is called out in its own Notes.
 
@@ -244,7 +246,7 @@ The small add-on operators that connect detection, clustering, and the sparse an
 
 ## Operator APIs
 
-Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a dtype + shape; every parameter carries a `Default:` (required parameters shown as `Default: none (required)`). Algorithm and Notes are added when each operator is fully locked. Each port lists both precision forms (`complex64 / complex128`, `float32 / float64`); an operator instance uses one, fixed by its template instantiation, with inputs and outputs matching. Leading `...` axes are opaque, preserved batch dims.
+Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a dtype + shape; every parameter carries a `Default:` (required parameters shown as `Default: none (required)`). Algorithm and Notes are added when each operator is fully locked. Each port lists both precision forms (`complex64 / complex128`, `float32 / float64`); an operator instance uses one, fixed by its template instantiation, with inputs and outputs matching. Port shapes use **named** axes only (no opaque leading batch; see [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md)).
 
 **Parameter override convention.** Parameters are configuration set at graph build.
 
@@ -264,8 +266,8 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 
 #### FMCWRangeProcessorOp
 
-- **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(..., num_chirps, samples_per_chirp)`. Range FFT along the last (fast-time) axis.
-- **Out:** `range_profiles` — complex64 / complex128, `(..., num_chirps, num_range_bins)`. `num_range_bins = samples_per_chirp` (complex IF) or `samples_per_chirp//2 + 1` (real IF); grows to `nfft` when set. No range-axis `fftshift` (bin 0 = zero range).
+- **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(num_chirps, samples_per_chirp)`. Range FFT along the last (fast-time) axis.
+- **Out:** `range_profiles` — complex64 / complex128, `(num_chirps, num_range_bins)`. `num_range_bins = samples_per_chirp` (complex IF) or `samples_per_chirp//2 + 1` (real IF); grows to `nfft` when set. No range-axis `fftshift` (bin 0 = zero range).
 - **Out:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`. Per-bin range (m) relative to zero beat; emitted only when a waveform descriptor is available.
 
 **Parameters:**
@@ -279,8 +281,9 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 
 #### ClutterFilterOp
 
-- **In:** `range_profiles` — complex64 / complex128, `(..., num_chirps, num_range_bins)`. Slow-time (chirp) axis second-to-last.
-- **Out:** `range_profiles_out` — complex64 / complex128, `(..., num_chirps_out, num_range_bins)`. `num_chirps_out = num_chirps` (`mean_subtraction`), `num_chirps − 1` (`single_delay`), `num_chirps − 2` (`double_delay`). HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `range_profiles_out` rather than repeating `range_profiles` ([EA HSDK5 ONLY] — same pattern will apply to other operators that previously reused an input name on the output).
+- **In:** `range_profiles` — complex64 / complex128, `(num_chirps, num_range_bins)` or with named leading `N_rx` / `(M_tx, N_rx)` (no opaque leading batch). Slow-time (chirp) axis second-to-last.
+- **Out:** `range_profiles_out` — complex64 / complex128, same leading + `(num_chirps_out, num_range_bins)`. `num_chirps_out = num_chirps` (`mean_subtraction`), `num_chirps − 1` (`single_delay`), `num_chirps − 2` (`double_delay`). HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `range_profiles_out` rather than repeating `range_profiles` ([EA HSDK5 ONLY] — same pattern will apply to other operators that previously reused an input name on the output).
+- **Ctor:** `MaxTensorExtents` required (`max_chirps`, `max_range_bins`; optional `max_rx` / `max_tx` / `max_channels` admit named leading axes).
 
 **Parameters:**
 
@@ -288,8 +291,8 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 
 #### FMCWDopplerProcessorOp
 
-- **In:** `range_profiles` — complex64 / complex128, `(..., num_chirps, num_range_bins)`. Doppler FFT along the `num_chirps` (slow-time) axis.
-- **Out:** `rd_maps` — complex64 / complex128, `(..., num_doppler, num_range_bins)`. `num_doppler = num_chirps` (or `nfft`); zero-Doppler centered by default.
+- **In:** `range_profiles` — complex64 / complex128, `(num_chirps, num_range_bins)`. Doppler FFT along the `num_chirps` (slow-time) axis.
+- **Out:** `rd_maps` — complex64 / complex128, `(num_doppler, num_range_bins)`. `num_doppler = num_chirps` (or `nfft`); zero-Doppler centered by default.
 - **Out:** `velocity_bins` (optional) — float32 / float64, `(num_doppler,)`. Per-bin radial velocity; emitted only when a descriptor is available.
 
 **Parameters:**
@@ -302,8 +305,8 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 
 #### FMCWRangeDopplerProcessorOp (fused)
 
-- **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(..., num_chirps, samples_per_chirp)`.
-- **Out:** `rd_maps` — complex64 / complex128, `(..., num_doppler, num_range_bins)`. `num_range_bins` per FMCWRangeProcessorOp, `num_doppler = num_chirps` (reduced by the delay-canceller chirp loss when `clutter_filter` is a delay canceller). No intermediate range-profile output; the inline clutter filter is fused into the Doppler pre-FFT expression (no materialized intermediate), bit-identical to `ClutterFilterOp` → `FMCWDopplerProcessorOp`.
+- **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(num_chirps, samples_per_chirp)`.
+- **Out:** `rd_maps` — complex64 / complex128, `(num_doppler, num_range_bins)`. `num_range_bins` per FMCWRangeProcessorOp, `num_doppler = num_chirps` (reduced by the delay-canceller chirp loss when `clutter_filter` is a delay canceller). No intermediate range-profile output; the inline clutter filter is fused into the Doppler pre-FFT expression (no materialized intermediate), bit-identical to `ClutterFilterOp` → `FMCWDopplerProcessorOp`.
 - **Out:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`.
 - **Out:** `velocity_bins` (optional) — float32 / float64, `(num_doppler,)`.
 
@@ -325,8 +328,8 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 
 #### CFARDetectorOp
 
-- **In:** `rd_maps` — complex64 / complex128, **or** a real float32 / float64 power map, `(..., num_doppler, num_range_bins)`. CFAR plane = last two axes; leading axes batched/integrated per `nci_axes`. The path is auto-selected by input dtype (no parameter, mirroring FMCWRangeProcessorOp): **complex** → form the square-law power `|·|²`; **real** → treat as an already-formed power map and threshold it directly.
-- **Out:** `detection_mask` — uint8 (`0`/`1`), `(..., num_doppler, num_range_bins)` (axes in `nci_axes` reduced; other leading axes preserved). `1` where detected — equivalently `detection_score > 1`. **When `peak_only` is set**, the mask instead marks only the retained peak cells (a strict subset of `detection_score > 1`), so it stays consistent with `detection_idx`; `detection_score` / `noise_estimate` remain the dense per-cell maps. Emitted as `uint8` rather than `bool` because HSDK 4.3's DLPack message path has no NumPy typestr for `kDLBool`, so a `bool` port throws when a Python consumer wraps it; the bytes are 0/1 and `arr.view(bool)` recovers a boolean view. (Applies equally to `SnapshotGatherOp.is_valid`.)
+- **In:** `rd_maps` — complex64 / complex128, **or** a real float32 / float64 power map, `(num_doppler, num_range_bins)`. CFAR plane = last two axes; leading axes batched/integrated per `nci_axes`. The path is auto-selected by input dtype (no parameter, mirroring FMCWRangeProcessorOp): **complex** → form the square-law power `|·|²`; **real** → treat as an already-formed power map and threshold it directly.
+- **Out:** `detection_mask` — uint8 (`0`/`1`), `(num_doppler, num_range_bins)` (axes in `nci_axes` reduced; other leading axes preserved). `1` where detected — equivalently `detection_score > 1`. **When `peak_only` is set**, the mask instead marks only the retained peak cells (a strict subset of `detection_score > 1`), so it stays consistent with `detection_idx`; `detection_score` / `noise_estimate` remain the dense per-cell maps. Emitted as `uint8` rather than `bool` because HSDK 4.3's DLPack message path has no NumPy typestr for `kDLBool`, so a `bool` port throws when a Python consumer wraps it; the bytes are 0/1 and `arr.view(bool)` recovers a boolean view. (Applies equally to `SnapshotGatherOp.is_valid`.)
 - **Out:** `detection_score` — float32 / float64, same shape as `detection_mask`. The CFAR test statistic normalized by its per-cell adaptive threshold: `detection_score = P / (threshold_scale · α · noise_estimate)`, where `P` is the cell's power statistic (`|·|²`, or the NCI sum). `> 1` ⇔ detected; the value is the detection margin, and since the threshold tracks local noise it is proportional to the cell SNR — so it doubles as the per-detection **strength / ranking score** used downstream (gathered by feature-assembly into `points` for `ClusterDBSCANOp` / `DetectionReductionOp`). Replaces the former `detection_threshold` output (the absolute threshold is recoverable from `noise_estimate` and the params).
 - **Out:** `noise_estimate` — float32 / float64, same shape as `detection_mask`. Per-cell noise from the training cells (`N`); kept for absolute calibration / diagnostics.
 - **Out:** `cfar_power` — float32 / float64, same shape as `detection_mask`. The exact surface the threshold is applied to: the post-NCI integrated power `Σ_k |x_k|²` over the `nci_axes` fold, or the plain square-law power map `|x|²` when `nci_axes` is empty. **Power, not amplitude, and not noise-normalized** — that is `detection_score`. Exists so a consumer can display or analyze what the detector actually saw instead of re-deriving it from `rd_maps` (a re-derivation silently diverges the moment `nci_axes` / `nci_fold` change). Emitted as the operator's own ping-ponged workspace buffer with no copy: **read-only, valid for the current tick only** — it is overwritten two ticks later, so a consumer that needs to retain it must copy.
@@ -383,7 +386,7 @@ Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`
 - **In:** `detection_idx` — int, `(num_points, 2 [+ n_batch])`. The `(doppler_bin, range_bin)` cells (CFAR). Row order sets the output row order (so `ClusterDBSCANOp.labels` join back positionally).
 - **In:** `range_bins` (optional) — float32 / float64, `(num_range,)`. Physical range (m) per range bin (`FMCWRangeProcessorOp.range_bins`); indexed by the `range_bin` column for the range feature. Absent → the raw bin index is used.
 - **In:** `velocity_bins` (optional) — float32 / float64, `(num_doppler,)`. Physical velocity (m/s) per Doppler bin (`FMCWDopplerProcessorOp.velocity_bins`); indexed by `doppler_bin`. Absent → the raw bin index.
-- **In:** `detection_score` (optional) — float32 / float64, `(..., num_doppler, num_range)`. CFAR's per-cell score map; gathered at each detection cell → the strength feature.
+- **In:** `detection_score` (optional) — float32 / float64, `(num_doppler, num_range)`. CFAR's per-cell score map; gathered at each detection cell → the strength feature.
 - **In:** `aoa_estimates` (optional) — float32 / float64, `(num_points, 2)`. Per-detection `(az, el)` **values** (sparse post-angle path), row-aligned with `detection_idx`; supplies the `az` / `el` features.
 - **In:** `az_angles` (optional) — float32 / float64, `(num_az,)`. Azimuth scan grid (the beamformer's `az_angles`); indexed by the `az_bin` preserved-batch column for the `az_bin` feature (dense path). Required when `az_bin` is selected.
 - **In:** `el_angles` (optional) — float32 / float64, `(num_el,)`. Elevation scan grid; indexed by `el_bin`. Required when `el_bin` is selected.
@@ -450,8 +453,8 @@ Reduces each cluster to one **representative detection** so the cluster-then-ang
 
 #### PhaseShiftBeamformerOp (dense)
 
-- **In:** `rd_maps` — complex64 / complex128, `(..., num_channels, num_doppler, num_range_bins)`. The channel axis sits immediately before the `(doppler, range)` plane and is reduced into the beam axes; `num_channels` must match `array_geometry`.
-- **Out:** `rda_cube` — complex64 / complex128, `(..., num_az, num_el, num_doppler, num_range_bins)`. Channel axis replaced by the `az × el` beam grid (or `u × v` under the `direction_cosine` convention); feeds CFARDetectorOp's dense path directly.
+- **In:** `rd_maps` — complex64 / complex128, `(num_channels, num_doppler, num_range_bins)`. The channel axis sits immediately before the `(doppler, range)` plane and is reduced into the beam axes; `num_channels` must match `array_geometry`.
+- **Out:** `rda_cube` — complex64 / complex128, `(num_az, num_el, num_doppler, num_range_bins)`. Channel axis replaced by the `az × el` beam grid (or `u × v` under the `direction_cosine` convention); feeds CFARDetectorOp's dense path directly.
 
 **Parameters:**
 
@@ -467,7 +470,7 @@ Reduces each cluster to one **representative detection** so the cluster-then-ang
 
 Gathers, for each detection, the per-channel complex snapshot(s) from the RD maps — the channel vector at the detected cell plus a configurable range-Doppler neighborhood — into the `snapshot` matrix the sparse angle estimators consume. Pure indexed gather; no arithmetic.
 
-- **In:** `rd_maps` — complex64 / complex128, `(..., num_channels, num_doppler, num_range)`. The **per-channel** RD maps (SIMO: physical RX; MIMO: the assembled virtual array), channel axis immediately before the `(doppler, range)` plane, leading axes batched. Must be the pre-integration maps — *not* the NCI-integrated maps CFAR thresholded on (the channel axis has to be intact to gather from).
+- **In:** `rd_maps` — complex64 / complex128, `(num_channels, num_doppler, num_range)`. The **per-channel** RD maps (SIMO: physical RX; MIMO: the assembled virtual array), channel axis immediately before the `(doppler, range)` plane, leading axes batched. Must be the pre-integration maps — *not* the NCI-integrated maps CFAR thresholded on (the channel axis has to be intact to gather from).
 - **In:** `detection_idx` — int, `(num_detections, 2 [+ n_batch])`. Detected `(doppler_bin, range_bin)` cells — CFAR's `detection_idx` contract (sized to the actual count; its row count *is* `num_detections`).
 - **Out:** `snapshot` — complex64 / complex128, `(num_detections, num_channels, num_snapshots)`. Row *i* is detection *i*'s `(num_channels, num_snapshots)` block; sized to the actual detection count and reallocated per tick (no fixed capacity / padding). `num_snapshots = (2·doppler_half + 1)·(2·range_half + 1)` from `snapshot_window` (1 at the default) — the full window product for every detection regardless of edge mode; under a `clamp` edge, out-of-bounds slots are left unfilled and flagged in `is_valid`. Feeds `⟨sparse angle estimator⟩.snapshot`.
 - **Out:** `is_valid` (optional) — uint8 (`0`/`1`), `(num_detections, num_snapshots)`. Per-detection mask of which snapshot slots hold a real gathered cell — all `1` except where a `clamp` edge truncated the window (ragged). Consumed by the sparse estimators to restrict the covariance / beamforming to valid snapshots; emit it whenever either axis uses `clamp`. `uint8` rather than `bool` for HSDK 4.3 NumPy visibility (see `CFARDetectorOp.detection_mask`); the sparse estimators accept a `bool` or `uint8` mask.
@@ -651,8 +654,8 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 
 #### MIMODeinterleaveOp
 
-- **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(..., N_rx, M·L, samples_per_chirp)`. Slow-time interleaves the M TX per the TX schedule.
-- **Out:** `adc_cube_out` — complex64 / complex128 / float32 / float64 (dtype preserved), `(..., M_tx, N_rx, L, samples_per_chirp)`. TX split into an explicit axis. Pure marshaling (strided reshape/gather). HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `adc_cube_out` rather than repeating `adc_cube` ([EA HSDK5 ONLY] — same pattern as ClutterFilterOp `range_profiles_out`).
+- **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(N_rx, M·L, samples_per_chirp)`. Slow-time interleaves the M TX per the TX schedule.
+- **Out:** `adc_cube_out` — complex64 / complex128 / float32 / float64 (dtype preserved), `(M_tx, N_rx, L, samples_per_chirp)`. TX split into an explicit axis. Pure marshaling (strided reshape/gather). HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `adc_cube_out` rather than repeating `adc_cube` ([EA HSDK5 ONLY] — same pattern as ClutterFilterOp `range_profiles_out`).
 
 **Parameters:**
 
@@ -660,8 +663,8 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 
 #### MIMOCoherentCompensationOp
 
-- **In:** `rd_maps` — complex64 / complex128. **TDM mode:** `(..., M_tx, N_rx, num_doppler, num_range_bins)` (TX axis already explicit from de-interleave). **DDM mode:** `(..., N_rx, num_doppler, num_range_bins)` (the M TX sit in distinct Doppler sub-bands). Rank/interpretation set by the `multiplexing_scheme` parameter.
-- **Out:** `rd_maps_out` — complex64 / complex128, `(..., M_tx, N_rx, num_doppler_out, num_range_bins)`. Separated, phase-aligned `(tx, rx)` block. `num_doppler_out = num_doppler` (TDM, or DDM non-linear correlate) or `num_doppler_per_tx` (DDM linear-phase band gather). [EA HSDK5 ONLY] unique in/out port names required; logical output channel remains `rd_maps`.
+- **In:** `rd_maps` — complex64 / complex128. **TDM mode:** `(M_tx, N_rx, num_doppler, num_range_bins)` (TX axis already explicit from de-interleave). **DDM mode:** `(N_rx, num_doppler, num_range_bins)` (the M TX sit in distinct Doppler sub-bands). Rank/interpretation set by the `multiplexing_scheme` parameter.
+- **Out:** `rd_maps_out` — complex64 / complex128, `(M_tx, N_rx, num_doppler_out, num_range_bins)`. Separated, phase-aligned `(tx, rx)` block. `num_doppler_out = num_doppler` (TDM, or DDM non-linear correlate) or `num_doppler_per_tx` (DDM linear-phase band gather). [EA HSDK5 ONLY] unique in/out port names required; logical output channel remains `rd_maps`.
 
 **Parameters:**
 
@@ -673,8 +676,8 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 
 #### VirtualArrayAssemblyOp
 
-- **In:** `rd_maps` — complex64 / complex128, `(..., M_tx, N_rx, num_doppler, num_range_bins)`. Separated `(tx, rx)` block. (TX/RX element positions are parameters.)
-- **Out:** `rd_maps_out` — complex64 / complex128, `(..., num_virtual, num_doppler, num_range_bins)`. `(tx, rx)` flattened to a single virtual channel axis (`c = tx·N_rx + rx`), overlapped virtual elements deduped, so `num_virtual ≤ M·N`. [EA HSDK5 ONLY] physical port name `rd_maps_out` (unique in/out namespace).
+- **In:** `rd_maps` — complex64 / complex128, `(M_tx, N_rx, num_doppler, num_range_bins)`. Separated `(tx, rx)` block. (TX/RX element positions are parameters.)
+- **Out:** `rd_maps_out` — complex64 / complex128, `(num_virtual, num_doppler, num_range_bins)`. `(tx, rx)` flattened to a single virtual channel axis (`c = tx·N_rx + rx`), overlapped virtual elements deduped, so `num_virtual ≤ M·N`. [EA HSDK5 ONLY] physical port name `rd_maps_out` (unique in/out namespace).
 - **Out:** `array_geometry` — float64 Tensor, shape `(num_virtual + 1, 3)`: packed ArrayGeometry via `array_geometry_tensor.hpp` (HSDK5_PORT §10). Virtual `element_positions` (`p_virtual = p_tx + p_rx`) + wavelength in the metadata row; consumers unpack with `unpack_array_geometry`. [EA HSDK5 ONLY] `Output<ArrayGeometry>` is not a PublishedPayload; serialized Tensor interim.
 
 **Parameters:**

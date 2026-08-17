@@ -25,6 +25,7 @@
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -62,6 +63,25 @@ expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
 }  // namespace
 
 template <typename T>
+ClusterDBSCANOp<T>::ClusterDBSCANOp(
+    const MaxTensorExtents& extents) {
+  const char* who = "ClusterDBSCANOp";
+  const std::int64_t max_points =
+      require_extent(extents.max_points, "max_points", who);
+  const std::int64_t max_clusters =
+      require_extent(extents.max_clusters, "max_clusters", who);
+  extents_ = extents;
+  // labels: int64 (max_points,)
+  max_labels_byte_span_ = byte_span_elems(
+      static_cast<std::size_t>(max_points),
+      sizeof(std::int64_t), who);
+  // sizes: int64 (max_clusters,)
+  max_sizes_byte_span_ = byte_span_elems(
+      static_cast<std::size_t>(max_clusters),
+      sizeof(std::int64_t), who);
+}
+
+template <typename T>
 void ClusterDBSCANOp<T>::setup(OperatorSpec& spec) {
   // Declare device storage only; dtype is enforced in compute() so one
   // operator binary still serves F32/F64 and the harness can feed either.
@@ -74,13 +94,13 @@ void ClusterDBSCANOp<T>::setup(OperatorSpec& spec) {
   spec.output(labels)
       .produces_tensor(kDevice)
       .tensor_allocation(TensorAllocationBounds{
-          .max_rank = kClusterDBSCANMaxRank,
-          .max_byte_span = kClusterDBSCANMaxByteSpan});
+          .max_rank = 1U,
+          .max_byte_span = max_labels_byte_span_});
   spec.output(sizes)
       .produces_tensor(kDevice)
       .tensor_allocation(TensorAllocationBounds{
-          .max_rank = kClusterDBSCANMaxRank,
-          .max_byte_span = kClusterDBSCANMaxByteSpan});
+          .max_rank = 1U,
+          .max_byte_span = max_sizes_byte_span_});
   // [live] scalar override ports. Wired graphs may push samples; the operator
   // caches the last value (sticky). Leaving them unconnected is legal —
   // compute() seeds from Params. epsilon is Params-only (HSDK5_PORT §9).

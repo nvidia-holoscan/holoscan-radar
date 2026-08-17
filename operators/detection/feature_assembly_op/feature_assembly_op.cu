@@ -19,6 +19,7 @@
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -135,6 +136,19 @@ const char* kernel_error_message(int code) {
 }  // namespace
 
 template <typename T>
+FeatureAssemblyOp<T>::FeatureAssemblyOp(
+    const MaxTensorExtents& extents) {
+  const char* who = "FeatureAssemblyOp";
+  const std::int64_t max_points =
+      require_extent(extents.max_points, "max_points", who);
+  const std::int64_t max_features =
+      require_extent(extents.max_features, "max_features", who);
+  extents_ = extents;
+  max_byte_span_ = byte_span_real_cube<T>(
+      {max_points, max_features}, who);
+}
+
+template <typename T>
 void FeatureAssemblyOp<T>::setup(OperatorSpec& spec) {
   // Declare device storage only; dtype is enforced in compute() so one
   // operator binary still serves F32/F64 and the harness can feed either.
@@ -144,8 +158,8 @@ void FeatureAssemblyOp<T>::setup(OperatorSpec& spec) {
       .rank = std::nullopt,
   };
   const TensorAllocationBounds bounds{
-      .max_rank = kFeatureAssemblyMaxRank,
-      .max_byte_span = kFeatureAssemblyMaxByteSpan};
+      .max_rank = 2U,
+      .max_byte_span = max_byte_span_};
   spec.input(detection_idx).queue_depth(2U).expects_tensor(kDevice);
   // Optional gather sources: registered so they may be wired; omitted from
   // contract() so unconnected apps compile (HSDK5_PORT / Beamscan pattern).
@@ -198,6 +212,14 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
         "(num_points, 2 [+ n_batch])");
   }
   const int64_t num_points = idx_shape[0];
+  if (extents_.max_points.has_value() &&
+      num_points > *extents_.max_points) {
+    return fail_invalid(
+        "FeatureAssemblyOp: detection_idx rows (" +
+        std::to_string(num_points) +
+        ") exceed MaxTensorExtents max_points (" +
+        std::to_string(*extents_.max_points) + ")");
+  }
   const int64_t idx_cols = idx_shape[1];
   const int64_t n_preserved = idx_cols - 2;
 

@@ -3,8 +3,8 @@
 
 // Contract tests for VirtualArrayAssemblyOp (HSDK 5 Graph harness):
 // virtual layout, overlap policies, array_geometry packed Tensor emission,
-// rank-agnostic batching, [live] wavelength overrides (sticky §1 deferred),
-// cross-cutting input validation, and float/double agreement.
+// opaque leading-batch rejection, [live] wavelength overrides (sticky §1
+// deferred), cross-cutting input validation, and float/double agreement.
 
 #include <gtest/gtest.h>
 
@@ -409,15 +409,21 @@ TEST(VirtualArrayAssemblyOp, ComplexDoublePreservesValues) {
   }
 }
 
-TEST(VirtualArrayAssemblyOp, LeadingBatchAxesPreservedAndIndependent) {
+TEST(VirtualArrayAssemblyOp, RejectsOpaqueLeadingBatch) {
+  // Contract is (M_tx, N_rx, D, R); an extra leading dim is opaque batch.
   const std::vector<int64_t> shape = {2, kNumTx, kNumRx, kDoppler, kRange};
-  const auto result = run_assembly<float>(
-      build_rd_host<float>(shape), shape, separated_tx_positions(),
-      default_rx_positions(), kWavelength, OverlapPolicy::kKeepAll);
-  ASSERT_EQ(result.rd_maps.shape.size(), 4U);
-  EXPECT_EQ(result.rd_maps.shape[0], 2);
-  EXPECT_EQ(result.rd_maps.shape[1], kNumTx * kNumRx);
-  expect_keep_all_values(result.rd_maps, shape);
+  VirtualArrayAssemblyParams params;
+  params.tx_positions = separated_tx_positions();
+  params.rx_positions = default_rx_positions();
+  params.wavelength = kWavelength;
+  params.overlap_policy = OverlapPolicy::kKeepAll;
+  const DualIOGraphRunResult result = run_assembly_result_t<float>(
+      to_device_tensor(build_rd_host<float>(shape), shape,
+                       complex_dtype<float>()),
+      std::move(params));
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames0.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(VirtualArrayAssemblyOp, LiveWavelengthOverrideSticky) {

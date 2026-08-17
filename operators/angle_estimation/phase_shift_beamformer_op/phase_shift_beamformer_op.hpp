@@ -24,6 +24,7 @@
 
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/sdk/config_cache.hpp"
 
@@ -91,19 +92,17 @@ static_assert(
     "HOLOSCAN_PARAM_SCHEMA must be in PhaseShiftBeamformerParams's "
     "namespace");
 
-// Admission bounds for the device output pool (rank-agnostic batching).
-inline constexpr std::uint32_t kPhaseShiftBeamformerMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kPhaseShiftBeamformerMaxByteSpan = 256ULL << 20;
-
 template <typename T>
 class PhaseShiftBeamformerOp
     : public holoscan::Operator<PhaseShiftBeamformerParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
-                "PhaseShiftBeamformerOp supports float and double precision");
+                "PhaseShiftBeamformerOp supports float and double "
+                "precision");
 
  public:
-  PhaseShiftBeamformerOp() = default;
+  // Required: sizes the rda_cube Tensor pool at setup().
+  explicit PhaseShiftBeamformerOp(
+      const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -114,14 +113,19 @@ class PhaseShiftBeamformerOp
   Output<Tensor> rda_cube{"rda_cube"};
 
  private:
-  // Keep the previous activation's input alive across ticks so async device
-  // reads cannot outlive the buffer.
+  MaxTensorExtents extents_;
+  std::uint32_t max_rank_{4U};
+  std::size_t max_byte_span_{0U};
+
+  // Keep the previous activation's input alive across ticks so async
+  // device reads cannot outlive the buffer.
   Tensor retained_input_;
 
   // Conjugated steering weights, built on device, laid out
   // (num_beams, num_channels) with the beam axis enumerated az-major
-  // (beam = ia * num_el + ie) so the GEMM output reshapes directly to the
-  // (..., num_az, num_el, D, R) cube. Cached, warn-once on rebuild.
+  // (beam = ia * num_el + ie) so the GEMM output reshapes directly
+  // to the (..., num_az, num_el, D, R) cube. Cached, warn-once on
+  // rebuild.
   ConfigCache<std::shared_ptr<holoscan::Tensor>> steering_cache_;
 };
 

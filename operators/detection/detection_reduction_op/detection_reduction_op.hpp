@@ -23,6 +23,7 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/reduce/reduction_enums.hpp"
 
 namespace holoscan::radar {
@@ -92,11 +93,6 @@ static_assert(
         holoscan::ParamSchemaAvailability::kDeclared,
     "HOLOSCAN_PARAM_SCHEMA must be in DetectionReductionParams's namespace");
 
-// Admission bounds for the device output pool.
-inline constexpr std::uint32_t kDetectionReductionMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kDetectionReductionMaxByteSpan = 256ULL << 20;
-
 template <typename T, typename ScoreFn = NoCustomScore>
 class DetectionReductionOp
     : public holoscan::Operator<DetectionReductionParams> {
@@ -104,7 +100,9 @@ class DetectionReductionOp
                 "DetectionReductionOp supports float and double precision");
 
  public:
-  DetectionReductionOp() = default;
+  // Required: sizes the rep_idx Tensor pool at setup().
+  explicit DetectionReductionOp(
+      const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -124,6 +122,9 @@ class DetectionReductionOp
   Input<ScoreMethod> score_method{"score_method"};
 
  private:
+  MaxTensorExtents extents_;
+  std::size_t max_byte_span_{0U};
+
   // Keep the previous activation's inputs alive across ticks so async device
   // reads cannot outlive the buffers.
   Tensor retained_labels_;

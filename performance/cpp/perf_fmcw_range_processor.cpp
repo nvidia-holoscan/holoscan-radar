@@ -27,6 +27,7 @@
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
@@ -127,13 +128,19 @@ perf::TimingCollector run_range_graph(const RangeScenario& scen,
                                       int total_frames) {
   auto cube =
       perf::make_iq_cube_device<PerfPrecision>(cube_shape(scen));
+  hr::MaxTensorExtents extents;
+  extents.max_chirps = scen.num_chirps;
+  extents.max_range_bins = scen.samples_per_chirp;
+  if (scen.channels > 1) {
+    extents.max_rx = scen.channels;
+  }
   return perf::run_perf_graph(
       std::move(cube), total_frames, "range-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
         auto op =
             graph.op<hr::FMCWRangeProcessorOp<PerfPrecision>>(
-                "range");
+                "range", extents);
         hr::FMCWRangeProcessorParams params;
         params.waveform = make_waveform();
         params.range_window = window_of(scen.window);

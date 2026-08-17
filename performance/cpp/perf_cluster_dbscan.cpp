@@ -30,6 +30,7 @@
 #include <holoscan/core/graph.hpp>
 
 #include "clustering/cluster_dbscan_op/cluster_dbscan_op.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/perf_driver.hpp"
@@ -155,9 +156,14 @@ perf::TimingCollector run_dbscan_graph(
       std::move(pts), total_frames, "dbscan-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_points = std::max<int64_t>(
+            scen.num_points, 1);
+        extents.max_clusters = std::max<int64_t>(
+            scen.num_clusters, 1);
         auto op =
             graph.op<hr::ClusterDBSCANOp<PerfPrecision>>(
-                "dbscan");
+                "dbscan", extents);
         hr::ClusterDBSCANParams params;
         params.epsilon = scen.epsilon;
         params.min_points = scen.min_points;

@@ -27,6 +27,7 @@
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
@@ -133,9 +134,16 @@ perf::TimingCollector run_doppler_graph(
       std::move(cube), total_frames, "doppler-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_chirps = scen.num_chirps;
+        extents.max_range_bins = scen.num_range_bins;
+        if (scen.channels > 1) {
+          extents.max_rx = scen.channels;
+        }
         auto op =
-            graph.op<hr::FMCWDopplerProcessorOp<PerfPrecision>>(
-                "doppler");
+            graph.op<hr::FMCWDopplerProcessorOp<
+                PerfPrecision>>(
+                "doppler", extents);
         hr::FMCWDopplerProcessorParams params;
         params.waveform = make_waveform();
         params.doppler_window = window_of(scen.window);

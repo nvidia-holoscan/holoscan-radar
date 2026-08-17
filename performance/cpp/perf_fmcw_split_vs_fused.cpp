@@ -37,6 +37,7 @@
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
@@ -157,9 +158,17 @@ perf::TimingCollector run_fused_compare_graph(
       std::move(cube), total_frames, "svf-fused",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents fused_extents;
+        fused_extents.max_chirps = scen.num_chirps;
+        fused_extents.max_range_bins =
+            scen.samples_per_chirp;
+        if (scen.channels > 1) {
+          fused_extents.max_rx = scen.channels;
+        }
         auto op =
             graph.op<hr::FMCWRangeDopplerProcessorOp<
-                PerfPrecision>>("fused");
+                PerfPrecision>>(
+                "fused", fused_extents);
         hr::FMCWRangeDopplerProcessorParams params;
         params.waveform = make_waveform();
         params.clutter_filter = scen.clutter;
@@ -216,16 +225,31 @@ perf::TimingCollector run_split_compare_graph(
       std::move(cube), total_frames, "svf-split",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents range_extents;
+        range_extents.max_chirps = scen.num_chirps;
+        range_extents.max_range_bins =
+            scen.samples_per_chirp;
+        if (scen.channels > 1) {
+          range_extents.max_rx = scen.channels;
+        }
         auto range =
             graph.op<hr::FMCWRangeProcessorOp<
-                PerfPrecision>>("range");
+                PerfPrecision>>("range", range_extents);
         hr::FMCWRangeProcessorParams rp;
         rp.waveform = make_waveform();
         range.set_params(std::move(rp));
 
+        hr::MaxTensorExtents doppler_extents;
+        doppler_extents.max_chirps = scen.num_chirps;
+        doppler_extents.max_range_bins =
+            scen.samples_per_chirp;
+        if (scen.channels > 1) {
+          doppler_extents.max_rx = scen.channels;
+        }
         auto doppler =
             graph.op<hr::FMCWDopplerProcessorOp<
-                PerfPrecision>>("doppler");
+                PerfPrecision>>(
+                "doppler", doppler_extents);
         hr::FMCWDopplerProcessorParams dp;
         dp.waveform = make_waveform();
         doppler.set_params(std::move(dp));
@@ -236,8 +260,14 @@ perf::TimingCollector run_split_compare_graph(
 
         if (scen.clutter !=
             hr::ClutterFilterMethod::kNone) {
+          hr::MaxTensorExtents extents;
+          extents.max_chirps = scen.num_chirps;
+          extents.max_range_bins = scen.samples_per_chirp;
+          if (scen.channels > 1) {
+            extents.max_rx = scen.channels;
+          }
           auto clt = graph.op<hr::ClutterFilterOp<
-              PerfPrecision>>("clutter");
+              PerfPrecision>>("clutter", extents);
           hr::ClutterFilterParams cp;
           cp.method = scen.clutter;
           clt.set_params(std::move(cp));

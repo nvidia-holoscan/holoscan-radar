@@ -22,6 +22,8 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 
+#include "radar_common/descriptors/max_tensor_extents.hpp"
+
 namespace holoscan::radar {
 
 // Density clustering (DBSCAN) over a caller-assembled feature matrix. This
@@ -89,18 +91,14 @@ static_assert(holoscan::param_schema_availability<ClusterDBSCANParams>() ==
               "HOLOSCAN_PARAM_SCHEMA must be in ClusterDBSCANParams's "
               "namespace");
 
-// Admission bounds for the device output pools.
-inline constexpr std::uint32_t kClusterDBSCANMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kClusterDBSCANMaxByteSpan = 256ULL << 20;
-
 template <typename T>
 class ClusterDBSCANOp : public holoscan::Operator<ClusterDBSCANParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "ClusterDBSCANOp supports float and double precision");
 
  public:
-  ClusterDBSCANOp() = default;
+  // Required: sizes the labels / sizes Tensor pools at setup().
+  explicit ClusterDBSCANOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -116,6 +114,10 @@ class ClusterDBSCANOp : public holoscan::Operator<ClusterDBSCANParams> {
   Input<int64_t> max_clusters{"max_clusters"};
 
  private:
+  MaxTensorExtents extents_;
+  std::size_t max_labels_byte_span_{0U};
+  std::size_t max_sizes_byte_span_{0U};
+
   // Keep the previous activation's input alive across ticks so async device
   // reads cannot outlive the buffer.
   Tensor retained_points_;

@@ -23,6 +23,7 @@
 
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 
 namespace holoscan::radar {
@@ -94,9 +95,6 @@ static_assert(
     "HOLOSCAN_PARAM_SCHEMA must be in "
     "FMCWDopplerProcessorParams's namespace");
 
-inline constexpr std::uint32_t kDopplerProcessorMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kDopplerProcessorMaxByteSpan = 256ULL << 20;
 
 template <typename T>
 class FMCWDopplerProcessorOp
@@ -105,7 +103,8 @@ class FMCWDopplerProcessorOp
                 "FMCWDopplerProcessorOp supports float and double precision");
 
  public:
-  FMCWDopplerProcessorOp() = default;
+  explicit FMCWDopplerProcessorOp(
+      const MaxTensorExtents& extents);
   ~FMCWDopplerProcessorOp() override;
 
   void setup(OperatorSpec& spec) override;
@@ -135,6 +134,11 @@ class FMCWDopplerProcessorOp
   std::optional<bool> sticky_center_zero_doppler_;
   std::optional<FftNorm> sticky_fft_norm_;
   std::optional<int64_t> sticky_nfft_;
+
+  MaxTensorExtents extents_;
+  std::uint32_t max_rank_{2U};
+  std::size_t max_byte_span_{0U};
+  std::size_t velocity_bins_byte_span_{0U};
 };
 
 // Explicit instantiations live in fmcw_doppler_processor_op.cu.

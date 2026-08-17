@@ -3,7 +3,17 @@
 **The point of this app:** show how naturally **Holoscan** lets you drop a whole
 family of operators that solve the *same problem different ways* into **one
 running graph** and swap among them **at runtime** — with only the selected one
-paying compute each frame. You connect every candidate with the same `add_flow`
+paying compute each frame.
+
+**[EA HSDK5 ONLY]** The C++ demo is Graph-ported: Application `set_dynamic_flows`
+is replaced by `EstimatorRouterOp` (five `snapshot_*` outs; emit only the
+selected) plus `AoaMergeOp` (`OnAnyInput` over five `aoa_*` ports). Idle
+estimators never receive a snapshot. Live RD uses `X11RdViewerOp` (same overlays
+as the other Graph demos, with the active estimator's name in the header).
+Python remains on the Application/Holoviz path.
+See [`HSDK5_PORT.md`](../../docs/planning/HSDK5_PORT.md) §6.
+
+You connect every candidate with the same `add_flow`
 you'd use for any edge, add a few-line dynamic-flow callback, and the scheduler
 does the rest: no dispatch logic, no branch-heavy `compute()`, no data copies,
 no restart. Here that family is the five sparse angle-of-arrival (AoA)
@@ -263,29 +273,34 @@ offline inspection (PPM in C++, PNG in Python).
 Kept colocated with the app (not shared operators or contract changes), because
 they exist only to serve *this* demo's switching pattern:
 
-- **`EstimatorRouterOp`** (C++) — pass-through of `snapshot`/`is_valid` that owns
-  the rotate/hold/file policy and exposes `active_target()` for the dynamic-flow
-  callback.
+- **`EstimatorRouterOp`** (C++ Graph) — rotate/hold/file policy; five
+  `snapshot_*` outs, emits only the selected branch each tick.
+- **`AoaMergeOp`** (C++ Graph) — `OnAnyInput` fan-in of five `aoa_*` ports to
+  one `aoa_estimates` out, plus an `estimator_idx` int64 `(1,)` tensor naming
+  which branch fired (the viewer's header label; always drained as well).
 - **`EstimatorSelector`** (Python) — the same policy as a plain object, queried
   by the two gather callbacks; frame-synchronized so both callbacks agree.
 - **`SnapshotK1SliceOp`** (C++) — center-slices a multi-look `(N, C, K)` snapshot
   to `(N, C, 1)` for the single-snapshot Beamscan branch.
-- **`EstimatorLabelOp`** — emits the live `Estimator: <NAME>` Holoviz caption
-  reflecting the active estimator each frame.
+- **`EstimatorLabelOp`** (Python / Holoviz Application path) — live
+  `Estimator: <NAME>` caption; the Graph/X11 path shows the same name in the
+  viewer header from `AoaMergeOp.estimator_idx`.
 
 ## Build & run
 
-**C++:**
+**C++ (Graph + X11):**
 
 ```bash
 cmake -S . -B build -DAPP_fmcw_aoa_estimators=ON
 cmake --build build --target fmcw_aoa_estimators -j"$(nproc)"
+./build/applications/fmcw_aoa_estimators/cpp/fmcw_aoa_estimators
+# log-only smoke:
 ./build/applications/fmcw_aoa_estimators/cpp/fmcw_aoa_estimators \
-    [path/to/config.yaml]   # defaults to the installed fmcw_aoa_estimators.yaml
+  ./build/applications/fmcw_aoa_estimators/cpp/fmcw_aoa_estimators_smoke.yaml
 ```
 
-**Python** (same graph shape; `config.py` + `custom_ops.py` colocated). Run it
-against the build tree:
+**Python** (Application/Holoviz; same graph shape; `config.py` + `custom_ops.py`
+colocated). Run it against the build tree:
 
 ```bash
 ulimit -s 32768   # Holoscan warns below this stack size

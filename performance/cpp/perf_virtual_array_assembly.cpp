@@ -3,15 +3,17 @@
 
 // Performance characterization for VirtualArrayAssemblyOp — flatten separated
 // (tx, rx) RD maps into a virtual channel axis and emit runtime
-// array_geometry. Sweeps (M_tx, N_rx, num_doppler, num_range_bins), a leading
-// batch axis, and overlap policies. Measurement tool only: no timing
+// array_geometry. Sweeps (M_tx, N_rx, num_doppler, num_range_bins) and
+// overlap policies. Measurement tool only: no timing
 // assertions. See docs/planning/OPERATOR_DEVELOPMENT.md.
 //
 // [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
 // Mid-session [live] wavelength override measurement is deferred until
 // docs/planning/HSDK5_PORT.md §1. Params still select the policy under
 // test. The always-emitted array_geometry output is drained by
-// PerfNullSinkOp.
+// PerfNullSinkOp. Source publish uses PerfPublishMode::kFillInPlace
+// (value-agnostic gather); remaining lg/xl gap vs Holoscan 4.3 is the
+// accepted Graph pool publish-path artifact (HSDK5_PORT.md §3).
 
 #include <complex>
 #include <cstdint>
@@ -28,6 +30,7 @@
 
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
@@ -61,7 +64,6 @@ struct AssemblyScenario {
   int64_t num_rx{0};
   int64_t num_doppler{0};
   int64_t num_range_bins{0};
-  int64_t batch{1};
   hr::OverlapPolicy policy{hr::OverlapPolicy::kDedup};
 };
 
@@ -116,12 +118,11 @@ std::string policy_tag(hr::OverlapPolicy policy) {
   return "unk";
 }
 
+// The contract input is exactly (M_tx, N_rx, num_doppler, num_range_bins).
+// There is no leading batch rung: an extra leading dim is opaque batch, which
+// the operator rejects (see VirtualArrayAssemblyOp.RejectsOpaqueLeadingBatch).
 std::vector<int64_t> separated_shape(
     const AssemblyScenario& scen) {
-  if (scen.batch > 1) {
-    return {scen.batch, scen.num_tx, scen.num_rx,
-            scen.num_doppler, scen.num_range_bins};
-  }
   return {scen.num_tx, scen.num_rx, scen.num_doppler,
           scen.num_range_bins};
 }
@@ -130,13 +131,20 @@ perf::TimingCollector run_assembly_graph(
     const AssemblyScenario& scen, int total_frames) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(
       separated_shape(scen));
+  // Value-agnostic gather: zero-fill loan is valid. Remaining xl gap vs
+  // Holoscan 4.3 is accepted Graph publish-path cost (HSDK5_PORT.md §3).
   return perf::run_perf_graph(
       std::move(cube), total_frames, "assembly-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_tx = scen.num_tx;
+        extents.max_rx = scen.num_rx;
+        extents.max_doppler_bins = scen.num_doppler;
+        extents.max_range_bins = scen.num_range_bins;
         auto op =
             graph.op<hr::VirtualArrayAssemblyOp<PerfPrecision>>(
-                "virtual_array");
+                "virtual_array", extents);
         hr::VirtualArrayAssemblyParams params;
         params.tx_positions =
             linear_positions(scen.num_tx, 0.5);
@@ -159,7 +167,8 @@ perf::TimingCollector run_assembly_graph(
             options, "virtual_array", "rd_maps_out");
         perf::bind_tensor_out(
             options, "virtual_array", "array_geometry");
-      });
+      },
+      perf::PerfPublishMode::kFillInPlace);
 }
 
 void fill_throughput(perf::ResultRow* row,
@@ -169,9 +178,8 @@ void fill_throughput(perf::ResultRow* row,
     return;
   }
   const double sec = median_ms / 1000.0;
-  const double batch = static_cast<double>(scen.batch);
   const double elems =
-      batch * static_cast<double>(scen.num_tx) *
+      static_cast<double>(scen.num_tx) *
       static_cast<double>(scen.num_rx) *
       static_cast<double>(scen.num_doppler) *
       static_cast<double>(scen.num_range_bins);
@@ -181,7 +189,7 @@ void fill_throughput(perf::ResultRow* row,
       static_cast<double>(scen.num_tx * scen.num_rx);
   const double in_bytes = elems * csz;
   const double out_bytes =
-      batch * out_virtual *
+      out_virtual *
       static_cast<double>(scen.num_doppler) *
       static_cast<double>(scen.num_range_bins) * csz;
   row->estimated_effective_gbps =
@@ -195,7 +203,6 @@ perf::ResultRow base_row(const AssemblyScenario& scen) {
   row.variant = policy_tag(scen.policy);
   row.size_id = scen.size_id;
   row.input_shape = separated_shape(scen);
-  row.out_batch = scen.batch;
   row.k = scen.num_doppler;
   // [EA HSDK5 ONLY] live override timing deferred — HSDK5_PORT.md §1.
   row.notes = "live_override=deferred_ea";
@@ -203,7 +210,7 @@ perf::ResultRow base_row(const AssemblyScenario& scen) {
 }
 
 AssemblyScenario make_scenario(
-    const SizeSpec& s, int64_t batch = 1,
+    const SizeSpec& s,
     hr::OverlapPolicy policy = hr::OverlapPolicy::kDedup) {
   AssemblyScenario sc;
   sc.size_id = s.id;
@@ -211,13 +218,9 @@ AssemblyScenario make_scenario(
   sc.num_rx = s.num_rx;
   sc.num_doppler = s.num_doppler;
   sc.num_range_bins = s.num_range_bins;
-  sc.batch = batch;
   sc.policy = policy;
   std::ostringstream id;
   id << "virtual_" << policy_tag(policy) << "_" << s.id;
-  if (batch > 1) {
-    id << "_b" << batch;
-  }
   sc.id = id.str();
   return sc;
 }
@@ -240,8 +243,8 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
            "subset";
   }
   static const char* full_help() {
-    return "Full matrix (sizes + overlap policies + batch "
-           "axis on md/lg); live-override timing deferred "
+    return "Full matrix (sizes + overlap policies); "
+           "live-override timing deferred "
            "on HSDK 5 EA (HSDK5_PORT.md §1)";
   }
 
@@ -266,7 +269,6 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
     for (const char* sid : {"xs", "md", "lg", "xl"}) {
       out.push_back(make_scenario(must_find_size(sid)));
     }
-    out.push_back(make_scenario(must_find_size("md"), 4));
     return out;
   }
 
@@ -293,13 +295,9 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
     }
     const SizeSpec& md = must_find_size("md");
     out.push_back(make_scenario(
-        md, 1, hr::OverlapPolicy::kAverage));
+        md, hr::OverlapPolicy::kAverage));
     out.push_back(make_scenario(
-        md, 1, hr::OverlapPolicy::kKeepAll));
-    for (const char* sid : {"md", "lg"}) {
-      out.push_back(
-          make_scenario(must_find_size(sid), 4));
-    }
+        md, hr::OverlapPolicy::kKeepAll));
     return out;
   }
 

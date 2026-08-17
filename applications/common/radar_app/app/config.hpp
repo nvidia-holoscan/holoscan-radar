@@ -60,6 +60,10 @@ struct CommonRunConfig {
     // the resize path markedly more robust against Holoviz's fatal
     // "Failed to acquire next swap chain image" on an out-of-date surface.
     bool vsync{true};
+    // Live-window size in pixels. Consumed by the [EA HSDK5 ONLY] X11 RD
+    // viewer; the Holoviz apps size their own window.
+    int64_t window_width{1280};
+    int64_t window_height{720};
   } viz;
   // CFAR peak-grouping mode. A native CFARDetectorOp parameter (set through the
   // cfar_detector YAML block via from_config); each app also reads the same key
@@ -188,6 +192,12 @@ inline void parse_viz_toggles(const YAML::Node& root, CommonRunConfig* cfg) {
     if (v["vsync"]) {
       cfg->viz.vsync = v["vsync"].as<bool>();
     }
+    if (v["window_width"]) {
+      cfg->viz.window_width = v["window_width"].as<int64_t>();
+    }
+    if (v["window_height"]) {
+      cfg->viz.window_height = v["window_height"].as<int64_t>();
+    }
   } else if (const YAML::Node legacy = root["visualize"];
              legacy && !legacy.IsNull()) {
     cfg->visualize = legacy.as<bool>();  // legacy top-level toggle
@@ -197,6 +207,10 @@ inline void parse_viz_toggles(const YAML::Node& root, CommonRunConfig* cfg) {
   }
   if (cfg->viz.marker_outline < 0.0F) {
     throw std::runtime_error("visualization.marker_outline must be >= 0");
+  }
+  if (cfg->viz.window_width < 320 || cfg->viz.window_height < 240) {
+    throw std::runtime_error(
+        "visualization.window_width/window_height must be >= 320x240");
   }
   if (cfg->viz.marker_segments < 3) {
     throw std::runtime_error(

@@ -28,6 +28,7 @@
 #include <holoscan/core/graph.hpp>
 
 #include "detection/detection_reduction_op/detection_reduction_op.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/perf_driver.hpp"
@@ -169,9 +170,14 @@ perf::TimingCollector run_reduction_graph(const RedScenario& scen,
       total_frames, "reduction-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_clusters = std::max<int64_t>(
+            scen.num_clusters, 1);
+        extents.max_points = std::max<int64_t>(
+            scen.num_points, 1);
         auto op =
             graph.op<hr::DetectionReductionOp<PerfPrecision>>(
-                "reduction");
+                "reduction", extents);
         hr::DetectionReductionParams params;
         params.representative = scen.policy;
         params.score_method = scen.score_method;

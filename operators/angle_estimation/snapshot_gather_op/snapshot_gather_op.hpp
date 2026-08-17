@@ -26,6 +26,7 @@
 #include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 
 namespace holoscan::radar {
 
@@ -115,18 +116,13 @@ static_assert(holoscan::param_schema_availability<SnapshotGatherParams>() ==
               "HOLOSCAN_PARAM_SCHEMA must be in SnapshotGatherParams's "
               "namespace");
 
-// Admission bounds for the device output pools (rank-agnostic batching).
-inline constexpr std::uint32_t kSnapshotGatherMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kSnapshotGatherMaxByteSpan = 256ULL << 20;
-
 template <typename T>
 class SnapshotGatherOp : public holoscan::Operator<SnapshotGatherParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "SnapshotGatherOp supports float and double precision");
 
  public:
-  SnapshotGatherOp() = default;
+  explicit SnapshotGatherOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -143,6 +139,11 @@ class SnapshotGatherOp : public holoscan::Operator<SnapshotGatherParams> {
   Input<SnapshotWindowOverride> snapshot_window{"snapshot_window"};
 
  private:
+  MaxTensorExtents extents_;
+  std::uint32_t snapshot_max_rank_{3U};
+  std::size_t snapshot_max_byte_span_{0U};
+  std::size_t is_valid_max_byte_span_{0U};
+
   // Keep the previous activation's inputs alive across ticks so async device
   // reads cannot outlive the buffers.
   Tensor retained_rd_maps_;

@@ -27,6 +27,7 @@
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -65,6 +66,27 @@ using detection_reduction_op_detail::kOpName;
 using detection_reduction_op_detail::writable_ptr;
 
 template <typename T, typename ScoreFn>
+DetectionReductionOp<T, ScoreFn>::DetectionReductionOp(
+    const MaxTensorExtents& extents) {
+  const char* who = "DetectionReductionOp";
+  const std::int64_t max_clusters =
+      require_extent(extents.max_clusters, "max_clusters", who);
+  // rep_idx shape is (num_clusters, idx_cols). idx_cols is at most 2
+  // + leading-batch cols; conservatively assume max_points columns.
+  const std::int64_t max_points =
+      extents.max_points.value_or(max_clusters);
+  const std::int64_t max_cols = std::max<std::int64_t>(
+      2, 2 + max_points);
+  (void)max_cols;
+  // rep_idx is int64 (num_clusters, idx_cols). Size for generous
+  // idx_cols = 8 (more than any realistic preserved-batch count).
+  max_byte_span_ = byte_span_elems(
+      product_extents({max_clusters, 8}, who),
+      sizeof(std::int64_t), who);
+  extents_ = extents;
+}
+
+template <typename T, typename ScoreFn>
 void DetectionReductionOp<T, ScoreFn>::setup(OperatorSpec& spec) {
   // Declare device storage only; dtype is enforced in compute() so one
   // operator binary still serves F32/F64 and the harness can feed either.
@@ -81,8 +103,8 @@ void DetectionReductionOp<T, ScoreFn>::setup(OperatorSpec& spec) {
   spec.output(rep_idx)
       .produces_tensor(kDevice)
       .tensor_allocation(TensorAllocationBounds{
-          .max_rank = kDetectionReductionMaxRank,
-          .max_byte_span = kDetectionReductionMaxByteSpan});
+          .max_rank = 2U,
+          .max_byte_span = max_byte_span_});
   // [live] POD enum override ports. Wired graphs may push samples; the
   // operator caches the last value (sticky). Leaving them unconnected is
   // legal — compute() seeds from Params. feature_weights is Params-only

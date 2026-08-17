@@ -25,6 +25,7 @@
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -56,26 +57,59 @@ expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
 }  // namespace
 
 template <typename T>
+SubarraySelectionOp<T>::SubarraySelectionOp(
+    const MaxTensorExtents& extents)
+    : extents_(extents) {
+  if (!extents.max_items.has_value() &&
+      !extents.max_subarray_channels.has_value() &&
+      !extents.max_snapshots.has_value()) {
+    return;  // Python / non-pooled: leave byte spans at 0.
+  }
+  const char* who = "SubarraySelectionOp";
+  const std::int64_t max_items =
+      require_extent(extents.max_items,
+                     "max_items", who);
+  const std::int64_t max_sub =
+      require_extent(extents.max_subarray_channels,
+                     "max_subarray_channels", who);
+  const std::int64_t max_snap =
+      require_extent(extents.max_snapshots,
+                     "max_snapshots", who);
+  snapshot_max_byte_span_ = byte_span_complex_cube<T>(
+      {max_items, max_sub, max_snap}, who);
+  geom_max_byte_span_ = byte_span_elems(
+      product_extents({max_sub + 1, 3}, who),
+      sizeof(double), who);
+  is_valid_max_byte_span_ = byte_span_elems(
+      product_extents({max_items, max_snap}, who), 1U, who);
+}
+
+template <typename T>
 void SubarraySelectionOp<T>::setup(OperatorSpec& spec) {
   constexpr TensorPortLayout kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  const TensorAllocationBounds bounds{
-      .max_rank = kSubarraySelectionMaxRank,
-      .max_byte_span = kSubarraySelectionMaxByteSpan};
   spec.input(snapshot).queue_depth(2U).expects_tensor(kDevice);
   // Optional is_valid: omitted from contract so unconnected graphs compile.
   spec.input(is_valid).queue_depth(2U).expects_tensor(kDevice);
-  spec.output(snapshot_out).produces_tensor(kDevice).tensor_allocation(bounds);
+  spec.output(snapshot_out)
+      .produces_tensor(kDevice)
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = max_rank_,
+          .max_byte_span = snapshot_max_byte_span_});
   // Packed ArrayGeometry (host-planned; H2D each rebuild / tick).
   spec.output(array_geometry)
       .produces_tensor(kDevice)
-      .tensor_allocation(bounds);
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = 2U,
+          .max_byte_span = geom_max_byte_span_});
   spec.output(is_valid_out)
       .produces_tensor(kDevice)
-      .tensor_allocation(bounds);
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = max_rank_,
+          .max_byte_span = is_valid_max_byte_span_});
 }
 
 template <typename T>

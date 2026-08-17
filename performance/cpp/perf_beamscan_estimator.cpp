@@ -28,6 +28,7 @@
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
@@ -128,13 +129,17 @@ perf::TimingCollector run_beamscan_graph(
     const BeamScenario& scen, int total_frames) {
   auto snap = perf::make_iq_cube_device<PerfPrecision>(
       {scen.detections, scen.channels});
+  hr::MaxTensorExtents extents;
+  extents.max_items = scen.detections;
+  extents.max_az = scen.num_az;
+  extents.max_el = scen.num_el;
   return perf::run_perf_graph(
       std::move(snap), total_frames, "beamscan-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
         auto op =
             graph.op<hr::BeamscanEstimatorOp<PerfPrecision>>(
-                "beamscan");
+                "beamscan", extents);
         hr::BeamscanParams params;
         params.array_geometry =
             make_ula_geometry(scen.channels, 0.5, 1.0);

@@ -21,6 +21,8 @@
 #include "radar_common/dsp/steering_weights_device.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
+#include "radar_common/tensor/extents_layout.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -40,6 +42,24 @@ expected<void, Error> fail_runtime(const std::string& message) {
 }  // namespace
 
 template <typename T>
+PhaseShiftBeamformerOp<T>::PhaseShiftBeamformerOp(
+    const MaxTensorExtents& extents) {
+  const std::int64_t max_az =
+      require_extent(extents.max_az, "max_az", kOpName);
+  const std::int64_t max_el =
+      require_extent(extents.max_el, "max_el", kOpName);
+  const std::int64_t max_doppler = require_extent(
+      extents.max_doppler_bins, "max_doppler_bins", kOpName);
+  const std::int64_t max_range = require_extent(
+      extents.max_range_bins, "max_range_bins", kOpName);
+  extents_ = extents;
+  // rda_cube is (num_az, num_el, D, R) — beamforming collapses channels.
+  max_rank_ = 4U;
+  max_byte_span_ = byte_span_complex_cube<T>(
+      {max_az, max_el, max_doppler, max_range}, kOpName);
+}
+
+template <typename T>
 void PhaseShiftBeamformerOp<T>::setup(OperatorSpec& spec) {
   // Declare device storage only; dtype is enforced in compute() so one
   // operator binary still serves F32/F64 and the harness can feed either.
@@ -52,8 +72,8 @@ void PhaseShiftBeamformerOp<T>::setup(OperatorSpec& spec) {
   spec.output(rda_cube)
       .produces_tensor(kDevice)
       .tensor_allocation(TensorAllocationBounds{
-          .max_rank = kPhaseShiftBeamformerMaxRank,
-          .max_byte_span = kPhaseShiftBeamformerMaxByteSpan});
+          .max_rank = max_rank_,
+          .max_byte_span = max_byte_span_});
   // [EA HSDK5 ONLY] No [live] Input ports — ArrayGeometry / WindowSpec /
   // unbounded az/el vectors are not PublishedPayload (HSDK5_PORT.md §9).
   // Selection is via Params (set_params); sticky live Inputs deferred.
@@ -104,7 +124,15 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
   if (rank < 3) {
     return fail_invalid(
         "PhaseShiftBeamformerOp: rd_maps must have shape "
-        "(..., num_channels, num_doppler, num_range_bins) with rank >= 3");
+        "(..., num_channels, num_doppler, num_range_bins) "
+        "with rank >= 3");
+  }
+  const std::size_t max_leading =
+      named_tx_rx_leading_rank(extents_);
+  if (static_cast<std::size_t>(rank - 3) > max_leading) {
+    return fail_invalid(unexpected_leading_message(
+        kOpName, static_cast<std::size_t>(rank - 3),
+        max_leading));
   }
   const int64_t num_channels = shape[static_cast<size_t>(rank - 3)];
   const int64_t num_doppler = shape[static_cast<size_t>(rank - 2)];

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -24,6 +25,8 @@
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
+#include "radar_common/tensor/extents_layout.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -144,6 +147,41 @@ expected<TensorOutputLoan, Error> prepare_copy_device(
 }  // namespace
 
 template <typename T>
+CFARDetectorOp<T>::CFARDetectorOp(const MaxTensorExtents& extents) {
+  const char* who = "CFARDetectorOp";
+  const std::int64_t max_doppler =
+      require_extent(extents.max_doppler_bins, "max_doppler_bins",
+                     who);
+  const std::int64_t max_range =
+      require_extent(extents.max_range_bins, "max_range_bins", who);
+  extents_ = extents;
+
+  // Named leading axes: none, N_rx, or (M_tx, N_rx). Same scope as
+  // ClutterFilter; the dense beamscan path (az/el leading) uses a
+  // separate CFARDetectorOp instance with tighter az/el-only extents
+  // (those instances would not set max_tx / max_rx).
+  const std::size_t leading = named_tx_rx_leading_rank(extents);
+  max_leading_ = leading;
+  max_map_rank_ = static_cast<std::uint32_t>(2U + leading);
+
+  std::int64_t max_tx = 1;
+  std::int64_t max_rx = 1;
+  require_tx_rx_pool_extents(extents, who, &max_tx, &max_rx);
+  const std::int64_t leading_product = max_tx * max_rx;
+  max_map_byte_span_ = byte_span_real_cube<T>(
+      {leading_product, max_doppler, max_range}, who);
+
+  const std::int64_t max_dets =
+      extents.max_detections.value_or(
+          leading_product * max_doppler * max_range);
+  const std::int64_t idx_cols =
+      2 + static_cast<std::int64_t>(leading);
+  max_idx_byte_span_ = byte_span_elems(
+      product_extents({max_dets, idx_cols}, who),
+      sizeof(std::int64_t), who);
+}
+
+template <typename T>
 CFARDetectorOp<T>::~CFARDetectorOp() = default;
 
 template <typename T>
@@ -221,18 +259,27 @@ void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
       .rank = std::nullopt,
   };
   spec.input(rd_maps).queue_depth(2U).expects_tensor(kDevice);
-  const TensorAllocationBounds bounds{
-      .max_rank = kCFARDetectorMaxRank,
-      .max_byte_span = kCFARDetectorMaxByteSpan};
-  spec.output(detection_mask).produces_tensor(kDevice).tensor_allocation(
-      bounds);
-  spec.output(detection_score).produces_tensor(kDevice).tensor_allocation(
-      bounds);
-  spec.output(noise_estimate).produces_tensor(kDevice).tensor_allocation(
-      bounds);
-  spec.output(detection_idx).produces_tensor(kDevice).tensor_allocation(
-      bounds);
-  spec.output(cfar_power).produces_tensor(kDevice).tensor_allocation(bounds);
+  const TensorAllocationBounds map_bounds{
+      .max_rank = max_map_rank_,
+      .max_byte_span = max_map_byte_span_};
+  // detection_mask is uint8 — map_bounds (real T) is a safe ceiling.
+  spec.output(detection_mask)
+      .produces_tensor(kDevice)
+      .tensor_allocation(map_bounds);
+  spec.output(detection_score)
+      .produces_tensor(kDevice)
+      .tensor_allocation(map_bounds);
+  spec.output(noise_estimate)
+      .produces_tensor(kDevice)
+      .tensor_allocation(map_bounds);
+  spec.output(cfar_power)
+      .produces_tensor(kDevice)
+      .tensor_allocation(map_bounds);
+  spec.output(detection_idx)
+      .produces_tensor(kDevice)
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = 2U,
+          .max_byte_span = max_idx_byte_span_});
   // [live] POD override ports. Vector lives are Params-only (HSDK5_PORT §9).
   spec.input(pfa).queue_depth(2U);
   spec.input(threshold_scale).queue_depth(2U);
@@ -301,8 +348,32 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
-  const int64_t num_doppler = input.shape()[input.shape().size() - 2];
-  const int64_t num_range = input.shape()[input.shape().size() - 1];
+  const std::size_t total_rank = input.shape().size();
+  if (total_rank < 2) {
+    return fail_invalid(
+        "CFARDetectorOp: rd_maps must have at least 2 axes "
+        "(num_doppler, num_range)");
+  }
+  const std::size_t leading_rank = total_rank - 2;
+  if (leading_rank > max_leading_) {
+    return fail_invalid(
+        unexpected_leading_message(kOpName, leading_rank,
+                                   max_leading_));
+  }
+  const int64_t num_doppler = input.shape()[total_rank - 2];
+  const int64_t num_range = input.shape()[total_rank - 1];
+  if (extents_.max_doppler_bins.has_value() &&
+      num_doppler > *extents_.max_doppler_bins) {
+    return fail_invalid(
+        "CFARDetectorOp: input doppler_bins exceed "
+        "MaxTensorExtents");
+  }
+  if (extents_.max_range_bins.has_value() &&
+      num_range > *extents_.max_range_bins) {
+    return fail_invalid(
+        "CFARDetectorOp: input range_bins exceed "
+        "MaxTensorExtents");
+  }
   const std::vector<int64_t> output_shape =
       plan.output_shape(num_doppler, num_range);
 

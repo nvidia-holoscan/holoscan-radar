@@ -20,6 +20,7 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 
 namespace holoscan::radar {
@@ -53,10 +54,6 @@ static_assert(holoscan::param_schema_availability<MIMODeinterleaveParams>() ==
               "HOLOSCAN_PARAM_SCHEMA must be in MIMODeinterleaveParams's "
               "namespace");
 
-inline constexpr std::uint32_t kMIMODeinterleaveMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kMIMODeinterleaveMaxByteSpan = 256ULL << 20;
-
 template <typename T>
 class MIMODeinterleaveOp
     : public holoscan::Operator<MIMODeinterleaveParams> {
@@ -64,7 +61,7 @@ class MIMODeinterleaveOp
                 "MIMODeinterleaveOp supports float and double precision");
 
  public:
-  MIMODeinterleaveOp() = default;
+  explicit MIMODeinterleaveOp(const MaxTensorExtents& extents);
   ~MIMODeinterleaveOp() override;
 
   void setup(OperatorSpec& spec) override;
@@ -91,6 +88,10 @@ class MIMODeinterleaveOp
   std::vector<int64_t> cached_gather_host_;
   int64_t* d_gather_map_{nullptr};
   size_t d_gather_capacity_{0};
+
+  MaxTensorExtents extents_;
+  std::uint32_t max_rank_{4U};
+  std::size_t max_byte_span_{0U};
 };
 
 extern template class MIMODeinterleaveOp<float>;

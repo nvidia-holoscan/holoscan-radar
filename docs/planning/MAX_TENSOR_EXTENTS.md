@@ -1,7 +1,11 @@
-# Max Tensor Extents (tentative)
+# Max Tensor Extents (in progress)
 
-**Status:** design proposal only. **Do not implement** until Dylan approves
-(or amends) this approach.
+**Status:** C++ operator wave landed on `dpc/hs5.0-fixes` (all fat ops +
+Graph unit tests at `ctest -j4`). Remaining: apps Graph port (phase 4),
+Python bindings polish, xl perf ladders vs honest spans. **Pinned baseline
+(2026-08-15):**
+[`MAX_TENSOR_EXTENTS_2026-08-15.md`](MAX_TENSOR_EXTENTS_2026-08-15.md) —
+keep that file unchanged; edit this living doc for later revisions.
 
 Module convention for sizing HSDK 5 Tensor output pools, **plus** dropping
 opaque leading-batch as a module invariant. Pool sizing is **not** an HSDK 5
@@ -109,8 +113,8 @@ struct MaxTensorExtents {
 
 // Parent / grouping keys (after_range, for_beamscan) are app-local.
 // Keys *inside* each node match MaxTensorExtents fields (max_channels, …).
-const auto after_range = MaxTensorExtents::from_yaml(root["after_range"]);
-const auto for_beamscan = MaxTensorExtents::from_yaml(root["for_beamscan"]);
+const auto after_range = MaxTensorExtentsFromYaml(root["after_range"]);
+const auto for_beamscan = MaxTensorExtentsFromYaml(root["for_beamscan"]);
 
 auto range = graph.op<FMCWRangeProcessorOp<float>>("range", after_range);
 auto beam = graph.op<BeamscanEstimatorOp<float>>("beamscan", for_beamscan);
@@ -128,7 +132,7 @@ App fills MaxTensorExtents (from YAML or cfg)
 
 | Fixed by module contract | App-flexible |
 | --- | --- |
-| Extent **field names** on `MaxTensorExtents` (and the same keys under any node passed to `from_yaml`) | Which YAML **parent/group** nodes exist (`after_range`, `for_beamscan`, …) and which node is passed into which `op()` |
+| Extent **field names** on `MaxTensorExtents` (and the same keys under any node passed to `MaxTensorExtentsFromYaml`) | Which YAML **parent/group** nodes exist (`after_range`, `for_beamscan`, …) and which node is passed into which `op()` |
 | Which fields each **operator** requires (per-op docs) | Filling extents without YAML (e.g. from `cfg` / cube / grids into the struct) |
 | Ctor-capture injection (not Params) | Deriving the numeric values from scene config |
 | No opaque leading batch on data ports | App-level multi-item composition |

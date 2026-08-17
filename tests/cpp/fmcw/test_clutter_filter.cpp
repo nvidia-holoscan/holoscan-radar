@@ -3,7 +3,7 @@
 
 // Tests for ClutterFilterOp (HSDK 5 Graph harness):
 // zero-Doppler nulling with moving-target preservation, the delay
-// cancellers' binomial high-pass response, leading-batch-axis handling,
+// cancellers' binomial high-pass response, named RX-axis handling,
 // sticky method overrides, error paths, and float/double agreement.
 
 #include <gtest/gtest.h>
@@ -219,8 +219,9 @@ TEST(ClutterFilterOpTest, DelayCancellersNotchDC) {
   }
 }
 
-TEST(ClutterFilterOpTest, LeadingBatchAxesPreservedAndIndependent) {
-  const int64_t batch = 2;
+TEST(ClutterFilterOpTest, NamedRxAxisPreservedAndIndependent) {
+  // Rank-3 leading dim is the named N_rx axis (SIMO), not opaque batch.
+  const int64_t num_rx = 2;
   const int64_t nc = 8;
   const int64_t nb = 16;
   const auto slice0 = doppler_tone<float>(nc, nb, 0.25);
@@ -233,11 +234,11 @@ TEST(ClutterFilterOpTest, LeadingBatchAxesPreservedAndIndependent) {
   host.insert(host.end(), slice1.begin(), slice1.end());
 
   const HostTensor out = run_single<float>(
-      host, {batch, nc, nb}, ClutterFilterMethod::kMeanSubtraction);
-  ASSERT_EQ(out.shape, (std::vector<int64_t>{batch, nc, nb}));
+      host, {num_rx, nc, nb}, ClutterFilterMethod::kMeanSubtraction);
+  ASSERT_EQ(out.shape, (std::vector<int64_t>{num_rx, nc, nb}));
 
   const auto* data = out.as<std::complex<float>>();
-  for (int64_t b = 0; b < batch; ++b) {
+  for (int64_t b = 0; b < num_rx; ++b) {
     for (int64_t r = 0; r < nb; ++r) {
       std::complex<double> mean{0.0, 0.0};
       for (int64_t k = 0; k < nc; ++k) {
@@ -258,8 +259,26 @@ TEST(ClutterFilterOpTest, LeadingBatchAxesPreservedAndIndependent) {
   }
 
   const HostTensor delayed = run_single<float>(
-      host, {batch, nc, nb}, ClutterFilterMethod::kSingleDelay);
-  EXPECT_EQ(delayed.shape, (std::vector<int64_t>{batch, nc - 1, nb}));
+      host, {num_rx, nc, nb}, ClutterFilterMethod::kSingleDelay);
+  EXPECT_EQ(delayed.shape, (std::vector<int64_t>{num_rx, nc - 1, nb}));
+}
+
+TEST(ClutterFilterOpTest, RejectsOpaqueLeadingBatchWhenExtentsAreSiso) {
+  holoscan::radar::MaxTensorExtents extents;
+  extents.max_chirps = kChirps;
+  extents.max_range_bins = kBins;
+  // No max_rx / max_tx → leading rank must be 0.
+  const auto host = doppler_tone<float>(kChirps, kBins, 0.0);
+  std::vector<std::complex<float>> stacked = host;
+  stacked.insert(stacked.end(), host.begin(), host.end());
+  const GraphRunResult result =
+      run_operator_graph_result<ClutterFilterOp<float>>(
+          {to_device_tensor(stacked,
+                            std::vector<int64_t>{2, kChirps, kBins},
+                            complex_dtype<float>())},
+          ClutterFilterParams{},
+          extents);
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(ClutterFilterOpTest, LiveMethodOverrideMidStreamAndSticky) {

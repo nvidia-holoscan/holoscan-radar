@@ -25,6 +25,7 @@
 #include "angle_estimation/esprit_estimator_op/esprit_estimator_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
@@ -159,8 +160,13 @@ perf::TimingCollector run_esprit_graph(const Scenario& scen,
       std::move(cube), total_frames, "esprit-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_items = scen.detections;
+        extents.max_sources = 4;
+        extents.max_channels = scen.channels;
         auto op =
-            graph.op<hr::ESPRITEstimatorOp<PerfPrecision>>("esprit");
+            graph.op<hr::ESPRITEstimatorOp<PerfPrecision>>(
+                "esprit", extents);
         hr::ESPRITParams params;
         params.array_geometry = scenario_geometry(scen, 0.5);
         params.angle_convention.preset =

@@ -23,6 +23,7 @@
 
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/math/constants.hpp"
 
@@ -38,14 +39,16 @@ struct RangeStageState;  // kernel-side caches; defined in range_stage.hpp
 // parameters; module-wide conventions live in operators/common/README.md.
 //
 // In:  adc_cube       — complex64/complex128 (IQ IF) or float32/float64
-//                       (real IF), (..., num_chirps, samples_per_chirp).
+//                       (real IF), (num_chirps, samples_per_chirp) or with
+//                       named leading N_rx / (M_tx, N_rx).
 // Out: range_profiles — complex64/complex128,
-//                       (..., num_chirps, num_range_bins).
+//                       same leading + (num_chirps, num_range_bins).
 // Out: range_bins     — optional, float32/float64, (num_range_bins,);
 //                       emitted only when a waveform descriptor is set.
 //
 // Precision is fixed at compile time by the template instantiation
 // (T = float → complex64/float32, T = double → complex128/float64).
+// Fat outs require MaxTensorExtents at graph.op() (ctor).
 //
 // [EA HSDK5 ONLY] range_window and waveform are [live] in OPERATOR_API.md
 // but stay Params-only here: WindowSpec and FMCWWaveformDescriptor own
@@ -101,10 +104,6 @@ static_assert(
     "HOLOSCAN_PARAM_SCHEMA must be in "
     "FMCWRangeProcessorParams's namespace");
 
-inline constexpr std::uint32_t kFMCWRangeProcessorMaxRank = 8U;
-// 256 MiB
-inline constexpr std::size_t kFMCWRangeProcessorMaxByteSpan = 256ULL << 20;
-
 template <typename T>
 class FMCWRangeProcessorOp
     : public holoscan::Operator<FMCWRangeProcessorParams> {
@@ -112,7 +111,7 @@ class FMCWRangeProcessorOp
                 "FMCWRangeProcessorOp supports float and double precision");
 
  public:
-  FMCWRangeProcessorOp() = default;
+  explicit FMCWRangeProcessorOp(const MaxTensorExtents& extents);
   ~FMCWRangeProcessorOp() override;
 
   void setup(OperatorSpec& spec) override;
@@ -143,6 +142,11 @@ class FMCWRangeProcessorOp
   // Kernel-side caches (window coefficients, dechirp reference, seen FFT
   // lengths); allocated on first compute().
   std::shared_ptr<detail::RangeStageState<T>> state_;
+
+  MaxTensorExtents extents_;
+  std::uint32_t max_rank_{2U};
+  std::size_t max_byte_span_{0U};
+  std::size_t range_bins_byte_span_{0U};
 };
 
 // Explicit instantiations live in fmcw_range_processor_op.cu.

@@ -445,7 +445,9 @@ TEST(FMCWRangeProcessorOpTest, NfftOversamplingInterpolatesGrid) {
   EXPECT_NEAR(axis[1], 0.5 * base_axis[1], 1e-4 * base_axis[1]);
 }
 
-TEST(FMCWRangeProcessorOpTest, LeadingBatchAxesRoundTrip) {
+TEST(FMCWRangeProcessorOpTest, NamedRxAxisRoundTrip) {
+  // Rank-3 leading dim is the named N_rx axis (SIMO), not opaque batch.
+  // default_test_extents() sets max_rx so the leading axis is admitted.
   const sim::SimWaveform waveform{};
   const double target_range = range_at_bin(30.0);
 

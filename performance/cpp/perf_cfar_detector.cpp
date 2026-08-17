@@ -31,6 +31,7 @@
 
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "utils/perf_app.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
@@ -187,8 +188,25 @@ perf::TimingCollector run_cfar_graph(const CfarScenario& scen,
       std::move(input), total_frames, "cfar-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_doppler_bins = scen.input_shape[
+            scen.input_shape.size() - 2];
+        extents.max_range_bins = scen.input_shape[
+            scen.input_shape.size() - 1];
+        int64_t out_batch = 1, k = 1;
+        batch_and_k(scen.input_shape, scen.nci_axes,
+                    &out_batch, &k);
+        // Input leading rank (before NCI) must be admitted even when NCI
+        // collapses it to a single plane (out_batch == 1).
+        if (scen.input_shape.size() > 2) {
+          extents.max_rx = scen.input_shape[0];
+        }
+        extents.max_detections = out_batch *
+            extents.max_doppler_bins.value() *
+            extents.max_range_bins.value();
         auto op =
-            graph.op<hr::CFARDetectorOp<PerfPrecision>>("cfar");
+            graph.op<hr::CFARDetectorOp<PerfPrecision>>(
+                "cfar", extents);
         hr::CFARParams params;
         params.cfar_variant = scen.variant;
         params.guard_cells = scen.footprint.guard;
