@@ -16,7 +16,7 @@
         },
         "holoscan_sdk": {
             "minimum_required_version": "5.0.0",
-            "tested_versions": ["5.0.0-ea"]
+            "tested_versions": ["5.0.0"]
         },
         "platforms": ["x86_64", "aarch64"],
         "tags": ["Radar", "Angle", "MUSIC", "Subspace", "GPU", "FMCW", "SIMO"],

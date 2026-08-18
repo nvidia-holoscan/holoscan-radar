@@ -161,8 +161,8 @@ ULAParameters analyze_ula(const ArrayGeometry& geometry) {
 
 template <typename T>
 RootMUSICEstimatorOp<T>::RootMUSICEstimatorOp(
-    const MaxTensorExtents& extents)
-    : extents_(extents) {
+    const MaxTensorExtents& extents) {
+  extents_ = extents;
   if (!extents.max_items.has_value() &&
       !extents.max_sources.has_value()) {
     return;
