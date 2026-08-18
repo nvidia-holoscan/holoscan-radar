@@ -39,7 +39,7 @@ Read before starting non-trivial work, in this precedence order:
 5. [`docs/planning/NEW_OPERATOR_CHECKLIST.md`](docs/planning/NEW_OPERATOR_CHECKLIST.md) — landing gate; verify before claiming an operator (or variant slice) done.
 6. [`docs/planning/OPERATOR_DEVELOPMENT.md`](docs/planning/OPERATOR_DEVELOPMENT.md) — how to implement well: hot-path discipline, diagnosis, `[live]`/calibration pitfalls, tests, and performance characterization (lessons from landed operators).
 7. [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md) — index of items blocked on a team decision (detail in each operator’s `OPEN_ITEMS.md`).
-8. [`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md) — **[EA HSDK5 ONLY]** HSDK 5 / EA migration issues (SDK gaps, durable API changes, deferred port work).
+8. [`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md) — **[EA HSDK5 ONLY]** HSDK 5 / EA migration issues (SDK gaps, durable API changes, deferred port work). Executive overview: [`docs/planning/HSDK5_BRANCH_SUMMARY.md`](docs/planning/HSDK5_BRANCH_SUMMARY.md).
 
 Rules that follow from "lockdown":
 
