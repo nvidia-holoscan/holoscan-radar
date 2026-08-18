@@ -87,8 +87,8 @@ expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
 
 template <typename T>
 SnapshotGatherOp<T>::SnapshotGatherOp(
-    const MaxTensorExtents& extents)
-    : extents_(extents) {
+    const MaxTensorExtents& extents) {
+  extents_ = extents;
   const bool has_det = extents.max_detections.has_value() ||
                        extents.max_items.has_value();
   if (!has_det && !extents.max_channels.has_value() &&

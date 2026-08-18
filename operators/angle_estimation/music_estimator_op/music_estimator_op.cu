@@ -79,8 +79,8 @@ expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
 
 template <typename T>
 MUSICEstimatorOp<T>::MUSICEstimatorOp(
-    const MaxTensorExtents& extents)
-    : extents_(extents) {
+    const MaxTensorExtents& extents) {
+  extents_ = extents;
   if (!extents.max_items.has_value() &&
       !extents.max_az.has_value()) {
     return;

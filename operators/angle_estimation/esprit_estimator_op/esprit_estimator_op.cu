@@ -84,8 +84,8 @@ std::string pair_key(const ArrayGeometry& geometry,
 
 template <typename T>
 ESPRITEstimatorOp<T>::ESPRITEstimatorOp(
-    const MaxTensorExtents& extents)
-    : extents_(extents) {
+    const MaxTensorExtents& extents) {
+  extents_ = extents;
   if (!extents.max_items.has_value() &&
       !extents.max_sources.has_value()) {
     return;
