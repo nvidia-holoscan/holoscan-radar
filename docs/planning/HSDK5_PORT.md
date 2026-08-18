@@ -13,6 +13,7 @@ here when the root cause is HSDK 5 / EA.
 
 | Resource | Role |
 | --- | --- |
+| [`HSDK5_BRANCH_SUMMARY.md`](HSDK5_BRANCH_SUMMARY.md) | Executive summary: branch plan, issues + workarounds, EA blockers |
 | [HSDK 5 preview docs](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/introduction/overview.md) | SDK API source of truth (prefer `.md`; index via `llms.txt`) — do not infer from HSDK 4.x |
 | [`OPERATOR_API.md`](OPERATOR_API.md) | Locked operator contracts (ports, shapes, dtypes, params) |
 | [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md) | Done gate once an op is on HSDK 5 (adapt 4.x checklist wording to Graph / `Operator<Params>`) |
