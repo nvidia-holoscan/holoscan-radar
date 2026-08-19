@@ -33,11 +33,154 @@ expected<void, Error> fail_invalid(const std::string& message) {
 
 constexpr const char* kOpName = "FMCWRangeProcessorOp";
 
+// Effective per-tick values after applying sticky scalar overrides. Params-only
+// descriptor values are borrowed from the operator parameter storage.
+struct EffectiveRangeConfig {
+  const WindowSpec* window;
+  bool apply_dechirp;
+  const FMCWWaveformDescriptor* waveform;
+  FftNorm fft_norm;
+  double propagation_speed;
+  int64_t nfft;
+};
+
+// Validated stage configuration plus the output-axis decisions derived from
+// the current input dtype and shape.
+struct ValidatedRangeConfig {
+  detail::RangeStageConfig stage;
+  int64_t num_bins;
+  bool waveform_present;
+};
+
+// Resolve sticky scalar inputs and combine them with the pinned parameters.
+expected<EffectiveRangeConfig, Error> resolve_overrides(
+    Input<bool>& apply_dechirp_in, Input<FftNorm>& fft_norm_in,
+    Input<int64_t>& nfft_in, const FMCWRangeProcessorParams& pinned,
+    std::optional<bool>& sticky_apply_dechirp,
+    std::optional<FftNorm>& sticky_fft_norm,
+    std::optional<int64_t>& sticky_nfft) {
+  HOLOSCAN_TRY(auto apply_dechirp,
+               resolve_sticky_override(apply_dechirp_in,
+                                       pinned.apply_dechirp,
+                                       sticky_apply_dechirp));
+  HOLOSCAN_TRY(auto fft_norm,
+               resolve_sticky_override(fft_norm_in, pinned.fft_norm,
+                                       sticky_fft_norm));
+  HOLOSCAN_TRY(auto nfft,
+               resolve_sticky_override(nfft_in, pinned.nfft, sticky_nfft));
+
+  return EffectiveRangeConfig{.window = &pinned.range_window,
+                              .apply_dechirp = apply_dechirp,
+                              .waveform = &pinned.waveform,
+                              .fft_norm = fft_norm,
+                              .propagation_speed = pinned.propagation_speed,
+                              .nfft = nfft};
+}
+
+// Classify the input precision and return whether the input is complex-IF.
+template <typename T>
+expected<bool, Error> classify_complex_input(const Tensor& input) {
+  try {
+    const InputPrecision precision =
+        classify_input_dtype<T>(input, "adc_cube", /*allow_real=*/true);
+    return precision == InputPrecision::kComplex;
+  } catch (const std::invalid_argument& e) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, std::string(e.what())});
+  }
+}
+
+// Collapse the named leading axes for MatX and enforce their extent bounds.
+expected<BatchedShape, Error> resolve_batched_shape(
+    const Tensor& input, const MaxTensorExtents& extents) {
+  BatchedShape batched;
+  try {
+    batched = collapse_batch(input, "adc_cube");
+  } catch (const std::invalid_argument& e) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, std::string(e.what())});
+  }
+
+  const std::size_t max_leading = named_tx_rx_leading_rank(extents);
+  if (batched.leading.size() > max_leading) {
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 unexpected_leading_message(
+                                     kOpName, batched.leading.size(),
+                                     max_leading)});
+  }
+  const std::int64_t max_rx = extent_rx_or_channels(extents);
+  const std::int64_t max_tx = extent_or_one(extents.max_tx);
+  if (batched.batch > max_tx * max_rx) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) + ": leading product " +
+            std::to_string(batched.batch) +
+            " exceeds max_tx*max_rx from MaxTensorExtents"});
+  }
+  return batched;
+}
+
+// Validate configuration-dependent constraints and build the stage config.
+expected<ValidatedRangeConfig, Error> validate_configuration(
+    const EffectiveRangeConfig& effective, bool complex_input,
+    const BatchedShape& batched) {
+  std::optional<int64_t> opt_nfft;
+  if (effective.nfft != 0) {
+    opt_nfft = effective.nfft;
+  }
+
+  if (opt_nfft.has_value() && *opt_nfft < batched.cols) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) + ": nfft (" + std::to_string(*opt_nfft) +
+            ") must be >= samples_per_chirp (" +
+            std::to_string(batched.cols) + ") on port adc_cube"});
+  }
+  if (effective.apply_dechirp) {
+    if (!effective.waveform->is_valid()) {
+      return make_unexpected(Error{
+          ErrorCode::kInvalidArgument,
+          std::string(kOpName) +
+              ": apply_dechirp = true requires a waveform descriptor "
+              "(dechirp reference source)"});
+    }
+    if (!complex_input) {
+      return make_unexpected(Error{
+          ErrorCode::kInvalidArgument,
+          std::string(kOpName) +
+              ": apply_dechirp = true requires complex-IF input on port "
+              "adc_cube (received real-IF samples; software dechirp "
+              "produces complex samples, inconsistent with the real-IF "
+              "output size)"});
+    }
+  }
+
+  const bool waveform_present = effective.waveform->is_valid();
+  std::optional<FMCWWaveformDescriptor> opt_waveform;
+  if (waveform_present) {
+    opt_waveform = *effective.waveform;
+  }
+
+  detail::RangeStageConfig stage;
+  stage.window = *effective.window;
+  stage.apply_dechirp = effective.apply_dechirp;
+  stage.waveform = std::move(opt_waveform);
+  stage.fft_norm = effective.fft_norm;
+  stage.propagation_speed = effective.propagation_speed;
+  stage.nfft = opt_nfft;
+
+  return ValidatedRangeConfig{
+      .stage = std::move(stage),
+      .num_bins = detail::range_num_bins(complex_input, batched.cols, opt_nfft),
+      .waveform_present = waveform_present};
+}
+
 }  // namespace
 
 template <typename T>
 FMCWRangeProcessorOp<T>::FMCWRangeProcessorOp(
-    const MaxTensorExtents& extents) {
+    const MaxTensorExtents& extents)
+    : state_(std::make_shared<detail::RangeStageState<T>>()) {
   const char* who = "FMCWRangeProcessorOp";
   const std::int64_t max_chirps =
       require_extent(extents.max_chirps, "max_chirps", who);
@@ -106,36 +249,8 @@ Contract FMCWRangeProcessorOp<T>::contract() const {
 template <typename T>
 expected<void, Error> FMCWRangeProcessorOp<T>::compute(
     ExecutionContext& context) {
+  // Receive the input tensor, validate the format, and prepare for processing.
   HOLOSCAN_TRY(auto input, receive_tensor(adc_cube, kOpName));
-
-  const FMCWRangeProcessorParams& pinned =
-      context.params<FMCWRangeProcessorParams>();
-
-  // Resolve sticky [live] overrides for POD scalars.
-  HOLOSCAN_TRY(auto eff_apply_dechirp,
-               resolve_sticky_override(apply_dechirp_in,
-                                       pinned.apply_dechirp,
-                                       sticky_apply_dechirp_));
-  HOLOSCAN_TRY(auto eff_fft_norm,
-               resolve_sticky_override(fft_norm_in, pinned.fft_norm,
-                                       sticky_fft_norm_));
-  HOLOSCAN_TRY(auto eff_nfft,
-               resolve_sticky_override(nfft_in, pinned.nfft,
-                                       sticky_nfft_));
-
-  // [EA HSDK5 ONLY] range_window and waveform are Params-only (§9).
-  const WindowSpec& eff_window = pinned.range_window;
-  const FMCWWaveformDescriptor& eff_waveform = pinned.waveform;
-
-  // Classify and validate input against the locked contract.
-  InputPrecision precision;
-  try {
-    precision = classify_input_dtype<T>(input, "adc_cube",
-                                        /*allow_real=*/true);
-  } catch (const std::invalid_argument& e) {
-    return fail_invalid(e.what());
-  }
-  const bool complex_input = precision == InputPrecision::kComplex;
 
   try {
     require_cuda_accessible(input, "adc_cube", kOpName);
@@ -144,93 +259,33 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
     return fail_invalid(e.what());
   }
 
-  BatchedShape batched;
-  try {
-    batched = collapse_batch(input, "adc_cube");
-  } catch (const std::invalid_argument& e) {
-    return fail_invalid(e.what());
-  }
+  HOLOSCAN_TRY(auto complex_input, classify_complex_input<T>(input));
+  HOLOSCAN_TRY(auto batched, resolve_batched_shape(input, extents_));
 
-  const std::size_t max_leading =
-      named_tx_rx_leading_rank(extents_);
-  if (batched.leading.size() > max_leading) {
-    return fail_invalid(unexpected_leading_message(
-        kOpName, batched.leading.size(), max_leading));
-  }
-  const std::int64_t max_rx = extent_rx_or_channels(extents_);
-  const std::int64_t max_tx = extent_or_one(extents_.max_tx);
-  if (batched.batch > max_tx * max_rx) {
-    return fail_invalid(
-        std::string(kOpName) + ": leading product " +
-        std::to_string(batched.batch) +
-        " exceeds max_tx*max_rx from MaxTensorExtents");
-  }
+  // Resolve the configuration parameters from the operator context.
+  const FMCWRangeProcessorParams& pinned =
+      context.params<FMCWRangeProcessorParams>();
 
-  // nfft: 0 means exact (no zero-padding); translate to optional for
-  // the stage config.
-  std::optional<int64_t> opt_nfft;
-  if (eff_nfft != 0) {
-    opt_nfft = eff_nfft;
-  }
+  HOLOSCAN_TRY(auto effective,
+               resolve_overrides(
+                   apply_dechirp_in, fft_norm_in, nfft_in, pinned,
+                   sticky_apply_dechirp_, sticky_fft_norm_, sticky_nfft_));
 
-  if (opt_nfft.has_value() && *opt_nfft < batched.cols) {
-    return fail_invalid(
-        std::string(kOpName) + ": nfft (" + std::to_string(*opt_nfft) +
-        ") must be >= samples_per_chirp (" +
-        std::to_string(batched.cols) + ") on port adc_cube");
-  }
-  if (eff_apply_dechirp) {
-    if (!eff_waveform.is_valid()) {
-      return fail_invalid(
-          std::string(kOpName) +
-          ": apply_dechirp = true requires a waveform descriptor "
-          "(dechirp reference source)");
-    }
-    if (!complex_input) {
-      return fail_invalid(
-          std::string(kOpName) +
-          ": apply_dechirp = true requires complex-IF input on port "
-          "adc_cube (received real-IF samples; software dechirp "
-          "produces complex samples, inconsistent with the real-IF "
-          "output size)");
-    }
-  }
+  HOLOSCAN_TRY(auto validated,
+               validate_configuration(effective, complex_input, batched));
 
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
-    return make_unexpected(Error{ErrorCode::kNotSupported,
-                                 std::string(kOpName) +
-                                     ": no CUDA compute stream"});
-  }
-
-  // Build the RangeStageConfig from effective parameters.
-  const bool waveform_present = eff_waveform.is_valid();
-  std::optional<FMCWWaveformDescriptor> opt_waveform;
-  if (waveform_present) {
-    opt_waveform = eff_waveform;
-  }
-
-  detail::RangeStageConfig cfg;
-  cfg.window = eff_window;
-  cfg.apply_dechirp = eff_apply_dechirp;
-  cfg.waveform = opt_waveform;
-  cfg.fft_norm = eff_fft_norm;
-  cfg.propagation_speed = pinned.propagation_speed;
-  cfg.nfft = opt_nfft;
-
-  const int64_t num_bins =
-      detail::range_num_bins(complex_input, batched.cols, opt_nfft);
-
-  if (!state_) {
-    state_ = std::make_shared<detail::RangeStageState<T>>();
+    const std::string& msg = std::string(kOpName) + ": no CUDA compute stream";
+    return make_unexpected(Error{ErrorCode::kNotSupported, msg});
   }
 
   // Conditionally prepare range_bins first (before range_profiles) so both
   // loans are ready before either is emitted.
-  const bool emit_bins = waveform_present;
+  const bool emit_bins = validated.waveform_present;
   std::optional<TensorOutputLoan> bins_loan;
   if (emit_bins) {
-    const std::vector<int64_t> bins_shape{num_bins};
+    const std::vector<int64_t> bins_shape{validated.num_bins};
     const DLDataType bins_dtype = real_dtype<T>();
     HOLOSCAN_TRY(auto prepared,
                  prepare_device_tensor(
@@ -238,7 +293,7 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
                      [&](void* dst, std::size_t) -> expected<void, Error> {
                        try {
                          detail::fill_range_bins<T>(
-                             cfg, batched.cols, num_bins,
+                             validated.stage, batched.cols, validated.num_bins,
                              static_cast<T*>(dst), stream);
                        } catch (const std::invalid_argument& e) {
                          return fail_invalid(e.what());
@@ -253,7 +308,7 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
 
   // Run the range stage into a freshly allocated output tensor.
   const std::vector<int64_t> out_shape =
-      full_rank_shape(batched, batched.rows, num_bins);
+      full_rank_shape(batched, batched.rows, validated.num_bins);
   const DLDataType out_dtype = complex_dtype<T>();
   const void* input_ptr = input.data();
 
