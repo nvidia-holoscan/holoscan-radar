@@ -8,9 +8,8 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <sstream>
+#include <stdexcept>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -32,16 +31,124 @@ expected<void, Error> fail_invalid(const std::string& message) {
   return make_unexpected(Error{ErrorCode::kInvalidArgument, message});
 }
 
-template <typename T>
-constexpr const char* precision_name() {
-  return std::is_same_v<T, float> ? "float" : "double";
+constexpr const char* kOpName = "FMCWDopplerProcessorOp";
+
+// Effective per-tick values after applying sticky scalar overrides. Params-only
+// descriptor values are borrowed from the operator parameter storage.
+struct EffectiveDopplerConfig {
+  const WindowSpec* window;
+  bool center_zero_doppler;
+  const FMCWWaveformDescriptor* waveform;
+  FftNorm fft_norm;
+  int64_t nfft;
+};
+
+// Validated stage configuration plus the output-axis decisions derived from
+// the current input shape.
+struct ValidatedDopplerConfig {
+  detail::DopplerStageConfig stage;
+  int64_t num_doppler;
+  bool waveform_present;
+};
+
+// Resolve sticky scalar inputs and combine them with the pinned parameters.
+expected<EffectiveDopplerConfig, Error> resolve_overrides(
+    Input<bool>& center_zero_doppler_in, Input<FftNorm>& fft_norm_in,
+    Input<int64_t>& nfft_in, const FMCWDopplerProcessorParams& pinned,
+    std::optional<bool>& sticky_center_zero_doppler,
+    std::optional<FftNorm>& sticky_fft_norm,
+    std::optional<int64_t>& sticky_nfft) {
+  HOLOSCAN_TRY(auto center_zero_doppler,
+               resolve_sticky_override(center_zero_doppler_in,
+                                       pinned.center_zero_doppler,
+                                       sticky_center_zero_doppler));
+  HOLOSCAN_TRY(auto fft_norm,
+               resolve_sticky_override(fft_norm_in, pinned.fft_norm,
+                                       sticky_fft_norm));
+  HOLOSCAN_TRY(auto nfft,
+               resolve_sticky_override(nfft_in, pinned.nfft, sticky_nfft));
+
+  return EffectiveDopplerConfig{
+      .window = &pinned.doppler_window,
+      .center_zero_doppler = center_zero_doppler,
+      .waveform = &pinned.waveform,
+      .fft_norm = fft_norm,
+      .nfft = nfft};
+}
+
+// Collapse the named leading axes for MatX and enforce their extent bounds.
+expected<BatchedShape, Error> resolve_batched_shape(
+    const Tensor& input, const MaxTensorExtents& extents) {
+  BatchedShape batched;
+  try {
+    batched = collapse_batch(input, "range_profiles");
+  } catch (const std::invalid_argument& e) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, std::string(e.what())});
+  }
+
+  const std::size_t max_leading = named_tx_rx_leading_rank(extents);
+  if (batched.leading.size() > max_leading) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        unexpected_leading_message(kOpName, batched.leading.size(),
+                                   max_leading)});
+  }
+  const std::int64_t max_rx = extent_rx_or_channels(extents);
+  const std::int64_t max_tx = extent_or_one(extents.max_tx);
+  if (batched.batch > max_tx * max_rx) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) + ": leading product " +
+            std::to_string(batched.batch) +
+            " exceeds max_tx*max_rx from MaxTensorExtents"});
+  }
+  return batched;
+}
+
+// Validate configuration-dependent constraints and build the stage config.
+expected<ValidatedDopplerConfig, Error> validate_configuration(
+    const EffectiveDopplerConfig& effective, const BatchedShape& batched) {
+  std::optional<int64_t> opt_nfft;
+  if (effective.nfft != 0) {
+    opt_nfft = effective.nfft;
+  }
+
+  if (opt_nfft.has_value() && *opt_nfft < batched.rows) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) + ": nfft (" + std::to_string(*opt_nfft) +
+            ") must be >= num_chirps (" + std::to_string(batched.rows) +
+            ") on input port 'range_profiles'"});
+  }
+
+  const bool waveform_present = effective.waveform->is_valid();
+  std::optional<FMCWWaveformDescriptor> opt_waveform;
+  if (waveform_present) {
+    opt_waveform = *effective.waveform;
+  }
+
+  detail::DopplerStageConfig stage;
+  stage.window = *effective.window;
+  stage.center_zero_doppler = effective.center_zero_doppler;
+  stage.waveform = std::move(opt_waveform);
+  stage.fft_norm = effective.fft_norm;
+  stage.nfft = opt_nfft;
+  const int64_t num_doppler =
+      detail::doppler_num_bins(batched.rows, stage.nfft);
+
+  return ValidatedDopplerConfig{
+      .stage = std::move(stage),
+      .num_doppler = num_doppler,
+      .waveform_present = waveform_present};
 }
 
 }  // namespace
 
 template <typename T>
 FMCWDopplerProcessorOp<T>::FMCWDopplerProcessorOp(
-    const MaxTensorExtents& extents) {
+    const MaxTensorExtents& extents)
+    : state_(std::make_shared<detail::DopplerStageState<T>>()) {
   const char* who = "FMCWDopplerProcessorOp";
   const std::int64_t max_chirps =
       require_extent(extents.max_chirps, "max_chirps", who);
@@ -110,113 +217,56 @@ Contract FMCWDopplerProcessorOp<T>::contract() const {
 template <typename T>
 expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
     ExecutionContext& context) {
-  const std::string op_name =
-      std::string("FMCWDopplerProcessorOp<") + precision_name<T>() + ">";
+  HOLOSCAN_TRY(auto input, receive_tensor(range_profiles, kOpName));
 
-  HOLOSCAN_TRY(auto input,
-               receive_tensor(range_profiles, op_name));
+  try {
+    require_cuda_accessible(input, "range_profiles", kOpName);
+    require_contiguous(input, "range_profiles", kOpName);
+  } catch (const std::invalid_argument& e) {
+    return fail_invalid(e.what());
+  }
 
   const FMCWDopplerProcessorParams& pinned =
       context.params<FMCWDopplerProcessorParams>();
 
-  // Resolve sticky [live] overrides from POD input ports.
-  HOLOSCAN_TRY(auto eff_center,
-               resolve_sticky_override(center_zero_doppler_in,
-                                       pinned.center_zero_doppler,
-                                       sticky_center_zero_doppler_));
-  HOLOSCAN_TRY(auto eff_fft_norm,
-               resolve_sticky_override(fft_norm_in, pinned.fft_norm,
-                                       sticky_fft_norm_));
-  HOLOSCAN_TRY(auto eff_nfft_raw,
-               resolve_sticky_override(nfft_in, pinned.nfft,
-                                       sticky_nfft_));
-
-  // nfft 0 = "use num_chirps" (Params "none" convention).
-  const std::optional<int64_t> eff_nfft =
-      eff_nfft_raw != 0 ? std::optional<int64_t>{eff_nfft_raw} : std::nullopt;
-
-  // doppler_window and waveform are Params-only on EA (HSDK5_PORT §9).
-  const WindowSpec& eff_window = pinned.doppler_window;
-  const bool waveform_effective = pinned.waveform.is_valid();
-  const std::optional<FMCWWaveformDescriptor> eff_waveform =
-      waveform_effective ? std::optional{pinned.waveform} : std::nullopt;
+  HOLOSCAN_TRY(auto effective,
+               resolve_overrides(
+                   center_zero_doppler_in, fft_norm_in, nfft_in, pinned,
+                   sticky_center_zero_doppler_, sticky_fft_norm_,
+                   sticky_nfft_));
 
   try {
     classify_input_dtype<T>(input, "range_profiles", /*allow_real=*/false);
-    require_cuda_accessible(input, "range_profiles", op_name);
-    require_contiguous(input, "range_profiles", op_name);
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
 
-  BatchedShape batched;
-  try {
-    batched = collapse_batch(input, "range_profiles");
-  } catch (const std::invalid_argument& e) {
-    return fail_invalid(e.what());
-  }
-  const std::size_t max_leading =
-      named_tx_rx_leading_rank(extents_);
-  if (batched.leading.size() > max_leading) {
-    return fail_invalid(unexpected_leading_message(
-        op_name.c_str(), batched.leading.size(),
-        max_leading));
-  }
-  const std::int64_t max_rx_val =
-      extent_rx_or_channels(extents_);
-  const std::int64_t max_tx_val =
-      extent_or_one(extents_.max_tx);
-  if (batched.batch > max_tx_val * max_rx_val) {
-    return fail_invalid(
-        op_name + ": leading product " +
-        std::to_string(batched.batch) +
-        " exceeds max_tx*max_rx from "
-        "MaxTensorExtents");
-  }
-  const int64_t num_chirps = batched.rows;
-  const int64_t num_range_bins = batched.cols;
-  if (eff_nfft.has_value() && *eff_nfft < num_chirps) {
-    std::ostringstream msg;
-    msg << op_name << ": nfft (" << *eff_nfft
-        << ") must be >= num_chirps (" << num_chirps
-        << ") on input port 'range_profiles'";
-    return fail_invalid(msg.str());
-  }
+  HOLOSCAN_TRY(auto batched, resolve_batched_shape(input, extents_));
+
+  HOLOSCAN_TRY(auto validated,
+               validate_configuration(effective, batched));
 
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
-    return make_unexpected(Error{ErrorCode::kNotSupported,
-                                 op_name + ": no CUDA compute stream"});
+    const std::string& msg = std::string(kOpName) + ": no CUDA compute stream";
+    return make_unexpected(Error{ErrorCode::kNotSupported, msg});
   }
-
-  if (!state_) {
-    state_ = std::make_shared<detail::DopplerStageState<T>>();
-  }
-
-  detail::DopplerStageConfig cfg;
-  cfg.window = eff_window;
-  cfg.center_zero_doppler = eff_center;
-  cfg.waveform = eff_waveform;
-  cfg.fft_norm = eff_fft_norm;
-  cfg.nfft = eff_nfft;
-
-  const int64_t num_doppler =
-      detail::doppler_num_bins(num_chirps, eff_nfft);
 
   // Conditional velocity_bins: emitted only when waveform is effective.
   // Enqueued before the Doppler FFT: its host-staged upload waits on the
   // stream, so this ordering keeps that wait off the FFT hot path.
   std::optional<TensorOutputLoan> velocity_loan;
-  if (eff_waveform.has_value()) {
+  if (validated.waveform_present) {
     HOLOSCAN_TRY(auto loan,
                  prepare_device_tensor(
                      velocity_bins, context,
-                     std::vector<int64_t>{num_doppler},
+                     std::vector<int64_t>{validated.num_doppler},
                      real_dtype<T>(),
                      [&](void* out_ptr, std::size_t) -> expected<void, Error> {
                        try {
                          detail::fill_velocity_bins<T>(
-                             cfg, num_doppler, static_cast<T*>(out_ptr),
+                             validated.stage, validated.num_doppler,
+                             static_cast<T*>(out_ptr),
                              stream);
                        } catch (const std::invalid_argument& e) {
                          return fail_invalid(e.what());
@@ -226,8 +276,9 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
     velocity_loan.emplace(std::move(loan));
   }
 
+  // Run the Doppler stage.
   const std::vector<int64_t> out_shape =
-      full_rank_shape(batched, num_doppler, num_range_bins);
+      full_rank_shape(batched, validated.num_doppler, batched.cols);
   const DLDataType dtype = complex_dtype<T>();
 
   const void* input_ptr = input.data();
@@ -237,9 +288,9 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
                    [&](void* out_ptr, std::size_t) -> expected<void, Error> {
                      try {
                        detail::run_doppler_stage<T>(
-                           cfg, *state_, input_ptr, batched.batch,
-                           num_chirps, num_range_bins, out_ptr,
-                           num_doppler, stream);
+                           validated.stage, *state_, input_ptr, batched.batch,
+                           batched.rows, batched.cols, out_ptr,
+                           validated.num_doppler, stream);
                      } catch (const std::invalid_argument& e) {
                        return fail_invalid(e.what());
                      }
