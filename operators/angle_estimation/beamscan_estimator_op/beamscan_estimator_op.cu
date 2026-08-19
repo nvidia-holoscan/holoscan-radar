@@ -233,11 +233,9 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
 
   const std::string cache_key =
       steering_cache_key(geometry, convention, az, el, taper);
-  // Params-seeded builds are silent (warn_on_build=false); live descriptor
-  // overrides that would rebuild weights are deferred (HSDK5_PORT §9).
   const std::shared_ptr<holoscan::Tensor>& weights =
       steering_cache_.get_or_build(
-          cache_key, /*warn_on_build=*/false, "steering weights", [&] {
+          cache_key, "steering weights", [&] {
             return build_steering_weights_device<T>(
                 geometry, convention, az, el, taper, BeamOrder::kElMajor,
                 SteeringLayout::kChannelMajor, /*conjugate=*/true, stream);

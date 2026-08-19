@@ -59,7 +59,9 @@ by this library:
   wiring the override into `contract()` would fail compile when the port
   is left unconnected, register the port in `setup()` and resolve
   best-effort from `compute()` — see the ClutterFilter pilot. Costly
-  overrides still warn once and cache via `sdk/config_cache.hpp`.
+  reconfigurations still warn once and cache via `sdk/config_cache.hpp`;
+  the cache decides that itself (a miss against a non-empty cache), so
+  callers pass no warn flag.
 - **Params schema replaces ArgumentSetter.** [EA HSDK5 ONLY] Ported
   operators use `Operator<Params>` + `HOLOSCAN_PARAM_SCHEMA` (YAML /
   `set_params` / `from_config`). Drop `HOLOSCAN_OPERATOR_FORWARD_ARGS`

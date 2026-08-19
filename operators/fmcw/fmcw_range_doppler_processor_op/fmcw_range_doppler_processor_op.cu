@@ -344,16 +344,12 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
       {batched.batch, num_chirps, num_range_bins},
       matx::MATX_ASYNC_DEVICE_MEMORY, stream);
 
-  // warn_on_rebuild: false — Params-only window/waveform never trigger
-  // mid-stream rebuilds; POD scalars do not cause ConfigCache invalidation
-  // in the range stage.
-  constexpr bool kWarnOnRebuild = false;
   const void* input_ptr = input.data();
   try {
     detail::run_range_stage<T>(range_cfg, *range_state_, input_ptr,
                                complex_input, batched.batch, num_chirps,
                                samples_per_chirp, profiles.Data(),
-                               num_range_bins, kWarnOnRebuild, stream);
+                               num_range_bins, stream);
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
@@ -376,8 +372,7 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
                            [&](const auto& expr) {
                              detail::run_doppler_stage<T>(
                                  doppler_cfg, *doppler_state_, expr,
-                                 out_ptr, num_doppler,
-                                 kWarnOnRebuild, stream);
+                                 out_ptr, num_doppler, stream);
                            });
                      } catch (const std::invalid_argument& e) {
                        return fail_invalid(e.what());

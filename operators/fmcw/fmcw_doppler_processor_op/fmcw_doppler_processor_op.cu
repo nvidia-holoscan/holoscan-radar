@@ -239,7 +239,7 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
                        detail::run_doppler_stage<T>(
                            cfg, *state_, input_ptr, batched.batch,
                            num_chirps, num_range_bins, out_ptr,
-                           num_doppler, /*warn_on_rebuild=*/false, stream);
+                           num_doppler, stream);
                      } catch (const std::invalid_argument& e) {
                        return fail_invalid(e.what());
                      }

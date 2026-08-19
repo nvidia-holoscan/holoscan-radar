@@ -94,7 +94,7 @@ Contract MIMOCoherentCompensationOp<T>::contract() const {
 template <typename T>
 expected<void, Error> MIMOCoherentCompensationOp<T>::run_tdm_compute(
     ExecutionContext& context, const detail::TdmRdMapsLayout& layout,
-    const Tensor& input, cudaStream_t stream, bool waveform_changed) {
+    const Tensor& input, cudaStream_t stream) {
   if (!effective_waveform_.is_valid()) {
     return fail_invalid(
         "MIMOCoherentCompensationOp: waveform must be a valid "
@@ -104,7 +104,7 @@ expected<void, Error> MIMOCoherentCompensationOp<T>::run_tdm_compute(
   const std::string cache_key = detail::tdm_correction_cache_key(
       effective_waveform_, layout.num_tx, layout.num_doppler);
   const CachedTdmCorrection& cached = correction_cache_.get_or_build(
-      cache_key, waveform_changed, "TDM correction table", [&] {
+      cache_key, "TDM correction table", [&] {
         CachedTdmCorrection entry;
         const auto host = detail::build_tdm_correction_table(
             effective_waveform_, layout.num_tx, layout.num_doppler);
@@ -178,7 +178,7 @@ expected<void, Error> MIMOCoherentCompensationOp<T>::run_ddm_compute(
   const std::string cache_key =
       detail::ddm_demux_cache_key(code, layout.num_doppler);
   const CachedDdmDemux& cached = demux_cache_.get_or_build(
-      cache_key, /*changed=*/false, "DDM demux table", [&] {
+      cache_key, "DDM demux table", [&] {
         CachedDdmDemux entry;
         const auto host = detail::build_ddm_demux_table(
             offsets, num_tx, layout.num_doppler, num_doppler_per_tx);
@@ -249,7 +249,7 @@ expected<void, Error> MIMOCoherentCompensationOp<T>::run_ddm_correlate(
   const std::string cache_key =
       detail::ddm_correlate_cache_key(code, layout.num_doppler);
   const CachedDdmCorrelate& cached = correlate_cache_.get_or_build(
-      cache_key, /*changed=*/false, "DDM correlate FFT weights", [&] {
+      cache_key, "DDM correlate FFT weights", [&] {
         CachedDdmCorrelate entry;
         const auto host_weights =
             detail::build_ddm_corr_weights(code, layout.num_doppler);
@@ -325,17 +325,10 @@ expected<void, Error> MIMOCoherentCompensationOp<T>::compute(
       context.params<MIMOCoherentCompensationParams>();
 
   // waveform is [live] in OPERATOR_API.md but Params-only on EA
-  // (HSDK5_PORT §9: FMCWWaveformDescriptor owns vectors). Read from
-  // Params each tick; track changes for TDM correction-table cache
-  // warn-once (initial Params seed is silent — ConfigCache contract).
-  bool waveform_changed = false;
-  if (!waveform_seeded_) {
-    effective_waveform_ = pinned.waveform;
-    waveform_seeded_ = true;
-  } else if (!(pinned.waveform == effective_waveform_)) {
-    waveform_changed = true;
-    effective_waveform_ = pinned.waveform;
-  }
+  // (HSDK5_PORT §9: FMCWWaveformDescriptor owns vectors). A changed waveform
+  // yields a new correction-table cache key, so ConfigCache handles the
+  // warn-once itself.
+  effective_waveform_ = pinned.waveform;
 
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
@@ -366,8 +359,7 @@ expected<void, Error> MIMOCoherentCompensationOp<T>::compute(
     } catch (const std::invalid_argument& e) {
       return fail_invalid(e.what());
     }
-    HOLOSCAN_TRY(run_tdm_compute(
-        context, layout, input, stream, waveform_changed));
+    HOLOSCAN_TRY(run_tdm_compute(context, layout, input, stream));
   } else {
     return fail_invalid(
         std::string(kOpName) + ": unknown multiplexing_scheme");

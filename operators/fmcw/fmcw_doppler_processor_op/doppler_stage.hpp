@@ -62,8 +62,10 @@ inline int64_t doppler_num_bins(int64_t num_chirps,
 //   out         — device pointer, (batch, num_doppler, num_range_bins),
 //                 cuda::std::complex<T>, preallocated by the caller;
 //                 num_doppler must equal doppler_num_bins(...).
-//   warn_on_rebuild — true when this tick's config came from an
-//                 override that differs from the previous effective config.
+//
+// Cached artifacts (window taps, FFT keys) are rebuilt only for unseen
+// configurations; ConfigCache warns once when it sees a new one after the
+// first.
 //
 // Steps (per the locked contract): window multiply along slow-time, FFT
 // along the slow-time (second-to-last) axis with nfft zero-padding and
@@ -77,8 +79,7 @@ inline int64_t doppler_num_bins(int64_t num_chirps,
 template <typename T, typename InOp>
 void run_doppler_stage(const DopplerStageConfig& cfg,
                        DopplerStageState<T>& state, const InOp& in_op,
-                       void* out, int64_t num_doppler,
-                       bool warn_on_rebuild, cudaStream_t stream) {
+                       void* out, int64_t num_doppler, cudaStream_t stream) {
   static_assert(matx::is_matx_op<InOp>(),
                 "doppler stage: in_op must be a MatX operator or tensor");
   static_assert(InOp::Rank() == 3,
@@ -113,14 +114,13 @@ void run_doppler_stage(const DopplerStageConfig& cfg,
   matx::cudaExecutor exec{stream};
 
   // FFT plan reuse comes from MatX's internal plan cache; seen_fft_keys
-  // exists purely to decide when an override-driven new length warns.
+  // exists purely to decide when a reconfigured length warns.
   const std::string fft_key =
       "nfft=" + std::to_string(num_doppler) +
       ",len=" + std::to_string(num_chirps) +
       ",batch=" + std::to_string(batch * num_range_bins) +
       ",dtype=" + std::string(sizeof(T) == 4 ? "complex64" : "complex128");
-  state.seen_fft_keys.get_or_build(fft_key, warn_on_rebuild,
-                                   "Doppler FFT plan",
+  state.seen_fft_keys.get_or_build(fft_key, "Doppler FFT plan",
                                    []() { return true; });
 
   // The slow-time axis is permuted innermost so the window multiply, FFT,
@@ -148,7 +148,7 @@ void run_doppler_stage(const DopplerStageConfig& cfg,
   if (cfg.window.type != WindowType::kNone) {
     const std::string key = window_cache_key(cfg.window, num_chirps);
     const auto& window = state.windows.get_or_build(
-        key, warn_on_rebuild, "Doppler window", [&]() {
+        key, "Doppler window", [&]() {
           return upload_coefficients<T>(generate_window(cfg.window,
                                                         num_chirps),
                                         stream);
@@ -173,11 +173,11 @@ void run_doppler_stage(const DopplerStageConfig& cfg,
                        DopplerStageState<T>& state, const void* in,
                        int64_t batch, int64_t num_chirps,
                        int64_t num_range_bins, void* out, int64_t num_doppler,
-                       bool warn_on_rebuild, cudaStream_t stream) {
+                       cudaStream_t stream) {
   run_doppler_stage<T>(
       cfg, state,
       make_const_complex_view3<T>(in, batch, num_chirps, num_range_bins),
-      out, num_doppler, warn_on_rebuild, stream);
+      out, num_doppler, stream);
 }
 
 // Compute the velocity_bins axis (m/s) for the current configuration into a

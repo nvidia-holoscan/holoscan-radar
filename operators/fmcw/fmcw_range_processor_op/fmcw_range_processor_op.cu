@@ -257,20 +257,15 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
   const DLDataType out_dtype = complex_dtype<T>();
   const void* input_ptr = input.data();
 
-  // warn_on_rebuild: false — Params-only window/waveform never trigger
-  // mid-stream rebuilds; POD scalars do not cause ConfigCache invalidation
-  // in the range stage.
-  constexpr bool kWarnOnRebuild = false;
-
   HOLOSCAN_TRY(auto profiles_loan,
                prepare_device_tensor(
                    range_profiles, context, out_shape, out_dtype,
                    [&](void* dst, std::size_t) -> expected<void, Error> {
                      try {
                        detail::run_range_stage<T>(
-                           cfg, *state_, input_ptr, complex_input,
-                           batched.batch, batched.rows, batched.cols,
-                           dst, num_bins, kWarnOnRebuild, stream);
+                           validated.stage, *state_, input_ptr, complex_input,
+                           batched.batch, batched.rows, batched.cols, dst,
+                           validated.num_bins, stream);
                      } catch (const std::invalid_argument& e) {
                        return fail_invalid(e.what());
                      }

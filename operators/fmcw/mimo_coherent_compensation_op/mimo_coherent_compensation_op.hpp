@@ -126,7 +126,7 @@ class MIMOCoherentCompensationOp
 
   expected<void, Error> run_tdm_compute(
       ExecutionContext& context, const detail::TdmRdMapsLayout& layout,
-      const Tensor& input, cudaStream_t stream, bool waveform_changed);
+      const Tensor& input, cudaStream_t stream);
 
   expected<void, Error> run_ddm_compute(
       ExecutionContext& context, const detail::DdmRdMapsLayout& layout,
@@ -137,9 +137,6 @@ class MIMOCoherentCompensationOp
       const Tensor& input, cudaStream_t stream);
 
   FMCWWaveformDescriptor effective_waveform_{};
-  // False until the first Params seed; keeps the initial ConfigCache build
-  // silent (warn-once applies to later waveform changes only).
-  bool waveform_seeded_{false};
   ConfigCache<CachedTdmCorrection> correction_cache_{};
   ConfigCache<CachedDdmDemux> demux_cache_{};
   ConfigCache<CachedDdmCorrelate> correlate_cache_{};

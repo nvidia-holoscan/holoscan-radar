@@ -160,11 +160,9 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
       steering_cache_key(geometry, convention, az, el, taper);
   // Conjugated weights, built on device, az-major beams in a
   // (num_beams, num_channels) layout — drops straight into the GEMM.
-  // warn_on_build stays false while live Inputs are deferred (Params-only);
-  // cache still dedupes identical keys across ticks.
   const std::shared_ptr<holoscan::Tensor>& weights =
       steering_cache_.get_or_build(
-          cache_key, /*warn_on_build=*/false, "steering weights", [&] {
+          cache_key, "steering weights", [&] {
             return build_steering_weights_device<T>(
                 geometry, convention, az, el, taper, BeamOrder::kAzMajor,
                 SteeringLayout::kBeamMajor, /*conjugate=*/true, stream);

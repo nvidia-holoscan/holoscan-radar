@@ -5,11 +5,18 @@
 // converters for enums, window specs, and waveform descriptors.
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <holoscan/logger/logger.hpp>
 
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
@@ -41,14 +48,95 @@ TEST(ConfigCacheTest, BuildsOncePerKeyAndCaches) {
   ConfigCache<int> cache;
   int builds = 0;
   auto builder = [&builds]() { return ++builds; };
-  EXPECT_EQ(cache.get_or_build("a", false, "test artifact", builder), 1);
-  EXPECT_EQ(cache.get_or_build("a", true, "test artifact", builder), 1);
-  EXPECT_EQ(cache.get_or_build("b", true, "test artifact", builder), 2);
-  EXPECT_EQ(cache.get_or_build("a", true, "test artifact", builder), 1);
+  EXPECT_EQ(cache.get_or_build("a", "test artifact", builder), 1);
+  EXPECT_EQ(cache.get_or_build("a", "test artifact", builder), 1);
+  EXPECT_EQ(cache.get_or_build("b", "test artifact", builder), 2);
+  // Alternating back to a seen configuration must not rebuild.
+  EXPECT_EQ(cache.get_or_build("a", "test artifact", builder), 1);
   EXPECT_EQ(builds, 2);
   EXPECT_TRUE(cache.contains("a"));
   EXPECT_FALSE(cache.contains("c"));
   EXPECT_EQ(cache.size(), 2u);
+}
+
+// Captures the Holoscan log for the enclosing scope so the warn-once
+// diagnostic can be asserted rather than assumed.
+//
+// Two things have to be neutralized. The level is forced to WARN, and
+// HOLOSCAN_LOG_LEVEL is cleared first because it otherwise overrides
+// set_log_level (so a developer running with a raised level would see this
+// test fail for the wrong reason). The sink writes to the stderr FILE*, so
+// the capture redirects the underlying descriptor rather than replacing a
+// sink: that works no matter when the logger was initialized. Both the level
+// and the environment are restored on scope exit.
+class ScopedLogCapture {
+ public:
+  ScopedLogCapture() {
+    if (const char* env = std::getenv("HOLOSCAN_LOG_LEVEL")) {
+      saved_env_ = env;
+      had_env_ = true;
+      ::unsetenv("HOLOSCAN_LOG_LEVEL");
+    }
+    saved_level_ = holoscan::log_level();
+    holoscan::set_log_level(holoscan::LogLevel::WARN);
+
+    capture_fd_ = ::mkstemp(path_);
+    std::fflush(stderr);
+    saved_stderr_fd_ = ::dup(STDERR_FILENO);
+    ::dup2(capture_fd_, STDERR_FILENO);
+  }
+
+  ~ScopedLogCapture() {
+    std::fflush(stderr);
+    ::dup2(saved_stderr_fd_, STDERR_FILENO);
+    ::close(saved_stderr_fd_);
+    ::close(capture_fd_);
+    ::unlink(path_);
+    holoscan::set_log_level(saved_level_);
+    if (had_env_) {
+      ::setenv("HOLOSCAN_LOG_LEVEL", saved_env_.c_str(), 1);
+    }
+  }
+
+  ScopedLogCapture(const ScopedLogCapture&) = delete;
+  ScopedLogCapture& operator=(const ScopedLogCapture&) = delete;
+
+  // Everything logged in this scope so far. Read through a fresh stream so
+  // the shared descriptor offset does not affect the result.
+  std::string text() const {
+    std::fflush(stderr);
+    std::ifstream in(path_);
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+  }
+
+ private:
+  char path_[32] = "/tmp/radar_log_captureXXXXXX";
+  int capture_fd_ = -1;
+  int saved_stderr_fd_ = -1;
+  holoscan::LogLevel saved_level_ = holoscan::LogLevel::INFO;
+  std::string saved_env_;
+  bool had_env_ = false;
+};
+
+TEST(ConfigCacheTest, FirstBuildIsSilentThenReconfigurationWarnsOnce) {
+  ConfigCache<int> cache;
+  auto builder = []() { return 7; };
+  ScopedLogCapture log;
+
+  // Whether the artifact warning appears in the output this call adds.
+  const auto warned_building = [&](const char* key) {
+    const std::string::size_type before = log.text().size();
+    cache.get_or_build(key, "test artifact", builder);
+    return log.text().find("unseen test artifact configuration", before) !=
+           std::string::npos;
+  };
+
+  EXPECT_FALSE(warned_building("a"));  // initial, parameter-driven build
+  EXPECT_TRUE(warned_building("b"));   // reconfigured to an unseen key
+  EXPECT_FALSE(warned_building("b"));  // cached: warns once per config
+  EXPECT_FALSE(warned_building("a"));  // prior config still cached
 }
 
 // ---- YAML converters -------------------------------------------------------

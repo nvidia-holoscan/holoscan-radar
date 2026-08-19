@@ -420,13 +420,11 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
     }
   }
 
-  // Params-seeded builds are silent (warn_on_build=false); live descriptor
-  // overrides that would rebuild weights are deferred (HSDK5_PORT §9).
   const std::string cache_key =
       steering_cache_key(*manifold_geom, convention, az, el, WindowSpec{});
   const std::shared_ptr<holoscan::Tensor>& manifold =
       steering_cache_.get_or_build(
-          cache_key, /*warn_on_build=*/false, "steering manifold", [&] {
+          cache_key, "steering manifold", [&] {
             return build_steering_weights_device<T>(
                 *manifold_geom, convention, az, el, WindowSpec{},
                 BeamOrder::kElMajor, SteeringLayout::kBeamMajor,
