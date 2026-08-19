@@ -106,7 +106,6 @@ void FMCWRangeDopplerProcessorOp<T>::setup(OperatorSpec& spec) {
   spec.input(clutter_filter_in).queue_depth(2U);
   spec.input(fft_norm_in).queue_depth(2U);
   spec.input(center_zero_doppler_in).queue_depth(2U);
-  spec.input(propagation_speed_in).queue_depth(2U);
   spec.input(nfft_range_in).queue_depth(2U);
   spec.input(nfft_doppler_in).queue_depth(2U);
 }
@@ -146,10 +145,6 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
                resolve_sticky_override(center_zero_doppler_in,
                                        pinned.center_zero_doppler,
                                        sticky_center_zero_doppler_));
-  HOLOSCAN_TRY(auto eff_propagation_speed,
-               resolve_sticky_override(propagation_speed_in,
-                                       pinned.propagation_speed,
-                                       sticky_propagation_speed_));
   HOLOSCAN_TRY(auto eff_nfft_range_raw,
                resolve_sticky_override(nfft_range_in, pinned.nfft_range,
                                        sticky_nfft_range_));
@@ -286,7 +281,7 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
   range_cfg.apply_dechirp = eff_apply_dechirp;
   range_cfg.waveform = eff_waveform;
   range_cfg.fft_norm = eff_fft_norm;
-  range_cfg.propagation_speed = eff_propagation_speed;
+  range_cfg.propagation_speed = pinned.propagation_speed;
   range_cfg.nfft = eff_nfft_range;
 
   detail::DopplerStageConfig doppler_cfg;

@@ -276,7 +276,7 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 - `apply_dechirp` **[live]** — bool. Conjugate-multiply the input against the reference chirp along fast-time before windowing/FFT (for data not dechirped in hardware). Requires a `waveform` and complex-IF input when `true` — software dechirp produces complex samples, which is inconsistent with the real-IF `samples_per_chirp//2 + 1` output size, so real-IF input with `apply_dechirp = true` is an error. Default: `false`.
 - `waveform` **[live]** — FMCWWaveformDescriptor. Shared chirp descriptor; source for the dechirp reference and the `range_bins` axis. Overriding supports a waveform that changes between frames (the fused reference is cached, rebuilt only when the descriptor changes). Default: none (required when `apply_dechirp = true` and/or `range_bins` is used; unused otherwise).
 - `fft_norm` **[live]** — enum {backward, ortho, forward}. FFT normalization; `backward` (unnormalized forward) is the radar-standard, keeping coherent-integration gain visible. Default: backward.
-- `propagation_speed` **[live]** — float. Wave speed for the beat-frequency → range conversion (`range_bins` only). Default: speed of light ≈ 2.998e8 m/s.
+- `propagation_speed` — float. Wave speed for the beat-frequency → range conversion (`range_bins` only). Default: speed of light ≈ 2.998e8 m/s.
 - `nfft` **[live]** — int, ≥ `samples_per_chirp`. Fast-time FFT length; larger zero-pads for a finer interpolated range grid over the same span (also the fast-length escape hatch for a large-prime `samples_per_chirp`). The output range-bin count follows `nfft` (downstream infers it). Overriding to an unseen length builds a new FFT plan and warns; seen lengths are reused from the MatX plan cache. Default: none (= `samples_per_chirp`, exact N-point).
 
 #### ClutterFilterOp
@@ -319,7 +319,7 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 - `waveform` **[live]** — FMCWWaveformDescriptor. Dechirp reference and the `range_bins` / `velocity_bins` axes. Override for a changing waveform. Default: none (required for software dechirp and/or those outputs).
 - `fft_norm` **[live]** — enum {backward, ortho, forward}. One normalization convention for both transforms. Default: backward.
 - `center_zero_doppler` **[live]** — bool. Center zero-Doppler on the Doppler axis. Default: `true`.
-- `propagation_speed` **[live]** — float. For the `range_bins` output. Default: speed of light ≈ 2.998e8 m/s.
+- `propagation_speed` — float. For the `range_bins` output. Default: speed of light ≈ 2.998e8 m/s.
 - `nfft_range`, `nfft_doppler` **[live]** — int, each ≥ its natural length. Per-axis FFT lengths (interpolation / large-prime escape hatch); the output bin counts follow them (downstream infers). Overriding to an unseen length builds a new FFT plan and warns; seen lengths reused from the plan cache. Default: none (= exact `samples_per_chirp` / `num_chirps`).
 
 ---

@@ -56,7 +56,7 @@ struct DopplerStageState;  // defined in doppler_stage.hpp
 // OPERATOR_API.md but stay Params-only here: WindowSpec and
 // FMCWWaveformDescriptor own vectors / optionals (HSDK5_PORT.md §9). POD
 // scalars (apply_dechirp, clutter_filter, fft_norm, center_zero_doppler,
-// propagation_speed, nfft_range, nfft_doppler) have sticky Input overrides.
+// nfft_range, nfft_doppler) have sticky Input overrides.
 
 struct FMCWRangeDopplerProcessorParams {
   WindowSpec range_window{};
@@ -163,7 +163,6 @@ class FMCWRangeDopplerProcessorOp
   Input<ClutterFilterMethod> clutter_filter_in{"clutter_filter"};
   Input<FftNorm> fft_norm_in{"fft_norm"};
   Input<bool> center_zero_doppler_in{"center_zero_doppler"};
-  Input<double> propagation_speed_in{"propagation_speed"};
   Input<int64_t> nfft_range_in{"nfft_range"};
   Input<int64_t> nfft_doppler_in{"nfft_doppler"};
 
@@ -175,7 +174,6 @@ class FMCWRangeDopplerProcessorOp
   std::optional<ClutterFilterMethod> sticky_clutter_filter_;
   std::optional<FftNorm> sticky_fft_norm_;
   std::optional<bool> sticky_center_zero_doppler_;
-  std::optional<double> sticky_propagation_speed_;
   std::optional<int64_t> sticky_nfft_range_;
   std::optional<int64_t> sticky_nfft_doppler_;
 

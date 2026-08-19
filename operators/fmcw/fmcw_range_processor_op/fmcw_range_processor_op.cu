@@ -89,7 +89,6 @@ void FMCWRangeProcessorOp<T>::setup(OperatorSpec& spec) {
   // [live] sticky override ports for POD scalars.
   spec.input(apply_dechirp_in).queue_depth(2U);
   spec.input(fft_norm_in).queue_depth(2U);
-  spec.input(propagation_speed_in).queue_depth(2U);
   spec.input(nfft_in).queue_depth(2U);
 }
 
@@ -120,10 +119,6 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
   HOLOSCAN_TRY(auto eff_fft_norm,
                resolve_sticky_override(fft_norm_in, pinned.fft_norm,
                                        sticky_fft_norm_));
-  HOLOSCAN_TRY(auto eff_propagation_speed,
-               resolve_sticky_override(propagation_speed_in,
-                                       pinned.propagation_speed,
-                                       sticky_propagation_speed_));
   HOLOSCAN_TRY(auto eff_nfft,
                resolve_sticky_override(nfft_in, pinned.nfft,
                                        sticky_nfft_));
@@ -220,7 +215,7 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
   cfg.apply_dechirp = eff_apply_dechirp;
   cfg.waveform = opt_waveform;
   cfg.fft_norm = eff_fft_norm;
-  cfg.propagation_speed = eff_propagation_speed;
+  cfg.propagation_speed = pinned.propagation_speed;
   cfg.nfft = opt_nfft;
 
   const int64_t num_bins =

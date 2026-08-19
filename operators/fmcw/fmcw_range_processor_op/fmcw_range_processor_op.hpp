@@ -53,7 +53,7 @@ struct RangeStageState;  // kernel-side caches; defined in range_stage.hpp
 // [EA HSDK5 ONLY] range_window and waveform are [live] in OPERATOR_API.md
 // but stay Params-only here: WindowSpec and FMCWWaveformDescriptor own
 // vectors / optionals (HSDK5_PORT.md §9). POD scalars (apply_dechirp,
-// fft_norm, propagation_speed, nfft) have sticky Input overrides.
+// fft_norm, nfft) have sticky Input overrides.
 
 struct FMCWRangeProcessorParams {
   WindowSpec range_window{};
@@ -127,7 +127,6 @@ class FMCWRangeProcessorOp
   // [EA HSDK5 ONLY] range_window and waveform are Params-only (§9).
   Input<bool> apply_dechirp_in{"apply_dechirp"};
   Input<FftNorm> fft_norm_in{"fft_norm"};
-  Input<double> propagation_speed_in{"propagation_speed"};
   Input<int64_t> nfft_in{"nfft"};
 
  private:
@@ -136,7 +135,6 @@ class FMCWRangeProcessorOp
   // Sticky [live] state for POD scalars.
   std::optional<bool> sticky_apply_dechirp_;
   std::optional<FftNorm> sticky_fft_norm_;
-  std::optional<double> sticky_propagation_speed_;
   std::optional<int64_t> sticky_nfft_;
 
   // Kernel-side caches (window coefficients, dechirp reference, seen FFT
