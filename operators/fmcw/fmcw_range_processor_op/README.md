@@ -1,0 +1,154 @@
+# `FMCWRangeProcessorOp`
+
+Range compression: optional software dechirp, then a windowed FFT along fast-time that turns an ADC cube into range profiles. It is the first node of the split FMCW chain (SISO / SIMO / MIMO-TDM after de-interleave; MIMO-DDM on the raw cube). The input dtype selects the path — complex IF keeps a full-length FFT; real IF takes the R2C half-spectrum — and bin 0 is always zero range (no `fftshift`). `range_bins` is emitted only when a valid `waveform` is set.
+
+| Kind | Port | Dtype | Shape | Notes |
+| --- | --- | --- | --- | --- |
+| in | `adc_cube` | complex64 / complex128, or float32 / float64 | `(num_chirps, samples_per_chirp)`, optional named leading `N_rx` / `(M_tx, N_rx)` | Path auto-selected by dtype: complex IF or real IF |
+| out | `range_profiles` | complex64 / complex128 | same leading + `(num_chirps, num_range_bins)` | Always emitted. `num_range_bins = nfft` (complex IF) or `nfft/2+1` (real IF); `nfft` defaults to `samples_per_chirp` |
+| out (cond.) | `range_bins` | float32 / float64 | `(num_range_bins,)` | Emitted only when a valid `waveform` is available |
+| live | `apply_dechirp` | bool | scalar | Sticky override of `apply_dechirp` |
+| live | `fft_norm` | `FftNorm` | scalar | Sticky override of `fft_norm` |
+| param | `propagation_speed` | float64 | scalar | Wave speed for `range_bins`; defaults to the speed of light |
+| live | `nfft` | int64 | scalar | Sticky override of `nfft` |
+
+```text
+adc_cube → FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp
+```
+
+**[EA HSDK5 ONLY]** `range_window` and `waveform` are `[live]` in the contract but Params-only on this branch (`WindowSpec` / `FMCWWaveformDescriptor` own vectors; [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9) — they have no override ports.
+
+Contract: [`OPERATOR_API.md` § `FMCWRangeProcessorOp`](../../../docs/planning/OPERATOR_API.md) ·
+group: [`operators/fmcw/README.md`](../README.md)
+
+## Algorithm
+
+All math lives in `range_stage.hpp`. `compute()` classifies the input, resolves overrides, validates, loans outputs, and calls the stage. The fused `FMCWRangeDopplerProcessorOp` calls this same stage, which is why split-vs-fused range compression is identical by construction.
+
+Per tick, after override resolution:
+
+1. **Path selection.** `classify_input_dtype<T>(adc_cube, …, allow_real=true)`: matching complex dtype → C2C FFT of length `nfft`; matching real dtype → R2C FFT of length `nfft` producing `nfft/2+1` bins. Precision is the template `T`, never a runtime flag.
+2. **Optional software dechirp** (`apply_dechirp = true`, complex IF only). Conjugate-multiply along fast-time against a per-chirp reference. When `waveform.reference_samples` is non-empty those samples are used (length must equal `samples_per_chirp`); otherwise the reference is synthesized as
+   `r[s] = exp(+j·π·slope·t_s²)` with `t_s = s / sample_rate`, and the dechirped sample is `in[s] * conj(r[s])` (`range_stage.hpp`). This is the same sign convention as `radar_common/sim/`.
+3. **Window.** If `range_window.type != none`, multiply along fast-time by the coherent-gain-normalized taps from `generate_window`. On the complex path the window and `conj(r)` are folded into one cached per-sample premultiplier; the real path caches plain window taps (dechirp is illegal there).
+4. **Range FFT.** `matx::fft(pre, nfft, norm)` along the last axis. `nfft` defaults to `samples_per_chirp`; a larger value zero-pads. `fft_norm` maps to MatX (`backward` = unnormalized forward — radar-standard, coherent-integration gain stays visible; `ortho`; `forward`). **No `fftshift`**: bin 0 is zero beat / zero range.
+5. **`range_bins` (conditional).** When `waveform.is_valid()`, fill
+   `range_bins[i] = propagation_speed · (i · fs / nfft) / (2 · slope)`
+   (`fill_range_bins`). Units are metres relative to zero beat. Default `propagation_speed` is `kSpeedOfLight = 299792458.0`.
+
+Invariants: leading named axes are processed independently (collapsed to a batch of size `N_rx` or `M_tx·N_rx`); the stage does not reorder chirps or range bins.
+
+## Shape and dtype rules
+
+- **`range_profiles` rank** = input rank. Trailing axes are `(num_chirps, num_range_bins)` with `num_chirps` copied from the input and `num_range_bins = range_num_bins(complex_input, samples_per_chirp, nfft)`: `nfft` when complex, `nfft/2+1` when real (`nfft` defaults to `samples_per_chirp`).
+- **`range_bins`** is rank-1, length `num_range_bins`.
+- **Named leading axes.** None, `N_rx`, or `(M_tx, N_rx)`, admitted only up to `named_tx_rx_leading_rank(extents)` (0 / 1 / 2 from whether `max_tx` and `max_rx`/`max_channels` were set). Extra leading axes fail with `FMCWRangeProcessorOp: unexpected leading axes (opaque batch is not supported); got leading rank <got>, max named leading <max>`. A leading product above `max_tx * max_rx` fails with `FMCWRangeProcessorOp: leading product <n> exceeds max_tx*max_rx from MaxTensorExtents`.
+- **Real IF vs complex IF.** Selected only by `adc_cube` dtype vs the instantiation. A mismatched dtype fails: `adc_cube: received dtype <got> does not match this operator's float|double-precision instantiation (expected <complex> or <real>)`.
+- **`nfft`.** When non-zero it must be `≥ samples_per_chirp`; otherwise `FMCWRangeProcessorOp: nfft (<n>) must be >= samples_per_chirp (<s>) on port adc_cube`. Downstream re-infers `num_range_bins` after a `[live]` `nfft` change.
+- **`apply_dechirp = true`** without a valid waveform: `FMCWRangeProcessorOp: apply_dechirp = true requires a waveform descriptor (dechirp reference source)`. With real-IF input: `FMCWRangeProcessorOp: apply_dechirp = true requires complex-IF input on port adc_cube (received real-IF samples; software dechirp produces complex samples, inconsistent with the real-IF output size)`. Stage-level: `waveform.reference_samples` length must match `samples_per_chirp`.
+- **Layout.** `adc_cube` must be CUDA-accessible and compact row-major: `FMCWRangeProcessorOp: tensor received on input port 'adc_cube' is not CUDA-accessible (device, managed, or pinned-host memory required)` / `… must be contiguous (compact row-major)`.
+- **No CUDA stream.** `FMCWRangeProcessorOp: no CUDA compute stream`.
+
+## Parameters
+
+| Parameter | Type | Default | Override | Cost | Meaning |
+| --- | --- | --- | --- | --- | --- |
+| `range_window` | `WindowSpec` | `none` (rectangular) | Params-only **[EA HSDK5 ONLY]** (`WindowSpec` owns vectors; [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9) | Rebuilds cached premultiplier / window taps on an unseen spec, warning once | Fast-time window before the range FFT; coherent-gain normalized when `coherent_gain_normalization` is true (WindowSpec default) |
+| `apply_dechirp` | bool | `false` | `[live]` | Rebuilds the cached premultiplier when combined with the waveform / window | Software dechirp; requires a valid `waveform` and complex-IF input |
+| `waveform` | `FMCWWaveformDescriptor` | none (`is_valid() == false`) | Params-only **[EA HSDK5 ONLY]** (owns vectors / optionals; §9) | Rebuilds dechirp reference / premultiplier when `apply_dechirp` is true; required for `range_bins` | Dechirp reference (`reference_samples`, or `slope` + `sample_rate`) and the `range_bins` axis |
+| `fft_norm` | `FftNorm` {`backward`, `ortho`, `forward`} | `backward` | `[live]` | Free at the operator (MatX applies the convention on the FFT) | FFT normalization; `backward` keeps coherent-integration gain visible |
+| `propagation_speed` | float64 | `299792458.0` m/s | — | Free (host fill of `range_bins` only) | Wave speed for beat frequency → range |
+| `nfft` | int64 | `0` (= `samples_per_chirp`) | `[live]` | Unseen length builds a MatX FFT plan; the stage keys `seen_fft_keys` and warns once per new length | Fast-time FFT length; larger zero-pads for a finer interpolated grid over the same span |
+
+`waveform` is required when `apply_dechirp` is true and whenever a consumer needs `range_bins`. A default-constructed descriptor is treated as absent. YAML / `set_params` field names match the table (`range_window: hann` or a `WindowSpec` map; `fft_norm: backward`).
+
+## SDK implementation notes
+
+- **Construction.** `FMCWRangeProcessorOp(const MaxTensorExtents&)` requires `max_chirps` and `max_range_bins`. Optional `max_rx` / `max_channels` admit a leading `N_rx`; `max_tx` plus an RX/channel field admits `(M_tx, N_rx)`. Those fields size `range_profiles` (`max_rank` 2–4, `max_byte_span` of a complex cube `{max_tx, max_rx, max_chirps, max_range_bins}`) and `range_bins` (`max_rank` 1, real `{max_range_bins}`). A tick that exceeds the admitted leading rank or `max_tx * max_rx` is rejected (messages above). `max_rx`/`max_tx` must be positive when set.
+- **Triggering.** `contract()` is `OnEach{adc_cube}` only. The four sticky override inputs and the optional `range_bins` output are omitted so an unconnected override does not yield `TEMPORAL_INPUT_UNCONNECTED` and an unwired `range_bins` does not gate scheduling.
+- **Ports and queues.** `adc_cube` and the override inputs use `queue_depth(2)`. Tensor ports are `MemoryKind::kCudaDevice`. Fat / bins outs carry the ctor-derived `tensor_allocation` bounds.
+- **Streams and lifetime.** Work is enqueued on `context.cuda_stream()`. `adc_cube` is moved into `retained_input_` after emit as a stream-ordered lifetime guard. The range FFT path does not synchronize. `fill_range_bins` copies a host staging vector with `cudaMemcpyAsync` and then **`cudaStreamSynchronize(stream)`** so that vector can leave scope — the only hot-path sync.
+- **Emission.** Conditional `range_bins` loan is prepared first, then `range_profiles`; both are filled on the compute stream; emit order is `range_profiles` then `range_bins`. Each out is a pool loan (`prepare_device_tensor` → fill → `emit_prepared_tensor`).
+- **Parameter authoring.** Schema id `com.nvidia.holoscan.radar.FMCWRangeProcessorParams`, version 1. Apps on this branch load YAML into `FMCWRangeProcessorParams` and call `set_params` ([EA HSDK5 ONLY] Graph has no `from_config()`).
+- **Precision.** Explicit instantiations `FMCWRangeProcessorOp<float>` and `FMCWRangeProcessorOp<double>` in `fmcw_range_processor_op.cu`.
+- **Cache warn-once.** The stage's `ConfigCache`s decide on their own when to warn: the first configuration builds silently, a later unseen one (new `nfft`, new window / dechirp key, new chirp length) builds and warns once, then is cached. `compute()` passes no warn flag.
+- **[EA HSDK5 ONLY]** `range_window` / `waveform` are Params-only (§9). Sticky `Input<>` ports exist for the four POD scalars; Graph mid-stream override tests are skipped ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1).
+
+## Consumer lifetime notes
+
+Every output is a fresh Tensor-pool buffer for that tick. A consumer may retain `range_profiles` or `range_bins` without copying.
+
+## Performance
+
+**Cold.** First tick (and first unseen window / dechirp-reference / FFT-length key) builds `RangeStageState`: `premultipliers` (complex path), `windows` (real path), and `seen_fft_keys`. MatX owns the cuFFT plan cache. `range_bins` is filled directly on the compute stream by a MatX range generator.
+
+**Steady.** Cached coefficients are reused; each tick loans `range_profiles` (and `range_bins` when a waveform is set) and enqueues the FFT. `[live]` `nfft` to an unseen length builds a new MatX plan. `[live]` `apply_dechirp` / Params `range_window` / `waveform` rebuild the premultiplier or window taps on an unseen key. `fft_norm` and the parameter-only `propagation_speed` do not invalidate those caches.
+
+Harness: `performance/cpp/perf_fmcw_range_processor.cpp` (Python mirror exists but is not built on this branch). Axes: size ladder `{xs, sm, md, lg, xl}` = `(16×128) … (256×2048)` chirps × samples; window `{rect, hann}`; optional channel batch (`md` × 4). Default matrix: rect `{xs, md, lg, xl}` plus hann/`md` and rect/`md`/4 channels. `--full` crosses windows × sizes and adds channel batches on `md`/`lg`. Notes field records `live_override=deferred_ea`. No measured numbers are recorded in-tree; run the harness for timings.
+
+GPU-native construction of synthesized dechirp references, window taps, and
+premultipliers is a performance follow-up; see [`OPEN_ITEMS.md`](OPEN_ITEMS.md)
+§1.
+
+```bash
+ctest --test-dir build -R perf_fmcw_range_processor_smoke
+```
+
+## Tests and verification
+
+C++ Graph suite: `tests/cpp/fmcw/test_fmcw_range_processor.cpp`. Ground truth is `radar_common/sim/` (`sim::simulate` / `to_real_if`). Python `tests/python/fmcw/test_fmcw_range_processor.py` is not registered ([EA HSDK5 ONLY] `HOLOSCAN_RADAR_BUILD_PYTHON` forced off; [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §6).
+
+| Check | Proves |
+| --- | --- |
+| `SingleTargetComplexIfPeakAndRangeAxis` | Peak maps via `range_bins` to the injected range within one bin; axis matches `propagation_speed·(i·fs/nfft)/(2·slope)` (tolerance `1e-3 + 1e-5·abs(expected)`) |
+| `RealIfPathPeakAtRange` | Real IF → `samples_per_chirp/2+1` bins; peak still at the target range |
+| `NoRangeBinsWithoutWaveform` | `range_bins` not emitted when `waveform` is absent; profiles-only graph still runs |
+| `ApplyDechirpMatchesHardwareDechirp` | Software dechirp of pre-mixer data matches hardware-dechirped sim (≤ `2e-3` of peak magnitude) |
+| `ApplyDechirpWithoutWaveformErrors` / `ApplyDechirpWithRealInputErrors` | The two contract-illegal dechirp combinations raise diagnostics |
+| `HannWindowLowersSidelobesKeepsPeak` | Hann PSL < 50% of rectangular (bins `peak+4…peak+16`); on-bin peak preserved within 3% under `fft_norm = backward` |
+| `NfftOversamplingInterpolatesGrid` | `nfft = 2·samples` doubles bin count; bin spacing halves; peak stays on the same range |
+| `NamedRxAxisRoundTrip` | Leading `N_rx = 2` preserved; per-RX magnitudes agree to `1e-3` |
+| `WindowConfigurableFromParams` / `WaveformConfigurableFromParams` | Params authoring of `WindowSpec` / descriptor |
+| `FloatAndDoubleInstantiationsAgree` | F32 vs F64 peak index match; magnitudes within `1e-4` of the F64 peak |
+| `LiveWindowOverrideAppliesPerTick` | `GTEST_SKIP` — Graph live + `WindowSpec` Params-only ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1/§9) |
+
+`TESTING.md` also asks for a `tx×rx` leading-axis case; only `N_rx` is covered. There is no Graph test that a `[live]` `nfft` / `fft_norm` / `apply_dechirp` override is sticky (POD ports exist; harness deferred §1).
+
+```bash
+ctest --test-dir build -R test_fmcw_range_processor --output-on-failure
+```
+
+## Usage
+
+```yaml
+range_processor:
+  waveform: *waveform
+  range_window: hann
+  # apply_dechirp: false
+  # fft_norm: backward
+  # nfft: 512
+  # propagation_speed: 299792458.0
+```
+
+```cpp
+auto range = graph.op<FMCWRangeProcessorOp<float>>(
+    "range_processor", extents);
+range.set_params(cfg.range_params);
+
+graph.add_flow(source->adc_cube, range->adc_cube, q);
+graph.add_flow(range->range_profiles, clutter->range_profiles, q);
+graph.add_flow(range->range_bins, sink->range_bins, q);  // only if waveform is set
+```
+
+Python bindings (`FMCWRangeProcessorOpF32` / `F64`) are deferred on this branch ([EA HSDK5 ONLY] [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §6); the 4.x Fragment trampoline in `python/` is not built.
+
+## Contract conformance
+
+Most of the locked contract is implemented. The table lists every claim that is not a plain `conforms`.
+
+| Contract claim | Verdict | Detail |
+| --- | --- | --- |
+| `range_window` **[live]** | EA-deferred | Params-only: `WindowSpec` owns vectors ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9). Header comment agrees. |
+| `waveform` **[live]** | EA-deferred | Params-only: `FMCWWaveformDescriptor` owns vectors / optionals (§9). |
+
+Audit scope (static; no build or test run): `docs/planning/OPERATOR_API.md` § `FMCWRangeProcessorOp`, `WORKFLOWS.md`, `TESTING.md`, `HSDK5_PORT.md` §1/§6/§8/§9, `STATUS.md`, `operators/common/README.md`, `operators/fmcw/README.md`, `fmcw_range_processor_op.hpp` / `.cu`, `range_stage.hpp`, `metadata.json`, `python/_fmcw_range_processor_op_bindings.cpp`, `tests/cpp/fmcw/test_fmcw_range_processor.cpp`, `tests/python/fmcw/test_fmcw_range_processor.py`, `performance/cpp/perf_fmcw_range_processor.cpp`, and `OPEN_ITEMS.md`. The GPU coefficient-construction question is tracked in `OPEN_ITEMS.md` §1.
