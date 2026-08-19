@@ -332,23 +332,11 @@ void fill_range_bins(const RangeStageConfig& cfg, int64_t samples_per_chirp,
   const double slope = cfg.waveform->slope();
   const int64_t nfft = cfg.nfft.value_or(samples_per_chirp);
 
-  std::vector<double> host(static_cast<size_t>(num_bins));
-  for (int64_t i = 0; i < num_bins; ++i) {
-    const double beat = static_cast<double>(i) * fs /
-                        static_cast<double>(nfft);
-    host[static_cast<size_t>(i)] =
-        cfg.propagation_speed * beat / (2.0 * slope);
-  }
-  // Cast to the instantiation precision and copy straight into the output
-  // buffer, stream-ordered; sync before the host staging vector goes out of
-  // scope (mirrors fill_velocity_bins in doppler_stage.hpp).
-  std::vector<T> cast(host.begin(), host.end());
-  if (cudaMemcpyAsync(out, cast.data(),
-                      sizeof(T) * static_cast<size_t>(num_bins),
-                      cudaMemcpyHostToDevice, stream) != cudaSuccess) {
-    throw std::runtime_error("range stage: range_bins H2D copy failed");
-  }
-  cudaStreamSynchronize(stream);
+  matx::cudaExecutor exec{stream};
+  auto bins = matx::make_tensor<T, 1>(out, {num_bins});
+  const T step = static_cast<T>(
+      cfg.propagation_speed * fs / (2.0 * slope * static_cast<double>(nfft)));
+  (bins = matx::range<0>(bins.Shape(), T{0}, step)).run(exec);
 }
 
 }  // namespace holoscan::radar::detail
