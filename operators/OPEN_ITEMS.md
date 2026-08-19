@@ -119,21 +119,25 @@ per-operator ping-pong does not commit the module to either path.
 **Status:** agreed 2026-07-13, acceptable for now; revisit when latency
 budgets tighten or benchmarking flags it.
 
-When axis outputs are enabled, the range/velocity bin builders recompute the
-axis on the host, upload it, and block on `cudaStreamSynchronize` on *every*
-`compute()` tick, even when the inputs that determine the axis are unchanged.
-The window taps in the same stage states already avoid this via the
-`ConfigCache` pattern (`radar_common/sdk/config_cache.hpp`); the axis builders
-should follow it, computing/uploading only on a cache miss for a new
-configuration and reusing the cached device buffer (or an async device-side
-copy into the output) on subsequent ticks.
+When axis outputs are enabled, the range-bin builder recomputes the axis on the
+host, uploads it, and blocks on `cudaStreamSynchronize` on *every* `compute()`
+tick, even when the inputs that determine the axis are unchanged. The Doppler
+velocity-bin builder uses a MatX-native `fftfreq`/`fftshift1D` expression, is
+stream-ordered, and does not perform a host staging upload or explicit
+synchronization; it rebuilds the axis every tick. The window
+taps in the stage states already avoid this via the `ConfigCache` pattern
+(`radar_common/sdk/config_cache.hpp`); the remaining axis builders should
+follow it, computing/uploading only on a cache miss for a new configuration and
+reusing the cached device buffer (or an async device-side copy into the
+output) on subsequent ticks.
 
 Affected paths (each called per tick from the operator's `compute()`):
 
 - `fmcw_range_processor_op` — `fill_range_bins` keyed on the fields it reads
   (waveform, `nfft`/`samples_per_chirp`, `propagation_speed`,
   `num_bins`); see `range_stage.hpp`.
-- `fmcw_doppler_processor_op` — `fill_velocity_bins` keyed on waveform,
+- `fmcw_doppler_processor_op` — `fill_velocity_bins` is already MatX-native;
+  cache its expression/output path keyed on waveform,
   `center_zero_doppler`, and `num_doppler`; see `doppler_stage.hpp`.
 - `fmcw_range_doppler_processor_op` — the fused operator calls both builders,
   so it inherits both once the two above are cached.
@@ -168,3 +172,18 @@ is pinned per operator:
 - **Shared descriptors.** `DDMCodeDescriptor` and `TXSchedule` validation rules
   (mutually exclusive offset forms, uniform TDM schedule) live with the
   consuming operator / descriptor code; see operator open items above.
+
+## 4. Add automatic C++ formatting checks
+
+**Status:** open; the current pre-commit configuration runs `cpplint` but not
+`clang-format`.
+
+Add a checked-in `.clang-format` policy and a pinned `clang-format`
+pre-commit hook, then run the same formatter check in CI. This would make
+equivalent formatting choices deterministic across the operator sources (for
+example, nested `Error{...}` initializer wrapping) instead of relying on
+manual consistency. Editor format-on-save can use the same checked-in policy.
+
+Before landing, choose and document the formatter version and verify the
+initial repository-wide formatting diff is acceptable. Avoid mixing the
+bootstrap formatting sweep with behavioral changes.

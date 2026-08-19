@@ -19,7 +19,6 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
-#include <vector>
 
 #include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/descriptors/enums.hpp"
@@ -185,6 +184,10 @@ void run_doppler_stage(const DopplerStageConfig& cfg,
 // f_d the per-bin Doppler frequency (PRF = 1 / chirp_repetition_interval),
 // ordered to match the rd_maps Doppler axis (i.e. accounting for
 // cfg.center_zero_doppler). Requires cfg.waveform. Enqueued on `stream`.
+//
+// MatX's fftfreq provides the unshifted signed frequency ordering, including
+// Nyquist folding. fftshift1D then applies the same odd/even ordering as the
+// Doppler FFT when center_zero_doppler is enabled.
 template <typename T>
 void fill_velocity_bins(const DopplerStageConfig& cfg, int64_t num_doppler,
                         T* out, cudaStream_t stream) {
@@ -205,34 +208,17 @@ void fill_velocity_bins(const DopplerStageConfig& cfg, int64_t num_doppler,
   const double prf = 1.0 / cfg.waveform->chirp_repetition_interval();
   const double wavelength = cfg.waveform->wavelength();
 
-  // Per-bin Doppler frequency on the (possibly centered) axis, then
-  // v = -f_d * lambda / 2. This must agree exactly with the independent
-  // reference in tests/cpp/utils/bin_model.hpp (expected_velocity_axis).
-  std::vector<T> axis(static_cast<size_t>(num_doppler));
-  for (int64_t i = 0; i < num_doppler; ++i) {
-    int64_t idx = i;
-    if (cfg.center_zero_doppler) {
-      // Position i on the shifted axis corresponds to unshifted bin
-      // (i - n/2) mod n (numpy.fft.fftshift semantics).
-      idx = (i - num_doppler / 2 + num_doppler) % num_doppler;
-    }
-    double f = static_cast<double>(idx) / static_cast<double>(num_doppler) *
-               prf;
-    if (f >= prf / 2.0) {
-      f -= prf;
-    }
-    axis[static_cast<size_t>(i)] = static_cast<T>(-f * wavelength / 2.0);
+  matx::cudaExecutor exec{stream};
+  auto bins = matx::make_tensor<T, 1>(out, {num_doppler});
+  const T velocity_scale =
+      static_cast<T>(-prf * wavelength / 2.0);
+  const auto unshifted =
+      matx::fftfreq<T>(num_doppler) * velocity_scale;
+  if (cfg.center_zero_doppler) {
+    (bins = matx::fftshift1D(unshifted)).run(exec);
+  } else {
+    (bins = unshifted).run(exec);
   }
-
-  if (cudaMemcpyAsync(out, axis.data(), sizeof(T) * axis.size(),
-                      cudaMemcpyHostToDevice, stream) != cudaSuccess) {
-    throw std::runtime_error(
-        "doppler stage: velocity_bins host-to-device upload failed");
-  }
-  // The host staging vector is freed on return: block until the copy lands
-  // (mirrors upload_coefficients; callers enqueue this before the Doppler
-  // FFT so the wait does not cover the hot path).
-  cudaStreamSynchronize(stream);
 }
 
 }  // namespace holoscan::radar::detail
