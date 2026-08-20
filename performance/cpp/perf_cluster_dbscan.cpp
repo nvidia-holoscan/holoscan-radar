@@ -9,9 +9,8 @@
 // docs/planning/OPERATOR_DEVELOPMENT.md.
 //
 // [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
-// Mid-session [live] override measurement is deferred until
-// docs/planning/HSDK5_PORT.md §1 (EA partition / device binding). Params
-// still select epsilon / min_points / max_clusters under test.
+// Measures a mid-session min_points override. The epsilon vector remains
+// Params-only (HSDK5_PORT.md §9).
 
 #include <cuda_runtime_api.h>
 
@@ -149,11 +148,16 @@ std::shared_ptr<holoscan::Tensor> make_points(
 }
 
 perf::TimingCollector run_dbscan_graph(
-    const DbscanScenario& scen, int total_frames) {
+    const DbscanScenario& scen, const perf::RunPlan& plan) {
   auto pts = make_points<PerfPrecision>(
       scen.num_points, scen.num_features, scen.num_clusters);
-  return perf::run_perf_graph(
-      std::move(pts), total_frames, "dbscan-perf",
+  using BaseOp = hr::ClusterDBSCANOp<PerfPrecision>;
+  using LiveOp =
+      perf::PerfLiveContractOp<BaseOp, &BaseOp::min_points>;
+  const int64_t override_min_points = scen.min_points + 1;
+  return perf::run_perf_graph_with_override(
+      std::move(pts), plan.total_frames, plan.override_at,
+      scen.min_points, override_min_points, "dbscan-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
@@ -161,9 +165,7 @@ perf::TimingCollector run_dbscan_graph(
             scen.num_points, 1);
         extents.max_clusters = std::max<int64_t>(
             scen.num_clusters, 1);
-        auto op =
-            graph.op<hr::ClusterDBSCANOp<PerfPrecision>>(
-                "dbscan", extents);
+        auto op = graph.op<LiveOp>("dbscan", extents);
         hr::ClusterDBSCANParams params;
         params.epsilon = scen.epsilon;
         params.min_points = scen.min_points;
@@ -176,8 +178,14 @@ perf::TimingCollector run_dbscan_graph(
         const holoscan::ConnectionOptions q{
             .queue_depth = 4U};
         graph.add_flow(src->out, op->points, q);
+        graph.add_flow(src->override_out, op->min_points, q);
         graph.add_flow(op->labels, sink->in, q);
         graph.add_flow(op->sizes, null->in, q);
+        graph.partition("perf")
+            .add(src)
+            .add(op)
+            .add(sink)
+            .add(null);
         perf::bind_tensor_out(options, "dbscan", "labels");
         perf::bind_tensor_out(options, "dbscan", "sizes");
       });
@@ -216,7 +224,7 @@ perf::ResultRow base_row(const DbscanScenario& scen) {
   row.input_shape = {scen.num_points, scen.num_features};
   row.out_batch = scen.num_clusters;
   row.k = scen.num_features;
-  row.notes = "live_override=deferred_ea";
+  row.notes = "live_override=min_points; epsilon remains Params-only";
   return row;
 }
 
@@ -253,8 +261,7 @@ struct DbscanTraits : perf::PerfDriverDefaults {
     return "Size sweep across an explicit subset";
   }
   static const char* full_help() {
-    return "Full size x feature ladder; live-override timing "
-           "deferred on HSDK 5 EA (HSDK5_PORT.md §1)";
+    return "Full size x feature ladder with min_points override timing";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -307,10 +314,10 @@ struct DbscanTraits : perf::PerfDriverDefaults {
                            const perf::RunSettings& rs,
                            perf::PerfReport* report) {
     const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/false);
+        perf::make_run_plan(rs, /*has_override=*/true);
     const auto samples = perf::collect_scenario_samples(
         rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_dbscan_graph(scen, p.total_frames);
+          return run_dbscan_graph(scen, p);
         });
 
     perf::append_setup_row(base_row(scen), samples, report);
@@ -320,8 +327,8 @@ struct DbscanTraits : perf::PerfDriverDefaults {
     fill_throughput(&row, scen, row.latency.median_ms);
     row.notes =
         "cold_ms is first-frame latency; median/p90 are "
-        "post-warmup steady state; live override timing "
-        "deferred (HSDK5_PORT.md §1); cells/s is "
+        "post-warmup steady state; override_ms is the peak after an inline "
+        "min_points change; epsilon remains Params-only; cells/s is "
         "points/s";
     report->results.push_back(row);
   }

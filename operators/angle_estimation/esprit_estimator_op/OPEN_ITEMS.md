@@ -32,6 +32,8 @@ Cross-cut SDK / migration detail lives in
 - Those ports are omitted from `contract()` so unwired graphs compile.
 - `LiveNumSourcesStickyOverride` / `LiveSourceCountPfaStickyOverride` /
   `LiveMaxSourcesStickyOverride` are `GTEST_SKIP`’d.
+- `perf_esprit_estimator` measures an inline `max_sources` transition with
+  the supported single-clock / exact-contract / single-partition shape.
 - Params authoring covers selection
   (`NumSourcesConfigurableFromParams` /
   `SourceCountPfaConfigurableFromParams` /
@@ -40,7 +42,8 @@ Cross-cut SDK / migration detail lives in
 **Next.** Restore sticky temporal policy + Graph sticky unit tests on a
 newer EA / GA (shared recipe with ClutterFilter §1).
 
-**Status:** open — EA.
+**Status:** open for sticky unit tests and isolated `num_sources` /
+`source_count_pfa` perf; `max_sources` perf timing is restored.
 
 ---
 
@@ -137,8 +140,9 @@ rotation eigenproblem. Unchanged by the HSDK 5 port.
 
 ## Python bindings / perf harness
 
-**Class:** Our deferred work (HSDK5_PORT §6 / §8). Existing pybind trampoline
-and perf harness remain HSDK 4.x and are not built while
-`HOLOSCAN_RADAR_BUILD_PYTHON=OFF`. Graph-port perf in a follow-up.
+**Class:** Our deferred work (HSDK5_PORT §6). Existing pybind trampoline is
+still HSDK 4.x and is not built while `HOLOSCAN_RADAR_BUILD_PYTHON=OFF`.
+`perf_esprit_estimator` is Graph-ported and reports `max_sources`
+`override_ms` (§8).
 
-**Status:** open — deferred; not required to land the C++ HSDK 5 port.
+**Status:** open — Python deferred; not required to land the C++ HSDK 5 port.

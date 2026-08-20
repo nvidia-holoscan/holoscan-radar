@@ -10,8 +10,7 @@ are indexed in [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md).
 
 ## 1. Graph mid-stream sticky `[live] min_points` / `max_clusters` coverage
 
-**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”;
-Performance → inline live-override measurement (when Graph-ported).
+**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”.
 
 **Class:** HSDK 5 EA limitation (not a contract change). See
 [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
@@ -24,13 +23,16 @@ Performance → inline live-override measurement (when Graph-ported).
   (same pattern as ClutterFilter `method` / SnapshotGather `snapshot_window`).
 - `LiveMinPointsStickyOverride` / `LiveMaxClustersStickyOverride` are
   `GTEST_SKIP`’d.
+- `perf_cluster_dbscan` measures an inline `min_points` transition with the
+  supported single-clock / exact-contract / single-partition shape.
 - Params authoring covers selection (`MinPointsConfigurableFromParams` /
   `MaxClustersConfigurableFromParams`).
 
 **Next.** Restore sticky temporal policy + Graph sticky unit tests on a newer
 EA / GA (shared recipe with ClutterFilter §1).
 
-**Status:** open — EA; do not treat as checklist-complete until closed.
+**Status:** open for sticky unit tests and `max_clusters` perf isolation;
+`min_points` perf timing is restored.
 
 ---
 
@@ -87,13 +89,13 @@ module max-feature count is pinned) and restore sticky live + Graph tests.
   allocation matters. Deferred.
 - **Status.** `landed with caveat`.
 
-## 5. Performance harness (4.x; Graph port deferred)
+## 5. Performance harness (closed for Graph + scalar timing)
 
-`performance/cpp/perf_cluster_dbscan.cpp` still uses the HSDK 4.x Application
-helpers. Graph-port the perf binary (cold/steady + deferred live-override
-timing per §1 / §2) in a follow-up, mirroring `perf_clutter_filter`.
+`performance/cpp/perf_cluster_dbscan.cpp` uses the HSDK 5 Graph source and
+reports cold / steady / inline `min_points` override timing. `epsilon` remains
+Params-only (§2); dedicated `max_clusters` override isolation remains in §1.
 
-**Status:** open — deferred; not required to land the C++ HSDK 5 unit port.
+**Status:** closed for the Graph port and representative scalar override.
 
 ## 6. Python bindings
 

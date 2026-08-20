@@ -6,9 +6,8 @@
 // Measurement only: no timing assertions.
 //
 // [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
-// Mid-session [live] override measurement is deferred until
-// docs/planning/HSDK5_PORT.md §1 (EA partition / device binding). Params
-// still select array_geometry, num_sources, etc. under test.
+// Measures a mid-session max_sources override. Descriptor, smoothing-vector,
+// and subarray-spec overrides remain Params-only (HSDK5_PORT.md §9).
 
 #include <cstdint>
 #include <cstdlib>
@@ -153,27 +152,31 @@ Scenario make_ura_scenario(const char* size_id, int64_t ny, int64_t nz,
 }
 
 perf::TimingCollector run_esprit_graph(const Scenario& scen,
-                                       int total_frames) {
+                                       const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(
       {scen.detections, scen.channels, scen.snapshots});
-  return perf::run_perf_graph(
-      std::move(cube), total_frames, "esprit-perf",
+  using BaseOp = hr::ESPRITEstimatorOp<PerfPrecision>;
+  using LiveOp =
+      perf::PerfLiveContractOp<BaseOp, &BaseOp::max_sources>;
+  constexpr int64_t kInitialMaxSources = 4;
+  constexpr int64_t kOverrideMaxSources = 3;
+  return perf::run_perf_graph_with_override(
+      std::move(cube), plan.total_frames, plan.override_at,
+      kInitialMaxSources, kOverrideMaxSources, "esprit-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
         extents.max_items = scen.detections;
         extents.max_sources = 4;
         extents.max_channels = scen.channels;
-        auto op =
-            graph.op<hr::ESPRITEstimatorOp<PerfPrecision>>(
-                "esprit", extents);
+        auto op = graph.op<LiveOp>("esprit", extents);
         hr::ESPRITParams params;
         params.array_geometry = scenario_geometry(scen, 0.5);
         params.angle_convention.preset =
             hr::AngleConventionPreset::kRadarBoresight;
         params.num_sources = 1;
         params.source_count_pfa = 1e-4;
-        params.max_sources = 4;
+        params.max_sources = kInitialMaxSources;
         op.set_params(std::move(params));
 
         const auto aoa_sink =
@@ -187,10 +190,18 @@ perf::TimingCollector run_esprit_graph(const Scenario& scen,
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
 
         graph.add_flow(src->out, op->snapshot, q);
+        graph.add_flow(src->override_out, op->max_sources, q);
         graph.add_flow(op->aoa_estimates, aoa_sink->in, q);
         graph.add_flow(op->doa_multi, doa_drain->in, q);
         graph.add_flow(op->source_count, sc_drain->in, q);
         graph.add_flow(op->eigenvalues, eig_drain->in, q);
+        graph.partition("perf")
+            .add(src)
+            .add(op)
+            .add(aoa_sink)
+            .add(doa_drain)
+            .add(sc_drain)
+            .add(eig_drain);
 
         perf::bind_tensor_out(options, "esprit", "aoa_estimates");
         perf::bind_tensor_out(options, "esprit", "doa_multi");
@@ -209,7 +220,9 @@ perf::ResultRow base_row(const Scenario& scenario) {
                      scenario.snapshots};
   row.out_batch = scenario.detections;
   row.k = scenario.channels;
-  row.notes = "live_override=deferred_ea";
+  row.notes =
+      "live_override=max_sources; descriptor, smoothing vector, and "
+      "subarray spec remain Params-only";
   return row;
 }
 
@@ -228,8 +241,7 @@ struct Traits : perf::PerfDriverDefaults {
     return "ESPRIT sweep across an explicit subset";
   }
   static const char* full_help() {
-    return "Full ESPRIT size ladder; live-override timing deferred on "
-           "HSDK 5 EA (HSDK5_PORT.md §1)";
+    return "Full ESPRIT size ladder with max_sources override timing";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -282,10 +294,10 @@ struct Traits : perf::PerfDriverDefaults {
                            const perf::RunSettings& settings,
                            perf::PerfReport* report) {
     const auto plan =
-        perf::make_run_plan(settings, /*has_override=*/false);
+        perf::make_run_plan(settings, /*has_override=*/true);
     const auto samples = perf::collect_scenario_samples(
         settings, plan, [&](int, const perf::RunPlan& run_plan) {
-          return run_esprit_graph(scenario, run_plan.total_frames);
+          return run_esprit_graph(scenario, run_plan);
         });
     perf::append_setup_row(base_row(scenario), samples, report);
     perf::ResultRow row = base_row(scenario);
@@ -295,8 +307,9 @@ struct Traits : perf::PerfDriverDefaults {
           scenario.detections / (row.latency.median_ms / 1000.0);
     }
     row.notes =
-        "fixed one-source steady path; live bundle deferred "
-        "(HSDK5_PORT.md §1)";
+        "fixed one-source steady path; override_ms is the peak after an "
+        "inline max_sources change; descriptor, smoothing vector, and "
+        "subarray spec remain Params-only";
     report->results.push_back(row);
   }
 

@@ -10,9 +10,8 @@
 // docs/planning/OPERATOR_DEVELOPMENT.md.
 //
 // [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
-// Mid-session [live] override measurement is deferred until
-// docs/planning/HSDK5_PORT.md §1 (EA partition / device binding). Params
-// still select the scan grid under test.
+// Measures a mid-session max_sources override. Descriptor and scan-grid
+// vector overrides remain Params-only (HSDK5_PORT.md §9).
 //
 // num_sources is fixed (=1) across the matrix rather than auto: this keeps
 // the model order — and hence the noise-subspace projector's cost —
@@ -138,11 +137,17 @@ hr::ArrayGeometry make_ula_geometry(int64_t num_elements,
 }
 
 perf::TimingCollector run_music_graph(
-    const MusicScenario& scen, int total_frames) {
+    const MusicScenario& scen, const perf::RunPlan& plan) {
   auto snap = perf::make_iq_cube_device<PerfPrecision>(
       {scen.detections, scen.channels, scen.snapshots});
-  return perf::run_perf_graph(
-      std::move(snap), total_frames, "music-perf",
+  using BaseOp = hr::MUSICEstimatorOp<PerfPrecision>;
+  using LiveOp =
+      perf::PerfLiveContractOp<BaseOp, &BaseOp::max_sources>;
+  constexpr int64_t kInitialMaxSources = 4;
+  constexpr int64_t kOverrideMaxSources = 3;
+  return perf::run_perf_graph_with_override(
+      std::move(snap), plan.total_frames, plan.override_at,
+      kInitialMaxSources, kOverrideMaxSources, "music-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
@@ -151,9 +156,7 @@ perf::TimingCollector run_music_graph(
         extents.max_el = scen.num_el;
         extents.max_sources = 4;
         extents.max_channels = scen.channels;
-        auto op =
-            graph.op<hr::MUSICEstimatorOp<PerfPrecision>>(
-                "music", extents);
+        auto op = graph.op<LiveOp>("music", extents);
         hr::MUSICParams params;
         params.array_geometry =
             make_ula_geometry(scen.channels, 0.5, 1.0);
@@ -165,7 +168,7 @@ perf::TimingCollector run_music_graph(
             linspace(-0.3, 0.3, scen.num_el);
         params.num_sources = 1;
         params.source_count_pfa = 1e-4;
-        params.max_sources = 4;
+        params.max_sources = kInitialMaxSources;
         op.set_params(std::move(params));
 
         const auto sink =
@@ -182,12 +185,21 @@ perf::TimingCollector run_music_graph(
             .queue_depth = 4U};
 
         graph.add_flow(src->out, op->snapshot, q);
+        graph.add_flow(src->override_out, op->max_sources, q);
         graph.add_flow(op->aoa_estimates, sink->in, q);
         graph.add_flow(
             op->angle_spectrum, ns1->in, q);
         graph.add_flow(op->doa_multi, ns2->in, q);
         graph.add_flow(op->source_count, ns3->in, q);
         graph.add_flow(op->eigenvalues, ns4->in, q);
+        graph.partition("perf")
+            .add(src)
+            .add(op)
+            .add(sink)
+            .add(ns1)
+            .add(ns2)
+            .add(ns3)
+            .add(ns4);
 
         perf::bind_tensor_out(
             options, "music", "aoa_estimates");
@@ -228,6 +240,9 @@ perf::ResultRow base_row(const MusicScenario& scen) {
                      scen.snapshots};
   row.out_batch = scen.detections;
   row.k = scen.channels;
+  row.notes =
+      "live_override=max_sources; descriptor and grid vectors remain "
+      "Params-only";
   return row;
 }
 
@@ -259,14 +274,13 @@ struct MusicTraits : perf::PerfDriverDefaults {
            "characterization (HSDK 5 Graph)";
   }
   static const char* sizes_all_help() {
-    return "Default size sweep (no live override)";
+    return "Default size sweep with max_sources override timing";
   }
   static const char* sizes_subset_help() {
     return "Size sweep across an explicit subset";
   }
   static const char* full_help() {
-    return "Full size ladder; live-override timing "
-           "deferred on HSDK 5 EA (HSDK5_PORT.md §1)";
+    return "Full size ladder with max_sources override timing";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -318,12 +332,11 @@ struct MusicTraits : perf::PerfDriverDefaults {
                            const perf::RunSettings& rs,
                            perf::PerfReport* report) {
     const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/false);
+        perf::make_run_plan(rs, /*has_override=*/true);
     const auto samples = perf::collect_scenario_samples(
         rs, plan,
         [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_music_graph(
-              scen, p.total_frames);
+          return run_music_graph(scen, p);
         });
 
     perf::append_setup_row(
@@ -335,8 +348,9 @@ struct MusicTraits : perf::PerfDriverDefaults {
     row.notes =
         "num_sources fixed=1 (deterministic model "
         "order); cold_ms is first-frame latency; "
-        "median/p90 are post-warmup steady state; live "
-        "override timing deferred (HSDK5_PORT.md §1); "
+        "median/p90 are post-warmup steady state; override_ms is the peak "
+        "after an inline max_sources change; descriptor and grid vectors "
+        "remain Params-only; "
         "cells/s is detections/s";
     report->results.push_back(row);
   }

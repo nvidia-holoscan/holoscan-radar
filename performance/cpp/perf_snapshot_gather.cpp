@@ -154,21 +154,32 @@ std::shared_ptr<holoscan::Tensor> make_detection_idx(
 }
 
 perf::TimingCollector run_snapshot_graph(const SnapScenario& scen,
-                                         int total_frames) {
+                                         const perf::RunPlan& plan) {
   auto rd = make_rd_maps<PerfPrecision>(scen.channels, scen.doppler,
                                         scen.range);
   auto idx = make_detection_idx(scen.detections, scen.doppler,
                                 scen.range);
-  return perf::run_perf_graph_dual(
-      std::move(rd), std::move(idx), total_frames, "snapshot-perf",
+  const Window override_window =
+      scen.window.wd == 0 && scen.window.wr == 0 ? Window{1, 1}
+                                                 : Window{0, 0};
+  const hr::SnapshotWindowOverride initial{
+      .doppler = scen.window.wd, .range = scen.window.wr};
+  const hr::SnapshotWindowOverride override{
+      .doppler = override_window.wd, .range = override_window.wr};
+  using BaseOp = hr::SnapshotGatherOp<PerfPrecision>;
+  using LiveOp =
+      perf::PerfLiveContractOp<BaseOp, &BaseOp::snapshot_window>;
+  return perf::run_perf_graph_dual_with_override(
+      std::move(rd), std::move(idx), plan.total_frames, plan.override_at,
+      initial, override, "snapshot-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
         extents.max_detections = scen.detections;
         extents.max_channels = scen.channels;
-        extents.max_snapshots = snapshots_for(scen.window);
-        auto op = graph.op<hr::SnapshotGatherOp<PerfPrecision>>(
-            "gather", extents);
+        extents.max_snapshots = std::max(
+            snapshots_for(scen.window), snapshots_for(override_window));
+        auto op = graph.op<LiveOp>("gather", extents);
         hr::SnapshotGatherParams params;
         params.snapshot_window = {scen.window.wd, scen.window.wr};
         params.doppler_edge = hr::SnapshotEdgeMode::kWrap;
@@ -183,8 +194,15 @@ perf::TimingCollector run_snapshot_graph(const SnapScenario& scen,
 
         graph.add_flow(src->out_a, op->rd_maps, q);
         graph.add_flow(src->out_b, op->detection_idx, q);
+        graph.add_flow(
+            src->override_out, op->snapshot_window, q);
         graph.add_flow(op->snapshot, snap_sink->in, q);
         graph.add_flow(op->is_valid, valid_drain->in, q);
+        graph.partition("perf")
+            .add(src)
+            .add(op)
+            .add(snap_sink)
+            .add(valid_drain);
 
         perf::bind_tensor_out(options, "gather", "snapshot");
         perf::bind_tensor_out(options, "gather", "is_valid");
@@ -226,7 +244,7 @@ perf::ResultRow base_row(const SnapScenario& scen) {
   row.input_shape = {scen.detections, 2};
   row.out_batch = scen.detections;
   row.k = scen.channels;
-  row.notes = "live_override=deferred_ea";
+  row.notes = "live_override=snapshot_window";
   return row;
 }
 
@@ -254,15 +272,14 @@ struct SnapTraits : perf::PerfDriverDefaults {
            "(HSDK 5 Graph)";
   }
   static const char* sizes_all_help() {
-    return "Window w1x1 size sweep; live snapshot_window override "
-           "deferred (HSDK5_PORT.md §1)";
+    return "Window w1x1 size sweep with snapshot_window override timing";
   }
   static const char* sizes_subset_help() {
     return "Window w1x1 size sweep across an explicit subset";
   }
   static const char* full_help() {
     return "Full matrix (sizes x windows {0x0, 1x1, 2x2}); "
-           "live-override timing deferred on HSDK 5 EA";
+           "inline snapshot_window override timing";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -322,10 +339,10 @@ struct SnapTraits : perf::PerfDriverDefaults {
                            const perf::RunSettings& rs,
                            perf::PerfReport* report) {
     const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/false);
+        perf::make_run_plan(rs, /*has_override=*/true);
     const auto samples = perf::collect_scenario_samples(
         rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_snapshot_graph(scen, p.total_frames);
+          return run_snapshot_graph(scen, p);
         });
 
     perf::append_setup_row(base_row(scen), samples, report);
@@ -335,8 +352,8 @@ struct SnapTraits : perf::PerfDriverDefaults {
     fill_throughput(&row, scen, row.latency.median_ms);
     row.notes =
         "cold_ms is first-frame latency; median/p90 are steady "
-        "state; live snapshot_window override timing deferred "
-        "(HSDK5_PORT.md §1); cells/s is detections/s";
+        "state; override_ms is the peak after an inline snapshot_window "
+        "change; cells/s is detections/s";
     report->results.push_back(row);
   }
 

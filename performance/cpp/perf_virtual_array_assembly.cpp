@@ -128,13 +128,17 @@ std::vector<int64_t> separated_shape(
 }
 
 perf::TimingCollector run_assembly_graph(
-    const AssemblyScenario& scen, int total_frames) {
+    const AssemblyScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(
       separated_shape(scen));
   // Value-agnostic gather: zero-fill loan is valid. Remaining xl gap vs
   // Holoscan 4.3 is accepted Graph publish-path cost (HSDK5_PORT.md §3).
-  return perf::run_perf_graph(
-      std::move(cube), total_frames, "assembly-perf",
+  using BaseOp = hr::VirtualArrayAssemblyOp<PerfPrecision>;
+  using LiveOp = perf::PerfLiveContractOp<BaseOp, &BaseOp::wavelength>;
+  constexpr double kOverrideWavelength = kDefaultWavelength * 1.1;
+  return perf::run_perf_graph_with_override(
+      std::move(cube), plan.total_frames, plan.override_at,
+      kDefaultWavelength, kOverrideWavelength, "assembly-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
@@ -142,9 +146,7 @@ perf::TimingCollector run_assembly_graph(
         extents.max_rx = scen.num_rx;
         extents.max_doppler_bins = scen.num_doppler;
         extents.max_range_bins = scen.num_range_bins;
-        auto op =
-            graph.op<hr::VirtualArrayAssemblyOp<PerfPrecision>>(
-                "virtual_array", extents);
+        auto op = graph.op<LiveOp>("virtual_array", extents);
         hr::VirtualArrayAssemblyParams params;
         params.tx_positions =
             linear_positions(scen.num_tx, 0.5);
@@ -160,9 +162,15 @@ perf::TimingCollector run_assembly_graph(
         const holoscan::ConnectionOptions q{
             .queue_depth = 4U};
         graph.add_flow(src->out, op->rd_maps, q);
+        graph.add_flow(src->override_out, op->wavelength, q);
         graph.add_flow(op->rd_maps_out, sink->in, q);
         graph.add_flow(
             op->array_geometry, geom_drain->in, q);
+        graph.partition("perf")
+            .add(src)
+            .add(op)
+            .add(sink)
+            .add(geom_drain);
         perf::bind_tensor_out(
             options, "virtual_array", "rd_maps_out");
         perf::bind_tensor_out(
@@ -204,8 +212,7 @@ perf::ResultRow base_row(const AssemblyScenario& scen) {
   row.size_id = scen.size_id;
   row.input_shape = separated_shape(scen);
   row.k = scen.num_doppler;
-  // [EA HSDK5 ONLY] live override timing deferred — HSDK5_PORT.md §1.
-  row.notes = "live_override=deferred_ea";
+  row.notes = "live_override=wavelength";
   return row;
 }
 
@@ -244,8 +251,7 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
   }
   static const char* full_help() {
     return "Full matrix (sizes + overlap policies); "
-           "live-override timing deferred "
-           "on HSDK 5 EA (HSDK5_PORT.md §1)";
+           "inline wavelength-override timing";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -306,12 +312,11 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
       const perf::RunSettings& rs,
       perf::PerfReport* report) {
     const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/false);
+        perf::make_run_plan(rs, /*has_override=*/true);
     const auto samples = perf::collect_scenario_samples(
         rs, plan,
         [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_assembly_graph(
-              scen, p.total_frames);
+          return run_assembly_graph(scen, p);
         });
 
     perf::append_setup_row(
@@ -323,8 +328,8 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
     row.notes =
         "virtual channel flatten + geometry emit; "
         "cold_ms is first-frame latency; median/p90 are "
-        "steady state; live wavelength override timing "
-        "deferred (HSDK5_PORT.md §1); cells/s counts "
+        "steady state; override_ms is the peak after an inline wavelength "
+        "change; cells/s counts "
         "input complex samples";
     report->results.push_back(row);
   }
