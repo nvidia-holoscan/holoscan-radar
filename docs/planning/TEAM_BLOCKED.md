@@ -53,7 +53,13 @@ Interim stance already chosen (or the capability is explicitly out of current
 scope). Development and checklist completion proceed; these need ratification
 or a deliberate contract change when the team has bandwidth.
 
-**None currently.** All prior items (L1–L15, plus S1–S4) are settled — see
-STATUS.md → Settled decisions. Capabilities deliberately deferred out of the
-current scope (e.g. staggered TDM, sum-set holey subarray smoothing) are tracked
-under STATUS.md → Roadmap, not here.
+Items L1–L15 and S1–S4 are settled — see STATUS.md → Settled decisions.
+Capabilities deliberately deferred out of the current scope (e.g. staggered TDM,
+sum-set holey subarray smoothing) are tracked under STATUS.md → Roadmap, not
+here.
+
+### `[live]` override semantics
+
+| # | Decision needed | Interim stance | Detail |
+| --- | --- | --- | --- |
+| L16 | **Coherence-critical `[live]` descriptors** — does the convention grow an effective-from (epoch) binding between a descriptor and the frames it applies to, or is coherence an application obligation discharged by the ADC source co-publishing the waveform? Sticky semantics apply a runtime waveform change too early or too late, and the operator cannot detect either. Cross-cutting: range, Doppler, range-Doppler, MIMO compensation | **Sticky as documented** (`OPERATOR_API.md` `[live]` convention); measured failure quantified on a scalar probe, no code changed | [FMCWRangeProcessor OPEN_ITEMS](../../operators/fmcw/fmcw_range_processor_op/OPEN_ITEMS.md) item 2 |

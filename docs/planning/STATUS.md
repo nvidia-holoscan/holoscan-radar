@@ -32,6 +32,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
 | MaxTensorExtents (HSDK 5 pool sizing + drop opaque leading batch) | dpc | `dpc/hs5.0-fixes` | **C++ wave landed:** type + helpers; all fat ops take extents ctor; Graph units green at `-j4` (high `-j` can OOM GPU pools). Apps/Python still phase 4. Plan: [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md) |
+| HSDK 5 temporal-contract probes (sample time, aligned joins, `[live]` override binding) | deustice | `deustice/hsdk5-updates` | **Measured, docs updated, no operator code changed.** Sample-time / `OnAligned` semantics recorded in [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md); EA override-port binding narrowed in [`HSDK5_PORT.md`](HSDK5_PORT.md) §1 (a wired port must be declared in `contract()`, a declared port must be wired — so the omission workaround makes those ports unusable, and the listed operators need re-testing); waveform/cube coherence raised as TEAM_BLOCKED L16 |
 
 ## Settled decisions
 

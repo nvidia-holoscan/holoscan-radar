@@ -240,6 +240,41 @@ measurement frame. The source, operator, and drains are placed in one explicit
 partition, and a perf-only operator adapter adds the wired sideband to
 `contract()` with `LatestWithin` + `SafeDefault`.
 
+**Narrowed 2026-08-20 (scalar-only probe).** A minimal scalar probe
+separated the causes, and the second clock is *not* one of them:
+
+- **A wired input port omitted from `contract()` fails at runtime** —
+  `RUNTIME_OPERATOR_REPLAY_MISMATCH` on the second activation
+  (`RUNTIME_EXECUTION_LANE_PLAN_INVALID` in the two-clock topology).
+- **A declared port with no producer fails at compile** —
+  `TEMPORAL_INPUT_UNCONNECTED`, `on_missing SafeDefault{}`
+  notwithstanding.
+- **Declared *and* wired works**, using the
+  `radar_common/sdk/override_param.hpp` mapping (`LatestWithin` +
+  `SafeDefault`) unchanged — including with an independent OnClock
+  control-plane source publishing on a subset of activations.
+- **A second independent OnClock source only needs manual partitions** —
+  `graph.partition("data_plane").add(...)` /
+  `graph.partition("control_plane").add(...)`. Once any partition is
+  authored, every operator must be covered exactly once.
+
+So the two failure modes are complementary, and the interim workaround
+below sits on the wrong side of the trade: omitting the port keeps an
+*unwired* graph compiling, but an application that actually connects the
+override gets a run that dies on the second frame. The `[live]`
+convention as written in `OPERATOR_API.md` — a port an application *may*
+connect — has no EA encoding in one build. Re-test at GA; if the
+behavior persists, the choice is a contract that varies with wiring or an
+SDK fix, which is a team decision rather than an implementation detail.
+
+**Re-test list.** Every operator whose `SDK_WORKAROUNDS.md` documents
+"live Inputs omitted from `contract()`" should be re-checked against this
+narrowing: `ClutterFilterOp`, `SnapshotGatherOp`, `FeatureAssemblyOp`,
+`FMCWRangeProcessorOp`, `FMCWDopplerProcessorOp`,
+`FMCWRangeDopplerProcessorOp`, and the sticky-Input operators listed in
+the progress table. The skipped live-override tests may be unblockable by
+declaring the port and wiring it in the test graph.
+
 **Interim.**
 
 - `ClutterFilterOp::contract()` triggers only on `range_profiles`
