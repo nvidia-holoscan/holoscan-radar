@@ -131,11 +131,17 @@ hr::ArrayGeometry make_ula_geometry(int64_t num_elements,
 }
 
 perf::TimingCollector run_mvdr_graph(
-    const MvdrScenario& scen, int total_frames) {
+    const MvdrScenario& scen, const perf::RunPlan& plan) {
   auto snap = perf::make_iq_cube_device<PerfPrecision>(
       {scen.detections, scen.channels, scen.snapshots});
-  return perf::run_perf_graph(
-      std::move(snap), total_frames, "mvdr-perf",
+  using BaseOp = hr::MVDREstimatorOp<PerfPrecision>;
+  using LiveOp =
+      perf::PerfLiveContractOp<BaseOp, &BaseOp::diagonal_loading>;
+  constexpr double kInitialLoading = -1.0;
+  constexpr double kOverrideLoading = 1e-2;
+  return perf::run_perf_graph_with_override(
+      std::move(snap), plan.total_frames, plan.override_at, kInitialLoading,
+      kOverrideLoading, "mvdr-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
@@ -144,9 +150,7 @@ perf::TimingCollector run_mvdr_graph(
         extents.max_el = scen.num_el;
         extents.max_sources = 4;
         extents.max_channels = scen.channels;
-        auto op =
-            graph.op<hr::MVDREstimatorOp<PerfPrecision>>(
-                "mvdr", extents);
+        auto op = graph.op<LiveOp>("mvdr", extents);
         hr::MVDRParams params;
         params.array_geometry =
             make_ula_geometry(scen.channels, 0.5, 1.0);
@@ -156,6 +160,7 @@ perf::TimingCollector run_mvdr_graph(
             linspace(-0.5, 0.5, scen.num_az);
         params.el_angles =
             linspace(-0.3, 0.3, scen.num_el);
+        params.diagonal_loading = kInitialLoading;
         op.set_params(std::move(params));
 
         const auto sink =
@@ -172,12 +177,22 @@ perf::TimingCollector run_mvdr_graph(
             .queue_depth = 4U};
 
         graph.add_flow(src->out, op->snapshot, q);
+        graph.add_flow(
+            src->override_out, op->diagonal_loading, q);
         graph.add_flow(op->aoa_estimates, sink->in, q);
         graph.add_flow(
             op->angle_spectrum, ns1->in, q);
         graph.add_flow(op->doa_multi, ns2->in, q);
         graph.add_flow(op->source_count, ns3->in, q);
         graph.add_flow(op->eigenvalues, ns4->in, q);
+        graph.partition("perf")
+            .add(src)
+            .add(op)
+            .add(sink)
+            .add(ns1)
+            .add(ns2)
+            .add(ns3)
+            .add(ns4);
 
         perf::bind_tensor_out(
             options, "mvdr", "aoa_estimates");
@@ -249,14 +264,13 @@ struct MvdrTraits : perf::PerfDriverDefaults {
            "characterization (HSDK 5 Graph)";
   }
   static const char* sizes_all_help() {
-    return "Default size sweep (no live override)";
+    return "Default size sweep with diagonal-loading override timing";
   }
   static const char* sizes_subset_help() {
     return "Size sweep across an explicit subset";
   }
   static const char* full_help() {
-    return "Full size ladder; live-override timing "
-           "deferred on HSDK 5 EA (HSDK5_PORT.md §1)";
+    return "Full size ladder with diagonal-loading override timing";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -308,12 +322,11 @@ struct MvdrTraits : perf::PerfDriverDefaults {
                            const perf::RunSettings& rs,
                            perf::PerfReport* report) {
     const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/false);
+        perf::make_run_plan(rs, /*has_override=*/true);
     const auto samples = perf::collect_scenario_samples(
         rs, plan,
         [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_mvdr_graph(
-              scen, p.total_frames);
+          return run_mvdr_graph(scen, p);
         });
 
     perf::append_setup_row(
@@ -324,8 +337,8 @@ struct MvdrTraits : perf::PerfDriverDefaults {
     fill_throughput(&row, scen, row.latency.median_ms);
     row.notes =
         "cold_ms is first-frame latency; median/p90 "
-        "are post-warmup steady state; live override "
-        "timing deferred (HSDK5_PORT.md §1); cells/s "
+        "are post-warmup steady state; override_ms is the peak after an "
+        "inline diagonal-loading change; cells/s "
         "is detections/s; Capon scan dominates per "
         "tick";
     report->results.push_back(row);

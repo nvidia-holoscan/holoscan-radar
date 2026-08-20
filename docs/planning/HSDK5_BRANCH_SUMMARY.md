@@ -21,7 +21,7 @@ HSDK 5 Graph + `Operator<Params>` with typed Tensor ports — **no 4.x shim**.
 | 0 — Foundation | EA image, CMake/MatX, Holoviz probe, Python forced off | Landed |
 | 1 — Shared glue | `radar_common/sdk/` Tensor I/O + sticky helpers; Graph test harness | Landed |
 | 2 — Operator wave | All 19 ops → Graph/`Operator<Params>` + unit tests (allow-list) | Landed (intentional live skips OK) |
-| 3 — Perf wave | Graph `perf_*` drivers + cold/steady smokes | Landed (live-override timing still deferred) |
+| 3 — Perf wave | Graph `perf_*` drivers + cold/steady smokes | Landed (POD `override_ms` restored; enum/§9 lives still deferred) |
 | 4 — Apps / Python | Demos + bindings when Holoviz / Python EA surface exists | **Partial:** C++ Graph demos + X11 RD viewer; Holoviz/Python still off |
 | 5 — Close deferred | Re-probe EA gaps; ratify durable API deltas; unskip live Graph | **Open** — see blockers below |
 | 6 — Cleanup | Drop allow-lists, `[EA HSDK5 ONLY]`, this file / `HSDK5_PORT.md` | Blocked on phase 5 |
@@ -45,7 +45,8 @@ do not infer Graph behavior from 4.x.
   marshaling ops on Graph; CFAR GO/SO/OS/alpha_lut + statistical Graph
   suites; allow-lists for ops and perf.
 - **Perf:** shared `perf_graph.hpp`; all drivers cold/steady via
-  `ctest -L performance`.
+  `ctest -L performance`; POD `override_ms` on CFAR, DBSCAN, MUSIC /
+  Root-MUSIC / ESPRIT, MVDR, SnapshotGather, and VirtualArrayAssembly.
 - **Pool sizing:** `MaxTensorExtents` through fat ops, Graph units, apps,
   and Python binding constructors (no empty extents).
 - **Demos:** `fmcw_siso`, `fmcw_simo`, `fmcw_dense_simo`, `fmcw_mimo`
@@ -112,7 +113,7 @@ Until these close, phase 5 / cleanup cannot finish. Detail and next steps:
 
 | ID | Gap | Impact if still broken |
 | --- | --- | --- |
-| §1 | Mid-stream sticky Graph `[live]` (device Tensor path + scalar/enum override) | Graph sticky unit tests skipped; no mid-session live-override **perf** timing (§8); optional-mask Graph wiring stays awkward |
+| §1 | Mid-stream sticky Graph `[live]` (device Tensor path + scalar/enum override) | POD perf timing works with an exact contract and one explicit partition; one-shot sticky unit tests, enums, and general wired/unwired production contracts remain open |
 | §6 (Holoviz / Python) | Holoviz package + usable Python / pybind11 operator surface | Holoviz demos and pytest remain forced off; X11 is interim only |
 | §6 (partition) | Auto-partition rejects graphs with an unreachable / unwired operator | Keep always-drain pattern; want named diagnostics or tolerance |
 | §3 (re-probe) | Foreign-handle / loan-reuse Tensor publish | Keep per-tick pool fill; 4.x→5.x e2e medians include publish cost |

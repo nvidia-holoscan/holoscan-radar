@@ -9,8 +9,7 @@ migration items are indexed in
 ## 1. Graph mid-stream sticky `[live]` POD coverage
 
 **Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky” for
-`pfa` / `threshold_scale` / `os_rank` / `max_detections`; Performance →
-inline live-override measurement (when Graph-ported).
+`pfa` / `threshold_scale` / `os_rank` / `max_detections`.
 
 **Class:** HSDK 5 EA limitation (not a contract change). See
 [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
@@ -24,13 +23,16 @@ inline live-override measurement (when Graph-ported).
 - `LiveThresholdScaleOverrideMidStreamAndSticky` /
   `LivePfaOverrideMidStreamAndSticky` /
   `LiveMaxDetectionsOverrideMidStreamAndSticky` are `GTEST_SKIP`’d.
+- `perf_cfar_detector` measures an inline `threshold_scale` transition with
+  the supported single-clock / exact-contract / single-partition shape.
 - Params authoring covers selection (`ThresholdScaleConfigurableFromParams` /
   `PfaConfigurableFromParams` / `MaxDetectionsConfigurableFromParams`).
 
 **Next.** Restore sticky temporal policy + Graph sticky unit tests on a newer
 EA / GA (shared recipe with ClutterFilter §1).
 
-**Status:** open — EA; do not treat as checklist-complete until closed.
+**Status:** open for sticky unit tests and isolated `pfa` / `os_rank` /
+`max_detections` perf; `threshold_scale` perf timing is restored.
 
 ---
 
@@ -110,13 +112,14 @@ phase 5.
 
 ---
 
-## 6. Performance harness (4.x; Graph port deferred)
+## 6. Performance harness (closed for Graph + scalar timing)
 
-`performance/cpp/perf_cfar_detector.cpp` still uses the HSDK 4.x Application
-helpers. Graph-port the perf binary (cold/steady + deferred live-override
-timing per §1 / §2) in a follow-up, mirroring `perf_clutter_filter`.
+`performance/cpp/perf_cfar_detector.cpp` uses the HSDK 5 Graph five-output
+path and reports cold / steady / inline `threshold_scale` override timing.
+Other scalar live inputs still need isolated rows; vector lives remain
+Params-only under HSDK5_PORT §9.
 
-**Status:** open — deferred; not required to land the C++ HSDK 5 unit port.
+**Status:** closed for the Graph port and representative scalar override.
 
 ---
 

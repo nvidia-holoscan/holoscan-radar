@@ -6,11 +6,10 @@
 // one session and emits a single unified report. Measurement tool only: no
 // timing assertions.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite. Mid-session [live] pfa/alpha_lut/
-// training_cells override measurement is deferred until HSDK5_PORT.md §1.
-// Params still select variant/peak_only/etc. under test. The post_run
-// calibration summary is kept for alpha_lut vs pfa cold-start comparison
-// (still meaningful without live overrides).
+// [EA HSDK5 ONLY] Graph-based rewrite. Measures a mid-session threshold_scale
+// override. alpha_lut / training_cells and the other vectors remain Params-only
+// (HSDK5_PORT.md §9). The post_run calibration summary is kept for alpha_lut
+// vs pfa cold-start comparison.
 
 #include <cuda_runtime_api.h>
 
@@ -181,11 +180,17 @@ std::vector<double> precompute_alpha_lut(const CfarScenario& scen) {
 }
 
 perf::TimingCollector run_cfar_graph(const CfarScenario& scen,
-                                     int total_frames) {
+                                     const perf::RunPlan& plan) {
   auto input =
       perf::make_power_map_device<PerfPrecision>(scen.input_shape);
-  return perf::run_perf_graph(
-      std::move(input), total_frames, "cfar-perf",
+  using BaseOp = hr::CFARDetectorOp<PerfPrecision>;
+  using LiveOp =
+      perf::PerfLiveContractOp<BaseOp, &BaseOp::threshold_scale>;
+  constexpr double kInitialThresholdScale = 1.0;
+  constexpr double kOverrideThresholdScale = 1.1;
+  return perf::run_perf_graph_with_override(
+      std::move(input), plan.total_frames, plan.override_at,
+      kInitialThresholdScale, kOverrideThresholdScale, "cfar-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
@@ -204,15 +209,13 @@ perf::TimingCollector run_cfar_graph(const CfarScenario& scen,
         extents.max_detections = out_batch *
             extents.max_doppler_bins.value() *
             extents.max_range_bins.value();
-        auto op =
-            graph.op<hr::CFARDetectorOp<PerfPrecision>>(
-                "cfar", extents);
+        auto op = graph.op<LiveOp>("cfar", extents);
         hr::CFARParams params;
         params.cfar_variant = scen.variant;
         params.guard_cells = scen.footprint.guard;
         params.training_cells = scen.footprint.training;
         params.pfa = scen.pfa;
-        params.threshold_scale = 1.0;
+        params.threshold_scale = kInitialThresholdScale;
         params.nci_axes = scen.nci_axes;
         params.os_rank = scen.os_rank;
         params.max_detections = 0;
@@ -234,11 +237,21 @@ perf::TimingCollector run_cfar_graph(const CfarScenario& scen,
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
 
         graph.add_flow(src->out, op->rd_maps, q);
+        graph.add_flow(
+            src->override_out, op->threshold_scale, q);
         graph.add_flow(op->detection_idx, idx_sink->in, q);
         graph.add_flow(op->detection_mask, mask_drain->in, q);
         graph.add_flow(op->detection_score, score_drain->in, q);
         graph.add_flow(op->noise_estimate, noise_drain->in, q);
         graph.add_flow(op->cfar_power, power_drain->in, q);
+        graph.partition("perf")
+            .add(src)
+            .add(op)
+            .add(idx_sink)
+            .add(mask_drain)
+            .add(score_drain)
+            .add(noise_drain)
+            .add(power_drain);
 
         perf::bind_tensor_out(options, "cfar", "detection_idx");
         perf::bind_tensor_out(options, "cfar", "detection_mask");
@@ -287,7 +300,8 @@ perf::ResultRow base_row(const CfarScenario& scen) {
   row.k = k;
   row.calibration_pair = scen.calibration_pair;
   row.calibration_mode = scen.use_alpha_lut ? "alpha_lut" : "pfa";
-  row.notes = "live_override=deferred_ea";
+  row.notes =
+      "live_override=threshold_scale; vector overrides remain Params-only";
   return row;
 }
 
@@ -505,8 +519,7 @@ struct CfarTraits : perf::PerfDriverDefaults {
   static const char* full_help() {
     return "Full matrix (all variants/footprints/batch/NCI) plus the "
            "default alpha_lut calibration pairs and peak_only NMS "
-           "rows; live-override timing deferred on HSDK 5 EA "
-           "(HSDK5_PORT.md §1)";
+           "rows; inline threshold_scale override timing";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -610,14 +623,14 @@ struct CfarTraits : perf::PerfDriverDefaults {
                            const perf::RunSettings& rs,
                            perf::PerfReport* report) {
     const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/false);
+        perf::make_run_plan(rs, /*has_override=*/true);
     const auto samples = perf::collect_scenario_samples(
         rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           CfarScenario run_scen = scen;
           if (run_scen.use_alpha_lut && run_scen.alpha_lut.empty()) {
             run_scen.alpha_lut = precompute_alpha_lut(run_scen);
           }
-          return run_cfar_graph(run_scen, p.total_frames);
+          return run_cfar_graph(run_scen, p);
         });
 
     perf::append_setup_row(base_row(scen), samples, report);
@@ -628,13 +641,13 @@ struct CfarTraits : perf::PerfDriverDefaults {
     if (scen.use_alpha_lut) {
       row.notes =
           "cold_ms includes initial alpha_lut H2D; median/p90 are "
-          "steady state; live-override timing deferred "
-          "(HSDK5_PORT.md §1)";
+          "steady state; override_ms is the peak after an inline "
+          "threshold_scale change; vector overrides remain Params-only";
     } else {
       row.notes =
           "cold_ms includes initial LUT calibration; median/p90 are "
-          "steady state; live-override timing deferred "
-          "(HSDK5_PORT.md §1)";
+          "steady state; override_ms is the peak after an inline "
+          "threshold_scale change; vector overrides remain Params-only";
     }
     if (scen.peak_only) {
       row.notes +=

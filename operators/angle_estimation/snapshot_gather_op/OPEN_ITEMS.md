@@ -13,8 +13,7 @@ if it affects the module, then remove or archive the section here.
 
 ## 1. Graph mid-stream sticky `[live] snapshot_window` coverage
 
-**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”;
-Performance → inline live-override measurement (when Graph-ported).
+**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”.
 
 **Class:** HSDK 5 EA limitation (not a contract change). See
 [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
@@ -28,6 +27,8 @@ Performance → inline live-override measurement (when Graph-ported).
 - `snapshot_window` is omitted from `contract()` so unwired graphs compile
   (same pattern as ClutterFilter `method`).
 - `SnapshotGatherOpTest.LiveSnapshotWindowStickyOverride` is `GTEST_SKIP`’d.
+- `perf_snapshot_gather` measures an inline `snapshot_window` POD transition
+  with the supported single-clock / exact-contract / single-partition shape.
 - Params authoring covers window selection
   (`SnapshotWindowConfigurableFromParams`, window/edge-mode tests).
 - Edge modes (`doppler_edge` / `range_edge`) remain static Params only.
@@ -35,7 +36,7 @@ Performance → inline live-override measurement (when Graph-ported).
 **Next.** Restore sticky temporal policy + Graph sticky unit test on a newer
 EA / GA (shared recipe with ClutterFilter §1).
 
-**Status:** open — EA; do not treat as checklist-complete until closed.
+**Status:** open for the sticky unit test; perf override timing is restored.
 
 ---
 
@@ -77,8 +78,9 @@ snapshot-minor). Gather tests index `(N, C, K)`.
 
 ---
 
-## 5. Performance harness (4.x; Graph port deferred)
+## 5. Performance harness (closed)
 
-`performance/cpp/perf_snapshot_gather.cpp` still uses the HSDK 4.x Application
-helpers. Graph-port the perf binary (cold/steady + deferred live-override
-timing per §1) in a follow-up, mirroring `perf_clutter_filter`.
+`performance/cpp/perf_snapshot_gather.cpp` uses the HSDK 5 Graph dual-Tensor
+source and reports cold / steady / inline `snapshot_window` override timing.
+
+**Status:** closed.

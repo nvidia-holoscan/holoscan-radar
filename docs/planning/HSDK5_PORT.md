@@ -84,7 +84,7 @@ new EA/team items added there). Typical work:
 
 | Class | Close by |
 | --- | --- |
-| **EA limitation** (e.g. §1 mid-stream sticky Graph, §8 live-override perf) | Re-probe on newer EA / GA; restore `contract()` sticky policy + unskip Graph tests; document the working harness recipe — or reclassify as durable if the SDK will not support it |
+| **EA limitation** (e.g. §1 sticky Graph units / enum lives; remaining §8 enum/vector perf) | Re-probe on newer EA / GA; restore `contract()` sticky policy + unskip Graph tests; document the working harness recipe — or reclassify as durable if the SDK will not support it |
 | **Durable HSDK 5** (e.g. §2 unique in/out names, §9 vector/descriptor lives, §10 `ArrayGeometry` Tensor pack) | Team decision: keep the interim as the locked contract (update `OPERATOR_API.md`) **or** restore typed live/descriptor ports when the SDK admits them; drop dual “logical vs physical” naming notes once settled |
 | **Our deferred work blocked on the above** (optional-mask Graph wiring, Params-only → live Inputs, Graph sticky unskips) | Land only after the matching EA/team item is closed; do not silently pick a contract answer in code |
 
@@ -127,9 +127,10 @@ HSDK 4.x `InputContext` / `TensorMap` / `HOLOSCAN_OPERATOR_FORWARD_ARGS`.
 
 **C++ operator first-pass:** complete (all 19 operators allow-listed). CFAR
 GO/SO/OS/alpha_lut Graph unit suites + statistical MC (`ctest -L statistical`)
-landed. Graph perf (phase 3) cold/steady smokes landed for all drivers; live-override
-timing still deferred (§1/§8/§9). Remaining: apps/Python (phase 4),
-and EA gaps in §§1/9/10 (phase 5) — see progress table.
+landed. Graph perf (phase 3) cold/steady smokes landed for all drivers; POD
+`override_ms` restored for applicable consumers (§8). Enum and §9 lives remain
+deferred (§1/§9). Remaining: apps/Python (phase 4), and EA gaps in §§1/9/10
+(phase 5) — see progress table.
 
 ---
 
@@ -183,25 +184,25 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | --- | --- |
 | Foundation (Dockerfile yaml-cpp/ssh, `find_package(matx)`, Holoviz gate, C++20) | landed on `dpc/hs5.0-fixes` |
 | Shared Tensor I/O + sticky `[live]` helpers (`radar_common/sdk/`) | landed (ClutterFilter pilot) |
-| `ClutterFilterOp` F32/F64 + Graph C++ tests | landed; Graph perf cold/steady landed; live-override unit+perf deferred (§1) |
-| `SnapshotGatherOp` F32/F64 + Graph C++ tests (OnAligned 2-in/2-out) | landed; live-override unit deferred (§1); Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `PhaseShiftBeamformerOp` F32/F64 + Graph C++ tests | landed; `[live]` geometry/grid/taper Params-only (§9); Graph live tests skipped (§1); Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; `peak_interpolation` live + optional `is_valid` Graph wiring deferred (§1); geometry/grid/taper Params-only (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
+| `ClutterFilterOp` F32/F64 + Graph C++ tests | landed; Graph perf cold/steady landed; `method` enum live unit+perf still deferred (§1) |
+| `SnapshotGatherOp` F32/F64 + Graph C++ tests (OnAligned 2-in/2-out) | landed; live-override unit deferred (§1); Graph perf `snapshot_window` `override_ms` restored (§8) |
+| `PhaseShiftBeamformerOp` F32/F64 + Graph C++ tests | landed; `[live]` geometry/grid/taper Params-only (§9); Graph live tests skipped (§1); Graph perf cold/steady landed (no POD live measured) |
+| `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; `peak_interpolation` live + optional `is_valid` Graph wiring deferred (§1); geometry/grid/taper Params-only (§9); Graph perf cold/steady landed (enum live still deferred) |
 | `SubarraySelectionOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; outputs `snapshot_out` / `is_valid_out` (§2); `array_geometry` emitted as packed float64 Tensor (§10); `array_geometry`/`subarray` live Params-only (§9); optional `is_valid` Graph wiring deferred (§1); no dedicated `perf_*` driver |
-| `ClusterDBSCANOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; `min_points`/`max_clusters` sticky Inputs (Graph live deferred §1); `epsilon` Params-only (§9 unbounded vector); Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `MVDREstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; sticky `diagonal_loading`/`max_sources` Inputs (Graph live deferred §1); geometry/grid/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX retire preserved; Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `MUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; sticky `num_sources`/`source_count_pfa`/`max_sources` Inputs (Graph live deferred §1); geometry/grid/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX retire preserved; Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); sticky `num_sources`/`source_count_pfa`/`max_sources` Inputs (Graph live deferred §1); geometry/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX/cuSOLVER teardown preserved; Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); sticky `num_sources`/`source_count_pfa`/`max_sources` Inputs (Graph live deferred §1); geometry/`spatial_smoothing`/`subarray_spec` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX retire preserved; Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `FeatureAssemblyOp` F32/F64 + Graph C++ tests (1-in/1-out; optional gathers) | landed; optional gather Inputs omitted from contract (§1 / Beamscan `is_valid` pattern); Graph optional wiring deferred — stage kernel coverage; no `[live]` params; Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; `representative`/`score_method` sticky Inputs (Graph live deferred §1); `feature_weights` Params-only (§9 unbounded vector); Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; sticky POD lives (Graph live deferred §1); vector lives Params-only (§9); statistical MC suite on label `statistical`; Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph sticky/`TXSchedule` live N/A (Params-only schedule); Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` Params-only (§9); Graph live tests skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); sticky `wavelength` Input (Graph mid-stream sticky deferred §1); Graph perf cold/steady landed (live deferred §1/§8/§9); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
-| `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; sticky POD lives; `range_window`/`waveform` Params-only (§9); Graph live window skipped (§1/§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `FMCWDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `velocity_bins` only with waveform; sticky POD lives; `doppler_window`/`waveform` Params-only (§9); Graph live skipped (§1/§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `FMCWRangeDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–3-out) | landed; optional axis outs with waveform; sticky POD lives incl. `clutter_filter`; windows/`waveform` Params-only (§9); UlpParity vs split chain preserved; Graph live skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
+| `ClusterDBSCANOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; sticky unit tests deferred (§1); `epsilon` Params-only (§9 unbounded vector); Graph perf `min_points` `override_ms` restored (§8) |
+| `MVDREstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; sticky unit tests deferred (§1); geometry/grid/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX retire preserved; Graph perf `diagonal_loading` `override_ms` restored (§8) |
+| `MUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; sticky unit tests deferred (§1); geometry/grid/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
+| `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); sticky unit tests deferred (§1); geometry/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX/cuSOLVER teardown preserved; Graph perf `max_sources` `override_ms` restored (§8) |
+| `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); sticky unit tests deferred (§1); geometry/`spatial_smoothing`/`subarray_spec` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
+| `FeatureAssemblyOp` F32/F64 + Graph C++ tests (1-in/1-out; optional gathers) | landed; optional gather Inputs omitted from contract (§1 / Beamscan `is_valid` pattern); Graph optional wiring deferred — stage kernel coverage; no `[live]` params; Graph perf cold/steady landed |
+| `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; `representative`/`score_method` sticky Inputs (enum live unit+perf deferred §1); `feature_weights` Params-only (§9 unbounded vector); Graph perf cold/steady landed |
+| `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; sticky unit tests deferred (§1); vector lives Params-only (§9); statistical MC suite on label `statistical`; Graph perf `threshold_scale` `override_ms` restored (§8) |
+| `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph sticky/`TXSchedule` live N/A (Params-only schedule); Graph perf cold/steady landed |
+| `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` Params-only (§9); Graph live tests skipped; Graph perf cold/steady landed (no POD live measured) |
+| `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); sticky unit test deferred (§1); Graph perf `wavelength` `override_ms` restored (§8); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
+| `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; sticky POD lives; `range_window`/`waveform` Params-only (§9); Graph live window skipped (§1/§9); Graph perf cold/steady landed (no POD live measured) |
+| `FMCWDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `velocity_bins` only with waveform; sticky POD lives; `doppler_window`/`waveform` Params-only (§9); Graph live skipped (§1/§9); Graph perf cold/steady landed (no POD live measured) |
+| `FMCWRangeDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–3-out) | landed; optional axis outs with waveform; sticky POD lives incl. `clutter_filter`; windows/`waveform` Params-only (§9); UlpParity vs split chain preserved; Graph live skipped; Graph perf cold/steady landed (no POD live measured) |
 | Python bindings / Holoviz demos / apps | deferred (phase 4); X11 RD + Graph demos siso/simo/dense/mimo/aoa landed (§6) |
 
 ---
@@ -217,14 +218,27 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 operator keeps the typed `Input<>` and resolves via
 `resolve_sticky_override` in `compute()`.
 
-**What fails on EA.** Wiring a second OnClock / multi-partition enum
-source beside a device-Tensor path fails at compile with
-`PARTITION_MANUAL_AUTHORING_REQUIRED`, or at runtime with
-`RUNTIME_PORT_BINDING_UNAVAILABLE` /
-`RUNTIME_EXECUTION_LANE_PLAN_INVALID` /
-`RUNTIME_OPERATOR_REPLAY_MISMATCH` (co-emit of Tensor + scalar from one
-OnClock source). Putting an enum `Output` on the same op as a device
-`Output<Tensor>` also failed binding in earlier probes.
+**What the reproducer established.** The earlier failures were invalid
+authoring shapes, not evidence that scalar sidebands are unsupported:
+
+- independent clock roots need an explicit exact partition cover
+  (`PARTITION_MANUAL_AUTHORING_REQUIRED` otherwise);
+- a wired input must appear in the consumer's temporal contract, and every
+  declared co-emitted output must publish on each replay
+  (`RUNTIME_OPERATOR_REPLAY_MISMATCH` otherwise);
+- enum outputs still fail runtime binding on this EA (`kLocalEnum` cannot cross
+  partitions, and the same-partition probe fails in the source callback).
+  Isolated drop-in repro (closed-width `uint32_t` control vs
+  `enum class : uint32_t`, same co-emit / contract / partition shape):
+  [`tests/cpp/utils/hsdk_enum_tensor_bind_repro/`](../../tests/cpp/utils/hsdk_enum_tensor_bind_repro/)
+  — copy that directory; it has its own `CMakeLists.txt` (Holoscan + CUDA
+  only). In this tree: `ctest --test-dir build -R EnumTensorBindRepro`.
+
+The supported perf shape is one source that emits the device Tensor and a
+fixed-width scalar/POD sideband every tick, switching the sideband value at the
+measurement frame. The source, operator, and drains are placed in one explicit
+partition, and a perf-only operator adapter adds the wired sideband to
+`contract()` with `LatestWithin` + `SafeDefault`.
 
 **Interim.**
 
@@ -297,20 +311,22 @@ OnClock source). Putting an enum `Output` on the same op as a device
   `MaxDetectionsConfigurableFromParams` /
   `GuardCellsConfigurableFromParams` /
   `TrainingCellsConfigurableFromParams`).
+- Graph perf now measures inline POD transitions through the supported shape:
+  CFAR `threshold_scale`, DBSCAN `min_points`, MUSIC / Root-MUSIC / ESPRIT
+  `max_sources`, MVDR `diagonal_loading`, SnapshotGather `snapshot_window`,
+  and VirtualArrayAssembly `wavelength`. `override_ms` /
+  `override_delta_ms` are populated in the smoke JSON. Enum live ports and
+  vector/descriptor lives remain deferred; perf does not claim to replace the
+  skipped one-shot sticky unit tests.
 
-**Next.** Re-probe on a newer EA: restore sticky policy in `contract()`
-(`LatestWithin` + `SafeDefault` / reuse semantics from
-`override_param.hpp`), unskip the Graph sticky test, and document the
-working partition/binding recipe in `sdk_harness.hpp`.
+**Next.** Re-probe enum transport and one-shot sticky sources on a newer EA,
+then unskip the Graph sticky unit tests. The production contract still has to
+support both wired and genuinely unwired instances; the perf-only adapter is
+not that general solution.
 
-**Status:** open — EA harness gap; sticky contract still required.
-Pending Holoscan maintainer answer on whether a single runnable graph that
-mixes a device GPU tensor path with a mid-run scalar/enum override input is
-supported (EA bug / missing recipe) or intentionally unsupported. Observed
-tokens: `RUNTIME_PORT_BINDING_UNAVAILABLE` /
-`RUNTIME_EXECUTION_LANE_PLAN_INVALID`. Until answered, keep ports + Params
-coverage, leave Graph live / override-timing harness skipped, and do not
-reclassify as durable.
+**Status:** partially closed — scalar/POD override perf is working with the
+supported authored graph shape. Production optional-port contracts, one-shot
+sticky unit tests, and enum transport remain open EA gaps.
 
 ---
 
@@ -502,7 +518,7 @@ stay gated intentionally. Demo apps still need
 Holoviz (§6) and Graph-port of remaining app scaffolding. CFAR GO/SO/OS /
 alpha_lut Graph unit suites and the `statistical`-labeled MC suite have
 landed (phase-2 unit coverage). Perf drivers are on the separate
-`HOLOSCAN_RADAR_HSDK5_PORTED_PERF` list (phase 3: all 19 drivers + split_vs_fused; live-override timing still deferred §8).
+`HOLOSCAN_RADAR_HSDK5_PORTED_PERF` list (phase 3: all 19 drivers + split_vs_fused; POD `override_ms` restored §8; enum/§9 lives remain open).
 
 **Status:** C++ first-pass + CFAR variant Graph units landed; allow-list
 kept for EA gating / cleanup.
@@ -670,9 +686,9 @@ work is the FMCW/MIMO shapes and the §1 live-override cases.
 
 ---
 
-### 8. ClutterFilterOp perf: live-override timing still deferred
+### 8. Graph perf: POD live-override timing restored
 
-**Class:** EA limitation (depends on §1) + partial our work.
+**Class:** our work, with enum/vector/descriptor EA limits in §§1/9.
 
 All `perf_*.cpp` drivers are Graph-ported on HSDK 5 (setup / cold /
 steady, process warmup, smoke via `ctest -L performance`) and listed in
@@ -683,16 +699,19 @@ steady, process warmup, smoke via `ctest -L performance`) and listed in
 fixed wall-clock budget, since per-frame cost is hardware-dependent and spans
 milliseconds to seconds (a fixed 60 s deadline previously aborted
 `perf_root_music_estimator --full` at the `xl` rung, which needs ~150 s here).
-Use `--stop-after-s` to cap total runtime. Inline mid-session `[live]`
-`override_ms` is **not** measured until §1 is fixed — checklist
-Performance → live-override coverage remains open (see per-op
-`OPEN_ITEMS.md` and clutter §1). Per-tick source publish is a fresh
-pool loan (§3); vs HSDK 4’s free handle republish this is an
+Use `--stop-after-s` to cap total runtime. Inline mid-session POD `[live]`
+changes use the supported single-clock, exact-contract, single-partition shape
+from §1 and report `override_ms` / `override_delta_ms`. Enum lives remain
+blocked by EA runtime binding; vector/descriptor lives remain Params-only under
+§9. Per-tick source publish is a fresh pool loan (§3); vs HSDK 4’s free handle
+republish this is an
 **accepted** end-to-end comparison artifact on large inputs (VAA
 `virtual_dedup_lg`/`_xl` — see §3). Drivers pick `PerfPublishMode`
 explicitly; default remains `kCopy`.
 
-**Status:** open — cold/steady landed for all drivers; override timing blocked on §1.
+**Status:** partially closed — cold/steady landed for all drivers; POD
+override timing restored for the applicable consumers. Enum and §9 lives
+remain open.
 
 ---
 
