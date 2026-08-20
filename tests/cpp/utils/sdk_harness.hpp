@@ -192,10 +192,17 @@ class TensorSourceOp final : public holoscan::Operator<> {
 };
 
 // One OnClock activation publishes both input tensors with the same
-// capture_time — required for OnAligned{.window = 0ns} + Exact (see
-// /opt/nvidia/holoscan/examples/temporal_contracts/on_aligned/). Two separate
-// OnClock sources fail compile with PARTITION_MANUAL_AUTHORING_REQUIRED on
-// EA when combined with device Tensor binding.
+// capture_time. OnAligned{.window = 0ns} + Exact requires the heads to share a
+// capture time exactly, and two independent OnClock sources tick at different
+// times, so a single co-emitting source is what makes the join fire here (see
+// /opt/nvidia/holoscan/examples/temporal_contracts/on_aligned/). Co-emission is
+// not the only way to get equal times in general — a data-triggered operator
+// inherits its input's capture time, so a production diamond feeding both ports
+// from one upstream frame aligns without co-emitting (see
+// docs/planning/OPERATOR_DEVELOPMENT.md, "Sample time propagation and aligned
+// joins"). Two separate OnClock sources additionally fail compile with
+// PARTITION_MANUAL_AUTHORING_REQUIRED on EA when combined with device Tensor
+// binding.
 class DualTensorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {

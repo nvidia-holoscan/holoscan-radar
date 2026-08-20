@@ -100,6 +100,12 @@ expected<TensorOutputLoan, Error> prepare_device_tensor(
   return std::move(*loan);
 }
 
+// Stamping activation_time() propagates the frame's time rather than replacing
+// it: for a data-triggered operator HSDK 5 sets activation time to the
+// triggering sample's capture_time. Aligned fusion operators are the exception
+// (activation time is the newest aligned head) — see
+// docs/planning/OPERATOR_DEVELOPMENT.md, "Sample time propagation and aligned
+// joins".
 inline expected<void, Error> emit_prepared_tensor(
     Output<Tensor>& port, ExecutionContext& context, TensorOutputLoan loan) {
   return port.emit(std::move(loan),

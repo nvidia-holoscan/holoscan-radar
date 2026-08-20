@@ -158,6 +158,41 @@ because downstream re-infers named extents. Fat Tensor outs take
 - Prefer stream-ordered work; avoid `cudaStreamSynchronize` on the hot path
   unless a scalar result is truly required (and even then, minimize it).
 
+### Sample time propagation and aligned joins
+
+`capture_time` is the frame's logical time, and HSDK 5 propagates it for you.
+For a **data-triggered** operator, `context.activation_time()` equals the
+triggering sample's `capture_time` exactly — not the operator's wall-clock
+dispatch. So `emit_prepared_tensor` / `emit_device_tensor` stamping
+`activation_time()` *forwards* the incoming frame time rather than overwriting
+it, and a chain of pass-through operators keeps every branch of a diamond on
+one shared time. Do not "fix" those helpers to re-read a clock, and do not
+hand-roll a stamp in a pass-through operator.
+
+`OnAligned` enforces its window strictly: `.window = 0ns` means exact
+capture-time equality of the queue heads, so `SnapshotGatherOp`'s zero window is
+load-bearing and must not be loosened. Alignment is also *consuming* — when the
+heads cannot be matched, the unmatched head is discarded rather than paired with
+a neighbor, so a branch that skips a frame costs that frame and nothing more.
+Never add manual frame-matching on top of an aligned trigger.
+
+Two places the automatic propagation does not apply:
+
+- **`OnClock` sources.** Activation time is the tick, so an operator that owns a
+  genuine acquisition time (a real receiver, a simulator modeling one) must
+  supply it explicitly in `EmitOptions{.capture_time = ...}`. Everything
+  downstream then inherits that time, which is what makes a coherent join
+  against a separately-produced descriptor branch possible.
+- **Aligned fusion operators.** When an aligned operator's heads differ within a
+  non-zero window, its activation time is the *newest* of them, so re-stamping
+  advances the frame's time by up to the window on each fusion hop. Where the
+  original frame time must survive, read the chosen input with
+  `Input<T>::receive()` and forward `sample.metadata.capture_time()` —
+  `receive_data()` (and therefore `receive_tensor`) discards the metadata.
+
+Verified experimentally against HSDK 5 EA `v5.0.0.1`; re-check if a later SDK
+changes activation-time or alignment semantics.
+
 ### MatX where it fits; custom CUDA where it does not
 
 Use MatX for element-wise maps, FFTs, and other expression-friendly ops. For
