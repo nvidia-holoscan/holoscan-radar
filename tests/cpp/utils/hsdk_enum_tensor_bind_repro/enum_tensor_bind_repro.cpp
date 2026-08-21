@@ -17,6 +17,7 @@
 //   cmake -S . -B build -Dholoscan_DIR=/path/to/holoscan/lib/cmake/holoscan
 
 #include <cuda_runtime_api.h>
+#include <dlpack/dlpack.h>
 
 #include <chrono>
 #include <cstdint>
@@ -28,7 +29,6 @@
 #include <utility>
 #include <vector>
 
-#include <dlpack/dlpack.h>
 #include <holoscan/core/compile.hpp>
 #include <holoscan/core/connection_options.hpp>
 #include <holoscan/core/domain/tensor.hpp>
