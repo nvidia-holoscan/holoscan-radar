@@ -51,17 +51,14 @@ by this library:
   re-infers. Inputs must be compact row-major in this wave.
 - **Overridable ("live") parameters.** [EA HSDK5 ONLY] An overridable
   parameter may be changed in-flight via a same-named typed
-  `Input<T>` (`sdk/override_param.hpp`). Overrides remain **sticky**: the
-  Params field seeds the initial effective value; an arriving override
-  stays effective until the next. Stickiness is held in an
-  operator-owned `std::optional` updated by `resolve_sticky_override`
-  (not experimental `runtime_mutable`, which is scalars-only). Where
-  wiring the override into `contract()` would fail compile when the port
-  is left unconnected, register the port in `setup()` and resolve
-  best-effort from `compute()` — see the ClutterFilter pilot. Costly
-  reconfigurations still warn once and cache via `sdk/config_cache.hpp`;
-  the cache decides that itself (a miss against a non-empty cache), so
-  callers pass no warn flag.
+  `Input<T>` (`sdk/override_param.hpp`). Enabled ports (`expect_*=true`)
+  join the data trigger with `Exact{}` + `SafeDefault{}`; `sticky_*`
+  (default true) latches the last Exact match in `compute()` via
+  `resolve_live_override`. `expect_*=false` (default) omits the port from
+  `contract()` so unwired graphs compile. Costly reconfigurations
+  still warn once and cache via `sdk/config_cache.hpp`; the cache decides
+  that itself (a miss against a non-empty cache), so callers pass no warn
+  flag.
 - **Params schema replaces ArgumentSetter.** [EA HSDK5 ONLY] Ported
   operators use `Operator<Params>` + `HOLOSCAN_PARAM_SCHEMA` (YAML /
   `set_params` / `from_config`). Drop `HOLOSCAN_OPERATOR_FORWARD_ARGS`
@@ -81,7 +78,7 @@ branch to `main`. Open EA / migration issues live in
 | Receive | `receive_tensor(Input<Tensor>&, who)` → `expected<Tensor, Error>` |
 | Emit | `emit_device_tensor(Output<Tensor>&, context, shape, dtype, fill)` — pool loan → write on `context.cuda_stream()` → commit → emit |
 | Stream | `context.cuda_stream()` only (no `receive_cuda_stream` / `set_cuda_stream`) |
-| Sticky `[live]` | `resolve_sticky_override(port, seed, sticky)`; optional port may stay out of `contract()` when unwired graphs must compile |
+| Exact `[live]` | `maybe_add_live_override_to_contract` + `resolve_live_override`; `expect_*` gates the contract entry |
 | Writable test tensors | `dlpack_buffer.hpp` builds a `DLManagedTensorContext` + device alloc — raw `DLManagedTensor*` import is permanently read-only in HSDK 5 |
 | C++ tests | `tests/cpp/utils/sdk_harness.hpp`: `TensorSourceOp` / `TensorCaptureOp` + `Graph` compile/`run_async`; device producers need `bind_tensor_output_device` |
 

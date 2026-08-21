@@ -114,6 +114,18 @@ template <typename T>
 Contract FMCWRangeDopplerProcessorOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{adc_cube});
+  maybe_add_live_override_to_contract(
+      result, apply_dechirp_in, params().expect_apply_dechirp);
+  maybe_add_live_override_to_contract(
+      result, clutter_filter_in, params().expect_clutter_filter);
+  maybe_add_live_override_to_contract(
+      result, fft_norm_in, params().expect_fft_norm);
+  maybe_add_live_override_to_contract(
+      result, center_zero_doppler_in, params().expect_center_zero_doppler);
+  maybe_add_live_override_to_contract(
+      result, nfft_range_in, params().expect_nfft_range);
+  maybe_add_live_override_to_contract(
+      result, nfft_doppler_in, params().expect_nfft_doppler);
   return result;
 }
 
@@ -129,28 +141,38 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
   const FMCWRangeDopplerProcessorParams& pinned =
       context.params<FMCWRangeDopplerProcessorParams>();
 
-  // Resolve sticky [live] overrides for POD scalars.
+  // Resolve Exact [live] overrides for POD scalars.
   HOLOSCAN_TRY(auto eff_apply_dechirp,
-               resolve_sticky_override(apply_dechirp_in,
-                                       pinned.apply_dechirp,
-                                       sticky_apply_dechirp_));
+               resolve_expected_override(pinned.expect_apply_dechirp,
+                                         apply_dechirp_in, pinned.apply_dechirp,
+                                         sticky_apply_dechirp_,
+                                         pinned.sticky_apply_dechirp));
   HOLOSCAN_TRY(auto eff_clutter_filter,
-               resolve_sticky_override(clutter_filter_in,
-                                       pinned.clutter_filter,
-                                       sticky_clutter_filter_));
+               resolve_expected_override(pinned.expect_clutter_filter,
+                                         clutter_filter_in,
+                                         pinned.clutter_filter,
+                                         sticky_clutter_filter_,
+                                         pinned.sticky_clutter_filter));
   HOLOSCAN_TRY(auto eff_fft_norm,
-               resolve_sticky_override(fft_norm_in, pinned.fft_norm,
-                                       sticky_fft_norm_));
+               resolve_expected_override(pinned.expect_fft_norm, fft_norm_in,
+                                         pinned.fft_norm, sticky_fft_norm_,
+                                         pinned.sticky_fft_norm));
   HOLOSCAN_TRY(auto eff_center_zero_doppler,
-               resolve_sticky_override(center_zero_doppler_in,
-                                       pinned.center_zero_doppler,
-                                       sticky_center_zero_doppler_));
+               resolve_expected_override(pinned.expect_center_zero_doppler,
+                                         center_zero_doppler_in,
+                                         pinned.center_zero_doppler,
+                                         sticky_center_zero_doppler_,
+                                         pinned.sticky_center_zero_doppler));
   HOLOSCAN_TRY(auto eff_nfft_range_raw,
-               resolve_sticky_override(nfft_range_in, pinned.nfft_range,
-                                       sticky_nfft_range_));
+               resolve_expected_override(pinned.expect_nfft_range,
+                                         nfft_range_in, pinned.nfft_range,
+                                         sticky_nfft_range_,
+                                         pinned.sticky_nfft_range));
   HOLOSCAN_TRY(auto eff_nfft_doppler_raw,
-               resolve_sticky_override(nfft_doppler_in, pinned.nfft_doppler,
-                                       sticky_nfft_doppler_));
+               resolve_expected_override(pinned.expect_nfft_doppler,
+                                         nfft_doppler_in, pinned.nfft_doppler,
+                                         sticky_nfft_doppler_,
+                                         pinned.sticky_nfft_doppler));
 
   // nfft 0 = "use natural length" (Params "none" convention).
   const std::optional<int64_t> eff_nfft_range =

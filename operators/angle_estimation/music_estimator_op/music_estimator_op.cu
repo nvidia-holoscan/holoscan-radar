@@ -161,13 +161,14 @@ void MUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
 
 template <typename T>
 Contract MUSICEstimatorOp<T>::contract() const {
-  // Trigger on the data tensor only. Optional is_valid and [live] POD
-  // overrides are omitted from the temporal contract so unconnected ports do
-  // not yield TEMPORAL_INPUT_UNCONNECTED (same pattern as Beamscan /
-  // MVDREstimator). Graph wiring of is_valid / live scalars is deferred
-  // (HSDK5_PORT.md §1).
   Contract result;
   result.trigger(OnEach{snapshot});
+  maybe_add_live_override_to_contract(
+      result, num_sources, params().expect_num_sources);
+  maybe_add_live_override_to_contract(
+      result, source_count_pfa, params().expect_source_count_pfa);
+  maybe_add_live_override_to_contract(
+      result, max_sources, params().expect_max_sources);
   return result;
 }
 
@@ -177,15 +178,19 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
 
   const MUSICParams& pinned = context.params<MUSICParams>();
   HOLOSCAN_TRY(auto effective_num_sources,
-               resolve_sticky_override(num_sources, pinned.num_sources,
-                                       sticky_num_sources_));
+               resolve_expected_override(
+                   pinned.expect_num_sources, num_sources, pinned.num_sources,
+                   sticky_num_sources_, pinned.sticky_num_sources));
   HOLOSCAN_TRY(auto effective_pfa,
-               resolve_sticky_override(source_count_pfa,
-                                       pinned.source_count_pfa,
-                                       sticky_source_count_pfa_));
+               resolve_expected_override(pinned.expect_source_count_pfa,
+                                         source_count_pfa,
+                                         pinned.source_count_pfa,
+                                         sticky_source_count_pfa_,
+                                         pinned.sticky_source_count_pfa));
   HOLOSCAN_TRY(auto effective_max_sources,
-               resolve_sticky_override(max_sources, pinned.max_sources,
-                                       sticky_max_sources_));
+               resolve_expected_override(
+                   pinned.expect_max_sources, max_sources, pinned.max_sources,
+                   sticky_max_sources_, pinned.sticky_max_sources));
 
   // Descriptor / vector live params are Params-only on EA (HSDK5_PORT §9).
   ArrayGeometry geometry = pinned.array_geometry;

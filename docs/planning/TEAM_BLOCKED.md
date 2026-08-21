@@ -53,13 +53,15 @@ Interim stance already chosen (or the capability is explicitly out of current
 scope). Development and checklist completion proceed; these need ratification
 or a deliberate contract change when the team has bandwidth.
 
-Items L1–L15 and S1–S4 are settled — see STATUS.md → Settled decisions.
+Items L1–L17 and S1–S4 are settled — see STATUS.md → Settled decisions.
 Capabilities deliberately deferred out of the current scope (e.g. staggered TDM,
 sum-set holey subarray smoothing) are tracked under STATUS.md → Roadmap, not
 here.
 
 ### `[live]` override semantics
 
-| # | Decision needed | Interim stance | Detail |
-| --- | --- | --- | --- |
-| L16 | **Coherence-critical `[live]` descriptors** — does the convention grow an effective-from (epoch) binding between a descriptor and the frames it applies to, or is coherence an application obligation discharged by the ADC source co-publishing the waveform? Sticky semantics apply a runtime waveform change too early or too late, and the operator cannot detect either. Cross-cutting: range, Doppler, range-Doppler, MIMO compensation | **Sticky as documented** (`OPERATOR_API.md` `[live]` convention); measured failure quantified on a scalar probe, no code changed | [FMCWRangeProcessor OPEN_ITEMS](../../operators/fmcw/fmcw_range_processor_op/OPEN_ITEMS.md) item 2 |
+L16 (Exact join on the data trigger's `capture_time`) and L17 (per-port
+`expect_*` declared wiring) are **adopted** — see STATUS.md Settled decisions
+and the Parameter override convention in [`OPERATOR_API.md`](OPERATOR_API.md).
+Who owns the transmit stamp (sequencer vs device report) is still open; the
+consumer contract is the same either way ([`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md)).

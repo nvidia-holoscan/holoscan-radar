@@ -110,14 +110,10 @@ void BeamscanEstimatorOp<T>::setup(OperatorSpec& spec) {
 
 template <typename T>
 Contract BeamscanEstimatorOp<T>::contract() const {
-  // Trigger on the data tensor only. Optional is_valid and [live]
-  // peak_interpolation are omitted from the temporal contract so unconnected
-  // ports do not yield TEMPORAL_INPUT_UNCONNECTED (SafeDefault alone is not
-  // enough on EA — same pattern as ClutterFilter method). Wiring is_valid in
-  // Graph tests is deferred (RUNTIME_OPERATOR_REPLAY_MISMATCH); see
-  // OPEN_ITEMS.md / HSDK5_PORT.md §1.
   Contract result;
   result.trigger(OnEach{snapshot});
+  maybe_add_live_override_to_contract(
+      result, peak_interpolation, params().expect_peak_interpolation);
   return result;
 }
 
@@ -128,9 +124,11 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
 
   const BeamscanParams& pinned = context.params<BeamscanParams>();
   HOLOSCAN_TRY(auto peak_interp,
-               resolve_sticky_override(peak_interpolation,
-                                       pinned.peak_interpolation,
-                                       sticky_peak_interpolation_));
+               resolve_expected_override(pinned.expect_peak_interpolation,
+                                         peak_interpolation,
+                                         pinned.peak_interpolation,
+                                         sticky_peak_interpolation_,
+                                         pinned.sticky_peak_interpolation));
 
   // Descriptor / vector live params are Params-only on EA (HSDK5_PORT §9).
   ArrayGeometry geometry = pinned.array_geometry;

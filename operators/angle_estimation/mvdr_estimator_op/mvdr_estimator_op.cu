@@ -159,13 +159,12 @@ void MVDREstimatorOp<T>::setup(OperatorSpec& spec) {
 
 template <typename T>
 Contract MVDREstimatorOp<T>::contract() const {
-  // Trigger on the data tensor only. Optional is_valid and [live] POD
-  // overrides are omitted from the temporal contract so unconnected ports do
-  // not yield TEMPORAL_INPUT_UNCONNECTED (same pattern as Beamscan /
-  // ClutterFilter). Graph wiring of is_valid / live scalars is deferred
-  // (HSDK5_PORT.md §1).
   Contract result;
   result.trigger(OnEach{snapshot});
+  maybe_add_live_override_to_contract(
+      result, diagonal_loading, params().expect_diagonal_loading);
+  maybe_add_live_override_to_contract(
+      result, max_sources, params().expect_max_sources);
   return result;
 }
 
@@ -175,12 +174,15 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
 
   const MVDRParams& pinned = context.params<MVDRParams>();
   HOLOSCAN_TRY(auto effective_loading,
-               resolve_sticky_override(diagonal_loading,
-                                       pinned.diagonal_loading,
-                                       sticky_diagonal_loading_));
+               resolve_expected_override(pinned.expect_diagonal_loading,
+                                         diagonal_loading,
+                                         pinned.diagonal_loading,
+                                         sticky_diagonal_loading_,
+                                         pinned.sticky_diagonal_loading));
   HOLOSCAN_TRY(auto effective_max_sources,
-               resolve_sticky_override(max_sources, pinned.max_sources,
-                                       sticky_max_sources_));
+               resolve_expected_override(
+                   pinned.expect_max_sources, max_sources, pinned.max_sources,
+                   sticky_max_sources_, pinned.sticky_max_sources));
 
   // Descriptor / vector live params are Params-only on EA (HSDK5_PORT §9).
   ArrayGeometry geometry = pinned.array_geometry;

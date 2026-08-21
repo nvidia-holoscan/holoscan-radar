@@ -143,19 +143,14 @@ void SnapshotGatherOp<T>::setup(OperatorSpec& spec) {
 
 template <typename T>
 Contract SnapshotGatherOp<T>::contract() const {
-  // Trigger when both data tensors share an aligned event time. The [live]
-  // snapshot_window input is intentionally omitted from the temporal contract
-  // so an unconnected override port does not yield TEMPORAL_INPUT_UNCONNECTED,
-  // and so a second OnClock source is not required (HSDK 5 EA multi-partition
-  // device binding is still rough — sticky live-override coverage is
-  // exercised via Params + operator sticky state when a sample does arrive).
-  // [EA HSDK5 ONLY] see docs/planning/HSDK5_PORT.md §1.
   Contract result;
   result
       .trigger(OnAligned{.ports = ports(rd_maps, detection_idx),
                          .window = std::chrono::nanoseconds{0}})
       .input(rd_maps, Exact{})
       .input(detection_idx, Exact{});
+  maybe_add_live_override_to_contract(
+      result, snapshot_window, params().expect_snapshot_window);
   return result;
 }
 
@@ -179,8 +174,10 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
   // Best-effort sticky override: if the port is wired and a sample is waiting,
   // absorb it; otherwise keep sticky / fall back to Params.
   HOLOSCAN_TRY(auto window_pod,
-               resolve_sticky_override(snapshot_window, window_seed,
-                                       sticky_snapshot_window_));
+               resolve_expected_override(pinned.expect_snapshot_window,
+                                         snapshot_window, window_seed,
+                                         sticky_snapshot_window_,
+                                         pinned.sticky_snapshot_window));
 
   std::vector<int64_t> effective_window;
   try {

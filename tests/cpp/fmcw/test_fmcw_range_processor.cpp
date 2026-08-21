@@ -9,21 +9,39 @@
 
 #include <gtest/gtest.h>
 
+#include <cuda_runtime_api.h>
+
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <holoscan/core/compile.hpp>
 #include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/expected.hpp>
 #include <holoscan/core/graph.hpp>
+#include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
+#include <holoscan/core/payload_options.hpp>
+#include <holoscan/core/run.hpp>
+#include <holoscan/core/temporal_contract.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/time/realtime_clock.hpp>
 
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/bin_model.hpp"
@@ -477,6 +495,249 @@ TEST(FMCWRangeProcessorOpTest, NamedRxAxisRoundTrip) {
           << "chirp " << chirp << " bin " << i;
     }
   }
+}
+
+struct LiveNfftTick {
+  std::shared_ptr<holoscan::Tensor> cube;
+  std::optional<int64_t> nfft;
+  int64_t nfft_skew_ns{0};
+};
+
+struct LiveNfftBank {
+  static void reset() {
+    ticks.clear();
+    index = 0;
+  }
+  static inline std::vector<LiveNfftTick> ticks;
+  static inline std::size_t index{0};
+};
+
+holoscan::expected<void, holoscan::Error> emit_cube_at(
+    holoscan::Output<holoscan::Tensor>& out,
+    holoscan::ExecutionContext& context,
+    const std::shared_ptr<holoscan::Tensor>& frame,
+    holoscan::TimePoint capture_time) {
+  const auto shape = frame->shape();
+  const DLDataType dtype = frame->dtype();
+  auto loan = out.allocate_tensor(
+      holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
+  if (!loan) {
+    return holoscan::make_unexpected(std::move(loan).error());
+  }
+  auto writer = loan->write(context.cuda_stream());
+  if (!writer) {
+    return holoscan::make_unexpected(std::move(writer).error());
+  }
+  cudaStream_t stream = context.cuda_stream().get();
+  if (writer->byte_size() > 0 &&
+      cudaMemcpyAsync(writer->data(), frame->data(), writer->byte_size(),
+                      cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
+    return holoscan::make_unexpected(holoscan::Error{
+        holoscan::ErrorCode::kFailure,
+        "LiveNfftSourceOp: cudaMemcpyAsync failed"});
+  }
+  auto committed = std::move(*writer).commit();
+  if (!committed) {
+    return holoscan::make_unexpected(std::move(committed).error());
+  }
+  return out.emit(std::move(*loan),
+                  holoscan::EmitOptions{.capture_time = capture_time});
+}
+
+class LiveNfftSourceOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorPortLayout kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice,
+        .dtype = std::nullopt,
+        .rank = std::nullopt,
+    };
+    spec.output(cube, "out")
+        .produces_tensor(kDevice)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL});
+    spec.output(nfft, "nfft");
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{
+        .period = holoscan::radar::testing::detail::kHarnessTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    LiveNfftTick tick;
+    {
+      if (LiveNfftBank::index >= LiveNfftBank::ticks.size()) {
+        return {};
+      }
+      tick = LiveNfftBank::ticks[LiveNfftBank::index++];
+    }
+    // Publish the override before the cube so Exact can see it.
+    const holoscan::TimePoint cube_time = context.activation_time();
+    if (tick.nfft.has_value()) {
+      holoscan::TimePoint nfft_time = cube_time;
+      nfft_time.timestamp_ns += tick.nfft_skew_ns;
+      auto emitted = nfft.emit(
+          *tick.nfft, holoscan::EmitOptions{.capture_time = nfft_time});
+      if (!emitted) {
+        return holoscan::make_unexpected(std::move(emitted).error());
+      }
+    }
+    return emit_cube_at(cube, context, tick.cube, cube_time);
+  }
+
+  holoscan::Output<holoscan::Tensor> cube{"out"};
+  holoscan::Output<int64_t> nfft{"nfft"};
+};
+
+GraphRunResult run_nfft_override_graph(
+    std::vector<LiveNfftTick> ticks, FMCWRangeProcessorParams params) {
+  GraphRunResult result;
+  holoscan::radar::testing::detail::FrameBank::reset();
+  LiveNfftBank::reset();
+  LiveNfftBank::ticks = std::move(ticks);
+  const std::size_t expected = LiveNfftBank::ticks.size();
+
+  holoscan::Graph graph{"nfft-live-override"};
+  const auto source = graph.op<LiveNfftSourceOp>("source");
+  auto op = holoscan::radar::testing::emplace_harness_op<
+      FMCWRangeProcessorOp<float>>(
+      graph, holoscan::radar::testing::default_test_extents());
+  op.set_params(std::move(params));
+  const auto sink =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink");
+  const holoscan::ConnectionOptions q{.queue_depth = 8U};
+  graph.add_flow(source->cube, op->adc_cube, q);
+  graph.add_flow(source->nfft, op->nfft_in, q);
+  graph.add_flow(op->range_profiles, sink->in, q);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  holoscan::radar::testing::detail::bind_single_io_device_pools(
+      options, "range_profiles");
+  holoscan::radar::testing::detail::bind_op_device_output(
+      options, "range_bins");
+
+  try {
+    const holoscan::ExecutionPlan plan =
+        holoscan::compile(graph, std::move(options));
+    result.plan_ok = plan.ok();
+    result.plan_json = plan.json();
+    if (!plan.ok()) {
+      return result;
+    }
+    holoscan::RunSession session = holoscan::run_async(plan);
+    const auto deadline = std::chrono::steady_clock::now() +
+                          holoscan::radar::testing::detail::kHarnessDeadline;
+    {
+      std::unique_lock lock(
+          holoscan::radar::testing::detail::FrameBank::mutex);
+      while (holoscan::radar::testing::detail::FrameBank::captured.size() <
+                 expected &&
+             session.diagnostics().empty() &&
+             std::chrono::steady_clock::now() < deadline) {
+        holoscan::radar::testing::detail::FrameBank::ready.wait_for(
+            lock, holoscan::radar::testing::detail::kHarnessPoll);
+      }
+    }
+    session.request_stop();
+    session.wait();
+    result.termination = session.termination();
+    for (const auto& d : session.diagnostics()) {
+      result.diagnostics.push_back(std::string(d.token));
+    }
+  } catch (const holoscan::RuntimeError& e) {
+    result.plan_ok = false;
+    result.plan_json = std::string("RuntimeError: ") + e.what();
+    return result;
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBank::mutex);
+    result.frames =
+        std::move(holoscan::radar::testing::detail::FrameBank::captured);
+  }
+  return result;
+}
+
+std::vector<LiveNfftTick> two_cube_ticks(
+    const std::shared_ptr<holoscan::Tensor>& cube,
+    std::optional<int64_t> nfft0, std::optional<int64_t> nfft1,
+    int64_t nfft0_skew_ns = 0, int64_t nfft1_skew_ns = 0) {
+  return {{cube, nfft0, nfft0_skew_ns}, {cube, nfft1, nfft1_skew_ns}};
+}
+
+TEST(FMCWRangeProcessorOpTest, LiveNfftExactMatchChangesBinCount) {
+  const auto sim_result = sim::simulate(make_scene(range_at_bin(30.0)));
+  auto cube = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
+
+  FMCWRangeProcessorParams params;
+  params.expect_nfft = true;
+  params.sticky_nfft = false;
+  const GraphRunResult out = run_nfft_override_graph(
+      two_cube_ticks(cube, int64_t{256}, int64_t{256}), std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 2u);
+  EXPECT_EQ(out.frames[0].shape.back(), 256);
+  EXPECT_EQ(out.frames[1].shape.back(), 256);
+}
+
+TEST(FMCWRangeProcessorOpTest, LiveNfftStickyKeepsLastMatch) {
+  const auto sim_result = sim::simulate(make_scene(range_at_bin(30.0)));
+  auto cube = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
+
+  FMCWRangeProcessorParams params;
+  params.expect_nfft = true;
+  params.sticky_nfft = true;
+  const GraphRunResult out = run_nfft_override_graph(
+      two_cube_ticks(cube, int64_t{256}, std::nullopt), std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 2u);
+  EXPECT_EQ(out.frames[0].shape.back(), 256);
+  EXPECT_EQ(out.frames[1].shape.back(), 256);
+}
+
+TEST(FMCWRangeProcessorOpTest, LiveNfftEphemeralRevertsToParams) {
+  const auto sim_result = sim::simulate(make_scene(range_at_bin(30.0)));
+  auto cube = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
+
+  FMCWRangeProcessorParams params;
+  params.expect_nfft = true;
+  params.sticky_nfft = false;
+  const GraphRunResult out = run_nfft_override_graph(
+      two_cube_ticks(cube, int64_t{256}, std::nullopt), std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 2u);
+  EXPECT_EQ(out.frames[0].shape.back(), 256);
+  EXPECT_EQ(out.frames[1].shape.back(), kSamples);
+}
+
+TEST(FMCWRangeProcessorOpTest, LiveNfftSkewedCaptureTimeMissesExact) {
+  const auto sim_result = sim::simulate(make_scene(range_at_bin(30.0)));
+  auto cube = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
+  const int64_t skew_ns = 1'000'000;
+
+  FMCWRangeProcessorParams params;
+  params.expect_nfft = true;
+  params.sticky_nfft = false;
+  const GraphRunResult out = run_nfft_override_graph(
+      two_cube_ticks(cube, int64_t{256}, int64_t{256}, skew_ns, skew_ns),
+      std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 2u);
+  EXPECT_EQ(out.frames[0].shape.back(), kSamples);
+  EXPECT_EQ(out.frames[1].shape.back(), kSamples);
 }
 
 TEST(FMCWRangeProcessorOpTest, LiveWindowOverrideAppliesPerTick) {

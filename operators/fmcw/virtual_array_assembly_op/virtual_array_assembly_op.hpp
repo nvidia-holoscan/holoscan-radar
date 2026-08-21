@@ -48,6 +48,8 @@ struct VirtualArrayAssemblyParams {
   std::vector<double> rx_positions{};
   double wavelength{0.0};
   OverlapPolicy overlap_policy{OverlapPolicy::kDedup};
+  bool expect_wavelength{false};
+  bool sticky_wavelength{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -68,7 +70,16 @@ HOLOSCAN_PARAM_SCHEMA(
         "overlap_policy")
         .description(
             "How coincident virtual elements are handled: dedup, average, "
-            "or keep_all. Static."));
+            "or keep_all. Static."),
+    holoscan::field<&VirtualArrayAssemblyParams::expect_wavelength>(
+        "expect_wavelength")
+        .description(
+            "Set when the application wires the wavelength override."),
+    holoscan::field<&VirtualArrayAssemblyParams::sticky_wavelength>(
+        "sticky_wavelength")
+        .description(
+            "Keep the last Exact wavelength match on a miss. Ignored "
+            "unless expect_wavelength."));
 
 static_assert(
     holoscan::param_schema_availability<VirtualArrayAssemblyParams>() ==

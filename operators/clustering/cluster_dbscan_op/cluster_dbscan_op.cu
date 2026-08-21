@@ -110,15 +110,12 @@ void ClusterDBSCANOp<T>::setup(OperatorSpec& spec) {
 
 template <typename T>
 Contract ClusterDBSCANOp<T>::contract() const {
-  // Trigger on the data tensor only. [live] min_points / max_clusters are
-  // intentionally omitted from the temporal contract so unconnected override
-  // ports do not yield TEMPORAL_INPUT_UNCONNECTED, and so a second OnClock
-  // source is not required (HSDK 5 EA multi-partition device binding is still
-  // rough — sticky live-override coverage is exercised via Params + operator
-  // sticky state when a sample does arrive). [EA HSDK5 ONLY] see
-  // docs/planning/HSDK5_PORT.md §1.
   Contract result;
   result.trigger(OnEach{points});
+  maybe_add_live_override_to_contract(
+      result, min_points, params().expect_min_points);
+  maybe_add_live_override_to_contract(
+      result, max_clusters, params().expect_max_clusters);
   return result;
 }
 
@@ -131,11 +128,14 @@ expected<void, Error> ClusterDBSCANOp<T>::compute(ExecutionContext& context) {
   // waiting, absorb it; otherwise keep sticky / fall back to Params.
   // epsilon is Params-only (unbounded vector — HSDK5_PORT §9).
   HOLOSCAN_TRY(auto effective_min_points,
-               resolve_sticky_override(min_points, pinned.min_points,
-                                       sticky_min_points_));
+               resolve_expected_override(pinned.expect_min_points, min_points,
+                                         pinned.min_points, sticky_min_points_,
+                                         pinned.sticky_min_points));
   HOLOSCAN_TRY(auto effective_max_clusters,
-               resolve_sticky_override(max_clusters, pinned.max_clusters,
-                                       sticky_max_clusters_));
+               resolve_expected_override(
+                   pinned.expect_max_clusters, max_clusters,
+                   pinned.max_clusters, sticky_max_clusters_,
+                   pinned.sticky_max_clusters));
   const std::vector<double>& eps = pinned.epsilon;
 
   try {

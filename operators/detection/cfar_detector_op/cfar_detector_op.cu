@@ -289,11 +289,15 @@ void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
 
 template <typename T>
 Contract CFARDetectorOp<T>::contract() const {
-  // Trigger on the data tensor only. [live] POD scalars are omitted from the
-  // temporal contract so unconnected override ports do not yield
-  // TEMPORAL_INPUT_UNCONNECTED (HSDK5_PORT.md §1).
   Contract result;
   result.trigger(OnEach{rd_maps});
+  maybe_add_live_override_to_contract(result, pfa, params().expect_pfa);
+  maybe_add_live_override_to_contract(
+      result, threshold_scale, params().expect_threshold_scale);
+  maybe_add_live_override_to_contract(
+      result, os_rank, params().expect_os_rank);
+  maybe_add_live_override_to_contract(
+      result, max_detections, params().expect_max_detections);
   return result;
 }
 
@@ -303,16 +307,23 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
 
   const CFARParams& pinned = context.params<CFARParams>();
   HOLOSCAN_TRY(auto effective_pfa,
-               resolve_sticky_override(pfa, pinned.pfa, sticky_pfa_));
+               resolve_expected_override(pinned.expect_pfa, pfa, pinned.pfa,
+                                         sticky_pfa_, pinned.sticky_pfa));
   HOLOSCAN_TRY(auto effective_threshold_scale,
-               resolve_sticky_override(threshold_scale, pinned.threshold_scale,
-                                       sticky_threshold_scale_));
+               resolve_expected_override(pinned.expect_threshold_scale,
+                                         threshold_scale,
+                                         pinned.threshold_scale,
+                                         sticky_threshold_scale_,
+                                         pinned.sticky_threshold_scale));
   HOLOSCAN_TRY(auto effective_os_rank,
-               resolve_sticky_override(os_rank, pinned.os_rank,
-                                       sticky_os_rank_));
+               resolve_expected_override(pinned.expect_os_rank, os_rank,
+                                         pinned.os_rank, sticky_os_rank_,
+                                         pinned.sticky_os_rank));
   HOLOSCAN_TRY(auto effective_max_detections,
-               resolve_sticky_override(max_detections, pinned.max_detections,
-                                       sticky_max_detections_));
+               resolve_expected_override(pinned.expect_max_detections,
+                                         max_detections, pinned.max_detections,
+                                         sticky_max_detections_,
+                                         pinned.sticky_max_detections));
   // Params-only vectors (HSDK5_PORT §9).
   const std::vector<int64_t>& effective_guard_cells = pinned.guard_cells;
   const std::vector<int64_t>& effective_training_cells =

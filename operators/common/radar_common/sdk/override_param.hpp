@@ -17,34 +17,74 @@
 
 namespace holoscan::radar {
 
-// HSDK 5 mapping of the module's sticky [live] override convention
+// HSDK 5 mapping of the module's `[live]` override convention
 // (OPERATOR_API.md).
 //
-// Contract: LatestWithin admits a fresh override when present; on_missing
-// SafeDefault lets the activation proceed when the port is unconnected or
-// silent (ReuseLast alone would suppress compute() before the first sample,
-// which breaks Params-seeded defaults). Sticky retention across silent ticks
-// is held in an operator-owned std::optional updated by
-// resolve_sticky_override — not experimental runtime_mutable (scalars-only).
+// Enabled ports join the data trigger with Exact{} so the override's
+// capture_time must match the cube. on_missing SafeDefault{} lets the
+// activation proceed when this tick has no match; never treat the
+// default-constructed payload as a value (nfft == 0 is a legal seed).
+// Stickiness vs revert-to-Params is compute-side (sticky_* bool).
 //
-// LatestWithin still needs a positive max_age; use a century-scale bound so a
-// queued override is not aged out mid-session.
+// POD [live] ports join via maybe_add_live_override_to_contract (Exact +
+// SafeDefault, gated by expect_*). resolve_sticky_override /
+// add_sticky_override_to_contract remain for the LatestWithin repro test.
 
 inline constexpr auto kStickyOverrideMaxAge = std::chrono::years{100};
 
+template <typename T>
+void add_live_override_to_contract(Contract& contract, const Input<T>& port) {
+  contract.input(port, Exact{}).on_missing(port, SafeDefault{});
+}
+
+template <typename T>
+void maybe_add_live_override_to_contract(Contract& contract,
+                                         const Input<T>& port, bool expect) {
+  if (expect) {
+    add_live_override_to_contract(contract, port);
+  }
+}
+
+// Resolve the effective value for an enabled Exact override port.
+// Missing sample: sticky keeps the last match (else seed); otherwise
+// always returns seed. A present sample is latched only when sticky.
+template <typename T>
+expected<T, Error> resolve_live_override(Input<T>& port, const T& seed,
+                                         std::optional<T>& sticky,
+                                         bool keep_sticky) {
+  HOLOSCAN_TRY(auto maybe, receive_optional_value(port));
+  if (maybe.has_value()) {
+    if (keep_sticky) {
+      sticky = *maybe;
+    }
+    return std::move(*maybe);
+  }
+  if (keep_sticky && sticky.has_value()) {
+    return *sticky;
+  }
+  return seed;
+}
+
+template <typename T>
+expected<T, Error> resolve_expected_override(
+    bool expect, Input<T>& port, const T& seed, std::optional<T>& sticky,
+    bool keep_sticky) {
+  if (!expect) {
+    return seed;
+  }
+  return resolve_live_override(port, seed, sticky, keep_sticky);
+}
+
+// Deprecated LatestWithin mapping for operators not yet on Exact+expect.
 template <typename T>
 void add_sticky_override_to_contract(Contract& contract, const Input<T>& port) {
   contract.input(port, LatestWithin{.max_age = kStickyOverrideMaxAge})
       .on_missing(port, SafeDefault{});
 }
 
-// Resolve the effective value for this activation: update `sticky` when a
-// fresh sample arrives, then return sticky (or `seed` when never overridden).
 template <typename T>
 expected<T, Error> resolve_sticky_override(Input<T>& port, const T& seed,
                                            std::optional<T>& sticky) {
-  // Unconnected / silent override ports must not fail the activation, but a
-  // genuine transport failure has to surface rather than degrade to the seed.
   HOLOSCAN_TRY(auto maybe, receive_optional_value(port));
   if (maybe.has_value()) {
     sticky = std::move(*maybe);

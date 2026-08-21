@@ -33,8 +33,8 @@ expected<void, Error> fail_invalid(const std::string& message) {
 
 constexpr const char* kOpName = "FMCWRangeProcessorOp";
 
-// Effective per-tick values after applying sticky scalar overrides. Params-only
-// descriptor values are borrowed from the operator parameter storage.
+// Effective per-tick values after applying Exact scalar overrides.
+// Params-only descriptor values are borrowed from parameter storage.
 struct EffectiveRangeConfig {
   const WindowSpec* window;
   bool apply_dechirp;
@@ -52,7 +52,8 @@ struct ValidatedRangeConfig {
   bool waveform_present;
 };
 
-// Resolve sticky scalar inputs and combine them with the pinned parameters.
+// Resolve Exact scalar inputs (when expect_* is set) with the pinned
+// parameters. Unwired ports (expect=false) must not be received.
 expected<EffectiveRangeConfig, Error> resolve_overrides(
     Input<bool>& apply_dechirp_in, Input<FftNorm>& fft_norm_in,
     Input<int64_t>& nfft_in, const FMCWRangeProcessorParams& pinned,
@@ -60,14 +61,18 @@ expected<EffectiveRangeConfig, Error> resolve_overrides(
     std::optional<FftNorm>& sticky_fft_norm,
     std::optional<int64_t>& sticky_nfft) {
   HOLOSCAN_TRY(auto apply_dechirp,
-               resolve_sticky_override(apply_dechirp_in,
-                                       pinned.apply_dechirp,
-                                       sticky_apply_dechirp));
+               resolve_expected_override(
+                   pinned.expect_apply_dechirp, apply_dechirp_in,
+                   pinned.apply_dechirp, sticky_apply_dechirp,
+                   pinned.sticky_apply_dechirp));
   HOLOSCAN_TRY(auto fft_norm,
-               resolve_sticky_override(fft_norm_in, pinned.fft_norm,
-                                       sticky_fft_norm));
+               resolve_expected_override(pinned.expect_fft_norm, fft_norm_in,
+                                         pinned.fft_norm, sticky_fft_norm,
+                                         pinned.sticky_fft_norm));
   HOLOSCAN_TRY(auto nfft,
-               resolve_sticky_override(nfft_in, pinned.nfft, sticky_nfft));
+               resolve_expected_override(pinned.expect_nfft, nfft_in,
+                                         pinned.nfft, sticky_nfft,
+                                         pinned.sticky_nfft));
 
   return EffectiveRangeConfig{.window = &pinned.range_window,
                               .apply_dechirp = apply_dechirp,
@@ -229,7 +234,7 @@ void FMCWRangeProcessorOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(kDevice)
       .tensor_allocation(bins_bounds);
 
-  // [live] sticky override ports for POD scalars.
+  // [live] Exact override ports for POD scalars.
   spec.input(apply_dechirp_in).queue_depth(2U);
   spec.input(fft_norm_in).queue_depth(2U);
   spec.input(nfft_in).queue_depth(2U);
@@ -237,12 +242,17 @@ void FMCWRangeProcessorOp<T>::setup(OperatorSpec& spec) {
 
 template <typename T>
 Contract FMCWRangeProcessorOp<T>::contract() const {
-  // Trigger on the data tensor only. Sticky override ports and the optional
-  // range_bins output are intentionally omitted from the contract so
-  // unconnected ports do not yield TEMPORAL_INPUT_UNCONNECTED and an
-  // unwired range_bins sink does not gate scheduling.
+  // Trigger on the data tensor. Each expect_* gate puts that Exact
+  // override in the contract (must be wired). Optional range_bins stays
+  // omitted so an unwired sink does not gate scheduling.
   Contract result;
   result.trigger(OnEach{adc_cube});
+  maybe_add_live_override_to_contract(
+      result, apply_dechirp_in, params().expect_apply_dechirp);
+  maybe_add_live_override_to_contract(
+      result, fft_norm_in, params().expect_fft_norm);
+  maybe_add_live_override_to_contract(
+      result, nfft_in, params().expect_nfft);
   return result;
 }
 

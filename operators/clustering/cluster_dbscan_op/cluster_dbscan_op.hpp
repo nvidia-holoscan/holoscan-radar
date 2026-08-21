@@ -68,6 +68,10 @@ struct ClusterDBSCANParams {
   std::vector<double> epsilon{};
   int64_t min_points{0};
   int64_t max_clusters{0};
+  bool expect_min_points{false};
+  bool expect_max_clusters{false};
+  bool sticky_min_points{true};
+  bool sticky_max_clusters{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -84,7 +88,25 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&ClusterDBSCANParams::max_clusters>("max_clusters")
         .description(
             "Upper cap on reported clusters (surplus dropped to noise with a "
-            "warning); <= 0 is uncapped"));
+            "warning); <= 0 is uncapped"),
+    holoscan::field<&ClusterDBSCANParams::expect_min_points>(
+        "expect_min_points")
+        .description(
+            "Set when the application wires the min_points override."),
+    holoscan::field<&ClusterDBSCANParams::expect_max_clusters>(
+        "expect_max_clusters")
+        .description(
+            "Set when the application wires the max_clusters override."),
+    holoscan::field<&ClusterDBSCANParams::sticky_min_points>(
+        "sticky_min_points")
+        .description(
+            "Keep the last Exact min_points match on a miss. Ignored "
+            "unless expect_min_points."),
+    holoscan::field<&ClusterDBSCANParams::sticky_max_clusters>(
+        "sticky_max_clusters")
+        .description(
+            "Keep the last Exact max_clusters match on a miss. Ignored "
+            "unless expect_max_clusters."));
 
 static_assert(holoscan::param_schema_availability<ClusterDBSCANParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,

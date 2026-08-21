@@ -56,6 +56,12 @@ struct FMCWDopplerProcessorParams {
   FMCWWaveformDescriptor waveform{};
   FftNorm fft_norm{FftNorm::kBackward};
   int64_t nfft{0};
+  bool expect_center_zero_doppler{false};
+  bool expect_fft_norm{false};
+  bool expect_nfft{false};
+  bool sticky_center_zero_doppler{true};
+  bool sticky_fft_norm{true};
+  bool sticky_nfft{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -87,7 +93,32 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&FMCWDopplerProcessorParams::nfft>("nfft")
         .description(
             "Slow-time FFT length >= num_chirps; larger interpolates "
-            "the velocity grid over the same span. 0 = num_chirps."));
+            "the velocity grid over the same span. 0 = num_chirps."),
+    holoscan::field<&FMCWDopplerProcessorParams::expect_center_zero_doppler>(
+        "expect_center_zero_doppler")
+        .description(
+            "Set when the application wires the center_zero_doppler "
+            "override."),
+    holoscan::field<&FMCWDopplerProcessorParams::expect_fft_norm>(
+        "expect_fft_norm")
+        .description(
+            "Set when the application wires the fft_norm override."),
+    holoscan::field<&FMCWDopplerProcessorParams::expect_nfft>("expect_nfft")
+        .description("Set when the application wires the nfft override."),
+    holoscan::field<&FMCWDopplerProcessorParams::sticky_center_zero_doppler>(
+        "sticky_center_zero_doppler")
+        .description(
+            "Keep the last Exact center_zero_doppler match on a miss. "
+            "Ignored unless expect_center_zero_doppler."),
+    holoscan::field<&FMCWDopplerProcessorParams::sticky_fft_norm>(
+        "sticky_fft_norm")
+        .description(
+            "Keep the last Exact fft_norm match on a miss. Ignored "
+            "unless expect_fft_norm."),
+    holoscan::field<&FMCWDopplerProcessorParams::sticky_nfft>("sticky_nfft")
+        .description(
+            "Keep the last Exact nfft match on a miss. Ignored unless "
+            "expect_nfft."));
 
 static_assert(
     holoscan::param_schema_availability<FMCWDopplerProcessorParams>() ==
@@ -116,8 +147,8 @@ class FMCWDopplerProcessorOp
   Output<Tensor> rd_maps{"rd_maps"};
   Output<Tensor> velocity_bins{"velocity_bins"};
 
-  // Sticky [live] overrides (OPERATOR_API.md). doppler_window / waveform
-  // are Params-only on EA (HSDK5_PORT §9).
+  // [live] Exact overrides gated by expect_* (OPERATOR_API.md).
+  // doppler_window / waveform are Params-only on EA (HSDK5_PORT §9).
   Input<bool> center_zero_doppler_in{"center_zero_doppler"};
   Input<FftNorm> fft_norm_in{"fft_norm"};
   Input<int64_t> nfft_in{"nfft"};

@@ -35,7 +35,8 @@ throws / sits in `OPEN_ITEMS.md`.
       group `README.md`, SPDX on all new files.
 - [ ] **`setup()` complete** — single-entry `TensorMap` ports, `initialize()`
       arg setters, `[live]` override ports where required.
-- [ ] **`compute()` correct** — sticky overrides, rank-agnostic shapes,
+- [ ] **`compute()` correct** — Exact `[live]` resolve (`expect_*` /
+      retention), rank-agnostic shapes,
       stream-ordered CUDA, clear errors on unsupported paths.
 - [ ] **Tests** — `tests/cpp/<group>/test_<operator>.cpp` covers `TESTING.md`
       unit checks; all output ports wired in harness tests; float/double +
@@ -93,7 +94,8 @@ throws / sits in `OPEN_ITEMS.md`.
       `static_assert` in the header.
 - [ ] **Parameters** match `OPERATOR_API.md` names, types, and defaults.
 - [ ] **`[live]` parameters:** declare with `spec.param(...)`, then
-      `add_override_port<T>(spec, "name")` from `override_param.hpp`.
+      register the `Input<>` in `setup()` and gate `contract()` with
+      `expect_*` via `maybe_add_live_override_to_contract`.
 - [ ] **Static parameters** (kernel-selecting enums, structural modes): no
       override port; document that callers instantiate separate operators.
 - [ ] **`initialize()`:** call `ensure_radar_arg_setters()` and register any
@@ -105,9 +107,10 @@ throws / sits in `OPEN_ITEMS.md`.
 
 - [ ] **Receive / emit** via single-entry `TensorMap` helpers; reject
       multi-entry maps with a clear error.
-- [ ] **Sticky overrides:** seed `effective_*` from parameters on the first
-      tick; each tick call `resolve_override_param()` (pass `changed` when
-      costly rebuilds use `ConfigCache`).
+- [ ] **Sticky overrides:** when `expect_*` is true, each tick call
+      `resolve_live_override()` (or `resolve_expected_override`); seed
+      from Params on miss / until first match. Pass `changed` when
+      costly rebuilds use `ConfigCache`.
 - [ ] **Named axes / no opaque batch:** infer trailing (and any named
       leading) axes from input tensors; use `collapse_batch` /
       `full_rank_shape` only as a MatX layout helper over **named** axes;
@@ -151,7 +154,8 @@ throws / sits in `OPEN_ITEMS.md`.
       with multiple outputs will not tick if a port is left unconnected.
 - [ ] Cover **`TESTING.md`** high-level checks for this operator (unit tier
       first; integration/statistical when dependencies exist).
-- [ ] **`[live]` overrides:** at least one mid-stream override + sticky tick
+- [ ] **`[live]` overrides:** at least one mid-stream Exact match + a
+      following miss tick (sticky and/or ephemeral).
       per functional override param (not just build-time `Arg`).
 - [ ] **Float and double** instantiation agreement where applicable.
 - [ ] **Error paths:** invalid args, unsupported modes, bad TensorMap shape.
@@ -220,7 +224,7 @@ Exemplar: `performance/cpp/perf_cfar_detector.cpp`.
 
 | Need | Header |
 | --- | --- |
-| Override ports / sticky resolve | `radar_common/sdk/override_param.hpp` |
+| Override ports / Exact resolve | `radar_common/sdk/override_param.hpp` |
 | Warn-once artifact cache | `radar_common/sdk/config_cache.hpp` |
 | Custom parameter Arg setters | `radar_common/sdk/arg_setters.hpp` |
 | Batching / dtype / device checks | `radar_common/tensor/tensor_utils.hpp` |

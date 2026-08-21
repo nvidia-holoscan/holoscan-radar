@@ -73,6 +73,12 @@ struct ESPRITParams {
   bool forward_backward{true};
   // Static structural; empty vectors = auto. Params-only (§9).
   ShiftInvariantSubarrayPair subarray_spec{};
+  bool expect_num_sources{false};
+  bool expect_source_count_pfa{false};
+  bool expect_max_sources{false};
+  bool sticky_num_sources{true};
+  bool sticky_source_count_pfa{true};
+  bool sticky_max_sources{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -104,7 +110,30 @@ HOLOSCAN_PARAM_SCHEMA(
             "Include conjugate-reversed looks when spatial_smoothing is set"),
     holoscan::field<&ESPRITParams::subarray_spec>("subarray_spec")
         .description(
-            "Shift-invariant subarray pair; empty derives ULA/URA auto"));
+            "Shift-invariant subarray pair; empty derives ULA/URA auto"),
+    holoscan::field<&ESPRITParams::expect_num_sources>("expect_num_sources")
+        .description(
+            "Set when the application wires the num_sources override."),
+    holoscan::field<&ESPRITParams::expect_source_count_pfa>(
+        "expect_source_count_pfa")
+        .description(
+            "Set when the application wires the source_count_pfa override."),
+    holoscan::field<&ESPRITParams::expect_max_sources>("expect_max_sources")
+        .description(
+            "Set when the application wires the max_sources override."),
+    holoscan::field<&ESPRITParams::sticky_num_sources>("sticky_num_sources")
+        .description(
+            "Keep the last Exact num_sources match on a miss. Ignored "
+            "unless expect_num_sources."),
+    holoscan::field<&ESPRITParams::sticky_source_count_pfa>(
+        "sticky_source_count_pfa")
+        .description(
+            "Keep the last Exact source_count_pfa match on a miss. Ignored "
+            "unless expect_source_count_pfa."),
+    holoscan::field<&ESPRITParams::sticky_max_sources>("sticky_max_sources")
+        .description(
+            "Keep the last Exact max_sources match on a miss. Ignored "
+            "unless expect_max_sources."));
 
 static_assert(holoscan::param_schema_availability<ESPRITParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,

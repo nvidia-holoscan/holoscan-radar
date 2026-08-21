@@ -51,7 +51,8 @@ struct ValidatedDopplerConfig {
   bool waveform_present;
 };
 
-// Resolve sticky scalar inputs and combine them with the pinned parameters.
+// Resolve Exact scalar inputs (when expect_* is set) with the pinned
+// parameters. Unwired ports (expect=false) must not be received.
 expected<EffectiveDopplerConfig, Error> resolve_overrides(
     Input<bool>& center_zero_doppler_in, Input<FftNorm>& fft_norm_in,
     Input<int64_t>& nfft_in, const FMCWDopplerProcessorParams& pinned,
@@ -59,14 +60,18 @@ expected<EffectiveDopplerConfig, Error> resolve_overrides(
     std::optional<FftNorm>& sticky_fft_norm,
     std::optional<int64_t>& sticky_nfft) {
   HOLOSCAN_TRY(auto center_zero_doppler,
-               resolve_sticky_override(center_zero_doppler_in,
-                                       pinned.center_zero_doppler,
-                                       sticky_center_zero_doppler));
+               resolve_expected_override(
+                   pinned.expect_center_zero_doppler, center_zero_doppler_in,
+                   pinned.center_zero_doppler, sticky_center_zero_doppler,
+                   pinned.sticky_center_zero_doppler));
   HOLOSCAN_TRY(auto fft_norm,
-               resolve_sticky_override(fft_norm_in, pinned.fft_norm,
-                                       sticky_fft_norm));
+               resolve_expected_override(pinned.expect_fft_norm, fft_norm_in,
+                                         pinned.fft_norm, sticky_fft_norm,
+                                         pinned.sticky_fft_norm));
   HOLOSCAN_TRY(auto nfft,
-               resolve_sticky_override(nfft_in, pinned.nfft, sticky_nfft));
+               resolve_expected_override(pinned.expect_nfft, nfft_in,
+                                         pinned.nfft, sticky_nfft,
+                                         pinned.sticky_nfft));
 
   return EffectiveDopplerConfig{
       .window = &pinned.doppler_window,
@@ -205,12 +210,14 @@ void FMCWDopplerProcessorOp<T>::setup(OperatorSpec& spec) {
 
 template <typename T>
 Contract FMCWDopplerProcessorOp<T>::contract() const {
-  // Trigger on the data tensor only. The [live] sticky override inputs
-  // are intentionally omitted from the temporal contract so an unconnected
-  // override port does not yield TEMPORAL_INPUT_UNCONNECTED (same pattern
-  // as ClutterFilterOp / MIMOCoherentCompensationOp).
   Contract result;
   result.trigger(OnEach{range_profiles});
+  maybe_add_live_override_to_contract(
+      result, center_zero_doppler_in, params().expect_center_zero_doppler);
+  maybe_add_live_override_to_contract(
+      result, fft_norm_in, params().expect_fft_norm);
+  maybe_add_live_override_to_contract(
+      result, nfft_in, params().expect_nfft);
   return result;
 }
 

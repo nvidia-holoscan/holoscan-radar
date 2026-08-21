@@ -77,7 +77,8 @@ make progress — they are **not** checklist completion. Prefer:
 
 - CA before GO/SO/OS (or whichever mode has a closed-form reference)
 - Complex + real dtype paths early (they share most of the shell)
-- Sticky `[live]` plumbing with at least one mid-stream test early
+- Exact `[live]` plumbing (`expect_*` + retention) with at least one
+  mid-stream match and a following miss tick (sticky and/or ephemeral)
 - Sparse / variable-size outputs (compaction) as a staged follow-up if a host
   path unblocks correctness first — but schedule the GPU path before calling
   the operator "performance-ready"
@@ -102,7 +103,7 @@ Put math in the stage. Put host calibration / LUT builders in dedicated TUs
 | Need | Header |
 | --- | --- |
 | Single-entry `TensorMap` receive/emit | `radar_common/sdk/tensor_io.hpp` |
-| Sticky `[live]` resolve | `radar_common/sdk/override_param.hpp` |
+| Exact `[live]` resolve | `radar_common/sdk/override_param.hpp` |
 | Warn-once artifact cache | `radar_common/sdk/config_cache.hpp` |
 | Arg setters for custom types | `radar_common/sdk/arg_setters.hpp` |
 | Batching / dtype / device / contiguity checks | `radar_common/tensor/tensor_utils.hpp` |
@@ -190,8 +191,75 @@ Two places the automatic propagation does not apply:
   `Input<T>::receive()` and forward `sample.metadata.capture_time()` —
   `receive_data()` (and therefore `receive_tensor`) discards the metadata.
 
+**Only `OnAligned` waits for a companion, so `OnEach` + `Exact{}` is a bet on
+causal order.** `OnEach` fires the moment the driver lands and never waits, and
+`Exact{}` on a side input resolves against that driver's `capture_time`. Whether
+that pairing works is therefore decided entirely by whether the companion was
+already published:
+
+- **A sibling branch of the same frame loses every time.** A side value computed
+  by a *different* operator from the same source has not run yet when the driver
+  arrives, so selection freezes with `kNeverSeen` and the activation takes the
+  degraded path — on every frame, under the deterministic serial scheduler. A
+  sticky fallback then silently applies a stale value forever. Use `OnAligned`
+  here; do not build it out of `OnEach`.
+- **A companion that causally precedes the frame wins every time.** Config
+  published *before* the frame it describes is already retained when the cube
+  lands, so `Exact{}` pairs them exactly, with no window and no wait — verified
+  across a full frame of acquisition lag in `tmp-app/control_plane_app.cpp`,
+  including a negative control (1 ms stamp skew → `kNeverSeen`, no silent
+  pairing). This is the module's chosen shape for coherence-critical `[live]`
+  descriptors; the topology it requires, and what it replaces, are in
+  [`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md).
+
+Reach for `OnEach` + `LatestWithin` when stale is acceptable.
+
+`OnWindow` is the only trigger that combines a data driver with a bounded wait,
+but it is shaped for sensor-fusion neighborhoods, not for pairing: it rejects a
+scalar `Exact` companion (`OnWindow requires at least one BracketedWindow
+input`), so the operator scans `selected_batch()` and compares
+`capture_timestamp_ns` itself. **A bracket always waits**, because
+`lookahead = 0` is not expressible — a lookbehind-only `BracketedWindow` is
+rejected as `TEMPORAL_CONTRACT_INVALID`, so at least one strict *successor*
+companion is always required to close a window. What that costs depends on the
+companion's cadence, not the driver's: the window closes once the next
+companion sample after the anchor arrives, bounded above by `max_wait`. A
+companion published once per frame therefore costs a frame (and `max_wait` must
+exceed the frame period), while a companion published at 40 ms against 100 ms
+cubes cost ~20 ms in `tmp-app/lookbehind_probe.cpp`.
+
+**An incomplete bracket is no bracket, so `OnWindow` is the wrong shape for an
+irregular companion.** The selection is all-or-nothing: when the window closes
+on timeout the input is *absent* with `kWindowTimeout` — the operator does not
+receive the lookbehind samples it already has. Measured with a control plane
+that publishes three overrides and then falls silent: the 100 ms cube ran at
+host 351 ms (a full `max_wait` late) and saw **no** override, though three sat
+retained at 0/40/80 ms. Shrinking `max_wait` only trades the latency for
+emptiness — at `max_wait = 5 ms` against a 40 ms companion every window times
+out, 5 ms late, delivering nothing every frame. And a same-time companion does
+not help, because a successor must be *strictly* after the anchor. `OnWindow`
+therefore pays off only when the companion is at least as frequent as the
+anchor and reliably so; for "use the newest config at or before this frame",
+`DrainAll` plus an operator-side `capture_time` comparison is both cheaper and
+correct (no wait, and it delivers whatever is retained).
+
+Budget also for degraded activations at stream edges (priming
+consumes the first anchor; then `kInsufficientHistory`, and `kWindowTimeout` on
+the last frame), and retention for `max_pending_windows * max_samples` on that
+edge or the plan is rejected with `TEMPORAL_RETENTION_INSUFFICIENT` — that
+bound is the *queue depth*, and it is a genuine constraint at speed: a 5 ms
+companion against 100 ms cubes selects 22 per bracket (the inclusive middle
+plus the outer brackets, with boundary samples appearing in both adjacent
+windows), so `max_samples = 32` with four pending windows needs a 128-deep
+queue. Sized correctly it is steady state with ~7 ms latency; under-sized it is
+a compile rejection rather than a runtime death. Sizing
+`max_pending_windows = 1` at frame rate starves with `kWindowPendingLimit` and
+delivers activations out of order. When an input is absent, read
+`Input<T>::selection().reason` before concluding anything — it distinguishes
+"the producer had not run" from "the window gave up waiting".
+
 Verified experimentally against HSDK 5 EA `v5.0.0.1`; re-check if a later SDK
-changes activation-time or alignment semantics.
+changes activation-time, alignment, or window semantics.
 
 ### MatX where it fits; custom CUDA where it does not
 
@@ -298,9 +366,76 @@ kernel rewrites.
 
 ### Sticky semantics
 
+**Module `[live]` ports** (when `expect_*` is true) join with `Exact{}` +
+`SafeDefault{}`. Stickiness is the `sticky_*` Param in `compute()` via
+`resolve_live_override` — not a `LatestWithin` window. Seed from Params until
+the first Exact match (sticky) or on every miss (ephemeral). Never treat a
+default-constructed SafeDefault payload as a value.
+
+The notes below are the measured `LatestWithin` / `DrainAll` behavior (still
+true of the SDK, and still used by unmigrated operators that omit live Inputs
+from `contract()`). They are **not** the `[live]` contract.
+
 Seed `effective_*` from parameters on first tick; each tick
 `resolve_override_param(...)`. Overrides remain until the next override.
 Vector overrides use the `std::any` port path (see common README).
+
+**Override selection is causal on event time, one-sidedly.** A `LatestWithin`
+port takes the newest value stamped at or before the frame being processed and
+never one stamped after it, so a producer that stamps a value for a future
+frame cannot have it applied early — verified against EA `v5.0.0.1`. `max_age`
+is measured on the sample's `capture_time`, not on when it arrived: an override
+published *now* but stamped 500 ms in the past is not selected under a 100 ms
+window, and is selected under a 1000 ms one
+(`tmp-app/selector_probe.cpp --backdate`). So the window is a statement about
+sample time, which is what makes it meaningful under replay and simulated
+clocks — and it means a producer that neglects to stamp `capture_time` gets
+`kCaptureTimeAbsent`, not a fresh sample. The
+converse has no protection: a value stamped at or before the frame *will* be
+applied to it, whatever the producer meant, because the sample carries no
+statement of which frames it belongs to. The producer's `capture_time` is that
+whole statement, which is why an `OnClock` control operator must stamp
+deliberately rather than by reflex.
+
+**A `LatestWithin` override port drains, it does not collapse.** Each activation
+consumes exactly one sample, and the next one selects the next-newest *retained*
+survivor — so two overrides published between two ticks arrive on two
+consecutive ticks, newest first, and the second one is *older* than the value
+already applied. Sticky state therefore does not move monotonically forward in
+time, and an operator that logs or gates on the override's `capture_time` will
+see it go backwards. Do not paper over that in the operator: a control plane
+that publishes faster than the consumer ticks is the caller's problem to
+notice, and swallowing it hides the real behavior. Both behaviors are
+observable in `tmp-app/control_plane_app.cpp`.
+
+**Sustained over-publication on a `LatestWithin` port kills the run.**
+Measured on EA `v5.0.0.1` (`tmp-app/selector_probe.cpp`, a 25 ms control plane
+against a 100 ms consumer): the activation consumes one sample, the other three
+stay retained, and once the queue is full the *producer's* `emit` fails with
+`kBackpressured` — which fails its `compute()`, so the session ends with
+`RUNTIME_OPERATOR_CALLBACK_FAILED` / `RUNTIME_EXECUTION_LANE_PLAN_INVALID`.
+With a 16-deep queue that is under 600 ms. There is no eviction of superseded
+values and no silent drop: retention is a resource, and an over-published
+override port exhausts it and takes the graph down. Queue depth only buys time.
+The corollary for the module's `kStickyOverrideMaxAge = years{100}` mapping is
+that it is safe only while the control plane publishes no faster than the
+operator ticks. One unprobed escape hatch: the edge itself can be authored
+`QueuePolicy::kDropOldest` (`ConnectionOptions` / `FlowConfigurator`), which the
+SDK documents as retaining the newest depth and evicting rather than blocking —
+a freshest-only mailbox at depth 1. If that holds it removes the failure without
+changing the selector, so probe it before designing around the crash
+([`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md)).
+
+**`DrainAll` is the fix for a fast side stream.** It selects every retained
+survivor as one batch, so the backlog is consumed in the activation that sees
+it: no leak, no backwards steps, and the operator chooses which sample matters
+(`selected_batch()` is random-access, in FIFO order oldest → newest, so
+`back()` is the newest and a scan can pick the newest at or before the frame's
+`capture_time`). Two constraints: an empty batch is a *successful* selection, so
+`on_missing` is not applicable and pairing one with `DrainAll` is rejected as
+`TEMPORAL_CONTRACT_INVALID`; and `receive()` is the wrong accessor — use
+`selected_batch()` or `for_each_selected()`. Both selectors, same graph, in
+`tmp-app/selector_probe.cpp`.
 
 ### Static vs live
 
@@ -348,10 +483,12 @@ A test that only checks `detection_idx` will not notice a broken mask dtype
 path. If the contract emits multiple related tensors, assert consistency
 (`mask == score > 1`, idx lists exactly the true cells, etc.).
 
-### Cover sticky `[live]`, not only build-time `Arg`
+### Cover `[live]` Exact joins, not only build-time `Arg`
 
-At least one mid-stream override + a following sticky tick per functional live
-param. Build-time args alone do not exercise `resolve_override_param`.
+At least one mid-stream Exact match plus a following miss tick (sticky
+keeps the value; ephemeral reverts to Params). Stamp cube and override with
+the same producer-chosen `capture_time`. Build-time args alone do not
+exercise `resolve_live_override`.
 
 ### Float and double
 

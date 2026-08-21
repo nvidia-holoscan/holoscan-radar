@@ -67,6 +67,10 @@ struct DetectionReductionParams {
   RepresentativePolicy representative{RepresentativePolicy::kPeak};
   ScoreMethod score_method{ScoreMethod::kWeightedSum};
   std::vector<double> feature_weights{};
+  bool expect_representative{false};
+  bool expect_score_method{false};
+  bool sticky_representative{true};
+  bool sticky_score_method{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -86,7 +90,25 @@ HOLOSCAN_PARAM_SCHEMA(
         "feature_weights")
         .description(
             "Per-feature weights for peak/medoid (length num_features); "
-            "required for those policies unless peak+custom"));
+            "required for those policies unless peak+custom"),
+    holoscan::field<&DetectionReductionParams::expect_representative>(
+        "expect_representative")
+        .description(
+            "Set when the application wires the representative override."),
+    holoscan::field<&DetectionReductionParams::expect_score_method>(
+        "expect_score_method")
+        .description(
+            "Set when the application wires the score_method override."),
+    holoscan::field<&DetectionReductionParams::sticky_representative>(
+        "sticky_representative")
+        .description(
+            "Keep the last Exact representative match on a miss. Ignored "
+            "unless expect_representative."),
+    holoscan::field<&DetectionReductionParams::sticky_score_method>(
+        "sticky_score_method")
+        .description(
+            "Keep the last Exact score_method match on a miss. Ignored "
+            "unless expect_score_method."));
 
 static_assert(
     holoscan::param_schema_availability<DetectionReductionParams>() ==

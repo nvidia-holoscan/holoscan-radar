@@ -53,6 +53,8 @@ struct BeamscanParams {
   std::vector<double> el_angles{};
   WindowSpec array_taper{};
   PeakInterpolation peak_interpolation{PeakInterpolation::kNone};
+  bool expect_peak_interpolation{false};
+  bool sticky_peak_interpolation{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -78,7 +80,17 @@ HOLOSCAN_PARAM_SCHEMA(
         .description("Amplitude taper across array elements"),
     holoscan::field<&BeamscanParams::peak_interpolation>("peak_interpolation")
         .description(
-            "Sub-grid peak refinement {none, parabolic}"));
+            "Sub-grid peak refinement {none, parabolic}"),
+    holoscan::field<&BeamscanParams::expect_peak_interpolation>(
+        "expect_peak_interpolation")
+        .description(
+            "Set when the application wires the peak_interpolation "
+            "override."),
+    holoscan::field<&BeamscanParams::sticky_peak_interpolation>(
+        "sticky_peak_interpolation")
+        .description(
+            "Keep the last Exact peak_interpolation match on a miss. "
+            "Ignored unless expect_peak_interpolation."));
 
 static_assert(holoscan::param_schema_availability<BeamscanParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,

@@ -82,6 +82,10 @@ struct MVDRParams {
   // Empty → off; [P] ULA; [P_az, P_el] URA. Params-only on EA (§9).
   std::vector<int64_t> spatial_smoothing{};
   bool forward_backward{true};
+  bool expect_diagonal_loading{false};
+  bool expect_max_sources{false};
+  bool sticky_diagonal_loading{true};
+  bool sticky_max_sources{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -115,7 +119,23 @@ HOLOSCAN_PARAM_SCHEMA(
             "(empty = off)"),
     holoscan::field<&MVDRParams::forward_backward>("forward_backward")
         .description(
-            "Include conjugate-reversed looks when spatial_smoothing is set"));
+            "Include conjugate-reversed looks when spatial_smoothing is set"),
+    holoscan::field<&MVDRParams::expect_diagonal_loading>(
+        "expect_diagonal_loading")
+        .description(
+            "Set when the application wires the diagonal_loading override."),
+    holoscan::field<&MVDRParams::expect_max_sources>("expect_max_sources")
+        .description(
+            "Set when the application wires the max_sources override."),
+    holoscan::field<&MVDRParams::sticky_diagonal_loading>(
+        "sticky_diagonal_loading")
+        .description(
+            "Keep the last Exact diagonal_loading match on a miss. Ignored "
+            "unless expect_diagonal_loading."),
+    holoscan::field<&MVDRParams::sticky_max_sources>("sticky_max_sources")
+        .description(
+            "Keep the last Exact max_sources match on a miss. Ignored "
+            "unless expect_max_sources."));
 
 static_assert(holoscan::param_schema_availability<MVDRParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,

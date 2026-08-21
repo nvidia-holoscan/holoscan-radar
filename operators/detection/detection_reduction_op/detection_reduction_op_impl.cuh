@@ -116,9 +116,7 @@ void DetectionReductionOp<T, ScoreFn>::setup(OperatorSpec& spec) {
 template <typename T, typename ScoreFn>
 Contract DetectionReductionOp<T, ScoreFn>::contract() const {
   // Trigger when labels + detection_idx + points share an aligned event time.
-  // [live] representative / score_method are intentionally omitted from the
-  // temporal contract so unconnected override ports do not yield
-  // TEMPORAL_INPUT_UNCONNECTED (HSDK5_PORT.md §1).
+  // [live] representative / score_method join via expect_*.
   //
   // [EA HSDK5 ONLY] points is Exact in the contract even though OPERATOR_API
   // marks it optional for representative=first. SafeDefault / LatestWithin
@@ -133,6 +131,10 @@ Contract DetectionReductionOp<T, ScoreFn>::contract() const {
       .input(labels, Exact{})
       .input(detection_idx, Exact{})
       .input(points, Exact{});
+  maybe_add_live_override_to_contract(
+      result, representative, params().expect_representative);
+  maybe_add_live_override_to_contract(
+      result, score_method, params().expect_score_method);
   return result;
 }
 
@@ -149,11 +151,15 @@ expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
   // waiting, absorb it; otherwise keep sticky / fall back to Params.
   // feature_weights is Params-only (unbounded vector — HSDK5_PORT §9).
   HOLOSCAN_TRY(auto effective_representative,
-               resolve_sticky_override(representative, pinned.representative,
-                                       sticky_representative_));
+               resolve_expected_override(pinned.expect_representative,
+                                         representative, pinned.representative,
+                                         sticky_representative_,
+                                         pinned.sticky_representative));
   HOLOSCAN_TRY(auto effective_score_method,
-               resolve_sticky_override(score_method, pinned.score_method,
-                                       sticky_score_method_));
+               resolve_expected_override(pinned.expect_score_method,
+                                         score_method, pinned.score_method,
+                                         sticky_score_method_,
+                                         pinned.sticky_score_method));
   const std::vector<double>& feature_weights = pinned.feature_weights;
 
   if (effective_representative == RepresentativePolicy::kPeak &&

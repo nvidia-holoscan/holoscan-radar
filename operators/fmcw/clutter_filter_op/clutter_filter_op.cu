@@ -66,22 +66,16 @@ void ClutterFilterOp<T>::setup(OperatorSpec& spec) {
       .tensor_allocation(TensorAllocationBounds{
           .max_rank = max_rank_,
           .max_byte_span = max_byte_span_});
-  // [live] method override port. Wired graphs may push ClutterFilterMethod
-  // samples; the operator caches the last value (sticky). Leaving the port
-  // unconnected is legal — compute() seeds from Params.
+  // [live] method override. Wired only when expect_method is true.
   spec.input(method).queue_depth(2U);
 }
 
 template <typename T>
 Contract ClutterFilterOp<T>::contract() const {
-  // Trigger on the data tensor only. The [live] method input is intentionally
-  // omitted from the temporal contract so an unconnected override port does
-  // not yield TEMPORAL_INPUT_UNCONNECTED, and so a second OnClock source is
-  // not required (HSDK 5 EA multi-partition device binding is still rough —
-  // sticky live-override coverage is exercised via Params + operator sticky
-  // state when a sample does arrive).
   Contract result;
   result.trigger(OnEach{range_profiles});
+  maybe_add_live_override_to_contract(
+      result, method, params().expect_method);
   return result;
 }
 
@@ -91,10 +85,10 @@ expected<void, Error> ClutterFilterOp<T>::compute(ExecutionContext& context) {
                receive_tensor(range_profiles, "ClutterFilterOp"));
 
   const ClutterFilterParams& pinned = context.params<ClutterFilterParams>();
-  // Best-effort sticky override: if the port is wired and a sample is waiting,
-  // absorb it; otherwise keep sticky / fall back to Params.
   HOLOSCAN_TRY(auto method_value,
-               resolve_sticky_override(method, pinned.method, sticky_method_));
+               resolve_expected_override(pinned.expect_method, method,
+                                         pinned.method, sticky_method_,
+                                         pinned.sticky_method));
   if (method_value == ClutterFilterMethod::kNone) {
     return fail_invalid(
         "ClutterFilterOp: method 'none' is not supported by the standalone "

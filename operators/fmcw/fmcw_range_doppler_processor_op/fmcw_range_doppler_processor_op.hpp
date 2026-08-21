@@ -72,6 +72,18 @@ struct FMCWRangeDopplerProcessorParams {
   int64_t nfft_range{0};
   // 0 = exact (no zero-padding); >= post-clutter chirp count when non-zero.
   int64_t nfft_doppler{0};
+  bool expect_apply_dechirp{false};
+  bool expect_clutter_filter{false};
+  bool expect_fft_norm{false};
+  bool expect_center_zero_doppler{false};
+  bool expect_nfft_range{false};
+  bool expect_nfft_doppler{false};
+  bool sticky_apply_dechirp{true};
+  bool sticky_clutter_filter{true};
+  bool sticky_fft_norm{true};
+  bool sticky_center_zero_doppler{true};
+  bool sticky_nfft_range{true};
+  bool sticky_nfft_doppler{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -126,7 +138,64 @@ HOLOSCAN_PARAM_SCHEMA(
         "nfft_doppler")
         .description(
             "Slow-time FFT length >= the post-clutter chirp count for the "
-            "Doppler stage. 0 = the post-clutter chirp count."));
+            "Doppler stage. 0 = the post-clutter chirp count."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_apply_dechirp>(
+        "expect_apply_dechirp")
+        .description(
+            "Set when the application wires the apply_dechirp override."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_clutter_filter>(
+        "expect_clutter_filter")
+        .description(
+            "Set when the application wires the clutter_filter override."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_fft_norm>(
+        "expect_fft_norm")
+        .description(
+            "Set when the application wires the fft_norm override."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::
+                       expect_center_zero_doppler>(
+        "expect_center_zero_doppler")
+        .description(
+            "Set when the application wires the center_zero_doppler "
+            "override."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_nfft_range>(
+        "expect_nfft_range")
+        .description(
+            "Set when the application wires the nfft_range override."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_nfft_doppler>(
+        "expect_nfft_doppler")
+        .description(
+            "Set when the application wires the nfft_doppler override."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_apply_dechirp>(
+        "sticky_apply_dechirp")
+        .description(
+            "Keep the last Exact apply_dechirp match on a miss. Ignored "
+            "unless expect_apply_dechirp."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_clutter_filter>(
+        "sticky_clutter_filter")
+        .description(
+            "Keep the last Exact clutter_filter match on a miss. Ignored "
+            "unless expect_clutter_filter."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_fft_norm>(
+        "sticky_fft_norm")
+        .description(
+            "Keep the last Exact fft_norm match on a miss. Ignored unless "
+            "expect_fft_norm."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::
+                       sticky_center_zero_doppler>(
+        "sticky_center_zero_doppler")
+        .description(
+            "Keep the last Exact center_zero_doppler match on a miss. "
+            "Ignored unless expect_center_zero_doppler."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_nfft_range>(
+        "sticky_nfft_range")
+        .description(
+            "Keep the last Exact nfft_range match on a miss. Ignored "
+            "unless expect_nfft_range."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_nfft_doppler>(
+        "sticky_nfft_doppler")
+        .description(
+            "Keep the last Exact nfft_doppler match on a miss. Ignored "
+            "unless expect_nfft_doppler."));
 
 static_assert(
     holoscan::param_schema_availability<FMCWRangeDopplerProcessorParams>() ==
@@ -156,7 +225,7 @@ class FMCWRangeDopplerProcessorOp
   Output<Tensor> range_bins{"range_bins"};
   Output<Tensor> velocity_bins{"velocity_bins"};
 
-  // Sticky [live] override ports for POD scalars (OPERATOR_API.md).
+  // [live] Exact override ports for POD scalars, gated by expect_*.
   // [EA HSDK5 ONLY] range_window, doppler_window, waveform are
   // Params-only (§9).
   Input<bool> apply_dechirp_in{"apply_dechirp"};

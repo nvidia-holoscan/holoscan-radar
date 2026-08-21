@@ -117,6 +117,8 @@ template <typename T>
 Contract VirtualArrayAssemblyOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{rd_maps});
+  maybe_add_live_override_to_contract(
+      result, wavelength, params().expect_wavelength);
   return result;
 }
 
@@ -209,8 +211,9 @@ expected<void, Error> VirtualArrayAssemblyOp<T>::compute(
       context.params<VirtualArrayAssemblyParams>();
 
   HOLOSCAN_TRY(auto effective_wavelength,
-               resolve_sticky_override(wavelength, pinned.wavelength,
-                                       sticky_wavelength_));
+               resolve_expected_override(pinned.expect_wavelength, wavelength,
+                                         pinned.wavelength, sticky_wavelength_,
+                                         pinned.sticky_wavelength));
 
   if (!(effective_wavelength > 0.0) || !std::isfinite(effective_wavelength)) {
     return fail_invalid(

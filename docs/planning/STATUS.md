@@ -26,13 +26,14 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 - **2026-08-18** — **HSDK 5 branch summary** (`dpc/hs5.0-fixes`): executive write-up of the branch plan, issues + workarounds, and EA blockers — [`HSDK5_BRANCH_SUMMARY.md`](HSDK5_BRANCH_SUMMARY.md) (detail remains in [`HSDK5_PORT.md`](HSDK5_PORT.md)).
 - **2026-08-19** — **HSDK 5 Graph POD override perf restored** (`dpc/hs5.0-fixes`): a co-emitting Tensor+sideband source, exact perf-only temporal contract, and one explicit partition now populate `override_ms` / `override_delta_ms` for CFAR, DBSCAN, MUSIC / Root-MUSIC / ESPRIT, MVDR, SnapshotGather, and VirtualArrayAssembly. Enum live ports, one-shot sticky unit tests, and §9 vector/descriptor lives remain open.
 - **2026-08-19** — **`ConfigCache` decides warn-once itself.** Dropped the caller-supplied `warn_on_build` / `warn_on_rebuild` flag from `sdk/config_cache.hpp` and the range / Doppler stage APIs: the cache warns on a miss against a non-empty cache (first configuration silent, later unseen ones warn once, then cache). Provenance (Params seed vs `[live]` override) was the flag's only justification, but 9 of 10 call sites hard-coded it `false`, so invariant 5's warn-once rule never fired — three operator READMEs carried it as a `deviates` row. The local rule subsumes the one real usage (`MIMOCoherentCompensationOp`'s `waveform_changed`), so `waveform_seeded_` went too. No contract change; the warn is now asserted via a scoped log capture. Verified in-container: 731/731.
+- **2026-08-21** — **Contract change (L16/L17):** `[live]` overrides join the data trigger with `Exact{}` + `SafeDefault{}`; per-port static `expect_*` (default false) and `sticky_*` (default true). All operators with POD live Inputs gate `contract()` on `expect_*`. Descriptor / vector lives stay Params-only (§9). Graph Exact tests exist for `FMCWRangeProcessorOp.nfft`; other live Graph cases remain skipped.
 
 ## In flight / claims
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
 | MaxTensorExtents (HSDK 5 pool sizing + drop opaque leading batch) | dpc | `dpc/hs5.0-fixes` | **C++ wave landed:** type + helpers; all fat ops take extents ctor; Graph units green at `-j4` (high `-j` can OOM GPU pools). Apps/Python still phase 4. Plan: [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md) |
-| HSDK 5 temporal-contract probes (sample time, aligned joins, `[live]` override binding) | deustice | `deustice/hsdk5-updates` | **Measured, docs updated, no operator code changed.** Sample-time / `OnAligned` semantics recorded in [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md); EA override-port binding narrowed in [`HSDK5_PORT.md`](HSDK5_PORT.md) §1 (a wired port must be declared in `contract()`, a declared port must be wired — so the omission workaround makes those ports unusable, and the listed operators need re-testing); waveform/cube coherence raised as TEAM_BLOCKED L16 |
+| HSDK 5 temporal-contract probes (sample time, aligned joins, `[live]` override binding) | deustice | `deustice/hsdk5-updates` | **L16/L17 adopted.** Exact + `expect_*` / `sticky_*` on every POD `[live]` Input. Descriptor/vector lives stay Params-only (§9). Remaining: Graph Exact tests beyond range `nfft`; optional `is_valid` wiring |
 
 ## Settled decisions
 
@@ -66,6 +67,8 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | L7 — ClusterDBSCAN `max_clusters` surplus policy | **Keep the largest clusters** — realized by numbering ids by descending size (L10), so the existing "drop highest ids" cap drops the **smallest** surplus clusters (their points → noise `-1`, keeping `labels`/`sizes` consistent). Chosen over the prior spatially-arbitrary ascending-root drop, and over "leave surplus `labels` populated / truncate only `sizes`" (**rejected** — breaks the `sizes[label]` invariant). `OPERATOR_API.md` `max_clusters`/`sizes` updated; landed + tested (`MaxClustersKeepsLargest`, C++ + Python). Parameterizing the order is deferred (ClusterDBSCAN OPEN_ITEMS §8) | 2026-07-22 |
 | L10 — ClusterDBSCAN cluster-id numbering order | Pin **descending point count** (cluster 0 = largest), ties broken by **ascending component root** (lowest member row index); `sizes` non-increasing. Chosen over the prior ascending-root numbering — descending size gives a "cluster 0 is largest" guarantee and makes the `max_clusters` cap keep the largest (L7) for free. Deterministic (`labels` a pure function of `(points, epsilon, min_points)`). Implemented via a host argsort of per-id counts + a `remap_labels` GPU pass; `OPERATOR_API.md` `labels`/`sizes` updated; tested (`NumbersClustersByDescendingSize`). **Deferred:** a `cluster_order` param for alternate orders (OPEN_ITEMS §8) | 2026-07-22 |
 | L6 — CFAR exact-sized `detection_idx` | **Ratify exact sizing** (chosen over a capacity + `num_detections` port). Accept the per-tick scalar device→host count sync as the cost of the contract: it moves one integer, and the exact-size, no-companion shape is load-bearing across the downstream chain (`SnapshotGather`/`FeatureAssembly`/`DetectionReduction`/`ClusterDBSCAN` all positionally join on "row count *is* `num_detections`"), so breaking it is a broad change unjustified without a measured latency budget the sync violates. Docs-only — the locked `detection_idx` contract is unchanged. **Deferred:** a capacity + `num_detections` port as an **opt-in** fast path, added only if profiling shows the sync bounds latency (CFAR OPEN_ITEMS §8) | 2026-07-21 |
+| L16 — Exact `[live]` join | **Adopt Exact{}** against the data trigger's `capture_time` for every enabled `[live]` port. No epoch field. `on_missing SafeDefault{}`; `sticky_*` bool (default true) latches the last Exact match. Pilot: `FMCWRangeProcessorOp` POD ports. Remaining ops migrate in follow-ups. Transmit-stamp ownership (sequencer vs device) still open | 2026-08-21 |
+| L17 — optional `[live]` as `expect_*` | **Adopt per-port `expect_*`** (default `false`): register the port in `setup()`, gate only the `contract()` entry. Must agree with `add_flow`. Contract-visible in `OPERATOR_API.md`. SDK still cannot infer wiring (§11) | 2026-08-21 |
 
 ## In-flight work
 
@@ -154,6 +157,12 @@ each operator’s `OPEN_ITEMS.md` (for example,
 [`CFARDetectorOp open items`](../../operators/detection/cfar_detector_op/OPEN_ITEMS.md)).
 New operators should follow [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md)
 and [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md).
+
+Temporal contracts — how the data plane joins the config plane, what the EA
+selectors and triggers actually do, and the adopted Exact + `expect_*` shape
+(L16 / L17): [`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md).
+`FMCWRangeProcessorOp` is the code pilot; other operators still omit live
+Inputs from `contract()` until follow-up PRs.
 
 HSDK 5 Tensor pool sizing (**C++ wave landed** — apps/Python still phase 4):
 [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md) (pinned baseline:

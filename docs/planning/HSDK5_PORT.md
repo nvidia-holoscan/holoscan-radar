@@ -189,20 +189,20 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `PhaseShiftBeamformerOp` F32/F64 + Graph C++ tests | landed; `[live]` geometry/grid/taper Params-only (§9); Graph live tests skipped (§1); Graph perf cold/steady landed (no POD live measured) |
 | `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; `peak_interpolation` live + optional `is_valid` Graph wiring deferred (§1); geometry/grid/taper Params-only (§9); Graph perf cold/steady landed (enum live still deferred) |
 | `SubarraySelectionOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; outputs `snapshot_out` / `is_valid_out` (§2); `array_geometry` emitted as packed float64 Tensor (§10); `array_geometry`/`subarray` live Params-only (§9); optional `is_valid` Graph wiring deferred (§1); no dedicated `perf_*` driver |
-| `ClusterDBSCANOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; sticky unit tests deferred (§1); `epsilon` Params-only (§9 unbounded vector); Graph perf `min_points` `override_ms` restored (§8) |
-| `MVDREstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; sticky unit tests deferred (§1); geometry/grid/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX retire preserved; Graph perf `diagonal_loading` `override_ms` restored (§8) |
-| `MUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; sticky unit tests deferred (§1); geometry/grid/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
-| `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); sticky unit tests deferred (§1); geometry/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX/cuSOLVER teardown preserved; Graph perf `max_sources` `override_ms` restored (§8) |
-| `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); sticky unit tests deferred (§1); geometry/`spatial_smoothing`/`subarray_spec` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
+| `ClusterDBSCANOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; `min_points`/`max_clusters` sticky Inputs (Graph live deferred §1); `epsilon` Params-only (§9 unbounded vector); Graph perf `min_points` `override_ms` restored (§8) |
+| `MVDREstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; sticky `diagonal_loading`/`max_sources` Inputs (Graph live deferred §1); geometry/grid/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX retire preserved; Graph perf `diagonal_loading` `override_ms` restored (§8) |
+| `MUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; sticky `num_sources`/`source_count_pfa`/`max_sources` Inputs (Graph live deferred §1); geometry/grid/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
+| `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); sticky `num_sources`/`source_count_pfa`/`max_sources` Inputs (Graph live deferred §1); geometry/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX/cuSOLVER teardown preserved; Graph perf `max_sources` `override_ms` restored (§8) |
+| `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); sticky `num_sources`/`source_count_pfa`/`max_sources` Inputs (Graph live deferred §1); geometry/`spatial_smoothing`/`subarray_spec` Params-only (§9); optional `is_valid` Graph deferred (§1); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
 | `FeatureAssemblyOp` F32/F64 + Graph C++ tests (1-in/1-out; optional gathers) | landed; optional gather Inputs omitted from contract (§1 / Beamscan `is_valid` pattern); Graph optional wiring deferred — stage kernel coverage; no `[live]` params; Graph perf cold/steady landed |
-| `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; `representative`/`score_method` sticky Inputs (enum live unit+perf deferred §1); `feature_weights` Params-only (§9 unbounded vector); Graph perf cold/steady landed |
-| `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; sticky unit tests deferred (§1); vector lives Params-only (§9); statistical MC suite on label `statistical`; Graph perf `threshold_scale` `override_ms` restored (§8) |
+| `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; `representative`/`score_method` sticky Inputs (Graph live deferred §1); `feature_weights` Params-only (§9 unbounded vector); Graph perf cold/steady landed |
+| `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; sticky POD lives (Graph live deferred §1); vector lives Params-only (§9); statistical MC suite on label `statistical`; Graph perf `threshold_scale` `override_ms` restored (§8) |
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph sticky/`TXSchedule` live N/A (Params-only schedule); Graph perf cold/steady landed |
-| `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` Params-only (§9); Graph live tests skipped; Graph perf cold/steady landed (no POD live measured) |
-| `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); sticky unit test deferred (§1); Graph perf `wavelength` `override_ms` restored (§8); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
-| `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; sticky POD lives; `range_window`/`waveform` Params-only (§9); Graph live window skipped (§1/§9); Graph perf cold/steady landed (no POD live measured) |
-| `FMCWDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `velocity_bins` only with waveform; sticky POD lives; `doppler_window`/`waveform` Params-only (§9); Graph live skipped (§1/§9); Graph perf cold/steady landed (no POD live measured) |
-| `FMCWRangeDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–3-out) | landed; optional axis outs with waveform; sticky POD lives incl. `clutter_filter`; windows/`waveform` Params-only (§9); UlpParity vs split chain preserved; Graph live skipped; Graph perf cold/steady landed (no POD live measured) |
+| `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` Params-only (§9); Graph live tests skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
+| `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); sticky `wavelength` Input (Graph mid-stream sticky deferred §1); Graph perf `wavelength` `override_ms` restored (§8); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
+| `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; Exact POD lives gated by `expect_*` (nfft Graph tests); `range_window`/`waveform` Params-only (§9); Graph live window skipped (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
+| `FMCWDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `velocity_bins` only with waveform; sticky POD lives; `doppler_window`/`waveform` Params-only (§9); Graph live skipped (§1/§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
+| `FMCWRangeDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–3-out) | landed; optional axis outs with waveform; sticky POD lives incl. `clutter_filter`; windows/`waveform` Params-only (§9); UlpParity vs split chain preserved; Graph live skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | Python bindings / Holoviz demos / apps | deferred (phase 4); X11 RD + Graph demos siso/simo/dense/mimo/aoa landed (§6) |
 
 ---
@@ -213,10 +213,10 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 
 **Class:** EA limitation (not a permanent ban on sticky live overrides).
 
-**Contract.** `OPERATOR_API.md` still requires sticky `[live]` parameters
-(e.g. `ClutterFilterOp.method`, `SnapshotGatherOp.snapshot_window`). The
-operator keeps the typed `Input<>` and resolves via
-`resolve_sticky_override` in `compute()`.
+**Contract.** `OPERATOR_API.md` requires Exact `[live]` parameters gated by
+`expect_*`. POD live Inputs are in `contract()` only when `expect_*=true`.
+Descriptor / unbounded-vector lives stay Params-only (§9). `resolve_sticky_override`
+remains for the LatestWithin repro test.
 
 **What the reproducer established.** The earlier failures were invalid
 authoring shapes, not evidence that scalar sidebands are unsupported:
@@ -261,11 +261,65 @@ separated the causes, and the second clock is *not* one of them:
 So the two failure modes are complementary, and the interim workaround
 below sits on the wrong side of the trade: omitting the port keeps an
 *unwired* graph compiling, but an application that actually connects the
-override gets a run that dies on the second frame. The `[live]`
-convention as written in `OPERATOR_API.md` — a port an application *may*
-connect — has no EA encoding in one build. Re-test at GA; if the
-behavior persists, the choice is a contract that varies with wiring or an
-SDK fix, which is a team decision rather than an implementation detail.
+override gets a run that dies on the second frame.
+
+**Encoding found 2026-08-20 (declaration-replay probe; the pattern it
+settled on is now `tmp-app/optional_live_port.cpp`).** A port an
+application *may* connect
+does have a single-build encoding, and an ordinary parameter is enough to
+select it — provided the split between the two declaration sites is
+respected:
+
+- **`setup()` and `contract()` are replayed, and both may read
+  `params()`.** They run on the authoring prototype, again after each
+  accepted `set_params`, again during `compile()`, and again per run —
+  three to four times in a trivial graph. Treat them as pure declaration
+  code (the SDK says the same); the parameter value they see is the
+  resolved one.
+- **The port set is fixed; the contract is not.** `setup()` must register
+  the same ports for every parameter value: a `set_params` that changes
+  which ports it registers throws `GRAPH_PARAMETER_PORT_SHAPE_CHANGED`
+  immediately. A `set_params` that only changes `contract()` is accepted
+  and re-replayed — both a selector bound (`LatestWithin::max_age`) and
+  the presence or absence of an entire `input()` entry.
+- **So a per-port `expect_*` parameter works.** Register the `[live]`
+  port unconditionally in `setup()`, and emit its contract entry only
+  when the parameter is set. Parameter off + unwired compiles and runs
+  (the port is simply never selected); parameter on + wired runs with the
+  override. Both wirings come from one build, and the choice is plain
+  `Params` — so it rides `from_config()` YAML like any other parameter,
+  with no constructor argument and no `MaxTensorExtents`-style
+  ctor capture.
+- **The two failure modes still bound it.** Parameter on + unwired is the
+  compile rejection (`TEMPORAL_INPUT_UNCONNECTED`); parameter off + wired
+  is the runtime one (`RUNTIME_OPERATOR_REPLAY_MISMATCH`). The parameter
+  must therefore agree with the application's `add_flow`, and a mismatch
+  in either direction is loud.
+- **The selector bounds parameterize too, and they bite.** A parameter may
+  set `LatestWithin::max_age`, and the window really gates selection: with
+  a 1 ms window against a 100 ms control plane, most activations report
+  `is_missing()` and the operator's sticky value stalls. So the window is
+  the knob that converts silent staleness into visible absence — at the
+  price of the operator needing a defined answer for "control plane went
+  quiet". A practically-infinite `years{100}` gives never-expire sticky
+  semantics, but no window value makes `LatestWithin` safe against a control
+  plane that publishes *faster* than the operator ticks: unselected survivors
+  are retained rather than evicted, and exhausting the queue fails the
+  producer's `emit` with `kBackpressured` and ends the run. That case wants
+  `DrainAll` — see `OPERATOR_DEVELOPMENT.md` "Sticky semantics".
+- **`set_params` during a run is a silent no-op.** Called on the operator
+  handle after `run_async`, it neither throws nor emits a diagnostic, does
+  not replay `contract()`, and does not change the running plan's
+  behavior. Contract-affecting parameters are build-time configuration;
+  retuning one means recompiling. Anything genuinely live must go through
+  a `[live]` port (or the parameter control plane) instead.
+
+The residual cost is that the agreement is manual: an application must
+state which `[live]` ports it wires, instead of that following from
+`add_flow` alone. **Adopted (L17):** per-port `expect_*` (default false),
+contract-visible in `OPERATOR_API.md`. Re-test at GA; an SDK that
+tolerates a declared, unwired port with `SafeDefault{}` would remove the
+need entirely (§11).
 
 **Re-test list.** Every operator whose `SDK_WORKAROUNDS.md` documents
 "live Inputs omitted from `contract()`" should be re-checked against this
@@ -277,10 +331,11 @@ declaring the port and wiring it in the test graph.
 
 **Interim.**
 
-- `ClutterFilterOp::contract()` triggers only on `range_profiles`
-  (`OnEach`); `method` is registered in `setup()` but omitted from the
-  temporal contract so unwired graphs compile
-  (`TEMPORAL_INPUT_UNCONNECTED` otherwise).
+- `FMCWRangeProcessorOp::contract()` triggers on `adc_cube` (`OnEach`) and
+  adds `Exact{}` + `SafeDefault{}` for each POD override whose `expect_*`
+  is true (default false). Graph `nfft` Exact tests are in
+  `test_fmcw_range_processor.cpp`. Window / waveform live Inputs remain
+  Params-only (§9).
 - `SnapshotGatherOp::contract()` uses `OnAligned` on the two data
   tensors only; `snapshot_window` is likewise omitted from the contract.
 - `ClutterFilterOpTest.LiveMethodOverrideMidStreamAndSticky` and
@@ -462,6 +517,72 @@ when porting remaining test fixtures and apps.
 types. `std::vector` (and other owning containers) are rejected at
 compile time.
 
+**SDK documentation.**
+[Payload type rules](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/data-and-payloads/payload-type-rules.md)
+is the canonical list of admitted families, and states that everything
+outside them — "references, cv-qualified types, pointers, arbitrary
+classes, `std::string` and string views, backend handles, and raw memory
+buffers" — is rejected at the port declaration.
+[Experimental raw POD payloads](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/advanced/experimental-pod-payloads.md)
+covers the ChannelPod escape hatch we use for `SnapshotWindowOverride`:
+padding-free exact tiling, fixed-width scalars only, and "no external
+ownership" (no pointer, string, nested object, or Tensor members).
+
+What those pages recommend *instead* is a generated FlatBuffers schema
+type, the documented path for messages with string, vector, optional, or
+nested fields
+([custom FlatBuffer schemas](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/data-and-payloads/custom-flatbuffer-schemas.md),
+[schema payloads](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/data-and-payloads/schema-payloads.md)).
+
+**Measured 2026-08-21 (`tmp-app/fbs/`).** It works for exactly the shapes
+we need. `fbs_live_override.cpp` carries this operator's two demoted
+overrides — `waveform` (optional scalars + `[Complex64]`) and
+`range_window` (enum, optional scalar, `[double]`) — as generated owning
+types on ordinary sticky `[live]` ports, reusing
+`add_sticky_override_to_contract` / `receive_optional_value` unchanged,
+with `LatestWithin` selection, `SafeDefault`, and per-field round-trip
+equality against the descriptor the control plane meant to install. The
+costs are all real but bounded: (a) `TRAITS_MAX_SERIALIZED_SIZE` is a
+hard per-value cap chosen in CMake — an oversized coefficient vector
+fails at `emit()` with `kResourceExhausted`, so every unbounded `[live]`
+vector needs a declared bound, the same class of decision as
+`MaxTensorExtents`; (b) the port payload is a mutable, unvalidated
+generated type, so each descriptor needs a marshaling boundary (~15 lines
+per type) which is also where its invariants get enforced; (c) the
+generated headers and `holoscan::schema` linkage cannot live in
+`radar_common` (Holoscan-free), so the schemas and conversions need a
+home; (d) the object-API types are C++-only, so a Python app would drive
+these ports through Params. Adopting it is still a build-system and
+contract change — raise it with the team; the cheaper alternative to
+weigh is stripping the bulk arrays out of the descriptors and routing
+them as their own `Input<Tensor>`.
+
+**Artifact and packaging shape** (what adoption would commit us to). The
+`.fbs` files are committed source, not generated: schema compatibility is
+exact-match on canonical name + version + schema SHA, so the file *is* the
+wire contract and every edit is a version decision. Everything flatc
+emits (`*_generated.h`, `*_bfbs_generated.h`, the traits header) is build
+output under the target's `OUTPUT_DIR`, regenerated on every configure /
+build (the schema and its include closure are registered as
+`CMAKE_CONFIGURE_DEPENDS`), so nothing generated is tracked. No new build
+dependency comes with it: `find_package(holoscan)` already hard-requires
+the schema tooling — it `find_dependency(Flatbuffers … EXACT)`,
+fatal-errors on a missing `share/holoscan/schemas`, and defines
+`holoscan::fbs_tools`; the generator then re-verifies `flatc --version`
+against the pinned build. One schema target must own each shared
+descriptor (the same two are `[live]` on range, Doppler, range-Doppler,
+and MIMO compensation, and duplicate `.fbs` copies would mint two
+incompatible identities for one descriptor), which argues for a
+`radar_common`-sibling module rather than per-operator schemas. The
+sharp edge is the install surface: the payload type appears in the
+operator's public header (`Input<radar_fbs::FMCWWaveformT>`), so the
+generated headers join the module's installed API next to
+`fmcw_range_processor_op.hpp` and must carry the same include spelling in
+the build and install trees — a generated header becomes a compatibility
+surface for downstream `find_package(holoscan_radar)` users, and the
+descriptor's field list then lives in three places (struct, param schema,
+`.fbs`) needing a round-trip test to hold them together.
+
 **Interim.** `SnapshotGatherOp` keeps `Params.snapshot_window` as
 `std::vector<int64_t>` (OPERATOR_API.md / YAML). The `[live]` port is
 `Input<SnapshotWindowOverride>` — a fixed `{doppler, range}` int64 POD
@@ -516,7 +637,11 @@ vectors.
 layout + trivially copyable) and not a SchemaIdentity type. Declaring
 `Output<ArrayGeometry>` (or `Input<ArrayGeometry>`) fails the
 `PublishedPayload` concept at compile time. The same blocker applies to
-`VirtualArrayAssemblyOp.array_geometry` when that op ports.
+`VirtualArrayAssemblyOp.array_geometry` when that op ports. SDK
+documentation for the admitted families and the POD restrictions:
+[payload type rules](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/data-and-payloads/payload-type-rules.md),
+[experimental raw POD payloads](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/advanced/experimental-pod-payloads.md)
+(§9 has the FlatBuffers-schema alternative these pages point to).
 
 **Contract.** Operators that *compute* geometry at runtime
 (`SubarraySelectionOp`, `VirtualArrayAssemblyOp`) must still emit it on a
@@ -538,6 +663,55 @@ descriptor type.
 **Status:** open — SubarraySelection + VirtualArrayAssembly Tensor pack
 landed; restore typed `Output<ArrayGeometry>` when the SDK admits owning
 containers / a durable ChannelPod schema.
+
+---
+
+### 11. No optional input: a contract entry cannot tolerate an unwired port
+
+**Class:** SDK feature request (EA gap; the semantics are already reserved).
+
+**What fails.** An operator with an optional `[live]` override cannot be
+written so that connecting the port is the *only* thing an application does.
+The contract's input set must match the wiring exactly — a declared entry with
+no producer is rejected at compile with `TEMPORAL_INPUT_UNCONNECTED`, and a
+wired port absent from the contract kills the second activation with
+`RUNTIME_OPERATOR_REPLAY_MISMATCH` (§1). Nothing lets the operator resolve
+that itself: its virtual surface is `setup` / `contract` / `start` / `stop` /
+`compute`, `contract()` is const with access only to `params()` and its own
+port handles, `InputSpecBuilder` offers no `optional()`, `Input<T>` exposes
+only compute-time selection state, and the graph-side `InputPortConfigurator`
+reaches only `queue_depth` / `expects_tensor` / `memory_conversion` /
+`diagnostic_alias` — never a selector. `on_missing` does not help: it governs a
+*declared and connected* input that produced no value.
+
+**Requested.** Permit a contract entry for an input with no producer, and
+report the reason the SDK already defines for it —
+`SelectionReason::kNotConnected` ("No admitted producer is connected to the
+input", `activation.hpp`), which is declared and never raised anywhere in the
+sources. Routing it through the existing `on_missing` policy needs no new
+vocabulary: `Skip{}` suppresses the activation, `SafeDefault{}` runs the
+degraded path. An `InputSpecBuilder::optional()` marker would be an acceptable
+alternative shape, but the contract-level form composes better with the
+`on_missing` policies that already exist.
+
+**Why the workarounds are all unacceptable.** Measured in
+`tmp-app/wiring_inference.cpp`; the trade is structural, not a matter of taste:
+
+| Workaround | Cost |
+| --- | --- |
+| `expect_*` parameter gating the `contract()` entry | The application states the same fact twice (the `add_flow` and the flag) and a disagreement is a compile or runtime failure |
+| Application-side derivation from `Graph::view()` | Removes the disagreement but still requires a non-standard pass before `compile()` |
+| Wire an idle producer that never emits (making the port mandatory) | Legal and parameter-free, but wiring a deliberately dead operator is not an idiom a Holoscan author would recognize, and it makes "unwired" indistinguishable from "has not published yet" (both `kNeverSeen`) |
+| Fan-in a stand-in alongside a real producer | Impossible — `add_flow` throws `GRAPH_INPUT_FANIN_UNSUPPORTED` |
+
+**Next.** Raise with the HSDK 5 team while the EA is open. Until then the
+module keeps the `expect_*` parameter (contract-visible, L17 adopted —
+[`OPERATOR_API.md`](OPERATOR_API.md)) rather than the idle-producer idiom,
+because a hidden dead operator in every application graph is worse than an
+explicit flag. Reasoning and the full measurement set:
+[`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md).
+
+**Status:** open — SDK request not yet filed.
 
 ---
 

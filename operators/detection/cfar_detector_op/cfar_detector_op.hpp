@@ -145,6 +145,14 @@ struct CFARParams {
   bool blocking_alpha_lut_rebuild{false};
   bool peak_only{false};
   CfarPeakNeighborhood peak_neighborhood{CfarPeakNeighborhood::kSquare8};
+  bool expect_pfa{false};
+  bool expect_threshold_scale{false};
+  bool expect_os_rank{false};
+  bool expect_max_detections{false};
+  bool sticky_pfa{true};
+  bool sticky_threshold_scale{true};
+  bool sticky_os_rank{true};
+  bool sticky_max_detections{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -197,7 +205,38 @@ HOLOSCAN_PARAM_SCHEMA(
             "local-maximum cell; static"),
     holoscan::field<&CFARParams::peak_neighborhood>("peak_neighborhood")
         .description(
-            "Neighborhood for peak_only NMS {cross4, square8}; static"));
+            "Neighborhood for peak_only NMS {cross4, square8}; static"),
+    holoscan::field<&CFARParams::expect_pfa>("expect_pfa")
+        .description("Set when the application wires the pfa override."),
+    holoscan::field<&CFARParams::expect_threshold_scale>(
+        "expect_threshold_scale")
+        .description(
+            "Set when the application wires the threshold_scale override."),
+    holoscan::field<&CFARParams::expect_os_rank>("expect_os_rank")
+        .description(
+            "Set when the application wires the os_rank override."),
+    holoscan::field<&CFARParams::expect_max_detections>(
+        "expect_max_detections")
+        .description(
+            "Set when the application wires the max_detections override."),
+    holoscan::field<&CFARParams::sticky_pfa>("sticky_pfa")
+        .description(
+            "Keep the last Exact pfa match on a miss. Ignored unless "
+            "expect_pfa."),
+    holoscan::field<&CFARParams::sticky_threshold_scale>(
+        "sticky_threshold_scale")
+        .description(
+            "Keep the last Exact threshold_scale match on a miss. Ignored "
+            "unless expect_threshold_scale."),
+    holoscan::field<&CFARParams::sticky_os_rank>("sticky_os_rank")
+        .description(
+            "Keep the last Exact os_rank match on a miss. Ignored unless "
+            "expect_os_rank."),
+    holoscan::field<&CFARParams::sticky_max_detections>(
+        "sticky_max_detections")
+        .description(
+            "Keep the last Exact max_detections match on a miss. Ignored "
+            "unless expect_max_detections."));
 
 static_assert(holoscan::param_schema_availability<CFARParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -240,7 +279,7 @@ class CFARDetectorOp : public holoscan::Operator<CFARParams> {
   // Always emitted on HSDK 5 (was optional kNone on 4.x). Tests and apps must
   // bind / drain this port.
   Output<Tensor> cfar_power{"cfar_power"};
-  // [live] sticky POD overrides (OPERATOR_API.md). Vector lives stay
+  // [live] Exact POD overrides gated by expect_* (OPERATOR_API.md). Vector lives stay
   // Params-only on HSDK 5 EA — see OPEN_ITEMS.md / HSDK5_PORT §9.
   Input<double> pfa{"pfa"};
   Input<double> threshold_scale{"threshold_scale"};
