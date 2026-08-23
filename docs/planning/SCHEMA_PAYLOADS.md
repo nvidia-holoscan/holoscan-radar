@@ -57,8 +57,8 @@ join.
 - [ ] Install generated public headers with one include spelling that works
       in both build and install trees, and link every consumer to the one
       schema target.
-- [ ] Update `OPERATOR_API.md`, the operator's `SDK_WORKAROUNDS.md` and
-      `OPEN_ITEMS.md`, `HSDK5_PORT.md` §9, and this document's sync surface.
+- [ ] Update `OPERATOR_API.md`, the operator's `OPEN_ITEMS.md`,
+      `HSDK5_PORT.md` §9, and this document's sync surface.
 
 ## Evolution rules
 

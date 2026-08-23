@@ -58,7 +58,10 @@ by this library:
   `contract()` so unwired graphs compile. Costly reconfigurations
   still warn once and cache via `sdk/config_cache.hpp`; the cache decides
   that itself (a miss against a non-empty cache), so callers pass no warn
-  flag.
+  flag. Container-owning FMCW window/waveform lives use generated
+  `holoscan::radar::wire` descriptor-Tensor payloads and validated bridges;
+  Python remains Params-only for those physical ports. See
+  [`SCHEMA_PAYLOADS.md`](../../docs/planning/SCHEMA_PAYLOADS.md).
 - **Params schema replaces ArgumentSetter.** [EA HSDK5 ONLY] Ported
   operators use `Operator<Params>` + `HOLOSCAN_PARAM_SCHEMA` (YAML /
   `set_params` / `from_config`). Drop `HOLOSCAN_OPERATOR_FORWARD_ARGS`

@@ -68,7 +68,7 @@ Grouped by theme. Section numbers match [`HSDK5_PORT.md`](HSDK5_PORT.md)
 
 | Issue | What we did |
 | --- | --- |
-| Mid-stream sticky `[live]` Graph (scalar/enum beside device Tensor) fails compile or runtime (`PARTITION_MANUAL_AUTHORING_REQUIRED`, `RUNTIME_PORT_BINDING_UNAVAILABLE`, `RUNTIME_EXECUTION_LANE_PLAN_INVALID`, …) | Keep typed live Inputs + Params coverage; omit live ports from `contract()` when unwired; `GTEST_SKIP` Graph sticky tests; minimal repro in `tests/cpp/utils/test_live_override_repro.cpp` (`ctest -L ea_repro`) (§1) |
+| Mid-stream sticky `[live]` Graph (scalar/enum beside device Tensor) fails compile or runtime (`PARTITION_MANUAL_AUTHORING_REQUIRED`, `RUNTIME_PORT_BINDING_UNAVAILABLE`, `RUNTIME_EXECUTION_LANE_PLAN_INVALID`, …) | Gate typed live Inputs in `contract()` with `expect_*`; keep remaining scalar/enum Graph skips and the minimal repro in `tests/cpp/utils/test_live_override_repro.cpp` (`ctest -L ea_repro`). FMCW schema-backed window/waveform Graph tests run (§1 / §9). |
 | Device Tensor outs need explicit pool bind; foreign-handle / zero-copy republish rejected | `bind_*_device_pools` in harness; apps/perf `allocate_tensor` / loan fill each tick; `PerfPublishMode`; accept VAA lg/xl vs 4.3 gap as publish-path artifact (§3) |
 | Raw `DLManagedTensor*` imports are read-only | Writable path via `DLManagedTensorContext` + owned device memory (`dlpack_buffer.hpp`) (§4) |
 | Operator with **no** wired port breaks auto-partition (`PARTITION_MANUAL_AUTHORING_REQUIRED`, unnamed vertex) | Always drain fan-outs (e.g. `cfar_power` → viewer **and** `NullSinkOp`); never leave a constructed sink unwired (§6) |
@@ -84,7 +84,7 @@ Grouped by theme. Section numbers match [`HSDK5_PORT.md`](HSDK5_PORT.md)
 | Issue | What we did |
 | --- | --- |
 | In/out port names share one namespace | Rename physical outs (`range_profiles_out`, `adc_cube_out`, `rd_maps_out`, …); note in `OPERATOR_API.md` (§2) |
-| Live ports cannot carry `std::vector` / owning descriptors | POD ChannelPod for fixed shapes (e.g. SnapshotGather window); Params-only for unbounded vectors / `ArrayGeometry` / `WindowSpec` / waveforms (§9) |
+| Live ports cannot carry `std::vector` / owning descriptors | POD ChannelPod for fixed shapes (e.g. SnapshotGather window); generated descriptor-Tensor schemas for FMCW windows/waveform (interim pending ratification); Params-only for other unbounded vectors / owning descriptors (§9) |
 | `Output<ArrayGeometry>` not a `PublishedPayload` | Pack geometry as float64 Tensor `(N+1, 3)` (`array_geometry_tensor.hpp`) on SubarraySelection / VAA (§10) |
 | Hardcoded fat Tensor pool ceilings OOM or under-size | `MaxTensorExtents` at `graph.op()`; fail-closed extent checks where required |
 
@@ -123,7 +123,7 @@ Until these close, phase 5 / cleanup cannot finish. Detail and next steps:
 | ID | Question | Interim today |
 | --- | --- | --- |
 | §2 | Keep module-wide `*_out` unique names as locked contract? | Physical `*_out` names + doc notes |
-| §9 | Params-only vs Tensor/POD for vector / descriptor `[live]` overrides? | Params-only for non-POD / unbounded; POD where fixed-shape |
+| §9 | Params-only vs schema/Tensor/POD for vector / descriptor `[live]` overrides? | Generated descriptor-Tensor schemas for FMCW windows/waveform pending ratification; Params-only for other non-POD / unbounded values; POD where fixed-shape |
 | §10 | Restore typed `Output<ArrayGeometry>` when SDK admits it, or lock Tensor pack? | float64 Tensor pack |
 | §3 / §4 | Confirm GA keeps explicit bind + writable DLPack rules | Documented patterns in harness / `radar_common` |
 
@@ -160,6 +160,7 @@ ctest --test-dir build -L ea_repro --output-on-failure   # sticky live Graph rep
 | Doc | Role |
 | --- | --- |
 | [`HSDK5_PORT.md`](HSDK5_PORT.md) | Full playbook, open items, progress table, cleanup gate |
+| [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md) | Interim schema-payload ownership, wire shape, evolution, and verification rules |
 | [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md) | Pool-sizing design |
 | [`OPERATOR_API.md`](OPERATOR_API.md) | Locked operator contracts (incl. EA physical renames) |
 | [`STATUS.md`](STATUS.md) | Claim / land log |

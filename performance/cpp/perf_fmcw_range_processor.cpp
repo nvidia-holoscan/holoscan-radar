@@ -7,8 +7,9 @@
 //
 // [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
 // Mid-session [live] range_window override measurement is deferred —
-// WindowSpec is Params-only on EA (HSDK5_PORT.md §9). Params still select
-// the window under test. Measurement tool only: no timing assertions.
+// the port exists, but override_ms timing remains open (HSDK5_PORT.md
+// §1 / §8). Params still select the window under test. Measurement tool only:
+// no timing assertions.
 // See docs/planning/OPERATOR_DEVELOPMENT.md.
 
 #include <complex>
@@ -190,7 +191,7 @@ perf::ResultRow base_row(const RangeScenario& scen) {
   row.input_shape = cube_shape(scen);
   row.out_batch = scen.channels;
   row.k = scen.samples_per_chirp;
-  // [EA HSDK5 ONLY] live override timing deferred — HSDK5_PORT.md §9.
+  // [EA HSDK5 ONLY] live override timing deferred — HSDK5_PORT.md §1 / §8.
   row.notes = "live_override=deferred_ea";
   return row;
 }
@@ -215,7 +216,7 @@ RangeScenario make_scenario(hr::WindowType window, const SizeSpec& s,
 
 // ---------------------------------------------------------------------------
 // Traits: the operator-specific surface the shared driver plugs into.
-// [EA HSDK5 ONLY] live range_window override is deferred (HSDK5_PORT §9).
+// [EA HSDK5 ONLY] live range_window timing is deferred (HSDK5_PORT §1 / §8).
 // ---------------------------------------------------------------------------
 struct RangeTraits : perf::PerfDriverDefaults {
   using Scenario = RangeScenario;
@@ -237,7 +238,7 @@ struct RangeTraits : perf::PerfDriverDefaults {
   static const char* full_help() {
     return "Full matrix (windows x sizes x channel batch); "
            "live-override timing deferred on HSDK 5 EA "
-           "(HSDK5_PORT.md §9)";
+           "(HSDK5_PORT.md §1 / §8)";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -304,7 +305,7 @@ struct RangeTraits : perf::PerfDriverDefaults {
   static void run_scenario(const RangeScenario& scen,
                            const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    // No mid-session live override until HSDK5_PORT.md §9 is closed.
+    // Port coverage is landed; override_ms timing remains deferred (§1 / §8).
     const perf::RunPlan plan =
         perf::make_run_plan(rs, /*has_override=*/false);
     const auto samples = perf::collect_scenario_samples(
@@ -321,7 +322,7 @@ struct RangeTraits : perf::PerfDriverDefaults {
         "cold_ms is first-frame latency including initial "
         "window/FFT plan build; median/p90 are post-warmup "
         "steady state; live range_window override timing "
-        "deferred (HSDK5_PORT.md §9); "
+        "deferred (HSDK5_PORT.md §1 / §8); "
         "cells/s is complex range bins/s";
     report->results.push_back(row);
   }

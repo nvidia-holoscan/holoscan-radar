@@ -218,9 +218,10 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 **Class:** EA limitation (not a permanent ban on sticky live overrides).
 
 **Contract.** `OPERATOR_API.md` requires Exact `[live]` parameters gated by
-`expect_*`. POD live Inputs are in `contract()` only when `expect_*=true`.
-Descriptor / unbounded-vector lives stay Params-only (§9). `resolve_sticky_override`
-remains for the LatestWithin repro test.
+`expect_*`. Enabled live Inputs are in `contract()` only when
+`expect_*=true`. FMCW windows/waveform use interim generated schema payloads;
+other descriptor / unbounded-vector lives stay Params-only (§9).
+`resolve_sticky_override` remains for the LatestWithin repro test.
 
 **What the reproducer established.** The earlier failures were invalid
 authoring shapes, not evidence that scalar sidebands are unsupported:
@@ -325,30 +326,32 @@ contract-visible in `OPERATOR_API.md`. Re-test at GA; an SDK that
 tolerates a declared, unwired port with `SafeDefault{}` would remove the
 need entirely (§11).
 
-**Re-test list — swept 2026-08-23.** Every operator whose
-`SDK_WORKAROUNDS.md` documented "live Inputs omitted from `contract()`" was
-re-checked against this narrowing and converted: `ClutterFilterOp`,
+**Re-test list — swept 2026-08-23.** Every operator previously documented as
+omitting live Inputs from `contract()` was re-checked against this narrowing
+and converted: `ClutterFilterOp`,
 `SnapshotGatherOp`, `FMCWRangeProcessorOp`, `FMCWDopplerProcessorOp`,
 `FMCWRangeDopplerProcessorOp`, `VirtualArrayAssemblyOp`, `CFARDetectorOp`,
 `DetectionReductionOp`, `ClusterDBSCANOp`, `BeamscanEstimatorOp`,
 `MVDREstimatorOp`, `MUSICEstimatorOp`, `RootMUSICEstimatorOp`,
-`ESPRITEstimatorOp`. What survives in those scratch docs is optional
-*Tensor* inputs (§11), conditional outputs, and Params-only descriptor /
-vector lives (§9). `FeatureAssemblyOp` and `SubarraySelectionOp` have no POD
-lives, so only their optional-input entries remain.
+`ESPRITEstimatorOp`. Remaining limitations are tracked here and in each
+operator's `OPEN_ITEMS.md`: optional *Tensor* inputs (§11), conditional
+outputs, and Params-only descriptor / vector lives outside the restored FMCW
+schema ports (§9). `FeatureAssemblyOp` and `SubarraySelectionOp` have no POD
+lives, so only their optional-input limitations remain.
 
 **Interim.**
 
 - Every ported operator's `contract()` is now its data trigger (`OnEach`, or
   `OnAligned` for the two-tensor ops) plus one `Exact{}` + `SafeDefault{}`
-  entry per POD override whose `expect_*` is true (default false), via
+  entry per enabled override whose `expect_*` is true (default false), via
   `maybe_add_live_override_to_contract` in
-  `radar_common/sdk/override_param.hpp`. Descriptor / vector lives stay
-  Params-only (§9); optional Tensor inputs and conditional outputs stay out
-  of the contract (§11).
+  `radar_common/sdk/override_param.hpp`. The restored FMCW descriptor ports
+  convert generated wire types before sticky resolution; other descriptor /
+  vector lives stay Params-only (§9). Optional Tensor inputs and conditional
+  outputs stay out of the contract (§11).
 - **What is missing now is Graph coverage, not the contract shape.**
-  Mid-stream Exact override tests are landed only for
-  `FMCWRangeProcessorOp` `nfft` (`test_fmcw_range_processor.cpp`); the
+  Mid-stream Exact tests cover `FMCWRangeProcessorOp` `nfft`, range/Doppler
+  windows, waveform validation, and fused schema overrides. The scalar/enum
   equivalents below still `GTEST_SKIP` pending that harness work.
 - `ClutterFilterOpTest.LiveMethodOverrideMidStreamAndSticky` and
   `SnapshotGatherOpTest.LiveSnapshotWindowStickyOverride` are
