@@ -4,6 +4,7 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
 #include <optional>
 #include <utility>
 
@@ -73,6 +74,33 @@ expected<T, Error> resolve_expected_override(
     return seed;
   }
   return resolve_live_override(port, seed, sticky, keep_sticky);
+}
+
+// Resolve a wire override through a validating converter. The converter runs
+// only for a fresh sample, and sticky state owns the converted descriptor so
+// generated wire storage never leaks into operator state.
+template <typename Wire, typename Converted, typename Converter>
+expected<Converted, Error> resolve_expected_override_via(
+    bool expect, Input<Wire>& port, const Converted& seed,
+    std::optional<Converted>& sticky, bool keep_sticky,
+    Converter&& converter) {
+  if (!expect) {
+    return seed;
+  }
+  HOLOSCAN_TRY(auto maybe, receive_optional_value(port));
+  if (maybe.has_value()) {
+    HOLOSCAN_TRY(
+        auto converted,
+        std::invoke(std::forward<Converter>(converter), *maybe));
+    if (keep_sticky) {
+      sticky = converted;
+    }
+    return converted;
+  }
+  if (keep_sticky && sticky.has_value()) {
+    return *sticky;
+  }
+  return seed;
 }
 
 // Deprecated LatestWithin mapping for operators not yet on Exact+expect.

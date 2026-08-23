@@ -12,6 +12,7 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -19,7 +20,10 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
+#include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -44,6 +48,8 @@
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "radar_schemas/fmcw_waveform_bridge.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 #include "utils/bin_model.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/sim_reference.hpp"
@@ -740,13 +746,301 @@ TEST(FMCWRangeProcessorOpTest, LiveNfftSkewedCaptureTimeMissesExact) {
   EXPECT_EQ(out.frames[1].shape.back(), kSamples);
 }
 
+struct LiveRangeDescriptorTick {
+  std::shared_ptr<holoscan::Tensor> cube;
+  std::optional<WindowSpec> range_window;
+  std::optional<FMCWWaveformDescriptor> waveform;
+  bool invalid_waveform{false};
+};
+
+struct LiveRangeDescriptorBank {
+  static void reset() {
+    ticks.clear();
+    index = 0;
+  }
+  static inline std::vector<LiveRangeDescriptorTick> ticks;
+  static inline std::size_t index{0};
+};
+
+template <typename Wire, typename Element>
+holoscan::expected<void, holoscan::Error> emit_descriptor_tensor(
+    holoscan::Output<Wire>& output, Wire wire,
+    std::span<const Element> values, holoscan::TimePoint capture_time) {
+  const std::array<int64_t, 1> shape{
+      static_cast<int64_t>(values.size())};
+  constexpr DLDataType dtype{
+      std::is_same_v<Element, double> ? kDLFloat : kDLComplex,
+      static_cast<uint8_t>(sizeof(Element) * 8), 1U};
+  auto loan = output.allocate_tensor(
+      holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
+  if (!loan) {
+    return holoscan::make_unexpected(std::move(loan).error());
+  }
+  auto written = loan->write_host_and_commit(
+      [values](const holoscan::TensorOutputWriteGuard& writer) {
+        std::copy(values.begin(), values.end(),
+                  writer.template data_as<Element>());
+      });
+  if (!written) {
+    return holoscan::make_unexpected(std::move(written).error());
+  }
+  return output.emit_tensor(
+      std::move(*loan), wire,
+      holoscan::EmitOptions{.capture_time = capture_time});
+}
+
+class LiveRangeDescriptorSourceOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorPortLayout kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice,
+        .dtype = std::nullopt,
+        .rank = std::nullopt,
+    };
+    constexpr holoscan::TensorPortLayout kWindow{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = DLDataType{kDLFloat, 64U, 1U},
+        .rank = 1U,
+    };
+    constexpr holoscan::TensorPortLayout kWaveform{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = DLDataType{kDLComplex, 128U, 1U},
+        .rank = 1U,
+    };
+    spec.output(cube, "cube")
+        .produces_tensor(kDevice)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL});
+    spec.output(range_window, "range_window")
+        .max_emits_per_compute(1U)
+        .produces_tensor(kWindow)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 1U,
+            .max_byte_span = kSamples * sizeof(double)});
+    spec.output(waveform, "waveform")
+        .max_emits_per_compute(1U)
+        .produces_tensor(kWaveform)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 1U,
+            .max_byte_span =
+                kSamples * sizeof(std::complex<double>)});
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{
+        .period = holoscan::radar::testing::detail::kHarnessTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    if (LiveRangeDescriptorBank::index >=
+        LiveRangeDescriptorBank::ticks.size()) {
+      return {};
+    }
+    const LiveRangeDescriptorTick& tick =
+        LiveRangeDescriptorBank::ticks[LiveRangeDescriptorBank::index++];
+    const holoscan::TimePoint capture_time = context.activation_time();
+    if (tick.range_window.has_value()) {
+      auto wire = holoscan::radar::to_wire(*tick.range_window);
+      auto emitted = emit_descriptor_tensor(
+          range_window, std::move(wire),
+          std::span<const double>{tick.range_window->coefficients},
+          capture_time);
+      if (!emitted) {
+        return emitted;
+      }
+    }
+    if (tick.waveform.has_value()) {
+      auto wire = holoscan::radar::to_wire(*tick.waveform);
+      if (tick.invalid_waveform) {
+        wire.chirp_duration = 0.0;
+      }
+      auto emitted = emit_descriptor_tensor(
+          waveform, std::move(wire),
+          std::span<const std::complex<double>>{
+              tick.waveform->reference_samples()},
+          capture_time);
+      if (!emitted) {
+        return emitted;
+      }
+    }
+    return emit_cube_at(cube, context, tick.cube, capture_time);
+  }
+
+  holoscan::Output<holoscan::Tensor> cube{"cube"};
+  holoscan::Output<holoscan::radar::wire::WindowSpecT>
+      range_window{"range_window"};
+  holoscan::Output<holoscan::radar::wire::FMCWWaveformT>
+      waveform{"waveform"};
+};
+
+DualIOGraphRunResult run_range_descriptor_override_graph(
+    std::vector<LiveRangeDescriptorTick> ticks,
+    FMCWRangeProcessorParams params) {
+  DualIOGraphRunResult result;
+  holoscan::radar::testing::detail::FrameBank::reset();
+  holoscan::radar::testing::detail::FrameBankB::reset();
+  LiveRangeDescriptorBank::reset();
+  LiveRangeDescriptorBank::ticks = std::move(ticks);
+  const std::size_t expected = LiveRangeDescriptorBank::ticks.size();
+
+  holoscan::Graph graph{"range-descriptor-overrides"};
+  const auto source = graph.op<LiveRangeDescriptorSourceOp>("source");
+  auto op = holoscan::radar::testing::emplace_harness_op<
+      FMCWRangeProcessorOp<float>>(
+      graph, holoscan::radar::testing::default_test_extents());
+  op.set_params(std::move(params));
+  const auto sink0 =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink0");
+  const auto sink1 =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("sink1");
+  const holoscan::ConnectionOptions q{.queue_depth = 8U};
+  graph.add_flow(source->range_window, op->range_window_in, q);
+  graph.add_flow(source->waveform, op->waveform_in, q);
+  graph.add_flow(source->cube, op->adc_cube, q);
+  graph.add_flow(op->range_profiles, sink0->in, q);
+  graph.add_flow(op->range_bins, sink1->in, q);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  options.deployment.bind_tensor_output_device(
+      holoscan::TensorOutputDevicePlacement{
+          .operator_path = "source",
+          .output_port = "cube",
+          .device = holoscan::DeviceId{0}});
+  holoscan::radar::testing::detail::bind_op_device_output(
+      options, "range_profiles");
+  holoscan::radar::testing::detail::bind_op_device_output(
+      options, "range_bins");
+
+  try {
+    const holoscan::ExecutionPlan plan =
+        holoscan::compile(graph, std::move(options));
+    result.plan_ok = plan.ok();
+    result.plan_json = plan.json();
+    if (!plan.ok()) {
+      return result;
+    }
+    holoscan::RunSession session = holoscan::run_async(plan);
+    const auto deadline = std::chrono::steady_clock::now() +
+                          holoscan::radar::testing::detail::kHarnessDeadline;
+    while (session.diagnostics().empty() &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::size_t count0 = 0;
+      std::size_t count1 = 0;
+      {
+        const std::lock_guard lock(
+            holoscan::radar::testing::detail::FrameBank::mutex);
+        count0 =
+            holoscan::radar::testing::detail::FrameBank::captured.size();
+      }
+      {
+        const std::lock_guard lock(
+            holoscan::radar::testing::detail::FrameBankB::mutex);
+        count1 =
+            holoscan::radar::testing::detail::FrameBankB::captured.size();
+      }
+      if (count0 >= expected && count1 >= expected) {
+        break;
+      }
+      std::this_thread::sleep_for(
+          holoscan::radar::testing::detail::kHarnessPoll);
+    }
+    session.request_stop();
+    session.wait();
+    result.termination = session.termination();
+    for (const auto& diagnostic : session.diagnostics()) {
+      result.diagnostics.emplace_back(diagnostic.token);
+    }
+  } catch (const holoscan::RuntimeError& error) {
+    result.plan_ok = false;
+    result.plan_json = std::string("RuntimeError: ") + error.what();
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBank::mutex);
+    result.frames0 = std::move(
+        holoscan::radar::testing::detail::FrameBank::captured);
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBankB::mutex);
+    result.frames1 = std::move(
+        holoscan::radar::testing::detail::FrameBankB::captured);
+  }
+  return result;
+}
+
 TEST(FMCWRangeProcessorOpTest, LiveWindowOverrideAppliesPerTick) {
-  // [EA HSDK5 ONLY] See docs/planning/HSDK5_PORT.md §1/§9 — Graph
-  // mid-stream sticky override harness fails on EA device/partition
-  // binding; WindowSpec is Params-only (owns vectors). Params authoring
-  // covers window selection; restore once §1 + §9 are closed.
-  GTEST_SKIP() << "HSDK 5 EA: live window override harness deferred "
-                  "(HSDK5_PORT.md §1/§9)";
+  const sim::SimWaveform base_waveform{};
+  sim::SimWaveform narrow_waveform = base_waveform;
+  narrow_waveform.bandwidth *= 0.5;
+  const auto sim_result = sim::simulate(make_scene(range_at_bin(30.5)));
+  auto cube = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
+
+  WindowSpec hann;
+  hann.type = WindowType::kHann;
+  LiveRangeDescriptorTick base{cube, std::nullopt, std::nullopt};
+  LiveRangeDescriptorTick changed{
+      cube, hann, to_descriptor(narrow_waveform)};
+
+  FMCWRangeProcessorParams params;
+  params.waveform = to_descriptor(base_waveform);
+  params.expect_range_window = true;
+  params.expect_waveform = true;
+  params.sticky_range_window = true;
+  params.sticky_waveform = true;
+  const DualIOGraphRunResult out = run_range_descriptor_override_graph(
+      {base, changed, base}, std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames0.size(), 3u);
+  ASSERT_EQ(out.frames1.size(), 3u);
+
+  const auto rect = slice_abs<float>(out.frames0[0], 0, 0);
+  const auto windowed = slice_abs<float>(out.frames0[1], 0, 0);
+  const auto sticky = slice_abs<float>(out.frames0[2], 0, 0);
+  const int64_t peak = argmax(rect);
+  double rect_sidelobe = 0.0;
+  double windowed_sidelobe = 0.0;
+  for (int64_t i = peak + 4; i < std::min<int64_t>(peak + 16, kSamples);
+       ++i) {
+    rect_sidelobe =
+        std::max(rect_sidelobe, rect[static_cast<size_t>(i)]);
+    windowed_sidelobe =
+        std::max(windowed_sidelobe, windowed[static_cast<size_t>(i)]);
+  }
+  EXPECT_LT(windowed_sidelobe, 0.5 * rect_sidelobe);
+  EXPECT_EQ(windowed, sticky);
+
+  const float base_spacing = out.frames1[0].as<float>()[1];
+  const float changed_spacing = out.frames1[1].as<float>()[1];
+  EXPECT_NEAR(changed_spacing, 2.0F * base_spacing,
+              1e-4F * changed_spacing);
+  EXPECT_EQ(out.frames1[1].as<float>()[1],
+            out.frames1[2].as<float>()[1]);
+}
+
+TEST(FMCWRangeProcessorOpTest, InvalidLiveWaveformRejectedBeforeDsp) {
+  const auto sim_result = sim::simulate(make_scene(range_at_bin(30.0)));
+  auto cube = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
+  LiveRangeDescriptorTick invalid{
+      cube, std::nullopt, to_descriptor(sim::SimWaveform{})};
+  invalid.invalid_waveform = true;
+
+  FMCWRangeProcessorParams params;
+  params.expect_range_window = true;
+  params.expect_waveform = true;
+  const DualIOGraphRunResult out =
+      run_range_descriptor_override_graph({invalid}, std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  EXPECT_TRUE(out.frames0.empty());
+  EXPECT_TRUE(out.frames1.empty());
+  EXPECT_FALSE(out.diagnostics.empty());
 }
 
 TEST(FMCWRangeProcessorOpTest, FloatAndDoubleInstantiationsAgree) {

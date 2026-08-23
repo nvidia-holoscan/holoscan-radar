@@ -20,6 +20,7 @@ here when the root cause is HSDK 5 / EA.
 | [`operators/common/README.md`](../../operators/common/README.md) | Pilot patterns: Tensor I/O, sticky `[live]`, Graph harness |
 | [`STATUS.md`](STATUS.md) | Who owns what; claim / land coordination |
 | [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md) | **C++ landed:** module `MaxTensorExtents` ctor-capture for Tensor pool sizing + drop opaque leading batch; apps/Python phase 4; pinned [`MAX_TENSOR_EXTENTS_2026-08-15.md`](MAX_TENSOR_EXTENTS_2026-08-15.md) |
+| [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md) | Interim schema-payload ownership, generation, evolution, Tensor bounds, bridges/tests, and Python limitation |
 | This file | Migration process + open HSDK 5 / EA friction |
 
 ---
@@ -203,9 +204,9 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph sticky/`TXSchedule` live N/A (Params-only schedule); Graph perf cold/steady landed |
 | `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` Params-only (§9); Graph live tests skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); Exact `wavelength` gated by `expect_wavelength` (Graph live deferred §1); Graph perf `wavelength` `override_ms` restored (§8); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
-| `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; Exact POD lives gated by `expect_*` (nfft Graph tests); `range_window`/`waveform` Params-only (§9); Graph live window skipped (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `FMCWDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `velocity_bins` only with waveform; Exact POD lives gated by `expect_*`; `doppler_window`/`waveform` Params-only (§9); Graph live skipped (§1/§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `FMCWRangeDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–3-out) | landed; optional axis outs with waveform; Exact POD lives incl. `clutter_filter` gated by `expect_*`; windows/`waveform` Params-only (§9); UlpParity vs split chain preserved; Graph live skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
+| `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; Exact lives gated by `expect_*`; `range_window`/`waveform` restored through interim generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
+| `FMCWDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `velocity_bins` only with waveform; Exact lives gated by `expect_*`; `doppler_window`/`waveform` restored through interim generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
+| `FMCWRangeDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–3-out) | landed; optional axis outs with waveform; Exact lives incl. `clutter_filter` gated by `expect_*`; windows/`waveform` restored through interim generated schema payloads (§9); UlpParity vs split chain preserved; Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
 | Python bindings / Holoviz demos / apps | deferred (phase 4); X11 RD + Graph demos siso/simo/dense/mimo/aoa landed (§6) |
 
 ---
@@ -578,6 +579,57 @@ contract change — raise it with the team; the cheaper alternative to
 weigh is stripping the bulk arrays out of the descriptors and routing
 them as their own `Input<Tensor>`.
 
+**Measured 2026-08-23: a schema may carry the Tensor itself, which
+collapses those two options into one.** `holoscan_add_flatbuffer_schema`
+has a second mode, `DESCRIPTOR_TENSOR`, in which a field typed
+`holoscan.schema.Tensor` (from the SDK's `tensor.fbs`) becomes a
+`std::shared_ptr<holoscan::Tensor>` member of the generated owning type
+with a generated `TensorFieldSelector`, its own shape / dtype / memory
+kind / allocation bound, and publication through `allocate_tensors()` /
+`write_all()` / `emit_tensors()`. The Tensor bytes are never serialized
+into the FlatBuffer — the SDK examples (`descriptor_tensor_schema`,
+`multi_tensor_schema` under `examples/flatbuffer_schemas/`) state they
+move by buffer handle with no staging copy, including across a
+process-partitioned graph. A scratch schema mixing our exact field set
+(`WindowType` enum, optional `double`, `bool`, `[double]`, plus one
+Tensor) generates cleanly, so metadata and bulk array coexist in one
+message. Consequences for this decision: cost (a) above mostly
+evaporates — `TRAITS_MAX_SERIALIZED_SIZE` and
+`TRAITS_DESCRIPTOR_METADATA_CAPACITY` (hard-capped at 65536) then bound
+only the metadata, while the array is bounded by the per-field tensor
+allocation we already declare via `MaxTensorExtents` — and it is
+strictly better than a separate `Input<Tensor>` for the bulk array,
+because the descriptor and its array arrive as one sample under one
+`capture_time` instead of needing a second join. Two constraints found:
+descriptor mode rejects vectors of structs or tables
+(`reference_samples: [Complex64]` fails with
+`vectors of tables or structs are unsupported by descriptor traits
+generation`, so a measured dechirp reference has to *be* the Tensor, or
+flatten to an interleaved `[double]`, or take the hand-written-codec
+escape hatch) and it forces `--require-explicit-ids` across the schema
+closure. Note also that the `descriptor_tensor_schema` README claims
+"exactly one Tensor member per schema" while `multi_tensor_schema`
+carries three (two device, one host) — verify multi-Tensor before
+depending on it.
+
+**Measured 2026-08-23: descriptor Tensor members cannot be null.** Ordinary
+publication with a null member is rejected with `kInvalidArgument`. A rank-1
+zero-length Tensor allocated and published with `emit_tensor` succeeds and
+arrives as a present Tensor with `nbytes() == 0`. The interim schemas
+therefore always carry the Tensor: zero-length is the absent optional-array
+representation, nonzero is present, and null is invalid. This is a measured
+transport rule, not by itself ratification of the schema payload design.
+
+**Two EA generator workarounds remain.** Descriptor-traits generation emits
+invalid C++ for FlatBuffers nullable scalars, so the two schemas encode each
+optional double losslessly as a value plus an explicit `has_*` field rather
+than reserving a valid numeric sentinel. The generated traits also place their
+unqualified `CreateTensor` forwarding block after the generated root header;
+`radar_schemas` post-processes the build output to include its forwarding
+overload first. Neither workaround changes committed generated files (none are
+tracked). Re-probe both against the public SDK and remove or version the schema
+workarounds before the EA cleanup.
+
 **Artifact and packaging shape** (what adoption would commit us to). The
 `.fbs` files are committed source, not generated: schema compatibility is
 exact-match on canonical name + version + schema SHA, so the file *is* the
@@ -640,15 +692,29 @@ Params-only.
 `guard_cells` / `training_cells` / `nci_axes` / `alpha_lut` stay
 Params-only (pair / unbounded vectors).
 
-**Next.** Prefer POD / schema types for other vector-shaped live
-overrides as those ops port; for unbounded grids / feature radii prefer
-`Input<Tensor>` (or a durable schema) and document any OPERATOR_API
-physical-type divergence.
+The three FMCW processing operators restore `range_window`,
+`doppler_window`, and `waveform` `[live]` ports through generated
+`holoscan::radar::wire` mixed metadata + descriptor-Tensor payloads. Logical
+Params remain `WindowSpec` / `FMCWWaveformDescriptor`; each port has static
+`expect_*` / `sticky_*` controls and uses the zero-length absent convention
+above. The committed-source/generated-output boundary, exact identity and
+evolution rules, `MaxTensorExtents` bounds, bridge/install/test sync surface,
+and C++-only wire-type limitation are in
+[`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md). Python continues through Params.
+This is an interim implementation under TEAM_BLOCKED review, not a settled
+module-wide schema decision.
 
-**Status:** open — SnapshotGather POD pattern + PhaseShift/Beamscan/
+**Next.** Obtain team ratification of the FMCW schema payload shape and
+maintenance contract. Prefer POD / schema types for other vector-shaped live
+overrides only after applying the decision; for unbounded grids / feature
+radii prefer `Input<Tensor>` (or a ratified durable schema) and document any
+OPERATOR_API physical-type divergence.
+
+**Status:** open — FMCW schema-backed ports restored as an interim pending
+team ratification; SnapshotGather POD pattern plus PhaseShift/Beamscan/
 SubarraySelection/ClusterDBSCAN/MVDR/MUSIC/RootMUSIC/ESPRIT/
-DetectionReduction/CFAR Params-only fallback for non-POD / unbounded
-vectors.
+DetectionReduction/CFAR Params-only fallback remains for other non-POD /
+unbounded vectors.
 
 ---
 

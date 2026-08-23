@@ -91,6 +91,9 @@ void FMCWRangeDopplerProcessorOp<T>::setup(OperatorSpec& spec) {
       .max_byte_span = velocity_bins_byte_span_};
 
   spec.input(adc_cube).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(range_window_in).queue_depth(2U);
+  spec.input(doppler_window_in).queue_depth(2U);
+  spec.input(waveform_in).queue_depth(2U);
   spec.output(rd_maps)
       .produces_tensor(kDevice)
       .tensor_allocation(fat_bounds);
@@ -101,7 +104,7 @@ void FMCWRangeDopplerProcessorOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(kDevice)
       .tensor_allocation(vb_bounds);
 
-  // [live] sticky override ports for POD scalars.
+  // [live] sticky override ports.
   spec.input(apply_dechirp_in).queue_depth(2U);
   spec.input(clutter_filter_in).queue_depth(2U);
   spec.input(fft_norm_in).queue_depth(2U);
@@ -115,9 +118,15 @@ Contract FMCWRangeDopplerProcessorOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{adc_cube});
   maybe_add_live_override_to_contract(
+      result, range_window_in, params().expect_range_window);
+  maybe_add_live_override_to_contract(
+      result, doppler_window_in, params().expect_doppler_window);
+  maybe_add_live_override_to_contract(
       result, apply_dechirp_in, params().expect_apply_dechirp);
   maybe_add_live_override_to_contract(
       result, clutter_filter_in, params().expect_clutter_filter);
+  maybe_add_live_override_to_contract(
+      result, waveform_in, params().expect_waveform);
   maybe_add_live_override_to_contract(
       result, fft_norm_in, params().expect_fft_norm);
   maybe_add_live_override_to_contract(
@@ -141,7 +150,21 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
   const FMCWRangeDopplerProcessorParams& pinned =
       context.params<FMCWRangeDopplerProcessorParams>();
 
-  // Resolve Exact [live] overrides for POD scalars.
+  // Resolve Exact [live] overrides. Schema conversion only runs for a fresh
+  // wire sample; sticky state stores the converted descriptor.
+  HOLOSCAN_TRY(
+      auto eff_range_window,
+      resolve_expected_override_via(
+          pinned.expect_range_window, range_window_in, pinned.range_window,
+          sticky_range_window_, pinned.sticky_range_window,
+          [](const wire::WindowSpecT& value) { return from_wire(value); }));
+  HOLOSCAN_TRY(
+      auto eff_doppler_window,
+      resolve_expected_override_via(
+          pinned.expect_doppler_window, doppler_window_in,
+          pinned.doppler_window, sticky_doppler_window_,
+          pinned.sticky_doppler_window,
+          [](const wire::WindowSpecT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto eff_apply_dechirp,
                resolve_expected_override(pinned.expect_apply_dechirp,
                                          apply_dechirp_in, pinned.apply_dechirp,
@@ -153,6 +176,12 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
                                          pinned.clutter_filter,
                                          sticky_clutter_filter_,
                                          pinned.sticky_clutter_filter));
+  HOLOSCAN_TRY(
+      auto eff_waveform_value,
+      resolve_expected_override_via(
+          pinned.expect_waveform, waveform_in, pinned.waveform,
+          sticky_waveform_, pinned.sticky_waveform,
+          [](const wire::FMCWWaveformT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto eff_fft_norm,
                resolve_expected_override(pinned.expect_fft_norm, fft_norm_in,
                                          pinned.fft_norm, sticky_fft_norm_,
@@ -183,13 +212,9 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
           ? std::optional<int64_t>{eff_nfft_doppler_raw}
           : std::nullopt;
 
-  // [EA HSDK5 ONLY] range_window, doppler_window, waveform are
-  // Params-only (§9).
-  const WindowSpec& eff_range_window = pinned.range_window;
-  const WindowSpec& eff_doppler_window = pinned.doppler_window;
-  const bool waveform_present = pinned.waveform.is_valid();
+  const bool waveform_present = eff_waveform_value.is_valid();
   const std::optional<FMCWWaveformDescriptor> eff_waveform =
-      waveform_present ? std::optional{pinned.waveform} : std::nullopt;
+      waveform_present ? std::optional{eff_waveform_value} : std::nullopt;
 
   // Classify and validate input against the locked contract.
   InputPrecision precision;

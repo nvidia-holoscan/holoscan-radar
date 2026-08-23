@@ -1,0 +1,22 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+include "tensor.fbs";
+
+namespace holoscan.radar.wire;
+
+table FMCWWaveform {
+  carrier_frequency: double (id: 0);
+  // EA descriptor traits do not compile nullable scalars; each optional
+  // double uses an explicit presence bit.
+  bandwidth: double = 0.0 (id: 1);
+  has_bandwidth: bool = false (id: 2);
+  chirp_slope: double = 0.0 (id: 3);
+  has_chirp_slope: bool = false (id: 4);
+  chirp_duration: double (id: 5);
+  sample_rate: double (id: 6);
+  chirp_repetition_interval: double (id: 7);
+  reference_samples: holoscan.schema.Tensor (id: 8);
+}
+
+root_type FMCWWaveform;

@@ -55,6 +55,9 @@ install(DIRECTORY radar_common
     FILES_MATCHING PATTERN "*.hpp"
 )
 
+# Generated wire schemas and descriptor bridges depend on radar_common.
+add_subdirectory(radar_schemas)
+
 # CUDA group-by-label reduction primitives (public library surface for the
 # DetectionReductionOp contract and any future consumer). Host-only
 # radar_common stays CUDA-free; this target owns the .cu objects so operators

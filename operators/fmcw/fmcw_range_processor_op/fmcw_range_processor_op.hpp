@@ -26,6 +26,8 @@
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/math/constants.hpp"
+#include "radar_schemas/fmcw_waveform_bridge.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 
 namespace holoscan::radar {
 
@@ -50,11 +52,6 @@ struct RangeStageState;  // kernel-side caches; defined in range_stage.hpp
 // (T = float → complex64/float32, T = double → complex128/float64).
 // Fat outs require MaxTensorExtents at graph.op() (ctor).
 //
-// [EA HSDK5 ONLY] range_window and waveform are [live] in OPERATOR_API.md
-// but stay Params-only here: WindowSpec and FMCWWaveformDescriptor own
-// vectors / optionals (HSDK5_PORT.md §9). POD scalars (apply_dechirp,
-// fft_norm, nfft) have Exact Input overrides gated by expect_*.
-
 struct FMCWRangeProcessorParams {
   WindowSpec range_window{};
   bool apply_dechirp{false};
@@ -64,12 +61,16 @@ struct FMCWRangeProcessorParams {
   double propagation_speed{kDefaultPropagationSpeed};
   // 0 = exact (no zero-padding); ≥ samples_per_chirp when non-zero.
   int64_t nfft{0};
-  // Static wiring flags for POD [live] ports (OPERATOR_API.md). Default
+  // Static wiring flags for [live] ports (OPERATOR_API.md). Default
   // off so unwired graphs compile. Must match add_flow.
+  bool expect_range_window{false};
   bool expect_apply_dechirp{false};
+  bool expect_waveform{false};
   bool expect_fft_norm{false};
   bool expect_nfft{false};
+  bool sticky_range_window{true};
   bool sticky_apply_dechirp{true};
+  bool sticky_waveform{true};
   bool sticky_fft_norm{true};
   bool sticky_nfft{true};
 };
@@ -90,8 +91,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&FMCWRangeProcessorParams::waveform>("waveform")
         .description(
             "FMCW chirp descriptor; source for the dechirp reference "
-            "and the range_bins axis. Default-constructed = none. "
-            "[live] in API but Params-only on EA (HSDK5_PORT §9)."),
+            "and the range_bins axis. Default-constructed = none."),
     holoscan::field<&FMCWRangeProcessorParams::fft_norm>("fft_norm")
         .description(
             "FFT normalization convention {backward, ortho, forward}; "
@@ -105,21 +105,38 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Fast-time FFT length >= samples_per_chirp; larger zero-pads "
             "for a finer interpolated range grid. 0 = samples_per_chirp."),
+    holoscan::field<&FMCWRangeProcessorParams::expect_range_window>(
+        "expect_range_window")
+        .description(
+            "Set when the application wires the range_window override."),
     holoscan::field<&FMCWRangeProcessorParams::expect_apply_dechirp>(
         "expect_apply_dechirp")
         .description(
             "Set when the application wires the apply_dechirp override."),
+    holoscan::field<&FMCWRangeProcessorParams::expect_waveform>(
+        "expect_waveform")
+        .description("Set when the application wires the waveform override."),
     holoscan::field<&FMCWRangeProcessorParams::expect_fft_norm>(
         "expect_fft_norm")
         .description(
             "Set when the application wires the fft_norm override."),
     holoscan::field<&FMCWRangeProcessorParams::expect_nfft>("expect_nfft")
         .description("Set when the application wires the nfft override."),
+    holoscan::field<&FMCWRangeProcessorParams::sticky_range_window>(
+        "sticky_range_window")
+        .description(
+            "Keep the last Exact range_window match on a miss. False "
+            "reverts to Params. Ignored unless expect_range_window."),
     holoscan::field<&FMCWRangeProcessorParams::sticky_apply_dechirp>(
         "sticky_apply_dechirp")
         .description(
             "Keep the last Exact apply_dechirp match on a miss. False "
             "reverts to Params. Ignored unless expect_apply_dechirp."),
+    holoscan::field<&FMCWRangeProcessorParams::sticky_waveform>(
+        "sticky_waveform")
+        .description(
+            "Keep the last Exact waveform match on a miss. False reverts "
+            "to Params. Ignored unless expect_waveform."),
     holoscan::field<&FMCWRangeProcessorParams::sticky_fft_norm>(
         "sticky_fft_norm")
         .description(
@@ -155,17 +172,20 @@ class FMCWRangeProcessorOp
   Output<Tensor> range_profiles{"range_profiles"};
   Output<Tensor> range_bins{"range_bins"};
 
-  // [live] Exact override ports for POD scalars (OPERATOR_API.md).
-  // [EA HSDK5 ONLY] range_window and waveform are Params-only (§9).
+  // [live] Exact override ports (OPERATOR_API.md).
+  Input<wire::WindowSpecT> range_window_in{"range_window"};
   Input<bool> apply_dechirp_in{"apply_dechirp"};
+  Input<wire::FMCWWaveformT> waveform_in{"waveform"};
   Input<FftNorm> fft_norm_in{"fft_norm"};
   Input<int64_t> nfft_in{"nfft"};
 
  private:
   Tensor retained_input_;
 
-  // Last Exact-matched POD override (used when sticky_* is true).
+  // Last Exact-matched override (used when sticky_* is true).
+  std::optional<WindowSpec> sticky_range_window_;
   std::optional<bool> sticky_apply_dechirp_;
+  std::optional<FMCWWaveformDescriptor> sticky_waveform_;
   std::optional<FftNorm> sticky_fft_norm_;
   std::optional<int64_t> sticky_nfft_;
 

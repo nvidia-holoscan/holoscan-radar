@@ -33,12 +33,11 @@ expected<void, Error> fail_invalid(const std::string& message) {
 
 constexpr const char* kOpName = "FMCWRangeProcessorOp";
 
-// Effective per-tick values after applying Exact scalar overrides.
-// Params-only descriptor values are borrowed from parameter storage.
+// Effective per-tick values own converted schema payloads.
 struct EffectiveRangeConfig {
-  const WindowSpec* window;
+  WindowSpec window;
   bool apply_dechirp;
-  const FMCWWaveformDescriptor* waveform;
+  FMCWWaveformDescriptor waveform;
   FftNorm fft_norm;
   double propagation_speed;
   int64_t nfft;
@@ -52,19 +51,35 @@ struct ValidatedRangeConfig {
   bool waveform_present;
 };
 
-// Resolve Exact scalar inputs (when expect_* is set) with the pinned
-// parameters. Unwired ports (expect=false) must not be received.
+// Resolve Exact inputs with the pinned parameters. Unwired ports
+// (expect=false) must not be received.
 expected<EffectiveRangeConfig, Error> resolve_overrides(
-    Input<bool>& apply_dechirp_in, Input<FftNorm>& fft_norm_in,
+    Input<wire::WindowSpecT>& range_window_in,
+    Input<bool>& apply_dechirp_in,
+    Input<wire::FMCWWaveformT>& waveform_in, Input<FftNorm>& fft_norm_in,
     Input<int64_t>& nfft_in, const FMCWRangeProcessorParams& pinned,
+    std::optional<WindowSpec>& sticky_range_window,
     std::optional<bool>& sticky_apply_dechirp,
+    std::optional<FMCWWaveformDescriptor>& sticky_waveform,
     std::optional<FftNorm>& sticky_fft_norm,
     std::optional<int64_t>& sticky_nfft) {
+  HOLOSCAN_TRY(
+      auto range_window,
+      resolve_expected_override_via(
+          pinned.expect_range_window, range_window_in, pinned.range_window,
+          sticky_range_window, pinned.sticky_range_window,
+          [](const wire::WindowSpecT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto apply_dechirp,
                resolve_expected_override(
                    pinned.expect_apply_dechirp, apply_dechirp_in,
                    pinned.apply_dechirp, sticky_apply_dechirp,
                    pinned.sticky_apply_dechirp));
+  HOLOSCAN_TRY(
+      auto waveform,
+      resolve_expected_override_via(
+          pinned.expect_waveform, waveform_in, pinned.waveform,
+          sticky_waveform, pinned.sticky_waveform,
+          [](const wire::FMCWWaveformT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto fft_norm,
                resolve_expected_override(pinned.expect_fft_norm, fft_norm_in,
                                          pinned.fft_norm, sticky_fft_norm,
@@ -74,9 +89,9 @@ expected<EffectiveRangeConfig, Error> resolve_overrides(
                                          pinned.nfft, sticky_nfft,
                                          pinned.sticky_nfft));
 
-  return EffectiveRangeConfig{.window = &pinned.range_window,
+  return EffectiveRangeConfig{.window = std::move(range_window),
                               .apply_dechirp = apply_dechirp,
-                              .waveform = &pinned.waveform,
+                              .waveform = std::move(waveform),
                               .fft_norm = fft_norm,
                               .propagation_speed = pinned.propagation_speed,
                               .nfft = nfft};
@@ -142,7 +157,7 @@ expected<ValidatedRangeConfig, Error> validate_configuration(
             std::to_string(batched.cols) + ") on port adc_cube"});
   }
   if (effective.apply_dechirp) {
-    if (!effective.waveform->is_valid()) {
+    if (!effective.waveform.is_valid()) {
       return make_unexpected(Error{
           ErrorCode::kInvalidArgument,
           std::string(kOpName) +
@@ -160,14 +175,14 @@ expected<ValidatedRangeConfig, Error> validate_configuration(
     }
   }
 
-  const bool waveform_present = effective.waveform->is_valid();
+  const bool waveform_present = effective.waveform.is_valid();
   std::optional<FMCWWaveformDescriptor> opt_waveform;
   if (waveform_present) {
-    opt_waveform = *effective.waveform;
+    opt_waveform = effective.waveform;
   }
 
   detail::RangeStageConfig stage;
-  stage.window = *effective.window;
+  stage.window = effective.window;
   stage.apply_dechirp = effective.apply_dechirp;
   stage.waveform = std::move(opt_waveform);
   stage.fft_norm = effective.fft_norm;
@@ -185,7 +200,7 @@ expected<ValidatedRangeConfig, Error> validate_configuration(
 template <typename T>
 FMCWRangeProcessorOp<T>::FMCWRangeProcessorOp(
     const MaxTensorExtents& extents)
-    : state_(std::make_shared<detail::RangeStageState<T>>()) {
+    : state_(std::make_shared<detail::RangeStageState<T>>()) {  // NOLINT
   const char* who = "FMCWRangeProcessorOp";
   const std::int64_t max_chirps =
       require_extent(extents.max_chirps, "max_chirps", who);
@@ -227,6 +242,8 @@ void FMCWRangeProcessorOp<T>::setup(OperatorSpec& spec) {
       .max_byte_span = range_bins_byte_span_};
 
   spec.input(adc_cube).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(range_window_in).queue_depth(2U);
+  spec.input(waveform_in).queue_depth(2U);
   spec.output(range_profiles)
       .produces_tensor(kDevice)
       .tensor_allocation(fat_bounds);
@@ -234,7 +251,7 @@ void FMCWRangeProcessorOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(kDevice)
       .tensor_allocation(bins_bounds);
 
-  // [live] Exact override ports for POD scalars.
+  // [live] Exact override ports.
   spec.input(apply_dechirp_in).queue_depth(2U);
   spec.input(fft_norm_in).queue_depth(2U);
   spec.input(nfft_in).queue_depth(2U);
@@ -248,7 +265,11 @@ Contract FMCWRangeProcessorOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{adc_cube});
   maybe_add_live_override_to_contract(
+      result, range_window_in, params().expect_range_window);
+  maybe_add_live_override_to_contract(
       result, apply_dechirp_in, params().expect_apply_dechirp);
+  maybe_add_live_override_to_contract(
+      result, waveform_in, params().expect_waveform);
   maybe_add_live_override_to_contract(
       result, fft_norm_in, params().expect_fft_norm);
   maybe_add_live_override_to_contract(
@@ -278,8 +299,10 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
 
   HOLOSCAN_TRY(auto effective,
                resolve_overrides(
-                   apply_dechirp_in, fft_norm_in, nfft_in, pinned,
-                   sticky_apply_dechirp_, sticky_fft_norm_, sticky_nfft_));
+                   range_window_in, apply_dechirp_in, waveform_in, fft_norm_in,
+                   nfft_in, pinned, sticky_range_window_,
+                   sticky_apply_dechirp_, sticky_waveform_, sticky_fft_norm_,
+                   sticky_nfft_));
 
   HOLOSCAN_TRY(auto validated,
                validate_configuration(effective, complex_input, batched));

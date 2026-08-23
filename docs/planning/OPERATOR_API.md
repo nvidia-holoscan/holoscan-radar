@@ -272,11 +272,18 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 - **Out:** `range_profiles` — complex64 / complex128, `(num_chirps, num_range_bins)`. `num_range_bins = samples_per_chirp` (complex IF) or `samples_per_chirp//2 + 1` (real IF); grows to `nfft` when set. No range-axis `fftshift` (bin 0 = zero range).
 - **Out:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`. Per-bin range (m) relative to zero beat; emitted only when a waveform descriptor is available.
 
+The logical `[live]` types remain `WindowSpec` and
+`FMCWWaveformDescriptor`. Their HSDK 5 physical port payloads are generated
+`holoscan::radar::wire` schema types with metadata plus a descriptor Tensor
+bulk field. The Tensor is always present: rank-1 zero-length means the
+optional array is absent; null is invalid. See
+[`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md).
+
 **Parameters:**
 
-- `range_window` **[live]** — WindowSpec {none, Hann, Hamming, Blackman, Blackman-Harris, Kaiser, Chebyshev, Taylor, flat_top, Tukey, custom}, coherent-gain normalized. Window applied along fast-time before the range FFT. Overriding to an unseen window rebuilds its coefficients and warns once; prior windows are cached. Default: none (rectangular — best resolution, ~−13 dB sidelobes). **[EA HSDK5 ONLY]** Params-only (`WindowSpec` owns vectors — no override port yet).
+- `range_window` **[live]** — WindowSpec {none, Hann, Hamming, Blackman, Blackman-Harris, Kaiser, Chebyshev, Taylor, flat_top, Tukey, custom}, coherent-gain normalized. Window applied along fast-time before the range FFT. Overriding to an unseen window rebuilds its coefficients and warns once; prior windows are cached. Default: none (rectangular — best resolution, ~−13 dB sidelobes). Static: `expect_range_window` (default `false`), `sticky_range_window` (default `true`).
 - `apply_dechirp` **[live]** — bool. Conjugate-multiply the input against the reference chirp along fast-time before windowing/FFT (for data not dechirped in hardware). Requires a `waveform` and complex-IF input when `true` — software dechirp produces complex samples, which is inconsistent with the real-IF `samples_per_chirp//2 + 1` output size, so real-IF input with `apply_dechirp = true` is an error. Default: `false`. Static: `expect_apply_dechirp` (default `false`), `sticky_apply_dechirp` (default `true`).
-- `waveform` **[live]** — FMCWWaveformDescriptor. Shared chirp descriptor; source for the dechirp reference and the `range_bins` axis. Overriding supports a waveform that changes between frames (the fused reference is cached, rebuilt only when the descriptor changes). Default: none (required when `apply_dechirp = true` and/or `range_bins` is used; unused otherwise). **[EA HSDK5 ONLY]** Params-only (descriptor owns vectors / optionals — no override port and no `expect_waveform` until §9 lifts).
+- `waveform` **[live]** — FMCWWaveformDescriptor. Shared chirp descriptor; source for the dechirp reference and the `range_bins` axis. Overriding supports a waveform that changes between frames (the fused reference is cached, rebuilt only when the descriptor changes). Default: none (required when `apply_dechirp = true` and/or `range_bins` is used; unused otherwise). Static: `expect_waveform` (default `false`), `sticky_waveform` (default `true`).
 - `fft_norm` **[live]** — enum {backward, ortho, forward}. FFT normalization; `backward` (unnormalized forward) is the radar-standard, keeping coherent-integration gain visible. Default: backward. Static: `expect_fft_norm` (default `false`), `sticky_fft_norm` (default `true`).
 - `propagation_speed` — float. Wave speed for the beat-frequency → range conversion (`range_bins` only). Default: speed of light ≈ 2.998e8 m/s.
 - `nfft` **[live]** — int, ≥ `samples_per_chirp`. Fast-time FFT length; larger zero-pads for a finer interpolated range grid over the same span (also the fast-length escape hatch for a large-prime `samples_per_chirp`). The output range-bin count follows `nfft` (downstream infers it). Overriding to an unseen length builds a new FFT plan and warns; seen lengths are reused from the MatX plan cache. Default: none (= `samples_per_chirp`, exact N-point). Static: `expect_nfft` (default `false`), `sticky_nfft` (default `true`).
@@ -297,13 +304,20 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 - **Out:** `rd_maps` — complex64 / complex128, `(num_doppler, num_range_bins)`. `num_doppler = num_chirps` (or `nfft`); zero-Doppler centered by default.
 - **Out:** `velocity_bins` (optional) — float32 / float64, `(num_doppler,)`. Per-bin radial velocity; emitted only when a descriptor is available.
 
+The logical `[live]` types remain `WindowSpec` and
+`FMCWWaveformDescriptor`. Their HSDK 5 physical port payloads are generated
+`holoscan::radar::wire` schema types with metadata plus a descriptor Tensor
+bulk field. The Tensor is always present: rank-1 zero-length means the
+optional array is absent; null is invalid. See
+[`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md).
+
 **Parameters:**
 
-- `doppler_window` **[live]** — WindowSpec. Window along the chirp (slow-time) axis; sidelobe control trades against zero-Doppler clutter leaking into moving-target bins. Overriding to an unseen window rebuilds its coefficients and warns once; prior windows cached. Default: none.
-- `center_zero_doppler` **[live]** — bool. `fftshift` the Doppler axis so zero-Doppler is centered (conventional RD layout); else DC at bin 0. Default: `true`.
-- `waveform` **[live]** — FMCWWaveformDescriptor. Source for the `velocity_bins` axis (carrier → λ, chirp repetition interval → PRF). Override for a changing waveform. Default: none (required only when `velocity_bins` is used).
-- `fft_norm` **[live]** — enum {backward, ortho, forward}. Same convention and rationale as FMCWRangeProcessorOp. Default: backward.
-- `nfft` **[live]** — int, ≥ `num_chirps`. Doppler FFT length; larger interpolates the velocity grid over the same span (also the large-prime escape hatch). The output Doppler-bin count follows `nfft` (downstream infers it). Overriding to an unseen length builds a new FFT plan and warns; seen lengths reused from the MatX plan cache. Default: none (= `num_chirps`, exact N-point).
+- `doppler_window` **[live]** — WindowSpec. Window along the chirp (slow-time) axis; sidelobe control trades against zero-Doppler clutter leaking into moving-target bins. Overriding to an unseen window rebuilds its coefficients and warns once; prior windows cached. Default: none. Static: `expect_doppler_window` (default `false`), `sticky_doppler_window` (default `true`).
+- `center_zero_doppler` **[live]** — bool. `fftshift` the Doppler axis so zero-Doppler is centered (conventional RD layout); else DC at bin 0. Default: `true`. Static: `expect_center_zero_doppler` (default `false`), `sticky_center_zero_doppler` (default `true`).
+- `waveform` **[live]** — FMCWWaveformDescriptor. Source for the `velocity_bins` axis (carrier → λ, chirp repetition interval → PRF). Override for a changing waveform. Default: none (required only when `velocity_bins` is used). Static: `expect_waveform` (default `false`), `sticky_waveform` (default `true`).
+- `fft_norm` **[live]** — enum {backward, ortho, forward}. Same convention and rationale as FMCWRangeProcessorOp. Default: backward. Static: `expect_fft_norm` (default `false`), `sticky_fft_norm` (default `true`).
+- `nfft` **[live]** — int, ≥ `num_chirps`. Doppler FFT length; larger interpolates the velocity grid over the same span (also the large-prime escape hatch). The output Doppler-bin count follows `nfft` (downstream infers it). Overriding to an unseen length builds a new FFT plan and warns; seen lengths reused from the MatX plan cache. Default: none (= `num_chirps`, exact N-point). Static: `expect_nfft` (default `false`), `sticky_nfft` (default `true`).
 
 #### FMCWRangeDopplerProcessorOp (fused)
 
@@ -312,17 +326,24 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 - **Out:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`.
 - **Out:** `velocity_bins` (optional) — float32 / float64, `(num_doppler,)`.
 
+The logical `[live]` types remain `WindowSpec` and
+`FMCWWaveformDescriptor`. Their HSDK 5 physical port payloads are generated
+`holoscan::radar::wire` schema types with metadata plus a descriptor Tensor
+bulk field. The Tensor is always present: rank-1 zero-length means the
+optional array is absent; null is invalid. See
+[`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md).
+
 **Parameters:** (fused; union of the split operators, same semantics)
 
-- `range_window` **[live]** — WindowSpec. Window along fast-time (range FFT). Overriding to an unseen window rebuilds its coefficients and warns once; cached. Default: none.
-- `doppler_window` **[live]** — WindowSpec. Window along the chirp axis (Doppler FFT). Overriding to an unseen window rebuilds its coefficients and warns once; cached. Default: none.
-- `apply_dechirp` **[live]** — bool. Software dechirp before the range FFT. Requires a `waveform` and complex-IF input when `true` (same constraint as FMCWRangeProcessorOp). Default: `false`.
-- `clutter_filter` **[live]** — enum {none, mean_subtraction, single_delay, double_delay}. Optional inline clutter stage between the range and Doppler stages (same semantics as ClutterFilterOp `method`); the delay cancellers reduce `num_doppler` (downstream infers it). No setup cost. Default: none.
-- `waveform` **[live]** — FMCWWaveformDescriptor. Dechirp reference and the `range_bins` / `velocity_bins` axes. Override for a changing waveform. Default: none (required for software dechirp and/or those outputs).
-- `fft_norm` **[live]** — enum {backward, ortho, forward}. One normalization convention for both transforms. Default: backward.
-- `center_zero_doppler` **[live]** — bool. Center zero-Doppler on the Doppler axis. Default: `true`.
+- `range_window` **[live]** — WindowSpec. Window along fast-time (range FFT). Overriding to an unseen window rebuilds its coefficients and warns once; cached. Default: none. Static: `expect_range_window` (default `false`), `sticky_range_window` (default `true`).
+- `doppler_window` **[live]** — WindowSpec. Window along the chirp axis (Doppler FFT). Overriding to an unseen window rebuilds its coefficients and warns once; cached. Default: none. Static: `expect_doppler_window` (default `false`), `sticky_doppler_window` (default `true`).
+- `apply_dechirp` **[live]** — bool. Software dechirp before the range FFT. Requires a `waveform` and complex-IF input when `true` (same constraint as FMCWRangeProcessorOp). Default: `false`. Static: `expect_apply_dechirp` (default `false`), `sticky_apply_dechirp` (default `true`).
+- `clutter_filter` **[live]** — enum {none, mean_subtraction, single_delay, double_delay}. Optional inline clutter stage between the range and Doppler stages (same semantics as ClutterFilterOp `method`); the delay cancellers reduce `num_doppler` (downstream infers it). No setup cost. Default: none. Static: `expect_clutter_filter` (default `false`), `sticky_clutter_filter` (default `true`).
+- `waveform` **[live]** — FMCWWaveformDescriptor. Dechirp reference and the `range_bins` / `velocity_bins` axes. Override for a changing waveform. Default: none (required for software dechirp and/or those outputs). Static: `expect_waveform` (default `false`), `sticky_waveform` (default `true`).
+- `fft_norm` **[live]** — enum {backward, ortho, forward}. One normalization convention for both transforms. Default: backward. Static: `expect_fft_norm` (default `false`), `sticky_fft_norm` (default `true`).
+- `center_zero_doppler` **[live]** — bool. Center zero-Doppler on the Doppler axis. Default: `true`. Static: `expect_center_zero_doppler` (default `false`), `sticky_center_zero_doppler` (default `true`).
 - `propagation_speed` — float. For the `range_bins` output. Default: speed of light ≈ 2.998e8 m/s.
-- `nfft_range`, `nfft_doppler` **[live]** — int, each ≥ its natural length. Per-axis FFT lengths (interpolation / large-prime escape hatch); the output bin counts follow them (downstream infers). Overriding to an unseen length builds a new FFT plan and warns; seen lengths reused from the plan cache. Default: none (= exact `samples_per_chirp` / `num_chirps`).
+- `nfft_range`, `nfft_doppler` **[live]** — int, each ≥ its natural length. Per-axis FFT lengths (interpolation / large-prime escape hatch); the output bin counts follow them (downstream infers). Overriding to an unseen length builds a new FFT plan and warns; seen lengths reused from the plan cache. Default: none (= exact `samples_per_chirp` / `num_chirps`). Static, independently per axis: `expect_nfft_range` / `expect_nfft_doppler` (default `false`) and `sticky_nfft_range` / `sticky_nfft_doppler` (default `true`).
 
 ---
 

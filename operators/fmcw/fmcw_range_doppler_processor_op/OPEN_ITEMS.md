@@ -70,3 +70,19 @@ enforced by `tests/cpp/fmcw/test_fmcw_range_doppler_processor.cpp`
 (`UlpParity*`, agreement to a few ULP rather than bit-exact — the
 `mean_subtraction` reduction's summation order is not guaranteed to match
 between the two paths).
+
+## 2. Schema-backed `[live]` payload ratification
+
+**Class:** Needs team look; interim implementation does not block landing.
+
+`range_window`, `doppler_window`, and `waveform` are restored as Exact
+`[live]` Inputs through generated `holoscan::radar::wire` physical payloads
+while the logical Params remain `WindowSpec` and
+`FMCWWaveformDescriptor`. Descriptor bulk arrays use a present rank-1
+zero-length Tensor for absence; null Tensor members are invalid.
+
+The team must ratify, revise, or reject this physical payload shape and its
+schema-evolution obligations. See
+[`SCHEMA_PAYLOADS.md`](../../../docs/planning/SCHEMA_PAYLOADS.md),
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9, and
+[`TEAM_BLOCKED.md`](../../../docs/planning/TEAM_BLOCKED.md).

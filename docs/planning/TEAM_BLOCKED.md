@@ -65,3 +65,20 @@ L16 (Exact join on the data trigger's `capture_time`) and L17 (per-port
 and the Parameter override convention in [`OPERATOR_API.md`](OPERATOR_API.md).
 Who owns the transmit stamp (sequencer vs device report) is still open; the
 consumer contract is the same either way ([`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md)).
+
+### Payload shape and schema adoption
+
+**Needs team look:** Ratify, revise, or reject the interim HSDK 5 physical
+payload for container-owning `[live]` values. The FMCW windows and waveform
+use generated `holoscan::radar::wire` mixed metadata + descriptor-Tensor
+schemas while retaining `WindowSpec` / `FMCWWaveformDescriptor` as the
+logical Params. Optional arrays are present rank-1 zero-length Tensors; null
+Tensor members are invalid.
+
+Ratification includes the committed `.fbs` ownership and evolution policy,
+exact canonical/version/hash identity, explicit append-only field ids,
+`MaxTensorExtents`-derived Tensor bounds, C++ bridge/install/test obligations,
+coordinated producer/consumer deployment, and the current Python Params-only
+limitation. This is an interim implementation, not a settled team decision.
+See [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md) and
+[`HSDK5_PORT.md`](HSDK5_PORT.md) §9.

@@ -54,6 +54,7 @@ radar_add_test(common/test_subarray_selection)
 radar_add_test(common/test_source_count)
 radar_add_test(common/test_angle_convention)
 radar_add_test(common/test_descriptors)
+radar_add_test(common/test_wire_descriptors holoscan::radar_schemas)
 # yaml_converters.hpp / max_tensor_extents_yaml.hpp are header-only; HSDK 5
 # no longer re-exports yaml-cpp.
 find_package(yaml-cpp REQUIRED)

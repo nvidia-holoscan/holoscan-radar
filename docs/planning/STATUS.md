@@ -32,6 +32,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) โ
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
+| Schema-backed container-owning `[live]` overrides (FMCW windows + waveform) | deustice | `deustice/hsdk5-updates` | **landed:** shared mixed metadata + Tensor schemas and range/Doppler/fused ports; optional Tensor behavior measured (null rejected; present rank-1 zero-length means absent); bridge drift guards, Graph tests, lint, and install smoke pass; payload shape remains interim pending team ratification |
 | MaxTensorExtents (HSDK 5 pool sizing + drop opaque leading batch) | dpc | `dpc/hs5.0-fixes` | **C++ wave landed:** type + helpers; all fat ops take extents ctor; Graph units green at `-j4` (high `-j` can OOM GPU pools). Apps/Python still phase 4. Plan: [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md) |
 | HSDK 5 temporal-contract probes (sample time, aligned joins, `[live]` override binding) | deustice | `deustice/hsdk5-updates` | **L16/L17 adopted.** Exact + `expect_*` / `sticky_*` on every POD `[live]` Input. Descriptor/vector lives stay Params-only (ยง9). Remaining: Graph Exact tests beyond range `nfft`; optional `is_valid` wiring |
 

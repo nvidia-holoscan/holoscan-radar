@@ -13,6 +13,8 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -20,12 +22,20 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/compile.hpp>
+#include <holoscan/core/execution_context.hpp>
 #include <holoscan/core/graph.hpp>
+#include <holoscan/core/run.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/time/realtime_clock.hpp>
 
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
@@ -34,6 +44,8 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
+#include "radar_schemas/fmcw_waveform_bridge.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 #include "utils/bin_model.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/sim_reference.hpp"
@@ -731,6 +743,249 @@ TEST(FMCWRangeDopplerProcessorOpTest, NfftDopplerTooSmallErrors) {
   }
 }
 
+struct LiveFusedDescriptorTick {
+  std::shared_ptr<holoscan::Tensor> cube;
+  std::optional<WindowSpec> range_window;
+  std::optional<WindowSpec> doppler_window;
+  std::optional<FMCWWaveformDescriptor> waveform;
+};
+
+struct LiveFusedDescriptorBank {
+  static void reset() {
+    ticks.clear();
+    index = 0;
+  }
+  static inline std::vector<LiveFusedDescriptorTick> ticks;
+  static inline std::size_t index{0};
+};
+
+template <typename Wire, typename Element>
+holoscan::expected<void, holoscan::Error> emit_fused_descriptor_tensor(
+    holoscan::Output<Wire>& output, Wire wire,
+    std::span<const Element> values, holoscan::TimePoint capture_time) {
+  const std::array<int64_t, 1> shape{
+      static_cast<int64_t>(values.size())};
+  constexpr DLDataType dtype{
+      std::is_same_v<Element, double> ? kDLFloat : kDLComplex,
+      static_cast<uint8_t>(sizeof(Element) * 8), 1U};
+  auto loan = output.allocate_tensor(
+      holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
+  if (!loan) {
+    return holoscan::make_unexpected(std::move(loan).error());
+  }
+  auto written = loan->write_host_and_commit(
+      [values](const holoscan::TensorOutputWriteGuard& writer) {
+        std::copy(values.begin(), values.end(),
+                  writer.template data_as<Element>());
+      });
+  if (!written) {
+    return holoscan::make_unexpected(std::move(written).error());
+  }
+  return output.emit_tensor(
+      std::move(*loan), wire,
+      holoscan::EmitOptions{.capture_time = capture_time});
+}
+
+class LiveFusedDescriptorSourceOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorPortLayout kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice};
+    constexpr holoscan::TensorPortLayout kWindow{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = DLDataType{kDLFloat, 64U, 1U},
+        .rank = 1U};
+    constexpr holoscan::TensorPortLayout kWaveform{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = DLDataType{kDLComplex, 128U, 1U},
+        .rank = 1U};
+    spec.output(cube, "cube")
+        .produces_tensor(kDevice)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL});
+    for (auto* output : {&range_window, &doppler_window}) {
+      spec.output(*output)
+          .produces_tensor(kWindow)
+          .tensor_allocation(holoscan::TensorAllocationBounds{
+              .max_rank = 1U, .max_byte_span = 4096U * sizeof(double)});
+    }
+    spec.output(waveform, "waveform")
+        .produces_tensor(kWaveform)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 1U,
+            .max_byte_span =
+                4096U * sizeof(std::complex<double>)});
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{
+        .period = holoscan::radar::testing::detail::kHarnessTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    if (LiveFusedDescriptorBank::index >=
+        LiveFusedDescriptorBank::ticks.size()) {
+      return {};
+    }
+    const auto& tick = LiveFusedDescriptorBank::ticks[
+        LiveFusedDescriptorBank::index++];
+    const holoscan::TimePoint capture_time = context.activation_time();
+    auto publish_window =
+        [&](holoscan::Output<holoscan::radar::wire::WindowSpecT>& output,
+            const std::optional<WindowSpec>& window)
+        -> holoscan::expected<void, holoscan::Error> {
+      if (!window.has_value()) {
+        return {};
+      }
+      return emit_fused_descriptor_tensor(
+          output, holoscan::radar::to_wire(*window),
+          std::span<const double>{window->coefficients}, capture_time);
+    };
+    auto emitted = publish_window(range_window, tick.range_window);
+    if (!emitted) {
+      return emitted;
+    }
+    emitted = publish_window(doppler_window, tick.doppler_window);
+    if (!emitted) {
+      return emitted;
+    }
+    if (tick.waveform.has_value()) {
+      auto waveform_emitted = emit_fused_descriptor_tensor(
+          waveform, holoscan::radar::to_wire(*tick.waveform),
+          std::span<const std::complex<double>>{
+              tick.waveform->reference_samples()},
+          capture_time);
+      if (!waveform_emitted) {
+        return waveform_emitted;
+      }
+    }
+    return holoscan::radar::testing::detail::emit_bank_frame(
+        cube, context, tick.cube, "LiveFusedDescriptorSourceOp");
+  }
+
+  holoscan::Output<holoscan::Tensor> cube{"cube"};
+  holoscan::Output<holoscan::radar::wire::WindowSpecT>
+      range_window{"range_window"};
+  holoscan::Output<holoscan::radar::wire::WindowSpecT>
+      doppler_window{"doppler_window"};
+  holoscan::Output<holoscan::radar::wire::FMCWWaveformT>
+      waveform{"waveform"};
+};
+
+ThreeOutGraphRunResult run_fused_descriptor_override_graph(
+    std::vector<LiveFusedDescriptorTick> ticks,
+    FMCWRangeDopplerProcessorParams params) {
+  ThreeOutGraphRunResult result;
+  holoscan::radar::testing::detail::FrameBank::reset();
+  holoscan::radar::testing::detail::FrameBankB::reset();
+  holoscan::radar::testing::detail::FrameBankC::reset();
+  LiveFusedDescriptorBank::reset();
+  LiveFusedDescriptorBank::ticks = std::move(ticks);
+  const std::size_t expected = LiveFusedDescriptorBank::ticks.size();
+  holoscan::Graph graph{"fused-descriptor-overrides"};
+  const auto source = graph.op<LiveFusedDescriptorSourceOp>("source");
+  auto op = holoscan::radar::testing::emplace_harness_op<
+      FMCWRangeDopplerProcessorOp<float>>(
+      graph, holoscan::radar::testing::default_test_extents());
+  op.set_params(std::move(params));
+  const auto sink0 =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink0");
+  const auto sink1 =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("sink1");
+  const auto sink2 =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureCOp>("sink2");
+  const holoscan::ConnectionOptions q{.queue_depth = 8U};
+  graph.add_flow(source->range_window, op->range_window_in, q);
+  graph.add_flow(source->doppler_window, op->doppler_window_in, q);
+  graph.add_flow(source->waveform, op->waveform_in, q);
+  graph.add_flow(source->cube, op->adc_cube, q);
+  graph.add_flow(op->rd_maps, sink0->in, q);
+  graph.add_flow(op->range_bins, sink1->in, q);
+  graph.add_flow(op->velocity_bins, sink2->in, q);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+  holoscan::CompileOptions options;
+  options.deployment.bind_tensor_output_device(
+      holoscan::TensorOutputDevicePlacement{
+          .operator_path = "source",
+          .output_port = "cube",
+          .device = holoscan::DeviceId{0}});
+  for (const char* port : {"rd_maps", "range_bins", "velocity_bins"}) {
+    holoscan::radar::testing::detail::bind_op_device_output(options, port);
+  }
+  try {
+    const holoscan::ExecutionPlan plan =
+        holoscan::compile(graph, std::move(options));
+    result.plan_ok = plan.ok();
+    result.plan_json = plan.json();
+    if (!plan.ok()) {
+      return result;
+    }
+    holoscan::RunSession session = holoscan::run_async(plan);
+    const auto deadline = std::chrono::steady_clock::now() +
+        holoscan::radar::testing::detail::kHarnessDeadline;
+    while (session.diagnostics().empty() &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::size_t count0 = 0;
+      std::size_t count1 = 0;
+      std::size_t count2 = 0;
+      {
+        const std::lock_guard lock(
+            holoscan::radar::testing::detail::FrameBank::mutex);
+        count0 =
+            holoscan::radar::testing::detail::FrameBank::captured.size();
+      }
+      {
+        const std::lock_guard lock(
+            holoscan::radar::testing::detail::FrameBankB::mutex);
+        count1 =
+            holoscan::radar::testing::detail::FrameBankB::captured.size();
+      }
+      {
+        const std::lock_guard lock(
+            holoscan::radar::testing::detail::FrameBankC::mutex);
+        count2 =
+            holoscan::radar::testing::detail::FrameBankC::captured.size();
+      }
+      if (count0 >= expected && count1 >= expected && count2 >= expected) {
+        break;
+      }
+      std::this_thread::sleep_for(
+          holoscan::radar::testing::detail::kHarnessPoll);
+    }
+    session.request_stop();
+    session.wait();
+    result.termination = session.termination();
+    for (const auto& diagnostic : session.diagnostics()) {
+      result.diagnostics.emplace_back(diagnostic.token);
+    }
+  } catch (const holoscan::RuntimeError& error) {
+    result.plan_ok = false;
+    result.plan_json = std::string("RuntimeError: ") + error.what();
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBank::mutex);
+    result.frames0 = std::move(
+        holoscan::radar::testing::detail::FrameBank::captured);
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBankB::mutex);
+    result.frames1 = std::move(
+        holoscan::radar::testing::detail::FrameBankB::captured);
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBankC::mutex);
+    result.frames2 = std::move(
+        holoscan::radar::testing::detail::FrameBankC::captured);
+  }
+  return result;
+}
+
 TEST(FMCWRangeDopplerProcessorOpTest,
      LiveClutterOverrideChangesShape) {
   // [EA HSDK5 ONLY] Graph mid-stream sticky override harness deferred —
@@ -740,18 +995,55 @@ TEST(FMCWRangeDopplerProcessorOpTest,
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest,
-     LiveWindowOverride) {
-  // [EA HSDK5 ONLY] range_window / doppler_window are Params-only
-  // (HSDK5_PORT §9).
-  GTEST_SKIP() << "HSDK 5 EA: window overrides are Params-only "
-                  "(HSDK5_PORT.md §9)";
-}
+     LiveWindowAndWaveformOverride) {
+  const auto base_waveform = to_descriptor(sim::SimWaveform{});
+  sim::SimWaveform changed_sim_waveform{};
+  changed_sim_waveform.bandwidth *= 0.5;
+  const auto changed_waveform = to_descriptor(changed_sim_waveform);
+  WindowSpec range_window;
+  range_window.type = WindowType::kHann;
+  WindowSpec doppler_window;
+  doppler_window.type = WindowType::kHamming;
+  auto cube = complex_cube_to_device<float>(
+      parity_sim().cube, parity_sim().shape);
+  LiveFusedDescriptorTick base{
+      cube, std::nullopt, std::nullopt, std::nullopt};
+  LiveFusedDescriptorTick changed{
+      cube, range_window, doppler_window, changed_waveform};
+  FMCWRangeDopplerProcessorParams params;
+  params.waveform = base_waveform;
+  params.expect_range_window = true;
+  params.expect_doppler_window = true;
+  params.expect_waveform = true;
+  const ThreeOutGraphRunResult out =
+      run_fused_descriptor_override_graph(
+          {base, changed, base}, std::move(params));
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames0.size(), 3u);
+  ASSERT_EQ(out.frames1.size(), 3u);
+  ASSERT_EQ(out.frames2.size(), 3u);
 
-TEST(FMCWRangeDopplerProcessorOpTest,
-     LiveWaveformOverride) {
-  // [EA HSDK5 ONLY] waveform is Params-only (HSDK5_PORT §9).
-  GTEST_SKIP() << "HSDK 5 EA: waveform override is Params-only "
-                  "(HSDK5_PORT.md §9)";
+  ParityConfig expected_cfg;
+  expected_cfg.range_window = range_window;
+  expected_cfg.doppler_window = doppler_window;
+  const ChainOutputs expected = run_fused<float>(
+      complex_cube_to_device<float>(parity_sim().cube, parity_sim().shape),
+      expected_cfg, changed_waveform);
+  const double reference = max_abs<float>(expected.rd);
+  EXPECT_LT(max_abs_diff<float>(out.frames0[1], expected.rd),
+            1e-5 * reference);
+  EXPECT_GT(max_abs_diff<float>(out.frames0[0], out.frames0[1]),
+            1e-2 * reference);
+  EXPECT_LT(max_abs_diff<float>(out.frames0[1], out.frames0[2]),
+            1e-6 * reference);
+  EXPECT_NEAR(out.frames1[1].as<float>()[1],
+              2.0F * out.frames1[0].as<float>()[1],
+              1e-4F * out.frames1[1].as<float>()[1]);
+  EXPECT_EQ(out.frames1[1].as<float>()[1],
+            out.frames1[2].as<float>()[1]);
+  EXPECT_EQ(out.frames2[1].as<float>()[1],
+            out.frames2[2].as<float>()[1]);
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, FloatAndDoubleAgree) {

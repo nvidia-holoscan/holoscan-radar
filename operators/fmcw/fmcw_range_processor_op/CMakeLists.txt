@@ -12,6 +12,7 @@ target_link_libraries(fmcw_range_processor_op
     PUBLIC
         holoscan::core
         holoscan::radar_common
+        holoscan::radar_schemas
     PRIVATE
         matx::matx)
 

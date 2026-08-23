@@ -93,6 +93,10 @@ throws / sits in `OPEN_ITEMS.md`.
 - [ ] **Precision:** `template <typename T>` with `T ∈ {float, double}` only;
       `static_assert` in the header.
 - [ ] **Parameters** match `OPERATOR_API.md` names, types, and defaults.
+- [ ] **Schema payloads:** any `[live]` value that owns a container follows
+      [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md) — one committed canonical
+      `.fbs`, generated outputs untracked, bounded Tensor fields, validated
+      bridges, evolution discipline, install surface, and drift/Graph tests.
 - [ ] **`[live]` parameters:** declare with `spec.param(...)`, then
       register the `Input<>` in `setup()` and gate `contract()` with
       `expect_*` via `maybe_add_live_override_to_contract`.

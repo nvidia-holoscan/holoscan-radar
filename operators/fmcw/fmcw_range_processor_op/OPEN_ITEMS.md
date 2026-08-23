@@ -29,9 +29,15 @@ ordering, and numerical parity with `radar_common/sim/`.
 `on_missing SafeDefault{}`. The application stamps the frame's transmit time
 on both the override and the cube. `sticky_*` (default true) latches the
 last Exact match; false reverts to Params on a miss. No epoch field in the
-descriptor. `waveform` itself is still
-Params-only on EA (§9), so `expect_waveform` is not declared until a port
-exists.
+descriptor. `waveform` is restored through a generated
+`holoscan::radar::wire` schema payload with `expect_waveform` /
+`sticky_waveform`; the logical parameter remains
+`FMCWWaveformDescriptor`. This physical encoding is interim pending team
+ratification. See
+[`SCHEMA_PAYLOADS.md`](../../../docs/planning/SCHEMA_PAYLOADS.md),
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9, and the
+payload-shape/schema item in
+[`TEAM_BLOCKED.md`](../../../docs/planning/TEAM_BLOCKED.md).
 
 **Still open:** who owns the transmit stamp (host sequencer vs device
 report). The consumer contract is the same either way — see

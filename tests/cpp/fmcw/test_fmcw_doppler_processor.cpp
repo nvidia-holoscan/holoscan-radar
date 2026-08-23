@@ -10,17 +10,28 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/compile.hpp>
+#include <holoscan/core/execution_context.hpp>
 #include <holoscan/core/graph.hpp>
+#include <holoscan/core/run.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/time/realtime_clock.hpp>
 
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
@@ -28,6 +39,8 @@
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/math/constants.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "radar_schemas/fmcw_waveform_bridge.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 #include "utils/bin_model.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/sim_reference.hpp"
@@ -512,6 +525,218 @@ TEST(FMCWDopplerProcessorOpTest, NamedRxAxisProcessedIndependently) {
   EXPECT_LT(cell_mag<float>(rd_map, 1, num_chirps, num_bins, 3, 2), 1e-3);
 }
 
+struct LiveDopplerDescriptorTick {
+  std::shared_ptr<holoscan::Tensor> profiles;
+  std::optional<WindowSpec> doppler_window;
+  std::optional<FMCWWaveformDescriptor> waveform;
+};
+
+struct LiveDopplerDescriptorBank {
+  static void reset() {
+    ticks.clear();
+    index = 0;
+  }
+  static inline std::vector<LiveDopplerDescriptorTick> ticks;
+  static inline std::size_t index{0};
+};
+
+template <typename Wire, typename Element>
+holoscan::expected<void, holoscan::Error> emit_doppler_descriptor_tensor(
+    holoscan::Output<Wire>& output, Wire wire,
+    std::span<const Element> values, holoscan::TimePoint capture_time) {
+  const std::array<int64_t, 1> shape{
+      static_cast<int64_t>(values.size())};
+  constexpr DLDataType dtype{
+      std::is_same_v<Element, double> ? kDLFloat : kDLComplex,
+      static_cast<uint8_t>(sizeof(Element) * 8), 1U};
+  auto loan = output.allocate_tensor(
+      holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
+  if (!loan) {
+    return holoscan::make_unexpected(std::move(loan).error());
+  }
+  auto written = loan->write_host_and_commit(
+      [values](const holoscan::TensorOutputWriteGuard& writer) {
+        std::copy(values.begin(), values.end(),
+                  writer.template data_as<Element>());
+      });
+  if (!written) {
+    return holoscan::make_unexpected(std::move(written).error());
+  }
+  return output.emit_tensor(
+      std::move(*loan), wire,
+      holoscan::EmitOptions{.capture_time = capture_time});
+}
+
+class LiveDopplerDescriptorSourceOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorPortLayout kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice};
+    constexpr holoscan::TensorPortLayout kWindow{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = DLDataType{kDLFloat, 64U, 1U},
+        .rank = 1U};
+    constexpr holoscan::TensorPortLayout kWaveform{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = DLDataType{kDLComplex, 128U, 1U},
+        .rank = 1U};
+    spec.output(profiles, "profiles")
+        .produces_tensor(kDevice)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL});
+    spec.output(doppler_window, "doppler_window")
+        .produces_tensor(kWindow)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 1U, .max_byte_span = 4096U * sizeof(double)});
+    spec.output(waveform, "waveform")
+        .produces_tensor(kWaveform)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 1U,
+            .max_byte_span =
+                4096U * sizeof(std::complex<double>)});
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{
+        .period = holoscan::radar::testing::detail::kHarnessTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    if (LiveDopplerDescriptorBank::index >=
+        LiveDopplerDescriptorBank::ticks.size()) {
+      return {};
+    }
+    const auto& tick = LiveDopplerDescriptorBank::ticks[
+        LiveDopplerDescriptorBank::index++];
+    const holoscan::TimePoint capture_time = context.activation_time();
+    if (tick.doppler_window.has_value()) {
+      auto emitted = emit_doppler_descriptor_tensor(
+          doppler_window, holoscan::radar::to_wire(*tick.doppler_window),
+          std::span<const double>{tick.doppler_window->coefficients},
+          capture_time);
+      if (!emitted) {
+        return emitted;
+      }
+    }
+    if (tick.waveform.has_value()) {
+      auto emitted = emit_doppler_descriptor_tensor(
+          waveform, holoscan::radar::to_wire(*tick.waveform),
+          std::span<const std::complex<double>>{
+              tick.waveform->reference_samples()},
+          capture_time);
+      if (!emitted) {
+        return emitted;
+      }
+    }
+    return holoscan::radar::testing::detail::emit_bank_frame(
+        profiles, context, tick.profiles,
+        "LiveDopplerDescriptorSourceOp");
+  }
+
+  holoscan::Output<holoscan::Tensor> profiles{"profiles"};
+  holoscan::Output<holoscan::radar::wire::WindowSpecT>
+      doppler_window{"doppler_window"};
+  holoscan::Output<holoscan::radar::wire::FMCWWaveformT>
+      waveform{"waveform"};
+};
+
+DualIOGraphRunResult run_doppler_descriptor_override_graph(
+    std::vector<LiveDopplerDescriptorTick> ticks,
+    FMCWDopplerProcessorParams params) {
+  DualIOGraphRunResult result;
+  holoscan::radar::testing::detail::FrameBank::reset();
+  holoscan::radar::testing::detail::FrameBankB::reset();
+  LiveDopplerDescriptorBank::reset();
+  LiveDopplerDescriptorBank::ticks = std::move(ticks);
+  const std::size_t expected = LiveDopplerDescriptorBank::ticks.size();
+  holoscan::Graph graph{"doppler-descriptor-overrides"};
+  const auto source = graph.op<LiveDopplerDescriptorSourceOp>("source");
+  auto op = holoscan::radar::testing::emplace_harness_op<
+      FMCWDopplerProcessorOp<float>>(
+      graph, holoscan::radar::testing::default_test_extents());
+  op.set_params(std::move(params));
+  const auto sink0 =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink0");
+  const auto sink1 =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("sink1");
+  const holoscan::ConnectionOptions q{.queue_depth = 8U};
+  graph.add_flow(source->doppler_window, op->doppler_window_in, q);
+  graph.add_flow(source->waveform, op->waveform_in, q);
+  graph.add_flow(source->profiles, op->range_profiles, q);
+  graph.add_flow(op->rd_maps, sink0->in, q);
+  graph.add_flow(op->velocity_bins, sink1->in, q);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+  holoscan::CompileOptions options;
+  options.deployment.bind_tensor_output_device(
+      holoscan::TensorOutputDevicePlacement{
+          .operator_path = "source",
+          .output_port = "profiles",
+          .device = holoscan::DeviceId{0}});
+  holoscan::radar::testing::detail::bind_op_device_output(
+      options, "rd_maps");
+  holoscan::radar::testing::detail::bind_op_device_output(
+      options, "velocity_bins");
+  try {
+    const holoscan::ExecutionPlan plan =
+        holoscan::compile(graph, std::move(options));
+    result.plan_ok = plan.ok();
+    result.plan_json = plan.json();
+    if (!plan.ok()) {
+      return result;
+    }
+    holoscan::RunSession session = holoscan::run_async(plan);
+    const auto deadline = std::chrono::steady_clock::now() +
+        holoscan::radar::testing::detail::kHarnessDeadline;
+    while (session.diagnostics().empty() &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::size_t count0 = 0;
+      std::size_t count1 = 0;
+      {
+        const std::lock_guard lock(
+            holoscan::radar::testing::detail::FrameBank::mutex);
+        count0 =
+            holoscan::radar::testing::detail::FrameBank::captured.size();
+      }
+      {
+        const std::lock_guard lock(
+            holoscan::radar::testing::detail::FrameBankB::mutex);
+        count1 =
+            holoscan::radar::testing::detail::FrameBankB::captured.size();
+      }
+      if (count0 >= expected && count1 >= expected) {
+        break;
+      }
+      std::this_thread::sleep_for(
+          holoscan::radar::testing::detail::kHarnessPoll);
+    }
+    session.request_stop();
+    session.wait();
+    result.termination = session.termination();
+    for (const auto& diagnostic : session.diagnostics()) {
+      result.diagnostics.emplace_back(diagnostic.token);
+    }
+  } catch (const holoscan::RuntimeError& error) {
+    result.plan_ok = false;
+    result.plan_json = std::string("RuntimeError: ") + error.what();
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBank::mutex);
+    result.frames0 = std::move(
+        holoscan::radar::testing::detail::FrameBank::captured);
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBankB::mutex);
+    result.frames1 = std::move(
+        holoscan::radar::testing::detail::FrameBankB::captured);
+  }
+  return result;
+}
+
 TEST(FMCWDopplerProcessorOpTest,
      LiveOverrideCenterZeroDopplerMidStream) {
   // [EA HSDK5 ONLY] Graph mid-stream sticky override harness deferred —
@@ -521,10 +746,55 @@ TEST(FMCWDopplerProcessorOpTest,
 }
 
 TEST(FMCWDopplerProcessorOpTest, LiveOverrideDopplerWindow) {
-  // [EA HSDK5 ONLY] doppler_window is Params-only (HSDK5_PORT §9);
-  // Graph override deferred until §9 is closed.
-  GTEST_SKIP() << "HSDK 5 EA: doppler_window is Params-only "
-                  "(HSDK5_PORT.md §9)";
+  constexpr int64_t num_chirps = 32;
+  constexpr int64_t num_bins = 4;
+  constexpr int64_t range_bin = 2;
+  const auto base_waveform = test_waveform();
+  FMCWWaveformSpec changed_spec;
+  changed_spec.carrier_frequency =
+      0.5 * base_waveform.carrier_frequency();
+  changed_spec.bandwidth = base_waveform.bandwidth();
+  changed_spec.chirp_duration = base_waveform.chirp_duration();
+  changed_spec.sample_rate = base_waveform.sample_rate();
+  changed_spec.chirp_repetition_interval =
+      base_waveform.chirp_repetition_interval();
+  const FMCWWaveformDescriptor changed_waveform(changed_spec);
+  const double pri = base_waveform.chirp_repetition_interval();
+  const double doppler_hz =
+      4.5 / (pri * static_cast<double>(num_chirps));
+  auto profiles = make_input<float>(
+      tone_profiles(num_chirps, num_bins, range_bin, doppler_hz, pri),
+      {num_chirps, num_bins});
+  WindowSpec hann;
+  hann.type = WindowType::kHann;
+  LiveDopplerDescriptorTick base{profiles, std::nullopt, std::nullopt};
+  LiveDopplerDescriptorTick changed{profiles, hann, changed_waveform};
+  FMCWDopplerProcessorParams params;
+  params.waveform = base_waveform;
+  params.center_zero_doppler = false;
+  params.expect_doppler_window = true;
+  params.expect_waveform = true;
+  const DualIOGraphRunResult out =
+      run_doppler_descriptor_override_graph(
+          {base, changed, base}, std::move(params));
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames0.size(), 3u);
+  ASSERT_EQ(out.frames1.size(), 3u);
+  const double base_sidelobe = max_doppler_sidelobe(
+      out.frames0[0], num_chirps, num_bins, range_bin);
+  const double changed_sidelobe = max_doppler_sidelobe(
+      out.frames0[1], num_chirps, num_bins, range_bin);
+  EXPECT_LT(changed_sidelobe, 0.4 * base_sidelobe);
+  EXPECT_EQ(max_doppler_sidelobe(
+                out.frames0[2], num_chirps, num_bins, range_bin),
+            changed_sidelobe);
+  const auto base_axis = velocity_axis_of<float>(out.frames1[0]);
+  const auto changed_axis = velocity_axis_of<float>(out.frames1[1]);
+  const auto sticky_axis = velocity_axis_of<float>(out.frames1[2]);
+  EXPECT_NEAR(changed_axis[1] - changed_axis[0],
+              2.0 * (base_axis[1] - base_axis[0]), 1e-5);
+  EXPECT_EQ(changed_axis, sticky_axis);
 }
 
 TEST(FMCWDopplerProcessorOpTest, VelocityBinsOnlyEmittedWithWaveform) {

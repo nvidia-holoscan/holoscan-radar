@@ -26,6 +26,8 @@
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/math/constants.hpp"
+#include "radar_schemas/fmcw_waveform_bridge.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 
 namespace holoscan::radar {
 
@@ -52,13 +54,6 @@ struct DopplerStageState;  // defined in doppler_stage.hpp
 //
 // Precision is fixed at compile time by the template instantiation.
 //
-// [EA HSDK5 ONLY] range_window, doppler_window, and waveform are [live] in
-// OPERATOR_API.md but stay Params-only here: WindowSpec and
-// FMCWWaveformDescriptor own vectors / optionals (HSDK5_PORT.md §9). POD
-// scalars (apply_dechirp, clutter_filter, fft_norm, center_zero_doppler,
-// nfft_range, nfft_doppler) have Exact Input overrides, each gated by its
-// expect_* param.
-
 struct FMCWRangeDopplerProcessorParams {
   WindowSpec range_window{};
   WindowSpec doppler_window{};
@@ -73,14 +68,20 @@ struct FMCWRangeDopplerProcessorParams {
   int64_t nfft_range{0};
   // 0 = exact (no zero-padding); >= post-clutter chirp count when non-zero.
   int64_t nfft_doppler{0};
+  bool expect_range_window{false};
+  bool expect_doppler_window{false};
   bool expect_apply_dechirp{false};
   bool expect_clutter_filter{false};
+  bool expect_waveform{false};
   bool expect_fft_norm{false};
   bool expect_center_zero_doppler{false};
   bool expect_nfft_range{false};
   bool expect_nfft_doppler{false};
+  bool sticky_range_window{true};
+  bool sticky_doppler_window{true};
   bool sticky_apply_dechirp{true};
   bool sticky_clutter_filter{true};
+  bool sticky_waveform{true};
   bool sticky_fft_norm{true};
   bool sticky_center_zero_doppler{true};
   bool sticky_nfft_range{true};
@@ -116,8 +117,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&FMCWRangeDopplerProcessorParams::waveform>("waveform")
         .description(
             "Dechirp reference and the range_bins / velocity_bins axes. "
-            "Required for software dechirp and/or those outputs. "
-            "[live] in API but Params-only on EA (HSDK5_PORT §9)."),
+            "Required for software dechirp and/or those outputs."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::fft_norm>("fft_norm")
         .description(
             "One normalization convention {backward, ortho, forward} for "
@@ -140,6 +140,14 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Slow-time FFT length >= the post-clutter chirp count for the "
             "Doppler stage. 0 = the post-clutter chirp count."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_range_window>(
+        "expect_range_window")
+        .description(
+            "Set when the application wires the range_window override."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_doppler_window>(
+        "expect_doppler_window")
+        .description(
+            "Set when the application wires the doppler_window override."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::expect_apply_dechirp>(
         "expect_apply_dechirp")
         .description(
@@ -148,6 +156,9 @@ HOLOSCAN_PARAM_SCHEMA(
         "expect_clutter_filter")
         .description(
             "Set when the application wires the clutter_filter override."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_waveform>(
+        "expect_waveform")
+        .description("Set when the application wires the waveform override."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::expect_fft_norm>(
         "expect_fft_norm")
         .description(
@@ -166,6 +177,16 @@ HOLOSCAN_PARAM_SCHEMA(
         "expect_nfft_doppler")
         .description(
             "Set when the application wires the nfft_doppler override."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_range_window>(
+        "sticky_range_window")
+        .description(
+            "Keep the last Exact range_window match on a miss. False "
+            "reverts to Params. Ignored unless expect_range_window."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_doppler_window>(
+        "sticky_doppler_window")
+        .description(
+            "Keep the last Exact doppler_window match on a miss. False "
+            "reverts to Params. Ignored unless expect_doppler_window."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_apply_dechirp>(
         "sticky_apply_dechirp")
         .description(
@@ -176,6 +197,11 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Keep the last Exact clutter_filter match on a miss. Ignored "
             "unless expect_clutter_filter."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_waveform>(
+        "sticky_waveform")
+        .description(
+            "Keep the last Exact waveform match on a miss. False reverts "
+            "to Params. Ignored unless expect_waveform."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_fft_norm>(
         "sticky_fft_norm")
         .description(
@@ -226,11 +252,12 @@ class FMCWRangeDopplerProcessorOp
   Output<Tensor> range_bins{"range_bins"};
   Output<Tensor> velocity_bins{"velocity_bins"};
 
-  // [live] Exact override ports for POD scalars, gated by expect_*.
-  // [EA HSDK5 ONLY] range_window, doppler_window, waveform are
-  // Params-only (§9).
+  // [live] Exact override ports gated by expect_*.
+  Input<wire::WindowSpecT> range_window_in{"range_window"};
+  Input<wire::WindowSpecT> doppler_window_in{"doppler_window"};
   Input<bool> apply_dechirp_in{"apply_dechirp"};
   Input<ClutterFilterMethod> clutter_filter_in{"clutter_filter"};
+  Input<wire::FMCWWaveformT> waveform_in{"waveform"};
   Input<FftNorm> fft_norm_in{"fft_norm"};
   Input<bool> center_zero_doppler_in{"center_zero_doppler"};
   Input<int64_t> nfft_range_in{"nfft_range"};
@@ -239,9 +266,12 @@ class FMCWRangeDopplerProcessorOp
  private:
   Tensor retained_input_;
 
-  // Sticky [live] state for POD scalars.
+  // Sticky [live] state.
+  std::optional<WindowSpec> sticky_range_window_;
+  std::optional<WindowSpec> sticky_doppler_window_;
   std::optional<bool> sticky_apply_dechirp_;
   std::optional<ClutterFilterMethod> sticky_clutter_filter_;
+  std::optional<FMCWWaveformDescriptor> sticky_waveform_;
   std::optional<FftNorm> sticky_fft_norm_;
   std::optional<bool> sticky_center_zero_doppler_;
   std::optional<int64_t> sticky_nfft_range_;

@@ -1,0 +1,139 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <span>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+#include <holoscan/core/domain/dlpack.hpp>
+#include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/expected.hpp>
+
+#include "tensor_generated.h"  // NOLINT(build/include_subdir)
+
+// FlatBuffers 25.12 emits an unqualified cross-namespace Tensor pack call.
+// Define the SDK generator's forwarding overload once for both radar schemas.
+namespace holoscan::radar::wire {
+
+inline flatbuffers::Offset<holoscan::schema::Tensor> CreateTensor(
+    flatbuffers::FlatBufferBuilder& builder, const holoscan::Tensor* tensor,
+    const flatbuffers::rehasher_function_t* rehasher = nullptr) {
+  return holoscan::schema::CreateTensor(builder, tensor, rehasher);
+}
+
+}  // namespace holoscan::radar::wire
+
+namespace holoscan::radar::wire_bridge_detail {
+
+struct AggregateInitializer {
+  template <typename T>
+  constexpr operator T() const noexcept;  // NOLINT(runtime/explicit)
+};
+
+template <typename T, std::size_t... Indices>
+consteval bool aggregate_initializable(std::index_sequence<Indices...>) {
+  return requires {
+    T{(static_cast<void>(Indices), AggregateInitializer{})...};
+  };
+}
+
+template <typename T, std::size_t Count = 0>
+consteval std::size_t aggregate_field_count() {
+  static_assert(std::is_aggregate_v<T>);
+  static_assert(Count < 32, "aggregate field-count tripwire limit exceeded");
+  if constexpr (aggregate_initializable<T>(
+                    std::make_index_sequence<Count + 1>{})) {
+    return aggregate_field_count<T, Count + 1>();
+  } else {
+    return Count;
+  }
+}
+
+template <typename T>
+struct HostTensorMemory final : TensorMemoryReference {
+  explicit HostTensorMemory(std::span<const T> source)
+      : values(source.begin(), source.end()) {}
+
+  std::vector<T> values;
+};
+
+template <typename T>
+std::shared_ptr<Tensor> make_host_tensor(std::span<const T> source,
+                                         DLDataType dtype) {
+  static_assert(std::is_trivially_copyable_v<T>);
+  auto memory = std::make_shared<HostTensorMemory<T>>(source);
+  auto context = std::make_shared<DLManagedTensorContext>();
+  context->memory_reference = memory;
+  context->dl_shape = {static_cast<std::int64_t>(source.size())};
+  context->tensor.dl_tensor.data =
+      memory->values.empty() ? nullptr : memory->values.data();
+  context->tensor.dl_tensor.device = DLDevice{kDLCPU, 0};
+  context->tensor.dl_tensor.ndim = 1;
+  context->tensor.dl_tensor.dtype = dtype;
+  context->tensor.dl_tensor.shape = context->dl_shape.data();
+  context->tensor.dl_tensor.strides = nullptr;
+  context->tensor.dl_tensor.byte_offset = 0;
+  return std::make_shared<Tensor>(std::move(context));
+}
+
+inline bool dtype_equals(DLDataType lhs, DLDataType rhs) {
+  return lhs.code == rhs.code && lhs.bits == rhs.bits &&
+         lhs.lanes == rhs.lanes;
+}
+
+inline unexpected<Error> invalid_wire_tensor(const char* field,
+                                             const std::string& reason) {
+  return make_unexpected(
+      Error{ErrorCode::kInvalidArgument,
+            std::string("wire field '") + field + "': " + reason});
+}
+
+template <typename T>
+expected<std::vector<T>, Error> read_host_vector(
+    const std::shared_ptr<Tensor>& tensor, DLDataType expected_dtype,
+    const char* field) {
+  if (tensor == nullptr) {
+    return invalid_wire_tensor(field, "Tensor pointer must not be null");
+  }
+  if (tensor->shape().size() != 1U) {
+    return invalid_wire_tensor(field, "expected rank 1");
+  }
+  if (tensor->device().device_type != kDLCPU) {
+    return invalid_wire_tensor(field, "expected pageable host memory");
+  }
+  if (!tensor->is_contiguous()) {
+    return invalid_wire_tensor(field, "expected contiguous storage");
+  }
+  if (!dtype_equals(tensor->dtype(), expected_dtype)) {
+    return invalid_wire_tensor(field, "unexpected dtype");
+  }
+  if (tensor->nbytes() == 0) {
+    return std::vector<T>{};
+  }
+  const auto extent = tensor->shape()[0];
+  if (extent < 0 ||
+      static_cast<std::uint64_t>(extent) >
+          static_cast<std::uint64_t>(SIZE_MAX / sizeof(T))) {
+    return invalid_wire_tensor(field, "invalid extent");
+  }
+  const std::size_t expected_bytes =
+      static_cast<std::size_t>(extent) * sizeof(T);
+  if (static_cast<std::size_t>(tensor->nbytes()) != expected_bytes ||
+      tensor->data() == nullptr) {
+    return invalid_wire_tensor(field, "byte size is inconsistent with shape");
+  }
+  std::vector<T> result(static_cast<std::size_t>(extent));
+  std::memcpy(result.data(), tensor->data(), expected_bytes);
+  return result;
+}
+
+}  // namespace holoscan::radar::wire_bridge_detail
