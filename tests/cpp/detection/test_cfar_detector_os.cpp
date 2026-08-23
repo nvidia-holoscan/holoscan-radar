@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Tests for CFARDetectorOp (OS variant) on the HSDK 5 Graph harness.
-// Live mid-stream sticky Graph coverage deferred (HSDK5_PORT.md §1 / §9).
+// Scalar live mid-stream Graph coverage remains deferred (HSDK5_PORT.md §1).
 
 #include <gtest/gtest.h>
 
@@ -587,24 +587,6 @@ TEST(CFARDetectorOpOsTest, TrainingCellsConfigurableFromParams) {
   // OS: more training cells → higher α / noise → lower CUT score.
   EXPECT_LT(score_at(w.score, dt, rt),
             score_at(n.score, dt, rt));
-}
-
-TEST(CFARDetectorOpOsTest,
-     LiveGuardCellsOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] vector live Params-only "
-                  "(HSDK5_PORT.md §9)";
-}
-
-TEST(CFARDetectorOpOsTest,
-     LiveTrainingCellsOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] vector live Params-only "
-                  "(HSDK5_PORT.md §9)";
-}
-
-TEST(CFARDetectorOpOsTest,
-     LiveNciAxesOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] vector live Params-only "
-                  "(HSDK5_PORT.md §9)";
 }
 
 TEST(CFARDetectorOpOsTest, NciIntegratesChannelsForDetection) {

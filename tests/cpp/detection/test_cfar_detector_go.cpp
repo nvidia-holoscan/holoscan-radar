@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // GO-CFAR contract tests for CFARDetectorOp on the HSDK 5 Graph harness.
-// Live mid-stream sticky Graph coverage deferred (HSDK5_PORT.md §1 / §9).
+// Scalar live mid-stream Graph coverage remains deferred (HSDK5_PORT.md §1).
 
 #include <gtest/gtest.h>
 
@@ -527,18 +527,6 @@ TEST(CFARDetectorOpGoTest, TrainingCellsConfigurableFromParams) {
   const auto w = run_cfar<double>(input, wide);
   const auto n = run_cfar<double>(input, narrow);
   EXPECT_GT(score_at(w.score, dt, rt), score_at(n.score, dt, rt));
-}
-
-TEST(CFARDetectorOpGoTest, LiveGuardCellsOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] vector live Params-only (HSDK5_PORT.md §9)";
-}
-
-TEST(CFARDetectorOpGoTest, LiveTrainingCellsOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] vector live Params-only (HSDK5_PORT.md §9)";
-}
-
-TEST(CFARDetectorOpGoTest, LiveNciAxesOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] vector live Params-only (HSDK5_PORT.md §9)";
 }
 
 TEST(CFARDetectorOpGoTest, PeakOnlyOffMatchesRawMask) {

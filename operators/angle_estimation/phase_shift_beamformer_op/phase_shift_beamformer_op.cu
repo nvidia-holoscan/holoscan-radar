@@ -19,6 +19,9 @@
 #include "angle_estimation/phase_shift_beamformer_op/phase_shift_beamformer_stage.hpp"
 #include "radar_common/dsp/steering_weights.hpp"
 #include "radar_common/dsp/steering_weights_device.hpp"
+#include "radar_common/dsp/window.hpp"
+#include "radar_common/sdk/config_tensor.hpp"
+#include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
 #include "radar_common/tensor/extents_layout.hpp"
@@ -53,6 +56,8 @@ PhaseShiftBeamformerOp<T>::PhaseShiftBeamformerOp(
   const std::int64_t max_range = require_extent(
       extents.max_range_bins, "max_range_bins", kOpName);
   extents_ = extents;
+  max_az_ = max_az;
+  max_el_ = max_el;
   // rda_cube is (num_az, num_el, D, R) — beamforming collapses channels.
   max_rank_ = 4U;
   max_byte_span_ = byte_span_complex_cube<T>(
@@ -68,21 +73,35 @@ void PhaseShiftBeamformerOp<T>::setup(OperatorSpec& spec) {
       .dtype = std::nullopt,
       .rank = std::nullopt,  // rank-agnostic batching
   };
+  constexpr TensorPortLayout kHostF64{
+      .memory_kind = MemoryKind::kHost,
+      .dtype = DLDataType{kDLFloat, 64U, 1U},
+      .rank = 1U,
+  };
   spec.input(rd_maps).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(array_geometry).queue_depth(2U);
+  spec.input(az_angles).queue_depth(2U).expects_tensor(kHostF64);
+  spec.input(el_angles).queue_depth(2U).expects_tensor(kHostF64);
+  spec.input(array_taper).queue_depth(2U);
   spec.output(rda_cube)
       .produces_tensor(kDevice)
       .tensor_allocation(TensorAllocationBounds{
           .max_rank = max_rank_,
           .max_byte_span = max_byte_span_});
-  // [EA HSDK5 ONLY] No [live] Input ports — ArrayGeometry / WindowSpec /
-  // unbounded az/el vectors are not PublishedPayload (HSDK5_PORT.md §9).
-  // Selection is via Params (set_params); sticky live Inputs deferred.
 }
 
 template <typename T>
 Contract PhaseShiftBeamformerOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{rd_maps});
+  maybe_add_live_override_to_contract(
+      result, array_geometry, params().expect_array_geometry);
+  maybe_add_live_override_to_contract(
+      result, az_angles, params().expect_az_angles);
+  maybe_add_live_override_to_contract(
+      result, el_angles, params().expect_el_angles);
+  maybe_add_live_override_to_contract(
+      result, array_taper, params().expect_array_taper);
   return result;
 }
 
@@ -93,22 +112,66 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
 
   const PhaseShiftBeamformerParams& pinned =
       context.params<PhaseShiftBeamformerParams>();
-  // Params-only effective values (live Inputs deferred — OPEN_ITEMS / §9).
-  ArrayGeometry geometry = pinned.array_geometry;
+
+  auto next_geometry = sticky_array_geometry_;
+  auto next_az = sticky_az_angles_;
+  auto next_el = sticky_el_angles_;
+  auto next_taper = sticky_array_taper_;
+  HOLOSCAN_TRY(
+      auto geometry,
+      resolve_expected_override_via(
+          pinned.expect_array_geometry, array_geometry,
+          pinned.array_geometry, next_geometry,
+          pinned.sticky_array_geometry,
+          [](const WireArrayGeometry& value) { return from_wire(value); }));
+  HOLOSCAN_TRY(
+      auto az,
+      resolve_expected_override_via(
+          pinned.expect_az_angles, az_angles, pinned.az_angles,
+          next_az, pinned.sticky_az_angles,
+          [&](const Tensor& value) {
+            return read_host_config_vector<double>(
+                value, DLDataType{kDLFloat, 64U, 1U}, max_az_,
+                "az_angles");
+          }));
+  HOLOSCAN_TRY(
+      auto el,
+      resolve_expected_override_via(
+          pinned.expect_el_angles, el_angles, pinned.el_angles,
+          next_el, pinned.sticky_el_angles,
+          [&](const Tensor& value) {
+            return read_host_config_vector<double>(
+                value, DLDataType{kDLFloat, 64U, 1U}, max_el_,
+                "el_angles");
+          }));
+  HOLOSCAN_TRY(
+      auto taper,
+      resolve_expected_override_via(
+          pinned.expect_array_taper, array_taper, pinned.array_taper,
+          next_taper, pinned.sticky_array_taper,
+          [](const WireWindowSpec& value) { return from_wire(value); }));
   const AngleConvention& convention = pinned.angle_convention;
-  const std::vector<double>& az = pinned.az_angles;
-  const std::vector<double>& el = pinned.el_angles;
-  const WindowSpec& taper = pinned.array_taper;
 
   try {
     geometry.validate();
+    if (az.empty() || el.empty()) {
+      throw std::invalid_argument(
+          "PhaseShiftBeamformerOp: az_angles and el_angles must be non-empty");
+    }
+    if (az.size() > static_cast<std::size_t>(max_az_) ||
+        el.size() > static_cast<std::size_t>(max_el_)) {
+      throw std::invalid_argument(
+          "PhaseShiftBeamformerOp: scan grid exceeds MaxTensorExtents");
+    }
+    generate_window(taper, geometry.num_elements());
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
-  if (az.empty() || el.empty()) {
-    return fail_invalid(
-        "PhaseShiftBeamformerOp: az_angles and el_angles must be non-empty");
-  }
+
+  sticky_array_geometry_ = std::move(next_geometry);
+  sticky_az_angles_ = std::move(next_az);
+  sticky_el_angles_ = std::move(next_el);
+  sticky_array_taper_ = std::move(next_taper);
 
   try {
     classify_input_dtype<T>(rd, "rd_maps", /*allow_real=*/false);

@@ -3,7 +3,7 @@
 
 // alpha_lut fast-path contract tests for CFARDetectorOp on the HSDK 5
 // Graph harness.
-// Live mid-stream sticky Graph coverage deferred (HSDK5_PORT.md §1 / §9).
+// Scalar live mid-stream Graph coverage remains deferred (HSDK5_PORT.md §1).
 
 #include <gtest/gtest.h>
 
@@ -350,13 +350,6 @@ TEST(CFARDetectorAlphaLutTest,
       num_detections(
           run_cfar<double>(input, params).idx),
       0);
-}
-
-TEST(CFARDetectorAlphaLutTest,
-     LiveAlphaLutOverrideStickyAndClearing) {
-  GTEST_SKIP()
-      << "[EA HSDK5 ONLY] vector live Params-only "
-         "(HSDK5_PORT.md §9)";
 }
 
 TEST(CFARDetectorAlphaLutTest,

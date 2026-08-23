@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,6 +16,7 @@
 
 #include <holoscan/core/errors.hpp>
 
+#include "radar_schemas/array_geometry_bridge.hpp"
 #include "radar_schemas/fmcw_waveform_bridge.hpp"
 #include "radar_schemas/window_spec_bridge.hpp"
 
@@ -25,6 +27,53 @@ static_assert(
     wire_bridge_detail::aggregate_field_count<WindowSpec>() == 7);
 static_assert(
     wire_bridge_detail::aggregate_field_count<FMCWWaveformSpec>() == 7);
+static_assert(
+    wire_bridge_detail::aggregate_field_count<ArrayGeometry>() == 3);
+
+TEST(WireArrayGeometry, PackedLayoutRoundTrips) {
+  const ArrayGeometry source{
+      .element_positions = {
+          0.0, 0.0, 0.0,
+          0.0, 0.001, 0.0,
+          0.0, 0.002, 0.0,
+      },
+      .wavelength = 0.0039,
+      .geometry_type = ArrayGeometryType::kUla,
+  };
+  const WireArrayGeometry wire_value = to_wire(source);
+  ASSERT_NE(wire_value.packed_geometry, nullptr);
+  ASSERT_EQ(wire_value.packed_geometry->shape().size(), 2U);
+  EXPECT_EQ(wire_value.packed_geometry->shape()[0], 4);
+  EXPECT_EQ(wire_value.packed_geometry->shape()[1], 3);
+
+  const auto result = from_wire(wire_value);
+  ASSERT_TRUE(result) << runtime_error_message(result.error());
+  EXPECT_EQ(*result, source);
+}
+
+TEST(WireArrayGeometry, RejectsWrongTensorRank) {
+  WireArrayGeometry wire_value;
+  const std::vector<double> packed(12U, 0.0);
+  wire_value.packed_geometry =
+      wire_bridge_detail::make_host_tensor<double>(
+          std::span<const double>{packed},
+          DLDataType{kDLFloat, 64U, 1U});
+  const auto result = from_wire(wire_value);
+  ASSERT_FALSE(result);
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidArgument);
+}
+
+TEST(WireArrayGeometry, UnsetGeometryTypeRoundTrips) {
+  const ArrayGeometry source{
+      .element_positions = {0.0, 0.0, 0.0},
+      .wavelength = 0.0039,
+  };
+  const WireArrayGeometry wire_value = to_wire(source);
+  EXPECT_FALSE(wire_value.has_geometry_type);
+  const auto result = from_wire(wire_value);
+  ASSERT_TRUE(result) << runtime_error_message(result.error());
+  EXPECT_EQ(*result, source);
+}
 
 void expect_window_round_trip(const WindowSpec& source) {
   WireWindowSpec wire_value = to_wire(source);
@@ -194,6 +243,16 @@ TEST(WireSchemas, EmbeddedReflectionMatchesWindowSpecContract) {
           {"coefficients", 6U, reflection::BaseType::Obj},
           {"coherent_gain_normalization", 7U,
            reflection::BaseType::Bool},
+      });
+}
+
+TEST(WireSchemas, EmbeddedReflectionMatchesArrayGeometryContract) {
+  expect_reflected_fields<WireArrayGeometryBinarySchema>(
+      "holoscan.radar.wire.ArrayGeometry",
+      {
+          {"packed_geometry", 0U, reflection::BaseType::Obj},
+          {"has_geometry_type", 1U, reflection::BaseType::Bool},
+          {"geometry_type", 2U, reflection::BaseType::UByte},
       });
 }
 

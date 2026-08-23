@@ -25,6 +25,7 @@
 #include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/sdk/live_override_payloads.hpp"
 
 namespace holoscan::radar {
 
@@ -122,12 +123,9 @@ struct CfarAlphaLutKey {
 // Out: detection_idx   — int64, (num_detections, 2 [+ n_batch]),
 //                       (doppler_bin, range_bin) per row.
 //
-// [EA HSDK5 ONLY] Live override ports: Exact Input for POD scalars, each
-// gated by its expect_* param
-// (pfa, threshold_scale, os_rank, max_detections). Unbounded / pair vectors
-// (guard_cells, training_cells, nci_axes, alpha_lut) are Params-only
-// (HSDK5_PORT.md §9). Static params (cfar_variant, peak_only, …) stay
-// Params-only with no live Input.
+// Live override ports use Exact + SafeDefault and are gated by expect_*.
+// Pair-valued windows use CfarCellWindowOverride POD payloads. Variable-length
+// nci_axes / alpha_lut use rank-1 pageable-host config Tensors.
 //
 // Precision is fixed at compile time (T = float | double).
 
@@ -150,10 +148,18 @@ struct CFARParams {
   bool expect_threshold_scale{false};
   bool expect_os_rank{false};
   bool expect_max_detections{false};
+  bool expect_guard_cells{false};
+  bool expect_training_cells{false};
+  bool expect_nci_axes{false};
+  bool expect_alpha_lut{false};
   bool sticky_pfa{true};
   bool sticky_threshold_scale{true};
   bool sticky_os_rank{true};
   bool sticky_max_detections{true};
+  bool sticky_guard_cells{true};
+  bool sticky_training_cells{true};
+  bool sticky_nci_axes{true};
+  bool sticky_alpha_lut{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -168,19 +174,16 @@ HOLOSCAN_PARAM_SCHEMA(
             "Rank into the sorted training cells; used only for OS"),
     holoscan::field<&CFARParams::guard_cells>("guard_cells")
         .description(
-            "Guard extent each side of the CUT (doppler, range); Params-only "
-            "on EA (HSDK5_PORT §9)"),
+            "Guard extent each side of the CUT (doppler, range)"),
     holoscan::field<&CFARParams::training_cells>("training_cells")
         .description(
-            "Training/reference extent each side (doppler, range); "
-            "Params-only on EA (HSDK5_PORT §9)"),
+            "Training/reference extent each side (doppler, range)"),
     holoscan::field<&CFARParams::pfa>("pfa").description(
         "Probability of false alarm; sets alpha when alpha_lut is unset"),
     holoscan::field<&CFARParams::alpha_lut>("alpha_lut")
         .description(
             "Optional threshold multiplier table; when non-empty, used "
-            "directly and pfa is ignored for alpha calibration; Params-only "
-            "on EA (HSDK5_PORT §9)"),
+            "directly and pfa is ignored for alpha calibration"),
     holoscan::field<&CFARParams::threshold_scale>("threshold_scale")
         .description(
             "Empirical multiplier on top of the Pfa-derived threshold; "
@@ -188,7 +191,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&CFARParams::nci_axes>("nci_axes")
         .description(
             "Leading-axis indices to non-coherently integrate before "
-            "thresholding; Params-only on EA (HSDK5_PORT §9)"),
+            "thresholding"),
     holoscan::field<&CFARParams::nci_fold>("nci_fold")
         .description(
             "Optional integration fold K for start-time alpha LUT "
@@ -220,6 +223,17 @@ HOLOSCAN_PARAM_SCHEMA(
         "expect_max_detections")
         .description(
             "Set when the application wires the max_detections override."),
+    holoscan::field<&CFARParams::expect_guard_cells>("expect_guard_cells")
+        .description(
+            "Set when the application wires the guard_cells override."),
+    holoscan::field<&CFARParams::expect_training_cells>(
+        "expect_training_cells")
+        .description(
+            "Set when the application wires the training_cells override."),
+    holoscan::field<&CFARParams::expect_nci_axes>("expect_nci_axes")
+        .description("Set when the application wires the nci_axes override."),
+    holoscan::field<&CFARParams::expect_alpha_lut>("expect_alpha_lut")
+        .description("Set when the application wires the alpha_lut override."),
     holoscan::field<&CFARParams::sticky_pfa>("sticky_pfa")
         .description(
             "Keep the last Exact pfa match on a miss. Ignored unless "
@@ -237,7 +251,24 @@ HOLOSCAN_PARAM_SCHEMA(
         "sticky_max_detections")
         .description(
             "Keep the last Exact max_detections match on a miss. Ignored "
-            "unless expect_max_detections."));
+            "unless expect_max_detections."),
+    holoscan::field<&CFARParams::sticky_guard_cells>("sticky_guard_cells")
+        .description(
+            "Keep the last Exact guard_cells match on a miss. Ignored unless "
+            "expect_guard_cells."),
+    holoscan::field<&CFARParams::sticky_training_cells>(
+        "sticky_training_cells")
+        .description(
+            "Keep the last Exact training_cells match on a miss. Ignored "
+            "unless expect_training_cells."),
+    holoscan::field<&CFARParams::sticky_nci_axes>("sticky_nci_axes")
+        .description(
+            "Keep the last Exact nci_axes match on a miss. Ignored unless "
+            "expect_nci_axes."),
+    holoscan::field<&CFARParams::sticky_alpha_lut>("sticky_alpha_lut")
+        .description(
+            "Keep the last Exact alpha_lut match on a miss. Ignored unless "
+            "expect_alpha_lut."));
 
 static_assert(holoscan::param_schema_availability<CFARParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -280,12 +311,15 @@ class CFARDetectorOp : public holoscan::Operator<CFARParams> {
   // Always emitted on HSDK 5 (was optional kNone on 4.x). Tests and apps must
   // bind / drain this port.
   Output<Tensor> cfar_power{"cfar_power"};
-  // [live] Exact POD overrides gated by expect_* (OPERATOR_API.md). Vector lives stay
-  // Params-only on HSDK 5 EA — see OPEN_ITEMS.md / HSDK5_PORT §9.
+  // [live] Exact overrides gated by expect_* (OPERATOR_API.md).
   Input<double> pfa{"pfa"};
   Input<double> threshold_scale{"threshold_scale"};
   Input<int64_t> os_rank{"os_rank"};
   Input<int64_t> max_detections{"max_detections"};
+  Input<CfarCellWindowOverride> guard_cells{"guard_cells"};
+  Input<CfarCellWindowOverride> training_cells{"training_cells"};
+  Input<Tensor> nci_axes{"nci_axes"};
+  Input<Tensor> alpha_lut{"alpha_lut"};
 
  private:
   MaxTensorExtents extents_;
@@ -293,6 +327,7 @@ class CFARDetectorOp : public holoscan::Operator<CFARParams> {
   std::size_t max_map_byte_span_{0U};
   std::size_t max_idx_byte_span_{0U};
   std::size_t max_leading_{0U};
+  std::int64_t max_alpha_lut_extent_{0};
 
   using AlphaLutKey = CfarAlphaLutKey;
 
@@ -301,8 +336,12 @@ class CFARDetectorOp : public holoscan::Operator<CFARParams> {
   std::optional<double> sticky_threshold_scale_;
   std::optional<int64_t> sticky_os_rank_;
   std::optional<int64_t> sticky_max_detections_;
+  std::optional<std::vector<int64_t>> sticky_guard_cells_;
+  std::optional<std::vector<int64_t>> sticky_training_cells_;
+  std::optional<std::vector<int64_t>> sticky_nci_axes_;
+  std::optional<std::vector<double>> sticky_alpha_lut_;
   // Tracks pfa sticky transitions for the "pfa ignored while alpha_lut"
-  // warn-once (Params-only alpha_lut still participates).
+  // warn-once.
   double last_seen_pfa_{-1.0};
   bool pfa_seen_{false};
 

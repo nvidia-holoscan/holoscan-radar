@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <type_traits>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -26,6 +27,7 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/sdk/config_cache.hpp"
+#include "radar_schemas/fmcw_waveform_bridge.hpp"
 
 namespace holoscan::radar {
 
@@ -61,6 +63,8 @@ struct MIMOCoherentCompensationParams {
   MultiplexingScheme multiplexing_scheme{MultiplexingScheme::kUnspecified};
   FMCWWaveformDescriptor waveform{};
   DDMCodeDescriptor ddm_code{};
+  bool expect_waveform{false};
+  bool sticky_waveform{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -75,12 +79,19 @@ HOLOSCAN_PARAM_SCHEMA(
             "Static. Required."),
     holoscan::field<&MIMOCoherentCompensationParams::waveform>("waveform")
         .description(
-            "Per-TX PRI and carrier for Doppler-dependent phase math. "
-            "[live] in API but Params-only on EA (HSDK5_PORT §9)."),
+            "Per-TX PRI and carrier for Doppler-dependent phase math. [live]."),
     holoscan::field<&MIMOCoherentCompensationParams::ddm_code>("ddm_code")
         .description(
             "Doppler-band / phase-code layout for DDM mode. Unused for "
-            "TDM. Static."));
+            "TDM. Static."),
+    holoscan::field<&MIMOCoherentCompensationParams::expect_waveform>(
+        "expect_waveform")
+        .description("Set when the application wires the waveform override."),
+    holoscan::field<&MIMOCoherentCompensationParams::sticky_waveform>(
+        "sticky_waveform")
+        .description(
+            "Keep the last Exact waveform match on a miss. False reverts "
+            "to Params. Ignored unless expect_waveform."));
 
 static_assert(
     holoscan::param_schema_availability<MIMOCoherentCompensationParams>() ==
@@ -105,6 +116,7 @@ class MIMOCoherentCompensationOp
       ExecutionContext& context) override;
 
   Input<Tensor> rd_maps{"rd_maps"};
+  Input<wire::FMCWWaveformT> waveform_in{"waveform"};
   // HSDK 5 requires unique port names within an operator (inputs and
   // outputs share one namespace). OPERATOR_API.md's logical output channel
   // remains "rd_maps"; the physical port name is rd_maps_out.
@@ -137,6 +149,7 @@ class MIMOCoherentCompensationOp
       const Tensor& input, cudaStream_t stream);
 
   FMCWWaveformDescriptor effective_waveform_{};
+  std::optional<FMCWWaveformDescriptor> sticky_waveform_;
   ConfigCache<CachedTdmCorrection> correction_cache_{};
   ConfigCache<CachedDdmDemux> demux_cache_{};
   ConfigCache<CachedDdmCorrelate> correlate_cache_{};

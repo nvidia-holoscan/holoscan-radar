@@ -20,6 +20,8 @@
 #include "angle_estimation/beamscan_estimator_op/is_valid_mask.hpp"
 #include "radar_common/dsp/steering_weights.hpp"
 #include "radar_common/dsp/steering_weights_device.hpp"
+#include "radar_common/dsp/window.hpp"
+#include "radar_common/sdk/config_tensor.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
@@ -74,6 +76,8 @@ BeamscanEstimatorOp<T>::BeamscanEstimatorOp(
   const std::int64_t el =
       require_extent(extents.max_el, "max_el", kOpName);
   extents_ = extents;
+  max_az_ = az;
+  max_el_ = el;
   spectrum_max_byte_span_ =
       byte_span_real_cube<T>({items, az, el}, kOpName);
   aoa_max_byte_span_ =
@@ -89,6 +93,11 @@ void BeamscanEstimatorOp<T>::setup(OperatorSpec& spec) {
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
+  constexpr TensorPortLayout kHostF64{
+      .memory_kind = MemoryKind::kHost,
+      .dtype = DLDataType{kDLFloat, 64U, 1U},
+      .rank = 1U,
+  };
   spec.input(snapshot).queue_depth(2U).expects_tensor(kDevice);
   // Optional is_valid: SafeDefault / omitted from contract so unconnected
   // graphs compile and activate.
@@ -103,8 +112,10 @@ void BeamscanEstimatorOp<T>::setup(OperatorSpec& spec) {
       .tensor_allocation(TensorAllocationBounds{
           .max_rank = max_rank_,
           .max_byte_span = spectrum_max_byte_span_});
-  // [live] peak_interpolation override. Leaving the port unconnected is
-  // legal — compute() seeds from Params.
+  spec.input(array_geometry).queue_depth(2U);
+  spec.input(az_angles).queue_depth(2U).expects_tensor(kHostF64);
+  spec.input(el_angles).queue_depth(2U).expects_tensor(kHostF64);
+  spec.input(array_taper).queue_depth(2U);
   spec.input(peak_interpolation).queue_depth(2U);
 }
 
@@ -112,6 +123,14 @@ template <typename T>
 Contract BeamscanEstimatorOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{snapshot});
+  maybe_add_live_override_to_contract(
+      result, array_geometry, params().expect_array_geometry);
+  maybe_add_live_override_to_contract(
+      result, az_angles, params().expect_az_angles);
+  maybe_add_live_override_to_contract(
+      result, el_angles, params().expect_el_angles);
+  maybe_add_live_override_to_contract(
+      result, array_taper, params().expect_array_taper);
   maybe_add_live_override_to_contract(
       result, peak_interpolation, params().expect_peak_interpolation);
   return result;
@@ -123,29 +142,72 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
   HOLOSCAN_TRY(auto snap, receive_tensor(snapshot, kOpName));
 
   const BeamscanParams& pinned = context.params<BeamscanParams>();
+  auto next_geometry = sticky_array_geometry_;
+  auto next_az = sticky_az_angles_;
+  auto next_el = sticky_el_angles_;
+  auto next_taper = sticky_array_taper_;
+  auto next_peak_interp = sticky_peak_interpolation_;
+  HOLOSCAN_TRY(
+      auto geometry,
+      resolve_expected_override_via(
+          pinned.expect_array_geometry, array_geometry,
+          pinned.array_geometry, next_geometry,
+          pinned.sticky_array_geometry,
+          [](const WireArrayGeometry& value) { return from_wire(value); }));
+  HOLOSCAN_TRY(
+      auto az,
+      resolve_expected_override_via(
+          pinned.expect_az_angles, az_angles, pinned.az_angles,
+          next_az, pinned.sticky_az_angles,
+          [&](const Tensor& value) {
+            return read_host_config_vector<double>(
+                value, DLDataType{kDLFloat, 64U, 1U}, max_az_,
+                "az_angles");
+          }));
+  HOLOSCAN_TRY(
+      auto el,
+      resolve_expected_override_via(
+          pinned.expect_el_angles, el_angles, pinned.el_angles,
+          next_el, pinned.sticky_el_angles,
+          [&](const Tensor& value) {
+            return read_host_config_vector<double>(
+                value, DLDataType{kDLFloat, 64U, 1U}, max_el_,
+                "el_angles");
+          }));
+  HOLOSCAN_TRY(
+      auto taper,
+      resolve_expected_override_via(
+          pinned.expect_array_taper, array_taper, pinned.array_taper,
+          next_taper, pinned.sticky_array_taper,
+          [](const WireWindowSpec& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto peak_interp,
                resolve_expected_override(pinned.expect_peak_interpolation,
                                          peak_interpolation,
                                          pinned.peak_interpolation,
-                                         sticky_peak_interpolation_,
+                                         next_peak_interp,
                                          pinned.sticky_peak_interpolation));
 
-  // Descriptor / vector live params are Params-only on EA (HSDK5_PORT §9).
-  ArrayGeometry geometry = pinned.array_geometry;
   try {
     geometry.validate();
+    if (az.empty() || el.empty()) {
+      throw std::invalid_argument(
+          "BeamscanEstimatorOp: az_angles and el_angles must be non-empty");
+    }
+    if (az.size() > static_cast<std::size_t>(max_az_) ||
+        el.size() > static_cast<std::size_t>(max_el_)) {
+      throw std::invalid_argument(
+          "BeamscanEstimatorOp: scan grid exceeds MaxTensorExtents");
+    }
+    generate_window(taper, geometry.num_elements());
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
   const AngleConvention& convention = pinned.angle_convention;
-  const std::vector<double>& az = pinned.az_angles;
-  const std::vector<double>& el = pinned.el_angles;
-  const WindowSpec& taper = pinned.array_taper;
-
-  if (az.empty() || el.empty()) {
-    return fail_invalid(
-        "BeamscanEstimatorOp: az_angles and el_angles must be non-empty");
-  }
+  sticky_array_geometry_ = std::move(next_geometry);
+  sticky_az_angles_ = std::move(next_az);
+  sticky_el_angles_ = std::move(next_el);
+  sticky_array_taper_ = std::move(next_taper);
+  sticky_peak_interpolation_ = std::move(next_peak_interp);
 
   try {
     require_cuda_accessible(snap, "snapshot", kOpName);

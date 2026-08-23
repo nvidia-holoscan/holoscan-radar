@@ -24,6 +24,7 @@
 #include "radar_common/dsp/spatial_smoothing_device.hpp"
 #include "radar_common/dsp/steering_weights.hpp"
 #include "radar_common/dsp/steering_weights_device.hpp"
+#include "radar_common/sdk/config_tensor.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
@@ -52,6 +53,22 @@ expected<void, Error> fail_invalid(const std::string& message) {
 
 expected<void, Error> fail_runtime(const std::string& message) {
   return make_unexpected(Error{ErrorCode::kFailure, message});
+}
+
+std::string spatial_smoothing_key(
+    const ArrayGeometry& geometry, const std::vector<int64_t>& smoothing,
+    bool forward_backward) {
+  std::ostringstream stream;
+  stream << geometry.wavelength << '|';
+  for (double value : geometry.element_positions) {
+    stream << value << ',';
+  }
+  stream << '|';
+  for (int64_t value : smoothing) {
+    stream << value << ',';
+  }
+  stream << '|' << (forward_backward ? 1 : 0);
+  return stream.str();
 }
 
 template <typename T>
@@ -122,6 +139,11 @@ void MUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
+  constexpr TensorPortLayout kHostF64Vector{
+      .memory_kind = MemoryKind::kHost,
+      .dtype = DLDataType{kDLFloat, 64U, 1U},
+      .rank = 1U,
+  };
   spec.input(snapshot).queue_depth(2U).expects_tensor(kDevice);
   // Optional is_valid: omitted from contract so unconnected graphs compile.
   spec.input(is_valid).queue_depth(2U).expects_tensor(kDevice);
@@ -152,8 +174,16 @@ void MUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
       .tensor_allocation(TensorAllocationBounds{
           .max_rank = 2U,
           .max_byte_span = eig_max_byte_span_});
-  // [live] POD sticky overrides. Leaving unconnected is legal — compute()
-  // seeds from Params. Descriptor / vector live params are Params-only (§9).
+  // [live] sticky overrides. Leaving unconnected is legal when expect_* is
+  // false; enabled ports join snapshot through Exact + SafeDefault.
+  spec.input(array_geometry).queue_depth(2U);
+  spec.input(az_angles)
+      .queue_depth(2U)
+      .expects_tensor(kHostF64Vector);
+  spec.input(el_angles)
+      .queue_depth(2U)
+      .expects_tensor(kHostF64Vector);
+  spec.input(spatial_smoothing).queue_depth(2U);
   spec.input(num_sources).queue_depth(2U);
   spec.input(source_count_pfa).queue_depth(2U);
   spec.input(max_sources).queue_depth(2U);
@@ -163,6 +193,14 @@ template <typename T>
 Contract MUSICEstimatorOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{snapshot});
+  maybe_add_live_override_to_contract(
+      result, array_geometry, params().expect_array_geometry);
+  maybe_add_live_override_to_contract(
+      result, az_angles, params().expect_az_angles);
+  maybe_add_live_override_to_contract(
+      result, el_angles, params().expect_el_angles);
+  maybe_add_live_override_to_contract(
+      result, spatial_smoothing, params().expect_spatial_smoothing);
   maybe_add_live_override_to_contract(
       result, num_sources, params().expect_num_sources);
   maybe_add_live_override_to_contract(
@@ -177,6 +215,47 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
   HOLOSCAN_TRY(auto snap, receive_tensor(snapshot, kOpName));
 
   const MUSICParams& pinned = context.params<MUSICParams>();
+  auto next_sticky_geometry = sticky_array_geometry_;
+  auto next_sticky_az = sticky_az_angles_;
+  auto next_sticky_el = sticky_el_angles_;
+  auto next_sticky_smoothing = sticky_spatial_smoothing_;
+  HOLOSCAN_TRY(
+      auto geometry,
+      resolve_expected_override_via(
+          pinned.expect_array_geometry, array_geometry, pinned.array_geometry,
+          next_sticky_geometry, pinned.sticky_array_geometry,
+          [](const WireArrayGeometry& value) { return from_wire(value); }));
+  HOLOSCAN_TRY(
+      auto az,
+      resolve_expected_override_via(
+          pinned.expect_az_angles, az_angles, pinned.az_angles, next_sticky_az,
+          pinned.sticky_az_angles,
+          [this](const Tensor& value) {
+            return read_host_config_vector<double>(
+                value, DLDataType{kDLFloat, 64U, 1U},
+                require_extent(extents_.max_az, "max_az", kOpName),
+                "az_angles");
+          }));
+  HOLOSCAN_TRY(
+      auto el,
+      resolve_expected_override_via(
+          pinned.expect_el_angles, el_angles, pinned.el_angles, next_sticky_el,
+          pinned.sticky_el_angles,
+          [this](const Tensor& value) {
+            return read_host_config_vector<double>(
+                value, DLDataType{kDLFloat, 64U, 1U},
+                require_extent(extents_.max_el, "max_el", kOpName),
+                "el_angles");
+          }));
+  HOLOSCAN_TRY(
+      auto smoothing,
+      resolve_expected_override_via(
+          pinned.expect_spatial_smoothing, spatial_smoothing,
+          pinned.spatial_smoothing, next_sticky_smoothing,
+          pinned.sticky_spatial_smoothing,
+          [](const SpatialSmoothingOverride& value) {
+            return from_wire(value);
+          }));
   HOLOSCAN_TRY(auto effective_num_sources,
                resolve_expected_override(
                    pinned.expect_num_sources, num_sources, pinned.num_sources,
@@ -192,22 +271,29 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
                    pinned.expect_max_sources, max_sources, pinned.max_sources,
                    sticky_max_sources_, pinned.sticky_max_sources));
 
-  // Descriptor / vector live params are Params-only on EA (HSDK5_PORT §9).
-  ArrayGeometry geometry = pinned.array_geometry;
   try {
     geometry.validate();
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
   const AngleConvention& convention = pinned.angle_convention;
-  const std::vector<double>& az = pinned.az_angles;
-  const std::vector<double>& el = pinned.el_angles;
-  const std::vector<int64_t>& smoothing = pinned.spatial_smoothing;
   const bool forward_backward = pinned.forward_backward;
 
   if (az.empty() || el.empty()) {
     return fail_invalid(
         "MUSICEstimatorOp: az_angles and el_angles must be non-empty");
+  }
+  const int64_t max_az =
+      require_extent(extents_.max_az, "max_az", kOpName);
+  const int64_t max_el =
+      require_extent(extents_.max_el, "max_el", kOpName);
+  const int64_t max_channels =
+      require_extent(extents_.max_channels, "max_channels", kOpName);
+  if (static_cast<int64_t>(az.size()) > max_az ||
+      static_cast<int64_t>(el.size()) > max_el ||
+      geometry.num_elements() > max_channels) {
+    return fail_invalid(
+        "MUSICEstimatorOp: live configuration exceeds MaxTensorExtents");
   }
   if (effective_max_sources < 1 || effective_max_sources > kMaxSourcesCap) {
     return fail_invalid(
@@ -217,6 +303,29 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
     return fail_invalid(
         "MUSICEstimatorOp: source_count_pfa must be in (0, 1)");
   }
+
+  const std::string candidate_smoothing_key =
+      smoothing.empty()
+          ? std::string{}
+          : spatial_smoothing_key(geometry, smoothing, forward_backward);
+  std::optional<SpatialSmoothingPlan> candidate_smoothing_plan;
+  if (!smoothing.empty() && candidate_smoothing_key != smoothing_key_) {
+    try {
+      candidate_smoothing_plan = build_spatial_smoothing_plan(
+          geometry, smoothing, forward_backward);
+    } catch (const std::invalid_argument& e) {
+      return fail_invalid(e.what());
+    } catch (const std::runtime_error& e) {
+      return fail_runtime(e.what());
+    }
+  }
+
+  // Commit only fully validated logical values; malformed wire/Tensor samples
+  // cannot poison sticky state.
+  sticky_array_geometry_ = std::move(next_sticky_geometry);
+  sticky_az_angles_ = std::move(next_sticky_az);
+  sticky_el_angles_ = std::move(next_sticky_el);
+  sticky_spatial_smoothing_ = std::move(next_sticky_smoothing);
 
   try {
     require_cuda_accessible(snap, "snapshot", kOpName);
@@ -344,27 +453,9 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
   std::shared_ptr<holoscan::Tensor> ss_mask_t;    // keep-alive
 
   if (!smoothing.empty()) {
-    std::ostringstream ks;
-    ks << geometry.wavelength << '|';
-    for (double v : geometry.element_positions) {
-      ks << v << ',';
-    }
-    ks << '|';
-    for (int64_t v : smoothing) {
-      ks << v << ',';
-    }
-    ks << '|' << (forward_backward ? 1 : 0);
-    const std::string key = ks.str();
-    if (key != smoothing_key_) {
-      try {
-        smoothing_plan_ = build_spatial_smoothing_plan(
-            geometry, smoothing, forward_backward);
-      } catch (const std::invalid_argument& e) {
-        return fail_invalid(e.what());
-      } catch (const std::runtime_error& e) {
-        return fail_runtime(e.what());
-      }
-      smoothing_key_ = key;
+    if (candidate_smoothing_key != smoothing_key_) {
+      smoothing_plan_ = std::move(*candidate_smoothing_plan);
+      smoothing_key_ = candidate_smoothing_key;
       if (smoothing_plan_.enabled) {
         const int64_t p = smoothing_plan_.num_subarrays;
         const int64_t l = smoothing_plan_.subarray_size;

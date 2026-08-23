@@ -8,18 +8,30 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <random>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
+#include <holoscan/core/compile.hpp>
 #include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/expected_macros.hpp>
 #include <holoscan/core/graph.hpp>
+#include <holoscan/core/payload_options.hpp>
+#include <holoscan/core/run.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/time/realtime_clock.hpp>
 
 #include "angle_estimation/mvdr_estimator_op/mvdr_estimator_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
@@ -27,6 +39,7 @@
 #include "radar_common/dsp/angle_convention.hpp"
 #include "radar_common/math/constants.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
@@ -37,6 +50,8 @@ using holoscan::radar::AngleConventionPreset;
 using holoscan::radar::ArrayGeometry;
 using holoscan::radar::MVDREstimatorOp;
 using holoscan::radar::MVDRParams;
+using holoscan::radar::SpatialSmoothingOverride;
+using holoscan::radar::WireArrayGeometry;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::kPi;
 using holoscan::radar::testing::FiveOutGraphRunResult;
@@ -268,6 +283,266 @@ MvdrOutputs run_mvdr(std::shared_ptr<holoscan::Tensor> snapshot,
   return {std::move(result.frames0.front()), std::move(result.frames1.front()),
           std::move(result.frames2.front()), std::move(result.frames3.front()),
           std::move(result.frames4.front())};
+}
+
+struct LiveMvdrTick {
+  std::shared_ptr<holoscan::Tensor> snapshot;
+  std::optional<ArrayGeometry> geometry;
+  std::optional<std::vector<double>> az;
+  std::optional<std::vector<double>> el;
+  std::optional<SpatialSmoothingOverride> smoothing;
+  int64_t skew_ns{0};
+};
+
+struct LiveMvdrBank {
+  static void reset(std::vector<LiveMvdrTick> new_ticks) {
+    const std::lock_guard lock(mutex);
+    ticks = std::move(new_ticks);
+    index = 0U;
+  }
+  static inline std::mutex mutex;
+  static inline std::vector<LiveMvdrTick> ticks;
+  static inline std::size_t index{0U};
+};
+
+class LiveMvdrSourceOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorPortLayout kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice,
+        .dtype = std::nullopt,
+        .rank = std::nullopt,
+    };
+    constexpr holoscan::TensorPortLayout kHostVector{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = DLDataType{kDLFloat, 64U, 1U},
+        .rank = 1U,
+    };
+    constexpr holoscan::TensorPortLayout kHostGeometry{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = DLDataType{kDLFloat, 64U, 1U},
+        .rank = 2U,
+    };
+    spec.output(snapshot)
+        .produces_tensor(kDevice)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 3U, .max_byte_span = 1024U * 1024U});
+    spec.output(geometry)
+        .max_emits_per_compute(1U)
+        .produces_tensor(kHostGeometry)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 2U, .max_byte_span = 65U * 3U * sizeof(double)});
+    spec.output(az)
+        .max_emits_per_compute(1U)
+        .produces_tensor(kHostVector)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 1U, .max_byte_span = 65U * sizeof(double)});
+    spec.output(el)
+        .max_emits_per_compute(1U)
+        .produces_tensor(kHostVector)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 1U, .max_byte_span = 33U * sizeof(double)});
+    spec.output(smoothing);
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{
+        .period = holoscan::radar::testing::detail::kHarnessTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_vector(
+      holoscan::Output<holoscan::Tensor>& output,
+      const std::vector<double>& values, holoscan::TimePoint capture_time) {
+    const std::array<int64_t, 1> shape{
+        static_cast<int64_t>(values.size())};
+    auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{
+        .shape = shape, .dtype = DLDataType{kDLFloat, 64U, 1U}});
+    if (!loan) {
+      return holoscan::make_unexpected(std::move(loan).error());
+    }
+    HOLOSCAN_RETURN_IF_ERROR(loan->write_host_and_commit(
+        [&values](const holoscan::TensorOutputWriteGuard& writer) {
+          std::copy(values.begin(), values.end(), writer.data_as<double>());
+        }));
+    return output.emit(
+        std::move(*loan), holoscan::EmitOptions{.capture_time = capture_time});
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_geometry(
+      const ArrayGeometry& value, holoscan::TimePoint capture_time) {
+    const std::vector<double> packed =
+        holoscan::radar::pack_array_geometry(value);
+    const std::array<int64_t, 2> shape{value.num_elements() + 1, 3};
+    auto loan = geometry.allocate_tensor(holoscan::TensorLoanRequest{
+        .shape = shape, .dtype = DLDataType{kDLFloat, 64U, 1U}});
+    if (!loan) {
+      return holoscan::make_unexpected(std::move(loan).error());
+    }
+    HOLOSCAN_RETURN_IF_ERROR(loan->write_host_and_commit(
+        [&packed](const holoscan::TensorOutputWriteGuard& writer) {
+          std::copy(packed.begin(), packed.end(), writer.data_as<double>());
+        }));
+    return geometry.emit_tensor(
+        std::move(*loan), holoscan::radar::to_wire(value),
+        holoscan::EmitOptions{.capture_time = capture_time});
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    LiveMvdrTick tick;
+    {
+      const std::lock_guard lock(LiveMvdrBank::mutex);
+      if (LiveMvdrBank::index >= LiveMvdrBank::ticks.size()) {
+        return {};
+      }
+      tick = LiveMvdrBank::ticks[LiveMvdrBank::index++];
+    }
+    holoscan::TimePoint override_time = context.activation_time();
+    override_time.timestamp_ns += tick.skew_ns;
+    if (tick.geometry.has_value()) {
+      HOLOSCAN_RETURN_IF_ERROR(emit_geometry(*tick.geometry, override_time));
+    }
+    if (tick.az.has_value()) {
+      HOLOSCAN_RETURN_IF_ERROR(emit_vector(az, *tick.az, override_time));
+    }
+    if (tick.el.has_value()) {
+      HOLOSCAN_RETURN_IF_ERROR(emit_vector(el, *tick.el, override_time));
+    }
+    if (tick.smoothing.has_value()) {
+      HOLOSCAN_RETURN_IF_ERROR(smoothing.emit(
+          *tick.smoothing,
+          holoscan::EmitOptions{.capture_time = override_time}));
+    }
+    return holoscan::radar::testing::detail::emit_bank_frame(
+        snapshot, context, tick.snapshot, "LiveMvdrSourceOp");
+  }
+
+  holoscan::Output<holoscan::Tensor> snapshot{"snapshot"};
+  holoscan::Output<WireArrayGeometry> geometry{"array_geometry"};
+  holoscan::Output<holoscan::Tensor> az{"az_angles"};
+  holoscan::Output<holoscan::Tensor> el{"el_angles"};
+  holoscan::Output<SpatialSmoothingOverride> smoothing{"spatial_smoothing"};
+};
+
+FiveOutGraphRunResult run_live_mvdr(std::vector<LiveMvdrTick> ticks,
+                                    MVDRParams params) {
+  FiveOutGraphRunResult result;
+  holoscan::radar::testing::detail::FrameBank::reset();
+  holoscan::radar::testing::detail::FrameBankB::reset();
+  holoscan::radar::testing::detail::FrameBankC::reset();
+  holoscan::radar::testing::detail::FrameBankD::reset();
+  holoscan::radar::testing::detail::FrameBankE::reset();
+  const std::size_t expected = ticks.size();
+  LiveMvdrBank::reset(std::move(ticks));
+
+  holoscan::Graph graph{"mvdr-live-container-overrides"};
+  const auto source = graph.op<LiveMvdrSourceOp>("source");
+  const bool expect_geometry = params.expect_array_geometry;
+  const bool expect_az = params.expect_az_angles;
+  const bool expect_el = params.expect_el_angles;
+  const bool expect_smoothing = params.expect_spatial_smoothing;
+  auto op = holoscan::radar::testing::emplace_harness_op<
+      MVDREstimatorOp<double>>(
+      graph, holoscan::radar::testing::default_test_extents());
+  op.set_params(std::move(params));
+  const auto sink0 =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink0");
+  const auto sink1 =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("sink1");
+  const auto sink2 =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureCOp>("sink2");
+  const auto sink3 =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureDOp>("sink3");
+  const auto sink4 =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureEOp>("sink4");
+  const holoscan::ConnectionOptions q{.queue_depth = 8U};
+  graph.add_flow(source->snapshot, op->snapshot, q);
+  if (expect_geometry) {
+    graph.add_flow(source->geometry, op->array_geometry, q);
+  }
+  if (expect_az) {
+    graph.add_flow(source->az, op->az_angles, q);
+  }
+  if (expect_el) {
+    graph.add_flow(source->el, op->el_angles, q);
+  }
+  if (expect_smoothing) {
+    graph.add_flow(source->smoothing, op->spatial_smoothing, q);
+  }
+  graph.add_flow(op->aoa_estimates, sink0->in, q);
+  graph.add_flow(op->angle_spectrum, sink1->in, q);
+  graph.add_flow(op->doa_multi, sink2->in, q);
+  graph.add_flow(op->source_count, sink3->in, q);
+  graph.add_flow(op->eigenvalues, sink4->in, q);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  for (const char* port : {"aoa_estimates", "angle_spectrum", "doa_multi",
+                           "source_count", "eigenvalues"}) {
+    holoscan::radar::testing::detail::bind_op_device_output(options, port);
+  }
+  options.deployment.bind_tensor_output_device(
+      holoscan::TensorOutputDevicePlacement{
+          .operator_path = "source", .output_port = "snapshot",
+          .device = holoscan::DeviceId{0}});
+  try {
+    const holoscan::ExecutionPlan plan =
+        holoscan::compile(graph, std::move(options));
+    result.plan_ok = plan.ok();
+    result.plan_json = plan.json();
+    if (!plan.ok()) {
+      return result;
+    }
+    holoscan::RunSession session = holoscan::run_async(plan);
+    const auto deadline = std::chrono::steady_clock::now() +
+                          holoscan::radar::testing::detail::kHarnessDeadline;
+    while (session.diagnostics().empty() &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::size_t spectrum_count = 0U;
+      std::size_t eigenvalue_count = 0U;
+      {
+        const std::lock_guard lock(
+            holoscan::radar::testing::detail::FrameBankB::mutex);
+        spectrum_count =
+            holoscan::radar::testing::detail::FrameBankB::captured.size();
+      }
+      {
+        const std::lock_guard lock(
+            holoscan::radar::testing::detail::FrameBankE::mutex);
+        eigenvalue_count =
+            holoscan::radar::testing::detail::FrameBankE::captured.size();
+      }
+      if (spectrum_count >= expected && eigenvalue_count >= expected) {
+        break;
+      }
+      std::this_thread::sleep_for(
+          holoscan::radar::testing::detail::kHarnessPoll);
+    }
+    session.request_stop();
+    session.wait();
+    result.termination = session.termination();
+    for (const auto& diagnostic : session.diagnostics()) {
+      result.diagnostics.emplace_back(diagnostic.token);
+    }
+  } catch (const holoscan::RuntimeError& error) {
+    result.plan_ok = false;
+    result.plan_json = std::string("RuntimeError: ") + error.what();
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBankB::mutex);
+    result.frames1 = std::move(
+        holoscan::radar::testing::detail::FrameBankB::captured);
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBankE::mutex);
+    result.frames4 = std::move(
+        holoscan::radar::testing::detail::FrameBankE::captured);
+  }
+  return result;
 }
 
 TEST(MVDREstimatorOpTest, SpatialSmoothingResolvesCoherentSourcesUla) {
@@ -759,8 +1034,30 @@ TEST(MVDREstimatorOpTest, AllInvalidMaskBlanksDoaAndSpectrum) {
 }
 
 TEST(MVDREstimatorOpTest, LiveAzGridStickyOverride) {
-  GTEST_SKIP() << "HSDK 5 EA: live az_angles override deferred "
-                  "(HSDK5_PORT.md §1 / §9)";
+  constexpr int64_t kN = 4;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geom, conv, 0.0, 0.0, 8, 0.02, 301u);
+  auto snap = block_to_device<double>(block, {1, kN, 8});
+  MVDRParams params = make_params(geom, conv, {-0.2, 0.2}, {0.0});
+  params.expect_az_angles = true;
+  params.sticky_az_angles = true;
+
+  const FiveOutGraphRunResult result = run_live_mvdr(
+      {{snap, std::nullopt, std::vector<double>{-0.1, 0.0, 0.1},
+         std::nullopt, std::nullopt, 0},
+       {snap, std::nullopt, std::vector<double>{-0.2, -0.1, 0.0, 0.1, 0.2},
+         std::nullopt, std::nullopt, 1}},
+      std::move(params));
+
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames1.size(), 2U);
+  EXPECT_EQ(result.frames1[0].shape,
+            (std::vector<int64_t>{1, 3, 1}));
+  EXPECT_EQ(result.frames1[1].shape,
+            (std::vector<int64_t>{1, 3, 1}));
 }
 
 TEST(MVDREstimatorOpTest, LiveDiagonalLoadingStickyOverride) {
@@ -769,8 +1066,28 @@ TEST(MVDREstimatorOpTest, LiveDiagonalLoadingStickyOverride) {
 }
 
 TEST(MVDREstimatorOpTest, LiveArrayGeometryStickyOverride) {
-  GTEST_SKIP() << "HSDK 5 EA: live array_geometry override deferred "
-                  "(HSDK5_PORT.md §1 / §9)";
+  constexpr int64_t kN = 4;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto live_geom = make_ula_geometry(kN, 0.5, 1.0);
+  auto seed_geom = live_geom;
+  seed_geom.wavelength = 2.0;
+  const auto block = make_block(live_geom, conv, 0.1, 0.0, 16, 0.02, 302u);
+  auto snap = block_to_device<double>(block, {1, kN, 16});
+  MVDRParams params =
+      make_params(seed_geom, conv, linspace(-0.3, 0.3, 31), {0.0});
+  params.expect_array_geometry = true;
+  params.sticky_array_geometry = true;
+
+  const FiveOutGraphRunResult result = run_live_mvdr(
+      {{snap, live_geom, std::nullopt, std::nullopt, std::nullopt, 0},
+       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0}},
+      std::move(params));
+
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames1.size(), 2U);
+  EXPECT_EQ(result.frames1[0].data, result.frames1[1].data);
 }
 
 TEST(MVDREstimatorOpTest, LiveMaxSourcesStickyOverrideReallocates) {
@@ -779,8 +1096,68 @@ TEST(MVDREstimatorOpTest, LiveMaxSourcesStickyOverrideReallocates) {
 }
 
 TEST(MVDREstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
-  GTEST_SKIP() << "HSDK 5 EA: live spatial_smoothing override deferred "
-                  "(HSDK5_PORT.md §1 / §9)";
+  constexpr int64_t kN = 8;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geom, conv, 0.1, 0.0, 16, 0.02, 303u);
+  auto snap = block_to_device<double>(block, {1, kN, 16});
+  MVDRParams params =
+      make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0});
+  params.expect_spatial_smoothing = true;
+  params.sticky_spatial_smoothing = true;
+
+  const FiveOutGraphRunResult result = run_live_mvdr(
+      {{snap, std::nullopt, std::nullopt, std::nullopt,
+         SpatialSmoothingOverride{.count = 1, .first = 3}, 0},
+       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0}},
+      std::move(params));
+
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames4.size(), 2U);
+  EXPECT_EQ(result.frames4[0].shape, (std::vector<int64_t>{1, 6}));
+  EXPECT_EQ(result.frames4[1].shape, (std::vector<int64_t>{1, 6}));
+}
+
+TEST(MVDREstimatorOpTest, LiveSpatialSmoothingRejectsMalformedPod) {
+  constexpr int64_t kN = 4;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geom, conv, 0.0, 0.0, 8, 0.02, 304u);
+  auto snap = block_to_device<double>(block, {1, kN, 8});
+  MVDRParams params = make_params(geom, conv, {0.0}, {0.0});
+  params.expect_spatial_smoothing = true;
+
+  const FiveOutGraphRunResult result = run_live_mvdr(
+      {{snap, std::nullopt, std::nullopt, std::nullopt,
+         SpatialSmoothingOverride{.count = 3}, 0}},
+      std::move(params));
+
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  EXPECT_TRUE(result.frames1.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
+TEST(MVDREstimatorOpTest, LiveAzGridRejectsExtentAboveMaxAz) {
+  constexpr int64_t kN = 4;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geom, conv, 0.0, 0.0, 8, 0.02, 305u);
+  auto snap = block_to_device<double>(block, {1, kN, 8});
+  MVDRParams params = make_params(geom, conv, {0.0}, {0.0});
+  params.expect_az_angles = true;
+
+  const FiveOutGraphRunResult result = run_live_mvdr(
+      {{snap, std::nullopt, std::vector<double>(65U, 0.0), std::nullopt,
+         std::nullopt, 0}},
+      std::move(params));
+
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  EXPECT_TRUE(result.frames1.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 }  // namespace

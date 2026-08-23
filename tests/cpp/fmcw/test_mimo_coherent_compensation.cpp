@@ -13,18 +13,36 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <numeric>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
+#include <holoscan/core/compile.hpp>
 #include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/expected.hpp>
 #include <holoscan/core/graph.hpp>
+#include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
+#include <holoscan/core/payload_options.hpp>
+#include <holoscan/core/run.hpp>
+#include <holoscan/core/temporal_contract.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/time/realtime_clock.hpp>
 
 #include "fmcw/mimo_coherent_compensation_op/mimo_coherent_compensation_op.hpp"
 #include "fmcw/mimo_coherent_compensation_op/mimo_coherent_compensation_stage.hpp"
@@ -32,6 +50,7 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/math/constants.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "radar_schemas/fmcw_waveform_bridge.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
@@ -212,6 +231,184 @@ HostTensor run_compensation(const std::vector<std::complex<T>>& host,
   return run_tdm_once<T>(
       to_device_tensor(host, shape, complex_dtype<T>()),
       tdm_params(waveform));
+}
+
+struct LiveWaveformTick {
+  std::shared_ptr<holoscan::Tensor> rd_maps;
+  std::optional<FMCWWaveformDescriptor> waveform;
+  int64_t waveform_skew_ns{0};
+  bool invalid_waveform{false};
+};
+
+struct LiveWaveformBank {
+  static void reset() {
+    ticks.clear();
+    index = 0;
+  }
+  static inline std::vector<LiveWaveformTick> ticks;
+  static inline std::size_t index{0};
+};
+
+holoscan::expected<void, holoscan::Error> emit_wire_waveform(
+    holoscan::Output<holoscan::radar::wire::FMCWWaveformT>& output,
+    holoscan::radar::wire::FMCWWaveformT wire,
+    std::span<const std::complex<double>> samples,
+    holoscan::TimePoint capture_time) {
+  const std::array<int64_t, 1> shape{
+      static_cast<int64_t>(samples.size())};
+  constexpr DLDataType kDtype{kDLComplex, 128U, 1U};
+  auto loan = output.allocate_tensor(
+      holoscan::TensorLoanRequest{.shape = shape, .dtype = kDtype});
+  if (!loan) {
+    return holoscan::make_unexpected(std::move(loan).error());
+  }
+  auto written = loan->write_host_and_commit(
+      [samples](const holoscan::TensorOutputWriteGuard& writer) {
+        std::copy(samples.begin(), samples.end(),
+                  writer.data_as<std::complex<double>>());
+      });
+  if (!written) {
+    return holoscan::make_unexpected(std::move(written).error());
+  }
+  return output.emit_tensor(
+      std::move(*loan), wire,
+      holoscan::EmitOptions{.capture_time = capture_time});
+}
+
+class LiveWaveformSourceOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorPortLayout kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice,
+        .dtype = std::nullopt,
+        .rank = std::nullopt,
+    };
+    constexpr holoscan::TensorPortLayout kWaveform{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = DLDataType{kDLComplex, 128U, 1U},
+        .rank = 1U,
+    };
+    spec.output(rd_maps, "out")
+        .produces_tensor(kDevice)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 4U, .max_byte_span = 256ULL * 1024ULL * 1024ULL});
+    spec.output(waveform, "waveform")
+        .max_emits_per_compute(1U)
+        .produces_tensor(kWaveform)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 1U,
+            .max_byte_span = 1024U * sizeof(std::complex<double>)});
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{
+        .period = holoscan::radar::testing::detail::kHarnessTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    if (LiveWaveformBank::index >= LiveWaveformBank::ticks.size()) {
+      return {};
+    }
+    const LiveWaveformTick& tick =
+        LiveWaveformBank::ticks[LiveWaveformBank::index++];
+    const holoscan::TimePoint rd_time = context.activation_time();
+    if (tick.waveform.has_value()) {
+      auto wire = holoscan::radar::to_wire(*tick.waveform);
+      if (tick.invalid_waveform) {
+        wire.chirp_duration = 0.0;
+      }
+      holoscan::TimePoint waveform_time = rd_time;
+      waveform_time.timestamp_ns += tick.waveform_skew_ns;
+      auto emitted = emit_wire_waveform(
+          waveform, std::move(wire),
+          std::span<const std::complex<double>>{
+              tick.waveform->reference_samples()},
+          waveform_time);
+      if (!emitted) {
+        return emitted;
+      }
+    }
+    return holoscan::radar::testing::detail::emit_bank_frame(
+        rd_maps, context, tick.rd_maps, "LiveWaveformSourceOp");
+  }
+
+  holoscan::Output<holoscan::Tensor> rd_maps{"out"};
+  holoscan::Output<holoscan::radar::wire::FMCWWaveformT>
+      waveform{"waveform"};
+};
+
+GraphRunResult run_live_waveform_graph(
+    std::vector<LiveWaveformTick> ticks,
+    MIMOCoherentCompensationParams params) {
+  GraphRunResult result;
+  holoscan::radar::testing::detail::FrameBank::reset();
+  LiveWaveformBank::reset();
+  LiveWaveformBank::ticks = std::move(ticks);
+  const std::size_t expected = LiveWaveformBank::ticks.size();
+
+  holoscan::Graph graph{"mimo-live-waveform"};
+  const auto source = graph.op<LiveWaveformSourceOp>("source");
+  auto op = holoscan::radar::testing::emplace_harness_op<
+      MIMOCoherentCompensationOp<float>>(
+      graph, holoscan::radar::testing::default_test_extents());
+  op.set_params(std::move(params));
+  const auto sink =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink");
+  const holoscan::ConnectionOptions q{.queue_depth = 8U};
+  graph.add_flow(source->waveform, op->waveform_in, q);
+  graph.add_flow(source->rd_maps, op->rd_maps, q);
+  graph.add_flow(op->rd_maps_out, sink->in, q);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  holoscan::radar::testing::detail::bind_single_io_device_pools(
+      options, "rd_maps_out");
+  try {
+    const holoscan::ExecutionPlan plan =
+        holoscan::compile(graph, std::move(options));
+    result.plan_ok = plan.ok();
+    result.plan_json = plan.json();
+    if (!plan.ok()) {
+      return result;
+    }
+    holoscan::RunSession session = holoscan::run_async(plan);
+    const auto deadline = std::chrono::steady_clock::now() +
+                          holoscan::radar::testing::detail::kHarnessDeadline;
+    while (session.diagnostics().empty() &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::size_t count = 0;
+      {
+        const std::lock_guard lock(
+            holoscan::radar::testing::detail::FrameBank::mutex);
+        count =
+            holoscan::radar::testing::detail::FrameBank::captured.size();
+      }
+      if (count >= expected) {
+        break;
+      }
+      std::this_thread::sleep_for(
+          holoscan::radar::testing::detail::kHarnessPoll);
+    }
+    session.request_stop();
+    session.wait();
+    result.termination = session.termination();
+    for (const auto& diagnostic : session.diagnostics()) {
+      result.diagnostics.emplace_back(diagnostic.token);
+    }
+  } catch (const holoscan::RuntimeError& error) {
+    result.plan_ok = false;
+    result.plan_json = std::string("RuntimeError: ") + error.what();
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBank::mutex);
+    result.frames = std::move(
+        holoscan::radar::testing::detail::FrameBank::captured);
+  }
+  return result;
 }
 
 // ---- DDM helpers ----------------------------------------------------------
@@ -487,12 +684,73 @@ TEST(MIMOCoherentCompensationOp, WaveformConfigurableFromParams) {
 }
 
 TEST(MIMOCoherentCompensationOp, LiveWaveformOverrideSticky) {
-  // [EA HSDK5 ONLY] waveform is [live] in OPERATOR_API.md but Params-only
-  // on EA: FMCWWaveformDescriptor owns vectors, so it cannot be a typed
-  // Input<> (HSDK5_PORT §9). Mid-stream Graph sticky override testing is
-  // also blocked (§1). Restore when EA admits owning-container Inputs.
-  GTEST_SKIP() << "HSDK 5 EA: waveform live Input blocked (§9 owns "
-                  "vectors); mid-stream Graph sticky override blocked (§1)";
+  const auto waveform_a = make_test_waveform(kPri);
+  const auto waveform_b = make_test_waveform(kPri * 1.3);
+  const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
+  const auto frame_a = to_device_tensor(
+      build_misaligned_rd_host<float>(
+          waveform_a, kNumTx, kNumRx, kDoppler, kRange),
+      shape, complex_dtype<float>());
+  const auto frame_b = to_device_tensor(
+      build_misaligned_rd_host<float>(
+          waveform_b, kNumTx, kNumRx, kDoppler, kRange),
+      shape, complex_dtype<float>());
+  MIMOCoherentCompensationParams params = tdm_params(waveform_a);
+  params.expect_waveform = true;
+  params.sticky_waveform = true;
+
+  const GraphRunResult out = run_live_waveform_graph(
+      {{frame_a, std::nullopt}, {frame_b, waveform_b},
+       {frame_b, std::nullopt}},
+      std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 3U);
+  for (const HostTensor& frame : out.frames) {
+    expect_tx_lanes_aligned<float>(
+        frame, kNumTx, kNumRx, kDoppler, kRange);
+  }
+}
+
+TEST(MIMOCoherentCompensationOp, LiveWaveformUsesExactCaptureTime) {
+  const auto waveform_a = make_test_waveform(kPri);
+  const auto waveform_b = make_test_waveform(kPri * 1.3);
+  const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
+  const auto frame = to_device_tensor(
+      build_misaligned_rd_host<float>(
+          waveform_a, kNumTx, kNumRx, kDoppler, kRange),
+      shape, complex_dtype<float>());
+  MIMOCoherentCompensationParams params = tdm_params(waveform_a);
+  params.expect_waveform = true;
+  params.sticky_waveform = false;
+
+  const GraphRunResult out = run_live_waveform_graph(
+      {{frame, waveform_b, 1'000'000}}, std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 1U);
+  expect_tx_lanes_aligned<float>(
+      out.frames.front(), kNumTx, kNumRx, kDoppler, kRange);
+}
+
+TEST(MIMOCoherentCompensationOp, RejectsInvalidLiveWaveform) {
+  const auto waveform = make_test_waveform();
+  const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
+  const auto frame = to_device_tensor(
+      build_misaligned_rd_host<float>(
+          waveform, kNumTx, kNumRx, kDoppler, kRange),
+      shape, complex_dtype<float>());
+  MIMOCoherentCompensationParams params = tdm_params(waveform);
+  params.expect_waveform = true;
+
+  const GraphRunResult out = run_live_waveform_graph(
+      {{frame, waveform, 0, true}}, std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  EXPECT_TRUE(out.frames.empty());
+  EXPECT_FALSE(out.diagnostics.empty());
 }
 
 TEST(MIMOCoherentCompensationOp, FloatDoubleAgreement) {

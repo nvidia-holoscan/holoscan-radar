@@ -15,6 +15,7 @@ target_link_libraries(root_music_estimator_op
         holoscan::radar_common
         holoscan::radar_common_spatial_smoothing
         holoscan::radar_common_source_count
+        holoscan::radar_schemas
     PRIVATE
         matx::matx
         CUDA::cusolver)

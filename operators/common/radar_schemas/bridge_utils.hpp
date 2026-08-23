@@ -8,6 +8,7 @@
 #include <cstring>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -85,6 +86,38 @@ std::shared_ptr<Tensor> make_host_tensor(std::span<const T> source,
   return std::make_shared<Tensor>(std::move(context));
 }
 
+template <typename T>
+std::shared_ptr<Tensor> make_host_matrix(std::span<const T> source,
+                                         std::int64_t rows,
+                                         std::int64_t columns,
+                                         DLDataType dtype) {
+  if (rows < 0 || columns <= 0 ||
+      static_cast<std::uint64_t>(rows) >
+          static_cast<std::uint64_t>(SIZE_MAX) ||
+      static_cast<std::uint64_t>(columns) >
+          static_cast<std::uint64_t>(SIZE_MAX) ||
+      static_cast<std::size_t>(rows) >
+          SIZE_MAX / static_cast<std::size_t>(columns) ||
+      static_cast<std::size_t>(rows) * static_cast<std::size_t>(columns) !=
+          source.size()) {
+    throw std::invalid_argument("host Tensor matrix shape is invalid");
+  }
+  static_assert(std::is_trivially_copyable_v<T>);
+  auto memory = std::make_shared<HostTensorMemory<T>>(source);
+  auto context = std::make_shared<DLManagedTensorContext>();
+  context->memory_reference = memory;
+  context->dl_shape = {rows, columns};
+  context->tensor.dl_tensor.data =
+      memory->values.empty() ? nullptr : memory->values.data();
+  context->tensor.dl_tensor.device = DLDevice{kDLCPU, 0};
+  context->tensor.dl_tensor.ndim = 2;
+  context->tensor.dl_tensor.dtype = dtype;
+  context->tensor.dl_tensor.shape = context->dl_shape.data();
+  context->tensor.dl_tensor.strides = nullptr;
+  context->tensor.dl_tensor.byte_offset = 0;
+  return std::make_shared<Tensor>(std::move(context));
+}
+
 inline bool dtype_equals(DLDataType lhs, DLDataType rhs) {
   return lhs.code == rhs.code && lhs.bits == rhs.bits &&
          lhs.lanes == rhs.lanes;
@@ -133,6 +166,51 @@ expected<std::vector<T>, Error> read_host_vector(
   }
   std::vector<T> result(static_cast<std::size_t>(extent));
   std::memcpy(result.data(), tensor->data(), expected_bytes);
+  return result;
+}
+
+template <typename T>
+expected<std::vector<T>, Error> read_host_matrix(
+    const std::shared_ptr<Tensor>& tensor, DLDataType expected_dtype,
+    std::int64_t expected_columns, const char* field) {
+  if (tensor == nullptr) {
+    return invalid_wire_tensor(field, "Tensor pointer must not be null");
+  }
+  if (tensor->shape().size() != 2U ||
+      tensor->shape()[1] != expected_columns) {
+    return invalid_wire_tensor(field, "unexpected matrix shape");
+  }
+  if (tensor->device().device_type != kDLCPU) {
+    return invalid_wire_tensor(field, "expected pageable host memory");
+  }
+  if (!tensor->is_contiguous()) {
+    return invalid_wire_tensor(field, "expected contiguous storage");
+  }
+  if (!dtype_equals(tensor->dtype(), expected_dtype)) {
+    return invalid_wire_tensor(field, "unexpected dtype");
+  }
+  const auto rows = tensor->shape()[0];
+  if (rows < 0 || expected_columns <= 0 ||
+      static_cast<std::uint64_t>(rows) >
+          static_cast<std::uint64_t>(SIZE_MAX) ||
+      static_cast<std::size_t>(rows) >
+          SIZE_MAX / static_cast<std::size_t>(expected_columns) ||
+      static_cast<std::size_t>(rows) *
+              static_cast<std::size_t>(expected_columns) >
+          SIZE_MAX / sizeof(T)) {
+    return invalid_wire_tensor(field, "invalid extent");
+  }
+  const std::size_t count = static_cast<std::size_t>(rows) *
+                            static_cast<std::size_t>(expected_columns);
+  const std::size_t expected_bytes = count * sizeof(T);
+  if (static_cast<std::size_t>(tensor->nbytes()) != expected_bytes ||
+      (expected_bytes != 0U && tensor->data() == nullptr)) {
+    return invalid_wire_tensor(field, "byte size is inconsistent with shape");
+  }
+  std::vector<T> result(count);
+  if (expected_bytes != 0U) {
+    std::memcpy(result.data(), tensor->data(), expected_bytes);
+  }
   return result;
 }
 

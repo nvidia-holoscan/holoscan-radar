@@ -4,20 +4,35 @@
 // ClusterDBSCANOp contract tests (HSDK 5 Graph harness): density clustering
 // over a feature matrix — blobs/noise, anisotropic epsilon, min_points /
 // max_clusters Params coverage, descending-size numbering, error paths, and
-// float/double agreement. Graph mid-stream sticky [live] overrides deferred
-// (HSDK5_PORT.md §1 / §9).
+// float/double agreement and pageable-host epsilon live overrides.
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
+#include <holoscan/core/compile.hpp>
 #include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/expected.hpp>
 #include <holoscan/core/graph.hpp>
+#include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
+#include <holoscan/core/payload_options.hpp>
+#include <holoscan/core/run.hpp>
+#include <holoscan/core/temporal_contract.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/time/realtime_clock.hpp>
 
 #include "clustering/cluster_dbscan_op/cluster_dbscan_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -32,6 +47,8 @@ using holoscan::radar::testing::DualIOGraphRunResult;
 using holoscan::radar::testing::HostTensor;
 using holoscan::radar::testing::real_cube_to_device;
 using holoscan::radar::testing::run_single_in_dual_out_operator_graph_result;
+
+constexpr DLDataType kFloat64Dtype{kDLFloat, 64, 1};
 
 struct DbscanResult {
   HostTensor labels;
@@ -294,8 +311,7 @@ TEST(ClusterDBSCANOpTest, FloatAndDoubleAgree) {
 }
 
 TEST(ClusterDBSCANOpTest, EpsilonConfigurableFromParams) {
-  // Authoring Params must select isotropic vs per-axis epsilon (live Graph
-  // override deferred — HSDK5_PORT §9).
+  // Params remain the seed when no live epsilon Tensor is expected.
   std::vector<double> pts = {
       0.0, 0.0,  2.0, 0.0,  4.0, 0.0,  0.0, 5.0,
   };
@@ -373,14 +389,259 @@ TEST(ClusterDBSCANOpTest, RejectsBadPointsRank) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-// ---- Sticky [live] overrides (deferred on EA) -----------------------------
+// ---- Pageable-host vector [live] override ---------------------------------
 
-TEST(ClusterDBSCANOpTest, LiveEpsilonStickyOverride) {
-  // [EA HSDK5 ONLY] epsilon is Params-only: unbounded length-1-or-F vector
-  // cannot use Input<std::vector> (HSDK5_PORT.md §9). Params authoring covers
-  // selection (EpsilonConfigurableFromParams).
-  GTEST_SKIP() << "HSDK 5 EA: live epsilon override deferred "
-                  "(HSDK5_PORT.md §9 — Params-only unbounded vector)";
+struct LiveEpsilonTick {
+  std::shared_ptr<holoscan::Tensor> points;
+  std::optional<std::vector<double>> epsilon;
+  int64_t skew_ns{0};
+};
+
+struct LiveEpsilonBank {
+  static void reset(std::vector<LiveEpsilonTick> new_ticks) {
+    ticks = std::move(new_ticks);
+    index = 0U;
+  }
+  static inline std::vector<LiveEpsilonTick> ticks;
+  static inline std::size_t index{0U};
+};
+
+class LiveEpsilonSourceOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorPortLayout kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice,
+        .dtype = std::nullopt,
+        .rank = std::nullopt,
+    };
+    constexpr holoscan::TensorPortLayout kHostVector{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = kFloat64Dtype,
+        .rank = 1U,
+    };
+    spec.output(points, "out")
+        .produces_tensor(kDevice)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 2U, .max_byte_span = 4096U});
+    spec.output(epsilon, "epsilon")
+        .max_emits_per_compute(1U)
+        .produces_tensor(kHostVector)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 1U, .max_byte_span = 128U * sizeof(double)});
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{
+        .period = holoscan::radar::testing::detail::kHarnessTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    if (LiveEpsilonBank::index >= LiveEpsilonBank::ticks.size()) {
+      return {};
+    }
+    const LiveEpsilonTick tick =
+        LiveEpsilonBank::ticks[LiveEpsilonBank::index++];
+    const holoscan::TimePoint points_time = context.activation_time();
+    if (tick.epsilon.has_value()) {
+      const std::vector<double>& values = *tick.epsilon;
+      const std::vector<int64_t> shape{
+          static_cast<int64_t>(values.size())};
+      auto loan = epsilon.allocate_tensor(holoscan::TensorLoanRequest{
+          .shape = shape, .dtype = kFloat64Dtype});
+      if (!loan) {
+        return holoscan::make_unexpected(std::move(loan).error());
+      }
+      auto written = loan->write_host_and_commit(
+          [&values](const holoscan::TensorOutputWriteGuard& writer) {
+            std::copy(values.begin(), values.end(),
+                      writer.data_as<double>());
+          });
+      if (!written) {
+        return holoscan::make_unexpected(std::move(written).error());
+      }
+      holoscan::TimePoint epsilon_time = points_time;
+      epsilon_time.timestamp_ns += tick.skew_ns;
+      auto emitted = epsilon.emit(
+          std::move(*loan),
+          holoscan::EmitOptions{.capture_time = epsilon_time});
+      if (!emitted) {
+        return holoscan::make_unexpected(std::move(emitted).error());
+      }
+    }
+    return holoscan::radar::testing::detail::emit_bank_frame(
+        points, context, tick.points, "LiveEpsilonSourceOp");
+  }
+
+  holoscan::Output<holoscan::Tensor> points{"out"};
+  holoscan::Output<holoscan::Tensor> epsilon{"epsilon"};
+};
+
+DualIOGraphRunResult run_epsilon_override_graph(
+    std::vector<LiveEpsilonTick> ticks, ClusterDBSCANParams params,
+    int64_t max_features = 2) {
+  DualIOGraphRunResult result;
+  holoscan::radar::testing::detail::FrameBank::reset();
+  holoscan::radar::testing::detail::FrameBankB::reset();
+  const std::size_t expected = ticks.size();
+  LiveEpsilonBank::reset(std::move(ticks));
+
+  holoscan::Graph graph{"epsilon-live-override"};
+  const auto source = graph.op<LiveEpsilonSourceOp>("source");
+  auto extents = holoscan::radar::testing::default_test_extents();
+  extents.max_features = max_features;
+  auto op = graph.op<ClusterDBSCANOp<double>>("op", extents);
+  op.set_params(std::move(params));
+  const auto labels =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("labels");
+  const auto sizes =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("sizes");
+  const holoscan::ConnectionOptions q{.queue_depth = 8U};
+  graph.add_flow(source->points, op->points, q);
+  graph.add_flow(source->epsilon, op->epsilon, q);
+  graph.add_flow(op->labels, labels->in, q);
+  graph.add_flow(op->sizes, sizes->in, q);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  holoscan::radar::testing::detail::bind_single_in_dual_out_device_pools(
+      options, "labels", "sizes");
+  try {
+    const holoscan::ExecutionPlan plan =
+        holoscan::compile(graph, std::move(options));
+    result.plan_ok = plan.ok();
+    result.plan_json = plan.json();
+    if (!plan.ok()) {
+      return result;
+    }
+    holoscan::RunSession session = holoscan::run_async(plan);
+    const auto deadline = std::chrono::steady_clock::now() +
+                          holoscan::radar::testing::detail::kHarnessDeadline;
+    while (session.diagnostics().empty() &&
+           std::chrono::steady_clock::now() < deadline) {
+      {
+        const std::lock_guard lock(
+            holoscan::radar::testing::detail::FrameBankB::mutex);
+        if (holoscan::radar::testing::detail::FrameBankB::captured.size() >=
+            expected) {
+          break;
+        }
+      }
+      std::this_thread::sleep_for(
+          holoscan::radar::testing::detail::kHarnessPoll);
+    }
+    session.request_stop();
+    session.wait();
+    result.termination = session.termination();
+    for (const auto& diagnostic : session.diagnostics()) {
+      result.diagnostics.emplace_back(diagnostic.token);
+    }
+  } catch (const holoscan::RuntimeError& error) {
+    result.plan_ok = false;
+    result.plan_json = std::string("RuntimeError: ") + error.what();
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBank::mutex);
+    result.frames0 = std::move(
+        holoscan::radar::testing::detail::FrameBank::captured);
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBankB::mutex);
+    result.frames1 = std::move(
+        holoscan::radar::testing::detail::FrameBankB::captured);
+  }
+  return result;
+}
+
+std::shared_ptr<holoscan::Tensor> live_epsilon_points() {
+  return points_tensor<double>(
+      {0.0, 0.0, 2.0, 0.0, 4.0, 0.0, 0.0, 5.0}, 4, 2);
+}
+
+TEST(ClusterDBSCANOpTest, LiveEpsilonExactMatchChangesClustering) {
+  ClusterDBSCANParams params = make_params({1.0}, 2);
+  params.expect_epsilon = true;
+  params.sticky_epsilon = false;
+  const auto out = run_epsilon_override_graph(
+      {{live_epsilon_points(), std::vector<double>{3.0, 1.0}}},
+      std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames1.size(), 1U);
+  EXPECT_EQ(out.frames1[0].shape[0], 1);
+}
+
+TEST(ClusterDBSCANOpTest, LiveEpsilonSkewedCaptureMissesExact) {
+  ClusterDBSCANParams params = make_params({1.0}, 2);
+  params.expect_epsilon = true;
+  params.sticky_epsilon = false;
+  const auto out = run_epsilon_override_graph(
+      {{live_epsilon_points(), std::vector<double>{3.0, 1.0}, 1}},
+      std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames1.size(), 1U);
+  EXPECT_EQ(out.frames1[0].shape[0], 0);
+}
+
+TEST(ClusterDBSCANOpTest, LiveEpsilonStickyKeepsLastExactMatch) {
+  ClusterDBSCANParams params = make_params({1.0}, 2);
+  params.expect_epsilon = true;
+  params.sticky_epsilon = true;
+  const auto out = run_epsilon_override_graph(
+      {{live_epsilon_points(), std::vector<double>{3.0, 1.0}},
+       {live_epsilon_points(), std::nullopt}},
+      std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames1.size(), 2U);
+  EXPECT_EQ(out.frames1[0].shape[0], 1);
+  EXPECT_EQ(out.frames1[1].shape[0], 1);
+}
+
+TEST(ClusterDBSCANOpTest, LiveEpsilonEphemeralRevertsToParams) {
+  ClusterDBSCANParams params = make_params({1.0}, 2);
+  params.expect_epsilon = true;
+  params.sticky_epsilon = false;
+  const auto out = run_epsilon_override_graph(
+      {{live_epsilon_points(), std::vector<double>{3.0, 1.0}},
+       {live_epsilon_points(), std::nullopt}},
+      std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames1.size(), 2U);
+  EXPECT_EQ(out.frames1[0].shape[0], 1);
+  EXPECT_EQ(out.frames1[1].shape[0], 0);
+}
+
+TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsMalformedVector) {
+  ClusterDBSCANParams params = make_params({1.0}, 2);
+  params.expect_epsilon = true;
+  const auto out = run_epsilon_override_graph(
+      {{live_epsilon_points(), std::vector<double>{}}},
+      std::move(params));
+
+  EXPECT_TRUE(out.plan_ok) << out.plan_json;
+  EXPECT_FALSE(out.diagnostics.empty());
+}
+
+TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsConfiguredBoundOverflow) {
+  ClusterDBSCANParams params = make_params({1.0}, 2);
+  params.expect_epsilon = true;
+  const auto out = run_epsilon_override_graph(
+      {{live_epsilon_points(), std::vector<double>{1.0, 1.0, 1.0}}},
+      std::move(params), 2);
+
+  EXPECT_TRUE(out.plan_ok) << out.plan_json;
+  EXPECT_FALSE(out.diagnostics.empty());
 }
 
 TEST(ClusterDBSCANOpTest, LiveMinPointsStickyOverride) {

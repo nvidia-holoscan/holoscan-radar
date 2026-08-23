@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -26,6 +27,7 @@
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/dsp/subarray_selection.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
 
 namespace holoscan::radar {
 
@@ -55,16 +57,16 @@ namespace holoscan::radar {
 //
 // Precision is fixed at compile time (T = float | double).
 //
-// [EA HSDK5 ONLY] array_geometry / subarray are [live] in OPERATOR_API.md but
-// stay Params-only here: ArrayGeometry embeds vectors; subarray is an
-// unbounded index vector (HSDK5_PORT.md §9).
-
 struct SubarraySelectionParams {
   ArrayGeometry array_geometry{};
   // Explicit sub-array channel indices; empty → auto (largest filled ULA/URA).
   std::vector<int64_t> subarray{};
   // Minimum acceptable auto-selected sub-array size (error below it).
   int64_t min_subarray_size{2};
+  bool expect_array_geometry{false};
+  bool expect_subarray{false};
+  bool sticky_array_geometry{true};
+  bool sticky_subarray{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -82,7 +84,24 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&SubarraySelectionParams::min_subarray_size>(
         "min_subarray_size")
         .description(
-            "Auto-selection errors below this many channels"));
+            "Auto-selection errors below this many channels"),
+    holoscan::field<&SubarraySelectionParams::expect_array_geometry>(
+        "expect_array_geometry")
+        .description(
+            "Set when the application wires the array_geometry override."),
+    holoscan::field<&SubarraySelectionParams::expect_subarray>(
+        "expect_subarray")
+        .description("Set when the application wires the subarray override."),
+    holoscan::field<&SubarraySelectionParams::sticky_array_geometry>(
+        "sticky_array_geometry")
+        .description(
+            "Keep the last Exact array_geometry match on a miss. False "
+            "reverts to Params. Ignored unless expect_array_geometry."),
+    holoscan::field<&SubarraySelectionParams::sticky_subarray>(
+        "sticky_subarray")
+        .description(
+            "Keep the last Exact subarray match on a miss. False reverts "
+            "to Params. Ignored unless expect_subarray."));
 
 static_assert(
     holoscan::param_schema_availability<SubarraySelectionParams>() ==
@@ -106,6 +125,10 @@ class SubarraySelectionOp
   Input<Tensor> snapshot{"snapshot"};
   // Optional; unconnected graphs omit it from the temporal contract.
   Input<Tensor> is_valid{"is_valid"};
+  // [live] Exact overrides. The geometry input uses a distinct physical name
+  // because HSDK 5 requires unique input/output port names.
+  Input<WireArrayGeometry> array_geometry_in{"array_geometry_in"};
+  Input<Tensor> subarray{"subarray"};
   // [EA HSDK5 ONLY] unique in/out names — see OPERATOR_API.md / HSDK5_PORT §2.
   Output<Tensor> snapshot_out{"snapshot_out"};
   // Packed ArrayGeometry (float64 Tensor) — HSDK5_PORT §10.
@@ -118,9 +141,13 @@ class SubarraySelectionOp
   std::size_t snapshot_max_byte_span_{0U};
   std::size_t geom_max_byte_span_{0U};
   std::size_t is_valid_max_byte_span_{0U};
+  std::int64_t subarray_max_extent_{0};
 
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
+
+  std::optional<ArrayGeometry> sticky_array_geometry_;
+  std::optional<std::vector<int64_t>> sticky_subarray_;
 
   // Selection plan + uploaded channel-index table, rebuilt only when the
   // geometry / selection config changes (keyed by sel_key_).

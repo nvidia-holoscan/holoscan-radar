@@ -48,8 +48,8 @@ namespace holoscan::radar {
 //                  (anisotropic) ellipsoid: q is a neighbor of p when
 //                  Σ_i ((p_i − q_i) / epsilon_i)² ≤ 1. All values must be
 //                  finite and > 0. Required (no default).
-//                  [EA HSDK5 ONLY] Params-only — Input<std::vector> is not a
-//                  valid PublishedPayload (HSDK5_PORT.md §9); see OPEN_ITEMS.
+//                  [live] Exact rank-1 pageable-host float64 Tensor Input when
+//                  expect_epsilon; bounded by MaxTensorExtents.max_features.
 //   min_points   — int64. Minimum neighbors (including the point itself) for a
 //                  core point (DBSCAN minPts). <= 0 selects the default
 //                  heuristic 2·num_features (resolved per tick from the input).
@@ -68,8 +68,10 @@ struct ClusterDBSCANParams {
   std::vector<double> epsilon{};
   int64_t min_points{0};
   int64_t max_clusters{0};
+  bool expect_epsilon{false};
   bool expect_min_points{false};
   bool expect_max_clusters{false};
+  bool sticky_epsilon{true};
   bool sticky_min_points{true};
   bool sticky_max_clusters{true};
 };
@@ -89,6 +91,9 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Upper cap on reported clusters (surplus dropped to noise with a "
             "warning); <= 0 is uncapped"),
+    holoscan::field<&ClusterDBSCANParams::expect_epsilon>("expect_epsilon")
+        .description(
+            "Set when the application wires the epsilon Tensor override."),
     holoscan::field<&ClusterDBSCANParams::expect_min_points>(
         "expect_min_points")
         .description(
@@ -97,6 +102,10 @@ HOLOSCAN_PARAM_SCHEMA(
         "expect_max_clusters")
         .description(
             "Set when the application wires the max_clusters override."),
+    holoscan::field<&ClusterDBSCANParams::sticky_epsilon>("sticky_epsilon")
+        .description(
+            "Keep the last Exact epsilon match on a miss. Ignored unless "
+            "expect_epsilon."),
     holoscan::field<&ClusterDBSCANParams::sticky_min_points>(
         "sticky_min_points")
         .description(
@@ -119,7 +128,8 @@ class ClusterDBSCANOp : public holoscan::Operator<ClusterDBSCANParams> {
                 "ClusterDBSCANOp supports float and double precision");
 
  public:
-  // Required: sizes the labels / sizes Tensor pools at setup().
+  // Required: sizes output pools. A live epsilon port also requires
+  // max_features to bound its vector payload.
   explicit ClusterDBSCANOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
@@ -130,20 +140,22 @@ class ClusterDBSCANOp : public holoscan::Operator<ClusterDBSCANParams> {
   Input<Tensor> points{"points"};
   Output<Tensor> labels{"labels"};
   Output<Tensor> sizes{"sizes"};
-  // [live] Exact overrides, gated by expect_* (OPERATOR_API.md). epsilon
-  // stays Params-only
-  // (unbounded vector — HSDK5_PORT.md §9 / OPEN_ITEMS).
+  // [live] Exact overrides, gated by expect_* (OPERATOR_API.md).
+  Input<Tensor> epsilon{"epsilon"};
   Input<int64_t> min_points{"min_points"};
   Input<int64_t> max_clusters{"max_clusters"};
 
  private:
   MaxTensorExtents extents_;
+  std::int64_t max_features_{0};
   std::size_t max_labels_byte_span_{0U};
   std::size_t max_sizes_byte_span_{0U};
 
   // Keep the previous activation's input alive across ticks so async device
   // reads cannot outlive the buffer.
   Tensor retained_points_;
+  // Logical sticky state owns converted values, not Tensor storage.
+  std::optional<std::vector<double>> sticky_epsilon_;
   // Sticky [live] scalars: the last Exact match holds while sticky_*.
   std::optional<int64_t> sticky_min_points_;
   std::optional<int64_t> sticky_max_clusters_;

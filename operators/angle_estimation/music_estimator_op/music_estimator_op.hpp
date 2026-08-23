@@ -29,6 +29,8 @@
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/dsp/spatial_smoothing.hpp"
 #include "radar_common/sdk/config_cache.hpp"
+#include "radar_common/sdk/live_override_payloads.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
 
 namespace holoscan::radar {
 
@@ -68,12 +70,8 @@ void retire_music_matx_caches();
 // Out: eigenvalues     — float32/float64, (num_items, num_channels). Always
 //                       emitted (computed every tick).
 //
-// [EA HSDK5 ONLY] Live override ports: Exact Input for POD scalars, each
-// gated by its expect_* param
-// (num_sources, source_count_pfa, max_sources). Descriptor / unbounded-
-// vector live params (array_geometry, az_angles, el_angles,
-// spatial_smoothing) are Params-only (HSDK5_PORT.md §9). angle_convention
-// and forward_backward stay Params-only (STATIC / not [live]).
+// [live] ports join snapshot with Exact + SafeDefault and are gated by their
+// expect_* Params. angle_convention and forward_backward stay static.
 
 struct MUSICParams {
   ArrayGeometry array_geometry{};
@@ -88,12 +86,20 @@ struct MUSICParams {
   // Capacity of doa_multi / source_count, and the K_max cap on auto's EFT
   // search. Default 4.
   int64_t max_sources{4};
-  // Empty → off; [P] ULA; [P_az, P_el] URA. Params-only on EA (§9).
+  // Empty → off; [P] ULA; [P_az, P_el] URA.
   std::vector<int64_t> spatial_smoothing{};
   bool forward_backward{true};
+  bool expect_array_geometry{false};
+  bool expect_az_angles{false};
+  bool expect_el_angles{false};
+  bool expect_spatial_smoothing{false};
   bool expect_num_sources{false};
   bool expect_source_count_pfa{false};
   bool expect_max_sources{false};
+  bool sticky_array_geometry{true};
+  bool sticky_az_angles{true};
+  bool sticky_el_angles{true};
+  bool sticky_spatial_smoothing{true};
   bool sticky_num_sources{true};
   bool sticky_source_count_pfa{true};
   bool sticky_max_sources{true};
@@ -137,6 +143,20 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Include conjugate-reversed looks when spatial_smoothing is "
             "set"),
+    holoscan::field<&MUSICParams::expect_array_geometry>(
+        "expect_array_geometry")
+        .description(
+            "Set when the application wires the array_geometry override."),
+    holoscan::field<&MUSICParams::expect_az_angles>("expect_az_angles")
+        .description(
+            "Set when the application wires the az_angles override."),
+    holoscan::field<&MUSICParams::expect_el_angles>("expect_el_angles")
+        .description(
+            "Set when the application wires the el_angles override."),
+    holoscan::field<&MUSICParams::expect_spatial_smoothing>(
+        "expect_spatial_smoothing")
+        .description(
+            "Set when the application wires the spatial_smoothing override."),
     holoscan::field<&MUSICParams::expect_num_sources>("expect_num_sources")
         .description(
             "Set when the application wires the num_sources override."),
@@ -147,6 +167,20 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&MUSICParams::expect_max_sources>("expect_max_sources")
         .description(
             "Set when the application wires the max_sources override."),
+    holoscan::field<&MUSICParams::sticky_array_geometry>(
+        "sticky_array_geometry")
+        .description(
+            "Keep the last valid Exact array_geometry match on a miss."),
+    holoscan::field<&MUSICParams::sticky_az_angles>("sticky_az_angles")
+        .description(
+            "Keep the last valid Exact az_angles match on a miss."),
+    holoscan::field<&MUSICParams::sticky_el_angles>("sticky_el_angles")
+        .description(
+            "Keep the last valid Exact el_angles match on a miss."),
+    holoscan::field<&MUSICParams::sticky_spatial_smoothing>(
+        "sticky_spatial_smoothing")
+        .description(
+            "Keep the last valid Exact spatial_smoothing match on a miss."),
     holoscan::field<&MUSICParams::sticky_num_sources>("sticky_num_sources")
         .description(
             "Keep the last Exact num_sources match on a miss. Ignored "
@@ -190,9 +224,11 @@ class MUSICEstimatorOp : public holoscan::Operator<MUSICParams> {
   Output<Tensor> doa_multi{"doa_multi"};
   Output<Tensor> source_count{"source_count"};
   Output<Tensor> eigenvalues{"eigenvalues"};
-  // [live] Exact POD overrides, gated by expect_* (OPERATOR_API.md).
-  // Vector / descriptor live params stay Params-only on HSDK 5 EA — see
-  // OPEN_ITEMS.md / HSDK5_PORT §9.
+  // [live] Exact overrides, gated by expect_*.
+  Input<WireArrayGeometry> array_geometry{"array_geometry"};
+  Input<Tensor> az_angles{"az_angles"};
+  Input<Tensor> el_angles{"el_angles"};
+  Input<SpatialSmoothingOverride> spatial_smoothing{"spatial_smoothing"};
   Input<int64_t> num_sources{"num_sources"};
   Input<double> source_count_pfa{"source_count_pfa"};
   Input<int64_t> max_sources{"max_sources"};
@@ -209,7 +245,11 @@ class MUSICEstimatorOp : public holoscan::Operator<MUSICParams> {
   // reads cannot outlive the buffers.
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
-  // Sticky [live] scalars: the last Exact match holds while sticky_*.
+  // Sticky [live] state stores logical values, never wire-owned storage.
+  std::optional<ArrayGeometry> sticky_array_geometry_;
+  std::optional<std::vector<double>> sticky_az_angles_;
+  std::optional<std::vector<double>> sticky_el_angles_;
+  std::optional<std::vector<int64_t>> sticky_spatial_smoothing_;
   std::optional<int64_t> sticky_num_sources_;
   std::optional<double> sticky_source_count_pfa_;
   std::optional<int64_t> sticky_max_sources_;

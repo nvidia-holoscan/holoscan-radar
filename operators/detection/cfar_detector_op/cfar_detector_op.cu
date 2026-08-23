@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -22,6 +23,7 @@
 #include "detection/cfar_detector_op/cfar_compact.cuh"
 #include "detection/cfar_detector_op/cfar_stage.hpp"
 #include "detection/cfar_detector_op/nci_plan.hpp"
+#include "radar_common/sdk/config_tensor.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
@@ -38,6 +40,7 @@ constexpr const char* kOpName = "CFARDetectorOp";
 // 0/1 bytes kernels write; NumPy-visible.
 constexpr DLDataType kMaskDtype{kDLUInt, 8, 1};
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
+constexpr DLDataType kFloat64Dtype{kDLFloat, 64, 1};
 
 expected<void, Error> fail_invalid(const std::string& message) {
   return make_unexpected(Error{ErrorCode::kInvalidArgument, message});
@@ -124,6 +127,41 @@ expected<void, Error> require_pair(const std::vector<int64_t>& v,
   return {};
 }
 
+expected<void, Error> require_window_bounds(
+    const std::vector<int64_t>& value, const char* name,
+    int64_t max_doppler, int64_t max_range) {
+  HOLOSCAN_TRY(require_pair(value, name));
+  if (value[0] > max_doppler || value[1] > max_range) {
+    return fail_invalid(std::string("CFARDetectorOp: '") + name +
+                        "' exceeds MaxTensorExtents map bounds");
+  }
+  return {};
+}
+
+template <typename T>
+expected<std::vector<T>, Error> resolve_config_tensor_override(
+    bool expect, Input<Tensor>& port, const std::vector<T>& seed,
+    std::optional<std::vector<T>>& sticky, bool keep_sticky,
+    DLDataType dtype, int64_t max_extent, const char* field) {
+  if (!expect) {
+    return seed;
+  }
+  HOLOSCAN_TRY(auto maybe, receive_optional_value(port));
+  if (maybe.has_value()) {
+    HOLOSCAN_TRY(
+        auto converted,
+        read_host_config_vector<T>(*maybe, dtype, max_extent, field));
+    if (keep_sticky) {
+      sticky = converted;
+    }
+    return converted;
+  }
+  if (keep_sticky && sticky.has_value()) {
+    return *sticky;
+  }
+  return seed;
+}
+
 expected<TensorOutputLoan, Error> prepare_copy_device(
     Output<Tensor>& port, ExecutionContext& context,
     std::span<const int64_t> shape, DLDataType dtype, const void* src,
@@ -163,6 +201,11 @@ CFARDetectorOp<T>::CFARDetectorOp(const MaxTensorExtents& extents) {
   const std::size_t leading = named_tx_rx_leading_rank(extents);
   max_leading_ = leading;
   max_map_rank_ = static_cast<std::uint32_t>(2U + leading);
+  if (max_doppler > std::numeric_limits<int>::max() ||
+      max_range > std::numeric_limits<int>::max()) {
+    throw std::invalid_argument(
+        "CFARDetectorOp: map extents must fit int kernel dimensions");
+  }
 
   std::int64_t max_tx = 1;
   std::int64_t max_rx = 1;
@@ -179,6 +222,14 @@ CFARDetectorOp<T>::CFARDetectorOp(const MaxTensorExtents& extents) {
   max_idx_byte_span_ = byte_span_elems(
       product_extents({max_dets, idx_cols}, who),
       sizeof(std::int64_t), who);
+
+  const int64_t max_map_cells =
+      product_extents({max_doppler, max_range}, who);
+  if (max_map_cells == std::numeric_limits<int64_t>::max()) {
+    throw std::invalid_argument(
+        "CFARDetectorOp: alpha_lut extent bound overflows int64");
+  }
+  max_alpha_lut_extent_ = max_map_cells + 1;
 }
 
 template <typename T>
@@ -280,11 +331,29 @@ void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
       .tensor_allocation(TensorAllocationBounds{
           .max_rank = 2U,
           .max_byte_span = max_idx_byte_span_});
-  // [live] POD override ports. Vector lives are Params-only (HSDK5_PORT §9).
+  constexpr TensorPortLayout kHostInt64Vector{
+      .memory_kind = MemoryKind::kHost,
+      .dtype = kInt64Dtype,
+      .rank = 1U,
+  };
+  constexpr TensorPortLayout kHostFloat64Vector{
+      .memory_kind = MemoryKind::kHost,
+      .dtype = kFloat64Dtype,
+      .rank = 1U,
+  };
+  // [live] override ports.
   spec.input(pfa).queue_depth(2U);
   spec.input(threshold_scale).queue_depth(2U);
   spec.input(os_rank).queue_depth(2U);
   spec.input(max_detections).queue_depth(2U);
+  spec.input(guard_cells).queue_depth(2U);
+  spec.input(training_cells).queue_depth(2U);
+  spec.input(nci_axes)
+      .queue_depth(2U)
+      .expects_tensor(kHostInt64Vector);
+  spec.input(alpha_lut)
+      .queue_depth(2U)
+      .expects_tensor(kHostFloat64Vector);
 }
 
 template <typename T>
@@ -298,6 +367,14 @@ Contract CFARDetectorOp<T>::contract() const {
       result, os_rank, params().expect_os_rank);
   maybe_add_live_override_to_contract(
       result, max_detections, params().expect_max_detections);
+  maybe_add_live_override_to_contract(
+      result, guard_cells, params().expect_guard_cells);
+  maybe_add_live_override_to_contract(
+      result, training_cells, params().expect_training_cells);
+  maybe_add_live_override_to_contract(
+      result, nci_axes, params().expect_nci_axes);
+  maybe_add_live_override_to_contract(
+      result, alpha_lut, params().expect_alpha_lut);
   return result;
 }
 
@@ -324,12 +401,41 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
                                          max_detections, pinned.max_detections,
                                          sticky_max_detections_,
                                          pinned.sticky_max_detections));
-  // Params-only vectors (HSDK5_PORT §9).
-  const std::vector<int64_t>& effective_guard_cells = pinned.guard_cells;
-  const std::vector<int64_t>& effective_training_cells =
-      pinned.training_cells;
-  const std::vector<double>& effective_alpha_lut = pinned.alpha_lut;
-  const std::vector<int64_t>& effective_nci_axes = pinned.nci_axes;
+  HOLOSCAN_TRY(auto effective_guard_cells,
+               resolve_expected_override_via(
+                   pinned.expect_guard_cells, guard_cells,
+                   pinned.guard_cells, sticky_guard_cells_,
+                   pinned.sticky_guard_cells,
+                   [](const CfarCellWindowOverride& value) {
+                     return from_wire(value);
+                   }));
+  HOLOSCAN_TRY(auto effective_training_cells,
+               resolve_expected_override_via(
+                   pinned.expect_training_cells, training_cells,
+                   pinned.training_cells, sticky_training_cells_,
+                   pinned.sticky_training_cells,
+                   [](const CfarCellWindowOverride& value) {
+                     return from_wire(value);
+                   }));
+  HOLOSCAN_TRY(auto effective_nci_axes,
+               resolve_config_tensor_override(
+                   pinned.expect_nci_axes, nci_axes, pinned.nci_axes,
+                   sticky_nci_axes_, pinned.sticky_nci_axes, kInt64Dtype,
+                   static_cast<int64_t>(max_leading_), "nci_axes"));
+  int64_t alpha_lut_extent_bound = max_alpha_lut_extent_;
+  if (pinned.cfar_variant == CfarVariant::kOS) {
+    alpha_lut_extent_bound =
+        static_cast<int64_t>(detail::kMaxOsTrainingCells) + 1;
+  } else if (pinned.cfar_variant == CfarVariant::kGO ||
+             pinned.cfar_variant == CfarVariant::kSO) {
+    alpha_lut_extent_bound =
+        std::max(*extents_.max_doppler_bins, *extents_.max_range_bins) + 1;
+  }
+  HOLOSCAN_TRY(auto effective_alpha_lut,
+               resolve_config_tensor_override(
+                   pinned.expect_alpha_lut, alpha_lut, pinned.alpha_lut,
+                   sticky_alpha_lut_, pinned.sticky_alpha_lut,
+                   kFloat64Dtype, alpha_lut_extent_bound, "alpha_lut"));
 
   bool pfa_override_changed = false;
   if (pfa_seen_ && effective_pfa != last_seen_pfa_) {
@@ -338,8 +444,12 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
   last_seen_pfa_ = effective_pfa;
   pfa_seen_ = true;
 
-  HOLOSCAN_TRY(require_pair(effective_guard_cells, "guard_cells"));
-  HOLOSCAN_TRY(require_pair(effective_training_cells, "training_cells"));
+  HOLOSCAN_TRY(require_window_bounds(
+      effective_guard_cells, "guard_cells", *extents_.max_doppler_bins,
+      *extents_.max_range_bins));
+  HOLOSCAN_TRY(require_window_bounds(
+      effective_training_cells, "training_cells",
+      *extents_.max_doppler_bins, *extents_.max_range_bins));
 
   InputPrecision precision;
   try {

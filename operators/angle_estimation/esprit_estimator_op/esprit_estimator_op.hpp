@@ -32,6 +32,8 @@
 #include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
 #include "radar_common/dsp/shift_invariant_subarray.hpp"
 #include "radar_common/dsp/spatial_smoothing.hpp"
+#include "radar_common/sdk/live_override_payloads.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
 
 namespace holoscan::radar {
 
@@ -56,10 +58,9 @@ namespace holoscan::radar {
 //                       (num_items, post-smoothing num_channels). Always
 //                       emitted. No angle_spectrum (gridless).
 //
-// [EA HSDK5 ONLY] Exact Input, each gated by its expect_* param, for POD
-// [live] scalars (num_sources, source_count_pfa, max_sources). array_geometry / spatial_smoothing /
-// subarray_spec are Params-only (HSDK5_PORT.md §9; subarray_spec is STATIC).
-// angle_convention and forward_backward stay Params-only (STATIC / not [live]).
+// [EA HSDK5 ONLY] Exact Input, each gated by its expect_* param, for all
+// [live] parameters. subarray_spec, angle_convention, and forward_backward
+// stay Params-only (STATIC / not [live]).
 
 struct ESPRITParams {
   ArrayGeometry array_geometry{};
@@ -68,11 +69,15 @@ struct ESPRITParams {
   int64_t num_sources{-1};
   double source_count_pfa{1e-2};
   int64_t max_sources{4};
-  // Empty → off; [P] ULA; [P_az, P_el] URA. Params-only on EA (§9).
+  // Empty → off; [P] ULA; [P_az, P_el] URA.
   std::vector<int64_t> spatial_smoothing{};
   bool forward_backward{true};
-  // Static structural; empty vectors = auto. Params-only (§9).
+  // Static structural; empty vectors = auto.
   ShiftInvariantSubarrayPair subarray_spec{};
+  bool expect_array_geometry{false};
+  bool expect_spatial_smoothing{false};
+  bool sticky_array_geometry{true};
+  bool sticky_spatial_smoothing{true};
   bool expect_num_sources{false};
   bool expect_source_count_pfa{false};
   bool expect_max_sources{false};
@@ -111,6 +116,14 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&ESPRITParams::subarray_spec>("subarray_spec")
         .description(
             "Shift-invariant subarray pair; empty derives ULA/URA auto"),
+    holoscan::field<&ESPRITParams::expect_array_geometry>(
+        "expect_array_geometry")
+        .description(
+            "Set when the application wires the array_geometry override."),
+    holoscan::field<&ESPRITParams::expect_spatial_smoothing>(
+        "expect_spatial_smoothing")
+        .description(
+            "Set when the application wires the spatial_smoothing override."),
     holoscan::field<&ESPRITParams::expect_num_sources>("expect_num_sources")
         .description(
             "Set when the application wires the num_sources override."),
@@ -121,6 +134,16 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&ESPRITParams::expect_max_sources>("expect_max_sources")
         .description(
             "Set when the application wires the max_sources override."),
+    holoscan::field<&ESPRITParams::sticky_array_geometry>(
+        "sticky_array_geometry")
+        .description(
+            "Keep the last Exact array_geometry match on a miss. Ignored "
+            "unless expect_array_geometry."),
+    holoscan::field<&ESPRITParams::sticky_spatial_smoothing>(
+        "sticky_spatial_smoothing")
+        .description(
+            "Keep the last Exact spatial_smoothing match on a miss. Ignored "
+            "unless expect_spatial_smoothing."),
     holoscan::field<&ESPRITParams::sticky_num_sources>("sticky_num_sources")
         .description(
             "Keep the last Exact num_sources match on a miss. Ignored "
@@ -163,9 +186,9 @@ class ESPRITEstimatorOp : public holoscan::Operator<ESPRITParams> {
   Output<Tensor> doa_multi{"doa_multi"};
   Output<Tensor> source_count{"source_count"};
   Output<Tensor> eigenvalues{"eigenvalues"};
-  // [live] Exact POD overrides, gated by expect_* (OPERATOR_API.md).
-  // Vector / descriptor live params stay Params-only on HSDK 5 EA — see
-  // OPEN_ITEMS.md / HSDK5_PORT §9.
+  // [live] Exact overrides, gated by expect_* (OPERATOR_API.md).
+  Input<WireArrayGeometry> array_geometry{"array_geometry"};
+  Input<SpatialSmoothingOverride> spatial_smoothing{"spatial_smoothing"};
   Input<int64_t> num_sources{"num_sources"};
   Input<double> source_count_pfa{"source_count_pfa"};
   Input<int64_t> max_sources{"max_sources"};
@@ -176,9 +199,12 @@ class ESPRITEstimatorOp : public holoscan::Operator<ESPRITParams> {
   std::size_t doa_max_byte_span_{0U};
   std::size_t count_max_byte_span_{0U};
   std::size_t eig_max_byte_span_{0U};
+  std::optional<int64_t> max_channels_;
 
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
+  std::optional<ArrayGeometry> sticky_array_geometry_;
+  std::optional<std::vector<int64_t>> sticky_spatial_smoothing_;
   std::optional<int64_t> sticky_num_sources_;
   std::optional<double> sticky_source_count_pfa_;
   std::optional<int64_t> sticky_max_sources_;

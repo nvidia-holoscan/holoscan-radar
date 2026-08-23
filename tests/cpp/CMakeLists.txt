@@ -54,6 +54,7 @@ radar_add_test(common/test_subarray_selection)
 radar_add_test(common/test_source_count)
 radar_add_test(common/test_angle_convention)
 radar_add_test(common/test_descriptors)
+radar_add_test(common/test_live_override_payloads)
 radar_add_test(common/test_wire_descriptors holoscan::radar_schemas)
 # yaml_converters.hpp / max_tensor_extents_yaml.hpp are header-only; HSDK 5
 # no longer re-exports yaml-cpp.
@@ -74,6 +75,9 @@ target_link_libraries(enum_tensor_bind_repro PRIVATE
     CUDA::cudart)
 add_test(NAME EnumTensorBindRepro COMMAND enum_tensor_bind_repro)
 set_tests_properties(EnumTensorBindRepro PROPERTIES LABELS ea_repro)
+
+# Plain pageable-host Tensor config probe under OnEach + Exact + SafeDefault.
+radar_add_test(utils/test_host_tensor_exact_override LABELS ea_repro)
 radar_add_test(fmcw/test_clutter_filter
     holoscan::clutter_filter_op)
 radar_add_test(fmcw/test_mimo_deinterleave

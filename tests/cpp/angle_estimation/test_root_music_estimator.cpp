@@ -14,6 +14,7 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -22,13 +23,16 @@
 
 #include <holoscan/core/connection_options.hpp>
 #include <holoscan/core/graph.hpp>
+#include <holoscan/core/payload_options.hpp>
 
 #include "angle_estimation/root_music_estimator_op/root_music_estimator_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/dsp/angle_convention.hpp"
+#include "radar_common/sdk/live_override_payloads.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
 #include "utils/estimator_test_fixtures.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
@@ -42,8 +46,11 @@ using holoscan::radar::ArrayGeometryType;
 using holoscan::radar::ElevationReference;
 using holoscan::radar::RootMUSICEstimatorOp;
 using holoscan::radar::RootMUSICParams;
+using holoscan::radar::SpatialSmoothingOverride;
 using holoscan::radar::SignedAxis;
+using holoscan::radar::WireArrayGeometry;
 using holoscan::radar::complex_dtype;
+using holoscan::radar::real_dtype;
 using holoscan::radar::testing::FourOutGraphRunResult;
 using holoscan::radar::testing::HostTensor;
 using holoscan::radar::testing::block_to_device;
@@ -52,9 +59,12 @@ using holoscan::radar::testing::make_block;
 using holoscan::radar::testing::make_block_two;
 using holoscan::radar::testing::make_planar_ura_geometry;
 using holoscan::radar::testing::make_ula_geometry;
+namespace radar_testing = holoscan::radar::testing;
+using radar_testing::run_exact_override_four_out_operator_graph_result;
 using holoscan::radar::testing::run_single_in_four_out_operator_graph_result;
 using holoscan::radar::testing::steering_vector;
 using holoscan::radar::testing::to_device_tensor;
+using holoscan::radar::testing::to_pageable_host_tensor;
 
 struct RootMusicOutputs {
   HostTensor aoa;
@@ -781,13 +791,128 @@ TEST(RootMUSICEstimatorOpTest, LiveNumSourcesStickyOverride) {
 }
 
 TEST(RootMUSICEstimatorOpTest, LiveArrayGeometryStickyOverride) {
-  GTEST_SKIP() << "HSDK 5 EA: live array_geometry override deferred "
-                  "(HSDK5_PORT.md §1 / §9)";
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geometry, conv, 0.1, 0.0, kS, 0.02, 301u);
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  for (int tick = 0; tick < 3; ++tick) {
+    frames.push_back(block_to_device<double>(block, {1, kN, kS}));
+  }
+  RootMUSICParams params =
+      make_params(make_ula_geometry(kN - 1, 0.5, 1.0), conv,
+                  /*num_sources=*/1);
+  params.expect_array_geometry = true;
+  std::vector<std::optional<WireArrayGeometry>> payloads;
+  payloads.emplace_back(holoscan::radar::to_wire(geometry));
+  payloads.emplace_back(std::nullopt);
+  payloads.emplace_back(std::nullopt);
+
+  const auto result =
+      run_exact_override_four_out_operator_graph_result<
+          RootMUSICEstimatorOp<double>, WireArrayGeometry>(
+          std::move(frames), std::move(payloads), std::move(params),
+          "aoa_estimates", "doa_multi", "source_count", "eigenvalues",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1, const auto& sink2,
+             const auto& sink3) {
+            wire_root_music(graph, source, op, sink0, sink1, sink2, sink3);
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->override_out, op->array_geometry, q);
+          });
+  EXPECT_TRUE(result.plan_ok) << result.plan_json;
+  EXPECT_TRUE(result.diagnostics.empty());
+  EXPECT_EQ(result.frames0.size(), 3U);
+
+  RootMUSICParams invalid_params =
+      make_params(geometry, conv, /*num_sources=*/1);
+  invalid_params.expect_array_geometry = true;
+  WireArrayGeometry malformed_geometry = holoscan::radar::to_wire(geometry);
+  malformed_geometry.packed_geometry = to_pageable_host_tensor<double>(
+      {1.0}, {1}, real_dtype<double>());
+  std::vector<std::optional<WireArrayGeometry>> malformed_payloads;
+  malformed_payloads.emplace_back(std::move(malformed_geometry));
+  const auto invalid =
+      run_exact_override_four_out_operator_graph_result<
+          RootMUSICEstimatorOp<double>, WireArrayGeometry>(
+          {block_to_device<double>(block, {1, kN, kS})},
+          std::move(malformed_payloads),
+          std::move(invalid_params), "aoa_estimates", "doa_multi",
+          "source_count", "eigenvalues",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1, const auto& sink2,
+             const auto& sink3) {
+            wire_root_music(graph, source, op, sink0, sink1, sink2, sink3);
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->override_out, op->array_geometry, q);
+          });
+  EXPECT_TRUE(invalid.plan_ok) << invalid.plan_json;
+  EXPECT_TRUE(invalid.frames0.empty());
+  EXPECT_FALSE(invalid.diagnostics.empty());
 }
 
 TEST(RootMUSICEstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
-  GTEST_SKIP() << "HSDK 5 EA: live spatial_smoothing override deferred "
-                  "(HSDK5_PORT.md §1 / §9)";
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geometry, conv, 0.1, 0.0, kS, 0.02, 302u);
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  for (int tick = 0; tick < 3; ++tick) {
+    frames.push_back(block_to_device<double>(block, {1, kN, kS}));
+  }
+  RootMUSICParams params = make_params(
+      geometry, conv, /*num_sources=*/1, 1e-2, 4, /*smoothing=*/{kN + 1});
+  params.expect_spatial_smoothing = true;
+  std::vector<std::optional<SpatialSmoothingOverride>> payloads{
+      SpatialSmoothingOverride{.count = 1, .first = 2},
+      std::nullopt,
+      std::nullopt,
+  };
+
+  const auto result =
+      run_exact_override_four_out_operator_graph_result<
+          RootMUSICEstimatorOp<double>>(
+          std::move(frames), std::move(payloads), std::move(params),
+          "aoa_estimates", "doa_multi", "source_count", "eigenvalues",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1, const auto& sink2,
+             const auto& sink3) {
+            wire_root_music(graph, source, op, sink0, sink1, sink2, sink3);
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->override_out, op->spatial_smoothing, q);
+          });
+  EXPECT_TRUE(result.plan_ok) << result.plan_json;
+  EXPECT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames3.size(), 3U);
+  for (const auto& eigenvalues : result.frames3) {
+    EXPECT_EQ(eigenvalues.shape, (std::vector<int64_t>{1, kN - 1}));
+  }
+
+  RootMUSICParams invalid_params =
+      make_params(geometry, conv, /*num_sources=*/1);
+  invalid_params.expect_spatial_smoothing = true;
+  const auto invalid =
+      run_exact_override_four_out_operator_graph_result<
+          RootMUSICEstimatorOp<double>, SpatialSmoothingOverride>(
+          {block_to_device<double>(block, {1, kN, kS})},
+          {std::optional<SpatialSmoothingOverride>{
+              SpatialSmoothingOverride{.count = 3}}},
+          std::move(invalid_params), "aoa_estimates", "doa_multi",
+          "source_count", "eigenvalues",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1, const auto& sink2,
+             const auto& sink3) {
+            wire_root_music(graph, source, op, sink0, sink1, sink2, sink3);
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->override_out, op->spatial_smoothing, q);
+          });
+  EXPECT_TRUE(invalid.plan_ok) << invalid.plan_json;
+  EXPECT_TRUE(invalid.frames0.empty());
+  EXPECT_FALSE(invalid.diagnostics.empty());
 }
 
 TEST(RootMUSICEstimatorOpTest, LiveSourceCountPfaStickyOverride) {

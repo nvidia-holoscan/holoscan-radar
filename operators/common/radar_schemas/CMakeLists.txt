@@ -9,6 +9,27 @@ set(RADAR_SCHEMAS_GENERATED_DIR
     "${RADAR_SCHEMAS_GENERATED_ROOT}/radar_schemas")
 
 holoscan_add_flatbuffer_schema(
+    TARGET radar_array_geometry_schema
+    SCHEMAS array_geometry.fbs
+    INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_DIR "${RADAR_SCHEMAS_GENERATED_DIR}"
+    BFBS_EMBED
+    DESCRIPTOR_TENSOR
+    TRAITS_HEADER array_geometry_schema_traits.hpp
+    TRAITS_ROOT_TYPE holoscan::radar::wire::ArrayGeometry
+    TRAITS_NATIVE_TYPE holoscan::radar::wire::ArrayGeometryT
+    TRAITS_BINARY_SCHEMA_TYPE
+        holoscan::radar::wire::ArrayGeometryBinarySchema
+    TRAITS_PACKAGE_NAMESPACE
+        holoscan::radar::wire::array_geometry_package
+    TRAITS_CANONICAL_NAME
+        com.nvidia.holoscan.radar.wire.ArrayGeometry
+    TRAITS_SCHEMA_VERSION 1
+    TRAITS_MAX_SERIALIZED_SIZE 512
+    TRAITS_DESCRIPTOR_METADATA_CAPACITY 512
+)
+
+holoscan_add_flatbuffer_schema(
     TARGET radar_window_spec_schema
     SCHEMAS window_spec.fbs
     INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -67,6 +88,9 @@ function(radar_normalize_schema_traits SCHEMA_TARGET TRAITS_FILE)
 endfunction()
 
 radar_normalize_schema_traits(
+    radar_array_geometry_schema
+    "${RADAR_SCHEMAS_GENERATED_DIR}/array_geometry_schema_traits.hpp")
+radar_normalize_schema_traits(
     radar_window_spec_schema
     "${RADAR_SCHEMAS_GENERATED_DIR}/window_spec_schema_traits.hpp")
 radar_normalize_schema_traits(
@@ -76,8 +100,10 @@ radar_normalize_schema_traits(
 add_library(radar_schemas INTERFACE)
 add_library(holoscan::radar_schemas ALIAS radar_schemas)
 add_dependencies(radar_schemas
+    radar_array_geometry_schema
     radar_window_spec_schema
     radar_fmcw_waveform_schema
+    radar_array_geometry_schema_normalized
     radar_window_spec_schema_normalized
     radar_fmcw_waveform_schema_normalized)
 
@@ -103,6 +129,7 @@ install(DIRECTORY "${RADAR_SCHEMAS_GENERATED_DIR}/"
         PATTERN "*.hpp")
 install(FILES
     bridge_utils.hpp
+    array_geometry_bridge.hpp
     window_spec_bridge.hpp
     fmcw_waveform_bridge.hpp
     DESTINATION

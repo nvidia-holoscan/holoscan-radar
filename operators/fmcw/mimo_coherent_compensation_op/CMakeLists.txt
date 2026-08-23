@@ -15,6 +15,7 @@ target_link_libraries(mimo_coherent_compensation_op
     PUBLIC
         holoscan::core
         holoscan::radar_common
+        holoscan::radar_schemas
     PRIVATE
         matx::matx
         CUDA::cufft)

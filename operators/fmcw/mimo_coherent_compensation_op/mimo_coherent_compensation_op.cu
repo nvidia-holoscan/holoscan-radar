@@ -17,6 +17,7 @@
 #include <holoscan/core/expected_macros.hpp>
 #include <holoscan/core/payload_options.hpp>
 
+#include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/extents_layout.hpp"
@@ -58,6 +59,12 @@ MIMOCoherentCompensationOp<T>::MIMOCoherentCompensationOp(
   const std::int64_t max_range =
       require_extent(extents.max_range_bins,
                      "max_range_bins", who);
+  if (extents.max_samples_per_chirp.has_value() &&
+      *extents.max_samples_per_chirp <= 0) {
+    throw std::invalid_argument(
+        "MIMOCoherentCompensationOp: max_samples_per_chirp must be "
+        "positive when set");
+  }
   extents_ = extents;
   max_rank_ = 4U;
   max_byte_span_ = byte_span_complex_cube<T>(
@@ -77,6 +84,7 @@ void MIMOCoherentCompensationOp<T>::setup(OperatorSpec& spec) {
       .rank = std::nullopt,
   };
   spec.input(rd_maps).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(waveform_in).queue_depth(2U);
   spec.output(rd_maps_out)
       .produces_tensor(kDevice)
       .tensor_allocation(TensorAllocationBounds{
@@ -88,6 +96,8 @@ template <typename T>
 Contract MIMOCoherentCompensationOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{rd_maps});
+  maybe_add_live_override_to_contract(
+      result, waveform_in, params().expect_waveform);
   return result;
 }
 
@@ -324,11 +334,24 @@ expected<void, Error> MIMOCoherentCompensationOp<T>::compute(
   const MIMOCoherentCompensationParams& pinned =
       context.params<MIMOCoherentCompensationParams>();
 
-  // waveform is [live] in OPERATOR_API.md but Params-only on EA
-  // (HSDK5_PORT §9: FMCWWaveformDescriptor owns vectors). A changed waveform
-  // yields a new correction-table cache key, so ConfigCache handles the
-  // warn-once itself.
-  effective_waveform_ = pinned.waveform;
+  // Convert only fresh wire samples; sticky state owns the logical descriptor.
+  // A changed waveform yields a new correction-table cache key, so
+  // ConfigCache handles the warn-once itself.
+  HOLOSCAN_TRY(
+      effective_waveform_,
+      resolve_expected_override_via(
+          pinned.expect_waveform, waveform_in, pinned.waveform,
+          sticky_waveform_, pinned.sticky_waveform,
+          [](const wire::FMCWWaveformT& value) { return from_wire(value); }));
+  if (extents_.max_samples_per_chirp.has_value() &&
+      effective_waveform_.reference_samples().size() >
+          static_cast<std::size_t>(*extents_.max_samples_per_chirp)) {
+    return fail_invalid(
+        std::string(kOpName) + ": waveform reference_samples length " +
+        std::to_string(effective_waveform_.reference_samples().size()) +
+        " exceeds max_samples_per_chirp (" +
+        std::to_string(*extents_.max_samples_per_chirp) + ")");
+  }
 
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {

@@ -59,7 +59,11 @@ expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
 
 std::string geometry_key(const ArrayGeometry& geometry) {
   std::ostringstream key;
-  key << geometry.wavelength << '|';
+  key << geometry.wavelength << '|'
+      << (geometry.geometry_type.has_value()
+              ? static_cast<int>(*geometry.geometry_type)
+              : -1)
+      << '|';
   for (double value : geometry.element_positions) {
     key << value << ',';
   }
@@ -86,6 +90,7 @@ template <typename T>
 ESPRITEstimatorOp<T>::ESPRITEstimatorOp(
     const MaxTensorExtents& extents) {
   extents_ = extents;
+  max_channels_ = extents.max_channels;
   if (!extents.max_items.has_value() &&
       !extents.max_sources.has_value()) {
     return;
@@ -147,8 +152,10 @@ void ESPRITEstimatorOp<T>::setup(OperatorSpec& spec) {
       .tensor_allocation(TensorAllocationBounds{
           .max_rank = kMaxRank,
           .max_byte_span = eig_max_byte_span_});
-  // [live] POD sticky overrides. Leaving unconnected is legal — compute()
-  // seeds from Params. Descriptor / vector live params are Params-only (§9).
+  // [live] Exact sticky overrides. Leaving unconnected is legal — compute()
+  // seeds from Params.
+  spec.input(array_geometry).queue_depth(2U);
+  spec.input(spatial_smoothing).queue_depth(2U);
   spec.input(num_sources).queue_depth(2U);
   spec.input(source_count_pfa).queue_depth(2U);
   spec.input(max_sources).queue_depth(2U);
@@ -158,6 +165,10 @@ template <typename T>
 Contract ESPRITEstimatorOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{snapshot});
+  maybe_add_live_override_to_contract(
+      result, array_geometry, params().expect_array_geometry);
+  maybe_add_live_override_to_contract(
+      result, spatial_smoothing, params().expect_spatial_smoothing);
   maybe_add_live_override_to_contract(
       result, num_sources, params().expect_num_sources);
   maybe_add_live_override_to_contract(
@@ -173,6 +184,36 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
   HOLOSCAN_TRY(auto snap, receive_tensor(snapshot, kOpName));
 
   const ESPRITParams& pinned = context.params<ESPRITParams>();
+  HOLOSCAN_TRY(
+      auto geometry,
+      resolve_expected_override_via(
+          pinned.expect_array_geometry, array_geometry, pinned.array_geometry,
+          sticky_array_geometry_, pinned.sticky_array_geometry,
+          [this](const WireArrayGeometry& wire)
+              -> expected<ArrayGeometry, Error> {
+            auto converted = from_wire(wire);
+            if (!converted) {
+              return make_unexpected(std::move(converted).error());
+            }
+            if (max_channels_.has_value() &&
+                converted->num_elements() > *max_channels_) {
+              return make_unexpected(
+                  Error{ErrorCode::kInvalidArgument,
+                        "ESPRITEstimatorOp: "
+                        "array_geometry.num_elements exceeds "
+                        "MaxTensorExtents.max_channels"});
+            }
+            return std::move(*converted);
+          }));
+  HOLOSCAN_TRY(
+      auto smoothing,
+      resolve_expected_override_via(
+          pinned.expect_spatial_smoothing, spatial_smoothing,
+          pinned.spatial_smoothing, sticky_spatial_smoothing_,
+          pinned.sticky_spatial_smoothing,
+          [](const SpatialSmoothingOverride& wire) {
+            return from_wire(wire);
+          }));
   HOLOSCAN_TRY(auto effective_num_sources,
                resolve_expected_override(
                    pinned.expect_num_sources, num_sources, pinned.num_sources,
@@ -188,8 +229,6 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
                    pinned.expect_max_sources, max_sources, pinned.max_sources,
                    sticky_max_sources_, pinned.sticky_max_sources));
 
-  // Descriptor / vector / static params are Params-only on EA (HSDK5_PORT §9).
-  ArrayGeometry geometry = pinned.array_geometry;
   try {
     geometry.validate();
   } catch (const std::invalid_argument& e) {
@@ -202,9 +241,14 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
         "after the first successful activation; instantiate a separate "
         "operator per convention");
   }
-  const std::vector<int64_t>& smoothing = pinned.spatial_smoothing;
   const bool forward_backward = pinned.forward_backward;
   const ShiftInvariantSubarrayPair& requested_pair = pinned.subarray_spec;
+  if (max_channels_.has_value() &&
+      geometry.num_elements() > *max_channels_) {
+    return fail_invalid(
+        "ESPRITEstimatorOp: array_geometry.num_elements exceeds "
+        "MaxTensorExtents.max_channels");
+  }
 
   if (!(effective_pfa > 0.0) || !(effective_pfa < 1.0)) {
     return fail_invalid(
@@ -351,8 +395,7 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
     return {};
   }
 
-  // Params-only geometry: warn once per previously unseen geometry key
-  // (replaces HSDK4 live array_geometry override tracking).
+  // Warn once per previously unseen geometry key.
   const std::string geom_key = geometry_key(geometry);
   const bool geometry_is_new = seen_geometry_keys_.insert(geom_key).second;
   const bool geometry_changed =

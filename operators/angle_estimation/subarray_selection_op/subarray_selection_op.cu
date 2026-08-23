@@ -22,6 +22,8 @@
 #include "radar_common/descriptors/array_geometry_tensor.hpp"
 #include "radar_common/dsp/spatial_smoothing_device.hpp"
 #include "radar_common/dsp/subarray_selection.hpp"
+#include "radar_common/sdk/config_tensor.hpp"
+#include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
@@ -60,6 +62,18 @@ template <typename T>
 SubarraySelectionOp<T>::SubarraySelectionOp(
     const MaxTensorExtents& extents) {
   extents_ = extents;
+  if (extents.max_subarray_channels.has_value()) {
+    subarray_max_extent_ = require_extent(
+        extents.max_subarray_channels, "max_subarray_channels",
+        "SubarraySelectionOp");
+  } else if (extents.max_virtual_channels.has_value()) {
+    subarray_max_extent_ = require_extent(
+        extents.max_virtual_channels, "max_virtual_channels",
+        "SubarraySelectionOp");
+  } else if (extents.max_channels.has_value()) {
+    subarray_max_extent_ = require_extent(
+        extents.max_channels, "max_channels", "SubarraySelectionOp");
+  }
   if (!extents.max_items.has_value() &&
       !extents.max_subarray_channels.has_value() &&
       !extents.max_snapshots.has_value()) {
@@ -91,9 +105,18 @@ void SubarraySelectionOp<T>::setup(OperatorSpec& spec) {
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
+  constexpr TensorPortLayout kHostIndexVector{
+      .memory_kind = MemoryKind::kHost,
+      .dtype = DLDataType{kDLInt, 64U, 1U},
+      .rank = 1U,
+  };
   spec.input(snapshot).queue_depth(2U).expects_tensor(kDevice);
   // Optional is_valid: omitted from contract so unconnected graphs compile.
   spec.input(is_valid).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(array_geometry_in).queue_depth(2U);
+  spec.input(subarray)
+      .queue_depth(2U)
+      .expects_tensor(kHostIndexVector);
   spec.output(snapshot_out)
       .produces_tensor(kDevice)
       .tensor_allocation(TensorAllocationBounds{
@@ -116,10 +139,13 @@ template <typename T>
 Contract SubarraySelectionOp<T>::contract() const {
   // Trigger on the data tensor only. Optional is_valid is omitted so
   // unconnected graphs do not yield TEMPORAL_INPUT_UNCONNECTED (same pattern
-  // as BeamscanEstimatorOp). Descriptor / vector live overrides are
-  // Params-only (HSDK5_PORT §9).
+  // as BeamscanEstimatorOp).
   Contract result;
   result.trigger(OnEach{snapshot});
+  maybe_add_live_override_to_contract(
+      result, array_geometry_in, params().expect_array_geometry);
+  maybe_add_live_override_to_contract(
+      result, subarray, params().expect_subarray);
   return result;
 }
 
@@ -127,17 +153,6 @@ template <typename T>
 expected<void, Error> SubarraySelectionOp<T>::compute(
     ExecutionContext& context) {
   HOLOSCAN_TRY(auto snap, receive_tensor(snapshot, kOpName));
-
-  const SubarraySelectionParams& pinned =
-      context.params<SubarraySelectionParams>();
-  ArrayGeometry geometry = pinned.array_geometry;
-  try {
-    geometry.validate();
-  } catch (const std::invalid_argument& e) {
-    return fail_invalid(e.what());
-  }
-  const std::vector<int64_t>& subarray = pinned.subarray;
-  const int64_t min_size = pinned.min_subarray_size;
 
   try {
     require_cuda_accessible(snap, "snapshot", kOpName);
@@ -156,6 +171,33 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
   const int64_t num_items = shape[0];
   const int64_t num_channels = shape[1];
   const int64_t num_snapshots = shape.size() == 3 ? shape[2] : 1;
+  const SubarraySelectionParams& pinned =
+      context.params<SubarraySelectionParams>();
+  HOLOSCAN_TRY(
+      auto geometry,
+      resolve_expected_override_via(
+          pinned.expect_array_geometry, array_geometry_in,
+          pinned.array_geometry, sticky_array_geometry_,
+          pinned.sticky_array_geometry,
+          [](const WireArrayGeometry& value) { return from_wire(value); }));
+  const int64_t live_subarray_bound =
+      subarray_max_extent_ > 0 ? subarray_max_extent_ : num_channels;
+  HOLOSCAN_TRY(
+      auto subarray_value,
+      resolve_expected_override_via(
+          pinned.expect_subarray, subarray, pinned.subarray,
+          sticky_subarray_, pinned.sticky_subarray,
+          [live_subarray_bound](const Tensor& value) {
+            return read_host_config_vector<int64_t>(
+                value, DLDataType{kDLInt, 64U, 1U},
+                live_subarray_bound, "subarray");
+          }));
+  try {
+    geometry.validate();
+  } catch (const std::invalid_argument& e) {
+    return fail_invalid(e.what());
+  }
+  const int64_t min_size = pinned.min_subarray_size;
   if (num_channels != geometry.num_elements()) {
     return fail_invalid(
         "SubarraySelectionOp: snapshot num_channels must match "
@@ -203,14 +245,15 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
     ks << v << ',';
   }
   ks << '|';
-  for (int64_t v : subarray) {
+  for (int64_t v : subarray_value) {
     ks << v << ',';
   }
   ks << '|' << min_size;
   const std::string key = ks.str();
   if (key != sel_key_) {
     try {
-      selection_ = build_subarray_selection(geometry, subarray, min_size);
+      selection_ =
+          build_subarray_selection(geometry, subarray_value, min_size);
     } catch (const std::invalid_argument& e) {
       return fail_invalid(e.what());
     }

@@ -1,11 +1,21 @@
 # Schema Payloads
 
-Schema payloads are the HSDK 5 physical wire representation for a `[live]`
-value that owns a container and therefore cannot satisfy `PublishedPayload`
-directly. The logical operator contract remains expressed in the seven shared
-descriptors and ordinary parameter types. This encoding is an interim
-implementation that requires team ratification; it does not add another
-shared descriptor type.
+This document records the settled HSDK 5 physical payload policy for `[live]`
+values that cannot use an admitted scalar or enum directly. The logical
+operator contract remains expressed in the seven shared descriptors and
+ordinary parameter types; physical wire types never replace operator Params,
+YAML types, or the public descriptor model.
+
+Use one of three physical representations:
+
+1. generated FlatBuffers descriptor-Tensor schemas for shared owning
+   descriptors;
+2. ChannelPod payloads for bounded, fixed-layout scalar tuples; and
+3. rank-1 pageable-host `Input<Tensor>` payloads for variable-length scalar
+   vectors, with a per-port bound captured at operator construction.
+
+This mixed policy is settled. It does not add a shared descriptor type or
+permit bespoke record types on the data plane.
 
 ## Source and generated artifacts
 
@@ -19,19 +29,41 @@ Each shared logical value has one schema owner and one canonical identity.
 Do not copy a schema into individual operator directories: two copies can
 mint incompatible identities for the same logical payload.
 
-## When a schema is required
+## Choosing the physical payload
 
-Use a schema payload when both conditions hold:
+Use a generated schema payload when all of these conditions hold:
 
 1. the value is `[live]` and must cross an HSDK 5 typed port; and
-2. its logical C++ type owns a container or otherwise is not an admitted POD
-   payload.
+2. its logical type is one of the shared owning descriptors; and
+3. preserving the descriptor as one coherent value is preferable to exposing
+   its members as unrelated ports.
 
-Keep bounded, padding-free scalar aggregates as ChannelPod payloads. Keep
-plain numeric bulk data on Tensor ports. A mixed metadata + Tensor schema is
-appropriate when metadata and its bulk array form one coherent value: they
-then share one sample identity and `capture_time`, without a second temporal
-join.
+The generated owning object carries descriptor metadata, while variable bulk
+members use descriptor-Tensor fields. Metadata and bulk arrays then share one
+sample identity and `capture_time`, without a second temporal join. Examples
+include `WindowSpec`, `FMCWWaveformDescriptor`, and `ArrayGeometry`.
+
+Use ChannelPod only for a bounded scalar tuple whose physical field sequence
+and arity are fixed. It must satisfy the SDK's padding-free exact-tiling,
+fixed-width-scalar, standard-layout, trivially-copyable, and no-external-
+ownership rules. `SnapshotWindowOverride {doppler, range}` is the reference
+shape. A logical Params field may remain a vector where YAML compatibility
+requires it; the bridge validates and normalizes that logical value before
+forming the fixed physical tuple.
+
+Use a rank-1 pageable-host Tensor for a variable-length vector of one admitted
+scalar dtype. The port is physically `Input<Tensor>`; its logical Params and
+YAML type remains `std::vector<T>` (or the existing equivalent). Capture a
+finite maximum element count in the operator constructor, reject rank, dtype,
+memory-kind, and extent mismatches at the receive boundary, and copy or
+convert into operator-owned state before returning from `compute()`. The
+pageable-host requirement is a control-plane exception to the normal
+CUDA-accessible data-Tensor rule; these small vectors are not bulk data-plane
+inputs. Empty rank-1 Tensors represent empty vectors.
+
+Do not use a schema merely because a standalone scalar vector owns memory.
+Do not use ChannelPod for variable arity, pointers, strings, nested owning
+objects, or Tensor members. Keep ordinary numeric bulk data on Tensor ports.
 
 ## Adding a schema
 

@@ -16,6 +16,7 @@ target_link_libraries(music_estimator_op
         holoscan::radar_common_steering
         holoscan::radar_common_spatial_smoothing
         holoscan::radar_common_source_count
+        holoscan::radar_schemas
     PRIVATE
         matx::matx)
 

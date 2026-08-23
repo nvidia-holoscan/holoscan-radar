@@ -4,7 +4,18 @@
 
 An **FMCW-focused** operator API lockdown. Scope is derived from the FMCW workflows doc: the operators here are exactly those the SISO / SIMO / MIMO-TDM / MIMO-DDM chains require, plus the MIMO data-marshaling operators and the I/O bridges those chains lean on. Each operator is specified by its **Inputs / Outputs / Parameters / Algorithm / Notes**.
 
-Design conventions (from the workflows doc): plain-tensor ports (bridge with small explicit add-on operators, never shared record/struct message types); precision fixed by compile-time template instantiation (single + double), not a runtime flag or dtype inference; MatX implementation accepting tensors in any CUDA-accessible memory space (device, managed, pinned host — pageable-host input is rejected; amended 2026-07-10) and producing device memory; **named contract axes with no opaque leading `...` batch** (multi-item throughput is an application concern; see [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md)); industry-standard operator names; and angle operators that make the az/el convention explicit at the API boundary (required, no default).
+Design conventions (from the workflows doc): plain-tensor ports (bridge with
+small explicit add-on operators, never shared record/struct message types);
+precision fixed by compile-time template instantiation (single + double), not a
+runtime flag or dtype inference; MatX implementation accepting data tensors in
+any CUDA-accessible memory space (device, managed, pinned host — pageable-host
+data input is rejected; amended 2026-07-10), with a narrow pageable-host
+exception for rank-1 scalar-vector `[live]` payloads, and producing device
+memory; **named contract axes with no opaque leading `...` batch** (multi-item
+throughput is an application concern; see
+[`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md)); industry-standard operator
+names; and angle operators that make the az/el convention explicit at the API
+boundary (required, no default).
 
 Fat Tensor outputs take `MaxTensorExtents` at `graph.op()` for HSDK 5 pool sizing.
 
@@ -259,6 +270,28 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 - Output shapes are inferred from the input tensors each tick (never assumed fixed downstream), so a **[live]** change that alters an output shape is allowed — consumers re-infer.
 - Where a **[live]** override incurs a genuine cost — an FFT-plan build, a window-coefficient build, a CFAR window-kernel build — the operator **warns** (once per new configuration) and **caches** prior configurations so alternating values do not thrash.
 - A few parameters are genuinely fixed for an instance's lifetime (e.g. the CFAR variant, which selects the kernel) and are **static**; instantiate separate operators to vary those.
+
+**HSDK 5 physical `[live]` payload policy.** The parameter bullets below name
+the logical Params/YAML types. Those types do not change to satisfy
+`PublishedPayload`; only the same-named port's physical representation changes.
+
+- Shared owning descriptors use generated `holoscan::radar::wire`
+  FlatBuffers descriptor-Tensor schemas. The logical operator values remain
+  the corresponding shared descriptors.
+- Bounded fixed-layout scalar tuples use padding-free ChannelPod wrappers.
+  The logical Params type remains the type documented by the operator.
+- Variable-length scalar vectors use rank-1 pageable-host `Input<Tensor>`
+  payloads. Their logical Params remain `std::vector<T>` or the documented
+  equivalent. Each such port has a finite maximum element count captured at
+  operator construction; rank, dtype, pageable-host memory kind, and extent
+  are validated before conversion to the logical value.
+
+These control-plane Tensors are the sole pageable-host exception to the data
+Tensor memory-space rule. The physical payload does not alter Exact /
+SafeDefault joining, `expect_*` / `sticky_*`, validation, defaults, or
+shape-change semantics. Schema identity/evolution, generated-artifact, EA
+generator-workaround, and C++-only limitations are locked in
+[`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md).
 
 **Bridge operators.** The workflows also use small add-on operators to connect detection, clustering, and the sparse angle estimators. Per the plain-tensor-ports convention, bridging is done by explicit add-on operators (never shared structs). Each carries a **delivery-model** decision — a mainstream library operator, a per-application implementation, or a shared helper called inside another operator's `compute()` — recorded per bridge. Three exist — `SnapshotGatherOp`, `DetectionReductionOp`, and `FeatureAssemblyOp` — grouped into the functional sections below alongside the operators they connect (each flagged in its own Notes).
 
@@ -533,8 +566,8 @@ Selects a uniform ULA/URA sub-array from a (possibly holey) MIMO virtual array a
 
 **Parameters:**
 
-- `array_geometry` **[live]** — ArrayGeometry (holey virtual positions + wavelength). Required. On HSDK 5 EA the live Input is Params-only (descriptor owns vectors — HSDK5_PORT.md §9).
-- `subarray` **[live]** — int64 vector of explicit channel indices; empty → auto (largest filled ULA/URA). On HSDK 5 EA Params-only (unbounded vector — §9).
+- `array_geometry` **[live]** — ArrayGeometry (holey virtual positions + wavelength). Required. HSDK 5 physical live payload: generated descriptor-Tensor schema; logical Params type remains `ArrayGeometry`.
+- `subarray` **[live]** — int64 vector of explicit channel indices; empty → auto (largest filled ULA/URA). HSDK 5 physical live payload: rank-1 pageable-host int64 Tensor with a ctor-captured element bound; logical Params type remains the int64 vector.
 - `min_subarray_size` — int64. Auto-selection errors below this many channels. Static. Default: 2.
 
 #### Sparse angle estimators (shared slot)
@@ -692,7 +725,7 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 **Parameters:**
 
 - `multiplexing_scheme` — enum {TDM, DDM}. Selects the compensation path — TDM: per-Doppler-bin inter-TX phase correction; DDM: Doppler-band demux + per-chirp code removal + alignment — and how the `rd_maps` input rank is interpreted. Static (selects the kernel; instantiate separate ops to switch). Default: none (required).
-- `waveform` **[live]** — FMCWWaveformDescriptor. Per-TX PRI and carrier frequency for the Doppler-dependent phase math (the inter-TX correction under TDM; band alignment under DDM). Default: none (required). [EA HSDK5 ONLY] Params-only on EA (HSDK5_PORT §9: FMCWWaveformDescriptor owns vectors); live Input deferred.
+- `waveform` **[live]** — FMCWWaveformDescriptor. Per-TX PRI and carrier frequency for the Doppler-dependent phase math (the inter-TX correction under TDM; band alignment under DDM). Default: none (required). HSDK 5 physical live payload: the shared generated waveform descriptor-Tensor schema; logical Params type remains `FMCWWaveformDescriptor`.
 - `ddm_code` — DDMCodeDescriptor. The Doppler-band / phase-code layout to demux (carries `num_tx`). Static. Default: none (required for DDM; unused for TDM).
 
 *(No array/element geometry is needed here — this is a phase/demux operation, not a spatial one; `element_positions` enter only downstream at VirtualArrayAssemblyOp. `num_tx` is not a separate parameter — TDM reads it from the input's `M_tx` axis, DDM from `ddm_code`; anything sized by `num_tx` (e.g. the TDM per-Doppler-bin correction table) is built lazily on the first tick and cached, as with FFT plans, so it needs no init-time `num_tx`. TDM assumes uniform per-TX spacing; a non-uniform schedule is rejected upstream (see MIMODeinterleaveOp). Doppler-ambiguity / ÷M velocity handling lives here.)*

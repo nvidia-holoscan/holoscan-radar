@@ -53,9 +53,9 @@ namespace holoscan::radar {
 //                     expect_score_method.
 //   feature_weights — std::vector<double>, length num_features. Required for
 //                     peak (non-custom) / medoid.
-//                     [EA HSDK5 ONLY] Params-only — Input<std::vector> is not
-//                     a valid PublishedPayload (HSDK5_PORT.md §9); see
-//                     OPEN_ITEMS.
+//                     [live] Exact rank-1 pageable-host float64 Tensor Input
+//                     when expect_feature_weights; bounded by
+//                     MaxTensorExtents.max_features.
 //
 // Precision T = float | double. Optional ScoreFn is a compile-time device
 // functor used when score_method=custom: callable as
@@ -70,8 +70,10 @@ struct DetectionReductionParams {
   std::vector<double> feature_weights{};
   bool expect_representative{false};
   bool expect_score_method{false};
+  bool expect_feature_weights{false};
   bool sticky_representative{true};
   bool sticky_score_method{true};
+  bool sticky_feature_weights{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -100,6 +102,11 @@ HOLOSCAN_PARAM_SCHEMA(
         "expect_score_method")
         .description(
             "Set when the application wires the score_method override."),
+    holoscan::field<&DetectionReductionParams::expect_feature_weights>(
+        "expect_feature_weights")
+        .description(
+            "Set when the application wires the feature_weights Tensor "
+            "override."),
     holoscan::field<&DetectionReductionParams::sticky_representative>(
         "sticky_representative")
         .description(
@@ -109,7 +116,12 @@ HOLOSCAN_PARAM_SCHEMA(
         "sticky_score_method")
         .description(
             "Keep the last Exact score_method match on a miss. Ignored "
-            "unless expect_score_method."));
+            "unless expect_score_method."),
+    holoscan::field<&DetectionReductionParams::sticky_feature_weights>(
+        "sticky_feature_weights")
+        .description(
+            "Keep the last Exact feature_weights match on a miss. Ignored "
+            "unless expect_feature_weights."));
 
 static_assert(
     holoscan::param_schema_availability<DetectionReductionParams>() ==
@@ -123,7 +135,8 @@ class DetectionReductionOp
                 "DetectionReductionOp supports float and double precision");
 
  public:
-  // Required: sizes the rep_idx Tensor pool at setup().
+  // Required: sizes rep_idx. A live feature_weights port also requires
+  // max_features to bound its vector payload.
   explicit DetectionReductionOp(
       const MaxTensorExtents& extents);
 
@@ -140,13 +153,13 @@ class DetectionReductionOp
   Input<Tensor> points{"points"};
   Output<Tensor> rep_idx{"rep_idx"};
   // [live] Exact overrides, gated by expect_* (OPERATOR_API.md).
-  // feature_weights stays
-  // Params-only (unbounded vector — HSDK5_PORT.md §9 / OPEN_ITEMS).
   Input<RepresentativePolicy> representative{"representative"};
   Input<ScoreMethod> score_method{"score_method"};
+  Input<Tensor> feature_weights{"feature_weights"};
 
  private:
   MaxTensorExtents extents_;
+  std::int64_t max_features_{0};
   std::size_t max_byte_span_{0U};
 
   // Keep the previous activation's inputs alive across ticks so async device
@@ -158,6 +171,8 @@ class DetectionReductionOp
   // Sticky [live] POD enums: the last Exact match holds while sticky_*.
   std::optional<RepresentativePolicy> sticky_representative_;
   std::optional<ScoreMethod> sticky_score_method_;
+  // Logical sticky state owns converted values, not Tensor storage.
+  std::optional<std::vector<double>> sticky_feature_weights_;
 };
 
 extern template class DetectionReductionOp<float>;

@@ -3,20 +3,36 @@
 
 // DetectionReductionOp contract tests (HSDK 5 Graph harness): group-by-label
 // → rep_idx — first/peak/medoid policies, score methods, noise exclusion,
-// Params coverage, error paths, and float/double agreement. Graph mid-stream
-// sticky [live] overrides deferred (HSDK5_PORT.md §1 / §9).
+// Params coverage, error paths, float/double agreement, and pageable-host
+// feature_weights live overrides.
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
+#include <holoscan/core/compile.hpp>
 #include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/expected.hpp>
 #include <holoscan/core/graph.hpp>
+#include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
+#include <holoscan/core/payload_options.hpp>
+#include <holoscan/core/run.hpp>
+#include <holoscan/core/temporal_contract.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/time/realtime_clock.hpp>
 
 #include "detection/detection_reduction_op/detection_reduction_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -36,6 +52,7 @@ using holoscan::radar::testing::run_triple_in_single_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 
 constexpr DLDataType kInt64{kDLInt, 64, 1};
+constexpr DLDataType kFloat64Dtype{kDLFloat, 64, 1};
 
 DetectionReductionParams make_params(
     RepresentativePolicy representative = RepresentativePolicy::kPeak,
@@ -414,8 +431,7 @@ TEST(DetectionReductionOpTest, ScoreMethodConfigurableFromParams) {
 }
 
 TEST(DetectionReductionOpTest, FeatureWeightsConfigurableFromParams) {
-  // Authoring Params must select feature_weights (live Graph override
-  // deferred — HSDK5_PORT §9).
+  // Params remain the seed when no live feature_weights Tensor is expected.
   std::vector<int64_t> labels = {0, 0};
   std::vector<int64_t> idx = {10, 1, 20, 2};
   std::vector<float> points = {5.0f, 0.0f, 1.0f, 10.0f};
@@ -456,12 +472,276 @@ TEST(DetectionReductionOpTest, LiveScoreMethodStickyOverride) {
                   "(HSDK5_PORT.md §1)";
 }
 
-TEST(DetectionReductionOpTest, LiveFeatureWeightsStickyOverride) {
-  // [EA HSDK5 ONLY] feature_weights is Params-only: unbounded length-F vector
-  // cannot use Input<std::vector> (HSDK5_PORT.md §9). Params authoring covers
-  // selection (FeatureWeightsConfigurableFromParams).
-  GTEST_SKIP() << "HSDK 5 EA: live feature_weights override deferred "
-                  "(HSDK5_PORT.md §9 — Params-only unbounded vector)";
+// ---- Pageable-host vector [live] override ---------------------------------
+
+struct LiveWeightsTick {
+  std::shared_ptr<holoscan::Tensor> labels;
+  std::shared_ptr<holoscan::Tensor> detection_idx;
+  std::shared_ptr<holoscan::Tensor> points;
+  std::optional<std::vector<double>> weights;
+  int64_t skew_ns{0};
+};
+
+struct LiveWeightsBank {
+  static void reset(std::vector<LiveWeightsTick> new_ticks) {
+    ticks = std::move(new_ticks);
+    index = 0U;
+  }
+  static inline std::vector<LiveWeightsTick> ticks;
+  static inline std::size_t index{0U};
+};
+
+class LiveWeightsSourceOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorPortLayout kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice,
+        .dtype = std::nullopt,
+        .rank = std::nullopt,
+    };
+    constexpr holoscan::TensorPortLayout kHostVector{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = kFloat64Dtype,
+        .rank = 1U,
+    };
+    const holoscan::TensorAllocationBounds device_bounds{
+        .max_rank = 2U, .max_byte_span = 4096U};
+    spec.output(labels, "out0")
+        .produces_tensor(kDevice)
+        .tensor_allocation(device_bounds);
+    spec.output(detection_idx, "out1")
+        .produces_tensor(kDevice)
+        .tensor_allocation(device_bounds);
+    spec.output(points, "out2")
+        .produces_tensor(kDevice)
+        .tensor_allocation(device_bounds);
+    spec.output(weights, "feature_weights")
+        .max_emits_per_compute(1U)
+        .produces_tensor(kHostVector)
+        .tensor_allocation(holoscan::TensorAllocationBounds{
+            .max_rank = 1U, .max_byte_span = 128U * sizeof(double)});
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{
+        .period = holoscan::radar::testing::detail::kHarnessTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    if (LiveWeightsBank::index >= LiveWeightsBank::ticks.size()) {
+      return {};
+    }
+    const LiveWeightsTick tick =
+        LiveWeightsBank::ticks[LiveWeightsBank::index++];
+    const holoscan::TimePoint capture_time = context.activation_time();
+    if (tick.weights.has_value()) {
+      const std::vector<double>& values = *tick.weights;
+      const std::vector<int64_t> shape{
+          static_cast<int64_t>(values.size())};
+      auto loan = weights.allocate_tensor(holoscan::TensorLoanRequest{
+          .shape = shape, .dtype = kFloat64Dtype});
+      if (!loan) {
+        return holoscan::make_unexpected(std::move(loan).error());
+      }
+      auto written = loan->write_host_and_commit(
+          [&values](const holoscan::TensorOutputWriteGuard& writer) {
+            std::copy(values.begin(), values.end(),
+                      writer.data_as<double>());
+          });
+      if (!written) {
+        return holoscan::make_unexpected(std::move(written).error());
+      }
+      holoscan::TimePoint weights_time = capture_time;
+      weights_time.timestamp_ns += tick.skew_ns;
+      auto emitted = weights.emit(
+          std::move(*loan),
+          holoscan::EmitOptions{.capture_time = weights_time});
+      if (!emitted) {
+        return holoscan::make_unexpected(std::move(emitted).error());
+      }
+    }
+    auto emitted = holoscan::radar::testing::detail::emit_bank_frame(
+        labels, context, tick.labels, "LiveWeightsSourceOp.labels");
+    if (!emitted) {
+      return emitted;
+    }
+    emitted = holoscan::radar::testing::detail::emit_bank_frame(
+        detection_idx, context, tick.detection_idx,
+        "LiveWeightsSourceOp.detection_idx");
+    if (!emitted) {
+      return emitted;
+    }
+    return holoscan::radar::testing::detail::emit_bank_frame(
+        points, context, tick.points, "LiveWeightsSourceOp.points");
+  }
+
+  holoscan::Output<holoscan::Tensor> labels{"out0"};
+  holoscan::Output<holoscan::Tensor> detection_idx{"out1"};
+  holoscan::Output<holoscan::Tensor> points{"out2"};
+  holoscan::Output<holoscan::Tensor> weights{"feature_weights"};
+};
+
+GraphRunResult run_weights_override_graph(
+    std::vector<LiveWeightsTick> ticks, DetectionReductionParams params,
+    int64_t max_features = 2) {
+  GraphRunResult result;
+  holoscan::radar::testing::detail::FrameBank::reset();
+  const std::size_t expected = ticks.size();
+  LiveWeightsBank::reset(std::move(ticks));
+
+  holoscan::Graph graph{"feature-weights-live-override"};
+  const auto source = graph.op<LiveWeightsSourceOp>("source");
+  auto extents = holoscan::radar::testing::default_test_extents();
+  extents.max_features = max_features;
+  auto op = graph.op<DetectionReductionOp<double>>("op", extents);
+  op.set_params(std::move(params));
+  const auto sink =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink");
+  const holoscan::ConnectionOptions q{.queue_depth = 8U};
+  graph.add_flow(source->labels, op->labels, q);
+  graph.add_flow(source->detection_idx, op->detection_idx, q);
+  graph.add_flow(source->points, op->points, q);
+  graph.add_flow(source->weights, op->feature_weights, q);
+  graph.add_flow(op->rep_idx, sink->in, q);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  holoscan::radar::testing::detail::bind_triple_in_single_out_device_pools(
+      options, "rep_idx");
+  try {
+    const holoscan::ExecutionPlan plan =
+        holoscan::compile(graph, std::move(options));
+    result.plan_ok = plan.ok();
+    result.plan_json = plan.json();
+    if (!plan.ok()) {
+      return result;
+    }
+    holoscan::RunSession session = holoscan::run_async(plan);
+    const auto deadline = std::chrono::steady_clock::now() +
+                          holoscan::radar::testing::detail::kHarnessDeadline;
+    while (session.diagnostics().empty() &&
+           std::chrono::steady_clock::now() < deadline) {
+      {
+        const std::lock_guard lock(
+            holoscan::radar::testing::detail::FrameBank::mutex);
+        if (holoscan::radar::testing::detail::FrameBank::captured.size() >=
+            expected) {
+          break;
+        }
+      }
+      std::this_thread::sleep_for(
+          holoscan::radar::testing::detail::kHarnessPoll);
+    }
+    session.request_stop();
+    session.wait();
+    result.termination = session.termination();
+    for (const auto& diagnostic : session.diagnostics()) {
+      result.diagnostics.emplace_back(diagnostic.token);
+    }
+  } catch (const holoscan::RuntimeError& error) {
+    result.plan_ok = false;
+    result.plan_json = std::string("RuntimeError: ") + error.what();
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBank::mutex);
+    result.frames =
+        std::move(holoscan::radar::testing::detail::FrameBank::captured);
+  }
+  return result;
+}
+
+LiveWeightsTick make_weights_tick(
+    std::optional<std::vector<double>> weights, int64_t skew_ns = 0) {
+  const std::vector<int64_t> labels = {0, 0};
+  const std::vector<int64_t> idx = {10, 1, 20, 2};
+  const std::vector<double> points = {5.0, 0.0, 1.0, 10.0};
+  return {
+      to_device_tensor(labels, {2}, kInt64),
+      to_device_tensor(idx, {2, 2}, kInt64),
+      to_device_tensor(points, {2, 2}, real_dtype<double>()),
+      std::move(weights),
+      skew_ns,
+  };
+}
+
+DetectionReductionParams live_weights_params(bool sticky) {
+  auto params = make_params(RepresentativePolicy::kPeak,
+                            ScoreMethod::kWeightedSum, {1.0, 0.0});
+  params.expect_feature_weights = true;
+  params.sticky_feature_weights = sticky;
+  return params;
+}
+
+TEST(DetectionReductionOpTest, LiveFeatureWeightsExactMatchChangesSelection) {
+  const auto out = run_weights_override_graph(
+      {make_weights_tick(std::vector<double>{0.0, 1.0})},
+      live_weights_params(false));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 1U);
+  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 20);
+  EXPECT_EQ(out.frames[0].as<int64_t>()[1], 2);
+}
+
+TEST(DetectionReductionOpTest, LiveFeatureWeightsSkewedCaptureMissesExact) {
+  const auto out = run_weights_override_graph(
+      {make_weights_tick(std::vector<double>{0.0, 1.0}, 1)},
+      live_weights_params(false));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 1U);
+  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 10);
+  EXPECT_EQ(out.frames[0].as<int64_t>()[1], 1);
+}
+
+TEST(DetectionReductionOpTest, LiveFeatureWeightsStickyKeepsLastExactMatch) {
+  const auto out = run_weights_override_graph(
+      {make_weights_tick(std::vector<double>{0.0, 1.0}),
+       make_weights_tick(std::nullopt)},
+      live_weights_params(true));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 2U);
+  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 20);
+  EXPECT_EQ(out.frames[1].as<int64_t>()[0], 20);
+}
+
+TEST(DetectionReductionOpTest, LiveFeatureWeightsEphemeralRevertsToParams) {
+  const auto out = run_weights_override_graph(
+      {make_weights_tick(std::vector<double>{0.0, 1.0}),
+       make_weights_tick(std::nullopt)},
+      live_weights_params(false));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 2U);
+  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 20);
+  EXPECT_EQ(out.frames[1].as<int64_t>()[0], 10);
+}
+
+TEST(DetectionReductionOpTest, LiveFeatureWeightsRejectsMalformedLength) {
+  const auto out = run_weights_override_graph(
+      {make_weights_tick(std::vector<double>{1.0})},
+      live_weights_params(true));
+
+  EXPECT_TRUE(out.plan_ok) << out.plan_json;
+  EXPECT_FALSE(out.diagnostics.empty());
+}
+
+TEST(DetectionReductionOpTest, LiveFeatureWeightsRejectsBoundOverflow) {
+  const auto out = run_weights_override_graph(
+      {make_weights_tick(std::vector<double>{1.0, 1.0, 1.0})},
+      live_weights_params(true), 2);
+
+  EXPECT_TRUE(out.plan_ok) << out.plan_json;
+  EXPECT_FALSE(out.diagnostics.empty());
 }
 
 }  // namespace

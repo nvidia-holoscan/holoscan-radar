@@ -20,7 +20,7 @@ here when the root cause is HSDK 5 / EA.
 | [`operators/common/README.md`](../../operators/common/README.md) | Pilot patterns: Tensor I/O, sticky `[live]`, Graph harness |
 | [`STATUS.md`](STATUS.md) | Who owns what; claim / land coordination |
 | [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md) | **C++ landed:** module `MaxTensorExtents` ctor-capture for Tensor pool sizing + drop opaque leading batch; apps/Python phase 4; pinned [`MAX_TENSOR_EXTENTS_2026-08-15.md`](MAX_TENSOR_EXTENTS_2026-08-15.md) |
-| [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md) | Interim schema-payload ownership, generation, evolution, Tensor bounds, bridges/tests, and Python limitation |
+| [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md) | Settled mixed `[live]` payload policy: schema ownership/evolution, ChannelPod tuples, bounded host-Tensor vectors, bridges/tests, and Python limitation |
 | This file | Migration process + open HSDK 5 / EA friction |
 
 ---
@@ -40,9 +40,9 @@ The EA branch covers, in dependency order:
    stable.
 5. Python bindings, Holoviz demos, and example apps once EA exposes a
    usable Python operator surface / Holoviz (or we accept a C++-only path).
-6. Close issues deferred on the EA SDK and/or team decisions (sticky live
-   Graph, durable port/descriptor API deltas, restore or ratify interim
-   Params-only / Tensor-pack workarounds).
+6. Close issues deferred on the EA SDK and/or settled implementation work
+   (sticky live Graph, durable port/descriptor API deltas, and remaining
+   Params-only → mixed-payload / Tensor-pack migrations).
 7. Cleanup before `main` (drop allow-lists, `[EA HSDK5 ONLY]` fences, and
    this file).
 
@@ -86,8 +86,8 @@ new EA/team items added there). Typical work:
 | Class | Close by |
 | --- | --- |
 | **EA limitation** (e.g. §1 sticky Graph units / enum lives; remaining §8 enum/vector perf) | Re-probe on newer EA / GA; restore `contract()` sticky policy + unskip Graph tests; document the working harness recipe — or reclassify as durable if the SDK will not support it |
-| **Durable HSDK 5** (e.g. §2 unique in/out names, §9 vector/descriptor lives, §10 `ArrayGeometry` Tensor pack) | Team decision: keep the interim as the locked contract (update `OPERATOR_API.md`) **or** restore typed live/descriptor ports when the SDK admits them; drop dual “logical vs physical” naming notes once settled |
-| **Our deferred work blocked on the above** (optional-mask Graph wiring, Params-only → live Inputs, Graph sticky unskips) | Land only after the matching EA/team item is closed; do not silently pick a contract answer in code |
+| **Durable HSDK 5** (e.g. §2 unique in/out names, §9 vector/descriptor lives, §10 `ArrayGeometry` Tensor pack) | Apply the locked contract in `OPERATOR_API.md`; for §9 this means generated schemas for shared owning descriptors, ChannelPod fixed tuples, and bounded rank-1 pageable-host Tensors for variable scalar vectors |
+| **Our deferred work blocked on the above** (optional-mask Graph wiring, remaining Params-only → live Inputs, Graph sticky unskips) | Land against the settled contract after the matching EA prerequisite is closed; do not invent a different physical payload locally |
 
 Phase 5 is **not** for new algorithm contracts (those stay
 [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md) / per-op `OPEN_ITEMS.md`). It **is**
@@ -102,8 +102,8 @@ Copy the ClutterFilter / SnapshotGather patterns; do not reintroduce
 HSDK 4.x `InputContext` / `TensorMap` / `HOLOSCAN_OPERATOR_FORWARD_ARGS`.
 
 1. **Read the contract** in `OPERATOR_API.md` and any op `OPEN_ITEMS.md`.
-   Note unique in/out names (§2), POD vs Params-only live params (§9), and
-   whether a descriptor must ride a Tensor pack (§10).
+   Note unique in/out names (§2), the settled mixed live-payload mapping
+   (§9), and whether a descriptor output must ride a Tensor pack (§10).
 2. **Rewrite the op** to `Operator<Params>` + `HOLOSCAN_PARAM_SCHEMA`;
    typed `Input<Tensor>` / `Output<Tensor>` (or POD live Inputs); receive
    via `receive_tensor`, emit via `emit_device_tensor` /
@@ -204,9 +204,9 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph sticky/`TXSchedule` live N/A (Params-only schedule); Graph perf cold/steady landed |
 | `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` Params-only (§9); Graph live tests skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); Exact `wavelength` gated by `expect_wavelength` (Graph live deferred §1); Graph perf `wavelength` `override_ms` restored (§8); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
-| `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; Exact lives gated by `expect_*`; `range_window`/`waveform` restored through interim generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
-| `FMCWDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `velocity_bins` only with waveform; Exact lives gated by `expect_*`; `doppler_window`/`waveform` restored through interim generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
-| `FMCWRangeDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–3-out) | landed; optional axis outs with waveform; Exact lives incl. `clutter_filter` gated by `expect_*`; windows/`waveform` restored through interim generated schema payloads (§9); UlpParity vs split chain preserved; Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
+| `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; Exact lives gated by `expect_*`; `range_window`/`waveform` restored through generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
+| `FMCWDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `velocity_bins` only with waveform; Exact lives gated by `expect_*`; `doppler_window`/`waveform` restored through generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
+| `FMCWRangeDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–3-out) | landed; optional axis outs with waveform; Exact lives incl. `clutter_filter` gated by `expect_*`; windows/`waveform` restored through generated schema payloads (§9); UlpParity vs split chain preserved; Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
 | Python bindings / Holoviz demos / apps | deferred (phase 4); X11 RD + Graph demos siso/simo/dense/mimo/aoa landed (§6) |
 
 ---
@@ -219,8 +219,9 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 
 **Contract.** `OPERATOR_API.md` requires Exact `[live]` parameters gated by
 `expect_*`. Enabled live Inputs are in `contract()` only when
-`expect_*=true`. FMCW windows/waveform use interim generated schema payloads;
-other descriptor / unbounded-vector lives stay Params-only (§9).
+`expect_*=true`. FMCW windows/waveform use generated schema payloads; other
+descriptor / vector lives currently stay Params-only until the settled §9
+mapping is implemented.
 `resolve_sticky_override` remains for the LatestWithin repro test.
 
 **What the reproducer established.** The earlier failures were invalid
@@ -335,8 +336,9 @@ and converted: `ClutterFilterOp`,
 `MVDREstimatorOp`, `MUSICEstimatorOp`, `RootMUSICEstimatorOp`,
 `ESPRITEstimatorOp`. Remaining limitations are tracked here and in each
 operator's `OPEN_ITEMS.md`: optional *Tensor* inputs (§11), conditional
-outputs, and Params-only descriptor / vector lives outside the restored FMCW
-schema ports (§9). `FeatureAssemblyOp` and `SubarraySelectionOp` have no POD
+outputs, and not-yet-implemented descriptor / vector live ports outside the
+restored FMCW schema ports (§9). `FeatureAssemblyOp` and
+`SubarraySelectionOp` have no POD
 lives, so only their optional-input limitations remain.
 
 **Interim.**
@@ -347,8 +349,9 @@ lives, so only their optional-input limitations remain.
   `maybe_add_live_override_to_contract` in
   `radar_common/sdk/override_param.hpp`. The restored FMCW descriptor ports
   convert generated wire types before sticky resolution; other descriptor /
-  vector lives stay Params-only (§9). Optional Tensor inputs and conditional
-  outputs stay out of the contract (§11).
+  descriptor / vector lives remain Params-only only until the settled §9
+  physical payload mapping is implemented. Optional Tensor inputs and
+  conditional outputs stay out of the contract (§11).
 - **What is missing now is Graph coverage, not the contract shape.**
   Mid-stream Exact tests cover `FMCWRangeProcessorOp` `nfft`, range/Doppler
   windows, waveform validation, and fused schema overrides. The scalar/enum
@@ -559,6 +562,20 @@ nested fields
 ([custom FlatBuffer schemas](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/data-and-payloads/custom-flatbuffer-schemas.md),
 [schema payloads](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/data-and-payloads/schema-payloads.md)).
 
+**Settled policy (L18, 2026-08-23).** Use generated FlatBuffers
+descriptor-Tensor schemas for shared owning descriptors, ChannelPod wrappers
+for bounded fixed-layout scalar tuples, and rank-1 pageable-host
+`Input<Tensor>` payloads for variable-length scalar vectors. Every vector
+Tensor has a finite maximum element count captured at operator construction.
+The receive boundary validates rank, scalar dtype, pageable-host memory kind,
+and extent before converting to operator-owned state. Logical Params/YAML
+types remain the descriptor, tuple/vector, or `std::vector<T>` types documented
+in `OPERATOR_API.md`; generated objects, ChannelPod wrappers, and Tensor
+handles are physical port types only. The host-Tensor vector path is a narrow
+control-plane exception to the normal rejection of pageable-host data
+Tensors. Exact / SafeDefault and `expect_*` / `sticky_*` semantics are
+unchanged.
+
 **Measured 2026-08-21 (`tmp-app/fbs/`).** It works for exactly the shapes
 we need. `fbs_live_override.cpp` carries this operator's two demoted
 overrides — `waveform` (optional scalars + `[Complex64]`) and
@@ -618,7 +635,7 @@ depending on it.
 **Measured 2026-08-23: descriptor Tensor members cannot be null.** Ordinary
 publication with a null member is rejected with `kInvalidArgument`. A rank-1
 zero-length Tensor allocated and published with `emit_tensor` succeeds and
-arrives as a present Tensor with `nbytes() == 0`. The interim schemas
+arrives as a present Tensor with `nbytes() == 0`. The schemas
 therefore always carry the Tensor: zero-length is the absent optional-array
 representation, nonzero is present, and null is invalid. This is a measured
 transport rule, not by itself ratification of the schema payload design.
@@ -633,7 +650,7 @@ overload first. Neither workaround changes committed generated files (none are
 tracked). Re-probe both against the public SDK and remove or version the schema
 workarounds before the EA cleanup.
 
-**Artifact and packaging shape** (what adoption would commit us to). The
+**Artifact and packaging shape.** The
 `.fbs` files are committed source, not generated: schema compatibility is
 exact-match on canonical name + version + schema SHA, so the file *is* the
 wire contract and every edit is a version decision. Everything flatc
@@ -659,41 +676,49 @@ surface for downstream `find_package(holoscan_radar)` users, and the
 descriptor's field list then lives in three places (struct, param schema,
 `.fbs`) needing a round-trip test to hold them together.
 
-**Interim.** `SnapshotGatherOp` keeps `Params.snapshot_window` as
-`std::vector<int64_t>` (OPERATOR_API.md / YAML). The `[live]` port is
-`Input<SnapshotWindowOverride>` — a fixed `{doppler, range}` int64 POD
-with `ChannelTypeIdentity` / `ChannelPodLayout` ([EA HSDK5 ONLY] in
-`snapshot_gather_op.hpp`). Normalize empty/size-1 vectors on the Params
-path before seeding the POD sticky state. `PhaseShiftBeamformerOp`,
-`BeamscanEstimatorOp`, and `SubarraySelectionOp` cannot use that
-fixed-POD recipe for descriptor / unbounded vectors: `az_angles` /
-`el_angles` / `subarray` are unbounded, and `ArrayGeometry` /
-`WindowSpec` own vectors — those `[live]` params stay Params-only (see
-each op’s `OPEN_ITEMS.md`). Beamscan declares
-`Input<PeakInterpolation>` for the enum live, Exact behind
+**Current implementation and remaining migration.** `SnapshotGatherOp` keeps
+`Params.snapshot_window` as `std::vector<int64_t>` (OPERATOR_API.md / YAML).
+The `[live]` port is `Input<SnapshotWindowOverride>` — a fixed
+`{doppler, range}` int64 POD with `ChannelTypeIdentity` /
+`ChannelPodLayout` ([EA HSDK5 ONLY] in `snapshot_gather_op.hpp`). Normalize
+empty/size-1 vectors on the Params path before seeding the POD sticky state.
+The same ChannelPod category applies to other bounded fixed tuples, including
+CFAR's `(doppler, range)` `guard_cells` and `training_cells`; their logical
+Params remain unchanged.
+
+`PhaseShiftBeamformerOp`, `BeamscanEstimatorOp`, and
+`SubarraySelectionOp` use generated schemas for `ArrayGeometry` /
+`WindowSpec` live ports and bounded rank-1 host Tensors for variable scalar
+vectors such as `az_angles`, `el_angles`, and `subarray`. Those ports remain
+Params-only in the current code until that migration lands; this is
+implementation debt under a settled policy, not a team decision. Beamscan
+declares `Input<PeakInterpolation>` for the enum live, Exact behind
 `expect_peak_interpolation` (Graph harness deferred §1).
-`ClusterDBSCANOp.epsilon` is likewise Params-only: length `1` or
-`num_features` with unbounded `num_features` (caller-assembled
-`points`); scalar `min_points` / `max_clusters` keep Exact
+
+`ClusterDBSCANOp.epsilon` uses the bounded rank-1 host-Tensor category: length
+`1` or `num_features`, capped by its ctor-captured bound. It remains
+Params-only until implemented. Scalar `min_points` / `max_clusters` keep Exact
 `Input<int64_t>` behind `expect_*` (Graph harness deferred §1).
-`MVDREstimatorOp` mirrors this: Exact `Input<double> diagonal_loading` /
-`Input<int64_t> max_sources`;
-`az_angles` / `el_angles` / `spatial_smoothing` / `ArrayGeometry` stay
-Params-only. `MUSICEstimatorOp` likewise: Exact `Input<int64_t>
-num_sources` / `Input<double> source_count_pfa` / `Input<int64_t>
-max_sources`; geometry/grid/`spatial_smoothing` Params-only.
-`DetectionReductionOp.feature_weights` is Params-only for the
-same unbounded-vector reason (length `num_features`); enum
-`representative` / `score_method` keep Exact Inputs behind `expect_*`
-(Graph harness deferred §1).
-`RootMUSICEstimatorOp` / `ESPRITEstimatorOp` mirror MUSIC’s POD Exact
-trio (`num_sources` / `source_count_pfa` / `max_sources`); geometry /
-`spatial_smoothing` (and ESPRIT’s STATIC `subarray_spec`) stay
-Params-only.
-`CFARDetectorOp` mirrors this: Exact `Input<double> pfa` /
-`threshold_scale` and `Input<int64_t> os_rank` / `max_detections`;
-`guard_cells` / `training_cells` / `nci_axes` / `alpha_lut` stay
-Params-only (pair / unbounded vectors).
+`MVDREstimatorOp` keeps Exact scalar Inputs for `diagonal_loading` /
+`max_sources`; `ArrayGeometry` uses a generated schema, while `az_angles` /
+`el_angles` / `spatial_smoothing` use bounded host Tensors. Those ports remain
+Params-only until implemented. `MUSICEstimatorOp` likewise keeps Exact scalar
+Inputs for `num_sources` / `source_count_pfa` / `max_sources`; generated
+geometry plus bounded host-Tensor grid / `spatial_smoothing` ports remain to
+be implemented.
+
+`DetectionReductionOp.feature_weights` uses a bounded host Tensor of length
+`num_features` and remains Params-only until implemented; enum
+`representative` / `score_method` keep Exact Inputs behind `expect_*`.
+`RootMUSICEstimatorOp` / `ESPRITEstimatorOp` mirror MUSIC's scalar Exact
+trio; geometry / `spatial_smoothing` live ports use the same generated-schema
+/ bounded-Tensor mapping and remain to be implemented. ESPRIT's
+`subarray_spec` stays static.
+
+`CFARDetectorOp` keeps Exact scalar Inputs for `pfa` / `threshold_scale` /
+`os_rank` / `max_detections`; `guard_cells` / `training_cells` use
+ChannelPod fixed tuples, while `nci_axes` / `alpha_lut` use bounded rank-1
+host Tensors. Those vector ports remain Params-only until implemented.
 
 The three FMCW processing operators restore `range_window`,
 `doppler_window`, and `waveform` `[live]` ports through generated
@@ -704,20 +729,17 @@ above. The committed-source/generated-output boundary, exact identity and
 evolution rules, `MaxTensorExtents` bounds, bridge/install/test sync surface,
 and C++-only wire-type limitation are in
 [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md). Python continues through Params.
-This is an interim implementation under TEAM_BLOCKED review, not a settled
-module-wide schema decision.
+The schema identity/evolution rules are settled with the mixed policy.
 
-**Next.** Obtain team ratification of the FMCW schema payload shape and
-maintenance contract. Prefer POD / schema types for other vector-shaped live
-overrides only after applying the decision; for unbounded grids / feature
-radii prefer `Input<Tensor>` (or a ratified durable schema) and document any
-OPERATOR_API physical-type divergence.
+**Next.** Implement the remaining generated-schema, ChannelPod, and bounded
+rank-1 pageable-host Tensor ports without changing operator logical Params
+types. Add ctor bounds, validation, Exact Graph tests, Python limitation
+notes, and install/round-trip coverage as applicable.
 
-**Status:** open — FMCW schema-backed ports restored as an interim pending
-team ratification; SnapshotGather POD pattern plus PhaseShift/Beamscan/
-SubarraySelection/ClusterDBSCAN/MVDR/MUSIC/RootMUSIC/ESPRIT/
-DetectionReduction/CFAR Params-only fallback remains for other non-POD /
-unbounded vectors.
+**Status:** policy settled (L18); implementation open. FMCW schema-backed
+ports and the SnapshotGather ChannelPod pattern are landed. The remaining
+descriptor, fixed-tuple, and variable-vector live ports are still Params-only
+until migrated to their ratified physical payload categories.
 
 ---
 

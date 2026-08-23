@@ -21,6 +21,7 @@
 #include <holoscan/logger/logger.hpp>
 
 #include "clustering/cluster_dbscan_op/cluster_dbscan_stage.hpp"
+#include "radar_common/sdk/config_tensor.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
@@ -39,6 +40,7 @@ constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
 constexpr DLDataType kInt32Dtype{kDLInt, 32, 1};
 constexpr DLDataType kUint8Dtype{kDLUInt, 8, 1};
 constexpr DLDataType kUint32Dtype{kDLUInt, 32, 1};
+constexpr DLDataType kFloat64Dtype{kDLFloat, 64, 1};
 
 expected<void, Error> fail_invalid(const std::string& message) {
   return make_unexpected(Error{ErrorCode::kInvalidArgument, message});
@@ -70,6 +72,7 @@ ClusterDBSCANOp<T>::ClusterDBSCANOp(
       require_extent(extents.max_points, "max_points", who);
   const std::int64_t max_clusters =
       require_extent(extents.max_clusters, "max_clusters", who);
+  max_features_ = extents.max_features.value_or(0);
   extents_ = extents;
   // labels: int64 (max_points,)
   max_labels_byte_span_ = byte_span_elems(
@@ -90,6 +93,11 @@ void ClusterDBSCANOp<T>::setup(OperatorSpec& spec) {
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
+  constexpr TensorPortLayout kHostVector{
+      .memory_kind = MemoryKind::kHost,
+      .dtype = kFloat64Dtype,
+      .rank = 1U,
+  };
   spec.input(points).queue_depth(2U).expects_tensor(kDevice);
   spec.output(labels)
       .produces_tensor(kDevice)
@@ -101,9 +109,9 @@ void ClusterDBSCANOp<T>::setup(OperatorSpec& spec) {
       .tensor_allocation(TensorAllocationBounds{
           .max_rank = 1U,
           .max_byte_span = max_sizes_byte_span_});
-  // [live] scalar override ports. Wired graphs may push samples; the operator
-  // caches the last value (sticky). Leaving them unconnected is legal —
-  // compute() seeds from Params. epsilon is Params-only (HSDK5_PORT §9).
+  // [live] override ports. Leaving them unconnected is legal; compute() seeds
+  // from Params and logical sticky state owns converted vector values.
+  spec.input(epsilon).queue_depth(2U).expects_tensor(kHostVector);
   spec.input(min_points).queue_depth(2U);
   spec.input(max_clusters).queue_depth(2U);
 }
@@ -112,6 +120,8 @@ template <typename T>
 Contract ClusterDBSCANOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{points});
+  maybe_add_live_override_to_contract(
+      result, epsilon, params().expect_epsilon);
   maybe_add_live_override_to_contract(
       result, min_points, params().expect_min_points);
   maybe_add_live_override_to_contract(
@@ -124,9 +134,20 @@ expected<void, Error> ClusterDBSCANOp<T>::compute(ExecutionContext& context) {
   HOLOSCAN_TRY(auto points_in, receive_tensor(points, kOpName));
 
   const ClusterDBSCANParams& pinned = context.params<ClusterDBSCANParams>();
-  // Best-effort sticky overrides: if the port is wired and a sample is
-  // waiting, absorb it; otherwise keep sticky / fall back to Params.
-  // epsilon is Params-only (unbounded vector — HSDK5_PORT §9).
+  if (pinned.expect_epsilon && max_features_ <= 0) {
+    return fail_invalid(
+        "ClusterDBSCANOp: MaxTensorExtents.max_features must be positive "
+        "when expect_epsilon is true");
+  }
+  HOLOSCAN_TRY(
+      auto eps,
+      resolve_expected_override_via(
+          pinned.expect_epsilon, epsilon, pinned.epsilon, sticky_epsilon_,
+          pinned.sticky_epsilon,
+          [this](const Tensor& tensor) {
+            return read_host_config_vector<double>(
+                tensor, kFloat64Dtype, max_features_, "epsilon");
+          }));
   HOLOSCAN_TRY(auto effective_min_points,
                resolve_expected_override(pinned.expect_min_points, min_points,
                                          pinned.min_points, sticky_min_points_,
@@ -136,8 +157,6 @@ expected<void, Error> ClusterDBSCANOp<T>::compute(ExecutionContext& context) {
                    pinned.expect_max_clusters, max_clusters,
                    pinned.max_clusters, sticky_max_clusters_,
                    pinned.sticky_max_clusters));
-  const std::vector<double>& eps = pinned.epsilon;
-
   try {
     require_cuda_accessible(points_in, "points", kOpName);
     require_contiguous(points_in, "points", kOpName);

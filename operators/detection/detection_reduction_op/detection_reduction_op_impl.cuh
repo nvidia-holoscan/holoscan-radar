@@ -23,6 +23,7 @@
 #include <holoscan/core/payload_options.hpp>
 
 #include "detection/detection_reduction_op/detection_reduction_stage.hpp"
+#include "radar_common/sdk/config_tensor.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
@@ -36,6 +37,7 @@ namespace detection_reduction_op_detail {
 
 constexpr const char* kOpName = "DetectionReductionOp";
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
+constexpr DLDataType kFloat64Dtype{kDLFloat, 64, 1};
 
 expected<void, Error> fail_invalid(const std::string& message) {
   return make_unexpected(Error{ErrorCode::kInvalidArgument, message});
@@ -61,6 +63,7 @@ expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
 
 using detection_reduction_op_detail::fail_invalid;
 using detection_reduction_op_detail::fail_runtime;
+using detection_reduction_op_detail::kFloat64Dtype;
 using detection_reduction_op_detail::kInt64Dtype;
 using detection_reduction_op_detail::kOpName;
 using detection_reduction_op_detail::writable_ptr;
@@ -71,6 +74,7 @@ DetectionReductionOp<T, ScoreFn>::DetectionReductionOp(
   const char* who = "DetectionReductionOp";
   const std::int64_t max_clusters =
       require_extent(extents.max_clusters, "max_clusters", who);
+  max_features_ = extents.max_features.value_or(0);
   // rep_idx shape is (num_clusters, idx_cols). idx_cols is at most 2
   // + leading-batch cols; conservatively assume max_points columns.
   const std::int64_t max_points =
@@ -95,6 +99,11 @@ void DetectionReductionOp<T, ScoreFn>::setup(OperatorSpec& spec) {
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
+  constexpr TensorPortLayout kHostVector{
+      .memory_kind = MemoryKind::kHost,
+      .dtype = kFloat64Dtype,
+      .rank = 1U,
+  };
   spec.input(labels).queue_depth(2U).expects_tensor(kDevice);
   spec.input(detection_idx).queue_depth(2U).expects_tensor(kDevice);
   // Optional points: SafeDefault / omitted from contract so unconnected
@@ -105,12 +114,11 @@ void DetectionReductionOp<T, ScoreFn>::setup(OperatorSpec& spec) {
       .tensor_allocation(TensorAllocationBounds{
           .max_rank = 2U,
           .max_byte_span = max_byte_span_});
-  // [live] POD enum override ports. Wired graphs may push samples; the
-  // operator caches the last value (sticky). Leaving them unconnected is
-  // legal — compute() seeds from Params. feature_weights is Params-only
-  // (HSDK5_PORT §9).
+  // [live] override ports. Leaving them unconnected is legal; compute() seeds
+  // from Params and logical sticky state owns converted vector values.
   spec.input(representative).queue_depth(2U);
   spec.input(score_method).queue_depth(2U);
+  spec.input(feature_weights).queue_depth(2U).expects_tensor(kHostVector);
 }
 
 template <typename T, typename ScoreFn>
@@ -135,6 +143,8 @@ Contract DetectionReductionOp<T, ScoreFn>::contract() const {
       result, representative, params().expect_representative);
   maybe_add_live_override_to_contract(
       result, score_method, params().expect_score_method);
+  maybe_add_live_override_to_contract(
+      result, feature_weights, params().expect_feature_weights);
   return result;
 }
 
@@ -147,9 +157,11 @@ expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
 
   const DetectionReductionParams& pinned =
       context.params<DetectionReductionParams>();
-  // Best-effort sticky overrides: if the port is wired and a sample is
-  // waiting, absorb it; otherwise keep sticky / fall back to Params.
-  // feature_weights is Params-only (unbounded vector — HSDK5_PORT §9).
+  if (pinned.expect_feature_weights && max_features_ <= 0) {
+    return fail_invalid(
+        "DetectionReductionOp: MaxTensorExtents.max_features must be positive "
+        "when expect_feature_weights is true");
+  }
   HOLOSCAN_TRY(auto effective_representative,
                resolve_expected_override(pinned.expect_representative,
                                          representative, pinned.representative,
@@ -160,7 +172,16 @@ expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
                                          score_method, pinned.score_method,
                                          sticky_score_method_,
                                          pinned.sticky_score_method));
-  const std::vector<double>& feature_weights = pinned.feature_weights;
+  HOLOSCAN_TRY(
+      auto effective_feature_weights,
+      resolve_expected_override_via(
+          pinned.expect_feature_weights, feature_weights,
+          pinned.feature_weights, sticky_feature_weights_,
+          pinned.sticky_feature_weights,
+          [this](const Tensor& tensor) {
+            return read_host_config_vector<double>(
+                tensor, kFloat64Dtype, max_features_, "feature_weights");
+          }));
 
   if (effective_representative == RepresentativePolicy::kPeak &&
       effective_score_method == ScoreMethod::kCustom &&
@@ -234,7 +255,8 @@ expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
   }
 
   if (needs_weights) {
-    if (static_cast<int64_t>(feature_weights.size()) != num_features) {
+    if (static_cast<int64_t>(effective_feature_weights.size()) !=
+        num_features) {
       return fail_invalid(
           "DetectionReductionOp: feature_weights length must equal "
           "num_features");
@@ -329,7 +351,8 @@ expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
     std::vector<T> host_w(static_cast<size_t>(num_features));
     for (int64_t f = 0; f < num_features; ++f) {
       host_w[static_cast<size_t>(f)] =
-          static_cast<T>(feature_weights[static_cast<size_t>(f)]);
+          static_cast<T>(
+              effective_feature_weights[static_cast<size_t>(f)]);
     }
     weights_dev = make_device_tensor({num_features}, real_dtype<T>());
     HOLOSCAN_TRY(auto weights_ptr, writable_ptr(*weights_dev, "weights"));

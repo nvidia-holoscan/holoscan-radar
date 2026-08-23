@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <type_traits>
 #include <vector>
 
@@ -27,6 +28,8 @@
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/sdk/config_cache.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 
 namespace holoscan::radar {
 
@@ -48,18 +51,20 @@ namespace holoscan::radar {
 //
 // Precision is fixed at compile time by the template instantiation.
 //
-// [EA HSDK5 ONLY] array_geometry / az_angles / el_angles / array_taper are
-// [live] in OPERATOR_API.md but stay Params-only here: ArrayGeometry and
-// WindowSpec contain owning vectors (not PublishedPayload / ChannelPod), and
-// unbounded scan grids cannot use Input<std::vector>. See OPEN_ITEMS.md and
-// HSDK5_PORT.md §9. angle_convention remains STATIC.
-
 struct PhaseShiftBeamformerParams {
   ArrayGeometry array_geometry{};
   AngleConvention angle_convention{};
   std::vector<double> az_angles{};
   std::vector<double> el_angles{};
   WindowSpec array_taper{};
+  bool expect_array_geometry{false};
+  bool expect_az_angles{false};
+  bool expect_el_angles{false};
+  bool expect_array_taper{false};
+  bool sticky_array_geometry{true};
+  bool sticky_az_angles{true};
+  bool sticky_el_angles{true};
+  bool sticky_array_taper{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -84,7 +89,41 @@ HOLOSCAN_PARAM_SCHEMA(
             "size-1 yields a 1-D azimuth scan"),
     holoscan::field<&PhaseShiftBeamformerParams::array_taper>("array_taper")
         .description(
-            "Amplitude taper across elements for spatial sidelobe control"));
+            "Amplitude taper across elements for spatial sidelobe control"),
+    holoscan::field<&PhaseShiftBeamformerParams::expect_array_geometry>(
+        "expect_array_geometry")
+        .description(
+            "Set when the application wires the array_geometry override."),
+    holoscan::field<&PhaseShiftBeamformerParams::expect_az_angles>(
+        "expect_az_angles")
+        .description("Set when the application wires the az_angles override."),
+    holoscan::field<&PhaseShiftBeamformerParams::expect_el_angles>(
+        "expect_el_angles")
+        .description("Set when the application wires the el_angles override."),
+    holoscan::field<&PhaseShiftBeamformerParams::expect_array_taper>(
+        "expect_array_taper")
+        .description(
+            "Set when the application wires the array_taper override."),
+    holoscan::field<&PhaseShiftBeamformerParams::sticky_array_geometry>(
+        "sticky_array_geometry")
+        .description(
+            "Keep the last Exact array_geometry match on a miss. Ignored "
+            "unless expect_array_geometry."),
+    holoscan::field<&PhaseShiftBeamformerParams::sticky_az_angles>(
+        "sticky_az_angles")
+        .description(
+            "Keep the last Exact az_angles match on a miss. Ignored unless "
+            "expect_az_angles."),
+    holoscan::field<&PhaseShiftBeamformerParams::sticky_el_angles>(
+        "sticky_el_angles")
+        .description(
+            "Keep the last Exact el_angles match on a miss. Ignored unless "
+            "expect_el_angles."),
+    holoscan::field<&PhaseShiftBeamformerParams::sticky_array_taper>(
+        "sticky_array_taper")
+        .description(
+            "Keep the last Exact array_taper match on a miss. Ignored unless "
+            "expect_array_taper."));
 
 static_assert(
     holoscan::param_schema_availability<PhaseShiftBeamformerParams>() ==
@@ -111,15 +150,26 @@ class PhaseShiftBeamformerOp
 
   Input<Tensor> rd_maps{"rd_maps"};
   Output<Tensor> rda_cube{"rda_cube"};
+  Input<WireArrayGeometry> array_geometry{"array_geometry"};
+  Input<Tensor> az_angles{"az_angles"};
+  Input<Tensor> el_angles{"el_angles"};
+  Input<WireWindowSpec> array_taper{"array_taper"};
 
  private:
   MaxTensorExtents extents_;
   std::uint32_t max_rank_{4U};
   std::size_t max_byte_span_{0U};
+  std::int64_t max_az_{0};
+  std::int64_t max_el_{0};
 
   // Keep the previous activation's input alive across ticks so async
   // device reads cannot outlive the buffer.
   Tensor retained_input_;
+
+  std::optional<ArrayGeometry> sticky_array_geometry_;
+  std::optional<std::vector<double>> sticky_az_angles_;
+  std::optional<std::vector<double>> sticky_el_angles_;
+  std::optional<WindowSpec> sticky_array_taper_;
 
   // Conjugated steering weights, built on device, laid out
   // (num_beams, num_channels) with the beam axis enumerated az-major

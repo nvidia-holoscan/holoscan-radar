@@ -29,6 +29,8 @@
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/sdk/config_cache.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 
 namespace holoscan::radar {
 
@@ -53,7 +55,15 @@ struct BeamscanParams {
   std::vector<double> el_angles{};
   WindowSpec array_taper{};
   PeakInterpolation peak_interpolation{PeakInterpolation::kNone};
+  bool expect_array_geometry{false};
+  bool expect_az_angles{false};
+  bool expect_el_angles{false};
+  bool expect_array_taper{false};
   bool expect_peak_interpolation{false};
+  bool sticky_array_geometry{true};
+  bool sticky_az_angles{true};
+  bool sticky_el_angles{true};
+  bool sticky_array_taper{true};
   bool sticky_peak_interpolation{true};
 };
 
@@ -81,11 +91,41 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&BeamscanParams::peak_interpolation>("peak_interpolation")
         .description(
             "Sub-grid peak refinement {none, parabolic}"),
+    holoscan::field<&BeamscanParams::expect_array_geometry>(
+        "expect_array_geometry")
+        .description(
+            "Set when the application wires the array_geometry override."),
+    holoscan::field<&BeamscanParams::expect_az_angles>("expect_az_angles")
+        .description("Set when the application wires the az_angles override."),
+    holoscan::field<&BeamscanParams::expect_el_angles>("expect_el_angles")
+        .description("Set when the application wires the el_angles override."),
+    holoscan::field<&BeamscanParams::expect_array_taper>(
+        "expect_array_taper")
+        .description(
+            "Set when the application wires the array_taper override."),
     holoscan::field<&BeamscanParams::expect_peak_interpolation>(
         "expect_peak_interpolation")
         .description(
             "Set when the application wires the peak_interpolation "
             "override."),
+    holoscan::field<&BeamscanParams::sticky_array_geometry>(
+        "sticky_array_geometry")
+        .description(
+            "Keep the last Exact array_geometry match on a miss. Ignored "
+            "unless expect_array_geometry."),
+    holoscan::field<&BeamscanParams::sticky_az_angles>("sticky_az_angles")
+        .description(
+            "Keep the last Exact az_angles match on a miss. Ignored unless "
+            "expect_az_angles."),
+    holoscan::field<&BeamscanParams::sticky_el_angles>("sticky_el_angles")
+        .description(
+            "Keep the last Exact el_angles match on a miss. Ignored unless "
+            "expect_el_angles."),
+    holoscan::field<&BeamscanParams::sticky_array_taper>(
+        "sticky_array_taper")
+        .description(
+            "Keep the last Exact array_taper match on a miss. Ignored unless "
+            "expect_array_taper."),
     holoscan::field<&BeamscanParams::sticky_peak_interpolation>(
         "sticky_peak_interpolation")
         .description(
@@ -115,11 +155,10 @@ class BeamscanEstimatorOp : public holoscan::Operator<BeamscanParams> {
   Input<Tensor> is_valid{"is_valid"};
   Output<Tensor> aoa_estimates{"aoa_estimates"};
   Output<Tensor> angle_spectrum{"angle_spectrum"};
-  // [live] Exact override of params().peak_interpolation, gated by
-  // expect_peak_interpolation (OPERATOR_API.md).
-  // Vector / descriptor live params (az_angles, el_angles, array_geometry,
-  // array_taper) are Params-only on HSDK 5 EA — see OPEN_ITEMS.md /
-  // HSDK5_PORT.md §9. angle_convention is static (Params only).
+  Input<WireArrayGeometry> array_geometry{"array_geometry"};
+  Input<Tensor> az_angles{"az_angles"};
+  Input<Tensor> el_angles{"el_angles"};
+  Input<WireWindowSpec> array_taper{"array_taper"};
   Input<PeakInterpolation> peak_interpolation{"peak_interpolation"};
 
  private:
@@ -127,12 +166,17 @@ class BeamscanEstimatorOp : public holoscan::Operator<BeamscanParams> {
   std::uint32_t max_rank_{3U};
   std::size_t spectrum_max_byte_span_{0U};
   std::size_t aoa_max_byte_span_{0U};
+  std::int64_t max_az_{0};
+  std::int64_t max_el_{0};
 
   // Keep the previous activation's inputs alive across ticks so async
   // device reads cannot outlive the buffers.
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
-  // Sticky [live] peak_interpolation: last Exact match holds while sticky_*.
+  std::optional<ArrayGeometry> sticky_array_geometry_;
+  std::optional<std::vector<double>> sticky_az_angles_;
+  std::optional<std::vector<double>> sticky_el_angles_;
+  std::optional<WindowSpec> sticky_array_taper_;
   std::optional<PeakInterpolation> sticky_peak_interpolation_;
   // Conjugate-transposed steering weights Wᶜ, built on device, laid
   // out (num_channels, num_beams) with beams el-major. Cached;
