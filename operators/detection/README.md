@@ -16,9 +16,9 @@ Typical placement:
 
 | Operator | In → Out | Function |
 | --- | --- | --- |
-| `CFARDetectorOp<T>` | `rd_maps` (…, doppler, range; complex or real power) → `detection_mask`, `detection_score`, `noise_estimate`, `detection_idx` | 2-D CFAR on the (Doppler, range) plane; complex input → square-law power, real input → thresholded directly; per-cell adaptive threshold from the training-cell noise estimate |
-| `DetectionReductionOp<T>` | `labels` + `detection_idx` (+ `points`) → `rep_idx` | One representative CFAR cell per cluster (`first` / `peak` / `medoid`) for cluster-then-angle |
-| `FeatureAssemblyOp<T>` | `detection_idx` (+ optional `range_bins` / `velocity_bins` / `detection_score` / `aoa_estimates`) → `points` | Gather / bin→physical lookup into the clustering feature matrix; static `features` list sets column layout |
+| [`CFARDetectorOp<T>`](cfar_detector_op/README.md) | `rd_maps` (…, doppler, range; complex or real power) → `detection_mask`, `detection_score`, `noise_estimate`, `detection_idx` | 2-D CFAR on the (Doppler, range) plane; complex input → square-law power, real input → thresholded directly; per-cell adaptive threshold from the training-cell noise estimate |
+| [`DetectionReductionOp<T>`](detection_reduction_op/README.md) | `labels` + `detection_idx` (+ `points`) → `rep_idx` | One representative CFAR cell per cluster (`first` / `peak` / `medoid`) for cluster-then-angle |
+| [`FeatureAssemblyOp<T>`](feature_assembly_op/README.md) | `detection_idx` (+ optional `range_bins` / `velocity_bins` / `detection_score` / `aoa_estimates`) → `points` | Gather / bin→physical lookup into the clustering feature matrix; static `features` list sets column layout |
 
 ## Implementation status
 

@@ -20,7 +20,7 @@ detection-group `FeatureAssemblyOp` bridge):
 
 | Operator | In → Out | Function |
 | --- | --- | --- |
-| `ClusterDBSCANOp<T>` | `points` (num_points, num_features) → `labels` (num_points,), `sizes` (num_clusters,) | Density clustering (DBSCAN) over an N-D feature matrix; per-axis `epsilon` neighborhood, `min_points` core threshold, optional `max_clusters` cap; noise labeled `-1` |
+| [`ClusterDBSCANOp<T>`](cluster_dbscan_op/README.md) | `points` (num_points, num_features) → `labels` (num_points,), `sizes` (num_clusters,) | Density clustering (DBSCAN) over an N-D feature matrix; per-axis `epsilon` neighborhood, `min_points` core threshold, optional `max_clusters` cap; noise labeled `-1` |
 
 ## Implementation status
 
