@@ -15,7 +15,7 @@ Each folder depends only on the layers above it:
 | `radar_common/dsp/` | Host-side signal math (window/taper generation) | descriptors |
 | `radar_common/sim/` | Analytic FMCW signal simulators — single-TX `point_target_sim.hpp` (multi-RX `SimScene`) and MIMO TDM/DDM `mimo_sim.hpp` — plus antenna-array geometry builders `array_builders.hpp` (input synthesis for applications; analytic ground truth for tests) | descriptors |
 | `radar_common/tensor/` | Rank-agnostic batching, DLPack device buffers, MatX view/upload helpers | holoscan::Tensor, CUDA |
-| `radar_common/sdk/` | Operator-authoring glue: HSDK 5 Tensor I/O + sticky `[live]` helpers, warn-once config cache (4.x argument-setter path retained only until remaining ops port) | holoscan core |
+| `radar_common/sdk/` | Operator-authoring glue: HSDK 5 Tensor I/O + Exact `[live]` helpers, warn-once config cache (4.x argument-setter path retained only until remaining ops port) | holoscan core |
 | `radar_common/reduce/` | Public group-by-label CUDA primitives (headers + `radar_common_reduce` lib) | CUDA, descriptors/enums |
 
 `tensor/matx_utils.hpp` includes `<matx.h>` and must only be included from

@@ -102,7 +102,7 @@ this operator to select another ordering.
 
 ### A.7 `waveform` on DDM (linear-phase slice)
 
-Required and validated (build-time or `[live]` sticky override), but **does
+Required and validated (build-time or `[live]` override), but **does
 not affect** the linear-phase gather demux or the non-linear correlate demux.
 Kept for TDM parity. Overriding `waveform` under DDM does not change output.
 

@@ -146,7 +146,7 @@ The lint stack (`.pre-commit-config.yaml`): ruff + isort + black (Python), cppli
 
 **Iterate with `pre-commit run <hook-id> --files <changed>`, not a system-installed tool.** The hooks pin exact versions (e.g. `black==26.5.1`, `cpplint==2.0.2`), and a different local version re-flags already-clean files or formats differently than CI — the pre-commit run is the only authoritative check.
 
-**Verifying a change.** The analytic simulators (`radar_common/sim/`) are the ground-truth "tautology guard" — assert operator/pipeline output against them, and add sim self-checks (`tests/cpp/common/test_sim.cpp`) when you add or change a signal model. For a behavior-preserving refactor, diff an app's deterministic log output before/after — but exclude the per-cluster representative (`rep_*`) fields: they are non-deterministic run-to-run (a GPU medoid tie-break; see `operators/detection/detection_reduction_op/OPEN_ITEMS.md` item 6), so a naive diff shows false churn. Build and run in the Holoscan container (`./holohub run-container`).
+**Verifying a change.** The analytic simulators (`radar_common/sim/`) are the ground-truth "tautology guard" — assert operator/pipeline output against them, and add sim self-checks (`tests/cpp/common/test_sim.cpp`) when you add or change a signal model. For a behavior-preserving refactor, diff an app's deterministic log output before/after — but exclude the per-cluster representative (`rep_*`) fields: they are non-deterministic run-to-run (a GPU medoid tie-break; see `operators/detection/detection_reduction_op/OPEN_ITEMS.md` item 9), so a naive diff shows false churn. Build and run in the Holoscan container (`./holohub run-container`).
 
 ## Conventions
 

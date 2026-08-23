@@ -56,8 +56,8 @@ namespace holoscan::radar {
 //                       (num_items, post-smoothing num_channels). Always
 //                       emitted. No angle_spectrum (gridless).
 //
-// [EA HSDK5 ONLY] Sticky Input for POD [live] scalars (num_sources,
-// source_count_pfa, max_sources). array_geometry / spatial_smoothing /
+// [EA HSDK5 ONLY] Exact Input, each gated by its expect_* param, for POD
+// [live] scalars (num_sources, source_count_pfa, max_sources). array_geometry / spatial_smoothing /
 // subarray_spec are Params-only (HSDK5_PORT.md §9; subarray_spec is STATIC).
 // angle_convention and forward_backward stay Params-only (STATIC / not [live]).
 
@@ -163,8 +163,9 @@ class ESPRITEstimatorOp : public holoscan::Operator<ESPRITParams> {
   Output<Tensor> doa_multi{"doa_multi"};
   Output<Tensor> source_count{"source_count"};
   Output<Tensor> eigenvalues{"eigenvalues"};
-  // [live] sticky POD overrides (OPERATOR_API.md). Vector / descriptor live
-  // params stay Params-only on HSDK 5 EA — see OPEN_ITEMS.md / HSDK5_PORT §9.
+  // [live] Exact POD overrides, gated by expect_* (OPERATOR_API.md).
+  // Vector / descriptor live params stay Params-only on HSDK 5 EA — see
+  // OPEN_ITEMS.md / HSDK5_PORT §9.
   Input<int64_t> num_sources{"num_sources"};
   Input<double> source_count_pfa{"source_count_pfa"};
   Input<int64_t> max_sources{"max_sources"};

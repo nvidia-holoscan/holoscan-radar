@@ -144,7 +144,8 @@ class SnapshotGatherOp : public holoscan::Operator<SnapshotGatherParams> {
   Input<Tensor> detection_idx{"detection_idx"};
   Output<Tensor> snapshot{"snapshot"};
   Output<Tensor> is_valid{"is_valid"};
-  // [live] sticky override of params().snapshot_window (OPERATOR_API.md).
+  // [live] Exact override of params().snapshot_window, gated by
+  // expect_snapshot_window (OPERATOR_API.md).
   // [EA HSDK5 ONLY] POD payload — see SnapshotWindowOverride / HSDK5_PORT §9.
   // Edge modes are static Params only (no live ports).
   Input<SnapshotWindowOverride> snapshot_window{"snapshot_window"};
@@ -161,7 +162,7 @@ class SnapshotGatherOp : public holoscan::Operator<SnapshotGatherParams> {
   Tensor retained_detection_idx_;
   // Cached device copy of rd_maps leading dims for the batch-linear kernel.
   std::shared_ptr<holoscan::Tensor> retained_leading_dims_;
-  // Sticky [live] snapshot_window: last override wins until the next.
+  // Sticky [live] snapshot_window: last Exact match holds while sticky_*.
   std::optional<SnapshotWindowOverride> sticky_snapshot_window_;
 };
 

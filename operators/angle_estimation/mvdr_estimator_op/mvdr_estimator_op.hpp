@@ -65,8 +65,9 @@ void retire_matx_solver_caches();
 // Out: eigenvalues     — float32/float64, (num_items, num_channels). Always
 //                       emitted (computed every tick).
 //
-// [EA HSDK5 ONLY] Live override ports: sticky Input for POD scalars
-// (diagonal_loading, max_sources). Descriptor / unbounded-vector live params
+// [EA HSDK5 ONLY] Live override ports: Exact Input for POD scalars, each
+// gated by its expect_* param (diagonal_loading, max_sources). Descriptor /
+// unbounded-vector live params
 // (array_geometry, az_angles, el_angles, spatial_smoothing) are Params-only
 // (HSDK5_PORT.md §9). angle_convention and forward_backward stay Params-only
 // (STATIC / not [live]).
@@ -166,8 +167,9 @@ class MVDREstimatorOp : public holoscan::Operator<MVDRParams> {
   Output<Tensor> doa_multi{"doa_multi"};
   Output<Tensor> source_count{"source_count"};
   Output<Tensor> eigenvalues{"eigenvalues"};
-  // [live] sticky POD overrides (OPERATOR_API.md). Vector / descriptor live
-  // params stay Params-only on HSDK 5 EA — see OPEN_ITEMS.md / HSDK5_PORT §9.
+  // [live] Exact POD overrides, gated by expect_* (OPERATOR_API.md).
+  // Vector / descriptor live params stay Params-only on HSDK 5 EA — see
+  // OPEN_ITEMS.md / HSDK5_PORT §9.
   Input<double> diagonal_loading{"diagonal_loading"};
   Input<int64_t> max_sources{"max_sources"};
 
@@ -183,7 +185,7 @@ class MVDREstimatorOp : public holoscan::Operator<MVDRParams> {
   // reads cannot outlive the buffers.
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
-  // Sticky [live] scalars: last override wins until the next.
+  // Sticky [live] scalars: the last Exact match holds while sticky_*.
   std::optional<double> sticky_diagonal_loading_;
   std::optional<int64_t> sticky_max_sources_;
 

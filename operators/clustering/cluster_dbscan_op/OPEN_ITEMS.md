@@ -8,31 +8,41 @@ are indexed in [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md).
 
 ---
 
-## 1. Graph mid-stream sticky `[live] min_points` / `max_clusters` coverage
+## 1. Graph mid-stream `[live] min_points` / `max_clusters` coverage
 
 **Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”.
 
-**Class:** HSDK 5 EA limitation (not a contract change). See
-[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
+**Class:** Wiring settled (L16 / L17, 2026-08-21); Graph test coverage still
+deferred on EA. See
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1 and
+[`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
-**Interim.**
+**Decision.** `min_points` / `max_clusters` join the `points` trigger with
+`Exact{}` and `on_missing SafeDefault{}`, each gated by `expect_<name>`
+(default false). `sticky_<name>` (default true) latches the last Exact
+match; false reverts to Params on a miss. The application stamps the
+frame's transmit time on both the override and the feature matrix.
+`expect_*=true` requires the matching `add_flow`
+(`TEMPORAL_INPUT_UNCONNECTED` otherwise); wiring without the flag is
+`RUNTIME_OPERATOR_REPLAY_MISMATCH`.
 
-- Operator still declares sticky `Input<int64_t> min_points` /
-  `Input<int64_t> max_clusters` and resolves via `resolve_sticky_override`.
-- Both live ports are omitted from `contract()` so unwired graphs compile
-  (same pattern as ClutterFilter `method` / SnapshotGather `snapshot_window`).
-- `LiveMinPointsStickyOverride` / `LiveMaxClustersStickyOverride` are
-  `GTEST_SKIP`’d.
+**Still deferred.**
+
+- `LiveMinPointsStickyOverride` / `LiveMaxClustersStickyOverride` are still
+  `GTEST_SKIP`’d — the Graph harness for a mid-stream POD override on this
+  one-in / two-out operator is not written yet.
 - `perf_cluster_dbscan` measures an inline `min_points` transition with the
   supported single-clock / exact-contract / single-partition shape.
 - Params authoring covers selection (`MinPointsConfigurableFromParams` /
   `MaxClustersConfigurableFromParams`).
 
-**Next.** Restore sticky temporal policy + Graph sticky unit tests on a newer
-EA / GA (shared recipe with ClutterFilter §1).
+**Next.** Port the Graph live-override harness (the pattern
+`test_fmcw_range_processor.cpp` uses for `nfft`) to this fixture and
+unskip.
 
-**Status:** open for sticky unit tests and `max_clusters` perf isolation;
-`min_points` perf timing is restored.
+**Status:** open — test coverage only; the contract wiring is settled.
+`max_clusters` perf isolation is still owed; `min_points` perf timing is
+restored (§8).
 
 ---
 
@@ -50,8 +60,9 @@ POD like `SnapshotWindowOverride` does not fit.
 
 **Interim.** `epsilon` stays on `ClusterDBSCANParams` only (`set_params` /
 YAML). `LiveEpsilonStickyOverride` is `GTEST_SKIP`’d. Params coverage remains
-(`EpsilonConfigurableFromParams`, anisotropic / isotropic unit tests). Scalar
-live ports (`min_points` / `max_clusters`) still declare sticky Inputs (§1).
+(`EpsilonConfigurableFromParams`, anisotropic / isotropic unit tests). The
+scalar lives (`min_points` / `max_clusters`) do join `contract()` behind
+`expect_*` (§1); only `epsilon` is portless.
 
 **Next.** Prefer `Input<Tensor>` (or a durable schema / bounded POD once a
 module max-feature count is pinned) and restore sticky live + Graph tests.

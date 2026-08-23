@@ -65,7 +65,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&VirtualArrayAssemblyParams::wavelength>("wavelength")
         .description(
             "Operating wavelength (m) for the emitted array_geometry. "
-            "Seeds the sticky [live] override."),
+            "Seeds the [live] Exact override."),
     holoscan::field<&VirtualArrayAssemblyParams::overlap_policy>(
         "overlap_policy")
         .description(
@@ -109,8 +109,8 @@ class VirtualArrayAssemblyOp
   // Packed ArrayGeometry (float64 Tensor) — HSDK5_PORT §10.
   Output<Tensor> array_geometry{"array_geometry"};
 
-  // [live] sticky scalar — HSDK5_PORT §1. Unconnected is legal; compute()
-  // seeds from Params.
+  // [live] Exact scalar, gated by expect_wavelength — HSDK5_PORT §1.
+  // Unconnected is legal while the gate is off; compute() seeds from Params.
   Input<double> wavelength{"wavelength"};
 
  private:

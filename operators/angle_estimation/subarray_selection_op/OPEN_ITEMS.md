@@ -40,10 +40,14 @@ Cross-cut detail:
 
 `Input<ArrayGeometry>` and `Input<std::vector<int64_t>>` are not valid
 PublishedPayloads. Those parameters stay on `SubarraySelectionParams` only
-(`set_params`). Params coverage: `SubarrayConfigurableFromParams` + selection
-Graph tests.
+(`set_params`), so this operator declares no `expect_*` / `sticky_*` fields.
+Params coverage: `SubarrayConfigurableFromParams` + selection Graph tests.
 
 **Next.** Tensor / POD / schema live ports once a module-wide recipe lands.
+The wiring they would use is already settled: join the trigger with `Exact{}`
+plus `on_missing SafeDefault{}` behind a per-port `expect_*` (default false),
+with `sticky_*` (default true) latching the last match — see
+[`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
 ### 2. `array_geometry` output is a packed float64 Tensor
 
@@ -58,12 +62,17 @@ ported. Params side-channel is not acceptable.
 
 ### 3. Optional `is_valid` Graph wiring
 
-**Class:** HSDK 5 EA limitation (HSDK5_PORT §1 / Beamscan §3).
+**Class:** HSDK 5 EA limitation — no optional input (HSDK5_PORT §11).
 
-Port registered in `setup()`; omitted from `contract()`; `receive_optional_value`
-
-- forward to `is_valid_out` when present. Connected Graph paths deferred
-(`RUNTIME_OPERATOR_REPLAY_MISMATCH` risk).
+Port registered in `setup()`, omitted from `contract()`, read with
+`receive_optional_value` and forwarded to `is_valid_out` when present.
+Connected Graph paths stay deferred: declaring the entry would fail a
+mask-less graph at compile (`TEMPORAL_INPUT_UNCONNECTED`), and wiring the
+mask without declaring it kills the second activation
+(`RUNTIME_OPERATOR_REPLAY_MISMATCH`). The `expect_*` gate that unblocked the
+POD `[live]` overrides is not applied here — the contract calls `is_valid` a
+plain optional input, not a `[live]` parameter, so adding a flag would be a
+contract change.
 
 ### 4. Physical output renames (`snapshot_out` / `is_valid_out`)
 

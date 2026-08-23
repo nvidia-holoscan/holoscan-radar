@@ -115,7 +115,8 @@ class BeamscanEstimatorOp : public holoscan::Operator<BeamscanParams> {
   Input<Tensor> is_valid{"is_valid"};
   Output<Tensor> aoa_estimates{"aoa_estimates"};
   Output<Tensor> angle_spectrum{"angle_spectrum"};
-  // [live] sticky override of params().peak_interpolation (OPERATOR_API.md).
+  // [live] Exact override of params().peak_interpolation, gated by
+  // expect_peak_interpolation (OPERATOR_API.md).
   // Vector / descriptor live params (az_angles, el_angles, array_geometry,
   // array_taper) are Params-only on HSDK 5 EA — see OPEN_ITEMS.md /
   // HSDK5_PORT.md §9. angle_convention is static (Params only).
@@ -131,7 +132,7 @@ class BeamscanEstimatorOp : public holoscan::Operator<BeamscanParams> {
   // device reads cannot outlive the buffers.
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
-  // Sticky [live] peak_interpolation: last override wins until the next.
+  // Sticky [live] peak_interpolation: last Exact match holds while sticky_*.
   std::optional<PeakInterpolation> sticky_peak_interpolation_;
   // Conjugate-transposed steering weights Wᶜ, built on device, laid
   // out (num_channels, num_beams) with beams el-major. Cached;

@@ -68,7 +68,8 @@ void retire_music_matx_caches();
 // Out: eigenvalues     — float32/float64, (num_items, num_channels). Always
 //                       emitted (computed every tick).
 //
-// [EA HSDK5 ONLY] Live override ports: sticky Input for POD scalars
+// [EA HSDK5 ONLY] Live override ports: Exact Input for POD scalars, each
+// gated by its expect_* param
 // (num_sources, source_count_pfa, max_sources). Descriptor / unbounded-
 // vector live params (array_geometry, az_angles, el_angles,
 // spatial_smoothing) are Params-only (HSDK5_PORT.md §9). angle_convention
@@ -189,8 +190,9 @@ class MUSICEstimatorOp : public holoscan::Operator<MUSICParams> {
   Output<Tensor> doa_multi{"doa_multi"};
   Output<Tensor> source_count{"source_count"};
   Output<Tensor> eigenvalues{"eigenvalues"};
-  // [live] sticky POD overrides (OPERATOR_API.md). Vector / descriptor live
-  // params stay Params-only on HSDK 5 EA — see OPEN_ITEMS.md / HSDK5_PORT §9.
+  // [live] Exact POD overrides, gated by expect_* (OPERATOR_API.md).
+  // Vector / descriptor live params stay Params-only on HSDK 5 EA — see
+  // OPEN_ITEMS.md / HSDK5_PORT §9.
   Input<int64_t> num_sources{"num_sources"};
   Input<double> source_count_pfa{"source_count_pfa"};
   Input<int64_t> max_sources{"max_sources"};
@@ -207,7 +209,7 @@ class MUSICEstimatorOp : public holoscan::Operator<MUSICParams> {
   // reads cannot outlive the buffers.
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
-  // Sticky [live] scalars: last override wins until the next.
+  // Sticky [live] scalars: the last Exact match holds while sticky_*.
   std::optional<int64_t> sticky_num_sources_;
   std::optional<double> sticky_source_count_pfa_;
   std::optional<int64_t> sticky_max_sources_;

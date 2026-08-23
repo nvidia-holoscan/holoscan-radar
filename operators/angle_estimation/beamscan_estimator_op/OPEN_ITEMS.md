@@ -11,29 +11,32 @@ if it affects the module, then remove or archive the section here.
 
 ---
 
-## 1. Graph mid-stream sticky `[live] peak_interpolation` coverage
+## 1. Graph mid-stream `[live] peak_interpolation` coverage
 
 **Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”;
 Performance → inline live-override measurement (when Graph-ported).
 
-**Class:** HSDK 5 EA limitation (not a contract change). See
-[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
+**Wiring (settled — L16 / L17).** `contract()` joins
+`Input<PeakInterpolation> peak_interpolation` to the data trigger with
+`Exact{}` and `on_missing SafeDefault{}` when `expect_peak_interpolation`
+is set, and `compute()` resolves it with `resolve_expected_override`.
+`sticky_peak_interpolation` (default true) latches the last Exact match;
+false reverts to Params on a miss. The application stamps one transmit
+time on both the override and the snapshot — see
+[`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
-**Interim.**
+**Still open (EA test harness).**
 
-- Operator still declares `Input<PeakInterpolation> peak_interpolation` and
-  resolves sticky overrides in `compute()` via `resolve_sticky_override`.
-- `peak_interpolation` is omitted from `contract()` so unwired graphs compile
-  (same pattern as ClutterFilter `method` / SnapshotGather `snapshot_window`).
 - `BeamscanEstimatorOpTest.LivePeakInterpolationStickyOverride` is
-  `GTEST_SKIP`’d.
+  `GTEST_SKIP`’d; no Graph test drives a mid-stream override through this
+  operator yet.
 - Params authoring covers selection
   (`PeakInterpolationConfigurableFromParams`).
 
-**Next.** Restore sticky temporal policy + Graph sticky unit test on a newer
-EA / GA (shared recipe with ClutterFilter §1).
+**Next.** Add the Graph mid-stream + sticky test, modeled on
+`FMCWRangeProcessorOp`’s `nfft` Exact cases.
 
-**Status:** open — EA; do not treat as checklist-complete until closed.
+**Status:** open — test coverage only; the wiring decision is settled.
 
 ---
 
@@ -56,7 +59,8 @@ fixed-size POD like `SnapshotWindowOverride`.
 `set_params`). Live Graph override tests are `GTEST_SKIP`’d. Params
 coverage remains (`ArrayTaperConfigurableFromParams`, scan-grid / DOA
 tests). `angle_convention` stays static (Params only) per OPERATOR_API.md.
-Enum live `peak_interpolation` still has a sticky Input (§1).
+Enum live `peak_interpolation` has an Exact override port (§1); no
+`expect_*` is declared for these four until ports exist.
 
 **Next.** Prefer Tensor live ports for angle grids and/or ChannelPod /
 schema wrappers for descriptors once a module-wide recipe lands (§9);
@@ -71,15 +75,19 @@ deferred.
 
 **Blocks checklist:** Tests → optional `is_valid` connected Graph paths.
 
-**Class:** HSDK 5 EA limitation (related to §1 temporal / binding gaps).
+**Class:** HSDK 5 EA gap — no optional input
+([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11).
 
 **What fails.**
 
 - Omitting `is_valid` from `contract()` lets unwired graphs compile
   (`TEMPORAL_INPUT_UNCONNECTED` otherwise; `SafeDefault` alone is not
-  enough on EA — same as ClutterFilter live ports).
+  enough on EA).
 - Wiring `is_valid` via DualIO while it is omitted from the contract
   yields `RUNTIME_OPERATOR_REPLAY_MISMATCH`.
+- The `expect_*` recipe that unblocked the POD `[live]` overrides (§1)
+  would apply here too, at the cost of a second declaration site for a
+  cheap mask; not adopted for `is_valid`.
 
 **Interim.** Port remains registered in `setup()`; `compute()` uses
 `receive_optional_value`. Graph tests

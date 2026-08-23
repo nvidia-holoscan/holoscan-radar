@@ -56,7 +56,8 @@ struct DopplerStageState;  // defined in doppler_stage.hpp
 // OPERATOR_API.md but stay Params-only here: WindowSpec and
 // FMCWWaveformDescriptor own vectors / optionals (HSDK5_PORT.md §9). POD
 // scalars (apply_dechirp, clutter_filter, fft_norm, center_zero_doppler,
-// nfft_range, nfft_doppler) have sticky Input overrides.
+// nfft_range, nfft_doppler) have Exact Input overrides, each gated by its
+// expect_* param.
 
 struct FMCWRangeDopplerProcessorParams {
   WindowSpec range_window{};

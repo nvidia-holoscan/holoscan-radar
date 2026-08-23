@@ -108,8 +108,9 @@ void VirtualArrayAssemblyOp<T>::setup(OperatorSpec& spec) {
   spec.output(array_geometry)
       .produces_tensor(kDevice)
       .tensor_allocation(geom_bounds);
-  // [live] POD sticky override. Leaving unconnected is legal — compute()
-  // seeds from Params. Descriptor / vector live params are Params-only (§9).
+  // [live] POD Exact override, registered unconditionally; contract() adds
+  // the entry only when expect_wavelength, so leaving it unconnected is
+  // legal there. Descriptor / vector live params are Params-only (§9).
   spec.input(wavelength).queue_depth(2U);
 }
 

@@ -6,33 +6,45 @@ migration items are indexed in
 
 ---
 
-## 1. Graph mid-stream sticky `[live]` POD coverage
+## 1. Graph mid-stream `[live]` POD coverage
 
 **Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky” for
 `pfa` / `threshold_scale` / `os_rank` / `max_detections`.
 
-**Class:** HSDK 5 EA limitation (not a contract change). See
-[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
+**Class:** Wiring settled (L16 / L17, 2026-08-21); Graph test coverage still
+deferred on EA. See
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1 and
+[`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
-**Interim.**
+**Decision.** `pfa` / `threshold_scale` / `os_rank` / `max_detections` join
+the `rd_maps` trigger with `Exact{}` and `on_missing SafeDefault{}`, each
+gated by `expect_<name>` (default false). `sticky_<name>` (default true)
+latches the last Exact match; false reverts to Params on a miss. The
+application stamps the frame's transmit time on both the override and the
+cube. `expect_*=true` requires the matching `add_flow`
+(`TEMPORAL_INPUT_UNCONNECTED` otherwise); wiring without the flag is
+`RUNTIME_OPERATOR_REPLAY_MISMATCH`.
 
-- Operator still declares sticky `Input<double> pfa` /
-  `Input<double> threshold_scale` / `Input<int64_t> os_rank` /
-  `Input<int64_t> max_detections` and resolves via `resolve_sticky_override`.
-- Live ports are omitted from `contract()` so unwired graphs compile.
+**Still deferred.**
+
 - `LiveThresholdScaleOverrideMidStreamAndSticky` /
   `LivePfaOverrideMidStreamAndSticky` /
-  `LiveMaxDetectionsOverrideMidStreamAndSticky` are `GTEST_SKIP`’d.
+  `LiveMaxDetectionsOverrideMidStreamAndSticky` (and the OS suite's
+  `LiveOsRankOverrideMidStreamAndSticky`) are still `GTEST_SKIP`’d — the
+  Graph harness for a mid-stream POD override on this five-output operator
+  is not written yet.
 - `perf_cfar_detector` measures an inline `threshold_scale` transition with
   the supported single-clock / exact-contract / single-partition shape.
 - Params authoring covers selection (`ThresholdScaleConfigurableFromParams` /
   `PfaConfigurableFromParams` / `MaxDetectionsConfigurableFromParams`).
 
-**Next.** Restore sticky temporal policy + Graph sticky unit tests on a newer
-EA / GA (shared recipe with ClutterFilter §1).
+**Next.** Port the Graph live-override harness (the pattern
+`test_fmcw_range_processor.cpp` uses for `nfft`) to the five-out CFAR
+fixture and unskip.
 
-**Status:** open for sticky unit tests and isolated `pfa` / `os_rank` /
-`max_detections` perf; `threshold_scale` perf timing is restored.
+**Status:** open — test coverage only; the contract wiring is settled.
+Isolated `pfa` / `os_rank` / `max_detections` perf is still owed;
+`threshold_scale` perf timing is restored (§8).
 
 ---
 
@@ -53,8 +65,8 @@ POD later); `nci_axes` / `alpha_lut` are unbounded.
 `LiveTrainingCellsOverrideMidStreamAndSticky` /
 `LiveNciAxesOverrideMidStreamAndSticky` are `GTEST_SKIP`’d. Params coverage
 remains (`GuardCellsConfigurableFromParams` /
-`TrainingCellsConfigurableFromParams`). POD scalar live Inputs (§1) still
-declared.
+`TrainingCellsConfigurableFromParams`). The POD scalar lives do join
+`contract()` behind `expect_*` (§1); only these four are portless.
 
 **Next.** Prefer fixed POD for (doppler, range) pairs and `Input<Tensor>` (or
 a durable schema) for `alpha_lut` / `nci_axes`; restore sticky live + Graph

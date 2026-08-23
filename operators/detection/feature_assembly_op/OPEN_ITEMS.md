@@ -11,16 +11,21 @@ items are indexed in [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md).
 `detection_score` / `aoa_estimates` / `az_angles` / `el_angles` connected
 Graph paths.
 
-**Class:** HSDK 5 EA limitation (same family as Beamscan optional `is_valid`).
-See [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1 / §7.
+**Class:** HSDK 5 EA gap — no optional input (same family as Beamscan optional
+`is_valid`). See [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11.
 
 **What fails.**
 
 - Putting optional Tensor Inputs in `contract()` with `SafeDefault` /
   `LatestWithin` yields `TEMPORAL_INPUT_UNCONNECTED` when left unwired
-  (apps routinely omit unused gather sources).
+  (apps routinely omit unused gather sources); `on_missing` governs a
+  declared *and connected* input.
 - Wiring those ports via DualIO / multi-source while they are omitted from
   `contract()` yields `RUNTIME_OPERATOR_REPLAY_MISMATCH` on EA.
+- The `expect_*` recipe that settled the module's POD `[live]` overrides
+  does not transfer: this operator has no `[live]` parameters, and the
+  gather ports' presence already follows from the static `features` list,
+  so a per-port flag would state the same fact a third time.
 
 **Interim.**
 
@@ -30,7 +35,7 @@ See [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1 / §7.
   (trigger = `OnEach{detection_idx}` only).
 - Graph unit coverage for optional-connected paths is deferred
   (`OptionalGatherGraphWiringDeferred` skipped). Stage / kernel launches in
-  `test_feature_assembly.cpp` cover physical lookup, score gather, AoA,
+  `test_feature_assembly.cu` cover physical lookup, score gather, AoA,
   dense az/el, and OOB error codes.
 
 **Next.** Restore optional-Tensor temporal recipe (SafeDefault that admits

@@ -53,11 +53,11 @@ namespace holoscan::radar {
 //   min_points   — int64. Minimum neighbors (including the point itself) for a
 //                  core point (DBSCAN minPts). <= 0 selects the default
 //                  heuristic 2·num_features (resolved per tick from the input).
-//                  Sticky [live] Input when wired.
+//                  [live] Exact Input when expect_min_points.
 //   max_clusters — int64. Upper cap on the number of clusters reported; surplus
 //                  clusters are dropped (points relabeled to noise) and a
 //                  warning raised if exceeded. <= 0 → uncapped (default).
-//                  Sticky [live] Input when wired.
+//                  [live] Exact Input when expect_max_clusters.
 //
 // Precision is fixed at compile time (T = float | double). The clustering is a
 // brute-force O(num_points²) neighbor sweep with iterative min-label connected
@@ -130,7 +130,8 @@ class ClusterDBSCANOp : public holoscan::Operator<ClusterDBSCANParams> {
   Input<Tensor> points{"points"};
   Output<Tensor> labels{"labels"};
   Output<Tensor> sizes{"sizes"};
-  // [live] sticky overrides (OPERATOR_API.md). epsilon stays Params-only
+  // [live] Exact overrides, gated by expect_* (OPERATOR_API.md). epsilon
+  // stays Params-only
   // (unbounded vector — HSDK5_PORT.md §9 / OPEN_ITEMS).
   Input<int64_t> min_points{"min_points"};
   Input<int64_t> max_clusters{"max_clusters"};
@@ -143,7 +144,7 @@ class ClusterDBSCANOp : public holoscan::Operator<ClusterDBSCANParams> {
   // Keep the previous activation's input alive across ticks so async device
   // reads cannot outlive the buffer.
   Tensor retained_points_;
-  // Sticky [live] scalars: last override wins until the next.
+  // Sticky [live] scalars: the last Exact match holds while sticky_*.
   std::optional<int64_t> sticky_min_points_;
   std::optional<int64_t> sticky_max_clusters_;
   bool warned_max_clusters_{false};

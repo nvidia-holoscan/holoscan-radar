@@ -11,32 +11,40 @@ if it affects the module, then remove or archive the section here.
 
 ---
 
-## 1. Graph mid-stream sticky `[live] snapshot_window` coverage
+## 1. Graph mid-stream `[live] snapshot_window` coverage
 
 **Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”.
 
-**Class:** HSDK 5 EA limitation (not a contract change). See
+**Class:** Test / harness gap. The override wiring itself is settled
+(L16 / L17) — see
+[`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md) and
 [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
 
-**Interim.**
+**Settled wiring.**
 
-- Operator still declares `Input<SnapshotWindowOverride> snapshot_window`
-  (POD — see [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9;
-  Params remain `std::vector<int64_t>`) and resolves sticky overrides in
-  `compute()` via `resolve_sticky_override`.
-- `snapshot_window` is omitted from `contract()` so unwired graphs compile
-  (same pattern as ClutterFilter `method`).
-- `SnapshotGatherOpTest.LiveSnapshotWindowStickyOverride` is `GTEST_SKIP`’d.
+- `Input<SnapshotWindowOverride> snapshot_window` (POD — §9; Params remain
+  `std::vector<int64_t>`) is registered unconditionally in `setup()` and
+  joins the `OnAligned` data trigger with `Exact{}` +
+  `on_missing SafeDefault{}` when `expect_snapshot_window` is set.
+- `sticky_snapshot_window` (default true) latches the last Exact match;
+  false reverts to Params on a miss. `compute()` resolves through
+  `resolve_expected_override`.
+- The trigger stays `OnAligned{rd_maps, detection_idx}`; the override rides
+  the same activation, so a wired application must stamp the frame's
+  transmit time on the override as well as the cube.
 - `perf_snapshot_gather` measures an inline `snapshot_window` POD transition
   with the supported single-clock / exact-contract / single-partition shape.
-- Params authoring covers window selection
-  (`SnapshotWindowConfigurableFromParams`, window/edge-mode tests).
-- Edge modes (`doppler_edge` / `range_edge`) remain static Params only.
 
-**Next.** Restore sticky temporal policy + Graph sticky unit test on a newer
-EA / GA (shared recipe with ClutterFilter §1).
+**Still owed.** `SnapshotGatherOpTest.LiveSnapshotWindowStickyOverride` is
+`GTEST_SKIP`’d — no Graph test drives a mid-stream override here yet (the
+`FMCWRangeProcessorOp` `nfft` Exact tests are the worked example). Params
+authoring covers window selection
+(`SnapshotWindowConfigurableFromParams`, window/edge-mode tests). Edge modes
+(`doppler_edge` / `range_edge`) remain static Params only.
 
-**Status:** open for the sticky unit test; perf override timing is restored.
+**Status:** open — do not treat the mid-stream/sticky test clause as
+checklist-complete until a Graph test drives it. Perf override timing is
+restored (§8).
 
 ---
 

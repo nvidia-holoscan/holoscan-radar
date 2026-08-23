@@ -6,29 +6,38 @@ migration items are indexed in
 
 ---
 
-## 1. Graph mid-stream sticky `[live] representative` / `score_method` coverage
+## 1. Graph mid-stream `[live] representative` / `score_method` coverage
 
 **Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”;
 Performance → inline live-override measurement (when Graph-ported).
 
-**Class:** HSDK 5 EA limitation (not a contract change). See
-[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
+**Class:** Wiring settled (L16 / L17, 2026-08-21); Graph test coverage still
+deferred on EA. See
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1 and
+[`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
-**Interim.**
+**Decision.** `representative` / `score_method` join the
+`OnAligned{labels, detection_idx, points}` trigger with `Exact{}` and
+`on_missing SafeDefault{}`, each gated by `expect_<name>` (default false).
+`sticky_<name>` (default true) latches the last Exact match; false reverts
+to Params on a miss. The application stamps the frame's transmit time on
+both the override and the aligned tensors. `expect_*=true` requires the
+matching `add_flow` (`TEMPORAL_INPUT_UNCONNECTED` otherwise); wiring
+without the flag is `RUNTIME_OPERATOR_REPLAY_MISMATCH`.
 
-- Operator still declares sticky `Input<RepresentativePolicy> representative` /
-  `Input<ScoreMethod> score_method` and resolves via `resolve_sticky_override`.
-- Both live ports are omitted from `contract()` so unwired graphs compile
-  (same pattern as ClutterFilter `method` / ClusterDBSCAN scalars).
+**Still deferred.**
+
 - `LiveRepresentativeStickyOverride` / `LiveScoreMethodStickyOverride` are
-  `GTEST_SKIP`’d.
+  still `GTEST_SKIP`’d — the Graph harness for a mid-stream enum override
+  alongside a three-way `OnAligned` join is not written yet.
 - Params authoring covers selection (`RepresentativeConfigurableFromParams` /
   `ScoreMethodConfigurableFromParams`).
 
-**Next.** Restore sticky temporal policy + Graph sticky unit tests on a newer
-EA / GA (shared recipe with ClutterFilter §1).
+**Next.** Port the Graph live-override harness (the pattern
+`test_fmcw_range_processor.cpp` uses for `nfft`) to this triple-in fixture
+and unskip.
 
-**Status:** open — EA; do not treat as checklist-complete until closed.
+**Status:** open — test coverage only; the contract wiring is settled.
 
 ---
 
@@ -46,9 +55,9 @@ EA / GA (shared recipe with ClutterFilter §1).
 
 **Interim.** `feature_weights` stays on `DetectionReductionParams` only
 (`set_params` / YAML). `LiveFeatureWeightsStickyOverride` is `GTEST_SKIP`’d.
-Params coverage remains (`FeatureWeightsConfigurableFromParams`). Scalar /
-enum live ports (`representative` / `score_method`) still declare sticky
-Inputs (§1).
+Params coverage remains (`FeatureWeightsConfigurableFromParams`). The enum
+lives (`representative` / `score_method`) do join `contract()` behind
+`expect_*` (§1); only `feature_weights` is portless.
 
 **Next.** Prefer `Input<Tensor>` (or a durable schema / bounded POD once a
 module max-feature count is pinned) and restore sticky live + Graph tests.
@@ -62,16 +71,22 @@ module max-feature count is pinned) and restore sticky live + Graph tests.
 **Blocks checklist:** Tests → unconnected `points` with `representative=first`;
 `RejectsPeakWithoutPoints` Graph path.
 
-**Class:** HSDK 5 EA limitation (same family as FeatureAssembly optional
-gathers / Beamscan `is_valid`). See
-[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1 / §7.
+**Class:** HSDK 5 EA gap — no optional input (same family as FeatureAssembly
+optional gathers / Beamscan `is_valid`). See
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11.
 
 **What fails.**
 
 - `SafeDefault` / `LatestWithin` on optional Tensor `points` still yields
-  `TEMPORAL_INPUT_UNCONNECTED` when left unwired.
+  `TEMPORAL_INPUT_UNCONNECTED` when left unwired: `on_missing` governs a
+  declared *and connected* input.
 - Omitting `points` from `contract()` while wiring it makes the sample
-  unavailable in `compute()` (peak/medoid Graph paths fail).
+  unavailable in `compute()` and kills the second activation with
+  `RUNTIME_OPERATOR_REPLAY_MISMATCH` (peak/medoid Graph paths fail).
+- The `expect_*` recipe that settled the `[live]` overrides (§1) does not
+  transfer: `points` is a trigger port, so gating its contract entry on a
+  flag would also change what the operator triggers on, not just whether an
+  override is selected.
 
 **Interim.**
 
@@ -98,7 +113,7 @@ scalar cluster count (and max-label) each tick.
 
 ---
 
-## 4. Dense label assumption
+## 5. Dense label assumption
 
 **Context.** Implementation treats non-noise labels as integers in
 `[0, max_label]` and allocates `max_label+1` slots (cap 2^20). Gaps are
@@ -109,7 +124,7 @@ labels are remapped differently.
 
 ---
 
-## 5. Custom `ScoreFn` template path
+## 6. Custom `ScoreFn` template path
 
 **Context.** Contract `score_method=custom` uses a compile-time device
 functor (`DetectionReductionOp<T, ScoreFn>`). Implemented: custom peak
@@ -124,7 +139,7 @@ is installed with the operator headers). Graph unit coverage for a non-default
 
 ---
 
-## 6. Algorithm text previously said MatX; implementation is custom CUDA
+## 7. Algorithm text previously said MatX; implementation is custom CUDA
 
 **Context.** Locked algorithm line mentioned MatX segmented reduction; this
 slice uses custom CUDA atomics / compact (CUB/MatX segmented reduce can
@@ -136,7 +151,7 @@ link target); operators must not recompile `group_by_label.cu`.
 
 ---
 
-## 7. Per-tick scratch `make_device_tensor` allocations
+## 8. Per-tick scratch `make_device_tensor` allocations
 
 **Context.** Each compute tick allocates temporary device buffers
 (`best_rows`, score-bit scratch, centroid sums, packed working sets, …)
@@ -148,7 +163,7 @@ consumer or a hot production path makes it worth the complexity.
 
 ---
 
-## 8. Representative `rep_idx` under ties is order-dependent (benign, not a defect)
+## 9. Representative `rep_idx` under ties is order-dependent (benign, not a defect)
 
 **This is a known, by-design behavior, not a bug — no fix is required.** It is
 documented here only because it affects bit-exact reproducibility.
@@ -181,7 +196,7 @@ fields and exclude the medoid `rep_*` values, or add a deterministic tie-break
 
 ---
 
-## 9. Performance harness (4.x; Graph port deferred)
+## 10. Performance harness (4.x; Graph port deferred)
 
 `performance/cpp/perf_detection_reduction.cpp` still uses the HSDK 4.x
 Application helpers. Graph-port the perf binary (cold/steady + deferred
@@ -192,7 +207,7 @@ live-override timing per §1 / §2) in a follow-up, mirroring
 
 ---
 
-## 10. Python bindings
+## 11. Python bindings
 
 **Blocks checklist:** only if this PR were a bindings wave (module-wide
 Python is deferred per checklist / STATUS).

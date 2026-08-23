@@ -46,10 +46,11 @@ namespace holoscan::radar {
 //                       cluster count and reallocated per tick.
 //
 // Parameters (OPERATOR_API.md [live] tags):
-//   representative  — enum {peak, medoid, first}. Sticky [live] Input when
-//                     wired.
+//   representative  — enum {peak, medoid, first}. [live] Exact Input when
+//                     expect_representative.
 //   score_method    — enum {weighted_sum, weighted_l2, weighted_max, custom}.
-//                     Used by peak. Sticky [live] Input when wired.
+//                     Used by peak. [live] Exact Input when
+//                     expect_score_method.
 //   feature_weights — std::vector<double>, length num_features. Required for
 //                     peak (non-custom) / medoid.
 //                     [EA HSDK5 ONLY] Params-only — Input<std::vector> is not
@@ -138,7 +139,8 @@ class DetectionReductionOp
   // OPEN_ITEMS.
   Input<Tensor> points{"points"};
   Output<Tensor> rep_idx{"rep_idx"};
-  // [live] sticky overrides (OPERATOR_API.md). feature_weights stays
+  // [live] Exact overrides, gated by expect_* (OPERATOR_API.md).
+  // feature_weights stays
   // Params-only (unbounded vector — HSDK5_PORT.md §9 / OPEN_ITEMS).
   Input<RepresentativePolicy> representative{"representative"};
   Input<ScoreMethod> score_method{"score_method"};
@@ -153,7 +155,7 @@ class DetectionReductionOp
   Tensor retained_idx_;
   Tensor retained_points_;
   std::shared_ptr<holoscan::Tensor> retained_weights_;
-  // Sticky [live] POD enums: last override wins until the next.
+  // Sticky [live] POD enums: the last Exact match holds while sticky_*.
   std::optional<RepresentativePolicy> sticky_representative_;
   std::optional<ScoreMethod> sticky_score_method_;
 };

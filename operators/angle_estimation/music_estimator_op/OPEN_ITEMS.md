@@ -18,20 +18,23 @@ Cross-cut SDK / migration detail lives in
 
 ---
 
-## 1. Graph mid-stream sticky `[live]` POD coverage
+## 1. Graph mid-stream `[live]` POD coverage
 
 **Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky” for
 `num_sources` / `source_count_pfa` / `max_sources`.
 
-**Class:** HSDK 5 EA limitation. See
-[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
+**Wiring (settled — L16 / L17).** `contract()` joins
+`Input<int64_t> num_sources`, `Input<double> source_count_pfa`, and
+`Input<int64_t> max_sources` to the data trigger with `Exact{}` and
+`on_missing SafeDefault{}` when the matching `expect_*` is set;
+`compute()` resolves them with `resolve_expected_override`. `sticky_*`
+(default true) latches the last Exact match; false reverts to Params on a
+miss. The application stamps one transmit time on the override and the
+snapshot — see
+[`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
-**Interim.**
+**Still open (EA test harness).**
 
-- Operator still declares sticky `Input<int64_t> num_sources`,
-  `Input<double> source_count_pfa`, and `Input<int64_t> max_sources`;
-  `compute()` resolves via `resolve_sticky_override`.
-- Those ports are omitted from `contract()` so unwired graphs compile.
 - `LiveNumSourcesStickyOverride` / `LiveSourceCountPfaStickyOverride` /
   `LiveMaxSourcesStickyOverrideReallocates` are `GTEST_SKIP`’d.
 - `perf_music_estimator` measures an inline `max_sources` transition with
@@ -41,11 +44,12 @@ Cross-cut SDK / migration detail lives in
   `SourceCountPfaConfigurableFromParams` /
   `MaxSourcesConfigurableFromParams`).
 
-**Next.** Restore sticky temporal policy + Graph sticky unit tests on a
-newer EA / GA (shared recipe with ClutterFilter §1 / MVDR §1).
+**Next.** Add Graph mid-stream + sticky tests, modeled on
+`FMCWRangeProcessorOp`’s `nfft` Exact cases.
 
-**Status:** open for sticky unit tests and isolated `num_sources` /
-`source_count_pfa` perf; `max_sources` perf timing is restored.
+**Status:** open — test coverage only; the wiring decision is settled.
+Isolated `num_sources` / `source_count_pfa` perf is still open;
+`max_sources` perf timing is restored (§8).
 
 ---
 
@@ -75,11 +79,14 @@ deferred.
 
 **Blocks checklist:** Tests → optional `is_valid` connected Graph paths.
 
-**Class:** HSDK 5 EA limitation (related to §1). Same as Beamscan /
-MVDR OPEN_ITEMS §3.
+**Class:** HSDK 5 EA gap — no optional input
+([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11). Same as
+Beamscan / MVDR OPEN_ITEMS §3.
 
-**Interim.** Port registered in `setup()`; omitted from `contract()`;
-`compute()` uses `receive_optional_value`. Graph tests
+**Interim.** Port registered in `setup()`; omitted from `contract()` so
+unwired graphs compile (wiring it anyway is
+`RUNTIME_OPERATOR_REPLAY_MISMATCH`, §1); `compute()` uses
+`receive_optional_value`. Graph tests
 `IsValidMaskExcludesWrongDoaSnapshots` /
 `AllInvalidMaskBlanksDoaAndSpectrum` are `GTEST_SKIP`’d.
 

@@ -11,7 +11,7 @@ if it affects the module, then remove or archive the section here.
 
 ---
 
-## 1. Graph mid-stream sticky `[live] method` coverage
+## 1. Graph mid-stream `[live] method` coverage
 
 **Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”;
 Performance → inline live-override measurement.
@@ -19,22 +19,27 @@ Performance → inline live-override measurement.
 **Class:** HSDK 5 EA limitation (not a contract change). See
 [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
 
-**Interim.**
+**Wiring (settled, L16 / L17).** `Input<ClutterFilterMethod> method` joins
+the data trigger with `Exact{}` and `on_missing SafeDefault{}` when
+`expect_method` is true, so the override's `capture_time` must match the
+cube's. `sticky_method` (default true) latches the last Exact match; false
+reverts to Params on a miss. `compute()` resolves via
+`resolve_expected_override`. See
+[`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
-- Operator still declares `Input<ClutterFilterMethod> method` and resolves
-  sticky overrides in `compute()` via `resolve_sticky_override`.
-- `method` is omitted from `contract()` so unwired graphs compile.
+**Still deferred.**
+
 - `ClutterFilterOpTest.LiveMethodOverrideMidStreamAndSticky` is
-  `GTEST_SKIP`’d.
-- Params authoring covers method selection
+  `GTEST_SKIP`’d; Params authoring covers method selection
   (`MethodConfigurableFromParams`).
 - `perf_clutter_filter` measures setup / cold / steady only; notes
   `live_override=deferred_ea`.
 
-**Next.** Restore sticky temporal policy + Graph sticky unit test +
-`override_ms` in the perf harness on a newer EA / GA.
+**Next.** Add the Graph mid-stream unit test + `override_ms` in the perf
+harness on a newer EA / GA.
 
-**Status:** open — EA; do not treat as checklist-complete until closed.
+**Status:** open — EA harness gap; do not treat as checklist-complete until
+closed.
 
 ---
 

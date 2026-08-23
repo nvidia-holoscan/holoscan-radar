@@ -122,7 +122,8 @@ struct CfarAlphaLutKey {
 // Out: detection_idx   — int64, (num_detections, 2 [+ n_batch]),
 //                       (doppler_bin, range_bin) per row.
 //
-// [EA HSDK5 ONLY] Live override ports: sticky Input for POD scalars
+// [EA HSDK5 ONLY] Live override ports: Exact Input for POD scalars, each
+// gated by its expect_* param
 // (pfa, threshold_scale, os_rank, max_detections). Unbounded / pair vectors
 // (guard_cells, training_cells, nci_axes, alpha_lut) are Params-only
 // (HSDK5_PORT.md §9). Static params (cfar_variant, peak_only, …) stay
@@ -295,7 +296,7 @@ class CFARDetectorOp : public holoscan::Operator<CFARParams> {
 
   using AlphaLutKey = CfarAlphaLutKey;
 
-  // Sticky [live] POD scalars: last override wins until the next.
+  // Sticky [live] POD scalars: the last Exact match holds while sticky_*.
   std::optional<double> sticky_pfa_;
   std::optional<double> sticky_threshold_scale_;
   std::optional<int64_t> sticky_os_rank_;
