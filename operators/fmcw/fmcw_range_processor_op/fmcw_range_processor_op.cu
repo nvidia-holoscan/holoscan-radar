@@ -51,8 +51,8 @@ struct ValidatedRangeConfig {
   bool waveform_present;
 };
 
-// Resolve Exact inputs with the pinned parameters. Unwired ports
-// (expect=false) must not be received.
+// Resolve Exact inputs with the pinned parameters. An unwired port reads as
+// an ordinary miss, so no wiring flag is needed.
 expected<EffectiveRangeConfig, Error> resolve_overrides(
     Input<wire::WindowSpecT>& range_window_in,
     Input<bool>& apply_dechirp_in,
@@ -65,29 +65,26 @@ expected<EffectiveRangeConfig, Error> resolve_overrides(
     std::optional<int64_t>& sticky_nfft) {
   HOLOSCAN_TRY(
       auto range_window,
-      resolve_expected_override_via(
-          pinned.expect_range_window, range_window_in, pinned.range_window,
-          sticky_range_window, pinned.sticky_range_window,
+      resolve_live_override_via(
+          range_window_in, pinned.range_window, sticky_range_window,
+          pinned.sticky_range_window,
           [](const wire::WindowSpecT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto apply_dechirp,
-               resolve_expected_override(
-                   pinned.expect_apply_dechirp, apply_dechirp_in,
-                   pinned.apply_dechirp, sticky_apply_dechirp,
-                   pinned.sticky_apply_dechirp));
+               resolve_live_override(
+                   apply_dechirp_in, pinned.apply_dechirp,
+                   sticky_apply_dechirp, pinned.sticky_apply_dechirp));
   HOLOSCAN_TRY(
       auto waveform,
-      resolve_expected_override_via(
-          pinned.expect_waveform, waveform_in, pinned.waveform,
-          sticky_waveform, pinned.sticky_waveform,
+      resolve_live_override_via(
+          waveform_in, pinned.waveform, sticky_waveform,
+          pinned.sticky_waveform,
           [](const wire::FMCWWaveformT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto fft_norm,
-               resolve_expected_override(pinned.expect_fft_norm, fft_norm_in,
-                                         pinned.fft_norm, sticky_fft_norm,
-                                         pinned.sticky_fft_norm));
+               resolve_live_override(fft_norm_in, pinned.fft_norm,
+                                     sticky_fft_norm, pinned.sticky_fft_norm));
   HOLOSCAN_TRY(auto nfft,
-               resolve_expected_override(pinned.expect_nfft, nfft_in,
-                                         pinned.nfft, sticky_nfft,
-                                         pinned.sticky_nfft));
+               resolve_live_override(nfft_in, pinned.nfft, sticky_nfft,
+                                     pinned.sticky_nfft));
 
   return EffectiveRangeConfig{.window = std::move(range_window),
                               .apply_dechirp = apply_dechirp,
@@ -259,21 +256,17 @@ void FMCWRangeProcessorOp<T>::setup(OperatorSpec& spec) {
 
 template <typename T>
 Contract FMCWRangeProcessorOp<T>::contract() const {
-  // Trigger on the data tensor. Each expect_* gate puts that Exact
-  // override in the contract (must be wired). Optional range_bins stays
-  // omitted so an unwired sink does not gate scheduling.
+  // Trigger on the data tensor. Every Exact override is declared whether or
+  // not the application wires it: an unwired one compiles to a warning and
+  // reads as a miss. Optional range_bins stays omitted so an unwired sink does
+  // not gate scheduling.
   Contract result;
   result.trigger(OnEach{adc_cube});
-  maybe_add_live_override_to_contract(
-      result, range_window_in, params().expect_range_window);
-  maybe_add_live_override_to_contract(
-      result, apply_dechirp_in, params().expect_apply_dechirp);
-  maybe_add_live_override_to_contract(
-      result, waveform_in, params().expect_waveform);
-  maybe_add_live_override_to_contract(
-      result, fft_norm_in, params().expect_fft_norm);
-  maybe_add_live_override_to_contract(
-      result, nfft_in, params().expect_nfft);
+  add_live_override_to_contract(result, range_window_in);
+  add_live_override_to_contract(result, apply_dechirp_in);
+  add_live_override_to_contract(result, waveform_in);
+  add_live_override_to_contract(result, fft_norm_in);
+  add_live_override_to_contract(result, nfft_in);
   return result;
 }
 

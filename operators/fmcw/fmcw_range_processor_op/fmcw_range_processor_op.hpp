@@ -61,13 +61,8 @@ struct FMCWRangeProcessorParams {
   double propagation_speed{kDefaultPropagationSpeed};
   // 0 = exact (no zero-padding); ≥ samples_per_chirp when non-zero.
   int64_t nfft{0};
-  // Static wiring flags for [live] ports (OPERATOR_API.md). Default
-  // off so unwired graphs compile. Must match add_flow.
-  bool expect_range_window{false};
-  bool expect_apply_dechirp{false};
-  bool expect_waveform{false};
-  bool expect_fft_norm{false};
-  bool expect_nfft{false};
+  // [live] override ports need no wiring flag: an unwired one reads as a
+  // miss (OPERATOR_API.md).
   bool sticky_range_window{true};
   bool sticky_apply_dechirp{true};
   bool sticky_waveform{true};
@@ -105,47 +100,26 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Fast-time FFT length >= samples_per_chirp; larger zero-pads "
             "for a finer interpolated range grid. 0 = samples_per_chirp."),
-    holoscan::field<&FMCWRangeProcessorParams::expect_range_window>(
-        "expect_range_window")
-        .description(
-            "Set when the application wires the range_window override."),
-    holoscan::field<&FMCWRangeProcessorParams::expect_apply_dechirp>(
-        "expect_apply_dechirp")
-        .description(
-            "Set when the application wires the apply_dechirp override."),
-    holoscan::field<&FMCWRangeProcessorParams::expect_waveform>(
-        "expect_waveform")
-        .description("Set when the application wires the waveform override."),
-    holoscan::field<&FMCWRangeProcessorParams::expect_fft_norm>(
-        "expect_fft_norm")
-        .description(
-            "Set when the application wires the fft_norm override."),
-    holoscan::field<&FMCWRangeProcessorParams::expect_nfft>("expect_nfft")
-        .description("Set when the application wires the nfft override."),
     holoscan::field<&FMCWRangeProcessorParams::sticky_range_window>(
         "sticky_range_window")
         .description(
             "Keep the last Exact range_window match on a miss. False "
-            "reverts to Params. Ignored unless expect_range_window."),
+            "reverts to Params."),
     holoscan::field<&FMCWRangeProcessorParams::sticky_apply_dechirp>(
         "sticky_apply_dechirp")
         .description(
             "Keep the last Exact apply_dechirp match on a miss. False "
-            "reverts to Params. Ignored unless expect_apply_dechirp."),
+            "reverts to Params."),
     holoscan::field<&FMCWRangeProcessorParams::sticky_waveform>(
         "sticky_waveform")
         .description(
             "Keep the last Exact waveform match on a miss. False reverts "
-            "to Params. Ignored unless expect_waveform."),
+            "to Params."),
     holoscan::field<&FMCWRangeProcessorParams::sticky_fft_norm>(
         "sticky_fft_norm")
-        .description(
-            "Keep the last Exact fft_norm match on a miss. Ignored "
-            "unless expect_fft_norm."),
+        .description("Keep the last Exact fft_norm match on a miss."),
     holoscan::field<&FMCWRangeProcessorParams::sticky_nfft>("sticky_nfft")
-        .description(
-            "Keep the last Exact nfft match on a miss. Ignored unless "
-            "expect_nfft."));
+        .description("Keep the last Exact nfft match on a miss."));
 
 static_assert(
     holoscan::param_schema_availability<FMCWRangeProcessorParams>() ==

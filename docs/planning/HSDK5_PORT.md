@@ -819,14 +819,48 @@ alternative shape, but the contract-level form composes better with the
 | Wire an idle producer that never emits (making the port mandatory) | Legal and parameter-free, but wiring a deliberately dead operator is not an idiom a Holoscan author would recognize, and it makes "unwired" indistinguishable from "has not published yet" (both `kNeverSeen`) |
 | Fan-in a stand-in alongside a real producer | Impossible — `add_flow` throws `GRAPH_INPUT_FANIN_UNSUPPORTED` |
 
-**Next.** Raise with the HSDK 5 team while the EA is open. Until then the
-module keeps the `expect_*` parameter (contract-visible, L17 adopted —
-[`OPERATOR_API.md`](OPERATOR_API.md)) rather than the idle-producer idiom,
-because a hidden dead operator in every application graph is worse than an
-explicit flag. Reasoning and the full measurement set:
-[`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md).
+**Answered in the SDK (2026-08-24), not yet shippable here.** SDK branch
+`deustice/5x/optional-port-contracts` (CONTRACT-020 / COMPILE-068 /
+RUNTIME-050) implements the requested form, and `tmp-app/optional_input_ports.cpp`
+measures it against this module's shapes:
 
-**Status:** open — SDK request not yet filed.
+| Case | Measured |
+| --- | --- |
+| `OnEach{data}` + POD override `Exact{}` + `SafeDefault{}`, unwired | Compile **accepted** with warning `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT` (vertex + port scoped); every activation reports `kSafeDefault` / `kNotConnected` and the read returns `kInputEmpty` |
+| Same, wired with a co-stamped companion | `kSelected` / `kNone` and the value — unchanged from the `expect_*` form |
+| Optional **Tensor** input (`is_valid`-shaped), unwired | Same acceptance and `kNotConnected` — the rule is about the *selector* being scalar `Exact`, not the payload, so the optional-Tensor family is covered too |
+| `OnAligned{…}` trigger + unwired `Exact{}` override | **Rejected**, `TEMPORAL_INPUT_UNCONNECTED` — `OnAligned`, `OnWindow`, and predicate inputs stay excluded |
+
+Consequences for this module: every `OnEach`-triggered operator can drop
+`expect_*` outright, and the optional-Tensor omissions (`is_valid`,
+FeatureAssembly gathers) become ordinary contract entries. `SnapshotGatherOp`
+and `DetectionReductionOp` trigger `OnAligned`, so they keep `expect_*` (or the
+SDK extends the rule to non-member inputs of an aligned trigger — worth asking,
+since an override is not an alignment member).
+
+**Blocked on SDK packaging, not on us.** That branch sits on `main-5x`, which
+has moved the Tensor spec API past the `v5.0.0.1` EA tag this module builds
+against (`TensorPortLayout` → `TensorInputSpec`/`TensorOutputSpec`,
+`TensorAllocationBounds` → `TensorPoolBounds`, `.tensor_allocation(bounds)` →
+`produces_tensor(spec, byte_span)`) — ~350 sites here. Backporting the feature
+onto `v5.0.0.1` conflicts in the diagnostic registry and `run_session.cpp`
+(312 commits of drift). So the removal cannot be validated end to end until
+either the public release lands or the module ports to `main-5x`.
+
+**Next.** Keep `expect_*` on `main`. The prepared removal (one operator,
+`FMCWRangeProcessorOp`) lives on branch `deustice/optional-input-ports`: it
+compiles against the EA SDK, and on that SDK exactly 28 tests then fail
+`TEMPORAL_INPUT_UNCONNECTED` — the operator's own 18 plus the 10
+`FMCWRangeDopplerProcessorOp` split-vs-fused parity cases that instantiate it
+(all pass at HEAD). Nothing else moves, which is the expected proof that the
+change is gated on the SDK feature and is otherwise complete. Reasoning and the
+full measurement set: [`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md).
+
+The one measurement gap: the operator's own Graph coverage cannot run until the
+feature ships, so "wired override still selects" is asserted only by the probe,
+not by the operator's tests.
+
+**Status:** open — SDK implements it; blocked on a release we can build against.
 
 ---
 

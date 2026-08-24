@@ -80,13 +80,10 @@ expected<T, Error> resolve_expected_override(
 // only for a fresh sample, and sticky state owns the converted descriptor so
 // generated wire storage never leaks into operator state.
 template <typename Wire, typename Converted, typename Converter>
-expected<Converted, Error> resolve_expected_override_via(
-    bool expect, Input<Wire>& port, const Converted& seed,
+expected<Converted, Error> resolve_live_override_via(
+    Input<Wire>& port, const Converted& seed,
     std::optional<Converted>& sticky, bool keep_sticky,
     Converter&& converter) {
-  if (!expect) {
-    return seed;
-  }
   HOLOSCAN_TRY(auto maybe, receive_optional_value(port));
   if (maybe.has_value()) {
     HOLOSCAN_TRY(
@@ -101,6 +98,18 @@ expected<Converted, Error> resolve_expected_override_via(
     return *sticky;
   }
   return seed;
+}
+
+template <typename Wire, typename Converted, typename Converter>
+expected<Converted, Error> resolve_expected_override_via(
+    bool expect, Input<Wire>& port, const Converted& seed,
+    std::optional<Converted>& sticky, bool keep_sticky,
+    Converter&& converter) {
+  if (!expect) {
+    return seed;
+  }
+  return resolve_live_override_via(port, seed, sticky, keep_sticky,
+                                   std::forward<Converter>(converter));
 }
 
 // Deprecated LatestWithin mapping for operators not yet on Exact+expect.

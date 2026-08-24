@@ -681,7 +681,6 @@ TEST(FMCWRangeProcessorOpTest, LiveNfftExactMatchChangesBinCount) {
   auto cube = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
 
   FMCWRangeProcessorParams params;
-  params.expect_nfft = true;
   params.sticky_nfft = false;
   const GraphRunResult out = run_nfft_override_graph(
       two_cube_ticks(cube, int64_t{256}, int64_t{256}), std::move(params));
@@ -698,7 +697,6 @@ TEST(FMCWRangeProcessorOpTest, LiveNfftStickyKeepsLastMatch) {
   auto cube = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
 
   FMCWRangeProcessorParams params;
-  params.expect_nfft = true;
   params.sticky_nfft = true;
   const GraphRunResult out = run_nfft_override_graph(
       two_cube_ticks(cube, int64_t{256}, std::nullopt), std::move(params));
@@ -715,7 +713,6 @@ TEST(FMCWRangeProcessorOpTest, LiveNfftEphemeralRevertsToParams) {
   auto cube = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
 
   FMCWRangeProcessorParams params;
-  params.expect_nfft = true;
   params.sticky_nfft = false;
   const GraphRunResult out = run_nfft_override_graph(
       two_cube_ticks(cube, int64_t{256}, std::nullopt), std::move(params));
@@ -733,7 +730,6 @@ TEST(FMCWRangeProcessorOpTest, LiveNfftSkewedCaptureTimeMissesExact) {
   const int64_t skew_ns = 1'000'000;
 
   FMCWRangeProcessorParams params;
-  params.expect_nfft = true;
   params.sticky_nfft = false;
   const GraphRunResult out = run_nfft_override_graph(
       two_cube_ticks(cube, int64_t{256}, int64_t{256}, skew_ns, skew_ns),
@@ -988,8 +984,6 @@ TEST(FMCWRangeProcessorOpTest, LiveWindowOverrideAppliesPerTick) {
 
   FMCWRangeProcessorParams params;
   params.waveform = to_descriptor(base_waveform);
-  params.expect_range_window = true;
-  params.expect_waveform = true;
   params.sticky_range_window = true;
   params.sticky_waveform = true;
   const DualIOGraphRunResult out = run_range_descriptor_override_graph(
@@ -1032,8 +1026,6 @@ TEST(FMCWRangeProcessorOpTest, InvalidLiveWaveformRejectedBeforeDsp) {
   invalid.invalid_waveform = true;
 
   FMCWRangeProcessorParams params;
-  params.expect_range_window = true;
-  params.expect_waveform = true;
   const DualIOGraphRunResult out =
       run_range_descriptor_override_graph({invalid}, std::move(params));
 

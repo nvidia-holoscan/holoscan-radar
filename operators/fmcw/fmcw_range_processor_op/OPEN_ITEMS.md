@@ -29,9 +29,12 @@ ordering, and numerical parity with `radar_common/sim/`.
 `on_missing SafeDefault{}`. The application stamps the frame's transmit time
 on both the override and the cube. `sticky_*` (default true) latches the
 last Exact match; false reverts to Params on a miss. No epoch field in the
-descriptor. `waveform` is restored through a generated
-`holoscan::radar::wire` schema payload with `expect_waveform` /
-`sticky_waveform`; the logical parameter remains
+descriptor. On this branch the override entries are unconditional — an unwired
+port is admitted by the SDK's optional-input rule, so `expect_waveform` is
+gone and only `sticky_waveform` remains
+([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11). `waveform` is
+restored through a generated
+`holoscan::radar::wire` schema payload; the logical parameter remains
 `FMCWWaveformDescriptor`. This physical encoding is interim pending team
 ratification. See
 [`SCHEMA_PAYLOADS.md`](../../../docs/planning/SCHEMA_PAYLOADS.md),
