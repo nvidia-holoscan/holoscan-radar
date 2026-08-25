@@ -16,17 +16,77 @@
 #include <string>
 #include <system_error>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "io/cphd_reader_op/cphd_file.hpp"
 #include "radar_common/descriptors/coordinate_frame.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
+#include "radar_common/sdk/stream_boundary.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
+
+struct CphdReaderResources {
+  void* history{nullptr};
+  size_t history_bytes{0};
+  void* scratch{nullptr};
+  size_t scratch_bytes{0};
+
+  CphdReaderResources() = default;
+  CphdReaderResources(const CphdReaderResources&) = delete;
+  CphdReaderResources& operator=(const CphdReaderResources&) = delete;
+
+  ~CphdReaderResources() {
+    if (history != nullptr) {
+      cudaFreeHost(history);
+    }
+    if (scratch != nullptr) {
+      cudaFreeHost(scratch);
+    }
+  }
+
+  void ensure_history(size_t bytes) {
+    if (bytes <= history_bytes) {
+      return;
+    }
+    if (history != nullptr) {
+      cudaFreeHost(history);
+      history = nullptr;
+      history_bytes = 0;
+    }
+    if (bytes == 0) {
+      return;
+    }
+    if (cudaMallocHost(&history, bytes) != cudaSuccess) {
+      throw std::runtime_error(
+          "CPHDReaderOp: pinned history allocation failed");
+    }
+    history_bytes = bytes;
+  }
+
+  void ensure_scratch(size_t bytes) {
+    if (bytes <= scratch_bytes) {
+      return;
+    }
+    if (scratch != nullptr) {
+      cudaFreeHost(scratch);
+      scratch = nullptr;
+      scratch_bytes = 0;
+    }
+    if (bytes == 0) {
+      return;
+    }
+    if (cudaMallocHost(&scratch, bytes) != cudaSuccess) {
+      throw std::runtime_error(
+          "CPHDReaderOp: pinned decode-scratch allocation failed");
+    }
+    scratch_bytes = bytes;
+  }
+};
 
 namespace {
 
@@ -34,29 +94,6 @@ template <typename T>
 constexpr const char* precision_name() {
   return std::is_same_v<T, float> ? "float" : "double";
 }
-
-// The metadata key the boundary announcement rides on (D22). The reader is
-// the only stage that knows where a collection ends, so it stamps the key on
-// the messages of the batch that *is* the last one -- announcing on the
-// following batch would be a boundary reported after the closing aperture
-// had already been contaminated.
-//
-// The SAR tier is the interim value R10 prescribes: the namespace scope is a
-// team decision that may not be settled in code, so the key sits under `sar`
-// until it is answered, committing FMCW to nothing. Promotion to the module
-// level is then a change to this one constant. See SAR/SIGPROC_PLAN.md.
-constexpr const char* kStreamBoundaryKey = "holoscan.radar.sar.stream_boundary";
-
-// MID-IMPLEMENTATION, and not the contract's encoding. OPERATOR_API.md
-// specifies a uint8 enum named in radar_common, sharing the encoding the
-// `control` port uses for its four values -- and that encoding does not exist
-// yet, because ApertureManagerOp does not. Choosing the numbering here would
-// commit the half of a shared vocabulary whose other half is unwritten, so
-// these strings stand in until both land together. Nothing reads the key yet,
-// which is what makes that safe. Do not write a consumer against these
-// values. See OPEN_ITEMS.md item 11.
-constexpr const char* kEndOfStream = "end_of_stream";
-constexpr const char* kCollectionBoundary = "collection_boundary";
 
 // Whether `path` ends in the CPHD extension, compared without ASCII case:
 // a directory holding SCENE.CPHD would otherwise contribute nothing, and the
@@ -123,51 +160,51 @@ std::vector<std::string> resolve_paths(const CollectionPaths& parameter,
 }
 
 // Copy a host buffer to a freshly allocated device tensor of `shape`.
+// On `stream` (non-default) the copy is async; the caller must keep
+// `host` alive until that stream catches up, and should stamp the
+// stream on the emitted port so the consumer waits for it.
 template <typename Element>
-std::shared_ptr<holoscan::Tensor> upload(const std::vector<Element>& host,
+std::shared_ptr<holoscan::Tensor> upload(const Element* host, size_t count,
                                          const std::vector<int64_t>& shape,
-                                         DLDataType dtype, const char* who) {
+                                         DLDataType dtype, cudaStream_t stream,
+                                         const char* who) {
   auto tensor = make_device_tensor(shape, dtype);
-  const size_t bytes = sizeof(Element) * host.size();
-  // The shape sizes the allocation while the vector sizes the copy, so a
-  // disagreement between the two writes past the device buffer rather than
-  // merely emitting a wrongly shaped tensor.
+  const size_t bytes = sizeof(Element) * count;
   if (bytes != static_cast<size_t>(tensor->nbytes())) {
     throw std::runtime_error(
         std::string(who) + ": H2D upload of " + std::to_string(bytes) +
         " host bytes into a " + std::to_string(tensor->nbytes()) +
         "-byte device tensor");
   }
-  // Synchronous by design, not an oversight. The host source is one of this
-  // tick's locals, so the copy has to complete before this returns; that also
-  // means the data is visible to every stream by the time the tensor is
-  // emitted, so no stream ordering against the consumer is needed.
-  if (cudaMemcpy(tensor->data(), host.data(), bytes,
-                 cudaMemcpyHostToDevice) != cudaSuccess) {
+  if (bytes == 0) {
+    return tensor;
+  }
+  const cudaError_t copied =
+      (stream == cudaStreamDefault)
+          ? cudaMemcpy(tensor->data(), host, bytes, cudaMemcpyHostToDevice)
+          : cudaMemcpyAsync(tensor->data(), host, bytes,
+                            cudaMemcpyHostToDevice, stream);
+  if (copied != cudaSuccess) {
     throw std::runtime_error(std::string(who) + ": H2D upload failed");
   }
   return tensor;
 }
 
-// Narrow the file's doubles to the instantiated precision. PVP records are
-// always float64 on disk; single-precision instances pay the cast here so
-// the rest of the chain sees one dtype.
-//
-// A double-precision instance returns the caller's vector by reference rather
-// than copying it, the cast being the identity. Every call site hands the
-// result straight to upload() and owns a local that outlives that call, so the
-// reference cannot outlive what it names.
-template <typename T>
-decltype(auto) narrow(const std::vector<double>& values) {
-  if constexpr (std::is_same_v<T, double>) {
-    return values;
-  } else {
-    std::vector<T> narrowed(values.size());
-    for (size_t i = 0; i < values.size(); ++i) {
-      narrowed[i] = static_cast<T>(values[i]);
-    }
-    return narrowed;
-  }
+template <typename Element>
+std::shared_ptr<holoscan::Tensor> upload(const std::vector<Element>& host,
+                                         const std::vector<int64_t>& shape,
+                                         DLDataType dtype, cudaStream_t stream,
+                                         const char* who) {
+  return upload(host.data(), host.size(), shape, dtype, stream, who);
+}
+
+// Stamp the GXF-managed H2D stream on the port before emit: set_cuda_stream
+// must precede emit, and only accepts streams from allocate_cuda_stream.
+void emit_with_stream(holoscan::OutputContext& op_output, const char* port,
+                      std::shared_ptr<holoscan::Tensor> tensor,
+                      cudaStream_t stream) {
+  op_output.set_cuda_stream(stream, port);
+  emit_single(op_output, port, std::move(tensor));
 }
 
 }  // namespace
@@ -189,6 +226,14 @@ void CPHDReaderOp<T>::initialize() {
   stop_condition_ =
       fragment()->make_condition<holoscan::BooleanCondition>("stop_condition");
   add_arg(stop_condition_);
+
+  // H2D needs a GXF-managed stream so set_cuda_stream can attach it to
+  // output ports. A homemade cudaStreamCreate stream is not in GXF's map
+  // and logs an error on every port every tick. Non-blocking so the copy
+  // does not wait for unrelated kernels on the default stream.
+  add_arg(fragment()->make_resource<holoscan::CudaStreamPool>(
+      "cuda_stream_pool", 0,
+      static_cast<uint32_t>(cudaStreamNonBlocking), 0, 1, 0));
 
   Operator::initialize();
 }
@@ -358,12 +403,19 @@ void CPHDReaderOp<T>::start() {
     file_index_ = 0;
   }
   open_current_file();
+
+  // Pinned staging lives for the operator's lifetime so a tick does not
+  // value-initialize 60 MiB of phase history. The H2D stream is allocated
+  // in compute() from the GXF pool (set_cuda_stream requires that).
+  if (!resources_) {
+    resources_ = std::make_shared<CphdReaderResources>();
+  }
 }
 
 template <typename T>
 void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
                               OutputContext& op_output,
-                              [[maybe_unused]] ExecutionContext& context) {
+                              ExecutionContext& context) {
   const std::string who =
       std::string("CPHDReaderOp<") + precision_name<T>() + ">";
   const cphd::ChannelInfo& info = file_->channel(channel_.get());
@@ -391,14 +443,28 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   std::optional<cphd::PvpBlock> pvp =
       file_->read_pvp_block(channel_.get(), first, count);
 
-  // 2. Phase history, read straight into the staging buffer at this
-  // instance's precision. A single-precision instance reading CF8 makes no
-  // copy beyond this one: CF8 is big-endian complex<float>, so the bytes land
-  // here and are swapped in place.
-  std::vector<std::complex<T>> history(
-      static_cast<size_t>(count * num_samples));
-  file_->read_signal_into(channel_.get(), first, count, history.data(),
-                          &pvp.value());
+  // 2. Phase history, read into reused pinned staging at this instance's
+  // precision. A single-precision instance reading CF8 makes no copy
+  // beyond this one: CF8 is big-endian complex<float>, so the bytes land
+  // here and are swapped in place. The buffer is not zeroed; decode
+  // overwrites every element.
+  if (resources_ == nullptr) {
+    throw std::runtime_error(who + ": H2D staging was not created");
+  }
+  auto maybe_stream = context.allocate_cuda_stream("h2d");
+  if (!maybe_stream) {
+    throw std::runtime_error(who + ": failed to allocate H2D stream: " +
+                             maybe_stream.error().what());
+  }
+  const cudaStream_t stream = maybe_stream.value();
+  const size_t nsamp = static_cast<size_t>(count * num_samples);
+  resources_->ensure_history(nsamp * sizeof(std::complex<T>));
+  auto* history = static_cast<std::complex<T>*>(resources_->history);
+  resources_->ensure_scratch(nsamp * 8);
+  file_->read_signal_into(channel_.get(), first, count, history,
+                          &pvp.value(),
+                          static_cast<char*>(resources_->scratch),
+                          resources_->scratch_bytes);
 
   // The aperture phase centre is the midpoint of the transmit and receive
   // phase centres, which reduces to either one for the monostatic
@@ -480,40 +546,69 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   // batch late would already have let the next collection's pulses into the
   // closing aperture.
   if (is_final && is_metadata_enabled()) {
-    metadata()->set(kStreamBoundaryKey, std::string(is_last_file
-                                                        ? kEndOfStream
-                                                        : kCollectionBoundary));
+    metadata()->set(
+        kStreamBoundaryKey,
+        std::string(is_last_file ? kStreamBoundaryEndOfStream
+                                 : kStreamBoundaryCollection));
   }
 
   const std::vector<int64_t> pulse_shape{count, 3};
-  emit_single(
+  // Named host buffers: async H2D from a temporary would dangle when
+  // the statement ends, before the stream sync below.
+  std::vector<T> pos_host(apc.size());
+  std::vector<T> srp_host(srp.size());
+  for (size_t i = 0; i < apc.size(); ++i) {
+    pos_host[i] = static_cast<T>(apc[i]);
+  }
+  for (size_t i = 0; i < srp.size(); ++i) {
+    srp_host[i] = static_cast<T>(srp[i]);
+  }
+  emit_with_stream(
       op_output, "phase_history",
-      upload(history, {count, num_samples}, complex_dtype<T>(), who.c_str()));
-  emit_single(
+      upload(history, nsamp, {count, num_samples}, complex_dtype<T>(),
+             stream, who.c_str()),
+      stream);
+  emit_with_stream(
       op_output, "positions",
-      upload(narrow<T>(apc), pulse_shape, real_dtype<T>(), who.c_str()));
-  emit_single(
+      upload(pos_host, pulse_shape, real_dtype<T>(), stream, who.c_str()),
+      stream);
+  emit_with_stream(
       op_output, "reference_position",
-      upload(narrow<T>(srp), pulse_shape, real_dtype<T>(), who.c_str()));
-  emit_single(op_output, "sample_axis",
-              upload(axis, {num_samples}, real_dtype<T>(), who.c_str()));
+      upload(srp_host, pulse_shape, real_dtype<T>(), stream, who.c_str()),
+      stream);
+  emit_with_stream(op_output, "sample_axis",
+                   upload(axis, {num_samples}, real_dtype<T>(), stream,
+                          who.c_str()),
+                   stream);
 
   // Pulse times stay float64 in both instantiations: a collection-relative
   // timestamp does not survive single precision to useful accuracy.
   const std::vector<double> times = pvp->field("TxTime", 1);
-  emit_single(op_output, "pulse_times",
-              upload(times, {count}, real_dtype<double>(), who.c_str()));
+  emit_with_stream(op_output, "pulse_times",
+                   upload(times, {count}, real_dtype<double>(), stream,
+                          who.c_str()),
+                   stream);
 
+  std::vector<T> vel_host;
   if (pvp->has("TxVel") && pvp->has("RcvVel")) {
     const std::vector<double> tx_vel = pvp->field("TxVel", 3);
     const std::vector<double> rcv_vel = pvp->field("RcvVel", 3);
-    std::vector<double> velocity(tx_vel.size());
-    for (size_t i = 0; i < velocity.size(); ++i) {
-      velocity[i] = 0.5 * (tx_vel[i] + rcv_vel[i]);
+    vel_host.resize(tx_vel.size());
+    for (size_t i = 0; i < tx_vel.size(); ++i) {
+      vel_host[i] = static_cast<T>(0.5 * (tx_vel[i] + rcv_vel[i]));
     }
-    emit_single(op_output, "velocities",
-                upload(narrow<T>(velocity), pulse_shape, real_dtype<T>(),
-                       who.c_str()));
+    emit_with_stream(op_output, "velocities",
+                     upload(vel_host, pulse_shape, real_dtype<T>(), stream,
+                            who.c_str()),
+                     stream);
+  }
+
+  // Locals (positions, axis, times) back the small copies; wait so they
+  // stay alive for the DMA. History is pinned and reused, so this wait
+  // is also what keeps the next tick from overwriting it while this
+  // tick's H2D is still in flight.
+  if (cudaStreamSynchronize(stream) != cudaSuccess) {
+    throw std::runtime_error(who + ": H2D stream sync failed");
   }
 
   // The descriptor edge is emitted once, at the first tick: a consumer

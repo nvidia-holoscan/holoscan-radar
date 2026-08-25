@@ -6,13 +6,15 @@ fixtures and — once `BackprojectionOp` exists — to check the operator.
 ```bash
 pip install -r requirements.txt
 python3 form_image.py /tmp/sar_fixtures/mode01.cphd -o /tmp/mode01.png
+python3 form_image.py --image dump.npy --sidecar scene_truth.json -o out.png
+python3 form_image.py --image atlanta.npy -o atlanta.png
 ```
 
 It reads the ground-truth sidecar beside the CPHD (`<stem>_truth.json`) for
-the image lattice, and draws the pixel each target is predicted to focus to
-over the formed image. That overlay is the point: a SAR image of point
-targets looks plausible whether or not the geometry is right, so the check is
-whether the energy is inside the circles.
+the image lattice. Predicted target pixels stay in the sidecar — the PNG is
+a 1:1 greyscale raster of the formed samples (no axes, no overlay). The
+check that energy landed on those pixels is `tests/python/sar/test_sar_sim.py`,
+not the picture.
 
 ## Why this is a separate tool
 
@@ -25,9 +27,11 @@ have to agree.
 
 The same reasoning keeps `backproject()` a literal transcription of the
 algorithm — compress in range, then sum each pulse's contribution at the
-delay each pixel implies. It is deliberately *not* the approximations
-`BackprojectionOp` will make. If it adopted them, agreement between the two
-would stop being evidence.
+delay each pixel implies. That delay is the two-leg path (`TxPos` and
+`RcvPos`) versus the same path to the SRP, halved to one-way metres.
+It is deliberately *not* the single-APC midpoint `BackprojectionOp`
+currently forms against. If it adopted that approximation, agreement
+between the two would stop being evidence.
 
 What it cannot do is establish agreement with the outside world; no
 self-consistent pair can. That is what the phase 2 comparison against the
@@ -53,15 +57,12 @@ real collections are far larger than this fixture.
 
 ```text
 tools/sar_image/
-  form_image.py        # CLI: CPHD + sidecar -> PNG
+  form_image.py        # CLI: CPHD + sidecar -> PNG, or --image dump.npy
   sar_image/
     backproject.py     # the reference backprojector
-    render.py          # dB rendering, marker overlay
+    render.py          # 1:1 dB greyscale raster
 ```
 
 ## Not here yet
 
-- **Reading `TensorDumpOp` output.** Phase 2 dumps the formed image and
-  renders it here for sign-off before any Holoviz work starts; today the
-  renderer only forms from a CPHD.
 - **A diff mode** against a golden image, for the MatX comparison.

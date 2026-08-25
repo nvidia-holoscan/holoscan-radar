@@ -115,6 +115,53 @@ inline constexpr Ellipsoid kAllEllipsoids[] = {
     Ellipsoid::kWgs84,
 };
 
+inline constexpr FormationControl kAllFormationControls[] = {
+    FormationControl::kEmitAndContinue,
+    FormationControl::kEmitAndReset,
+    FormationControl::kResetWithoutEmit,
+    FormationControl::kResetThenEmit,
+};
+
+inline constexpr RangeInterpolation kAllRangeInterpolations[] = {
+    RangeInterpolation::kNearest,
+    RangeInterpolation::kLinear,
+    RangeInterpolation::kSinc,
+};
+
+inline constexpr BackprojectionBackend kAllBackprojectionBackends[] = {
+    BackprojectionBackend::kMatxDouble,
+    BackprojectionBackend::kMatxDoublePhaseLut,
+    BackprojectionBackend::kMatxMixed,
+    BackprojectionBackend::kMatxMixedPhaseLut,
+    BackprojectionBackend::kMatxFloatFloat,
+    BackprojectionBackend::kMatxFloat,
+    BackprojectionBackend::kMatxFloatPhaseLut,
+    BackprojectionBackend::kMatxTaylorFast,
+    BackprojectionBackend::kNvradarCudaFp32,
+    BackprojectionBackend::kNvradarCudaFp32Hq,
+    BackprojectionBackend::kNvradarCudaFp32HqFast,
+    BackprojectionBackend::kNvradarFp64Reference,
+    BackprojectionBackend::kNvradarBlockAnchored,
+    BackprojectionBackend::kNvradarBlockAnchoredFp64Trajectory,
+    BackprojectionBackend::kNvradarBlockAnchoredRefinedThroughput,
+    BackprojectionBackend::kNvradarBlockAnchoredRefinedQuality,
+    BackprojectionBackend::kNvradarBlockAnchoredExpandedThroughput,
+    BackprojectionBackend::kNvradarBlockAnchoredExpandedQuality,
+    BackprojectionBackend::kNvradarBlockAnchoredPhaseLut,
+    BackprojectionBackend::kNvradarBlockAnchoredRefinedQualityPhaseLut,
+    BackprojectionBackend::kNvradarBlockAnchoredExpandedThroughputPhaseLut,
+    BackprojectionBackend::kNvradarBlockAnchoredExpandedThroughputPhaseLutVec,
+    BackprojectionBackend::kNvradarBlockAnchoredExpandedThroughputPhaseLutVecZ0,
+    BackprojectionBackend::kNvradarBlockAnchoredExpandedQualityPhaseLut,
+    BackprojectionBackend::kNvradarBlockAnchoredPhaseLutLegacy,
+    BackprojectionBackend::kNvradarBlockAnchoredFp64TrajectoryPhaseLut,
+};
+
+inline constexpr GeometryChange kAllGeometryChanges[] = {
+    GeometryChange::kReset,
+    GeometryChange::kScroll,
+};
+
 // Decode a fixed-length YAML sequence into std::array, rejecting a missing
 // key or the wrong length by name. The descriptors' (3,) and (2,) fields are
 // arrays rather than vectors, so their length is a type invariant and not
@@ -830,6 +877,74 @@ struct convert<holoscan::radar::LFMWaveformDescriptor> {
     // Throws std::invalid_argument naming the offending field on an
     // incomplete or inconsistent waveform block.
     wf = holoscan::radar::LFMWaveformDescriptor(std::move(spec));
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::FormationControl> {
+  static Node encode(const holoscan::radar::FormationControl& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::FormationControl& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "FormationControl",
+        holoscan::radar::detail::kAllFormationControls);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::RangeInterpolation> {
+  static Node encode(const holoscan::radar::RangeInterpolation& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::RangeInterpolation& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "RangeInterpolation",
+        holoscan::radar::detail::kAllRangeInterpolations);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::BackprojectionBackend> {
+  static Node encode(const holoscan::radar::BackprojectionBackend& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::BackprojectionBackend& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "BackprojectionBackend",
+        holoscan::radar::detail::kAllBackprojectionBackends);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::GeometryChange> {
+  static Node encode(const holoscan::radar::GeometryChange& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::GeometryChange& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "GeometryChange",
+        holoscan::radar::detail::kAllGeometryChanges);
     return true;
   }
 };

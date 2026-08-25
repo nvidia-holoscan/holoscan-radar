@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Mode-1 demo: Umbra spotlight of Hartsfield-Jackson Atlanta, the
+# collection the MatX sar_bp example images (INPUT_DATA.md).
+#
+# Download once (28.59 GiB), then form. The app never reaches the
+# network; pulse_range seeks the 1° closest-approach frame.
+#
+#   curl -L -o /tmp/sar/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd \
+#     https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com/sar-data/task-data/0f1231be-26d3-4b98-96ab-f675a5375c14/2026-02-20-03-03-38_UMBRA-07/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd
+#
+# Lattice is the NVRadar spaceborne Atlanta grid: 8192² IARP ENU,
+# z=0, 0.6992513927571693 m, ~5.73 km, row 0 = north / col 0 =
+# west (axis_v = south, axis_u = east, origin at the NW pixel
+# centre). CPHD positions stay ECEF; enu_origin_ecef rotates them
+# into this frame so the kernel sees matching numbers. The app is
+# double. reference_frequency is stored sample N/2 (IFFT DC after
+# range compression's ifftshift), not SC0. Range-bin spacing is
+# derived from CPHD SCSS; range_bins is not wired.
+
+cphd:
+  path: /tmp/sar/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd
+  sidecar: ""
+
+output:
+  path: ""
+
+# IARP-centred scene ENU. Pixel centres match NVRadar's meshgrid:
+#   min_x = (-N/2 + 0.5)*ps , max_y = (N-1)/2*ps
+enu_origin_ecef: [515952.45361328125, -5290612.79296875, 3513424.31640625]
+# Temporary: same APC bits as NVRadar's .dat xyz (see NVRADAR_PARITY.md).
+quantize_phase_center_f32: false
+# Contract RC now rotates; do not inject their conditioner vph unless
+# diagnosing that path (their vph still pairs with SC0, not N/2).
+# nvradar_vph_path: /tmp/sar/nvradar-vph-11500.c64
+sample_geometry:
+  origin: [-2863.7840790369868, 2863.7840790369868, 0.0]
+  axis_v: [0.0, -1.0, 0.0]
+  axis_u: [1.0, 0.0, 0.0]
+  spacing: [0.6992513927571693, 0.6992513927571693]
+  counts: [8192, 8192]
+
+# Stored sample N/2 = SC0 + (N/2)*SCSS, IFFT DC after RC's ifftshift.
+reference_frequency: 9.599985055974686e9
+
+cphd_reader:
+  coordinate_frame: ecef
+  pulses_per_tick: 100
+  # Half-open. Their 1° keep is [91273, 102839); they then drop 66
+  # trailing pulses so Np % 100 == 0. Match that trim.
+  pulse_range: [91273, 102773]
+
+# No waveform: RC does not emit range_bins. BP gets spacing from
+# the CPHD (SCSS, num_samples); origin is the centred default.
+range_compression: {}
+
+backprojection:
+  coordinate_frame: enu
+
+# Live Holoviz window of the formed image (greyscale log-magnitude,
+# same 99.8-percentile / 30 dB window as the offline PNG). Requires a
+# GUI host; with no display the app warns and runs without the window.
+# visualize_hold_s keeps the window up after the single emit.
+visualize: true
+skip_display_check: false
+headless: false
+visualize_hold_s: 30

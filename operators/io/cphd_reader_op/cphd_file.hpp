@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -143,7 +144,9 @@ class CphdFile {
   template <typename T>
   void read_signal_into(int64_t channel_index, int64_t first, int64_t count,
                         std::complex<T>* out,
-                        const PvpBlock* pvp = nullptr) const;
+                        const PvpBlock* pvp = nullptr,
+                        char* scratch = nullptr,
+                        size_t scratch_bytes = 0) const;
 
   // Convenience wrapper allocating its own buffer, and reading the parameter
   // block itself where scale factors are needed. Used by tests and tools; the
@@ -165,6 +168,9 @@ class CphdFile {
   // The per-vector scale factors for a span, or empty when the file has none.
   std::vector<double> amplitude_scale(const PvpBlock* pvp,
                                       int64_t count) const;
+  // Stored-form scratch for the widen path (double CF8, integer formats).
+  // `new char[n]` is default-init, not zeroed; vector<char>(n) would be.
+  void ensure_decode_scratch(size_t bytes) const;
 
   std::string path_;
   std::string version_;
@@ -182,6 +188,8 @@ class CphdFile {
   int64_t signal_block_offset_{0};
 
   mutable std::ifstream stream_;
+  mutable std::unique_ptr<char[]> decode_scratch_;
+  mutable size_t decode_scratch_bytes_{0};
 };
 
 }  // namespace holoscan::radar::cphd

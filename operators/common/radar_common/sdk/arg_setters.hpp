@@ -53,6 +53,10 @@ inline void ensure_radar_arg_setters() {
     ArgumentSetter::ensure_type<Ellipsoid>();
     ArgumentSetter::ensure_type<SampleGeometry>();
     ArgumentSetter::ensure_type<LFMWaveformDescriptor>();
+    ArgumentSetter::ensure_type<FormationControl>();
+    ArgumentSetter::ensure_type<RangeInterpolation>();
+    ArgumentSetter::ensure_type<BackprojectionBackend>();
+    ArgumentSetter::ensure_type<GeometryChange>();
     return true;
   }();
   (void)registered;

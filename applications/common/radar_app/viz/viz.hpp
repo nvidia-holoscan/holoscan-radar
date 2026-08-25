@@ -369,6 +369,19 @@ inline std::vector<std::vector<float>> make_turbo_lut() {
   return lut;
 }
 
+// kLutSize-entry greyscale LUT. SAR Holoviz uses this so the live
+// window matches the offline PNG checkpoint (1:1 dB-windowed
+// magnitude, no turbo).
+inline std::vector<std::vector<float>> make_grayscale_lut() {
+  std::vector<std::vector<float>> lut;
+  lut.reserve(kLutSize);
+  for (size_t i = 0; i < kLutSize; ++i) {
+    const float t = static_cast<float>(i) / (kLutSize - 1);
+    lut.push_back({t, t, t, 1.0F});
+  }
+  return lut;
+}
+
 // Categorical RGBA palette for the cluster-overlay CROSSES layers, one entry
 // per color (index i colors layer cluster_i). Chosen to read against the
 // turbo image; size must equal kNumClusterColors.

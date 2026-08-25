@@ -113,6 +113,11 @@ target_link_libraries(perf_sar_range_compression PRIVATE
     radar_perf_utils
     holoscan::sar_range_compression_op)
 
+add_executable(perf_backprojection perf_backprojection.cpp)
+target_link_libraries(perf_backprojection PRIVATE
+    radar_perf_utils
+    holoscan::backprojection_op)
+
 add_executable(perf_tensor_dump perf_tensor_dump.cpp)
 target_link_libraries(perf_tensor_dump PRIVATE
     radar_perf_utils
@@ -234,6 +239,12 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
             --quiet
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_sar_range_compression_smoke.json)
     set_tests_properties(perf_sar_range_compression_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_backprojection_smoke
+        COMMAND perf_backprojection --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_backprojection_smoke.json)
+    set_tests_properties(perf_backprojection_smoke PROPERTIES
         LABELS "performance")
 
     # Writes its dumps under the build tree rather than /tmp so a CI runner

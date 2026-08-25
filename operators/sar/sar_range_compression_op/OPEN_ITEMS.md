@@ -1,9 +1,10 @@
 # SARRangeCompressionOp — open items
 
 Items this operator carries. **The contract surface is complete** as of
-2026-08-10: all three output ports, all five `[live]` parameters, `nfft`
-zero-padding, the centred range axis, and both descriptor-derived outputs are
-implemented, and nothing in
+2026-08-24: all three output ports, all five `[live]` parameters, `nfft`
+zero-padding in the middle of the rotated row, the leading `ifftshift`
+(IFFT DC = stored sample `N/2`), the centred range axis, and both
+descriptor-derived outputs are implemented, and nothing in
 [`OPERATOR_API.md`](../../../docs/planning/SAR/OPERATOR_API.md) →
 *SARRangeCompressionOp* is staged or throws.
 

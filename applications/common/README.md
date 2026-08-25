@@ -1,12 +1,15 @@
 # Application-support library (`radar_app` / `python/`)
 
-Shared, app-agnostic building blocks for the FMCW example applications
-(`fmcw_siso`, `fmcw_simo`, `fmcw_dense_simo`, `fmcw_mimo`), for both the C++
-side (`radar_app/`, this directory's original content) and the Python side
-(`python/`, documented in its own section below — same layering, same
-three-tier breakdown). It exists so those apps stay small and readable: each
-app is mostly a graph-wiring `compose()` plus its own `AppConfig`, not a pile
-of copy-pasted operators and scaffolding.
+Shared, app-agnostic building blocks for the example applications
+(`fmcw_siso`, `fmcw_simo`, `fmcw_dense_simo`, `fmcw_mimo`, and the
+SAR `sar_formation` image window), for both the C++ side (`radar_app/`,
+this directory's original content) and the Python side (`python/`,
+documented in its own section below — same layering, same three-tier
+breakdown). It exists so those apps stay small and readable: each app
+is mostly a graph-wiring `compose()` plus its own `AppConfig`, not a
+pile of copy-pasted operators and scaffolding. `sar_formation` does
+**not** inherit `CommonRunConfig`; it only uses the greyscale LUT and
+`make_image_holoviz_op`.
 
 The applications are organized around three kinds of component:
 
@@ -55,16 +58,18 @@ radar_app/
   app/source.hpp          SimAdcSourceOp — rank-agnostic synthetic ADC source
   app/driver.hpp          resolve_config_path + run_fmcw_app (the shared main:
                           load config, display-probe downgrade, config(), run())
-  app/holoviz_layout.hpp  HolovizLayout / RightPanel + build_holoviz_input_specs
-                          + make_rd_holoviz_op factory + panel presets
+  app/holoviz_layout.hpp  HolovizLayout / RightPanel +
+                          build_holoviz_input_specs +
+                          make_rd_holoviz_op /
+                          make_image_holoviz_op + panel presets
   report/cadence_meter.hpp  CadenceMeter — wall-clock source / e2e probe
   report/report_ops.hpp   DetectionReportOp, ClusterReportOp (2- or 4-column
                           rep_idx), NullSinkOp, TensorMapDiscardOp
   viz/viz.hpp             RdChannelSliceOp (SIMO per-RX RD slice),
                           RdMapToImageOp, ClusterOverlayOp, RollingPlotOp,
                           BoresightViewOp (az/el scatter), the turbo LUT, the
-                          cluster palette, and the overlay / plot layer-name
-                          helpers
+                          greyscale LUT, the cluster palette, and the overlay /
+                          plot layer-name helpers
   viz/display.hpp         gui_available() — the Holoviz display probe
 ```
 

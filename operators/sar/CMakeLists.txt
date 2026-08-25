@@ -8,3 +8,4 @@
 # live in operators/io/ behind their own gates, so a build that wants only the
 # formation chain pays nothing for the XML and NITF dependencies.
 add_holohub_operator(sar_range_compression_op)
+add_holohub_operator(backprojection_op)

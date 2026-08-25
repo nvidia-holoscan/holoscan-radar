@@ -56,3 +56,11 @@ add_holohub_application(fmcw_mimo
         detection_reduction_op
         cluster_dbscan_op
 )
+
+add_holohub_application(sar_formation
+    DEPENDS OPERATORS
+        cphd_reader_op
+        sar_range_compression_op
+        backprojection_op
+        tensor_dump_op
+)

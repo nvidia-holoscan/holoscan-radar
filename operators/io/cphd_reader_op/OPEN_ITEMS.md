@@ -43,6 +43,14 @@ and see which focuses. Worth doing when `BackprojectionOp` can form an image,
 since focus quality is the only test that discriminates. Still a contract
 clarification rather than a bug, since the contract permits any of the three.
 
+The independent former in `tools/sar_image` no longer uses `TxPos` as a
+stand-in APC. It uses the two-leg path
+`½(‖x−Tx‖ + ‖x−Rcv‖ − ‖SRP−Tx‖ − ‖SRP−Rcv‖)`, which is the monostatic
+formula when the two coincide (simulator fixtures) and the physically
+correct delay when they do not. Comparing an Atlanta operator dump to a
+cupy formation is therefore **midpoint-as-one-APC versus two-leg range**,
+not Tx-only versus midpoint.
+
 ## 2. The paths deferred to mode 3 — closed, pulled forward to clear the checklist
 
 *Closed 2026-08-09.* All four landed together, ahead of the mode 3 slice
@@ -133,12 +141,12 @@ claims, and the branch is no longer untested.
 
 ## 6. Remaining hot-path cost — now measured, and it was not what was assumed
 
-The tick's five `cudaMemcpy` calls are synchronous on the default stream rather
-than async on the operator's own, and each of the five output tensors is a
-fresh device allocation. This entry previously named the synchronous copies as
-the cost and deferred judgement to the performance harness. The harness
-(`performance/cpp/perf_cphd_reader.cpp`) now exists, and attributing the tick
-puts the ranking the other way round at small batches:
+The tick's five `cudaMemcpy` calls **were** synchronous on the default stream
+rather than async on the operator's own, and each of the five output tensors
+is still a fresh device allocation. This entry previously named the
+synchronous copies as the cost and deferred judgement to the performance
+harness. The harness (`performance/cpp/perf_cphd_reader.cpp`) exists, and
+attributing the tick puts the ranking the other way round at small batches:
 
 | pulses x 512 | pvp read | signal read | 5x `cudaMalloc` | 5x H2D |
 | --- | --- | --- | --- | --- |
@@ -163,14 +171,27 @@ Three readings, none of which the original entry would have predicted:
   4.1 GB/s with the file in page cache. On a cold 28 GiB Atlanta pull the disk
   will dominate all three columns and none of this will matter.
 
-Left unfixed deliberately. The two available wins — a pooled allocator and
-pinned staging — are worth having, but their value is only visible against a
-downstream consumer that the flat 0.09 ms would serialize against, and
-`BackprojectionOp` does not exist yet. Revisit when the mode 1 chain runs end
-to end, with the whole-chain measurement this entry originally asked for and
-now has the harness to take.
+*Paid 2026-08-24, once the mode 1 chain ran end to end.* Atlanta (11500 ×
+37268 CF8, `CPHDReaderOp<double>`) spent **12.4 s in the reader** — not the
+3.19 GiB of CF8, which isolated `read_signal_into` into a reused buffer does
+in 1.71 s. Two host costs each tick: (1) `std::vector<complex<double>>(n)`
+and `vector<char>(n)` **value-initialize ~90 MiB of fresh pages**, and (2)
+blocking `cudaMemcpy` on the default stream. The operator now keeps
+**unzeroed pinned** phase-history and decode scratch for its lifetime and
+H2Ds on a GXF-managed non-blocking stream (`allocate_cuda_stream`; a
+homemade `cudaStreamCreate` stream is rejected by `set_cuda_stream` and
+logged an error on every port every tick), then `cudaStreamSynchronize`s
+at the end of `compute()` so the next tick cannot overwrite history still
+in flight. Ping-pong (overlapping decode of tick N+1 with H2D of tick N) was
+measured and declined — extra complexity for ~0.8 s. `CphdFile` reuses an
+uninitialized `new char[n]` scratch on the widen path the same way;
+`vector<char>(n)` is gone there too.
 
-*Two costs closed, both measured rather than assumed:*
+**Still unpaid:** per-tick `make_device_tensor` (~0.09 ms, the small-batch
+harness finding above). A pooled allocator is the remaining win; it is a
+module-wide `make_device_tensor` question, not a reader-local one.
+
+*Two earlier costs closed, both measured rather than assumed:*
 
 - **The parameter block was read once per field** — eight passes over the same
   interleaved bytes every tick. `read_pvp_block` reads the span once and the
@@ -361,28 +382,23 @@ The D22 table specifies the value as `uint8`, an enum
 Python agree, on the same `uint8_t` encoding the `control` port uses for its
 four values". The reader currently writes the two names as a `std::string`.
 
-**It cannot be implemented as written yet.** The binding clause is the last
-one: the boundary values share `control`'s encoding. That vocabulary —
-*emit-and-continue*, *emit-and-reset*, *reset-without-emit*, *reset-then-emit*
-(D23) — has no enum in `radar_common` either, because `ApertureManagerOp` and
-`BackprojectionOp` are not implemented. Adding a `StreamBoundary` enum now
-would mean choosing the shared numbering before the operator that owns the
-other half of it exists, and then hoping the two agree. That is a guess
-dressed as conformance.
+`FormationControl` (the four `control` values) now exists in
+`radar_common/descriptors/enums.hpp` — it landed with `BackprojectionOp`.
+`StreamBoundary` as a `uint8` enum still does not, because
+`ApertureManagerOp` is the other half of that shared numbering and is not
+implemented. Adding it now would still be choosing the encoding before the
+manager exists.
 
-**Treat the current encoding as invalid until then.** It is a placeholder
-chosen so the announcement is testable end to end, not a value any consumer
-should be written against. It is safe to change precisely because nothing
-reads it: the reader is the only writer, its intended consumer does not exist,
-and no test asserts the wire format beyond the reader's own round trip.
+The mode-1 app-owned control operator now **reads** the interim strings.
+The key and both values live in `radar_common/sdk/stream_boundary.hpp` so
+the reader and that consumer cannot drift. Changing a string is a breaking
+change between those two sites. The uint8 switch is still the close: land
+`StreamBoundary` beside `FormationControl` when `ApertureManagerOp` lands,
+switch this operator's `metadata()` write, and update `test_cphd_reader.cpp`
+plus the control operator together.
 
-**What closes this:** land the `control` enum with `ApertureManagerOp`, add
-`StreamBoundary` beside it in `radar_common/descriptors/enums.hpp` on the same
-`uint8_t` encoding, bind both for Python, switch this operator's `metadata()`
-write from `std::string` to the enum's `uint8_t`, and update
-`test_cphd_reader.cpp`, which reads the key back as a string today. Doing all
-of that in one change is the point — it is what makes the two vocabularies
-consistent by construction rather than by review.
+This does **not** close the item. The wire format is still the placeholder
+string encoding, not the contract's `uint8`.
 
 Note this is separate from **R10**, the open team question about the key's
 *namespace*. That is why the key sits at the SAR tier

@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Declarative Holoviz layout for the FMCW example apps. The ~90-line
-// InputSpec/View construction that every app copy-pasted (the turbo LUT RD-map
-// layer, one CROSSES layer per cluster color + noise, and the right-column
-// image+title panels) is owned here and driven by a small HolovizLayout struct.
+// Declarative Holoviz layout for the example apps. The FMCW RD-map
+// path (~90 lines of InputSpec/View: turbo LUT, one CROSSES layer per
+// cluster color + noise, optional right-column panels) is owned here
+// and driven by HolovizLayout. SAR formation uses a separate factory
+// (`make_image_holoviz_op`) for a single greyscale COLOR_LUT image;
+// it does not inherit CommonRunConfig or the RD-map layout.
 //
 // This deliberately builds only DATA (+ a factory that makes the HolovizOp)
 // — it does NOT call add_flow. HolovizOp is already the operator; which tensors
@@ -128,6 +130,26 @@ inline std::shared_ptr<holoscan::ops::HolovizOp> make_rd_holoviz_op(
   return fragment->make_operator<holoscan::ops::HolovizOp>(
       name, holoscan::Arg("tensors", build_holoviz_input_specs(layout)),
       holoscan::Arg("color_lut", make_turbo_lut()),
+      holoscan::Arg("window_title", layout.window_title),
+      holoscan::Arg("width", layout.width),
+      holoscan::Arg("height", layout.height),
+      holoscan::Arg("headless", layout.headless));
+}
+
+// Single COLOR_LUT image, full window — the SAR formation path (one
+// formed image, no cluster overlays). `layer_name` is both the
+// Holoviz InputSpec name and the TensorMap key the rasterizer emits.
+inline std::shared_ptr<holoscan::ops::HolovizOp> make_image_holoviz_op(
+    holoscan::Fragment* fragment, const std::string& name,
+    const HolovizLayout& layout, const std::string& layer_name,
+    const std::vector<std::vector<float>>& color_lut) {
+  using InputSpec = holoscan::ops::HolovizOp::InputSpec;
+  using InputType = holoscan::ops::HolovizOp::InputType;
+  std::vector<InputSpec> specs;
+  specs.emplace_back(layer_name, InputType::COLOR_LUT);
+  return fragment->make_operator<holoscan::ops::HolovizOp>(
+      name, holoscan::Arg("tensors", specs),
+      holoscan::Arg("color_lut", color_lut),
       holoscan::Arg("window_title", layout.window_title),
       holoscan::Arg("width", layout.width),
       holoscan::Arg("height", layout.height),

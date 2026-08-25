@@ -40,10 +40,9 @@
 // vanishes at the reference range and grows toward the swath edges, so a
 // single target at scene centre cannot see it.
 //
-// Scope: this header models the fast-time (range) axis, which is what range
-// compression needs, and takes the per-pulse differential range as an input
-// rather than deriving it from a trajectory. Image formation needs the
-// geometry too, and will extend this file rather than restate the phase model.
+// Scope: the fast-time (range) axis plus the 3-D geometry helpers formation
+// needs (APC + SRP + target → per-pulse dR, predicted peak on a
+// SampleGeometry). The phase model is not restated in BackprojectionOp.
 
 #pragma once
 
@@ -51,9 +50,14 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
+#include <array>
+#include <utility>
+
+#include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/math/constants.hpp"
 
 namespace holoscan::radar::sim {
@@ -201,6 +205,97 @@ inline std::vector<std::complex<double>> sar_phase_history(
     }
   }
   return signal;
+}
+
+// Euclidean distance between two 3-D points. Shared by the differential-
+// range helper and the predicted-peak search so they cannot disagree on
+// the norm.
+inline double sar_distance(const std::array<double, 3>& a,
+                           const std::array<double, 3>& b) {
+  const double dx = a[0] - b[0];
+  const double dy = a[1] - b[1];
+  const double dz = a[2] - b[2];
+  return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+// Two-way differential range: ||apc - target|| - ||apc - srp||. Positive
+// when the target is farther than the reference point. Same quantity the
+// stored phase history is written against.
+inline double sar_differential_range(const std::array<double, 3>& apc,
+                                     const std::array<double, 3>& srp,
+                                     const std::array<double, 3>& target) {
+  return sar_distance(apc, target) - sar_distance(apc, srp);
+}
+
+// Per-pulse differential range from row-major (num_pulses, 3) APC and SRP
+// arrays. Length must match. Used to fill
+// SarPointTarget::differential_range_per_pulse so formation tests share
+// the same phase model as range-compression tests.
+inline std::vector<double> sar_differential_range_per_pulse(
+    const std::vector<double>& apc, const std::vector<double>& srp,
+    const std::array<double, 3>& target, int64_t num_pulses) {
+  if (num_pulses <= 0) {
+    throw std::invalid_argument(
+        "sar_phase_history_sim: num_pulses must be positive");
+  }
+  const size_t need = static_cast<size_t>(num_pulses) * 3;
+  if (apc.size() != need || srp.size() != need) {
+    throw std::invalid_argument(
+        "sar_phase_history_sim: APC/SRP length must be num_pulses * 3");
+  }
+  std::vector<double> delta_r(static_cast<size_t>(num_pulses));
+  for (int64_t p = 0; p < num_pulses; ++p) {
+    const size_t i = static_cast<size_t>(p) * 3;
+    const std::array<double, 3> apc_p{apc[i], apc[i + 1], apc[i + 2]};
+    const std::array<double, 3> srp_p{srp[i], srp[i + 1], srp[i + 2]};
+    delta_r[static_cast<size_t>(p)] =
+        sar_differential_range(apc_p, srp_p, target);
+  }
+  return delta_r;
+}
+
+// Matched phase the formation kernel applies at differential range
+// `delta_r` using the carrier the range transform mixed out:
+// exp(+j * 4 pi * f_ref * dR / c). After SARRangeCompressionOp's
+// ifftshift that is stored sample N/2, not sample 0. The stored
+// history carries the conjugate.
+inline std::complex<double> sar_matched_phase(double reference_frequency,
+                                              double delta_r,
+                                              double speed = kSpeedOfLight) {
+  const double phase =
+      4.0 * kPi * reference_frequency * delta_r / speed;
+  return {std::cos(phase), std::sin(phase)};
+}
+
+// Nearest lattice index (iv, iu) to `target` on a uniform SampleGeometry.
+// Ties go to the smaller iv, then the smaller iu. This is the pixel a
+// well-focused point target should peak on.
+inline std::pair<int64_t, int64_t> sar_predicted_peak(
+    const SampleGeometry& geometry, const std::array<double, 3>& target) {
+  if (!geometry.is_valid()) {
+    throw std::invalid_argument(
+        "sar_phase_history_sim: geometry is default-constructed");
+  }
+  const int64_t num_v = geometry.num_v();
+  const int64_t num_u = geometry.num_u();
+  int64_t best_v = 0;
+  int64_t best_u = 0;
+  double best_d2 = std::numeric_limits<double>::infinity();
+  for (int64_t iv = 0; iv < num_v; ++iv) {
+    for (int64_t iu = 0; iu < num_u; ++iu) {
+      const auto pos = geometry.sample_position(iv, iu);
+      const double dx = pos[0] - target[0];
+      const double dy = pos[1] - target[1];
+      const double dz = pos[2] - target[2];
+      const double d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < best_d2) {
+        best_d2 = d2;
+        best_v = iv;
+        best_u = iu;
+      }
+    }
+  }
+  return {best_v, best_u};
 }
 
 }  // namespace holoscan::radar::sim

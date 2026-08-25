@@ -83,6 +83,33 @@ TEST(YamlConverters, EnumsRoundTripAndRejectUnknownSpellings) {
                std::invalid_argument);
   EXPECT_THROW(YAML::Load("mean-subtraction").as<ClutterFilterMethod>(),
                std::invalid_argument);
+
+  using holoscan::radar::BackprojectionBackend;
+  using holoscan::radar::FormationControl;
+  using holoscan::radar::GeometryChange;
+  using holoscan::radar::RangeInterpolation;
+  for (auto value : holoscan::radar::detail::kAllFormationControls) {
+    const YAML::Node node = YAML::convert<FormationControl>::encode(value);
+    EXPECT_EQ(node.as<FormationControl>(), value);
+  }
+  for (auto value : holoscan::radar::detail::kAllRangeInterpolations) {
+    const YAML::Node node =
+        YAML::convert<RangeInterpolation>::encode(value);
+    EXPECT_EQ(node.as<RangeInterpolation>(), value);
+  }
+  for (auto value : holoscan::radar::detail::kAllBackprojectionBackends) {
+    const YAML::Node node =
+        YAML::convert<BackprojectionBackend>::encode(value);
+    EXPECT_EQ(node.as<BackprojectionBackend>(), value);
+  }
+  for (auto value : holoscan::radar::detail::kAllGeometryChanges) {
+    const YAML::Node node = YAML::convert<GeometryChange>::encode(value);
+    EXPECT_EQ(node.as<GeometryChange>(), value);
+  }
+  EXPECT_THROW(YAML::Load("mixed").as<BackprojectionBackend>(),
+               std::invalid_argument);
+  EXPECT_THROW(YAML::Load("emit-and-reset").as<FormationControl>(),
+               std::invalid_argument);
 }
 
 TEST(YamlConverters, WindowSpecMapScalarAndRoundTrip) {

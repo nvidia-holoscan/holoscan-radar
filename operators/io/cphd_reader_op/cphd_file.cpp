@@ -657,10 +657,21 @@ std::vector<double> CphdFile::amplitude_scale(const PvpBlock* pvp,
   return pvp->field("AmpSF", 1);
 }
 
+void CphdFile::ensure_decode_scratch(size_t bytes) const {
+  if (bytes <= decode_scratch_bytes_) {
+    return;
+  }
+  // Default-init, not value-init: a 30 MiB memset every tick was the
+  // Atlanta reader's host cost, and the bytes are overwritten by read_at.
+  decode_scratch_.reset(new char[bytes]);
+  decode_scratch_bytes_ = bytes;
+}
+
 template <typename T>
 void CphdFile::read_signal_into(int64_t channel_index, int64_t first,
                                 int64_t count, std::complex<T>* out,
-                                const PvpBlock* pvp) const {
+                                const PvpBlock* pvp, char* scratch,
+                                size_t scratch_bytes) const {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "CphdFile reads into float or double precision only");
   const ChannelInfo& info = check_signal_request(channel_index, first, count);
@@ -695,9 +706,16 @@ void CphdFile::read_signal_into(int64_t channel_index, int64_t first,
     // stored form. One scratch buffer, one pass. The integer formats are
     // plain signed pairs -- no offset, no normalisation -- so the conversion
     // is a cast, and any scaling a collection needs is what AmpSF carries.
-    std::vector<char> scratch(static_cast<size_t>(bytes));
-    read_at(base, scratch.data(), bytes, "signal block");
-    const char* source = scratch.data();
+    char* source = scratch;
+    if (source == nullptr) {
+      ensure_decode_scratch(static_cast<size_t>(bytes));
+      source = decode_scratch_.get();
+    } else if (scratch_bytes < static_cast<size_t>(bytes)) {
+      throw std::runtime_error(
+          "CphdFile: " + path_ +
+          ": decode scratch is smaller than the stored signal span");
+    }
+    read_at(base, source, bytes, "signal block");
     for (int64_t sample = 0; sample < total; ++sample) {
       switch (sample_format_) {
         case SampleFormat::kCF8: {
@@ -739,10 +757,12 @@ void CphdFile::read_signal_into(int64_t channel_index, int64_t first,
 
 template void CphdFile::read_signal_into<float>(int64_t, int64_t, int64_t,
                                                 std::complex<float>*,
-                                                const PvpBlock*) const;
+                                                const PvpBlock*, char*,
+                                                size_t) const;
 template void CphdFile::read_signal_into<double>(int64_t, int64_t, int64_t,
                                                  std::complex<double>*,
-                                                 const PvpBlock*) const;
+                                                 const PvpBlock*, char*,
+                                                 size_t) const;
 
 std::vector<std::complex<float>> CphdFile::read_signal(int64_t channel_index,
                                                        int64_t first,

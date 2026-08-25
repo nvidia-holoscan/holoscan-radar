@@ -20,6 +20,9 @@ namespace cphd {
 class CphdFile;  // host-side file reading; defined in cphd_file.hpp
 }  // namespace cphd
 
+// Pinned staging for CPHDReaderOp. Defined in cphd_reader_op.cu.
+struct CphdReaderResources;
+
 // Reads a CPHD collection and emits phase history with the per-pulse
 // geometry stored alongside it. A source operator: no data inputs. This
 // header is the contract reference for the operator's ports, shapes,
@@ -125,6 +128,15 @@ class CPHDReaderOp : public holoscan::Operator {
   // Real collections carry occasional non-finite ephemeris; warned about
   // once per instance rather than per tick.
   bool nonfinite_warned_{false};
+
+  // Pinned staging so a tick does not value-initialize tens of MiB of
+  // phase history. The H2D stream comes from the operator's GXF
+  // CudaStreamPool (allocate_cuda_stream), not a homemade cudaStream_t:
+  // set_cuda_stream only accepts GXF-mapped streams. shared_ptr, not
+  // unique_ptr: FORWARD_ARGS constructors live in this header, and
+  // unique_ptr's destructor needs a complete type in those TUs (see
+  // CFARDetectorOp). make_shared is in the .cu.
+  std::shared_ptr<CphdReaderResources> resources_;
 };
 
 // Explicit instantiations live in cphd_reader_op.cu.

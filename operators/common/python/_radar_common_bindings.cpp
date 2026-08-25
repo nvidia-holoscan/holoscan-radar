@@ -120,6 +120,75 @@ PYBIND11_MODULE(_radar_common, m) {
 
   py::enum_<Ellipsoid>(m, "Ellipsoid").value("WGS84", Ellipsoid::kWgs84);
 
+  py::enum_<FormationControl>(m, "FormationControl")
+      .value("EMIT_AND_CONTINUE", FormationControl::kEmitAndContinue)
+      .value("EMIT_AND_RESET", FormationControl::kEmitAndReset)
+      .value("RESET_WITHOUT_EMIT", FormationControl::kResetWithoutEmit)
+      .value("RESET_THEN_EMIT", FormationControl::kResetThenEmit);
+
+  py::enum_<RangeInterpolation>(m, "RangeInterpolation")
+      .value("NEAREST", RangeInterpolation::kNearest)
+      .value("LINEAR", RangeInterpolation::kLinear)
+      .value("SINC", RangeInterpolation::kSinc);
+
+  py::enum_<BackprojectionBackend>(m, "BackprojectionBackend")
+      .value("MATX_DOUBLE", BackprojectionBackend::kMatxDouble)
+      .value("MATX_DOUBLE_PHASE_LUT",
+             BackprojectionBackend::kMatxDoublePhaseLut)
+      .value("MATX_MIXED", BackprojectionBackend::kMatxMixed)
+      .value("MATX_MIXED_PHASE_LUT",
+             BackprojectionBackend::kMatxMixedPhaseLut)
+      .value("MATX_FLOAT_FLOAT", BackprojectionBackend::kMatxFloatFloat)
+      .value("MATX_FLOAT", BackprojectionBackend::kMatxFloat)
+      .value("MATX_FLOAT_PHASE_LUT",
+             BackprojectionBackend::kMatxFloatPhaseLut)
+      .value("MATX_TAYLOR_FAST", BackprojectionBackend::kMatxTaylorFast)
+      .value("NVRADAR_CUDA_FP32", BackprojectionBackend::kNvradarCudaFp32)
+      .value("NVRADAR_CUDA_FP32_HQ",
+             BackprojectionBackend::kNvradarCudaFp32Hq)
+      .value("NVRADAR_CUDA_FP32_HQ_FAST",
+             BackprojectionBackend::kNvradarCudaFp32HqFast)
+      .value("NVRADAR_FP64_REFERENCE",
+             BackprojectionBackend::kNvradarFp64Reference)
+      .value("NVRADAR_BLOCK_ANCHORED",
+             BackprojectionBackend::kNvradarBlockAnchored)
+      .value("NVRADAR_BLOCK_ANCHORED_FP64_TRAJECTORY",
+             BackprojectionBackend::kNvradarBlockAnchoredFp64Trajectory)
+      .value("NVRADAR_BLOCK_ANCHORED_REFINED_THROUGHPUT",
+             BackprojectionBackend::kNvradarBlockAnchoredRefinedThroughput)
+      .value("NVRADAR_BLOCK_ANCHORED_REFINED_QUALITY",
+             BackprojectionBackend::kNvradarBlockAnchoredRefinedQuality)
+      .value("NVRADAR_BLOCK_ANCHORED_EXPANDED_THROUGHPUT",
+             BackprojectionBackend::kNvradarBlockAnchoredExpandedThroughput)
+      .value("NVRADAR_BLOCK_ANCHORED_EXPANDED_QUALITY",
+             BackprojectionBackend::kNvradarBlockAnchoredExpandedQuality)
+      .value("NVRADAR_BLOCK_ANCHORED_PHASE_LUT",
+             BackprojectionBackend::kNvradarBlockAnchoredPhaseLut)
+      .value("NVRADAR_BLOCK_ANCHORED_REFINED_QUALITY_PHASE_LUT",
+             BackprojectionBackend::
+                 kNvradarBlockAnchoredRefinedQualityPhaseLut)
+      .value("NVRADAR_BLOCK_ANCHORED_EXPANDED_THROUGHPUT_PHASE_LUT",
+             BackprojectionBackend::
+                 kNvradarBlockAnchoredExpandedThroughputPhaseLut)
+      .value("NVRADAR_BLOCK_ANCHORED_EXPANDED_THROUGHPUT_PHASE_LUT_VEC",
+             BackprojectionBackend::
+                 kNvradarBlockAnchoredExpandedThroughputPhaseLutVec)
+      .value("NVRADAR_BLOCK_ANCHORED_EXPANDED_THROUGHPUT_PHASE_LUT_VEC_Z0",
+             BackprojectionBackend::
+                 kNvradarBlockAnchoredExpandedThroughputPhaseLutVecZ0)
+      .value("NVRADAR_BLOCK_ANCHORED_EXPANDED_QUALITY_PHASE_LUT",
+             BackprojectionBackend::
+                 kNvradarBlockAnchoredExpandedQualityPhaseLut)
+      .value("NVRADAR_BLOCK_ANCHORED_PHASE_LUT_LEGACY",
+             BackprojectionBackend::kNvradarBlockAnchoredPhaseLutLegacy)
+      .value("NVRADAR_BLOCK_ANCHORED_FP64_TRAJECTORY_PHASE_LUT",
+             BackprojectionBackend::
+                 kNvradarBlockAnchoredFp64TrajectoryPhaseLut);
+
+  py::enum_<GeometryChange>(m, "GeometryChange")
+      .value("RESET", GeometryChange::kReset)
+      .value("SCROLL", GeometryChange::kScroll);
+
   py::enum_<RepresentativePolicy>(m, "RepresentativePolicy")
       .value("PEAK", RepresentativePolicy::kPeak)
       .value("MEDOID", RepresentativePolicy::kMedoid)
@@ -349,5 +418,11 @@ PYBIND11_MODULE(_radar_common, m) {
     registry.add_emitter_receiver<SampleGeometry>("SampleGeometry", true);
     registry.add_emitter_receiver<LFMWaveformDescriptor>(
         "LFMWaveformDescriptor", true);
+    registry.add_emitter_receiver<RangeInterpolation>("RangeInterpolation",
+                                                      true);
+    registry.add_emitter_receiver<BackprojectionBackend>(
+        "BackprojectionBackend", true);
+    registry.add_emitter_receiver<GeometryChange>("GeometryChange", true);
+    registry.add_emitter_receiver<FormationControl>("FormationControl", true);
   });
 }

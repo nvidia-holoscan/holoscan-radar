@@ -35,6 +35,7 @@
 #include "io/cphd_reader_op/cphd_reader_op.hpp"
 #include "radar_common/descriptors/coordinate_frame.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/sdk/stream_boundary.hpp"
 
 namespace holoscan::radar {
 namespace {
@@ -488,7 +489,7 @@ class CaptureSinkOp : public holoscan::Operator {
     }
 
     capture->boundaries.push_back(metadata()->get<std::string>(
-        "holoscan.radar.sar.stream_boundary", std::string()));
+        kStreamBoundaryKey, std::string()));
   }
 };
 
@@ -676,7 +677,7 @@ TEST(CPHDReaderOp, AnnouncesEndOfStreamOnTheFinalBatchAndNoOther) {
   // Announcing on the batch *after* the last is the plausible off-by-one, and
   // it would contaminate the closing aperture, so the assertion is about
   // which batch carries the key rather than that some batch does.
-  EXPECT_EQ(capture.boundaries.back(), "end_of_stream");
+  EXPECT_EQ(capture.boundaries.back(), kStreamBoundaryEndOfStream);
 }
 
 TEST(CPHDReaderOp, PulseRangeSelectsTheRequestedSubset) {
@@ -742,9 +743,9 @@ TEST(CPHDReaderOp, MultipleFilesReadInOrderAndAnnounceEachSeam) {
   // first seam is a collection boundary, the last is the end of the stream.
   ASSERT_EQ(capture.boundaries.size(), 4u);
   EXPECT_EQ(capture.boundaries[0], "");
-  EXPECT_EQ(capture.boundaries[1], "collection_boundary");
+  EXPECT_EQ(capture.boundaries[1], kStreamBoundaryCollection);
   EXPECT_EQ(capture.boundaries[2], "");
-  EXPECT_EQ(capture.boundaries[3], "end_of_stream");
+  EXPECT_EQ(capture.boundaries[3], kStreamBoundaryEndOfStream);
 
   // The frame descriptor is emitted once per collection, not once per
   // instance: a new file may declare a new frame, and the consumer's
@@ -779,9 +780,9 @@ TEST(CPHDReaderOp, ADirectoryIsReadInLexicographicOrder) {
 
   // mode01_ci2, mode01_ci4, mode01_smoke -- one tick each at this window.
   ASSERT_EQ(capture.boundaries.size(), 3u);
-  EXPECT_EQ(capture.boundaries[0], "collection_boundary");
-  EXPECT_EQ(capture.boundaries[1], "collection_boundary");
-  EXPECT_EQ(capture.boundaries[2], "end_of_stream");
+  EXPECT_EQ(capture.boundaries[0], kStreamBoundaryCollection);
+  EXPECT_EQ(capture.boundaries[1], kStreamBoundaryCollection);
+  EXPECT_EQ(capture.boundaries[2], kStreamBoundaryEndOfStream);
 
   const CphdFile ci2(fixture_path("mode01_ci2"));
   const std::vector<std::complex<float>> expected = ci2.read_signal(0, 0, 64);

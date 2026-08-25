@@ -24,8 +24,8 @@ CPHDReaderOp → phase_history → SARRangeCompressionOp → range_profiles → 
 
 ## Operators
 
-`SARRangeCompressionOp` has landed; the rest are planned, in the build order
-set by
+`SARRangeCompressionOp` has landed; `BackprojectionOp` is in flight as a
+mode-1 slice (not checklist-complete), in the build order set by
 [`docs/planning/SAR/SIGPROC_PLAN.md`](../../docs/planning/SAR/SIGPROC_PLAN.md):
 
 | Operator | In → Out | Function |
@@ -45,12 +45,26 @@ fills in demo order rather than in the table order above:
 `SARRangeCompressionOp` then `BackprojectionOp` for the mode 1 spotlight demo,
 with autofocus and the direct-sampled branch later.
 
+**`BackprojectionOp` — in flight, mode-1 slice (not checklist-complete).**
+Required ports, four control phases, `kUpdate`, `stop()` warning, linear
+interpolation, `geometry_change = reset`. Shipped backends: default
+`nvradar_block_anchored_expanded_throughput_phase_lut_vec`, golden
+`nvradar_fp64_reference`, Taylor
+`nvradar_block_anchored_refined_throughput`,
+naive/HQ `nvradar_cuda_fp32{,_hq,_hq_fast}`, every remaining `nvradar_*`
+copy, and the `matx_*` wrap (except `matx_taylor_fast`) when the bundled
+header is present.
+`initial_image` and `scroll` are declared and rejected. I6/I7 closed.
+Follow-ups in
+[`backprojection_op/OPEN_ITEMS.md`](backprojection_op/OPEN_ITEMS.md).
+
 **`SARRangeCompressionOp` — landed, contract-complete.** All three output
-ports, all five `[live]` parameters, `nfft` zero-padding, and the centred range
-axis. The transform is the **inverse** one — phase history is the
-frequency-domain form — which is the opposite direction from FMCW's
-`FMCWRangeProcessorOp`, so `fft_norm = backward` applies the 1/N *here* while
-the same spelling leaves the FMCW stage unscaled.
+ports, all five `[live]` parameters, `nfft` zero-padding (spectral edges of
+the rotated row), a leading `ifftshift` so IFFT DC is stored sample `N/2`,
+and the centred range axis. The transform is the **inverse** one — phase
+history is the frequency-domain form — which is the opposite direction from
+FMCW's `FMCWRangeProcessorOp`, so `fft_norm = backward` applies the 1/N
+*here* while the same spelling leaves the FMCW stage unscaled.
 
 Three things about it are worth knowing before reading the code:
 
@@ -58,7 +72,10 @@ Three things about it are worth knowing before reading the code:
   Without it every sample nearer than the reference point wraps to the top of
   the array, where `BackprojectionOp`'s bounds check drops it — roughly half the
   swath, silently. It costs a second pass over the cube (the shift is a gather,
-  so it cannot be done in place) into a shape-cached scratch buffer.
+  so it cannot be done in place) into a shape-cached scratch buffer. A leading
+  `ifftshift` is a separate convention: it makes `range_profiles` complex
+  baseband (IFFT DC = stored sample `N/2`) so formation's `reference_frequency`
+  is that sample, not `SC0`.
 - **The tests assert phase, not just peak position.** A point target's
   compressed profile is a Dirichlet kernel whose complex value at every bin is
   predictable in closed form, and asserting against that is what makes an

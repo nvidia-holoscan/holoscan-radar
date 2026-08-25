@@ -8,7 +8,7 @@
 # (cupy-cuda12x / cupy-cuda13x). It is already present in the Holoscan
 # container, and a CUDA-capable GPU is a hard dependency of this module.
 #
-# sarkit reads the CPHD; matplotlib only renders the PNG.
-matplotlib>=3.7
+# sarkit reads the CPHD; Pillow writes the 1:1 greyscale PNG.
 numpy>=1.24
+pillow>=10.0
 sarkit>=1.0

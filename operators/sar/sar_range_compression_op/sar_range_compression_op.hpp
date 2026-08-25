@@ -22,8 +22,10 @@ struct RangeCompressionState;  // caches; defined in range_compression_stage.hpp
 }  // namespace detail
 
 // SAR range compression: windowed, optionally zero-padded inverse transform
-// along fast-time, taking phase history to range profiles. This header is the
-// contract reference for the operator's ports, shapes, dtypes and parameters;
+// along fast-time, taking phase history to range profiles. Native FX is
+// ifftshifted first so stored sample N/2 is IFFT DC (complex baseband
+// video); nfft pads the spectral edges. This header is the contract
+// reference for the operator's ports, shapes, dtypes and parameters;
 // module-wide conventions live in operators/common/README.md and the locked
 // contract in docs/planning/SAR/OPERATOR_API.md.
 //
@@ -47,7 +49,10 @@ struct RangeCompressionState;  // caches; defined in range_compression_stage.hpp
 // bins above it are farther. This is a correctness requirement rather than a
 // presentation choice: read as a linearly increasing axis, an unshifted
 // transform sends every sample nearer than the reference to a negative bin
-// index, where BackprojectionOp's bounds check discards it.
+// index, where BackprojectionOp's bounds check discards it. A leading
+// ifftshift is a separate rule: IFFT DC is stored sample N/2, so the
+// profiles are baseband and BackprojectionOp.reference_frequency is that
+// sample's frequency, not SC0.
 //
 // Precision is fixed at compile time by the template instantiation
 // (T = float → complex64/float32, T = double → complex128/float64).

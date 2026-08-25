@@ -12,15 +12,12 @@
 #include "radar_common/descriptors/sample_geometry.hpp"
 
 // Expansion of a uniform SampleGeometry lattice into the explicit
-// (num_v, num_u, 3) point list the formation kernels consume.
+// (num_v, num_u, 3) point list.
 //
-// This is what makes BackprojectionOp's two geometry modes reach one kernel
-// path: with `sample_points` connected the lattice *is* that tensor;
-// otherwise it is expanded from the `sample_geometry` descriptor here. Both
-// end up with the same 2D shape, so the kernel never learns which mode it
-// is running in.
-//
-// Host-side and pure: no Holoscan, no CUDA. Callers upload the result.
+// Host-side and pure: no Holoscan, no CUDA. Tests and small lattices use
+// this. BackprojectionOp's hot path expands the same formula on device
+// (see expand_geometry_on_device in backprojection_stage.hpp) so an
+// 8192² scene does not pay a 1.6 GiB host buffer and H2D.
 
 namespace holoscan::radar {
 
@@ -76,8 +73,7 @@ void expand_sample_lattice(const SampleGeometry& geometry, T* out) {
 }
 
 // Convenience overload allocating the point list, for tests and small
-// lattices. Hot paths should expand straight into a pinned or device
-// staging buffer with the pointer overload above.
+// lattices. BackprojectionOp does not use this on the formation path.
 inline std::vector<double> expand_sample_lattice(
     const SampleGeometry& geometry) {
   std::vector<double> points(

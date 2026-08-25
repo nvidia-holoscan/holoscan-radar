@@ -67,13 +67,22 @@ def backproject(signal, pvps, lattice, *, oversample: int = 8) -> np.ndarray:
         samples = samples * scale
     signal = cp.asarray(np.ascontiguousarray(samples))
     num_samples = signal.shape[1]
+    shift = int(num_samples) // 2
     padded = num_samples * oversample
+    # Native CPHD FX has sample 0 at SC0. Rotate so sample N/2 is IFFT DC
+    # (complex baseband), and pad the spectral edges -- the middle of the
+    # rotated row -- rather than the end of the stored axis.
+    spectrum = cp.zeros((signal.shape[0], padded), dtype=signal.dtype)
+    spectrum[:, : num_samples - shift] = signal[:, shift:]
+    spectrum[:, padded - shift :] = signal[:, :shift]
     # The positive-exponent transform, which numpy and cupy both spell ifft.
     # Using fft here mirrors the image about the reference point.
-    compressed = cp.fft.ifft(signal, n=padded, axis=1) * padded
+    compressed = cp.fft.ifft(spectrum, axis=1) * padded
 
     sc0 = float(pvps["SC0"][0])
-    range_step = SPEED_OF_LIGHT / (2.0 * padded * float(pvps["SCSS"][0]))
+    scss = float(pvps["SCSS"][0])
+    f_ref = sc0 + shift * scss
+    range_step = SPEED_OF_LIGHT / (2.0 * padded * scss)
 
     origin = cp.asarray(np.asarray(lattice["origin"], dtype=float))
     axis_v = cp.asarray(np.asarray(lattice["axis_v"], dtype=float))
@@ -86,6 +95,7 @@ def backproject(signal, pvps, lattice, *, oversample: int = 8) -> np.ndarray:
     pixels = (origin + grid_v + grid_u).reshape(-1, 3)
 
     tx_pos = cp.asarray(np.asarray(pvps["TxPos"], dtype=float))
+    rcv_pos = cp.asarray(np.asarray(pvps["RcvPos"], dtype=float))
     srp_pos = cp.asarray(np.asarray(pvps["SRPPos"], dtype=float))
 
     image = cp.zeros(pixels.shape[0], dtype=complex)
@@ -94,8 +104,18 @@ def backproject(signal, pvps, lattice, *, oversample: int = 8) -> np.ndarray:
     # it is the kind of rewrite that lands this on the same approximations
     # `BackprojectionOp` makes, and agreement reached that way is not evidence.
     for pulse in range(signal.shape[0]):
-        apc = tx_pos[pulse]
-        delta_r = cp.linalg.norm(pixels - apc, axis=1) - cp.linalg.norm(srp_pos[pulse] - apc)
+        tx = tx_pos[pulse]
+        rcv = rcv_pos[pulse]
+        srp = srp_pos[pulse]
+        # One-way differential range from the two-leg path. Tx==Rcv reduces
+        # to ||x-apc|| - ||srp-apc||, which is the monostatic formula and
+        # what the simulator fixtures exercise. A single midpoint APC is
+        # the operator's approximation, not this former's.
+        two_way_pixel = cp.linalg.norm(pixels - tx, axis=1) + cp.linalg.norm(
+            pixels - rcv, axis=1
+        )
+        two_way_srp = cp.linalg.norm(srp - tx) + cp.linalg.norm(srp - rcv)
+        delta_r = 0.5 * (two_way_pixel - two_way_srp)
         index = delta_r / range_step
         low = cp.floor(index).astype(cp.int64)
         frac = index - low
@@ -104,9 +124,9 @@ def backproject(signal, pvps, lattice, *, oversample: int = 8) -> np.ndarray:
             + compressed[pulse][(low + 1) % padded] * frac
         )
         # Undo the carrier phase factored out by the range transform. The
-        # demodulation frequency is SC0, the first sample's frequency, not
-        # the band centre -- that pairing is set by the frequency axis the
+        # demodulation frequency is stored sample N/2 -- IFFT DC after the
+        # rotate -- not SC0. That pairing is set by the frequency axis the
         # transform ran over.
-        image += sample * cp.exp(1j * 4.0 * cp.pi * sc0 * delta_r / SPEED_OF_LIGHT)
+        image += sample * cp.exp(1j * 4.0 * cp.pi * f_ref * delta_r / SPEED_OF_LIGHT)
 
     return cp.asnumpy(image.reshape(num_v, num_u))

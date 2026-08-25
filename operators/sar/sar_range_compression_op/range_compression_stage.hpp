@@ -155,10 +155,11 @@ inline double range_bin_spacing(const RangeCompressionConfig& cfg,
 //   warn_on_rebuild — true when this tick's config came from an override that
 //              differs from the previous effective config.
 //
-// Steps, per the locked contract: window along fast-time, zero-pad to nfft,
-// inverse-transform under cfg.fft_norm, and fftshift the range axis so zero
-// differential range lands at bin num_bins/2. All work is enqueued on
-// `stream`; no synchronization.
+// Steps, per the locked contract: window along fast-time, ifftshift so
+// stored sample N/2 is IFFT DC, zero-pad the middle of the rotated row
+// when nfft > num_samples, inverse-transform under cfg.fft_norm, and
+// fftshift the range axis so zero differential range lands at bin
+// num_bins/2. All work is enqueued on `stream`; no synchronization.
 template <typename T>
 void run_range_compression(const RangeCompressionConfig& cfg,
                            RangeCompressionState<T>& state, const void* in,
@@ -174,6 +175,48 @@ template <typename T>
 void fill_compressed_range_bins(const RangeCompressionConfig& cfg,
                                 int64_t num_samples, int64_t num_bins, T* out,
                                 cudaStream_t stream);
+
+// Pack native FX into IFFT order: stored sample N/2 at bin 0, optional
+// zeros in the middle (spectral edges). dest has dest_cols = nfft;
+// src is (nrows, src_pitch) with the first num_samples columns live.
+template <typename T>
+void pack_rotated_spectrum(cuda::std::complex<T>* dest, int64_t dest_cols,
+                           const cuda::std::complex<T>* src,
+                           int64_t src_pitch, int64_t num_samples,
+                           int64_t nrows, cudaStream_t stream) {
+  const int64_t shift = num_samples / 2;
+  const int64_t n_hi = num_samples - shift;
+  const int64_t n_lo = shift;
+  const int64_t pad = dest_cols - num_samples;
+  const size_t elem = sizeof(cuda::std::complex<T>);
+  const size_t dpitch = static_cast<size_t>(dest_cols) * elem;
+  const size_t spitch = static_cast<size_t>(src_pitch) * elem;
+  const size_t rows = static_cast<size_t>(nrows);
+
+  if (cudaMemcpy2DAsync(dest, dpitch, src + shift, spitch,
+                        static_cast<size_t>(n_hi) * elem, rows,
+                        cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
+    throw std::runtime_error(
+        "range compression stage: rotated-spectrum copy (high) failed");
+  }
+  if (pad > 0) {
+    if (cudaMemset2DAsync(dest + n_hi, dpitch, 0,
+                          static_cast<size_t>(pad) * elem, rows,
+                          stream) != cudaSuccess) {
+      throw std::runtime_error(
+          "range compression stage: spectral-edge pad failed");
+    }
+  }
+  if (n_lo > 0) {
+    if (cudaMemcpy2DAsync(dest + (dest_cols - n_lo), dpitch, src, spitch,
+                          static_cast<size_t>(n_lo) * elem, rows,
+                          cudaMemcpyDeviceToDevice, stream) !=
+        cudaSuccess) {
+      throw std::runtime_error(
+          "range compression stage: rotated-spectrum copy (low) failed");
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -246,6 +289,9 @@ void run_range_compression(const RangeCompressionConfig& cfg,
 
   const bool apply_window = cfg.window.type != WindowType::kNone;
   const uint64_t fft_size = static_cast<uint64_t>(nfft);
+  const int64_t nrows = batch * num_pulses;
+  const cuda::std::complex<T>* pack_src = in_view.Data();
+  int64_t pack_pitch = num_samples;
   if (apply_window) {
     const auto& taps = state.windows.get_or_build(
         window_cache_key(cfg.window, num_samples), warn_on_rebuild,
@@ -255,10 +301,16 @@ void run_range_compression(const RangeCompressionConfig& cfg,
         });
     const auto bcast =
         matx::clone<3>(taps, {batch, num_pulses, matx::matxKeepDim});
-    (scratch = matx::ifft(in_view * bcast, fft_size, norm)).run(exec);
-  } else {
-    (scratch = matx::ifft(in_view, fft_size, norm)).run(exec);
+    // First N columns of the nfft-wide scratch; pitch is nfft.
+    auto windowed = matx::slice(scratch, {0, 0, 0},
+                                {batch, num_pulses, num_samples});
+    (windowed = in_view * bcast).run(exec);
+    pack_src = scratch.Data();
+    pack_pitch = nfft;
   }
+  pack_rotated_spectrum(out_view.Data(), nfft, pack_src, pack_pitch,
+                        num_samples, nrows, stream);
+  (scratch = matx::ifft(out_view, fft_size, norm)).run(exec);
 
   // The centring shift, applied as a separate gather out of the scratch
   // buffer. MatX's fftshift1D rotates the last axis by (N + 1) / 2, which is

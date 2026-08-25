@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -15,6 +16,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/math/constants.hpp"
@@ -351,6 +353,38 @@ TEST(SarPhaseHistorySim, PerPulseRangeOverridesTheConstant) {
   mismatched.differential_range_per_pulse = {0.0, 1.0};
   EXPECT_THROW(sim::sar_phase_history(cfg, {mismatched}),
                std::invalid_argument);
+}
+
+TEST(SarPhaseHistorySim, DifferentialRangeFromGeometry) {
+  const std::array<double, 3> apc{0.0, 0.0, 1000.0};
+  const std::array<double, 3> srp{0.0, 0.0, 0.0};
+  const std::array<double, 3> target{10.0, 0.0, 0.0};
+  const double dR = sim::sar_differential_range(apc, srp, target);
+  // ||apc-target|| - ||apc-srp|| = hypot(10, 1000) - 1000
+  EXPECT_NEAR(dR, std::hypot(10.0, 1000.0) - 1000.0, 1e-12);
+
+  const std::vector<double> apcs{0.0, 0.0, 1000.0, 1.0, 0.0, 1000.0};
+  const std::vector<double> srps{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  const auto per_pulse =
+      sim::sar_differential_range_per_pulse(apcs, srps, target, 2);
+  ASSERT_EQ(per_pulse.size(), 2u);
+  EXPECT_NEAR(per_pulse[0], dR, 1e-12);
+  EXPECT_GT(std::abs(per_pulse[1] - per_pulse[0]), 1e-6);
+}
+
+TEST(SarPhaseHistorySim, PredictedPeakIsNearestLatticePoint) {
+  holoscan::radar::SampleGeometrySpec spec;
+  spec.origin = {-2.0, -1.0, 0.0};
+  spec.axis_u = {1.0, 0.0, 0.0};
+  spec.axis_v = {0.0, 1.0, 0.0};
+  spec.spacing = {1.0, 1.0};  // (v, u)
+  spec.counts = {5, 5};
+  const holoscan::radar::SampleGeometry geometry(spec);
+  const auto peak =
+      sim::sar_predicted_peak(geometry, {1.0, 2.0, 0.0});
+  // origin + iv * axis_v + iu * axis_u → iu=3, iv=3
+  EXPECT_EQ(peak.first, 3);
+  EXPECT_EQ(peak.second, 3);
 }
 
 TEST(MimoSim, ResolveDdmOffsets) {

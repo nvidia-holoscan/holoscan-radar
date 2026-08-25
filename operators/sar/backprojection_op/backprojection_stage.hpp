@@ -1,0 +1,1031 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cuda_runtime.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <vector>
+
+#include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/sample_geometry.hpp"
+#include "radar_common/math/constants.hpp"
+#include "sar/backprojection_op/nvradar_kernels.cuh"
+#include "sar/backprojection_op/nvradar_kernels_fp32.cuh"
+#include "sar/backprojection_op/nvradar_kernels_lut.cuh"
+#include "sar/backprojection_op/nvradar_kernels_taylor.cuh"
+
+namespace holoscan::radar::detail {
+
+// Cached device allocation. Reuses capacity; never stream-ordered (the
+// range-compression teardown crash). Per-tick cudaMalloc is the ~0.1 ms
+// floor already measured on the reader.
+struct DeviceBuffer {
+  void* ptr{nullptr};
+  size_t bytes{0};
+
+  DeviceBuffer() = default;
+  DeviceBuffer(const DeviceBuffer&) = delete;
+  DeviceBuffer& operator=(const DeviceBuffer&) = delete;
+
+  ~DeviceBuffer() {
+    if (ptr != nullptr) {
+      cudaFree(ptr);
+    }
+  }
+
+  // `stream` is the stream that last used this buffer. Grow waits on
+  // it before cudaFree so a larger lattice cannot free in-flight work.
+  void ensure(size_t need, cudaStream_t stream) {
+    if (need <= bytes) {
+      return;
+    }
+    if (ptr != nullptr) {
+      if (cudaStreamSynchronize(stream) != cudaSuccess) {
+        throw std::runtime_error(
+            "BackprojectionOp: stream sync before realloc failed");
+      }
+      cudaFree(ptr);
+      ptr = nullptr;
+      bytes = 0;
+    }
+    if (need == 0) {
+      return;
+    }
+    if (cudaMalloc(&ptr, need) != cudaSuccess) {
+      throw std::runtime_error(
+          "BackprojectionOp: device allocation failed");
+    }
+    bytes = need;
+  }
+
+  template <typename U>
+  U* as() {
+    return static_cast<U*>(ptr);
+  }
+};
+
+inline bool backend_is_matx(BackprojectionBackend backend) {
+  switch (backend) {
+    case BackprojectionBackend::kMatxDouble:
+    case BackprojectionBackend::kMatxDoublePhaseLut:
+    case BackprojectionBackend::kMatxMixed:
+    case BackprojectionBackend::kMatxMixedPhaseLut:
+    case BackprojectionBackend::kMatxFloatFloat:
+    case BackprojectionBackend::kMatxFloat:
+    case BackprojectionBackend::kMatxFloatPhaseLut:
+      return true;
+    default:
+      return false;
+  }
+}
+
+inline bool backend_is_implemented(BackprojectionBackend backend) {
+  if (backend == BackprojectionBackend::kMatxTaylorFast) {
+    return false;
+  }
+  if (backend_is_matx(backend)) {
+#if __has_include("matx/kernels/sar_bp.cuh")
+    return true;
+#else
+    return false;
+#endif
+  }
+  return true;
+}
+
+template <typename T>
+struct BackprojectionState {
+  DeviceBuffer lattice_xyz;   // (num_v * num_u * 3) T, cached
+  DeviceBuffer x_plane;       // double, num_pixels
+  DeviceBuffer y_plane;
+  DeviceBuffer z_plane;
+  DeviceBuffer apc;           // double, 3 * num_pulses
+  DeviceBuffer mcp;           // double, 3 * num_pulses (reference)
+  DeviceBuffer r0;            // double, num_pulses
+  DeviceBuffer x_plane_f;     // float lattice / APC / R0 for fp32 family
+  DeviceBuffer y_plane_f;
+  DeviceBuffer z_plane_f;
+  DeviceBuffer apc_f;
+  DeviceBuffer mcp_f;
+  DeviceBuffer r0_f;
+  DeviceBuffer phase_lut;  // interleaved complex64, 2 * Nfft
+  double lut_pc{0.0};
+  double lut_rmin{0.0};
+  double lut_dr{0.0};
+  int lut_nfft{0};
+  DeviceBuffer weight_scratch;  // complex<T>, profiles
+  DeviceBuffer vph_cast;      // upcast/downcast profiles
+  DeviceBuffer accum;         // float, 2 * batch * num_v * num_u (NVRadar)
+  DeviceBuffer matx_accum;    // complex<T>, batch * num_v * num_u
+  DeviceBuffer cmp_flag;      // int, sample_points equality
+  DeviceBuffer tile_diam;     // double, I7 points-mode tile diameters
+  int64_t lattice_num_v{0};   // xyz / planes, independent of accum
+  int64_t lattice_num_u{0};
+  int64_t cached_num_v{0};    // accumulator shape
+  int64_t cached_num_u{0};
+  int64_t cached_batch{0};
+  bool lattice_valid{false};
+  bool planes_valid{false};
+};
+
+__global__ void gather_xyz_kernel(const float* lattice, int64_t n,
+                                  double* x, double* y, double* z) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x +
+                    threadIdx.x;
+  if (i >= n) {
+    return;
+  }
+  x[i] = static_cast<double>(lattice[i * 3 + 0]);
+  y[i] = static_cast<double>(lattice[i * 3 + 1]);
+  z[i] = static_cast<double>(lattice[i * 3 + 2]);
+}
+
+__global__ void gather_xyz_kernel(const double* lattice, int64_t n,
+                                  double* x, double* y, double* z) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x +
+                    threadIdx.x;
+  if (i >= n) {
+    return;
+  }
+  x[i] = lattice[i * 3 + 0];
+  y[i] = lattice[i * 3 + 1];
+  z[i] = lattice[i * 3 + 2];
+}
+
+template <typename T>
+__global__ void mark_if_differ_kernel(const T* a, const T* b, int64_t n,
+                                      int* flag) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x +
+                    threadIdx.x;
+  if (i >= n) {
+    return;
+  }
+  if (a[i] != b[i]) {
+    *flag = 1;
+  }
+}
+
+// AABB diagonal of each 16x16 image tile — I7 points-mode block
+// diameter. Conservative vs pairwise max, cheap, and matches the
+// Taylor kernel's 16x16 launch.
+__global__ void tile_aabb_diameter_kernel(const double* x, const double* y,
+                                          const double* z, int num_v,
+                                          int num_u, double* out) {
+  const int tile_u = (num_u + 15) / 16;
+  const int tx = static_cast<int>(blockIdx.x);
+  const int ty = static_cast<int>(blockIdx.y);
+  const int i0 = ty * 16;
+  const int j0 = tx * 16;
+  double minx = 0.0;
+  double miny = 0.0;
+  double minz = 0.0;
+  double maxx = 0.0;
+  double maxy = 0.0;
+  double maxz = 0.0;
+  bool any = false;
+  for (int dy = 0; dy < 16; ++dy) {
+    const int iv = i0 + dy;
+    if (iv >= num_v) {
+      break;
+    }
+    for (int dx = 0; dx < 16; ++dx) {
+      const int iu = j0 + dx;
+      if (iu >= num_u) {
+        break;
+      }
+      const int idx = iv * num_u + iu;
+      const double px = x[idx];
+      const double py = y[idx];
+      const double pz = z[idx];
+      if (!any) {
+        minx = maxx = px;
+        miny = maxy = py;
+        minz = maxz = pz;
+        any = true;
+      } else {
+        minx = fmin(minx, px);
+        miny = fmin(miny, py);
+        minz = fmin(minz, pz);
+        maxx = fmax(maxx, px);
+        maxy = fmax(maxy, py);
+        maxz = fmax(maxz, pz);
+      }
+    }
+  }
+  const int o = ty * tile_u + tx;
+  if (!any) {
+    out[o] = 0.0;
+    return;
+  }
+  const double dx = maxx - minx;
+  const double dy = maxy - miny;
+  const double dz = maxz - minz;
+  out[o] = sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+template <typename T>
+bool device_arrays_differ(const T* a, const T* b, int64_t n,
+                          DeviceBuffer& flag, cudaStream_t stream) {
+  flag.ensure(sizeof(int), stream);
+  if (cudaMemsetAsync(flag.ptr, 0, sizeof(int), stream) != cudaSuccess) {
+    throw std::runtime_error(
+        "BackprojectionOp: sample_points compare memset failed");
+  }
+  const int threads = 256;
+  const int blocks = static_cast<int>(
+      (n + static_cast<int64_t>(threads) - 1) / threads);
+  mark_if_differ_kernel<T><<<blocks, threads, 0, stream>>>(
+      a, b, n, flag.template as<int>());
+  int host = 0;
+  if (cudaMemcpyAsync(&host, flag.ptr, sizeof(int),
+                      cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
+    throw std::runtime_error(
+        "BackprojectionOp: sample_points compare copy failed");
+  }
+  if (cudaStreamSynchronize(stream) != cudaSuccess) {
+    throw std::runtime_error(
+        "BackprojectionOp: sample_points compare sync failed");
+  }
+  return host != 0;
+}
+
+// Worst-case 16x16-tile diameter over x/y/z planes.
+template <typename T>
+double max_tile_diameter(BackprojectionState<T>& state, int64_t num_v,
+                         int64_t num_u, cudaStream_t stream) {
+  const int tiles_v = static_cast<int>((num_v + 15) / 16);
+  const int tiles_u = static_cast<int>((num_u + 15) / 16);
+  const int ntiles = tiles_v * tiles_u;
+  state.tile_diam.ensure(static_cast<size_t>(ntiles) * sizeof(double),
+                         stream);
+  const dim3 grid(static_cast<unsigned>(tiles_u),
+                  static_cast<unsigned>(tiles_v));
+  tile_aabb_diameter_kernel<<<grid, 1, 0, stream>>>(
+      state.x_plane.template as<double>(),
+      state.y_plane.template as<double>(),
+      state.z_plane.template as<double>(),
+      static_cast<int>(num_v), static_cast<int>(num_u),
+      state.tile_diam.template as<double>());
+  std::vector<double> host(static_cast<size_t>(ntiles));
+  if (cudaMemcpyAsync(host.data(), state.tile_diam.ptr,
+                      host.size() * sizeof(double),
+                      cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
+    throw std::runtime_error(
+        "BackprojectionOp: tile-diameter copy failed");
+  }
+  if (cudaStreamSynchronize(stream) != cudaSuccess) {
+    throw std::runtime_error(
+        "BackprojectionOp: tile-diameter sync failed");
+  }
+  double dmax = 0.0;
+  for (double d : host) {
+    dmax = std::max(dmax, d);
+  }
+  return dmax;
+}
+
+// Device-side SampleGeometry::sample_position:
+//   origin + iv * spacing[0] * axis_v + iu * spacing[1] * axis_u
+// iv is the slow (row) index, iu the fast (column) index.
+__global__ void expand_lattice_planes_kernel(double3 origin, double3 axis_v,
+                                             double3 axis_u, double spacing_v,
+                                             double spacing_u, int64_t num_v,
+                                             int64_t num_u, double* x,
+                                             double* y, double* z) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x +
+                    threadIdx.x;
+  const int64_t n = num_v * num_u;
+  if (i >= n) {
+    return;
+  }
+  const int64_t iv = i / num_u;
+  const int64_t iu = i - iv * num_u;
+  const double dv = static_cast<double>(iv) * spacing_v;
+  const double du = static_cast<double>(iu) * spacing_u;
+  x[i] = origin.x + dv * axis_v.x + du * axis_u.x;
+  y[i] = origin.y + dv * axis_v.y + du * axis_u.y;
+  z[i] = origin.z + dv * axis_v.z + du * axis_u.z;
+}
+
+template <typename T>
+__global__ void expand_lattice_packed_kernel(double3 origin, double3 axis_v,
+                                             double3 axis_u, double spacing_v,
+                                             double spacing_u, int64_t num_v,
+                                             int64_t num_u, T* out) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x +
+                    threadIdx.x;
+  const int64_t n = num_v * num_u;
+  if (i >= n) {
+    return;
+  }
+  const int64_t iv = i / num_u;
+  const int64_t iu = i - iv * num_u;
+  const double dv = static_cast<double>(iv) * spacing_v;
+  const double du = static_cast<double>(iu) * spacing_u;
+  out[i * 3 + 0] =
+      static_cast<T>(origin.x + dv * axis_v.x + du * axis_u.x);
+  out[i * 3 + 1] =
+      static_cast<T>(origin.y + dv * axis_v.y + du * axis_u.y);
+  out[i * 3 + 2] =
+      static_cast<T>(origin.z + dv * axis_v.z + du * axis_u.z);
+}
+
+template <typename T>
+__global__ void compute_r0_apc_kernel(const T* pos, const T* ref, int Np,
+                                      double* apc, double* mcp, double* r0) {
+  const int p = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (p >= Np) {
+    return;
+  }
+  const double px = static_cast<double>(pos[p * 3 + 0]);
+  const double py = static_cast<double>(pos[p * 3 + 1]);
+  const double pz = static_cast<double>(pos[p * 3 + 2]);
+  const double rx = static_cast<double>(ref[p * 3 + 0]);
+  const double ry = static_cast<double>(ref[p * 3 + 1]);
+  const double rz = static_cast<double>(ref[p * 3 + 2]);
+  apc[p] = px;
+  apc[p + Np] = py;
+  apc[p + 2 * Np] = pz;
+  mcp[p] = rx;
+  mcp[p + Np] = ry;
+  mcp[p + 2 * Np] = rz;
+  const double dx = px - rx;
+  const double dy = py - ry;
+  const double dz = pz - rz;
+  r0[p] = sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+template <typename T>
+__global__ void scale_profiles_kernel(const T* src_r, const T* src_i,
+                                      const T* weight, T* dst_r, T* dst_i,
+                                      int Np, int N) {
+  const int idx = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  const int total = Np * N;
+  if (idx >= total) {
+    return;
+  }
+  const int p = idx / N;
+  const T w = weight[p];
+  dst_r[idx] = src_r[idx] * w;
+  dst_i[idx] = src_i[idx] * w;
+}
+
+// Interleaved complex scale in place on a scratch copy.
+template <typename T>
+__global__ void scale_interleaved_kernel(const T* src, const T* weight,
+                                         T* dst, int Np, int N) {
+  const int idx = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  const int total = Np * N;
+  if (idx >= total) {
+    return;
+  }
+  const int p = idx / N;
+  const T w = weight[p];
+  dst[idx * 2] = src[idx * 2] * w;
+  dst[idx * 2 + 1] = src[idx * 2 + 1] * w;
+}
+
+__global__ void upcast_vph_kernel(const float* src, double* dst, int n) {
+  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (i >= n) {
+    return;
+  }
+  dst[i] = static_cast<double>(src[i]);
+}
+
+__global__ void downcast_vph_kernel(const double* src, float* dst, int n) {
+  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (i >= n) {
+    return;
+  }
+  dst[i] = static_cast<float>(src[i]);
+}
+
+__global__ void downcast_real_kernel(const double* src, float* dst, int n) {
+  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (i >= n) {
+    return;
+  }
+  dst[i] = static_cast<float>(src[i]);
+}
+
+__global__ void zero_float_kernel(float* dst, int n) {
+  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (i >= n) {
+    return;
+  }
+  dst[i] = 0.0f;
+}
+
+__global__ void promote_image_kernel(const float* src, float* dst, int n) {
+  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (i >= n) {
+    return;
+  }
+  dst[i] = src[i];
+}
+
+__global__ void promote_image_kernel(const float* src, double* dst, int n) {
+  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (i >= n) {
+    return;
+  }
+  dst[i] = static_cast<double>(src[i]);
+}
+
+inline dim3 bp_grid(int img_width, int img_height) {
+  return dim3((img_width + 15) / 16, (img_height + 15) / 16, 1);
+}
+
+inline dim3 bp_block() { return dim3(16, 16, 1); }
+
+template <typename T>
+void ensure_accum(BackprojectionState<T>& state, int64_t batch,
+                  int64_t num_v, int64_t num_u, cudaStream_t stream) {
+  const int64_t n = batch * num_v * num_u * 2;
+  const bool resize = state.cached_batch != batch ||
+                      state.cached_num_v != num_v ||
+                      state.cached_num_u != num_u;
+  state.accum.ensure(static_cast<size_t>(n) * sizeof(float), stream);
+  if (resize) {
+    const int threads = 256;
+    const int blocks =
+        static_cast<int>((n + threads - 1) / threads);
+    zero_float_kernel<<<blocks, threads, 0, stream>>>(
+        state.accum.template as<float>(), static_cast<int>(n));
+    state.cached_batch = batch;
+    state.cached_num_v = num_v;
+    state.cached_num_u = num_u;
+  }
+}
+
+template <typename T>
+void reset_accum(BackprojectionState<T>& state, cudaStream_t stream) {
+  if (state.accum.ptr == nullptr || state.cached_batch == 0) {
+    return;
+  }
+  const int64_t n =
+      state.cached_batch * state.cached_num_v * state.cached_num_u * 2;
+  const int threads = 256;
+  const int blocks = static_cast<int>((n + threads - 1) / threads);
+  zero_float_kernel<<<blocks, threads, 0, stream>>>(
+      state.accum.template as<float>(), static_cast<int>(n));
+}
+
+inline dim3 lattice_launch(int64_t num_pixels) {
+  const int threads = 256;
+  const int blocks =
+      static_cast<int>((num_pixels + threads - 1) / threads);
+  return dim3(static_cast<unsigned>(blocks), 1, 1);
+}
+
+inline void geometry_to_double3(const SampleGeometry& geometry, double3* origin,
+                                double3* axis_v, double3* axis_u,
+                                double* spacing_v, double* spacing_u) {
+  const auto& o = geometry.origin();
+  const auto& av = geometry.axis_v();
+  const auto& au = geometry.axis_u();
+  const auto& sp = geometry.spacing();
+  *origin = make_double3(o[0], o[1], o[2]);
+  *axis_v = make_double3(av[0], av[1], av[2]);
+  *axis_u = make_double3(au[0], au[1], au[2]);
+  *spacing_v = sp[0];
+  *spacing_u = sp[1];
+}
+
+// Expand a uniform lattice on device. NVRadar consumes x/y/z planes, so
+// `packed == false` writes those directly and never materializes the
+// (N, 3) buffer (1.61 GiB at Atlanta 8192x8192 double). MatX consumes packed
+// xyz, so `packed == true` writes that instead.
+template <typename T>
+void expand_geometry_on_device(BackprojectionState<T>& state,
+                               const SampleGeometry& geometry, bool packed,
+                               cudaStream_t stream) {
+  const int64_t num_v = geometry.num_v();
+  const int64_t num_u = geometry.num_u();
+  const int64_t pixels = num_v * num_u;
+  double3 origin{};
+  double3 axis_v{};
+  double3 axis_u{};
+  double spacing_v = 0.0;
+  double spacing_u = 0.0;
+  geometry_to_double3(geometry, &origin, &axis_v, &axis_u, &spacing_v,
+                      &spacing_u);
+  state.lattice_num_v = num_v;
+  state.lattice_num_u = num_u;
+  const dim3 grid = lattice_launch(pixels);
+  constexpr int kThreads = 256;
+  if (packed) {
+    state.lattice_xyz.ensure(static_cast<size_t>(pixels) * 3 * sizeof(T),
+                             stream);
+    expand_lattice_packed_kernel<T><<<grid, kThreads, 0, stream>>>(
+        origin, axis_v, axis_u, spacing_v, spacing_u, num_v, num_u,
+        state.lattice_xyz.template as<T>());
+    return;
+  }
+  state.x_plane.ensure(static_cast<size_t>(pixels) * sizeof(double),
+                       stream);
+  state.y_plane.ensure(static_cast<size_t>(pixels) * sizeof(double),
+                       stream);
+  state.z_plane.ensure(static_cast<size_t>(pixels) * sizeof(double),
+                       stream);
+  expand_lattice_planes_kernel<<<grid, kThreads, 0, stream>>>(
+      origin, axis_v, axis_u, spacing_v, spacing_u, num_v, num_u,
+      state.x_plane.template as<double>(),
+      state.y_plane.template as<double>(),
+      state.z_plane.template as<double>());
+}
+
+template <typename T>
+void gather_lattice(BackprojectionState<T>& state, const T* lattice,
+                    int64_t num_pixels, cudaStream_t stream) {
+  state.x_plane.ensure(static_cast<size_t>(num_pixels) * sizeof(double),
+                       stream);
+  state.y_plane.ensure(static_cast<size_t>(num_pixels) * sizeof(double),
+                       stream);
+  state.z_plane.ensure(static_cast<size_t>(num_pixels) * sizeof(double),
+                       stream);
+  const int threads = 256;
+  const int blocks =
+      static_cast<int>((num_pixels + threads - 1) / threads);
+  gather_xyz_kernel<<<blocks, threads, 0, stream>>>(
+      lattice, num_pixels, state.x_plane.template as<double>(),
+      state.y_plane.template as<double>(), state.z_plane.template as<double>());
+}
+
+template <typename T>
+void prepare_pulses(BackprojectionState<T>& state, const T* positions,
+                    const T* reference, int Np, cudaStream_t stream) {
+  state.apc.ensure(static_cast<size_t>(Np) * 3 * sizeof(double), stream);
+  state.mcp.ensure(static_cast<size_t>(Np) * 3 * sizeof(double), stream);
+  state.r0.ensure(static_cast<size_t>(Np) * sizeof(double), stream);
+  const int threads = 256;
+  const int blocks = (Np + threads - 1) / threads;
+  compute_r0_apc_kernel<T><<<blocks, threads, 0, stream>>>(
+      positions, reference, Np, state.apc.template as<double>(),
+      state.mcp.template as<double>(), state.r0.template as<double>());
+}
+
+template <typename T>
+void prepare_float_scene(BackprojectionState<T>& state, int64_t num_pixels,
+                         int Np, cudaStream_t stream) {
+  auto downcast = [&](DeviceBuffer& src, DeviceBuffer& dst, int n) {
+    dst.ensure(static_cast<size_t>(n) * sizeof(float), stream);
+    const int threads = 256;
+    const int blocks = (n + threads - 1) / threads;
+    downcast_real_kernel<<<blocks, threads, 0, stream>>>(
+        src.template as<double>(), dst.template as<float>(), n);
+  };
+  downcast(state.x_plane, state.x_plane_f, static_cast<int>(num_pixels));
+  downcast(state.y_plane, state.y_plane_f, static_cast<int>(num_pixels));
+  downcast(state.z_plane, state.z_plane_f, static_cast<int>(num_pixels));
+  downcast(state.apc, state.apc_f, Np * 3);
+  downcast(state.mcp, state.mcp_f, Np * 3);
+  downcast(state.r0, state.r0_f, Np);
+}
+
+template <typename T>
+void ensure_nvradar_lut(BackprojectionState<T>& state, double pc_partial,
+                        double rmin, double dr, int Nfft,
+                        cudaStream_t stream) {
+  const bool same = state.lut_nfft == Nfft && state.lut_pc == pc_partial &&
+                    state.lut_rmin == rmin && state.lut_dr == dr;
+  state.phase_lut.ensure(static_cast<size_t>(Nfft) * 2 * sizeof(float),
+                         stream);
+  if (same && state.phase_lut.ptr != nullptr) {
+    return;
+  }
+  const int threads = 256;
+  const int blocks = (Nfft + threads - 1) / threads;
+  nvradar_fill_phase_lut<<<blocks, threads, 0, stream>>>(
+      state.phase_lut.template as<float>(), pc_partial, rmin, dr, Nfft);
+  state.lut_pc = pc_partial;
+  state.lut_rmin = rmin;
+  state.lut_dr = dr;
+  state.lut_nfft = Nfft;
+}
+
+template <typename T>
+void launch_nvradar(BackprojectionBackend backend,
+                    BackprojectionState<T>& state, const void* profiles,
+                    int num_v, int num_u, int Np, int Nfft, int batch_index,
+                    double rmin, double dr, double pc_partial,
+                    cudaStream_t stream) {
+  const int img_width = num_u;
+  const int img_height = num_v;
+  const int pixels = num_v * num_u;
+  float* simg = state.accum.template as<float>() +
+                static_cast<size_t>(batch_index) * pixels * 2;
+  const dim3 grid = bp_grid(img_width, img_height);
+  const dim3 block = bp_block();
+
+  if (backend == BackprojectionBackend::kNvradarFp64Reference) {
+    const double* vph = nullptr;
+    if constexpr (std::is_same_v<T, double>) {
+      vph = static_cast<const double*>(profiles);
+    } else {
+      const int n = Np * Nfft * 2;
+      state.vph_cast.ensure(static_cast<size_t>(n) * sizeof(double),
+                            stream);
+      const int threads = 256;
+      const int blocks = (n + threads - 1) / threads;
+      upcast_vph_kernel<<<blocks, threads, 0, stream>>>(
+          static_cast<const float*>(profiles), state.vph_cast.template as<double>(),
+          n);
+      vph = state.vph_cast.template as<double>();
+    }
+    backprojection_kernel_fp64_ref<<<grid, block, 0, stream>>>(
+        0, img_width, img_height, Np, Np, rmin, dr, pc_partial, simg,
+        nullptr, state.x_plane.template as<double>(), state.y_plane.template as<double>(),
+        state.z_plane.template as<double>(), state.apc.template as<double>(),
+        state.r0.template as<double>(), vph, Nfft);
+    return;
+  }
+
+  auto float_vph = [&]() -> const float* {
+    if constexpr (std::is_same_v<T, float>) {
+      return static_cast<const float*>(profiles);
+    }
+    const int n = Np * Nfft * 2;
+    state.vph_cast.ensure(static_cast<size_t>(n) * sizeof(float), stream);
+    const int threads = 256;
+    const int blocks = (n + threads - 1) / threads;
+    downcast_vph_kernel<<<blocks, threads, 0, stream>>>(
+        static_cast<const double*>(profiles), state.vph_cast.template as<float>(),
+        n);
+    return state.vph_cast.template as<float>();
+  };
+
+  if (backend == BackprojectionBackend::kNvradarCudaFp32 ||
+      backend == BackprojectionBackend::kNvradarCudaFp32Hq ||
+      backend == BackprojectionBackend::kNvradarCudaFp32HqFast) {
+    prepare_float_scene(state, pixels, Np, stream);
+    const float* vph = float_vph();
+    const float rmin_f = static_cast<float>(rmin);
+    const float dr_inv_f = static_cast<float>(1.0 / dr);
+    const float pc_f = static_cast<float>(pc_partial);
+    if (backend == BackprojectionBackend::kNvradarCudaFp32) {
+      backprojection_kernel_fp32<<<grid, block, 0, stream>>>(
+          0, img_width, img_height, Np, Np, rmin_f, dr_inv_f, pc_f, simg,
+          nullptr, state.x_plane_f.template as<float>(),
+          state.y_plane_f.template as<float>(), state.z_plane_f.template as<float>(),
+          state.apc_f.template as<float>(), state.r0_f.template as<float>(), vph, Nfft);
+      return;
+    }
+    if (backend == BackprojectionBackend::kNvradarCudaFp32Hq) {
+      backprojection_kernel_fp32_hq<<<grid, block, 0, stream>>>(
+          0, img_width, img_height, Np, Np, Np, rmin_f, dr_inv_f, pc_f,
+          simg, nullptr, state.x_plane_f.template as<float>(),
+          state.y_plane_f.template as<float>(), state.z_plane_f.template as<float>(),
+          state.apc_f.template as<float>(), state.mcp_f.template as<float>(),
+          state.r0_f.template as<float>(), vph, Nfft);
+      return;
+    }
+    backprojection_kernel_fp32_hq_fast<<<grid, block, 0, stream>>>(
+        0, img_width, img_height, Np, Np, Np, rmin_f, dr_inv_f, pc_f,
+        simg, nullptr, state.x_plane_f.template as<float>(),
+        state.y_plane_f.template as<float>(), state.z_plane_f.template as<float>(),
+        state.apc_f.template as<float>(), state.mcp_f.template as<float>(),
+        state.r0_f.template as<float>(), vph, Nfft);
+    return;
+  }
+
+  if (backend == BackprojectionBackend::kNvradarBlockAnchored) {
+    prepare_float_scene(state, pixels, Np, stream);
+    const float* vph = float_vph();
+    backprojection_kernel_fp32_hq_block<<<grid, block, 0, stream>>>(
+        0, img_width, img_height, Np, Np, Np, static_cast<float>(rmin),
+        static_cast<float>(1.0 / dr), static_cast<float>(pc_partial),
+        simg, nullptr, state.x_plane_f.template as<float>(),
+        state.y_plane_f.template as<float>(), state.z_plane_f.template as<float>(),
+        state.apc_f.template as<float>(), state.mcp_f.template as<float>(),
+        state.r0_f.template as<float>(), vph, Nfft);
+    return;
+  }
+
+  if (backend ==
+      BackprojectionBackend::kNvradarBlockAnchoredRefinedThroughput) {
+    const float* vph = nullptr;
+    if constexpr (std::is_same_v<T, float>) {
+      vph = static_cast<const float*>(profiles);
+    } else {
+      const int n = Np * Nfft * 2;
+      state.vph_cast.ensure(static_cast<size_t>(n) * sizeof(float),
+                            stream);
+      const int threads = 256;
+      const int blocks = (n + threads - 1) / threads;
+      downcast_vph_kernel<<<blocks, threads, 0, stream>>>(
+          static_cast<const double*>(profiles), state.vph_cast.template as<float>(),
+          n);
+      vph = state.vph_cast.template as<float>();
+    }
+    const double dr_inv_d = 1.0 / dr;
+    const float dr_inv = static_cast<float>(dr_inv_d);
+    backprojection_kernel_fp64_phiwrap_f32mf_f32vph_anchor_taylor_phi32_vphf_drinvd<<<  // NOLINT
+        grid, block, 0, stream>>>(
+        0, img_width, img_height, Np, Np, rmin, dr_inv_d, dr_inv,
+        pc_partial, simg, nullptr, state.x_plane.template as<double>(),
+        state.y_plane.template as<double>(), state.z_plane.template as<double>(),
+        state.apc.template as<double>(), state.r0.template as<double>(), vph, Nfft);
+    return;
+  }
+
+  if (backend ==
+      BackprojectionBackend::kNvradarBlockAnchoredRefinedQuality) {
+    const float* vph = float_vph();
+    const float dr_inv = static_cast<float>(1.0 / dr);
+    backprojection_kernel_fp64_phiwrap_f32mf_f32vph_anchor_taylor_phi32df_dr_cw1nw<<<  // NOLINT
+        grid, block, 0, stream>>>(
+        0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_partial,
+        simg, nullptr, state.x_plane.template as<double>(),
+        state.y_plane.template as<double>(), state.z_plane.template as<double>(),
+        state.apc.template as<double>(), state.r0.template as<double>(), vph, Nfft);
+    return;
+  }
+
+  if (backend ==
+          BackprojectionBackend::kNvradarBlockAnchoredExpandedThroughput ||
+      backend ==
+          BackprojectionBackend::kNvradarBlockAnchoredExpandedQuality) {
+    const float* vph = float_vph();
+    const float dr_inv = static_cast<float>(1.0 / dr);
+    if (backend ==
+        BackprojectionBackend::kNvradarBlockAnchoredExpandedThroughput) {
+      backprojection_kernel_fp64_phiwrap_f32mf_f32vph_anchor_taylor_phi32df_dr_in_cw1nw_fma<<<  // NOLINT
+          grid, block, 0, stream>>>(
+          0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_partial,
+          simg, nullptr, state.x_plane.template as<double>(),
+          state.y_plane.template as<double>(), state.z_plane.template as<double>(),
+          state.apc.template as<double>(), state.r0.template as<double>(), vph, Nfft);
+    } else {
+      backprojection_kernel_fp64_phiwrap_f32mf_f32vph_anchor_taylor_phi32df_dr_in_cw1nw<<<  // NOLINT
+          grid, block, 0, stream>>>(
+          0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_partial,
+          simg, nullptr, state.x_plane.template as<double>(),
+          state.y_plane.template as<double>(), state.z_plane.template as<double>(),
+          state.apc.template as<double>(), state.r0.template as<double>(), vph, Nfft);
+    }
+    return;
+  }
+
+  if (backend ==
+      BackprojectionBackend::kNvradarBlockAnchoredFp64Trajectory) {
+    prepare_float_scene(state, pixels, Np, stream);
+    const float* vph = float_vph();
+    backprojection_kernel_fp32_hq_block3_fp64in<<<grid, block, 0, stream>>>(
+        0, img_width, img_height, Np, Np, Np, static_cast<float>(rmin),
+        static_cast<float>(1.0 / dr), static_cast<float>(pc_partial),
+        simg, nullptr, state.x_plane_f.template as<float>(),
+        state.y_plane_f.template as<float>(), state.z_plane_f.template as<float>(),
+        state.apc.template as<double>(), state.mcp.template as<double>(),
+        state.r0.template as<double>(), vph, Nfft);
+    return;
+  }
+
+  const bool lut_backend =
+      backend == BackprojectionBackend::kNvradarBlockAnchoredPhaseLut ||
+      backend ==
+          BackprojectionBackend::kNvradarBlockAnchoredRefinedQualityPhaseLut ||
+      backend == BackprojectionBackend::
+                     kNvradarBlockAnchoredExpandedThroughputPhaseLut ||
+      backend == BackprojectionBackend::
+                     kNvradarBlockAnchoredExpandedThroughputPhaseLutVec ||
+      backend == BackprojectionBackend::
+                     kNvradarBlockAnchoredExpandedThroughputPhaseLutVecZ0 ||
+      backend == BackprojectionBackend::
+                     kNvradarBlockAnchoredExpandedQualityPhaseLut ||
+      backend ==
+          BackprojectionBackend::kNvradarBlockAnchoredPhaseLutLegacy ||
+      backend == BackprojectionBackend::
+                     kNvradarBlockAnchoredFp64TrajectoryPhaseLut;
+  if (lut_backend) {
+    const float* vph = float_vph();
+    const float dr_inv = static_cast<float>(1.0 / dr);
+    const double dr_inv_d = 1.0 / dr;
+    const float pc_dr = static_cast<float>(pc_partial * dr);
+    ensure_nvradar_lut(state, pc_partial, rmin, dr, Nfft, stream);
+    const float* lut = state.phase_lut.template as<float>();
+    if (backend == BackprojectionBackend::kNvradarBlockAnchoredPhaseLut) {
+      backprojection_kernel_anchor_taylor_phase_lut<<<grid, block, 0,
+                                                      stream>>>(
+          0, img_width, img_height, Np, Np, rmin, dr_inv_d, dr_inv, pc_dr,
+          simg, nullptr, state.x_plane.template as<double>(),
+          state.y_plane.template as<double>(), state.z_plane.template as<double>(),
+          state.apc.template as<double>(), state.r0.template as<double>(), vph, lut, Nfft);
+      return;
+    }
+    if (backend ==
+        BackprojectionBackend::kNvradarBlockAnchoredRefinedQualityPhaseLut) {
+      backprojection_kernel_anchor_taylor_quality_phase_lut<<<
+          grid, block, 0, stream>>>(
+          0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_dr, simg,
+          nullptr, state.x_plane.template as<double>(), state.y_plane.template as<double>(),
+          state.z_plane.template as<double>(), state.apc.template as<double>(),
+          state.r0.template as<double>(), vph, lut, Nfft);
+      return;
+    }
+    if (backend == BackprojectionBackend::
+                       kNvradarBlockAnchoredExpandedThroughputPhaseLut) {
+      backprojection_kernel_anchor_expanded_throughput_phase_lut<<<
+          grid, block, 0, stream>>>(
+          0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_dr, simg,
+          nullptr, state.x_plane.template as<double>(), state.y_plane.template as<double>(),
+          state.z_plane.template as<double>(), state.apc.template as<double>(),
+          state.r0.template as<double>(), vph, lut, Nfft);
+      return;
+    }
+    if (backend == BackprojectionBackend::
+                       kNvradarBlockAnchoredExpandedThroughputPhaseLutVec) {
+      backprojection_kernel_anchor_expanded_throughput_phase_lut_vec<<<
+          grid, block, 0, stream>>>(
+          0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_dr, simg,
+          nullptr, state.x_plane.template as<double>(), state.y_plane.template as<double>(),
+          state.z_plane.template as<double>(), state.apc.template as<double>(),
+          state.r0.template as<double>(), vph, lut, Nfft);
+      return;
+    }
+    if (backend ==
+        BackprojectionBackend::
+            kNvradarBlockAnchoredExpandedThroughputPhaseLutVecZ0) {
+      backprojection_kernel_anchor_expanded_throughput_phase_lut_vec_z0<<<  // NOLINT
+          grid, block, 0, stream>>>(
+          0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_dr, simg,
+          nullptr, state.x_plane.template as<double>(), state.y_plane.template as<double>(),
+          state.z_plane.template as<double>(), state.apc.template as<double>(),
+          state.r0.template as<double>(), vph, lut, Nfft);
+      return;
+    }
+    if (backend == BackprojectionBackend::
+                       kNvradarBlockAnchoredExpandedQualityPhaseLut) {
+      backprojection_kernel_anchor_expanded_quality_phase_lut<<<
+          grid, block, 0, stream>>>(
+          0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_dr, simg,
+          nullptr, state.x_plane.template as<double>(), state.y_plane.template as<double>(),
+          state.z_plane.template as<double>(), state.apc.template as<double>(),
+          state.r0.template as<double>(), vph, lut, Nfft);
+      return;
+    }
+    if (backend ==
+        BackprojectionBackend::kNvradarBlockAnchoredPhaseLutLegacy) {
+      prepare_float_scene(state, pixels, Np, stream);
+      backprojection_kernel_hq_block_phase_lut<<<grid, block, 0, stream>>>(
+          0, img_width, img_height, Np, Np, Np, static_cast<float>(rmin),
+          dr_inv, pc_dr, simg, nullptr, state.x_plane_f.template as<float>(),
+          state.y_plane_f.template as<float>(), state.z_plane_f.template as<float>(),
+          state.apc_f.template as<float>(), state.mcp_f.template as<float>(),
+          state.r0_f.template as<float>(), vph, lut, Nfft);
+      return;
+    }
+    prepare_float_scene(state, pixels, Np, stream);
+    backprojection_kernel_hq_block3_fp64in_phase_lut<<<grid, block, 0,
+                                                       stream>>>(
+        0, img_width, img_height, Np, Np, Np, static_cast<float>(rmin),
+        dr_inv, pc_dr, simg, nullptr, state.x_plane_f.template as<float>(),
+        state.y_plane_f.template as<float>(), state.z_plane_f.template as<float>(),
+        state.apc.template as<double>(), state.mcp.template as<double>(),
+        state.r0.template as<double>(), vph, lut, Nfft);
+    return;
+  }
+
+  throw std::invalid_argument(
+      std::string("BackprojectionOp: backend '") +
+      std::string(to_string(backend)) + "' is not implemented");
+}
+
+template <typename T>
+void emit_accum(BackprojectionState<T>& state, T* dst, int64_t batch,
+                int64_t num_v, int64_t num_u, cudaStream_t stream) {
+  const int64_t n = batch * num_v * num_u * 2;
+  const int threads = 256;
+  const int blocks = static_cast<int>((n + threads - 1) / threads);
+  promote_image_kernel<<<blocks, threads, 0, stream>>>(
+      state.accum.template as<float>(), dst, static_cast<int>(n));
+}
+
+}  // namespace holoscan::radar::detail
+
+#if __has_include("matx/kernels/sar_bp.cuh")
+#include <vector_types.h>
+
+#include "matx/operators/sar_bp.h"
+#include "radar_common/tensor/matx_utils.hpp"
+#endif
+
+namespace holoscan::radar::detail {
+
+#if __has_include("matx/kernels/sar_bp.cuh")
+inline matx::SarBpParams matx_params(BackprojectionBackend backend,
+                                     double frequency, double dr) {
+  matx::SarBpParams params;
+  params.center_frequency = frequency;
+  params.del_r = dr;
+  params.features = matx::SarBpFeature::None;
+  switch (backend) {
+    case BackprojectionBackend::kMatxDouble:
+      params.compute_type = matx::SarBpComputeType::Double;
+      break;
+    case BackprojectionBackend::kMatxDoublePhaseLut:
+      params.compute_type = matx::SarBpComputeType::Double;
+      params.features = matx::SarBpFeature::PhaseLUTOptimization;
+      break;
+    case BackprojectionBackend::kMatxMixed:
+      params.compute_type = matx::SarBpComputeType::Mixed;
+      break;
+    case BackprojectionBackend::kMatxMixedPhaseLut:
+      params.compute_type = matx::SarBpComputeType::Mixed;
+      params.features = matx::SarBpFeature::PhaseLUTOptimization;
+      break;
+    case BackprojectionBackend::kMatxFloatFloat:
+      params.compute_type = matx::SarBpComputeType::FloatFloat;
+      params.features = matx::SarBpFeature::PhaseLUTOptimization;
+      break;
+    case BackprojectionBackend::kMatxFloat:
+      params.compute_type = matx::SarBpComputeType::Float;
+      break;
+    case BackprojectionBackend::kMatxFloatPhaseLut:
+      params.compute_type = matx::SarBpComputeType::Float;
+      params.features = matx::SarBpFeature::PhaseLUTOptimization;
+      break;
+    default:
+      params.compute_type = matx::SarBpComputeType::Mixed;
+      break;
+  }
+  return params;
+}
+
+template <typename T>
+void ensure_matx_accum(BackprojectionState<T>& state, int64_t batch,
+                       int64_t num_v, int64_t num_u, cudaStream_t stream) {
+  const int64_t n = batch * num_v * num_u;
+  const bool resize = state.cached_batch != batch ||
+                      state.cached_num_v != num_v ||
+                      state.cached_num_u != num_u;
+  state.matx_accum.ensure(static_cast<size_t>(n) *
+                          sizeof(cuda::std::complex<T>), stream);
+  if (resize) {
+    if (cudaMemsetAsync(state.matx_accum.ptr, 0,
+                        state.matx_accum.bytes, stream) != cudaSuccess) {
+      throw std::runtime_error("BackprojectionOp: matx accum memset");
+    }
+    state.cached_batch = batch;
+    state.cached_num_v = num_v;
+    state.cached_num_u = num_u;
+  }
+}
+
+template <typename T>
+void reset_matx_accum(BackprojectionState<T>& state, cudaStream_t stream) {
+  if (state.matx_accum.ptr == nullptr) {
+    return;
+  }
+  if (cudaMemsetAsync(state.matx_accum.ptr, 0, state.matx_accum.bytes,
+                      stream) != cudaSuccess) {
+    throw std::runtime_error("BackprojectionOp: matx accum reset");
+  }
+}
+
+template <typename T>
+void launch_matx(BackprojectionBackend backend,
+                 BackprojectionState<T>& state, const void* profiles,
+                 const T* positions, const T* lattice, int num_v, int num_u,
+                 int Np, int Nfft, int batch_index, double frequency,
+                 double dr, cudaStream_t stream) {
+  using C = cuda::std::complex<T>;
+  using Vec = std::conditional_t<std::is_same_v<T, float>, float3, double3>;
+  const int pixels = num_v * num_u;
+  C* img_ptr = state.matx_accum.template as<C>() +
+               static_cast<size_t>(batch_index) * pixels;
+  auto img = matx::make_tensor<C, 2>(img_ptr, {num_v, num_u});
+  auto prof = matx::make_tensor<C, 2>(
+      static_cast<C*>(const_cast<void*>(profiles)), {Np, Nfft});
+  auto pos = matx::make_tensor<Vec, 1>(
+      reinterpret_cast<Vec*>(const_cast<T*>(positions)), {Np});
+  auto vox = matx::make_tensor<Vec, 2>(
+      reinterpret_cast<Vec*>(const_cast<T*>(lattice)), {num_v, num_u});
+  auto r0 = matx::make_tensor<double, 1>(state.r0.template as<double>(), {Np});
+  const auto params = matx_params(backend, frequency, dr);
+  (img = matx::experimental::sar_bp(img, prof, pos, vox, r0, params))
+      .run(stream);
+}
+
+template <typename T>
+void emit_matx_accum(BackprojectionState<T>& state, T* dst, int64_t batch,
+                     int64_t num_v, int64_t num_u, cudaStream_t stream) {
+  const size_t bytes = static_cast<size_t>(batch * num_v * num_u) *
+                       sizeof(cuda::std::complex<T>);
+  if (cudaMemcpyAsync(dst, state.matx_accum.ptr, bytes,
+                      cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
+    throw std::runtime_error("BackprojectionOp: matx emit copy");
+  }
+}
+#endif  // sar_bp.cuh
+
+}  // namespace holoscan::radar::detail

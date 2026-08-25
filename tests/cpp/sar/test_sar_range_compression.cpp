@@ -162,15 +162,17 @@ double minus_3db_width_bins(const std::vector<double>& magnitude) {
 // analytically rather than transformed.
 //
 // A target at differential range dR contributes s[k] = a * exp(-j*4*pi*f_k*
-// dR/c). Writing f_k = f0 + k*df and using the operator's own bin spacing,
-// the k-dependent factor is exp(-j*2*pi*k*n_t/N) with n_t = dR / spacing, so
-// the inverse transform is a Dirichlet kernel centred on n_t:
+// dR/c) on native FX (f_k = f0 + k*df). Compression ifftshifts so stored
+// sample K/2 is IFFT DC (f_ref = f0 + (K/2)*df), optionally pads the
+// spectral edges, then inverse-transforms. Occupied DFT bins are
+// m = -(K/2) .. K/2-1 (even K), and the inverse is a Dirichlet kernel
+// centred on n_t = dR / spacing:
 //
-//   out[n] = (a/N) * exp(-j*4*pi*f0*dR/c) * sum_k exp(j*2*pi*k*(n - n_t)/N)
+//   out[n] = (a/N) * exp(-j*4*pi*f_ref*dR/c)
+//            * sum_{m=-K/2}^{K/2-1} exp(j*2*pi*m*(n - n_t)/N)
 //
-// with the sum in closed form below. `n` is the *signed* bin index — the
-// centred output index i maps to n = i - N/2, which is precisely the N/2
-// convention under test.
+// `n` is the *signed* bin index — the centred output index i maps to
+// n = i - N/2, which is precisely the N/2 convention under test.
 std::complex<double> predicted_bin(const SarPhaseHistoryConfig& cfg,
                                    const SarPointTarget& target, int64_t nfft,
                                    int64_t index, FftNorm norm) {
@@ -178,22 +180,32 @@ std::complex<double> predicted_bin(const SarPhaseHistoryConfig& cfg,
                      sar_range_bin_spacing(cfg, nfft);
   const double n = static_cast<double>(index - nfft / 2);
   const double delta = n - n_t;
+  const double df =
+      cfg.bandwidth / static_cast<double>(cfg.num_samples - 1);
   const double f0 = cfg.carrier_frequency - 0.5 * cfg.bandwidth;
+  const int64_t k0 = cfg.num_samples / 2;
+  const double f_ref = f0 + static_cast<double>(k0) * df;
   const std::complex<double> carrier = std::polar(
-      1.0, -4.0 * kPi * f0 * target.differential_range / cfg.propagation_speed);
+      1.0, -4.0 * kPi * f_ref * target.differential_range /
+               cfg.propagation_speed);
 
-  // sum_{k=0}^{K-1} exp(j*2*pi*k*delta/N), K = num_samples (the padded tail
-  // contributes nothing), evaluated as its Dirichlet closed form.
+  // sum_{q=0}^{K-1} exp(j*2*pi*q*delta/N), K = num_samples, then rotate
+  // the start index from 0 to -k0 so the occupied set is centred.
   const int64_t k_count = cfg.num_samples;
   const double arg = kPi * delta / static_cast<double>(nfft);
-  std::complex<double> sum;
+  std::complex<double> geometric;
   if (std::abs(std::sin(arg)) < 1e-12) {
-    sum = std::complex<double>(static_cast<double>(k_count), 0.0);
+    geometric = std::complex<double>(static_cast<double>(k_count), 0.0);
   } else {
     const double magnitude =
         std::sin(arg * static_cast<double>(k_count)) / std::sin(arg);
-    sum = std::polar(magnitude, arg * static_cast<double>(k_count - 1));
+    geometric =
+        std::polar(magnitude, arg * static_cast<double>(k_count - 1));
   }
+  const std::complex<double> sum =
+      geometric *
+      std::polar(1.0, -2.0 * kPi * static_cast<double>(k0) * delta /
+                          static_cast<double>(nfft));
 
   double scale = 1.0;
   switch (norm) {
@@ -341,6 +353,37 @@ TEST(SARRangeCompressionOpTest, HalfBinTargetMatchesAnalyticProfileInPhase) {
   for (int64_t i = 0; i < kSamples; ++i) {
     const std::complex<double> expected =
         predicted_bin(cfg, target, kSamples, i, FftNorm::kBackward);
+    EXPECT_NEAR(std::abs(profile[static_cast<size_t>(i)] - expected), 0.0,
+                1e-6 * peak_mag)
+        << "bin " << i;
+  }
+}
+
+// Pad-in-middle of the rotated row is a different interpolant from
+// pad-at-end of native FX. Magnitude PSLR / span tests pass either
+// way; the Dirichlet in phase is what fails the wrong pad.
+TEST(SARRangeCompressionOpTest, NfftPadMatchesAnalyticProfileInPhase) {
+  const SarPhaseHistoryConfig cfg = make_config();
+  const int64_t nfft = 2 * kSamples;
+  const double spacing = sar_range_bin_spacing(cfg, nfft);
+  const auto target = target_at(33.5 * spacing, {0.7, -0.4});
+
+  const RunOutputs out = run_frame<double>(
+      synthesize(cfg, {target}), {kPulses, kSamples},
+      holoscan::Arg("waveform") = to_descriptor(cfg),
+      holoscan::Arg("nfft") = nfft);
+
+  const auto profile = slice<double>(out.profiles, 0, 0);
+  ASSERT_EQ(static_cast<int64_t>(profile.size()), nfft);
+  double peak_mag = 0.0;
+  for (const auto& value : profile) {
+    peak_mag = std::max(peak_mag, std::abs(value));
+  }
+  ASSERT_GT(peak_mag, 0.0);
+
+  for (int64_t i = 0; i < nfft; ++i) {
+    const std::complex<double> expected =
+        predicted_bin(cfg, target, nfft, i, FftNorm::kBackward);
     EXPECT_NEAR(std::abs(profile[static_cast<size_t>(i)] - expected), 0.0,
                 1e-6 * peak_mag)
         << "bin " << i;

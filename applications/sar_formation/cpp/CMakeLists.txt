@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+add_executable(sar_formation sar_formation.cpp sar_image_lut.cu)
+
+# yaml-cpp ships with the Holoscan SDK (found transitively via
+# find_package(holoscan)); the app parses its sidecar JSON (valid YAML)
+# and the app-owned config sections with it.
+find_package(yaml-cpp REQUIRED)
+
+target_link_libraries(sar_formation PRIVATE
+    holoscan::cphd_reader_op
+    holoscan::sar_range_compression_op
+    holoscan::backprojection_op
+    holoscan::tensor_dump_op
+    holoscan::radar_app
+    holoscan::radar_common
+    holoscan::core
+    holoscan::ops::holoviz
+    holoscan::viz
+    yaml-cpp::yaml-cpp
+    CUDA::cudart)
+
+target_include_directories(sar_formation PRIVATE
+    ${PROJECT_SOURCE_DIR}/operators)
+
+# Stage the default config next to the executable so it is found without
+# a CLI argument (the run command's workdir is the app bin directory).
+configure_file(mode01.yaml
+    ${CMAKE_CURRENT_BINARY_DIR}/mode01.yaml COPYONLY)
+configure_file(mode01_smoke.yaml
+    ${CMAKE_CURRENT_BINARY_DIR}/mode01_smoke.yaml COPYONLY)
