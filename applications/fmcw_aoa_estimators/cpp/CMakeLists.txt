@@ -16,15 +16,12 @@ target_link_libraries(fmcw_aoa_estimators PRIVATE
     holoscan::music_estimator_op
     holoscan::root_music_estimator_op
     holoscan::esprit_estimator_op
-    holoscan::feature_assembly_op
     holoscan::detection_reduction_op
     holoscan::cluster_dbscan_op
     holoscan::radar_app
     holoscan::radar_common_simulator
     holoscan::radar_common
     holoscan::core
-    holoscan::ops::holoviz
-    holoscan::viz
     yaml-cpp::yaml-cpp
     CUDA::cudart)
 
@@ -33,3 +30,5 @@ target_include_directories(fmcw_aoa_estimators PRIVATE
 
 configure_file(fmcw_aoa_estimators.yaml
     ${CMAKE_CURRENT_BINARY_DIR}/fmcw_aoa_estimators.yaml COPYONLY)
+configure_file(fmcw_aoa_estimators_smoke.yaml
+    ${CMAKE_CURRENT_BINARY_DIR}/fmcw_aoa_estimators_smoke.yaml COPYONLY)

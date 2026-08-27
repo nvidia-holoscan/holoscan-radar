@@ -1,19 +1,21 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Performance characterization for FMCWRangeDopplerProcessorOp — fused range +
-// optional inline clutter + Doppler in one graph node. Sweeps the
-// (chirps x samples) size ladder, the inline clutter stage (off / mean
-// subtraction), and a multi-channel batch. Every compute run inlines a
-// mid-session [live] clutter_filter override so the cost of toggling the inline
-// clutter stage is measured. Measurement tool only: no timing assertions.
+// Performance characterization for FMCWRangeDopplerProcessorOp — fused
+// range + optional inline clutter + Doppler in one graph node.  Sweeps
+// the (chirps x samples) size ladder, the inline clutter stage (off /
+// mean subtraction), and a multi-channel batch.
 //
-// This tool times the fused node alone; for an end-to-end split vs fused
-// comparison (range → [clutter] → Doppler vs this op), use
+// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application
+// harness.  Mid-session [live] clutter_filter override measurement is
+// deferred — ClutterFilterMethod Input is not exercised on EA
+// (HSDK5_PORT.md §1).  Params still select the clutter method under
+// test.  Measurement tool only: no timing assertions.
+//
+// This tool times the fused node alone; for an end-to-end split vs
+// fused comparison (range → [clutter] → Doppler vs this op), use
 // perf_fmcw_split_vs_fused — do not sum the three per-operator tools.
 // See docs/planning/OPERATOR_DEVELOPMENT.md.
-
-#include <cuda_runtime_api.h>
 
 #include <complex>
 #include <cstdint>
@@ -25,20 +27,20 @@
 #include <utility>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
+#include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/graph.hpp>
 
 #include "fmcw/fmcw_range_doppler_processor_op/fmcw_range_doppler_processor_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
-#include "utils/perf_app.hpp"
 #include "utils/perf_driver.hpp"
+#include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
-#include "utils/perf_sink.hpp"
-#include "utils/perf_source.hpp"
 #include "utils/tensor_factory.hpp"
 
 namespace hr = holoscan::radar;
@@ -70,7 +72,8 @@ const std::vector<SizeSpec>& size_ladder() {
       {"sm", 32, 256, "compact sensor"},
       {"md", 64, 512, "common dev size"},
       {"lg", 128, 1024, "moderate production-scale"},
-      {"xl", 256, 2048, "range-heavy moderate (v1 upper bound)"}};
+      {"xl", 256, 2048,
+       "range-heavy moderate (v1 upper bound)"}};
   return ladder;
 }
 
@@ -86,7 +89,8 @@ const SizeSpec* find_size(const std::string& id) {
 const SizeSpec& must_find_size(const std::string& id) {
   const SizeSpec* s = find_size(id);
   if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id << "'\n";
+    std::cerr << "internal error: unknown size id '"
+              << id << "'\n";
     std::abort();
   }
   return *s;
@@ -95,19 +99,14 @@ const SizeSpec& must_find_size(const std::string& id) {
 std::string clutter_tag(hr::ClutterFilterMethod m) {
   switch (m) {
     case hr::ClutterFilterMethod::kNone: return "noclt";
-    case hr::ClutterFilterMethod::kMeanSubtraction: return "msub";
-    case hr::ClutterFilterMethod::kSingleDelay: return "sdel";
-    case hr::ClutterFilterMethod::kDoubleDelay: return "ddel";
+    case hr::ClutterFilterMethod::kMeanSubtraction:
+      return "msub";
+    case hr::ClutterFilterMethod::kSingleDelay:
+      return "sdel";
+    case hr::ClutterFilterMethod::kDoubleDelay:
+      return "ddel";
   }
   return "unk";
-}
-
-// Toggle the inline clutter stage so a live override always changes the work:
-// off -> mean subtraction, any-on -> off.
-hr::ClutterFilterMethod flip_clutter(hr::ClutterFilterMethod m) {
-  return m == hr::ClutterFilterMethod::kNone
-             ? hr::ClutterFilterMethod::kMeanSubtraction
-             : hr::ClutterFilterMethod::kNone;
 }
 
 hr::FMCWWaveformDescriptor make_waveform() {
@@ -122,75 +121,83 @@ hr::FMCWWaveformDescriptor make_waveform() {
 
 std::vector<int64_t> cube_shape(const FusedScenario& scen) {
   if (scen.channels > 1) {
-    return {scen.channels, scen.num_chirps, scen.samples_per_chirp};
+    return {scen.channels, scen.num_chirps,
+            scen.samples_per_chirp};
   }
   return {scen.num_chirps, scen.samples_per_chirp};
 }
 
-// ---------------------------------------------------------------------------
-// Mini-application: adc_cube source -> fused op -> terminal (rd_maps) + null
-// (range_bins, velocity_bins) sinks + a [live] clutter_filter override source.
-// ---------------------------------------------------------------------------
-template <typename T>
-class FusedPerfApp : public holoscan::Application {
- public:
-  const FusedScenario* scen{nullptr};
-  perf::TimingCollector* collector{nullptr};
-  holoscan::TensorMap frame;  // adc_cube
-  hr::FMCWWaveformDescriptor waveform;
-  hr::ClutterFilterMethod override_clutter{
-      hr::ClutterFilterMethod::kMeanSubtraction};
-  int64_t override_at{0};
-  int total_frames{25};
+// -------------------------------------------------------------------
+// Graph: adc_cube source → fused op → terminal (rd_maps) + null
+// (range_bins, velocity_bins).  Both axis outputs are always emitted
+// here because a valid waveform is set.
+// -------------------------------------------------------------------
+perf::TimingCollector run_fused_graph(
+    const FusedScenario& scen, int total_frames) {
+  auto cube = perf::make_iq_cube_device<PerfPrecision>(
+      cube_shape(scen));
+  return perf::run_perf_graph(
+      std::move(cube), total_frames, "rdproc-perf",
+      [&](holoscan::Graph& graph, const auto& src,
+          holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_chirps = scen.num_chirps;
+        extents.max_range_bins = scen.samples_per_chirp;
+        if (scen.channels > 1) {
+          extents.max_rx = scen.channels;
+        }
+        auto op =
+            graph.op<hr::FMCWRangeDopplerProcessorOp<
+                PerfPrecision>>("fused", extents);
+        hr::FMCWRangeDopplerProcessorParams params;
+        params.waveform = make_waveform();
+        params.clutter_filter = scen.clutter;
+        op.set_params(std::move(params));
+        const auto sink =
+            graph.op<perf::PerfTerminalSinkOp>(
+                "out_sink");
+        const auto rb =
+            graph.op<perf::PerfNullSinkOp>("rb_sink");
+        const auto vb =
+            graph.op<perf::PerfNullSinkOp>("vb_sink");
+        const holoscan::ConnectionOptions q{
+            .queue_depth = 4U};
+        graph.add_flow(src->out, op->adc_cube, q);
+        graph.add_flow(op->rd_maps, sink->in, q);
+        graph.add_flow(op->range_bins, rb->in, q);
+        graph.add_flow(op->velocity_bins, vb->in, q);
+        perf::bind_tensor_out(
+            options, "fused", "rd_maps");
+        perf::bind_tensor_out(
+            options, "fused", "range_bins");
+        perf::bind_tensor_out(
+            options, "fused", "velocity_bins");
+      });
+}
 
-  void compose() override {
-    using holoscan::Arg;
-    auto op = make_operator<hr::FMCWRangeDopplerProcessorOp<T>>(
-        "fused", Arg("waveform") = waveform,
-        Arg("clutter_filter") = scen->clutter);
-
-    auto src = make_operator<perf::PerfTensorSourceOp<perf::AdcCubePort>>(
-        "src", make_condition<holoscan::CountCondition>(total_frames));
-    src->configure(collector, frame);
-    add_flow(src, op, {{"adc_cube", "adc_cube"}});
-
-    auto term = make_operator<perf::PerfTerminalSinkOp>("rd_sink");
-    term->configure(collector);
-    add_flow(op, term, {{"rd_maps", "input"}});
-
-    // Optional axes are emitted (waveform is set); drain both so the operator
-    // ticks and both axis paths are exercised.
-    for (const char* port : {"range_bins", "velocity_bins"}) {
-      auto ns =
-          make_operator<perf::PerfNullSinkOp>(std::string(port) + "_sink");
-      add_flow(op, ns, {{port, "input"}});
-    }
-
-    auto ovr =
-        make_operator<perf::PerfOverrideSourceOp<hr::ClutterFilterMethod>>(
-            "ovr", make_condition<holoscan::CountCondition>(total_frames));
-    ovr->configure(override_at, override_clutter);
-    add_flow(ovr, op, {{"output", "clutter_filter"}});
-  }
-};
-
-void fill_throughput(perf::ResultRow* row, const FusedScenario& scen,
+void fill_throughput(perf::ResultRow* row,
+                     const FusedScenario& scen,
                      double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
   const double sec = median_ms / 1000.0;
   const double batch = static_cast<double>(scen.channels);
-  const double chirps = static_cast<double>(scen.num_chirps);
-  const double n = static_cast<double>(scen.samples_per_chirp);
-  row->cells_per_second = batch * chirps * n / sec;  // complex rd-map cells/s
-  row->slices_per_second = batch / sec;              // full cubes/s
+  const double chirps =
+      static_cast<double>(scen.num_chirps);
+  const double n =
+      static_cast<double>(scen.samples_per_chirp);
+  row->cells_per_second =
+      batch * chirps * n / sec;  // complex rd-map cells/s
+  row->slices_per_second = batch / sec;  // full cubes/s
 
   const double csz = sizeof(std::complex<PerfPrecision>);
   const double in_bytes = batch * chirps * n * csz;
   const double out_bytes =
-      batch * chirps * n * csz + (chirps + n) * sizeof(PerfPrecision);
-  row->estimated_effective_gbps = (in_bytes + out_bytes) / sec / 1e9;
+      batch * chirps * n * csz +
+      (chirps + n) * sizeof(PerfPrecision);
+  row->estimated_effective_gbps =
+      (in_bytes + out_bytes) / sec / 1e9;
 }
 
 perf::ResultRow base_row(const FusedScenario& scen) {
@@ -199,15 +206,18 @@ perf::ResultRow base_row(const FusedScenario& scen) {
   row.op_name = "FMCWRangeDopplerProcessorOp";
   row.variant = clutter_tag(scen.clutter);
   row.size_id = scen.size_id;
-  row.map_shape = {scen.num_chirps, scen.samples_per_chirp};
+  row.map_shape = {scen.num_chirps,
+                   scen.samples_per_chirp};
   row.input_shape = cube_shape(scen);
   row.out_batch = scen.channels;
   row.k = scen.samples_per_chirp;
-  row.notes = "live_override=clutter_filter";
+  // [EA HSDK5 ONLY] live override timing deferred — HSDK5_PORT.md §1.
+  row.notes = "live_override=deferred_ea";
   return row;
 }
 
-FusedScenario make_scenario(hr::ClutterFilterMethod clutter, const SizeSpec& s,
+FusedScenario make_scenario(hr::ClutterFilterMethod clutter,
+                            const SizeSpec& s,
                             int64_t channels = 1) {
   FusedScenario sc;
   sc.size_id = s.id;
@@ -216,7 +226,8 @@ FusedScenario make_scenario(hr::ClutterFilterMethod clutter, const SizeSpec& s,
   sc.channels = channels;
   sc.clutter = clutter;
   std::ostringstream id;
-  id << "rdproc_" << clutter_tag(clutter) << "_" << s.id;
+  id << "rdproc_" << clutter_tag(clutter) << "_"
+     << s.id;
   if (channels > 1) {
     id << "_ch" << channels;
   }
@@ -225,11 +236,10 @@ FusedScenario make_scenario(hr::ClutterFilterMethod clutter, const SizeSpec& s,
   return sc;
 }
 
-// ---------------------------------------------------------------------------
-// Traits. The fused op has [live] override ports (clutter_filter exercised
-// inline in run_scenario); it needs no process warmup or post-run summary and
-// emits no bool tensors, so it takes the driver defaults.
-// ---------------------------------------------------------------------------
+// -------------------------------------------------------------------
+// Traits.  [EA HSDK5 ONLY] live clutter_filter override is deferred
+// (HSDK5_PORT §1).
+// -------------------------------------------------------------------
 struct FusedTraits : perf::PerfDriverDefaults {
   using Scenario = FusedScenario;
 
@@ -237,16 +247,23 @@ struct FusedTraits : perf::PerfDriverDefaults {
     return "perf_fmcw_range_doppler_processor";
   }
   static const char* tool_description() {
-    return "FMCWRangeDopplerProcessorOp (fused) performance characterization";
+    return "FMCWRangeDopplerProcessorOp (fused) "
+           "performance characterization "
+           "(HSDK 5 Graph)";
   }
   static const char* sizes_all_help() {
-    return "No-clutter size sweep across the full ladder";
+    return "No-clutter size sweep across the full "
+           "ladder";
   }
   static const char* sizes_subset_help() {
-    return "No-clutter size sweep across an explicit subset";
+    return "No-clutter size sweep across an explicit "
+           "subset";
   }
   static const char* full_help() {
-    return "Full matrix (clutter modes x sizes x channel batch)";
+    return "Full matrix (clutter modes x sizes x "
+           "channel batch); live-override timing "
+           "deferred on HSDK 5 EA "
+           "(HSDK5_PORT.md §1)";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -262,16 +279,19 @@ struct FusedTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static std::vector<FusedScenario> build_default_matrix() {
+  static std::vector<FusedScenario>
+  build_default_matrix() {
     std::vector<FusedScenario> out;
     for (const char* sid : {"xs", "md", "lg", "xl"}) {
-      out.push_back(
-          make_scenario(hr::ClutterFilterMethod::kNone, must_find_size(sid)));
+      out.push_back(make_scenario(
+          hr::ClutterFilterMethod::kNone,
+          must_find_size(sid)));
     }
     const SizeSpec& md = must_find_size("md");
-    out.push_back(
-        make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, md));
-    out.push_back(make_scenario(hr::ClutterFilterMethod::kNone, md, 4));
+    out.push_back(make_scenario(
+        hr::ClutterFilterMethod::kMeanSubtraction, md));
+    out.push_back(make_scenario(
+        hr::ClutterFilterMethod::kNone, md, 4));
     return out;
   }
 
@@ -281,27 +301,32 @@ struct FusedTraits : perf::PerfDriverDefaults {
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
       if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        std::cerr << "warning: unknown size id '"
+                  << sid << "', skipping\n";
         continue;
       }
-      out.push_back(make_scenario(hr::ClutterFilterMethod::kNone, *s));
+      out.push_back(make_scenario(
+          hr::ClutterFilterMethod::kNone, *s));
     }
     return out;
   }
 
-  static std::vector<FusedScenario> build_full_matrix() {
+  static std::vector<FusedScenario>
+  build_full_matrix() {
     std::vector<FusedScenario> out;
     for (const auto& s : size_ladder()) {
-      for (auto c : {hr::ClutterFilterMethod::kNone,
-                     hr::ClutterFilterMethod::kMeanSubtraction,
-                     hr::ClutterFilterMethod::kSingleDelay}) {
+      for (auto c :
+           {hr::ClutterFilterMethod::kNone,
+            hr::ClutterFilterMethod::kMeanSubtraction,
+            hr::ClutterFilterMethod::kSingleDelay}) {
         out.push_back(make_scenario(c, s));
       }
     }
     for (const char* sid : {"md", "lg"}) {
       const SizeSpec& s = must_find_size(sid);
       for (int64_t ch : {4, 16}) {
-        out.push_back(make_scenario(hr::ClutterFilterMethod::kNone, s, ch));
+        out.push_back(make_scenario(
+            hr::ClutterFilterMethod::kNone, s, ch));
       }
     }
     return out;
@@ -310,43 +335,33 @@ struct FusedTraits : perf::PerfDriverDefaults {
   static void run_scenario(const FusedScenario& scen,
                            const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    const perf::RunPlan plan =
+        perf::make_run_plan(rs, /*has_override=*/false);
     const auto samples = perf::collect_scenario_samples(
-        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
-          perf::TimingCollector collector;
-          auto cube = perf::single_map(
-              perf::make_iq_cube_device<PerfPrecision>(cube_shape(scen)),
-              "adc_cube");
-
-          collector.t_construct = perf::Clock::now();
-          auto app = holoscan::make_application<FusedPerfApp<PerfPrecision>>();
-          app->scen = &scen;
-          app->collector = &collector;
-          app->frame = std::move(cube);
-          app->waveform = make_waveform();
-          app->override_clutter = flip_clutter(scen.clutter);
-          app->override_at = p.override_at;
-          app->total_frames = p.total_frames;
-          app->run();
-          return collector;
+        rs, plan,
+        [&](int /*rep*/, const perf::RunPlan& p) {
+          return run_fused_graph(
+              scen, p.total_frames);
         });
 
-    perf::append_setup_row(base_row(scen), samples, report);
+    perf::append_setup_row(
+        base_row(scen), samples, report);
 
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
     row.notes =
-        "cold_ms is first-frame latency including both FFT plan builds; "
-        "median/p90 are pre-override steady state; override_ms is peak latency "
-        "over the 3-frame live clutter_filter toggle; cells/s is complex "
-        "rd-map cells/s";
+        "cold_ms is first-frame latency including "
+        "both FFT plan builds; median/p90 are "
+        "post-warmup steady state; live "
+        "clutter_filter override timing deferred "
+        "(HSDK5_PORT.md §1); "
+        "cells/s is complex rd-map cells/s";
     report->results.push_back(row);
   }
 
-  // Pay CUDA + Holoscan first-Application (and both first cuFFT plans) costs on
-  // a discarded xs run so scenario #1 cold_ms is not inflated by process init.
-  static void process_warmup(const perf::RunSettings&) {
+  static void process_warmup(
+      const perf::RunSettings&) {
     perf::run_process_warmup([] {
       perf::PerfReport discarded;
       perf::RunSettings warm;
@@ -354,7 +369,9 @@ struct FusedTraits : perf::PerfDriverDefaults {
       warm.measured_frames = 2;
       warm.repeats = 1;
       run_scenario(
-          make_scenario(hr::ClutterFilterMethod::kNone, must_find_size("xs")),
+          make_scenario(
+              hr::ClutterFilterMethod::kNone,
+              must_find_size("xs")),
           warm, &discarded);
     });
   }
@@ -363,5 +380,6 @@ struct FusedTraits : perf::PerfDriverDefaults {
 }  // namespace
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<FusedTraits>(argc, argv);
+  return holoscan::radar::perf::perf_main<FusedTraits>(
+      argc, argv);
 }

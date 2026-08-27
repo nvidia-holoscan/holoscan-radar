@@ -4,6 +4,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -12,6 +13,7 @@
 #include <holoscan/core/operator_spec.hpp>
 
 #include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/python/py_operator_utils.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
@@ -29,9 +31,20 @@ class PyMIMODeinterleaveOp : public MIMODeinterleaveOp<T> {
 
   PyMIMODeinterleaveOp(
       Fragment* fragment, const py::args& args,
+      std::int64_t max_tx = 8,
+      std::int64_t max_rx = 16,
+      std::int64_t max_chirps = 512,
+      std::int64_t max_samples = 4096,
       const TXSchedule& tx_schedule = TXSchedule{},
       const std::string& name = "mimo_deinterleave")
-      : MIMODeinterleaveOp<T>() {
+      : MIMODeinterleaveOp<T>([&] {
+          MaxTensorExtents extents;
+          extents.max_tx = max_tx;
+          extents.max_rx = max_rx;
+          extents.max_chirps = max_chirps;
+          extents.max_samples_per_chirp = max_samples;
+          return extents;
+        }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -51,11 +64,22 @@ void bind_mimo_deinterleave(py::module_& m, const char* class_name) {
       "TDM front-end marshaling: split interleaved slow-time into TX axis.\n\n"
       "Parameters\n----------\n"
       "fragment : holoscan.core.Fragment\n"
+      "max_tx : int, optional\n"
+      "max_rx : int, optional\n"
+      "max_chirps : int, optional\n"
+      "max_samples : int, optional\n"
       "tx_schedule : TXSchedule, optional\n"
       "name : str, optional\n")
-      .def(py::init<Fragment*, const py::args&, const TXSchedule&,
+      .def(py::init<Fragment*, const py::args&,
+                    std::int64_t, std::int64_t,
+                    std::int64_t, std::int64_t,
+                    const TXSchedule&,
                     const std::string&>(),
            py::arg("fragment"),
+           py::arg("max_tx") = 8,
+           py::arg("max_rx") = 16,
+           py::arg("max_chirps") = 512,
+           py::arg("max_samples") = 4096,
            py::arg("tx_schedule") = TXSchedule{},
            py::arg("name") = "mimo_deinterleave")
       .def("setup", &Op::setup, py::arg("spec"));

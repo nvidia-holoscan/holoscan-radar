@@ -110,6 +110,8 @@ noise_snr_db: 18.0
 # roundness.
 visualization:
   enabled: true
+  window_width: 1280
+  window_height: 720
   marker_radius: 0.004
   marker_outline: 0.002
   marker_segments: 20

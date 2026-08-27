@@ -15,8 +15,10 @@
 
 #include "radar_app/report/cadence_meter.hpp"
 #include "radar_app/report/report_ops.hpp"
+#if defined(HOLOSCAN_RADAR_HAS_HOLOVIZ)
 #include "radar_app/viz/display.hpp"
 #include "radar_app/viz/viz.hpp"
+#endif
 #include "radar_common/python/py_operator_utils.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 
@@ -70,6 +72,8 @@ class PyNullSinkOp : public NullSinkOp {
     python::add_conditions_and_resources(this, args);
   }
 };
+
+#if defined(HOLOSCAN_RADAR_HAS_HOLOVIZ)
 
 class PyRdChannelSliceOp : public RdChannelSliceOp {
  public:
@@ -172,6 +176,8 @@ class PyBoresightViewOp : public BoresightViewOp {
   }
 };
 
+#endif  // HOLOSCAN_RADAR_HAS_HOLOVIZ
+
 void bind_radar_app(py::module_& m) {
   py::class_<CadenceMeter, std::shared_ptr<CadenceMeter>>(
       m, "CadenceMeter",
@@ -213,6 +219,8 @@ void bind_radar_app(py::module_& m) {
       .def(py::init<Fragment*, const py::args&, const std::string&>(),
            py::arg("fragment"), py::arg("name") = "null_sink")
       .def("setup", &NullSinkOp::setup, py::arg("spec"));
+
+#if defined(HOLOSCAN_RADAR_HAS_HOLOVIZ)
 
   py::class_<RdChannelSliceOp, PyRdChannelSliceOp, Operator,
              std::shared_ptr<RdChannelSliceOp>>(
@@ -327,6 +335,8 @@ void bind_radar_app(py::module_& m) {
         "kLutSize-entry RGBA turbo colormap for HolovizOp color_lut.");
   m.def("cluster_palette", &cluster_palette,
         "Categorical RGBA palette for cluster-overlay disc layers.");
+
+#endif  // HOLOSCAN_RADAR_HAS_HOLOVIZ
 }
 
 }  // namespace

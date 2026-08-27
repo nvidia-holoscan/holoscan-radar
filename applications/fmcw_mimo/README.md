@@ -73,6 +73,13 @@ a display. When visualization is on, the RD map shown is the non-coherent
 integration over the virtual-channel axis — the surface CFAR thresholds
 (`nci_axes: [0]`) — not a single virtual channel.
 
+**[EA HSDK5 ONLY]** On the `hsdk-5.0` branch Holoviz is absent from the EA
+package, so the window is drawn by the Xlib stand-in `X11RdViewerOp`
+(`radar_app/viz/`): RD map with cluster-colored detections and representative
+crosshairs, legend, rolling range/velocity plots, and a boresight az/el scatter
+of the virtual-array beamscan angles. X11 only — an `Xvfb` `DISPLAY` suffices.
+See [`HSDK5_PORT.md`](../../docs/planning/HSDK5_PORT.md) §6.
+
 ## Configuration notes
 
 | Topic | TDM (`fmcw_mimo.yaml`) | DDM (`fmcw_mimo_ddm.yaml`) | DDM-NL (`fmcw_mimo_ddm_phase_codes.yaml`) |

@@ -12,20 +12,25 @@ target_link_libraries(fmcw_simo PRIVATE
     holoscan::cfar_detector_op
     holoscan::snapshot_gather_op
     holoscan::beamscan_estimator_op
-    holoscan::feature_assembly_op
     holoscan::detection_reduction_op
     holoscan::cluster_dbscan_op
     holoscan::radar_app
     holoscan::radar_common_simulator
     holoscan::radar_common
     holoscan::core
-    holoscan::ops::holoviz
-    holoscan::viz
     yaml-cpp::yaml-cpp
     CUDA::cudart)
+
+if(HOLOSCAN_RADAR_HAS_HOLOVIZ)
+    target_link_libraries(fmcw_simo PRIVATE
+        holoscan::ops::holoviz
+        holoscan::viz)
+endif()
 
 target_include_directories(fmcw_simo PRIVATE
     ${PROJECT_SOURCE_DIR}/operators)
 
 configure_file(fmcw_simo.yaml
     ${CMAKE_CURRENT_BINARY_DIR}/fmcw_simo.yaml COPYONLY)
+configure_file(fmcw_simo_smoke.yaml
+    ${CMAKE_CURRENT_BINARY_DIR}/fmcw_simo_smoke.yaml COPYONLY)

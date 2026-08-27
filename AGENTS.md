@@ -2,7 +2,7 @@
 
 GPU radar signal-processing operator library for the NVIDIA Holoscan SDK: Holoscan operators implemented in C++/CUDA on [MatX](https://github.com/NVIDIA/MatX), composed into pipelines purely by port connections — no glue code between operators.
 
-**Current phase: FMCW implementation.** The operator contracts (ports, shapes, dtypes, parameters) are fully specified in `docs/planning/`; implementation lands against them. The signal-processing group (`operators/fmcw/`: range, clutter, Doppler, fused range-Doppler) and the shared `operators/common/` library are implemented; detection, clustering, angle estimation, and MIMO marshaling are next.
+**Current phase: FMCW implementation.** The operator contracts (ports, shapes, dtypes, parameters) are fully specified in `docs/planning/`; implementation lands against them. The signal-processing (`operators/fmcw/`: range, clutter, Doppler, fused range-Doppler), detection, clustering, and angle-estimation groups plus the shared `operators/common/` library are implemented; MIMO marshaling is next. **[EA HSDK5 ONLY]** On this branch, "implemented" and "ported to HSDK 5" differ — see the allow-list and progress table in [`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md).
 
 ## [EA HSDK5 ONLY] Temporary development environment
 
@@ -19,11 +19,14 @@ as the source of truth; prefer each page's `.md` form, and use the
 to find applicable pages. Do not infer HSDK 5 behavior from HSDK 4.x code.
 Repository planning documents remain authoritative for this library's operator
 contracts. Record durable migration decisions there rather than in this file.
+Track HSDK 5 / EA port friction in
+[`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md) (not
+`TEAM_BLOCKED.md`).
 
 Before merging the HSDK 5 port into `main` for the public release, search the
 entire repository for `[EA HSDK5 ONLY]` and remove every marked workaround,
-including this section. Do not rely on conversation context when performing
-that cleanup.
+including this section and `HSDK5_PORT.md`. Do not rely on conversation
+context when performing that cleanup.
 
 ## Source of truth
 
@@ -36,6 +39,7 @@ Read before starting non-trivial work, in this precedence order:
 5. [`docs/planning/NEW_OPERATOR_CHECKLIST.md`](docs/planning/NEW_OPERATOR_CHECKLIST.md) — landing gate; verify before claiming an operator (or variant slice) done.
 6. [`docs/planning/OPERATOR_DEVELOPMENT.md`](docs/planning/OPERATOR_DEVELOPMENT.md) — how to implement well: hot-path discipline, diagnosis, `[live]`/calibration pitfalls, tests, and performance characterization (lessons from landed operators).
 7. [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md) — index of items blocked on a team decision (detail in each operator’s `OPEN_ITEMS.md`).
+8. [`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md) — **[EA HSDK5 ONLY]** HSDK 5 / EA migration issues (SDK gaps, durable API changes, deferred port work). Executive overview: [`docs/planning/HSDK5_BRANCH_SUMMARY.md`](docs/planning/HSDK5_BRANCH_SUMMARY.md).
 
 Rules that follow from "lockdown":
 
@@ -52,9 +56,9 @@ Rules that follow from "lockdown":
 ## Design invariants (do not violate)
 
 1. **Plain-tensor data ports.** Operators exchange plain tensors on the data plane — never bespoke record/message types (e.g. no "detection" struct: CFAR emits `detection_idx`, `detection_score`, `noise_estimate` as separate tensors). Where producers and consumers need bridging, that is an explicit small add-on operator (`SnapshotGatherOp`, `FeatureAssemblyOp`, `DetectionReductionOp`), not a shared message type.
-2. **Shared descriptors are bounded.** Exactly seven shared config-plane types exist: `ArrayGeometry`, `ShiftInvariantSubarrayPair`, `AngleConvention`, `WindowSpec`, `FMCWWaveformDescriptor`, `DDMCodeDescriptor`, `TXSchedule`. They are parameters, and ride input ports only as `[live]` overrides; the single sanctioned descriptor *output* port is `VirtualArrayAssemblyOp.array_geometry` (runtime-computed virtual geometry). Do not add new shared types or new descriptor-carrying ports without a contract change to `OPERATOR_API.md`.
+2. **Shared descriptors are bounded.** Exactly seven shared config-plane types exist: `ArrayGeometry`, `ShiftInvariantSubarrayPair`, `AngleConvention`, `WindowSpec`, `FMCWWaveformDescriptor`, `DDMCodeDescriptor`, `TXSchedule`. They are parameters, and ride input ports only as `[live]` overrides; the single sanctioned descriptor *output* port is `VirtualArrayAssemblyOp.array_geometry` (runtime-computed virtual geometry). Do not add new shared types or new descriptor-carrying ports without a contract change to `OPERATOR_API.md`. Separately, `MaxTensorExtents` is a **ctor-capture sizing type** for HSDK 5 Tensor pools (not a descriptor, never a Tensor port) — see [`docs/planning/MAX_TENSOR_EXTENTS.md`](docs/planning/MAX_TENSOR_EXTENTS.md).
 3. **Precision by compile-time template instantiation** (single + double). Never a runtime dtype flag, never inferred from data; an instance's inputs and outputs match its templated precision.
-4. **Rank-agnostic batching.** Operate on the meaningful trailing axes; treat leading `...` axes as opaque batch dims; infer shapes from the tensors each tick rather than taking them as parameters. Downstream never assumes fixed shapes — that is what makes shape-changing `[live]` overrides legal.
+4. **Named trailing axes; no opaque leading batch.** Operate on the contract's named axes; infer those extents from the tensors each tick rather than taking them as parameters. Do **not** treat an open-ended leading `...` as an opaque module batch axis — multi-item throughput is an application concern (loop / fan-out). Named leading axes that are part of the contract (e.g. `N_rx`, `M_tx`, `num_az`/`num_el`) remain. Downstream never assumes fixed shapes for those named axes — that is what makes shape-changing `[live]` overrides legal. Fat Tensor outputs take `MaxTensorExtents` at `graph.op()` so pools can be sized before arm.
 5. **`[live]` override convention.** Parameters are build-time config by default; a `[live]` parameter may additionally be overridden in-flight via a same-named non-blocking input port. Costly overrides (FFT plans, window coefficients, CFAR kernels) warn once per new configuration and cache prior ones. Structural parameters (e.g. `cfar_variant`, `angle_convention`, `multiplexing_scheme`) stay static — instantiate separate operators to vary them. Philosophy: don't over-constrain a caller who knows what they're doing; allow reasonable footguns and warn where relevant.
 6. **Convention-free kernels, explicit angle boundary.** Kernels only dot direction vectors with element positions in the fixed canonical array-local frame. `AngleConvention` is a **required parameter with no default** on every operator that consumes or emits angles; it is applied only as a boundary relabeling. `direction_cosine` (u, v) is the convention-free escape hatch.
 7. **Industry-standard operator names** over internal schemes.

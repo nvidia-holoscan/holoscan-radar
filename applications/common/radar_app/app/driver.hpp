@@ -18,29 +18,10 @@
 
 #include <holoscan/holoscan.hpp>
 
-#include "radar_app/viz/display.hpp"
+#include "radar_app/app/config_path.hpp"
+#include "radar_app/viz/display_probe.hpp"
 
 namespace holoscan::radar::app {
-
-// Resolve the config path: the first CLI argument if given, otherwise
-// `default_yaml` staged next to the executable. Bare names like
-// `fmcw_mimo_ddm.yaml` also resolve beside the binary (CMake-staged YAMLs).
-inline std::filesystem::path resolve_config_path(int argc, char** argv,
-                                                  const char* default_yaml) {
-  const auto bin_dir = std::filesystem::path(argv[0]).parent_path();
-  if (argc > 1) {
-    std::filesystem::path given(argv[1]);
-    if (std::filesystem::is_regular_file(given)) {
-      return given;
-    }
-    const auto beside_bin = bin_dir / given.filename();
-    if (std::filesystem::is_regular_file(beside_bin)) {
-      return beside_bin;
-    }
-    return given;  // load_config will report the original path
-  }
-  return bin_dir / default_yaml;
-}
 
 namespace detail {
 
@@ -62,6 +43,9 @@ auto log_cadence_if_present(App* app, int) -> decltype(app->cadence, void()) {
 // ((const std::filesystem::path&) -> decltype(App::cfg)); `App::cfg` must
 // expose .visualize / .headless / .skip_display_check (satisfied by deriving
 // the app's AppConfig from CommonRunConfig).
+//
+// [EA HSDK5 ONLY] Application API is unavailable without Holoviz demos —
+// prefer run_fmcw_graph_app (graph_driver.hpp) on this branch.
 template <class App, class LoadFn>
 int run_fmcw_app(int argc, char** argv, const char* log_prefix,
                  const char* default_yaml, LoadFn&& load_config) {
@@ -75,7 +59,7 @@ int run_fmcw_app(int argc, char** argv, const char* log_prefix,
         !app->cfg.skip_display_check && !gui_available()) {
       HOLOSCAN_LOG_WARN(
           "{}: visualize is enabled but no usable display was detected "
-          "(Holoviz could not initialize a window); running without the "
+          "(no usable display was detected); running without the "
           "visualization window",
           log_prefix);
       app->cfg.visualize = false;

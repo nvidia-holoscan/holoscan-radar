@@ -3,7 +3,62 @@
 Concrete questions surfaced while implementing `ClusterDBSCANOp` against the
 locked contract in [`OPERATOR_API.md`](../../../docs/planning/OPERATOR_API.md).
 None of these silently change the contract; they record decisions taken with a
-faithful default plus the question for the team.
+faithful default plus the question for the team. HSDK 5 / EA migration items
+are indexed in [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md).
+
+---
+
+## 1. Graph mid-stream sticky `[live] min_points` / `max_clusters` coverage
+
+**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”.
+
+**Class:** HSDK 5 EA limitation (not a contract change). See
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
+
+**Interim.**
+
+- Operator still declares sticky `Input<int64_t> min_points` /
+  `Input<int64_t> max_clusters` and resolves via `resolve_sticky_override`.
+- Both live ports are omitted from `contract()` so unwired graphs compile
+  (same pattern as ClutterFilter `method` / SnapshotGather `snapshot_window`).
+- `LiveMinPointsStickyOverride` / `LiveMaxClustersStickyOverride` are
+  `GTEST_SKIP`’d.
+- `perf_cluster_dbscan` measures an inline `min_points` transition with the
+  supported single-clock / exact-contract / single-partition shape.
+- Params authoring covers selection (`MinPointsConfigurableFromParams` /
+  `MaxClustersConfigurableFromParams`).
+
+**Next.** Restore sticky temporal policy + Graph sticky unit tests on a newer
+EA / GA (shared recipe with ClutterFilter §1).
+
+**Status:** open for sticky unit tests and `max_clusters` perf isolation;
+`min_points` perf timing is restored.
+
+---
+
+## 2. `[live] epsilon` is Params-only (unbounded vector)
+
+**Blocks checklist:** Tests → live `epsilon` mid-stream sticky override.
+
+**Class:** Durable HSDK 5 (`PublishedPayload` admission). See
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9.
+
+**What fails.** `Input<std::vector<double>>` is rejected at compile time.
+`epsilon` is length `1` (isotropic) or `num_features` (per-axis); `num_features`
+comes from the caller-assembled `points` matrix and is unbounded, so a fixed
+POD like `SnapshotWindowOverride` does not fit.
+
+**Interim.** `epsilon` stays on `ClusterDBSCANParams` only (`set_params` /
+YAML). `LiveEpsilonStickyOverride` is `GTEST_SKIP`’d. Params coverage remains
+(`EpsilonConfigurableFromParams`, anisotropic / isotropic unit tests). Scalar
+live ports (`min_points` / `max_clusters`) still declare sticky Inputs (§1).
+
+**Next.** Prefer `Input<Tensor>` (or a durable schema / bounded POD once a
+module max-feature count is pinned) and restore sticky live + Graph tests.
+
+**Status:** open — ported compute path; live vector port deferred.
+
+---
 
 ## 3. Brute-force `O(num_points²)` neighbor graph — scaling (perf follow-up)
 
@@ -33,6 +88,28 @@ faithful default plus the question for the team.
   `num_points`, mirroring the CFAR dense-buffer pattern, if profiling shows the
   allocation matters. Deferred.
 - **Status.** `landed with caveat`.
+
+## 5. Performance harness (closed for Graph + scalar timing)
+
+`performance/cpp/perf_cluster_dbscan.cpp` uses the HSDK 5 Graph source and
+reports cold / steady / inline `min_points` override timing. `epsilon` remains
+Params-only (§2); dedicated `max_clusters` override isolation remains in §1.
+
+**Status:** closed for the Graph port and representative scalar override.
+
+## 6. Python bindings
+
+**Blocks checklist:** only if this PR were a bindings wave (module-wide
+Python is deferred per checklist / STATUS).
+
+**Class:** Our deferred work + EA incomplete Python surface. See
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §6.
+
+Existing `python/_cluster_dbscan_op_bindings.cpp` is still the HSDK 4.x
+`Fragment` / `Arg` trampoline and is not built
+(`HOLOSCAN_RADAR_BUILD_PYTHON=OFF`).
+
+**Status:** open — deferred; not required to land the C++ HSDK 5 port.
 
 ## 7. Scope vs. general-purpose DBSCAN (deliberate non-features)
 

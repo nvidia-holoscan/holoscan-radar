@@ -55,6 +55,11 @@ radar_app/
   app/source.hpp          SimAdcSourceOp — rank-agnostic synthetic ADC source
   app/driver.hpp          resolve_config_path + run_fmcw_app (the shared main:
                           load config, display-probe downgrade, config(), run())
+  app/config_path.hpp     resolve_config_path, shared by both drivers
+  app/graph_driver.hpp    [EA HSDK5 ONLY] run_fmcw_graph_app + AppFrameBank —
+                          the Graph-API counterpart of run_fmcw_app
+  app/physical_points_op.hpp  [EA HSDK5 ONLY] PhysicalRangeVelocityPointsOp —
+                          required-port stand-in for FeatureAssemblyOp
   app/holoviz_layout.hpp  HolovizLayout / RightPanel + build_holoviz_input_specs
                           + make_rd_holoviz_op factory + panel presets
   report/cadence_meter.hpp  CadenceMeter — wall-clock source / e2e probe
@@ -66,6 +71,14 @@ radar_app/
                           cluster palette, and the overlay / plot layer-name
                           helpers
   viz/display.hpp         gui_available() — the Holoviz display probe
+  viz/colormap.hpp        the Holoviz-free turbo LUT (kLutSize indices)
+  viz/rd_map_to_image_op.hpp  [EA HSDK5 ONLY] Graph RdMapToImageOp (LUT image)
+  viz/x11_rd_viewer_op.hpp    [EA HSDK5 ONLY] X11RdViewerOp — sized RD window
+                          with axes, cluster-colored detections + rep
+                          crosshairs, legend, clock, and the rolling plots
+  viz/overlay_style.hpp   [EA HSDK5 ONLY] Holoviz-free cluster palette /
+                          rank coloring / tick formatting for that viewer
+  viz/x11_display.hpp     [EA HSDK5 ONLY] x11_display_available() probe
 ```
 
 Two shared geometry builders (`make_ura_geometry` / `make_ura_rx_positions`

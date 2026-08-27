@@ -3,13 +3,28 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <type_traits>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
+#include <holoscan/core/domain/dlpack.hpp>
+#include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/expected.hpp>
+#include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
+#include <holoscan/core/parameter.hpp>
+#include <holoscan/core/parameter_schema.hpp>
+#include <holoscan/core/port.hpp>
+#include <holoscan/core/temporal_contract.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
+
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 
 namespace holoscan::radar {
 
@@ -28,10 +43,14 @@ enum class CfarVariant {
 
 constexpr std::string_view to_string(CfarVariant variant) {
   switch (variant) {
-    case CfarVariant::kCA: return "CA";
-    case CfarVariant::kGO: return "GO";
-    case CfarVariant::kSO: return "SO";
-    case CfarVariant::kOS: return "OS";
+    case CfarVariant::kCA:
+      return "CA";
+    case CfarVariant::kGO:
+      return "GO";
+    case CfarVariant::kSO:
+      return "SO";
+    case CfarVariant::kOS:
+      return "OS";
   }
   return "unknown";
 }
@@ -46,8 +65,10 @@ enum class CfarPeakNeighborhood {
 
 constexpr std::string_view to_string(CfarPeakNeighborhood neighborhood) {
   switch (neighborhood) {
-    case CfarPeakNeighborhood::kCross4: return "cross4";
-    case CfarPeakNeighborhood::kSquare8: return "square8";
+    case CfarPeakNeighborhood::kCross4:
+      return "cross4";
+    case CfarPeakNeighborhood::kSquare8:
+      return "square8";
   }
   return "unknown";
 }
@@ -91,145 +112,174 @@ struct CfarAlphaLutKey {
 // Out: detection_mask  — uint8 (0/1), (..., num_doppler, num_range_bins), with
 //                       the nci_axes reduced. 1 where detected
 //                       (detection_score > 1). uint8 rather than bool so the
-//                       mask is NumPy-visible on HSDK 4.3 (kDLBool has no NumPy
-//                       typestr on the 4.3 path). When peak_only is set,
-//                       the mask instead marks only the retained peak cells (a
-//                       strict subset of detection_score > 1), matching
-//                       detection_idx; detection_score / noise_estimate stay
-//                       the dense per-cell maps.
+//                       mask is NumPy-visible. When peak_only is set, the
+//                       mask instead marks only the retained peak cells.
 // Out: detection_score — float32/float64, same shape as detection_mask.
-//                       P / (threshold_scale * alpha * noise_estimate); >1
-//                       ⇔ detected, doubles as the per-detection strength.
 // Out: noise_estimate  — float32/float64, same shape as detection_mask.
-//                       Per-cell training-cell noise (N cells).
 // Out: cfar_power      — float32/float64, same shape as detection_mask. The
-//                       exact surface the threshold is applied to: the
-//                       post-NCI integrated power sum_k |x_k|^2 over the
-//                       nci_axes fold, or the plain square-law power map
-//                       |x|^2 when nci_axes is empty. Power, not amplitude,
-//                       and NOT noise-normalized (that is detection_score).
-//                       Emitted as the operator's own workspace buffer with
-//                       no copy, so a consumer must treat it as read-only and
-//                       valid only for the current tick — it is ping-ponged
-//                       and overwritten two ticks later.
+//                       exact surface the threshold is applied to. Always
+//                       emitted (was optional kNone on HSDK 4.x).
 // Out: detection_idx   — int64, (num_detections, 2 [+ n_batch]),
-//                       (doppler_bin, range_bin) per row. Always emitted,
-//                       sized to the detection count and reallocated per
-//                       tick. Capped by max_detections when set.
+//                       (doppler_bin, range_bin) per row.
 //
-// Precision is fixed at compile time by the template instantiation
-// (T = float → complex64/float32, T = double → complex128/float64).
+// [EA HSDK5 ONLY] Live override ports: sticky Input for POD scalars
+// (pfa, threshold_scale, os_rank, max_detections). Unbounded / pair vectors
+// (guard_cells, training_cells, nci_axes, alpha_lut) are Params-only
+// (HSDK5_PORT.md §9). Static params (cfar_variant, peak_only, …) stay
+// Params-only with no live Input.
 //
-// Implementation status: all four variants (CA, GO, SO, OS) are implemented for
-// arbitrary leading axes with optional non-coherent integration (nci_axes),
-// Gamma(K) thresholding, and batch-widened detection_idx.
+// Precision is fixed at compile time (T = float | double).
+
+struct CFARParams {
+  CfarVariant cfar_variant{CfarVariant::kCA};
+  int64_t os_rank{0};  // OS only
+  std::vector<int64_t> guard_cells{};
+  std::vector<int64_t> training_cells{};
+  double pfa{1e-6};
+  std::vector<double> alpha_lut{};
+  double threshold_scale{1.0};
+  std::vector<int64_t> nci_axes{};
+  // Optional NCI fold hint (K). Static. YAML name nci_fold.
+  int64_t nci_fold{0};
+  int64_t max_detections{0};  // <= 0 → uncapped
+  bool blocking_alpha_lut_rebuild{false};
+  bool peak_only{false};
+  CfarPeakNeighborhood peak_neighborhood{CfarPeakNeighborhood::kSquare8};
+};
+
+HOLOSCAN_PARAM_SCHEMA(
+    CFARParams,
+    holoscan::param_schema("com.nvidia.holoscan.radar.CFARParams", 1),
+    holoscan::field<&CFARParams::cfar_variant>("cfar_variant")
+        .description(
+            "Noise-estimation rule {CA, GO, SO, OS}. Static: selects the "
+            "kernel; instantiate separate detectors to vary it"),
+    holoscan::field<&CFARParams::os_rank>("os_rank")
+        .description(
+            "Rank into the sorted training cells; used only for OS"),
+    holoscan::field<&CFARParams::guard_cells>("guard_cells")
+        .description(
+            "Guard extent each side of the CUT (doppler, range); Params-only "
+            "on EA (HSDK5_PORT §9)"),
+    holoscan::field<&CFARParams::training_cells>("training_cells")
+        .description(
+            "Training/reference extent each side (doppler, range); "
+            "Params-only on EA (HSDK5_PORT §9)"),
+    holoscan::field<&CFARParams::pfa>("pfa").description(
+        "Probability of false alarm; sets alpha when alpha_lut is unset"),
+    holoscan::field<&CFARParams::alpha_lut>("alpha_lut")
+        .description(
+            "Optional threshold multiplier table; when non-empty, used "
+            "directly and pfa is ignored for alpha calibration; Params-only "
+            "on EA (HSDK5_PORT §9)"),
+    holoscan::field<&CFARParams::threshold_scale>("threshold_scale")
+        .description(
+            "Empirical multiplier on top of the Pfa-derived threshold; "
+            "1.0 = pure CFAR"),
+    holoscan::field<&CFARParams::nci_axes>("nci_axes")
+        .description(
+            "Leading-axis indices to non-coherently integrate before "
+            "thresholding; Params-only on EA (HSDK5_PORT §9)"),
+    holoscan::field<&CFARParams::nci_fold>("nci_fold")
+        .description(
+            "Optional integration fold K for start-time alpha LUT "
+            "pre-warm when nci_axes is set; <= 0 → unset; static"),
+    holoscan::field<&CFARParams::max_detections>("max_detections")
+        .description("Cap on emitted detections (<= 0 → uncapped)"),
+    holoscan::field<&CFARParams::blocking_alpha_lut_rebuild>(
+        "blocking_alpha_lut_rebuild")
+        .description(
+            "When false, serve the previous LUT while a new one calibrates "
+            "after a config change; when true, block until ready; static"),
+    holoscan::field<&CFARParams::peak_only>("peak_only")
+        .description(
+            "When true, collapse each contiguous above-threshold blob to its "
+            "local-maximum cell; static"),
+    holoscan::field<&CFARParams::peak_neighborhood>("peak_neighborhood")
+        .description(
+            "Neighborhood for peak_only NMS {cross4, square8}; static"));
+
+static_assert(holoscan::param_schema_availability<CFARParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in CFARParams's namespace");
+
+// 2-D CFAR detector on the (Doppler, range) plane. Fat map outputs
+// (detection_mask/score/noise/cfar_power) are sized from
+// MaxTensorExtents at graph.op() (ctor capture); detection_idx uses
+// max_detections. Dense path may include named leading az/el axes.
+//
+// Precision is fixed at compile time (T = float | double).
+
 template <typename T>
-class CFARDetectorOp : public holoscan::Operator {
+class CFARDetectorOp : public holoscan::Operator<CFARParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "CFARDetectorOp supports float and double precision");
 
  public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(CFARDetectorOp)
-
-  CFARDetectorOp() = default;
+  // Required: sizes the output Tensor pools at setup().
+  explicit CFARDetectorOp(const MaxTensorExtents& extents);
   ~CFARDetectorOp() override;
 
-  // Registers the argument setters for the custom parameter types
-  // (radar_common/sdk/arg_setters.hpp, plus the local CfarVariant enum)
-  // before the base class processes args.
-  void initialize() override;
   // Pre-calibrates the alpha LUT at startup (before the first tick) so a slow
-  // Monte Carlo build does not stall the data plane on tick one. Assumes the RD
-  // map is at least as large as the CFAR window; a smaller map triggers a
-  // map-specific rebuild in compute() with a warning.
+  // Monte Carlo build does not stall the data plane on tick one.
   void start() override;
   // Drains any in-flight background alpha-LUT build before Holoscan tears down
-  // the CUDA context, so a detached GPU Monte-Carlo calibration cannot launch
-  // kernels on a destroyed context (fixes the non-blocking-rebuild SEGFAULT).
+  // the CUDA context.
   void stop() override;
 
   void setup(OperatorSpec& spec) override;
-  void compute(InputContext& op_input, OutputContext& op_output,
-               ExecutionContext& context) override;
+  [[nodiscard]] Contract contract() const override;
+  [[nodiscard]] expected<void, Error> compute(
+      ExecutionContext& context) override;
+
+  Input<Tensor> rd_maps{"rd_maps"};
+  Output<Tensor> detection_mask{"detection_mask"};
+  Output<Tensor> detection_score{"detection_score"};
+  Output<Tensor> noise_estimate{"noise_estimate"};
+  Output<Tensor> detection_idx{"detection_idx"};
+  // Always emitted on HSDK 5 (was optional kNone on 4.x). Tests and apps must
+  // bind / drain this port.
+  Output<Tensor> cfar_power{"cfar_power"};
+  // [live] sticky POD overrides (OPERATOR_API.md). Vector lives stay
+  // Params-only on HSDK 5 EA — see OPEN_ITEMS.md / HSDK5_PORT §9.
+  Input<double> pfa{"pfa"};
+  Input<double> threshold_scale{"threshold_scale"};
+  Input<int64_t> os_rank{"os_rank"};
+  Input<int64_t> max_detections{"max_detections"};
 
  private:
-  // Parameters per the locked contract. cfar_variant, nci_fold_hint,
-  // blocking_alpha_lut_rebuild, peak_only, and peak_neighborhood are static;
-  // the remaining parameters are
-  // overridable — only those with a setup() override port may be live-wired,
-  // and each has a same-named non-blocking override input port declared there
-  // (os_rank, guard_cells, training_cells, pfa, alpha_lut, threshold_scale,
-  // nci_axes, max_detections).
-  Parameter<CfarVariant> cfar_variant_;
-  Parameter<int64_t> os_rank_;                  // OS only
-  Parameter<std::vector<int64_t>> guard_cells_;    // (doppler, range)
-  Parameter<std::vector<int64_t>> training_cells_;  // (doppler, range)
-  Parameter<double> pfa_;
-  Parameter<std::vector<double>> alpha_lut_;
-  Parameter<double> threshold_scale_;
-  Parameter<std::vector<int64_t>> nci_axes_;
-  // Optional NCI fold hint (K = product of nci_axes sizes). Static. Only used
-  // to pre-warm the alpha LUT at start() when nci_axes is non-empty (the fold
-  // is otherwise unknown until the first tick). <= 0 → unset (defer to first
-  // tick); ignored when nci_axes is empty (K = 1).
-  Parameter<int64_t> nci_fold_hint_;
-  Parameter<int64_t> max_detections_;  // <= 0 → uncapped
-  // When false (default), a [live] LUT-key change serves the previous alpha LUT
-  // on that tick while the new table calibrates in the background (one-shot
-  // warn). When true, compute() blocks until the new LUT is ready.
-  Parameter<bool> blocking_alpha_lut_rebuild_;
-  // Optional peak-grouping (non-maximum-suppression) stage. When false
-  // (default), the raw candidate mask is emitted unchanged (additive to the
-  // ratified raw-mask contract). When true, each contiguous above-threshold
-  // blob is collapsed to its local-maximum cell ("one point per CFAR peak").
-  // Static per instance. peak_neighborhood selects the NMS neighborhood.
-  Parameter<bool> peak_only_;
-  Parameter<CfarPeakNeighborhood> peak_neighborhood_;
+  MaxTensorExtents extents_;
+  std::uint32_t max_map_rank_{2U};
+  std::size_t max_map_byte_span_{0U};
+  std::size_t max_idx_byte_span_{0U};
+  std::size_t max_leading_{0U};
 
-  // Effective override values as of the last tick (override-aware), used to
-  // detect override-triggered window-kernel rebuilds for the
-  // warn-once-and-cache rule.
-  std::vector<int64_t> effective_guard_cells_{};
-  std::vector<int64_t> effective_training_cells_{};
-  double effective_pfa_{1e-6};
-  std::vector<double> effective_alpha_lut_{};
-  double effective_threshold_scale_{1.0};
-  int64_t effective_os_rank_{0};
-  std::vector<int64_t> effective_nci_axes_{};
-  int64_t effective_max_detections_{0};
+  using AlphaLutKey = CfarAlphaLutKey;
 
-  // Set once the effective_* values have been seeded from the parameters
-  // (first tick); overrides are applied on top each tick thereafter.
-  bool seeded_{false};
+  // Sticky [live] POD scalars: last override wins until the next.
+  std::optional<double> sticky_pfa_;
+  std::optional<double> sticky_threshold_scale_;
+  std::optional<int64_t> sticky_os_rank_;
+  std::optional<int64_t> sticky_max_detections_;
+  // Tracks pfa sticky transitions for the "pfa ignored while alpha_lut"
+  // warn-once (Params-only alpha_lut still participates).
+  double last_seen_pfa_{-1.0};
+  bool pfa_seen_{false};
 
-  // Cached device copy of the NCI batch_in lookup table. Rebuilt only when the
-  // integration layout changes (plan.batch_in_table differs), so a stable
-  // nci_axes + input shape incurs no per-tick device alloc/free or upload.
+  // Cached device copy of the NCI batch_in lookup table.
   std::shared_ptr<holoscan::Tensor> nci_table_dev_{};
   std::vector<int64_t> nci_table_host_cache_{};
 
-  // Host-built alpha(N) LUT. Rebuilt when pfa, fold, window footprint, map
-  // size, or variant changes. Host table is shared across operator instances
-  // via detail::get_cached_alpha_lut.
-  using AlphaLutKey = CfarAlphaLutKey;
   AlphaLutKey alpha_lut_key_{};
   AlphaLutKey pending_lut_key_{};
   bool pending_lut_active_{false};
   bool stale_lut_warned_{false};
   bool pfa_lut_slow_warned_{false};
-  // Warns once per key transition when a LUT build is forced during compute()
-  // (a runtime rebuild / stall) rather than served from the start-time warm
-  // cache. Reset whenever the effective LUT key changes.
   bool runtime_build_warned_{false};
-  // Warns once when an RD map smaller than the CFAR window arrives, so the
-  // start-time (map-fits-window) pre-warm does not apply and a map-specific LUT
-  // is built with reduced-N edge thresholds.
   bool window_exceeds_map_warned_{false};
   bool using_external_alpha_lut_{false};
   bool pfa_ignored_while_alpha_lut_warned_{false};
   bool alpha_lut_cleared_pfa_active_warned_{false};
-  // Cache that external alpha_lut was validated for the current table +
-  // geometry/fold so we skip the O(max_index) checks on unchanged ticks.
   bool external_alpha_lut_validated_{false};
   CfarVariant validated_external_variant_{CfarVariant::kCA};
   int64_t validated_external_fold_{0};
@@ -242,22 +292,14 @@ class CFARDetectorOp : public holoscan::Operator {
   std::vector<double> alpha_lut_host_cache_{};
   std::shared_ptr<holoscan::Tensor> alpha_lut_dev_{};
 
-  // Device-side detection_idx compaction scratch (CUB temps + scan offsets).
-  // shared_ptr (not unique_ptr) so the incomplete type is OK in TUs that only
-  // see the forward declaration — the deleter is type-erased at creation in
-  // the .cu.
   std::shared_ptr<detail::DetectionIdxCompactState> detection_idx_compact_;
 
-  // Ping-ponged dense workspaces. score/noise/mask are emitted, so two sets
-  // avoid overwriting a buffer a downstream consumer may still hold. power /
-  // integrated_power are scratch-only (same slot is fine within a tick).
-  // Reallocated only when (batch_in, out_batch, D, R) changes.
+  // Ping-ponged dense scratch workspaces. Outputs are loaned from the pool
+  // each tick (HSDK 5); these buffers hold stage results before D2D emit.
   struct DenseWorkspace {
     std::shared_ptr<holoscan::Tensor> score;
     std::shared_ptr<holoscan::Tensor> noise;
     std::shared_ptr<holoscan::Tensor> mask;
-    // Peak-grouping refined mask (peak_only). Emitted as detection_mask when
-    // peak_only is set, so it is ping-ponged with the rest of the workspace.
     std::shared_ptr<holoscan::Tensor> peak_mask;
     std::shared_ptr<holoscan::Tensor> power;
     std::shared_ptr<holoscan::Tensor> integrated_power;
@@ -271,10 +313,9 @@ class CFARDetectorOp : public holoscan::Operator {
 
   // Keeps the previous tick's input alive until this tick's kernels are
   // enqueued (stream-ordered lifetime guard).
-  std::shared_ptr<holoscan::Tensor> retained_input_;
+  Tensor retained_input_;
 };
 
-// Explicit instantiations live in cfar_detector_op.cu.
 extern template class CFARDetectorOp<float>;
 extern template class CFARDetectorOp<double>;
 

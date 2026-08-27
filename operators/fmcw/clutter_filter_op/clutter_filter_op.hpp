@@ -3,12 +3,26 @@
 
 #pragma once
 
-#include <memory>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <type_traits>
 
-#include <holoscan/holoscan.hpp>
+#include <holoscan/core/domain/dlpack.hpp>
+#include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/expected.hpp>
+#include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
+#include <holoscan/core/parameter.hpp>
+#include <holoscan/core/parameter_schema.hpp>
+#include <holoscan/core/port.hpp>
+#include <holoscan/core/temporal_contract.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 
 namespace holoscan::radar {
 
@@ -18,40 +32,71 @@ namespace holoscan::radar {
 // conventions live in operators/common/README.md.
 //
 // In:  range_profiles — complex64/complex128,
-//                       (..., num_chirps, num_range_bins).
-// Out: range_profiles — complex64/complex128,
-//                       (..., num_chirps_out, num_range_bins), where
+//                       (num_chirps, num_range_bins) or with named leading
+//                       N_rx / (M_tx, N_rx) axes (no opaque leading batch).
+// Out: range_profiles_out — complex64/complex128,
+//                       same leading + (num_chirps_out, num_range_bins), where
 //                       num_chirps_out = num_chirps (mean_subtraction),
 //                       num_chirps - 1 (single_delay), or
 //                       num_chirps - 2 (double_delay).
+//                       [EA HSDK5 ONLY] unique in/out port names required.
 //
 // Precision is fixed at compile time by the template instantiation.
+// Fat output pool sizing requires MaxTensorExtents at graph.op() (ctor).
+
+struct ClutterFilterParams {
+  ClutterFilterMethod method{ClutterFilterMethod::kMeanSubtraction};
+};
+
+HOLOSCAN_PARAM_SCHEMA(
+    ClutterFilterParams,
+    holoscan::param_schema("com.nvidia.holoscan.radar.ClutterFilterParams", 1),
+    holoscan::field<&ClutterFilterParams::method>("method").description(
+        "Slow-time clutter suppression {mean_subtraction, single_delay, "
+        "double_delay}: mean_subtraction nulls zero-Doppler with no chirp "
+        "loss; the delay cancellers are 1st/2nd-order MTI high-pass filters "
+        "and drop 1-2 chirps."));
+
+static_assert(holoscan::param_schema_availability<ClutterFilterParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in ClutterFilterParams's "
+              "namespace");
+
 template <typename T>
-class ClutterFilterOp : public holoscan::Operator {
+class ClutterFilterOp : public holoscan::Operator<ClutterFilterParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "ClutterFilterOp supports float and double precision");
 
  public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(ClutterFilterOp)
+  // Required: sizes the range_profiles_out Tensor pool at setup().
+  explicit ClutterFilterOp(const MaxTensorExtents& extents);
 
-  ClutterFilterOp() = default;
-
-  void initialize() override;
   void setup(OperatorSpec& spec) override;
-  void compute(InputContext& op_input, OutputContext& op_output,
-               ExecutionContext& context) override;
+  [[nodiscard]] Contract contract() const override;
+  [[nodiscard]] expected<void, Error> compute(
+      ExecutionContext& context) override;
+
+  Input<Tensor> range_profiles{"range_profiles"};
+  // HSDK 5 requires unique port names within an operator (inputs and
+  // outputs share one namespace). OPERATOR_API.md's logical output channel
+  // remains "range_profiles"; the physical port name is range_profiles_out.
+  // [EA HSDK5 ONLY] revisit naming once the full port is settled.
+  Output<Tensor> range_profiles_out{"range_profiles_out"};
+  // [live] sticky override of params().method (OPERATOR_API.md).
+  Input<ClutterFilterMethod> method{"method"};
 
  private:
-  // Overridable; mean_subtraction nulls zero-Doppler with no chirp loss, the
-  // delay cancellers are 1st/2nd-order MTI high-pass filters. kNone is
-  // rejected (it exists for the fused operator's inline stage only).
-  Parameter<ClutterFilterMethod> method_;
+  MaxTensorExtents extents_;
+  std::uint32_t max_rank_{2U};
+  std::size_t max_byte_span_{0U};
 
-  // Stream-ordered lifetime guard for the previous tick's input.
-  std::shared_ptr<holoscan::Tensor> retained_input_;
+  // Keep the previous activation's input alive across ticks so async device
+  // reads cannot outlive the buffer.
+  Tensor retained_input_;
+  // Sticky [live] method: last override wins until the next override.
+  std::optional<ClutterFilterMethod> sticky_method_;
 };
 
-// Explicit instantiations live in clutter_filter_op.cu.
 extern template class ClutterFilterOp<float>;
 extern template class ClutterFilterOp<double>;
 

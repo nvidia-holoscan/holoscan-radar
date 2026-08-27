@@ -1,12 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// App-owned configuration for fmcw_mimo: AppConfig plus the scene-geometry and
-// YAML loaders (TDM/DDM branch, virtual array geometry, targets, the
-// boresight-axis mirror of the beamscan grid). Colocated with the app. The
-// scene is the shared radar::sim::SimScene (multi-TX); the source operators
-// synthesize the multiplexed cube on the
-// device (simulator.hpp::simulate_mimo_gpu).
+// App-owned config for fmcw_mimo: AppConfig + YAML loader (TDM/DDM branch,
+// virtual array geometry, targets). [EA HSDK5 ONLY] Operator blocks are
+// parsed into Params structs (Graph has no from_config()).
 
 #pragma once
 
@@ -23,15 +20,18 @@
 #include <vector>
 
 #include "fmcw/mimo_coherent_compensation_op/mimo_coherent_compensation_stage.hpp"
+#include "radar_app/app/config.hpp"
+#include "radar_app/app/graph_params.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
 #include "radar_common/sim/array_builders.hpp"
-#include "radar_app/app/config.hpp"
+#include "radar_common/sim/scene.hpp"
 
 namespace radar = holoscan::radar;
 using namespace holoscan::radar::app;  // NOLINT(build/namespaces)
@@ -51,9 +51,23 @@ struct AppConfig : CommonRunConfig {
   // Optional fixed velocity-plot Y extent (m/s); NaN keeps the full-axis span.
   float velocity_ylim_lo{std::numeric_limits<float>::quiet_NaN()};
   float velocity_ylim_hi{std::numeric_limits<float>::quiet_NaN()};
+  // Boresight panel axes, from the beamscan scan grid.
   double az_lo{-0.35}, az_hi{0.35}, el_lo{-0.1}, el_hi{0.1};
   radar::FMCWWaveformDescriptor report_waveform;
   int64_t report_num_doppler{0};
+
+  radar::FMCWRangeProcessorParams range_params;
+  radar::ClutterFilterParams clutter_params;
+  radar::FMCWDopplerProcessorParams doppler_params;
+  radar::MIMODeinterleaveParams deinterleave_params;
+  radar::MIMOCoherentCompensationParams compensation_params;
+  radar::VirtualArrayAssemblyParams vaa_params;
+  radar::CFARParams cfar_params;
+  radar::SnapshotGatherParams gather_params;
+  radar::BeamscanParams beamscan_params;
+  radar::ClusterDBSCANParams dbscan_params;
+  radar::DetectionReductionParams reduction_params;
+  radar::MaxTensorExtents extents;
 };
 
 // Demo helpers for generate_phase_codes: expand unit-magnitude codes without
@@ -143,6 +157,67 @@ inline void load_scene_geometry(AppConfig* cfg, const YAML::Node& root,
 
   cfg->array_geometry = radar::sim::make_virtual_geometry(
       cfg->scene.tx_positions, cfg->scene.rx_positions, wavelength);
+}
+
+inline int64_t snapshot_count(const std::vector<int64_t>& window) {
+  int64_t doppler_half = 0;
+  int64_t range_half = 0;
+  if (window.size() >= 1) {
+    doppler_half = window[0];
+  }
+  if (window.size() >= 2) {
+    range_half = window[1];
+  } else if (window.size() == 1) {
+    range_half = window[0];
+  }
+  return (2 * doppler_half + 1) * (2 * range_half + 1);
+}
+
+inline radar::MaxTensorExtents make_mimo_extents(const AppConfig& cfg) {
+  radar::MaxTensorExtents e;
+  const int64_t n_tx =
+      static_cast<int64_t>(cfg.scene.tx_positions.size());
+  const int64_t n_rx =
+      static_cast<int64_t>(cfg.scene.rx_positions.size());
+  const int64_t chirps = cfg.scene.num_chirps;
+  const int64_t samples = cfg.scene.samples_per_chirp;
+  const int64_t range_bins =
+      cfg.range_params.nfft > 0 ? cfg.range_params.nfft : samples;
+  // Pre-demux / pre-FFT Doppler length; demuxed DDM maps are smaller.
+  const int64_t doppler_bins =
+      cfg.doppler_params.nfft > 0 ? cfg.doppler_params.nfft : chirps;
+  const int64_t report_doppler =
+      cfg.report_num_doppler > 0 ? cfg.report_num_doppler : doppler_bins;
+  const int64_t map_doppler =
+      report_doppler > doppler_bins ? report_doppler : doppler_bins;
+  const int64_t map_cells = map_doppler * range_bins;
+  const int64_t n_virtual = cfg.array_geometry.num_elements();
+  const int64_t num_az =
+      static_cast<int64_t>(cfg.beamscan_params.az_angles.size());
+  const int64_t num_el =
+      static_cast<int64_t>(cfg.beamscan_params.el_angles.size());
+
+  e.max_tx = n_tx;
+  e.max_rx = n_rx;
+  e.max_chirps = chirps;
+  e.max_interleaved_chirps = n_tx * chirps;
+  e.max_samples_per_chirp = samples;
+  e.max_range_bins = range_bins;
+  e.max_doppler_bins = map_doppler;
+  e.max_virtual_channels = n_virtual;
+  e.max_channels = n_virtual;
+  e.max_detections = map_cells;
+  e.max_items = map_cells;
+  e.max_points = map_cells;
+  e.max_features = 4;
+  e.max_snapshots = snapshot_count(cfg.gather_params.snapshot_window);
+  e.max_az = num_az > 0 ? num_az : 1;
+  e.max_el = num_el > 0 ? num_el : 1;
+  const int64_t cluster_cap = cfg.dbscan_params.max_clusters > 0
+                                  ? cfg.dbscan_params.max_clusters
+                                  : map_cells;
+  e.max_clusters = cluster_cap;
+  return e;
 }
 
 inline AppConfig load_config(const std::filesystem::path& path) {
@@ -282,13 +357,6 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   parse_noise(root, &cfg.scene);
   parse_viz_toggles(root, &cfg);
   parse_plots(root, &cfg);
-  // READ-ONLY MIRROR of the cfar_detector operator block: peak_only stays a
-  // native CFAR param (applied via from_config); the app reads it here only to
-  // decide the graph shape (drop clustering when set).
-  if (const YAML::Node cd = root["cfar_detector"];
-      cd && cd["peak_only"] && !cd["peak_only"].IsNull()) {
-    cfg.peak_only = cd["peak_only"].as<bool>();
-  }
 
   // Optional fixed velocity-plot Y extent (dense/MIMO plot knob).
   if (const YAML::Node plots = root["plots"]; plots && !plots.IsNull()) {
@@ -301,13 +369,40 @@ inline AppConfig load_config(const std::filesystem::path& path) {
     }
   }
 
-  // Boresight view axes mirror the beamscan estimator's angle grid (READ-ONLY
-  // MIRROR of an operator block; the estimator owns az_angles/el_angles via
-  // from_config()).
-  const YAML::Node be = root["beamscan_estimator"];
-  grid_extent(extract_grid(be ? be["az_angles"] : YAML::Node()), -0.35, 0.35,
-              &cfg.az_lo, &cfg.az_hi);
-  grid_extent(extract_grid(be ? be["el_angles"] : YAML::Node()), -0.1, 0.1,
-              &cfg.el_lo, &cfg.el_hi);
+  load_range_params(root["range_processor"], &cfg.range_params);
+  load_clutter_params(root["clutter_filter"], &cfg.clutter_params);
+  load_doppler_params(root["doppler_processor"], &cfg.doppler_params);
+  load_deinterleave_params(root["mimo_deinterleave"],
+                           &cfg.deinterleave_params);
+  cfg.deinterleave_params.tx_schedule = cfg.tx_schedule;
+  load_coherent_compensation_params(mcc, &cfg.compensation_params);
+  // Prefer the app-resolved descriptor (may expand generate_phase_codes).
+  cfg.compensation_params.ddm_code = cfg.ddm_code;
+  cfg.compensation_params.multiplexing_scheme = cfg.scheme;
+  if (!cfg.compensation_params.waveform.is_valid()) {
+    cfg.compensation_params.waveform = waveform;
+  }
+  load_vaa_params(root["virtual_array_assembly"], &cfg.vaa_params);
+  cfg.vaa_params.tx_positions = cfg.tx_positions_flat;
+  cfg.vaa_params.rx_positions = cfg.rx_positions_flat;
+  cfg.vaa_params.wavelength = cfg.wavelength;
+
+  load_cfar_params(root["cfar_detector"], &cfg.cfar_params);
+  load_snapshot_gather_params(root["snapshot_gather"], &cfg.gather_params);
+  load_beamscan_params(root["beamscan_estimator"], &cfg.beamscan_params);
+  // Params-only geometry on EA (§9): seed from the virtual array built here.
+  // VAA still emits a packed Tensor (drained to NullSink); live wire deferred.
+  cfg.beamscan_params.array_geometry = cfg.array_geometry;
+  if (!cfg.cfar_params.nci_axes.empty()) {
+    cfg.cfar_params.nci_fold = cfg.array_geometry.num_elements();
+  }
+  load_dbscan_params(root["cluster_dbscan"], &cfg.dbscan_params);
+  load_reduction_params(root["reduction"], &cfg.reduction_params);
+
+  cfg.peak_only = cfg.cfar_params.peak_only;
+  grid_extent(cfg.beamscan_params.az_angles, -0.35, 0.35, &cfg.az_lo,
+              &cfg.az_hi);
+  grid_extent(cfg.beamscan_params.el_angles, -0.1, 0.1, &cfg.el_lo, &cfg.el_hi);
+  cfg.extents = make_mimo_extents(cfg);
   return cfg;
 }

@@ -18,7 +18,7 @@ fused:  adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
 | Operator | In → Out | Function |
 | --- | --- | --- |
 | `FMCWRangeProcessorOp<T>` | `adc_cube` (…, chirps, samples; complex or real IF) → `range_profiles` (…, chirps, range bins) + optional `range_bins` axis | Range compression: optional software dechirp, windowed fast-time FFT (`nfft` zero-pad, `fft_norm`); real IF takes the R2C path (`nfft/2+1` bins); bin 0 = zero range (no fftshift) |
-| `ClutterFilterOp<T>` | `range_profiles` → `range_profiles` (chirp count preserved / −1 / −2) | Slow-time clutter suppression: `mean_subtraction` (zero-Doppler nulled, no chirp loss) or 1st/2nd-order MTI delay cancellers |
+| `ClutterFilterOp<T>` | `range_profiles` → `range_profiles_out` (chirp count preserved / −1 / −2) | Slow-time clutter suppression: `mean_subtraction` (zero-Doppler nulled, no chirp loss) or 1st/2nd-order MTI delay cancellers. **[EA HSDK5 ONLY]** ported on HSDK 5; see [`HSDK5_PORT.md`](../../docs/planning/HSDK5_PORT.md) + operator `OPEN_ITEMS.md` |
 | `FMCWDopplerProcessorOp<T>` | `range_profiles` → `rd_maps` (…, doppler, range bins) + optional `velocity_bins` axis | Doppler compression: windowed slow-time FFT (`nfft` zero-pad), zero-Doppler centered by default (numpy-style fftshift) |
 | `FMCWRangeDopplerProcessorOp<T>` | `adc_cube` → `rd_maps` + optional `range_bins`/`velocity_bins` | Fused range + optional inline clutter + Doppler in one node; per-axis `nfft_range`/`nfft_doppler` |
 | `MIMODeinterleaveOp<T>` | `adc_cube` (…, N_rx, M·L, samples; complex or real IF) → `adc_cube` (…, M_tx, N_rx, L, samples) | TDM marshaling: split interleaved slow-time into an explicit TX axis via `TXSchedule` gather. **Uniform round-robin TDM only** — non-uniform / staggered schedules are rejected (staggered TDM deferred; STATUS.md L12) |
@@ -49,7 +49,7 @@ physical units through them.
 - **Sign conventions.** Radial velocity `v_r > 0` = receding; the velocity
   axis satisfies `v = -f_d·λ/2`; the range axis is
   `range_bins[i] = propagation_speed·(i·fs/nfft)/(2·slope)`.
-- **Streams.** All work is enqueued on the stream from
-  `receive_cuda_stream()` (no hot-path synchronization); the received
-  input tensor is retained until the next tick as a stream-ordered
-  lifetime guard.
+- **Streams.** [EA HSDK5 ONLY] Ported operators enqueue on
+  `context.cuda_stream()` (no hot-path synchronization) and retain the
+  received input until the next tick as a stream-ordered lifetime guard.
+  Unported operators still use the HSDK 4.x `receive_cuda_stream()` path.

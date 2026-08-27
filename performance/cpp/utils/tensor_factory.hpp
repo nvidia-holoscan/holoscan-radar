@@ -24,7 +24,6 @@
 #include <vector>
 
 #include <holoscan/core/domain/tensor.hpp>
-#include <holoscan/core/domain/tensor_map.hpp>
 
 #include "radar_common/math/constants.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
@@ -32,12 +31,11 @@
 
 namespace holoscan::radar::perf {
 
-// Single-entry TensorMap (the module's port payload convention).
-inline holoscan::TensorMap single_map(std::shared_ptr<holoscan::Tensor> tensor,
-                                      const std::string& key) {
-  holoscan::TensorMap map;
-  map.insert({key, std::move(tensor)});
-  return map;
+// [EA HSDK5 ONLY] TensorMap is gone; ports carry a plain Tensor. Keep a
+// shared_ptr alias helper so unported consumers can migrate incrementally.
+inline std::shared_ptr<holoscan::Tensor> as_tensor(
+    std::shared_ptr<holoscan::Tensor> tensor) {
+  return tensor;
 }
 
 // Fill a host buffer with a deterministic noise floor plus a sparse, fixed
@@ -68,7 +66,13 @@ std::shared_ptr<holoscan::Tensor> make_power_map_device(
     const std::vector<int64_t>& shape) {
   const auto host = deterministic_power_host<T>(shape);
   auto tensor = make_device_tensor(shape, real_dtype<T>());
-  if (cudaMemcpy(tensor->data(), host.data(), sizeof(T) * host.size(),
+  auto mut = tensor->mutable_data();
+  if (!mut) {
+    throw std::runtime_error(
+        std::string("make_power_map_device: tensor not writable: ") +
+        mut.error().message);
+  }
+  if (cudaMemcpy(mut.value(), host.data(), sizeof(T) * host.size(),
                  cudaMemcpyHostToDevice) != cudaSuccess) {
     throw std::runtime_error("make_power_map_device: cudaMemcpy H2D failed");
   }
@@ -115,7 +119,13 @@ std::shared_ptr<holoscan::Tensor> make_iq_cube_device(
     const std::vector<int64_t>& shape) {
   const auto host = deterministic_iq_host<T>(shape);
   auto tensor = make_device_tensor(shape, complex_dtype<T>());
-  if (cudaMemcpy(tensor->data(), host.data(),
+  auto mut = tensor->mutable_data();
+  if (!mut) {
+    throw std::runtime_error(
+        std::string("make_iq_cube_device: tensor not writable: ") +
+        mut.error().message);
+  }
+  if (cudaMemcpy(mut.value(), host.data(),
                  sizeof(std::complex<T>) * host.size(),
                  cudaMemcpyHostToDevice) != cudaSuccess) {
     throw std::runtime_error("make_iq_cube_device: cudaMemcpy H2D failed");

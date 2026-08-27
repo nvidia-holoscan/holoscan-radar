@@ -34,7 +34,9 @@ constexpr int kErrElBin = 6;
 // Per-row element offset into a compact (…, D, R) score map from the
 // preserved batch columns of detection_idx. Out-of-range batch coords set
 // *error_flag and leave offsets[row] unspecified.
-__global__ void score_plane_offsets_kernel(
+// static: header is included from the op .cu and (optionally) stage tests;
+// each TU gets a private kernel copy to avoid ODR link errors.
+static __global__ void score_plane_offsets_kernel(
     const int64_t* __restrict__ detection_idx, int64_t num_points,
     int64_t idx_cols, int64_t n_preserved,
     const int64_t* __restrict__ leading_dims, int64_t plane_elems,
@@ -82,7 +84,7 @@ inline void launch_score_plane_offsets(const int64_t* detection_idx,
 // When bin axes are present, out-of-range indices set *error_flag (raw-bin
 // fallback is only for absent axes). Score gathers are bounds-checked.
 template <typename T>
-__global__ void assemble_features_kernel(
+static __global__ void assemble_features_kernel(
     const int64_t* __restrict__ detection_idx, int64_t num_points,
     int64_t idx_cols, int64_t n_preserved, const T* __restrict__ range_bins,
     int64_t num_range, bool have_range_bins,

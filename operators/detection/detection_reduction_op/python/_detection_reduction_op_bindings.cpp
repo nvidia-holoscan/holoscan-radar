@@ -13,6 +13,7 @@
 #include <holoscan/core/operator_spec.hpp>
 
 #include "detection/detection_reduction_op/detection_reduction_op.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/python/py_operator_utils.hpp"
 #include "radar_common/reduce/reduction_enums.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
@@ -33,8 +34,15 @@ class PyDetectionReductionOp : public DetectionReductionOp<T, NoCustomScore> {
       RepresentativePolicy representative = RepresentativePolicy::kPeak,
       ScoreMethod score_method = ScoreMethod::kWeightedSum,
       const std::vector<double>& feature_weights = {},
+      int64_t max_clusters = 256,
+      int64_t max_points = 8192,
       const std::string& name = "detection_reduction")
-      : DetectionReductionOp<T, NoCustomScore>() {
+      : DetectionReductionOp<T, NoCustomScore>([&] {
+          MaxTensorExtents extents;
+          extents.max_clusters = max_clusters;
+          extents.max_points = max_points;
+          return extents;
+        }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -62,11 +70,13 @@ void bind_detection_reduction(py::module_& m, const char* class_name) {
       "name : str, optional\n")
       .def(py::init<Fragment*, const py::args&, RepresentativePolicy,
                     ScoreMethod, const std::vector<double>&,
-                    const std::string&>(),
+                    int64_t, int64_t, const std::string&>(),
            py::arg("fragment"),
            py::arg("representative") = RepresentativePolicy::kPeak,
            py::arg("score_method") = ScoreMethod::kWeightedSum,
            py::arg("feature_weights") = std::vector<double>{},
+           py::arg("max_clusters") = int64_t{256},
+           py::arg("max_points") = int64_t{8192},
            py::arg("name") = "detection_reduction")
       .def("setup", &Op::setup, py::arg("spec"));
 }

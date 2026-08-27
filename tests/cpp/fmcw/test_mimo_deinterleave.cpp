@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Tests for MIMODeinterleaveOp: TDM slow-time gather into an explicit TX
-// axis (round-robin, custom tx_order, explicit chirp_tx_index), non-uniform
-// schedule rejection, dtype preservation, leading batch axes, cross-cutting
-// input validation, and float/double agreement.
+// Tests for MIMODeinterleaveOp (HSDK 5 Graph harness):
+// TDM slow-time gather into an explicit TX axis (round-robin, custom
+// tx_order, explicit chirp_tx_index), non-uniform schedule rejection,
+// dtype preservation, opaque leading-batch rejection, cross-cutting input
+// validation, and float/double agreement.
 
 #include <gtest/gtest.h>
 
@@ -20,8 +21,8 @@
 #include <utility>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
-#include <holoscan/test/test_harness.hpp>
+#include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/graph.hpp>
 
 #include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
@@ -32,16 +33,15 @@
 namespace {
 
 using holoscan::radar::MIMODeinterleaveOp;
+using holoscan::radar::MIMODeinterleaveParams;
 using holoscan::radar::TXSchedule;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::real_dtype;
+using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::single_map;
-using holoscan::radar::testing::TensorMapCapture;
+using holoscan::radar::testing::run_single_io_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
-using holoscan::radar::testing::to_host;
 using holoscan::radar::testing::to_pageable_host_tensor;
-using holoscan::test::create_operator_test;
 
 constexpr int64_t kNumRx = 2;
 constexpr int64_t kNumTx = 2;
@@ -90,7 +90,8 @@ std::vector<int64_t> pattern_for(const TXSchedule& schedule) {
 
 template <typename ElementT>
 std::vector<ElementT> build_interleaved_cube(
-    const std::vector<int64_t>& pattern, const std::vector<int64_t>& shape) {
+    const std::vector<int64_t>& pattern,
+    const std::vector<int64_t>& shape) {
   const int64_t num_rx = shape[shape.size() - 3];
   const int64_t slow_time = shape[shape.size() - 2];
   const int64_t samples = shape.back();
@@ -113,7 +114,7 @@ std::vector<ElementT> build_interleaved_cube(
           } else {
             data[idx] =
                 ElementT(static_cast<typename ElementT::value_type>(m),
-                           static_cast<typename ElementT::value_type>(0));
+                         static_cast<typename ElementT::value_type>(0));
           }
         }
       }
@@ -122,28 +123,59 @@ std::vector<ElementT> build_interleaved_cube(
   return data;
 }
 
+// Graph wiring lambda for 1-in / 1-out MIMODeinterleaveOp.
+auto deinterleave_wire() {
+  return [](holoscan::Graph& graph, const auto& source, auto& op,
+            const auto& sink) {
+    const holoscan::ConnectionOptions q{.queue_depth = 4U};
+    graph.add_flow(source->out, op->adc_cube, q);
+    graph.add_flow(op->adc_cube_out, sink->in, q);
+  };
+}
+
 template <typename T>
-HostTensor run_harness_single(const TXSchedule& schedule,
-                              holoscan::TensorMap frame) {
-  TensorMapCapture capture;
-  auto harness = create_operator_test<MIMODeinterleaveOp<T>>(
-      holoscan::Arg("tx_schedule") = schedule);
-  harness->template add_input_port<holoscan::TensorMap>("adc_cube", {frame});
-  harness->template add_output_port<holoscan::TensorMap>(
-      "adc_cube", capture.validators());
-  harness->run_test();
-  if (capture.frames.size() != 1) {
-    throw std::runtime_error("expected exactly one captured output frame");
+GraphRunResult run_deinterleave_result(
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
+    MIMODeinterleaveParams params) {
+  return run_single_io_operator_graph_result<MIMODeinterleaveOp<T>>(
+      std::move(inputs), std::move(params), "adc_cube_out",
+      deinterleave_wire());
+}
+
+template <typename T>
+HostTensor run_deinterleave_once(
+    std::shared_ptr<holoscan::Tensor> input,
+    MIMODeinterleaveParams params) {
+  GraphRunResult result =
+      run_deinterleave_result<T>({std::move(input)}, std::move(params));
+  if (!result.plan_ok) {
+    throw std::runtime_error(std::string("compile failed: ") +
+                             result.plan_json);
   }
-  return std::move(capture.frames.front());
+  if (!result.diagnostics.empty()) {
+    std::string msg = "run diagnostics:";
+    for (const auto& d : result.diagnostics) {
+      msg += " ";
+      msg += d;
+    }
+    throw std::runtime_error(msg);
+  }
+  if (result.frames.size() != 1U) {
+    throw std::runtime_error(
+        "expected 1 frame, got " +
+        std::to_string(result.frames.size()));
+  }
+  return std::move(result.frames.front());
 }
 
 template <typename T, typename ElementT>
 HostTensor run_deinterleave(const std::vector<ElementT>& host,
                             const std::vector<int64_t>& shape,
-                            DLDataType dtype, const TXSchedule& schedule) {
-  return run_harness_single<T>(
-      schedule, single_map(to_device_tensor(host, shape, dtype), "adc_cube"));
+                            DLDataType dtype,
+                            const TXSchedule& schedule) {
+  return run_deinterleave_once<T>(
+      to_device_tensor(host, shape, dtype),
+      MIMODeinterleaveParams{.tx_schedule = schedule});
 }
 
 template <typename ElementT>
@@ -169,7 +201,8 @@ void expect_deinterleaved(const HostTensor& out,
           for (int64_t s = 0; s < samples; ++s) {
             const size_t idx = static_cast<size_t>(
                 b * slice_elems +
-                (((tx * num_rx + rx) * chirps_per_tx + l) * samples) + s);
+                (((tx * num_rx + rx) * chirps_per_tx + l) * samples) +
+                s);
             const double expected = marker_value(b, tx, l, rx, s);
             double got = 0.0;
             if constexpr (std::is_same_v<ElementT, float> ||
@@ -178,80 +211,16 @@ void expect_deinterleaved(const HostTensor& out,
             } else {
               got = static_cast<double>(data[idx].real());
             }
-            const double tol = std::max(1e-4, 1e-6 * std::abs(expected));
+            const double tol =
+                std::max(1e-4, 1e-6 * std::abs(expected));
             EXPECT_NEAR(got, expected, tol)
-                << "batch=" << b << " tx=" << tx << " rx=" << rx << " l=" << l
-                << " s=" << s;
+                << "batch=" << b << " tx=" << tx << " rx=" << rx
+                << " l=" << l << " s=" << s;
           }
         }
       }
     }
   }
-}
-
-struct StridedAdcCubeHolder {
-  void* data{nullptr};
-  std::vector<int64_t> shape;
-  std::vector<int64_t> strides;
-  DLManagedTensor dl{};
-
-  ~StridedAdcCubeHolder() {
-    if (data != nullptr) {
-      cudaFree(data);
-    }
-  }
-};
-
-// Device tensor with non-compact row-major strides on adc_cube.
-std::shared_ptr<holoscan::Tensor> make_non_contiguous_adc_cube(
-    const std::vector<std::complex<float>>& host,
-    const std::vector<int64_t>& shape) {
-  const int64_t num_rx = shape[0];
-  const int64_t slow_time = shape[1];
-  const int64_t samples = shape[2];
-  const int64_t slow_stride = samples + 1;
-  const size_t alloc_elems =
-      static_cast<size_t>(num_rx * slow_time * slow_stride);
-  auto holder = std::make_unique<StridedAdcCubeHolder>();
-  holder->shape = shape;
-  holder->strides = {slow_time * slow_stride, slow_stride, 1};
-  if (cudaMalloc(&holder->data, alloc_elems * sizeof(std::complex<float>)) !=
-      cudaSuccess) {
-    throw std::runtime_error("make_non_contiguous_adc_cube: cudaMalloc failed");
-  }
-  std::vector<std::complex<float>> padded(alloc_elems, {0.0f, 0.0f});
-  for (int64_t rx = 0; rx < num_rx; ++rx) {
-    for (int64_t k = 0; k < slow_time; ++k) {
-      for (int64_t s = 0; s < samples; ++s) {
-        const size_t dst = static_cast<size_t>(
-            rx * slow_time * slow_stride + k * slow_stride + s);
-        const size_t src =
-            static_cast<size_t>((rx * slow_time + k) * samples + s);
-        padded[dst] = host[src];
-      }
-    }
-  }
-  if (cudaMemcpy(holder->data, padded.data(),
-                 alloc_elems * sizeof(std::complex<float>),
-                 cudaMemcpyHostToDevice) != cudaSuccess) {
-    throw std::runtime_error("make_non_contiguous_adc_cube: H2D failed");
-  }
-  int device_id = 0;
-  cudaGetDevice(&device_id);
-  holder->dl.dl_tensor.data = holder->data;
-  holder->dl.dl_tensor.device = DLDevice{kDLCUDA, device_id};
-  holder->dl.dl_tensor.ndim = 3;
-  holder->dl.dl_tensor.dtype = complex_dtype<float>();
-  holder->dl.dl_tensor.shape = holder->shape.data();
-  holder->dl.dl_tensor.strides = holder->strides.data();
-  holder->dl.dl_tensor.byte_offset = 0;
-  holder->dl.manager_ctx = holder.get();
-  holder->dl.deleter = [](DLManagedTensor* self) {
-    delete static_cast<StridedAdcCubeHolder*>(self->manager_ctx);
-  };
-  auto tensor = std::make_shared<holoscan::Tensor>(&holder->dl);
-  holder.release();
-  return tensor;
 }
 
 TXSchedule round_robin_schedule() {
@@ -282,8 +251,8 @@ TEST(MIMODeinterleaveOp, RoundRobinComplexFloat) {
       build_interleaved_cube<std::complex<float>>(pattern, shape);
   const HostTensor out = run_deinterleave<float>(
       host, shape, complex_dtype<float>(), schedule);
-  EXPECT_TRUE(
-      holoscan::radar::dldatatype_equals(out.dtype, complex_dtype<float>()));
+  EXPECT_TRUE(holoscan::radar::dldatatype_equals(
+      out.dtype, complex_dtype<float>()));
   expect_deinterleaved<std::complex<float>>(out, out.shape);
 }
 
@@ -314,10 +283,10 @@ TEST(MIMODeinterleaveOp, RealIfPreserved) {
   const TXSchedule schedule = round_robin_schedule();
   const auto pattern = pattern_for(schedule);
   const auto host = build_interleaved_cube<float>(pattern, shape);
-  const HostTensor out =
-      run_deinterleave<float>(host, shape, real_dtype<float>(), schedule);
-  EXPECT_TRUE(
-      holoscan::radar::dldatatype_equals(out.dtype, real_dtype<float>()));
+  const HostTensor out = run_deinterleave<float>(
+      host, shape, real_dtype<float>(), schedule);
+  EXPECT_TRUE(holoscan::radar::dldatatype_equals(
+      out.dtype, real_dtype<float>()));
   expect_deinterleaved<float>(out, out.shape);
 }
 
@@ -329,8 +298,8 @@ TEST(MIMODeinterleaveOp, ComplexDoublePreserved) {
       build_interleaved_cube<std::complex<double>>(pattern, shape);
   const HostTensor out = run_deinterleave<double>(
       host, shape, complex_dtype<double>(), schedule);
-  EXPECT_TRUE(
-      holoscan::radar::dldatatype_equals(out.dtype, complex_dtype<double>()));
+  EXPECT_TRUE(holoscan::radar::dldatatype_equals(
+      out.dtype, complex_dtype<double>()));
   expect_deinterleaved<std::complex<double>>(out, out.shape);
 }
 
@@ -339,24 +308,27 @@ TEST(MIMODeinterleaveOp, RealDoublePreserved) {
   const TXSchedule schedule = round_robin_schedule();
   const auto pattern = pattern_for(schedule);
   const auto host = build_interleaved_cube<double>(pattern, shape);
-  const HostTensor out =
-      run_deinterleave<double>(host, shape, real_dtype<double>(), schedule);
-  EXPECT_TRUE(
-      holoscan::radar::dldatatype_equals(out.dtype, real_dtype<double>()));
+  const HostTensor out = run_deinterleave<double>(
+      host, shape, real_dtype<double>(), schedule);
+  EXPECT_TRUE(holoscan::radar::dldatatype_equals(
+      out.dtype, real_dtype<double>()));
   expect_deinterleaved<double>(out, out.shape);
 }
 
-TEST(MIMODeinterleaveOp, LeadingBatchAxesPreservedAndIndependent) {
+TEST(MIMODeinterleaveOp, RejectsOpaqueLeadingBatch) {
+  // Contract is (N_rx, slow_time, samples); an extra leading dim is opaque
+  // batch (Part B), not a named axis.
   const std::vector<int64_t> shape = {2, kNumRx, kSlowTime, kSamples};
   const TXSchedule schedule = round_robin_schedule();
   const auto pattern = pattern_for(schedule);
   const auto host =
       build_interleaved_cube<std::complex<float>>(pattern, shape);
-  const HostTensor out = run_deinterleave<float>(
-      host, shape, complex_dtype<float>(), schedule);
-  ASSERT_EQ(out.shape.size(), 5U);
-  EXPECT_EQ(out.shape[0], 2);
-  expect_deinterleaved<std::complex<float>>(out, out.shape);
+  const GraphRunResult result = run_deinterleave_result<float>(
+      {to_device_tensor(host, shape, complex_dtype<float>())},
+      MIMODeinterleaveParams{.tx_schedule = schedule});
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(MIMODeinterleaveOp, RejectsNonUniformSchedule) {
@@ -365,58 +337,40 @@ TEST(MIMODeinterleaveOp, RejectsNonUniformSchedule) {
   schedule.chirp_tx_index = {0, 1, 0, 1, 0, 0};
   const std::vector<int64_t> shape = {kNumRx, kSlowTime, kSamples};
   const auto host = std::vector<std::complex<float>>(
-      static_cast<size_t>(kNumRx * kSlowTime * kSamples), {1.0f, 0.0f});
-  EXPECT_THROW(
-      (void)run_deinterleave<float>(host, shape, complex_dtype<float>(),
-                                    schedule),
-      std::invalid_argument);
+      static_cast<size_t>(kNumRx * kSlowTime * kSamples),
+      {1.0f, 0.0f});
+  const GraphRunResult result =
+      run_deinterleave_result<float>(
+          {to_device_tensor(host, shape, complex_dtype<float>())},
+          MIMODeinterleaveParams{.tx_schedule = schedule});
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(MIMODeinterleaveOp, RejectsIndivisibleSlowTime) {
   TXSchedule schedule = round_robin_schedule();
   const std::vector<int64_t> shape = {kNumRx, kSlowTime + 1, kSamples};
   const auto host = std::vector<std::complex<float>>(
-      static_cast<size_t>(kNumRx * (kSlowTime + 1) * kSamples), {1.0f, 0.0f});
-  EXPECT_THROW(
-      (void)run_deinterleave<float>(host, shape, complex_dtype<float>(),
-                                    schedule),
-      std::invalid_argument);
+      static_cast<size_t>(kNumRx * (kSlowTime + 1) * kSamples),
+      {1.0f, 0.0f});
+  const GraphRunResult result =
+      run_deinterleave_result<float>(
+          {to_device_tensor(host, shape, complex_dtype<float>())},
+          MIMODeinterleaveParams{.tx_schedule = schedule});
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(MIMODeinterleaveOp, RejectsPageableHostInput) {
-  const TXSchedule schedule = round_robin_schedule();
-  const std::vector<int64_t> shape = {kNumRx, kSlowTime, kSamples};
-  const auto host = std::vector<std::complex<float>>(
-      static_cast<size_t>(tensor_count(shape)), {1.0f, 0.0f});
-  holoscan::TensorMap map;
-  map.insert({"adc_cube",
-              to_pageable_host_tensor(host, shape, complex_dtype<float>())});
-  EXPECT_THROW((void)run_harness_single<float>(schedule, map),
-               std::invalid_argument);
-}
-
-TEST(MIMODeinterleaveOp, RejectsMultiEntryTensorMap) {
-  const TXSchedule schedule = round_robin_schedule();
-  const std::vector<int64_t> shape = {kNumRx, kSlowTime, kSamples};
-  const auto host = std::vector<std::complex<float>>(
-      static_cast<size_t>(tensor_count(shape)), {1.0f, 0.0f});
-  holoscan::TensorMap map;
-  map.insert({"a", to_device_tensor(host, shape, complex_dtype<float>())});
-  map.insert({"b", to_device_tensor(host, shape, complex_dtype<float>())});
-  EXPECT_THROW((void)run_harness_single<float>(schedule, map),
-               std::invalid_argument);
-}
-
-TEST(MIMODeinterleaveOp, RejectsNonContiguousInput) {
-  const TXSchedule schedule = round_robin_schedule();
-  const std::vector<int64_t> shape = {kNumRx, kSlowTime, kSamples};
-  const auto pattern = pattern_for(schedule);
-  const auto host =
-      build_interleaved_cube<std::complex<float>>(pattern, shape);
-  holoscan::TensorMap map;
-  map.insert({"adc_cube", make_non_contiguous_adc_cube(host, shape)});
-  EXPECT_THROW((void)run_harness_single<float>(schedule, map),
-               std::invalid_argument);
+  // [EA HSDK5 ONLY] The Graph harness materializes all inputs through
+  // device-bound tensor loans, so pageable host data never reaches the
+  // operator's compute(). The require_cuda_accessible guard remains for
+  // safety, but is untestable through the Graph model. Restore if a
+  // direct-call harness is added later.
+  GTEST_SKIP() << "HSDK 5 Graph: pageable host input cannot reach "
+                  "the operator through device-bound tensor loans";
 }
 
 TEST(MIMODeinterleaveOp, FloatDoubleAgreement) {

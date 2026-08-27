@@ -6,13 +6,11 @@
 # copy staged next to the executable is used).
 #
 # The per-operator blocks (range_processor, clutter_filter, doppler_processor,
-# cfar_detector, cluster_dbscan, reduction) are consumed natively via
-# Holoscan's from_config(): every key is an operator parameter, converted by
-# the YAML::convert<> specializations (in radar_common/sdk/yaml_converters.hpp
-# and each operator's own translation unit). FeatureAssemblyOp's `features`
-# is fixed in the app code (native-only param). The remaining top-level
-# sections (cube, run, targets, noise_snr_db) configure the app's synthetic
-# source and run cadence.
+# cfar_detector, cluster_dbscan, reduction) are parsed by the Graph app into
+# Params structs ([EA HSDK5 ONLY] — no from_config() on Graph). Feature
+# assembly for clustering uses PhysicalRangeVelocityPointsOp (FeatureAssembly
+# optional-bin wiring deferred on EA). Remaining top-level sections (cube,
+# run, targets, noise_snr_db) configure the synthetic source and run cadence.
 
 # FMCW waveform, anchored so the range and Doppler blocks (and the app's
 # simulator mirror) share one definition. Provide exactly one of `bandwidth`
@@ -136,16 +134,23 @@ targets:
 # Set to null (or omit) only when exercising the signal-processing chain alone.
 noise_snr_db: 20.0
 
-# Live RD-map visualization (Holoviz turbo-colormapped image of the
-# log-magnitude map, with the CFAR detections overlaid as filled dots colored
-# by DBSCAN cluster). Requires a GUI-capable host; when no display is detected
-# the app warns and runs as if disabled.
-#   enabled         — master switch for the live Holoviz window
+# Live RD-map visualization: a turbo-colormapped image of the log-magnitude
+# map, framed by physical range / velocity axes, with the CFAR detections
+# overlaid as filled dots colored by DBSCAN cluster, each cluster's reduction
+# representative crosshaired, and a legend of the per-cluster range/velocity
+# readouts. Requires a GUI-capable host; when no display is detected the app
+# warns and runs as if disabled. [EA HSDK5 ONLY] this branch renders through
+# the X11 stand-in viewer rather than Holoviz.
+#   enabled         — master switch for the live window
+#   window_width    — window size in pixels (>= 320x240); the RD map and the
+#   window_height     rolling plots share it
 #   marker_radius   — detection-dot radius, as a fraction of the RD image extent
 #   marker_outline  — extra radius of each dot's black outline ring (same units)
-#   marker_segments — triangle-fan segments per dot (roundness; must be >= 3)
+#   marker_segments — triangle-fan segments per dot (Holoviz only; must be >= 3)
 visualization:
   enabled: true
+  window_width: 1280
+  window_height: 720
   marker_radius: 0.004
   marker_outline: 0.002
   marker_segments: 20
@@ -169,8 +174,8 @@ headless: false
 # Rolling time-series plots drawn to the right of the RD map (only when
 # visualization is enabled). Two scrolling scatter plots — range (m) vs time and
 # velocity (m/s) vs time — where every detection is a dot colored by its
-# DBSCAN cluster (noise gray) and each cluster's centroid is a '+' marker in
-# the same color. Y axes are fixed to the range/velocity bin extents.
+# DBSCAN cluster (noise gray). Y axes are fixed to the range/velocity bin
+# extents; the X axis spans the retained window.
 #   enable — draw the plots (false → RD map fills the window, as before)
 #   window — number of frames retained in the scrolling window (must be > 1)
 plots:

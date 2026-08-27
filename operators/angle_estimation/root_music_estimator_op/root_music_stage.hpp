@@ -79,6 +79,30 @@ inline constexpr cudaDataType root_complex_cuda_type<double>() {
   return CUDA_C_64F;
 }
 
+// HSDK 5: Tensor::data() is const void*; writers must use mutable_data().
+// Prefer mutable_data() + cast over mutable_data_as<U>() — the latter rejects
+// complex DLPack dtypes used by make_device_tensor(complex_dtype<T>()).
+template <typename U>
+inline U* require_mutable(holoscan::Tensor& tensor, const char* what) {
+  auto mut = tensor.mutable_data();
+  if (!mut) {
+    throw std::runtime_error(
+        std::string("RootMUSICEstimatorOp: ") + what +
+        " is not writable: " + mut.error().message);
+  }
+  return static_cast<U*>(*mut);
+}
+
+inline void* require_mutable_void(holoscan::Tensor& tensor, const char* what) {
+  auto mut = tensor.mutable_data();
+  if (!mut) {
+    throw std::runtime_error(
+        std::string("RootMUSICEstimatorOp: ") + what +
+        " is not writable: " + mut.error().message);
+  }
+  return *mut;
+}
+
 template <typename T>
 __global__ void root_music_coefficients_kernel(
     const cuda::std::complex<T>* __restrict__ projector, int64_t num_items,
@@ -307,10 +331,12 @@ inline void solve_companion_roots(RootMUSICSolverState* solver, int64_t degree,
             root_complex_cuda_type<T>(), roots + item * degree,
             root_complex_cuda_type<T>(), nullptr, 1,
             root_complex_cuda_type<T>(), nullptr, 1,
-            root_complex_cuda_type<T>(), solver->device_workspace->data(),
+            root_complex_cuda_type<T>(),
+            require_mutable_void(*solver->device_workspace,
+                                 "geev device workspace"),
             solver->device_workspace_bytes, solver->host_workspace.data(),
             solver->host_workspace_bytes,
-            static_cast<int*>(solver->info->data()) + item),
+            require_mutable<int>(*solver->info, "geev info") + item),
         "cusolverDnXgeev");
   }
   std::vector<int> info_host(
@@ -666,13 +692,18 @@ inline void root_music_axis_roots(cuda::std::complex<T>* cov_axis,
       make_device_tensor({num_items, degree, degree}, complex_dtype<T>());
   auto roots = make_device_tensor({num_items, degree}, complex_dtype<T>());
 
-  auto* evec_p = static_cast<cuda::std::complex<T>*>(evec->data());
-  auto* eval_p = static_cast<T*>(eval->data());
-  auto* proj_p = static_cast<cuda::std::complex<T>*>(proj->data());
-  auto* mo_p = static_cast<int32_t*>(mo->data());
-  auto* coeff_p = static_cast<cuda::std::complex<T>*>(coeff->data());
-  auto* comp_p = static_cast<cuda::std::complex<T>*>(comp->data());
-  auto* roots_p = static_cast<cuda::std::complex<T>*>(roots->data());
+  auto* evec_p =
+      require_mutable<cuda::std::complex<T>>(*evec, "axis eigenvectors");
+  auto* eval_p = require_mutable<T>(*eval, "axis eigenvalues");
+  auto* proj_p =
+      require_mutable<cuda::std::complex<T>>(*proj, "axis projector");
+  auto* mo_p = require_mutable<int32_t>(*mo, "axis model order");
+  auto* coeff_p =
+      require_mutable<cuda::std::complex<T>>(*coeff, "axis coefficients");
+  auto* comp_p =
+      require_mutable<cuda::std::complex<T>>(*comp, "axis companion");
+  auto* roots_p =
+      require_mutable<cuda::std::complex<T>>(*roots, "axis roots");
 
   auto cov_view = matx::make_tensor<cuda::std::complex<T>, 3>(
       cov_axis, {num_items, axis_channels, axis_channels});
@@ -757,8 +788,10 @@ inline void run_root_music_2d_stage(
 
   auto cov_y = make_device_tensor({num_items, ny, ny}, complex_dtype<T>());
   auto cov_z = make_device_tensor({num_items, nz, nz}, complex_dtype<T>());
-  auto* cov_y_p = static_cast<cuda::std::complex<T>*>(cov_y->data());
-  auto* cov_z_p = static_cast<cuda::std::complex<T>*>(cov_z->data());
+  auto* cov_y_p =
+      require_mutable<cuda::std::complex<T>>(*cov_y, "ura cov_y");
+  auto* cov_z_p =
+      require_mutable<cuda::std::complex<T>>(*cov_z, "ura cov_z");
   ura_axis_covariance_kernel<T><<<grid, block, 0, stream>>>(
       covariance, num_items, ny, nz, cov_y_p, cov_z_p);
 
@@ -770,10 +803,10 @@ inline void run_root_music_2d_stage(
       make_device_tensor({num_items}, DLDataType{kDLInt, 32, 1});
   auto v_count =
       make_device_tensor({num_items}, DLDataType{kDLInt, 32, 1});
-  auto* u_cand_p = static_cast<T*>(u_cand->data());
-  auto* v_cand_p = static_cast<T*>(v_cand->data());
-  auto* u_count_p = static_cast<int32_t*>(u_count->data());
-  auto* v_count_p = static_cast<int32_t*>(v_count->data());
+  auto* u_cand_p = require_mutable<T>(*u_cand, "ura u candidates");
+  auto* v_cand_p = require_mutable<T>(*v_cand, "ura v candidates");
+  auto* u_count_p = require_mutable<int32_t>(*u_count, "ura u counts");
+  auto* v_count_p = require_mutable<int32_t>(*v_count, "ura v counts");
 
   root_music_axis_roots<T>(cov_y_p, num_items, ny, valid_counts, model_order,
                            u_cap, ky_spacing, solver_y, u_cand_p, u_count_p,

@@ -66,3 +66,18 @@ arrays with numeric noise.
 Allocate-per-tick via `make_device_tensor`; xl profiling does not show the same
 malloc-dominated profile as `MIMODeinterleaveOp`. See
 [`operators/OPEN_ITEMS.md`](../../OPEN_ITEMS.md) §1.
+
+### B.3 Graph mid-stream sticky `[live] wavelength`
+
+**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”.
+
+**Class:** HSDK 5 EA limitation. See
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
+
+**Interim.** Operator still declares sticky `Input<double> wavelength` and
+resolves via `resolve_sticky_override`. The port is omitted from `contract()`
+so unwired graphs compile. Graph sticky unit tests remain `GTEST_SKIP`’d.
+`perf_virtual_array_assembly` measures an inline `wavelength` transition with
+the supported single-clock / exact-contract / single-partition shape.
+
+**Status:** open for the sticky unit test; perf override timing is restored.

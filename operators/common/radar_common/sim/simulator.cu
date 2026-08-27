@@ -176,8 +176,12 @@ std::shared_ptr<holoscan::Tensor> simulate_gpu(const SimScene& scene,
     (acc = acc * ref3).run(exec);
   }
 
+  auto out_mut = out->mutable_data();
+  if (!out_mut) {
+    throw std::runtime_error("simulate_gpu: output tensor is not writable");
+  }
   auto out_view =
-      make_complex_view3<float>(out->data(), num_rx, num_chirps, samples);
+      make_complex_view3<float>(*out_mut, num_rx, num_chirps, samples);
   (out_view = matx::as_type<cuda::std::complex<float>>(acc)).run(exec);
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
     throw std::runtime_error("simulate_gpu: final stream sync failed");
@@ -209,8 +213,13 @@ std::shared_ptr<holoscan::Tensor> simulate_mimo_gpu(
 
   accumulate_scene(acc, scene, weights, slow_time, t_dev, exec, stream);
 
+  auto out_mut = out->mutable_data();
+  if (!out_mut) {
+    throw std::runtime_error(
+        "simulate_mimo_gpu: output tensor is not writable");
+  }
   auto out_view =
-      make_complex_view3<float>(out->data(), num_rx, slow_time, samples);
+      make_complex_view3<float>(*out_mut, num_rx, slow_time, samples);
   (out_view = matx::as_type<cuda::std::complex<float>>(acc)).run(exec);
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
     throw std::runtime_error("simulate_mimo_gpu: final stream sync failed");

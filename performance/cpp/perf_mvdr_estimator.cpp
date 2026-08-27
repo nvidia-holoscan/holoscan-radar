@@ -2,16 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Performance characterization for MVDREstimatorOp — adaptive (Capon)
-// sparse-path DOA. Per item it forms a snapshot covariance, diagonal-loads and
-// inverts it (batched), then scans the (az, el) grid for the Capon spectrum.
-// Sweeps detection count, channel count, snapshot count, and scan-grid size,
-// and inlines a mid-session [live] az_angles override (finer grid → steering
-// rebuild). Measurement tool only: no timing assertions. See
+// sparse-path DOA. Per item it forms a snapshot covariance, diagonal-loads
+// and inverts it (batched), then scans the (az, el) grid for the Capon
+// spectrum. Sweeps detection count, channel count, snapshot count, and
+// scan-grid size. Measurement tool only: no timing assertions. See
 // docs/planning/OPERATOR_DEVELOPMENT.md.
+//
+// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
+// Mid-session [live] override measurement is deferred until
+// docs/planning/HSDK5_PORT.md §1 (EA partition / device binding). Params
+// still select the scan grid under test.
 
-#include <cuda_runtime_api.h>
-
-#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -21,21 +22,19 @@
 #include <utility>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
+#include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/graph.hpp>
 
 #include "angle_estimation/mvdr_estimator_op/mvdr_estimator_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
-#include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/perf_app.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "utils/perf_driver.hpp"
+#include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
-#include "utils/perf_sink.hpp"
-#include "utils/perf_source.hpp"
-#include "utils/perf_stats.hpp"
 #include "utils/tensor_factory.hpp"
 
 namespace hr = holoscan::radar;
@@ -43,7 +42,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using PerfPrecision = float;  // v1 characterizes single precision.
+using PerfPrecision = float;
 
 struct SizeSpec {
   std::string id;
@@ -63,19 +62,19 @@ struct MvdrScenario {
   int64_t snapshots{0};
   int64_t num_az{0};
   int64_t num_el{0};
-  int64_t override_at{0};
-  int64_t override_num_az{0};
 };
 
 const std::vector<SizeSpec>& size_ladder() {
-  // Covariance + inverse scratch is O(detections · channels²); the ladder keeps
-  // that bounded rather than chasing the wide dense-array sizes Beamscan uses.
+  // Covariance + inverse scratch is O(detections · channels²); the ladder
+  // keeps that bounded rather than chasing wide dense-array sizes.
   static const std::vector<SizeSpec> ladder = {
       {"xs", 4, 64, 16, 21, 11, "small array; fast smoke"},
       {"sm", 8, 128, 32, 41, 21, "compact SIMO array"},
       {"md", 16, 256, 48, 61, 31, "common dev size"},
-      {"lg", 32, 512, 64, 81, 41, "wide aperture, many looks"},
-      {"xl", 32, 1024, 96, 101, 51, "upper characterization bound"}};
+      {"lg", 32, 512, 64, 81, 41,
+       "wide aperture, many looks"},
+      {"xl", 32, 1024, 96, 101, 51,
+       "upper characterization bound"}};
   return ladder;
 }
 
@@ -91,119 +90,125 @@ const SizeSpec* find_size(const std::string& id) {
 const SizeSpec& must_find_size(const std::string& id) {
   const SizeSpec* s = find_size(id);
   if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id << "'\n";
+    std::cerr << "internal error: unknown size id '"
+              << id << "'\n";
     std::abort();
   }
   return *s;
 }
 
-std::vector<double> linspace(double start, double stop, int64_t n) {
+std::vector<double> linspace(double start, double stop,
+                             int64_t n) {
   std::vector<double> out(static_cast<size_t>(n));
   if (n == 1) {
     out[0] = start;
     return out;
   }
-  const double step = (stop - start) / static_cast<double>(n - 1);
+  const double step =
+      (stop - start) / static_cast<double>(n - 1);
   for (int64_t i = 0; i < n; ++i) {
-    out[static_cast<size_t>(i)] = start + step * static_cast<double>(i);
+    out[static_cast<size_t>(i)] =
+        start + step * static_cast<double>(i);
   }
   return out;
 }
 
-hr::ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing,
+hr::ArrayGeometry make_ula_geometry(int64_t num_elements,
+                                    double spacing,
                                     double wavelength) {
   hr::ArrayGeometry geom;
   geom.wavelength = wavelength;
   geom.geometry_type = hr::ArrayGeometryType::kUla;
-  geom.element_positions.reserve(static_cast<size_t>(num_elements * 3));
+  geom.element_positions.reserve(
+      static_cast<size_t>(num_elements * 3));
   for (int64_t m = 0; m < num_elements; ++m) {
     geom.element_positions.push_back(0.0);
-    geom.element_positions.push_back(static_cast<double>(m) * spacing);
+    geom.element_positions.push_back(
+        static_cast<double>(m) * spacing);
     geom.element_positions.push_back(0.0);
   }
   return geom;
 }
 
-template <typename T>
-std::shared_ptr<holoscan::Tensor> make_snapshots(int64_t detections,
-                                                 int64_t channels,
-                                                 int64_t snapshots) {
-  return perf::make_iq_cube_device<T>({detections, channels, snapshots});
+perf::TimingCollector run_mvdr_graph(
+    const MvdrScenario& scen, const perf::RunPlan& plan) {
+  auto snap = perf::make_iq_cube_device<PerfPrecision>(
+      {scen.detections, scen.channels, scen.snapshots});
+  using BaseOp = hr::MVDREstimatorOp<PerfPrecision>;
+  using LiveOp =
+      perf::PerfLiveContractOp<BaseOp, &BaseOp::diagonal_loading>;
+  constexpr double kInitialLoading = -1.0;
+  constexpr double kOverrideLoading = 1e-2;
+  return perf::run_perf_graph_with_override(
+      std::move(snap), plan.total_frames, plan.override_at, kInitialLoading,
+      kOverrideLoading, "mvdr-perf",
+      [&](holoscan::Graph& graph, const auto& src,
+          holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_items = scen.detections;
+        extents.max_az = scen.num_az;
+        extents.max_el = scen.num_el;
+        extents.max_sources = 4;
+        extents.max_channels = scen.channels;
+        auto op = graph.op<LiveOp>("mvdr", extents);
+        hr::MVDRParams params;
+        params.array_geometry =
+            make_ula_geometry(scen.channels, 0.5, 1.0);
+        params.angle_convention.preset =
+            hr::AngleConventionPreset::kRadarBoresight;
+        params.az_angles =
+            linspace(-0.5, 0.5, scen.num_az);
+        params.el_angles =
+            linspace(-0.3, 0.3, scen.num_el);
+        params.diagonal_loading = kInitialLoading;
+        op.set_params(std::move(params));
+
+        const auto sink =
+            graph.op<perf::PerfTerminalSinkOp>("aoa_sink");
+        const auto ns1 =
+            graph.op<perf::PerfNullSinkOp>("spectrum_drain");
+        const auto ns2 =
+            graph.op<perf::PerfNullSinkOp>("doa_drain");
+        const auto ns3 =
+            graph.op<perf::PerfNullSinkOp>("count_drain");
+        const auto ns4 =
+            graph.op<perf::PerfNullSinkOp>("eig_drain");
+        const holoscan::ConnectionOptions q{
+            .queue_depth = 4U};
+
+        graph.add_flow(src->out, op->snapshot, q);
+        graph.add_flow(
+            src->override_out, op->diagonal_loading, q);
+        graph.add_flow(op->aoa_estimates, sink->in, q);
+        graph.add_flow(
+            op->angle_spectrum, ns1->in, q);
+        graph.add_flow(op->doa_multi, ns2->in, q);
+        graph.add_flow(op->source_count, ns3->in, q);
+        graph.add_flow(op->eigenvalues, ns4->in, q);
+        graph.partition("perf")
+            .add(src)
+            .add(op)
+            .add(sink)
+            .add(ns1)
+            .add(ns2)
+            .add(ns3)
+            .add(ns4);
+
+        perf::bind_tensor_out(
+            options, "mvdr", "aoa_estimates");
+        perf::bind_tensor_out(
+            options, "mvdr", "angle_spectrum");
+        perf::bind_tensor_out(
+            options, "mvdr", "doa_multi");
+        perf::bind_tensor_out(
+            options, "mvdr", "source_count");
+        perf::bind_tensor_out(
+            options, "mvdr", "eigenvalues");
+      });
 }
 
-class MvdrPerfSourceOp : public holoscan::Operator {
- public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(MvdrPerfSourceOp)
-  MvdrPerfSourceOp() = default;
-
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.output<holoscan::TensorMap>("snapshot");
-  }
-
-  void compute(holoscan::InputContext&, holoscan::OutputContext& op_output,
-               holoscan::ExecutionContext&) override {
-    const auto now = perf::Clock::now();
-    if (collector_ != nullptr) {
-      if (!collector_->first_tick_set) {
-        collector_->t_first_tick = now;
-        collector_->first_tick_set = true;
-      }
-      collector_->starts.push_back(now);
-    }
-    op_output.emit(snapshot_, "snapshot");
-  }
-
-  void configure(perf::TimingCollector* collector,
-                 holoscan::TensorMap snapshot) {
-    collector_ = collector;
-    snapshot_ = std::move(snapshot);
-  }
-
- private:
-  perf::TimingCollector* collector_{nullptr};
-  holoscan::TensorMap snapshot_;
-};
-
-template <typename T>
-class MvdrPerfApp : public holoscan::Application {
- public:
-  const MvdrScenario* scen{nullptr};
-  perf::TimingCollector* collector{nullptr};
-  holoscan::TensorMap snapshot;
-  hr::ArrayGeometry geometry;
-  hr::AngleConvention convention;
-  std::vector<double> az_grid;
-  std::vector<double> el_grid;
-  int total_frames{25};
-
-  void compose() override {
-    auto op = make_operator<hr::MVDREstimatorOp<T>>(
-        "mvdr", holoscan::Arg("array_geometry") = geometry,
-        holoscan::Arg("angle_convention") = convention,
-        holoscan::Arg("az_angles") = az_grid,
-        holoscan::Arg("el_angles") = el_grid);
-
-    auto src = make_operator<MvdrPerfSourceOp>(
-        "src", make_condition<holoscan::CountCondition>(total_frames));
-    src->configure(collector, snapshot);
-    add_flow(src, op, {{"snapshot", "snapshot"}});
-
-    auto aoa_sink = make_operator<perf::PerfTerminalSinkOp>("aoa_sink");
-    aoa_sink->configure(collector);
-    add_flow(op, aoa_sink, {{"aoa_estimates", "input"}});
-
-    auto spec_drain = make_operator<perf::PerfNullSinkOp>("spectrum_drain");
-    add_flow(op, spec_drain, {{"angle_spectrum", "input"}});
-
-    auto ovr = make_operator<perf::PerfOverrideSourceOp<std::vector<double>>>(
-        "ovr", make_condition<holoscan::CountCondition>(total_frames));
-    ovr->configure(scen->override_at,
-                   linspace(-0.5, 0.5, scen->override_num_az));
-    add_flow(ovr, op, {{"output", "az_angles"}});
-  }
-};
-
-void fill_throughput(perf::ResultRow* row, const MvdrScenario& scen,
+void fill_throughput(perf::ResultRow* row,
+                     const MvdrScenario& scen,
                      double median_ms) {
   if (median_ms <= 0.0) {
     return;
@@ -212,7 +217,8 @@ void fill_throughput(perf::ResultRow* row, const MvdrScenario& scen,
   const double n = static_cast<double>(scen.detections);
   row->cells_per_second = n / sec;
   const double beams =
-      static_cast<double>(scen.num_az) * static_cast<double>(scen.num_el);
+      static_cast<double>(scen.num_az) *
+      static_cast<double>(scen.num_el);
   row->slices_per_second = n * beams / sec;
 }
 
@@ -223,7 +229,8 @@ perf::ResultRow base_row(const MvdrScenario& scen) {
   row.variant = "capon";
   row.size_id = scen.size_id;
   row.map_shape = {scen.num_az, scen.num_el};
-  row.input_shape = {scen.detections, scen.channels, scen.snapshots};
+  row.input_shape = {scen.detections, scen.channels,
+                     scen.snapshots};
   row.out_batch = scen.detections;
   row.k = scen.channels;
   return row;
@@ -237,10 +244,11 @@ MvdrScenario make_scenario(const SizeSpec& s) {
   sc.snapshots = s.snapshots;
   sc.num_az = s.num_az;
   sc.num_el = s.num_el;
-  sc.override_num_az = s.num_az + 20;
   std::ostringstream id;
-  id << "mvdr_" << s.id << "_c" << s.channels << "_n" << s.detections << "_s"
-     << s.snapshots << "_g" << s.num_az << "x" << s.num_el;
+  id << "mvdr_" << s.id << "_c" << s.channels
+     << "_n" << s.detections << "_s" << s.snapshots
+     << "_g" << s.num_az << "x" << s.num_el
+     << "_compute";
   sc.id = id.str();
   return sc;
 }
@@ -248,17 +256,22 @@ MvdrScenario make_scenario(const SizeSpec& s) {
 struct MvdrTraits : perf::PerfDriverDefaults {
   using Scenario = MvdrScenario;
 
-  static const char* tool_name() { return "perf_mvdr_estimator"; }
+  static const char* tool_name() {
+    return "perf_mvdr_estimator";
+  }
   static const char* tool_description() {
-    return "MVDREstimatorOp performance characterization";
+    return "MVDREstimatorOp performance "
+           "characterization (HSDK 5 Graph)";
   }
   static const char* sizes_all_help() {
-    return "Default size sweep (inline az_angles override)";
+    return "Default size sweep with diagonal-loading override timing";
   }
   static const char* sizes_subset_help() {
     return "Size sweep across an explicit subset";
   }
-  static const char* full_help() { return "Full size ladder"; }
+  static const char* full_help() {
+    return "Full size ladder with diagonal-loading override timing";
+  }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
     std::vector<perf::SizeDef> out;
@@ -276,7 +289,8 @@ struct MvdrTraits : perf::PerfDriverDefaults {
   static std::vector<MvdrScenario> build_default_matrix() {
     std::vector<MvdrScenario> out;
     for (const char* sid : {"xs", "sm", "md"}) {
-      out.push_back(make_scenario(must_find_size(sid)));
+      out.push_back(
+          make_scenario(must_find_size(sid)));
     }
     return out;
   }
@@ -287,7 +301,8 @@ struct MvdrTraits : perf::PerfDriverDefaults {
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
       if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        std::cerr << "warning: unknown size id '"
+                  << sid << "', skipping\n";
         continue;
       }
       out.push_back(make_scenario(*s));
@@ -306,51 +321,39 @@ struct MvdrTraits : perf::PerfDriverDefaults {
   static void run_scenario(const MvdrScenario& scen,
                            const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    const perf::RunPlan plan =
+        perf::make_run_plan(rs, /*has_override=*/true);
     const auto samples = perf::collect_scenario_samples(
-        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
-          MvdrScenario run_scen = scen;
-          run_scen.override_at = p.override_at;
-
-          perf::TimingCollector collector;
-          auto snap_t = make_snapshots<PerfPrecision>(
-              scen.detections, scen.channels, scen.snapshots);
-
-          collector.t_construct = perf::Clock::now();
-          auto app = holoscan::make_application<MvdrPerfApp<PerfPrecision>>();
-          app->scen = &run_scen;
-          app->collector = &collector;
-          app->snapshot = perf::single_map(std::move(snap_t), "snapshot");
-          app->geometry = make_ula_geometry(scen.channels, 0.5, 1.0);
-          app->convention.preset = hr::AngleConventionPreset::kRadarBoresight;
-          app->az_grid = linspace(-0.5, 0.5, scen.num_az);
-          app->el_grid = linspace(-0.3, 0.3, scen.num_el);
-          app->total_frames = p.total_frames;
-          app->run();
-          return collector;
+        rs, plan,
+        [&](int /*rep*/, const perf::RunPlan& p) {
+          return run_mvdr_graph(scen, p);
         });
 
-    perf::append_setup_row(base_row(scen), samples, report);
+    perf::append_setup_row(
+        base_row(scen), samples, report);
 
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
     row.notes =
-        "cold_ms is first-frame latency; median/p90 are pre-override steady "
-        "state; override_ms is peak latency over the live-az_angles (finer "
-        "grid) window; cells/s is detections/s. The Capon scan dominates per "
-        "tick (~97%); covariance + batched inverse are minor";
+        "cold_ms is first-frame latency; median/p90 "
+        "are post-warmup steady state; override_ms is the peak after an "
+        "inline diagonal-loading change; cells/s "
+        "is detections/s; Capon scan dominates per "
+        "tick";
     report->results.push_back(row);
   }
 
   static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([&] {
+    perf::run_process_warmup([] {
       perf::PerfReport discarded;
-      perf::RunSettings warm_rs;
-      warm_rs.warmup_frames = 0;
-      warm_rs.measured_frames = 2;
-      warm_rs.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs")), warm_rs, &discarded);
+      perf::RunSettings warm;
+      warm.warmup_frames = 0;
+      warm.measured_frames = 2;
+      warm.repeats = 1;
+      run_scenario(
+          make_scenario(must_find_size("xs")),
+          warm, &discarded);
     });
   }
 };
@@ -358,5 +361,6 @@ struct MvdrTraits : perf::PerfDriverDefaults {
 }  // namespace
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<MvdrTraits>(argc, argv);
+  return holoscan::radar::perf::perf_main<MvdrTraits>(
+      argc, argv);
 }
