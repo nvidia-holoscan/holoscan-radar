@@ -18,12 +18,13 @@ deferred on EA. See
 [`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
 **Decision.** `min_points` / `max_clusters` join the `points` trigger with
-`Exact{}` and `on_missing SafeDefault{}`, each gated by `expect_<name>`
-(default false). `sticky_<name>` (default true) latches the last Exact
+`Exact{}` and `on_missing SafeDefault{}`, and the entries are
+unconditional. `sticky_<name>` (default true) latches the last Exact
 match; false reverts to Params on a miss. The application stamps the
-frame's transmit time on both the override and the feature matrix.
-`expect_*=true` requires the matching `add_flow`
-(`TEMPORAL_INPUT_UNCONNECTED` otherwise); wiring without the flag is
+frame's transmit time on both the override and the feature matrix. Wiring
+a port is the only thing that enables its override: an unwired entry
+compiles (warning `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT`) and reads as
+no override, while wiring a port absent from `contract()` is
 `RUNTIME_OPERATOR_REPLAY_MISMATCH`.
 
 **Still deferred.**
@@ -46,28 +47,36 @@ restored (§8).
 
 ---
 
-## 2. `[live] epsilon` is Params-only (unbounded vector)
+## 2. `[live] epsilon` rides a host config Tensor
 
-**Blocks checklist:** Tests → live `epsilon` mid-stream sticky override.
+**Blocks checklist:** none — the `epsilon` override is wired.
 
 **Class:** Durable HSDK 5 (`PublishedPayload` admission). See
 [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9.
 
 **What fails.** `Input<std::vector<double>>` is rejected at compile time.
 `epsilon` is length `1` (isotropic) or `num_features` (per-axis); `num_features`
-comes from the caller-assembled `points` matrix and is unbounded, so a fixed
-POD like `SnapshotWindowOverride` does not fit.
+comes from the caller-assembled `points` matrix, so a fixed POD like
+`SnapshotWindowOverride` does not fit either.
 
-**Interim.** `epsilon` stays on `ClusterDBSCANParams` only (`set_params` /
-YAML). `LiveEpsilonStickyOverride` is `GTEST_SKIP`’d. Params coverage remains
-(`EpsilonConfigurableFromParams`, anisotropic / isotropic unit tests). The
-scalar lives (`min_points` / `max_clusters`) do join `contract()` behind
-`expect_*` (§1); only `epsilon` is portless.
+**Mapping.** `epsilon` is an `Input<Tensor>` carrying a rank-1
+pageable-host float64 vector, validated on arrival (rank, host memory,
+contiguity, dtype, and a `MaxTensorExtents.max_features` extent bound) and
+converted to `std::vector<double>` before it reaches sticky state. The
+extent bound is checked when an override arrives rather than at every
+activation, so a graph that never sends one runs with `max_features` unset.
+Graph coverage: `LiveEpsilonExactMatchChangesClustering`,
+`LiveEpsilonSkewedCaptureMissesExact`,
+`LiveEpsilonStickyKeepsLastExactMatch`,
+`LiveEpsilonEphemeralRevertsToParams`,
+`LiveEpsilonRejectsMalformedVector`,
+`LiveEpsilonRejectsConfiguredBoundOverflow`.
 
-**Next.** Prefer `Input<Tensor>` (or a durable schema / bounded POD once a
-module max-feature count is pinned) and restore sticky live + Graph tests.
+**Next.** Nothing owed unless an owning-container payload family lands, at
+which point the config Tensor can collapse back to the logical vector type.
 
-**Status:** open — ported compute path; live vector port deferred.
+**Status:** settled — the payload form differs from the logical Params type;
+behavior conforms.
 
 ---
 
@@ -103,8 +112,8 @@ module max-feature count is pinned) and restore sticky live + Graph tests.
 ## 5. Performance harness (closed for Graph + scalar timing)
 
 `performance/cpp/perf_cluster_dbscan.cpp` uses the HSDK 5 Graph source and
-reports cold / steady / inline `min_points` override timing. `epsilon` remains
-Params-only (§2); dedicated `max_clusters` override isolation remains in §1.
+reports cold / steady / inline `min_points` override timing. Isolated
+`epsilon` and `max_clusters` override rows are still owed (§1).
 
 **Status:** closed for the Graph port and representative scalar override.
 

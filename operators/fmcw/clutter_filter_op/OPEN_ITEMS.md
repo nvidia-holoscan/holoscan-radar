@@ -20,11 +20,12 @@ Performance → inline live-override measurement.
 [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
 
 **Wiring (settled, L16 / L17).** `Input<ClutterFilterMethod> method` joins
-the data trigger with `Exact{}` and `on_missing SafeDefault{}` when
-`expect_method` is true, so the override's `capture_time` must match the
-cube's. `sticky_method` (default true) latches the last Exact match; false
+the data trigger with `Exact{}` and `on_missing SafeDefault{}` unconditionally,
+so the override's `capture_time` must match the cube's. Wiring the port is the
+application's only obligation: an unwired entry reads as no override for that
+tick. `sticky_method` (default true) latches the last Exact match; false
 reverts to Params on a miss. `compute()` resolves via
-`resolve_expected_override`. See
+`resolve_live_override`. See
 [`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
 **Still deferred.**

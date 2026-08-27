@@ -17,9 +17,10 @@ if it affects the module, then remove or archive the section here.
 Performance → inline live-override measurement (when Graph-ported).
 
 **Class:** Durable HSDK 5 `PublishedPayload` admission (§9). The temporal
-side is settled (L16 / L17): enabled `[live]` ports join the data trigger
-with `Exact{}` + `on_missing SafeDefault{}`, gated by a per-port `expect_*`
-(default false) with `sticky_*` (default true) latching the last match —
+side is settled (L16 / L17): every `[live]` port joins the data trigger
+with `Exact{}` + `on_missing SafeDefault{}` unconditionally, the application
+enables an override by wiring the port, and `sticky_*` (default true) latches
+the last match —
 [`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md). The
 only blocker left here is that none of these parameters has an admissible
 payload type, so there is no port to declare.
@@ -41,7 +42,7 @@ remains STATIC.
 
 - Operator uses `Operator<PhaseShiftBeamformerParams>` + `set_params`;
   no live Input ports are declared, so `contract()` carries only
-  `OnEach{rd_maps}` and there are no `expect_*` / `sticky_*` fields.
+  `OnEach{rd_maps}` and there are no `sticky_*` fields.
 - `ConfigCache` steering rebuild still keys on the Params-derived
   geometry / grid / taper.
 - Graph sticky override tests
@@ -53,8 +54,8 @@ remains STATIC.
 
 **Next.** Choose a durable live transport (Tensor for scan grids; nested
 ChannelPod / schema for `ArrayGeometry` / `WindowSpec`, or flatten), then
-declare each port unconditionally in `setup()` and add its `Exact{}` +
-`SafeDefault{}` contract entry behind `expect_*`, and unskip the Graph
+declare each port unconditionally in `setup()` and add its unconditional
+`Exact{}` + `SafeDefault{}` contract entry, and unskip the Graph
 tests with the port wired. Document any OPERATOR_API physical-type
 divergence.
 

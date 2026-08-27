@@ -7,12 +7,12 @@ Range compression: optional software dechirp, then a windowed FFT along fast-tim
 | in | `adc_cube` | complex64 / complex128, or float32 / float64 | `(num_chirps, samples_per_chirp)`, optional named leading `N_rx` / `(M_tx, N_rx)` | Path auto-selected by dtype: complex IF or real IF |
 | out | `range_profiles` | complex64 / complex128 | same leading + `(num_chirps, num_range_bins)` | Always emitted. `num_range_bins = nfft` (complex IF) or `nfft/2+1` (real IF); `nfft` defaults to `samples_per_chirp` |
 | out (cond.) | `range_bins` | float32 / float64 | `(num_range_bins,)` | Emitted only when a valid `waveform` is available |
-| live | `range_window` | `holoscan::radar::wire::WindowSpecT` | schema metadata + descriptor Tensor | Exact override; unwired = miss |
-| live | `apply_dechirp` | bool | scalar | Exact override; unwired = miss |
-| live | `waveform` | `holoscan::radar::wire::FMCWWaveformT` | schema metadata + descriptor Tensor | Exact override; unwired = miss |
-| live | `fft_norm` | `FftNorm` | scalar | Exact override; unwired = miss |
+| live | `range_window` | `holoscan::radar::wire::WindowSpecT` | schema metadata + descriptor Tensor | Exact override; wire to enable, unwired = miss |
+| live | `apply_dechirp` | bool | scalar | Exact override; wire to enable, unwired = miss |
+| live | `waveform` | `holoscan::radar::wire::FMCWWaveformT` | schema metadata + descriptor Tensor | Exact override; wire to enable, unwired = miss |
+| live | `fft_norm` | `FftNorm` | scalar | Exact override; wire to enable, unwired = miss |
 | param | `propagation_speed` | float64 | scalar | Wave speed for `range_bins`; defaults to the speed of light |
-| live | `nfft` | int64 | scalar | Exact override; unwired = miss |
+| live | `nfft` | int64 | scalar | Exact override; wire to enable, unwired = miss |
 
 ```text
 adc_cube → FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp
@@ -67,7 +67,7 @@ Invariants: leading named axes are processed independently (collapsed to a batch
 ## SDK implementation notes
 
 - **Construction.** `FMCWRangeProcessorOp(const MaxTensorExtents&)` requires `max_chirps` and `max_range_bins`. Optional `max_rx` / `max_channels` admit a leading `N_rx`; `max_tx` plus an RX/channel field admits `(M_tx, N_rx)`. Those fields size `range_profiles` (`max_rank` 2–4, `max_byte_span` of a complex cube `{max_tx, max_rx, max_chirps, max_range_bins}`) and `range_bins` (`max_rank` 1, real `{max_range_bins}`). A tick that exceeds the admitted leading rank or `max_tx * max_rx` is rejected (messages above). `max_rx`/`max_tx` must be positive when set.
-- **Triggering.** `contract()` is `OnEach{adc_cube}` plus an `Exact{}` + `SafeDefault{}` entry for every override, wired or not. An unwired override compiles to a `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT` warning and reads as `kNotConnected` on every tick, so wiring the port is the application's only obligation — there is no `expect_*` flag to agree with. This requires an SDK carrying CONTRACT-020; on the `v5.0.0.1` EA it is `TEMPORAL_INPUT_UNCONNECTED` at compile ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11). Optional `range_bins` stays omitted so an unwired sink does not gate scheduling.
+- **Triggering.** `contract()` is `OnEach{adc_cube}` plus an `Exact{}` + `SafeDefault{}` entry for every override, wired or not. An unwired override compiles to a `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT` warning and reads as `kNotConnected` on every tick, so wiring the port is the application's only obligation. This requires an SDK carrying CONTRACT-020 ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11). Wiring a port `contract()` does not declare is still `RUNTIME_OPERATOR_REPLAY_MISMATCH` (§1). Optional `range_bins` stays omitted so an unwired sink does not gate scheduling.
 - **Ports and queues.** `adc_cube` and the override inputs use `queue_depth(2)`. Tensor ports are `MemoryKind::kCudaDevice`. Fat / bins outs carry the ctor-derived `tensor_allocation` bounds.
 - **Streams and lifetime.** Work is enqueued on `context.cuda_stream()`. `adc_cube` is moved into `retained_input_` after emit as a stream-ordered lifetime guard. Neither the range FFT path nor `fill_range_bins` synchronizes: bins are written into the loaned device buffer by a MatX `range` generator on the compute stream, with no host staging. The only remaining stream sync is cold-path — uploading regenerated dechirp / window coefficients on a cache miss ([`OPEN_ITEMS.md`](OPEN_ITEMS.md) item 1).
 - **Emission.** Conditional `range_bins` loan is prepared first, then `range_profiles`; both are filled on the compute stream; emit order is `range_profiles` then `range_bins`. Each out is a pool loan (`prepare_device_tensor` → fill → `emit_prepared_tensor`).

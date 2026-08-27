@@ -38,8 +38,8 @@ header is the full contract.
   (non-increasing); all three parameters `[live]`-overridable with sticky
   semantics; float and double; empty `points` → empty `labels` / `sizes`. Unit
   tests cover the [`TESTING.md`](../../docs/planning/TESTING.md) clustering
-  checks and a `perf_cluster_dbscan` characterization harness measures the
-  live-`epsilon` override.
+  checks and a `perf_cluster_dbscan` characterization harness measures an
+  inline live `min_points` override.
 - **Staged follow-ups (not contract changes):** the neighbor graph is a
   brute-force `O(N²)` sweep with iterative min-label connected components —
   correct and appropriate for the sparse post-CFAR detection counts this stage

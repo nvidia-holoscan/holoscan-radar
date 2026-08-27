@@ -189,10 +189,10 @@ class CfarLiveDataSourceOp final : public holoscan::Operator<> {
 };
 
 struct CfarLiveControlConfig {
-  static inline bool expect_guard_cells{false};
-  static inline bool expect_training_cells{false};
-  static inline bool expect_nci_axes{false};
-  static inline bool expect_alpha_lut{false};
+  static inline bool wire_guard_cells{false};
+  static inline bool wire_training_cells{false};
+  static inline bool wire_nci_axes{false};
+  static inline bool wire_alpha_lut{false};
 };
 
 class CfarLivePodControlsSourceOp final : public holoscan::Operator<> {
@@ -225,11 +225,11 @@ class CfarLivePodControlsSourceOp final : public holoscan::Operator<> {
     }
     const holoscan::EmitOptions options{
         .capture_time = cfar_live_capture_time(index, context)};
-    if (CfarLiveControlConfig::expect_guard_cells &&
+    if (CfarLiveControlConfig::wire_guard_cells &&
         tick.guard_cells.has_value()) {
       HOLOSCAN_RETURN_IF_ERROR(guard_cells.emit(*tick.guard_cells, options));
     }
-    if (CfarLiveControlConfig::expect_training_cells &&
+    if (CfarLiveControlConfig::wire_training_cells &&
         tick.training_cells.has_value()) {
       HOLOSCAN_RETURN_IF_ERROR(
           training_cells.emit(*tick.training_cells, options));
@@ -304,7 +304,7 @@ class CfarLiveTensorControlsSourceOp final : public holoscan::Operator<> {
     }
     const holoscan::TimePoint capture_time =
         cfar_live_capture_time(index, context);
-    if (CfarLiveControlConfig::expect_nci_axes &&
+    if (CfarLiveControlConfig::wire_nci_axes &&
         tick.nci_axes.has_value()) {
       const std::vector<int64_t> shape =
           tick.nci_shape.empty()
@@ -314,7 +314,7 @@ class CfarLiveTensorControlsSourceOp final : public holoscan::Operator<> {
       HOLOSCAN_RETURN_IF_ERROR(emit_live_host_tensor(
           nci_axes, *tick.nci_axes, shape, kInt64ConfigDtype, capture_time));
     }
-    if (CfarLiveControlConfig::expect_alpha_lut &&
+    if (CfarLiveControlConfig::wire_alpha_lut &&
         tick.alpha_lut.has_value()) {
       HOLOSCAN_RETURN_IF_ERROR(emit_live_host_tensor(
           alpha_lut, *tick.alpha_lut,
@@ -444,14 +444,14 @@ FiveOutGraphRunResult run_cfar_live(std::vector<CfarLiveTick> ticks,
   CfarLiveBank<CfarLivePodControlsTag>::reset(ticks);
   CfarLiveBank<CfarLiveTensorControlsTag>::reset(ticks);
   CfarLiveTimestampBank::reset();
-  const bool expect_guard_cells = wiring.guard_cells;
-  const bool expect_training_cells = wiring.training_cells;
-  const bool expect_nci_axes = wiring.nci_axes;
-  const bool expect_alpha_lut = wiring.alpha_lut;
-  CfarLiveControlConfig::expect_guard_cells = expect_guard_cells;
-  CfarLiveControlConfig::expect_training_cells = expect_training_cells;
-  CfarLiveControlConfig::expect_nci_axes = expect_nci_axes;
-  CfarLiveControlConfig::expect_alpha_lut = expect_alpha_lut;
+  const bool wire_guard_cells = wiring.guard_cells;
+  const bool wire_training_cells = wiring.training_cells;
+  const bool wire_nci_axes = wiring.nci_axes;
+  const bool wire_alpha_lut = wiring.alpha_lut;
+  CfarLiveControlConfig::wire_guard_cells = wire_guard_cells;
+  CfarLiveControlConfig::wire_training_cells = wire_training_cells;
+  CfarLiveControlConfig::wire_nci_axes = wire_nci_axes;
+  CfarLiveControlConfig::wire_alpha_lut = wire_alpha_lut;
 
   holoscan::Graph graph{"cfar-live-config"};
   const auto source = graph.op<CfarLiveDataSourceOp>("data_source");
@@ -473,24 +473,24 @@ FiveOutGraphRunResult run_cfar_live(std::vector<CfarLiveTick> ticks,
       .add(sink4);
   const holoscan::ConnectionOptions q{.queue_depth = 4U};
   graph.add_flow(source->rd_maps, op->rd_maps, q);
-  if (expect_guard_cells || expect_training_cells) {
+  if (wire_guard_cells || wire_training_cells) {
     const auto control =
         graph.op<CfarLivePodControlsSourceOp>("pod_control_source");
-    if (expect_guard_cells) {
+    if (wire_guard_cells) {
       graph.add_flow(control->guard_cells, op->guard_cells, q);
     }
-    if (expect_training_cells) {
+    if (wire_training_cells) {
       graph.add_flow(control->training_cells, op->training_cells, q);
     }
     graph.partition("pod_control").add(control);
   }
-  if (expect_nci_axes || expect_alpha_lut) {
+  if (wire_nci_axes || wire_alpha_lut) {
     const auto control =
         graph.op<CfarLiveTensorControlsSourceOp>("tensor_control_source");
-    if (expect_nci_axes) {
+    if (wire_nci_axes) {
       graph.add_flow(control->nci_axes, op->nci_axes, q);
     }
-    if (expect_alpha_lut) {
+    if (wire_alpha_lut) {
       graph.add_flow(control->alpha_lut, op->alpha_lut, q);
     }
     graph.partition("tensor_control").add(control);

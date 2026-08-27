@@ -25,13 +25,13 @@ ordering, and numerical parity with `radar_common/sim/`.
 
 **Class:** Settled (L16 / L17, 2026-08-21); residual stamp-ownership question.
 
-**Decision:** Enabled `[live]` ports join the data trigger with `Exact{}` and
+**Decision:** `[live]` ports join the data trigger with `Exact{}` and
 `on_missing SafeDefault{}`. The application stamps the frame's transmit time
 on both the override and the cube. `sticky_*` (default true) latches the
 last Exact match; false reverts to Params on a miss. No epoch field in the
-descriptor. On this branch the override entries are unconditional — an unwired
-port is admitted by the SDK's optional-input rule, so `expect_waveform` is
-gone and only `sticky_waveform` remains
+descriptor. The override entries are unconditional and an unwired port is
+admitted by the SDK's optional-input rule, so wiring is the application's only
+obligation and `sticky_waveform` is the sole per-port static
 ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11). `waveform` is
 restored through a generated
 `holoscan::radar::wire` schema payload; the logical parameter remains

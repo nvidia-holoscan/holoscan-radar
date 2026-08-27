@@ -17,12 +17,13 @@ deferred on EA. See
 [`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
 **Decision.** `pfa` / `threshold_scale` / `os_rank` / `max_detections` join
-the `rd_maps` trigger with `Exact{}` and `on_missing SafeDefault{}`, each
-gated by `expect_<name>` (default false). `sticky_<name>` (default true)
-latches the last Exact match; false reverts to Params on a miss. The
-application stamps the frame's transmit time on both the override and the
-cube. `expect_*=true` requires the matching `add_flow`
-(`TEMPORAL_INPUT_UNCONNECTED` otherwise); wiring without the flag is
+the `rd_maps` trigger with `Exact{}` and `on_missing SafeDefault{}`, and the
+entries are unconditional. `sticky_<name>` (default true) latches the last
+Exact match; false reverts to Params on a miss. The application stamps the
+frame's transmit time on both the override and the cube. Wiring a port is
+the only thing that enables its override: an unwired entry compiles
+(warning `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT`) and reads as no
+override, while wiring a port absent from `contract()` is
 `RUNTIME_OPERATOR_REPLAY_MISMATCH`.
 
 **Still deferred.**
@@ -48,31 +49,33 @@ Isolated `pfa` / `os_rank` / `max_detections` perf is still owed;
 
 ---
 
-## 2. `[live]` vector params are Params-only (unbounded / pair vectors)
+## 2. `[live]` vector params ride PODs and config Tensors
 
-**Blocks checklist:** Tests → live `guard_cells` / `training_cells` /
-`nci_axes` / `alpha_lut` mid-stream sticky override.
+**Blocks checklist:** none — the vector lives are wired.
 
 **Class:** Durable HSDK 5 (`PublishedPayload` admission). See
 [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9.
 
-**What fails.** `Input<std::vector<…>>` is rejected at compile time.
-`guard_cells` / `training_cells` are length-2 pairs (could become a fixed
-POD later); `nci_axes` / `alpha_lut` are unbounded.
+**What fails.** `Input<std::vector<…>>` is rejected at compile time, so the
+contract's vector `[live]` tags cannot map to the logical Params type
+directly.
 
-**Interim.** Those four stay on `CFARParams` only (`set_params` / YAML).
-`LiveGuardCellsOverrideMidStreamAndSticky` /
-`LiveTrainingCellsOverrideMidStreamAndSticky` /
-`LiveNciAxesOverrideMidStreamAndSticky` are `GTEST_SKIP`’d. Params coverage
-remains (`GuardCellsConfigurableFromParams` /
-`TrainingCellsConfigurableFromParams`). The POD scalar lives do join
-`contract()` behind `expect_*` (§1); only these four are portless.
+**Mapping.** `guard_cells` / `training_cells` are length-2 pairs and ride
+padding-free `CfarCellWindowOverride` PODs converted by `from_wire`.
+`nci_axes` / `alpha_lut` ride rank-1 pageable-host config Tensors validated
+on arrival (rank, host memory, contiguity, dtype, and a per-variant maximum
+extent). Sticky state owns the converted `std::vector`, so no wire storage
+leaks into operator state. Graph coverage:
+`LiveGuardCellsOverrideMidStreamAndSticky`,
+`LiveAlphaLutOverrideStickyAndClearing`,
+`RejectsMalformedLiveNciAxesTensor`, `RejectsMalformedLiveAlphaLut`.
 
-**Next.** Prefer fixed POD for (doppler, range) pairs and `Input<Tensor>` (or
-a durable schema) for `alpha_lut` / `nci_axes`; restore sticky live + Graph
-tests.
+**Next.** Nothing owed unless an owning-container payload family lands, at
+which point the POD / config-Tensor wrappers can collapse back to the
+logical vector types.
 
-**Status:** open — ported compute path; live vector ports deferred.
+**Status:** settled — the payload form differs from the logical Params type;
+behavior conforms.
 
 ---
 
@@ -128,8 +131,8 @@ phase 5.
 
 `performance/cpp/perf_cfar_detector.cpp` uses the HSDK 5 Graph five-output
 path and reports cold / steady / inline `threshold_scale` override timing.
-Other scalar live inputs still need isolated rows; vector lives remain
-Params-only under HSDK5_PORT §9.
+Other scalar live inputs, and the POD / config-Tensor vector lives, still
+need isolated rows.
 
 **Status:** closed for the Graph port and representative scalar override.
 

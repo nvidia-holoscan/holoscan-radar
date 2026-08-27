@@ -68,7 +68,7 @@ Grouped by theme. Section numbers match [`HSDK5_PORT.md`](HSDK5_PORT.md)
 
 | Issue | What we did |
 | --- | --- |
-| Mid-stream sticky `[live]` Graph (scalar/enum beside device Tensor) fails compile or runtime (`PARTITION_MANUAL_AUTHORING_REQUIRED`, `RUNTIME_PORT_BINDING_UNAVAILABLE`, `RUNTIME_EXECUTION_LANE_PLAN_INVALID`, …) | Gate typed live Inputs in `contract()` with `expect_*`; keep remaining scalar/enum Graph skips and the minimal repro in `tests/cpp/utils/test_live_override_repro.cpp` (`ctest -L ea_repro`). FMCW schema-backed window/waveform Graph tests run (§1 / §9). |
+| Mid-stream sticky `[live]` Graph (scalar/enum beside device Tensor) fails compile or runtime (`PARTITION_MANUAL_AUTHORING_REQUIRED`, `RUNTIME_PORT_BINDING_UNAVAILABLE`, `RUNTIME_EXECUTION_LANE_PLAN_INVALID`, …) | Declare typed live Inputs in `contract()` unconditionally and let wiring decide (`expect_*` only under an `OnAligned` trigger); keep remaining scalar/enum Graph skips and the minimal repro in `tests/cpp/utils/test_live_override_repro.cpp` (`ctest -L ea_repro`). FMCW schema-backed window/waveform Graph tests run (§1 / §9). |
 | Device Tensor outs need explicit pool bind; foreign-handle / zero-copy republish rejected | `bind_*_device_pools` in harness; apps/perf `allocate_tensor` / loan fill each tick; `PerfPublishMode`; accept VAA lg/xl vs 4.3 gap as publish-path artifact (§3) |
 | Raw `DLManagedTensor*` imports are read-only | Writable path via `DLManagedTensorContext` + owned device memory (`dlpack_buffer.hpp`) (§4) |
 | Operator with **no** wired port breaks auto-partition (`PARTITION_MANUAL_AUTHORING_REQUIRED`, unnamed vertex) | Always drain fan-outs (e.g. `cfar_power` → viewer **and** `NullSinkOp`); never leave a constructed sink unwired (§6) |

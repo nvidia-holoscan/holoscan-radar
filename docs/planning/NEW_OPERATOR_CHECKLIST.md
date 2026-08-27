@@ -35,7 +35,7 @@ throws / sits in `OPEN_ITEMS.md`.
       group `README.md`, SPDX on all new files.
 - [ ] **`setup()` complete** — single-entry `TensorMap` ports, `initialize()`
       arg setters, `[live]` override ports where required.
-- [ ] **`compute()` correct** — Exact `[live]` resolve (`expect_*` /
+- [ ] **`compute()` correct** — Exact `[live]` resolve (wiring /
       retention), rank-agnostic shapes,
       stream-ordered CUDA, clear errors on unsupported paths.
 - [ ] **Tests** — `tests/cpp/<group>/test_<operator>.cpp` covers `TESTING.md`
@@ -97,9 +97,12 @@ throws / sits in `OPEN_ITEMS.md`.
       [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md) — one committed canonical
       `.fbs`, generated outputs untracked, bounded Tensor fields, validated
       bridges, evolution discipline, install surface, and drift/Graph tests.
-- [ ] **`[live]` parameters:** declare with `spec.param(...)`, then
-      register the `Input<>` in `setup()` and gate `contract()` with
-      `expect_*` via `maybe_add_live_override_to_contract`.
+- [ ] **`[live]` parameters:** declare with `spec.param(...)`, register the
+      `Input<>` in `setup()`, then add the `contract()` entry
+      unconditionally via `add_live_override_to_contract` — an unwired port
+      is legal and reads as "no override". `OnAligned`-triggered operators
+      are the exception and still gate on `expect_*` via
+      `maybe_add_live_override_to_contract`.
 - [ ] **Static parameters** (kernel-selecting enums, structural modes): no
       override port; document that callers instantiate separate operators.
 - [ ] **`initialize()`:** call `ensure_radar_arg_setters()` and register any
@@ -111,8 +114,8 @@ throws / sits in `OPEN_ITEMS.md`.
 
 - [ ] **Receive / emit** via single-entry `TensorMap` helpers; reject
       multi-entry maps with a clear error.
-- [ ] **Sticky overrides:** when `expect_*` is true, each tick call
-      `resolve_live_override()` (or `resolve_expected_override`); seed
+- [ ] **Sticky overrides:** each tick call `resolve_live_override()` (or
+      `resolve_live_override_via` when the payload needs conversion); seed
       from Params on miss / until first match. Pass `changed` when
       costly rebuilds use `ConfigCache`.
 - [ ] **Named axes / no opaque batch:** infer trailing (and any named

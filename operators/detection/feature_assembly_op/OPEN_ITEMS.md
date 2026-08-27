@@ -22,10 +22,10 @@ Graph paths.
   declared *and connected* input.
 - Wiring those ports via DualIO / multi-source while they are omitted from
   `contract()` yields `RUNTIME_OPERATOR_REPLAY_MISMATCH` on EA.
-- The `expect_*` recipe that settled the module's POD `[live]` overrides
-  does not transfer: this operator has no `[live]` parameters, and the
-  gather ports' presence already follows from the static `features` list,
-  so a per-port flag would state the same fact a third time.
+- The module's `[live]` override recipe does not transfer: this operator has
+  no `[live]` parameters, and these are data gathers whose presence already
+  follows from the static `features` list, so a per-port selector would
+  state the same fact a third time.
 
 **Interim.**
 

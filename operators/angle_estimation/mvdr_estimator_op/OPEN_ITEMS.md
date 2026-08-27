@@ -20,11 +20,12 @@ Cross-cut SDK / migration detail lives in
 **Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky” for
 `diagonal_loading` / `max_sources`.
 
-**Wiring (settled — L16 / L17).** `contract()` joins
+**Wiring (settled — L16 / L17).** `contract()` unconditionally joins
 `Input<double> diagonal_loading` and `Input<int64_t> max_sources` to the
-data trigger with `Exact{}` and `on_missing SafeDefault{}` when the
-matching `expect_*` is set; `compute()` resolves them with
-`resolve_expected_override`. `sticky_*` (default true) latches the last
+data trigger with `Exact{}` and `on_missing SafeDefault{}`; `compute()`
+resolves them with `resolve_live_override`. The application enables an
+override by wiring its port and disables it by leaving it unwired.
+`sticky_*` (default true) latches the last
 Exact match; false reverts to Params on a miss. The application stamps one
 transmit time on the override and the snapshot — see
 [`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).

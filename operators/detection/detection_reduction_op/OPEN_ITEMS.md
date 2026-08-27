@@ -16,14 +16,19 @@ deferred on EA. See
 [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1 and
 [`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
-**Decision.** `representative` / `score_method` join the
+**Decision.** `representative` / `score_method` / `feature_weights` join the
 `OnAligned{labels, detection_idx, points}` trigger with `Exact{}` and
 `on_missing SafeDefault{}`, each gated by `expect_<name>` (default false).
-`sticky_<name>` (default true) latches the last Exact match; false reverts
-to Params on a miss. The application stamps the frame's transmit time on
-both the override and the aligned tensors. `expect_*=true` requires the
-matching `add_flow` (`TEMPORAL_INPUT_UNCONNECTED` otherwise); wiring
-without the flag is `RUNTIME_OPERATOR_REPLAY_MISMATCH`.
+The gate is required here and not module-wide: under an `OnAligned` trigger
+the SDK still rejects an unwired non-trigger `Exact{}` entry with
+`TEMPORAL_INPUT_UNCONNECTED`
+([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11), so
+`expect_*=true` requires the matching `add_flow` and `expect_*=false` omits
+the entry and forbids wiring; wiring without the flag is
+`RUNTIME_OPERATOR_REPLAY_MISMATCH`. `sticky_<name>` (default true) latches
+the last Exact match; false reverts to Params on a miss. The application
+stamps the frame's transmit time on both the override and the aligned
+tensors.
 
 **Still deferred.**
 
@@ -41,28 +46,36 @@ and unskip.
 
 ---
 
-## 2. `[live] feature_weights` is Params-only (unbounded vector)
+## 2. `[live] feature_weights` rides a host config Tensor
 
-**Blocks checklist:** Tests → live `feature_weights` mid-stream sticky override.
+**Blocks checklist:** none — the `feature_weights` override is wired.
 
 **Class:** Durable HSDK 5 (`PublishedPayload` admission). See
 [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9.
 
 **What fails.** `Input<std::vector<double>>` is rejected at compile time.
 `feature_weights` length equals `num_features` from the caller-assembled
-`points` matrix and is unbounded, so a fixed POD like
-`SnapshotWindowOverride` does not fit.
+`points` matrix, so a fixed POD like `SnapshotWindowOverride` does not fit
+either.
 
-**Interim.** `feature_weights` stays on `DetectionReductionParams` only
-(`set_params` / YAML). `LiveFeatureWeightsStickyOverride` is `GTEST_SKIP`’d.
-Params coverage remains (`FeatureWeightsConfigurableFromParams`). The enum
-lives (`representative` / `score_method`) do join `contract()` behind
-`expect_*` (§1); only `feature_weights` is portless.
+**Mapping.** `feature_weights` is an `Input<Tensor>` carrying a rank-1
+pageable-host float64 vector, validated on arrival (rank, host memory,
+contiguity, dtype, and a `MaxTensorExtents.max_features` extent bound) and
+converted to `std::vector<double>` before it reaches sticky state. Like the
+enum lives it is gated by `expect_feature_weights` (§1), and that flag also
+makes `max_features` a required extent. Graph coverage:
+`LiveFeatureWeightsExactMatchChangesSelection`,
+`LiveFeatureWeightsSkewedCaptureMissesExact`,
+`LiveFeatureWeightsStickyKeepsLastExactMatch`,
+`LiveFeatureWeightsEphemeralRevertsToParams`,
+`LiveFeatureWeightsRejectsMalformedLength`,
+`LiveFeatureWeightsRejectsBoundOverflow`.
 
-**Next.** Prefer `Input<Tensor>` (or a durable schema / bounded POD once a
-module max-feature count is pinned) and restore sticky live + Graph tests.
+**Next.** Nothing owed unless an owning-container payload family lands, at
+which point the config Tensor can collapse back to the logical vector type.
 
-**Status:** open — ported compute path; live vector port deferred.
+**Status:** settled — the payload form differs from the logical Params type;
+behavior conforms.
 
 ---
 
@@ -78,8 +91,9 @@ optional gathers / Beamscan `is_valid`). See
 **What fails.**
 
 - `SafeDefault` / `LatestWithin` on optional Tensor `points` still yields
-  `TEMPORAL_INPUT_UNCONNECTED` when left unwired: `on_missing` governs a
-  declared *and connected* input.
+  `TEMPORAL_INPUT_UNCONNECTED` when left unwired under this operator's
+  `OnAligned` trigger: `on_missing` governs a declared *and connected*
+  input.
 - Omitting `points` from `contract()` while wiring it makes the sample
   unavailable in `compute()` and kills the second activation with
   `RUNTIME_OPERATOR_REPLAY_MISMATCH` (peak/medoid Graph paths fail).

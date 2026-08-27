@@ -51,11 +51,11 @@ by this library:
   re-infers. Inputs must be compact row-major in this wave.
 - **Overridable ("live") parameters.** [EA HSDK5 ONLY] An overridable
   parameter may be changed in-flight via a same-named typed
-  `Input<T>` (`sdk/override_param.hpp`). Enabled ports (`expect_*=true`)
-  join the data trigger with `Exact{}` + `SafeDefault{}`; `sticky_*`
+  `Input<T>` (`sdk/override_param.hpp`). Every such port joins the data
+  trigger with `Exact{}` + `SafeDefault{}` unconditionally; `sticky_*`
   (default true) latches the last Exact match in `compute()` via
-  `resolve_live_override`. `expect_*=false` (default) omits the port from
-  `contract()` so unwired graphs compile. Costly reconfigurations
+  `resolve_live_override`. An unwired port reports `kNotConnected` and reads
+  as no override, so one build serves both wirings. Costly reconfigurations
   still warn once and cache via `sdk/config_cache.hpp`; the cache decides
   that itself (a miss against a non-empty cache), so callers pass no warn
   flag. Container-owning FMCW window/waveform lives use generated
@@ -81,7 +81,7 @@ branch to `main`. Open EA / migration issues live in
 | Receive | `receive_tensor(Input<Tensor>&, who)` → `expected<Tensor, Error>` |
 | Emit | `emit_device_tensor(Output<Tensor>&, context, shape, dtype, fill)` — pool loan → write on `context.cuda_stream()` → commit → emit |
 | Stream | `context.cuda_stream()` only (no `receive_cuda_stream` / `set_cuda_stream`) |
-| Exact `[live]` | `maybe_add_live_override_to_contract` + `resolve_live_override`; `expect_*` gates the contract entry |
+| Exact `[live]` | `add_live_override_to_contract` + `resolve_live_override`; the entry is unconditional (`maybe_add_live_override_to_contract` + `expect_*` only under an `OnAligned` trigger) |
 | Writable test tensors | `dlpack_buffer.hpp` builds a `DLManagedTensorContext` + device alloc — raw `DLManagedTensor*` import is permanently read-only in HSDK 5 |
 | C++ tests | `tests/cpp/utils/sdk_harness.hpp`: `TensorSourceOp` / `TensorCaptureOp` + `Graph` compile/`run_async`; device producers need `bind_tensor_output_device` |
 

@@ -137,7 +137,7 @@ surface:
   generator arguments;
 - logical ↔ generated-wire marshaling and optional-array normalization;
 - Tensor field bounds derived from `MaxTensorExtents`;
-- operator public typed ports, `expect_*` / `sticky_*`, and temporal contract;
+- operator public typed ports, `sticky_*`, and temporal contract;
 - the shared schema target, generated-header include path, linkage, install,
   export, and package surface;
 - C++ round-trip, drift-guard, allocation-bound, and Graph publication tests;

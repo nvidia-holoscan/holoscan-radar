@@ -109,8 +109,10 @@ HSDK 4.x `InputContext` / `TensorMap` / `HOLOSCAN_OPERATOR_FORWARD_ARGS`.
    via `receive_tensor`, emit via `emit_device_tensor` /
    `bind_tensor_output_device` on the producer side; stream from
    `context.cuda_stream()`; POD lives via
-   `maybe_add_live_override_to_contract` + `resolve_expected_override`
-   (`Exact{}` + `SafeDefault{}`, gated by `expect_*`; §1).
+   `add_live_override_to_contract` + `resolve_live_override`
+   (`Exact{}` + `SafeDefault{}`, unconditional — wiring is the app's choice;
+   `OnAligned` operators instead gate on `expect_*` via
+   `maybe_add_live_override_to_contract`, §11).
 3. **Allow-list** the CMake target name in
    `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS`
    ([`cmake/HoloscanRadarOptionalFeatures.cmake`](../../cmake/HoloscanRadarOptionalFeatures.cmake))
@@ -187,26 +189,26 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | Area | State |
 | --- | --- |
 | Foundation (Dockerfile yaml-cpp/ssh, `find_package(matx)`, Holoviz gate, C++20) | landed on `dpc/hs5.0-fixes` |
-| Shared Tensor I/O + Exact `[live]` helpers (`radar_common/sdk/`) | landed (ClutterFilter pilot; Exact + `expect_*` since 2026-08-21) |
-| `ClutterFilterOp` F32/F64 + Graph C++ tests | landed; Exact `method` gated by `expect_method`; Graph perf cold/steady landed; live-override unit+perf deferred (§1) |
+| Shared Tensor I/O + Exact `[live]` helpers (`radar_common/sdk/`) | landed (ClutterFilter pilot; Exact since 2026-08-21) |
+| `ClutterFilterOp` F32/F64 + Graph C++ tests | landed; Exact `method` (unconditional entry); Graph perf cold/steady landed; live-override unit+perf deferred (§1) |
 | `SnapshotGatherOp` F32/F64 + Graph C++ tests (OnAligned 2-in/2-out) | landed; Exact `snapshot_window` gated by `expect_snapshot_window`; live-override unit deferred (§1); Graph perf `snapshot_window` `override_ms` restored (§8) |
 | `PhaseShiftBeamformerOp` F32/F64 + Graph C++ tests | landed; `[live]` geometry/grid/taper Params-only (§9); no POD live Inputs, so Graph live tests skipped under §9; Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `peak_interpolation` gated by `expect_peak_interpolation` (Graph live deferred §1); optional `is_valid` Graph wiring deferred (§11); geometry/grid/taper Params-only (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
+| `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `peak_interpolation` (unconditional entry) (Graph live deferred §1); optional `is_valid` Graph wiring deferred (§11); geometry/grid/taper Params-only (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `SubarraySelectionOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; outputs `snapshot_out` / `is_valid_out` (§2); `array_geometry` emitted as packed float64 Tensor (§10); `array_geometry`/`subarray` live Params-only (§9); optional `is_valid` Graph wiring deferred (§11); no dedicated `perf_*` driver |
-| `ClusterDBSCANOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `min_points`/`max_clusters` gated by `expect_*` (Graph live deferred §1); `epsilon` Params-only (§9 unbounded vector); Graph perf `min_points` `override_ms` restored (§8) |
-| `MVDREstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `diagonal_loading`/`max_sources` gated by `expect_*` (Graph live deferred §1); geometry/grid/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `diagonal_loading` `override_ms` restored (§8) |
-| `MUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `num_sources`/`source_count_pfa`/`max_sources` gated by `expect_*` (Graph live deferred §1); geometry/grid/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
-| `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` gated by `expect_*` (Graph live deferred §1); geometry/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX/cuSOLVER teardown preserved; Graph perf `max_sources` `override_ms` restored (§8) |
-| `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` gated by `expect_*` (Graph live deferred §1); geometry/`spatial_smoothing`/`subarray_spec` Params-only (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
+| `ClusterDBSCANOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `min_points`/`max_clusters` (unconditional entries) (Graph live deferred §1); `epsilon` Params-only (§9 unbounded vector); Graph perf `min_points` `override_ms` restored (§8) |
+| `MVDREstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `diagonal_loading`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/grid/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `diagonal_loading` `override_ms` restored (§8) |
+| `MUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/grid/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
+| `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX/cuSOLVER teardown preserved; Graph perf `max_sources` `override_ms` restored (§8) |
+| `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing`/`subarray_spec` Params-only (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
 | `FeatureAssemblyOp` F32/F64 + Graph C++ tests (1-in/1-out; optional gathers) | landed; optional gather Inputs omitted from contract (§11 / Beamscan `is_valid` pattern); Graph optional wiring deferred — stage kernel coverage; no `[live]` params; Graph perf cold/steady landed |
 | `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; Exact `representative`/`score_method` gated by `expect_*` (Graph live deferred §1); `feature_weights` Params-only (§9 unbounded vector); Graph perf cold/steady landed |
-| `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; Exact POD lives gated by `expect_*` (Graph live deferred §1); vector lives Params-only (§9); statistical MC suite on label `statistical`; Graph perf `threshold_scale` `override_ms` restored (§8) |
+| `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; Exact POD lives (unconditional entries) (Graph live deferred §1); vector lives Params-only (§9); statistical MC suite on label `statistical`; Graph perf `threshold_scale` `override_ms` restored (§8) |
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph sticky/`TXSchedule` live N/A (Params-only schedule); Graph perf cold/steady landed |
 | `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` Params-only (§9); Graph live tests skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); Exact `wavelength` gated by `expect_wavelength` (Graph live deferred §1); Graph perf `wavelength` `override_ms` restored (§8); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
-| `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; Exact lives gated by `expect_*`; `range_window`/`waveform` restored through generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
-| `FMCWDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `velocity_bins` only with waveform; Exact lives gated by `expect_*`; `doppler_window`/`waveform` restored through generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
-| `FMCWRangeDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–3-out) | landed; optional axis outs with waveform; Exact lives incl. `clutter_filter` gated by `expect_*`; windows/`waveform` restored through generated schema payloads (§9); UlpParity vs split chain preserved; Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
+| `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); Exact `wavelength` (unconditional entry) (Graph live deferred §1); Graph perf `wavelength` `override_ms` restored (§8); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
+| `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; Exact lives (unconditional entries); `range_window`/`waveform` restored through generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
+| `FMCWDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `velocity_bins` only with waveform; Exact lives (unconditional entries); `doppler_window`/`waveform` restored through generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
+| `FMCWRangeDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–3-out) | landed; optional axis outs with waveform; Exact lives incl. `clutter_filter` (unconditional entries); windows/`waveform` restored through generated schema payloads (§9); UlpParity vs split chain preserved; Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
 | Python bindings / Holoviz demos / apps | deferred (phase 4); X11 RD + Graph demos siso/simo/dense/mimo/aoa landed (§6) |
 
 ---
@@ -217,9 +219,10 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 
 **Class:** EA limitation (not a permanent ban on sticky live overrides).
 
-**Contract.** `OPERATOR_API.md` requires Exact `[live]` parameters gated by
-`expect_*`. Enabled live Inputs are in `contract()` only when
-`expect_*=true`. FMCW windows/waveform use generated schema payloads; other
+**Contract.** `OPERATOR_API.md` requires Exact `[live]` parameters. Their
+`contract()` entries are unconditional and an app enables an override by wiring
+the port; the `OnAligned` operators gate theirs on `expect_*` (§11). FMCW
+windows/waveform use generated schema payloads; other
 descriptor / vector lives currently stay Params-only until the settled §9
 mapping is implemented.
 `resolve_sticky_override` remains for the LatestWithin repro test.
@@ -295,12 +298,13 @@ respected:
   override. Both wirings come from one build, and the choice is plain
   `Params` — so it rides `from_config()` YAML like any other parameter,
   with no constructor argument and no `MaxTensorExtents`-style
-  ctor capture.
-- **The two failure modes still bound it.** Parameter on + unwired is the
-  compile rejection (`TEMPORAL_INPUT_UNCONNECTED`); parameter off + wired
-  is the runtime one (`RUNTIME_OPERATOR_REPLAY_MISMATCH`). The parameter
-  must therefore agree with the application's `add_flow`, and a mismatch
-  in either direction is loud.
+  ctor capture. This is how the `OnAligned` operators still work (§11);
+  everywhere else the entry is unconditional and the gate is gone.
+- **Wired-undeclared is still a failure mode.** A port the application
+  wires but the contract omits kills the second activation with
+  `RUNTIME_OPERATOR_REPLAY_MISMATCH`. The reverse — declared and unwired —
+  is now legal for a non-trigger `Exact{}` + `SafeDefault{}` entry, which
+  is what retired the gate (§11).
 - **The selector bounds parameterize too, and they bite.** A parameter may
   set `LatestWithin::max_age`, and the window really gates selection: with
   a 1 ms window against a 100 ms control plane, most activations report
@@ -320,12 +324,12 @@ respected:
   retuning one means recompiling. Anything genuinely live must go through
   a `[live]` port (or the parameter control plane) instead.
 
-The residual cost is that the agreement is manual: an application must
-state which `[live]` ports it wires, instead of that following from
-`add_flow` alone. **Adopted (L17):** per-port `expect_*` (default false),
-contract-visible in `OPERATOR_API.md`. Re-test at GA; an SDK that
-tolerates a declared, unwired port with `SafeDefault{}` would remove the
-need entirely (§11).
+The residual cost of the gate was that the agreement is manual: an
+application had to state which `[live]` ports it wires, instead of that
+following from `add_flow` alone. **Settled (L17):** the SDK now tolerates a
+declared, unwired non-trigger `Exact{}` + `SafeDefault{}` entry, so wiring
+is the only statement an application makes and the gate survives on the two
+`OnAligned` operators alone (§11).
 
 **Re-test list — swept 2026-08-23.** Every operator previously documented as
 omitting live Inputs from `contract()` was re-checked against this narrowing
@@ -834,9 +838,19 @@ measures it against this module's shapes:
 Consequences for this module: every `OnEach`-triggered operator can drop
 `expect_*` outright, and the optional-Tensor omissions (`is_valid`,
 FeatureAssembly gathers) become ordinary contract entries. `SnapshotGatherOp`
-and `DetectionReductionOp` trigger `OnAligned`, so they keep `expect_*` (or the
-SDK extends the rule to non-member inputs of an aligned trigger — worth asking,
-since an override is not an alignment member).
+and `DetectionReductionOp` trigger `OnAligned`, so they keep `expect_*`.
+
+**The `OnAligned` exclusion is the one thing still worth asking for.** Re-run of
+the probe against the pinned branch confirms it is unchanged: an unwired
+`Exact{}` + `SafeDefault{}` input that is *not* a member of the aligned trigger
+set is still `TEMPORAL_INPUT_UNCONNECTED`, while the same operator shape under
+`OnEach` is accepted. An override is not an alignment member and its absence
+cannot make the alignment unsatisfiable, so extending the rule to non-member
+inputs of an `OnAligned` trigger looks like a strictly narrowing fix rather than
+new vocabulary. Until it lands, `SnapshotGatherOp` and `DetectionReductionOp`
+are the module's only two `expect_*` holders — recorded as an exception in
+[`OPERATOR_API.md`](OPERATOR_API.md)'s parameter override convention rather than
+as a module-wide idiom.
 
 **Validated end to end (2026-08-27) against branch tip `906fc1247`.** The
 `expect_*`-free `FMCWRangeProcessorOp` from `deustice/optional-input-ports`
@@ -848,11 +862,20 @@ on the `v5.0.0.1` EA SDK with `TEMPORAL_INPUT_UNCONNECTED` on the unwired
 measurement gap — "wired override still selects" is now asserted by the
 operator's own tests, not only by the probe.
 
-**Remaining blocker is the Tensor spec API, not the feature.** The branch sits
-on `main-5x`, which has reshaped the Tensor spec surface past `v5.0.0.1`. A
-full build of this module against it produced 156 errors in 23 files (18
-operator targets plus 3 test targets), every one of them this migration and
-nothing else. The mapping is mechanical:
+**Adopted (2026-08-27).** The devcontainer base image now pins the SDK to
+`deustice/5x/optional-port-contracts`, the module has migrated to that branch's
+Tensor spec API, and `expect_*` is gone from every `OnEach`-triggered operator
+in the `fmcw`, `angle_estimation`, `detection`, and `clustering` groups along
+with the corresponding test wiring. Tests that used to set an `expect_*` flag
+now pass an explicit wiring struct to their graph helper, so the fact that used
+to be stated twice (the flag and the `add_flow`) is stated once.
+
+**Getting here required the Tensor spec migration.** The branch sits on
+`main-5x`, which has reshaped the Tensor spec surface past `v5.0.0.1`, so the
+module could not build against the feature until it moved. The mapping is
+mechanical and is now applied module-wide behind the `tensor_input` /
+`tensor_output` / `pooled_tensor_output` helpers in
+`radar_common/sdk/tensor_io.hpp`:
 
 | `v5.0.0.1` (this module) | `main-5x` |
 | --- | --- |
@@ -861,22 +884,23 @@ nothing else. The mapping is mechanical:
 | `.produces_tensor(layout).tensor_allocation(bounds)` | `.produces_tensor(spec)` with `.storage = TensorOutputStorage::kRuntimePool` |
 | `.expects_tensor(layout)` | `.expects_tensor(TensorInputSpec{.representation = …})` |
 
-Repository-wide surface: `TensorPortLayout` in 44 files, `TensorAllocationBounds`
-in 42 (apps and bindings included, which that build had gated off). The
-validation above applied this mapping to three files only — the operator, the
-shared test harness, and the operator's test — in a throwaway worktree.
-Cherry-picking the feature back onto `v5.0.0.1` instead conflicts in the
-diagnostic registry and `run_session.cpp` (312 commits of drift).
+The migration also surfaced two stricter compile-time checks on the newer SDK:
+a producer's pool `max_rank` must agree with the rank its `TensorRepresentation`
+declares, or the edge fails `GRAPH_TENSOR_LAYOUT_EDGE_CONFLICT` at compile.
+Two test sources were over-declaring rank and were corrected; one CFAR test that
+deliberately feeds a malformed rank-2 control tensor now sees it rejected at the
+edge rather than inside `compute()`, which is a strictly earlier and better
+diagnosis of the same mistake.
 
-**Next.** Keep `expect_*` on `main` until either the feature ships in a release
-built on the EA Tensor spec API, or this module migrates to the `main-5x` shape
-(a contract-adjacent change — see
-[`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md) — that wants its own decision,
-not a drive-by). Reasoning and the full measurement set:
+**Consequence for the branch.** This is a one-way door: the module no longer
+builds against the `v5.0.0.1` EA tag. Cherry-picking the feature back onto
+`v5.0.0.1` was tried and conflicts in the diagnostic registry and
+`run_session.cpp` (312 commits of drift), so the pin moves forward rather than
+the feature moving back. Reasoning and the full measurement set:
 [`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md).
 
-**Status:** open — the feature is proven sufficient; shipping it here waits on
-the Tensor spec API decision.
+**Status:** open only for the `OnAligned` exclusion. The `OnEach` case is
+implemented, adopted, and covered by the operator test suites.
 
 ---
 
@@ -1096,7 +1120,7 @@ remain open.
 | Params schema | Ported ops use `Operator<Params>` + `HOLOSCAN_PARAM_SCHEMA`; drop `ArgumentSetter` / `ensure_radar_arg_setters` for those |
 | Stream | `context.cuda_stream()` only — no `receive_cuda_stream` / `set_cuda_stream` |
 | Emit | `prepare_device_tensor` then `emit_prepared_tensor` for multi-out ticks (fill/commit all loans before any publish); single-out may still use `emit_device_tensor` |
-| Live override helper | `maybe_add_live_override_to_contract` (`Exact{}` + `SafeDefault{}`, gated by `expect_*`) + operator-owned `std::optional` latched by `resolve_expected_override` (not experimental `runtime_mutable`). `resolve_sticky_override` / `LatestWithin` survive only in the repro test |
+| Live override helper | `add_live_override_to_contract` (`Exact{}` + `SafeDefault{}`, unconditional; `maybe_add_live_override_to_contract` + `expect_*` only under an `OnAligned` trigger) + operator-owned `std::optional` latched by `resolve_live_override` (not experimental `runtime_mutable`). `resolve_sticky_override` / `LatestWithin` survive only in the repro test |
 | Optional receives | Only `kInputUndeclared` / `kInputEmpty` / `kInputNotSelected` / `kNotReady` mean "absent" (`is_absent_input_error`); every other receive error propagates instead of degrading to the Params seed |
 | Empty tensors | `receive_tensor` rejects a null `data()` only when `nbytes() > 0` — a zero-element tensor legitimately carries no allocation |
 | Static params | Root-MUSIC / ESPRIT reject a mid-session `angle_convention` change rather than silently reusing the seeded device relabeling |

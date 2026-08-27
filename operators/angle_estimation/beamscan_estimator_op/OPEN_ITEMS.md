@@ -16,10 +16,11 @@ if it affects the module, then remove or archive the section here.
 **Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”;
 Performance → inline live-override measurement (when Graph-ported).
 
-**Wiring (settled — L16 / L17).** `contract()` joins
+**Wiring (settled — L16 / L17).** `contract()` unconditionally joins
 `Input<PeakInterpolation> peak_interpolation` to the data trigger with
-`Exact{}` and `on_missing SafeDefault{}` when `expect_peak_interpolation`
-is set, and `compute()` resolves it with `resolve_expected_override`.
+`Exact{}` and `on_missing SafeDefault{}`, and `compute()` resolves it with
+`resolve_live_override`. The application enables the override by wiring the
+port and disables it by leaving it unwired.
 `sticky_peak_interpolation` (default true) latches the last Exact match;
 false reverts to Params on a miss. The application stamps one transmit
 time on both the override and the snapshot — see
@@ -59,8 +60,8 @@ fixed-size POD like `SnapshotWindowOverride`.
 `set_params`). Live Graph override tests are `GTEST_SKIP`’d. Params
 coverage remains (`ArrayTaperConfigurableFromParams`, scan-grid / DOA
 tests). `angle_convention` stays static (Params only) per OPERATOR_API.md.
-Enum live `peak_interpolation` has an Exact override port (§1); no
-`expect_*` is declared for these four until ports exist.
+Enum live `peak_interpolation` has an Exact override port (§1); these four
+have no port to wire.
 
 **Next.** Prefer Tensor live ports for angle grids and/or ChannelPod /
 schema wrappers for descriptors once a module-wide recipe lands (§9);
@@ -85,9 +86,6 @@ deferred.
   enough on EA).
 - Wiring `is_valid` via DualIO while it is omitted from the contract
   yields `RUNTIME_OPERATOR_REPLAY_MISMATCH`.
-- The `expect_*` recipe that unblocked the POD `[live]` overrides (§1)
-  would apply here too, at the cost of a second declaration site for a
-  cheap mask; not adopted for `is_valid`.
 
 **Interim.** Port remains registered in `setup()`; `compute()` uses
 `receive_optional_value`. Graph tests

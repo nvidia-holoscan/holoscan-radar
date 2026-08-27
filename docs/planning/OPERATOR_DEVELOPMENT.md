@@ -77,7 +77,7 @@ make progress — they are **not** checklist completion. Prefer:
 
 - CA before GO/SO/OS (or whichever mode has a closed-form reference)
 - Complex + real dtype paths early (they share most of the shell)
-- Exact `[live]` plumbing (`expect_*` + retention) with at least one
+- Exact `[live]` plumbing (wiring + retention) with at least one
   mid-stream match and a following miss tick (sticky and/or ephemeral)
 - Sparse / variable-size outputs (compaction) as a staged follow-up if a host
   path unblocks correctness first — but schedule the GPU path before calling
@@ -366,11 +366,17 @@ kernel rewrites.
 
 ### Sticky semantics
 
-**Module `[live]` ports** (when `expect_*` is true) join with `Exact{}` +
-`SafeDefault{}`. Stickiness is the `sticky_*` Param in `compute()` via
+**Module `[live]` ports** join with `Exact{}` + `SafeDefault{}`, declared
+unconditionally — an app enables an override by wiring the port and disables it
+by leaving it unwired, which reports `kNotConnected` and reads as "no value this
+tick". Stickiness is the `sticky_*` Param in `compute()` via
 `resolve_live_override` — not a `LatestWithin` window. Seed from Params until
 the first Exact match (sticky) or on every miss (ephemeral). Never treat a
 default-constructed SafeDefault payload as a value.
+
+`OnAligned`-triggered operators (`SnapshotGatherOp`, `DetectionReductionOp`)
+are the exception: the SDK still rejects an unwired non-trigger `Exact{}` entry
+under an aligned trigger, so they keep the `expect_*` gate.
 
 The notes below are the measured `LatestWithin` / `DrainAll` behavior (still
 true of the SDK, and still used by unmigrated operators that omit live Inputs

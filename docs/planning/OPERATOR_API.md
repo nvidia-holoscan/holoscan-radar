@@ -262,10 +262,10 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 **Parameter override convention.** Parameters are configuration set at graph build.
 
 - A parameter tagged **[live]** may additionally be overridden in-flight via a same-named input port. The port is listed under Parameters (with the tag), never duplicated under Inputs; only true data tensors appear under Inputs.
-- Wiring is a **declared expectation**: each `[live]` port has a static `expect_<name>` bool (**Default: `false`**) and a static `sticky_<name>` bool (**Default: `true`**, ignored when `expect_*` is false). These are not themselves `[live]`; `set_params` on a running plan does not change wiring. `expect_*=true` puts `Exact{}` + `on_missing SafeDefault{}` in `contract()` and the application **must** `add_flow` the port; `false` omits the entry and the port **must not** be wired (HSDK 5 rejects declared-unwired and wired-undeclared inputs).
-- **[EA HSDK5 ONLY]** `expect_*` exists only because the EA rejects a declared-unwired input. An SDK carrying CONTRACT-020 admits an unwired non-trigger `Exact{}` + `SafeDefault{}` entry (compile warning, `kNotConnected` per activation), and then wiring the port is the application's only obligation. `FMCWRangeProcessorOp` is already written that way — its `expect_*` parameters are gone. `OnAligned`-triggered operators (`SnapshotGatherOp`, `DetectionReductionOp`) are excluded from the rule and keep theirs. See [`HSDK5_PORT.md`](HSDK5_PORT.md) §11.
+- **Wiring is the application's only obligation.** Every `[live]` port's `Exact{}` + `on_missing SafeDefault{}` entry is in `contract()` unconditionally; an app enables the override by `add_flow`-ing the port and disables it by leaving it unwired. An unwired entry compiles (warning `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT`) and reports `kNotConnected` on every activation, which the operator reads as "no override this tick". The only per-port static is `sticky_<name>` (**Default: `true`**); it is not itself `[live]`, and `set_params` on a running plan does not change it.
+- **Exception — `OnAligned` triggers.** An unwired non-trigger `Exact{}` entry is still `TEMPORAL_INPUT_UNCONNECTED` when the trigger is `OnAligned`, so `SnapshotGatherOp` and `DetectionReductionOp` keep a static `expect_<name>` bool (**Default: `false`**) that gates the `contract()` entry: `true` requires the app to wire the port, `false` omits the entry and the port must not be wired. See [`HSDK5_PORT.md`](HSDK5_PORT.md) §11.
 - Join is **Exact** against the operator's data trigger (`OnEach` on the cube / map). Capture times must match. The override for frame *k* must already be published when the trigger sample arrives (application causal order — typically the sequencer stamps transmit time on both). A same-tick sibling that has not yet published yields `kNeverSeen`.
-- **Effective value.** `expect=false` → the Params/YAML value. `expect=true` and Exact match → that sample (latched if `sticky_*=true`). `expect=true` and miss → sticky: last latched sample, else Params; `sticky_*=false`: Params. Never treat a SafeDefault default-constructed payload as an override.
+- **Effective value.** Unwired → the Params/YAML value on every tick. Wired with an Exact match → that sample (latched if `sticky_*=true`). Wired with a miss → sticky: last latched sample, else Params; `sticky_*=false`: Params. Never treat a SafeDefault default-constructed payload as an override.
 - Unmatched ticks still run (SafeDefault). Apps that need fail-closed coherence must publish every frame on the trigger's `capture_time` (or handle miss at the application). Stickiness is compute-side; the selector is the same either way.
 - The philosophy is to not over-constrain a caller who knows what they are doing: allow a reasonable set of footguns, and warn where relevant.
 - Output shapes are inferred from the input tensors each tick (never assumed fixed downstream), so a **[live]** change that alters an output shape is allowed — consumers re-infer.
@@ -289,7 +289,7 @@ the logical Params/YAML types. Those types do not change to satisfy
 
 These control-plane Tensors are the sole pageable-host exception to the data
 Tensor memory-space rule. The physical payload does not alter Exact /
-SafeDefault joining, `expect_*` / `sticky_*`, validation, defaults, or
+SafeDefault joining, wiring, `sticky_*`, validation, defaults, or
 shape-change semantics. Schema identity/evolution, generated-artifact, EA
 generator-workaround, and C++-only limitations are locked in
 [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md).
@@ -347,11 +347,11 @@ optional array is absent; null is invalid. See
 
 **Parameters:**
 
-- `doppler_window` **[live]** — WindowSpec. Window along the chirp (slow-time) axis; sidelobe control trades against zero-Doppler clutter leaking into moving-target bins. Overriding to an unseen window rebuilds its coefficients and warns once; prior windows cached. Default: none. Static: `expect_doppler_window` (default `false`), `sticky_doppler_window` (default `true`).
-- `center_zero_doppler` **[live]** — bool. `fftshift` the Doppler axis so zero-Doppler is centered (conventional RD layout); else DC at bin 0. Default: `true`. Static: `expect_center_zero_doppler` (default `false`), `sticky_center_zero_doppler` (default `true`).
-- `waveform` **[live]** — FMCWWaveformDescriptor. Source for the `velocity_bins` axis (carrier → λ, chirp repetition interval → PRF). Override for a changing waveform. Default: none (required only when `velocity_bins` is used). Static: `expect_waveform` (default `false`), `sticky_waveform` (default `true`).
-- `fft_norm` **[live]** — enum {backward, ortho, forward}. Same convention and rationale as FMCWRangeProcessorOp. Default: backward. Static: `expect_fft_norm` (default `false`), `sticky_fft_norm` (default `true`).
-- `nfft` **[live]** — int, ≥ `num_chirps`. Doppler FFT length; larger interpolates the velocity grid over the same span (also the large-prime escape hatch). The output Doppler-bin count follows `nfft` (downstream infers it). Overriding to an unseen length builds a new FFT plan and warns; seen lengths reused from the MatX plan cache. Default: none (= `num_chirps`, exact N-point). Static: `expect_nfft` (default `false`), `sticky_nfft` (default `true`).
+- `doppler_window` **[live]** — WindowSpec. Window along the chirp (slow-time) axis; sidelobe control trades against zero-Doppler clutter leaking into moving-target bins. Overriding to an unseen window rebuilds its coefficients and warns once; prior windows cached. Default: none. Static: `sticky_doppler_window` (default `true`).
+- `center_zero_doppler` **[live]** — bool. `fftshift` the Doppler axis so zero-Doppler is centered (conventional RD layout); else DC at bin 0. Default: `true`. Static: `sticky_center_zero_doppler` (default `true`).
+- `waveform` **[live]** — FMCWWaveformDescriptor. Source for the `velocity_bins` axis (carrier → λ, chirp repetition interval → PRF). Override for a changing waveform. Default: none (required only when `velocity_bins` is used). Static: `sticky_waveform` (default `true`).
+- `fft_norm` **[live]** — enum {backward, ortho, forward}. Same convention and rationale as FMCWRangeProcessorOp. Default: backward. Static: `sticky_fft_norm` (default `true`).
+- `nfft` **[live]** — int, ≥ `num_chirps`. Doppler FFT length; larger interpolates the velocity grid over the same span (also the large-prime escape hatch). The output Doppler-bin count follows `nfft` (downstream infers it). Overriding to an unseen length builds a new FFT plan and warns; seen lengths reused from the MatX plan cache. Default: none (= `num_chirps`, exact N-point). Static: `sticky_nfft` (default `true`).
 
 #### FMCWRangeDopplerProcessorOp (fused)
 
@@ -369,15 +369,15 @@ optional array is absent; null is invalid. See
 
 **Parameters:** (fused; union of the split operators, same semantics)
 
-- `range_window` **[live]** — WindowSpec. Window along fast-time (range FFT). Overriding to an unseen window rebuilds its coefficients and warns once; cached. Default: none. Static: `expect_range_window` (default `false`), `sticky_range_window` (default `true`).
-- `doppler_window` **[live]** — WindowSpec. Window along the chirp axis (Doppler FFT). Overriding to an unseen window rebuilds its coefficients and warns once; cached. Default: none. Static: `expect_doppler_window` (default `false`), `sticky_doppler_window` (default `true`).
-- `apply_dechirp` **[live]** — bool. Software dechirp before the range FFT. Requires a `waveform` and complex-IF input when `true` (same constraint as FMCWRangeProcessorOp). Default: `false`. Static: `expect_apply_dechirp` (default `false`), `sticky_apply_dechirp` (default `true`).
-- `clutter_filter` **[live]** — enum {none, mean_subtraction, single_delay, double_delay}. Optional inline clutter stage between the range and Doppler stages (same semantics as ClutterFilterOp `method`); the delay cancellers reduce `num_doppler` (downstream infers it). No setup cost. Default: none. Static: `expect_clutter_filter` (default `false`), `sticky_clutter_filter` (default `true`).
-- `waveform` **[live]** — FMCWWaveformDescriptor. Dechirp reference and the `range_bins` / `velocity_bins` axes. Override for a changing waveform. Default: none (required for software dechirp and/or those outputs). Static: `expect_waveform` (default `false`), `sticky_waveform` (default `true`).
-- `fft_norm` **[live]** — enum {backward, ortho, forward}. One normalization convention for both transforms. Default: backward. Static: `expect_fft_norm` (default `false`), `sticky_fft_norm` (default `true`).
-- `center_zero_doppler` **[live]** — bool. Center zero-Doppler on the Doppler axis. Default: `true`. Static: `expect_center_zero_doppler` (default `false`), `sticky_center_zero_doppler` (default `true`).
+- `range_window` **[live]** — WindowSpec. Window along fast-time (range FFT). Overriding to an unseen window rebuilds its coefficients and warns once; cached. Default: none. Static: `sticky_range_window` (default `true`).
+- `doppler_window` **[live]** — WindowSpec. Window along the chirp axis (Doppler FFT). Overriding to an unseen window rebuilds its coefficients and warns once; cached. Default: none. Static: `sticky_doppler_window` (default `true`).
+- `apply_dechirp` **[live]** — bool. Software dechirp before the range FFT. Requires a `waveform` and complex-IF input when `true` (same constraint as FMCWRangeProcessorOp). Default: `false`. Static: `sticky_apply_dechirp` (default `true`).
+- `clutter_filter` **[live]** — enum {none, mean_subtraction, single_delay, double_delay}. Optional inline clutter stage between the range and Doppler stages (same semantics as ClutterFilterOp `method`); the delay cancellers reduce `num_doppler` (downstream infers it). No setup cost. Default: none. Static: `sticky_clutter_filter` (default `true`).
+- `waveform` **[live]** — FMCWWaveformDescriptor. Dechirp reference and the `range_bins` / `velocity_bins` axes. Override for a changing waveform. Default: none (required for software dechirp and/or those outputs). Static: `sticky_waveform` (default `true`).
+- `fft_norm` **[live]** — enum {backward, ortho, forward}. One normalization convention for both transforms. Default: backward. Static: `sticky_fft_norm` (default `true`).
+- `center_zero_doppler` **[live]** — bool. Center zero-Doppler on the Doppler axis. Default: `true`. Static: `sticky_center_zero_doppler` (default `true`).
 - `propagation_speed` — float. For the `range_bins` output. Default: speed of light ≈ 2.998e8 m/s.
-- `nfft_range`, `nfft_doppler` **[live]** — int, each ≥ its natural length. Per-axis FFT lengths (interpolation / large-prime escape hatch); the output bin counts follow them (downstream infers). Overriding to an unseen length builds a new FFT plan and warns; seen lengths reused from the plan cache. Default: none (= exact `samples_per_chirp` / `num_chirps`). Static, independently per axis: `expect_nfft_range` / `expect_nfft_doppler` (default `false`) and `sticky_nfft_range` / `sticky_nfft_doppler` (default `true`).
+- `nfft_range`, `nfft_doppler` **[live]** — int, each ≥ its natural length. Per-axis FFT lengths (interpolation / large-prime escape hatch); the output bin counts follow them (downstream infers). Overriding to an unseen length builds a new FFT plan and warns; seen lengths reused from the plan cache. Default: none (= exact `samples_per_chirp` / `num_chirps`). Static, independently per axis: `sticky_nfft_range` / `sticky_nfft_doppler` (default `true`).
 
 ---
 
@@ -486,6 +486,7 @@ Reduces each cluster to one **representative detection** so the cluster-then-ang
 - `score_method` **[live]** — enum {weighted_sum, weighted_l2, weighted_max, custom}. For `peak`, how the weighted feature columns collapse to the scalar score that is maximized: `weighted_sum` = Σ wᵢ·featureᵢ; `weighted_l2` = ‖w ⊙ feature‖₂; `weighted_max` = maxᵢ wᵢ·featureᵢ; `custom` = the caller's `score_fn` functor. A one-hot `feature_weights` reduces `weighted_sum` to "max of a single column" (e.g. peak power). Used only by `peak`. Default: weighted_sum.
 - `feature_weights` **[live]** — float `(num_features,)`. Per-feature weights `w`. For `peak` they weight the columns before `score_method` combines them; for `medoid` they scale the per-axis centroid distance (mixed-unit weighting — the same idea as `ClusterDBSCANOp.epsilon`, best matched to it). Default: none (required for `peak` / `medoid`; mixed-unit features have no universal default).
 - `score_fn` — custom scoring functor, used only when `score_method = custom`. A **compile-time** device functor (a template parameter, like precision), mapping a length-`num_features` feature row to a scalar — not a runtime value. Default: none.
+- Each `[live]` port above is gated by a static `expect_<name>` bool (default `false`) plus `sticky_<name>` (default `true`) — this operator triggers `OnAligned`, the one shape that cannot tolerate an unwired contract entry (see the Parameter override convention).
 
 **Algorithm:**
 
@@ -535,6 +536,7 @@ Gathers, for each detection, the per-channel complex snapshot(s) from the RD map
 **Parameters:**
 
 - `snapshot_window` **[live]** — int per axis `(doppler, range)`, the neighborhood half-extent gathered around each detection. `(0, 0)` → one snapshot (the detection cell itself). `num_snapshots = (2·doppler_half + 1)·(2·range_half + 1)`. Overriding changes `num_snapshots` (an output-shape change — downstream infers); cheap (a gather, no setup). Default: `(0, 0)` (single-snapshot — matches Beamscan).
+- Each `[live]` port above is gated by a static `expect_<name>` bool (default `false`) plus `sticky_<name>` (default `true`) — this operator triggers `OnAligned`, the one shape that cannot tolerate an unwired contract entry (see the Parameter override convention).
 - `doppler_edge` — enum {wrap, clamp, shift}. Neighborhood behavior at the Doppler-axis edges. `wrap`: periodic — bin 0 is adjacent to bin `num_doppler − 1` in the aliased spectrum (physically correct for the Doppler FFT axis). `clamp`: truncate the window at the axis bound, yielding fewer real snapshots near the edge (ragged) — the missing slots are flagged in `is_valid`. `shift`: slide the window inward to keep `num_snapshots` constant using real distinct cells (asymmetric about the detection near an edge). Static. Default: wrap.
 - `range_edge` — enum {wrap, clamp, shift}, the same three behaviors as `doppler_edge`. (`wrap` is offered for symmetry but is rarely physical for range — range bins are not periodic.) Static. Default: shift.
 
