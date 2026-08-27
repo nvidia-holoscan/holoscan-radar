@@ -114,24 +114,15 @@ template <typename T>
 Contract FMCWRangeDopplerProcessorOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{adc_cube});
-  maybe_add_live_override_to_contract(
-      result, range_window_in, params().expect_range_window);
-  maybe_add_live_override_to_contract(
-      result, doppler_window_in, params().expect_doppler_window);
-  maybe_add_live_override_to_contract(
-      result, apply_dechirp_in, params().expect_apply_dechirp);
-  maybe_add_live_override_to_contract(
-      result, clutter_filter_in, params().expect_clutter_filter);
-  maybe_add_live_override_to_contract(
-      result, waveform_in, params().expect_waveform);
-  maybe_add_live_override_to_contract(
-      result, fft_norm_in, params().expect_fft_norm);
-  maybe_add_live_override_to_contract(
-      result, center_zero_doppler_in, params().expect_center_zero_doppler);
-  maybe_add_live_override_to_contract(
-      result, nfft_range_in, params().expect_nfft_range);
-  maybe_add_live_override_to_contract(
-      result, nfft_doppler_in, params().expect_nfft_doppler);
+  add_live_override_to_contract(result, range_window_in);
+  add_live_override_to_contract(result, doppler_window_in);
+  add_live_override_to_contract(result, apply_dechirp_in);
+  add_live_override_to_contract(result, clutter_filter_in);
+  add_live_override_to_contract(result, waveform_in);
+  add_live_override_to_contract(result, fft_norm_in);
+  add_live_override_to_contract(result, center_zero_doppler_in);
+  add_live_override_to_contract(result, nfft_range_in);
+  add_live_override_to_contract(result, nfft_doppler_in);
   return result;
 }
 
@@ -151,54 +142,47 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
   // wire sample; sticky state stores the converted descriptor.
   HOLOSCAN_TRY(
       auto eff_range_window,
-      resolve_expected_override_via(
-          pinned.expect_range_window, range_window_in, pinned.range_window,
-          sticky_range_window_, pinned.sticky_range_window,
+      resolve_live_override_via(
+          range_window_in, pinned.range_window, sticky_range_window_,
+          pinned.sticky_range_window,
           [](const wire::WindowSpecT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(
       auto eff_doppler_window,
-      resolve_expected_override_via(
-          pinned.expect_doppler_window, doppler_window_in,
-          pinned.doppler_window, sticky_doppler_window_,
+      resolve_live_override_via(
+          doppler_window_in, pinned.doppler_window, sticky_doppler_window_,
           pinned.sticky_doppler_window,
           [](const wire::WindowSpecT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto eff_apply_dechirp,
-               resolve_expected_override(pinned.expect_apply_dechirp,
-                                         apply_dechirp_in, pinned.apply_dechirp,
-                                         sticky_apply_dechirp_,
-                                         pinned.sticky_apply_dechirp));
+               resolve_live_override(
+                   apply_dechirp_in, pinned.apply_dechirp,
+                   sticky_apply_dechirp_, pinned.sticky_apply_dechirp));
   HOLOSCAN_TRY(auto eff_clutter_filter,
-               resolve_expected_override(pinned.expect_clutter_filter,
-                                         clutter_filter_in,
-                                         pinned.clutter_filter,
-                                         sticky_clutter_filter_,
-                                         pinned.sticky_clutter_filter));
+               resolve_live_override(
+                   clutter_filter_in, pinned.clutter_filter,
+                   sticky_clutter_filter_, pinned.sticky_clutter_filter));
   HOLOSCAN_TRY(
       auto eff_waveform_value,
-      resolve_expected_override_via(
-          pinned.expect_waveform, waveform_in, pinned.waveform,
-          sticky_waveform_, pinned.sticky_waveform,
+      resolve_live_override_via(
+          waveform_in, pinned.waveform, sticky_waveform_,
+          pinned.sticky_waveform,
           [](const wire::FMCWWaveformT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto eff_fft_norm,
-               resolve_expected_override(pinned.expect_fft_norm, fft_norm_in,
-                                         pinned.fft_norm, sticky_fft_norm_,
-                                         pinned.sticky_fft_norm));
+               resolve_live_override(
+                   fft_norm_in, pinned.fft_norm, sticky_fft_norm_,
+                   pinned.sticky_fft_norm));
   HOLOSCAN_TRY(auto eff_center_zero_doppler,
-               resolve_expected_override(pinned.expect_center_zero_doppler,
-                                         center_zero_doppler_in,
-                                         pinned.center_zero_doppler,
-                                         sticky_center_zero_doppler_,
-                                         pinned.sticky_center_zero_doppler));
+               resolve_live_override(
+                   center_zero_doppler_in, pinned.center_zero_doppler,
+                   sticky_center_zero_doppler_,
+                   pinned.sticky_center_zero_doppler));
   HOLOSCAN_TRY(auto eff_nfft_range_raw,
-               resolve_expected_override(pinned.expect_nfft_range,
-                                         nfft_range_in, pinned.nfft_range,
-                                         sticky_nfft_range_,
-                                         pinned.sticky_nfft_range));
+               resolve_live_override(
+                   nfft_range_in, pinned.nfft_range, sticky_nfft_range_,
+                   pinned.sticky_nfft_range));
   HOLOSCAN_TRY(auto eff_nfft_doppler_raw,
-               resolve_expected_override(pinned.expect_nfft_doppler,
-                                         nfft_doppler_in, pinned.nfft_doppler,
-                                         sticky_nfft_doppler_,
-                                         pinned.sticky_nfft_doppler));
+               resolve_live_override(
+                   nfft_doppler_in, pinned.nfft_doppler, sticky_nfft_doppler_,
+                   pinned.sticky_nfft_doppler));
 
   // nfft 0 = "use natural length" (Params "none" convention).
   const std::optional<int64_t> eff_nfft_range =

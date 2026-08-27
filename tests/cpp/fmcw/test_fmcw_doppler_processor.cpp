@@ -768,8 +768,6 @@ TEST(FMCWDopplerProcessorOpTest, LiveOverrideDopplerWindow) {
   FMCWDopplerProcessorParams params;
   params.waveform = base_waveform;
   params.center_zero_doppler = false;
-  params.expect_doppler_window = true;
-  params.expect_waveform = true;
   const DualIOGraphRunResult out =
       run_doppler_descriptor_override_graph(
           {base, changed, base}, std::move(params));

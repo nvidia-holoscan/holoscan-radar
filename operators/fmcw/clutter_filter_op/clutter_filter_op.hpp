@@ -46,7 +46,6 @@ namespace holoscan::radar {
 
 struct ClutterFilterParams {
   ClutterFilterMethod method{ClutterFilterMethod::kMeanSubtraction};
-  bool expect_method{false};
   bool sticky_method{true};
 };
 
@@ -58,12 +57,10 @@ HOLOSCAN_PARAM_SCHEMA(
         "double_delay}: mean_subtraction nulls zero-Doppler with no chirp "
         "loss; the delay cancellers are 1st/2nd-order MTI high-pass filters "
         "and drop 1-2 chirps."),
-    holoscan::field<&ClutterFilterParams::expect_method>("expect_method")
-        .description("Set when the application wires the method override."),
     holoscan::field<&ClutterFilterParams::sticky_method>("sticky_method")
         .description(
-            "Keep the last Exact method match on a miss. Ignored unless "
-            "expect_method."));
+            "Keep the last Exact method match on a miss; otherwise every "
+            "miss reverts to the method parameter."));
 
 static_assert(holoscan::param_schema_availability<ClutterFilterParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -90,7 +87,7 @@ class ClutterFilterOp : public holoscan::Operator<ClutterFilterParams> {
   // remains "range_profiles"; the physical port name is range_profiles_out.
   // [EA HSDK5 ONLY] revisit naming once the full port is settled.
   Output<Tensor> range_profiles_out{"range_profiles_out"};
-  // [live] Exact override of params().method, gated by expect_method.
+  // [live] Exact override of params().method.
   Input<ClutterFilterMethod> method{"method"};
 
  private:

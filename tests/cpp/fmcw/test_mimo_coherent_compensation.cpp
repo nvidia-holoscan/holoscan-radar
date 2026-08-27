@@ -694,7 +694,6 @@ TEST(MIMOCoherentCompensationOp, LiveWaveformOverrideSticky) {
           waveform_b, kNumTx, kNumRx, kDoppler, kRange),
       shape, complex_dtype<float>());
   MIMOCoherentCompensationParams params = tdm_params(waveform_a);
-  params.expect_waveform = true;
   params.sticky_waveform = true;
 
   const GraphRunResult out = run_live_waveform_graph(
@@ -720,7 +719,6 @@ TEST(MIMOCoherentCompensationOp, LiveWaveformUsesExactCaptureTime) {
           waveform_a, kNumTx, kNumRx, kDoppler, kRange),
       shape, complex_dtype<float>());
   MIMOCoherentCompensationParams params = tdm_params(waveform_a);
-  params.expect_waveform = true;
   params.sticky_waveform = false;
 
   const GraphRunResult out = run_live_waveform_graph(
@@ -741,7 +739,6 @@ TEST(MIMOCoherentCompensationOp, RejectsInvalidLiveWaveform) {
           waveform, kNumTx, kNumRx, kDoppler, kRange),
       shape, complex_dtype<float>());
   MIMOCoherentCompensationParams params = tdm_params(waveform);
-  params.expect_waveform = true;
 
   const GraphRunResult out = run_live_waveform_graph(
       {{frame, waveform, 0, true}}, std::move(params));

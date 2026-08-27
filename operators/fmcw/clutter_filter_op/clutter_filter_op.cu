@@ -63,7 +63,7 @@ void ClutterFilterOp<T>::setup(OperatorSpec& spec) {
   spec.input(range_profiles).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.output(range_profiles_out)
       .produces_tensor(pooled_tensor_output(kDevice, max_rank_, max_byte_span_));
-  // [live] method override. Wired only when expect_method is true.
+  // [live] method override; an unwired port simply reads as a miss.
   spec.input(method).queue_depth(2U);
 }
 
@@ -71,8 +71,7 @@ template <typename T>
 Contract ClutterFilterOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{range_profiles});
-  maybe_add_live_override_to_contract(
-      result, method, params().expect_method);
+  add_live_override_to_contract(result, method);
   return result;
 }
 
@@ -83,9 +82,8 @@ expected<void, Error> ClutterFilterOp<T>::compute(ExecutionContext& context) {
 
   const ClutterFilterParams& pinned = context.params<ClutterFilterParams>();
   HOLOSCAN_TRY(auto method_value,
-               resolve_expected_override(pinned.expect_method, method,
-                                         pinned.method, sticky_method_,
-                                         pinned.sticky_method));
+               resolve_live_override(
+                   method, pinned.method, sticky_method_, pinned.sticky_method));
   if (method_value == ClutterFilterMethod::kNone) {
     return fail_invalid(
         "ClutterFilterOp: method 'none' is not supported by the standalone "

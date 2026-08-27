@@ -55,11 +55,6 @@ struct FMCWDopplerProcessorParams {
   FMCWWaveformDescriptor waveform{};
   FftNorm fft_norm{FftNorm::kBackward};
   int64_t nfft{0};
-  bool expect_doppler_window{false};
-  bool expect_center_zero_doppler{false};
-  bool expect_waveform{false};
-  bool expect_fft_norm{false};
-  bool expect_nfft{false};
   bool sticky_doppler_window{true};
   bool sticky_center_zero_doppler{true};
   bool sticky_waveform{true};
@@ -95,48 +90,24 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Slow-time FFT length >= num_chirps; larger interpolates "
             "the velocity grid over the same span. 0 = num_chirps."),
-    holoscan::field<&FMCWDopplerProcessorParams::expect_doppler_window>(
-        "expect_doppler_window")
-        .description(
-            "Set when the application wires the doppler_window override."),
-    holoscan::field<&FMCWDopplerProcessorParams::expect_center_zero_doppler>(
-        "expect_center_zero_doppler")
-        .description(
-            "Set when the application wires the center_zero_doppler "
-            "override."),
-    holoscan::field<&FMCWDopplerProcessorParams::expect_waveform>(
-        "expect_waveform")
-        .description("Set when the application wires the waveform override."),
-    holoscan::field<&FMCWDopplerProcessorParams::expect_fft_norm>(
-        "expect_fft_norm")
-        .description(
-            "Set when the application wires the fft_norm override."),
-    holoscan::field<&FMCWDopplerProcessorParams::expect_nfft>("expect_nfft")
-        .description("Set when the application wires the nfft override."),
     holoscan::field<&FMCWDopplerProcessorParams::sticky_doppler_window>(
         "sticky_doppler_window")
         .description(
-            "Keep the last Exact doppler_window match on a miss. False "
-            "reverts to Params. Ignored unless expect_doppler_window."),
+            "Keep the last Exact doppler_window match on a miss. False reverts "
+            "to Params."),
     holoscan::field<&FMCWDopplerProcessorParams::sticky_center_zero_doppler>(
         "sticky_center_zero_doppler")
-        .description(
-            "Keep the last Exact center_zero_doppler match on a miss. "
-            "Ignored unless expect_center_zero_doppler."),
+        .description("Keep the last Exact center_zero_doppler match on a miss."),
     holoscan::field<&FMCWDopplerProcessorParams::sticky_waveform>(
         "sticky_waveform")
         .description(
-            "Keep the last Exact waveform match on a miss. False reverts "
-            "to Params. Ignored unless expect_waveform."),
+            "Keep the last Exact waveform match on a miss. False reverts to "
+            "Params."),
     holoscan::field<&FMCWDopplerProcessorParams::sticky_fft_norm>(
         "sticky_fft_norm")
-        .description(
-            "Keep the last Exact fft_norm match on a miss. Ignored "
-            "unless expect_fft_norm."),
+        .description("Keep the last Exact fft_norm match on a miss."),
     holoscan::field<&FMCWDopplerProcessorParams::sticky_nfft>("sticky_nfft")
-        .description(
-            "Keep the last Exact nfft match on a miss. Ignored unless "
-            "expect_nfft."));
+        .description("Keep the last Exact nfft match on a miss."));
 
 static_assert(
     holoscan::param_schema_availability<FMCWDopplerProcessorParams>() ==
@@ -165,7 +136,7 @@ class FMCWDopplerProcessorOp
   Output<Tensor> rd_maps{"rd_maps"};
   Output<Tensor> velocity_bins{"velocity_bins"};
 
-  // [live] Exact overrides gated by expect_* (OPERATOR_API.md).
+  // [live] Exact overrides (OPERATOR_API.md).
   Input<wire::WindowSpecT> doppler_window_in{"doppler_window"};
   Input<bool> center_zero_doppler_in{"center_zero_doppler"};
   Input<wire::FMCWWaveformT> waveform_in{"waveform"};

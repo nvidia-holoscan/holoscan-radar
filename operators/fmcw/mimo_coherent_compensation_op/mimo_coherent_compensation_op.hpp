@@ -63,7 +63,6 @@ struct MIMOCoherentCompensationParams {
   MultiplexingScheme multiplexing_scheme{MultiplexingScheme::kUnspecified};
   FMCWWaveformDescriptor waveform{};
   DDMCodeDescriptor ddm_code{};
-  bool expect_waveform{false};
   bool sticky_waveform{true};
 };
 
@@ -84,14 +83,11 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Doppler-band / phase-code layout for DDM mode. Unused for "
             "TDM. Static."),
-    holoscan::field<&MIMOCoherentCompensationParams::expect_waveform>(
-        "expect_waveform")
-        .description("Set when the application wires the waveform override."),
     holoscan::field<&MIMOCoherentCompensationParams::sticky_waveform>(
         "sticky_waveform")
         .description(
-            "Keep the last Exact waveform match on a miss. False reverts "
-            "to Params. Ignored unless expect_waveform."));
+            "Keep the last Exact waveform match on a miss. False reverts to "
+            "Params."));
 
 static_assert(
     holoscan::param_schema_availability<MIMOCoherentCompensationParams>() ==

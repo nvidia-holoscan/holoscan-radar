@@ -1008,9 +1008,6 @@ TEST(FMCWRangeDopplerProcessorOpTest,
       cube, range_window, doppler_window, changed_waveform};
   FMCWRangeDopplerProcessorParams params;
   params.waveform = base_waveform;
-  params.expect_range_window = true;
-  params.expect_doppler_window = true;
-  params.expect_waveform = true;
   const ThreeOutGraphRunResult out =
       run_fused_descriptor_override_graph(
           {base, changed, base}, std::move(params));

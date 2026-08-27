@@ -93,8 +93,7 @@ template <typename T>
 Contract MIMOCoherentCompensationOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{rd_maps});
-  maybe_add_live_override_to_contract(
-      result, waveform_in, params().expect_waveform);
+  add_live_override_to_contract(result, waveform_in);
   return result;
 }
 
@@ -336,9 +335,9 @@ expected<void, Error> MIMOCoherentCompensationOp<T>::compute(
   // ConfigCache handles the warn-once itself.
   HOLOSCAN_TRY(
       effective_waveform_,
-      resolve_expected_override_via(
-          pinned.expect_waveform, waveform_in, pinned.waveform,
-          sticky_waveform_, pinned.sticky_waveform,
+      resolve_live_override_via(
+          waveform_in, pinned.waveform, sticky_waveform_,
+          pinned.sticky_waveform,
           [](const wire::FMCWWaveformT& value) { return from_wire(value); }));
   if (extents_.max_samples_per_chirp.has_value() &&
       effective_waveform_.reference_samples().size() >

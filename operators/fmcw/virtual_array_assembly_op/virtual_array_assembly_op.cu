@@ -107,9 +107,8 @@ void VirtualArrayAssemblyOp<T>::setup(OperatorSpec& spec) {
   // Packed ArrayGeometry (host-planned; H2D each tick).
   spec.output(array_geometry)
       .produces_tensor(pooled_tensor_output(kDevice, geom_bounds));
-  // [live] POD Exact override, registered unconditionally; contract() adds
-  // the entry only when expect_wavelength, so leaving it unconnected is
-  // legal there. Descriptor / vector live params are Params-only (§9).
+  // [live] POD Exact override. Descriptor / vector live params are
+  // Params-only (§9).
   spec.input(wavelength).queue_depth(2U);
 }
 
@@ -117,8 +116,7 @@ template <typename T>
 Contract VirtualArrayAssemblyOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{rd_maps});
-  maybe_add_live_override_to_contract(
-      result, wavelength, params().expect_wavelength);
+  add_live_override_to_contract(result, wavelength);
   return result;
 }
 
@@ -211,9 +209,9 @@ expected<void, Error> VirtualArrayAssemblyOp<T>::compute(
       context.params<VirtualArrayAssemblyParams>();
 
   HOLOSCAN_TRY(auto effective_wavelength,
-               resolve_expected_override(pinned.expect_wavelength, wavelength,
-                                         pinned.wavelength, sticky_wavelength_,
-                                         pinned.sticky_wavelength));
+               resolve_live_override(
+                   wavelength, pinned.wavelength, sticky_wavelength_,
+                   pinned.sticky_wavelength));
 
   if (!(effective_wavelength > 0.0) || !std::isfinite(effective_wavelength)) {
     return fail_invalid(

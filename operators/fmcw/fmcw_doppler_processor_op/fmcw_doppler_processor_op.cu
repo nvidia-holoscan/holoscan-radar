@@ -64,30 +64,27 @@ expected<EffectiveDopplerConfig, Error> resolve_overrides(
     std::optional<int64_t>& sticky_nfft) {
   HOLOSCAN_TRY(
       auto doppler_window,
-      resolve_expected_override_via(
-          pinned.expect_doppler_window, doppler_window_in,
-          pinned.doppler_window, sticky_doppler_window,
+      resolve_live_override_via(
+          doppler_window_in, pinned.doppler_window, sticky_doppler_window,
           pinned.sticky_doppler_window,
           [](const wire::WindowSpecT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto center_zero_doppler,
-               resolve_expected_override(
-                   pinned.expect_center_zero_doppler, center_zero_doppler_in,
-                   pinned.center_zero_doppler, sticky_center_zero_doppler,
+               resolve_live_override(
+                   center_zero_doppler_in, pinned.center_zero_doppler,
+                   sticky_center_zero_doppler,
                    pinned.sticky_center_zero_doppler));
   HOLOSCAN_TRY(
       auto waveform,
-      resolve_expected_override_via(
-          pinned.expect_waveform, waveform_in, pinned.waveform,
-          sticky_waveform, pinned.sticky_waveform,
+      resolve_live_override_via(
+          waveform_in, pinned.waveform, sticky_waveform, pinned.sticky_waveform,
           [](const wire::FMCWWaveformT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto fft_norm,
-               resolve_expected_override(pinned.expect_fft_norm, fft_norm_in,
-                                         pinned.fft_norm, sticky_fft_norm,
-                                         pinned.sticky_fft_norm));
+               resolve_live_override(
+                   fft_norm_in, pinned.fft_norm, sticky_fft_norm,
+                   pinned.sticky_fft_norm));
   HOLOSCAN_TRY(auto nfft,
-               resolve_expected_override(pinned.expect_nfft, nfft_in,
-                                         pinned.nfft, sticky_nfft,
-                                         pinned.sticky_nfft));
+               resolve_live_override(
+                   nfft_in, pinned.nfft, sticky_nfft, pinned.sticky_nfft));
 
   return EffectiveDopplerConfig{
       .window = std::move(doppler_window),
@@ -228,16 +225,11 @@ template <typename T>
 Contract FMCWDopplerProcessorOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{range_profiles});
-  maybe_add_live_override_to_contract(
-      result, doppler_window_in, params().expect_doppler_window);
-  maybe_add_live_override_to_contract(
-      result, center_zero_doppler_in, params().expect_center_zero_doppler);
-  maybe_add_live_override_to_contract(
-      result, waveform_in, params().expect_waveform);
-  maybe_add_live_override_to_contract(
-      result, fft_norm_in, params().expect_fft_norm);
-  maybe_add_live_override_to_contract(
-      result, nfft_in, params().expect_nfft);
+  add_live_override_to_contract(result, doppler_window_in);
+  add_live_override_to_contract(result, center_zero_doppler_in);
+  add_live_override_to_contract(result, waveform_in);
+  add_live_override_to_contract(result, fft_norm_in);
+  add_live_override_to_contract(result, nfft_in);
   return result;
 }
 

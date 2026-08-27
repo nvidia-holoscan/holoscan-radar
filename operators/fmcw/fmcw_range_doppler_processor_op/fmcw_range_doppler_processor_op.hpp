@@ -68,15 +68,6 @@ struct FMCWRangeDopplerProcessorParams {
   int64_t nfft_range{0};
   // 0 = exact (no zero-padding); >= post-clutter chirp count when non-zero.
   int64_t nfft_doppler{0};
-  bool expect_range_window{false};
-  bool expect_doppler_window{false};
-  bool expect_apply_dechirp{false};
-  bool expect_clutter_filter{false};
-  bool expect_waveform{false};
-  bool expect_fft_norm{false};
-  bool expect_center_zero_doppler{false};
-  bool expect_nfft_range{false};
-  bool expect_nfft_doppler{false};
   bool sticky_range_window{true};
   bool sticky_doppler_window{true};
   bool sticky_apply_dechirp{true};
@@ -140,89 +131,40 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Slow-time FFT length >= the post-clutter chirp count for the "
             "Doppler stage. 0 = the post-clutter chirp count."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_range_window>(
-        "expect_range_window")
-        .description(
-            "Set when the application wires the range_window override."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_doppler_window>(
-        "expect_doppler_window")
-        .description(
-            "Set when the application wires the doppler_window override."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_apply_dechirp>(
-        "expect_apply_dechirp")
-        .description(
-            "Set when the application wires the apply_dechirp override."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_clutter_filter>(
-        "expect_clutter_filter")
-        .description(
-            "Set when the application wires the clutter_filter override."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_waveform>(
-        "expect_waveform")
-        .description("Set when the application wires the waveform override."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_fft_norm>(
-        "expect_fft_norm")
-        .description(
-            "Set when the application wires the fft_norm override."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::
-                       expect_center_zero_doppler>(
-        "expect_center_zero_doppler")
-        .description(
-            "Set when the application wires the center_zero_doppler "
-            "override."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_nfft_range>(
-        "expect_nfft_range")
-        .description(
-            "Set when the application wires the nfft_range override."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::expect_nfft_doppler>(
-        "expect_nfft_doppler")
-        .description(
-            "Set when the application wires the nfft_doppler override."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_range_window>(
         "sticky_range_window")
         .description(
-            "Keep the last Exact range_window match on a miss. False "
-            "reverts to Params. Ignored unless expect_range_window."),
+            "Keep the last Exact range_window match on a miss. False reverts "
+            "to Params."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_doppler_window>(
         "sticky_doppler_window")
         .description(
-            "Keep the last Exact doppler_window match on a miss. False "
-            "reverts to Params. Ignored unless expect_doppler_window."),
+            "Keep the last Exact doppler_window match on a miss. False reverts "
+            "to Params."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_apply_dechirp>(
         "sticky_apply_dechirp")
-        .description(
-            "Keep the last Exact apply_dechirp match on a miss. Ignored "
-            "unless expect_apply_dechirp."),
+        .description("Keep the last Exact apply_dechirp match on a miss."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_clutter_filter>(
         "sticky_clutter_filter")
-        .description(
-            "Keep the last Exact clutter_filter match on a miss. Ignored "
-            "unless expect_clutter_filter."),
+        .description("Keep the last Exact clutter_filter match on a miss."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_waveform>(
         "sticky_waveform")
         .description(
-            "Keep the last Exact waveform match on a miss. False reverts "
-            "to Params. Ignored unless expect_waveform."),
+            "Keep the last Exact waveform match on a miss. False reverts to "
+            "Params."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_fft_norm>(
         "sticky_fft_norm")
-        .description(
-            "Keep the last Exact fft_norm match on a miss. Ignored unless "
-            "expect_fft_norm."),
+        .description("Keep the last Exact fft_norm match on a miss."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::
                        sticky_center_zero_doppler>(
         "sticky_center_zero_doppler")
-        .description(
-            "Keep the last Exact center_zero_doppler match on a miss. "
-            "Ignored unless expect_center_zero_doppler."),
+        .description("Keep the last Exact center_zero_doppler match on a miss."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_nfft_range>(
         "sticky_nfft_range")
-        .description(
-            "Keep the last Exact nfft_range match on a miss. Ignored "
-            "unless expect_nfft_range."),
+        .description("Keep the last Exact nfft_range match on a miss."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_nfft_doppler>(
         "sticky_nfft_doppler")
-        .description(
-            "Keep the last Exact nfft_doppler match on a miss. Ignored "
-            "unless expect_nfft_doppler."));
+        .description("Keep the last Exact nfft_doppler match on a miss."));
 
 static_assert(
     holoscan::param_schema_availability<FMCWRangeDopplerProcessorParams>() ==
@@ -252,7 +194,7 @@ class FMCWRangeDopplerProcessorOp
   Output<Tensor> range_bins{"range_bins"};
   Output<Tensor> velocity_bins{"velocity_bins"};
 
-  // [live] Exact override ports gated by expect_*.
+  // [live] Exact override ports.
   Input<wire::WindowSpecT> range_window_in{"range_window"};
   Input<wire::WindowSpecT> doppler_window_in{"doppler_window"};
   Input<bool> apply_dechirp_in{"apply_dechirp"};
