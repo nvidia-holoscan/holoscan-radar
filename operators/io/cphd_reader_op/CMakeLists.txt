@@ -17,7 +17,10 @@ if(NOT TINYXML2_INCLUDE_DIR OR NOT TINYXML2_LIBRARY)
         "configure with -DOP_cphd_reader_op=OFF to build without the reader.")
 endif()
 
-add_library(cphd_reader_op cphd_reader_op.cu cphd_file.cpp)
+add_library(cphd_reader_op
+    cphd_cf8_decode.cu
+    cphd_file.cpp
+    cphd_reader_op.cu)
 add_library(holoscan::cphd_reader_op ALIAS cphd_reader_op)
 
 target_include_directories(cphd_reader_op PUBLIC

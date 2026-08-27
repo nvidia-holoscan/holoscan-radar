@@ -5,6 +5,9 @@
 
 #include <tinyxml2.h>
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <complex>
 #include <cstdint>
 #include <cstring>
@@ -17,6 +20,8 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#include "radar_common/math/constants.hpp"
 
 namespace holoscan::radar::cphd {
 
@@ -204,6 +209,59 @@ int64_t to_int(const std::string& text, const std::string& what,
     throw std::runtime_error("CphdFile: " + file + ": " + what +
                              " is not an integer: '" + text + "'");
   }
+}
+
+double to_double(const std::string& text, const std::string& what,
+                 const std::string& file) {
+  try {
+    size_t consumed = 0;
+    const double value = std::stod(text, &consumed);
+    if (consumed != text.size()) {
+      throw std::invalid_argument("trailing characters");
+    }
+    if (!std::isfinite(value)) {
+      throw std::invalid_argument("not finite");
+    }
+    return value;
+  } catch (const std::exception&) {
+    throw std::runtime_error("CphdFile: " + file + ": " + what +
+                             " is not a finite number: '" + text + "'");
+  }
+}
+
+std::array<double, 3> required_xyz(const tinyxml2::XMLElement* root,
+                                   const std::string& path,
+                                   const std::string& file) {
+  return {
+      to_double(required_text(root, path + "/X", file), path + "/X",
+                file),
+      to_double(required_text(root, path + "/Y", file), path + "/Y",
+                file),
+      to_double(required_text(root, path + "/Z", file), path + "/Z",
+                file)};
+}
+
+std::array<double, 3> vec_sub(const std::array<double, 3>& a,
+                              const std::array<double, 3>& b) {
+  return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+}
+
+double vec_dot(const std::array<double, 3>& a,
+               const std::array<double, 3>& b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+std::array<double, 3> vec_unit(const std::array<double, 3>& a) {
+  const double n = std::sqrt(vec_dot(a, a));
+  if (!(n > 0.0) || !std::isfinite(n)) {
+    throw std::runtime_error(
+        "CphdFile: aspect angle needs a non-zero LOS");
+  }
+  return {a[0] / n, a[1] / n, a[2] / n};
+}
+
+std::array<double, 3> pvp_xyz(const std::vector<double>& v) {
+  return {v[0], v[1], v[2]};
 }
 
 }  // namespace
@@ -466,6 +524,122 @@ void CphdFile::parse_xml(const std::string& xml) {
     throw std::runtime_error("CphdFile: " + path_ +
                              ": PVP block declares no fields");
   }
+
+  // Optional: a geolocated collection names the image-area reference
+  // point. The mode-5 lattice is built from this; a file without it
+  // still reads, and the accessor throws if a caller needs it.
+  const tinyxml2::XMLElement* iarp_x =
+      find_path(root, "SceneCoordinates/IARP/ECF/X");
+  const tinyxml2::XMLElement* iarp_y =
+      find_path(root, "SceneCoordinates/IARP/ECF/Y");
+  const tinyxml2::XMLElement* iarp_z =
+      find_path(root, "SceneCoordinates/IARP/ECF/Z");
+  if (iarp_x != nullptr && iarp_y != nullptr && iarp_z != nullptr) {
+    iarp_ecef_ = {
+        to_double(required_text(root, "SceneCoordinates/IARP/ECF/X",
+                                path_),
+                  "IARP/ECF/X", path_),
+        to_double(required_text(root, "SceneCoordinates/IARP/ECF/Y",
+                                path_),
+                  "IARP/ECF/Y", path_),
+        to_double(required_text(root, "SceneCoordinates/IARP/ECF/Z",
+                                path_),
+                  "IARP/ECF/Z", path_)};
+    has_iarp_ = true;
+  }
+
+  // Optional: the declared imaged rectangle in the IA plane. A
+  // file without it still reads; the accessor throws if a caller
+  // needs it. Mode 5's default lattice is collection_physics(),
+  // not this rectangle.
+  const tinyxml2::XMLElement* image_x1 =
+      find_path(root, "SceneCoordinates/ImageArea/X1Y1/X");
+  if (image_x1 != nullptr) {
+    image_area_.u_iax = required_xyz(
+        root, "SceneCoordinates/ReferenceSurface/Planar/uIAX",
+        path_);
+    image_area_.u_iay = required_xyz(
+        root, "SceneCoordinates/ReferenceSurface/Planar/uIAY",
+        path_);
+    image_area_.x1 = to_double(
+        required_text(root, "SceneCoordinates/ImageArea/X1Y1/X",
+                      path_),
+        "ImageArea/X1Y1/X", path_);
+    image_area_.y1 = to_double(
+        required_text(root, "SceneCoordinates/ImageArea/X1Y1/Y",
+                      path_),
+        "ImageArea/X1Y1/Y", path_);
+    image_area_.x2 = to_double(
+        required_text(root, "SceneCoordinates/ImageArea/X2Y2/X",
+                      path_),
+        "ImageArea/X2Y2/X", path_);
+    image_area_.y2 = to_double(
+        required_text(root, "SceneCoordinates/ImageArea/X2Y2/Y",
+                      path_),
+        "ImageArea/X2Y2/Y", path_);
+    if (!(image_area_.x2 > image_area_.x1) ||
+        !(image_area_.y2 > image_area_.y1)) {
+      throw std::runtime_error(
+          "CphdFile: " + path_ +
+          ": SceneCoordinates/ImageArea is empty or inverted");
+    }
+    has_image_area_ = true;
+  }
+
+  const tinyxml2::XMLElement* graze =
+      find_path(root, "ReferenceGeometry/Monostatic/GrazeAngle");
+  const tinyxml2::XMLElement* slant = find_path(
+      root, "ReferenceGeometry/Monostatic/SlantRange");
+  const tinyxml2::XMLElement* az_el = find_path(
+      root, "ReferenceGeometry/Monostatic/AzimuthAngle");
+  const tinyxml2::XMLElement* fx_c =
+      find_path(root, "Channel/Parameters/FxC");
+  const tinyxml2::XMLElement* toa =
+      find_path(root, "Channel/Parameters/TOASaved");
+  const tinyxml2::XMLElement* gain =
+      find_path(root, "Antenna/AntPattern/GainZero");
+  if (graze != nullptr && slant != nullptr && az_el != nullptr &&
+      fx_c != nullptr && toa != nullptr && gain != nullptr) {
+    graze_deg_ = to_double(
+        required_text(root, "ReferenceGeometry/Monostatic/GrazeAngle",
+                      path_),
+        "GrazeAngle", path_);
+    slant_range_m_ = to_double(
+        required_text(root, "ReferenceGeometry/Monostatic/SlantRange",
+                      path_),
+        "SlantRange", path_);
+    azimuth_deg_ = to_double(
+        required_text(root,
+                      "ReferenceGeometry/Monostatic/AzimuthAngle",
+                      path_),
+        "AzimuthAngle", path_);
+    fx_c_hz_ = to_double(
+        required_text(root, "Channel/Parameters/FxC", path_), "FxC",
+        path_);
+    toa_saved_s_ = to_double(
+        required_text(root, "Channel/Parameters/TOASaved", path_),
+        "TOASaved", path_);
+    antenna_gain_db_ = to_double(
+        required_text(root, "Antenna/AntPattern/GainZero", path_),
+        "GainZero", path_);
+    if (find_path(root, "Channel/Parameters/FxBW") != nullptr) {
+      fx_bw_hz_ = to_double(
+          required_text(root, "Channel/Parameters/FxBW", path_),
+          "FxBW", path_);
+    } else if (find_path(root, "Global/FxBand/FxMin") != nullptr &&
+               find_path(root, "Global/FxBand/FxMax") != nullptr) {
+      const double fx_min = to_double(
+          required_text(root, "Global/FxBand/FxMin", path_), "FxMin",
+          path_);
+      const double fx_max = to_double(
+          required_text(root, "Global/FxBand/FxMax", path_), "FxMax",
+          path_);
+      fx_bw_hz_ = fx_max - fx_min;
+    } else {
+      fx_bw_hz_ = 0.0;
+    }
+    has_physics_xml_ = fx_bw_hz_ > 0.0 && std::isfinite(fx_bw_hz_);
+  }
 }
 
 void CphdFile::read_at(int64_t offset, char* dest, int64_t bytes,
@@ -488,6 +662,151 @@ const ChannelInfo& CphdFile::channel(int64_t index) const {
         " out of range (file has " + std::to_string(channels_.size()) + ")");
   }
   return channels_[static_cast<size_t>(index)];
+}
+
+const std::array<double, 3>& CphdFile::iarp_ecef() const {
+  if (!has_iarp_) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ +
+        ": XML does not declare SceneCoordinates/IARP/ECF");
+  }
+  return iarp_ecef_;
+}
+
+const CphdFile::ImageArea& CphdFile::image_area() const {
+  if (!has_image_area_) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ +
+        ": XML does not declare SceneCoordinates/ImageArea "
+        "with a planar uIAX/uIAY");
+  }
+  return image_area_;
+}
+
+double CphdFile::xy_square_in_range_azimuth(
+    double range_swath_m, double azimuth_swath_m,
+    double heading_cw_from_north_rad) {
+  if (!(range_swath_m > 0.0) || !(azimuth_swath_m > 0.0) ||
+      !std::isfinite(range_swath_m) ||
+      !std::isfinite(azimuth_swath_m) ||
+      !std::isfinite(heading_cw_from_north_rad)) {
+    throw std::runtime_error(
+        "CphdFile: range/azimuth swath and heading must be finite "
+        "and swaths > 0");
+  }
+  const double shrink =
+      std::abs(std::sin(heading_cw_from_north_rad)) +
+      std::abs(std::cos(heading_cw_from_north_rad));
+  return std::min(range_swath_m, azimuth_swath_m) / shrink;
+}
+
+bool CphdFile::has_collection_physics() const {
+  return has_physics_xml_ && has_pvp_field("SIGNAL") &&
+         has_pvp_field("TxPos") && has_pvp_field("SRPPos") &&
+         !channels_.empty();
+}
+
+CphdFile::CollectionPhysics CphdFile::collection_physics() const {
+  if (!has_collection_physics()) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ +
+        ": collection_physics needs Monostatic GrazeAngle / "
+        "SlantRange / AzimuthAngle, Channel FxC / FxBW / TOASaved, "
+        "Antenna GainZero, and PVP SIGNAL / TxPos / SRPPos");
+  }
+  CollectionPhysics out;
+  const double graze = graze_deg_ * kPi / 180.0;
+  if (!(graze > 0.0) || !(graze < kHalfPi) || !std::isfinite(graze)) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ +
+        ": GrazeAngle must be in (0, 90) deg, got " +
+        std::to_string(graze_deg_));
+  }
+  const double cos_g = std::cos(graze);
+  if (!(fx_bw_hz_ > 0.0) || !std::isfinite(fx_bw_hz_) ||
+      !(toa_saved_s_ > 0.0) || !std::isfinite(toa_saved_s_) ||
+      !(slant_range_m_ > 0.0) || !std::isfinite(slant_range_m_)) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ +
+        ": FxBW, TOASaved, and SlantRange must be finite and > 0");
+  }
+  const double slant_res = kSpeedOfLight / (2.0 * fx_bw_hz_);
+  out.gsd_range_m = slant_res / cos_g;
+  out.range_swath_m =
+      (kSpeedOfLight / 2.0) * toa_saved_s_ / cos_g;
+  const double gain = std::pow(10.0, antenna_gain_db_ / 10.0);
+  if (!(gain > 0.0) || !std::isfinite(gain)) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ + ": Antenna GainZero is not usable");
+  }
+  const double hpbw = std::sqrt(4.0 * kPi / gain);
+  out.azimuth_swath_m = slant_range_m_ * hpbw;
+  out.heading_cw_rad = azimuth_deg_ * kPi / 180.0;
+
+  const int64_t nvec = channel(0).num_vectors;
+  const std::vector<double> sig = read_pvp(0, "SIGNAL", 0, nvec, 1);
+  int64_t first = -1;
+  int64_t last = -1;
+  for (int64_t i = 0; i < nvec; ++i) {
+    if (std::llround(sig[static_cast<size_t>(i)]) == 1) {
+      first = i;
+      break;
+    }
+  }
+  for (int64_t i = nvec - 1; i >= 0; --i) {
+    if (std::llround(sig[static_cast<size_t>(i)]) == 1) {
+      last = i;
+      break;
+    }
+  }
+  if (first < 0 || last <= first) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ +
+        ": need at least two SIGNAL=1 vectors for aspect angle");
+  }
+  const auto tx0 = pvp_xyz(read_pvp(0, "TxPos", first, 1, 3));
+  const auto srp0 = pvp_xyz(read_pvp(0, "SRPPos", first, 1, 3));
+  const auto tx1 = pvp_xyz(read_pvp(0, "TxPos", last, 1, 3));
+  const auto srp1 = pvp_xyz(read_pvp(0, "SRPPos", last, 1, 3));
+  auto finite3 = [](const std::array<double, 3>& a) {
+    return std::isfinite(a[0]) && std::isfinite(a[1]) &&
+           std::isfinite(a[2]);
+  };
+  if (!finite3(tx0) || !finite3(srp0) || !finite3(tx1) ||
+      !finite3(srp1)) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ +
+        ": first/last SIGNAL=1 TxPos/SRPPos is not finite");
+  }
+  const auto u0 = vec_unit(vec_sub(tx0, srp0));
+  const auto u1 = vec_unit(vec_sub(tx1, srp1));
+  const double cang =
+      std::min(1.0, std::max(-1.0, vec_dot(u0, u1)));
+  const double dtheta = std::acos(cang);
+  if (!(dtheta > 0.0) || !std::isfinite(dtheta)) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ +
+        ": first/last valid TxPos give a zero aspect angle");
+  }
+  if (!(fx_c_hz_ > 0.0) || !std::isfinite(fx_c_hz_)) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ + ": FxC must be finite and > 0");
+  }
+  const double lambda = kSpeedOfLight / fx_c_hz_;
+  out.gsd_azimuth_m = lambda / (2.0 * dtheta);
+  out.xy_square_m = xy_square_in_range_azimuth(
+      out.range_swath_m, out.azimuth_swath_m, out.heading_cw_rad);
+  out.gsd_m = std::max(out.gsd_range_m, out.gsd_azimuth_m);
+  if (!(out.gsd_m > 0.0) || !(out.xy_square_m > 0.0)) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ +
+        ": collection physics produced an empty lattice");
+  }
+  out.native_count = std::max(
+      int64_t{1},
+      static_cast<int64_t>(
+          std::llround(out.xy_square_m / out.gsd_m)));
+  return out;
 }
 
 int64_t CphdFile::signal_bytes_per_sample() const {
@@ -665,6 +984,25 @@ void CphdFile::ensure_decode_scratch(size_t bytes) const {
   // Atlanta reader's host cost, and the bytes are overwritten by read_at.
   decode_scratch_.reset(new char[bytes]);
   decode_scratch_bytes_ = bytes;
+}
+
+void CphdFile::read_signal_bytes(int64_t channel_index, int64_t first,
+                                 int64_t count, char* dest,
+                                 size_t dest_bytes) const {
+  const ChannelInfo& info = check_signal_request(channel_index, first, count);
+  const int64_t row_bytes = info.num_samples * signal_bytes_per_sample();
+  const int64_t bytes = count * row_bytes;
+  if (dest == nullptr || dest_bytes < static_cast<size_t>(bytes)) {
+    throw std::runtime_error(
+        "CphdFile: " + path_ +
+        ": stored-signal buffer is smaller than the requested span");
+  }
+  if (bytes == 0) {
+    return;
+  }
+  const int64_t base =
+      signal_block_offset_ + info.signal_byte_offset + first * row_bytes;
+  read_at(base, dest, bytes, "signal block");
 }
 
 template <typename T>

@@ -3,7 +3,10 @@
 
 #pragma once
 
+#include <array>
+#include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <map>
@@ -113,6 +116,54 @@ class CphdFile {
   // quietly unscaled read -- see read_signal_into.
   bool has_amp_sf() const { return has_pvp_field("AmpSF"); }
 
+  // Per-vector AmpSF for a span, or empty when the file has none. The
+  // operator applies these on the GPU CF8 path; read_signal_into applies
+  // them on the host for integer formats and for tools.
+  std::vector<double> amplitude_scale(const PvpBlock* pvp,
+                                      int64_t count) const;
+
+  // SceneCoordinates/IARP/ECF when the XML declares it. Spotlight
+  // collections stare here; the mode-5 lattice is centred on this point.
+  bool has_iarp() const { return has_iarp_; }
+  const std::array<double, 3>& iarp_ecef() const;
+
+  // SceneCoordinates ImageArea in the planar IA frame (metres from
+  // IARP, along uIAX / uIAY). Explicit lattice.counts still uses
+  // this; the mode-5 default is collection_physics() instead.
+  struct ImageArea {
+    std::array<double, 3> u_iax{};
+    std::array<double, 3> u_iay{};
+    double x1{0.0};
+    double y1{0.0};
+    double x2{0.0};
+    double y2{0.0};
+  };
+  bool has_image_area() const { return has_image_area_; }
+  const ImageArea& image_area() const;
+
+  // Side of the largest east-north square, centred at the IARP,
+  // that fits in a range x azimuth rectangle of those extents
+  // whose range axis is `heading_cw_from_north_rad` from north.
+  static double xy_square_in_range_azimuth(
+      double range_swath_m, double azimuth_swath_m,
+      double heading_cw_from_north_rad);
+
+  // Ground-range / ground-azimuth support and the demo lattice:
+  // XY-aligned square at the coarser of the two GSDs. Throws if
+  // the XML/PVP fields it needs are missing.
+  struct CollectionPhysics {
+    double range_swath_m{0.0};
+    double azimuth_swath_m{0.0};
+    double gsd_range_m{0.0};
+    double gsd_azimuth_m{0.0};
+    double heading_cw_rad{0.0};
+    double xy_square_m{0.0};
+    double gsd_m{0.0};
+    int64_t native_count{0};
+  };
+  bool has_collection_physics() const;
+  CollectionPhysics collection_physics() const;
+
   // The per-vector parameter records for `count` vectors starting at
   // `first`, read in one go. Prefer this wherever more than one field is
   // wanted from the same span, which is the usual case.
@@ -150,10 +201,18 @@ class CphdFile {
 
   // Convenience wrapper allocating its own buffer, and reading the parameter
   // block itself where scale factors are needed. Used by tests and tools; the
-  // operator uses read_signal_into to avoid both the copy and the extra read.
+  // operator uses read_signal_bytes (CF8) or read_signal_into (integer).
   std::vector<std::complex<float>> read_signal(int64_t channel_index,
                                                int64_t first,
                                                int64_t count) const;
+
+  // Stored-form bytes for `count` vectors starting at `first`, no endian
+  // swap and no widen. `dest` must hold at least
+  // count * num_samples * stored-bytes-per-sample. The operator H2Ds this
+  // span and decodes CF8 on the device; tests and tools still go through
+  // read_signal_into for a host decode.
+  void read_signal_bytes(int64_t channel_index, int64_t first, int64_t count,
+                         char* dest, size_t dest_bytes) const;
 
  private:
   void parse_ascii_header(std::ifstream* stream);
@@ -162,13 +221,10 @@ class CphdFile {
   // Seek and fill `bytes` at `offset`, or throw naming `what`.
   void read_at(int64_t offset, char* dest, int64_t bytes,
                const char* what) const;
-  // Shared validation for the two signal entry points.
+  // Shared validation for the signal entry points.
   const ChannelInfo& check_signal_request(int64_t channel_index, int64_t first,
                                           int64_t count) const;
-  // The per-vector scale factors for a span, or empty when the file has none.
-  std::vector<double> amplitude_scale(const PvpBlock* pvp,
-                                      int64_t count) const;
-  // Stored-form scratch for the widen path (double CF8, integer formats).
+  // Stored-form scratch for the host widen path (double CF8, integer).
   // `new char[n]` is default-init, not zeroed; vector<char>(n) would be.
   void ensure_decode_scratch(size_t bytes) const;
 
@@ -186,6 +242,18 @@ class CphdFile {
   int64_t xml_block_size_{0};
   int64_t pvp_block_offset_{0};
   int64_t signal_block_offset_{0};
+  bool has_iarp_{false};
+  std::array<double, 3> iarp_ecef_{};
+  bool has_image_area_{false};
+  ImageArea image_area_{};
+  bool has_physics_xml_{false};
+  double graze_deg_{0.0};
+  double slant_range_m_{0.0};
+  double azimuth_deg_{0.0};
+  double fx_c_hz_{0.0};
+  double fx_bw_hz_{0.0};
+  double toa_saved_s_{0.0};
+  double antenna_gain_db_{0.0};
 
   mutable std::ifstream stream_;
   mutable std::unique_ptr<char[]> decode_scratch_;

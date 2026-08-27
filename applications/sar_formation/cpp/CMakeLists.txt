@@ -1,7 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-add_executable(sar_formation sar_formation.cpp sar_image_lut.cu)
+# compute() is a .cpp so nvcc does not parse Holoscan (that was
+# the slow sar_image_lut.cu.o). The .cu is |z|, box-average,
+# GPU percentile, and the uint8 LUT.
+add_executable(sar_formation
+    sar_formation.cpp
+    sar_image_lut.cpp
+    sar_image_lut.cu
+    timeline.cpp)
 
 # yaml-cpp ships with the Holoscan SDK (found transitively via
 # find_package(holoscan)); the app parses its sidecar JSON (valid YAML)
@@ -30,3 +37,5 @@ configure_file(mode01.yaml
     ${CMAKE_CURRENT_BINARY_DIR}/mode01.yaml COPYONLY)
 configure_file(mode01_smoke.yaml
     ${CMAKE_CURRENT_BINARY_DIR}/mode01_smoke.yaml COPYONLY)
+configure_file(mode05.yaml
+    ${CMAKE_CURRENT_BINARY_DIR}/mode05.yaml COPYONLY)

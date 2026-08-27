@@ -21,10 +21,12 @@
 
 cphd:
   path: /tmp/sar/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd
+  names:
+    - Atlanta
   sidecar: ""
 
-output:
-  path: ""
+# dump: true writes a .npy (off by default). Empty output.path
+# puts it next to the CPHD as <stem>_image_{index}.npy.
 
 # IARP-centred scene ENU. Pixel centres match NVRadar's meshgrid:
 #   min_x = (-N/2 + 0.5)*ps , max_y = (N-1)/2*ps
@@ -59,10 +61,14 @@ backprojection:
   coordinate_frame: enu
 
 # Live Holoviz window of the formed image (greyscale log-magnitude,
-# same 99.8-percentile / 30 dB window as the offline PNG). Requires a
-# GUI host; with no display the app warns and runs without the window.
-# visualize_hold_s keeps the window up after the single emit.
+# 99.8th / 25th percentile with a 30 dB floor, same as the offline
+# PNG). Requires a GUI host; with no display the app warns and runs
+# without the window.
+# visualize_size is the window (px); the LUT box-averages Atlanta's
+# 8192² image to that. visualize_hold_s keeps the window up after the
+# single emit. dump: true writes a full-resolution .npy.
 visualize: true
+visualize_size: 1024
 skip_display_check: false
 headless: false
 visualize_hold_s: 30

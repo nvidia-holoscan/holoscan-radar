@@ -37,7 +37,7 @@ All are credential-free: a plain HTTPS or `aws s3 --no-sign-request` pull, no ac
 | 2, video SAR | Umbra, downtown Houston | 110 GiB | pinned, **fully validated** — see below |
 | 3, tiled strip | Capella stripmap, ~4.3 s dwell, CI4 with `AmpSF` | ~704 MiB | collection identified; **exact key needs re-verification** |
 | 4, continuous strip | Capella stripmap, ~15.8 s dwell, CI4 with `AmpSF` | ~3.45 GiB | collection identified; **exact key needs re-verification** |
-| 5, independent images | reuses the mode 1 and 3 collections | — | no separate pin needed |
+| 5, independent images | six unique-IARP Umbra CPHDs (see below). Capella is **not** required | ~10.5 GiB | **settled 2026-08-25** |
 
 The two Capella pins carry weight beyond their modes: they are the only `CI4` collections here, and the only ones with `AmpSF` present, so they are what covers the reader's integer-sample and per-vector-scale paths. Both Umbra collections are `CF8` without `AmpSF`.
 
@@ -50,6 +50,42 @@ sar-data/task-data/0f1231be-26d3-4b98-96ab-f675a5375c14/2026-02-20-03-03-38_UMBR
 ```
 
 `CPHD/1.1.0`, `CF8`, 102,839 vectors x 37,268 samples, 42.01 deg graze, IARP 33.6400 / -84.4300. The key is taken from the MatX `sar_bp` example README rather than transcribed, so "the scene that example images" is exact rather than approximate — which matters because this collection is also the parity reference for `BackprojectionOp`.
+
+## Mode 5 — unique-IARP Umbra collects
+
+Mode 5 is N independent products, so the demo has to *look* like a catalogue of scenes, not a double-run of mode 1. Listing the same CPHD twice proves `collection_boundary` and proves nothing a viewer can see.
+
+**Demo set (settled 2026-08-25):** six real Umbra CPHDs, one IARP each. All `CF8` / FX / `SGN` −1 / `SRPFixed=true`, all `SNAPSHOT` / `UMB-SPOTLIGHT-35-1`. This is the first-ship pin; do not swap a collect without a broken key or an explicit reopen. Tanna Island and David Fuentes were dropped as too small. Atlanta stays on mode 1 — a 16.63 s / 28.59 GiB collect is a different product class, not a larger catalogue tile. Houston stays on mode 2.
+
+Dwell is the **radar collect**, not the download: Umbra `METADATA.json` `collects[].startAtUTC`–`endAtUTC`.
+
+| Scene | IARP | Size | Dwell | Vectors × samples |
+| :--- | :--- | ---: | ---: | :--- |
+| Panama Canal | 8.97°N, 79.58°W | 801 MiB | 2.0 s | 9693 × 7218 |
+| Melbourne | 37.85°S, 144.91°E | 1.07 GiB | 2.39 s | 9946 × 8704 |
+| Bingham Copper Mine | 40.52°N, 112.15°W | 1.20 GiB | 2.0 s | 11134 × 9147 |
+| Kourou, French Guiana | 5.23°N, 52.77°W | 1.74 GiB | 2.72 s | 13451 × 9682 |
+| Buenos Aires | 34.60°S, 58.38°W | 1.93 GiB | 3.23 s | 17205 × 11700 |
+| Intel Ohio One | 40.12°N, 82.71°W | 3.77 GiB | 5.0 s | 22475 × 16183 |
+
+All six are snapshot spotlights. Intel Ohio One is the large-image slot: same SKU as the others, ~2× Buenos Aires in file size and ~1.5× in dwell. The site has a second IARP ~10 km west (40.08°N, 82.81°W, 2.54 GiB / 3.80 s); that cluster is **not** in the set — one plant, one IARP.
+
+Keys (bucket `umbra-open-data-catalog`, smallest CF8 in each IARP cluster):
+
+```text
+sar-data/tasks/Panama Canal, Panama/2d482820-501d-4a21-9c8a-b0213637a4f4/2023-09-12-02-36-33_UMBRA-04/2023-09-12-02-36-33_UMBRA-04_CPHD.cphd
+sar-data/tasks/Melbourne, Australia/0a23b3bc-96f2-48cc-8214-c10cef0d48f3/2023-07-14-23-20-06_UMBRA-05/2023-07-14-23-20-06_UMBRA-05_CPHD.cphd
+sar-data/tasks/Bingham Copper Mine/b276284e-c8c6-4fb5-8aac-0916bc6ef4d6/2023-10-20-04-22-56_UMBRA-04/2023-10-20-04-22-56_UMBRA-04_CPHD.cphd
+sar-data/tasks/Kourou, French Guiana/b40dc22c-c15f-4295-b71f-3a1db2007bbd/2023-02-22-12-54-56_UMBRA-04/2023-02-22-12-54-56_UMBRA-04_CPHD.cphd
+sar-data/tasks/Buenos Aires, ARG/a7a03ef5-6bb6-4f85-aceb-638685a9b3e7/2023-02-08-02-11-21_UMBRA-05/2023-02-08-02-11-21_UMBRA-05_CPHD.cphd
+sar-data/tasks/Intel Ohio One/95d6685e-a4af-4a87-ba0b-b4a43e636e81/2023-10-11-02-20-47_UMBRA-05/2023-10-11-02-20-47_UMBRA-05_CPHD.cphd
+```
+
+**A committed pull script ships with the demo.** The app still reads only local files; the user runs the script first. It lives with the app (`applications/sar_formation/pull_cphd.py`), takes this manifest, downloads over HTTPS / `aws s3 --no-sign-request`, skips files already present, and **refuses the set if two IARPs collide** (read from each file's XML, not from the folder name; collision is ECEF distance < 1 km).
+
+**CI** stays generated: a handful of small simulator CPHDs with different IARPs and different target layouts. No CI job pulls public data.
+
+**The visual checkpoint is Holoviz per collection.** Mode 5 `loop`s, so Holoviz replaces the last emit as each image forms (`visualize_hold_s: -1` keeps the window until SIGINT). `dump: true` writes `.npy` (off by default); `output.max_files` caps a looping dump.
 
 ## Mode 2 — the Houston collect, full dwell
 

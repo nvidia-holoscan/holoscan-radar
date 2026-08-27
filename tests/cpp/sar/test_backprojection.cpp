@@ -91,30 +91,31 @@ holoscan::TensorMap control_map(FormationControl value) {
 
 template <typename T>
 holoscan::TensorMap profiles_impulse(double delta_r, double origin,
-                                     std::complex<double> amplitude) {
+                                     std::complex<double> amplitude,
+                                     int64_t pulses = kPulses) {
   const double bin_f = (delta_r - origin) / kSpacing;
   const int64_t bin = static_cast<int64_t>(std::llround(bin_f));
   std::vector<std::complex<double>> cube(
-      static_cast<size_t>(kPulses * kBins), {0.0, 0.0});
+      static_cast<size_t>(pulses * kBins), {0.0, 0.0});
   if (bin >= 0 && bin < kBins) {
-    for (int64_t p = 0; p < kPulses; ++p) {
+    for (int64_t p = 0; p < pulses; ++p) {
       cube[static_cast<size_t>(p * kBins + bin)] = amplitude;
     }
   }
   return single_map(
-      complex_cube_to_device<T>(cube, {kPulses, kBins}), "range_profiles");
+      complex_cube_to_device<T>(cube, {pulses, kBins}), "range_profiles");
 }
 
 template <typename T>
 holoscan::TensorMap xyz_map(const std::array<double, 3>& point,
-                            const char* key) {
-  std::vector<double> host(static_cast<size_t>(kPulses * 3));
-  for (int64_t p = 0; p < kPulses; ++p) {
+                            const char* key, int64_t pulses = kPulses) {
+  std::vector<double> host(static_cast<size_t>(pulses * 3));
+  for (int64_t p = 0; p < pulses; ++p) {
     host[static_cast<size_t>(p * 3 + 0)] = point[0];
     host[static_cast<size_t>(p * 3 + 1)] = point[1];
     host[static_cast<size_t>(p * 3 + 2)] = point[2];
   }
-  return single_map(real_cube_to_device<T>(host, {kPulses, 3}), key);
+  return single_map(real_cube_to_device<T>(host, {pulses, 3}), key);
 }
 
 struct ImageCapture {
@@ -126,13 +127,15 @@ class BackprojectionApp : public holoscan::Application {
  public:
   BackprojectionApp(BackprojectionBackend backend, FormationControl control,
                     ImageCapture* capture, double origin, double frequency,
-                    const std::array<double, 3>& target)
+                    const std::array<double, 3>& target,
+                    int64_t pulses = kPulses)
       : backend_(backend),
         control_(control),
         capture_(capture),
         origin_(origin),
         frequency_(frequency),
-        target_(target) {}
+        target_(target),
+        pulses_(pulses) {}
 
   void compose() override {
     const auto geometry = grid_geometry();
@@ -154,12 +157,12 @@ class BackprojectionApp : public holoscan::Application {
 
     holoscan::radar::testing::wire_data_source(
         this, op, "range_profiles",
-        {profiles_impulse<T>(dR, origin_, amp)});
+        {profiles_impulse<T>(dR, origin_, amp, pulses_)});
     holoscan::radar::testing::wire_data_source(
-        this, op, "positions", {xyz_map<T>(apc, "positions")});
+        this, op, "positions", {xyz_map<T>(apc, "positions", pulses_)});
     holoscan::radar::testing::wire_data_source(
         this, op, "reference_position",
-        {xyz_map<T>(srp, "reference_position")});
+        {xyz_map<T>(srp, "reference_position", pulses_)});
     holoscan::radar::testing::wire_leading_override(
         this, op, "control",
         std::vector<holoscan::TensorMap>{control_map(control_)});
@@ -182,19 +185,20 @@ class BackprojectionApp : public holoscan::Application {
   double origin_;
   double frequency_;
   std::array<double, 3> target_;
+  int64_t pulses_;
   TensorMapCapture sink_;
 };
 
 template <typename T>
 HostTensor form_one(BackprojectionBackend backend,
                     const std::array<double, 3>& target,
-                    double frequency = kFreq) {
+                    double frequency = kFreq, int64_t pulses = kPulses) {
   const double origin =
       -std::floor(static_cast<double>(kBins) / 2.0) * kSpacing;
   ImageCapture capture;
   auto app = holoscan::make_application<BackprojectionApp<T>>(
       backend, FormationControl::kEmitAndReset, &capture, origin, frequency,
-      target);
+      target, pulses);
   app->run();
   app->take();
   return capture.image;
@@ -265,6 +269,27 @@ TEST(BackprojectionOp, DefaultBackendPeaksDouble) {
   const auto image = form_one<double>(
       holoscan::radar::kDefaultBackprojectionBackend, kTarget);
   expect_peak_at_target(image, kTarget, false, 0.0);
+}
+
+TEST(BackprojectionOp, KernelPulseTilesAccumulate) {
+  // Host launch tile is 1024 pulses (kKernelPulseTile in the stage TU;
+  // this test cannot include that CUDA header). 1300 splits 1024 + 276.
+  // Identical pulses add coherently. Overwrite-not-+= would scale
+  // like 276/4 instead of 1300/4.
+  constexpr int64_t kTiledPulses = 1300;
+  const auto four = form_one<float>(
+      holoscan::radar::kDefaultBackprojectionBackend, kTarget);
+  const auto tiled = form_one<float>(
+      holoscan::radar::kDefaultBackprojectionBackend, kTarget, kFreq,
+      kTiledPulses);
+  const auto expected = sar_predicted_peak(grid_geometry(), kTarget);
+  const double mag4 =
+      std::abs(pixel(four, expected.first, expected.second));
+  const double magn =
+      std::abs(pixel(tiled, expected.first, expected.second));
+  ASSERT_GT(mag4, 1.0);
+  EXPECT_NEAR(magn / mag4,
+              static_cast<double>(kTiledPulses) / kPulses, 2.0);
 }
 
 TEST(BackprojectionOp, ResetWithoutEmitProducesNoImage) {

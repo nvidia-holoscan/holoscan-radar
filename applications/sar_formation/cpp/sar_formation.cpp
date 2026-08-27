@@ -1,24 +1,28 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Mode-1 SAR formation: one collection, one image, dumped as .npy
-// and shown in Holoviz (visualize: true). The default YAML forms
-// the Atlanta Umbra collect; pass mode01_smoke.yaml for the
-// generated fixture.
+// Mode-1 SAR formation: one collection, one image. Holoviz when
+// visualize: true. TensorDumpOp when dump: true (off by default).
+// The dump is the offline PNG checkpoint
+// (tools/sar_image/form_image.py).
 //
 //   CPHDReaderOp → SARRangeCompressionOp → BackprojectionOp
-//                                        → TensorDumpOp
+//                                        [→ TensorDumpOp]
 //                                        [→ SarImageToLutOp
 //                                            → HoldLastImageOp
 //                                            → HolovizOp]
+//                                        [→ TimelineRasterOp
+//                                            → HolovizOp]
 //   reader.positions / reference_position bypass range compression.
 //   StreamBoundaryControlOp (custom_ops.hpp) watches the reader's
-//   D22 announcement and issues emit-and-reset on that tick.
+//   D22 announcement and issues emit-and-reset on that tick. Mode 5
+//   also sends the next collection's lattice / dr / f0 on the seam.
 //
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/sar_formation/cpp/sar_formation \
-//            [mode01.yaml] <collection.cphd>
+//            [mode01.yaml | mode05.yaml] [<collection.cphd>]
 
+#include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -33,6 +37,7 @@
 #include "io/tensor_dump_op/tensor_dump_op.hpp"
 #include "radar_app/app/holoviz_layout.hpp"
 #include "radar_app/viz/display.hpp"
+#include "radar_common/math/constants.hpp"
 #include "sar/backprojection_op/backprojection_op.hpp"
 #include "sar/sar_range_compression_op/sar_range_compression_op.hpp"
 #include "config.hpp"       // NOLINT(build/include_subdir)
@@ -41,6 +46,7 @@
 namespace radar = holoscan::radar;
 using holoscan::radar::app::HolovizLayout;
 using holoscan::radar::app::gui_available;
+using holoscan::radar::app::make_color_holoviz_op;
 using holoscan::radar::app::make_grayscale_lut;
 using holoscan::radar::app::make_image_holoviz_op;
 
@@ -53,10 +59,11 @@ class SarFormationApp : public holoscan::Application {
     const auto& axis_v = cfg.sample_geometry.axis_v();
     const auto& axis_u = cfg.sample_geometry.axis_u();
     HOLOSCAN_LOG_INFO(
-        "sar_formation: {}  lattice {}x{}  f0={:.6e} Hz  dump {}",
-        cfg.cphd_path, cfg.sample_geometry.num_v(),
+        "sar_formation: {} collection(s)  lattice {}x{}  "
+        "f0={:.6e} Hz  dump {}",
+        cfg.cphd_paths.size(), cfg.sample_geometry.num_v(),
         cfg.sample_geometry.num_u(), cfg.reference_frequency,
-        cfg.dump_path);
+        cfg.dump ? cfg.dump_path : std::string("off"));
     HOLOSCAN_LOG_INFO(
         "sar_formation lattice origin [{:.3f}, {:.3f}, {:.3f}]",
         origin[0], origin[1], origin[2]);
@@ -72,18 +79,56 @@ class SarFormationApp : public holoscan::Application {
     // The graph stays double. TESTING.md: fp32 is degraded at
     // spaceborne ranges.
     HOLOSCAN_LOG_INFO("sar_formation precision double");
-    HOLOSCAN_LOG_INFO(
-        "sar_formation range_bin_spacing {:.9f} m (CPHD SCSS; "
-        "range_bins unconnected)",
-        cfg.range_bin_spacing);
+    if (cfg.nfft > 0) {
+      HOLOSCAN_LOG_INFO(
+          "sar_formation range_bin_spacing {:.9f} m (CPHD SCSS, "
+          "nfft={}; range_bins unconnected)",
+          cfg.range_bin_spacing, cfg.nfft);
+    } else {
+      HOLOSCAN_LOG_INFO(
+          "sar_formation range_bin_spacing {:.9f} m (CPHD SCSS; "
+          "range_bins unconnected)",
+          cfg.range_bin_spacing);
+    }
+    for (size_t i = 0; i < cfg.collection_geometries.size(); ++i) {
+      const auto& geom = cfg.collection_geometries[i];
+      const auto& sp = geom.spacing();
+      HOLOSCAN_LOG_INFO(
+          "sar_formation collection {} / {}: {}x{}  "
+          "spacing {:.4f} x {:.4f} m  pixel_scale {:.4g}",
+          i + 1, cfg.collection_geometries.size(), geom.num_v(),
+          geom.num_u(), sp[0], sp[1],
+          i < cfg.lattice_pixel_scale.size()
+              ? cfg.lattice_pixel_scale[i]
+              : 1.0);
+      if (i < cfg.collection_physics.size()) {
+        const auto& phys = cfg.collection_physics[i];
+        HOLOSCAN_LOG_INFO(
+            "sar_formation collection {} physics: heading {:.1f} "
+            "deg CW from N  XY square {:.2f} km  GSD {:.3f} m "
+            "(range {:.3f}, azimuth {:.3f})  native {}x{}",
+            i + 1,
+            phys.heading_cw_rad * 180.0 / radar::kPi,
+            phys.xy_square_m / 1000.0, phys.gsd_m,
+            phys.gsd_range_m, phys.gsd_azimuth_m,
+            phys.native_count, phys.native_count);
+      }
+    }
     auto reader = make_operator<radar::CPHDReaderOp<double>>(
         "cphd_reader",
         from_config("cphd_reader"),
         holoscan::Arg("path") =
-            radar::CollectionPaths(cfg.cphd_path));
+            radar::CollectionPaths(cfg.cphd_paths));
 
-    auto range = make_operator<radar::SARRangeCompressionOp<double>>(
-        "range_compression", from_config("range_compression"));
+    std::shared_ptr<radar::SARRangeCompressionOp<double>> range;
+    if (cfg.nfft > 0) {
+      range = make_operator<radar::SARRangeCompressionOp<double>>(
+          "range_compression", from_config("range_compression"),
+          holoscan::Arg("nfft") = cfg.nfft);
+    } else {
+      range = make_operator<radar::SARRangeCompressionOp<double>>(
+          "range_compression", from_config("range_compression"));
+    }
 
     // Lattice and stored-sample-N/2 frequency: sidecar when present
     // (generated fixtures), otherwise the app-owned YAML keys
@@ -97,9 +142,9 @@ class SarFormationApp : public holoscan::Application {
         holoscan::Arg("range_bin_spacing") = cfg.range_bin_spacing);
 
     auto control = make_operator<StreamBoundaryControlOp>("control");
-
-    auto dump = make_operator<radar::TensorDumpOp>(
-        "tensor_dump", holoscan::Arg("path") = cfg.dump_path);
+    control->geometries = cfg.collection_geometries;
+    control->spacings = cfg.collection_spacings;
+    control->frequencies = cfg.collection_frequencies;
 
     // Fan-out of phase_history is the control operator's reachability
     // edge: metadata arrives only through receive().
@@ -139,10 +184,45 @@ class SarFormationApp : public holoscan::Application {
       add_flow(range, bp, {{"range_profiles", "range_profiles"}});
     }
     add_flow(control, bp, {{"control", "control"}});
-    add_flow(bp, dump, {{"image", "tensor"}});
+    if (cfg.collection_geometries.size() > 1) {
+      add_flow(control, bp,
+               {{"sample_geometry", "sample_geometry"}});
+      add_flow(control, bp,
+               {{"range_bin_spacing", "range_bin_spacing"}});
+      add_flow(control, bp,
+               {{"reference_frequency", "reference_frequency"}});
+    }
+    if (cfg.dump) {
+      holoscan::ArgList dump_args{
+          holoscan::Arg("path") = cfg.dump_path};
+      if (cfg.dump_max_files >= 0) {
+        dump_args.add(
+            holoscan::Arg("max_files") = cfg.dump_max_files);
+      }
+      auto dump = make_operator<radar::TensorDumpOp>(
+          "tensor_dump", dump_args);
+      add_flow(bp, dump, {{"image", "tensor"}});
+    }
 
     if (cfg.visualize) {
       auto to_lut = make_operator<SarImageToLutOp>("sar_image_to_lut");
+      // Window size, not the formed lattice. R8_UINT cannot
+      // bilinear; box-average the LUT to this side so the
+      // window is 1:1. BP (and TensorDump, when dump: true) stay
+      // at the formed lattice (collection physics,
+      // lattice.max_side cap, or sample_geometry counts).
+      to_lut->max_side = cfg.visualize_size;
+      to_lut->scene_names = cfg.scene_names;
+      to_lut->formation_diag = [bp, reader]() {
+        const auto t = bp->last_image_timing();
+        SarImageToLutOp::FormationDiag d;
+        d.bp_compute_s = t.compute_s;
+        d.pulses = t.pulses;
+        d.pixels = t.pixels;
+        d.emit_at = t.emit_at;
+        d.last_packet_at = reader->last_packet_at();
+        return d;
+      };
       auto hold = make_operator<HoldLastImageOp>(
           "hold_image",
           make_condition<holoscan::PeriodicCondition>(
@@ -151,17 +231,68 @@ class SarFormationApp : public holoscan::Application {
 
       HolovizLayout layout;
       layout.window_title = "SAR formation";
-      layout.width = 1024U;
-      layout.height = 1024U;
+      const auto side =
+          static_cast<uint32_t>(cfg.visualize_size);
+      layout.width = side;
+      layout.height = side;
       layout.headless = cfg.headless;
       auto visualizer = make_image_holoviz_op(
           this, "holoviz", layout, "sar_image",
           make_grayscale_lut());
 
+      auto timeline = make_operator<TimelineRasterOp>(
+          "timeline",
+          make_condition<holoscan::PeriodicCondition>(
+              "timeline_period",
+              static_cast<int64_t>(100000000)));
+      timeline->scene_names = cfg.scene_names;
+      timeline->spans = [reader]() {
+        return reader->timeline_spans();
+      };
+      timeline->last_image_emit = [bp]() {
+        return bp->last_image_timing().emit_at;
+      };
+      timeline->last_packet_at = [reader]() {
+        return reader->last_packet_at();
+      };
+      HolovizLayout tl_layout;
+      tl_layout.window_title = "SAR timeline";
+      tl_layout.width = static_cast<uint32_t>(timeline->width);
+      tl_layout.height = static_cast<uint32_t>(timeline->height);
+      tl_layout.headless = cfg.headless;
+      auto timeline_viz = make_color_holoviz_op(
+          this, "timeline_holoviz", tl_layout, "timeline");
+
       add_flow(bp, to_lut, {{"image", "image"}});
       add_flow(to_lut, hold, {{"sar_image", "image"}});
       add_flow(hold, visualizer, {{"image", "receivers"}});
+      add_flow(timeline, timeline_viz,
+               {{"timeline", "receivers"}});
+
+      // One GLFW thread for both windows. EventBased strict-pins
+      // a user pool; pin_operator false so both Holoviz ops share
+      // the single worker rather than each needing its own.
+      auto viz_pool = make_thread_pool("viz", 1);
+      viz_pool->add(visualizer, false);
+      viz_pool->add(timeline_viz, false);
     }
+
+    // Shared default pool, not a pinned thread per operator.
+    // EventBasedScheduler strict-pins user ThreadPools: an idle
+    // reader thread then cannot run BP. A pool of size N (N =
+    // operator count) is enough that a ready op never waits on a
+    // busy worker; extra threads sleep. Greedy (the SDK default)
+    // cannot overlap reader.compute() with BP.compute().
+    const auto n_ops = graph().get_nodes().size();
+    const int64_t n_workers =
+        n_ops > 0 ? static_cast<int64_t>(n_ops) : int64_t{2};
+    scheduler(make_scheduler<holoscan::EventBasedScheduler>(
+        "event_based",
+        holoscan::Arg("worker_thread_number") = n_workers));
+    HOLOSCAN_LOG_INFO(
+        "sar_formation: EventBasedScheduler, {} workers "
+        "(one per operator, shared pool)",
+        n_workers);
   }
 };
 

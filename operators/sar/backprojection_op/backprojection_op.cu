@@ -4,6 +4,7 @@
 #include "sar/backprojection_op/backprojection_op.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -259,6 +260,7 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
                                   OutputContext& op_output,
                                   [[maybe_unused]] ExecutionContext&
                                       context) {
+  const auto t0 = std::chrono::steady_clock::now();
   const std::string& who = op_name<T>();
 
   auto profiles = receive_single(op_input, "range_profiles", who);
@@ -275,6 +277,17 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
         who + ": initial_image is not implemented this slice");
   }
 
+  std::optional<FormationControl> control;
+  if (control_tensor) {
+    control = read_control(*control_tensor, who);
+  }
+  // emit-and-reset forms this tick on the closing aperture's lattice
+  // and scalars, then installs the co-arriving overrides. Applying
+  // spacing / f0 immediately would form A's last pulses at B's dr/f0.
+  const bool stage_after =
+      control.has_value() &&
+      *control == FormationControl::kEmitAndReset;
+
   bool geometry_override = false;
   SampleGeometry pending_geometry;
   bool changed = false;
@@ -284,26 +297,39 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
     geometry_override = true;
     pending_geometry = std::move(new_geometry);
   }
+  std::optional<double> pending_spacing;
   auto spacing_override = receive_override<double>(op_input,
                                                    "range_bin_spacing");
   if (spacing_override.has_value()) {
-    effective_spacing_ = *spacing_override;
+    if (stage_after) {
+      pending_spacing = spacing_override;
+    } else {
+      effective_spacing_ = *spacing_override;
+    }
   }
+  std::optional<double> pending_origin;
   auto origin_override = receive_override<double>(op_input,
                                                  "range_bin_origin");
   if (origin_override.has_value()) {
-    effective_origin_ = *origin_override;
+    if (stage_after) {
+      pending_origin = origin_override;
+    } else {
+      effective_origin_ = *origin_override;
+    }
   }
-  effective_frequency_ = resolve_override_param(
-      op_input, "reference_frequency", effective_frequency_, nullptr);
+  std::optional<double> pending_frequency;
+  auto frequency_override = receive_override<double>(
+      op_input, "reference_frequency");
+  if (frequency_override.has_value()) {
+    if (stage_after) {
+      pending_frequency = frequency_override;
+    } else {
+      effective_frequency_ = *frequency_override;
+    }
+  }
   effective_interpolation_ = resolve_override_param(
       op_input, "interpolation", effective_interpolation_, nullptr);
   require_linear(effective_interpolation_, who);
-
-  std::optional<FormationControl> control;
-  if (control_tensor) {
-    control = read_control(*control_tensor, who);
-  }
 
   classify_input_dtype<T>(*profiles, "range_profiles",
                           /*allow_real=*/false);
@@ -416,6 +442,7 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
       detail::reset_accum(*state_, stream);
     }
     unemitted_pulses_ = 0;
+    aperture_compute_s_ = 0.0;
   }
 
   const int64_t num_bins = cube.cols;
@@ -659,8 +686,15 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
 
   unemitted_pulses_ += num_pulses * cube.batch;
 
+  bool emitted = false;
+  int64_t emitted_pulses = 0;
+  int64_t emitted_pixels = 0;
+  std::shared_ptr<holoscan::Tensor> image;
   if (control.has_value() && is_emit(*control)) {
-    auto image = make_device_tensor(
+    emitted = true;
+    emitted_pulses = unemitted_pulses_;
+    emitted_pixels = num_v * num_u;
+    image = make_device_tensor(
         full_rank_shape(cube, num_v, num_u), complex_dtype<T>());
     if (detail::backend_is_matx(backend_value_)) {
 #if __has_include("matx/kernels/sar_bp.cuh")
@@ -673,10 +707,6 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
     }
     if (stream != cudaStreamDefault) {
       op_output.set_cuda_stream(stream, "image");
-    }
-    emit_single(op_output, "image", image);
-    if (!sample_points_connected_ && effective_geometry_.is_valid()) {
-      op_output.emit(effective_geometry_, "sample_geometry");
     }
     unemitted_pulses_ = 0;
   }
@@ -695,6 +725,17 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
   if (apply_after) {
     install_pending_geometry();
   }
+  if (stage_after) {
+    if (pending_spacing.has_value()) {
+      effective_spacing_ = *pending_spacing;
+    }
+    if (pending_origin.has_value()) {
+      effective_origin_ = *pending_origin;
+    }
+    if (pending_frequency.has_value()) {
+      effective_frequency_ = *pending_frequency;
+    }
+  }
 
   retained_profiles_ = std::move(profiles);
   retained_positions_ = std::move(positions);
@@ -704,6 +745,45 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
   }
   if (weight) {
     retained_weight_ = std::move(weight);
+  }
+
+  if (emitted) {
+    if (cudaStreamSynchronize(stream) != cudaSuccess) {
+      throw std::runtime_error(who + ": emit stream sync failed");
+    }
+  }
+  const auto now = std::chrono::steady_clock::now();
+  aperture_compute_s_ += std::chrono::duration<double>(now - t0).count();
+  if (emitted) {
+    // Timing is published before the image port so EventBased
+    // downstream host code (the overlay) reads this emit, not the
+    // previous collection's.
+    last_image_compute_s_.store(aperture_compute_s_,
+                                std::memory_order_relaxed);
+    last_image_pulses_.store(emitted_pulses,
+                             std::memory_order_relaxed);
+    last_image_pixels_.store(emitted_pixels,
+                             std::memory_order_relaxed);
+    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        now.time_since_epoch())
+                        .count();
+    last_image_emit_ns_.store(ns, std::memory_order_relaxed);
+    last_image_emit_valid_.store(true, std::memory_order_release);
+    emit_single(op_output, "image", image);
+    if (!sample_points_connected_ && effective_geometry_.is_valid()) {
+      op_output.emit(effective_geometry_, "sample_geometry");
+    }
+    const double rate =
+        aperture_compute_s_ > 0.0
+            ? static_cast<double>(emitted_pixels) *
+                  static_cast<double>(emitted_pulses) /
+                  aperture_compute_s_
+            : 0.0;
+    HOLOSCAN_LOG_INFO(
+        "{}: {}x{} in {:.3f} s ({:.3e} px*pls/s, {} pulses)",
+        who, num_v, num_u, aperture_compute_s_, rate,
+        emitted_pulses);
+    aperture_compute_s_ = 0.0;
   }
 }
 

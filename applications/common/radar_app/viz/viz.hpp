@@ -369,9 +369,9 @@ inline std::vector<std::vector<float>> make_turbo_lut() {
   return lut;
 }
 
-// kLutSize-entry greyscale LUT. SAR Holoviz uses this so the live
-// window matches the offline PNG checkpoint (1:1 dB-windowed
-// magnitude, no turbo).
+// kLutSize-entry greyscale LUT. Index i is PNG code i/(N-1).
+// Linear, not inverse-sRGB: a full decode overshot (Holoviz too
+// dark vs the PNG). R8_UINT is what makes the index match.
 inline std::vector<std::vector<float>> make_grayscale_lut() {
   std::vector<std::vector<float>> lut;
   lut.reserve(kLutSize);
@@ -401,9 +401,9 @@ inline std::vector<std::vector<float>> cluster_palette() {
 // ---- Shared 2D raster plotting helpers (RGBA8 byte canvas) --------------
 // A tiny software rasterizer shared by the side-panel plot operators
 // (RollingPlotOp, BoresightViewOp): per-cluster marker colors, pixel
-// plotting, a 3x5 bitmap font for numeric tick labels, and the constant
-// title-position tensor. Canvas is row-major RGBA8 (W*H*4 bytes), origin
-// top-left.
+// plotting, a 3x5 bitmap font (digits, A-Z, and a few symbols),
+// and the constant title-position tensor. Canvas is row-major
+// RGBA8 (W*H*4 bytes), origin top-left.
 constexpr int kPlotFontScale = 2;
 
 // RGBA byte color for a cluster bucket (palette color, or gray for noise).
@@ -430,9 +430,13 @@ inline void plot_put_px(std::vector<uint8_t>* img, int64_t w, int64_t h,
   (*img)[o + 3] = 255;
 }
 
-// Minimal 3x5 bitmap font for axis tick labels (digits, '-', '.'); each
-// row's low 3 bits are the columns (bit 0 = left). Rendered at kPlotFontScale.
+// Minimal 3x5 bitmap font. Each row's low 3 bits are the columns
+// (bit 0 = left). Rendered at `scale` (FMCW ticks use
+// kPlotFontScale). Lowercase maps to uppercase.
 inline std::array<uint8_t, 5> plot_glyph_rows(char c) {
+  if (c >= 'a' && c <= 'z') {
+    c = static_cast<char>('A' + (c - 'a'));
+  }
   switch (c) {
     case '0': return {7, 5, 5, 5, 7};
     case '1': return {2, 3, 2, 2, 7};
@@ -444,36 +448,76 @@ inline std::array<uint8_t, 5> plot_glyph_rows(char c) {
     case '7': return {7, 4, 2, 2, 2};
     case '8': return {7, 5, 7, 5, 7};
     case '9': return {7, 5, 7, 4, 7};
+    case 'A': return {2, 5, 7, 5, 5};
+    case 'B': return {7, 5, 7, 5, 7};
+    case 'C': return {7, 1, 1, 1, 7};
+    case 'D': return {3, 5, 5, 5, 3};
+    case 'E': return {7, 1, 7, 1, 7};
+    case 'F': return {7, 1, 7, 1, 1};
+    case 'G': return {7, 1, 5, 5, 7};
+    case 'H': return {5, 5, 7, 5, 5};
+    case 'I': return {7, 2, 2, 2, 7};
+    case 'J': return {7, 2, 2, 2, 3};
+    case 'K': return {5, 5, 3, 5, 5};
+    case 'L': return {1, 1, 1, 1, 7};
+    case 'M': return {5, 7, 7, 5, 5};
+    case 'N': return {5, 7, 5, 5, 5};
+    case 'O': return {7, 5, 5, 5, 7};
+    case 'P': return {7, 5, 7, 1, 1};
+    case 'Q': return {7, 5, 5, 7, 4};
+    case 'R': return {7, 5, 3, 5, 5};
+    case 'S': return {7, 1, 7, 4, 7};
+    case 'T': return {7, 2, 2, 2, 2};
+    case 'U': return {5, 5, 5, 5, 7};
+    case 'V': return {5, 5, 5, 5, 2};
+    case 'W': return {5, 5, 7, 7, 5};
+    case 'X': return {5, 5, 2, 5, 5};
+    case 'Y': return {5, 5, 2, 2, 2};
+    case 'Z': return {7, 4, 2, 1, 7};
     case '-': return {0, 0, 7, 0, 0};
     case '.': return {0, 0, 0, 0, 2};
+    case '*': return {2, 5, 2, 5, 2};
+    case '/': return {4, 4, 2, 1, 1};
+    case ':': return {0, 2, 0, 2, 0};
+    case ' ': return {0, 0, 0, 0, 0};
     default: return {0, 0, 0, 0, 0};
   }
 }
 
+inline int64_t plot_text_width(const std::string& s, int scale) {
+  return static_cast<int64_t>(s.size()) * 4 * scale;
+}
+
 inline int64_t plot_text_width(const std::string& s) {
-  return static_cast<int64_t>(s.size()) * 4 * kPlotFontScale;
+  return plot_text_width(s, kPlotFontScale);
 }
 
 inline void plot_draw_text(std::vector<uint8_t>* img, int64_t w, int64_t h,
                            int64_t x, int64_t y, const std::string& s,
-                           const std::array<uint8_t, 3>& col) {
+                           const std::array<uint8_t, 3>& col, int scale) {
   int64_t cx = x;
   for (char c : s) {
     const auto rows = plot_glyph_rows(c);
     for (int r = 0; r < 5; ++r) {
       for (int ci = 0; ci < 3; ++ci) {
         if ((rows[static_cast<size_t>(r)] >> ci) & 1) {
-          for (int sy = 0; sy < kPlotFontScale; ++sy) {
-            for (int sx = 0; sx < kPlotFontScale; ++sx) {
-              plot_put_px(img, w, h, cx + ci * kPlotFontScale + sx,
-                          y + r * kPlotFontScale + sy, col);
+          for (int sy = 0; sy < scale; ++sy) {
+            for (int sx = 0; sx < scale; ++sx) {
+              plot_put_px(img, w, h, cx + ci * scale + sx,
+                          y + r * scale + sy, col);
             }
           }
         }
       }
     }
-    cx += 4 * kPlotFontScale;
+    cx += 4 * scale;
   }
+}
+
+inline void plot_draw_text(std::vector<uint8_t>* img, int64_t w, int64_t h,
+                           int64_t x, int64_t y, const std::string& s,
+                           const std::array<uint8_t, 3>& col) {
+  plot_draw_text(img, w, h, x, y, s, col, kPlotFontScale);
 }
 
 // Format a tick value with `dec` decimals (0 or 1); no locale / sprintf.

@@ -42,6 +42,16 @@ Do not resolve team-blocked items here.
    8192x8192 double); MatX still gets packed xyz, also expanded on device.
    `sample_points` remains a device-to-device copy of the caller tensor.
 
+8. **Host pulse tiling of kernel launches.** `launch_nvradar` /
+   `launch_matx` split a tick into 1024-pulse tiles (`kKernelPulseTile`).
+   Not a contract parameter: the operator still consumes the whole tick.
+   Tiles `+=` into the same accum; `prepare_pulses` / LUT fill /
+   float-scene downcast stay on the full tick. Planar APC/R0 keep the
+   tick stride; packed VPH is a pointer offset. Ticks with `Np <= 1024`
+   stay one launch. 256 was slower on Ohio (~1.5%): each tile does a
+   global `simg +=`, so a tile equal to the in-kernel smem chunk flushed
+   the image once per chunk.
+
 ## Not ours to close
 
 - **R10** — metadata key namespace. This operator consumes uint8

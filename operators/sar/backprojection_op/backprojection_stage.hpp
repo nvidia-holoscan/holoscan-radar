@@ -363,21 +363,6 @@ __global__ void compute_r0_apc_kernel(const T* pos, const T* ref, int Np,
   r0[p] = sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-template <typename T>
-__global__ void scale_profiles_kernel(const T* src_r, const T* src_i,
-                                      const T* weight, T* dst_r, T* dst_i,
-                                      int Np, int N) {
-  const int idx = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
-  const int total = Np * N;
-  if (idx >= total) {
-    return;
-  }
-  const int p = idx / N;
-  const T w = weight[p];
-  dst_r[idx] = src_r[idx] * w;
-  dst_i[idx] = src_i[idx] * w;
-}
-
 // Interleaved complex scale in place on a scratch copy.
 template <typename T>
 __global__ void scale_interleaved_kernel(const T* src, const T* weight,
@@ -440,6 +425,12 @@ __global__ void promote_image_kernel(const float* src, double* dst, int n) {
   }
   dst[i] = static_cast<double>(src[i]);
 }
+
+// Host-side pulse tile for kernel launches. Not a contract parameter:
+// the operator still consumes the whole tick. 1024 keeps a mode-5
+// pulses_per_tick tick as one launch (256 forced an extra simg write
+// per inner smem chunk). Ticks with Np <= this stay one launch.
+inline constexpr int kKernelPulseTile = 1024;
 
 inline dim3 bp_grid(int img_width, int img_height) {
   return dim3((img_width + 15) / 16, (img_height + 15) / 16, 1);
@@ -626,6 +617,16 @@ void launch_nvradar(BackprojectionBackend backend,
                 static_cast<size_t>(batch_index) * pixels * 2;
   const dim3 grid = bp_grid(img_width, img_height);
   const dim3 block = bp_block();
+  const int stride = Np;
+  const size_t vph_pulse = static_cast<size_t>(Nfft) * 2;
+  // Kernels += into simg. Planar APC/R0 keep the tick stride; packed
+  // vph is a pointer offset. Np <= kKernelPulseTile is one launch.
+  auto tiles = [&](auto&& launch) {
+    for (int p0 = 0; p0 < Np; p0 += kKernelPulseTile) {
+      const int n = std::min(kKernelPulseTile, Np - p0);
+      launch(p0, n);
+    }
+  };
 
   if (backend == BackprojectionBackend::kNvradarFp64Reference) {
     const double* vph = nullptr;
@@ -642,11 +643,15 @@ void launch_nvradar(BackprojectionBackend backend,
           n);
       vph = state.vph_cast.template as<double>();
     }
-    backprojection_kernel_fp64_ref<<<grid, block, 0, stream>>>(
-        0, img_width, img_height, Np, Np, rmin, dr, pc_partial, simg,
-        nullptr, state.x_plane.template as<double>(), state.y_plane.template as<double>(),
-        state.z_plane.template as<double>(), state.apc.template as<double>(),
-        state.r0.template as<double>(), vph, Nfft);
+    tiles([&](int p0, int n) {
+      backprojection_kernel_fp64_ref<<<grid, block, 0, stream>>>(
+          0, img_width, img_height, n, stride, rmin, dr, pc_partial, simg,
+          nullptr, state.x_plane.template as<double>(),
+          state.y_plane.template as<double>(),
+          state.z_plane.template as<double>(),
+          state.apc.template as<double>() + p0,
+          state.r0.template as<double>() + p0, vph + p0 * vph_pulse, Nfft);
+    });
     return;
   }
 
@@ -673,41 +678,62 @@ void launch_nvradar(BackprojectionBackend backend,
     const float dr_inv_f = static_cast<float>(1.0 / dr);
     const float pc_f = static_cast<float>(pc_partial);
     if (backend == BackprojectionBackend::kNvradarCudaFp32) {
-      backprojection_kernel_fp32<<<grid, block, 0, stream>>>(
-          0, img_width, img_height, Np, Np, rmin_f, dr_inv_f, pc_f, simg,
-          nullptr, state.x_plane_f.template as<float>(),
-          state.y_plane_f.template as<float>(), state.z_plane_f.template as<float>(),
-          state.apc_f.template as<float>(), state.r0_f.template as<float>(), vph, Nfft);
+      tiles([&](int p0, int n) {
+        backprojection_kernel_fp32<<<grid, block, 0, stream>>>(
+            0, img_width, img_height, n, stride, rmin_f, dr_inv_f, pc_f,
+            simg, nullptr, state.x_plane_f.template as<float>(),
+            state.y_plane_f.template as<float>(),
+            state.z_plane_f.template as<float>(),
+            state.apc_f.template as<float>() + p0,
+            state.r0_f.template as<float>() + p0, vph + p0 * vph_pulse,
+            Nfft);
+      });
       return;
     }
     if (backend == BackprojectionBackend::kNvradarCudaFp32Hq) {
-      backprojection_kernel_fp32_hq<<<grid, block, 0, stream>>>(
-          0, img_width, img_height, Np, Np, Np, rmin_f, dr_inv_f, pc_f,
-          simg, nullptr, state.x_plane_f.template as<float>(),
-          state.y_plane_f.template as<float>(), state.z_plane_f.template as<float>(),
-          state.apc_f.template as<float>(), state.mcp_f.template as<float>(),
-          state.r0_f.template as<float>(), vph, Nfft);
+      tiles([&](int p0, int n) {
+        backprojection_kernel_fp32_hq<<<grid, block, 0, stream>>>(
+            0, img_width, img_height, n, stride, stride, rmin_f, dr_inv_f,
+            pc_f, simg, nullptr, state.x_plane_f.template as<float>(),
+            state.y_plane_f.template as<float>(),
+            state.z_plane_f.template as<float>(),
+            state.apc_f.template as<float>() + p0,
+            state.mcp_f.template as<float>() + p0,
+            state.r0_f.template as<float>() + p0, vph + p0 * vph_pulse,
+            Nfft);
+      });
       return;
     }
-    backprojection_kernel_fp32_hq_fast<<<grid, block, 0, stream>>>(
-        0, img_width, img_height, Np, Np, Np, rmin_f, dr_inv_f, pc_f,
-        simg, nullptr, state.x_plane_f.template as<float>(),
-        state.y_plane_f.template as<float>(), state.z_plane_f.template as<float>(),
-        state.apc_f.template as<float>(), state.mcp_f.template as<float>(),
-        state.r0_f.template as<float>(), vph, Nfft);
+    tiles([&](int p0, int n) {
+      backprojection_kernel_fp32_hq_fast<<<grid, block, 0, stream>>>(
+          0, img_width, img_height, n, stride, stride, rmin_f, dr_inv_f,
+          pc_f, simg, nullptr, state.x_plane_f.template as<float>(),
+          state.y_plane_f.template as<float>(),
+          state.z_plane_f.template as<float>(),
+          state.apc_f.template as<float>() + p0,
+          state.mcp_f.template as<float>() + p0,
+          state.r0_f.template as<float>() + p0, vph + p0 * vph_pulse,
+          Nfft);
+    });
     return;
   }
 
   if (backend == BackprojectionBackend::kNvradarBlockAnchored) {
     prepare_float_scene(state, pixels, Np, stream);
     const float* vph = float_vph();
-    backprojection_kernel_fp32_hq_block<<<grid, block, 0, stream>>>(
-        0, img_width, img_height, Np, Np, Np, static_cast<float>(rmin),
-        static_cast<float>(1.0 / dr), static_cast<float>(pc_partial),
-        simg, nullptr, state.x_plane_f.template as<float>(),
-        state.y_plane_f.template as<float>(), state.z_plane_f.template as<float>(),
-        state.apc_f.template as<float>(), state.mcp_f.template as<float>(),
-        state.r0_f.template as<float>(), vph, Nfft);
+    tiles([&](int p0, int n) {
+      backprojection_kernel_fp32_hq_block<<<grid, block, 0, stream>>>(
+          0, img_width, img_height, n, stride, stride,
+          static_cast<float>(rmin), static_cast<float>(1.0 / dr),
+          static_cast<float>(pc_partial), simg, nullptr,
+          state.x_plane_f.template as<float>(),
+          state.y_plane_f.template as<float>(),
+          state.z_plane_f.template as<float>(),
+          state.apc_f.template as<float>() + p0,
+          state.mcp_f.template as<float>() + p0,
+          state.r0_f.template as<float>() + p0, vph + p0 * vph_pulse,
+          Nfft);
+    });
     return;
   }
 
@@ -729,12 +755,16 @@ void launch_nvradar(BackprojectionBackend backend,
     }
     const double dr_inv_d = 1.0 / dr;
     const float dr_inv = static_cast<float>(dr_inv_d);
-    backprojection_kernel_fp64_phiwrap_f32mf_f32vph_anchor_taylor_phi32_vphf_drinvd<<<  // NOLINT
-        grid, block, 0, stream>>>(
-        0, img_width, img_height, Np, Np, rmin, dr_inv_d, dr_inv,
-        pc_partial, simg, nullptr, state.x_plane.template as<double>(),
-        state.y_plane.template as<double>(), state.z_plane.template as<double>(),
-        state.apc.template as<double>(), state.r0.template as<double>(), vph, Nfft);
+    tiles([&](int p0, int n) {
+      backprojection_kernel_fp64_phiwrap_f32mf_f32vph_anchor_taylor_phi32_vphf_drinvd<<<  // NOLINT
+          grid, block, 0, stream>>>(
+          0, img_width, img_height, n, stride, rmin, dr_inv_d, dr_inv,
+          pc_partial, simg, nullptr, state.x_plane.template as<double>(),
+          state.y_plane.template as<double>(),
+          state.z_plane.template as<double>(),
+          state.apc.template as<double>() + p0,
+          state.r0.template as<double>() + p0, vph + p0 * vph_pulse, Nfft);
+    });
     return;
   }
 
@@ -742,12 +772,16 @@ void launch_nvradar(BackprojectionBackend backend,
       BackprojectionBackend::kNvradarBlockAnchoredRefinedQuality) {
     const float* vph = float_vph();
     const float dr_inv = static_cast<float>(1.0 / dr);
-    backprojection_kernel_fp64_phiwrap_f32mf_f32vph_anchor_taylor_phi32df_dr_cw1nw<<<  // NOLINT
-        grid, block, 0, stream>>>(
-        0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_partial,
-        simg, nullptr, state.x_plane.template as<double>(),
-        state.y_plane.template as<double>(), state.z_plane.template as<double>(),
-        state.apc.template as<double>(), state.r0.template as<double>(), vph, Nfft);
+    tiles([&](int p0, int n) {
+      backprojection_kernel_fp64_phiwrap_f32mf_f32vph_anchor_taylor_phi32df_dr_cw1nw<<<  // NOLINT
+          grid, block, 0, stream>>>(
+          0, img_width, img_height, n, stride, rmin, dr, dr_inv, pc_partial,
+          simg, nullptr, state.x_plane.template as<double>(),
+          state.y_plane.template as<double>(),
+          state.z_plane.template as<double>(),
+          state.apc.template as<double>() + p0,
+          state.r0.template as<double>() + p0, vph + p0 * vph_pulse, Nfft);
+    });
     return;
   }
 
@@ -759,19 +793,31 @@ void launch_nvradar(BackprojectionBackend backend,
     const float dr_inv = static_cast<float>(1.0 / dr);
     if (backend ==
         BackprojectionBackend::kNvradarBlockAnchoredExpandedThroughput) {
-      backprojection_kernel_fp64_phiwrap_f32mf_f32vph_anchor_taylor_phi32df_dr_in_cw1nw_fma<<<  // NOLINT
-          grid, block, 0, stream>>>(
-          0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_partial,
-          simg, nullptr, state.x_plane.template as<double>(),
-          state.y_plane.template as<double>(), state.z_plane.template as<double>(),
-          state.apc.template as<double>(), state.r0.template as<double>(), vph, Nfft);
+      tiles([&](int p0, int n) {
+        backprojection_kernel_fp64_phiwrap_f32mf_f32vph_anchor_taylor_phi32df_dr_in_cw1nw_fma<<<  // NOLINT
+            grid, block, 0, stream>>>(
+            0, img_width, img_height, n, stride, rmin, dr, dr_inv,
+            pc_partial, simg, nullptr,
+            state.x_plane.template as<double>(),
+            state.y_plane.template as<double>(),
+            state.z_plane.template as<double>(),
+            state.apc.template as<double>() + p0,
+            state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
+            Nfft);
+      });
     } else {
-      backprojection_kernel_fp64_phiwrap_f32mf_f32vph_anchor_taylor_phi32df_dr_in_cw1nw<<<  // NOLINT
-          grid, block, 0, stream>>>(
-          0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_partial,
-          simg, nullptr, state.x_plane.template as<double>(),
-          state.y_plane.template as<double>(), state.z_plane.template as<double>(),
-          state.apc.template as<double>(), state.r0.template as<double>(), vph, Nfft);
+      tiles([&](int p0, int n) {
+        backprojection_kernel_fp64_phiwrap_f32mf_f32vph_anchor_taylor_phi32df_dr_in_cw1nw<<<  // NOLINT
+            grid, block, 0, stream>>>(
+            0, img_width, img_height, n, stride, rmin, dr, dr_inv,
+            pc_partial, simg, nullptr,
+            state.x_plane.template as<double>(),
+            state.y_plane.template as<double>(),
+            state.z_plane.template as<double>(),
+            state.apc.template as<double>() + p0,
+            state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
+            Nfft);
+      });
     }
     return;
   }
@@ -780,13 +826,19 @@ void launch_nvradar(BackprojectionBackend backend,
       BackprojectionBackend::kNvradarBlockAnchoredFp64Trajectory) {
     prepare_float_scene(state, pixels, Np, stream);
     const float* vph = float_vph();
-    backprojection_kernel_fp32_hq_block3_fp64in<<<grid, block, 0, stream>>>(
-        0, img_width, img_height, Np, Np, Np, static_cast<float>(rmin),
-        static_cast<float>(1.0 / dr), static_cast<float>(pc_partial),
-        simg, nullptr, state.x_plane_f.template as<float>(),
-        state.y_plane_f.template as<float>(), state.z_plane_f.template as<float>(),
-        state.apc.template as<double>(), state.mcp.template as<double>(),
-        state.r0.template as<double>(), vph, Nfft);
+    tiles([&](int p0, int n) {
+      backprojection_kernel_fp32_hq_block3_fp64in<<<grid, block, 0, stream>>>(
+          0, img_width, img_height, n, stride, stride,
+          static_cast<float>(rmin), static_cast<float>(1.0 / dr),
+          static_cast<float>(pc_partial), simg, nullptr,
+          state.x_plane_f.template as<float>(),
+          state.y_plane_f.template as<float>(),
+          state.z_plane_f.template as<float>(),
+          state.apc.template as<double>() + p0,
+          state.mcp.template as<double>() + p0,
+          state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
+          Nfft);
+    });
     return;
   }
 
@@ -814,84 +866,126 @@ void launch_nvradar(BackprojectionBackend backend,
     ensure_nvradar_lut(state, pc_partial, rmin, dr, Nfft, stream);
     const float* lut = state.phase_lut.template as<float>();
     if (backend == BackprojectionBackend::kNvradarBlockAnchoredPhaseLut) {
-      backprojection_kernel_anchor_taylor_phase_lut<<<grid, block, 0,
-                                                      stream>>>(
-          0, img_width, img_height, Np, Np, rmin, dr_inv_d, dr_inv, pc_dr,
-          simg, nullptr, state.x_plane.template as<double>(),
-          state.y_plane.template as<double>(), state.z_plane.template as<double>(),
-          state.apc.template as<double>(), state.r0.template as<double>(), vph, lut, Nfft);
+      tiles([&](int p0, int n) {
+        backprojection_kernel_anchor_taylor_phase_lut<<<grid, block, 0,
+                                                        stream>>>(
+            0, img_width, img_height, n, stride, rmin, dr_inv_d, dr_inv,
+            pc_dr, simg, nullptr, state.x_plane.template as<double>(),
+            state.y_plane.template as<double>(),
+            state.z_plane.template as<double>(),
+            state.apc.template as<double>() + p0,
+            state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
+            lut, Nfft);
+      });
       return;
     }
     if (backend ==
         BackprojectionBackend::kNvradarBlockAnchoredRefinedQualityPhaseLut) {
-      backprojection_kernel_anchor_taylor_quality_phase_lut<<<
-          grid, block, 0, stream>>>(
-          0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_dr, simg,
-          nullptr, state.x_plane.template as<double>(), state.y_plane.template as<double>(),
-          state.z_plane.template as<double>(), state.apc.template as<double>(),
-          state.r0.template as<double>(), vph, lut, Nfft);
+      tiles([&](int p0, int n) {
+        backprojection_kernel_anchor_taylor_quality_phase_lut<<<
+            grid, block, 0, stream>>>(
+            0, img_width, img_height, n, stride, rmin, dr, dr_inv, pc_dr,
+            simg, nullptr, state.x_plane.template as<double>(),
+            state.y_plane.template as<double>(),
+            state.z_plane.template as<double>(),
+            state.apc.template as<double>() + p0,
+            state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
+            lut, Nfft);
+      });
       return;
     }
     if (backend == BackprojectionBackend::
                        kNvradarBlockAnchoredExpandedThroughputPhaseLut) {
-      backprojection_kernel_anchor_expanded_throughput_phase_lut<<<
-          grid, block, 0, stream>>>(
-          0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_dr, simg,
-          nullptr, state.x_plane.template as<double>(), state.y_plane.template as<double>(),
-          state.z_plane.template as<double>(), state.apc.template as<double>(),
-          state.r0.template as<double>(), vph, lut, Nfft);
+      tiles([&](int p0, int n) {
+        backprojection_kernel_anchor_expanded_throughput_phase_lut<<<
+            grid, block, 0, stream>>>(
+            0, img_width, img_height, n, stride, rmin, dr, dr_inv, pc_dr,
+            simg, nullptr, state.x_plane.template as<double>(),
+            state.y_plane.template as<double>(),
+            state.z_plane.template as<double>(),
+            state.apc.template as<double>() + p0,
+            state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
+            lut, Nfft);
+      });
       return;
     }
     if (backend == BackprojectionBackend::
                        kNvradarBlockAnchoredExpandedThroughputPhaseLutVec) {
-      backprojection_kernel_anchor_expanded_throughput_phase_lut_vec<<<
-          grid, block, 0, stream>>>(
-          0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_dr, simg,
-          nullptr, state.x_plane.template as<double>(), state.y_plane.template as<double>(),
-          state.z_plane.template as<double>(), state.apc.template as<double>(),
-          state.r0.template as<double>(), vph, lut, Nfft);
+      tiles([&](int p0, int n) {
+        backprojection_kernel_anchor_expanded_throughput_phase_lut_vec<<<  // NOLINT
+            grid, block, 0, stream>>>(
+            0, img_width, img_height, n, stride, rmin, dr, dr_inv, pc_dr,
+            simg, nullptr, state.x_plane.template as<double>(),
+            state.y_plane.template as<double>(),
+            state.z_plane.template as<double>(),
+            state.apc.template as<double>() + p0,
+            state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
+            lut, Nfft);
+      });
       return;
     }
     if (backend ==
         BackprojectionBackend::
             kNvradarBlockAnchoredExpandedThroughputPhaseLutVecZ0) {
-      backprojection_kernel_anchor_expanded_throughput_phase_lut_vec_z0<<<  // NOLINT
-          grid, block, 0, stream>>>(
-          0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_dr, simg,
-          nullptr, state.x_plane.template as<double>(), state.y_plane.template as<double>(),
-          state.z_plane.template as<double>(), state.apc.template as<double>(),
-          state.r0.template as<double>(), vph, lut, Nfft);
+      tiles([&](int p0, int n) {
+        backprojection_kernel_anchor_expanded_throughput_phase_lut_vec_z0<<<  // NOLINT
+            grid, block, 0, stream>>>(
+            0, img_width, img_height, n, stride, rmin, dr, dr_inv, pc_dr,
+            simg, nullptr, state.x_plane.template as<double>(),
+            state.y_plane.template as<double>(),
+            state.z_plane.template as<double>(),
+            state.apc.template as<double>() + p0,
+            state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
+            lut, Nfft);
+      });
       return;
     }
     if (backend == BackprojectionBackend::
                        kNvradarBlockAnchoredExpandedQualityPhaseLut) {
-      backprojection_kernel_anchor_expanded_quality_phase_lut<<<
-          grid, block, 0, stream>>>(
-          0, img_width, img_height, Np, Np, rmin, dr, dr_inv, pc_dr, simg,
-          nullptr, state.x_plane.template as<double>(), state.y_plane.template as<double>(),
-          state.z_plane.template as<double>(), state.apc.template as<double>(),
-          state.r0.template as<double>(), vph, lut, Nfft);
+      tiles([&](int p0, int n) {
+        backprojection_kernel_anchor_expanded_quality_phase_lut<<<
+            grid, block, 0, stream>>>(
+            0, img_width, img_height, n, stride, rmin, dr, dr_inv, pc_dr,
+            simg, nullptr, state.x_plane.template as<double>(),
+            state.y_plane.template as<double>(),
+            state.z_plane.template as<double>(),
+            state.apc.template as<double>() + p0,
+            state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
+            lut, Nfft);
+      });
       return;
     }
     if (backend ==
         BackprojectionBackend::kNvradarBlockAnchoredPhaseLutLegacy) {
       prepare_float_scene(state, pixels, Np, stream);
-      backprojection_kernel_hq_block_phase_lut<<<grid, block, 0, stream>>>(
-          0, img_width, img_height, Np, Np, Np, static_cast<float>(rmin),
-          dr_inv, pc_dr, simg, nullptr, state.x_plane_f.template as<float>(),
-          state.y_plane_f.template as<float>(), state.z_plane_f.template as<float>(),
-          state.apc_f.template as<float>(), state.mcp_f.template as<float>(),
-          state.r0_f.template as<float>(), vph, lut, Nfft);
+      tiles([&](int p0, int n) {
+        backprojection_kernel_hq_block_phase_lut<<<grid, block, 0, stream>>>(
+            0, img_width, img_height, n, stride, stride,
+            static_cast<float>(rmin), dr_inv, pc_dr, simg, nullptr,
+            state.x_plane_f.template as<float>(),
+            state.y_plane_f.template as<float>(),
+            state.z_plane_f.template as<float>(),
+            state.apc_f.template as<float>() + p0,
+            state.mcp_f.template as<float>() + p0,
+            state.r0_f.template as<float>() + p0, vph + p0 * vph_pulse,
+            lut, Nfft);
+      });
       return;
     }
     prepare_float_scene(state, pixels, Np, stream);
-    backprojection_kernel_hq_block3_fp64in_phase_lut<<<grid, block, 0,
-                                                       stream>>>(
-        0, img_width, img_height, Np, Np, Np, static_cast<float>(rmin),
-        dr_inv, pc_dr, simg, nullptr, state.x_plane_f.template as<float>(),
-        state.y_plane_f.template as<float>(), state.z_plane_f.template as<float>(),
-        state.apc.template as<double>(), state.mcp.template as<double>(),
-        state.r0.template as<double>(), vph, lut, Nfft);
+    tiles([&](int p0, int n) {
+      backprojection_kernel_hq_block3_fp64in_phase_lut<<<grid, block, 0,
+                                                         stream>>>(
+          0, img_width, img_height, n, stride, stride,
+          static_cast<float>(rmin), dr_inv, pc_dr, simg, nullptr,
+          state.x_plane_f.template as<float>(),
+          state.y_plane_f.template as<float>(),
+          state.z_plane_f.template as<float>(),
+          state.apc.template as<double>() + p0,
+          state.mcp.template as<double>() + p0,
+          state.r0.template as<double>() + p0, vph + p0 * vph_pulse, lut,
+          Nfft);
+    });
     return;
   }
 
@@ -1004,16 +1098,21 @@ void launch_matx(BackprojectionBackend backend,
   C* img_ptr = state.matx_accum.template as<C>() +
                static_cast<size_t>(batch_index) * pixels;
   auto img = matx::make_tensor<C, 2>(img_ptr, {num_v, num_u});
-  auto prof = matx::make_tensor<C, 2>(
-      static_cast<C*>(const_cast<void*>(profiles)), {Np, Nfft});
-  auto pos = matx::make_tensor<Vec, 1>(
-      reinterpret_cast<Vec*>(const_cast<T*>(positions)), {Np});
   auto vox = matx::make_tensor<Vec, 2>(
       reinterpret_cast<Vec*>(const_cast<T*>(lattice)), {num_v, num_u});
-  auto r0 = matx::make_tensor<double, 1>(state.r0.template as<double>(), {Np});
   const auto params = matx_params(backend, frequency, dr);
-  (img = matx::experimental::sar_bp(img, prof, pos, vox, r0, params))
-      .run(stream);
+  auto* prof_base = static_cast<C*>(const_cast<void*>(profiles));
+  auto* pos_base =
+      reinterpret_cast<Vec*>(const_cast<T*>(positions));
+  double* r0_base = state.r0.template as<double>();
+  for (int p0 = 0; p0 < Np; p0 += kKernelPulseTile) {
+    const int n = std::min(kKernelPulseTile, Np - p0);
+    auto prof = matx::make_tensor<C, 2>(prof_base + p0 * Nfft, {n, Nfft});
+    auto pos = matx::make_tensor<Vec, 1>(pos_base + p0, {n});
+    auto r0 = matx::make_tensor<double, 1>(r0_base + p0, {n});
+    (img = matx::experimental::sar_bp(img, prof, pos, vox, r0, params))
+        .run(stream);
+  }
 }
 
 template <typename T>

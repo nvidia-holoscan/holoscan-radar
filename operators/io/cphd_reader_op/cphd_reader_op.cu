@@ -6,19 +6,27 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <deque>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "io/cphd_reader_op/cphd_cf8_decode.hpp"
 #include "io/cphd_reader_op/cphd_file.hpp"
 #include "radar_common/descriptors/coordinate_frame.hpp"
 #include "radar_common/descriptors/enums.hpp"
@@ -35,6 +43,13 @@ struct CphdReaderResources {
   size_t history_bytes{0};
   void* scratch{nullptr};
   size_t scratch_bytes{0};
+  void* device_cf8{nullptr};
+  size_t device_cf8_bytes{0};
+  void* device_amp{nullptr};
+  size_t device_amp_bytes{0};
+  // Host AmpSF for the in-flight CF8 H2D. A temporary would dangle
+  // before compute()'s stream sync (same as pos_host / srp_host).
+  std::vector<double> amp_host;
 
   CphdReaderResources() = default;
   CphdReaderResources(const CphdReaderResources&) = delete;
@@ -47,6 +62,8 @@ struct CphdReaderResources {
     if (scratch != nullptr) {
       cudaFreeHost(scratch);
     }
+    cudaFree(device_cf8);
+    cudaFree(device_amp);
   }
 
   void ensure_history(size_t bytes) {
@@ -86,6 +103,34 @@ struct CphdReaderResources {
     }
     scratch_bytes = bytes;
   }
+
+  void ensure_device(void** slot, size_t* cap, size_t bytes,
+                     const char* what) {
+    if (bytes <= *cap) {
+      return;
+    }
+    if (*slot != nullptr) {
+      cudaFree(*slot);
+      *slot = nullptr;
+      *cap = 0;
+    }
+    if (bytes == 0) {
+      return;
+    }
+    if (cudaMalloc(slot, bytes) != cudaSuccess) {
+      throw std::runtime_error(
+          std::string("CPHDReaderOp: ") + what + " allocation failed");
+    }
+    *cap = bytes;
+  }
+
+  void ensure_device_cf8(size_t bytes) {
+    ensure_device(&device_cf8, &device_cf8_bytes, bytes, "device CF8 staging");
+  }
+
+  void ensure_device_amp(size_t bytes) {
+    ensure_device(&device_amp, &device_amp_bytes, bytes, "device AmpSF");
+  }
 };
 
 namespace {
@@ -114,6 +159,42 @@ bool has_cphd_extension(const std::filesystem::path& path) {
     }
   }
   return true;
+}
+
+// One shared sample_axis row per batch, so SC0/SCSS must agree across the
+// pulses of that batch. Umbra SNAPSHOT files ramp both smoothly -- SC0 by
+// ~0.02 Hz/pulse (~2e-12 relative at X-band), SCSS by ~4e-6 Hz/pulse
+// (~1e-10 relative) -- which is a recorded-grid residual, not last-place
+// jitter and not a stepped axis. 1e-12 refused every public SNAPSHOT file
+// on pulse 1 (mode-5 Panama, 2026-08-26). 1e-5 still catches a genuine
+// step (100 kHz on a 10 GHz SC0, 0.3 Hz on a 30 kHz SCSS); measured
+// SNAPSHOT ramps stay below 1e-8 in a 100-pulse batch and ~3e-6 over a
+// 5 s collect even as one batch.
+void require_constant_sample_axis(const std::string& who, const char* name,
+                                  int64_t first,
+                                  const std::vector<double>& values) {
+  constexpr double kRelTol = 1e-5;
+  if (values.size() < 2) {
+    return;
+  }
+  const double reference = values[0];
+  for (size_t pulse = 1; pulse < values.size(); ++pulse) {
+    const double value = values[pulse];
+    const double scale = std::max(std::abs(value), std::abs(reference));
+    if (std::abs(value - reference) <= kRelTol * scale) {
+      continue;
+    }
+    std::ostringstream msg;
+    msg.setf(std::ios::scientific);
+    msg.precision(8);
+    msg << who << ": " << name
+        << " varies across pulses by more than the accepted sample-axis "
+           "ramp (pulse "
+        << (first + static_cast<int64_t>(pulse)) << " is " << value
+        << ", batch first is " << reference
+        << "); a per-pulse sample axis is not supported";
+    throw std::runtime_error(msg.str());
+  }
 }
 
 // Expand the `path` parameter into the ordered list of collections to read.
@@ -207,6 +288,80 @@ void emit_with_stream(holoscan::OutputContext& op_output, const char* port,
   emit_single(op_output, port, std::move(tensor));
 }
 
+void throw_if_cuda(cudaError_t err, const char* who, const char* what) {
+  if (err != cudaSuccess) {
+    throw std::runtime_error(std::string(who) + ": " + what);
+  }
+}
+
+// H2D the stored CF8 bytes from pinned scratch and decode on the device
+// into a fresh output tensor. Float decodes in place on that tensor
+// (CF8 is 8 bytes/sample); double H2Ds into reused device staging and
+// writes complex128, so the copy is half the host-widen H2D.
+template <typename T>
+std::shared_ptr<holoscan::Tensor> decode_cf8_to_tensor(
+    CphdReaderResources* resources, int64_t count, int64_t num_samples,
+    const std::vector<double>& amp, cudaStream_t stream, const char* who) {
+  const size_t nsamp = static_cast<size_t>(count * num_samples);
+  auto tensor = make_device_tensor({count, num_samples}, complex_dtype<T>());
+  if (nsamp == 0) {
+    return tensor;
+  }
+  const size_t stored_bytes = nsamp * 8;
+  const double* d_amp = nullptr;
+  if (!amp.empty()) {
+    const size_t amp_bytes = amp.size() * sizeof(double);
+    resources->ensure_device_amp(amp_bytes);
+    throw_if_cuda(cudaMemcpyAsync(resources->device_amp, amp.data(),
+                                  amp_bytes, cudaMemcpyHostToDevice, stream),
+                  who, "AmpSF H2D failed");
+    d_amp = static_cast<const double*>(resources->device_amp);
+  }
+  if constexpr (std::is_same_v<T, float>) {
+    throw_if_cuda(cudaMemcpyAsync(tensor->data(), resources->scratch,
+                                  stored_bytes, cudaMemcpyHostToDevice,
+                                  stream),
+                  who, "CF8 H2D failed");
+    throw_if_cuda(cphd_decode_cf8_f32(tensor->data(), tensor->data(), nsamp,
+                                      num_samples, d_amp, stream),
+                  who, "CF8 GPU decode failed");
+  } else {
+    resources->ensure_device_cf8(stored_bytes);
+    throw_if_cuda(cudaMemcpyAsync(resources->device_cf8, resources->scratch,
+                                  stored_bytes, cudaMemcpyHostToDevice,
+                                  stream),
+                  who, "CF8 H2D failed");
+    throw_if_cuda(cphd_decode_cf8_f64(resources->device_cf8, tensor->data(),
+                                      nsamp, num_samples, d_amp, stream),
+                  who, "CF8 GPU decode failed");
+  }
+  return tensor;
+}
+
+template <typename T>
+std::shared_ptr<holoscan::Tensor> load_phase_history(
+    cphd::CphdFile* file, CphdReaderResources* resources, int64_t channel,
+    int64_t first, int64_t count, int64_t num_samples,
+    const cphd::PvpBlock& pvp, cudaStream_t stream, const char* who) {
+  const size_t nsamp = static_cast<size_t>(count * num_samples);
+  resources->ensure_scratch(nsamp * 8);
+  if (file->sample_format() == cphd::SampleFormat::kCF8) {
+    file->read_signal_bytes(channel, first, count,
+                            static_cast<char*>(resources->scratch),
+                            resources->scratch_bytes);
+    resources->amp_host = file->amplitude_scale(&pvp, count);
+    return decode_cf8_to_tensor<T>(resources, count, num_samples,
+                                   resources->amp_host, stream, who);
+  }
+  resources->ensure_history(nsamp * sizeof(std::complex<T>));
+  auto* history = static_cast<std::complex<T>*>(resources->history);
+  file->read_signal_into(channel, first, count, history, &pvp,
+                         static_cast<char*>(resources->scratch),
+                         resources->scratch_bytes);
+  return upload(history, nsamp, {count, num_samples}, complex_dtype<T>(),
+                stream, who);
+}
+
 }  // namespace
 
 template <typename T>
@@ -276,6 +431,22 @@ void CPHDReaderOp<T>::setup(OperatorSpec& spec) {
              "Half-open [first, last) pulse range to read. Default: the "
              "whole collection.",
              ParameterFlag::kOptional);
+
+  spec.param(loop_, "loop", "Loop collections",
+             "Wrap to the first file instead of ending the stream. "
+             "Every seam including the wrap is collection_boundary.",
+             false);
+
+  spec.param(playback_rate_, "playback_rate", "Playback rate",
+             "0 = unconstrained; 1 = collect-time pacing (2 = twice as "
+             "fast). Sleeps the slack so a tick is not faster than "
+             "TxTime_span / rate.",
+             0.0);
+
+  spec.param(duty_cycle_, "duty_cycle", "Platform duty cycle",
+             "In (0, 1]. 1 = no gap. After a collection, when another "
+             "follows, sleep T_c*(1/D - 1) of radar collect time.",
+             1.0);
 }
 
 // Opens files_[file_index_] and resolves the pulse range within it. Called
@@ -285,6 +456,7 @@ void CPHDReaderOp<T>::open_current_file() {
   const std::string who =
       std::string("CPHDReaderOp<") + precision_name<T>() + ">";
   const std::string& path = files_[file_index_];
+  const auto t0 = std::chrono::steady_clock::now();
 
   file_ = std::make_unique<cphd::CphdFile>(path);
   const cphd::ChannelInfo& info = file_->channel(channel_.get());
@@ -344,14 +516,19 @@ void CPHDReaderOp<T>::open_current_file() {
   }
   next_pulse_ = first_pulse_;
   frame_emitted_ = false;
+  collection_t_min_ = 0.0;
+  collection_t_max_ = 0.0;
+  collection_time_valid_ = false;
 
   HOLOSCAN_LOG_INFO(
       "{}: '{}' ({} of {}) channel {} ({}): {} pulses x {} samples, {}, "
-      "reading [{}, {}) in batches of {}",
+      "reading [{}, {}) in batches of {} ({:.3f} s to open)",
       who, path, file_index_ + 1, files_.size(), channel_.get(),
       info.identifier, info.num_vectors, info.num_samples,
       to_string(file_->sample_format()), first_pulse_, last_pulse_,
-      pulses_per_tick_.get());
+      pulses_per_tick_.get(),
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
+          .count());
 }
 
 template <typename T>
@@ -371,6 +548,19 @@ void CPHDReaderOp<T>::start() {
   if (range.has_value() && range->size() != 2) {
     throw std::runtime_error(who + ": pulse_range needs 2 entries, got " +
                              std::to_string(range->size()));
+  }
+  const double playback_rate = playback_rate_.get();
+  if (!std::isfinite(playback_rate) || playback_rate < 0.0) {
+    throw std::runtime_error(
+        who + ": playback_rate must be finite and >= 0, got " +
+        std::to_string(playback_rate));
+  }
+  const double duty_cycle = duty_cycle_.get();
+  if (!std::isfinite(duty_cycle) || duty_cycle <= 0.0 ||
+      duty_cycle > 1.0) {
+    throw std::runtime_error(
+        who + ": duty_cycle must be in (0, 1], got " +
+        std::to_string(duty_cycle));
   }
 
   // The boundary announcement (D22) rides the metadata plane, so with metadata
@@ -413,9 +603,116 @@ void CPHDReaderOp<T>::start() {
 }
 
 template <typename T>
+void CPHDReaderOp<T>::pace_tick(double batch_span) {
+  const double rate = playback_rate_.get();
+  if (!(rate > 0.0) || !(batch_span > 0.0) || !std::isfinite(batch_span)) {
+    return;
+  }
+  const double target_s = batch_span / rate;
+  const auto now = std::chrono::steady_clock::now();
+  const auto elapsed =
+      std::chrono::duration<double>(now - tick_start_).count();
+  const double slack = target_s - elapsed;
+  if (slack > 0.0) {
+    std::this_thread::sleep_for(std::chrono::duration<double>(slack));
+  }
+}
+
+template <typename T>
+void CPHDReaderOp<T>::cooldown_if_needed() {
+  const double duty = duty_cycle_.get();
+  if (duty >= 1.0 || !collection_time_valid_) {
+    return;
+  }
+  const double collect_s = collection_t_max_ - collection_t_min_;
+  if (!(collect_s > 0.0) || !std::isfinite(collect_s)) {
+    return;
+  }
+  double cooldown_s = collect_s * (1.0 / duty - 1.0);
+  const double rate = playback_rate_.get();
+  if (rate > 0.0) {
+    cooldown_s /= rate;
+  }
+  if (cooldown_s > 0.0 && std::isfinite(cooldown_s)) {
+    pending_cooldown_s_ = cooldown_s;
+  }
+}
+
+template <typename T>
+void CPHDReaderOp<T>::publish_last_packet_at(
+    std::chrono::steady_clock::time_point at) {
+  const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                      at.time_since_epoch())
+                      .count();
+  last_packet_ns_.store(ns, std::memory_order_relaxed);
+  last_packet_valid_.store(true, std::memory_order_release);
+}
+
+template <typename T>
+void CPHDReaderOp<T>::timeline_open_dwell() {
+  CollectionSpan span;
+  span.file_index = static_cast<int>(file_index_);
+  span.dwell_start = tick_start_;
+  std::lock_guard<std::mutex> lock(timeline_->mu);
+  timeline_->spans.push_back(span);
+  while (timeline_->spans.size() > kTimelineCap) {
+    timeline_->spans.pop_front();
+  }
+}
+
+template <typename T>
+void CPHDReaderOp<T>::timeline_close_dwell() {
+  const auto now = std::chrono::steady_clock::now();
+  std::lock_guard<std::mutex> lock(timeline_->mu);
+  if (timeline_->spans.empty()) {
+    return;
+  }
+  timeline_->spans.back().dwell_end = now;
+}
+
+template <typename T>
+void CPHDReaderOp<T>::timeline_quiet_begin() {
+  const auto now = std::chrono::steady_clock::now();
+  std::lock_guard<std::mutex> lock(timeline_->mu);
+  if (timeline_->spans.empty()) {
+    return;
+  }
+  timeline_->spans.back().quiet_start = now;
+}
+
+template <typename T>
+void CPHDReaderOp<T>::timeline_quiet_end() {
+  const auto now = std::chrono::steady_clock::now();
+  std::lock_guard<std::mutex> lock(timeline_->mu);
+  if (timeline_->spans.empty()) {
+    return;
+  }
+  timeline_->spans.back().quiet_end = now;
+}
+
+template <typename T>
+std::vector<CollectionSpan> CPHDReaderOp<T>::timeline_spans() const {
+  std::lock_guard<std::mutex> lock(timeline_->mu);
+  return {timeline_->spans.begin(), timeline_->spans.end()};
+}
+
+template <typename T>
 void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
                               OutputContext& op_output,
                               ExecutionContext& context) {
+  if (pending_cooldown_s_ > 0.0) {
+    const std::string who =
+        std::string("CPHDReaderOp<") + precision_name<T>() + ">";
+    HOLOSCAN_LOG_INFO(
+        "{}: duty_cycle cooldown {:.3f} s before the next collect",
+        who, pending_cooldown_s_);
+    timeline_quiet_begin();
+    std::this_thread::sleep_for(
+        std::chrono::duration<double>(pending_cooldown_s_));
+    timeline_quiet_end();
+    pending_cooldown_s_ = 0.0;
+  }
+  tick_start_ = std::chrono::steady_clock::now();
   const std::string who =
       std::string("CPHDReaderOp<") + precision_name<T>() + ">";
   const cphd::ChannelInfo& info = file_->channel(channel_.get());
@@ -427,10 +724,15 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   const int64_t count =
       std::min(pulses_per_tick_.get(), last_pulse_ - next_pulse_);
   const int64_t first = next_pulse_;
+  if (first == first_pulse_) {
+    timeline_open_dwell();
+  }
   // Final for this collection, which is not the same as final overall once
   // path names more than one file.
   const bool is_final = (first + count >= last_pulse_);
+  const bool wrapping = loop_.get();
   const bool is_last_file = (file_index_ + 1 == files_.size());
+  const bool another_follows = wrapping || !is_last_file;
 
   // 1. Per-pulse geometry. Every field this tick needs comes out of one read
   // of the parameter block: the records are interleaved, so reading eight
@@ -443,11 +745,11 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   std::optional<cphd::PvpBlock> pvp =
       file_->read_pvp_block(channel_.get(), first, count);
 
-  // 2. Phase history, read into reused pinned staging at this instance's
-  // precision. A single-precision instance reading CF8 makes no copy
-  // beyond this one: CF8 is big-endian complex<float>, so the bytes land
-  // here and are swapped in place. The buffer is not zeroed; decode
-  // overwrites every element.
+  // 2. Phase history. CF8 is stored as big-endian complex64: the operator
+  // reads those bytes into reused pinned scratch, H2Ds them, and
+  // byte-swaps / widens / applies AmpSF on the device. Integer formats
+  // still decode on the host into pinned history (CI4/CI2 are not the
+  // mode-5 path). Scratch is not zeroed; the read overwrites it.
   if (resources_ == nullptr) {
     throw std::runtime_error(who + ": H2D staging was not created");
   }
@@ -457,14 +759,9 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
                              maybe_stream.error().what());
   }
   const cudaStream_t stream = maybe_stream.value();
-  const size_t nsamp = static_cast<size_t>(count * num_samples);
-  resources_->ensure_history(nsamp * sizeof(std::complex<T>));
-  auto* history = static_cast<std::complex<T>*>(resources_->history);
-  resources_->ensure_scratch(nsamp * 8);
-  file_->read_signal_into(channel_.get(), first, count, history,
-                          &pvp.value(),
-                          static_cast<char*>(resources_->scratch),
-                          resources_->scratch_bytes);
+  const auto phase_history = load_phase_history<T>(
+      file_.get(), resources_.get(), channel_.get(), first, count,
+      num_samples, pvp.value(), stream, who.c_str());
 
   // The aperture phase centre is the midpoint of the transmit and receive
   // phase centres, which reduces to either one for the monostatic
@@ -510,35 +807,37 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   // for a TOA one -- so the arithmetic is the same and only the unit the
   // contract ascribes to the port differs.
   //
-  // They are per-vector fields while the axis is one shared row, so their
-  // constancy over the batch is a precondition rather than an assumption: a
-  // collection that steps its start frequency would otherwise be read at the
-  // wrong frequencies and produce a plausible, wrong image.
-  //
-  // Tolerantly, though: these are doubles decoded per vector from the file,
-  // and a collection holding one start frequency across the aperture still
-  // shows last-place jitter between records. A genuinely stepped axis moves by
-  // parts in a million or more, which this still refuses.
+  // They are per-vector fields while the axis is one shared row, so a
+  // bound on their variation over the batch is a precondition rather than
+  // an assumption: a collection that steps its start frequency would
+  // otherwise be read at the wrong frequencies and produce a plausible,
+  // wrong image. The bound is a ramp, not bit-identity -- see
+  // require_constant_sample_axis.
   const std::vector<double> sc0 = pvp->field("SC0", 1);
   const std::vector<double> scss = pvp->field("SCSS", 1);
-  constexpr double kConstantRelTol = 1e-12;
-  const auto differs = [&](double value, double reference) {
-    return std::abs(value - reference) >
-           kConstantRelTol * std::max(std::abs(value), std::abs(reference));
-  };
-  for (int64_t pulse = 1; pulse < count; ++pulse) {
-    if (differs(sc0[pulse], sc0[0]) || differs(scss[pulse], scss[0])) {
-      throw std::runtime_error(
-          who + ": SC0/SCSS vary across pulses by more than floating-point "
-          "jitter (pulse " + std::to_string(first + pulse) +
-          " differs from the batch's first by more than a relative 1e-12); a "
-          "per-pulse sample axis is not supported");
-    }
-  }
+  require_constant_sample_axis(who, "SC0", first, sc0);
+  require_constant_sample_axis(who, "SCSS", first, scss);
   std::vector<T> axis(static_cast<size_t>(num_samples));
   for (int64_t sample = 0; sample < num_samples; ++sample) {
     axis[static_cast<size_t>(sample)] =
         static_cast<T>(sc0[0] + static_cast<double>(sample) * scss[0]);
+  }
+
+  // Pulse times stay float64 in both instantiations: a collection-relative
+  // timestamp does not survive single precision to useful accuracy.
+  const std::vector<double> times = pvp->field("TxTime", 1);
+  for (double t : times) {
+    if (!std::isfinite(t)) {
+      continue;
+    }
+    if (!collection_time_valid_) {
+      collection_t_min_ = t;
+      collection_t_max_ = t;
+      collection_time_valid_ = true;
+    } else {
+      collection_t_min_ = std::min(collection_t_min_, t);
+      collection_t_max_ = std::max(collection_t_max_, t);
+    }
   }
 
   // 4. Emit. The boundary key is stamped before the emits so it rides the
@@ -548,8 +847,8 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   if (is_final && is_metadata_enabled()) {
     metadata()->set(
         kStreamBoundaryKey,
-        std::string(is_last_file ? kStreamBoundaryEndOfStream
-                                 : kStreamBoundaryCollection));
+        std::string(another_follows ? kStreamBoundaryCollection
+                                    : kStreamBoundaryEndOfStream));
   }
 
   const std::vector<int64_t> pulse_shape{count, 3};
@@ -563,11 +862,7 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   for (size_t i = 0; i < srp.size(); ++i) {
     srp_host[i] = static_cast<T>(srp[i]);
   }
-  emit_with_stream(
-      op_output, "phase_history",
-      upload(history, nsamp, {count, num_samples}, complex_dtype<T>(),
-             stream, who.c_str()),
-      stream);
+  emit_with_stream(op_output, "phase_history", phase_history, stream);
   emit_with_stream(
       op_output, "positions",
       upload(pos_host, pulse_shape, real_dtype<T>(), stream, who.c_str()),
@@ -581,9 +876,21 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
                           who.c_str()),
                    stream);
 
-  // Pulse times stay float64 in both instantiations: a collection-relative
-  // timestamp does not survive single precision to useful accuracy.
-  const std::vector<double> times = pvp->field("TxTime", 1);
+  double batch_span = 0.0;
+  if (count > 0) {
+    double tmin = times[0];
+    double tmax = times[0];
+    for (double t : times) {
+      if (!std::isfinite(t)) {
+        continue;
+      }
+      tmin = std::min(tmin, t);
+      tmax = std::max(tmax, t);
+    }
+    if (std::isfinite(tmin) && std::isfinite(tmax)) {
+      batch_span = tmax - tmin;
+    }
+  }
   emit_with_stream(op_output, "pulse_times",
                    upload(times, {count}, real_dtype<double>(), stream,
                           who.c_str()),
@@ -603,12 +910,28 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
                      stream);
   }
 
+  // Last pulse packet is in the graph. EventBased may form during
+  // the H2D wait and pace_tick below; the overlay subtracts this
+  // from BackprojectionOp's emit time.
+  if (is_final) {
+    publish_last_packet_at(std::chrono::steady_clock::now());
+  }
+
   // Locals (positions, axis, times) back the small copies; wait so they
-  // stay alive for the DMA. History is pinned and reused, so this wait
-  // is also what keeps the next tick from overwriting it while this
-  // tick's H2D is still in flight.
+  // stay alive for the DMA. Pinned scratch (and integer-path history,
+  // and double CF8 device staging) are reused, so this wait is also
+  // what keeps the next tick from overwriting buffers still in flight.
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
     throw std::runtime_error(who + ": H2D stream sync failed");
+  }
+  // Seam log is host read + H2D + sync, not pace_tick sleep.
+  collection_compute_s_ += std::chrono::duration<double>(
+                               std::chrono::steady_clock::now() -
+                               tick_start_)
+                               .count();
+  pace_tick(batch_span);
+  if (is_final) {
+    timeline_close_dwell();
   }
 
   // The descriptor edge is emitted once, at the first tick: a consumer
@@ -623,24 +946,32 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   if (!is_final) {
     return;
   }
-  if (is_last_file) {
+  if (!another_follows) {
     HOLOSCAN_LOG_INFO(
         "{}: end of stream: {} pulses read from the final collection '{}' "
-        "({} of {})",
+        "({} of {}, {:.3f} s)",
         who, last_pulse_ - first_pulse_, files_[file_index_], file_index_ + 1,
-        files_.size());
+        files_.size(), collection_compute_s_);
     stop_condition_->disable_tick();
     return;
   }
-  // Advance to the next collection. The seam has already been announced on
-  // the batch just emitted, so the consumer's flush and reset happen before
-  // any pulse of the next file reaches it.
-  HOLOSCAN_LOG_INFO("{}: collection boundary after {} pulses of '{}'", who,
-                    last_pulse_ - first_pulse_, files_[file_index_]);
+  // Advance to the next collection (or wrap). The seam has already been
+  // announced on the batch just emitted, so the consumer's flush and reset
+  // happen before any pulse of the next file reaches it.
+  HOLOSCAN_LOG_INFO(
+      "{}: collection boundary after {} pulses of '{}' ({:.3f} s)", who,
+      last_pulse_ - first_pulse_, files_[file_index_],
+      collection_compute_s_);
+  collection_compute_s_ = 0.0;
+  cooldown_if_needed();
   // Released before the file it points into is replaced: the block holds the
   // old file's PVP layout and path by pointer.
   pvp.reset();
-  ++file_index_;
+  if (is_last_file) {
+    file_index_ = 0;
+  } else {
+    ++file_index_;
+  }
   open_current_file();
 }
 

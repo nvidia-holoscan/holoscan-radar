@@ -1,25 +1,30 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cub/device/device_radix_sort.cuh>
+#include <cub/device/device_select.cuh>
 #include <cuda_runtime.h>
 
-#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <stdexcept>
-#include <string>
-#include <vector>
 
-#include "custom_ops.hpp"  // NOLINT(build/include_subdir)
-#include "radar_common/sdk/tensor_io.hpp"
-#include "radar_common/tensor/dlpack_buffer.hpp"
-#include "radar_common/tensor/tensor_utils.hpp"
+#include "sar_image_lut_kernels.hpp"  // NOLINT(build/include_subdir)
 
 namespace {
 
 constexpr int kThreads = 256;
+
+struct AutoFree {
+  void* p{nullptr};
+  ~AutoFree() { cudaFree(p); }
+};
+
+struct PositiveFinite {
+  __device__ __forceinline__ bool operator()(float x) const {
+    return isfinite(x) && x > 0.0F;
+  }
+};
 
 __global__ void magnitude_c64_kernel(const float2* in, float* out,
                                      size_t count) {
@@ -43,177 +48,209 @@ __global__ void magnitude_c128_kernel(const double2* in, float* out,
   out[i] = static_cast<float>(hypot(z.x, z.y));
 }
 
-int64_t downsample_factor(int64_t height, int64_t width,
-                          int64_t max_side) {
-  if (max_side <= 0) {
-    throw std::invalid_argument(
-        "SarImageToLutOp: max_side must be positive");
+__global__ void box_average_kernel(const float* in, float* out,
+                                   int64_t in_u, int64_t factor,
+                                   int64_t out_v, int64_t out_u) {
+  const int64_t x = static_cast<int64_t>(blockIdx.x) * blockDim.x +
+                    threadIdx.x;
+  const int64_t y = static_cast<int64_t>(blockIdx.y) * blockDim.y +
+                    threadIdx.y;
+  if (x >= out_u || y >= out_v) {
+    return;
   }
-  const int64_t longest = std::max(height, width);
-  if (longest <= max_side) {
-    return 1;
-  }
-  return (longest + max_side - 1) / max_side;
-}
-
-void check_cuda(cudaError_t err, const char* what) {
-  if (err != cudaSuccess) {
-    throw std::runtime_error(std::string("SarImageToLutOp: ") + what +
-                             ": " + cudaGetErrorString(err));
-  }
-}
-
-std::vector<float> box_average(const std::vector<float>& in, int64_t in_v,
-                               int64_t in_u, int64_t factor) {
-  const int64_t out_v = in_v / factor;
-  const int64_t out_u = in_u / factor;
-  std::vector<float> out(static_cast<size_t>(out_v * out_u));
-  const float n = static_cast<float>(factor * factor);
-  for (int64_t y = 0; y < out_v; ++y) {
-    for (int64_t x = 0; x < out_u; ++x) {
-      float sum = 0.0F;
-      for (int64_t dy = 0; dy < factor; ++dy) {
-        for (int64_t dx = 0; dx < factor; ++dx) {
-          const int64_t iy = y * factor + dy;
-          const int64_t ix = x * factor + dx;
-          sum += in[static_cast<size_t>(iy * in_u + ix)];
-        }
-      }
-      out[static_cast<size_t>(y * out_u + x)] = sum / n;
+  float sum = 0.0F;
+  for (int64_t dy = 0; dy < factor; ++dy) {
+    const int64_t iy = y * factor + dy;
+    for (int64_t dx = 0; dx < factor; ++dx) {
+      const int64_t ix = x * factor + dx;
+      sum += in[iy * in_u + ix];
     }
   }
-  return out;
+  out[y * out_u + x] =
+      sum / static_cast<float>(factor * factor);
+}
+
+__global__ void apply_lut_kernel(const float* mag, std::uint8_t* out,
+                                 size_t count, float high, float floor) {
+  const size_t i = static_cast<size_t>(blockIdx.x) * kThreads +
+                   static_cast<size_t>(threadIdx.x);
+  if (i >= count) {
+    return;
+  }
+  const float db =
+      20.0F * log10f(mag[i] / high + 1.0e-12F);
+  const float clipped = fminf(0.0F, fmaxf(floor, db));
+  const float scaled =
+      (clipped - floor) / (-floor) * 255.0F;
+  out[i] = static_cast<std::uint8_t>(
+      fminf(255.0F, fmaxf(0.0F, roundf(scaled))));
+}
+
+int blocks_for(size_t count) {
+  return static_cast<int>(
+      (count + static_cast<size_t>(kThreads) - 1) /
+      static_cast<size_t>(kThreads));
+}
+
+int64_t percentile_index(int64_t n, double q) {
+  auto idx = static_cast<int64_t>(
+      std::floor(static_cast<double>(n - 1) * (q / 100.0)));
+  if (idx < 0) {
+    idx = 0;
+  }
+  if (idx >= n) {
+    idx = n - 1;
+  }
+  return idx;
 }
 
 }  // namespace
 
-void SarImageToLutOp::compute(
-    holoscan::InputContext& op_input,
-    holoscan::OutputContext& op_output,
-    [[maybe_unused]] holoscan::ExecutionContext& context) {
-  const char* who = "SarImageToLutOp";
-  auto image = radar::receive_single(op_input, "image", who);
-  radar::require_cuda_accessible(*image, "image", who);
-  radar::require_contiguous(*image, "image", who);
-  const auto dtype = image->dtype();
-  const bool is_c64 =
-      dtype.code == kDLComplex && dtype.bits == 64 && dtype.lanes == 1;
-  const bool is_c128 =
-      dtype.code == kDLComplex && dtype.bits == 128 &&
-      dtype.lanes == 1;
-  if (!is_c64 && !is_c128) {
-    throw std::invalid_argument(
-        std::string(who) + ": image must be complex64 or complex128");
+void sar_image_magnitude_c64(const void* in, float* out, size_t count,
+                             cudaStream_t stream) {
+  magnitude_c64_kernel<<<blocks_for(count), kThreads, 0, stream>>>(
+      static_cast<const float2*>(in), out, count);
+}
+
+void sar_image_magnitude_c128(const void* in, float* out, size_t count,
+                              cudaStream_t stream) {
+  magnitude_c128_kernel<<<blocks_for(count), kThreads, 0, stream>>>(
+      static_cast<const double2*>(in), out, count);
+}
+
+void sar_image_box_average(const float* in, float* out, int64_t in_v,
+                           int64_t in_u, int64_t factor,
+                           cudaStream_t stream) {
+  const int64_t out_v = in_v / factor;
+  const int64_t out_u = in_u / factor;
+  constexpr int kBx = 16;
+  constexpr int kBy = 16;
+  const dim3 block(kBx, kBy);
+  const dim3 grid(
+      static_cast<unsigned int>((out_u + kBx - 1) / kBx),
+      static_cast<unsigned int>((out_v + kBy - 1) / kBy));
+  box_average_kernel<<<grid, block, 0, stream>>>(in, out, in_u,
+                                                 factor, out_v, out_u);
+}
+
+cudaError_t sar_image_percentiles(const float* in, size_t count,
+                                  double high_q, double low_q,
+                                  float* high_out, float* low_out,
+                                  size_t* n_valid,
+                                  cudaStream_t stream) {
+  *n_valid = 0;
+  if (count == 0) {
+    return cudaSuccess;
   }
-  const auto shape = image->shape();
-  if (shape.size() != 2) {
-    throw std::invalid_argument(
-        std::string(who) + ": image must be rank-2 (num_v, num_u)");
+  const auto n = static_cast<int64_t>(count);
+  AutoFree compact;
+  AutoFree sorted;
+  AutoFree nsel;
+  AutoFree cub_select;
+  AutoFree cub_sort;
+  void* mem = nullptr;
+  cudaError_t err = cudaMalloc(&mem, count * sizeof(float));
+  if (err != cudaSuccess) {
+    return err;
   }
-  const int64_t num_v = shape[0];
-  const int64_t num_u = shape[1];
-  if (num_v <= 0 || num_u <= 0) {
-    throw std::invalid_argument(
-        std::string(who) + ": image axes must be positive");
+  compact.p = mem;
+  mem = nullptr;
+  err = cudaMalloc(&mem, count * sizeof(float));
+  if (err != cudaSuccess) {
+    return err;
   }
-  if (!(floor_db < 0.0) || !std::isfinite(floor_db)) {
-    throw std::invalid_argument(
-        std::string(who) + ": floor_db must be finite and < 0");
+  sorted.p = mem;
+  mem = nullptr;
+  err = cudaMalloc(&mem, sizeof(int64_t));
+  if (err != cudaSuccess) {
+    return err;
   }
-  if (!(high_percentile > 0.0) || high_percentile >= 100.0 ||
-      !std::isfinite(high_percentile)) {
-    throw std::invalid_argument(
-        std::string(who) +
-        ": high_percentile must be in (0, 100)");
+  nsel.p = mem;
+
+  PositiveFinite pred;
+  auto* d_compact = static_cast<float*>(compact.p);
+  auto* d_sorted = static_cast<float*>(sorted.p);
+  auto* d_nsel = static_cast<int64_t*>(nsel.p);
+
+  size_t temp_bytes = 0;
+  err = cub::DeviceSelect::If(nullptr, temp_bytes, in, d_compact,
+                              d_nsel, n, pred, stream);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  if (temp_bytes > 0) {
+    mem = nullptr;
+    err = cudaMalloc(&mem, temp_bytes);
+    if (err != cudaSuccess) {
+      return err;
+    }
+    cub_select.p = mem;
+  }
+  err = cub::DeviceSelect::If(cub_select.p, temp_bytes, in,
+                              d_compact, d_nsel, n, pred, stream);
+  if (err != cudaSuccess) {
+    return err;
   }
 
-  cudaStream_t stream = op_input.receive_cuda_stream("image");
-  const size_t count =
-      static_cast<size_t>(num_v) * static_cast<size_t>(num_u);
-  auto mag = radar::make_device_tensor({num_v, num_u},
-                                       radar::real_dtype<float>());
-  const int blocks = static_cast<int>(
-      (count + static_cast<size_t>(kThreads) - 1) /
-      static_cast<size_t>(kThreads));
-  if (is_c64) {
-    magnitude_c64_kernel<<<blocks, kThreads, 0, stream>>>(
-        static_cast<const float2*>(image->data()),
-        static_cast<float*>(mag->data()), count);
-  } else {
-    magnitude_c128_kernel<<<blocks, kThreads, 0, stream>>>(
-        static_cast<const double2*>(image->data()),
-        static_cast<float*>(mag->data()), count);
+  int64_t h_n = 0;
+  err = cudaMemcpyAsync(&h_n, d_nsel, sizeof(h_n),
+                        cudaMemcpyDeviceToHost, stream);
+  if (err != cudaSuccess) {
+    return err;
   }
-  check_cuda(cudaGetLastError(), "magnitude kernel failed");
+  err = cudaStreamSynchronize(stream);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  if (h_n <= 0) {
+    return cudaSuccess;
+  }
+  *n_valid = static_cast<size_t>(h_n);
 
-  std::vector<float> host(count);
-  check_cuda(
-      cudaMemcpyAsync(host.data(), mag->data(), count * sizeof(float),
-                      cudaMemcpyDeviceToHost, stream),
-      "magnitude D2H failed");
-  check_cuda(cudaStreamSynchronize(stream),
-             "magnitude D2H sync failed");
+  temp_bytes = 0;
+  err = cub::DeviceRadixSort::SortKeys(
+      nullptr, temp_bytes, d_compact, d_sorted, h_n, 0,
+      static_cast<int>(sizeof(float) * 8), stream);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  if (temp_bytes > 0) {
+    mem = nullptr;
+    err = cudaMalloc(&mem, temp_bytes);
+    if (err != cudaSuccess) {
+      return err;
+    }
+    cub_sort.p = mem;
+  }
+  err = cub::DeviceRadixSort::SortKeys(
+      cub_sort.p, temp_bytes, d_compact, d_sorted, h_n, 0,
+      static_cast<int>(sizeof(float) * 8), stream);
+  if (err != cudaSuccess) {
+    return err;
+  }
 
-  std::vector<float> valid;
-  valid.reserve(host.size());
-  for (float value : host) {
-    if (std::isfinite(value) && value > 0.0F) {
-      valid.push_back(value);
+  err = cudaMemcpyAsync(high_out,
+                        d_sorted + percentile_index(h_n, high_q),
+                        sizeof(float), cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  if (low_q > 0.0 && low_out != nullptr) {
+    err = cudaMemcpyAsync(low_out,
+                          d_sorted + percentile_index(h_n, low_q),
+                          sizeof(float), cudaMemcpyDeviceToHost,
+                          stream);
+    if (err != cudaSuccess) {
+      return err;
     }
   }
-  if (valid.empty()) {
-    throw std::runtime_error(
-        std::string(who) + ": image is identically zero");
-  }
-  const double frac = high_percentile / 100.0;
-  auto idx = static_cast<size_t>(
-      std::floor(static_cast<double>(valid.size() - 1) * frac));
-  if (idx >= valid.size()) {
-    idx = valid.size() - 1;
-  }
-  std::nth_element(valid.begin(),
-                   valid.begin() + static_cast<std::ptrdiff_t>(idx),
-                   valid.end());
-  const float high = valid[idx];
-  if (!(high > 0.0F)) {
-    throw std::runtime_error(
-        std::string(who) + ": image is identically zero");
-  }
+  return cudaStreamSynchronize(stream);
+}
 
-  const int64_t factor =
-      downsample_factor(num_v, num_u, max_side);
-  const int64_t out_v = num_v / factor;
-  const int64_t out_u = num_u / factor;
-  if (out_v <= 0 || out_u <= 0) {
-    throw std::invalid_argument(
-        std::string(who) + ": max_side leaves an empty display grid");
-  }
-  const std::vector<float> displayed =
-      factor > 1 ? box_average(host, num_v, num_u, factor) : host;
-  const size_t out_count =
-      static_cast<size_t>(out_v) * static_cast<size_t>(out_u);
-
-  const float floor = static_cast<float>(floor_db);
-  const float span = -floor;
-  constexpr float kLutMax = 255.0F;
-  std::vector<float> lut(out_count);
-  for (size_t i = 0; i < out_count; ++i) {
-    const float mag_v = displayed[i];
-    const float db =
-        20.0F * std::log10(mag_v / high + 1.0e-12F);
-    const float clipped = std::min(0.0F, std::max(floor, db));
-    lut[i] = (clipped - floor) / span * kLutMax;
-  }
-
-  auto tensor = radar::make_device_tensor(
-      {out_v, out_u, 1}, radar::real_dtype<float>());
-  check_cuda(cudaMemcpyAsync(tensor->data(), lut.data(),
-                             out_count * sizeof(float),
-                             cudaMemcpyHostToDevice, stream),
-             "LUT H2D failed");
-  check_cuda(cudaStreamSynchronize(stream), "LUT H2D sync failed");
-  if (stream != cudaStreamDefault) {
-    op_output.set_cuda_stream(stream, "sar_image");
-  }
-  radar::emit_single(op_output, "sar_image", tensor);
+void sar_image_apply_lut(const float* mag, std::uint8_t* out,
+                         size_t count, float high, float floor,
+                         cudaStream_t stream) {
+  apply_lut_kernel<<<blocks_for(count), kThreads, 0, stream>>>(
+      mag, out, count, high, floor);
 }

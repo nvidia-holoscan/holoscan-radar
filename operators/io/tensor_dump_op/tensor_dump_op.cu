@@ -5,6 +5,7 @@
 
 #include <cuda_runtime.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
@@ -197,6 +198,7 @@ void TensorDumpOp::compute(InputContext& op_input,
   }
 
   const size_t nbytes = tensor->nbytes();
+  const auto t0 = std::chrono::steady_clock::now();
   host_.resize(nbytes);
   if (nbytes > 0) {
     cudaStream_t stream = op_input.receive_cuda_stream("tensor");
@@ -229,8 +231,13 @@ void TensorDumpOp::compute(InputContext& op_input,
   }
   ++files_written_;
 
-  HOLOSCAN_LOG_DEBUG("{}: wrote {} ({} bytes, {})", kOpName, out_path, nbytes,
-                     to_string(format_.get()));
+  const double write_s = std::chrono::duration<double>(
+                             std::chrono::steady_clock::now() - t0)
+                             .count();
+  HOLOSCAN_LOG_INFO(
+      "{}: wrote {} ({:.2f} GiB) in {:.3f} s", kOpName, out_path,
+      static_cast<double>(nbytes) / (1024.0 * 1024.0 * 1024.0),
+      write_s);
 }
 
 void TensorDumpOp::stop() {

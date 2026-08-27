@@ -24,14 +24,18 @@
 #include <complex>
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include <holoscan/holoscan.hpp>
 
+#include "io/cphd_reader_op/cphd_reader_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/sdk/stream_boundary.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
@@ -44,14 +48,32 @@ class StreamBoundaryControlOp : public holoscan::Operator {
   HOLOSCAN_OPERATOR_FORWARD_ARGS(StreamBoundaryControlOp)
   StreamBoundaryControlOp() = default;
 
+  // Per-collection lattice / dr / f0, index-aligned with the
+  // reader's file list. Size 1 (mode 1) emits no live overrides.
+  std::vector<radar::SampleGeometry> geometries;
+  std::vector<double> spacings;
+  std::vector<double> frequencies;
+
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("announce");
     // kNone: silent on non-boundary ticks (absent control = accumulate).
     spec.output<holoscan::TensorMap>("control")
         .condition(holoscan::ConditionType::kNone);
+    spec.output<radar::SampleGeometry>("sample_geometry")
+        .condition(holoscan::ConditionType::kNone);
+    spec.output<double>("range_bin_spacing")
+        .condition(holoscan::ConditionType::kNone);
+    spec.output<double>("reference_frequency")
+        .condition(holoscan::ConditionType::kNone);
   }
 
   void start() override {
+    if (geometries.size() != spacings.size() ||
+        geometries.size() != frequencies.size()) {
+      throw std::invalid_argument(
+          "StreamBoundaryControlOp: geometries, spacings, and "
+          "frequencies must be the same length");
+    }
     emit_and_reset_ =
         radar::make_device_tensor({1}, DLDataType{kDLUInt, 8, 1});
     const uint8_t value = static_cast<uint8_t>(
@@ -79,10 +101,23 @@ class StreamBoundaryControlOp : public holoscan::Operator {
         boundary == radar::kStreamBoundaryCollection) {
       radar::emit_single(op_output, "control", emit_and_reset_);
     }
+    // Mode 5: the next collection's lattice / dr / f0 ride the same
+    // tick as emit-and-reset. BackprojectionOp stages them until after
+    // this emit (the closing aperture stays on the old geometry).
+    if (boundary == radar::kStreamBoundaryCollection &&
+        geometries.size() > 1) {
+      ++boundary_count_;
+      const size_t next =
+          boundary_count_ % geometries.size();
+      op_output.emit(geometries[next], "sample_geometry");
+      op_output.emit(spacings[next], "range_bin_spacing");
+      op_output.emit(frequencies[next], "reference_frequency");
+    }
   }
 
  private:
   std::shared_ptr<holoscan::Tensor> emit_and_reset_;
+  size_t boundary_count_{0};
 };
 
 // Diagnostic: rotate reader ECEF positions / SRP into scene ENU at a
@@ -378,25 +413,52 @@ class NvradarVphOverrideOp : public holoscan::Operator {
   int64_t cursor_{0};
 };
 
-// Magnitude-and-log rasterizer for Holoviz. Matches
-// tools/sar_image/sar_image/render.py: dB relative to the 99.8th
-// percentile of full-resolution |z| (valid samples only), clipped
-// 30 dB down, mapped onto the greyscale LUT. Display-only; the
-// TensorDump .npy stays full-resolution complex. GPU |z|, then a
-// host magnitude copy (256 MiB at Atlanta 8192² float) so the
-// percentile matches the PNG; box-average is after that, for the
-// displayed grid only. compute() is in sar_image_lut.cu.
+// Magnitude-and-log rasterizer for Holoviz. dB relative to the
+// displayed grid's 99.8th-percentile |z| (finite samples). The
+// floor is that grid's 25th percentile, never wider than
+// `floor_db` (Atlanta's 30 dB cap). A 2nd-percentile floor is the
+// sidelobe tail on a filled lattice and does not move the window.
+// Speculars clip. Display-only; the TensorDump .npy stays
+// full-resolution complex. GPU |z|, box-average onto the Holoviz
+// grid, then percentile and uint8 LUT on that grid (CUB compact +
+// sort). Overlay is host and tiny. Emits a TensorMap on
+// `sar_image`: uint8 (H, W, 1) LUT indices 0–255 keyed
+// `sar_image`, plus `size_label` (RGBA overlay: name + formed HxW,
+// BP time, px*pls/s). compute() is in sar_image_lut.cpp; kernels
+// are in sar_image_lut.cu so nvcc does not parse Holoscan.
 class SarImageToLutOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(SarImageToLutOp)
   SarImageToLutOp() = default;
 
-  // Same window as the offline PNG (render.py floor_db / percentile).
+  // Widest window below the high percentile (negative dB). A
+  // brighter low percentile on this image wins (tighter).
   double floor_db{-30.0};
   double high_percentile{99.8};
-  // Longest displayed side; the other axis scales. 2048 keeps the
-  // Atlanta lattice readable in a 1024² window.
-  int64_t max_side{2048};
+  // 25th, not 2nd: SNAPSHOT lattices have energy in every sample
+  // (sidelobes), so the 2nd percentile is ~30 dB down and the cap
+  // always wins. The 25th is the dark end of the scene; images
+  // whose median sits only ~14 dB below the 99.8th then get a
+  // tight window instead of mid-grey wash.
+  double low_percentile{25.0};
+  // Longest displayed side; the other axis scales. Compose sets
+  // this to the Holoviz window so R8_UINT is 1:1 (nearest-only).
+  // The formed dump is the BP lattice, not this.
+  int64_t max_side{1024};
+  // Optional: last-emit BP timing (compose binds this to
+  // BackprojectionOp::last_image_timing) and the reader's last
+  // pulse-packet emit. Overlay index walks scene_names on each
+  // emit (mode 5 loop wraps).
+  struct FormationDiag {
+    double bp_compute_s{0.0};
+    int64_t pulses{0};
+    int64_t pixels{0};
+    std::optional<std::chrono::steady_clock::time_point> emit_at;
+    std::optional<std::chrono::steady_clock::time_point> last_packet_at;
+  };
+  std::function<FormationDiag()> formation_diag;
+  std::vector<std::string> scene_names;
+  int64_t overlay_index{0};
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("image");
@@ -406,6 +468,50 @@ class SarImageToLutOp : public holoscan::Operator {
   void compute(holoscan::InputContext& op_input,
                holoscan::OutputContext& op_output,
                holoscan::ExecutionContext& context) override;
+
+ private:
+  // Inter-image wall at LUT emit, not HoldLastImageOp's 100 ms
+  // Holoviz tick. First image of a run has no predecessor.
+  std::chrono::steady_clock::time_point last_emit_at_{};
+  bool have_last_emit_{false};
+};
+
+// Scrolling wall-clock Gantt: per-collect dwell bars, duty-cycle
+// quiet, image-emit ticks with last-packet latency. Source:
+// PeriodicCondition 100 ms, no data input. Polls
+// CPHDReaderOp::timeline_spans, last_packet_at, and BP emit_at.
+// compute() is in timeline.cpp.
+class TimelineRasterOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(TimelineRasterOp)
+  TimelineRasterOp() = default;
+
+  double window_s{20.0};
+  int64_t width{1280};
+  int64_t height{112};
+  std::vector<std::string> scene_names;
+  std::function<std::vector<radar::CollectionSpan>()> spans;
+  std::function<std::optional<std::chrono::steady_clock::time_point>()>
+      last_image_emit;
+  std::function<std::optional<std::chrono::steady_clock::time_point>()>
+      last_packet_at;
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.output<holoscan::TensorMap>("timeline");
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               holoscan::OutputContext& op_output,
+               holoscan::ExecutionContext& context) override;
+
+ private:
+  struct ImageMark {
+    std::chrono::steady_clock::time_point at{};
+    int file_index{-1};
+    std::optional<double> latency_s;
+  };
+  std::vector<ImageMark> image_emits_;
+  std::optional<std::chrono::steady_clock::time_point> last_seen_emit_;
 };
 
 // Mode 1 emits one image, then the reader stops the graph. Re-emit
@@ -415,7 +521,8 @@ class SarImageToLutOp : public holoscan::Operator {
 // first frame (Atlanta forms in ~9 s; default 30 s still covers
 // that). The deadline arms in start() so a silent formation path
 // cannot hang the window; the first image re-arms so the hold is
-// still counted from emit.
+// still counted from emit. `hold_s < 0` holds indefinitely (mode 5
+// loops until SIGINT).
 class HoldLastImageOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(HoldLastImageOp)
@@ -437,7 +544,11 @@ class HoldLastImageOp : public holoscan::Operator {
     spec.output<holoscan::TensorMap>("image");
   }
 
-  void start() override { arm_deadline(); }
+  void start() override {
+    if (hold_s >= 0.0) {
+      arm_deadline();
+    }
+  }
 
   void compute(holoscan::InputContext& op_input,
                holoscan::OutputContext& op_output,
@@ -446,7 +557,9 @@ class HoldLastImageOp : public holoscan::Operator {
     if (maybe && !maybe->empty()) {
       cached_ = maybe.value();
       if (waiting_for_first_) {
-        arm_deadline();
+        if (hold_s >= 0.0) {
+          arm_deadline();
+        }
         waiting_for_first_ = false;
       }
     }

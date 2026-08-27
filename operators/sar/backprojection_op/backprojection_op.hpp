@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -56,6 +58,32 @@ class BackprojectionOp : public holoscan::Operator {
                ExecutionContext& context) override;
   void stop() override;
 
+  // Host wall time of compute() summed over the aperture that
+  // produced the last emit, after a stream sync on that emit.
+  // Not a port. The formation app reads this for the overlay.
+  struct LastImageTiming {
+    double compute_s{0.0};
+    int64_t pulses{0};
+    int64_t pixels{0};
+    // Wall time when the formed image was ready (after the
+    // emit-path stream sync, before the image port is emitted).
+    std::optional<std::chrono::steady_clock::time_point> emit_at;
+  };
+  LastImageTiming last_image_timing() const {
+    LastImageTiming t;
+    t.compute_s =
+        last_image_compute_s_.load(std::memory_order_acquire);
+    t.pulses = last_image_pulses_.load(std::memory_order_relaxed);
+    t.pixels = last_image_pixels_.load(std::memory_order_relaxed);
+    if (last_image_emit_valid_.load(std::memory_order_acquire)) {
+      const auto ns =
+          last_image_emit_ns_.load(std::memory_order_relaxed);
+      t.emit_at = std::chrono::steady_clock::time_point{
+          std::chrono::nanoseconds{ns}};
+    }
+    return t;
+  }
+
  private:
   Parameter<CoordinateFrame> coordinate_frame_;
   Parameter<SampleGeometry> sample_geometry_;
@@ -81,6 +109,12 @@ class BackprojectionOp : public holoscan::Operator {
 
   int64_t unemitted_pulses_{0};
   bool locality_warned_{false};
+  double aperture_compute_s_{0.0};
+  std::atomic<double> last_image_compute_s_{0.0};
+  std::atomic<int64_t> last_image_pulses_{0};
+  std::atomic<int64_t> last_image_pixels_{0};
+  std::atomic<int64_t> last_image_emit_ns_{0};
+  std::atomic<bool> last_image_emit_valid_{false};
 
   std::shared_ptr<detail::BackprojectionState<T>> state_;
   std::shared_ptr<holoscan::Tensor> retained_profiles_;

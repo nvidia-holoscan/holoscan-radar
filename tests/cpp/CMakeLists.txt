@@ -76,6 +76,7 @@ foreach(_recipe IN LISTS SAR_FIXTURE_RECIPES)
 endforeach()
 
 radar_add_test(common/test_window)
+radar_add_test(common/test_fft_size)
 radar_add_test(common/test_steering_weights_device
     holoscan::radar_common_steering)
 radar_add_test(common/test_spatial_smoothing)

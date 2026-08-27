@@ -12,8 +12,9 @@ cphd:
   path: ""
   sidecar: ""
 
-output:
-  path: ""
+# dump: true writes a .npy (off by default).
+# output:
+#   path: /tmp/sar/mode01_smoke_image_{index}.npy
 
 cphd_reader:
   coordinate_frame: ecef

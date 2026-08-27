@@ -105,7 +105,8 @@ def main(argv: list[str] | None = None) -> int:
         "--floor-db",
         type=float,
         default=-30.0,
-        help="Display window in dB below the 99.8th-percentile magnitude (default: -30)",
+        help="Widest display window in dB below the 99.8th-percentile magnitude "
+        "(default: -30). Each image may use a tighter floor from its 25th percentile.",
     )
     parser.add_argument("--save-npy", type=Path, help="Also write the complex image as .npy")
     args = parser.parse_args(argv)

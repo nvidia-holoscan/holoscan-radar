@@ -65,9 +65,11 @@ done at the mode 1 subset. What each now does:
   explicit ordered list. Each file is its own collection: `pulse_range` applies
   per file, the frame is validated per file, the `coordinate_frame` descriptor
   is re-emitted at each collection's first tick, and the seam is announced as
-  `collection_boundary` with `end_of_stream` reserved for the last. Every file
-  is opened and checked at `start()`, so an unreadable third file fails before
-  the first pulse rather than after two collections have been formed.
+  `collection_boundary` with `end_of_stream` reserved for the last
+  unless `loop` is true (then the last seam wraps and is also
+  `collection_boundary`). Every file is opened and checked at
+  `start()`, so an unreadable third file fails before the first
+  pulse rather than after two collections have been formed.
 - **`CI4` and `CI2` sample decoding.** Both decode. `CF8` keeps its
   no-intermediate-copy path (item 6); the integer formats convert per sample,
   which is why `CI2` is the slowest per byte in the harness despite moving the
@@ -90,12 +92,22 @@ now.
 ## 3. Frequency-axis constancy is enforced per batch, not per collection
 
 `SC0` and `SCSS` are per-vector fields, but `sample_axis` is one shared row, so
-the operator checks that they are constant across the pulses of each batch and
-throws otherwise. A collection that stepped its start frequency **between**
-batches at exactly the batch boundary would slip through. Cheap to close by
-checking the whole channel at `start()`; not done because it costs a full-file
-PVP pass at open, which on a 28 GiB collection is not free, and no known
-collection behaves that way. Revisit if one does.
+the operator checks that they agree across the pulses of each batch and throws
+otherwise. A collection that stepped its start frequency **between** batches at
+exactly the batch boundary would slip through. Cheap to close by checking the
+whole channel at `start()`; not done because it costs a full-file PVP pass at
+open, which on a 28 GiB collection is not free, and no known collection
+behaves that way. Revisit if one does.
+
+*Updated 2026-08-26.* The check is a **relative ramp bound of 1e-5**, not
+bit-identity and not last-place jitter. Public Umbra SNAPSHOT CPHDs (the six
+mode-5 files) ramp `SC0` by ~0.02 Hz/pulse (~2e-12 relative at X-band) and
+`SCSS` by ~4e-6 Hz/pulse (~1e-10 relative), monotonically, unique on every
+vector of the first 100. That is a recorded-grid residual, not a stepped
+sample axis. The previous 1e-12 bound refused Panama on pulse 1 of the first
+batch. 1e-5 still refuses a genuine step (100 kHz on a 10 GHz `SC0`) and
+leaves ~3× margin on a 5 s SNAPSHOT even if the whole collect is one batch
+(~3e-6 relative on `SCSS`). The error names the field and prints both values.
 
 ## 4. Endianness — closed, and not the portability question it looked like
 
@@ -187,9 +199,23 @@ measured and declined — extra complexity for ~0.8 s. `CphdFile` reuses an
 uninitialized `new char[n]` scratch on the widen path the same way;
 `vector<char>(n)` is gone there too.
 
+*Paid 2026-08-26.* Mode-5 Ohio spent **8.2 s in `CPHDReaderOp<double>`**
+after the pinned-staging fix, against 3.9 s of backprojection. The files
+are CF8; the double host path widened every sample in a scalar loop
+(~6 s) and H2D'd 16 bytes/sample. CF8 now reads stored bytes into the
+existing pinned scratch, H2Ds 8 bytes/sample, and byte-swaps / widens /
+applies AmpSF on the device (`cphd_cf8_decode.cu`). Float CF8 decodes
+in-place on the output tensor; double H2Ds into a reused device CF8
+buffer. Integer formats still use `read_signal_into`. `CphdFile`'s host
+widen remains for tests and tools. No contract change.
+
 **Still unpaid:** per-tick `make_device_tensor` (~0.09 ms, the small-batch
 harness finding above). A pooled allocator is the remaining win; it is a
 module-wide `make_device_tensor` question, not a reader-local one.
+Two-slot ping-pong of `phase_history` was tried 2026-08-26 and reverted:
+it removed RC's 0.27 s `cudaFree` but Ohio BP dropped ~8.7e11 → ~7.7e11
+(same after `range_profiles` ping-pong was already gone). The device
+sync from `cudaFree` was serializing decode off BP's GPU time.
 
 *Two earlier costs closed, both measured rather than assumed:*
 

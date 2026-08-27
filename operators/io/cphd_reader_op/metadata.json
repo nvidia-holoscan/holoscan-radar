@@ -9,10 +9,11 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.2.0",
+        "version": "0.3.0",
         "changelog": {
             "0.1.0": "Initial Release (mode 1 slice: one CF8 FX-domain file)",
-            "0.2.0": "Complete the contract: multi-file path with collection_boundary, CI4/CI2 decoding, per-vector AmpSF, TOA-domain sample axis"
+            "0.2.0": "Complete the contract: multi-file path with collection_boundary, CI4/CI2 decoding, per-vector AmpSF, TOA-domain sample axis",
+            "0.3.0": "loop, playback_rate, and duty_cycle (mode-5 rotate / collect-time pacing / platform cooldown)"
         },
         "holoscan_sdk": {
             "minimum_required_version": "4.3.0",

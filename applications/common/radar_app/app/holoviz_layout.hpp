@@ -5,8 +5,9 @@
 // path (~90 lines of InputSpec/View: turbo LUT, one CROSSES layer per
 // cluster color + noise, optional right-column panels) is owned here
 // and driven by HolovizLayout. SAR formation uses a separate factory
-// (`make_image_holoviz_op`) for a single greyscale COLOR_LUT image;
-// it does not inherit CommonRunConfig or the RD-map layout.
+// (`make_image_holoviz_op`) for a greyscale COLOR_LUT image plus a
+// formed-size COLOR overlay; it does not inherit CommonRunConfig or
+// the RD-map layout.
 //
 // This deliberately builds only DATA (+ a factory that makes the HolovizOp)
 // — it does NOT call add_flow. HolovizOp is already the operator; which tensors
@@ -139,17 +140,55 @@ inline std::shared_ptr<holoscan::ops::HolovizOp> make_rd_holoviz_op(
 // Single COLOR_LUT image, full window — the SAR formation path (one
 // formed image, no cluster overlays). `layer_name` is both the
 // Holoviz InputSpec name and the TensorMap key the rasterizer emits.
+// R8_UINT indices are PNG codes 0–255. Do not set PASS_THROUGH:
+// this GLFW surface only offers SrgbNonlinear (`No framebuffer
+// format found which supports the requirements pass_through`).
+// Inverse-sRGB on the LUT overshot (too dark vs the PNG).
 inline std::shared_ptr<holoscan::ops::HolovizOp> make_image_holoviz_op(
     holoscan::Fragment* fragment, const std::string& name,
     const HolovizLayout& layout, const std::string& layer_name,
     const std::vector<std::vector<float>>& color_lut) {
   using InputSpec = holoscan::ops::HolovizOp::InputSpec;
   using InputType = holoscan::ops::HolovizOp::InputType;
+  using ImageFormat = holoscan::ops::HolovizOp::ImageFormat;
   std::vector<InputSpec> specs;
-  specs.emplace_back(layer_name, InputType::COLOR_LUT);
+  InputSpec spec(layer_name, InputType::COLOR_LUT);
+  spec.image_format_ = ImageFormat::R8_UINT;
+  specs.push_back(spec);
+  // Scene name / formed size / BP timing, rasterized by
+  // SarImageToLutOp (Holoviz TEXT strings are compose-time).
+  InputSpec label("size_label", InputType::COLOR);
+  label.image_format_ = ImageFormat::R8G8B8A8_UNORM;
+  label.priority_ = 1;
+  InputSpec::View banner;
+  banner.offset_x_ = 0.015F;
+  banner.offset_y_ = 0.015F;
+  banner.width_ = 0.55F;
+  banner.height_ = 0.11F;
+  label.views_ = {banner};
+  specs.push_back(label);
   return fragment->make_operator<holoscan::ops::HolovizOp>(
       name, holoscan::Arg("tensors", specs),
       holoscan::Arg("color_lut", color_lut),
+      holoscan::Arg("window_title", layout.window_title),
+      holoscan::Arg("width", layout.width),
+      holoscan::Arg("height", layout.height),
+      holoscan::Arg("headless", layout.headless));
+}
+
+// Full-window RGBA image (no LUT). The SAR timeline strip.
+inline std::shared_ptr<holoscan::ops::HolovizOp> make_color_holoviz_op(
+    holoscan::Fragment* fragment, const std::string& name,
+    const HolovizLayout& layout, const std::string& layer_name) {
+  using InputSpec = holoscan::ops::HolovizOp::InputSpec;
+  using InputType = holoscan::ops::HolovizOp::InputType;
+  using ImageFormat = holoscan::ops::HolovizOp::ImageFormat;
+  std::vector<InputSpec> specs;
+  InputSpec spec(layer_name, InputType::COLOR);
+  spec.image_format_ = ImageFormat::R8G8B8A8_UNORM;
+  specs.push_back(spec);
+  return fragment->make_operator<holoscan::ops::HolovizOp>(
+      name, holoscan::Arg("tensors", specs),
       holoscan::Arg("window_title", layout.window_title),
       holoscan::Arg("width", layout.width),
       holoscan::Arg("height", layout.height),

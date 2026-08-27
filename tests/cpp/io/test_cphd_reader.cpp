@@ -19,9 +19,13 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -30,11 +34,13 @@
 
 #include <holoscan/holoscan.hpp>
 
+#include "io/cphd_reader_op/cphd_cf8_decode.hpp"
 #include "io/cphd_reader_op/collection_paths.hpp"
 #include "io/cphd_reader_op/cphd_file.hpp"
 #include "io/cphd_reader_op/cphd_reader_op.hpp"
 #include "radar_common/descriptors/coordinate_frame.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/stream_boundary.hpp"
 
 namespace holoscan::radar {
@@ -60,6 +66,30 @@ std::string fixture_path(const char* recipe) {
 constexpr double quantization_step(double saturation) {
   return 1.0 / saturation;
 }
+
+uint32_t host_bswap32(uint32_t value) {
+  return ((value & 0x000000ffU) << 24) | ((value & 0x0000ff00U) << 8) |
+         ((value & 0x00ff0000U) >> 8) | ((value & 0xff000000U) >> 24);
+}
+
+void store_be_float(char* dest, float value) {
+  uint32_t bits = 0;
+  std::memcpy(&bits, &value, sizeof(bits));
+  bits = host_bswap32(bits);
+  std::memcpy(dest, &bits, sizeof(bits));
+}
+
+struct DeviceBuf {
+  void* p{nullptr};
+  explicit DeviceBuf(size_t bytes) {
+    if (cudaMalloc(&p, bytes) != cudaSuccess) {
+      throw std::runtime_error("DeviceBuf: cudaMalloc failed");
+    }
+  }
+  ~DeviceBuf() { cudaFree(p); }
+  DeviceBuf(const DeviceBuf&) = delete;
+  DeviceBuf& operator=(const DeviceBuf&) = delete;
+};
 
 CoordinateFrame ecef_frame() {
   CoordinateFrameSpec spec;
@@ -236,6 +266,106 @@ TEST(CphdFile, IntegerPvpFieldsDecodeAsIntegersNotBitPatterns) {
   }
 }
 
+TEST(CphdFile, IarpIsDeclaredInEcefMetres) {
+  const CphdFile file(fixture_path());
+  ASSERT_TRUE(file.has_iarp());
+  const std::array<double, 3>& iarp = file.iarp_ecef();
+  const double radius = std::hypot(iarp[0], iarp[1], iarp[2]);
+  // WGS-84 surface ~6371 km; the smoke IARP is Atlanta HAE 313 m.
+  EXPECT_GT(radius, 6.3e6);
+  EXPECT_LT(radius, 6.5e6);
+  EXPECT_GT(iarp[2], 3.0e6);
+}
+
+TEST(CphdFile, ImageAreaIsTheDeclaredSceneRectangle) {
+  const CphdFile file(fixture_path());
+  ASSERT_TRUE(file.has_image_area());
+  const auto& area = file.image_area();
+  // tools/sar_sim/recipes/mode01_smoke.yaml image_half_extent_m: 20
+  EXPECT_DOUBLE_EQ(area.x1, -20.0);
+  EXPECT_DOUBLE_EQ(area.y1, -20.0);
+  EXPECT_DOUBLE_EQ(area.x2, 20.0);
+  EXPECT_DOUBLE_EQ(area.y2, 20.0);
+  const double nx =
+      std::hypot(area.u_iax[0], area.u_iax[1], area.u_iax[2]);
+  const double ny =
+      std::hypot(area.u_iay[0], area.u_iay[1], area.u_iay[2]);
+  EXPECT_NEAR(nx, 1.0, 1e-12);
+  EXPECT_NEAR(ny, 1.0, 1e-12);
+  const double dot = area.u_iax[0] * area.u_iay[0] +
+                     area.u_iax[1] * area.u_iay[1] +
+                     area.u_iax[2] * area.u_iay[2];
+  EXPECT_NEAR(dot, 0.0, 1e-12);
+}
+
+TEST(CphdFile, XySquareFitsTheRangeAzimuthRectangle) {
+  EXPECT_DOUBLE_EQ(
+      CphdFile::xy_square_in_range_azimuth(1000.0, 2000.0, 0.0),
+      1000.0);
+  EXPECT_DOUBLE_EQ(
+      CphdFile::xy_square_in_range_azimuth(1000.0, 2000.0,
+                                          kHalfPi),
+      1000.0);
+  EXPECT_NEAR(
+      CphdFile::xy_square_in_range_azimuth(1000.0, 2000.0,
+                                          kPi / 4.0),
+      1000.0 / std::sqrt(2.0), 1e-12);
+  EXPECT_THROW(CphdFile::xy_square_in_range_azimuth(0.0, 2000.0,
+                                                   0.0),
+               std::runtime_error);
+}
+
+TEST(CphdFile, SmokeFixtureHasNoCollectionPhysics) {
+  const CphdFile file(fixture_path());
+  EXPECT_FALSE(file.has_collection_physics());
+  EXPECT_THROW(file.collection_physics(), std::runtime_error);
+}
+
+TEST(CphdFile, PublicSnapshotsMatchTheMode5PhysicsTable) {
+  struct Row {
+    const char* file;
+    double heading_deg;
+    double square_km;
+    double gsd_m;
+    int64_t native_count;
+  };
+  const Row rows[] = {
+      {"2023-09-12-02-36-33_UMBRA-04_CPHD.cphd", 122.3, 4.75,
+       0.831, 5715},
+      {"2023-07-14-23-20-06_UMBRA-05_CPHD.cphd", 59.6, 5.14, 0.689,
+       7463},
+      {"2023-10-20-04-22-56_UMBRA-04_CPHD.cphd", 103.6, 5.67, 0.656,
+       8643},
+      {"2023-02-22-12-54-56_UMBRA-04_CPHD.cphd", 140.1, 4.43, 0.620,
+       7150},
+      {"2023-02-08-02-11-21_UMBRA-05_CPHD.cphd", 255.4, 4.77, 0.521,
+       9162},
+      {"2023-10-11-02-20-47_UMBRA-05_CPHD.cphd", 118.2, 4.44, 0.375,
+       11848},
+  };
+  const std::string dest = "/tmp/sar/mode5/";
+  try {
+    CphdFile probe(dest + rows[0].file);
+    (void)probe;
+  } catch (const std::runtime_error&) {
+    GTEST_SKIP() << "mode-5 CPHDs not at /tmp/sar/mode5";
+  }
+  for (const Row& row : rows) {
+    const CphdFile file(dest + row.file);
+    ASSERT_TRUE(file.has_collection_physics()) << row.file;
+    const auto phys = file.collection_physics();
+    EXPECT_NEAR(phys.heading_cw_rad * 180.0 / kPi, row.heading_deg,
+                0.15)
+        << row.file;
+    EXPECT_NEAR(phys.xy_square_m / 1000.0, row.square_km, 0.05)
+        << row.file;
+    EXPECT_NEAR(phys.gsd_m, row.gsd_m, 0.005) << row.file;
+    EXPECT_NEAR(static_cast<double>(phys.native_count),
+                static_cast<double>(row.native_count), 2.0)
+        << row.file;
+  }
+}
+
 TEST(CphdFile, SignalSamplesAreFiniteAndCarryEnergy) {
   const CphdFile file(fixture_path());
   const std::vector<std::complex<float>> signal = file.read_signal(0, 0, 4);
@@ -281,6 +411,98 @@ TEST(CphdFile, SinglePrecisionAndDoublePrecisionReadsAgreeExactly) {
   ASSERT_EQ(wrapped.size(), single.size());
   for (size_t i = 0; i < total; ++i) {
     ASSERT_EQ(wrapped[i], single[i]) << i;
+  }
+}
+
+// Stored bytes plus the GPU decode must match the host widen: that is
+// the operator's CF8 path, and float32→double is exact, so EXPECT_EQ.
+TEST(CphdFile, ReadSignalBytesGpuDecodeMatchesHostWiden) {
+  const CphdFile file(fixture_path());
+  const int64_t count = 5;
+  const int64_t samples = file.channel(0).num_samples;
+  const size_t nsamp = static_cast<size_t>(count * samples);
+  const size_t bytes = nsamp * 8;
+
+  std::vector<char> raw(bytes);
+  file.read_signal_bytes(0, 2, count, raw.data(), raw.size());
+
+  std::vector<std::complex<double>> host(nsamp);
+  file.read_signal_into(0, 2, count, host.data());
+
+  DeviceBuf in(bytes);
+  DeviceBuf out(nsamp * sizeof(std::complex<double>));
+  ASSERT_EQ(cudaMemcpy(in.p, raw.data(), bytes, cudaMemcpyHostToDevice),
+            cudaSuccess);
+  ASSERT_EQ(cphd_decode_cf8_f64(in.p, out.p, nsamp, samples, nullptr,
+                                cudaStreamDefault),
+            cudaSuccess);
+  std::vector<std::complex<double>> gpu(nsamp);
+  ASSERT_EQ(cudaMemcpy(gpu.data(), out.p, nsamp * sizeof(gpu[0]),
+                       cudaMemcpyDeviceToHost),
+            cudaSuccess);
+  ASSERT_EQ(gpu.size(), host.size());
+  for (size_t i = 0; i < nsamp; ++i) {
+    ASSERT_EQ(gpu[i], host[i]) << i;
+  }
+
+  std::vector<char> too_small(bytes - 1);
+  EXPECT_THROW(file.read_signal_bytes(0, 2, count, too_small.data(),
+                                      too_small.size()),
+               std::runtime_error);
+}
+
+// AmpSF is applied as T(amp) on the host; the GPU kernels must do the
+// same, not a double multiply rounded back to float.
+TEST(CphdCf8Decode, AmpSfMatchesHostArithmetic) {
+  constexpr int64_t kSamples = 2;
+  constexpr int64_t kPulses = 2;
+  constexpr size_t kNsamp = 4;
+  const float pair[8] = {1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F, 7.0F, 8.0F};
+  std::vector<char> stored(kNsamp * 8);
+  for (size_t i = 0; i < 8; ++i) {
+    store_be_float(stored.data() + i * sizeof(float), pair[i]);
+  }
+  const std::vector<double> amp{2.0, 0.25};
+
+  std::vector<std::complex<float>> host_f(kNsamp);
+  std::vector<std::complex<double>> host_d(kNsamp);
+  for (size_t i = 0; i < kNsamp; ++i) {
+    const std::complex<float> z(pair[2 * i], pair[2 * i + 1]);
+    const size_t pulse = i / static_cast<size_t>(kSamples);
+    host_f[i] = z * static_cast<float>(amp[pulse]);
+    host_d[i] = std::complex<double>(pair[2 * i], pair[2 * i + 1]) *
+                amp[pulse];
+  }
+
+  DeviceBuf in(stored.size());
+  DeviceBuf amp_dev(amp.size() * sizeof(double));
+  DeviceBuf out_f(kNsamp * sizeof(std::complex<float>));
+  DeviceBuf out_d(kNsamp * sizeof(std::complex<double>));
+  ASSERT_EQ(cudaMemcpy(in.p, stored.data(), stored.size(),
+                       cudaMemcpyHostToDevice),
+            cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(amp_dev.p, amp.data(), amp.size() * sizeof(double),
+                       cudaMemcpyHostToDevice),
+            cudaSuccess);
+  ASSERT_EQ(cphd_decode_cf8_f32(in.p, out_f.p, kNsamp, kSamples,
+                                static_cast<const double*>(amp_dev.p),
+                                cudaStreamDefault),
+            cudaSuccess);
+  ASSERT_EQ(cphd_decode_cf8_f64(in.p, out_d.p, kNsamp, kSamples,
+                                static_cast<const double*>(amp_dev.p),
+                                cudaStreamDefault),
+            cudaSuccess);
+  std::vector<std::complex<float>> gpu_f(kNsamp);
+  std::vector<std::complex<double>> gpu_d(kNsamp);
+  ASSERT_EQ(cudaMemcpy(gpu_f.data(), out_f.p, kNsamp * sizeof(gpu_f[0]),
+                       cudaMemcpyDeviceToHost),
+            cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(gpu_d.data(), out_d.p, kNsamp * sizeof(gpu_d[0]),
+                       cudaMemcpyDeviceToHost),
+            cudaSuccess);
+  for (size_t i = 0; i < kNsamp; ++i) {
+    ASSERT_EQ(gpu_f[i], host_f[i]) << i;
+    ASSERT_EQ(gpu_d[i], host_d[i]) << i;
   }
 }
 
@@ -493,33 +715,54 @@ class CaptureSinkOp : public holoscan::Operator {
   }
 };
 
+struct ReaderOptions {
+  bool loop{false};
+  double playback_rate{0.0};
+  double duty_cycle{1.0};
+  int64_t max_ticks{0};
+};
+
 class ReaderApp : public holoscan::Application {
  public:
   ReaderApp(ReaderCapture* capture, int64_t pulses_per_tick,
             std::vector<int64_t> pulse_range,
-            CollectionPaths paths = CollectionPaths(fixture_path()))
+            CollectionPaths paths = CollectionPaths(fixture_path()),
+            ReaderOptions options = {})
       : capture_(capture),
         pulses_per_tick_(pulses_per_tick),
         pulse_range_(std::move(pulse_range)),
-        paths_(std::move(paths)) {}
+        paths_(std::move(paths)),
+        options_(options) {}
 
   void compose() override {
     holoscan::ArgList args{holoscan::Arg("path", paths_),
                            holoscan::Arg("coordinate_frame", ecef_frame()),
-                           holoscan::Arg("pulses_per_tick", pulses_per_tick_)};
+                           holoscan::Arg("pulses_per_tick", pulses_per_tick_),
+                           holoscan::Arg("loop", options_.loop),
+                           holoscan::Arg("playback_rate",
+                                        options_.playback_rate),
+                           holoscan::Arg("duty_cycle", options_.duty_cycle)};
     if (!pulse_range_.empty()) {
       args.add(holoscan::Arg("pulse_range", pulse_range_));
     }
+    if (options_.max_ticks > 0) {
+      auto reader = make_operator<CPHDReaderOp<float>>(
+          "reader", args,
+          make_condition<holoscan::CountCondition>("tick_limit",
+                                                  options_.max_ticks));
+      wire_sink(reader);
+      return;
+    }
     auto reader = make_operator<CPHDReaderOp<float>>("reader", args);
+    wire_sink(reader);
+  }
 
+ private:
+  template <typename Reader>
+  void wire_sink(Reader reader) {
     auto sink = make_operator<CaptureSinkOp>("sink");
     sink->capture = capture_;
-    // Any consumer taking more than one port from the reader merges the same
-    // boundary key several times, and the SDK's default policy (kRaise)
-    // rejects the duplicate. kUpdate on the merging consumer is what D22
-    // specifies, and it is set per operator rather than per application.
     sink->metadata_policy(holoscan::MetadataPolicy::kUpdate);
-
     add_flow(reader, sink,
              {{"phase_history", "phase_history"},
               {"positions", "positions"},
@@ -530,11 +773,11 @@ class ReaderApp : public holoscan::Application {
               {"coordinate_frame", "coordinate_frame"}});
   }
 
- private:
   ReaderCapture* capture_;
   int64_t pulses_per_tick_;
   std::vector<int64_t> pulse_range_;
   CollectionPaths paths_;
+  ReaderOptions options_;
 };
 
 TEST(CPHDReaderOp, BatchingCoversTheCollectionWithAShortFinalTick) {
@@ -585,6 +828,75 @@ TEST(CPHDReaderOp, BatchingCoversTheCollectionWithAShortFinalTick) {
   for (size_t i = 0; i < srp.size(); ++i) {
     EXPECT_NEAR(capture.reference_positions[i], static_cast<float>(srp[i]),
                 std::abs(srp[i]) * 1e-6);
+  }
+}
+
+// CPHDReaderOp<double> on CF8 is the mode-5 path: GPU widen, not the host
+// scalar loop. Pin it against read_signal_into; float32→double is exact.
+class DoubleHistorySinkOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(DoubleHistorySinkOp)
+  DoubleHistorySinkOp() = default;
+
+  std::vector<std::complex<double>>* samples{nullptr};
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::TensorMap>("phase_history");
+    spec.input<holoscan::TensorMap>("positions");
+    spec.input<holoscan::TensorMap>("reference_position");
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               [[maybe_unused]] holoscan::OutputContext& op_output,
+               [[maybe_unused]] holoscan::ExecutionContext& context) override {
+    auto history =
+        op_input.receive<holoscan::TensorMap>("phase_history").value();
+    (void)op_input.receive<holoscan::TensorMap>("positions");
+    (void)op_input.receive<holoscan::TensorMap>("reference_position");
+    const auto tick =
+        download<std::complex<double>>(history.begin()->second);
+    samples->insert(samples->end(), tick.begin(), tick.end());
+  }
+};
+
+class DoubleReaderApp : public holoscan::Application {
+ public:
+  DoubleReaderApp(std::vector<std::complex<double>>* samples,
+                  int64_t pulses_per_tick)
+      : samples_(samples), pulses_per_tick_(pulses_per_tick) {}
+
+  void compose() override {
+    auto reader = make_operator<CPHDReaderOp<double>>(
+        "reader", holoscan::Arg("path", CollectionPaths(fixture_path())),
+        holoscan::Arg("coordinate_frame", ecef_frame()),
+        holoscan::Arg("pulses_per_tick", pulses_per_tick_));
+    auto sink = make_operator<DoubleHistorySinkOp>("sink");
+    sink->samples = samples_;
+    sink->metadata_policy(holoscan::MetadataPolicy::kUpdate);
+    add_flow(reader, sink,
+             {{"phase_history", "phase_history"},
+              {"positions", "positions"},
+              {"reference_position", "reference_position"}});
+  }
+
+ private:
+  std::vector<std::complex<double>>* samples_;
+  int64_t pulses_per_tick_;
+};
+
+TEST(CPHDReaderOp, DoubleCf8DecodeMatchesHostWiden) {
+  const CphdFile file(fixture_path());
+  const int64_t pulses = file.channel(0).num_vectors;
+  const size_t nsamp =
+      static_cast<size_t>(pulses * file.channel(0).num_samples);
+  std::vector<std::complex<double>> expected(nsamp);
+  file.read_signal_into(0, 0, pulses, expected.data());
+
+  std::vector<std::complex<double>> got;
+  DoubleReaderApp(&got, 48).run();
+  ASSERT_EQ(got.size(), expected.size());
+  for (size_t i = 0; i < expected.size(); ++i) {
+    ASSERT_EQ(got[i], expected[i]) << "sample " << i;
   }
 }
 
@@ -818,6 +1130,137 @@ TEST(CPHDReaderOp, RejectsACoordinateFrameTheFileDoesNotDeclare) {
     }
   };
   EXPECT_THROW(MismatchedApp().run(), std::runtime_error);
+}
+
+// loop wraps last→first. Every seam is collection_boundary; the graph
+// never emits end_of_stream. CountCondition caps the otherwise infinite
+// run at four ticks (two files, one tick each, two full cycles).
+TEST(CPHDReaderOp, LoopWrapsWithoutEndOfStream) {
+  ReaderCapture capture;
+  ReaderOptions options;
+  options.loop = true;
+  options.max_ticks = 4;
+  ReaderApp(&capture, 256, {},
+            CollectionPaths(std::vector<std::string>{
+                fixture_path(), fixture_path("mode01_ci4")}),
+            options)
+      .run();
+
+  ASSERT_EQ(capture.boundaries.size(), 4u);
+  for (const auto& boundary : capture.boundaries) {
+    EXPECT_EQ(boundary, kStreamBoundaryCollection);
+  }
+}
+
+// playback_rate 1 holds each tick to at least that batch's TxTime span.
+// Smoke is 256 pulses at 2 ms CRI ≈ 0.51 s; one tick of 256 pulses.
+TEST(CPHDReaderOp, PlaybackRateOneMatchesCollectTime) {
+  ReaderCapture capture;
+  ReaderOptions options;
+  options.playback_rate = 1.0;
+  const auto t0 = std::chrono::steady_clock::now();
+  ReaderApp(&capture, 256, {}, CollectionPaths(fixture_path()), options)
+      .run();
+  const double wall_s =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
+          .count();
+  ASSERT_EQ(capture.pulse_times.size(), 256u);
+  const double span =
+      capture.pulse_times.back() - capture.pulse_times.front();
+  EXPECT_GT(span, 0.4);
+  EXPECT_GE(wall_s, span * 0.9);
+}
+
+// duty_cycle < 1 inserts a cooldown after a collection when another
+// follows. Two one-tick files with D=0.5 add roughly one collect-span of
+// sleep between them.
+TEST(CPHDReaderOp, DutyCycleInsertsCooldownBetweenFiles) {
+  ReaderCapture capture;
+  ReaderOptions options;
+  options.duty_cycle = 0.5;
+  const auto t0 = std::chrono::steady_clock::now();
+  ReaderApp(&capture, 256, {},
+            CollectionPaths(std::vector<std::string>{
+                fixture_path(), fixture_path("mode01_ci4")}),
+            options)
+      .run();
+  const double wall_s =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
+          .count();
+  ASSERT_EQ(capture.boundaries.size(), 2u);
+  EXPECT_EQ(capture.boundaries[0], kStreamBoundaryCollection);
+  EXPECT_EQ(capture.boundaries[1], kStreamBoundaryEndOfStream);
+  ASSERT_GE(capture.pulse_times.size(), 2u);
+  const double span =
+      capture.pulse_times.back() - capture.pulse_times.front();
+  // CaptureSink appends both files' TxTime (both recipes start near 0,
+  // so the span is one collect). Cooldown is ~that span at D=0.5.
+  EXPECT_GE(wall_s, span * 0.9);
+}
+
+// A single file with loop false never cooldowns, even at D<1: there is
+// no following collection.
+TEST(CPHDReaderOp, DutyCycleSkippedOnLastFileWhenNotLooping) {
+  ReaderCapture capture;
+  ReaderOptions options;
+  options.duty_cycle = 0.25;
+  const auto t0 = std::chrono::steady_clock::now();
+  ReaderApp(&capture, 256, {}, CollectionPaths(fixture_path()), options)
+      .run();
+  const double wall_s =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
+          .count();
+  ASSERT_EQ(capture.boundaries.size(), 1u);
+  EXPECT_EQ(capture.boundaries[0], kStreamBoundaryEndOfStream);
+  // Formation of one 256-pulse smoke tick is well under a quarter-second
+  // without a cooldown. 0.25 duty on a 0.51 s collect would sleep ~1.5 s
+  // if the last-file skip were broken.
+  EXPECT_LT(wall_s, 1.0);
+}
+
+TEST(CPHDReaderOp, RejectsNonPositiveDutyCycle) {
+  class BadDutyApp : public holoscan::Application {
+   public:
+    void compose() override {
+      auto reader = make_operator<CPHDReaderOp<float>>(
+          "reader", holoscan::Arg("path", CollectionPaths(fixture_path())),
+          holoscan::Arg("coordinate_frame", ecef_frame()),
+          holoscan::Arg("pulses_per_tick", static_cast<int64_t>(32)),
+          holoscan::Arg("duty_cycle", 0.0));
+      add_operator(reader);
+    }
+  };
+  EXPECT_THROW(BadDutyApp().run(), std::runtime_error);
+}
+
+TEST(CPHDReaderOp, RejectsDutyCycleAboveOne) {
+  class BadDutyApp : public holoscan::Application {
+   public:
+    void compose() override {
+      auto reader = make_operator<CPHDReaderOp<float>>(
+          "reader", holoscan::Arg("path", CollectionPaths(fixture_path())),
+          holoscan::Arg("coordinate_frame", ecef_frame()),
+          holoscan::Arg("pulses_per_tick", static_cast<int64_t>(32)),
+          holoscan::Arg("duty_cycle", 1.5));
+      add_operator(reader);
+    }
+  };
+  EXPECT_THROW(BadDutyApp().run(), std::runtime_error);
+}
+
+TEST(CPHDReaderOp, RejectsNegativePlaybackRate) {
+  class BadRateApp : public holoscan::Application {
+   public:
+    void compose() override {
+      auto reader = make_operator<CPHDReaderOp<float>>(
+          "reader", holoscan::Arg("path", CollectionPaths(fixture_path())),
+          holoscan::Arg("coordinate_frame", ecef_frame()),
+          holoscan::Arg("pulses_per_tick", static_cast<int64_t>(32)),
+          holoscan::Arg("playback_rate", -1.0));
+      add_operator(reader);
+    }
+  };
+  EXPECT_THROW(BadRateApp().run(), std::runtime_error);
 }
 
 }  // namespace

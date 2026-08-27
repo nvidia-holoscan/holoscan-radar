@@ -104,6 +104,21 @@ class SARRangeCompressionOp : public holoscan::Operator {
   // Keeps the previous tick's input alive until this tick's kernels are
   // enqueued (stream-ordered lifetime guard).
   std::shared_ptr<holoscan::Tensor> retained_input_;
+
+  // Host wall of compute() over the current aperture. Logged on
+  // the reader's D22 boundary (last batch; may be the only
+  // batch). No stream sync: GPU FFT shows up in BP.
+  // Splits: recv = ports+overrides; alloc = make_device_tensor;
+  // stage = pack/ifft/fftshift enqueue; emit = range_profiles
+  // emit; retain = drop previous input.
+  double aperture_compute_s_{0.0};
+  double aperture_recv_s_{0.0};
+  double aperture_alloc_s_{0.0};
+  double aperture_stage_s_{0.0};
+  double aperture_emit_s_{0.0};
+  double aperture_retain_s_{0.0};
+  int64_t aperture_pulses_{0};
+  int64_t aperture_ticks_{0};
 };
 
 // Explicit instantiations live in sar_range_compression_op.cu.

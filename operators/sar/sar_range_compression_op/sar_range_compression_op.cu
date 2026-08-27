@@ -3,6 +3,7 @@
 
 #include "sar/sar_range_compression_op/sar_range_compression_op.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -12,6 +13,7 @@
 
 #include "radar_common/sdk/arg_setters.hpp"
 #include "radar_common/sdk/override_param.hpp"
+#include "radar_common/sdk/stream_boundary.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -108,10 +110,21 @@ void SARRangeCompressionOp<T>::compute(InputContext& op_input,
                                        OutputContext& op_output,
                                        [[maybe_unused]] ExecutionContext&
                                            context) {
+  const auto t0 = std::chrono::steady_clock::now();
+  const auto elapsed_s = [](std::chrono::steady_clock::time_point a) {
+    return std::chrono::duration<double>(
+               std::chrono::steady_clock::now() - a)
+        .count();
+  };
   const std::string& who = op_name<T>();
 
   std::shared_ptr<holoscan::Tensor> input =
       receive_single(op_input, "phase_history", who);
+  // Stamp is on this tick's phase_history. Capture before
+  // override receives. Last batch of a collection (including a
+  // one-tick collect) carries collection_boundary / end_of_stream.
+  const std::string boundary = metadata()->get<std::string>(
+      kStreamBoundaryKey, std::string());
 
   // Resolve the overridable parameters against the previous effective values
   // (sticky). warn_on_rebuild is raised only when an override changed a
@@ -174,23 +187,32 @@ void SARRangeCompressionOp<T>::compute(InputContext& op_input,
   cfg.nfft = effective_nfft_;
   cfg.propagation_speed = effective_propagation_speed_;
 
+  aperture_recv_s_ += elapsed_s(t0);
+
+  const auto t_alloc = std::chrono::steady_clock::now();
   auto profiles = make_device_tensor(
       full_rank_shape(batched, batched.rows, num_bins), complex_dtype<T>());
+  aperture_alloc_s_ += elapsed_s(t_alloc);
+
+  const auto t_stage = std::chrono::steady_clock::now();
   detail::run_range_compression<T>(cfg, *state_, input->data(), batched.batch,
                                    batched.rows, batched.cols,
                                    profiles->data(), num_bins, warn_on_rebuild,
                                    stream);
+  aperture_stage_s_ += elapsed_s(t_stage);
 
   // receive_cuda_stream already configures outputs to carry the internal
   // stream; set_cuda_stream additionally covers manual-stream setups. It
   // only accepts Holoscan-managed streams, so skip the default stream
   // (no stream pool and no upstream stream this tick).
+  const auto t_emit = std::chrono::steady_clock::now();
   if (stream != cudaStreamDefault) {
     op_output.set_cuda_stream(stream, "range_profiles");
   }
   holoscan::TensorMap profiles_map;
   profiles_map.insert({"range_profiles", profiles});
   op_output.emit(profiles_map, "range_profiles");
+  aperture_emit_s_ += elapsed_s(t_emit);
 
   // Optional centred range axis: only when an effective waveform is available.
   if (effective_waveform_.has_value() && effective_waveform_->is_valid()) {
@@ -216,7 +238,35 @@ void SARRangeCompressionOp<T>::compute(InputContext& op_input,
   // Stream-ordered lifetime guard: keep this tick's input alive until the next
   // tick (the previous tick's guard is released here, after this tick's
   // kernels are enqueued).
+  const auto t_retain = std::chrono::steady_clock::now();
   retained_input_ = std::move(input);
+  aperture_retain_s_ += elapsed_s(t_retain);
+
+  const int64_t n = batched.rows * batched.batch;
+  aperture_compute_s_ += elapsed_s(t0);
+  aperture_pulses_ += n;
+  ++aperture_ticks_;
+  // No stream sync: GPU FFT is on BP's stream and shows up in
+  // BackprojectionOp's emit time, not here. The short-batch
+  // heuristic misses a one-tick collect (n == the whole file).
+  if (boundary == kStreamBoundaryEndOfStream ||
+      boundary == kStreamBoundaryCollection) {
+    HOLOSCAN_LOG_INFO(
+        "{}: {} pulses in {:.3f} s (host enqueue, {} ticks; "
+        "recv {:.3f}, alloc {:.3f}, stage {:.3f}, emit {:.3f}, "
+        "retain {:.3f})",
+        who, aperture_pulses_, aperture_compute_s_, aperture_ticks_,
+        aperture_recv_s_, aperture_alloc_s_, aperture_stage_s_,
+        aperture_emit_s_, aperture_retain_s_);
+    aperture_compute_s_ = 0.0;
+    aperture_recv_s_ = 0.0;
+    aperture_alloc_s_ = 0.0;
+    aperture_stage_s_ = 0.0;
+    aperture_emit_s_ = 0.0;
+    aperture_retain_s_ = 0.0;
+    aperture_pulses_ = 0;
+    aperture_ticks_ = 0;
+  }
 }
 
 template class SARRangeCompressionOp<float>;

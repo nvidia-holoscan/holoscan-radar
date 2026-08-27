@@ -100,7 +100,13 @@ the third data point and the one with a real frame budget to serialize against.
 
 Not paid here, deliberately: the operator allocates its output per tick like
 every other operator in the module, and diverging from that locally would hide
-the shared problem rather than fix it.
+the shared problem rather than fix it. Two-slot ping-pong of
+`range_profiles` *and* of the reader's `phase_history` was tried 2026-08-26
+and reverted. RC output reuse raced BP's in-flight kernel; reader reuse
+removed the `cudaFree` device-sync that had been serializing decode off
+BP's GPU time. Mode-5 Ohio BP dropped ~8.7e11 → ~7.5–7.7e11 px·pls/s
+either way. A pooled allocator or a completion-event N-buffer is the
+remaining path; two slots are not enough when GPU lag ≫ one host tick.
 
 ## 5. A prime `nfft` costs 170 ms the first time on a cold JIT cache
 
