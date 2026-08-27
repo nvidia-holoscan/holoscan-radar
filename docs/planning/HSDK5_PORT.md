@@ -41,8 +41,8 @@ The EA branch covers, in dependency order:
 5. Python bindings, Holoviz demos, and example apps once EA exposes a
    usable Python operator surface / Holoviz (or we accept a C++-only path).
 6. Close issues deferred on the EA SDK and/or settled implementation work
-   (sticky live Graph, durable port/descriptor API deltas, and remaining
-   Params-only → mixed-payload / Tensor-pack migrations).
+   (sticky live Graph, durable port/descriptor API deltas, and the
+   descriptor-output Tensor-pack representation).
 7. Cleanup before `main` (drop allow-lists, `[EA HSDK5 ONLY]` fences, and
    this file).
 
@@ -87,7 +87,7 @@ new EA/team items added there). Typical work:
 | --- | --- |
 | **EA limitation** (e.g. §1 sticky Graph units / enum lives; remaining §8 enum/vector perf) | Re-probe on newer EA / GA; restore `contract()` sticky policy + unskip Graph tests; document the working harness recipe — or reclassify as durable if the SDK will not support it |
 | **Durable HSDK 5** (e.g. §2 unique in/out names, §9 vector/descriptor lives, §10 `ArrayGeometry` Tensor pack) | Apply the locked contract in `OPERATOR_API.md`; for §9 this means generated schemas for shared owning descriptors, ChannelPod fixed tuples, and bounded rank-1 pageable-host Tensors for variable scalar vectors |
-| **Our deferred work blocked on the above** (optional-mask Graph wiring, remaining Params-only → live Inputs, Graph sticky unskips) | Land against the settled contract after the matching EA prerequisite is closed; do not invent a different physical payload locally |
+| **Our deferred work blocked on the above** (optional-mask Graph wiring, Graph sticky unskips) | Land against the settled contract after the matching EA prerequisite is closed; do not invent a different physical payload locally |
 
 Phase 5 is **not** for new algorithm contracts (those stay
 [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md) / per-op `OPEN_ITEMS.md`). It **is**
@@ -192,19 +192,19 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | Shared Tensor I/O + Exact `[live]` helpers (`radar_common/sdk/`) | landed (ClutterFilter pilot; Exact since 2026-08-21) |
 | `ClutterFilterOp` F32/F64 + Graph C++ tests | landed; Exact `method` (unconditional entry); Graph perf cold/steady landed; live-override unit+perf deferred (§1) |
 | `SnapshotGatherOp` F32/F64 + Graph C++ tests (OnAligned 2-in/2-out) | landed; Exact `snapshot_window` gated by `expect_snapshot_window`; live-override unit deferred (§1); Graph perf `snapshot_window` `override_ms` restored (§8) |
-| `PhaseShiftBeamformerOp` F32/F64 + Graph C++ tests | landed; `[live]` geometry/grid/taper Params-only (§9); no POD live Inputs, so Graph live tests skipped under §9; Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `peak_interpolation` (unconditional entry) (Graph live deferred §1); optional `is_valid` Graph wiring deferred (§11); geometry/grid/taper Params-only (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `SubarraySelectionOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; outputs `snapshot_out` / `is_valid_out` (§2); `array_geometry` emitted as packed float64 Tensor (§10); `array_geometry`/`subarray` live Params-only (§9); optional `is_valid` Graph wiring deferred (§11); no dedicated `perf_*` driver |
-| `ClusterDBSCANOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `min_points`/`max_clusters` (unconditional entries) (Graph live deferred §1); `epsilon` Params-only (§9 unbounded vector); Graph perf `min_points` `override_ms` restored (§8) |
-| `MVDREstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `diagonal_loading`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/grid/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `diagonal_loading` `override_ms` restored (§8) |
-| `MUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/grid/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
-| `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing` Params-only (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX/cuSOLVER teardown preserved; Graph perf `max_sources` `override_ms` restored (§8) |
-| `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing`/`subarray_spec` Params-only (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
+| `PhaseShiftBeamformerOp` F32/F64 + Graph C++ tests | landed; `[live]` geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); no POD live Inputs, so Graph live tests still skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
+| `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `peak_interpolation` (unconditional entry) (Graph live deferred §1); optional `is_valid` Graph wiring deferred (§11); geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
+| `SubarraySelectionOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; outputs `snapshot_out` / `is_valid_out` (§2); `array_geometry` emitted as packed float64 Tensor (§10); `array_geometry` wire-schema and `subarray` bounded host-Tensor lives (§9); optional `is_valid` Graph wiring deferred (§11); no dedicated `perf_*` driver |
+| `ClusterDBSCANOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `min_points`/`max_clusters` (unconditional entries) (Graph live deferred §1); `epsilon` bounded host-Tensor live, `max_features` checked on arrival (§9); Graph perf `min_points` `override_ms` restored (§8) |
+| `MVDREstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `diagonal_loading`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/grid/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `diagonal_loading` `override_ms` restored (§8) |
+| `MUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/grid/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
+| `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX/cuSOLVER teardown preserved; Graph perf `max_sources` `override_ms` restored (§8) |
+| `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports, `subarray_spec` static (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
 | `FeatureAssemblyOp` F32/F64 + Graph C++ tests (1-in/1-out; optional gathers) | landed; optional gather Inputs omitted from contract (§11 / Beamscan `is_valid` pattern); Graph optional wiring deferred — stage kernel coverage; no `[live]` params; Graph perf cold/steady landed |
-| `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; Exact `representative`/`score_method` gated by `expect_*` (Graph live deferred §1); `feature_weights` Params-only (§9 unbounded vector); Graph perf cold/steady landed |
-| `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; Exact POD lives (unconditional entries) (Graph live deferred §1); vector lives Params-only (§9); statistical MC suite on label `statistical`; Graph perf `threshold_scale` `override_ms` restored (§8) |
+| `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; Exact `representative`/`score_method`/`feature_weights` gated by `expect_*` under its `OnAligned` trigger (§11; Graph live deferred §1); `feature_weights` is a bounded host Tensor (§9); Graph perf cold/steady landed |
+| `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; Exact POD lives (unconditional entries) (Graph live deferred §1); vector lives on bounded host-Tensor ports, fixed tuples on ChannelPod (§9); statistical MC suite on label `statistical`; Graph perf `threshold_scale` `override_ms` restored (§8) |
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph sticky/`TXSchedule` live N/A (Params-only schedule); Graph perf cold/steady landed |
-| `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` Params-only (§9); Graph live tests skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
+| `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` on a generated wire-schema port (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); Exact `wavelength` (unconditional entry) (Graph live deferred §1); Graph perf `wavelength` `override_ms` restored (§8); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
 | `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; Exact lives (unconditional entries); `range_window`/`waveform` restored through generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
 | `FMCWDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `velocity_bins` only with waveform; Exact lives (unconditional entries); `doppler_window`/`waveform` restored through generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
@@ -222,9 +222,8 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 **Contract.** `OPERATOR_API.md` requires Exact `[live]` parameters. Their
 `contract()` entries are unconditional and an app enables an override by wiring
 the port; the `OnAligned` operators gate theirs on `expect_*` (§11). FMCW
-windows/waveform use generated schema payloads; other
-descriptor / vector lives currently stay Params-only until the settled §9
-mapping is implemented.
+windows/waveform use generated schema payloads; the other descriptor and
+vector lives ride the same wire-schema / bounded host-Tensor mapping (§9).
 `resolve_sticky_override` remains for the LatestWithin repro test.
 
 **What the reproducer established.** The earlier failures were invalid
@@ -351,11 +350,10 @@ lives, so only their optional-input limitations remain.
   `OnAligned` for the two-tensor ops) plus one `Exact{}` + `SafeDefault{}`
   entry per enabled override whose `expect_*` is true (default false), via
   `maybe_add_live_override_to_contract` in
-  `radar_common/sdk/override_param.hpp`. The restored FMCW descriptor ports
-  convert generated wire types before sticky resolution; other descriptor /
-  descriptor / vector lives remain Params-only only until the settled §9
-  physical payload mapping is implemented. Optional Tensor inputs and
-  conditional outputs stay out of the contract (§11).
+  `radar_common/sdk/override_param.hpp`. Descriptor ports convert generated
+  wire types, and vector ports convert bounded rank-1 host Tensors, before
+  sticky resolution (§9). Optional Tensor inputs and conditional outputs stay
+  out of the contract (§11).
 - **What is missing now is Graph coverage, not the contract shape.**
   Mid-stream Exact tests cover `FMCWRangeProcessorOp` `nfft`, range/Doppler
   windows, waveform validation, and fused schema overrides. The scalar/enum
@@ -372,11 +370,11 @@ lives, so only their optional-input limitations remain.
   passes; dual-OnClock / co-emit / sticky-contract wirings fail with
   compile rejection or runtime diagnostics (see test stdout +
   `/tmp/live_override_repro_*.json`). `PhaseShiftBeamformerOp` /
-  Beamscan geometry/grid/taper live Graph tests are also skipped; those
-  ops have no live Inputs for non-POD descriptors yet (§9 /
-  Params-only). `ClusterDBSCANOpTest.LiveMinPointsStickyOverride` /
-  `LiveMaxClustersStickyOverride` are skipped the same way;
-  `LiveEpsilonStickyOverride` is skipped under §9.
+  Beamscan geometry/grid/taper live Graph tests are also skipped — the ports
+  exist (§9), the Graph harness for them does not yet.
+  `ClusterDBSCANOpTest.LiveMinPointsStickyOverride` /
+  `LiveMaxClustersStickyOverride` / `LiveEpsilonStickyOverride` are skipped
+  the same way.
 - Selection is still covered via Params
   (`MethodConfigurableFromParams` /
   `SnapshotWindowConfigurableFromParams` /
@@ -388,21 +386,20 @@ lives, so only their optional-input limitations remain.
   `DiagonalLoadingConfigurableFromParams` /
   `MaxSourcesConfigurableFromParams`).
 - `MVDREstimatorOpTest.LiveDiagonalLoadingStickyOverride` /
-  `LiveMaxSourcesStickyOverrideReallocates` are likewise skipped;
-  geometry/grid/`spatial_smoothing` live Graph tests skipped
-  under §9.
+  `LiveMaxSourcesStickyOverrideReallocates` are likewise skipped; its
+  geometry / grid / `spatial_smoothing` live Graph tests are active.
 - `MUSICEstimatorOpTest.LiveNumSourcesStickyOverride` /
   `LiveSourceCountPfaStickyOverride` /
-  `LiveMaxSourcesStickyOverrideReallocates` are likewise skipped;
-  geometry/grid/`spatial_smoothing` live Graph tests skipped
-  under §9. Params cover selection
+  `LiveMaxSourcesStickyOverrideReallocates` are likewise skipped; its
+  geometry / grid / `spatial_smoothing` live Graph tests are active.
+  Params cover selection
   (`NumSourcesConfigurableFromParams` /
   `SourceCountPfaConfigurableFromParams` /
   `MaxSourcesConfigurableFromParams`).
 - `RootMUSICEstimatorOpTest` / `ESPRITEstimatorOpTest`
   `LiveNumSourcesStickyOverride` / `LiveSourceCountPfaStickyOverride` /
-  `LiveMaxSourcesStickyOverride` are likewise skipped;
-  geometry/`spatial_smoothing` live Graph tests skipped under §9.
+  `LiveMaxSourcesStickyOverride` are likewise skipped; their
+  geometry / `spatial_smoothing` live Graph tests are active.
   Params cover the same trio of configurable-from-Params tests.
 - `FeatureAssemblyOp` has no `[live]` params; optional gather Tensor Inputs
   are omitted from `contract()` (unconnected apps) and Graph wiring of those
@@ -577,8 +574,7 @@ types remain the descriptor, tuple/vector, or `std::vector<T>` types documented
 in `OPERATOR_API.md`; generated objects, ChannelPod wrappers, and Tensor
 handles are physical port types only. The host-Tensor vector path is a narrow
 control-plane exception to the normal rejection of pageable-host data
-Tensors. Exact / SafeDefault and `expect_*` / `sticky_*` semantics are
-unchanged.
+Tensors. Exact / SafeDefault and `sticky_*` semantics are unchanged.
 
 **Measured 2026-08-21 (`tmp-app/fbs/`).** It works for exactly the shapes
 we need. `fbs_live_override.cpp` carries this operator's two demoted
@@ -680,7 +676,7 @@ surface for downstream `find_package(holoscan_radar)` users, and the
 descriptor's field list then lives in three places (struct, param schema,
 `.fbs`) needing a round-trip test to hold them together.
 
-**Current implementation and remaining migration.** `SnapshotGatherOp` keeps
+**Current implementation.** `SnapshotGatherOp` keeps
 `Params.snapshot_window` as `std::vector<int64_t>` (OPERATOR_API.md / YAML).
 The `[live]` port is `Input<SnapshotWindowOverride>` — a fixed
 `{doppler, range}` int64 POD with `ChannelTypeIdentity` /
@@ -690,60 +686,44 @@ The same ChannelPod category applies to other bounded fixed tuples, including
 CFAR's `(doppler, range)` `guard_cells` and `training_cells`; their logical
 Params remain unchanged.
 
-`PhaseShiftBeamformerOp`, `BeamscanEstimatorOp`, and
-`SubarraySelectionOp` use generated schemas for `ArrayGeometry` /
-`WindowSpec` live ports and bounded rank-1 host Tensors for variable scalar
-vectors such as `az_angles`, `el_angles`, and `subarray`. Those ports remain
-Params-only in the current code until that migration lands; this is
-implementation debt under a settled policy, not a team decision. Beamscan
-declares `Input<PeakInterpolation>` for the enum live, Exact behind
-`expect_peak_interpolation` (Graph harness deferred §1).
+**Every documented `[live]` port now exists.** No operator falls back to
+Params-only for a port `OPERATOR_API.md` tags `[live]`. The mapping as
+implemented:
 
-`ClusterDBSCANOp.epsilon` uses the bounded rank-1 host-Tensor category: length
-`1` or `num_features`, capped by its ctor-captured bound. It remains
-Params-only until implemented. Scalar `min_points` / `max_clusters` keep Exact
-`Input<int64_t>` behind `expect_*` (Graph harness deferred §1).
-`MVDREstimatorOp` keeps Exact scalar Inputs for `diagonal_loading` /
-`max_sources`; `ArrayGeometry` uses a generated schema, while `az_angles` /
-`el_angles` / `spatial_smoothing` use bounded host Tensors. Those ports remain
-Params-only until implemented. `MUSICEstimatorOp` likewise keeps Exact scalar
-Inputs for `num_sources` / `source_count_pfa` / `max_sources`; generated
-geometry plus bounded host-Tensor grid / `spatial_smoothing` ports remain to
-be implemented.
+| Physical category | Ports |
+| --- | --- |
+| Generated FlatBuffers descriptor-Tensor schema | `array_geometry` (`Input<WireArrayGeometry>`) on all eight angle operators; `array_taper` (`Input<WireWindowSpec>`) on Beamscan and PhaseShiftBeamformer; `range_window` / `doppler_window` / `waveform` on the three FMCW processing operators and MIMO compensation |
+| ChannelPod fixed tuple | SnapshotGather `snapshot_window` (`Input<SnapshotWindowOverride>`); `spatial_smoothing` (`Input<SpatialSmoothingOverride>`, a `{count, first, second}` int64 triple with `count` in 0–2 selecting the 1-D / 2-D counts); CFAR `guard_cells` / `training_cells` |
+| Bounded rank-1 pageable-host `Input<Tensor>` | `az_angles` / `el_angles` (bounds `max_az` / `max_el`), `subarray`, DBSCAN `epsilon` (bound `max_features`), CFAR `nci_axes` / `alpha_lut`, DetectionReduction `feature_weights` |
+| Plain scalar / enum `Input<T>` | the Exact scalar and enum lives (`nfft`, `pfa`, `max_sources`, `peak_interpolation`, `clutter_filter`, …) |
 
-`DetectionReductionOp.feature_weights` uses a bounded host Tensor of length
-`num_features` and remains Params-only until implemented; enum
-`representative` / `score_method` keep Exact Inputs behind `expect_*`.
-`RootMUSICEstimatorOp` / `ESPRITEstimatorOp` mirror MUSIC's scalar Exact
-trio; geometry / `spatial_smoothing` live ports use the same generated-schema
-/ bounded-Tensor mapping and remain to be implemented. ESPRIT's
-`subarray_spec` stays static.
+Vector ports read through `read_host_config_vector<T>`, which validates rank,
+scalar dtype, pageable-host memory kind, and extent against the bound before
+converting. Where the bound is a `MaxTensorExtents` field, `require_extent`
+fails with a named error if the application did not supply it; DBSCAN checks
+its `max_features` bound on arrival instead, so a graph that never sends an
+`epsilon` override compiles without one. Logical Params stay the types
+`OPERATOR_API.md` documents, and `sticky_*` semantics are unchanged.
 
-`CFARDetectorOp` keeps Exact scalar Inputs for `pfa` / `threshold_scale` /
-`os_rank` / `max_detections`; `guard_cells` / `training_cells` use
-ChannelPod fixed tuples, while `nci_axes` / `alpha_lut` use bounded rank-1
-host Tensors. Those vector ports remain Params-only until implemented.
-
-The three FMCW processing operators restore `range_window`,
-`doppler_window`, and `waveform` `[live]` ports through generated
-`holoscan::radar::wire` mixed metadata + descriptor-Tensor payloads. Logical
-Params remain `WindowSpec` / `FMCWWaveformDescriptor`; each port has static
-`expect_*` / `sticky_*` controls and uses the zero-length absent convention
-above. The committed-source/generated-output boundary, exact identity and
-evolution rules, `MaxTensorExtents` bounds, bridge/install/test sync surface,
-and C++-only wire-type limitation are in
+The committed-source/generated-output boundary, exact identity and evolution
+rules, `MaxTensorExtents` bounds, bridge/install/test sync surface, and
+C++-only wire-type limitation are in
 [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md). Python continues through Params.
-The schema identity/evolution rules are settled with the mixed policy.
 
-**Next.** Implement the remaining generated-schema, ChannelPod, and bounded
-rank-1 pageable-host Tensor ports without changing operator logical Params
-types. Add ctor bounds, validation, Exact Graph tests, Python limitation
-notes, and install/round-trip coverage as applicable.
+**One connection the categories do not make.** `ArrayGeometry` rides *into* an
+operator as a generated wire type but comes *out* of
+`VirtualArrayAssemblyOp.array_geometry` as a packed float64 `Output<Tensor>`
+(§10, the sanctioned descriptor output). The types differ, so VAA cannot drive
+an angle operator's `array_geometry` port directly — that override has to come
+from an application-side wire-schema producer. Closing it means either giving
+the descriptor output a wire payload or bridging the two representations; it
+is not a Params-only fallback and should not be documented as one.
 
-**Status:** policy settled (L18); implementation open. FMCW schema-backed
-ports and the SnapshotGather ChannelPod pattern are landed. The remaining
-descriptor, fixed-tuple, and variable-vector live ports are still Params-only
-until migrated to their ratified physical payload categories.
+**Next.** Extend Graph Exact coverage over the landed ports (§1), and decide
+the VAA descriptor-output representation above.
+
+**Status:** policy settled (L18); implementation landed for every `[live]`
+port. Remaining work is test coverage and the VAA descriptor-output type.
 
 ---
 
@@ -772,7 +752,8 @@ device Tensor of shape `(num_elements + 1, 3)` via
 `radar_common/descriptors/array_geometry_tensor.hpp` (positions in rows
 `[0, N)`, metadata row `[wavelength, geometry_type_code, 0]`). Documented
 in `OPERATOR_API.md` under SubarraySelectionOp. Live *input* overrides of
-`ArrayGeometry` remain Params-only (§9).
+`ArrayGeometry` ride a generated wire type instead (§9), so a descriptor
+output cannot currently feed a descriptor override port.
 
 **Next.** Prefer a durable schema / ChannelPod-compatible wrapper (or SDK
 admission for owning containers) shared with VirtualArrayAssembly; restore
@@ -834,11 +815,25 @@ measures it against this module's shapes:
 | Same, wired with a co-stamped companion | `kSelected` / `kNone` and the value — unchanged from the `expect_*` form |
 | Optional **Tensor** input (`is_valid`-shaped), unwired | Same acceptance and `kNotConnected` — the rule is about the *selector* being scalar `Exact`, not the payload, so the optional-Tensor family is covered too |
 | `OnAligned{…}` trigger + unwired `Exact{}` override | **Rejected**, `TEMPORAL_INPUT_UNCONNECTED` — `OnAligned`, `OnWindow`, and predicate inputs stay excluded |
+| `OnAligned{…}` trigger + **wired** `Exact{}` override | **Accepted**; every activation reports `kSelected` / `kNone` and delivers the co-stamped value, exactly as under `OnEach` |
 
 Consequences for this module: every `OnEach`-triggered operator can drop
 `expect_*` outright, and the optional-Tensor omissions (`is_valid`,
 FeatureAssembly gathers) become ordinary contract entries. `SnapshotGatherOp`
 and `DetectionReductionOp` trigger `OnAligned`, so they keep `expect_*`.
+
+The last two rows together are the precise reason they keep it, and it is worth
+stating plainly because it is easy to misread as "the override does not work
+under `OnAligned`". It works. What is not expressible is its *absence*: an
+unconditional entry via `add_live_override_to_contract` would make the override
+port **mandatory**, so every application instantiating `SnapshotGatherOp` would
+have to wire a `snapshot_window` producer or fail to compile. `expect_*` is what
+buys back the optional case, and the same one build still serves both wirings.
+
+Coverage caveat: the wired-aligned row above is measured only by the probe.
+Neither aligned operator's own suite exercises it — their live-override tests
+are the ones still skipped under §1 — so `expect_*=true` plus `add_flow` is
+asserted for the operators by construction, not by a test.
 
 **The `OnAligned` exclusion is the one thing still worth asking for.** Re-run of
 the probe against the pinned branch confirms it is unchanged: an unwired
@@ -1100,8 +1095,8 @@ milliseconds to seconds (a fixed 60 s deadline previously aborted
 Use `--stop-after-s` to cap total runtime. Inline mid-session POD `[live]`
 changes use the supported single-clock, exact-contract, single-partition shape
 from §1 and report `override_ms` / `override_delta_ms`. Enum lives remain
-blocked by EA runtime binding; vector/descriptor lives remain Params-only under
-§9. Per-tick source publish is a fresh pool loan (§3); vs HSDK 4’s free handle
+blocked by EA runtime binding; vector/descriptor live *timing* is not yet
+covered, though the ports exist (§9). Per-tick source publish is a fresh pool loan (§3); vs HSDK 4’s free handle
 republish this is an
 **accepted** end-to-end comparison artifact on large inputs (VAA
 `virtual_dedup_lg`/`_xl` — see §3). Drivers pick `PerfPublishMode`

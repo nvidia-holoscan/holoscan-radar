@@ -11,56 +11,45 @@ if it affects the module, then remove or archive the section here.
 
 ---
 
-## 1. Live `[live]` Input ports for geometry / scan grid / taper
+## 1. `array_geometry` overrides have no in-module producer
 
-**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”;
-Performance → inline live-override measurement (when Graph-ported).
-
-**Class:** Durable HSDK 5 `PublishedPayload` admission (§9). The temporal
-side is settled (L16 / L17): every `[live]` port joins the data trigger
-with `Exact{}` + `on_missing SafeDefault{}` unconditionally, the application
-enables an override by wiring the port, and `sticky_*` (default true) latches
-the last match —
-[`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md). The
-only blocker left here is that none of these parameters has an admissible
-payload type, so there is no port to declare.
+**Blocks checklist:** Performance → inline live-override measurement (when
+Graph-ported). The ports and their mid-stream Graph coverage are in place.
 
 **Contract.** `OPERATOR_API.md` marks `array_geometry`, `az_angles`,
 `el_angles`, and `array_taper` as sticky `[live]`; `angle_convention`
 remains STATIC.
 
-**Why Params-only on EA.**
+**Ports (settled — L16 / L17 / L18).** `contract()` unconditionally joins
+`Input<WireArrayGeometry> array_geometry`, `Input<WireWindowSpec>
+array_taper`, and the rank-1 pageable-host float64 config Tensors
+`az_angles` / `el_angles` to the data trigger with `Exact{}` +
+`on_missing SafeDefault{}`; the application enables an override by wiring
+the port, and `sticky_*` (default true) latches the last match —
+[`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
+`compute()` resolves each with `resolve_live_override_via`, validating the
+Tensors against `max_az` / `max_el` from `MaxTensorExtents`. Logical Params
+types are unchanged; the `ConfigCache` steering rebuild keys on the
+resolved geometry / grid / taper either way.
 
-- `Input<std::vector<double>>` is rejected (`az_angles` / `el_angles`).
-- `ArrayGeometry` and `WindowSpec` own `std::vector` (and
-  `std::optional`) members — not ChannelPod / schema payloads — so
-  `Input<ArrayGeometry>` / `Input<WindowSpec>` fail compile.
-- Unbounded scan grids cannot use a fixed-size POD like
-  `SnapshotWindowOverride`.
+Graph coverage: `LiveAzGridStickyOverride`, `LiveElGridStickyOverride`,
+`LiveArrayGeometryStickyOverride`, `LiveArrayTaperStickyOverride`,
+`LiveOverridesRejectMalformedAndBounds`. Params authoring still covers
+selection (`ScanGridConfigurableFromParams`,
+`ArrayTaperConfigurableFromParams`).
 
-**Interim.**
+**Still open.** `VirtualArrayAssemblyOp` / `SubarraySelectionOp` emit
+geometry as a packed float64 `(N + 1, 3)` Tensor (§10), not the
+wire-schema type this port consumes (§9). The representations differ, so a
+runtime virtual geometry cannot drive this override directly — it has to
+come from an app-side wire-schema producer. The generated wire objects are
+also C++-only, so Python drives the parameter through Params.
 
-- Operator uses `Operator<PhaseShiftBeamformerParams>` + `set_params`;
-  no live Input ports are declared, so `contract()` carries only
-  `OnEach{rd_maps}` and there are no `sticky_*` fields.
-- `ConfigCache` steering rebuild still keys on the Params-derived
-  geometry / grid / taper.
-- Graph sticky override tests
-  (`LiveAzGridStickyOverride`, `LiveElGridStickyOverride`,
-  `LiveArrayGeometryStickyOverride`, `LiveArrayTaperStickyOverride`) are
-  `GTEST_SKIP`’d.
-- Params authoring covers selection
-  (`ScanGridConfigurableFromParams`, `ArrayTaperConfigurableFromParams`).
-
-**Next.** Choose a durable live transport (Tensor for scan grids; nested
-ChannelPod / schema for `ArrayGeometry` / `WindowSpec`, or flatten), then
-declare each port unconditionally in `setup()` and add its unconditional
-`Exact{}` + `SafeDefault{}` contract entry, and unskip the Graph
-tests with the port wired. Document any OPERATOR_API physical-type
+**Next.** Settle one `ArrayGeometry` transport so a descriptor output can
+feed a descriptor override port. Document any OPERATOR_API physical-type
 divergence.
 
-**Status:** open — do not treat as checklist-complete until live Inputs
-land.
+**Status:** open — `ArrayGeometry` transport decision.
 
 ---
 

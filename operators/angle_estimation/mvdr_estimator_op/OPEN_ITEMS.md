@@ -1,8 +1,8 @@
 # MVDREstimatorOp — open items
 
-Status: **HSDK 5 EA C++ port landed** (checklist not fully closed — live /
-`is_valid` Graph coverage deferred; one test is red on a real correctness
-bug, item 6). Algorithm contract
+Status: **HSDK 5 EA C++ port landed** (checklist not fully closed — scalar
+live / `is_valid` Graph coverage deferred; one test is red on a real
+correctness bug, item 6). Algorithm contract
 (`OPERATOR_API.md` → MVDREstimatorOp) is unchanged:
 
 - sample covariance with `is_valid` masking, diagonal loading (`auto` / fixed),
@@ -49,25 +49,35 @@ timing is restored (§8).
 
 ---
 
-## 2. Non-POD / variable-length `[live]` params are Params-only
+## 2. `array_geometry` overrides have no in-module producer
 
-**Blocks checklist:** Tests → live `az_angles` / `el_angles` /
-`array_geometry` / `spatial_smoothing` mid-stream sticky overrides.
+**Blocks checklist:** nothing on its own — the descriptor / grid /
+smoothing ports and their Graph coverage are in place (see item 6 for the
+one red test); this is the transport decision behind the geometry port.
 
-**Class:** Durable HSDK 5 (`PublishedPayload` admission) + our deferred
-work. Same recipe as Beamscan / PhaseShift — see
-[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9.
+**Class:** Open `ArrayGeometry` transport decision. See
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9 / §10.
 
-**Interim.** Those parameters remain on `MVDRParams` only (`set_params`).
-Live Graph override tests are `GTEST_SKIP`’d. `angle_convention` and
-`forward_backward` stay Params-only (STATIC / not `[live]`).
+**Ports (settled — L18).** `contract()` unconditionally joins
+`Input<WireArrayGeometry> array_geometry`, the rank-1 pageable-host float64
+config Tensors `az_angles` / `el_angles` (bounded by `max_az` / `max_el`),
+and the bounded `{count, first, second}` int64 POD
+`Input<SpatialSmoothingOverride> spatial_smoothing`; `compute()` resolves
+each with `resolve_live_override_via`. Logical `MVDRParams` types are
+unchanged. `angle_convention` and `forward_backward` stay Params-only
+(STATIC / not `[live]`).
 
-**Next.** Prefer Tensor live ports for angle grids / smoothing counts
-and/or ChannelPod / schema wrappers for `ArrayGeometry` once a module-wide
-recipe lands (§9).
+**Still open.** `VirtualArrayAssemblyOp` / `SubarraySelectionOp` emit
+geometry as a packed float64 `(N + 1, 3)` Tensor (§10), not the
+wire-schema type this port consumes (§9). The representations differ, so a
+runtime virtual geometry cannot drive this override directly — it has to
+come from an app-side wire-schema producer. The generated wire objects are
+also C++-only, so Python drives the parameter through Params.
 
-**Status:** open — ported compute path; live descriptor/vector ports
-deferred.
+**Next.** Settle one `ArrayGeometry` transport so a descriptor output can
+feed a descriptor override port.
+
+**Status:** open — `ArrayGeometry` transport decision.
 
 ---
 

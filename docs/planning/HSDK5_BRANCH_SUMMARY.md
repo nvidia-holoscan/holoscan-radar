@@ -84,7 +84,7 @@ Grouped by theme. Section numbers match [`HSDK5_PORT.md`](HSDK5_PORT.md)
 | Issue | What we did |
 | --- | --- |
 | In/out port names share one namespace | Rename physical outs (`range_profiles_out`, `adc_cube_out`, `rd_maps_out`, …); note in `OPERATOR_API.md` (§2) |
-| Live ports cannot carry `std::vector` / owning descriptors | POD ChannelPod for fixed shapes (e.g. SnapshotGather window); generated descriptor-Tensor schemas for FMCW windows/waveform (interim pending ratification); Params-only for other unbounded vectors / owning descriptors (§9) |
+| Live ports cannot carry `std::vector` / owning descriptors | ChannelPod for bounded fixed tuples (SnapshotGather window, CFAR guard/training cells); generated descriptor-Tensor schemas for owning descriptors (FMCW windows/waveform, `ArrayGeometry`, `WindowSpec`); bounded rank-1 pageable-host Tensors for variable-length scalar vectors. Fully implemented (§9) |
 | `Output<ArrayGeometry>` not a `PublishedPayload` | Pack geometry as float64 Tensor `(N+1, 3)` (`array_geometry_tensor.hpp`) on SubarraySelection / VAA (§10) |
 | Hardcoded fat Tensor pool ceilings OOM or under-size | `MaxTensorExtents` at `graph.op()`; fail-closed extent checks where required |
 
@@ -123,7 +123,7 @@ Until these close, phase 5 / cleanup cannot finish. Detail and next steps:
 | ID | Question | Interim today |
 | --- | --- | --- |
 | §2 | Keep module-wide `*_out` unique names as locked contract? | Physical `*_out` names + doc notes |
-| §9 | Params-only vs schema/Tensor/POD for vector / descriptor `[live]` overrides? | Generated descriptor-Tensor schemas for FMCW windows/waveform pending ratification; Params-only for other non-POD / unbounded values; POD where fixed-shape |
+| §9 | Params-only vs schema/Tensor/POD for vector / descriptor `[live]` overrides? | Settled as L18 and implemented: generated descriptor-Tensor schemas for owning descriptors, ChannelPod where fixed-shape, bounded rank-1 host Tensors for variable-length vectors. Nothing stays Params-only |
 | §10 | Restore typed `Output<ArrayGeometry>` when SDK admits it, or lock Tensor pack? | float64 Tensor pack |
 | §3 / §4 | Confirm GA keeps explicit bind + writable DLPack rules | Documented patterns in harness / `radar_common` |
 

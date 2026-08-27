@@ -34,21 +34,25 @@ follows when those operators land.
 Cross-cut detail:
 [`docs/planning/HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md).
 
-### 1. Non-POD `[live]` `array_geometry` / `subarray` are Params-only
+### 1. `[live]` `array_geometry` / `subarray` payload forms
 
 **Class:** Durable HSDK 5 (`PublishedPayload` admission) — HSDK5_PORT §9.
 
 `Input<ArrayGeometry>` and `Input<std::vector<int64_t>>` are not valid
-PublishedPayloads. Those parameters stay on `SubarraySelectionParams` only
-(`set_params`), so this operator declares no `sticky_*` fields.
-Params coverage: `SubarrayConfigurableFromParams` + selection Graph tests.
-
-**Next.** Tensor / POD / schema live ports once a module-wide recipe lands.
-The wiring they would use is already settled: join the trigger with `Exact{}`
-plus `on_missing SafeDefault{}` unconditionally, let the application enable
-each override by wiring its port, and use `sticky_*` (default true) to latch
-the last match — see
+PublishedPayloads, so the ports carry `Input<WireArrayGeometry>` (under the
+physical name `array_geometry_in`, §2) and a rank-1 pageable-host int64
+config Tensor. Both join the trigger with `Exact{}` plus `on_missing
+SafeDefault{}` unconditionally, the application enables an override by
+wiring its port, and `sticky_*` (default true) latches the last match — see
 [`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
+The logical Params types are unchanged. Coverage:
+`LiveOverridesRequireExactCaptureTime`,
+`LiveOverridesStayStickyAfterExactMiss`, `EphemeralOverridesRevertToParams`,
+`RejectsMalformedLivePayloads`, `RejectsLiveSubarrayBeyondCapturedBound`,
+plus `SubarrayConfigurableFromParams` for the Params path.
+
+**Next.** Revisit if the SDK admits owning containers on typed ports and the
+logical and physical types can converge.
 
 ### 2. `array_geometry` output is a packed float64 Tensor
 
@@ -59,7 +63,14 @@ still emits geometry each tick as a float64 Tensor
 (`array_geometry_tensor.hpp`). VirtualArrayAssembly faces the same blocker when
 ported. Params side-channel is not acceptable.
 
-**Next.** Restore typed descriptor output when SDK admits a durable carrier.
+That packed layout is also not the representation the geometry override
+inputs take (`Input<WireArrayGeometry>`, §9), so this output cannot drive a
+downstream — or this operator's own — `array_geometry` override; that has to
+come from an app-side wire-schema producer.
+
+**Next.** Restore typed descriptor output when SDK admits a durable carrier;
+settle one `ArrayGeometry` transport shared by descriptor outputs and
+override inputs.
 
 ### 3. Optional `is_valid` Graph wiring
 

@@ -29,8 +29,8 @@ time on both the override and the snapshot — see
 **Still open (EA test harness).**
 
 - `BeamscanEstimatorOpTest.LivePeakInterpolationStickyOverride` is
-  `GTEST_SKIP`’d; no Graph test drives a mid-stream override through this
-  operator yet.
+  `GTEST_SKIP`’d; the descriptor / scan-grid override tests do run
+  mid-stream, so the gap is this enum port specifically.
 - Params authoring covers selection
   (`PeakInterpolationConfigurableFromParams`).
 
@@ -41,34 +41,38 @@ time on both the override and the snapshot — see
 
 ---
 
-## 2. Non-POD / variable-length `[live]` params are Params-only
+## 2. `array_geometry` overrides have no in-module producer
 
-**Blocks checklist:** Tests → live `az_angles` / `el_angles` /
-`array_geometry` / `array_taper` mid-stream sticky overrides.
+**Blocks checklist:** nothing on its own — the port and its Graph
+mid-stream coverage are in place; this is the transport decision behind
+the port.
 
-**Class:** Durable HSDK 5 (`PublishedPayload` admission) + our deferred
-work. Same recipe as `PhaseShiftBeamformerOp` — see
-[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9.
+**Class:** Open `ArrayGeometry` transport decision. See
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9 / §10.
 
-**What fails.** `Input<std::vector<double>>`, `Input<ArrayGeometry>`, and
-`Input<WindowSpec>` are not valid PublishedPayloads (vectors are owning
-containers; descriptors embed vectors / optionals and are not ChannelPod /
-schema-identity channel types). Unbounded scan grids cannot use a
-fixed-size POD like `SnapshotWindowOverride`.
+**Ports (settled — L18).** `contract()` unconditionally joins
+`Input<WireArrayGeometry> array_geometry`, `Input<WireWindowSpec>
+array_taper`, and the rank-1 pageable-host float64 config Tensors
+`az_angles` / `el_angles` to the data trigger with `Exact{}` and
+`on_missing SafeDefault{}`; `compute()` resolves each with
+`resolve_live_override_via`, validating the Tensors against `max_az` /
+`max_el` from `MaxTensorExtents`. Logical Params types are unchanged.
+`angle_convention` stays static (Params only) per OPERATOR_API.md. Graph
+coverage: `LiveAzGridStickyOverride`, `LiveElGridStickyOverride`,
+`LiveArrayGeometryStickyOverride`, `LiveArrayTaperStickyOverride`,
+`LiveOverridesRejectMalformedAndBounds`.
 
-**Interim.** Those parameters remain on `BeamscanParams` only (set via
-`set_params`). Live Graph override tests are `GTEST_SKIP`’d. Params
-coverage remains (`ArrayTaperConfigurableFromParams`, scan-grid / DOA
-tests). `angle_convention` stays static (Params only) per OPERATOR_API.md.
-Enum live `peak_interpolation` has an Exact override port (§1); these four
-have no port to wire.
+**Still open.** `VirtualArrayAssemblyOp` / `SubarraySelectionOp` emit
+geometry as a packed float64 `(N + 1, 3)` Tensor (§10), not the
+wire-schema type this port consumes (§9). The representations differ, so
+a runtime virtual geometry cannot drive this override directly — it has to
+come from an app-side wire-schema producer. The generated wire objects are
+also C++-only, so Python drives the parameter through Params.
 
-**Next.** Prefer Tensor live ports for angle grids and/or ChannelPod /
-schema wrappers for descriptors once a module-wide recipe lands (§9);
-then restore sticky live ports + Graph tests.
+**Next.** Settle one `ArrayGeometry` transport so a descriptor output can
+feed a descriptor override port.
 
-**Status:** open — ported compute path; live descriptor/vector ports
-deferred.
+**Status:** open — `ArrayGeometry` transport decision.
 
 ---
 

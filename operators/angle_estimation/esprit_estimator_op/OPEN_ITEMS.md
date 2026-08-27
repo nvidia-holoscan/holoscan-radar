@@ -1,13 +1,15 @@
 # ESPRITEstimatorOp — open items
 
-Status: **HSDK 5 EA C++ port landed** (checklist not fully closed — live /
-`is_valid` Graph coverage deferred). Algorithm contract
+Status: **HSDK 5 EA C++ port landed** (checklist not fully closed — scalar
+live / `is_valid` Graph coverage deferred). Algorithm contract
 (`OPERATOR_API.md` → ESPRITEstimatorOp) is unchanged:
 
 - gridless LS-ESPRIT on ULA / dual-invariance 2-D ESPRIT on filled URA;
 - shared MUSIC covariance / eig / fixed-or-EFT source count front-end;
-- `num_sources` / `source_count_pfa` / `max_sources` **[live]** POD Exact
+- `num_sources` / `source_count_pfa` / `max_sources` **[live]** scalar Exact
   override Inputs (always in `contract()`, latched by `sticky_*`);
+- `array_geometry` / `spatial_smoothing` **[live]** wire-object and POD Exact
+  override Inputs (same unconditional entry, same `sticky_*`);
 - `spatial_smoothing` (+ `forward_backward`) front-end; `subarray_spec` STATIC;
 - always-emit `aoa_estimates` / `doa_multi` / `source_count` / `eigenvalues`
   (no `angle_spectrum`).
@@ -53,26 +55,37 @@ Isolated `num_sources` / `source_count_pfa` perf is still open;
 
 ---
 
-## 2. Non-POD / variable-length `[live]` params are Params-only
+## 2. `array_geometry` overrides have no in-module producer
 
-**Blocks checklist:** Tests → live `array_geometry` / `spatial_smoothing`
-mid-stream sticky overrides. `subarray_spec` is STATIC (Params-only by
-contract).
+**Blocks checklist:** nothing on its own — the geometry / smoothing ports
+and their Graph coverage are in place; this is the transport decision
+behind the geometry port.
 
-**Class:** Durable HSDK 5 (`PublishedPayload` admission) + our deferred
-work. Same recipe as MVDR / Root-MUSIC — see
-[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9.
+**Class:** Open `ArrayGeometry` transport decision. See
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9 / §10.
 
-**Interim.** Those parameters remain on `ESPRITParams` only (`set_params`).
-Live Graph override tests are `GTEST_SKIP`’d. `angle_convention`,
-`forward_backward`, and `subarray_spec` stay Params-only (STATIC /
-not `[live]`).
+**Ports (settled — L18).** `contract()` unconditionally joins
+`Input<WireArrayGeometry> array_geometry` and the bounded
+`{count, first, second}` int64 POD
+`Input<SpatialSmoothingOverride> spatial_smoothing`; `compute()` resolves
+both with `resolve_live_override_via`. Logical `ESPRITParams` types are
+unchanged. `angle_convention`, `forward_backward`, and `subarray_spec` stay
+Params-only (STATIC / not `[live]`), so having no port for them is
+conformance. Graph coverage: `LiveArrayGeometryStickyOverride`,
+`LiveSpatialSmoothingStickyOverride`.
 
-**Next.** Prefer Tensor live ports for smoothing counts and/or ChannelPod /
-schema wrappers for `ArrayGeometry` once a module-wide recipe lands (§9).
+**Still open.** `SubarraySelectionOp` — this operator's usual upstream —
+and `VirtualArrayAssemblyOp` emit geometry as a packed float64 `(N + 1, 3)`
+Tensor (§10), not the wire-schema type this port consumes (§9). The
+representations differ, so a runtime virtual geometry cannot drive this
+override directly; it has to come from an app-side wire-schema producer.
+The generated wire objects are also C++-only, so Python drives the
+parameter through Params.
 
-**Status:** open — ported compute path; live descriptor/vector ports
-deferred.
+**Next.** Settle one `ArrayGeometry` transport so a descriptor output can
+feed a descriptor override port.
+
+**Status:** open — `ArrayGeometry` transport decision.
 
 ---
 

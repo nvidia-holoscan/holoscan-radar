@@ -39,11 +39,16 @@ apart are distinct virtual elements.
 
 ### A.5 Emitted `array_geometry`
 
-Runtime output on port `array_geometry` (descriptor exception — not a tensor).
-Contains `element_positions` for the **post-policy** virtual set and `wavelength`
-from the effective `[live]` `wavelength` parameter. `geometry_type` is left
-unset (informational field only). Downstream angle ops should consume this port
-as the `[live]` override when wiring MIMO graphs.
+Runtime output on port `array_geometry` — the one sanctioned descriptor output
+(design invariant 2), carried on this branch as a packed float64 Tensor
+([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §10). Contains
+`element_positions` for the **post-policy** virtual set and `wavelength` from
+the effective `[live]` `wavelength` parameter. `geometry_type` is left unset
+(informational field only). The intent is for downstream angle ops to consume
+this port as their `[live]` `array_geometry` override when wiring MIMO graphs;
+that connection does not exist yet, because those overrides take the generated
+`WireArrayGeometry` schema type rather than this packed Tensor — see the
+representation mismatch in [`SDK_WORKAROUNDS.md`](SDK_WORKAROUNDS.md).
 
 ### A.6 Doppler / range axes unchanged
 
@@ -74,10 +79,13 @@ malloc-dominated profile as `MIMODeinterleaveOp`. See
 **Class:** HSDK 5 EA limitation. See
 [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
 
-**Interim.** Operator still declares sticky `Input<double> wavelength` and
-resolves via `resolve_sticky_override`. The port is omitted from `contract()`
-so unwired graphs compile. Graph sticky unit tests remain `GTEST_SKIP`’d.
-`perf_virtual_array_assembly` measures an inline `wavelength` transition with
-the supported single-clock / exact-contract / single-partition shape.
+**Interim.** The operator declares `Input<double> wavelength`, adds its
+`Exact{}` + `SafeDefault{}` entry unconditionally via
+`add_live_override_to_contract`, and latches through `resolve_live_override`,
+so an unwired graph compiles without the port needing to leave the contract.
+What is still missing is coverage: the Graph sticky unit tests remain
+`GTEST_SKIP`’d. `perf_virtual_array_assembly` measures an inline `wavelength`
+transition with the supported single-clock / exact-contract / single-partition
+shape.
 
 **Status:** open for the sticky unit test; perf override timing is restored.
