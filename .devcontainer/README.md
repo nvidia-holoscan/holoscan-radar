@@ -82,10 +82,12 @@ GitLab SSH access and Docker.
 The default pin is the branch `deustice/5x/optional-port-contracts`, which
 carries the optional-unwired-input feature this module needs in order to retire
 its `expect_*` parameters ([`../docs/planning/HSDK5_PORT.md`](../docs/planning/HSDK5_PORT.md)
-§11). Because a branch pin's image tag carries its short sha, the produced name
-is not the one in [`devcontainer.json`](devcontainer.json) — run with
-`--print-pin` first and set `BASE_IMAGE` to what it reports. Pin `v5.0.0.1` to
-build the EA tag instead.
+§11), and [`devcontainer.json`](devcontainer.json) names the image it produces.
+The module no longer builds against the `v5.0.0.1` EA tag: it uses that
+branch's Tensor spec API, and its operators declare optional `[live]` inputs
+the tag rejects as unconnected. Because a branch pin's image tag carries its
+short sha, re-run with `--print-pin` and update `BASE_IMAGE` whenever the
+branch moves.
 
 After it completes, rebuild and reopen the devcontainer. Re-run the script only
 when the pinned HSDK build needs to be recreated.
@@ -123,7 +125,7 @@ against the EA image from the host, run:
 
 ```bash
 ./holohub run-container \
-  --base-img holoscan-radar-hsdk5-ea:v5.0.0.1
+  --base-img holoscan-radar-hsdk5-ea:deustice-5x-optional-port-contracts-906fc1247
 ```
 
 Inside the EA devcontainer, use local execution so `holohub` uses the HSDK 5
