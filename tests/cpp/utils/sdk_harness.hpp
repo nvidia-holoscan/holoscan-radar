@@ -10,8 +10,10 @@
 
 #include <cuda_runtime_api.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
@@ -675,6 +677,20 @@ inline MaxTensorExtents default_test_extents() {
   extents.max_sources = 8;
   extents.max_clusters = 256;
   extents.max_subarray_channels = 32;
+  return extents;
+}
+
+// The angle operators reject a scan grid wider than the captured max_az /
+// max_el, and those two extents also multiply into the output pool span, so
+// grid-scanning suites size them to the grid under test rather than paying
+// for the default caps.
+inline MaxTensorExtents extents_for_scan_grid(std::size_t num_az,
+                                              std::size_t num_el) {
+  MaxTensorExtents extents = default_test_extents();
+  extents.max_az = std::max<std::int64_t>(
+      1, static_cast<std::int64_t>(num_az));
+  extents.max_el = std::max<std::int64_t>(
+      1, static_cast<std::int64_t>(num_el));
   return extents;
 }
 

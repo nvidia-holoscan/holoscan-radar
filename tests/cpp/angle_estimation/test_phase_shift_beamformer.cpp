@@ -195,14 +195,16 @@ template <typename T>
 GraphRunResult run_beamformer_result(
     std::shared_ptr<holoscan::Tensor> rd_maps,
     PhaseShiftBeamformerParams params,
-    const holoscan::radar::MaxTensorExtents& extents =
-        holoscan::radar::testing::default_test_extents()) {
+    std::optional<holoscan::radar::MaxTensorExtents> extents = std::nullopt) {
+  const holoscan::radar::MaxTensorExtents sized =
+      extents.value_or(holoscan::radar::testing::extents_for_scan_grid(
+          params.az_angles.size(), params.el_angles.size()));
   return run_single_io_operator_graph_result<PhaseShiftBeamformerOp<T>>(
       {std::move(rd_maps)}, std::move(params), "rda_cube",
       [](holoscan::Graph& graph, const auto& source, auto& op,
          const auto& sink) { wire_beamformer(graph, source, op, sink); },
       {},
-      extents);
+      sized);
 }
 
 template <typename T>

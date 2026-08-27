@@ -191,13 +191,17 @@ BeamscanParams make_params(ArrayGeometry geom, AngleConvention conv,
 template <typename T>
 DualIOGraphRunResult run_beamscan_result(
     std::shared_ptr<holoscan::Tensor> snapshot, BeamscanParams params) {
+  const holoscan::radar::MaxTensorExtents sized =
+      holoscan::radar::testing::extents_for_scan_grid(
+          params.az_angles.size(), params.el_angles.size());
   return run_single_in_dual_out_operator_graph_result<BeamscanEstimatorOp<T>>(
       {std::move(snapshot)}, std::move(params), "aoa_estimates",
       "angle_spectrum",
       [](holoscan::Graph& graph, const auto& source, auto& op,
          const auto& sink0, const auto& sink1) {
         wire_beamscan(graph, source, op, sink0, sink1);
-      });
+      },
+      {}, sized);
 }
 
 template <typename T>

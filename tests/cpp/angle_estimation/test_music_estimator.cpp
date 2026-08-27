@@ -241,6 +241,9 @@ MUSICParams make_params(ArrayGeometry geom, AngleConvention conv,
 template <typename T>
 FiveOutGraphRunResult run_music_result(std::shared_ptr<holoscan::Tensor> snapshot,
                                        MUSICParams params) {
+  const holoscan::radar::MaxTensorExtents sized =
+      holoscan::radar::testing::extents_for_scan_grid(
+          params.az_angles.size(), params.el_angles.size());
   return run_single_in_five_out_operator_graph_result<MUSICEstimatorOp<T>>(
       {std::move(snapshot)}, std::move(params), "aoa_estimates",
       "angle_spectrum", "doa_multi", "source_count", "eigenvalues",
@@ -248,7 +251,8 @@ FiveOutGraphRunResult run_music_result(std::shared_ptr<holoscan::Tensor> snapsho
          const auto& sink0, const auto& sink1, const auto& sink2,
          const auto& sink3, const auto& sink4) {
         wire_music(graph, source, op, sink0, sink1, sink2, sink3, sink4);
-      });
+      },
+      sized);
 }
 
 template <typename T>
@@ -562,13 +566,17 @@ BeamscanParams make_beamscan_params(ArrayGeometry geom, AngleConvention conv,
 template <typename T>
 DualIOGraphRunResult run_beamscan_result(
     std::shared_ptr<holoscan::Tensor> snapshot, BeamscanParams params) {
+  const holoscan::radar::MaxTensorExtents sized =
+      holoscan::radar::testing::extents_for_scan_grid(
+          params.az_angles.size(), params.el_angles.size());
   return run_single_in_dual_out_operator_graph_result<BeamscanEstimatorOp<T>>(
       {std::move(snapshot)}, std::move(params), "aoa_estimates",
       "angle_spectrum",
       [](holoscan::Graph& graph, const auto& source, auto& op,
          const auto& sink0, const auto& sink1) {
         wire_beamscan(graph, source, op, sink0, sink1);
-      });
+      },
+      {}, sized);
 }
 
 template <typename T>

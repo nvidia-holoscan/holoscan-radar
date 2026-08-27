@@ -247,6 +247,9 @@ MVDRParams make_params(ArrayGeometry geom, AngleConvention conv,
 template <typename T>
 FiveOutGraphRunResult run_mvdr_result(std::shared_ptr<holoscan::Tensor> snapshot,
                                       MVDRParams params) {
+  const holoscan::radar::MaxTensorExtents sized =
+      holoscan::radar::testing::extents_for_scan_grid(
+          params.az_angles.size(), params.el_angles.size());
   return run_single_in_five_out_operator_graph_result<MVDREstimatorOp<T>>(
       {std::move(snapshot)}, std::move(params), "aoa_estimates",
       "angle_spectrum", "doa_multi", "source_count", "eigenvalues",
@@ -254,7 +257,8 @@ FiveOutGraphRunResult run_mvdr_result(std::shared_ptr<holoscan::Tensor> snapshot
          const auto& sink0, const auto& sink1, const auto& sink2,
          const auto& sink3, const auto& sink4) {
         wire_mvdr(graph, source, op, sink0, sink1, sink2, sink3, sink4);
-      });
+      },
+      sized);
 }
 
 template <typename T>
