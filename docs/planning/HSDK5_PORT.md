@@ -838,29 +838,45 @@ and `DetectionReductionOp` trigger `OnAligned`, so they keep `expect_*` (or the
 SDK extends the rule to non-member inputs of an aligned trigger — worth asking,
 since an override is not an alignment member).
 
-**Blocked on SDK packaging, not on us.** That branch sits on `main-5x`, which
-has moved the Tensor spec API past the `v5.0.0.1` EA tag this module builds
-against (`TensorPortLayout` → `TensorInputSpec`/`TensorOutputSpec`,
-`TensorAllocationBounds` → `TensorPoolBounds`, `.tensor_allocation(bounds)` →
-`produces_tensor(spec, byte_span)`) — ~350 sites here. Backporting the feature
-onto `v5.0.0.1` conflicts in the diagnostic registry and `run_session.cpp`
-(312 commits of drift). So the removal cannot be validated end to end until
-either the public release lands or the module ports to `main-5x`.
+**Validated end to end (2026-08-27) against branch tip `906fc1247`.** The
+`expect_*`-free `FMCWRangeProcessorOp` from `deustice/optional-input-ports`
+builds against that SDK and **all 18 of its tests pass**, including the graph
+cases whose overrides are left unwired. The same binary's two representative
+cases (`NoRangeBinsWithoutWaveform`, `LiveNfftExactMatchChangesBinCount`) fail
+on the `v5.0.0.1` EA SDK with `TEMPORAL_INPUT_UNCONNECTED` on the unwired
+`range_window` port and `"admitted": false`. That closes the earlier
+measurement gap — "wired override still selects" is now asserted by the
+operator's own tests, not only by the probe.
 
-**Next.** Keep `expect_*` on `main`. The prepared removal (one operator,
-`FMCWRangeProcessorOp`) lives on branch `deustice/optional-input-ports`: it
-compiles against the EA SDK, and on that SDK exactly 28 tests then fail
-`TEMPORAL_INPUT_UNCONNECTED` — the operator's own 18 plus the 10
-`FMCWRangeDopplerProcessorOp` split-vs-fused parity cases that instantiate it
-(all pass at HEAD). Nothing else moves, which is the expected proof that the
-change is gated on the SDK feature and is otherwise complete. Reasoning and the
-full measurement set: [`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md).
+**Remaining blocker is the Tensor spec API, not the feature.** The branch sits
+on `main-5x`, which has reshaped the Tensor spec surface past `v5.0.0.1`. A
+full build of this module against it produced 156 errors in 23 files (18
+operator targets plus 3 test targets), every one of them this migration and
+nothing else. The mapping is mechanical:
 
-The one measurement gap: the operator's own Graph coverage cannot run until the
-feature ships, so "wired override still selects" is asserted only by the probe,
-not by the operator's tests.
+| `v5.0.0.1` (this module) | `main-5x` |
+| --- | --- |
+| `TensorPortLayout{.memory_kind, .dtype, .rank}` | `TensorRepresentation{…}` nested in `TensorInputSpec` / `TensorOutputSpec` |
+| `TensorAllocationBounds{.max_rank, .max_byte_span}` | `TensorBounds{…}` on the spec (pool sizing became `TensorPoolBounds`) |
+| `.produces_tensor(layout).tensor_allocation(bounds)` | `.produces_tensor(spec)` with `.storage = TensorOutputStorage::kRuntimePool` |
+| `.expects_tensor(layout)` | `.expects_tensor(TensorInputSpec{.representation = …})` |
 
-**Status:** open — SDK implements it; blocked on a release we can build against.
+Repository-wide surface: `TensorPortLayout` in 44 files, `TensorAllocationBounds`
+in 42 (apps and bindings included, which that build had gated off). The
+validation above applied this mapping to three files only — the operator, the
+shared test harness, and the operator's test — in a throwaway worktree.
+Cherry-picking the feature back onto `v5.0.0.1` instead conflicts in the
+diagnostic registry and `run_session.cpp` (312 commits of drift).
+
+**Next.** Keep `expect_*` on `main` until either the feature ships in a release
+built on the EA Tensor spec API, or this module migrates to the `main-5x` shape
+(a contract-adjacent change — see
+[`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md) — that wants its own decision,
+not a drive-by). Reasoning and the full measurement set:
+[`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md).
+
+**Status:** open — the feature is proven sufficient; shipping it here waits on
+the Tensor spec API decision.
 
 ---
 

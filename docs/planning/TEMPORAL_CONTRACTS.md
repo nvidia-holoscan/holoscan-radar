@@ -157,7 +157,13 @@ For the agent applying this to `contract()` bodies and `OPERATOR_API.md`:
   the cube (Params or last latch). Fail-closed `Skip{}` is not the
   operator default.
 - **L17.** Per-port `expect_*` (default false) gates the `contract()` entry.
-  Ports stay registered in `setup()`.
+  Ports stay registered in `setup()`. Interim: on SDK branch
+  `deustice/5x/optional-port-contracts` (tip `906fc1247`) the parameter is
+  unnecessary for `OnEach`-triggered operators, and the `expect_*`-free
+  `FMCWRangeProcessorOp` passes all 18 of its tests there against the same
+  cases that fail `TEMPORAL_INPUT_UNCONNECTED` on the EA tag. Adopting it
+  module-wide waits on the Tensor spec API migration that branch also carries
+  ([`HSDK5_PORT.md`](HSDK5_PORT.md) §11).
 
 ## Still open
 
@@ -176,7 +182,8 @@ For the agent applying this to `contract()` bodies and `OPERATOR_API.md`:
 | `tmp-app/lookbehind_probe.cpp` | `OnWindow` latency, `lookahead = 0` rejection, timeout delivering nothing, and retention sizing. |
 | `tmp-app/optional_live_port.cpp` | The optional-override pattern: unconditional `setup()`, parameterized `contract()` entry and selector bound, and mid-run `set_params` as a no-op. |
 | `tmp-app/wiring_inference.cpp` | The same operator in two hand-written compositions, override wired and absent, as the reference for how an optional `[live]` port is declared. Earlier revisions of this probe also measured the results recorded above: `expect_*` derivable from `Graph::view()`, a declared-but-unwired entry rejected even with `on_missing`, a never-emitting producer accepted, input fan-in rejected (`GRAPH_INPUT_FANIN_UNSUPPORTED`), and an unconsumed output failing its emit. |
-| `tmp-app/optional_input_ports.cpp` | The `expect_*`-free successor on SDK branch `deustice/5x/optional-port-contracts`: wired and unwired POD overrides, an unwired optional Tensor input, and the `OnAligned` exclusion, with the compile diagnostics printed for each. |
+| `tmp-app/optional_input_ports.cpp` | The `expect_*`-free successor on SDK branch `deustice/5x/optional-port-contracts`: wired and unwired POD overrides, an unwired optional Tensor input, and the `OnAligned` exclusion, with the compile diagnostics printed for each. Re-measured unchanged on tip `906fc1247`. |
+| `FMCWRangeProcessorOp`'s own suite | The operator-level confirmation of the row above: 18/18 pass on the SDK branch with every `expect_*` removed, against the EA tag's `TEMPORAL_INPUT_UNCONNECTED` for the same graphs. |
 
 Re-verify all of the above if the SDK changes activation-time, selector, or
 retention semantics; the EA is under active development.
