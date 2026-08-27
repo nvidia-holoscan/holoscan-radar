@@ -75,13 +75,45 @@ On the host, from the root of this repository, run:
 ./.devcontainer/build-hsdk5-ea-image.sh
 ```
 
-The script clones the internal HSDK repository at `v5.0.0.1` into the ignored
-`.cache/` directory, builds the SDK, and creates the local image already named
-in [`devcontainer.json`](devcontainer.json). It requires internal GitLab SSH
-access and Docker.
+The script clones the internal HSDK repository into the ignored `.cache/`
+directory, builds the SDK, and creates a local image. It requires internal
+GitLab SSH access and Docker.
+
+The default pin is the branch `deustice/5x/optional-port-contracts`, which
+carries the optional-unwired-input feature this module needs in order to retire
+its `expect_*` parameters ([`../docs/planning/HSDK5_PORT.md`](../docs/planning/HSDK5_PORT.md)
+§11). Because a branch pin's image tag carries its short sha, the produced name
+is not the one in [`devcontainer.json`](devcontainer.json) — run with
+`--print-pin` first and set `BASE_IMAGE` to what it reports. Pin `v5.0.0.1` to
+build the EA tag instead.
 
 After it completes, rebuild and reopen the devcontainer. Re-run the script only
 when the pinned HSDK build needs to be recreated.
+
+### Changing the SDK pin
+
+`--pin` accepts a tag, a branch, or a commit sha (`$HSDK_PIN` sets the same
+thing). Each pin gets its own `.cache/` checkout and its own image tag, so
+several pins can coexist:
+
+```bash
+./.devcontainer/build-hsdk5-ea-image.sh --pin v5.0.0.1
+./.devcontainer/build-hsdk5-ea-image.sh --pin 9bd905908
+./.devcontainer/build-hsdk5-ea-image.sh --pin deustice/5x/optional-port-contracts
+```
+
+A tag or sha pin is immutable, and the script verifies the cached checkout
+against it without touching the network. A branch pin is resolved with
+`git ls-remote` and must sit exactly on the current tip — when the branch moves,
+the script refuses to build the stale checkout and tells you to remove it or pin
+the sha instead. Because a branch is mutable, its image tag carries the short
+sha (`holoscan-radar-hsdk5-ea:deustice-5x-optional-port-contracts-9bd905908`).
+
+`--print-pin` resolves and verifies the pin, prints the commit and the image
+name, and exits without building — use it to read off the value to record in
+`devcontainer.json`'s `BASE_IMAGE`, which the script does not edit. A pin other
+than the default therefore takes two steps: build the image, then point
+`BASE_IMAGE` at it before reopening the container.
 
 ### Using `./holohub`
 
