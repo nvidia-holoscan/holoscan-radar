@@ -140,12 +140,9 @@ expected<void, Error> require_window_bounds(
 
 template <typename T>
 expected<std::vector<T>, Error> resolve_config_tensor_override(
-    bool expect, Input<Tensor>& port, const std::vector<T>& seed,
+    Input<Tensor>& port, const std::vector<T>& seed,
     std::optional<std::vector<T>>& sticky, bool keep_sticky,
     DLDataType dtype, int64_t max_extent, const char* field) {
-  if (!expect) {
-    return seed;
-  }
   HOLOSCAN_TRY(auto maybe, receive_optional_value(port));
   if (maybe.has_value()) {
     HOLOSCAN_TRY(
@@ -353,21 +350,14 @@ template <typename T>
 Contract CFARDetectorOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{rd_maps});
-  maybe_add_live_override_to_contract(result, pfa, params().expect_pfa);
-  maybe_add_live_override_to_contract(
-      result, threshold_scale, params().expect_threshold_scale);
-  maybe_add_live_override_to_contract(
-      result, os_rank, params().expect_os_rank);
-  maybe_add_live_override_to_contract(
-      result, max_detections, params().expect_max_detections);
-  maybe_add_live_override_to_contract(
-      result, guard_cells, params().expect_guard_cells);
-  maybe_add_live_override_to_contract(
-      result, training_cells, params().expect_training_cells);
-  maybe_add_live_override_to_contract(
-      result, nci_axes, params().expect_nci_axes);
-  maybe_add_live_override_to_contract(
-      result, alpha_lut, params().expect_alpha_lut);
+  add_live_override_to_contract(result, pfa);
+  add_live_override_to_contract(result, threshold_scale);
+  add_live_override_to_contract(result, os_rank);
+  add_live_override_to_contract(result, max_detections);
+  add_live_override_to_contract(result, guard_cells);
+  add_live_override_to_contract(result, training_cells);
+  add_live_override_to_contract(result, nci_axes);
+  add_live_override_to_contract(result, alpha_lut);
   return result;
 }
 
@@ -377,43 +367,38 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
 
   const CFARParams& pinned = context.params<CFARParams>();
   HOLOSCAN_TRY(auto effective_pfa,
-               resolve_expected_override(pinned.expect_pfa, pfa, pinned.pfa,
-                                         sticky_pfa_, pinned.sticky_pfa));
+               resolve_live_override(
+                   pfa, pinned.pfa, sticky_pfa_, pinned.sticky_pfa));
   HOLOSCAN_TRY(auto effective_threshold_scale,
-               resolve_expected_override(pinned.expect_threshold_scale,
-                                         threshold_scale,
-                                         pinned.threshold_scale,
-                                         sticky_threshold_scale_,
-                                         pinned.sticky_threshold_scale));
+               resolve_live_override(
+                   threshold_scale, pinned.threshold_scale,
+                   sticky_threshold_scale_, pinned.sticky_threshold_scale));
   HOLOSCAN_TRY(auto effective_os_rank,
-               resolve_expected_override(pinned.expect_os_rank, os_rank,
-                                         pinned.os_rank, sticky_os_rank_,
-                                         pinned.sticky_os_rank));
+               resolve_live_override(
+                   os_rank, pinned.os_rank, sticky_os_rank_,
+                   pinned.sticky_os_rank));
   HOLOSCAN_TRY(auto effective_max_detections,
-               resolve_expected_override(pinned.expect_max_detections,
-                                         max_detections, pinned.max_detections,
-                                         sticky_max_detections_,
-                                         pinned.sticky_max_detections));
+               resolve_live_override(
+                   max_detections, pinned.max_detections,
+                   sticky_max_detections_, pinned.sticky_max_detections));
   HOLOSCAN_TRY(auto effective_guard_cells,
-               resolve_expected_override_via(
-                   pinned.expect_guard_cells, guard_cells,
-                   pinned.guard_cells, sticky_guard_cells_,
+               resolve_live_override_via(
+                   guard_cells, pinned.guard_cells, sticky_guard_cells_,
                    pinned.sticky_guard_cells,
                    [](const CfarCellWindowOverride& value) {
                      return from_wire(value);
                    }));
   HOLOSCAN_TRY(auto effective_training_cells,
-               resolve_expected_override_via(
-                   pinned.expect_training_cells, training_cells,
-                   pinned.training_cells, sticky_training_cells_,
-                   pinned.sticky_training_cells,
+               resolve_live_override_via(
+                   training_cells, pinned.training_cells,
+                   sticky_training_cells_, pinned.sticky_training_cells,
                    [](const CfarCellWindowOverride& value) {
                      return from_wire(value);
                    }));
   HOLOSCAN_TRY(auto effective_nci_axes,
                resolve_config_tensor_override(
-                   pinned.expect_nci_axes, nci_axes, pinned.nci_axes,
-                   sticky_nci_axes_, pinned.sticky_nci_axes, kInt64Dtype,
+                   nci_axes, pinned.nci_axes, sticky_nci_axes_,
+                   pinned.sticky_nci_axes, kInt64Dtype,
                    static_cast<int64_t>(max_leading_), "nci_axes"));
   int64_t alpha_lut_extent_bound = max_alpha_lut_extent_;
   if (pinned.cfar_variant == CfarVariant::kOS) {
@@ -426,9 +411,9 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
   }
   HOLOSCAN_TRY(auto effective_alpha_lut,
                resolve_config_tensor_override(
-                   pinned.expect_alpha_lut, alpha_lut, pinned.alpha_lut,
-                   sticky_alpha_lut_, pinned.sticky_alpha_lut,
-                   kFloat64Dtype, alpha_lut_extent_bound, "alpha_lut"));
+                   alpha_lut, pinned.alpha_lut, sticky_alpha_lut_,
+                   pinned.sticky_alpha_lut, kFloat64Dtype,
+                   alpha_lut_extent_bound, "alpha_lut"));
 
   bool pfa_override_changed = false;
   if (pfa_seen_ && effective_pfa != last_seen_pfa_) {

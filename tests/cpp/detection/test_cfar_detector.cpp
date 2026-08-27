@@ -420,8 +420,18 @@ CfarOutputs run_cfar(std::shared_ptr<holoscan::Tensor> input,
           std::move(result.frames4.front())};
 }
 
+// Which override ports the graph wires, and so which controls its sources
+// emit. The operator declares every entry unconditionally.
+struct CfarLiveWiring {
+  bool guard_cells{false};
+  bool training_cells{false};
+  bool nci_axes{false};
+  bool alpha_lut{false};
+};
+
 FiveOutGraphRunResult run_cfar_live(std::vector<CfarLiveTick> ticks,
-                                    CFARParams params) {
+                                    CFARParams params,
+                                    CfarLiveWiring wiring) {
   namespace harness = holoscan::radar::testing::detail;
   FiveOutGraphRunResult result;
   harness::FrameBank::reset();
@@ -434,10 +444,10 @@ FiveOutGraphRunResult run_cfar_live(std::vector<CfarLiveTick> ticks,
   CfarLiveBank<CfarLivePodControlsTag>::reset(ticks);
   CfarLiveBank<CfarLiveTensorControlsTag>::reset(ticks);
   CfarLiveTimestampBank::reset();
-  const bool expect_guard_cells = params.expect_guard_cells;
-  const bool expect_training_cells = params.expect_training_cells;
-  const bool expect_nci_axes = params.expect_nci_axes;
-  const bool expect_alpha_lut = params.expect_alpha_lut;
+  const bool expect_guard_cells = wiring.guard_cells;
+  const bool expect_training_cells = wiring.training_cells;
+  const bool expect_nci_axes = wiring.nci_axes;
+  const bool expect_alpha_lut = wiring.alpha_lut;
   CfarLiveControlConfig::expect_guard_cells = expect_guard_cells;
   CfarLiveControlConfig::expect_training_cells = expect_training_cells;
   CfarLiveControlConfig::expect_nci_axes = expect_nci_axes;
@@ -962,13 +972,13 @@ TEST(CFARDetectorOpTest, LiveGuardCellsOverrideMidStreamAndSticky) {
   params.nci_axes = {0};
   params.nci_fold = kChannels;
   params.alpha_lut = lut;
-  params.expect_guard_cells = true;
   const CfarLiveTick first{
       input, CfarCellWindowOverride{1, 2}, std::nullopt, std::nullopt,
       std::nullopt, {}};
   const CfarLiveTick missing{input, std::nullopt, std::nullopt, std::nullopt,
                              std::nullopt, {}};
-  const auto result = run_cfar_live({first, missing}, params);
+  const auto result = run_cfar_live({first, missing}, params,
+                                     {.guard_cells = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
@@ -986,11 +996,11 @@ TEST(CFARDetectorOpTest, RejectsMalformedLiveCellWindow) {
       power_map(1.0, {{8, 16}}, 100.0), {kDoppler, kRange},
       real_dtype<double>());
   CFARParams params = ca_params(1e-3);
-  params.expect_guard_cells = true;
   const CfarLiveTick malformed{
       input, CfarCellWindowOverride{-1, 1}, std::nullopt, std::nullopt,
       std::nullopt, {}};
-  const auto result = run_cfar_live({malformed}, params);
+  const auto result = run_cfar_live({malformed}, params,
+                                     {.guard_cells = true});
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1008,11 +1018,11 @@ TEST(CFARDetectorOpTest, RejectsMalformedLiveNciAxesTensor) {
   auto input = to_device_tensor<double>(
       cube, {kChannels, kDoppler, kRange}, real_dtype<double>());
   CFARParams params = ca_params(1e-3);
-  params.expect_nci_axes = true;
   const CfarLiveTick malformed{
       input, std::nullopt, std::nullopt, std::vector<int64_t>{0},
       std::nullopt, {1, 1}};
-  const auto result = run_cfar_live({malformed}, params);
+  const auto result = run_cfar_live({malformed}, params,
+                                     {.nci_axes = true});
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1029,7 +1039,6 @@ TEST(CFARDetectorOpTest, LiveAlphaLutOverrideStickyAndClearing) {
     huge_lut[i] *= 1e6;
   }
   CFARParams params = ca_params(1e-3);
-  params.expect_alpha_lut = true;
   params.blocking_alpha_lut_rebuild = true;
   const CfarLiveTick external{
       input, std::nullopt, std::nullopt, std::nullopt, huge_lut, {}};
@@ -1038,7 +1047,8 @@ TEST(CFARDetectorOpTest, LiveAlphaLutOverrideStickyAndClearing) {
       std::vector<double>{}, {}};
   const CfarLiveTick missing{input, std::nullopt, std::nullopt, std::nullopt,
                              std::nullopt, {}};
-  const auto result = run_cfar_live({external, clear, missing}, params);
+  const auto result = run_cfar_live({external, clear, missing}, params,
+                                     {.alpha_lut = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
@@ -1058,10 +1068,10 @@ TEST(CFARDetectorOpTest, RejectsMalformedLiveAlphaLut) {
       1, 1, 2, 2);
   lut[1] = std::numeric_limits<double>::quiet_NaN();
   CFARParams params = ca_params(1e-3);
-  params.expect_alpha_lut = true;
   const CfarLiveTick malformed{
       input, std::nullopt, std::nullopt, std::nullopt, lut, {}};
-  const auto result = run_cfar_live({malformed}, params);
+  const auto result = run_cfar_live({malformed}, params,
+                                     {.alpha_lut = true});
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());

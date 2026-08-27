@@ -123,7 +123,7 @@ struct CfarAlphaLutKey {
 // Out: detection_idx   — int64, (num_detections, 2 [+ n_batch]),
 //                       (doppler_bin, range_bin) per row.
 //
-// Live override ports use Exact + SafeDefault and are gated by expect_*.
+// Live override ports use Exact + SafeDefault.
 // Pair-valued windows use CfarCellWindowOverride POD payloads. Variable-length
 // nci_axes / alpha_lut use rank-1 pageable-host config Tensors.
 //
@@ -144,14 +144,6 @@ struct CFARParams {
   bool blocking_alpha_lut_rebuild{false};
   bool peak_only{false};
   CfarPeakNeighborhood peak_neighborhood{CfarPeakNeighborhood::kSquare8};
-  bool expect_pfa{false};
-  bool expect_threshold_scale{false};
-  bool expect_os_rank{false};
-  bool expect_max_detections{false};
-  bool expect_guard_cells{false};
-  bool expect_training_cells{false};
-  bool expect_nci_axes{false};
-  bool expect_alpha_lut{false};
   bool sticky_pfa{true};
   bool sticky_threshold_scale{true};
   bool sticky_os_rank{true};
@@ -210,65 +202,25 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&CFARParams::peak_neighborhood>("peak_neighborhood")
         .description(
             "Neighborhood for peak_only NMS {cross4, square8}; static"),
-    holoscan::field<&CFARParams::expect_pfa>("expect_pfa")
-        .description("Set when the application wires the pfa override."),
-    holoscan::field<&CFARParams::expect_threshold_scale>(
-        "expect_threshold_scale")
-        .description(
-            "Set when the application wires the threshold_scale override."),
-    holoscan::field<&CFARParams::expect_os_rank>("expect_os_rank")
-        .description(
-            "Set when the application wires the os_rank override."),
-    holoscan::field<&CFARParams::expect_max_detections>(
-        "expect_max_detections")
-        .description(
-            "Set when the application wires the max_detections override."),
-    holoscan::field<&CFARParams::expect_guard_cells>("expect_guard_cells")
-        .description(
-            "Set when the application wires the guard_cells override."),
-    holoscan::field<&CFARParams::expect_training_cells>(
-        "expect_training_cells")
-        .description(
-            "Set when the application wires the training_cells override."),
-    holoscan::field<&CFARParams::expect_nci_axes>("expect_nci_axes")
-        .description("Set when the application wires the nci_axes override."),
-    holoscan::field<&CFARParams::expect_alpha_lut>("expect_alpha_lut")
-        .description("Set when the application wires the alpha_lut override."),
     holoscan::field<&CFARParams::sticky_pfa>("sticky_pfa")
-        .description(
-            "Keep the last Exact pfa match on a miss. Ignored unless "
-            "expect_pfa."),
+        .description("Keep the last Exact pfa match on a miss."),
     holoscan::field<&CFARParams::sticky_threshold_scale>(
         "sticky_threshold_scale")
-        .description(
-            "Keep the last Exact threshold_scale match on a miss. Ignored "
-            "unless expect_threshold_scale."),
+        .description("Keep the last Exact threshold_scale match on a miss."),
     holoscan::field<&CFARParams::sticky_os_rank>("sticky_os_rank")
-        .description(
-            "Keep the last Exact os_rank match on a miss. Ignored unless "
-            "expect_os_rank."),
+        .description("Keep the last Exact os_rank match on a miss."),
     holoscan::field<&CFARParams::sticky_max_detections>(
         "sticky_max_detections")
-        .description(
-            "Keep the last Exact max_detections match on a miss. Ignored "
-            "unless expect_max_detections."),
+        .description("Keep the last Exact max_detections match on a miss."),
     holoscan::field<&CFARParams::sticky_guard_cells>("sticky_guard_cells")
-        .description(
-            "Keep the last Exact guard_cells match on a miss. Ignored unless "
-            "expect_guard_cells."),
+        .description("Keep the last Exact guard_cells match on a miss."),
     holoscan::field<&CFARParams::sticky_training_cells>(
         "sticky_training_cells")
-        .description(
-            "Keep the last Exact training_cells match on a miss. Ignored "
-            "unless expect_training_cells."),
+        .description("Keep the last Exact training_cells match on a miss."),
     holoscan::field<&CFARParams::sticky_nci_axes>("sticky_nci_axes")
-        .description(
-            "Keep the last Exact nci_axes match on a miss. Ignored unless "
-            "expect_nci_axes."),
+        .description("Keep the last Exact nci_axes match on a miss."),
     holoscan::field<&CFARParams::sticky_alpha_lut>("sticky_alpha_lut")
-        .description(
-            "Keep the last Exact alpha_lut match on a miss. Ignored unless "
-            "expect_alpha_lut."));
+        .description("Keep the last Exact alpha_lut match on a miss."));
 
 static_assert(holoscan::param_schema_availability<CFARParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -311,7 +263,7 @@ class CFARDetectorOp : public holoscan::Operator<CFARParams> {
   // Always emitted on HSDK 5 (was optional kNone on 4.x). Tests and apps must
   // bind / drain this port.
   Output<Tensor> cfar_power{"cfar_power"};
-  // [live] Exact overrides gated by expect_* (OPERATOR_API.md).
+  // [live] Exact overrides (OPERATOR_API.md).
   Input<double> pfa{"pfa"};
   Input<double> threshold_scale{"threshold_scale"};
   Input<int64_t> os_rank{"os_rank"};

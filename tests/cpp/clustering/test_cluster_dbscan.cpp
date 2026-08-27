@@ -563,7 +563,6 @@ std::shared_ptr<holoscan::Tensor> live_epsilon_points() {
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonExactMatchChangesClustering) {
   ClusterDBSCANParams params = make_params({1.0}, 2);
-  params.expect_epsilon = true;
   params.sticky_epsilon = false;
   const auto out = run_epsilon_override_graph(
       {{live_epsilon_points(), std::vector<double>{3.0, 1.0}}},
@@ -577,7 +576,6 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonExactMatchChangesClustering) {
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonSkewedCaptureMissesExact) {
   ClusterDBSCANParams params = make_params({1.0}, 2);
-  params.expect_epsilon = true;
   params.sticky_epsilon = false;
   const auto out = run_epsilon_override_graph(
       {{live_epsilon_points(), std::vector<double>{3.0, 1.0}, 1}},
@@ -591,7 +589,6 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonSkewedCaptureMissesExact) {
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonStickyKeepsLastExactMatch) {
   ClusterDBSCANParams params = make_params({1.0}, 2);
-  params.expect_epsilon = true;
   params.sticky_epsilon = true;
   const auto out = run_epsilon_override_graph(
       {{live_epsilon_points(), std::vector<double>{3.0, 1.0}},
@@ -607,7 +604,6 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonStickyKeepsLastExactMatch) {
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonEphemeralRevertsToParams) {
   ClusterDBSCANParams params = make_params({1.0}, 2);
-  params.expect_epsilon = true;
   params.sticky_epsilon = false;
   const auto out = run_epsilon_override_graph(
       {{live_epsilon_points(), std::vector<double>{3.0, 1.0}},
@@ -623,7 +619,6 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonEphemeralRevertsToParams) {
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsMalformedVector) {
   ClusterDBSCANParams params = make_params({1.0}, 2);
-  params.expect_epsilon = true;
   const auto out = run_epsilon_override_graph(
       {{live_epsilon_points(), std::vector<double>{}}},
       std::move(params));
@@ -634,7 +629,6 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsMalformedVector) {
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsConfiguredBoundOverflow) {
   ClusterDBSCANParams params = make_params({1.0}, 2);
-  params.expect_epsilon = true;
   const auto out = run_epsilon_override_graph(
       {{live_epsilon_points(), std::vector<double>{1.0, 1.0, 1.0}}},
       std::move(params), 2);

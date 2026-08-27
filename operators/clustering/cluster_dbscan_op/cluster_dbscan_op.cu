@@ -114,12 +114,9 @@ template <typename T>
 Contract ClusterDBSCANOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{points});
-  maybe_add_live_override_to_contract(
-      result, epsilon, params().expect_epsilon);
-  maybe_add_live_override_to_contract(
-      result, min_points, params().expect_min_points);
-  maybe_add_live_override_to_contract(
-      result, max_clusters, params().expect_max_clusters);
+  add_live_override_to_contract(result, epsilon);
+  add_live_override_to_contract(result, min_points);
+  add_live_override_to_contract(result, max_clusters);
   return result;
 }
 
@@ -128,28 +125,30 @@ expected<void, Error> ClusterDBSCANOp<T>::compute(ExecutionContext& context) {
   HOLOSCAN_TRY(auto points_in, receive_tensor(points, kOpName));
 
   const ClusterDBSCANParams& pinned = context.params<ClusterDBSCANParams>();
-  if (pinned.expect_epsilon && max_features_ <= 0) {
-    return fail_invalid(
-        "ClusterDBSCANOp: MaxTensorExtents.max_features must be positive "
-        "when expect_epsilon is true");
-  }
   HOLOSCAN_TRY(
       auto eps,
-      resolve_expected_override_via(
-          pinned.expect_epsilon, epsilon, pinned.epsilon, sticky_epsilon_,
-          pinned.sticky_epsilon,
-          [this](const Tensor& tensor) {
+      resolve_live_override_via(
+          epsilon, pinned.epsilon, sticky_epsilon_, pinned.sticky_epsilon,
+          [this](const Tensor& tensor)
+              -> expected<std::vector<double>, Error> {
+            // The bound only has to exist for a caller that sends overrides,
+            // so this is checked on arrival rather than at every activation.
+            if (max_features_ <= 0) {
+              return make_unexpected(Error{
+                  ErrorCode::kInvalidArgument,
+                  "ClusterDBSCANOp: MaxTensorExtents.max_features must be "
+                  "positive to accept an epsilon override"});
+            }
             return read_host_config_vector<double>(
                 tensor, kFloat64Dtype, max_features_, "epsilon");
           }));
   HOLOSCAN_TRY(auto effective_min_points,
-               resolve_expected_override(pinned.expect_min_points, min_points,
-                                         pinned.min_points, sticky_min_points_,
-                                         pinned.sticky_min_points));
+               resolve_live_override(
+                   min_points, pinned.min_points, sticky_min_points_,
+                   pinned.sticky_min_points));
   HOLOSCAN_TRY(auto effective_max_clusters,
-               resolve_expected_override(
-                   pinned.expect_max_clusters, max_clusters,
-                   pinned.max_clusters, sticky_max_clusters_,
+               resolve_live_override(
+                   max_clusters, pinned.max_clusters, sticky_max_clusters_,
                    pinned.sticky_max_clusters));
   try {
     require_cuda_accessible(points_in, "points", kOpName);
