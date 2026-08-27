@@ -64,17 +64,14 @@ MIMODeinterleaveOp<T>::~MIMODeinterleaveOp() {
 
 template <typename T>
 void MIMODeinterleaveOp<T>::setup(OperatorSpec& spec) {
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  spec.input(adc_cube).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(adc_cube).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.output(adc_cube_out)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = max_rank_,
-          .max_byte_span = max_byte_span_});
+      .produces_tensor(pooled_tensor_output(kDevice, max_rank_, max_byte_span_));
 }
 
 template <typename T>

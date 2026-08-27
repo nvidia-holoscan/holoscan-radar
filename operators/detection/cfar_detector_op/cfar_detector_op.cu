@@ -304,39 +304,32 @@ void CFARDetectorOp<T>::stop() {
 
 template <typename T>
 void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  spec.input(rd_maps).queue_depth(2U).expects_tensor(kDevice);
-  const TensorAllocationBounds map_bounds{
+  spec.input(rd_maps).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  const TensorBounds map_bounds{
       .max_rank = max_map_rank_,
       .max_byte_span = max_map_byte_span_};
   // detection_mask is uint8 — map_bounds (real T) is a safe ceiling.
   spec.output(detection_mask)
-      .produces_tensor(kDevice)
-      .tensor_allocation(map_bounds);
+      .produces_tensor(pooled_tensor_output(kDevice, map_bounds));
   spec.output(detection_score)
-      .produces_tensor(kDevice)
-      .tensor_allocation(map_bounds);
+      .produces_tensor(pooled_tensor_output(kDevice, map_bounds));
   spec.output(noise_estimate)
-      .produces_tensor(kDevice)
-      .tensor_allocation(map_bounds);
+      .produces_tensor(pooled_tensor_output(kDevice, map_bounds));
   spec.output(cfar_power)
-      .produces_tensor(kDevice)
-      .tensor_allocation(map_bounds);
+      .produces_tensor(pooled_tensor_output(kDevice, map_bounds));
   spec.output(detection_idx)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = 2U,
-          .max_byte_span = max_idx_byte_span_});
-  constexpr TensorPortLayout kHostInt64Vector{
+      .produces_tensor(pooled_tensor_output(kDevice, 2U, max_idx_byte_span_));
+  constexpr TensorRepresentation kHostInt64Vector{
       .memory_kind = MemoryKind::kHost,
       .dtype = kInt64Dtype,
       .rank = 1U,
   };
-  constexpr TensorPortLayout kHostFloat64Vector{
+  constexpr TensorRepresentation kHostFloat64Vector{
       .memory_kind = MemoryKind::kHost,
       .dtype = kFloat64Dtype,
       .rank = 1U,
@@ -350,10 +343,10 @@ void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
   spec.input(training_cells).queue_depth(2U);
   spec.input(nci_axes)
       .queue_depth(2U)
-      .expects_tensor(kHostInt64Vector);
+      .expects_tensor(tensor_input(kHostInt64Vector));
   spec.input(alpha_lut)
       .queue_depth(2U)
-      .expects_tensor(kHostFloat64Vector);
+      .expects_tensor(tensor_input(kHostFloat64Vector));
 }
 
 template <typename T>

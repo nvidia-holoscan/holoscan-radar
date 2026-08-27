@@ -104,19 +104,25 @@ class X11RdViewerOp : public holoscan::Operator<> {
   ~X11RdViewerOp() override { shutdown(); }
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    spec.input(rd_image).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(detection_idx).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(range_bins).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(velocity_bins).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(labels).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(rep_idx).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(aoa_estimates).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(label_idx).queue_depth(2U).expects_tensor(kDevice);
+    spec.input(rd_image).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(detection_idx)
+        .queue_depth(2U)
+        .expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(range_bins).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(velocity_bins)
+        .queue_depth(2U)
+        .expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(labels).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(rep_idx).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(aoa_estimates)
+        .queue_depth(2U)
+        .expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(label_idx).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

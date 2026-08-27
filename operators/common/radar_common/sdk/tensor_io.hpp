@@ -19,6 +19,7 @@
 #include <holoscan/core/expected_macros.hpp>
 #include <holoscan/core/payload_options.hpp>
 #include <holoscan/core/port.hpp>
+#include <holoscan/core/tensor_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 
 namespace holoscan::radar {
@@ -26,6 +27,36 @@ namespace holoscan::radar {
 // HSDK 5 Tensor port helpers. Ports carry a plain holoscan::Tensor (no
 // TensorMap). Receive/emit return expected<>; callers propagate with
 // HOLOSCAN_TRY. The runtime compute stream is context.cuda_stream().
+
+// Port specs. A TensorRepresentation states the facts a port constrains
+// (memory kind / dtype / rank); a consumer constrains only those, while a
+// producer that wants Runtime-owned loans also sizes its pool.
+
+inline TensorInputSpec tensor_input(
+    const TensorRepresentation& representation) {
+  return TensorInputSpec{.representation = representation};
+}
+
+// A producer that hands on storage it does not own (no loans allocated).
+inline TensorOutputSpec tensor_output(
+    const TensorRepresentation& representation) {
+  return TensorOutputSpec{.representation = representation};
+}
+
+inline TensorOutputSpec pooled_tensor_output(
+    const TensorRepresentation& representation, const TensorBounds& bounds) {
+  return TensorOutputSpec{.representation = representation,
+                          .bounds = bounds,
+                          .storage = TensorOutputStorage::kRuntimePool};
+}
+
+inline TensorOutputSpec pooled_tensor_output(
+    const TensorRepresentation& representation, std::uint32_t max_rank,
+    std::uint64_t max_byte_span) {
+  return pooled_tensor_output(
+      representation,
+      TensorBounds{.max_rank = max_rank, .max_byte_span = max_byte_span});
+}
 
 inline expected<Tensor, Error> receive_tensor(Input<Tensor>& port,
                                               const std::string& who) {

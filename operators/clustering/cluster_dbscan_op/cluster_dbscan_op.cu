@@ -88,30 +88,24 @@ template <typename T>
 void ClusterDBSCANOp<T>::setup(OperatorSpec& spec) {
   // Declare device storage only; dtype is enforced in compute() so one
   // operator binary still serves F32/F64 and the harness can feed either.
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  constexpr TensorPortLayout kHostVector{
+  constexpr TensorRepresentation kHostVector{
       .memory_kind = MemoryKind::kHost,
       .dtype = kFloat64Dtype,
       .rank = 1U,
   };
-  spec.input(points).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(points).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.output(labels)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = 1U,
-          .max_byte_span = max_labels_byte_span_});
+      .produces_tensor(pooled_tensor_output(kDevice, 1U, max_labels_byte_span_));
   spec.output(sizes)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = 1U,
-          .max_byte_span = max_sizes_byte_span_});
+      .produces_tensor(pooled_tensor_output(kDevice, 1U, max_sizes_byte_span_));
   // [live] override ports. Leaving them unconnected is legal; compute() seeds
   // from Params and logical sticky state owns converted vector values.
-  spec.input(epsilon).queue_depth(2U).expects_tensor(kHostVector);
+  spec.input(epsilon).queue_depth(2U).expects_tensor(tensor_input(kHostVector));
   spec.input(min_points).queue_depth(2U);
   spec.input(max_clusters).queue_depth(2U);
 }

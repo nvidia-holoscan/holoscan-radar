@@ -88,33 +88,28 @@ template <typename T>
 void BeamscanEstimatorOp<T>::setup(OperatorSpec& spec) {
   // Declare device storage only; dtype is enforced in compute() so one
   // operator binary still serves F32/F64 and the harness can feed either.
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  constexpr TensorPortLayout kHostF64{
+  constexpr TensorRepresentation kHostF64{
       .memory_kind = MemoryKind::kHost,
       .dtype = DLDataType{kDLFloat, 64U, 1U},
       .rank = 1U,
   };
-  spec.input(snapshot).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(snapshot).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   // Optional is_valid: SafeDefault / omitted from contract so unconnected
   // graphs compile and activate.
-  spec.input(is_valid).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(is_valid).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.output(aoa_estimates)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = 2U,
-          .max_byte_span = aoa_max_byte_span_});
+      .produces_tensor(pooled_tensor_output(kDevice, 2U, aoa_max_byte_span_));
   spec.output(angle_spectrum)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = max_rank_,
-          .max_byte_span = spectrum_max_byte_span_});
+      .produces_tensor(pooled_tensor_output(
+          kDevice, max_rank_, spectrum_max_byte_span_));
   spec.input(array_geometry).queue_depth(2U);
-  spec.input(az_angles).queue_depth(2U).expects_tensor(kHostF64);
-  spec.input(el_angles).queue_depth(2U).expects_tensor(kHostF64);
+  spec.input(az_angles).queue_depth(2U).expects_tensor(tensor_input(kHostF64));
+  spec.input(el_angles).queue_depth(2U).expects_tensor(tensor_input(kHostF64));
   spec.input(array_taper).queue_depth(2U);
   spec.input(peak_interpolation).queue_depth(2U);
 }

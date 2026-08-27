@@ -49,6 +49,7 @@
 #include <holoscan/time/realtime_clock.hpp>
 
 #include "radar_common/sdk/override_param.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "utils/perf_app.hpp"
 
 namespace holoscan::radar::perf {
@@ -330,15 +331,14 @@ inline void record_start_locked() {
 class PerfTensorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(out, "out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_a()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_a()));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -384,15 +384,14 @@ class PerfTensorOverrideSourceOp final : public holoscan::Operator<> {
         override_value_(std::move(override_value)) {}
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(out, "out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_a()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_a()));
     spec.output(override_out, "override_out");
   }
 
@@ -444,19 +443,17 @@ class PerfTensorOverrideSourceOp final : public holoscan::Operator<> {
 class PerfDualTensorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(out_a, "out_a")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_a()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_a()));
     spec.output(out_b, "out_b")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_b()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_b()));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -501,19 +498,17 @@ class PerfDualTensorOverrideSourceOp final : public holoscan::Operator<> {
         override_value_(std::move(override_value)) {}
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(out_a, "out_a")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_a()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_a()));
     spec.output(out_b, "out_b")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_b()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_b()));
     spec.output(override_out, "override_out");
   }
 
@@ -569,23 +564,20 @@ class PerfDualTensorOverrideSourceOp final : public holoscan::Operator<> {
 class PerfTripleTensorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(out_a, "out_a")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_a()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_a()));
     spec.output(out_b, "out_b")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_b()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_b()));
     spec.output(out_c, "out_c")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_c()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_c()));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

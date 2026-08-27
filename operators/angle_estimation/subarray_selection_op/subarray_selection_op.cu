@@ -100,39 +100,32 @@ SubarraySelectionOp<T>::SubarraySelectionOp(
 
 template <typename T>
 void SubarraySelectionOp<T>::setup(OperatorSpec& spec) {
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  constexpr TensorPortLayout kHostIndexVector{
+  constexpr TensorRepresentation kHostIndexVector{
       .memory_kind = MemoryKind::kHost,
       .dtype = DLDataType{kDLInt, 64U, 1U},
       .rank = 1U,
   };
-  spec.input(snapshot).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(snapshot).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   // Optional is_valid: omitted from contract so unconnected graphs compile.
-  spec.input(is_valid).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(is_valid).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.input(array_geometry_in).queue_depth(2U);
   spec.input(subarray)
       .queue_depth(2U)
-      .expects_tensor(kHostIndexVector);
+      .expects_tensor(tensor_input(kHostIndexVector));
   spec.output(snapshot_out)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = max_rank_,
-          .max_byte_span = snapshot_max_byte_span_});
+      .produces_tensor(pooled_tensor_output(
+          kDevice, max_rank_, snapshot_max_byte_span_));
   // Packed ArrayGeometry (host-planned; H2D each rebuild / tick).
   spec.output(array_geometry)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = 2U,
-          .max_byte_span = geom_max_byte_span_});
+      .produces_tensor(pooled_tensor_output(kDevice, 2U, geom_max_byte_span_));
   spec.output(is_valid_out)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = max_rank_,
-          .max_byte_span = is_valid_max_byte_span_});
+      .produces_tensor(pooled_tensor_output(
+          kDevice, max_rank_, is_valid_max_byte_span_));
 }
 
 template <typename T>

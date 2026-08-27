@@ -47,6 +47,7 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/fmcw_waveform_bridge.hpp"
 #include "radar_schemas/window_spec_bridge.hpp"
@@ -553,15 +554,14 @@ holoscan::expected<void, holoscan::Error> emit_cube_at(
 class LiveNfftSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(cube, "out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
     spec.output(nfft, "nfft");
   }
 
@@ -788,38 +788,32 @@ holoscan::expected<void, holoscan::Error> emit_descriptor_tensor(
 class LiveRangeDescriptorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    constexpr holoscan::TensorPortLayout kWindow{
+    constexpr holoscan::TensorRepresentation kWindow{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = DLDataType{kDLFloat, 64U, 1U},
         .rank = 1U,
     };
-    constexpr holoscan::TensorPortLayout kWaveform{
+    constexpr holoscan::TensorRepresentation kWaveform{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = DLDataType{kDLComplex, 128U, 1U},
         .rank = 1U,
     };
     spec.output(cube, "cube")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
     spec.output(range_window, "range_window")
         .max_emits_per_compute(1U)
-        .produces_tensor(kWindow)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U,
-            .max_byte_span = kSamples * sizeof(double)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kWindow, 1U, kSamples * sizeof(double)));
     spec.output(waveform, "waveform")
         .max_emits_per_compute(1U)
-        .produces_tensor(kWaveform)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U,
-            .max_byte_span =
-                kSamples * sizeof(std::complex<double>)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kWaveform, 1U, kSamples * sizeof(std::complex<double>)));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

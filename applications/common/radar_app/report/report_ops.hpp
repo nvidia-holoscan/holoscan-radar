@@ -76,16 +76,24 @@ class DetectionReportOp : public holoscan::Operator<> {
   std::shared_ptr<CadenceMeter> cadence;
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    spec.input(detection_idx).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(detection_score).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(range_bins).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(velocity_bins).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(aoa_estimates).queue_depth(2U).expects_tensor(kDevice);
+    spec.input(detection_idx)
+        .queue_depth(2U)
+        .expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(detection_score)
+        .queue_depth(2U)
+        .expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(range_bins).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(velocity_bins)
+        .queue_depth(2U)
+        .expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(aoa_estimates)
+        .queue_depth(2U)
+        .expects_tensor(holoscan::radar::tensor_input(kDevice));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -311,18 +319,22 @@ class ClusterReportOp : public holoscan::Operator<> {
         cadence_(std::move(config.cadence)) {}
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    spec.input(points).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(labels).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(sizes).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(rep_idx).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(range_bins).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(velocity_bins).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(detection_idx).queue_depth(2U).expects_tensor(kDevice);
+    spec.input(points).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(labels).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(sizes).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(rep_idx).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(range_bins).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(velocity_bins)
+        .queue_depth(2U)
+        .expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(detection_idx)
+        .queue_depth(2U)
+        .expects_tensor(holoscan::radar::tensor_input(kDevice));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

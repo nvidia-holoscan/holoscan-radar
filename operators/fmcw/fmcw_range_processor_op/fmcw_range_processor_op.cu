@@ -226,27 +226,25 @@ FMCWRangeProcessorOp<T>::~FMCWRangeProcessorOp() = default;
 
 template <typename T>
 void FMCWRangeProcessorOp<T>::setup(OperatorSpec& spec) {
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  const TensorAllocationBounds fat_bounds{
+  const TensorBounds fat_bounds{
       .max_rank = max_rank_,
       .max_byte_span = max_byte_span_};
-  const TensorAllocationBounds bins_bounds{
+  const TensorBounds bins_bounds{
       .max_rank = 1U,
       .max_byte_span = range_bins_byte_span_};
 
-  spec.input(adc_cube).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(adc_cube).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.input(range_window_in).queue_depth(2U);
   spec.input(waveform_in).queue_depth(2U);
   spec.output(range_profiles)
-      .produces_tensor(kDevice)
-      .tensor_allocation(fat_bounds);
+      .produces_tensor(pooled_tensor_output(kDevice, fat_bounds));
   spec.output(range_bins)
-      .produces_tensor(kDevice)
-      .tensor_allocation(bins_bounds);
+      .produces_tensor(pooled_tensor_output(kDevice, bins_bounds));
 
   // [live] Exact override ports.
   spec.input(apply_dechirp_in).queue_depth(2U);

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Standalone Holoscan Graph reproducer (no radar / GTest).
-// EA v5.0.0.1: TensorPortLayout + TensorAllocationBounds.
+// EA v5.0.0.1: TensorRepresentation + TensorBounds.
 //
 // Question for Holoscan: kLocalEnum is "admitted only on local typed Graph
 // edges". Does a local edge that also carries a CUDA Tensor bind, or is
@@ -117,15 +117,17 @@ template <typename Sideband>
 class CoEmitSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(tensor_out, "tensor_out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U, .max_byte_span = sizeof(float)});
+        .produces_tensor(holoscan::TensorOutputSpec{
+            .representation = kDevice,
+            .bounds = holoscan::TensorBounds{.max_rank = 1U,
+                                             .max_byte_span = sizeof(float)},
+            .storage = holoscan::TensorOutputStorage::kRuntimePool});
     spec.output(sideband_out, "sideband_out");
   }
 
@@ -164,17 +166,21 @@ template <typename Sideband>
 class PassThroughOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    spec.input(in, "in").queue_depth(4U).expects_tensor(kDevice);
+    spec.input(in, "in")
+        .queue_depth(4U)
+        .expects_tensor(holoscan::TensorInputSpec{.representation = kDevice});
     spec.input(sideband, "sideband").queue_depth(4U);
     spec.output(out, "out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U, .max_byte_span = sizeof(float)});
+        .produces_tensor(holoscan::TensorOutputSpec{
+            .representation = kDevice,
+            .bounds = holoscan::TensorBounds{.max_rank = 1U,
+                                             .max_byte_span = sizeof(float)},
+            .storage = holoscan::TensorOutputStorage::kRuntimePool});
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

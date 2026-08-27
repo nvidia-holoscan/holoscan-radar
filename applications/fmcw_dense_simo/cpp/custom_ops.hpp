@@ -50,17 +50,20 @@ class AnglePeakPickOp : public holoscan::Operator<> {
   }
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    spec.input(detection_idx).queue_depth(2U).expects_tensor(kDevice);
-    spec.input(detection_score).queue_depth(2U).expects_tensor(kDevice);
+    spec.input(detection_idx)
+        .queue_depth(2U)
+        .expects_tensor(holoscan::radar::tensor_input(kDevice));
+    spec.input(detection_score)
+        .queue_depth(2U)
+        .expects_tensor(holoscan::radar::tensor_input(kDevice));
     spec.output(detection_idx_out)
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 2U, .max_byte_span = max_byte_span_});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 2U, max_byte_span_));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -219,16 +222,17 @@ class CubeAoaLookupOp : public holoscan::Operator<> {
   }
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    spec.input(detection_idx).queue_depth(2U).expects_tensor(kDevice);
+    spec.input(detection_idx)
+        .queue_depth(2U)
+        .expects_tensor(holoscan::radar::tensor_input(kDevice));
     spec.output(aoa_estimates)
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 2U, .max_byte_span = max_byte_span_});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 2U, max_byte_span_));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -336,16 +340,15 @@ class TrailingIdxColumnsOp : public holoscan::Operator<> {
   }
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    spec.input(idx).queue_depth(2U).expects_tensor(kDevice);
+    spec.input(idx).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
     spec.output(idx_out)
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 2U, .max_byte_span = max_byte_span_});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 2U, max_byte_span_));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

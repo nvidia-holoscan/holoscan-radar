@@ -134,55 +134,41 @@ template <typename T>
 void MUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
   // Declare device storage only; dtype is enforced in compute() so one
   // operator binary still serves F32/F64 and the harness can feed either.
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  constexpr TensorPortLayout kHostF64Vector{
+  constexpr TensorRepresentation kHostF64Vector{
       .memory_kind = MemoryKind::kHost,
       .dtype = DLDataType{kDLFloat, 64U, 1U},
       .rank = 1U,
   };
-  spec.input(snapshot).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(snapshot).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   // Optional is_valid: omitted from contract so unconnected graphs compile.
-  spec.input(is_valid).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(is_valid).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.output(aoa_estimates)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = 2U,
-          .max_byte_span = aoa_max_byte_span_});
+      .produces_tensor(pooled_tensor_output(kDevice, 2U, aoa_max_byte_span_));
   // Optional in OPERATOR_API.md — always emitted so unwired consumers do
   // not need Connectivity gating; tests bind/wire all five (OPEN_ITEMS).
   spec.output(angle_spectrum)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = 3U,
-          .max_byte_span = spectrum_max_byte_span_});
+      .produces_tensor(pooled_tensor_output(
+          kDevice, 3U, spectrum_max_byte_span_));
   spec.output(doa_multi)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = 3U,
-          .max_byte_span = doa_max_byte_span_});
+      .produces_tensor(pooled_tensor_output(kDevice, 3U, doa_max_byte_span_));
   spec.output(source_count)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = 1U,
-          .max_byte_span = count_max_byte_span_});
+      .produces_tensor(pooled_tensor_output(kDevice, 1U, count_max_byte_span_));
   spec.output(eigenvalues)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = 2U,
-          .max_byte_span = eig_max_byte_span_});
+      .produces_tensor(pooled_tensor_output(kDevice, 2U, eig_max_byte_span_));
   // [live] sticky overrides. Leaving unconnected is legal when expect_* is
   // false; enabled ports join snapshot through Exact + SafeDefault.
   spec.input(array_geometry).queue_depth(2U);
   spec.input(az_angles)
       .queue_depth(2U)
-      .expects_tensor(kHostF64Vector);
+      .expects_tensor(tensor_input(kHostF64Vector));
   spec.input(el_angles)
       .queue_depth(2U)
-      .expects_tensor(kHostF64Vector);
+      .expects_tensor(tensor_input(kHostF64Vector));
   spec.input(spatial_smoothing).queue_depth(2U);
   spec.input(num_sources).queue_depth(2U);
   spec.input(source_count_pfa).queue_depth(2U);

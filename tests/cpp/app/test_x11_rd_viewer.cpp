@@ -71,7 +71,7 @@ struct SmokeBank {
 class SmokeSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
@@ -79,9 +79,8 @@ class SmokeSourceOp final : public holoscan::Operator<> {
     const std::size_t span = tensor_byte_span(
         std::vector<int64_t>{kDoppler, kRange}, complex_dtype<float>());
     spec.output(out, "out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 2U, .max_byte_span = span});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 2U, span));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -131,12 +130,12 @@ class SmokeSourceOp final : public holoscan::Operator<> {
 class PresentCountOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    spec.input(in, "in").queue_depth(8U).expects_tensor(kDevice);
+    spec.input(in, "in").queue_depth(8U).expects_tensor(holoscan::radar::tensor_input(kDevice));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -327,16 +326,16 @@ class OverlaySourceOp final : public holoscan::Operator<> {
                       holoscan::Output<holoscan::Tensor>& port,
                       const char* name, const std::vector<int64_t>& shape,
                       DLDataType dtype) {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(port, name)
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = static_cast<uint32_t>(shape.size()),
-            .max_byte_span = tensor_byte_span(shape, dtype)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice,
+            static_cast<uint32_t>(shape.size()),
+            tensor_byte_span(shape, dtype)));
   }
 
   static holoscan::expected<void, holoscan::Error> emit_copy(

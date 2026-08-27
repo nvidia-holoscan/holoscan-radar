@@ -94,31 +94,28 @@ template <typename T, typename ScoreFn>
 void DetectionReductionOp<T, ScoreFn>::setup(OperatorSpec& spec) {
   // Declare device storage only; dtype is enforced in compute() so one
   // operator binary still serves F32/F64 and the harness can feed either.
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  constexpr TensorPortLayout kHostVector{
+  constexpr TensorRepresentation kHostVector{
       .memory_kind = MemoryKind::kHost,
       .dtype = kFloat64Dtype,
       .rank = 1U,
   };
-  spec.input(labels).queue_depth(2U).expects_tensor(kDevice);
-  spec.input(detection_idx).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(labels).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  spec.input(detection_idx).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   // Optional points: SafeDefault / omitted from contract so unconnected
   // graphs compile (required at runtime unless representative == first).
-  spec.input(points).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(points).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.output(rep_idx)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = 2U,
-          .max_byte_span = max_byte_span_});
+      .produces_tensor(pooled_tensor_output(kDevice, 2U, max_byte_span_));
   // [live] override ports. Leaving them unconnected is legal; compute() seeds
   // from Params and logical sticky state owns converted vector values.
   spec.input(representative).queue_depth(2U);
   spec.input(score_method).queue_depth(2U);
-  spec.input(feature_weights).queue_depth(2U).expects_tensor(kHostVector);
+  spec.input(feature_weights).queue_depth(2U).expects_tensor(tensor_input(kHostVector));
 }
 
 template <typename T, typename ScoreFn>

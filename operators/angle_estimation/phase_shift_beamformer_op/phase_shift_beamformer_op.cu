@@ -68,26 +68,23 @@ template <typename T>
 void PhaseShiftBeamformerOp<T>::setup(OperatorSpec& spec) {
   // Declare device storage only; dtype is enforced in compute() so one
   // operator binary still serves F32/F64 and the harness can feed either.
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,  // rank-agnostic batching
   };
-  constexpr TensorPortLayout kHostF64{
+  constexpr TensorRepresentation kHostF64{
       .memory_kind = MemoryKind::kHost,
       .dtype = DLDataType{kDLFloat, 64U, 1U},
       .rank = 1U,
   };
-  spec.input(rd_maps).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(rd_maps).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.input(array_geometry).queue_depth(2U);
-  spec.input(az_angles).queue_depth(2U).expects_tensor(kHostF64);
-  spec.input(el_angles).queue_depth(2U).expects_tensor(kHostF64);
+  spec.input(az_angles).queue_depth(2U).expects_tensor(tensor_input(kHostF64));
+  spec.input(el_angles).queue_depth(2U).expects_tensor(tensor_input(kHostF64));
   spec.input(array_taper).queue_depth(2U);
   spec.output(rda_cube)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = max_rank_,
-          .max_byte_span = max_byte_span_});
+      .produces_tensor(pooled_tensor_output(kDevice, max_rank_, max_byte_span_));
 }
 
 template <typename T>

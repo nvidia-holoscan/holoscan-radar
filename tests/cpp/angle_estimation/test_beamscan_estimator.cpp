@@ -38,6 +38,7 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/dsp/angle_convention.hpp"
 #include "radar_common/math/constants.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
 #include "radar_schemas/window_spec_bridge.hpp"
@@ -316,42 +317,38 @@ holoscan::expected<void, holoscan::Error> emit_beamscan_wire_doubles(
 class LiveBeamscanSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    constexpr holoscan::TensorPortLayout kHostVector{
+    constexpr holoscan::TensorRepresentation kHostVector{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = DLDataType{kDLFloat, 64U, 1U},
         .rank = 1U,
     };
-    constexpr holoscan::TensorPortLayout kHostMatrix{
+    constexpr holoscan::TensorRepresentation kHostMatrix{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = DLDataType{kDLFloat, 64U, 1U},
         .rank = 2U,
     };
     spec.output(snapshot)
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
     spec.output(array_geometry)
         .max_emits_per_compute(1U)
-        .produces_tensor(kHostMatrix)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 2U, .max_byte_span = 4096U * sizeof(double)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kHostMatrix, 2U, 4096U * sizeof(double)));
     for (auto* output : {&az_angles, &el_angles}) {
       spec.output(*output)
           .max_emits_per_compute(1U)
-          .produces_tensor(kHostVector)
-          .tensor_allocation(holoscan::TensorAllocationBounds{
-              .max_rank = 1U, .max_byte_span = 4096U * sizeof(double)});
+          .produces_tensor(holoscan::radar::pooled_tensor_output(
+              kHostVector, 1U, 4096U * sizeof(double)));
     }
     spec.output(array_taper)
         .max_emits_per_compute(1U)
-        .produces_tensor(kHostVector)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U, .max_byte_span = 4096U * sizeof(double)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kHostVector, 1U, 4096U * sizeof(double)));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

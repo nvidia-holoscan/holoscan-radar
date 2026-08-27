@@ -90,16 +90,15 @@ class SnapshotK1SliceOp : public holoscan::Operator<> {
   }
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    spec.input(snapshot_in).queue_depth(2U).expects_tensor(kDevice);
+    spec.input(snapshot_in).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
     spec.output(snapshot_out)
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 3U, .max_byte_span = max_byte_span_});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 3U, max_byte_span_));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -211,17 +210,16 @@ class EstimatorRouterOp : public holoscan::Operator<> {
   }
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    spec.input(snapshot_in).queue_depth(2U).expects_tensor(kDevice);
+    spec.input(snapshot_in).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
     auto declare_out = [&](holoscan::Output<holoscan::Tensor>& port) {
       spec.output(port)
-          .produces_tensor(kDevice)
-          .tensor_allocation(holoscan::TensorAllocationBounds{
-              .max_rank = 3U, .max_byte_span = max_byte_span_});
+          .produces_tensor(holoscan::radar::pooled_tensor_output(
+              kDevice, 3U, max_byte_span_));
     };
     declare_out(snapshot_beamscan);
     declare_out(snapshot_mvdr);
@@ -362,13 +360,13 @@ class AoaMergeOp : public holoscan::Operator<> {
   }
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     auto declare_in = [&](holoscan::Input<holoscan::Tensor>& port) {
-      spec.input(port).queue_depth(2U).expects_tensor(kDevice);
+      spec.input(port).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
     };
     declare_in(aoa_beamscan);
     declare_in(aoa_mvdr);
@@ -376,13 +374,11 @@ class AoaMergeOp : public holoscan::Operator<> {
     declare_in(aoa_root_music);
     declare_in(aoa_esprit);
     spec.output(aoa_estimates)
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 2U, .max_byte_span = max_byte_span_});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 2U, max_byte_span_));
     spec.output(estimator_idx)
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U, .max_byte_span = sizeof(int64_t)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 1U, sizeof(int64_t)));
   }
 
   // Empty contract → synthesized OnAnyInput (HSDK 5 default for inputful ops).

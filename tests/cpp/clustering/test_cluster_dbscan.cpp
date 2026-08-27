@@ -35,6 +35,7 @@
 #include <holoscan/time/realtime_clock.hpp>
 
 #include "clustering/cluster_dbscan_op/cluster_dbscan_op.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
@@ -409,25 +410,23 @@ struct LiveEpsilonBank {
 class LiveEpsilonSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    constexpr holoscan::TensorPortLayout kHostVector{
+    constexpr holoscan::TensorRepresentation kHostVector{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = kFloat64Dtype,
         .rank = 1U,
     };
     spec.output(points, "out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 2U, .max_byte_span = 4096U});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 2U, 4096U));
     spec.output(epsilon, "epsilon")
         .max_emits_per_compute(1U)
-        .produces_tensor(kHostVector)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U, .max_byte_span = 128U * sizeof(double)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kHostVector, 1U, 128U * sizeof(double)));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

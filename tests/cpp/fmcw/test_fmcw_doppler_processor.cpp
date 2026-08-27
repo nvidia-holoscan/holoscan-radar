@@ -38,6 +38,7 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/math/constants.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/fmcw_waveform_bridge.hpp"
 #include "radar_schemas/window_spec_bridge.hpp"
@@ -570,30 +571,25 @@ holoscan::expected<void, holoscan::Error> emit_doppler_descriptor_tensor(
 class LiveDopplerDescriptorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice};
-    constexpr holoscan::TensorPortLayout kWindow{
+    constexpr holoscan::TensorRepresentation kWindow{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = DLDataType{kDLFloat, 64U, 1U},
         .rank = 1U};
-    constexpr holoscan::TensorPortLayout kWaveform{
+    constexpr holoscan::TensorRepresentation kWaveform{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = DLDataType{kDLComplex, 128U, 1U},
         .rank = 1U};
     spec.output(profiles, "profiles")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
     spec.output(doppler_window, "doppler_window")
-        .produces_tensor(kWindow)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U, .max_byte_span = 4096U * sizeof(double)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kWindow, 1U, 4096U * sizeof(double)));
     spec.output(waveform, "waveform")
-        .produces_tensor(kWaveform)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U,
-            .max_byte_span =
-                4096U * sizeof(std::complex<double>)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kWaveform, 1U, 4096U * sizeof(std::complex<double>)));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

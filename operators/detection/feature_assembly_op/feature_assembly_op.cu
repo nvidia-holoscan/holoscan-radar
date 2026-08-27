@@ -152,24 +152,24 @@ template <typename T>
 void FeatureAssemblyOp<T>::setup(OperatorSpec& spec) {
   // Declare device storage only; dtype is enforced in compute() so one
   // operator binary still serves F32/F64 and the harness can feed either.
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  const TensorAllocationBounds bounds{
+  const TensorBounds bounds{
       .max_rank = 2U,
       .max_byte_span = max_byte_span_};
-  spec.input(detection_idx).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(detection_idx).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   // Optional gather sources: registered so they may be wired; omitted from
   // contract() so unconnected apps compile (HSDK5_PORT / Beamscan pattern).
-  spec.input(range_bins).queue_depth(2U).expects_tensor(kDevice);
-  spec.input(velocity_bins).queue_depth(2U).expects_tensor(kDevice);
-  spec.input(detection_score).queue_depth(2U).expects_tensor(kDevice);
-  spec.input(aoa_estimates).queue_depth(2U).expects_tensor(kDevice);
-  spec.input(az_angles).queue_depth(2U).expects_tensor(kDevice);
-  spec.input(el_angles).queue_depth(2U).expects_tensor(kDevice);
-  spec.output(points).produces_tensor(kDevice).tensor_allocation(bounds);
+  spec.input(range_bins).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  spec.input(velocity_bins).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  spec.input(detection_score).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  spec.input(aoa_estimates).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  spec.input(az_angles).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  spec.input(el_angles).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  spec.output(points).produces_tensor(pooled_tensor_output(kDevice, bounds));
 }
 
 template <typename T>

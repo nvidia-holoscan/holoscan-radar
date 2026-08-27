@@ -199,26 +199,24 @@ FMCWDopplerProcessorOp<T>::~FMCWDopplerProcessorOp() = default;
 
 template <typename T>
 void FMCWDopplerProcessorOp<T>::setup(OperatorSpec& spec) {
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  const TensorAllocationBounds fat_bounds{
+  const TensorBounds fat_bounds{
       .max_rank = max_rank_,
       .max_byte_span = max_byte_span_};
-  const TensorAllocationBounds vel_bounds{
+  const TensorBounds vel_bounds{
       .max_rank = 1U,
       .max_byte_span = velocity_bins_byte_span_};
-  spec.input(range_profiles).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(range_profiles).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.input(doppler_window_in).queue_depth(2U);
   spec.input(waveform_in).queue_depth(2U);
   spec.output(rd_maps)
-      .produces_tensor(kDevice)
-      .tensor_allocation(fat_bounds);
+      .produces_tensor(pooled_tensor_output(kDevice, fat_bounds));
   spec.output(velocity_bins)
-      .produces_tensor(kDevice)
-      .tensor_allocation(vel_bounds);
+      .produces_tensor(pooled_tensor_output(kDevice, vel_bounds));
 
   // Sticky [live] POD override ports.
   spec.input(center_zero_doppler_in).queue_depth(2U);

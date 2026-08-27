@@ -32,6 +32,7 @@
 
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
@@ -140,15 +141,14 @@ holoscan::expected<void, holoscan::Error> emit_live_device_frame(
 class CfarLiveDataSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(rd_maps)
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 3U, .max_byte_span = 8U * kDoppler * kRange * 8U});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 3U, 8U * kDoppler * kRange * 8U));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -262,25 +262,22 @@ holoscan::expected<void, holoscan::Error> emit_live_host_tensor(
 class CfarLiveTensorControlsSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kHostInt64{
+    constexpr holoscan::TensorRepresentation kHostInt64{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = kInt64ConfigDtype,
         .rank = 1U,
     };
-    constexpr holoscan::TensorPortLayout kHostFloat64{
+    constexpr holoscan::TensorRepresentation kHostFloat64{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = kFloat64ConfigDtype,
         .rank = 1U,
     };
     spec.output(nci_axes)
-        .produces_tensor(kHostInt64)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 2U, .max_byte_span = 2U * sizeof(int64_t)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kHostInt64, 1U, 2U * sizeof(int64_t)));
     spec.output(alpha_lut)
-        .produces_tensor(kHostFloat64)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U,
-            .max_byte_span = kDoppler * kRange * sizeof(double)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kHostFloat64, 1U, kDoppler * kRange * sizeof(double)));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -999,6 +996,12 @@ TEST(CFARDetectorOpTest, RejectsMalformedLiveCellWindow) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
+// A rank-2 nci_axes never reaches compute: the source's rank-1 pool refuses
+// the loan, so the malformed shape surfaces as a run diagnostic rather than
+// through the operator's own vector guard. Declaring the source rank-2 to
+// smuggle it past is no longer possible either — HSDK 5 rejects a producer
+// whose rank capacity exceeds the consumer's exact rank when the graph
+// compiles (GRAPH_TENSOR_LAYOUT_EDGE_CONFLICT).
 TEST(CFARDetectorOpTest, RejectsMalformedLiveNciAxesTensor) {
   constexpr int64_t kChannels = 2;
   const auto cube = power_cube({kChannels, kDoppler, kRange}, 1.0, {});

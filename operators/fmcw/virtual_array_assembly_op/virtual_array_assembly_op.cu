@@ -91,23 +91,22 @@ VirtualArrayAssemblyOp<T>::~VirtualArrayAssemblyOp() {
 
 template <typename T>
 void VirtualArrayAssemblyOp<T>::setup(OperatorSpec& spec) {
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  const TensorAllocationBounds bounds{
+  const TensorBounds bounds{
       .max_rank = max_rank_,
       .max_byte_span = max_byte_span_};
-  const TensorAllocationBounds geom_bounds{
+  const TensorBounds geom_bounds{
       .max_rank = 2U,
       .max_byte_span = geom_byte_span_};
-  spec.input(rd_maps).queue_depth(2U).expects_tensor(kDevice);
-  spec.output(rd_maps_out).produces_tensor(kDevice).tensor_allocation(bounds);
+  spec.input(rd_maps).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  spec.output(rd_maps_out).produces_tensor(pooled_tensor_output(kDevice, bounds));
   // Packed ArrayGeometry (host-planned; H2D each tick).
   spec.output(array_geometry)
-      .produces_tensor(kDevice)
-      .tensor_allocation(geom_bounds);
+      .produces_tensor(pooled_tensor_output(kDevice, geom_bounds));
   // [live] POD Exact override, registered unconditionally; contract() adds
   // the entry only when expect_wavelength, so leaving it unconnected is
   // legal there. Descriptor / vector live params are Params-only (§9).

@@ -43,6 +43,7 @@
 
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace holoscan::radar::testing {
@@ -160,15 +161,14 @@ inline holoscan::expected<void, holoscan::Error> emit_bank_frame(
 class TensorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(out, "out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -205,15 +205,14 @@ template <typename Payload>
 class TensorOverrideSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(out, "out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
     spec.output(override_out, "override_out");
   }
 
@@ -273,19 +272,17 @@ class TensorOverrideSourceOp final : public holoscan::Operator<> {
 class DualTensorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    const holoscan::TensorAllocationBounds bounds{
+    const holoscan::TensorBounds bounds{
         .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL};
     spec.output(out0, "out0")
-        .produces_tensor(kDevice)
-        .tensor_allocation(bounds);
+        .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, bounds));
     spec.output(out1, "out1")
-        .produces_tensor(kDevice)
-        .tensor_allocation(bounds);
+        .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, bounds));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -324,22 +321,19 @@ class DualTensorSourceOp final : public holoscan::Operator<> {
 class TripleTensorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    const holoscan::TensorAllocationBounds bounds{
+    const holoscan::TensorBounds bounds{
         .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL};
     spec.output(out0, "out0")
-        .produces_tensor(kDevice)
-        .tensor_allocation(bounds);
+        .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, bounds));
     spec.output(out1, "out1")
-        .produces_tensor(kDevice)
-        .tensor_allocation(bounds);
+        .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, bounds));
     spec.output(out2, "out2")
-        .produces_tensor(kDevice)
-        .tensor_allocation(bounds);
+        .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, bounds));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

@@ -69,16 +69,15 @@ class DdmReportVelocityBinsOp : public holoscan::Operator<> {
   }
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    spec.input(sync).queue_depth(2U).expects_tensor(kDevice);
+    spec.input(sync).queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
     spec.output(velocity_bins)
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U, .max_byte_span = max_byte_span_});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 1U, max_byte_span_));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -190,15 +189,14 @@ class MimoTdmAdcSourceOp : public holoscan::Operator<> {
   }
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(adc_cube)
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 3U, .max_byte_span = max_byte_span_});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 3U, max_byte_span_));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -319,15 +317,14 @@ class MimoDdmAdcSourceOp : public holoscan::Operator<> {
   }
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(adc_cube)
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 3U, .max_byte_span = max_byte_span_});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 3U, max_byte_span_));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

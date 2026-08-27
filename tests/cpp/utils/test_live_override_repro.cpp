@@ -85,15 +85,14 @@ struct Bank {
 class DeviceTensorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(out, "out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U, .max_byte_span = sizeof(float)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 1U, sizeof(float)));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -168,15 +167,14 @@ class ScalarOverrideSourceOp final : public holoscan::Operator<> {
 class CoEmitSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(tensor_out, "tensor_out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U, .max_byte_span = sizeof(float)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 1U, sizeof(float)));
     spec.output(scalar_out, "scalar_out");
   }
 
@@ -232,16 +230,15 @@ class CoEmitSourceOp final : public holoscan::Operator<> {
 class PassThroughWithOverrideOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    spec.input(in, "in").queue_depth(2U).expects_tensor(kDevice);
+    spec.input(in, "in").queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
     spec.output(out, "out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U, .max_byte_span = sizeof(float)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 1U, sizeof(float)));
     spec.input(scale, "scale").queue_depth(2U);
   }
 
@@ -289,16 +286,15 @@ class PassThroughWithOverrideOp final : public holoscan::Operator<> {
 class PassThroughWithStickyContractOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    spec.input(in, "in").queue_depth(2U).expects_tensor(kDevice);
+    spec.input(in, "in").queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
     spec.output(out, "out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U, .max_byte_span = sizeof(float)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 1U, sizeof(float)));
     spec.input(scale, "scale").queue_depth(2U);
   }
 

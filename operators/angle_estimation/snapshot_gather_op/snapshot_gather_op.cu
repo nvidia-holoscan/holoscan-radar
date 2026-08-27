@@ -118,23 +118,19 @@ template <typename T>
 void SnapshotGatherOp<T>::setup(OperatorSpec& spec) {
   // Declare device storage only; dtype is enforced in compute() so one
   // operator binary still serves F32/F64 and the harness can feed either.
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,  // rank-agnostic batching
   };
-  spec.input(rd_maps).queue_depth(2U).expects_tensor(kDevice);
-  spec.input(detection_idx).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(rd_maps).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  spec.input(detection_idx).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.output(snapshot)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = snapshot_max_rank_,
-          .max_byte_span = snapshot_max_byte_span_});
+      .produces_tensor(pooled_tensor_output(
+          kDevice, snapshot_max_rank_, snapshot_max_byte_span_));
   spec.output(is_valid)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = snapshot_max_rank_,
-          .max_byte_span = is_valid_max_byte_span_});
+      .produces_tensor(pooled_tensor_output(
+          kDevice, snapshot_max_rank_, is_valid_max_byte_span_));
   // [live] snapshot_window override port. Wired graphs may push window
   // samples; the operator caches the last value (sticky). Leaving the port
   // unconnected is legal — compute() seeds from Params.

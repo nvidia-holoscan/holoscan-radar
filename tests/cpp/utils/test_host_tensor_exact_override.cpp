@@ -83,7 +83,7 @@ struct ProbeBank {
 class HostConfigSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kHostConfig{
+    constexpr holoscan::TensorRepresentation kHostConfig{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = kConfigDtype,
         .rank = 1U,
@@ -91,9 +91,8 @@ class HostConfigSourceOp final : public holoscan::Operator<> {
     spec.output(data, "data");
     spec.output(config, "config")
         .max_emits_per_compute(1U)
-        .produces_tensor(kHostConfig)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U, .max_byte_span = 64U * sizeof(int64_t)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kHostConfig, 1U, 64U * sizeof(int64_t)));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -148,7 +147,7 @@ class HostConfigSourceOp final : public holoscan::Operator<> {
 class HostTensorOverrideProbeOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kHostConfig{
+    constexpr holoscan::TensorRepresentation kHostConfig{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = kConfigDtype,
         .rank = 1U,
@@ -156,7 +155,7 @@ class HostTensorOverrideProbeOp final : public holoscan::Operator<> {
     spec.input(data, "data").queue_depth(4U);
     spec.input(config, "config")
         .queue_depth(4U)
-        .expects_tensor(kHostConfig);
+        .expects_tensor(holoscan::radar::tensor_input(kHostConfig));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

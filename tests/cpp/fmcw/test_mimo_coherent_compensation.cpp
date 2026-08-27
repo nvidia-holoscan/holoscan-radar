@@ -49,6 +49,7 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/math/constants.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/fmcw_waveform_bridge.hpp"
 #include "utils/sdk_harness.hpp"
@@ -278,26 +279,23 @@ holoscan::expected<void, holoscan::Error> emit_wire_waveform(
 class LiveWaveformSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    constexpr holoscan::TensorPortLayout kWaveform{
+    constexpr holoscan::TensorRepresentation kWaveform{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = DLDataType{kDLComplex, 128U, 1U},
         .rank = 1U,
     };
     spec.output(rd_maps, "out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 4U, .max_byte_span = 256ULL * 1024ULL * 1024ULL});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 4U, 256ULL * 1024ULL * 1024ULL));
     spec.output(waveform, "waveform")
         .max_emits_per_compute(1U)
-        .produces_tensor(kWaveform)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U,
-            .max_byte_span = 1024U * sizeof(std::complex<double>)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kWaveform, 1U, 1024U * sizeof(std::complex<double>)));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

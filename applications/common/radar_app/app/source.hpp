@@ -69,15 +69,14 @@ class SimAdcSourceOp : public holoscan::Operator<> {
   }
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(adc_cube)
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = max_rank_, .max_byte_span = max_byte_span_});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, max_rank_, max_byte_span_));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

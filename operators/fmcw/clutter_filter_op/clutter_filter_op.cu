@@ -55,17 +55,14 @@ void ClutterFilterOp<T>::setup(OperatorSpec& spec) {
   // layout.rank stays unset (exact-rank optional); max_rank on allocation
   // admits the named-axis ceiling from extents. Opaque leading batch is
   // rejected in compute().
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  spec.input(range_profiles).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(range_profiles).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.output(range_profiles_out)
-      .produces_tensor(kDevice)
-      .tensor_allocation(TensorAllocationBounds{
-          .max_rank = max_rank_,
-          .max_byte_span = max_byte_span_});
+      .produces_tensor(pooled_tensor_output(kDevice, max_rank_, max_byte_span_));
   // [live] method override. Wired only when expect_method is true.
   spec.input(method).queue_depth(2U);
 }

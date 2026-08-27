@@ -35,6 +35,7 @@
 #include <holoscan/time/realtime_clock.hpp>
 
 #include "detection/detection_reduction_op/detection_reduction_op.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
@@ -494,32 +495,31 @@ struct LiveWeightsBank {
 class LiveWeightsSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    constexpr holoscan::TensorPortLayout kHostVector{
+    constexpr holoscan::TensorRepresentation kHostVector{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = kFloat64Dtype,
         .rank = 1U,
     };
-    const holoscan::TensorAllocationBounds device_bounds{
+    const holoscan::TensorBounds device_bounds{
         .max_rank = 2U, .max_byte_span = 4096U};
     spec.output(labels, "out0")
-        .produces_tensor(kDevice)
-        .tensor_allocation(device_bounds);
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, device_bounds));
     spec.output(detection_idx, "out1")
-        .produces_tensor(kDevice)
-        .tensor_allocation(device_bounds);
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, device_bounds));
     spec.output(points, "out2")
-        .produces_tensor(kDevice)
-        .tensor_allocation(device_bounds);
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, device_bounds));
     spec.output(weights, "feature_weights")
         .max_emits_per_compute(1U)
-        .produces_tensor(kHostVector)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 1U, .max_byte_span = 128U * sizeof(double)});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kHostVector, 1U, 128U * sizeof(double)));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {

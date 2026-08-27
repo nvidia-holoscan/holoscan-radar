@@ -42,6 +42,7 @@
 #include "angle_estimation/subarray_selection_op/subarray_selection_op.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/array_geometry_tensor.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
 #include "utils/sdk_harness.hpp"
@@ -284,16 +285,15 @@ class LiveTickSourceOp final : public holoscan::Operator<> {
 class LiveSnapshotSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.input(tick, "tick").queue_depth(8U);
     spec.output(snapshot, "snapshot")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 3U, .max_byte_span = 1024U * 1024U});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 3U, 1024U * 1024U));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -321,7 +321,7 @@ class LiveSnapshotSourceOp final : public holoscan::Operator<> {
 class LiveGeometrySourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kGeometry{
+    constexpr holoscan::TensorRepresentation kGeometry{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = DLDataType{kDLFloat, 64U, 1U},
         .rank = 2U,
@@ -329,9 +329,8 @@ class LiveGeometrySourceOp final : public holoscan::Operator<> {
     spec.input(tick, "tick").queue_depth(8U);
     spec.output(geometry, "geometry")
         .max_emits_per_compute(1U)
-        .produces_tensor(kGeometry)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 2U, .max_byte_span = 64U * 1024U});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kGeometry, 2U, 64U * 1024U));
     spec.output(next, "next");
   }
 
@@ -377,7 +376,7 @@ class LiveGeometrySourceOp final : public holoscan::Operator<> {
 class LiveSubarrayConfigSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kHost{
+    constexpr holoscan::TensorRepresentation kHost{
         .memory_kind = holoscan::MemoryKind::kHost,
         .dtype = DLDataType{kDLInt, 64U, 1U},
         .rank = 1U,
@@ -385,9 +384,8 @@ class LiveSubarrayConfigSourceOp final : public holoscan::Operator<> {
     spec.input(tick, "tick").queue_depth(8U);
     spec.output(subarray, "subarray")
         .max_emits_per_compute(1U)
-        .produces_tensor(kHost)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 2U, .max_byte_span = 1024U});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kHost, 1U, 1024U));
     spec.output(next, "next");
   }
 
