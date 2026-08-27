@@ -826,10 +826,6 @@ TEST(PhaseShiftBeamformerOpTest, LiveAzGridStickyOverride) {
       make_steering_vector(geom, AngleConvention{}, 0.0, 0.0);
   auto rd = vector_to_rd_maps<double>(vec, {kN, 1, 1});
   auto params = make_params(geom, AngleConvention{}, {-0.1, 0.0, 0.1}, {0.0});
-  params.expect_array_geometry = true;
-  params.expect_az_angles = true;
-  params.expect_el_angles = true;
-  params.expect_array_taper = true;
   const GraphRunResult out = run_live_beamformer_graph(
       {{rd}, {rd, std::nullopt, linspace(-0.2, 0.2, 5)}, {rd}},
       std::move(params));
@@ -848,10 +844,6 @@ TEST(PhaseShiftBeamformerOpTest, LiveElGridStickyOverride) {
       make_steering_vector(geom, AngleConvention{}, 0.0, 0.0),
       {kN, 1, 1});
   auto params = make_params(geom, AngleConvention{}, {0.0}, {0.0});
-  params.expect_array_geometry = true;
-  params.expect_az_angles = true;
-  params.expect_el_angles = true;
-  params.expect_array_taper = true;
   const GraphRunResult out = run_live_beamformer_graph(
       {{rd},
        {rd, std::nullopt, std::nullopt,
@@ -875,10 +867,6 @@ TEST(PhaseShiftBeamformerOpTest, LiveArrayGeometryStickyOverride) {
       {kN, 1, 1});
   auto params = make_params(
       geom, AngleConvention{}, linspace(-0.4, 0.4, 9), {0.0});
-  params.expect_array_geometry = true;
-  params.expect_az_angles = true;
-  params.expect_el_angles = true;
-  params.expect_array_taper = true;
   const GraphRunResult out = run_live_beamformer_graph(
       {{rd}, {rd, changed}, {rd}}, std::move(params));
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
@@ -898,10 +886,6 @@ TEST(PhaseShiftBeamformerOpTest, LiveArrayTaperStickyOverride) {
   hann.type = WindowType::kHann;
   auto params = make_params(
       geom, AngleConvention{}, linspace(-0.4, 0.4, 17), {0.0});
-  params.expect_array_geometry = true;
-  params.expect_az_angles = true;
-  params.expect_el_angles = true;
-  params.expect_array_taper = true;
   const GraphRunResult out = run_live_beamformer_graph(
       {{rd}, {rd, std::nullopt, std::nullopt, std::nullopt, hann}, {rd}},
       std::move(params));
@@ -919,10 +903,6 @@ TEST(PhaseShiftBeamformerOpTest, LiveOverridesRejectMalformedAndBounds) {
       make_steering_vector(geom, AngleConvention{}, 0.0, 0.0),
       {kN, 1, 1});
   auto params = make_params(geom, AngleConvention{}, {0.0}, {0.0});
-  params.expect_array_geometry = true;
-  params.expect_az_angles = true;
-  params.expect_el_angles = true;
-  params.expect_array_taper = true;
   const GraphRunResult malformed = run_live_beamformer_graph(
       {{rd, geom, std::nullopt, std::nullopt, std::nullopt, true}}, params);
   ASSERT_TRUE(malformed.plan_ok) << malformed.plan_json;

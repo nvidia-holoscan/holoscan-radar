@@ -58,8 +58,7 @@ namespace holoscan::radar {
 //                       (num_items, post-smoothing num_channels). Always
 //                       emitted. No angle_spectrum (gridless).
 //
-// [EA HSDK5 ONLY] Exact Input, each gated by its expect_* param, for all
-// [live] parameters. subarray_spec, angle_convention, and forward_backward
+// Exact Input for all [live] parameters. subarray_spec, angle_convention, and forward_backward
 // stay Params-only (STATIC / not [live]).
 
 struct ESPRITParams {
@@ -74,13 +73,8 @@ struct ESPRITParams {
   bool forward_backward{true};
   // Static structural; empty vectors = auto.
   ShiftInvariantSubarrayPair subarray_spec{};
-  bool expect_array_geometry{false};
-  bool expect_spatial_smoothing{false};
   bool sticky_array_geometry{true};
   bool sticky_spatial_smoothing{true};
-  bool expect_num_sources{false};
-  bool expect_source_count_pfa{false};
-  bool expect_max_sources{false};
   bool sticky_num_sources{true};
   bool sticky_source_count_pfa{true};
   bool sticky_max_sources{true};
@@ -116,47 +110,19 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&ESPRITParams::subarray_spec>("subarray_spec")
         .description(
             "Shift-invariant subarray pair; empty derives ULA/URA auto"),
-    holoscan::field<&ESPRITParams::expect_array_geometry>(
-        "expect_array_geometry")
-        .description(
-            "Set when the application wires the array_geometry override."),
-    holoscan::field<&ESPRITParams::expect_spatial_smoothing>(
-        "expect_spatial_smoothing")
-        .description(
-            "Set when the application wires the spatial_smoothing override."),
-    holoscan::field<&ESPRITParams::expect_num_sources>("expect_num_sources")
-        .description(
-            "Set when the application wires the num_sources override."),
-    holoscan::field<&ESPRITParams::expect_source_count_pfa>(
-        "expect_source_count_pfa")
-        .description(
-            "Set when the application wires the source_count_pfa override."),
-    holoscan::field<&ESPRITParams::expect_max_sources>("expect_max_sources")
-        .description(
-            "Set when the application wires the max_sources override."),
     holoscan::field<&ESPRITParams::sticky_array_geometry>(
         "sticky_array_geometry")
-        .description(
-            "Keep the last Exact array_geometry match on a miss. Ignored "
-            "unless expect_array_geometry."),
+        .description("Keep the last Exact array_geometry match on a miss."),
     holoscan::field<&ESPRITParams::sticky_spatial_smoothing>(
         "sticky_spatial_smoothing")
-        .description(
-            "Keep the last Exact spatial_smoothing match on a miss. Ignored "
-            "unless expect_spatial_smoothing."),
+        .description("Keep the last Exact spatial_smoothing match on a miss."),
     holoscan::field<&ESPRITParams::sticky_num_sources>("sticky_num_sources")
-        .description(
-            "Keep the last Exact num_sources match on a miss. Ignored "
-            "unless expect_num_sources."),
+        .description("Keep the last Exact num_sources match on a miss."),
     holoscan::field<&ESPRITParams::sticky_source_count_pfa>(
         "sticky_source_count_pfa")
-        .description(
-            "Keep the last Exact source_count_pfa match on a miss. Ignored "
-            "unless expect_source_count_pfa."),
+        .description("Keep the last Exact source_count_pfa match on a miss."),
     holoscan::field<&ESPRITParams::sticky_max_sources>("sticky_max_sources")
-        .description(
-            "Keep the last Exact max_sources match on a miss. Ignored "
-            "unless expect_max_sources."));
+        .description("Keep the last Exact max_sources match on a miss."));
 
 static_assert(holoscan::param_schema_availability<ESPRITParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -186,7 +152,7 @@ class ESPRITEstimatorOp : public holoscan::Operator<ESPRITParams> {
   Output<Tensor> doa_multi{"doa_multi"};
   Output<Tensor> source_count{"source_count"};
   Output<Tensor> eigenvalues{"eigenvalues"};
-  // [live] Exact overrides, gated by expect_* (OPERATOR_API.md).
+  // [live] Exact overrides (OPERATOR_API.md).
   Input<WireArrayGeometry> array_geometry{"array_geometry"};
   Input<SpatialSmoothingOverride> spatial_smoothing{"spatial_smoothing"};
   Input<int64_t> num_sources{"num_sources"};

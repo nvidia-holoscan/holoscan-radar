@@ -70,8 +70,8 @@ void retire_music_matx_caches();
 // Out: eigenvalues     — float32/float64, (num_items, num_channels). Always
 //                       emitted (computed every tick).
 //
-// [live] ports join snapshot with Exact + SafeDefault and are gated by their
-// expect_* Params. angle_convention and forward_backward stay static.
+// [live] ports join snapshot with Exact + SafeDefault. angle_convention
+// and forward_backward stay static.
 
 struct MUSICParams {
   ArrayGeometry array_geometry{};
@@ -89,13 +89,6 @@ struct MUSICParams {
   // Empty → off; [P] ULA; [P_az, P_el] URA.
   std::vector<int64_t> spatial_smoothing{};
   bool forward_backward{true};
-  bool expect_array_geometry{false};
-  bool expect_az_angles{false};
-  bool expect_el_angles{false};
-  bool expect_spatial_smoothing{false};
-  bool expect_num_sources{false};
-  bool expect_source_count_pfa{false};
-  bool expect_max_sources{false};
   bool sticky_array_geometry{true};
   bool sticky_az_angles{true};
   bool sticky_el_angles{true};
@@ -143,30 +136,6 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Include conjugate-reversed looks when spatial_smoothing is "
             "set"),
-    holoscan::field<&MUSICParams::expect_array_geometry>(
-        "expect_array_geometry")
-        .description(
-            "Set when the application wires the array_geometry override."),
-    holoscan::field<&MUSICParams::expect_az_angles>("expect_az_angles")
-        .description(
-            "Set when the application wires the az_angles override."),
-    holoscan::field<&MUSICParams::expect_el_angles>("expect_el_angles")
-        .description(
-            "Set when the application wires the el_angles override."),
-    holoscan::field<&MUSICParams::expect_spatial_smoothing>(
-        "expect_spatial_smoothing")
-        .description(
-            "Set when the application wires the spatial_smoothing override."),
-    holoscan::field<&MUSICParams::expect_num_sources>("expect_num_sources")
-        .description(
-            "Set when the application wires the num_sources override."),
-    holoscan::field<&MUSICParams::expect_source_count_pfa>(
-        "expect_source_count_pfa")
-        .description(
-            "Set when the application wires the source_count_pfa override."),
-    holoscan::field<&MUSICParams::expect_max_sources>("expect_max_sources")
-        .description(
-            "Set when the application wires the max_sources override."),
     holoscan::field<&MUSICParams::sticky_array_geometry>(
         "sticky_array_geometry")
         .description(
@@ -182,18 +151,12 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Keep the last valid Exact spatial_smoothing match on a miss."),
     holoscan::field<&MUSICParams::sticky_num_sources>("sticky_num_sources")
-        .description(
-            "Keep the last Exact num_sources match on a miss. Ignored "
-            "unless expect_num_sources."),
+        .description("Keep the last Exact num_sources match on a miss."),
     holoscan::field<&MUSICParams::sticky_source_count_pfa>(
         "sticky_source_count_pfa")
-        .description(
-            "Keep the last Exact source_count_pfa match on a miss. Ignored "
-            "unless expect_source_count_pfa."),
+        .description("Keep the last Exact source_count_pfa match on a miss."),
     holoscan::field<&MUSICParams::sticky_max_sources>("sticky_max_sources")
-        .description(
-            "Keep the last Exact max_sources match on a miss. Ignored "
-            "unless expect_max_sources."));
+        .description("Keep the last Exact max_sources match on a miss."));
 
 static_assert(holoscan::param_schema_availability<MUSICParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -224,7 +187,7 @@ class MUSICEstimatorOp : public holoscan::Operator<MUSICParams> {
   Output<Tensor> doa_multi{"doa_multi"};
   Output<Tensor> source_count{"source_count"};
   Output<Tensor> eigenvalues{"eigenvalues"};
-  // [live] Exact overrides, gated by expect_*.
+  // [live] Exact overrides.
   Input<WireArrayGeometry> array_geometry{"array_geometry"};
   Input<Tensor> az_angles{"az_angles"};
   Input<Tensor> el_angles{"el_angles"};

@@ -804,7 +804,6 @@ TEST(RootMUSICEstimatorOpTest, LiveArrayGeometryStickyOverride) {
   RootMUSICParams params =
       make_params(make_ula_geometry(kN - 1, 0.5, 1.0), conv,
                   /*num_sources=*/1);
-  params.expect_array_geometry = true;
   std::vector<std::optional<WireArrayGeometry>> payloads;
   payloads.emplace_back(holoscan::radar::to_wire(geometry));
   payloads.emplace_back(std::nullopt);
@@ -828,7 +827,6 @@ TEST(RootMUSICEstimatorOpTest, LiveArrayGeometryStickyOverride) {
 
   RootMUSICParams invalid_params =
       make_params(geometry, conv, /*num_sources=*/1);
-  invalid_params.expect_array_geometry = true;
   WireArrayGeometry malformed_geometry = holoscan::radar::to_wire(geometry);
   malformed_geometry.packed_geometry = to_pageable_host_tensor<double>(
       {1.0}, {1}, real_dtype<double>());
@@ -866,7 +864,6 @@ TEST(RootMUSICEstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
   }
   RootMUSICParams params = make_params(
       geometry, conv, /*num_sources=*/1, 1e-2, 4, /*smoothing=*/{kN + 1});
-  params.expect_spatial_smoothing = true;
   std::vector<std::optional<SpatialSmoothingOverride>> payloads{
       SpatialSmoothingOverride{.count = 1, .first = 2},
       std::nullopt,
@@ -894,7 +891,6 @@ TEST(RootMUSICEstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
 
   RootMUSICParams invalid_params =
       make_params(geometry, conv, /*num_sources=*/1);
-  invalid_params.expect_spatial_smoothing = true;
   const auto invalid =
       run_exact_override_four_out_operator_graph_result<
           RootMUSICEstimatorOp<double>, SpatialSmoothingOverride>(

@@ -57,10 +57,6 @@ struct PhaseShiftBeamformerParams {
   std::vector<double> az_angles{};
   std::vector<double> el_angles{};
   WindowSpec array_taper{};
-  bool expect_array_geometry{false};
-  bool expect_az_angles{false};
-  bool expect_el_angles{false};
-  bool expect_array_taper{false};
   bool sticky_array_geometry{true};
   bool sticky_az_angles{true};
   bool sticky_el_angles{true};
@@ -90,40 +86,18 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&PhaseShiftBeamformerParams::array_taper>("array_taper")
         .description(
             "Amplitude taper across elements for spatial sidelobe control"),
-    holoscan::field<&PhaseShiftBeamformerParams::expect_array_geometry>(
-        "expect_array_geometry")
-        .description(
-            "Set when the application wires the array_geometry override."),
-    holoscan::field<&PhaseShiftBeamformerParams::expect_az_angles>(
-        "expect_az_angles")
-        .description("Set when the application wires the az_angles override."),
-    holoscan::field<&PhaseShiftBeamformerParams::expect_el_angles>(
-        "expect_el_angles")
-        .description("Set when the application wires the el_angles override."),
-    holoscan::field<&PhaseShiftBeamformerParams::expect_array_taper>(
-        "expect_array_taper")
-        .description(
-            "Set when the application wires the array_taper override."),
     holoscan::field<&PhaseShiftBeamformerParams::sticky_array_geometry>(
         "sticky_array_geometry")
-        .description(
-            "Keep the last Exact array_geometry match on a miss. Ignored "
-            "unless expect_array_geometry."),
+        .description("Keep the last Exact array_geometry match on a miss."),
     holoscan::field<&PhaseShiftBeamformerParams::sticky_az_angles>(
         "sticky_az_angles")
-        .description(
-            "Keep the last Exact az_angles match on a miss. Ignored unless "
-            "expect_az_angles."),
+        .description("Keep the last Exact az_angles match on a miss."),
     holoscan::field<&PhaseShiftBeamformerParams::sticky_el_angles>(
         "sticky_el_angles")
-        .description(
-            "Keep the last Exact el_angles match on a miss. Ignored unless "
-            "expect_el_angles."),
+        .description("Keep the last Exact el_angles match on a miss."),
     holoscan::field<&PhaseShiftBeamformerParams::sticky_array_taper>(
         "sticky_array_taper")
-        .description(
-            "Keep the last Exact array_taper match on a miss. Ignored unless "
-            "expect_array_taper."));
+        .description("Keep the last Exact array_taper match on a miss."));
 
 static_assert(
     holoscan::param_schema_availability<PhaseShiftBeamformerParams>() ==

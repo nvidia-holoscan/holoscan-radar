@@ -427,8 +427,18 @@ class LiveMvdrSourceOp final : public holoscan::Operator<> {
   holoscan::Output<SpatialSmoothingOverride> smoothing{"spatial_smoothing"};
 };
 
+// Which override ports the graph wires. The operator declares every entry
+// unconditionally, so this is the application's choice alone.
+struct LiveMvdrWiring {
+  bool geometry{false};
+  bool az{false};
+  bool el{false};
+  bool smoothing{false};
+};
+
 FiveOutGraphRunResult run_live_mvdr(std::vector<LiveMvdrTick> ticks,
-                                    MVDRParams params) {
+                                    MVDRParams params,
+                                    LiveMvdrWiring wiring) {
   FiveOutGraphRunResult result;
   holoscan::radar::testing::detail::FrameBank::reset();
   holoscan::radar::testing::detail::FrameBankB::reset();
@@ -440,10 +450,6 @@ FiveOutGraphRunResult run_live_mvdr(std::vector<LiveMvdrTick> ticks,
 
   holoscan::Graph graph{"mvdr-live-container-overrides"};
   const auto source = graph.op<LiveMvdrSourceOp>("source");
-  const bool expect_geometry = params.expect_array_geometry;
-  const bool expect_az = params.expect_az_angles;
-  const bool expect_el = params.expect_el_angles;
-  const bool expect_smoothing = params.expect_spatial_smoothing;
   auto op = holoscan::radar::testing::emplace_harness_op<
       MVDREstimatorOp<double>>(
       graph, holoscan::radar::testing::default_test_extents());
@@ -460,16 +466,16 @@ FiveOutGraphRunResult run_live_mvdr(std::vector<LiveMvdrTick> ticks,
       graph.op<holoscan::radar::testing::detail::TensorCaptureEOp>("sink4");
   const holoscan::ConnectionOptions q{.queue_depth = 8U};
   graph.add_flow(source->snapshot, op->snapshot, q);
-  if (expect_geometry) {
+  if (wiring.geometry) {
     graph.add_flow(source->geometry, op->array_geometry, q);
   }
-  if (expect_az) {
+  if (wiring.az) {
     graph.add_flow(source->az, op->az_angles, q);
   }
-  if (expect_el) {
+  if (wiring.el) {
     graph.add_flow(source->el, op->el_angles, q);
   }
-  if (expect_smoothing) {
+  if (wiring.smoothing) {
     graph.add_flow(source->smoothing, op->spatial_smoothing, q);
   }
   graph.add_flow(op->aoa_estimates, sink0->in, q);
@@ -1042,7 +1048,6 @@ TEST(MVDREstimatorOpTest, LiveAzGridStickyOverride) {
   const auto block = make_block(geom, conv, 0.0, 0.0, 8, 0.02, 301u);
   auto snap = block_to_device<double>(block, {1, kN, 8});
   MVDRParams params = make_params(geom, conv, {-0.2, 0.2}, {0.0});
-  params.expect_az_angles = true;
   params.sticky_az_angles = true;
 
   const FiveOutGraphRunResult result = run_live_mvdr(
@@ -1050,7 +1055,7 @@ TEST(MVDREstimatorOpTest, LiveAzGridStickyOverride) {
          std::nullopt, std::nullopt, 0},
        {snap, std::nullopt, std::vector<double>{-0.2, -0.1, 0.0, 0.1, 0.2},
          std::nullopt, std::nullopt, 1}},
-      std::move(params));
+      std::move(params), {.az = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
@@ -1077,13 +1082,12 @@ TEST(MVDREstimatorOpTest, LiveArrayGeometryStickyOverride) {
   auto snap = block_to_device<double>(block, {1, kN, 16});
   MVDRParams params =
       make_params(seed_geom, conv, linspace(-0.3, 0.3, 31), {0.0});
-  params.expect_array_geometry = true;
   params.sticky_array_geometry = true;
 
   const FiveOutGraphRunResult result = run_live_mvdr(
       {{snap, live_geom, std::nullopt, std::nullopt, std::nullopt, 0},
        {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0}},
-      std::move(params));
+      std::move(params), {.geometry = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
@@ -1105,14 +1109,13 @@ TEST(MVDREstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
   auto snap = block_to_device<double>(block, {1, kN, 16});
   MVDRParams params =
       make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0});
-  params.expect_spatial_smoothing = true;
   params.sticky_spatial_smoothing = true;
 
   const FiveOutGraphRunResult result = run_live_mvdr(
       {{snap, std::nullopt, std::nullopt, std::nullopt,
          SpatialSmoothingOverride{.count = 1, .first = 3}, 0},
        {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0}},
-      std::move(params));
+      std::move(params), {.smoothing = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
@@ -1129,12 +1132,11 @@ TEST(MVDREstimatorOpTest, LiveSpatialSmoothingRejectsMalformedPod) {
   const auto block = make_block(geom, conv, 0.0, 0.0, 8, 0.02, 304u);
   auto snap = block_to_device<double>(block, {1, kN, 8});
   MVDRParams params = make_params(geom, conv, {0.0}, {0.0});
-  params.expect_spatial_smoothing = true;
 
   const FiveOutGraphRunResult result = run_live_mvdr(
       {{snap, std::nullopt, std::nullopt, std::nullopt,
          SpatialSmoothingOverride{.count = 3}, 0}},
-      std::move(params));
+      std::move(params), {.smoothing = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   EXPECT_TRUE(result.frames1.empty());
@@ -1149,12 +1151,11 @@ TEST(MVDREstimatorOpTest, LiveAzGridRejectsExtentAboveMaxAz) {
   const auto block = make_block(geom, conv, 0.0, 0.0, 8, 0.02, 305u);
   auto snap = block_to_device<double>(block, {1, kN, 8});
   MVDRParams params = make_params(geom, conv, {0.0}, {0.0});
-  params.expect_az_angles = true;
 
   const FiveOutGraphRunResult result = run_live_mvdr(
       {{snap, std::nullopt, std::vector<double>(65U, 0.0), std::nullopt,
          std::nullopt, 0}},
-      std::move(params));
+      std::move(params), {.az = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   EXPECT_TRUE(result.frames1.empty());

@@ -118,16 +118,11 @@ template <typename T>
 Contract BeamscanEstimatorOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{snapshot});
-  maybe_add_live_override_to_contract(
-      result, array_geometry, params().expect_array_geometry);
-  maybe_add_live_override_to_contract(
-      result, az_angles, params().expect_az_angles);
-  maybe_add_live_override_to_contract(
-      result, el_angles, params().expect_el_angles);
-  maybe_add_live_override_to_contract(
-      result, array_taper, params().expect_array_taper);
-  maybe_add_live_override_to_contract(
-      result, peak_interpolation, params().expect_peak_interpolation);
+  add_live_override_to_contract(result, array_geometry);
+  add_live_override_to_contract(result, az_angles);
+  add_live_override_to_contract(result, el_angles);
+  add_live_override_to_contract(result, array_taper);
+  add_live_override_to_contract(result, peak_interpolation);
   return result;
 }
 
@@ -144,16 +139,14 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
   auto next_peak_interp = sticky_peak_interpolation_;
   HOLOSCAN_TRY(
       auto geometry,
-      resolve_expected_override_via(
-          pinned.expect_array_geometry, array_geometry,
-          pinned.array_geometry, next_geometry,
+      resolve_live_override_via(
+          array_geometry, pinned.array_geometry, next_geometry,
           pinned.sticky_array_geometry,
           [](const WireArrayGeometry& value) { return from_wire(value); }));
   HOLOSCAN_TRY(
       auto az,
-      resolve_expected_override_via(
-          pinned.expect_az_angles, az_angles, pinned.az_angles,
-          next_az, pinned.sticky_az_angles,
+      resolve_live_override_via(
+          az_angles, pinned.az_angles, next_az, pinned.sticky_az_angles,
           [&](const Tensor& value) {
             return read_host_config_vector<double>(
                 value, DLDataType{kDLFloat, 64U, 1U}, max_az_,
@@ -161,9 +154,8 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
           }));
   HOLOSCAN_TRY(
       auto el,
-      resolve_expected_override_via(
-          pinned.expect_el_angles, el_angles, pinned.el_angles,
-          next_el, pinned.sticky_el_angles,
+      resolve_live_override_via(
+          el_angles, pinned.el_angles, next_el, pinned.sticky_el_angles,
           [&](const Tensor& value) {
             return read_host_config_vector<double>(
                 value, DLDataType{kDLFloat, 64U, 1U}, max_el_,
@@ -171,16 +163,14 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
           }));
   HOLOSCAN_TRY(
       auto taper,
-      resolve_expected_override_via(
-          pinned.expect_array_taper, array_taper, pinned.array_taper,
-          next_taper, pinned.sticky_array_taper,
+      resolve_live_override_via(
+          array_taper, pinned.array_taper, next_taper,
+          pinned.sticky_array_taper,
           [](const WireWindowSpec& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto peak_interp,
-               resolve_expected_override(pinned.expect_peak_interpolation,
-                                         peak_interpolation,
-                                         pinned.peak_interpolation,
-                                         next_peak_interp,
-                                         pinned.sticky_peak_interpolation));
+               resolve_live_override(
+                   peak_interpolation, pinned.peak_interpolation,
+                   next_peak_interp, pinned.sticky_peak_interpolation));
 
   try {
     geometry.validate();

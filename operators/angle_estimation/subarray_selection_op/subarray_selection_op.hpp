@@ -63,8 +63,6 @@ struct SubarraySelectionParams {
   std::vector<int64_t> subarray{};
   // Minimum acceptable auto-selected sub-array size (error below it).
   int64_t min_subarray_size{2};
-  bool expect_array_geometry{false};
-  bool expect_subarray{false};
   bool sticky_array_geometry{true};
   bool sticky_subarray{true};
 };
@@ -85,23 +83,16 @@ HOLOSCAN_PARAM_SCHEMA(
         "min_subarray_size")
         .description(
             "Auto-selection errors below this many channels"),
-    holoscan::field<&SubarraySelectionParams::expect_array_geometry>(
-        "expect_array_geometry")
-        .description(
-            "Set when the application wires the array_geometry override."),
-    holoscan::field<&SubarraySelectionParams::expect_subarray>(
-        "expect_subarray")
-        .description("Set when the application wires the subarray override."),
     holoscan::field<&SubarraySelectionParams::sticky_array_geometry>(
         "sticky_array_geometry")
         .description(
-            "Keep the last Exact array_geometry match on a miss. False "
-            "reverts to Params. Ignored unless expect_array_geometry."),
+            "Keep the last Exact array_geometry match on a miss. False reverts "
+            "to Params."),
     holoscan::field<&SubarraySelectionParams::sticky_subarray>(
         "sticky_subarray")
         .description(
-            "Keep the last Exact subarray match on a miss. False reverts "
-            "to Params. Ignored unless expect_subarray."));
+            "Keep the last Exact subarray match on a miss. False reverts to "
+            "Params."));
 
 static_assert(
     holoscan::param_schema_availability<SubarraySelectionParams>() ==

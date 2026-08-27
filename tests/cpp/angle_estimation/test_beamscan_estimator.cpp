@@ -670,10 +670,6 @@ TEST(BeamscanEstimatorOpTest, LiveAzGridStickyOverride) {
       make_steering_snapshot(geom, AngleConvention{}, 0.0, 0.0),
       {1, kN});
   auto params = make_params(geom, AngleConvention{}, {-0.1, 0.0, 0.1}, {0.0});
-  params.expect_array_geometry = true;
-  params.expect_az_angles = true;
-  params.expect_el_angles = true;
-  params.expect_array_taper = true;
   const DualIOGraphRunResult out = run_live_beamscan_graph(
       {{snapshot},
        {snapshot, std::nullopt, linspace(-0.2, 0.2, 5)},
@@ -694,10 +690,6 @@ TEST(BeamscanEstimatorOpTest, LiveElGridStickyOverride) {
       make_steering_snapshot(geom, AngleConvention{}, 0.0, 0.0),
       {1, kN});
   auto params = make_params(geom, AngleConvention{}, {0.0}, {0.0});
-  params.expect_array_geometry = true;
-  params.expect_az_angles = true;
-  params.expect_el_angles = true;
-  params.expect_array_taper = true;
   const DualIOGraphRunResult out = run_live_beamscan_graph(
       {{snapshot},
        {snapshot, std::nullopt, std::nullopt,
@@ -721,10 +713,6 @@ TEST(BeamscanEstimatorOpTest, LiveArrayGeometryStickyOverride) {
       {1, kN});
   auto params = make_params(
       geom, AngleConvention{}, linspace(-0.4, 0.4, 9), {0.0});
-  params.expect_array_geometry = true;
-  params.expect_az_angles = true;
-  params.expect_el_angles = true;
-  params.expect_array_taper = true;
   const DualIOGraphRunResult out = run_live_beamscan_graph(
       {{snapshot}, {snapshot, changed}, {snapshot}}, std::move(params));
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
@@ -744,10 +732,6 @@ TEST(BeamscanEstimatorOpTest, LiveArrayTaperStickyOverride) {
   hann.type = WindowType::kHann;
   auto params = make_params(
       geom, AngleConvention{}, linspace(-0.4, 0.4, 17), {0.0});
-  params.expect_array_geometry = true;
-  params.expect_az_angles = true;
-  params.expect_el_angles = true;
-  params.expect_array_taper = true;
   const DualIOGraphRunResult out = run_live_beamscan_graph(
       {{snapshot},
        {snapshot, std::nullopt, std::nullopt, std::nullopt, hann},
@@ -767,10 +751,6 @@ TEST(BeamscanEstimatorOpTest, LiveOverridesRejectMalformedAndBounds) {
       make_steering_snapshot(geom, AngleConvention{}, 0.0, 0.0),
       {1, kN});
   auto params = make_params(geom, AngleConvention{}, {0.0}, {0.0});
-  params.expect_array_geometry = true;
-  params.expect_az_angles = true;
-  params.expect_el_angles = true;
-  params.expect_array_taper = true;
   const DualIOGraphRunResult malformed = run_live_beamscan_graph(
       {{snapshot, geom, std::nullopt, std::nullopt, std::nullopt, true}},
       params);

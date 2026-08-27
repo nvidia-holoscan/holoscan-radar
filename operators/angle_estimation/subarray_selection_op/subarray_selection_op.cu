@@ -135,10 +135,8 @@ Contract SubarraySelectionOp<T>::contract() const {
   // as BeamscanEstimatorOp).
   Contract result;
   result.trigger(OnEach{snapshot});
-  maybe_add_live_override_to_contract(
-      result, array_geometry_in, params().expect_array_geometry);
-  maybe_add_live_override_to_contract(
-      result, subarray, params().expect_subarray);
+  add_live_override_to_contract(result, array_geometry_in);
+  add_live_override_to_contract(result, subarray);
   return result;
 }
 
@@ -168,18 +166,16 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
       context.params<SubarraySelectionParams>();
   HOLOSCAN_TRY(
       auto geometry,
-      resolve_expected_override_via(
-          pinned.expect_array_geometry, array_geometry_in,
-          pinned.array_geometry, sticky_array_geometry_,
+      resolve_live_override_via(
+          array_geometry_in, pinned.array_geometry, sticky_array_geometry_,
           pinned.sticky_array_geometry,
           [](const WireArrayGeometry& value) { return from_wire(value); }));
   const int64_t live_subarray_bound =
       subarray_max_extent_ > 0 ? subarray_max_extent_ : num_channels;
   HOLOSCAN_TRY(
       auto subarray_value,
-      resolve_expected_override_via(
-          pinned.expect_subarray, subarray, pinned.subarray,
-          sticky_subarray_, pinned.sticky_subarray,
+      resolve_live_override_via(
+          subarray, pinned.subarray, sticky_subarray_, pinned.sticky_subarray,
           [live_subarray_bound](const Tensor& value) {
             return read_host_config_vector<int64_t>(
                 value, DLDataType{kDLInt, 64U, 1U},

@@ -157,16 +157,11 @@ template <typename T>
 Contract ESPRITEstimatorOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{snapshot});
-  maybe_add_live_override_to_contract(
-      result, array_geometry, params().expect_array_geometry);
-  maybe_add_live_override_to_contract(
-      result, spatial_smoothing, params().expect_spatial_smoothing);
-  maybe_add_live_override_to_contract(
-      result, num_sources, params().expect_num_sources);
-  maybe_add_live_override_to_contract(
-      result, source_count_pfa, params().expect_source_count_pfa);
-  maybe_add_live_override_to_contract(
-      result, max_sources, params().expect_max_sources);
+  add_live_override_to_contract(result, array_geometry);
+  add_live_override_to_contract(result, spatial_smoothing);
+  add_live_override_to_contract(result, num_sources);
+  add_live_override_to_contract(result, source_count_pfa);
+  add_live_override_to_contract(result, max_sources);
   return result;
 }
 
@@ -178,11 +173,12 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
   const ESPRITParams& pinned = context.params<ESPRITParams>();
   HOLOSCAN_TRY(
       auto geometry,
-      resolve_expected_override_via(
-          pinned.expect_array_geometry, array_geometry, pinned.array_geometry,
-          sticky_array_geometry_, pinned.sticky_array_geometry,
+      resolve_live_override_via(
+          array_geometry, pinned.array_geometry, sticky_array_geometry_,
+          pinned.sticky_array_geometry,
           [this](const WireArrayGeometry& wire)
-              -> expected<ArrayGeometry, Error> {
+              -> expected<ArrayGeometry,
+          Error> {
             auto converted = from_wire(wire);
             if (!converted) {
               return make_unexpected(std::move(converted).error());
@@ -199,27 +195,24 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
           }));
   HOLOSCAN_TRY(
       auto smoothing,
-      resolve_expected_override_via(
-          pinned.expect_spatial_smoothing, spatial_smoothing,
-          pinned.spatial_smoothing, sticky_spatial_smoothing_,
-          pinned.sticky_spatial_smoothing,
+      resolve_live_override_via(
+          spatial_smoothing, pinned.spatial_smoothing,
+          sticky_spatial_smoothing_, pinned.sticky_spatial_smoothing,
           [](const SpatialSmoothingOverride& wire) {
             return from_wire(wire);
           }));
   HOLOSCAN_TRY(auto effective_num_sources,
-               resolve_expected_override(
-                   pinned.expect_num_sources, num_sources, pinned.num_sources,
-                   sticky_num_sources_, pinned.sticky_num_sources));
+               resolve_live_override(
+                   num_sources, pinned.num_sources, sticky_num_sources_,
+                   pinned.sticky_num_sources));
   HOLOSCAN_TRY(auto effective_pfa,
-               resolve_expected_override(pinned.expect_source_count_pfa,
-                                         source_count_pfa,
-                                         pinned.source_count_pfa,
-                                         sticky_source_count_pfa_,
-                                         pinned.sticky_source_count_pfa));
+               resolve_live_override(
+                   source_count_pfa, pinned.source_count_pfa,
+                   sticky_source_count_pfa_, pinned.sticky_source_count_pfa));
   HOLOSCAN_TRY(auto effective_max_sources,
-               resolve_expected_override(
-                   pinned.expect_max_sources, max_sources, pinned.max_sources,
-                   sticky_max_sources_, pinned.sticky_max_sources));
+               resolve_live_override(
+                   max_sources, pinned.max_sources, sticky_max_sources_,
+                   pinned.sticky_max_sources));
 
   try {
     geometry.validate();

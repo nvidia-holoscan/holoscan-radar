@@ -55,11 +55,6 @@ struct BeamscanParams {
   std::vector<double> el_angles{};
   WindowSpec array_taper{};
   PeakInterpolation peak_interpolation{PeakInterpolation::kNone};
-  bool expect_array_geometry{false};
-  bool expect_az_angles{false};
-  bool expect_el_angles{false};
-  bool expect_array_taper{false};
-  bool expect_peak_interpolation{false};
   bool sticky_array_geometry{true};
   bool sticky_az_angles{true};
   bool sticky_el_angles{true};
@@ -91,46 +86,19 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&BeamscanParams::peak_interpolation>("peak_interpolation")
         .description(
             "Sub-grid peak refinement {none, parabolic}"),
-    holoscan::field<&BeamscanParams::expect_array_geometry>(
-        "expect_array_geometry")
-        .description(
-            "Set when the application wires the array_geometry override."),
-    holoscan::field<&BeamscanParams::expect_az_angles>("expect_az_angles")
-        .description("Set when the application wires the az_angles override."),
-    holoscan::field<&BeamscanParams::expect_el_angles>("expect_el_angles")
-        .description("Set when the application wires the el_angles override."),
-    holoscan::field<&BeamscanParams::expect_array_taper>(
-        "expect_array_taper")
-        .description(
-            "Set when the application wires the array_taper override."),
-    holoscan::field<&BeamscanParams::expect_peak_interpolation>(
-        "expect_peak_interpolation")
-        .description(
-            "Set when the application wires the peak_interpolation "
-            "override."),
     holoscan::field<&BeamscanParams::sticky_array_geometry>(
         "sticky_array_geometry")
-        .description(
-            "Keep the last Exact array_geometry match on a miss. Ignored "
-            "unless expect_array_geometry."),
+        .description("Keep the last Exact array_geometry match on a miss."),
     holoscan::field<&BeamscanParams::sticky_az_angles>("sticky_az_angles")
-        .description(
-            "Keep the last Exact az_angles match on a miss. Ignored unless "
-            "expect_az_angles."),
+        .description("Keep the last Exact az_angles match on a miss."),
     holoscan::field<&BeamscanParams::sticky_el_angles>("sticky_el_angles")
-        .description(
-            "Keep the last Exact el_angles match on a miss. Ignored unless "
-            "expect_el_angles."),
+        .description("Keep the last Exact el_angles match on a miss."),
     holoscan::field<&BeamscanParams::sticky_array_taper>(
         "sticky_array_taper")
-        .description(
-            "Keep the last Exact array_taper match on a miss. Ignored unless "
-            "expect_array_taper."),
+        .description("Keep the last Exact array_taper match on a miss."),
     holoscan::field<&BeamscanParams::sticky_peak_interpolation>(
         "sticky_peak_interpolation")
-        .description(
-            "Keep the last Exact peak_interpolation match on a miss. "
-            "Ignored unless expect_peak_interpolation."));
+        .description("Keep the last Exact peak_interpolation match on a miss."));
 
 static_assert(holoscan::param_schema_availability<BeamscanParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,

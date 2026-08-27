@@ -160,8 +160,8 @@ void MUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(pooled_tensor_output(kDevice, 1U, count_max_byte_span_));
   spec.output(eigenvalues)
       .produces_tensor(pooled_tensor_output(kDevice, 2U, eig_max_byte_span_));
-  // [live] sticky overrides. Leaving unconnected is legal when expect_* is
-  // false; enabled ports join snapshot through Exact + SafeDefault.
+  // [live] sticky overrides. Leaving one unconnected is legal; a wired
+  // port joins snapshot through Exact + SafeDefault.
   spec.input(array_geometry).queue_depth(2U);
   spec.input(az_angles)
       .queue_depth(2U)
@@ -179,20 +179,13 @@ template <typename T>
 Contract MUSICEstimatorOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{snapshot});
-  maybe_add_live_override_to_contract(
-      result, array_geometry, params().expect_array_geometry);
-  maybe_add_live_override_to_contract(
-      result, az_angles, params().expect_az_angles);
-  maybe_add_live_override_to_contract(
-      result, el_angles, params().expect_el_angles);
-  maybe_add_live_override_to_contract(
-      result, spatial_smoothing, params().expect_spatial_smoothing);
-  maybe_add_live_override_to_contract(
-      result, num_sources, params().expect_num_sources);
-  maybe_add_live_override_to_contract(
-      result, source_count_pfa, params().expect_source_count_pfa);
-  maybe_add_live_override_to_contract(
-      result, max_sources, params().expect_max_sources);
+  add_live_override_to_contract(result, array_geometry);
+  add_live_override_to_contract(result, az_angles);
+  add_live_override_to_contract(result, el_angles);
+  add_live_override_to_contract(result, spatial_smoothing);
+  add_live_override_to_contract(result, num_sources);
+  add_live_override_to_contract(result, source_count_pfa);
+  add_live_override_to_contract(result, max_sources);
   return result;
 }
 
@@ -207,15 +200,14 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
   auto next_sticky_smoothing = sticky_spatial_smoothing_;
   HOLOSCAN_TRY(
       auto geometry,
-      resolve_expected_override_via(
-          pinned.expect_array_geometry, array_geometry, pinned.array_geometry,
-          next_sticky_geometry, pinned.sticky_array_geometry,
+      resolve_live_override_via(
+          array_geometry, pinned.array_geometry, next_sticky_geometry,
+          pinned.sticky_array_geometry,
           [](const WireArrayGeometry& value) { return from_wire(value); }));
   HOLOSCAN_TRY(
       auto az,
-      resolve_expected_override_via(
-          pinned.expect_az_angles, az_angles, pinned.az_angles, next_sticky_az,
-          pinned.sticky_az_angles,
+      resolve_live_override_via(
+          az_angles, pinned.az_angles, next_sticky_az, pinned.sticky_az_angles,
           [this](const Tensor& value) {
             return read_host_config_vector<double>(
                 value, DLDataType{kDLFloat, 64U, 1U},
@@ -224,9 +216,8 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
           }));
   HOLOSCAN_TRY(
       auto el,
-      resolve_expected_override_via(
-          pinned.expect_el_angles, el_angles, pinned.el_angles, next_sticky_el,
-          pinned.sticky_el_angles,
+      resolve_live_override_via(
+          el_angles, pinned.el_angles, next_sticky_el, pinned.sticky_el_angles,
           [this](const Tensor& value) {
             return read_host_config_vector<double>(
                 value, DLDataType{kDLFloat, 64U, 1U},
@@ -235,27 +226,24 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
           }));
   HOLOSCAN_TRY(
       auto smoothing,
-      resolve_expected_override_via(
-          pinned.expect_spatial_smoothing, spatial_smoothing,
-          pinned.spatial_smoothing, next_sticky_smoothing,
+      resolve_live_override_via(
+          spatial_smoothing, pinned.spatial_smoothing, next_sticky_smoothing,
           pinned.sticky_spatial_smoothing,
           [](const SpatialSmoothingOverride& value) {
             return from_wire(value);
           }));
   HOLOSCAN_TRY(auto effective_num_sources,
-               resolve_expected_override(
-                   pinned.expect_num_sources, num_sources, pinned.num_sources,
-                   sticky_num_sources_, pinned.sticky_num_sources));
+               resolve_live_override(
+                   num_sources, pinned.num_sources, sticky_num_sources_,
+                   pinned.sticky_num_sources));
   HOLOSCAN_TRY(auto effective_pfa,
-               resolve_expected_override(pinned.expect_source_count_pfa,
-                                         source_count_pfa,
-                                         pinned.source_count_pfa,
-                                         sticky_source_count_pfa_,
-                                         pinned.sticky_source_count_pfa));
+               resolve_live_override(
+                   source_count_pfa, pinned.source_count_pfa,
+                   sticky_source_count_pfa_, pinned.sticky_source_count_pfa));
   HOLOSCAN_TRY(auto effective_max_sources,
-               resolve_expected_override(
-                   pinned.expect_max_sources, max_sources, pinned.max_sources,
-                   sticky_max_sources_, pinned.sticky_max_sources));
+               resolve_live_override(
+                   max_sources, pinned.max_sources, sticky_max_sources_,
+                   pinned.sticky_max_sources));
 
   try {
     geometry.validate();

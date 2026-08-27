@@ -67,8 +67,8 @@ void retire_matx_solver_caches();
 // Out: eigenvalues     — float32/float64, (num_items, num_channels). Always
 //                       emitted (computed every tick).
 //
-// [live] ports join snapshot with Exact + SafeDefault and are gated by their
-// expect_* Params. angle_convention and forward_backward stay static.
+// [live] ports join snapshot with Exact + SafeDefault. angle_convention
+// and forward_backward stay static.
 
 struct MVDRParams {
   ArrayGeometry array_geometry{};
@@ -81,12 +81,6 @@ struct MVDRParams {
   // Empty → off; [P] ULA; [P_az, P_el] URA.
   std::vector<int64_t> spatial_smoothing{};
   bool forward_backward{true};
-  bool expect_array_geometry{false};
-  bool expect_az_angles{false};
-  bool expect_el_angles{false};
-  bool expect_spatial_smoothing{false};
-  bool expect_diagonal_loading{false};
-  bool expect_max_sources{false};
   bool sticky_array_geometry{true};
   bool sticky_az_angles{true};
   bool sticky_el_angles{true};
@@ -127,27 +121,6 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&MVDRParams::forward_backward>("forward_backward")
         .description(
             "Include conjugate-reversed looks when spatial_smoothing is set"),
-    holoscan::field<&MVDRParams::expect_array_geometry>(
-        "expect_array_geometry")
-        .description(
-            "Set when the application wires the array_geometry override."),
-    holoscan::field<&MVDRParams::expect_az_angles>("expect_az_angles")
-        .description(
-            "Set when the application wires the az_angles override."),
-    holoscan::field<&MVDRParams::expect_el_angles>("expect_el_angles")
-        .description(
-            "Set when the application wires the el_angles override."),
-    holoscan::field<&MVDRParams::expect_spatial_smoothing>(
-        "expect_spatial_smoothing")
-        .description(
-            "Set when the application wires the spatial_smoothing override."),
-    holoscan::field<&MVDRParams::expect_diagonal_loading>(
-        "expect_diagonal_loading")
-        .description(
-            "Set when the application wires the diagonal_loading override."),
-    holoscan::field<&MVDRParams::expect_max_sources>("expect_max_sources")
-        .description(
-            "Set when the application wires the max_sources override."),
     holoscan::field<&MVDRParams::sticky_array_geometry>(
         "sticky_array_geometry")
         .description(
@@ -164,13 +137,9 @@ HOLOSCAN_PARAM_SCHEMA(
             "Keep the last valid Exact spatial_smoothing match on a miss."),
     holoscan::field<&MVDRParams::sticky_diagonal_loading>(
         "sticky_diagonal_loading")
-        .description(
-            "Keep the last Exact diagonal_loading match on a miss. Ignored "
-            "unless expect_diagonal_loading."),
+        .description("Keep the last Exact diagonal_loading match on a miss."),
     holoscan::field<&MVDRParams::sticky_max_sources>("sticky_max_sources")
-        .description(
-            "Keep the last Exact max_sources match on a miss. Ignored "
-            "unless expect_max_sources."));
+        .description("Keep the last Exact max_sources match on a miss."));
 
 static_assert(holoscan::param_schema_availability<MVDRParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -201,7 +170,7 @@ class MVDREstimatorOp : public holoscan::Operator<MVDRParams> {
   Output<Tensor> doa_multi{"doa_multi"};
   Output<Tensor> source_count{"source_count"};
   Output<Tensor> eigenvalues{"eigenvalues"};
-  // [live] Exact overrides, gated by expect_*.
+  // [live] Exact overrides.
   Input<WireArrayGeometry> array_geometry{"array_geometry"};
   Input<Tensor> az_angles{"az_angles"};
   Input<Tensor> el_angles{"el_angles"};

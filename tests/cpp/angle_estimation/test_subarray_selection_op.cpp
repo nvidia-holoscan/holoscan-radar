@@ -422,8 +422,16 @@ class LiveSubarrayConfigSourceOp final : public holoscan::Operator<> {
   holoscan::Output<int64_t> next{"next"};
 };
 
+// Which override ports the graph wires, and so which control-plane sources
+// it builds. The operator declares both entries unconditionally.
+struct LiveSubarrayWiring {
+  bool geometry{false};
+  bool subarray{false};
+};
+
 DualIOGraphRunResult run_live_subarray_graph(
     std::vector<LiveSubarrayTick> ticks, SubarraySelectionParams params,
+    LiveSubarrayWiring wiring,
     holoscan::radar::MaxTensorExtents extents = default_test_extents()) {
   DualIOGraphRunResult result;
   holoscan::radar::testing::detail::FrameBank::reset();
@@ -436,8 +444,6 @@ DualIOGraphRunResult run_live_subarray_graph(
   const auto snapshot_source =
       graph.op<LiveSnapshotSourceOp>("snapshot_source");
   auto op = graph.op<SubarraySelectionOp<double>>("op", extents);
-  const bool expect_geometry = params.expect_array_geometry;
-  const bool expect_subarray = params.expect_subarray;
   op.set_params(std::move(params));
   const auto sink0 =
       graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink0");
@@ -447,7 +453,7 @@ DualIOGraphRunResult run_live_subarray_graph(
   graph.add_flow(snapshot_source->snapshot, op->snapshot, q);
   auto control_partition = graph.partition("control");
   control_partition.add(sequencer);
-  if (expect_geometry && expect_subarray) {
+  if (wiring.geometry && wiring.subarray) {
     const auto geometry_source =
         graph.op<LiveGeometrySourceOp>("geometry_source");
     const auto subarray_source =
@@ -458,14 +464,14 @@ DualIOGraphRunResult run_live_subarray_graph(
     graph.add_flow(geometry_source->next, subarray_source->tick, q);
     graph.add_flow(subarray_source->subarray, op->subarray, q);
     graph.add_flow(subarray_source->next, snapshot_source->tick, q);
-  } else if (expect_geometry) {
+  } else if (wiring.geometry) {
     const auto geometry_source =
         graph.op<LiveGeometrySourceOp>("geometry_source");
     control_partition.add(geometry_source);
     graph.add_flow(sequencer->tick, geometry_source->tick, q);
     graph.add_flow(geometry_source->geometry, op->array_geometry_in, q);
     graph.add_flow(geometry_source->next, snapshot_source->tick, q);
-  } else if (expect_subarray) {
+  } else if (wiring.subarray) {
     const auto subarray_source =
         graph.op<LiveSubarrayConfigSourceOp>("subarray_source");
     control_partition.add(subarray_source);
@@ -609,15 +615,13 @@ TEST(SubarraySelectionOpTest, LiveOverridesRequireExactCaptureTime) {
     changed.element_positions[static_cast<size_t>(i * 3 + 1)] += 10.0;
   }
   SubarraySelectionParams params = make_params(base, {0, 1});
-  params.expect_array_geometry = true;
-  params.expect_subarray = true;
   params.sticky_array_geometry = false;
   params.sticky_subarray = false;
   const DualIOGraphRunResult out = run_live_subarray_graph(
       {{make_snapshot(1, 8, 2), changed, host_subarray({2, 3, 4})},
        {make_snapshot(1, 8, 2), changed, host_subarray({2, 3, 4}),
         /*geometry_skew_ns=*/1, /*subarray_skew_ns=*/1}},
-      std::move(params));
+      std::move(params), {.geometry = true, .subarray = true});
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
@@ -638,12 +642,10 @@ TEST(SubarraySelectionOpTest, LiveOverridesStayStickyAfterExactMiss) {
     changed.element_positions[static_cast<size_t>(i * 3 + 1)] += 20.0;
   }
   SubarraySelectionParams params = make_params(base, {0, 1});
-  params.expect_array_geometry = true;
-  params.expect_subarray = true;
   const DualIOGraphRunResult out = run_live_subarray_graph(
       {{make_snapshot(1, 8, 2), changed, host_subarray({3, 4, 5})},
        {make_snapshot(1, 8, 2), std::nullopt, nullptr}},
-      std::move(params));
+      std::move(params), {.geometry = true, .subarray = true});
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
@@ -662,14 +664,12 @@ TEST(SubarraySelectionOpTest, EphemeralOverridesRevertToParams) {
     changed.element_positions[static_cast<size_t>(i * 3 + 1)] += 30.0;
   }
   SubarraySelectionParams params = make_params(base, {0, 1});
-  params.expect_array_geometry = true;
-  params.expect_subarray = true;
   params.sticky_array_geometry = false;
   params.sticky_subarray = false;
   const DualIOGraphRunResult out = run_live_subarray_graph(
       {{make_snapshot(1, 8, 2), changed, host_subarray({4, 5, 6})},
        {make_snapshot(1, 8, 2), std::nullopt, nullptr}},
-      std::move(params));
+      std::move(params), {.geometry = true, .subarray = true});
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
@@ -684,21 +684,19 @@ TEST(SubarraySelectionOpTest, EphemeralOverridesRevertToParams) {
 TEST(SubarraySelectionOpTest, RejectsMalformedLivePayloads) {
   const auto geom = make_linear({0, 1, 2, 3});
   SubarraySelectionParams geometry_params = make_params(geom, {0, 1});
-  geometry_params.expect_array_geometry = true;
   const DualIOGraphRunResult bad_geometry = run_live_subarray_graph(
       {{make_snapshot(1, 4, 2), geom, nullptr, 0, 0,
         /*malformed_geometry=*/true}},
-      std::move(geometry_params));
+      std::move(geometry_params), {.geometry = true});
   EXPECT_TRUE(bad_geometry.plan_ok) << bad_geometry.plan_json;
   EXPECT_TRUE(bad_geometry.frames0.empty());
   EXPECT_FALSE(bad_geometry.diagnostics.empty());
 
   SubarraySelectionParams subarray_params = make_params(geom, {0, 1});
-  subarray_params.expect_subarray = true;
   const DualIOGraphRunResult bad_subarray = run_live_subarray_graph(
       {{make_snapshot(1, 4, 2), std::nullopt,
         host_subarray({0, 1, 3})}},
-      std::move(subarray_params));
+      std::move(subarray_params), {.subarray = true});
   EXPECT_TRUE(bad_subarray.plan_ok) << bad_subarray.plan_json;
   EXPECT_TRUE(bad_subarray.frames0.empty());
   EXPECT_FALSE(bad_subarray.diagnostics.empty());
@@ -707,13 +705,12 @@ TEST(SubarraySelectionOpTest, RejectsMalformedLivePayloads) {
 TEST(SubarraySelectionOpTest, RejectsLiveSubarrayBeyondCapturedBound) {
   const auto geom = make_linear({0, 1, 2, 3});
   SubarraySelectionParams params = make_params(geom, {0, 1});
-  params.expect_subarray = true;
   auto extents = default_test_extents();
   extents.max_subarray_channels = 2;
   const DualIOGraphRunResult out = run_live_subarray_graph(
       {{make_snapshot(1, 4, 2), std::nullopt,
         host_subarray({0, 1, 2})}},
-      std::move(params), extents);
+      std::move(params), {.subarray = true}, extents);
 
   EXPECT_TRUE(out.plan_ok) << out.plan_json;
   EXPECT_TRUE(out.frames0.empty());
