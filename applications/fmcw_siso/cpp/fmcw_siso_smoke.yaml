@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Short smoke config for Graph-ported fmcw_siso (few frames, log-only by default).
+
+waveform: &waveform
+  carrier_frequency: 77.0e9
+  bandwidth: 150.0e6
+  chirp_duration: 20.0e-6
+  sample_rate: 12.8e6
+  chirp_repetition_interval: 25.0e-6
+
+range_processor:
+  waveform: *waveform
+  range_window: hann
+
+clutter_filter:
+  method: mean_subtraction
+
+doppler_processor:
+  waveform: *waveform
+  doppler_window: hann
+
+cfar_detector:
+  cfar_variant: CA
+  guard_cells: [3, 3]
+  training_cells: [3, 3]
+  pfa: 1.0e-9
+  os_rank: 0
+  peak_only: false
+
+cluster_dbscan:
+  epsilon: [3.0, 2.0]
+  min_points: 1
+  max_clusters: 0
+
+reduction:
+  representative: medoid
+  feature_weights: [0.3333, 0.5]
+
+cube:
+  num_chirps: 128
+  samples_per_chirp: 256
+
+run:
+  num_frames: 5
+  frame_period: 0.05
+  meter_cadence: true
+  meter_log_every: 0
+
+targets:
+  - { range: 60.0,  velocity: 0.0,     amplitude: 1.0 }
+  - { range: 130.0, velocity: 1.2167,  amplitude: 0.6 }
+  - { range: 20.0,  velocity: 6.6918,  amplitude: 0.7 }
+
+noise_snr_db: 20.0
+
+visualization:
+  enabled: false
+
+skip_display_check: true
+headless: false
+
+plots:
+  enable: false
+  window: 120

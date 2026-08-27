@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-// SISO FMCW pipeline example: a synthetic ADC source feeding the split
-// signal-processing chain
+// SISO FMCW pipeline example (HSDK 5 Graph):
 //
 //   SimAdcSourceOp -> FMCWRangeProcessorOp -> ClutterFilterOp
 //               -> FMCWDopplerProcessorOp -> CFARDetectorOp
@@ -11,259 +10,214 @@
 //                                             -> ClusterDBSCANOp
 //                                                  -> DetectionReductionOp
 //                                                       -> ClusterReportOp
-//                                         [-> RdMapToImageOp   -> HolovizOp]
-//                                         [-> ClusterOverlayOp -> HolovizOp]
-//                                         [-> RollingPlotOp    -> HolovizOp]
-//                                              (RD map + cluster crosses left;
-//                                               range/velocity-vs-time right)
+//                                         [-> RdMapToImageOp -> X11RdViewerOp]
 //
-// The source synthesizes one static clutter return and one moving target with
-// the shared analytic point-target simulator (radar_common/sim), emitting one
-// cube (CPI) per tick and advancing the targets between ticks. CFAR detects on
-// the range-Doppler map; the sinks report each detection / cluster in physical
-// units via the operators' range_bins / velocity_bins axis outputs.
-//
-// The app scaffolding — config-path resolution, the app-owned config parse, the
-// synthetic source, the display-probe downgrade, the run driver, and the
-// Holoviz layout — is shared in radar_app/app and radar_app/viz; this file is
-// the graph wiring plus its own AppConfig. The per-operator blocks
-// (range_processor, clutter_filter, doppler_processor, cfar_detector,
-// cluster_dbscan, reduction) flow through Holoscan's native from_config().
-//
+// With visualize on, the X11 viewer also takes the detection cells, the range /
+// velocity bins, and (outside peak_only) the cluster labels + representatives,
+// so it draws the RD-map overlays the Holoviz demo drew: physical axes, cluster
+// -colored detections, a legend, and the rolling range/velocity plots.
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/fmcw_siso/cpp/fmcw_siso [config.yaml]
 
 #include <memory>
+#include <optional>
+#include <utility>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
-#include <holoscan/operators/holoviz/holoviz.hpp>
+#include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/graph.hpp>
+#include <holoscan/logger/logger.hpp>
 
 #include "clustering/cluster_dbscan_op/cluster_dbscan_op.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "detection/detection_reduction_op/detection_reduction_op.hpp"
-#include "detection/feature_assembly_op/feature_assembly_op.hpp"
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
-#include "radar_app/app/driver.hpp"
-#include "radar_app/app/holoviz_layout.hpp"
+#include "radar_app/app/graph_driver.hpp"
+#include "radar_app/app/physical_points_op.hpp"
 #include "radar_app/app/source.hpp"
 #include "radar_app/report/report_ops.hpp"
-#include "radar_app/viz/viz.hpp"
 #include "config.hpp"  // NOLINT(build/include_subdir): colocated app header
 
-namespace radar = holoscan::radar;
+#if defined(HOLOSCAN_RADAR_HAS_X11)
+#include "radar_app/viz/rd_map_to_image_op.hpp"
+#include "radar_app/viz/x11_rd_viewer_op.hpp"
+#endif
 
-// The shared app scaffolding (SimAdcSourceOp, run_fmcw_app, the Holoviz layout
-// builder) and the reusable report / visualization operators live under
-// holoscan::radar::app; this app pulls them in unqualified and only wires them
-// into its graph. The app-owned AppConfig + load_config live in config.hpp.
+namespace radar = holoscan::radar;
 using namespace holoscan::radar::app;  // NOLINT(build/namespaces)
 
-class FmcwSisoApp : public holoscan::Application {
- public:
-  AppConfig cfg;  // set before run()
-  std::shared_ptr<CadenceMeter> cadence;
+namespace {
 
-  void compose() override {
-    // Emit cfg.num_frames cubes, one every cfg.frame_period seconds, so the
-    // targets are seen moving through space over the run.
-    auto source = make_operator<SimAdcSourceOp>(
-        "adc_source",
-        make_condition<holoscan::CountCondition>("frame_count", cfg.num_frames),
-        make_condition<holoscan::PeriodicCondition>(
-            "frame_rate", static_cast<int64_t>(cfg.frame_period * 1e9)));
-    source->scene = cfg.scene;
-    source->frame_period = cfg.frame_period;
+void bind_out(holoscan::CompileOptions& options, const char* op,
+              const char* port) {
+  options.deployment.bind_tensor_output_device(
+      holoscan::TensorOutputDevicePlacement{
+          .operator_path = op,
+          .output_port = port,
+          .device = holoscan::DeviceId{0},
+      });
+}
 
-    // Operator parameters come straight from the same-named YAML blocks; the
-    // yaml_converters.hpp specializations decode the custom types.
-    auto range = make_operator<radar::FMCWRangeProcessorOp<float>>(
-        "range_processor", from_config("range_processor"));
-    auto clutter = make_operator<radar::ClutterFilterOp<float>>(
-        "clutter_filter", from_config("clutter_filter"));
-    auto doppler = make_operator<radar::FMCWDopplerProcessorOp<float>>(
-        "doppler_processor", from_config("doppler_processor"));
-    // peak_only is a native cfar_detector param (applied via from_config); the
-    // app also reads it (cfg.peak_only) to drop the clustering subgraph below.
-    auto cfar = make_operator<radar::CFARDetectorOp<float>>(
-        "cfar_detector", from_config("cfar_detector"));
-    auto sink = make_operator<DetectionReportOp>("detection_report");
-    // Every CFAR output needs a receiver or the operator never ticks.
-    auto mask_sink = make_operator<NullSinkOp>("detection_mask_sink");
-    auto noise_sink = make_operator<NullSinkOp>("noise_estimate_sink");
-
-    if (cfg.meter_cadence) {
-      cadence = std::make_shared<CadenceMeter>();
-      cadence->frame_period_s = cfg.frame_period;
-      cadence->log_every = cfg.meter_log_every;
-      source->cadence = cadence;
-      sink->cadence = cadence;
-    }
-    add_flow(source, range, {{"adc_cube", "adc_cube"}});
-    add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
-    add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
-    add_flow(doppler, cfar, {{"rd_maps", "rd_maps"}});
-    add_flow(cfar, sink, {{"detection_idx", "detection_idx"}});
-    add_flow(cfar, sink, {{"detection_score", "detection_score"}});
-    add_flow(range, sink, {{"range_bins", "range_bins"}});
-    add_flow(doppler, sink, {{"velocity_bins", "velocity_bins"}});
-    add_flow(cfar, mask_sink, {{"detection_mask", "input"}});
-    add_flow(cfar, noise_sink, {{"noise_estimate", "input"}});
-
-    // Clustering subgraph — dropped entirely when peak_only is set (CFAR then
-    // emits one detection per target, so DBSCAN + reduction are redundant and
-    // DetectionReportOp above reports the CFAR peaks directly). `cluster` /
-    // `reduction` stay null in that mode and the viz block below adapts.
-    std::shared_ptr<radar::ClusterDBSCANOp<float>> cluster;
-    std::shared_ptr<radar::DetectionReductionOp<float>> reduction;
-    if (!cfg.peak_only) {
-      // Assemble a [range, velocity] feature matrix from the CFAR cells
-      // (physical units, via the range/Doppler
-      // axis outputs) and density-cluster
-      // it. `features` is fixed in code — the parameter is native-only by
-      // operator contract, and this app's downstream report / overlays assume
-      // this exact 2-column layout. The DBSCAN
-      // parameters flow natively from the
-      // cluster_dbscan YAML block.
-      const std::vector<radar::AssemblyFeature> feature_columns{
-          radar::AssemblyFeature::kRange, radar::AssemblyFeature::kVelocity};
-      auto feature_assembly = make_operator<radar::FeatureAssemblyOp<float>>(
-          "feature_assembly", holoscan::Arg("features") = feature_columns);
-      cluster = make_operator<radar::ClusterDBSCANOp<float>>(
-          "cluster_dbscan", from_config("cluster_dbscan"));
-      auto cluster_report = make_operator<ClusterReportOp>("cluster_report");
-      // Reduce each cluster to one representative cell. The reduction block
-      // flows natively; set feature_weights ~ 1/epsilon in the YAML so the
-      // medoid distance matches the DBSCAN metric.
-      reduction = make_operator<radar::DetectionReductionOp<float>>(
-          "detection_reduction", from_config("reduction"));
-
-      // CFAR cells → feature matrix → DBSCAN → report. The range/Doppler axis
-      // outputs feed FeatureAssemblyOp so the columns land in physical units;
-      // its `points` output fans out to both the clusterer and the reporter.
-      add_flow(cfar, feature_assembly, {{"detection_idx", "detection_idx"}});
-      add_flow(range, feature_assembly, {{"range_bins", "range_bins"}});
-      add_flow(doppler, feature_assembly, {{"velocity_bins", "velocity_bins"}});
-      add_flow(feature_assembly, cluster, {{"points", "points"}});
-      add_flow(feature_assembly, cluster_report, {{"points", "points"}});
-      add_flow(cluster, cluster_report, {{"labels", "labels"}});
-      add_flow(cluster, cluster_report, {{"sizes", "sizes"}});
-
-      // Reduction: one representative cell per cluster (medoid = most-central
-      // detection). rep_idx feeds the report (logged in physical units, so the
-      // report also needs the axis bins) and, when visualizing, the GUI.
-      add_flow(cluster, reduction, {{"labels", "labels"}});
-      add_flow(cfar, reduction, {{"detection_idx", "detection_idx"}});
-      add_flow(feature_assembly, reduction, {{"points", "points"}});
-      add_flow(reduction, cluster_report, {{"rep_idx", "rep_idx"}});
-      add_flow(range, cluster_report, {{"range_bins", "range_bins"}});
-      add_flow(doppler, cluster_report, {{"velocity_bins", "velocity_bins"}});
-    }
-
-    // Optional live RD-map window (cfg.visualize; the driver has already
-    // downgraded it with a warning on GUI-less hosts). Turbo-mapped |RD| with
-    // the CFAR detections overlaid as crosses colored by DBSCAN cluster (noise
-    // in gray). With cfg.plots.enable, two rolling time-series plots (range and
-    // velocity vs time) stack on the right; radar_app owns the layout, this app
-    // wires the flows.
-    if (cfg.visualize) {
-      auto to_image = make_operator<RdMapToImageOp>("rd_map_to_image");
-      auto overlay = make_operator<ClusterOverlayOp>("cluster_overlay");
-
-      HolovizLayout layout;
-      layout.window_title = "FMCW SISO - Range-Doppler + clusters";
-      layout.width = cfg.plots.enable ? 1200U : 800U;
-      layout.height = 600U;
-      layout.headless = cfg.headless;
-      layout.vsync = cfg.viz.vsync;
-      layout.plots_enabled = cfg.plots.enable;
-      // Side panels are drawn with native Holoviz primitives by RollingPlotOp
-      // (dynamic InputSpecs); no static right-panel images are declared. Panel
-      // view rects: right column, stacked range (top) then velocity (bottom).
-      const PanelRect range_view{0.63F, 0.04F, 0.35F, 0.44F};
-      const PanelRect velocity_view{0.63F, 0.52F, 0.35F, 0.44F};
-      const auto panel_aspect = [&](const PanelRect& v) {
-        return (v.w * static_cast<float>(layout.width)) /
-               (v.h * static_cast<float>(layout.height));
-      };
-      auto visualizer = make_rd_holoviz_op(this, "holoviz", layout);
-      overlay->view_aspect = rd_map_view_aspect(layout);
-      overlay->rd_region = rd_map_region(layout);  // axes/frame/title region
-      overlay->rd_view_px_height = static_cast<float>(layout.height);
-      overlay->frame_period = cfg.frame_period;    // scenario clock
-      overlay->marker_radius = cfg.viz.marker_radius;
-      overlay->marker_outline = cfg.viz.marker_outline;
-      overlay->marker_segments = cfg.viz.marker_segments;
-
-      std::shared_ptr<RollingPlotOp> plot;
-      if (cfg.plots.enable) {
-        plot = make_operator<RollingPlotOp>("rolling_plot");
-        plot->window = cfg.plots.window;
-        plot->frame_period = cfg.frame_period;
-        plot->primitive = true;
-        plot->range_view = range_view;
-        plot->velocity_view = velocity_view;
-        plot->range_aspect = panel_aspect(range_view);
-        plot->velocity_aspect = panel_aspect(velocity_view);
-        plot->marker_radius = cfg.viz.marker_radius;
-        plot->marker_outline = cfg.viz.marker_outline;
-        plot->marker_segments = cfg.viz.marker_segments;
-      }
-
-      add_flow(doppler, to_image, {{"rd_maps", "rd_maps"}});
-      add_flow(to_image, visualizer, {{"rd_image", "receivers"}});
-      // The overlay needs the detector's cells and the map dimensions; the
-      // cluster labels color the dots when clustering runs. In peak_only mode
-      // there are no labels, so the overlay colors each CFAR peak by its row
-      // index (ClusterOverlayOp treats absent labels that way).
-      add_flow(cfar, overlay, {{"detection_idx", "detection_idx"}});
-      add_flow(doppler, overlay, {{"rd_maps", "rd_maps"}});
-      // Physical axis bins for the RD-map tick labels (range X, velocity Y).
-      add_flow(range, overlay, {{"range_bins", "range_bins"}});
-      add_flow(doppler, overlay, {{"velocity_bins", "velocity_bins"}});
-      if (!cfg.peak_only) {
-        add_flow(cluster, overlay, {{"labels", "labels"}});
-        // rep_idx colors each cluster by its representative RD cell (stable
-        // across frames) instead of the flickery size-rank DBSCAN label.
-        add_flow(reduction, overlay, {{"rep_idx", "rep_idx"}});
-      }
-      add_flow(overlay, visualizer, {{"overlay", "receivers"}});
-      // Scenario clock overlay: its spec heads the primitive-panel InputSpec
-      // chain when panels are on (→ rolling plot), else feeds input_specs.
-      if (plot) {
-        add_flow(overlay, plot, {{"time_specs", "specs_in"}});
-      } else {
-        add_flow(overlay, visualizer, {{"time_specs", "input_specs"}});
-      }
-
-      // Rolling range/velocity plots: the per-cluster representative from
-      // reduction (clustered) or the raw CFAR peaks (peak_only) — both are
-      // (N, 2) (doppler, range) — plus the axis bins that fix each plot's Y
-      // extent and resolve the bins to physical units.
-      if (plot) {
-        if (!cfg.peak_only) {
-          add_flow(reduction, plot, {{"rep_idx", "rep_idx"}});
-          // Per-detection labels let the plot
-          // color each rep by its true cluster
-          // (matching the RD-map / boresight markers) rather than by row index.
-          add_flow(cluster, plot, {{"labels", "labels"}});
-        } else {
-          add_flow(cfar, plot, {{"detection_idx", "rep_idx"}});
-        }
-        add_flow(range, plot, {{"range_bins", "range_bins"}});
-        add_flow(doppler, plot, {{"velocity_bins", "velocity_bins"}});
-        add_flow(plot, visualizer, {{"plots", "receivers"}});
-        // Dynamic InputSpecs for the primitive panels (tick labels + only-used
-        // marker colors) → HolovizOp's input_specs port.
-        add_flow(plot, visualizer, {{"plot_specs", "input_specs"}});
-      }
-    }
-  }
-};
+}  // namespace
 
 int main(int argc, char** argv) {
-  return run_fmcw_app<FmcwSisoApp>(argc, argv, "fmcw_siso", "fmcw_siso.yaml",
-                                   load_config);
+  return run_fmcw_graph_app<AppConfig>(
+      argc, argv, "fmcw_siso", "fmcw_siso.yaml", load_config,
+      [](holoscan::Graph& graph, holoscan::CompileOptions& options,
+         AppConfig& cfg, std::shared_ptr<CadenceMeter>* cadence_out) {
+        const holoscan::ConnectionOptions q{.queue_depth = 4U};
+        const radar::MaxTensorExtents& extents = cfg.extents;
+
+        SimAdcSourceConfig src_cfg;
+        src_cfg.scene = cfg.scene;
+        src_cfg.frame_period = cfg.frame_period;
+        src_cfg.num_frames = cfg.num_frames;
+
+        std::shared_ptr<CadenceMeter> cadence;
+        if (cfg.meter_cadence) {
+          cadence = std::make_shared<CadenceMeter>();
+          cadence->frame_period_s = cfg.frame_period;
+          cadence->log_every = cfg.meter_log_every;
+          src_cfg.cadence = cadence;
+          *cadence_out = cadence;
+        }
+
+        auto source =
+            graph.op<SimAdcSourceOp>("adc_source", extents, std::move(src_cfg));
+
+        auto range = graph.op<radar::FMCWRangeProcessorOp<float>>(
+            "range_processor", extents);
+        range.set_params(cfg.range_params);
+
+        auto clutter = graph.op<radar::ClutterFilterOp<float>>(
+            "clutter_filter", extents);
+        clutter.set_params(cfg.clutter_params);
+
+        auto doppler = graph.op<radar::FMCWDopplerProcessorOp<float>>(
+            "doppler_processor", extents);
+        doppler.set_params(cfg.doppler_params);
+
+        auto cfar =
+            graph.op<radar::CFARDetectorOp<float>>("cfar_detector", extents);
+        cfar.set_params(cfg.cfar_params);
+
+        auto sink = graph.op<DetectionReportOp>(
+            "detection_report", DetectionReportOp::Config{cadence});
+        auto mask_sink = graph.op<NullSinkOp>("detection_mask_sink");
+        auto noise_sink = graph.op<NullSinkOp>("noise_estimate_sink");
+        auto power_sink = graph.op<NullSinkOp>("cfar_power_sink");
+
+        graph.add_flow(source->adc_cube, range->adc_cube, q);
+        graph.add_flow(range->range_profiles, clutter->range_profiles, q);
+        graph.add_flow(clutter->range_profiles_out, doppler->range_profiles, q);
+        graph.add_flow(doppler->rd_maps, cfar->rd_maps, q);
+        graph.add_flow(cfar->detection_idx, sink->detection_idx, q);
+        graph.add_flow(cfar->detection_score, sink->detection_score, q);
+        graph.add_flow(range->range_bins, sink->range_bins, q);
+        graph.add_flow(doppler->velocity_bins, sink->velocity_bins, q);
+        graph.add_flow(cfar->detection_mask, mask_sink->input, q);
+        graph.add_flow(cfar->noise_estimate, noise_sink->input, q);
+        graph.add_flow(cfar->cfar_power, power_sink->input, q);
+
+#if defined(HOLOSCAN_RADAR_HAS_X11)
+        // Created before the clustering stages so their outputs can be wired
+        // into the overlay ports below; the viewer's contract covers exactly
+        // the ports this app wires (see X11RdViewerConfig).
+        std::optional<holoscan::OperatorHandle<X11RdViewerOp>> viewer;
+        if (cfg.visualize) {
+          X11RdViewerConfig viz_cfg;
+          viz_cfg.title = "fmcw_siso - Range-Doppler";  // ASCII: Latin-1 draw
+          viz_cfg.width = static_cast<int>(cfg.viz.window_width);
+          viz_cfg.height = static_cast<int>(cfg.viz.window_height);
+          viz_cfg.overlay_detections = true;
+          viz_cfg.overlay_clusters = !cfg.peak_only;
+          viz_cfg.plots_enabled = cfg.plots.enable;
+          viz_cfg.plot_window = cfg.plots.window;
+          viz_cfg.frame_period = cfg.frame_period;
+          viz_cfg.marker_radius = cfg.viz.marker_radius;
+          viz_cfg.marker_outline = cfg.viz.marker_outline;
+
+          auto to_image =
+              graph.op<RdMapToImageOp>("rd_map_to_image", extents);
+          viewer = graph.op<X11RdViewerOp>("x11_rd_viewer", viz_cfg);
+          graph.add_flow(doppler->rd_maps, to_image->rd_maps, q);
+          graph.add_flow(to_image->rd_image, (*viewer)->rd_image, q);
+          graph.add_flow(cfar->detection_idx, (*viewer)->detection_idx, q);
+          graph.add_flow(range->range_bins, (*viewer)->range_bins, q);
+          graph.add_flow(doppler->velocity_bins, (*viewer)->velocity_bins, q);
+          bind_out(options, "rd_map_to_image", "rd_image");
+          HOLOSCAN_LOG_INFO("fmcw_siso: X11 RD live viewer enabled ({}x{})",
+                            viz_cfg.width, viz_cfg.height);
+        }
+#else
+        if (cfg.visualize) {
+          HOLOSCAN_LOG_WARN(
+              "fmcw_siso: visualize requested but X11/Holoviz unavailable; "
+              "running log-only");
+          cfg.visualize = false;
+        }
+#endif
+
+        if (!cfg.peak_only) {
+          // [EA HSDK5 ONLY] FeatureAssemblyOp optional range/velocity wiring
+          // yields RUNTIME_OPERATOR_REPLAY_MISMATCH; use required-port lookup.
+          auto feature_assembly =
+              graph.op<PhysicalRangeVelocityPointsOp>("feature_assembly",
+                                                      extents);
+
+          auto cluster = graph.op<radar::ClusterDBSCANOp<float>>(
+              "cluster_dbscan", extents);
+          cluster.set_params(cfg.dbscan_params);
+
+          auto reduction = graph.op<radar::DetectionReductionOp<float>>(
+              "detection_reduction", extents);
+          reduction.set_params(cfg.reduction_params);
+
+          auto cluster_report =
+              graph.op<ClusterReportOp>("cluster_report");
+
+          graph.add_flow(cfar->detection_idx, feature_assembly->detection_idx,
+                         q);
+          graph.add_flow(range->range_bins, feature_assembly->range_bins, q);
+          graph.add_flow(doppler->velocity_bins,
+                         feature_assembly->velocity_bins, q);
+          graph.add_flow(feature_assembly->points, cluster->points, q);
+          graph.add_flow(feature_assembly->points, cluster_report->points, q);
+          graph.add_flow(cluster->labels, cluster_report->labels, q);
+          graph.add_flow(cluster->sizes, cluster_report->sizes, q);
+          graph.add_flow(cluster->labels, reduction->labels, q);
+          graph.add_flow(cfar->detection_idx, reduction->detection_idx, q);
+          graph.add_flow(feature_assembly->points, reduction->points, q);
+          graph.add_flow(reduction->rep_idx, cluster_report->rep_idx, q);
+          graph.add_flow(range->range_bins, cluster_report->range_bins, q);
+          graph.add_flow(doppler->velocity_bins, cluster_report->velocity_bins,
+                         q);
+
+#if defined(HOLOSCAN_RADAR_HAS_X11)
+          if (viewer) {
+            graph.add_flow(cluster->labels, (*viewer)->labels, q);
+            graph.add_flow(reduction->rep_idx, (*viewer)->rep_idx, q);
+          }
+#endif
+
+          bind_out(options, "feature_assembly", "points");
+          bind_out(options, "cluster_dbscan", "labels");
+          bind_out(options, "cluster_dbscan", "sizes");
+          bind_out(options, "detection_reduction", "rep_idx");
+        }
+
+        bind_out(options, "adc_source", "adc_cube");
+        bind_out(options, "range_processor", "range_profiles");
+        bind_out(options, "range_processor", "range_bins");
+        bind_out(options, "clutter_filter", "range_profiles_out");
+        bind_out(options, "doppler_processor", "rd_maps");
+        bind_out(options, "doppler_processor", "velocity_bins");
+        bind_out(options, "cfar_detector", "detection_mask");
+        bind_out(options, "cfar_detector", "detection_score");
+        bind_out(options, "cfar_detector", "noise_estimate");
+        bind_out(options, "cfar_detector", "detection_idx");
+        bind_out(options, "cfar_detector", "cfar_power");
+      });
 }

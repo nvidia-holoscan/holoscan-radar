@@ -16,6 +16,7 @@
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/python/py_operator_utils.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
@@ -35,12 +36,24 @@ class PyFMCWRangeProcessorOp : public FMCWRangeProcessorOp<T> {
       Fragment* fragment, const py::args& args,
       const WindowSpec& range_window = WindowSpec{},
       bool apply_dechirp = false,
-      std::optional<FMCWWaveformDescriptor> waveform = std::nullopt,
+      std::optional<FMCWWaveformDescriptor> waveform =
+          std::nullopt,
       FftNorm fft_norm = FftNorm::kBackward,
       double propagation_speed = kDefaultPropagationSpeed,
       std::optional<int64_t> nfft = std::nullopt,
+      std::int64_t max_chirps = 512,
+      std::int64_t max_range_bins = 4096,
+      std::int64_t max_rx = 1,
       const std::string& name = "fmcw_range_processor")
-      : FMCWRangeProcessorOp<T>() {
+      : FMCWRangeProcessorOp<T>([&] {
+          MaxTensorExtents extents;
+          extents.max_chirps = max_chirps;
+          extents.max_range_bins = max_range_bins;
+          if (max_rx > 1) {
+            extents.max_rx = max_rx;
+          }
+          return extents;
+        }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -75,17 +88,29 @@ void bind_fmcw_range_processor(py::module_& m, const char* class_name) {
       "fft_norm : FftNorm, optional\n"
       "propagation_speed : float, optional\n"
       "nfft : int, optional\n"
+      "max_chirps : int, optional\n"
+      "max_range_bins : int, optional\n"
+      "max_rx : int, optional\n"
       "name : str, optional\n")
-      .def(py::init<Fragment*, const py::args&, const WindowSpec&, bool,
-                    std::optional<FMCWWaveformDescriptor>, FftNorm, double,
-                    std::optional<int64_t>, const std::string&>(),
+      .def(py::init<Fragment*, const py::args&,
+                    const WindowSpec&, bool,
+                    std::optional<FMCWWaveformDescriptor>,
+                    FftNorm, double,
+                    std::optional<int64_t>,
+                    std::int64_t, std::int64_t,
+                    std::int64_t,
+                    const std::string&>(),
            py::arg("fragment"),
            py::arg("range_window") = WindowSpec{},
            py::arg("apply_dechirp") = false,
            py::arg("waveform") = py::none(),
            py::arg("fft_norm") = FftNorm::kBackward,
-           py::arg("propagation_speed") = kDefaultPropagationSpeed,
+           py::arg("propagation_speed") =
+               kDefaultPropagationSpeed,
            py::arg("nfft") = py::none(),
+           py::arg("max_chirps") = 512,
+           py::arg("max_range_bins") = 4096,
+           py::arg("max_rx") = 1,
            py::arg("name") = "fmcw_range_processor")
       .def("setup", &Op::setup, py::arg("spec"));
 }

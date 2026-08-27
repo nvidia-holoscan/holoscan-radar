@@ -9,13 +9,14 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.1.0",
+        "version": "0.2.0",
         "changelog": {
-            "0.1.0": "Capon MVDR: covariance + diagonal loading + spectrum + dominant DOA; max_sources/doa_multi/source_count; eigenvalues; spatial_smoothing deferred"
+            "0.2.0": "HSDK 5 EA port: Operator<MVDRParams>, typed Tensor ports, OnEach contract, sticky POD live Inputs, always-emit optional outputs, stop() MatX teardown",
+            "0.1.0": "Capon MVDR: covariance + diagonal loading + spectrum + dominant DOA; max_sources/doa_multi/source_count; eigenvalues; spatial_smoothing"
         },
         "holoscan_sdk": {
-            "minimum_required_version": "4.3.0",
-            "tested_versions": ["4.3.0"]
+            "minimum_required_version": "5.0.0",
+            "tested_versions": ["5.0.0"]
         },
         "platforms": ["x86_64", "aarch64"],
         "tags": ["Radar", "Angle", "MVDR", "Capon", "GPU", "FMCW", "SIMO"],

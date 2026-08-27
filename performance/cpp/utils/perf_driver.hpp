@@ -30,7 +30,7 @@
 // redefine to customize):
 //
 //   void process_warmup(const RunSettings&);  // discarded prime run
-//   void post_run(PerfReport*);               // e.g. calibration summary
+//   void post_run(PerfReport*, bool quiet);   // e.g. calibration / tables
 //   bool isolate_failures();                  // try/catch each scenario
 
 #pragma once
@@ -56,7 +56,7 @@ namespace holoscan::radar::perf {
 // struct only defines the hooks it actually needs.
 struct PerfDriverDefaults {
   static void process_warmup(const RunSettings&) {}
-  static void post_run(PerfReport*) {}
+  static void post_run(PerfReport*, bool /*quiet*/) {}
   static bool isolate_failures() { return false; }
 };
 
@@ -302,7 +302,7 @@ int perf_main(int argc, char** argv) {
 
   Traits::process_warmup(opt.rs);
   detail::run_all_scenarios<Traits>(scenarios, opt, &report);
-  Traits::post_run(&report);
+  Traits::post_run(&report, opt.quiet);
 
   return detail::write_outputs(opt, report);
 }

@@ -5,12 +5,22 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <string>
+#include <type_traits>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
+#include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/expected.hpp>
+#include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
+#include <holoscan/core/parameter.hpp>
+#include <holoscan/core/parameter_schema.hpp>
+#include <holoscan/core/port.hpp>
+#include <holoscan/core/temporal_contract.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
 
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 
 namespace holoscan::radar {
@@ -20,44 +30,71 @@ namespace holoscan::radar {
 //
 // In:  adc_cube — complex64/complex128 or float32/float64 (real IF),
 //               (..., N_rx, M·L, samples_per_chirp).
-// Out: adc_cube — same dtype, (..., M_tx, N_rx, L, samples_per_chirp).
+// Out: adc_cube_out — same dtype,
+//               (..., M_tx, N_rx, L, samples_per_chirp).
+//               [EA HSDK5 ONLY] unique in/out port names required.
 //
-// Scope (v1): uniform round-robin TDM only — each TX fires once per length-M
-// cycle and the cycle repeats identically across all L repetitions (equal
-// per-TX counts, fixed PRI/M inter-TX spacing). Non-uniform / staggered
-// schedules (varying TX dwell or count) are rejected by TXSchedule with an
-// error. Supporting them is a deferred future enhancement (needs a
-// per-TX-timing schedule descriptor plus a matching MIMOCoherentCompensationOp
-// model) — see STATUS.md → Roadmap (settled as L12).
+// Precision is fixed at compile time by the template instantiation.
+
+struct MIMODeinterleaveParams {
+  TXSchedule tx_schedule{};
+};
+
+HOLOSCAN_PARAM_SCHEMA(
+    MIMODeinterleaveParams,
+    holoscan::param_schema(
+        "com.nvidia.holoscan.radar.MIMODeinterleaveParams", 1),
+    holoscan::field<&MIMODeinterleaveParams::tx_schedule>("tx_schedule")
+        .description(
+            "TXSchedule describing how the interleaved slow-time axis "
+            "splits into (M_tx, L). Required; static for the instance."));
+
+static_assert(holoscan::param_schema_availability<MIMODeinterleaveParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in MIMODeinterleaveParams's "
+              "namespace");
+
 template <typename T>
-class MIMODeinterleaveOp : public holoscan::Operator {
+class MIMODeinterleaveOp
+    : public holoscan::Operator<MIMODeinterleaveParams> {
+  static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
+                "MIMODeinterleaveOp supports float and double precision");
+
  public:
-  static_assert(sizeof(T) == 4 || sizeof(T) == 8,
-                "MIMODeinterleaveOp supports float and double only");
-
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(MIMODeinterleaveOp)
-
-  MIMODeinterleaveOp() = default;
+  explicit MIMODeinterleaveOp(const MaxTensorExtents& extents);
   ~MIMODeinterleaveOp() override;
 
-  void initialize() override;
   void setup(OperatorSpec& spec) override;
-  void compute(InputContext& op_input, OutputContext& op_output,
-               ExecutionContext& context) override;
+  [[nodiscard]] Contract contract() const override;
+  [[nodiscard]] expected<void, Error> compute(
+      ExecutionContext& context) override;
+
+  Input<Tensor> adc_cube{"adc_cube"};
+  // HSDK 5 requires unique port names within an operator (inputs and
+  // outputs share one namespace). OPERATOR_API.md's logical output channel
+  // remains "adc_cube"; the physical port name is adc_cube_out.
+  // [EA HSDK5 ONLY] revisit naming once the full port is settled.
+  Output<Tensor> adc_cube_out{"adc_cube_out"};
 
  private:
-  void ensure_device_gather_map(int64_t slow_time, const TXSchedule& schedule,
+  void ensure_device_gather_map(int64_t slow_time,
+                                const TXSchedule& schedule,
                                 cudaStream_t stream);
 
-  Parameter<TXSchedule> tx_schedule_;
-
-  std::shared_ptr<holoscan::Tensor> retained_input_;
+  Tensor retained_input_;
 
   int64_t cached_slow_time_{-1};
   TXSchedule cached_schedule_{};
   std::vector<int64_t> cached_gather_host_;
   int64_t* d_gather_map_{nullptr};
   size_t d_gather_capacity_{0};
+
+  MaxTensorExtents extents_;
+  std::uint32_t max_rank_{4U};
+  std::size_t max_byte_span_{0U};
 };
+
+extern template class MIMODeinterleaveOp<float>;
+extern template class MIMODeinterleaveOp<double>;
 
 }  // namespace holoscan::radar

@@ -158,8 +158,8 @@ class FmcwMimoApp(Application):
             self.add_flow(source, range_op, {("adc_cube", "adc_cube")})
             self.add_flow(range_op, doppler, {("range_profiles", "range_profiles")})
             self.add_flow(doppler, compensation, {("rd_maps", "rd_maps")})
-            self.add_flow(compensation, clutter, {("rd_maps", "range_profiles")})
-            self.add_flow(clutter, vaa, {("range_profiles", "rd_maps")})
+            self.add_flow(compensation, clutter, {("rd_maps_out", "range_profiles")})
+            self.add_flow(clutter, vaa, {("range_profiles_out", "rd_maps")})
         else:
             source = custom_ops.MimoTdmAdcSourceOp(
                 self,
@@ -175,11 +175,11 @@ class FmcwMimoApp(Application):
                 self, self.from_config("mimo_deinterleave"), name="mimo_deinterleave"
             )
             self.add_flow(source, deinterleave, {("adc_cube", "adc_cube")})
-            self.add_flow(deinterleave, range_op, {("adc_cube", "adc_cube")})
+            self.add_flow(deinterleave, range_op, {("adc_cube_out", "adc_cube")})
             self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
-            self.add_flow(clutter, doppler, {("range_profiles", "range_profiles")})
+            self.add_flow(clutter, doppler, {("range_profiles_out", "range_profiles")})
             self.add_flow(doppler, compensation, {("rd_maps", "rd_maps")})
-            self.add_flow(compensation, vaa, {("rd_maps", "rd_maps")})
+            self.add_flow(compensation, vaa, {("rd_maps_out", "rd_maps")})
 
         # peak_only is a native cfar_detector param (from_config); the app reads
         # it (cfg.peak_only) to drop the clustering subgraph below.
@@ -213,8 +213,8 @@ class FmcwMimoApp(Application):
             )
             self.add_flow(range_op, ddm_velocity_bins, {("range_bins", "sync")})
 
-        self.add_flow(vaa, cfar, {("rd_maps", "rd_maps")})
-        self.add_flow(vaa, gather, {("rd_maps", "rd_maps")})
+        self.add_flow(vaa, cfar, {("rd_maps_out", "rd_maps")})
+        self.add_flow(vaa, gather, {("rd_maps_out", "rd_maps")})
         self.add_flow(cfar, gather, {("detection_idx", "detection_idx")})
         self.add_flow(gather, beamscan, {("snapshot", "snapshot"), ("is_valid", "is_valid")})
         self.add_flow(vaa, beamscan, {("array_geometry", "array_geometry")})

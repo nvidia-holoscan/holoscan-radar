@@ -3,12 +3,13 @@
 
 // Performance characterization for FMCWRangeProcessorOp — windowed FFT along
 // fast-time. Sweeps the (chirps x samples) size ladder, the range window
-// (rectangular / Hann), and a multi-channel batch. Every compute run inlines a
-// mid-session [live] range_window override so the window-coefficient rebuild
-// (warn-once-and-cache) cost is measured. Measurement tool only: no timing
-// assertions. See docs/planning/OPERATOR_DEVELOPMENT.md.
-
-#include <cuda_runtime_api.h>
+// (rectangular / Hann), and a multi-channel batch.
+//
+// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
+// Mid-session [live] range_window override measurement is deferred —
+// WindowSpec is Params-only on EA (HSDK5_PORT.md §9). Params still select
+// the window under test. Measurement tool only: no timing assertions.
+// See docs/planning/OPERATOR_DEVELOPMENT.md.
 
 #include <complex>
 #include <cstdint>
@@ -20,20 +21,20 @@
 #include <utility>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
+#include <holoscan/core/connection_options.hpp>
+#include <holoscan/core/graph.hpp>
 
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
-#include "utils/perf_app.hpp"
 #include "utils/perf_driver.hpp"
+#include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
-#include "utils/perf_sink.hpp"
-#include "utils/perf_source.hpp"
 #include "utils/tensor_factory.hpp"
 
 namespace hr = holoscan::radar;
@@ -99,13 +100,6 @@ hr::WindowSpec window_of(hr::WindowType type) {
   return w;
 }
 
-// Flip to the other window so a live override always forces a coefficient
-// rebuild (rect <-> Hann).
-hr::WindowType flip_window(hr::WindowType w) {
-  return w == hr::WindowType::kHann ? hr::WindowType::kNone
-                                    : hr::WindowType::kHann;
-}
-
 // A fixed, valid waveform descriptor so range_bins is emitted every tick. The
 // exact values do not affect timing; they only need to pass descriptor
 // validation (all finite and > 0, bandwidth defined).
@@ -127,46 +121,44 @@ std::vector<int64_t> cube_shape(const RangeScenario& scen) {
 }
 
 // ---------------------------------------------------------------------------
-// Mini-application: adc_cube source -> range op -> terminal (profiles) + null
-// (bins) sinks + a [live] range_window override source.
+// Graph: adc_cube source -> range op -> terminal (profiles) + null (bins).
+// range_bins is always emitted here because we set a valid waveform.
 // ---------------------------------------------------------------------------
-template <typename T>
-class RangePerfApp : public holoscan::Application {
- public:
-  const RangeScenario* scen{nullptr};
-  perf::TimingCollector* collector{nullptr};
-  holoscan::TensorMap frame;  // adc_cube
-  hr::FMCWWaveformDescriptor waveform;
-  hr::WindowSpec override_window;
-  int64_t override_at{0};
-  int total_frames{25};
-
-  void compose() override {
-    using holoscan::Arg;
-    auto op = make_operator<hr::FMCWRangeProcessorOp<T>>(
-        "range", Arg("waveform") = waveform,
-        Arg("range_window") = window_of(scen->window));
-
-    auto src = make_operator<perf::PerfTensorSourceOp<perf::AdcCubePort>>(
-        "src", make_condition<holoscan::CountCondition>(total_frames));
-    src->configure(collector, frame);
-    add_flow(src, op, {{"adc_cube", "adc_cube"}});
-
-    auto term = make_operator<perf::PerfTerminalSinkOp>("profiles_sink");
-    term->configure(collector);
-    add_flow(op, term, {{"range_profiles", "input"}});
-
-    // range_bins is optional but emitted (waveform is set); drain it so the
-    // operator ticks and the axis path is exercised.
-    auto ns = make_operator<perf::PerfNullSinkOp>("bins_sink");
-    add_flow(op, ns, {{"range_bins", "input"}});
-
-    auto ovr = make_operator<perf::PerfOverrideSourceOp<hr::WindowSpec>>(
-        "ovr", make_condition<holoscan::CountCondition>(total_frames));
-    ovr->configure(override_at, override_window);
-    add_flow(ovr, op, {{"output", "range_window"}});
+perf::TimingCollector run_range_graph(const RangeScenario& scen,
+                                      int total_frames) {
+  auto cube =
+      perf::make_iq_cube_device<PerfPrecision>(cube_shape(scen));
+  hr::MaxTensorExtents extents;
+  extents.max_chirps = scen.num_chirps;
+  extents.max_range_bins = scen.samples_per_chirp;
+  if (scen.channels > 1) {
+    extents.max_rx = scen.channels;
   }
-};
+  return perf::run_perf_graph(
+      std::move(cube), total_frames, "range-perf",
+      [&](holoscan::Graph& graph, const auto& src,
+          holoscan::CompileOptions& options) {
+        auto op =
+            graph.op<hr::FMCWRangeProcessorOp<PerfPrecision>>(
+                "range", extents);
+        hr::FMCWRangeProcessorParams params;
+        params.waveform = make_waveform();
+        params.range_window = window_of(scen.window);
+        op.set_params(std::move(params));
+        const auto sink =
+            graph.op<perf::PerfTerminalSinkOp>("out_sink");
+        const auto ns =
+            graph.op<perf::PerfNullSinkOp>("bins_sink");
+        const holoscan::ConnectionOptions q{.queue_depth = 4U};
+        graph.add_flow(src->out, op->adc_cube, q);
+        graph.add_flow(op->range_profiles, sink->in, q);
+        graph.add_flow(op->range_bins, ns->in, q);
+        perf::bind_tensor_out(
+            options, "range", "range_profiles");
+        perf::bind_tensor_out(
+            options, "range", "range_bins");
+      });
+}
 
 void fill_throughput(perf::ResultRow* row, const RangeScenario& scen,
                      double median_ms) {
@@ -177,14 +169,15 @@ void fill_throughput(perf::ResultRow* row, const RangeScenario& scen,
   const double batch = static_cast<double>(scen.channels);
   const double chirps = static_cast<double>(scen.num_chirps);
   const double n = static_cast<double>(scen.samples_per_chirp);
-  row->cells_per_second = batch * chirps * n / sec;  // complex bins/s
-  row->slices_per_second = batch * chirps / sec;     // range FFTs/s
+  row->cells_per_second = batch * chirps * n / sec;
+  row->slices_per_second = batch * chirps / sec;
 
-  const double csz = sizeof(std::complex<PerfPrecision>);  // complex sample
+  const double csz = sizeof(std::complex<PerfPrecision>);
   const double in_bytes = batch * chirps * n * csz;
   const double out_bytes = batch * chirps * n * csz +
-                           n * sizeof(PerfPrecision);  // profiles + bins
-  row->estimated_effective_gbps = (in_bytes + out_bytes) / sec / 1e9;
+                           n * sizeof(PerfPrecision);
+  row->estimated_effective_gbps =
+      (in_bytes + out_bytes) / sec / 1e9;
 }
 
 perf::ResultRow base_row(const RangeScenario& scen) {
@@ -196,8 +189,9 @@ perf::ResultRow base_row(const RangeScenario& scen) {
   row.map_shape = {scen.num_chirps, scen.samples_per_chirp};
   row.input_shape = cube_shape(scen);
   row.out_batch = scen.channels;
-  row.k = scen.samples_per_chirp;  // transform length
-  row.notes = "live_override=range_window";
+  row.k = scen.samples_per_chirp;
+  // [EA HSDK5 ONLY] live override timing deferred — HSDK5_PORT.md §9.
+  row.notes = "live_override=deferred_ea";
   return row;
 }
 
@@ -221,25 +215,29 @@ RangeScenario make_scenario(hr::WindowType window, const SizeSpec& s,
 
 // ---------------------------------------------------------------------------
 // Traits: the operator-specific surface the shared driver plugs into.
-// FMCWRangeProcessorOp has [live] override ports (range_window exercised inline
-// in run_scenario) and needs no process warmup or post-run summary, so it takes
-// those defaults. It does not emit bool tensors, so no stderr filtering.
+// [EA HSDK5 ONLY] live range_window override is deferred (HSDK5_PORT §9).
 // ---------------------------------------------------------------------------
 struct RangeTraits : perf::PerfDriverDefaults {
   using Scenario = RangeScenario;
 
-  static const char* tool_name() { return "perf_fmcw_range_processor"; }
+  static const char* tool_name() {
+    return "perf_fmcw_range_processor";
+  }
   static const char* tool_description() {
-    return "FMCWRangeProcessorOp performance characterization";
+    return "FMCWRangeProcessorOp performance characterization "
+           "(HSDK 5 Graph)";
   }
   static const char* sizes_all_help() {
     return "Rectangular-window size sweep across the full ladder";
   }
   static const char* sizes_subset_help() {
-    return "Rectangular-window size sweep across an explicit subset";
+    return "Rectangular-window size sweep across an explicit "
+           "subset";
   }
   static const char* full_help() {
-    return "Full matrix (windows x sizes x channel batch)";
+    return "Full matrix (windows x sizes x channel batch); "
+           "live-override timing deferred on HSDK 5 EA "
+           "(HSDK5_PORT.md §9)";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -258,11 +256,14 @@ struct RangeTraits : perf::PerfDriverDefaults {
   static std::vector<RangeScenario> build_default_matrix() {
     std::vector<RangeScenario> out;
     for (const char* sid : {"xs", "md", "lg", "xl"}) {
-      out.push_back(make_scenario(hr::WindowType::kNone, must_find_size(sid)));
+      out.push_back(make_scenario(
+          hr::WindowType::kNone, must_find_size(sid)));
     }
     const SizeSpec& md = must_find_size("md");
-    out.push_back(make_scenario(hr::WindowType::kHann, md));
-    out.push_back(make_scenario(hr::WindowType::kNone, md, 4));
+    out.push_back(
+        make_scenario(hr::WindowType::kHann, md));
+    out.push_back(
+        make_scenario(hr::WindowType::kNone, md, 4));
     return out;
   }
 
@@ -272,10 +273,12 @@ struct RangeTraits : perf::PerfDriverDefaults {
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
       if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+        std::cerr << "warning: unknown size id '"
+                  << sid << "', skipping\n";
         continue;
       }
-      out.push_back(make_scenario(hr::WindowType::kNone, *s));
+      out.push_back(
+          make_scenario(hr::WindowType::kNone, *s));
     }
     return out;
   }
@@ -283,14 +286,16 @@ struct RangeTraits : perf::PerfDriverDefaults {
   static std::vector<RangeScenario> build_full_matrix() {
     std::vector<RangeScenario> out;
     for (const auto& s : size_ladder()) {
-      for (auto w : {hr::WindowType::kNone, hr::WindowType::kHann}) {
+      for (auto w : {hr::WindowType::kNone,
+                     hr::WindowType::kHann}) {
         out.push_back(make_scenario(w, s));
       }
     }
     for (const char* sid : {"md", "lg"}) {
       const SizeSpec& s = must_find_size(sid);
       for (int64_t ch : {4, 16}) {
-        out.push_back(make_scenario(hr::WindowType::kNone, s, ch));
+        out.push_back(make_scenario(
+            hr::WindowType::kNone, s, ch));
       }
     }
     return out;
@@ -299,27 +304,12 @@ struct RangeTraits : perf::PerfDriverDefaults {
   static void run_scenario(const RangeScenario& scen,
                            const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    // No mid-session live override until HSDK5_PORT.md §9 is closed.
+    const perf::RunPlan plan =
+        perf::make_run_plan(rs, /*has_override=*/false);
     const auto samples = perf::collect_scenario_samples(
         rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
-          perf::TimingCollector collector;
-          // Preallocate the input before the setup clock so the H2D upload is
-          // not billed as operator setup.
-          auto cube = perf::single_map(
-              perf::make_iq_cube_device<PerfPrecision>(cube_shape(scen)),
-              "adc_cube");
-
-          collector.t_construct = perf::Clock::now();
-          auto app = holoscan::make_application<RangePerfApp<PerfPrecision>>();
-          app->scen = &scen;
-          app->collector = &collector;
-          app->frame = std::move(cube);
-          app->waveform = make_waveform();
-          app->override_window = window_of(flip_window(scen.window));
-          app->override_at = p.override_at;
-          app->total_frames = p.total_frames;
-          app->run();
-          return collector;
+          return run_range_graph(scen, p.total_frames);
         });
 
     perf::append_setup_row(base_row(scen), samples, report);
@@ -328,15 +318,14 @@ struct RangeTraits : perf::PerfDriverDefaults {
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
     row.notes =
-        "cold_ms is first-frame latency including initial window/FFT plan "
-        "build; median/p90 are pre-override steady state; override_ms is peak "
-        "latency over the 3-frame live range_window rebuild window; cells/s is "
-        "complex range bins/s";
+        "cold_ms is first-frame latency including initial "
+        "window/FFT plan build; median/p90 are post-warmup "
+        "steady state; live range_window override timing "
+        "deferred (HSDK5_PORT.md §9); "
+        "cells/s is complex range bins/s";
     report->results.push_back(row);
   }
 
-  // Pay CUDA + Holoscan first-Application (and first cuFFT plan) costs on a
-  // discarded xs run so scenario #1 cold_ms is not inflated by process init.
   static void process_warmup(const perf::RunSettings&) {
     perf::run_process_warmup([] {
       perf::PerfReport discarded;
@@ -344,8 +333,10 @@ struct RangeTraits : perf::PerfDriverDefaults {
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(make_scenario(hr::WindowType::kNone, must_find_size("xs")),
-                   warm, &discarded);
+      run_scenario(
+          make_scenario(hr::WindowType::kNone,
+                        must_find_size("xs")),
+          warm, &discarded);
     });
   }
 };
@@ -353,5 +344,6 @@ struct RangeTraits : perf::PerfDriverDefaults {
 }  // namespace
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<RangeTraits>(argc, argv);
+  return holoscan::radar::perf::perf_main<RangeTraits>(
+      argc, argv);
 }

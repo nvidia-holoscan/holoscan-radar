@@ -7,21 +7,29 @@
 
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "radar_common/sdk/arg_setters.hpp"
-#include "radar_common/sdk/override_param.hpp"
+#include <holoscan/core/expected_macros.hpp>
+#include <holoscan/core/payload_options.hpp>
+
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
+#include "radar_common/tensor/extents_layout.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
 
 namespace {
+
+expected<void, Error> fail_invalid(const std::string& message) {
+  return make_unexpected(Error{ErrorCode::kInvalidArgument, message});
+}
 
 template <typename T>
 std::vector<std::complex<T>> cast_correction(
@@ -37,43 +45,58 @@ std::vector<std::complex<T>> cast_correction(
 }  // namespace
 
 template <typename T>
+MIMOCoherentCompensationOp<T>::MIMOCoherentCompensationOp(
+    const MaxTensorExtents& extents) {
+  const char* who = "MIMOCoherentCompensationOp";
+  const std::int64_t max_tx =
+      require_extent(extents.max_tx, "max_tx", who);
+  const std::int64_t max_rx =
+      require_extent(extents.max_rx, "max_rx", who);
+  const std::int64_t max_doppler =
+      require_extent(extents.max_doppler_bins,
+                     "max_doppler_bins", who);
+  const std::int64_t max_range =
+      require_extent(extents.max_range_bins,
+                     "max_range_bins", who);
+  extents_ = extents;
+  max_rank_ = 4U;
+  max_byte_span_ = byte_span_complex_cube<T>(
+      {max_tx, max_rx, max_doppler, max_range}, who);
+}
+
+template <typename T>
 MIMOCoherentCompensationOp<T>::~MIMOCoherentCompensationOp() {
   detail::release_ddm_correlate_scratch(this);
 }
 
 template <typename T>
-void MIMOCoherentCompensationOp<T>::initialize() {
-  ensure_radar_arg_setters();
-  Operator::initialize();
-  effective_waveform_ = waveform_.get();
-}
-
-template <typename T>
 void MIMOCoherentCompensationOp<T>::setup(OperatorSpec& spec) {
-  spec.input<holoscan::TensorMap>("rd_maps");
-  spec.output<holoscan::TensorMap>("rd_maps");
-
-  spec.param(multiplexing_scheme_, "multiplexing_scheme",
-             "MIMO multiplexing scheme",
-             "TDM: per-Doppler-bin inter-TX phase correction. DDM: band demux "
-             "+ code removal. Static. Required.",
-             MultiplexingScheme::kUnspecified);
-  spec.param(waveform_, "waveform", "FMCW waveform descriptor",
-             "Per-TX PRI and carrier for Doppler-dependent phase math.",
-             FMCWWaveformDescriptor{});
-  add_override_port<FMCWWaveformDescriptor>(spec, "waveform");
-  spec.param(ddm_code_, "ddm_code", "DDM code descriptor",
-             "Doppler-band / phase-code layout for DDM mode. Unused for TDM.",
-             DDMCodeDescriptor{});
+  constexpr TensorPortLayout kDevice{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = std::nullopt,
+      .rank = std::nullopt,
+  };
+  spec.input(rd_maps).queue_depth(2U).expects_tensor(kDevice);
+  spec.output(rd_maps_out)
+      .produces_tensor(kDevice)
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = max_rank_,
+          .max_byte_span = max_byte_span_});
 }
 
 template <typename T>
-void MIMOCoherentCompensationOp<T>::run_tdm_compute(
-    OutputContext& op_output, const detail::TdmRdMapsLayout& layout,
-    const std::shared_ptr<holoscan::Tensor>& input, cudaStream_t stream,
-    bool waveform_changed) {
+Contract MIMOCoherentCompensationOp<T>::contract() const {
+  Contract result;
+  result.trigger(OnEach{rd_maps});
+  return result;
+}
+
+template <typename T>
+expected<void, Error> MIMOCoherentCompensationOp<T>::run_tdm_compute(
+    ExecutionContext& context, const detail::TdmRdMapsLayout& layout,
+    const Tensor& input, cudaStream_t stream, bool waveform_changed) {
   if (!effective_waveform_.is_valid()) {
-    throw std::invalid_argument(
+    return fail_invalid(
         "MIMOCoherentCompensationOp: waveform must be a valid "
         "FMCWWaveformDescriptor (build-time or [live] override)");
   }
@@ -88,7 +111,12 @@ void MIMOCoherentCompensationOp<T>::run_tdm_compute(
         const auto typed = cast_correction<T>(host);
         entry.device_table = make_device_tensor(
             {layout.num_tx, layout.num_doppler}, complex_dtype<T>());
-        if (cudaMemcpyAsync(entry.device_table->data(), typed.data(),
+        auto mut = entry.device_table->mutable_data();
+        if (!mut) {
+          throw std::runtime_error(
+              "MIMOCoherentCompensationOp: correction-table not writable");
+        }
+        if (cudaMemcpyAsync(*mut, typed.data(),
                             typed.size() * sizeof(std::complex<T>),
                             cudaMemcpyHostToDevice,
                             stream) != cudaSuccess) {
@@ -98,41 +126,54 @@ void MIMOCoherentCompensationOp<T>::run_tdm_compute(
         return entry;
       });
 
-  auto output = make_device_tensor(detail::tdm_output_rd_shape(layout),
-                                   input->dtype());
-  detail::run_tdm_compensation_stage<T>(
-      input->data(), output->data(), layout, cached.device_table->data(),
-      stream);
+  const std::vector<int64_t> out_shape =
+      detail::tdm_output_rd_shape(layout);
 
-  if (stream != cudaStreamDefault) {
-    op_output.set_cuda_stream(stream, "rd_maps");
-  }
-  holoscan::TensorMap out_map;
-  out_map.insert({"rd_maps", output});
-  op_output.emit(out_map, "rd_maps");
+  const void* input_ptr = input.data();
+  HOLOSCAN_TRY(emit_device_tensor(
+      rd_maps_out, context, out_shape, input.dtype(),
+      [&](void* out_ptr, std::size_t) -> expected<void, Error> {
+        try {
+          detail::run_tdm_compensation_stage<T>(
+              input_ptr, out_ptr, layout,
+              cached.device_table->data(), stream);
+        } catch (const std::invalid_argument& e) {
+          return fail_invalid(e.what());
+        }
+        return {};
+      }));
+
+  return {};
 }
 
 template <typename T>
-void MIMOCoherentCompensationOp<T>::run_ddm_compute(
-    OutputContext& op_output, const detail::DdmRdMapsLayout& layout,
-    const std::shared_ptr<holoscan::Tensor>& input, cudaStream_t stream) {
+expected<void, Error> MIMOCoherentCompensationOp<T>::run_ddm_compute(
+    ExecutionContext& context, const detail::DdmRdMapsLayout& layout,
+    const Tensor& input, cudaStream_t stream) {
   if (!effective_waveform_.is_valid()) {
-    throw std::invalid_argument(
+    return fail_invalid(
         "MIMOCoherentCompensationOp: waveform must be a valid "
         "FMCWWaveformDescriptor (build-time or [live] override)");
   }
-  const DDMCodeDescriptor& code = ddm_code_.get();
+
+  const MIMOCoherentCompensationParams& pinned =
+      context.params<MIMOCoherentCompensationParams>();
+  const DDMCodeDescriptor& code = pinned.ddm_code;
   const auto mode = detail::ddm_classify_codes(code);
 
   if (mode == detail::DdmCodeMode::kNonLinear) {
-    run_ddm_correlate(op_output, layout, input, stream);
-    return;
+    return run_ddm_correlate(context, layout, input, stream);
   }
 
   const std::vector<double> offsets = detail::ddm_resolve_offsets(code);
   const int64_t num_tx = code.num_tx;
-  const int64_t num_doppler_per_tx = detail::ddm_num_doppler_per_tx(
-      layout.num_doppler, num_tx, code.guard_bands);
+  int64_t num_doppler_per_tx = 0;
+  try {
+    num_doppler_per_tx = detail::ddm_num_doppler_per_tx(
+        layout.num_doppler, num_tx, code.guard_bands);
+  } catch (const std::invalid_argument& e) {
+    return fail_invalid(e.what());
+  }
 
   const std::string cache_key =
       detail::ddm_demux_cache_key(code, layout.num_doppler);
@@ -144,7 +185,12 @@ void MIMOCoherentCompensationOp<T>::run_ddm_compute(
         entry.device_table =
             make_device_tensor({num_tx, num_doppler_per_tx},
                                DLDataType{kDLInt, 64, 1});
-        if (cudaMemcpyAsync(entry.device_table->data(), host.data(),
+        auto mut = entry.device_table->mutable_data();
+        if (!mut) {
+          throw std::runtime_error(
+              "MIMOCoherentCompensationOp: demux-table not writable");
+        }
+        if (cudaMemcpyAsync(*mut, host.data(),
                             host.size() * sizeof(int64_t),
                             cudaMemcpyHostToDevice, stream) != cudaSuccess) {
           throw std::runtime_error(
@@ -153,38 +199,46 @@ void MIMOCoherentCompensationOp<T>::run_ddm_compute(
         return entry;
       });
 
-  auto output = make_device_tensor(
-      detail::ddm_output_rd_shape(layout, num_tx, num_doppler_per_tx),
-      input->dtype());
-  detail::run_ddm_demux_stage<T>(
-      input->data(), output->data(), layout, num_tx, num_doppler_per_tx,
-      static_cast<const int64_t*>(cached.device_table->data()), stream);
+  const std::vector<int64_t> out_shape =
+      detail::ddm_output_rd_shape(layout, num_tx, num_doppler_per_tx);
 
-  if (stream != cudaStreamDefault) {
-    op_output.set_cuda_stream(stream, "rd_maps");
-  }
-  holoscan::TensorMap out_map;
-  out_map.insert({"rd_maps", output});
-  op_output.emit(out_map, "rd_maps");
+  const void* input_ptr = input.data();
+  HOLOSCAN_TRY(emit_device_tensor(
+      rd_maps_out, context, out_shape, input.dtype(),
+      [&](void* out_ptr, std::size_t) -> expected<void, Error> {
+        try {
+          detail::run_ddm_demux_stage<T>(
+              input_ptr, out_ptr, layout, num_tx, num_doppler_per_tx,
+              static_cast<const int64_t*>(cached.device_table->data()),
+              stream);
+        } catch (const std::invalid_argument& e) {
+          return fail_invalid(e.what());
+        }
+        return {};
+      }));
+
+  return {};
 }
 
 template <typename T>
-void MIMOCoherentCompensationOp<T>::run_ddm_correlate(
-    OutputContext& op_output, const detail::DdmRdMapsLayout& layout,
-    const std::shared_ptr<holoscan::Tensor>& input, cudaStream_t stream) {
-  const DDMCodeDescriptor& code = ddm_code_.get();
+expected<void, Error> MIMOCoherentCompensationOp<T>::run_ddm_correlate(
+    ExecutionContext& context, const detail::DdmRdMapsLayout& layout,
+    const Tensor& input, cudaStream_t stream) {
+  const MIMOCoherentCompensationParams& pinned =
+      context.params<MIMOCoherentCompensationParams>();
+  const DDMCodeDescriptor& code = pinned.ddm_code;
   const int64_t num_tx = code.num_tx;
   const int64_t num_chirps =
       static_cast<int64_t>(code.phase_codes.size()) / num_tx;
 
   if (code.guard_bands != 0) {
-    throw std::invalid_argument(
+    return fail_invalid(
         "MIMOCoherentCompensationOp: non-linear DDM phase_codes require "
         "guard_bands = 0 (got " +
         std::to_string(code.guard_bands) + ")");
   }
   if (num_chirps != layout.num_doppler) {
-    throw std::invalid_argument(
+    return fail_invalid(
         "MIMOCoherentCompensationOp: non-linear DDM phase_codes imply "
         "num_chirps = " +
         std::to_string(num_chirps) +
@@ -202,9 +256,14 @@ void MIMOCoherentCompensationOp<T>::run_ddm_correlate(
         const int64_t D = layout.num_doppler;
         entry.device_corr_weights =
             make_device_tensor({num_tx, D}, complex_dtype<T>());
+        auto mut = entry.device_corr_weights->mutable_data();
+        if (!mut) {
+          throw std::runtime_error(
+              "MIMOCoherentCompensationOp: corr-weights not writable");
+        }
         if constexpr (sizeof(T) == 8) {
           if (cudaMemcpyAsync(
-                  entry.device_corr_weights->data(), host_weights.data(),
+                  *mut, host_weights.data(),
                   host_weights.size() * sizeof(std::complex<double>),
                   cudaMemcpyHostToDevice, stream) != cudaSuccess) {
             throw std::runtime_error(
@@ -217,7 +276,7 @@ void MIMOCoherentCompensationOp<T>::run_ddm_correlate(
                 static_cast<float>(host_weights[i].real()),
                 static_cast<float>(host_weights[i].imag()));
           }
-          if (cudaMemcpyAsync(entry.device_corr_weights->data(), typed.data(),
+          if (cudaMemcpyAsync(*mut, typed.data(),
                               typed.size() * sizeof(std::complex<float>),
                               cudaMemcpyHostToDevice, stream) != cudaSuccess) {
             throw std::runtime_error(
@@ -227,64 +286,95 @@ void MIMOCoherentCompensationOp<T>::run_ddm_correlate(
         return entry;
       });
 
-  auto output = make_device_tensor(
-      detail::ddm_correlate_output_shape(layout, num_tx), input->dtype());
-  detail::run_ddm_correlate_stage<T>(input->data(), output->data(), layout,
-                                     num_tx, cached.device_corr_weights->data(),
-                                     this, stream);
+  const std::vector<int64_t> out_shape =
+      detail::ddm_correlate_output_shape(layout, num_tx);
 
-  if (stream != cudaStreamDefault) {
-    op_output.set_cuda_stream(stream, "rd_maps");
-  }
-  holoscan::TensorMap out_map;
-  out_map.insert({"rd_maps", output});
-  op_output.emit(out_map, "rd_maps");
+  const void* input_ptr = input.data();
+  HOLOSCAN_TRY(emit_device_tensor(
+      rd_maps_out, context, out_shape, input.dtype(),
+      [&](void* out_ptr, std::size_t) -> expected<void, Error> {
+        try {
+          detail::run_ddm_correlate_stage<T>(
+              input_ptr, out_ptr, layout, num_tx,
+              cached.device_corr_weights->data(), this, stream);
+        } catch (const std::invalid_argument& e) {
+          return fail_invalid(e.what());
+        }
+        return {};
+      }));
+
+  return {};
 }
 
 template <typename T>
-void MIMOCoherentCompensationOp<T>::compute(InputContext& op_input,
-                                          OutputContext& op_output,
-                                          ExecutionContext& context) {
-  (void)context;
+expected<void, Error> MIMOCoherentCompensationOp<T>::compute(
+    ExecutionContext& context) {
   constexpr const char* kOpName = "MIMOCoherentCompensationOp";
 
-  std::shared_ptr<holoscan::Tensor> input =
-      receive_single(op_input, "rd_maps", kOpName);
+  HOLOSCAN_TRY(auto input, receive_tensor(rd_maps, kOpName));
 
-  classify_input_dtype<T>(*input, "rd_maps", /*allow_real=*/false);
-  require_cuda_accessible(*input, "rd_maps", kOpName);
-  require_contiguous(*input, "rd_maps", kOpName);
-
-  // waveform is a [live] override on both schemes; sticky per invariant #5.
-  // (For linear-phase DDM the demux gather is waveform-independent, but the
-  // override is still accepted and validated for contract parity.)
-  bool waveform_changed = false;
-  effective_waveform_ =
-      resolve_override_param(op_input, "waveform", effective_waveform_,
-                             &waveform_changed);
-
-  cudaStream_t stream = op_input.receive_cuda_stream("rd_maps");
-
-  const MultiplexingScheme scheme = multiplexing_scheme_.get();
-  if (scheme == MultiplexingScheme::kUnspecified) {
-    throw std::invalid_argument(std::string(kOpName) +
-                                ": multiplexing_scheme is required "
-                                "(tdm or ddm)");
+  try {
+    classify_input_dtype<T>(input, "rd_maps", /*allow_real=*/false);
+    require_cuda_accessible(input, "rd_maps", kOpName);
+    require_contiguous(input, "rd_maps", kOpName);
+  } catch (const std::invalid_argument& e) {
+    return fail_invalid(e.what());
   }
+
+  const MIMOCoherentCompensationParams& pinned =
+      context.params<MIMOCoherentCompensationParams>();
+
+  // waveform is [live] in OPERATOR_API.md but Params-only on EA
+  // (HSDK5_PORT §9: FMCWWaveformDescriptor owns vectors). Read from
+  // Params each tick; track changes for TDM correction-table cache
+  // warn-once (initial Params seed is silent — ConfigCache contract).
+  bool waveform_changed = false;
+  if (!waveform_seeded_) {
+    effective_waveform_ = pinned.waveform;
+    waveform_seeded_ = true;
+  } else if (!(pinned.waveform == effective_waveform_)) {
+    waveform_changed = true;
+    effective_waveform_ = pinned.waveform;
+  }
+
+  cudaStream_t stream = context.cuda_stream().get();
+  if (stream == nullptr) {
+    return make_unexpected(
+        Error{ErrorCode::kNotSupported,
+              "MIMOCoherentCompensationOp: no CUDA compute stream"});
+  }
+
+  const MultiplexingScheme scheme = pinned.multiplexing_scheme;
+  if (scheme == MultiplexingScheme::kUnspecified) {
+    return fail_invalid(
+        std::string(kOpName) +
+        ": multiplexing_scheme is required (tdm or ddm)");
+  }
+
   if (scheme == MultiplexingScheme::kDdm) {
-    const detail::DdmRdMapsLayout layout =
-        detail::parse_ddm_rd_maps_layout(*input, "rd_maps");
-    run_ddm_compute(op_output, layout, input, stream);
+    detail::DdmRdMapsLayout layout;
+    try {
+      layout = detail::parse_ddm_rd_maps_layout(input, "rd_maps");
+    } catch (const std::invalid_argument& e) {
+      return fail_invalid(e.what());
+    }
+    HOLOSCAN_TRY(run_ddm_compute(context, layout, input, stream));
   } else if (scheme == MultiplexingScheme::kTdm) {
-    const detail::TdmRdMapsLayout layout =
-        detail::parse_tdm_rd_maps_layout(*input, "rd_maps");
-    run_tdm_compute(op_output, layout, input, stream, waveform_changed);
+    detail::TdmRdMapsLayout layout;
+    try {
+      layout = detail::parse_tdm_rd_maps_layout(input, "rd_maps");
+    } catch (const std::invalid_argument& e) {
+      return fail_invalid(e.what());
+    }
+    HOLOSCAN_TRY(run_tdm_compute(
+        context, layout, input, stream, waveform_changed));
   } else {
-    throw std::invalid_argument(std::string(kOpName) +
-                                ": unknown multiplexing_scheme");
+    return fail_invalid(
+        std::string(kOpName) + ": unknown multiplexing_scheme");
   }
 
   retained_input_ = std::move(input);
+  return {};
 }
 
 template class MIMOCoherentCompensationOp<float>;

@@ -147,7 +147,7 @@ class FmcwDenseSimoApp(Application):
 
         self.add_flow(source, range_op, {("adc_cube", "adc_cube")})
         self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
-        self.add_flow(clutter, doppler, {("range_profiles", "range_profiles")})
+        self.add_flow(clutter, doppler, {("range_profiles_out", "range_profiles")})
         self.add_flow(doppler, beamformer, {("rd_maps", "rd_maps")})
         self.add_flow(beamformer, cfar, {("rda_cube", "rd_maps")})
 

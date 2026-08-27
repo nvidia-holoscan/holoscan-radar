@@ -23,28 +23,35 @@
 # contain. `holoscan package` configures with -DBUILD_ALL=OFF, so anything
 # absent here is never enabled, never built, and never installed — it simply
 # does not appear in the .deb. Nothing warns about the omission.
+#
+# [EA HSDK5 ONLY] Demo applications require Holoviz *and* their operator
+# dependencies on the port allow-list — listing an app here FORCEs APP_<name>
+# and its OP_<dep> options ON, and an unported dep is never created as a
+# target. Every app needs the FMCW range/Doppler chain; fmcw_mimo also needs
+# the MIMO marshaling group. Keep these gates in step with
+# applications/CMakeLists.txt.
+holoscan_radar_operators_ported(_HOLOSCAN_RADAR_PKG_FMCW_CHAIN
+    fmcw_range_processor_op
+    fmcw_doppler_processor_op)
+holoscan_radar_operators_ported(_HOLOSCAN_RADAR_PKG_MIMO
+    mimo_deinterleave_op
+    mimo_coherent_compensation_op
+    virtual_array_assembly_op)
+
+set(_HOLOSCAN_RADAR_PKG_APPLICATIONS)
+if(HOLOSCAN_RADAR_HAS_HOLOVIZ AND _HOLOSCAN_RADAR_PKG_FMCW_CHAIN)
+    list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS
+        fmcw_aoa_estimators
+        fmcw_dense_simo
+        fmcw_simo
+        fmcw_siso)
+    if(_HOLOSCAN_RADAR_PKG_MIMO)
+        list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS fmcw_mimo)
+    endif()
+endif()
+
+# [EA HSDK5 ONLY] Package exactly the ported operators so FORCE OP_* never
+# names an unported target; the allow-list is the single source of truth.
 add_holohub_package(holoscan-radar
-                    OPERATORS    beamscan_estimator_op
-                                 cfar_detector_op
-                                 cluster_dbscan_op
-                                 clutter_filter_op
-                                 detection_reduction_op
-                                 esprit_estimator_op
-                                 feature_assembly_op
-                                 fmcw_doppler_processor_op
-                                 fmcw_range_doppler_processor_op
-                                 fmcw_range_processor_op
-                                 mimo_coherent_compensation_op
-                                 mimo_deinterleave_op
-                                 music_estimator_op
-                                 mvdr_estimator_op
-                                 phase_shift_beamformer_op
-                                 root_music_estimator_op
-                                 snapshot_gather_op
-                                 subarray_selection_op
-                                 virtual_array_assembly_op
-                    APPLICATIONS fmcw_aoa_estimators
-                                 fmcw_dense_simo
-                                 fmcw_mimo
-                                 fmcw_simo
-                                 fmcw_siso)
+                    OPERATORS    ${HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS}
+                    APPLICATIONS ${_HOLOSCAN_RADAR_PKG_APPLICATIONS})

@@ -16,12 +16,16 @@
 #include <utility>
 #include <vector>
 
+#include <holoscan/core/expected_macros.hpp>
+#include <holoscan/core/payload_options.hpp>
+#include <holoscan/logger/logger.hpp>
+
 #include "clustering/cluster_dbscan_op/cluster_dbscan_stage.hpp"
-#include "radar_common/sdk/arg_setters.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
@@ -36,118 +40,176 @@ constexpr DLDataType kInt32Dtype{kDLInt, 32, 1};
 constexpr DLDataType kUint8Dtype{kDLUInt, 8, 1};
 constexpr DLDataType kUint32Dtype{kDLUInt, 32, 1};
 
+expected<void, Error> fail_invalid(const std::string& message) {
+  return make_unexpected(Error{ErrorCode::kInvalidArgument, message});
+}
+
+expected<void, Error> fail_runtime(const std::string& message) {
+  return make_unexpected(Error{ErrorCode::kFailure, message});
+}
+
+expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
+                                    const char* what) {
+  auto mut = tensor.mutable_data();
+  if (!mut) {
+    return make_unexpected(Error{
+        ErrorCode::kFailure,
+        std::string(kOpName) + ": " + what + " is not writable: " +
+            mut.error().message});
+  }
+  return *mut;
+}
+
 }  // namespace
 
 template <typename T>
-void ClusterDBSCANOp<T>::initialize() {
-  // epsilon (std::vector<double>), min_points / max_clusters (int64_t) are all
-  // SDK built-in parameter types, so the default radar arg setters cover them.
-  ensure_radar_arg_setters();
-  Operator::initialize();
+ClusterDBSCANOp<T>::ClusterDBSCANOp(
+    const MaxTensorExtents& extents) {
+  const char* who = "ClusterDBSCANOp";
+  const std::int64_t max_points =
+      require_extent(extents.max_points, "max_points", who);
+  const std::int64_t max_clusters =
+      require_extent(extents.max_clusters, "max_clusters", who);
+  extents_ = extents;
+  // labels: int64 (max_points,)
+  max_labels_byte_span_ = byte_span_elems(
+      static_cast<std::size_t>(max_points),
+      sizeof(std::int64_t), who);
+  // sizes: int64 (max_clusters,)
+  max_sizes_byte_span_ = byte_span_elems(
+      static_cast<std::size_t>(max_clusters),
+      sizeof(std::int64_t), who);
 }
 
 template <typename T>
 void ClusterDBSCANOp<T>::setup(OperatorSpec& spec) {
-  spec.input<holoscan::TensorMap>("points");
-
-  spec.output<holoscan::TensorMap>("labels");
-  spec.output<holoscan::TensorMap>("sizes");
-
-  // epsilon has no meaningful default (required); an empty vector is rejected
-  // at compute time with an operator-specific message.
-  spec.param(epsilon_, "epsilon", "Neighborhood radius",
-             "Scalar (length 1, isotropic) or per-feature (length "
-             "num_features) DBSCAN neighborhood radius; all values > 0",
-             std::vector<double>{});
-  spec.param(min_points_, "min_points", "Min core neighbors",
-             "Minimum neighbors (incl. self) for a core point; <= 0 selects "
-             "the 2*num_features default",
-             int64_t{0});
-  spec.param(max_clusters_, "max_clusters", "Max reported clusters",
-             "Upper cap on reported clusters (surplus dropped to noise with a "
-             "warning); <= 0 is uncapped",
-             int64_t{0});
-
-  add_override_port<std::vector<double>>(spec, "epsilon");
-  add_override_port<int64_t>(spec, "min_points");
-  add_override_port<int64_t>(spec, "max_clusters");
+  // Declare device storage only; dtype is enforced in compute() so one
+  // operator binary still serves F32/F64 and the harness can feed either.
+  constexpr TensorPortLayout kDevice{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = std::nullopt,
+      .rank = std::nullopt,
+  };
+  spec.input(points).queue_depth(2U).expects_tensor(kDevice);
+  spec.output(labels)
+      .produces_tensor(kDevice)
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = 1U,
+          .max_byte_span = max_labels_byte_span_});
+  spec.output(sizes)
+      .produces_tensor(kDevice)
+      .tensor_allocation(TensorAllocationBounds{
+          .max_rank = 1U,
+          .max_byte_span = max_sizes_byte_span_});
+  // [live] scalar override ports. Wired graphs may push samples; the operator
+  // caches the last value (sticky). Leaving them unconnected is legal —
+  // compute() seeds from Params. epsilon is Params-only (HSDK5_PORT §9).
+  spec.input(min_points).queue_depth(2U);
+  spec.input(max_clusters).queue_depth(2U);
 }
 
 template <typename T>
-void ClusterDBSCANOp<T>::compute(InputContext& op_input,
-                                 OutputContext& op_output, ExecutionContext&) {
-  if (!seeded_) {
-    effective_epsilon_ = epsilon_.get();
-    effective_min_points_ = min_points_.get();
-    effective_max_clusters_ = max_clusters_.get();
-    seeded_ = true;
+Contract ClusterDBSCANOp<T>::contract() const {
+  // Trigger on the data tensor only. [live] min_points / max_clusters are
+  // intentionally omitted from the temporal contract so unconnected override
+  // ports do not yield TEMPORAL_INPUT_UNCONNECTED, and so a second OnClock
+  // source is not required (HSDK 5 EA multi-partition device binding is still
+  // rough — sticky live-override coverage is exercised via Params + operator
+  // sticky state when a sample does arrive). [EA HSDK5 ONLY] see
+  // docs/planning/HSDK5_PORT.md §1.
+  Contract result;
+  result.trigger(OnEach{points});
+  return result;
+}
+
+template <typename T>
+expected<void, Error> ClusterDBSCANOp<T>::compute(ExecutionContext& context) {
+  HOLOSCAN_TRY(auto points_in, receive_tensor(points, kOpName));
+
+  const ClusterDBSCANParams& pinned = context.params<ClusterDBSCANParams>();
+  // Best-effort sticky overrides: if the port is wired and a sample is
+  // waiting, absorb it; otherwise keep sticky / fall back to Params.
+  // epsilon is Params-only (unbounded vector — HSDK5_PORT §9).
+  HOLOSCAN_TRY(auto effective_min_points,
+               resolve_sticky_override(min_points, pinned.min_points,
+                                       sticky_min_points_));
+  HOLOSCAN_TRY(auto effective_max_clusters,
+               resolve_sticky_override(max_clusters, pinned.max_clusters,
+                                       sticky_max_clusters_));
+  const std::vector<double>& eps = pinned.epsilon;
+
+  try {
+    require_cuda_accessible(points_in, "points", kOpName);
+    require_contiguous(points_in, "points", kOpName);
+    require_dtype(points_in, real_dtype<T>(), "points", kOpName);
+  } catch (const std::invalid_argument& e) {
+    return fail_invalid(e.what());
   }
-  effective_epsilon_ =
-      resolve_override_param(op_input, "epsilon", effective_epsilon_, nullptr);
-  effective_min_points_ = resolve_override_param(
-      op_input, "min_points", effective_min_points_, nullptr);
-  effective_max_clusters_ = resolve_override_param(
-      op_input, "max_clusters", effective_max_clusters_, nullptr);
 
-  auto points = receive_single(op_input, "points", kOpName);
-  require_cuda_accessible(*points, "points", kOpName);
-  require_contiguous(*points, "points", kOpName);
-  require_dtype(*points, real_dtype<T>(), "points", kOpName);
-
-  const auto& shape = points->shape();
+  const auto& shape = points_in.shape();
   if (shape.size() != 2) {
-    throw std::invalid_argument(
+    return fail_invalid(
         "ClusterDBSCANOp: points must have shape (num_points, num_features)");
   }
   const int64_t num_points = shape[0];
   const int64_t num_features = shape[1];
   if (num_features < 1) {
-    throw std::invalid_argument(
-        "ClusterDBSCANOp: num_features must be >= 1");
+    return fail_invalid("ClusterDBSCANOp: num_features must be >= 1");
   }
 
   // Validate epsilon: scalar (length 1) or per-feature (length num_features),
   // all finite and strictly positive.
-  const auto& eps = effective_epsilon_;
   if (eps.empty()) {
-    throw std::invalid_argument("ClusterDBSCANOp: epsilon is required");
+    return fail_invalid("ClusterDBSCANOp: epsilon is required");
   }
   if (static_cast<int64_t>(eps.size()) != 1 &&
       static_cast<int64_t>(eps.size()) != num_features) {
-    throw std::invalid_argument(
+    return fail_invalid(
         "ClusterDBSCANOp: epsilon must be a scalar (length 1) or match "
         "num_features");
   }
   for (double e : eps) {
     if (!std::isfinite(e) || e <= 0.0) {
-      throw std::invalid_argument(
+      return fail_invalid(
           "ClusterDBSCANOp: epsilon values must be finite and > 0");
     }
   }
 
   // Resolve min_points: <= 0 → the 2*num_features heuristic.
-  const int64_t min_points =
-      effective_min_points_ <= 0 ? 2 * num_features : effective_min_points_;
-  const int64_t max_clusters = effective_max_clusters_;  // <= 0 → uncapped
+  const int64_t min_pts =
+      effective_min_points <= 0 ? 2 * num_features : effective_min_points;
+  const int64_t max_clust = effective_max_clusters;  // <= 0 → uncapped
 
-  auto stream = op_input.receive_cuda_stream("points");
+  cudaStream_t stream = context.cuda_stream().get();
+  if (stream == nullptr) {
+    return make_unexpected(Error{ErrorCode::kNotSupported,
+                                 "ClusterDBSCANOp: no CUDA compute stream"});
+  }
 
   // Empty input → empty outputs (a valid pipeline state).
   if (num_points == 0) {
-    auto labels = make_device_tensor({0}, kInt64Dtype);
-    auto sizes = make_device_tensor({0}, kInt64Dtype);
-    if (stream != cudaStreamDefault) {
-      op_output.set_cuda_stream(stream, "labels");
-      op_output.set_cuda_stream(stream, "sizes");
-    }
-    emit_single(op_output, "labels", labels);
-    emit_single(op_output, "sizes", sizes);
-    retained_points_ = std::move(points);
-    return;
+    // Prepare both loans before any publish so a late allocate/commit
+    // failure cannot leave a sibling port already downstream.
+    const std::vector<int64_t> empty_shape = {0};
+    auto noop = [](void*, std::size_t) -> expected<void, Error> {
+      return {};
+    };
+    HOLOSCAN_TRY(auto labels_loan,
+                 prepare_device_tensor(labels, context, empty_shape,
+                                      kInt64Dtype, noop));
+    HOLOSCAN_TRY(auto sizes_loan,
+                 prepare_device_tensor(sizes, context, empty_shape,
+                                      kInt64Dtype, noop));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(labels, context, std::move(labels_loan)));
+    HOLOSCAN_TRY(
+        emit_prepared_tensor(sizes, context, std::move(sizes_loan)));
+    retained_points_ = std::move(points_in);
+    return {};
   }
 
   if (num_points > std::numeric_limits<int>::max()) {
-    throw std::invalid_argument(
+    return fail_invalid(
         "ClusterDBSCANOp: num_points exceeds the supported range");
   }
 
@@ -158,13 +220,14 @@ void ClusterDBSCANOp<T>::compute(InputContext& op_input,
     eps_inv2[static_cast<size_t>(a)] = static_cast<T>(1.0 / (e * e));
   }
   auto eps_inv2_dev = make_device_tensor({num_features}, real_dtype<T>());
-  if (cudaMemcpyAsync(eps_inv2_dev->data(), eps_inv2.data(),
+  HOLOSCAN_TRY(auto eps_mut, writable_ptr(*eps_inv2_dev, "eps_inv2"));
+  if (cudaMemcpyAsync(eps_mut, eps_inv2.data(),
                       sizeof(T) * eps_inv2.size(), cudaMemcpyHostToDevice,
                       stream) != cudaSuccess) {
-    throw std::runtime_error("ClusterDBSCANOp: epsilon H2D copy failed");
+    return fail_runtime("ClusterDBSCANOp: epsilon H2D copy failed");
   }
 
-  const T* points_ptr = static_cast<const T*>(points->data());
+  const T* points_ptr = static_cast<const T*>(points_in.data());
   const T* eps_ptr = static_cast<const T*>(eps_inv2_dev->data());
 
   // Device scratch.
@@ -172,42 +235,53 @@ void ClusterDBSCANOp<T>::compute(InputContext& op_input,
   auto cc_a = make_device_tensor({num_points}, kInt64Dtype);
   auto cc_b = make_device_tensor({num_points}, kInt64Dtype);
   auto changed_dev = make_device_tensor({1}, kInt32Dtype);
+  HOLOSCAN_TRY(auto is_core_ptr, writable_ptr(*is_core, "is_core"));
+  HOLOSCAN_TRY(auto cc_a_ptr, writable_ptr(*cc_a, "cc_a"));
+  HOLOSCAN_TRY(auto cc_b_ptr, writable_ptr(*cc_b, "cc_b"));
+  HOLOSCAN_TRY(auto changed_ptr, writable_ptr(*changed_dev, "changed"));
 
-  cd::launch_mark_core<T>(points_ptr, eps_ptr, num_points, num_features,
-                          min_points, static_cast<uint8_t*>(is_core->data()),
-                          static_cast<int64_t*>(cc_a->data()), stream);
-  check_cuda("mark_core", kOpName);
+  try {
+    cd::launch_mark_core<T>(points_ptr, eps_ptr, num_points, num_features,
+                            min_pts, static_cast<uint8_t*>(is_core_ptr),
+                            static_cast<int64_t*>(cc_a_ptr), stream);
+    check_cuda("mark_core", kOpName);
+  } catch (const std::runtime_error& e) {
+    return fail_runtime(e.what());
+  }
 
   // Connected components: min-label propagation (ping-pong) to convergence.
   // One-hop propagation bounds the iteration count by the graph diameter
   // (< num_points); the +64 slack is a defensive infinite-loop guard.
-  int64_t* cur = static_cast<int64_t*>(cc_a->data());
-  int64_t* nxt = static_cast<int64_t*>(cc_b->data());
+  int64_t* cur = static_cast<int64_t*>(cc_a_ptr);
+  int64_t* nxt = static_cast<int64_t*>(cc_b_ptr);
   const int64_t max_iters = num_points + 64;
   int64_t iter = 0;
   for (;; ++iter) {
     if (iter > max_iters) {
-      throw std::runtime_error(
+      return fail_runtime(
           "ClusterDBSCANOp: connected-components did not converge");
     }
-    if (cudaMemsetAsync(changed_dev->data(), 0, sizeof(int), stream) !=
-        cudaSuccess) {
-      throw std::runtime_error("ClusterDBSCANOp: changed-flag clear failed");
+    if (cudaMemsetAsync(changed_ptr, 0, sizeof(int), stream) != cudaSuccess) {
+      return fail_runtime("ClusterDBSCANOp: changed-flag clear failed");
     }
-    cd::launch_cc_step<T>(
-        points_ptr, eps_ptr, static_cast<const uint8_t*>(is_core->data()), cur,
-        nxt, num_points, num_features,
-        static_cast<int*>(changed_dev->data()), stream);
-    check_cuda("cc_step", kOpName);
+    try {
+      cd::launch_cc_step<T>(
+          points_ptr, eps_ptr, static_cast<const uint8_t*>(is_core_ptr), cur,
+          nxt, num_points, num_features, static_cast<int*>(changed_ptr),
+          stream);
+      check_cuda("cc_step", kOpName);
+    } catch (const std::runtime_error& e) {
+      return fail_runtime(e.what());
+    }
     std::swap(cur, nxt);
 
     int host_changed = 0;
-    if (cudaMemcpyAsync(&host_changed, changed_dev->data(), sizeof(int),
+    if (cudaMemcpyAsync(&host_changed, changed_ptr, sizeof(int),
                         cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
-      throw std::runtime_error("ClusterDBSCANOp: changed-flag D2H failed");
+      return fail_runtime("ClusterDBSCANOp: changed-flag D2H failed");
     }
     if (cudaStreamSynchronize(stream) != cudaSuccess) {
-      throw std::runtime_error("ClusterDBSCANOp: stream sync failed");
+      return fail_runtime("ClusterDBSCANOp: stream sync failed");
     }
     if (host_changed == 0) {
       break;
@@ -215,54 +289,85 @@ void ClusterDBSCANOp<T>::compute(InputContext& op_input,
   }
 
   // Border points join their lowest-root core neighbor (in place on `cur`).
-  cd::launch_assign_border<T>(points_ptr, eps_ptr,
-                              static_cast<const uint8_t*>(is_core->data()), cur,
-                              num_points, num_features, stream);
-  check_cuda("assign_border", kOpName);
+  try {
+    cd::launch_assign_border<T>(points_ptr, eps_ptr,
+                                static_cast<const uint8_t*>(is_core_ptr), cur,
+                                num_points, num_features, stream);
+    check_cuda("assign_border", kOpName);
+  } catch (const std::runtime_error& e) {
+    return fail_runtime(e.what());
+  }
 
   // Compact component roots into dense cluster ids (ascending-root order).
   auto root_flag = make_device_tensor({num_points}, kUint32Dtype);
   auto dense = make_device_tensor({num_points}, kUint32Dtype);
-  cd::launch_root_flag(static_cast<const uint8_t*>(is_core->data()), cur,
-                       static_cast<uint32_t*>(root_flag->data()), num_points,
-                       stream);
-  check_cuda("root_flag", kOpName);
+  HOLOSCAN_TRY(auto root_flag_ptr, writable_ptr(*root_flag, "root_flag"));
+  HOLOSCAN_TRY(auto dense_ptr, writable_ptr(*dense, "dense"));
+  try {
+    cd::launch_root_flag(static_cast<const uint8_t*>(is_core_ptr), cur,
+                         static_cast<uint32_t*>(root_flag_ptr), num_points,
+                         stream);
+    check_cuda("root_flag", kOpName);
+  } catch (const std::runtime_error& e) {
+    return fail_runtime(e.what());
+  }
 
   const size_t scan_bytes = cd::cub_scan_temp_bytes(num_points);
   const int64_t scan_alloc =
       static_cast<int64_t>(std::max<size_t>(scan_bytes, 1));
   auto scan_temp = make_device_tensor({scan_alloc}, kUint8Dtype);
-  cd::launch_scan_root_ids(scan_temp->data(), scan_bytes,
-                           static_cast<const uint32_t*>(root_flag->data()),
-                           static_cast<uint32_t*>(dense->data()), num_points,
-                           stream);
-  check_cuda("scan_root_ids", kOpName);
+  HOLOSCAN_TRY(auto scan_temp_ptr, writable_ptr(*scan_temp, "scan_temp"));
+  try {
+    cd::launch_scan_root_ids(scan_temp_ptr, scan_bytes,
+                             static_cast<const uint32_t*>(root_flag_ptr),
+                             static_cast<uint32_t*>(dense_ptr), num_points,
+                             stream);
+    check_cuda("scan_root_ids", kOpName);
+  } catch (const std::runtime_error& e) {
+    return fail_runtime(e.what());
+  }
 
   // num_clusters = exclusive_scan[N-1] + root_flag[N-1].
   uint32_t dense_last = 0;
   uint32_t flag_last = 0;
   const int64_t last = num_points - 1;
   if (cudaMemcpyAsync(&dense_last,
-                      static_cast<const uint32_t*>(dense->data()) + last,
+                      static_cast<const uint32_t*>(dense_ptr) + last,
                       sizeof(uint32_t), cudaMemcpyDeviceToHost, stream) !=
           cudaSuccess ||
       cudaMemcpyAsync(&flag_last,
-                      static_cast<const uint32_t*>(root_flag->data()) + last,
+                      static_cast<const uint32_t*>(root_flag_ptr) + last,
                       sizeof(uint32_t), cudaMemcpyDeviceToHost, stream) !=
           cudaSuccess) {
-    throw std::runtime_error("ClusterDBSCANOp: cluster-count D2H failed");
+    return fail_runtime("ClusterDBSCANOp: cluster-count D2H failed");
   }
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
-    throw std::runtime_error("ClusterDBSCANOp: cluster-count sync failed");
+    return fail_runtime("ClusterDBSCANOp: cluster-count sync failed");
   }
   const int64_t num_clusters =
       static_cast<int64_t>(dense_last) + static_cast<int64_t>(flag_last);
 
-  auto labels = make_device_tensor({num_points}, kInt64Dtype);
-  cd::launch_finalize_labels(cur, static_cast<const uint32_t*>(dense->data()),
-                             static_cast<int64_t*>(labels->data()), num_points,
-                             stream);
-  check_cuda("finalize_labels", kOpName);
+  // Loan both outputs: labels shape is known; sizes shape depends on the cap
+  // applied below. Allocate labels now and write through remap/cap in place.
+  const std::vector<int64_t> labels_shape = {num_points};
+  auto labels_loan = labels.allocate_tensor(
+      TensorLoanRequest{.shape = labels_shape, .dtype = kInt64Dtype});
+  if (!labels_loan) {
+    return make_unexpected(std::move(labels_loan).error());
+  }
+  auto labels_writer = labels_loan->write(context.cuda_stream());
+  if (!labels_writer) {
+    return make_unexpected(std::move(labels_writer).error());
+  }
+  int64_t* labels_ptr = static_cast<int64_t*>(labels_writer->data());
+
+  try {
+    cd::launch_finalize_labels(cur, static_cast<const uint32_t*>(dense_ptr),
+                               labels_ptr, num_points, stream);
+    check_cuda("finalize_labels", kOpName);
+  } catch (const std::runtime_error& e) {
+    return fail_runtime(e.what());
+  }
 
   // Renumber clusters by descending point count (tie-break: ascending root id)
   // so cluster 0 is the largest. The host argsorts the per-id counts and
@@ -273,23 +378,27 @@ void ClusterDBSCANOp<T>::compute(InputContext& op_input,
   // `labels` stays a pure function of (points, epsilon, min_points).
   if (num_clusters > 1) {
     auto sizes_all = make_device_tensor({num_clusters}, kInt64Dtype);
-    if (cudaMemsetAsync(sizes_all->data(), 0, sizeof(int64_t) * num_clusters,
+    HOLOSCAN_TRY(auto sizes_all_ptr, writable_ptr(*sizes_all, "sizes_all"));
+    if (cudaMemsetAsync(sizes_all_ptr, 0, sizeof(int64_t) * num_clusters,
                         stream) != cudaSuccess) {
-      throw std::runtime_error("ClusterDBSCANOp: size-histogram clear failed");
+      return fail_runtime("ClusterDBSCANOp: size-histogram clear failed");
     }
-    cd::launch_histogram(static_cast<const int64_t*>(labels->data()),
-                         static_cast<int64_t*>(sizes_all->data()), num_points,
-                         stream);
-    check_cuda("size_histogram", kOpName);
+    try {
+      cd::launch_histogram(labels_ptr, static_cast<int64_t*>(sizes_all_ptr),
+                           num_points, stream);
+      check_cuda("size_histogram", kOpName);
+    } catch (const std::runtime_error& e) {
+      return fail_runtime(e.what());
+    }
 
     std::vector<int64_t> host_sizes(static_cast<size_t>(num_clusters));
-    if (cudaMemcpyAsync(host_sizes.data(), sizes_all->data(),
+    if (cudaMemcpyAsync(host_sizes.data(), sizes_all_ptr,
                         sizeof(int64_t) * num_clusters, cudaMemcpyDeviceToHost,
                         stream) != cudaSuccess) {
-      throw std::runtime_error("ClusterDBSCANOp: size D2H failed");
+      return fail_runtime("ClusterDBSCANOp: size D2H failed");
     }
     if (cudaStreamSynchronize(stream) != cudaSuccess) {
-      throw std::runtime_error("ClusterDBSCANOp: size sync failed");
+      return fail_runtime("ClusterDBSCANOp: size sync failed");
     }
 
     // order[r] = ascending-root id ranked r-th by (size desc, id asc); the
@@ -306,55 +415,92 @@ void ClusterDBSCANOp<T>::compute(InputContext& op_input,
       remap[static_cast<size_t>(order[static_cast<size_t>(r)])] = r;
     }
     auto remap_dev = make_device_tensor({num_clusters}, kInt64Dtype);
-    if (cudaMemcpyAsync(remap_dev->data(), remap.data(),
+    HOLOSCAN_TRY(auto remap_ptr, writable_ptr(*remap_dev, "remap"));
+    if (cudaMemcpyAsync(remap_ptr, remap.data(),
                         sizeof(int64_t) * num_clusters, cudaMemcpyHostToDevice,
                         stream) != cudaSuccess) {
-      throw std::runtime_error("ClusterDBSCANOp: remap H2D failed");
+      return fail_runtime("ClusterDBSCANOp: remap H2D failed");
     }
-    cd::launch_remap_labels(static_cast<int64_t*>(labels->data()),
-                            static_cast<const int64_t*>(remap_dev->data()),
-                            num_points, stream);
-    check_cuda("remap_labels", kOpName);
+    try {
+      cd::launch_remap_labels(labels_ptr,
+                              static_cast<const int64_t*>(remap_ptr),
+                              num_points, stream);
+      check_cuda("remap_labels", kOpName);
+    } catch (const std::runtime_error& e) {
+      return fail_runtime(e.what());
+    }
   }
 
   // Apply the max_clusters cap: drop surplus clusters (highest dense ids —
   // now the smallest, after the descending-size renumber above) to noise and
   // report only the first `max_clusters` (the largest).
   int64_t reported_clusters = num_clusters;
-  if (max_clusters > 0 && num_clusters > max_clusters) {
+  if (max_clust > 0 && num_clusters > max_clust) {
     if (!warned_max_clusters_) {
       HOLOSCAN_LOG_WARN(
           "ClusterDBSCANOp: {} clusters exceed max_clusters={}, dropping {} "
           "surplus cluster(s) to noise",
-          num_clusters, max_clusters, num_clusters - max_clusters);
+          num_clusters, max_clust, num_clusters - max_clust);
       warned_max_clusters_ = true;
     }
-    cd::launch_cap_labels(static_cast<int64_t*>(labels->data()), max_clusters,
-                          num_points, stream);
-    check_cuda("cap_labels", kOpName);
-    reported_clusters = max_clusters;
-  }
-
-  auto sizes = make_device_tensor({reported_clusters}, kInt64Dtype);
-  if (reported_clusters > 0) {
-    if (cudaMemsetAsync(sizes->data(), 0, sizeof(int64_t) * reported_clusters,
-                        stream) != cudaSuccess) {
-      throw std::runtime_error("ClusterDBSCANOp: sizes clear failed");
+    try {
+      cd::launch_cap_labels(labels_ptr, max_clust, num_points, stream);
+      check_cuda("cap_labels", kOpName);
+    } catch (const std::runtime_error& e) {
+      return fail_runtime(e.what());
     }
-    cd::launch_histogram(static_cast<const int64_t*>(labels->data()),
-                         static_cast<int64_t*>(sizes->data()), num_points,
-                         stream);
-    check_cuda("histogram", kOpName);
+    reported_clusters = max_clust;
   }
 
-  if (stream != cudaStreamDefault) {
-    op_output.set_cuda_stream(stream, "labels");
-    op_output.set_cuda_stream(stream, "sizes");
+  const std::vector<int64_t> sizes_shape = {reported_clusters};
+  auto sizes_loan = sizes.allocate_tensor(
+      TensorLoanRequest{.shape = sizes_shape, .dtype = kInt64Dtype});
+  if (!sizes_loan) {
+    return make_unexpected(std::move(sizes_loan).error());
   }
-  emit_single(op_output, "labels", labels);
-  emit_single(op_output, "sizes", sizes);
+  auto sizes_writer = sizes_loan->write(context.cuda_stream());
+  if (!sizes_writer) {
+    return make_unexpected(std::move(sizes_writer).error());
+  }
+  int64_t* sizes_ptr = static_cast<int64_t*>(sizes_writer->data());
 
-  retained_points_ = std::move(points);
+  if (reported_clusters > 0) {
+    if (cudaMemsetAsync(sizes_ptr, 0, sizeof(int64_t) * reported_clusters,
+                        stream) != cudaSuccess) {
+      return fail_runtime("ClusterDBSCANOp: sizes clear failed");
+    }
+    try {
+      cd::launch_histogram(labels_ptr, sizes_ptr, num_points, stream);
+      check_cuda("histogram", kOpName);
+    } catch (const std::runtime_error& e) {
+      return fail_runtime(e.what());
+    }
+  }
+
+  auto labels_committed = std::move(*labels_writer).commit();
+  if (!labels_committed) {
+    return make_unexpected(std::move(labels_committed).error());
+  }
+  auto sizes_committed = std::move(*sizes_writer).commit();
+  if (!sizes_committed) {
+    return make_unexpected(std::move(sizes_committed).error());
+  }
+
+  auto labels_emitted = labels.emit(
+      std::move(*labels_loan),
+      EmitOptions{.capture_time = context.activation_time()});
+  if (!labels_emitted) {
+    return make_unexpected(std::move(labels_emitted).error());
+  }
+  auto sizes_emitted = sizes.emit(
+      std::move(*sizes_loan),
+      EmitOptions{.capture_time = context.activation_time()});
+  if (!sizes_emitted) {
+    return make_unexpected(std::move(sizes_emitted).error());
+  }
+
+  retained_points_ = std::move(points_in);
+  return {};
 }
 
 template class ClusterDBSCANOp<float>;

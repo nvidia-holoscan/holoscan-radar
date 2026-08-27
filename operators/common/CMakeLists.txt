@@ -38,7 +38,7 @@ target_link_libraries(radar_common
         holoscan::core
 )
 
-target_compile_features(radar_common PUBLIC cxx_std_17)
+target_compile_features(radar_common PUBLIC cxx_std_20)
 set_property(TARGET radar_common PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS radar_common
@@ -146,7 +146,9 @@ install(EXPORT holoscan_radar_common_simulator_targets
 )
 
 # Python bindings for shared descriptors / enums (holoscan.radar.radar_common).
-add_subdirectory(python)
+if(HOLOSCAN_RADAR_BUILD_PYTHON)
+    add_subdirectory(python)
+endif()
 
 # CUDA spatial-smoothing gather (shared by the covariance angle estimators).
 # Materializes sub-array "looks" from the host-planned index tables; the host

@@ -1,181 +1,142 @@
 # MVDREstimatorOp — open items
 
-Status: **checklist-complete.** The full contract
-(`OPERATOR_API.md` → MVDREstimatorOp) is implemented:
+Status: **HSDK 5 EA C++ port landed** (checklist not fully closed — live /
+`is_valid` Graph coverage deferred). Algorithm contract
+(`OPERATOR_API.md` → MVDREstimatorOp) is unchanged:
 
 - sample covariance with `is_valid` masking, diagonal loading (`auto` / fixed),
   batched Hermitian inverse, Capon spectrum, dominant DOA;
-- `max_sources` **[live]** + `doa_multi` (num_items, max_sources, 2) +
-  `source_count` (num_items,) — the top-`max_sources` Capon-spectrum peaks
-  (pass 0 = global Capon argmax so `doa_multi[·,0,·]` equals `aoa_estimates`;
-  further peaks are strict 2-D local maxima, strongest first), unused rows NaN;
-- `eigenvalues` (num_items, num_channels) — the ascending eigenvalue spectrum
-  of the raw (pre-loading) sample covariance (batched `matx::eig`, NO_VECTOR).
+- `max_sources` **[live]** + `doa_multi` / `source_count` and `eigenvalues`;
+- `spatial_smoothing` (+ `forward_backward`) front-end on filled ULA/URA.
 
-All four optional outputs (`angle_spectrum`, `doa_multi`, `source_count`,
-`eigenvalues`) carry `ConditionType::kNone`, so a consumer that only wants
-`aoa_estimates` leaves them unwired without gating scheduling. They are always
-emitted (see the eigenvalues perf note below).
+Cross-cut SDK / migration detail lives in
+[`docs/planning/HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md).
+
+---
+
+## 1. Graph mid-stream sticky `[live]` POD coverage
+
+**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky” for
+`diagonal_loading` / `max_sources`.
+
+**Class:** HSDK 5 EA limitation. See
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
+
+**Interim.**
+
+- Operator still declares sticky `Input<double> diagonal_loading` and
+  `Input<int64_t> max_sources`; `compute()` resolves via
+  `resolve_sticky_override`.
+- Those ports are omitted from `contract()` so unwired graphs compile.
+- `LiveDiagonalLoadingStickyOverride` /
+  `LiveMaxSourcesStickyOverrideReallocates` are `GTEST_SKIP`’d.
+- `perf_mvdr_estimator` measures an inline `diagonal_loading` transition with
+  the supported single-clock / exact-contract / single-partition shape.
+- Params authoring covers selection
+  (`DiagonalLoadingConfigurableFromParams` /
+  `MaxSourcesConfigurableFromParams` / fixed-loading DOA test).
+
+**Next.** Restore sticky temporal policy + Graph sticky unit tests on a
+newer EA / GA (shared recipe with ClutterFilter §1).
+
+**Status:** open for sticky unit tests and isolated `max_sources` perf;
+`diagonal_loading` perf timing is restored.
+
+---
+
+## 2. Non-POD / variable-length `[live]` params are Params-only
+
+**Blocks checklist:** Tests → live `az_angles` / `el_angles` /
+`array_geometry` / `spatial_smoothing` mid-stream sticky overrides.
+
+**Class:** Durable HSDK 5 (`PublishedPayload` admission) + our deferred
+work. Same recipe as Beamscan / PhaseShift — see
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9.
+
+**Interim.** Those parameters remain on `MVDRParams` only (`set_params`).
+Live Graph override tests are `GTEST_SKIP`’d. `angle_convention` and
+`forward_backward` stay Params-only (STATIC / not `[live]`).
+
+**Next.** Prefer Tensor live ports for angle grids / smoothing counts
+and/or ChannelPod / schema wrappers for `ArrayGeometry` once a module-wide
+recipe lands (§9).
+
+**Status:** open — ported compute path; live descriptor/vector ports
+deferred.
+
+---
+
+## 3. Optional `is_valid` Graph wiring
+
+**Blocks checklist:** Tests → optional `is_valid` connected Graph paths.
+
+**Class:** HSDK 5 EA limitation (related to §1). Same as Beamscan OPEN_ITEMS
+§3.
+
+**Interim.** Port registered in `setup()`; omitted from `contract()`;
+`compute()` uses `receive_optional_value`. Graph tests
+`IsValidMaskExcludesWrongDoaSnapshots` /
+`AllInvalidMaskBlanksDoaAndSpectrum` are `GTEST_SKIP`’d.
+
+**Status:** open — EA.
+
+---
+
+## 4. Optional outputs always emitted
+
+**Contract.** `OPERATOR_API.md` marks `angle_spectrum`, `doa_multi`,
+`source_count`, and `eigenvalues` optional. On HSDK 5 EA the operator
+**always allocates and emits** all five Tensor outputs each tick (same
+compute cost as before — `eigenvalues` still runs `matx::eig` every tick).
+C++ Graph tests wire and `bind_tensor_output_device` all five.
+
+**Apps.** Consumers that previously left optional ports unwired must still
+satisfy device-output binding (`IMPLICIT_DEVICE_ZERO_REJECTED` if a device
+producer is unbound — HSDK5_PORT §3). Prefer wiring a no-op sink or
+explicitly binding unused ports in app compile options. A future SDK
+“is output connected” signal could gate `eig` / peak extract (see
+Performance follow-ups below).
+
+**Status:** open — document for apps; not a blocker for the C++ port.
+
+---
+
+## 5. MatX cache teardown via `stop()`
+
+**Status:** preserved. HSDK 5 `OperatorBase::stop()` still runs at the
+`kStop` lifecycle checkpoint. `MVDREstimatorOp::stop()` calls
+`detail::retire_matx_solver_caches()` (full `GetAllocMap()` drain once while
+CUDA is valid). Per-tick `clear_matx_solver_plan_caches()` at the end of
+`run_mvdr_stage` is unchanged. Public `retire_matx_solver_caches()` remains
+for Python / apps.
+
+---
+
+## Representation notes (unchanged)
+
+- **`diagonal_loading` encoding.** `double`: negative → auto
+  (`kAutoLoadingFactor · trace(R̂)/C`), non-negative → absolute δ. Default
+  `-1` (auto).
+- **Auto-loading factor.** `kAutoLoadingFactor = 1e-2` first cut; tune with
+  the analytic simulator.
+
+## Performance follow-ups (unchanged)
+
+- Capon reduce is latency-bound (~97% GPU time); warp-cooperative / GEMM
+  paths still open.
+- `eigenvalues` `matx::eig` every tick even when unused (~2–4% on lg/xl).
+
+## Python bindings / perf harness
+
+**Class:** Our deferred work (HSDK5_PORT §6). Existing pybind trampoline is
+still HSDK 4.x and is not built while `HOLOSCAN_RADAR_BUILD_PYTHON=OFF`.
+`perf_mvdr_estimator` is Graph-ported and reports `diagonal_loading`
+`override_ms` (§8).
+
+**Status:** open — Python deferred; not required to land the C++ HSDK 5 port.
 
 ## Spatial smoothing (settled — S1)
 
-`spatial_smoothing` (+ `forward_backward`) is implemented as a front-end
-transform (shared helper `radar_common/dsp/spatial_smoothing`): it detects the
-array lattice, gathers the snapshot into overlapping sub-array looks (forward /
-forward-backward), forms the averaged covariance on the reduced sub-array
-geometry, and the covariance / eig / inverse / Capon path runs unchanged on the
-`L` reduced channels. 1-D (ULA) and 2-D (URA) are both supported; the parameter
-is a per-aperture-axis vector of sub-array **counts** (`[P]` / `[P_az, P_el]`).
-See STATUS.md (S1 settled decision).
-
-- **Non-uniform / holey arrays are rejected** (clear error) — they must be
-  reduced to a uniform sub-array upstream (S3), or a custom smoother can be
-  supplied as an upstream operator emitting a reduced `(snapshot, geometry)`
-  pair.
-
-The two forks — **count** semantics (over sub-array length) and **holey→S3**
-(over in-operator partitions) — are settled (STATUS.md L13).
-
-The related "where does the source count come from" question (fixed vs.
-MDL/AIC vs. CFAR/cluster seed) does **not** affect MVDR: `max_sources` is simply
-the number of Capon peaks to report (a reporting capacity, not a model order).
-That shared question still governs MUSIC/ESPRIT's `num_sources`.
-
-## Representation notes
-
-- **`diagonal_loading` encoding.** The contract types this param as "float or
-  auto". Pending the shared descriptor/YAML story, it is encoded here as a
-  `double`: a negative value selects auto (δ scaled to
-  `kAutoLoadingFactor · trace(R̂)/C`), a non-negative value is the absolute δ.
-  Revisit when Python bindings / YAML converters land so a literal `auto`
-  string round-trips.
-- **Auto-loading factor.** `kAutoLoadingFactor = 1e-2` is a first cut. It
-  guarantees invertibility (including rank-deficient `K < C`) without
-  dominating a well-conditioned covariance, but has not been swept against
-  resolution / SNR; tune with the analytic simulator.
-
-## Performance follow-ups
-
-Profiled on an RTX PRO 6000 (Blackwell GB202), `perf_mvdr_estimator --full`.
-`capon_reduce_kernel` is ~97% of GPU time (nsys `cuda_gpu_kern_sum`); the
-covariance kernel and the batched `matx::inv` are ~1.6% / ~1.3%. GPU-metrics
-sampling shows the Capon kernel is **latency-bound**, not memory-bound: DRAM
-throughput ≈0%, tensor cores unused, SM issue-rate tiny while warps are
-resident (they stall). Findings:
-
-- **Staging `R̂⁻¹` in shared memory measured *slower*** (lg 5.3→8.7 ms) and was
-  reverted. Every thread reads the same `R̂⁻¹[c,c2]` in lockstep, so the global
-  reads already broadcast from L1/L2; staging only added a copy + `__syncthreads`
-  and cost occupancy. Do not retry this.
-- **Inner-loop ILP (four independent accumulators) landed** — breaks the serial
-  reduction dependency chain so FMAs pipeline. Measured: xl 20.0→14.9 ms
-  (−26%), lg ~−4%, md flat, no regressions.
-- **Remaining ceiling is occupancy + the one-thread-per-beam mapping.** The
-  kernel uses ~66–68 registers/thread (≈3 blocks/SM), and `lg` launches only
-  ~2.7 blocks/SM. The larger structural wins (not yet done): a warp-cooperative
-  reduction (a warp per beam → more warps to hide latency + shorter per-thread
-  chains), or a cuBLAS batched GEMM `M = R̂⁻¹·A` followed by a cheap reduction
-  (tile over beams to bound the `O(num_items·num_channels·num_beams)` `M`).
-- Covariance + inverse scratch is `O(num_items · num_channels²)`; chunk the item
-  axis if a workload needs wider apertures at high detection counts.
-- **`eigenvalues` runs a batched `matx::eig` (heevd) every tick, even when the
-  port is unwired.** Measured overhead vs. the Capon-only pipeline is small
-  (lg 5.3→5.4 ms ≈ +2%, xl 14.9→15.6 ms ≈ +4%, md flat; cold start grows with
-  the cached heevd workspace). `peak_extract_kernel` (multi-source) is
-  negligible — it re-reads the resident spectrum. If a workload never consumes
-  `eigenvalues`, gating the `eig` on the port's connectivity is the obvious
-  win, but Holoscan gives no clean in-`compute()` "is this output connected"
-  signal (the codebase idiom gates optional outputs on a *parameter*, e.g.
-  FMCWRangeProcessor's `waveform`); revisit if the diagnostic cost matters.
-
-## Inherited caveats
-
-- **`is_valid` bool transport (HSDK 4.3).** Shares the CFAR / SnapshotGather
-  bool-`DLPack` transport caveat; `is_valid` is accepted as bool or uint8.
-
-## Python teardown double-free / SIGSEGV
-
-**Status:** fixed in-tree.
-
-Two MatX lifetime bugs stacked:
-
-1. **`inv` plans keyed on `(A, A_inv)` device pointers.** Holoscan frees
-   cov/rinv when `compute()` returns; cached plans outlive those keys.
-2. **`MemTracker` leftovers.** Even after `GetCache().Clear`, ~64B of
-   MatX-tracked temps remain. `~MemTracker` frees them with `cudaFreeAsync` at
-   process exit — after CuPy has torn down CUDA under pytest → SIGSEGV
-   (tests already PASSED).
-
-**Fix:** `Clear` eig/inv caches every tick (`clear_matx_solver_plan_caches()`
-at the end of each `run_mvdr_stage`), and drain `matx::GetAllocMap()` **once**
-from `MVDREstimatorOp::stop()` while CUDA is still valid.
-`install_matx_cache_atexit()` after `import cupy` remains as backup.
-`tests/python/conftest.py` imports `holoscan.radar` **before** CuPy —
-CuPy-first makes MatX eig `Clear` abort on this stack.
-
-Apps: import `holoscan.radar` **before** CuPy, then call
-`holoscan.radar.install_matx_cache_atexit()` once. Do not register
-`retire_matx_solver_caches()` from C++ `std::atexit`/`~Op` alone — too late
-once CUDA is gone.
-
-## Per-tick `GetAllocMap()` drain corrupted sibling FFT operators
-
-**Status:** fixed in-tree.
-
-The teardown fix above originally drained the process-global
-`matx::GetAllocMap()` **every tick** (inside `retire_matx_solver_caches()`
-called from `run_mvdr_stage`). That map is process-wide: draining it frees
-*every* MatX-tracked buffer, including **other operators'** cached cuFFT
-workspaces. In `applications/fmcw_aoa_estimators` (range/Doppler → CFAR →
-snapshot → estimator, all in one process), each MVDR/MUSIC/Root-MUSIC/ESPRIT
-tick freed `FMCWRangeProcessorOp`'s windowed-FFT workspace; the FFT *plan*
-cache was untouched, so the next tick's `matx::fft(x * window, …)` reused a
-plan whose workspace had been freed (and reallocated smaller) → out-of-bounds
-reads → corrupted range profiles → garbage RD map → CFAR emitting 0 or
-hundreds of spurious detections. `beamscan` (no `eig`/`inv`, never retires)
-stayed clean, which is what localized it.
-
-Confirmed with `compute-sanitizer` (9283 OOB reads with MVDR, 0 with beamscan)
-and a standalone MatX repro: a windowed-FFT loop is clean on its own and clean
-alongside `eig`/`inv`, but a per-iteration `GetAllocMap()` drain reproduces the
-identical `FFTOp<...MulOp...>` OOB; clearing only the eig/inv plan caches
-per-iteration (drain deferred to teardown) is clean.
-
-**Fix:** split retirement — per-tick `clear_matx_solver_plan_caches()` clears
-only the eig/inv plan caches (bounded; leaves the live flags set); the full
-`GetAllocMap()` drain runs once from `stop()`. Same split applied to
-`retire_music_matx_caches()` (MUSIC/Root-MUSIC/ESPRIT).
-
-## Python mid-run double free in `retire_matx_solver_caches()` (fixed)
-
-**Status:** fixed — was an import-order footgun, not a MatX keying bug.
-
-`performance/python/utils/__init__.py` eagerly imported CuPy-using harness
-modules. Any `from utils.bootstrap import …` therefore loaded **CuPy before
-`holoscan.radar`**, which makes MatX eig/inv `GetCache().Clear` abort with
-`double free or corruption` when the per-tick `retire_matx_solver_caches()`
-runs (same CuPy-first rule as above). Pytest's `conftest.py` imports radar
-before CuPy, so unit tests never hit it; `perf_mvdr_estimator.py` did.
-
-**Fix:** keep `performance/python/utils/__init__.py` free of CuPy/Holoscan
-imports so bootstrap cannot pull CuPy early. Scripts still do
-`import holoscan.radar` then `import cupy` then `install_matx_cache_atexit()`.
-
-## Regression: isort silently re-broke the import order (fixed again, 2026-07-21)
-
-**Status:** fixed — `perf_mvdr_estimator.py`'s `import cupy` / `import
-holoscan.radar` pair had been swapped back to alphabetical (cupy first) by
-an isort pass, silently reintroducing the exact double-free above (`double
-free or corruption (out)`, `Aborted (core dumped)`, crashing before any
-scenario prints). The script's own comment described the *correct* order
-the whole time; only the code had drifted. Confirmed by re-running with
-the MUSIC bindings' `__init__.py` changes fully reverted — the crash
-persisted, so it predates and is unrelated to that work.
-
-**Fix:** wrapped the `import holoscan.radar` / `import cupy` /
-`install_matx_cache_atexit()` block in `# isort: off` / `# isort: on` (the
-same guard `applications/fmcw_*/python/*.py` and `applications/common/
-python/{demo_config,ops,mimo_sim}.py` already use for this identical
-reason). **Any new script that calls `install_matx_cache_atexit()` must use
-this guard** — plain sequential `import` statements are exactly what isort
-alphabetizes, and alphabetical happens to put `cupy` before `holoscan`.
+Unchanged from the HSDK 4.x landing: front-end transform via
+`radar_common/dsp/spatial_smoothing`; non-uniform / holey arrays rejected
+(upstream S3). See STATUS.md (S1 / L13).

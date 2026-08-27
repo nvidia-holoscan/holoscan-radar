@@ -8,14 +8,15 @@
                 "affiliation": "NVIDIA"
             }
         ],
-        "language": ["C++", "Python"],
-        "version": "0.1.0",
+        "language": ["C++"],
+        "version": "0.2.0",
         "changelog": {
+            "0.2.0": "HSDK 5 EA port: Operator<MUSICParams>, typed Tensor ports, OnEach contract, sticky POD live Inputs, always-emit optional outputs, stop() MatX teardown",
             "0.1.0": "Subspace MUSIC: covariance + eig (VECTOR) + noise-subspace projector + pseudospectrum + dominant DOA; num_sources fixed/auto (EFT); max_sources/doa_multi/source_count; eigenvalues; spatial_smoothing reused from MVDR. Python bindings + pytest."
         },
         "holoscan_sdk": {
-            "minimum_required_version": "4.3.0",
-            "tested_versions": ["4.3.0"]
+            "minimum_required_version": "5.0.0",
+            "tested_versions": ["5.0.0"]
         },
         "platforms": ["x86_64", "aarch64"],
         "tags": ["Radar", "Angle", "MUSIC", "Subspace", "GPU", "FMCW", "SIMO"],

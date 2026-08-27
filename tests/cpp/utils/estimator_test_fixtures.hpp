@@ -23,8 +23,7 @@
 #include <string>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
-#include <holoscan/test/test_harness.hpp>
+#include <holoscan/core/domain/tensor.hpp>
 
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
@@ -216,18 +215,6 @@ std::shared_ptr<holoscan::Tensor> block_to_device(
     cast[i] = {static_cast<T>(host[i].real()), static_cast<T>(host[i].imag())};
   }
   return to_device_tensor(cast, shape, complex_dtype<T>());
-}
-
-// Attach a no-op validating sink to an operator output port so a run that
-// only asserts on other ports still has every emitted port consumed.
-inline void wire_noop_output(holoscan::Fragment* app,
-                             const std::shared_ptr<holoscan::Operator>& op,
-                             const std::string& port) {
-  const auto noop = [](const holoscan::TensorMap&) {};
-  auto sink = app->make_operator<
-      holoscan::test::TestHarnessSinkOp<holoscan::TensorMap>>(port + "_noop");
-  sink->set_validators({noop});
-  app->add_flow(op, sink, {{port, "input"}});
 }
 
 }  // namespace holoscan::radar::testing

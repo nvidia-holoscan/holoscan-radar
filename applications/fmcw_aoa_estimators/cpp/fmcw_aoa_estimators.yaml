@@ -171,6 +171,8 @@ visualization:
   # robust to window-resize swap-chain errors than IMMEDIATE. Set false for
   # uncapped / low-latency rendering, at the cost of resize robustness (and
   # possible tearing).
+  window_width: 1280
+  window_height: 720
   vsync: true
 skip_display_check: false
 headless: false

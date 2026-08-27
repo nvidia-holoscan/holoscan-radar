@@ -16,6 +16,7 @@
 #include "angle_estimation/root_music_estimator_op/root_music_estimator_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/python/py_operator_utils.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 
@@ -38,8 +39,16 @@ class PyRootMUSICEstimatorOp : public RootMUSICEstimatorOp<T> {
       int64_t max_sources = 4,
       const std::vector<int64_t>& spatial_smoothing = {},
       bool forward_backward = true,
+      int64_t max_items = 16384,
+      int64_t max_channels = 16,
       const std::string& name = "root_music_estimator")
-      : RootMUSICEstimatorOp<T>() {
+      : RootMUSICEstimatorOp<T>([&] {
+          MaxTensorExtents extents;
+          extents.max_items = max_items;
+          extents.max_sources = max_sources;
+          extents.max_channels = max_channels;
+          return extents;
+        }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -65,7 +74,8 @@ void bind_root_music_estimator(py::module_& module,
       "Gridless Root-MUSIC sparse-path ULA DOA estimator.")
       .def(py::init<Fragment*, const py::args&, const ArrayGeometry&,
                     const AngleConvention&, int64_t, double, int64_t,
-                    const std::vector<int64_t>&, bool, const std::string&>(),
+                    const std::vector<int64_t>&, bool, int64_t, int64_t,
+                    const std::string&>(),
            py::arg("fragment"),
            py::arg("array_geometry") = ArrayGeometry{},
            py::arg("angle_convention") = AngleConvention{},
@@ -74,6 +84,8 @@ void bind_root_music_estimator(py::module_& module,
            py::arg("max_sources") = int64_t{4},
            py::arg("spatial_smoothing") = std::vector<int64_t>{},
            py::arg("forward_backward") = true,
+           py::arg("max_items") = int64_t{16384},
+           py::arg("max_channels") = int64_t{16},
            py::arg("name") = "root_music_estimator")
       .def("setup", &Op::setup, py::arg("spec"));
 }

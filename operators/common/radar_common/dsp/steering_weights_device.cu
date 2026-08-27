@@ -161,6 +161,11 @@ std::shared_ptr<holoscan::Tensor> build_steering_weights_device(
   upload_async(d_taper.ptr, taper.data(),
                static_cast<size_t>(num_channels) * sizeof(double), stream);
 
+  auto out_mut = out->mutable_data();
+  if (!out_mut) {
+    throw std::runtime_error(
+        "build_steering_weights_device: output tensor is not writable");
+  }
   const double k = kTwoPi / geometry.wavelength;
   const int64_t total = num_beams * num_channels;
   constexpr int block = 256;
@@ -171,7 +176,7 @@ std::shared_ptr<holoscan::Tensor> build_steering_weights_device(
       static_cast<const unsigned char*>(d_valid.ptr),
       static_cast<const double*>(d_taper.ptr), num_beams, num_channels, k,
       conjugate, layout == SteeringLayout::kChannelMajor,
-      static_cast<cuda::std::complex<T>*>(out->data()));
+      static_cast<cuda::std::complex<T>*>(*out_mut));
   if (cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error(
         "build_steering_weights_device: kernel launch failed");
