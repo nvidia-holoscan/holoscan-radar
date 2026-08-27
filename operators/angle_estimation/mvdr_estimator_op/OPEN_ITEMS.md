@@ -1,7 +1,8 @@
 # MVDREstimatorOp — open items
 
 Status: **HSDK 5 EA C++ port landed** (checklist not fully closed — live /
-`is_valid` Graph coverage deferred). Algorithm contract
+`is_valid` Graph coverage deferred; one test is red on a real correctness
+bug, item 6). Algorithm contract
 (`OPERATOR_API.md` → MVDREstimatorOp) is unchanged:
 
 - sample covariance with `is_valid` masking, diagonal loading (`auto` / fixed),
@@ -115,6 +116,51 @@ Performance follow-ups below).
 CUDA is valid). Per-tick `clear_matx_solver_plan_caches()` at the end of
 `run_mvdr_stage` is unchanged. Public `retire_matx_solver_caches()` remains
 for Python / apps.
+
+---
+
+## 6. Second tick diverges from the first on identical input
+
+**Blocks checklist:** Tests → `LiveArrayGeometryStickyOverride` is red.
+
+**Symptom.** In a fresh process, feeding the same snapshot twice makes
+`angle_spectrum` differ between tick 1 and tick 2. Tick 1 is the correct
+answer (peak at the simulated target, `argmax = 20` for
+`u = 0.10` on a `linspace(-0.3, 0.3, 31)` grid, peak `0.98`); tick 2 peaks
+one bin over at `7.74`. It is deterministic run to run.
+
+**Not the live-override path.** A throwaway two-tick test with every
+`expect_*` false and no override port wired reproduces it, and a probe
+showed both ticks resolving the same `ArrayGeometry` and the same steering
+cache key. `LiveArrayGeometryStickyOverride` is the only test that
+compares spectra across ticks, which is why it is the one that fails; the
+sticky resolution itself is correct. The test was `GTEST_SKIP`’d before
+the live overrides were restored, so this is newly exposed, not new.
+
+**What the evidence points at** — the `matx::eig` / `matx::inv` region of
+`run_mvdr_stage`, with a dependence on host timing:
+
+- Same CUDA stream both ticks, and identical device addresses for the
+  manifold, covariance, inverse, and all five output loans. No aliasing.
+- `cudaStreamSynchronize` plus D2H reads *inside* the stage make both
+  ticks agree on tick 1's value. A sync only at the tail of the stage
+  changes nothing; a sync only after `matx::inv` yields a third, also
+  wrong, tick-2 answer.
+- Under `--gtest_repeat=5`, iteration 1 fails and iterations 2–5 pass in
+  the same process — the cold path is the broken one.
+- Suppressing the per-tick `clear_matx_solver_plan_caches()` changes
+  nothing.
+- Incidental, possibly related: the `eigenvalues` loan comes back in a
+  different address space from the other four outputs, and
+  `cudaMemsetAsync` on it fails, though all five declare
+  `produces_tensor(kDevice)`.
+
+**Next.** Reduce to a standalone MatX `eig` + `inv` repro (batched
+Hermitian, `C = 4`, two back-to-back solves on one stream) so it can be
+filed upstream, then re-check against a newer MatX / HSDK 5 build.
+
+**Status:** open — correctness bug, test left failing deliberately so it
+is not forgotten.
 
 ---
 
