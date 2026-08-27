@@ -390,12 +390,17 @@ TEST(ClusterDBSCANOpTest, RejectsBadPointsRank) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-// ---- Pageable-host vector [live] override ---------------------------------
+// ---- [live] overrides (pageable-host epsilon vector + scalars) ------------
 
+// Carries all three of DBSCAN's [live] overrides; skew_ns applies to whichever
+// of them this tick publishes. New slots go after skew_ns so the positional
+// brace initializers below keep binding what they were written for.
 struct LiveEpsilonTick {
   std::shared_ptr<holoscan::Tensor> points;
   std::optional<std::vector<double>> epsilon;
   int64_t skew_ns{0};
+  std::optional<int64_t> min_points;
+  std::optional<int64_t> max_clusters;
 };
 
 struct LiveEpsilonBank {
@@ -427,6 +432,8 @@ class LiveEpsilonSourceOp final : public holoscan::Operator<> {
         .max_emits_per_compute(1U)
         .produces_tensor(holoscan::radar::pooled_tensor_output(
             kHostVector, 1U, 128U * sizeof(double)));
+    spec.output(min_points, "min_points");
+    spec.output(max_clusters, "max_clusters");
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -470,12 +477,32 @@ class LiveEpsilonSourceOp final : public holoscan::Operator<> {
         return holoscan::make_unexpected(std::move(emitted).error());
       }
     }
+    holoscan::TimePoint scalar_time = points_time;
+    scalar_time.timestamp_ns += tick.skew_ns;
+    if (tick.min_points.has_value()) {
+      auto emitted = min_points.emit(
+          *tick.min_points,
+          holoscan::EmitOptions{.capture_time = scalar_time});
+      if (!emitted) {
+        return holoscan::make_unexpected(std::move(emitted).error());
+      }
+    }
+    if (tick.max_clusters.has_value()) {
+      auto emitted = max_clusters.emit(
+          *tick.max_clusters,
+          holoscan::EmitOptions{.capture_time = scalar_time});
+      if (!emitted) {
+        return holoscan::make_unexpected(std::move(emitted).error());
+      }
+    }
     return holoscan::radar::testing::detail::emit_bank_frame(
         points, context, tick.points, "LiveEpsilonSourceOp");
   }
 
   holoscan::Output<holoscan::Tensor> points{"out"};
   holoscan::Output<holoscan::Tensor> epsilon{"epsilon"};
+  holoscan::Output<int64_t> min_points{"min_points"};
+  holoscan::Output<int64_t> max_clusters{"max_clusters"};
 };
 
 DualIOGraphRunResult run_epsilon_override_graph(
@@ -500,6 +527,8 @@ DualIOGraphRunResult run_epsilon_override_graph(
   const holoscan::ConnectionOptions q{.queue_depth = 8U};
   graph.add_flow(source->points, op->points, q);
   graph.add_flow(source->epsilon, op->epsilon, q);
+  graph.add_flow(source->min_points, op->min_points, q);
+  graph.add_flow(source->max_clusters, op->max_clusters, q);
   graph.add_flow(op->labels, labels->in, q);
   graph.add_flow(op->sizes, sizes->in, q);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
@@ -637,22 +666,98 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsConfiguredBoundOverflow) {
   EXPECT_FALSE(out.diagnostics.empty());
 }
 
+// ---- Scalar [live] overrides ----------------------------------------------
+
+// A triple and a pair, 0.5 apart within each group: min_points 2 admits both
+// groups, min_points 3 leaves the pair short of a core point. The cluster
+// count is therefore the shape of `sizes` — no float payload is compared.
+std::shared_ptr<holoscan::Tensor> live_min_points_points() {
+  return points_tensor<double>(
+      {0.0, 0.0, 0.1, 0.0, 0.2, 0.0, 10.0, 0.0, 10.1, 0.0}, 5, 2);
+}
+
+// Three well-separated pairs → three clusters when uncapped.
+std::shared_ptr<holoscan::Tensor> live_max_clusters_points() {
+  return points_tensor<double>(
+      {0.0, 0.0, 0.1, 0.0, 10.0, 0.0, 10.1, 0.0, 20.0, 0.0, 20.1, 0.0}, 6,
+      2);
+}
+
 TEST(ClusterDBSCANOpTest, LiveMinPointsStickyOverride) {
-  // [EA HSDK5 ONLY] See docs/planning/HSDK5_PORT.md §1 — Graph mid-stream
-  // sticky override harness fails on EA device/partition binding. Operator
-  // still declares Input<int64_t> min_points + sticky resolve; Params cover
-  // selection (MinPointsConfigurableFromParams).
-  GTEST_SKIP() << "HSDK 5 EA: live min_points override harness deferred "
-                  "(HSDK5_PORT.md §1)";
+  ClusterDBSCANParams latching = make_params({0.5}, 2);
+  latching.sticky_min_points = true;
+  const auto latched = run_epsilon_override_graph(
+      {{live_min_points_points(), std::nullopt, 0, int64_t{3}},
+       {live_min_points_points(), std::nullopt, 0, std::nullopt}},
+      std::move(latching));
+
+  ASSERT_TRUE(latched.plan_ok) << latched.plan_json;
+  ASSERT_TRUE(latched.diagnostics.empty());
+  ASSERT_EQ(latched.frames1.size(), 2U);
+  // Tick 0 matches Exact (the pair drops to noise); tick 1 publishes nothing,
+  // so sticky_min_points holds the override.
+  EXPECT_EQ(latched.frames1[0].shape[0], 1);
+  EXPECT_EQ(latched.frames1[1].shape[0], 1);
+
+  ClusterDBSCANParams ephemeral = make_params({0.5}, 2);
+  ephemeral.sticky_min_points = false;
+  const auto reverted = run_epsilon_override_graph(
+      {{live_min_points_points(), std::nullopt, 0, int64_t{3}},
+       {live_min_points_points(), std::nullopt, 0, std::nullopt}},
+      std::move(ephemeral));
+
+  ASSERT_TRUE(reverted.plan_ok) << reverted.plan_json;
+  ASSERT_TRUE(reverted.diagnostics.empty());
+  ASSERT_EQ(reverted.frames1.size(), 2U);
+  EXPECT_EQ(reverted.frames1[0].shape[0], 1);
+  EXPECT_EQ(reverted.frames1[1].shape[0], 2);
+}
+
+TEST(ClusterDBSCANOpTest, LiveMinPointsSkewedCaptureMissesExact) {
+  ClusterDBSCANParams params = make_params({0.5}, 2);
+  params.sticky_min_points = false;
+  const auto out = run_epsilon_override_graph(
+      {{live_min_points_points(), std::nullopt, 1, int64_t{3}}},
+      std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames1.size(), 1U);
+  EXPECT_EQ(out.frames1[0].shape[0], 2);
 }
 
 TEST(ClusterDBSCANOpTest, LiveMaxClustersStickyOverride) {
-  // [EA HSDK5 ONLY] See docs/planning/HSDK5_PORT.md §1 — Graph mid-stream
-  // sticky override harness fails on EA device/partition binding. Operator
-  // still declares Input<int64_t> max_clusters + sticky resolve; Params cover
-  // selection (MaxClustersConfigurableFromParams).
-  GTEST_SKIP() << "HSDK 5 EA: live max_clusters override harness deferred "
-                  "(HSDK5_PORT.md §1)";
+  ClusterDBSCANParams latching = make_params({0.5}, 2);
+  latching.sticky_max_clusters = true;
+  const auto latched = run_epsilon_override_graph(
+      {{live_max_clusters_points(), std::nullopt, 0, std::nullopt,
+        int64_t{2}},
+       {live_max_clusters_points(), std::nullopt, 0, std::nullopt,
+        std::nullopt}},
+      std::move(latching));
+
+  ASSERT_TRUE(latched.plan_ok) << latched.plan_json;
+  ASSERT_TRUE(latched.diagnostics.empty());
+  ASSERT_EQ(latched.frames1.size(), 2U);
+  // Params leave the cap open (3 clusters); the override caps to 2 and
+  // sticky_max_clusters holds that cap when tick 1 publishes nothing.
+  EXPECT_EQ(latched.frames1[0].shape[0], 2);
+  EXPECT_EQ(latched.frames1[1].shape[0], 2);
+
+  ClusterDBSCANParams ephemeral = make_params({0.5}, 2);
+  ephemeral.sticky_max_clusters = false;
+  const auto reverted = run_epsilon_override_graph(
+      {{live_max_clusters_points(), std::nullopt, 0, std::nullopt,
+        int64_t{2}},
+       {live_max_clusters_points(), std::nullopt, 0, std::nullopt,
+        std::nullopt}},
+      std::move(ephemeral));
+
+  ASSERT_TRUE(reverted.plan_ok) << reverted.plan_json;
+  ASSERT_TRUE(reverted.diagnostics.empty());
+  ASSERT_EQ(reverted.frames1.size(), 2U);
+  EXPECT_EQ(reverted.frames1[0].shape[0], 2);
+  EXPECT_EQ(reverted.frames1[1].shape[0], 3);
 }
 
 }  // namespace

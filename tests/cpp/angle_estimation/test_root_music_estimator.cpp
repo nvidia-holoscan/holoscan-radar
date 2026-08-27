@@ -105,6 +105,38 @@ RootMUSICParams make_params(ArrayGeometry geom, AngleConvention conv,
   return params;
 }
 
+// Noise-free block whose sample covariance is exactly V diag(`eigenvalues`)
+// V^H, with V the unit steering vectors of `direction_cosines`. Spacing those
+// cosines 2/num_channels apart makes V unitary on a half-wavelength ULA, so
+// snapshot k carrying source k alone at power num_snapshots * eigenvalues[k] /
+// num_channels reproduces the profile exactly. Pinning the eigenvalues that
+// way turns the EFT source count into a pure function of the requested Pfa,
+// while keeping the covariance physically realizable (unlike a synthetic
+// diagonal, which leaves the rooting stage ill-conditioned).
+std::vector<std::complex<double>> make_orthogonal_source_block(
+    const ArrayGeometry& geometry, const AngleConvention& convention,
+    const std::vector<double>& direction_cosines,
+    const std::vector<double>& eigenvalues) {
+  const int64_t channels = geometry.num_elements();
+  const int64_t snapshots = static_cast<int64_t>(eigenvalues.size());
+  std::vector<std::complex<double>> block(
+      static_cast<size_t>(channels * snapshots));
+  for (int64_t s = 0; s < snapshots; ++s) {
+    const auto a =
+        steering_vector(geometry, convention,
+                        direction_cosines[static_cast<size_t>(s)], 0.0);
+    const double amplitude =
+        std::sqrt(static_cast<double>(snapshots) *
+                  eigenvalues[static_cast<size_t>(s)] /
+                  static_cast<double>(channels));
+    for (int64_t c = 0; c < channels; ++c) {
+      block[static_cast<size_t>(c * snapshots + s)] =
+          a[static_cast<size_t>(c)] * amplitude;
+    }
+  }
+  return block;
+}
+
 template <typename T>
 FourOutGraphRunResult run_root_music_result(
     std::shared_ptr<holoscan::Tensor> snapshot, RootMUSICParams params) {
@@ -785,9 +817,46 @@ TEST(RootMUSICEstimatorOpTest, AllInvalidMaskBlanksDoa) {
                   "(HSDK5_PORT.md §1 / OPEN_ITEMS.md)";
 }
 
+// num_sources is reported verbatim on source_count (clamped by max_sources),
+// so an int32 output value carries both the override and the sticky latch.
+// Tick 0 sends nothing and pins the Params baseline inside the same run, so
+// nothing is compared across graph runs.
 TEST(RootMUSICEstimatorOpTest, LiveNumSourcesStickyOverride) {
-  GTEST_SKIP() << "HSDK 5 EA: live num_sources override harness deferred "
-                  "(HSDK5_PORT.md §1 / §9)";
+  constexpr int64_t kN = 12;
+  constexpr int64_t kS = 256;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block =
+      make_block_two(geometry, conv, 0.20, 0.0, -0.15, 0.0, kS, 0.02, 311u);
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  for (int tick = 0; tick < 3; ++tick) {
+    frames.push_back(block_to_device<double>(block, {1, kN, kS}));
+  }
+  RootMUSICParams params =
+      make_params(geometry, conv, /*num_sources=*/1, 1e-2,
+                  /*max_sources=*/4);
+  std::vector<std::optional<int64_t>> payloads{
+      std::nullopt, int64_t{2}, std::nullopt};
+
+  const auto result =
+      run_exact_override_four_out_operator_graph_result<
+          RootMUSICEstimatorOp<double>, int64_t>(
+          std::move(frames), std::move(payloads), std::move(params),
+          "aoa_estimates", "doa_multi", "source_count", "eigenvalues",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1, const auto& sink2,
+             const auto& sink3) {
+            wire_root_music(graph, source, op, sink0, sink1, sink2, sink3);
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->override_out, op->num_sources, q);
+          });
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames2.size(), 3U);
+  EXPECT_EQ(result.frames2[0].as<int32_t>()[0], 1);
+  EXPECT_EQ(result.frames2[1].as<int32_t>()[0], 2);
+  EXPECT_EQ(result.frames2[2].as<int32_t>()[0], 2);
 }
 
 TEST(RootMUSICEstimatorOpTest, LiveArrayGeometryStickyOverride) {
@@ -911,14 +980,93 @@ TEST(RootMUSICEstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
   EXPECT_FALSE(invalid.diagnostics.empty());
 }
 
+// source_count_pfa only steers the EFT model order, so the observable is the
+// int32 source_count. The crafted covariance pins the eigenvalue profile
+// exactly, which makes the 1 -> 2 transition between the Params Pfa and the
+// override Pfa deterministic instead of a noise draw.
 TEST(RootMUSICEstimatorOpTest, LiveSourceCountPfaStickyOverride) {
-  GTEST_SKIP() << "HSDK 5 EA: live source_count_pfa override harness "
-                  "deferred (HSDK5_PORT.md §1 / §9)";
+  const std::vector<double> spectrum = {0.8930540251, 0.9468277841,
+                                        1.3517214181, 1.6732266229,
+                                        9.0798471606, 14.3477610683};
+  const std::vector<double> cosines = {-5.0 / 6.0, -0.5, -1.0 / 6.0,
+                                       1.0 / 6.0, 0.5, 5.0 / 6.0};
+  const int64_t kN = static_cast<int64_t>(spectrum.size());
+  const int64_t kS = kN;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kDirectionCosine;
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block =
+      make_orthogonal_source_block(geometry, conv, cosines, spectrum);
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  for (int tick = 0; tick < 3; ++tick) {
+    frames.push_back(block_to_device<double>(block, {1, kN, kS}));
+  }
+  RootMUSICParams params =
+      make_params(geometry, conv, /*num_sources=*/-1, /*pfa=*/1e-4,
+                  /*max_sources=*/4, /*smoothing=*/{},
+                  /*forward_backward=*/false);
+  std::vector<std::optional<double>> payloads{std::nullopt, 0.5, std::nullopt};
+
+  const auto result =
+      run_exact_override_four_out_operator_graph_result<
+          RootMUSICEstimatorOp<double>, double>(
+          std::move(frames), std::move(payloads), std::move(params),
+          "aoa_estimates", "doa_multi", "source_count", "eigenvalues",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1, const auto& sink2,
+             const auto& sink3) {
+            wire_root_music(graph, source, op, sink0, sink1, sink2, sink3);
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->override_out, op->source_count_pfa, q);
+          });
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames2.size(), 3U);
+  EXPECT_EQ(result.frames2[0].as<int32_t>()[0], 1);
+  EXPECT_EQ(result.frames2[1].as<int32_t>()[0], 2);
+  EXPECT_EQ(result.frames2[2].as<int32_t>()[0], 2);
 }
 
+// max_sources widens doa_multi to {items, max_sources, 2}, so both the
+// override and the sticky latch show up in the output shape alone.
 TEST(RootMUSICEstimatorOpTest, LiveMaxSourcesStickyOverride) {
-  GTEST_SKIP() << "HSDK 5 EA: live max_sources override harness deferred "
-                  "(HSDK5_PORT.md §1 / §9)";
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  constexpr int64_t kLiveMaxSources = 3;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geometry, conv, 0.1, 0.0, kS, 0.02, 312u);
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  for (int tick = 0; tick < 3; ++tick) {
+    frames.push_back(block_to_device<double>(block, {1, kN, kS}));
+  }
+  RootMUSICParams params =
+      make_params(geometry, conv, /*num_sources=*/1, 1e-2,
+                  /*max_sources=*/1);
+  std::vector<std::optional<int64_t>> payloads{
+      std::nullopt, kLiveMaxSources, std::nullopt};
+
+  const auto result =
+      run_exact_override_four_out_operator_graph_result<
+          RootMUSICEstimatorOp<double>, int64_t>(
+          std::move(frames), std::move(payloads), std::move(params),
+          "aoa_estimates", "doa_multi", "source_count", "eigenvalues",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1, const auto& sink2,
+             const auto& sink3) {
+            wire_root_music(graph, source, op, sink0, sink1, sink2, sink3);
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->override_out, op->max_sources, q);
+          });
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames1.size(), 3U);
+  EXPECT_EQ(result.frames1[0].shape, (std::vector<int64_t>{1, 1, 2}));
+  EXPECT_EQ(result.frames1[1].shape,
+            (std::vector<int64_t>{1, kLiveMaxSources, 2}));
+  EXPECT_EQ(result.frames1[2].shape,
+            (std::vector<int64_t>{1, kLiveMaxSources, 2}));
 }
 
 TEST(RootMUSICEstimatorOpTest, NumSourcesConfigurableFromParams) {

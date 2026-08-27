@@ -358,48 +358,62 @@ lives, so only their optional-input limitations remain.
   Mid-stream Exact tests cover `FMCWRangeProcessorOp` `nfft`, range/Doppler
   windows, waveform validation, and fused schema overrides. The scalar/enum
   equivalents below still `GTEST_SKIP` pending that harness work.
-- `ClutterFilterOpTest.LiveMethodOverrideMidStreamAndSticky` and
-  `SnapshotGatherOpTest.LiveSnapshotWindowStickyOverride` are
-  `GTEST_SKIP`’d. `BeamscanEstimatorOpTest.LivePeakInterpolationStickyOverride`
-  is likewise skipped. **Runnable minimal Graph
-  reproducer** (no radar domain logic):
+- **Scalar / bool `[live]` overrides now run** (2026-08-27). The declared-but-
+  unwired-port limitation is closed, and the Graph harness pattern from
+  `test_fmcw_range_processor.cpp` (`nfft`) ports cleanly to the other
+  operators. Landed and passing repeatedly in fresh processes:
+  `FMCWDopplerProcessorOpTest.LiveOverrideCenterZeroDopplerMidStream`;
+  `ClusterDBSCANOpTest.LiveMinPointsStickyOverride` /
+  `LiveMaxClustersStickyOverride` / `LiveMinPointsSkewedCaptureMissesExact`;
+  `MVDREstimatorOpTest.LiveMaxSourcesStickyOverrideReallocates`; and
+  `num_sources` / `source_count_pfa` / `max_sources` on MUSIC, Root-MUSIC, and
+  ESPRIT. Prefer a structural observable (an output extent or a reported
+  integer) over a float payload comparison — see the MVDR caveat below.
+- **Enum `[live]` overrides do not**, and that is now the only blocker for the
+  remaining live-override stubs. Wiring an `Output<enum class>` edge fails the
+  run at the *source* vertex with `RUNTIME_PORT_BINDING_UNAVAILABLE` (`emit`
+  returns `kNotReady`) even when nothing is emitted on it. This is the
+  `kLocalEnum` gap above; reproducer at
+  [`tests/cpp/utils/hsdk_enum_tensor_bind_repro/`](../../tests/cpp/utils/hsdk_enum_tensor_bind_repro/).
+  Independently reproduced on three operators with different trigger shapes —
+  `ClutterFilterOp.method` (`OnEach`, single override),
+  `BeamscanEstimatorOp.peak_interpolation` (`OnEach`), and
+  `DetectionReductionOp.representative` / `score_method` (`OnAligned`,
+  triple-in) — which is what rules out the trigger, the fixture, and the pool
+  binding as causes. Each test body is written or scoped; only the wire is
+  missing. Still `GTEST_SKIP`'d for this reason, with the reason recorded at
+  the stub.
+- `SnapshotGatherOpTest.LiveSnapshotWindowStickyOverride` remains skipped
+  (`snapshot_window` rides a ChannelPod tuple under an `OnAligned` trigger; not
+  re-measured since the enum finding). `PhaseShiftBeamformerOp` / Beamscan
+  geometry / grid / taper live Graph tests are also still skipped — the ports
+  exist (§9), that harness does not.
+- **Runnable minimal Graph reproducer** (no radar domain logic):
   [`tests/cpp/utils/test_live_override_repro.cpp`](../../tests/cpp/utils/test_live_override_repro.cpp)
   — label `ea_repro`, not part of default `unit`:
   `ctest --test-dir build -L ea_repro --output-on-failure`
   or `./build/tests/cpp/test_live_override_repro`. Control (tensor-only)
   passes; dual-OnClock / co-emit / sticky-contract wirings fail with
   compile rejection or runtime diagnostics (see test stdout +
-  `/tmp/live_override_repro_*.json`). `PhaseShiftBeamformerOp` /
-  Beamscan geometry/grid/taper live Graph tests are also skipped — the ports
-  exist (§9), the Graph harness for them does not yet.
-  `ClusterDBSCANOpTest.LiveMinPointsStickyOverride` /
-  `LiveMaxClustersStickyOverride` / `LiveEpsilonStickyOverride` are skipped
-  the same way.
-- Selection is still covered via Params
-  (`MethodConfigurableFromParams` /
-  `SnapshotWindowConfigurableFromParams` /
-  `ScanGridConfigurableFromParams` /
-  `PeakInterpolationConfigurableFromParams` /
-  `EpsilonConfigurableFromParams` /
-  `MinPointsConfigurableFromParams` /
-  `MaxClustersConfigurableFromParams` /
-  `DiagonalLoadingConfigurableFromParams` /
-  `MaxSourcesConfigurableFromParams`).
-- `MVDREstimatorOpTest.LiveDiagonalLoadingStickyOverride` /
-  `LiveMaxSourcesStickyOverrideReallocates` are likewise skipped; its
-  geometry / grid / `spatial_smoothing` live Graph tests are active.
+  `/tmp/live_override_repro_*.json`).
+- `MVDREstimatorOpTest.LiveMaxSourcesStickyOverrideReallocates` now passes;
+  its geometry / grid / `spatial_smoothing` live Graph tests are active.
+  `LiveDiagonalLoadingStickyOverride` stays skipped, but **not** for an SDK
+  reason: δ is observable only in float values, and MVDR corrupts later runs
+  in the same process, so any two-run value comparison is untrustworthy. See
+  `mvdr_estimator_op/OPEN_ITEMS.md` item 6 — an operator-state bug, not a
+  port-binding one.
 - `MUSICEstimatorOpTest.LiveNumSourcesStickyOverride` /
   `LiveSourceCountPfaStickyOverride` /
-  `LiveMaxSourcesStickyOverrideReallocates` are likewise skipped; its
-  geometry / grid / `spatial_smoothing` live Graph tests are active.
-  Params cover selection
+  `LiveMaxSourcesStickyOverrideReallocates` now pass; its geometry / grid /
+  `spatial_smoothing` live Graph tests are active. Params also cover selection
   (`NumSourcesConfigurableFromParams` /
   `SourceCountPfaConfigurableFromParams` /
   `MaxSourcesConfigurableFromParams`).
 - `RootMUSICEstimatorOpTest` / `ESPRITEstimatorOpTest`
   `LiveNumSourcesStickyOverride` / `LiveSourceCountPfaStickyOverride` /
-  `LiveMaxSourcesStickyOverride` are likewise skipped; their
-  geometry / `spatial_smoothing` live Graph tests are active.
+  `LiveMaxSourcesStickyOverride` now pass; their geometry /
+  `spatial_smoothing` live Graph tests are active.
   Params cover the same trio of configurable-from-Params tests.
 - `FeatureAssemblyOp` has no `[live]` params; optional gather Tensor Inputs
   are omitted from `contract()` (unconnected apps) and Graph wiring of those

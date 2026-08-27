@@ -655,12 +655,24 @@ TEST(BeamscanEstimatorOpTest, PeakInterpolationConfigurableFromParams) {
   EXPECT_GT(std::abs(para_az[0] - none_az[0]), 5e-3);
 }
 
+// Blocked by enum payload transport, not by the declared-but-unwired port
+// limitation that §1 tracked (that one is closed on the pinned SDK, which is
+// why the scalar live overrides on the subspace estimators now run). The
+// observable itself is fine and was written: with the truth off-grid, kNone
+// reports the peak grid cell exactly (0.16) and a kParabolic override reports
+// ~0.17, with the sticky tick byte-identical to the override tick. What fails
+// is the wire: `peak_interpolation` is `Input<PeakInterpolation>`, so the test
+// source needs `Output<PeakInterpolation>`, and a `kLocalEnum` Graph edge
+// alongside a bound device Tensor producer dies at run start with
+// RUNTIME_PORT_BINDING_UNAVAILABLE — declaring and wiring that one port broke
+// every other Live* test in this file. Measured on the pinned SDK by
+// `tests/cpp/utils/hsdk_enum_tensor_bind_repro` (ctest -L ea_repro), which
+// still reports "uint32_t works, enum class fails to bind/run". Unskip when
+// enum payload ports bind; Params authoring covers peak_interpolation until
+// then (PeakInterpolationConfigurableFromParams).
 TEST(BeamscanEstimatorOpTest, LivePeakInterpolationStickyOverride) {
-  // [EA HSDK5 ONLY] See docs/planning/HSDK5_PORT.md §1 — Graph mid-stream
-  // sticky override harness fails on EA device/partition binding.
-  // Params authoring covers peak_interpolation; restore once §1 is closed.
-  GTEST_SKIP() << "HSDK 5 EA: live peak_interpolation override harness "
-                  "deferred (HSDK5_PORT.md §1)";
+  GTEST_SKIP() << "HSDK 5 EA: kLocalEnum Graph edge beside a bound device "
+                  "Tensor fails to bind (enum_tensor_bind_repro)";
 }
 
 TEST(BeamscanEstimatorOpTest, LiveAzGridStickyOverride) {

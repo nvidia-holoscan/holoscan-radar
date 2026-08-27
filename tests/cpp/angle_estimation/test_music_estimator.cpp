@@ -161,6 +161,36 @@ std::vector<std::complex<double>> make_block_two(
   return x;
 }
 
+// Noise-free block whose sample covariance is exactly V diag(`eigenvalues`)
+// V^H, with V the unit steering vectors of `direction_cosines`. Spacing those
+// cosines 2/num_channels apart makes V unitary on a half-wavelength ULA, so
+// snapshot k carrying source k alone at power num_snapshots * eigenvalues[k] /
+// num_channels reproduces the profile exactly. Pinning the eigenvalues that
+// way turns the EFT source count into a pure function of the requested Pfa
+// instead of a noise draw.
+std::vector<std::complex<double>> make_orthogonal_source_block(
+    const ArrayGeometry& geom, const AngleConvention& conv,
+    const std::vector<double>& direction_cosines,
+    const std::vector<double>& eigenvalues) {
+  const int64_t channels = geom.num_elements();
+  const int64_t snapshots = static_cast<int64_t>(eigenvalues.size());
+  std::vector<std::complex<double>> block(
+      static_cast<size_t>(channels * snapshots));
+  for (int64_t s = 0; s < snapshots; ++s) {
+    const auto a = steering_vector(
+        geom, conv, direction_cosines[static_cast<size_t>(s)], 0.0);
+    const double amplitude =
+        std::sqrt(static_cast<double>(snapshots) *
+                  eigenvalues[static_cast<size_t>(s)] /
+                  static_cast<double>(channels));
+    for (int64_t c = 0; c < channels; ++c) {
+      block[static_cast<size_t>(c * snapshots + s)] =
+          a[static_cast<size_t>(c)] * amplitude;
+    }
+  }
+  return block;
+}
+
 std::vector<double> linspace(double start, double stop, int64_t n) {
   std::vector<double> out(static_cast<size_t>(n));
   if (n == 1) {
@@ -291,6 +321,11 @@ struct LiveMusicTick {
   std::optional<std::vector<double>> el;
   std::optional<SpatialSmoothingOverride> smoothing;
   int64_t skew_ns{0};
+  // Appended after skew_ns on purpose: the existing positional brace
+  // initializers below would silently rebind if a field were inserted above.
+  std::optional<int64_t> num_sources;
+  std::optional<double> source_count_pfa;
+  std::optional<int64_t> max_sources;
 };
 
 struct LiveMusicBank {
@@ -338,6 +373,9 @@ class LiveMusicSourceOp final : public holoscan::Operator<> {
         .produces_tensor(holoscan::radar::pooled_tensor_output(
             kHostVector, 1U, 33U * sizeof(double)));
     spec.output(smoothing);
+    spec.output(num_sources);
+    spec.output(source_count_pfa);
+    spec.output(max_sources);
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -410,6 +448,21 @@ class LiveMusicSourceOp final : public holoscan::Operator<> {
           *tick.smoothing,
           holoscan::EmitOptions{.capture_time = override_time}));
     }
+    if (tick.num_sources.has_value()) {
+      HOLOSCAN_RETURN_IF_ERROR(num_sources.emit(
+          *tick.num_sources,
+          holoscan::EmitOptions{.capture_time = override_time}));
+    }
+    if (tick.source_count_pfa.has_value()) {
+      HOLOSCAN_RETURN_IF_ERROR(source_count_pfa.emit(
+          *tick.source_count_pfa,
+          holoscan::EmitOptions{.capture_time = override_time}));
+    }
+    if (tick.max_sources.has_value()) {
+      HOLOSCAN_RETURN_IF_ERROR(max_sources.emit(
+          *tick.max_sources,
+          holoscan::EmitOptions{.capture_time = override_time}));
+    }
     return holoscan::radar::testing::detail::emit_bank_frame(
         snapshot, context, tick.snapshot, "LiveMusicSourceOp");
   }
@@ -419,6 +472,9 @@ class LiveMusicSourceOp final : public holoscan::Operator<> {
   holoscan::Output<holoscan::Tensor> az{"az_angles"};
   holoscan::Output<holoscan::Tensor> el{"el_angles"};
   holoscan::Output<SpatialSmoothingOverride> smoothing{"spatial_smoothing"};
+  holoscan::Output<int64_t> num_sources{"num_sources"};
+  holoscan::Output<double> source_count_pfa{"source_count_pfa"};
+  holoscan::Output<int64_t> max_sources{"max_sources"};
 };
 
 // Which override ports the graph wires. The operator declares every entry
@@ -428,6 +484,9 @@ struct LiveMusicWiring {
   bool az{false};
   bool el{false};
   bool smoothing{false};
+  bool num_sources{false};
+  bool source_count_pfa{false};
+  bool max_sources{false};
 };
 
 FiveOutGraphRunResult run_live_music(std::vector<LiveMusicTick> ticks,
@@ -471,6 +530,15 @@ FiveOutGraphRunResult run_live_music(std::vector<LiveMusicTick> ticks,
   }
   if (wiring.smoothing) {
     graph.add_flow(source->smoothing, op->spatial_smoothing, q);
+  }
+  if (wiring.num_sources) {
+    graph.add_flow(source->num_sources, op->num_sources, q);
+  }
+  if (wiring.source_count_pfa) {
+    graph.add_flow(source->source_count_pfa, op->source_count_pfa, q);
+  }
+  if (wiring.max_sources) {
+    graph.add_flow(source->max_sources, op->max_sources, q);
   }
   graph.add_flow(op->aoa_estimates, sink0->in, q);
   graph.add_flow(op->angle_spectrum, sink1->in, q);
@@ -536,6 +604,18 @@ FiveOutGraphRunResult run_live_music(std::vector<LiveMusicTick> ticks,
         holoscan::radar::testing::detail::FrameBankB::mutex);
     result.frames1 = std::move(
         holoscan::radar::testing::detail::FrameBankB::captured);
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBankC::mutex);
+    result.frames2 = std::move(
+        holoscan::radar::testing::detail::FrameBankC::captured);
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBankD::mutex);
+    result.frames3 = std::move(
+        holoscan::radar::testing::detail::FrameBankD::captured);
   }
   {
     const std::lock_guard lock(
@@ -1413,19 +1493,116 @@ TEST(MUSICEstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
   EXPECT_EQ(result.frames4[1].shape, (std::vector<int64_t>{1, 6}));
 }
 
+// num_sources is reported verbatim on source_count (clamped by max_sources),
+// so an int32 output value carries both the override and the sticky latch.
+// Tick 0 sends nothing and pins the Params baseline inside the same run, so
+// nothing is compared across graph runs.
 TEST(MUSICEstimatorOpTest, LiveNumSourcesStickyOverride) {
-  GTEST_SKIP() << "HSDK 5 EA: live num_sources override harness deferred "
-                  "(HSDK5_PORT.md §1)";
+  constexpr int64_t kN = 12;
+  constexpr int64_t kS = 128;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block =
+      make_block_two(geom, conv, 0.20, 0.0, -0.15, 0.0, kS, 0.02, 405u);
+  auto snap = block_to_device<double>(block, {1, kN, kS});
+  MUSICParams params =
+      make_params(geom, conv, linspace(-0.4, 0.4, 41), {0.0},
+                  /*num_sources=*/1, 1e-2, /*max_sources=*/4);
+  params.sticky_num_sources = true;
+
+  const FiveOutGraphRunResult result = run_live_music(
+      {{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+        std::nullopt, std::nullopt, std::nullopt},
+       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+        int64_t{2}, std::nullopt, std::nullopt},
+       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+        std::nullopt, std::nullopt, std::nullopt}},
+      std::move(params), {.num_sources = true});
+
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames3.size(), 3U);
+  EXPECT_EQ(result.frames3[0].as<int32_t>()[0], 1);
+  EXPECT_EQ(result.frames3[1].as<int32_t>()[0], 2);
+  EXPECT_EQ(result.frames3[2].as<int32_t>()[0], 2);
 }
 
+// source_count_pfa only steers the EFT model order, so the observable is the
+// int32 source_count. The crafted covariance pins the eigenvalue profile
+// exactly, which makes the 1 -> 2 transition between the Params Pfa and the
+// override Pfa deterministic instead of a noise draw.
 TEST(MUSICEstimatorOpTest, LiveSourceCountPfaStickyOverride) {
-  GTEST_SKIP() << "HSDK 5 EA: live source_count_pfa override harness "
-                  "deferred (HSDK5_PORT.md §1)";
+  const std::vector<double> spectrum = {0.8930540251, 0.9468277841,
+                                        1.3517214181, 1.6732266229,
+                                        9.0798471606, 14.3477610683};
+  const std::vector<double> cosines = {-5.0 / 6.0, -0.5, -1.0 / 6.0,
+                                       1.0 / 6.0, 0.5, 5.0 / 6.0};
+  const int64_t kN = static_cast<int64_t>(spectrum.size());
+  const int64_t kS = kN;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kDirectionCosine;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block =
+      make_orthogonal_source_block(geom, conv, cosines, spectrum);
+  auto snap = block_to_device<double>(block, {1, kN, kS});
+  MUSICParams params =
+      make_params(geom, conv, linspace(-0.9, 0.9, 37), {0.0},
+                  /*num_sources=*/-1, /*source_count_pfa=*/1e-4,
+                  /*max_sources=*/4, /*smoothing=*/{},
+                  /*forward_backward=*/false);
+  params.sticky_source_count_pfa = true;
+
+  const FiveOutGraphRunResult result = run_live_music(
+      {{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+        std::nullopt, std::nullopt, std::nullopt},
+       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+        std::nullopt, 0.5, std::nullopt},
+       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+        std::nullopt, std::nullopt, std::nullopt}},
+      std::move(params), {.source_count_pfa = true});
+
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames3.size(), 3U);
+  EXPECT_EQ(result.frames3[0].as<int32_t>()[0], 1);
+  EXPECT_EQ(result.frames3[1].as<int32_t>()[0], 2);
+  EXPECT_EQ(result.frames3[2].as<int32_t>()[0], 2);
 }
 
+// max_sources widens doa_multi to {items, max_sources, 2}, so both the
+// override and the sticky latch show up in the output shape alone.
 TEST(MUSICEstimatorOpTest, LiveMaxSourcesStickyOverrideReallocates) {
-  GTEST_SKIP() << "HSDK 5 EA: live max_sources override harness deferred "
-                  "(HSDK5_PORT.md §1)";
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  constexpr int64_t kLiveMaxSources = 3;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.02, 406u);
+  auto snap = block_to_device<double>(block, {1, kN, kS});
+  MUSICParams params =
+      make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0},
+                  /*num_sources=*/1, 1e-2, /*max_sources=*/1);
+  params.sticky_max_sources = true;
+
+  const FiveOutGraphRunResult result = run_live_music(
+      {{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+        std::nullopt, std::nullopt, std::nullopt},
+       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+        std::nullopt, std::nullopt, kLiveMaxSources},
+       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+        std::nullopt, std::nullopt, std::nullopt}},
+      std::move(params), {.max_sources = true});
+
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames2.size(), 3U);
+  EXPECT_EQ(result.frames2[0].shape, (std::vector<int64_t>{1, 1, 2}));
+  EXPECT_EQ(result.frames2[1].shape,
+            (std::vector<int64_t>{1, kLiveMaxSources, 2}));
+  EXPECT_EQ(result.frames2[2].shape,
+            (std::vector<int64_t>{1, kLiveMaxSources, 2}));
 }
 
 }  // namespace

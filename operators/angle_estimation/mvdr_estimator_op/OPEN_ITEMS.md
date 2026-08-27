@@ -132,7 +132,41 @@ for Python / apps.
 
 ## 6. Second tick diverges from the first on identical input
 
-**Blocks checklist:** Tests → `LiveArrayGeometryStickyOverride` is red.
+**Blocks checklist:** Tests → most of the suite is red. See *Measured scope*.
+
+**Measured scope (2026-08-27, `holoscan-radar:optports-baseline`).** This is
+much broader than the single sticky-override test this item originally
+described. Six consecutive runs of the whole `test_mvdr_estimator` binary:
+
+| Test | Runs failed |
+| --- | --- |
+| `SpatialSmoothingReducesEigenvalueChannels` | 6/6 |
+| `RecoversKnownDoaUlaAzOnly` | 6/6 |
+| `MultiSourceRecoversTwoDoa` | 6/6 |
+| `FixedDiagonalLoadingRecoversDoa` | 6/6 |
+| `FloatDoubleAgreeOnDoa` | 5/6 |
+| `MaxSourcesCapacityNanFillsUnusedRows` | 2/6 |
+| `LiveArrayGeometryStickyOverride` | 2/6 |
+
+**It is process-state contamination, not a wrong algorithm.** Every one of
+those tests passes when run as the only test in its own process
+(`--gtest_filter` on each of the four: 0 failures). They fail only when the
+whole binary runs them in one process. That is why `ctest` is green — it
+discovers each GTest case as a separate test and so isolates them: the full
+`ctest -LE performance` run is 764/765. Anyone running
+`./test_mvdr_estimator` directly will see five failures and should not read
+them as broken DOA math.
+
+So the defect is that MVDR leaves per-process state behind that corrupts
+later runs in the same process — consistent with the MatX solver-cache /
+cold-path evidence below, and a superset of the original tick-to-tick
+symptom. `LiveArrayGeometryStickyOverride`, the test this item was filed
+against, is now among the *least* frequent failures.
+
+Pre-existing and independent of the live-override test work: the committed
+baseline of the test file fails the same five per whole-binary run, and the
+newly added `LiveMaxSourcesStickyOverrideReallocates` passes 8/8 in
+isolation.
 
 **Symptom.** In a fresh process, feeding the same snapshot twice makes
 `angle_spectrum` differ between tick 1 and tick 2. Tick 1 is the correct
@@ -147,6 +181,17 @@ cache key. `LiveArrayGeometryStickyOverride` is the only test that
 compares spectra across ticks, which is why it is the one that fails; the
 sticky resolution itself is correct. The test was `GTEST_SKIP`’d before
 the live overrides were restored, so this is newly exposed, not new.
+
+**Blast radius is wider than one tick.** It also breaks run-to-run
+comparison, which blocks the `diagonal_loading` live-override test: δ moves
+spectrum values only, so the natural assertion is that an override δ produces
+the same spectrum as the identical Params δ. Written out, that comparison
+fails 8/8 when it is the first graph run in a fresh process and passes once the
+process is warm — the first run is the wrong one, matching the cold-path
+finding below. The test is therefore left skipped against this item rather than
+against any SDK limitation. `LiveMaxSourcesStickyOverrideReallocates` is
+unaffected and passes 8/8, because `max_sources` is observable in the
+`doa_multi` shape rather than in float values.
 
 **What the evidence points at** — the `matx::eig` / `matx::inv` region of
 `run_mvdr_stage`, with a dependence on host timing:

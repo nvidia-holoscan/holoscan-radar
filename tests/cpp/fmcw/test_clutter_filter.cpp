@@ -281,13 +281,22 @@ TEST(ClutterFilterOpTest, RejectsOpaqueLeadingBatchWhenExtentsAreSiso) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
+// [EA HSDK5 ONLY] Blocked by enum transport, not by the override harness:
+// `method` is the only [live] parameter here and it is an enum. Measured with
+// the same source shape that passes for scalars (co-emitted override before the
+// cube, one shared capture_time, Exact{} + SafeDefault{}): the source's
+// Output<ClutterFilterMethod>::emit returns kNotReady on every tick, and wiring
+// that edge at all kills the run with RUNTIME_PORT_BINDING_UNAVAILABLE before
+// the first frame. Leaving the edge unwired runs clean, which isolates the
+// failure to the enum-typed edge. This is the `kLocalEnum` binding gap in
+// HSDK5_PORT.md §1 (isolated reproducer:
+// tests/cpp/utils/hsdk_enum_tensor_bind_repro/), so the shape assertion this
+// test wants — mean_subtraction keeps every chirp, single_delay drops one,
+// double_delay drops two — cannot be reached yet. Params authoring covers
+// method selection (MethodConfigurableFromParams).
 TEST(ClutterFilterOpTest, LiveMethodOverrideMidStreamAndSticky) {
-  // [EA HSDK5 ONLY] See docs/planning/HSDK5_PORT.md §1 — Graph mid-stream
-  // sticky override harness fails on EA device/partition binding
-  // (RUNTIME_PORT_BINDING_UNAVAILABLE / RUNTIME_EXECUTION_LANE_PLAN_INVALID).
-  // Params authoring covers method selection; restore once §1 is closed.
-  GTEST_SKIP() << "HSDK 5 EA: live method override harness deferred "
-                  "(HSDK5_PORT.md §1)";
+  GTEST_SKIP() << "HSDK 5 EA: enum [live] edges fail runtime binding "
+                  "(kLocalEnum, HSDK5_PORT.md §1); scalar overrides work";
 }
 
 TEST(ClutterFilterOpTest, RejectsMethodNone) {

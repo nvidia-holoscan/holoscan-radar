@@ -33,14 +33,27 @@ tensors.
 **Still deferred.**
 
 - `LiveRepresentativeStickyOverride` / `LiveScoreMethodStickyOverride` are
-  still `GTEST_SKIP`’d — the Graph harness for a mid-stream enum override
-  alongside a three-way `OnAligned` join is not written yet.
+  still `GTEST_SKIP`’d, and an attempt (2026-08-27) confirmed the blocker is
+  real. Both parameters are **enum**-typed, and an enum-typed edge still fails
+  runtime binding on this EA
+  ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1, isolated
+  reproducer in `tests/cpp/utils/hsdk_enum_tensor_bind_repro/`). Measured
+  here: wiring an `Output<RepresentativePolicy>` onto the working
+  `feature_weights` harness fails the run at the **source** vertex with
+  `RUNTIME_PORT_BINDING_UNAVAILABLE` even with nothing emitted on it; the
+  host-Tensor `feature_weights` override on the same harness passes.
+  `ClutterFilterOp`'s enum `method` override reproduces it independently
+  (`emit` returns `kNotReady` every tick), which is what rules out the
+  `OnAligned` join, the triple-in fixture, and the pool binding as causes —
+  the common factor is the enum edge alone.
 - Params authoring covers selection (`RepresentativeConfigurableFromParams` /
   `ScoreMethodConfigurableFromParams`).
 
-**Next.** Port the Graph live-override harness (the pattern
-`test_fmcw_range_processor.cpp` uses for `nfft`) to this triple-in fixture
-and unskip.
+**Next.** Blocked on the §1 enum-edge fix, not on test authoring — do not
+re-attempt the harness until enum outputs bind. The rest of the pattern is
+ready: a scalar override on this same fixture is expected to work, since
+`Output<int64_t>` / `Output<bool>` overrides now pass in the FMCW, Doppler,
+and DBSCAN suites.
 
 **Status:** open — test coverage only; the contract wiring is settled.
 

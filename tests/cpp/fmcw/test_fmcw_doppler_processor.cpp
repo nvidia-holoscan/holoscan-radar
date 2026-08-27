@@ -4,8 +4,8 @@
 // Tests for FMCWDopplerProcessorOp (HSDK 5 Graph harness):
 // Doppler-peak recovery, fftshift, Hann window, nfft interpolation,
 // batch-axis handling, float/double agreement, conditional velocity_bins
-// output, and error paths. Sticky [live] center_zero_doppler Graph
-// mid-stream test is GTEST_SKIP'd per HSDK5_PORT.md §1.
+// output, mid-stream sticky [live] overrides (doppler_window / waveform /
+// center_zero_doppler), and error paths.
 
 #include <gtest/gtest.h>
 
@@ -526,10 +526,14 @@ TEST(FMCWDopplerProcessorOpTest, NamedRxAxisProcessedIndependently) {
   EXPECT_LT(cell_mag<float>(rd_map, 1, num_chirps, num_bins, 3, 2), 1e-3);
 }
 
+// The harness carries every [live] override this suite exercises. New slots go
+// after the existing trailing members so the positional brace initializers
+// below keep binding what they were written for.
 struct LiveDopplerDescriptorTick {
   std::shared_ptr<holoscan::Tensor> profiles;
   std::optional<WindowSpec> doppler_window;
   std::optional<FMCWWaveformDescriptor> waveform;
+  std::optional<bool> center_zero_doppler;
 };
 
 struct LiveDopplerDescriptorBank {
@@ -590,6 +594,7 @@ class LiveDopplerDescriptorSourceOp final : public holoscan::Operator<> {
     spec.output(waveform, "waveform")
         .produces_tensor(holoscan::radar::pooled_tensor_output(
             kWaveform, 1U, 4096U * sizeof(std::complex<double>)));
+    spec.output(center_zero_doppler, "center_zero_doppler");
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -627,6 +632,14 @@ class LiveDopplerDescriptorSourceOp final : public holoscan::Operator<> {
         return emitted;
       }
     }
+    if (tick.center_zero_doppler.has_value()) {
+      auto emitted = center_zero_doppler.emit(
+          *tick.center_zero_doppler,
+          holoscan::EmitOptions{.capture_time = capture_time});
+      if (!emitted) {
+        return emitted;
+      }
+    }
     return holoscan::radar::testing::detail::emit_bank_frame(
         profiles, context, tick.profiles,
         "LiveDopplerDescriptorSourceOp");
@@ -637,6 +650,7 @@ class LiveDopplerDescriptorSourceOp final : public holoscan::Operator<> {
       doppler_window{"doppler_window"};
   holoscan::Output<holoscan::radar::wire::FMCWWaveformT>
       waveform{"waveform"};
+  holoscan::Output<bool> center_zero_doppler{"center_zero_doppler"};
 };
 
 DualIOGraphRunResult run_doppler_descriptor_override_graph(
@@ -661,6 +675,8 @@ DualIOGraphRunResult run_doppler_descriptor_override_graph(
   const holoscan::ConnectionOptions q{.queue_depth = 8U};
   graph.add_flow(source->doppler_window, op->doppler_window_in, q);
   graph.add_flow(source->waveform, op->waveform_in, q);
+  graph.add_flow(source->center_zero_doppler,
+                 op->center_zero_doppler_in, q);
   graph.add_flow(source->profiles, op->range_profiles, q);
   graph.add_flow(op->rd_maps, sink0->in, q);
   graph.add_flow(op->velocity_bins, sink1->in, q);
@@ -735,10 +751,86 @@ DualIOGraphRunResult run_doppler_descriptor_override_graph(
 
 TEST(FMCWDopplerProcessorOpTest,
      LiveOverrideCenterZeroDopplerMidStream) {
-  // [EA HSDK5 ONLY] Graph mid-stream sticky override harness deferred —
-  // HSDK5_PORT.md §1 (EA device/partition binding issues).
-  GTEST_SKIP() << "HSDK 5 EA: live center_zero_doppler override harness "
-                  "deferred (HSDK5_PORT.md §1)";
+  // center_zero_doppler is observable without comparing any float payload:
+  // fftshift moves the zero-Doppler bin, so a DC-only tone peaks at bin 0 when
+  // the axis is uncentered and at num_doppler/2 when it is centered, and
+  // velocity_bins puts its 0 m/s entry at the same index. Both assertions are
+  // integer bin positions.
+  constexpr int64_t num_chirps = 32;
+  constexpr int64_t num_bins = 4;
+  constexpr int64_t range_bin = 1;
+  constexpr int64_t centered_bin = num_chirps / 2;
+  const auto waveform = test_waveform();
+  const double pri = waveform.chirp_repetition_interval();
+  const auto dc_tone =
+      tone_profiles(num_chirps, num_bins, range_bin, 0.0, pri);
+  const auto frame = [&dc_tone] {
+    return make_input<float>(dc_tone, {num_chirps, num_bins});
+  };
+
+  // Which bin holds 0 m/s tells us how the axis was laid out this tick.
+  const auto zero_velocity_bin = [](const HostTensor& bins) {
+    const auto axis = velocity_axis_of<float>(bins);
+    for (size_t i = 0; i < axis.size(); ++i) {
+      if (axis[i] == 0.0) {
+        return static_cast<int64_t>(i);
+      }
+    }
+    return int64_t{-1};
+  };
+
+  FMCWDopplerProcessorParams latching;
+  latching.waveform = waveform;
+  latching.center_zero_doppler = false;
+  latching.sticky_center_zero_doppler = true;
+  const DualIOGraphRunResult latched =
+      run_doppler_descriptor_override_graph(
+          {{frame(), std::nullopt, std::nullopt, std::nullopt},
+           {frame(), std::nullopt, std::nullopt, true},
+           {frame(), std::nullopt, std::nullopt, std::nullopt}},
+          std::move(latching));
+
+  ASSERT_TRUE(latched.plan_ok) << latched.plan_json;
+  ASSERT_TRUE(latched.diagnostics.empty());
+  ASSERT_EQ(latched.frames0.size(), 3u);
+  ASSERT_EQ(latched.frames1.size(), 3u);
+  // Tick 0 misses → Params (uncentered). Tick 1 matches Exact. Tick 2 misses
+  // but sticky_center_zero_doppler holds the centered layout.
+  EXPECT_EQ(doppler_argmax<float>(latched.frames0[0], 0, num_chirps,
+                                  num_bins, range_bin),
+            0);
+  EXPECT_EQ(doppler_argmax<float>(latched.frames0[1], 0, num_chirps,
+                                  num_bins, range_bin),
+            centered_bin);
+  EXPECT_EQ(doppler_argmax<float>(latched.frames0[2], 0, num_chirps,
+                                  num_bins, range_bin),
+            centered_bin);
+  EXPECT_EQ(zero_velocity_bin(latched.frames1[0]), 0);
+  EXPECT_EQ(zero_velocity_bin(latched.frames1[1]), centered_bin);
+  EXPECT_EQ(zero_velocity_bin(latched.frames1[2]), centered_bin);
+
+  FMCWDopplerProcessorParams ephemeral;
+  ephemeral.waveform = waveform;
+  ephemeral.center_zero_doppler = false;
+  ephemeral.sticky_center_zero_doppler = false;
+  const DualIOGraphRunResult reverted =
+      run_doppler_descriptor_override_graph(
+          {{frame(), std::nullopt, std::nullopt, true},
+           {frame(), std::nullopt, std::nullopt, std::nullopt}},
+          std::move(ephemeral));
+
+  ASSERT_TRUE(reverted.plan_ok) << reverted.plan_json;
+  ASSERT_TRUE(reverted.diagnostics.empty());
+  ASSERT_EQ(reverted.frames0.size(), 2u);
+  ASSERT_EQ(reverted.frames1.size(), 2u);
+  EXPECT_EQ(doppler_argmax<float>(reverted.frames0[0], 0, num_chirps,
+                                  num_bins, range_bin),
+            centered_bin);
+  EXPECT_EQ(doppler_argmax<float>(reverted.frames0[1], 0, num_chirps,
+                                  num_bins, range_bin),
+            0);
+  EXPECT_EQ(zero_velocity_bin(reverted.frames1[0]), centered_bin);
+  EXPECT_EQ(zero_velocity_bin(reverted.frames1[1]), 0);
 }
 
 TEST(FMCWDopplerProcessorOpTest, LiveOverrideDopplerWindow) {
