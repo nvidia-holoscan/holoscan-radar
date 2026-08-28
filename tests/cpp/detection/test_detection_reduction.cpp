@@ -456,23 +456,6 @@ TEST(DetectionReductionOpTest, FeatureWeightsConfigurableFromParams) {
   EXPECT_EQ(w1.as<int64_t>()[1], 2);
 }
 
-// ---- Sticky [live] overrides (deferred on EA) -----------------------------
-
-TEST(DetectionReductionOpTest, LiveRepresentativeStickyOverride) {
-  // [EA HSDK5 ONLY] See docs/planning/HSDK5_PORT.md §1 — Graph mid-stream
-  // sticky override harness fails on EA device/partition binding. Operator
-  // still declares Input<RepresentativePolicy> + sticky resolve; Params cover
-  // selection (RepresentativeConfigurableFromParams).
-  GTEST_SKIP() << "HSDK 5 EA: live representative override harness deferred "
-                  "(HSDK5_PORT.md §1)";
-}
-
-TEST(DetectionReductionOpTest, LiveScoreMethodStickyOverride) {
-  // [EA HSDK5 ONLY] See docs/planning/HSDK5_PORT.md §1.
-  GTEST_SKIP() << "HSDK 5 EA: live score_method override harness deferred "
-                  "(HSDK5_PORT.md §1)";
-}
-
 // ---- Pageable-host vector [live] override ---------------------------------
 
 struct LiveWeightsTick {
@@ -481,6 +464,8 @@ struct LiveWeightsTick {
   std::shared_ptr<holoscan::Tensor> points;
   std::optional<std::vector<double>> weights;
   int64_t skew_ns{0};
+  std::optional<RepresentativePolicy> representative;
+  std::optional<ScoreMethod> score_method;
 };
 
 struct LiveWeightsBank {
@@ -520,6 +505,8 @@ class LiveWeightsSourceOp final : public holoscan::Operator<> {
         .max_emits_per_compute(1U)
         .produces_tensor(holoscan::radar::pooled_tensor_output(
             kHostVector, 1U, 128U * sizeof(double)));
+    spec.output(representative, "representative").max_emits_per_compute(1U);
+    spec.output(score_method, "score_method").max_emits_per_compute(1U);
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -563,6 +550,22 @@ class LiveWeightsSourceOp final : public holoscan::Operator<> {
         return holoscan::make_unexpected(std::move(emitted).error());
       }
     }
+    if (tick.representative.has_value()) {
+      auto emitted = representative.emit(
+          *tick.representative,
+          holoscan::EmitOptions{.capture_time = capture_time});
+      if (!emitted) {
+        return holoscan::make_unexpected(std::move(emitted).error());
+      }
+    }
+    if (tick.score_method.has_value()) {
+      auto emitted = score_method.emit(
+          *tick.score_method,
+          holoscan::EmitOptions{.capture_time = capture_time});
+      if (!emitted) {
+        return holoscan::make_unexpected(std::move(emitted).error());
+      }
+    }
     auto emitted = holoscan::radar::testing::detail::emit_bank_frame(
         labels, context, tick.labels, "LiveWeightsSourceOp.labels");
     if (!emitted) {
@@ -582,6 +585,8 @@ class LiveWeightsSourceOp final : public holoscan::Operator<> {
   holoscan::Output<holoscan::Tensor> detection_idx{"out1"};
   holoscan::Output<holoscan::Tensor> points{"out2"};
   holoscan::Output<holoscan::Tensor> weights{"feature_weights"};
+  holoscan::Output<RepresentativePolicy> representative{"representative"};
+  holoscan::Output<ScoreMethod> score_method{"score_method"};
 };
 
 GraphRunResult run_weights_override_graph(
@@ -597,6 +602,11 @@ GraphRunResult run_weights_override_graph(
   auto extents = holoscan::radar::testing::default_test_extents();
   extents.max_features = max_features;
   auto op = graph.op<DetectionReductionOp<double>>("op", extents);
+  // Under an OnAligned trigger each override entry is gated by its expect_*
+  // flag, so the wiring has to agree with the flag exactly.
+  const bool wire_weights = params.expect_feature_weights;
+  const bool wire_representative = params.expect_representative;
+  const bool wire_score_method = params.expect_score_method;
   op.set_params(std::move(params));
   const auto sink =
       graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink");
@@ -604,7 +614,15 @@ GraphRunResult run_weights_override_graph(
   graph.add_flow(source->labels, op->labels, q);
   graph.add_flow(source->detection_idx, op->detection_idx, q);
   graph.add_flow(source->points, op->points, q);
-  graph.add_flow(source->weights, op->feature_weights, q);
+  if (wire_weights) {
+    graph.add_flow(source->weights, op->feature_weights, q);
+  }
+  if (wire_representative) {
+    graph.add_flow(source->representative, op->representative, q);
+  }
+  if (wire_score_method) {
+    graph.add_flow(source->score_method, op->score_method, q);
+  }
   graph.add_flow(op->rep_idx, sink->in, q);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
 
@@ -742,6 +760,100 @@ TEST(DetectionReductionOpTest, LiveFeatureWeightsRejectsBoundOverflow) {
 
   EXPECT_TRUE(out.plan_ok) << out.plan_json;
   EXPECT_FALSE(out.diagnostics.empty());
+}
+
+// ---- Enum [live] overrides -----------------------------------------------
+
+// Points chosen so the two policies disagree: with w = (1, 0) the first row is
+// the lower-scoring one, so `first` keeps row 0 (10, 1) and `peak` keeps
+// row 1 (20, 2).
+LiveWeightsTick make_representative_tick(
+    std::optional<RepresentativePolicy> representative) {
+  const std::vector<int64_t> labels = {0, 0};
+  const std::vector<int64_t> idx = {10, 1, 20, 2};
+  const std::vector<double> points = {1.0, 0.0, 5.0, 10.0};
+  LiveWeightsTick tick{
+      to_device_tensor(labels, {2}, kInt64),
+      to_device_tensor(idx, {2, 2}, kInt64),
+      to_device_tensor(points, {2, 2}, real_dtype<double>()),
+      std::nullopt,
+      0,
+  };
+  tick.representative = representative;
+  return tick;
+}
+
+// With w = (1, 1), weighted_sum ranks row 0 above row 1 (7 vs 6) while
+// weighted_l2 reverses it (5 vs 6), so the peak row names the score method.
+LiveWeightsTick make_score_method_tick(
+    std::optional<ScoreMethod> score_method) {
+  const std::vector<int64_t> labels = {0, 0};
+  const std::vector<int64_t> idx = {10, 1, 20, 2};
+  const std::vector<double> points = {4.0, 3.0, 6.0, 0.0};
+  LiveWeightsTick tick{
+      to_device_tensor(labels, {2}, kInt64),
+      to_device_tensor(idx, {2, 2}, kInt64),
+      to_device_tensor(points, {2, 2}, real_dtype<double>()),
+      std::nullopt,
+      0,
+  };
+  tick.score_method = score_method;
+  return tick;
+}
+
+TEST(DetectionReductionOpTest, LiveRepresentativeStickyOverride) {
+  auto params = make_params(RepresentativePolicy::kFirst,
+                            ScoreMethod::kWeightedSum, {1.0, 0.0});
+  params.expect_representative = true;
+  params.sticky_representative = true;
+  const auto out = run_weights_override_graph(
+      {make_representative_tick(std::nullopt),
+       make_representative_tick(RepresentativePolicy::kPeak),
+       make_representative_tick(std::nullopt)},
+      std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 3U);
+  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 10);
+  EXPECT_EQ(out.frames[1].as<int64_t>()[0], 20);
+  EXPECT_EQ(out.frames[2].as<int64_t>()[0], 20);
+}
+
+TEST(DetectionReductionOpTest, LiveRepresentativeEphemeralRevertsToParams) {
+  auto params = make_params(RepresentativePolicy::kFirst,
+                            ScoreMethod::kWeightedSum, {1.0, 0.0});
+  params.expect_representative = true;
+  params.sticky_representative = false;
+  const auto out = run_weights_override_graph(
+      {make_representative_tick(RepresentativePolicy::kPeak),
+       make_representative_tick(std::nullopt)},
+      std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 2U);
+  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 20);
+  EXPECT_EQ(out.frames[1].as<int64_t>()[0], 10);
+}
+
+TEST(DetectionReductionOpTest, LiveScoreMethodStickyOverride) {
+  auto params = make_params(RepresentativePolicy::kPeak,
+                            ScoreMethod::kWeightedSum, {1.0, 1.0});
+  params.expect_score_method = true;
+  params.sticky_score_method = true;
+  const auto out = run_weights_override_graph(
+      {make_score_method_tick(std::nullopt),
+       make_score_method_tick(ScoreMethod::kWeightedL2),
+       make_score_method_tick(std::nullopt)},
+      std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 3U);
+  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 10);
+  EXPECT_EQ(out.frames[1].as<int64_t>()[0], 20);
+  EXPECT_EQ(out.frames[2].as<int64_t>()[0], 20);
 }
 
 }  // namespace

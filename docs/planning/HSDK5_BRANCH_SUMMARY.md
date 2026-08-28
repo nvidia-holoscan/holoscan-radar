@@ -21,7 +21,7 @@ HSDK 5 Graph + `Operator<Params>` with typed Tensor ports — **no 4.x shim**.
 | 0 — Foundation | EA image, CMake/MatX, Holoviz probe, Python forced off | Landed |
 | 1 — Shared glue | `radar_common/sdk/` Tensor I/O + sticky helpers; Graph test harness | Landed |
 | 2 — Operator wave | All 19 ops → Graph/`Operator<Params>` + unit tests (allow-list) | Landed (intentional live skips OK) |
-| 3 — Perf wave | Graph `perf_*` drivers + cold/steady smokes | Landed (POD `override_ms` restored; enum/§9 lives still deferred) |
+| 3 — Perf wave | Graph `perf_*` drivers + cold/steady smokes | Landed (POD `override_ms` restored; enum `override_ms` still unmeasured — §8, no longer blocked) |
 | 4 — Apps / Python | Demos + bindings when Holoviz / Python EA surface exists | **Partial:** C++ Graph demos + X11 RD viewer; Holoviz/Python still off |
 | 5 — Close deferred | Re-probe EA gaps; ratify durable API deltas; unskip live Graph | **Open** — see blockers below |
 | 6 — Cleanup | Drop allow-lists, `[EA HSDK5 ONLY]`, this file / `HSDK5_PORT.md` | Blocked on phase 5 |
@@ -68,7 +68,7 @@ Grouped by theme. Section numbers match [`HSDK5_PORT.md`](HSDK5_PORT.md)
 
 | Issue | What we did |
 | --- | --- |
-| Mid-stream sticky `[live]` Graph (scalar/enum beside device Tensor) fails compile or runtime (`PARTITION_MANUAL_AUTHORING_REQUIRED`, `RUNTIME_PORT_BINDING_UNAVAILABLE`, `RUNTIME_EXECUTION_LANE_PLAN_INVALID`, …) | Declare typed live Inputs in `contract()` unconditionally and let wiring decide (`expect_*` only under an `OnAligned` trigger); keep remaining scalar/enum Graph skips and the minimal repro in `tests/cpp/utils/test_live_override_repro.cpp` (`ctest -L ea_repro`). FMCW schema-backed window/waveform Graph tests run (§1 / §9). |
+| Mid-stream sticky `[live]` Graph (scalar/enum beside device Tensor) fails compile or runtime (`PARTITION_MANUAL_AUTHORING_REQUIRED`, `RUNTIME_PORT_BINDING_UNAVAILABLE`, `RUNTIME_EXECUTION_LANE_PLAN_INVALID`, …) | Declare typed live Inputs in `contract()` unconditionally and let wiring decide (`expect_*` only under an `OnAligned` trigger); keep the minimal repro in `tests/cpp/utils/test_live_override_repro.cpp` (`ctest -L ea_repro`). Scalar/bool overrides run, and enum edges run since the §12 fix. FMCW schema-backed window/waveform Graph tests run (§1 / §9). |
 | Device Tensor outs need explicit pool bind; foreign-handle / zero-copy republish rejected | `bind_*_device_pools` in harness; apps/perf `allocate_tensor` / loan fill each tick; `PerfPublishMode`; accept VAA lg/xl vs 4.3 gap as publish-path artifact (§3) |
 | Raw `DLManagedTensor*` imports are read-only | Writable path via `DLManagedTensorContext` + owned device memory (`dlpack_buffer.hpp`) (§4) |
 | Operator with **no** wired port breaks auto-partition (`PARTITION_MANUAL_AUTHORING_REQUIRED`, unnamed vertex) | Always drain fan-outs (e.g. `cfar_power` → viewer **and** `NullSinkOp`); never leave a constructed sink unwired (§6) |
@@ -107,13 +107,15 @@ Grouped by theme. Section numbers match [`HSDK5_PORT.md`](HSDK5_PORT.md)
 ## Blocked on EA gaps (and related durable decisions)
 
 Until these close, phase 5 / cleanup cannot finish. Detail and next steps:
-[`HSDK5_PORT.md`](HSDK5_PORT.md) §§1–4, 8–10.
+[`HSDK5_PORT.md`](HSDK5_PORT.md) §§1–4, 8–12.
 
 ### Need newer EA / GA or Holoscan maintainer answer
 
 | ID | Gap | Impact if still broken |
 | --- | --- | --- |
-| §1 | Mid-stream sticky Graph `[live]` (device Tensor path + scalar/enum override) | POD perf timing works with an exact contract and one explicit partition; one-shot sticky unit tests, enums, and general wired/unwired production contracts remain open |
+| §1 | Mid-stream sticky Graph `[live]` (device Tensor path + scalar override) | Scalar / bool overrides now run and are covered; what remains is one-shot sticky harness work on the operators not yet converted |
+| §12 | ~~`enum class` Graph edge fails bind (`kLocalEnum`)~~ — **fixed on pin `f0cb828d4`** | Closed. All four enum `Live*` tests landed; only enum `override_ms` (§8) and the four unauthored `fft_norm` / fused `clutter_filter` live tests remain, both ordinary work |
+| §11 | ~~`OnAligned` trigger rejects an unwired non-member `Exact{}` override~~ — **fixed on pin `f0cb828d4`** | Closed in the SDK. `SnapshotGatherOp` / `DetectionReductionOp` can now drop `expect_*`; that retirement is the only module-side work left |
 | §6 (Holoviz / Python) | Holoviz package + usable Python / pybind11 operator surface | Holoviz demos and pytest remain forced off; X11 is interim only |
 | §6 (partition) | Auto-partition rejects graphs with an unreachable / unwired operator | Keep always-drain pattern; want named diagnostics or tolerance |
 | §3 (re-probe) | Foreign-handle / loan-reuse Tensor publish | Keep per-tick pool fill; 4.x→5.x e2e medians include publish cost |

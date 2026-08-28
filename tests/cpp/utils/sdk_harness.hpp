@@ -823,6 +823,71 @@ GraphRunResult run_single_io_operator_graph_result(
   return result;
 }
 
+// 1-in / optional Exact override / 1-out runner. `payloads` is positional
+// against `inputs`: a nullopt (or short list) leaves that tick's override
+// unpublished, which is how a miss and the sticky latch get exercised.
+template <typename OpT, typename Payload, typename ParamsT, typename WireFn>
+GraphRunResult run_exact_override_single_io_operator_graph_result(
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
+    std::vector<std::optional<Payload>> payloads, ParamsT params,
+    const char* out_port, WireFn&& wire,
+    const MaxTensorExtents& extents = default_test_extents()) {
+  GraphRunResult result;
+  detail::FrameBank::reset();
+  detail::FrameBank::input_frames = std::move(inputs);
+  detail::OverrideBank<Payload>::payloads = std::move(payloads);
+  const std::size_t expected = detail::FrameBank::input_frames.size();
+
+  holoscan::Graph graph{"exact-override-single-io-harness"};
+  const auto source =
+      graph.op<detail::TensorOverrideSourceOp<Payload>>("source");
+  auto op = emplace_harness_op<OpT>(graph, extents);
+  op.set_params(std::move(params));
+  const auto sink = graph.op<detail::TensorCaptureOp>("sink");
+  wire(graph, source, op, sink);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  detail::bind_single_io_device_pools(options, out_port);
+
+  try {
+    const holoscan::ExecutionPlan plan =
+        holoscan::compile(graph, std::move(options));
+    result.plan_ok = plan.ok();
+    result.plan_json = plan.json();
+    if (!plan.ok()) {
+      return result;
+    }
+
+    holoscan::RunSession session = holoscan::run_async(plan);
+    {
+      const auto deadline =
+          std::chrono::steady_clock::now() + detail::kHarnessDeadline;
+      std::unique_lock lock(detail::FrameBank::mutex);
+      while (detail::FrameBank::captured.size() < expected &&
+             session.diagnostics().empty() &&
+             std::chrono::steady_clock::now() < deadline) {
+        detail::FrameBank::ready.wait_for(lock, detail::kHarnessPoll);
+      }
+    }
+    session.request_stop();
+    session.wait();
+    result.termination = session.termination();
+    for (const auto& d : session.diagnostics()) {
+      result.diagnostics.push_back(std::string(d.token));
+    }
+  } catch (const holoscan::RuntimeError& e) {
+    result.plan_ok = false;
+    result.plan_json = std::string("RuntimeError: ") + e.what();
+    return result;
+  }
+  {
+    const std::lock_guard lock(detail::FrameBank::mutex);
+    result.frames = std::move(detail::FrameBank::captured);
+  }
+  return result;
+}
+
 template <typename OpT>
 GraphRunResult run_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs,

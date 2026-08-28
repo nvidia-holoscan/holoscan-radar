@@ -16,8 +16,10 @@ if it affects the module, then remove or archive the section here.
 **Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”;
 Performance → inline live-override measurement.
 
-**Class:** HSDK 5 EA limitation (not a contract change). See
-[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
+**Class:** was an HSDK 5 EA limitation (never a contract change). `method` is
+enum-typed, and an `enum class` Graph edge failed runtime binding until the SDK
+fix on pin `f0cb828d4` — see
+[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §12.
 
 **Wiring (settled, L16 / L17).** `Input<ClutterFilterMethod> method` joins
 the data trigger with `Exact{}` and `on_missing SafeDefault{}` unconditionally,
@@ -28,19 +30,25 @@ reverts to Params on a miss. `compute()` resolves via
 `resolve_live_override`. See
 [`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
+**Unit coverage landed (2026-08-28).** With the enum edge fixed,
+`LiveMethodOverrideMidStreamAndSticky` and
+`LiveMethodEphemeralRevertsToParams` are real tests. They read the method from
+the output's chirp count — mean subtraction preserves all `kChirps` rows,
+single-delay drops one, double-delay drops two — so the assertion names the
+method without inspecting parameters: an override mid-stream changes the shape,
+`sticky_method` holds it on the following tick, and with `sticky_method=false`
+the tick after a present override reverts to the Params method.
+
 **Still deferred.**
 
-- `ClutterFilterOpTest.LiveMethodOverrideMidStreamAndSticky` is
-  `GTEST_SKIP`’d; Params authoring covers method selection
-  (`MethodConfigurableFromParams`).
-- `perf_clutter_filter` measures setup / cold / steady only; notes
-  `live_override=deferred_ea`.
+- `perf_clutter_filter` measures setup / cold / steady only and notes
+  `live_override=deferred_ea`. The blocker is gone, so this is now ordinary
+  harness work: `perf_graph.hpp` still skips enum sidebands
+  ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §8).
 
-**Next.** Add the Graph mid-stream unit test + `override_ms` in the perf
-harness on a newer EA / GA.
+**Next.** Add `override_ms` for `method` in the perf harness.
 
-**Status:** open — EA harness gap; do not treat as checklist-complete until
-closed.
+**Status:** open only for perf `override_ms`; the unit-test gap is closed.
 
 ---
 

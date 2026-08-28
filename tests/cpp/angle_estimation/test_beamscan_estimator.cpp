@@ -257,6 +257,7 @@ struct LiveBeamscanTick {
   std::optional<std::vector<double>> el;
   std::optional<WindowSpec> taper;
   bool malformed_geometry{false};
+  std::optional<PeakInterpolation> peak_interpolation;
 };
 
 struct LiveBeamscanBank {
@@ -349,6 +350,7 @@ class LiveBeamscanSourceOp final : public holoscan::Operator<> {
         .max_emits_per_compute(1U)
         .produces_tensor(holoscan::radar::pooled_tensor_output(
             kHostVector, 1U, 4096U * sizeof(double)));
+    spec.output(peak_interpolation).max_emits_per_compute(1U);
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -404,6 +406,14 @@ class LiveBeamscanSourceOp final : public holoscan::Operator<> {
         return emitted;
       }
     }
+    if (tick.peak_interpolation.has_value()) {
+      auto emitted = peak_interpolation.emit(
+          *tick.peak_interpolation,
+          holoscan::EmitOptions{.capture_time = time});
+      if (!emitted) {
+        return emitted;
+      }
+    }
     return holoscan::radar::testing::detail::emit_bank_frame(
         snapshot, context, tick.snapshot, "LiveBeamscanSourceOp");
   }
@@ -415,6 +425,8 @@ class LiveBeamscanSourceOp final : public holoscan::Operator<> {
   holoscan::Output<holoscan::Tensor> el_angles{"el_angles"};
   holoscan::Output<holoscan::radar::WireWindowSpec>
       array_taper{"array_taper"};
+  holoscan::Output<PeakInterpolation>
+      peak_interpolation{"peak_interpolation"};
 };
 
 DualIOGraphRunResult run_live_beamscan_graph(
@@ -441,6 +453,7 @@ DualIOGraphRunResult run_live_beamscan_graph(
   graph.add_flow(source->az_angles, op->az_angles, q);
   graph.add_flow(source->el_angles, op->el_angles, q);
   graph.add_flow(source->array_taper, op->array_taper, q);
+  graph.add_flow(source->peak_interpolation, op->peak_interpolation, q);
   graph.add_flow(op->aoa_estimates, sink0->in, q);
   graph.add_flow(op->angle_spectrum, sink1->in, q);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
@@ -655,24 +668,45 @@ TEST(BeamscanEstimatorOpTest, PeakInterpolationConfigurableFromParams) {
   EXPECT_GT(std::abs(para_az[0] - none_az[0]), 5e-3);
 }
 
-// Blocked by enum payload transport, not by the declared-but-unwired port
-// limitation that §1 tracked (that one is closed on the pinned SDK, which is
-// why the scalar live overrides on the subspace estimators now run). The
-// observable itself is fine and was written: with the truth off-grid, kNone
-// reports the peak grid cell exactly (0.16) and a kParabolic override reports
-// ~0.17, with the sticky tick byte-identical to the override tick. What fails
-// is the wire: `peak_interpolation` is `Input<PeakInterpolation>`, so the test
-// source needs `Output<PeakInterpolation>`, and a `kLocalEnum` Graph edge
-// alongside a bound device Tensor producer dies at run start with
-// RUNTIME_PORT_BINDING_UNAVAILABLE — declaring and wiring that one port broke
-// every other Live* test in this file. Measured on the pinned SDK by
-// `tests/cpp/utils/hsdk_enum_tensor_bind_repro` (ctest -L ea_repro), which
-// still reports "uint32_t works, enum class fails to bind/run". Unskip when
-// enum payload ports bind; Params authoring covers peak_interpolation until
-// then (PeakInterpolationConfigurableFromParams).
+// Truth sits off-grid, so the interpolation mode is readable in the reported
+// angle: kNone can only name the peak grid cell (0.16) while kParabolic
+// refines toward the truth (0.17).
+LiveBeamscanTick make_interp_tick(
+    std::shared_ptr<holoscan::Tensor> snapshot,
+    std::optional<PeakInterpolation> interpolation) {
+  LiveBeamscanTick tick{std::move(snapshot)};
+  tick.peak_interpolation = interpolation;
+  return tick;
+}
+
 TEST(BeamscanEstimatorOpTest, LivePeakInterpolationStickyOverride) {
-  GTEST_SKIP() << "HSDK 5 EA: kLocalEnum Graph edge beside a bound device "
-                  "Tensor fails to bind (enum_tensor_bind_repro)";
+  constexpr int64_t kN = 8;
+  constexpr double kTruthAz = 0.17;
+
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  auto snapshot = snapshot_to_device<double>(
+      make_steering_snapshot(geom, conv, kTruthAz, 0.0), {1, kN});
+  auto params = make_params(geom, conv, linspace(-0.2, 0.2, 11),
+                            linspace(-0.1, 0.1, 3), PeakInterpolation::kNone);
+
+  const DualIOGraphRunResult out = run_live_beamscan_graph(
+      {make_interp_tick(snapshot, std::nullopt),
+       make_interp_tick(snapshot, PeakInterpolation::kParabolic),
+       make_interp_tick(snapshot, std::nullopt)},
+      std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames0.size(), 3U);
+  const double params_az = out.frames0[0].as<double>()[0];
+  const double override_az = out.frames0[1].as<double>()[0];
+  const double sticky_az = out.frames0[2].as<double>()[0];
+  EXPECT_NEAR(params_az, 0.16, 1e-6);
+  EXPECT_NEAR(override_az, kTruthAz, 0.02);
+  EXPECT_GT(std::abs(override_az - params_az), 5e-3);
+  EXPECT_EQ(sticky_az, override_az);
 }
 
 TEST(BeamscanEstimatorOpTest, LiveAzGridStickyOverride) {

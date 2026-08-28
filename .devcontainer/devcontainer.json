@@ -13,7 +13,7 @@
     "dockerfile": "../Dockerfile",
     // [EA HSDK5 ONLY] Build this image first; remove this args block before GA.
     "args": {
-      "BASE_IMAGE": "holoscan-radar-hsdk5-ea:deustice-5x-optional-port-contracts-906fc1247"
+      "BASE_IMAGE": "holoscan-radar-hsdk5-ea:deustice-5x-optional-port-contracts-f0cb828d4"
     }
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/holoscan-radar,type=bind,consistency=cached",

@@ -281,22 +281,59 @@ TEST(ClutterFilterOpTest, RejectsOpaqueLeadingBatchWhenExtentsAreSiso) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-// [EA HSDK5 ONLY] Blocked by enum transport, not by the override harness:
-// `method` is the only [live] parameter here and it is an enum. Measured with
-// the same source shape that passes for scalars (co-emitted override before the
-// cube, one shared capture_time, Exact{} + SafeDefault{}): the source's
-// Output<ClutterFilterMethod>::emit returns kNotReady on every tick, and wiring
-// that edge at all kills the run with RUNTIME_PORT_BINDING_UNAVAILABLE before
-// the first frame. Leaving the edge unwired runs clean, which isolates the
-// failure to the enum-typed edge. This is the `kLocalEnum` binding gap in
-// HSDK5_PORT.md §1 (isolated reproducer:
-// tests/cpp/utils/hsdk_enum_tensor_bind_repro/), so the shape assertion this
-// test wants — mean_subtraction keeps every chirp, single_delay drops one,
-// double_delay drops two — cannot be reached yet. Params authoring covers
-// method selection (MethodConfigurableFromParams).
+// The method decides how many chirps survive, so the output's chirp extent is
+// the observable: mean_subtraction keeps all of them, single_delay drops one,
+// double_delay drops two.
+GraphRunResult run_method_override(
+    std::vector<std::optional<ClutterFilterMethod>> overrides, bool sticky) {
+  const auto tone = doppler_tone<float>(kChirps, kBins, 0.19);
+  std::vector<std::shared_ptr<holoscan::Tensor>> cubes;
+  cubes.reserve(overrides.size());
+  for (std::size_t tick = 0; tick < overrides.size(); ++tick) {
+    cubes.push_back(to_device_tensor(
+        tone, std::vector<int64_t>{kChirps, kBins}, complex_dtype<float>()));
+  }
+  ClutterFilterParams params{};
+  params.method = ClutterFilterMethod::kMeanSubtraction;
+  params.sticky_method = sticky;
+  return holoscan::radar::testing::
+      run_exact_override_single_io_operator_graph_result<
+          ClutterFilterOp<float>, ClutterFilterMethod>(
+          std::move(cubes), std::move(overrides), params,
+          "range_profiles_out",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out, op->range_profiles, q);
+            graph.add_flow(source->override_out, op->method, q);
+            graph.add_flow(op->range_profiles_out, sink->in, q);
+          });
+}
+
 TEST(ClutterFilterOpTest, LiveMethodOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "HSDK 5 EA: enum [live] edges fail runtime binding "
-                  "(kLocalEnum, HSDK5_PORT.md §1); scalar overrides work";
+  const GraphRunResult out = run_method_override(
+      {std::nullopt, ClutterFilterMethod::kSingleDelay, std::nullopt},
+      /*sticky=*/true);
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 3U);
+  // Params seed the first tick, the override takes effect mid-stream, and the
+  // latch keeps it once the control plane goes quiet.
+  EXPECT_EQ(out.frames[0].shape, (std::vector<int64_t>{kChirps, kBins}));
+  EXPECT_EQ(out.frames[1].shape, (std::vector<int64_t>{kChirps - 1, kBins}));
+  EXPECT_EQ(out.frames[2].shape, (std::vector<int64_t>{kChirps - 1, kBins}));
+}
+
+TEST(ClutterFilterOpTest, LiveMethodEphemeralRevertsToParams) {
+  const GraphRunResult out = run_method_override(
+      {ClutterFilterMethod::kDoubleDelay, std::nullopt}, /*sticky=*/false);
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 2U);
+  EXPECT_EQ(out.frames[0].shape, (std::vector<int64_t>{kChirps - 2, kBins}));
+  EXPECT_EQ(out.frames[1].shape, (std::vector<int64_t>{kChirps, kBins}));
 }
 
 TEST(ClutterFilterOpTest, RejectsMethodNone) {

@@ -19,43 +19,41 @@ deferred on EA. See
 **Decision.** `representative` / `score_method` / `feature_weights` join the
 `OnAligned{labels, detection_idx, points}` trigger with `Exact{}` and
 `on_missing SafeDefault{}`, each gated by `expect_<name>` (default false).
-The gate is required here and not module-wide: under an `OnAligned` trigger
-the SDK still rejects an unwired non-trigger `Exact{}` entry with
-`TEMPORAL_INPUT_UNCONNECTED`
-([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11), so
-`expect_*=true` requires the matching `add_flow` and `expect_*=false` omits
-the entry and forbids wiring; wiring without the flag is
-`RUNTIME_OPERATOR_REPLAY_MISMATCH`. `sticky_<name>` (default true) latches
-the last Exact match; false reverts to Params on a miss. The application
-stamps the frame's transmit time on both the override and the aligned
-tensors.
+The gate was required here and not module-wide because under an `OnAligned`
+trigger the SDK used to reject an unwired non-trigger `Exact{}` entry with
+`TEMPORAL_INPUT_UNCONNECTED`, so `expect_*=true` requires the matching
+`add_flow` and `expect_*=false` omits the entry and forbids wiring; wiring
+without the flag is `RUNTIME_OPERATOR_REPLAY_MISMATCH`. `sticky_<name>`
+(default true) latches the last Exact match; false reverts to Params on a
+miss. The application stamps the frame's transmit time on both the override
+and the aligned tensors.
 
-**Still deferred.**
+**The `expect_*` gate is now retirable.** The SDK admits an unwired non-member
+side input of an aligned trigger as of pin `f0cb828d4`
+([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11), so these three
+entries can become unconditional like every other operator's, leaving wiring
+as the application's only statement. Not yet done.
 
-- `LiveRepresentativeStickyOverride` / `LiveScoreMethodStickyOverride` are
-  still `GTEST_SKIP`’d, and an attempt (2026-08-27) confirmed the blocker is
-  real. Both parameters are **enum**-typed, and an enum-typed edge still fails
-  runtime binding on this EA
-  ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1, isolated
-  reproducer in `tests/cpp/utils/hsdk_enum_tensor_bind_repro/`). Measured
-  here: wiring an `Output<RepresentativePolicy>` onto the working
-  `feature_weights` harness fails the run at the **source** vertex with
-  `RUNTIME_PORT_BINDING_UNAVAILABLE` even with nothing emitted on it; the
-  host-Tensor `feature_weights` override on the same harness passes.
-  `ClutterFilterOp`'s enum `method` override reproduces it independently
-  (`emit` returns `kNotReady` every tick), which is what rules out the
-  `OnAligned` join, the triple-in fixture, and the pool binding as causes —
-  the common factor is the enum edge alone.
-- Params authoring covers selection (`RepresentativeConfigurableFromParams` /
-  `ScoreMethodConfigurableFromParams`).
+**Unit coverage landed (2026-08-28).** The enum-edge fix (§12) unblocked all
+three tests, and they are the module's first operator-level assertions of a
+wired override under an `OnAligned` trigger:
 
-**Next.** Blocked on the §1 enum-edge fix, not on test authoring — do not
-re-attempt the harness until enum outputs bind. The rest of the pattern is
-ready: a scalar override on this same fixture is expected to work, since
-`Output<int64_t>` / `Output<bool>` overrides now pass in the FMCW, Doppler,
-and DBSCAN suites.
+- `LiveRepresentativeStickyOverride` — two points in one cluster with
+  `feature_weights = (1, 0)`, chosen so `kFirst` keeps row 0 and `kPeak` keeps
+  row 1. The reported representative index therefore names the policy, and the
+  third tick shows `sticky_representative` holding the override.
+- `LiveRepresentativeEphemeralRevertsToParams` — same fixture with
+  `sticky_representative=false`; the tick after a present override returns to
+  the Params policy.
+- `LiveScoreMethodStickyOverride` — with `w = (1, 1)`, `kWeightedSum` ranks
+  row 0 above row 1 (7 vs 6) while `kWeightedL2` reverses it (5 vs 6), so the
+  peak row names the score method.
 
-**Status:** open — test coverage only; the contract wiring is settled.
+Params authoring remains covered separately
+(`RepresentativeConfigurableFromParams` / `ScoreMethodConfigurableFromParams`).
+
+**Status:** open only for the mechanical `expect_*` retirement; the test-coverage
+gap is closed and the contract wiring is settled.
 
 ---
 

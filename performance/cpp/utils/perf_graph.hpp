@@ -372,8 +372,9 @@ class PerfTensorSourceOp final : public holoscan::Operator<> {
 // the configured initial value before `override_at`, then the override.
 // Publishing both outputs every activation satisfies replay. Callers must
 // put source, operator, and sinks in one explicit partition (independent
-// OnClock roots otherwise fail compile). That partition does not make
-// kLocalEnum bind: enum sidebands still fail at source emit on this EA.
+// OnClock roots otherwise fail compile). Enum sidebands bind since the
+// kLocalEnum fix (HSDK5_PORT.md §12); wiring them here to measure enum
+// override_ms is still outstanding (§8).
 template <typename Value>
 class PerfTensorOverrideSourceOp final : public holoscan::Operator<> {
  public:

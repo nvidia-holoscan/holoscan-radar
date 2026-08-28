@@ -190,10 +190,10 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | --- | --- |
 | Foundation (Dockerfile yaml-cpp/ssh, `find_package(matx)`, Holoviz gate, C++20) | landed on `dpc/hs5.0-fixes` |
 | Shared Tensor I/O + Exact `[live]` helpers (`radar_common/sdk/`) | landed (ClutterFilter pilot; Exact since 2026-08-21) |
-| `ClutterFilterOp` F32/F64 + Graph C++ tests | landed; Exact `method` (unconditional entry); Graph perf cold/steady landed; live-override unit+perf deferred (§1) |
-| `SnapshotGatherOp` F32/F64 + Graph C++ tests (OnAligned 2-in/2-out) | landed; Exact `snapshot_window` gated by `expect_snapshot_window`; live-override unit deferred (§1); Graph perf `snapshot_window` `override_ms` restored (§8) |
+| `ClutterFilterOp` F32/F64 + Graph C++ tests | landed; Exact `method` (unconditional entry); Graph perf cold/steady landed; enum `method` live-override units landed now that §12 is fixed; Graph perf `override_ms` still unmeasured for enums (§8) |
+| `SnapshotGatherOp` F32/F64 + Graph C++ tests (OnAligned 2-in/2-out) | landed; Exact `snapshot_window` still gated by `expect_snapshot_window` — retirement pending now that §11 is fixed; live-override unit deferred (§1); Graph perf `snapshot_window` `override_ms` restored (§8) |
 | `PhaseShiftBeamformerOp` F32/F64 + Graph C++ tests | landed; `[live]` geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); no POD live Inputs, so Graph live tests still skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `peak_interpolation` (unconditional entry) (Graph live deferred §1); optional `is_valid` Graph wiring deferred (§11); geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
+| `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `peak_interpolation` (unconditional entry) with its enum live-override unit landed now that §12 is fixed; optional `is_valid` Graph wiring deferred (§11); geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `SubarraySelectionOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; outputs `snapshot_out` / `is_valid_out` (§2); `array_geometry` emitted as packed float64 Tensor (§10); `array_geometry` wire-schema and `subarray` bounded host-Tensor lives (§9); optional `is_valid` Graph wiring deferred (§11); no dedicated `perf_*` driver |
 | `ClusterDBSCANOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `min_points`/`max_clusters` (unconditional entries) (Graph live deferred §1); `epsilon` bounded host-Tensor live, `max_features` checked on arrival (§9); Graph perf `min_points` `override_ms` restored (§8) |
 | `MVDREstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `diagonal_loading`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/grid/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `diagonal_loading` `override_ms` restored (§8) |
@@ -201,7 +201,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX/cuSOLVER teardown preserved; Graph perf `max_sources` `override_ms` restored (§8) |
 | `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports, `subarray_spec` static (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
 | `FeatureAssemblyOp` F32/F64 + Graph C++ tests (1-in/1-out; optional gathers) | landed; optional gather Inputs omitted from contract (§11 / Beamscan `is_valid` pattern); Graph optional wiring deferred — stage kernel coverage; no `[live]` params; Graph perf cold/steady landed |
-| `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; Exact `representative`/`score_method`/`feature_weights` gated by `expect_*` under its `OnAligned` trigger (§11; Graph live deferred §1); `feature_weights` is a bounded host Tensor (§9); Graph perf cold/steady landed |
+| `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; Exact `representative`/`score_method`/`feature_weights` still gated by `expect_*` under its `OnAligned` trigger — retirement pending now that §11 is fixed; the two enum live-override units landed (§12 fixed); `feature_weights` is a bounded host Tensor (§9); Graph perf cold/steady landed |
 | `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; Exact POD lives (unconditional entries) (Graph live deferred §1); vector lives on bounded host-Tensor ports, fixed tuples on ChannelPod (§9); statistical MC suite on label `statistical`; Graph perf `threshold_scale` `override_ms` restored (§8) |
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph sticky/`TXSchedule` live N/A (Params-only schedule); Graph perf cold/steady landed |
 | `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` on a generated wire-schema port (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
@@ -234,13 +234,8 @@ authoring shapes, not evidence that scalar sidebands are unsupported:
 - a wired input must appear in the consumer's temporal contract, and every
   declared co-emitted output must publish on each replay
   (`RUNTIME_OPERATOR_REPLAY_MISMATCH` otherwise);
-- enum outputs still fail runtime binding on this EA (`kLocalEnum` cannot cross
-  partitions, and the same-partition probe fails in the source callback).
-  Isolated drop-in repro (closed-width `uint32_t` control vs
-  `enum class : uint32_t`, same co-emit / contract / partition shape):
-  [`tests/cpp/utils/hsdk_enum_tensor_bind_repro/`](../../tests/cpp/utils/hsdk_enum_tensor_bind_repro/)
-  — copy that directory; it has its own `CMakeLists.txt` (Holoscan + CUDA
-  only). In this tree: `ctest --test-dir build -R EnumTensorBindRepro`.
+- enum outputs still fail runtime binding on this EA, in any wiring — tracked
+  on its own as §12.
 
 The supported perf shape is one source that emits the device Tensor and a
 fixed-width scalar/POD sideband every tick, switching the sideband value at the
@@ -347,10 +342,10 @@ lives, so only their optional-input limitations remain.
 **Interim.**
 
 - Every ported operator's `contract()` is now its data trigger (`OnEach`, or
-  `OnAligned` for the two-tensor ops) plus one `Exact{}` + `SafeDefault{}`
-  entry per enabled override whose `expect_*` is true (default false), via
-  `maybe_add_live_override_to_contract` in
-  `radar_common/sdk/override_param.hpp`. Descriptor ports convert generated
+  `OnAligned` for the two-tensor ops) plus one unconditional `Exact{}` +
+  `SafeDefault{}` entry per override, via `add_live_override_to_contract` in
+  `radar_common/sdk/override_param.hpp` — the two `OnAligned` operators still
+  gate theirs on `expect_*` (§11). Descriptor ports convert generated
   wire types, and vector ports convert bounded rank-1 host Tensors, before
   sticky resolution (§9). Optional Tensor inputs and conditional outputs stay
   out of the contract (§11).
@@ -370,19 +365,9 @@ lives, so only their optional-input limitations remain.
   ESPRIT. Prefer a structural observable (an output extent or a reported
   integer) over a float payload comparison — see the MVDR caveat below.
 - **Enum `[live]` overrides do not**, and that is now the only blocker for the
-  remaining live-override stubs. Wiring an `Output<enum class>` edge fails the
-  run at the *source* vertex with `RUNTIME_PORT_BINDING_UNAVAILABLE` (`emit`
-  returns `kNotReady`) even when nothing is emitted on it. This is the
-  `kLocalEnum` gap above; reproducer at
-  [`tests/cpp/utils/hsdk_enum_tensor_bind_repro/`](../../tests/cpp/utils/hsdk_enum_tensor_bind_repro/).
-  Independently reproduced on three operators with different trigger shapes —
-  `ClutterFilterOp.method` (`OnEach`, single override),
-  `BeamscanEstimatorOp.peak_interpolation` (`OnEach`), and
-  `DetectionReductionOp.representative` / `score_method` (`OnAligned`,
-  triple-in) — which is what rules out the trigger, the fixture, and the pool
-  binding as causes. Each test body is written or scoped; only the wire is
-  missing. Still `GTEST_SKIP`'d for this reason, with the reason recorded at
-  the stub.
+  remaining live-override stubs. Tracked separately as **§12** — the failure is
+  a payload-identity gap independent of this harness work, so the four skipped
+  enum stubs are accounted for there rather than here.
 - `SnapshotGatherOpTest.LiveSnapshotWindowStickyOverride` remains skipped
   (`snapshot_window` rides a ChannelPod tuple under an `OnAligned` trigger; not
   re-measured since the enum finding). `PhaseShiftBeamformerOp` / Beamscan
@@ -421,14 +406,16 @@ lives, so only their optional-input limitations remain.
   the optional-input gap (§11), not this one; stage kernel tests cover the
   optional gather paths.
 - `DetectionReductionOpTest.LiveRepresentativeStickyOverride` /
-  `LiveScoreMethodStickyOverride` are skipped the same way;
+  `LiveScoreMethodStickyOverride` are skipped under §12 (enum edges);
   `LiveFeatureWeightsStickyOverride` is skipped under §9. Params
   cover selection (`RepresentativeConfigurableFromParams` /
   `ScoreMethodConfigurableFromParams` /
   `FeatureWeightsConfigurableFromParams`).
 - `CFARDetectorOpTest.LiveThresholdScaleOverrideMidStreamAndSticky` /
   `LivePfaOverrideMidStreamAndSticky` /
-  `LiveMaxDetectionsOverrideMidStreamAndSticky` are likewise skipped;
+  `LiveMaxDetectionsOverrideMidStreamAndSticky` are still skipped for the
+  harness reason above (they are scalars, so §12 does not apply — writing them
+  is the same work that landed the scalars listed earlier);
   vector lives (`guard_cells` / `training_cells` /
   `nci_axes` / `alpha_lut`) skipped under §9. Params cover selection
   (`ThresholdScaleConfigurableFromParams` / `PfaConfigurableFromParams` /
@@ -459,7 +446,7 @@ co-emit wirings, and the minimal reproducer still shows them; keep it until
 GA re-test. Do not reclassify as durable. Perf timing is the exception: POD
 `override_ms` is measured for the seven operators listed above through that
 same supported shape (§8), so what remains open here is the one-shot sticky
-unit tests and enum transport.
+unit tests. Enum transport moved to §12.
 
 ---
 
@@ -828,38 +815,34 @@ measures it against this module's shapes:
 | `OnEach{data}` + POD override `Exact{}` + `SafeDefault{}`, unwired | Compile **accepted** with warning `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT` (vertex + port scoped); every activation reports `kSafeDefault` / `kNotConnected` and the read returns `kInputEmpty` |
 | Same, wired with a co-stamped companion | `kSelected` / `kNone` and the value — unchanged from the `expect_*` form |
 | Optional **Tensor** input (`is_valid`-shaped), unwired | Same acceptance and `kNotConnected` — the rule is about the *selector* being scalar `Exact`, not the payload, so the optional-Tensor family is covered too |
-| `OnAligned{…}` trigger + unwired `Exact{}` override | **Rejected**, `TEMPORAL_INPUT_UNCONNECTED` — `OnAligned`, `OnWindow`, and predicate inputs stay excluded |
+| `OnAligned{…}` trigger + unwired `Exact{}` override | **Rejected**, `TEMPORAL_INPUT_UNCONNECTED` — `OnAligned`, `OnWindow`, and predicate inputs excluded (**since fixed**, see below) |
 | `OnAligned{…}` trigger + **wired** `Exact{}` override | **Accepted**; every activation reports `kSelected` / `kNone` and delivers the co-stamped value, exactly as under `OnEach` |
 
-Consequences for this module: every `OnEach`-triggered operator can drop
-`expect_*` outright, and the optional-Tensor omissions (`is_valid`,
-FeatureAssembly gathers) become ordinary contract entries. `SnapshotGatherOp`
-and `DetectionReductionOp` trigger `OnAligned`, so they keep `expect_*`.
+Consequences for this module at that point: every `OnEach`-triggered operator
+could drop `expect_*` outright, and the optional-Tensor omissions (`is_valid`,
+FeatureAssembly gathers) became ordinary contract entries. `SnapshotGatherOp`
+and `DetectionReductionOp` trigger `OnAligned`, so they had to keep `expect_*`.
 
-The last two rows together are the precise reason they keep it, and it is worth
-stating plainly because it is easy to misread as "the override does not work
-under `OnAligned`". It works. What is not expressible is its *absence*: an
+The last two rows together were the precise reason, and it is worth stating
+plainly because it is easy to misread as "the override does not work under
+`OnAligned`". It works. What was not expressible was its *absence*: an
 unconditional entry via `add_live_override_to_contract` would make the override
 port **mandatory**, so every application instantiating `SnapshotGatherOp` would
 have to wire a `snapshot_window` producer or fail to compile. `expect_*` is what
-buys back the optional case, and the same one build still serves both wirings.
+bought back the optional case, and the same one build still served both wirings.
 
-Coverage caveat: the wired-aligned row above is measured only by the probe.
-Neither aligned operator's own suite exercises it — their live-override tests
-are the ones still skipped under §1 — so `expect_*=true` plus `add_flow` is
-asserted for the operators by construction, not by a test.
+Coverage caveat, since resolved: the wired-aligned row was originally measured
+only by the probe. `DetectionReductionOp`'s enum live-override tests (§12) now
+wire an `Exact{}` override under its `OnAligned` trigger and assert the value
+lands, so that row is asserted by an operator suite rather than by construction.
 
-**The `OnAligned` exclusion is the one thing still worth asking for.** Re-run of
-the probe against the pinned branch confirms it is unchanged: an unwired
-`Exact{}` + `SafeDefault{}` input that is *not* a member of the aligned trigger
-set is still `TEMPORAL_INPUT_UNCONNECTED`, while the same operator shape under
-`OnEach` is accepted. An override is not an alignment member and its absence
-cannot make the alignment unsatisfiable, so extending the rule to non-member
-inputs of an `OnAligned` trigger looks like a strictly narrowing fix rather than
-new vocabulary. Until it lands, `SnapshotGatherOp` and `DetectionReductionOp`
-are the module's only two `expect_*` holders — recorded as an exception in
-[`OPERATOR_API.md`](OPERATOR_API.md)'s parameter override convention rather than
-as a module-wide idiom.
+**Why the `OnAligned` exclusion was worth asking for.** An override is not an
+alignment member and its absence cannot make the alignment unsatisfiable, so
+extending the rule to non-member inputs of an `OnAligned` trigger was a strictly
+narrowing fix rather than new vocabulary. Until it landed, `SnapshotGatherOp` and
+`DetectionReductionOp` were the module's only two `expect_*` holders — recorded
+as an exception in [`OPERATOR_API.md`](OPERATOR_API.md)'s parameter override
+convention rather than as a module-wide idiom.
 
 **Validated end to end (2026-08-27) against branch tip `906fc1247`.** The
 `expect_*`-free `FMCWRangeProcessorOp` from `deustice/optional-input-ports`
@@ -908,8 +891,114 @@ builds against the `v5.0.0.1` EA tag. Cherry-picking the feature back onto
 the feature moving back. Reasoning and the full measurement set:
 [`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md).
 
-**Status:** open only for the `OnAligned` exclusion. The `OnEach` case is
-implemented, adopted, and covered by the operator test suites.
+**The `OnAligned` exclusion was fixed too (2026-08-28).** `feat(runtime): allow
+optional aligned side inputs` on the same SDK branch (tip `f0cb828d4`) admits an
+unwired `Exact{}` + `SafeDefault{}` input that is not a member of the aligned
+presence set. Re-run of the probe against that tip:
+
+| Case | Before | Now |
+| --- | --- | --- |
+| `OnAligned` + unwired `Exact{}` override | rejected, `TEMPORAL_INPUT_UNCONNECTED` | accepted with warning `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT`; reads `kSafeDefault` / `kNotConnected` / `kInputEmpty` |
+| `OnAligned` + wired `Exact{}` override | accepted, `kSelected` / `kNone` | unchanged |
+
+That makes the two trigger shapes behave identically, so the reason
+`SnapshotGatherOp` and `DetectionReductionOp` kept `expect_*` — that an
+unconditional contract entry would make their override ports *mandatory* — no
+longer holds. Retiring those last two `expect_*` holders is the remaining work
+in this module; the SDK side is done.
+
+**Status:** closed in the SDK for both trigger shapes. Open in this module only
+as the mechanical retirement of `expect_*` on the two `OnAligned` operators.
+
+---
+
+### 12. Enum-typed `[live]` override edges fail runtime port binding
+
+**Class:** EA limitation — **fixed in the SDK (2026-08-28)**, see Resolution.
+
+**What fails.** A Graph edge whose payload is an `enum class` compiles and then
+kills the run. Holoscan labels such a payload `kLocalEnum`
+(`holoscan/core/payload_identity.hpp`), admitted "only on local typed Graph
+edges" — but a local edge is exactly what fails, while a fixed-width integer of
+the *same underlying type* on the *same* edge binds and runs. Connecting the
+edge is sufficient: the producer's `Output<Enum>::emit` returns `kNotReady` even
+on an activation that publishes nothing on that port, so no application can wire
+an enum `[live]` override today.
+
+**Reproducer.** A/B in one binary, graph held constant and only the sideband
+type varied (co-emitted CUDA Tensor + scalar sideband, one explicit partition,
+`LatestWithin` + `SafeDefault` on the sideband):
+[`tests/cpp/utils/hsdk_enum_tensor_bind_repro/`](../../tests/cpp/utils/hsdk_enum_tensor_bind_repro/).
+It is drop-in for the SDK tree — copy the directory, it carries its own
+`CMakeLists.txt` and needs only Holoscan + CUDA. In this tree:
+It is a standalone project rather than a `ctest` entry, so it stays buildable
+against any SDK tree: `cmake -S tests/cpp/utils/hsdk_enum_tensor_bind_repro
+-B <dir> && cmake --build <dir>`, then run the binary. Originally measured on
+`deustice/5x/optional-port-contracts` tip `906fc1247`:
+
+```text
+uint32_t:    plan_ok=true captured=3 diagnostics=
+enum class:  plan_ok=true captured=0 diagnostics= RUNTIME_PORT_BINDING_UNAVAILABLE
+```
+
+So compilation accepted the enum edge and the failure was entirely at bind /
+run time, on the first generation, with the diagnostic scoped to a vertex and
+port.
+
+**What it blocked.** Every enum-typed `[live]` port in the module — eight of
+them, on seven operators. Four surfaced as live-override test stubs; the other
+four were latent, since no test wires them:
+
+| Port | Type | Trigger | Test |
+| --- | --- | --- | --- |
+| `ClutterFilterOp.method` | `ClutterFilterMethod` | `OnEach` | `LiveMethodOverrideMidStreamAndSticky`, `LiveMethodEphemeralRevertsToParams` — landed |
+| `BeamscanEstimatorOp.peak_interpolation` | `PeakInterpolation` | `OnEach` | `LivePeakInterpolationStickyOverride` — landed |
+| `DetectionReductionOp.representative` | `RepresentativePolicy` | `OnAligned` | `LiveRepresentativeStickyOverride`, `LiveRepresentativeEphemeralRevertsToParams` — landed |
+| `DetectionReductionOp.score_method` | `ScoreMethod` | `OnAligned` | `LiveScoreMethodStickyOverride` — landed |
+| `FMCWRangeProcessorOp.fft_norm` | `FftNorm` | `OnEach` | none authored |
+| `FMCWDopplerProcessorOp.fft_norm` | `FftNorm` | `OnEach` | none authored |
+| `FMCWRangeDopplerProcessorOp.fft_norm` | `FftNorm` | `OnEach` | none authored |
+| `FMCWRangeDopplerProcessorOp.clutter_filter` | `ClutterFilterMethod` | `OnEach` | `LiveClutterOverrideChangesShape` stubbed, skipped citing §1 |
+
+The three `fft_norm` ports remain exercised from `Params` only, and the fused
+`clutter_filter` stub still skips against the §1 harness item — both are now
+ordinary authoring gaps rather than blocked ones. `ClutterFilterOp.method` is
+the worked example to copy for the fused port, since it is the same enum. Graph perf still
+skips enum sidebands, so no `override_ms` is measured for any enum parameter
+(§8); re-enabling that measurement is follow-on work.
+
+**What rules out the alternatives.** The A/B holds the graph shape fixed, which
+eliminates the co-emit, the partition cover, and the device Tensor binding. It
+was then reproduced independently on three operators with unrelated fixtures and
+both trigger shapes — `ClutterFilterOp` and `BeamscanEstimatorOp` under `OnEach`,
+`DetectionReductionOp` under `OnAligned` triple-in — which eliminates the
+trigger, the fixture, and the pool binding. Scalar and bool `[live]` overrides on
+those same operators pass (§1). The enum type is the only common factor.
+
+**Requested.** Admit `kLocalEnum` on a local typed Graph edge as the identity
+docs already describe — or, if enum payloads are intentionally not transportable,
+reject the edge at *compile* with a diagnostic naming the payload identity,
+rather than accepting the plan and failing at bind.
+
+**Resolution (2026-08-28).** Fixed upstream by `fix(core): support local enum
+edges` on `deustice/5x/optional-port-contracts` (this branch's SDK pin, tip
+`f0cb828d4`). The reproducer now reads:
+
+```text
+uint32_t:    plan_ok=true captured=3 diagnostics=
+enum class:  plan_ok=true captured=3 diagnostics=
+```
+
+No operator code changed — the enum ports were always declared exactly like
+their scalar siblings, so the fix was invisible to this module. What changed is
+the test surface: all four skipped stubs are now real tests that wire the enum
+edge and assert the override takes effect mid-stream, is latched by `sticky_*`,
+and reverts to the `Params` value when ephemeral. Because the two
+`DetectionReductionOp` ports sit under an `OnAligned` trigger, they are also the
+first tests to assert a wired enum override on that trigger shape.
+
+**Status:** closed. Re-running the reproducer is the whole re-test, so re-run it
+at the GA pin to confirm the fix survived.
 
 ---
 
