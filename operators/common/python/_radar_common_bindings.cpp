@@ -189,6 +189,11 @@ PYBIND11_MODULE(_radar_common, m) {
       .value("RESET", GeometryChange::kReset)
       .value("SCROLL", GeometryChange::kScroll);
 
+  py::enum_<ApertureEmitMode>(m, "ApertureEmitMode")
+      .value("CONTINUE", ApertureEmitMode::kContinue)
+      .value("RESET", ApertureEmitMode::kReset)
+      .value("REFORM", ApertureEmitMode::kReform);
+
   py::enum_<RepresentativePolicy>(m, "RepresentativePolicy")
       .value("PEAK", RepresentativePolicy::kPeak)
       .value("MEDOID", RepresentativePolicy::kMedoid)
@@ -424,5 +429,6 @@ PYBIND11_MODULE(_radar_common, m) {
         "BackprojectionBackend", true);
     registry.add_emitter_receiver<GeometryChange>("GeometryChange", true);
     registry.add_emitter_receiver<FormationControl>("FormationControl", true);
+    registry.add_emitter_receiver<ApertureEmitMode>("ApertureEmitMode", true);
   });
 }

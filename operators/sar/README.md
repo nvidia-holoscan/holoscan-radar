@@ -19,7 +19,7 @@ Typical placement (wave one, autofocus off — see
 the full wiring, including where `ApertureManagerOp` sits):
 
 ```text
-CPHDReaderOp → phase_history → SARRangeCompressionOp → range_profiles → BackprojectionOp → image → …
+CPHDReaderOp → phase_history → SARRangeCompressionOp → range_profiles → ApertureManagerOp → BackprojectionOp → image → …
 ```
 
 ## Operators
@@ -31,6 +31,7 @@ mode-1 slice (not checklist-complete), in the build order set by
 | Operator | In → Out | Function |
 | --- | --- | --- |
 | `SARRangeCompressionOp<T>` | `phase_history` → `range_profiles` (+ `range_bins`) | Inverse transform of deramped phase history to the range axis |
+| `ApertureManagerOp<T>` | `range_profiles`, `positions` → same + `weight` + `control` | Aperture membership, emit cadence, geometry staging; no kernel |
 | `BackprojectionOp<T>` | `range_profiles`, `positions`, `control` → `image` | Time-domain backprojection onto a `SampleGeometry` lattice or an explicit `sample_points` one, accumulating across ticks |
 | `PhaseCorrectionOp<T>` | `phase_history`, `phase_correction` → `phase_history` | Broadcast multiply applying an autofocus estimate |
 | `AutofocusOp<T>` | `image` → `phase_correction` | Phase-gradient autofocus estimate over a conjugate grid |
@@ -44,6 +45,15 @@ minimum-per-demo rule in
 fills in demo order rather than in the table order above:
 `SARRangeCompressionOp` then `BackprojectionOp` for the mode 1 spotlight demo,
 with autofocus and the direct-sampled branch later.
+
+**`ApertureManagerOp` — landed, not checklist-complete.** CPU-only
+membership / emit / D22 flush / geometry staging. Modes 1 and 5 of
+`sar_formation` wire the spotlight row (`max_aperture_pulses = 0`,
+`emit_mode = reset`). Retention, application-owned `evict`, and
+`emit_mode = reform` are implemented and unit-tested; signed `weight`
+stays unconnected on those demos. No perf harness (no GPU hot path).
+Follow-ups in
+[`aperture_manager_op/OPEN_ITEMS.md`](aperture_manager_op/OPEN_ITEMS.md).
 
 **`BackprojectionOp` — in flight, mode-1 slice (not checklist-complete).**
 Required ports, four control phases, `kUpdate`, `stop()` warning, linear

@@ -6,17 +6,19 @@
 // The dump is the offline PNG checkpoint
 // (tools/sar_image/form_image.py).
 //
-//   CPHDReaderOp → SARRangeCompressionOp → BackprojectionOp
+//   CPHDReaderOp → SARRangeCompressionOp → ApertureManagerOp
+//                                        → BackprojectionOp
 //                                        [→ TensorDumpOp]
 //                                        [→ SarImageToLutOp
 //                                            → HoldLastImageOp
 //                                            → HolovizOp]
 //                                        [→ TimelineRasterOp
 //                                            → HolovizOp]
-//   reader.positions / reference_position bypass range compression.
-//   StreamBoundaryControlOp (custom_ops.hpp) watches the reader's
-//   D22 announcement and issues emit-and-reset on that tick. Mode 5
-//   also sends the next collection's lattice / dr / f0 on the seam.
+//   reader.positions / reference_position bypass range compression
+//   and go through the manager. Mode 5 inserts
+//   CollectionBoundaryStagerOp on the range_profiles edge so the
+//   next lattice is staged into the manager (and dr / f0 into BP)
+//   on collection_boundary.
 //
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/sar_formation/cpp/sar_formation \
@@ -38,10 +40,12 @@
 #include "radar_app/app/holoviz_layout.hpp"
 #include "radar_app/viz/display.hpp"
 #include "radar_common/math/constants.hpp"
+#include "sar/aperture_manager_op/aperture_manager_op.hpp"
 #include "sar/backprojection_op/backprojection_op.hpp"
 #include "sar/sar_range_compression_op/sar_range_compression_op.hpp"
 #include "config.hpp"       // NOLINT(build/include_subdir)
 #include "custom_ops.hpp"   // NOLINT(build/include_subdir)
+#include "window_place.hpp"  // NOLINT(build/include_subdir)
 
 namespace radar = holoscan::radar;
 using holoscan::radar::app::HolovizLayout;
@@ -133,6 +137,9 @@ class SarFormationApp : public holoscan::Application {
     // Lattice and stored-sample-N/2 frequency: sidecar when present
     // (generated fixtures), otherwise the app-owned YAML keys
     // (Atlanta and any other public CPHD).
+    auto manager = make_operator<radar::ApertureManagerOp<double>>(
+        "aperture_manager", from_config("aperture_manager"));
+
     auto bp = make_operator<radar::BackprojectionOp<double>>(
         "backprojection",
         from_config("backprojection"),
@@ -141,15 +148,42 @@ class SarFormationApp : public holoscan::Application {
             cfg.reference_frequency,
         holoscan::Arg("range_bin_spacing") = cfg.range_bin_spacing);
 
-    auto control = make_operator<StreamBoundaryControlOp>("control");
-    control->geometries = cfg.collection_geometries;
-    control->spacings = cfg.collection_spacings;
-    control->frequencies = cfg.collection_frequencies;
-
-    // Fan-out of phase_history is the control operator's reachability
-    // edge: metadata arrives only through receive().
     add_flow(reader, range, {{"phase_history", "phase_history"}});
-    add_flow(reader, control, {{"phase_history", "announce"}});
+
+    std::shared_ptr<holoscan::Operator> profiles = range;
+    if (!cfg.nvradar_vph_path.empty()) {
+      HOLOSCAN_LOG_INFO(
+          "sar_formation: NVRadar vph override {}",
+          cfg.nvradar_vph_path);
+      auto vph = make_operator<NvradarVphOverrideOp>(
+          "nvradar_vph",
+          holoscan::Arg("path") = cfg.nvradar_vph_path);
+      add_flow(range, vph, {{"range_profiles", "range_profiles"}});
+      profiles = vph;
+    }
+    if (cfg.collection_geometries.size() > 1) {
+      auto stager =
+          make_operator<CollectionBoundaryStagerOp>("stager");
+      stager->geometries = cfg.collection_geometries;
+      stager->spacings = cfg.collection_spacings;
+      stager->frequencies = cfg.collection_frequencies;
+      add_flow(profiles, stager,
+               {{"range_profiles", "range_profiles"}});
+      add_flow(stager, manager,
+               {{"range_profiles", "range_profiles"}});
+      add_flow(stager, manager,
+               {{"sample_geometry", "sample_geometry"}});
+      add_flow(stager, bp,
+               {{"range_bin_spacing", "range_bin_spacing"}});
+      add_flow(stager, bp,
+               {{"reference_frequency", "reference_frequency"}});
+      add_flow(manager, bp,
+               {{"sample_geometry", "sample_geometry"}});
+    } else {
+      add_flow(profiles, manager,
+               {{"range_profiles", "range_profiles"}});
+    }
+
     if (cfg.transform_to_scene_enu) {
       HOLOSCAN_LOG_INFO(
           "sar_formation: ECEF→ENU at IARP for NVRadar grid");
@@ -163,35 +197,19 @@ class SarFormationApp : public holoscan::Application {
       add_flow(reader, to_enu, {{"positions", "positions"}});
       add_flow(reader, to_enu,
                {{"reference_position", "reference_position"}});
-      add_flow(to_enu, bp, {{"positions", "positions"}});
-      add_flow(to_enu, bp,
+      add_flow(to_enu, manager, {{"positions", "positions"}});
+      add_flow(to_enu, manager,
                {{"reference_position", "reference_position"}});
     } else {
-      add_flow(reader, bp, {{"positions", "positions"}});
-      add_flow(reader, bp,
+      add_flow(reader, manager, {{"positions", "positions"}});
+      add_flow(reader, manager,
                {{"reference_position", "reference_position"}});
     }
-    if (!cfg.nvradar_vph_path.empty()) {
-      HOLOSCAN_LOG_INFO(
-          "sar_formation: NVRadar vph override {}",
-          cfg.nvradar_vph_path);
-      auto vph = make_operator<NvradarVphOverrideOp>(
-          "nvradar_vph",
-          holoscan::Arg("path") = cfg.nvradar_vph_path);
-      add_flow(range, vph, {{"range_profiles", "range_profiles"}});
-      add_flow(vph, bp, {{"range_profiles", "range_profiles"}});
-    } else {
-      add_flow(range, bp, {{"range_profiles", "range_profiles"}});
-    }
-    add_flow(control, bp, {{"control", "control"}});
-    if (cfg.collection_geometries.size() > 1) {
-      add_flow(control, bp,
-               {{"sample_geometry", "sample_geometry"}});
-      add_flow(control, bp,
-               {{"range_bin_spacing", "range_bin_spacing"}});
-      add_flow(control, bp,
-               {{"reference_frequency", "reference_frequency"}});
-    }
+    add_flow(manager, bp, {{"range_profiles", "range_profiles"}});
+    add_flow(manager, bp, {{"positions", "positions"}});
+    add_flow(manager, bp,
+             {{"reference_position", "reference_position"}});
+    add_flow(manager, bp, {{"control", "control"}});
     if (cfg.dump) {
       holoscan::ArgList dump_args{
           holoscan::Arg("path") = cfg.dump_path};
@@ -261,7 +279,10 @@ class SarFormationApp : public holoscan::Application {
       tl_layout.height = static_cast<uint32_t>(timeline->height);
       tl_layout.headless = cfg.headless;
       auto timeline_viz = make_color_holoviz_op(
-          this, "timeline_holoviz", tl_layout, "timeline");
+          this, "timeline_holoviz", tl_layout, "timeline",
+          [title = tl_layout.window_title](int, int) {
+            spawn_place_window_bottom_left(title);
+          });
 
       add_flow(bp, to_lut, {{"image", "image"}});
       add_flow(to_lut, hold, {{"sar_image", "image"}});

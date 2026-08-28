@@ -84,6 +84,7 @@ TEST(YamlConverters, EnumsRoundTripAndRejectUnknownSpellings) {
   EXPECT_THROW(YAML::Load("mean-subtraction").as<ClutterFilterMethod>(),
                std::invalid_argument);
 
+  using holoscan::radar::ApertureEmitMode;
   using holoscan::radar::BackprojectionBackend;
   using holoscan::radar::FormationControl;
   using holoscan::radar::GeometryChange;
@@ -106,9 +107,16 @@ TEST(YamlConverters, EnumsRoundTripAndRejectUnknownSpellings) {
     const YAML::Node node = YAML::convert<GeometryChange>::encode(value);
     EXPECT_EQ(node.as<GeometryChange>(), value);
   }
+  for (auto value : holoscan::radar::detail::kAllApertureEmitModes) {
+    const YAML::Node node =
+        YAML::convert<ApertureEmitMode>::encode(value);
+    EXPECT_EQ(node.as<ApertureEmitMode>(), value);
+  }
   EXPECT_THROW(YAML::Load("mixed").as<BackprojectionBackend>(),
                std::invalid_argument);
   EXPECT_THROW(YAML::Load("emit-and-reset").as<FormationControl>(),
+               std::invalid_argument);
+  EXPECT_THROW(YAML::Load("replay").as<ApertureEmitMode>(),
                std::invalid_argument);
 }
 

@@ -109,6 +109,8 @@ radar_add_test(sar/test_sar_range_compression
     holoscan::sar_range_compression_op)
 radar_add_test(sar/test_backprojection
     holoscan::backprojection_op)
+radar_add_test(sar/test_aperture_manager
+    holoscan::aperture_manager_op)
 # Declared explicitly rather than via radar_add_test: it needs the generated
 # fixture's location as a compile definition and the CTest fixture dependency
 # that produces it.

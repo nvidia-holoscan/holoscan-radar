@@ -22,6 +22,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <holoscan/holoscan.hpp>
@@ -176,10 +177,14 @@ inline std::shared_ptr<holoscan::ops::HolovizOp> make_image_holoviz_op(
       holoscan::Arg("headless", layout.headless));
 }
 
-// Full-window RGBA image (no LUT). The SAR timeline strip.
+// Full-window RGBA image (no LUT). Optional `on_window_size`:
+// HolovizOp has no window-position parameter; a caller can use the
+// first size callback to place the window after GLFW maps it.
 inline std::shared_ptr<holoscan::ops::HolovizOp> make_color_holoviz_op(
     holoscan::Fragment* fragment, const std::string& name,
-    const HolovizLayout& layout, const std::string& layer_name) {
+    const HolovizLayout& layout, const std::string& layer_name,
+    holoscan::ops::HolovizOp::WindowSizeCallbackFunction
+        on_window_size = {}) {
   using InputSpec = holoscan::ops::HolovizOp::InputSpec;
   using InputType = holoscan::ops::HolovizOp::InputType;
   using ImageFormat = holoscan::ops::HolovizOp::ImageFormat;
@@ -187,12 +192,17 @@ inline std::shared_ptr<holoscan::ops::HolovizOp> make_color_holoviz_op(
   InputSpec spec(layer_name, InputType::COLOR);
   spec.image_format_ = ImageFormat::R8G8B8A8_UNORM;
   specs.push_back(spec);
-  return fragment->make_operator<holoscan::ops::HolovizOp>(
-      name, holoscan::Arg("tensors", specs),
-      holoscan::Arg("window_title", layout.window_title),
-      holoscan::Arg("width", layout.width),
-      holoscan::Arg("height", layout.height),
-      holoscan::Arg("headless", layout.headless));
+  holoscan::ArgList args;
+  args.add(holoscan::Arg("tensors", specs));
+  args.add(holoscan::Arg("window_title", layout.window_title));
+  args.add(holoscan::Arg("width", layout.width));
+  args.add(holoscan::Arg("height", layout.height));
+  args.add(holoscan::Arg("headless", layout.headless));
+  if (on_window_size) {
+    args.add(holoscan::Arg("window_size_callback",
+                           std::move(on_window_size)));
+  }
+  return fragment->make_operator<holoscan::ops::HolovizOp>(name, args);
 }
 
 // Preset: two stacked right-column panels — range vs time and velocity vs time

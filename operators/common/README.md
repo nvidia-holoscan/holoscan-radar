@@ -16,6 +16,7 @@ Each folder depends only on the layers above it:
 | `radar_common/sim/` | Analytic FMCW signal simulators — single-TX `point_target_sim.hpp` (multi-RX `SimScene`) and MIMO TDM/DDM `mimo_sim.hpp` — plus antenna-array geometry builders `array_builders.hpp` (input synthesis for applications; analytic ground truth for tests) | descriptors |
 | `radar_common/tensor/` | Rank-agnostic batching, DLPack device buffers, MatX view/upload helpers | holoscan::Tensor, CUDA |
 | `radar_common/sdk/` | Operator-authoring glue: parameter override ports, warn-once config cache, argument-setter registration | holoscan core |
+| `radar_common/sar/` | Aperture ring + pulse-axis concat (`ApertureBuffer`) used by `ApertureManagerOp`; header-only | tensor, CUDA |
 | `radar_common/reduce/` | Public group-by-label CUDA primitives (headers + `radar_common_reduce` lib) | CUDA, descriptors/enums |
 
 `tensor/matx_utils.hpp` includes `<matx.h>` and must only be included from

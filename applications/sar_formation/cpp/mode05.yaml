@@ -73,6 +73,12 @@ cphd_reader:
 # N (mode 1). Mutually exclusive with range_compression.nfft.
 nfft_pad: next_fast
 
+# Spotlight spelling: no retention, emit-and-reset on each seam.
+aperture_manager:
+  max_aperture_pulses: 0
+  emit_interval_pulses: 0
+  emit_mode: reset
+
 # Empty operator block: nfft comes from nfft_pad via Arg.
 range_compression: {}
 

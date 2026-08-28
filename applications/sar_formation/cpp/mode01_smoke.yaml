@@ -20,6 +20,11 @@ cphd_reader:
   coordinate_frame: ecef
   pulses_per_tick: 256
 
+aperture_manager:
+  max_aperture_pulses: 0
+  emit_interval_pulses: 0
+  emit_mode: reset
+
 # No waveform: RC does not emit range_bins. BP gets spacing from
 # the CPHD (SCSS, num_samples); origin is the centred default.
 range_compression: {}

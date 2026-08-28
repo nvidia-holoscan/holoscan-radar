@@ -6,13 +6,20 @@ that dump is the offline PNG checkpoint
 (`tools/sar_image/form_image.py`).
 
 ```text
-CPHDReaderOp → SARRangeCompressionOp → BackprojectionOp
+CPHDReaderOp → SARRangeCompressionOp → ApertureManagerOp → BackprojectionOp
                                               [→ TensorDumpOp]
                                               [→ SarImageToLutOp → HoldLastImageOp → HolovizOp]
                                               [→ TimelineRasterOp → HolovizOp]
 reader.positions / reference_position ─────────────▲
-StreamBoundaryControlOp (app-owned) ───────────────▲
 ```
+
+Modes 1 and 5 wire `ApertureManagerOp` with `max_aperture_pulses: 0`,
+`emit_interval_pulses: 0`, `emit_mode: reset` (one image per
+collection, no retention). `weight` stays unconnected (all `+1`).
+Mode 5 inserts `CollectionBoundaryStagerOp` on the `range_profiles`
+edge so the next lattice is staged into the manager on
+`collection_boundary`, and `range_bin_spacing` / `reference_frequency`
+still go straight to `BackprojectionOp` (those are not manager ports).
 
 `range_bins` is not wired. `BackprojectionOp.range_bin_spacing`
 is derived from CPHD `SCSS` and `num_samples`, and from
@@ -147,8 +154,9 @@ and the implied `pixels * pulses / s`. A second Holoviz window
 on the platform lane (one color per collect), a matching tick on
 the product lane at each image emit with the last-packet→image
 latency beside it, and duty-cycle cooldown as a dimmer bar when
-`duty_cycle` < 1 (mode 5 default `1` leaves that empty). Holoviz
-(and a PNG
-of the dump) resets the dB window on every emit from that image's
-own histogram.
+`duty_cycle` < 1 (mode 5 default `1` leaves that empty). After
+GLFW maps it, the strip is moved to the bottom-left of the
+desktop work area (X11 / XWayland; native Wayland is a no-op).
+Holoviz (and a PNG of the dump) resets the dB window on every
+emit from that image's own histogram.
 CI stays on generated fixtures; this YAML is not a CTest.

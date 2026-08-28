@@ -162,6 +162,12 @@ inline constexpr GeometryChange kAllGeometryChanges[] = {
     GeometryChange::kScroll,
 };
 
+inline constexpr ApertureEmitMode kAllApertureEmitModes[] = {
+    ApertureEmitMode::kContinue,
+    ApertureEmitMode::kReset,
+    ApertureEmitMode::kReform,
+};
+
 // Decode a fixed-length YAML sequence into std::array, rejecting a missing
 // key or the wrong length by name. The descriptors' (3,) and (2,) fields are
 // arrays rather than vectors, so their length is a type invariant and not
@@ -945,6 +951,23 @@ struct convert<holoscan::radar::GeometryChange> {
     value = holoscan::radar::detail::parse_enum(
         node.as<std::string>(), "GeometryChange",
         holoscan::radar::detail::kAllGeometryChanges);
+    return true;
+  }
+};
+
+template <>
+struct convert<holoscan::radar::ApertureEmitMode> {
+  static Node encode(const holoscan::radar::ApertureEmitMode& value) {
+    return Node(std::string(holoscan::radar::to_string(value)));
+  }
+  static bool decode(const Node& node,
+                     holoscan::radar::ApertureEmitMode& value) {
+    if (!node.IsScalar()) {
+      return false;
+    }
+    value = holoscan::radar::detail::parse_enum(
+        node.as<std::string>(), "ApertureEmitMode",
+        holoscan::radar::detail::kAllApertureEmitModes);
     return true;
   }
 };

@@ -169,14 +169,22 @@ enum class BackprojectionBackend {
   kNvradarBlockAnchoredFp64TrajectoryPhaseLut,
 };
 
-inline constexpr BackprojectionBackend kDefaultBackprojectionBackend =
-    BackprojectionBackend::
-        kNvradarBlockAnchoredExpandedThroughputPhaseLutVec;
+inline constexpr BackprojectionBackend kDefaultBackprojectionBackend = {
+    BackprojectionBackend::kNvradarBlockAnchoredExpandedThroughputPhaseLutVec,
+};
 
 // What an incoming sample geometry means for the accumulator.
 enum class GeometryChange {
   kReset,
   kScroll,
+};
+
+// ApertureManagerOp.emit_mode: which FormationControl accompanies an emit.
+// Structural (Static). YAML spelling `continue` is kContinue.
+enum class ApertureEmitMode {
+  kContinue,
+  kReset,
+  kReform,
 };
 
 // Canonical spellings (lowercase snake_case, for logs and future YAML
@@ -384,6 +392,15 @@ constexpr std::string_view to_string(BackprojectionBackend backend) {
       return "nvradar_block_anchored_phase_lut_legacy";
     case BackprojectionBackend::kNvradarBlockAnchoredFp64TrajectoryPhaseLut:
       return "nvradar_block_anchored_fp64_trajectory_phase_lut";
+  }
+  return "unknown";
+}
+
+constexpr std::string_view to_string(ApertureEmitMode mode) {
+  switch (mode) {
+    case ApertureEmitMode::kContinue: return "continue";
+    case ApertureEmitMode::kReset: return "reset";
+    case ApertureEmitMode::kReform: return "reform";
   }
   return "unknown";
 }

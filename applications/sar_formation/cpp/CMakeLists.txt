@@ -22,11 +22,13 @@ target_link_libraries(sar_formation PRIVATE
     holoscan::tensor_dump_op
     holoscan::radar_app
     holoscan::radar_common
+    holoscan::aperture_manager_op
     holoscan::core
     holoscan::ops::holoviz
     holoscan::viz
     yaml-cpp::yaml-cpp
-    CUDA::cudart)
+    CUDA::cudart
+    ${CMAKE_DL_LIBS})
 
 target_include_directories(sar_formation PRIVATE
     ${PROJECT_SOURCE_DIR}/operators)

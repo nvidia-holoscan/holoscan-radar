@@ -1,17 +1,19 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// App-owned operators for mode 1: the control operator (a spotlight
-// retains nothing, so ApertureManagerOp is off this path —
-// OPERATOR_API.md → Running without a manager), the Holoviz
-// rasterizer / hold pair, and the NVRadar-parity diagnostics.
+// App-owned operators for the formation demo: the Holoviz rasterizer /
+// hold pair, NVRadar-parity diagnostics, and CollectionBoundaryStagerOp.
+// ApertureManagerOp (library) drives BackprojectionOp.control; this
+// stager is the leftover app path for mode 5's live lattice / dr / f0
+// (the manager stages sample_geometry; range_bin_spacing and
+// reference_frequency are not manager ports).
 //
-// StreamBoundaryControlOp watches the reader's D22 announcement and
-// issues one emit-and-reset on that same tick so the closing batch
-// lands in the image. It is not a source: metadata arrives only
-// through receive(), so it must be fed from the reader (fan-out of
-// phase_history). Absent control → BackprojectionOp accumulates and
-// does not emit.
+// CollectionBoundaryStagerOp sits on the range_profiles edge so its
+// sample_geometry emit is queued with the profiles the manager waits
+// on — one producer, one tick, no race against a non-blocking live
+// port. It watches the reader's D22 announcement (forwarded through
+// range compression) and on collection_boundary forwards the next
+// collect's lattice into the manager and dr / f0 into formation.
 
 #pragma once
 
@@ -43,10 +45,10 @@
 
 namespace radar = holoscan::radar;
 
-class StreamBoundaryControlOp : public holoscan::Operator {
+class CollectionBoundaryStagerOp : public holoscan::Operator {
  public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(StreamBoundaryControlOp)
-  StreamBoundaryControlOp() = default;
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(CollectionBoundaryStagerOp)
+  CollectionBoundaryStagerOp() = default;
 
   // Per-collection lattice / dr / f0, index-aligned with the
   // reader's file list. Size 1 (mode 1) emits no live overrides.
@@ -55,10 +57,8 @@ class StreamBoundaryControlOp : public holoscan::Operator {
   std::vector<double> frequencies;
 
   void setup(holoscan::OperatorSpec& spec) override {
-    spec.input<holoscan::TensorMap>("announce");
-    // kNone: silent on non-boundary ticks (absent control = accumulate).
-    spec.output<holoscan::TensorMap>("control")
-        .condition(holoscan::ConditionType::kNone);
+    spec.input<holoscan::TensorMap>("range_profiles");
+    spec.output<holoscan::TensorMap>("range_profiles");
     spec.output<radar::SampleGeometry>("sample_geometry")
         .condition(holoscan::ConditionType::kNone);
     spec.output<double>("range_bin_spacing")
@@ -71,39 +71,19 @@ class StreamBoundaryControlOp : public holoscan::Operator {
     if (geometries.size() != spacings.size() ||
         geometries.size() != frequencies.size()) {
       throw std::invalid_argument(
-          "StreamBoundaryControlOp: geometries, spacings, and "
+          "CollectionBoundaryStagerOp: geometries, spacings, and "
           "frequencies must be the same length");
-    }
-    emit_and_reset_ =
-        radar::make_device_tensor({1}, DLDataType{kDLUInt, 8, 1});
-    const uint8_t value = static_cast<uint8_t>(
-        radar::FormationControl::kEmitAndReset);
-    if (cudaMemcpy(emit_and_reset_->data(), &value, sizeof(value),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error(
-          "StreamBoundaryControlOp: control H2D copy failed");
     }
   }
 
   void compute(holoscan::InputContext& op_input,
                holoscan::OutputContext& op_output,
                holoscan::ExecutionContext&) override {
-    // Pull the message so the reader's metadata lands on this operator.
-    radar::receive_single(op_input, "announce",
-                          "StreamBoundaryControlOp");
-    // Interim string encoding (OPEN_ITEMS item 11), not the contract's
-    // uint8 StreamBoundary enum. Both collection seams and the final
-    // tick close an aperture; mode 1 is one file so only
-    // end_of_stream appears.
+    auto profiles = radar::receive_single(
+        op_input, "range_profiles", "CollectionBoundaryStagerOp");
+    radar::emit_single(op_output, "range_profiles", profiles);
     const std::string boundary = metadata()->get<std::string>(
         radar::kStreamBoundaryKey, std::string());
-    if (boundary == radar::kStreamBoundaryEndOfStream ||
-        boundary == radar::kStreamBoundaryCollection) {
-      radar::emit_single(op_output, "control", emit_and_reset_);
-    }
-    // Mode 5: the next collection's lattice / dr / f0 ride the same
-    // tick as emit-and-reset. BackprojectionOp stages them until after
-    // this emit (the closing aperture stays on the old geometry).
     if (boundary == radar::kStreamBoundaryCollection &&
         geometries.size() > 1) {
       ++boundary_count_;
@@ -116,7 +96,6 @@ class StreamBoundaryControlOp : public holoscan::Operator {
   }
 
  private:
-  std::shared_ptr<holoscan::Tensor> emit_and_reset_;
   size_t boundary_count_{0};
 };
 

@@ -410,18 +410,12 @@ four values". The reader currently writes the two names as a `std::string`.
 
 `FormationControl` (the four `control` values) now exists in
 `radar_common/descriptors/enums.hpp` — it landed with `BackprojectionOp`.
-`StreamBoundary` as a `uint8` enum still does not, because
-`ApertureManagerOp` is the other half of that shared numbering and is not
-implemented. Adding it now would still be choosing the encoding before the
-manager exists.
-
-The mode-1 app-owned control operator now **reads** the interim strings.
-The key and both values live in `radar_common/sdk/stream_boundary.hpp` so
-the reader and that consumer cannot drift. Changing a string is a breaking
-change between those two sites. The uint8 switch is still the close: land
-`StreamBoundary` beside `FormationControl` when `ApertureManagerOp` lands,
-switch this operator's `metadata()` write, and update `test_cphd_reader.cpp`
-plus the control operator together.
+`StreamBoundary` as a `uint8` enum still does not. `ApertureManagerOp`
+landed reading the same interim strings as this reader
+(`radar_common/sdk/stream_boundary.hpp`). Switching both sites to
+`uint8` together is still the close: add `StreamBoundary` beside
+`FormationControl`, switch this operator's `metadata()` write, and
+update `test_cphd_reader.cpp` plus the manager together.
 
 This does **not** close the item. The wire format is still the placeholder
 string encoding, not the contract's `uint8`.
