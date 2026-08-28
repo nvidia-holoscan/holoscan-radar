@@ -374,9 +374,10 @@ tick". Stickiness is the `sticky_*` Param in `compute()` via
 the first Exact match (sticky) or on every miss (ephemeral). Never treat a
 default-constructed SafeDefault payload as a value.
 
-`OnAligned`-triggered operators (`SnapshotGatherOp`, `DetectionReductionOp`)
-are the exception: the SDK still rejects an unwired non-trigger `Exact{}` entry
-under an aligned trigger, so they keep the `expect_*` gate.
+This holds under every trigger shape. `OnAligned`-triggered operators
+(`SnapshotGatherOp`, `DetectionReductionOp`) were the one exception while the
+SDK rejected an unwired non-trigger `Exact{}` entry under an aligned trigger;
+that is fixed, so no operator carries an `expect_*` gate.
 
 The notes below are the measured `LatestWithin` / `DrainAll` behavior (still
 true of the SDK, and still used by unmigrated operators that omit live Inputs

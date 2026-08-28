@@ -18,21 +18,19 @@ deferred on EA. See
 
 **Decision.** `representative` / `score_method` / `feature_weights` join the
 `OnAligned{labels, detection_idx, points}` trigger with `Exact{}` and
-`on_missing SafeDefault{}`, each gated by `expect_<name>` (default false).
-The gate was required here and not module-wide because under an `OnAligned`
-trigger the SDK used to reject an unwired non-trigger `Exact{}` entry with
-`TEMPORAL_INPUT_UNCONNECTED`, so `expect_*=true` requires the matching
-`add_flow` and `expect_*=false` omits the entry and forbids wiring; wiring
-without the flag is `RUNTIME_OPERATOR_REPLAY_MISMATCH`. `sticky_<name>`
+`on_missing SafeDefault{}`, each declared unconditionally. Wiring is the
+application's only statement, as it is module-wide. `sticky_<name>`
 (default true) latches the last Exact match; false reverts to Params on a
 miss. The application stamps the frame's transmit time on both the override
 and the aligned tensors.
 
-**The `expect_*` gate is now retirable.** The SDK admits an unwired non-member
-side input of an aligned trigger as of pin `f0cb828d4`
-([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11), so these three
-entries can become unconditional like every other operator's, leaving wiring
-as the application's only statement. Not yet done.
+**The `expect_*` gate is retired.** It existed only because the SDK once
+rejected an unwired non-trigger `Exact{}` entry under an aligned trigger with
+`TEMPORAL_INPUT_UNCONNECTED`; the SDK admits it as of pin `f0cb828d4`
+([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11), so the three
+parameters are gone. The live suite now wires all three ports in every case,
+including cases that never emit on one — that is also the assertion that an
+enabled-but-silent port does not stall the aligned trigger.
 
 **Unit coverage landed (2026-08-28).** The enum-edge fix (§12) unblocked all
 three tests, and they are the module's first operator-level assertions of a
@@ -52,8 +50,8 @@ wired override under an `OnAligned` trigger:
 Params authoring remains covered separately
 (`RepresentativeConfigurableFromParams` / `ScoreMethodConfigurableFromParams`).
 
-**Status:** open only for the mechanical `expect_*` retirement; the test-coverage
-gap is closed and the contract wiring is settled.
+**Status:** closed. The test-coverage gap is closed, the contract wiring is
+settled, and the `expect_*` gate is retired.
 
 ---
 
@@ -73,8 +71,8 @@ either.
 pageable-host float64 vector, validated on arrival (rank, host memory,
 contiguity, dtype, and a `MaxTensorExtents.max_features` extent bound) and
 converted to `std::vector<double>` before it reaches sticky state. Like the
-enum lives it is gated by `expect_feature_weights` (§1), and that flag also
-makes `max_features` a required extent. Graph coverage:
+enum lives its contract entry is unconditional (§1); an arriving sample makes
+`max_features` a required extent and is rejected without it. Graph coverage:
 `LiveFeatureWeightsExactMatchChangesSelection`,
 `LiveFeatureWeightsSkewedCaptureMissesExact`,
 `LiveFeatureWeightsStickyKeepsLastExactMatch`,
@@ -108,10 +106,10 @@ optional gathers / Beamscan `is_valid`). See
 - Omitting `points` from `contract()` while wiring it makes the sample
   unavailable in `compute()` and kills the second activation with
   `RUNTIME_OPERATOR_REPLAY_MISMATCH` (peak/medoid Graph paths fail).
-- The `expect_*` recipe that settled the `[live]` overrides (§1) does not
-  transfer: `points` is a trigger port, so gating its contract entry on a
-  flag would also change what the operator triggers on, not just whether an
-  override is selected.
+- The unwired-tolerance the `[live]` overrides rely on (§1, §11) does not
+  transfer: it covers a *non-trigger* entry, and `points` is a trigger port,
+  so omitting or relaxing its entry would change what the operator triggers
+  on, not just whether an override is selected.
 
 **Interim.**
 

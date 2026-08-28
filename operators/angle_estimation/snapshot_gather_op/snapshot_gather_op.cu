@@ -145,8 +145,7 @@ Contract SnapshotGatherOp<T>::contract() const {
                          .window = std::chrono::nanoseconds{0}})
       .input(rd_maps, Exact{})
       .input(detection_idx, Exact{});
-  maybe_add_live_override_to_contract(
-      result, snapshot_window, params().expect_snapshot_window);
+  add_live_override_to_contract(result, snapshot_window);
   return result;
 }
 
@@ -170,10 +169,9 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
   // Best-effort sticky override: if the port is wired and a sample is waiting,
   // absorb it; otherwise keep sticky / fall back to Params.
   HOLOSCAN_TRY(auto window_pod,
-               resolve_expected_override(pinned.expect_snapshot_window,
-                                         snapshot_window, window_seed,
-                                         sticky_snapshot_window_,
-                                         pinned.sticky_snapshot_window));
+               resolve_live_override(snapshot_window, window_seed,
+                                     sticky_snapshot_window_,
+                                     pinned.sticky_snapshot_window));
 
   std::vector<int64_t> effective_window;
   try {

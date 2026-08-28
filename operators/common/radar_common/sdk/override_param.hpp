@@ -27,8 +27,9 @@ namespace holoscan::radar {
 // default-constructed payload as a value (nfft == 0 is a legal seed).
 // Stickiness vs revert-to-Params is compute-side (sticky_* bool).
 //
-// POD [live] ports join via maybe_add_live_override_to_contract (Exact +
-// SafeDefault, gated by expect_*). resolve_sticky_override /
+// [live] ports join via add_live_override_to_contract (Exact + SafeDefault).
+// The entry is unconditional: wiring the port enables the override, an unwired
+// port tolerates the missing sample. resolve_sticky_override /
 // add_sticky_override_to_contract remain for the LatestWithin repro test.
 
 inline constexpr auto kStickyOverrideMaxAge = std::chrono::years{100};
@@ -36,14 +37,6 @@ inline constexpr auto kStickyOverrideMaxAge = std::chrono::years{100};
 template <typename T>
 void add_live_override_to_contract(Contract& contract, const Input<T>& port) {
   contract.input(port, Exact{}).on_missing(port, SafeDefault{});
-}
-
-template <typename T>
-void maybe_add_live_override_to_contract(Contract& contract,
-                                         const Input<T>& port, bool expect) {
-  if (expect) {
-    add_live_override_to_contract(contract, port);
-  }
 }
 
 // Resolve the effective value for an enabled Exact override port.
@@ -64,16 +57,6 @@ expected<T, Error> resolve_live_override(Input<T>& port, const T& seed,
     return *sticky;
   }
   return seed;
-}
-
-template <typename T>
-expected<T, Error> resolve_expected_override(
-    bool expect, Input<T>& port, const T& seed, std::optional<T>& sticky,
-    bool keep_sticky) {
-  if (!expect) {
-    return seed;
-  }
-  return resolve_live_override(port, seed, sticky, keep_sticky);
 }
 
 // Resolve a wire override through a validating converter. The converter runs
@@ -98,18 +81,6 @@ expected<Converted, Error> resolve_live_override_via(
     return *sticky;
   }
   return seed;
-}
-
-template <typename Wire, typename Converted, typename Converter>
-expected<Converted, Error> resolve_expected_override_via(
-    bool expect, Input<Wire>& port, const Converted& seed,
-    std::optional<Converted>& sticky, bool keep_sticky,
-    Converter&& converter) {
-  if (!expect) {
-    return seed;
-  }
-  return resolve_live_override_via(port, seed, sticky, keep_sticky,
-                                   std::forward<Converter>(converter));
 }
 
 // Deprecated LatestWithin mapping for operators not yet on Exact+expect.

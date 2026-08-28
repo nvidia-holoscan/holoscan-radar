@@ -602,11 +602,6 @@ GraphRunResult run_weights_override_graph(
   auto extents = holoscan::radar::testing::default_test_extents();
   extents.max_features = max_features;
   auto op = graph.op<DetectionReductionOp<double>>("op", extents);
-  // Under an OnAligned trigger each override entry is gated by its expect_*
-  // flag, so the wiring has to agree with the flag exactly.
-  const bool wire_weights = params.expect_feature_weights;
-  const bool wire_representative = params.expect_representative;
-  const bool wire_score_method = params.expect_score_method;
   op.set_params(std::move(params));
   const auto sink =
       graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink");
@@ -614,15 +609,13 @@ GraphRunResult run_weights_override_graph(
   graph.add_flow(source->labels, op->labels, q);
   graph.add_flow(source->detection_idx, op->detection_idx, q);
   graph.add_flow(source->points, op->points, q);
-  if (wire_weights) {
-    graph.add_flow(source->weights, op->feature_weights, q);
-  }
-  if (wire_representative) {
-    graph.add_flow(source->representative, op->representative, q);
-  }
-  if (wire_score_method) {
-    graph.add_flow(source->score_method, op->score_method, q);
-  }
+  // All three override ports stay wired for every case here: the source only
+  // emits the ones a tick carries, so a case that never exercises a port is
+  // also the check that a silent enabled port cannot stall the OnAligned
+  // trigger.
+  graph.add_flow(source->weights, op->feature_weights, q);
+  graph.add_flow(source->representative, op->representative, q);
+  graph.add_flow(source->score_method, op->score_method, q);
   graph.add_flow(op->rep_idx, sink->in, q);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
 
@@ -689,7 +682,6 @@ LiveWeightsTick make_weights_tick(
 DetectionReductionParams live_weights_params(bool sticky) {
   auto params = make_params(RepresentativePolicy::kPeak,
                             ScoreMethod::kWeightedSum, {1.0, 0.0});
-  params.expect_feature_weights = true;
   params.sticky_feature_weights = sticky;
   return params;
 }
@@ -804,7 +796,6 @@ LiveWeightsTick make_score_method_tick(
 TEST(DetectionReductionOpTest, LiveRepresentativeStickyOverride) {
   auto params = make_params(RepresentativePolicy::kFirst,
                             ScoreMethod::kWeightedSum, {1.0, 0.0});
-  params.expect_representative = true;
   params.sticky_representative = true;
   const auto out = run_weights_override_graph(
       {make_representative_tick(std::nullopt),
@@ -823,7 +814,6 @@ TEST(DetectionReductionOpTest, LiveRepresentativeStickyOverride) {
 TEST(DetectionReductionOpTest, LiveRepresentativeEphemeralRevertsToParams) {
   auto params = make_params(RepresentativePolicy::kFirst,
                             ScoreMethod::kWeightedSum, {1.0, 0.0});
-  params.expect_representative = true;
   params.sticky_representative = false;
   const auto out = run_weights_override_graph(
       {make_representative_tick(RepresentativePolicy::kPeak),
@@ -840,7 +830,6 @@ TEST(DetectionReductionOpTest, LiveRepresentativeEphemeralRevertsToParams) {
 TEST(DetectionReductionOpTest, LiveScoreMethodStickyOverride) {
   auto params = make_params(RepresentativePolicy::kPeak,
                             ScoreMethod::kWeightedSum, {1.0, 1.0});
-  params.expect_score_method = true;
   params.sticky_score_method = true;
   const auto out = run_weights_override_graph(
       {make_score_method_tick(std::nullopt),

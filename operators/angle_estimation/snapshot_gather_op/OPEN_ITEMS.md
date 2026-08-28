@@ -25,14 +25,13 @@ if it affects the module, then remove or archive the section here.
 - `Input<SnapshotWindowOverride> snapshot_window` (POD — §9; Params remain
   `std::vector<int64_t>`) is registered unconditionally in `setup()` and
   joins the `OnAligned` data trigger with `Exact{}` +
-  `on_missing SafeDefault{}` when `expect_snapshot_window` is set. The gate
-  is what the `OnAligned` trigger requires: an unwired non-trigger `Exact{}`
-  entry is still `TEMPORAL_INPUT_UNCONNECTED` there (§11), where an
-  `OnEach`-triggered operator declares its override entries unconditionally
-  and lets wiring decide.
+  `on_missing SafeDefault{}` unconditionally. Wiring is the application's
+  only statement: an unwired non-trigger `Exact{}` entry compiles under
+  `OnAligned` just as under `OnEach` (§11), so there is no
+  `expect_snapshot_window` parameter.
 - `sticky_snapshot_window` (default true) latches the last Exact match;
   false reverts to Params on a miss. `compute()` resolves through
-  `resolve_expected_override`.
+  `resolve_live_override`.
 - The trigger stays `OnAligned{rd_maps, detection_idx}`; the override rides
   the same activation, so a wired application must stamp the frame's
   transmit time on the override as well as the cube.

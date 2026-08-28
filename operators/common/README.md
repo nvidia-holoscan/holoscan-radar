@@ -81,7 +81,7 @@ branch to `main`. Open EA / migration issues live in
 | Receive | `receive_tensor(Input<Tensor>&, who)` → `expected<Tensor, Error>` |
 | Emit | `emit_device_tensor(Output<Tensor>&, context, shape, dtype, fill)` — pool loan → write on `context.cuda_stream()` → commit → emit |
 | Stream | `context.cuda_stream()` only (no `receive_cuda_stream` / `set_cuda_stream`) |
-| Exact `[live]` | `add_live_override_to_contract` + `resolve_live_override`; the entry is unconditional (`maybe_add_live_override_to_contract` + `expect_*` only under an `OnAligned` trigger) |
+| Exact `[live]` | `add_live_override_to_contract` + `resolve_live_override`; the entry is unconditional under every trigger shape, and wiring the port is what enables the override |
 | Writable test tensors | `dlpack_buffer.hpp` builds a `DLManagedTensorContext` + device alloc — raw `DLManagedTensor*` import is permanently read-only in HSDK 5 |
 | C++ tests | `tests/cpp/utils/sdk_harness.hpp`: `TensorSourceOp` / `TensorCaptureOp` + `Graph` compile/`run_async`; device producers need `bind_tensor_output_device` |
 

@@ -174,8 +174,8 @@ answer (peak at the simulated target, `argmax = 20` for
 `u = 0.10` on a `linspace(-0.3, 0.3, 31)` grid, peak `0.98`); tick 2 peaks
 one bin over at `7.74`. It is deterministic run to run.
 
-**Not the live-override path.** A throwaway two-tick test with every
-`expect_*` false and no override port wired reproduces it, and a probe
+**Not the live-override path.** A throwaway two-tick test with no override
+port wired reproduces it, and a probe
 showed both ticks resolving the same `ArrayGeometry` and the same steering
 cache key. `LiveArrayGeometryStickyOverride` is the only test that
 compares spectra across ticks, which is why it is the one that fails; the

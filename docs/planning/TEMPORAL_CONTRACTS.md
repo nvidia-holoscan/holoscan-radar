@@ -19,7 +19,7 @@ suggestion.
 | 2 | **The config plane publishes once per frame, not once per change.** Content changes stay irregular; publication is paced. | Publish-on-change plus sticky operator state as the *coherent* path (it remains the *degraded* path). |
 | 3 | **`Exact{}` + `on_missing(SafeDefault{})` for `[live]` overrides**; unmatched ticks still run and take Params or the last latch when `sticky_*` is true. `Skip{}` remains available to an application that wants fail-closed, but operators in this module do not skip the cube. `LatestWithin` is not the `[live]` selector. | `LatestWithin{years{100}}` as the default sticky-override shape; `Skip{}` as the operator default (would drop cubes). |
 | 4 | **`max_age` is a staleness bound, never a coherence mechanism.** No window value makes "the waveform that produced this cube" expressible. | Tuning `max_age` to approximate frame alignment. |
-| 5 | **Optional override ports**: register unconditionally in `setup()` *and* in `contract()`, and let wiring be the application's only statement — an unwired non-trigger `Exact{}` + `SafeDefault{}` entry compiles with a warning and reports `kNotConnected` every activation. `sticky_*` (default true) is the one remaining static Param and is compute-side only. The two `OnAligned` operators still gate their entry on an `expect_*` parameter, because that trigger shape still rejects an unwired entry ([`HSDK5_PORT.md`](HSDK5_PORT.md) §11). | A parameter that changes the port set (`GRAPH_PARAMETER_PORT_SHAPE_CHANGED`); operator-side inference of its own wiring (no such API); making the port mandatory and wiring an idle producer (legal, parameter-free, but an idiom no Holoscan author would recognize); an `expect_*` parameter everywhere (states the wiring fact twice). |
+| 5 | **Optional override ports**: register unconditionally in `setup()` *and* in `contract()`, and let wiring be the application's only statement — an unwired non-trigger `Exact{}` + `SafeDefault{}` entry compiles with a warning and reports `kNotConnected` every activation. `sticky_*` (default true) is the one remaining static Param and is compute-side only. This holds under `OnAligned` as well as `OnEach`; the aligned-trigger exclusion that once forced an `expect_*` gate on the two `OnAligned` operators is fixed ([`HSDK5_PORT.md`](HSDK5_PORT.md) §11). | A parameter that changes the port set (`GRAPH_PARAMETER_PORT_SHAPE_CHANGED`); operator-side inference of its own wiring (no such API); making the port mandatory and wiring an idle producer (legal, parameter-free, but an idiom no Holoscan author would recognize); an `expect_*` parameter everywhere (states the wiring fact twice). |
 | 6 | **Queue depth is sized by frames in flight**, because acquisition and readout latency mean a cube arrives long after its config was published. | Treating retention as a time bound. |
 | 7 | **`OnWindow` / `BracketedWindow` are not for config joins.** | Using a bracketed window to mean "newest config at or before this frame". |
 | 8 | **`DrainAll` + operator-side `capture_time` comparison is the fallback**, for control planes that are fast or that cannot be paced — not the default. | `DrainAll` everywhere (it forfeits the fail-stop that `Exact` gives). |
@@ -163,8 +163,9 @@ For the agent applying this to `contract()` bodies and `OPERATOR_API.md`:
   `deustice/5x/optional-port-contracts`, the Tensor spec migration that branch
   required is done, and the `fmcw`, `angle_estimation`, `detection`, and
   `clustering` operators plus their tests carry no `expect_*`. The two
-  `OnAligned` operators (`SnapshotGatherOp`, `DetectionReductionOp`) keep the
-  gate, which is the only piece of §11 still open
+  `OnAligned` operators (`SnapshotGatherOp`, `DetectionReductionOp`) were the
+  last holdouts; the SDK now accepts an unwired non-trigger entry under an
+  aligned trigger too, so the gate is gone module-wide and §11 is closed
   ([`HSDK5_PORT.md`](HSDK5_PORT.md) §11).
 
 ## Still open
@@ -185,7 +186,7 @@ For the agent applying this to `contract()` bodies and `OPERATOR_API.md`:
 | `tmp-app/optional_live_port.cpp` | The superseded gated form, kept for the two facts it isolates: a parameter may vary a `contract()` entry and a selector bound, and mid-run `set_params` is a no-op. |
 | `tmp-app/wiring_inference.cpp` | The same operator in two hand-written compositions, override wired and absent, as the reference for how an optional `[live]` port is declared. Earlier revisions of this probe also measured the results recorded above: `expect_*` derivable from `Graph::view()`, a declared-but-unwired entry rejected even with `on_missing`, a never-emitting producer accepted, input fan-in rejected (`GRAPH_INPUT_FANIN_UNSUPPORTED`), and an unconsumed output failing its emit. |
 | `tmp-app/optional_input_ports.cpp` | The adopted pattern on SDK branch `deustice/5x/optional-port-contracts`: wired and unwired POD overrides, an unwired optional Tensor input, and the `OnAligned` exclusion, with the compile diagnostics printed for each. Re-measured unchanged on tip `906fc1247`. |
-| The operator suites | The operator-level confirmation of the row above, now module-wide: the `fmcw`, `angle_estimation`, `detection`, and `clustering` suites pass with no `expect_*` anywhere, against the EA tag's `TEMPORAL_INPUT_UNCONNECTED` for the same graphs. |
+| The operator suites | The operator-level confirmation of the row above, now module-wide including the two `OnAligned` operators: the `fmcw`, `angle_estimation`, `detection`, and `clustering` suites pass with no `expect_*` anywhere, against the EA tag's `TEMPORAL_INPUT_UNCONNECTED` for the same graphs. `DetectionReductionOp`'s live suite wires all three override ports in every case, including cases that never emit on one, so an enabled-but-silent port is shown not to stall the aligned trigger. |
 
 Re-verify all of the above if the SDK changes activation-time, selector, or
 retention semantics; the EA is under active development.

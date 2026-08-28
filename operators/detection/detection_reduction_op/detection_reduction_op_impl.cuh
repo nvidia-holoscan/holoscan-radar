@@ -121,14 +121,15 @@ void DetectionReductionOp<T, ScoreFn>::setup(OperatorSpec& spec) {
 template <typename T, typename ScoreFn>
 Contract DetectionReductionOp<T, ScoreFn>::contract() const {
   // Trigger when labels + detection_idx + points share an aligned event time.
-  // [live] representative / score_method join via expect_*.
+  // The three [live] overrides join unconditionally; they are not alignment
+  // members, so leaving one unwired is legal and reads as no override.
   //
   // [EA HSDK5 ONLY] points is Exact in the contract even though OPERATOR_API
-  // marks it optional for representative=first. SafeDefault / LatestWithin
-  // on an optional Tensor Input still yields TEMPORAL_INPUT_UNCONNECTED when
-  // unwired, and omitting it while wiring yields a missed sample (same family
-  // as FeatureAssembly OPEN_ITEMS §1). Graph tests always wire points (dummy
-  // for first); see OPEN_ITEMS.
+  // marks it optional for representative=first. Unlike the overrides it is a
+  // trigger port, so an unwired points is still TEMPORAL_INPUT_UNCONNECTED and
+  // omitting it while wiring yields a missed sample (same family as
+  // FeatureAssembly OPEN_ITEMS §1). Graph tests always wire points (dummy for
+  // first); see OPEN_ITEMS.
   Contract result;
   result
       .trigger(OnAligned{.ports = ports(labels, detection_idx, points),
@@ -136,12 +137,9 @@ Contract DetectionReductionOp<T, ScoreFn>::contract() const {
       .input(labels, Exact{})
       .input(detection_idx, Exact{})
       .input(points, Exact{});
-  maybe_add_live_override_to_contract(
-      result, representative, params().expect_representative);
-  maybe_add_live_override_to_contract(
-      result, score_method, params().expect_score_method);
-  maybe_add_live_override_to_contract(
-      result, feature_weights, params().expect_feature_weights);
+  add_live_override_to_contract(result, representative);
+  add_live_override_to_contract(result, score_method);
+  add_live_override_to_contract(result, feature_weights);
   return result;
 }
 
@@ -154,28 +152,29 @@ expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
 
   const DetectionReductionParams& pinned =
       context.params<DetectionReductionParams>();
-  if (pinned.expect_feature_weights && max_features_ <= 0) {
-    return fail_invalid(
-        "DetectionReductionOp: MaxTensorExtents.max_features must be positive "
-        "when expect_feature_weights is true");
-  }
   HOLOSCAN_TRY(auto effective_representative,
-               resolve_expected_override(pinned.expect_representative,
-                                         representative, pinned.representative,
-                                         sticky_representative_,
-                                         pinned.sticky_representative));
+               resolve_live_override(representative, pinned.representative,
+                                     sticky_representative_,
+                                     pinned.sticky_representative));
   HOLOSCAN_TRY(auto effective_score_method,
-               resolve_expected_override(pinned.expect_score_method,
-                                         score_method, pinned.score_method,
-                                         sticky_score_method_,
-                                         pinned.sticky_score_method));
+               resolve_live_override(score_method, pinned.score_method,
+                                     sticky_score_method_,
+                                     pinned.sticky_score_method));
   HOLOSCAN_TRY(
       auto effective_feature_weights,
-      resolve_expected_override_via(
-          pinned.expect_feature_weights, feature_weights,
-          pinned.feature_weights, sticky_feature_weights_,
+      resolve_live_override_via(
+          feature_weights, pinned.feature_weights, sticky_feature_weights_,
           pinned.sticky_feature_weights,
-          [this](const Tensor& tensor) {
+          [this](const Tensor& tensor)
+              -> expected<std::vector<double>, Error> {
+            // Only a wired-and-sampled override needs the bound; an app that
+            // never overrides feature_weights may leave max_features unset.
+            if (max_features_ <= 0) {
+              return make_unexpected(Error{
+                  ErrorCode::kInvalidArgument,
+                  "DetectionReductionOp: MaxTensorExtents.max_features must "
+                  "be positive to accept a feature_weights override"});
+            }
             return read_host_config_vector<double>(
                 tensor, kFloat64Dtype, max_features_, "feature_weights");
           }));

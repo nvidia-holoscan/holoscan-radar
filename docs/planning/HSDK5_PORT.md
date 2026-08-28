@@ -110,9 +110,8 @@ HSDK 4.x `InputContext` / `TensorMap` / `HOLOSCAN_OPERATOR_FORWARD_ARGS`.
    `bind_tensor_output_device` on the producer side; stream from
    `context.cuda_stream()`; POD lives via
    `add_live_override_to_contract` + `resolve_live_override`
-   (`Exact{}` + `SafeDefault{}`, unconditional — wiring is the app's choice;
-   `OnAligned` operators instead gate on `expect_*` via
-   `maybe_add_live_override_to_contract`, §11).
+   (`Exact{}` + `SafeDefault{}`, unconditional under every trigger shape —
+   wiring is the app's choice, and no `expect_*` parameter exists, §11).
 3. **Allow-list** the CMake target name in
    `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS`
    ([`cmake/HoloscanRadarOptionalFeatures.cmake`](../../cmake/HoloscanRadarOptionalFeatures.cmake))
@@ -191,7 +190,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | Foundation (Dockerfile yaml-cpp/ssh, `find_package(matx)`, Holoviz gate, C++20) | landed on `dpc/hs5.0-fixes` |
 | Shared Tensor I/O + Exact `[live]` helpers (`radar_common/sdk/`) | landed (ClutterFilter pilot; Exact since 2026-08-21) |
 | `ClutterFilterOp` F32/F64 + Graph C++ tests | landed; Exact `method` (unconditional entry); Graph perf cold/steady landed; enum `method` live-override units landed now that §12 is fixed; Graph perf `override_ms` still unmeasured for enums (§8) |
-| `SnapshotGatherOp` F32/F64 + Graph C++ tests (OnAligned 2-in/2-out) | landed; Exact `snapshot_window` still gated by `expect_snapshot_window` — retirement pending now that §11 is fixed; live-override unit deferred (§1); Graph perf `snapshot_window` `override_ms` restored (§8) |
+| `SnapshotGatherOp` F32/F64 + Graph C++ tests (OnAligned 2-in/2-out) | landed; Exact `snapshot_window` on an unconditional entry — `expect_snapshot_window` retired (§11); live-override unit deferred (§1); Graph perf `snapshot_window` `override_ms` restored (§8) |
 | `PhaseShiftBeamformerOp` F32/F64 + Graph C++ tests | landed; `[live]` geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); no POD live Inputs, so Graph live tests still skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `peak_interpolation` (unconditional entry) with its enum live-override unit landed now that §12 is fixed; optional `is_valid` Graph wiring deferred (§11); geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `SubarraySelectionOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; outputs `snapshot_out` / `is_valid_out` (§2); `array_geometry` emitted as packed float64 Tensor (§10); `array_geometry` wire-schema and `subarray` bounded host-Tensor lives (§9); optional `is_valid` Graph wiring deferred (§11); no dedicated `perf_*` driver |
@@ -201,7 +200,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX/cuSOLVER teardown preserved; Graph perf `max_sources` `override_ms` restored (§8) |
 | `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports, `subarray_spec` static (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
 | `FeatureAssemblyOp` F32/F64 + Graph C++ tests (1-in/1-out; optional gathers) | landed; optional gather Inputs omitted from contract (§11 / Beamscan `is_valid` pattern); Graph optional wiring deferred — stage kernel coverage; no `[live]` params; Graph perf cold/steady landed |
-| `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; Exact `representative`/`score_method`/`feature_weights` still gated by `expect_*` under its `OnAligned` trigger — retirement pending now that §11 is fixed; the two enum live-override units landed (§12 fixed); `feature_weights` is a bounded host Tensor (§9); Graph perf cold/steady landed |
+| `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; Exact `representative`/`score_method`/`feature_weights` on unconditional entries under its `OnAligned` trigger — all three `expect_*` retired (§11), and the live suite keeps every override port wired so a silent one is shown not to stall the trigger; the two enum live-override units landed (§12 fixed); `feature_weights` is a bounded host Tensor (§9); Graph perf cold/steady landed |
 | `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; Exact POD lives (unconditional entries) (Graph live deferred §1); vector lives on bounded host-Tensor ports, fixed tuples on ChannelPod (§9); statistical MC suite on label `statistical`; Graph perf `threshold_scale` `override_ms` restored (§8) |
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph sticky/`TXSchedule` live N/A (Params-only schedule); Graph perf cold/steady landed |
 | `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` on a generated wire-schema port (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
@@ -221,7 +220,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 
 **Contract.** `OPERATOR_API.md` requires Exact `[live]` parameters. Their
 `contract()` entries are unconditional and an app enables an override by wiring
-the port; the `OnAligned` operators gate theirs on `expect_*` (§11). FMCW
+the port, under `OnAligned` as much as under `OnEach` (§11). FMCW
 windows/waveform use generated schema payloads; the other descriptor and
 vector lives ride the same wire-schema / bounded host-Tensor mapping (§9).
 `resolve_sticky_override` remains for the LatestWithin repro test.
@@ -285,15 +284,13 @@ respected:
   immediately. A `set_params` that only changes `contract()` is accepted
   and re-replayed — both a selector bound (`LatestWithin::max_age`) and
   the presence or absence of an entire `input()` entry.
-- **So a per-port `expect_*` parameter works.** Register the `[live]`
-  port unconditionally in `setup()`, and emit its contract entry only
-  when the parameter is set. Parameter off + unwired compiles and runs
-  (the port is simply never selected); parameter on + wired runs with the
-  override. Both wirings come from one build, and the choice is plain
-  `Params` — so it rides `from_config()` YAML like any other parameter,
-  with no constructor argument and no `MaxTensorExtents`-style
-  ctor capture. This is how the `OnAligned` operators still work (§11);
-  everywhere else the entry is unconditional and the gate is gone.
+- **So a per-port `expect_*` parameter worked** — this is what the module
+  used before §11 landed, and it is recorded because the mechanism is still
+  the general answer for a genuinely parameter-dependent contract entry:
+  register the `[live]` port unconditionally in `setup()` and emit its
+  contract entry only when the parameter is set. It is no longer used for
+  `[live]` overrides anywhere; every entry is unconditional and the gate is
+  gone module-wide (§11).
 - **Wired-undeclared is still a failure mode.** A port the application
   wires but the contract omits kills the second activation with
   `RUNTIME_OPERATOR_REPLAY_MISMATCH`. The reverse — declared and unwired —
@@ -321,9 +318,9 @@ respected:
 The residual cost of the gate was that the agreement is manual: an
 application had to state which `[live]` ports it wires, instead of that
 following from `add_flow` alone. **Settled (L17):** the SDK now tolerates a
-declared, unwired non-trigger `Exact{}` + `SafeDefault{}` entry, so wiring
-is the only statement an application makes and the gate survives on the two
-`OnAligned` operators alone (§11).
+declared, unwired non-trigger `Exact{}` + `SafeDefault{}` entry under every
+trigger shape, so wiring is the only statement an application makes and the
+gate is gone module-wide (§11).
 
 **Re-test list — swept 2026-08-23.** Every operator previously documented as
 omitting live Inputs from `contract()` was re-checked against this narrowing
@@ -344,8 +341,8 @@ lives, so only their optional-input limitations remain.
 - Every ported operator's `contract()` is now its data trigger (`OnEach`, or
   `OnAligned` for the two-tensor ops) plus one unconditional `Exact{}` +
   `SafeDefault{}` entry per override, via `add_live_override_to_contract` in
-  `radar_common/sdk/override_param.hpp` — the two `OnAligned` operators still
-  gate theirs on `expect_*` (§11). Descriptor ports convert generated
+  `radar_common/sdk/override_param.hpp` — including the two `OnAligned`
+  operators (§11). Descriptor ports convert generated
   wire types, and vector ports convert bounded rank-1 host Tensors, before
   sticky resolution (§9). Optional Tensor inputs and conditional outputs stay
   out of the contract (§11).
@@ -858,9 +855,10 @@ operator's own tests, not only by the probe.
 `deustice/5x/optional-port-contracts`, the module has migrated to that branch's
 Tensor spec API, and `expect_*` is gone from every `OnEach`-triggered operator
 in the `fmcw`, `angle_estimation`, `detection`, and `clustering` groups along
-with the corresponding test wiring. Tests that used to set an `expect_*` flag
-now pass an explicit wiring struct to their graph helper, so the fact that used
-to be stated twice (the flag and the `add_flow`) is stated once.
+with the corresponding test wiring (the two `OnAligned` operators followed on
+2026-08-28, below). Tests that used to set an `expect_*` flag now pass an
+explicit wiring struct to their graph helper, so the fact that used to be
+stated twice (the flag and the `add_flow`) is stated once.
 
 **Getting here required the Tensor spec migration.** The branch sits on
 `main-5x`, which has reshaped the Tensor spec surface past `v5.0.0.1`, so the
@@ -904,11 +902,22 @@ presence set. Re-run of the probe against that tip:
 That makes the two trigger shapes behave identically, so the reason
 `SnapshotGatherOp` and `DetectionReductionOp` kept `expect_*` — that an
 unconditional contract entry would make their override ports *mandatory* — no
-longer holds. Retiring those last two `expect_*` holders is the remaining work
-in this module; the SDK side is done.
+longer holds.
 
-**Status:** closed in the SDK for both trigger shapes. Open in this module only
-as the mechanical retirement of `expect_*` on the two `OnAligned` operators.
+**Retired in this module (2026-08-28).** `SnapshotGatherOp.expect_snapshot_window`
+and `DetectionReductionOp.expect_representative` / `expect_score_method` /
+`expect_feature_weights` are gone, and with them the shared
+`maybe_add_live_override_to_contract` / `resolve_expected_override` /
+`resolve_expected_override_via` helpers, which had no other callers. No operator
+in the module carries an `expect_*` parameter now, under any trigger shape. The
+`DetectionReductionOp` live suite wires all three override ports in every case
+— including the cases that never emit on one — so the 43 passing tests are also
+the assertion that an enabled-but-silent aligned side input does not stall the
+trigger. `DetectionReductionOp`'s `max_features` check moved from a Params-time
+gate to the `feature_weights` converter, so it now fires only for a tick that
+actually carries an override.
+
+**Status:** closed, in the SDK and in this module.
 
 ---
 
@@ -1218,7 +1227,7 @@ remain open.
 | Params schema | Ported ops use `Operator<Params>` + `HOLOSCAN_PARAM_SCHEMA`; drop `ArgumentSetter` / `ensure_radar_arg_setters` for those |
 | Stream | `context.cuda_stream()` only — no `receive_cuda_stream` / `set_cuda_stream` |
 | Emit | `prepare_device_tensor` then `emit_prepared_tensor` for multi-out ticks (fill/commit all loans before any publish); single-out may still use `emit_device_tensor` |
-| Live override helper | `add_live_override_to_contract` (`Exact{}` + `SafeDefault{}`, unconditional; `maybe_add_live_override_to_contract` + `expect_*` only under an `OnAligned` trigger) + operator-owned `std::optional` latched by `resolve_live_override` (not experimental `runtime_mutable`). `resolve_sticky_override` / `LatestWithin` survive only in the repro test |
+| Live override helper | `add_live_override_to_contract` (`Exact{}` + `SafeDefault{}`, unconditional under every trigger shape) + operator-owned `std::optional` latched by `resolve_live_override` (not experimental `runtime_mutable`). `resolve_sticky_override` / `LatestWithin` survive only in the repro test |
 | Optional receives | Only `kInputUndeclared` / `kInputEmpty` / `kInputNotSelected` / `kNotReady` mean "absent" (`is_absent_input_error`); every other receive error propagates instead of degrading to the Params seed |
 | Empty tensors | `receive_tensor` rejects a null `data()` only when `nbytes() > 0` — a zero-element tensor legitimately carries no allocation |
 | Static params | Root-MUSIC / ESPRIT reject a mid-session `angle_convention` change rather than silently reusing the seeded device relabeling |

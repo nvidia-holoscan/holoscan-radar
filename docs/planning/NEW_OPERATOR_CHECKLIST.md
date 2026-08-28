@@ -100,9 +100,9 @@ throws / sits in `OPEN_ITEMS.md`.
 - [ ] **`[live]` parameters:** declare with `spec.param(...)`, register the
       `Input<>` in `setup()`, then add the `contract()` entry
       unconditionally via `add_live_override_to_contract` — an unwired port
-      is legal and reads as "no override". `OnAligned`-triggered operators
-      are the exception and still gate on `expect_*` via
-      `maybe_add_live_override_to_contract`.
+      is legal and reads as "no override", under `OnAligned` as much as
+      under `OnEach`. No `expect_*` parameter: wiring is the app's only
+      statement.
 - [ ] **Static parameters** (kernel-selecting enums, structural modes): no
       override port; document that callers instantiate separate operators.
 - [ ] **`initialize()`:** call `ensure_radar_arg_setters()` and register any

@@ -46,16 +46,13 @@ namespace holoscan::radar {
 //                       cluster count and reallocated per tick.
 //
 // Parameters (OPERATOR_API.md [live] tags):
-//   representative  — enum {peak, medoid, first}. [live] Exact Input when
-//                     expect_representative.
+//   representative  — enum {peak, medoid, first}. [live] Exact Input.
 //   score_method    — enum {weighted_sum, weighted_l2, weighted_max, custom}.
-//                     Used by peak. [live] Exact Input when
-//                     expect_score_method.
+//                     Used by peak. [live] Exact Input.
 //   feature_weights — std::vector<double>, length num_features. Required for
 //                     peak (non-custom) / medoid.
-//                     [live] Exact rank-1 pageable-host float64 Tensor Input
-//                     when expect_feature_weights; bounded by
-//                     MaxTensorExtents.max_features.
+//                     [live] Exact rank-1 pageable-host float64 Tensor Input,
+//                     bounded by MaxTensorExtents.max_features.
 //
 // Precision T = float | double. Optional ScoreFn is a compile-time device
 // functor used when score_method=custom: callable as
@@ -68,9 +65,6 @@ struct DetectionReductionParams {
   RepresentativePolicy representative{RepresentativePolicy::kPeak};
   ScoreMethod score_method{ScoreMethod::kWeightedSum};
   std::vector<double> feature_weights{};
-  bool expect_representative{false};
-  bool expect_score_method{false};
-  bool expect_feature_weights{false};
   bool sticky_representative{true};
   bool sticky_score_method{true};
   bool sticky_feature_weights{true};
@@ -94,34 +88,17 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Per-feature weights for peak/medoid (length num_features); "
             "required for those policies unless peak+custom"),
-    holoscan::field<&DetectionReductionParams::expect_representative>(
-        "expect_representative")
-        .description(
-            "Set when the application wires the representative override."),
-    holoscan::field<&DetectionReductionParams::expect_score_method>(
-        "expect_score_method")
-        .description(
-            "Set when the application wires the score_method override."),
-    holoscan::field<&DetectionReductionParams::expect_feature_weights>(
-        "expect_feature_weights")
-        .description(
-            "Set when the application wires the feature_weights Tensor "
-            "override."),
     holoscan::field<&DetectionReductionParams::sticky_representative>(
         "sticky_representative")
         .description(
-            "Keep the last Exact representative match on a miss. Ignored "
-            "unless expect_representative."),
+            "Keep the last Exact representative match on a miss."),
     holoscan::field<&DetectionReductionParams::sticky_score_method>(
         "sticky_score_method")
-        .description(
-            "Keep the last Exact score_method match on a miss. Ignored "
-            "unless expect_score_method."),
+        .description("Keep the last Exact score_method match on a miss."),
     holoscan::field<&DetectionReductionParams::sticky_feature_weights>(
         "sticky_feature_weights")
         .description(
-            "Keep the last Exact feature_weights match on a miss. Ignored "
-            "unless expect_feature_weights."));
+            "Keep the last Exact feature_weights match on a miss."));
 
 static_assert(
     holoscan::param_schema_availability<DetectionReductionParams>() ==
@@ -152,7 +129,8 @@ class DetectionReductionOp
   // OPEN_ITEMS.
   Input<Tensor> points{"points"};
   Output<Tensor> rep_idx{"rep_idx"};
-  // [live] Exact overrides, gated by expect_* (OPERATOR_API.md).
+  // [live] Exact overrides; the entries are unconditional and wiring the port
+  // enables it (OPERATOR_API.md).
   Input<RepresentativePolicy> representative{"representative"};
   Input<ScoreMethod> score_method{"score_method"};
   Input<Tensor> feature_weights{"feature_weights"};

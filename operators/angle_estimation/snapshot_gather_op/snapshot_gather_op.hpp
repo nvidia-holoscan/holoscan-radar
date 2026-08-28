@@ -93,7 +93,6 @@ struct SnapshotGatherParams {
   std::vector<int64_t> snapshot_window{0, 0};
   SnapshotEdgeMode doppler_edge{SnapshotEdgeMode::kWrap};
   SnapshotEdgeMode range_edge{SnapshotEdgeMode::kShift};
-  bool expect_snapshot_window{false};
   bool sticky_snapshot_window{true};
 };
 
@@ -112,15 +111,10 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Neighborhood behavior at the range-axis edges "
             "{wrap, clamp, shift}"),
-    holoscan::field<&SnapshotGatherParams::expect_snapshot_window>(
-        "expect_snapshot_window")
-        .description(
-            "Set when the application wires the snapshot_window override."),
     holoscan::field<&SnapshotGatherParams::sticky_snapshot_window>(
         "sticky_snapshot_window")
         .description(
-            "Keep the last Exact snapshot_window match on a miss. Ignored "
-            "unless expect_snapshot_window."));
+            "Keep the last Exact snapshot_window match on a miss."));
 
 static_assert(holoscan::param_schema_availability<SnapshotGatherParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -144,8 +138,8 @@ class SnapshotGatherOp : public holoscan::Operator<SnapshotGatherParams> {
   Input<Tensor> detection_idx{"detection_idx"};
   Output<Tensor> snapshot{"snapshot"};
   Output<Tensor> is_valid{"is_valid"};
-  // [live] Exact override of params().snapshot_window, gated by
-  // expect_snapshot_window (OPERATOR_API.md).
+  // [live] Exact override of params().snapshot_window; the entry is
+  // unconditional and wiring the port enables it (OPERATOR_API.md).
   // [EA HSDK5 ONLY] POD payload — see SnapshotWindowOverride / HSDK5_PORT §9.
   // Edge modes are static Params only (no live ports).
   Input<SnapshotWindowOverride> snapshot_window{"snapshot_window"};
