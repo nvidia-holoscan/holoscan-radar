@@ -182,6 +182,20 @@ HSDK 5 fix. Blast radius is **large but uneven** across the two parts.
 Pain is **volume and repetition**, not algorithmic redesign. Same pattern per
 op.
 
+**Sizing is a stability requirement on unified-memory hosts.** Extents multiply
+into a pool's byte span, so an extent left at a generous default is not merely
+wasteful — where the GPU shares the host's RAM (Jetson, GB10 / DGX Spark), an
+over-sized pool exhausts *system* memory. Measured 2026-08-28: the phase-shift
+beamformer suite raised only `max_az` / `max_el` for its scan grid and left
+`max_doppler_bins` / `max_range_bins` at the harness defaults, so its
+`max_az * max_el * max_doppler_bins * max_range_bins` complex cube pool asked
+for ~13 GiB for a fixture whose doppler/range extent is 1x1. That reliably
+pushed a 121 GiB GB10 into `NV_ERR_NO_MEMORY`, a `nvidia_uvm` deadlock, and an
+OOM-killed sshd — the host went unreachable, not just the test. Two rules
+follow: **size every extent from the fixture or scenario actually under test**,
+including the ones a suite is not varying, and **run GPU suites at low `-j`**
+(`-j2` on that host) so concurrent pools cannot sum past physical memory.
+
 ### Part B — drop opaque leading `...` (wide + sharper)
 
 | Surface | Impact |

@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -429,6 +430,12 @@ struct CfarLiveWiring {
   bool alpha_lut{false};
 };
 
+template <typename Bank>
+bool bank_caught_up(std::size_t expected) {
+  const std::lock_guard lock(Bank::mutex);
+  return Bank::captured.size() >= expected;
+}
+
 FiveOutGraphRunResult run_cfar_live(std::vector<CfarLiveTick> ticks,
                                     CFARParams params,
                                     CfarLiveWiring wiring) {
@@ -528,11 +535,15 @@ FiveOutGraphRunResult run_cfar_live(std::vector<CfarLiveTick> ticks,
         std::chrono::steady_clock::now() + harness::kHarnessDeadline;
     while (session.diagnostics().empty() &&
            std::chrono::steady_clock::now() < deadline) {
-      {
-        const std::lock_guard lock(harness::FrameBank::mutex);
-        if (harness::FrameBank::captured.size() >= expected) {
-          break;
-        }
+      // Every sink must be caught up before the stop request: the five outputs
+      // are captured independently, so waiting on one alone lets a slower sink
+      // lose its last frame to `request_stop()`.
+      if (bank_caught_up<harness::FrameBank>(expected) &&
+          bank_caught_up<harness::FrameBankB>(expected) &&
+          bank_caught_up<harness::FrameBankC>(expected) &&
+          bank_caught_up<harness::FrameBankD>(expected) &&
+          bank_caught_up<harness::FrameBankE>(expected)) {
+        break;
       }
       std::this_thread::sleep_for(harness::kHarnessPoll);
     }

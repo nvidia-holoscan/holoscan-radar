@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -197,9 +198,19 @@ GraphRunResult run_beamformer_result(
     std::shared_ptr<holoscan::Tensor> rd_maps,
     PhaseShiftBeamformerParams params,
     std::optional<holoscan::radar::MaxTensorExtents> extents = std::nullopt) {
+  // rd_maps is (N_rx, D, R) and the output pool spans az*el*D*R, so take D and
+  // R from the fixture instead of the harness caps — these suites scan wide
+  // grids over cubes that are usually 1x1 in doppler/range.
+  const auto rd_shape = rd_maps->shape();
   const holoscan::radar::MaxTensorExtents sized =
       extents.value_or(holoscan::radar::testing::extents_for_scan_grid(
-          params.az_angles.size(), params.el_angles.size()));
+          params.az_angles.size(), params.el_angles.size(),
+          rd_shape.size() > 1U ? std::optional<std::size_t>(
+                                     static_cast<std::size_t>(rd_shape[1]))
+                               : std::nullopt,
+          rd_shape.size() > 2U ? std::optional<std::size_t>(
+                                     static_cast<std::size_t>(rd_shape[2]))
+                               : std::nullopt));
   return run_single_io_operator_graph_result<PhaseShiftBeamformerOp<T>>(
       {std::move(rd_maps)}, std::move(params), "rda_cube",
       [](holoscan::Graph& graph, const auto& source, auto& op,
@@ -398,19 +409,39 @@ class LiveBeamformerSourceOp final : public holoscan::Operator<> {
       array_taper{"array_taper"};
 };
 
+// Live overrides can widen the scan grid mid-stream, so az/el keep the default
+// caps; doppler/range come from the fixture cube for the same pool-span reason
+// as `run_beamformer_result`.
+holoscan::radar::MaxTensorExtents live_extents_for(
+    const std::vector<LiveBeamformerTick>& ticks) {
+  auto extents = holoscan::radar::testing::default_test_extents();
+  if (ticks.empty() || !ticks.front().rd_maps) {
+    return extents;
+  }
+  const auto shape = ticks.front().rd_maps->shape();
+  if (shape.size() > 1U) {
+    extents.max_doppler_bins = std::max<std::int64_t>(1, shape[1]);
+  }
+  if (shape.size() > 2U) {
+    extents.max_range_bins = std::max<std::int64_t>(1, shape[2]);
+  }
+  return extents;
+}
+
 GraphRunResult run_live_beamformer_graph(
     std::vector<LiveBeamformerTick> ticks,
     PhaseShiftBeamformerParams params,
-    holoscan::radar::MaxTensorExtents extents =
-        holoscan::radar::testing::default_test_extents()) {
+    std::optional<holoscan::radar::MaxTensorExtents> extents = std::nullopt) {
   GraphRunResult result;
   holoscan::radar::testing::detail::FrameBank::reset();
+  const holoscan::radar::MaxTensorExtents sized =
+      extents.value_or(live_extents_for(ticks));
   LiveBeamformerBank::reset(std::move(ticks));
   const std::size_t expected = LiveBeamformerBank::ticks.size();
   holoscan::Graph graph{"live-beamformer-overrides"};
   const auto source = graph.op<LiveBeamformerSourceOp>("source");
   auto op = holoscan::radar::testing::emplace_harness_op<
-      PhaseShiftBeamformerOp<double>>(graph, extents);
+      PhaseShiftBeamformerOp<double>>(graph, sized);
   op.set_params(std::move(params));
   const auto sink =
       graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink");

@@ -678,13 +678,28 @@ inline MaxTensorExtents default_test_extents() {
 // max_el, and those two extents also multiply into the output pool span, so
 // grid-scanning suites size them to the grid under test rather than paying
 // for the default caps.
-inline MaxTensorExtents extents_for_scan_grid(std::size_t num_az,
-                                              std::size_t num_el) {
+//
+// A beam cube pool spans max_az * max_el * max_doppler_bins * max_range_bins
+// complex elements, so leaving the doppler/range caps at their defaults while
+// widening the grid is what makes these pools enormous: a 101x61 grid against
+// the default 256x512 asks for ~13 GiB of complex<double> for a cube whose
+// real extent is 1x1. Pass the actual cube's doppler/range extents.
+inline MaxTensorExtents extents_for_scan_grid(
+    std::size_t num_az, std::size_t num_el,
+    std::optional<std::size_t> num_doppler = std::nullopt,
+    std::optional<std::size_t> num_range = std::nullopt) {
+  const auto at_least_one = [](std::size_t value) {
+    return std::max<std::int64_t>(1, static_cast<std::int64_t>(value));
+  };
   MaxTensorExtents extents = default_test_extents();
-  extents.max_az = std::max<std::int64_t>(
-      1, static_cast<std::int64_t>(num_az));
-  extents.max_el = std::max<std::int64_t>(
-      1, static_cast<std::int64_t>(num_el));
+  extents.max_az = at_least_one(num_az);
+  extents.max_el = at_least_one(num_el);
+  if (num_doppler) {
+    extents.max_doppler_bins = at_least_one(*num_doppler);
+  }
+  if (num_range) {
+    extents.max_range_bins = at_least_one(*num_range);
+  }
   return extents;
 }
 
