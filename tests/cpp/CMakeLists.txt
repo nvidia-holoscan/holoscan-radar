@@ -111,17 +111,13 @@ radar_add_test(sar/test_backprojection
     holoscan::backprojection_op)
 radar_add_test(sar/test_aperture_manager
     holoscan::aperture_manager_op)
-# App-owned TileMosaicOp lives with sar_formation; the test includes
-# that header (same-dir NOLINT) plus the operator include root.
-add_executable(test_tile_mosaic sar/test_tile_mosaic.cpp)
+# App-owned TileMosaicOp lives with sar_formation; extra includes
+# for that header (same-dir NOLINT) and the operator include root
+# (custom_ops.hpp pulls cphd_reader_op.hpp).
+radar_add_test(sar/test_tile_mosaic)
 target_include_directories(test_tile_mosaic PRIVATE
     ${PROJECT_SOURCE_DIR}/operators
     ${PROJECT_SOURCE_DIR}/applications/sar_formation/cpp)
-target_link_libraries(test_tile_mosaic PRIVATE
-    radar_test_utils
-    GTest::gtest_main
-    holoscan::cphd_reader_op)
-gtest_discover_tests(test_tile_mosaic PROPERTIES LABELS "unit")
 # Declared explicitly rather than via radar_add_test: it needs the generated
 # fixture's location as a compile definition and the CTest fixture dependency
 # that produces it.
