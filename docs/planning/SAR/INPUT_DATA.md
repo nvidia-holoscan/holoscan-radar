@@ -35,11 +35,11 @@ All are credential-free: a plain HTTPS or `aws s3 --no-sign-request` pull, no ac
 | :--- | :--- | :--- | :--- |
 | 1, spotlight image | Umbra, Hartsfield-Jackson Atlanta — the scene the MatX `sar_bp` example uses | 28.59 GiB | pinned, header verified |
 | 2, video SAR | Umbra, downtown Houston | 110 GiB | pinned, **fully validated** — see below |
-| 3, tiled strip | Capella stripmap, ~4.3 s dwell, CI4 with `AmpSF` | ~704 MiB | collection identified; **exact key needs re-verification** |
-| 4, continuous strip | Capella stripmap, ~15.8 s dwell, CI4 with `AmpSF` | ~3.45 GiB | collection identified; **exact key needs re-verification** |
+| 3, tiled strip | Capella stripmap, Imperial Valley CA — ~15.77 s dwell, CI4 with `AmpSF` (same file as mode 4) | 3.452 GiB | pinned, header verified 2026-08-30 |
+| 4, continuous strip | Capella stripmap, Imperial Valley CA — same collect as mode 3; scroll YAML later | 3.452 GiB | pinned, header verified 2026-08-30 |
 | 5, independent images | six unique-IARP Umbra CPHDs (see below). Capella is **not** required | ~10.5 GiB | **settled 2026-08-25** |
 
-The two Capella pins carry weight beyond their modes: they are the only `CI4` collections here, and the only ones with `AmpSF` present, so they are what covers the reader's integer-sample and per-vector-scale paths. Both Umbra collections are `CF8` without `AmpSF`.
+The two Capella pins carry weight beyond their modes: they are the only `CI4` collections here, and the only ones with `AmpSF` present, so they are what covers the reader's integer-sample and per-vector-scale paths. They also split CPHD minor version (1.0.1 vs 1.1.0) and are `SGN` +1 with travelling `SRPPos` (`SRPFixed=false`). Both Umbra collections are `CF8` without `AmpSF`, `SGN` −1, frozen SRP.
 
 ### Mode 1 — Atlanta
 
@@ -81,7 +81,7 @@ sar-data/tasks/Buenos Aires, ARG/a7a03ef5-6bb6-4f85-aceb-638685a9b3e7/2023-02-08
 sar-data/tasks/Intel Ohio One/95d6685e-a4af-4a87-ba0b-b4a43e636e81/2023-10-11-02-20-47_UMBRA-05/2023-10-11-02-20-47_UMBRA-05_CPHD.cphd
 ```
 
-**A committed pull script ships with the demo.** The app still reads only local files; the user runs the script first. It lives with the app (`applications/sar_formation/pull_cphd.py`), takes this manifest, downloads over HTTPS / `aws s3 --no-sign-request`, skips files already present, and **refuses the set if two IARPs collide** (read from each file's XML, not from the folder name; collision is ECEF distance < 1 km).
+**A committed pull script ships with the demo.** The app still reads only local files; the user runs the script first. It lives with the app (`applications/sar_formation/pull_cphd.py`), takes `--mode 5` (this manifest; default), or `--mode 3` / `--mode 4` (Imperial Valley, shared dest). Downloads over HTTPS / `aws s3 --no-sign-request`, skips files already present, and **on mode 5 refuses the set if two IARPs collide** (read from each file's XML, not from the folder name; collision is ECEF distance < 1 km).
 
 **CI** stays generated: a handful of small simulator CPHDs with different IARPs and different target layouts. No CI job pulls public data.
 
@@ -147,6 +147,32 @@ Two of the 208,753 vectors — indices 171,540 and 182,384 — carry `TOA1`/`TOA
 
 The practical impact here is nil. The value is as evidence: this is a real, public, otherwise clean collection with corrupt PVP in it, which argues concretely for the per-vector sanity checking `CPHDReaderOp` is contracted to do, and against deriving anything global from an unguarded min/max over a PVP field.
 
+## Mode 3 — Imperial Valley stripmap (tiled strip)
+
+Same collect as mode 4. Bucket `capella-open-data` (us-west-2; objects also answer at the REST hostname `capella-open-data.s3.amazonaws.com`), key:
+
+```text
+data/2024/11/29/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
+```
+
+Credential-free: `aws s3 cp --no-sign-request` or HTTPS GET. 3,706,536,768 bytes (3.452 GiB). `CPHD/1.1.0`, `CI4`, FX, `SGN` +1, `AmpSF` present, `STRIPMAP` / VV / right-looking. 159,051 vectors × 5,760 samples. TxTime dwell **15.766 s** at 10,088.1 Hz PRF. IARP 32.8423°N, 115.5275°W (HAE 10 m) — Imperial Valley, California. Graze 73.11 deg, slant 616.8 km, FxC 9.650 GHz, bandwidth 200 MHz. `SC0` 9,550,000,277.42 Hz and `SCSS` 34,722.221 Hz both constant. `SRPFixed=false`: SRP travels 103.8 km (platform 113.8 km at 7,217 m/s). Ground-range swath ≈ 10.3 km. Fields and canals; a ~10:1 strip. `nvec` only divides evenly by 3; the demo drops one vector (`pulse_range: [0, 159050)`) for ten ~10.4 × 10.3 km tiles.
+
+The demo pulls the file whole (no subsetter): `python3 applications/sar_formation/pull_cphd.py --mode 3 --dest /tmp/sar/imperial`. `--mode 4` is the same key and dest. Tiles are IA-aligned ROIs of a parent SRP × swath lattice (along-track on `v`); `lattice.max_side` caps each tile, not the parent; `TileMosaicOp` holds finished squares. Taylor `range_window` / `aperture_window`; `weight` wired. Palmdale/Rosamond is not this YAML.
+
+## Mode 4 — Imperial Valley stripmap (continuous strip)
+
+Same file as mode 3 (pinned so open item 3 closed once; the mode-4 YAML waits on scroll). Formation will set `geometry_change = scroll` on the parent lattice; LUT + Holoviz stay the strip window. No blit — `BP.image` is already the parent.
+
+## Palmdale / Rosamond — optional CPHD 1.0.1 spare
+
+Not `mode03.yaml`. Same bucket, key:
+
+```text
+data/2021/7/27/CAPELLA_C02_SM_CPHD_HH_20210727210317_20210727210321/CAPELLA_C02_SM_CPHD_HH_20210727210317_20210727210321.cphd
+```
+
+738,094,880 bytes (703.9 MiB). `CPHD/1.0.1`, `CI4`, FX domain, `SGN` +1, `AmpSF` present, `STRIPMAP` / HH / right-looking. 43,746 vectors × 4,148 samples; signal block 692.2 MiB. TxTime dwell **4.265 s** at 10,257.1 Hz PRF. IARP 34.7988°N, 118.0771°W (HAE 657 m), labeled Palmdale; the SRP track is Rosamond (~1.4 km), Plant 42 / Palmdale Airport 15–19 km off-swath. Graze 52.26 deg, slant 664.9 km, FxC 9.650 GHz, bandwidth 100 MHz. `SRPFixed=false`: SRP travels 23.76 km. Kept as a small CPHD 1.0.1 + `CI4` + `AmpSF` spare; the live tiled-strip demo is Imperial Valley.
+
 ## The offline reference path, and what it is not
 
 The MatX `sar_bp` example was used to form every frame described above: a `.sarbp` file per frame, written directly from the range-read subband, formed at 34 ms per 2048 x 2048 frame (440 Gbp/s, `fltflt` precision, `pixel-z zero`, RTX PRO 6000 Blackwell).
@@ -165,5 +191,5 @@ Tracked here rather than in [TEAM_BLOCKED.md](TEAM_BLOCKED.md), since none needs
 
 1. **Recipe / geometry source of truth.** A recipe names a collection, a subband, a window and a grid. Whether the grid is declared in the recipe or derived from the collection's own geometry decides whether a recipe is portable between collections.
 2. **Demo numeric budgets for the simulator path.** The image-derived scene needs a reflector cap chosen against measured generation time, the same way the Houston budget above was measured rather than assumed.
-3. **The two Capella keys need re-verifying and transcribing** into the recipes, with header probes recorded as for the two Umbra collections.
+3. **The two Capella keys — closed 2026-08-30.** Palmdale (1.0.1 spare) and Imperial Valley (modes 3 and 4) re-probed over range-GET (ASCII header, XML, first/last PVP `TxTime` / `SRPPos` / `SC0` / `SCSS`) and transcribed above. Size and TxTime dwell match the original survey (~704 MiB / ~4.3 s, ~3.45 GiB / ~15.8 s). The live tiled-strip demo is Imperial Valley.
 4. **Fixture regeneration determinism.** With the simulator in-repo the bit-for-bit requirement loses its original justification, but CI still wants a generated fixture to be stable across platforms; what "stable enough" means is unsettled.

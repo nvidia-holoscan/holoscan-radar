@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Mode-3 demo: tiled strip of Imperial Valley Capella stripmap
+# (INPUT_DATA.md). Same collect as mode 4; mode 3 steps geometry
+# and resets (seams), a parent mosaic holds finished squares so
+# Holoviz is the strip, not the last chip. Pull first (~3.45 GiB);
+# the app never reaches the network.
+#
+#   python3 applications/sar_formation/pull_cphd.py --mode 3 \
+#     --dest /tmp/sar/imperial
+#   ./build/applications/sar_formation/cpp/sar_formation mode03.yaml
+#
+# nvec 159051 does not divide by 10; pulse_range drops the last
+# vector so ten tiles of 15905 pulses (~10.4 × 10.3 km). Parent
+# lattice is SRP × range swath on uIAX/uIAY, along-track on v;
+# lattice.max_side caps each tile's longer axis (range-Nyquist
+# ~4k on a ~10 km square; the parent is ten of those along v).
+# Block aperture: max_aperture_pulses 0 with
+# emit_interval = tile length is the stamped-window row
+# (aperture_window is illegal when max > 0). Taylor on range and
+# azimuth; weight wired. pulses_per_tick 3181 divides the tile
+# (five ticks). playback_rate 0.5 so each square sits ~3 s.
+# nfft_pad: next_fast. loop wraps until SIGINT; wrap restages
+# tile 0 and clears the mosaic. visualize_size is the no-DISPLAY
+# fallback; with X11 the Holoviz window fills the work area on
+# the long axis (full desktop width for this strip).
+
+cphd:
+  path: /tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
+  names:
+    - Imperial Valley
+  sidecar: ""
+
+lattice:
+  tiles: 10
+  max_side: 4096
+
+cphd_reader:
+  coordinate_frame: ecef
+  pulse_range: [0, 159050]
+  pulses_per_tick: 3181
+  loop: true
+  playback_rate: 0.5
+  duty_cycle: 1
+
+nfft_pad: next_fast
+
+aperture_manager:
+  max_aperture_pulses: 0
+  emit_interval_pulses: 15905
+  emit_mode: reset
+  aperture_window: taylor
+
+range_compression:
+  range_window: taylor
+
+backprojection:
+  coordinate_frame: ecef
+
+visualize: true
+visualize_size: 1400
+skip_display_check: false
+headless: false
+visualize_hold_s: -1

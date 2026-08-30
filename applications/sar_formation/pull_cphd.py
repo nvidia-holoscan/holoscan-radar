@@ -2,13 +2,20 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Download the six mode-5 Umbra SNAPSHOT CPHDs (INPUT_DATA.md).
+"""Download the pinned public CPHDs for sar_formation (INPUT_DATA.md).
 
-The app reads only local files. This script pulls the settled catalog
-set over HTTPS (or ``aws s3 --no-sign-request`` when available), skips
-files already present, and refuses the set if two IARPs collide — the
-check reads each file's CPHD XML, not the folder name.
+The app reads only local files. This script pulls over HTTPS (or
+``aws s3 --no-sign-request`` when available) and skips files already
+present.
 
+Mode 5 (default) is the six unique-IARP Umbra SNAPSHOTs and
+refuses the set if two IARPs collide — the check reads each
+file's CPHD XML, not the folder name.
+
+Mode 3 is the Imperial Valley Capella stripmap (same key as
+mode 4); mode 4 is the later scroll YAML.
+
+python3 applications/sar_formation/pull_cphd.py --mode 3 --dest /tmp/sar/imperial
 python3 applications/sar_formation/pull_cphd.py --dest /tmp/sar/mode5
 """
 
@@ -24,11 +31,14 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-BUCKET = "umbra-open-data-catalog"
-HTTPS_PREFIX = f"https://{BUCKET}.s3.us-west-2.amazonaws.com/"
+UMBRA_BUCKET = "umbra-open-data-catalog"
+UMBRA_HTTPS = f"https://{UMBRA_BUCKET}.s3.us-west-2.amazonaws.com/"
+CAPELLA_BUCKET = "capella-open-data"
+# STAC asset hrefs use this host; us-west-2 also serves the bucket.
+CAPELLA_HTTPS = f"https://{CAPELLA_BUCKET}.s3.amazonaws.com/"
 
 # Settled 2026-08-25. A swap needs a broken key or an explicit reopen.
-COLLECTS: list[tuple[str, str]] = [
+MODE5: list[tuple[str, str]] = [
     (
         "Panama Canal",
         "sar-data/tasks/Panama Canal, Panama/"
@@ -72,6 +82,25 @@ COLLECTS: list[tuple[str, str]] = [
         "2023-10-11-02-20-47_UMBRA-05_CPHD.cphd",
     ),
 ]
+
+# Re-verified 2026-08-30. INPUT_DATA.md open item 3.
+# Modes 3 and 4 share Imperial Valley. Palmdale stays in
+# INPUT_DATA as an optional CPHD 1.0.1 spare, not this pin.
+IMPERIAL_VALLEY: list[tuple[str, str]] = [
+    (
+        "Imperial Valley",
+        "data/2024/11/29/"
+        "CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602/"
+        "CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd",
+    ),
+]
+
+# mode -> (bucket, https prefix, collects, default dest, iarp check)
+MODES: dict[str, tuple[str, str, list[tuple[str, str]], str, bool]] = {
+    "3": (CAPELLA_BUCKET, CAPELLA_HTTPS, IMPERIAL_VALLEY, "/tmp/sar/imperial", False),
+    "4": (CAPELLA_BUCKET, CAPELLA_HTTPS, IMPERIAL_VALLEY, "/tmp/sar/imperial", False),
+    "5": (UMBRA_BUCKET, UMBRA_HTTPS, MODE5, "/tmp/sar/mode5", True),
+}
 
 # Two IARPs closer than this are the same scene (Ohio's second plant
 # cluster is ~10 km west; 1 km catches a duplicate of one collect).
@@ -161,14 +190,12 @@ def iarp_llh(path: Path) -> tuple[float, float, float] | None:
     return float(lat.text), float(lon.text), float(hae.text)
 
 
-def distance_m(
-    a: tuple[float, float, float], b: tuple[float, float, float]
-) -> float:
+def distance_m(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 
-def https_url(key: str) -> str:
-    return HTTPS_PREFIX + urllib.parse.quote(key, safe="/")
+def https_url(https_prefix: str, key: str) -> str:
+    return https_prefix + urllib.parse.quote(key, safe="/")
 
 
 def cphd_readable(path: Path) -> bool:
@@ -186,9 +213,10 @@ def download_https(url: str, dest: Path) -> None:
         partial.unlink()
     print(f"GET {url}")
     try:
-        with urllib.request.urlopen(
-            url, timeout=HTTPS_TIMEOUT_S
-        ) as response, partial.open("wb") as out:
+        with (
+            urllib.request.urlopen(url, timeout=HTTPS_TIMEOUT_S) as response,
+            partial.open("wb") as out,
+        ):
             shutil.copyfileobj(response, out)
         partial.replace(dest)
     except BaseException:
@@ -197,12 +225,12 @@ def download_https(url: str, dest: Path) -> None:
         raise
 
 
-def download_aws(key: str, dest: Path) -> None:
+def download_aws(bucket: str, key: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     partial = dest.with_suffix(dest.suffix + ".part")
     if partial.exists():
         partial.unlink()
-    uri = f"s3://{BUCKET}/{key}"
+    uri = f"s3://{bucket}/{key}"
     print(f"aws s3 cp {uri}")
     try:
         subprocess.run(
@@ -216,7 +244,14 @@ def download_aws(key: str, dest: Path) -> None:
         raise
 
 
-def pull_one(scene: str, key: str, dest_dir: Path, force: bool) -> Path:
+def pull_one(
+    scene: str,
+    key: str,
+    dest_dir: Path,
+    force: bool,
+    bucket: str,
+    https_prefix: str,
+) -> Path:
     dest = dest_dir / Path(key).name
     if dest.is_file() and not force:
         if cphd_readable(dest):
@@ -227,11 +262,11 @@ def pull_one(scene: str, key: str, dest_dir: Path, force: bool) -> Path:
     aws = shutil.which("aws")
     if aws is not None:
         try:
-            download_aws(key, dest)
+            download_aws(bucket, key, dest)
             return dest
         except (subprocess.CalledProcessError, OSError) as exc:
             print(f"aws s3 failed ({exc}); falling back to HTTPS")
-    download_https(https_url(key), dest)
+    download_https(https_url(https_prefix, key), dest)
     return dest
 
 
@@ -243,10 +278,7 @@ def refuse_colliding_iarps(files: list[tuple[str, Path]]) -> None:
         if llh is None:
             print(f"  {scene}: IARP ECEF {ecef}")
         else:
-            print(
-                f"  {scene}: IARP {llh[0]:.4f}°, {llh[1]:.4f}°  "
-                f"HAE {llh[2]:.1f} m"
-            )
+            print(f"  {scene}: IARP {llh[0]:.4f}°, {llh[1]:.4f}°  " f"HAE {llh[2]:.1f} m")
         parsed.append((scene, ecef))
     for i, (scene_a, ecef_a) in enumerate(parsed):
         for scene_b, ecef_b in parsed[i + 1 :]:
@@ -261,10 +293,16 @@ def refuse_colliding_iarps(files: list[tuple[str, Path]]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
+        "--mode",
+        choices=sorted(MODES),
+        default="5",
+        help="3/4 Imperial Valley stripmap, 5 Umbra SNAPSHOTs",
+    )
+    parser.add_argument(
         "--dest",
         type=Path,
-        default=Path("/tmp/sar/mode5"),
-        help="directory to write the six CPHD files into",
+        default=None,
+        help="directory to write CPHD files into (default /tmp/sar/modeN)",
     )
     parser.add_argument(
         "--force",
@@ -272,16 +310,30 @@ def main() -> int:
         help="re-download files that already exist",
     )
     args = parser.parse_args()
-    dest_dir: Path = args.dest
+    bucket, https_prefix, collects, dest_default, check_iarp = MODES[args.mode]
+    dest_dir: Path = args.dest if args.dest is not None else Path(dest_default)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     pulled: list[tuple[str, Path]] = []
-    for scene, key in COLLECTS:
-        pulled.append((scene, pull_one(scene, key, dest_dir, args.force)))
+    for scene, key in collects:
+        pulled.append(
+            (
+                scene,
+                pull_one(scene, key, dest_dir, args.force, bucket, https_prefix),
+            )
+        )
 
-    print("checking IARPs (must be unique)…")
-    refuse_colliding_iarps(pulled)
-    print(f"mode-5 set ready in {dest_dir}")
+    if check_iarp:
+        print("checking IARPs (must be unique)…")
+        refuse_colliding_iarps(pulled)
+    else:
+        for scene, path in pulled:
+            llh = iarp_llh(path)
+            if llh is None:
+                print(f"  {scene}: {path.name}")
+            else:
+                print(f"  {scene}: IARP {llh[0]:.4f}°, {llh[1]:.4f}°  " f"HAE {llh[2]:.1f} m")
+    print(f"mode-{args.mode} set ready in {dest_dir}")
     return 0
 
 

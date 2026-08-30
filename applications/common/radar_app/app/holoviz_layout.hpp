@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -145,10 +146,14 @@ inline std::shared_ptr<holoscan::ops::HolovizOp> make_rd_holoviz_op(
 // this GLFW surface only offers SrgbNonlinear (`No framebuffer
 // format found which supports the requirements pass_through`).
 // Inverse-sRGB on the LUT overshot (too dark vs the PNG).
+// Optional `on_window_size`: same as make_color_holoviz_op
+// (place the window after GLFW maps it).
 inline std::shared_ptr<holoscan::ops::HolovizOp> make_image_holoviz_op(
     holoscan::Fragment* fragment, const std::string& name,
     const HolovizLayout& layout, const std::string& layer_name,
-    const std::vector<std::vector<float>>& color_lut) {
+    const std::vector<std::vector<float>>& color_lut,
+    holoscan::ops::HolovizOp::WindowSizeCallbackFunction
+        on_window_size = {}) {
   using InputSpec = holoscan::ops::HolovizOp::InputSpec;
   using InputType = holoscan::ops::HolovizOp::InputType;
   using ImageFormat = holoscan::ops::HolovizOp::ImageFormat;
@@ -156,39 +161,51 @@ inline std::shared_ptr<holoscan::ops::HolovizOp> make_image_holoviz_op(
   InputSpec spec(layer_name, InputType::COLOR_LUT);
   spec.image_format_ = ImageFormat::R8_UINT;
   specs.push_back(spec);
-  // Scene name / formed size / BP timing, plus mode-2 playback
-  // lag, rasterized by SarImageToLutOp (Holoviz TEXT strings
-  // are compose-time).
+  // Scene name / formed size / BP timing. Views are overlay-canvas
+  // pixels over the window so a landscape strip does not stretch
+  // the glyphs (0.55 x 0.15 of a 1920x201 window did).
   InputSpec label("size_label", InputType::COLOR);
   label.image_format_ = ImageFormat::R8G8B8A8_UNORM;
   label.priority_ = 1;
+  const float win_w =
+      static_cast<float>(std::max(layout.width, uint32_t{1}));
+  const float win_h =
+      static_cast<float>(std::max(layout.height, uint32_t{1}));
+  constexpr float kPad = 0.015F;
   InputSpec::View banner;
-  banner.offset_x_ = 0.015F;
-  banner.offset_y_ = 0.015F;
-  banner.width_ = 0.55F;
-  banner.height_ = 0.15F;
+  banner.offset_x_ = kPad;
+  banner.offset_y_ = kPad;
+  banner.width_ = static_cast<float>(kSarOverlayWidth) / win_w;
+  banner.height_ = static_cast<float>(kSarOverlayHeight) / win_h;
   label.views_ = {banner};
   specs.push_back(label);
-  // N-up compass; arrow toward the mean APC (same axes as the
-  // image: row 0 = north, col 0 = west). Bottom-right so it
-  // does not cover the size_label banner.
+  // N-up compass (true ENU). The formed-image chevron is raster
+  // u/v, drawn on the COLOR_LUT layer. Bottom-right so it does
+  // not cover the size_label banner. Square in window pixels.
   InputSpec look("apc_look", InputType::COLOR);
   look.image_format_ = ImageFormat::R8G8B8A8_UNORM;
   look.priority_ = 1;
+  const float cpx = static_cast<float>(kSarCompassSide);
   InputSpec::View compass;
-  compass.offset_x_ = 0.835F;
-  compass.offset_y_ = 0.835F;
-  compass.width_ = 0.15F;
-  compass.height_ = 0.15F;
+  compass.width_ = cpx / win_w;
+  compass.height_ = cpx / win_h;
+  compass.offset_x_ = 1.0F - kPad - compass.width_;
+  compass.offset_y_ = 1.0F - kPad - compass.height_;
   look.views_ = {compass};
   specs.push_back(look);
+  holoscan::ArgList args;
+  args.add(holoscan::Arg("tensors", specs));
+  args.add(holoscan::Arg("color_lut", color_lut));
+  args.add(holoscan::Arg("window_title", layout.window_title));
+  args.add(holoscan::Arg("width", layout.width));
+  args.add(holoscan::Arg("height", layout.height));
+  args.add(holoscan::Arg("headless", layout.headless));
+  if (on_window_size) {
+    args.add(holoscan::Arg("window_size_callback",
+                           std::move(on_window_size)));
+  }
   return fragment->make_operator<holoscan::ops::HolovizOp>(
-      name, holoscan::Arg("tensors", specs),
-      holoscan::Arg("color_lut", color_lut),
-      holoscan::Arg("window_title", layout.window_title),
-      holoscan::Arg("width", layout.width),
-      holoscan::Arg("height", layout.height),
-      holoscan::Arg("headless", layout.headless));
+      name, args);
 }
 
 // Full-window RGBA image (no LUT). Optional `on_window_size`:

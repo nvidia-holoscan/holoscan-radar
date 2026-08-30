@@ -59,15 +59,32 @@ __global__ void box_average_kernel(const float* in, float* out,
     return;
   }
   float sum = 0.0F;
+  int n = 0;
   for (int64_t dy = 0; dy < factor; ++dy) {
     const int64_t iy = y * factor + dy;
     for (int64_t dx = 0; dx < factor; ++dx) {
       const int64_t ix = x * factor + dx;
-      sum += in[iy * in_u + ix];
+      const float v = in[iy * in_u + ix];
+      if (isfinite(v) && v > 0.0F) {
+        sum += v;
+        ++n;
+      }
     }
   }
   out[y * out_u + x] =
-      sum / static_cast<float>(factor * factor);
+      n > 0 ? sum / static_cast<float>(n) : 0.0F;
+}
+
+__global__ void transpose_kernel(const float* in, float* out,
+                                 int64_t in_v, int64_t in_u) {
+  const int64_t x = static_cast<int64_t>(blockIdx.x) * blockDim.x +
+                    threadIdx.x;
+  const int64_t y = static_cast<int64_t>(blockIdx.y) * blockDim.y +
+                    threadIdx.y;
+  if (x >= in_u || y >= in_v) {
+    return;
+  }
+  out[x * in_v + y] = in[y * in_u + x];
 }
 
 __global__ void apply_lut_kernel(const float* mag, std::uint8_t* out,
@@ -131,6 +148,18 @@ void sar_image_box_average(const float* in, float* out, int64_t in_v,
       static_cast<unsigned int>((out_v + kBy - 1) / kBy));
   box_average_kernel<<<grid, block, 0, stream>>>(in, out, in_u,
                                                  factor, out_v, out_u);
+}
+
+void sar_image_transpose(const float* in, float* out, int64_t in_v,
+                         int64_t in_u, cudaStream_t stream) {
+  constexpr int kBx = 16;
+  constexpr int kBy = 16;
+  const dim3 block(kBx, kBy);
+  const dim3 grid(
+      static_cast<unsigned int>((in_u + kBx - 1) / kBx),
+      static_cast<unsigned int>((in_v + kBy - 1) / kBy));
+  transpose_kernel<<<grid, block, 0, stream>>>(in, out, in_v,
+                                               in_u);
 }
 
 cudaError_t sar_image_percentiles(const float* in, size_t count,

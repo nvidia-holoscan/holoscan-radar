@@ -1041,12 +1041,13 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
                      stream);
   }
 
-  // Last pulse packet is in the graph. EventBased may form during
-  // the H2D wait and playback sleep below; the overlay subtracts
-  // this from BackprojectionOp's emit time.
-  if (is_final) {
-    publish_last_packet_at(std::chrono::steady_clock::now());
-  }
+  // Last pulse packet is in the graph (this tick, not only the
+  // collection's final batch). EventBased may form during the H2D
+  // wait and playback sleep below; the overlay subtracts this from
+  // BackprojectionOp's emit time. Publishing only on is_final made
+  // tiled-strip latency climb after wrap (stale end-of-collect
+  // stamp vs each tile's last pulse).
+  publish_last_packet_at(std::chrono::steady_clock::now());
 
   // Locals (positions, axis, times) back the small copies; wait so they
   // stay alive for the DMA. Pinned scratch (and integer-path history,

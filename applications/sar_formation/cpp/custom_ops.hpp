@@ -2,19 +2,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // App-owned operators for the formation demo: the Holoviz rasterizer /
-// hold pair, NVRadar-parity diagnostics, and
-// CollectionBoundaryStagerOp.
-// ApertureManagerOp (library) drives BackprojectionOp.control; this
-// stager is the leftover app path for mode 5's live lattice / dr / f0
-// (the manager stages sample_geometry; range_bin_spacing and
+// hold pair, NVRadar-parity diagnostics,
+// CollectionBoundaryStagerOp, TileGeometryStagerOp, and
+// TileMosaicOp.
+// ApertureManagerOp (library) drives BackprojectionOp.control; these
+// stagers are the leftover app path for live lattice (the manager
+// stages sample_geometry; range_bin_spacing and
 // reference_frequency are not manager ports).
 //
-// CollectionBoundaryStagerOp sits on the range_profiles edge so its
-// sample_geometry emit is queued with the profiles the manager waits
-// on — one producer, one tick, no race against a non-blocking live
-// port. It watches the reader's D22 announcement (forwarded through
-// range compression) and on collection_boundary forwards the next
-// collect's lattice into the manager and dr / f0 into formation.
+// Both sit on the range_profiles edge so sample_geometry is queued
+// with the profiles the manager waits on — one producer, one tick,
+// no race against a non-blocking live port.
+// CollectionBoundaryStagerOp: mode 5, on collection_boundary, also
+// restages dr / f0 into formation.
+// TileGeometryStagerOp: mode 3, on the tile pulse cadence (and on
+// a looping wrap so the first tile's lattice returns).
+// TileMosaicOp: mode 3 parent hold. BP reset emits one tile;
+// this blits it into a persistent parent so Holoviz shows the
+// strip. Mode 4 will not use it (scroll already is the parent).
 
 #pragma once
 
@@ -98,6 +103,294 @@ class CollectionBoundaryStagerOp : public holoscan::Operator {
 
  private:
   size_t boundary_count_{0};
+};
+
+// Mode 3: emit the next tile's SampleGeometry on the tick that
+// closes the current tile (pulse count crosses k * tile_pulses).
+// The manager holds it and forwards it with emit-and-reset.
+// geometries[0] is the BP parameter (first tile); this operator
+// emits geometries[1..] and, when loop is set, geometries[0] on
+// wrap so the next pass is not formed on the last tile's lattice.
+class TileGeometryStagerOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(TileGeometryStagerOp)
+  TileGeometryStagerOp() = default;
+
+  std::vector<radar::SampleGeometry> geometries;
+  int64_t tile_pulses{0};
+  bool loop{false};
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::TensorMap>("range_profiles");
+    spec.output<holoscan::TensorMap>("range_profiles");
+    spec.output<radar::SampleGeometry>("sample_geometry")
+        .condition(holoscan::ConditionType::kNone);
+  }
+
+  void start() override {
+    if (geometries.size() < 2) {
+      throw std::invalid_argument(
+          "TileGeometryStagerOp: need at least two tile "
+          "geometries");
+    }
+    if (tile_pulses < 1) {
+      throw std::invalid_argument(
+          "TileGeometryStagerOp: tile_pulses must be >= 1");
+    }
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               holoscan::OutputContext& op_output,
+               holoscan::ExecutionContext&) override {
+    auto profiles = radar::receive_single(
+        op_input, "range_profiles", "TileGeometryStagerOp");
+    radar::emit_single(op_output, "range_profiles", profiles);
+    const radar::BatchedShape cube = radar::collapse_batch(
+        *profiles, "range_profiles");
+    const int64_t np = cube.rows;
+    const int64_t start = pulses_seen_;
+    pulses_seen_ += np;
+
+    const std::string boundary = metadata()->get<std::string>(
+        radar::kStreamBoundaryKey, std::string());
+    const bool wrap =
+        loop && boundary == radar::kStreamBoundaryCollection;
+
+    // At most one sample_geometry emit per tick (live override
+    // is a single pending slot on the manager).
+    std::optional<size_t> geom_idx;
+    const size_t n = geometries.size();
+    for (size_t k = 1; k < n; ++k) {
+      const int64_t edge =
+          static_cast<int64_t>(k) * tile_pulses;
+      if (start < edge && pulses_seen_ >= edge) {
+        geom_idx = k;
+      }
+    }
+    const int64_t end_edge =
+        static_cast<int64_t>(n) * tile_pulses;
+    if (loop && start < end_edge && pulses_seen_ >= end_edge) {
+      geom_idx = 0;
+    }
+    if (wrap) {
+      geom_idx = 0;
+    }
+    if (geom_idx.has_value()) {
+      op_output.emit(geometries[*geom_idx], "sample_geometry");
+    }
+    if (wrap) {
+      pulses_seen_ = 0;
+    }
+  }
+
+ private:
+  int64_t pulses_seen_{0};
+};
+
+// Mode 3 parent hold. Each BP emit is one tile (reset drops the
+// previous square from BP.image). Blit tile k into its ROI on a
+// persistent parent; loop wrap (tile 0 after tile n-1) clears
+// first. LUT / Holoviz / optional dump consume the parent.
+class TileMosaicOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(TileMosaicOp)
+  TileMosaicOp() = default;
+
+  radar::SampleGeometry parent;
+  std::vector<radar::SampleGeometry> tiles;
+  bool loop{false};
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::TensorMap>("image");
+    spec.output<holoscan::TensorMap>("image");
+  }
+
+  void start() override {
+    if (!parent.is_valid()) {
+      throw std::invalid_argument(
+          "TileMosaicOp: parent SampleGeometry is empty");
+    }
+    if (tiles.size() < 2) {
+      throw std::invalid_argument(
+          "TileMosaicOp: need at least two tile geometries");
+    }
+    rois_.resize(tiles.size());
+    for (size_t k = 0; k < tiles.size(); ++k) {
+      rois_[k] = roi_from_geometries(parent, tiles[k]);
+    }
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               holoscan::OutputContext& op_output,
+               holoscan::ExecutionContext&) override {
+    const char* who = "TileMosaicOp";
+    auto image = radar::receive_single(op_input, "image", who);
+    radar::require_contiguous(*image, "image", who);
+    radar::require_cuda_accessible(*image, "image", who);
+    const auto shape = image->shape();
+    if (shape.size() != 2) {
+      throw std::invalid_argument(
+          std::string(who) + ": image must be rank-2");
+    }
+    const auto dtype = image->dtype();
+    const size_t elem =
+        (static_cast<size_t>(dtype.bits) + 7) / 8 *
+        static_cast<size_t>(dtype.lanes);
+    cudaStream_t stream = op_input.receive_cuda_stream("image");
+
+    const int64_t pv = parent.num_v();
+    const int64_t pu = parent.num_u();
+    if (!canvas_) {
+      canvas_ = radar::make_device_tensor({pv, pu}, dtype);
+      const size_t bytes =
+          static_cast<size_t>(pv) * static_cast<size_t>(pu) *
+          elem;
+      const auto err = cudaMemsetAsync(canvas_->data(), 0,
+                                       bytes, stream);
+      if (err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string(who) + ": canvas memset failed: " +
+            cudaGetErrorString(err));
+      }
+      dtype_ = dtype;
+    } else if (dtype.code != dtype_.code ||
+               dtype.bits != dtype_.bits ||
+               dtype.lanes != dtype_.lanes) {
+      throw std::invalid_argument(
+          std::string(who) + ": image dtype changed mid-run");
+    }
+
+    const size_t n = tiles.size();
+    if (loop && tile_index_ == 0 && emitted_ > 0) {
+      const size_t bytes =
+          static_cast<size_t>(pv) * static_cast<size_t>(pu) *
+          elem;
+      const auto err = cudaMemsetAsync(canvas_->data(), 0,
+                                       bytes, stream);
+      if (err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string(who) + ": wrap clear failed: " +
+            cudaGetErrorString(err));
+      }
+      HOLOSCAN_LOG_INFO("{}: cleared parent on wrap", who);
+    }
+    const Roi& roi = rois_[tile_index_];
+    if (shape[0] != roi.nv || shape[1] != roi.nu) {
+      throw std::invalid_argument(
+          std::string(who) + ": tile " +
+          std::to_string(tile_index_) + " is " +
+          std::to_string(shape[0]) + "x" +
+          std::to_string(shape[1]) + ", ROI is " +
+          std::to_string(roi.nv) + "x" +
+          std::to_string(roi.nu));
+    }
+    auto* dst = static_cast<char*>(canvas_->data());
+    dst += (static_cast<size_t>(roi.v0) *
+                static_cast<size_t>(pu) +
+            static_cast<size_t>(roi.u0)) *
+           elem;
+    const size_t dpitch = static_cast<size_t>(pu) * elem;
+    const size_t spitch = static_cast<size_t>(roi.nu) * elem;
+    const auto copy_err = cudaMemcpy2DAsync(
+        dst, dpitch, image->data(), spitch, spitch,
+        static_cast<size_t>(roi.nv), cudaMemcpyDeviceToDevice,
+        stream);
+    if (copy_err != cudaSuccess) {
+      throw std::runtime_error(
+          std::string(who) + ": blit failed: " +
+          cudaGetErrorString(copy_err));
+    }
+    HOLOSCAN_LOG_INFO(
+        "{}: tile {} / {} at v={} u={} ({}x{}) into "
+        "{}x{}",
+        who, tile_index_ + 1, n, roi.v0, roi.u0, roi.nv,
+        roi.nu, pv, pu);
+
+    auto out = radar::make_device_tensor({pv, pu}, dtype);
+    const size_t bytes =
+        static_cast<size_t>(pv) * static_cast<size_t>(pu) * elem;
+    const auto out_err = cudaMemcpyAsync(
+        out->data(), canvas_->data(), bytes,
+        cudaMemcpyDeviceToDevice, stream);
+    if (out_err != cudaSuccess) {
+      throw std::runtime_error(
+          std::string(who) + ": parent copy failed: " +
+          cudaGetErrorString(out_err));
+    }
+    if (stream != cudaStreamDefault) {
+      op_output.set_cuda_stream(stream, "image");
+    }
+    radar::emit_single(op_output, "image", out);
+    ++emitted_;
+    tile_index_ = (tile_index_ + 1) % n;
+  }
+
+ private:
+  struct Roi {
+    int64_t v0{0};
+    int64_t u0{0};
+    int64_t nv{0};
+    int64_t nu{0};
+  };
+
+  static Roi roi_from_geometries(const radar::SampleGeometry& par,
+                                 const radar::SampleGeometry& tile) {
+    const auto& po = par.origin();
+    const auto& to = tile.origin();
+    const double d0 = to[0] - po[0];
+    const double d1 = to[1] - po[1];
+    const double d2 = to[2] - po[2];
+    const auto& av = par.axis_v();
+    const auto& au = par.axis_u();
+    const double dv =
+        (d0 * av[0] + d1 * av[1] + d2 * av[2]) /
+        par.spacing()[0];
+    const double du =
+        (d0 * au[0] + d1 * au[1] + d2 * au[2]) /
+        par.spacing()[1];
+    Roi roi;
+    roi.v0 = static_cast<int64_t>(std::llround(dv));
+    roi.u0 = static_cast<int64_t>(std::llround(du));
+    roi.nv = tile.num_v();
+    roi.nu = tile.num_u();
+    if (std::abs(dv - static_cast<double>(roi.v0)) > 0.25 ||
+        std::abs(du - static_cast<double>(roi.u0)) > 0.25) {
+      throw std::invalid_argument(
+          "TileMosaicOp: tile origin is not on the parent "
+          "lattice");
+    }
+    if (roi.v0 < 0 || roi.u0 < 0 ||
+        roi.v0 + roi.nv > par.num_v() ||
+        roi.u0 + roi.nu > par.num_u()) {
+      throw std::invalid_argument(
+          "TileMosaicOp: tile ROI is outside the parent");
+    }
+    return roi;
+  }
+
+  std::vector<Roi> rois_;
+  std::shared_ptr<holoscan::Tensor> canvas_;
+  DLDataType dtype_{};
+  size_t tile_index_{0};
+  int64_t emitted_{0};
+};
+
+// Drain TileMosaicOp when neither Holoviz nor dump is wired, so
+// smoke (visualize: false, dump: false) still ticks the blit.
+class DiscardImageOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(DiscardImageOp)
+  DiscardImageOp() = default;
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::TensorMap>("image");
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               holoscan::OutputContext&,
+               holoscan::ExecutionContext&) override {
+    (void)radar::receive_single(op_input, "image", "DiscardImageOp");
+  }
 };
 
 // Diagnostic: rotate reader ECEF positions / SRP into scene ENU at a
@@ -434,12 +727,18 @@ class SarImageToLutOp : public holoscan::Operator {
     double bp_compute_s{0.0};
     int64_t pulses{0};
     int64_t pixels{0};
+    int64_t bp_num_v{0};
+    int64_t bp_num_u{0};
     std::optional<std::chrono::steady_clock::time_point> emit_at;
     std::optional<std::chrono::steady_clock::time_point> last_packet_at;
     radar::PlaybackStatus playback;
     bool apc_valid{false};
-    double apc_east{0.0};
-    double apc_north{0.0};
+    // Chevron: metres along lattice axis_u / axis_v (raster).
+    double raster_u{0.0};
+    double raster_v{0.0};
+    // Compass: true ENU at the lattice centre.
+    double compass_east{0.0};
+    double compass_north{0.0};
   };
   std::function<FormationDiag()> formation_diag;
   std::vector<std::string> scene_names;
@@ -462,9 +761,9 @@ class SarImageToLutOp : public holoscan::Operator {
 };
 
 // Scrolling wall-clock Gantt: per-collect dwell bars, duty-cycle
-// quiet, image-emit ticks with last-packet latency, and (mode 2
-// only) collect-vs-wall lag. Source: PeriodicCondition 100 ms,
-// no data input. Polls CPHDReaderOp::timeline_spans,
+// quiet, image-emit ticks with last-packet→image latency, and
+// (mode 2 only) collect-vs-wall lag. Source: PeriodicCondition
+// 100 ms, no data input. Polls CPHDReaderOp::timeline_spans,
 // last_packet_at, playback_status, and BP emit_at.
 // compute() is in timeline.cpp.
 class TimelineRasterOp : public holoscan::Operator {

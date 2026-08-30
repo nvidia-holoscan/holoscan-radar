@@ -1,13 +1,15 @@
 # SAR formation
 
 Mode-1 spotlight: one collection, one image, shown in Holoviz when
-`visualize: true`. Mode 2 is video SAR (sliding window). Mode 5 is
-N independent images. `dump: true` writes a `.npy`
-(off by default); that dump is the offline PNG checkpoint
+`visualize: true`. Mode 2 is video SAR (sliding window). Mode 3 is
+a tiled strip (one file, app-stepped lattices, parent mosaic).
+Mode 5 is N independent images. `dump: true` writes a `.npy` (off
+by default); that dump is the offline PNG checkpoint
 (`tools/sar_image/form_image.py`).
 
 ```text
 CPHDReaderOp → SARRangeCompressionOp → ApertureManagerOp → BackprojectionOp
+                                              [→ TileMosaicOp]
                                               [→ TensorDumpOp]
                                               [→ SarImageToLutOp → HoldLastImageOp → HolovizOp]
                                               [→ TimelineRasterOp → HolovizOp]
@@ -16,14 +18,20 @@ reader.positions / reference_position ─────────────▲
 
 Modes 1 and 5 wire `ApertureManagerOp` with `max_aperture_pulses: 0`,
 `emit_interval_pulses: 0`, `emit_mode: reset` (one image per
-collection, no retention). `weight` stays unconnected (all `+1`).
-Mode 2 retains a sliding window (`max_aperture_pulses > 0`,
-`emit_mode: continue`) and wires `manager.weight` so eviction is
-`−1`. Mode 5 inserts `CollectionBoundaryStagerOp` on the
-`range_profiles` edge so the next lattice is staged into the
-manager on `collection_boundary`, and `range_bin_spacing` /
-`reference_frequency` still go straight to `BackprojectionOp`
-(those are not manager ports).
+collection, no retention). Mode 3 is the stamped block-aperture
+row: `max_aperture_pulses: 0`, `emit_interval` equal to one tile,
+Taylor `aperture_window`, `weight` wired. Mode 2 retains a sliding
+window (`max_aperture_pulses > 0`, `emit_mode: continue`) and
+wires `manager.weight` so eviction is `−1`. Mode 5 inserts
+`CollectionBoundaryStagerOp` on the `range_profiles` edge so the
+next lattice is staged into the manager on `collection_boundary`,
+and `range_bin_spacing` / `reference_frequency` still go straight
+to `BackprojectionOp` (those are not manager ports). Mode 3
+inserts `TileGeometryStagerOp` on the same edge: the next tile
+lattice is staged on the pulse cadence and the manager forwards
+it with the reset. `TileMosaicOp` blits each reset tile into a
+parent raster so Holoviz is the growing strip (same window mode
+4 will use).
 
 `range_bins` is not wired. `BackprojectionOp.range_bin_spacing`
 is derived from CPHD `SCSS` and `num_samples`, and from
@@ -151,6 +159,47 @@ the formed complex lattice.
 pixels: `/tmp/sar/mode02_houston_0p5m.cphd` (recipe
 `mode02_houston_0p5m.yaml`, 33505 samples), lattice 13600² at
 0.5 m, `max_aperture_pulses: 16524`.
+
+## Mode 3 — Imperial Valley tiled strip
+
+One 15.77 s Capella stripmap, ten independent squares along the
+travelling SRP (INPUT_DATA.md), same file mode 4 will scroll.
+Spotlight-row manager (`max_aperture_pulses: 0`, `emit_mode:
+reset`) with `emit_interval_pulses` = 15905 (one tile) and
+Taylor `aperture_window` / `range_window`. `weight` is wired so
+the taper reaches BP. Seams at the joins are the mode: a reset
+drops retention, so edge pixels under-integrate. Mode 4 is the
+seam-free scroll. Tiles are IA-aligned ROIs of a parent SRP ×
+range-swath lattice (along-track on `v`), not east-north squares
+and not Capella `ImageArea` Y extents. `lattice.max_side: 4096`
+caps each tile's longer axis (~2.6 m GSD, near range-Nyquist on
+a ~10 km square), not the parent strip. `TileMosaicOp` holds
+finished squares so Holoviz is the strip, not the last chip.
+LUT windows filled pixels only while the canvas is sparse.
+Chevron is raster `u`/`v`; the compass inset is true ENU.
+Holoviz fits the parent strip to the desktop work area (full
+width on a typical 16:9); `visualize_size` is the fallback when
+DISPLAY/X11 is missing. Timeline product ticks show last-pulse
+packet → image (the last reader tick that closed the tile, not
+end-of-collect). Overlay BP time is the tile lattice and
+milliseconds, not the parent canvas.
+
+Pull first (~3.45 GiB). The script skips a file already present.
+`--mode 4` downloads the same key to the same dest.
+
+```bash
+python3 applications/sar_formation/pull_cphd.py --mode 3 \
+    --dest /tmp/sar/imperial
+
+./build/applications/sar_formation/cpp/sar_formation mode03.yaml
+```
+
+`pulse_range: [0, 159050)` drops the leftover vector so ten
+tiles divide evenly. `pulses_per_tick: 3181` divides the tile
+(five ticks each). `nfft_pad: next_fast`, `playback_rate: 0.5`,
+`loop: true` (wrap restages tile 0 and clears the mosaic),
+`visualize_hold_s: -1`. Overlay name is `Imperial Valley`. CI
+stays on generated fixtures; this YAML is not a CTest.
 
 ## Mode 5 — six unique-IARP spotlights
 

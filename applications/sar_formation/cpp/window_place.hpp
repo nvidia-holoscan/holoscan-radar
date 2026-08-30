@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Move a mapped top-level window to the bottom-left of the work area.
-// HolovizOp has no window-position parameter; GLFW is inside Holoviz,
-// so this finds the window by title after it appears. X11 is loaded
-// at runtime (libX11.so.6) so the app does not need libx11-dev.
+// Move a mapped top-level window to a work-area corner, or query
+// the work-area size for GLFW client sizing. HolovizOp has no
+// window-position parameter; GLFW is inside Holoviz, so this
+// finds the window by title after it appears. X11 is loaded at
+// runtime (libX11.so.6) so the app does not need libx11-dev.
 // Include from one TU. Warns once if DISPLAY / libX11 / the title
 // is missing (native Wayland without XWayland is a no-op).
 
@@ -191,7 +192,10 @@ inline void x11_frame_top_bottom(const X11Api& x, XDisplay* dpy,
   x.XFree(data);
 }
 
-inline bool try_place_x11_bottom_left(const std::string& title) {
+enum class WindowCorner { kBottomLeft, kTopLeft };
+
+inline bool try_place_x11(const std::string& title,
+                          WindowCorner corner) {
   const X11Api* x = x11();
   if (x == nullptr) {
     return false;
@@ -251,9 +255,12 @@ inline bool try_place_x11_bottom_left(const std::string& title) {
   }
   const int total_h = static_cast<int>(gh) + ft + fb;
   int xpos = wx;
-  int ypos = wy + wh - total_h;
-  if (ypos < wy) {
-    ypos = wy;
+  int ypos = wy;
+  if (corner == WindowCorner::kBottomLeft) {
+    ypos = wy + wh - total_h;
+    if (ypos < wy) {
+      ypos = wy;
+    }
   }
   x->XMoveWindow(dpy, found, xpos, ypos);
   x->XFlush(dpy);
@@ -261,11 +268,45 @@ inline bool try_place_x11_bottom_left(const std::string& title) {
   return true;
 }
 
+// Work-area size for sizing a GLFW client. Falls back to the
+// display size when _NET_WORKAREA is missing. False if X11 /
+// DISPLAY is unavailable (caller keeps visualize_size).
+inline bool desktop_work_area(int* width, int* height) {
+  if (width == nullptr || height == nullptr) {
+    return false;
+  }
+  const X11Api* x = x11();
+  if (x == nullptr || std::getenv("DISPLAY") == nullptr) {
+    return false;
+  }
+  XDisplay* dpy = x->XOpenDisplay(nullptr);
+  if (dpy == nullptr) {
+    return false;
+  }
+  const XWindow root = x->XDefaultRootWindow(dpy);
+  const int screen = x->XDefaultScreen(dpy);
+  int ox = 0;
+  int oy = 0;
+  int ww = x->XDisplayWidth(dpy, screen);
+  int wh = x->XDisplayHeight(dpy, screen);
+  x11_work_area(*x, dpy, root, &ox, &oy, &ww, &wh);
+  x->XCloseDisplay(dpy);
+  if (ww <= 0 || wh <= 0) {
+    return false;
+  }
+  *width = ww;
+  *height = wh;
+  return true;
+}
+
 }  // namespace x11_place_detail
 
-// Find `title` and move it to the bottom-left of the work area. Retries
-// briefly: Holoviz maps the GLFW window a tick after start().
-inline void place_window_bottom_left(const std::string& title) {
+inline bool desktop_work_area(int* width, int* height) {
+  return x11_place_detail::desktop_work_area(width, height);
+}
+
+inline void place_window(const std::string& title,
+                         x11_place_detail::WindowCorner corner) {
   if (x11_place_detail::x11() == nullptr) {
     HOLOSCAN_LOG_WARN(
         "window_place: cannot move '{}': libX11.so.6 not loaded "
@@ -279,7 +320,7 @@ inline void place_window_bottom_left(const std::string& title) {
     return;
   }
   for (int i = 0; i < 50; ++i) {
-    if (x11_place_detail::try_place_x11_bottom_left(title)) {
+    if (x11_place_detail::try_place_x11(title, corner)) {
       return;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -288,6 +329,17 @@ inline void place_window_bottom_left(const std::string& title) {
       "window_place: no window titled '{}' after 1 s; left unmoved "
       "(Holoviz may suffix the title, or the window is not X11)",
       title);
+}
+
+// Find `title` and move it to the bottom-left of the work area.
+// Retries briefly: Holoviz maps the GLFW window a tick after
+// start().
+inline void place_window_bottom_left(const std::string& title) {
+  place_window(title, x11_place_detail::WindowCorner::kBottomLeft);
+}
+
+inline void place_window_top_left(const std::string& title) {
+  place_window(title, x11_place_detail::WindowCorner::kTopLeft);
 }
 
 // Non-blocking: Holoviz's size callback runs on the GLFW thread.
@@ -300,4 +352,15 @@ inline void spawn_place_window_bottom_left(const std::string& title) {
   }
   started = true;
   std::thread([title] { place_window_bottom_left(title); }).detach();
+}
+
+inline void spawn_place_window_top_left(const std::string& title) {
+  static std::mutex mu;
+  static bool started = false;
+  std::lock_guard<std::mutex> lock(mu);
+  if (started) {
+    return;
+  }
+  started = true;
+  std::thread([title] { place_window_top_left(title); }).detach();
 }

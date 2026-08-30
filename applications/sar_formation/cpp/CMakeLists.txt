@@ -41,5 +41,7 @@ configure_file(mode01_smoke.yaml
     ${CMAKE_CURRENT_BINARY_DIR}/mode01_smoke.yaml COPYONLY)
 configure_file(mode02.yaml
     ${CMAKE_CURRENT_BINARY_DIR}/mode02.yaml COPYONLY)
+configure_file(mode03.yaml
+    ${CMAKE_CURRENT_BINARY_DIR}/mode03.yaml COPYONLY)
 configure_file(mode05.yaml
     ${CMAKE_CURRENT_BINARY_DIR}/mode05.yaml COPYONLY)

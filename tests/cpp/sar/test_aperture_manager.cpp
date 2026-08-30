@@ -293,6 +293,21 @@ TEST(ApertureManager, CadenceReset) {
             FormationControl::kEmitAndReset);
 }
 
+TEST(ApertureManager, CadenceResetForwardsPendingGeometry) {
+  auto* raw = new ManagerApp<double>();
+  raw->batches = {{0, 1}, {2, 3}};
+  raw->geometry_overrides = {make_geom(10.0)};
+  raw->args = {holoscan::Arg("max_aperture_pulses") = int64_t{0},
+               holoscan::Arg("emit_interval_pulses") = int64_t{2},
+               holoscan::Arg("emit_mode") = ApertureEmitMode::kReset};
+  auto app = run_app(raw);
+  ASSERT_EQ(app->control.frames.size(), 2u);
+  EXPECT_EQ(control_of(app->control.frames[0]),
+            FormationControl::kEmitAndReset);
+  ASSERT_EQ(app->forwarded.size(), 1u);
+  EXPECT_DOUBLE_EQ(app->forwarded[0].origin()[0], 10.0);
+}
+
 TEST(ApertureManager, GrowingApertureCadenceContinue) {
   auto* raw = new ManagerApp<double>();
   raw->batches = {{0, 1}, {2, 3}, {4}};

@@ -406,6 +406,12 @@ inline std::vector<std::vector<float>> cluster_palette() {
 // RGBA8 (W*H*4 bytes), origin top-left.
 constexpr int kPlotFontScale = 2;
 
+// SAR formation overlay canvases (pixels). Holoviz views are these
+// over the window so a landscape strip does not stretch glyphs.
+constexpr int64_t kSarOverlayWidth = 480;
+constexpr int64_t kSarOverlayHeight = 40;
+constexpr int64_t kSarCompassSide = 81;
+
 // RGBA byte color for a cluster bucket (palette color, or gray for noise).
 inline std::array<uint8_t, 3> plot_bucket_color(int bucket) {
   if (bucket >= kNumClusterColors) {

@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Mode-1 / 2 / 5 SAR formation. Holoviz when visualize: true.
+// Mode-1 / 2 / 3 / 5 SAR formation. Holoviz when visualize: true.
 // TensorDumpOp when dump: true (off by default). The dump is the
 // offline PNG checkpoint (tools/sar_image/form_image.py).
 //
 //   CPHDReaderOp → SARRangeCompressionOp → ApertureManagerOp
 //                                        → BackprojectionOp
+//                                        [→ TileMosaicOp]
 //                                        [→ TensorDumpOp]
 //                                        [→ SarImageToLutOp
 //                                            → HoldLastImageOp
@@ -18,11 +19,14 @@
 //   Mode 5 inserts CollectionBoundaryStagerOp on the
 //   range_profiles edge so the next lattice is staged into the
 //   manager (and dr / f0 into BP) on collection_boundary.
+//   Mode 3 inserts TileGeometryStagerOp on the same edge so the
+//   next tile lattice is staged on the pulse cadence, and
+//   TileMosaicOp holds finished squares in a parent raster.
 //
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/sar_formation/cpp/sar_formation \
-//            [mode01.yaml | mode02.yaml | mode05.yaml] \
-//            [<collection.cphd>]
+//            [mode01.yaml | mode02.yaml | mode03.yaml |
+//             mode05.yaml] [<collection.cphd>]
 
 #include <algorithm>
 #include <cstdint>
@@ -32,6 +36,7 @@
 #include <vector>
 
 #include <holoscan/holoscan.hpp>
+#include <holoscan/operators/holoviz/holoviz.hpp>
 
 #include "io/cphd_reader_op/cphd_file.hpp"
 #include "io/cphd_reader_op/collection_paths.hpp"
@@ -69,7 +74,12 @@ class SarFormationApp : public holoscan::Application {
         cfg.sample_geometry.num_u(), cfg.reference_frequency,
         cfg.dump ? cfg.dump_path : std::string("off"));
     if (cfg.lattice_max_side > 0) {
-      if (cfg.wire_weight) {
+      if (cfg.parent_geometry.is_valid()) {
+        HOLOSCAN_LOG_INFO(
+            "sar_formation lattice.max_side {} (per-tile "
+            "formed-pixel cap)",
+            cfg.lattice_max_side);
+      } else if (cfg.show_playback_lag) {
         HOLOSCAN_LOG_INFO(
             "sar_formation lattice.max_side {} (formed-pixel cap; "
             "lower this if playback lag climbs)",
@@ -106,29 +116,50 @@ class SarFormationApp : public holoscan::Application {
           "range_bins unconnected)",
           cfg.range_bin_spacing);
     }
-    for (size_t i = 0; i < cfg.collection_geometries.size(); ++i) {
-      const auto& geom = cfg.collection_geometries[i];
+    if (cfg.tile_geometries.size() <= 1) {
+      for (size_t i = 0; i < cfg.collection_geometries.size();
+           ++i) {
+        const auto& geom = cfg.collection_geometries[i];
+        const auto& sp = geom.spacing();
+        HOLOSCAN_LOG_INFO(
+            "sar_formation collection {} / {}: {}x{}  "
+            "spacing {:.4f} x {:.4f} m  pixel_scale {:.4g}",
+            i + 1, cfg.collection_geometries.size(), geom.num_v(),
+            geom.num_u(), sp[0], sp[1],
+            i < cfg.lattice_pixel_scale.size()
+                ? cfg.lattice_pixel_scale[i]
+                : 1.0);
+        if (i < cfg.collection_physics.size()) {
+          const auto& phys = cfg.collection_physics[i];
+          HOLOSCAN_LOG_INFO(
+              "sar_formation collection {} physics: heading "
+              "{:.1f} deg CW from N  XY square {:.2f} km  "
+              "GSD {:.3f} m (range {:.3f}, azimuth {:.3f})  "
+              "native {}x{}",
+              i + 1,
+              phys.heading_cw_rad * 180.0 / radar::kPi,
+              phys.xy_square_m / 1000.0, phys.gsd_m,
+              phys.gsd_range_m, phys.gsd_azimuth_m,
+              phys.native_count, phys.native_count);
+        }
+      }
+    }
+    for (size_t i = 0; i < cfg.tile_geometries.size(); ++i) {
+      const auto& geom = cfg.tile_geometries[i];
+      const auto& origin = geom.origin();
       const auto& sp = geom.spacing();
       HOLOSCAN_LOG_INFO(
-          "sar_formation collection {} / {}: {}x{}  "
-          "spacing {:.4f} x {:.4f} m  pixel_scale {:.4g}",
-          i + 1, cfg.collection_geometries.size(), geom.num_v(),
-          geom.num_u(), sp[0], sp[1],
-          i < cfg.lattice_pixel_scale.size()
-              ? cfg.lattice_pixel_scale[i]
-              : 1.0);
-      if (i < cfg.collection_physics.size()) {
-        const auto& phys = cfg.collection_physics[i];
-        HOLOSCAN_LOG_INFO(
-            "sar_formation collection {} physics: heading {:.1f} "
-            "deg CW from N  XY square {:.2f} km  GSD {:.3f} m "
-            "(range {:.3f}, azimuth {:.3f})  native {}x{}",
-            i + 1,
-            phys.heading_cw_rad * 180.0 / radar::kPi,
-            phys.xy_square_m / 1000.0, phys.gsd_m,
-            phys.gsd_range_m, phys.gsd_azimuth_m,
-            phys.native_count, phys.native_count);
-      }
+          "sar_formation tile {} / {}: {}x{}  "
+          "spacing {:.4f} m  origin [{:.3f}, {:.3f}, {:.3f}]",
+          i + 1, cfg.tile_geometries.size(), geom.num_v(),
+          geom.num_u(), sp[0], origin[0], origin[1], origin[2]);
+    }
+    if (cfg.parent_geometry.is_valid()) {
+      const auto& p = cfg.parent_geometry;
+      const auto& sp = p.spacing();
+      HOLOSCAN_LOG_INFO(
+          "sar_formation parent {}x{}  spacing {:.4f} x {:.4f} m",
+          p.num_v(), p.num_u(), sp[0], sp[1]);
     }
     auto reader = make_operator<radar::CPHDReaderOp<double>>(
         "cphd_reader",
@@ -149,8 +180,13 @@ class SarFormationApp : public holoscan::Application {
     // Lattice and stored-sample-N/2 frequency: sidecar when present
     // (generated fixtures), otherwise the app-owned YAML keys
     // (Atlanta and any other public CPHD).
+    holoscan::ArgList manager_args = from_config("aperture_manager");
+    if (cfg.tile_pulses > 0) {
+      manager_args.add(holoscan::Arg("emit_interval_pulses") =
+                           cfg.tile_pulses);
+    }
     auto manager = make_operator<radar::ApertureManagerOp<double>>(
-        "aperture_manager", from_config("aperture_manager"));
+        "aperture_manager", manager_args);
 
     auto bp = make_operator<radar::BackprojectionOp<double>>(
         "backprojection",
@@ -191,6 +227,24 @@ class SarFormationApp : public holoscan::Application {
                {{"reference_frequency", "reference_frequency"}});
       add_flow(manager, bp,
                {{"sample_geometry", "sample_geometry"}});
+    } else if (cfg.tile_geometries.size() > 1) {
+      HOLOSCAN_LOG_INFO(
+          "sar_formation: tiling {} tiles of {} pulses "
+          "(live sample_geometry on cadence reset)",
+          cfg.tile_geometries.size(), cfg.tile_pulses);
+      auto stager =
+          make_operator<TileGeometryStagerOp>("tile_stager");
+      stager->geometries = cfg.tile_geometries;
+      stager->tile_pulses = cfg.tile_pulses;
+      stager->loop = cfg.reader_loop;
+      add_flow(profiles, stager,
+               {{"range_profiles", "range_profiles"}});
+      add_flow(stager, manager,
+               {{"range_profiles", "range_profiles"}});
+      add_flow(stager, manager,
+               {{"sample_geometry", "sample_geometry"}});
+      add_flow(manager, bp,
+               {{"sample_geometry", "sample_geometry"}});
     } else {
       add_flow(profiles, manager,
                {{"range_profiles", "range_profiles"}});
@@ -224,9 +278,21 @@ class SarFormationApp : public holoscan::Application {
     add_flow(manager, bp, {{"control", "control"}});
     if (cfg.wire_weight) {
       HOLOSCAN_LOG_INFO(
-          "sar_formation: wiring ApertureManagerOp.weight "
-          "(sliding-window eviction)");
+          "sar_formation: wiring ApertureManagerOp.weight");
       add_flow(manager, bp, {{"weight", "weight"}});
+    }
+    std::shared_ptr<holoscan::Operator> formed = bp;
+    if (cfg.parent_geometry.is_valid() &&
+        cfg.tile_geometries.size() > 1) {
+      HOLOSCAN_LOG_INFO(
+          "sar_formation: TileMosaicOp parent hold ({} tiles)",
+          cfg.tile_geometries.size());
+      auto mosaic = make_operator<TileMosaicOp>("tile_mosaic");
+      mosaic->parent = cfg.parent_geometry;
+      mosaic->tiles = cfg.tile_geometries;
+      mosaic->loop = cfg.reader_loop;
+      add_flow(bp, mosaic, {{"image", "image"}});
+      formed = mosaic;
     }
     if (cfg.dump) {
       holoscan::ArgList dump_args{
@@ -237,21 +303,53 @@ class SarFormationApp : public holoscan::Application {
       }
       auto dump = make_operator<radar::TensorDumpOp>(
           "tensor_dump", dump_args);
-      add_flow(bp, dump, {{"image", "tensor"}});
+      add_flow(formed, dump, {{"image", "tensor"}});
     }
 
     if (cfg.visualize) {
       auto to_lut = make_operator<SarImageToLutOp>("sar_image_to_lut");
       // Window size, not the formed lattice. R8_UINT cannot
-      // bilinear; box-average the LUT to this side so the
-      // window is 1:1. BP (and TensorDump, when dump: true) stay
-      // at the formed lattice (collection physics,
+      // bilinear; box-average the LUT toward this side so the
+      // window is near 1:1. BP (and TensorDump, when dump: true)
+      // stay at the formed lattice (collection physics,
       // lattice.max_side cap, or sample_geometry counts).
-      to_lut->max_side = cfg.visualize_size;
+      const bool show_lag = cfg.show_playback_lag;
+      const bool mosaic = cfg.parent_geometry.is_valid();
+      uint32_t viz_w = 0;
+      uint32_t viz_h = 0;
+      int64_t lut_max_side = cfg.visualize_size;
+      if (mosaic) {
+        int work_w = 0;
+        int work_h = 0;
+        if (desktop_work_area(&work_w, &work_h)) {
+          const auto fit = holoviz_fit_wh(
+              cfg.parent_geometry.num_v(),
+              cfg.parent_geometry.num_u(), work_w, work_h);
+          viz_w = fit[0];
+          viz_h = fit[1];
+          lut_max_side = static_cast<int64_t>(
+              std::max(viz_w, viz_h));
+          HOLOSCAN_LOG_INFO(
+              "sar_formation Holoviz {}x{} (desktop work area "
+              "{}x{}; visualize_size {} is the no-DISPLAY "
+              "fallback)",
+              viz_w, viz_h, work_w, work_h, cfg.visualize_size);
+        } else {
+          const auto wh = holoviz_window_wh(
+              cfg.parent_geometry.num_v(),
+              cfg.parent_geometry.num_u(), cfg.visualize_size);
+          viz_w = wh[0];
+          viz_h = wh[1];
+          HOLOSCAN_LOG_INFO(
+              "sar_formation Holoviz {}x{} (visualize_size {}; "
+              "no desktop work area)",
+              viz_w, viz_h, cfg.visualize_size);
+        }
+      }
+      to_lut->max_side = lut_max_side;
       to_lut->scene_names = cfg.scene_names;
-      // Collect-vs-wall lag is the mode-2 (retention) overlay.
-      const bool show_lag = cfg.wire_weight;
-      to_lut->formation_diag = [bp, reader, show_lag,
+      to_lut->formation_diag = [bp, reader, show_lag, mosaic,
+                                parent = cfg.parent_geometry,
                                 geoms = cfg.collection_geometries,
                                 to_enu = cfg.transform_to_scene_enu,
                                 origin = cfg.enu_origin_ecef]() {
@@ -260,21 +358,39 @@ class SarFormationApp : public holoscan::Application {
         d.bp_compute_s = t.compute_s;
         d.pulses = t.pulses;
         d.pixels = t.pixels;
+        d.bp_num_v = t.num_v;
+        d.bp_num_u = t.num_u;
         d.emit_at = t.emit_at;
         d.last_packet_at = reader->last_packet_at();
         if (show_lag) {
           d.playback = reader->playback_status();
         }
         const auto apc = reader->last_mean_apc();
-        if (apc.valid && !geoms.empty()) {
-          const size_t i =
-              static_cast<size_t>(apc.file_index) % geoms.size();
-          const auto en = apc_east_north(
-              apc.ecef, geoms[i], to_enu, origin);
-          if (en.has_value()) {
-            d.apc_valid = true;
-            d.apc_east = (*en)[0];
-            d.apc_north = (*en)[1];
+        if (apc.valid) {
+          const radar::SampleGeometry* g = nullptr;
+          if (mosaic && parent.is_valid()) {
+            g = &parent;
+          } else if (!geoms.empty()) {
+            const size_t i =
+                static_cast<size_t>(apc.file_index) %
+                geoms.size();
+            g = &geoms[i];
+          }
+          if (g != nullptr) {
+            const auto uv = apc_raster_uv(
+                apc.ecef, *g, to_enu, origin);
+            const auto en = apc_compass_enu(
+                apc.ecef, *g, to_enu, origin);
+            if (uv.has_value()) {
+              d.apc_valid = true;
+              d.raster_u = (*uv)[0];
+              d.raster_v = (*uv)[1];
+            }
+            if (en.has_value()) {
+              d.apc_valid = true;
+              d.compass_east = (*en)[0];
+              d.compass_north = (*en)[1];
+            }
           }
         }
         return d;
@@ -287,14 +403,29 @@ class SarFormationApp : public holoscan::Application {
 
       HolovizLayout layout;
       layout.window_title = "SAR formation";
-      const auto side =
-          static_cast<uint32_t>(cfg.visualize_size);
-      layout.width = side;
-      layout.height = side;
+      if (mosaic) {
+        layout.width = viz_w;
+        layout.height = viz_h;
+      } else {
+        const auto side =
+            static_cast<uint32_t>(cfg.visualize_size);
+        layout.width = side;
+        layout.height = side;
+      }
       layout.headless = cfg.headless;
-      auto visualizer = make_image_holoviz_op(
-          this, "holoviz", layout, "sar_image",
-          make_grayscale_lut());
+      std::shared_ptr<holoscan::ops::HolovizOp> visualizer;
+      if (mosaic) {
+        visualizer = make_image_holoviz_op(
+            this, "holoviz", layout, "sar_image",
+            make_grayscale_lut(),
+            [title = layout.window_title](int, int) {
+              spawn_place_window_top_left(title);
+            });
+      } else {
+        visualizer = make_image_holoviz_op(
+            this, "holoviz", layout, "sar_image",
+            make_grayscale_lut());
+      }
 
       auto timeline = make_operator<TimelineRasterOp>(
           "timeline",
@@ -327,7 +458,7 @@ class SarFormationApp : public holoscan::Application {
             spawn_place_window_bottom_left(title);
           });
 
-      add_flow(bp, to_lut, {{"image", "image"}});
+      add_flow(formed, to_lut, {{"image", "image"}});
       add_flow(to_lut, hold, {{"sar_image", "image"}});
       add_flow(hold, visualizer, {{"image", "receivers"}});
       add_flow(timeline, timeline_viz,
@@ -339,6 +470,11 @@ class SarFormationApp : public holoscan::Application {
       auto viz_pool = make_thread_pool("viz", 1);
       viz_pool->add(visualizer, false);
       viz_pool->add(timeline_viz, false);
+    }
+
+    if (formed != bp && !cfg.dump && !cfg.visualize) {
+      auto drain = make_operator<DiscardImageOp>("mosaic_drain");
+      add_flow(formed, drain, {{"image", "image"}});
     }
 
     // Shared default pool, not a pinned thread per operator.

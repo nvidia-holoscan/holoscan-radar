@@ -47,7 +47,11 @@ void check_cuda(cudaError_t err, const char* what) {
 
 std::string format_seconds(double s) {
   if (!std::isfinite(s) || s < 0.0) {
-    return "0.0s";
+    return "0ms";
+  }
+  if (s < 1.0) {
+    const int ms = static_cast<int>(std::llround(s * 1000.0));
+    return std::to_string(ms) + "ms";
   }
   const int scaled =
       static_cast<int>(std::llround(s * 10.0));
@@ -84,20 +88,11 @@ std::string format_sci(double v) {
 
 std::shared_ptr<holoscan::Tensor> overlay_tensor(
     const std::vector<std::string>& lines, cudaStream_t stream) {
-  constexpr int kScale = 1;
+  constexpr int kScale = 2;
   constexpr int64_t kPad = 3;
   constexpr int64_t kGap = 2;
-  int64_t tw = 0;
-  for (const auto& line : lines) {
-    tw = std::max(tw, holoscan::radar::app::plot_text_width(
-                          line, kScale));
-  }
-  const int64_t n = static_cast<int64_t>(lines.size());
-  const int64_t line_h = 5 * kScale;
-  const int64_t th =
-      n * line_h + (n > 1 ? (n - 1) * kGap : 0);
-  const int64_t width = std::max(int64_t{1}, tw + 2 * kPad);
-  const int64_t height = std::max(int64_t{1}, th + 2 * kPad);
+  const int64_t width = holoscan::radar::app::kSarOverlayWidth;
+  const int64_t height = holoscan::radar::app::kSarOverlayHeight;
   std::vector<uint8_t> img(
       static_cast<size_t>(width * height * 4), 0);
   const std::array<uint8_t, 3> bg{16, 16, 16};
@@ -108,8 +103,12 @@ std::shared_ptr<holoscan::Tensor> overlay_tensor(
                                         bg);
     }
   }
+  const int64_t line_h = 5 * kScale;
   int64_t y = kPad;
   for (const auto& line : lines) {
+    if (y + line_h > height) {
+      break;
+    }
     holoscan::radar::app::plot_draw_text(
         &img, width, height, kPad, y, line, fg, kScale);
     y += line_h + kGap;
@@ -213,7 +212,7 @@ void fill_triangle_rgba(std::vector<uint8_t>* img, int64_t w,
 
 std::shared_ptr<holoscan::Tensor> compass_tensor(
     bool valid, double east, double north, cudaStream_t stream) {
-  constexpr int64_t kSide = 81;
+  constexpr int64_t kSide = holoscan::radar::app::kSarCompassSide;
   constexpr int64_t kCx = 40;
   constexpr int64_t kCy = 40;
   constexpr int64_t kDisc = 36;
@@ -235,6 +234,7 @@ std::shared_ptr<holoscan::Tensor> compass_tensor(
       &img, kSide, kSide, kCx - 1, 8, "N", n_rgb, 1);
   if (valid) {
     const double len = std::hypot(east, north);
+    if (len > 0.0) {
     const double ux = east / len;
     const double uy = -north / len;
     const int64_t tx = kCx + static_cast<int64_t>(
@@ -258,6 +258,7 @@ std::shared_ptr<holoscan::Tensor> compass_tensor(
                                 std::llround(py * 5.0));
     fill_triangle_rgba(&img, kSide, kSide, tx, ty, l0, l1, r0,
                        r1, fg);
+    }
   }
   fill_disc_rgba(&img, kSide, kSide, kCx, kCy, 2, fg);
   auto tensor = radar::make_device_tensor(
@@ -464,12 +465,27 @@ void SarImageToLutOp::compute(
                              stream);
   }
   check_cuda(cudaGetLastError(), "magnitude kernel failed");
+  const bool landscape = num_v > num_u;
+  int64_t grid_v = num_v;
+  int64_t grid_u = num_u;
+  std::shared_ptr<holoscan::Tensor> transposed;
+  if (landscape) {
+    transposed = radar::make_device_tensor(
+        {num_u, num_v}, radar::real_dtype<float>());
+    sar_image_transpose(static_cast<float*>(mag->data()),
+                        static_cast<float*>(transposed->data()),
+                        num_v, num_u, stream);
+    check_cuda(cudaGetLastError(), "transpose kernel failed");
+    mag = transposed;
+    grid_v = num_u;
+    grid_u = num_v;
+  }
   const double mag_s = elapsed();
 
   const int64_t factor =
-      downsample_factor(num_v, num_u, max_side);
-  const int64_t out_v = num_v / factor;
-  const int64_t out_u = num_u / factor;
+      downsample_factor(grid_v, grid_u, max_side);
+  const int64_t out_v = grid_v / factor;
+  const int64_t out_u = grid_u / factor;
   if (out_v <= 0 || out_u <= 0) {
     throw std::invalid_argument(
         std::string(who) + ": max_side leaves an empty display grid");
@@ -483,7 +499,7 @@ void SarImageToLutOp::compute(
         {out_v, out_u}, radar::real_dtype<float>());
     sar_image_box_average(grid,
                           static_cast<float*>(displayed->data()),
-                          num_v, num_u, factor, stream);
+                          grid_v, grid_u, factor, stream);
     check_cuda(cudaGetLastError(), "box-average kernel failed");
     grid = static_cast<float*>(displayed->data());
   }
@@ -545,8 +561,13 @@ void SarImageToLutOp::compute(
         "LUT D2H for APC mark failed");
     check_cuda(cudaStreamSynchronize(stream),
                "LUT D2H sync failed");
-    draw_border_chevron(&host, out_v, out_u, diag.apc_east,
-                        diag.apc_north);
+    // Chevron in display pixels: +x is right. Landscape swaps
+    // (u,v) so along-track (v) is horizontal.
+    const double chev_e =
+        landscape ? diag.raster_v : diag.raster_u;
+    const double chev_n =
+        landscape ? -diag.raster_u : -diag.raster_v;
+    draw_border_chevron(&host, out_v, out_u, chev_e, chev_n);
     check_cuda(
         cudaMemcpyAsync(tensor->data(), host.data(), out_count,
                         cudaMemcpyHostToDevice, stream),
@@ -568,8 +589,17 @@ void SarImageToLutOp::compute(
     const double rate = static_cast<double>(diag.pixels) *
                         static_cast<double>(diag.pulses) /
                         diag.bp_compute_s;
-    lines.push_back(format_seconds(diag.bp_compute_s) + "  " +
-                    format_sci(rate) + " px*pls/s");
+    std::string rate_line = format_seconds(diag.bp_compute_s) +
+                            "  " + format_sci(rate) + " px*pls/s";
+    // Mosaic canvas is the LUT input; BP formed a tile. Name the
+    // lattice the rate is for so the parent strip is not read
+    // as the tile throughput.
+    if (diag.bp_num_v > 0 && diag.bp_num_u > 0 &&
+        (diag.bp_num_v != num_v || diag.bp_num_u != num_u)) {
+      rate_line = std::to_string(diag.bp_num_v) + "x" +
+                  std::to_string(diag.bp_num_u) + "  " + rate_line;
+    }
+    lines.push_back(rate_line);
   }
   if (diag.playback.valid && diag.playback.paced &&
       std::isfinite(diag.playback.behind_s)) {
@@ -592,8 +622,8 @@ void SarImageToLutOp::compute(
                        .count();
   }
   auto label = overlay_tensor(lines, stream);
-  auto look = compass_tensor(diag.apc_valid, diag.apc_east,
-                             diag.apc_north, stream);
+  auto look = compass_tensor(diag.apc_valid, diag.compass_east,
+                             diag.compass_north, stream);
   check_cuda(cudaStreamSynchronize(stream), "LUT H2D sync failed");
   if (stream != cudaStreamDefault) {
     op_output.set_cuda_stream(stream, "sar_image");
@@ -627,7 +657,8 @@ void SarImageToLutOp::compute(
   if (diag.apc_valid) {
     HOLOSCAN_LOG_INFO(
         "{}: APC look  E {:.1f} km  N {:.1f} km",
-        who, diag.apc_east / 1000.0, diag.apc_north / 1000.0);
+        who, diag.compass_east / 1000.0,
+        diag.compass_north / 1000.0);
   }
   const double total_s = elapsed();
   const double lut_s = total_s - mag_s - box_s - pct_s;

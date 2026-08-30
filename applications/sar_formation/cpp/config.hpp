@@ -13,10 +13,13 @@
 //
 // Lattice: `sample_geometry` (Atlanta ENU), sidecar truth, or
 // `lattice` — explicit counts/spacing (IARP ENU; counts may be N
-// or [num_v, num_u]) or collection physics (XY square at the
-// coarser GSD) with `max_side` as a formed-pixel cap (the
-// slower-GPU knob) and `pixel_scale` as a per-collect factor on N.
-// A guessed sidecar must not override an explicit YAML lattice.
+// or [num_v, num_u]), collection physics (XY square at the
+// coarser GSD), or `lattice.tiles` > 1 (mode 3: IA-aligned
+// parent strip + ROI tiles along a travelling SRP; one file;
+// omit counts/spacing). `max_side` caps each *tile's* longer
+// axis (the parent is n_tiles of those along v). `pixel_scale`
+// is a per-collect factor on N. A guessed sidecar must not
+// override an explicit YAML lattice.
 
 #pragma once
 
@@ -34,7 +37,9 @@
 #include <vector>
 
 #include "io/cphd_reader_op/cphd_file.hpp"
+#include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/sample_geometry.hpp"
+#include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/dsp/fft_size.hpp"
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
@@ -60,15 +65,28 @@ struct AppConfig {
   // 0 = operator default (num_samples). Mirrored from
   // range_compression.nfft when that YAML key is set.
   int64_t nfft{0};
+  // Mode 3: parent strip plus one lattice per tile along a
+  // travelling SRP, from lattice.tiles > 1. Size 0 when not
+  // tiling. collection_geometries stays length 1 so the mode-5
+  // collection_boundary stager stays off; tile 0 is also
+  // sample_geometry (BP parameter). parent_geometry is the
+  // mosaic canvas (LUT / Holoviz / optional dump).
+  std::vector<radar::SampleGeometry> tile_geometries;
+  radar::SampleGeometry parent_geometry;
+  int64_t tile_pulses{0};
+  // Read-only mirror of cphd_reader.loop so the tile stager can
+  // restage tile 0 on wrap. Not parsed into the operator here.
+  bool reader_loop{false};
   // Mode 5: one lattice / dr / f0 per collection, aligned with
-  // cphd_paths. Mode 1 has a single entry matching the YAML lattice.
+  // cphd_paths. Modes 1 and 3 have a single entry.
   std::vector<radar::SampleGeometry> collection_geometries;
   std::vector<double> collection_spacings;
   std::vector<double> collection_frequencies;
   // Timing cap on each physics-derived (or explicit-count) lattice
   // axis. 0 = no cap (native collection-physics N, or the YAML
-  // counts). A positive cap coarsens GSD and keeps the square.
-  // This is the formation-cost knob: lower it on a slower GPU.
+  // counts). A positive cap coarsens GSD and keeps the scene.
+  // Mode 3: per tile, not the parent strip. Mode 2 / 5: the
+  // formed image. Lower it on a slower GPU.
   int64_t lattice_max_side{0};
   // Per-collection factor on native N (both axes). 1 = native.
   // Same square, coarser GSD. Size matches cphd_paths.
@@ -88,19 +106,25 @@ struct AppConfig {
   std::string nvradar_vph_path;
   bool visualize{false};
   // Wire manager.weight → BP.weight. True when the manager
-  // retains (max_aperture_pulses > 0) so eviction can emit −1.
-  // Modes 1 / 5 stay unconnected (all +1, no D2H of weights).
+  // retains (max_aperture_pulses > 0, eviction −1) or stamps an
+  // aperture_window (mode 3 Taylor). Mode 1 / 5 stay unconnected
+  // (all +1, no D2H of weights).
   bool wire_weight{false};
+  // Collect-vs-wall lag overlay. Mode 2 retention only, not a
+  // stamped block-aperture window.
+  bool show_playback_lag{false};
   bool skip_display_check{false};
   bool headless{false};
-  // Holoviz window (px, square). LUT box-averages the formed
-  // image to this so R8_UINT is 1:1; a dump (dump: true) is the
-  // BP lattice. 1024 fits a 1080p screen.
+  // Holoviz window: longest side (px) for square collects, and
+  // the no-DISPLAY fallback for a parent strip. A mosaic strip
+  // fits the desktop work area (full width on a typical 16:9).
+  // LUT box-averages toward that side; a dump is the formed
+  // lattice (parent mosaic when tiling).
   int64_t visualize_size{1024};
   // Seconds the Holoviz window keeps the formed image after emit.
   // Also the max wait for the first frame (Atlanta ~9 s). Mode 1
   // emits once; 0 closes with the graph. Negative: hold until
-  // SIGINT (mode 5 looping rotate).
+  // SIGINT (mode 3 / 5 looping).
   double visualize_hold_s{30.0};
 };
 
@@ -234,8 +258,7 @@ inline std::array<double, 9> ecef_to_enu_rotation(
 }
 
 // Lattice centre (half-index along each axis), same frame as
-// origin / axes. Used to project an APC onto east/north of the
-// displayed map (axis_u = east, axis_v = south).
+// origin / axes.
 inline std::array<double, 3> lattice_centre(
     const radar::SampleGeometry& geom) {
   const double cv =
@@ -252,36 +275,71 @@ inline std::array<double, 3> lattice_centre(
           o[2] + dv * av[2] + du * au[2]};
 }
 
-// Horizontal look of an APC relative to the scene: metres east
-// and north of the lattice centre, in the displayed map frame
-// (row 0 = north, col 0 = west). `apc_xyz` is ECEF unless
-// `to_scene_enu`, in which case it is rotated at `enu_origin`
-// first (Atlanta NVRadar path).
-inline std::optional<std::array<double, 2>> apc_east_north(
+inline std::array<double, 3> rotate_apc_to_scene(
+    std::array<double, 3> apc_xyz, bool to_scene_enu,
+    const std::array<double, 3>& enu_origin) {
+  if (!to_scene_enu) {
+    return apc_xyz;
+  }
+  const auto R = ecef_to_enu_rotation(enu_origin);
+  const double dx = apc_xyz[0] - enu_origin[0];
+  const double dy = apc_xyz[1] - enu_origin[1];
+  const double dz = apc_xyz[2] - enu_origin[2];
+  return {R[0] * dx + R[1] * dy + R[2] * dz,
+          R[3] * dx + R[4] * dy + R[5] * dz,
+          R[6] * dx + R[7] * dy + R[8] * dz};
+}
+
+// APC minus lattice centre, metres along axis_u / axis_v (raster,
+// not geographic). Chevron uses this so IA-aligned strips are
+// not treated as east/south.
+inline std::optional<std::array<double, 2>> apc_raster_uv(
     std::array<double, 3> apc_xyz,
     const radar::SampleGeometry& geom, bool to_scene_enu,
     const std::array<double, 3>& enu_origin) {
   if (!geom.is_valid()) {
     return std::nullopt;
   }
-  if (to_scene_enu) {
-    const auto R = ecef_to_enu_rotation(enu_origin);
-    const double dx = apc_xyz[0] - enu_origin[0];
-    const double dy = apc_xyz[1] - enu_origin[1];
-    const double dz = apc_xyz[2] - enu_origin[2];
-    apc_xyz = {R[0] * dx + R[1] * dy + R[2] * dz,
-               R[3] * dx + R[4] * dy + R[5] * dz,
-               R[6] * dx + R[7] * dy + R[8] * dz};
-  }
+  apc_xyz = rotate_apc_to_scene(apc_xyz, to_scene_enu, enu_origin);
   const auto c = lattice_centre(geom);
   const double d0 = apc_xyz[0] - c[0];
   const double d1 = apc_xyz[1] - c[1];
   const double d2 = apc_xyz[2] - c[2];
   const auto& au = geom.axis_u();
   const auto& av = geom.axis_v();
-  const double east = d0 * au[0] + d1 * au[1] + d2 * au[2];
-  const double south = d0 * av[0] + d1 * av[1] + d2 * av[2];
-  const double north = -south;
+  const double ru = d0 * au[0] + d1 * au[1] + d2 * au[2];
+  const double rv = d0 * av[0] + d1 * av[1] + d2 * av[2];
+  if (!std::isfinite(ru) || !std::isfinite(rv)) {
+    return std::nullopt;
+  }
+  if (ru * ru + rv * rv < 1.0) {
+    return std::nullopt;
+  }
+  return std::array<double, 2>{ru, rv};
+}
+
+// True ENU of an APC relative to the lattice centre. Compass
+// inset; does not assume the lattice axes are east/south.
+// `to_scene_enu` means `apc_xyz` is already scene ENU.
+inline std::optional<std::array<double, 2>> apc_compass_enu(
+    std::array<double, 3> apc_xyz,
+    const radar::SampleGeometry& geom, bool to_scene_enu,
+    const std::array<double, 3>& enu_origin) {
+  if (!geom.is_valid()) {
+    return std::nullopt;
+  }
+  apc_xyz = rotate_apc_to_scene(apc_xyz, to_scene_enu, enu_origin);
+  const auto c = lattice_centre(geom);
+  const double d0 = apc_xyz[0] - c[0];
+  const double d1 = apc_xyz[1] - c[1];
+  const double d2 = apc_xyz[2] - c[2];
+  double east = d0;
+  double north = d1;
+  if (!to_scene_enu) {
+    const auto R = ecef_to_enu_rotation(c);
+    east = R[0] * d0 + R[1] * d1 + R[2] * d2;
+    north = R[3] * d0 + R[4] * d1 + R[5] * d2;
+  }
   if (!std::isfinite(east) || !std::isfinite(north)) {
     return std::nullopt;
   }
@@ -350,7 +408,8 @@ inline std::array<int64_t, 2> parse_lattice_counts(
 
 // Range-Nyquist counts that fill the extents, then cap the longer
 // side at max_side (0 = no cap). Timing knob: lower max_side
-// coarsens spacing and keeps the declared scene.
+// coarsens spacing and keeps the declared scene. Spotlight /
+// video-SAR images (one lattice).
 inline std::array<int64_t, 2> counts_for_extent(
     double extent_v, double extent_u, double native_spacing,
     int64_t max_side) {
@@ -382,6 +441,111 @@ inline std::array<int64_t, 2> counts_for_extent(
   }
   return {num_v, num_u};
 }
+
+// Same as counts_for_extent, but max_side is each tile's longer
+// axis. n_tiles slices extent_v (along-track). tile_extent_u is
+// the tile's cross-track (range swath). Parent extent_u may be
+// wider (SRP wander) and is not the cap; a 10:1 strip does not
+// spend the whole budget on along-track.
+inline std::array<int64_t, 2> counts_for_tiled_extent(
+    double extent_v, double extent_u, double tile_extent_u,
+    double native_spacing, int64_t n_tiles, int64_t max_side) {
+  if (n_tiles < 1) {
+    throw std::runtime_error("lattice.tiles must be >= 1");
+  }
+  if (!(native_spacing > 0.0) || !std::isfinite(native_spacing)) {
+    throw std::runtime_error(
+        "native lattice spacing must be finite and > 0");
+  }
+  if (!(extent_v > 0.0) || !(extent_u > 0.0) ||
+      !(tile_extent_u > 0.0)) {
+    throw std::runtime_error("image area extents must be > 0");
+  }
+  auto num_v = std::max(
+      int64_t{1},
+      static_cast<int64_t>(std::llround(extent_v / native_spacing)));
+  auto num_u = std::max(
+      int64_t{1},
+      static_cast<int64_t>(std::llround(extent_u / native_spacing)));
+  const int64_t tile_v = std::max(int64_t{1}, num_v / n_tiles);
+  const int64_t tile_u = std::max(
+      int64_t{1},
+      static_cast<int64_t>(
+          std::llround(tile_extent_u / native_spacing)));
+  const int64_t tile_long = std::max(tile_v, tile_u);
+  if (max_side > 0 && tile_long > max_side) {
+    const double scale = static_cast<double>(tile_long) /
+                         static_cast<double>(max_side);
+    num_v = std::max(
+        int64_t{1},
+        static_cast<int64_t>(std::llround(
+            static_cast<double>(num_v) / scale)));
+    num_u = std::max(
+        int64_t{1},
+        static_cast<int64_t>(std::llround(
+            static_cast<double>(num_u) / scale)));
+  }
+  return {num_v, num_u};
+}
+
+inline int64_t display_downsample_factor(int64_t height,
+                                         int64_t width,
+                                         int64_t max_side) {
+  if (max_side <= 0) {
+    throw std::runtime_error("visualize_size must be > 0");
+  }
+  const int64_t longest = std::max(height, width);
+  if (longest <= max_side) {
+    return 1;
+  }
+  return (longest + max_side - 1) / max_side;
+}
+
+// Holoviz (width, height). Landscape when the lattice is taller
+// than wide (along-track on v), matching SarImageToLutOp.
+inline std::array<uint32_t, 2> holoviz_window_wh(
+    int64_t num_v, int64_t num_u, int64_t max_side) {
+  const int64_t factor =
+      display_downsample_factor(num_v, num_u, max_side);
+  const int64_t ov = num_v / factor;
+  const int64_t ou = num_u / factor;
+  const auto w = static_cast<uint32_t>(std::max(ov, ou));
+  const auto h = static_cast<uint32_t>(std::min(ov, ou));
+  return {std::max(uint32_t{1}, w), std::max(uint32_t{1}, h)};
+}
+
+// Fit a landscape lattice into the work area so at least one
+// desktop edge is used (full width for a wide/short strip on
+// 16:9). Caller passes _NET_WORKAREA size; GLFW client size is
+// the result (title bar does not eat width).
+inline std::array<uint32_t, 2> holoviz_fit_wh(int64_t num_v,
+                                              int64_t num_u,
+                                              int work_w,
+                                              int work_h) {
+  const double long_n =
+      static_cast<double>(std::max(num_v, num_u));
+  const double short_n =
+      static_cast<double>(std::min(num_v, num_u));
+  if (!(long_n > 0.0) || !(short_n > 0.0) || work_w <= 0 ||
+      work_h <= 0) {
+    return {1, 1};
+  }
+  const double s =
+      std::min(static_cast<double>(work_w) / long_n,
+               static_cast<double>(work_h) / short_n);
+  const int64_t wi = std::max(
+      int64_t{1},
+      static_cast<int64_t>(std::llround(long_n * s)));
+  const int64_t hi = std::max(
+      int64_t{1},
+      static_cast<int64_t>(std::llround(short_n * s)));
+  const auto w = static_cast<uint32_t>(
+      std::min(wi, static_cast<int64_t>(work_w)));
+  const auto h = static_cast<uint32_t>(
+      std::min(hi, static_cast<int64_t>(work_h)));
+  return {w, h};
+}
+
 inline radar::SampleGeometry ecef_lattice_at_iarp(
     const std::array<double, 3>& iarp,
     const std::array<int64_t, 2>& counts,
@@ -427,6 +591,202 @@ inline radar::SampleGeometry ecef_physics_lattice(
           ? phys.gsd_m
           : phys.xy_square_m / static_cast<double>(n);
   return ecef_lattice_at_iarp(iarp, {n, n}, {spacing, spacing});
+}
+
+inline double dot3(const std::array<double, 3>& a,
+                   const std::array<double, 3>& b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+inline std::array<double, 3> sub3(const std::array<double, 3>& a,
+                                  const std::array<double, 3>& b) {
+  return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+}
+
+inline std::array<double, 3> scale3(const std::array<double, 3>& a,
+                                    double s) {
+  return {a[0] * s, a[1] * s, a[2] * s};
+}
+
+inline std::array<double, 3> unit3(const std::array<double, 3>& a,
+                                   const std::string& what) {
+  const double n = std::sqrt(dot3(a, a));
+  if (!(n > 0.0) || !std::isfinite(n)) {
+    throw std::runtime_error(what + " must be a non-zero vector");
+  }
+  return {a[0] / n, a[1] / n, a[2] / n};
+}
+
+struct StripmapTiling {
+  radar::SampleGeometry parent;
+  std::vector<radar::SampleGeometry> tiles;
+  int64_t tile_pulses{0};
+};
+
+// Mode 3: parent strip (SRP span × range swath on uIAX/uIAY,
+// along-track on v) plus ROI tiles. Cross-track is ± range
+// swath / 2 about each tile's mean SRP. Capella ImageArea
+// extents are not the scene. first/last is the half-open pulse
+// window (pulse_range, or the whole channel). max_side caps
+// each tile's longer axis; the parent is n_tiles of those
+// along v.
+inline StripmapTiling stripmap_tile_lattices(
+    const radar::cphd::CphdFile& file, int64_t n_tiles,
+    int64_t max_side, double pixel_scale,
+    const radar::cphd::CphdFile::CollectionPhysics& phys,
+    int64_t first_pulse, int64_t last_pulse) {
+  if (n_tiles < 2) {
+    throw std::runtime_error("lattice.tiles must be >= 2");
+  }
+  if (!(pixel_scale > 0.0) || !std::isfinite(pixel_scale)) {
+    throw std::runtime_error(
+        "lattice.pixel_scale must be finite and > 0");
+  }
+  if (file.num_channels() < 1) {
+    throw std::runtime_error("tiling needs a CPHD with a channel");
+  }
+  if (!file.has_pvp_field("SRPPos")) {
+    throw std::runtime_error(
+        "tiling needs PVP SRPPos (travelling scene reference)");
+  }
+  if (!file.has_image_area()) {
+    throw std::runtime_error(
+        "tiling needs planar SceneCoordinates uIAX/uIAY");
+  }
+  if (!file.has_iarp()) {
+    throw std::runtime_error("tiling needs SceneCoordinates IARP");
+  }
+  const int64_t nvec = file.channel(0).num_vectors;
+  if (first_pulse < 0 || last_pulse > nvec ||
+      first_pulse >= last_pulse) {
+    throw std::runtime_error(
+        "pulse_range [" + std::to_string(first_pulse) + ", " +
+        std::to_string(last_pulse) +
+        ") is out of range for tiling (" + std::to_string(nvec) +
+        " vectors)");
+  }
+  const int64_t span = last_pulse - first_pulse;
+  if (span < n_tiles) {
+    throw std::runtime_error(
+        "tiling needs at least as many pulses as tiles");
+  }
+  if (span % n_tiles != 0) {
+    throw std::runtime_error(
+        "lattice.tiles must divide the pulse window (" +
+        std::to_string(span) + " pulses, " +
+        std::to_string(n_tiles) +
+        " tiles); drop leftover vectors with pulse_range");
+  }
+  if (!(phys.range_swath_m > 0.0) ||
+      !(phys.gsd_range_m > 0.0)) {
+    throw std::runtime_error(
+        "tiling needs a positive range swath and range GSD");
+  }
+  const auto& ia = file.image_area();
+  const auto iarp = file.iarp_ecef();
+  const auto iax = unit3(ia.u_iax, "uIAX");
+  const auto iay = unit3(ia.u_iay, "uIAY");
+  if (std::abs(dot3(iax, iay)) > 0.99) {
+    throw std::runtime_error("uIAX and uIAY must not be parallel");
+  }
+  const auto srp_at = [&](int64_t i) {
+    const auto v = file.read_pvp(0, "SRPPos", i, 1, 3);
+    if (v.size() != 3) {
+      throw std::runtime_error("SRPPos must have 3 components");
+    }
+    return std::array<double, 3>{v[0], v[1], v[2]};
+  };
+  const auto proj = [&](const std::array<double, 3>& srp,
+                        const std::array<double, 3>& axis) {
+    return dot3(sub3(srp, iarp), axis);
+  };
+  const auto s0 = srp_at(first_pulse);
+  const auto s1 = srp_at(last_pulse - 1);
+  const double x0 = proj(s0, iax);
+  const double x1 = proj(s1, iax);
+  const double y0 = proj(s0, iay);
+  const double y1 = proj(s1, iay);
+  const bool along_x =
+      std::abs(x1 - x0) >= std::abs(y1 - y0);
+  std::array<double, 3> axis_along = along_x ? iax : iay;
+  const std::array<double, 3> axis_across = along_x ? iay : iax;
+  double a0 = along_x ? x0 : y0;
+  double a1 = along_x ? x1 : y1;
+  if (a1 < a0) {
+    axis_along = scale3(axis_along, -1.0);
+    a0 = -a0;
+    a1 = -a1;
+  }
+  if (!(a1 > a0) || !std::isfinite(a0) || !std::isfinite(a1)) {
+    throw std::runtime_error(
+        "tiling needs a travelling SRP along uIAX/uIAY");
+  }
+  const int64_t tile_pulses = span / n_tiles;
+  const double swath = phys.range_swath_m;
+  const double half = 0.5 * swath;
+  std::vector<double> cross_c(static_cast<size_t>(n_tiles));
+  for (int64_t k = 0; k < n_tiles; ++k) {
+    int64_t mid =
+        first_pulse + k * tile_pulses + tile_pulses / 2;
+    if (mid >= last_pulse) {
+      mid = last_pulse - 1;
+    }
+    cross_c[static_cast<size_t>(k)] =
+        proj(srp_at(mid), axis_across);
+  }
+  double cross_lo = cross_c.front() - half;
+  double cross_hi = cross_c.front() + half;
+  for (double c : cross_c) {
+    cross_lo = std::min(cross_lo, c - half);
+    cross_hi = std::max(cross_hi, c + half);
+  }
+  const double spacing0 = phys.gsd_range_m / pixel_scale;
+  const auto counts = counts_for_tiled_extent(
+      a1 - a0, cross_hi - cross_lo, swath, spacing0, n_tiles,
+      max_side);
+  StripmapTiling out;
+  out.tile_pulses = tile_pulses;
+  out.parent = lattice_from_image_area(
+      iarp, axis_across, axis_along, cross_lo, a0, cross_hi, a1,
+      counts[0], counts[1]);
+  const int64_t nv_p = out.parent.num_v();
+  const int64_t nu_p = out.parent.num_u();
+  const double spu = out.parent.spacing()[1];
+  out.tiles.reserve(static_cast<size_t>(n_tiles));
+  for (int64_t k = 0; k < n_tiles; ++k) {
+    const int64_t v0 = k * nv_p / n_tiles;
+    const int64_t v1 = (k + 1) * nv_p / n_tiles;
+    const int64_t nv = v1 - v0;
+    if (nv < 1) {
+      throw std::runtime_error(
+          "lattice.max_side is too small to slice tiles along v");
+    }
+    const double clo = cross_c[static_cast<size_t>(k)] - half;
+    const double chi = cross_c[static_cast<size_t>(k)] + half;
+    int64_t u0 = static_cast<int64_t>(
+        std::llround((clo - cross_lo) / spu));
+    int64_t u1 = static_cast<int64_t>(
+        std::llround((chi - cross_lo) / spu));
+    if (u0 < 0) {
+      u0 = 0;
+    }
+    if (u1 > nu_p) {
+      u1 = nu_p;
+    }
+    if (u1 <= u0) {
+      u0 = 0;
+      u1 = nu_p;
+    }
+    const int64_t nu = u1 - u0;
+    radar::SampleGeometrySpec spec;
+    spec.origin = out.parent.sample_position(v0, u0);
+    spec.axis_u = out.parent.axis_u();
+    spec.axis_v = out.parent.axis_v();
+    spec.spacing = out.parent.spacing();
+    spec.counts = {nv, nu};
+    out.tiles.emplace_back(spec);
+  }
+  return out;
 }
 
 inline std::filesystem::path resolve_existing(
@@ -476,7 +836,8 @@ inline AppConfig load_config(const std::filesystem::path& path,
           "cphd.path is empty or not a file (" + cphd.string() +
           "). Mode 1 wants the Atlanta Umbra collect "
           "(see mode01.yaml). Mode 2: subset Houston first "
-          "(mode02.yaml). Mode 5: run pull_cphd.py first. "
+          "(mode02.yaml). Mode 3: run pull_cphd.py --mode 3. "
+          "Mode 5: run pull_cphd.py first. "
           "For the generated smoke fixture:\n"
           "  python3 tools/sar_sim/generate_cphd.py "
           "tools/sar_sim/recipes/mode01_smoke.yaml -o <dir>\n"
@@ -490,7 +851,8 @@ inline AppConfig load_config(const std::filesystem::path& path,
     throw std::runtime_error(
         "cphd.path is empty or not a file. Mode 1 wants the "
         "Atlanta Umbra collect (see mode01.yaml). Mode 2: "
-        "subset Houston (mode02.yaml). For the generated "
+        "subset Houston (mode02.yaml). Mode 3: run "
+        "pull_cphd.py --mode 3. For the generated "
         "smoke fixture:\n"
         "  python3 tools/sar_sim/generate_cphd.py "
         "tools/sar_sim/recipes/mode01_smoke.yaml -o <dir>\n"
@@ -506,10 +868,6 @@ inline AppConfig load_config(const std::filesystem::path& path,
       }
       for (const YAML::Node& item : n) {
         cfg.scene_names.push_back(item.as<std::string>());
-      }
-      if (cfg.scene_names.size() != cfg.cphd_paths.size()) {
-        throw std::runtime_error(
-            "cphd.names length must match cphd.path");
       }
     }
   }
@@ -575,6 +933,25 @@ inline AppConfig load_config(const std::filesystem::path& path,
           "lattice.counts and lattice.spacing must be set "
           "together (or omit both and derive from collection "
           "physics)");
+    }
+    int64_t n_tiles = 1;
+    if (const YAML::Node t = lat["tiles"]) {
+      n_tiles = t.as<int64_t>();
+      if (n_tiles < 1) {
+        throw std::runtime_error("lattice.tiles must be >= 1");
+      }
+    }
+    if (n_tiles > 1) {
+      if (cfg.cphd_paths.size() != 1) {
+        throw std::runtime_error(
+            "lattice.tiles is one-file (mode 3); mode 5 uses "
+            "one lattice per cphd.path instead");
+      }
+      if (has_counts) {
+        throw std::runtime_error(
+            "lattice.tiles builds an IA-aligned parent strip; "
+            "omit counts/spacing");
+      }
     }
     if (const YAML::Node side = lat["max_side"]) {
       cfg.lattice_max_side = side.as<int64_t>();
@@ -656,7 +1033,36 @@ inline AppConfig load_config(const std::filesystem::path& path,
       const double dr =
           range_bin_spacing_from_cphd(path, nfft, speed);
       radar::SampleGeometry geom;
-      if (has_counts) {
+      if (n_tiles > 1) {
+        if (!file.has_collection_physics()) {
+          throw std::runtime_error(
+              "lattice.tiles needs collection physics "
+              "(GrazeAngle / SlantRange / FxBW / TOASaved) in " +
+              path);
+        }
+        const auto phys = file.collection_physics();
+        int64_t first_pulse = 0;
+        int64_t last_pulse = file.channel(0).num_vectors;
+        if (const YAML::Node rd = root["cphd_reader"]) {
+          if (const YAML::Node pr = rd["pulse_range"]) {
+            const auto range = pr.as<std::vector<int64_t>>();
+            if (range.size() != 2) {
+              throw std::runtime_error(
+                  "cphd_reader.pulse_range needs 2 entries");
+            }
+            first_pulse = range[0];
+            last_pulse = range[1];
+          }
+        }
+        const auto tiling = stripmap_tile_lattices(
+            file, n_tiles, cfg.lattice_max_side, pixel_scale[i],
+            phys, first_pulse, last_pulse);
+        cfg.tile_geometries = tiling.tiles;
+        cfg.parent_geometry = tiling.parent;
+        cfg.tile_pulses = tiling.tile_pulses;
+        geom = cfg.tile_geometries.front();
+        cfg.collection_physics.push_back(phys);
+      } else if (has_counts) {
         geom = ecef_lattice_at_iarp(
             file.iarp_ecef(), lattice_counts, lattice_spacing);
         if (cfg.lattice_max_side > 0) {
@@ -839,7 +1245,90 @@ inline AppConfig load_config(const std::filesystem::path& path,
 
   if (const YAML::Node am = root["aperture_manager"]) {
     if (const YAML::Node m = am["max_aperture_pulses"]) {
-      cfg.wire_weight = m.as<int64_t>() > 0;
+      const auto max_ap = m.as<int64_t>();
+      cfg.show_playback_lag = max_ap > 0;
+      if (max_ap > 0) {
+        cfg.wire_weight = true;
+      }
+    }
+    if (const YAML::Node w = am["aperture_window"]) {
+      const auto spec = w.as<radar::WindowSpec>();
+      if (spec.type != radar::WindowType::kNone) {
+        cfg.wire_weight = true;
+      }
+    }
+  }
+  // Read-only mirrors of operator YAML so the tile stager can
+  // wrap and so cadence tiles stay even (one tile = N reader
+  // ticks). from_config() still owns the operator parameters.
+  if (const YAML::Node rd = root["cphd_reader"]) {
+    if (const YAML::Node lp = rd["loop"]; lp && !lp.IsNull()) {
+      cfg.reader_loop = lp.as<bool>();
+    }
+  }
+  if (cfg.tile_pulses > 0) {
+    int64_t yaml_interval = 0;
+    if (const YAML::Node am = root["aperture_manager"]) {
+      if (const YAML::Node e = am["emit_interval_pulses"]) {
+        yaml_interval = e.as<int64_t>();
+      }
+    }
+    if (yaml_interval != 0 && yaml_interval != cfg.tile_pulses) {
+      throw std::runtime_error(
+          "aperture_manager.emit_interval_pulses must match "
+          "vector_count / lattice.tiles, after pulse_range (" +
+          std::to_string(cfg.tile_pulses) + ")");
+    }
+    int64_t ppt = 0;
+    if (const YAML::Node rd = root["cphd_reader"]) {
+      if (const YAML::Node p = rd["pulses_per_tick"]) {
+        ppt = p.as<int64_t>();
+      }
+    }
+    if (ppt > 0 && cfg.tile_pulses % ppt != 0) {
+      throw std::runtime_error(
+          "cphd_reader.pulses_per_tick must divide the tile "
+          "length (" +
+          std::to_string(cfg.tile_pulses) +
+          " pulses) so cadence tiles stay even");
+    }
+  }
+  {
+    if (cfg.parent_geometry.is_valid()) {
+      if (cfg.scene_names.size() > 1) {
+        throw std::runtime_error(
+            "cphd.names must be one name (or omitted) when "
+            "tiling a mosaic");
+      }
+      if (cfg.scene_names.empty()) {
+        cfg.scene_names.emplace_back("strip");
+      }
+    } else {
+    const size_t name_n =
+        cfg.tile_geometries.size() > 1
+            ? cfg.tile_geometries.size()
+            : cfg.cphd_paths.size();
+    if (cfg.scene_names.size() == 1 && name_n > 1) {
+      const std::string base = cfg.scene_names.front();
+      cfg.scene_names.clear();
+      for (size_t i = 0; i < name_n; ++i) {
+        cfg.scene_names.push_back(
+            base + " " + std::to_string(i + 1) + "/" +
+            std::to_string(name_n));
+      }
+    } else if (!cfg.scene_names.empty() &&
+               cfg.scene_names.size() != name_n) {
+      throw std::runtime_error(
+          "cphd.names length must match cphd.path, or "
+          "lattice.tiles when tiling");
+    } else if (cfg.scene_names.empty() &&
+               cfg.tile_geometries.size() > 1) {
+      for (size_t i = 0; i < cfg.tile_geometries.size(); ++i) {
+        cfg.scene_names.push_back(
+            "tile " + std::to_string(i + 1) + "/" +
+            std::to_string(cfg.tile_geometries.size()));
+      }
+    }
     }
   }
   if (const YAML::Node v = root["visualize"]; v && !v.IsNull()) {

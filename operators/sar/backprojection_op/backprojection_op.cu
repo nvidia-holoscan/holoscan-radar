@@ -764,6 +764,8 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
                              std::memory_order_relaxed);
     last_image_pixels_.store(emitted_pixels,
                              std::memory_order_relaxed);
+    last_image_num_v_.store(num_v, std::memory_order_relaxed);
+    last_image_num_u_.store(num_u, std::memory_order_relaxed);
     const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                         now.time_since_epoch())
                         .count();

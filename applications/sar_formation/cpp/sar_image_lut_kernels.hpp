@@ -19,10 +19,15 @@ void sar_image_magnitude_c128(const void* in, float* out, size_t count,
                               cudaStream_t stream);
 
 // Mean of each factor×factor block. out is (in_v/factor) by
-// (in_u/factor). factor must be >= 1.
+// (in_u/factor). factor must be >= 1. Empty (non-positive)
+// samples are omitted so a sparse mosaic does not dilute.
 void sar_image_box_average(const float* in, float* out, int64_t in_v,
                            int64_t in_u, int64_t factor,
                            cudaStream_t stream);
+
+// out is (in_u, in_v): row-major transpose of (in_v, in_u).
+void sar_image_transpose(const float* in, float* out, int64_t in_v,
+                         int64_t in_u, cudaStream_t stream);
 
 // Compact finite positive samples, radix-sort them, return
 // nearest-rank percentiles. low_q <= 0 skips *low_out. n_valid 0
