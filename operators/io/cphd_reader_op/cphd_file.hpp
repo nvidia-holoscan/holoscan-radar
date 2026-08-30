@@ -100,6 +100,8 @@ class CphdFile {
   ~CphdFile();
   CphdFile(const CphdFile&) = delete;
   CphdFile& operator=(const CphdFile&) = delete;
+  CphdFile(CphdFile&&) = delete;
+  CphdFile& operator=(CphdFile&&) = delete;
 
   const std::string& path() const { return path_; }
   const std::string& version() const { return version_; }

@@ -97,20 +97,30 @@ holoscan::TensorMap weight_map(const std::vector<double>& values) {
 }
 
 template <typename T>
-holoscan::TensorMap profiles_impulse(double delta_r, double origin,
-                                     std::complex<double> amplitude,
-                                     int64_t pulses = kPulses) {
+holoscan::TensorMap profiles_impulse(
+    double delta_r, double origin, std::complex<double> amplitude,
+    int64_t pulses = kPulses,
+    const std::vector<double>& scales = {}) {
+  if (!scales.empty() &&
+      static_cast<int64_t>(scales.size()) != pulses) {
+    throw std::invalid_argument(
+        "profiles_impulse: scales length must match pulses");
+  }
   const double bin_f = (delta_r - origin) / kSpacing;
   const int64_t bin = static_cast<int64_t>(std::llround(bin_f));
   std::vector<std::complex<double>> cube(
       static_cast<size_t>(pulses * kBins), {0.0, 0.0});
   if (bin >= 0 && bin < kBins) {
     for (int64_t p = 0; p < pulses; ++p) {
-      cube[static_cast<size_t>(p * kBins + bin)] = amplitude;
+      const double scale =
+          scales.empty() ? 1.0 : scales[static_cast<size_t>(p)];
+      cube[static_cast<size_t>(p * kBins + bin)] =
+          amplitude * scale;
     }
   }
   return single_map(
-      complex_cube_to_device<T>(cube, {pulses, kBins}), "range_profiles");
+      complex_cube_to_device<T>(cube, {pulses, kBins}),
+      "range_profiles");
 }
 
 template <typename T>
@@ -135,14 +145,16 @@ class BackprojectionApp : public holoscan::Application {
   BackprojectionApp(BackprojectionBackend backend, FormationControl control,
                     ImageCapture* capture, double origin, double frequency,
                     const std::array<double, 3>& target,
-                    int64_t pulses = kPulses)
+                    int64_t pulses = kPulses,
+                    std::vector<double> scales = {})
       : backend_(backend),
         control_(control),
         capture_(capture),
         origin_(origin),
         frequency_(frequency),
         target_(target),
-        pulses_(pulses) {}
+        pulses_(pulses),
+        scales_(std::move(scales)) {}
 
   void compose() override {
     const auto geometry = grid_geometry();
@@ -164,7 +176,8 @@ class BackprojectionApp : public holoscan::Application {
 
     holoscan::radar::testing::wire_data_source(
         this, op, "range_profiles",
-        {profiles_impulse<T>(dR, origin_, amp, pulses_)});
+        {profiles_impulse<T>(dR, origin_, amp, pulses_,
+                             scales_)});
     holoscan::radar::testing::wire_data_source(
         this, op, "positions", {xyz_map<T>(apc, "positions", pulses_)});
     holoscan::radar::testing::wire_data_source(
@@ -193,19 +206,21 @@ class BackprojectionApp : public holoscan::Application {
   double frequency_;
   std::array<double, 3> target_;
   int64_t pulses_;
+  std::vector<double> scales_;
   TensorMapCapture sink_;
 };
 
 template <typename T>
 HostTensor form_one(BackprojectionBackend backend,
                     const std::array<double, 3>& target,
-                    double frequency = kFreq, int64_t pulses = kPulses) {
+                    double frequency = kFreq, int64_t pulses = kPulses,
+                    std::vector<double> scales = {}) {
   const double origin =
       -std::floor(static_cast<double>(kBins) / 2.0) * kSpacing;
   ImageCapture capture;
   auto app = holoscan::make_application<BackprojectionApp<T>>(
-      backend, FormationControl::kEmitAndReset, &capture, origin, frequency,
-      target, pulses);
+      backend, FormationControl::kEmitAndReset, &capture, origin,
+      frequency, target, pulses, std::move(scales));
   app->run();
   app->take();
   return capture.image;
@@ -834,6 +849,8 @@ struct WeightedTick {
   int64_t pulses{kPulses};
   double weight{1.0};
   FormationControl control{FormationControl::kEmitAndContinue};
+  // Empty = every pulse uses the matched amplitude (scale 1).
+  std::vector<double> scales{};
 };
 
 class WeightedTicksApp : public holoscan::Application {
@@ -872,8 +889,8 @@ class WeightedTicksApp : public holoscan::Application {
     weights.reserve(ticks_.size());
     control.reserve(ticks_.size());
     for (const auto& tick : ticks_) {
-      profiles.push_back(
-          profiles_impulse<float>(dR, origin, amp, tick.pulses));
+      profiles.push_back(profiles_impulse<float>(
+          dR, origin, amp, tick.pulses, tick.scales));
       pos.push_back(xyz_map<float>(apc, "positions", tick.pulses));
       ref.push_back(
           xyz_map<float>(srp, "reference_position", tick.pulses));
@@ -922,22 +939,33 @@ TEST(BackprojectionOp, SignedWeightCancels) {
 }
 
 TEST(BackprojectionOp, SlidingWindowEqualsFromScratch) {
-  // Eight pulses, then evict four at −1. Each emit matches a
-  // from-scratch formation over the pulses still in the window.
+  // Eight pulses with distinct scales, then replay the first four
+  // at −1. Remaining four must match a from-scratch form of scales
+  // 5..8, not of the evicted 1..4 (identical pulses would not tell
+  // those apart).
+  const std::vector<double> all{1.0, 2.0, 3.0, 4.0,
+                                5.0, 6.0, 7.0, 8.0};
+  const std::vector<double> evicted{1.0, 2.0, 3.0, 4.0};
+  const std::vector<double> kept{5.0, 6.0, 7.0, 8.0};
   TensorMapCapture sink;
   auto app = holoscan::make_application<WeightedTicksApp>(
       std::vector<WeightedTick>{
-          {2 * kPulses, 1.0, FormationControl::kEmitAndContinue},
-          {kPulses, -1.0, FormationControl::kEmitAndContinue}},
+          {2 * kPulses, 1.0, FormationControl::kEmitAndContinue,
+           all},
+          {kPulses, -1.0, FormationControl::kEmitAndContinue,
+           evicted}},
       &sink);
   app->run();
   ASSERT_EQ(sink.frames.size(), 2u);
   const auto eight = form_one<float>(
       BackprojectionBackend::kNvradarFp64Reference, kTarget, kFreq,
-      2 * kPulses);
-  const auto four = form_one<float>(
+      2 * kPulses, all);
+  const auto four_kept = form_one<float>(
       BackprojectionBackend::kNvradarFp64Reference, kTarget, kFreq,
-      kPulses);
+      kPulses, kept);
+  const auto four_evicted = form_one<float>(
+      BackprojectionBackend::kNvradarFp64Reference, kTarget, kFreq,
+      kPulses, evicted);
   const auto expected = sar_predicted_peak(grid_geometry(), kTarget);
   const double mag_win8 = std::abs(
       pixel(sink.frames[0], expected.first, expected.second));
@@ -945,11 +973,14 @@ TEST(BackprojectionOp, SlidingWindowEqualsFromScratch) {
       pixel(sink.frames[1], expected.first, expected.second));
   const double mag_8 =
       std::abs(pixel(eight, expected.first, expected.second));
-  const double mag_4 =
-      std::abs(pixel(four, expected.first, expected.second));
+  const double mag_kept = std::abs(
+      pixel(four_kept, expected.first, expected.second));
+  const double mag_gone = std::abs(
+      pixel(four_evicted, expected.first, expected.second));
   EXPECT_GT(mag_8, 1.0);
   EXPECT_NEAR(mag_win8, mag_8, 0.05 * mag_8);
-  EXPECT_NEAR(mag_win4, mag_4, 0.05 * mag_4);
+  EXPECT_NEAR(mag_win4, mag_kept, 0.05 * mag_kept);
+  EXPECT_GT(std::abs(mag_win4 - mag_gone), 0.25 * mag_kept);
 }
 
 class RejectSincApp : public holoscan::Application {

@@ -37,8 +37,9 @@ Current recipes:
 The public-collection **subsetter** is a sibling CLI. It does not synthesize: it
 takes a local CPHD or an HTTPS URL and writes a new CPHD whose `SC0` / `FxC` /
 `FxBW` are derived from the kept sample grid (`INPUT_DATA.md`). The kept window
-is a recipe/CLI knob — not a constant in the tool — because the demo size is
-still being chosen. Omit an axis to keep it whole.
+is a recipe/CLI knob — not a constant in the tool. The live mode-2 YAML uses
+the 1.0 m recipe (`mode02_houston_1p0m.yaml`); 0.5 m stays on disk. Omit an
+axis to keep it whole.
 
 ```yaml
 samples:

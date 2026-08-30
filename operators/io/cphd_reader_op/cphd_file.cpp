@@ -300,6 +300,9 @@ void pread_fully(int fd, char* dest, int64_t bytes, int64_t offset,
         ::pread(fd, dest + got, static_cast<size_t>(bytes - got),
                 static_cast<off_t>(offset + got));
     if (n < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
       throw std::runtime_error(
           "CphdFile: " + path + ": " + what + " read failed: " +
           std::strerror(errno));

@@ -116,7 +116,7 @@ Everything pulled out of phases 0–2 attaches to the demo that first forces it.
 - **Scroll accumulation is forced by mode 4** and nothing else.
 - **The subsetter is forced by mode 2, not by phase 2.** It has two jobs — a pulse window and a contiguous central frequency subband — and mode 1 needs neither. `CPHDReaderOp.pulse_range` already selects an aperture out of a long collection, and a spotlight has no reason to narrow bandwidth, since full bandwidth *is* the finest range resolution the demo wants. So Atlanta can be pulled whole at 28.59 GiB and read with `pulse_range`, the reader seeking rather than loading it. Houston is where that stops working: 110 GiB, and the subband is a strided slice inside every vector rather than a contiguous byte range, which is why its pull is 208,753 separate range requests.
 
-**Mode 2 is in flight.** `mode02.yaml` streams the Houston 1.0 m subset with retention, signed `weight`, a ~2.18 Hz emit cadence, and collect-vs-wall lag. Formed side is `lattice.max_side: 6144` on a 6.8 km scene (0.5 m ran ~4× behind; 6800² was ~7%). Collect-time smoke is the remaining gate. Capella stays a mode 3 pin. Mode 4 still follows mode 3, because scroll is the first thing that changes the accumulator.
+**Mode 2 landed 2026-08-29.** `mode02.yaml` streams the Houston 1.0 m subset with retention, signed `weight`, a ~2.18 Hz emit cadence, collect-vs-wall lag, and the APC look overlay. Formed side is `lattice.max_side: 6144` on a 6.8 km scene (0.5 m ran ~4× behind; 6800² was ~7%). Catch-up pacing held collect time. Capella stays a mode 3 pin. Mode 4 still follows mode 3, because scroll is the first thing that changes the accumulator.
 
 ### Work no demo forces
 

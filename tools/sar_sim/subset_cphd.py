@@ -196,6 +196,7 @@ def main() -> int:
         connections=connections,
         force=args.force,
         dry_run=args.dry_run,
+        progress=True,
     )
     elapsed = time.perf_counter() - started
     if result.dry_run:

@@ -722,9 +722,13 @@ def subset_cphd(
     connections: int = _DEFAULT_CONNECTIONS,
     force: bool = False,
     dry_run: bool = False,
-    progress: bool = True,
+    progress: bool = False,
 ) -> SubsetResult:
-    """Write a pulse-and/or-sample subset of ``source`` to ``dest``."""
+    """Write a pulse-and/or-sample subset of ``source`` to ``dest``.
+
+    ``progress`` is off by default so importing this as a library is quiet.
+    The CLI passes ``progress=True``.
+    """
     dest = Path(dest)
     pulse_spec = as_axis_window(pulses, axis="pulses")
     sample_spec = as_axis_window(samples, axis="samples")
@@ -790,10 +794,11 @@ def subset_cphd(
                 dest, source, (pulse_start, pulse_stop), (sample_start, sample_stop)
             )
         ):
-            print(
-                f"skip {dest}: already pulses [{pulse_start}, {pulse_stop}) "
-                f"samples [{sample_start}, {sample_stop})"
-            )
+            if progress:
+                print(
+                    f"skip {dest}: already pulses [{pulse_start}, {pulse_stop}) "
+                    f"samples [{sample_start}, {sample_stop})"
+                )
             return SubsetResult(skipped=True, **result_kw)
 
         support = _read_support_arrays(src, xmltree, kvps)
