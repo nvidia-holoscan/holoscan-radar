@@ -146,6 +146,12 @@ inline std::shared_ptr<holoscan::ops::HolovizOp> make_rd_holoviz_op(
 // this GLFW surface only offers SrgbNonlinear (`No framebuffer
 // format found which supports the requirements pass_through`).
 // Inverse-sRGB on the LUT overshot (too dark vs the PNG).
+// Overlay canvases (pixels). Views are these over the window so a
+// landscape strip does not stretch glyphs.
+constexpr int64_t kSarOverlayWidth = 480;
+constexpr int64_t kSarOverlayHeight = 40;
+constexpr int64_t kSarCompassSide = 81;
+
 // Optional `on_window_size`: same as make_color_holoviz_op
 // (place the window after GLFW maps it).
 inline std::shared_ptr<holoscan::ops::HolovizOp> make_image_holoviz_op(

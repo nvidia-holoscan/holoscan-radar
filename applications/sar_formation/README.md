@@ -169,11 +169,14 @@ reset`) with `emit_interval_pulses` = 15905 (one tile) and
 Taylor `aperture_window` / `range_window`. `weight` is wired so
 the taper reaches BP. Seams at the joins are the mode: a reset
 drops retention, so edge pixels under-integrate. Mode 4 is the
-seam-free scroll. Tiles are IA-aligned ROIs of a parent SRP ×
-range-swath lattice (along-track on `v`), not east-north squares
-and not Capella `ImageArea` Y extents. `lattice.max_side: 4096`
-caps each tile's longer axis (~2.6 m GSD, near range-Nyquist on
-a ~10 km square), not the parent strip. `TileMosaicOp` holds
+seam-free scroll. Tiles are ROIs of a parent lattice that
+follows the SRP chord (along-track on `v`), not the IARP
+tangent plane, not east-north squares, and not Capella
+`ImageArea` Y extents. Parent `u` is every ground point the
+pulses can light; every tile forms that full height so a
+shared edge matches. `lattice.max_side: 4096` caps each
+tile's along-track axis (~2.6 m GSD, near range-Nyquist),
+not parent or tile `u`. `TileMosaicOp` holds
 finished squares so Holoviz is the strip, not the last chip.
 LUT windows filled pixels only while the canvas is sparse.
 Chevron is raster `u`/`v`; the compass inset is true ENU.

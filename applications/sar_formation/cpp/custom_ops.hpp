@@ -191,6 +191,8 @@ class TileGeometryStagerOp : public holoscan::Operator {
 // previous square from BP.image). Blit tile k into its ROI on a
 // persistent parent; loop wrap (tile 0 after tile n-1) clears
 // first. LUT / Holoviz / optional dump consume the parent.
+// Two output slots so a downstream tick can still read the last
+// emit while this one copies (no per-emit parent malloc).
 class TileMosaicOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(TileMosaicOp)
@@ -242,6 +244,8 @@ class TileMosaicOp : public holoscan::Operator {
     const int64_t pu = parent.num_u();
     if (!canvas_) {
       canvas_ = radar::make_device_tensor({pv, pu}, dtype);
+      outs_[0] = radar::make_device_tensor({pv, pu}, dtype);
+      outs_[1] = radar::make_device_tensor({pv, pu}, dtype);
       const size_t bytes =
           static_cast<size_t>(pv) * static_cast<size_t>(pu) *
           elem;
@@ -306,7 +310,7 @@ class TileMosaicOp : public holoscan::Operator {
         who, tile_index_ + 1, n, roi.v0, roi.u0, roi.nv,
         roi.nu, pv, pu);
 
-    auto out = radar::make_device_tensor({pv, pu}, dtype);
+    auto out = outs_[out_slot_];
     const size_t bytes =
         static_cast<size_t>(pv) * static_cast<size_t>(pu) * elem;
     const auto out_err = cudaMemcpyAsync(
@@ -321,6 +325,7 @@ class TileMosaicOp : public holoscan::Operator {
       op_output.set_cuda_stream(stream, "image");
     }
     radar::emit_single(op_output, "image", out);
+    out_slot_ ^= 1;
     ++emitted_;
     tile_index_ = (tile_index_ + 1) % n;
   }
@@ -370,6 +375,8 @@ class TileMosaicOp : public holoscan::Operator {
 
   std::vector<Roi> rois_;
   std::shared_ptr<holoscan::Tensor> canvas_;
+  std::shared_ptr<holoscan::Tensor> outs_[2];
+  size_t out_slot_{0};
   DLDataType dtype_{};
   size_t tile_index_{0};
   int64_t emitted_{0};

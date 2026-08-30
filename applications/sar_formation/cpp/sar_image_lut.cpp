@@ -18,6 +18,7 @@
 
 #include "custom_ops.hpp"  // NOLINT(build/include_subdir)
 #include "sar_image_lut_kernels.hpp"  // NOLINT(build/include_subdir)
+#include "radar_app/app/holoviz_layout.hpp"
 #include "radar_app/viz/viz.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"

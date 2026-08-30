@@ -12,10 +12,12 @@
 #   ./build/applications/sar_formation/cpp/sar_formation mode03.yaml
 #
 # nvec 159051 does not divide by 10; pulse_range drops the last
-# vector so ten tiles of 15905 pulses (~10.4 × 10.3 km). Parent
-# lattice is SRP × range swath on uIAX/uIAY, along-track on v;
-# lattice.max_side caps each tile's longer axis (range-Nyquist
-# ~4k on a ~10 km square; the parent is ten of those along v).
+# vector so ten tiles of 15905 pulses (~10.4 km along-track).
+# Lattice follows the SRP chord (not the IARP tangent plane).
+# Parent u is every ground point the pulses can light; every
+# tile forms that full height so joins line up. lattice.max_side
+# caps each tile's along-track axis. Parent v is ten tiles
+# along-track; parent u can exceed max_side.
 # Block aperture: max_aperture_pulses 0 with
 # emit_interval = tile length is the stamped-window row
 # (aperture_window is illegal when max > 0). Taylor on range and

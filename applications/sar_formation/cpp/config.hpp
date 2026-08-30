@@ -14,12 +14,14 @@
 // Lattice: `sample_geometry` (Atlanta ENU), sidecar truth, or
 // `lattice` — explicit counts/spacing (IARP ENU; counts may be N
 // or [num_v, num_u]), collection physics (XY square at the
-// coarser GSD), or `lattice.tiles` > 1 (mode 3: IA-aligned
-// parent strip + ROI tiles along a travelling SRP; one file;
-// omit counts/spacing). `max_side` caps each *tile's* longer
-// axis (the parent is n_tiles of those along v). `pixel_scale`
-// is a per-collect factor on N. A guessed sidecar must not
-// override an explicit YAML lattice.
+// coarser GSD), or `lattice.tiles` > 1 (mode 3: parent strip +
+// ROI tiles along a travelling SRP; one file; omit
+// counts/spacing). Along-track follows the SRP chord, not the
+// IARP tangent plane. `max_side` caps each tile's along-track
+// axis (the parent is n_tiles of those along v; tile and parent
+// u may exceed the cap so the IFFT swath stays native GSD).
+// `pixel_scale` is a per-collect factor on N. A guessed sidecar
+// must not override an explicit YAML lattice.
 
 #pragma once
 
@@ -85,8 +87,9 @@ struct AppConfig {
   // Timing cap on each physics-derived (or explicit-count) lattice
   // axis. 0 = no cap (native collection-physics N, or the YAML
   // counts). A positive cap coarsens GSD and keeps the scene.
-  // Mode 3: per tile, not the parent strip. Mode 2 / 5: the
-  // formed image. Lower it on a slower GPU.
+  // Mode 3: each tile's along-track axis (u may exceed so the
+  // IFFT swath stays native). Mode 2 / 5: the formed image.
+  // Lower it on a slower GPU.
   int64_t lattice_max_side{0};
   // Per-collection factor on native N (both axes). 1 = native.
   // Same square, coarser GSD. Size matches cphd_paths.
@@ -442,14 +445,14 @@ inline std::array<int64_t, 2> counts_for_extent(
   return {num_v, num_u};
 }
 
-// Same as counts_for_extent, but max_side is each tile's longer
-// axis. n_tiles slices extent_v (along-track). tile_extent_u is
-// the tile's cross-track (range swath). Parent extent_u may be
-// wider (SRP wander) and is not the cap; a 10:1 strip does not
-// spend the whole budget on along-track.
+// Same as counts_for_extent, but max_side caps each tile's
+// along-track axis. n_tiles slices extent_v. Parent/tile u is
+// the range-window envelope union and is not the cap; a 10:1
+// strip does not spend the whole budget on along-track, and an
+// IFFT swath wider than max_side stays at native GSD.
 inline std::array<int64_t, 2> counts_for_tiled_extent(
-    double extent_v, double extent_u, double tile_extent_u,
-    double native_spacing, int64_t n_tiles, int64_t max_side) {
+    double extent_v, double extent_u, double native_spacing,
+    int64_t n_tiles, int64_t max_side) {
   if (n_tiles < 1) {
     throw std::runtime_error("lattice.tiles must be >= 1");
   }
@@ -457,8 +460,7 @@ inline std::array<int64_t, 2> counts_for_tiled_extent(
     throw std::runtime_error(
         "native lattice spacing must be finite and > 0");
   }
-  if (!(extent_v > 0.0) || !(extent_u > 0.0) ||
-      !(tile_extent_u > 0.0)) {
+  if (!(extent_v > 0.0) || !(extent_u > 0.0)) {
     throw std::runtime_error("image area extents must be > 0");
   }
   auto num_v = std::max(
@@ -468,22 +470,13 @@ inline std::array<int64_t, 2> counts_for_tiled_extent(
       int64_t{1},
       static_cast<int64_t>(std::llround(extent_u / native_spacing)));
   const int64_t tile_v = std::max(int64_t{1}, num_v / n_tiles);
-  const int64_t tile_u = std::max(
-      int64_t{1},
-      static_cast<int64_t>(
-          std::llround(tile_extent_u / native_spacing)));
-  const int64_t tile_long = std::max(tile_v, tile_u);
-  if (max_side > 0 && tile_long > max_side) {
-    const double scale = static_cast<double>(tile_long) /
+  if (max_side > 0 && tile_v > max_side) {
+    const double scale = static_cast<double>(tile_v) /
                          static_cast<double>(max_side);
     num_v = std::max(
         int64_t{1},
         static_cast<int64_t>(std::llround(
             static_cast<double>(num_v) / scale)));
-    num_u = std::max(
-        int64_t{1},
-        static_cast<int64_t>(std::llround(
-            static_cast<double>(num_u) / scale)));
   }
   return {num_v, num_u};
 }
@@ -603,9 +596,19 @@ inline std::array<double, 3> sub3(const std::array<double, 3>& a,
   return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
 }
 
+inline std::array<double, 3> add3(const std::array<double, 3>& a,
+                                  const std::array<double, 3>& b) {
+  return {a[0] + b[0], a[1] + b[1], a[2] + b[2]};
+}
+
 inline std::array<double, 3> scale3(const std::array<double, 3>& a,
                                     double s) {
   return {a[0] * s, a[1] * s, a[2] * s};
+}
+
+inline double dist3(const std::array<double, 3>& a,
+                    const std::array<double, 3>& b) {
+  return std::sqrt(dot3(sub3(a, b), sub3(a, b)));
 }
 
 inline std::array<double, 3> unit3(const std::array<double, 3>& a,
@@ -623,18 +626,21 @@ struct StripmapTiling {
   int64_t tile_pulses{0};
 };
 
-// Mode 3: parent strip (SRP span × range swath on uIAX/uIAY,
-// along-track on v) plus ROI tiles. Cross-track is ± range
-// swath / 2 about each tile's mean SRP. Capella ImageArea
-// extents are not the scene. first/last is the half-open pulse
-// window (pulse_range, or the whole channel). max_side caps
-// each tile's longer axis; the parent is n_tiles of those
-// along v.
+// Mode 3: parent strip plus ROI tiles. Along-track (v) follows
+// the SRP chord in ECEF. Cross-track is the IA across-axis,
+// orthogonalized against the chord. Parent u is every ground
+// point the pulses can light (IFFT window on the plane, first
+// / mid / last pulse of each tile). Every tile forms that
+// full u so a shared v-edge is the same height; cropping u
+// per tile made the staircase at the joins. Capella ImageArea
+// extents are not the scene. first/last is the half-open
+// pulse window. max_side caps each tile's along-track axis;
+// the parent is n_tiles of those along v.
 inline StripmapTiling stripmap_tile_lattices(
     const radar::cphd::CphdFile& file, int64_t n_tiles,
     int64_t max_side, double pixel_scale,
     const radar::cphd::CphdFile::CollectionPhysics& phys,
-    int64_t first_pulse, int64_t last_pulse) {
+    int64_t first_pulse, int64_t last_pulse, double half_slant) {
   if (n_tiles < 2) {
     throw std::runtime_error("lattice.tiles must be >= 2");
   }
@@ -648,6 +654,10 @@ inline StripmapTiling stripmap_tile_lattices(
   if (!file.has_pvp_field("SRPPos")) {
     throw std::runtime_error(
         "tiling needs PVP SRPPos (travelling scene reference)");
+  }
+  if (!file.has_pvp_field("TxPos")) {
+    throw std::runtime_error(
+        "tiling needs PVP TxPos (range-window envelope)");
   }
   if (!file.has_image_area()) {
     throw std::runtime_error(
@@ -677,10 +687,12 @@ inline StripmapTiling stripmap_tile_lattices(
         std::to_string(n_tiles) +
         " tiles); drop leftover vectors with pulse_range");
   }
-  if (!(phys.range_swath_m > 0.0) ||
-      !(phys.gsd_range_m > 0.0)) {
+  if (!(phys.gsd_range_m > 0.0)) {
+    throw std::runtime_error("tiling needs a positive range GSD");
+  }
+  if (!(half_slant > 0.0) || !std::isfinite(half_slant)) {
     throw std::runtime_error(
-        "tiling needs a positive range swath and range GSD");
+        "tiling needs a positive compressed-range half-span");
   }
   const auto& ia = file.image_area();
   const auto iarp = file.iarp_ecef();
@@ -696,6 +708,13 @@ inline StripmapTiling stripmap_tile_lattices(
     }
     return std::array<double, 3>{v[0], v[1], v[2]};
   };
+  const auto tx_at = [&](int64_t i) {
+    const auto v = file.read_pvp(0, "TxPos", i, 1, 3);
+    if (v.size() != 3) {
+      throw std::runtime_error("TxPos must have 3 components");
+    }
+    return std::array<double, 3>{v[0], v[1], v[2]};
+  };
   const auto proj = [&](const std::array<double, 3>& srp,
                         const std::array<double, 3>& axis) {
     return dot3(sub3(srp, iarp), axis);
@@ -708,42 +727,108 @@ inline StripmapTiling stripmap_tile_lattices(
   const double y1 = proj(s1, iay);
   const bool along_x =
       std::abs(x1 - x0) >= std::abs(y1 - y0);
-  std::array<double, 3> axis_along = along_x ? iax : iay;
-  const std::array<double, 3> axis_across = along_x ? iay : iax;
-  double a0 = along_x ? x0 : y0;
-  double a1 = along_x ? x1 : y1;
+  const std::array<double, 3> ia_across = along_x ? iay : iax;
+  auto axis_along = unit3(sub3(s1, s0), "SRP track");
+  double a0 = proj(s0, axis_along);
+  double a1 = proj(s1, axis_along);
   if (a1 < a0) {
     axis_along = scale3(axis_along, -1.0);
     a0 = -a0;
     a1 = -a1;
   }
   if (!(a1 > a0) || !std::isfinite(a0) || !std::isfinite(a1)) {
-    throw std::runtime_error(
-        "tiling needs a travelling SRP along uIAX/uIAY");
+    throw std::runtime_error("tiling needs a travelling SRP");
   }
+  const auto axis_across = unit3(
+      sub3(ia_across,
+           scale3(axis_along, dot3(ia_across, axis_along))),
+      "cross-track");
   const int64_t tile_pulses = span / n_tiles;
-  const double swath = phys.range_swath_m;
-  const double half = 0.5 * swath;
-  std::vector<double> cross_c(static_cast<size_t>(n_tiles));
+  const auto formable_across =
+      [&](const std::array<double, 3>& srp,
+          const std::array<double, 3>& tx) {
+        const double a = proj(srp, axis_along);
+        const double r0 = dist3(tx, srp);
+        const auto los = unit3(sub3(srp, tx), "APC-SRP");
+        const double los_across =
+            std::abs(dot3(los, axis_across));
+        if (!(los_across > 0.0) || !std::isfinite(los_across)) {
+          throw std::runtime_error(
+              "tiling range window mapped to an empty "
+              "cross-track interval");
+        }
+        const double half_ground = half_slant / los_across;
+        const double c_ref = proj(srp, axis_across);
+        const auto in_win = [&](double c) {
+          const auto p = add3(
+              iarp, add3(scale3(axis_along, a),
+                         scale3(axis_across, c)));
+          return std::abs(dist3(p, tx) - r0) <= half_slant;
+        };
+        if (!in_win(c_ref)) {
+          throw std::runtime_error(
+              "tiling: SRP projection is outside the range "
+              "window on the lattice plane");
+        }
+        const auto edge = [&](double sign) {
+          double lo = 0.0;
+          double hi = 2.0 * half_ground;
+          for (int i = 0; i < 40; ++i) {
+            const double mid = 0.5 * (lo + hi);
+            if (in_win(c_ref + sign * mid)) {
+              lo = mid;
+            } else {
+              hi = mid;
+            }
+          }
+          return c_ref + sign * lo;
+        };
+        return std::array<double, 2>{edge(-1.0), edge(1.0)};
+      };
+  double cross_lo = 0.0;
+  double cross_hi = 0.0;
   for (int64_t k = 0; k < n_tiles; ++k) {
-    int64_t mid =
-        first_pulse + k * tile_pulses + tile_pulses / 2;
+    const int64_t i0 = first_pulse + k * tile_pulses;
+    int64_t i1 = i0 + tile_pulses - 1;
+    if (i1 >= last_pulse) {
+      i1 = last_pulse - 1;
+    }
+    int64_t mid = i0 + tile_pulses / 2;
     if (mid >= last_pulse) {
       mid = last_pulse - 1;
     }
-    cross_c[static_cast<size_t>(k)] =
-        proj(srp_at(mid), axis_across);
-  }
-  double cross_lo = cross_c.front() - half;
-  double cross_hi = cross_c.front() + half;
-  for (double c : cross_c) {
-    cross_lo = std::min(cross_lo, c - half);
-    cross_hi = std::max(cross_hi, c + half);
+    double clo = 0.0;
+    double chi = 0.0;
+    bool first = true;
+    const int64_t pulses[3] = {i0, mid, i1};
+    for (int64_t p = 0; p < 3; ++p) {
+      const auto env =
+          formable_across(srp_at(pulses[p]), tx_at(pulses[p]));
+      if (first) {
+        clo = env[0];
+        chi = env[1];
+        first = false;
+      } else {
+        clo = std::min(clo, env[0]);
+        chi = std::max(chi, env[1]);
+      }
+    }
+    if (!(chi > clo)) {
+      throw std::runtime_error(
+          "tiling tile " + std::to_string(k + 1) +
+          " has an empty range-window envelope");
+    }
+    if (k == 0) {
+      cross_lo = clo;
+      cross_hi = chi;
+    } else {
+      cross_lo = std::min(cross_lo, clo);
+      cross_hi = std::max(cross_hi, chi);
+    }
   }
   const double spacing0 = phys.gsd_range_m / pixel_scale;
   const auto counts = counts_for_tiled_extent(
-      a1 - a0, cross_hi - cross_lo, swath, spacing0, n_tiles,
-      max_side);
+      a1 - a0, cross_hi - cross_lo, spacing0, n_tiles, max_side);
   StripmapTiling out;
   out.tile_pulses = tile_pulses;
   out.parent = lattice_from_image_area(
@@ -751,7 +836,6 @@ inline StripmapTiling stripmap_tile_lattices(
       counts[0], counts[1]);
   const int64_t nv_p = out.parent.num_v();
   const int64_t nu_p = out.parent.num_u();
-  const double spu = out.parent.spacing()[1];
   out.tiles.reserve(static_cast<size_t>(n_tiles));
   for (int64_t k = 0; k < n_tiles; ++k) {
     const int64_t v0 = k * nv_p / n_tiles;
@@ -761,29 +845,12 @@ inline StripmapTiling stripmap_tile_lattices(
       throw std::runtime_error(
           "lattice.max_side is too small to slice tiles along v");
     }
-    const double clo = cross_c[static_cast<size_t>(k)] - half;
-    const double chi = cross_c[static_cast<size_t>(k)] + half;
-    int64_t u0 = static_cast<int64_t>(
-        std::llround((clo - cross_lo) / spu));
-    int64_t u1 = static_cast<int64_t>(
-        std::llround((chi - cross_lo) / spu));
-    if (u0 < 0) {
-      u0 = 0;
-    }
-    if (u1 > nu_p) {
-      u1 = nu_p;
-    }
-    if (u1 <= u0) {
-      u0 = 0;
-      u1 = nu_p;
-    }
-    const int64_t nu = u1 - u0;
     radar::SampleGeometrySpec spec;
-    spec.origin = out.parent.sample_position(v0, u0);
+    spec.origin = out.parent.sample_position(v0, 0);
     spec.axis_u = out.parent.axis_u();
     spec.axis_v = out.parent.axis_v();
     spec.spacing = out.parent.spacing();
-    spec.counts = {nv, nu};
+    spec.counts = {nv, nu_p};
     out.tiles.emplace_back(spec);
   }
   return out;
@@ -949,7 +1016,7 @@ inline AppConfig load_config(const std::filesystem::path& path,
       }
       if (has_counts) {
         throw std::runtime_error(
-            "lattice.tiles builds an IA-aligned parent strip; "
+            "lattice.tiles builds an SRP-track parent strip; "
             "omit counts/spacing");
       }
     }
@@ -1054,9 +1121,17 @@ inline AppConfig load_config(const std::filesystem::path& path,
             last_pulse = range[1];
           }
         }
+        const int64_t num_bins =
+            nfft > 0 ? nfft : file.channel(0).num_samples;
+        if (num_bins < 1) {
+          throw std::runtime_error(
+              "tiling needs num_samples >= 1 in " + path);
+        }
+        const double half_slant =
+            0.5 * static_cast<double>(num_bins) * dr;
         const auto tiling = stripmap_tile_lattices(
             file, n_tiles, cfg.lattice_max_side, pixel_scale[i],
-            phys, first_pulse, last_pulse);
+            phys, first_pulse, last_pulse, half_slant);
         cfg.tile_geometries = tiling.tiles;
         cfg.parent_geometry = tiling.parent;
         cfg.tile_pulses = tiling.tile_pulses;
@@ -1304,31 +1379,20 @@ inline AppConfig load_config(const std::filesystem::path& path,
         cfg.scene_names.emplace_back("strip");
       }
     } else {
-    const size_t name_n =
-        cfg.tile_geometries.size() > 1
-            ? cfg.tile_geometries.size()
-            : cfg.cphd_paths.size();
-    if (cfg.scene_names.size() == 1 && name_n > 1) {
-      const std::string base = cfg.scene_names.front();
-      cfg.scene_names.clear();
-      for (size_t i = 0; i < name_n; ++i) {
-        cfg.scene_names.push_back(
-            base + " " + std::to_string(i + 1) + "/" +
-            std::to_string(name_n));
+      const size_t name_n = cfg.cphd_paths.size();
+      if (cfg.scene_names.size() == 1 && name_n > 1) {
+        const std::string base = cfg.scene_names.front();
+        cfg.scene_names.clear();
+        for (size_t i = 0; i < name_n; ++i) {
+          cfg.scene_names.push_back(
+              base + " " + std::to_string(i + 1) + "/" +
+              std::to_string(name_n));
+        }
+      } else if (!cfg.scene_names.empty() &&
+                 cfg.scene_names.size() != name_n) {
+        throw std::runtime_error(
+            "cphd.names length must match cphd.path");
       }
-    } else if (!cfg.scene_names.empty() &&
-               cfg.scene_names.size() != name_n) {
-      throw std::runtime_error(
-          "cphd.names length must match cphd.path, or "
-          "lattice.tiles when tiling");
-    } else if (cfg.scene_names.empty() &&
-               cfg.tile_geometries.size() > 1) {
-      for (size_t i = 0; i < cfg.tile_geometries.size(); ++i) {
-        cfg.scene_names.push_back(
-            "tile " + std::to_string(i + 1) + "/" +
-            std::to_string(cfg.tile_geometries.size()));
-      }
-    }
     }
   }
   if (const YAML::Node v = root["visualize"]; v && !v.IsNull()) {
