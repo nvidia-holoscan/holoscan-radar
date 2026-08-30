@@ -123,6 +123,278 @@ std::shared_ptr<holoscan::Tensor> overlay_tensor(
   return tensor;
 }
 
+void put_rgba(std::vector<uint8_t>* img, int64_t w, int64_t h,
+              int64_t x, int64_t y, const std::array<uint8_t, 4>& c) {
+  if (x < 0 || x >= w || y < 0 || y >= h) {
+    return;
+  }
+  const size_t o = static_cast<size_t>((y * w + x) * 4);
+  (*img)[o + 0] = c[0];
+  (*img)[o + 1] = c[1];
+  (*img)[o + 2] = c[2];
+  (*img)[o + 3] = c[3];
+}
+
+void draw_line_rgba(std::vector<uint8_t>* img, int64_t w, int64_t h,
+                    int64_t x0, int64_t y0, int64_t x1, int64_t y1,
+                    const std::array<uint8_t, 4>& c) {
+  int64_t dx = std::abs(x1 - x0);
+  int64_t dy = -std::abs(y1 - y0);
+  const int64_t sx = x0 < x1 ? 1 : -1;
+  const int64_t sy = y0 < y1 ? 1 : -1;
+  int64_t err = dx + dy;
+  int64_t x = x0;
+  int64_t y = y0;
+  while (true) {
+    put_rgba(img, w, h, x, y, c);
+    put_rgba(img, w, h, x + 1, y, c);
+    put_rgba(img, w, h, x, y + 1, c);
+    if (x == x1 && y == y1) {
+      break;
+    }
+    const int64_t e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      y += sy;
+    }
+  }
+}
+
+void fill_disc_rgba(std::vector<uint8_t>* img, int64_t w, int64_t h,
+                    int64_t cx, int64_t cy, int64_t r,
+                    const std::array<uint8_t, 4>& c) {
+  const int64_t r2 = r * r;
+  for (int64_t y = cy - r; y <= cy + r; ++y) {
+    for (int64_t x = cx - r; x <= cx + r; ++x) {
+      const int64_t dx = x - cx;
+      const int64_t dy = y - cy;
+      if (dx * dx + dy * dy <= r2) {
+        put_rgba(img, w, h, x, y, c);
+      }
+    }
+  }
+}
+
+void fill_triangle_rgba(std::vector<uint8_t>* img, int64_t w,
+                        int64_t h, int64_t x0, int64_t y0, int64_t x1,
+                        int64_t y1, int64_t x2, int64_t y2,
+                        const std::array<uint8_t, 4>& c) {
+  const int64_t xmin = std::min(x0, std::min(x1, x2));
+  const int64_t xmax = std::max(x0, std::max(x1, x2));
+  const int64_t ymin = std::min(y0, std::min(y1, y2));
+  const int64_t ymax = std::max(y0, std::max(y1, y2));
+  const auto edge = [](int64_t ax, int64_t ay, int64_t bx,
+                       int64_t by, int64_t px, int64_t py) {
+    return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+  };
+  const int64_t a01 = edge(x0, y0, x1, y1, x2, y2);
+  if (a01 == 0) {
+    return;
+  }
+  for (int64_t y = ymin; y <= ymax; ++y) {
+    for (int64_t x = xmin; x <= xmax; ++x) {
+      const int64_t w0 = edge(x1, y1, x2, y2, x, y);
+      const int64_t w1 = edge(x2, y2, x0, y0, x, y);
+      const int64_t w2 = edge(x0, y0, x1, y1, x, y);
+      if (a01 > 0) {
+        if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+          put_rgba(img, w, h, x, y, c);
+        }
+      } else if (w0 <= 0 && w1 <= 0 && w2 <= 0) {
+        put_rgba(img, w, h, x, y, c);
+      }
+    }
+  }
+}
+
+std::shared_ptr<holoscan::Tensor> compass_tensor(
+    bool valid, double east, double north, cudaStream_t stream) {
+  constexpr int64_t kSide = 81;
+  constexpr int64_t kCx = 40;
+  constexpr int64_t kCy = 40;
+  constexpr int64_t kDisc = 36;
+  constexpr int64_t kShaft = 22;
+  std::vector<uint8_t> img(
+      static_cast<size_t>(kSide * kSide * 4), 0);
+  const std::array<uint8_t, 4> bg{16, 16, 16, 255};
+  const std::array<uint8_t, 4> ring{90, 90, 90, 255};
+  const std::array<uint8_t, 4> fg{255, 220, 80, 255};
+  for (int64_t y = 0; y < kSide; ++y) {
+    for (int64_t x = 0; x < kSide; ++x) {
+      put_rgba(&img, kSide, kSide, x, y, bg);
+    }
+  }
+  fill_disc_rgba(&img, kSide, kSide, kCx, kCy, kDisc, ring);
+  fill_disc_rgba(&img, kSide, kSide, kCx, kCy, kDisc - 2, bg);
+  const std::array<uint8_t, 3> n_rgb{220, 220, 220};
+  holoscan::radar::app::plot_draw_text(
+      &img, kSide, kSide, kCx - 1, 8, "N", n_rgb, 1);
+  if (valid) {
+    const double len = std::hypot(east, north);
+    const double ux = east / len;
+    const double uy = -north / len;
+    const int64_t tx = kCx + static_cast<int64_t>(
+                                 std::llround(ux * kShaft));
+    const int64_t ty = kCy + static_cast<int64_t>(
+                                 std::llround(uy * kShaft));
+    draw_line_rgba(&img, kSide, kSide, kCx, kCy, tx, ty, fg);
+    const double px = -uy;
+    const double py = ux;
+    const int64_t bx = tx - static_cast<int64_t>(
+                                std::llround(ux * 9.0));
+    const int64_t by = ty - static_cast<int64_t>(
+                                std::llround(uy * 9.0));
+    const int64_t l0 = bx + static_cast<int64_t>(
+                                std::llround(px * 5.0));
+    const int64_t l1 = by + static_cast<int64_t>(
+                                std::llround(py * 5.0));
+    const int64_t r0 = bx - static_cast<int64_t>(
+                                std::llround(px * 5.0));
+    const int64_t r1 = by - static_cast<int64_t>(
+                                std::llround(py * 5.0));
+    fill_triangle_rgba(&img, kSide, kSide, tx, ty, l0, l1, r0,
+                       r1, fg);
+  }
+  fill_disc_rgba(&img, kSide, kSide, kCx, kCy, 2, fg);
+  auto tensor = radar::make_device_tensor(
+      {kSide, kSide, 4}, DLDataType{kDLUInt, 8, 1});
+  check_cuda(
+      cudaMemcpyAsync(tensor->data(), img.data(), img.size(),
+                      cudaMemcpyHostToDevice, stream),
+      "compass H2D failed");
+  return tensor;
+}
+
+void put_u8(std::vector<uint8_t>* img, int64_t w, int64_t h,
+            int64_t x, int64_t y, uint8_t v) {
+  if (x < 0 || x >= w || y < 0 || y >= h) {
+    return;
+  }
+  (*img)[static_cast<size_t>(y * w + x)] = v;
+}
+
+void fill_triangle_u8(std::vector<uint8_t>* img, int64_t w,
+                      int64_t h, int64_t x0, int64_t y0, int64_t x1,
+                      int64_t y1, int64_t x2, int64_t y2,
+                      uint8_t v) {
+  const int64_t xmin = std::min(x0, std::min(x1, x2));
+  const int64_t xmax = std::max(x0, std::max(x1, x2));
+  const int64_t ymin = std::min(y0, std::min(y1, y2));
+  const int64_t ymax = std::max(y0, std::max(y1, y2));
+  const auto edge = [](int64_t ax, int64_t ay, int64_t bx,
+                       int64_t by, int64_t px, int64_t py) {
+    return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+  };
+  const int64_t a01 = edge(x0, y0, x1, y1, x2, y2);
+  if (a01 == 0) {
+    return;
+  }
+  for (int64_t y = ymin; y <= ymax; ++y) {
+    for (int64_t x = xmin; x <= xmax; ++x) {
+      const int64_t w0 = edge(x1, y1, x2, y2, x, y);
+      const int64_t w1 = edge(x2, y2, x0, y0, x, y);
+      const int64_t w2 = edge(x0, y0, x1, y1, x, y);
+      if (a01 > 0) {
+        if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+          put_u8(img, w, h, x, y, v);
+        }
+      } else if (w0 <= 0 && w1 <= 0 && w2 <= 0) {
+        put_u8(img, w, h, x, y, v);
+      }
+    }
+  }
+}
+
+void draw_border_chevron(std::vector<uint8_t>* img, int64_t h,
+                         int64_t w, double east, double north) {
+  const double len = std::hypot(east, north);
+  if (!(len > 0.0) || h < 32 || w < 32) {
+    return;
+  }
+  const double dx = east / len;
+  const double dy = -north / len;
+  const double cx = 0.5 * static_cast<double>(w - 1);
+  const double cy = 0.5 * static_cast<double>(h - 1);
+  const double x0 = 16.0;
+  const double y0 = 16.0;
+  const double x1 = static_cast<double>(w - 17);
+  const double y1 = static_cast<double>(h - 17);
+  double t_hit = 1.0e300;
+  double hx = cx;
+  double hy = cy;
+  auto consider_x = [&](double xe) {
+    if (dx == 0.0) {
+      return;
+    }
+    const double t = (xe - cx) / dx;
+    if (!(t > 0.0) || t >= t_hit) {
+      return;
+    }
+    const double y = cy + t * dy;
+    if (y >= y0 && y <= y1) {
+      t_hit = t;
+      hx = xe;
+      hy = y;
+    }
+  };
+  auto consider_y = [&](double ye) {
+    if (dy == 0.0) {
+      return;
+    }
+    const double t = (ye - cy) / dy;
+    if (!(t > 0.0) || t >= t_hit) {
+      return;
+    }
+    const double x = cx + t * dx;
+    if (x >= x0 && x <= x1) {
+      t_hit = t;
+      hx = x;
+      hy = ye;
+    }
+  };
+  consider_x(x0);
+  consider_x(x1);
+  consider_y(y0);
+  consider_y(y1);
+  if (!(t_hit < 1.0e299)) {
+    return;
+  }
+  const int64_t tx = static_cast<int64_t>(std::llround(hx));
+  const int64_t ty = static_cast<int64_t>(std::llround(hy));
+  const double px = -dy;
+  const double py = dx;
+  const int64_t bx = tx - static_cast<int64_t>(
+                              std::llround(dx * 16.0));
+  const int64_t by = ty - static_cast<int64_t>(
+                              std::llround(dy * 16.0));
+  const int64_t l0 = bx + static_cast<int64_t>(
+                              std::llround(px * 8.0));
+  const int64_t l1 = by + static_cast<int64_t>(
+                              std::llround(py * 8.0));
+  const int64_t r0 = bx - static_cast<int64_t>(
+                              std::llround(px * 8.0));
+  const int64_t r1 = by - static_cast<int64_t>(
+                              std::llround(py * 8.0));
+  fill_triangle_u8(img, w, h, tx, ty, l0, l1, r0, r1, 0);
+  const int64_t bx2 = tx - static_cast<int64_t>(
+                               std::llround(dx * 12.0));
+  const int64_t by2 = ty - static_cast<int64_t>(
+                               std::llround(dy * 12.0));
+  const int64_t l2 = bx2 + static_cast<int64_t>(
+                               std::llround(px * 5.0));
+  const int64_t l3 = by2 + static_cast<int64_t>(
+                               std::llround(py * 5.0));
+  const int64_t r2 = bx2 - static_cast<int64_t>(
+                               std::llround(px * 5.0));
+  const int64_t r3 = by2 - static_cast<int64_t>(
+                               std::llround(py * 5.0));
+  fill_triangle_u8(img, w, h, tx, ty, l2, l3, r2, r3, 255);
+}
+
 }  // namespace
 
 void SarImageToLutOp::compute(
@@ -261,6 +533,25 @@ void SarImageToLutOp::compute(
   sar_image_apply_lut(grid, static_cast<std::uint8_t*>(tensor->data()),
                       out_count, high, floor, stream);
   check_cuda(cudaGetLastError(), "LUT kernel failed");
+  FormationDiag diag{};
+  if (formation_diag) {
+    diag = formation_diag();
+  }
+  if (diag.apc_valid) {
+    std::vector<uint8_t> host(out_count);
+    check_cuda(
+        cudaMemcpyAsync(host.data(), tensor->data(), out_count,
+                        cudaMemcpyDeviceToHost, stream),
+        "LUT D2H for APC mark failed");
+    check_cuda(cudaStreamSynchronize(stream),
+               "LUT D2H sync failed");
+    draw_border_chevron(&host, out_v, out_u, diag.apc_east,
+                        diag.apc_north);
+    check_cuda(
+        cudaMemcpyAsync(tensor->data(), host.data(), out_count,
+                        cudaMemcpyHostToDevice, stream),
+        "LUT H2D for APC mark failed");
+  }
   std::vector<std::string> lines;
   const std::string size = std::to_string(num_v) + "x" +
                            std::to_string(num_u);
@@ -271,10 +562,6 @@ void SarImageToLutOp::compute(
   } else {
     lines.push_back(size);
   }
-  FormationDiag diag{};
-  if (formation_diag) {
-    diag = formation_diag();
-  }
   ++overlay_index;
   if (diag.bp_compute_s > 0.0 && diag.pulses > 0 &&
       diag.pixels > 0) {
@@ -284,6 +571,19 @@ void SarImageToLutOp::compute(
     lines.push_back(format_seconds(diag.bp_compute_s) + "  " +
                     format_sci(rate) + " px*pls/s");
   }
+  if (diag.playback.valid && diag.playback.paced &&
+      std::isfinite(diag.playback.behind_s)) {
+    const double behind = diag.playback.behind_s;
+    std::string lag;
+    if (std::abs(behind) < 0.05) {
+      lag = "on time";
+    } else if (behind > 0.0) {
+      lag = "+" + format_seconds(behind) + " behind";
+    } else {
+      lag = format_seconds(-behind) + " ahead";
+    }
+    lines.push_back(lag);
+  }
   std::optional<double> form_latency;
   if (diag.last_packet_at.has_value()) {
     const auto emit_at = diag.emit_at.value_or(t0);
@@ -292,6 +592,8 @@ void SarImageToLutOp::compute(
                        .count();
   }
   auto label = overlay_tensor(lines, stream);
+  auto look = compass_tensor(diag.apc_valid, diag.apc_east,
+                             diag.apc_north, stream);
   check_cuda(cudaStreamSynchronize(stream), "LUT H2D sync failed");
   if (stream != cudaStreamDefault) {
     op_output.set_cuda_stream(stream, "sar_image");
@@ -299,6 +601,7 @@ void SarImageToLutOp::compute(
   holoscan::TensorMap map;
   map.insert({"sar_image", std::move(tensor)});
   map.insert({"size_label", std::move(label)});
+  map.insert({"apc_look", std::move(look)});
   op_output.emit(map, "sar_image");
   const auto now = std::chrono::steady_clock::now();
   if (have_last_emit_) {
@@ -313,6 +616,18 @@ void SarImageToLutOp::compute(
     HOLOSCAN_LOG_INFO(
         "{}: image {:.3f} s after last pulse packet",
         who, *form_latency);
+  }
+  if (diag.playback.valid && diag.playback.paced) {
+    HOLOSCAN_LOG_INFO(
+        "{}: playback collect {:.3f} s  wall {:.3f} s  "
+        "behind {:.3f} s",
+        who, diag.playback.collect_s, diag.playback.wall_s,
+        diag.playback.behind_s);
+  }
+  if (diag.apc_valid) {
+    HOLOSCAN_LOG_INFO(
+        "{}: APC look  E {:.1f} km  N {:.1f} km",
+        who, diag.apc_east / 1000.0, diag.apc_north / 1000.0);
   }
   const double total_s = elapsed();
   const double lut_s = total_s - mag_s - box_s - pct_s;

@@ -165,7 +165,8 @@ const std::vector<SizeSpec>& full_size_ladder() {
       {"sm", 16, "small batch, frequent ticks"},
       {"md", 32, "common dev size"},
       {"lg", 64, "large batch, fewer uploads"},
-      {"xl", 128, "upper characterization bound"}};
+      {"xl", 128, "upper characterization bound"},
+      {"1k", 1024, "mode-5 demo batch; Houston realtime"}};
   return ladder;
 }
 

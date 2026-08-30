@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Tests for BackprojectionOp (mode-1 slice). Inputs are constructed range
-// profiles (a single-bin impulse at the predicted delay), not phase history,
+// Tests for BackprojectionOp (mode-1 slice plus signed-weight
+// accumulation for mode 2). Inputs are constructed range profiles
+// (a single-bin impulse at the predicted delay), not phase history,
 // so a compression bug cannot hide a formation bug. Ground truth is
 // radar_common/sim/sar_phase_history_sim.hpp.
 
@@ -87,6 +88,12 @@ holoscan::TensorMap control_map(FormationControl value) {
   return single_map(
       to_device_uint8_tensor({static_cast<uint8_t>(value)}, {1}),
       "control");
+}
+
+holoscan::TensorMap weight_map(const std::vector<double>& values) {
+  const int64_t n = static_cast<int64_t>(values.size());
+  return single_map(real_cube_to_device<float>(values, {n}),
+                    "weight");
 }
 
 template <typename T>
@@ -556,6 +563,8 @@ struct BpOptions {
   std::array<double, 3> apc{{0.0, 0.0, 100.0}};
   std::array<double, 3> srp{{0.0, 0.0, 0.0}};
   bool weight_ones{false};
+  // Non-empty: drive `weight` with these values (length = kPulses).
+  std::vector<double> weights;
 };
 
 class ConfigurableBpApp : public holoscan::Application {
@@ -602,12 +611,13 @@ class ConfigurableBpApp : public holoscan::Application {
     holoscan::radar::testing::wire_leading_override(
         this, op, "control",
         std::vector<holoscan::TensorMap>{control_map(opt_.control)});
-    if (opt_.weight_ones) {
+    if (!opt_.weights.empty()) {
+      holoscan::radar::testing::wire_data_source(
+          this, op, "weight", {weight_map(opt_.weights)});
+    } else if (opt_.weight_ones) {
       std::vector<double> ones(static_cast<size_t>(kPulses), 1.0);
       holoscan::radar::testing::wire_data_source(
-          this, op, "weight",
-          {single_map(real_cube_to_device<float>(ones, {kPulses}),
-                      "weight")});
+          this, op, "weight", {weight_map(ones)});
     }
     holoscan::radar::testing::wire_capture_sink(
         this, op, "image", &sink_);
@@ -793,6 +803,153 @@ TEST(BackprojectionOp, UnconnectedWeightEqualsPlusOne) {
   const double mag_a = std::abs(pixel(a, peak.first, peak.second));
   const double mag_b = std::abs(pixel(b, peak.first, peak.second));
   EXPECT_NEAR(mag_b, mag_a, 0.05 * mag_a);
+}
+
+TEST(BackprojectionOp, ZeroWeightContributesNothing) {
+  BpOptions opt;
+  opt.weights.assign(static_cast<size_t>(kPulses), 0.0);
+  const auto image = form_configured(opt);
+  const auto expected = sar_predicted_peak(grid_geometry(), kTarget);
+  EXPECT_LT(std::abs(pixel(image, expected.first, expected.second)),
+            0.25);
+}
+
+TEST(BackprojectionOp, FractionalWeightScalesLinearly) {
+  BpOptions full;
+  BpOptions half;
+  half.weights.assign(static_cast<size_t>(kPulses), 0.5);
+  const auto a = form_configured(full);
+  const auto b = form_configured(half);
+  const auto expected = sar_predicted_peak(grid_geometry(), kTarget);
+  const double mag_a =
+      std::abs(pixel(a, expected.first, expected.second));
+  const double mag_b =
+      std::abs(pixel(b, expected.first, expected.second));
+  EXPECT_GT(mag_a, 1.0);
+  EXPECT_NEAR(mag_b, 0.5 * mag_a, 0.05 * mag_a);
+}
+
+// Per-tick pulse count, a uniform weight, and the control message.
+struct WeightedTick {
+  int64_t pulses{kPulses};
+  double weight{1.0};
+  FormationControl control{FormationControl::kEmitAndContinue};
+};
+
+class WeightedTicksApp : public holoscan::Application {
+ public:
+  WeightedTicksApp(std::vector<WeightedTick> ticks,
+                   TensorMapCapture* sink)
+      : ticks_(std::move(ticks)), sink_(sink) {}
+
+  void compose() override {
+    const auto geometry = grid_geometry();
+    const double origin = centred_origin();
+    auto op = make_operator<BackprojectionOp<float>>(
+        "bp",
+        holoscan::Arg("coordinate_frame", scene_frame()),
+        holoscan::Arg("sample_geometry", geometry),
+        holoscan::Arg("range_bin_spacing", kSpacing),
+        holoscan::Arg("range_bin_origin", origin),
+        holoscan::Arg("reference_frequency", kFreq),
+        holoscan::Arg("backend",
+                      BackprojectionBackend::kNvradarFp64Reference));
+
+    const std::array<double, 3> apc{0.0, 0.0, 100.0};
+    const std::array<double, 3> srp{0.0, 0.0, 0.0};
+    const double dR = sar_differential_range(apc, srp, kTarget);
+    const auto phase = sar_matched_phase(kFreq, dR);
+    const std::complex<double> amp{phase.real(), -phase.imag()};
+
+    std::vector<holoscan::TensorMap> profiles;
+    std::vector<holoscan::TensorMap> pos;
+    std::vector<holoscan::TensorMap> ref;
+    std::vector<holoscan::TensorMap> weights;
+    std::vector<holoscan::TensorMap> control;
+    profiles.reserve(ticks_.size());
+    pos.reserve(ticks_.size());
+    ref.reserve(ticks_.size());
+    weights.reserve(ticks_.size());
+    control.reserve(ticks_.size());
+    for (const auto& tick : ticks_) {
+      profiles.push_back(
+          profiles_impulse<float>(dR, origin, amp, tick.pulses));
+      pos.push_back(xyz_map<float>(apc, "positions", tick.pulses));
+      ref.push_back(
+          xyz_map<float>(srp, "reference_position", tick.pulses));
+      std::vector<double> w(static_cast<size_t>(tick.pulses),
+                            tick.weight);
+      weights.push_back(weight_map(w));
+      control.push_back(control_map(tick.control));
+    }
+    holoscan::radar::testing::wire_data_source(
+        this, op, "range_profiles", profiles);
+    holoscan::radar::testing::wire_data_source(
+        this, op, "positions", pos);
+    holoscan::radar::testing::wire_data_source(
+        this, op, "reference_position", ref);
+    holoscan::radar::testing::wire_data_source(
+        this, op, "weight", weights);
+    holoscan::radar::testing::wire_data_source(
+        this, op, "control", control);
+    holoscan::radar::testing::wire_capture_sink(
+        this, op, "image", sink_);
+  }
+
+ private:
+  std::vector<WeightedTick> ticks_;
+  TensorMapCapture* sink_;
+};
+
+TEST(BackprojectionOp, SignedWeightCancels) {
+  // +1 then the same pulses at −1 under emit-and-continue returns
+  // the accumulator to empty. This is the eviction mechanism.
+  TensorMapCapture sink;
+  auto app = holoscan::make_application<WeightedTicksApp>(
+      std::vector<WeightedTick>{
+          {kPulses, 1.0, FormationControl::kEmitAndContinue},
+          {kPulses, -1.0, FormationControl::kEmitAndContinue}},
+      &sink);
+  app->run();
+  ASSERT_EQ(sink.frames.size(), 2u);
+  const auto expected = sar_predicted_peak(grid_geometry(), kTarget);
+  const auto added =
+      pixel(sink.frames[0], expected.first, expected.second);
+  const auto cancelled =
+      pixel(sink.frames[1], expected.first, expected.second);
+  EXPECT_GT(std::abs(added), 1.0);
+  EXPECT_LT(std::abs(cancelled), 0.05 * std::abs(added));
+}
+
+TEST(BackprojectionOp, SlidingWindowEqualsFromScratch) {
+  // Eight pulses, then evict four at −1. Each emit matches a
+  // from-scratch formation over the pulses still in the window.
+  TensorMapCapture sink;
+  auto app = holoscan::make_application<WeightedTicksApp>(
+      std::vector<WeightedTick>{
+          {2 * kPulses, 1.0, FormationControl::kEmitAndContinue},
+          {kPulses, -1.0, FormationControl::kEmitAndContinue}},
+      &sink);
+  app->run();
+  ASSERT_EQ(sink.frames.size(), 2u);
+  const auto eight = form_one<float>(
+      BackprojectionBackend::kNvradarFp64Reference, kTarget, kFreq,
+      2 * kPulses);
+  const auto four = form_one<float>(
+      BackprojectionBackend::kNvradarFp64Reference, kTarget, kFreq,
+      kPulses);
+  const auto expected = sar_predicted_peak(grid_geometry(), kTarget);
+  const double mag_win8 = std::abs(
+      pixel(sink.frames[0], expected.first, expected.second));
+  const double mag_win4 = std::abs(
+      pixel(sink.frames[1], expected.first, expected.second));
+  const double mag_8 =
+      std::abs(pixel(eight, expected.first, expected.second));
+  const double mag_4 =
+      std::abs(pixel(four, expected.first, expected.second));
+  EXPECT_GT(mag_8, 1.0);
+  EXPECT_NEAR(mag_win8, mag_8, 0.05 * mag_8);
+  EXPECT_NEAR(mag_win4, mag_4, 0.05 * mag_4);
 }
 
 class RejectSincApp : public holoscan::Application {

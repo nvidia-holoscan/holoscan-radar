@@ -15,9 +15,10 @@ over a YAML file in [`recipes/`](recipes/).
 ```bash
 pip install -r requirements.txt
 python3 generate_cphd.py recipes/mode01_smoke.yaml -o /tmp/sar_fixtures
+python3 subset_cphd.py recipes/mode02_houston.yaml -o /tmp/sar/mode2
 ```
 
-That writes two files into the output directory:
+`generate_cphd.py` writes two files into the output directory:
 
 | File | What it is |
 | --- | --- |
@@ -32,6 +33,50 @@ Current recipes:
 | `mode01.yaml` | 32 MiB, 2048 x 2048 | ~1 s | Mode 1 bring-up and the spotlight demo |
 | `mode01_ci4.yaml` | 0.6 MiB, 256 x 512 | < 1 s | CI; `mode01_smoke` stored as `CI4` with `AmpSF` |
 | `mode01_ci2.yaml` | 0.3 MiB, 256 x 512 | < 1 s | CI; the same, stored as `CI2` |
+
+The public-collection **subsetter** is a sibling CLI. It does not synthesize: it
+takes a local CPHD or an HTTPS URL and writes a new CPHD whose `SC0` / `FxC` /
+`FxBW` are derived from the kept sample grid (`INPUT_DATA.md`). The kept window
+is a recipe/CLI knob — not a constant in the tool — because the demo size is
+still being chosen. Omit an axis to keep it whole.
+
+```yaml
+samples:
+  count: 4096
+  origin: center          # start | center | end
+# or samples: [33389, 37485]
+# or samples: {bandwidth_hz: 61.6e6, origin: center}
+# pulses: {duration_s: 8.0, origin: center}
+```
+
+Houston is 208,753 Range requests at 128 keep-alive connections; pin that, do
+not raise it.
+
+```bash
+# CI / local: slice a generated fixture (no network)
+python3 subset_cphd.py --source /tmp/sar_fixtures/mode01_smoke.cphd \
+    --pulse-count 40 --sample-count 128 -o /tmp/sar_fixtures/smoke_subset.cphd
+
+# Mode 2: full-dwell Houston, window from the recipe (~6.84 GiB at count 4096)
+python3 subset_cphd.py recipes/mode02_houston.yaml -o /tmp/sar/mode2
+python3 subset_cphd.py recipes/mode02_houston.yaml --sample-count 2048 -o /tmp/sar/mode2
+
+# 0.5 m / 1.0 m subbands from a local copy of the 110 GiB collect
+python3 subset_cphd.py recipes/mode02_houston_0p5m.yaml \
+    --source /tmp/sar/2024-10-30-16-10-33_UMBRA-06_CPHD.cphd -o /tmp/sar
+python3 subset_cphd.py recipes/mode02_houston_1p0m.yaml \
+    --source /tmp/sar/2024-10-30-16-10-33_UMBRA-06_CPHD.cphd -o /tmp/sar
+```
+
+The writer streams signal in 64 MiB chunks so a 0.5 m Houston subband (~52 GiB)
+does not need to fit in RAM. Local files use one sequential reader; `connections`
+applies to HTTP Range only.
+
+| Recipe | Default window | For |
+| --- | --- | --- |
+| `mode02_houston.yaml` | centred 4096 of 70,875 samples, all pulses | Mode 2 video SAR at 4.09 m; change `samples.count` to try other bandwidths |
+| `mode02_houston_0p5m.yaml` | centred 33505 samples, all pulses | ~0.5 m GSD, ~52 GiB, ~2.4 GB/s collect-time |
+| `mode02_houston_1p0m.yaml` | centred 16753 samples, all pulses | ~1.0 m GSD, ~26 GiB, ~1.2 GB/s collect-time |
 
 ### The `storage` section
 
@@ -90,13 +135,15 @@ the real Atlanta collection is for.
 
 ```text
 tools/sar_sim/
-  generate_cphd.py     # CLI
-  recipes/             # committed fixture descriptions
+  generate_cphd.py     # CLI: recipe -> CPHD + sidecar
+  subset_cphd.py       # CLI: local or HTTPS CPHD -> pulse/sample subset
+  recipes/             # committed fixture and subset descriptions
   sar_sim/
     recipe.py          # recipe model + YAML loading
     geometry.py        # WGS84, ENU, platform track
     signal.py          # point-target phase-history synthesis
     cphd.py            # CPHD 1.1.0 XML + sarkit writing
+    subset.py          # pulse window + frequency subband
     truth.py           # ground-truth sidecar
     generate.py        # recipe -> files, in one call
 ```
@@ -138,10 +185,7 @@ in [`INPUT_DATA.md`](../../docs/planning/SAR/INPUT_DATA.md).
 - **The image-derived scene mode**, for demos that need to look like
   something. Point targets are for metric assertions; a demo wants a scene
   with a reflector-count cap chosen against measured generation time.
-- **Recipes for modes 2-5.** Mode 1 only, following the minimum-per-demo rule
-  in [`SIGPROC_PLAN.md`](../../docs/planning/SAR/SIGPROC_PLAN.md).
-- **The public-collection subsetter**, which will live beside this tool and
-  share the `sarpy` dependency. It is a **mode 2** prerequisite: every
-  application reads a local file, and Houston at 110 GiB cannot be pulled
-  whole. Atlanta can — 28.59 GiB, read with `CPHDReaderOp.pulse_range` — so
-  mode 1 needs no pull tooling.
+- **Recipes for modes 2-5.** Mode 1 only for the *simulator*; Houston is a
+  public-collection subset (`mode02_houston.yaml`), not a synthesized scene.
+  Following the minimum-per-demo rule in
+  [`SIGPROC_PLAN.md`](../../docs/planning/SAR/SIGPROC_PLAN.md).

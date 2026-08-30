@@ -120,6 +120,36 @@ std::string format_latency_ms(double s) {
   return out;
 }
 
+std::string format_tenths_s(double s) {
+  const int scaled =
+      static_cast<int>(std::llround(std::abs(s) * 10.0));
+  return std::to_string(scaled / 10) + "." +
+         std::to_string(scaled % 10) + "s";
+}
+
+std::string format_lag(const radar::PlaybackStatus& st) {
+  if (!st.valid || !st.paced || !std::isfinite(st.behind_s)) {
+    return {};
+  }
+  if (std::abs(st.behind_s) < 0.05) {
+    return "on time";
+  }
+  if (st.behind_s > 0.0) {
+    return "+" + format_tenths_s(st.behind_s) + " behind";
+  }
+  return format_tenths_s(-st.behind_s) + " ahead";
+}
+
+std::array<uint8_t, 3> lag_color(const radar::PlaybackStatus& st) {
+  if (st.behind_s > 0.2) {
+    return {{255, 80, 80}};
+  }
+  if (st.behind_s > 0.05) {
+    return {{255, 180, 60}};
+  }
+  return {{80, 200, 80}};
+}
+
 std::string fit_label(const std::string& name, int64_t max_w,
                       int scale) {
   if (max_w <= 0) {
@@ -154,6 +184,9 @@ void TimelineRasterOp::compute(
   if (spans) {
     collected = spans();
   }
+  const auto now = Clock::now();
+  const auto origin = now - std::chrono::duration_cast<Clock::duration>(
+                                std::chrono::duration<double>(window_s));
   if (last_image_emit) {
     const auto at = last_image_emit();
     if (at.has_value() &&
@@ -175,15 +208,14 @@ void TimelineRasterOp::compute(
       // lands in the next dwell (reader overlaps BP).
       mark.file_index = span_file_at(collected, color_at);
       image_emits_.push_back(mark);
-      if (image_emits_.size() > 64) {
-        image_emits_.erase(image_emits_.begin());
-      }
     }
   }
-
-  const auto now = Clock::now();
-  const auto origin = now - std::chrono::duration_cast<Clock::duration>(
-                                std::chrono::duration<double>(window_s));
+  // Visible window, not a count. 64 marks was ~29 s at 2 Hz
+  // and only ~7 s at one-tick emits (~8.7 Hz).
+  const auto keep = std::find_if(
+      image_emits_.begin(), image_emits_.end(),
+      [&](const ImageMark& m) { return m.at >= origin; });
+  image_emits_.erase(image_emits_.begin(), keep);
   const int64_t w = width;
   const int64_t h = height;
   std::vector<uint8_t> img(static_cast<size_t>(w * h * 4), 0);
@@ -304,6 +336,23 @@ void TimelineRasterOp::compute(
         &img, w, h, tx, axis_y + lab_gap, lab, fg, kScale);
   }
   fill_rect(&img, w, h, w - 2, 0, w, h, head_c);
+
+  if (playback) {
+    const auto st = playback();
+    const std::string lab = format_lag(st);
+    if (!lab.empty()) {
+      const int64_t tw =
+          holoscan::radar::app::plot_text_width_5x7(lab, kScale);
+      const int64_t pad = 4;
+      const int64_t tx = w - 8 - tw;
+      const int64_t ty =
+          plat_y0 + (plat_y1 - plat_y0 - label_h) / 2;
+      fill_rect(&img, w, h, tx - pad, plat_y0, w - 2, plat_y1,
+                bg);
+      holoscan::radar::app::plot_draw_text_5x7(
+          &img, w, h, tx, ty, lab, lag_color(st), kScale);
+    }
+  }
 
   auto tensor = radar::make_device_tensor(
       {h, w, 4}, DLDataType{kDLUInt, 8, 1});

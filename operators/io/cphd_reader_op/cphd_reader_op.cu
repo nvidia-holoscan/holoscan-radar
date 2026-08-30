@@ -38,6 +38,12 @@
 
 namespace holoscan::radar {
 
+using Clock = std::chrono::steady_clock;
+
+double elapsed_s(Clock::time_point start) {
+  return std::chrono::duration<double>(Clock::now() - start).count();
+}
+
 struct CphdReaderResources {
   void* history{nullptr};
   size_t history_bytes{0};
@@ -50,6 +56,11 @@ struct CphdReaderResources {
   // Host AmpSF for the in-flight CF8 H2D. A temporary would dangle
   // before compute()'s stream sync (same as pos_host / srp_host).
   std::vector<double> amp_host;
+  double pvp_s{0.0};
+  double signal_s{0.0};
+  double decode_s{0.0};
+  double geo_s{0.0};
+  double sync_s{0.0};
 
   CphdReaderResources() = default;
   CphdReaderResources(const CphdReaderResources&) = delete;
@@ -344,22 +355,33 @@ std::shared_ptr<holoscan::Tensor> load_phase_history(
     int64_t first, int64_t count, int64_t num_samples,
     const cphd::PvpBlock& pvp, cudaStream_t stream, const char* who) {
   const size_t nsamp = static_cast<size_t>(count * num_samples);
-  resources->ensure_scratch(nsamp * 8);
   if (file->sample_format() == cphd::SampleFormat::kCF8) {
+    resources->ensure_scratch(nsamp * 8);
+    const auto t_read = Clock::now();
     file->read_signal_bytes(channel, first, count,
                             static_cast<char*>(resources->scratch),
                             resources->scratch_bytes);
+    resources->signal_s += elapsed_s(t_read);
     resources->amp_host = file->amplitude_scale(&pvp, count);
-    return decode_cf8_to_tensor<T>(resources, count, num_samples,
-                                   resources->amp_host, stream, who);
+    const auto t_dec = Clock::now();
+    auto tensor = decode_cf8_to_tensor<T>(resources, count, num_samples,
+                                          resources->amp_host, stream, who);
+    resources->decode_s += elapsed_s(t_dec);
+    return tensor;
   }
   resources->ensure_history(nsamp * sizeof(std::complex<T>));
+  resources->ensure_scratch(nsamp * 8);
   auto* history = static_cast<std::complex<T>*>(resources->history);
+  const auto t_read = Clock::now();
   file->read_signal_into(channel, first, count, history, &pvp,
                          static_cast<char*>(resources->scratch),
                          resources->scratch_bytes);
-  return upload(history, nsamp, {count, num_samples}, complex_dtype<T>(),
-                stream, who);
+  resources->signal_s += elapsed_s(t_read);
+  const auto t_dec = Clock::now();
+  auto tensor = upload(history, nsamp, {count, num_samples},
+                       complex_dtype<T>(), stream, who);
+  resources->decode_s += elapsed_s(t_dec);
+  return tensor;
 }
 
 }  // namespace
@@ -439,8 +461,7 @@ void CPHDReaderOp<T>::setup(OperatorSpec& spec) {
 
   spec.param(playback_rate_, "playback_rate", "Playback rate",
              "0 = unconstrained; 1 = collect-time pacing (2 = twice as "
-             "fast). Sleeps the slack so a tick is not faster than "
-             "TxTime_span / rate.",
+             "fast). Sleeps collect/rate - wall; skips sleep when behind.",
              0.0);
 
   spec.param(duty_cycle_, "duty_cycle", "Platform duty cycle",
@@ -603,19 +624,99 @@ void CPHDReaderOp<T>::start() {
 }
 
 template <typename T>
-void CPHDReaderOp<T>::pace_tick(double batch_span) {
+double CPHDReaderOp<T>::playback_slack() {
   const double rate = playback_rate_.get();
-  if (!(rate > 0.0) || !(batch_span > 0.0) || !std::isfinite(batch_span)) {
-    return;
+  if (!(rate > 0.0) || !collection_time_valid_) {
+    return 0.0;
   }
-  const double target_s = batch_span / rate;
+  const double collect_s = collection_t_max_ - collection_t_min_;
+  if (!(collect_s > 0.0) || !std::isfinite(collect_s)) {
+    return 0.0;
+  }
+  const int64_t start_ns =
+      collection_start_ns_.load(std::memory_order_relaxed);
+  if (start_ns <= 0) {
+    return 0.0;
+  }
+  const int64_t now_ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count();
+  if (now_ns < start_ns) {
+    return 0.0;
+  }
+  const double wall_s =
+      static_cast<double>(now_ns - start_ns) * 1.0e-9;
+  return collect_s / rate - wall_s;
+}
+
+template <typename T>
+void CPHDReaderOp<T>::publish_playback(double slack, bool live) {
+  const double collect_s =
+      collection_time_valid_
+          ? collection_t_max_ - collection_t_min_
+          : 0.0;
   const auto now = std::chrono::steady_clock::now();
-  const auto elapsed =
-      std::chrono::duration<double>(now - tick_start_).count();
-  const double slack = target_s - elapsed;
-  if (slack > 0.0) {
-    std::this_thread::sleep_for(std::chrono::duration<double>(slack));
+  const int64_t start_ns =
+      collection_start_ns_.load(std::memory_order_relaxed);
+  const int64_t now_ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          now.time_since_epoch())
+          .count();
+  const int64_t wall_ns =
+      (start_ns > 0 && now_ns >= start_ns) ? now_ns - start_ns : 0;
+  const double rate = playback_rate_.get();
+  collect_span_ns_.store(
+      static_cast<int64_t>(std::llround(collect_s * 1.0e9)),
+      std::memory_order_relaxed);
+  last_wall_ns_.store(wall_ns, std::memory_order_relaxed);
+  last_slack_ns_.store(
+      static_cast<int64_t>(std::llround(slack * 1.0e9)),
+      std::memory_order_relaxed);
+  playback_rate_x1e6_.store(
+      static_cast<int64_t>(std::llround(rate * 1.0e6)),
+      std::memory_order_relaxed);
+  playback_live_.store(live, std::memory_order_relaxed);
+  playback_valid_.store(true, std::memory_order_release);
+}
+
+template <typename T>
+PlaybackStatus CPHDReaderOp<T>::playback_status() const {
+  PlaybackStatus s;
+  if (!playback_valid_.load(std::memory_order_acquire)) {
+    return s;
   }
+  s.valid = true;
+  const int64_t rate_x =
+      playback_rate_x1e6_.load(std::memory_order_relaxed);
+  s.paced = rate_x > 0;
+  const double rate = static_cast<double>(rate_x) / 1.0e6;
+  s.collect_s = static_cast<double>(
+                    collect_span_ns_.load(std::memory_order_relaxed)) *
+                1.0e-9;
+  s.last_slack_s = static_cast<double>(
+                       last_slack_ns_.load(std::memory_order_relaxed)) *
+                   1.0e-9;
+  int64_t wall_ns = 0;
+  if (playback_live_.load(std::memory_order_acquire)) {
+    const int64_t start_ns =
+        collection_start_ns_.load(std::memory_order_relaxed);
+    const int64_t now_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    wall_ns = (start_ns > 0 && now_ns >= start_ns) ? now_ns - start_ns
+                                                   : 0;
+  } else {
+    wall_ns = last_wall_ns_.load(std::memory_order_relaxed);
+  }
+  s.wall_s = static_cast<double>(wall_ns) * 1.0e-9;
+  if (s.paced && rate > 0.0) {
+    s.behind_s = s.wall_s - s.collect_s / rate;
+  } else {
+    s.behind_s = s.wall_s - s.collect_s;
+  }
+  return s;
 }
 
 template <typename T>
@@ -646,6 +747,38 @@ void CPHDReaderOp<T>::publish_last_packet_at(
                       .count();
   last_packet_ns_.store(ns, std::memory_order_relaxed);
   last_packet_valid_.store(true, std::memory_order_release);
+}
+
+template <typename T>
+void CPHDReaderOp<T>::publish_last_mean_apc(
+    const std::vector<double>& apc, int64_t count) {
+  double sx = 0.0;
+  double sy = 0.0;
+  double sz = 0.0;
+  int64_t n = 0;
+  for (int64_t i = 0; i < count; ++i) {
+    const size_t base = static_cast<size_t>(i) * 3;
+    if (!std::isfinite(apc[base]) ||
+        !std::isfinite(apc[base + 1]) ||
+        !std::isfinite(apc[base + 2])) {
+      continue;
+    }
+    sx += apc[base];
+    sy += apc[base + 1];
+    sz += apc[base + 2];
+    ++n;
+  }
+  if (n == 0) {
+    last_apc_valid_.store(false, std::memory_order_release);
+    return;
+  }
+  const double inv = 1.0 / static_cast<double>(n);
+  last_apc_x_.store(sx * inv, std::memory_order_relaxed);
+  last_apc_y_.store(sy * inv, std::memory_order_relaxed);
+  last_apc_z_.store(sz * inv, std::memory_order_relaxed);
+  last_apc_file_.store(static_cast<int64_t>(file_index_),
+                       std::memory_order_relaxed);
+  last_apc_valid_.store(true, std::memory_order_release);
 }
 
 template <typename T>
@@ -725,6 +858,15 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
       std::min(pulses_per_tick_.get(), last_pulse_ - next_pulse_);
   const int64_t first = next_pulse_;
   if (first == first_pulse_) {
+    const int64_t ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            tick_start_.time_since_epoch())
+            .count();
+    collection_start_ns_.store(ns, std::memory_order_relaxed);
+    collect_span_ns_.store(0, std::memory_order_relaxed);
+    last_wall_ns_.store(0, std::memory_order_relaxed);
+    last_slack_ns_.store(0, std::memory_order_relaxed);
+    playback_live_.store(true, std::memory_order_relaxed);
     timeline_open_dwell();
   }
   // Final for this collection, which is not the same as final overall once
@@ -742,8 +884,10 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   // Optional because the block borrows its layout and path from the file that
   // produced it, and the tail of this function may replace that file: the
   // borrow has to be given up before the reopen, not merely left unused.
+  const auto t_pvp = Clock::now();
   std::optional<cphd::PvpBlock> pvp =
       file_->read_pvp_block(channel_.get(), first, count);
+  resources_->pvp_s += elapsed_s(t_pvp);
 
   // 2. Phase history. CF8 is stored as big-endian complex64: the operator
   // reads those bytes into reused pinned scratch, H2Ds them, and
@@ -762,6 +906,7 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   const auto phase_history = load_phase_history<T>(
       file_.get(), resources_.get(), channel_.get(), first, count,
       num_samples, pvp.value(), stream, who.c_str());
+  const auto t_geo = Clock::now();
 
   // The aperture phase centre is the midpoint of the transmit and receive
   // phase centres, which reduces to either one for the monostatic
@@ -774,6 +919,7 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   for (size_t i = 0; i < apc.size(); ++i) {
     apc[i] = 0.5 * (tx_pos[i] + rcv_pos[i]);
   }
+  publish_last_mean_apc(apc, count);
   const std::vector<double> srp = pvp->field("SRPPos", 3);
 
   // Public collections do carry non-finite ephemeris on a minority of
@@ -876,21 +1022,6 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
                           who.c_str()),
                    stream);
 
-  double batch_span = 0.0;
-  if (count > 0) {
-    double tmin = times[0];
-    double tmax = times[0];
-    for (double t : times) {
-      if (!std::isfinite(t)) {
-        continue;
-      }
-      tmin = std::min(tmin, t);
-      tmax = std::max(tmax, t);
-    }
-    if (std::isfinite(tmin) && std::isfinite(tmax)) {
-      batch_span = tmax - tmin;
-    }
-  }
   emit_with_stream(op_output, "pulse_times",
                    upload(times, {count}, real_dtype<double>(), stream,
                           who.c_str()),
@@ -911,8 +1042,8 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   }
 
   // Last pulse packet is in the graph. EventBased may form during
-  // the H2D wait and pace_tick below; the overlay subtracts this
-  // from BackprojectionOp's emit time.
+  // the H2D wait and playback sleep below; the overlay subtracts
+  // this from BackprojectionOp's emit time.
   if (is_final) {
     publish_last_packet_at(std::chrono::steady_clock::now());
   }
@@ -921,15 +1052,26 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   // stay alive for the DMA. Pinned scratch (and integer-path history,
   // and double CF8 device staging) are reused, so this wait is also
   // what keeps the next tick from overwriting buffers still in flight.
+  const auto t_sync = Clock::now();
+  resources_->geo_s += std::chrono::duration<double>(t_sync - t_geo).count();
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
     throw std::runtime_error(who + ": H2D stream sync failed");
   }
-  // Seam log is host read + H2D + sync, not pace_tick sleep.
+  resources_->sync_s += elapsed_s(t_sync);
+  // Seam log is host read + H2D + sync, not playback sleep.
   collection_compute_s_ += std::chrono::duration<double>(
                                std::chrono::steady_clock::now() -
                                tick_start_)
                                .count();
-  pace_tick(batch_span);
+  // Publish collect time before the pace sleep so a 100 ms
+  // timeline poll during the sleep does not look behind (the
+  // previous tick's collect_s would still be showing).
+  const double slack = playback_slack();
+  publish_playback(slack, !is_final);
+  if (slack > 0.0) {
+    std::this_thread::sleep_for(std::chrono::duration<double>(slack));
+    publish_playback(playback_slack(), !is_final);
+  }
   if (is_final) {
     timeline_close_dwell();
   }
@@ -949,9 +1091,12 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   if (!another_follows) {
     HOLOSCAN_LOG_INFO(
         "{}: end of stream: {} pulses read from the final collection '{}' "
-        "({} of {}, {:.3f} s)",
+        "({} of {}, {:.3f} s; pvp {:.3f}, signal {:.3f}, decode {:.3f}, "
+        "geo {:.3f}, sync {:.3f})",
         who, last_pulse_ - first_pulse_, files_[file_index_], file_index_ + 1,
-        files_.size(), collection_compute_s_);
+        files_.size(), collection_compute_s_, resources_->pvp_s,
+        resources_->signal_s, resources_->decode_s, resources_->geo_s,
+        resources_->sync_s);
     stop_condition_->disable_tick();
     return;
   }
@@ -959,10 +1104,17 @@ void CPHDReaderOp<T>::compute([[maybe_unused]] InputContext& op_input,
   // announced on the batch just emitted, so the consumer's flush and reset
   // happen before any pulse of the next file reaches it.
   HOLOSCAN_LOG_INFO(
-      "{}: collection boundary after {} pulses of '{}' ({:.3f} s)", who,
-      last_pulse_ - first_pulse_, files_[file_index_],
-      collection_compute_s_);
+      "{}: collection boundary after {} pulses of '{}' ({:.3f} s; pvp "
+      "{:.3f}, signal {:.3f}, decode {:.3f}, geo {:.3f}, sync {:.3f})",
+      who, last_pulse_ - first_pulse_, files_[file_index_],
+      collection_compute_s_, resources_->pvp_s, resources_->signal_s,
+      resources_->decode_s, resources_->geo_s, resources_->sync_s);
   collection_compute_s_ = 0.0;
+  resources_->pvp_s = 0.0;
+  resources_->signal_s = 0.0;
+  resources_->decode_s = 0.0;
+  resources_->geo_s = 0.0;
+  resources_->sync_s = 0.0;
   cooldown_if_needed();
   // Released before the file it points into is replaced: the block holds the
   // old file's PVP layout and path by pointer.

@@ -17,6 +17,9 @@ if(NOT TINYXML2_INCLUDE_DIR OR NOT TINYXML2_LIBRARY)
         "configure with -DOP_cphd_reader_op=OFF to build without the reader.")
 endif()
 
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 add_library(cphd_reader_op
     cphd_cf8_decode.cu
     cphd_file.cpp
@@ -33,7 +36,8 @@ target_link_libraries(cphd_reader_op
         holoscan::core
         holoscan::radar_common
     PRIVATE
-        ${TINYXML2_LIBRARY})
+        ${TINYXML2_LIBRARY}
+        Threads::Threads)
 
 set_property(TARGET cphd_reader_op PROPERTY POSITION_INDEPENDENT_CODE ON)
 

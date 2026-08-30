@@ -12,9 +12,10 @@
 // as Arg("nfft"); mutually exclusive with range_compression.nfft.
 //
 // Lattice: `sample_geometry` (Atlanta ENU), sidecar truth, or
-// `lattice` — explicit counts/spacing (IARP ENU) or collection
-// physics (XY square at the coarser GSD) with `max_side` as a
-// global cap and `pixel_scale` as a per-collect factor on N.
+// `lattice` — explicit counts/spacing (IARP ENU; counts may be N
+// or [num_v, num_u]) or collection physics (XY square at the
+// coarser GSD) with `max_side` as a formed-pixel cap (the
+// slower-GPU knob) and `pixel_scale` as a per-collect factor on N.
 // A guessed sidecar must not override an explicit YAML lattice.
 
 #pragma once
@@ -26,6 +27,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -66,6 +68,7 @@ struct AppConfig {
   // Timing cap on each physics-derived (or explicit-count) lattice
   // axis. 0 = no cap (native collection-physics N, or the YAML
   // counts). A positive cap coarsens GSD and keeps the square.
+  // This is the formation-cost knob: lower it on a slower GPU.
   int64_t lattice_max_side{0};
   // Per-collection factor on native N (both axes). 1 = native.
   // Same square, coarser GSD. Size matches cphd_paths.
@@ -84,6 +87,10 @@ struct AppConfig {
   // Diagnostic: replace contract RC with their conditioned vph.
   std::string nvradar_vph_path;
   bool visualize{false};
+  // Wire manager.weight → BP.weight. True when the manager
+  // retains (max_aperture_pulses > 0) so eviction can emit −1.
+  // Modes 1 / 5 stay unconnected (all +1, no D2H of weights).
+  bool wire_weight{false};
   bool skip_display_check{false};
   bool headless{false};
   // Holoviz window (px, square). LUT box-averages the formed
@@ -226,6 +233,64 @@ inline std::array<double, 9> ecef_to_enu_rotation(
           cl * co,  cl * so,  sl};
 }
 
+// Lattice centre (half-index along each axis), same frame as
+// origin / axes. Used to project an APC onto east/north of the
+// displayed map (axis_u = east, axis_v = south).
+inline std::array<double, 3> lattice_centre(
+    const radar::SampleGeometry& geom) {
+  const double cv =
+      0.5 * static_cast<double>(geom.num_v() - 1);
+  const double cu =
+      0.5 * static_cast<double>(geom.num_u() - 1);
+  const auto& o = geom.origin();
+  const auto& av = geom.axis_v();
+  const auto& au = geom.axis_u();
+  const double dv = cv * geom.spacing()[0];
+  const double du = cu * geom.spacing()[1];
+  return {o[0] + dv * av[0] + du * au[0],
+          o[1] + dv * av[1] + du * au[1],
+          o[2] + dv * av[2] + du * au[2]};
+}
+
+// Horizontal look of an APC relative to the scene: metres east
+// and north of the lattice centre, in the displayed map frame
+// (row 0 = north, col 0 = west). `apc_xyz` is ECEF unless
+// `to_scene_enu`, in which case it is rotated at `enu_origin`
+// first (Atlanta NVRadar path).
+inline std::optional<std::array<double, 2>> apc_east_north(
+    std::array<double, 3> apc_xyz,
+    const radar::SampleGeometry& geom, bool to_scene_enu,
+    const std::array<double, 3>& enu_origin) {
+  if (!geom.is_valid()) {
+    return std::nullopt;
+  }
+  if (to_scene_enu) {
+    const auto R = ecef_to_enu_rotation(enu_origin);
+    const double dx = apc_xyz[0] - enu_origin[0];
+    const double dy = apc_xyz[1] - enu_origin[1];
+    const double dz = apc_xyz[2] - enu_origin[2];
+    apc_xyz = {R[0] * dx + R[1] * dy + R[2] * dz,
+               R[3] * dx + R[4] * dy + R[5] * dz,
+               R[6] * dx + R[7] * dy + R[8] * dz};
+  }
+  const auto c = lattice_centre(geom);
+  const double d0 = apc_xyz[0] - c[0];
+  const double d1 = apc_xyz[1] - c[1];
+  const double d2 = apc_xyz[2] - c[2];
+  const auto& au = geom.axis_u();
+  const auto& av = geom.axis_v();
+  const double east = d0 * au[0] + d1 * au[1] + d2 * au[2];
+  const double south = d0 * av[0] + d1 * av[1] + d2 * av[2];
+  const double north = -south;
+  if (!std::isfinite(east) || !std::isfinite(north)) {
+    return std::nullopt;
+  }
+  if (east * east + north * north < 1.0) {
+    return std::nullopt;
+  }
+  return std::array<double, 2>{east, north};
+}
+
 // Pixel-centre lattice covering the IA rectangle [x1, x2] × [y1, y2]
 // metres from IARP along unit uIAX / uIAY. counts are (num_v, num_u)
 // along IAY / IAX. Sample (0, 0) is the min-X min-Y pixel centre.
@@ -258,6 +323,29 @@ inline radar::SampleGeometry lattice_from_image_area(
   spec.spacing = {dy, dx};
   spec.counts = {num_v, num_u};
   return radar::SampleGeometry(spec);
+}
+
+// Square N, or [num_v, num_u].
+inline std::array<int64_t, 2> parse_lattice_counts(
+    const YAML::Node& node) {
+  if (node.IsScalar()) {
+    const int64_t n = node.as<int64_t>();
+    if (n <= 0) {
+      throw std::runtime_error(
+          "lattice.counts must be > 0");
+    }
+    return {n, n};
+  }
+  if (!node.IsSequence()) {
+    throw std::runtime_error(
+        "lattice.counts must be N or [num_v, num_u]");
+  }
+  const auto counts = node.as<std::vector<int64_t>>();
+  if (counts.size() != 2 || counts[0] <= 0 || counts[1] <= 0) {
+    throw std::runtime_error(
+        "lattice.counts must be N or [num_v, num_u], all > 0");
+  }
+  return {counts[0], counts[1]};
 }
 
 // Range-Nyquist counts that fill the extents, then cap the longer
@@ -387,7 +475,8 @@ inline AppConfig load_config(const std::filesystem::path& path,
       throw std::runtime_error(
           "cphd.path is empty or not a file (" + cphd.string() +
           "). Mode 1 wants the Atlanta Umbra collect "
-          "(see mode01.yaml). Mode 5: run pull_cphd.py first. "
+          "(see mode01.yaml). Mode 2: subset Houston first "
+          "(mode02.yaml). Mode 5: run pull_cphd.py first. "
           "For the generated smoke fixture:\n"
           "  python3 tools/sar_sim/generate_cphd.py "
           "tools/sar_sim/recipes/mode01_smoke.yaml -o <dir>\n"
@@ -400,8 +489,9 @@ inline AppConfig load_config(const std::filesystem::path& path,
   if (cfg.cphd_paths.empty()) {
     throw std::runtime_error(
         "cphd.path is empty or not a file. Mode 1 wants the "
-        "Atlanta Umbra collect (see mode01.yaml). For the "
-        "generated smoke fixture:\n"
+        "Atlanta Umbra collect (see mode01.yaml). Mode 2: "
+        "subset Houston (mode02.yaml). For the generated "
+        "smoke fixture:\n"
         "  python3 tools/sar_sim/generate_cphd.py "
         "tools/sar_sim/recipes/mode01_smoke.yaml -o <dir>\n"
         "  sar_formation mode01_smoke.yaml "
@@ -531,12 +621,7 @@ inline AppConfig load_config(const std::filesystem::path& path,
     }
     cfg.lattice_pixel_scale = pixel_scale;
     if (has_counts) {
-      const auto counts = lat["counts"].as<std::vector<int64_t>>();
-      if (counts.size() != 2 || counts[0] <= 0 || counts[1] <= 0) {
-        throw std::runtime_error(
-            "lattice.counts must be [num_v, num_u], both > 0");
-      }
-      lattice_counts = {counts[0], counts[1]};
+      lattice_counts = parse_lattice_counts(lat["counts"]);
       const YAML::Node sp = lat["spacing"];
       if (sp.IsScalar()) {
         const double metres = sp.as<double>();
@@ -752,6 +837,11 @@ inline AppConfig load_config(const std::filesystem::path& path,
             .string();
   }
 
+  if (const YAML::Node am = root["aperture_manager"]) {
+    if (const YAML::Node m = am["max_aperture_pulses"]) {
+      cfg.wire_weight = m.as<int64_t>() > 0;
+    }
+  }
   if (const YAML::Node v = root["visualize"]; v && !v.IsNull()) {
     cfg.visualize = v.as<bool>();
   }

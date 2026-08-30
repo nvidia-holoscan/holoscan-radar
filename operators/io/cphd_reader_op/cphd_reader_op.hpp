@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -37,6 +38,30 @@ struct CollectionSpan {
   std::optional<std::chrono::steady_clock::time_point> dwell_end;
   std::optional<std::chrono::steady_clock::time_point> quiet_start;
   std::optional<std::chrono::steady_clock::time_point> quiet_end;
+};
+
+// Collect time vs wall. Not a port (R10). The formation app
+// paints this so a `playback_rate: 1` run shows whether it is
+// keeping collect time. `behind_s` > 0 means wall is ahead of
+// radar time (falling behind). After the collection ends, wall
+// freezes so a Holoviz hold does not inflate the lag.
+struct PlaybackStatus {
+  bool valid{false};
+  bool paced{false};
+  double collect_s{0.0};
+  double wall_s{0.0};
+  double behind_s{0.0};
+  double last_slack_s{0.0};
+};
+
+// Mean aperture phase centre of the last emitted pulse batch,
+// in the reader's declared frame (CPHD ECEF). Not a port (R10);
+// the formation app projects this onto the lattice for a look
+// indicator. `file_index` selects the collection's geometry.
+struct LastMeanApc {
+  bool valid{false};
+  int64_t file_index{0};
+  std::array<double, 3> ecef{};
 };
 
 // Reads a CPHD collection and emits phase history with the per-pulse
@@ -79,7 +104,9 @@ struct CollectionSpan {
 //   loop             — wrap to the first file instead of ending the stream.
 //                      Static, default false.
 //   playback_rate    — 0 = unconstrained; 1 = collect-time pacing (video
-//                      convention: 2 = twice as fast). Static, default 0.
+//                      convention: 2 = twice as fast). Sleeps while
+//                      ahead of radar; no sleep while behind. Static,
+//                      default 0.
 //   duty_cycle       — (0, 1]; 1 = no gap. Cooldown between collections
 //                      is T_c*(1/D - 1). Static, default 1.
 //
@@ -133,6 +160,24 @@ class CPHDReaderOp : public holoscan::Operator {
   // The formation timeline window copies this every tick.
   std::vector<CollectionSpan> timeline_spans() const;
 
+  // Collect-time vs wall. Polled by the timeline at 100 ms.
+  PlaybackStatus playback_status() const;
+
+  // Mean APC of the last emitted batch. Not a port (R10).
+  LastMeanApc last_mean_apc() const {
+    LastMeanApc out;
+    if (!last_apc_valid_.load(std::memory_order_acquire)) {
+      return out;
+    }
+    out.valid = true;
+    out.file_index =
+        last_apc_file_.load(std::memory_order_relaxed);
+    out.ecef[0] = last_apc_x_.load(std::memory_order_relaxed);
+    out.ecef[1] = last_apc_y_.load(std::memory_order_relaxed);
+    out.ecef[2] = last_apc_z_.load(std::memory_order_relaxed);
+    return out;
+  }
+
  private:
   // Parameters per the contract. All static: a reader's file, frame,
   // batching and pacing are build-time configuration, not in-flight
@@ -162,14 +207,20 @@ class CPHDReaderOp : public holoscan::Operator {
 
   // Opens files_[file_index_] and resolves the pulse range within it.
   void open_current_file();
-  // Sleep so this tick's wall time is at least batch_span / playback_rate.
-  void pace_tick(double batch_span);
+  // Slack seconds: collect/rate − wall since collection start
+  // (positive = ahead; negative = behind). Sleep is in compute()
+  // so collect time can be published before the wait.
+  double playback_slack();
+  void publish_playback(double slack, bool live);
   // Queue a platform cooldown after a collection when another
   // follows; slept at the next tick's start so the closing image
   // is already on screen.
   void cooldown_if_needed();
   // Publish last-batch emit time for the formation app.
   void publish_last_packet_at(std::chrono::steady_clock::time_point at);
+  // Mean of finite APCs in this batch, for the look overlay.
+  void publish_last_mean_apc(const std::vector<double>& apc,
+                             int64_t count);
   void timeline_open_dwell();
   void timeline_close_dwell();
   void timeline_quiet_begin();
@@ -186,9 +237,22 @@ class CPHDReaderOp : public holoscan::Operator {
   std::chrono::steady_clock::time_point tick_start_{};
   // Last collection's final pulse-batch emit, as nanoseconds of
   // steady_clock. Atomically published so EventBased can read it
-  // from SarImageToLutOp during the reader's last pace_tick.
+  // from SarImageToLutOp during the reader's last playback sleep.
   std::atomic<int64_t> last_packet_ns_{0};
   std::atomic<bool> last_packet_valid_{false};
+  // Collect vs wall, polled by the timeline. Nanoseconds.
+  std::atomic<int64_t> collection_start_ns_{0};
+  std::atomic<int64_t> collect_span_ns_{0};
+  std::atomic<int64_t> last_wall_ns_{0};
+  std::atomic<int64_t> last_slack_ns_{0};
+  std::atomic<int64_t> playback_rate_x1e6_{0};
+  std::atomic<bool> playback_valid_{false};
+  std::atomic<bool> playback_live_{false};
+  std::atomic<double> last_apc_x_{0.0};
+  std::atomic<double> last_apc_y_{0.0};
+  std::atomic<double> last_apc_z_{0.0};
+  std::atomic<int64_t> last_apc_file_{0};
+  std::atomic<bool> last_apc_valid_{false};
   // Wall-clock dwell/quiet ring for the app timeline. shared_ptr so
   // FORWARD_ARGS stay movable (mutex is not).
   static constexpr size_t kTimelineCap = 32;

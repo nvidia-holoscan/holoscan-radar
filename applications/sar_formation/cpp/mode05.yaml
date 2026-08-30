@@ -21,8 +21,8 @@
 # load_config derives each file's dr from that same length.
 # nfft_pad: next_fast fills it (5-smooth >= max CPHD samples).
 # loop wraps until SIGINT.
-# playback_rate 1 = collect-time pacing (each tick sleeps so its
-# wall time is at least that batch's TxTime last−first). 0 = unconstrained.
+# playback_rate 1 = collect-time pacing (sleep collect − wall;
+# skip sleep while behind). 0 = unconstrained.
 # duty_cycle 1 = no gap; <1 sleeps T_c*(1/D-1) between collections.
 
 cphd:
@@ -62,8 +62,8 @@ cphd_reader:
   # GPU if you want one tick per collect.
   pulses_per_tick: 1024
   loop: true
-  # 1 = dwell cadence: each 1024-pulse tick is held to that
-  # batch's TxTime span. Never slower than the GPU. 2 = 2x.
+  # 1 = collect-time pacing: sleep while ahead of radar, skip
+  # while behind (catch up at GPU speed). 2 = 2x.
   playback_rate: 1
   duty_cycle: 1
 

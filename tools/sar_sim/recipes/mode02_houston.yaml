@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Mode 2 Houston video-SAR subset. Source is pinned; the kept window is a
+# knob. count 4096 at origin center is the INPUT_DATA.md 4.09 m ground-range
+# subband on this collect (equivalent to samples [33389, 37485) of 70875).
+# Change count or switch to bandwidth_hz / an explicit [start, stop) without
+# editing the subsetter. Pulses omitted = the whole dwell.
+#
+# connections: measured optimum. Do not raise it; 256 regresses.
+
+name: mode02_houston
+description: >-
+  Full-dwell downtown Houston (Umbra, 2024-10-30). Central FX subband of
+  the 70,875-sample collect; width is samples.count.
+
+source:
+  bucket: umbra-open-data-catalog
+  key: sar-data/tasks/Houston_TX/8f28779a-7cfa-412d-9856-4d4d08079198/2024-10-30-16-10-33_UMBRA-06/2024-10-30-16-10-33_UMBRA-06_CPHD.cphd
+
+# Keep a contiguous sample window. Forms:
+#   samples: [start, stop)              # explicit half-open indices
+#   samples: {count: N, origin: center} # start | center | end
+#   samples: {bandwidth_hz: 61.6e6, origin: center}
+samples:
+  count: 4096
+  origin: center
+
+# pulses omitted = all. Same forms, plus {duration_s: 8.0, origin: center}.
+
+connections: 128

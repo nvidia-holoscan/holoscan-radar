@@ -15,7 +15,8 @@ harness (checklist Performance section skipped).
 2. **`weight` is unconnected in `sar_formation` modes 1 and 5.**
    All weights are `+1` on the spotlight row, and a connected
    `weight` port makes `BackprojectionOp` D2H-sync every tick to
-   prove that. Mode 2 wires it when eviction emits `−1`.
+   prove that. Mode 2 wires it (`max_aperture_pulses > 0`) so
+   eviction can emit `−1`.
 
 3. **TESTING.md items not covered as unit tests here:** a fragment
    with metadata disabled / default `kRaise`; the announcement

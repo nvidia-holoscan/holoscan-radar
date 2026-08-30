@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Full-dwell Houston central FX subband at ~0.5 m ground-range GSD.
+# count 33505 is 4096 * 4.09 / 0.5 on the INPUT_DATA.md 4.09 m pin
+# (centred 4096 of 70875). Pulses omitted = the whole dwell.
+#
+# Local file, not S3:
+#   python3 subset_cphd.py recipes/mode02_houston_0p5m.yaml \
+#     --source /tmp/sar/2024-10-30-16-10-33_UMBRA-06_CPHD.cphd \
+#     -o /tmp/sar
+
+name: mode02_houston_0p5m
+description: >-
+  Full-dwell downtown Houston (Umbra, 2024-10-30). Central FX subband
+  sized for ~0.5 m ground-range GSD (~2.4 GB/s collect-time ingest).
+
+source:
+  bucket: umbra-open-data-catalog
+  key: sar-data/tasks/Houston_TX/8f28779a-7cfa-412d-9856-4d4d08079198/2024-10-30-16-10-33_UMBRA-06/2024-10-30-16-10-33_UMBRA-06_CPHD.cphd
+
+samples:
+  count: 33505
+  origin: center
+
+connections: 128

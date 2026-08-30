@@ -209,6 +209,18 @@ in-place on the output tensor; double H2Ds into a reused device CF8
 buffer. Integer formats still use `read_signal_into`. `CphdFile`'s host
 widen remains for tests and tools. No contract change.
 
+*Paid 2026-08-28.* Houston 1.0 m / 0.5 m ingest is **one outstanding
+sequential read**, not H2D and not ifstream buffering. Isolated cold
+`pread` of a 131 MiB tick is ~1.9 GB/s on the SN850X whether the file
+sits on overlay `/tmp` or ext4; cache-hot is ~6.3 GB/s. PVP seeks,
+`POSIX_FADV_SEQUENTIAL`, and a 4 MiB `filebuf` do not move the cold
+number. Four concurrent `pread`s of the same span reach ~4.4 GB/s (eight
+~4.8). `CphdFile::read_at` now uses `pread` and splits spans ≥ 1 MiB
+across four threads. Cold operator confirm: 1.0 m 16.35 s → 8.24 s
+(signal 6.78 s), 0.5 m 33.92 s → 17.41 s (signal 14.56 s); both under
+the 23.5 s dwell. EOS logs split the tick into pvp / signal / decode /
+geo / sync.
+
 **Still unpaid:** per-tick `make_device_tensor` (~0.09 ms, the small-batch
 harness finding above). A pooled allocator is the remaining win; it is a
 module-wide `make_device_tensor` question, not a reader-local one.

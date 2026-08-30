@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Mode-1 SAR formation: one collection, one image. Holoviz when
-// visualize: true. TensorDumpOp when dump: true (off by default).
-// The dump is the offline PNG checkpoint
-// (tools/sar_image/form_image.py).
+// Mode-1 / 2 / 5 SAR formation. Holoviz when visualize: true.
+// TensorDumpOp when dump: true (off by default). The dump is the
+// offline PNG checkpoint (tools/sar_image/form_image.py).
 //
 //   CPHDReaderOp → SARRangeCompressionOp → ApertureManagerOp
 //                                        → BackprojectionOp
@@ -15,14 +14,15 @@
 //                                        [→ TimelineRasterOp
 //                                            → HolovizOp]
 //   reader.positions / reference_position bypass range compression
-//   and go through the manager. Mode 5 inserts
-//   CollectionBoundaryStagerOp on the range_profiles edge so the
-//   next lattice is staged into the manager (and dr / f0 into BP)
-//   on collection_boundary.
+//   and go through the manager. Mode 2 wires manager.weight.
+//   Mode 5 inserts CollectionBoundaryStagerOp on the
+//   range_profiles edge so the next lattice is staged into the
+//   manager (and dr / f0 into BP) on collection_boundary.
 //
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/sar_formation/cpp/sar_formation \
-//            [mode01.yaml | mode05.yaml] [<collection.cphd>]
+//            [mode01.yaml | mode02.yaml | mode05.yaml] \
+//            [<collection.cphd>]
 
 #include <algorithm>
 #include <cstdint>
@@ -68,6 +68,18 @@ class SarFormationApp : public holoscan::Application {
         cfg.cphd_paths.size(), cfg.sample_geometry.num_v(),
         cfg.sample_geometry.num_u(), cfg.reference_frequency,
         cfg.dump ? cfg.dump_path : std::string("off"));
+    if (cfg.lattice_max_side > 0) {
+      if (cfg.wire_weight) {
+        HOLOSCAN_LOG_INFO(
+            "sar_formation lattice.max_side {} (formed-pixel cap; "
+            "lower this if playback lag climbs)",
+            cfg.lattice_max_side);
+      } else {
+        HOLOSCAN_LOG_INFO(
+            "sar_formation lattice.max_side {} (formed-pixel cap)",
+            cfg.lattice_max_side);
+      }
+    }
     HOLOSCAN_LOG_INFO(
         "sar_formation lattice origin [{:.3f}, {:.3f}, {:.3f}]",
         origin[0], origin[1], origin[2]);
@@ -210,6 +222,12 @@ class SarFormationApp : public holoscan::Application {
     add_flow(manager, bp,
              {{"reference_position", "reference_position"}});
     add_flow(manager, bp, {{"control", "control"}});
+    if (cfg.wire_weight) {
+      HOLOSCAN_LOG_INFO(
+          "sar_formation: wiring ApertureManagerOp.weight "
+          "(sliding-window eviction)");
+      add_flow(manager, bp, {{"weight", "weight"}});
+    }
     if (cfg.dump) {
       holoscan::ArgList dump_args{
           holoscan::Arg("path") = cfg.dump_path};
@@ -231,7 +249,12 @@ class SarFormationApp : public holoscan::Application {
       // lattice.max_side cap, or sample_geometry counts).
       to_lut->max_side = cfg.visualize_size;
       to_lut->scene_names = cfg.scene_names;
-      to_lut->formation_diag = [bp, reader]() {
+      // Collect-vs-wall lag is the mode-2 (retention) overlay.
+      const bool show_lag = cfg.wire_weight;
+      to_lut->formation_diag = [bp, reader, show_lag,
+                                geoms = cfg.collection_geometries,
+                                to_enu = cfg.transform_to_scene_enu,
+                                origin = cfg.enu_origin_ecef]() {
         const auto t = bp->last_image_timing();
         SarImageToLutOp::FormationDiag d;
         d.bp_compute_s = t.compute_s;
@@ -239,6 +262,21 @@ class SarFormationApp : public holoscan::Application {
         d.pixels = t.pixels;
         d.emit_at = t.emit_at;
         d.last_packet_at = reader->last_packet_at();
+        if (show_lag) {
+          d.playback = reader->playback_status();
+        }
+        const auto apc = reader->last_mean_apc();
+        if (apc.valid && !geoms.empty()) {
+          const size_t i =
+              static_cast<size_t>(apc.file_index) % geoms.size();
+          const auto en = apc_east_north(
+              apc.ecef, geoms[i], to_enu, origin);
+          if (en.has_value()) {
+            d.apc_valid = true;
+            d.apc_east = (*en)[0];
+            d.apc_north = (*en)[1];
+          }
+        }
         return d;
       };
       auto hold = make_operator<HoldLastImageOp>(
@@ -273,6 +311,11 @@ class SarFormationApp : public holoscan::Application {
       timeline->last_packet_at = [reader]() {
         return reader->last_packet_at();
       };
+      if (show_lag) {
+        timeline->playback = [reader]() {
+          return reader->playback_status();
+        };
+      }
       HolovizLayout tl_layout;
       tl_layout.window_title = "SAR timeline";
       tl_layout.width = static_cast<uint32_t>(timeline->width);
@@ -290,9 +333,9 @@ class SarFormationApp : public holoscan::Application {
       add_flow(timeline, timeline_viz,
                {{"timeline", "receivers"}});
 
-      // One GLFW thread for both windows. EventBased strict-pins
-      // a user pool; pin_operator false so both Holoviz ops share
-      // the single worker rather than each needing its own.
+      // One GLFW thread for both windows. EventBased
+      // strict-pins a user pool; pin_operator false so Holoviz
+      // ops share the single worker.
       auto viz_pool = make_thread_pool("viz", 1);
       viz_pool->add(visualizer, false);
       viz_pool->add(timeline_viz, false);

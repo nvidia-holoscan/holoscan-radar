@@ -750,12 +750,16 @@ class ReaderApp : public holoscan::Application {
           "reader", args,
           make_condition<holoscan::CountCondition>("tick_limit",
                                                   options_.max_ticks));
+      reader_op = reader;
       wire_sink(reader);
       return;
     }
     auto reader = make_operator<CPHDReaderOp<float>>("reader", args);
+    reader_op = reader;
     wire_sink(reader);
   }
+
+  std::shared_ptr<CPHDReaderOp<float>> reader_op;
 
  private:
   template <typename Reader>
@@ -829,6 +833,38 @@ TEST(CPHDReaderOp, BatchingCoversTheCollectionWithAShortFinalTick) {
     EXPECT_NEAR(capture.reference_positions[i], static_cast<float>(srp[i]),
                 std::abs(srp[i]) * 1e-6);
   }
+}
+
+TEST(CPHDReaderOp, LastMeanApcIsTheLastBatchMidpoint) {
+  const CphdFile file(fixture_path());
+  ReaderCapture capture;
+  ReaderOptions options;
+  options.max_ticks = 1;
+  const int64_t per_tick = 48;
+  ReaderApp app(&capture, per_tick, {}, CollectionPaths(fixture_path()),
+                options);
+  app.run();
+  ASSERT_NE(app.reader_op, nullptr);
+  const auto apc = app.reader_op->last_mean_apc();
+  ASSERT_TRUE(apc.valid);
+  EXPECT_EQ(apc.file_index, 0);
+  const std::vector<double> tx =
+      file.read_pvp(0, "TxPos", 0, per_tick, 3);
+  const std::vector<double> rcv =
+      file.read_pvp(0, "RcvPos", 0, per_tick, 3);
+  double sx = 0.0;
+  double sy = 0.0;
+  double sz = 0.0;
+  for (int64_t i = 0; i < per_tick; ++i) {
+    const size_t b = static_cast<size_t>(i) * 3;
+    sx += 0.5 * (tx[b] + rcv[b]);
+    sy += 0.5 * (tx[b + 1] + rcv[b + 1]);
+    sz += 0.5 * (tx[b + 2] + rcv[b + 2]);
+  }
+  const double inv = 1.0 / static_cast<double>(per_tick);
+  EXPECT_DOUBLE_EQ(apc.ecef[0], sx * inv);
+  EXPECT_DOUBLE_EQ(apc.ecef[1], sy * inv);
+  EXPECT_DOUBLE_EQ(apc.ecef[2], sz * inv);
 }
 
 // CPHDReaderOp<double> on CF8 is the mode-5 path: GPU widen, not the host
@@ -1152,8 +1188,8 @@ TEST(CPHDReaderOp, LoopWrapsWithoutEndOfStream) {
   }
 }
 
-// playback_rate 1 holds each tick to at least that batch's TxTime span.
-// Smoke is 256 pulses at 2 ms CRI ≈ 0.51 s; one tick of 256 pulses.
+// playback_rate 1 sleeps collect − wall (catch-up). Smoke is 256
+// pulses at 2 ms CRI ≈ 0.51 s; one tick of 256 pulses.
 TEST(CPHDReaderOp, PlaybackRateOneMatchesCollectTime) {
   ReaderCapture capture;
   ReaderOptions options;

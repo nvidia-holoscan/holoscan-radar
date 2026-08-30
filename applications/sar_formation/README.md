@@ -1,8 +1,9 @@
 # SAR formation
 
 Mode-1 spotlight: one collection, one image, shown in Holoviz when
-`visualize: true`. `dump: true` writes a `.npy` (off by default);
-that dump is the offline PNG checkpoint
+`visualize: true`. Mode 2 is video SAR (sliding window). Mode 5 is
+N independent images. `dump: true` writes a `.npy`
+(off by default); that dump is the offline PNG checkpoint
 (`tools/sar_image/form_image.py`).
 
 ```text
@@ -16,10 +17,13 @@ reader.positions / reference_position ─────────────▲
 Modes 1 and 5 wire `ApertureManagerOp` with `max_aperture_pulses: 0`,
 `emit_interval_pulses: 0`, `emit_mode: reset` (one image per
 collection, no retention). `weight` stays unconnected (all `+1`).
-Mode 5 inserts `CollectionBoundaryStagerOp` on the `range_profiles`
-edge so the next lattice is staged into the manager on
-`collection_boundary`, and `range_bin_spacing` / `reference_frequency`
-still go straight to `BackprojectionOp` (those are not manager ports).
+Mode 2 retains a sliding window (`max_aperture_pulses > 0`,
+`emit_mode: continue`) and wires `manager.weight` so eviction is
+`−1`. Mode 5 inserts `CollectionBoundaryStagerOp` on the
+`range_profiles` edge so the next lattice is staged into the
+manager on `collection_boundary`, and `range_bin_spacing` /
+`reference_frequency` still go straight to `BackprojectionOp`
+(those are not manager ports).
 
 `range_bins` is not wired. `BackprojectionOp.range_bin_spacing`
 is derived from CPHD `SCSS` and `num_samples`, and from
@@ -65,6 +69,8 @@ python3 tools/sar_image/form_image.py \
 `mode01.yaml` sets `visualize: true`. The window is greyscale
 log-magnitude, 0 dB at the displayed grid's 99.8th-percentile
 magnitude, floor at its 25th percentile (never wider than 30 dB).
+A small N-up compass (bottom-right) and a border chevron mark
+the mean phase-centre direction (row 0 = north, col 0 = west).
 Holoviz is given those 8-bit codes as `R8_UINT` (COLOR_LUT
 indexes 0–255; a float raster was the washed live window).
 `pass_through` is not available on this display. Held for
@@ -103,6 +109,49 @@ python3 tools/sar_sim/generate_cphd.py \
     mode01_smoke.yaml /tmp/sar/mode01_smoke.cphd
 ```
 
+## Mode 2 — Houston video SAR
+
+Full 23.5 s downtown Houston dwell as a sliding window (INPUT_DATA.md).
+The app streams a **local** central-subband CPHD; subset once, never
+the network. Live YAML is ~1.0 m ground-range GSD (~27 GiB) after
+0.5 m ran ~4× behind collect time on this GPU.
+
+```bash
+python3 tools/sar_sim/subset_cphd.py \
+    tools/sar_sim/recipes/mode02_houston_1p0m.yaml \
+    --source /tmp/sar/2024-10-30-16-10-33_UMBRA-06_CPHD.cphd \
+    -o /tmp/sar
+
+./build/applications/sar_formation/cpp/sar_formation mode02.yaml
+```
+
+`mode02.yaml` retains 8262 pulses (`2020 × 4.09 / 1.0`, the 4.09 m
+window scaled), emits every 4096 pulses (~2.18 Hz at PRF 8942 Hz;
+four 1024-pulse reader ticks, `emit_mode: continue`),
+and wires `ApertureManagerOp.weight` so the trailing edge leaves at
+`−1`. No `aperture_window`: a sliding window is unweighted (~−13 dB).
+The scene is 6.8 km (`lattice.counts` × `spacing` at 1.0 m).
+`lattice.max_side: 6144` is the formed pixel side (~1.11 m GSD);
+**that is the number to lower on a slower GPU** (same km, coarser
+pixels, cost ~ N²). `visualize_size` is only the Holoviz window.
+Watch the overlay's `behind` line: if it climbs, drop `max_side`.
+`nfft_pad: next_fast`, `playback_rate: 1`, `loop: true` (wrap is
+`collection_boundary` / emit-and-reset; the window refills over
+the next ~0.92 s), `visualize_hold_s: -1`.
+
+Two Holoviz windows: formed `|z|` and the timeline. The
+formed-image overlay and the timeline show collect-vs-wall lag
+when playback is paced (`on time` / behind / ahead). Modes 1
+and 5 omit that overlay. A small N-up compass (bottom-right)
+and a border chevron mark the mean phase-centre direction
+relative to the scene (row 0 = north, col 0 = west). Dump stays
+the formed complex lattice.
+
+0.5 m is the same extent at twice the samples and four times the
+pixels: `/tmp/sar/mode02_houston_0p5m.cphd` (recipe
+`mode02_houston_0p5m.yaml`, 33505 samples), lattice 13600² at
+0.5 m, `max_aperture_pulses: 16524`.
+
 ## Mode 5 — six unique-IARP spotlights
 
 N independent images on the same spine as mode 1. The reader
@@ -110,8 +159,10 @@ N independent images on the same spine as mode 1. The reader
 Bingham Copper Mine, Kourou, Buenos Aires, Intel Ohio One). Each
 seam is `collection_boundary`; Holoviz keeps the last emit until
 the next image replaces it. `visualize_hold_s: -1` holds the window
-until SIGINT. `playback_rate: 1` paces each tick to that batch's
-`TxTime` span (collect-time cadence; `0` is unconstrained). Optional
+until SIGINT. `playback_rate: 1` paces to collect time (sleep
+while ahead of radar; no sleep while behind). `0` is
+unconstrained. The collect-vs-wall lag overlay is mode 2 only.
+Optional
 `duty_cycle` < 1 inserts a cooldown
 `T_c · (1/D − 1)` between collections. `pulses_per_tick: 1024`
 is the mode-5 batch (Ohio is 22 ticks); 100 was NVRadar Atlanta

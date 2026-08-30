@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // App-owned operators for the formation demo: the Holoviz rasterizer /
-// hold pair, NVRadar-parity diagnostics, and CollectionBoundaryStagerOp.
+// hold pair, NVRadar-parity diagnostics, and
+// CollectionBoundaryStagerOp.
 // ApertureManagerOp (library) drives BackprojectionOp.control; this
 // stager is the leftover app path for mode 5's live lattice / dr / f0
 // (the manager stages sample_geometry; range_bin_spacing and
@@ -403,8 +404,9 @@ class NvradarVphOverrideOp : public holoscan::Operator {
 // sort). Overlay is host and tiny. Emits a TensorMap on
 // `sar_image`: uint8 (H, W, 1) LUT indices 0–255 keyed
 // `sar_image`, plus `size_label` (RGBA overlay: name + formed HxW,
-// BP time, px*pls/s). compute() is in sar_image_lut.cpp; kernels
-// are in sar_image_lut.cu so nvcc does not parse Holoscan.
+// BP time, px*pls/s) and `apc_look` (RGBA compass: N-up, arrow
+// toward the mean phase centre). compute() is in sar_image_lut.cpp;
+// kernels are in sar_image_lut.cu so nvcc does not parse Holoscan.
 class SarImageToLutOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(SarImageToLutOp)
@@ -434,6 +436,10 @@ class SarImageToLutOp : public holoscan::Operator {
     int64_t pixels{0};
     std::optional<std::chrono::steady_clock::time_point> emit_at;
     std::optional<std::chrono::steady_clock::time_point> last_packet_at;
+    radar::PlaybackStatus playback;
+    bool apc_valid{false};
+    double apc_east{0.0};
+    double apc_north{0.0};
   };
   std::function<FormationDiag()> formation_diag;
   std::vector<std::string> scene_names;
@@ -456,9 +462,10 @@ class SarImageToLutOp : public holoscan::Operator {
 };
 
 // Scrolling wall-clock Gantt: per-collect dwell bars, duty-cycle
-// quiet, image-emit ticks with last-packet latency. Source:
-// PeriodicCondition 100 ms, no data input. Polls
-// CPHDReaderOp::timeline_spans, last_packet_at, and BP emit_at.
+// quiet, image-emit ticks with last-packet latency, and (mode 2
+// only) collect-vs-wall lag. Source: PeriodicCondition 100 ms,
+// no data input. Polls CPHDReaderOp::timeline_spans,
+// last_packet_at, playback_status, and BP emit_at.
 // compute() is in timeline.cpp.
 class TimelineRasterOp : public holoscan::Operator {
  public:
@@ -474,6 +481,7 @@ class TimelineRasterOp : public holoscan::Operator {
       last_image_emit;
   std::function<std::optional<std::chrono::steady_clock::time_point>()>
       last_packet_at;
+  std::function<radar::PlaybackStatus()> playback;
 
   void setup(holoscan::OperatorSpec& spec) override {
     spec.output<holoscan::TensorMap>("timeline");

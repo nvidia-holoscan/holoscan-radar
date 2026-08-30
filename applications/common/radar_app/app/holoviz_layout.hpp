@@ -6,8 +6,8 @@
 // cluster color + noise, optional right-column panels) is owned here
 // and driven by HolovizLayout. SAR formation uses a separate factory
 // (`make_image_holoviz_op`) for a greyscale COLOR_LUT image plus a
-// formed-size COLOR overlay; it does not inherit CommonRunConfig or
-// the RD-map layout.
+// formed-size COLOR overlay and an APC-look compass; it does not
+// inherit CommonRunConfig or the RD-map layout.
 //
 // This deliberately builds only DATA (+ a factory that makes the HolovizOp)
 // — it does NOT call add_flow. HolovizOp is already the operator; which tensors
@@ -156,8 +156,9 @@ inline std::shared_ptr<holoscan::ops::HolovizOp> make_image_holoviz_op(
   InputSpec spec(layer_name, InputType::COLOR_LUT);
   spec.image_format_ = ImageFormat::R8_UINT;
   specs.push_back(spec);
-  // Scene name / formed size / BP timing, rasterized by
-  // SarImageToLutOp (Holoviz TEXT strings are compose-time).
+  // Scene name / formed size / BP timing, plus mode-2 playback
+  // lag, rasterized by SarImageToLutOp (Holoviz TEXT strings
+  // are compose-time).
   InputSpec label("size_label", InputType::COLOR);
   label.image_format_ = ImageFormat::R8G8B8A8_UNORM;
   label.priority_ = 1;
@@ -165,9 +166,22 @@ inline std::shared_ptr<holoscan::ops::HolovizOp> make_image_holoviz_op(
   banner.offset_x_ = 0.015F;
   banner.offset_y_ = 0.015F;
   banner.width_ = 0.55F;
-  banner.height_ = 0.11F;
+  banner.height_ = 0.15F;
   label.views_ = {banner};
   specs.push_back(label);
+  // N-up compass; arrow toward the mean APC (same axes as the
+  // image: row 0 = north, col 0 = west). Bottom-right so it
+  // does not cover the size_label banner.
+  InputSpec look("apc_look", InputType::COLOR);
+  look.image_format_ = ImageFormat::R8G8B8A8_UNORM;
+  look.priority_ = 1;
+  InputSpec::View compass;
+  compass.offset_x_ = 0.835F;
+  compass.offset_y_ = 0.835F;
+  compass.width_ = 0.15F;
+  compass.height_ = 0.15F;
+  look.views_ = {compass};
+  specs.push_back(look);
   return fragment->make_operator<holoscan::ops::HolovizOp>(
       name, holoscan::Arg("tensors", specs),
       holoscan::Arg("color_lut", color_lut),

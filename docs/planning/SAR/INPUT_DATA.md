@@ -109,6 +109,8 @@ The 110 GiB signal block is never downloaded whole. Resolution is set by a **con
 | pulse window | 2,020 vectors — 0.226 s | 0.214 deg of aspect, **4.09 m cross range** |
 | image grid | 2048 x 2048 at 2.5 m, anchored at the IARP | 5.12 km, 1.6x oversampled |
 
+The 4.09 m pin above used a 2048² / 2.5 m / 5.12 km grid. **The shipped `mode02.yaml` is a local subband of the same full dwell at ~1.0 m ground-range GSD** (`tools/sar_sim/recipes/mode02_houston_1p0m.yaml`, 16753 samples, ~27 GiB) on a 6.8 km IARP-centred ENU square (`lattice.counts: 6800`, `spacing: 1.0`), formed at `lattice.max_side: 6144` (~1.11 m GSD). Lower `max_side` on a slower GPU (same km, coarser pixels). Aperture 8262 pulses is `2020 × 4.09 / 1.0`. The 0.5 m subset (`mode02_houston_0p5m.cphd`, 33505 samples, 13600², `max_aperture_pulses: 16524`) missed collect time by ~4× on the demo GPU and is kept on disk, not in the live YAML.
+
 A subband is phase-consistent as a lower-bandwidth collect provided the centre frequency and bandwidth are derived from the **actual sample grid** (`SC0 + (i0 + (n-1)/2) * SCSS`, `n * SCSS`) rather than from the global `FxBand`, which on this collect implies a sample spacing 0.06% off the true `SCSS`.
 
 **One fixed grid is valid for the whole dwell**, because SRP travel across the collect is exactly 0.0 m — a true staring spotlight. That is what makes frames pixel-registered without resampling, and it is worth asserting rather than assuming: a sliding-spotlight or stripmap collect would need the grid to follow the SRP. The 5.12 km grid is inside the sampled range window on 208,751 of the 208,753 vectors.
@@ -131,7 +133,7 @@ The pull is **request-rate bound, not bandwidth bound** — 6.84 GB in 7.1 min i
 
 Across the full collect the aspect sweeps 22.3 deg, so layover rotates and specular returns flash — tall structures visibly swing and linear features brighten and fade, while the street grid stays registered. That is physically correct on a flat `Z = 0` grid and typical of real video SAR, and it is what makes the sequence unmistakably a video rather than a repeated still.
 
-**Movers are real but are the subtle layer.** Analysis over a 3.6 s burst found 20 unambiguously moving vehicles across the 5.12 km scene, tracked over up to 16 consecutive frames with sub-pixel fit residuals and landing on the freeway corridors. They read clearly only after the static background is removed, so the demo should ship a **median-subtracted residual view** as a viz mode rather than relying on traffic being visible in raw magnitude.
+**Movers are real but are the subtle layer.** Analysis over a 3.6 s burst found 20 unambiguously moving vehicles across the 5.12 km scene, tracked over up to 16 consecutive frames with sub-pixel fit residuals and landing on the freeway corridors. They read clearly only after the static background is removed. The demo does not ship that background-subtraction view; traffic is not expected to be obvious in raw magnitude.
 
 Two findings from that analysis are worth carrying into the operator work:
 
