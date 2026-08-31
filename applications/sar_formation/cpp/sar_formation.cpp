@@ -367,6 +367,7 @@ class SarFormationApp : public holoscan::Application {
       auto mosaic = make_operator<ScrollMosaicOp>("scroll_mosaic");
       mosaic->parent = cfg.scroll_parent;
       mosaic->loop = cfg.reader_loop;
+      mosaic->input_queue_capacity = scroll_cap;
       add_flow(bp, mosaic, {{"image", "image"}});
       add_flow(bp, mosaic,
                {{"sample_geometry", "sample_geometry"}});

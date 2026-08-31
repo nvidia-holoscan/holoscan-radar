@@ -167,8 +167,7 @@ a coarsening cap). `ScrollMosaicOp` blits each window into the parent so
 Holoviz is the strip (same landscape fit as mode 3). `weight` is
 unconnected (untapered ~−13 dB). `emit_interval_pulses: 256` with
 `pulses_per_tick: 1024` — the app stager slices each reader cube so
-formation sees the interval. Pull: `python3 applications/sar_formation/pull_cphd.py --mode 4
---dest /tmp/sar/imperial`.
+formation sees the interval. Pull: `python3 applications/sar_formation/pull_cphd.py --mode 4 --dest /tmp/sar/imperial`.
 
 ## Palmdale / Rosamond — optional CPHD 1.0.1 spare
 

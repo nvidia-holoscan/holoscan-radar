@@ -24,8 +24,9 @@ CPHDReaderOp → phase_history → SARRangeCompressionOp → range_profiles → 
 
 ## Operators
 
-`SARRangeCompressionOp` has landed; `BackprojectionOp` is in flight as a
-mode-1 slice (not checklist-complete), in the build order set by
+`SARRangeCompressionOp` has landed; `BackprojectionOp` is in flight
+(not checklist-complete; mode-1 plus mode-4 scroll), in the build
+order set by
 [`docs/planning/SAR/SIGPROC_PLAN.md`](../../docs/planning/SAR/SIGPROC_PLAN.md):
 
 | Operator | In → Out | Function |

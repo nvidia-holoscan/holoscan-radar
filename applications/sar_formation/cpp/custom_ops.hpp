@@ -694,11 +694,26 @@ class ScrollMosaicOp : public holoscan::Operator {
 
   radar::SampleGeometry parent;
   bool loop{false};
+  // Receiver queue when BP emits more than one window per
+  // reader tick (mode-4 stager slices). Default 1. setup()
+  // runs inside make_operator; initialize() applies this.
+  // min_size stays 1 (no batching). Output stays capacity 1
+  // (two ping-pong parent slots).
+  int64_t input_queue_capacity{1};
 
   void setup(holoscan::OperatorSpec& spec) override {
-    spec.input<holoscan::TensorMap>("image");
-    spec.input<radar::SampleGeometry>("sample_geometry");
+    spec.input<holoscan::TensorMap>("image")
+        .condition(holoscan::ConditionType::kMessageAvailable,
+                   holoscan::Arg("min_size") = uint64_t{1});
+    spec.input<radar::SampleGeometry>("sample_geometry")
+        .condition(holoscan::ConditionType::kMessageAvailable,
+                   holoscan::Arg("min_size") = uint64_t{1});
     spec.output<holoscan::TensorMap>("image");
+  }
+
+  void initialize() override {
+    configure_queues();
+    Operator::initialize();
   }
 
   void start() override {
@@ -862,6 +877,25 @@ class ScrollMosaicOp : public holoscan::Operator {
           "ScrollMosaicOp: window ROI is outside the parent");
     }
     return roi;
+  }
+
+  void configure_queues() {
+    if (spec() == nullptr || input_queue_capacity <= 1) {
+      return;
+    }
+    // Inputs only. Output stays capacity 1: two ping-pong
+    // parent slots. Raising it would overwrite a queued emit.
+    const int64_t cap = input_queue_capacity;
+    const char* in_ports[] = {"image", "sample_geometry"};
+    for (const char* name : in_ports) {
+      auto it = spec()->inputs().find(name);
+      if (it == spec()->inputs().end() || !it->second) {
+        throw std::logic_error(
+            std::string("ScrollMosaicOp: missing input '") +
+            name + "'");
+      }
+      it->second->queue_size(cap);
+    }
   }
 
   std::shared_ptr<holoscan::Tensor> canvas_;
