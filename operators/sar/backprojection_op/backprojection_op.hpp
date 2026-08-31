@@ -88,6 +88,16 @@ class BackprojectionOp : public holoscan::Operator {
     return t;
   }
 
+  // Receiver/transmitter queue when an upstream operator emits
+  // more than one cube or lattice per compute (the mode-4
+  // stager, when it slices). Covers the pulse inputs, control,
+  // and the live sample_geometry override. Default 1. Not a
+  // contract parameter: Holoscan plumbing; live ports stay
+  // non-blocking, pulse min_size stays 1 (no batching).
+  // setup() runs inside make_operator, before compose can write
+  // this field; initialize() applies it.
+  int64_t input_queue_capacity{1};
+
  private:
   Parameter<CoordinateFrame> coordinate_frame_;
   Parameter<SampleGeometry> sample_geometry_;
@@ -110,6 +120,7 @@ class BackprojectionOp : public holoscan::Operator {
   bool sample_points_connected_{false};
   bool range_bins_connected_{false};
   bool control_connected_{false};
+  bool weight_connected_{false};
 
   int64_t unemitted_pulses_{0};
   bool locality_warned_{false};

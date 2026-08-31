@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Mode-4 demo: continuous strip of Imperial Valley Capella
+# stripmap (INPUT_DATA.md). Same collect as mode 3; mode 4
+# translates the lattice along v and scrolls the accumulator
+# (no tile seams, no cross-range taper). Pull first (~3.45 GiB);
+# the app never reaches the network.
+#
+#   python3 applications/sar_formation/pull_cphd.py --mode 4 \
+#     --dest /tmp/sar/imperial
+#   ./build/applications/sar_formation/cpp/sar_formation mode04.yaml
+#
+# Lattice follows the SRP chord (not the IARP tangent plane).
+# lattice.max_side is the scrolling window depth along v, not a
+# coarsening cap; parent u is the IFFT swath at native GSD.
+# Geometry goes to BackprojectionOp (geometry_change: scroll);
+# the manager is cadence only (emit_and_continue, no weight).
+# pulses_per_tick 1024 (reader batch). emit_interval 256: compose
+# hands that to ScrollGeometryStagerOp as the slice size so one
+# reader cube becomes four manager/BP ticks (window from each
+# slice's last SRP). 159050 / 1024 leaves a 330-pulse final
+# reader batch (256+74 after slicing). playback_rate 0.5.
+# nfft_pad: next_fast. loop wraps until SIGINT; wrap restages
+# the opening window with emit-and-reset. Holoviz is the parent
+# strip (same landscape fit as mode 3), not the scrolling chip:
+# ScrollMosaicOp blits each window into the parent. Holoviz
+# crops parent u to the always-formable band so the walking
+# range-window sawtooth is off-screen; dump stays the union.
+# visualize_size is the no-DISPLAY fallback; with X11 the
+# Holoviz window fills the work area on the long axis (full
+# desktop width for this strip).
+
+cphd:
+  path: /tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
+  names:
+    - Imperial Valley
+  sidecar: ""
+
+lattice:
+  scroll: true
+  max_side: 4096
+
+cphd_reader:
+  coordinate_frame: ecef
+  pulse_range: [0, 159050]
+  pulses_per_tick: 1024
+  loop: true
+  playback_rate: 0.5
+  duty_cycle: 1
+
+nfft_pad: next_fast
+
+aperture_manager:
+  max_aperture_pulses: 0
+  emit_interval_pulses: 256
+  emit_mode: continue
+
+range_compression:
+  range_window: taylor
+
+backprojection:
+  coordinate_frame: ecef
+  geometry_change: scroll
+
+visualize: true
+visualize_size: 1400
+skip_display_check: false
+headless: false
+visualize_hold_s: -1

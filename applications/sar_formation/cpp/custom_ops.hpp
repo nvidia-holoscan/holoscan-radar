@@ -3,8 +3,8 @@
 
 // App-owned operators for the formation demo: the Holoviz rasterizer /
 // hold pair, NVRadar-parity diagnostics,
-// CollectionBoundaryStagerOp, TileGeometryStagerOp, and
-// TileMosaicOp.
+// CollectionBoundaryStagerOp, TileGeometryStagerOp,
+// TileMosaicOp, ScrollMosaicOp, and ScrollGeometryStagerOp.
 // ApertureManagerOp (library) drives BackprojectionOp.control; these
 // stagers are the leftover app path for live lattice (the manager
 // stages sample_geometry; range_bin_spacing and
@@ -19,7 +19,16 @@
 // a looping wrap so the first tile's lattice returns).
 // TileMosaicOp: mode 3 parent hold. BP reset emits one tile;
 // this blits it into a persistent parent so Holoviz shows the
-// strip. Mode 4 will not use it (scroll already is the parent).
+// strip.
+// ScrollMosaicOp: mode 4 parent hold. BP.image is the scrolling
+// window; this blits it into the same parent canvas so Holoviz
+// is the growing strip (mode 3's display), not the chip.
+// ScrollGeometryStagerOp: mode 4, translates SampleGeometry along
+// v from each dispatch's last SRP so BP can scroll the ring.
+// Geometry goes straight to BackprojectionOp (not through the
+// manager). When emit_interval_pulses < pulses_per_tick, compose
+// sets slice_pulses to the interval so one reader cube becomes
+// several manager ticks.
 
 #pragma once
 
@@ -27,6 +36,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -44,6 +54,7 @@
 #include "io/cphd_reader_op/cphd_reader_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/sample_geometry.hpp"
+#include "radar_common/sar/aperture_buffer.hpp"
 #include "radar_common/sdk/stream_boundary.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
@@ -185,6 +196,294 @@ class TileGeometryStagerOp : public holoscan::Operator {
 
  private:
   int64_t pulses_seen_{0};
+};
+
+// Mode 4: emit a translated SampleGeometry from each dispatch's
+// last SRP (straight to BackprojectionOp, not through the
+// manager). When slice_pulses > 0 and the incoming cube is
+// larger, emit one dispatch per slice (profiles + positions +
+// SRP + window) so the manager's cadence sees incoming ==
+// emit_interval. D22 stays on the last slice only.
+class ScrollGeometryStagerOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(ScrollGeometryStagerOp)
+  ScrollGeometryStagerOp() = default;
+
+  radar::SampleGeometry parent;
+  radar::SampleGeometry window0;
+  int64_t anchor{0};
+  bool loop{false};
+  // 0 = pass the cube through. Else the dispatch size compose()
+  // copies from emit_interval_pulses when that is smaller than
+  // pulses_per_tick.
+  int64_t slice_pulses{0};
+  // Transmitter slots for a 1:N tick. compose() sets
+  // ceil(pulses_per_tick / slice_pulses). Default 1.
+  // Holoscan setup() runs inside make_operator, before compose
+  // can write this field; initialize() applies it.
+  int64_t dispatch_capacity{1};
+
+  radar::SampleGeometry current_window() const {
+    return window_at(v0_.load(std::memory_order_acquire));
+  }
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::TensorMap>("range_profiles");
+    spec.input<holoscan::TensorMap>("positions");
+    spec.input<holoscan::TensorMap>("reference_position");
+    spec.output<holoscan::TensorMap>("range_profiles");
+    spec.output<holoscan::TensorMap>("positions")
+        .condition(holoscan::ConditionType::kNone);
+    spec.output<holoscan::TensorMap>("reference_position")
+        .condition(holoscan::ConditionType::kNone);
+    spec.output<radar::SampleGeometry>("sample_geometry")
+        .condition(holoscan::ConditionType::kNone);
+  }
+
+  void initialize() override {
+    configure_dispatch_queues();
+    Operator::initialize();
+  }
+
+  void start() override {
+    // Several inputs share stream_boundary; kRaise would fire
+    // on the second receive.
+    metadata_policy(holoscan::MetadataPolicy::kUpdate);
+    if (!parent.is_valid() || !window0.is_valid()) {
+      throw std::invalid_argument(
+          "ScrollGeometryStagerOp: parent and window0 must be "
+          "valid");
+    }
+    if (window0.num_v() > parent.num_v() ||
+        window0.num_u() != parent.num_u()) {
+      throw std::invalid_argument(
+          "ScrollGeometryStagerOp: window must share parent u "
+          "and not exceed parent v");
+    }
+    if (anchor < 0 || anchor >= window0.num_v()) {
+      throw std::invalid_argument(
+          "ScrollGeometryStagerOp: anchor must be in [0, num_v)");
+    }
+    if (slice_pulses < 0) {
+      throw std::invalid_argument(
+          "ScrollGeometryStagerOp: slice_pulses must be >= 0");
+    }
+    if (dispatch_capacity < 1) {
+      throw std::invalid_argument(
+          "ScrollGeometryStagerOp: dispatch_capacity must be "
+          ">= 1");
+    }
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               holoscan::OutputContext& op_output,
+               holoscan::ExecutionContext&) override {
+    constexpr const char* kWho = "ScrollGeometryStagerOp";
+    auto profiles =
+        radar::receive_single(op_input, "range_profiles", kWho);
+    auto positions =
+        radar::receive_single(op_input, "positions", kWho);
+    auto reference = radar::receive_single(
+        op_input, "reference_position", kWho);
+    cudaStream_t stream =
+        op_input.receive_cuda_stream("range_profiles");
+    if (cudaStreamSynchronize(stream) != cudaSuccess) {
+      throw std::runtime_error(
+          "ScrollGeometryStagerOp: failed to sync before SRP");
+    }
+
+    const radar::BatchedShape cube = radar::collapse_batch(
+        *reference, "reference_position");
+    const radar::BatchedShape pcube =
+        radar::collapse_batch(*profiles, "range_profiles");
+    const radar::BatchedShape xcube =
+        radar::collapse_batch(*positions, "positions");
+    if (cube.cols != 3 || cube.rows < 1) {
+      throw std::invalid_argument(
+          "ScrollGeometryStagerOp: reference_position last axis "
+          "must be 3");
+    }
+    if (pcube.rows != cube.rows || xcube.rows != cube.rows) {
+      throw std::invalid_argument(
+          "ScrollGeometryStagerOp: pulse counts on "
+          "range_profiles, positions, and reference_position "
+          "must match");
+    }
+
+    const std::string boundary = metadata()->get<std::string>(
+        radar::kStreamBoundaryKey, std::string());
+    const bool wrap_tick =
+        loop && boundary == radar::kStreamBoundaryCollection;
+    const bool had_boundary =
+        metadata()->has_key(radar::kStreamBoundaryKey);
+
+    const int64_t np = cube.rows;
+    const int64_t step =
+        (slice_pulses > 0 && slice_pulses < np) ? slice_pulses
+                                                : np;
+    int64_t n_dispatch = (np + step - 1) / step;
+    if (n_dispatch > dispatch_capacity) {
+      throw std::invalid_argument(
+          "ScrollGeometryStagerOp: " + std::to_string(n_dispatch) +
+          " dispatches exceed dispatch_capacity (" +
+          std::to_string(dispatch_capacity) + ")");
+    }
+
+    auto stamp = [&](const char* port) {
+      op_output.set_cuda_stream(stream, port);
+    };
+
+    for (int64_t i = 0; i < n_dispatch; ++i) {
+      const int64_t first = i * step;
+      const int64_t count = std::min(step, np - first);
+      const bool last = (i + 1 == n_dispatch);
+      if (had_boundary && !last) {
+        metadata()->erase(radar::kStreamBoundaryKey);
+      } else if (had_boundary && last) {
+        metadata()->set(radar::kStreamBoundaryKey, boundary);
+      }
+
+      std::shared_ptr<holoscan::Tensor> p_out = profiles;
+      std::shared_ptr<holoscan::Tensor> x_out = positions;
+      std::shared_ptr<holoscan::Tensor> r_out = reference;
+      if (count != np) {
+        p_out = slice_pulse_axis(
+            *profiles, first, count, stream, kWho);
+        x_out = slice_pulse_axis(
+            *positions, first, count, stream, kWho);
+        r_out = slice_pulse_axis(
+            *reference, first, count, stream, kWho);
+      }
+      stamp("range_profiles");
+      radar::emit_single(op_output, "range_profiles", p_out);
+      stamp("positions");
+      radar::emit_single(op_output, "positions", x_out);
+      stamp("reference_position");
+      radar::emit_single(
+          op_output, "reference_position", r_out);
+
+      const bool wrap = wrap_tick && last;
+      if (wrap) {
+        v0_.store(0, std::memory_order_release);
+        op_output.emit(window0, "sample_geometry");
+        continue;
+      }
+      double srp[3] = {0.0, 0.0, 0.0};
+      read_srp(*reference, first + count - 1, srp);
+      maybe_advance(srp, op_output);
+    }
+  }
+
+ private:
+  static std::shared_ptr<holoscan::Tensor> slice_pulse_axis(
+      const holoscan::Tensor& src, int64_t first, int64_t count,
+      cudaStream_t stream, const char* who) {
+    const radar::BatchedShape shape =
+        radar::collapse_batch(src, who);
+    auto out = radar::make_device_tensor(
+        radar::full_rank_shape(shape, count, shape.cols),
+        src.dtype());
+    radar::copy_pulse_rows(
+        src, first, *out, 0, count, stream, who);
+    return out;
+  }
+
+  static void read_srp(const holoscan::Tensor& reference,
+                       int64_t pulse, double srp[3]) {
+    const radar::BatchedShape cube = radar::collapse_batch(
+        reference, "reference_position");
+    if (pulse < 0 || pulse >= cube.rows) {
+      throw std::invalid_argument(
+          "ScrollGeometryStagerOp: SRP pulse out of range");
+    }
+    const char* base =
+        static_cast<const char*>(reference.data());
+    const size_t stride = 3 * radar::dtype_bytes(reference.dtype());
+    const char* src =
+        base + static_cast<size_t>(pulse) * stride;
+    if (reference.dtype().bits == 64) {
+      if (cudaMemcpy(srp, src, 3 * sizeof(double),
+                     cudaMemcpyDeviceToHost) != cudaSuccess) {
+        throw std::runtime_error(
+            "ScrollGeometryStagerOp: failed to read SRP");
+      }
+      return;
+    }
+    float tmp[3] = {0.0f, 0.0f, 0.0f};
+    if (cudaMemcpy(tmp, src, 3 * sizeof(float),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+      throw std::runtime_error(
+          "ScrollGeometryStagerOp: failed to read SRP");
+    }
+    srp[0] = static_cast<double>(tmp[0]);
+    srp[1] = static_cast<double>(tmp[1]);
+    srp[2] = static_cast<double>(tmp[2]);
+  }
+
+  void maybe_advance(const double srp[3],
+                     holoscan::OutputContext& op_output) {
+    const auto& origin = parent.origin();
+    const auto& av = parent.axis_v();
+    const double sv = parent.spacing()[0];
+    double proj = 0.0;
+    for (int i = 0; i < 3; ++i) {
+      proj += (srp[i] - origin[i]) * av[i];
+    }
+    const double row = proj / sv;
+    int64_t desired =
+        static_cast<int64_t>(std::llround(row)) - anchor;
+    const int64_t vmax = parent.num_v() - window0.num_v();
+    if (desired < 0) {
+      desired = 0;
+    }
+    if (desired > vmax) {
+      desired = vmax;
+    }
+    const int64_t cur = v0_.load(std::memory_order_relaxed);
+    if (desired > cur) {
+      v0_.store(desired, std::memory_order_release);
+    }
+    // One lattice per dispatch so the live override stays 1:1
+    // with the sliced cubes (N geoms can queue before BP ticks).
+    op_output.emit(
+        window_at(v0_.load(std::memory_order_relaxed)),
+        "sample_geometry");
+  }
+
+  void configure_dispatch_queues() {
+    if (spec() == nullptr || dispatch_capacity <= 1) {
+      return;
+    }
+    const uint64_t cap =
+        static_cast<uint64_t>(dispatch_capacity);
+    const char* ports[] = {"range_profiles",
+                           "positions",
+                           "reference_position",
+                           "sample_geometry"};
+    for (const char* name : ports) {
+      auto it = spec()->outputs().find(name);
+      if (it == spec()->outputs().end() || !it->second) {
+        throw std::logic_error(
+            std::string("ScrollGeometryStagerOp: missing output '") +
+            name + "'");
+      }
+      it->second->connector(
+          holoscan::IOSpec::ConnectorType::kDoubleBuffer,
+          holoscan::Arg("capacity") = cap);
+    }
+  }
+
+  radar::SampleGeometry window_at(int64_t v0) const {
+    radar::SampleGeometrySpec spec;
+    spec.origin = parent.sample_position(v0, 0);
+    spec.axis_u = parent.axis_u();
+    spec.axis_v = parent.axis_v();
+    spec.spacing = parent.spacing();
+    spec.counts = {window0.num_v(), parent.num_u()};
+    return radar::SampleGeometry(spec);
+  }
+
+  std::atomic<int64_t> v0_{0};
 };
 
 // Mode 3 parent hold. Each BP emit is one tile (reset drops the
@@ -382,8 +681,198 @@ class TileMosaicOp : public holoscan::Operator {
   int64_t emitted_{0};
 };
 
-// Drain TileMosaicOp when neither Holoviz nor dump is wired, so
-// smoke (visualize: false, dump: false) still ticks the blit.
+// Mode 4 parent hold. Each BP emit is the current window. Blit
+// it into its ROI on a persistent parent so LUT / Holoviz /
+// optional dump are the strip (same canvas as mode 3), not the
+// 4096-row chip. Overlap keeps the later product. Loop wrap
+// (window origin backtracks) clears first. Two output slots so
+// a downstream tick can still read the last emit.
+class ScrollMosaicOp : public holoscan::Operator {
+ public:
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(ScrollMosaicOp)
+  ScrollMosaicOp() = default;
+
+  radar::SampleGeometry parent;
+  bool loop{false};
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input<holoscan::TensorMap>("image");
+    spec.input<radar::SampleGeometry>("sample_geometry");
+    spec.output<holoscan::TensorMap>("image");
+  }
+
+  void start() override {
+    // image and sample_geometry both arrive from BP and share
+    // stream_boundary; kRaise would fire on the second receive.
+    metadata_policy(holoscan::MetadataPolicy::kUpdate);
+    if (!parent.is_valid()) {
+      throw std::invalid_argument(
+          "ScrollMosaicOp: parent SampleGeometry is empty");
+    }
+  }
+
+  void compute(holoscan::InputContext& op_input,
+               holoscan::OutputContext& op_output,
+               holoscan::ExecutionContext&) override {
+    const char* who = "ScrollMosaicOp";
+    auto image = radar::receive_single(op_input, "image", who);
+    radar::require_contiguous(*image, "image", who);
+    radar::require_cuda_accessible(*image, "image", who);
+    auto maybe_geom =
+        op_input.receive<radar::SampleGeometry>("sample_geometry");
+    if (!maybe_geom) {
+      throw std::runtime_error(
+          std::string(who) + ": sample_geometry is required");
+    }
+    const auto window = maybe_geom.value();
+    const auto shape = image->shape();
+    if (shape.size() != 2) {
+      throw std::invalid_argument(
+          std::string(who) + ": image must be rank-2");
+    }
+    const auto dtype = image->dtype();
+    const size_t elem =
+        (static_cast<size_t>(dtype.bits) + 7) / 8 *
+        static_cast<size_t>(dtype.lanes);
+    cudaStream_t stream = op_input.receive_cuda_stream("image");
+
+    const int64_t pv = parent.num_v();
+    const int64_t pu = parent.num_u();
+    if (!canvas_) {
+      canvas_ = radar::make_device_tensor({pv, pu}, dtype);
+      outs_[0] = radar::make_device_tensor({pv, pu}, dtype);
+      outs_[1] = radar::make_device_tensor({pv, pu}, dtype);
+      const size_t bytes =
+          static_cast<size_t>(pv) * static_cast<size_t>(pu) *
+          elem;
+      const auto err = cudaMemsetAsync(canvas_->data(), 0,
+                                       bytes, stream);
+      if (err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string(who) + ": canvas memset failed: " +
+            cudaGetErrorString(err));
+      }
+      dtype_ = dtype;
+    } else if (dtype.code != dtype_.code ||
+               dtype.bits != dtype_.bits ||
+               dtype.lanes != dtype_.lanes) {
+      throw std::invalid_argument(
+          std::string(who) + ": image dtype changed mid-run");
+    }
+
+    const Roi roi = roi_from_geometries(parent, window);
+    if (loop && last_v0_ >= 0 && roi.v0 < last_v0_) {
+      const size_t bytes =
+          static_cast<size_t>(pv) * static_cast<size_t>(pu) *
+          elem;
+      const auto err = cudaMemsetAsync(canvas_->data(), 0,
+                                       bytes, stream);
+      if (err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string(who) + ": wrap clear failed: " +
+            cudaGetErrorString(err));
+      }
+      HOLOSCAN_LOG_INFO("{}: cleared parent on wrap", who);
+    }
+    if (shape[0] != roi.nv || shape[1] != roi.nu) {
+      throw std::invalid_argument(
+          std::string(who) + ": window is " +
+          std::to_string(shape[0]) + "x" +
+          std::to_string(shape[1]) + ", ROI is " +
+          std::to_string(roi.nv) + "x" +
+          std::to_string(roi.nu));
+    }
+    auto* dst = static_cast<char*>(canvas_->data());
+    dst += (static_cast<size_t>(roi.v0) *
+                static_cast<size_t>(pu) +
+            static_cast<size_t>(roi.u0)) *
+           elem;
+    const size_t dpitch = static_cast<size_t>(pu) * elem;
+    const size_t spitch = static_cast<size_t>(roi.nu) * elem;
+    const auto copy_err = cudaMemcpy2DAsync(
+        dst, dpitch, image->data(), spitch, spitch,
+        static_cast<size_t>(roi.nv), cudaMemcpyDeviceToDevice,
+        stream);
+    if (copy_err != cudaSuccess) {
+      throw std::runtime_error(
+          std::string(who) + ": blit failed: " +
+          cudaGetErrorString(copy_err));
+    }
+    HOLOSCAN_LOG_INFO(
+        "{}: window at v={} u={} ({}x{}) into {}x{}",
+        who, roi.v0, roi.u0, roi.nv, roi.nu, pv, pu);
+
+    auto out = outs_[out_slot_];
+    const size_t bytes =
+        static_cast<size_t>(pv) * static_cast<size_t>(pu) * elem;
+    const auto out_err = cudaMemcpyAsync(
+        out->data(), canvas_->data(), bytes,
+        cudaMemcpyDeviceToDevice, stream);
+    if (out_err != cudaSuccess) {
+      throw std::runtime_error(
+          std::string(who) + ": parent copy failed: " +
+          cudaGetErrorString(out_err));
+    }
+    if (stream != cudaStreamDefault) {
+      op_output.set_cuda_stream(stream, "image");
+    }
+    radar::emit_single(op_output, "image", out);
+    out_slot_ ^= 1;
+    last_v0_ = roi.v0;
+  }
+
+ private:
+  struct Roi {
+    int64_t v0{0};
+    int64_t u0{0};
+    int64_t nv{0};
+    int64_t nu{0};
+  };
+
+  static Roi roi_from_geometries(const radar::SampleGeometry& par,
+                                 const radar::SampleGeometry& win) {
+    const auto& po = par.origin();
+    const auto& wo = win.origin();
+    const double d0 = wo[0] - po[0];
+    const double d1 = wo[1] - po[1];
+    const double d2 = wo[2] - po[2];
+    const auto& av = par.axis_v();
+    const auto& au = par.axis_u();
+    const double dv =
+        (d0 * av[0] + d1 * av[1] + d2 * av[2]) /
+        par.spacing()[0];
+    const double du =
+        (d0 * au[0] + d1 * au[1] + d2 * au[2]) /
+        par.spacing()[1];
+    Roi roi;
+    roi.v0 = static_cast<int64_t>(std::llround(dv));
+    roi.u0 = static_cast<int64_t>(std::llround(du));
+    roi.nv = win.num_v();
+    roi.nu = win.num_u();
+    if (std::abs(dv - static_cast<double>(roi.v0)) > 0.25 ||
+        std::abs(du - static_cast<double>(roi.u0)) > 0.25) {
+      throw std::invalid_argument(
+          "ScrollMosaicOp: window origin is not on the parent "
+          "lattice");
+    }
+    if (roi.v0 < 0 || roi.u0 < 0 ||
+        roi.v0 + roi.nv > par.num_v() ||
+        roi.u0 + roi.nu > par.num_u()) {
+      throw std::invalid_argument(
+          "ScrollMosaicOp: window ROI is outside the parent");
+    }
+    return roi;
+  }
+
+  std::shared_ptr<holoscan::Tensor> canvas_;
+  std::shared_ptr<holoscan::Tensor> outs_[2];
+  size_t out_slot_{0};
+  DLDataType dtype_{};
+  int64_t last_v0_{-1};
+};
+
+// Drain a parent-hold blit when neither Holoviz nor dump is
+// wired, so smoke (visualize: false, dump: false) still ticks.
 class DiscardImageOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(DiscardImageOp)
@@ -726,6 +1215,10 @@ class SarImageToLutOp : public holoscan::Operator {
   // this to the Holoviz window so R8_UINT is 1:1 (nearest-only).
   // The formed dump is the BP lattice, not this.
   int64_t max_side{1024};
+  // Strip Holoviz crop of the incoming image's u axis (parent
+  // union). 0 nu = no crop. Overlay size stays the formed lattice.
+  int64_t crop_u0{0};
+  int64_t crop_nu{0};
   // Optional: last-emit BP timing (compose binds this to
   // BackprojectionOp::last_image_timing) and the reader's last
   // pulse-packet emit. Overlay index walks scene_names on each
@@ -765,14 +1258,22 @@ class SarImageToLutOp : public holoscan::Operator {
   // Holoviz tick. First image of a run has no predecessor.
   std::chrono::steady_clock::time_point last_emit_at_{};
   bool have_last_emit_{false};
+  // Rate line is held so the banner is not a 10 Hz slot machine
+  // on the formed image.
+  std::chrono::steady_clock::time_point overlay_rate_at_{};
+  bool have_overlay_rate_{false};
+  std::string held_rate_line_;
+  std::vector<std::string> last_overlay_lines_;
+  std::shared_ptr<holoscan::Tensor> held_overlay_;
 };
 
 // Scrolling wall-clock Gantt: per-collect dwell bars, duty-cycle
-// quiet, image-emit ticks with last-packet→image latency, and
-// (mode 2 only) collect-vs-wall lag. Source: PeriodicCondition
-// 100 ms, no data input. Polls CPHDReaderOp::timeline_spans,
-// last_packet_at, playback_status, and BP emit_at.
-// compute() is in timeline.cpp.
+// quiet, image-emit ticks, and corner HUDs for last-packet→image
+// latency and collect-vs-wall lag. HUDs refresh at 1 Hz in a
+// fixed-width slot (per-tick glyphs overprint; per-frame text
+// chatters). Source: PeriodicCondition 100 ms, no data input.
+// Polls CPHDReaderOp::timeline_spans, last_packet_at,
+// playback_status, and BP emit_at. compute() is in timeline.cpp.
 class TimelineRasterOp : public holoscan::Operator {
  public:
   HOLOSCAN_OPERATOR_FORWARD_ARGS(TimelineRasterOp)
@@ -805,6 +1306,13 @@ class TimelineRasterOp : public holoscan::Operator {
   };
   std::vector<ImageMark> image_emits_;
   std::optional<std::chrono::steady_clock::time_point> last_seen_emit_;
+  std::chrono::steady_clock::time_point hud_at_{};
+  bool hud_held_{false};
+  std::string lag_hud_;
+  std::string lat_hud_;
+  std::array<uint8_t, 3> lag_hud_fg_{{80, 200, 80}};
+  std::array<uint8_t, 3> lat_hud_fg_{{220, 220, 220}};
+  int lag_band_{0};
 };
 
 // Mode 1 emits one image, then the reader stops the graph. Re-emit

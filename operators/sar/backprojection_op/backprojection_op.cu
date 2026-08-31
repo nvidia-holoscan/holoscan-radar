@@ -77,6 +77,58 @@ void require_backend(BackprojectionBackend backend, const std::string& who) {
   }
 }
 
+int64_t scroll_translation_rows(const SampleGeometry& from,
+                                const SampleGeometry& to,
+                                const std::string& who) {
+  if (from.axis_u() != to.axis_u() || from.axis_v() != to.axis_v() ||
+      from.spacing() != to.spacing() || from.counts() != to.counts()) {
+    throw std::invalid_argument(
+        who + ": geometry_change 'scroll' requires a pure translation "
+              "along v (axes, spacing, and counts unchanged)");
+  }
+  const auto& av = from.axis_v();
+  const auto& au = from.axis_u();
+  const double sv = from.spacing()[0];
+  double dv = 0.0;
+  double du = 0.0;
+  for (int i = 0; i < 3; ++i) {
+    const double d = to.origin()[i] - from.origin()[i];
+    dv += d * av[i];
+    du += d * au[i];
+  }
+  double dn2 = 0.0;
+  for (int i = 0; i < 3; ++i) {
+    const double d = to.origin()[i] - from.origin()[i];
+    const double recon = dv * av[i] + du * au[i];
+    const double r = d - recon;
+    dn2 += r * r;
+  }
+  const double tol = 1.0e-3 * std::max(sv, 1.0e-6);
+  if (std::abs(du) > tol || std::sqrt(dn2) > tol) {
+    throw std::invalid_argument(
+        who + ": geometry_change 'scroll' translation must be along v "
+              "with no u component");
+  }
+  const double k_real = dv / sv;
+  const int64_t k = std::llround(k_real);
+  if (std::abs(k_real - static_cast<double>(k)) * sv > tol) {
+    throw std::invalid_argument(
+        who + ": geometry_change 'scroll' translation must be a whole "
+              "number of pixels along v");
+  }
+  if (k < 1) {
+    throw std::invalid_argument(
+        who + ": geometry_change 'scroll' translation must be at least "
+              "one row along v");
+  }
+  if (k >= from.num_v()) {
+    throw std::invalid_argument(
+        who + ": a scroll of k >= num_v retains nothing; send a "
+              "resetting control message");
+  }
+  return k;
+}
+
 std::optional<FormationControl> read_control(
     const holoscan::Tensor& tensor, const std::string& who) {
   require_dtype(tensor, DLDataType{kDLUInt, 8, 1}, "control", who);
@@ -142,6 +194,21 @@ BackprojectionOp<T>::~BackprojectionOp() = default;
 template <typename T>
 void BackprojectionOp<T>::initialize() {
   ensure_radar_arg_setters();
+  if (input_queue_capacity > 1) {
+    auto* sp = spec();
+    if (sp != nullptr) {
+      const int64_t cap = input_queue_capacity;
+      const char* in_ports[] = {
+          "range_profiles", "positions", "reference_position",
+          "control", "sample_geometry"};
+      for (const char* name : in_ports) {
+        auto it = sp->inputs().find(name);
+        if (it != sp->inputs().end() && it->second) {
+          it->second->queue_size(cap);
+        }
+      }
+    }
+  }
   Operator::initialize();
   metadata_policy(MetadataPolicy::kUpdate);
 
@@ -154,6 +221,7 @@ void BackprojectionOp<T>::initialize() {
   }
   sample_points_connected_ = input_port_connected(this, "sample_points");
   range_bins_connected_ = input_port_connected(this, "range_bins");
+  weight_connected_ = input_port_connected(this, "weight");
 
   effective_frame_ = coordinate_frame_.get();
   if (!effective_frame_.is_valid()) {
@@ -189,18 +257,27 @@ void BackprojectionOp<T>::initialize() {
   backend_value_ = backend_.get();
   require_backend(backend_value_, who);
   geometry_change_value_ = geometry_change_.get();
-  if (geometry_change_value_ == GeometryChange::kScroll) {
+  if (geometry_change_value_ == GeometryChange::kScroll &&
+      weight_connected_) {
     throw std::invalid_argument(
-        who + ": geometry_change 'scroll' is not implemented this slice");
+        who + ": geometry_change 'scroll' requires the weight port "
+              "to be unconnected (a strip cannot carry a per-pulse "
+              "taper)");
   }
   state_ = std::make_shared<detail::BackprojectionState<T>>();
 }
 
 template <typename T>
 void BackprojectionOp<T>::setup(OperatorSpec& spec) {
-  spec.input<holoscan::TensorMap>("range_profiles");
-  spec.input<holoscan::TensorMap>("positions");
-  spec.input<holoscan::TensorMap>("reference_position");
+  spec.input<holoscan::TensorMap>("range_profiles")
+      .condition(ConditionType::kMessageAvailable,
+                 Arg("min_size") = uint64_t{1});
+  spec.input<holoscan::TensorMap>("positions")
+      .condition(ConditionType::kMessageAvailable,
+                 Arg("min_size") = uint64_t{1});
+  spec.input<holoscan::TensorMap>("reference_position")
+      .condition(ConditionType::kMessageAvailable,
+                 Arg("min_size") = uint64_t{1});
   spec.input<holoscan::TensorMap>("control")
       .condition(ConditionType::kNone);
   spec.input<holoscan::TensorMap>("range_bins")
@@ -251,7 +328,7 @@ void BackprojectionOp<T>::setup(OperatorSpec& spec) {
              kDefaultBackprojectionBackend);
 
   spec.param(geometry_change_, "geometry_change", "Geometry change",
-             "reset or scroll. scroll is rejected this slice.",
+             "reset or scroll. scroll is a ring accumulator along v.",
              GeometryChange::kReset);
 }
 
@@ -360,6 +437,9 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
 
   bool points_changed = false;
   bool install_first_points = false;
+  bool points_scroll = false;
+  bool grid_scroll = false;
+  int64_t scroll_k = 0;
   int64_t incoming_v = 0;
   int64_t incoming_u = 0;
   if (sample_points_connected_ && sample_points) {
@@ -376,6 +456,24 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
     if (!state_->lattice_valid) {
       // First lattice is not a change; install it this tick.
       install_first_points = true;
+    } else if (geometry_change_value_ == GeometryChange::kScroll &&
+               incoming_u == state_->lattice_num_u && incoming_v > 0 &&
+               incoming_v < state_->lattice_num_v &&
+               !(control.has_value() && is_resetting(*control))) {
+      points_scroll = true;
+      scroll_k = incoming_v;
+    } else if (geometry_change_value_ == GeometryChange::kScroll &&
+               incoming_u != state_->lattice_num_u &&
+               !(control.has_value() && is_resetting(*control))) {
+      throw std::invalid_argument(
+          who + ": sample_points num_u must match the retained lattice "
+                "under geometry_change 'scroll'");
+    } else if (geometry_change_value_ == GeometryChange::kScroll &&
+               incoming_v >= state_->lattice_num_v &&
+               !(control.has_value() && is_resetting(*control))) {
+      throw std::invalid_argument(
+          who + ": a scroll of k >= num_v retains nothing; send a "
+                "resetting control message");
     } else if (state_->lattice_num_v == incoming_v &&
                state_->lattice_num_u == incoming_u) {
       const int64_t n = incoming_v * incoming_u * 3;
@@ -390,10 +488,18 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
     }
   }
 
+  const bool resetting =
+      control.has_value() && is_resetting(*control);
+  if (geometry_override &&
+      geometry_change_value_ == GeometryChange::kScroll && !resetting) {
+    scroll_k = scroll_translation_rows(effective_geometry_,
+                                       pending_geometry, who);
+    grid_scroll = true;
+    geometry_override = false;
+  }
+
   const bool geometry_change = geometry_override || points_changed;
   if (geometry_change) {
-    const bool resetting =
-        control.has_value() && is_resetting(*control);
     if (!resetting) {
       throw std::invalid_argument(
           who + ": a geometry change must arrive with a resetting "
@@ -562,6 +668,39 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
     }
   }
 
+  if (grid_scroll || points_scroll) {
+    const int64_t k = scroll_k;
+    const int64_t phys0 = state_->ring_offset;
+    const bool packed = detail::backend_is_matx(backend_value_);
+    if (packed) {
+#if __has_include("matx/kernels/sar_bp.cuh")
+      detail::zero_matx_rows(*state_, phys0, k, stream);
+#endif
+    } else {
+      detail::zero_nvradar_rows(*state_, phys0, k, stream);
+    }
+    if (grid_scroll) {
+      effective_geometry_ = pending_geometry;
+      detail::expand_geometry_rows(*state_, effective_geometry_, packed,
+                                   num_v - k, k, phys0, stream);
+      if (!packed) {
+        state_->planes_valid = true;
+      }
+    } else {
+      detail::copy_entering_xyz(
+          *state_, static_cast<const T*>(sample_points->data()), k,
+          num_u, phys0, stream);
+      lattice_ptr = state_->lattice_xyz.template as<T>();
+      if (!packed) {
+        detail::gather_lattice(*state_, lattice_ptr, num_v * num_u,
+                               stream);
+        state_->planes_valid = true;
+      }
+    }
+    state_->ring_offset = (phys0 + k) % num_v;
+    locality_warned_ = false;
+  }
+
   const T* profile_ptr = static_cast<const T*>(profiles->data());
   if (weight) {
     require_dtype(*weight, real_dtype<T>(), "weight", who);
@@ -635,7 +774,7 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
                            static_cast<int>(num_pulses), stream);
     if (detail::backend_is_matx(backend_value_)) {
 #if __has_include("matx/kernels/sar_bp.cuh")
-      detail::launch_matx<T>(
+      detail::launch_matx_window<T>(
           backend_value_, *state_, prof_b, pos_b, lattice_ptr,
           static_cast<int>(num_v), static_cast<int>(num_u),
           static_cast<int>(num_pulses), static_cast<int>(num_bins),
@@ -646,7 +785,7 @@ void BackprojectionOp<T>::compute(InputContext& op_input,
           "' needs matx/kernels/sar_bp.cuh");
 #endif
     } else {
-      detail::launch_nvradar<T>(
+      detail::launch_nvradar_window<T>(
           backend_value_, *state_, prof_b, static_cast<int>(num_v),
           static_cast<int>(num_u), static_cast<int>(num_pulses),
           static_cast<int>(num_bins), static_cast<int>(b), origin, spacing,

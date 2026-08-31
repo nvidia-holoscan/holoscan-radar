@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Mode-1 / 2 / 3 / 5 SAR formation. Holoviz when visualize: true.
+// Mode-1 / 2 / 3 / 4 / 5 SAR formation. Holoviz when visualize: true.
 // TensorDumpOp when dump: true (off by default). The dump is the
 // offline PNG checkpoint (tools/sar_image/form_image.py).
 //
 //   CPHDReaderOp → SARRangeCompressionOp → ApertureManagerOp
 //                                        → BackprojectionOp
 //                                        [→ TileMosaicOp]
+//                                        [→ ScrollMosaicOp]
 //                                        [→ TensorDumpOp]
 //                                        [→ SarImageToLutOp
 //                                            → HoldLastImageOp
@@ -22,11 +23,18 @@
 //   Mode 3 inserts TileGeometryStagerOp on the same edge so the
 //   next tile lattice is staged on the pulse cadence, and
 //   TileMosaicOp holds finished squares in a parent raster.
+//   Mode 4 inserts ScrollGeometryStagerOp on range_profiles +
+//   positions + reference_position; geometry goes to BP
+//   (geometry_change = scroll), not through the manager.
+//   When emit_interval_pulses < pulses_per_tick, the stager
+//   slices the reader cube so the manager sees the interval.
+//   ScrollMosaicOp blits the window into the parent strip so
+//   Holoviz matches mode 3.
 //
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/sar_formation/cpp/sar_formation \
 //            [mode01.yaml | mode02.yaml | mode03.yaml |
-//             mode05.yaml] [<collection.cphd>]
+//             mode04.yaml | mode05.yaml] [<collection.cphd>]
 
 #include <algorithm>
 #include <cstdint>
@@ -74,7 +82,12 @@ class SarFormationApp : public holoscan::Application {
         cfg.sample_geometry.num_u(), cfg.reference_frequency,
         cfg.dump ? cfg.dump_path : std::string("off"));
     if (cfg.lattice_max_side > 0) {
-      if (cfg.parent_geometry.is_valid()) {
+      if (cfg.scroll) {
+        HOLOSCAN_LOG_INFO(
+            "sar_formation lattice.max_side {} (scroll window "
+            "depth along v)",
+            cfg.lattice_max_side);
+      } else if (cfg.parent_geometry.is_valid()) {
         HOLOSCAN_LOG_INFO(
             "sar_formation lattice.max_side {} (per-tile "
             "formed-pixel cap)",
@@ -160,6 +173,12 @@ class SarFormationApp : public holoscan::Application {
       HOLOSCAN_LOG_INFO(
           "sar_formation parent {}x{}  spacing {:.4f} x {:.4f} m",
           p.num_v(), p.num_u(), sp[0], sp[1]);
+    } else if (cfg.scroll && cfg.scroll_parent.is_valid()) {
+      const auto& p = cfg.scroll_parent;
+      const auto& sp = p.spacing();
+      HOLOSCAN_LOG_INFO(
+          "sar_formation parent {}x{}  spacing {:.4f} x {:.4f} m",
+          p.num_v(), p.num_u(), sp[0], sp[1]);
     }
     auto reader = make_operator<radar::CPHDReaderOp<double>>(
         "cphd_reader",
@@ -185,8 +204,18 @@ class SarFormationApp : public holoscan::Application {
       manager_args.add(holoscan::Arg("emit_interval_pulses") =
                            cfg.tile_pulses);
     }
+    int64_t scroll_slice = 0;
+    int64_t scroll_cap = 1;
+    if (cfg.scroll && cfg.emit_interval_pulses > 0 &&
+        cfg.reader_pulses_per_tick > cfg.emit_interval_pulses) {
+      scroll_slice = cfg.emit_interval_pulses;
+      scroll_cap =
+          (cfg.reader_pulses_per_tick + scroll_slice - 1) /
+          scroll_slice;
+    }
     auto manager = make_operator<radar::ApertureManagerOp<double>>(
         "aperture_manager", manager_args);
+    manager->input_queue_capacity = scroll_cap;
 
     auto bp = make_operator<radar::BackprojectionOp<double>>(
         "backprojection",
@@ -195,9 +224,11 @@ class SarFormationApp : public holoscan::Application {
         holoscan::Arg("reference_frequency") =
             cfg.reference_frequency,
         holoscan::Arg("range_bin_spacing") = cfg.range_bin_spacing);
+    bp->input_queue_capacity = scroll_cap;
 
     add_flow(reader, range, {{"phase_history", "phase_history"}});
 
+    std::shared_ptr<ScrollGeometryStagerOp> scroll_stager;
     std::shared_ptr<holoscan::Operator> profiles = range;
     if (!cfg.nvradar_vph_path.empty()) {
       HOLOSCAN_LOG_INFO(
@@ -245,11 +276,41 @@ class SarFormationApp : public holoscan::Application {
                {{"sample_geometry", "sample_geometry"}});
       add_flow(manager, bp,
                {{"sample_geometry", "sample_geometry"}});
+    } else if (cfg.scroll) {
+      HOLOSCAN_LOG_INFO(
+          "sar_formation: scrolling {}x{} window on {}x{} parent "
+          "(anchor row {}, live sample_geometry along v)",
+          cfg.sample_geometry.num_v(), cfg.sample_geometry.num_u(),
+          cfg.scroll_parent.num_v(), cfg.scroll_parent.num_u(),
+          cfg.scroll_anchor);
+      auto stager =
+          make_operator<ScrollGeometryStagerOp>("scroll_stager");
+      stager->parent = cfg.scroll_parent;
+      stager->window0 = cfg.sample_geometry;
+      stager->anchor = cfg.scroll_anchor;
+      stager->loop = cfg.reader_loop;
+      if (scroll_slice > 0) {
+        HOLOSCAN_LOG_INFO(
+            "sar_formation: scroll stager slicing {}-pulse "
+            "reader ticks into {}-pulse dispatches (up to {} "
+            "per tick)",
+            cfg.reader_pulses_per_tick, scroll_slice, scroll_cap);
+      }
+      stager->slice_pulses = scroll_slice;
+      stager->dispatch_capacity = scroll_cap;
+      add_flow(profiles, stager,
+               {{"range_profiles", "range_profiles"}});
+      add_flow(stager, manager,
+               {{"range_profiles", "range_profiles"}});
+      add_flow(stager, bp,
+               {{"sample_geometry", "sample_geometry"}});
+      scroll_stager = stager;
     } else {
       add_flow(profiles, manager,
                {{"range_profiles", "range_profiles"}});
     }
 
+    std::shared_ptr<holoscan::Operator> geom_src = reader;
     if (cfg.transform_to_scene_enu) {
       HOLOSCAN_LOG_INFO(
           "sar_formation: ECEF→ENU at IARP for NVRadar grid");
@@ -263,12 +324,18 @@ class SarFormationApp : public holoscan::Application {
       add_flow(reader, to_enu, {{"positions", "positions"}});
       add_flow(reader, to_enu,
                {{"reference_position", "reference_position"}});
-      add_flow(to_enu, manager, {{"positions", "positions"}});
-      add_flow(to_enu, manager,
+      geom_src = to_enu;
+    }
+    if (scroll_stager) {
+      add_flow(geom_src, scroll_stager, {{"positions", "positions"}});
+      add_flow(geom_src, scroll_stager,
+               {{"reference_position", "reference_position"}});
+      add_flow(scroll_stager, manager, {{"positions", "positions"}});
+      add_flow(scroll_stager, manager,
                {{"reference_position", "reference_position"}});
     } else {
-      add_flow(reader, manager, {{"positions", "positions"}});
-      add_flow(reader, manager,
+      add_flow(geom_src, manager, {{"positions", "positions"}});
+      add_flow(geom_src, manager,
                {{"reference_position", "reference_position"}});
     }
     add_flow(manager, bp, {{"range_profiles", "range_profiles"}});
@@ -293,6 +360,17 @@ class SarFormationApp : public holoscan::Application {
       mosaic->loop = cfg.reader_loop;
       add_flow(bp, mosaic, {{"image", "image"}});
       formed = mosaic;
+    } else if (cfg.scroll) {
+      HOLOSCAN_LOG_INFO(
+          "sar_formation: ScrollMosaicOp parent hold ({}x{})",
+          cfg.scroll_parent.num_v(), cfg.scroll_parent.num_u());
+      auto mosaic = make_operator<ScrollMosaicOp>("scroll_mosaic");
+      mosaic->parent = cfg.scroll_parent;
+      mosaic->loop = cfg.reader_loop;
+      add_flow(bp, mosaic, {{"image", "image"}});
+      add_flow(bp, mosaic,
+               {{"sample_geometry", "sample_geometry"}});
+      formed = mosaic;
     }
     if (cfg.dump) {
       holoscan::ArgList dump_args{
@@ -308,23 +386,30 @@ class SarFormationApp : public holoscan::Application {
 
     if (cfg.visualize) {
       auto to_lut = make_operator<SarImageToLutOp>("sar_image_to_lut");
-      // Window size, not the formed lattice. R8_UINT cannot
-      // bilinear; box-average the LUT toward this side so the
-      // window is near 1:1. BP (and TensorDump, when dump: true)
-      // stay at the formed lattice (collection physics,
-      // lattice.max_side cap, or sample_geometry counts).
+      // Holoviz window size, not the LUT input lattice. R8_UINT
+      // cannot bilinear; box-average the LUT toward this side
+      // so the window is near 1:1. BP stays at the formed
+      // lattice (tile or scroll window); dump follows `formed`
+      // (parent canvas when tiling or scrolling).
       const bool show_lag = cfg.show_playback_lag;
       const bool mosaic = cfg.parent_geometry.is_valid();
+      const bool strip_fit = mosaic || cfg.scroll;
+      const radar::SampleGeometry viz_geom =
+          mosaic ? cfg.parent_geometry
+                 : (cfg.scroll ? cfg.scroll_parent
+                               : cfg.sample_geometry);
       uint32_t viz_w = 0;
       uint32_t viz_h = 0;
       int64_t lut_max_side = cfg.visualize_size;
-      if (mosaic) {
+      const int64_t viz_u =
+          (cfg.viz_crop_nu > 0) ? cfg.viz_crop_nu
+                                : viz_geom.num_u();
+      if (strip_fit) {
         int work_w = 0;
         int work_h = 0;
         if (desktop_work_area(&work_w, &work_h)) {
           const auto fit = holoviz_fit_wh(
-              cfg.parent_geometry.num_v(),
-              cfg.parent_geometry.num_u(), work_w, work_h);
+              viz_geom.num_v(), viz_u, work_w, work_h);
           viz_w = fit[0];
           viz_h = fit[1];
           lut_max_side = static_cast<int64_t>(
@@ -336,8 +421,7 @@ class SarFormationApp : public holoscan::Application {
               viz_w, viz_h, work_w, work_h, cfg.visualize_size);
         } else {
           const auto wh = holoviz_window_wh(
-              cfg.parent_geometry.num_v(),
-              cfg.parent_geometry.num_u(), cfg.visualize_size);
+              viz_geom.num_v(), viz_u, cfg.visualize_size);
           viz_w = wh[0];
           viz_h = wh[1];
           HOLOSCAN_LOG_INFO(
@@ -347,9 +431,20 @@ class SarFormationApp : public holoscan::Application {
         }
       }
       to_lut->max_side = lut_max_side;
+      to_lut->crop_u0 = cfg.viz_crop_u0;
+      to_lut->crop_nu = cfg.viz_crop_nu;
+      if (cfg.viz_crop_nu > 0) {
+        HOLOSCAN_LOG_INFO(
+            "sar_formation Holoviz crop u [{}, {}) of {} "
+            "(range-window intersection)",
+            cfg.viz_crop_u0, cfg.viz_crop_u0 + cfg.viz_crop_nu,
+            viz_geom.num_u());
+      }
       to_lut->scene_names = cfg.scene_names;
       to_lut->formation_diag = [bp, reader, show_lag, mosaic,
+                                scroll = cfg.scroll,
                                 parent = cfg.parent_geometry,
+                                scroll_parent = cfg.scroll_parent,
                                 geoms = cfg.collection_geometries,
                                 to_enu = cfg.transform_to_scene_enu,
                                 origin = cfg.enu_origin_ecef]() {
@@ -370,6 +465,8 @@ class SarFormationApp : public holoscan::Application {
           const radar::SampleGeometry* g = nullptr;
           if (mosaic && parent.is_valid()) {
             g = &parent;
+          } else if (scroll && scroll_parent.is_valid()) {
+            g = &scroll_parent;
           } else if (!geoms.empty()) {
             const size_t i =
                 static_cast<size_t>(apc.file_index) %
@@ -403,7 +500,7 @@ class SarFormationApp : public holoscan::Application {
 
       HolovizLayout layout;
       layout.window_title = "SAR formation";
-      if (mosaic) {
+      if (strip_fit) {
         layout.width = viz_w;
         layout.height = viz_h;
       } else {
@@ -414,7 +511,7 @@ class SarFormationApp : public holoscan::Application {
       }
       layout.headless = cfg.headless;
       std::shared_ptr<holoscan::ops::HolovizOp> visualizer;
-      if (mosaic) {
+      if (strip_fit) {
         visualizer = make_image_holoviz_op(
             this, "holoviz", layout, "sar_image",
             make_grayscale_lut(),

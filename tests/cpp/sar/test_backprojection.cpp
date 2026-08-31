@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Tests for BackprojectionOp (mode-1 slice plus signed-weight
-// accumulation for mode 2). Inputs are constructed range profiles
+// accumulation for mode 2, plus geometry_change = scroll for
+// mode 4). Inputs are constructed range profiles
 // (a single-bin impulse at the predicted delay), not phase history,
 // so a compression bug cannot hide a formation bug. Ground truth is
 // radar_common/sim/sar_phase_history_sim.hpp.
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -400,7 +402,7 @@ TEST(BackprojectionOp, TaylorFastThrowsByName) {
   }
 }
 
-class RejectScrollApp : public holoscan::Application {
+class RejectScrollWeightApp : public holoscan::Application {
  public:
   void compose() override {
     auto op = make_operator<BackprojectionOp<float>>(
@@ -419,6 +421,9 @@ class RejectScrollApp : public holoscan::Application {
     holoscan::radar::testing::wire_data_source(
         this, op, "reference_position",
         {xyz_map<float>({0.0, 0.0, 0.0}, "reference_position")});
+    holoscan::radar::testing::wire_data_source(
+        this, op, "weight",
+        {weight_map({1.0, 1.0, 1.0, 1.0})});
     holoscan::radar::testing::wire_leading_override(
         this, op, "control",
         std::vector<holoscan::TensorMap>{
@@ -426,14 +431,469 @@ class RejectScrollApp : public holoscan::Application {
   }
 };
 
-TEST(BackprojectionOp, ScrollRejected) {
-  auto app = holoscan::make_application<RejectScrollApp>();
+TEST(BackprojectionOp, ScrollRejectsConnectedWeight) {
+  auto app = holoscan::make_application<RejectScrollWeightApp>();
   try {
     app->run();
-    FAIL() << "scroll should throw at init";
+    FAIL() << "scroll with weight connected should throw at init";
+  } catch (const std::exception& ex) {
+    const std::string msg = ex.what();
+    EXPECT_NE(msg.find("scroll"), std::string::npos);
+    EXPECT_NE(msg.find("weight"), std::string::npos);
+  }
+}
+
+SampleGeometry strip_geometry() {
+  SampleGeometrySpec spec;
+  spec.origin = {-8.0, 0.0, 0.0};
+  spec.axis_u = {1.0, 0.0, 0.0};
+  spec.axis_v = {0.0, 1.0, 0.0};
+  spec.spacing = {1.0, 1.0};
+  spec.counts = {32, 16};
+  return SampleGeometry(spec);
+}
+
+SampleGeometry translate_v(const SampleGeometry& g, int64_t k) {
+  SampleGeometrySpec spec;
+  spec.origin = g.origin();
+  spec.axis_u = g.axis_u();
+  spec.axis_v = g.axis_v();
+  spec.spacing = g.spacing();
+  spec.counts = g.counts();
+  const double step = static_cast<double>(k) * g.spacing()[0];
+  for (int i = 0; i < 3; ++i) {
+    spec.origin[i] += step * g.axis_v()[i];
+  }
+  return SampleGeometry(spec);
+}
+
+std::vector<double> host_lattice(const SampleGeometry& g) {
+  const int64_t nv = g.num_v();
+  const int64_t nu = g.num_u();
+  std::vector<double> xyz(static_cast<size_t>(nv * nu * 3));
+  for (int64_t iv = 0; iv < nv; ++iv) {
+    for (int64_t iu = 0; iu < nu; ++iu) {
+      const auto p = g.sample_position(iv, iu);
+      const int64_t o = (iv * nu + iu) * 3;
+      xyz[static_cast<size_t>(o + 0)] = p[0];
+      xyz[static_cast<size_t>(o + 1)] = p[1];
+      xyz[static_cast<size_t>(o + 2)] = p[2];
+    }
+  }
+  return xyz;
+}
+
+std::vector<double> host_entering(const SampleGeometry& g, int64_t k) {
+  const int64_t nv = g.num_v();
+  const int64_t nu = g.num_u();
+  std::vector<double> xyz(static_cast<size_t>(k * nu * 3));
+  for (int64_t r = 0; r < k; ++r) {
+    for (int64_t iu = 0; iu < nu; ++iu) {
+      const auto p = g.sample_position(nv - k + r, iu);
+      const int64_t o = (r * nu + iu) * 3;
+      xyz[static_cast<size_t>(o + 0)] = p[0];
+      xyz[static_cast<size_t>(o + 1)] = p[1];
+      xyz[static_cast<size_t>(o + 2)] = p[2];
+    }
+  }
+  return xyz;
+}
+
+template <typename T>
+class FormGeometryApp : public holoscan::Application {
+ public:
+  FormGeometryApp(SampleGeometry geometry, const std::array<double, 3>& target,
+                  ImageCapture* capture)
+      : geometry_(std::move(geometry)),
+        target_(target),
+        capture_(capture) {}
+
+  void compose() override {
+    const double origin = centred_origin();
+    auto op = make_operator<BackprojectionOp<T>>(
+        "bp",
+        holoscan::Arg("coordinate_frame", scene_frame()),
+        holoscan::Arg("sample_geometry", geometry_),
+        holoscan::Arg("range_bin_spacing", kSpacing),
+        holoscan::Arg("range_bin_origin", origin),
+        holoscan::Arg("reference_frequency", kFreq));
+    const std::array<double, 3> apc{0.0, 0.0, 100.0};
+    const std::array<double, 3> srp{0.0, 0.0, 0.0};
+    const double dR = sar_differential_range(apc, srp, target_);
+    const auto phase = sar_matched_phase(kFreq, dR);
+    const std::complex<double> amp{phase.real(), -phase.imag()};
+    holoscan::radar::testing::wire_data_source(
+        this, op, "range_profiles",
+        {profiles_impulse<T>(dR, origin, amp)});
+    holoscan::radar::testing::wire_data_source(
+        this, op, "positions", {xyz_map<T>(apc, "positions")});
+    holoscan::radar::testing::wire_data_source(
+        this, op, "reference_position",
+        {xyz_map<T>(srp, "reference_position")});
+    holoscan::radar::testing::wire_leading_override(
+        this, op, "control",
+        std::vector<holoscan::TensorMap>{
+            control_map(FormationControl::kEmitAndReset)});
+    holoscan::radar::testing::wire_capture_sink(this, op, "image", &sink_);
+  }
+
+  void take() {
+    if (sink_.frames.size() != 1u) {
+      throw std::runtime_error("expected one emitted image, got " +
+                               std::to_string(sink_.frames.size()));
+    }
+    capture_->image = std::move(sink_.frames.front());
+  }
+
+ private:
+  SampleGeometry geometry_;
+  std::array<double, 3> target_;
+  ImageCapture* capture_;
+  TensorMapCapture sink_;
+};
+
+template <typename T>
+HostTensor form_geometry(const SampleGeometry& geometry,
+                         const std::array<double, 3>& target) {
+  ImageCapture capture;
+  auto app = holoscan::make_application<FormGeometryApp<T>>(
+      geometry, target, &capture);
+  app->run();
+  app->take();
+  return capture.image;
+}
+
+class ScrollOnceApp : public holoscan::Application {
+ public:
+  ScrollOnceApp(SampleGeometry geom0, SampleGeometry geom1,
+                const std::array<double, 3>& target, ImageCapture* capture)
+      : geom0_(std::move(geom0)),
+        geom1_(std::move(geom1)),
+        target_(target),
+        capture_(capture) {}
+
+  void compose() override {
+    const double origin = centred_origin();
+    auto op = make_operator<BackprojectionOp<float>>(
+        "bp",
+        holoscan::Arg("coordinate_frame", scene_frame()),
+        holoscan::Arg("sample_geometry", geom0_),
+        holoscan::Arg("range_bin_spacing", kSpacing),
+        holoscan::Arg("range_bin_origin", origin),
+        holoscan::Arg("reference_frequency", kFreq),
+        holoscan::Arg("geometry_change", GeometryChange::kScroll));
+    const std::array<double, 3> apc{0.0, 0.0, 100.0};
+    const std::array<double, 3> srp{0.0, 0.0, 0.0};
+    const double dR = sar_differential_range(apc, srp, target_);
+    const auto phase = sar_matched_phase(kFreq, dR);
+    const std::complex<double> amp{phase.real(), -phase.imag()};
+    holoscan::radar::testing::wire_data_source(
+        this, op, "range_profiles",
+        {profiles_impulse<float>(dR, origin, amp)});
+    holoscan::radar::testing::wire_data_source(
+        this, op, "positions", {xyz_map<float>(apc, "positions")});
+    holoscan::radar::testing::wire_data_source(
+        this, op, "reference_position",
+        {xyz_map<float>(srp, "reference_position")});
+    holoscan::radar::testing::wire_leading_override(
+        this, op, "sample_geometry", std::vector<SampleGeometry>{geom1_});
+    holoscan::radar::testing::wire_leading_override(
+        this, op, "control",
+        std::vector<holoscan::TensorMap>{
+            control_map(FormationControl::kEmitAndContinue)});
+    holoscan::radar::testing::wire_capture_sink(this, op, "image", &sink_);
+  }
+
+  void take() {
+    if (sink_.frames.size() != 1u) {
+      throw std::runtime_error("expected one emitted image, got " +
+                               std::to_string(sink_.frames.size()));
+    }
+    capture_->image = std::move(sink_.frames.front());
+  }
+
+ private:
+  SampleGeometry geom0_;
+  SampleGeometry geom1_;
+  std::array<double, 3> target_;
+  ImageCapture* capture_;
+  TensorMapCapture sink_;
+};
+
+HostTensor scroll_once(const SampleGeometry& geom0,
+                       const SampleGeometry& geom1,
+                       const std::array<double, 3>& target) {
+  ImageCapture capture;
+  auto app = holoscan::make_application<ScrollOnceApp>(geom0, geom1, target,
+                                                       &capture);
+  app->run();
+  app->take();
+  return capture.image;
+}
+
+TEST(BackprojectionOp, ScrollWrapTargetMatchesFromScratch) {
+  const auto g0 = strip_geometry();
+  constexpr int64_t k = 16;
+  const auto g1 = translate_v(g0, k);
+  // Logical row 0 after the scroll is the wrap (physical ring_offset).
+  const auto target = g1.sample_position(0, 8);
+  const auto scrolled = scroll_once(g0, g1, target);
+  const auto direct = form_geometry<float>(g1, target);
+  const auto expected = sar_predicted_peak(g1, target);
+  const auto got = pixel(scrolled, expected.first, expected.second);
+  const auto ref = pixel(direct, expected.first, expected.second);
+  EXPECT_EQ(expected.first, 0);
+  EXPECT_GT(std::abs(got), 1.0);
+  EXPECT_NEAR(std::abs(got), std::abs(ref), 0.05 * std::abs(ref));
+  EXPECT_NEAR(std::arg(got), std::arg(ref), 0.2);
+}
+
+TEST(BackprojectionOp, ScrollEmittedLogicalOrder) {
+  const auto g0 = strip_geometry();
+  constexpr int64_t k = 16;
+  const auto g1 = translate_v(g0, k);
+  const auto target = g1.sample_position(0, 8);
+  const auto image = scroll_once(g0, g1, target);
+  const auto at_logical = pixel(image, 0, 8);
+  const auto at_physical = pixel(image, 16, 8);
+  EXPECT_GT(std::abs(at_logical), 1.0);
+  EXPECT_LT(std::abs(at_physical), 0.25 * std::abs(at_logical));
+}
+
+class ScrollThenZeroApp : public holoscan::Application {
+ public:
+  explicit ScrollThenZeroApp(ImageCapture* capture)
+      : capture_(capture) {}
+
+  void compose() override {
+    const auto g0 = strip_geometry();
+    const auto g1 = translate_v(g0, 1);
+    const double origin = centred_origin();
+    const auto target = g0.sample_position(0, 8);
+    auto op = make_operator<BackprojectionOp<float>>(
+        "bp",
+        holoscan::Arg("coordinate_frame", scene_frame()),
+        holoscan::Arg("sample_geometry", g0),
+        holoscan::Arg("range_bin_spacing", kSpacing),
+        holoscan::Arg("range_bin_origin", origin),
+        holoscan::Arg("reference_frequency", kFreq),
+        holoscan::Arg("geometry_change", GeometryChange::kScroll));
+    const std::array<double, 3> apc{0.0, 0.0, 100.0};
+    const std::array<double, 3> srp{0.0, 0.0, 0.0};
+    const double dR = sar_differential_range(apc, srp, target);
+    const auto phase = sar_matched_phase(kFreq, dR);
+    const std::complex<double> amp{phase.real(), -phase.imag()};
+    const auto live = profiles_impulse<float>(dR, origin, amp);
+    const auto silent = profiles_impulse<float>(dR, origin, {0.0, 0.0});
+    holoscan::radar::testing::wire_data_source(
+        this, op, "range_profiles", {live, silent});
+    holoscan::radar::testing::wire_data_source(
+        this, op, "positions",
+        {xyz_map<float>(apc, "positions"),
+         xyz_map<float>(apc, "positions")});
+    holoscan::radar::testing::wire_data_source(
+        this, op, "reference_position",
+        {xyz_map<float>(srp, "reference_position"),
+         xyz_map<float>(srp, "reference_position")});
+    holoscan::radar::testing::wire_leading_override(
+        this, op, "sample_geometry", std::vector<SampleGeometry>{g0, g1});
+    holoscan::radar::testing::wire_data_source(
+        this, op, "control",
+        {control_map(FormationControl::kResetWithoutEmit),
+         control_map(FormationControl::kEmitAndContinue)});
+    holoscan::radar::testing::wire_capture_sink(this, op, "image", &sink_);
+  }
+
+  void take() {
+    if (sink_.frames.size() != 1u) {
+      throw std::runtime_error("expected one emitted image, got " +
+                               std::to_string(sink_.frames.size()));
+    }
+    capture_->image = std::move(sink_.frames.front());
+  }
+
+ private:
+  ImageCapture* capture_;
+  TensorMapCapture sink_;
+};
+
+TEST(BackprojectionOp, ScrollEnteringRowsZeroed) {
+  ImageCapture capture;
+  auto app = holoscan::make_application<ScrollThenZeroApp>(&capture);
+  app->run();
+  app->take();
+  const auto& image = capture.image;
+  const int64_t nv = image.shape[image.shape.size() - 2];
+  const int64_t nu = image.shape.back();
+  double leading = 0.0;
+  for (int64_t iu = 0; iu < nu; ++iu) {
+    leading = std::max(leading, std::abs(pixel(image, nv - 1, iu)));
+  }
+  EXPECT_LT(leading, 1.0e-3);
+}
+
+class ScrollBadGeomApp : public holoscan::Application {
+ public:
+  explicit ScrollBadGeomApp(SampleGeometry next) : next_(std::move(next)) {}
+
+  void compose() override {
+    auto op = make_operator<BackprojectionOp<float>>(
+        "bp",
+        holoscan::Arg("coordinate_frame", scene_frame()),
+        holoscan::Arg("sample_geometry", strip_geometry()),
+        holoscan::Arg("range_bin_spacing", kSpacing),
+        holoscan::Arg("reference_frequency", kFreq),
+        holoscan::Arg("geometry_change", GeometryChange::kScroll));
+    holoscan::radar::testing::wire_data_source(
+        this, op, "range_profiles",
+        {profiles_impulse<float>(0.0, centred_origin(), {1.0, 0.0})});
+    holoscan::radar::testing::wire_data_source(
+        this, op, "positions",
+        {xyz_map<float>({0.0, 0.0, 100.0}, "positions")});
+    holoscan::radar::testing::wire_data_source(
+        this, op, "reference_position",
+        {xyz_map<float>({0.0, 0.0, 0.0}, "reference_position")});
+    holoscan::radar::testing::wire_leading_override(
+        this, op, "sample_geometry", std::vector<SampleGeometry>{next_});
+    holoscan::radar::testing::wire_leading_override(
+        this, op, "control",
+        std::vector<holoscan::TensorMap>{
+            control_map(FormationControl::kEmitAndContinue)});
+  }
+
+ private:
+  SampleGeometry next_;
+};
+
+TEST(BackprojectionOp, ScrollRejectsUComponent) {
+  SampleGeometrySpec spec;
+  spec.origin = {-7.0, 0.0, 0.0};
+  spec.axis_u = {1.0, 0.0, 0.0};
+  spec.axis_v = {0.0, 1.0, 0.0};
+  spec.spacing = {1.0, 1.0};
+  spec.counts = {32, 16};
+  auto app = holoscan::make_application<ScrollBadGeomApp>(
+      SampleGeometry(spec));
+  try {
+    app->run();
+    FAIL() << "u-component translation should throw";
   } catch (const std::exception& ex) {
     EXPECT_NE(std::string(ex.what()).find("scroll"), std::string::npos);
   }
+}
+
+TEST(BackprojectionOp, ScrollRejectsFractionalRow) {
+  const auto g0 = strip_geometry();
+  SampleGeometrySpec spec;
+  spec.origin = g0.origin();
+  spec.axis_u = g0.axis_u();
+  spec.axis_v = g0.axis_v();
+  spec.spacing = g0.spacing();
+  spec.counts = g0.counts();
+  spec.origin[1] += 0.5 * g0.spacing()[0];
+  auto app = holoscan::make_application<ScrollBadGeomApp>(
+      SampleGeometry(spec));
+  try {
+    app->run();
+    FAIL() << "fractional-row translation should throw";
+  } catch (const std::exception& ex) {
+    EXPECT_NE(std::string(ex.what()).find("scroll"), std::string::npos);
+    EXPECT_NE(std::string(ex.what()).find("whole"), std::string::npos);
+  }
+}
+
+TEST(BackprojectionOp, ScrollRejectsKGeNumV) {
+  const auto g0 = strip_geometry();
+  auto app = holoscan::make_application<ScrollBadGeomApp>(
+      translate_v(g0, g0.num_v()));
+  try {
+    app->run();
+    FAIL() << "k >= num_v should throw";
+  } catch (const std::exception& ex) {
+    EXPECT_NE(std::string(ex.what()).find("scroll"), std::string::npos);
+    EXPECT_NE(std::string(ex.what()).find("num_v"), std::string::npos);
+  }
+}
+
+class ScrollPointsApp : public holoscan::Application {
+ public:
+  ScrollPointsApp(const std::array<double, 3>& target, ImageCapture* capture)
+      : target_(target), capture_(capture) {}
+
+  void compose() override {
+    const auto g0 = strip_geometry();
+    constexpr int64_t k = 16;
+    const auto g1 = translate_v(g0, k);
+    const double origin = centred_origin();
+    auto op = make_operator<BackprojectionOp<float>>(
+        "bp",
+        holoscan::Arg("coordinate_frame", scene_frame()),
+        holoscan::Arg("range_bin_spacing", kSpacing),
+        holoscan::Arg("range_bin_origin", origin),
+        holoscan::Arg("reference_frequency", kFreq),
+        holoscan::Arg("geometry_change", GeometryChange::kScroll));
+    const std::array<double, 3> apc{0.0, 0.0, 100.0};
+    const std::array<double, 3> srp{0.0, 0.0, 0.0};
+    const double dR = sar_differential_range(apc, srp, target_);
+    const auto phase = sar_matched_phase(kFreq, dR);
+    const std::complex<double> amp{phase.real(), -phase.imag()};
+    const auto silent =
+        profiles_impulse<float>(dR, origin, {0.0, 0.0});
+    const auto live = profiles_impulse<float>(dR, origin, amp);
+    holoscan::radar::testing::wire_data_source(
+        this, op, "range_profiles", {silent, live});
+    holoscan::radar::testing::wire_data_source(
+        this, op, "positions",
+        {xyz_map<float>(apc, "positions"),
+         xyz_map<float>(apc, "positions")});
+    holoscan::radar::testing::wire_data_source(
+        this, op, "reference_position",
+        {xyz_map<float>(srp, "reference_position"),
+         xyz_map<float>(srp, "reference_position")});
+    const auto full = host_lattice(g0);
+    const auto enter = host_entering(g1, k);
+    holoscan::radar::testing::wire_data_source(
+        this, op, "sample_points",
+        {single_map(real_cube_to_device<float>(full, {32, 16, 3}),
+                    "sample_points"),
+         single_map(real_cube_to_device<float>(enter, {k, 16, 3}),
+                    "sample_points")});
+    holoscan::radar::testing::wire_data_source(
+        this, op, "control",
+        {control_map(FormationControl::kResetWithoutEmit),
+         control_map(FormationControl::kEmitAndContinue)});
+    holoscan::radar::testing::wire_capture_sink(this, op, "image", &sink_);
+  }
+
+  void take() {
+    if (sink_.frames.size() != 1u) {
+      throw std::runtime_error("expected one emitted image, got " +
+                               std::to_string(sink_.frames.size()));
+    }
+    capture_->image = std::move(sink_.frames.front());
+  }
+
+ private:
+  std::array<double, 3> target_;
+  ImageCapture* capture_;
+  TensorMapCapture sink_;
+};
+
+TEST(BackprojectionOp, ScrollPointsModeWrapMatchesGrid) {
+  const auto g0 = strip_geometry();
+  constexpr int64_t k = 16;
+  const auto g1 = translate_v(g0, k);
+  const auto target = g1.sample_position(0, 8);
+  ImageCapture capture;
+  auto app = holoscan::make_application<ScrollPointsApp>(target, &capture);
+  app->run();
+  app->take();
+  const auto grid = scroll_once(g0, g1, target);
+  const auto expected = sar_predicted_peak(g1, target);
+  const auto pts = pixel(capture.image, expected.first, expected.second);
+  const auto gpix = pixel(grid, expected.first, expected.second);
+  EXPECT_GT(std::abs(pts), 1.0);
+  EXPECT_NEAR(std::abs(pts), std::abs(gpix), 0.05 * std::abs(gpix));
 }
 
 class RejectNearestApp : public holoscan::Application {

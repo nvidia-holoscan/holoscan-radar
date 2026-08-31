@@ -67,8 +67,8 @@ backprojection:
 
 visualize: true
 # Holoviz window (px), not formation cost. LUT box-averages
-# the formed lattice to this. If the overlay says "behind",
-# lower lattice.max_side, not this.
+# the formed lattice to this. If the timeline HUD says
+# "behind", lower lattice.max_side, not this.
 visualize_size: 1024
 skip_display_check: false
 headless: false

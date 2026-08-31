@@ -111,9 +111,9 @@ radar_add_test(sar/test_backprojection
     holoscan::backprojection_op)
 radar_add_test(sar/test_aperture_manager
     holoscan::aperture_manager_op)
-# App-owned TileMosaicOp lives with sar_formation; extra includes
-# for that header (same-dir NOLINT) and the operator include root
-# (custom_ops.hpp pulls cphd_reader_op.hpp).
+# App-owned TileMosaicOp / ScrollMosaicOp live with sar_formation;
+# extra includes for that header (same-dir NOLINT) and the
+# operator include root (custom_ops.hpp pulls cphd_reader_op.hpp).
 radar_add_test(sar/test_tile_mosaic)
 target_include_directories(test_tile_mosaic PRIVATE
     ${PROJECT_SOURCE_DIR}/operators

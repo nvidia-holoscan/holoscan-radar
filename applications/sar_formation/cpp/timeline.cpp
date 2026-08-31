@@ -107,19 +107,6 @@ int span_file_at(const std::vector<radar::CollectionSpan>& spans,
   return idx;
 }
 
-std::string format_latency_ms(double s) {
-  if (!std::isfinite(s)) {
-    return {};
-  }
-  const bool neg = s < 0.0;
-  const int ms = static_cast<int>(
-      std::llround(std::abs(s) * 1000.0));
-  std::string out = neg ? "-" : "";
-  out += std::to_string(ms);
-  out += "ms";
-  return out;
-}
-
 std::string format_tenths_s(double s) {
   const int scaled =
       static_cast<int>(std::llround(std::abs(s) * 10.0));
@@ -127,27 +114,82 @@ std::string format_tenths_s(double s) {
          std::to_string(scaled % 10) + "s";
 }
 
-std::string format_lag(const radar::PlaybackStatus& st) {
-  if (!st.valid || !st.paced || !std::isfinite(st.behind_s)) {
-    return {};
+enum class LagBand : int {
+  kUnknown = 0,
+  kOnTime = 1,
+  kBehind = 2,
+  kAhead = 3
+};
+
+LagBand step_lag_band(LagBand cur, double behind) {
+  if (!std::isfinite(behind)) {
+    return cur;
   }
-  if (std::abs(st.behind_s) < 0.05) {
-    return "on time";
+  const double mag = std::abs(behind);
+  if (cur == LagBand::kUnknown) {
+    if (mag < 0.15) {
+      return LagBand::kOnTime;
+    }
+    return behind > 0.0 ? LagBand::kBehind : LagBand::kAhead;
   }
-  if (st.behind_s > 0.0) {
-    return "+" + format_tenths_s(st.behind_s) + " behind";
+  if (cur == LagBand::kOnTime) {
+    if (behind >= 0.2) {
+      return LagBand::kBehind;
+    }
+    if (behind <= -0.2) {
+      return LagBand::kAhead;
+    }
+    return LagBand::kOnTime;
   }
-  return format_tenths_s(-st.behind_s) + " ahead";
+  if (cur == LagBand::kBehind) {
+    if (behind <= -0.2) {
+      return LagBand::kAhead;
+    }
+    if (behind <= 0.05) {
+      return LagBand::kOnTime;
+    }
+    return LagBand::kBehind;
+  }
+  if (behind >= 0.2) {
+    return LagBand::kBehind;
+  }
+  if (behind >= -0.05) {
+    return LagBand::kOnTime;
+  }
+  return LagBand::kAhead;
 }
 
-std::array<uint8_t, 3> lag_color(const radar::PlaybackStatus& st) {
-  if (st.behind_s > 0.2) {
+std::string format_lag_band(LagBand band, double behind) {
+  if (band == LagBand::kUnknown || band == LagBand::kOnTime) {
+    return "on time";
+  }
+  if (band == LagBand::kBehind) {
+    return "+" + format_tenths_s(behind) + " behind";
+  }
+  return format_tenths_s(-behind) + " ahead";
+}
+
+std::array<uint8_t, 3> lag_band_color(LagBand band, double behind) {
+  if (band == LagBand::kBehind && behind > 0.2) {
     return {{255, 80, 80}};
   }
-  if (st.behind_s > 0.05) {
+  if (band == LagBand::kBehind) {
     return {{255, 180, 60}};
   }
   return {{80, 200, 80}};
+}
+
+std::string format_latency_held(double s) {
+  if (!std::isfinite(s) || s < 0.0) {
+    return {};
+  }
+  const double q = 0.05;
+  const double r = std::round(s / q) * q;
+  if (r < 1.0) {
+    const int ms = static_cast<int>(std::llround(r * 1000.0));
+    return std::to_string(ms) + "ms";
+  }
+  return format_tenths_s(r);
 }
 
 std::string fit_label(const std::string& name, int64_t max_w,
@@ -249,6 +291,21 @@ void TimelineRasterOp::compute(
   fill_rect(&img, w, h, 0, prod_y0, w, prod_y1,
             std::array<uint8_t, 3>{28, 28, 28});
 
+  const int64_t hud_slot =
+      14 * holoscan::radar::app::kFont5x7Advance * kScale;
+  auto draw_hud = [&](int64_t y0, int64_t y1, const std::string& lab,
+                      const std::array<uint8_t, 3>& fg) {
+    if (lab.empty()) {
+      return;
+    }
+    const int64_t pad = 4;
+    const int64_t tx = w - 8 - hud_slot;
+    const int64_t ty = y0 + (y1 - y0 - label_h) / 2;
+    fill_rect(&img, w, h, tx - pad, y0, w - 2, y1, bg);
+    holoscan::radar::app::plot_draw_text_5x7(
+        &img, w, h, tx, ty, lab, fg, kScale);
+  };
+
   for (const auto& span : collected) {
     const auto dwell_end = span.dwell_end.value_or(now);
     const auto dwell_c = collect_color(span.file_index);
@@ -280,32 +337,14 @@ void TimelineRasterOp::compute(
       }
     }
   }
-  const int64_t lat_y =
-      prod_y0 + (prod_y1 - prod_y0 - label_h) / 2;
   for (const auto& mark : image_emits_) {
     const auto tick_c = collect_color(mark.file_index);
     draw_tick(&img, w, h, mark.at, origin, window_s, prod_y0,
               prod_y1, tick_c);
-    if (!mark.latency_s.has_value()) {
-      continue;
-    }
-    const std::string lab = format_latency_ms(*mark.latency_s);
-    if (lab.empty()) {
-      continue;
-    }
-    const int64_t x = time_to_x(mark.at, origin, window_s, w);
-    const int64_t tw =
-        holoscan::radar::app::plot_text_width_5x7(lab, kScale);
-    int64_t tx = x + 4;
-    if (tx + tw > w - 4) {
-      tx = x - 4 - tw;
-    }
-    if (tx < 2) {
-      tx = 2;
-    }
-    holoscan::radar::app::plot_draw_text_5x7(
-        &img, w, h, tx, lat_y, lab, tick_c, kScale);
   }
+  // Per-tick "165ms" is wider than the inter-emit gap once
+  // formation is a few Hz (mode 4 at 256 pulses). Keep the
+  // ticks; park the latest latency in a corner like lag.
 
   fill_rect(&img, w, h, 0, axis_y, w, axis_y + 1, axis_c);
   const int n_ticks = 5;
@@ -337,22 +376,34 @@ void TimelineRasterOp::compute(
   }
   fill_rect(&img, w, h, w - 2, 0, w, h, head_c);
 
-  if (playback) {
-    const auto st = playback();
-    const std::string lab = format_lag(st);
-    if (!lab.empty()) {
-      const int64_t tw =
-          holoscan::radar::app::plot_text_width_5x7(lab, kScale);
-      const int64_t pad = 4;
-      const int64_t tx = w - 8 - tw;
-      const int64_t ty =
-          plat_y0 + (plat_y1 - plat_y0 - label_h) / 2;
-      fill_rect(&img, w, h, tx - pad, plat_y0, w - 2, plat_y1,
-                bg);
-      holoscan::radar::app::plot_draw_text_5x7(
-          &img, w, h, tx, ty, lab, lag_color(st), kScale);
+  const bool hud_due =
+      !hud_held_ ||
+      std::chrono::duration<double>(now - hud_at_).count() >= 1.0;
+  if (hud_due) {
+    hud_at_ = now;
+    hud_held_ = true;
+    if (playback) {
+      const auto st = playback();
+      if (st.valid && st.paced && std::isfinite(st.behind_s)) {
+        const auto band = step_lag_band(
+            static_cast<LagBand>(lag_band_), st.behind_s);
+        lag_band_ = static_cast<int>(band);
+        lag_hud_ = format_lag_band(band, st.behind_s);
+        lag_hud_fg_ = lag_band_color(band, st.behind_s);
+      }
+    }
+    for (auto it = image_emits_.rbegin();
+         it != image_emits_.rend(); ++it) {
+      if (!it->latency_s.has_value() || *it->latency_s < 0.0) {
+        continue;
+      }
+      lat_hud_ = format_latency_held(*it->latency_s);
+      lat_hud_fg_ = collect_color(it->file_index);
+      break;
     }
   }
+  draw_hud(prod_y0, prod_y1, lat_hud_, lat_hud_fg_);
+  draw_hud(plat_y0, plat_y1, lag_hud_, lag_hud_fg_);
 
   auto tensor = radar::make_device_tensor(
       {h, w, 4}, DLDataType{kDLUInt, 8, 1});

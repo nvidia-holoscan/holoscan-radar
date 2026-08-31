@@ -136,11 +136,43 @@ void keep_group(std::vector<std::shared_ptr<holoscan::Tensor>>* keep,
   }
 }
 
+void add_pulse_input(OperatorSpec& spec, const char* name) {
+  spec.input<holoscan::TensorMap>(name)
+      .condition(ConditionType::kMessageAvailable,
+                 Arg("min_size") = uint64_t{1});
+}
+
 }  // namespace
 
 template <typename T>
 void ApertureManagerOp<T>::initialize() {
   ensure_radar_arg_setters();
+  if (input_queue_capacity > 1) {
+    auto* sp = spec();
+    if (sp != nullptr) {
+      const int64_t cap = input_queue_capacity;
+      const uint64_t ucap = static_cast<uint64_t>(cap);
+      const char* in_ports[] = {
+          "range_profiles", "positions", "reference_position"};
+      for (const char* name : in_ports) {
+        auto it = sp->inputs().find(name);
+        if (it != sp->inputs().end() && it->second) {
+          it->second->queue_size(cap);
+        }
+      }
+      const char* out_ports[] = {
+          "range_profiles", "positions", "reference_position",
+          "weight", "sample_geometry", "sample_points", "control"};
+      for (const char* name : out_ports) {
+        auto it = sp->outputs().find(name);
+        if (it != sp->outputs().end() && it->second) {
+          it->second->connector(
+              IOSpec::ConnectorType::kDoubleBuffer,
+              Arg("capacity") = ucap);
+        }
+      }
+    }
+  }
   Operator::initialize();
   metadata_policy(MetadataPolicy::kUpdate);
 
@@ -195,9 +227,9 @@ void ApertureManagerOp<T>::initialize() {
 
 template <typename T>
 void ApertureManagerOp<T>::setup(OperatorSpec& spec) {
-  spec.input<holoscan::TensorMap>("range_profiles");
-  spec.input<holoscan::TensorMap>("positions");
-  spec.input<holoscan::TensorMap>("reference_position");
+  add_pulse_input(spec, "range_profiles");
+  add_pulse_input(spec, "positions");
+  add_pulse_input(spec, "reference_position");
   add_override_port<SampleGeometry>(spec, "sample_geometry");
   spec.input<holoscan::TensorMap>("sample_points")
       .condition(ConditionType::kNone);

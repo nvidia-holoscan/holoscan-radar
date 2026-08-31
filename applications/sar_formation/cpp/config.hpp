@@ -14,12 +14,15 @@
 // Lattice: `sample_geometry` (Atlanta ENU), sidecar truth, or
 // `lattice` — explicit counts/spacing (IARP ENU; counts may be N
 // or [num_v, num_u]), collection physics (XY square at the
-// coarser GSD), or `lattice.tiles` > 1 (mode 3: parent strip +
+// coarser GSD), `lattice.tiles` > 1 (mode 3: parent strip +
 // ROI tiles along a travelling SRP; one file; omit
-// counts/spacing). Along-track follows the SRP chord, not the
-// IARP tangent plane. `max_side` caps each tile's along-track
-// axis (the parent is n_tiles of those along v; tile and parent
-// u may exceed the cap so the IFFT swath stays native GSD).
+// counts/spacing), or `lattice.scroll` (mode 4: same parent,
+// one window `max_side` deep along v). Along-track follows the
+// SRP chord, not the IARP tangent plane. `max_side` caps each
+// tile's along-track axis in mode 3 (the parent is n_tiles of
+// those along v; tile and parent u may exceed the cap so the
+// IFFT swath stays native GSD). Mode 4 uses `max_side` as the
+// buffer depth, not a coarsening cap.
 // `pixel_scale` is a per-collect factor on N. A guessed sidecar
 // must not override an explicit YAML lattice.
 
@@ -76,9 +79,20 @@ struct AppConfig {
   std::vector<radar::SampleGeometry> tile_geometries;
   radar::SampleGeometry parent_geometry;
   int64_t tile_pulses{0};
+  // Mode 4: lattice.scroll. Parent is the SRP-chord strip;
+  // sample_geometry is the scrolling window (max_side along v).
+  bool scroll{false};
+  radar::SampleGeometry scroll_parent;
+  int64_t scroll_anchor{0};
   // Read-only mirror of cphd_reader.loop so the tile stager can
   // restage tile 0 on wrap. Not parsed into the operator here.
   bool reader_loop{false};
+  // Read-only mirrors of the reader / manager cadences so
+  // compose() can slice a mode-4 cube when the emit interval is
+  // smaller than the reader batch. from_config() still owns the
+  // operator parameters.
+  int64_t reader_pulses_per_tick{0};
+  int64_t emit_interval_pulses{0};
   // Mode 5: one lattice / dr / f0 per collection, aligned with
   // cphd_paths. Modes 1 and 3 have a single entry.
   std::vector<radar::SampleGeometry> collection_geometries;
@@ -113,17 +127,25 @@ struct AppConfig {
   // aperture_window (mode 3 Taylor). Mode 1 / 5 stay unconnected
   // (all +1, no D2H of weights).
   bool wire_weight{false};
-  // Collect-vs-wall lag overlay. Mode 2 retention only, not a
-  // stamped block-aperture window.
+  // Collect-vs-wall lag timeline HUD. Retention (mode 2) and
+  // paced strips (mode 3 mosaic / mode 4 scroll). Modes 1 and
+  // 5 omit it. Display still gates on playback_status().paced
+  // so an unpaced YAML stays blank.
   bool show_playback_lag{false};
   bool skip_display_check{false};
   bool headless{false};
   // Holoviz window: longest side (px) for square collects, and
-  // the no-DISPLAY fallback for a parent strip. A mosaic strip
-  // fits the desktop work area (full width on a typical 16:9).
-  // LUT box-averages toward that side; a dump is the formed
-  // lattice (parent mosaic when tiling).
+  // the no-DISPLAY fallback for a parent strip. A parent strip
+  // (mode 3 mosaic / mode 4 scroll blit) fits the desktop work
+  // area (full width on a typical 16:9). LUT box-averages toward
+  // that side; a dump is the formed lattice (parent when tiling
+  // or scrolling).
   int64_t visualize_size{1024};
+  // Strip Holoviz crop of parent u (half-open). 0 nu = full
+  // union. Set from the range-window intersection so the
+  // walking far/near edge is off-screen. BP / dump unchanged.
+  int64_t viz_crop_u0{0};
+  int64_t viz_crop_nu{0};
   // Seconds the Holoviz window keeps the formed image after emit.
   // Also the max wait for the first frame (Atlanta ~9 s). Mode 1
   // emits once; 0 closes with the graph. Negative: hold until
@@ -624,6 +646,10 @@ struct StripmapTiling {
   radar::SampleGeometry parent;
   std::vector<radar::SampleGeometry> tiles;
   int64_t tile_pulses{0};
+  // Holoviz crop of parent u (half-open [display_u0, +display_nu)).
+  // 0 nu means show the full union. Formation and dump stay parent.
+  int64_t display_u0{0};
+  int64_t display_nu{0};
 };
 
 // Mode 3: parent strip plus ROI tiles. Along-track (v) follows
@@ -632,17 +658,20 @@ struct StripmapTiling {
 // point the pulses can light (IFFT window on the plane, first
 // / mid / last pulse of each tile). Every tile forms that
 // full u so a shared v-edge is the same height; cropping u
-// per tile made the staircase at the joins. Capella ImageArea
-// extents are not the scene. first/last is the half-open
-// pulse window. max_side caps each tile's along-track axis;
-// the parent is n_tiles of those along v.
+// per tile made the staircase at the joins. Holoviz crops
+// parent u to the intersection of those envelopes so the
+// walking range-window edge is off-screen; dump stays the
+// union. Capella ImageArea extents are not the scene.
+// first/last is the half-open pulse window. max_side caps
+// each tile's along-track axis; the parent is n_tiles of
+// those along v.
 inline StripmapTiling stripmap_tile_lattices(
     const radar::cphd::CphdFile& file, int64_t n_tiles,
     int64_t max_side, double pixel_scale,
     const radar::cphd::CphdFile::CollectionPhysics& phys,
     int64_t first_pulse, int64_t last_pulse, double half_slant) {
-  if (n_tiles < 2) {
-    throw std::runtime_error("lattice.tiles must be >= 2");
+  if (n_tiles < 1) {
+    throw std::runtime_error("lattice.tiles must be >= 1");
   }
   if (!(pixel_scale > 0.0) || !std::isfinite(pixel_scale)) {
     throw std::runtime_error(
@@ -787,15 +816,28 @@ inline StripmapTiling stripmap_tile_lattices(
       };
   double cross_lo = 0.0;
   double cross_hi = 0.0;
-  for (int64_t k = 0; k < n_tiles; ++k) {
-    const int64_t i0 = first_pulse + k * tile_pulses;
-    int64_t i1 = i0 + tile_pulses - 1;
-    if (i1 >= last_pulse) {
-      i1 = last_pulse - 1;
-    }
-    int64_t mid = i0 + tile_pulses / 2;
-    if (mid >= last_pulse) {
-      mid = last_pulse - 1;
+  double inter_lo = 0.0;
+  double inter_hi = 0.0;
+  bool have_inter = false;
+  const int64_t n_env = (n_tiles == 1) ? int64_t{11} : n_tiles;
+  for (int64_t k = 0; k < n_env; ++k) {
+    int64_t i0 = 0;
+    int64_t i1 = 0;
+    int64_t mid = 0;
+    if (n_tiles == 1) {
+      const int64_t i =
+          first_pulse + k * (span - 1) / (n_env - 1);
+      i0 = i1 = mid = std::min(i, last_pulse - 1);
+    } else {
+      i0 = first_pulse + k * tile_pulses;
+      i1 = i0 + tile_pulses - 1;
+      if (i1 >= last_pulse) {
+        i1 = last_pulse - 1;
+      }
+      mid = i0 + tile_pulses / 2;
+      if (mid >= last_pulse) {
+        mid = last_pulse - 1;
+      }
     }
     double clo = 0.0;
     double chi = 0.0;
@@ -811,6 +853,14 @@ inline StripmapTiling stripmap_tile_lattices(
       } else {
         clo = std::min(clo, env[0]);
         chi = std::max(chi, env[1]);
+      }
+      if (!have_inter) {
+        inter_lo = env[0];
+        inter_hi = env[1];
+        have_inter = true;
+      } else {
+        inter_lo = std::max(inter_lo, env[0]);
+        inter_hi = std::min(inter_hi, env[1]);
       }
     }
     if (!(chi > clo)) {
@@ -852,6 +902,35 @@ inline StripmapTiling stripmap_tile_lattices(
     spec.spacing = out.parent.spacing();
     spec.counts = {nv, nu_p};
     out.tiles.emplace_back(spec);
+  }
+  // Holoviz only: crop parent u to the intersection of the
+  // sampled envelopes (plus a small inset) so the walking
+  // range-window edge stays off-screen. BP / dump stay the
+  // union parent. Skip if the core is empty or would drop
+  // more than half the swath (a collapsing TOA window).
+  if (have_inter && inter_hi > inter_lo) {
+    const double dx = out.parent.spacing()[1];
+    const auto u_at = [cross_lo, dx](double c) {
+      return (c - cross_lo) / dx - 0.5;
+    };
+    int64_t u0 = static_cast<int64_t>(
+        std::ceil(u_at(inter_lo)));
+    int64_t u1 = static_cast<int64_t>(
+        std::floor(u_at(inter_hi)));
+    const int64_t inset = std::max(int64_t{16}, nu_p / 200);
+    u0 += inset;
+    u1 -= inset;
+    if (u0 < 0) {
+      u0 = 0;
+    }
+    if (u1 >= nu_p) {
+      u1 = nu_p - 1;
+    }
+    const int64_t nu = u1 - u0 + 1;
+    if (nu > nu_p / 2 && nu < nu_p) {
+      out.display_u0 = u0;
+      out.display_nu = nu;
+    }
   }
   return out;
 }
@@ -1020,6 +1099,25 @@ inline AppConfig load_config(const std::filesystem::path& path,
             "omit counts/spacing");
       }
     }
+    if (const YAML::Node sc = lat["scroll"]) {
+      cfg.scroll = sc.as<bool>();
+    }
+    if (cfg.scroll) {
+      if (n_tiles > 1) {
+        throw std::runtime_error(
+            "lattice.scroll and lattice.tiles are mutually "
+            "exclusive (mode 4 is one window, not tiles)");
+      }
+      if (cfg.cphd_paths.size() != 1) {
+        throw std::runtime_error(
+            "lattice.scroll is one-file (mode 4)");
+      }
+      if (has_counts) {
+        throw std::runtime_error(
+            "lattice.scroll builds an SRP-track strip window; "
+            "omit counts/spacing");
+      }
+    }
     if (const YAML::Node side = lat["max_side"]) {
       cfg.lattice_max_side = side.as<int64_t>();
       if (cfg.lattice_max_side < 0) {
@@ -1100,7 +1198,58 @@ inline AppConfig load_config(const std::filesystem::path& path,
       const double dr =
           range_bin_spacing_from_cphd(path, nfft, speed);
       radar::SampleGeometry geom;
-      if (n_tiles > 1) {
+      if (cfg.scroll) {
+        if (!file.has_collection_physics()) {
+          throw std::runtime_error(
+              "lattice.scroll needs collection physics "
+              "(GrazeAngle / SlantRange / FxBW / TOASaved) in " +
+              path);
+        }
+        const auto phys = file.collection_physics();
+        int64_t first_pulse = 0;
+        int64_t last_pulse = file.channel(0).num_vectors;
+        if (const YAML::Node rd = root["cphd_reader"]) {
+          if (const YAML::Node pr = rd["pulse_range"]) {
+            const auto range = pr.as<std::vector<int64_t>>();
+            if (range.size() != 2) {
+              throw std::runtime_error(
+                  "cphd_reader.pulse_range needs 2 entries");
+            }
+            first_pulse = range[0];
+            last_pulse = range[1];
+          }
+        }
+        const int64_t num_bins =
+            nfft > 0 ? nfft : file.channel(0).num_samples;
+        if (num_bins < 1) {
+          throw std::runtime_error(
+              "scroll needs num_samples >= 1 in " + path);
+        }
+        const double half_slant =
+            0.5 * static_cast<double>(num_bins) * dr;
+        const auto tiling = stripmap_tile_lattices(
+            file, 1, 0, pixel_scale[i], phys, first_pulse,
+            last_pulse, half_slant);
+        cfg.scroll_parent = tiling.parent;
+        cfg.viz_crop_u0 = tiling.display_u0;
+        cfg.viz_crop_nu = tiling.display_nu;
+        int64_t buf = cfg.lattice_max_side;
+        if (buf < 1) {
+          buf = tiling.parent.num_v();
+        }
+        if (buf > tiling.parent.num_v()) {
+          buf = tiling.parent.num_v();
+        }
+        radar::SampleGeometrySpec spec;
+        spec.origin = tiling.parent.origin();
+        spec.axis_u = tiling.parent.axis_u();
+        spec.axis_v = tiling.parent.axis_v();
+        spec.spacing = tiling.parent.spacing();
+        spec.counts = {buf, tiling.parent.num_u()};
+        geom = radar::SampleGeometry(spec);
+        cfg.scroll_anchor = buf / 2;
+        cfg.collection_physics.push_back(phys);
+      } else if (n_tiles > 1) {
         if (!file.has_collection_physics()) {
           throw std::runtime_error(
               "lattice.tiles needs collection physics "
@@ -1134,6 +1283,8 @@ inline AppConfig load_config(const std::filesystem::path& path,
             phys, first_pulse, last_pulse, half_slant);
         cfg.tile_geometries = tiling.tiles;
         cfg.parent_geometry = tiling.parent;
+        cfg.viz_crop_u0 = tiling.display_u0;
+        cfg.viz_crop_nu = tiling.display_nu;
         cfg.tile_pulses = tiling.tile_pulses;
         geom = cfg.tile_geometries.front();
         cfg.collection_physics.push_back(phys);
@@ -1332,6 +1483,12 @@ inline AppConfig load_config(const std::filesystem::path& path,
         cfg.wire_weight = true;
       }
     }
+    if (const YAML::Node e = am["emit_interval_pulses"]) {
+      cfg.emit_interval_pulses = e.as<int64_t>();
+    }
+  }
+  if (cfg.scroll || cfg.parent_geometry.is_valid()) {
+    cfg.show_playback_lag = true;
   }
   // Read-only mirrors of operator YAML so the tile stager can
   // wrap and so cadence tiles stay even (one tile = N reader
@@ -1340,27 +1497,20 @@ inline AppConfig load_config(const std::filesystem::path& path,
     if (const YAML::Node lp = rd["loop"]; lp && !lp.IsNull()) {
       cfg.reader_loop = lp.as<bool>();
     }
+    if (const YAML::Node p = rd["pulses_per_tick"]) {
+      cfg.reader_pulses_per_tick = p.as<int64_t>();
+    }
   }
   if (cfg.tile_pulses > 0) {
-    int64_t yaml_interval = 0;
-    if (const YAML::Node am = root["aperture_manager"]) {
-      if (const YAML::Node e = am["emit_interval_pulses"]) {
-        yaml_interval = e.as<int64_t>();
-      }
-    }
-    if (yaml_interval != 0 && yaml_interval != cfg.tile_pulses) {
+    if (cfg.emit_interval_pulses != 0 &&
+        cfg.emit_interval_pulses != cfg.tile_pulses) {
       throw std::runtime_error(
           "aperture_manager.emit_interval_pulses must match "
           "vector_count / lattice.tiles, after pulse_range (" +
           std::to_string(cfg.tile_pulses) + ")");
     }
-    int64_t ppt = 0;
-    if (const YAML::Node rd = root["cphd_reader"]) {
-      if (const YAML::Node p = rd["pulses_per_tick"]) {
-        ppt = p.as<int64_t>();
-      }
-    }
-    if (ppt > 0 && cfg.tile_pulses % ppt != 0) {
+    if (cfg.reader_pulses_per_tick > 0 &&
+        cfg.tile_pulses % cfg.reader_pulses_per_tick != 0) {
       throw std::runtime_error(
           "cphd_reader.pulses_per_tick must divide the tile "
           "length (" +
@@ -1369,7 +1519,7 @@ inline AppConfig load_config(const std::filesystem::path& path,
     }
   }
   {
-    if (cfg.parent_geometry.is_valid()) {
+    if (cfg.parent_geometry.is_valid() || cfg.scroll) {
       if (cfg.scene_names.size() > 1) {
         throw std::runtime_error(
             "cphd.names must be one name (or omitted) when "

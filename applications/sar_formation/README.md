@@ -3,13 +3,14 @@
 Mode-1 spotlight: one collection, one image, shown in Holoviz when
 `visualize: true`. Mode 2 is video SAR (sliding window). Mode 3 is
 a tiled strip (one file, app-stepped lattices, parent mosaic).
-Mode 5 is N independent images. `dump: true` writes a `.npy` (off
-by default); that dump is the offline PNG checkpoint
-(`tools/sar_image/form_image.py`).
+Mode 4 is a continuous strip (same file as mode 3; BP scrolls a
+window along `v`). Mode 5 is N independent images. `dump: true`
+writes a `.npy` (off by default); that dump is the offline PNG
+checkpoint (`tools/sar_image/form_image.py`).
 
 ```text
 CPHDReaderOp → SARRangeCompressionOp → ApertureManagerOp → BackprojectionOp
-                                              [→ TileMosaicOp]
+                                              [→ TileMosaicOp | ScrollMosaicOp]
                                               [→ TensorDumpOp]
                                               [→ SarImageToLutOp → HoldLastImageOp → HolovizOp]
                                               [→ TimelineRasterOp → HolovizOp]
@@ -30,8 +31,16 @@ to `BackprojectionOp` (those are not manager ports). Mode 3
 inserts `TileGeometryStagerOp` on the same edge: the next tile
 lattice is staged on the pulse cadence and the manager forwards
 it with the reset. `TileMosaicOp` blits each reset tile into a
-parent raster so Holoviz is the growing strip (same window mode
-4 will use).
+parent raster so Holoviz is the growing strip. Mode 4 inserts
+`ScrollGeometryStagerOp` on `range_profiles` + `positions` +
+`reference_position` and wires geometry straight to BP
+(`geometry_change: scroll`); the manager is cadence only
+(`emit_mode: continue`, no `weight`). When
+`emit_interval_pulses` < `pulses_per_tick`, compose sets the
+stager's slice size to the interval so one reader cube becomes
+several manager ticks (window from each slice's last SRP).
+`ScrollMosaicOp` blits the window into the same parent canvas so
+Holoviz is the strip, not the chip.
 
 `range_bins` is not wired. `BackprojectionOp.range_bin_spacing`
 is derived from CPHD `SCSS` and `num_samples`, and from
@@ -142,15 +151,15 @@ The scene is 6.8 km (`lattice.counts` × `spacing` at 1.0 m).
 `lattice.max_side: 6144` is the formed pixel side (~1.11 m GSD);
 **that is the number to lower on a slower GPU** (same km, coarser
 pixels, cost ~ N²). `visualize_size` is only the Holoviz window.
-Watch the overlay's `behind` line: if it climbs, drop `max_side`.
+Watch the timeline `behind` HUD: if it climbs, drop `max_side`.
 `nfft_pad: next_fast`, `playback_rate: 1`, `loop: true` (wrap is
 `collection_boundary` / emit-and-reset; the window refills over
 the next ~0.92 s), `visualize_hold_s: -1`.
 
 Two Holoviz windows: formed `|z|` and the timeline. The
-formed-image overlay and the timeline show collect-vs-wall lag
-when playback is paced (`on time` / behind / ahead). Modes 1
-and 5 omit that overlay. A small N-up compass (bottom-right)
+timeline's 1 Hz corner HUD shows collect-vs-wall lag when
+playback is paced (`on time` / behind / ahead). Modes 1
+and 5 omit that HUD. A small N-up compass (bottom-right)
 and a border chevron mark the mean phase-centre direction
 relative to the scene (row 0 = north, col 0 = west). Dump stays
 the formed complex lattice.
@@ -178,7 +187,10 @@ shared edge matches. `lattice.max_side: 4096` caps each
 tile's along-track axis (~2.6 m GSD, near range-Nyquist),
 not parent or tile `u`. `TileMosaicOp` holds
 finished squares so Holoviz is the strip, not the last chip.
-LUT windows filled pixels only while the canvas is sparse.
+Holoviz crops parent `u` to the always-formable band (range-window
+intersection) so the walking far/near sawtooth is off-screen;
+the dump stays the union parent. LUT windows filled pixels only
+while the canvas is sparse.
 Chevron is raster `u`/`v`; the compass inset is true ENU.
 Holoviz fits the parent strip to the desktop work area (full
 width on a typical 16:9); `visualize_size` is the fallback when
@@ -203,6 +215,46 @@ tiles divide evenly. `pulses_per_tick: 3181` divides the tile
 `loop: true` (wrap restages tile 0 and clears the mosaic),
 `visualize_hold_s: -1`. Overlay name is `Imperial Valley`. CI
 stays on generated fixtures; this YAML is not a CTest.
+
+## Mode 4 — Imperial Valley continuous strip
+
+Same file as mode 3. `mode04.yaml` sets `geometry_change: scroll`
+on a parent-width window `lattice.max_side` deep along `v`
+(buffer depth, not a coarsening cap). `ScrollMosaicOp` blits
+each window into the parent strip so Holoviz matches mode 3
+(along-track landscape, work-area fit). Holoviz crops parent `u`
+to the always-formable band so the walking range-window sawtooth
+is off-screen; dump stays the union. `weight` is unconnected
+(untapered ~−13 dB). Geometry goes to BP, not through the
+manager: `ScrollGeometryStagerOp` projects each dispatch's last
+SRP onto parent `v` and emits that window so the live override
+stays 1:1 with sliced cubes. Manager is `max_aperture_pulses: 0`,
+`emit_mode: continue`. `emit_interval_pulses: 256` with
+`pulses_per_tick: 1024` — compose slices the reader cube so the
+manager sees the interval. Wrap is D22 emit-and-reset plus
+restaging window 0. Taylor on range only. Overlay is name, lattice,
+and a 1 Hz BP-rate line (not lag). Timeline product ticks stay;
+`on time` / behind / ahead and last-packet→image latency are 1 Hz
+corner HUDs in a fixed-width slot.
+
+Pull first (~3.45 GiB). The script skips a file already present.
+
+```bash
+python3 applications/sar_formation/pull_cphd.py --mode 4 \
+    --dest /tmp/sar/imperial
+
+./build/applications/sar_formation/cpp/sar_formation mode04.yaml
+```
+
+`pulse_range: [0, 159050)`, `pulses_per_tick: 1024`,
+`emit_interval_pulses: 256` (stager slices the reader cube),
+`nfft_pad: next_fast`, `playback_rate: 0.5`, `loop: true`,
+`visualize_hold_s: -1`. Overlay name is `Imperial Valley`.
+Holoviz fits the parent strip to the desktop work area (full
+width on a typical 16:9); `visualize_size` is the fallback when
+DISPLAY/X11 is missing. LUT windows filled pixels only while
+the canvas is sparse. CI stays on generated fixtures; this YAML
+is not a CTest.
 
 ## Mode 5 — six unique-IARP spotlights
 
@@ -255,8 +307,9 @@ then the host time spent in `BackprojectionOp` for that image
 and the implied `pixels * pulses / s`. A second Holoviz window
 (`SAR timeline`) is a 20 s scrolling wall-clock Gantt: dwell bars
 on the platform lane (one color per collect), a matching tick on
-the product lane at each image emit with the last-packet→image
-latency beside it, and duty-cycle cooldown as a dimmer bar when
+the product lane at each image emit, and 1 Hz corner HUDs for
+last-packet→image latency and collect-vs-wall lag (fixed-width
+slot; per-tick glyphs overprint). Duty-cycle cooldown is a dimmer bar when
 `duty_cycle` < 1 (mode 5 default `1` leaves that empty). After
 GLFW maps it, the strip is moved to the bottom-left of the
 desktop work area (X11 / XWayland; native Wayland is a no-op).

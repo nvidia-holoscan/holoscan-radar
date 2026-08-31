@@ -13,7 +13,7 @@ refuses the set if two IARPs collide — the check reads each
 file's CPHD XML, not the folder name.
 
 Mode 3 is the Imperial Valley Capella stripmap (same key as
-mode 4); mode 4 is the later scroll YAML.
+mode 4); mode 4 is the scroll YAML on that file.
 
 python3 applications/sar_formation/pull_cphd.py --mode 3 --dest /tmp/sar/imperial
 python3 applications/sar_formation/pull_cphd.py --dest /tmp/sar/mode5

@@ -64,6 +64,15 @@ class ApertureManagerOp : public holoscan::Operator {
   int64_t evicted_pulses() const { return evicted_; }
   int64_t dropped_pulses() const { return dropped_; }
 
+  // Receiver/transmitter queue on the pulse ports. Default 1.
+  // Raise when an upstream operator emits more than one cube
+  // per compute (the mode-4 stager, when it slices a reader
+  // tick). Not a contract parameter: Holoscan plumbing.
+  // setup() runs inside make_operator, before compose can write
+  // this field; initialize() applies it. min_size stays 1
+  // (no batching).
+  int64_t input_queue_capacity{1};
+
  private:
   Parameter<int64_t> max_aperture_pulses_;
   Parameter<int64_t> emit_interval_pulses_;

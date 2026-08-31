@@ -55,16 +55,18 @@ stays unconnected on those demos. No perf harness (no GPU hot path).
 Follow-ups in
 [`aperture_manager_op/OPEN_ITEMS.md`](aperture_manager_op/OPEN_ITEMS.md).
 
-**`BackprojectionOp` — in flight, mode-1 slice (not checklist-complete).**
+**`BackprojectionOp` — in flight, not checklist-complete.**
 Required ports, four control phases, `kUpdate`, `stop()` warning, linear
-interpolation, `geometry_change = reset`. Shipped backends: default
+interpolation, `geometry_change = reset` **and** `scroll` (ring along
+`v`, two launches, logical emit). `weight` must be unconnected under
+scroll. Shipped backends: default
 `nvradar_block_anchored_expanded_throughput_phase_lut_vec`, golden
 `nvradar_fp64_reference`, Taylor
 `nvradar_block_anchored_refined_throughput`,
 naive/HQ `nvradar_cuda_fp32{,_hq,_hq_fast}`, every remaining `nvradar_*`
 copy, and the `matx_*` wrap (except `matx_taylor_fast`) when the bundled
 header is present.
-`initial_image` and `scroll` are declared and rejected. I6/I7 closed.
+`initial_image` is declared and rejected. I6/I7 closed.
 Follow-ups in
 [`backprojection_op/OPEN_ITEMS.md`](backprojection_op/OPEN_ITEMS.md).
 

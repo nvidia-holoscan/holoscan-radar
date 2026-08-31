@@ -24,9 +24,12 @@
 # azimuth; weight wired. pulses_per_tick 3181 divides the tile
 # (five ticks). playback_rate 0.5 so each square sits ~3 s.
 # nfft_pad: next_fast. loop wraps until SIGINT; wrap restages
-# tile 0 and clears the mosaic. visualize_size is the no-DISPLAY
-# fallback; with X11 the Holoviz window fills the work area on
-# the long axis (full desktop width for this strip).
+# tile 0 and clears the mosaic. Holoviz crops parent u to the
+# always-formable band so the walking range-window sawtooth is
+# off-screen; dump stays the union. visualize_size is the
+# no-DISPLAY fallback; with X11 the Holoviz window fills the
+# work area on the long axis (full desktop width for this
+# strip).
 
 cphd:
   path: /tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd

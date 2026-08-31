@@ -132,8 +132,37 @@ struct BackprojectionState {
   int64_t cached_num_v{0};    // accumulator shape
   int64_t cached_num_u{0};
   int64_t cached_batch{0};
+  // Physical row of logical v=0. Non-zero only under scroll.
+  int64_t ring_offset{0};
+  // Slab start for the current kernel launch (two launches wrap).
+  int64_t launch_row0{0};
   bool lattice_valid{false};
   bool planes_valid{false};
+
+  double* x_d() {
+    return x_plane.as<double>() +
+           static_cast<size_t>(launch_row0 * lattice_num_u);
+  }
+  double* y_d() {
+    return y_plane.as<double>() +
+           static_cast<size_t>(launch_row0 * lattice_num_u);
+  }
+  double* z_d() {
+    return z_plane.as<double>() +
+           static_cast<size_t>(launch_row0 * lattice_num_u);
+  }
+  float* x_f() {
+    return x_plane_f.as<float>() +
+           static_cast<size_t>(launch_row0 * lattice_num_u);
+  }
+  float* y_f() {
+    return y_plane_f.as<float>() +
+           static_cast<size_t>(launch_row0 * lattice_num_u);
+  }
+  float* z_f() {
+    return z_plane_f.as<float>() +
+           static_cast<size_t>(launch_row0 * lattice_num_u);
+  }
 };
 
 __global__ void gather_xyz_kernel(const float* lattice, int64_t n,
@@ -269,9 +298,9 @@ double max_tile_diameter(BackprojectionState<T>& state, int64_t num_v,
   const dim3 grid(static_cast<unsigned>(tiles_u),
                   static_cast<unsigned>(tiles_v));
   tile_aabb_diameter_kernel<<<grid, 1, 0, stream>>>(
-      state.x_plane.template as<double>(),
-      state.y_plane.template as<double>(),
-      state.z_plane.template as<double>(),
+      state.x_d(),
+      state.y_d(),
+      state.z_d(),
       static_cast<int>(num_v), static_cast<int>(num_u),
       state.tile_diam.template as<double>());
   std::vector<double> host(static_cast<size_t>(ntiles));
@@ -335,6 +364,63 @@ __global__ void expand_lattice_packed_kernel(double3 origin, double3 axis_v,
   out[i * 3 + 1] =
       static_cast<T>(origin.y + dv * axis_v.y + du * axis_u.y);
   out[i * 3 + 2] =
+      static_cast<T>(origin.z + dv * axis_v.z + du * axis_u.z);
+}
+
+// Write n_rows of a SampleGeometry into a ring-ordered plane buffer.
+// logical_v0 is the first logical row (in the new geometry);
+// phys_v0 is the physical slot those rows occupy (may wrap).
+__global__ void expand_lattice_plane_rows_kernel(
+    double3 origin, double3 axis_v, double3 axis_u, double spacing_v,
+    double spacing_u, int64_t num_v, int64_t num_u, int64_t logical_v0,
+    int64_t n_rows, int64_t phys_v0, double* x, double* y, double* z) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x +
+                    threadIdx.x;
+  const int64_t n = n_rows * num_u;
+  if (i >= n) {
+    return;
+  }
+  const int64_t r = i / num_u;
+  const int64_t iu = i - r * num_u;
+  const int64_t iv = logical_v0 + r;
+  int64_t pv = phys_v0 + r;
+  if (pv >= num_v) {
+    pv -= num_v;
+  }
+  const int64_t o = pv * num_u + iu;
+  const double dv = static_cast<double>(iv) * spacing_v;
+  const double du = static_cast<double>(iu) * spacing_u;
+  x[o] = origin.x + dv * axis_v.x + du * axis_u.x;
+  y[o] = origin.y + dv * axis_v.y + du * axis_u.y;
+  z[o] = origin.z + dv * axis_v.z + du * axis_u.z;
+}
+
+template <typename T>
+__global__ void expand_lattice_packed_rows_kernel(
+    double3 origin, double3 axis_v, double3 axis_u, double spacing_v,
+    double spacing_u, int64_t num_v, int64_t num_u, int64_t logical_v0,
+    int64_t n_rows, int64_t phys_v0, T* out) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x +
+                    threadIdx.x;
+  const int64_t n = n_rows * num_u;
+  if (i >= n) {
+    return;
+  }
+  const int64_t r = i / num_u;
+  const int64_t iu = i - r * num_u;
+  const int64_t iv = logical_v0 + r;
+  int64_t pv = phys_v0 + r;
+  if (pv >= num_v) {
+    pv -= num_v;
+  }
+  const int64_t o = pv * num_u + iu;
+  const double dv = static_cast<double>(iv) * spacing_v;
+  const double du = static_cast<double>(iu) * spacing_u;
+  out[o * 3 + 0] =
+      static_cast<T>(origin.x + dv * axis_v.x + du * axis_u.x);
+  out[o * 3 + 1] =
+      static_cast<T>(origin.y + dv * axis_v.y + du * axis_u.y);
+  out[o * 3 + 2] =
       static_cast<T>(origin.z + dv * axis_v.z + du * axis_u.z);
 }
 
@@ -455,6 +541,8 @@ void ensure_accum(BackprojectionState<T>& state, int64_t batch,
     state.cached_batch = batch;
     state.cached_num_v = num_v;
     state.cached_num_u = num_u;
+    state.ring_offset = 0;
+    state.launch_row0 = 0;
   }
 }
 
@@ -469,6 +557,8 @@ void reset_accum(BackprojectionState<T>& state, cudaStream_t stream) {
   const int blocks = static_cast<int>((n + threads - 1) / threads);
   zero_float_kernel<<<blocks, threads, 0, stream>>>(
       state.accum.template as<float>(), static_cast<int>(n));
+  state.ring_offset = 0;
+  state.launch_row0 = 0;
 }
 
 inline dim3 lattice_launch(int64_t num_pixels) {
@@ -530,9 +620,106 @@ void expand_geometry_on_device(BackprojectionState<T>& state,
                        stream);
   expand_lattice_planes_kernel<<<grid, kThreads, 0, stream>>>(
       origin, axis_v, axis_u, spacing_v, spacing_u, num_v, num_u,
-      state.x_plane.template as<double>(),
+      state.x_d(),
+      state.y_d(),
+      state.z_d());
+}
+
+template <typename T>
+void expand_geometry_rows(BackprojectionState<T>& state,
+                          const SampleGeometry& geometry, bool packed,
+                          int64_t logical_v0, int64_t n_rows,
+                          int64_t phys_v0, cudaStream_t stream) {
+  const int64_t num_v = geometry.num_v();
+  const int64_t num_u = geometry.num_u();
+  double3 origin{};
+  double3 axis_v{};
+  double3 axis_u{};
+  double spacing_v = 0.0;
+  double spacing_u = 0.0;
+  geometry_to_double3(geometry, &origin, &axis_v, &axis_u, &spacing_v,
+                      &spacing_u);
+  const int64_t pixels = n_rows * num_u;
+  const dim3 grid = lattice_launch(pixels);
+  constexpr int kThreads = 256;
+  if (packed) {
+    expand_lattice_packed_rows_kernel<T><<<grid, kThreads, 0, stream>>>(
+        origin, axis_v, axis_u, spacing_v, spacing_u, num_v, num_u,
+        logical_v0, n_rows, phys_v0,
+        state.lattice_xyz.template as<T>());
+    return;
+  }
+  expand_lattice_plane_rows_kernel<<<grid, kThreads, 0, stream>>>(
+      origin, axis_v, axis_u, spacing_v, spacing_u, num_v, num_u,
+      logical_v0, n_rows, phys_v0, state.x_plane.template as<double>(),
       state.y_plane.template as<double>(),
       state.z_plane.template as<double>());
+}
+
+inline void memset_row_span(void* base, int64_t phys0, int64_t n_rows,
+                            int64_t num_v, int64_t row_bytes,
+                            cudaStream_t stream, const char* who) {
+  if (n_rows <= 0 || row_bytes <= 0) {
+    return;
+  }
+  auto one = [&](int64_t row, int64_t n) {
+    unsigned char* p = static_cast<unsigned char*>(base) +
+                       static_cast<size_t>(row) *
+                           static_cast<size_t>(row_bytes);
+    if (cudaMemsetAsync(p, 0, static_cast<size_t>(n) *
+                                  static_cast<size_t>(row_bytes),
+                        stream) != cudaSuccess) {
+      throw std::runtime_error(std::string(who) + ": row memset");
+    }
+  };
+  if (phys0 + n_rows <= num_v) {
+    one(phys0, n_rows);
+    return;
+  }
+  const int64_t first = num_v - phys0;
+  one(phys0, first);
+  one(0, n_rows - first);
+}
+
+template <typename T>
+void zero_nvradar_rows(BackprojectionState<T>& state, int64_t phys0,
+                       int64_t n_rows, cudaStream_t stream) {
+  const int64_t nv = state.cached_num_v;
+  const int64_t nu = state.cached_num_u;
+  const int64_t batch = state.cached_batch;
+  const int64_t row_bytes =
+      nu * 2 * static_cast<int64_t>(sizeof(float));
+  for (int64_t b = 0; b < batch; ++b) {
+    float* base = state.accum.template as<float>() +
+                  static_cast<size_t>(b) * nv * nu * 2;
+    memset_row_span(base, phys0, n_rows, nv, row_bytes, stream,
+                    "BackprojectionOp");
+  }
+}
+
+template <typename T>
+void copy_entering_xyz(BackprojectionState<T>& state, const T* src,
+                       int64_t k, int64_t num_u, int64_t phys0,
+                       cudaStream_t stream) {
+  const int64_t nv = state.lattice_num_v;
+  const int64_t nu = num_u;
+  T* dst = state.lattice_xyz.template as<T>();
+  auto copy_rows = [&](int64_t drow, int64_t srow, int64_t n) {
+    if (cudaMemcpyAsync(
+            dst + (drow * nu * 3), src + (srow * nu * 3),
+            sizeof(T) * static_cast<size_t>(n * nu * 3),
+            cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
+      throw std::runtime_error(
+          "BackprojectionOp: entering sample_points copy");
+    }
+  };
+  if (phys0 + k <= nv) {
+    copy_rows(phys0, 0, k);
+    return;
+  }
+  const int64_t first = nv - phys0;
+  copy_rows(phys0, 0, first);
+  copy_rows(0, first, k - first);
 }
 
 template <typename T>
@@ -548,8 +735,8 @@ void gather_lattice(BackprojectionState<T>& state, const T* lattice,
   const int blocks =
       static_cast<int>((num_pixels + threads - 1) / threads);
   gather_xyz_kernel<<<blocks, threads, 0, stream>>>(
-      lattice, num_pixels, state.x_plane.template as<double>(),
-      state.y_plane.template as<double>(), state.z_plane.template as<double>());
+      lattice, num_pixels, state.x_d(),
+      state.y_d(), state.z_d());
 }
 
 template <typename T>
@@ -568,19 +755,31 @@ void prepare_pulses(BackprojectionState<T>& state, const T* positions,
 template <typename T>
 void prepare_float_scene(BackprojectionState<T>& state, int64_t num_pixels,
                          int Np, cudaStream_t stream) {
-  auto downcast = [&](DeviceBuffer& src, DeviceBuffer& dst, int n) {
-    dst.ensure(static_cast<size_t>(n) * sizeof(float), stream);
+  const int64_t full = state.lattice_num_v * state.lattice_num_u;
+  const int64_t off = state.launch_row0 * state.lattice_num_u;
+  auto downcast = [&](DeviceBuffer& src, DeviceBuffer& dst, int n,
+                      size_t bytes, int64_t poff) {
+    dst.ensure(bytes, stream);
     const int threads = 256;
     const int blocks = (n + threads - 1) / threads;
     downcast_real_kernel<<<blocks, threads, 0, stream>>>(
-        src.template as<double>(), dst.template as<float>(), n);
+        src.template as<double>() + poff, dst.template as<float>() + poff,
+        n);
   };
-  downcast(state.x_plane, state.x_plane_f, static_cast<int>(num_pixels));
-  downcast(state.y_plane, state.y_plane_f, static_cast<int>(num_pixels));
-  downcast(state.z_plane, state.z_plane_f, static_cast<int>(num_pixels));
-  downcast(state.apc, state.apc_f, Np * 3);
-  downcast(state.mcp, state.mcp_f, Np * 3);
-  downcast(state.r0, state.r0_f, Np);
+  const size_t plane_bytes =
+      static_cast<size_t>(full) * sizeof(float);
+  downcast(state.x_plane, state.x_plane_f, static_cast<int>(num_pixels),
+           plane_bytes, off);
+  downcast(state.y_plane, state.y_plane_f, static_cast<int>(num_pixels),
+           plane_bytes, off);
+  downcast(state.z_plane, state.z_plane_f, static_cast<int>(num_pixels),
+           plane_bytes, off);
+  downcast(state.apc, state.apc_f, Np * 3,
+           static_cast<size_t>(Np * 3) * sizeof(float), 0);
+  downcast(state.mcp, state.mcp_f, Np * 3,
+           static_cast<size_t>(Np * 3) * sizeof(float), 0);
+  downcast(state.r0, state.r0_f, Np,
+           static_cast<size_t>(Np) * sizeof(float), 0);
 }
 
 template <typename T>
@@ -609,12 +808,27 @@ void launch_nvradar(BackprojectionBackend backend,
                     BackprojectionState<T>& state, const void* profiles,
                     int num_v, int num_u, int Np, int Nfft, int batch_index,
                     double rmin, double dr, double pc_partial,
-                    cudaStream_t stream) {
+                    cudaStream_t stream, int row0 = 0, int full_v = -1) {
+  if (full_v < 1) {
+    full_v = num_v;
+  }
+  struct LaunchRowGuard {
+    BackprojectionState<T>& state;
+    explicit LaunchRowGuard(BackprojectionState<T>& s, int64_t row)
+        : state(s) {
+      state.launch_row0 = row;
+    }
+    ~LaunchRowGuard() { state.launch_row0 = 0; }
+  };
+  LaunchRowGuard guard(state, row0);
   const int img_width = num_u;
   const int img_height = num_v;
   const int pixels = num_v * num_u;
   float* simg = state.accum.template as<float>() +
-                static_cast<size_t>(batch_index) * pixels * 2;
+                (static_cast<size_t>(batch_index) *
+                     static_cast<size_t>(full_v) +
+                 static_cast<size_t>(row0)) *
+                    static_cast<size_t>(num_u) * 2;
   const dim3 grid = bp_grid(img_width, img_height);
   const dim3 block = bp_block();
   const int stride = Np;
@@ -639,16 +853,17 @@ void launch_nvradar(BackprojectionBackend backend,
       const int threads = 256;
       const int blocks = (n + threads - 1) / threads;
       upcast_vph_kernel<<<blocks, threads, 0, stream>>>(
-          static_cast<const float*>(profiles), state.vph_cast.template as<double>(),
+          static_cast<const float*>(profiles),
+          state.vph_cast.template as<double>(),
           n);
       vph = state.vph_cast.template as<double>();
     }
     tiles([&](int p0, int n) {
       backprojection_kernel_fp64_ref<<<grid, block, 0, stream>>>(
           0, img_width, img_height, n, stride, rmin, dr, pc_partial, simg,
-          nullptr, state.x_plane.template as<double>(),
-          state.y_plane.template as<double>(),
-          state.z_plane.template as<double>(),
+          nullptr, state.x_d(),
+          state.y_d(),
+          state.z_d(),
           state.apc.template as<double>() + p0,
           state.r0.template as<double>() + p0, vph + p0 * vph_pulse, Nfft);
     });
@@ -664,7 +879,8 @@ void launch_nvradar(BackprojectionBackend backend,
     const int threads = 256;
     const int blocks = (n + threads - 1) / threads;
     downcast_vph_kernel<<<blocks, threads, 0, stream>>>(
-        static_cast<const double*>(profiles), state.vph_cast.template as<float>(),
+        static_cast<const double*>(profiles),
+        state.vph_cast.template as<float>(),
         n);
     return state.vph_cast.template as<float>();
   };
@@ -681,9 +897,9 @@ void launch_nvradar(BackprojectionBackend backend,
       tiles([&](int p0, int n) {
         backprojection_kernel_fp32<<<grid, block, 0, stream>>>(
             0, img_width, img_height, n, stride, rmin_f, dr_inv_f, pc_f,
-            simg, nullptr, state.x_plane_f.template as<float>(),
-            state.y_plane_f.template as<float>(),
-            state.z_plane_f.template as<float>(),
+            simg, nullptr, state.x_f(),
+            state.y_f(),
+            state.z_f(),
             state.apc_f.template as<float>() + p0,
             state.r0_f.template as<float>() + p0, vph + p0 * vph_pulse,
             Nfft);
@@ -694,9 +910,9 @@ void launch_nvradar(BackprojectionBackend backend,
       tiles([&](int p0, int n) {
         backprojection_kernel_fp32_hq<<<grid, block, 0, stream>>>(
             0, img_width, img_height, n, stride, stride, rmin_f, dr_inv_f,
-            pc_f, simg, nullptr, state.x_plane_f.template as<float>(),
-            state.y_plane_f.template as<float>(),
-            state.z_plane_f.template as<float>(),
+            pc_f, simg, nullptr, state.x_f(),
+            state.y_f(),
+            state.z_f(),
             state.apc_f.template as<float>() + p0,
             state.mcp_f.template as<float>() + p0,
             state.r0_f.template as<float>() + p0, vph + p0 * vph_pulse,
@@ -707,9 +923,9 @@ void launch_nvradar(BackprojectionBackend backend,
     tiles([&](int p0, int n) {
       backprojection_kernel_fp32_hq_fast<<<grid, block, 0, stream>>>(
           0, img_width, img_height, n, stride, stride, rmin_f, dr_inv_f,
-          pc_f, simg, nullptr, state.x_plane_f.template as<float>(),
-          state.y_plane_f.template as<float>(),
-          state.z_plane_f.template as<float>(),
+          pc_f, simg, nullptr, state.x_f(),
+          state.y_f(),
+          state.z_f(),
           state.apc_f.template as<float>() + p0,
           state.mcp_f.template as<float>() + p0,
           state.r0_f.template as<float>() + p0, vph + p0 * vph_pulse,
@@ -726,9 +942,9 @@ void launch_nvradar(BackprojectionBackend backend,
           0, img_width, img_height, n, stride, stride,
           static_cast<float>(rmin), static_cast<float>(1.0 / dr),
           static_cast<float>(pc_partial), simg, nullptr,
-          state.x_plane_f.template as<float>(),
-          state.y_plane_f.template as<float>(),
-          state.z_plane_f.template as<float>(),
+          state.x_f(),
+          state.y_f(),
+          state.z_f(),
           state.apc_f.template as<float>() + p0,
           state.mcp_f.template as<float>() + p0,
           state.r0_f.template as<float>() + p0, vph + p0 * vph_pulse,
@@ -749,7 +965,8 @@ void launch_nvradar(BackprojectionBackend backend,
       const int threads = 256;
       const int blocks = (n + threads - 1) / threads;
       downcast_vph_kernel<<<blocks, threads, 0, stream>>>(
-          static_cast<const double*>(profiles), state.vph_cast.template as<float>(),
+          static_cast<const double*>(profiles),
+          state.vph_cast.template as<float>(),
           n);
       vph = state.vph_cast.template as<float>();
     }
@@ -759,9 +976,9 @@ void launch_nvradar(BackprojectionBackend backend,
       backprojection_kernel_fp64_phiwrap_f32mf_f32vph_anchor_taylor_phi32_vphf_drinvd<<<  // NOLINT
           grid, block, 0, stream>>>(
           0, img_width, img_height, n, stride, rmin, dr_inv_d, dr_inv,
-          pc_partial, simg, nullptr, state.x_plane.template as<double>(),
-          state.y_plane.template as<double>(),
-          state.z_plane.template as<double>(),
+          pc_partial, simg, nullptr, state.x_d(),
+          state.y_d(),
+          state.z_d(),
           state.apc.template as<double>() + p0,
           state.r0.template as<double>() + p0, vph + p0 * vph_pulse, Nfft);
     });
@@ -776,9 +993,9 @@ void launch_nvradar(BackprojectionBackend backend,
       backprojection_kernel_fp64_phiwrap_f32mf_f32vph_anchor_taylor_phi32df_dr_cw1nw<<<  // NOLINT
           grid, block, 0, stream>>>(
           0, img_width, img_height, n, stride, rmin, dr, dr_inv, pc_partial,
-          simg, nullptr, state.x_plane.template as<double>(),
-          state.y_plane.template as<double>(),
-          state.z_plane.template as<double>(),
+          simg, nullptr, state.x_d(),
+          state.y_d(),
+          state.z_d(),
           state.apc.template as<double>() + p0,
           state.r0.template as<double>() + p0, vph + p0 * vph_pulse, Nfft);
     });
@@ -798,9 +1015,9 @@ void launch_nvradar(BackprojectionBackend backend,
             grid, block, 0, stream>>>(
             0, img_width, img_height, n, stride, rmin, dr, dr_inv,
             pc_partial, simg, nullptr,
-            state.x_plane.template as<double>(),
-            state.y_plane.template as<double>(),
-            state.z_plane.template as<double>(),
+            state.x_d(),
+            state.y_d(),
+            state.z_d(),
             state.apc.template as<double>() + p0,
             state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
             Nfft);
@@ -811,9 +1028,9 @@ void launch_nvradar(BackprojectionBackend backend,
             grid, block, 0, stream>>>(
             0, img_width, img_height, n, stride, rmin, dr, dr_inv,
             pc_partial, simg, nullptr,
-            state.x_plane.template as<double>(),
-            state.y_plane.template as<double>(),
-            state.z_plane.template as<double>(),
+            state.x_d(),
+            state.y_d(),
+            state.z_d(),
             state.apc.template as<double>() + p0,
             state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
             Nfft);
@@ -831,9 +1048,9 @@ void launch_nvradar(BackprojectionBackend backend,
           0, img_width, img_height, n, stride, stride,
           static_cast<float>(rmin), static_cast<float>(1.0 / dr),
           static_cast<float>(pc_partial), simg, nullptr,
-          state.x_plane_f.template as<float>(),
-          state.y_plane_f.template as<float>(),
-          state.z_plane_f.template as<float>(),
+          state.x_f(),
+          state.y_f(),
+          state.z_f(),
           state.apc.template as<double>() + p0,
           state.mcp.template as<double>() + p0,
           state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
@@ -870,9 +1087,9 @@ void launch_nvradar(BackprojectionBackend backend,
         backprojection_kernel_anchor_taylor_phase_lut<<<grid, block, 0,
                                                         stream>>>(
             0, img_width, img_height, n, stride, rmin, dr_inv_d, dr_inv,
-            pc_dr, simg, nullptr, state.x_plane.template as<double>(),
-            state.y_plane.template as<double>(),
-            state.z_plane.template as<double>(),
+            pc_dr, simg, nullptr, state.x_d(),
+            state.y_d(),
+            state.z_d(),
             state.apc.template as<double>() + p0,
             state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
             lut, Nfft);
@@ -885,9 +1102,9 @@ void launch_nvradar(BackprojectionBackend backend,
         backprojection_kernel_anchor_taylor_quality_phase_lut<<<
             grid, block, 0, stream>>>(
             0, img_width, img_height, n, stride, rmin, dr, dr_inv, pc_dr,
-            simg, nullptr, state.x_plane.template as<double>(),
-            state.y_plane.template as<double>(),
-            state.z_plane.template as<double>(),
+            simg, nullptr, state.x_d(),
+            state.y_d(),
+            state.z_d(),
             state.apc.template as<double>() + p0,
             state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
             lut, Nfft);
@@ -900,9 +1117,9 @@ void launch_nvradar(BackprojectionBackend backend,
         backprojection_kernel_anchor_expanded_throughput_phase_lut<<<
             grid, block, 0, stream>>>(
             0, img_width, img_height, n, stride, rmin, dr, dr_inv, pc_dr,
-            simg, nullptr, state.x_plane.template as<double>(),
-            state.y_plane.template as<double>(),
-            state.z_plane.template as<double>(),
+            simg, nullptr, state.x_d(),
+            state.y_d(),
+            state.z_d(),
             state.apc.template as<double>() + p0,
             state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
             lut, Nfft);
@@ -915,9 +1132,9 @@ void launch_nvradar(BackprojectionBackend backend,
         backprojection_kernel_anchor_expanded_throughput_phase_lut_vec<<<  // NOLINT
             grid, block, 0, stream>>>(
             0, img_width, img_height, n, stride, rmin, dr, dr_inv, pc_dr,
-            simg, nullptr, state.x_plane.template as<double>(),
-            state.y_plane.template as<double>(),
-            state.z_plane.template as<double>(),
+            simg, nullptr, state.x_d(),
+            state.y_d(),
+            state.z_d(),
             state.apc.template as<double>() + p0,
             state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
             lut, Nfft);
@@ -931,9 +1148,9 @@ void launch_nvradar(BackprojectionBackend backend,
         backprojection_kernel_anchor_expanded_throughput_phase_lut_vec_z0<<<  // NOLINT
             grid, block, 0, stream>>>(
             0, img_width, img_height, n, stride, rmin, dr, dr_inv, pc_dr,
-            simg, nullptr, state.x_plane.template as<double>(),
-            state.y_plane.template as<double>(),
-            state.z_plane.template as<double>(),
+            simg, nullptr, state.x_d(),
+            state.y_d(),
+            state.z_d(),
             state.apc.template as<double>() + p0,
             state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
             lut, Nfft);
@@ -946,9 +1163,9 @@ void launch_nvradar(BackprojectionBackend backend,
         backprojection_kernel_anchor_expanded_quality_phase_lut<<<
             grid, block, 0, stream>>>(
             0, img_width, img_height, n, stride, rmin, dr, dr_inv, pc_dr,
-            simg, nullptr, state.x_plane.template as<double>(),
-            state.y_plane.template as<double>(),
-            state.z_plane.template as<double>(),
+            simg, nullptr, state.x_d(),
+            state.y_d(),
+            state.z_d(),
             state.apc.template as<double>() + p0,
             state.r0.template as<double>() + p0, vph + p0 * vph_pulse,
             lut, Nfft);
@@ -962,9 +1179,9 @@ void launch_nvradar(BackprojectionBackend backend,
         backprojection_kernel_hq_block_phase_lut<<<grid, block, 0, stream>>>(
             0, img_width, img_height, n, stride, stride,
             static_cast<float>(rmin), dr_inv, pc_dr, simg, nullptr,
-            state.x_plane_f.template as<float>(),
-            state.y_plane_f.template as<float>(),
-            state.z_plane_f.template as<float>(),
+            state.x_f(),
+            state.y_f(),
+            state.z_f(),
             state.apc_f.template as<float>() + p0,
             state.mcp_f.template as<float>() + p0,
             state.r0_f.template as<float>() + p0, vph + p0 * vph_pulse,
@@ -978,9 +1195,9 @@ void launch_nvradar(BackprojectionBackend backend,
                                                          stream>>>(
           0, img_width, img_height, n, stride, stride,
           static_cast<float>(rmin), dr_inv, pc_dr, simg, nullptr,
-          state.x_plane_f.template as<float>(),
-          state.y_plane_f.template as<float>(),
-          state.z_plane_f.template as<float>(),
+          state.x_f(),
+          state.y_f(),
+          state.z_f(),
           state.apc.template as<double>() + p0,
           state.mcp.template as<double>() + p0,
           state.r0.template as<double>() + p0, vph + p0 * vph_pulse, lut,
@@ -995,13 +1212,48 @@ void launch_nvradar(BackprojectionBackend backend,
 }
 
 template <typename T>
+void launch_nvradar_window(BackprojectionBackend backend,
+                           BackprojectionState<T>& state,
+                           const void* profiles, int num_v, int num_u,
+                           int Np, int Nfft, int batch_index, double rmin,
+                           double dr, double pc_partial, cudaStream_t stream) {
+  const int offset = static_cast<int>(state.ring_offset);
+  if (offset <= 0 || offset >= num_v) {
+    launch_nvradar(backend, state, profiles, num_v, num_u, Np, Nfft,
+                   batch_index, rmin, dr, pc_partial, stream);
+    return;
+  }
+  launch_nvradar(backend, state, profiles, num_v - offset, num_u, Np,
+                 Nfft, batch_index, rmin, dr, pc_partial, stream, offset,
+                 num_v);
+  launch_nvradar(backend, state, profiles, offset, num_u, Np, Nfft,
+                 batch_index, rmin, dr, pc_partial, stream, 0, num_v);
+}
+
+template <typename T>
 void emit_accum(BackprojectionState<T>& state, T* dst, int64_t batch,
                 int64_t num_v, int64_t num_u, cudaStream_t stream) {
-  const int64_t n = batch * num_v * num_u * 2;
   const int threads = 256;
-  const int blocks = static_cast<int>((n + threads - 1) / threads);
-  promote_image_kernel<<<blocks, threads, 0, stream>>>(
-      state.accum.template as<float>(), dst, static_cast<int>(n));
+  auto promote = [&](const float* src, T* out, int64_t n) {
+    const int blocks = static_cast<int>((n + threads - 1) / threads);
+    promote_image_kernel<<<blocks, threads, 0, stream>>>(
+        src, out, static_cast<int>(n));
+  };
+  const int64_t off = state.ring_offset;
+  if (off <= 0 || off >= num_v) {
+    const int64_t n = batch * num_v * num_u * 2;
+    promote(state.accum.template as<float>(), dst, n);
+    return;
+  }
+  const int64_t row = num_u * 2;
+  const int64_t h1 = num_v - off;
+  for (int64_t b = 0; b < batch; ++b) {
+    const float* src = state.accum.template as<float>() +
+                       static_cast<size_t>(b) * num_v * row;
+    T* out = dst + static_cast<size_t>(b) * num_v * row;
+    promote(src + off * row, out, h1 * row);
+    promote(src, out + h1 * row, off * row);
+  }
 }
 
 }  // namespace holoscan::radar::detail
@@ -1072,6 +1324,8 @@ void ensure_matx_accum(BackprojectionState<T>& state, int64_t batch,
     state.cached_batch = batch;
     state.cached_num_v = num_v;
     state.cached_num_u = num_u;
+    state.ring_offset = 0;
+    state.launch_row0 = 0;
   }
 }
 
@@ -1084,6 +1338,8 @@ void reset_matx_accum(BackprojectionState<T>& state, cudaStream_t stream) {
                       stream) != cudaSuccess) {
     throw std::runtime_error("BackprojectionOp: matx accum reset");
   }
+  state.ring_offset = 0;
+  state.launch_row0 = 0;
 }
 
 template <typename T>
@@ -1091,15 +1347,21 @@ void launch_matx(BackprojectionBackend backend,
                  BackprojectionState<T>& state, const void* profiles,
                  const T* positions, const T* lattice, int num_v, int num_u,
                  int Np, int Nfft, int batch_index, double frequency,
-                 double dr, cudaStream_t stream) {
+                 double dr, cudaStream_t stream, int row0 = 0,
+                 int full_v = -1) {
   using C = cuda::std::complex<T>;
   using Vec = std::conditional_t<std::is_same_v<T, float>, float3, double3>;
-  const int pixels = num_v * num_u;
+  if (full_v < 1) {
+    full_v = num_v;
+  }
+  const int pixels_full = full_v * num_u;
   C* img_ptr = state.matx_accum.template as<C>() +
-               static_cast<size_t>(batch_index) * pixels;
+               static_cast<size_t>(batch_index) * pixels_full +
+               static_cast<size_t>(row0) * num_u;
+  const T* lat = lattice + static_cast<size_t>(row0) * num_u * 3;
   auto img = matx::make_tensor<C, 2>(img_ptr, {num_v, num_u});
   auto vox = matx::make_tensor<Vec, 2>(
-      reinterpret_cast<Vec*>(const_cast<T*>(lattice)), {num_v, num_u});
+      reinterpret_cast<Vec*>(const_cast<T*>(lat)), {num_v, num_u});
   const auto params = matx_params(backend, frequency, dr);
   auto* prof_base = static_cast<C*>(const_cast<void*>(profiles));
   auto* pos_base =
@@ -1116,13 +1378,65 @@ void launch_matx(BackprojectionBackend backend,
 }
 
 template <typename T>
+void launch_matx_window(BackprojectionBackend backend,
+                        BackprojectionState<T>& state, const void* profiles,
+                        const T* positions, const T* lattice, int num_v,
+                        int num_u, int Np, int Nfft, int batch_index,
+                        double frequency, double dr, cudaStream_t stream) {
+  const int offset = static_cast<int>(state.ring_offset);
+  if (offset <= 0 || offset >= num_v) {
+    launch_matx(backend, state, profiles, positions, lattice, num_v,
+                num_u, Np, Nfft, batch_index, frequency, dr, stream);
+    return;
+  }
+  launch_matx(backend, state, profiles, positions, lattice,
+              num_v - offset, num_u, Np, Nfft, batch_index, frequency, dr,
+              stream, offset, num_v);
+  launch_matx(backend, state, profiles, positions, lattice, offset,
+              num_u, Np, Nfft, batch_index, frequency, dr, stream, 0,
+              num_v);
+}
+
+template <typename T>
+void zero_matx_rows(BackprojectionState<T>& state, int64_t phys0,
+                    int64_t n_rows, cudaStream_t stream) {
+  using C = cuda::std::complex<T>;
+  const int64_t nv = state.cached_num_v;
+  const int64_t nu = state.cached_num_u;
+  const int64_t batch = state.cached_batch;
+  const int64_t row_bytes = nu * static_cast<int64_t>(sizeof(C));
+  for (int64_t b = 0; b < batch; ++b) {
+    C* base = state.matx_accum.template as<C>() +
+              static_cast<size_t>(b) * nv * nu;
+    memset_row_span(base, phys0, n_rows, nv, row_bytes, stream,
+                    "BackprojectionOp");
+  }
+}
+
+template <typename T>
 void emit_matx_accum(BackprojectionState<T>& state, T* dst, int64_t batch,
                      int64_t num_v, int64_t num_u, cudaStream_t stream) {
-  const size_t bytes = static_cast<size_t>(batch * num_v * num_u) *
-                       sizeof(cuda::std::complex<T>);
-  if (cudaMemcpyAsync(dst, state.matx_accum.ptr, bytes,
-                      cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
-    throw std::runtime_error("BackprojectionOp: matx emit copy");
+  using C = cuda::std::complex<T>;
+  const int64_t off = state.ring_offset;
+  auto copy = [&](const C* src, T* out, int64_t n_complex) {
+    const size_t bytes =
+        static_cast<size_t>(n_complex) * sizeof(C);
+    if (cudaMemcpyAsync(out, src, bytes, cudaMemcpyDeviceToDevice,
+                        stream) != cudaSuccess) {
+      throw std::runtime_error("BackprojectionOp: matx emit copy");
+    }
+  };
+  if (off <= 0 || off >= num_v) {
+    copy(state.matx_accum.template as<C>(), dst, batch * num_v * num_u);
+    return;
+  }
+  const int64_t h1 = num_v - off;
+  for (int64_t b = 0; b < batch; ++b) {
+    const C* src = state.matx_accum.template as<C>() +
+                   static_cast<size_t>(b) * num_v * num_u;
+    T* out = dst + static_cast<size_t>(b) * num_v * num_u * 2;
+    copy(src + off * num_u, out, h1 * num_u);
+    copy(src, out + h1 * num_u * 2, off * num_u);
   }
 }
 #endif  // sar_bp.cuh

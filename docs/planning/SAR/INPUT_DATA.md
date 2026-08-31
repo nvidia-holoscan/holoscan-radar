@@ -36,7 +36,7 @@ All are credential-free: a plain HTTPS or `aws s3 --no-sign-request` pull, no ac
 | 1, spotlight image | Umbra, Hartsfield-Jackson Atlanta — the scene the MatX `sar_bp` example uses | 28.59 GiB | pinned, header verified |
 | 2, video SAR | Umbra, downtown Houston | 110 GiB | pinned, **fully validated** — see below |
 | 3, tiled strip | Capella stripmap, Imperial Valley CA — ~15.77 s dwell, CI4 with `AmpSF` (same file as mode 4) | 3.452 GiB | pinned, header verified 2026-08-30 |
-| 4, continuous strip | Capella stripmap, Imperial Valley CA — same collect as mode 3; scroll YAML later | 3.452 GiB | pinned, header verified 2026-08-30 |
+| 4, continuous strip | Capella stripmap, Imperial Valley CA — same collect as mode 3; `mode04.yaml` scrolls a 4096-row window | 3.452 GiB | pinned, header verified 2026-08-30 |
 | 5, independent images | six unique-IARP Umbra CPHDs (see below). Capella is **not** required | ~10.5 GiB | **settled 2026-08-25** |
 
 The two Capella pins carry weight beyond their modes: they are the only `CI4` collections here, and the only ones with `AmpSF` present, so they are what covers the reader's integer-sample and per-vector-scale paths. They also split CPHD minor version (1.0.1 vs 1.1.0) and are `SGN` +1 with travelling `SRPPos` (`SRPFixed=false`). Both Umbra collections are `CF8` without `AmpSF`, `SGN` −1, frozen SRP.
@@ -161,7 +161,14 @@ The demo pulls the file whole (no subsetter): `python3 applications/sar_formatio
 
 ## Mode 4 — Imperial Valley stripmap (continuous strip)
 
-Same file as mode 3 (pinned so open item 3 closed once; the mode-4 YAML waits on scroll). Formation will set `geometry_change = scroll` on the parent lattice; LUT + Holoviz stay the strip window. No blit — `BP.image` is already the parent.
+Same file as mode 3. `mode04.yaml` sets `geometry_change = scroll` on a
+parent-width window `lattice.max_side` deep along `v` (buffer depth, not
+a coarsening cap). `ScrollMosaicOp` blits each window into the parent so
+Holoviz is the strip (same landscape fit as mode 3). `weight` is
+unconnected (untapered ~−13 dB). `emit_interval_pulses: 256` with
+`pulses_per_tick: 1024` — the app stager slices each reader cube so
+formation sees the interval. Pull: `python3 applications/sar_formation/pull_cphd.py --mode 4
+--dest /tmp/sar/imperial`.
 
 ## Palmdale / Rosamond — optional CPHD 1.0.1 spare
 

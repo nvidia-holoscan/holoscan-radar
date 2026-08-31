@@ -466,19 +466,46 @@ void SarImageToLutOp::compute(
                              stream);
   }
   check_cuda(cudaGetLastError(), "magnitude kernel failed");
-  const bool landscape = num_v > num_u;
+  int64_t disp_u = num_u;
+  if (crop_nu > 0) {
+    if (crop_u0 < 0 || crop_nu < 1 ||
+        crop_u0 + crop_nu > num_u) {
+      throw std::invalid_argument(
+          std::string(who) + ": crop_u [" +
+          std::to_string(crop_u0) + ", " +
+          std::to_string(crop_u0 + crop_nu) +
+          ") is outside image u " + std::to_string(num_u));
+    }
+    auto cropped = radar::make_device_tensor(
+        {num_v, crop_nu}, radar::real_dtype<float>());
+    const size_t dst_pitch =
+        static_cast<size_t>(crop_nu) * sizeof(float);
+    const size_t src_pitch =
+        static_cast<size_t>(num_u) * sizeof(float);
+    const float* src =
+        static_cast<const float*>(mag->data()) + crop_u0;
+    check_cuda(
+        cudaMemcpy2DAsync(
+            cropped->data(), dst_pitch, src, src_pitch, dst_pitch,
+            static_cast<size_t>(num_v), cudaMemcpyDeviceToDevice,
+            stream),
+        "u-crop memcpy failed");
+    mag = cropped;
+    disp_u = crop_nu;
+  }
+  const bool landscape = num_v > disp_u;
   int64_t grid_v = num_v;
-  int64_t grid_u = num_u;
+  int64_t grid_u = disp_u;
   std::shared_ptr<holoscan::Tensor> transposed;
   if (landscape) {
     transposed = radar::make_device_tensor(
-        {num_u, num_v}, radar::real_dtype<float>());
+        {disp_u, num_v}, radar::real_dtype<float>());
     sar_image_transpose(static_cast<float*>(mag->data()),
                         static_cast<float*>(transposed->data()),
-                        num_v, num_u, stream);
+                        num_v, disp_u, stream);
     check_cuda(cudaGetLastError(), "transpose kernel failed");
     mag = transposed;
-    grid_v = num_u;
+    grid_v = disp_u;
     grid_u = num_v;
   }
   const double mag_s = elapsed();
@@ -585,13 +612,14 @@ void SarImageToLutOp::compute(
     lines.push_back(size);
   }
   ++overlay_index;
+  std::string rate_line;
   if (diag.bp_compute_s > 0.0 && diag.pulses > 0 &&
       diag.pixels > 0) {
     const double rate = static_cast<double>(diag.pixels) *
                         static_cast<double>(diag.pulses) /
                         diag.bp_compute_s;
-    std::string rate_line = format_seconds(diag.bp_compute_s) +
-                            "  " + format_sci(rate) + " px*pls/s";
+    rate_line = format_seconds(diag.bp_compute_s) + "  " +
+                format_sci(rate) + " px*pls/s";
     // Mosaic canvas is the LUT input; BP formed a tile. Name the
     // lattice the rate is for so the parent strip is not read
     // as the tile throughput.
@@ -600,20 +628,18 @@ void SarImageToLutOp::compute(
       rate_line = std::to_string(diag.bp_num_v) + "x" +
                   std::to_string(diag.bp_num_u) + "  " + rate_line;
     }
-    lines.push_back(rate_line);
   }
-  if (diag.playback.valid && diag.playback.paced &&
-      std::isfinite(diag.playback.behind_s)) {
-    const double behind = diag.playback.behind_s;
-    std::string lag;
-    if (std::abs(behind) < 0.05) {
-      lag = "on time";
-    } else if (behind > 0.0) {
-      lag = "+" + format_seconds(behind) + " behind";
-    } else {
-      lag = format_seconds(-behind) + " ahead";
-    }
-    lines.push_back(lag);
+  const auto overlay_now = std::chrono::steady_clock::now();
+  if (!rate_line.empty() &&
+      (!have_overlay_rate_ ||
+       std::chrono::duration<double>(overlay_now - overlay_rate_at_)
+               .count() >= 1.0)) {
+    overlay_rate_at_ = overlay_now;
+    have_overlay_rate_ = true;
+    held_rate_line_ = rate_line;
+  }
+  if (!held_rate_line_.empty()) {
+    lines.push_back(held_rate_line_);
   }
   std::optional<double> form_latency;
   if (diag.last_packet_at.has_value()) {
@@ -622,7 +648,12 @@ void SarImageToLutOp::compute(
                        emit_at - *diag.last_packet_at)
                        .count();
   }
-  auto label = overlay_tensor(lines, stream);
+  std::shared_ptr<holoscan::Tensor> label = held_overlay_;
+  if (!held_overlay_ || lines != last_overlay_lines_) {
+    last_overlay_lines_ = lines;
+    held_overlay_ = overlay_tensor(lines, stream);
+    label = held_overlay_;
+  }
   auto look = compass_tensor(diag.apc_valid, diag.compass_east,
                              diag.compass_north, stream);
   check_cuda(cudaStreamSynchronize(stream), "LUT H2D sync failed");
