@@ -13,7 +13,7 @@ if it affects the module, then remove or archive the section here.
 
 ## 1. Graph mid-stream `[live] snapshot_window` coverage
 
-**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”.
+**Blocks checklist:** Tests → “[live] overrides: mid-stream + revert-to-Params”.
 
 **Class:** Test / harness gap. The override wiring itself is settled
 (L16 / L17) — see
@@ -29,8 +29,8 @@ if it affects the module, then remove or archive the section here.
   only statement: an unwired non-trigger `Exact{}` entry compiles under
   `OnAligned` just as under `OnEach` (§11), so there is no
   `expect_snapshot_window` parameter.
-- `sticky_snapshot_window` (default true) latches the last Exact match;
-  false reverts to Params on a miss. `compute()` resolves through
+- A matched override applies to that tick only; a tick with no match uses
+  the Params value. `compute()` resolves through
   `resolve_live_override`.
 - The trigger stays `OnAligned{rd_maps, detection_idx}`; the override rides
   the same activation, so a wired application must stamp the frame's
@@ -38,14 +38,14 @@ if it affects the module, then remove or archive the section here.
 - `perf_snapshot_gather` measures an inline `snapshot_window` POD transition
   with the supported single-clock / exact-contract / single-partition shape.
 
-**Still owed.** `SnapshotGatherOpTest.LiveSnapshotWindowStickyOverride` is
+**Still owed.** `SnapshotGatherOpTest.LiveSnapshotWindowAppliesForOneTick` is
 `GTEST_SKIP`’d — no Graph test drives a mid-stream override here yet (the
 `FMCWRangeProcessorOp` `nfft` Exact tests are the worked example). Params
 authoring covers window selection
 (`SnapshotWindowConfigurableFromParams`, window/edge-mode tests). Edge modes
 (`doppler_edge` / `range_edge`) remain static Params only.
 
-**Status:** open — do not treat the mid-stream/sticky test clause as
+**Status:** open — do not treat the mid-stream / revert-to-Params test clause as
 checklist-complete until a Graph test drives it. Perf override timing is
 restored (§8).
 

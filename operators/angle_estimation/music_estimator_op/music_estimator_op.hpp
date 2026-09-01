@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -90,13 +89,6 @@ struct MUSICParams {
   // Empty → off; [P] ULA; [P_az, P_el] URA.
   std::vector<int64_t> spatial_smoothing{};
   bool forward_backward{true};
-  bool sticky_array_geometry{true};
-  bool sticky_az_angles{true};
-  bool sticky_el_angles{true};
-  bool sticky_spatial_smoothing{true};
-  bool sticky_num_sources{true};
-  bool sticky_source_count_pfa{true};
-  bool sticky_max_sources{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -136,28 +128,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&MUSICParams::forward_backward>("forward_backward")
         .description(
             "Include conjugate-reversed looks when spatial_smoothing is "
-            "set"),
-    holoscan::field<&MUSICParams::sticky_array_geometry>(
-        "sticky_array_geometry")
-        .description(
-            "Keep the last valid Exact array_geometry match on a miss."),
-    holoscan::field<&MUSICParams::sticky_az_angles>("sticky_az_angles")
-        .description(
-            "Keep the last valid Exact az_angles match on a miss."),
-    holoscan::field<&MUSICParams::sticky_el_angles>("sticky_el_angles")
-        .description(
-            "Keep the last valid Exact el_angles match on a miss."),
-    holoscan::field<&MUSICParams::sticky_spatial_smoothing>(
-        "sticky_spatial_smoothing")
-        .description(
-            "Keep the last valid Exact spatial_smoothing match on a miss."),
-    holoscan::field<&MUSICParams::sticky_num_sources>("sticky_num_sources")
-        .description("Keep the last Exact num_sources match on a miss."),
-    holoscan::field<&MUSICParams::sticky_source_count_pfa>(
-        "sticky_source_count_pfa")
-        .description("Keep the last Exact source_count_pfa match on a miss."),
-    holoscan::field<&MUSICParams::sticky_max_sources>("sticky_max_sources")
-        .description("Keep the last Exact max_sources match on a miss."));
+            "set"));
 
 static_assert(holoscan::param_schema_availability<MUSICParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -215,14 +186,6 @@ class MUSICEstimatorOp : public holoscan::Operator<MUSICParams> {
   LatchedOutput doa_multi_out_;
   LatchedOutput source_count_out_;
 
-  // Sticky [live] state stores logical values, never wire-owned storage.
-  std::optional<ArrayGeometry> sticky_array_geometry_;
-  std::optional<std::vector<double>> sticky_az_angles_;
-  std::optional<std::vector<double>> sticky_el_angles_;
-  std::optional<std::vector<int64_t>> sticky_spatial_smoothing_;
-  std::optional<int64_t> sticky_num_sources_;
-  std::optional<double> sticky_source_count_pfa_;
-  std::optional<int64_t> sticky_max_sources_;
   bool warned_rank_deficient_{false};
 
   // Untapered steering manifold a(θ) (num_beams, num_channels), beam el-major

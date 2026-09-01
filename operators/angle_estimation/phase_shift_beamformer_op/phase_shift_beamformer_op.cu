@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -106,20 +107,15 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
   const PhaseShiftBeamformerParams& pinned =
       context.params<PhaseShiftBeamformerParams>();
 
-  auto next_geometry = sticky_array_geometry_;
-  auto next_az = sticky_az_angles_;
-  auto next_el = sticky_el_angles_;
-  auto next_taper = sticky_array_taper_;
   HOLOSCAN_TRY(
       auto geometry,
       resolve_live_override_via(
-          array_geometry, pinned.array_geometry, next_geometry,
-          pinned.sticky_array_geometry,
+          array_geometry, pinned.array_geometry,
           [](const WireArrayGeometry& value) { return from_wire(value); }));
   HOLOSCAN_TRY(
       auto az,
       resolve_live_override_via(
-          az_angles, pinned.az_angles, next_az, pinned.sticky_az_angles,
+          az_angles, pinned.az_angles,
           [&](const Tensor& value) {
             return read_host_config_vector<double>(
                 value, DLDataType{kDLFloat, 64U, 1U}, max_az_,
@@ -128,7 +124,7 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
   HOLOSCAN_TRY(
       auto el,
       resolve_live_override_via(
-          el_angles, pinned.el_angles, next_el, pinned.sticky_el_angles,
+          el_angles, pinned.el_angles,
           [&](const Tensor& value) {
             return read_host_config_vector<double>(
                 value, DLDataType{kDLFloat, 64U, 1U}, max_el_,
@@ -137,8 +133,7 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
   HOLOSCAN_TRY(
       auto taper,
       resolve_live_override_via(
-          array_taper, pinned.array_taper, next_taper,
-          pinned.sticky_array_taper,
+          array_taper, pinned.array_taper,
           [](const WireWindowSpec& value) { return from_wire(value); }));
   const AngleConvention& convention = pinned.angle_convention;
 
@@ -157,11 +152,6 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
-
-  sticky_array_geometry_ = std::move(next_geometry);
-  sticky_az_angles_ = std::move(next_az);
-  sticky_el_angles_ = std::move(next_el);
-  sticky_array_taper_ = std::move(next_taper);
 
   try {
     classify_input_dtype<T>(rd, "rd_maps", /*allow_real=*/false);

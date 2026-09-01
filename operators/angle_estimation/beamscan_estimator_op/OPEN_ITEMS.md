@@ -13,7 +13,7 @@ if it affects the module, then remove or archive the section here.
 
 ## 1. Graph mid-stream `[live] peak_interpolation` coverage
 
-**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”;
+**Blocks checklist:** Tests → “[live] overrides: mid-stream + revert-to-Params”;
 Performance → inline live-override measurement (when Graph-ported).
 
 **Wiring (settled — L16 / L17).** `contract()` unconditionally joins
@@ -21,20 +21,20 @@ Performance → inline live-override measurement (when Graph-ported).
 `Exact{}` and `on_missing SafeDefault{}`, and `compute()` resolves it with
 `resolve_live_override`. The application enables the override by wiring the
 port and disables it by leaving it unwired.
-`sticky_peak_interpolation` (default true) latches the last Exact match;
-false reverts to Params on a miss. The application stamps one transmit
+A matched override applies to that tick only; a tick with no match uses
+the Params value. The application stamps one transmit
 time on both the override and the snapshot — see
 [`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
 **Still open (EA test harness).**
 
-- `BeamscanEstimatorOpTest.LivePeakInterpolationStickyOverride` is
+- `BeamscanEstimatorOpTest.LivePeakInterpolationAppliesForOneTick` is
   `GTEST_SKIP`’d; the descriptor / scan-grid override tests do run
   mid-stream, so the gap is this enum port specifically.
 - Params authoring covers selection
   (`PeakInterpolationConfigurableFromParams`).
 
-**Next.** Add the Graph mid-stream + sticky test, modeled on
+**Next.** Add the Graph mid-stream + revert-to-Params test, modeled on
 `FMCWRangeProcessorOp`’s `nfft` Exact cases.
 
 **Status:** open — test coverage only; the wiring decision is settled.
@@ -58,8 +58,8 @@ array_taper`, and the rank-1 pageable-host float64 config Tensors
 `resolve_live_override_via`, validating the Tensors against `max_az` /
 `max_el` from `MaxTensorExtents`. Logical Params types are unchanged.
 `angle_convention` stays static (Params only) per OPERATOR_API.md. Graph
-coverage: `LiveAzGridStickyOverride`, `LiveElGridStickyOverride`,
-`LiveArrayGeometryStickyOverride`, `LiveArrayTaperStickyOverride`,
+coverage: `LiveAzGridAppliesForOneTick`, `LiveElGridAppliesForOneTick`,
+`LiveArrayGeometryAppliesForOneTick`, `LiveArrayTaperAppliesForOneTick`,
 `LiveOverridesRejectMalformedAndBounds`.
 
 **Still open.** `VirtualArrayAssemblyOp` / `SubarraySelectionOp` emit

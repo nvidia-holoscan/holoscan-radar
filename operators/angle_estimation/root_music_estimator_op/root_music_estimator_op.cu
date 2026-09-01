@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -221,8 +222,8 @@ void RootMUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
   spec.output(eigenvalues)
       .produces_tensor(pooled_tensor_output(
           kDevice, kMaxRank, eig_max_byte_span_));
-  // [live] Exact sticky overrides. Leaving unconnected is legal — compute()
-  // seeds from Params.
+  // [live] Exact overrides. Leaving unconnected is legal — compute() seeds
+  // from Params.
   spec.input(array_geometry).queue_depth(2U);
   spec.input(spatial_smoothing).queue_depth(2U);
   spec.input(num_sources).queue_depth(2U);
@@ -251,11 +252,9 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
   HOLOSCAN_TRY(
       auto geometry,
       resolve_live_override_via(
-          array_geometry, pinned.array_geometry, sticky_array_geometry_,
-          pinned.sticky_array_geometry,
+          array_geometry, pinned.array_geometry,
           [this](const WireArrayGeometry& wire)
-              -> expected<ArrayGeometry,
-          Error> {
+              -> expected<ArrayGeometry, Error> {
             auto converted = from_wire(wire);
             if (!converted) {
               return make_unexpected(std::move(converted).error());
@@ -274,22 +273,18 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
       auto smoothing,
       resolve_live_override_via(
           spatial_smoothing, pinned.spatial_smoothing,
-          sticky_spatial_smoothing_, pinned.sticky_spatial_smoothing,
           [](const SpatialSmoothingOverride& wire) {
             return from_wire(wire);
           }));
   HOLOSCAN_TRY(auto effective_num_sources,
                resolve_live_override(
-                   num_sources, pinned.num_sources, sticky_num_sources_,
-                   pinned.sticky_num_sources));
+                   num_sources, pinned.num_sources));
   HOLOSCAN_TRY(auto effective_pfa,
                resolve_live_override(
-                   source_count_pfa, pinned.source_count_pfa,
-                   sticky_source_count_pfa_, pinned.sticky_source_count_pfa));
+                   source_count_pfa, pinned.source_count_pfa));
   HOLOSCAN_TRY(auto effective_max_sources,
                resolve_live_override(
-                   max_sources, pinned.max_sources, sticky_max_sources_,
-                   pinned.sticky_max_sources));
+                   max_sources, pinned.max_sources));
 
   try {
     geometry.validate();

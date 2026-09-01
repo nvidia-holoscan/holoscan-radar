@@ -43,11 +43,11 @@ PublishedPayloads, so the ports carry `Input<WireArrayGeometry>` (under the
 physical name `array_geometry_in`, §2) and a rank-1 pageable-host int64
 config Tensor. Both join the trigger with `Exact{}` plus `on_missing
 SafeDefault{}` unconditionally, the application enables an override by
-wiring its port, and `sticky_*` (default true) latches the last match — see
+wiring its port, and a matched override applies for that tick only — see
 [`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 The logical Params types are unchanged. Coverage:
 `LiveOverridesRequireExactCaptureTime`,
-`LiveOverridesStayStickyAfterExactMiss`, `EphemeralOverridesRevertToParams`,
+`LiveOverridesRevertToParamsAfterExactMiss`, `LiveOverridesRevertToParamsAfterExactMiss`,
 `RejectsMalformedLivePayloads`, `RejectsLiveSubarrayBeyondCapturedBound`,
 plus `SubarrayConfigurableFromParams` for the Params path.
 

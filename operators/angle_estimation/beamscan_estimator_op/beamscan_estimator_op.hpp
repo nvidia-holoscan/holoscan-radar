@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <type_traits>
 #include <vector>
 
@@ -55,11 +54,6 @@ struct BeamscanParams {
   std::vector<double> el_angles{};
   WindowSpec array_taper{};
   PeakInterpolation peak_interpolation{PeakInterpolation::kNone};
-  bool sticky_array_geometry{true};
-  bool sticky_az_angles{true};
-  bool sticky_el_angles{true};
-  bool sticky_array_taper{true};
-  bool sticky_peak_interpolation{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -85,20 +79,7 @@ HOLOSCAN_PARAM_SCHEMA(
         .description("Amplitude taper across array elements"),
     holoscan::field<&BeamscanParams::peak_interpolation>("peak_interpolation")
         .description(
-            "Sub-grid peak refinement {none, parabolic}"),
-    holoscan::field<&BeamscanParams::sticky_array_geometry>(
-        "sticky_array_geometry")
-        .description("Keep the last Exact array_geometry match on a miss."),
-    holoscan::field<&BeamscanParams::sticky_az_angles>("sticky_az_angles")
-        .description("Keep the last Exact az_angles match on a miss."),
-    holoscan::field<&BeamscanParams::sticky_el_angles>("sticky_el_angles")
-        .description("Keep the last Exact el_angles match on a miss."),
-    holoscan::field<&BeamscanParams::sticky_array_taper>(
-        "sticky_array_taper")
-        .description("Keep the last Exact array_taper match on a miss."),
-    holoscan::field<&BeamscanParams::sticky_peak_interpolation>(
-        "sticky_peak_interpolation")
-        .description("Keep the last Exact peak_interpolation match on a miss."));
+            "Sub-grid peak refinement {none, parabolic}"));
 
 static_assert(holoscan::param_schema_availability<BeamscanParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -141,11 +122,6 @@ class BeamscanEstimatorOp : public holoscan::Operator<BeamscanParams> {
   // device reads cannot outlive the buffers.
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
-  std::optional<ArrayGeometry> sticky_array_geometry_;
-  std::optional<std::vector<double>> sticky_az_angles_;
-  std::optional<std::vector<double>> sticky_el_angles_;
-  std::optional<WindowSpec> sticky_array_taper_;
-  std::optional<PeakInterpolation> sticky_peak_interpolation_;
   // Conjugate-transposed steering weights Wᶜ, built on device, laid
   // out (num_channels, num_beams) with beams el-major. Cached;
   // warn-once on rebuild.

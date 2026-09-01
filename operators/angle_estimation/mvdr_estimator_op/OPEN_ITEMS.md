@@ -17,7 +17,7 @@ Cross-cut SDK / migration detail lives in
 
 ## 1. Graph mid-stream `[live]` POD coverage
 
-**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky” for
+**Blocks checklist:** Tests → “[live] overrides: mid-stream + revert-to-Params” for
 `diagonal_loading` / `max_sources`.
 
 **Wiring (settled — L16 / L17).** `contract()` unconditionally joins
@@ -25,22 +25,22 @@ Cross-cut SDK / migration detail lives in
 data trigger with `Exact{}` and `on_missing SafeDefault{}`; `compute()`
 resolves them with `resolve_live_override`. The application enables an
 override by wiring its port and disables it by leaving it unwired.
-`sticky_*` (default true) latches the last
-Exact match; false reverts to Params on a miss. The application stamps one
+A matched override applies to that tick only; a
+tick with no match uses the Params value. The application stamps one
 transmit time on the override and the snapshot — see
 [`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
 **Still open (EA test harness).**
 
-- `LiveDiagonalLoadingStickyOverride` /
-  `LiveMaxSourcesStickyOverrideReallocates` are `GTEST_SKIP`’d.
+- `LiveDiagonalLoadingAppliesForOneTick` /
+  `LiveMaxSourcesAppliesForOneTickAndReallocates` are `GTEST_SKIP`’d.
 - `perf_mvdr_estimator` measures an inline `diagonal_loading` transition with
   the supported single-clock / exact-contract / single-partition shape.
 - Params authoring covers selection
   (`DiagonalLoadingConfigurableFromParams` /
   `MaxSourcesConfigurableFromParams` / fixed-loading DOA test).
 
-**Next.** Add Graph mid-stream + sticky tests, modeled on
+**Next.** Add Graph mid-stream + revert-to-Params tests, modeled on
 `FMCWRangeProcessorOp`’s `nfft` Exact cases.
 
 **Status:** open — test coverage only; the wiring decision is settled.
@@ -140,7 +140,7 @@ for Python / apps.
 **Blocks checklist:** Tests → most of the suite is red. See *Measured scope*.
 
 **Measured scope (2026-08-27, `holoscan-radar:optports-baseline`).** This is
-much broader than the single sticky-override test this item originally
+much broader than the single live-override test this item originally
 described. Six consecutive runs of the whole `test_mvdr_estimator` binary:
 
 | Test | Runs failed |
@@ -151,7 +151,7 @@ described. Six consecutive runs of the whole `test_mvdr_estimator` binary:
 | `FixedDiagonalLoadingRecoversDoa` | 6/6 |
 | `FloatDoubleAgreeOnDoa` | 5/6 |
 | `MaxSourcesCapacityNanFillsUnusedRows` | 2/6 |
-| `LiveArrayGeometryStickyOverride` | 2/6 |
+| `LiveArrayGeometryAppliesForOneTick` | 2/6 |
 
 **It is process-state contamination, not a wrong algorithm.** Every one of
 those tests passes when run as the only test in its own process
@@ -165,12 +165,12 @@ them as broken DOA math.
 So the defect is that MVDR leaves per-process state behind that corrupts
 later runs in the same process — consistent with the MatX solver-cache /
 cold-path evidence below, and a superset of the original tick-to-tick
-symptom. `LiveArrayGeometryStickyOverride`, the test this item was filed
+symptom. `LiveArrayGeometryAppliesForOneTick`, the test this item was filed
 against, is now among the *least* frequent failures.
 
 Pre-existing and independent of the live-override test work: the committed
 baseline of the test file fails the same five per whole-binary run, and the
-newly added `LiveMaxSourcesStickyOverrideReallocates` passes 8/8 in
+newly added `LiveMaxSourcesAppliesForOneTickAndReallocates` passes 8/8 in
 isolation.
 
 **Symptom.** In a fresh process, feeding the same snapshot twice makes
@@ -182,9 +182,9 @@ one bin over at `7.74`. It is deterministic run to run.
 **Not the live-override path.** A throwaway two-tick test with no override
 port wired reproduces it, and a probe
 showed both ticks resolving the same `ArrayGeometry` and the same steering
-cache key. `LiveArrayGeometryStickyOverride` is the only test that
+cache key. `LiveArrayGeometryAppliesForOneTick` is the only test that
 compares spectra across ticks, which is why it is the one that fails; the
-sticky resolution itself is correct. The test was `GTEST_SKIP`’d before
+override resolution itself is correct. The test was `GTEST_SKIP`’d before
 the live overrides were restored, so this is newly exposed, not new.
 
 **Blast radius is wider than one tick.** It also breaks run-to-run
@@ -194,7 +194,7 @@ the same spectrum as the identical Params δ. Written out, that comparison
 fails 8/8 when it is the first graph run in a fresh process and passes once the
 process is warm — the first run is the wrong one, matching the cold-path
 finding below. The test is therefore left skipped against this item rather than
-against any SDK limitation. `LiveMaxSourcesStickyOverrideReallocates` is
+against any SDK limitation. `LiveMaxSourcesAppliesForOneTickAndReallocates` is
 unaffected and passes 8/8, because `max_sources` is observable in the
 `doa_multi` shape rather than in float values.
 

@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -93,7 +92,6 @@ struct SnapshotGatherParams {
   std::vector<int64_t> snapshot_window{0, 0};
   SnapshotEdgeMode doppler_edge{SnapshotEdgeMode::kWrap};
   SnapshotEdgeMode range_edge{SnapshotEdgeMode::kShift};
-  bool sticky_snapshot_window{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -110,11 +108,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&SnapshotGatherParams::range_edge>("range_edge")
         .description(
             "Neighborhood behavior at the range-axis edges "
-            "{wrap, clamp, shift}"),
-    holoscan::field<&SnapshotGatherParams::sticky_snapshot_window>(
-        "sticky_snapshot_window")
-        .description(
-            "Keep the last Exact snapshot_window match on a miss."));
+            "{wrap, clamp, shift}"));
 
 static_assert(holoscan::param_schema_availability<SnapshotGatherParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -156,8 +150,6 @@ class SnapshotGatherOp : public holoscan::Operator<SnapshotGatherParams> {
   Tensor retained_detection_idx_;
   // Cached device copy of rd_maps leading dims for the batch-linear kernel.
   std::shared_ptr<holoscan::Tensor> retained_leading_dims_;
-  // Sticky [live] snapshot_window: last Exact match holds while sticky_*.
-  std::optional<SnapshotWindowOverride> sticky_snapshot_window_;
 };
 
 extern template class SnapshotGatherOp<float>;

@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -64,8 +63,6 @@ struct SubarraySelectionParams {
   std::vector<int64_t> subarray{};
   // Minimum acceptable auto-selected sub-array size (error below it).
   int64_t min_subarray_size{2};
-  bool sticky_array_geometry{true};
-  bool sticky_subarray{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -83,17 +80,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&SubarraySelectionParams::min_subarray_size>(
         "min_subarray_size")
         .description(
-            "Auto-selection errors below this many channels"),
-    holoscan::field<&SubarraySelectionParams::sticky_array_geometry>(
-        "sticky_array_geometry")
-        .description(
-            "Keep the last Exact array_geometry match on a miss. False reverts "
-            "to Params."),
-    holoscan::field<&SubarraySelectionParams::sticky_subarray>(
-        "sticky_subarray")
-        .description(
-            "Keep the last Exact subarray match on a miss. False reverts to "
-            "Params."));
+            "Auto-selection errors below this many channels"));
 
 static_assert(
     holoscan::param_schema_availability<SubarraySelectionParams>() ==
@@ -141,8 +128,6 @@ class SubarraySelectionOp
   // is_valid_out is optional/latched (OPERATOR_API.md).
   LatchedOutput is_valid_out_;
 
-  std::optional<ArrayGeometry> sticky_array_geometry_;
-  std::optional<std::vector<int64_t>> sticky_subarray_;
 
   // Selection plan + uploaded channel-index table, rebuilt only when the
   // geometry / selection config changes (keyed by sel_key_).

@@ -20,7 +20,7 @@ Cross-cut SDK / migration detail lives in
 
 ## 1. Graph mid-stream `[live]` POD coverage
 
-**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky” for
+**Blocks checklist:** Tests → “[live] overrides: mid-stream + revert-to-Params” for
 `num_sources` / `source_count_pfa` / `max_sources`.
 
 **Wiring (settled — L16 / L17).** `contract()` unconditionally joins
@@ -28,16 +28,15 @@ Cross-cut SDK / migration detail lives in
 `Input<int64_t> max_sources` to the data trigger with `Exact{}` and
 `on_missing SafeDefault{}`; `compute()` resolves them with
 `resolve_live_override`. The application enables an override by wiring its
-port and disables it by leaving it unwired. `sticky_*`
-(default true) latches the last Exact match; false reverts to Params on a
-miss. The application stamps one transmit time on the override and the
+port and disables it by leaving it unwired. A matched override applies to
+that tick only; a tick with no match uses the Params value. The application stamps one transmit time on the override and the
 snapshot — see
 [`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
 **Still open (EA test harness).**
 
-- `LiveNumSourcesStickyOverride` / `LiveSourceCountPfaStickyOverride` /
-  `LiveMaxSourcesStickyOverrideReallocates` are `GTEST_SKIP`’d.
+- `LiveNumSourcesAppliesForOneTick` / `LiveSourceCountPfaAppliesForOneTick` /
+  `LiveMaxSourcesAppliesForOneTickAndReallocates` are `GTEST_SKIP`’d.
 - `perf_music_estimator` measures an inline `max_sources` transition with
   the supported single-clock / exact-contract / single-partition shape.
 - Params authoring covers selection
@@ -45,7 +44,7 @@ snapshot — see
   `SourceCountPfaConfigurableFromParams` /
   `MaxSourcesConfigurableFromParams`).
 
-**Next.** Add Graph mid-stream + sticky tests, modeled on
+**Next.** Add Graph mid-stream + revert-to-Params tests, modeled on
 `FMCWRangeProcessorOp`’s `nfft` Exact cases.
 
 **Status:** open — test coverage only; the wiring decision is settled.
@@ -70,9 +69,9 @@ and the bounded `{count, first, second}` int64 POD
 `Input<SpatialSmoothingOverride> spatial_smoothing`; `compute()` resolves
 each with `resolve_live_override_via`. Logical `MUSICParams` types are
 unchanged. `angle_convention` and `forward_backward` stay Params-only
-(STATIC / not `[live]`). Graph coverage: `LiveAzGridStickyOverride`,
-`LiveElGridStickyOverride`, `LiveArrayGeometryStickyOverride`,
-`LiveSpatialSmoothingStickyOverride`.
+(STATIC / not `[live]`). Graph coverage: `LiveAzGridAppliesForOneTick`,
+`LiveElGridAppliesForOneTick`, `LiveArrayGeometryAppliesForOneTick`,
+`LiveSpatialSmoothingAppliesForOneTick`.
 
 **Still open.** `VirtualArrayAssemblyOp` / `SubarraySelectionOp` emit
 geometry as a packed float64 `(N + 1, 3)` Tensor (§10), not the

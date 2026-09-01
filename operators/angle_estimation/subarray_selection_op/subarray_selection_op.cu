@@ -167,15 +167,14 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
   HOLOSCAN_TRY(
       auto geometry,
       resolve_live_override_via(
-          array_geometry_in, pinned.array_geometry, sticky_array_geometry_,
-          pinned.sticky_array_geometry,
+          array_geometry_in, pinned.array_geometry,
           [](const WireArrayGeometry& value) { return from_wire(value); }));
   const int64_t live_subarray_bound =
       subarray_max_extent_ > 0 ? subarray_max_extent_ : num_channels;
   HOLOSCAN_TRY(
       auto subarray_value,
       resolve_live_override_via(
-          subarray, pinned.subarray, sticky_subarray_, pinned.sticky_subarray,
+          subarray, pinned.subarray,
           [live_subarray_bound](const Tensor& value) {
             return read_host_config_vector<int64_t>(
                 value, DLDataType{kDLInt, 64U, 1U},

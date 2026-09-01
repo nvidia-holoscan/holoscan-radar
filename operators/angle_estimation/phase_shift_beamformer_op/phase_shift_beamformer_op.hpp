@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <type_traits>
 #include <vector>
 
@@ -57,10 +56,6 @@ struct PhaseShiftBeamformerParams {
   std::vector<double> az_angles{};
   std::vector<double> el_angles{};
   WindowSpec array_taper{};
-  bool sticky_array_geometry{true};
-  bool sticky_az_angles{true};
-  bool sticky_el_angles{true};
-  bool sticky_array_taper{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -85,19 +80,7 @@ HOLOSCAN_PARAM_SCHEMA(
             "size-1 yields a 1-D azimuth scan"),
     holoscan::field<&PhaseShiftBeamformerParams::array_taper>("array_taper")
         .description(
-            "Amplitude taper across elements for spatial sidelobe control"),
-    holoscan::field<&PhaseShiftBeamformerParams::sticky_array_geometry>(
-        "sticky_array_geometry")
-        .description("Keep the last Exact array_geometry match on a miss."),
-    holoscan::field<&PhaseShiftBeamformerParams::sticky_az_angles>(
-        "sticky_az_angles")
-        .description("Keep the last Exact az_angles match on a miss."),
-    holoscan::field<&PhaseShiftBeamformerParams::sticky_el_angles>(
-        "sticky_el_angles")
-        .description("Keep the last Exact el_angles match on a miss."),
-    holoscan::field<&PhaseShiftBeamformerParams::sticky_array_taper>(
-        "sticky_array_taper")
-        .description("Keep the last Exact array_taper match on a miss."));
+            "Amplitude taper across elements for spatial sidelobe control"));
 
 static_assert(
     holoscan::param_schema_availability<PhaseShiftBeamformerParams>() ==
@@ -140,10 +123,6 @@ class PhaseShiftBeamformerOp
   // device reads cannot outlive the buffer.
   Tensor retained_input_;
 
-  std::optional<ArrayGeometry> sticky_array_geometry_;
-  std::optional<std::vector<double>> sticky_az_angles_;
-  std::optional<std::vector<double>> sticky_el_angles_;
-  std::optional<WindowSpec> sticky_array_taper_;
 
   // Conjugated steering weights, built on device, laid out
   // (num_beams, num_channels) with the beam axis enumerated az-major

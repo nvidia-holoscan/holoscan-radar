@@ -17,7 +17,7 @@ if it affects the module, then remove or archive the section here.
 Graph-ported). The ports and their mid-stream Graph coverage are in place.
 
 **Contract.** `OPERATOR_API.md` marks `array_geometry`, `az_angles`,
-`el_angles`, and `array_taper` as sticky `[live]`; `angle_convention`
+`el_angles`, and `array_taper` as `[live]`; `angle_convention`
 remains STATIC.
 
 **Ports (settled — L16 / L17 / L18).** `contract()` unconditionally joins
@@ -25,15 +25,15 @@ remains STATIC.
 array_taper`, and the rank-1 pageable-host float64 config Tensors
 `az_angles` / `el_angles` to the data trigger with `Exact{}` +
 `on_missing SafeDefault{}`; the application enables an override by wiring
-the port, and `sticky_*` (default true) latches the last match —
+the port, and a matched override applies for that tick only —
 [`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 `compute()` resolves each with `resolve_live_override_via`, validating the
 Tensors against `max_az` / `max_el` from `MaxTensorExtents`. Logical Params
 types are unchanged; the `ConfigCache` steering rebuild keys on the
 resolved geometry / grid / taper either way.
 
-Graph coverage: `LiveAzGridStickyOverride`, `LiveElGridStickyOverride`,
-`LiveArrayGeometryStickyOverride`, `LiveArrayTaperStickyOverride`,
+Graph coverage: `LiveAzGridAppliesForOneTick`, `LiveElGridAppliesForOneTick`,
+`LiveArrayGeometryAppliesForOneTick`, `LiveArrayTaperAppliesForOneTick`,
 `LiveOverridesRejectMalformedAndBounds`. Params authoring still covers
 selection (`ScanGridConfigurableFromParams`,
 `ArrayTaperConfigurableFromParams`).

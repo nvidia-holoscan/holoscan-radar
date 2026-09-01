@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -131,9 +132,9 @@ void SnapshotGatherOp<T>::setup(OperatorSpec& spec) {
   spec.output(is_valid)
       .produces_tensor(pooled_tensor_output(
           kDevice, snapshot_max_rank_, is_valid_max_byte_span_));
-  // [live] snapshot_window override port. Wired graphs may push window
-  // samples; the operator caches the last value (sticky). Leaving the port
-  // unconnected is legal — compute() seeds from Params.
+  // [live] snapshot_window override port. A matched sample applies to that
+  // tick only; leaving the port unconnected is legal — compute() seeds from
+  // Params.
   spec.input(snapshot_window).queue_depth(2U);
 }
 
@@ -157,8 +158,8 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
 
   const SnapshotGatherParams& pinned =
       context.params<SnapshotGatherParams>();
-  // Normalize Params vector (empty→{0,0}, size1→isotropic) into the POD seed
-  // for sticky resolve. Live samples arrive as SnapshotWindowOverride.
+  // Normalize the Params vector (empty→{0,0}, size1→isotropic) into the POD
+  // seed. Live samples arrive as SnapshotWindowOverride.
   SnapshotWindowOverride window_seed;
   try {
     const auto seeded = normalize_snapshot_window(pinned.snapshot_window);
@@ -166,12 +167,9 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
-  // Best-effort sticky override: if the port is wired and a sample is waiting,
-  // absorb it; otherwise keep sticky / fall back to Params.
+  // Absorb a matched sample if one is waiting; otherwise use the seed.
   HOLOSCAN_TRY(auto window_pod,
-               resolve_live_override(snapshot_window, window_seed,
-                                     sticky_snapshot_window_,
-                                     pinned.sticky_snapshot_window));
+               resolve_live_override(snapshot_window, window_seed));
 
   std::vector<int64_t> effective_window;
   try {

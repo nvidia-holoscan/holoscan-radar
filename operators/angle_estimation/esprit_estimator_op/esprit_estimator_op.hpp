@@ -73,11 +73,6 @@ struct ESPRITParams {
   bool forward_backward{true};
   // Static structural; empty vectors = auto.
   ShiftInvariantSubarrayPair subarray_spec{};
-  bool sticky_array_geometry{true};
-  bool sticky_spatial_smoothing{true};
-  bool sticky_num_sources{true};
-  bool sticky_source_count_pfa{true};
-  bool sticky_max_sources{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -109,20 +104,7 @@ HOLOSCAN_PARAM_SCHEMA(
             "Include conjugate-reversed looks when spatial_smoothing is set"),
     holoscan::field<&ESPRITParams::subarray_spec>("subarray_spec")
         .description(
-            "Shift-invariant subarray pair; empty derives ULA/URA auto"),
-    holoscan::field<&ESPRITParams::sticky_array_geometry>(
-        "sticky_array_geometry")
-        .description("Keep the last Exact array_geometry match on a miss."),
-    holoscan::field<&ESPRITParams::sticky_spatial_smoothing>(
-        "sticky_spatial_smoothing")
-        .description("Keep the last Exact spatial_smoothing match on a miss."),
-    holoscan::field<&ESPRITParams::sticky_num_sources>("sticky_num_sources")
-        .description("Keep the last Exact num_sources match on a miss."),
-    holoscan::field<&ESPRITParams::sticky_source_count_pfa>(
-        "sticky_source_count_pfa")
-        .description("Keep the last Exact source_count_pfa match on a miss."),
-    holoscan::field<&ESPRITParams::sticky_max_sources>("sticky_max_sources")
-        .description("Keep the last Exact max_sources match on a miss."));
+            "Shift-invariant subarray pair; empty derives ULA/URA auto"));
 
 static_assert(holoscan::param_schema_availability<ESPRITParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -169,11 +151,6 @@ class ESPRITEstimatorOp : public holoscan::Operator<ESPRITParams> {
 
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
-  std::optional<ArrayGeometry> sticky_array_geometry_;
-  std::optional<std::vector<int64_t>> sticky_spatial_smoothing_;
-  std::optional<int64_t> sticky_num_sources_;
-  std::optional<double> sticky_source_count_pfa_;
-  std::optional<int64_t> sticky_max_sources_;
 
   bool warned_rank_deficient_{false};
   detail::DeviceAngleConvention<T> device_angle_convention_{};

@@ -38,7 +38,7 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
 ## Implementation status
 
 - **`SnapshotGatherOp` (checklist-complete — dpc):** RD-neighborhood gather for the sparse
-  angle path; sticky `[live] snapshot_window`; static `doppler_edge` /
+  angle path; `[live] snapshot_window`; static `doppler_edge` /
   `range_edge`; float/double complex `rd_maps`; unit tests (edge modes, batch
   dims, error paths, live override); `performance/cpp/perf_snapshot_gather.cpp`
   characterizes gather cost + the `[live] snapshot_window` override spike.
@@ -46,7 +46,7 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   `detection_mask` (settled — STATUS.md L1).
 - **`BeamscanEstimatorOp` (checklist-complete — dpc):** conventional sparse-path
   Bartlett DOA on a scan grid; lands `ArrayGeometry` + `AngleConvention`
-  descriptors in `operators/common/`; sticky `[live]` overrides for geometry,
+  descriptors in `operators/common/`; `[live]` overrides for geometry,
   scan grid, taper, and peak interpolation; float/double; unit tests (2-D DOA
   recovery on a planar URA, 3-D single-look input, direction-cosine masking,
   error paths, live `az_angles` override); `performance/cpp/perf_beamscan_estimator.cpp`
@@ -73,7 +73,7 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   `eigenvalues` output
   (ascending spectrum of the raw covariance via batched `matx::eig`). Reuses the
   untapered `build_steering_weights_device` manifold and the `ArrayGeometry` /
-  `AngleConvention` machinery from Beamscan; sticky `[live]` overrides for
+  `AngleConvention` machinery from Beamscan; `[live]` overrides for
   geometry, scan grid, `diagonal_loading`, and `max_sources`; static
   `angle_convention`; float/double; the four estimator-specific outputs carry
   `kNone` so a consumer wanting only `aoa_estimates` leaves them unwired. Unit
@@ -156,7 +156,7 @@ detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
   Range-Doppler-Angle cube CFAR detects on directly (the *only* dense
   estimator — a dense MVDR/MUSIC cube is prohibitive). Reuses the
   `ArrayGeometry` / `AngleConvention` / `array_taper` steering machinery from
-  Beamscan (one broadcast complex GEMM per tick); sticky `[live]` overrides for
+  Beamscan (one broadcast complex GEMM per tick); `[live]` overrides for
   geometry, scan grid, and taper; static `angle_convention`; float/double;
   rank-agnostic leading batch dims; unit tests (dense DOA-bin recovery,
   convention relabeling + direction-cosine masking, taper sidelobes, batch,
