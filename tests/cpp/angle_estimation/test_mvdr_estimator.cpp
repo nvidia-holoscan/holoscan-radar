@@ -1125,7 +1125,7 @@ TEST(MVDREstimatorOpTest, AllInvalidMaskBlanksDoaAndSpectrum) {
                   "(HSDK5_PORT.md §1 / OPEN_ITEMS.md)";
 }
 
-TEST(MVDREstimatorOpTest, LiveAzGridStickyOverride) {
+TEST(MVDREstimatorOpTest, LiveAzGridAppliesForOneTick) {
   constexpr int64_t kN = 4;
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
@@ -1133,7 +1133,6 @@ TEST(MVDREstimatorOpTest, LiveAzGridStickyOverride) {
   const auto block = make_block(geom, conv, 0.0, 0.0, 8, 0.02, 301u);
   auto snap = block_to_device<double>(block, {1, kN, 8});
   MVDRParams params = make_params(geom, conv, {-0.2, 0.2}, {0.0});
-  params.sticky_az_angles = true;
 
   const FiveOutGraphRunResult result = run_live_mvdr(
       {{snap, std::nullopt, std::vector<double>{-0.1, 0.0, 0.1},
@@ -1147,8 +1146,10 @@ TEST(MVDREstimatorOpTest, LiveAzGridStickyOverride) {
   ASSERT_EQ(result.frames1.size(), 2U);
   EXPECT_EQ(result.frames1[0].shape,
             (std::vector<int64_t>{1, 3, 1}));
+  // Tick 1's override is skewed, so it misses Exact and the grid is the
+  // two-angle Params az again.
   EXPECT_EQ(result.frames1[1].shape,
-            (std::vector<int64_t>{1, 3, 1}));
+            (std::vector<int64_t>{1, 2, 1}));
 }
 
 // Blocked by the cold-run divergence in OPEN_ITEMS.md item 6, not by the SDK.
@@ -1157,15 +1158,15 @@ TEST(MVDREstimatorOpTest, LiveAzGridStickyOverride) {
 // later ones on identical input. Written and measured: comparing an override
 // delta against the identical Params delta fails 8/8 as the first run in a
 // fresh process and passes once the process is warm. Unskip with item 6.
-TEST(MVDREstimatorOpTest, LiveDiagonalLoadingStickyOverride) {
+TEST(MVDREstimatorOpTest, LiveDiagonalLoadingAppliesForOneTick) {
   GTEST_SKIP() << "MVDR cold-run divergence (OPEN_ITEMS.md item 6): a "
                   "value-comparison override test is not yet trustworthy";
 }
 
 // max_sources widens doa_multi to {items, max_sources, 2}, so the override is
-// observable in the shape alone -- and the sticky latch is too, which is why
-// this one can span ticks where the diagonal_loading test cannot.
-TEST(MVDREstimatorOpTest, LiveMaxSourcesStickyOverrideReallocates) {
+// observable in the shape alone, which is why this one can span ticks where
+// the diagonal_loading test cannot.
+TEST(MVDREstimatorOpTest, LiveMaxSourcesAppliesForOneTickAndReallocates) {
   constexpr int64_t kN = 4;
   constexpr int64_t kLiveMaxSources = 3;
   AngleConvention conv;
@@ -1177,9 +1178,8 @@ TEST(MVDREstimatorOpTest, LiveMaxSourcesStickyOverrideReallocates) {
   MVDRParams params =
       make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0});
   params.max_sources = 1;
-  params.sticky_max_sources = true;
 
-  // Tick 2 sends nothing: sticky must hold the widened allocation.
+  // Tick 1 sends nothing, so the allocation narrows back to the Params cap.
   const FiveOutGraphRunResult result = run_live_mvdr(
       {{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
         std::nullopt, kLiveMaxSources},
@@ -1192,11 +1192,10 @@ TEST(MVDREstimatorOpTest, LiveMaxSourcesStickyOverrideReallocates) {
   ASSERT_EQ(result.frames2.size(), 2U);
   EXPECT_EQ(result.frames2[0].shape,
             (std::vector<int64_t>{1, kLiveMaxSources, 2}));
-  EXPECT_EQ(result.frames2[1].shape,
-            (std::vector<int64_t>{1, kLiveMaxSources, 2}));
+  EXPECT_EQ(result.frames2[1].shape, (std::vector<int64_t>{1, 1, 2}));
 }
 
-TEST(MVDREstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
+TEST(MVDREstimatorOpTest, LiveSpatialSmoothingAppliesForOneTick) {
   constexpr int64_t kN = 8;
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
@@ -1205,19 +1204,21 @@ TEST(MVDREstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
   auto snap = block_to_device<double>(block, {1, kN, 16});
   MVDRParams params =
       make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0});
-  params.sticky_spatial_smoothing = true;
 
   const FiveOutGraphRunResult result = run_live_mvdr(
-      {{snap, std::nullopt, std::nullopt, std::nullopt,
+      {{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0},
+       {snap, std::nullopt, std::nullopt, std::nullopt,
          SpatialSmoothingOverride{.count = 1, .first = 3}, 0},
        {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0}},
       std::move(params), {.smoothing = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames4.size(), 2U);
-  EXPECT_EQ(result.frames4[0].shape, (std::vector<int64_t>{1, 6}));
-  EXPECT_EQ(result.frames4[1].shape, (std::vector<int64_t>{1, 6}));
+  ASSERT_EQ(result.frames4.size(), 3U);
+  // Smoothing changes the covariance order, so the eigenvalue count is the
+  // observable. Ticks 0 and 2 publish nothing and share the Params order.
+  EXPECT_NE(result.frames4[1].shape, result.frames4[0].shape);
+  EXPECT_EQ(result.frames4[2].shape, result.frames4[0].shape);
 }
 
 TEST(MVDREstimatorOpTest, LiveSpatialSmoothingRejectsMalformedPod) {

@@ -615,8 +615,6 @@ TEST(SubarraySelectionOpTest, LiveOverridesRequireExactCaptureTime) {
     changed.element_positions[static_cast<size_t>(i * 3 + 1)] += 10.0;
   }
   SubarraySelectionParams params = make_params(base, {0, 1});
-  params.sticky_array_geometry = false;
-  params.sticky_subarray = false;
   const DualIOGraphRunResult out = run_live_subarray_graph(
       {{make_snapshot(1, 8, 2), changed, host_subarray({2, 3, 4})},
        {make_snapshot(1, 8, 2), changed, host_subarray({2, 3, 4}),
@@ -635,37 +633,13 @@ TEST(SubarraySelectionOpTest, LiveOverridesRequireExactCaptureTime) {
             (std::set<double>{0.0, 0.5}));
 }
 
-TEST(SubarraySelectionOpTest, LiveOverridesStayStickyAfterExactMiss) {
-  const auto base = make_linear({0, 1, 2, 3, 4, 5, 6, 7});
-  auto changed = base;
-  for (int64_t i = 0; i < changed.num_elements(); ++i) {
-    changed.element_positions[static_cast<size_t>(i * 3 + 1)] += 20.0;
-  }
-  SubarraySelectionParams params = make_params(base, {0, 1});
-  const DualIOGraphRunResult out = run_live_subarray_graph(
-      {{make_snapshot(1, 8, 2), changed, host_subarray({3, 4, 5})},
-       {make_snapshot(1, 8, 2), std::nullopt, nullptr}},
-      std::move(params), {.geometry = true, .subarray = true});
-
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames0.size(), 2U);
-  ASSERT_EQ(out.frames1.size(), 2U);
-  expect_channels(out.frames0[0], {3, 4, 5}, 2);
-  expect_channels(out.frames0[1], {3, 4, 5}, 2);
-  EXPECT_EQ(y_set(unpack_output_geometry(out.frames1[0])),
-            y_set(unpack_output_geometry(out.frames1[1])));
-}
-
-TEST(SubarraySelectionOpTest, EphemeralOverridesRevertToParams) {
+TEST(SubarraySelectionOpTest, LiveOverridesRevertToParamsAfterExactMiss) {
   const auto base = make_linear({0, 1, 2, 3, 4, 5, 6, 7});
   auto changed = base;
   for (int64_t i = 0; i < changed.num_elements(); ++i) {
     changed.element_positions[static_cast<size_t>(i * 3 + 1)] += 30.0;
   }
   SubarraySelectionParams params = make_params(base, {0, 1});
-  params.sticky_array_geometry = false;
-  params.sticky_subarray = false;
   const DualIOGraphRunResult out = run_live_subarray_graph(
       {{make_snapshot(1, 8, 2), changed, host_subarray({4, 5, 6})},
        {make_snapshot(1, 8, 2), std::nullopt, nullptr}},

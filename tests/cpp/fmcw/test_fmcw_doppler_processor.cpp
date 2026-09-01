@@ -4,7 +4,7 @@
 // Tests for FMCWDopplerProcessorOp (HSDK 5 Graph harness):
 // Doppler-peak recovery, fftshift, Hann window, nfft interpolation,
 // batch-axis handling, float/double agreement, conditional velocity_bins
-// output, mid-stream sticky [live] overrides (doppler_window / waveform /
+// output, mid-stream [live] overrides (doppler_window / waveform /
 // center_zero_doppler), and error paths.
 
 #include <gtest/gtest.h>
@@ -779,58 +779,35 @@ TEST(FMCWDopplerProcessorOpTest,
     return int64_t{-1};
   };
 
-  FMCWDopplerProcessorParams latching;
-  latching.waveform = waveform;
-  latching.center_zero_doppler = false;
-  latching.sticky_center_zero_doppler = true;
-  const DualIOGraphRunResult latched =
+  FMCWDopplerProcessorParams params;
+  params.waveform = waveform;
+  params.center_zero_doppler = false;
+  const DualIOGraphRunResult out =
       run_doppler_descriptor_override_graph(
           {{frame(), std::nullopt, std::nullopt, std::nullopt},
            {frame(), std::nullopt, std::nullopt, true},
            {frame(), std::nullopt, std::nullopt, std::nullopt}},
-          std::move(latching));
+          std::move(params));
 
-  ASSERT_TRUE(latched.plan_ok) << latched.plan_json;
-  ASSERT_TRUE(latched.diagnostics.empty());
-  ASSERT_EQ(latched.frames0.size(), 3u);
-  ASSERT_EQ(latched.frames1.size(), 3u);
-  // Tick 0 misses → Params (uncentered). Tick 1 matches Exact. Tick 2 misses
-  // but sticky_center_zero_doppler holds the centered layout.
-  EXPECT_EQ(doppler_argmax<float>(latched.frames0[0], 0, num_chirps,
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames0.size(), 3u);
+  ASSERT_EQ(out.frames1.size(), 3u);
+  // Tick 0 misses → Params (uncentered). Tick 1 matches Exact and centers.
+  // Tick 2 misses again, so it is uncentered like tick 0: the override
+  // applied to its own tick and nothing carried it forward.
+  EXPECT_EQ(doppler_argmax<float>(out.frames0[0], 0, num_chirps,
                                   num_bins, range_bin),
             0);
-  EXPECT_EQ(doppler_argmax<float>(latched.frames0[1], 0, num_chirps,
+  EXPECT_EQ(doppler_argmax<float>(out.frames0[1], 0, num_chirps,
                                   num_bins, range_bin),
             centered_bin);
-  EXPECT_EQ(doppler_argmax<float>(latched.frames0[2], 0, num_chirps,
-                                  num_bins, range_bin),
-            centered_bin);
-  EXPECT_EQ(zero_velocity_bin(latched.frames1[0]), 0);
-  EXPECT_EQ(zero_velocity_bin(latched.frames1[1]), centered_bin);
-  EXPECT_EQ(zero_velocity_bin(latched.frames1[2]), centered_bin);
-
-  FMCWDopplerProcessorParams ephemeral;
-  ephemeral.waveform = waveform;
-  ephemeral.center_zero_doppler = false;
-  ephemeral.sticky_center_zero_doppler = false;
-  const DualIOGraphRunResult reverted =
-      run_doppler_descriptor_override_graph(
-          {{frame(), std::nullopt, std::nullopt, true},
-           {frame(), std::nullopt, std::nullopt, std::nullopt}},
-          std::move(ephemeral));
-
-  ASSERT_TRUE(reverted.plan_ok) << reverted.plan_json;
-  ASSERT_TRUE(reverted.diagnostics.empty());
-  ASSERT_EQ(reverted.frames0.size(), 2u);
-  ASSERT_EQ(reverted.frames1.size(), 2u);
-  EXPECT_EQ(doppler_argmax<float>(reverted.frames0[0], 0, num_chirps,
-                                  num_bins, range_bin),
-            centered_bin);
-  EXPECT_EQ(doppler_argmax<float>(reverted.frames0[1], 0, num_chirps,
+  EXPECT_EQ(doppler_argmax<float>(out.frames0[2], 0, num_chirps,
                                   num_bins, range_bin),
             0);
-  EXPECT_EQ(zero_velocity_bin(reverted.frames1[0]), centered_bin);
-  EXPECT_EQ(zero_velocity_bin(reverted.frames1[1]), 0);
+  EXPECT_EQ(zero_velocity_bin(out.frames1[0]), 0);
+  EXPECT_EQ(zero_velocity_bin(out.frames1[1]), centered_bin);
+  EXPECT_EQ(zero_velocity_bin(out.frames1[2]), 0);
 }
 
 TEST(FMCWDopplerProcessorOpTest, LiveOverrideDopplerWindow) {
@@ -872,15 +849,16 @@ TEST(FMCWDopplerProcessorOpTest, LiveOverrideDopplerWindow) {
   const double changed_sidelobe = max_doppler_sidelobe(
       out.frames0[1], num_chirps, num_bins, range_bin);
   EXPECT_LT(changed_sidelobe, 0.4 * base_sidelobe);
+  // Tick 2 publishes neither port, so both revert to their Params values.
   EXPECT_EQ(max_doppler_sidelobe(
                 out.frames0[2], num_chirps, num_bins, range_bin),
-            changed_sidelobe);
+            base_sidelobe);
   const auto base_axis = velocity_axis_of<float>(out.frames1[0]);
   const auto changed_axis = velocity_axis_of<float>(out.frames1[1]);
-  const auto sticky_axis = velocity_axis_of<float>(out.frames1[2]);
+  const auto reverted_axis = velocity_axis_of<float>(out.frames1[2]);
   EXPECT_NEAR(changed_axis[1] - changed_axis[0],
               2.0 * (base_axis[1] - base_axis[0]), 1e-5);
-  EXPECT_EQ(changed_axis, sticky_axis);
+  EXPECT_EQ(base_axis, reverted_axis);
 }
 
 TEST(FMCWDopplerProcessorOpTest, VelocityBinsOnlyEmittedWithWaveform) {

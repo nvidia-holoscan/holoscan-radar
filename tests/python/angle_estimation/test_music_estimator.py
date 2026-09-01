@@ -496,7 +496,7 @@ def test_DeterministicAcrossRuns():
         np.testing.assert_array_equal(first[port], second[port])
 
 
-def test_LiveNumSourcesStickyOverride():
+def test_LiveNumSourcesOverrideAppliesPerTick():
     k_n, k_s = 12, 128
     conv = radar_boresight_convention()
     geom = make_ula_geometry(k_n, 0.5, 1.0)
@@ -771,7 +771,7 @@ def test_SpatialSmoothingForwardOnlyReducesEigenvalueChannels():
 # --- Live overrides ---------------------------------------------------------
 
 
-def test_LiveSourceCountPfaStickyOverride():
+def test_LiveSourceCountPfaOverrideAppliesPerTick():
     k_n = k_s = 6
     eigenvalues = np.asarray(
         [0.8930540251, 0.9468277841, 1.3517214181, 1.6732266229, 9.0798471606, 14.3477610683]
@@ -809,10 +809,11 @@ def test_LiveSourceCountPfaStickyOverride():
     tight = float(np.max(outs["angle_spectrum"][0]))
     loose = float(np.max(outs["angle_spectrum"][1]))
     assert tight != loose
-    np.testing.assert_array_equal(outs["angle_spectrum"][1], outs["angle_spectrum"][2])
+    # Tick 2 reverts to the Params Pfa of 1e-4, as on tick 0.
+    np.testing.assert_array_equal(outs["angle_spectrum"][2], outs["angle_spectrum"][0])
 
 
-def test_LiveSpatialSmoothingStickyOverride():
+def test_LiveSpatialSmoothingOverrideAppliesPerTick():
     k_n, k_s = 8, 32
     conv = radar_boresight_convention()
     geom = make_ula_geometry(k_n, 0.5, 1.0)
@@ -843,10 +844,11 @@ def test_LiveSpatialSmoothingStickyOverride():
     assert len(outs["eigenvalues"]) == 3
     assert outs["eigenvalues"][0].shape == (1, k_n)
     assert outs["eigenvalues"][1].shape == (1, k_n - 1)
-    assert outs["eigenvalues"][2].shape == outs["eigenvalues"][1].shape
+    # Tick 2 reverts to the Params smoothing (off), as on tick 0.
+    assert outs["eigenvalues"][2].shape == (1, k_n)
 
 
-def test_LiveAzGridStickyOverride():
+def test_LiveAzGridOverrideAppliesPerTick():
     k_n, k_s = 4, 16
     conv = radar_boresight_convention()
     geom = make_ula_geometry(k_n, 0.5, 1.0)
@@ -878,7 +880,7 @@ def test_LiveAzGridStickyOverride():
     assert outs["angle_spectrum"][1].shape[1] == 11
 
 
-def test_LiveElGridStickyOverride():
+def test_LiveElGridOverrideAppliesPerTick():
     k_ny, k_nz, k_s = 4, 4, 48
     truth_el = 0.06
     conv = radar_boresight_convention()
@@ -911,7 +913,7 @@ def test_LiveElGridStickyOverride():
     assert outs["angle_spectrum"][1].shape == (1, 31, 11)
 
 
-def test_LiveArrayGeometryStickyOverride():
+def test_LiveArrayGeometryOverrideAppliesPerTick():
     k_n, k_s = 4, 16
     conv = radar_boresight_convention()
     geom_a = make_ula_geometry(k_n, 0.5, 1.0)
@@ -946,7 +948,7 @@ def test_LiveArrayGeometryStickyOverride():
     np.testing.assert_array_equal(outs["angle_spectrum"][0], outs["angle_spectrum"][2])
 
 
-def test_LiveMaxSourcesStickyOverrideReallocates():
+def test_LiveMaxSourcesOverrideReallocatesPerTick():
     k_n, k_s = 12, 128
     conv = radar_boresight_convention()
     geom = make_ula_geometry(k_n, 0.5, 1.0)

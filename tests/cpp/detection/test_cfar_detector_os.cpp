@@ -501,25 +501,25 @@ TEST(CFARDetectorOpOsTest, NoiseEstimateMatchesOrderStatistic) {
 }
 
 TEST(CFARDetectorOpOsTest,
-     LiveThresholdScaleOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream sticky live "
+     LiveThresholdScaleOverrideMidStream) {
+  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live "
                   "harness deferred (HSDK5_PORT.md §1)";
 }
 
-TEST(CFARDetectorOpOsTest, LivePfaOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream sticky live "
-                  "harness deferred (HSDK5_PORT.md §1)";
-}
-
-TEST(CFARDetectorOpOsTest,
-     LiveMaxDetectionsOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream sticky live "
+TEST(CFARDetectorOpOsTest, LivePfaOverrideMidStream) {
+  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live "
                   "harness deferred (HSDK5_PORT.md §1)";
 }
 
 TEST(CFARDetectorOpOsTest,
-     LiveOsRankOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream sticky live "
+     LiveMaxDetectionsOverrideMidStream) {
+  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live "
+                  "harness deferred (HSDK5_PORT.md §1)";
+}
+
+TEST(CFARDetectorOpOsTest,
+     LiveOsRankOverrideMidStream) {
+  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live "
                   "harness deferred (HSDK5_PORT.md §1)";
 }
 

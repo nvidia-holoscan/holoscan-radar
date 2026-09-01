@@ -679,7 +679,7 @@ LiveBeamscanTick make_interp_tick(
   return tick;
 }
 
-TEST(BeamscanEstimatorOpTest, LivePeakInterpolationStickyOverride) {
+TEST(BeamscanEstimatorOpTest, LivePeakInterpolationAppliesForOneTick) {
   constexpr int64_t kN = 8;
   constexpr double kTruthAz = 0.17;
 
@@ -702,14 +702,15 @@ TEST(BeamscanEstimatorOpTest, LivePeakInterpolationStickyOverride) {
   ASSERT_EQ(out.frames0.size(), 3U);
   const double params_az = out.frames0[0].as<double>()[0];
   const double override_az = out.frames0[1].as<double>()[0];
-  const double sticky_az = out.frames0[2].as<double>()[0];
+  const double reverted_az = out.frames0[2].as<double>()[0];
   EXPECT_NEAR(params_az, 0.16, 1e-6);
   EXPECT_NEAR(override_az, kTruthAz, 0.02);
   EXPECT_GT(std::abs(override_az - params_az), 5e-3);
-  EXPECT_EQ(sticky_az, override_az);
+  // The third tick publishes nothing, so it is back on Params `none`.
+  EXPECT_EQ(reverted_az, params_az);
 }
 
-TEST(BeamscanEstimatorOpTest, LiveAzGridStickyOverride) {
+TEST(BeamscanEstimatorOpTest, LiveAzGridAppliesForOneTick) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   auto snapshot = snapshot_to_device<double>(
@@ -726,10 +727,10 @@ TEST(BeamscanEstimatorOpTest, LiveAzGridStickyOverride) {
   ASSERT_EQ(out.frames1.size(), 3U);
   EXPECT_EQ(out.frames1[0].shape[1], 3);
   EXPECT_EQ(out.frames1[1].shape[1], 5);
-  EXPECT_EQ(out.frames1[2].shape[1], 5);
+  EXPECT_EQ(out.frames1[2].shape[1], 3);
 }
 
-TEST(BeamscanEstimatorOpTest, LiveElGridStickyOverride) {
+TEST(BeamscanEstimatorOpTest, LiveElGridAppliesForOneTick) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   auto snapshot = snapshot_to_device<double>(
@@ -747,10 +748,10 @@ TEST(BeamscanEstimatorOpTest, LiveElGridStickyOverride) {
   ASSERT_EQ(out.frames1.size(), 3U);
   EXPECT_EQ(out.frames1[0].shape[2], 1);
   EXPECT_EQ(out.frames1[1].shape[2], 3);
-  EXPECT_EQ(out.frames1[2].shape[2], 3);
+  EXPECT_EQ(out.frames1[2].shape[2], 1);
 }
 
-TEST(BeamscanEstimatorOpTest, LiveArrayGeometryStickyOverride) {
+TEST(BeamscanEstimatorOpTest, LiveArrayGeometryAppliesForOneTick) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   const auto changed = make_ula_geometry(kN, 0.25, 1.0);
@@ -765,10 +766,10 @@ TEST(BeamscanEstimatorOpTest, LiveArrayGeometryStickyOverride) {
   ASSERT_TRUE(out.diagnostics.empty());
   ASSERT_EQ(out.frames1.size(), 3U);
   EXPECT_NE(out.frames1[0].data, out.frames1[1].data);
-  EXPECT_EQ(out.frames1[1].data, out.frames1[2].data);
+  EXPECT_EQ(out.frames1[0].data, out.frames1[2].data);
 }
 
-TEST(BeamscanEstimatorOpTest, LiveArrayTaperStickyOverride) {
+TEST(BeamscanEstimatorOpTest, LiveArrayTaperAppliesForOneTick) {
   constexpr int64_t kN = 8;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   auto snapshot = snapshot_to_device<double>(
@@ -787,7 +788,7 @@ TEST(BeamscanEstimatorOpTest, LiveArrayTaperStickyOverride) {
   ASSERT_TRUE(out.diagnostics.empty());
   ASSERT_EQ(out.frames1.size(), 3U);
   EXPECT_NE(out.frames1[0].data, out.frames1[1].data);
-  EXPECT_EQ(out.frames1[1].data, out.frames1[2].data);
+  EXPECT_EQ(out.frames1[0].data, out.frames1[2].data);
 }
 
 TEST(BeamscanEstimatorOpTest, LiveOverridesRejectMalformedAndBounds) {

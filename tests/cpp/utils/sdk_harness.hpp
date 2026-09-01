@@ -194,8 +194,8 @@ class TensorSourceOp final : public holoscan::Operator<> {
 };
 
 // Co-emits one device Tensor and an optional override payload with the same
-// explicit capture time. A missing payload exercises Exact + SafeDefault;
-// subsequent missing payloads exercise compute-side sticky state.
+// explicit capture time. A missing payload exercises Exact + SafeDefault:
+// that tick falls back to the operator's Params value.
 template <typename Payload>
 struct OverrideBank {
   static inline std::vector<std::optional<Payload>> payloads;
@@ -840,7 +840,7 @@ GraphRunResult run_single_io_operator_graph_result(
 
 // 1-in / optional Exact override / 1-out runner. `payloads` is positional
 // against `inputs`: a nullopt (or short list) leaves that tick's override
-// unpublished, which is how a miss and the sticky latch get exercised.
+// unpublished, which is how a revert-to-Params tick gets exercised.
 template <typename OpT, typename Payload, typename ParamsT, typename WireFn>
 GraphRunResult run_exact_override_single_io_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs,

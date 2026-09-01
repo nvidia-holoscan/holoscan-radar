@@ -330,8 +330,8 @@ def test_LeadingBatchAxesPreservedAndIndependent():
 # ---------------------------------------------------------------------------
 
 
-def test_LiveMethodOverrideMidStreamAndSticky():
-    """Sticky [live] method override via typed Python→C++ emit."""
+def test_LiveMethodOverrideAppliesPerTick():
+    """Single-tick [live] method override via typed Python→C++ emit."""
     tone = doppler_tone(K_CHIRPS, K_BINS, 0.19)
     frame = single_map(to_device_array(tone), "range_profiles")
     frames = [frame, frame, frame]
@@ -352,6 +352,7 @@ def test_LiveMethodOverrideMidStreamAndSticky():
     assert len(outs) == 3
     assert outs[0].shape == (K_CHIRPS - 1, K_BINS)
     assert outs[1].shape == (K_CHIRPS, K_BINS)
+    # Tick 2 has no override, so the Params default (mean_subtraction) applies.
     assert outs[2].shape == (K_CHIRPS, K_BINS)
 
 

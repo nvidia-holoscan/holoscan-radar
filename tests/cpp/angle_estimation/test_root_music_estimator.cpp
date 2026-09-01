@@ -818,10 +818,10 @@ TEST(RootMUSICEstimatorOpTest, AllInvalidMaskBlanksDoa) {
 }
 
 // num_sources is reported verbatim on source_count (clamped by max_sources),
-// so an int32 output value carries both the override and the sticky latch.
-// Tick 0 sends nothing and pins the Params baseline inside the same run, so
-// nothing is compared across graph runs.
-TEST(RootMUSICEstimatorOpTest, LiveNumSourcesStickyOverride) {
+// so an int32 output value carries the override directly. Ticks 0 and 2 send
+// nothing and pin the Params baseline inside the same run, so nothing is
+// compared across graph runs.
+TEST(RootMUSICEstimatorOpTest, LiveNumSourcesAppliesForOneTick) {
   constexpr int64_t kN = 12;
   constexpr int64_t kS = 256;
   AngleConvention conv;
@@ -856,10 +856,10 @@ TEST(RootMUSICEstimatorOpTest, LiveNumSourcesStickyOverride) {
   ASSERT_EQ(result.frames2.size(), 3U);
   EXPECT_EQ(result.frames2[0].as<int32_t>()[0], 1);
   EXPECT_EQ(result.frames2[1].as<int32_t>()[0], 2);
-  EXPECT_EQ(result.frames2[2].as<int32_t>()[0], 2);
+  EXPECT_EQ(result.frames2[2].as<int32_t>()[0], 1);
 }
 
-TEST(RootMUSICEstimatorOpTest, LiveArrayGeometryStickyOverride) {
+TEST(RootMUSICEstimatorOpTest, LiveArrayGeometryAppliesForOneTick) {
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;
   AngleConvention conv;
@@ -870,12 +870,15 @@ TEST(RootMUSICEstimatorOpTest, LiveArrayGeometryStickyOverride) {
   for (int tick = 0; tick < 3; ++tick) {
     frames.push_back(block_to_device<double>(block, {1, kN, kS}));
   }
+  // The Params geometry has the same element count but a different
+  // wavelength, so it stays valid against the snapshot yet resolves the
+  // source to a different angle than the override does.
   RootMUSICParams params =
-      make_params(make_ula_geometry(kN - 1, 0.5, 1.0), conv,
+      make_params(make_ula_geometry(kN, 0.5, 0.8), conv,
                   /*num_sources=*/1);
   std::vector<std::optional<WireArrayGeometry>> payloads;
-  payloads.emplace_back(holoscan::radar::to_wire(geometry));
   payloads.emplace_back(std::nullopt);
+  payloads.emplace_back(holoscan::radar::to_wire(geometry));
   payloads.emplace_back(std::nullopt);
 
   const auto result =
@@ -892,7 +895,9 @@ TEST(RootMUSICEstimatorOpTest, LiveArrayGeometryStickyOverride) {
           });
   EXPECT_TRUE(result.plan_ok) << result.plan_json;
   EXPECT_TRUE(result.diagnostics.empty());
-  EXPECT_EQ(result.frames0.size(), 3U);
+  ASSERT_EQ(result.frames0.size(), 3U);
+  EXPECT_NE(result.frames0[1].data, result.frames0[0].data);
+  EXPECT_EQ(result.frames0[2].data, result.frames0[0].data);
 
   RootMUSICParams invalid_params =
       make_params(geometry, conv, /*num_sources=*/1);
@@ -920,7 +925,7 @@ TEST(RootMUSICEstimatorOpTest, LiveArrayGeometryStickyOverride) {
   EXPECT_FALSE(invalid.diagnostics.empty());
 }
 
-TEST(RootMUSICEstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
+TEST(RootMUSICEstimatorOpTest, LiveSpatialSmoothingAppliesForOneTick) {
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;
   AngleConvention conv;
@@ -931,11 +936,11 @@ TEST(RootMUSICEstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
   for (int tick = 0; tick < 3; ++tick) {
     frames.push_back(block_to_device<double>(block, {1, kN, kS}));
   }
-  RootMUSICParams params = make_params(
-      geometry, conv, /*num_sources=*/1, 1e-2, 4, /*smoothing=*/{kN + 1});
+  RootMUSICParams params =
+      make_params(geometry, conv, /*num_sources=*/1, 1e-2, 4);
   std::vector<std::optional<SpatialSmoothingOverride>> payloads{
-      SpatialSmoothingOverride{.count = 1, .first = 2},
       std::nullopt,
+      SpatialSmoothingOverride{.count = 1, .first = 2},
       std::nullopt,
   };
 
@@ -954,9 +959,10 @@ TEST(RootMUSICEstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
   EXPECT_TRUE(result.plan_ok) << result.plan_json;
   EXPECT_TRUE(result.diagnostics.empty());
   ASSERT_EQ(result.frames3.size(), 3U);
-  for (const auto& eigenvalues : result.frames3) {
-    EXPECT_EQ(eigenvalues.shape, (std::vector<int64_t>{1, kN - 1}));
-  }
+  // Smoothing shortens the sub-array, so the eigenvalue count is the
+  // observable. Ticks 0 and 2 publish nothing and share the Params order.
+  EXPECT_NE(result.frames3[1].shape, result.frames3[0].shape);
+  EXPECT_EQ(result.frames3[2].shape, result.frames3[0].shape);
 
   RootMUSICParams invalid_params =
       make_params(geometry, conv, /*num_sources=*/1);
@@ -984,7 +990,7 @@ TEST(RootMUSICEstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
 // int32 source_count. The crafted covariance pins the eigenvalue profile
 // exactly, which makes the 1 -> 2 transition between the Params Pfa and the
 // override Pfa deterministic instead of a noise draw.
-TEST(RootMUSICEstimatorOpTest, LiveSourceCountPfaStickyOverride) {
+TEST(RootMUSICEstimatorOpTest, LiveSourceCountPfaAppliesForOneTick) {
   const std::vector<double> spectrum = {0.8930540251, 0.9468277841,
                                         1.3517214181, 1.6732266229,
                                         9.0798471606, 14.3477610683};
@@ -1024,12 +1030,12 @@ TEST(RootMUSICEstimatorOpTest, LiveSourceCountPfaStickyOverride) {
   ASSERT_EQ(result.frames2.size(), 3U);
   EXPECT_EQ(result.frames2[0].as<int32_t>()[0], 1);
   EXPECT_EQ(result.frames2[1].as<int32_t>()[0], 2);
-  EXPECT_EQ(result.frames2[2].as<int32_t>()[0], 2);
+  EXPECT_EQ(result.frames2[2].as<int32_t>()[0], 1);
 }
 
-// max_sources widens doa_multi to {items, max_sources, 2}, so both the
-// override and the sticky latch show up in the output shape alone.
-TEST(RootMUSICEstimatorOpTest, LiveMaxSourcesStickyOverride) {
+// max_sources widens doa_multi to {items, max_sources, 2}, so the override
+// shows up in the output shape alone.
+TEST(RootMUSICEstimatorOpTest, LiveMaxSourcesAppliesForOneTick) {
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;
   constexpr int64_t kLiveMaxSources = 3;
@@ -1065,8 +1071,8 @@ TEST(RootMUSICEstimatorOpTest, LiveMaxSourcesStickyOverride) {
   EXPECT_EQ(result.frames1[0].shape, (std::vector<int64_t>{1, 1, 2}));
   EXPECT_EQ(result.frames1[1].shape,
             (std::vector<int64_t>{1, kLiveMaxSources, 2}));
-  EXPECT_EQ(result.frames1[2].shape,
-            (std::vector<int64_t>{1, kLiveMaxSources, 2}));
+  // Tick 2 reverts to the Params max_sources, narrowing doa_multi back.
+  EXPECT_EQ(result.frames1[2].shape, (std::vector<int64_t>{1, 1, 2}));
 }
 
 TEST(RootMUSICEstimatorOpTest, NumSourcesConfigurableFromParams) {

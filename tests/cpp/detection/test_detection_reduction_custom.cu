@@ -107,7 +107,7 @@ TEST(DetectionReductionOpTest, RejectsCustomWithoutScoreFn) {
   EXPECT_THROW(harness->run_test(), std::invalid_argument);
 }
 
-// Sticky live score_method into custom and back out.
+// Live score_method into custom and back out.
 TEST(DetectionReductionOpTest, LiveScoreMethodIntoAndOutOfCustom) {
   // sum (1,1): row1 wins (8>1). custom col0-col1: row0 wins (1-0 > 3-5).
   std::vector<int64_t> labels = {0, 0};

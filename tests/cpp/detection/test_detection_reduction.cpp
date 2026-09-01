@@ -679,17 +679,15 @@ LiveWeightsTick make_weights_tick(
   };
 }
 
-DetectionReductionParams live_weights_params(bool sticky) {
-  auto params = make_params(RepresentativePolicy::kPeak,
-                            ScoreMethod::kWeightedSum, {1.0, 0.0});
-  params.sticky_feature_weights = sticky;
-  return params;
+DetectionReductionParams live_weights_params() {
+  return make_params(RepresentativePolicy::kPeak,
+                     ScoreMethod::kWeightedSum, {1.0, 0.0});
 }
 
 TEST(DetectionReductionOpTest, LiveFeatureWeightsExactMatchChangesSelection) {
   const auto out = run_weights_override_graph(
       {make_weights_tick(std::vector<double>{0.0, 1.0})},
-      live_weights_params(false));
+      live_weights_params());
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
@@ -701,7 +699,7 @@ TEST(DetectionReductionOpTest, LiveFeatureWeightsExactMatchChangesSelection) {
 TEST(DetectionReductionOpTest, LiveFeatureWeightsSkewedCaptureMissesExact) {
   const auto out = run_weights_override_graph(
       {make_weights_tick(std::vector<double>{0.0, 1.0}, 1)},
-      live_weights_params(false));
+      live_weights_params());
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
@@ -710,24 +708,11 @@ TEST(DetectionReductionOpTest, LiveFeatureWeightsSkewedCaptureMissesExact) {
   EXPECT_EQ(out.frames[0].as<int64_t>()[1], 1);
 }
 
-TEST(DetectionReductionOpTest, LiveFeatureWeightsStickyKeepsLastExactMatch) {
+TEST(DetectionReductionOpTest, LiveFeatureWeightsRevertsToParamsAfterMiss) {
   const auto out = run_weights_override_graph(
       {make_weights_tick(std::vector<double>{0.0, 1.0}),
        make_weights_tick(std::nullopt)},
-      live_weights_params(true));
-
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames.size(), 2U);
-  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 20);
-  EXPECT_EQ(out.frames[1].as<int64_t>()[0], 20);
-}
-
-TEST(DetectionReductionOpTest, LiveFeatureWeightsEphemeralRevertsToParams) {
-  const auto out = run_weights_override_graph(
-      {make_weights_tick(std::vector<double>{0.0, 1.0}),
-       make_weights_tick(std::nullopt)},
-      live_weights_params(false));
+      live_weights_params());
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
@@ -739,7 +724,7 @@ TEST(DetectionReductionOpTest, LiveFeatureWeightsEphemeralRevertsToParams) {
 TEST(DetectionReductionOpTest, LiveFeatureWeightsRejectsMalformedLength) {
   const auto out = run_weights_override_graph(
       {make_weights_tick(std::vector<double>{1.0})},
-      live_weights_params(true));
+      live_weights_params());
 
   EXPECT_TRUE(out.plan_ok) << out.plan_json;
   EXPECT_FALSE(out.diagnostics.empty());
@@ -748,7 +733,7 @@ TEST(DetectionReductionOpTest, LiveFeatureWeightsRejectsMalformedLength) {
 TEST(DetectionReductionOpTest, LiveFeatureWeightsRejectsBoundOverflow) {
   const auto out = run_weights_override_graph(
       {make_weights_tick(std::vector<double>{1.0, 1.0, 1.0})},
-      live_weights_params(true), 2);
+      live_weights_params(), 2);
 
   EXPECT_TRUE(out.plan_ok) << out.plan_json;
   EXPECT_FALSE(out.diagnostics.empty());
@@ -793,10 +778,9 @@ LiveWeightsTick make_score_method_tick(
   return tick;
 }
 
-TEST(DetectionReductionOpTest, LiveRepresentativeStickyOverride) {
+TEST(DetectionReductionOpTest, LiveRepresentativeAppliesForOneTick) {
   auto params = make_params(RepresentativePolicy::kFirst,
                             ScoreMethod::kWeightedSum, {1.0, 0.0});
-  params.sticky_representative = true;
   const auto out = run_weights_override_graph(
       {make_representative_tick(std::nullopt),
        make_representative_tick(RepresentativePolicy::kPeak),
@@ -806,31 +790,15 @@ TEST(DetectionReductionOpTest, LiveRepresentativeStickyOverride) {
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
   ASSERT_EQ(out.frames.size(), 3U);
+  // Params `first` on the silent ticks either side of the `peak` override.
   EXPECT_EQ(out.frames[0].as<int64_t>()[0], 10);
   EXPECT_EQ(out.frames[1].as<int64_t>()[0], 20);
-  EXPECT_EQ(out.frames[2].as<int64_t>()[0], 20);
+  EXPECT_EQ(out.frames[2].as<int64_t>()[0], 10);
 }
 
-TEST(DetectionReductionOpTest, LiveRepresentativeEphemeralRevertsToParams) {
-  auto params = make_params(RepresentativePolicy::kFirst,
-                            ScoreMethod::kWeightedSum, {1.0, 0.0});
-  params.sticky_representative = false;
-  const auto out = run_weights_override_graph(
-      {make_representative_tick(RepresentativePolicy::kPeak),
-       make_representative_tick(std::nullopt)},
-      std::move(params));
-
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames.size(), 2U);
-  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 20);
-  EXPECT_EQ(out.frames[1].as<int64_t>()[0], 10);
-}
-
-TEST(DetectionReductionOpTest, LiveScoreMethodStickyOverride) {
+TEST(DetectionReductionOpTest, LiveScoreMethodAppliesForOneTick) {
   auto params = make_params(RepresentativePolicy::kPeak,
                             ScoreMethod::kWeightedSum, {1.0, 1.0});
-  params.sticky_score_method = true;
   const auto out = run_weights_override_graph(
       {make_score_method_tick(std::nullopt),
        make_score_method_tick(ScoreMethod::kWeightedL2),
@@ -842,7 +810,7 @@ TEST(DetectionReductionOpTest, LiveScoreMethodStickyOverride) {
   ASSERT_EQ(out.frames.size(), 3U);
   EXPECT_EQ(out.frames[0].as<int64_t>()[0], 10);
   EXPECT_EQ(out.frames[1].as<int64_t>()[0], 20);
-  EXPECT_EQ(out.frames[2].as<int64_t>()[0], 20);
+  EXPECT_EQ(out.frames[2].as<int64_t>()[0], 10);
 }
 
 }  // namespace

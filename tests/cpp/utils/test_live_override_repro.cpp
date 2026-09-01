@@ -14,8 +14,8 @@
 //   ./build/tests/cpp/test_live_override_repro
 //
 // Control case (tensor path only, override port unwired) is expected to pass.
-// Dual-OnClock / co-emit / sticky-contract cases document the EA failure for
-// Holoscan maintainers (full plan JSON under /tmp/live_override_repro_*.json).
+// The dual-OnClock and co-emit cases document the EA failure for Holoscan
+// maintainers (full plan JSON under /tmp/live_override_repro_*.json).
 
 #include <gtest/gtest.h>
 
@@ -29,7 +29,6 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -59,12 +58,11 @@
 
 namespace {
 
-using holoscan::radar::add_sticky_override_to_contract;
 using holoscan::radar::emit_device_tensor;
 using holoscan::radar::make_device_tensor;
 using holoscan::radar::real_dtype;
 using holoscan::radar::receive_tensor;
-using holoscan::radar::resolve_sticky_override;
+using holoscan::radar::resolve_live_override;
 
 inline constexpr auto kTick = std::chrono::milliseconds{5};
 inline constexpr auto kDeadline = std::chrono::seconds{5};
@@ -226,7 +224,7 @@ class CoEmitSourceOp final : public holoscan::Operator<> {
   holoscan::Output<int64_t> scalar_out{"scalar_out"};
 };
 
-// Pass-through op: OnEach on the Tensor; sticky optional scalar override.
+// Pass-through op: OnEach on the Tensor; optional scalar override.
 class PassThroughWithOverrideOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
@@ -244,10 +242,8 @@ class PassThroughWithOverrideOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
-    // Match production EA workaround (ClutterFilterOp): trigger on the data
-    // tensor only. Including the sticky override in the temporal contract
-    // makes an unwired graph fail TEMPORAL_INPUT_UNCONNECTED; including it
-    // when wired is the pattern Holoscan maintainers should also evaluate.
+    // Trigger on the data tensor only: this case isolates the wiring
+    // shape, so the override deliberately stays out of the contract.
     result.trigger(holoscan::OnEach{in});
     return result;
   }
@@ -256,7 +252,7 @@ class PassThroughWithOverrideOp final : public holoscan::Operator<> {
       holoscan::ExecutionContext& context) override {
     HOLOSCAN_TRY(auto input, receive_tensor(in, "PassThroughWithOverrideOp"));
     HOLOSCAN_TRY(auto scale_value,
-                 resolve_sticky_override(scale, int64_t{1}, sticky_scale_));
+                 resolve_live_override(scale, int64_t{1}));
     (void)scale_value;
     return emit_device_tensor(
         out, context, input.shape(), input.dtype(),
@@ -276,62 +272,6 @@ class PassThroughWithOverrideOp final : public holoscan::Operator<> {
   holoscan::Input<holoscan::Tensor> in{"in"};
   holoscan::Output<holoscan::Tensor> out{"out"};
   holoscan::Input<int64_t> scale{"scale"};
-
- private:
-  std::optional<int64_t> sticky_scale_;
-};
-
-// Same as PassThroughWithOverrideOp but puts the sticky override into the
-// temporal contract (the pattern we want once EA admits it).
-class PassThroughWithStickyContractOp final : public holoscan::Operator<> {
- public:
-  void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorRepresentation kDevice{
-        .memory_kind = holoscan::MemoryKind::kCudaDevice,
-        .dtype = std::nullopt,
-        .rank = std::nullopt,
-    };
-    spec.input(in, "in").queue_depth(2U).expects_tensor(holoscan::radar::tensor_input(kDevice));
-    spec.output(out, "out")
-        .produces_tensor(holoscan::radar::pooled_tensor_output(
-            kDevice, 1U, sizeof(float)));
-    spec.input(scale, "scale").queue_depth(2U);
-  }
-
-  [[nodiscard]] holoscan::Contract contract() const override {
-    holoscan::Contract result;
-    result.trigger(holoscan::OnEach{in});
-    add_sticky_override_to_contract(result, scale);
-    return result;
-  }
-
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext& context) override {
-    HOLOSCAN_TRY(auto input, receive_tensor(in, "PassThroughWithStickyContractOp"));
-    HOLOSCAN_TRY(auto scale_value,
-                 resolve_sticky_override(scale, int64_t{1}, sticky_scale_));
-    (void)scale_value;
-    return emit_device_tensor(
-        out, context, input.shape(), input.dtype(),
-        [&](void* dst,
-            std::size_t nbytes) -> holoscan::expected<void, holoscan::Error> {
-          if (cudaMemcpyAsync(dst, input.data(), nbytes,
-                              cudaMemcpyDeviceToDevice,
-                              context.cuda_stream().get()) != cudaSuccess) {
-            return holoscan::make_unexpected(
-                holoscan::Error{holoscan::ErrorCode::kFailure,
-                                "D2D failed"});
-          }
-          return {};
-        });
-  }
-
-  holoscan::Input<holoscan::Tensor> in{"in"};
-  holoscan::Output<holoscan::Tensor> out{"out"};
-  holoscan::Input<int64_t> scale{"scale"};
-
- private:
-  std::optional<int64_t> sticky_scale_;
 };
 
 class CaptureSinkOp final : public holoscan::Operator<> {
@@ -573,35 +513,6 @@ TEST(LiveOverrideRepro, CoEmitDeviceTensorAndScalar) {
   print_repro("CoEmitDeviceTensorAndScalar", r);
   if (r.plan_ok && r.diagnostics.empty() && r.captured == kFrames) {
     SUCCEED() << "co-emit live override path works on this SDK build";
-    return;
-  }
-  EXPECT_TRUE(has_known_ea_token(r))
-      << "unexpected failure mode (wanted known EA tokens): " << summarize(r);
-}
-
-// Repro C: dual OnClock + sticky override in the temporal contract (intended).
-TEST(LiveOverrideRepro, DualOnClockWithStickyContract) {
-  constexpr int kFrames = 3;
-  Bank::reset(kFrames);
-
-  holoscan::Graph graph{"live-override-sticky-contract"};
-  const auto tensor_src = graph.op<DeviceTensorSourceOp>("source");
-  const auto scalar_src = graph.op<ScalarOverrideSourceOp>("override");
-  const auto op = graph.op<PassThroughWithStickyContractOp>("op");
-  const auto sink = graph.op<CaptureSinkOp>("sink");
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(tensor_src->out, op->in, q);
-  graph.add_flow(scalar_src->out, op->scale, q);
-  graph.add_flow(op->out, sink->in, q);
-
-  holoscan::CompileOptions options;
-  bind_device(options, "source", "out");
-  bind_device(options, "op", "out");
-
-  const ReproResult r = run_until(graph, std::move(options), kFrames);
-  print_repro("DualOnClockWithStickyContract", r);
-  if (r.plan_ok && r.diagnostics.empty() && r.captured == kFrames) {
-    SUCCEED() << "sticky-contract live override path works on this SDK build";
     return;
   }
   EXPECT_TRUE(has_known_ea_token(r))

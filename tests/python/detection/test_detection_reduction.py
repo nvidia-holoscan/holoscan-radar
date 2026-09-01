@@ -274,7 +274,7 @@ def test_CustomScoreMethodIgnoredForFirst():
     assert rep[0, 1] == 1
 
 
-def test_LiveRepresentativeStickyOverride():
+def test_LiveRepresentativeOverrideAppliesPerTick():
     labels = np.array([0, 0], dtype=np.int64)
     idx = np.array([[0, 0], [1, 1]], dtype=np.int64)
     points = np.array([[1.0], [5.0]], dtype=np.float32)
@@ -311,10 +311,11 @@ def test_LiveRepresentativeStickyOverride():
     assert outs[0].shape == (1, 2)
     assert outs[0][0, 0] == 1 and outs[0][0, 1] == 1
     assert outs[1][0, 0] == 0 and outs[1][0, 1] == 0
-    assert outs[2][0, 0] == 0 and outs[2][0, 1] == 0
+    # Tick 2 reverts to the Params policy (PEAK), as on tick 0.
+    assert outs[2][0, 0] == 1 and outs[2][0, 1] == 1
 
 
-def test_LiveScoreMethodStickyOverride():
+def test_LiveScoreMethodOverrideAppliesPerTick():
     labels = np.array([0, 0], dtype=np.int64)
     idx = np.array([[10, 1], [20, 2]], dtype=np.int64)
     points = np.array([[4.0, 3.0], [6.0, 0.0]], dtype=np.float32)
@@ -345,10 +346,11 @@ def test_LiveScoreMethodStickyOverride():
     )
     assert outs[0][0, 0] == 10 and outs[0][0, 1] == 1
     assert outs[1][0, 0] == 20 and outs[1][0, 1] == 2
-    assert outs[2][0, 0] == 20 and outs[2][0, 1] == 2
+    # Tick 2 reverts to the Params method (WEIGHTED_SUM), as on tick 0.
+    assert outs[2][0, 0] == 10 and outs[2][0, 1] == 1
 
 
-def test_LiveFeatureWeightsStickyOverride():
+def test_LiveFeatureWeightsOverrideAppliesPerTick():
     labels = np.array([0, 0], dtype=np.int64)
     idx = np.array([[10, 1], [20, 2]], dtype=np.int64)
     points = np.array([[5.0, 0.0], [1.0, 10.0]], dtype=np.float32)
@@ -379,4 +381,5 @@ def test_LiveFeatureWeightsStickyOverride():
     )
     assert outs[0][0, 0] == 10 and outs[0][0, 1] == 1
     assert outs[1][0, 0] == 20 and outs[1][0, 1] == 2
-    assert outs[2][0, 0] == 20 and outs[2][0, 1] == 2
+    # Tick 2 reverts to the Params weights [1.0, 0.0], as on tick 0.
+    assert outs[2][0, 0] == 10 and outs[2][0, 1] == 1

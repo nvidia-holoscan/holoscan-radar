@@ -723,7 +723,6 @@ TEST(FMCWRangeProcessorOpTest, LiveNfftExactMatchChangesBinCount) {
   auto cube = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
 
   FMCWRangeProcessorParams params;
-  params.sticky_nfft = false;
   const GraphRunResult out = run_nfft_override_graph(
       two_cube_ticks(cube, int64_t{256}, int64_t{256}), std::move(params));
 
@@ -734,28 +733,11 @@ TEST(FMCWRangeProcessorOpTest, LiveNfftExactMatchChangesBinCount) {
   EXPECT_EQ(out.frames[1].shape.back(), 256);
 }
 
-TEST(FMCWRangeProcessorOpTest, LiveNfftStickyKeepsLastMatch) {
+TEST(FMCWRangeProcessorOpTest, LiveNfftRevertsToParamsAfterMiss) {
   const auto sim_result = sim::simulate(make_scene(range_at_bin(30.0)));
   auto cube = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
 
   FMCWRangeProcessorParams params;
-  params.sticky_nfft = true;
-  const GraphRunResult out = run_nfft_override_graph(
-      two_cube_ticks(cube, int64_t{256}, std::nullopt), std::move(params));
-
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames.size(), 2u);
-  EXPECT_EQ(out.frames[0].shape.back(), 256);
-  EXPECT_EQ(out.frames[1].shape.back(), 256);
-}
-
-TEST(FMCWRangeProcessorOpTest, LiveNfftEphemeralRevertsToParams) {
-  const auto sim_result = sim::simulate(make_scene(range_at_bin(30.0)));
-  auto cube = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
-
-  FMCWRangeProcessorParams params;
-  params.sticky_nfft = false;
   const GraphRunResult out = run_nfft_override_graph(
       two_cube_ticks(cube, int64_t{256}, std::nullopt), std::move(params));
 
@@ -772,7 +754,6 @@ TEST(FMCWRangeProcessorOpTest, LiveNfftSkewedCaptureTimeMissesExact) {
   const int64_t skew_ns = 1'000'000;
 
   FMCWRangeProcessorParams params;
-  params.sticky_nfft = false;
   const GraphRunResult out = run_nfft_override_graph(
       two_cube_ticks(cube, int64_t{256}, int64_t{256}, skew_ns, skew_ns),
       std::move(params));
@@ -1020,8 +1001,6 @@ TEST(FMCWRangeProcessorOpTest, LiveWindowOverrideAppliesPerTick) {
 
   FMCWRangeProcessorParams params;
   params.waveform = to_descriptor(base_waveform);
-  params.sticky_range_window = true;
-  params.sticky_waveform = true;
   const DualIOGraphRunResult out = run_range_descriptor_override_graph(
       {base, changed, base}, std::move(params));
 
@@ -1032,7 +1011,7 @@ TEST(FMCWRangeProcessorOpTest, LiveWindowOverrideAppliesPerTick) {
 
   const auto rect = slice_abs<float>(out.frames0[0], 0, 0);
   const auto windowed = slice_abs<float>(out.frames0[1], 0, 0);
-  const auto sticky = slice_abs<float>(out.frames0[2], 0, 0);
+  const auto reverted = slice_abs<float>(out.frames0[2], 0, 0);
   const int64_t peak = argmax(rect);
   double rect_sidelobe = 0.0;
   double windowed_sidelobe = 0.0;
@@ -1044,13 +1023,15 @@ TEST(FMCWRangeProcessorOpTest, LiveWindowOverrideAppliesPerTick) {
         std::max(windowed_sidelobe, windowed[static_cast<size_t>(i)]);
   }
   EXPECT_LT(windowed_sidelobe, 0.5 * rect_sidelobe);
-  EXPECT_EQ(windowed, sticky);
+  // Tick 2 publishes no window, so the Params (rectangular) window is back.
+  EXPECT_EQ(rect, reverted);
 
   const float base_spacing = out.frames1[0].as<float>()[1];
   const float changed_spacing = out.frames1[1].as<float>()[1];
   EXPECT_NEAR(changed_spacing, 2.0F * base_spacing,
               1e-4F * changed_spacing);
-  EXPECT_EQ(out.frames1[1].as<float>()[1],
+  // Likewise for the waveform: the range axis returns to the Params spacing.
+  EXPECT_EQ(out.frames1[0].as<float>()[1],
             out.frames1[2].as<float>()[1]);
 }
 

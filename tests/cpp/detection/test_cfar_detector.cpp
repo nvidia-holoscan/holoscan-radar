@@ -918,18 +918,18 @@ TEST(CFARDetectorOpTest, DetectionIdxRasterOrder) {
   EXPECT_EQ(rows[3], 24);
 }
 
-TEST(CFARDetectorOpTest, LiveThresholdScaleOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream sticky live harness "
+TEST(CFARDetectorOpTest, LiveThresholdScaleOverrideMidStream) {
+  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live harness "
                    "deferred (HSDK5_PORT.md §1)";
 }
 
-TEST(CFARDetectorOpTest, LivePfaOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream sticky live harness "
+TEST(CFARDetectorOpTest, LivePfaOverrideMidStream) {
+  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live harness "
                    "deferred (HSDK5_PORT.md §1)";
 }
 
-TEST(CFARDetectorOpTest, LiveMaxDetectionsOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream sticky live harness "
+TEST(CFARDetectorOpTest, LiveMaxDetectionsOverrideMidStream) {
+  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live harness "
                    "deferred (HSDK5_PORT.md §1)";
 }
 
@@ -967,7 +967,7 @@ TEST(CFARDetectorOpTest, TrainingCellsConfigurableFromParams) {
   EXPECT_GT(score_at(w.score, dt, rt), score_at(n.score, dt, rt));
 }
 
-TEST(CFARDetectorOpTest, LiveGuardCellsOverrideMidStreamAndSticky) {
+TEST(CFARDetectorOpTest, LiveGuardCellsOverrideAppliesForOneTick) {
   constexpr int64_t kChannels = 2;
   const auto cube = power_cube(
       {kChannels, kDoppler, kRange}, 1.0,
@@ -988,18 +988,24 @@ TEST(CFARDetectorOpTest, LiveGuardCellsOverrideMidStreamAndSticky) {
       std::nullopt, {}};
   const CfarLiveTick missing{input, std::nullopt, std::nullopt, std::nullopt,
                              std::nullopt, {}};
-  const auto result = run_cfar_live({first, missing}, params,
+  const auto result = run_cfar_live({missing, first, missing}, params,
                                      {.guard_cells = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames1.size(), 2U);
+  ASSERT_EQ(result.frames1.size(), 3U);
   EXPECT_EQ(result.frames1[0].shape,
             (std::vector<int64_t>{kDoppler, kRange}));
   EXPECT_EQ(result.frames1[1].shape, result.frames1[0].shape);
-  const auto* score0 = result.frames1[0].as<double>();
-  const auto* score1 = result.frames1[1].as<double>();
-  EXPECT_DOUBLE_EQ(score0[8 * kRange + 16], score1[8 * kRange + 16]);
+  EXPECT_EQ(result.frames1[2].shape, result.frames1[0].shape);
+  constexpr int64_t kPeak = 8 * kRange + 16;
+  const double params_score = result.frames1[0].as<double>()[kPeak];
+  const double override_score = result.frames1[1].as<double>()[kPeak];
+  const double reverted_score = result.frames1[2].as<double>()[kPeak];
+  // The wider guard window changes the noise estimate, so the middle tick is
+  // distinguishable; the silent tick after it is back on the Params window.
+  EXPECT_NE(override_score, params_score);
+  EXPECT_DOUBLE_EQ(reverted_score, params_score);
 }
 
 TEST(CFARDetectorOpTest, RejectsMalformedLiveCellWindow) {
@@ -1039,7 +1045,7 @@ TEST(CFARDetectorOpTest, RejectsMalformedLiveNciAxesTensor) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(CFARDetectorOpTest, LiveAlphaLutOverrideStickyAndClearing) {
+TEST(CFARDetectorOpTest, LiveAlphaLutOverrideAndClearing) {
   auto input = to_device_tensor<double>(
       power_map(1.0, {{8, 16}}, 100.0), {kDoppler, kRange},
       real_dtype<double>());
@@ -1064,6 +1070,9 @@ TEST(CFARDetectorOpTest, LiveAlphaLutOverrideStickyAndClearing) {
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
   ASSERT_EQ(result.frames3.size(), 3U);
+  // The huge external LUT suppresses everything; the explicit empty vector
+  // clears back to the internally built LUT; the silent third tick reverts to
+  // the Params alpha_lut, which is also empty, so it agrees with tick 1.
   EXPECT_EQ(num_detections(result.frames3[0]), 0);
   EXPECT_GE(num_detections(result.frames3[1]), 1);
   EXPECT_EQ(num_detections(result.frames3[2]),

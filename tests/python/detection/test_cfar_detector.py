@@ -385,7 +385,11 @@ def run_cfar_ticks(
     n_ticks: int | None = None,
     **cfar_kwargs,
 ) -> dict[str, list[np.ndarray]]:
-    """Multi-tick CFAR run with optional sticky [live] overrides."""
+    """Multi-tick CFAR run with optional [live] overrides.
+
+    An override sequence shorter than the tick count leaves the later ticks
+    without a match, so they fall back to the operator's Params value.
+    """
     arr = np.asarray(host, dtype=dtype).reshape(shape)
     frame = single_map(to_device_array(arr, dtype=dtype), "rd_maps")
     ticks = n_ticks if n_ticks is not None else 3
@@ -489,7 +493,7 @@ def test_CaAlphaK1MatchesContractClosedForm():
     assert ca_cfar_pfa_from_alpha(alpha, k_n, 1) == pytest.approx(k_pfa, abs=1e-9)
 
 
-def test_LiveThresholdScaleOverrideMidStreamAndSticky():
+def test_LiveThresholdScaleOverrideAppliesPerTick():
     mp = power_map(1.0, [(8, 16)], 100.0)
     outs = run_cfar_ticks(
         mp,
@@ -501,10 +505,11 @@ def test_LiveThresholdScaleOverrideMidStreamAndSticky():
     assert len(idx) == 3
     assert num_detections(idx[0]) == 1
     assert num_detections(idx[1]) == 0
-    assert num_detections(idx[2]) == 0
+    # Tick 2 has no override and reverts to the Params scale of 1.0.
+    assert num_detections(idx[2]) == 1
 
 
-def test_LivePfaOverrideMidStreamAndSticky():
+def test_LivePfaOverrideAppliesPerTick():
     dt, rt = 8, 16
     mp = power_map(1.0, [(dt, rt)], 26.0)
     outs = run_cfar_ticks(
@@ -519,11 +524,11 @@ def test_LivePfaOverrideMidStreamAndSticky():
     s0 = float(scores[0][dt, rt])
     s1 = float(scores[1][dt, rt])
     s2 = float(scores[2][dt, rt])
-    assert s0 > s1
-    assert s1 == pytest.approx(s2)
+    # Tick 2 reverts to the Params pfa of 1e-3, between the two overrides.
+    assert s1 < s2 < s0
 
 
-def test_LiveMaxDetectionsOverrideMidStreamAndSticky():
+def test_LiveMaxDetectionsOverrideAppliesPerTick():
     mp = power_map(1.0, [(4, 8), (12, 24)], 100.0)
     outs = run_cfar_ticks(
         mp,
@@ -534,10 +539,11 @@ def test_LiveMaxDetectionsOverrideMidStreamAndSticky():
     idx = outs["detection_idx"]
     assert num_detections(idx[0]) == 2
     assert num_detections(idx[1]) == 1
-    assert num_detections(idx[2]) == 1
+    # Tick 2 reverts to the Params cap, which is unset (uncapped).
+    assert num_detections(idx[2]) == 2
 
 
-def test_LiveGuardCellsOverrideMidStreamAndSticky():
+def test_LiveGuardCellsOverrideAppliesPerTick():
     dt, rt = 8, 16
     mp = power_map(1.0, [], 1.0)
     flat = mp.reshape(K_DOPPLER, K_RANGE)
@@ -555,10 +561,11 @@ def test_LiveGuardCellsOverrideMidStreamAndSticky():
     s1 = float(scores[1][dt, rt])
     s2 = float(scores[2][dt, rt])
     assert s0 < s1
-    assert s1 == pytest.approx(s2)
+    # Tick 2 reverts to the Params guard extent, which tick 0 also used.
+    assert s2 == pytest.approx(s0)
 
 
-def test_LiveTrainingCellsOverrideMidStreamAndSticky():
+def test_LiveTrainingCellsOverrideAppliesPerTick():
     dt, rt = 8, 16
     mp = power_map(1.0, [], 1.0)
     flat = mp.reshape(K_DOPPLER, K_RANGE)
@@ -577,10 +584,11 @@ def test_LiveTrainingCellsOverrideMidStreamAndSticky():
     s1 = float(scores[1][dt, rt])
     s2 = float(scores[2][dt, rt])
     assert s0 < s1
-    assert s1 == pytest.approx(s2)
+    # Tick 2 reverts to the Params training extent, which tick 0 also used.
+    assert s2 == pytest.approx(s0)
 
 
-def test_LiveNciAxesOverrideMidStreamAndSticky():
+def test_LiveNciAxesOverrideAppliesPerTick():
     k_channels = 8
     dt, rt = 8, 16
     floor, weak_peak = 1.0, 14.0
@@ -600,8 +608,9 @@ def test_LiveNciAxesOverrideMidStreamAndSticky():
     assert num_detections(idx[0]) == 0
     assert scores[0].shape == (k_channels, K_DOPPLER, K_RANGE)
     assert scores[1].shape == (K_DOPPLER, K_RANGE)
-    assert scores[2].shape == scores[1].shape
-    assert float(scores[1][dt, rt]) == pytest.approx(float(scores[2][dt, rt]))
+    # Tick 2 reverts to the Params nci_axes (empty), as on tick 0.
+    assert scores[2].shape == scores[0].shape
+    assert num_detections(idx[2]) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -916,7 +925,7 @@ def test_RejectsOsRankOutOfRange():
         )
 
 
-def test_LiveOsRankOverrideMidStreamAndSticky():
+def test_LiveOsRankOverrideAppliesPerTick():
     dt, rt = 8, 16
     mp = np.empty(K_DOPPLER * K_RANGE, dtype=np.float64)
     for i in range(mp.size):
@@ -937,4 +946,5 @@ def test_LiveOsRankOverrideMidStreamAndSticky():
     n1 = float(noise[1][dt, rt])
     n2 = float(noise[2][dt, rt])
     assert n0 != n1
-    assert n1 == pytest.approx(n2)
+    # Tick 2 reverts to the Params rank of 5, which tick 0 also used.
+    assert n2 == pytest.approx(n0)

@@ -3,7 +3,7 @@
 
 // PhaseShiftBeamformerOp contract tests (HSDK 5 Graph harness): conventional
 // dense-path Bartlett beamforming (rd_maps → rda_cube), Params coverage, and
-// error paths, including Exact live overrides and sticky reuse.
+// error paths, including single-tick Exact live overrides.
 
 #include <gtest/gtest.h>
 
@@ -850,7 +850,7 @@ TEST(PhaseShiftBeamformerOpTest, RejectsPageableHostInput) {
                   "device-bound Graph harness";
 }
 
-TEST(PhaseShiftBeamformerOpTest, LiveAzGridStickyOverride) {
+TEST(PhaseShiftBeamformerOpTest, LiveAzGridAppliesForOneTick) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   const auto vec =
@@ -865,10 +865,10 @@ TEST(PhaseShiftBeamformerOpTest, LiveAzGridStickyOverride) {
   ASSERT_EQ(out.frames.size(), 3U);
   EXPECT_EQ(out.frames[0].shape[0], 3);
   EXPECT_EQ(out.frames[1].shape[0], 5);
-  EXPECT_EQ(out.frames[2].shape[0], 5);
+  EXPECT_EQ(out.frames[2].shape[0], 3);
 }
 
-TEST(PhaseShiftBeamformerOpTest, LiveElGridStickyOverride) {
+TEST(PhaseShiftBeamformerOpTest, LiveElGridAppliesForOneTick) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   auto rd = vector_to_rd_maps<double>(
@@ -886,10 +886,10 @@ TEST(PhaseShiftBeamformerOpTest, LiveElGridStickyOverride) {
   ASSERT_EQ(out.frames.size(), 3U);
   EXPECT_EQ(out.frames[0].shape[1], 1);
   EXPECT_EQ(out.frames[1].shape[1], 3);
-  EXPECT_EQ(out.frames[2].shape[1], 3);
+  EXPECT_EQ(out.frames[2].shape[1], 1);
 }
 
-TEST(PhaseShiftBeamformerOpTest, LiveArrayGeometryStickyOverride) {
+TEST(PhaseShiftBeamformerOpTest, LiveArrayGeometryAppliesForOneTick) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   const auto changed = make_ula_geometry(kN, 0.25, 1.0);
@@ -904,10 +904,10 @@ TEST(PhaseShiftBeamformerOpTest, LiveArrayGeometryStickyOverride) {
   ASSERT_TRUE(out.diagnostics.empty());
   ASSERT_EQ(out.frames.size(), 3U);
   EXPECT_NE(out.frames[0].data, out.frames[1].data);
-  EXPECT_EQ(out.frames[1].data, out.frames[2].data);
+  EXPECT_EQ(out.frames[0].data, out.frames[2].data);
 }
 
-TEST(PhaseShiftBeamformerOpTest, LiveArrayTaperStickyOverride) {
+TEST(PhaseShiftBeamformerOpTest, LiveArrayTaperAppliesForOneTick) {
   constexpr int64_t kN = 8;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   auto rd = vector_to_rd_maps<double>(
@@ -924,7 +924,7 @@ TEST(PhaseShiftBeamformerOpTest, LiveArrayTaperStickyOverride) {
   ASSERT_TRUE(out.diagnostics.empty());
   ASSERT_EQ(out.frames.size(), 3U);
   EXPECT_NE(out.frames[0].data, out.frames[1].data);
-  EXPECT_EQ(out.frames[1].data, out.frames[2].data);
+  EXPECT_EQ(out.frames[0].data, out.frames[2].data);
 }
 
 TEST(PhaseShiftBeamformerOpTest, LiveOverridesRejectMalformedAndBounds) {

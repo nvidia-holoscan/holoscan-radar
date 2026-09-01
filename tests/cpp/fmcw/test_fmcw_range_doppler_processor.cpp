@@ -984,7 +984,7 @@ ThreeOutGraphRunResult run_fused_descriptor_override_graph(
 
 TEST(FMCWRangeDopplerProcessorOpTest,
      LiveClutterOverrideChangesShape) {
-  // [EA HSDK5 ONLY] Graph mid-stream sticky override harness deferred —
+  // [EA HSDK5 ONLY] Graph mid-stream override harness deferred —
   // HSDK5_PORT.md §1 (EA device/partition binding issues).
   GTEST_SKIP() << "HSDK 5 EA: live clutter_filter override harness "
                   "deferred (HSDK5_PORT.md §1)";
@@ -1028,15 +1028,16 @@ TEST(FMCWRangeDopplerProcessorOpTest,
             1e-5 * reference);
   EXPECT_GT(max_abs_diff<float>(out.frames0[0], out.frames0[1]),
             1e-2 * reference);
-  EXPECT_LT(max_abs_diff<float>(out.frames0[1], out.frames0[2]),
+  // Tick 2 publishes no override, so it reproduces tick 0's Params result.
+  EXPECT_LT(max_abs_diff<float>(out.frames0[2], out.frames0[0]),
             1e-6 * reference);
   EXPECT_NEAR(out.frames1[1].as<float>()[1],
               2.0F * out.frames1[0].as<float>()[1],
               1e-4F * out.frames1[1].as<float>()[1]);
-  EXPECT_EQ(out.frames1[1].as<float>()[1],
-            out.frames1[2].as<float>()[1]);
-  EXPECT_EQ(out.frames2[1].as<float>()[1],
-            out.frames2[2].as<float>()[1]);
+  EXPECT_EQ(out.frames1[2].as<float>()[1],
+            out.frames1[0].as<float>()[1]);
+  EXPECT_EQ(out.frames2[2].as<float>()[1],
+            out.frames2[0].as<float>()[1]);
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, FloatAndDoubleAgree) {

@@ -179,9 +179,6 @@ class HostTensorOverrideProbeOp final : public holoscan::Operator<> {
                    receive_tensor(config, "HostTensorOverrideProbeOp"));
       HOLOSCAN_TRY(effective, read_host_config_vector<int64_t>(
                                   tensor, kConfigDtype, 64, "config"));
-      sticky_config_ = effective;
-    } else if (sticky_config_.has_value()) {
-      effective = *sticky_config_;
     }
 
     {
@@ -194,9 +191,6 @@ class HostTensorOverrideProbeOp final : public holoscan::Operator<> {
 
   holoscan::Input<int64_t> data{"data"};
   holoscan::Input<holoscan::Tensor> config{"config"};
-
- private:
-  std::optional<std::vector<int64_t>> sticky_config_;
 };
 
 struct GraphRunResult {
@@ -257,7 +251,7 @@ GraphRunResult run_probe(std::vector<ConfigTick> ticks) {
 
 }  // namespace
 
-TEST(HostTensorExactOverrideProbe, ExactMatchThenStickyReuseAfterMiss) {
+TEST(HostTensorExactOverrideProbe, ExactMatchThenRevertToDefaultAfterMiss) {
   const std::vector<int64_t> exact{3, 5, 8};
   const GraphRunResult result = run_probe({
       ConfigTick{.data = 10, .config = exact},
@@ -274,7 +268,7 @@ TEST(HostTensorExactOverrideProbe, ExactMatchThenStickyReuseAfterMiss) {
   EXPECT_EQ(ProbeBank::observations[0].config, exact);
   EXPECT_FALSE(ProbeBank::observations[0].config_missing);
   EXPECT_EQ(ProbeBank::observations[1].data, 20);
-  EXPECT_EQ(ProbeBank::observations[1].config, exact);
+  EXPECT_EQ(ProbeBank::observations[1].config, (std::vector<int64_t>{1}));
   EXPECT_TRUE(ProbeBank::observations[1].config_missing);
 }
 

@@ -198,7 +198,7 @@ def test_RejectsEmptyEpsilon():
         run_dbscan(pts, 2, 2, epsilon=[])
 
 
-def test_LiveEpsilonStickyOverride():
+def test_LiveEpsilonOverrideAppliesPerTick():
     # Two nearby pairs. epsilon=0.9 keeps them separate (2 clusters);
     # epsilon=3.0 links them (1 cluster).
     pts = [0.0, 0.0, 0.1, 0.0, 2.0, 0.0, 2.1, 0.0]
@@ -219,5 +219,5 @@ def test_LiveEpsilonStickyOverride():
     assert len(outs["sizes"]) == 3
     assert outs["sizes"][0].shape[0] == 1  # eps=3.0 → merged
     assert outs["sizes"][1].shape[0] == 2  # eps=0.9 → split
-    assert outs["sizes"][2].shape[0] == 2  # sticky 0.9 → split
+    assert outs["sizes"][2].shape[0] == 2  # no override → Params 0.9 → split
     assert int(outs["sizes"][0][0]) == 4

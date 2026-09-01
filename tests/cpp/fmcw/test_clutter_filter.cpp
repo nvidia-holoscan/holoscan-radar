@@ -4,7 +4,7 @@
 // Tests for ClutterFilterOp (HSDK 5 Graph harness):
 // zero-Doppler nulling with moving-target preservation, the delay
 // cancellers' binomial high-pass response, named RX-axis handling,
-// sticky method overrides, error paths, and float/double agreement.
+// per-tick method overrides, error paths, and float/double agreement.
 
 #include <gtest/gtest.h>
 
@@ -285,7 +285,7 @@ TEST(ClutterFilterOpTest, RejectsOpaqueLeadingBatchWhenExtentsAreSiso) {
 // the observable: mean_subtraction keeps all of them, single_delay drops one,
 // double_delay drops two.
 GraphRunResult run_method_override(
-    std::vector<std::optional<ClutterFilterMethod>> overrides, bool sticky) {
+    std::vector<std::optional<ClutterFilterMethod>> overrides) {
   const auto tone = doppler_tone<float>(kChirps, kBins, 0.19);
   std::vector<std::shared_ptr<holoscan::Tensor>> cubes;
   cubes.reserve(overrides.size());
@@ -295,7 +295,6 @@ GraphRunResult run_method_override(
   }
   ClutterFilterParams params{};
   params.method = ClutterFilterMethod::kMeanSubtraction;
-  params.sticky_method = sticky;
   return holoscan::radar::testing::
       run_exact_override_single_io_operator_graph_result<
           ClutterFilterOp<float>, ClutterFilterMethod>(
@@ -310,24 +309,23 @@ GraphRunResult run_method_override(
           });
 }
 
-TEST(ClutterFilterOpTest, LiveMethodOverrideMidStreamAndSticky) {
+TEST(ClutterFilterOpTest, LiveMethodOverrideAppliesForOneTick) {
   const GraphRunResult out = run_method_override(
-      {std::nullopt, ClutterFilterMethod::kSingleDelay, std::nullopt},
-      /*sticky=*/true);
+      {std::nullopt, ClutterFilterMethod::kSingleDelay, std::nullopt});
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
   ASSERT_EQ(out.frames.size(), 3U);
-  // Params seed the first tick, the override takes effect mid-stream, and the
-  // latch keeps it once the control plane goes quiet.
+  // Params seed the first tick, the override takes effect on its own tick,
+  // and the third tick is back on Params once the control plane goes quiet.
   EXPECT_EQ(out.frames[0].shape, (std::vector<int64_t>{kChirps, kBins}));
   EXPECT_EQ(out.frames[1].shape, (std::vector<int64_t>{kChirps - 1, kBins}));
-  EXPECT_EQ(out.frames[2].shape, (std::vector<int64_t>{kChirps - 1, kBins}));
+  EXPECT_EQ(out.frames[2].shape, (std::vector<int64_t>{kChirps, kBins}));
 }
 
-TEST(ClutterFilterOpTest, LiveMethodEphemeralRevertsToParams) {
+TEST(ClutterFilterOpTest, LiveMethodRevertsToParamsAfterMiss) {
   const GraphRunResult out = run_method_override(
-      {ClutterFilterMethod::kDoubleDelay, std::nullopt}, /*sticky=*/false);
+      {ClutterFilterMethod::kDoubleDelay, std::nullopt});
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());

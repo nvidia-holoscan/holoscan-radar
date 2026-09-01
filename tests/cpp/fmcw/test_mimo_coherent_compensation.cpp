@@ -681,7 +681,7 @@ TEST(MIMOCoherentCompensationOp, WaveformConfigurableFromParams) {
   expect_tx_lanes_aligned<float>(out_b, kNumTx, kNumRx, kDoppler, kRange);
 }
 
-TEST(MIMOCoherentCompensationOp, LiveWaveformOverrideSticky) {
+TEST(MIMOCoherentCompensationOp, LiveWaveformOverrideAppliesPerTick) {
   const auto waveform_a = make_test_waveform(kPri);
   const auto waveform_b = make_test_waveform(kPri * 1.3);
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
@@ -694,11 +694,14 @@ TEST(MIMOCoherentCompensationOp, LiveWaveformOverrideSticky) {
           waveform_b, kNumTx, kNumRx, kDoppler, kRange),
       shape, complex_dtype<float>());
   MIMOCoherentCompensationParams params = tdm_params(waveform_a);
-  params.sticky_waveform = true;
 
+  // Tick 0 and tick 2 publish nothing, so both compensate with the Params
+  // waveform_a and are paired with the frame built from it; tick 1 matches
+  // Exact on waveform_b. An override that lasted longer would misalign
+  // tick 2's lanes.
   const GraphRunResult out = run_live_waveform_graph(
       {{frame_a, std::nullopt}, {frame_b, waveform_b},
-       {frame_b, std::nullopt}},
+       {frame_a, std::nullopt}},
       std::move(params));
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
@@ -719,7 +722,6 @@ TEST(MIMOCoherentCompensationOp, LiveWaveformUsesExactCaptureTime) {
           waveform_a, kNumTx, kNumRx, kDoppler, kRange),
       shape, complex_dtype<float>());
   MIMOCoherentCompensationParams params = tdm_params(waveform_a);
-  params.sticky_waveform = false;
 
   const GraphRunResult out = run_live_waveform_graph(
       {{frame, waveform_b, 1'000'000}}, std::move(params));

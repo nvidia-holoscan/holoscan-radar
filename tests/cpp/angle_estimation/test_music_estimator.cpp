@@ -1393,7 +1393,7 @@ TEST(MUSICEstimatorOpTest, AllInvalidMaskBlanksDoaAndSpectrum) {
                   "(HSDK5_PORT.md §1 / OPEN_ITEMS.md)";
 }
 
-TEST(MUSICEstimatorOpTest, LiveAzGridStickyOverride) {
+TEST(MUSICEstimatorOpTest, LiveAzGridAppliesForOneTick) {
   constexpr int64_t kN = 4;
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
@@ -1401,7 +1401,6 @@ TEST(MUSICEstimatorOpTest, LiveAzGridStickyOverride) {
   const auto block = make_block(geom, conv, 0.0, 0.0, 8, 0.02, 401u);
   auto snap = block_to_device<double>(block, {1, kN, 8});
   MUSICParams params = make_params(geom, conv, {-0.2, 0.2}, {0.0}, 1);
-  params.sticky_az_angles = true;
 
   const FiveOutGraphRunResult result = run_live_music(
       {{snap, std::nullopt, std::vector<double>{-0.1, 0.0, 0.1},
@@ -1415,11 +1414,13 @@ TEST(MUSICEstimatorOpTest, LiveAzGridStickyOverride) {
   ASSERT_EQ(result.frames1.size(), 2U);
   EXPECT_EQ(result.frames1[0].shape,
             (std::vector<int64_t>{1, 3, 1}));
+  // Tick 1's override is skewed, so it misses Exact and the grid is the
+  // two-angle Params az again -- the tick-0 match is not carried over.
   EXPECT_EQ(result.frames1[1].shape,
-            (std::vector<int64_t>{1, 3, 1}));
+            (std::vector<int64_t>{1, 2, 1}));
 }
 
-TEST(MUSICEstimatorOpTest, LiveElGridStickyOverride) {
+TEST(MUSICEstimatorOpTest, LiveElGridAppliesForOneTick) {
   constexpr int64_t kN = 4;
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
@@ -1427,7 +1428,6 @@ TEST(MUSICEstimatorOpTest, LiveElGridStickyOverride) {
   const auto block = make_block(geom, conv, 0.0, 0.0, 8, 0.02, 402u);
   auto snap = block_to_device<double>(block, {1, kN, 8});
   MUSICParams params = make_params(geom, conv, {0.0}, {-0.2, 0.2}, 1);
-  params.sticky_el_angles = true;
 
   const FiveOutGraphRunResult result = run_live_music(
       {{snap, std::nullopt, std::nullopt,
@@ -1441,11 +1441,13 @@ TEST(MUSICEstimatorOpTest, LiveElGridStickyOverride) {
   ASSERT_EQ(result.frames1.size(), 2U);
   EXPECT_EQ(result.frames1[0].shape,
             (std::vector<int64_t>{1, 1, 3}));
+  // Tick 1's override is skewed, so it misses Exact and the grid is the
+  // two-angle Params el again.
   EXPECT_EQ(result.frames1[1].shape,
-            (std::vector<int64_t>{1, 1, 3}));
+            (std::vector<int64_t>{1, 1, 2}));
 }
 
-TEST(MUSICEstimatorOpTest, LiveArrayGeometryStickyOverride) {
+TEST(MUSICEstimatorOpTest, LiveArrayGeometryAppliesForOneTick) {
   constexpr int64_t kN = 4;
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
@@ -1456,7 +1458,6 @@ TEST(MUSICEstimatorOpTest, LiveArrayGeometryStickyOverride) {
   auto snap = block_to_device<double>(block, {1, kN, 16});
   MUSICParams params =
       make_params(seed_geom, conv, linspace(-0.3, 0.3, 31), {0.0}, 1);
-  params.sticky_array_geometry = true;
 
   const FiveOutGraphRunResult result = run_live_music(
       {{snap, live_geom, std::nullopt, std::nullopt, std::nullopt, 0},
@@ -1466,10 +1467,12 @@ TEST(MUSICEstimatorOpTest, LiveArrayGeometryStickyOverride) {
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
   ASSERT_EQ(result.frames1.size(), 2U);
-  EXPECT_EQ(result.frames1[0].data, result.frames1[1].data);
+  // Tick 1 publishes nothing, so it is back on the seed geometry (a
+  // different wavelength) and the spectrum differs.
+  EXPECT_NE(result.frames1[0].data, result.frames1[1].data);
 }
 
-TEST(MUSICEstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
+TEST(MUSICEstimatorOpTest, LiveSpatialSmoothingAppliesForOneTick) {
   constexpr int64_t kN = 8;
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
@@ -1478,26 +1481,28 @@ TEST(MUSICEstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
   auto snap = block_to_device<double>(block, {1, kN, 16});
   MUSICParams params =
       make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0}, 1);
-  params.sticky_spatial_smoothing = true;
 
   const FiveOutGraphRunResult result = run_live_music(
-      {{snap, std::nullopt, std::nullopt, std::nullopt,
+      {{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0},
+       {snap, std::nullopt, std::nullopt, std::nullopt,
          SpatialSmoothingOverride{.count = 1, .first = 3}, 0},
        {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0}},
       std::move(params), {.smoothing = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames4.size(), 2U);
-  EXPECT_EQ(result.frames4[0].shape, (std::vector<int64_t>{1, 6}));
-  EXPECT_EQ(result.frames4[1].shape, (std::vector<int64_t>{1, 6}));
+  ASSERT_EQ(result.frames4.size(), 3U);
+  // Smoothing changes the covariance order, so the eigenvalue count is the
+  // observable. Ticks 0 and 2 publish nothing and share the Params order.
+  EXPECT_NE(result.frames4[1].shape, result.frames4[0].shape);
+  EXPECT_EQ(result.frames4[2].shape, result.frames4[0].shape);
 }
 
 // num_sources is reported verbatim on source_count (clamped by max_sources),
-// so an int32 output value carries both the override and the sticky latch.
-// Tick 0 sends nothing and pins the Params baseline inside the same run, so
-// nothing is compared across graph runs.
-TEST(MUSICEstimatorOpTest, LiveNumSourcesStickyOverride) {
+// so an int32 output value carries the override directly. Ticks 0 and 2 send
+// nothing and pin the Params baseline inside the same run, so nothing is
+// compared across graph runs.
+TEST(MUSICEstimatorOpTest, LiveNumSourcesAppliesForOneTick) {
   constexpr int64_t kN = 12;
   constexpr int64_t kS = 128;
   AngleConvention conv;
@@ -1509,7 +1514,6 @@ TEST(MUSICEstimatorOpTest, LiveNumSourcesStickyOverride) {
   MUSICParams params =
       make_params(geom, conv, linspace(-0.4, 0.4, 41), {0.0},
                   /*num_sources=*/1, 1e-2, /*max_sources=*/4);
-  params.sticky_num_sources = true;
 
   const FiveOutGraphRunResult result = run_live_music(
       {{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
@@ -1525,14 +1529,14 @@ TEST(MUSICEstimatorOpTest, LiveNumSourcesStickyOverride) {
   ASSERT_EQ(result.frames3.size(), 3U);
   EXPECT_EQ(result.frames3[0].as<int32_t>()[0], 1);
   EXPECT_EQ(result.frames3[1].as<int32_t>()[0], 2);
-  EXPECT_EQ(result.frames3[2].as<int32_t>()[0], 2);
+  EXPECT_EQ(result.frames3[2].as<int32_t>()[0], 1);
 }
 
 // source_count_pfa only steers the EFT model order, so the observable is the
 // int32 source_count. The crafted covariance pins the eigenvalue profile
 // exactly, which makes the 1 -> 2 transition between the Params Pfa and the
 // override Pfa deterministic instead of a noise draw.
-TEST(MUSICEstimatorOpTest, LiveSourceCountPfaStickyOverride) {
+TEST(MUSICEstimatorOpTest, LiveSourceCountPfaAppliesForOneTick) {
   const std::vector<double> spectrum = {0.8930540251, 0.9468277841,
                                         1.3517214181, 1.6732266229,
                                         9.0798471606, 14.3477610683};
@@ -1551,7 +1555,6 @@ TEST(MUSICEstimatorOpTest, LiveSourceCountPfaStickyOverride) {
                   /*num_sources=*/-1, /*source_count_pfa=*/1e-4,
                   /*max_sources=*/4, /*smoothing=*/{},
                   /*forward_backward=*/false);
-  params.sticky_source_count_pfa = true;
 
   const FiveOutGraphRunResult result = run_live_music(
       {{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
@@ -1567,12 +1570,12 @@ TEST(MUSICEstimatorOpTest, LiveSourceCountPfaStickyOverride) {
   ASSERT_EQ(result.frames3.size(), 3U);
   EXPECT_EQ(result.frames3[0].as<int32_t>()[0], 1);
   EXPECT_EQ(result.frames3[1].as<int32_t>()[0], 2);
-  EXPECT_EQ(result.frames3[2].as<int32_t>()[0], 2);
+  EXPECT_EQ(result.frames3[2].as<int32_t>()[0], 1);
 }
 
-// max_sources widens doa_multi to {items, max_sources, 2}, so both the
-// override and the sticky latch show up in the output shape alone.
-TEST(MUSICEstimatorOpTest, LiveMaxSourcesStickyOverrideReallocates) {
+// max_sources widens doa_multi to {items, max_sources, 2}, so the override
+// shows up in the output shape alone.
+TEST(MUSICEstimatorOpTest, LiveMaxSourcesAppliesForOneTickAndReallocates) {
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;
   constexpr int64_t kLiveMaxSources = 3;
@@ -1584,7 +1587,6 @@ TEST(MUSICEstimatorOpTest, LiveMaxSourcesStickyOverrideReallocates) {
   MUSICParams params =
       make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0},
                   /*num_sources=*/1, 1e-2, /*max_sources=*/1);
-  params.sticky_max_sources = true;
 
   const FiveOutGraphRunResult result = run_live_music(
       {{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
@@ -1601,8 +1603,8 @@ TEST(MUSICEstimatorOpTest, LiveMaxSourcesStickyOverrideReallocates) {
   EXPECT_EQ(result.frames2[0].shape, (std::vector<int64_t>{1, 1, 2}));
   EXPECT_EQ(result.frames2[1].shape,
             (std::vector<int64_t>{1, kLiveMaxSources, 2}));
-  EXPECT_EQ(result.frames2[2].shape,
-            (std::vector<int64_t>{1, kLiveMaxSources, 2}));
+  // Tick 2 reverts to the Params max_sources, narrowing doa_multi back.
+  EXPECT_EQ(result.frames2[2].shape, (std::vector<int64_t>{1, 1, 2}));
 }
 
 }  // namespace

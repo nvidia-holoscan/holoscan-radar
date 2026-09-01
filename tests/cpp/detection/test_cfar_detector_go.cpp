@@ -480,18 +480,18 @@ TEST(CFARDetectorOpGoTest, MoreConservativeThanCaWithOneSidedInterferer) {
             out_ca.noise.as<double>()[dt * kRange + rt]);
 }
 
-TEST(CFARDetectorOpGoTest, LiveThresholdScaleOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream sticky live harness "
+TEST(CFARDetectorOpGoTest, LiveThresholdScaleOverrideMidStream) {
+  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live harness "
                    "deferred (HSDK5_PORT.md §1)";
 }
 
-TEST(CFARDetectorOpGoTest, LivePfaOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream sticky live harness "
+TEST(CFARDetectorOpGoTest, LivePfaOverrideMidStream) {
+  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live harness "
                    "deferred (HSDK5_PORT.md §1)";
 }
 
-TEST(CFARDetectorOpGoTest, LiveMaxDetectionsOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream sticky live harness "
+TEST(CFARDetectorOpGoTest, LiveMaxDetectionsOverrideMidStream) {
+  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live harness "
                    "deferred (HSDK5_PORT.md §1)";
 }
 

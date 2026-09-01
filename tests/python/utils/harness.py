@@ -274,7 +274,7 @@ def wire_leading_override(
     """Wire an override source that emits only on the leading ticks.
 
     CountCondition equals ``len(values)``, then the source stays silent while
-    the data source keeps ticking — sticky-override semantics.
+    the data source keeps ticking, so the later ticks revert to Params.
 
     Values are emitted as registered C++ types (``emit`` 3rd arg) so wrapped
     C++ operators' ``receive<T>`` override ports apply them.
@@ -346,7 +346,8 @@ def run_operator(
         Data-plane port names on the operator under test.
     overrides:
         Optional map of override-port name → value sequence. Each sequence
-        may be shorter than ``frames`` (sticky override / leading-only).
+        may be shorter than ``frames``; the remaining ticks see no override
+        and use the operator's Params value.
     extra_inputs:
         Additional TensorMap input ports → frame sequences (same length as
         ``frames``, or broadcast a length-1 sequence).

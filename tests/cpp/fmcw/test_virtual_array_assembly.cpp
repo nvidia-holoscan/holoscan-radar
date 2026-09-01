@@ -3,8 +3,9 @@
 
 // Contract tests for VirtualArrayAssemblyOp (HSDK 5 Graph harness):
 // virtual layout, overlap policies, array_geometry packed Tensor emission,
-// opaque leading-batch rejection, [live] wavelength overrides (sticky §1
-// deferred), cross-cutting input validation, and float/double agreement.
+// opaque leading-batch rejection, [live] wavelength overrides (mid-stream
+// harness §1 deferred), cross-cutting input validation, and float/double
+// agreement.
 
 #include <gtest/gtest.h>
 
@@ -426,11 +427,11 @@ TEST(VirtualArrayAssemblyOp, RejectsOpaqueLeadingBatch) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(VirtualArrayAssemblyOp, LiveWavelengthOverrideSticky) {
-  // [EA HSDK5 ONLY] Graph mid-stream sticky override harness is deferred
+TEST(VirtualArrayAssemblyOp, LiveWavelengthOverrideMidStream) {
+  // [EA HSDK5 ONLY] Graph mid-stream override harness is deferred
   // (HSDK5_PORT.md §1). Skip until the Graph harness supports multi-tick
   // override injection.
-  GTEST_SKIP() << "HSDK 5 Graph: sticky mid-stream override harness "
+  GTEST_SKIP() << "HSDK 5 Graph: mid-stream override harness "
                   "deferred (HSDK5_PORT §1)";
 }
 

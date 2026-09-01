@@ -355,8 +355,8 @@ TEST(CFARDetectorAlphaLutTest,
 TEST(CFARDetectorAlphaLutTest,
      NonBlockingPfaOverrideServesStaleLut) {
   GTEST_SKIP()
-      << "[EA HSDK5 ONLY] Graph mid-stream sticky "
-         "live harness deferred (HSDK5_PORT.md §1)";
+      << "[EA HSDK5 ONLY] Graph mid-stream live "
+         "harness deferred (HSDK5_PORT.md §1)";
 }
 
 int64_t brute_max_go_lut_index(int num_doppler,

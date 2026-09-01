@@ -239,9 +239,9 @@ TEST(SnapshotGatherOpTest, EmptyDetections) {
   EXPECT_EQ(out.is_valid.shape[0], 0);
 }
 
-TEST(SnapshotGatherOpTest, LiveSnapshotWindowStickyOverride) {
+TEST(SnapshotGatherOpTest, LiveSnapshotWindowAppliesForOneTick) {
   // [EA HSDK5 ONLY] See docs/planning/HSDK5_PORT.md §1 — Graph mid-stream
-  // sticky override harness fails on EA device/partition binding
+  // live override harness fails on EA device/partition binding
   // (RUNTIME_PORT_BINDING_UNAVAILABLE / RUNTIME_EXECUTION_LANE_PLAN_INVALID).
   // Params authoring covers snapshot_window; restore once §1 is closed.
   GTEST_SKIP() << "HSDK 5 EA: live snapshot_window override harness deferred "

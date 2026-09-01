@@ -637,7 +637,6 @@ std::shared_ptr<holoscan::Tensor> live_epsilon_points() {
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonExactMatchChangesClustering) {
   ClusterDBSCANParams params = make_params({1.0}, 2);
-  params.sticky_epsilon = false;
   const auto out = run_epsilon_override_graph(
       {{live_epsilon_points(), std::vector<double>{3.0, 1.0}}},
       std::move(params));
@@ -650,7 +649,6 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonExactMatchChangesClustering) {
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonSkewedCaptureMissesExact) {
   ClusterDBSCANParams params = make_params({1.0}, 2);
-  params.sticky_epsilon = false;
   const auto out = run_epsilon_override_graph(
       {{live_epsilon_points(), std::vector<double>{3.0, 1.0}, 1}},
       std::move(params));
@@ -661,24 +659,8 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonSkewedCaptureMissesExact) {
   EXPECT_EQ(out.frames1[0].shape[0], 0);
 }
 
-TEST(ClusterDBSCANOpTest, LiveEpsilonStickyKeepsLastExactMatch) {
+TEST(ClusterDBSCANOpTest, LiveEpsilonRevertsToParamsAfterMiss) {
   ClusterDBSCANParams params = make_params({1.0}, 2);
-  params.sticky_epsilon = true;
-  const auto out = run_epsilon_override_graph(
-      {{live_epsilon_points(), std::vector<double>{3.0, 1.0}},
-       {live_epsilon_points(), std::nullopt}},
-      std::move(params));
-
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames1.size(), 2U);
-  EXPECT_EQ(out.frames1[0].shape[0], 1);
-  EXPECT_EQ(out.frames1[1].shape[0], 1);
-}
-
-TEST(ClusterDBSCANOpTest, LiveEpsilonEphemeralRevertsToParams) {
-  ClusterDBSCANParams params = make_params({1.0}, 2);
-  params.sticky_epsilon = false;
   const auto out = run_epsilon_override_graph(
       {{live_epsilon_points(), std::vector<double>{3.0, 1.0}},
        {live_epsilon_points(), std::nullopt}},
@@ -728,39 +710,23 @@ std::shared_ptr<holoscan::Tensor> live_max_clusters_points() {
       2);
 }
 
-TEST(ClusterDBSCANOpTest, LiveMinPointsStickyOverride) {
-  ClusterDBSCANParams latching = make_params({0.5}, 2);
-  latching.sticky_min_points = true;
-  const auto latched = run_epsilon_override_graph(
+TEST(ClusterDBSCANOpTest, LiveMinPointsRevertsToParamsAfterMiss) {
+  const auto out = run_epsilon_override_graph(
       {{live_min_points_points(), std::nullopt, 0, int64_t{3}},
        {live_min_points_points(), std::nullopt, 0, std::nullopt}},
-      std::move(latching));
+      make_params({0.5}, 2));
 
-  ASSERT_TRUE(latched.plan_ok) << latched.plan_json;
-  ASSERT_TRUE(latched.diagnostics.empty());
-  ASSERT_EQ(latched.frames1.size(), 2U);
-  // Tick 0 matches Exact (the pair drops to noise); tick 1 publishes nothing,
-  // so sticky_min_points holds the override.
-  EXPECT_EQ(latched.frames1[0].shape[0], 1);
-  EXPECT_EQ(latched.frames1[1].shape[0], 1);
-
-  ClusterDBSCANParams ephemeral = make_params({0.5}, 2);
-  ephemeral.sticky_min_points = false;
-  const auto reverted = run_epsilon_override_graph(
-      {{live_min_points_points(), std::nullopt, 0, int64_t{3}},
-       {live_min_points_points(), std::nullopt, 0, std::nullopt}},
-      std::move(ephemeral));
-
-  ASSERT_TRUE(reverted.plan_ok) << reverted.plan_json;
-  ASSERT_TRUE(reverted.diagnostics.empty());
-  ASSERT_EQ(reverted.frames1.size(), 2U);
-  EXPECT_EQ(reverted.frames1[0].shape[0], 1);
-  EXPECT_EQ(reverted.frames1[1].shape[0], 2);
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames1.size(), 2U);
+  // Tick 0 matches Exact and the pair drops to noise; tick 1 publishes
+  // nothing, so min_points is the Params value again and the pair returns.
+  EXPECT_EQ(out.frames1[0].shape[0], 1);
+  EXPECT_EQ(out.frames1[1].shape[0], 2);
 }
 
 TEST(ClusterDBSCANOpTest, LiveMinPointsSkewedCaptureMissesExact) {
   ClusterDBSCANParams params = make_params({0.5}, 2);
-  params.sticky_min_points = false;
   const auto out = run_epsilon_override_graph(
       {{live_min_points_points(), std::nullopt, 1, int64_t{3}}},
       std::move(params));
@@ -771,38 +737,21 @@ TEST(ClusterDBSCANOpTest, LiveMinPointsSkewedCaptureMissesExact) {
   EXPECT_EQ(out.frames1[0].shape[0], 2);
 }
 
-TEST(ClusterDBSCANOpTest, LiveMaxClustersStickyOverride) {
-  ClusterDBSCANParams latching = make_params({0.5}, 2);
-  latching.sticky_max_clusters = true;
-  const auto latched = run_epsilon_override_graph(
+TEST(ClusterDBSCANOpTest, LiveMaxClustersRevertsToParamsAfterMiss) {
+  const auto out = run_epsilon_override_graph(
       {{live_max_clusters_points(), std::nullopt, 0, std::nullopt,
         int64_t{2}},
        {live_max_clusters_points(), std::nullopt, 0, std::nullopt,
         std::nullopt}},
-      std::move(latching));
+      make_params({0.5}, 2));
 
-  ASSERT_TRUE(latched.plan_ok) << latched.plan_json;
-  ASSERT_TRUE(latched.diagnostics.empty());
-  ASSERT_EQ(latched.frames1.size(), 2U);
-  // Params leave the cap open (3 clusters); the override caps to 2 and
-  // sticky_max_clusters holds that cap when tick 1 publishes nothing.
-  EXPECT_EQ(latched.frames1[0].shape[0], 2);
-  EXPECT_EQ(latched.frames1[1].shape[0], 2);
-
-  ClusterDBSCANParams ephemeral = make_params({0.5}, 2);
-  ephemeral.sticky_max_clusters = false;
-  const auto reverted = run_epsilon_override_graph(
-      {{live_max_clusters_points(), std::nullopt, 0, std::nullopt,
-        int64_t{2}},
-       {live_max_clusters_points(), std::nullopt, 0, std::nullopt,
-        std::nullopt}},
-      std::move(ephemeral));
-
-  ASSERT_TRUE(reverted.plan_ok) << reverted.plan_json;
-  ASSERT_TRUE(reverted.diagnostics.empty());
-  ASSERT_EQ(reverted.frames1.size(), 2U);
-  EXPECT_EQ(reverted.frames1[0].shape[0], 2);
-  EXPECT_EQ(reverted.frames1[1].shape[0], 3);
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames1.size(), 2U);
+  // Params leave the cap open (3 clusters); the override caps tick 0 to 2,
+  // and tick 1 publishes nothing so the open cap is back.
+  EXPECT_EQ(out.frames1[0].shape[0], 2);
+  EXPECT_EQ(out.frames1[1].shape[0], 3);
 }
 
 }  // namespace
