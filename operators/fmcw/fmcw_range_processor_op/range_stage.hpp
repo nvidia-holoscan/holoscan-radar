@@ -31,7 +31,8 @@
 
 namespace holoscan::radar::detail {
 
-// Effective (override-resolved) range-stage configuration for one tick.
+// Kernel-facing knobs for one tick. Optionals replace Params sentinels
+// (nfft == 0, empty waveform).
 struct RangeStageConfig {
   WindowSpec window{};
   bool apply_dechirp{false};

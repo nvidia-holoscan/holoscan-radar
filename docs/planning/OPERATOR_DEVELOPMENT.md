@@ -106,7 +106,7 @@ Put math in the stage. Put host calibration / LUT builders in dedicated TUs
 | Exact `[live]` resolve | `radar_common/sdk/override_param.hpp` |
 | Warn-once artifact cache | `radar_common/sdk/config_cache.hpp` |
 | Arg setters for custom types | `radar_common/sdk/arg_setters.hpp` |
-| Batching / dtype / device / contiguity checks | `radar_common/tensor/tensor_utils.hpp` |
+| Batching / dtype / device / contiguity checks | `radar_common/tensor/tensor_utils.hpp` (`collapse_named_tx_rx_batch` for FMCW cubes) |
 | CUDA last-error guard | `radar_common/tensor/cuda_check.hpp` |
 | Device tensor alloc | `radar_common/tensor/dlpack_buffer.hpp` |
 | MatX views | `radar_common/tensor/matx_utils.hpp` (`.cu` / stage only) |
@@ -115,7 +115,8 @@ Put math in the stage. Put host calibration / LUT builders in dedicated TUs
 **Do not re-derive per-operator I/O or validation boilerplate.** The single-entry
 `TensorMap` receive/emit (`receive_single` / `receive_optional` / `emit_single`),
 the input checks (`require_cuda_accessible` / `require_contiguous` /
-`require_dtype`), and the CUDA last-error guard (`check_cuda`) all live in
+`require_dtype`), named-axis cube collapse (`collapse_named_tx_rx_batch`),
+and the CUDA last-error guard (`check_cuda`) all live in
 `radar_common` and take the operator name as a `who` argument so error messages
 stay specific. Call them; do not paste a local `namespace { ... }` copy into the
 `.cu`. If you genuinely need a helper that is not there yet and more than one

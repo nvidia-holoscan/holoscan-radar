@@ -125,10 +125,12 @@ throws / sits in `OPEN_ITEMS.md`.
       value. Keep no override state between ticks. Pass `changed` when
       costly rebuilds use `ConfigCache`.
 - [ ] **Named axes / no opaque batch:** infer trailing (and any named
-      leading) axes from input tensors; use `collapse_batch` /
-      `full_rank_shape` only as a MatX layout helper over **named** axes;
-      reject unexpected extra leading dims. Fat outs take
-      `MaxTensorExtents` at `graph.op()` (see `MAX_TENSOR_EXTENTS.md`).
+      leading) axes from input tensors; use `collapse_named_tx_rx_batch`
+      for FMCW cubes (it wraps `collapse_batch` + MaxTensorExtents
+      leading-rank / `max_tx*max_rx` checks). Use `full_rank_shape` only
+      as a MatX layout helper over **named** axes; reject unexpected extra
+      leading dims. Fat outs take `MaxTensorExtents` at `graph.op()` (see
+      `MAX_TENSOR_EXTENTS.md`).
 - [ ] **Output shapes** follow the contract when `[live]` params change
       leading dimensions (downstream re-infers).
 - [ ] **CUDA stream:** `receive_cuda_stream()` on the primary data input;

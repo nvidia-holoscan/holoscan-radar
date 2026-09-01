@@ -33,8 +33,10 @@ expected<void, Error> fail_invalid(const std::string& message) {
 
 constexpr const char* kOpName = "FMCWDopplerProcessorOp";
 
-// Effective per-tick values own converted schema payloads.
-struct EffectiveDopplerConfig {
+// Pinned Params for this tick, with any matched [live] override applied.
+// Converted schema payloads are owned here. An unwired or unmatched port
+// keeps the Params value; a match is this tick only (no latch).
+struct ResolvedParams {
   WindowSpec window;
   bool center_zero_doppler;
   FMCWWaveformDescriptor waveform;
@@ -42,17 +44,16 @@ struct EffectiveDopplerConfig {
   int64_t nfft;
 };
 
-// Validated stage configuration plus the output-axis decisions derived from
-// the current input shape.
-struct ValidatedDopplerConfig {
+// Kernel knobs plus output-axis decisions derived from this tick's input
+// shape.
+struct DopplerStagePlan {
   detail::DopplerStageConfig stage;
   int64_t num_doppler;
   bool waveform_present;
 };
 
-// Resolve Exact inputs against the pinned parameters. Each override applies to
-// this tick only; an unwired or unmatched port falls back to Params.
-expected<EffectiveDopplerConfig, Error> resolve_overrides(
+// Merge Exact [live] ports onto pinned Params.
+expected<ResolvedParams, Error> resolve_params(
     Input<wire::WindowSpecT>& doppler_window_in,
     Input<bool>& center_zero_doppler_in,
     Input<wire::FMCWWaveformT>& waveform_in, Input<FftNorm>& fft_norm_in,
@@ -74,7 +75,7 @@ expected<EffectiveDopplerConfig, Error> resolve_overrides(
                resolve_live_override(fft_norm_in, pinned.fft_norm));
   HOLOSCAN_TRY(auto nfft, resolve_live_override(nfft_in, pinned.nfft));
 
-  return EffectiveDopplerConfig{
+  return ResolvedParams{
       .window = std::move(doppler_window),
       .center_zero_doppler = center_zero_doppler,
       .waveform = std::move(waveform),
@@ -82,42 +83,12 @@ expected<EffectiveDopplerConfig, Error> resolve_overrides(
       .nfft = nfft};
 }
 
-// Collapse the named leading axes for MatX and enforce their extent bounds.
-expected<BatchedShape, Error> resolve_batched_shape(
-    const Tensor& input, const MaxTensorExtents& extents) {
-  BatchedShape batched;
-  try {
-    batched = collapse_batch(input, "range_profiles");
-  } catch (const std::invalid_argument& e) {
-    return make_unexpected(
-        Error{ErrorCode::kInvalidArgument, std::string(e.what())});
-  }
-
-  const std::size_t max_leading = named_tx_rx_leading_rank(extents);
-  if (batched.leading.size() > max_leading) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        unexpected_leading_message(kOpName, batched.leading.size(),
-                                   max_leading)});
-  }
-  const std::int64_t max_rx = extent_rx_or_channels(extents);
-  const std::int64_t max_tx = extent_or_one(extents.max_tx);
-  if (batched.batch > max_tx * max_rx) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) + ": leading product " +
-            std::to_string(batched.batch) +
-            " exceeds max_tx*max_rx from MaxTensorExtents"});
-  }
-  return batched;
-}
-
-// Validate configuration-dependent constraints and build the stage config.
-expected<ValidatedDopplerConfig, Error> validate_configuration(
-    const EffectiveDopplerConfig& effective, const BatchedShape& batched) {
+// Check resolved params against this tick's input and build the stage plan.
+expected<DopplerStagePlan, Error> build_doppler_stage_plan(
+    const ResolvedParams& resolved, const BatchedShape& batched) {
   std::optional<int64_t> opt_nfft;
-  if (effective.nfft != 0) {
-    opt_nfft = effective.nfft;
+  if (resolved.nfft != 0) {
+    opt_nfft = resolved.nfft;
   }
 
   if (opt_nfft.has_value() && *opt_nfft < batched.rows) {
@@ -128,22 +99,22 @@ expected<ValidatedDopplerConfig, Error> validate_configuration(
             ") on input port 'range_profiles'"});
   }
 
-  const bool waveform_present = effective.waveform.is_valid();
+  const bool waveform_present = resolved.waveform.is_valid();
   std::optional<FMCWWaveformDescriptor> opt_waveform;
   if (waveform_present) {
-    opt_waveform = effective.waveform;
+    opt_waveform = resolved.waveform;
   }
 
   detail::DopplerStageConfig stage;
-  stage.window = effective.window;
-  stage.center_zero_doppler = effective.center_zero_doppler;
+  stage.window = resolved.window;
+  stage.center_zero_doppler = resolved.center_zero_doppler;
   stage.waveform = std::move(opt_waveform);
-  stage.fft_norm = effective.fft_norm;
+  stage.fft_norm = resolved.fft_norm;
   stage.nfft = opt_nfft;
   const int64_t num_doppler =
       detail::doppler_num_bins(batched.rows, stage.nfft);
 
-  return ValidatedDopplerConfig{
+  return DopplerStagePlan{
       .stage = std::move(stage),
       .num_doppler = num_doppler,
       .waveform_present = waveform_present};
@@ -236,9 +207,9 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
   const FMCWDopplerProcessorParams& pinned =
       context.params<FMCWDopplerProcessorParams>();
 
-  HOLOSCAN_TRY(auto effective,
-               resolve_overrides(doppler_window_in, center_zero_doppler_in,
-                                 waveform_in, fft_norm_in, nfft_in, pinned));
+  HOLOSCAN_TRY(auto resolved,
+               resolve_params(doppler_window_in, center_zero_doppler_in,
+                              waveform_in, fft_norm_in, nfft_in, pinned));
 
   try {
     classify_input_dtype<T>(input, "range_profiles", /*allow_real=*/false);
@@ -246,10 +217,11 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
     return fail_invalid(e.what());
   }
 
-  HOLOSCAN_TRY(auto batched, resolve_batched_shape(input, extents_));
+  HOLOSCAN_TRY(auto batched,
+               collapse_named_tx_rx_batch(
+                   input, extents_, "range_profiles", kOpName));
 
-  HOLOSCAN_TRY(auto validated,
-               validate_configuration(effective, batched));
+  HOLOSCAN_TRY(auto plan, build_doppler_stage_plan(resolved, batched));
 
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
@@ -257,20 +229,20 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
     return make_unexpected(Error{ErrorCode::kNotSupported, msg});
   }
 
-  // Conditional velocity_bins: emitted only when waveform is effective.
+  // Conditional velocity_bins: emitted only when a waveform is present.
   // Enqueued before the Doppler FFT: its host-staged upload waits on the
   // stream, so this ordering keeps that wait off the FFT hot path.
   std::optional<TensorOutputLoan> velocity_loan;
-  if (validated.waveform_present && velocity_bins_out_.active()) {
+  if (plan.waveform_present && velocity_bins_out_.active()) {
     HOLOSCAN_TRY(auto loan,
                  prepare_device_tensor(
                      velocity_bins, context,
-                     std::vector<int64_t>{validated.num_doppler},
+                     std::vector<int64_t>{plan.num_doppler},
                      real_dtype<T>(),
                      [&](void* out_ptr, std::size_t) -> expected<void, Error> {
                        try {
                          detail::fill_velocity_bins<T>(
-                             validated.stage, validated.num_doppler,
+                             plan.stage, plan.num_doppler,
                              static_cast<T*>(out_ptr),
                              stream);
                        } catch (const std::invalid_argument& e) {
@@ -283,7 +255,7 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
 
   // Run the Doppler stage.
   const std::vector<int64_t> out_shape =
-      full_rank_shape(batched, validated.num_doppler, batched.cols);
+      full_rank_shape(batched, plan.num_doppler, batched.cols);
   const DLDataType dtype = complex_dtype<T>();
 
   const void* input_ptr = input.data();
@@ -293,9 +265,9 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
                    [&](void* out_ptr, std::size_t) -> expected<void, Error> {
                      try {
                        detail::run_doppler_stage<T>(
-                           validated.stage, *state_, input_ptr, batched.batch,
+                           plan.stage, *state_, input_ptr, batched.batch,
                            batched.rows, batched.cols, out_ptr,
-                           validated.num_doppler, stream);
+                           plan.num_doppler, stream);
                      } catch (const std::invalid_argument& e) {
                        return fail_invalid(e.what());
                      }

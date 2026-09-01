@@ -204,30 +204,9 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
     return fail_invalid(e.what());
   }
 
-  BatchedShape batched;
-  try {
-    batched = collapse_batch(input, "adc_cube");
-  } catch (const std::invalid_argument& e) {
-    return fail_invalid(e.what());
-  }
-  const std::size_t max_leading =
-      named_tx_rx_leading_rank(extents_);
-  if (batched.leading.size() > max_leading) {
-    return fail_invalid(unexpected_leading_message(
-        op_name.c_str(), batched.leading.size(),
-        max_leading));
-  }
-  const std::int64_t max_rx_val =
-      extent_rx_or_channels(extents_);
-  const std::int64_t max_tx_val =
-      extent_or_one(extents_.max_tx);
-  if (batched.batch > max_tx_val * max_rx_val) {
-    return fail_invalid(
-        op_name + ": leading product " +
-        std::to_string(batched.batch) +
-        " exceeds max_tx*max_rx from "
-        "MaxTensorExtents");
-  }
+  HOLOSCAN_TRY(auto batched,
+               collapse_named_tx_rx_batch(
+                   input, extents_, "adc_cube", op_name.c_str()));
 
   const int64_t num_chirps = batched.rows;
   const int64_t samples_per_chirp = batched.cols;

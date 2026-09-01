@@ -99,25 +99,9 @@ expected<void, Error> ClutterFilterOp<T>::compute(ExecutionContext& context) {
     return fail_invalid(e.what());
   }
 
-  BatchedShape batched;
-  try {
-    batched = collapse_batch(input, "range_profiles");
-  } catch (const std::invalid_argument& e) {
-    return fail_invalid(e.what());
-  }
-
-  const std::size_t max_leading = named_tx_rx_leading_rank(extents_);
-  if (batched.leading.size() > max_leading) {
-    return fail_invalid(unexpected_leading_message(
-        "ClutterFilterOp", batched.leading.size(), max_leading));
-  }
-  const std::int64_t max_rx = extent_rx_or_channels(extents_);
-  const std::int64_t max_tx = extent_or_one(extents_.max_tx);
-  if (batched.batch > max_tx * max_rx) {
-    return fail_invalid(
-        "ClutterFilterOp: leading product " + std::to_string(batched.batch) +
-        " exceeds max_tx*max_rx from MaxTensorExtents");
-  }
+  HOLOSCAN_TRY(auto batched,
+               collapse_named_tx_rx_batch(
+                   input, extents_, "range_profiles", "ClutterFilterOp"));
   if (batched.rows > *extents_.max_chirps ||
       batched.cols > *extents_.max_range_bins) {
     return fail_invalid(

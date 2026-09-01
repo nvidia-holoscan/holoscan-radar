@@ -29,7 +29,8 @@
 
 namespace holoscan::radar::detail {
 
-// Effective (override-resolved) Doppler-stage configuration for one tick.
+// Kernel-facing knobs for one tick. Optionals replace Params sentinels
+// (nfft == 0, empty waveform).
 struct DopplerStageConfig {
   WindowSpec window{};
   bool center_zero_doppler{true};
