@@ -148,7 +148,7 @@ by both apps:
 - **`mode: hold`** — pin one estimator (`hold: <name>`); ignore external input.
 - **`mode: file`** — poll `control_path` each frame. Writing a recognized name
   (`beamscan | mvdr | music | root_music | esprit`, or `1`–`5`) latches that
-  estimator (sticky) until changed; an empty/absent/unrecognized file falls back
+  estimator until changed; an empty/absent/unrecognized file falls back
   to the rotation. This is how you get **real-time control that still works
   unattended** — leave it rotating, override on demand:
 

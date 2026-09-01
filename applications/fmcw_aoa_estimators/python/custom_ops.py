@@ -200,9 +200,9 @@ class EstimatorSelector:
     Selection sources, in resolution order:
       hold   - a fixed estimator (hold_index), ignores external input.
       rotate - fixed dwell: index = (frame // rotate_period) % N.
-      file   - poll control_path each frame; a recognized name latches (sticky)
-               until changed; an absent/empty/unrecognized file falls back to
-               the rotation.
+      file   - poll control_path each frame; a recognized name latches until
+               changed; an absent/empty/unrecognized file falls back to the
+               rotation.
     """
 
     def __init__(
