@@ -184,14 +184,20 @@ output needs anyway (`angle_spectrum` is the same scan-grid pass that yields
 
 **`latched`** — the port has dedicated work worth skipping. Hold a
 `LatchedOutput` member, gate that work on `active()`, and emit through it. The
-first failed emit warns once and disables the port for the rest of the run:
+first failed emit warns once and disables the port for the rest of the run.
+Publish required outputs first (`emit_prepared_tensor`); then one gated `if`
+for the latched axis (allocate, fill, `LatchedOutput::emit`). Holding a
+required emit until the optional loan is prepared makes an optional allocate
+failure drop the required output. Exception: if the axis fill synchronizes
+the compute stream, enqueue it before the hot-path kernel so the wait stays
+off that path.
 
 ```cpp
-if (waveform_present && range_bins_out_.active()) { /* allocate + fill */ }
-...
-if (bins_loan.has_value()) {
-  range_bins_out_.emit(range_bins, context, std::move(*bins_loan),
-                       "FMCWRangeProcessorOp.range_bins");
+HOLOSCAN_TRY(emit_prepared_tensor(rd_maps, context, std::move(rd_loan)));
+if (plan.stage.waveform.has_value() && velocity_bins_out_.active()) {
+  HOLOSCAN_TRY(auto bins_loan, prepare_device_tensor(/* fill */));
+  velocity_bins_out_.emit(velocity_bins, context, std::move(bins_loan),
+                          "FMCWDopplerProcessorOp.velocity_bins");
 }
 ```
 

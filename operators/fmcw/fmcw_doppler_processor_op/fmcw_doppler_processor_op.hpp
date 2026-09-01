@@ -40,20 +40,25 @@ struct DopplerStageState;  // kernel-side caches; defined in doppler_stage.hpp
 // parameters; module-wide conventions live in operators/common/README.md.
 //
 // In:  range_profiles — complex64/complex128,
-//                       (..., num_chirps, num_range_bins).
+//                       (num_chirps, num_range_bins) or with named leading
+//                       N_rx / (M_tx, N_rx).
 // Out: rd_maps        — complex64/complex128,
-//                       (..., num_doppler, num_range_bins);
+//                       same leading + (num_doppler, num_range_bins);
 //                       zero-Doppler centered by default.
 // Out: velocity_bins  — optional, float32/float64, (num_doppler,);
 //                       emitted only when a waveform descriptor is set.
 //
-// Precision is fixed at compile time by the template instantiation.
+// Precision is fixed at compile time by the template instantiation
+// (T = float → complex64/float32, T = double → complex128/float64).
+// Fat outs require MaxTensorExtents at graph.op() (ctor).
 
 struct FMCWDopplerProcessorParams {
   WindowSpec doppler_window{};
   bool center_zero_doppler{true};
+  // Default-constructed = none/absent; is_valid() → false.
   FMCWWaveformDescriptor waveform{};
   FftNorm fft_norm{FftNorm::kBackward};
+  // 0 = exact (no zero-padding); ≥ num_chirps when non-zero.
   int64_t nfft{0};
 };
 
@@ -92,7 +97,6 @@ static_assert(
     "HOLOSCAN_PARAM_SCHEMA must be in "
     "FMCWDopplerProcessorParams's namespace");
 
-
 template <typename T>
 class FMCWDopplerProcessorOp
     : public holoscan::Operator<FMCWDopplerProcessorParams> {
@@ -121,15 +125,14 @@ class FMCWDopplerProcessorOp
   Input<int64_t> nfft_in{"nfft"};
 
  private:
-  // Kernel-side caches (window coefficients, seen FFT lengths); allocated
-  // on first compute().
-  std::shared_ptr<detail::DopplerStageState<T>> state_;
-
-  // Stream-ordered lifetime guard for the previous tick's input.
   Tensor retained_input_;
 
   // velocity_bins is optional/latched (OPERATOR_API.md).
   LatchedOutput velocity_bins_out_;
+
+  // Kernel-side caches (window coefficients, seen FFT lengths); allocated
+  // on first compute().
+  std::shared_ptr<detail::DopplerStageState<T>> state_;
 
   MaxTensorExtents extents_;
   std::uint32_t max_rank_{2U};

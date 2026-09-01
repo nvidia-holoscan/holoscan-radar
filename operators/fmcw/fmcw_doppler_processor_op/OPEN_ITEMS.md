@@ -1,17 +1,19 @@
 # FMCWDopplerProcessorOp — open items
 
-## 1. Schema-backed `[live]` payload ratification
+## 1. GPU-native window construction
 
-**Class:** Needs team look; interim implementation does not block landing.
+**Class:** Performance follow-up; no contract change.
 
-`doppler_window` and `waveform` are restored as Exact `[live]` Inputs through
-generated `holoscan::radar::wire` physical payloads while the logical Params
-remain `WindowSpec` and `FMCWWaveformDescriptor`. Descriptor bulk arrays use
-a present rank-1 zero-length Tensor for absence; null Tensor members are
-invalid.
+**Current behavior:** On a window cache miss, `doppler_stage.hpp` generates
+taps on the host (`generate_window`) and uploads them through
+`upload_coefficients`, which synchronizes the compute stream so its host
+staging buffer can be released safely.
 
-The team must ratify, revise, or reject this physical payload shape and its
-schema-evolution obligations. See
-[`SCHEMA_PAYLOADS.md`](../../../docs/planning/SCHEMA_PAYLOADS.md),
-[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9, and
-[`TEAM_BLOCKED.md`](../../../docs/planning/TEAM_BLOCKED.md).
+**Question:** Should window taps be generated directly on the GPU? The GPU
+path could avoid host-side generation, staging, and synchronization for
+unseen window configurations.
+
+**Acceptance:** Benchmark cold ticks and unseen configuration changes across
+the Doppler performance size ladder before choosing a CUDA kernel, a MatX
+expression, or the current host-build path. Preserve cache reuse, stream
+ordering, and numerical parity with `generate_window`.

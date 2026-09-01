@@ -144,7 +144,10 @@ void FMCWDopplerProcessorOp<T>::setup(OperatorSpec& spec) {
   const TensorBounds vel_bounds{
       .max_rank = 1U,
       .max_byte_span = velocity_bins_byte_span_};
-  spec.input(range_profiles).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+
+  spec.input(range_profiles)
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kDevice));
   spec.output(rd_maps)
       .produces_tensor(pooled_tensor_output(kDevice, fat_bounds));
   spec.output(velocity_bins)
@@ -160,6 +163,10 @@ void FMCWDopplerProcessorOp<T>::setup(OperatorSpec& spec) {
 
 template <typename T>
 Contract FMCWDopplerProcessorOp<T>::contract() const {
+  // Trigger on the data tensor. Every Exact override is declared whether or
+  // not the application wires it: an unwired one compiles to a warning and
+  // reads as a miss. Optional velocity_bins stays omitted so an unwired sink
+  // does not gate scheduling.
   Contract result;
   result.trigger(OnEach{range_profiles});
   add_live_override_to_contract(result, doppler_window_in);
@@ -173,8 +180,8 @@ Contract FMCWDopplerProcessorOp<T>::contract() const {
 template <typename T>
 expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
     ExecutionContext& context) {
+  // Receive range_profiles; require a device-contiguous buffer.
   HOLOSCAN_TRY(auto input, receive_tensor(range_profiles, kOpName));
-
   try {
     require_cuda_accessible(input, "range_profiles", kOpName);
     require_contiguous(input, "range_profiles", kOpName);
@@ -182,84 +189,82 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
     return fail_invalid(e.what());
   }
 
-  const FMCWDopplerProcessorParams& pinned =
-      context.params<FMCWDopplerProcessorParams>();
-
-  HOLOSCAN_TRY(auto stage,
-               resolve_params(doppler_window_in, center_zero_doppler_in,
-                              waveform_in, fft_norm_in, nfft_in, pinned));
-
+  // Complex-only input, and collapse named leading axes (N_rx / M_tx).
   try {
     classify_input_dtype<T>(input, "range_profiles", /*allow_real=*/false);
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
-
   HOLOSCAN_TRY(auto batched,
                collapse_named_tx_rx_batch(
                    input, extents_, "range_profiles", kOpName));
 
+  // This tick's Params: pinned defaults with any matched [live] override.
+  const FMCWDopplerProcessorParams& pinned =
+      context.params<FMCWDopplerProcessorParams>();
+  HOLOSCAN_TRY(auto stage,
+               resolve_params(doppler_window_in, center_zero_doppler_in,
+                              waveform_in, fft_norm_in, nfft_in, pinned));
+
+  // Bind the stage config to this input's shape.
   HOLOSCAN_TRY(auto plan,
                build_doppler_stage_plan(std::move(stage), batched));
 
+  // MatX work runs on the runtime compute stream.
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
     const std::string& msg = std::string(kOpName) + ": no CUDA compute stream";
     return make_unexpected(Error{ErrorCode::kNotSupported, msg});
   }
 
-  // Conditional velocity_bins: emitted only when a waveform is present.
-  // Enqueued before the Doppler FFT: its host-staged upload waits on the
-  // stream, so this ordering keeps that wait off the FFT hot path.
-  std::optional<TensorOutputLoan> velocity_loan;
-  if (plan.stage.waveform.has_value() && velocity_bins_out_.active()) {
-    HOLOSCAN_TRY(auto loan,
-                 prepare_device_tensor(
-                     velocity_bins, context,
-                     std::vector<int64_t>{plan.num_doppler},
-                     real_dtype<T>(),
-                     [&](void* out_ptr, std::size_t) -> expected<void, Error> {
-                       try {
-                         detail::fill_velocity_bins<T>(
-                             plan.stage, plan.num_doppler,
-                             static_cast<T*>(out_ptr),
-                             stream);
-                       } catch (const std::invalid_argument& e) {
-                         return fail_invalid(e.what());
-                       }
-                       return {};
-                     }));
-    velocity_loan.emplace(std::move(loan));
-  }
-
-  // Run the Doppler stage.
+  // Doppler compression into a pool loan, then publish rd_maps.
   const std::vector<int64_t> out_shape =
       full_rank_shape(batched, plan.num_doppler, batched.cols);
   const DLDataType dtype = complex_dtype<T>();
-
   const void* input_ptr = input.data();
+
   HOLOSCAN_TRY(auto rd_loan,
                prepare_device_tensor(
                    rd_maps, context, out_shape, dtype,
-                   [&](void* out_ptr, std::size_t) -> expected<void, Error> {
+                   [&](void* dst, std::size_t) -> expected<void, Error> {
                      try {
                        detail::run_doppler_stage<T>(
                            plan.stage, *state_, input_ptr, batched.batch,
-                           batched.rows, batched.cols, out_ptr,
+                           batched.rows, batched.cols, dst,
                            plan.num_doppler, stream);
                      } catch (const std::invalid_argument& e) {
                        return fail_invalid(e.what());
                      }
                      return {};
                    }));
-
-  // Emit all prepared loans together.
-  if (velocity_loan.has_value()) {
-    velocity_bins_out_.emit(velocity_bins, context, std::move(*velocity_loan),
-                            "FMCWDopplerProcessorOp.velocity_bins");
-  }
   HOLOSCAN_TRY(emit_prepared_tensor(rd_maps, context, std::move(rd_loan)));
 
+  // Optional velocity_bins: waveform present and the latched sink still
+  // active. Independent of the FFT; an unwired emit is absorbed.
+  if (plan.stage.waveform.has_value() && velocity_bins_out_.active()) {
+    HOLOSCAN_TRY(auto bins_loan,
+                 prepare_device_tensor(
+                     velocity_bins, context,
+                     std::vector<int64_t>{plan.num_doppler},
+                     real_dtype<T>(),
+                     [&](void* dst, std::size_t) -> expected<void, Error> {
+                       try {
+                         detail::fill_velocity_bins<T>(
+                             plan.stage, plan.num_doppler,
+                             static_cast<T*>(dst), stream);
+                       } catch (const std::invalid_argument& e) {
+                         return fail_invalid(e.what());
+                       } catch (const std::runtime_error& e) {
+                         return make_unexpected(
+                             Error{ErrorCode::kFailure, e.what()});
+                       }
+                       return {};
+                     }));
+    velocity_bins_out_.emit(velocity_bins, context, std::move(bins_loan),
+                            "FMCWDopplerProcessorOp.velocity_bins");
+  }
+
+  // Keep range_profiles alive until stream-ordered reads complete.
   retained_input_ = std::move(input);
   return {};
 }

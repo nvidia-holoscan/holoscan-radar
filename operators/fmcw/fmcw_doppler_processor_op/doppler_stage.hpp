@@ -184,7 +184,8 @@ void run_doppler_stage(const DopplerStageConfig& cfg,
 // device buffer of length num_doppler: v = -f_d * lambda / 2 with
 // f_d the per-bin Doppler frequency (PRF = 1 / chirp_repetition_interval),
 // ordered to match the rd_maps Doppler axis (i.e. accounting for
-// cfg.center_zero_doppler). Requires cfg.waveform. Enqueued on `stream`.
+// cfg.center_zero_doppler). Requires cfg.waveform. Enqueued on `stream`;
+// no synchronization, no host staging.
 //
 // MatX's fftfreq provides the unshifted signed frequency ordering, including
 // Nyquist folding. fftshift1D then applies the same odd/even ordering as the
