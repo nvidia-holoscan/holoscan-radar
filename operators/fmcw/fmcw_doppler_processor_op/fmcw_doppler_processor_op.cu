@@ -145,15 +145,15 @@ void FMCWDopplerProcessorOp<T>::setup(OperatorSpec& spec) {
       .max_rank = 1U,
       .max_byte_span = velocity_bins_byte_span_};
   spec.input(range_profiles).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  spec.input(doppler_window_in).queue_depth(2U);
-  spec.input(waveform_in).queue_depth(2U);
   spec.output(rd_maps)
       .produces_tensor(pooled_tensor_output(kDevice, fat_bounds));
   spec.output(velocity_bins)
       .produces_tensor(pooled_tensor_output(kDevice, vel_bounds));
 
-  // [live] POD override ports.
+  // [live] Exact overrides, Params order (schema and POD alike).
+  spec.input(doppler_window_in).queue_depth(2U);
   spec.input(center_zero_doppler_in).queue_depth(2U);
+  spec.input(waveform_in).queue_depth(2U);
   spec.input(fft_norm_in).queue_depth(2U);
   spec.input(nfft_in).queue_depth(2U);
 }

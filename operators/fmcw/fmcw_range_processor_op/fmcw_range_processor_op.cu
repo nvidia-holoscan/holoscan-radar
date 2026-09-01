@@ -177,15 +177,15 @@ void FMCWRangeProcessorOp<T>::setup(OperatorSpec& spec) {
       .max_byte_span = range_bins_byte_span_};
 
   spec.input(adc_cube).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  spec.input(range_window_in).queue_depth(2U);
-  spec.input(waveform_in).queue_depth(2U);
   spec.output(range_profiles)
       .produces_tensor(pooled_tensor_output(kDevice, fat_bounds));
   spec.output(range_bins)
       .produces_tensor(pooled_tensor_output(kDevice, bins_bounds));
 
-  // [live] Exact override ports.
+  // [live] Exact overrides, Params order (schema and POD alike).
+  spec.input(range_window_in).queue_depth(2U);
   spec.input(apply_dechirp_in).queue_depth(2U);
+  spec.input(waveform_in).queue_depth(2U);
   spec.input(fft_norm_in).queue_depth(2U);
   spec.input(nfft_in).queue_depth(2U);
 }
