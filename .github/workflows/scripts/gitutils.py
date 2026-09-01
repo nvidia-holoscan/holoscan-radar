@@ -26,8 +26,7 @@ def is_file_empty(f):
 
 def __git(*opts):
     """Runs a git command and returns its output"""
-    cmd = "git " + " ".join(list(opts))
-    ret = subprocess.check_output(cmd, shell=True)
+    ret = subprocess.check_output(["git", *opts])
     return ret.decode("UTF-8").rstrip("\n")
 
 
