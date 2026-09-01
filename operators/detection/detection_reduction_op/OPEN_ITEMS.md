@@ -8,7 +8,7 @@ migration items are indexed in
 
 ## 1. Graph mid-stream `[live] representative` / `score_method` coverage
 
-**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”;
+**Blocks checklist:** Tests → “[live] overrides: mid-stream + revert-to-Params”;
 Performance → inline live-override measurement (when Graph-ported).
 
 **Class:** Wiring settled (L16 / L17, 2026-08-21); Graph test coverage still
@@ -19,9 +19,8 @@ deferred on EA. See
 **Decision.** `representative` / `score_method` / `feature_weights` join the
 `OnAligned{labels, detection_idx, points}` trigger with `Exact{}` and
 `on_missing SafeDefault{}`, each declared unconditionally. Wiring is the
-application's only statement, as it is module-wide. `sticky_<name>`
-(default true) latches the last Exact match; false reverts to Params on a
-miss. The application stamps the frame's transmit time on both the override
+application's only statement, as it is module-wide. A matched override
+applies to that tick only; a tick with no match uses the Params value. The application stamps the frame's transmit time on both the override
 and the aligned tensors.
 
 **The `expect_*` gate is retired.** It existed only because the SDK once
@@ -36,14 +35,11 @@ enabled-but-silent port does not stall the aligned trigger.
 three tests, and they are the module's first operator-level assertions of a
 wired override under an `OnAligned` trigger:
 
-- `LiveRepresentativeStickyOverride` — two points in one cluster with
+- `LiveRepresentativeAppliesForOneTick` — two points in one cluster with
   `feature_weights = (1, 0)`, chosen so `kFirst` keeps row 0 and `kPeak` keeps
   row 1. The reported representative index therefore names the policy, and the
-  third tick shows `sticky_representative` holding the override.
-- `LiveRepresentativeEphemeralRevertsToParams` — same fixture with
-  `sticky_representative=false`; the tick after a present override returns to
-  the Params policy.
-- `LiveScoreMethodStickyOverride` — with `w = (1, 1)`, `kWeightedSum` ranks
+  third tick shows the revert to the Params policy after the override tick.
+- `LiveScoreMethodAppliesForOneTick` — with `w = (1, 1)`, `kWeightedSum` ranks
   row 0 above row 1 (7 vs 6) while `kWeightedL2` reverses it (5 vs 6), so the
   peak row names the score method.
 
@@ -70,13 +66,13 @@ either.
 **Mapping.** `feature_weights` is an `Input<Tensor>` carrying a rank-1
 pageable-host float64 vector, validated on arrival (rank, host memory,
 contiguity, dtype, and a `MaxTensorExtents.max_features` extent bound) and
-converted to `std::vector<double>` before it reaches sticky state. Like the
+converted to `std::vector<double>` per tick, with no state kept. Like the
 enum lives its contract entry is unconditional (§1); an arriving sample makes
 `max_features` a required extent and is rejected without it. Graph coverage:
 `LiveFeatureWeightsExactMatchChangesSelection`,
 `LiveFeatureWeightsSkewedCaptureMissesExact`,
-`LiveFeatureWeightsStickyKeepsLastExactMatch`,
-`LiveFeatureWeightsEphemeralRevertsToParams`,
+`LiveFeatureWeightsRevertsToParamsAfterMiss`,
+`LiveFeatureWeightsRevertsToParamsAfterMiss`,
 `LiveFeatureWeightsRejectsMalformedLength`,
 `LiveFeatureWeightsRejectsBoundOverflow`.
 

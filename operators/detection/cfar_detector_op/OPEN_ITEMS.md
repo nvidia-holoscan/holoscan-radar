@@ -8,7 +8,7 @@ migration items are indexed in
 
 ## 1. Graph mid-stream `[live]` POD coverage
 
-**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky” for
+**Blocks checklist:** Tests → “[live] overrides: mid-stream + revert-to-Params” for
 `pfa` / `threshold_scale` / `os_rank` / `max_detections`.
 
 **Class:** Wiring settled (L16 / L17, 2026-08-21); Graph test coverage still
@@ -18,8 +18,8 @@ deferred on EA. See
 
 **Decision.** `pfa` / `threshold_scale` / `os_rank` / `max_detections` join
 the `rd_maps` trigger with `Exact{}` and `on_missing SafeDefault{}`, and the
-entries are unconditional. `sticky_<name>` (default true) latches the last
-Exact match; false reverts to Params on a miss. The application stamps the
+entries are unconditional. A matched override applies to that tick only; a
+tick with no match uses the Params value. The application stamps the
 frame's transmit time on both the override and the cube. Wiring a port is
 the only thing that enables its override: an unwired entry compiles
 (warning `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT`) and reads as no
@@ -28,10 +28,10 @@ override, while wiring a port absent from `contract()` is
 
 **Still deferred.**
 
-- `LiveThresholdScaleOverrideMidStreamAndSticky` /
-  `LivePfaOverrideMidStreamAndSticky` /
-  `LiveMaxDetectionsOverrideMidStreamAndSticky` (and the OS suite's
-  `LiveOsRankOverrideMidStreamAndSticky`) are still `GTEST_SKIP`’d — the
+- `LiveThresholdScaleOverrideMidStream` /
+  `LivePfaOverrideMidStream` /
+  `LiveMaxDetectionsOverrideMidStream` (and the OS suite's
+  `LiveOsRankOverrideMidStream`) are still `GTEST_SKIP`’d — the
   Graph harness for a mid-stream POD override on this five-output operator
   is not written yet.
 - `perf_cfar_detector` measures an inline `threshold_scale` transition with
@@ -64,10 +64,10 @@ directly.
 padding-free `CfarCellWindowOverride` PODs converted by `from_wire`.
 `nci_axes` / `alpha_lut` ride rank-1 pageable-host config Tensors validated
 on arrival (rank, host memory, contiguity, dtype, and a per-variant maximum
-extent). Sticky state owns the converted `std::vector`, so no wire storage
+extent). The converted `std::vector` is a local, so no wire storage
 leaks into operator state. Graph coverage:
-`LiveGuardCellsOverrideMidStreamAndSticky`,
-`LiveAlphaLutOverrideStickyAndClearing`,
+`LiveGuardCellsOverrideAppliesForOneTick`,
+`LiveAlphaLutOverrideAndClearing`,
 `RejectsMalformedLiveNciAxesTensor`, `RejectsMalformedLiveAlphaLut`.
 
 **Next.** Nothing owed unless an owning-container payload family lands, at
@@ -116,7 +116,7 @@ question remains when that suite is re-enabled.
 
 **Landed.** `test_cfar_detector_{go,so,os,alpha_lut}.cpp` rewritten to the
 Graph five-out harness (`CFARParams` + `run_single_in_five_out_operator_graph_result`);
-registered next to the CA suite with label `unit`. Live mid-stream sticky /
+registered next to the CA suite with label `unit`. Live mid-stream POD /
 vector-live Graph cases remain `GTEST_SKIP` under HSDK5_PORT §1 / §9 (same
 as CA). `test_cfar_detector_statistical.cpp` uses the same Graph harness
 with multi-frame inputs and is registered with label `statistical` only

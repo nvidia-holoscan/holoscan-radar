@@ -5,7 +5,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <type_traits>
 #include <vector>
 
@@ -69,9 +68,6 @@ struct ClusterDBSCANParams {
   std::vector<double> epsilon{};
   int64_t min_points{0};
   int64_t max_clusters{0};
-  bool sticky_epsilon{true};
-  bool sticky_min_points{true};
-  bool sticky_max_clusters{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -88,15 +84,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&ClusterDBSCANParams::max_clusters>("max_clusters")
         .description(
             "Upper cap on reported clusters (surplus dropped to noise with a "
-            "warning); <= 0 is uncapped"),
-    holoscan::field<&ClusterDBSCANParams::sticky_epsilon>("sticky_epsilon")
-        .description("Keep the last Exact epsilon match on a miss."),
-    holoscan::field<&ClusterDBSCANParams::sticky_min_points>(
-        "sticky_min_points")
-        .description("Keep the last Exact min_points match on a miss."),
-    holoscan::field<&ClusterDBSCANParams::sticky_max_clusters>(
-        "sticky_max_clusters")
-        .description("Keep the last Exact max_clusters match on a miss."));
+            "warning); <= 0 is uncapped"));
 
 static_assert(holoscan::param_schema_availability<ClusterDBSCANParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -137,11 +125,6 @@ class ClusterDBSCANOp : public holoscan::Operator<ClusterDBSCANParams> {
   Tensor retained_points_;
   // sizes is optional/latched (OPERATOR_API.md).
   LatchedOutput sizes_out_;
-  // Logical sticky state owns converted values, not Tensor storage.
-  std::optional<std::vector<double>> sticky_epsilon_;
-  // Sticky [live] scalars: the last Exact match holds while sticky_*.
-  std::optional<int64_t> sticky_min_points_;
-  std::optional<int64_t> sticky_max_clusters_;
   bool warned_max_clusters_{false};
 };
 

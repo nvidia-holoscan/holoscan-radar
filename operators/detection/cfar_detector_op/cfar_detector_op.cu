@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -138,25 +139,16 @@ expected<void, Error> require_window_bounds(
   return {};
 }
 
+// resolve_live_override_via for a bounded host-Tensor vector payload: read and
+// validate a matched sample, otherwise fall back to the Params seed.
 template <typename T>
 expected<std::vector<T>, Error> resolve_config_tensor_override(
     Input<Tensor>& port, const std::vector<T>& seed,
-    std::optional<std::vector<T>>& sticky, bool keep_sticky,
     DLDataType dtype, int64_t max_extent, const char* field) {
-  HOLOSCAN_TRY(auto maybe, receive_optional_value(port));
-  if (maybe.has_value()) {
-    HOLOSCAN_TRY(
-        auto converted,
-        read_host_config_vector<T>(*maybe, dtype, max_extent, field));
-    if (keep_sticky) {
-      sticky = converted;
-    }
-    return converted;
-  }
-  if (keep_sticky && sticky.has_value()) {
-    return *sticky;
-  }
-  return seed;
+  return resolve_live_override_via(
+      port, seed, [&](const Tensor& value) {
+        return read_host_config_vector<T>(value, dtype, max_extent, field);
+      });
 }
 
 expected<TensorOutputLoan, Error> prepare_copy_device(
@@ -368,37 +360,31 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
   const CFARParams& pinned = context.params<CFARParams>();
   HOLOSCAN_TRY(auto effective_pfa,
                resolve_live_override(
-                   pfa, pinned.pfa, sticky_pfa_, pinned.sticky_pfa));
+                   pfa, pinned.pfa));
   HOLOSCAN_TRY(auto effective_threshold_scale,
                resolve_live_override(
-                   threshold_scale, pinned.threshold_scale,
-                   sticky_threshold_scale_, pinned.sticky_threshold_scale));
+                   threshold_scale, pinned.threshold_scale));
   HOLOSCAN_TRY(auto effective_os_rank,
                resolve_live_override(
-                   os_rank, pinned.os_rank, sticky_os_rank_,
-                   pinned.sticky_os_rank));
+                   os_rank, pinned.os_rank));
   HOLOSCAN_TRY(auto effective_max_detections,
                resolve_live_override(
-                   max_detections, pinned.max_detections,
-                   sticky_max_detections_, pinned.sticky_max_detections));
+                   max_detections, pinned.max_detections));
   HOLOSCAN_TRY(auto effective_guard_cells,
                resolve_live_override_via(
-                   guard_cells, pinned.guard_cells, sticky_guard_cells_,
-                   pinned.sticky_guard_cells,
+                   guard_cells, pinned.guard_cells,
                    [](const CfarCellWindowOverride& value) {
                      return from_wire(value);
                    }));
   HOLOSCAN_TRY(auto effective_training_cells,
                resolve_live_override_via(
                    training_cells, pinned.training_cells,
-                   sticky_training_cells_, pinned.sticky_training_cells,
                    [](const CfarCellWindowOverride& value) {
                      return from_wire(value);
                    }));
   HOLOSCAN_TRY(auto effective_nci_axes,
                resolve_config_tensor_override(
-                   nci_axes, pinned.nci_axes, sticky_nci_axes_,
-                   pinned.sticky_nci_axes, kInt64Dtype,
+                   nci_axes, pinned.nci_axes, kInt64Dtype,
                    static_cast<int64_t>(max_leading_), "nci_axes"));
   int64_t alpha_lut_extent_bound = max_alpha_lut_extent_;
   if (pinned.cfar_variant == CfarVariant::kOS) {
@@ -411,8 +397,7 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
   }
   HOLOSCAN_TRY(auto effective_alpha_lut,
                resolve_config_tensor_override(
-                   alpha_lut, pinned.alpha_lut, sticky_alpha_lut_,
-                   pinned.sticky_alpha_lut, kFloat64Dtype,
+                   alpha_lut, pinned.alpha_lut, kFloat64Dtype,
                    alpha_lut_extent_bound, "alpha_lut"));
 
   bool pfa_override_changed = false;

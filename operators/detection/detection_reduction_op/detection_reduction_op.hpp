@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <type_traits>
 #include <vector>
 
@@ -65,9 +64,6 @@ struct DetectionReductionParams {
   RepresentativePolicy representative{RepresentativePolicy::kPeak};
   ScoreMethod score_method{ScoreMethod::kWeightedSum};
   std::vector<double> feature_weights{};
-  bool sticky_representative{true};
-  bool sticky_score_method{true};
-  bool sticky_feature_weights{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -87,18 +83,7 @@ HOLOSCAN_PARAM_SCHEMA(
         "feature_weights")
         .description(
             "Per-feature weights for peak/medoid (length num_features); "
-            "required for those policies unless peak+custom"),
-    holoscan::field<&DetectionReductionParams::sticky_representative>(
-        "sticky_representative")
-        .description(
-            "Keep the last Exact representative match on a miss."),
-    holoscan::field<&DetectionReductionParams::sticky_score_method>(
-        "sticky_score_method")
-        .description("Keep the last Exact score_method match on a miss."),
-    holoscan::field<&DetectionReductionParams::sticky_feature_weights>(
-        "sticky_feature_weights")
-        .description(
-            "Keep the last Exact feature_weights match on a miss."));
+            "required for those policies unless peak+custom"));
 
 static_assert(
     holoscan::param_schema_availability<DetectionReductionParams>() ==
@@ -146,11 +131,6 @@ class DetectionReductionOp
   Tensor retained_idx_;
   Tensor retained_points_;
   std::shared_ptr<holoscan::Tensor> retained_weights_;
-  // Sticky [live] POD enums: the last Exact match holds while sticky_*.
-  std::optional<RepresentativePolicy> sticky_representative_;
-  std::optional<ScoreMethod> sticky_score_method_;
-  // Logical sticky state owns converted values, not Tensor storage.
-  std::optional<std::vector<double>> sticky_feature_weights_;
 };
 
 extern template class DetectionReductionOp<float>;

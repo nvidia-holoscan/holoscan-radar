@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -144,14 +143,6 @@ struct CFARParams {
   bool blocking_alpha_lut_rebuild{false};
   bool peak_only{false};
   CfarPeakNeighborhood peak_neighborhood{CfarPeakNeighborhood::kSquare8};
-  bool sticky_pfa{true};
-  bool sticky_threshold_scale{true};
-  bool sticky_os_rank{true};
-  bool sticky_max_detections{true};
-  bool sticky_guard_cells{true};
-  bool sticky_training_cells{true};
-  bool sticky_nci_axes{true};
-  bool sticky_alpha_lut{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -201,26 +192,7 @@ HOLOSCAN_PARAM_SCHEMA(
             "local-maximum cell; static"),
     holoscan::field<&CFARParams::peak_neighborhood>("peak_neighborhood")
         .description(
-            "Neighborhood for peak_only NMS {cross4, square8}; static"),
-    holoscan::field<&CFARParams::sticky_pfa>("sticky_pfa")
-        .description("Keep the last Exact pfa match on a miss."),
-    holoscan::field<&CFARParams::sticky_threshold_scale>(
-        "sticky_threshold_scale")
-        .description("Keep the last Exact threshold_scale match on a miss."),
-    holoscan::field<&CFARParams::sticky_os_rank>("sticky_os_rank")
-        .description("Keep the last Exact os_rank match on a miss."),
-    holoscan::field<&CFARParams::sticky_max_detections>(
-        "sticky_max_detections")
-        .description("Keep the last Exact max_detections match on a miss."),
-    holoscan::field<&CFARParams::sticky_guard_cells>("sticky_guard_cells")
-        .description("Keep the last Exact guard_cells match on a miss."),
-    holoscan::field<&CFARParams::sticky_training_cells>(
-        "sticky_training_cells")
-        .description("Keep the last Exact training_cells match on a miss."),
-    holoscan::field<&CFARParams::sticky_nci_axes>("sticky_nci_axes")
-        .description("Keep the last Exact nci_axes match on a miss."),
-    holoscan::field<&CFARParams::sticky_alpha_lut>("sticky_alpha_lut")
-        .description("Keep the last Exact alpha_lut match on a miss."));
+            "Neighborhood for peak_only NMS {cross4, square8}; static"));
 
 static_assert(holoscan::param_schema_availability<CFARParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -283,17 +255,7 @@ class CFARDetectorOp : public holoscan::Operator<CFARParams> {
 
   using AlphaLutKey = CfarAlphaLutKey;
 
-  // Sticky [live] POD scalars: the last Exact match holds while sticky_*.
-  std::optional<double> sticky_pfa_;
-  std::optional<double> sticky_threshold_scale_;
-  std::optional<int64_t> sticky_os_rank_;
-  std::optional<int64_t> sticky_max_detections_;
-  std::optional<std::vector<int64_t>> sticky_guard_cells_;
-  std::optional<std::vector<int64_t>> sticky_training_cells_;
-  std::optional<std::vector<int64_t>> sticky_nci_axes_;
-  std::optional<std::vector<double>> sticky_alpha_lut_;
-  // Tracks pfa sticky transitions for the "pfa ignored while alpha_lut"
-  // warn-once.
+  // Tracks pfa changes for the "pfa ignored while alpha_lut" warn-once.
   double last_seen_pfa_{-1.0};
   bool pfa_seen_{false};
 

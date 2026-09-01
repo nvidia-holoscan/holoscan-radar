@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -111,8 +112,8 @@ void DetectionReductionOp<T, ScoreFn>::setup(OperatorSpec& spec) {
   spec.input(points).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.output(rep_idx)
       .produces_tensor(pooled_tensor_output(kDevice, 2U, max_byte_span_));
-  // [live] override ports. Leaving them unconnected is legal; compute() seeds
-  // from Params and logical sticky state owns converted vector values.
+  // [live] override ports. Leaving them unconnected is legal; compute()
+  // seeds from Params on any tick without a match.
   spec.input(representative).queue_depth(2U);
   spec.input(score_method).queue_depth(2U);
   spec.input(feature_weights).queue_depth(2U).expects_tensor(tensor_input(kHostVector));
@@ -153,18 +154,13 @@ expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
   const DetectionReductionParams& pinned =
       context.params<DetectionReductionParams>();
   HOLOSCAN_TRY(auto effective_representative,
-               resolve_live_override(representative, pinned.representative,
-                                     sticky_representative_,
-                                     pinned.sticky_representative));
+               resolve_live_override(representative, pinned.representative));
   HOLOSCAN_TRY(auto effective_score_method,
-               resolve_live_override(score_method, pinned.score_method,
-                                     sticky_score_method_,
-                                     pinned.sticky_score_method));
+               resolve_live_override(score_method, pinned.score_method));
   HOLOSCAN_TRY(
       auto effective_feature_weights,
       resolve_live_override_via(
-          feature_weights, pinned.feature_weights, sticky_feature_weights_,
-          pinned.sticky_feature_weights,
+          feature_weights, pinned.feature_weights,
           [this](const Tensor& tensor)
               -> expected<std::vector<double>, Error> {
             // Only a wired-and-sampled override needs the bound; an app that

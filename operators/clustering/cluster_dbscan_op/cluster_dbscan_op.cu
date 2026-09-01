@@ -11,6 +11,7 @@
 #include <limits>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -103,8 +104,8 @@ void ClusterDBSCANOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(pooled_tensor_output(kDevice, 1U, max_labels_byte_span_));
   spec.output(sizes)
       .produces_tensor(pooled_tensor_output(kDevice, 1U, max_sizes_byte_span_));
-  // [live] override ports. Leaving them unconnected is legal; compute() seeds
-  // from Params and logical sticky state owns converted vector values.
+  // [live] override ports. Leaving them unconnected is legal; compute()
+  // seeds from Params on any tick without a match.
   spec.input(epsilon).queue_depth(2U).expects_tensor(tensor_input(kHostVector));
   spec.input(min_points).queue_depth(2U);
   spec.input(max_clusters).queue_depth(2U);
@@ -128,7 +129,7 @@ expected<void, Error> ClusterDBSCANOp<T>::compute(ExecutionContext& context) {
   HOLOSCAN_TRY(
       auto eps,
       resolve_live_override_via(
-          epsilon, pinned.epsilon, sticky_epsilon_, pinned.sticky_epsilon,
+          epsilon, pinned.epsilon,
           [this](const Tensor& tensor)
               -> expected<std::vector<double>, Error> {
             // The bound only has to exist for a caller that sends overrides,
@@ -144,12 +145,10 @@ expected<void, Error> ClusterDBSCANOp<T>::compute(ExecutionContext& context) {
           }));
   HOLOSCAN_TRY(auto effective_min_points,
                resolve_live_override(
-                   min_points, pinned.min_points, sticky_min_points_,
-                   pinned.sticky_min_points));
+                   min_points, pinned.min_points));
   HOLOSCAN_TRY(auto effective_max_clusters,
                resolve_live_override(
-                   max_clusters, pinned.max_clusters, sticky_max_clusters_,
-                   pinned.sticky_max_clusters));
+                   max_clusters, pinned.max_clusters));
   try {
     require_cuda_accessible(points_in, "points", kOpName);
     require_contiguous(points_in, "points", kOpName);

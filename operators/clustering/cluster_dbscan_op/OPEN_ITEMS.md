@@ -10,7 +10,7 @@ are indexed in [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md).
 
 ## 1. Graph mid-stream `[live] min_points` / `max_clusters` coverage
 
-**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”.
+**Blocks checklist:** Tests → “[live] overrides: mid-stream + revert-to-Params”.
 
 **Class:** Wiring settled (L16 / L17, 2026-08-21); Graph test coverage still
 deferred on EA. See
@@ -19,8 +19,8 @@ deferred on EA. See
 
 **Decision.** `min_points` / `max_clusters` join the `points` trigger with
 `Exact{}` and `on_missing SafeDefault{}`, and the entries are
-unconditional. `sticky_<name>` (default true) latches the last Exact
-match; false reverts to Params on a miss. The application stamps the
+unconditional. A matched override applies to that tick only; a tick with
+no match uses the Params value. The application stamps the
 frame's transmit time on both the override and the feature matrix. Wiring
 a port is the only thing that enables its override: an unwired entry
 compiles (warning `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT`) and reads as
@@ -29,7 +29,7 @@ no override, while wiring a port absent from `contract()` is
 
 **Still deferred.**
 
-- `LiveMinPointsStickyOverride` / `LiveMaxClustersStickyOverride` are still
+- `LiveMinPointsRevertsToParamsAfterMiss` / `LiveMaxClustersRevertsToParamsAfterMiss` are still
   `GTEST_SKIP`’d — the Graph harness for a mid-stream POD override on this
   one-in / two-out operator is not written yet.
 - `perf_cluster_dbscan` measures an inline `min_points` transition with the
@@ -62,13 +62,13 @@ comes from the caller-assembled `points` matrix, so a fixed POD like
 **Mapping.** `epsilon` is an `Input<Tensor>` carrying a rank-1
 pageable-host float64 vector, validated on arrival (rank, host memory,
 contiguity, dtype, and a `MaxTensorExtents.max_features` extent bound) and
-converted to `std::vector<double>` before it reaches sticky state. The
+converted to `std::vector<double>` per tick, with no state kept. The
 extent bound is checked when an override arrives rather than at every
 activation, so a graph that never sends one runs with `max_features` unset.
 Graph coverage: `LiveEpsilonExactMatchChangesClustering`,
 `LiveEpsilonSkewedCaptureMissesExact`,
-`LiveEpsilonStickyKeepsLastExactMatch`,
-`LiveEpsilonEphemeralRevertsToParams`,
+`LiveEpsilonRevertsToParamsAfterMiss`,
+`LiveEpsilonRevertsToParamsAfterMiss`,
 `LiveEpsilonRejectsMalformedVector`,
 `LiveEpsilonRejectsConfiguredBoundOverflow`.
 

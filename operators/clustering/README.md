@@ -35,8 +35,8 @@ header is the full contract.
   largest, tie-break ascending root); optional `max_clusters` cap (drops the
   **smallest** surplus clusters to noise with a warn-once); `labels`
   (noise = `-1`, row-aligned with `points`) and per-tick reallocated `sizes`
-  (non-increasing); all three parameters `[live]`-overridable with sticky
-  semantics; float and double; empty `points` → empty `labels` / `sizes`. Unit
+  (non-increasing); all three parameters `[live]`-overridable per tick;
+  float and double; empty `points` → empty `labels` / `sizes`. Unit
   tests cover the [`TESTING.md`](../../docs/planning/TESTING.md) clustering
   checks and a `perf_cluster_dbscan` characterization harness measures an
   inline live `min_points` override.

@@ -28,7 +28,7 @@ header is the full contract; the current build implements a faithful subset:
 
 - **`DetectionReductionOp` (checklist-complete):** group-by-label reduction
   with `first` / `peak` / `medoid`, built-in peak scorers plus compile-time
-  `ScoreFn` for `score_method=custom`, sticky `[live]` overrides
+  `ScoreFn` for `score_method=custom`, `[live]` overrides
   (`representative`, `score_method`, `feature_weights`), exact-sized
   `rep_idx`, public `radar_common/reduce/` primitives, unit tests, and
   `perf_detection_reduction` smoke. Open items in
@@ -39,7 +39,7 @@ header is the full contract; the current build implements a faithful subset:
   and OS (order-statistic with `[live] os_rank`), complex and real IF power
   paths, per-cell (border-correct) training-cell count, `pfa` / `guard_cells` /
   `training_cells` / `threshold_scale` / `max_detections` / `nci_axes` (all
-  overridable with sticky mid-stream tests), adopted
+  overridable, with mid-stream override tests), adopted
   `[live] alpha_lut` fast path (precomputed multipliers; takes precedence over
   `pfa`), `blocking_alpha_lut_rebuild` for stale-vs-block LUT rebuild policy,
   non-coherent integration over leading axes with Gamma(`K`) thresholding

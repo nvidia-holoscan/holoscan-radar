@@ -14,7 +14,7 @@
             "0.1.0": "Initial Release",
             "0.2.0": "Add optional peak-grouping (peak_only / peak_neighborhood) non-maximum-suppression stage; off by default",
             "0.3.0": "Emit the thresholded surface on a new cfar_power output port (post-NCI integrated power, or the raw square-law power map when nci_axes is empty); additive, existing ports unchanged",
-            "0.4.0": "HSDK 5 Operator<Params> / Graph port (always emit all 5 outs; vector lives Params-only; POD scalar sticky Inputs)"
+            "0.4.0": "HSDK 5 Operator<Params> / Graph port (always emit all 5 outs; vector lives Params-only; single-tick POD scalar Inputs)"
         },
         "holoscan_sdk": {
             "minimum_required_version": "5.0.0",
