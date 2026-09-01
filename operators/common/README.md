@@ -52,9 +52,10 @@ by this library:
 - **Overridable ("live") parameters.** [EA HSDK5 ONLY] An overridable
   parameter may be changed in-flight via a same-named typed
   `Input<T>` (`sdk/override_param.hpp`). Every such port joins the data
-  trigger with `Exact{}` + `SafeDefault{}` unconditionally; `sticky_*`
-  (default true) latches the last Exact match in `compute()` via
-  `resolve_live_override`. An unwired port reports `kNotConnected` and reads
+  trigger with `Exact{}` + `SafeDefault{}` unconditionally, and an override
+  applies to a single tick: `resolve_live_override` returns the matched sample
+  for that activation and the Params value on any tick without a match — no
+  operator state is carried forward. An unwired port reports `kNotConnected` and reads
   as no override, so one build serves both wirings. Costly reconfigurations
   still warn once and cache via `sdk/config_cache.hpp`; the cache decides
   that itself (a miss against a non-empty cache), so callers pass no warn
@@ -89,5 +90,5 @@ branch to `main`. Open EA / migration issues live in
 Device Tensor producers that skip `bind_tensor_output_device` fail at run
 time with `RUNTIME_PORT_BINDING_UNAVAILABLE`. Graph mid-stream enum
 override sources (separate clock / multi-partition) are deferred until EA
-partition + device-binding behavior is settled; unit coverage for sticky
+partition + device-binding behavior is settled; unit coverage for a live
 method change on ClutterFilter is skipped with that note.

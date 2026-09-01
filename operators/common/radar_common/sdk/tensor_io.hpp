@@ -87,7 +87,7 @@ inline bool is_absent_input_error(ErrorCode code) {
          code == ErrorCode::kInputNotSelected || code == ErrorCode::kNotReady;
 }
 
-// Optional sticky-override receive: success with a value when the port has
+// Optional override receive: success with a value when the port has
 // a selected/reused sample; nullopt on SafeDefault / absent / never-seen.
 template <typename T>
 expected<std::optional<T>, Error> receive_optional_value(Input<T>& port) {

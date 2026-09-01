@@ -73,9 +73,17 @@ enum class PerfPublishMode {
   kZeroCopy,
 };
 
-// Perf-only operator adapter: the production operator omits optional live
-// inputs from contract() so an unwired graph compiles. A perf graph that wires
-// an override must list that input in the temporal contract. MemberPorts are
+// Effectively unbounded: the perf override source publishes once and the
+// measurement frames that follow must all see that value.
+inline constexpr auto kPerfOverrideMaxAge = std::chrono::years{100};
+
+// Perf-only operator adapter. Production joins a `[live]` override with Exact{}
+// (OPERATOR_API.md), so an override applies to the one tick whose capture_time
+// it shares. A perf scenario needs the opposite: publish a new configuration on
+// one frame and hold it across every measurement frame after it, without
+// re-publishing per tick and paying for that in the numbers. LatestWithin does
+// exactly that, and keeping the hold in the contract rather than in operator
+// state is why the operators need no last-value member. MemberPorts are
 // pointers to public Input<T> members on OperatorT.
 template <typename OperatorT, auto... MemberPorts>
 class PerfLiveContractOp final : public OperatorT {
@@ -84,7 +92,11 @@ class PerfLiveContractOp final : public OperatorT {
 
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result = OperatorT::contract();
-    (add_sticky_override_to_contract(result, this->*MemberPorts), ...);
+    ((result
+          .input(this->*MemberPorts,
+                 holoscan::LatestWithin{.max_age = kPerfOverrideMaxAge})
+          .on_missing(this->*MemberPorts, holoscan::SafeDefault{})),
+     ...);
     return result;
   }
 };
