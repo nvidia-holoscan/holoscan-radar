@@ -33,28 +33,16 @@ expected<void, Error> fail_invalid(const std::string& message) {
 
 constexpr const char* kOpName = "FMCWRangeProcessorOp";
 
-// Pinned Params for this tick, with any matched [live] override applied.
-// Converted schema payloads are owned here. An unwired or unmatched port
-// keeps the Params value; a match is this tick only (no latch).
-struct ResolvedParams {
-  WindowSpec window;
-  bool apply_dechirp;
-  FMCWWaveformDescriptor waveform;
-  FftNorm fft_norm;
-  double propagation_speed;
-  int64_t nfft;
-};
-
 // Kernel knobs plus output-axis decisions derived from this tick's input
 // dtype and shape.
 struct RangeStagePlan {
   detail::RangeStageConfig stage;
   int64_t num_bins;
-  bool waveform_present;
 };
 
-// Merge Exact [live] ports onto pinned Params.
-expected<ResolvedParams, Error> resolve_params(
+// Merge Exact [live] ports onto pinned Params and map sentinels to the
+// stage form (nfft == 0 and an empty waveform become nullopt).
+expected<detail::RangeStageConfig, Error> resolve_params(
     Input<wire::WindowSpecT>& range_window_in,
     Input<bool>& apply_dechirp_in,
     Input<wire::FMCWWaveformT>& waveform_in, Input<FftNorm>& fft_norm_in,
@@ -74,14 +62,24 @@ expected<ResolvedParams, Error> resolve_params(
           [](const wire::FMCWWaveformT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto fft_norm,
                resolve_live_override(fft_norm_in, pinned.fft_norm));
-  HOLOSCAN_TRY(auto nfft, resolve_live_override(nfft_in, pinned.nfft));
+  HOLOSCAN_TRY(auto nfft_raw, resolve_live_override(nfft_in, pinned.nfft));
 
-  return ResolvedParams{.window = std::move(range_window),
-                        .apply_dechirp = apply_dechirp,
-                        .waveform = std::move(waveform),
-                        .fft_norm = fft_norm,
-                        .propagation_speed = pinned.propagation_speed,
-                        .nfft = nfft};
+  std::optional<int64_t> nfft;
+  if (nfft_raw != 0) {
+    nfft = nfft_raw;
+  }
+  std::optional<FMCWWaveformDescriptor> opt_waveform;
+  if (waveform.is_valid()) {
+    opt_waveform = std::move(waveform);
+  }
+
+  return detail::RangeStageConfig{
+      .window = std::move(range_window),
+      .apply_dechirp = apply_dechirp,
+      .waveform = std::move(opt_waveform),
+      .fft_norm = fft_norm,
+      .propagation_speed = pinned.propagation_speed,
+      .nfft = nfft};
 }
 
 // Classify the input precision and return whether the input is complex-IF.
@@ -97,24 +95,19 @@ expected<bool, Error> classify_complex_input(const Tensor& input) {
   }
 }
 
-// Check resolved params against this tick's input and build the stage plan.
+// Check the stage config against this tick's input and size the range axis.
 expected<RangeStagePlan, Error> build_range_stage_plan(
-    const ResolvedParams& resolved, bool complex_input,
+    detail::RangeStageConfig stage, bool complex_input,
     const BatchedShape& batched) {
-  std::optional<int64_t> opt_nfft;
-  if (resolved.nfft != 0) {
-    opt_nfft = resolved.nfft;
-  }
-
-  if (opt_nfft.has_value() && *opt_nfft < batched.cols) {
+  if (stage.nfft.has_value() && *stage.nfft < batched.cols) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
-        std::string(kOpName) + ": nfft (" + std::to_string(*opt_nfft) +
+        std::string(kOpName) + ": nfft (" + std::to_string(*stage.nfft) +
             ") must be >= samples_per_chirp (" +
             std::to_string(batched.cols) + ") on port adc_cube"});
   }
-  if (resolved.apply_dechirp) {
-    if (!resolved.waveform.is_valid()) {
+  if (stage.apply_dechirp) {
+    if (!stage.waveform.has_value()) {
       return make_unexpected(Error{
           ErrorCode::kInvalidArgument,
           std::string(kOpName) +
@@ -132,24 +125,9 @@ expected<RangeStagePlan, Error> build_range_stage_plan(
     }
   }
 
-  const bool waveform_present = resolved.waveform.is_valid();
-  std::optional<FMCWWaveformDescriptor> opt_waveform;
-  if (waveform_present) {
-    opt_waveform = resolved.waveform;
-  }
-
-  detail::RangeStageConfig stage;
-  stage.window = resolved.window;
-  stage.apply_dechirp = resolved.apply_dechirp;
-  stage.waveform = std::move(opt_waveform);
-  stage.fft_norm = resolved.fft_norm;
-  stage.propagation_speed = resolved.propagation_speed;
-  stage.nfft = opt_nfft;
-
-  return RangeStagePlan{
-      .stage = std::move(stage),
-      .num_bins = detail::range_num_bins(complex_input, batched.cols, opt_nfft),
-      .waveform_present = waveform_present};
+  const int64_t num_bins =
+      detail::range_num_bins(complex_input, batched.cols, stage.nfft);
+  return RangeStagePlan{.stage = std::move(stage), .num_bins = num_bins};
 }
 
 }  // namespace
@@ -249,13 +227,14 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
   // This tick's Params: pinned defaults with any matched [live] override.
   const FMCWRangeProcessorParams& pinned =
       context.params<FMCWRangeProcessorParams>();
-  HOLOSCAN_TRY(auto resolved,
+  HOLOSCAN_TRY(auto stage,
                resolve_params(range_window_in, apply_dechirp_in, waveform_in,
                               fft_norm_in, nfft_in, pinned));
 
-  // Bind resolved params to this input's dtype/shape for the stage.
+  // Bind the stage config to this input's dtype/shape.
   HOLOSCAN_TRY(auto plan,
-               build_range_stage_plan(resolved, complex_input, batched));
+               build_range_stage_plan(std::move(stage), complex_input,
+                                      batched));
 
   // MatX work runs on the runtime compute stream.
   cudaStream_t stream = context.cuda_stream().get();
@@ -290,7 +269,7 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
 
   // Optional range_bins: waveform present and the latched sink still
   // active. Independent of the FFT; an unwired emit is absorbed.
-  if (plan.waveform_present && range_bins_out_.active()) {
+  if (plan.stage.waveform.has_value() && range_bins_out_.active()) {
     HOLOSCAN_TRY(auto bins_loan,
                  prepare_device_tensor(
                      range_bins, context,
