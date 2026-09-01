@@ -16,10 +16,10 @@ suggestion.
 | # | Decision | Rejected instead |
 | --- | --- | --- |
 | 1 | **Coherence rides one shared event-time coordinate: the frame's transmit time.** The sequencer stamps `capture_time` on both the config sample and the frame trigger; the ADC source *copies* that stamp onto the cube rather than reading a clock; consumers join with `Exact{}`. | An `effective_from` / epoch field inside the descriptor; matching by generation ID inside `compute()`. |
-| 2 | **The config plane publishes once per frame, not once per change.** Content changes stay irregular; publication is paced. | Publish-on-change plus sticky operator state as the *coherent* path (it remains the *degraded* path). |
-| 3 | **`Exact{}` + `on_missing(SafeDefault{})` for `[live]` overrides**; unmatched ticks still run and take Params or the last latch when `sticky_*` is true. `Skip{}` remains available to an application that wants fail-closed, but operators in this module do not skip the cube. `LatestWithin` is not the `[live]` selector. | `LatestWithin{years{100}}` as the default sticky-override shape; `Skip{}` as the operator default (would drop cubes). |
+| 2 | **The config plane publishes once per frame, not once per change.** Content changes stay irregular; publication is paced. Since decision 3 an operator keeps no override state at all, so pacing is the *only* way to hold an override across frames. | Publish-on-change plus latched operator state as the coherent path. |
+| 3 | **`Exact{}` + `on_missing(SafeDefault{})` for `[live]` overrides, and an override applies to exactly one tick.** A matched sample is the effective value for that activation only; an unmatched tick still runs and takes the Params value. Operators carry no latch and no `sticky_*` parameter. `Skip{}` remains available to an application that wants fail-closed, but operators in this module do not skip the cube. `LatestWithin` is not the `[live]` selector. | Operator-side latching behind a `sticky_*` Param (an operator-owned copy of the caller's publication schedule, invisible in the wiring, and a silent stale-value path when a pairing is violated); `LatestWithin{years{100}}` as the override shape; `Skip{}` as the operator default (would drop cubes). |
 | 4 | **`max_age` is a staleness bound, never a coherence mechanism.** No window value makes "the waveform that produced this cube" expressible. | Tuning `max_age` to approximate frame alignment. |
-| 5 | **Optional override ports**: register unconditionally in `setup()` *and* in `contract()`, and let wiring be the application's only statement — an unwired non-trigger `Exact{}` + `SafeDefault{}` entry compiles with a warning and reports `kNotConnected` every activation. `sticky_*` (default true) is the one remaining static Param and is compute-side only. This holds under `OnAligned` as well as `OnEach`; the aligned-trigger exclusion that once forced an `expect_*` gate on the two `OnAligned` operators is fixed ([`HSDK5_PORT.md`](HSDK5_PORT.md) §11). | A parameter that changes the port set (`GRAPH_PARAMETER_PORT_SHAPE_CHANGED`); operator-side inference of its own wiring (no such API); making the port mandatory and wiring an idle producer (legal, parameter-free, but an idiom no Holoscan author would recognize); an `expect_*` parameter everywhere (states the wiring fact twice). |
+| 5 | **Optional override ports**: register unconditionally in `setup()` *and* in `contract()`, and let wiring be the application's only statement — an unwired non-trigger `Exact{}` + `SafeDefault{}` entry compiles with a warning and reports `kNotConnected` every activation. There is no companion static Param. This holds under `OnAligned` as well as `OnEach`; the aligned-trigger exclusion that once forced an `expect_*` gate on the two `OnAligned` operators is fixed ([`HSDK5_PORT.md`](HSDK5_PORT.md) §11). | A parameter that changes the port set (`GRAPH_PARAMETER_PORT_SHAPE_CHANGED`); operator-side inference of its own wiring (no such API); making the port mandatory and wiring an idle producer (legal, parameter-free, but an idiom no Holoscan author would recognize); an `expect_*` parameter everywhere (states the wiring fact twice). |
 | 6 | **Queue depth is sized by frames in flight**, because acquisition and readout latency mean a cube arrives long after its config was published. | Treating retention as a time bound. |
 | 7 | **`OnWindow` / `BracketedWindow` are not for config joins.** | Using a bracketed window to mean "newest config at or before this frame". |
 | 8 | **`DrainAll` + operator-side `capture_time` comparison is the fallback**, for control planes that are fast or that cannot be paced — not the default. | `DrainAll` everywhere (it forfeits the fail-stop that `Exact` gives). |
@@ -41,7 +41,7 @@ and the DSP join needs no window at all:
   holoscan::Contract result;
   result.trigger(holoscan::OnEach{adc})          // the cube sets the pace
       .input(waveform, holoscan::Exact{})        // the waveform that produced it
-      .on_missing(waveform, holoscan::SafeDefault{});  // run; Params/latch
+      .on_missing(waveform, holoscan::SafeDefault{});  // run; use Params
   return result;
 }
 ```
@@ -49,7 +49,7 @@ and the DSP join needs no window at all:
 Three properties follow, and they are the reason this shape was chosen over
 every alternative below. The pairing is **coherent by construction** — not by a
 tolerance that happens to be wide enough. A missing config is **visible to
-`compute()`** via `is_missing()`; operators apply Params or the last latch
+`compute()`** via `is_missing()`; operators apply their Params value
 (`SafeDefault{}`) rather than dropping the cube. An application that wants
 fail-closed can still author `Skip{}`. And it is **free**: no wait, no batch
 scan, no `max_age` to tune, one scalar receive.
@@ -133,12 +133,14 @@ For the agent applying this to `contract()` bodies and `OPERATOR_API.md`:
    The application must stamp the override with the frame's transmit time
    (or a copy of it) and publish it before the cube arrives. Document that
    next to the `[live]` tag. SafeDefault + retention is what happens on a
-   miss — a violated pairing is silent unless the app publishes every frame
-   (ephemeral) or inspects elsewhere.
-2. **Do not put `LatestWithin` on `[live]` ports.** Stickiness is
-   `sticky_*` in `compute()`, not a century-scale window.
-   `DrainAll` remains the tool for an unpaced fast side stream that is *not*
-   a `[live]` Exact join.
+   miss: the tick runs on Params. An app that wants an override to hold
+   across frames publishes it on every frame — which is what `Exact{}` asks
+   for anyway.
+2. **Do not put `LatestWithin` on `[live]` ports, and do not latch in
+   `compute()` either.** An override is a single-tick value; neither a
+   century-scale window nor operator-side state is the right place to
+   express persistence. `DrainAll` remains the tool for an unpaced fast side
+   stream that is *not* a `[live]` Exact join.
 3. **Do not add descriptor-carrying output ports** to make a device echo work.
    Design invariant 2 sanctions exactly one (`VirtualArrayAssemblyOp.array_geometry`),
    and the paced-sequencer topology does not need a second one. If a hardware
@@ -153,10 +155,9 @@ For the agent applying this to `contract()` bodies and `OPERATOR_API.md`:
 ## Adopted (L16 / L17)
 
 - **L16.** Shared transmit-time stamp plus `Exact{}` on enabled `[live]`
-  ports. No epoch field, no descriptor echo. `sticky_*` (default true) is
-  compute-side; `on_missing` is `SafeDefault{}` so a miss still processes
-  the cube (Params or last latch). Fail-closed `Skip{}` is not the
-  operator default.
+  ports. No epoch field, no descriptor echo, no operator-side latch:
+  `on_missing` is `SafeDefault{}` so a miss still processes the cube, on the
+  Params value. Fail-closed `Skip{}` is not the operator default.
 - **L17.** The `contract()` entry is unconditional and wiring is the
   application's only statement. Ports stay registered in `setup()`. This is
   live in the module: the SDK pin is

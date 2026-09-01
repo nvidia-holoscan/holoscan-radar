@@ -119,9 +119,10 @@ throws / sits in `OPEN_ITEMS.md`.
       `(void)`) or `latched` (a `LatchedOutput` member, dedicated work gated
       on `active()`). Never `HOLOSCAN_TRY` an optional emit: publishing to an
       unwired port fails and would take the tick's other outputs with it.
-- [ ] **Sticky overrides:** each tick call `resolve_live_override()` (or
-      `resolve_live_override_via` when the payload needs conversion); seed
-      from Params on miss / until first match. Pass `changed` when
+- [ ] **`[live]` overrides:** each tick call `resolve_live_override()` (or
+      `resolve_live_override_via` when the payload needs conversion). The
+      matched sample applies to that tick only; a miss takes the Params
+      value. Keep no override state between ticks. Pass `changed` when
       costly rebuilds use `ConfigCache`.
 - [ ] **Named axes / no opaque batch:** infer trailing (and any named
       leading) axes from input tensors; use `collapse_batch` /
@@ -160,15 +161,15 @@ throws / sits in `OPEN_ITEMS.md`.
 - [ ] **C++ unit tests** in `tests/cpp/<group>/test_<operator>.cpp`, mirroring
       the operator family tree (`fmcw/`, `detection/`, …), label `unit`.
 - [ ] Use **`create_operator_test`** + `tests/cpp/utils/sdk_harness.hpp`
-      (`single_map`, `TensorMapCapture`, `wire_leading_override` for sticky
+      (`single_map`, `TensorMapCapture`, `wire_leading_override` for
       `[live]` tests).
 - [ ] **Wire every output port** in harness/Application tests — operators
       with multiple outputs will not tick if a port is left unconnected.
 - [ ] Cover **`TESTING.md`** high-level checks for this operator (unit tier
       first; integration/statistical when dependencies exist).
-- [ ] **`[live]` overrides:** at least one mid-stream Exact match + a
-      following miss tick (sticky and/or ephemeral).
-      per functional override param (not just build-time `Arg`).
+- [ ] **`[live]` override tests:** at least one mid-stream Exact match plus a
+      following miss tick asserting the revert to Params, per functional
+      override param (not just build-time `Arg`).
 - [ ] **Float and double** instantiation agreement where applicable.
 - [ ] **Error paths:** invalid args, unsupported modes, bad TensorMap shape.
 - [ ] Register the test in **`tests/cpp/CMakeLists.txt`** with the

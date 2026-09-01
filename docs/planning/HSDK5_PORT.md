@@ -17,7 +17,7 @@ here when the root cause is HSDK 5 / EA.
 | [HSDK 5 preview docs](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/introduction/overview.md) | SDK API source of truth (prefer `.md`; index via `llms.txt`) — do not infer from HSDK 4.x |
 | [`OPERATOR_API.md`](OPERATOR_API.md) | Locked operator contracts (ports, shapes, dtypes, params) |
 | [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md) | Done gate once an op is on HSDK 5 (adapt 4.x checklist wording to Graph / `Operator<Params>`) |
-| [`operators/common/README.md`](../../operators/common/README.md) | Pilot patterns: Tensor I/O, sticky `[live]`, Graph harness |
+| [`operators/common/README.md`](../../operators/common/README.md) | Pilot patterns: Tensor I/O, `[live]` overrides, Graph harness |
 | [`STATUS.md`](STATUS.md) | Who owns what; claim / land coordination |
 | [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md) | **C++ landed:** module `MaxTensorExtents` ctor-capture for Tensor pool sizing + drop opaque leading batch; apps/Python phase 4; pinned [`MAX_TENSOR_EXTENTS_2026-08-15.md`](MAX_TENSOR_EXTENTS_2026-08-15.md) |
 | [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md) | Settled mixed `[live]` payload policy: schema ownership/evolution, ChannelPod tuples, bounded host-Tensor vectors, bridges/tests, and Python limitation |
@@ -41,7 +41,7 @@ The EA branch covers, in dependency order:
 5. Python bindings, Holoviz demos, and example apps once EA exposes a
    usable Python operator surface / Holoviz (or we accept a C++-only path).
 6. Close issues deferred on the EA SDK and/or settled implementation work
-   (sticky live Graph, durable port/descriptor API deltas, and the
+   (live-override Graph coverage, durable port/descriptor API deltas, and the
    descriptor-output Tensor-pack representation).
 7. Cleanup before `main` (drop allow-lists, `[EA HSDK5 ONLY]` fences, and
    this file).
@@ -64,11 +64,11 @@ Work proceeds in layers so unported code does not break the tree:
 | Phase | What lands | Gate |
 | --- | --- | --- |
 | **0 — Foundation** | Dockerfile / yaml-cpp / MatX `find_package`, C++20, Holoviz probe, Python forced off | Tree configures on EA |
-| **1 — Shared glue** | `radar_common/sdk/` Tensor I/O + sticky override; `sdk_harness.hpp` Graph runners | ClutterFilter pilot compiles |
+| **1 — Shared glue** | `radar_common/sdk/` Tensor I/O + `[live]` override helpers; `sdk_harness.hpp` Graph runners | ClutterFilter pilot compiles |
 | **2 — Operator wave** | Rewrite ops to `Operator<Params>` + typed ports; Graph unit tests; allow-list each name | `ctest -L unit` green for ported ops (intentional skips OK) |
 | **3 — Perf wave** | Rewrite `perf_*.cpp` to Graph; add names to `HOLOSCAN_RADAR_HSDK5_PORTED_PERF` | `ctest -L performance` smokes pass |
 | **4 — Apps / Python** | Demo apps + bindings when Holoviz / Python EA surface exists | App smoke / pytest |
-| **5 — Close deferred** | Re-probe EA gaps; settle durable HSDK 5 API deltas with the team; restore Graph sticky / live descriptor ports / typed geometry outs where ratified; unskip deferred suites | Every **Open — SDK / EA** item closed or moved to durable docs; no intentional EA `GTEST_SKIP` left unexplained |
+| **5 — Close deferred** | Re-probe EA gaps; settle durable HSDK 5 API deltas with the team; restore Graph live-override / live descriptor ports / typed geometry outs where ratified; unskip deferred suites | Every **Open — SDK / EA** item closed or moved to durable docs; no intentional EA `GTEST_SKIP` left unexplained |
 | **6 — Cleanup** | Drop allow-lists, `[EA HSDK5 ONLY]` fences, and this file before `main` | See **Cleanup gate** |
 
 Phases 2–3 are per-operator and may interleave (an op can be checklist-near
@@ -85,9 +85,9 @@ new EA/team items added there). Typical work:
 
 | Class | Close by |
 | --- | --- |
-| **EA limitation** (e.g. §1 sticky Graph units / enum lives; remaining §8 enum/vector perf) | Re-probe on newer EA / GA; restore `contract()` sticky policy + unskip Graph tests; document the working harness recipe — or reclassify as durable if the SDK will not support it |
+| **EA limitation** (e.g. §1 live-override Graph units / enum lives; remaining §8 enum/vector perf) | Re-probe on newer EA / GA; restore `contract()` override policy + unskip Graph tests; document the working harness recipe — or reclassify as durable if the SDK will not support it |
 | **Durable HSDK 5** (e.g. §2 unique in/out names, §9 vector/descriptor lives, §10 `ArrayGeometry` Tensor pack) | Apply the locked contract in `OPERATOR_API.md`; for §9 this means generated schemas for shared owning descriptors, ChannelPod fixed tuples, and bounded rank-1 pageable-host Tensors for variable scalar vectors |
-| **Our deferred work blocked on the above** (optional-mask Graph wiring, Graph sticky unskips) | Land against the settled contract after the matching EA prerequisite is closed; do not invent a different physical payload locally |
+| **Our deferred work blocked on the above** (optional-mask Graph wiring, Graph live-override unskips) | Land against the settled contract after the matching EA prerequisite is closed; do not invent a different physical payload locally |
 
 Phase 5 is **not** for new algorithm contracts (those stay
 [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md) / per-op `OPEN_ITEMS.md`). It **is**
@@ -202,7 +202,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `FeatureAssemblyOp` F32/F64 + Graph C++ tests (1-in/1-out; optional gathers) | landed; optional gather Inputs omitted from contract (§11 / Beamscan `is_valid` pattern); Graph optional wiring deferred — stage kernel coverage; no `[live]` params; Graph perf cold/steady landed |
 | `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; Exact `representative`/`score_method`/`feature_weights` on unconditional entries under its `OnAligned` trigger — all three `expect_*` retired (§11), and the live suite keeps every override port wired so a silent one is shown not to stall the trigger; the two enum live-override units landed (§12 fixed); `feature_weights` is a bounded host Tensor (§9); Graph perf cold/steady landed |
 | `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; Exact POD lives (unconditional entries) (Graph live deferred §1); vector lives on bounded host-Tensor ports, fixed tuples on ChannelPod (§9); statistical MC suite on label `statistical`; Graph perf `threshold_scale` `override_ms` restored (§8) |
-| `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph sticky/`TXSchedule` live N/A (Params-only schedule); Graph perf cold/steady landed |
+| `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph live-override/`TXSchedule` N/A (Params-only schedule); Graph perf cold/steady landed |
 | `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` on a generated wire-schema port (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); Exact `wavelength` (unconditional entry) (Graph live deferred §1); Graph perf `wavelength` `override_ms` restored (§8); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
 | `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; Exact lives (unconditional entries); `range_window`/`waveform` restored through generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
@@ -214,16 +214,16 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 
 ## Open — SDK / EA
 
-### 1. Graph mid-stream sticky `[live]` override harness
+### 1. Graph mid-stream `[live]` override harness
 
-**Class:** EA limitation (not a permanent ban on sticky live overrides).
+**Class:** EA limitation (not a permanent ban on live overrides).
 
 **Contract.** `OPERATOR_API.md` requires Exact `[live]` parameters. Their
 `contract()` entries are unconditional and an app enables an override by wiring
 the port, under `OnAligned` as much as under `OnEach` (§11). FMCW
 windows/waveform use generated schema payloads; the other descriptor and
-vector lives ride the same wire-schema / bounded host-Tensor mapping (§9).
-`resolve_sticky_override` remains for the LatestWithin repro test.
+vector lives ride the same wire-schema / bounded host-Tensor mapping (§9). An
+override applies to a single tick; there is no operator-side latch to test.
 
 **What the reproducer established.** The earlier failures were invalid
 authoring shapes, not evidence that scalar sidebands are unsupported:
@@ -299,15 +299,15 @@ respected:
 - **The selector bounds parameterize too, and they bite.** A parameter may
   set `LatestWithin::max_age`, and the window really gates selection: with
   a 1 ms window against a 100 ms control plane, most activations report
-  `is_missing()` and the operator's sticky value stalls. So the window is
+  `is_missing()`. So the window is
   the knob that converts silent staleness into visible absence — at the
   price of the operator needing a defined answer for "control plane went
-  quiet". A practically-infinite `years{100}` gives never-expire sticky
-  semantics, but no window value makes `LatestWithin` safe against a control
+  quiet". A practically-infinite `years{100}` never expires, but no window
+  value makes `LatestWithin` safe against a control
   plane that publishes *faster* than the operator ticks: unselected survivors
   are retained rather than evicted, and exhausting the queue fails the
   producer's `emit` with `kBackpressured` and ends the run. That case wants
-  `DrainAll` — see `OPERATOR_DEVELOPMENT.md` "Sticky semantics".
+  `DrainAll` — see `OPERATOR_DEVELOPMENT.md` "Single-tick override semantics".
 - **`set_params` during a run is a silent no-op.** Called on the operator
   handle after `run_async`, it neither throws nor emits a diagnostic, does
   not replay `contract()`, and does not change the running plan's
@@ -344,7 +344,7 @@ lives, so only their optional-input limitations remain.
   `radar_common/sdk/override_param.hpp` — including the two `OnAligned`
   operators (§11). Descriptor ports convert generated
   wire types, and vector ports convert bounded rank-1 host Tensors, before
-  sticky resolution (§9). Optional Tensor inputs and conditional outputs stay
+  override resolution (§9). Optional Tensor inputs and conditional outputs stay
   out of the contract (§11).
 - **What is missing now is Graph coverage, not the contract shape.**
   Mid-stream Exact tests cover `FMCWRangeProcessorOp` `nfft`, range/Doppler
@@ -355,9 +355,9 @@ lives, so only their optional-input limitations remain.
   `test_fmcw_range_processor.cpp` (`nfft`) ports cleanly to the other
   operators. Landed and passing repeatedly in fresh processes:
   `FMCWDopplerProcessorOpTest.LiveOverrideCenterZeroDopplerMidStream`;
-  `ClusterDBSCANOpTest.LiveMinPointsStickyOverride` /
-  `LiveMaxClustersStickyOverride` / `LiveMinPointsSkewedCaptureMissesExact`;
-  `MVDREstimatorOpTest.LiveMaxSourcesStickyOverrideReallocates`; and
+  `ClusterDBSCANOpTest.LiveMinPointsRevertsToParamsAfterMiss` /
+  `LiveMaxClustersRevertsToParamsAfterMiss` / `LiveMinPointsSkewedCaptureMissesExact`;
+  `MVDREstimatorOpTest.LiveMaxSourcesAppliesForOneTickAndReallocates`; and
   `num_sources` / `source_count_pfa` / `max_sources` on MUSIC, Root-MUSIC, and
   ESPRIT. Prefer a structural observable (an output extent or a reported
   integer) over a float payload comparison — see the MVDR caveat below.
@@ -365,7 +365,7 @@ lives, so only their optional-input limitations remain.
   remaining live-override stubs. Tracked separately as **§12** — the failure is
   a payload-identity gap independent of this harness work, so the four skipped
   enum stubs are accounted for there rather than here.
-- `SnapshotGatherOpTest.LiveSnapshotWindowStickyOverride` remains skipped
+- `SnapshotGatherOpTest.LiveSnapshotWindowAppliesForOneTick` remains skipped
   (`snapshot_window` rides a ChannelPod tuple under an `OnAligned` trigger; not
   re-measured since the enum finding). `PhaseShiftBeamformerOp` / Beamscan
   geometry / grid / taper live Graph tests are also still skipped — the ports
@@ -375,26 +375,26 @@ lives, so only their optional-input limitations remain.
   — label `ea_repro`, not part of default `unit`:
   `ctest --test-dir build -L ea_repro --output-on-failure`
   or `./build/tests/cpp/test_live_override_repro`. Control (tensor-only)
-  passes; dual-OnClock / co-emit / sticky-contract wirings fail with
+  passes; dual-OnClock / co-emit wirings fail with
   compile rejection or runtime diagnostics (see test stdout +
   `/tmp/live_override_repro_*.json`).
-- `MVDREstimatorOpTest.LiveMaxSourcesStickyOverrideReallocates` now passes;
+- `MVDREstimatorOpTest.LiveMaxSourcesAppliesForOneTickAndReallocates` now passes;
   its geometry / grid / `spatial_smoothing` live Graph tests are active.
-  `LiveDiagonalLoadingStickyOverride` stays skipped, but **not** for an SDK
+  `LiveDiagonalLoadingAppliesForOneTick` stays skipped, but **not** for an SDK
   reason: δ is observable only in float values, and MVDR corrupts later runs
   in the same process, so any two-run value comparison is untrustworthy. See
   `mvdr_estimator_op/OPEN_ITEMS.md` item 6 — an operator-state bug, not a
   port-binding one.
-- `MUSICEstimatorOpTest.LiveNumSourcesStickyOverride` /
-  `LiveSourceCountPfaStickyOverride` /
-  `LiveMaxSourcesStickyOverrideReallocates` now pass; its geometry / grid /
+- `MUSICEstimatorOpTest.LiveNumSourcesAppliesForOneTick` /
+  `LiveSourceCountPfaAppliesForOneTick` /
+  `LiveMaxSourcesAppliesForOneTickAndReallocates` now pass; its geometry / grid /
   `spatial_smoothing` live Graph tests are active. Params also cover selection
   (`NumSourcesConfigurableFromParams` /
   `SourceCountPfaConfigurableFromParams` /
   `MaxSourcesConfigurableFromParams`).
 - `RootMUSICEstimatorOpTest` / `ESPRITEstimatorOpTest`
-  `LiveNumSourcesStickyOverride` / `LiveSourceCountPfaStickyOverride` /
-  `LiveMaxSourcesStickyOverride` now pass; their geometry /
+  `LiveNumSourcesAppliesForOneTick` / `LiveSourceCountPfaAppliesForOneTick` /
+  `LiveMaxSourcesAppliesForOneTick` now pass; their geometry /
   `spatial_smoothing` live Graph tests are active.
   Params cover the same trio of configurable-from-Params tests.
 - `FeatureAssemblyOp` has no `[live]` params; optional gather Tensor Inputs
@@ -402,15 +402,15 @@ lives, so only their optional-input limitations remain.
   ports is deferred (`OptionalGatherGraphWiringDeferred` skipped) — that is
   the optional-input gap (§11), not this one; stage kernel tests cover the
   optional gather paths.
-- `DetectionReductionOpTest.LiveRepresentativeStickyOverride` /
-  `LiveScoreMethodStickyOverride` are skipped under §12 (enum edges);
-  `LiveFeatureWeightsStickyOverride` is skipped under §9. Params
+- `DetectionReductionOpTest.LiveRepresentativeAppliesForOneTick` /
+  `LiveScoreMethodAppliesForOneTick` are skipped under §12 (enum edges);
+  `LiveFeatureWeightsRevertsToParamsAfterMiss` is skipped under §9. Params
   cover selection (`RepresentativeConfigurableFromParams` /
   `ScoreMethodConfigurableFromParams` /
   `FeatureWeightsConfigurableFromParams`).
-- `CFARDetectorOpTest.LiveThresholdScaleOverrideMidStreamAndSticky` /
-  `LivePfaOverrideMidStreamAndSticky` /
-  `LiveMaxDetectionsOverrideMidStreamAndSticky` are still skipped for the
+- `CFARDetectorOpTest.LiveThresholdScaleOverrideMidStream` /
+  `LivePfaOverrideMidStream` /
+  `LiveMaxDetectionsOverrideMidStream` are still skipped for the
   harness reason above (they are scalars, so §12 does not apply — writing them
   is the same work that landed the scalars listed earlier);
   vector lives (`guard_cells` / `training_cells` /
@@ -425,7 +425,7 @@ lives, so only their optional-input limitations remain.
   and VirtualArrayAssembly `wavelength`. `override_ms` /
   `override_delta_ms` are populated in the smoke JSON. Enum live ports and
   vector/descriptor lives remain deferred; perf does not claim to replace the
-  skipped one-shot sticky unit tests.
+  skipped one-shot live-override unit tests.
 
 **Next.** Generalize the range-processor `nfft` recipe (manual partitions
 for the control-plane source, one shared transmit stamp, `Exact{}` +
@@ -442,7 +442,7 @@ partitioned control-plane source, which works. Earlier failure tokens
 co-emit wirings, and the minimal reproducer still shows them; keep it until
 GA re-test. Do not reclassify as durable. Perf timing is the exception: POD
 `override_ms` is measured for the seven operators listed above through that
-same supported shape (§8), so what remains open here is the one-shot sticky
+same supported shape (§8), so what remains open here is the one-shot
 unit tests. Enum transport moved to §12.
 
 ---
@@ -572,14 +572,14 @@ types remain the descriptor, tuple/vector, or `std::vector<T>` types documented
 in `OPERATOR_API.md`; generated objects, ChannelPod wrappers, and Tensor
 handles are physical port types only. The host-Tensor vector path is a narrow
 control-plane exception to the normal rejection of pageable-host data
-Tensors. Exact / SafeDefault and `sticky_*` semantics are unchanged.
+Tensors. Exact / SafeDefault and single-tick override semantics are unchanged.
 
 **Measured 2026-08-21 (`tmp-app/fbs/`).** It works for exactly the shapes
 we need. `fbs_live_override.cpp` carries this operator's two demoted
 overrides — `waveform` (optional scalars + `[Complex64]`) and
 `range_window` (enum, optional scalar, `[double]`) — as generated owning
-types on ordinary sticky `[live]` ports, reusing
-`add_sticky_override_to_contract` / `receive_optional_value` unchanged,
+types on ordinary `[live]` ports, reusing
+`add_live_override_to_contract` / `receive_optional_value` unchanged,
 with `LatestWithin` selection, `SafeDefault`, and per-field round-trip
 equality against the descriptor the control plane meant to install. The
 costs are all real but bounded: (a) `TRAITS_MAX_SERIALIZED_SIZE` is a
@@ -679,7 +679,7 @@ descriptor's field list then lives in three places (struct, param schema,
 The `[live]` port is `Input<SnapshotWindowOverride>` — a fixed
 `{doppler, range}` int64 POD with `ChannelTypeIdentity` /
 `ChannelPodLayout` ([EA HSDK5 ONLY] in `snapshot_gather_op.hpp`). Normalize
-empty/size-1 vectors on the Params path before seeding the POD sticky state.
+empty/size-1 vectors on the Params path before seeding the POD override.
 The same ChannelPod category applies to other bounded fixed tuples, including
 CFAR's `(doppler, range)` `guard_cells` and `training_cells`; their logical
 Params remain unchanged.
@@ -701,7 +701,7 @@ converting. Where the bound is a `MaxTensorExtents` field, `require_extent`
 fails with a named error if the application did not supply it; DBSCAN checks
 its `max_features` bound on arrival instead, so a graph that never sends an
 `epsilon` override compiles without one. Logical Params stay the types
-`OPERATOR_API.md` documents, and `sticky_*` semantics are unchanged.
+`OPERATOR_API.md` documents, and single-tick override semantics are unchanged.
 
 The committed-source/generated-output boundary, exact identity and evolution
 rules, `MaxTensorExtents` bounds, bridge/install/test sync surface, and
@@ -960,10 +960,10 @@ four were latent, since no test wires them:
 
 | Port | Type | Trigger | Test |
 | --- | --- | --- | --- |
-| `ClutterFilterOp.method` | `ClutterFilterMethod` | `OnEach` | `LiveMethodOverrideMidStreamAndSticky`, `LiveMethodEphemeralRevertsToParams` — landed |
-| `BeamscanEstimatorOp.peak_interpolation` | `PeakInterpolation` | `OnEach` | `LivePeakInterpolationStickyOverride` — landed |
-| `DetectionReductionOp.representative` | `RepresentativePolicy` | `OnAligned` | `LiveRepresentativeStickyOverride`, `LiveRepresentativeEphemeralRevertsToParams` — landed |
-| `DetectionReductionOp.score_method` | `ScoreMethod` | `OnAligned` | `LiveScoreMethodStickyOverride` — landed |
+| `ClutterFilterOp.method` | `ClutterFilterMethod` | `OnEach` | `LiveMethodOverrideAppliesForOneTick`, `LiveMethodRevertsToParamsAfterMiss` — landed |
+| `BeamscanEstimatorOp.peak_interpolation` | `PeakInterpolation` | `OnEach` | `LivePeakInterpolationAppliesForOneTick` — landed |
+| `DetectionReductionOp.representative` | `RepresentativePolicy` | `OnAligned` | `LiveRepresentativeAppliesForOneTick`, `LiveRepresentativeAppliesForOneTick` — landed |
+| `DetectionReductionOp.score_method` | `ScoreMethod` | `OnAligned` | `LiveScoreMethodAppliesForOneTick` — landed |
 | `FMCWRangeProcessorOp.fft_norm` | `FftNorm` | `OnEach` | none authored |
 | `FMCWDopplerProcessorOp.fft_norm` | `FftNorm` | `OnEach` | none authored |
 | `FMCWRangeDopplerProcessorOp.fft_norm` | `FftNorm` | `OnEach` | none authored |
@@ -1001,7 +1001,7 @@ enum class:  plan_ok=true captured=3 diagnostics=
 No operator code changed — the enum ports were always declared exactly like
 their scalar siblings, so the fix was invisible to this module. What changed is
 the test surface: all four skipped stubs are now real tests that wire the enum
-edge and assert the override takes effect mid-stream, is latched by `sticky_*`,
+edge and assert the override takes effect mid-stream, reverts to Params on the next miss,
 and reverts to the `Params` value when ephemeral. Because the two
 `DetectionReductionOp` ports sit under an `OnAligned` trigger, they are also the
 first tests to assert a wired enum override on that trigger shape.
@@ -1288,7 +1288,7 @@ Dual-/triple-in single-out runners
 `run_triple_in_single_out_operator_graph_result` +
 `TripleTensorSourceOp`) cover DetectionReductionOp. Error-path waits poll
 `session.diagnostics()` (capture CV alone never wakes on reject). Further
-generalize as more multi-port ops land; restore mid-stream sticky override
+generalize as more multi-port ops land; restore mid-stream live override
 coverage once item 1 is fixed.
 
 **Status:** open — runners for every landed port shape exist; remaining
@@ -1332,7 +1332,7 @@ remain open.
 | Params schema | Ported ops use `Operator<Params>` + `HOLOSCAN_PARAM_SCHEMA`; drop `ArgumentSetter` / `ensure_radar_arg_setters` for those |
 | Stream | `context.cuda_stream()` only — no `receive_cuda_stream` / `set_cuda_stream` |
 | Emit | `prepare_device_tensor` then `emit_prepared_tensor` for multi-out ticks (fill/commit all loans before any publish); single-out may still use `emit_device_tensor` |
-| Live override helper | `add_live_override_to_contract` (`Exact{}` + `SafeDefault{}`, unconditional under every trigger shape) + operator-owned `std::optional` latched by `resolve_live_override` (not experimental `runtime_mutable`). `resolve_sticky_override` / `LatestWithin` survive only in the repro test |
+| Live override helper | `add_live_override_to_contract` (`Exact{}` + `SafeDefault{}`, unconditional under every trigger shape) + `resolve_live_override`, which returns the matched sample for that tick and the Params seed otherwise (not experimental `runtime_mutable`). No operator-side latch; `LatestWithin` is not used on `[live]` ports |
 | Optional receives | Only `kInputUndeclared` / `kInputEmpty` / `kInputNotSelected` / `kNotReady` mean "absent" (`is_absent_input_error`); every other receive error propagates instead of degrading to the Params seed |
 | Empty tensors | `receive_tensor` rejects a null `data()` only when `nbytes() > 0` — a zero-element tensor legitimately carries no allocation |
 | Static params | Root-MUSIC / ESPRIT reject a mid-session `angle_convention` change rather than silently reusing the seeded device relabeling |

@@ -19,7 +19,7 @@ HSDK 5 Graph + `Operator<Params>` with typed Tensor ports — **no 4.x shim**.
 | Phase | Intent | Branch outcome |
 | --- | --- | --- |
 | 0 — Foundation | EA image, CMake/MatX, Holoviz probe, Python forced off | Landed |
-| 1 — Shared glue | `radar_common/sdk/` Tensor I/O + sticky helpers; Graph test harness | Landed |
+| 1 — Shared glue | `radar_common/sdk/` Tensor I/O + `[live]` override helpers; Graph test harness | Landed |
 | 2 — Operator wave | All 19 ops → Graph/`Operator<Params>` + unit tests (allow-list) | Landed (intentional live skips OK) |
 | 3 — Perf wave | Graph `perf_*` drivers + cold/steady smokes | Landed (POD `override_ms` restored; enum `override_ms` still unmeasured — §8, no longer blocked) |
 | 4 — Apps / Python | Demos + bindings when Holoviz / Python EA surface exists | **Partial:** C++ Graph demos + X11 RD viewer; Holoviz/Python still off |
@@ -68,7 +68,7 @@ Grouped by theme. Section numbers match [`HSDK5_PORT.md`](HSDK5_PORT.md)
 
 | Issue | What we did |
 | --- | --- |
-| Mid-stream sticky `[live]` Graph (scalar/enum beside device Tensor) fails compile or runtime (`PARTITION_MANUAL_AUTHORING_REQUIRED`, `RUNTIME_PORT_BINDING_UNAVAILABLE`, `RUNTIME_EXECUTION_LANE_PLAN_INVALID`, …) | Declare typed live Inputs in `contract()` unconditionally and let wiring decide, under every trigger shape; keep the minimal repro in `tests/cpp/utils/test_live_override_repro.cpp` (`ctest -L ea_repro`). Scalar/bool overrides run, and enum edges run since the §12 fix. FMCW schema-backed window/waveform Graph tests run (§1 / §9). |
+| Mid-stream `[live]` Graph (scalar/enum beside device Tensor) fails compile or runtime (`PARTITION_MANUAL_AUTHORING_REQUIRED`, `RUNTIME_PORT_BINDING_UNAVAILABLE`, `RUNTIME_EXECUTION_LANE_PLAN_INVALID`, …) | Declare typed live Inputs in `contract()` unconditionally and let wiring decide, under every trigger shape; keep the minimal repro in `tests/cpp/utils/test_live_override_repro.cpp` (`ctest -L ea_repro`). Scalar/bool overrides run, and enum edges run since the §12 fix. FMCW schema-backed window/waveform Graph tests run (§1 / §9). |
 | Device Tensor outs need explicit pool bind; foreign-handle / zero-copy republish rejected | `bind_*_device_pools` in harness; apps/perf `allocate_tensor` / loan fill each tick; `PerfPublishMode`; accept VAA lg/xl vs 4.3 gap as publish-path artifact (§3) |
 | Raw `DLManagedTensor*` imports are read-only | Writable path via `DLManagedTensorContext` + owned device memory (`dlpack_buffer.hpp`) (§4) |
 | Operator with **no** wired port breaks auto-partition (`PARTITION_MANUAL_AUTHORING_REQUIRED`, unnamed vertex) | Always drain fan-outs (e.g. `cfar_power` → viewer **and** `NullSinkOp`); never leave a constructed sink unwired (§6) |
@@ -113,7 +113,7 @@ Until these close, phase 5 / cleanup cannot finish. Detail and next steps:
 
 | ID | Gap | Impact if still broken |
 | --- | --- | --- |
-| §1 | Mid-stream sticky Graph `[live]` (device Tensor path + scalar override) | Scalar / bool overrides now run and are covered; what remains is one-shot sticky harness work on the operators not yet converted |
+| §1 | Mid-stream Graph `[live]` (device Tensor path + scalar override) | Scalar / bool overrides now run and are covered; what remains is one-shot override harness work on the operators not yet converted |
 | §12 | ~~`enum class` Graph edge fails bind (`kLocalEnum`)~~ — **fixed on pin `f0cb828d4`** | Closed. All four enum `Live*` tests landed; only enum `override_ms` (§8) and the four unauthored `fft_norm` / fused `clutter_filter` live tests remain, both ordinary work |
 | §11 | ~~`OnAligned` trigger rejects an unwired non-member `Exact{}` override~~ — **fixed on pin `f0cb828d4`** | Closed in the SDK and in the module: `SnapshotGatherOp` / `DetectionReductionOp` dropped `expect_*`, so no operator has a wiring flag |
 | §6 (Holoviz / Python) | Holoviz package + usable Python / pybind11 operator surface | Holoviz demos and pytest remain forced off; X11 is interim only |
@@ -149,7 +149,7 @@ cmake --build build -j"$(nproc)"
 
 ctest --test-dir build -L unit --output-on-failure
 ctest --test-dir build -L performance --output-on-failure
-ctest --test-dir build -L ea_repro --output-on-failure   # sticky live Graph repro
+ctest --test-dir build -L ea_repro --output-on-failure   # live override Graph repro
 
 # Demos (smoke YAMLs are log-only; default YAML needs DISPLAY/Xvfb for X11)
 ./build/applications/fmcw_siso/fmcw_siso applications/fmcw_siso/fmcw_siso_smoke.yaml

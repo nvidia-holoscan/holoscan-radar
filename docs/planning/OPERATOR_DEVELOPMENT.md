@@ -78,7 +78,7 @@ make progress — they are **not** checklist completion. Prefer:
 - CA before GO/SO/OS (or whichever mode has a closed-form reference)
 - Complex + real dtype paths early (they share most of the shell)
 - Exact `[live]` plumbing (wiring + retention) with at least one
-  mid-stream match and a following miss tick (sticky and/or ephemeral)
+  mid-stream match and a following miss tick that reverts to Params
 - Sparse / variable-size outputs (compaction) as a staged follow-up if a host
   path unblocks correctness first — but schedule the GPU path before calling
   the operator "performance-ready"
@@ -244,9 +244,9 @@ already published:
 - **A sibling branch of the same frame loses every time.** A side value computed
   by a *different* operator from the same source has not run yet when the driver
   arrives, so selection freezes with `kNeverSeen` and the activation takes the
-  degraded path — on every frame, under the deterministic serial scheduler. A
-  sticky fallback then silently applies a stale value forever. Use `OnAligned`
-  here; do not build it out of `OnEach`.
+  degraded path — on every frame, under the deterministic serial scheduler, so
+  the companion is never applied at all. Use `OnAligned` here; do not build it
+  out of `OnEach`.
 - **A companion that causally precedes the frame wins every time.** Config
   published *before* the frame it describes is already retained when the cube
   lands, so `Exact{}` pairs them exactly, with no window and no wait — verified
@@ -408,15 +408,15 @@ kernel rewrites.
 
 ## Costly configuration and `[live]` overrides
 
-### Sticky semantics
+### Single-tick override semantics
 
 **Module `[live]` ports** join with `Exact{}` + `SafeDefault{}`, declared
 unconditionally — an app enables an override by wiring the port and disables it
 by leaving it unwired, which reports `kNotConnected` and reads as "no value this
-tick". Stickiness is the `sticky_*` Param in `compute()` via
-`resolve_live_override` — not a `LatestWithin` window. Seed from Params until
-the first Exact match (sticky) or on every miss (ephemeral). Never treat a
-default-constructed SafeDefault payload as a value.
+tick". An override applies to **one tick**: `resolve_live_override` returns the
+matched sample when there is one and the Params seed otherwise, and the operator
+keeps no state between ticks. An app that wants an override to hold publishes it
+every tick. Never treat a default-constructed SafeDefault payload as a value.
 
 This holds under every trigger shape. `OnAligned`-triggered operators
 (`SnapshotGatherOp`, `DetectionReductionOp`) were the one exception while the
@@ -426,10 +426,6 @@ that is fixed, so no operator carries an `expect_*` gate.
 The notes below are the measured `LatestWithin` / `DrainAll` behavior (still
 true of the SDK, and still used by unmigrated operators that omit live Inputs
 from `contract()`). They are **not** the `[live]` contract.
-
-Seed `effective_*` from parameters on first tick; each tick
-`resolve_override_param(...)`. Overrides remain until the next override.
-Vector overrides use the `std::any` port path (see common README).
 
 **Override selection is causal on event time, one-sidedly.** A `LatestWithin`
 port takes the newest value stamped at or before the frame being processed and
@@ -452,9 +448,9 @@ deliberately rather than by reflex.
 consumes exactly one sample, and the next one selects the next-newest *retained*
 survivor — so two overrides published between two ticks arrive on two
 consecutive ticks, newest first, and the second one is *older* than the value
-already applied. Sticky state therefore does not move monotonically forward in
-time, and an operator that logs or gates on the override's `capture_time` will
-see it go backwards. Do not paper over that in the operator: a control plane
+already applied. The applied value therefore does not move monotonically
+forward in time, and an operator that logs or gates on the override's
+`capture_time` will see it go backwards. Do not paper over that in the operator: a control plane
 that publishes faster than the consumer ticks is the caller's problem to
 notice, and swallowing it hides the real behavior. Both behaviors are
 observable in `tmp-app/control_plane_app.cpp`.
@@ -468,9 +464,8 @@ stay retained, and once the queue is full the *producer's* `emit` fails with
 With a 16-deep queue that is under 600 ms. There is no eviction of superseded
 values and no silent drop: retention is a resource, and an over-published
 override port exhausts it and takes the graph down. Queue depth only buys time.
-The corollary for the module's `kStickyOverrideMaxAge = years{100}` mapping is
-that it is safe only while the control plane publishes no faster than the
-operator ticks. One unprobed escape hatch: the edge itself can be authored
+This is one reason the module's `[live]` ports use `Exact{}` rather than a
+wide `LatestWithin`. One unprobed escape hatch: the edge itself can be authored
 `QueuePolicy::kDropOldest` (`ConnectionOptions` / `FlowConfigurator`), which the
 SDK documents as retaining the newest depth and evicting rather than blocking —
 a freshest-only mailbox at depth 1. If that holds it removes the failure without
@@ -515,7 +510,7 @@ path (warn if that re-enters the slow path).
 
 If a rebuild is huge, serving the previous artifact for a tick while a
 background rebuild runs can be correct for some operators — but only if the
-contract allows stale thresholds and tests cover the sticky/warning behavior.
+contract allows stale thresholds and tests cover the stale/warning behavior.
 Default to blocking correctness unless the contract says otherwise.
 
 ---
@@ -536,10 +531,11 @@ path. If the contract emits multiple related tensors, assert consistency
 
 ### Cover `[live]` Exact joins, not only build-time `Arg`
 
-At least one mid-stream Exact match plus a following miss tick (sticky
-keeps the value; ephemeral reverts to Params). Stamp cube and override with
-the same producer-chosen `capture_time`. Build-time args alone do not
-exercise `resolve_live_override`.
+At least one mid-stream Exact match plus a following miss tick, which must
+revert to Params. Stamp cube and override with the same producer-chosen
+`capture_time`. Build-time args alone do not exercise `resolve_live_override`.
+Pick the Params value so the revert is observable — a Params value that only a
+miss tick reaches is otherwise never exercised at all.
 
 ### Float and double
 
@@ -596,7 +592,7 @@ operator has any — not only build-time `Arg` variants. Match the CFAR pattern:
 - Report `override_ms` / `override_delta_ms` on the compute row (peak latency
   over a short post-override window vs pre-override median).
 - Cover each functionally distinct live param at least once in the default or
-  `--full` matrix (cheap sticky flips and any costly rebuild paths). Claiming
+  `--full` matrix (cheap value flips and any costly rebuild paths). Claiming
   a fast path (`alpha_lut`, cached plans, …) while only timing the slow path
   is a harness bug.
 

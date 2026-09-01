@@ -182,7 +182,7 @@ Common check (all five): `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_e
 
 - **End-to-end per modality.** SISO / SIMO / MIMO-TDM / MIMO-DDM: a scene with known targets → detections at the correct range / velocity (and angle for the angle-bearing modalities), within resolution. The MIMO end-to-end runs are the primary validation of the marshaling + angle chain together.
 - **Sparse-slot interchangeability.** With the wiring fixed, swapping the estimator in `⟨sparse angle estimator⟩` (Beamscan ↔ MVDR ↔ MUSIC ↔ …) requires no graph change and each recovers the DOA — validating the shared contract.
-- **`[live]` override behavior.** An Exact-matched override mid-stream changes the output accordingly; a following tick with no match keeps the value if `sticky_*=true` and reverts to Params if `sticky_*=false`. Warn only when a genuine rebuild is triggered (FFT plan, window coefficients, CFAR window kernel); previously-seen configurations are reused from cache.
+- **`[live]` override behavior.** An Exact-matched override mid-stream changes the output accordingly; a following tick with no match reverts to the Params value, since an override applies to one tick only. Warn only when a genuine rebuild is triggered (FFT plan, window coefficients, CFAR window kernel); previously-seen configurations are reused from cache.
 - **Precision.** Single- and double-precision instantiations agree within their respective tolerances.
 - **Memory spaces.** Operators accept tensors in each CUDA-accessible memory space (device, managed, pinned host) and reject pageable-host input with a clear error; outputs are always device memory.
 - **Determinism.** A fixed seed reproduces identical outputs across runs.
