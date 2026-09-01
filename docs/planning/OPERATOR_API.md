@@ -272,6 +272,16 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 - Where a **[live]** override incurs a genuine cost — an FFT-plan build, a window-coefficient build, a CFAR window-kernel build — the operator **warns** (once per new configuration) and **caches** prior configurations so alternating values do not thrash.
 - A few parameters are genuinely fixed for an instance's lifetime (e.g. the CFAR variant, which selects the kernel) and are **static**; instantiate separate operators to vary those.
 
+**Optional output convention.** An output marked **(optional)** is one an application may leave unwired. Some are also *conditional* — published only on the ticks a producing condition holds (a waveform descriptor is configured, an `is_valid` input arrived); that is a separate property, noted per port.
+
+- **Wiring is the application's only statement**, exactly as for `[live]` inputs. Nothing exposes an output's wiring to the operator — `Output` has no connection query and `contract()` has no output side — so the operator cannot ask, and publishing to an output with no consumer fails. The operator absorbs that failure: a declined optional output never fails the activation and never disturbs the tick's other outputs. Required outputs keep `HOLOSCAN_TRY`, where a failed emit *is* an error.
+- Every optional output declares one of exactly **two dispositions**. The disposition is a property of the operator, not a parameter; an application does not select it, and both are equally safe to leave unwired. It decides only whether the operator keeps doing the work.
+  - **`always`** — attempt the emit every tick the port is produced, discarding the result. Silent. Correct when the value is a byproduct of work done for another output, so there is nothing to save by stopping.
+  - **`latched`** — on the first failed emit, warn once, then skip everything done **solely** to produce that output — its allocation, its fill kernels, its commit, its emit — for the remainder of the run. Correct when the port has dedicated work worth skipping.
+- **Only `ErrorCode::kFailure` latches.** That is what an unconsumed output reports. Any other code is a genuine fault that says nothing about wiring, and is ignored for that tick without disabling the port — otherwise one transient fault would cost the whole run instead of one frame.
+- Latching is sound because **wiring is fixed for a run**: the plan is compiled before the first activation and cannot be rewired while it runs.
+- Where dedicated work is shared by two optional ports (`doa_multi` and `source_count` come from one peak-extraction pass), it stops only once **both** have latched — until then the pass runs and needs somewhere to write, so both buffers are still allocated. Each port always gates its own emit.
+
 **HSDK 5 physical `[live]` payload policy.** The parameter bullets below name
 the logical Params/YAML types. Those types do not change to satisfy
 `PublishedPayload`; only the same-named port's physical representation changes.
@@ -304,7 +314,7 @@ generator-workaround, and C++-only limitations are locked in
 
 - **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(num_chirps, samples_per_chirp)`. Range FFT along the last (fast-time) axis.
 - **Out:** `range_profiles` — complex64 / complex128, `(num_chirps, num_range_bins)`. `num_range_bins = samples_per_chirp` (complex IF) or `samples_per_chirp//2 + 1` (real IF); grows to `nfft` when set. No range-axis `fftshift` (bin 0 = zero range).
-- **Out:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`. Per-bin range (m) relative to zero beat; emitted only when a waveform descriptor is available.
+- **Out:** `range_bins` (optional, **latched**) — float32 / float64, `(num_range_bins,)`. Per-bin range (m) relative to zero beat; emitted only when a waveform descriptor is available.
 
 The logical `[live]` types remain `WindowSpec` and
 `FMCWWaveformDescriptor`. Their HSDK 5 physical port payloads are generated
@@ -336,7 +346,7 @@ optional array is absent; null is invalid. See
 
 - **In:** `range_profiles` — complex64 / complex128, `(num_chirps, num_range_bins)`. Doppler FFT along the `num_chirps` (slow-time) axis.
 - **Out:** `rd_maps` — complex64 / complex128, `(num_doppler, num_range_bins)`. `num_doppler = num_chirps` (or `nfft`); zero-Doppler centered by default.
-- **Out:** `velocity_bins` (optional) — float32 / float64, `(num_doppler,)`. Per-bin radial velocity; emitted only when a descriptor is available.
+- **Out:** `velocity_bins` (optional, **latched**) — float32 / float64, `(num_doppler,)`. Per-bin radial velocity; emitted only when a descriptor is available.
 
 The logical `[live]` types remain `WindowSpec` and
 `FMCWWaveformDescriptor`. Their HSDK 5 physical port payloads are generated
@@ -357,8 +367,8 @@ optional array is absent; null is invalid. See
 
 - **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(num_chirps, samples_per_chirp)`.
 - **Out:** `rd_maps` — complex64 / complex128, `(num_doppler, num_range_bins)`. `num_range_bins` per FMCWRangeProcessorOp, `num_doppler = num_chirps` (reduced by the delay-canceller chirp loss when `clutter_filter` is a delay canceller). No intermediate range-profile output; the inline clutter filter is fused into the Doppler pre-FFT expression (no materialized intermediate), bit-identical to `ClutterFilterOp` → `FMCWDopplerProcessorOp`.
-- **Out:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`.
-- **Out:** `velocity_bins` (optional) — float32 / float64, `(num_doppler,)`.
+- **Out:** `range_bins` (optional, **latched**) — float32 / float64, `(num_range_bins,)`.
+- **Out:** `velocity_bins` (optional, **latched**) — float32 / float64, `(num_doppler,)`.
 
 The logical `[live]` types remain `WindowSpec` and
 `FMCWWaveformDescriptor`. Their HSDK 5 physical port payloads are generated
@@ -428,7 +438,7 @@ GO/SO start-time pre-calibration (needs an RD-map shape hint, since their LUTs a
 
 - **In:** `points` — float32 / float64, `(num_points, num_features)`. Caller-assembled feature matrix (e.g. `[range, velocity, az, el]`); radar-agnostic.
 - **Out:** `labels` — int, `(num_points,)`. Cluster id per point, noise = `-1`; row-aligned with `points`. Clusters are numbered by **descending point count** (cluster `0` is the largest), ties broken by ascending component root (lowest member row index). A **border point** reachable from cores in more than one cluster joins the core neighbor with the **numerically smallest component root** (lowest member row index) — the deterministic, order-independent tie-break for DBSCAN's inherent inter-cluster-border ambiguity. (The partition — core structure and noise set — is identical under any faithful DBSCAN; only which cluster a straddling border point joins is pinned here.) Deterministic: `labels` is a pure function of `(points, epsilon, min_points)`.
-- **Out:** `sizes` (optional) — int, `(num_clusters,)`. Point count per cluster, in the same descending order as the ids (so `sizes` is non-increasing); sized to the actual cluster count and reallocated per tick. If `max_clusters` is set and exceeded, the smallest surplus clusters are dropped (their points → noise) and a warning raised.
+- **Out:** `sizes` (optional, **latched**) — int, `(num_clusters,)`. Point count per cluster, in the same descending order as the ids (so `sizes` is non-increasing); sized to the actual cluster count and reallocated per tick. If `max_clusters` is set and exceeded, the smallest surplus clusters are dropped (their points → noise) and a warning raised.
 
 **Parameters:**
 
@@ -531,7 +541,7 @@ Gathers, for each detection, the per-channel complex snapshot(s) from the RD map
 - **In:** `rd_maps` — complex64 / complex128, `(num_channels, num_doppler, num_range)`. The **per-channel** RD maps (SIMO: physical RX; MIMO: the assembled virtual array), channel axis immediately before the `(doppler, range)` plane, leading axes batched. Must be the pre-integration maps — *not* the NCI-integrated maps CFAR thresholded on (the channel axis has to be intact to gather from).
 - **In:** `detection_idx` — int, `(num_detections, 2 [+ n_batch])`. Detected `(doppler_bin, range_bin)` cells — CFAR's `detection_idx` contract (sized to the actual count; its row count *is* `num_detections`).
 - **Out:** `snapshot` — complex64 / complex128, `(num_detections, num_channels, num_snapshots)`. Row *i* is detection *i*'s `(num_channels, num_snapshots)` block; sized to the actual detection count and reallocated per tick (no fixed capacity / padding). `num_snapshots = (2·doppler_half + 1)·(2·range_half + 1)` from `snapshot_window` (1 at the default) — the full window product for every detection regardless of edge mode; under a `clamp` edge, out-of-bounds slots are left unfilled and flagged in `is_valid`. Feeds `⟨sparse angle estimator⟩.snapshot`.
-- **Out:** `is_valid` (optional) — uint8 (`0`/`1`), `(num_detections, num_snapshots)`. Per-detection mask of which snapshot slots hold a real gathered cell — all `1` except where a `clamp` edge truncated the window (ragged). Consumed by the sparse estimators to restrict the covariance / beamforming to valid snapshots; emit it whenever either axis uses `clamp`. `uint8` rather than `bool` for HSDK 4.3 NumPy visibility (see `CFARDetectorOp.detection_mask`); the sparse estimators accept a `bool` or `uint8` mask.
+- **Out:** `is_valid` (optional, **always**) — uint8 (`0`/`1`), `(num_detections, num_snapshots)`. Per-detection mask of which snapshot slots hold a real gathered cell — all `1` except where a `clamp` edge truncated the window (ragged). Consumed by the sparse estimators to restrict the covariance / beamforming to valid snapshots; emit it whenever either axis uses `clamp`. `uint8` rather than `bool` for HSDK 4.3 NumPy visibility (see `CFARDetectorOp.detection_mask`); the sparse estimators accept a `bool` or `uint8` mask.
 
 **Parameters:**
 
@@ -565,7 +575,7 @@ Selects a uniform ULA/URA sub-array from a (possibly holey) MIMO virtual array a
 - **In:** `is_valid` (optional) — bool or uint8, `(num_items, num_snapshots)`. Forwarded unchanged when present (channel selection leaves the mask intact).
 - **Out:** `snapshot_out` — complex64 / complex128, `(num_items, L[, num_snapshots])`. Selected-channel snapshot (`L` = sub-array size). HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `snapshot_out` rather than repeating `snapshot` ([EA HSDK5 ONLY]).
 - **Out:** `array_geometry` — reduced geometry for the estimator. Logical type is `ArrayGeometry`; on HSDK 5 EA the physical port is a float64 Tensor of shape `(L + 1, 3)` packing positions + wavelength + optional `geometry_type` ([EA HSDK5 ONLY] — `Output<ArrayGeometry>` is not a PublishedPayload because the descriptor owns `std::vector` / `std::optional`; see `array_geometry_tensor.hpp` / HSDK5_PORT.md §10). Must be emitted each tick (Params side-channel is not acceptable).
-- **Out:** `is_valid_out` (optional) — the input mask, forwarded. Physical name `is_valid_out` ([EA HSDK5 ONLY] unique in/out names).
+- **Out:** `is_valid_out` (optional, **latched**) — the input mask, forwarded. Physical name `is_valid_out` ([EA HSDK5 ONLY] unique in/out names).
 
 **Parameters:**
 
@@ -608,7 +618,7 @@ Per-estimator deviations from the shared contract:
 
 - **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels)` **or** `(num_items, num_channels, num_snapshots)`. Beamscan is single-snapshot: a 3D input with `num_snapshots ≠ 1` is an error (a 2D input is the canonical form).
 - **Out:** `aoa_estimates` — `(num_items, 2)`.
-- **Out:** `angle_spectrum` (optional) — `(num_items, num_az, num_el)`. Single-source, single-snapshot — no `doa_multi`, no `eigenvalues`.
+- **Out:** `angle_spectrum` (optional, **always**) — `(num_items, num_az, num_el)`. Single-source, single-snapshot — no `doa_multi`, no `eigenvalues`. `always` because the scan grid is the same pass that yields `aoa_estimates`.
 
 **Parameters:** shared (`array_geometry`, `angle_convention`, `az_angles`, `el_angles`) plus:
 
@@ -619,8 +629,8 @@ Per-estimator deviations from the shared contract:
 
 - **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`. `num_snapshots` should be ≳ `num_channels` for a well-conditioned (invertible) covariance.
 - **Out:** `aoa_estimates` — `(num_items, 2)`.
-- **Out:** `angle_spectrum` (optional) — Capon spectrum, `(num_items, num_az, num_el)`.
-- **Out:** `doa_multi` + `source_count` (optional); `eigenvalues` (optional).
+- **Out:** `angle_spectrum` (optional, **always**) — Capon spectrum, `(num_items, num_az, num_el)`. `always` because the Capon grid also yields `aoa_estimates`.
+- **Out:** `doa_multi` + `source_count` (optional, **latched** — one shared peak-extraction pass, skipped only once both latch); `eigenvalues` (optional, **latched** — latching skips a batched Hermitian eigendecomposition run solely for this port).
 
 **Parameters:** shared (`array_geometry`, `angle_convention`, `az_angles`, `el_angles`) plus:
 
@@ -633,8 +643,8 @@ Per-estimator deviations from the shared contract:
 
 - **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`.
 - **Out:** `aoa_estimates` — `(num_items, 2)`.
-- **Out:** `angle_spectrum` (optional) — MUSIC pseudo-spectrum, `(num_items, num_az, num_el)`.
-- **Out:** `doa_multi` + `source_count` (optional); `eigenvalues` (optional).
+- **Out:** `angle_spectrum` (optional, **always**) — MUSIC pseudo-spectrum, `(num_items, num_az, num_el)`. `always` because the pseudo-spectrum also yields `aoa_estimates` and feeds peak extraction.
+- **Out:** `doa_multi` + `source_count` (optional, **latched** — one shared peak-extraction pass, skipped only once both latch); `eigenvalues` (optional, **always** — the eigendecomposition is required for the subspace projector, so the port is a re-export with no dedicated work).
 
 **Parameters:** shared (`array_geometry`, `angle_convention`, `az_angles`, `el_angles`) plus:
 
@@ -648,7 +658,7 @@ Per-estimator deviations from the shared contract:
 
 - **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`. Requires a ULA **or** a filled URA (Vandermonde per aperture axis); the geometry is auto-detected from `array_geometry`.
 - **Out:** `aoa_estimates` — `(num_items, 2)`. Gridless (DOAs from polynomial roots) — **no `angle_spectrum`**. A ULA resolves one coordinate (azimuth; elevation degenerate ≈ 0); a URA resolves native `(az, el)`.
-- **Out:** `doa_multi` + `source_count` (optional); `eigenvalues` (optional).
+- **Out:** `doa_multi` + `source_count` (optional, **always** — the same terminal kernel also produces `aoa_estimates`, so nothing is saved without splitting it); `eigenvalues` (optional, **always** — the eigendecomposition is required for the root polynomial).
 
 **Parameters:** shared `array_geometry` + `angle_convention` (**no scan grid**) plus:
 
@@ -680,7 +690,7 @@ Requires a ULA or a filled URA; a non-uniform / holey virtual array needs a unif
 
 - **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`. Requires a shift-invariant geometry: a ULA (or two identical displaced subarrays) for azimuth-only, **or** a filled URA for native az+el; the geometry is auto-detected from `array_geometry`.
 - **Out:** `aoa_estimates` — `(num_items, 2)`. Gridless (closed-form eigenvalue rotation) — **no `angle_spectrum`**. A ULA resolves one coordinate (azimuth; elevation degenerate ≈ 0); a URA resolves native `(az, el)`.
-- **Out:** `doa_multi` + `source_count` (optional); `eigenvalues` (optional).
+- **Out:** `doa_multi` + `source_count` (optional, **always** — the same terminal kernel also produces `aoa_estimates`, so nothing is saved without splitting it); `eigenvalues` (optional, **always** — the eigendecomposition is required for the subspace rotation).
 
 **Parameters:** shared `array_geometry` + `angle_convention` (**no scan grid**) plus:
 

@@ -159,6 +159,50 @@ because downstream re-infers named extents. Fat Tensor outs take
 - Prefer stream-ordered work; avoid `cudaStreamSynchronize` on the hot path
   unless a scalar result is truly required (and even then, minimize it).
 
+### Optional outputs: never `HOLOSCAN_TRY`, and pick a disposition
+
+An operator cannot see its own wiring. `Output` has no connection query and
+`contract()` has no output side, so it cannot tell a port the application
+declined from one it wants, and publishing to an output with no consumer
+fails. Wrapping that emit in `HOLOSCAN_TRY` — the right reflex everywhere else
+— propagates the failure out of `compute()` and fails the entire activation,
+so declining an optional output would silently kill the tick's other outputs
+too. Keep `HOLOSCAN_TRY` for required outputs only.
+
+Every optional output takes one of the two dispositions locked in
+[`OPERATOR_API.md`](OPERATOR_API.md), "Optional output convention". Choose by
+asking what work exists **solely** to produce the port:
+
+**`always`** — nothing to save, because the value falls out of work another
+output needs anyway (`angle_spectrum` is the same scan-grid pass that yields
+`aoa_estimates`). Discard the result and move on; this is silent by design.
+
+```cpp
+(void)emit_prepared_tensor(angle_spectrum, context, std::move(spec_loan));
+```
+
+**`latched`** — the port has dedicated work worth skipping. Hold a
+`LatchedOutput` member, gate that work on `active()`, and emit through it. The
+first failed emit warns once and disables the port for the rest of the run:
+
+```cpp
+if (waveform_present && range_bins_out_.active()) { /* allocate + fill */ }
+...
+if (bins_loan.has_value()) {
+  range_bins_out_.emit(range_bins, context, std::move(*bins_loan),
+                       "FMCWRangeProcessorOp.range_bins");
+}
+```
+
+Gate the whole cost, not just the emit — that is the point. Where one kernel
+feeds two optional ports, gate it on either still being active and let each
+port gate its own emit. `LatchedOutput` latches only on `kFailure`, so a
+transient fault costs one frame rather than the run.
+
+`emit_prepared_tensor` and `emit_device_tensor` carry `[[nodiscard]]` like the
+`Output::emit` they wrap, so forgetting to handle the result is a build error
+and the `(void)` reads as the deliberate choice it is.
+
 ### Sample time propagation and aligned joins
 
 `capture_time` is the frame's logical time, and HSDK 5 propagates it for you.

@@ -264,6 +264,48 @@ TEST(FMCWRangeProcessorOpTest, NoRangeBinsWithoutWaveform) {
             (std::vector<int64_t>{kChirps, kSamples}));
 }
 
+// Supplying a waveform makes range_bins computable, but only wiring makes it
+// wanted, and the operator cannot tell the two apart — nothing exposes an
+// output's wiring to contract() or compute(). So it emits, and the first
+// failure warns and latches the port off. Propagating that failure instead
+// would fail the activation and take range_profiles down with it, which is
+// what this pins: an undrained range_bins costs one warning, not the run.
+// NoRangeBinsWithoutWaveform is the companion where no waveform means nothing
+// is emitted at all. See OPERATOR_API.md, "Optional output convention".
+TEST(FMCWRangeProcessorOpTest, UndrainedRangeBinsDoesNotFailTheRun) {
+  const sim::SimWaveform waveform{};
+  const auto result = sim::simulate(make_scene(range_at_bin(30.0)));
+
+  // Many ticks, not one: the failed emit still takes a pool loan, so a slot
+  // the runtime did not recycle would starve the operator some frames in
+  // rather than on the first. It would surface here as a diagnostic, not a
+  // silent drop — prepare_device_tensor's kResourceExhausted is propagated.
+  // Any count above the pool depth suffices (that pool holds one loan); this
+  // is far above it and still sub-second. Verified separately at 2000.
+  constexpr std::size_t kFrames = 128;
+  std::vector<std::shared_ptr<holoscan::Tensor>> inputs;
+  inputs.reserve(kFrames);
+  for (std::size_t i = 0; i < kFrames; ++i) {
+    inputs.push_back(complex_cube_to_device<float>(result.cube, result.shape));
+  }
+
+  // Waveform present → the operator tries to emit range_bins, which the
+  // profiles-only harness declares but leaves unwired.
+  FMCWRangeProcessorParams params;
+  params.waveform = to_descriptor(waveform);
+  const GraphRunResult out =
+      run_profiles_only_graph_result<float>(std::move(inputs),
+                                            std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  EXPECT_TRUE(out.diagnostics.empty());
+  // Every tick's sibling output is delivered, start to finish.
+  ASSERT_EQ(out.frames.size(), kFrames);
+  for (const HostTensor& frame : out.frames) {
+    EXPECT_EQ(frame.shape, (std::vector<int64_t>{kChirps, kSamples}));
+  }
+}
+
 TEST(FMCWRangeProcessorOpTest, ApplyDechirpMatchesHardwareDechirp) {
   const sim::SimWaveform waveform{};
   const double target_range = range_at_bin(30.5);

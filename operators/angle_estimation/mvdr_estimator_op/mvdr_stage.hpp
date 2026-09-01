@@ -479,19 +479,23 @@ __global__ void peak_extract_kernel(const T* __restrict__ spectrum,
     return;
   }
   const T nan = T{0} / T{0};
-  for (int64_t k = 0; k < max_sources; ++k) {
-    const int64_t base = (item * max_sources + k) * 2;
-    if (k < found && sel[k] >= 0) {
-      const int64_t ia = sel[k] % num_az;
-      const int64_t ie = sel[k] / num_az;
-      doa_multi[base] = az_grid[ia];
-      doa_multi[base + 1] = el_grid[ie];
-    } else {
-      doa_multi[base] = nan;
-      doa_multi[base + 1] = nan;
+  if (doa_multi != nullptr) {
+    for (int64_t k = 0; k < max_sources; ++k) {
+      const int64_t base = (item * max_sources + k) * 2;
+      if (k < found && sel[k] >= 0) {
+        const int64_t ia = sel[k] % num_az;
+        const int64_t ie = sel[k] / num_az;
+        doa_multi[base] = az_grid[ia];
+        doa_multi[base + 1] = el_grid[ie];
+      } else {
+        doa_multi[base] = nan;
+        doa_multi[base + 1] = nan;
+      }
     }
   }
-  source_count[item] = static_cast<int32_t>(found);
+  if (source_count != nullptr) {
+    source_count[item] = static_cast<int32_t>(found);
+  }
 }
 
 // One block per item. When K_i == 0 the covariance was empty: zero the Capon
@@ -520,12 +524,16 @@ __global__ void blank_empty_items_kernel(
   const T nan = T{0} / T{0};
   aoa[item * 2] = nan;
   aoa[item * 2 + 1] = nan;
-  for (int64_t k = 0; k < max_sources; ++k) {
-    const int64_t base = (item * max_sources + k) * 2;
-    doa_multi[base] = nan;
-    doa_multi[base + 1] = nan;
+  if (doa_multi != nullptr) {
+    for (int64_t k = 0; k < max_sources; ++k) {
+      const int64_t base = (item * max_sources + k) * 2;
+      doa_multi[base] = nan;
+      doa_multi[base + 1] = nan;
+    }
   }
-  source_count[item] = 0;
+  if (source_count != nullptr) {
+    source_count[item] = 0;
+  }
 }
 
 // Run the full MVDR estimate for one tick: eigenvalues (raw covariance) →
@@ -545,6 +553,11 @@ __global__ void blank_empty_items_kernel(
 //   doa_multi   — device ptr, [num_items, max_sources, 2] T. Top-`max_sources`
 //                 Capon peaks (strongest first); unused rows NaN.
 //   source_count — device ptr, [num_items] int32. Peaks found (≤ max_sources).
+//
+// Those last three back latched optional ports and may be null, which skips
+// the work that produces them: a null `eigenvalues` skips the batched eig, and
+// a null `doa_multi` *and* `source_count` skips peak extraction. `spectrum`
+// and `aoa` are required.
 template <typename T>
 inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots,
                            const unsigned char* mask, int64_t num_items,
@@ -571,7 +584,10 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots,
   // eigenvector output (we hand it the `rinv` scratch, overwritten by the
   // inverse below) and solves in place, so `cov` survives for the load +
   // inverse. NO_VECTOR: eigenvalues only. Batched cuSOLVER heevd.
-  {
+  //
+  // Nothing downstream reads these, so a null `eigenvalues` skips the solve
+  // outright — the single largest saving available to a latched port here.
+  if (eigenvalues != nullptr) {
     auto cov_v = matx::make_tensor<cuda::std::complex<T>, 3>(
         cov, {num_items, num_channels, num_channels});
     auto evec_scratch = matx::make_tensor<cuda::std::complex<T>, 3>(
@@ -605,13 +621,16 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots,
       spectrum, aoa);
 
   // Multi-source: top-max_sources Capon peaks → doa_multi + source_count.
-  constexpr int peak_block = 256;
-  const size_t peak_smem =
-      static_cast<size_t>(peak_block) * (sizeof(T) + sizeof(int64_t)) +
-      static_cast<size_t>(max_sources) * sizeof(int64_t);
-  peak_extract_kernel<T><<<grid, peak_block, peak_smem, stream>>>(
-      spectrum, num_items, num_az, num_el, max_sources, az_grid, el_grid,
-      doa_multi, source_count);
+  // One pass writes both, so it runs unless both are null.
+  if (doa_multi != nullptr || source_count != nullptr) {
+    constexpr int peak_block = 256;
+    const size_t peak_smem =
+        static_cast<size_t>(peak_block) * (sizeof(T) + sizeof(int64_t)) +
+        static_cast<size_t>(max_sources) * sizeof(int64_t);
+    peak_extract_kernel<T><<<grid, peak_block, peak_smem, stream>>>(
+        spectrum, num_items, num_az, num_el, max_sources, az_grid, el_grid,
+        doa_multi, source_count);
+  }
 
   constexpr int blank_block = 256;
   blank_empty_items_kernel<T><<<grid, blank_block, 0, stream>>>(

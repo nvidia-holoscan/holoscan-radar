@@ -276,7 +276,7 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
   // Enqueued before the Doppler FFT: its host-staged upload waits on the
   // stream, so this ordering keeps that wait off the FFT hot path.
   std::optional<TensorOutputLoan> velocity_loan;
-  if (validated.waveform_present) {
+  if (validated.waveform_present && velocity_bins_out_.active()) {
     HOLOSCAN_TRY(auto loan,
                  prepare_device_tensor(
                      velocity_bins, context,
@@ -319,8 +319,8 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
 
   // Emit all prepared loans together.
   if (velocity_loan.has_value()) {
-    HOLOSCAN_TRY(emit_prepared_tensor(velocity_bins, context,
-                                      std::move(*velocity_loan)));
+    velocity_bins_out_.emit(velocity_bins, context, std::move(*velocity_loan),
+                            "FMCWDopplerProcessorOp.velocity_bins");
   }
   HOLOSCAN_TRY(emit_prepared_tensor(rd_maps, context, std::move(rd_loan)));
 

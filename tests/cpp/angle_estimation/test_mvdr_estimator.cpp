@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -692,6 +693,60 @@ TEST(MVDREstimatorOpTest, RecoversKnownDoaUra) {
   const double* aoa = out.aoa.as<double>();
   EXPECT_NEAR(aoa[0], kTruthAz, 0.02);
   EXPECT_NEAR(aoa[1], kTruthEl, 0.02);
+}
+
+// MVDR documents four optional outputs, but every one of them used to be
+// emitted under HOLOSCAN_TRY, so an application that declined any of them died
+// on its first tick with RUNTIME_OPERATOR_CALLBACK_FAILED — the contract
+// promised optional and the code required wired. Nothing exposes an output's
+// wiring to the operator, so it cannot ask first; it emits and absorbs the
+// failure instead. This pins that wiring aoa_estimates alone is legal.
+//
+// Several frames rather than one: a latched port still takes a pool loan on
+// the tick it discovers it is unwired, so a slot the runtime failed to recycle
+// would starve the operator a few frames in rather than immediately.
+// See OPERATOR_API.md, "Optional output convention".
+TEST(MVDREstimatorOpTest, UnwiredOptionalOutputsDoNotFailTheRun) {
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  constexpr std::size_t kFrames = 16;
+
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geom, conv, 0.08, 0.0, kS, 0.05, 11u);
+
+  std::vector<std::shared_ptr<holoscan::Tensor>> snapshots;
+  snapshots.reserve(kFrames);
+  for (std::size_t i = 0; i < kFrames; ++i) {
+    snapshots.push_back(block_to_device<double>(block, {1, kN, kS}));
+  }
+
+  auto params = make_params(geom, conv, linspace(-0.5, 0.5, 101), {0.0});
+  const holoscan::radar::MaxTensorExtents sized =
+      holoscan::radar::testing::extents_for_scan_grid(
+          params.az_angles.size(), params.el_angles.size());
+
+  const holoscan::radar::testing::GraphRunResult out =
+      holoscan::radar::testing::run_single_io_operator_graph_result<
+          MVDREstimatorOp<double>>(
+          std::move(snapshots), std::move(params), "aoa_estimates",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out, op->snapshot, q);
+            graph.add_flow(op->aoa_estimates, sink->in, q);
+          },
+          {"angle_spectrum", "doa_multi", "source_count", "eigenvalues"},
+          sized);
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  EXPECT_TRUE(out.diagnostics.empty());
+  // Every tick's wired output is delivered, start to finish.
+  ASSERT_EQ(out.frames.size(), kFrames);
+  for (const HostTensor& frame : out.frames) {
+    EXPECT_EQ(frame.shape, (std::vector<int64_t>{1, 2}));
+  }
 }
 
 TEST(MVDREstimatorOpTest, RecoversKnownDoaUlaAzOnly) {

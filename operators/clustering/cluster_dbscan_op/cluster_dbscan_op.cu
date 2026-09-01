@@ -209,13 +209,19 @@ expected<void, Error> ClusterDBSCANOp<T>::compute(ExecutionContext& context) {
     HOLOSCAN_TRY(auto labels_loan,
                  prepare_device_tensor(labels, context, empty_shape,
                                       kInt64Dtype, noop));
-    HOLOSCAN_TRY(auto sizes_loan,
-                 prepare_device_tensor(sizes, context, empty_shape,
-                                      kInt64Dtype, noop));
+    std::optional<TensorOutputLoan> sizes_loan;
+    if (sizes_out_.active()) {
+      HOLOSCAN_TRY(auto loan,
+                   prepare_device_tensor(sizes, context, empty_shape,
+                                        kInt64Dtype, noop));
+      sizes_loan.emplace(std::move(loan));
+    }
     HOLOSCAN_TRY(
         emit_prepared_tensor(labels, context, std::move(labels_loan)));
-    HOLOSCAN_TRY(
-        emit_prepared_tensor(sizes, context, std::move(sizes_loan)));
+    if (sizes_loan.has_value()) {
+      sizes_out_.emit(sizes, context, std::move(*sizes_loan),
+                      "ClusterDBSCANOp.sizes");
+    }
     retained_points_ = std::move(points_in);
     return {};
   }
@@ -464,51 +470,56 @@ expected<void, Error> ClusterDBSCANOp<T>::compute(ExecutionContext& context) {
     reported_clusters = max_clust;
   }
 
-  const std::vector<int64_t> sizes_shape = {reported_clusters};
-  auto sizes_loan = sizes.allocate_tensor(
-      TensorLoanRequest{.shape = sizes_shape, .dtype = kInt64Dtype});
-  if (!sizes_loan) {
-    return make_unexpected(std::move(sizes_loan).error());
-  }
-  auto sizes_writer = sizes_loan->write(context.cuda_stream());
-  if (!sizes_writer) {
-    return make_unexpected(std::move(sizes_writer).error());
-  }
-  int64_t* sizes_ptr = static_cast<int64_t*>(sizes_writer->data());
+  // sizes is optional/latched (OPERATOR_API.md). This histogram is the only
+  // work done solely for it — the earlier one feeds label renumbering and
+  // stays — so a port with no consumer skips the whole block.
+  std::optional<TensorOutputLoan> sizes_loan;
+  if (sizes_out_.active()) {
+    const std::vector<int64_t> sizes_shape = {reported_clusters};
+    auto loan = sizes.allocate_tensor(
+        TensorLoanRequest{.shape = sizes_shape, .dtype = kInt64Dtype});
+    if (!loan) {
+      return make_unexpected(std::move(loan).error());
+    }
+    auto sizes_writer = loan->write(context.cuda_stream());
+    if (!sizes_writer) {
+      return make_unexpected(std::move(sizes_writer).error());
+    }
+    int64_t* sizes_ptr = static_cast<int64_t*>(sizes_writer->data());
 
-  if (reported_clusters > 0) {
-    if (cudaMemsetAsync(sizes_ptr, 0, sizeof(int64_t) * reported_clusters,
-                        stream) != cudaSuccess) {
-      return fail_runtime("ClusterDBSCANOp: sizes clear failed");
+    if (reported_clusters > 0) {
+      if (cudaMemsetAsync(sizes_ptr, 0, sizeof(int64_t) * reported_clusters,
+                          stream) != cudaSuccess) {
+        return fail_runtime("ClusterDBSCANOp: sizes clear failed");
+      }
+      try {
+        cd::launch_histogram(labels_ptr, sizes_ptr, num_points, stream);
+        check_cuda("histogram", kOpName);
+      } catch (const std::runtime_error& e) {
+        return fail_runtime(e.what());
+      }
     }
-    try {
-      cd::launch_histogram(labels_ptr, sizes_ptr, num_points, stream);
-      check_cuda("histogram", kOpName);
-    } catch (const std::runtime_error& e) {
-      return fail_runtime(e.what());
+
+    auto sizes_committed = std::move(*sizes_writer).commit();
+    if (!sizes_committed) {
+      return make_unexpected(std::move(sizes_committed).error());
     }
+    sizes_loan.emplace(std::move(*loan));
   }
 
   auto labels_committed = std::move(*labels_writer).commit();
   if (!labels_committed) {
     return make_unexpected(std::move(labels_committed).error());
   }
-  auto sizes_committed = std::move(*sizes_writer).commit();
-  if (!sizes_committed) {
-    return make_unexpected(std::move(sizes_committed).error());
-  }
-
   auto labels_emitted = labels.emit(
       std::move(*labels_loan),
       EmitOptions{.capture_time = context.activation_time()});
   if (!labels_emitted) {
     return make_unexpected(std::move(labels_emitted).error());
   }
-  auto sizes_emitted = sizes.emit(
-      std::move(*sizes_loan),
-      EmitOptions{.capture_time = context.activation_time()});
-  if (!sizes_emitted) {
-    return make_unexpected(std::move(sizes_emitted).error());
+  if (sizes_loan.has_value()) {
+    sizes_out_.emit(sizes, context, std::move(*sizes_loan),
+                    "ClusterDBSCANOp.sizes");
   }
 
   retained_points_ = std::move(points_in);

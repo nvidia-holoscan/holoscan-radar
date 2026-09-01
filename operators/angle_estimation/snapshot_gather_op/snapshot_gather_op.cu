@@ -271,8 +271,9 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
                                       kMaskDtype, noop));
     HOLOSCAN_TRY(
         emit_prepared_tensor(snapshot, context, std::move(snap_loan)));
-    HOLOSCAN_TRY(
-        emit_prepared_tensor(is_valid, context, std::move(valid_loan)));
+    // is_valid is optional/always (OPERATOR_API.md): an unwired sink is the
+    // application's choice, and the mask costs nothing beyond this emit.
+    (void)emit_prepared_tensor(is_valid, context, std::move(valid_loan));
     retained_rd_maps_ = std::move(rd);
     retained_detection_idx_ = std::move(idx);
     return {};
@@ -387,12 +388,9 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
   if (!snap_emitted) {
     return make_unexpected(std::move(snap_emitted).error());
   }
-  auto valid_emitted = is_valid.emit(
-      std::move(*valid_loan),
-      EmitOptions{.capture_time = context.activation_time()});
-  if (!valid_emitted) {
-    return make_unexpected(std::move(valid_emitted).error());
-  }
+  // is_valid is optional/always (OPERATOR_API.md): an unwired sink is the
+  // application's choice, and the mask costs nothing beyond this emit.
+  (void)emit_prepared_tensor(is_valid, context, std::move(*valid_loan));
 
   retained_rd_maps_ = std::move(rd);
   retained_detection_idx_ = std::move(idx);

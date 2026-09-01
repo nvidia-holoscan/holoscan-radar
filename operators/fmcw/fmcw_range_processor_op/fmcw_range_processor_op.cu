@@ -306,7 +306,7 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
 
   // Conditionally prepare range_bins first (before range_profiles) so both
   // loans are ready before either is emitted.
-  const bool emit_bins = validated.waveform_present;
+  const bool emit_bins = validated.waveform_present && range_bins_out_.active();
   std::optional<TensorOutputLoan> bins_loan;
   if (emit_bins) {
     const std::vector<int64_t> bins_shape{validated.num_bins};
@@ -355,8 +355,8 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
   HOLOSCAN_TRY(emit_prepared_tensor(range_profiles, context,
                                     std::move(profiles_loan)));
   if (bins_loan.has_value()) {
-    HOLOSCAN_TRY(emit_prepared_tensor(range_bins, context,
-                                      std::move(*bins_loan)));
+    range_bins_out_.emit(range_bins, context, std::move(*bins_loan),
+                         "FMCWRangeProcessorOp.range_bins");
   }
 
   retained_input_ = std::move(input);

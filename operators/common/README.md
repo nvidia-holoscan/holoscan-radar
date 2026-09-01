@@ -80,6 +80,7 @@ branch to `main`. Open EA / migration issues live in
 | Allow-list | `cmake/HoloscanRadarOptionalFeatures.cmake` → `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS`; groups call `holoscan_radar_add_operator()` |
 | Receive | `receive_tensor(Input<Tensor>&, who)` → `expected<Tensor, Error>` |
 | Emit | `emit_device_tensor(Output<Tensor>&, context, shape, dtype, fill)` — pool loan → write on `context.cuda_stream()` → commit → emit |
+| Optional output | For a port the app may leave unwired — an unconsumed emit fails, and `HOLOSCAN_TRY` there would fail the activation and drop the tick's other outputs. `always` ports use `(void)emit_prepared_tensor(...)`; `latched` ports hold a `LatchedOutput`, gate their dedicated work on `active()`, and emit through it (warn once, then stop). The emit helpers are `[[nodiscard]]`, so a discard is deliberate. See [`OPERATOR_API.md`](../../docs/planning/OPERATOR_API.md), "Optional output convention" |
 | Stream | `context.cuda_stream()` only (no `receive_cuda_stream` / `set_cuda_stream`) |
 | Exact `[live]` | `add_live_override_to_contract` + `resolve_live_override`; the entry is unconditional under every trigger shape, and wiring the port is what enables the override |
 | Writable test tensors | `dlpack_buffer.hpp` builds a `DLManagedTensorContext` + device alloc — raw `DLManagedTensor*` import is permanently read-only in HSDK 5 |

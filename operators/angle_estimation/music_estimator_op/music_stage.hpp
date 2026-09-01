@@ -491,19 +491,23 @@ __global__ void music_peak_extract_kernel(
     return;
   }
   const T nan = T{0} / T{0};
-  for (int64_t k = 0; k < max_sources; ++k) {
-    const int64_t base = (item * max_sources + k) * 2;
-    if (k < found && sel[k] >= 0) {
-      const int64_t ia = sel[k] % num_az;
-      const int64_t ie = sel[k] / num_az;
-      doa_multi[base] = az_grid[ia];
-      doa_multi[base + 1] = el_grid[ie];
-    } else {
-      doa_multi[base] = nan;
-      doa_multi[base + 1] = nan;
+  if (doa_multi != nullptr) {
+    for (int64_t k = 0; k < max_sources; ++k) {
+      const int64_t base = (item * max_sources + k) * 2;
+      if (k < found && sel[k] >= 0) {
+        const int64_t ia = sel[k] % num_az;
+        const int64_t ie = sel[k] / num_az;
+        doa_multi[base] = az_grid[ia];
+        doa_multi[base + 1] = el_grid[ie];
+      } else {
+        doa_multi[base] = nan;
+        doa_multi[base + 1] = nan;
+      }
     }
   }
-  source_count[item] = static_cast<int32_t>(found);
+  if (source_count != nullptr) {
+    source_count[item] = static_cast<int32_t>(found);
+  }
 }
 
 // One block per item. When K_i == 0 the covariance was empty: zero the MUSIC
@@ -532,12 +536,16 @@ __global__ void music_blank_empty_items_kernel(
   const T nan = T{0} / T{0};
   aoa[item * 2] = nan;
   aoa[item * 2 + 1] = nan;
-  for (int64_t k = 0; k < max_sources; ++k) {
-    const int64_t base = (item * max_sources + k) * 2;
-    doa_multi[base] = nan;
-    doa_multi[base + 1] = nan;
+  if (doa_multi != nullptr) {
+    for (int64_t k = 0; k < max_sources; ++k) {
+      const int64_t base = (item * max_sources + k) * 2;
+      doa_multi[base] = nan;
+      doa_multi[base + 1] = nan;
+    }
   }
-  source_count[item] = 0;
+  if (source_count != nullptr) {
+    source_count[item] = 0;
+  }
 }
 
 // Run the full MUSIC estimate for one tick: covariance -> eig (VECTOR) ->
@@ -655,13 +663,17 @@ inline void run_music_stage(const cuda::std::complex<T>* snapshots,
         el_grid, spectrum, aoa);
   }
 
-  constexpr int peak_block = 256;
-  const size_t peak_smem =
-      static_cast<size_t>(peak_block) * (sizeof(T) + sizeof(int64_t)) +
-      static_cast<size_t>(max_sources) * sizeof(int64_t);
-  music_peak_extract_kernel<T><<<grid, peak_block, peak_smem, stream>>>(
-      spectrum, model_order, num_items, num_az, num_el, max_sources, az_grid,
-      el_grid, doa_multi, source_count);
+  // doa_multi and source_count back latched optional ports and may be null;
+  // one pass writes both, so it runs unless both are null.
+  if (doa_multi != nullptr || source_count != nullptr) {
+    constexpr int peak_block = 256;
+    const size_t peak_smem =
+        static_cast<size_t>(peak_block) * (sizeof(T) + sizeof(int64_t)) +
+        static_cast<size_t>(max_sources) * sizeof(int64_t);
+    music_peak_extract_kernel<T><<<grid, peak_block, peak_smem, stream>>>(
+        spectrum, model_order, num_items, num_az, num_el, max_sources, az_grid,
+        el_grid, doa_multi, source_count);
+  }
 
   constexpr int blank_block = 256;
   music_blank_empty_items_kernel<T><<<grid, blank_block, 0, stream>>>(

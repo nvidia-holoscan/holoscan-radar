@@ -267,8 +267,9 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
                      }));
     HOLOSCAN_TRY(
         emit_prepared_tensor(aoa_estimates, context, std::move(aoa_loan)));
-    HOLOSCAN_TRY(
-        emit_prepared_tensor(angle_spectrum, context, std::move(spec_loan)));
+    // angle_spectrum is optional/always (OPERATOR_API.md): the scan grid is
+    // the same pass that yields aoa_estimates, so there is nothing to skip.
+    (void)emit_prepared_tensor(angle_spectrum, context, std::move(spec_loan));
     retained_snapshot_ = std::move(snap);
     if (maybe_valid.has_value()) {
       retained_is_valid_ = std::move(*maybe_valid);
@@ -363,12 +364,9 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
   if (!aoa_emitted) {
     return make_unexpected(std::move(aoa_emitted).error());
   }
-  auto spec_emitted = angle_spectrum.emit(
-      std::move(*spec_loan),
-      EmitOptions{.capture_time = context.activation_time()});
-  if (!spec_emitted) {
-    return make_unexpected(std::move(spec_emitted).error());
-  }
+  // angle_spectrum is optional/always (OPERATOR_API.md): the scan grid is the
+  // same pass that yields aoa_estimates, so there is nothing to skip.
+  (void)emit_prepared_tensor(angle_spectrum, context, std::move(*spec_loan));
 
   retained_snapshot_ = std::move(snap);
   if (maybe_valid.has_value()) {

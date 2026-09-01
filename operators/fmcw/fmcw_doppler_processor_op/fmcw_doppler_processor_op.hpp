@@ -25,6 +25,7 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_schemas/fmcw_waveform_bridge.hpp"
 #include "radar_schemas/window_spec_bridge.hpp"
 
@@ -150,6 +151,9 @@ class FMCWDopplerProcessorOp
 
   // Stream-ordered lifetime guard for the previous tick's input.
   Tensor retained_input_;
+
+  // velocity_bins is optional/latched (OPERATOR_API.md).
+  LatchedOutput velocity_bins_out_;
 
   // Sticky override state.
   std::optional<WindowSpec> sticky_doppler_window_;

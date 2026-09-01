@@ -107,14 +107,24 @@ unwired graphs compile (wiring it anyway is
 
 ---
 
-## 4. Optional outputs always emitted
+## 4. Optional outputs (resolved 2026-09-01)
 
 **Contract.** `OPERATOR_API.md` marks `doa_multi`, `source_count`, and
-`eigenvalues` optional. On HSDK 5 EA the operator **always allocates and
-emits** all four Tensor outputs each tick (no `angle_spectrum`). C++ Graph
-tests wire and `bind_tensor_output_device` all four.
+`eigenvalues` optional, and its **Optional output convention** gives all three
+the `always` disposition: the terminal `root_music_select_kernel` produces the
+multi-source rows alongside the primary `aoa_estimates`, and the
+eigendecomposition is required for the root polynomial, so none of the three
+has work that could be skipped without splitting that kernel. Their emits are
+discarded rather than propagated, so leaving any of them unwired is legal.
 
-**Status:** open — document for apps; not a blocker for the C++ port.
+Previously all four were emitted under `HOLOSCAN_TRY`, so declining any of the
+optional three killed the run on its first tick.
+
+**Follow-up.** Splitting the terminal kernel would let the three become
+`latched` and actually save work; not attempted here, since a contract change
+is the wrong place for algorithm surgery.
+
+**Status:** resolved.
 
 ---
 

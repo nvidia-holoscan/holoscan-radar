@@ -327,9 +327,11 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
   // Optional axis outputs, only when an effective waveform is available.
   // Enqueued before the FFT stages: their host-staged uploads wait on the
   // stream, so this ordering keeps those waits off the FFT hot path.
+  // Each axis gates on its own latch: one port going unconsumed must not
+  // stop producing the other.
   std::optional<TensorOutputLoan> bins_loan;
   std::optional<TensorOutputLoan> velocity_loan;
-  if (waveform_present) {
+  if (waveform_present && range_bins_out_.active()) {
     HOLOSCAN_TRY(auto rb_loan,
                  prepare_device_tensor(
                      range_bins, context,
@@ -346,7 +348,8 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
                        return {};
                      }));
     bins_loan.emplace(std::move(rb_loan));
-
+  }
+  if (waveform_present && velocity_bins_out_.active()) {
     HOLOSCAN_TRY(auto vb_loan,
                  prepare_device_tensor(
                      velocity_bins, context,
@@ -410,12 +413,12 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
 
   // Emit all prepared loans together.
   if (bins_loan.has_value()) {
-    HOLOSCAN_TRY(emit_prepared_tensor(range_bins, context,
-                                      std::move(*bins_loan)));
+    range_bins_out_.emit(range_bins, context, std::move(*bins_loan),
+                         "FMCWRangeDopplerProcessorOp.range_bins");
   }
   if (velocity_loan.has_value()) {
-    HOLOSCAN_TRY(emit_prepared_tensor(velocity_bins, context,
-                                      std::move(*velocity_loan)));
+    velocity_bins_out_.emit(velocity_bins, context, std::move(*velocity_loan),
+                            "FMCWRangeDopplerProcessorOp.velocity_bins");
   }
   HOLOSCAN_TRY(emit_prepared_tensor(rd_maps, context, std::move(rd_loan)));
 

@@ -6,7 +6,7 @@ Range compression: optional software dechirp, then a windowed FFT along fast-tim
 | --- | --- | --- | --- | --- |
 | in | `adc_cube` | complex64 / complex128, or float32 / float64 | `(num_chirps, samples_per_chirp)`, optional named leading `N_rx` / `(M_tx, N_rx)` | Path auto-selected by dtype: complex IF or real IF |
 | out | `range_profiles` | complex64 / complex128 | same leading + `(num_chirps, num_range_bins)` | Always emitted. `num_range_bins = nfft` (complex IF) or `nfft/2+1` (real IF); `nfft` defaults to `samples_per_chirp` |
-| out (cond.) | `range_bins` | float32 / float64 | `(num_range_bins,)` | Emitted only when a valid `waveform` is available |
+| out (cond.) | `range_bins` | float32 / float64 | `(num_range_bins,)` | Emitted only when a valid `waveform` is available. Optional (`latched`): the first emit to an unwired port warns once, after which the axis is no longer built |
 | live | `range_window` | `holoscan::radar::wire::WindowSpecT` | schema metadata + descriptor Tensor | Exact override; wire to enable, unwired = miss |
 | live | `apply_dechirp` | bool | scalar | Exact override; wire to enable, unwired = miss |
 | live | `waveform` | `holoscan::radar::wire::FMCWWaveformT` | schema metadata + descriptor Tensor | Exact override; wire to enable, unwired = miss |

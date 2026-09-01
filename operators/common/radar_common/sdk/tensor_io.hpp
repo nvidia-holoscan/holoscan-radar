@@ -10,6 +10,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -21,6 +22,7 @@
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/tensor_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/logger/logger.hpp>
 
 namespace holoscan::radar {
 
@@ -137,21 +139,76 @@ expected<TensorOutputLoan, Error> prepare_device_tensor(
 // (activation time is the newest aligned head) — see
 // docs/planning/OPERATOR_DEVELOPMENT.md, "Sample time propagation and aligned
 // joins".
-inline expected<void, Error> emit_prepared_tensor(
+//
+// [[nodiscard]] mirrors Output::emit, which carries it: a dropped result is a
+// silently lost output. HOLOSCAN_TRY is right for a required output, where a
+// failed emit really is an error.
+//
+// An *optional* output — one the application may leave unwired — must never
+// use HOLOSCAN_TRY: publishing to an output with no consumer fails, and
+// propagating that would fail the whole activation and drop the tick's other
+// outputs as collateral. Per OPERATOR_API.md, "Optional output convention",
+// such a port takes one of two dispositions: `always` discards the result here
+// with an explicit (void), and `latched` goes through LatchedOutput below.
+[[nodiscard]] inline expected<void, Error> emit_prepared_tensor(
     Output<Tensor>& port, ExecutionContext& context, TensorOutputLoan loan) {
   return port.emit(std::move(loan),
                    EmitOptions{.capture_time = context.activation_time()});
 }
+
+// A `latched` optional output (OPERATOR_API.md, "Optional output
+// convention"). An application may leave an optional output unwired, but
+// nothing exposes an output's wiring to the operator, so it cannot ask —
+// it learns only by emitting and failing. This records that answer once and
+// gates every later tick on it.
+//
+// Only ErrorCode::kFailure latches. That is what an unconsumed output
+// reports; any other code (kResourceExhausted, kBackpressured, ...) is a
+// genuine fault that says nothing about wiring, and disabling the port for a
+// whole run over one transient fault would turn a lost frame into a lost run.
+// Those are ignored for the tick, leaving the port live.
+//
+// Latching is sound because wiring is fixed for a run: the plan is compiled
+// before the first activation and cannot be rewired while it runs, so an emit
+// that failed for want of a consumer will fail the same way forever.
+class LatchedOutput {
+ public:
+  // False once the port is known unconsumed. Guard the work performed *solely*
+  // to produce this output on it — allocation, fill kernels, commit — not just
+  // the emit; skipping that work is the point.
+  [[nodiscard]] bool active() const noexcept { return !disabled_; }
+
+  // Emit and absorb. Never fails the activation: a declined optional output
+  // must not take the tick's other outputs down with it.
+  void emit(Output<Tensor>& port, ExecutionContext& context,
+            TensorOutputLoan loan, std::string_view op_and_port) {
+    const auto emitted = emit_prepared_tensor(port, context, std::move(loan));
+    if (emitted) {
+      return;
+    }
+    if (emitted.error().code != ErrorCode::kFailure) {
+      return;
+    }
+    HOLOSCAN_LOG_WARN(
+        "{}: emit failed because no consumer is wired. Skipping the work that "
+        "produces this optional output for the rest of the run; wire the port "
+        "if you need it.",
+        op_and_port);
+    disabled_ = true;
+  }
+
+ private:
+  bool disabled_{false};
+};
 
 // Allocate a device Tensor loan, run `fill` with a writable device pointer on
 // the runtime compute stream, commit, and emit. `fill` must enqueue only
 // stream-ordered device work (no host sync). Prefer prepare_device_tensor +
 // emit_prepared_tensor when a tick publishes more than one output.
 template <typename FillFn>
-expected<void, Error> emit_device_tensor(Output<Tensor>& port,
-                                         ExecutionContext& context,
-                                         std::span<const int64_t> shape,
-                                         DLDataType dtype, FillFn&& fill) {
+[[nodiscard]] expected<void, Error> emit_device_tensor(
+    Output<Tensor>& port, ExecutionContext& context,
+    std::span<const int64_t> shape, DLDataType dtype, FillFn&& fill) {
   HOLOSCAN_TRY(auto loan,
                prepare_device_tensor(port, context, shape, dtype,
                                     std::forward<FillFn>(fill)));

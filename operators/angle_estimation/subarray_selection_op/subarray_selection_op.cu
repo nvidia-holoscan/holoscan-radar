@@ -341,7 +341,7 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
                    }));
 
   std::optional<TensorOutputLoan> valid_loan;
-  if (maybe_valid.has_value()) {
+  if (maybe_valid.has_value() && is_valid_out_.active()) {
     const auto& valid = *maybe_valid;
     const auto& vshape = valid.shape();
     const DLDataType vdtype = valid.dtype();
@@ -371,8 +371,9 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
   HOLOSCAN_TRY(
       emit_prepared_tensor(array_geometry, context, std::move(geom_loan)));
   if (valid_loan.has_value()) {
-    HOLOSCAN_TRY(emit_prepared_tensor(is_valid_out, context,
-                                      std::move(*valid_loan)));
+    is_valid_out_.emit(is_valid_out, context, std::move(*valid_loan),
+                       "SubarraySelectionOp.is_valid_out");
+    // Keeps the D2D source alive until the copy enqueued above retires.
     retained_is_valid_ = std::move(*maybe_valid);
   }
 

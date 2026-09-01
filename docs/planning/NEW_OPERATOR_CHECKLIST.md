@@ -114,6 +114,11 @@ throws / sits in `OPEN_ITEMS.md`.
 
 - [ ] **Receive / emit** via single-entry `TensorMap` helpers; reject
       multi-entry maps with a clear error.
+- [ ] **Optional outputs:** every port the application may leave unwired
+      declares a disposition in `OPERATOR_API.md` — `always` (discard with
+      `(void)`) or `latched` (a `LatchedOutput` member, dedicated work gated
+      on `active()`). Never `HOLOSCAN_TRY` an optional emit: publishing to an
+      unwired port fails and would take the tick's other outputs with it.
 - [ ] **Sticky overrides:** each tick call `resolve_live_override()` (or
       `resolve_live_override_via` when the payload needs conversion); seed
       from Params on miss / until first match. Pass `changed` when

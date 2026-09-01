@@ -27,6 +27,7 @@
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/dsp/subarray_selection.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
 
 namespace holoscan::radar {
@@ -136,6 +137,9 @@ class SubarraySelectionOp
 
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
+
+  // is_valid_out is optional/latched (OPERATOR_API.md).
+  LatchedOutput is_valid_out_;
 
   std::optional<ArrayGeometry> sticky_array_geometry_;
   std::optional<std::vector<int64_t>> sticky_subarray_;

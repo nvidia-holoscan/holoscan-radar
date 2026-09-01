@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -120,6 +121,50 @@ ClusterDBSCANParams make_params(std::vector<double> epsilon,
 }
 
 // ---------------------------------------------------------------------------
+
+// sizes is a latched optional output: an application may consume the labels
+// alone. It used to be emitted under HOLOSCAN_TRY, so declining it killed the
+// run on the first tick. Now the first failed emit warns and disables the
+// port, which also skips the per-cluster histogram that runs solely to fill
+// it — the earlier histogram feeding label renumbering must survive, so this
+// checks the labels stay correct on every later tick.
+// See OPERATOR_API.md, "Optional output convention".
+TEST(ClusterDBSCANOpTest, UnwiredSizesDoesNotFailTheRunOrDisturbLabels) {
+  constexpr std::size_t kFrames = 8;
+  const std::vector<double> pts = {
+      0.0, 0.0,  0.1, 0.0,  0.0, 0.1,  0.1, 0.1,   // blob A (4)
+      5.0, 5.0,                                    // outlier
+      10.0, 10.0, 10.1, 10.0, 10.0, 10.1,          // blob B (3)
+  };
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  frames.reserve(kFrames);
+  for (std::size_t i = 0; i < kFrames; ++i) {
+    frames.push_back(points_tensor<double>(pts, 8, 2));
+  }
+
+  const holoscan::radar::testing::GraphRunResult out =
+      holoscan::radar::testing::run_single_io_operator_graph_result<
+          ClusterDBSCANOp<double>>(
+          std::move(frames), make_params({0.5}, 3), "labels",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out, op->points, q);
+            graph.add_flow(op->labels, sink->in, q);
+          },
+          {"sizes"});
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  EXPECT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), kFrames);
+  for (const HostTensor& frame : out.frames) {
+    ASSERT_EQ(frame.shape, (std::vector<int64_t>{8}));
+    const int64_t* lab = frame.as<int64_t>();
+    EXPECT_EQ(lab[0], 0);
+    EXPECT_EQ(lab[4], -1);  // noise
+    EXPECT_EQ(lab[5], 1);
+  }
+}
 
 TEST(ClusterDBSCANOpTest, TwoBlobsAndNoise) {
   // Rows 0-3: blob A near (0,0). Row 4: isolated outlier. Rows 5-7: blob B

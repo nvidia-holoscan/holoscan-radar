@@ -1011,6 +1011,111 @@ at the GA pin to confirm the fix survived.
 
 ---
 
+### 13. Optional outputs: an unconsumed emit fails, and is diagnosed generically
+
+Closed 2026-09-01, worked around module-side — see **Module resolution** below.
+
+**Class:** EA limitation — worked around in the module; the residue is
+diagnosis quality, not capability.
+
+**What happens.** An operator that conditionally produces an output cannot ask
+whether anyone is listening. `Output` exposes `name()`, the `emit` overloads,
+and the allocate paths — there is no connection query, and `contract()` has no
+output side at all (it declares triggers and inputs; outputs are declared in
+`setup()`). So the emit can only be gated on something the operator can see,
+such as "a waveform is configured", which is not the same condition as "the
+port is wired". Publishing to an unconsumed output then fails.
+
+**What works.** Emitting anyway is safe, provided the result is absorbed. Every
+`emit` overload is `[[nodiscard]] expected<void, Error>` precisely so a caller
+can decide, and the failure is confined to that call: the activation completes
+and the tick's *other* outputs are delivered normally. Verified directly — with
+the error swallowed, an undrained `range_bins` run finishes with zero
+diagnostics and `range_profiles` intact. The trap is only in the module's own
+reflex of wrapping every emit in `HOLOSCAN_TRY`, which propagates the error out
+of `compute()` and fails the whole activation, so a graph that merely declined
+an optional output produces nothing at all and says nothing about why.
+
+**Module resolution (2026-09-01).** The fix generalized once the survey showed
+the exposure was far wider than the conditional emits. Seventeen further ports
+were documented `(optional)` in `OPERATOR_API.md` yet emitted unconditionally
+under `HOLOSCAN_TRY` — `ClusterDBSCANOp.sizes`, `SnapshotGatherOp.is_valid`,
+`BeamscanEstimatorOp.angle_spectrum`, and the `angle_spectrum` / `doa_multi` /
+`source_count` / `eigenvalues` sets on MVDR, MUSIC, Root-MUSIC and ESPRIT. An
+application that actually declined one of those died on its *first* tick. It
+had gone unnoticed only because every app and test harness wires everything.
+
+`OPERATOR_API.md` now carries an **Optional output convention** giving each of
+the 22 optional outputs one of two dispositions, both of which absorb the
+failed emit so no unwired port can fail a run:
+
+- **`always`** (11 ports) — `(void)emit_prepared_tensor(...)`, silent. Used
+  where the value is a byproduct of work another output needs anyway, so
+  stopping saves nothing (an `angle_spectrum` is the same scan-grid pass that
+  yields `aoa_estimates`; a MUSIC `eigenvalues` re-exports the eig its own
+  projector requires).
+- **`latched`** (11 ports) — a `LatchedOutput` in `radar_common/sdk/tensor_io.hpp`
+  warns once on the first failed emit and then skips everything done solely for
+  that port. It latches only on `kFailure`, the code an unconsumed output
+  reports, so a transient fault costs one frame rather than the whole run;
+  that is sound because wiring is fixed once the plan compiles. The largest
+  saving is `MVDREstimatorOp.eigenvalues`, which sheds a batched Hermitian
+  `matx::eig` that exists only to fill the port.
+
+Required outputs keep `HOLOSCAN_TRY`, where a failed emit *is* an error.
+`(void)` is the SDK's own idiom for a discarded `[[nodiscard]]` result (its
+docs spell `add_flow` the same way).
+
+Two stage kernels now take null output pointers to make the latch meaningful:
+the MVDR and MUSIC peak-extraction passes write `doa_multi` and `source_count`
+together, so the pass is skipped only once both have latched, and each kernel
+null-guards its stores.
+
+`emit_prepared_tensor` / `emit_device_tensor` now carry `[[nodiscard]]`
+themselves. They previously did not, and neither does `holoscan::expected`, so
+the wrappers were laundering away the protection the SDK put on `Output::emit`:
+a bare call compiled silently and "deliberately ignored" was indistinguishable
+from "forgot to check" in every operator. Adding it cost nothing — every
+required emit site already used `HOLOSCAN_TRY` — and makes the `(void)`
+compiler-enforced.
+
+Locked by three tests, each running many ticks because a latched port still
+takes a pool loan on the tick it discovers it is unwired, so a slot the runtime
+failed to recycle would starve the operator a few frames in rather than on the
+first: `UndrainedRangeBinsDoesNotFailTheRun` (conditional + latched),
+`MVDREstimatorOpTest.UnwiredOptionalOutputsDoNotFailTheRun` (the previously
+fatal class — wires `aoa_estimates` alone and leaves all four optional outputs
+unwired), and `ClusterDBSCANOpTest.UnwiredSizesDoesNotFailTheRunOrDisturbLabels`
+(also checks the surviving renumbering histogram still labels correctly once
+the sizes-only one is gated off).
+
+**What remains — diagnosis, and only if we want it.** Nothing reports an
+undrained optional output. The SDK is silent at every phase: no compile
+diagnostic, no bind warning, nothing but the bare return value. Its only
+"unconnected" tokens (`TEMPORAL_INPUT_UNCONNECTED`,
+`TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT`) are input-side, and no SDK log
+mentions an unconsumed output. Nor could a report be precise: the unconsumed
+emit is the generic `ErrorCode::kFailure` with an empty message, which a
+genuine fault also produces. The docs' statement that an unbound output returns
+`kNotReady` does not describe this case — `kNotReady` is returned only when the
+binding pointer is null, and a bound-but-unwired output is not that. This is
+the asymmetry left over from §11: inputs got both a specific `kNotConnected`
+and a named warning, outputs got neither.
+
+The tradeoff accepted with the silence: an output wired wrongly (one the author
+meant to consume) now fails quietly, surfacing later as missing downstream
+data. Judged acceptable — an optional port is optional.
+
+**Simplification trigger.** A distinct error code for the unconsumed emit, or a
+wiring query on `Output`. Either would make an undrained-output report precise
+enough to be worth adding. Recorded here rather than raised upstream, by
+decision.
+
+**Status:** closed — worked around, with the residual diagnosis gap accepted
+rather than papered over.
+
+---
+
 ## Open — deferred port work
 
 ### 5. Allow-list: C++ operator first-pass complete

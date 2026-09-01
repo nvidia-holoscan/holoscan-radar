@@ -107,20 +107,26 @@ unwired graphs compile (wiring it anyway is
 
 ---
 
-## 4. Optional outputs always emitted
+## 4. Optional outputs (resolved 2026-09-01)
 
 **Contract.** `OPERATOR_API.md` marks `angle_spectrum`, `doa_multi`,
-`source_count`, and `eigenvalues` optional. On HSDK 5 EA the operator
-**always allocates and emits** all five Tensor outputs each tick (same
-compute cost as before — `eigenvalues` still runs `matx::eig` every tick).
-C++ Graph tests wire and `bind_tensor_output_device` all five.
+`source_count`, and `eigenvalues` optional, and its **Optional output
+convention** now gives each a disposition. `angle_spectrum` and `eigenvalues`
+are `always`: the pseudo-spectrum is the same pass that yields
+`aoa_estimates` and also feeds peak extraction, and the eigendecomposition is
+required for the subspace projector — neither has work to skip, so the port is
+a re-export. `doa_multi` and `source_count` are `latched` and share one
+peak-extraction pass, skipped once both have latched.
 
-**Apps.** Consumers that previously left optional ports unwired must still
-satisfy device-output binding (`IMPLICIT_DEVICE_ZERO_REJECTED` if a device
-producer is unbound — HSDK5_PORT §3). Prefer wiring a no-op sink or
-explicitly binding unused ports in app compile options.
+Previously all five were emitted under `HOLOSCAN_TRY`, so declining any of them
+killed the run on its first tick.
 
-**Status:** open — document for apps; not a blocker for the C++ port.
+**Apps.** Unwired device outputs must still be bound
+(`IMPLICIT_DEVICE_ZERO_REJECTED` if a device producer is unbound — HSDK5_PORT
+§3); binding is not wiring, and an unwired-but-bound port is exactly the case
+the convention handles.
+
+**Status:** resolved.
 
 ---
 

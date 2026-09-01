@@ -23,6 +23,7 @@
 #include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 
 namespace holoscan::radar {
 
@@ -134,6 +135,8 @@ class ClusterDBSCANOp : public holoscan::Operator<ClusterDBSCANParams> {
   // Keep the previous activation's input alive across ticks so async device
   // reads cannot outlive the buffer.
   Tensor retained_points_;
+  // sizes is optional/latched (OPERATOR_API.md).
+  LatchedOutput sizes_out_;
   // Logical sticky state owns converted values, not Tensor storage.
   std::optional<std::vector<double>> sticky_epsilon_;
   // Sticky [live] scalars: the last Exact match holds while sticky_*.

@@ -372,25 +372,43 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
     HOLOSCAN_TRY(auto spec_loan,
                  prepare_device_tensor(angle_spectrum, context, spec_shape,
                                       out_dtype, noop));
-    HOLOSCAN_TRY(auto doa_loan,
-                 prepare_device_tensor(doa_multi, context, doa_shape,
-                                      out_dtype, noop));
-    HOLOSCAN_TRY(auto cnt_loan,
-                 prepare_device_tensor(source_count, context, count_shape,
-                                      i32_dtype, noop));
-    HOLOSCAN_TRY(auto eig_loan,
-                 prepare_device_tensor(eigenvalues, context, eig_shape,
-                                      out_dtype, noop));
+    std::optional<TensorOutputLoan> doa_loan;
+    std::optional<TensorOutputLoan> cnt_loan;
+    std::optional<TensorOutputLoan> eig_loan;
+    if (doa_multi_out_.active()) {
+      HOLOSCAN_TRY(auto loan,
+                   prepare_device_tensor(doa_multi, context, doa_shape,
+                                        out_dtype, noop));
+      doa_loan.emplace(std::move(loan));
+    }
+    if (source_count_out_.active()) {
+      HOLOSCAN_TRY(auto loan,
+                   prepare_device_tensor(source_count, context, count_shape,
+                                        i32_dtype, noop));
+      cnt_loan.emplace(std::move(loan));
+    }
+    if (eigenvalues_out_.active()) {
+      HOLOSCAN_TRY(auto loan,
+                   prepare_device_tensor(eigenvalues, context, eig_shape,
+                                        out_dtype, noop));
+      eig_loan.emplace(std::move(loan));
+    }
     HOLOSCAN_TRY(
         emit_prepared_tensor(aoa_estimates, context, std::move(aoa_loan)));
-    HOLOSCAN_TRY(
-        emit_prepared_tensor(angle_spectrum, context, std::move(spec_loan)));
-    HOLOSCAN_TRY(
-        emit_prepared_tensor(doa_multi, context, std::move(doa_loan)));
-    HOLOSCAN_TRY(
-        emit_prepared_tensor(source_count, context, std::move(cnt_loan)));
-    HOLOSCAN_TRY(
-        emit_prepared_tensor(eigenvalues, context, std::move(eig_loan)));
+    // angle_spectrum is optional/always (OPERATOR_API.md).
+    (void)emit_prepared_tensor(angle_spectrum, context, std::move(spec_loan));
+    if (doa_loan.has_value()) {
+      doa_multi_out_.emit(doa_multi, context, std::move(*doa_loan),
+                          "MVDREstimatorOp.doa_multi");
+    }
+    if (cnt_loan.has_value()) {
+      source_count_out_.emit(source_count, context, std::move(*cnt_loan),
+                             "MVDREstimatorOp.source_count");
+    }
+    if (eig_loan.has_value()) {
+      eigenvalues_out_.emit(eigenvalues, context, std::move(*eig_loan),
+                            "MVDREstimatorOp.eigenvalues");
+    }
     return {};
   };
 
@@ -526,8 +544,15 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
   HOLOSCAN_TRY(auto rinv_ptr, writable_ptr(*rinv, "rinv"));
   HOLOSCAN_TRY(auto k_ptr, writable_ptr(*k_counts, "k_counts"));
 
-  // Allocate all five output loans, fill on the runtime stream, then
-  // commit/emit (optional ports are always produced).
+  // Allocate the output loans, fill on the runtime stream, then commit/emit.
+  // The latched optional ports (OPERATOR_API.md) drop out of all of it once
+  // known unconsumed: eigenvalues then skips a batched Hermitian eig, and
+  // doa_multi / source_count skip the peak-extraction pass. That one pass
+  // writes both, so the pair drops out only once both have latched.
+  const bool want_eig = eigenvalues_out_.active();
+  const bool want_peaks =
+      doa_multi_out_.active() || source_count_out_.active();
+
   auto aoa_loan = aoa_estimates.allocate_tensor(
       TensorLoanRequest{.shape = aoa_shape, .dtype = out_dtype});
   if (!aoa_loan) {
@@ -538,20 +563,30 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
   if (!spec_loan) {
     return make_unexpected(std::move(spec_loan).error());
   }
-  auto doa_loan = doa_multi.allocate_tensor(
-      TensorLoanRequest{.shape = doa_shape, .dtype = out_dtype});
-  if (!doa_loan) {
-    return make_unexpected(std::move(doa_loan).error());
+  std::optional<TensorOutputLoan> doa_loan;
+  std::optional<TensorOutputLoan> cnt_loan;
+  if (want_peaks) {
+    auto doa = doa_multi.allocate_tensor(
+        TensorLoanRequest{.shape = doa_shape, .dtype = out_dtype});
+    if (!doa) {
+      return make_unexpected(std::move(doa).error());
+    }
+    doa_loan.emplace(std::move(*doa));
+    auto cnt = source_count.allocate_tensor(
+        TensorLoanRequest{.shape = count_shape, .dtype = i32_dtype});
+    if (!cnt) {
+      return make_unexpected(std::move(cnt).error());
+    }
+    cnt_loan.emplace(std::move(*cnt));
   }
-  auto cnt_loan = source_count.allocate_tensor(
-      TensorLoanRequest{.shape = count_shape, .dtype = i32_dtype});
-  if (!cnt_loan) {
-    return make_unexpected(std::move(cnt_loan).error());
-  }
-  auto eig_loan = eigenvalues.allocate_tensor(
-      TensorLoanRequest{.shape = eig_shape, .dtype = out_dtype});
-  if (!eig_loan) {
-    return make_unexpected(std::move(eig_loan).error());
+  std::optional<TensorOutputLoan> eig_loan;
+  if (want_eig) {
+    auto eig = eigenvalues.allocate_tensor(
+        TensorLoanRequest{.shape = eig_shape, .dtype = out_dtype});
+    if (!eig) {
+      return make_unexpected(std::move(eig).error());
+    }
+    eig_loan.emplace(std::move(*eig));
   }
 
   auto aoa_writer = aoa_loan->write(context.cuda_stream());
@@ -562,17 +597,27 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
   if (!spec_writer) {
     return make_unexpected(std::move(spec_writer).error());
   }
-  auto doa_writer = doa_loan->write(context.cuda_stream());
-  if (!doa_writer) {
-    return make_unexpected(std::move(doa_writer).error());
+  std::optional<TensorOutputWriteGuard> doa_writer;
+  std::optional<TensorOutputWriteGuard> cnt_writer;
+  if (want_peaks) {
+    auto doa = doa_loan->write(context.cuda_stream());
+    if (!doa) {
+      return make_unexpected(std::move(doa).error());
+    }
+    doa_writer.emplace(std::move(*doa));
+    auto cnt = cnt_loan->write(context.cuda_stream());
+    if (!cnt) {
+      return make_unexpected(std::move(cnt).error());
+    }
+    cnt_writer.emplace(std::move(*cnt));
   }
-  auto cnt_writer = cnt_loan->write(context.cuda_stream());
-  if (!cnt_writer) {
-    return make_unexpected(std::move(cnt_writer).error());
-  }
-  auto eig_writer = eig_loan->write(context.cuda_stream());
-  if (!eig_writer) {
-    return make_unexpected(std::move(eig_writer).error());
+  std::optional<TensorOutputWriteGuard> eig_writer;
+  if (want_eig) {
+    auto eig = eig_loan->write(context.cuda_stream());
+    if (!eig) {
+      return make_unexpected(std::move(eig).error());
+    }
+    eig_writer.emplace(std::move(*eig));
   }
 
   try {
@@ -586,9 +631,10 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
         static_cast<cuda::std::complex<T>*>(rinv_ptr),
         static_cast<int64_t*>(k_ptr), static_cast<T*>(spec_writer->data()),
         static_cast<T*>(aoa_writer->data()),
-        static_cast<T*>(eig_writer->data()),
-        static_cast<T*>(doa_writer->data()),
-        static_cast<int32_t*>(cnt_writer->data()), stream);
+        eig_writer ? static_cast<T*>(eig_writer->data()) : nullptr,
+        doa_writer ? static_cast<T*>(doa_writer->data()) : nullptr,
+        cnt_writer ? static_cast<int32_t*>(cnt_writer->data()) : nullptr,
+        stream);
     check_cuda("mvdr stage", kOpName);
   } catch (const std::runtime_error& e) {
     return fail_runtime(e.what());
@@ -602,17 +648,23 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
   if (!spec_committed) {
     return make_unexpected(std::move(spec_committed).error());
   }
-  auto doa_committed = std::move(*doa_writer).commit();
-  if (!doa_committed) {
-    return make_unexpected(std::move(doa_committed).error());
+  if (doa_writer.has_value()) {
+    auto doa_committed = std::move(*doa_writer).commit();
+    if (!doa_committed) {
+      return make_unexpected(std::move(doa_committed).error());
+    }
   }
-  auto cnt_committed = std::move(*cnt_writer).commit();
-  if (!cnt_committed) {
-    return make_unexpected(std::move(cnt_committed).error());
+  if (cnt_writer.has_value()) {
+    auto cnt_committed = std::move(*cnt_writer).commit();
+    if (!cnt_committed) {
+      return make_unexpected(std::move(cnt_committed).error());
+    }
   }
-  auto eig_committed = std::move(*eig_writer).commit();
-  if (!eig_committed) {
-    return make_unexpected(std::move(eig_committed).error());
+  if (eig_writer.has_value()) {
+    auto eig_committed = std::move(*eig_writer).commit();
+    if (!eig_committed) {
+      return make_unexpected(std::move(eig_committed).error());
+    }
   }
 
   const EmitOptions emit_opts{.capture_time = context.activation_time()};
@@ -620,21 +672,20 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
   if (!aoa_emitted) {
     return make_unexpected(std::move(aoa_emitted).error());
   }
-  auto spec_emitted = angle_spectrum.emit(std::move(*spec_loan), emit_opts);
-  if (!spec_emitted) {
-    return make_unexpected(std::move(spec_emitted).error());
+  // angle_spectrum is optional/always (OPERATOR_API.md): the Capon grid is the
+  // same pass that yields aoa_estimates, so there is nothing to skip.
+  (void)angle_spectrum.emit(std::move(*spec_loan), emit_opts);
+  if (doa_loan.has_value()) {
+    doa_multi_out_.emit(doa_multi, context, std::move(*doa_loan),
+                        "MVDREstimatorOp.doa_multi");
   }
-  auto doa_emitted = doa_multi.emit(std::move(*doa_loan), emit_opts);
-  if (!doa_emitted) {
-    return make_unexpected(std::move(doa_emitted).error());
+  if (cnt_loan.has_value()) {
+    source_count_out_.emit(source_count, context, std::move(*cnt_loan),
+                           "MVDREstimatorOp.source_count");
   }
-  auto cnt_emitted = source_count.emit(std::move(*cnt_loan), emit_opts);
-  if (!cnt_emitted) {
-    return make_unexpected(std::move(cnt_emitted).error());
-  }
-  auto eig_emitted = eigenvalues.emit(std::move(*eig_loan), emit_opts);
-  if (!eig_emitted) {
-    return make_unexpected(std::move(eig_emitted).error());
+  if (eig_loan.has_value()) {
+    eigenvalues_out_.emit(eigenvalues, context, std::move(*eig_loan),
+                          "MVDREstimatorOp.eigenvalues");
   }
 
   retained_snapshot_ = std::move(snap);

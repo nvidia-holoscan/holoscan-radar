@@ -361,12 +361,12 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
                                       out_dtype, noop));
     HOLOSCAN_TRY(
         emit_prepared_tensor(aoa_estimates, context, std::move(aoa_loan)));
-    HOLOSCAN_TRY(
-        emit_prepared_tensor(doa_multi, context, std::move(doa_loan)));
-    HOLOSCAN_TRY(
-        emit_prepared_tensor(source_count, context, std::move(cnt_loan)));
-    HOLOSCAN_TRY(
-        emit_prepared_tensor(eigenvalues, context, std::move(eig_loan)));
+    // doa_multi, source_count and eigenvalues are optional/always
+    // (OPERATOR_API.md): all three come from work the primary outputs need
+    // anyway, so an unwired sink saves nothing and is not an error.
+    (void)emit_prepared_tensor(doa_multi, context, std::move(doa_loan));
+    (void)emit_prepared_tensor(source_count, context, std::move(cnt_loan));
+    (void)emit_prepared_tensor(eigenvalues, context, std::move(eig_loan));
     return {};
   };
 
@@ -711,18 +711,12 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
     if (!aoa_emitted) {
       return make_unexpected(std::move(aoa_emitted).error());
     }
-    auto doa_emitted = doa_multi.emit(std::move(*doa_loan), emit_opts);
-    if (!doa_emitted) {
-      return make_unexpected(std::move(doa_emitted).error());
-    }
-    auto cnt_emitted = source_count.emit(std::move(*cnt_loan), emit_opts);
-    if (!cnt_emitted) {
-      return make_unexpected(std::move(cnt_emitted).error());
-    }
-    auto eig_emitted = eigenvalues.emit(std::move(*eig_loan), emit_opts);
-    if (!eig_emitted) {
-      return make_unexpected(std::move(eig_emitted).error());
-    }
+    // doa_multi, source_count and eigenvalues are optional/always
+    // (OPERATOR_API.md): all three come from work the primary outputs need
+    // anyway, so an unwired sink saves nothing and is not an error.
+    (void)doa_multi.emit(std::move(*doa_loan), emit_opts);
+    (void)source_count.emit(std::move(*cnt_loan), emit_opts);
+    (void)eigenvalues.emit(std::move(*eig_loan), emit_opts);
 
     seed_angle_convention_after_emit();
     retained_snapshot_ = std::move(snap);
@@ -922,18 +916,12 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
   if (!aoa_emitted) {
     return make_unexpected(std::move(aoa_emitted).error());
   }
-  auto doa_emitted = doa_multi.emit(std::move(*doa_loan), emit_opts);
-  if (!doa_emitted) {
-    return make_unexpected(std::move(doa_emitted).error());
-  }
-  auto cnt_emitted = source_count.emit(std::move(*cnt_loan), emit_opts);
-  if (!cnt_emitted) {
-    return make_unexpected(std::move(cnt_emitted).error());
-  }
-  auto eig_emitted = eigenvalues.emit(std::move(*eig_loan), emit_opts);
-  if (!eig_emitted) {
-    return make_unexpected(std::move(eig_emitted).error());
-  }
+  // doa_multi, source_count and eigenvalues are optional/always
+  // (OPERATOR_API.md): all three come from work the primary outputs need
+  // anyway, so an unwired sink saves nothing and is not an error.
+  (void)doa_multi.emit(std::move(*doa_loan), emit_opts);
+  (void)source_count.emit(std::move(*cnt_loan), emit_opts);
+  (void)eigenvalues.emit(std::move(*eig_loan), emit_opts);
 
   seed_angle_convention_after_emit();
   retained_snapshot_ = std::move(snap);

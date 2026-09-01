@@ -30,6 +30,7 @@
 #include "radar_common/dsp/spatial_smoothing.hpp"
 #include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/sdk/live_override_payloads.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
 
 namespace holoscan::radar {
@@ -208,6 +209,12 @@ class MUSICEstimatorOp : public holoscan::Operator<MUSICParams> {
   // reads cannot outlive the buffers.
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
+
+  // Latched optional outputs (OPERATOR_API.md). Both come from one
+  // peak-extraction pass, which stops only once both latch.
+  LatchedOutput doa_multi_out_;
+  LatchedOutput source_count_out_;
+
   // Sticky [live] state stores logical values, never wire-owned storage.
   std::optional<ArrayGeometry> sticky_array_geometry_;
   std::optional<std::vector<double>> sticky_az_angles_;
