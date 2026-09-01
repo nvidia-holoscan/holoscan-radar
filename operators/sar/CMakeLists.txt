@@ -10,3 +10,4 @@
 add_holohub_operator(sar_range_compression_op)
 add_holohub_operator(backprojection_op)
 add_holohub_operator(aperture_manager_op)
+add_holohub_operator(phase_correction_op)

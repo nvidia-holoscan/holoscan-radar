@@ -99,7 +99,7 @@ The wiring is correspondingly thin, which is what makes the path short. `Backpro
 | **Mode 2** | `ApertureManagerOp` retention, `emit_mode = continue`, `evict`; `BackprojectionOp` signed `weight` | `mode02.yaml` (Houston 1.0 m, 6.8 km, `lattice.max_side: 6144`, ~2.18 Hz emit, collect-vs-wall lag, `loop: true` with reset at wrap); signed-weight accumulation tests | Houston 1.0 m live / 0.5 m on disk (subsetter landed) |
 | **Mode 3** | per-tile geometry staging (the reader's `CI4` + `AmpSF` + second-minor-version work landed in phase 1); `TileGeometryStagerOp` on `range_profiles`; `TileMosaicOp` parent hold; manager `max_aperture_pulses = 0`, `emit_mode = reset`, `emit_interval` = tile pulses, Taylor `aperture_window` (stamped block aperture) | `mode03.yaml`; `pull_cphd.py --mode 3`; `lattice.tiles: 10`, `max_side: 4096` (per tile, not parent); `pulse_range: [0, 159050)`; `pulses_per_tick: 3181` | Capella Imperial Valley stripmap **pinned 2026-08-30** (`CAPELLA_C14_…20241129…`, 3.452 GiB, CPHD 1.1.0, CI4, `AmpSF`, `SGN` +1, 15.766 s). Same key as mode 4. Palmdale is a 1.0.1 spare, not this YAML |
 | **Mode 4** | `BackprojectionOp` scroll accumulation (ring, two slab launches); `ScrollGeometryStagerOp` on `range_profiles` + `positions` + `reference_position` (slices when `emit_interval_pulses` < `pulses_per_tick`); `ScrollMosaicOp` parent hold (Holoviz matches mode 3); manager cadence only (`emit_mode = continue`, no `weight`) | `mode04.yaml`; ring-wrap test; `lattice.scroll: true`, `max_side: 4096` (window depth); `pulse_range: [0, 159050)`; `pulses_per_tick: 1024`, `emit_interval_pulses: 256` — **first-ship modes 1–5 complete** | Capella Imperial Valley stripmap (same file as mode 3) |
-| **Autofocus** | `PhaseCorrectionOp`, `AutofocusOp`; `emit_mode = reform` | AF opt-in YAMLs on mode 1 | injected-phase recipes |
+| **Autofocus** | `PhaseCorrectionOp` (**landed**), `AutofocusOp`; `emit_mode = reform` | AF opt-in YAMLs on mode 1 | injected-phase recipes |
 | **Products** | `SICDWriterOp`, plus the scheduled items from *Work no demo forces* | demo polish, performance harness | pull tooling hardened: key re-probe self-check, useful failure on a moved object |
 | **Later** | — | modes **6–9** packaging: `compose()` N-instance fan-out, circular recipes, sub-aperture looks | recipes for 6–9 |
 
@@ -126,7 +126,7 @@ Three items are reached by no first-ship demo. Left to the rule alone they would
 - **The three non-default `backend` values.** `mixed` is the default and the one the golden comparison runs against, so no demo distinguishes them. They belong with the performance harness, which is the thing that can actually tell them apart.
 - **Points-mode `sample_points` geometry.** Modes 1–5 all use the uniform lattice. It is first genuinely needed by mode 9, in the deferred packaging wave.
 
-Also deferred and uncontroversial, because a named milestone forces each: `SICDWriterOp`, `AutofocusOp`, `PhaseCorrectionOp` and the performance harness.
+Also deferred and uncontroversial, because a named milestone forces each: `SICDWriterOp`, `AutofocusOp` and the performance harness.
 
 ### Dependency reasoning
 

@@ -58,6 +58,7 @@ inline void ensure_radar_arg_setters() {
     ArgumentSetter::ensure_type<BackprojectionBackend>();
     ArgumentSetter::ensure_type<GeometryChange>();
     ArgumentSetter::ensure_type<ApertureEmitMode>();
+    ArgumentSetter::ensure_type<PhaseCorrectionSense>();
     return true;
   }();
   (void)registered;

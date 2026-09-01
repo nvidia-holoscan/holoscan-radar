@@ -118,6 +118,11 @@ target_link_libraries(perf_backprojection PRIVATE
     radar_perf_utils
     holoscan::backprojection_op)
 
+add_executable(perf_phase_correction perf_phase_correction.cpp)
+target_link_libraries(perf_phase_correction PRIVATE
+    radar_perf_utils
+    holoscan::phase_correction_op)
+
 add_executable(perf_tensor_dump perf_tensor_dump.cpp)
 target_link_libraries(perf_tensor_dump PRIVATE
     radar_perf_utils
@@ -245,6 +250,12 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
         COMMAND perf_backprojection --sizes xs --warmup 1 --frames 2 --quiet
             --output ${CMAKE_CURRENT_BINARY_DIR}/perf_backprojection_smoke.json)
     set_tests_properties(perf_backprojection_smoke PROPERTIES
+        LABELS "performance")
+
+    add_test(NAME perf_phase_correction_smoke
+        COMMAND perf_phase_correction --sizes xs --warmup 1 --frames 2 --quiet
+            --output ${CMAKE_CURRENT_BINARY_DIR}/perf_phase_correction_smoke.json)
+    set_tests_properties(perf_phase_correction_smoke PROPERTIES
         LABELS "performance")
 
     # Writes its dumps under the build tree rather than /tmp so a CI runner

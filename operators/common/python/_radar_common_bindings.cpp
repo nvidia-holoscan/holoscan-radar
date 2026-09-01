@@ -194,6 +194,11 @@ PYBIND11_MODULE(_radar_common, m) {
       .value("RESET", ApertureEmitMode::kReset)
       .value("REFORM", ApertureEmitMode::kReform);
 
+  py::enum_<PhaseCorrectionSense>(m, "PhaseCorrectionSense")
+      .value("UNSPECIFIED", PhaseCorrectionSense::kUnspecified)
+      .value("SUBTRACT", PhaseCorrectionSense::kSubtract)
+      .value("ADD", PhaseCorrectionSense::kAdd);
+
   py::enum_<RepresentativePolicy>(m, "RepresentativePolicy")
       .value("PEAK", RepresentativePolicy::kPeak)
       .value("MEDOID", RepresentativePolicy::kMedoid)
@@ -430,5 +435,7 @@ PYBIND11_MODULE(_radar_common, m) {
     registry.add_emitter_receiver<GeometryChange>("GeometryChange", true);
     registry.add_emitter_receiver<FormationControl>("FormationControl", true);
     registry.add_emitter_receiver<ApertureEmitMode>("ApertureEmitMode", true);
+    registry.add_emitter_receiver<PhaseCorrectionSense>(
+        "PhaseCorrectionSense", true);
   });
 }

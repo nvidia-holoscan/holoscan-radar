@@ -25,8 +25,8 @@ CPHDReaderOp → phase_history → SARRangeCompressionOp → range_profiles → 
 ## Operators
 
 `SARRangeCompressionOp` has landed; `BackprojectionOp` is in flight
-(not checklist-complete; mode-1 plus mode-4 scroll), in the build
-order set by
+(not checklist-complete; mode-1 plus mode-4 scroll); `PhaseCorrectionOp`
+has landed (Autofocus slice). Build order is
 [`docs/planning/SAR/SIGPROC_PLAN.md`](../../docs/planning/SAR/SIGPROC_PLAN.md):
 
 | Operator | In → Out | Function |
@@ -34,7 +34,7 @@ order set by
 | `SARRangeCompressionOp<T>` | `phase_history` → `range_profiles` (+ `range_bins`) | Inverse transform of deramped phase history to the range axis |
 | `ApertureManagerOp<T>` | `range_profiles`, `positions` → same + `weight` + `control` | Aperture membership, emit cadence, geometry staging; no kernel |
 | `BackprojectionOp<T>` | `range_profiles`, `positions`, `control` → `image` | Time-domain backprojection onto a `SampleGeometry` lattice or an explicit `sample_points` one, accumulating across ticks |
-| `PhaseCorrectionOp<T>` | `phase_history`, `phase_correction` → `phase_history` | Broadcast multiply applying an autofocus estimate |
+| `PhaseCorrectionOp<T>` | `range_profiles`, `phase_correction` → `range_profiles` | Broadcast multiply applying an autofocus estimate |
 | `AutofocusOp<T>` | `image` → `phase_correction` | Phase-gradient autofocus estimate over a conjugate grid |
 | `RangeReferenceMultiplyOp<T>` | `pulses` → `phase_history` | Direct-sampled branch entry: forward FFT and multiply by the range reference function |
 
@@ -45,7 +45,7 @@ minimum-per-demo rule in
 [`SIGPROC_PLAN.md`](../../docs/planning/SAR/SIGPROC_PLAN.md), so this group
 fills in demo order rather than in the table order above:
 `SARRangeCompressionOp` then `BackprojectionOp` for the mode 1 spotlight demo,
-with autofocus and the direct-sampled branch later.
+with autofocus (`PhaseCorrectionOp` first) and the direct-sampled branch later.
 
 **`ApertureManagerOp` — landed, not checklist-complete.** CPU-only
 membership / emit / D22 flush / geometry staging. Modes 1 and 5 of
@@ -70,6 +70,14 @@ header is present.
 `initial_image` is declared and rejected. I6/I7 closed.
 Follow-ups in
 [`backprojection_op/OPEN_ITEMS.md`](backprojection_op/OPEN_ITEMS.md).
+
+**`PhaseCorrectionOp` — landed, contract-complete.** Required
+`range_profiles` + `phase_correction`, one output, static `sense`
+`{subtract, add}` with no user-facing default (`kUnspecified` is
+rejected at initialize). Broadcast multiply; add then subtract is
+identity. The sign is asserted against a formed impulse, not only the
+multiply. `performance/cpp/perf_phase_correction.cpp` (no `[live]`
+params). Python operator bindings deferred with the SAR wave.
 
 **`SARRangeCompressionOp` — landed, contract-complete.** All three output
 ports, all five `[live]` parameters, `nfft` zero-padding (spectral edges of

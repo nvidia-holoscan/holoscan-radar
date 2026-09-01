@@ -187,6 +187,15 @@ enum class ApertureEmitMode {
   kReform,
 };
 
+// PhaseCorrectionOp.sense: multiply by exp(−iφ) or exp(+iφ). Static,
+// required; kUnspecified is the Parameter placeholder and is rejected
+// at initialize (the contract has no default).
+enum class PhaseCorrectionSense {
+  kUnspecified,
+  kSubtract,
+  kAdd,
+};
+
 // Canonical spellings (lowercase snake_case, for logs and future YAML
 // configs).
 constexpr std::string_view to_string(WindowType type) {
@@ -409,6 +418,15 @@ constexpr std::string_view to_string(GeometryChange change) {
   switch (change) {
     case GeometryChange::kReset: return "reset";
     case GeometryChange::kScroll: return "scroll";
+  }
+  return "unknown";
+}
+
+constexpr std::string_view to_string(PhaseCorrectionSense sense) {
+  switch (sense) {
+    case PhaseCorrectionSense::kUnspecified: return "unspecified";
+    case PhaseCorrectionSense::kSubtract: return "subtract";
+    case PhaseCorrectionSense::kAdd: return "add";
   }
   return "unknown";
 }

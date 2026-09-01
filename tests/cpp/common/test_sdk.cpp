@@ -88,6 +88,7 @@ TEST(YamlConverters, EnumsRoundTripAndRejectUnknownSpellings) {
   using holoscan::radar::BackprojectionBackend;
   using holoscan::radar::FormationControl;
   using holoscan::radar::GeometryChange;
+  using holoscan::radar::PhaseCorrectionSense;
   using holoscan::radar::RangeInterpolation;
   for (auto value : holoscan::radar::detail::kAllFormationControls) {
     const YAML::Node node = YAML::convert<FormationControl>::encode(value);
@@ -112,11 +113,20 @@ TEST(YamlConverters, EnumsRoundTripAndRejectUnknownSpellings) {
         YAML::convert<ApertureEmitMode>::encode(value);
     EXPECT_EQ(node.as<ApertureEmitMode>(), value);
   }
+  for (auto value : holoscan::radar::detail::kAllPhaseCorrectionSenses) {
+    const YAML::Node node =
+        YAML::convert<PhaseCorrectionSense>::encode(value);
+    EXPECT_EQ(node.as<PhaseCorrectionSense>(), value);
+  }
   EXPECT_THROW(YAML::Load("mixed").as<BackprojectionBackend>(),
                std::invalid_argument);
   EXPECT_THROW(YAML::Load("emit-and-reset").as<FormationControl>(),
                std::invalid_argument);
   EXPECT_THROW(YAML::Load("replay").as<ApertureEmitMode>(),
+               std::invalid_argument);
+  EXPECT_THROW(YAML::Load("plus").as<PhaseCorrectionSense>(),
+               std::invalid_argument);
+  EXPECT_THROW(YAML::Load("unspecified").as<PhaseCorrectionSense>(),
                std::invalid_argument);
 }
 
