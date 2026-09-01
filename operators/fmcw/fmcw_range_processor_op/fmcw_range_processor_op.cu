@@ -51,40 +51,29 @@ struct ValidatedRangeConfig {
   bool waveform_present;
 };
 
-// Resolve Exact inputs with the pinned parameters. An unwired port reads as
-// an ordinary miss, so no wiring flag is needed.
+// Resolve Exact inputs against the pinned parameters. Each override applies to
+// this tick only; an unwired or unmatched port falls back to Params.
 expected<EffectiveRangeConfig, Error> resolve_overrides(
     Input<wire::WindowSpecT>& range_window_in,
     Input<bool>& apply_dechirp_in,
     Input<wire::FMCWWaveformT>& waveform_in, Input<FftNorm>& fft_norm_in,
-    Input<int64_t>& nfft_in, const FMCWRangeProcessorParams& pinned,
-    std::optional<WindowSpec>& sticky_range_window,
-    std::optional<bool>& sticky_apply_dechirp,
-    std::optional<FMCWWaveformDescriptor>& sticky_waveform,
-    std::optional<FftNorm>& sticky_fft_norm,
-    std::optional<int64_t>& sticky_nfft) {
+    Input<int64_t>& nfft_in, const FMCWRangeProcessorParams& pinned) {
   HOLOSCAN_TRY(
       auto range_window,
       resolve_live_override_via(
-          range_window_in, pinned.range_window, sticky_range_window,
-          pinned.sticky_range_window,
+          range_window_in, pinned.range_window,
           [](const wire::WindowSpecT& value) { return from_wire(value); }));
-  HOLOSCAN_TRY(auto apply_dechirp,
-               resolve_live_override(
-                   apply_dechirp_in, pinned.apply_dechirp,
-                   sticky_apply_dechirp, pinned.sticky_apply_dechirp));
+  HOLOSCAN_TRY(
+      auto apply_dechirp,
+      resolve_live_override(apply_dechirp_in, pinned.apply_dechirp));
   HOLOSCAN_TRY(
       auto waveform,
       resolve_live_override_via(
-          waveform_in, pinned.waveform, sticky_waveform,
-          pinned.sticky_waveform,
+          waveform_in, pinned.waveform,
           [](const wire::FMCWWaveformT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto fft_norm,
-               resolve_live_override(fft_norm_in, pinned.fft_norm,
-                                     sticky_fft_norm, pinned.sticky_fft_norm));
-  HOLOSCAN_TRY(auto nfft,
-               resolve_live_override(nfft_in, pinned.nfft, sticky_nfft,
-                                     pinned.sticky_nfft));
+               resolve_live_override(fft_norm_in, pinned.fft_norm));
+  HOLOSCAN_TRY(auto nfft, resolve_live_override(nfft_in, pinned.nfft));
 
   return EffectiveRangeConfig{.window = std::move(range_window),
                               .apply_dechirp = apply_dechirp,
@@ -289,11 +278,8 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
       context.params<FMCWRangeProcessorParams>();
 
   HOLOSCAN_TRY(auto effective,
-               resolve_overrides(
-                   range_window_in, apply_dechirp_in, waveform_in, fft_norm_in,
-                   nfft_in, pinned, sticky_range_window_,
-                   sticky_apply_dechirp_, sticky_waveform_, sticky_fft_norm_,
-                   sticky_nfft_));
+               resolve_overrides(range_window_in, apply_dechirp_in,
+                                 waveform_in, fft_norm_in, nfft_in, pinned));
 
   HOLOSCAN_TRY(auto validated,
                validate_configuration(effective, complex_input, batched));

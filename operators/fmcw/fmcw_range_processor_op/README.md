@@ -55,12 +55,12 @@ Invariants: leading named axes are processed independently (collapsed to a batch
 
 | Parameter | Type | Default | Override | Cost | Meaning |
 | --- | --- | --- | --- | --- | --- |
-| `range_window` | `WindowSpec` | `none` (rectangular) | `[live]` Exact via wire schema (`sticky_range_window` default true) | Rebuilds cached premultiplier / window taps on an unseen spec, warning once | Fast-time window before the range FFT; coherent-gain normalized when `coherent_gain_normalization` is true (WindowSpec default) |
-| `apply_dechirp` | bool | `false` | `[live]` Exact (`sticky_apply_dechirp` default true) | Rebuilds the cached premultiplier when combined with the waveform / window | Software dechirp; requires a valid `waveform` and complex-IF input |
-| `waveform` | `FMCWWaveformDescriptor` | none (`is_valid() == false`) | `[live]` Exact via wire schema (`sticky_waveform` default true) | Rebuilds dechirp reference / premultiplier when `apply_dechirp` is true; required for `range_bins` | Dechirp reference (`reference_samples`, or `slope` + `sample_rate`) and the `range_bins` axis |
-| `fft_norm` | `FftNorm` {`backward`, `ortho`, `forward`} | `backward` | `[live]` Exact (`sticky_fft_norm` default true) | Free at the operator (MatX applies the convention on the FFT) | FFT normalization; `backward` keeps coherent-integration gain visible |
+| `range_window` | `WindowSpec` | `none` (rectangular) | `[live]` Exact via wire schema | Rebuilds cached premultiplier / window taps on an unseen spec, warning once | Fast-time window before the range FFT; coherent-gain normalized when `coherent_gain_normalization` is true (WindowSpec default) |
+| `apply_dechirp` | bool | `false` | `[live]` Exact | Rebuilds the cached premultiplier when combined with the waveform / window | Software dechirp; requires a valid `waveform` and complex-IF input |
+| `waveform` | `FMCWWaveformDescriptor` | none (`is_valid() == false`) | `[live]` Exact via wire schema | Rebuilds dechirp reference / premultiplier when `apply_dechirp` is true; required for `range_bins` | Dechirp reference (`reference_samples`, or `slope` + `sample_rate`) and the `range_bins` axis |
+| `fft_norm` | `FftNorm` {`backward`, `ortho`, `forward`} | `backward` | `[live]` Exact | Free at the operator (MatX applies the convention on the FFT) | FFT normalization; `backward` keeps coherent-integration gain visible |
 | `propagation_speed` | float64 | `299792458.0` m/s | — | Free (host fill of `range_bins` only) | Wave speed for beat frequency → range |
-| `nfft` | int64 | `0` (= `samples_per_chirp`) | `[live]` Exact (`sticky_nfft` default true) | Unseen length builds a MatX FFT plan; the stage keys `seen_fft_keys` and warns once per new length | Fast-time FFT length; larger zero-pads for a finer interpolated grid over the same span |
+| `nfft` | int64 | `0` (= `samples_per_chirp`) | `[live]` Exact | Unseen length builds a MatX FFT plan; the stage keys `seen_fft_keys` and warns once per new length | Fast-time FFT length; larger zero-pads for a finer interpolated grid over the same span |
 
 `waveform` is required when `apply_dechirp` is true and whenever a consumer needs `range_bins`. A default-constructed descriptor is treated as absent. YAML / `set_params` field names match the table (`range_window: hann` or a `WindowSpec` map; `fft_norm: backward`).
 
@@ -74,7 +74,7 @@ Invariants: leading named axes are processed independently (collapsed to a batch
 - **Parameter authoring.** Schema id `com.nvidia.holoscan.radar.FMCWRangeProcessorParams`, version 1. Apps on this branch load YAML into `FMCWRangeProcessorParams` and call `set_params` ([EA HSDK5 ONLY] Graph has no `from_config()`).
 - **Precision.** Explicit instantiations `FMCWRangeProcessorOp<float>` and `FMCWRangeProcessorOp<double>` in `fmcw_range_processor_op.cu`.
 - **Cache warn-once.** The stage's `ConfigCache`s decide on their own when to warn: the first configuration builds silently, a later unseen one (new `nfft`, new window / dechirp key, new chirp length) builds and warns once, then is cached. `compute()` passes no warn flag.
-- **[EA HSDK5 ONLY]** Exact `Input<>` ports are declared unconditionally (see Triggering). `range_window` / `waveform` use generated schema wire types and convert back to the logical descriptor before sticky resolution; scalar / enum ports use their logical type directly. Graph tests cover `nfft`, window, waveform, and sticky schema behavior.
+- **[EA HSDK5 ONLY]** Exact `Input<>` ports are declared unconditionally (see Triggering). `range_window` / `waveform` use generated schema wire types and convert back to the logical descriptor before override resolution; scalar / enum ports use their logical type directly. Graph tests cover `nfft`, window, waveform, and the schema wire behavior.
 
 ## Consumer lifetime notes
 
@@ -112,10 +112,10 @@ C++ Graph suite: `tests/cpp/fmcw/test_fmcw_range_processor.cpp`. Ground truth is
 | `NamedRxAxisRoundTrip` | Leading `N_rx = 2` preserved; per-RX magnitudes agree to `1e-3` |
 | `WindowConfigurableFromParams` / `WaveformConfigurableFromParams` | Params authoring of `WindowSpec` / descriptor |
 | `FloatAndDoubleInstantiationsAgree` | F32 vs F64 peak index match; magnitudes within `1e-4` of the F64 peak |
-| `LiveWindowOverrideAppliesPerTick` | A schema-backed Hann override changes sidelobes on its Exact tick; a sticky waveform override continues to emit the expected range axis |
+| `LiveWindowOverrideAppliesPerTick` | A schema-backed Hann override changes sidelobes on its Exact tick; the following miss tick reverts to the Params window |
 | `LiveNfftExactMatchChangesBinCount` | Wired `nfft` override + matching `capture_time` changes `num_range_bins` |
-| `LiveNfftStickyKeepsLastMatch` | Silent miss after a match keeps the override `nfft` |
-| `LiveNfftEphemeralRevertsToParams` | Silent miss after a match reverts to Params `nfft` (= `samples_per_chirp`) |
+| `LiveNfftRevertsToParamsAfterMiss` | Silent miss after a match keeps the override `nfft` |
+| `LiveNfftRevertsToParamsAfterMiss` | Silent miss after a match reverts to Params `nfft` (= `samples_per_chirp`) |
 | `LiveNfftSkewedCaptureTimeMissesExact` | 1 ms-skewed override is not selected; ephemeral uses Params |
 
 `TESTING.md` also asks for a `tx×rx` leading-axis case; only `N_rx` is covered.

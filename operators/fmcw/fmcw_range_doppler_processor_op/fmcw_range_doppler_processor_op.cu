@@ -101,7 +101,7 @@ void FMCWRangeDopplerProcessorOp<T>::setup(OperatorSpec& spec) {
   spec.output(velocity_bins)
       .produces_tensor(pooled_tensor_output(kDevice, vb_bounds));
 
-  // [live] sticky override ports.
+  // [live] override ports.
   spec.input(apply_dechirp_in).queue_depth(2U);
   spec.input(clutter_filter_in).queue_depth(2U);
   spec.input(fft_norm_in).queue_depth(2U);
@@ -138,51 +138,41 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
   const FMCWRangeDopplerProcessorParams& pinned =
       context.params<FMCWRangeDopplerProcessorParams>();
 
-  // Resolve Exact [live] overrides. Schema conversion only runs for a fresh
-  // wire sample; sticky state stores the converted descriptor.
+  // Resolve Exact [live] overrides. Schema conversion only runs for a
+  // matched wire sample; a tick without one uses the Params value.
   HOLOSCAN_TRY(
       auto eff_range_window,
       resolve_live_override_via(
-          range_window_in, pinned.range_window, sticky_range_window_,
-          pinned.sticky_range_window,
+          range_window_in, pinned.range_window,
           [](const wire::WindowSpecT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(
       auto eff_doppler_window,
       resolve_live_override_via(
-          doppler_window_in, pinned.doppler_window, sticky_doppler_window_,
-          pinned.sticky_doppler_window,
+          doppler_window_in, pinned.doppler_window,
           [](const wire::WindowSpecT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto eff_apply_dechirp,
                resolve_live_override(
-                   apply_dechirp_in, pinned.apply_dechirp,
-                   sticky_apply_dechirp_, pinned.sticky_apply_dechirp));
+                   apply_dechirp_in, pinned.apply_dechirp));
   HOLOSCAN_TRY(auto eff_clutter_filter,
                resolve_live_override(
-                   clutter_filter_in, pinned.clutter_filter,
-                   sticky_clutter_filter_, pinned.sticky_clutter_filter));
+                   clutter_filter_in, pinned.clutter_filter));
   HOLOSCAN_TRY(
       auto eff_waveform_value,
       resolve_live_override_via(
-          waveform_in, pinned.waveform, sticky_waveform_,
-          pinned.sticky_waveform,
+          waveform_in, pinned.waveform,
           [](const wire::FMCWWaveformT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto eff_fft_norm,
                resolve_live_override(
-                   fft_norm_in, pinned.fft_norm, sticky_fft_norm_,
-                   pinned.sticky_fft_norm));
+                   fft_norm_in, pinned.fft_norm));
   HOLOSCAN_TRY(auto eff_center_zero_doppler,
                resolve_live_override(
-                   center_zero_doppler_in, pinned.center_zero_doppler,
-                   sticky_center_zero_doppler_,
-                   pinned.sticky_center_zero_doppler));
+                   center_zero_doppler_in, pinned.center_zero_doppler));
   HOLOSCAN_TRY(auto eff_nfft_range_raw,
                resolve_live_override(
-                   nfft_range_in, pinned.nfft_range, sticky_nfft_range_,
-                   pinned.sticky_nfft_range));
+                   nfft_range_in, pinned.nfft_range));
   HOLOSCAN_TRY(auto eff_nfft_doppler_raw,
                resolve_live_override(
-                   nfft_doppler_in, pinned.nfft_doppler, sticky_nfft_doppler_,
-                   pinned.sticky_nfft_doppler));
+                   nfft_doppler_in, pinned.nfft_doppler));
 
   // nfft 0 = "use natural length" (Params "none" convention).
   const std::optional<int64_t> eff_nfft_range =

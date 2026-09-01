@@ -9,6 +9,7 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -330,14 +331,13 @@ expected<void, Error> MIMOCoherentCompensationOp<T>::compute(
   const MIMOCoherentCompensationParams& pinned =
       context.params<MIMOCoherentCompensationParams>();
 
-  // Convert only fresh wire samples; sticky state owns the logical descriptor.
-  // A changed waveform yields a new correction-table cache key, so
+  // Convert only a matched wire sample. A changed waveform yields a new
+  // correction-table cache key, so
   // ConfigCache handles the warn-once itself.
   HOLOSCAN_TRY(
       effective_waveform_,
       resolve_live_override_via(
-          waveform_in, pinned.waveform, sticky_waveform_,
-          pinned.sticky_waveform,
+          waveform_in, pinned.waveform,
           [](const wire::FMCWWaveformT& value) { return from_wire(value); }));
   if (extents_.max_samples_per_chirp.has_value() &&
       effective_waveform_.reference_samples().size() >

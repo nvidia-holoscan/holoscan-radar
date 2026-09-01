@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -210,8 +211,7 @@ expected<void, Error> VirtualArrayAssemblyOp<T>::compute(
 
   HOLOSCAN_TRY(auto effective_wavelength,
                resolve_live_override(
-                   wavelength, pinned.wavelength, sticky_wavelength_,
-                   pinned.sticky_wavelength));
+                   wavelength, pinned.wavelength));
 
   if (!(effective_wavelength > 0.0) || !std::isfinite(effective_wavelength)) {
     return fail_invalid(

@@ -5,7 +5,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <type_traits>
 
 #include <holoscan/core/domain/dlpack.hpp>
@@ -46,7 +45,6 @@ namespace holoscan::radar {
 
 struct ClutterFilterParams {
   ClutterFilterMethod method{ClutterFilterMethod::kMeanSubtraction};
-  bool sticky_method{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -56,11 +54,7 @@ HOLOSCAN_PARAM_SCHEMA(
         "Slow-time clutter suppression {mean_subtraction, single_delay, "
         "double_delay}: mean_subtraction nulls zero-Doppler with no chirp "
         "loss; the delay cancellers are 1st/2nd-order MTI high-pass filters "
-        "and drop 1-2 chirps."),
-    holoscan::field<&ClutterFilterParams::sticky_method>("sticky_method")
-        .description(
-            "Keep the last Exact method match on a miss; otherwise every "
-            "miss reverts to the method parameter."));
+        "and drop 1-2 chirps."));
 
 static_assert(holoscan::param_schema_availability<ClutterFilterParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -98,8 +92,6 @@ class ClutterFilterOp : public holoscan::Operator<ClutterFilterParams> {
   // Keep the previous activation's input alive across ticks so async device
   // reads cannot outlive the buffer.
   Tensor retained_input_;
-  // Last Exact-matched method (used when sticky_method is true).
-  std::optional<ClutterFilterMethod> sticky_method_;
 };
 
 extern template class ClutterFilterOp<float>;

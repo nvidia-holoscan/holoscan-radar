@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <type_traits>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -62,13 +61,6 @@ struct FMCWRangeProcessorParams {
   double propagation_speed{kDefaultPropagationSpeed};
   // 0 = exact (no zero-padding); ≥ samples_per_chirp when non-zero.
   int64_t nfft{0};
-  // [live] override ports need no wiring flag: an unwired one reads as a
-  // miss (OPERATOR_API.md).
-  bool sticky_range_window{true};
-  bool sticky_apply_dechirp{true};
-  bool sticky_waveform{true};
-  bool sticky_fft_norm{true};
-  bool sticky_nfft{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -100,27 +92,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&FMCWRangeProcessorParams::nfft>("nfft")
         .description(
             "Fast-time FFT length >= samples_per_chirp; larger zero-pads "
-            "for a finer interpolated range grid. 0 = samples_per_chirp."),
-    holoscan::field<&FMCWRangeProcessorParams::sticky_range_window>(
-        "sticky_range_window")
-        .description(
-            "Keep the last Exact range_window match on a miss. False "
-            "reverts to Params."),
-    holoscan::field<&FMCWRangeProcessorParams::sticky_apply_dechirp>(
-        "sticky_apply_dechirp")
-        .description(
-            "Keep the last Exact apply_dechirp match on a miss. False "
-            "reverts to Params."),
-    holoscan::field<&FMCWRangeProcessorParams::sticky_waveform>(
-        "sticky_waveform")
-        .description(
-            "Keep the last Exact waveform match on a miss. False reverts "
-            "to Params."),
-    holoscan::field<&FMCWRangeProcessorParams::sticky_fft_norm>(
-        "sticky_fft_norm")
-        .description("Keep the last Exact fft_norm match on a miss."),
-    holoscan::field<&FMCWRangeProcessorParams::sticky_nfft>("sticky_nfft")
-        .description("Keep the last Exact nfft match on a miss."));
+            "for a finer interpolated range grid. 0 = samples_per_chirp."));
 
 static_assert(
     holoscan::param_schema_availability<FMCWRangeProcessorParams>() ==
@@ -159,13 +131,6 @@ class FMCWRangeProcessorOp
 
   // range_bins is optional/latched (OPERATOR_API.md).
   LatchedOutput range_bins_out_;
-
-  // Last Exact-matched override (used when sticky_* is true).
-  std::optional<WindowSpec> sticky_range_window_;
-  std::optional<bool> sticky_apply_dechirp_;
-  std::optional<FMCWWaveformDescriptor> sticky_waveform_;
-  std::optional<FftNorm> sticky_fft_norm_;
-  std::optional<int64_t> sticky_nfft_;
 
   // Kernel-side caches (window coefficients, dechirp reference, seen FFT
   // lengths); allocated on first compute().

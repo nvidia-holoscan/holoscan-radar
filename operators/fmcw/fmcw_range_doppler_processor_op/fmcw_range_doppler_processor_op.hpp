@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <type_traits>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -69,15 +68,6 @@ struct FMCWRangeDopplerProcessorParams {
   int64_t nfft_range{0};
   // 0 = exact (no zero-padding); >= post-clutter chirp count when non-zero.
   int64_t nfft_doppler{0};
-  bool sticky_range_window{true};
-  bool sticky_doppler_window{true};
-  bool sticky_apply_dechirp{true};
-  bool sticky_clutter_filter{true};
-  bool sticky_waveform{true};
-  bool sticky_fft_norm{true};
-  bool sticky_center_zero_doppler{true};
-  bool sticky_nfft_range{true};
-  bool sticky_nfft_doppler{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -131,41 +121,7 @@ HOLOSCAN_PARAM_SCHEMA(
         "nfft_doppler")
         .description(
             "Slow-time FFT length >= the post-clutter chirp count for the "
-            "Doppler stage. 0 = the post-clutter chirp count."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_range_window>(
-        "sticky_range_window")
-        .description(
-            "Keep the last Exact range_window match on a miss. False reverts "
-            "to Params."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_doppler_window>(
-        "sticky_doppler_window")
-        .description(
-            "Keep the last Exact doppler_window match on a miss. False reverts "
-            "to Params."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_apply_dechirp>(
-        "sticky_apply_dechirp")
-        .description("Keep the last Exact apply_dechirp match on a miss."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_clutter_filter>(
-        "sticky_clutter_filter")
-        .description("Keep the last Exact clutter_filter match on a miss."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_waveform>(
-        "sticky_waveform")
-        .description(
-            "Keep the last Exact waveform match on a miss. False reverts to "
-            "Params."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_fft_norm>(
-        "sticky_fft_norm")
-        .description("Keep the last Exact fft_norm match on a miss."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::
-                       sticky_center_zero_doppler>(
-        "sticky_center_zero_doppler")
-        .description("Keep the last Exact center_zero_doppler match on a miss."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_nfft_range>(
-        "sticky_nfft_range")
-        .description("Keep the last Exact nfft_range match on a miss."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::sticky_nfft_doppler>(
-        "sticky_nfft_doppler")
-        .description("Keep the last Exact nfft_doppler match on a miss."));
+            "Doppler stage. 0 = the post-clutter chirp count."));
 
 static_assert(
     holoscan::param_schema_availability<FMCWRangeDopplerProcessorParams>() ==
@@ -212,17 +168,6 @@ class FMCWRangeDopplerProcessorOp
   // Both axis outputs are optional/latched (OPERATOR_API.md).
   LatchedOutput range_bins_out_;
   LatchedOutput velocity_bins_out_;
-
-  // Sticky [live] state.
-  std::optional<WindowSpec> sticky_range_window_;
-  std::optional<WindowSpec> sticky_doppler_window_;
-  std::optional<bool> sticky_apply_dechirp_;
-  std::optional<ClutterFilterMethod> sticky_clutter_filter_;
-  std::optional<FMCWWaveformDescriptor> sticky_waveform_;
-  std::optional<FftNorm> sticky_fft_norm_;
-  std::optional<bool> sticky_center_zero_doppler_;
-  std::optional<int64_t> sticky_nfft_range_;
-  std::optional<int64_t> sticky_nfft_doppler_;
 
   // Kernel-side caches for the two FFT stages.
   std::shared_ptr<detail::RangeStageState<T>> range_state_;

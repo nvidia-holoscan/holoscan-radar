@@ -5,7 +5,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <type_traits>
 #include <vector>
 
@@ -48,7 +47,6 @@ struct VirtualArrayAssemblyParams {
   std::vector<double> rx_positions{};
   double wavelength{0.0};
   OverlapPolicy overlap_policy{OverlapPolicy::kDedup};
-  bool sticky_wavelength{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -69,10 +67,7 @@ HOLOSCAN_PARAM_SCHEMA(
         "overlap_policy")
         .description(
             "How coincident virtual elements are handled: dedup, average, "
-            "or keep_all. Static."),
-    holoscan::field<&VirtualArrayAssemblyParams::sticky_wavelength>(
-        "sticky_wavelength")
-        .description("Keep the last Exact wavelength match on a miss."));
+            "or keep_all. Static."));
 
 static_assert(
     holoscan::param_schema_availability<VirtualArrayAssemblyParams>() ==
@@ -111,7 +106,6 @@ class VirtualArrayAssemblyOp
                           cudaStream_t stream);
 
   Tensor retained_input_;
-  std::optional<double> sticky_wavelength_;
 
   std::vector<double> cached_tx_positions_;
   std::vector<double> cached_rx_positions_;

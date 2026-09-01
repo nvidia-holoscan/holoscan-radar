@@ -13,7 +13,7 @@ if it affects the module, then remove or archive the section here.
 
 ## 1. Graph mid-stream `[live] method` coverage
 
-**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”;
+**Blocks checklist:** Tests → “[live] overrides: mid-stream + revert-to-Params”;
 Performance → inline live-override measurement.
 
 **Class:** was an HSDK 5 EA limitation (never a contract change). `method` is
@@ -25,19 +25,18 @@ fix on pin `f0cb828d4` — see
 the data trigger with `Exact{}` and `on_missing SafeDefault{}` unconditionally,
 so the override's `capture_time` must match the cube's. Wiring the port is the
 application's only obligation: an unwired entry reads as no override for that
-tick. `sticky_method` (default true) latches the last Exact match; false
-reverts to Params on a miss. `compute()` resolves via
+tick. A tick with no match uses the Params method. `compute()` resolves via
 `resolve_live_override`. See
 [`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
 
 **Unit coverage landed (2026-08-28).** With the enum edge fixed,
-`LiveMethodOverrideMidStreamAndSticky` and
-`LiveMethodEphemeralRevertsToParams` are real tests. They read the method from
+`LiveMethodOverrideAppliesForOneTick` and
+`LiveMethodRevertsToParamsAfterMiss` are real tests. They read the method from
 the output's chirp count — mean subtraction preserves all `kChirps` rows,
 single-delay drops one, double-delay drops two — so the assertion names the
-method without inspecting parameters: an override mid-stream changes the shape,
-`sticky_method` holds it on the following tick, and with `sticky_method=false`
-the tick after a present override reverts to the Params method.
+method without inspecting parameters: an override mid-stream changes the shape
+for that tick, and the tick after a present override reverts to the Params
+method.
 
 **Still deferred.**
 

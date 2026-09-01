@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <type_traits>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -56,11 +55,6 @@ struct FMCWDopplerProcessorParams {
   FMCWWaveformDescriptor waveform{};
   FftNorm fft_norm{FftNorm::kBackward};
   int64_t nfft{0};
-  bool sticky_doppler_window{true};
-  bool sticky_center_zero_doppler{true};
-  bool sticky_waveform{true};
-  bool sticky_fft_norm{true};
-  bool sticky_nfft{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -90,25 +84,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&FMCWDopplerProcessorParams::nfft>("nfft")
         .description(
             "Slow-time FFT length >= num_chirps; larger interpolates "
-            "the velocity grid over the same span. 0 = num_chirps."),
-    holoscan::field<&FMCWDopplerProcessorParams::sticky_doppler_window>(
-        "sticky_doppler_window")
-        .description(
-            "Keep the last Exact doppler_window match on a miss. False reverts "
-            "to Params."),
-    holoscan::field<&FMCWDopplerProcessorParams::sticky_center_zero_doppler>(
-        "sticky_center_zero_doppler")
-        .description("Keep the last Exact center_zero_doppler match on a miss."),
-    holoscan::field<&FMCWDopplerProcessorParams::sticky_waveform>(
-        "sticky_waveform")
-        .description(
-            "Keep the last Exact waveform match on a miss. False reverts to "
-            "Params."),
-    holoscan::field<&FMCWDopplerProcessorParams::sticky_fft_norm>(
-        "sticky_fft_norm")
-        .description("Keep the last Exact fft_norm match on a miss."),
-    holoscan::field<&FMCWDopplerProcessorParams::sticky_nfft>("sticky_nfft")
-        .description("Keep the last Exact nfft match on a miss."));
+            "the velocity grid over the same span. 0 = num_chirps."));
 
 static_assert(
     holoscan::param_schema_availability<FMCWDopplerProcessorParams>() ==
@@ -154,13 +130,6 @@ class FMCWDopplerProcessorOp
 
   // velocity_bins is optional/latched (OPERATOR_API.md).
   LatchedOutput velocity_bins_out_;
-
-  // Sticky override state.
-  std::optional<WindowSpec> sticky_doppler_window_;
-  std::optional<bool> sticky_center_zero_doppler_;
-  std::optional<FMCWWaveformDescriptor> sticky_waveform_;
-  std::optional<FftNorm> sticky_fft_norm_;
-  std::optional<int64_t> sticky_nfft_;
 
   MaxTensorExtents extents_;
   std::uint32_t max_rank_{2U};

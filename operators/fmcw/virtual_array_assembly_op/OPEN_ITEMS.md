@@ -72,20 +72,20 @@ Allocate-per-tick via `make_device_tensor`; xl profiling does not show the same
 malloc-dominated profile as `MIMODeinterleaveOp`. See
 [`operators/OPEN_ITEMS.md`](../../OPEN_ITEMS.md) §1.
 
-### B.3 Graph mid-stream sticky `[live] wavelength`
+### B.3 Graph mid-stream `[live] wavelength`
 
-**Blocks checklist:** Tests → “[live] overrides: mid-stream + sticky”.
+**Blocks checklist:** Tests → “[live] overrides: mid-stream + revert-to-Params”.
 
 **Class:** HSDK 5 EA limitation. See
 [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1.
 
 **Interim.** The operator declares `Input<double> wavelength`, adds its
 `Exact{}` + `SafeDefault{}` entry unconditionally via
-`add_live_override_to_contract`, and latches through `resolve_live_override`,
-so an unwired graph compiles without the port needing to leave the contract.
-What is still missing is coverage: the Graph sticky unit tests remain
+`add_live_override_to_contract`, and resolves it per tick through
+`resolve_live_override`, so an unwired graph compiles without the port needing
+to leave the contract. What is still missing is coverage: the Graph unit tests remain
 `GTEST_SKIP`’d. `perf_virtual_array_assembly` measures an inline `wavelength`
 transition with the supported single-clock / exact-contract / single-partition
 shape.
 
-**Status:** open for the sticky unit test; perf override timing is restored.
+**Status:** open for the live-override unit test; perf override timing is restored.

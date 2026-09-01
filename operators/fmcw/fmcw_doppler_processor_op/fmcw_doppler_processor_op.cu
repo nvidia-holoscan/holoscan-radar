@@ -50,41 +50,29 @@ struct ValidatedDopplerConfig {
   bool waveform_present;
 };
 
-// Resolve Exact inputs with the pinned parameters. Unwired ports
-// (expect=false) must not be received.
+// Resolve Exact inputs against the pinned parameters. Each override applies to
+// this tick only; an unwired or unmatched port falls back to Params.
 expected<EffectiveDopplerConfig, Error> resolve_overrides(
     Input<wire::WindowSpecT>& doppler_window_in,
     Input<bool>& center_zero_doppler_in,
     Input<wire::FMCWWaveformT>& waveform_in, Input<FftNorm>& fft_norm_in,
-    Input<int64_t>& nfft_in, const FMCWDopplerProcessorParams& pinned,
-    std::optional<WindowSpec>& sticky_doppler_window,
-    std::optional<bool>& sticky_center_zero_doppler,
-    std::optional<FMCWWaveformDescriptor>& sticky_waveform,
-    std::optional<FftNorm>& sticky_fft_norm,
-    std::optional<int64_t>& sticky_nfft) {
+    Input<int64_t>& nfft_in, const FMCWDopplerProcessorParams& pinned) {
   HOLOSCAN_TRY(
       auto doppler_window,
       resolve_live_override_via(
-          doppler_window_in, pinned.doppler_window, sticky_doppler_window,
-          pinned.sticky_doppler_window,
+          doppler_window_in, pinned.doppler_window,
           [](const wire::WindowSpecT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto center_zero_doppler,
                resolve_live_override(
-                   center_zero_doppler_in, pinned.center_zero_doppler,
-                   sticky_center_zero_doppler,
-                   pinned.sticky_center_zero_doppler));
+                   center_zero_doppler_in, pinned.center_zero_doppler));
   HOLOSCAN_TRY(
       auto waveform,
       resolve_live_override_via(
-          waveform_in, pinned.waveform, sticky_waveform, pinned.sticky_waveform,
+          waveform_in, pinned.waveform,
           [](const wire::FMCWWaveformT& value) { return from_wire(value); }));
   HOLOSCAN_TRY(auto fft_norm,
-               resolve_live_override(
-                   fft_norm_in, pinned.fft_norm, sticky_fft_norm,
-                   pinned.sticky_fft_norm));
-  HOLOSCAN_TRY(auto nfft,
-               resolve_live_override(
-                   nfft_in, pinned.nfft, sticky_nfft, pinned.sticky_nfft));
+               resolve_live_override(fft_norm_in, pinned.fft_norm));
+  HOLOSCAN_TRY(auto nfft, resolve_live_override(nfft_in, pinned.nfft));
 
   return EffectiveDopplerConfig{
       .window = std::move(doppler_window),
@@ -215,7 +203,7 @@ void FMCWDopplerProcessorOp<T>::setup(OperatorSpec& spec) {
   spec.output(velocity_bins)
       .produces_tensor(pooled_tensor_output(kDevice, vel_bounds));
 
-  // Sticky [live] POD override ports.
+  // [live] POD override ports.
   spec.input(center_zero_doppler_in).queue_depth(2U);
   spec.input(fft_norm_in).queue_depth(2U);
   spec.input(nfft_in).queue_depth(2U);
@@ -249,11 +237,8 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
       context.params<FMCWDopplerProcessorParams>();
 
   HOLOSCAN_TRY(auto effective,
-               resolve_overrides(
-                   doppler_window_in, center_zero_doppler_in, waveform_in,
-                   fft_norm_in, nfft_in, pinned, sticky_doppler_window_,
-                   sticky_center_zero_doppler_, sticky_waveform_,
-                   sticky_fft_norm_, sticky_nfft_));
+               resolve_overrides(doppler_window_in, center_zero_doppler_in,
+                                 waveform_in, fft_norm_in, nfft_in, pinned));
 
   try {
     classify_input_dtype<T>(input, "range_profiles", /*allow_real=*/false);

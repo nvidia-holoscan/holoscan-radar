@@ -6,6 +6,7 @@
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -83,7 +84,7 @@ expected<void, Error> ClutterFilterOp<T>::compute(ExecutionContext& context) {
   const ClutterFilterParams& pinned = context.params<ClutterFilterParams>();
   HOLOSCAN_TRY(auto method_value,
                resolve_live_override(
-                   method, pinned.method, sticky_method_, pinned.sticky_method));
+                   method, pinned.method));
   if (method_value == ClutterFilterMethod::kNone) {
     return fail_invalid(
         "ClutterFilterOp: method 'none' is not supported by the standalone "

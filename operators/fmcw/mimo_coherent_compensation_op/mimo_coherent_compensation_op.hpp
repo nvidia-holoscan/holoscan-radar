@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <type_traits>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -63,7 +62,6 @@ struct MIMOCoherentCompensationParams {
   MultiplexingScheme multiplexing_scheme{MultiplexingScheme::kUnspecified};
   FMCWWaveformDescriptor waveform{};
   DDMCodeDescriptor ddm_code{};
-  bool sticky_waveform{true};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -82,12 +80,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&MIMOCoherentCompensationParams::ddm_code>("ddm_code")
         .description(
             "Doppler-band / phase-code layout for DDM mode. Unused for "
-            "TDM. Static."),
-    holoscan::field<&MIMOCoherentCompensationParams::sticky_waveform>(
-        "sticky_waveform")
-        .description(
-            "Keep the last Exact waveform match on a miss. False reverts to "
-            "Params."));
+            "TDM. Static."));
 
 static_assert(
     holoscan::param_schema_availability<MIMOCoherentCompensationParams>() ==
@@ -145,7 +138,6 @@ class MIMOCoherentCompensationOp
       const Tensor& input, cudaStream_t stream);
 
   FMCWWaveformDescriptor effective_waveform_{};
-  std::optional<FMCWWaveformDescriptor> sticky_waveform_;
   ConfigCache<CachedTdmCorrection> correction_cache_{};
   ConfigCache<CachedDdmDemux> demux_cache_{};
   ConfigCache<CachedDdmCorrelate> correlate_cache_{};
