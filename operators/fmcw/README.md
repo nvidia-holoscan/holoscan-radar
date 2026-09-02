@@ -6,12 +6,39 @@ batching, and parameter-override conventions are documented in
 [`operators/common/README.md`](../common/README.md), and each operator's
 header carries its full port/parameter reference.
 
-Typical chains:
+Typical chains (split form; `FMCWRangeDopplerProcessorOp` drops in for
+range + optional clutter + Doppler wherever no MIMO marshaling step
+interposes). Downstream detection and clustering are not shown.
+`⟨AoA operator⟩` is the angle-estimation slot — not a type in this group.
 
 ```text
-split:  adc_cube → FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp → rd_maps
-fused:  adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
+SISO / SIMO (split):
+  adc_cube → FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp → rd_maps
+SISO / SIMO (fused):
+  adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
+
+MIMO TDM (split):
+  adc_cube → MIMODeinterleaveOp → FMCWRangeProcessorOp → [ClutterFilterOp]
+           → FMCWDopplerProcessorOp → MIMOCoherentCompensationOp
+           → VirtualArrayAssemblyOp → ⟨AoA operator⟩
+MIMO TDM (fused):
+  adc_cube → MIMODeinterleaveOp → FMCWRangeDopplerProcessorOp
+           → MIMOCoherentCompensationOp → VirtualArrayAssemblyOp → ⟨AoA operator⟩
+
+MIMO DDM (split):
+  adc_cube → FMCWRangeProcessorOp → FMCWDopplerProcessorOp
+           → MIMOCoherentCompensationOp → [ClutterFilterOp]
+           → VirtualArrayAssemblyOp → ⟨AoA operator⟩
+MIMO DDM (fused):
+  adc_cube → FMCWRangeDopplerProcessorOp → MIMOCoherentCompensationOp
+           → [ClutterFilterOp] → VirtualArrayAssemblyOp → ⟨AoA operator⟩
 ```
+
+SIMO continues from `rd_maps` to an AoA operator on the physical RX axis;
+SISO has no angle stage. DDM has no deinterleave (TX fire together). Clutter
+is post-demux on DDM because the codes ride on the chirps, so fused inline
+clutter does not replace that filter. Linear-phase gather and non-linear
+correlate share the DDM chain.
 
 ## Operators
 
@@ -22,8 +49,8 @@ fused:  adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
 | [`FMCWDopplerProcessorOp<T>`](fmcw_doppler_processor_op/README.md) | `range_profiles` → `rd_maps` (…, doppler, range bins) + optional `velocity_bins` axis | Doppler compression: windowed slow-time FFT (`nfft` zero-pad), zero-Doppler centered by default (numpy-style fftshift) |
 | [`FMCWRangeDopplerProcessorOp<T>`](fmcw_range_doppler_processor_op/README.md) | `adc_cube` → `rd_maps` + optional `range_bins`/`velocity_bins` | Fused range + optional inline clutter + Doppler in one node; per-axis `nfft_range`/`nfft_doppler` |
 | [`MIMODeinterleaveOp<T>`](mimo_deinterleave_op/README.md) | `adc_cube` (`N_rx`, `M·L`, samples; complex or real IF) → `adc_cube_out` (`M_tx`, `N_rx`, `L`, samples) | TDM marshaling: split interleaved slow-time into an explicit TX axis via `TXSchedule` gather. **Uniform round-robin TDM only** — non-uniform / staggered schedules are rejected (staggered TDM deferred; STATUS.md L12) |
-| [`VirtualArrayAssemblyOp<T>`](virtual_array_assembly_op/README.md) | `rd_maps` (`M_tx`, `N_rx`, D, R) → `rd_maps_out` (`num_virtual`, D, R) + packed `array_geometry` | MIMO marshaling: flatten separated TX×RX channels into a virtual axis (`p_tx + p_rx`) |
 | [`MIMOCoherentCompensationOp<T>`](mimo_coherent_compensation_op/README.md) | TDM: `rd_maps` (…, M_tx, N_rx, D, R) → same shape. DDM: `rd_maps` (…, N_rx, D, R) → (…, M_tx, N_rx, D/M−guard, R) (linear) or full `D` (non-linear correlate) | MIMO marshaling: TDM per-Doppler-bin inter-TX phase correction; DDM Doppler-band demux into an explicit TX axis (linear gather or non-linear conjugate correlation) |
+| [`VirtualArrayAssemblyOp<T>`](virtual_array_assembly_op/README.md) | `rd_maps` (`M_tx`, `N_rx`, D, R) → `rd_maps_out` (`num_virtual`, D, R) + packed `array_geometry` | MIMO marshaling: flatten separated TX×RX channels into a virtual axis (`p_tx + p_rx`) |
 
 MIMO marshaling operators document **imposed decisions** (contract pins) in
 each operator README. Deferred slices stay in `OPEN_ITEMS.md` where they
