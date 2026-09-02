@@ -19,7 +19,7 @@
             "tested_versions": ["5.0.0"]
         },
         "platforms": ["x86_64", "aarch64"],
-        "tags": ["Radar", "Angle", "Beamscan", "GPU", "FMCW", "SIMO"],
+        "tags": ["Radar", "Angle", "Beamscan", "GPU", "FMCW", "Pulse-Doppler", "SIMO", "MIMO"],
         "ranking": 3,
         "requirements": {}
     }

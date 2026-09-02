@@ -9,8 +9,10 @@ port, batching, and parameter-override conventions are documented in
 [`operators/common/README.md`](../common/README.md), and each operator's header
 carries its full port/parameter reference.
 
-Typical placement (angle-then-cluster; the `points` matrix is assembled by the
-detection-group `FeatureAssemblyOp` bridge):
+Typical placement (angle-then-cluster; the `points` matrix is assembled by
+[`FeatureAssemblyOp`](../detection/feature_assembly_op/README.md) in the
+detection group). That bridge stays under `detection/` because it speaks CFAR
+`detection_idx`; this group is the radar-agnostic clusterer.
 
 ```text
 … → CFARDetectorOp → detection_idx → FeatureAssemblyOp → points → ClusterDBSCANOp → labels (+ sizes) → …

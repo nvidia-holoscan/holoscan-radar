@@ -9,7 +9,8 @@ header carries its full port/parameter reference.
 Typical placement:
 
 ```text
-… → FMCWDopplerProcessorOp → rd_maps → CFARDetectorOp → detection_idx (+ mask / score / noise) → …
+… → CFARDetectorOp → detection_idx (+ score) → FeatureAssemblyOp → points → …
+… → ClusterDBSCANOp.labels + detection_idx + points → DetectionReductionOp → rep_idx
 ```
 
 ## Operators
@@ -17,8 +18,8 @@ Typical placement:
 | Operator | In → Out | Function |
 | --- | --- | --- |
 | [`CFARDetectorOp<T>`](cfar_detector_op/README.md) | `rd_maps` (…, doppler, range; complex or real power) → `detection_mask`, `detection_score`, `noise_estimate`, `detection_idx` | 2-D CFAR on the (Doppler, range) plane; complex input → square-law power, real input → thresholded directly; per-cell adaptive threshold from the training-cell noise estimate |
+| [`FeatureAssemblyOp<T>`](feature_assembly_op/README.md) | `detection_idx` (+ optional `range_bins` / `velocity_bins` / `detection_score` / `aoa_estimates` / `az_angles` / `el_angles`) → `points` | Range–Doppler clustering-prep bridge: gather / bin→physical lookup into `points`. Lives here (not under `clustering/`) because it speaks CFAR `detection_idx`; static `features` list sets column layout |
 | [`DetectionReductionOp<T>`](detection_reduction_op/README.md) | `labels` + `detection_idx` (+ `points`) → `rep_idx` | One representative CFAR cell per cluster (`first` / `peak` / `medoid`) for cluster-then-angle |
-| [`FeatureAssemblyOp<T>`](feature_assembly_op/README.md) | `detection_idx` (+ optional `range_bins` / `velocity_bins` / `detection_score` / `aoa_estimates`) → `points` | Gather / bin→physical lookup into the clustering feature matrix; static `features` list sets column layout |
 
 ## Implementation status
 
@@ -71,7 +72,7 @@ header is the full contract; the current build implements a faithful subset:
   [`TESTING.md`](../../docs/planning/TESTING.md) FeatureAssembly checks.
 - **Staged follow-ups:** see
   [`feature_assembly_op/OPEN_ITEMS.md`](feature_assembly_op/OPEN_ITEMS.md)
-  (shared gather with SnapshotGatherOp; optional `points` ping-pong).
+  (optional gather `contract()` entries; shared gather with SnapshotGatherOp).
 
 ## Shared kernel conventions
 
@@ -89,7 +90,7 @@ header is the full contract; the current build implements a faithful subset:
   is the uniform home for all four variants.
 - **Dtype-selected power path.** Complex `rd_maps` → square-law power
   `|·|²`; real `rd_maps` → treated as an already-formed power map (mirrors
-  `FMCWRangeProcessorOp`'s real/complex handling). No parameter.
+  the range processor's real/complex handling). No parameter.
 - **Non-coherent integration.** `nci_axes` sums power along the listed leading
   axes before CFAR; the cell statistic is Gamma(`K`) with
   `K = ∏ integrated axis sizes` (`K = 1` when `nci_axes = []`). The CA

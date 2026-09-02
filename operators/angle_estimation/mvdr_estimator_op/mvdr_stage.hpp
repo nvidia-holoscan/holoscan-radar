@@ -66,8 +66,8 @@ inline void clear_matx_inv_cache() {
 // scratch pointers, freed when compute() returns) to bound cache growth —
 // WITHOUT draining MatX's global MemTracker. The global drain frees *every*
 // MatX-tracked buffer in the process, including sibling operators' cached
-// cuFFT workspaces (e.g. FMCWRange/DopplerProcessorOp's windowed FFT), which
-// they reuse next tick → out-of-bounds reads and corrupted output. Leaves the
+// cuFFT workspaces (range/Doppler FFT processors), which they reuse next
+// tick → out-of-bounds reads and corrupted output. Leaves the
 // live flags set so the teardown retire below still drains. Safe no-op if
 // solvers were never used.
 inline void clear_matx_solver_plan_caches() {

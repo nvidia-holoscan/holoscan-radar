@@ -13,7 +13,7 @@
 
 namespace holoscan::radar {
 
-// Named leading axes for FMCW cubes: none, N_rx, or (M_tx, N_rx).
+// Named leading axes for RD cubes: none, N_rx, or (M_tx, N_rx).
 // Opaque leading batch above that is rejected (MAX_TENSOR_EXTENTS Part B).
 inline std::size_t named_tx_rx_leading_rank(const MaxTensorExtents& extents) {
   if (extents.max_tx.has_value()) {

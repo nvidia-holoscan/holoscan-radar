@@ -14,7 +14,7 @@ inline constexpr double kTwoPi = 6.28318530717958647692;   // 2*pi
 inline constexpr double kHalfPi = 1.57079632679489661923;  // pi/2
 
 // Speed of light in vacuum (m/s), exact by SI definition. The default RF
-// propagation speed for FMCW range/velocity math and the simulator.
+// propagation speed for range/velocity axis math and the simulator.
 inline constexpr double kSpeedOfLight = 299792458.0;
 
 }  // namespace holoscan::radar

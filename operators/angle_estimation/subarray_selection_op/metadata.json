@@ -18,7 +18,7 @@
             "tested_versions": ["5.0.0"]
         },
         "platforms": ["x86_64", "aarch64"],
-        "tags": ["Radar", "Angle", "MIMO", "Subarray", "GPU", "FMCW"],
+        "tags": ["Radar", "Angle", "Subarray", "GPU", "FMCW", "Pulse-Doppler", "SIMO", "MIMO"],
         "ranking": 3,
         "requirements": {}
     }

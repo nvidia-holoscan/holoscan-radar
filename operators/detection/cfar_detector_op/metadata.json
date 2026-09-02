@@ -21,7 +21,7 @@
             "tested_versions": ["5.0.0"]
         },
         "platforms": ["x86_64", "aarch64"],
-        "tags": ["Radar", "Signal Processing", "GPU", "FMCW", "Detection", "CFAR"],
+        "tags": ["Radar", "Signal Processing", "GPU", "FMCW", "Pulse-Doppler", "Detection", "CFAR"],
         "ranking": 3,
         "requirements": {}
     }

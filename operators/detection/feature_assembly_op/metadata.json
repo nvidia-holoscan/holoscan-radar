@@ -19,7 +19,7 @@
             "tested_versions": ["5.0.0"]
         },
         "platforms": ["x86_64", "aarch64"],
-        "tags": ["Radar", "Detection", "Clustering", "Bridge", "GPU", "FMCW"],
+        "tags": ["Radar", "Detection", "Clustering", "Bridge", "GPU", "FMCW", "Pulse-Doppler"],
         "ranking": 3,
         "requirements": {}
     }

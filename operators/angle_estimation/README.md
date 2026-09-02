@@ -8,7 +8,7 @@ carries its full port/parameter reference.
 Typical sparse-path placement:
 
 ```text
-… → FMCWDopplerProcessorOp → rd_maps (per-channel)
+… → rd_maps (per-channel)
   → CFARDetectorOp (NCI over channel)
   → SnapshotGatherOp → snapshot → ⟨sparse angle estimator⟩ → aoa_estimates
 ```
@@ -17,10 +17,13 @@ Typical dense-path placement (angle-then-cluster — angle is formed before
 detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
 
 ```text
-… → FMCWDopplerProcessorOp → rd_maps (per-channel)
+… → rd_maps (per-channel)
   → PhaseShiftBeamformerOp → rda_cube (num_az, num_el, D, R)
   → CFARDetectorOp (on the RDA cube) → detections
 ```
+
+In-tree `rd_maps` today: `FMCWDopplerProcessorOp`. A pulse-Doppler Doppler
+stage would occupy the same slot.
 
 ## Operators
 

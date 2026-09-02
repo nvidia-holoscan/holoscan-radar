@@ -58,8 +58,9 @@ inline void clear_music_eig_cache() {
 // Per-tick: clear the eig plan cache (keys are freed-at-return scratch
 // pointers) to bound growth — WITHOUT draining MatX's global MemTracker. The
 // global drain frees every MatX-tracked buffer in the process, including
-// sibling operators' cached cuFFT workspaces (FMCWRange/DopplerProcessorOp),
-// which they reuse next tick → out-of-bounds reads and corrupted output.
+// sibling operators' cached cuFFT workspaces (range/Doppler FFT
+// processors), which they reuse next tick → out-of-bounds reads and
+// corrupted output.
 // Leaves the live flag set so the teardown retire still drains. See
 // mvdr_stage.hpp for the identical split.
 inline void clear_music_matx_caches() {
