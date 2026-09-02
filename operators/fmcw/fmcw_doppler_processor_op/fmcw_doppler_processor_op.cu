@@ -180,21 +180,17 @@ Contract FMCWDopplerProcessorOp<T>::contract() const {
 template <typename T>
 expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
     ExecutionContext& context) {
-  // Receive range_profiles; require a device-contiguous buffer.
+  // Receive range_profiles; require a device-contiguous complex cube.
   HOLOSCAN_TRY(auto input, receive_tensor(range_profiles, kOpName));
   try {
     require_cuda_accessible(input, "range_profiles", kOpName);
     require_contiguous(input, "range_profiles", kOpName);
+    require_complex<T>(input, "range_profiles");
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
 
-  // Complex-only input, and collapse named leading axes (N_rx / M_tx).
-  try {
-    classify_input_dtype<T>(input, "range_profiles", /*allow_real=*/false);
-  } catch (const std::invalid_argument& e) {
-    return fail_invalid(e.what());
-  }
+  // Collapse named leading axes (N_rx / M_tx).
   HOLOSCAN_TRY(auto batched,
                collapse_named_tx_rx_batch(
                    input, extents_, "range_profiles", kOpName));

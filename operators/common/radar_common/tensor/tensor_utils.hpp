@@ -139,4 +139,13 @@ extern template InputPrecision classify_input_dtype<float>(
 extern template InputPrecision classify_input_dtype<double>(
     const holoscan::Tensor&, const char*, bool);
 
+// Complex-only input: classify_input_dtype with allow_real=false, discarding
+// the enum. Same error strings. Use this when the operator has no real-IF
+// path; keep classify_input_dtype when the caller needs kReal vs kComplex.
+template <typename T>
+inline void require_complex(const holoscan::Tensor& tensor,
+                            const char* port_name) {
+  (void)classify_input_dtype<T>(tensor, port_name, /*allow_real=*/false);
+}
+
 }  // namespace holoscan::radar

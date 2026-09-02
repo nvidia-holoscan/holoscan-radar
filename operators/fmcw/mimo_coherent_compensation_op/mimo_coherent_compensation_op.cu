@@ -376,19 +376,12 @@ expected<void, Error> MIMOCoherentCompensationOp<T>::run_ddm_correlate(
 template <typename T>
 expected<void, Error> MIMOCoherentCompensationOp<T>::compute(
     ExecutionContext& context) {
-  // Receive rd_maps; require a device-contiguous buffer.
+  // Receive rd_maps; require a device-contiguous complex cube.
   HOLOSCAN_TRY(auto input, receive_tensor(rd_maps, kOpName));
   try {
     require_cuda_accessible(input, "rd_maps", kOpName);
     require_contiguous(input, "rd_maps", kOpName);
-  } catch (const std::invalid_argument& e) {
-    return fail_invalid(e.what());
-  }
-
-  // Complex-only input. Trailing rank is TDM/DDM-specific, not an FMCW
-  // (chirps, bins) cube — layout parse lives in the plan builder.
-  try {
-    classify_input_dtype<T>(input, "rd_maps", /*allow_real=*/false);
+    require_complex<T>(input, "rd_maps");
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
@@ -398,7 +391,8 @@ expected<void, Error> MIMOCoherentCompensationOp<T>::compute(
       context.params<MIMOCoherentCompensationParams>();
   HOLOSCAN_TRY(auto stage, resolve_params(waveform_in, pinned));
 
-  // Bind the stage config to this input's scheme-specific layout.
+  // Trailing rank is TDM/DDM-specific, not an FMCW (chirps, bins)
+  // cube — layout parse lives in the plan builder.
   HOLOSCAN_TRY(auto plan,
                build_compensation_stage_plan(std::move(stage), input,
                                              extents_));

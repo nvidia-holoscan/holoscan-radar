@@ -170,24 +170,18 @@ expected<void, Error> MIMODeinterleaveOp<T>::ensure_device_gather_map(
 template <typename T>
 expected<void, Error> MIMODeinterleaveOp<T>::compute(
     ExecutionContext& context) {
-  // Receive adc_cube; require a device-contiguous buffer.
+  // Receive adc_cube; require a device-contiguous cube (complex or real IF).
   HOLOSCAN_TRY(auto input, receive_tensor(adc_cube, kOpName));
   try {
     require_cuda_accessible(input, "adc_cube", kOpName);
     require_contiguous(input, "adc_cube", kOpName);
-  } catch (const std::invalid_argument& e) {
-    return fail_invalid(e.what());
-  }
-
-  // Complex or real IF. Trailing rank is (N_rx, M·L, samples), not an
-  // FMCW (chirps, bins) cube — layout parse lives in the plan builder.
-  try {
     classify_input_dtype<T>(input, "adc_cube", /*allow_real=*/true);
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
 
-  // Bind the static schedule to this input's shape. No [live] merge.
+  // Trailing rank is (N_rx, M·L, samples), not an FMCW (chirps, bins)
+  // cube — layout parse lives in the plan builder. No [live] merge.
   const MIMODeinterleaveParams& pinned =
       context.params<MIMODeinterleaveParams>();
   HOLOSCAN_TRY(auto plan,

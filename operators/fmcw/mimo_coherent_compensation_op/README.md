@@ -111,7 +111,7 @@ Input Doppler must be center-zero (`FMCWDopplerProcessorOp` default). There is n
 
 **Named axes.** Contract shapes are exact ranks (no opaque leading batch). Layout parsers still admit `rank >=` the trailing count and collapse extras as batch; constructor `max_rank = 4` makes a leading dim fail at emit. See Contract conformance.
 
-**Dtype.** Template `T` ∈ {`float`, `double`}; complex only (`allow_real=false`). Output dtype equals input.
+**Dtype.** Template `T` ∈ {`float`, `double`}; complex only (`require_complex<T>`). Output dtype equals input.
 
 **Rejected combinations** (quoted):
 
