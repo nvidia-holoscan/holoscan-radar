@@ -8,9 +8,10 @@
 // only: no timing assertions. See docs/planning/OPERATOR_DEVELOPMENT.md.
 //
 // [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
-// Mid-session [live] waveform override measurement is deferred until
-// docs/planning/HSDK5_PORT.md §1 / §9. Params still select the variant
-// under test.
+// Schema-valued [live] waveform override_ms is deferred (HSDK5_PORT.md §9),
+// same as range/Doppler windows. Cold/steady Graph is current. Do not wrap
+// the production Exact{} port in PerfLiveContractOp. Params still select
+// the variant under test.
 
 #include <complex>
 #include <cmath>
@@ -226,7 +227,7 @@ perf::ResultRow base_row(const CompensationScenario& scen) {
   row.size_id = scen.size_id;
   row.input_shape = input_shape(scen);
   row.k = scen.num_doppler;
-  // [EA HSDK5 ONLY] live override timing deferred — HSDK5_PORT.md §1/§9.
+  // Schema-valued waveform override_ms deferred — HSDK5_PORT.md §9.
   row.notes = "live_override=deferred_ea";
   return row;
 }
@@ -273,9 +274,8 @@ struct CompensationTraits : perf::PerfDriverDefaults {
            "an explicit subset";
   }
   static const char* full_help() {
-    return "Full matrix (sizes + DDM-NL); live-override "
-           "timing deferred on "
-           "HSDK 5 EA (HSDK5_PORT.md §1/§9)";
+    return "Full matrix (sizes + DDM-NL); schema waveform "
+           "override_ms deferred (HSDK5_PORT.md §9)";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {

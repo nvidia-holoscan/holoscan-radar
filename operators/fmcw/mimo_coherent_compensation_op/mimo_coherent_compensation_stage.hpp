@@ -13,9 +13,20 @@
 #include <holoscan/core/domain/tensor.hpp>
 
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
+#include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 
 namespace holoscan::radar::detail {
+
+// Kernel knobs for one tick. multiplexing_scheme and ddm_code are
+// Params-only (static). waveform is the live-merged descriptor: empty
+// Params / override is rejected in resolve_params, so this is always
+// valid after that call. TDM uses PRI/carrier; DDM validates and ignores.
+struct CompensationStageConfig {
+  MultiplexingScheme multiplexing_scheme{MultiplexingScheme::kUnspecified};
+  FMCWWaveformDescriptor waveform{};
+  DDMCodeDescriptor ddm_code{};
+};
 
 struct TdmRdMapsLayout {
   std::vector<int64_t> leading;
@@ -76,7 +87,7 @@ DdmCodeMode ddm_classify_codes(const DDMCodeDescriptor& code);
 std::vector<double> ddm_resolve_offsets(const DDMCodeDescriptor& code);
 
 // num_doppler_per_tx = num_doppler / num_tx - guard_bands. Throws if
-// num_doppler is not divisible by num_tx (imposed layout requirement) or the
+// num_doppler is not divisible by num_tx (equal-width bands) or the
 // resulting band width is < 1.
 int64_t ddm_num_doppler_per_tx(int64_t num_doppler, int64_t num_tx,
                                int64_t guard_bands);

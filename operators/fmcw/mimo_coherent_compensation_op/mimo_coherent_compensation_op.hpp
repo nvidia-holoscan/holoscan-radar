@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <type_traits>
+#include <vector>
 
 #include <holoscan/core/domain/tensor.hpp>
 #include <holoscan/core/errors.hpp>
@@ -18,7 +19,6 @@
 #include <holoscan/core/parameter_schema.hpp>
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
-#include <holoscan/core/tensor_output_loan.hpp>
 
 #include "fmcw/mimo_coherent_compensation_op/mimo_coherent_compensation_stage.hpp"
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
@@ -44,7 +44,8 @@ namespace holoscan::radar {
 //          `tx_order` permutation (still uniform-repeating, so accepted by
 //          `MIMODeinterleaveOp`) is NOT compensated correctly: each lane would
 //          need the correction for its actual firing slot, and this operator
-//          does not receive `tx_order`. Known limitation — see `OPEN_ITEMS.md`.
+//          does not receive `tx_order`. Known limitation — see
+//          `OPEN_ITEMS.md` item 1.
 //          Staggered / per-TX-timing schedules are separately out of scope
 //          (STATUS.md → Roadmap; settled as L12).
 //
@@ -57,6 +58,9 @@ namespace holoscan::radar {
 // DDM out (non-linear phase_codes):
 //          rd_maps_out — (..., M_tx, N_rx, num_doppler, num_range_bins);
 //          full Doppler axis preserved; conjugate-correlation demux.
+//
+// Precision is fixed at compile time by the template instantiation.
+// Fat output pool sizing requires MaxTensorExtents at graph.op() (ctor).
 
 struct MIMOCoherentCompensationParams {
   MultiplexingScheme multiplexing_scheme{MultiplexingScheme::kUnspecified};
@@ -95,8 +99,8 @@ class MIMOCoherentCompensationOp
                 "MIMOCoherentCompensationOp supports float and double only");
 
  public:
-  explicit MIMOCoherentCompensationOp(
-      const MaxTensorExtents& extents);
+  // Required: sizes the rd_maps_out Tensor pool at setup().
+  explicit MIMOCoherentCompensationOp(const MaxTensorExtents& extents);
   ~MIMOCoherentCompensationOp() override;
 
   void setup(OperatorSpec& spec) override;
@@ -105,12 +109,15 @@ class MIMOCoherentCompensationOp
       ExecutionContext& context) override;
 
   Input<Tensor> rd_maps{"rd_maps"};
-  Input<wire::FMCWWaveformT> waveform_in{"waveform"};
   // HSDK 5 requires unique port names within an operator (inputs and
   // outputs share one namespace). OPERATOR_API.md's logical output channel
   // remains "rd_maps"; the physical port name is rd_maps_out.
   // [EA HSDK5 ONLY] revisit naming once the full port is settled.
   Output<Tensor> rd_maps_out{"rd_maps_out"};
+
+  // [live] Exact override (OPERATOR_API.md). Schema wire type; converted
+  // back to FMCWWaveformDescriptor in resolve_params.
+  Input<wire::FMCWWaveformT> waveform_in{"waveform"};
 
  private:
   struct CachedTdmCorrection {
@@ -127,22 +134,29 @@ class MIMOCoherentCompensationOp
 
   expected<void, Error> run_tdm_compute(
       ExecutionContext& context, const detail::TdmRdMapsLayout& layout,
-      const Tensor& input, cudaStream_t stream);
+      const FMCWWaveformDescriptor& waveform,
+      const std::vector<int64_t>& out_shape, const Tensor& input,
+      cudaStream_t stream);
 
   expected<void, Error> run_ddm_compute(
       ExecutionContext& context, const detail::DdmRdMapsLayout& layout,
-      const Tensor& input, cudaStream_t stream);
+      const DDMCodeDescriptor& code, int64_t num_doppler_per_tx,
+      const std::vector<int64_t>& out_shape, const Tensor& input,
+      cudaStream_t stream);
 
   expected<void, Error> run_ddm_correlate(
       ExecutionContext& context, const detail::DdmRdMapsLayout& layout,
+      const DDMCodeDescriptor& code, const std::vector<int64_t>& out_shape,
       const Tensor& input, cudaStream_t stream);
 
-  FMCWWaveformDescriptor effective_waveform_{};
+  // Keep the previous activation's input alive across ticks so async
+  // device reads cannot outlive the buffer.
+  Tensor retained_input_;
+
+  // No latched optional. Table caches are stage state (warn-once).
   ConfigCache<CachedTdmCorrection> correction_cache_{};
   ConfigCache<CachedDdmDemux> demux_cache_{};
   ConfigCache<CachedDdmCorrelate> correlate_cache_{};
-
-  Tensor retained_input_;
 
   MaxTensorExtents extents_;
   std::uint32_t max_rank_{4U};

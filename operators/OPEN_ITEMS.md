@@ -166,9 +166,9 @@ is pinned per operator:
 - **DDM clutter placement.** Slow-time clutter filtering belongs **after**
   DDM demux in the workflow (`WORKFLOWS.md`); not enforced by operators — a
   graph wiring concern.
-- **Velocity ÷M ambiguity.** TDM and DDM reduce unambiguous velocity by `M`;
-  disambiguation (staggered PRI, band tricks) is **out of scope** for the
-  first wave — see compensation `OPEN_ITEMS.md` §A.9.
+- **Velocity ÷M ambiguity.** TDM and DDM reduce unambiguous velocity by `M`.
+  Downstream sees the aliased per-TX Doppler axis. Disambiguation (staggered
+  PRI, band tricks) is out of scope — not a `MIMOCoherentCompensationOp` mode.
 - **Shared descriptors.** `DDMCodeDescriptor` and `TXSchedule` validation rules
   (mutually exclusive offset forms, uniform TDM schedule) live with the
   consuming operator / descriptor code; see operator open items above.

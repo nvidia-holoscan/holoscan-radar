@@ -322,7 +322,7 @@ int64_t ddm_num_doppler_per_tx(int64_t num_doppler, int64_t num_tx,
     throw std::invalid_argument(
         "MIMOCoherentCompensationOp: DDM requires num_doppler (" +
         std::to_string(num_doppler) + ") divisible by num_tx (" +
-        std::to_string(num_tx) + "); see OPEN_ITEMS imposed layout");
+        std::to_string(num_tx) + ")");
   }
   const int64_t band = num_doppler / num_tx;
   const int64_t width = band - guard_bands;

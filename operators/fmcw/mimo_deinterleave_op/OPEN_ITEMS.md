@@ -23,9 +23,10 @@ Custom `tx_order` permutations of `[0, …, M−1]` are allowed when they repeat
 uniformly. Arbitrary `chirp_tx_index` vectors are allowed only when they still
 satisfy the same uniformity checks.
 
-**Rationale:** `MIMOCoherentCompensationOp` TDM correction (§A.2 in its
-`OPEN_ITEMS.md`) models a fixed inter-TX offset `PRI/M` between firings, not
-arbitrary dwell times per TX.
+**Rationale:** `MIMOCoherentCompensationOp` TDM correction uses a fixed
+inter-TX offset `PRI/M` between firings, not arbitrary dwell times per TX
+(see that operator's README). Identity-`tx_order` vs firing-slot indexing is
+a separate compensation gap (`OPEN_ITEMS.md` item 1 there).
 
 ### A.2 Slow-time divisibility
 
