@@ -22,12 +22,12 @@ fused:  adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
 | [`FMCWDopplerProcessorOp<T>`](fmcw_doppler_processor_op/README.md) | `range_profiles` → `rd_maps` (…, doppler, range bins) + optional `velocity_bins` axis | Doppler compression: windowed slow-time FFT (`nfft` zero-pad), zero-Doppler centered by default (numpy-style fftshift) |
 | [`FMCWRangeDopplerProcessorOp<T>`](fmcw_range_doppler_processor_op/README.md) | `adc_cube` → `rd_maps` + optional `range_bins`/`velocity_bins` | Fused range + optional inline clutter + Doppler in one node; per-axis `nfft_range`/`nfft_doppler` |
 | [`MIMODeinterleaveOp<T>`](mimo_deinterleave_op/README.md) | `adc_cube` (`N_rx`, `M·L`, samples; complex or real IF) → `adc_cube_out` (`M_tx`, `N_rx`, `L`, samples) | TDM marshaling: split interleaved slow-time into an explicit TX axis via `TXSchedule` gather. **Uniform round-robin TDM only** — non-uniform / staggered schedules are rejected (staggered TDM deferred; STATUS.md L12) |
-| [`VirtualArrayAssemblyOp<T>`](virtual_array_assembly_op/README.md) | `rd_maps` (…, M_tx, N_rx, D, R) → `rd_maps` (…, num_virtual, D, R) + `array_geometry` | MIMO marshaling: flatten separated TX×RX channels into a virtual axis (`p_tx + p_rx`) |
+| [`VirtualArrayAssemblyOp<T>`](virtual_array_assembly_op/README.md) | `rd_maps` (`M_tx`, `N_rx`, D, R) → `rd_maps_out` (`num_virtual`, D, R) + packed `array_geometry` | MIMO marshaling: flatten separated TX×RX channels into a virtual axis (`p_tx + p_rx`) |
 | [`MIMOCoherentCompensationOp<T>`](mimo_coherent_compensation_op/README.md) | TDM: `rd_maps` (…, M_tx, N_rx, D, R) → same shape. DDM: `rd_maps` (…, N_rx, D, R) → (…, M_tx, N_rx, D/M−guard, R) (linear) or full `D` (non-linear correlate) | MIMO marshaling: TDM per-Doppler-bin inter-TX phase correction; DDM Doppler-band demux into an explicit TX axis (linear gather or non-linear conjugate correlation) |
 
 MIMO marshaling operators document **imposed decisions** (contract pins) in
 each operator README. Deferred slices stay in `OPEN_ITEMS.md` where they
-still exist (none for deinterleave / compensation).
+still exist (none for deinterleave / compensation / virtual-array assembly).
 
 The optional axis outputs are emitted only when a waveform descriptor
 (`FMCWWaveformDescriptor`) is available; consumers map peaks back to

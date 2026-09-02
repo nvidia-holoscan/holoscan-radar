@@ -411,7 +411,8 @@ TEST(VirtualArrayAssemblyOp, ComplexDoublePreservesValues) {
 }
 
 TEST(VirtualArrayAssemblyOp, RejectsOpaqueLeadingBatch) {
-  // Contract is (M_tx, N_rx, D, R); an extra leading dim is opaque batch.
+  // Contract is rank 4 (M_tx, N_rx, D, R); an extra leading dim is
+  // opaque batch (Part B), not a named axis. parse_rd_maps_layout fail-closes.
   const std::vector<int64_t> shape = {2, kNumTx, kNumRx, kDoppler, kRange};
   VirtualArrayAssemblyParams params;
   params.tx_positions = separated_tx_positions();

@@ -68,8 +68,8 @@ now (allocate-per-tick remains in code).
 
 `VirtualArrayAssemblyOp` (2026-07-16 review): same allocate-per-tick output
 path via `make_device_tensor`. Realloc is **required** when output element
-count changes tick-to-tick (`num_doppler`, `num_range_bins`, leading batch,
-or `M_tx`/`N_rx` → `num_virtual`); the sole `[live]` param (`wavelength`)
+count changes tick-to-tick (`num_doppler`, `num_range_bins`, or
+`M_tx`/`N_rx` → `num_virtual`); the sole `[live]` param (`wavelength`)
 does **not** change tensor shapes. On the default perf matrix (xl median
 ~3.3 ms, setup ~3.5 ms) steady state does **not** show the malloc-dominated
 profile seen on `MIMODeinterleaveOp` xl — defer ping-pong here as well;
@@ -155,7 +155,7 @@ is pinned per operator:
 | --- | --- |
 | `MIMODeinterleaveOp` | none (uniformity / PRI / gather-axis pins live in the operator README; staggered TDM is STATUS.md L12 / Roadmap) |
 | `MIMOCoherentCompensationOp` | none (TDM firing-slot map is `tx_schedule`; ÷M aliased velocity is the module pin below) |
-| `VirtualArrayAssemblyOp` | [`virtual_array_assembly_op/OPEN_ITEMS.md`](fmcw/virtual_array_assembly_op/OPEN_ITEMS.md) |
+| `VirtualArrayAssemblyOp` | none (flatten / overlap / geometry pins live in the operator README; packed Tensor emit is HSDK5_PORT §10; Graph live unit skip is §1) |
 
 **Module-level pins (not re-litigated per operator):**
 

@@ -15,9 +15,20 @@
 
 namespace holoscan::radar::detail {
 
+// Kernel knobs for one tick. tx_positions, rx_positions, and overlap_policy
+// are Params-only (static). wavelength is the live-merged scalar: the
+// non-positive Params / override sentinel is rejected in resolve_params,
+// so this is always a positive finite value after that call.
+struct VirtualAssemblyStageConfig {
+  std::vector<double> tx_positions;
+  std::vector<double> rx_positions;
+  double wavelength{0.0};
+  OverlapPolicy overlap_policy{OverlapPolicy::kDedup};
+};
+
+// Contract input is exactly rank 4. Extra leading axes are not a module
+// batch (MAX_TENSOR_EXTENTS.md Part B).
 struct RdMapsLayout {
-  std::vector<int64_t> leading;
-  int64_t batch{1};
   int64_t num_tx{0};
   int64_t num_rx{0};
   int64_t num_doppler{0};

@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <type_traits>
 #include <vector>
 
@@ -18,7 +19,6 @@
 #include <holoscan/core/parameter_schema.hpp>
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
-#include <holoscan/core/tensor_output_loan.hpp>
 
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_stage.hpp"
 #include "radar_common/descriptors/enums.hpp"
@@ -30,9 +30,9 @@ namespace holoscan::radar {
 // axis and emit the matching ArrayGeometry as a packed float64 Tensor.
 // Contract reference: ports, shapes, dtypes, parameters.
 //
-// In:  rd_maps — complex64/complex128, (..., M_tx, N_rx, num_doppler,
-//               num_range_bins).
-// Out: rd_maps_out — same dtype, (..., num_virtual, num_doppler,
+// In:  rd_maps — complex64/complex128, (M_tx, N_rx, num_doppler,
+//               num_range_bins). No opaque leading batch.
+// Out: rd_maps_out — same dtype, (num_virtual, num_doppler,
 //               num_range_bins).
 //               [EA HSDK5 ONLY] unique in/out port names required.
 // Out: array_geometry — float64 Tensor, shape (num_virtual + 1, 3): packed
@@ -41,6 +41,7 @@ namespace holoscan::radar {
 //               PublishedPayload; serialized Tensor interim — HSDK5_PORT §10.
 //
 // Precision is fixed at compile time by the template instantiation.
+// Fat output pool sizing requires MaxTensorExtents at graph.op() (ctor).
 
 struct VirtualArrayAssemblyParams {
   std::vector<double> tx_positions{};
@@ -82,8 +83,9 @@ class VirtualArrayAssemblyOp
                 "VirtualArrayAssemblyOp supports float and double precision");
 
  public:
+  // Required: sizes the rd_maps_out and array_geometry Tensor pools at
+  // setup(), and the private index tables.
   explicit VirtualArrayAssemblyOp(const MaxTensorExtents& extents);
-  ~VirtualArrayAssemblyOp() override;
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -91,35 +93,40 @@ class VirtualArrayAssemblyOp
       ExecutionContext& context) override;
 
   Input<Tensor> rd_maps{"rd_maps"};
-  // [EA HSDK5 ONLY] unique in/out port names — see OPERATOR_API.md /
-  // HSDK5_PORT §2.
+  // HSDK 5 requires unique port names within an operator (inputs and
+  // outputs share one namespace). OPERATOR_API.md's logical output channel
+  // remains "rd_maps"; the physical port name is rd_maps_out.
+  // [EA HSDK5 ONLY] revisit naming once the full port is settled.
   Output<Tensor> rd_maps_out{"rd_maps_out"};
   // Packed ArrayGeometry (float64 Tensor) — HSDK5_PORT §10.
   Output<Tensor> array_geometry{"array_geometry"};
 
-  // [live] Exact scalar. Leaving it unconnected is legal; compute() then
-  // seeds from Params.
+  // [live] Exact override (OPERATOR_API.md).
   Input<double> wavelength{"wavelength"};
 
  private:
-  void ensure_device_plan(const detail::VirtualAssemblyPlan& plan,
-                          cudaStream_t stream);
+  expected<void, Error> ensure_device_index_tables(
+      const detail::VirtualAssemblyStageConfig& stage,
+      const detail::VirtualAssemblyPlan& plan, cudaStream_t stream);
 
+  // Keep the previous activation's input alive across ticks so async
+  // device reads cannot outlive the buffer.
   Tensor retained_input_;
 
-  std::vector<double> cached_tx_positions_;
-  std::vector<double> cached_rx_positions_;
-  OverlapPolicy cached_policy_{OverlapPolicy::kDedup};
+  // Index-table cache: ctor-sized device tables, rebuilt on a new
+  // (tx_positions, rx_positions, overlap_policy, M_tx, N_rx) key.
+  // Not ConfigCache — wavelength is live but does not rebuild the gather.
   int64_t cached_num_tx_{-1};
   int64_t cached_num_rx_{-1};
-  detail::VirtualAssemblyPlan cached_plan_{};
-
-  int64_t* d_src_channel_{nullptr};
-  size_t d_src_capacity_{0};
-  int64_t* d_member_offsets_{nullptr};
-  size_t d_member_offsets_capacity_{0};
-  int64_t* d_member_indices_{nullptr};
-  size_t d_member_indices_capacity_{0};
+  OverlapPolicy cached_policy_{OverlapPolicy::kDedup};
+  std::vector<double> cached_tx_positions_;
+  std::vector<double> cached_rx_positions_;
+  std::shared_ptr<Tensor> src_channel_;
+  std::size_t src_channel_capacity_{0};
+  std::shared_ptr<Tensor> member_offsets_;
+  std::size_t member_offsets_capacity_{0};
+  std::shared_ptr<Tensor> member_indices_;
+  std::size_t member_indices_capacity_{0};
 
   MaxTensorExtents extents_;
   std::uint32_t max_rank_{3U};

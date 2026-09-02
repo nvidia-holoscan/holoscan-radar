@@ -34,24 +34,13 @@ using Complex = cuda::std::complex<T>;
 
 template <typename T>
 __global__ void gather_single_source_kernel(
-    const Complex<T>* input, Complex<T>* output, int64_t batch,
-    int64_t num_channels, int64_t num_virtual, int64_t num_doppler,
+    const Complex<T>* input, Complex<T>* output, int64_t num_doppler,
     int64_t num_range, const int64_t* src_channel) {
   const int64_t plane = num_doppler * num_range;
-  const int64_t in_channel_stride = plane;
-  const int64_t in_batch_stride = num_channels * in_channel_stride;
-  const int64_t out_channel_stride = plane;
-  const int64_t out_batch_stride = num_virtual * out_channel_stride;
-
-  int64_t rem = static_cast<int64_t>(blockIdx.x);
-  const int64_t v = rem % num_virtual;
-  rem /= num_virtual;
-  const int64_t b = rem;
-
+  const int64_t v = static_cast<int64_t>(blockIdx.x);
   const int64_t src = src_channel[v];
-  const int64_t in_base =
-      b * in_batch_stride + src * in_channel_stride;
-  const int64_t out_base = b * out_batch_stride + v * out_channel_stride;
+  const int64_t in_base = src * plane;
+  const int64_t out_base = v * plane;
   for (int64_t i = static_cast<int64_t>(threadIdx.x); i < plane;
        i += blockDim.x) {
     output[out_base + i] = input[in_base + i];
@@ -60,21 +49,11 @@ __global__ void gather_single_source_kernel(
 
 template <typename T>
 __global__ void gather_average_kernel(
-    const Complex<T>* input, Complex<T>* output, int64_t batch,
-    int64_t num_channels, int64_t num_virtual, int64_t num_doppler,
+    const Complex<T>* input, Complex<T>* output, int64_t num_doppler,
     int64_t num_range, const int64_t* member_offsets,
     const int64_t* member_indices) {
   const int64_t plane = num_doppler * num_range;
-  const int64_t in_channel_stride = plane;
-  const int64_t in_batch_stride = num_channels * in_channel_stride;
-  const int64_t out_channel_stride = plane;
-  const int64_t out_batch_stride = num_virtual * out_channel_stride;
-
-  int64_t rem = static_cast<int64_t>(blockIdx.x);
-  const int64_t v = rem % num_virtual;
-  rem /= num_virtual;
-  const int64_t b = rem;
-
+  const int64_t v = static_cast<int64_t>(blockIdx.x);
   const int64_t begin = member_offsets[v];
   const int64_t end = member_offsets[v + 1];
   const int64_t count = end - begin;
@@ -82,15 +61,13 @@ __global__ void gather_average_kernel(
     return;
   }
 
-  const int64_t out_base = b * out_batch_stride + v * out_channel_stride;
+  const int64_t out_base = v * plane;
   for (int64_t i = static_cast<int64_t>(threadIdx.x); i < plane;
        i += blockDim.x) {
     Complex<T> sum{};
     for (int64_t m = begin; m < end; ++m) {
       const int64_t src = member_indices[m];
-      const int64_t in_base =
-          b * in_batch_stride + src * in_channel_stride + i;
-      sum += input[in_base];
+      sum += input[src * plane + i];
     }
     output[out_base + i] = sum / static_cast<T>(count);
   }
@@ -101,40 +78,28 @@ __global__ void gather_average_kernel(
 RdMapsLayout parse_rd_maps_layout(const holoscan::Tensor& tensor,
                                   const char* port_name) {
   const auto& shape = tensor.shape();
-  if (shape.size() < 4) {
-    throw std::invalid_argument(std::string(port_name) +
-                                ": expected rank >= 4 "
-                                "(..., M_tx, N_rx, num_doppler, num_range)");
+  if (shape.size() != 4) {
+    throw std::invalid_argument(
+        std::string(port_name) +
+        ": expected rank 4 (M_tx, N_rx, num_doppler, num_range), got " +
+        std::to_string(shape.size()));
   }
   RdMapsLayout layout;
-  layout.num_range = shape.back();
-  layout.num_doppler = shape[shape.size() - 2];
-  layout.num_rx = shape[shape.size() - 3];
-  layout.num_tx = shape[shape.size() - 4];
+  layout.num_tx = shape[0];
+  layout.num_rx = shape[1];
+  layout.num_doppler = shape[2];
+  layout.num_range = shape[3];
   if (layout.num_tx <= 0 || layout.num_rx <= 0 || layout.num_doppler <= 0 ||
       layout.num_range <= 0) {
     throw std::invalid_argument(std::string(port_name) +
                                 ": trailing axes must be positive");
-  }
-  layout.leading.assign(shape.begin(), shape.end() - 4);
-  layout.batch = 1;
-  for (int64_t d : layout.leading) {
-    if (d <= 0) {
-      throw std::invalid_argument(std::string(port_name) +
-                                  ": leading batch axes must be positive");
-    }
-    layout.batch *= d;
   }
   return layout;
 }
 
 std::vector<int64_t> assembled_rd_shape(const RdMapsLayout& in,
                                         int64_t num_virtual) {
-  std::vector<int64_t> shape = in.leading;
-  shape.push_back(num_virtual);
-  shape.push_back(in.num_doppler);
-  shape.push_back(in.num_range);
-  return shape;
+  return {num_virtual, in.num_doppler, in.num_range};
 }
 
 VirtualAssemblyPlan build_virtual_plan(
@@ -251,20 +216,17 @@ void run_virtual_assembly_stage(
     const VirtualAssemblyPlan& plan, const int64_t* d_src_channel,
     const int64_t* d_member_offsets, const int64_t* d_member_indices,
     cudaStream_t stream) {
-  const int64_t num_channels = layout.num_tx * layout.num_rx;
-  const int grid = static_cast<int>(layout.batch * plan.num_virtual);
+  const int grid = static_cast<int>(plan.num_virtual);
   const auto* in = static_cast<const Complex<T>*>(input);
   auto* out = static_cast<Complex<T>*>(output);
 
   if (plan.policy == OverlapPolicy::kAverage) {
     gather_average_kernel<T><<<grid, kBlock, 0, stream>>>(
-        in, out, layout.batch, num_channels, plan.num_virtual,
-        layout.num_doppler, layout.num_range, d_member_offsets,
+        in, out, layout.num_doppler, layout.num_range, d_member_offsets,
         d_member_indices);
   } else {
     gather_single_source_kernel<T><<<grid, kBlock, 0, stream>>>(
-        in, out, layout.batch, num_channels, plan.num_virtual,
-        layout.num_doppler, layout.num_range, d_src_channel);
+        in, out, layout.num_doppler, layout.num_range, d_src_channel);
   }
   if (cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error(

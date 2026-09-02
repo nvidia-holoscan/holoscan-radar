@@ -9,8 +9,9 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.1.0",
+        "version": "0.2.0",
         "changelog": {
+            "0.2.0": "Tick-shell cleanup: ctor-sized index tables, fail-closed rank 4",
             "0.1.0": "Initial Release"
         },
         "holoscan_sdk": {

@@ -176,6 +176,7 @@ Common check (all five): `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_e
 - `(tx, rx)` block → virtual channel axis with `p_virtual = p_tx + p_rx`; emitted `array_geometry.element_positions` match the analytic virtual layout.
 - `overlap_policy`: `dedup` collapses coincident positions (`num_virtual` = unique count); `keep_all` retains `M·N`; `average` combines coincident samples.
 - `num_virtual ≤ M·N`.
+- Extra leading axes are rejected (input rank is exactly 4; no module batch).
 
 ---
 
