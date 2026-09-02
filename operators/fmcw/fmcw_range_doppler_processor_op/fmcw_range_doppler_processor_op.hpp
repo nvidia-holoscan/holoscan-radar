@@ -46,13 +46,16 @@ struct DopplerStageState;  // defined in doppler_stage.hpp
 // rd_maps (within tolerance) by calling the same stage functions.
 //
 // In:  adc_cube      — complex64/complex128 (IQ IF) or float32/float64
-//                      (real IF), (..., num_chirps, samples_per_chirp).
+//                      (real IF), (num_chirps, samples_per_chirp) or with
+//                      named leading N_rx / (M_tx, N_rx).
 // Out: rd_maps       — complex64/complex128,
-//                      (..., num_doppler, num_range_bins).
+//                      same leading + (num_doppler, num_range_bins).
 // Out: range_bins    — optional, float32/float64, (num_range_bins,).
 // Out: velocity_bins — optional, float32/float64, (num_doppler,).
 //
-// Precision is fixed at compile time by the template instantiation.
+// Precision is fixed at compile time by the template instantiation
+// (T = float → complex64/float32, T = double → complex128/float64).
+// Fat outs require MaxTensorExtents at graph.op() (ctor).
 //
 struct FMCWRangeDopplerProcessorParams {
   WindowSpec range_window{};
@@ -151,7 +154,7 @@ class FMCWRangeDopplerProcessorOp
   Output<Tensor> range_bins{"range_bins"};
   Output<Tensor> velocity_bins{"velocity_bins"};
 
-  // [live] Exact override ports.
+  // [live] Exact override ports (OPERATOR_API.md).
   Input<wire::WindowSpecT> range_window_in{"range_window"};
   Input<wire::WindowSpecT> doppler_window_in{"doppler_window"};
   Input<bool> apply_dechirp_in{"apply_dechirp"};
