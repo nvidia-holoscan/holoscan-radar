@@ -133,8 +133,9 @@ HSDK 4.x `InputContext` / `TensorMap` / `HOLOSCAN_OPERATOR_FORWARD_ARGS`.
 **C++ operator first-pass:** complete (all 19 operators allow-listed). CFAR
 GO/SO/OS/alpha_lut Graph unit suites + statistical MC (`ctest -L statistical`)
 landed. Graph perf (phase 3) cold/steady smokes landed for all drivers; POD
-`override_ms` restored for applicable consumers (§8). Enum and §9 lives remain
-deferred (§1/§9). Remaining: apps/Python (phase 4), and EA gaps in §§1/9/10
+`override_ms` restored for applicable consumers (§8). Enum `ClutterFilterOp.method`
+`override_ms` landed; remaining enum lives and §9 lives remain deferred
+(§1/§9). Remaining: apps/Python (phase 4), and EA gaps in §§1/9/10
 (phase 5) — see progress table.
 
 ---
@@ -189,7 +190,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | --- | --- |
 | Foundation (Dockerfile yaml-cpp/ssh, `find_package(matx)`, Holoviz gate, C++20) | landed on `dpc/hs5.0-fixes` |
 | Shared Tensor I/O + Exact `[live]` helpers (`radar_common/sdk/`) | landed (ClutterFilter pilot; Exact since 2026-08-21) |
-| `ClutterFilterOp` F32/F64 + Graph C++ tests | landed; Exact `method` (unconditional entry); Graph perf cold/steady landed; enum `method` live-override units landed now that §12 is fixed; Graph perf `override_ms` still unmeasured for enums (§8) |
+| `ClutterFilterOp` F32/F64 + Graph C++ tests | landed; Exact `method` (unconditional entry); Graph perf cold/steady landed; enum `method` live-override units landed now that §12 is fixed; Graph perf `method` `override_ms` landed (§8) |
 | `SnapshotGatherOp` F32/F64 + Graph C++ tests (OnAligned 2-in/2-out) | landed; Exact `snapshot_window` on an unconditional entry — `expect_snapshot_window` retired (§11); live-override unit deferred (§1); Graph perf `snapshot_window` `override_ms` restored (§8) |
 | `PhaseShiftBeamformerOp` F32/F64 + Graph C++ tests | landed; `[live]` geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); no POD live Inputs, so Graph live tests still skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `peak_interpolation` (unconditional entry) with its enum live-override unit landed now that §12 is fixed; optional `is_valid` Graph wiring deferred (§11); geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
@@ -239,8 +240,12 @@ authoring shapes, not evidence that scalar sidebands are unsupported:
 The supported perf shape is one source that emits the device Tensor and a
 fixed-width scalar/POD sideband every tick, switching the sideband value at the
 measurement frame. The source, operator, and drains are placed in one explicit
-partition, and a perf-only operator adapter adds the wired sideband to
-`contract()` with `LatestWithin` + `SafeDefault`.
+partition. When the consumer already declares the sideband with production
+`Exact{}` (`add_live_override_to_contract`), wire that port directly — restacking
+`PerfLiveContractOp` / `LatestWithin` is `TEMPORAL_CONTRACT_INVALID`.
+`ClutterFilterOp.method` is the enum worked example. Historical POD drivers
+still wrap with `LatestWithin` + `SafeDefault`; prefer Exact when the source
+already re-publishes every tick.
 
 **Narrowed 2026-08-20 (scalar-only probe).** A minimal scalar probe
 separated the causes, and the second clock is *not* one of them:
@@ -972,9 +977,9 @@ four were latent, since no test wires them:
 The three `fft_norm` ports remain exercised from `Params` only, and the fused
 `clutter_filter` stub still skips against the §1 harness item — both are now
 ordinary authoring gaps rather than blocked ones. `ClutterFilterOp.method` is
-the worked example to copy for the fused port, since it is the same enum. Graph perf still
-skips enum sidebands, so no `override_ms` is measured for any enum parameter
-(§8); re-enabling that measurement is follow-on work.
+the worked example to copy for the fused port, since it is the same enum.
+Graph perf measures `override_ms` for `ClutterFilterOp.method`; remaining enum
+lives are not yet wired (§8).
 
 **What rules out the alternatives.** The A/B holds the graph shape fixed, which
 eliminates the co-emit, the partition cover, and the device Tensor binding. It
@@ -1128,7 +1133,7 @@ stay gated intentionally. Demo apps still need
 Holoviz (§6) and Graph-port of remaining app scaffolding. CFAR GO/SO/OS /
 alpha_lut Graph unit suites and the `statistical`-labeled MC suite have
 landed (phase-2 unit coverage). Perf drivers are on the separate
-`HOLOSCAN_RADAR_HSDK5_PORTED_PERF` list (phase 3: all 19 drivers + split_vs_fused; POD `override_ms` restored §8; enum/§9 lives remain open).
+`HOLOSCAN_RADAR_HSDK5_PORTED_PERF` list (phase 3: all 19 drivers + split_vs_fused; POD `override_ms` restored §8; clutter `method` enum `override_ms` landed; remaining enum/§9 lives remain open).
 
 **Status:** C++ first-pass + CFAR variant Graph units landed; allow-list
 kept for EA gating / cleanup.
@@ -1311,8 +1316,10 @@ milliseconds to seconds (a fixed 60 s deadline previously aborted
 `perf_root_music_estimator --full` at the `xl` rung, which needs ~150 s here).
 Use `--stop-after-s` to cap total runtime. Inline mid-session POD `[live]`
 changes use the supported single-clock, exact-contract, single-partition shape
-from §1 and report `override_ms` / `override_delta_ms`. Enum lives remain
-blocked by EA runtime binding; vector/descriptor live *timing* is not yet
+from §1 and report `override_ms` / `override_delta_ms`. Enum
+`ClutterFilterOp.method` uses production `Exact{}` (the co-emit source already
+publishes every tick; do not restack `LatestWithin`). Remaining enum lives are
+not yet wired. Vector/descriptor live *timing* is not yet
 covered, though the ports exist (§9). Per-tick source publish is a fresh pool loan (§3); vs HSDK 4’s free handle
 republish this is an
 **accepted** end-to-end comparison artifact on large inputs (VAA
@@ -1320,8 +1327,9 @@ republish this is an
 explicitly; default remains `kCopy`.
 
 **Status:** partially closed — cold/steady landed for all drivers; POD
-override timing restored for the applicable consumers. Enum and §9 lives
-remain open.
+override timing restored for the applicable consumers. Enum
+`ClutterFilterOp.method` `override_ms` landed; remaining enum lives and §9
+lives remain open.
 
 ---
 

@@ -21,7 +21,7 @@ HSDK 5 Graph + `Operator<Params>` with typed Tensor ports — **no 4.x shim**.
 | 0 — Foundation | EA image, CMake/MatX, Holoviz probe, Python forced off | Landed |
 | 1 — Shared glue | `radar_common/sdk/` Tensor I/O + `[live]` override helpers; Graph test harness | Landed |
 | 2 — Operator wave | All 19 ops → Graph/`Operator<Params>` + unit tests (allow-list) | Landed (intentional live skips OK) |
-| 3 — Perf wave | Graph `perf_*` drivers + cold/steady smokes | Landed (POD `override_ms` restored; enum `override_ms` still unmeasured — §8, no longer blocked) |
+| 3 — Perf wave | Graph `perf_*` drivers + cold/steady smokes | Landed (POD `override_ms` restored; clutter `method` enum `override_ms` landed — remaining enum lives still unmeasured, §8) |
 | 4 — Apps / Python | Demos + bindings when Holoviz / Python EA surface exists | **Partial:** C++ Graph demos + X11 RD viewer; Holoviz/Python still off |
 | 5 — Close deferred | Re-probe EA gaps; ratify durable API deltas; unskip live Graph | **Open** — see blockers below |
 | 6 — Cleanup | Drop allow-lists, `[EA HSDK5 ONLY]`, this file / `HSDK5_PORT.md` | Blocked on phase 5 |
@@ -46,7 +46,8 @@ do not infer Graph behavior from 4.x.
   suites; allow-lists for ops and perf.
 - **Perf:** shared `perf_graph.hpp`; all drivers cold/steady via
   `ctest -L performance`; POD `override_ms` on CFAR, DBSCAN, MUSIC /
-  Root-MUSIC / ESPRIT, MVDR, SnapshotGather, and VirtualArrayAssembly.
+  Root-MUSIC / ESPRIT, MVDR, SnapshotGather, and VirtualArrayAssembly;
+  enum `override_ms` on `ClutterFilterOp.method`.
 - **Pool sizing:** `MaxTensorExtents` through fat ops, Graph units, apps,
   and Python binding constructors (no empty extents).
 - **Demos:** `fmcw_siso`, `fmcw_simo`, `fmcw_dense_simo`, `fmcw_mimo`
@@ -114,7 +115,7 @@ Until these close, phase 5 / cleanup cannot finish. Detail and next steps:
 | ID | Gap | Impact if still broken |
 | --- | --- | --- |
 | §1 | Mid-stream Graph `[live]` (device Tensor path + scalar override) | Scalar / bool overrides now run and are covered; what remains is one-shot override harness work on the operators not yet converted |
-| §12 | ~~`enum class` Graph edge fails bind (`kLocalEnum`)~~ — **fixed on pin `f0cb828d4`** | Closed. All four enum `Live*` tests landed; only enum `override_ms` (§8) and the four unauthored `fft_norm` / fused `clutter_filter` live tests remain, both ordinary work |
+| §12 | ~~`enum class` Graph edge fails bind (`kLocalEnum`)~~ — **fixed on pin `f0cb828d4`** | Closed. All four enum `Live*` tests landed; clutter `method` `override_ms` landed. Remaining ordinary work: the four unauthored `fft_norm` / fused `clutter_filter` live tests, and other enum `override_ms` (§8) |
 | §11 | ~~`OnAligned` trigger rejects an unwired non-member `Exact{}` override~~ — **fixed on pin `f0cb828d4`** | Closed in the SDK and in the module: `SnapshotGatherOp` / `DetectionReductionOp` dropped `expect_*`, so no operator has a wiring flag |
 | §6 (Holoviz / Python) | Holoviz package + usable Python / pybind11 operator surface | Holoviz demos and pytest remain forced off; X11 is interim only |
 | §6 (partition) | Auto-partition rejects graphs with an unreachable / unwired operator | Keep always-drain pattern; want named diagnostics or tolerance |

@@ -25,6 +25,15 @@
 
 namespace holoscan::radar::detail {
 
+// Kernel-facing knobs for one tick. method is always a concrete enum (no
+// Params sentinel). kNone is a fused-only pass-through; the standalone
+// operator rejects it in resolve_params before calling the stage.
+// run_clutter_stage still takes the enum so the fused operator can pass
+// its clutter_filter field without a second wrapper.
+struct ClutterStageConfig {
+  ClutterFilterMethod method{ClutterFilterMethod::kMeanSubtraction};
+};
+
 // Output chirp count for a method, per the locked contract. kNone passes
 // through unchanged (fused operator's inline stage only).
 inline int64_t clutter_num_chirps_out(ClutterFilterMethod method,

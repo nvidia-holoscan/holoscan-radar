@@ -4,13 +4,13 @@
 // Performance characterization for ClutterFilterOp — slow-time static-clutter
 // suppression (mean subtraction / 1st- / 2nd-order delay-line MTI). Sweeps the
 // (chirps x range_bins) size ladder, the suppression method, and a
-// multi-channel batch.
+// multi-channel batch. Every compute run inlines a mid-session [live] method
+// override so the method-switch cost (and output chirp-count change) is
+// measured.
 //
 // [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
-// Mid-session [live] method override measurement is deferred until
-// docs/planning/HSDK5_PORT.md §1 (EA partition / device binding). Params
-// still select the method under test. Measurement tool only: no timing
-// assertions. See docs/planning/OPERATOR_DEVELOPMENT.md.
+// Measurement tool only: no timing assertions. See
+// docs/planning/OPERATOR_DEVELOPMENT.md.
 
 #include <complex>
 #include <cstdint>
@@ -96,6 +96,15 @@ std::string method_tag(hr::ClutterFilterMethod m) {
   return "unk";
 }
 
+// Flip to a different valid method so a live override always changes the
+// kernel path (and the output chirp count). kNone is invalid here.
+hr::ClutterFilterMethod flip_method(hr::ClutterFilterMethod m) {
+  if (m == hr::ClutterFilterMethod::kMeanSubtraction) {
+    return hr::ClutterFilterMethod::kSingleDelay;
+  }
+  return hr::ClutterFilterMethod::kMeanSubtraction;
+}
+
 std::vector<int64_t> profiles_shape(const ClutterScenario& scen) {
   if (scen.channels > 1) {
     return {scen.channels, scen.num_chirps, scen.num_range_bins};
@@ -104,7 +113,7 @@ std::vector<int64_t> profiles_shape(const ClutterScenario& scen) {
 }
 
 perf::TimingCollector run_clutter_graph(const ClutterScenario& scen,
-                                        int total_frames) {
+                                        const perf::RunPlan& plan) {
   auto cube =
       perf::make_iq_cube_device<PerfPrecision>(profiles_shape(scen));
   hr::MaxTensorExtents extents;
@@ -113,19 +122,25 @@ perf::TimingCollector run_clutter_graph(const ClutterScenario& scen,
   if (scen.channels > 1) {
     extents.max_rx = scen.channels;
   }
-  return perf::run_perf_graph(
-      std::move(cube), total_frames, "clutter-perf",
+  using BaseOp = hr::ClutterFilterOp<PerfPrecision>;
+  // Production Exact{} + per-tick co-emit. Do not wrap PerfLiveContractOp
+  // (restacking LatestWithin is TEMPORAL_CONTRACT_INVALID).
+  const hr::ClutterFilterMethod override_method = flip_method(scen.method);
+  return perf::run_perf_graph_with_override(
+      std::move(cube), plan.total_frames, plan.override_at, scen.method,
+      override_method, "clutter-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
-        auto op = graph.op<hr::ClutterFilterOp<PerfPrecision>>(
-            "clutter", extents);
+        auto op = graph.op<BaseOp>("clutter", extents);
         hr::ClutterFilterParams params;
         params.method = scen.method;
         op.set_params(std::move(params));
         const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
         graph.add_flow(src->out, op->range_profiles, q);
+        graph.add_flow(src->override_out, op->method, q);
         graph.add_flow(op->range_profiles_out, sink->in, q);
+        graph.partition("perf").add(src).add(op).add(sink);
         perf::bind_tensor_out(options, "clutter", "range_profiles_out");
       });
 }
@@ -157,8 +172,7 @@ perf::ResultRow base_row(const ClutterScenario& scen) {
   row.input_shape = profiles_shape(scen);
   row.out_batch = scen.channels;
   row.k = scen.num_chirps;
-  // [EA HSDK5 ONLY] live override timing deferred — HSDK5_PORT.md §1.
-  row.notes = "live_override=deferred_ea";
+  row.notes = "live_override=method";
   return row;
 }
 
@@ -194,8 +208,8 @@ struct ClutterTraits : perf::PerfDriverDefaults {
     return "Mean-subtraction size sweep across an explicit subset";
   }
   static const char* full_help() {
-    return "Full matrix (methods x sizes x channel batch); live-override "
-           "timing deferred on HSDK 5 EA (HSDK5_PORT.md §1)";
+    return "Full matrix (methods x sizes x channel batch) with live "
+           "method-override timing";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -263,11 +277,10 @@ struct ClutterTraits : perf::PerfDriverDefaults {
   static void run_scenario(const ClutterScenario& scen,
                            const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    // No mid-session live override until HSDK5_PORT.md §1 is closed.
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
+    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
     const auto samples = perf::collect_scenario_samples(
         rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_clutter_graph(scen, p.total_frames);
+          return run_clutter_graph(scen, p);
         });
 
     perf::append_setup_row(base_row(scen), samples, report);
@@ -276,8 +289,9 @@ struct ClutterTraits : perf::PerfDriverDefaults {
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
     row.notes =
-        "cold_ms is first-frame latency; median/p90 are post-warmup steady "
-        "state; live method-override timing deferred (HSDK5_PORT.md §1); "
+        "cold_ms is first-frame latency; median/p90 are pre-override "
+        "steady state; override_ms is peak latency over the 3-frame live "
+        "method switch (changes the kernel path and output chirp count); "
         "cells/s is complex cells/s";
     report->results.push_back(row);
   }

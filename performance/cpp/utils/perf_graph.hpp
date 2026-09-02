@@ -78,13 +78,13 @@ enum class PerfPublishMode {
 inline constexpr auto kPerfOverrideMaxAge = std::chrono::years{100};
 
 // Perf-only operator adapter. Production joins a `[live]` override with Exact{}
-// (OPERATOR_API.md), so an override applies to the one tick whose capture_time
-// it shares. A perf scenario needs the opposite: publish a new configuration on
-// one frame and hold it across every measurement frame after it, without
-// re-publishing per tick and paying for that in the numbers. LatestWithin does
-// exactly that, and keeping the hold in the contract rather than in operator
-// state is why the operators need no last-value member. MemberPorts are
-// pointers to public Input<T> members on OperatorT.
+// (OPERATOR_API.md). Do not wrap an operator whose production contract already
+// declares that selector on the same port — a second selector is
+// TEMPORAL_CONTRACT_INVALID. PerfTensorOverrideSourceOp publishes the
+// sideband every tick, so Exact matches (perf_clutter_filter). Historical POD
+// drivers still use this adapter to restack LatestWithin for a hold; prefer
+// Exact when the source already re-publishes. MemberPorts are pointers to
+// public Input<T> members on OperatorT.
 template <typename OperatorT, auto... MemberPorts>
 class PerfLiveContractOp final : public OperatorT {
  public:
@@ -385,8 +385,8 @@ class PerfTensorSourceOp final : public holoscan::Operator<> {
 // Publishing both outputs every activation satisfies replay. Callers must
 // put source, operator, and sinks in one explicit partition (independent
 // OnClock roots otherwise fail compile). Enum sidebands bind since the
-// kLocalEnum fix (HSDK5_PORT.md §12); wiring them here to measure enum
-// override_ms is still outstanding (§8).
+// kLocalEnum fix (HSDK5_PORT.md §12). ClutterFilterOp.method uses this
+// path for override_ms; other enum lives are not yet wired (§8).
 template <typename Value>
 class PerfTensorOverrideSourceOp final : public holoscan::Operator<> {
  public:

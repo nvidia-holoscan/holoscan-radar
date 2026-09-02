@@ -6,7 +6,6 @@
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -30,11 +29,71 @@ expected<void, Error> fail_invalid(const std::string& message) {
   return make_unexpected(Error{ErrorCode::kInvalidArgument, message});
 }
 
+constexpr const char* kOpName = "ClutterFilterOp";
+
+// Kernel knobs plus the output chirp count derived from this tick's input.
+struct ClutterStagePlan {
+  detail::ClutterStageConfig stage;
+  int64_t chirps_out;
+};
+
+// Merge the Exact [live] method onto pinned Params. kNone is illegal here
+// (fused inline pass-through only); there are no Params sentinels to map.
+expected<detail::ClutterStageConfig, Error> resolve_params(
+    Input<ClutterFilterMethod>& method_in,
+    const ClutterFilterParams& pinned) {
+  HOLOSCAN_TRY(auto method,
+               resolve_live_override(method_in, pinned.method));
+  if (method == ClutterFilterMethod::kNone) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) +
+            ": method 'none' is not supported by the standalone "
+            "operator (it exists only for the fused operator's inline "
+            "clutter stage); use one of {mean_subtraction, single_delay, "
+            "double_delay}"});
+  }
+  return detail::ClutterStageConfig{.method = method};
+}
+
+// Check the stage config against this tick's input and size the chirp axis.
+expected<ClutterStagePlan, Error> build_clutter_stage_plan(
+    detail::ClutterStageConfig stage, const BatchedShape& batched,
+    const MaxTensorExtents& extents) {
+  if (batched.rows > *extents.max_chirps ||
+      batched.cols > *extents.max_range_bins) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) +
+            ": input chirps/range_bins exceed MaxTensorExtents"});
+  }
+  if (stage.method == ClutterFilterMethod::kSingleDelay &&
+      batched.rows < 2) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) +
+            ": method 'single_delay' needs num_chirps >= 2, got " +
+            std::to_string(batched.rows)});
+  }
+  if (stage.method == ClutterFilterMethod::kDoubleDelay &&
+      batched.rows < 3) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) +
+            ": method 'double_delay' needs num_chirps >= 3, got " +
+            std::to_string(batched.rows)});
+  }
+  const int64_t chirps_out =
+      detail::clutter_num_chirps_out(stage.method, batched.rows);
+  return ClutterStagePlan{.stage = std::move(stage),
+                          .chirps_out = chirps_out};
+}
+
 }  // namespace
 
 template <typename T>
 ClutterFilterOp<T>::ClutterFilterOp(const MaxTensorExtents& extents) {
-  const char* who = "ClutterFilterOp";
+  const char* who = kOpName;
   const std::int64_t max_chirps =
       require_extent(extents.max_chirps, "max_chirps", who);
   const std::int64_t max_range_bins =
@@ -51,25 +110,30 @@ ClutterFilterOp<T>::ClutterFilterOp(const MaxTensorExtents& extents) {
 
 template <typename T>
 void ClutterFilterOp<T>::setup(OperatorSpec& spec) {
-  // Declare device storage only; dtype is enforced in compute() so one
-  // operator binary still serves F32/F64 and the harness can feed either.
-  // layout.rank stays unset (exact-rank optional); max_rank on allocation
-  // admits the named-axis ceiling from extents. Opaque leading batch is
-  // rejected in compute().
   constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  spec.input(range_profiles).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  const TensorBounds fat_bounds{
+      .max_rank = max_rank_,
+      .max_byte_span = max_byte_span_};
+
+  spec.input(range_profiles)
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kDevice));
   spec.output(range_profiles_out)
-      .produces_tensor(pooled_tensor_output(kDevice, max_rank_, max_byte_span_));
-  // [live] method override; an unwired port simply reads as a miss.
+      .produces_tensor(pooled_tensor_output(kDevice, fat_bounds));
+
+  // [live] Exact overrides, Params order (schema and POD alike).
   spec.input(method).queue_depth(2U);
 }
 
 template <typename T>
 Contract ClutterFilterOp<T>::contract() const {
+  // Trigger on the data tensor. The Exact override is declared whether or
+  // not the application wires it: an unwired one compiles to a warning and
+  // reads as a miss.
   Contract result;
   result.trigger(OnEach{range_profiles});
   add_live_override_to_contract(result, method);
@@ -78,74 +142,61 @@ Contract ClutterFilterOp<T>::contract() const {
 
 template <typename T>
 expected<void, Error> ClutterFilterOp<T>::compute(ExecutionContext& context) {
-  HOLOSCAN_TRY(auto input,
-               receive_tensor(range_profiles, "ClutterFilterOp"));
-
-  const ClutterFilterParams& pinned = context.params<ClutterFilterParams>();
-  HOLOSCAN_TRY(auto method_value,
-               resolve_live_override(
-                   method, pinned.method));
-  if (method_value == ClutterFilterMethod::kNone) {
-    return fail_invalid(
-        "ClutterFilterOp: method 'none' is not supported by the standalone "
-        "operator (it exists only for the fused operator's inline clutter "
-        "stage); use one of {mean_subtraction, single_delay, double_delay}");
-  }
-
+  // Receive range_profiles; require a device-contiguous buffer.
+  HOLOSCAN_TRY(auto input, receive_tensor(range_profiles, kOpName));
   try {
-    classify_input_dtype<T>(input, "range_profiles", /*allow_real=*/false);
-    require_cuda_accessible(input, "range_profiles", "ClutterFilterOp");
+    require_cuda_accessible(input, "range_profiles", kOpName);
+    require_contiguous(input, "range_profiles", kOpName);
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
 
+  // Complex-only input, and collapse named leading axes (N_rx / M_tx).
+  try {
+    classify_input_dtype<T>(input, "range_profiles", /*allow_real=*/false);
+  } catch (const std::invalid_argument& e) {
+    return fail_invalid(e.what());
+  }
   HOLOSCAN_TRY(auto batched,
                collapse_named_tx_rx_batch(
-                   input, extents_, "range_profiles", "ClutterFilterOp"));
-  if (batched.rows > *extents_.max_chirps ||
-      batched.cols > *extents_.max_range_bins) {
-    return fail_invalid(
-        "ClutterFilterOp: input chirps/range_bins exceed MaxTensorExtents");
-  }
+                   input, extents_, "range_profiles", kOpName));
 
-  const int64_t num_chirps = batched.rows;
-  if (method_value == ClutterFilterMethod::kSingleDelay && num_chirps < 2) {
-    return fail_invalid(
-        "ClutterFilterOp: method 'single_delay' needs num_chirps >= 2, got " +
-        std::to_string(num_chirps));
-  }
-  if (method_value == ClutterFilterMethod::kDoubleDelay && num_chirps < 3) {
-    return fail_invalid(
-        "ClutterFilterOp: method 'double_delay' needs num_chirps >= 3, got " +
-        std::to_string(num_chirps));
-  }
+  // This tick's Params: pinned defaults with any matched [live] override.
+  const ClutterFilterParams& pinned = context.params<ClutterFilterParams>();
+  HOLOSCAN_TRY(auto stage, resolve_params(method, pinned));
 
+  // Bind the stage config to this input's shape.
+  HOLOSCAN_TRY(auto plan,
+               build_clutter_stage_plan(std::move(stage), batched, extents_));
+
+  // MatX work runs on the runtime compute stream.
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
-    return make_unexpected(Error{ErrorCode::kNotSupported,
-                                 "ClutterFilterOp: no CUDA compute stream"});
+    const std::string& msg =
+        std::string(kOpName) + ": no CUDA compute stream";
+    return make_unexpected(Error{ErrorCode::kNotSupported, msg});
   }
 
-  const int64_t num_chirps_out =
-      detail::clutter_num_chirps_out(method_value, num_chirps);
+  // Clutter suppression into a pool loan, then publish range_profiles_out.
   const std::vector<int64_t> out_shape =
-      full_rank_shape(batched, num_chirps_out, batched.cols);
+      full_rank_shape(batched, plan.chirps_out, batched.cols);
   const DLDataType dtype = complex_dtype<T>();
-
   const void* input_ptr = input.data();
+
   HOLOSCAN_TRY(emit_device_tensor(
       range_profiles_out, context, out_shape, dtype,
       [&](void* out_ptr, std::size_t) -> expected<void, Error> {
         try {
-          detail::run_clutter_stage<T>(method_value, input_ptr, batched.batch,
-                                       num_chirps, batched.cols, out_ptr,
-                                       stream);
+          detail::run_clutter_stage<T>(plan.stage.method, input_ptr,
+                                       batched.batch, batched.rows,
+                                       batched.cols, out_ptr, stream);
         } catch (const std::invalid_argument& e) {
           return fail_invalid(e.what());
         }
         return {};
       }));
 
+  // Keep range_profiles alive until stream-ordered reads complete.
   retained_input_ = std::move(input);
   return {};
 }

@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <holoscan/core/domain/dlpack.hpp>
 #include <holoscan/core/domain/tensor.hpp>
 #include <holoscan/core/errors.hpp>
 #include <holoscan/core/execution_context.hpp>
@@ -18,7 +17,6 @@
 #include <holoscan/core/parameter_schema.hpp>
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
-#include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
@@ -81,17 +79,19 @@ class ClutterFilterOp : public holoscan::Operator<ClutterFilterParams> {
   // remains "range_profiles"; the physical port name is range_profiles_out.
   // [EA HSDK5 ONLY] revisit naming once the full port is settled.
   Output<Tensor> range_profiles_out{"range_profiles_out"};
-  // [live] Exact override of params().method.
+
+  // [live] Exact override (OPERATOR_API.md).
   Input<ClutterFilterMethod> method{"method"};
 
  private:
-  MaxTensorExtents extents_;
-  std::uint32_t max_rank_{2U};
-  std::size_t max_byte_span_{0U};
-
   // Keep the previous activation's input alive across ticks so async device
   // reads cannot outlive the buffer.
   Tensor retained_input_;
+
+  // Stateless stage (no FFT plan / coefficient cache). Pool bounds only.
+  MaxTensorExtents extents_;
+  std::uint32_t max_rank_{2U};
+  std::size_t max_byte_span_{0U};
 };
 
 extern template class ClutterFilterOp<float>;
