@@ -48,6 +48,7 @@
 #include "fmcw/mimo_coherent_compensation_op/mimo_coherent_compensation_stage.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -60,6 +61,7 @@ namespace {
 using holoscan::radar::DDMCodeDescriptor;
 using holoscan::radar::FMCWWaveformDescriptor;
 using holoscan::radar::FMCWWaveformSpec;
+using holoscan::radar::TXSchedule;
 using holoscan::radar::kPi;
 using holoscan::radar::kTwoPi;
 using holoscan::radar::MIMOCoherentCompensationOp;
@@ -99,9 +101,10 @@ int64_t tensor_count(const std::vector<int64_t>& shape) {
 template <typename T>
 std::vector<std::complex<T>> build_misaligned_rd_host(
     const FMCWWaveformDescriptor& waveform, int64_t num_tx, int64_t num_rx,
-    int64_t num_doppler, int64_t num_range, int64_t batch = 1) {
+    int64_t num_doppler, int64_t num_range, int64_t batch = 1,
+    const std::vector<int64_t>& slot_by_tx = {}) {
   const auto table = holoscan::radar::detail::build_tdm_correction_table(
-      waveform, num_tx, num_doppler);
+      waveform, num_tx, num_doppler, slot_by_tx);
   const int64_t slice = num_tx * num_rx * num_doppler * num_range;
   std::vector<std::complex<T>> host(static_cast<size_t>(batch * slice));
   for (int64_t b = 0; b < batch; ++b) {
@@ -604,6 +607,62 @@ TEST(MIMOCoherentCompensationOp, TdmCorrectionTableTxZeroIsIdentity) {
     EXPECT_NEAR(factor.real(), 1.0, 1e-12) << "doppler bin " << d;
     EXPECT_NEAR(factor.imag(), 0.0, 1e-12) << "doppler bin " << d;
   }
+}
+
+TEST(MIMOCoherentCompensationOp, TdmCorrectionTableUsesFiringSlot) {
+  // tx_order [1, 0]: TX 1 fires first (identity), TX 0 is slot 1.
+  const std::vector<int64_t> slot_by_tx{1, 0};
+  const auto waveform = make_test_waveform();
+  const auto table = holoscan::radar::detail::build_tdm_correction_table(
+      waveform, kNumTx, kDoppler, slot_by_tx);
+  const auto identity = holoscan::radar::detail::build_tdm_correction_table(
+      waveform, kNumTx, kDoppler);
+  for (int64_t d = 0; d < kDoppler; ++d) {
+    const auto& first = table[static_cast<size_t>(1 * kDoppler + d)];
+    EXPECT_NEAR(first.real(), 1.0, 1e-12) << "first-firing TX at d=" << d;
+    EXPECT_NEAR(first.imag(), 0.0, 1e-12) << "first-firing TX at d=" << d;
+    const auto& swapped = table[static_cast<size_t>(d)];
+    const auto& expect = identity[static_cast<size_t>(1 * kDoppler + d)];
+    EXPECT_NEAR(swapped.real(), expect.real(), 1e-12) << "d=" << d;
+    EXPECT_NEAR(swapped.imag(), expect.imag(), 1e-12) << "d=" << d;
+  }
+}
+
+TEST(MIMOCoherentCompensationOp, PermutedTxOrderAlignsAfterCompensation) {
+  const auto waveform = make_test_waveform();
+  TXSchedule schedule;
+  schedule.num_tx = kNumTx;
+  schedule.tx_order = {1, 0};
+  const auto slots = holoscan::radar::detail::tdm_firing_slots(
+      schedule, kNumTx);
+  ASSERT_EQ(slots, (std::vector<int64_t>{1, 0}));
+  const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
+  MIMOCoherentCompensationParams params = tdm_params(waveform);
+  params.tx_schedule = schedule;
+  const auto out = run_tdm_once<float>(
+      to_device_tensor(
+          build_misaligned_rd_host<float>(waveform, kNumTx, kNumRx,
+                                          kDoppler, kRange, 1, slots),
+          shape, complex_dtype<float>()),
+      params);
+  expect_tx_lanes_aligned<float>(out, kNumTx, kNumRx, kDoppler, kRange);
+}
+
+TEST(MIMOCoherentCompensationOp, RejectsTxScheduleNumTxMismatch) {
+  const auto waveform = make_test_waveform();
+  TXSchedule schedule;
+  schedule.num_tx = 3;
+  schedule.tx_order = {0, 1, 2};
+  MIMOCoherentCompensationParams params = tdm_params(waveform);
+  params.tx_schedule = schedule;
+  const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
+  const auto host = build_misaligned_rd_host<float>(
+      waveform, kNumTx, kNumRx, kDoppler, kRange);
+  const GraphRunResult result = run_tdm_result<float>(
+      {to_device_tensor(host, shape, complex_dtype<float>())}, params);
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(MIMOCoherentCompensationOp, ComplexFloatDtypePreserved) {

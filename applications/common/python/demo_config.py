@@ -176,6 +176,8 @@ def parse_mimo_coherent_compensation(block: dict[str, Any]) -> dict[str, Any]:
         kwargs["waveform"] = parse_waveform(block["waveform"])
     if "ddm_code" in block:
         kwargs["ddm_code"] = parse_ddm_code(block["ddm_code"])
+    if "tx_schedule" in block:
+        kwargs["tx_schedule"] = parse_tx_schedule(block["tx_schedule"])
     return kwargs
 
 

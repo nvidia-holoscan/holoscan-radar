@@ -379,6 +379,9 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   // Prefer the app-resolved descriptor (may expand generate_phase_codes).
   cfg.compensation_params.ddm_code = cfg.ddm_code;
   cfg.compensation_params.multiplexing_scheme = cfg.scheme;
+  if (cfg.scheme == radar::MultiplexingScheme::kTdm) {
+    cfg.compensation_params.tx_schedule = cfg.tx_schedule;
+  }
   if (!cfg.compensation_params.waveform.is_valid()) {
     cfg.compensation_params.waveform = waveform;
   }

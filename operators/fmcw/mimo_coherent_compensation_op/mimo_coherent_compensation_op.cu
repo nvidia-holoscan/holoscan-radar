@@ -52,13 +52,14 @@ struct CompensationStagePlan {
   std::vector<int64_t> out_shape;
   std::optional<detail::TdmRdMapsLayout> tdm;
   std::optional<detail::DdmRdMapsLayout> ddm;
+  std::vector<int64_t> tdm_slot_by_tx;
   detail::DdmCodeMode ddm_mode{detail::DdmCodeMode::kLinear};
   int64_t num_doppler_per_tx{0};
 };
 
 // Merge the Exact [live] waveform onto pinned Params. Map the empty
 // descriptor sentinel by rejecting it (waveform is required on every
-// path). multiplexing_scheme and ddm_code are Params-only / static.
+// path). multiplexing_scheme, ddm_code, and tx_schedule are Params-only.
 expected<detail::CompensationStageConfig, Error> resolve_params(
     Input<wire::FMCWWaveformT>& waveform_in,
     const MIMOCoherentCompensationParams& pinned) {
@@ -68,27 +69,32 @@ expected<detail::CompensationStageConfig, Error> resolve_params(
           waveform_in, pinned.waveform,
           [](const wire::FMCWWaveformT& value) { return from_wire(value); }));
   if (!waveform.is_valid()) {
-    return fail_invalid(
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
         std::string(kOpName) +
-        ": waveform must be a valid FMCWWaveformDescriptor "
-        "(build-time or [live] override)");
+            ": waveform must be a valid FMCWWaveformDescriptor "
+            "(build-time or [live] override)"});
   }
 
   const MultiplexingScheme scheme = pinned.multiplexing_scheme;
   if (scheme == MultiplexingScheme::kUnspecified) {
-    return fail_invalid(std::string(kOpName) +
-                        ": multiplexing_scheme is required (tdm or ddm)");
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) +
+            ": multiplexing_scheme is required (tdm or ddm)"});
   }
   if (scheme != MultiplexingScheme::kTdm &&
       scheme != MultiplexingScheme::kDdm) {
-    return fail_invalid(std::string(kOpName) +
-                        ": unknown multiplexing_scheme");
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) + ": unknown multiplexing_scheme"});
   }
 
   return detail::CompensationStageConfig{
       .multiplexing_scheme = scheme,
       .waveform = std::move(waveform),
-      .ddm_code = pinned.ddm_code};
+      .ddm_code = pinned.ddm_code,
+      .tx_schedule = pinned.tx_schedule};
 }
 
 // Bind the stage config to this input: parse TDM/DDM layout, size the
@@ -99,11 +105,12 @@ expected<CompensationStagePlan, Error> build_compensation_stage_plan(
   if (extents.max_samples_per_chirp.has_value() &&
       stage.waveform.reference_samples().size() >
           static_cast<std::size_t>(*extents.max_samples_per_chirp)) {
-    return fail_invalid(
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
         std::string(kOpName) + ": waveform reference_samples length " +
-        std::to_string(stage.waveform.reference_samples().size()) +
-        " exceeds max_samples_per_chirp (" +
-        std::to_string(*extents.max_samples_per_chirp) + ")");
+            std::to_string(stage.waveform.reference_samples().size()) +
+            " exceeds max_samples_per_chirp (" +
+            std::to_string(*extents.max_samples_per_chirp) + ")"});
   }
 
   CompensationStagePlan plan;
@@ -113,6 +120,8 @@ expected<CompensationStagePlan, Error> build_compensation_stage_plan(
     if (plan.stage.multiplexing_scheme == MultiplexingScheme::kTdm) {
       plan.tdm = detail::parse_tdm_rd_maps_layout(input, "rd_maps");
       plan.out_shape = detail::tdm_output_rd_shape(*plan.tdm);
+      plan.tdm_slot_by_tx = detail::tdm_firing_slots(
+          plan.stage.tx_schedule, plan.tdm->num_tx);
       return plan;
     }
 
@@ -121,20 +130,24 @@ expected<CompensationStagePlan, Error> build_compensation_stage_plan(
     plan.ddm_mode = detail::ddm_classify_codes(code);
     if (plan.ddm_mode == detail::DdmCodeMode::kNonLinear) {
       if (code.guard_bands != 0) {
-        return fail_invalid(
+        return make_unexpected(Error{
+            ErrorCode::kInvalidArgument,
             std::string(kOpName) +
-            ": non-linear DDM phase_codes require guard_bands = 0 (got " +
-            std::to_string(code.guard_bands) + ")");
+                ": non-linear DDM phase_codes require guard_bands = 0 "
+                "(got " +
+                std::to_string(code.guard_bands) + ")"});
       }
       const int64_t num_chirps =
           static_cast<int64_t>(code.phase_codes.size()) / code.num_tx;
       if (num_chirps != plan.ddm->num_doppler) {
-        return fail_invalid(
+        return make_unexpected(Error{
+            ErrorCode::kInvalidArgument,
             std::string(kOpName) +
-            ": non-linear DDM phase_codes imply num_chirps = " +
-            std::to_string(num_chirps) + " but input num_doppler = " +
-            std::to_string(plan.ddm->num_doppler) +
-            "; these must match for the correlate path");
+                ": non-linear DDM phase_codes imply num_chirps = " +
+                std::to_string(num_chirps) +
+                " but input num_doppler = " +
+                std::to_string(plan.ddm->num_doppler) +
+                "; these must match for the correlate path"});
       }
       plan.out_shape =
           detail::ddm_correlate_output_shape(*plan.ddm, code.num_tx);
@@ -148,7 +161,8 @@ expected<CompensationStagePlan, Error> build_compensation_stage_plan(
           *plan.ddm, code.num_tx, plan.num_doppler_per_tx);
     }
   } catch (const std::invalid_argument& e) {
-    return fail_invalid(e.what());
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, e.what()});
   }
   return plan;
 }
@@ -215,15 +229,16 @@ template <typename T>
 expected<void, Error> MIMOCoherentCompensationOp<T>::run_tdm_compute(
     ExecutionContext& context, const detail::TdmRdMapsLayout& layout,
     const FMCWWaveformDescriptor& waveform,
+    const std::vector<int64_t>& slot_by_tx,
     const std::vector<int64_t>& out_shape, const Tensor& input,
     cudaStream_t stream) {
   const std::string cache_key = detail::tdm_correction_cache_key(
-      waveform, layout.num_tx, layout.num_doppler);
+      waveform, layout.num_tx, layout.num_doppler, slot_by_tx);
   const CachedTdmCorrection& cached = correction_cache_.get_or_build(
       cache_key, "TDM correction table", [&] {
         CachedTdmCorrection entry;
         const auto host = detail::build_tdm_correction_table(
-            waveform, layout.num_tx, layout.num_doppler);
+            waveform, layout.num_tx, layout.num_doppler, slot_by_tx);
         const auto typed = cast_correction<T>(host);
         entry.device_table = make_device_tensor(
             {layout.num_tx, layout.num_doppler}, complex_dtype<T>());
@@ -399,7 +414,8 @@ expected<void, Error> MIMOCoherentCompensationOp<T>::compute(
   // Required rd_maps_out: TDM multiply, DDM gather, or DDM-NL correlate.
   if (plan.stage.multiplexing_scheme == MultiplexingScheme::kTdm) {
     HOLOSCAN_TRY(run_tdm_compute(context, *plan.tdm, plan.stage.waveform,
-                                 plan.out_shape, input, stream));
+                                 plan.tdm_slot_by_tx, plan.out_shape, input,
+                                 stream));
   } else if (plan.ddm_mode == detail::DdmCodeMode::kNonLinear) {
     HOLOSCAN_TRY(run_ddm_correlate(context, *plan.ddm, plan.stage.ddm_code,
                                    plan.out_shape, input, stream));

@@ -25,6 +25,7 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/sdk/config_cache.hpp"
 #include "radar_schemas/fmcw_waveform_bridge.hpp"
 
@@ -38,16 +39,12 @@ namespace holoscan::radar {
 //          num_range_bins).
 // TDM out: rd_maps_out — same shape; phase-aligned (tx, rx) block.
 //          [EA HSDK5 ONLY] unique in/out port names required.
-// TDM scope: the per-Doppler-bin correction uses a fixed PRI/M inter-TX offset
-//          and indexes it by TX id — i.e. it assumes the **default identity
-//          round-robin** `tx_order` (TX id == firing slot). A non-identity
-//          `tx_order` permutation (still uniform-repeating, so accepted by
-//          `MIMODeinterleaveOp`) is NOT compensated correctly: each lane would
-//          need the correction for its actual firing slot, and this operator
-//          does not receive `tx_order`. Known limitation — see
-//          `OPEN_ITEMS.md` item 1.
-//          Staggered / per-TX-timing schedules are separately out of scope
-//          (STATUS.md → Roadmap; settled as L12).
+// TDM scope: the per-Doppler-bin correction uses a fixed PRI/M inter-TX
+//          offset indexed by firing slot. Pass the same TXSchedule as
+//          MIMODeinterleaveOp (`tx_schedule`, static) so a uniform
+//          `tx_order` permutation is compensated correctly. Empty default
+//          is identity round-robin (TX id == firing slot). Staggered /
+//          per-TX-timing schedules stay out of scope (STATUS.md L12).
 //
 // DDM in:  rd_maps — complex64/complex128, (..., N_rx, num_doppler,
 //          num_range_bins); the M TX sit in distinct Doppler sub-bands.
@@ -66,6 +63,7 @@ struct MIMOCoherentCompensationParams {
   MultiplexingScheme multiplexing_scheme{MultiplexingScheme::kUnspecified};
   FMCWWaveformDescriptor waveform{};
   DDMCodeDescriptor ddm_code{};
+  TXSchedule tx_schedule{};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -84,7 +82,13 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&MIMOCoherentCompensationParams::ddm_code>("ddm_code")
         .description(
             "Doppler-band / phase-code layout for DDM mode. Unused for "
-            "TDM. Static."));
+            "TDM. Static."),
+    holoscan::field<&MIMOCoherentCompensationParams::tx_schedule>(
+        "tx_schedule")
+        .description(
+            "TDM firing cycle (same TXSchedule as MIMODeinterleaveOp). "
+            "Indexes the inter-TX phase by firing slot. Empty = identity "
+            "round-robin. Unused for DDM. Static."));
 
 static_assert(
     holoscan::param_schema_availability<MIMOCoherentCompensationParams>() ==
@@ -135,6 +139,7 @@ class MIMOCoherentCompensationOp
   expected<void, Error> run_tdm_compute(
       ExecutionContext& context, const detail::TdmRdMapsLayout& layout,
       const FMCWWaveformDescriptor& waveform,
+      const std::vector<int64_t>& slot_by_tx,
       const std::vector<int64_t>& out_shape, const Tensor& input,
       cudaStream_t stream);
 

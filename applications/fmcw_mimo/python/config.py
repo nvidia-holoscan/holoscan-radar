@@ -230,6 +230,8 @@ def load_config(path: Path) -> AppConfig:
     # Prefer the app-resolved descriptor (may expand generate_phase_codes).
     if cfg.scheme == MultiplexingScheme.DDM:
         cfg.mimo_coherent_compensation["ddm_code"] = cfg.ddm_code
+    if cfg.scheme == MultiplexingScheme.TDM:
+        cfg.mimo_coherent_compensation["tx_schedule"] = cfg.tx_schedule
     # READ-ONLY MIRROR of the cfar_detector operator block: peak_only stays a
     # native CFAR param (from_config); the app reads it only to gate the graph.
     cfg.peak_only = bool((root.get("cfar_detector") or {}).get("peak_only", False))

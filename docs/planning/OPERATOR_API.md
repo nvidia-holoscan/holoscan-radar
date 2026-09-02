@@ -737,7 +737,7 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 
 **Parameters:**
 
-- `tx_schedule` — TXSchedule. The TDM firing pattern (carries `num_tx`); determines how the interleaved `M·L` slow-time axis splits into `(M_tx, L)`. The split is not inferable from the input alone — the `M·L` axis carries no marker of the boundaries — so this is required; `chirps_per_tx` (L) is then `(M·L)/num_tx`. Static (a fixed waveform / hardware property). TDM only. Default: none (required). The first-wave TDM chain (the downstream per-TX phase compensation) assumes **uniform** per-TX spacing, so a non-uniform / non-round-robin schedule is rejected with an error. Staggered / per-TX-timing TDM (varying TX dwell or count, with a matching compensation model) is a **deferred future enhancement**, out of the v1 scope — see STATUS.md → Roadmap (settled as L12).
+- `tx_schedule` — TXSchedule. The TDM firing pattern (carries `num_tx`); determines how the interleaved `M·L` slow-time axis splits into `(M_tx, L)`. The split is not inferable from the input alone — the `M·L` axis carries no marker of the boundaries — so this is required; `chirps_per_tx` (L) is then `(M·L)/num_tx`. Static (a fixed waveform / hardware property). TDM only. Default: none (required). The first-wave TDM chain assumes **uniform** per-TX spacing, so a non-uniform / staggered schedule is rejected with an error. A uniform-repeating `tx_order` permutation is accepted; pass the same `tx_schedule` to `MIMOCoherentCompensationOp` so the inter-TX phase uses firing slot, not TX id. Staggered / per-TX-timing TDM is a **deferred future enhancement** — see STATUS.md → Roadmap (settled as L12).
 
 #### MIMOCoherentCompensationOp
 
@@ -749,6 +749,7 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 - `multiplexing_scheme` — enum {TDM, DDM}. Selects the compensation path — TDM: per-Doppler-bin inter-TX phase correction; DDM: Doppler-band demux + per-chirp code removal + alignment — and how the `rd_maps` input rank is interpreted. Static (selects the kernel; instantiate separate ops to switch). Default: none (required).
 - `waveform` **[live]** — FMCWWaveformDescriptor. Per-TX PRI and carrier frequency for the Doppler-dependent phase math (the inter-TX correction under TDM; band alignment under DDM). Default: none (required). HSDK 5 physical live payload: the shared generated waveform descriptor-Tensor schema; logical Params type remains `FMCWWaveformDescriptor`.
 - `ddm_code` — DDMCodeDescriptor. The Doppler-band / phase-code layout to demux (carries `num_tx`). Static. Default: none (required for DDM; unused for TDM).
+- `tx_schedule` — TXSchedule. TDM firing cycle used to index the inter-TX phase correction by **firing slot** (the same descriptor as `MIMODeinterleaveOp`). Static. Default: empty (identity round-robin: TX id == firing slot). Unused for DDM. When set, `num_tx` must match the input `M_tx` axis; uniformity rules match deinterleave (one repeating cycle; `chirp_tx_index` overrides `tx_order` when present).
 
 *(No array/element geometry is needed here — this is a phase/demux operation, not a spatial one; `element_positions` enter only downstream at VirtualArrayAssemblyOp. `num_tx` is not a separate parameter — TDM reads it from the input's `M_tx` axis, DDM from `ddm_code`; anything sized by `num_tx` (e.g. the TDM per-Doppler-bin correction table) is built lazily on the first tick and cached, as with FFT plans, so it needs no init-time `num_tx`. TDM assumes uniform per-TX spacing; a non-uniform schedule is rejected upstream (see MIMODeinterleaveOp). TDM and DDM reduce unambiguous velocity by `M`; this operator does not unfold that aliasing — downstream sees the per-TX Doppler axis from `FMCWDopplerProcessorOp`.)*
 
@@ -842,10 +843,10 @@ Notes: the `[0, PRF)` Doppler span is shared across the M bands, so unambiguous 
 
 ### TXSchedule
 
-Describes the TDM slow-time firing pattern for `MIMODeinterleaveOp` — how the interleaved slow-time axis (`M·L` chirps) splits into an explicit TX axis.
+Describes the TDM slow-time firing pattern for `MIMODeinterleaveOp` — how the interleaved slow-time axis (`M·L` chirps) splits into an explicit TX axis — and, for `MIMOCoherentCompensationOp` (TDM), which firing slot each TX id occupied so the inter-TX phase uses slot, not axis index.
 
 - `num_tx` — int. M, the number of time-multiplexed TX.
-- `tx_order` (optional) — int, `(num_tx,)`. TX firing order within one repetition cycle; the schedule repeats it `L` times. Default: round-robin `[0, 1, …, M−1]` (the common case). De-interleave gathers per this order.
+- `tx_order` (optional) — int, `(num_tx,)`. TX firing order within one repetition cycle; the schedule repeats it `L` times. Default: round-robin `[0, 1, …, M−1]` (the common case). De-interleave gathers per this order; compensation indexes the TDM phase by the inverse (firing slot of each TX id).
 - `chirp_tx_index` (optional) — int, `(M·L,)`. Explicit per-chirp TX index for irregular / non-repeating schedules; overrides `tx_order` when present.
 
 Notes: `chirps_per_tx` (L) is inferred as `(M·L) / M` from the input's slow-time length; the per-TX effective PRI is `M ×` the raw inter-chirp interval (carried in `FMCWWaveformDescriptor.chirp_repetition_interval`).

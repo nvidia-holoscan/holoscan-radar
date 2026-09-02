@@ -133,9 +133,32 @@ std::vector<int64_t> tdm_output_rd_shape(const TdmRdMapsLayout& in) {
   return shape;
 }
 
+std::vector<int64_t> tdm_firing_slots(const TXSchedule& schedule,
+                                      int64_t num_tx) {
+  if (num_tx <= 0) {
+    throw std::invalid_argument(
+        "MIMOCoherentCompensationOp: num_tx must be positive");
+  }
+  if (schedule.num_tx == 0 && schedule.tx_order.empty() &&
+      schedule.chirp_tx_index.empty()) {
+    std::vector<int64_t> slots(static_cast<size_t>(num_tx));
+    for (int64_t m = 0; m < num_tx; ++m) {
+      slots[static_cast<size_t>(m)] = m;
+    }
+    return slots;
+  }
+  if (schedule.num_tx != num_tx) {
+    throw std::invalid_argument(
+        "MIMOCoherentCompensationOp: tx_schedule.num_tx (" +
+        std::to_string(schedule.num_tx) + ") must match input M_tx (" +
+        std::to_string(num_tx) + ")");
+  }
+  return schedule.firing_slot_by_tx();
+}
+
 std::vector<std::complex<double>> build_tdm_correction_table(
     const FMCWWaveformDescriptor& waveform, int64_t num_tx,
-    int64_t num_doppler) {
+    int64_t num_doppler, const std::vector<int64_t>& slot_by_tx) {
   if (!waveform.is_valid()) {
     throw std::invalid_argument(
         "MIMOCoherentCompensationOp: waveform must be valid");
@@ -143,6 +166,16 @@ std::vector<std::complex<double>> build_tdm_correction_table(
   if (num_tx <= 0 || num_doppler <= 0) {
     throw std::invalid_argument(
         "MIMOCoherentCompensationOp: num_tx and num_doppler must be positive");
+  }
+  std::vector<int64_t> slots = slot_by_tx;
+  if (slots.empty()) {
+    slots.resize(static_cast<size_t>(num_tx));
+    for (int64_t m = 0; m < num_tx; ++m) {
+      slots[static_cast<size_t>(m)] = m;
+    }
+  } else if (static_cast<int64_t>(slots.size()) != num_tx) {
+    throw std::invalid_argument(
+        "MIMOCoherentCompensationOp: slot_by_tx length must equal num_tx");
   }
   const double pri = waveform.chirp_repetition_interval();
   const double prf = 1.0 / pri;
@@ -153,8 +186,13 @@ std::vector<std::complex<double>> build_tdm_correction_table(
   for (int64_t d = 0; d < num_doppler; ++d) {
     const double f_d = doppler_frequency_hz(d, num_doppler, prf);
     for (int64_t tx = 0; tx < num_tx; ++tx) {
+      const int64_t slot = slots[static_cast<size_t>(tx)];
+      if (slot < 0 || slot >= num_tx) {
+        throw std::invalid_argument(
+            "MIMOCoherentCompensationOp: firing slot out of range [0, num_tx)");
+      }
       const double phase =
-          -2.0 * kPi * f_d * static_cast<double>(tx) * t_inter_chirp;
+          -2.0 * kPi * f_d * static_cast<double>(slot) * t_inter_chirp;
       table[static_cast<size_t>(tx * num_doppler + d)] =
           std::complex<double>(std::cos(phase), std::sin(phase));
     }
@@ -163,10 +201,14 @@ std::vector<std::complex<double>> build_tdm_correction_table(
 }
 
 std::string tdm_correction_cache_key(const FMCWWaveformDescriptor& waveform,
-                                     int64_t num_tx, int64_t num_doppler) {
+                                     int64_t num_tx, int64_t num_doppler,
+                                     const std::vector<int64_t>& slot_by_tx) {
   std::ostringstream os;
   os << num_tx << "|" << num_doppler << "|" << waveform.carrier_frequency()
-     << "|" << waveform.chirp_repetition_interval();
+     << "|" << waveform.chirp_repetition_interval() << "|slots";
+  for (int64_t slot : slot_by_tx) {
+    os << ":" << slot;
+  }
   return os.str();
 }
 

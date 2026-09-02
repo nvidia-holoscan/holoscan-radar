@@ -9,10 +9,11 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.2.0",
+        "version": "0.3.0",
         "changelog": {
             "0.1.0": "Initial Release (TDM slice)",
-            "0.2.0": "Add DDM slice (standard linear-phase Doppler-band demux)"
+            "0.2.0": "Add DDM slice (standard linear-phase Doppler-band demux)",
+            "0.3.0": "TDM indexes inter-TX phase by firing slot via tx_schedule"
         },
         "holoscan_sdk": {
             "minimum_required_version": "4.3.0",

@@ -17,6 +17,7 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/python/py_operator_utils.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 
@@ -43,6 +44,7 @@ class PyMIMOCoherentCompensationOp : public MIMOCoherentCompensationOp<T> {
           FMCWWaveformDescriptor{},
       const DDMCodeDescriptor& ddm_code =
           DDMCodeDescriptor{},
+      const TXSchedule& tx_schedule = TXSchedule{},
       const std::string& name =
           "mimo_coherent_compensation")
       : MIMOCoherentCompensationOp<T>([&] {
@@ -59,6 +61,7 @@ class PyMIMOCoherentCompensationOp : public MIMOCoherentCompensationOp<T> {
     this->add_arg(Arg("multiplexing_scheme") = multiplexing_scheme);
     this->add_arg(Arg("waveform") = waveform);
     this->add_arg(Arg("ddm_code") = ddm_code);
+    this->add_arg(Arg("tx_schedule") = tx_schedule);
     this->setup(*this->spec_);
     python::add_conditions_and_resources(this, args);
   }
@@ -81,6 +84,7 @@ void bind_mimo_coherent_compensation(py::module_& m, const char* class_name) {
       "multiplexing_scheme : MultiplexingScheme, optional\n"
       "waveform : FMCWWaveformDescriptor, optional\n"
       "ddm_code : DDMCodeDescriptor, optional\n"
+      "tx_schedule : TXSchedule, optional\n"
       "name : str, optional\n")
       .def(py::init<Fragment*, const py::args&,
                     std::int64_t, std::int64_t,
@@ -88,6 +92,7 @@ void bind_mimo_coherent_compensation(py::module_& m, const char* class_name) {
                     MultiplexingScheme,
                     const FMCWWaveformDescriptor&,
                     const DDMCodeDescriptor&,
+                    const TXSchedule&,
                     const std::string&>(),
            py::arg("fragment"),
            py::arg("max_tx") = 8,
@@ -99,6 +104,7 @@ void bind_mimo_coherent_compensation(py::module_& m, const char* class_name) {
            py::arg("waveform") =
                FMCWWaveformDescriptor{},
            py::arg("ddm_code") = DDMCodeDescriptor{},
+           py::arg("tx_schedule") = TXSchedule{},
            py::arg("name") =
                "mimo_coherent_compensation")
       .def("setup", &Op::setup, py::arg("spec"));

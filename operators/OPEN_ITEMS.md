@@ -154,7 +154,7 @@ is pinned per operator:
 | Operator | Open items |
 | --- | --- |
 | `MIMODeinterleaveOp` | [`mimo_deinterleave_op/OPEN_ITEMS.md`](fmcw/mimo_deinterleave_op/OPEN_ITEMS.md) |
-| `MIMOCoherentCompensationOp` | [`mimo_coherent_compensation_op/OPEN_ITEMS.md`](fmcw/mimo_coherent_compensation_op/OPEN_ITEMS.md) |
+| `MIMOCoherentCompensationOp` | none (TDM firing-slot map is `tx_schedule`; ÷M aliased velocity is the module pin below) |
 | `VirtualArrayAssemblyOp` | [`virtual_array_assembly_op/OPEN_ITEMS.md`](fmcw/virtual_array_assembly_op/OPEN_ITEMS.md) |
 
 **Module-level pins (not re-litigated per operator):**

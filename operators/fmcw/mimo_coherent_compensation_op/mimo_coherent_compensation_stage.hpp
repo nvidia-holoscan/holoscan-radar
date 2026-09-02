@@ -15,17 +15,20 @@
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/tx_schedule.hpp"
 
 namespace holoscan::radar::detail {
 
-// Kernel knobs for one tick. multiplexing_scheme and ddm_code are
-// Params-only (static). waveform is the live-merged descriptor: empty
+// Kernel knobs for one tick. multiplexing_scheme, ddm_code, and tx_schedule
+// are Params-only (static). waveform is the live-merged descriptor: empty
 // Params / override is rejected in resolve_params, so this is always
-// valid after that call. TDM uses PRI/carrier; DDM validates and ignores.
+// valid after that call. TDM uses PRI/carrier and optional tx_schedule;
+// DDM validates waveform and ignores it (and ignores tx_schedule).
 struct CompensationStageConfig {
   MultiplexingScheme multiplexing_scheme{MultiplexingScheme::kUnspecified};
   FMCWWaveformDescriptor waveform{};
   DDMCodeDescriptor ddm_code{};
+  TXSchedule tx_schedule{};
 };
 
 struct TdmRdMapsLayout {
@@ -43,14 +46,21 @@ TdmRdMapsLayout parse_tdm_rd_maps_layout(const holoscan::Tensor& tensor,
 std::vector<int64_t> tdm_output_rd_shape(const TdmRdMapsLayout& in);
 
 // Per-(tx, doppler) complex correction factors for uniform TDM inter-TX
-// alignment. Assumes the Doppler axis matches FMCWDopplerProcessorOp with
-// center_zero_doppler=true (the operator default).
+// alignment. `slot_by_tx[tx]` is the firing slot of TX id `tx` in the TDM
+// cycle (empty → identity, slot == TX id). Assumes the Doppler axis matches
+// FMCWDopplerProcessorOp with center_zero_doppler=true (the operator default).
 std::vector<std::complex<double>> build_tdm_correction_table(
     const FMCWWaveformDescriptor& waveform, int64_t num_tx,
-    int64_t num_doppler);
+    int64_t num_doppler, const std::vector<int64_t>& slot_by_tx = {});
 
 std::string tdm_correction_cache_key(const FMCWWaveformDescriptor& waveform,
-                                     int64_t num_tx, int64_t num_doppler);
+                                     int64_t num_tx, int64_t num_doppler,
+                                     const std::vector<int64_t>& slot_by_tx);
+
+// Resolve firing slots for this tick's M_tx. Empty default tx_schedule →
+// identity. A nonempty schedule must have num_tx == M_tx.
+std::vector<int64_t> tdm_firing_slots(const TXSchedule& schedule,
+                                      int64_t num_tx);
 
 template <typename T>
 void run_tdm_compensation_stage(

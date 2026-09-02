@@ -248,8 +248,9 @@ inline void load_deinterleave_params(const YAML::Node& node,
   }
 }
 
-// Loads multiplexing_scheme / waveform / ddm_code from YAML. Apps that expand
-// generate_phase_codes overwrite ddm_code after this call.
+// Loads multiplexing_scheme / waveform / ddm_code / tx_schedule from YAML.
+// Apps that expand generate_phase_codes overwrite ddm_code after this call.
+// TDM apps typically overwrite tx_schedule from the deinterleave block.
 inline void load_coherent_compensation_params(
     const YAML::Node& node, MIMOCoherentCompensationParams* p) {
   if (!node || node.IsNull()) {
@@ -264,6 +265,9 @@ inline void load_coherent_compensation_params(
   }
   if (node["ddm_code"]) {
     p->ddm_code = node["ddm_code"].as<DDMCodeDescriptor>();
+  }
+  if (node["tx_schedule"]) {
+    p->tx_schedule = node["tx_schedule"].as<TXSchedule>();
   }
 }
 

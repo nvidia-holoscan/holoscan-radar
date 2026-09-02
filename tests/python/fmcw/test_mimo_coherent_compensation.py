@@ -126,6 +126,21 @@ def test_TdmCorrectionTableLayoutMatchesFormula():
                 assert abs(got - 1.0) > 1e-6, (tx, d, got)
 
 
+def test_TdmCorrectionTableUsesFiringSlot():
+    waveform = make_test_waveform()
+    slot_by_tx = [1, 0]
+    table = build_tdm_correction_table(waveform, K_NUM_TX, K_DOPPLER, slot_by_tx)
+    identity = build_tdm_correction_table(waveform, K_NUM_TX, K_DOPPLER)
+    for d in range(K_DOPPLER):
+        first = table[1 * K_DOPPLER + d]
+        assert first.real == pytest.approx(1.0, abs=1e-12)
+        assert first.imag == pytest.approx(0.0, abs=1e-12)
+        swapped = table[d]
+        expect = identity[1 * K_DOPPLER + d]
+        assert swapped.real == pytest.approx(expect.real, abs=1e-12)
+        assert swapped.imag == pytest.approx(expect.imag, abs=1e-12)
+
+
 def test_TdmRemovesInterTxPhaseAcrossDopplerBins():
     waveform = make_test_waveform()
     host = build_misaligned_rd_host(waveform, K_NUM_TX, K_NUM_RX, K_DOPPLER, K_RANGE)
