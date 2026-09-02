@@ -5,8 +5,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <type_traits>
-#include <vector>
 
 #include <holoscan/core/domain/tensor.hpp>
 #include <holoscan/core/errors.hpp>
@@ -18,7 +18,6 @@
 #include <holoscan/core/parameter_schema.hpp>
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
-#include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
@@ -29,12 +28,13 @@ namespace holoscan::radar {
 // axis. Contract reference: ports, shapes, dtypes, parameters.
 //
 // In:  adc_cube — complex64/complex128 or float32/float64 (real IF),
-//               (..., N_rx, M·L, samples_per_chirp).
+//               (N_rx, M·L, samples_per_chirp). No opaque leading batch.
 // Out: adc_cube_out — same dtype,
-//               (..., M_tx, N_rx, L, samples_per_chirp).
+//               (M_tx, N_rx, L, samples_per_chirp).
 //               [EA HSDK5 ONLY] unique in/out port names required.
 //
 // Precision is fixed at compile time by the template instantiation.
+// Fat output pool sizing requires MaxTensorExtents at graph.op() (ctor).
 
 struct MIMODeinterleaveParams {
   TXSchedule tx_schedule{};
@@ -61,8 +61,8 @@ class MIMODeinterleaveOp
                 "MIMODeinterleaveOp supports float and double precision");
 
  public:
+  // Required: sizes the adc_cube_out Tensor pool at setup().
   explicit MIMODeinterleaveOp(const MaxTensorExtents& extents);
-  ~MIMODeinterleaveOp() override;
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -77,17 +77,20 @@ class MIMODeinterleaveOp
   Output<Tensor> adc_cube_out{"adc_cube_out"};
 
  private:
-  void ensure_device_gather_map(int64_t slow_time,
-                                const TXSchedule& schedule,
-                                cudaStream_t stream);
+  expected<void, Error> ensure_device_gather_map(int64_t slow_time,
+                                                const TXSchedule& schedule,
+                                                cudaStream_t stream);
 
+  // Keep the previous activation's input alive across ticks so async
+  // device reads cannot outlive the buffer.
   Tensor retained_input_;
 
+  // Gather-map cache: ctor-sized device table, rebuilt on a new
+  // (slow_time, schedule) pair. Not ConfigCache — there are no lives.
   int64_t cached_slow_time_{-1};
   TXSchedule cached_schedule_{};
-  std::vector<int64_t> cached_gather_host_;
-  int64_t* d_gather_map_{nullptr};
-  size_t d_gather_capacity_{0};
+  std::shared_ptr<Tensor> gather_map_;
+  std::size_t gather_map_capacity_{0};
 
   MaxTensorExtents extents_;
   std::uint32_t max_rank_{4U};

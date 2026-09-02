@@ -3,20 +3,17 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <string>
 #include <vector>
 
 #include <holoscan/core/domain/tensor.hpp>
 
-#include "radar_common/descriptors/tx_schedule.hpp"
-
 namespace holoscan::radar::detail {
 
+// Contract input is exactly rank 3. Extra leading axes are not a module
+// batch (MAX_TENSOR_EXTENTS.md Part B).
 struct AdcCubeLayout {
-  std::vector<int64_t> leading;
-  int64_t batch{1};
   int64_t num_rx{0};
   int64_t slow_time{0};
   int64_t samples{0};

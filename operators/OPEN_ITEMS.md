@@ -153,7 +153,7 @@ is pinned per operator:
 
 | Operator | Open items |
 | --- | --- |
-| `MIMODeinterleaveOp` | [`mimo_deinterleave_op/OPEN_ITEMS.md`](fmcw/mimo_deinterleave_op/OPEN_ITEMS.md) |
+| `MIMODeinterleaveOp` | none (uniformity / PRI / gather-axis pins live in the operator README; staggered TDM is STATUS.md L12 / Roadmap) |
 | `MIMOCoherentCompensationOp` | none (TDM firing-slot map is `tx_schedule`; ÷M aliased velocity is the module pin below) |
 | `VirtualArrayAssemblyOp` | [`virtual_array_assembly_op/OPEN_ITEMS.md`](fmcw/virtual_array_assembly_op/OPEN_ITEMS.md) |
 
@@ -171,7 +171,7 @@ is pinned per operator:
   PRI, band tricks) is out of scope — not a `MIMOCoherentCompensationOp` mode.
 - **Shared descriptors.** `DDMCodeDescriptor` and `TXSchedule` validation rules
   (mutually exclusive offset forms, uniform TDM schedule) live with the
-  consuming operator / descriptor code; see operator open items above.
+  consuming operator README / descriptor code.
 
 ## 4. Add automatic C++ formatting checks
 

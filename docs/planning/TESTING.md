@@ -163,6 +163,7 @@ Common check (all five): `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_e
 - An interleaved cube with TX-tagged content → output correctly split into `(M_tx, N_rx, L, samples)` for a round-robin `tx_schedule` and for a custom order.
 - A non-uniform schedule is rejected with an error (first-wave TDM assumes uniform spacing).
 - Dtype preserved.
+- Extra leading axes are rejected (input rank is exactly 3; no module batch).
 
 #### MIMOCoherentCompensationOp
 

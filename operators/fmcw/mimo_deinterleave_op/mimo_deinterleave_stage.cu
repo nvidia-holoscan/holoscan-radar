@@ -26,28 +26,20 @@ __global__ void deinterleave_row_copy_kernel(
     const Word* input, Word* output, int64_t num_rx, int64_t slow_time,
     int64_t samples, int64_t num_tx, int64_t chirps_per_tx,
     const int64_t* gather_map) {
-  const int64_t in_plane = slow_time * samples;
-  const int64_t out_plane = chirps_per_tx * samples;
-  const int64_t in_rx_stride = in_plane;
-  const int64_t out_rx_stride = out_plane;
-  const int64_t in_batch_stride = num_rx * in_rx_stride;
-  const int64_t out_batch_stride = num_tx * num_rx * out_rx_stride;
+  const int64_t in_rx_stride = slow_time * samples;
+  const int64_t out_rx_stride = chirps_per_tx * samples;
 
-  int64_t rem = static_cast<int64_t>(blockIdx.x);
-  const int64_t l = rem % chirps_per_tx;
-  rem /= chirps_per_tx;
-  const int64_t rx = rem % num_rx;
-  rem /= num_rx;
-  const int64_t tx = rem % num_tx;
-  rem /= num_tx;
-  const int64_t b = rem;
+  int64_t remaining = static_cast<int64_t>(blockIdx.x);
+  const int64_t l = remaining % chirps_per_tx;
+  remaining /= chirps_per_tx;
+  const int64_t rx = remaining % num_rx;
+  remaining /= num_rx;
+  const int64_t tx = remaining;
 
   const int64_t in_slow = gather_map[tx * chirps_per_tx + l];
-  const int64_t in_base =
-      b * in_batch_stride + rx * in_rx_stride + in_slow * samples;
-  const int64_t out_base = b * out_batch_stride +
-                           tx * num_rx * out_rx_stride + rx * out_rx_stride +
-                           l * samples;
+  const int64_t in_base = rx * in_rx_stride + in_slow * samples;
+  const int64_t out_base =
+      tx * num_rx * out_rx_stride + rx * out_rx_stride + l * samples;
   for (int64_t s = static_cast<int64_t>(threadIdx.x); s < samples;
        s += blockDim.x) {
     output[out_base + s] = input[in_base + s];
@@ -58,7 +50,7 @@ template <typename Word>
 void launch_typed(const void* input, void* output, const AdcCubeLayout& layout,
                   int64_t num_tx, int64_t chirps_per_tx,
                   const int64_t* d_gather_map, cudaStream_t stream) {
-  const int64_t rows = layout.batch * num_tx * layout.num_rx * chirps_per_tx;
+  const int64_t rows = num_tx * layout.num_rx * chirps_per_tx;
   const int grid = static_cast<int>(rows);
   deinterleave_row_copy_kernel<Word><<<grid, kBlock, 0, stream>>>(
       static_cast<const Word*>(input), static_cast<Word*>(output),
@@ -71,27 +63,19 @@ void launch_typed(const void* input, void* output, const AdcCubeLayout& layout,
 AdcCubeLayout parse_adc_cube_layout(const holoscan::Tensor& tensor,
                                     const char* port_name) {
   const auto& shape = tensor.shape();
-  if (shape.size() < 3) {
-    throw std::invalid_argument(std::string(port_name) +
-                                ": expected rank >= 3 "
-                                "(..., N_rx, slow_time, samples)");
+  if (shape.size() != 3) {
+    throw std::invalid_argument(
+        std::string(port_name) +
+        ": expected rank 3 (N_rx, slow_time, samples), got " +
+        std::to_string(shape.size()));
   }
   AdcCubeLayout layout;
-  layout.samples = shape.back();
-  layout.slow_time = shape[shape.size() - 2];
-  layout.num_rx = shape[shape.size() - 3];
+  layout.samples = shape[2];
+  layout.slow_time = shape[1];
+  layout.num_rx = shape[0];
   if (layout.num_rx <= 0 || layout.slow_time <= 0 || layout.samples <= 0) {
     throw std::invalid_argument(std::string(port_name) +
                                 ": trailing axes must be positive");
-  }
-  layout.leading.assign(shape.begin(), shape.end() - 3);
-  layout.batch = 1;
-  for (int64_t d : layout.leading) {
-    if (d <= 0) {
-      throw std::invalid_argument(std::string(port_name) +
-                                  ": leading batch axes must be positive");
-    }
-    layout.batch *= d;
   }
   return layout;
 }
@@ -99,12 +83,7 @@ AdcCubeLayout parse_adc_cube_layout(const holoscan::Tensor& tensor,
 std::vector<int64_t> deinterleaved_adc_shape(const AdcCubeLayout& in,
                                              int64_t num_tx,
                                              int64_t chirps_per_tx) {
-  std::vector<int64_t> shape = in.leading;
-  shape.push_back(num_tx);
-  shape.push_back(in.num_rx);
-  shape.push_back(chirps_per_tx);
-  shape.push_back(in.samples);
-  return shape;
+  return {num_tx, in.num_rx, chirps_per_tx, in.samples};
 }
 
 void run_deinterleave_stage(const void* input, void* output,

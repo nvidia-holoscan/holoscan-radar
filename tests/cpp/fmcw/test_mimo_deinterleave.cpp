@@ -332,8 +332,8 @@ TEST(MIMODeinterleaveOp, RealDoublePreserved) {
 }
 
 TEST(MIMODeinterleaveOp, RejectsOpaqueLeadingBatch) {
-  // Contract is (N_rx, slow_time, samples); an extra leading dim is opaque
-  // batch (Part B), not a named axis.
+  // Contract is rank 3 (N_rx, slow_time, samples); an extra leading dim is
+  // opaque batch (Part B), not a named axis. parse_adc_cube_layout fail-closes.
   const std::vector<int64_t> shape = {2, kNumRx, kSlowTime, kSamples};
   const TXSchedule schedule = round_robin_schedule();
   const auto pattern = pattern_for(schedule);
