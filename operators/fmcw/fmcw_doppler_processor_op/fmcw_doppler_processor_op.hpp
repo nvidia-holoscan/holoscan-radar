@@ -131,7 +131,7 @@ class FMCWDopplerProcessorOp
   LatchedOutput velocity_bins_out_;
 
   // Kernel-side caches (window coefficients, seen FFT lengths); allocated
-  // on first compute().
+  // in the ctor.
   std::shared_ptr<detail::DopplerStageState<T>> state_;
 
   MaxTensorExtents extents_;

@@ -20,7 +20,8 @@ FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp → rd_map
 `doppler_window` and `waveform` remain logical `WindowSpec` / `FMCWWaveformDescriptor` Params. Their HSDK 5 physical ports use the L18 generated `holoscan::radar::wire` descriptor-Tensor encoding because the SDK does not admit container-owning C++ types directly. The Tensor member is always present: rank-1 zero-length represents an absent optional array, while null is invalid. See [`SCHEMA_PAYLOADS.md`](../../../docs/planning/SCHEMA_PAYLOADS.md).
 
 Contract: [`OPERATOR_API.md` § `FMCWDopplerProcessorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/fmcw/README.md`](../README.md)
+group: [`operators/fmcw/README.md`](../README.md) ·
+open items: [`OPEN_ITEMS.md`](OPEN_ITEMS.md)
 
 ## Algorithm
 
@@ -62,15 +63,15 @@ There is no Params-only field (unlike range `propagation_speed`).
 
 ## SDK implementation notes
 
-- **Construction.** `FMCWDopplerProcessorOp(const MaxTensorExtents&)` requires `max_chirps` and `max_range_bins`. Optional `max_rx` / `max_channels` admit a leading `N_rx`; `max_tx` plus an RX/channel field admits `(M_tx, N_rx)`. Those fields size `rd_maps` (`max_rank` 2–4, `max_byte_span` of a complex cube `{max_tx, max_rx, max_chirps, max_range_bins}`) and `velocity_bins` (`max_rank` 1, real `{max_chirps}`). The Doppler extent is **`max_chirps`**, not `max_doppler_bins` (that field is unused). A `[live]` `nfft` larger than `max_chirps` therefore exceeds the pool span; callers must size `max_chirps` to the largest Doppler FFT they will run. A tick that exceeds the admitted leading rank or `max_tx * max_rx` is rejected (messages above). `max_rx`/`max_tx` must be positive when set.
+- **Construction.** `FMCWDopplerProcessorOp(const MaxTensorExtents&)` requires `max_chirps` and `max_range_bins`. Optional `max_rx` / `max_channels` admit a leading `N_rx`; `max_tx` plus an RX/channel field admits `(M_tx, N_rx)`. Those fields size `rd_maps` (`max_rank` 2–4, `max_byte_span` of a complex cube `{max_tx, max_rx, max_chirps, max_range_bins}`) and `velocity_bins` (`max_rank` 1, real `{max_chirps}`). The Doppler extent is **`max_chirps`**, not `max_doppler_bins` (that field is unused). A `[live]` `nfft` larger than `max_chirps` therefore exceeds the pool span; callers must size `max_chirps` to the largest Doppler FFT they will run. A tick that exceeds the admitted leading rank or `max_tx * max_rx` is rejected (messages above). `max_rx`/`max_tx` must be positive when set. `DopplerStageState` is allocated in the ctor.
 - **Triggering.** `contract()` is `OnEach{range_profiles}` plus an `Exact{}` + `SafeDefault{}` entry for every override, wired or not. An unwired override compiles to a `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT` warning and reads as `kNotConnected` on every tick, so wiring the port is the application's only obligation. This requires an SDK carrying CONTRACT-020 ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11). Wiring a port `contract()` does not declare is still `RUNTIME_OPERATOR_REPLAY_MISMATCH` (§1). Optional `velocity_bins` stays omitted so an unwired sink does not gate scheduling.
-- **Ports and queues.** `range_profiles` and the override inputs use `queue_depth(2)`. Data Tensor ports are `MemoryKind::kCudaDevice`. Fat / bins outs carry ctor-derived `TensorBounds` via `pooled_tensor_output`. `setup()` registers data-plane I/O first (`range_profiles`, then `rd_maps`, then latched `velocity_bins`), then every `[live]` Exact input in Params field order. Schema-backed lives (`doppler_window`, `waveform`) sit with the POD lives, not next to the cube; they are `Input<wire::WindowSpecT>` / `Input<wire::FMCWWaveformT>` and do not take `expects_tensor`.
+- **Ports and queues.** `range_profiles` and the override inputs use `queue_depth(2)` (operator default; a graph may raise it per edge with `ConnectionOptions`). Data Tensor ports are `MemoryKind::kCudaDevice`. Fat / bins outs carry ctor-derived `TensorBounds` via `pooled_tensor_output`. `setup()` registers data-plane I/O first (`range_profiles`, then `rd_maps`, then latched `velocity_bins`), then every `[live]` Exact input in Params field order. Schema-backed lives (`doppler_window`, `waveform`) sit with the POD lives, not next to the cube; they are `Input<wire::WindowSpecT>` / `Input<wire::FMCWWaveformT>` and do not take `expects_tensor`.
 - **Streams and lifetime.** Work is enqueued on `context.cuda_stream()`. After emit, `range_profiles` is moved into `retained_input_` so the FFT can finish reading it after `compute()` returns. That is a different buffer from the published loans: emit never publishes the input (HSDK 5 rejects a foreign Tensor on a pooled output). Neither the Doppler FFT path nor `fill_velocity_bins` synchronizes: bins are written into the loaned device buffer by MatX `fftfreq` / `fftshift1D` on the compute stream, with no host staging. The only remaining stream sync is cold-path — uploading regenerated window coefficients on a cache miss ([`OPEN_ITEMS.md`](OPEN_ITEMS.md) item 1).
 - **Emission.** `rd_maps` is prepared and published first (`prepare_device_tensor` → `emit_prepared_tensor`). Holding that required emit until the optional bins loan is ready would drop maps if bins allocate failed. When `velocity_bins` is produced, that work runs afterward in one gated `if (plan.stage.waveform.has_value() && velocity_bins_out_.active())` (allocate, fill, `LatchedOutput::emit`). An unwired bins emit is absorbed and latches the port off. The required emit is not duplicated across branches.
 - **Parameter authoring.** Schema id `com.nvidia.holoscan.radar.FMCWDopplerProcessorParams`, version 1. Apps on this branch load YAML into `FMCWDopplerProcessorParams` and call `set_params` ([EA HSDK5 ONLY] Graph has no `from_config()`).
 - **Precision.** Explicit instantiations `FMCWDopplerProcessorOp<float>` and `FMCWDopplerProcessorOp<double>` in `fmcw_doppler_processor_op.cu`.
 - **Cache warn-once.** The stage's `ConfigCache`s decide on their own when to warn: the first configuration builds silently, a later unseen one (new `nfft`, new window key, new chirp count) builds and warns once, then is cached. `compute()` passes no warn flag.
-- **[EA HSDK5 ONLY]** Exact `Input<>` ports are declared unconditionally (see Triggering). `doppler_window` / `waveform` use generated schema wire types and convert back to the logical descriptor before override resolution; scalar / enum ports use their logical type directly. Graph tests cover the window, waveform, and `center_zero_doppler` schema / Exact behavior.
+- **[EA HSDK5 ONLY]** Exact `Input<>` ports are declared unconditionally (see Triggering). `doppler_window` / `waveform` use generated schema wire types and convert back to the logical descriptor before override resolution; scalar / enum ports use their logical type directly. Graph tests cover the window, waveform, and `center_zero_doppler` Exact behavior (`LiveOverrideDopplerWindow`, `LiveOverrideCenterZeroDopplerMidStream`); both run. There is no live-`nfft` Graph test.
 
 ## Consumer lifetime notes
 
@@ -78,7 +79,7 @@ Every output is a fresh Tensor-pool buffer for that tick. A consumer may retain 
 
 ## Performance
 
-**Cold.** First tick (and first unseen window / FFT-length key) builds `DopplerStageState`: `windows` and `seen_fft_keys`. MatX owns the cuFFT plan cache. `velocity_bins` is filled directly on the compute stream by MatX `fftfreq` / `fftshift1D`.
+**Cold.** First tick (and first unseen window / FFT-length key) fills the ctor-allocated `DopplerStageState` caches: `windows` and `seen_fft_keys`. MatX owns the cuFFT plan cache. `velocity_bins` is filled directly on the compute stream by MatX `fftfreq` / `fftshift1D`.
 
 **Steady.** Cached window taps are reused; each tick loans `rd_maps` (and `velocity_bins` when a waveform is set) and enqueues the permute + FFT + optional shift. `[live]` `nfft` to an unseen length builds a new MatX plan. `[live]` `doppler_window` rebuilds taps on an unseen key. `center_zero_doppler` and `fft_norm` do not invalidate those caches.
 
@@ -102,17 +103,17 @@ C++ Graph suite: `tests/cpp/fmcw/test_fmcw_doppler_processor.cpp`. Ground truth 
 | `HannWindowPreservesOnBinPeak` / `HannWindowLowersDopplerSidelobes` | Windowing as in the range operator (peak kept; PSL down) |
 | `NfftInterpolatesVelocityGrid` | Larger `nfft` interpolates; peak stays on the same velocity |
 | `NamedRxAxisProcessedIndependently` | Leading `N_rx` preserved; tones do not leak across RX |
-| `VelocityBinsOnlyEmittedWithWaveform` | Conditional emit: no waveform → profiles-only graph still runs; waveform set → both outs |
+| `VelocityBinsOnlyEmittedWithWaveform` | Conditional emit: no waveform → `rd_maps`-only graph still runs; waveform set → both outs |
 | `RejectsRealInput` / `NfftSmallerThanChirpCountRejected` | Contract-illegal inputs fail closed |
 | `FloatAndDoubleAgree` | Magnitudes within `1e-3 · num_chirps` |
 | `SimulatorTargetMapsToTruthVelocity` | Sim target at known `v_r` peaks on the matching bin |
 | `LiveOverrideDopplerWindow` | Schema-backed Hann + narrower-waveform Exact tick lowers sidelobes and halves velocity-axis spacing; the following miss tick reverts both to Params |
 | `LiveOverrideCenterZeroDopplerMidStream` | Exact `true` centers a DC tone (and the 0 m/s `velocity_bins` slot); the following miss reverts to Params `false` |
 
-`TESTING.md` also asks for a `tx×rx` leading-axis case; only `N_rx` is covered. There is no dedicated unwired-`velocity_bins`-with-waveform latch test (range has `UndrainedRangeBinsDoesNotFailTheRun`).
+`TESTING.md` also asks for a `tx×rx` leading-axis case; only `N_rx` is covered. There is no dedicated unwired-`velocity_bins`-with-waveform latch test (range has `UndrainedRangeBinsDoesNotFailTheRun`), and no live-`nfft` / invalid-live-waveform Graph tests (range has those; Doppler `nfft` is covered from Params only).
 
 ```bash
-ctest --test-dir build -R test_fmcw_doppler_processor --output-on-failure
+ctest --test-dir build -R FMCWDopplerProcessorOpTest --output-on-failure
 ```
 
 ## Usage
@@ -142,4 +143,4 @@ Python bindings (`FMCWDopplerProcessorOpF32` / `F64`) are deferred on this branc
 
 The locked [`OPERATOR_API.md`](../../../docs/planning/OPERATOR_API.md) surface is implemented. `doppler_window` and `waveform` `[live]` ports use the L18 generated `holoscan::radar::wire` descriptor-Tensor encoding ([`SCHEMA_PAYLOADS.md`](../../../docs/planning/SCHEMA_PAYLOADS.md)); that is the contract physical form, not a gap.
 
-Audit scope (static; no build or test run): `docs/planning/OPERATOR_API.md` § `FMCWDopplerProcessorOp`, `WORKFLOWS.md`, `TESTING.md`, `HSDK5_PORT.md` §1/§6/§8/§9, `STATUS.md`, `operators/common/README.md`, `operators/fmcw/README.md`, `fmcw_doppler_processor_op.hpp` / `.cu`, `doppler_stage.hpp`, `metadata.json`, `python/_fmcw_doppler_processor_op_bindings.cpp`, `tests/cpp/fmcw/test_fmcw_doppler_processor.cpp`, `tests/python/fmcw/test_fmcw_doppler_processor.py`, `performance/cpp/perf_fmcw_doppler_processor.cpp`, and `OPEN_ITEMS.md`. The GPU coefficient-construction question is tracked in `OPEN_ITEMS.md` §1.
+Audit scope (static; no build or test run): `docs/planning/OPERATOR_API.md` § `FMCWDopplerProcessorOp`, `WORKFLOWS.md`, `TESTING.md`, `HSDK5_PORT.md` §1/§6/§8/§9, `STATUS.md`, `operators/common/README.md`, `operators/fmcw/README.md`, `fmcw_doppler_processor_op.hpp` / `.cu`, `doppler_stage.hpp`, `metadata.json`, `python/_fmcw_doppler_processor_op_bindings.cpp`, `tests/cpp/fmcw/test_fmcw_doppler_processor.cpp`, `tests/python/fmcw/test_fmcw_doppler_processor.py`, `performance/cpp/perf_fmcw_doppler_processor.cpp`, and `OPEN_ITEMS.md`. The GPU-native window-construction question is tracked in `OPEN_ITEMS.md` §1.
