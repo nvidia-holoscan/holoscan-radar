@@ -119,7 +119,12 @@ if ! grep -qw build <<< "${_holoscan_cli_help}"; then
         "${PYTHON_BIN}" -m pip install --upgrade "${HOLOSCAN_CLI_SOURCE}"
     else
         echo "[holoscan-radar] installing with args: ${HOLOSCAN_CLI_INSTALL_ARGS}" >&2
-        "${PYTHON_BIN}" -m pip install ${HOLOSCAN_CLI_INSTALL_ARGS}
+        # This override is a whitespace-separated pip argument list. Suppress
+        # pathname expansion without changing the caller's shell options.
+        (
+            set -f
+            "${PYTHON_BIN}" -m pip install ${HOLOSCAN_CLI_INSTALL_ARGS}
+        )
     fi
 fi
 

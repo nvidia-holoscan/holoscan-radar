@@ -49,6 +49,9 @@ jobs:
       - name: Install pre-commit
         run: pip install -r utilities/requirements.lint.txt
 
+      - name: Test workflow helpers
+        run: python3 .github/workflows/scripts/test_gitutils.py
+
       # The check-copyright pre-commit hook uses --git-modified-only with no
       # ref, which finds zero uncommitted files in a clean CI checkout (no-op).
       # Skip it here and run it explicitly below with the correct ref.
