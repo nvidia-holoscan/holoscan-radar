@@ -19,12 +19,12 @@ constexpr int kFeatVelocity = 1;
 constexpr int kFeatScore = 2;
 constexpr int kFeatAz = 3;
 constexpr int kFeatEl = 4;
-constexpr int kFeatAzBin = 5;
-constexpr int kFeatElBin = 6;
+constexpr int kFeatAzEstimate = 5;
+constexpr int kFeatElEstimate = 6;
 constexpr int kFeatDopplerBin = 7;
 constexpr int kFeatRangeBin = 8;
-constexpr int kFeatAzBinIndex = 9;
-constexpr int kFeatElBinIndex = 10;
+constexpr int kFeatAzBin = 9;
+constexpr int kFeatElBin = 10;
 
 // Cap on preserved batch rank for score-plane indexing (CFAR n_preserved).
 constexpr int kMaxPreservedBatchDims = 8;
@@ -192,16 +192,6 @@ static __global__ void assemble_features_kernel(
         }
         break;
       case kFeatAz:
-        if (have_aoa) {
-          value = aoa[row * 2];
-        }
-        break;
-      case kFeatEl:
-        if (have_aoa) {
-          value = aoa[row * 2 + 1];
-        }
-        break;
-      case kFeatAzBin:
         // Dense path: az is the preserved-batch column just before the
         // (doppler_bin, range_bin) pair; look it up in the azimuth scan grid.
         if (az_angles != nullptr) {
@@ -213,7 +203,7 @@ static __global__ void assemble_features_kernel(
           value = az_angles[az_bin];
         }
         break;
-      case kFeatElBin:
+      case kFeatEl:
         if (el_angles != nullptr) {
           const int64_t el_bin = idx_row[n_preserved - 1];
           if (el_bin < 0 || el_bin >= num_el) {
@@ -223,10 +213,20 @@ static __global__ void assemble_features_kernel(
           value = el_angles[el_bin];
         }
         break;
-      case kFeatAzBinIndex:
+      case kFeatAzEstimate:
+        if (have_aoa) {
+          value = aoa[row * 2];
+        }
+        break;
+      case kFeatElEstimate:
+        if (have_aoa) {
+          value = aoa[row * 2 + 1];
+        }
+        break;
+      case kFeatAzBin:
         value = static_cast<T>(idx_row[n_preserved - 2]);
         break;
-      case kFeatElBinIndex:
+      case kFeatElBin:
         value = static_cast<T>(idx_row[n_preserved - 1]);
         break;
       default:

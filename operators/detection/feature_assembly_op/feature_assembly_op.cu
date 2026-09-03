@@ -107,6 +107,10 @@ expected<int, Error> feature_to_id(AssemblyFeature feature) {
       return detail::kFeatAz;
     case AssemblyFeature::kEl:
       return detail::kFeatEl;
+    case AssemblyFeature::kAzEstimate:
+      return detail::kFeatAzEstimate;
+    case AssemblyFeature::kElEstimate:
+      return detail::kFeatElEstimate;
     case AssemblyFeature::kAzBin:
       return detail::kFeatAzBin;
     case AssemblyFeature::kElBin:
@@ -115,10 +119,6 @@ expected<int, Error> feature_to_id(AssemblyFeature feature) {
       return detail::kFeatDopplerBin;
     case AssemblyFeature::kRangeBin:
       return detail::kFeatRangeBin;
-    case AssemblyFeature::kAzBinIndex:
-      return detail::kFeatAzBinIndex;
-    case AssemblyFeature::kElBinIndex:
-      return detail::kFeatElBinIndex;
   }
   return make_unexpected(Error{
       ErrorCode::kInvalidArgument,
@@ -179,12 +179,10 @@ RequiredSources required_sources(
     result.velocity =
         result.velocity || feature == AssemblyFeature::kVelocity;
     result.score = result.score || feature == AssemblyFeature::kScore;
-    result.aoa = result.aoa || feature == AssemblyFeature::kAz ||
-                  feature == AssemblyFeature::kEl;
-    result.az_angles =
-        result.az_angles || feature == AssemblyFeature::kAzBin;
-    result.el_angles =
-        result.el_angles || feature == AssemblyFeature::kElBin;
+    result.aoa = result.aoa || feature == AssemblyFeature::kAzEstimate ||
+                 feature == AssemblyFeature::kElEstimate;
+    result.az_angles = result.az_angles || feature == AssemblyFeature::kAz;
+    result.el_angles = result.el_angles || feature == AssemblyFeature::kEl;
   }
   return result;
 }
@@ -246,10 +244,10 @@ expected<AssemblyStagePlan, Error> build_assembly_stage_plan(
     HOLOSCAN_TRY(plan.feature_ids[static_cast<size_t>(i)],
                  feature_to_id(token));
     needs_dense_coordinates =
-        needs_dense_coordinates || token == AssemblyFeature::kAzBin ||
-        token == AssemblyFeature::kElBin ||
-        token == AssemblyFeature::kAzBinIndex ||
-        token == AssemblyFeature::kElBinIndex;
+        needs_dense_coordinates || token == AssemblyFeature::kAz ||
+        token == AssemblyFeature::kEl ||
+        token == AssemblyFeature::kAzBin ||
+        token == AssemblyFeature::kElBin;
   }
 
   try {
@@ -308,23 +306,21 @@ expected<AssemblyStagePlan, Error> build_assembly_stage_plan(
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
         std::string(kOpName) + ": features includes '" +
-            std::string(to_string(AssemblyFeature::kAz)) + "'/'" +
-            std::string(to_string(AssemblyFeature::kEl)) +
+            std::string(to_string(AssemblyFeature::kAzEstimate)) + "'/'" +
+            std::string(to_string(AssemblyFeature::kElEstimate)) +
             "' but aoa_estimates input is absent"});
   }
   if (required.az_angles && !plan.have_az) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
         std::string(kOpName) +
-            ": features includes 'az_bin' but az_angles input is "
-            "absent"});
+            ": features includes 'az' but az_angles input is absent"});
   }
   if (required.el_angles && !plan.have_el) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
         std::string(kOpName) +
-            ": features includes 'el_bin' but el_angles input is "
-            "absent"});
+            ": features includes 'el' but el_angles input is absent"});
   }
   if (needs_dense_coordinates && plan.layout.n_preserved < 2) {
     return make_unexpected(Error{

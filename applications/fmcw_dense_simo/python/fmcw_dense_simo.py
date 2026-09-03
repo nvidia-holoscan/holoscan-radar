@@ -181,8 +181,8 @@ class FmcwDenseSimoApp(Application):
                 features=[
                     AssemblyFeature.RANGE,
                     AssemblyFeature.VELOCITY,
-                    AssemblyFeature.AZ,
-                    AssemblyFeature.EL,
+                    AssemblyFeature.AZ_ESTIMATE,
+                    AssemblyFeature.EL_ESTIMATE,
                 ],
                 name="feature_assembly",
             )

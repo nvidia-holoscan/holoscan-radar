@@ -96,8 +96,8 @@ def test_AssemblesRawDenseAngleBinIndices():
     points = run_assembly(
         idx,
         [
-            AssemblyFeature.AZ_BIN_INDEX,
-            AssemblyFeature.EL_BIN_INDEX,
+            AssemblyFeature.AZ_BIN,
+            AssemblyFeature.EL_BIN,
             AssemblyFeature.DOPPLER_BIN,
             AssemblyFeature.RANGE_BIN,
         ],
@@ -137,7 +137,11 @@ def test_AppendsAoaEstimates():
     aoa = np.array([[0.1, -0.2], [0.3, 0.4]], dtype=np.float64)
     points = run_assembly(
         idx,
-        [AssemblyFeature.DOPPLER_BIN, AssemblyFeature.AZ, AssemblyFeature.EL],
+        [
+            AssemblyFeature.DOPPLER_BIN,
+            AssemblyFeature.AZ_ESTIMATE,
+            AssemblyFeature.EL_ESTIMATE,
+        ],
         aoa_estimates=aoa,
     )
     assert points.shape == (2, 3)

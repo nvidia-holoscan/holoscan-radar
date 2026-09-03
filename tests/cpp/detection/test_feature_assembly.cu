@@ -150,6 +150,14 @@ HostTensor stage_assemble(
       case AssemblyFeature::kEl:
         feature_ids[static_cast<size_t>(i)] = holoscan::radar::detail::kFeatEl;
         break;
+      case AssemblyFeature::kAzEstimate:
+        feature_ids[static_cast<size_t>(i)] =
+            holoscan::radar::detail::kFeatAzEstimate;
+        break;
+      case AssemblyFeature::kElEstimate:
+        feature_ids[static_cast<size_t>(i)] =
+            holoscan::radar::detail::kFeatElEstimate;
+        break;
       case AssemblyFeature::kAzBin:
         feature_ids[static_cast<size_t>(i)] = holoscan::radar::detail::kFeatAzBin;
         break;
@@ -163,14 +171,6 @@ HostTensor stage_assemble(
       case AssemblyFeature::kRangeBin:
         feature_ids[static_cast<size_t>(i)] =
             holoscan::radar::detail::kFeatRangeBin;
-        break;
-      case AssemblyFeature::kAzBinIndex:
-        feature_ids[static_cast<size_t>(i)] =
-            holoscan::radar::detail::kFeatAzBinIndex;
-        break;
-      case AssemblyFeature::kElBinIndex:
-        feature_ids[static_cast<size_t>(i)] =
-            holoscan::radar::detail::kFeatElBinIndex;
         break;
     }
   }
@@ -267,8 +267,8 @@ TEST(FeatureAssemblyOpTest, AssemblesRawDenseAngleBinIndices) {
   std::vector<int64_t> idx = {3, 2, 7, 5};
   auto idx_t = to_device_tensor(idx, {1, 4}, kInt64Dtype);
   const auto points = run_assembly<double>(
-      idx_t, make_params({AssemblyFeature::kAzBinIndex,
-                          AssemblyFeature::kElBinIndex,
+      idx_t, make_params({AssemblyFeature::kAzBin,
+                          AssemblyFeature::kElBin,
                           AssemblyFeature::kDopplerBin,
                           AssemblyFeature::kRangeBin}));
   ASSERT_EQ(points.shape, (std::vector<int64_t>{1, 4}));
@@ -325,19 +325,19 @@ TEST(FeatureAssemblyOpTest, FeaturesConfigurableFromParams) {
   EXPECT_DOUBLE_EQ(points.as<double>()[1], 4.0);
 }
 
-TEST(FeatureAssemblyOpTest, RejectsAzFeatureWithoutAoaInput) {
+TEST(FeatureAssemblyOpTest, RejectsAzEstimateWithoutAoaInput) {
   std::vector<int64_t> idx = {0, 0};
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
   const auto result = run_assembly_result<double>(
-      idx_t, make_params({AssemblyFeature::kAz}));
+      idx_t, make_params({AssemblyFeature::kAzEstimate}));
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
-TEST(FeatureAssemblyOpTest, RejectsElFeatureWithoutAoaInput) {
+TEST(FeatureAssemblyOpTest, RejectsElEstimateWithoutAoaInput) {
   std::vector<int64_t> idx = {0, 0};
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
   const auto result = run_assembly_result<double>(
-      idx_t, make_params({AssemblyFeature::kEl}));
+      idx_t, make_params({AssemblyFeature::kElEstimate}));
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
@@ -359,11 +359,11 @@ TEST(FeatureAssemblyOpTest, RejectsOpaqueLeadingBatch) {
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
-TEST(FeatureAssemblyOpTest, RejectsAzBinWithoutGrid) {
+TEST(FeatureAssemblyOpTest, RejectsAzWithoutGrid) {
   std::vector<int64_t> idx = {0, 0, 0, 0};
   auto idx_t = to_device_tensor(idx, {1, 4}, kInt64Dtype);
   const auto result = run_assembly_result<double>(
-      idx_t, make_params({AssemblyFeature::kAzBin}));
+      idx_t, make_params({AssemblyFeature::kAz}));
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
@@ -481,7 +481,9 @@ TEST(FeatureAssemblyOpTest, WaitsForLaterAoaFromSameFrame) {
   auto result =
       run_dual_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
           {idx}, {aoa},
-          make_params({AssemblyFeature::kAz, AssemblyFeature::kEl}), "points",
+          make_params({AssemblyFeature::kAzEstimate,
+                       AssemblyFeature::kElEstimate}),
+          "points",
           [](holoscan::Graph& graph, const auto& source, auto& op,
              const auto& sink) {
             const holoscan::ConnectionOptions q{.queue_depth = 4U};
@@ -503,7 +505,7 @@ TEST(FeatureAssemblyOpTest, GathersAlignedDenseAngleGrids) {
       run_triple_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
           {idx}, {az}, {el},
           make_params(
-              {AssemblyFeature::kAzBin, AssemblyFeature::kElBin}),
+              {AssemblyFeature::kAz, AssemblyFeature::kEl}),
           "points",
           [](holoscan::Graph& graph, const auto& source, auto& op,
              const auto& sink) {
@@ -564,8 +566,8 @@ TEST(FeatureAssemblyOpTest, AppendsAoaEstimates) {
   auto aoa_t = upload_real(aoa, {2, 2});
   const auto points = stage_assemble<double>(
       idx, 2, 2,
-      {AssemblyFeature::kDopplerBin, AssemblyFeature::kAz,
-       AssemblyFeature::kEl},
+      {AssemblyFeature::kDopplerBin, AssemblyFeature::kAzEstimate,
+       AssemblyFeature::kElEstimate},
       nullptr, 0, false, nullptr, 0, false, nullptr, 0, 0, nullptr, false,
       static_cast<const double*>(aoa_t->data()), true, nullptr, 0, nullptr, 0);
   ASSERT_EQ(points.shape[1], 3);
@@ -697,7 +699,7 @@ TEST(FeatureAssemblyOpTest, RejectsOobPreservedBatchCoord) {
   (void)sc;
 }
 
-TEST(FeatureAssemblyOpTest, DenseAzElBinLookup) {
+TEST(FeatureAssemblyOpTest, DenseAzElGridLookup) {
   std::vector<int64_t> idx = {1, 2, 0, 0, 3, 0, 0, 0};
   std::vector<double> az = {-0.3, -0.1, 0.1, 0.3};
   std::vector<double> el = {0.0, 0.05, 0.1};
@@ -705,7 +707,7 @@ TEST(FeatureAssemblyOpTest, DenseAzElBinLookup) {
   auto el_t = upload_real(el, {3});
 
   const auto points = stage_assemble<double>(
-      idx, 2, 4, {AssemblyFeature::kAzBin, AssemblyFeature::kElBin}, nullptr, 0,
+      idx, 2, 4, {AssemblyFeature::kAz, AssemblyFeature::kEl}, nullptr, 0,
       false, nullptr, 0, false, nullptr, 0, 0, nullptr, false, nullptr, false,
       static_cast<const double*>(az_t->data()), 4,
       static_cast<const double*>(el_t->data()), 3);
@@ -731,7 +733,7 @@ TEST(FeatureAssemblyOpTest, DenseAzElWithRangeVelocity) {
   const auto points = stage_assemble<double>(
       idx, 1, 4,
       {AssemblyFeature::kRange, AssemblyFeature::kVelocity,
-       AssemblyFeature::kAzBin, AssemblyFeature::kElBin},
+       AssemblyFeature::kAz, AssemblyFeature::kEl},
       static_cast<const double*>(rb->data()), 6, true,
       static_cast<const double*>(vb->data()), 4, true, nullptr, 0, 0, nullptr,
       false, nullptr, false, static_cast<const double*>(az_t->data()), 3,
@@ -744,23 +746,23 @@ TEST(FeatureAssemblyOpTest, DenseAzElWithRangeVelocity) {
   EXPECT_DOUBLE_EQ(p[3], 0.1);
 }
 
-TEST(FeatureAssemblyOpTest, RejectsAzBinWithTooFewPreservedColumns) {
-  // Graph path rejects az_bin when n_preserved < 2 (no optional grid needed).
+TEST(FeatureAssemblyOpTest, RejectsAzWithTooFewPreservedColumns) {
+  // Graph path rejects dense az when n_preserved < 2.
   std::vector<int64_t> idx = {0, 0};
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
   // Wire would need az_angles; without it Graph already fails for missing
   // grid. Stage path with n_preserved=0 simply skips az lookup (value 0);
   // the operator-level guard is what matters for the contract.
   const auto result = run_assembly_result<double>(
-      idx_t, make_params({AssemblyFeature::kAzBin}));
+      idx_t, make_params({AssemblyFeature::kAz}));
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
-TEST(FeatureAssemblyOpTest, RejectsAzBinIndexWithTooFewPreservedColumns) {
+TEST(FeatureAssemblyOpTest, RejectsAzBinWithTooFewPreservedColumns) {
   std::vector<int64_t> idx = {0, 0};
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
   const auto result = run_assembly_result<double>(
-      idx_t, make_params({AssemblyFeature::kAzBinIndex}));
+      idx_t, make_params({AssemblyFeature::kAzBin}));
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
@@ -770,7 +772,7 @@ TEST(FeatureAssemblyOpTest, RejectsOutOfRangeAzBin) {
   auto az_t = upload_real(az, {3});
   EXPECT_THROW(
       stage_assemble<double>(
-          idx, 1, 4, {AssemblyFeature::kAzBin}, nullptr, 0, false, nullptr, 0,
+          idx, 1, 4, {AssemblyFeature::kAz}, nullptr, 0, false, nullptr, 0,
           false, nullptr, 0, 0, nullptr, false, nullptr, false,
           static_cast<const double*>(az_t->data()), 3, nullptr, 0),
       std::invalid_argument);

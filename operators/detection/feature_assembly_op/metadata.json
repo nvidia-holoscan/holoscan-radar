@@ -13,7 +13,7 @@
         "changelog": {
             "0.1.0": "Initial Release",
             "0.2.0": "HSDK 5 Operator<Params> / Graph port (optional gather Inputs + SafeDefault; static features vector)",
-            "0.3.0": "Params-derived exact-aligned gathers; explicit raw RD and dense angle-bin feature tokens"
+            "0.3.0": "Params-derived exact-aligned gathers; symmetric physical, raw-bin, and sparse-estimate feature tokens"
         },
         "holoscan_sdk": {
             "minimum_required_version": "5.0.0",

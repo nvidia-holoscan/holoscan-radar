@@ -33,14 +33,14 @@ enum class AssemblyFeature {
   kRange,       // range_bins[range_bin] (input required)
   kVelocity,    // velocity_bins[doppler_bin] (input required)
   kScore,       // gather detection_score at the cell (input required)
-  kAz,          // aoa_estimates[row, 0] (sparse path; input required)
-  kEl,          // aoa_estimates[row, 1] (sparse path; input required)
-  kAzBin,       // az_angles[az_bin] (dense path; az_angles input required)
-  kElBin,       // el_angles[el_bin] (dense path; el_angles input required)
+  kAz,          // az_angles[az_bin] (dense path; input required)
+  kEl,          // el_angles[el_bin] (dense path; input required)
+  kAzEstimate,  // aoa_estimates[row, 0] (sparse path; input required)
+  kElEstimate,  // aoa_estimates[row, 1] (sparse path; input required)
   kDopplerBin,  // raw doppler_bin escape hatch
   kRangeBin,    // raw range_bin escape hatch
-  kAzBinIndex,  // raw preserved az_bin (dense path)
-  kElBinIndex,  // raw preserved el_bin (dense path)
+  kAzBin,       // raw preserved az_bin (dense path)
+  kElBin,       // raw preserved el_bin (dense path)
 };
 
 constexpr std::string_view to_string(AssemblyFeature feature) {
@@ -55,6 +55,10 @@ constexpr std::string_view to_string(AssemblyFeature feature) {
       return "az";
     case AssemblyFeature::kEl:
       return "el";
+    case AssemblyFeature::kAzEstimate:
+      return "az_estimate";
+    case AssemblyFeature::kElEstimate:
+      return "el_estimate";
     case AssemblyFeature::kAzBin:
       return "az_bin";
     case AssemblyFeature::kElBin:
@@ -63,10 +67,6 @@ constexpr std::string_view to_string(AssemblyFeature feature) {
       return "doppler_bin";
     case AssemblyFeature::kRangeBin:
       return "range_bin";
-    case AssemblyFeature::kAzBinIndex:
-      return "az_bin_index";
-    case AssemblyFeature::kElBinIndex:
-      return "el_bin_index";
   }
   return "unknown";
 }
@@ -85,11 +85,11 @@ constexpr std::string_view to_string(AssemblyFeature feature) {
 // In:  detection_score — optional float32/float64, (..., num_doppler,
 //                       num_range). Required when `score` is in features.
 // In:  aoa_estimates   — optional float32/float64, (num_points, 2). Required
-//                       when `az` or `el` is in features (sparse path).
+//                       for `az_estimate` / `el_estimate` (sparse path).
 // In:  az_angles       — optional float32/float64, (num_az,). Azimuth scan
-//                       grid; required when `az_bin` is in features (dense).
+//                       grid; required when `az` is in features (dense).
 // In:  el_angles       — optional float32/float64, (num_el,). Elevation scan
-//                       grid; required when `el_bin` is in features (dense).
+//                       grid; required when `el` is in features (dense).
 // Out: points          — float32/float64, (num_points, num_features). Columns
 //                       in `features` order; rows 1:1 with detection_idx.
 //

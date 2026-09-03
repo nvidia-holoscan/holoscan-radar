@@ -86,8 +86,8 @@ def _pack_features(pack: FeaturePack) -> list:
             AssemblyFeature.RANGE,
             AssemblyFeature.VELOCITY,
             AssemblyFeature.SCORE,
-            AssemblyFeature.AZ,
-            AssemblyFeature.EL,
+            AssemblyFeature.AZ_ESTIMATE,
+            AssemblyFeature.EL_ESTIMATE,
         ]
     raise ValueError(f"unsupported feature pack {pack}")
 

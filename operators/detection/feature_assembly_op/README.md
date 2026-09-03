@@ -22,9 +22,9 @@ operator into `clustering/` — that group is the clusterer, not the RD adapter.
 | in | `range_bins` | float32 / float64 | `(num_range,)` | Dense 1-D axis. Required when token `range` is selected; indexed with `range_bin` |
 | in | `velocity_bins` | float32 / float64 | `(num_doppler,)` | Dense 1-D axis. Required when token `velocity` is selected; indexed with `doppler_bin` |
 | in | `detection_score` | float32 / float64 | `(num_doppler, num_range)` plus optional leading matching preserved columns | Dense map, gathered at the cell. Required when `features` includes `score` |
-| in | `aoa_estimates` | float32 / float64 | `(num_points, 2)` | Sparse companion, row-aligned with `detection_idx`. Tokens `az` / `el`. Sparse post-angle path |
-| in | `az_angles` | float32 / float64 | `(num_az,)` | Dense 1-D scan grid. Token `az_bin` indexes the preserved `az_bin` column. Dense RDA path |
-| in | `el_angles` | float32 / float64 | `(num_el,)` | Dense 1-D scan grid. Token `el_bin`. Dense RDA path |
+| in | `aoa_estimates` | float32 / float64 | `(num_points, 2)` | Sparse companion, row-aligned with `detection_idx`. Tokens `az_estimate` / `el_estimate` |
+| in | `az_angles` | float32 / float64 | `(num_az,)` | Dense 1-D scan grid. Token `az` indexes the preserved `az_bin` column |
+| in | `el_angles` | float32 / float64 | `(num_el,)` | Dense 1-D scan grid. Token `el` indexes the preserved `el_bin` column |
 | out | `points` | float32 / float64 | `(num_points, num_features)` | Sparse. Columns in `features` order; one row per detection |
 
 `n_preserved = idx_cols - 2`: leading integers CFAR copied from axes in front of
@@ -33,8 +33,8 @@ They are **columns**, not a tensor batch axis.
 
 ```text
 CFARDetectorOp.detection_idx (+ detection_score) → FeatureAssemblyOp → points → ClusterDBSCANOp
-⟨sparse estimator⟩.aoa_estimates → FeatureAssemblyOp.aoa_estimates   (angle-then-cluster)
-⟨scan-grid tensor source⟩.az_angles / el_angles → FeatureAssemblyOp  (dense RDA; tokens az_bin / el_bin)
+⟨sparse estimator⟩.aoa_estimates → FeatureAssemblyOp.aoa_estimates   (tokens az_estimate / el_estimate)
+⟨scan-grid tensor source⟩.az_angles / el_angles → FeatureAssemblyOp  (dense RDA; tokens az / el)
 ```
 
 The six gathers are **data-plane** Inputs, not `[live]` overrides. Static
@@ -67,8 +67,8 @@ this wave; the same RD-cell gather would apply if a later chain reused this
 `detection_idx` contract.
 
 There is no dense az/el *value cube*. On the RDA path the cell’s angle is the
-scan-grid coordinate: tokens `az_bin` / `el_bin` plus `az_angles` / `el_angles`.
-Do not wire `az` / `el` for that path — those tokens mean `aoa_estimates`.
+scan-grid coordinate: tokens `az` / `el` plus `az_angles` / `el_angles`.
+Sparse row-aligned estimator results use `az_estimate` / `el_estimate`.
 
 ## Feature reference
 
@@ -85,18 +85,18 @@ list order is the output-column order.
 | `range` | `AssemblyFeature::kRange` | `range_bins[range_bin]` | `range_bins` |
 | `velocity` | `AssemblyFeature::kVelocity` | `velocity_bins[doppler_bin]` | `velocity_bins` |
 | `score` | `AssemblyFeature::kScore` | `detection_score[..., doppler_bin, range_bin]` | `detection_score` |
-| `az` | `AssemblyFeature::kAz` | `aoa_estimates[row, 0]` | `aoa_estimates` |
-| `el` | `AssemblyFeature::kEl` | `aoa_estimates[row, 1]` | `aoa_estimates` |
-| `az_bin` | `AssemblyFeature::kAzBin` | `az_angles[az_bin]` | `az_angles` |
-| `el_bin` | `AssemblyFeature::kElBin` | `el_angles[el_bin]` | `el_angles` |
+| `az` | `AssemblyFeature::kAz` | `az_angles[az_bin]` | `az_angles` |
+| `el` | `AssemblyFeature::kEl` | `el_angles[el_bin]` | `el_angles` |
+| `az_estimate` | `AssemblyFeature::kAzEstimate` | `aoa_estimates[row, 0]` | `aoa_estimates` |
+| `el_estimate` | `AssemblyFeature::kElEstimate` | `aoa_estimates[row, 1]` | `aoa_estimates` |
 | `doppler_bin` | `AssemblyFeature::kDopplerBin` | Raw trailing Doppler index | none |
 | `range_bin` | `AssemblyFeature::kRangeBin` | Raw trailing range index | none |
-| `az_bin_index` | `AssemblyFeature::kAzBinIndex` | Raw preserved azimuth index | none |
-| `el_bin_index` | `AssemblyFeature::kElBinIndex` | Raw preserved elevation index | none |
+| `az_bin` | `AssemblyFeature::kAzBin` | Raw preserved azimuth index | none |
+| `el_bin` | `AssemblyFeature::kElBin` | Raw preserved elevation index | none |
 
 Selecting a token whose source table is missing is an error. Select
-`range_bin` / `doppler_bin` / `az_bin_index` / `el_bin_index` explicitly when
-raw indices are wanted.
+`range_bin` / `doppler_bin` / `az_bin` / `el_bin` explicitly when raw indices
+are wanted.
 
 ## Usage
 
@@ -136,14 +136,15 @@ Same RD gathers as pre-angle, plus a sparse estimator’s `(N, 2)` AoA.
 
 ```yaml
 feature_assembly:
-  features: [range, velocity, score, az, el]
+  features: [range, velocity, score, az_estimate, el_estimate]
 ```
 
 ```cpp
 FeatureAssemblyParams params;
 params.features = {AssemblyFeature::kRange, AssemblyFeature::kVelocity,
-                   AssemblyFeature::kScore, AssemblyFeature::kAz,
-                   AssemblyFeature::kEl};
+                   AssemblyFeature::kScore,
+                   AssemblyFeature::kAzEstimate,
+                   AssemblyFeature::kElEstimate};
 feat.set_params(std::move(params));
 
 graph.add_flow(estimator->aoa_estimates, feat->aoa_estimates, q);
@@ -156,14 +157,14 @@ RD gathers as pre-angle. Angle columns are grid lookups, not `aoa_estimates`.
 
 ```yaml
 feature_assembly:
-  features: [range, velocity, score, az_bin, el_bin]
+  features: [range, velocity, score, az, el]
 ```
 
 ```cpp
 FeatureAssemblyParams params;
 params.features = {AssemblyFeature::kRange, AssemblyFeature::kVelocity,
-                   AssemblyFeature::kScore, AssemblyFeature::kAzBin,
-                   AssemblyFeature::kElBin};
+                   AssemblyFeature::kScore, AssemblyFeature::kAz,
+                   AssemblyFeature::kEl};
 feat.set_params(std::move(params));
 
 graph.add_flow(grid_source->az_angles, feat->az_angles, q);
@@ -173,7 +174,7 @@ graph.add_flow(grid_source->el_angles, feat->el_angles, q);
 The grid source publishes the same values configured on the beamformer.
 `PhaseShiftBeamformerOp.az_angles` / `el_angles` are `[live]` inputs, not
 outputs. An application that already resolves row-aligned `aoa_estimates` may
-instead use `az` / `el`, as the current dense demo does.
+instead use `az_estimate` / `el_estimate`, as the current dense demo does.
 
 ### Raw RD bins (no physical axes)
 
@@ -199,13 +200,13 @@ coordinates can be emitted without any gather inputs.
 
 ```yaml
 feature_assembly:
-  features: [az_bin_index, el_bin_index, doppler_bin, range_bin]
+  features: [az_bin, el_bin, doppler_bin, range_bin]
 ```
 
 ```cpp
 FeatureAssemblyParams params;
-params.features = {AssemblyFeature::kAzBinIndex,
-                   AssemblyFeature::kElBinIndex,
+params.features = {AssemblyFeature::kAzBin,
+                   AssemblyFeature::kElBin,
                    AssemblyFeature::kDopplerBin,
                    AssemblyFeature::kRangeBin};
 feat.set_params(std::move(params));
@@ -264,8 +265,8 @@ set a device error flag; the host maps it after a stream sync **before**
   | Rows exceed ctor max | `FeatureAssemblyOp: detection_idx rows (N) exceed MaxTensorExtents max_points (M)` |
   | Feature count exceeds ctor max | `FeatureAssemblyOp: features size (N) exceeds MaxTensorExtents max_features (M)` |
   | `score` without `detection_score` | `FeatureAssemblyOp: features includes 'score' but detection_score input is absent` |
-  | `az`/`el` without `aoa_estimates` | `FeatureAssemblyOp: features includes 'az'/'el' but aoa_estimates input is absent` |
-  | `az_bin` without `az_angles` | `FeatureAssemblyOp: features includes 'az_bin' but az_angles input is absent` (same pattern for `el_bin` / `el_angles`) |
+  | `az_estimate`/`el_estimate` without `aoa_estimates` | `FeatureAssemblyOp: features includes 'az_estimate'/'el_estimate' but aoa_estimates input is absent` |
+  | `az` without `az_angles` | `FeatureAssemblyOp: features includes 'az' but az_angles input is absent` (same pattern for `el` / `el_angles`) |
   | Dense tokens, `< 2` preserved cols | `FeatureAssemblyOp: dense angle features require detection_idx with at least two preserved-batch columns (…, az_bin, el_bin, doppler_bin, range_bin)` |
   | `aoa_estimates` not `(N, 2)` or `N ≠ num_points` | `FeatureAssemblyOp: aoa_estimates must have shape (num_points, 2)` / `… row count must match detection_idx` |
   | Rank-1 ports not rank-1 | `FeatureAssemblyOp: range_bins must be rank-1 (num_range,)` (same for `velocity_bins`, `az_angles`, `el_angles`) |
@@ -277,17 +278,17 @@ set a device error flag; the host maps it after a stream sync **before**
 
 | Parameter | Type | Default | Override | Cost | Meaning |
 | --- | --- | --- | --- | --- | --- |
-| `features` | ordered list of {range, velocity, score, az, el, az_bin, el_bin, doppler_bin, range_bin, az_bin_index, el_bin_index} | none (required, non-empty) | static (Params-only) | Feature-id vector uploaded once into a ctor-sized int32 table | Column set and order; fixes `num_features` and the compiled temporal join |
+| `features` | ordered list of {range, velocity, score, az, el, az_estimate, el_estimate, doppler_bin, range_bin, az_bin, el_bin} | none (required, non-empty) | static (Params-only) | Feature-id vector uploaded once into a ctor-sized int32 table | Column set and order; fixes `num_features` and the compiled temporal join |
 
 There are no `[live]` parameters. `features` has no Exact port and is not declared as `spec.input`. Set it before `Graph::compile()`; `contract()` reads the resolved Params when declaration replay runs. Mid-run `set_params()` does not alter the running plan. Do not invent gather-port `[live]` tags: those Inputs are data sources, and their requiredness follows from `features`.
 
-YAML tokens match `to_string(AssemblyFeature)`: `range`, `velocity`, `score`, `az`, `el`, `az_bin`, `el_bin`, `doppler_bin`, `range_bin`.
+YAML tokens match `to_string(AssemblyFeature)`: `range`, `velocity`, `score`, `az`, `el`, `az_estimate`, `el_estimate`, `doppler_bin`, `range_bin`, `az_bin`, `el_bin`.
 
 ## SDK implementation notes
 
 - **Construction.** `explicit FeatureAssemblyOp(const MaxTensorExtents& extents)`. Required: `max_points`, `max_features`. The `points` pool is `max_rank = 2`, `max_byte_span` = real-`T` `(max_points, max_features)`. A tick with more rows than `max_points`, or more columns than `max_features`, is rejected in the plan builder.
 - **Workspace.** Four ctor-sized device Tensors (`make_device_tensor`), not `ConfigCache` and not a first-tick `cudaMalloc`: `feature_ids` (`max_features` int32), `score_offsets` (`max_points` int64 — worst-case source count, not the collapsed output width), `score_leading` (`kMaxPreservedBatchDims` int64), `error_flag` (one int32). Tensor pools are per output port only; there is no scratch-loan API for these tables. Feature-id H2D is keyed on the first successful non-empty emit; score leading dims re-upload when that layout changes. `DLDataType{kDLInt, 64, 1}` / `{kDLInt, 32, 1}` are DLPack encodings of scalar `int64_t` / `int32_t` (signed, 64 or 32 bits, 1 lane), independent of template `T`.
-- **Triggering.** `contract()` reads static `params().features`. Raw-bin-only layouts use `OnEach{detection_idx}`. Any selected source adds its port to a zero-window `OnAligned` trigger with `detection_idx`; every member selects `Exact{}`. The source set is deduplicated, so `az` + `el` add `aoa_estimates` once.
+- **Triggering.** `contract()` reads static `params().features`. Raw-bin-only layouts use `OnEach{detection_idx}`. Any selected source adds its port to a zero-window `OnAligned` trigger with `detection_idx`; every member selects `Exact{}`. The source set is deduplicated, so `az_estimate` + `el_estimate` add `aoa_estimates` once.
 - **Unselected gathers.** Every gather not selected by `features` is still declared as a non-member `Exact{}` + `SafeDefault{}` input. The pinned SDK admits such an unwired Tensor input ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11), reporting `kNotConnected`; `receive_optional_value` maps that to absence. This keeps one fixed `setup()` port set while preventing a wired-but-undeclared replay mismatch.
 - **Ports and queues.** Every Input: `queue_depth(2)`, device tensors. `points`: device, allocation bounds above. `setup()` registers data-plane I/O only (trigger, then optional gathers, then `points`). There is no live block. Dtype is not pinned on the port (enforced in `compute()`).
 - **Streams and lifetime.** Work is enqueued on `context.cuda_stream()`. Every received Tensor is retained until the next tick. The hot path **does** synchronize: a scalar error-flag D2H + `cudaStreamSynchronize` after the assemble kernel, **before** emit, so an OOB index fails the tick rather than publishing a partial `points`. That sync is accepted operator-owned workspace (Holoscan `Error` is host-side); it dominates small-N steady time and is separate from the `points` alloc question.
@@ -322,13 +323,13 @@ Direct `launch_assemble_features` tests retain focused kernel and OOB coverage.
 | --- | --- |
 | `LooksUpPhysicalRangeVelocityAndScore` | `range = range_bins[range_bin]`, `velocity = velocity_bins[doppler_bin]`, score gathered (`TESTING.md`) |
 | `RejectsPhysicalFeaturesWithoutAxes` / `AssemblesRawBinEscapeHatches` | Physical sources are mandatory; raw indices require explicit tokens |
-| `AppendsAoaEstimates` | Sparse `az`/`el` from `aoa_estimates` |
-| `DenseAzElBinLookup` / `DenseAzElWithRangeVelocity` | Dense grid lookup from preserved `(az_bin, el_bin)` |
+| `AppendsAoaEstimates` | Sparse `az_estimate`/`el_estimate` from `aoa_estimates` |
+| `DenseAzElGridLookup` / `DenseAzElWithRangeVelocity` | Dense `az`/`el` grid lookup from preserved bins |
 | `AssemblesRawDenseAngleBinIndices` | Raw dense azimuth/elevation indices need only `detection_idx` |
 | `GathersScoreAcrossPreservedBatch` | Score-plane offsets for leading batch |
 | `EmptyDetectionIdxEmitsEmptyPoints` | `(0, num_features)` |
-| `RejectsScoreFeatureWithoutScoreInput` / `RejectsAzFeatureWithoutAoaInput` / `RejectsElFeatureWithoutAoaInput` / `RejectsAzBinWithoutGrid` | Selecting a token whose required input is absent (`TESTING.md`) |
-| `RejectsOob*` / `RejectsAzBinWithTooFewPreservedColumns` / `RejectsScoreLeadingRankMismatch` | Bounds and shape errors |
+| `RejectsScoreFeatureWithoutScoreInput` / `RejectsAzEstimateWithoutAoaInput` / `RejectsElEstimateWithoutAoaInput` / `RejectsAzWithoutGrid` | Selecting a token whose required input is absent (`TESTING.md`) |
+| `RejectsOob*` / `RejectsAzWithTooFewPreservedColumns` / `RejectsScoreLeadingRankMismatch` | Bounds and shape errors |
 | `RejectsOpaqueLeadingBatch` | Extra leading dim is not a named axis; `parse_detection_idx_layout` fail-closes (Part B) |
 | `FeaturesConfigurableFromParams` / `FloatDoubleAgreeOnPhysicalLookup` | Params field + both precisions |
 | selected-source Graph joins | Params-derived trigger requires exactly the source ports used by `features` |

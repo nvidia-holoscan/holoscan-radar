@@ -277,8 +277,8 @@ int main(int argc, char** argv) {
           feature_params.features = {
               radar::AssemblyFeature::kRange,
               radar::AssemblyFeature::kVelocity,
-              radar::AssemblyFeature::kAz,
-              radar::AssemblyFeature::kEl};
+              radar::AssemblyFeature::kAzEstimate,
+              radar::AssemblyFeature::kElEstimate};
           feature_assembly.set_params(std::move(feature_params));
 
           auto cluster = graph.op<radar::ClusterDBSCANOp<float>>(
