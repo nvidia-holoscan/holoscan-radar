@@ -3,6 +3,15 @@
 
 add_subdirectory(cpp)
 
+find_program(BASH_EXECUTABLE bash REQUIRED)
+add_test(
+    NAME holohub_install_args
+    COMMAND "${BASH_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_holohub_install_args.sh"
+        "${PROJECT_SOURCE_DIR}/holohub"
+)
+set_tests_properties(holohub_install_args PROPERTIES LABELS "unit")
+
 # [EA HSDK5 ONLY] The pytest suites exercise the Python bindings, so they only
 # make sense when those are built. Registering them unconditionally made a
 # bare `ctest` fail on the EA image (no operator bindings to import) and forced
