@@ -23,6 +23,8 @@ constexpr int kFeatAzBin = 5;
 constexpr int kFeatElBin = 6;
 constexpr int kFeatDopplerBin = 7;
 constexpr int kFeatRangeBin = 8;
+constexpr int kFeatAzBinIndex = 9;
+constexpr int kFeatElBinIndex = 10;
 
 // Cap on preserved batch rank for score-plane indexing (CFAR n_preserved).
 constexpr int kMaxPreservedBatchDims = 8;
@@ -220,6 +222,12 @@ static __global__ void assemble_features_kernel(
           }
           value = el_angles[el_bin];
         }
+        break;
+      case kFeatAzBinIndex:
+        value = static_cast<T>(idx_row[n_preserved - 2]);
+        break;
+      case kFeatElBinIndex:
+        value = static_cast<T>(idx_row[n_preserved - 1]);
         break;
       default:
         break;

@@ -115,6 +115,10 @@ expected<int, Error> feature_to_id(AssemblyFeature feature) {
       return detail::kFeatDopplerBin;
     case AssemblyFeature::kRangeBin:
       return detail::kFeatRangeBin;
+    case AssemblyFeature::kAzBinIndex:
+      return detail::kFeatAzBinIndex;
+    case AssemblyFeature::kElBinIndex:
+      return detail::kFeatElBinIndex;
   }
   return make_unexpected(Error{
       ErrorCode::kInvalidArgument,
@@ -236,10 +240,16 @@ expected<AssemblyStagePlan, Error> build_assembly_stage_plan(
   plan.num_features = static_cast<int64_t>(features.size());
   plan.feature_ids.resize(static_cast<size_t>(plan.num_features));
   const RequiredSources required = required_sources(features);
+  bool needs_dense_coordinates = false;
   for (int64_t i = 0; i < plan.num_features; ++i) {
     const AssemblyFeature token = features[static_cast<size_t>(i)];
     HOLOSCAN_TRY(plan.feature_ids[static_cast<size_t>(i)],
                  feature_to_id(token));
+    needs_dense_coordinates =
+        needs_dense_coordinates || token == AssemblyFeature::kAzBin ||
+        token == AssemblyFeature::kElBin ||
+        token == AssemblyFeature::kAzBinIndex ||
+        token == AssemblyFeature::kElBinIndex;
   }
 
   try {
@@ -316,14 +326,13 @@ expected<AssemblyStagePlan, Error> build_assembly_stage_plan(
             ": features includes 'el_bin' but el_angles input is "
             "absent"});
   }
-  if ((required.az_angles || required.el_angles) &&
-      plan.layout.n_preserved < 2) {
+  if (needs_dense_coordinates && plan.layout.n_preserved < 2) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
         std::string(kOpName) +
-            ": 'az_bin'/'el_bin' require detection_idx with at "
-            "least two preserved-batch columns (…, az_bin, el_bin, "
-            "doppler_bin, range_bin)"});
+            ": dense angle features require detection_idx with at least two "
+            "preserved-batch columns (…, az_bin, el_bin, doppler_bin, "
+            "range_bin)"});
   }
 
   if (plan.have_range) {

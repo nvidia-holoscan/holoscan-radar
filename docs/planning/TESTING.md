@@ -126,6 +126,9 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - Selecting a feature whose source input is absent → error.
 - `range` / `velocity` require their physical axes; raw coordinates are
   selected explicitly with `range_bin` / `doppler_bin`.
+- Dense `az_bin` / `el_bin` perform angle-grid lookups; raw preserved angle
+  coordinates are selected explicitly with `az_bin_index` / `el_bin_index`
+  and require no grid inputs.
 - Static `features` determines the compiled join: raw-only layouts need only
   `detection_idx`; selected source ports are required exact-aligned members;
   unselected gather ports may remain unwired.

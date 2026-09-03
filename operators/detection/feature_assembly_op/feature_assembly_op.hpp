@@ -39,6 +39,8 @@ enum class AssemblyFeature {
   kElBin,       // el_angles[el_bin] (dense path; el_angles input required)
   kDopplerBin,  // raw doppler_bin escape hatch
   kRangeBin,    // raw range_bin escape hatch
+  kAzBinIndex,  // raw preserved az_bin (dense path)
+  kElBinIndex,  // raw preserved el_bin (dense path)
 };
 
 constexpr std::string_view to_string(AssemblyFeature feature) {
@@ -61,6 +63,10 @@ constexpr std::string_view to_string(AssemblyFeature feature) {
       return "doppler_bin";
     case AssemblyFeature::kRangeBin:
       return "range_bin";
+    case AssemblyFeature::kAzBinIndex:
+      return "az_bin_index";
+    case AssemblyFeature::kElBinIndex:
+      return "el_bin_index";
   }
   return "unknown";
 }
@@ -88,9 +94,10 @@ constexpr std::string_view to_string(AssemblyFeature feature) {
 //                       in `features` order; rows 1:1 with detection_idx.
 //
 // Precision is fixed at compile time (T = float | double). `features` is
-// static (defines the output layout); instantiate a separate operator to
-// vary the column set. No [live] parameters. Fat output pool sizing and
-// private workspace require MaxTensorExtents at graph.op() (ctor).
+// static (defines the output layout and temporal join); instantiate a separate
+// operator or recompile to vary the column set. No [live] parameters. Fat
+// output pool sizing and private workspace require MaxTensorExtents at
+// graph.op() (ctor).
 
 struct FeatureAssemblyParams {
   std::vector<AssemblyFeature> features{};
@@ -102,7 +109,7 @@ HOLOSCAN_PARAM_SCHEMA(
                            1),
     holoscan::field<&FeatureAssemblyParams::features>("features").description(
         "Ordered AssemblyFeature tokens selecting points columns "
-        "(static; defines output layout; required, non-empty)"));
+        "(static; defines output layout and contract; required, non-empty)"));
 
 static_assert(holoscan::param_schema_availability<FeatureAssemblyParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,

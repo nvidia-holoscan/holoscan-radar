@@ -164,6 +164,14 @@ HostTensor stage_assemble(
         feature_ids[static_cast<size_t>(i)] =
             holoscan::radar::detail::kFeatRangeBin;
         break;
+      case AssemblyFeature::kAzBinIndex:
+        feature_ids[static_cast<size_t>(i)] =
+            holoscan::radar::detail::kFeatAzBinIndex;
+        break;
+      case AssemblyFeature::kElBinIndex:
+        feature_ids[static_cast<size_t>(i)] =
+            holoscan::radar::detail::kFeatElBinIndex;
+        break;
     }
   }
   auto feat_dev = make_device_tensor({num_features}, kInt32Dtype);
@@ -253,6 +261,22 @@ TEST(FeatureAssemblyOpTest, AssemblesRawBinEscapeHatches) {
   EXPECT_DOUBLE_EQ(p[1], 5.0);
   EXPECT_DOUBLE_EQ(p[2], 7.0);
   EXPECT_DOUBLE_EQ(p[3], 2.0);
+}
+
+TEST(FeatureAssemblyOpTest, AssemblesRawDenseAngleBinIndices) {
+  std::vector<int64_t> idx = {3, 2, 7, 5};
+  auto idx_t = to_device_tensor(idx, {1, 4}, kInt64Dtype);
+  const auto points = run_assembly<double>(
+      idx_t, make_params({AssemblyFeature::kAzBinIndex,
+                          AssemblyFeature::kElBinIndex,
+                          AssemblyFeature::kDopplerBin,
+                          AssemblyFeature::kRangeBin}));
+  ASSERT_EQ(points.shape, (std::vector<int64_t>{1, 4}));
+  const double* p = points.as<double>();
+  EXPECT_DOUBLE_EQ(p[0], 3.0);
+  EXPECT_DOUBLE_EQ(p[1], 2.0);
+  EXPECT_DOUBLE_EQ(p[2], 7.0);
+  EXPECT_DOUBLE_EQ(p[3], 5.0);
 }
 
 TEST(FeatureAssemblyOpTest, RejectsPhysicalFeaturesWithoutAxes) {
@@ -729,6 +753,14 @@ TEST(FeatureAssemblyOpTest, RejectsAzBinWithTooFewPreservedColumns) {
   // the operator-level guard is what matters for the contract.
   const auto result = run_assembly_result<double>(
       idx_t, make_params({AssemblyFeature::kAzBin}));
+  EXPECT_TRUE(run_failed_with_diagnostic(result));
+}
+
+TEST(FeatureAssemblyOpTest, RejectsAzBinIndexWithTooFewPreservedColumns) {
+  std::vector<int64_t> idx = {0, 0};
+  auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
+  const auto result = run_assembly_result<double>(
+      idx_t, make_params({AssemblyFeature::kAzBinIndex}));
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 

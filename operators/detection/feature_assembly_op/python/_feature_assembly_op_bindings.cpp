@@ -79,8 +79,12 @@ void bind_assembly_feature(py::module_& m) {
       .value("SCORE", AssemblyFeature::kScore)
       .value("AZ", AssemblyFeature::kAz)
       .value("EL", AssemblyFeature::kEl)
+      .value("AZ_BIN", AssemblyFeature::kAzBin)
+      .value("EL_BIN", AssemblyFeature::kElBin)
       .value("DOPPLER_BIN", AssemblyFeature::kDopplerBin)
-      .value("RANGE_BIN", AssemblyFeature::kRangeBin);
+      .value("RANGE_BIN", AssemblyFeature::kRangeBin)
+      .value("AZ_BIN_INDEX", AssemblyFeature::kAzBinIndex)
+      .value("EL_BIN_INDEX", AssemblyFeature::kElBinIndex);
 }
 
 }  // namespace
