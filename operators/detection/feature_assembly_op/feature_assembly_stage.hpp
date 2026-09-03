@@ -116,8 +116,8 @@ inline void launch_score_plane_offsets(const int64_t* detection_idx,
 // detection_idx columns: (…preserved_batch, doppler_bin, range_bin).
 // score_plane_offsets[row] is the element offset to the start of that row's
 // (D, R) plane within score_map (nullptr ⇒ plane base 0).
-// When bin axes are present, out-of-range indices set *error_flag (raw-bin
-// fallback is only for absent axes). Score gathers are bounds-checked.
+// Physical axis/grid lookups and score gathers are bounds-checked. Raw-bin
+// features emit their detection_idx coordinates directly.
 template <typename T>
 static __global__ void assemble_features_kernel(
     const int64_t* __restrict__ detection_idx, int64_t num_points,

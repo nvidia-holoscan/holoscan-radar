@@ -44,8 +44,7 @@ zero-window `OnAligned` members; raw-bin-only layouts use
 `SafeDefault{}` inputs, so they may remain unwired.
 
 Contract: [`OPERATOR_API.md` § `FeatureAssemblyOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/detection/README.md`](../README.md) ·
-open items: [`OPEN_ITEMS.md`](OPEN_ITEMS.md)
+group: [`operators/detection/README.md`](../README.md)
 
 ## Scope
 
@@ -228,9 +227,10 @@ be exactly 2.
 
 Token evaluation is the table in **Feature reference**. Physical
 range/velocity never silently change units to raw indices. No scaling. Custom
-CUDA (MatX is a poor fit for sparse irregular gathers). The contract’s “shared
-gather primitive with `SnapshotGatherOp`” is **not** extracted yet
-(OPEN_ITEMS §1); this operator has its own assemble kernel.
+CUDA (MatX is a poor fit for sparse irregular gathers). A shared gather
+primitive with `SnapshotGatherOp` was rejected: snapshot gathering
+uses complex channel vectors, 2-D neighborhoods, edge policies, and a different
+execution shape. This operator intentionally owns its scalar assemble kernel.
 
 Out-of-range indices (when the corresponding axis/grid/score map is present)
 set a device error flag; the host maps it after a stream sync **before**
@@ -344,9 +344,8 @@ ctest --test-dir build -R test_feature_assembly --output-on-failure
 
 Conforms on ports, dtypes, explicit physical-versus-raw token semantics,
 Params-derived temporal joins, row alignment, rank-2 `detection_idx`
-(fail-closed extra leading axes), and dense `az_bin`/`el_bin` lookup. The shared
-gather primitive with `SnapshotGatherOp` remains staged in OPEN_ITEMS §1; this
-operator still owns its assemble kernel.
+(fail-closed extra leading axes), and dense az/el lookup. The operator is
+checklist-complete with no operator-local open items.
 
 Header comment block matches the implementation (Params-derived required
 sources, no `[live]` params, explicit raw tokens, ctor-sized workspace).

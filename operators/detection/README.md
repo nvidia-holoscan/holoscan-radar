@@ -72,9 +72,7 @@ header is the full contract; the current build implements a faithful subset:
   device-side score-plane offsets for preserved batch dims; float and double;
   empty `detection_idx` → empty `points`; unit tests cover
   [`TESTING.md`](../../docs/planning/TESTING.md) FeatureAssembly checks.
-- **Staged follow-ups:** see
-  [`feature_assembly_op/OPEN_ITEMS.md`](feature_assembly_op/OPEN_ITEMS.md)
-  (shared gather with SnapshotGatherOp).
+- **Status:** checklist-complete; no operator-local open items.
 
 ## Shared kernel conventions
 
