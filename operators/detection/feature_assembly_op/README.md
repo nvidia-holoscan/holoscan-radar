@@ -70,22 +70,29 @@ There is no dense az/el *value cube*. On the RDA path the cell’s angle is the
 scan-grid coordinate: tokens `az_bin` / `el_bin` plus `az_angles` / `el_angles`.
 Do not wire `az` / `el` for that path — those tokens mean `aoa_estimates`.
 
-## How a row is assembled
+## Feature reference
 
 `detection_idx` is always sparse. Inputs are either 1-D axes, a dense score
 map, or a row-aligned companion. For each row, the last two columns are
 `(doppler_bin, range_bin)`. On the dense RDA path the two preserved columns
 immediately before that pair are `(az_bin, el_bin)`.
 
-| Token (output column) | Reads | Index |
-| --- | --- | --- |
-| `range` | `range_bins[range_bin]` (input required) | last column |
-| `velocity` | `velocity_bins[doppler_bin]` (input required) | second-to-last column |
-| `score` | `detection_score` at that cell | `(doppler_bin, range_bin)` plus preserved columns as the leading plane |
-| `az` / `el` | `aoa_estimates[row, 0]` / `[row, 1]` | row number (sparse path) |
-| `az_bin` / `el_bin` | `az_angles[az_bin]` / `el_angles[el_bin]` | preserved columns `n_preserved-2` / `n_preserved-1` (dense path) |
-| `az_bin_index` / `el_bin_index` | the index itself | preserved columns `n_preserved-2` / `n_preserved-1`; no table |
-| `doppler_bin` / `range_bin` | the index itself | trailing pair; no table |
+Every row below is a value accepted in `FeatureAssemblyParams.features`. The
+list order is the output-column order.
+
+| Config token | C++ enum | Emitted value | Required input |
+| --- | --- | --- | --- |
+| `range` | `AssemblyFeature::kRange` | `range_bins[range_bin]` | `range_bins` |
+| `velocity` | `AssemblyFeature::kVelocity` | `velocity_bins[doppler_bin]` | `velocity_bins` |
+| `score` | `AssemblyFeature::kScore` | `detection_score[..., doppler_bin, range_bin]` | `detection_score` |
+| `az` | `AssemblyFeature::kAz` | `aoa_estimates[row, 0]` | `aoa_estimates` |
+| `el` | `AssemblyFeature::kEl` | `aoa_estimates[row, 1]` | `aoa_estimates` |
+| `az_bin` | `AssemblyFeature::kAzBin` | `az_angles[az_bin]` | `az_angles` |
+| `el_bin` | `AssemblyFeature::kElBin` | `el_angles[el_bin]` | `el_angles` |
+| `doppler_bin` | `AssemblyFeature::kDopplerBin` | Raw trailing Doppler index | none |
+| `range_bin` | `AssemblyFeature::kRangeBin` | Raw trailing range index | none |
+| `az_bin_index` | `AssemblyFeature::kAzBinIndex` | Raw preserved azimuth index | none |
+| `el_bin_index` | `AssemblyFeature::kElBinIndex` | Raw preserved elevation index | none |
 
 Selecting a token whose source table is missing is an error. Select
 `range_bin` / `doppler_bin` / `az_bin_index` / `el_bin_index` explicitly when
@@ -218,7 +225,7 @@ not a `(chirps, samples)` ADC cube, so the plan builder uses
 `parse_detection_idx_layout` instead of `collapse_named_tx_rx_batch`. Rank must
 be exactly 2.
 
-Token evaluation is the table in **How a row is assembled**. Physical
+Token evaluation is the table in **Feature reference**. Physical
 range/velocity never silently change units to raw indices. No scaling. Custom
 CUDA (MatX is a poor fit for sparse irregular gathers). The contract’s “shared
 gather primitive with `SnapshotGatherOp`” is **not** extracted yet
