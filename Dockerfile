@@ -35,7 +35,10 @@ ARG DEV_GID=1000
 
 # Install holoscan-cli developer tools
 ARG HOLOSCAN_CLI_INSTALL_ARGS="--pre --extra-index-url https://pypi.nvidia.com holoscan-cli>4.2.0"
+# Disable pathname expansion while preserving the documented whitespace-separated
+# pip argument override.
 RUN if ! python3 -m holoscan_cli --help 2>/dev/null | grep -qw build; then \
+        set -f; \
         python3 -m pip install ${HOLOSCAN_CLI_INSTALL_ARGS} \
     ; fi
 
