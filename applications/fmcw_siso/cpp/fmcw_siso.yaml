@@ -7,9 +7,9 @@
 #
 # The per-operator blocks (range_processor, clutter_filter, doppler_processor,
 # cfar_detector, cluster_dbscan, reduction) are parsed by the Graph app into
-# Params structs ([EA HSDK5 ONLY] — no from_config() on Graph). Feature
-# assembly for clustering uses PhysicalRangeVelocityPointsOp (FeatureAssembly
-# optional-bin wiring deferred on EA). Remaining top-level sections (cube,
+# Params structs ([EA HSDK5 ONLY] — no from_config() on Graph).
+# FeatureAssembly gathers physical range and velocity for clustering.
+# Remaining top-level sections (cube,
 # run, targets, noise_snr_db) configure the synthetic source and run cadence.
 
 # FMCW waveform, anchored so the range and Doppler blocks (and the app's

@@ -124,6 +124,12 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - `points` columns equal the looked-up physical values at each detection (`range = range_bins[range_bin]`, `velocity = velocity_bins[doppler_bin]`, `score` gathered from `detection_score`, az/el from `aoa_estimates`), in the configured `features` order.
 - Rows 1:1 with `detection_idx`.
 - Selecting a feature whose source input is absent → error.
+- `range` / `velocity` require their physical axes; raw coordinates are
+  selected explicitly with `range_bin` / `doppler_bin`.
+- Static `features` determines the compiled join: raw-only layouts need only
+  `detection_idx`; selected source ports are required exact-aligned members;
+  unselected gather ports may remain unwired.
+- Extra leading axes on `detection_idx` are rejected (input rank is exactly 2; no module batch).
 
 #### DetectionReductionOp (bridge)
 

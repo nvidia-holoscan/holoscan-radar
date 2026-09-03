@@ -4,13 +4,8 @@
 // Performance characterization for FeatureAssemblyOp — sweeps detection count
 // and map size. Measurement tool only: no timing assertions.
 //
-// [EA HSDK5 ONLY] Graph rewrite via run_perf_graph (detection_idx only).
-// Optional gather Inputs (range_bins, velocity_bins, detection_score,
-// aoa_estimates, az_angles, el_angles) are omitted from contract() and must
-// stay unconnected on HSDK 5 EA (RUNTIME_OPERATOR_REPLAY_MISMATCH when wired;
-// same Beamscan is_valid pattern). Features that need those ports are covered
-// by stage/unit tests; this driver times the raw-bin pack
-// {doppler_bin, range_bin}. No [live] parameters.
+// Graph rewrite via run_perf_graph_triple. The driver times the physical
+// {range, velocity} pack with exact-aligned axis inputs. No [live] parameters.
 
 #include <cuda_runtime_api.h>
 
@@ -92,9 +87,8 @@ const SizeSpec& must_find_size(const std::string& id) {
 }
 
 std::vector<hr::AssemblyFeature> pack_features() {
-  // Raw-bin escape hatches — no optional gather Inputs required (§1 EA).
-  return {hr::AssemblyFeature::kDopplerBin,
-          hr::AssemblyFeature::kRangeBin};
+  return {hr::AssemblyFeature::kRange,
+          hr::AssemblyFeature::kVelocity};
 }
 
 template <typename T>
@@ -138,8 +132,25 @@ perf::TimingCollector run_feat_graph(const FeatScenario& scen,
                                      int total_frames) {
   auto idx_t = make_detection_idx(scen.num_detections,
                                   scen.doppler, scen.range);
-  return perf::run_perf_graph(
-      std::move(idx_t), total_frames, "feat-asm-perf",
+  std::vector<PerfPrecision> range_host(
+      static_cast<std::size_t>(scen.range));
+  std::vector<PerfPrecision> velocity_host(
+      static_cast<std::size_t>(scen.doppler));
+  for (int64_t i = 0; i < scen.range; ++i) {
+    range_host[static_cast<std::size_t>(i)] =
+        static_cast<PerfPrecision>(i);
+  }
+  for (int64_t i = 0; i < scen.doppler; ++i) {
+    velocity_host[static_cast<std::size_t>(i)] =
+        static_cast<PerfPrecision>(i);
+  }
+  auto range_t = make_device_from_host(
+      range_host, {scen.range}, hr::real_dtype<PerfPrecision>());
+  auto velocity_t = make_device_from_host(
+      velocity_host, {scen.doppler}, hr::real_dtype<PerfPrecision>());
+  return perf::run_perf_graph_triple(
+      std::move(idx_t), std::move(range_t), std::move(velocity_t),
+      total_frames, "feat-asm-perf",
       [&](holoscan::Graph& graph, const auto& src,
           holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
@@ -158,7 +169,9 @@ perf::TimingCollector run_feat_graph(const FeatScenario& scen,
             graph.op<perf::PerfTerminalSinkOp>("pts_sink");
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
 
-        graph.add_flow(src->out, op->detection_idx, q);
+        graph.add_flow(src->out_a, op->detection_idx, q);
+        graph.add_flow(src->out_b, op->range_bins, q);
+        graph.add_flow(src->out_c, op->velocity_bins, q);
         graph.add_flow(op->points, pts_sink->in, q);
 
         perf::bind_tensor_out(options, "feat", "points");
@@ -178,25 +191,27 @@ void fill_throughput(perf::ResultRow* row,
   const double tsz = sizeof(PerfPrecision);
   const double idx_bytes =
       n * 2.0 * static_cast<double>(sizeof(int64_t));
+  const double axis_bytes =
+      static_cast<double>(scen.doppler + scen.range) * tsz;
   const int64_t num_features =
       static_cast<int64_t>(pack_features().size());
   const double points_bytes =
       n * static_cast<double>(num_features) * tsz;
   row->estimated_effective_gbps =
-      (idx_bytes + points_bytes) / sec / 1e9;
+      (idx_bytes + axis_bytes + points_bytes) / sec / 1e9;
 }
 
 perf::ResultRow base_row(const FeatScenario& scen) {
   perf::ResultRow row;
   row.scenario_id = scen.id;
   row.op_name = "FeatureAssemblyOp";
-  row.variant = "raw_bins";
+  row.variant = "physical_range_velocity";
   row.size_id = scen.size_id;
   row.map_shape = {scen.doppler, scen.range};
   row.input_shape = {scen.num_detections, 2};
   row.out_batch = scen.num_detections;
   row.k = static_cast<int64_t>(pack_features().size());
-  row.notes = "optional_gathers=deferred_ea";
+  row.notes = "join=exact_aligned_axes";
   return row;
 }
 
@@ -208,7 +223,7 @@ FeatScenario make_scenario(const SizeSpec& s,
   sc.range = s.range;
   sc.num_detections = num_detections;
   std::ostringstream id;
-  id << "feat_asm_rawbins_" << s.id << "_n" << num_detections
+  id << "feat_asm_physical_" << s.id << "_n" << num_detections
      << "_compute";
   sc.id = id.str();
   return sc;
@@ -225,15 +240,14 @@ struct FeatTraits : perf::PerfDriverDefaults {
            "(HSDK 5 Graph)";
   }
   static const char* sizes_all_help() {
-    return "Raw-bin pack size sweep across the full ladder";
+    return "Physical range/velocity pack sweep across the full ladder";
   }
   static const char* sizes_subset_help() {
-    return "Raw-bin pack size sweep across an explicit subset";
+    return "Physical range/velocity pack sweep across an explicit subset";
   }
   static const char* full_help() {
-    return "Full matrix (sizes x detection counts); optional-port "
-           "packs (score, full) omitted on HSDK 5 EA Graph — "
-           "covered by stage tests";
+    return "Full matrix (sizes x detection counts); score and angle packs "
+           "remain covered by unit tests";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {

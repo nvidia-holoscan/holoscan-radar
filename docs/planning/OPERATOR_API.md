@@ -460,8 +460,8 @@ GO/SO start-time pre-calibration (needs an RD-map shape hint, since their LUTs a
 Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`) by gathering each detection's physical attributes from its cell — mapping CFAR's bare bin indices to physical range / velocity, gathering the detection strength, and appending angle when available. Pure gather / lookup — the feature-engineering step between detection and clustering.
 
 - **In:** `detection_idx` — int, `(num_points, 2 [+ n_batch])`. The `(doppler_bin, range_bin)` cells (CFAR). Row order sets the output row order (so `ClusterDBSCANOp.labels` join back positionally).
-- **In:** `range_bins` (optional) — float32 / float64, `(num_range,)`. Physical range (m) per range bin (range-processor `range_bins`; in-tree: `FMCWRangeProcessorOp`); indexed by the `range_bin` column for the range feature. Absent → the raw bin index is used.
-- **In:** `velocity_bins` (optional) — float32 / float64, `(num_doppler,)`. Physical velocity (m/s) per Doppler bin (Doppler-processor `velocity_bins`; in-tree: `FMCWDopplerProcessorOp`); indexed by `doppler_bin`. Absent → the raw bin index.
+- **In:** `range_bins` (optional port; required by `range`) — float32 / float64, `(num_range,)`. Physical range (m) per range bin (range-processor `range_bins`; in-tree: `FMCWRangeProcessorOp`); indexed by the `range_bin` column. Select `range_bin` instead when the raw index is wanted.
+- **In:** `velocity_bins` (optional port; required by `velocity`) — float32 / float64, `(num_doppler,)`. Physical velocity (m/s) per Doppler bin (Doppler-processor `velocity_bins`; in-tree: `FMCWDopplerProcessorOp`); indexed by `doppler_bin`. Select `doppler_bin` instead when the raw index is wanted.
 - **In:** `detection_score` (optional) — float32 / float64, `(num_doppler, num_range)`. CFAR's per-cell score map; gathered at each detection cell → the strength feature.
 - **In:** `aoa_estimates` (optional) — float32 / float64, `(num_points, 2)`. Per-detection `(az, el)` **values** (sparse post-angle path), row-aligned with `detection_idx`; supplies the `az` / `el` features.
 - **In:** `az_angles` (optional) — float32 / float64, `(num_az,)`. Azimuth scan grid (the beamformer's `az_angles`); indexed by the `az_bin` preserved-batch column for the `az_bin` feature (dense path). Required when `az_bin` is selected.
@@ -470,12 +470,12 @@ Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`
 
 **Parameters:**
 
-- `features` — ordered list over {range, velocity, score, az, el, az_bin, el_bin} (plus raw {doppler_bin, range_bin} as escape hatches). Selects which columns to assemble and their order, fixing `num_features` and the layout. Each token draws from its matching input: range/velocity from the bin-axis lookups, score from `detection_score`, `az`/`el` from `aoa_estimates` (sparse path, angle values), `az_bin`/`el_bin` from the `az_angles`/`el_angles` grids indexed by the preserved-batch `(az_bin, el_bin)` columns (dense path). Selecting a token whose input is absent is an error. Static (defines the output layout). Default: none (required).
+- `features` — ordered list over {range, velocity, score, az, el, az_bin, el_bin} (plus raw {doppler_bin, range_bin} as escape hatches). Selects columns and their order, fixing `num_features`, the layout, and the compile-time temporal join. Range/velocity use their required bin-axis lookups; score uses `detection_score`; `az`/`el` use sparse `aoa_estimates`; `az_bin`/`el_bin` use the scan grids indexed by preserved-batch columns. Selected source ports are required zero-window `OnAligned` members; raw tokens require only `detection_idx`. Unselected gathers are optional `Exact` + `SafeDefault` side inputs. A selected source input that is absent is an error. Static; changing it requires graph recompilation. Default: none (required).
 
 **Algorithm:**
 
 1. For each `detection_idx` row, read `(doppler_bin, range_bin)` (last two columns); on the dense path the two preserved columns just before them are `(az_bin, el_bin)`.
-2. Build each configured feature: `range = range_bins[range_bin]` (or the raw bin), `velocity = velocity_bins[doppler_bin]` (or raw), `score =` gather `detection_score` at the cell, `az` / `el` `= aoa_estimates[row]`, `az_bin` / `el_bin` `= az_angles[az_bin]` / `el_angles[el_bin]`.
+2. Build each configured feature: `range = range_bins[range_bin]`, `velocity = velocity_bins[doppler_bin]`, `range_bin` / `doppler_bin` = the raw indices, `score =` gather `detection_score` at the cell, `az` / `el` `= aoa_estimates[row]`, `az_bin` / `el_bin` `= az_angles[az_bin]` / `el_angles[el_bin]`.
 3. Stack the columns in `features` order → `points`. Pure gather / 1-D
    lookup (custom CUDA; MatX is a poor fit for sparse irregular gathers);
    no scaling.

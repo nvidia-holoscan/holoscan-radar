@@ -15,6 +15,7 @@ target_link_libraries(fmcw_mimo PRIVATE
     holoscan::cfar_detector_op
     holoscan::snapshot_gather_op
     holoscan::beamscan_estimator_op
+    holoscan::feature_assembly_op
     holoscan::detection_reduction_op
     holoscan::cluster_dbscan_op
     holoscan::radar_app

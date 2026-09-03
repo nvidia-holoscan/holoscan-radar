@@ -74,7 +74,7 @@ Grouped by theme. Section numbers match [`HSDK5_PORT.md`](HSDK5_PORT.md)
 | Raw `DLManagedTensor*` imports are read-only | Writable path via `DLManagedTensorContext` + owned device memory (`dlpack_buffer.hpp`) (§4) |
 | Operator with **no** wired port breaks auto-partition (`PARTITION_MANUAL_AUTHORING_REQUIRED`, unnamed vertex) | Always drain fan-outs (e.g. `cfar_power` → viewer **and** `NullSinkOp`); never leave a constructed sink unwired (§6) |
 | Registered-but-unwired ports vs wired-not-in-contract | `contract()` matches exactly the wired set (X11 viewer overlays, report optional ports) |
-| Optional Tensor Inputs hard to wire on Graph (e.g. FeatureAssembly bins, Beamscan `is_valid`) | Omit from contract for unconnected apps; stage/kernel coverage; app-local `PhysicalRangeVelocity*PointsOp` stand-ins for demos |
+| Optional Tensor Inputs hard to wire on Graph | SDK §11 support adopted: unselected non-member inputs use Exact + SafeDefault; FeatureAssembly derives required aligned sources from static `features`; app-local points stand-ins retired |
 | No Graph equivalent of Application `set_dynamic_flows` (AoA estimator rotate) | `EstimatorRouterOp` (one of N snapshot outs) + `AoaMergeOp` (`OnAnyInput`); `estimator_idx` Tensor for UI label (scalar mid-stream still EA-open) |
 | Multi-in `OnAligned`+`Exact` needs co-timed sources | Dual/triple Tensor sources on one OnClock tick in `sdk_harness.hpp` |
 | Harness “hang” on reject paths | Poll `session.diagnostics()` — capture CV alone never wakes |

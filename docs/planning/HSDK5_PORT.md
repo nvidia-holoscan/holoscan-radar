@@ -200,7 +200,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `MUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/grid/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
 | `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX/cuSOLVER teardown preserved; Graph perf `max_sources` `override_ms` restored (§8) |
 | `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports, `subarray_spec` static (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
-| `FeatureAssemblyOp` F32/F64 + Graph C++ tests (1-in/1-out; optional gathers) | landed; optional gather Inputs omitted from contract (§11 / Beamscan `is_valid` pattern); Graph optional wiring deferred — stage kernel coverage; no `[live]` params; Graph perf cold/steady landed |
+| `FeatureAssemblyOp` F32/F64 + Graph C++ tests (Params-derived aligned gathers) | landed; static `features` selects required zero-window aligned sources; unselected Tensor gathers use Exact + SafeDefault (§11); no `[live]` params; C++ apps use the library op; Graph perf cold/steady landed |
 | `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; Exact `representative`/`score_method`/`feature_weights` on unconditional entries under its `OnAligned` trigger — all three `expect_*` retired (§11), and the live suite keeps every override port wired so a silent one is shown not to stall the trigger; the two enum live-override units landed (§12 fixed); `feature_weights` is a bounded host Tensor (§9); Graph perf cold/steady landed |
 | `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; Exact POD lives (unconditional entries) (Graph live deferred §1); vector lives on bounded host-Tensor ports, fixed tuples on ChannelPod (§9); statistical MC suite on label `statistical`; Graph perf `threshold_scale` `override_ms` restored (§8) |
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph live-override/`TXSchedule` N/A (Params-only schedule); Graph perf cold/steady landed |
@@ -402,11 +402,10 @@ lives, so only their optional-input limitations remain.
   `LiveMaxSourcesAppliesForOneTick` now pass; their geometry /
   `spatial_smoothing` live Graph tests are active.
   Params cover the same trio of configurable-from-Params tests.
-- `FeatureAssemblyOp` has no `[live]` params; optional gather Tensor Inputs
-  are omitted from `contract()` (unconnected apps) and Graph wiring of those
-  ports is deferred (`OptionalGatherGraphWiringDeferred` skipped) — that is
-  the optional-input gap (§11), not this one; stage kernel tests cover the
-  optional gather paths.
+- `FeatureAssemblyOp` has no `[live]` params. Static `features` selects its
+  required aligned data sources; unselected gather Tensor Inputs are
+  non-member `Exact` + `SafeDefault` entries under §11. Graph tests cover the
+  selected-source joins.
 - `DetectionReductionOpTest.LiveRepresentativeAppliesForOneTick` /
   `LiveScoreMethodAppliesForOneTick` are skipped under §12 (enum edges);
   `LiveFeatureWeightsRevertsToParamsAfterMiss` is skipped under §9. Params
@@ -1227,10 +1226,9 @@ operator, or the diagnostic should name it.
 → Graph: `SimAdcSourceOp`, report/null sinks, `run_fmcw_graph_app`, YAML →
 `Params` + `MaxTensorExtents` (no `from_config()`). Optional X11 RD window
 with the full overlay set when `visualization.enabled`. **EA workaround:**
-`FeatureAssemblyOp`
-optional `range_bins`/`velocity_bins` wiring is deferred (§1 /
-OPEN_ITEMS) — SISO uses app-local `PhysicalRangeVelocityPointsOp`
-(required OnAligned Exact) for physical `[range, velocity]` points.
+`FeatureAssemblyOp` now uses a Params-derived `OnAligned` contract for selected
+sources, so SISO wires its physical range/velocity axes directly to the library
+operator. The earlier app-local required-port stand-in is retired.
 Smoke: `./fmcw_siso fmcw_siso_smoke.yaml` (log-only) or enable
 visualization under a real/`Xvfb` `DISPLAY`.
 
@@ -1240,13 +1238,13 @@ extends to the remaining sparse/dense FMCW demos under
 
 | App | Notes |
 | --- | --- |
-| `fmcw_simo` | Sparse SIMO: SnapshotGather → Beamscan; `PhysicalRangeVelocityAzElPointsOp` (4-feat); `cfar_power` → RD image; boresight from `beamscan.aoa_estimates` |
+| `fmcw_simo` | Sparse SIMO: SnapshotGather → Beamscan; `FeatureAssemblyOp` (4 features); `cfar_power` → RD image; boresight from `beamscan.aoa_estimates` |
 | `fmcw_dense_simo` | Dense: PhaseShiftBeamformer + Graph `AnglePeakPick`/`CubeAoaLookup`/`TrailingIdxColumns`/`RdAngleMaxOp`; 4-col `rep_idx` ClusterReport with az/el grids; boresight from `CubeAoaLookupOp` |
 | `fmcw_mimo` | Graph `MimoTdm`/`MimoDdm` sources + `DdmReportVelocityBinsOp`; TDM/DDM compose branches; same sparse tail as SIMO; boresight over the virtual-array scan grid |
 | `fmcw_aoa_estimators` | Five sparse estimators behind Graph `EstimatorRouterOp` (N snapshot outs) + `AoaMergeOp` (`OnAnyInput`); rotates beamscan/MVDR/MUSIC/Root-MUSIC/ESPRIT; X11 overlays + boresight + the active estimator's name in the header (`AoaMergeOp.estimator_idx` → viewer `label_idx`, also always drained) |
 
 Shared helpers: `radar_app/app/graph_params.hpp` (YAML → Params),
-`PhysicalRangeVelocityAzElPointsOp`, DetectionReport/ClusterReport
+DetectionReport/ClusterReport
 `Config` flags (`report_aoa` / `report_detection_idx`) so optional ports
 enter `contract()` only when wired. Beamscan `is_valid` stays unwired
 (§1). Smoke YAMLs: `*_smoke.yaml` (+ `fmcw_mimo_ddm_smoke.yaml`) — note

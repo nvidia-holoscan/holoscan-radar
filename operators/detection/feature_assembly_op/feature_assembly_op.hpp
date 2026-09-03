@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <cuda_runtime_api.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -11,7 +13,6 @@
 #include <type_traits>
 #include <vector>
 
-#include <holoscan/core/domain/dlpack.hpp>
 #include <holoscan/core/domain/tensor.hpp>
 #include <holoscan/core/errors.hpp>
 #include <holoscan/core/execution_context.hpp>
@@ -22,7 +23,6 @@
 #include <holoscan/core/parameter_schema.hpp>
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
-#include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 
@@ -30,8 +30,8 @@ namespace holoscan::radar {
 
 // Column tokens for FeatureAssemblyOp.features (static; defines output layout).
 enum class AssemblyFeature {
-  kRange,       // range_bins[range_bin], or raw range_bin if bins absent
-  kVelocity,    // velocity_bins[doppler_bin], or raw doppler_bin if absent
+  kRange,       // range_bins[range_bin] (input required)
+  kVelocity,    // velocity_bins[doppler_bin] (input required)
   kScore,       // gather detection_score at the cell (input required)
   kAz,          // aoa_estimates[row, 0] (sparse path; input required)
   kEl,          // aoa_estimates[row, 1] (sparse path; input required)
@@ -69,14 +69,13 @@ constexpr std::string_view to_string(AssemblyFeature feature) {
 // This header is the contract reference for ports, shapes, dtypes, and
 // parameters; module-wide conventions live in operators/common/README.md.
 //
-// In:  detection_idx   — int64, (num_points, 2 [+ n_batch]). CFAR cells;
+// In:  detection_idx   — int64, (num_points, 2 [+ n_preserved]). CFAR cells;
 //                       columns are (…preserved_batch, doppler_bin,
-//                       range_bin). Required.
+//                       range_bin). Required. Rank 2; no opaque leading batch.
 // In:  range_bins      — optional float32/float64, (num_range,). Physical
-//                       range (m); absent → raw range_bin for `range`.
+//                       range (m); required when `range` is selected.
 // In:  velocity_bins   — optional float32/float64, (num_doppler,). Physical
-//                       velocity (m/s); absent → raw doppler_bin for
-//                       `velocity`.
+//                       velocity (m/s); required when `velocity` is selected.
 // In:  detection_score — optional float32/float64, (..., num_doppler,
 //                       num_range). Required when `score` is in features.
 // In:  aoa_estimates   — optional float32/float64, (num_points, 2). Required
@@ -90,7 +89,8 @@ constexpr std::string_view to_string(AssemblyFeature feature) {
 //
 // Precision is fixed at compile time (T = float | double). `features` is
 // static (defines the output layout); instantiate a separate operator to
-// vary the column set. No [live] parameters.
+// vary the column set. No [live] parameters. Fat output pool sizing and
+// private workspace require MaxTensorExtents at graph.op() (ctor).
 
 struct FeatureAssemblyParams {
   std::vector<AssemblyFeature> features{};
@@ -115,7 +115,8 @@ class FeatureAssemblyOp : public holoscan::Operator<FeatureAssemblyParams> {
                 "FeatureAssemblyOp supports float and double precision");
 
  public:
-  // Required: sizes the points Tensor pool at setup().
+  // Required: sizes the points Tensor pool and the private workspace
+  // tables (feature ids, score offsets, score leading dims, error flag).
   explicit FeatureAssemblyOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
@@ -124,9 +125,9 @@ class FeatureAssemblyOp : public holoscan::Operator<FeatureAssemblyParams> {
       ExecutionContext& context) override;
 
   Input<Tensor> detection_idx{"detection_idx"};
-  // Optional gather sources — omitted from contract() so unconnected graphs
-  // compile (TEMPORAL_INPUT_UNCONNECTED otherwise; SafeDefault alone is not
-  // enough on EA — HSDK5_PORT.md / Beamscan optional is_valid pattern).
+  // Gather sources. Static features determines which are required aligned
+  // members; unselected ports are Exact + SafeDefault side inputs. Not [live]
+  // overrides.
   Input<Tensor> range_bins{"range_bins"};
   Input<Tensor> velocity_bins{"velocity_bins"};
   Input<Tensor> detection_score{"detection_score"};
@@ -136,11 +137,13 @@ class FeatureAssemblyOp : public holoscan::Operator<FeatureAssemblyParams> {
   Output<Tensor> points{"points"};
 
  private:
-  MaxTensorExtents extents_;
-  std::size_t max_byte_span_{0U};
+  expected<void, Error> ensure_device_feature_ids(
+      const std::vector<int>& feature_ids, cudaStream_t stream);
+  expected<void, Error> ensure_score_leading(
+      const std::vector<int64_t>& score_leading, cudaStream_t stream);
 
-  // Keep the previous activation's inputs alive across ticks so async device
-  // reads cannot outlive the buffers.
+  // Keep the previous activation's inputs alive across ticks so async
+  // device reads cannot outlive the buffers.
   Tensor retained_idx_;
   Tensor retained_range_bins_;
   Tensor retained_velocity_bins_;
@@ -148,17 +151,23 @@ class FeatureAssemblyOp : public holoscan::Operator<FeatureAssemblyParams> {
   Tensor retained_aoa_;
   Tensor retained_az_angles_;
   Tensor retained_el_angles_;
-  // Scratch uploads used by the assemble kernel (feature ids, score offsets,
-  // score leading dims). Feature ids are static → uploaded once. Leading
-  // dims are re-uploaded only when the score-map layout changes.
-  std::shared_ptr<holoscan::Tensor> retained_feature_ids_;
-  std::shared_ptr<holoscan::Tensor> retained_score_offsets_;
-  std::shared_ptr<holoscan::Tensor> retained_score_leading_;
-  std::shared_ptr<holoscan::Tensor> retained_error_flag_;
+
+  // Ctor-sized workspace (not ConfigCache): feature-id table, score-plane
+  // offsets, score leading dims, and the device error flag.
+  std::shared_ptr<Tensor> feature_ids_;
+  std::size_t feature_ids_capacity_{0};
+  std::shared_ptr<Tensor> score_offsets_;
+  std::size_t score_offsets_capacity_{0};
+  std::shared_ptr<Tensor> score_leading_;
+  std::size_t score_leading_capacity_{0};
+  std::shared_ptr<Tensor> error_flag_;
   std::vector<int64_t> cached_score_leading_;
-  // features is contract-static; lock the column map after the first upload
-  // and reject a later Params permute that would silently reuse stale ids.
+  // features is contract-static; lock the column map after the first
+  // successful non-empty emit and reject a later Params permute.
   std::optional<std::vector<int>> seeded_feature_ids_{};
+
+  MaxTensorExtents extents_;
+  std::size_t max_byte_span_{0U};
 };
 
 extern template class FeatureAssemblyOp<float>;

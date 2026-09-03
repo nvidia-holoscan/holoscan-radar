@@ -24,6 +24,7 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
             clutter_filter_op
             fmcw_doppler_processor_op
             cfar_detector_op
+            feature_assembly_op
             detection_reduction_op
             cluster_dbscan_op
     )
@@ -35,6 +36,7 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
             cfar_detector_op
             snapshot_gather_op
             beamscan_estimator_op
+            feature_assembly_op
             detection_reduction_op
             cluster_dbscan_op
     )
@@ -49,6 +51,7 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
             cfar_detector_op
             snapshot_gather_op
             beamscan_estimator_op
+            feature_assembly_op
             detection_reduction_op
             cluster_dbscan_op
     )
@@ -59,6 +62,7 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
             fmcw_doppler_processor_op
             phase_shift_beamformer_op
             cfar_detector_op
+            feature_assembly_op
             detection_reduction_op
             cluster_dbscan_op
     )
@@ -74,6 +78,7 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
             music_estimator_op
             root_music_estimator_op
             esprit_estimator_op
+            feature_assembly_op
             detection_reduction_op
             cluster_dbscan_op
     )

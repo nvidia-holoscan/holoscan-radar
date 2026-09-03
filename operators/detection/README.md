@@ -65,14 +65,15 @@ header is the full contract; the current build implements a faithful subset:
 
 - **Implemented:** static `features` column layout; required `detection_idx`;
   optional `range_bins` / `velocity_bins` / `detection_score` /
-  `aoa_estimates` (non-blocking); raw-bin fallback when physical bin axes are
-  absent; score/az/el require their inputs; GPU assemble kernel with
+  `aoa_estimates`; Params-derived exact-aligned joins for selected sources;
+  explicit `range_bin` / `doppler_bin` raw tokens; all physical features
+  require their source inputs; GPU assemble kernel with
   device-side score-plane offsets for preserved batch dims; float and double;
   empty `detection_idx` → empty `points`; unit tests cover
   [`TESTING.md`](../../docs/planning/TESTING.md) FeatureAssembly checks.
 - **Staged follow-ups:** see
   [`feature_assembly_op/OPEN_ITEMS.md`](feature_assembly_op/OPEN_ITEMS.md)
-  (optional gather `contract()` entries; shared gather with SnapshotGatherOp).
+  (shared gather with SnapshotGatherOp).
 
 ## Shared kernel conventions
 

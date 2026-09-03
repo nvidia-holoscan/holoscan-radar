@@ -58,8 +58,6 @@ radar_app/
   app/config_path.hpp     resolve_config_path, shared by both drivers
   app/graph_driver.hpp    [EA HSDK5 ONLY] run_fmcw_graph_app + AppFrameBank —
                           the Graph-API counterpart of run_fmcw_app
-  app/physical_points_op.hpp  [EA HSDK5 ONLY] PhysicalRangeVelocityPointsOp —
-                          required-port stand-in for FeatureAssemblyOp
   app/holoviz_layout.hpp  HolovizLayout / RightPanel + build_holoviz_input_specs
                           + make_rd_holoviz_op factory + panel presets
   report/cadence_meter.hpp  CadenceMeter — wall-clock source / e2e probe

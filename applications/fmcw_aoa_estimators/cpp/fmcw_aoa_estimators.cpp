@@ -7,7 +7,7 @@
 //     -> SnapshotGather -> EstimatorRouterOp (5 snapshot outs; emit one)
 //       -> SnapshotK1Slice -> Beamscan
 //       -> MVDR / MUSIC / Root-MUSIC / ESPRIT
-//     -> AoaMergeOp (OnAnyInput) -> [PhysicalPoints -> DBSCAN -> Reduction]
+//     -> AoaMergeOp (OnAnyInput) -> [FeatureAssembly -> DBSCAN -> Reduction]
 //     -> DetectionReportOp / ClusterReportOp
 //     [-> RdMapToImageOp(cfar_power) -> X11RdViewerOp]
 //
@@ -34,11 +34,11 @@
 #include "clustering/cluster_dbscan_op/cluster_dbscan_op.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "detection/detection_reduction_op/detection_reduction_op.hpp"
+#include "detection/feature_assembly_op/feature_assembly_op.hpp"
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "radar_app/app/graph_driver.hpp"
-#include "radar_app/app/physical_points_op.hpp"
 #include "radar_app/app/source.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "config.hpp"      // NOLINT(build/include_subdir): colocated app header
@@ -268,8 +268,15 @@ int main(int argc, char** argv) {
           graph.add_flow(aoa_merge->aoa_estimates, sink->aoa_estimates, q);
         } else {
           auto feature_assembly =
-              graph.op<PhysicalRangeVelocityAzElPointsOp>("feature_assembly",
-                                                          extents);
+              graph.op<radar::FeatureAssemblyOp<float>>("feature_assembly",
+                                                        extents);
+          radar::FeatureAssemblyParams feature_params;
+          feature_params.features = {
+              radar::AssemblyFeature::kRange,
+              radar::AssemblyFeature::kVelocity,
+              radar::AssemblyFeature::kAz,
+              radar::AssemblyFeature::kEl};
+          feature_assembly.set_params(std::move(feature_params));
           auto cluster = graph.op<radar::ClusterDBSCANOp<float>>(
               "cluster_dbscan", extents);
           cluster.set_params(cfg.dbscan_params);

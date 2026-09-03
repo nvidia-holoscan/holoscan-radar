@@ -16,6 +16,7 @@ target_link_libraries(fmcw_aoa_estimators PRIVATE
     holoscan::music_estimator_op
     holoscan::root_music_estimator_op
     holoscan::esprit_estimator_op
+    holoscan::feature_assembly_op
     holoscan::detection_reduction_op
     holoscan::cluster_dbscan_op
     holoscan::radar_app

@@ -2,11 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // FeatureAssemblyOp contract tests (HSDK 5 Graph harness + stage kernels):
-// gather / bin lookup → points matrix. Optional gather Inputs are omitted
-// from the operator temporal contract so unconnected graphs compile
-// (HSDK5_PORT / Beamscan optional-is_valid pattern); Graph wiring of those
-// ports is deferred (RUNTIME_OPERATOR_REPLAY_MISMATCH on EA). Paths that
-// need optional tensors are covered by direct stage launches.
+// static features defines both output columns and the compiled temporal join.
+// Selected sources are exact-aligned; unselected gathers may remain unwired.
+// detection_idx is rank 2; extra leading axes fail closed.
 
 #include <gtest/gtest.h>
 
@@ -38,7 +36,9 @@ using holoscan::radar::make_device_tensor;
 using holoscan::radar::real_dtype;
 using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
+using holoscan::radar::testing::run_dual_in_single_out_operator_graph_result;
 using holoscan::radar::testing::run_single_io_operator_graph_result;
+using holoscan::radar::testing::run_triple_in_single_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 using holoscan::radar::testing::to_host;
 
@@ -97,8 +97,24 @@ bool run_failed_with_diagnostic(const GraphRunResult& result) {
   return !result.diagnostics.empty() || !result.plan_ok;
 }
 
+HostTensor require_one_frame(GraphRunResult result) {
+  if (!result.plan_ok) {
+    throw std::runtime_error(std::string("compile failed: ") +
+                             result.plan_json);
+  }
+  if (!result.diagnostics.empty()) {
+    throw std::runtime_error(std::string("run diagnostic: ") +
+                             result.diagnostics.front());
+  }
+  if (result.frames.size() != 1U) {
+    throw std::runtime_error(
+        "FeatureAssemblyOp test: expected one points frame");
+  }
+  return std::move(result.frames.front());
+}
+
 // ---------------------------------------------------------------------------
-// Stage helpers — cover optional gather paths without Graph wiring (EA).
+// Stage helpers — focused kernel and error-path coverage.
 // ---------------------------------------------------------------------------
 
 template <typename T>
@@ -220,7 +236,7 @@ std::shared_ptr<holoscan::Tensor> upload_real(const std::vector<T>& host,
 }
 
 // ---------------------------------------------------------------------------
-// Graph: detection_idx-only paths (optional ports unconnected).
+// Graph: Params-derived temporal joins.
 // ---------------------------------------------------------------------------
 
 TEST(FeatureAssemblyOpTest, AssemblesRawBinEscapeHatches) {
@@ -239,14 +255,12 @@ TEST(FeatureAssemblyOpTest, AssemblesRawBinEscapeHatches) {
   EXPECT_DOUBLE_EQ(p[3], 2.0);
 }
 
-TEST(FeatureAssemblyOpTest, RangeFallsBackToRawBinWhenBinsAbsent) {
+TEST(FeatureAssemblyOpTest, RejectsPhysicalFeaturesWithoutAxes) {
   std::vector<int64_t> idx = {1, 9};
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
-  const auto points = run_assembly<float>(
+  const auto result = run_assembly_result<float>(
       idx_t, make_params({AssemblyFeature::kRange, AssemblyFeature::kVelocity}));
-  const float* p = points.as<float>();
-  EXPECT_FLOAT_EQ(p[0], 9.0f);
-  EXPECT_FLOAT_EQ(p[1], 1.0f);
+  EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
 TEST(FeatureAssemblyOpTest, RejectsScoreFeatureWithoutScoreInput) {
@@ -311,6 +325,16 @@ TEST(FeatureAssemblyOpTest, RejectsBadDetectionIdxRank) {
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
+TEST(FeatureAssemblyOpTest, RejectsOpaqueLeadingBatch) {
+  // Rank 3 is not a named axis; parse_detection_idx_layout fail-closes
+  // (MAX_TENSOR_EXTENTS.md Part B).
+  std::vector<int64_t> idx = {0, 1, 2, 3};
+  auto idx_t = to_device_tensor(idx, {2, 1, 2}, kInt64Dtype);
+  const auto result = run_assembly_result<double>(
+      idx_t, make_params({AssemblyFeature::kDopplerBin}));
+  EXPECT_TRUE(run_failed_with_diagnostic(result));
+}
+
 TEST(FeatureAssemblyOpTest, RejectsAzBinWithoutGrid) {
   std::vector<int64_t> idx = {0, 0, 0, 0};
   auto idx_t = to_device_tensor(idx, {1, 4}, kInt64Dtype);
@@ -360,12 +384,114 @@ TEST(FeatureAssemblyOpTest, RejectsNonContiguousDetectionIdx) {
       std::invalid_argument);
 }
 
-TEST(FeatureAssemblyOpTest, OptionalGatherGraphWiringDeferred) {
-  // [EA HSDK5 ONLY] Wiring optional Tensor Inputs while they are omitted
-  // from contract() yields RUNTIME_OPERATOR_REPLAY_MISMATCH (same as
-  // BeamscanEstimatorOp.is_valid). Stage tests below cover those paths.
-  GTEST_SKIP() << "HSDK 5 EA: optional gather Graph wiring deferred "
-                  "(HSDK5_PORT / OPEN_ITEMS)";
+TEST(FeatureAssemblyOpTest, GathersAlignedRangeVelocity) {
+  auto idx = to_device_tensor(std::vector<int64_t>{2, 3}, {1, 2},
+                              kInt64Dtype);
+  auto ranges = upload_real(std::vector<double>{0, 10, 20, 30}, {4});
+  auto velocities =
+      upload_real(std::vector<double>{-3, -2, -1, 0}, {4});
+  auto result =
+      run_triple_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
+          {idx}, {ranges}, {velocities},
+          make_params(
+              {AssemblyFeature::kRange, AssemblyFeature::kVelocity}),
+          "points",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->detection_idx, q);
+            graph.add_flow(source->out1, op->range_bins, q);
+            graph.add_flow(source->out2, op->velocity_bins, q);
+            graph.add_flow(op->points, sink->in, q);
+          });
+  const HostTensor points = require_one_frame(std::move(result));
+  ASSERT_EQ(points.shape, (std::vector<int64_t>{1, 2}));
+  EXPECT_DOUBLE_EQ(points.as<double>()[0], 30.0);
+  EXPECT_DOUBLE_EQ(points.as<double>()[1], -1.0);
+}
+
+TEST(FeatureAssemblyOpTest, WiredUnselectedGatherDoesNotChangeTrigger) {
+  auto idx = to_device_tensor(std::vector<int64_t>{2, 3}, {1, 2},
+                              kInt64Dtype);
+  auto ranges = upload_real(std::vector<double>{0, 10, 20, 30}, {4});
+  auto result =
+      run_dual_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
+          {idx}, {ranges}, make_params({AssemblyFeature::kRangeBin}), "points",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->detection_idx, q);
+            graph.add_flow(source->out1, op->range_bins, q);
+            graph.add_flow(op->points, sink->in, q);
+          });
+  const HostTensor points = require_one_frame(std::move(result));
+  EXPECT_DOUBLE_EQ(points.as<double>()[0], 3.0);
+}
+
+TEST(FeatureAssemblyOpTest, GathersAlignedScore) {
+  auto idx = to_device_tensor(std::vector<int64_t>{1, 2}, {1, 2},
+                              kInt64Dtype);
+  std::vector<double> score(12, 0.0);
+  score[6] = 7.5;
+  auto scores = upload_real(score, {3, 4});
+  auto result =
+      run_dual_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
+          {idx}, {scores}, make_params({AssemblyFeature::kScore}), "points",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->detection_idx, q);
+            graph.add_flow(source->out1, op->detection_score, q);
+            graph.add_flow(op->points, sink->in, q);
+          });
+  const HostTensor points = require_one_frame(std::move(result));
+  EXPECT_DOUBLE_EQ(points.as<double>()[0], 7.5);
+}
+
+TEST(FeatureAssemblyOpTest, WaitsForLaterAoaFromSameFrame) {
+  // DualTensorSourceOp emits out0 before out1. The zero-window OnAligned
+  // trigger waits for the later companion carrying the same capture time.
+  auto idx = to_device_tensor(std::vector<int64_t>{0, 1}, {1, 2},
+                              kInt64Dtype);
+  auto aoa = upload_real(std::vector<double>{0.25, -0.5}, {1, 2});
+  auto result =
+      run_dual_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
+          {idx}, {aoa},
+          make_params({AssemblyFeature::kAz, AssemblyFeature::kEl}), "points",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->detection_idx, q);
+            graph.add_flow(source->out1, op->aoa_estimates, q);
+            graph.add_flow(op->points, sink->in, q);
+          });
+  const HostTensor points = require_one_frame(std::move(result));
+  EXPECT_DOUBLE_EQ(points.as<double>()[0], 0.25);
+  EXPECT_DOUBLE_EQ(points.as<double>()[1], -0.5);
+}
+
+TEST(FeatureAssemblyOpTest, GathersAlignedDenseAngleGrids) {
+  auto idx = to_device_tensor(std::vector<int64_t>{1, 2, 0, 0}, {1, 4},
+                              kInt64Dtype);
+  auto az = upload_real(std::vector<double>{-0.2, 0.0, 0.2}, {3});
+  auto el = upload_real(std::vector<double>{0.0, 0.1, 0.2}, {3});
+  auto result =
+      run_triple_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
+          {idx}, {az}, {el},
+          make_params(
+              {AssemblyFeature::kAzBin, AssemblyFeature::kElBin}),
+          "points",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->detection_idx, q);
+            graph.add_flow(source->out1, op->az_angles, q);
+            graph.add_flow(source->out2, op->el_angles, q);
+            graph.add_flow(op->points, sink->in, q);
+          });
+  const HostTensor points = require_one_frame(std::move(result));
+  EXPECT_DOUBLE_EQ(points.as<double>()[0], 0.0);
+  EXPECT_DOUBLE_EQ(points.as<double>()[1], 0.2);
 }
 
 // ---------------------------------------------------------------------------

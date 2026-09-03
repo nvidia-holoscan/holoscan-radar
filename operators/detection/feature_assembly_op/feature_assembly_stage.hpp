@@ -6,6 +6,10 @@
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
+#include <stdexcept>
+#include <string>
+
+#include <holoscan/core/domain/tensor.hpp>
 
 namespace holoscan::radar::detail {
 
@@ -23,6 +27,33 @@ constexpr int kFeatRangeBin = 8;
 // Cap on preserved batch rank for score-plane indexing (CFAR n_preserved).
 constexpr int kMaxPreservedBatchDims = 8;
 
+// Contract input is exactly rank 2. Extra leading axes are not a module
+// batch (MAX_TENSOR_EXTENTS.md Part B). num_points == 0 is legal.
+struct DetectionIdxLayout {
+  int64_t num_points{0};
+  int64_t idx_cols{0};
+  int64_t n_preserved{0};
+};
+
+inline DetectionIdxLayout parse_detection_idx_layout(
+    const holoscan::Tensor& tensor, const char* port_name) {
+  const auto& shape = tensor.shape();
+  if (shape.size() != 2 || shape[1] < 2) {
+    throw std::invalid_argument(
+        std::string("FeatureAssemblyOp: ") + port_name +
+        " must have shape (num_points, 2 [+ n_batch])");
+  }
+  DetectionIdxLayout layout;
+  layout.num_points = shape[0];
+  layout.idx_cols = shape[1];
+  layout.n_preserved = layout.idx_cols - 2;
+  if (layout.num_points < 0) {
+    throw std::invalid_argument(std::string("FeatureAssemblyOp: ") +
+                                port_name + " row count must be >= 0");
+  }
+  return layout;
+}
+
 // Error codes written to *error_flag (0 = ok). Host throws after the kernel.
 constexpr int kErrBatchCoord = 1;
 constexpr int kErrRangeBin = 2;
@@ -30,6 +61,8 @@ constexpr int kErrDopplerBin = 3;
 constexpr int kErrScoreCoord = 4;
 constexpr int kErrAzBin = 5;
 constexpr int kErrElBin = 6;
+constexpr int kErrRangeSource = 7;
+constexpr int kErrVelocitySource = 8;
 
 // Per-row element offset into a compact (…, D, R) score map from the
 // preserved batch columns of detection_idx. Out-of-range batch coords set
@@ -122,26 +155,26 @@ static __global__ void assemble_features_kernel(
         value = static_cast<T>(range);
         break;
       case kFeatRange:
-        if (have_range_bins) {
-          if (range < 0 || range >= num_range) {
-            atomicExch(error_flag, kErrRangeBin);
-            return;
-          }
-          value = range_bins[range];
-        } else {
-          value = static_cast<T>(range);
+        if (!have_range_bins) {
+          atomicExch(error_flag, kErrRangeSource);
+          return;
         }
+        if (range < 0 || range >= num_range) {
+          atomicExch(error_flag, kErrRangeBin);
+          return;
+        }
+        value = range_bins[range];
         break;
       case kFeatVelocity:
-        if (have_velocity_bins) {
-          if (doppler < 0 || doppler >= num_doppler) {
-            atomicExch(error_flag, kErrDopplerBin);
-            return;
-          }
-          value = velocity_bins[doppler];
-        } else {
-          value = static_cast<T>(doppler);
+        if (!have_velocity_bins) {
+          atomicExch(error_flag, kErrVelocitySource);
+          return;
         }
+        if (doppler < 0 || doppler >= num_doppler) {
+          atomicExch(error_flag, kErrDopplerBin);
+          return;
+        }
+        value = velocity_bins[doppler];
         break;
       case kFeatScore:
         if (have_score) {

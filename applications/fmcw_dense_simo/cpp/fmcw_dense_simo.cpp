@@ -7,14 +7,15 @@
 //     -> PhaseShiftBeamformerOp (rd_maps -> rda_cube)
 //     -> CFARDetectorOp (nci_axes=[]; az/el ride as batch)
 //     -> AnglePeakPickOp -> CubeAoaLookupOp
-//     -> [PhysicalRangeVelocityAzElPointsOp -> DBSCAN -> Reduction]
+//     -> [FeatureAssemblyOp -> DBSCAN -> Reduction]
 //     -> DetectionReportOp / ClusterReportOp
 //     [-> RdAngleMaxOp(cfar_power) -> RdMapToImageOp -> X11RdViewerOp]
 //
 // Dense detection_idx / rep_idx carry (az_bin, el_bin) ahead of
 // (doppler, range); TrailingIdxColumnsOp slices the trailing two columns for
-// PhysicalPoints and the X11 viewer. FeatureAssembly optional-port gap →
-// PhysicalRangeVelocityAzElPointsOp.
+// FeatureAssembly and the X11 viewer. CubeAoaLookupOp resolves physical angle
+// values because the beamformer's angle grids are parameters/live inputs, not
+// output ports.
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/fmcw_dense_simo/cpp/fmcw_dense_simo [config.yaml]
 
@@ -31,11 +32,11 @@
 #include "clustering/cluster_dbscan_op/cluster_dbscan_op.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "detection/detection_reduction_op/detection_reduction_op.hpp"
+#include "detection/feature_assembly_op/feature_assembly_op.hpp"
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "radar_app/app/graph_driver.hpp"
-#include "radar_app/app/physical_points_op.hpp"
 #include "radar_app/app/source.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "radar_app/viz/rd_angle_max_op.hpp"
@@ -213,8 +214,15 @@ int main(int argc, char** argv) {
           bind_out(options, "detection_score_max", "rd_map");
         } else {
           auto feature_assembly =
-              graph.op<PhysicalRangeVelocityAzElPointsOp>("feature_assembly",
-                                                          extents);
+              graph.op<radar::FeatureAssemblyOp<float>>("feature_assembly",
+                                                        extents);
+          radar::FeatureAssemblyParams feature_params;
+          feature_params.features = {
+              radar::AssemblyFeature::kRange,
+              radar::AssemblyFeature::kVelocity,
+              radar::AssemblyFeature::kAz,
+              radar::AssemblyFeature::kEl};
+          feature_assembly.set_params(std::move(feature_params));
 
           auto cluster = graph.op<radar::ClusterDBSCANOp<float>>(
               "cluster_dbscan", extents);

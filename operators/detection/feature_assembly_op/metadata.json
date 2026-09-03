@@ -9,10 +9,11 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.2.0",
+        "version": "0.3.0",
         "changelog": {
             "0.1.0": "Initial Release",
-            "0.2.0": "HSDK 5 Operator<Params> / Graph port (optional gather Inputs + SafeDefault; static features vector)"
+            "0.2.0": "HSDK 5 Operator<Params> / Graph port (optional gather Inputs + SafeDefault; static features vector)",
+            "0.3.0": "Tick-shell cleanup and Params-derived exact-aligned gather contract; physical range/velocity require their axes"
         },
         "holoscan_sdk": {
             "minimum_required_version": "5.0.0",

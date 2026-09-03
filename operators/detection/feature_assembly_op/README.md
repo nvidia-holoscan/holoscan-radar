@@ -19,8 +19,8 @@ operator into `clustering/` — that group is the clusterer, not the RD adapter.
 | Kind | Port | Dtype | Shape | Indexing |
 | --- | --- | --- | --- | --- |
 | in | `detection_idx` | int64 | `(num_points, 2 [+ n_preserved])` | Sparse cells. Last two columns are always `(doppler_bin, range_bin)`. Rank 2; no opaque leading batch |
-| in | `range_bins` | float32 / float64 | `(num_range,)` | Dense 1-D axis. Token `range` indexes with `range_bin`. Absent → raw bin |
-| in | `velocity_bins` | float32 / float64 | `(num_doppler,)` | Dense 1-D axis. Token `velocity` indexes with `doppler_bin`. Absent → raw bin |
+| in | `range_bins` | float32 / float64 | `(num_range,)` | Dense 1-D axis. Required when token `range` is selected; indexed with `range_bin` |
+| in | `velocity_bins` | float32 / float64 | `(num_doppler,)` | Dense 1-D axis. Required when token `velocity` is selected; indexed with `doppler_bin` |
 | in | `detection_score` | float32 / float64 | `(num_doppler, num_range)` plus optional leading matching preserved columns | Dense map, gathered at the cell. Required when `features` includes `score` |
 | in | `aoa_estimates` | float32 / float64 | `(num_points, 2)` | Sparse companion, row-aligned with `detection_idx`. Tokens `az` / `el`. Sparse post-angle path |
 | in | `az_angles` | float32 / float64 | `(num_az,)` | Dense 1-D scan grid. Token `az_bin` indexes the preserved `az_bin` column. Dense RDA path |
@@ -34,13 +34,14 @@ They are **columns**, not a tensor batch axis.
 ```text
 CFARDetectorOp.detection_idx (+ detection_score) → FeatureAssemblyOp → points → ClusterDBSCANOp
 ⟨sparse estimator⟩.aoa_estimates → FeatureAssemblyOp.aoa_estimates   (angle-then-cluster)
-PhaseShiftBeamformerOp.az_angles / el_angles → FeatureAssemblyOp     (dense RDA; tokens az_bin / el_bin)
+⟨scan-grid tensor source⟩.az_angles / el_angles → FeatureAssemblyOp  (dense RDA; tokens az_bin / el_bin)
 ```
 
-The six gathers are **data-plane** Inputs, not `[live]` Exact overrides. Presence
-follows from the static `features` list. They are registered in `setup()` and
-omitted from `contract()` so unconnected graphs compile
-([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11 / OPEN_ITEMS §1).
+The six gathers are **data-plane** Inputs, not `[live]` overrides. Static
+`features` determines the compile-time join: selected source ports are required
+zero-window `OnAligned` members; raw-bin-only layouts use
+`OnEach{detection_idx}`. Unselected gathers are non-member `Exact{}` +
+`SafeDefault{}` inputs, so they may remain unwired.
 
 Contract: [`OPERATOR_API.md` § `FeatureAssemblyOp`](../../../docs/planning/OPERATOR_API.md) ·
 group: [`operators/detection/README.md`](../README.md) ·
@@ -77,25 +78,22 @@ immediately before that pair are `(az_bin, el_bin)`.
 
 | Token (output column) | Reads | Index |
 | --- | --- | --- |
-| `range` | `range_bins[range_bin]`, else raw `range_bin` | last column |
-| `velocity` | `velocity_bins[doppler_bin]`, else raw `doppler_bin` | second-to-last column |
+| `range` | `range_bins[range_bin]` (input required) | last column |
+| `velocity` | `velocity_bins[doppler_bin]` (input required) | second-to-last column |
 | `score` | `detection_score` at that cell | `(doppler_bin, range_bin)` plus preserved columns as the leading plane |
 | `az` / `el` | `aoa_estimates[row, 0]` / `[row, 1]` | row number (sparse path) |
 | `az_bin` / `el_bin` | `az_angles[az_bin]` / `el_angles[el_bin]` | preserved columns `n_preserved-2` / `n_preserved-1` (dense path) |
 | `doppler_bin` / `range_bin` | the index itself | trailing pair; no table |
 
-Selecting a token whose **required** table is missing is an error. `range` /
-`velocity` are the exceptions (raw-bin fallback).
+Selecting a token whose source table is missing is an error. Select
+`range_bin` / `doppler_bin` explicitly when raw indices are wanted.
 
 ## Usage
 
-Static `features` is the whole configuration. Instantiate a separate operator
-to vary the layout. **[EA HSDK5 ONLY]** Graph wiring of the six optional gathers
-is still `RUNTIME_OPERATOR_REPLAY_MISMATCH` while they are omitted from
-`contract()` (OPEN_ITEMS §1). Apps use
-`PhysicalRangeVelocityPointsOp` / `PhysicalRangeVelocityAzElPointsOp` in
-`applications/common/radar_app/app/physical_points_op.hpp` until that lands.
-The snippets below are the **intended** contract wiring.
+Static `features` is the whole configuration. It fixes both the output layout
+and the compile-time temporal join; instantiate a separate operator or
+recompile the graph to vary it. Only source ports used by the selected features
+must be wired. Unselected gather ports may remain unwired.
 
 Ctor extents must set `max_points` and `max_features`.
 
@@ -141,13 +139,18 @@ feature_assembly:
 ```
 
 ```cpp
-graph.add_flow(beamformer->az_angles, feat->az_angles, q);
-graph.add_flow(beamformer->el_angles, feat->el_angles, q);
+graph.add_flow(grid_source->az_angles, feat->az_angles, q);
+graph.add_flow(grid_source->el_angles, feat->el_angles, q);
 ```
+
+The grid source publishes the same values configured on the beamformer.
+`PhaseShiftBeamformerOp.az_angles` / `el_angles` are `[live]` inputs, not
+outputs. An application that already resolves row-aligned `aoa_estimates` may
+instead use `az` / `el`, as the current dense demo does.
 
 ### Raw bins (no physical axes)
 
-Legal when you only need integer Doppler/range for a test graph.
+Legal when integer Doppler/range coordinates are the intended feature units.
 
 ```yaml
 feature_assembly:
@@ -167,10 +170,11 @@ not a `(chirps, samples)` ADC cube, so the plan builder uses
 `parse_detection_idx_layout` instead of `collapse_named_tx_rx_batch`. Rank must
 be exactly 2.
 
-Token evaluation is the table in **How a row is assembled**. No scaling. Custom
+Token evaluation is the table in **How a row is assembled**. Physical
+range/velocity never silently change units to raw indices. No scaling. Custom
 CUDA (MatX is a poor fit for sparse irregular gathers). The contract’s “shared
 gather primitive with `SnapshotGatherOp`” is **not** extracted yet
-(OPEN_ITEMS §2); this operator has its own assemble kernel.
+(OPEN_ITEMS §1); this operator has its own assemble kernel.
 
 Out-of-range indices (when the corresponding axis/grid/score map is present)
 set a device error flag; the host maps it after a stream sync **before**
@@ -189,15 +193,18 @@ set a device error flag; the host maps it after a stream sync **before**
 
 - **`points`.** `num_points` = `detection_idx` rows (0 is legal → `(0, num_features)`). `num_features` = `features.size()`.
 - **`detection_idx`.** Rank 2, at least 2 columns. Extra columns are preserved-batch indices. Extra leading axes fail closed in `parse_detection_idx_layout`. `az_bin` / `el_bin` require `n_preserved >= 2`.
+- **Selected sources.** `range`, `velocity`, `score`, `az`/`el`, `az_bin`, and `el_bin` require `range_bins`, `velocity_bins`, `detection_score`, `aoa_estimates`, `az_angles`, and `el_angles`, respectively. Duplicate columns share one source port.
 - **`detection_score` leading rank** must equal `n_preserved` when `score` is gathered (`FeatureAssemblyOp: detection_score leading rank must match detection_idx preserved batch columns`). Preserved rank is capped at `kMaxPreservedBatchDims` (8). Those leading axes are named CFAR leftovers (NCI-preserved or dense `az`/`el` bins), not a module batch axis.
 - **Precision.** Template `T ∈ {float, double}`. Bin axes, score, AoA, and angle grids must be real `T`. `detection_idx` is int64.
 - **Named leading / batch.** No opaque leading batch on `points` or `detection_idx`. Tick row count may grow up to `MaxTensorExtents.max_points`.
-- **Legal mid-stream shape change.** `num_points` (and score-map geometry) may change per tick; `points` is re-loaned to the new shape. `features` is static — a Params permute after the first successful **non-empty** emit is rejected.
+- **Legal mid-stream shape change.** `num_points` (and score-map geometry) may change per tick; `points` is re-loaned to the new shape. `features` is static and determines the compiled contract; changing it requires graph recompilation.
 - **Rejected combinations:**
 
   | Condition | Message |
   | --- | --- |
   | Empty `features` | `FeatureAssemblyOp: features must be a non-empty list` |
+  | `range` without `range_bins` | graph compile rejects the missing required aligned source |
+  | `velocity` without `velocity_bins` | graph compile rejects the missing required aligned source |
   | Bad `detection_idx` rank/cols | `FeatureAssemblyOp: detection_idx must have shape (num_points, 2 [+ n_batch])` |
   | Rows exceed ctor max | `FeatureAssemblyOp: detection_idx rows (N) exceed MaxTensorExtents max_points (M)` |
   | Feature count exceeds ctor max | `FeatureAssemblyOp: features size (N) exceeds MaxTensorExtents max_features (M)` |
@@ -215,9 +222,9 @@ set a device error flag; the host maps it after a stream sync **before**
 
 | Parameter | Type | Default | Override | Cost | Meaning |
 | --- | --- | --- | --- | --- | --- |
-| `features` | ordered list of {range, velocity, score, az, el, az_bin, el_bin, doppler_bin, range_bin} | none (required, non-empty) | static (Params-only) | Feature-id vector uploaded once into a ctor-sized int32 table; a later permute is rejected | Column set and order; fixes `num_features` |
+| `features` | ordered list of {range, velocity, score, az, el, az_bin, el_bin, doppler_bin, range_bin} | none (required, non-empty) | static (Params-only) | Feature-id vector uploaded once into a ctor-sized int32 table | Column set and order; fixes `num_features` and the compiled temporal join |
 
-There are no `[live]` parameters. `features` has no Exact port and is not declared as `spec.input`. Instantiate a separate operator to vary the layout. Do not invent gather-port `[live]` tags: those Inputs are optional data, and their presence already follows from `features`.
+There are no `[live]` parameters. `features` has no Exact port and is not declared as `spec.input`. Set it before `Graph::compile()`; `contract()` reads the resolved Params when declaration replay runs. Mid-run `set_params()` does not alter the running plan. Do not invent gather-port `[live]` tags: those Inputs are data sources, and their requiredness follows from `features`.
 
 YAML tokens match `to_string(AssemblyFeature)`: `range`, `velocity`, `score`, `az`, `el`, `az_bin`, `el_bin`, `doppler_bin`, `range_bin`.
 
@@ -225,14 +232,14 @@ YAML tokens match `to_string(AssemblyFeature)`: `range`, `velocity`, `score`, `a
 
 - **Construction.** `explicit FeatureAssemblyOp(const MaxTensorExtents& extents)`. Required: `max_points`, `max_features`. The `points` pool is `max_rank = 2`, `max_byte_span` = real-`T` `(max_points, max_features)`. A tick with more rows than `max_points`, or more columns than `max_features`, is rejected in the plan builder.
 - **Workspace.** Four ctor-sized device Tensors (`make_device_tensor`), not `ConfigCache` and not a first-tick `cudaMalloc`: `feature_ids` (`max_features` int32), `score_offsets` (`max_points` int64 — worst-case source count, not the collapsed output width), `score_leading` (`kMaxPreservedBatchDims` int64), `error_flag` (one int32). Tensor pools are per output port only; there is no scratch-loan API for these tables. Feature-id H2D is keyed on the first successful non-empty emit; score leading dims re-upload when that layout changes. `DLDataType{kDLInt, 64, 1}` / `{kDLInt, 32, 1}` are DLPack encodings of scalar `int64_t` / `int32_t` (signed, 64 or 32 bits, 1 lane), independent of template `T`.
-- **Triggering.** `contract()` is `OnEach{detection_idx}` only — this operator has no `[live]` parameters, so there is no `Exact{}` + `SafeDefault{}` override entry. Optional gather Inputs are registered in `setup()` and read with `receive_optional_value`, but are **omitted from the temporal contract** so an unconnected port does not yield `TEMPORAL_INPUT_UNCONNECTED`. Wiring a port the contract omits is still `RUNTIME_OPERATOR_REPLAY_MISMATCH`.
-- **Optional gathers (EA).** **[EA HSDK5 ONLY]** the pinned SDK now admits an unwired non-trigger `Exact{}` + `SafeDefault{}` Tensor Input under `OnEach` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11); migrating these six ports, unskipping Graph wiring, and deleting the `Physical*PointsOp` stand-ins is OPEN_ITEMS §1, not this tick-shell walk. Apps use `PhysicalRangeVelocityPointsOp` / `PhysicalRangeVelocityAzElPointsOp` stand-ins until that recipe lands.
+- **Triggering.** `contract()` reads static `params().features`. Raw-bin-only layouts use `OnEach{detection_idx}`. Any selected source adds its port to a zero-window `OnAligned` trigger with `detection_idx`; every member selects `Exact{}`. The source set is deduplicated, so `az` + `el` add `aoa_estimates` once.
+- **Unselected gathers.** Every gather not selected by `features` is still declared as a non-member `Exact{}` + `SafeDefault{}` input. The pinned SDK admits such an unwired Tensor input ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11), reporting `kNotConnected`; `receive_optional_value` maps that to absence. This keeps one fixed `setup()` port set while preventing a wired-but-undeclared replay mismatch.
 - **Ports and queues.** Every Input: `queue_depth(2)`, device tensors. `points`: device, allocation bounds above. `setup()` registers data-plane I/O only (trigger, then optional gathers, then `points`). There is no live block. Dtype is not pinned on the port (enforced in `compute()`).
 - **Streams and lifetime.** Work is enqueued on `context.cuda_stream()`. Every received Tensor is retained until the next tick. The hot path **does** synchronize: a scalar error-flag D2H + `cudaStreamSynchronize` after the assemble kernel, **before** emit, so an OOB index fails the tick rather than publishing a partial `points`. That sync is accepted operator-owned workspace (Holoscan `Error` is host-side); it dominates small-N steady time and is separate from the `points` alloc question.
 - **Emission.** Single required output. Empty `detection_idx` is a no-op fill. Non-empty ticks `prepare_device_tensor` (stream-ordered kernels only), inspect the error flag, then `emit_prepared_tensor` — the prepare/emit split exists here so a device OOB can drop the loan before publish, not because there is a latched optional sibling. `emit_device_tensor`'s fill must not host-sync, so the D2H sits between prepare and emit.
 - **Parameter authoring.** Schema `com.nvidia.holoscan.radar.FeatureAssemblyParams` version 1. Field name: `features`. Apps on this branch `set_params` a loaded `FeatureAssemblyParams` ([EA HSDK5 ONLY] Graph has no `from_config()`).
 - **Precision.** `FeatureAssemblyOp<float>`, `FeatureAssemblyOp<double>`.
-- **[EA HSDK5 ONLY]** No port renames. Optional-Tensor contract omission is the Beamscan `is_valid` pattern ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11). Ported; Graph C++ tests and Graph perf cold/steady landed. Graph live tests are N/A (no `[live]` params).
+- **[EA HSDK5 ONLY]** No port renames. The contract relies on the optional non-member Tensor support in the pinned SDK ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11). Graph live tests are N/A (no `[live]` params).
 
 ## Consumer lifetime notes
 
@@ -244,7 +251,7 @@ YAML tokens match `to_string(AssemblyFeature)`: `range`, `velocity`, `score`, `a
 
 No `[live]` overrides. `features` cannot change mid-stream.
 
-Harness: `performance/cpp/perf_feature_assembly.cpp` is a Graph rewrite. Axes: map-size ladder (`xs`…`xlw`) × detection-count. **[EA HSDK5 ONLY]** optional gathers stay unconnected, so the driver times the raw-bin pack `{doppler_bin, range_bin}` only; physical / score / AoA / dense paths are unit-tested via stage launches. No measured numbers are recorded in-repo.
+Harness: `performance/cpp/perf_feature_assembly.cpp` is a Graph rewrite. Axes: map-size ladder (`xs`…`xlw`) × detection-count. The driver times the physical `{range, velocity}` pack with aligned axis inputs; score / AoA / dense paths are unit-tested. No measured numbers are recorded in-repo.
 
 ```bash
 ctest --test-dir build -R perf_feature_assembly_smoke
@@ -252,12 +259,14 @@ ctest --test-dir build -R perf_feature_assembly_smoke
 
 ## Tests and verification
 
-Graph tests cover the required-port path (`detection_idx` → `points`). Optional-gather correctness is proven by direct `launch_assemble_features` calls in the same file (EA cannot wire those Inputs while they are omitted from `contract()`).
+Graph tests cover raw-bin-only `OnEach`, selected-source `OnAligned`, unwired
+unselected gathers, and physical / score / sparse-AoA / dense-grid paths.
+Direct `launch_assemble_features` tests retain focused kernel and OOB coverage.
 
 | Check | Proves |
 | --- | --- |
 | `LooksUpPhysicalRangeVelocityAndScore` | `range = range_bins[range_bin]`, `velocity = velocity_bins[doppler_bin]`, score gathered (`TESTING.md`) |
-| `RangeFallsBackToRawBinWhenBinsAbsent` / `AssemblesRawBinEscapeHatches` | Raw-bin fallback and escape-hatch tokens |
+| `RejectsPhysicalFeaturesWithoutAxes` / `AssemblesRawBinEscapeHatches` | Physical sources are mandatory; raw indices require explicit tokens |
 | `AppendsAoaEstimates` | Sparse `az`/`el` from `aoa_estimates` |
 | `DenseAzElBinLookup` / `DenseAzElWithRangeVelocity` | Dense grid lookup from preserved `(az_bin, el_bin)` |
 | `GathersScoreAcrossPreservedBatch` | Score-plane offsets for leading batch |
@@ -266,7 +275,7 @@ Graph tests cover the required-port path (`detection_idx` → `points`). Optiona
 | `RejectsOob*` / `RejectsAzBinWithTooFewPreservedColumns` / `RejectsScoreLeadingRankMismatch` | Bounds and shape errors |
 | `RejectsOpaqueLeadingBatch` | Extra leading dim is not a named axis; `parse_detection_idx_layout` fail-closes (Part B) |
 | `FeaturesConfigurableFromParams` / `FloatDoubleAgreeOnPhysicalLookup` | Params field + both precisions |
-| `OptionalGatherGraphWiringDeferred` (`GTEST_SKIP`) | **[EA HSDK5 ONLY]** Graph optional wiring deferred (OPEN_ITEMS §1 / HSDK5_PORT §11) |
+| selected-source Graph joins | Params-derived trigger requires exactly the source ports used by `features` |
 
 `TESTING.md` row-alignment is implied by the gather tests (one output row per `detection_idx` row). Mid-stream optional Graph wiring is skipped. Python tests exist but are not built (HSDK5_PORT §6).
 
@@ -276,11 +285,11 @@ ctest --test-dir build -R test_feature_assembly --output-on-failure
 
 ## Contract conformance
 
-Conforms on ports, dtypes, token semantics (including raw-bin fallback), static `features`, row alignment, rank-2 `detection_idx` (fail-closed extra leading axes), and dense `az_bin`/`el_bin` lookup. Divergences:
+Conforms on ports, dtypes, explicit physical-versus-raw token semantics,
+Params-derived temporal joins, row alignment, rank-2 `detection_idx`
+(fail-closed extra leading axes), and dense `az_bin`/`el_bin` lookup. The shared
+gather primitive with `SnapshotGatherOp` remains staged in OPEN_ITEMS §1; this
+operator still owns its assemble kernel.
 
-| Contract claim | Verdict | Detail |
-| --- | --- | --- |
-| Optional gather Inputs participate in scheduling when wired | EA-deferred | Ports exist; omitted from `contract()` because no contract entry currently declares them; Graph wiring skipped ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11, OPEN_ITEMS §1). The SDK now admits Exact + SafeDefault Tensor; migration is not this walk |
-| Shared gather primitive with `SnapshotGatherOp` | staged | Own assemble kernel; extract when both consumers are stable (OPEN_ITEMS §2). User-visible gather behavior is implemented |
-
-Header comment block matches the implementation (optional ports, no `[live]` params, raw-bin fallback, ctor-sized workspace).
+Header comment block matches the implementation (Params-derived required
+sources, no `[live]` params, explicit raw tokens, ctor-sized workspace).

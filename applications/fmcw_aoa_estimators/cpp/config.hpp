@@ -87,6 +87,7 @@ inline radar::MaxTensorExtents make_aoa_extents(const AppConfig& cfg) {
   e.max_detections = map_cells;
   e.max_items = map_cells;
   e.max_points = map_cells;
+  e.max_features = 4;
   e.max_snapshots = k_snaps > 0 ? k_snaps : 1;
   e.max_az = num_az > 0 ? num_az : 1;
   e.max_el = num_el > 0 ? num_el : 1;
