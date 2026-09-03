@@ -49,6 +49,7 @@ using holoscan::radar::ScoreMethod;
 using holoscan::radar::real_dtype;
 using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
+using holoscan::radar::testing::run_dual_in_single_out_operator_graph_result;
 using holoscan::radar::testing::run_triple_in_single_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 
@@ -76,18 +77,31 @@ void wire_reduction_with_points(holoscan::Graph& graph, const Source& source,
   graph.add_flow(op->rep_idx, sink->in, q);
 }
 
+template <typename Source, typename OpRef, typename Sink>
+void wire_reduction_without_points(holoscan::Graph& graph,
+                                   const Source& source, OpRef& op,
+                                   const Sink& sink) {
+  const holoscan::ConnectionOptions q{.queue_depth = 4U};
+  graph.add_flow(source->out0, op->labels, q);
+  graph.add_flow(source->out1, op->detection_idx, q);
+  graph.add_flow(op->rep_idx, sink->in, q);
+}
+
 template <typename T>
 GraphRunResult run_reduction_result(
     std::shared_ptr<holoscan::Tensor> labels,
     std::shared_ptr<holoscan::Tensor> detection_idx,
     std::shared_ptr<holoscan::Tensor> points,
     DetectionReductionParams params) {
-  // [EA HSDK5 ONLY] points is Exact in the temporal contract — always wire
-  // (dummy zeros for first-only). See DetectionReduction OPEN_ITEMS.
   if (!points) {
-    const int64_t n = labels->shape()[0];
-    std::vector<T> zeros(static_cast<size_t>(n), T{0});
-    points = to_device_tensor(zeros, {n, 1}, real_dtype<T>());
+    return run_dual_in_single_out_operator_graph_result<
+        DetectionReductionOp<T>>(
+        {std::move(labels)}, {std::move(detection_idx)}, std::move(params),
+        "rep_idx",
+        [](holoscan::Graph& graph, const auto& source, auto& op,
+           const auto& sink) {
+          wire_reduction_without_points(graph, source, op, sink);
+        });
   }
   return run_triple_in_single_out_operator_graph_result<
       DetectionReductionOp<T>>(
@@ -236,13 +250,15 @@ TEST(DetectionReductionOpTest, ExcludesNoiseAndEmitsOnePerCluster) {
 }
 
 TEST(DetectionReductionOpTest, RejectsPeakWithoutPoints) {
-  // [EA HSDK5 ONLY] points is Exact in the temporal contract on EA, so an
-  // unconnected points port fails compile (TEMPORAL_INPUT_UNCONNECTED) rather
-  // than reaching the runtime "points required for peak" check. Same family
-  // as FeatureAssembly optional gathers (OPEN_ITEMS). Runtime validation is
-  // retained in compute() for when the optional-Tensor recipe lands.
-  GTEST_SKIP() << "HSDK 5 EA: unconnected optional points deferred "
-                  "(DetectionReduction OPEN_ITEMS — points Exact in contract)";
+  std::vector<int64_t> labels = {0};
+  std::vector<int64_t> idx = {0, 0};
+  auto lab_t = to_device_tensor(labels, {1}, kInt64);
+  auto idx_t = to_device_tensor(idx, {1, 2}, kInt64);
+  GraphRunResult result = run_reduction_result<float>(
+      lab_t, idx_t, nullptr,
+      make_params(RepresentativePolicy::kPeak, ScoreMethod::kWeightedSum,
+                  {1.0}));
+  EXPECT_FALSE(result.plan_ok);
 }
 
 TEST(DetectionReductionOpTest, RejectsMismatchedFeatureWeights) {
@@ -351,6 +367,28 @@ TEST(DetectionReductionOpTest, WidenedDetectionIdxCols) {
   EXPECT_EQ(rep.as<int64_t>()[2], 9);
 }
 
+TEST(DetectionReductionOpTest, RejectsTooManyDetectionIdxCols) {
+  std::vector<int64_t> labels = {0};
+  std::vector<int64_t> idx(11, 0);
+  auto lab_t = to_device_tensor(labels, {1}, kInt64);
+  auto idx_t = to_device_tensor(idx, {1, 11}, kInt64);
+  GraphRunResult result = run_reduction_result<float>(
+      lab_t, idx_t, nullptr, make_params(RepresentativePolicy::kFirst));
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
+TEST(DetectionReductionOpTest, RejectsOpaqueLeadingBatch) {
+  std::vector<int64_t> labels = {0};
+  std::vector<int64_t> idx = {0, 0};
+  auto lab_t = to_device_tensor(labels, {1, 1}, kInt64);
+  auto idx_t = to_device_tensor(idx, {1, 2}, kInt64);
+  GraphRunResult result = run_reduction_result<float>(
+      lab_t, idx_t, nullptr, make_params(RepresentativePolicy::kFirst));
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
 TEST(DetectionReductionOpTest, PeakEqualScorePicksLowestIndex) {
   std::vector<int64_t> labels = {0, 0};
   std::vector<int64_t> idx = {10, 1, 20, 2};
@@ -362,6 +400,22 @@ TEST(DetectionReductionOpTest, PeakEqualScorePicksLowestIndex) {
       lab_t, idx_t, pts,
       make_params(RepresentativePolicy::kPeak, ScoreMethod::kWeightedSum,
                   {1.0}));
+  ASSERT_EQ(rep.shape[0], 1);
+  EXPECT_EQ(rep.as<int64_t>()[0], 10);
+  EXPECT_EQ(rep.as<int64_t>()[1], 1);
+}
+
+TEST(DetectionReductionOpTest, MedoidEqualDistancePicksLowestIndex) {
+  std::vector<int64_t> labels = {0, 0};
+  std::vector<int64_t> idx = {10, 1, 20, 2};
+  std::vector<double> points = {0.0, 2.0};
+  auto lab_t = to_device_tensor(labels, {2}, kInt64);
+  auto idx_t = to_device_tensor(idx, {2, 2}, kInt64);
+  auto pts = to_device_tensor(points, {2, 1}, real_dtype<double>());
+  const auto rep = run_reduction<double>(
+      lab_t, idx_t, pts,
+      make_params(RepresentativePolicy::kMedoid,
+                  ScoreMethod::kWeightedSum, {1.0}));
   ASSERT_EQ(rep.shape[0], 1);
   EXPECT_EQ(rep.as<int64_t>()[0], 10);
   EXPECT_EQ(rep.as<int64_t>()[1], 1);
@@ -382,8 +436,8 @@ TEST(DetectionReductionOpTest, CustomScoreMethodIgnoredForFirst) {
 }
 
 TEST(DetectionReductionOpTest, RepresentativeConfigurableFromParams) {
-  // Authoring Params must select first vs peak (live Graph override deferred
-  // — HSDK5_PORT §1).
+  // Authoring Params selects both the policy and whether points joins the
+  // compiled aligned trigger.
   std::vector<int64_t> labels = {0, 0};
   std::vector<int64_t> idx = {0, 0, 1, 1};
   std::vector<float> points = {1.0f, 5.0f};
@@ -406,8 +460,7 @@ TEST(DetectionReductionOpTest, RepresentativeConfigurableFromParams) {
 }
 
 TEST(DetectionReductionOpTest, ScoreMethodConfigurableFromParams) {
-  // Authoring Params must select weighted_sum vs weighted_l2 (live Graph
-  // override deferred — HSDK5_PORT §1).
+  // Authoring Params must select weighted_sum vs weighted_l2.
   std::vector<int64_t> labels = {0, 0};
   std::vector<int64_t> idx = {10, 1, 20, 2};
   std::vector<float> points = {4.0f, 3.0f, 6.0f, 0.0f};
@@ -566,19 +619,22 @@ class LiveWeightsSourceOp final : public holoscan::Operator<> {
         return holoscan::make_unexpected(std::move(emitted).error());
       }
     }
+    // points is a non-member when static representative=first. Publish it
+    // before the aligned presence members so a same-tick live switch to peak
+    // can select it without making first-only graphs wire the port.
     auto emitted = holoscan::radar::testing::detail::emit_bank_frame(
-        labels, context, tick.labels, "LiveWeightsSourceOp.labels");
+        points, context, tick.points, "LiveWeightsSourceOp.points");
     if (!emitted) {
       return emitted;
     }
     emitted = holoscan::radar::testing::detail::emit_bank_frame(
-        detection_idx, context, tick.detection_idx,
-        "LiveWeightsSourceOp.detection_idx");
+        labels, context, tick.labels, "LiveWeightsSourceOp.labels");
     if (!emitted) {
       return emitted;
     }
     return holoscan::radar::testing::detail::emit_bank_frame(
-        points, context, tick.points, "LiveWeightsSourceOp.points");
+        detection_idx, context, tick.detection_idx,
+        "LiveWeightsSourceOp.detection_idx");
   }
 
   holoscan::Output<holoscan::Tensor> labels{"out0"};

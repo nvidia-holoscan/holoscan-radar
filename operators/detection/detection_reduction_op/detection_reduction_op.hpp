@@ -110,8 +110,7 @@ class DetectionReductionOp
   Input<Tensor> labels{"labels"};
   Input<Tensor> detection_idx{"detection_idx"};
   // Optional per OPERATOR_API (required unless representative == first).
-  // [EA HSDK5 ONLY] Exact in contract() — Graph tests always wire it; see
-  // OPEN_ITEMS.
+  // Static Params determines whether it joins the compiled aligned trigger.
   Input<Tensor> points{"points"};
   Output<Tensor> rep_idx{"rep_idx"};
   // [live] Exact overrides; the entries are unconditional and wiring the port
@@ -121,16 +120,15 @@ class DetectionReductionOp
   Input<Tensor> feature_weights{"feature_weights"};
 
  private:
-  MaxTensorExtents extents_;
-  std::int64_t max_features_{0};
-  std::size_t max_byte_span_{0U};
-
   // Keep the previous activation's inputs alive across ticks so async device
   // reads cannot outlive the buffers.
   Tensor retained_labels_;
   Tensor retained_idx_;
   Tensor retained_points_;
   std::shared_ptr<holoscan::Tensor> retained_weights_;
+
+  std::int64_t max_features_{0};
+  std::size_t max_byte_span_{0U};
 };
 
 extern template class DetectionReductionOp<float>;

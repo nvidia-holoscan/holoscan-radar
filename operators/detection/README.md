@@ -32,8 +32,8 @@ header is the full contract; the current build implements a faithful subset:
   `ScoreFn` for `score_method=custom`, `[live]` overrides
   (`representative`, `score_method`, `feature_weights`), exact-sized
   `rep_idx`, public `radar_common/reduce/` primitives, unit tests, and
-  `perf_detection_reduction` smoke. Open items in
-  [`detection_reduction_op/OPEN_ITEMS.md`](detection_reduction_op/OPEN_ITEMS.md).
+  `perf_detection_reduction` smoke. Static `representative` Params also
+  determine whether `points` joins the compiled aligned trigger.
 
 - **Implemented (all four CFAR variants — checklist-complete per variant as landed):**
   CA (cell-averaging), GO (2-D GOGO greatest-of), SO (2-D SOSO smallest-of),

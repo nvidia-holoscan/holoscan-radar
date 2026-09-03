@@ -9,17 +9,18 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.2.0",
+        "version": "0.3.0",
         "changelog": {
             "0.1.0": "Initial Release",
-            "0.2.0": "HSDK 5 Operator<Params> / Graph port (feature_weights Params-only live; representative/score_method single-tick Inputs)"
+            "0.2.0": "HSDK 5 Operator<Params> / Graph port",
+            "0.3.0": "Params-derived optional-points join, complete Exact live overrides, and Graph custom-score coverage"
         },
         "holoscan_sdk": {
             "minimum_required_version": "5.0.0",
             "tested_versions": ["5.0.0"]
         },
         "platforms": ["x86_64", "aarch64"],
-        "tags": ["Radar", "Detection", "Clustering", "Bridge", "GPU", "FMCW", "Pulse-Doppler"],
+        "tags": ["Radar", "Detection", "Clustering", "Bridge", "GPU", "FMCW"],
         "ranking": 3,
         "requirements": {}
     }

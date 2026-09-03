@@ -36,11 +36,13 @@ class PyDetectionReductionOp : public DetectionReductionOp<T, NoCustomScore> {
       const std::vector<double>& feature_weights = {},
       int64_t max_clusters = 256,
       int64_t max_points = 8192,
+      int64_t max_features = 64,
       const std::string& name = "detection_reduction")
       : DetectionReductionOp<T, NoCustomScore>([&] {
           MaxTensorExtents extents;
           extents.max_clusters = max_clusters;
           extents.max_points = max_points;
+          extents.max_features = max_features;
           return extents;
         }()) {
     this->name_ = name;
@@ -67,16 +69,18 @@ void bind_detection_reduction(py::module_& m, const char* class_name) {
       "representative : RepresentativePolicy, optional\n"
       "score_method : ScoreMethod, optional\n"
       "feature_weights : list[float], optional\n"
+      "max_clusters, max_points, max_features : int, optional\n"
       "name : str, optional\n")
       .def(py::init<Fragment*, const py::args&, RepresentativePolicy,
                     ScoreMethod, const std::vector<double>&,
-                    int64_t, int64_t, const std::string&>(),
+                    int64_t, int64_t, int64_t, const std::string&>(),
            py::arg("fragment"),
            py::arg("representative") = RepresentativePolicy::kPeak,
            py::arg("score_method") = ScoreMethod::kWeightedSum,
            py::arg("feature_weights") = std::vector<double>{},
            py::arg("max_clusters") = int64_t{256},
            py::arg("max_points") = int64_t{8192},
+           py::arg("max_features") = int64_t{64},
            py::arg("name") = "detection_reduction")
       .def("setup", &Op::setup, py::arg("spec"));
 }

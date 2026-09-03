@@ -128,6 +128,9 @@ radar_add_test(clustering/test_cluster_dbscan
     holoscan::cluster_dbscan_op)
 radar_add_test(detection/test_detection_reduction
     holoscan::detection_reduction_op)
+radar_add_test(detection/test_detection_reduction_custom
+    EXT .cu
+    holoscan::detection_reduction_op)
 radar_add_test(detection/test_feature_assembly
     EXT .cu
     holoscan::feature_assembly_op)

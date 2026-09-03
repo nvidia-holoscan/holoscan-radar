@@ -8,9 +8,8 @@
 //
 // [EA HSDK5 ONLY] Graph-based rewrite via run_perf_graph_triple (labels /
 // detection_idx / points co-emitted on the same OnClock tick). Mid-session
-// [live] representative / feature_weights / score_method override measurement
-// is deferred until docs/planning/HSDK5_PORT.md §1. Params still select the
-// policy under test.
+// [live] representative / feature_weights / score_method override timing is
+// not part of this harness. Params select the policy under test.
 
 #include <cuda_runtime_api.h>
 
@@ -237,7 +236,7 @@ perf::ResultRow base_row(const RedScenario& scen) {
   row.input_shape = {scen.num_points, 2};
   row.out_batch = scen.num_clusters;
   row.k = scen.num_features;
-  row.notes = "live_override=deferred_ea";
+  row.notes = "live_override=not_measured";
   return row;
 }
 
@@ -273,8 +272,7 @@ struct RedTraits : perf::PerfDriverDefaults {
     return "Peak-policy size sweep across an explicit subset";
   }
   static const char* full_help() {
-    return "Full matrix (policies x sizes); live-override timing "
-           "deferred on HSDK 5 EA (HSDK5_PORT.md §1)";
+    return "Full matrix (policies x sizes); live-override timing not measured";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -350,7 +348,7 @@ struct RedTraits : perf::PerfDriverDefaults {
     fill_throughput(&row, scen, row.latency.median_ms);
     row.notes =
         "cold_ms is first-frame latency; median/p90 are steady "
-        "state; live override timing deferred (HSDK5_PORT.md §1); "
+        "state; live override timing not measured; "
         "cells/s is points/s";
     report->results.push_back(row);
   }

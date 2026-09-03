@@ -201,7 +201,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX/cuSOLVER teardown preserved; Graph perf `max_sources` `override_ms` restored (§8) |
 | `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports, `subarray_spec` static (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
 | `FeatureAssemblyOp` F32/F64 + Graph C++ tests (Params-derived aligned gathers) | landed; static `features` selects required zero-window aligned sources; unselected Tensor gathers use Exact + SafeDefault (§11); no `[live]` params; C++ apps use the library op; Graph perf cold/steady landed |
-| `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; Exact `representative`/`score_method`/`feature_weights` on unconditional entries under its `OnAligned` trigger — all three `expect_*` retired (§11), and the live suite keeps every override port wired so a silent one is shown not to stall the trigger; the two enum live-override units landed (§12 fixed); `feature_weights` is a bounded host Tensor (§9); Graph perf cold/steady landed |
+| `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; static `representative` Params selects the compiled aligned presence set (`first`: labels + idx, `peak`/`medoid`: labels + idx + points), with unselected `points` as Exact + SafeDefault; Exact `representative`/`score_method`/`feature_weights` are unconditional non-member entries; all `expect_*` retired (§11); enum live units landed (§12 fixed); `feature_weights` is a bounded host Tensor (§9); Graph perf cold/steady landed |
 | `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; Exact POD lives (unconditional entries) (Graph live deferred §1); vector lives on bounded host-Tensor ports, fixed tuples on ChannelPod (§9); statistical MC suite on label `statistical`; Graph perf `threshold_scale` `override_ms` restored (§8) |
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph live-override/`TXSchedule` N/A (Params-only schedule); Graph perf cold/steady landed |
 | `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` on a generated wire-schema port (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
@@ -407,11 +407,9 @@ lives, so only their optional-input limitations remain.
   non-member `Exact` + `SafeDefault` entries under §11. Graph tests cover the
   selected-source joins.
 - `DetectionReductionOpTest.LiveRepresentativeAppliesForOneTick` /
-  `LiveScoreMethodAppliesForOneTick` are skipped under §12 (enum edges);
-  `LiveFeatureWeightsRevertsToParamsAfterMiss` is skipped under §9. Params
-  cover selection (`RepresentativeConfigurableFromParams` /
-  `ScoreMethodConfigurableFromParams` /
-  `FeatureWeightsConfigurableFromParams`).
+  `LiveScoreMethodAppliesForOneTick` and the `LiveFeatureWeights*` suite run.
+  Params cover selection and the compiled optional-`points` join; the custom
+  `ScoreFn` specialization also runs through the Graph harness from a CUDA TU.
 - `CFARDetectorOpTest.LiveThresholdScaleOverrideMidStream` /
   `LivePfaOverrideMidStream` /
   `LiveMaxDetectionsOverrideMidStream` are still skipped for the
@@ -915,9 +913,9 @@ and `DetectionReductionOp.expect_representative` / `expect_score_method` /
 `resolve_expected_override_via` helpers, which had no other callers. No operator
 in the module carries an `expect_*` parameter now, under any trigger shape. The
 `DetectionReductionOp` live suite wires all three override ports in every case
-— including the cases that never emit on one — so the 43 passing tests are also
-the assertion that an enabled-but-silent aligned side input does not stall the
-trigger. `DetectionReductionOp`'s `max_features` check moved from a Params-time
+— including cases that never emit on one — and therefore asserts that an
+enabled-but-silent aligned side input does not stall the trigger.
+`DetectionReductionOp`'s `max_features` check moved from a Params-time
 gate to the `feature_weights` converter, so it now fires only for a tick that
 actually carries an override.
 

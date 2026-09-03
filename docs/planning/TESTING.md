@@ -139,6 +139,9 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 
 - `peak` policy → `rep_idx` is the max-score member of each cluster; `first` / `medoid` select the expected member (`medoid` respects `feature_weights`).
 - Every `rep_idx` addresses a real detected cell (a subset of `detection_idx`); one per cluster; noise (`−1`) excluded.
+- Static `representative=first` compiles and runs with `points` unwired; `peak` / `medoid` compile `points` into the exact-aligned trigger and reject an unwired graph.
+- A caller-instantiated compile-time `ScoreFn` is exercised through the Graph harness from a CUDA translation unit.
+- Exact peak/medoid ties choose the lowest input row; opaque leading batch rank is rejected.
 
 ### Angle estimation
 
