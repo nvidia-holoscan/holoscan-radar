@@ -1039,6 +1039,31 @@ TEST(CFARDetectorOpTest, DetectionIdxRasterOrder) {
   EXPECT_EQ(rows[3], 24);
 }
 
+TEST(CFARDetectorOpTest, SingleLeadingAxisUsesMaxChannels) {
+  constexpr int64_t kTx = 2;
+  constexpr int64_t kRx = 4;
+  constexpr int64_t kVirtual = kTx * kRx;
+  const std::vector<int64_t> shape{kVirtual, kDoppler, kRange};
+  const auto map = power_cube(shape, 1.0, {});
+  auto input =
+      to_device_tensor<double>(map, shape, real_dtype<double>());
+
+  holoscan::radar::MaxTensorExtents extents;
+  extents.max_doppler_bins = kDoppler;
+  extents.max_range_bins = kRange;
+  extents.max_tx = kTx;
+  extents.max_rx = kRx;
+  extents.max_channels = kVirtual;
+  extents.max_detections = kVirtual * kDoppler * kRange;
+
+  const auto result =
+      run_cfar_result<double>(input, ca_params(1e-3), extents);
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  EXPECT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames0.size(), 1U);
+  EXPECT_EQ(result.frames0.front().shape, shape);
+}
+
 TEST(CFARDetectorOpTest, RejectsOpaqueLeadingBatch) {
   constexpr int64_t kOpaque = 2;
   const std::vector<int64_t> shape{

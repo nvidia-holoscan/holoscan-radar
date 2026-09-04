@@ -453,7 +453,8 @@ expected<CfarStagePlan, Error> build_cfar_stage_plan(
           "CFARDetectorOp: input range_bins exceed MaxTensorExtents"});
     }
     const int64_t max_rx = extent_rx_or_channels(extents);
-    if (leading_rank == 1 && input.shape()[0] > max_rx) {
+    const int64_t max_channels = extents.max_channels.value_or(max_rx);
+    if (leading_rank == 1 && input.shape()[0] > max_channels) {
       return make_unexpected(Error{
           ErrorCode::kInvalidArgument,
           std::string(kOpName) +
