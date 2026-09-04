@@ -177,6 +177,9 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - A non-trivial window gathers the correct neighborhood; `num_snapshots = (2·d+1)(2·r+1)`.
 - Edge modes: `wrap` wraps the Doppler axis; `shift` slides inward keeping the count; `clamp` truncates and marks the missing slots in `is_valid`.
 - Channel axis preserved (gathers per-channel, not the NCI-integrated map).
+- Invalid preserved-batch and Doppler/range coordinates fail predictably; `shift` rejects a requested window longer than its axis.
+- Leaving optional/always `is_valid` unwired does not suppress required `snapshot`.
+- A matched `[live] snapshot_window` applies for one tick and a subsequent miss reverts to Params.
 
 #### SubarraySelectionOp
 

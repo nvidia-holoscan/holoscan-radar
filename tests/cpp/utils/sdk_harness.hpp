@@ -317,6 +317,72 @@ class DualTensorSourceOp final : public holoscan::Operator<> {
   holoscan::Output<holoscan::Tensor> out1{"out1"};
 };
 
+// Co-emits two aligned device Tensors and an optional Exact override.
+template <typename Payload>
+class DualTensorOverrideSourceOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorRepresentation kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice,
+        .dtype = std::nullopt,
+        .rank = std::nullopt,
+    };
+    const holoscan::TensorBounds bounds{
+        .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL};
+    spec.output(out0, "out0")
+        .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, bounds));
+    spec.output(out1, "out1")
+        .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, bounds));
+    spec.output(override_out, "override_out");
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{.period = kHarnessTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    std::shared_ptr<holoscan::Tensor> frame0;
+    std::shared_ptr<holoscan::Tensor> frame1;
+    std::optional<Payload> payload;
+    {
+      const std::lock_guard lock0(FrameBank::mutex);
+      const std::lock_guard lock1(FrameBankB::mutex);
+      if (FrameBank::input_index >= FrameBank::input_frames.size() ||
+          FrameBankB::input_index >= FrameBankB::input_frames.size()) {
+        return {};
+      }
+      const std::size_t index = FrameBank::input_index++;
+      frame0 = FrameBank::input_frames[index];
+      frame1 = FrameBankB::input_frames[FrameBankB::input_index++];
+      if (index < OverrideBank<Payload>::payloads.size()) {
+        payload = std::move(OverrideBank<Payload>::payloads[index]);
+      }
+    }
+    if (payload.has_value()) {
+      auto emitted = override_out.emit(
+          std::move(*payload),
+          holoscan::EmitOptions{.capture_time = context.activation_time()});
+      if (!emitted) {
+        return emitted;
+      }
+    }
+    auto first = emit_bank_frame(
+        out0, context, frame0, "DualTensorOverrideSourceOp.out0");
+    if (!first) {
+      return first;
+    }
+    return emit_bank_frame(
+        out1, context, frame1, "DualTensorOverrideSourceOp.out1");
+  }
+
+  holoscan::Output<holoscan::Tensor> out0{"out0"};
+  holoscan::Output<holoscan::Tensor> out1{"out1"};
+  holoscan::Output<Payload> override_out{"override_out"};
+};
+
 // Three tensors on one OnClock activation (labels + detection_idx + points).
 class TripleTensorSourceOp final : public holoscan::Operator<> {
  public:
@@ -1571,7 +1637,8 @@ GraphRunResult run_dual_in_single_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs1, ParamsT params,
     const char* out_port, WireFn&& wire,
-    const MaxTensorExtents& extents = default_test_extents()) {
+    const MaxTensorExtents& extents = default_test_extents(),
+    std::initializer_list<const char*> extra_op_out_ports = {}) {
   GraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -1594,6 +1661,9 @@ GraphRunResult run_dual_in_single_out_operator_graph_result(
 
   holoscan::CompileOptions options;
   detail::bind_dual_in_single_out_device_pools(options, out_port);
+  for (const char* port : extra_op_out_ports) {
+    detail::bind_op_device_output(options, port);
+  }
 
   try {
     const holoscan::ExecutionPlan plan =
@@ -1619,6 +1689,82 @@ GraphRunResult run_dual_in_single_out_operator_graph_result(
     result.termination = session.termination();
     for (const auto& d : session.diagnostics()) {
       result.diagnostics.push_back(std::string(d.token));
+    }
+  } catch (const holoscan::RuntimeError& e) {
+    result.plan_ok = false;
+    result.plan_json = std::string("RuntimeError: ") + e.what();
+    return result;
+  }
+  {
+    const std::lock_guard lock(detail::FrameBank::mutex);
+    result.frames = std::move(detail::FrameBank::captured);
+  }
+  return result;
+}
+
+// 2-in / optional Exact override / 1-out runner. The two Tensor inputs and
+// any override payload are co-emitted with one capture time.
+template <typename OpT, typename Payload, typename ParamsT, typename WireFn>
+GraphRunResult run_exact_override_dual_in_single_out_operator_graph_result(
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs1,
+    std::vector<std::optional<Payload>> payloads, ParamsT params,
+    const char* out_port, WireFn&& wire,
+    const MaxTensorExtents& extents = default_test_extents(),
+    std::initializer_list<const char*> extra_op_out_ports = {}) {
+  GraphRunResult result;
+  detail::FrameBank::reset();
+  detail::FrameBankB::reset();
+  detail::FrameBank::input_frames = std::move(inputs0);
+  detail::FrameBankB::input_frames = std::move(inputs1);
+  detail::OverrideBank<Payload>::payloads = std::move(payloads);
+  const std::size_t expected = detail::FrameBank::input_frames.size();
+  if (detail::FrameBankB::input_frames.size() != expected) {
+    result.plan_ok = false;
+    result.plan_json = "dual-in override harness: input bank sizes differ";
+    return result;
+  }
+
+  holoscan::Graph graph{"exact-override-dual-in-harness"};
+  const auto source =
+      graph.op<detail::DualTensorOverrideSourceOp<Payload>>("source");
+  auto op = emplace_harness_op<OpT>(graph, extents);
+  op.set_params(std::move(params));
+  const auto sink = graph.op<detail::TensorCaptureOp>("sink");
+  wire(graph, source, op, sink);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  detail::bind_dual_in_single_out_device_pools(options, out_port);
+  for (const char* port : extra_op_out_ports) {
+    detail::bind_op_device_output(options, port);
+  }
+
+  try {
+    const holoscan::ExecutionPlan plan =
+        holoscan::compile(graph, std::move(options));
+    result.plan_ok = plan.ok();
+    result.plan_json = plan.json();
+    if (!plan.ok()) {
+      return result;
+    }
+
+    holoscan::RunSession session = holoscan::run_async(plan);
+    {
+      const auto deadline =
+          std::chrono::steady_clock::now() + detail::kHarnessDeadline;
+      std::unique_lock lock(detail::FrameBank::mutex);
+      while (detail::FrameBank::captured.size() < expected &&
+             session.diagnostics().empty() &&
+             std::chrono::steady_clock::now() < deadline) {
+        detail::FrameBank::ready.wait_for(lock, detail::kHarnessPoll);
+      }
+    }
+    session.request_stop();
+    session.wait();
+    result.termination = session.termination();
+    for (const auto& diagnostic : session.diagnostics()) {
+      result.diagnostics.push_back(std::string(diagnostic.token));
     }
   } catch (const holoscan::RuntimeError& e) {
     result.plan_ok = false;

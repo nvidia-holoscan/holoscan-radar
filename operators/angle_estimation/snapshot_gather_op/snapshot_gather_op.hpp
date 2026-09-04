@@ -22,7 +22,6 @@
 #include <holoscan/core/parameter_schema.hpp>
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
-#include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
@@ -67,6 +66,10 @@ struct ChannelPodLayout<radar::SnapshotWindowOverride> {
 
 namespace holoscan::radar {
 
+namespace detail {
+struct SnapshotGatherState;
+}  // namespace detail
+
 // Gathers per-detection channel snapshots from per-channel RD maps for the
 // sparse angle path. This header is the contract reference for the
 // operator's ports, shapes, dtypes, and parameters; module-wide
@@ -79,10 +82,11 @@ namespace holoscan::radar {
 //                       (…preserved_batch, doppler_bin, range_bin).
 // Out: snapshot       — complex64/complex128,
 //                       (num_detections, num_channels, num_snapshots).
-// Out: is_valid       — uint8 (0/1), (num_detections, num_snapshots). Per-
-//                       detection mask of usable snapshot slots (ragged under
-//                       clamp); 1 = valid. uint8 rather than bool so the mask
-//                       is NumPy-visible (kDLBool has no NumPy typestr on the
+// Out: is_valid       — optional/always uint8 (0/1),
+//                       (num_detections, num_snapshots). Per-detection mask
+//                       of usable snapshot slots (ragged under clamp); 1 =
+//                       valid. uint8 rather than bool so the mask is
+//                       NumPy-visible (kDLBool has no NumPy typestr on the
 //                       Holoscan message path). Consumers accept bool or
 //                       uint8.
 //
@@ -139,17 +143,17 @@ class SnapshotGatherOp : public holoscan::Operator<SnapshotGatherParams> {
   Input<SnapshotWindowOverride> snapshot_window{"snapshot_window"};
 
  private:
-  MaxTensorExtents extents_;
-  std::uint32_t snapshot_max_rank_{3U};
-  std::size_t snapshot_max_byte_span_{0U};
-  std::size_t is_valid_max_byte_span_{0U};
-
   // Keep the previous activation's inputs alive across ticks so async device
   // reads cannot outlive the buffers.
   Tensor retained_rd_maps_;
   Tensor retained_detection_idx_;
-  // Cached device copy of rd_maps leading dims for the batch-linear kernel.
-  std::shared_ptr<holoscan::Tensor> retained_leading_dims_;
+  std::shared_ptr<detail::SnapshotGatherState> state_;
+
+  std::int64_t max_detections_{0};
+  std::int64_t max_channels_{0};
+  std::int64_t max_snapshots_{0};
+  std::size_t snapshot_max_byte_span_{0U};
+  std::size_t is_valid_max_byte_span_{0U};
 };
 
 extern template class SnapshotGatherOp<float>;

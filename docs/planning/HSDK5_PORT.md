@@ -191,7 +191,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | Foundation (Dockerfile yaml-cpp/ssh, `find_package(matx)`, Holoviz gate, C++20) | landed on `dpc/hs5.0-fixes` |
 | Shared Tensor I/O + Exact `[live]` helpers (`radar_common/sdk/`) | landed (ClutterFilter pilot; Exact since 2026-08-21) |
 | `ClutterFilterOp` F32/F64 + Graph C++ tests | landed; Exact `method` (unconditional entry); Graph perf cold/steady landed; enum `method` live-override units landed now that §12 is fixed; Graph perf `method` `override_ms` landed (§8) |
-| `SnapshotGatherOp` F32/F64 + Graph C++ tests (OnAligned 2-in/2-out) | landed; Exact `snapshot_window` on an unconditional entry — `expect_snapshot_window` retired (§11); live-override unit deferred (§1); Graph perf `snapshot_window` `override_ms` restored (§8) |
+| `SnapshotGatherOp` F32/F64 + Graph C++ tests (OnAligned 2-in/2-out) | landed; tick-local config/plan and constructor-created workspace; Exact `snapshot_window` on an unconditional entry with mid-stream/revert Graph coverage; optional/always `is_valid`; Graph perf `snapshot_window` `override_ms` restored (§8) |
 | `PhaseShiftBeamformerOp` F32/F64 + Graph C++ tests | landed; `[live]` geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); no POD live Inputs, so Graph live tests still skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `peak_interpolation` (unconditional entry) with its enum live-override unit landed now that §12 is fixed; optional `is_valid` Graph wiring deferred (§11); geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `SubarraySelectionOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; tick-local config/plan, constructor-created selection cache + bounded index table; required `snapshot_out` before independent latched geometry/mask outputs; outputs `snapshot_out` / `is_valid_out` (§2); `array_geometry` emitted as packed float64 Tensor (§10); geometry wire-schema and bounded host-Tensor `subarray` lives (§9); optional `is_valid` Graph wiring deferred (§11); Graph perf cold/steady landed (live deferred §9) |
@@ -370,11 +370,10 @@ lives, so only their optional-input limitations remain.
   remaining live-override stubs. Tracked separately as **§12** — the failure is
   a payload-identity gap independent of this harness work, so the four skipped
   enum stubs are accounted for there rather than here.
-- `SnapshotGatherOpTest.LiveSnapshotWindowAppliesForOneTick` remains skipped
-  (`snapshot_window` rides a ChannelPod tuple under an `OnAligned` trigger; not
-  re-measured since the enum finding). `PhaseShiftBeamformerOp` / Beamscan
-  geometry / grid / taper live Graph tests are also still skipped — the ports
-  exist (§9), that harness does not.
+- `SnapshotGatherOpTest.LiveSnapshotWindowAppliesForOneTick` now drives a
+  ChannelPod tuple under the production `OnAligned` + Exact contract and
+  verifies the following miss reverts to Params. `PhaseShiftBeamformerOp` /
+  Beamscan geometry / grid / taper live Graph tests are separate payload cases.
 - **Runnable minimal Graph reproducer** (no radar domain logic):
   [`tests/cpp/utils/test_live_override_repro.cpp`](../../tests/cpp/utils/test_live_override_repro.cpp)
   — label `ea_repro`, not part of default `unit`:

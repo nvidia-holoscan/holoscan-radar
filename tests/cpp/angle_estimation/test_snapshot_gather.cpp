@@ -29,10 +29,15 @@ namespace {
 using holoscan::radar::SnapshotEdgeMode;
 using holoscan::radar::SnapshotGatherOp;
 using holoscan::radar::SnapshotGatherParams;
+using holoscan::radar::SnapshotWindowOverride;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::testing::DualIOGraphRunResult;
+using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
+using holoscan::radar::testing::run_dual_in_single_out_operator_graph_result;
 using holoscan::radar::testing::run_dual_io_operator_graph_result;
+using holoscan::radar::testing::
+run_exact_override_dual_in_single_out_operator_graph_result;  // NOLINT
 using holoscan::radar::testing::to_device_tensor;
 
 constexpr int64_t kC = 3;
@@ -239,13 +244,57 @@ TEST(SnapshotGatherOpTest, EmptyDetections) {
   EXPECT_EQ(out.is_valid.shape[0], 0);
 }
 
+TEST(SnapshotGatherOpTest, OptionalValidityMayBeLeftUnwired) {
+  std::vector<int64_t> idx = {3, 5};
+  GraphRunResult result =
+      run_dual_in_single_out_operator_graph_result<SnapshotGatherOp<double>>(
+          {make_rd_maps()},
+          {to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1})},
+          SnapshotGatherParams{}, "snapshot",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->rd_maps, q);
+            graph.add_flow(source->out1, op->detection_idx, q);
+            graph.add_flow(op->snapshot, sink->in, q);
+          },
+          holoscan::radar::testing::default_test_extents(), {"is_valid"});
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  EXPECT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames.size(), 1U);
+  EXPECT_EQ(result.frames[0].shape, (std::vector<int64_t>{1, kC, 1}));
+}
+
 TEST(SnapshotGatherOpTest, LiveSnapshotWindowAppliesForOneTick) {
-  // [EA HSDK5 ONLY] See docs/planning/HSDK5_PORT.md §1 — Graph mid-stream
-  // live override harness fails on EA device/partition binding
-  // (RUNTIME_PORT_BINDING_UNAVAILABLE / RUNTIME_EXECUTION_LANE_PLAN_INVALID).
-  // Params authoring covers snapshot_window; restore once §1 is closed.
-  GTEST_SKIP() << "HSDK 5 EA: live snapshot_window override harness deferred "
-                  "(HSDK5_PORT.md §1)";
+  std::vector<std::shared_ptr<holoscan::Tensor>> rd_maps;
+  std::vector<std::shared_ptr<holoscan::Tensor>> indices;
+  for (int tick = 0; tick < 3; ++tick) {
+    rd_maps.push_back(make_rd_maps());
+    std::vector<int64_t> idx = {3, 5};
+    indices.push_back(
+        to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1}));
+  }
+  GraphRunResult result =
+      run_exact_override_dual_in_single_out_operator_graph_result<
+          SnapshotGatherOp<double>, SnapshotWindowOverride>(
+          std::move(rd_maps), std::move(indices),
+          {std::nullopt, SnapshotWindowOverride{1, 0}, std::nullopt},
+          SnapshotGatherParams{}, "snapshot",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->rd_maps, q);
+            graph.add_flow(source->out1, op->detection_idx, q);
+            graph.add_flow(source->override_out, op->snapshot_window, q);
+            graph.add_flow(op->snapshot, sink->in, q);
+          },
+          holoscan::radar::testing::default_test_extents(), {"is_valid"});
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames.size(), 3U);
+  EXPECT_EQ(result.frames[0].shape, (std::vector<int64_t>{1, kC, 1}));
+  EXPECT_EQ(result.frames[1].shape, (std::vector<int64_t>{1, kC, 3}));
+  EXPECT_EQ(result.frames[2].shape, (std::vector<int64_t>{1, kC, 1}));
 }
 
 TEST(SnapshotGatherOpTest, FloatInstantiationSmoke) {
@@ -354,11 +403,46 @@ TEST(SnapshotGatherOpTest, RejectsNegativeSnapshotWindow) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
+TEST(SnapshotGatherOpTest, RejectsNegativeIsotropicSnapshotWindow) {
+  std::vector<int64_t> idx = {3, 5};
+  auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
+  SnapshotGatherParams params{};
+  params.snapshot_window = {-1};
+  const DualIOGraphRunResult result =
+      run_gather_result<double>(make_rd_maps(), idx_t, params);
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames0.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
+TEST(SnapshotGatherOpTest, RejectsOversizedShiftWindow) {
+  std::vector<int64_t> idx = {3, 5};
+  auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
+  SnapshotGatherParams params{};
+  params.snapshot_window = {0, kR};
+  params.range_edge = SnapshotEdgeMode::kShift;
+  const DualIOGraphRunResult result =
+      run_gather_result<double>(make_rd_maps(), idx_t, params);
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames0.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
 TEST(SnapshotGatherOpTest, RejectsBatchCoordOutOfRange) {
   std::vector<int64_t> idx = {9, 3, 5};
   auto idx_t = to_device_tensor(idx, {1, 3}, DLDataType{kDLInt, 64, 1});
   const DualIOGraphRunResult result =
       run_gather_result<double>(make_batched_rd_maps<double>(2), idx_t);
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames0.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
+TEST(SnapshotGatherOpTest, RejectsCellCoordOutOfRange) {
+  std::vector<int64_t> idx = {kD, 5};
+  auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
+  const DualIOGraphRunResult result =
+      run_gather_result<double>(make_rd_maps(), idx_t);
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
