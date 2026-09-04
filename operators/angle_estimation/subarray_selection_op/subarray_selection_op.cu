@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <sstream>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -31,6 +31,20 @@
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar {
+
+namespace detail {
+
+struct SubarraySelectionState {
+  bool has_selection{false};
+  ArrayGeometry geometry_key{};
+  std::vector<int64_t> subarray_key{};
+  int64_t min_subarray_size_key{0};
+  SubarraySelection selection{};
+  std::shared_ptr<holoscan::Tensor> channel_index{};
+  int64_t channel_index_capacity{0};
+};
+
+}  // namespace detail
 
 namespace {
 
@@ -56,12 +70,279 @@ expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
   return *mut;
 }
 
+struct SubarraySelectionStageConfig {
+  ArrayGeometry geometry;
+  std::vector<int64_t> subarray;
+  int64_t min_subarray_size{0};
+};
+
+struct SubarraySelectionStagePlan {
+  SubarraySelectionStageConfig stage;
+  int64_t num_items{0};
+  int64_t num_channels{0};
+  int64_t num_snapshots{0};
+  bool has_snapshot_axis{false};
+};
+
+expected<SubarraySelectionStageConfig, Error> resolve_params(
+    Input<WireArrayGeometry>& geometry_port, Input<Tensor>& subarray_port,
+    const SubarraySelectionParams& pinned, int64_t live_subarray_bound) {
+  HOLOSCAN_TRY(
+      auto geometry,
+      resolve_live_override_via(
+          geometry_port, pinned.array_geometry,
+          [](const WireArrayGeometry& value) { return from_wire(value); }));
+  HOLOSCAN_TRY(
+      auto subarray,
+      resolve_live_override_via(
+          subarray_port, pinned.subarray,
+          [live_subarray_bound](const Tensor& value) {
+            return read_host_config_vector<int64_t>(
+                value, DLDataType{kDLInt, 64U, 1U},
+                live_subarray_bound, "subarray");
+          }));
+  return SubarraySelectionStageConfig{
+      .geometry = std::move(geometry),
+      .subarray = std::move(subarray),
+      .min_subarray_size = pinned.min_subarray_size,
+  };
+}
+
+expected<SubarraySelectionStagePlan, Error> build_subarray_stage_plan(
+    const Tensor& snapshot, SubarraySelectionStageConfig stage,
+    int64_t max_items, int64_t max_snapshots) {
+  const auto& shape = snapshot.shape();
+  if (shape.size() != 2U && shape.size() != 3U) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) +
+            ": snapshot must have shape (num_items, num_channels) or "
+            "(num_items, num_channels, num_snapshots)"});
+  }
+  try {
+    stage.geometry.validate();
+  } catch (const std::invalid_argument& e) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, e.what()});
+  }
+
+  const int64_t num_channels = shape[1];
+  if (num_channels != stage.geometry.num_elements()) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) +
+            ": snapshot num_channels must match "
+            "array_geometry.num_elements"});
+  }
+  const int64_t num_snapshots = shape.size() == 3U ? shape[2] : 1;
+  if ((max_items > 0 && shape[0] > max_items) ||
+      (max_snapshots > 0 && num_snapshots > max_snapshots)) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) +
+            ": snapshot shape exceeds MaxTensorExtents"});
+  }
+  return SubarraySelectionStagePlan{
+      .stage = std::move(stage),
+      .num_items = shape[0],
+      .num_channels = num_channels,
+      .num_snapshots = num_snapshots,
+      .has_snapshot_axis = shape.size() == 3U,
+  };
+}
+
+bool selection_cache_hit(const detail::SubarraySelectionState& state,
+                         const SubarraySelectionStageConfig& stage) {
+  return state.has_selection && state.geometry_key == stage.geometry &&
+         state.subarray_key == stage.subarray &&
+         state.min_subarray_size_key == stage.min_subarray_size;
+}
+
+expected<const SubarraySelection*, Error> prepare_selection(
+    detail::SubarraySelectionState& state,
+    const SubarraySelectionStageConfig& stage, int64_t max_subarray_channels,
+    cudaStream_t stream) {
+  if (selection_cache_hit(state, stage)) {
+    return &state.selection;
+  }
+
+  SubarraySelection selection;
+  try {
+    selection = build_subarray_selection(
+        stage.geometry, stage.subarray, stage.min_subarray_size);
+  } catch (const std::invalid_argument& e) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, e.what()});
+  }
+  if (max_subarray_channels > 0 &&
+      selection.subarray_size > max_subarray_channels) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) +
+            ": selected channels exceed "
+            "MaxTensorExtents.max_subarray_channels"});
+  }
+
+  if (selection.reduced) {
+    if (!state.channel_index ||
+        state.channel_index_capacity < selection.subarray_size) {
+      state.channel_index =
+          make_device_tensor({selection.subarray_size},
+                             DLDataType{kDLInt, 32U, 1U});
+      state.channel_index_capacity = selection.subarray_size;
+    }
+    HOLOSCAN_TRY(auto index_ptr,
+                 writable_ptr(*state.channel_index, "channel_index"));
+    if (cudaMemcpyAsync(
+            index_ptr, selection.channel_index.data(),
+            selection.channel_index.size() * sizeof(int32_t),
+            cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+      return make_unexpected(Error{
+          ErrorCode::kFailure,
+          std::string(kOpName) + ": channel-index H2D failed"});
+    }
+    HOLOSCAN_LOG_INFO(
+        "{}: selected {}/{} channels (uniform sub-array)", kOpName,
+        selection.subarray_size, selection.num_channels);
+  }
+
+  state.geometry_key = stage.geometry;
+  state.subarray_key = stage.subarray;
+  state.min_subarray_size_key = stage.min_subarray_size;
+  state.selection = std::move(selection);
+  state.has_selection = true;
+  return &state.selection;
+}
+
+expected<void, Error> validate_optional_mask(
+    const std::optional<Tensor>& maybe_valid,
+    const SubarraySelectionStagePlan& plan) {
+  if (!maybe_valid.has_value()) {
+    return {};
+  }
+  const DLDataType dtype = maybe_valid->dtype();
+  const bool dtype_ok =
+      dtype.lanes == 1 && dtype.bits == 8 &&
+      (dtype.code == kDLBool || dtype.code == kDLUInt);
+  if (!dtype_ok) {
+    return fail_invalid(
+        "SubarraySelectionOp: is_valid must have dtype bool or uint8");
+  }
+  const auto& shape = maybe_valid->shape();
+  if (shape.size() != 2U || shape[0] != plan.num_items ||
+      shape[1] != plan.num_snapshots) {
+    return fail_invalid(
+        "SubarraySelectionOp: is_valid must have shape (num_items, "
+        "num_snapshots) matching snapshot");
+  }
+  try {
+    require_cuda_accessible(*maybe_valid, "is_valid", kOpName);
+    require_contiguous(*maybe_valid, "is_valid", kOpName);
+  } catch (const std::invalid_argument& e) {
+    return fail_invalid(e.what());
+  }
+  return {};
+}
+
+template <typename T>
+expected<TensorOutputLoan, Error> prepare_snapshot_output(
+    Output<Tensor>& output, ExecutionContext& context, const Tensor& snapshot,
+    const SubarraySelectionStagePlan& plan,
+    const SubarraySelection& selection,
+    const std::shared_ptr<holoscan::Tensor>& channel_index,
+    std::span<const int64_t> output_shape, cudaStream_t stream) {
+  const DLDataType dtype = complex_dtype<T>();
+  if (!selection.reduced) {
+    const std::size_t expected_bytes =
+        tensor_byte_span(output_shape, dtype);
+    return prepare_device_tensor(
+        output, context, output_shape, dtype,
+        [&](void* destination,
+            std::size_t bytes) -> expected<void, Error> {
+          if (bytes != expected_bytes) {
+            return fail_runtime(
+                "SubarraySelectionOp: snapshot pass-through size mismatch");
+          }
+          if (cudaMemcpyAsync(destination, snapshot.data(), bytes,
+                              cudaMemcpyDeviceToDevice, stream) !=
+              cudaSuccess) {
+            return fail_runtime(
+                "SubarraySelectionOp: snapshot pass-through D2D failed");
+          }
+          return {};
+        });
+  }
+
+  return prepare_device_tensor(
+      output, context, output_shape, dtype,
+      [&](void* destination, std::size_t) -> expected<void, Error> {
+        try {
+          run_spatial_smoothing_gather<T>(
+              static_cast<const cuda::std::complex<T>*>(snapshot.data()),
+              /*mask=*/nullptr, plan.num_items, plan.num_channels,
+              plan.num_snapshots,
+              static_cast<const int32_t*>(channel_index->data()),
+              /*fb_flip=*/nullptr, /*num_subarrays=*/1,
+              selection.subarray_size, /*forward_backward=*/false,
+              static_cast<cuda::std::complex<T>*>(destination),
+              /*ss_mask=*/nullptr, stream);
+          check_cuda("subarray gather", kOpName);
+        } catch (const std::runtime_error& e) {
+          return fail_runtime(e.what());
+        }
+        return {};
+      });
+}
+
+expected<TensorOutputLoan, Error> prepare_geometry_output(
+    Output<Tensor>& output, ExecutionContext& context,
+    const ArrayGeometry& geometry, const std::vector<double>& packed,
+    cudaStream_t stream) {
+  const std::vector<int64_t> shape =
+      array_geometry_tensor_shape(geometry);
+  return prepare_device_tensor(
+      output, context, shape, real_dtype<double>(),
+      [&](void* destination, std::size_t bytes) -> expected<void, Error> {
+        if (bytes != packed.size() * sizeof(double)) {
+          return fail_runtime(
+              "SubarraySelectionOp: array_geometry size mismatch");
+        }
+        if (cudaMemcpyAsync(destination, packed.data(), bytes,
+                            cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+          return fail_runtime(
+              "SubarraySelectionOp: array_geometry H2D failed");
+        }
+        return {};
+      });
+}
+
+expected<TensorOutputLoan, Error> prepare_mask_output(
+    Output<Tensor>& output, ExecutionContext& context, const Tensor& mask,
+    cudaStream_t stream) {
+  const std::size_t expected_bytes =
+      tensor_byte_span(mask.shape(), mask.dtype());
+  return prepare_device_tensor(
+      output, context, mask.shape(), mask.dtype(),
+      [&](void* destination, std::size_t bytes) -> expected<void, Error> {
+        if (bytes != expected_bytes) {
+          return fail_runtime(
+              "SubarraySelectionOp: is_valid forward size mismatch");
+        }
+        if (cudaMemcpyAsync(destination, mask.data(), bytes,
+                            cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
+          return fail_runtime(
+              "SubarraySelectionOp: is_valid forward D2D failed");
+        }
+        return {};
+      });
+}
+
 }  // namespace
 
 template <typename T>
 SubarraySelectionOp<T>::SubarraySelectionOp(
-    const MaxTensorExtents& extents) {
-  extents_ = extents;
+    const MaxTensorExtents& extents)
+    : state_(std::make_shared<detail::SubarraySelectionState>()) {  // NOLINT
   if (extents.max_subarray_channels.has_value()) {
     subarray_max_extent_ = require_extent(
         extents.max_subarray_channels, "max_subarray_channels",
@@ -89,6 +370,8 @@ SubarraySelectionOp<T>::SubarraySelectionOp(
   const std::int64_t max_snap =
       require_extent(extents.max_snapshots,
                      "max_snapshots", who);
+  max_items_ = max_items;
+  max_snapshots_ = max_snap;
   snapshot_max_byte_span_ = byte_span_complex_cube<T>(
       {max_items, max_sub, max_snap}, who);
   geom_max_byte_span_ = byte_span_elems(
@@ -96,6 +379,9 @@ SubarraySelectionOp<T>::SubarraySelectionOp(
       sizeof(double), who);
   is_valid_max_byte_span_ = byte_span_elems(
       product_extents({max_items, max_snap}, who), 1U, who);
+  state_->channel_index =
+      make_device_tensor({max_sub}, DLDataType{kDLInt, 32U, 1U});
+  state_->channel_index_capacity = max_sub;
 }
 
 template <typename T>
@@ -113,19 +399,20 @@ void SubarraySelectionOp<T>::setup(OperatorSpec& spec) {
   spec.input(snapshot).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   // Optional is_valid: omitted from contract so unconnected graphs compile.
   spec.input(is_valid).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  spec.input(array_geometry_in).queue_depth(2U);
-  spec.input(subarray)
-      .queue_depth(2U)
-      .expects_tensor(tensor_input(kHostIndexVector));
   spec.output(snapshot_out)
       .produces_tensor(pooled_tensor_output(
-          kDevice, max_rank_, snapshot_max_byte_span_));
+          kDevice, 3U, snapshot_max_byte_span_));
   // Packed ArrayGeometry (host-planned; H2D each rebuild / tick).
   spec.output(array_geometry)
       .produces_tensor(pooled_tensor_output(kDevice, 2U, geom_max_byte_span_));
   spec.output(is_valid_out)
       .produces_tensor(pooled_tensor_output(
-          kDevice, max_rank_, is_valid_max_byte_span_));
+          kDevice, 2U, is_valid_max_byte_span_));
+  // [live] Exact overrides, Params order (schema and host Tensor).
+  spec.input(array_geometry_in).queue_depth(2U);
+  spec.input(subarray)
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kHostIndexVector));
 }
 
 template <typename T>
@@ -143,239 +430,89 @@ Contract SubarraySelectionOp<T>::contract() const {
 template <typename T>
 expected<void, Error> SubarraySelectionOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and classify the trigger tensor.
   HOLOSCAN_TRY(auto snap, receive_tensor(snapshot, kOpName));
-
   try {
     require_cuda_accessible(snap, "snapshot", kOpName);
     require_contiguous(snap, "snapshot", kOpName);
-    require_dtype(snap, complex_dtype<T>(), "snapshot", kOpName);
+    require_complex<T>(snap, "snapshot");
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
 
-  const auto& shape = snap.shape();
-  if (shape.size() != 2 && shape.size() != 3) {
-    return fail_invalid(
-        "SubarraySelectionOp: snapshot must have shape (num_items, "
-        "num_channels) or (num_items, num_channels, num_snapshots)");
-  }
-  const int64_t num_items = shape[0];
-  const int64_t num_channels = shape[1];
-  const int64_t num_snapshots = shape.size() == 3 ? shape[2] : 1;
+  // Merge Exact overrides into one tick-local config, then derive geometry.
   const SubarraySelectionParams& pinned =
       context.params<SubarraySelectionParams>();
-  HOLOSCAN_TRY(
-      auto geometry,
-      resolve_live_override_via(
-          array_geometry_in, pinned.array_geometry,
-          [](const WireArrayGeometry& value) { return from_wire(value); }));
   const int64_t live_subarray_bound =
-      subarray_max_extent_ > 0 ? subarray_max_extent_ : num_channels;
+      subarray_max_extent_ > 0
+          ? subarray_max_extent_
+          : (snap.shape().size() > 1U ? snap.shape()[1] : 0);
   HOLOSCAN_TRY(
-      auto subarray_value,
-      resolve_live_override_via(
-          subarray, pinned.subarray,
-          [live_subarray_bound](const Tensor& value) {
-            return read_host_config_vector<int64_t>(
-                value, DLDataType{kDLInt, 64U, 1U},
-                live_subarray_bound, "subarray");
-          }));
-  try {
-    geometry.validate();
-  } catch (const std::invalid_argument& e) {
-    return fail_invalid(e.what());
-  }
-  const int64_t min_size = pinned.min_subarray_size;
-  if (num_channels != geometry.num_elements()) {
-    return fail_invalid(
-        "SubarraySelectionOp: snapshot num_channels must match "
-        "array_geometry.num_elements");
-  }
+      auto stage,
+      resolve_params(array_geometry_in, subarray, pinned,
+                     live_subarray_bound));
+  HOLOSCAN_TRY(
+      auto plan,
+      build_subarray_stage_plan(
+          snap, std::move(stage), max_items_, max_snapshots_));
 
+  // Validate the optional mask against this tick's named axes.
   HOLOSCAN_TRY(auto maybe_valid, receive_optional_value(is_valid));
-  if (maybe_valid.has_value()) {
-    // The mask is forwarded verbatim, so only its transport shape matters
-    // here; slot contents are the consuming estimator's business.
-    const DLDataType vdtype = maybe_valid->dtype();
-    const bool mask_dtype_ok =
-        vdtype.lanes == 1 && vdtype.bits == 8 &&
-        (vdtype.code == kDLBool || vdtype.code == kDLUInt);
-    if (!mask_dtype_ok) {
-      return fail_invalid(
-          "SubarraySelectionOp: is_valid must have dtype bool or uint8");
-    }
-    const auto& vshape = maybe_valid->shape();
-    if (vshape.size() != 2 || vshape[0] != num_items ||
-        vshape[1] != num_snapshots) {
-      return fail_invalid(
-          "SubarraySelectionOp: is_valid must have shape (num_items, "
-          "num_snapshots) matching snapshot");
-    }
-    try {
-      require_cuda_accessible(*maybe_valid, "is_valid", kOpName);
-      require_contiguous(*maybe_valid, "is_valid", kOpName);
-    } catch (const std::invalid_argument& e) {
-      return fail_invalid(e.what());
-    }
-  }
+  HOLOSCAN_TRY(validate_optional_mask(maybe_valid, plan));
 
-  cudaStream_t stream = context.cuda_stream().get();
+  // Resolve the runtime stream and cached host/device selection artifacts.
+  const cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
     return make_unexpected(Error{ErrorCode::kNotSupported,
                                  "SubarraySelectionOp: no CUDA compute stream"});
   }
-
-  // (Re)build the selection + upload the channel-index table only when the
-  // geometry / selection config changes.
-  std::ostringstream ks;
-  ks << geometry.wavelength << '|';
-  for (double v : geometry.element_positions) {
-    ks << v << ',';
-  }
-  ks << '|';
-  for (int64_t v : subarray_value) {
-    ks << v << ',';
-  }
-  ks << '|' << min_size;
-  const std::string key = ks.str();
-  if (key != sel_key_) {
-    try {
-      selection_ =
-          build_subarray_selection(geometry, subarray_value, min_size);
-    } catch (const std::invalid_argument& e) {
-      return fail_invalid(e.what());
-    }
-    sel_key_ = key;
-    if (selection_.reduced) {
-      d_channel_index_ = make_device_tensor({selection_.subarray_size},
-                                            DLDataType{kDLInt, 32, 1});
-      HOLOSCAN_TRY(auto idx_ptr,
-                   writable_ptr(*d_channel_index_, "channel_index"));
-      if (cudaMemcpyAsync(idx_ptr, selection_.channel_index.data(),
-                          selection_.channel_index.size() * sizeof(int32_t),
-                          cudaMemcpyHostToDevice, stream) != cudaSuccess) {
-        return fail_runtime(
-            "SubarraySelectionOp: channel-index H2D failed");
-      }
-      HOLOSCAN_LOG_INFO(
-          "SubarraySelectionOp: selected {}/{} channels (uniform sub-array)",
-          selection_.subarray_size, num_channels);
-    }
-  }
-
+  HOLOSCAN_TRY(
+      const auto* selection,
+      prepare_selection(*state_, plan.stage, subarray_max_extent_, stream));
   const ArrayGeometry& out_geometry =
-      selection_.reduced ? selection_.reduced_geometry : geometry;
+      selection->reduced ? selection->reduced_geometry : plan.stage.geometry;
   const int64_t out_channels =
-      selection_.reduced ? selection_.subarray_size : num_channels;
+      selection->reduced ? selection->subarray_size : plan.num_channels;
   const std::vector<int64_t> out_shape =
-      shape.size() == 3
-          ? std::vector<int64_t>{num_items, out_channels, num_snapshots}
-          : std::vector<int64_t>{num_items, out_channels};
+      plan.has_snapshot_axis
+          ? std::vector<int64_t>{
+                plan.num_items, out_channels, plan.num_snapshots}
+          : std::vector<int64_t>{plan.num_items, out_channels};
 
-  const DLDataType cplx = complex_dtype<T>();
-  const std::size_t snap_bytes = tensor_byte_span(out_shape, cplx);
-
-  // Prepare every output loan before any emit so a late fill failure cannot
-  // leave snapshot_out / array_geometry already published.
-  // TensorOutputLoan is move-only — prepare via a local lambda, not a
-  // default-constructed expected<>.
-  auto prepare_snap = [&]() -> expected<TensorOutputLoan, Error> {
-    if (!selection_.reduced) {
-      return prepare_device_tensor(
-          snapshot_out, context, out_shape, cplx,
-          [&](void* dst, std::size_t nbytes) -> expected<void, Error> {
-            if (nbytes != snap_bytes) {
-              return fail_runtime(
-                  "SubarraySelectionOp: snapshot pass-through size mismatch");
-            }
-            if (cudaMemcpyAsync(dst, snap.data(), nbytes,
-                                cudaMemcpyDeviceToDevice, stream) !=
-                cudaSuccess) {
-              return fail_runtime(
-                  "SubarraySelectionOp: snapshot pass-through D2D failed");
-            }
-            return {};
-          });
-    }
-    return prepare_device_tensor(
-        snapshot_out, context, out_shape, cplx,
-        [&](void* dst, std::size_t) -> expected<void, Error> {
-          try {
-            run_spatial_smoothing_gather<T>(
-                static_cast<const cuda::std::complex<T>*>(snap.data()),
-                /*mask=*/nullptr, num_items, num_channels, num_snapshots,
-                static_cast<const int32_t*>(d_channel_index_->data()),
-                /*fb_flip=*/nullptr, /*num_subarrays=*/1, out_channels,
-                /*forward_backward=*/false,
-                static_cast<cuda::std::complex<T>*>(dst),
-                /*ss_mask=*/nullptr, stream);
-            check_cuda("subarray gather", kOpName);
-          } catch (const std::runtime_error& e) {
-            return fail_runtime(e.what());
-          }
-          return {};
-        });
-  };
-  HOLOSCAN_TRY(auto snap_loan, prepare_snap());
-
-  const std::vector<double> packed = pack_array_geometry(out_geometry);
-  const std::vector<int64_t> geom_shape =
-      array_geometry_tensor_shape(out_geometry);
-  const DLDataType f64 = real_dtype<double>();
-  HOLOSCAN_TRY(auto geom_loan,
-               prepare_device_tensor(
-                   array_geometry, context, geom_shape, f64,
-                   [&](void* dst, std::size_t nbytes) -> expected<void, Error> {
-                     if (nbytes != packed.size() * sizeof(double)) {
-                       return fail_runtime(
-                           "SubarraySelectionOp: array_geometry size mismatch");
-                     }
-                     if (cudaMemcpyAsync(dst, packed.data(), nbytes,
-                                         cudaMemcpyHostToDevice, stream) !=
-                         cudaSuccess) {
-                       return fail_runtime(
-                           "SubarraySelectionOp: array_geometry H2D failed");
-                     }
-                     return {};
-                   }));
-
-  std::optional<TensorOutputLoan> valid_loan;
-  if (maybe_valid.has_value() && is_valid_out_.active()) {
-    const auto& valid = *maybe_valid;
-    const auto& vshape = valid.shape();
-    const DLDataType vdtype = valid.dtype();
-    const std::size_t vbytes = tensor_byte_span(vshape, vdtype);
-    HOLOSCAN_TRY(auto prepared,
-                 prepare_device_tensor(
-                     is_valid_out, context, vshape, vdtype,
-                     [&](void* dst, std::size_t nbytes) -> expected<void, Error> {
-                       if (nbytes != vbytes) {
-                         return fail_runtime(
-                             "SubarraySelectionOp: is_valid forward size "
-                             "mismatch");
-                       }
-                       if (cudaMemcpyAsync(dst, valid.data(), nbytes,
-                                           cudaMemcpyDeviceToDevice, stream) !=
-                           cudaSuccess) {
-                         return fail_runtime(
-                             "SubarraySelectionOp: is_valid forward D2D failed");
-                       }
-                       return {};
-                     }));
-    valid_loan.emplace(std::move(prepared));
-  }
-
+  // Publish the required selected snapshot.
+  HOLOSCAN_TRY(
+      auto snap_loan,
+      prepare_snapshot_output<T>(
+          snapshot_out, context, snap, plan, *selection,
+          state_->channel_index, out_shape, stream));
   HOLOSCAN_TRY(
       emit_prepared_tensor(snapshot_out, context, std::move(snap_loan)));
-  HOLOSCAN_TRY(
-      emit_prepared_tensor(array_geometry, context, std::move(geom_loan)));
-  if (valid_loan.has_value()) {
-    is_valid_out_.emit(is_valid_out, context, std::move(*valid_loan),
+
+  // Publish each independent latched optional after the required snapshot.
+  if (array_geometry_out_.active()) {
+    const std::vector<double> packed = pack_array_geometry(out_geometry);
+    HOLOSCAN_TRY(
+        auto prepared,
+        prepare_geometry_output(
+            array_geometry, context, out_geometry, packed, stream));
+    array_geometry_out_.emit(
+        array_geometry, context, std::move(prepared),
+        "SubarraySelectionOp.array_geometry");
+  }
+
+  if (maybe_valid.has_value() && is_valid_out_.active()) {
+    HOLOSCAN_TRY(
+        auto prepared,
+        prepare_mask_output(is_valid_out, context, *maybe_valid, stream));
+    is_valid_out_.emit(is_valid_out, context, std::move(prepared),
                        "SubarraySelectionOp.is_valid_out");
     // Keeps the D2D source alive until the copy enqueued above retires.
     retained_is_valid_ = std::move(*maybe_valid);
+  } else if (!maybe_valid.has_value()) {
+    retained_is_valid_ = {};
   }
 
+  // Keep the trigger allocation alive until the next activation.
   retained_snapshot_ = std::move(snap);
   return {};
 }

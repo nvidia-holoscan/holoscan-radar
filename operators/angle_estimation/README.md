@@ -63,8 +63,7 @@ stage would occupy the same slot.
   `(snapshot, array_geometry)` pair. Unblocks the gridless subspace
   estimators (Root-MUSIC/ESPRIT) and the holey-array path for spatial
   smoothing. All four forks ratified (settled — STATUS.md L14); consumed by the
-  gridless Root-MUSIC / ESPRIT estimators and by MVDR on a reduced array. See
-  `subarray_selection_op/OPEN_ITEMS.md`.
+  gridless Root-MUSIC / ESPRIT estimators and by MVDR on a reduced array.
 - **`MVDREstimatorOp` (checklist-complete — dpc):**
   adaptive (MVDR / Capon) sparse-path DOA. Implements the per-item sample
   covariance with `is_valid` masking, diagonal loading (`auto` = a small

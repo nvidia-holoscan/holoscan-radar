@@ -178,6 +178,14 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - Edge modes: `wrap` wraps the Doppler axis; `shift` slides inward keeping the count; `clamp` truncates and marks the missing slots in `is_valid`.
 - Channel axis preserved (gathers per-channel, not the NCI-integrated map).
 
+#### SubarraySelectionOp
+
+- Auto-selection returns the longest filled ULA run or largest filled URA rectangle, including the larger-azimuth-aperture tie-break.
+- A filled but non-lattice-ordered input is still gathered into lattice order; equal input/output channel counts do not imply pass-through.
+- Explicit indices are range/uniqueness checked, reordered into lattice order, and rejected when they leave a hole.
+- A 3-D aperture or selected size below `min_subarray_size` fails predictably.
+- Leaving optional/latched `array_geometry` unwired does not suppress required `snapshot_out`; a wired geometry emits on the same tick.
+
 #### Sparse angle estimators (shared slot)
 
 Common check (all five): `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_estimates ≈ θ` within grid/interpolation or the CRLB; an `is_valid` mask correctly excludes masked snapshots.

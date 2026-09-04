@@ -40,6 +40,7 @@ set(HOLOSCAN_RADAR_HSDK5_PORTED_PERF
     esprit_estimator
     cfar_detector
     snapshot_gather
+    subarray_selection
     detection_reduction
     feature_assembly
 )
@@ -93,6 +94,7 @@ endif()
 
 radar_add_perf(cluster_dbscan holoscan::cluster_dbscan_op)
 radar_add_perf(snapshot_gather holoscan::snapshot_gather_op)
+radar_add_perf(subarray_selection holoscan::subarray_selection_op)
 radar_add_perf(beamscan_estimator holoscan::beamscan_estimator_op)
 radar_add_perf(mvdr_estimator holoscan::mvdr_estimator_op)
 radar_add_perf(music_estimator holoscan::music_estimator_op)

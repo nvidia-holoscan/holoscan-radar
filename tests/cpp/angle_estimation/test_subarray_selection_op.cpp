@@ -58,7 +58,9 @@ using holoscan::radar::complex_dtype;
 using holoscan::radar::pack_array_geometry;
 using holoscan::radar::testing::default_test_extents;
 using holoscan::radar::testing::DualIOGraphRunResult;
+using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
+using holoscan::radar::testing::run_single_io_operator_graph_result;
 using holoscan::radar::testing::run_single_in_dual_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 using holoscan::radar::testing::to_pageable_host_tensor;
@@ -108,7 +110,9 @@ void wire_subarray(holoscan::Graph& graph, const Source& source, OpRef& op,
 }
 
 DualIOGraphRunResult run_select_result(
-    std::shared_ptr<holoscan::Tensor> snap, SubarraySelectionParams params) {
+    std::shared_ptr<holoscan::Tensor> snap, SubarraySelectionParams params,
+    const holoscan::radar::MaxTensorExtents& extents =
+        default_test_extents()) {
   return run_single_in_dual_out_operator_graph_result<
       SubarraySelectionOp<double>>(
       {std::move(snap)}, std::move(params), "snapshot_out", "array_geometry",
@@ -118,7 +122,7 @@ DualIOGraphRunResult run_select_result(
       },
       // Optional is_valid_out is declared but unwired; still needs a device
       // bind (IMPLICIT_DEVICE_ZERO_REJECTED otherwise).
-      {"is_valid_out"});
+      {"is_valid_out"}, extents);
 }
 
 Result run_select(std::shared_ptr<holoscan::Tensor> snap,
@@ -151,6 +155,20 @@ Result run_select(std::shared_ptr<holoscan::Tensor> snap,
   ArrayGeometry geom = unpack_array_geometry(
       geom_t.as<double>(), geom_t.shape[0], geom_t.shape[1]);
   return {std::move(result.frames0.front()), std::move(geom)};
+}
+
+GraphRunResult run_snapshot_only(
+    std::vector<std::shared_ptr<holoscan::Tensor>> snapshots,
+    SubarraySelectionParams params) {
+  return run_single_io_operator_graph_result<SubarraySelectionOp<double>>(
+      std::move(snapshots), std::move(params), "snapshot_out",
+      [](holoscan::Graph& graph, const auto& source, auto& op,
+         const auto& sink) {
+        const holoscan::ConnectionOptions queue{.queue_depth = 4U};
+        graph.add_flow(source->out, op->snapshot, queue);
+        graph.add_flow(op->snapshot_out, sink->in, queue);
+      },
+      {"array_geometry", "is_valid_out"});
 }
 
 std::set<double> y_set(const ArrayGeometry& g) {
@@ -588,6 +606,30 @@ TEST(SubarraySelectionOpTest, FilledUlaPassesThrough) {
   EXPECT_EQ(out.geometry.wavelength, 1.0);
 }
 
+TEST(SubarraySelectionOpTest, FilledUnorderedUlaIsGatheredToLatticeOrder) {
+  const auto geom = make_linear({2, 0, 1, 3});
+  auto snap = make_snapshot(1, 4, 2);
+  const auto out = run_select(snap, make_params(geom));
+
+  EXPECT_EQ(out.snapshot.shape, (std::vector<int64_t>{1, 4, 2}));
+  expect_channels(out.snapshot, {1, 2, 0, 3}, 2);
+  EXPECT_EQ(y_set(out.geometry),
+            (std::set<double>{0.0, kD, 2 * kD, 3 * kD}));
+}
+
+TEST(SubarraySelectionOpTest, OptionalGeometryMayBeLeftUnwired) {
+  const auto geom = make_linear({0, 1, 2, 3, 5, 6});
+  const GraphRunResult out = run_snapshot_only(
+      {make_snapshot(1, 6, 2), make_snapshot(1, 6, 2)},
+      make_params(geom));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  EXPECT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 2U);
+  expect_channels(out.frames[0], {0, 1, 2, 3}, 2);
+  expect_channels(out.frames[1], {0, 1, 2, 3}, 2);
+}
+
 TEST(SubarraySelectionOpTest, ExplicitSubarray) {
   const auto geom = make_linear({0, 1, 2, 3, 4, 5, 6, 7});
   auto snap = make_snapshot(1, 8, 3);
@@ -685,6 +727,18 @@ TEST(SubarraySelectionOpTest, RejectsLiveSubarrayBeyondCapturedBound) {
       {{make_snapshot(1, 4, 2), std::nullopt,
         host_subarray({0, 1, 2})}},
       std::move(params), {.subarray = true}, extents);
+
+  EXPECT_TRUE(out.plan_ok) << out.plan_json;
+  EXPECT_TRUE(out.frames0.empty());
+  EXPECT_FALSE(out.diagnostics.empty());
+}
+
+TEST(SubarraySelectionOpTest, RejectsSelectionBeyondCapturedOutputBound) {
+  const auto geom = make_linear({0, 1, 2, 3});
+  auto extents = default_test_extents();
+  extents.max_subarray_channels = 2;
+  const DualIOGraphRunResult out = run_select_result(
+      make_snapshot(1, 4, 2), make_params(geom), extents);
 
   EXPECT_TRUE(out.plan_ok) << out.plan_json;
   EXPECT_TRUE(out.frames0.empty());

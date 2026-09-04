@@ -9,8 +9,9 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.1.0",
+        "version": "0.2.0",
         "changelog": {
+            "0.2.0": "Align compute with the tick-shell model, ctor-size the channel-index table, make geometry optional/latched after the required snapshot, and require identity channel order for pass-through",
             "0.1.0": "S3: select the largest filled ULA/URA (or an explicit sub-array) from a holey MIMO virtual array; emit reduced snapshot + packed array_geometry Tensor (HSDK 5)"
         },
         "holoscan_sdk": {
@@ -18,7 +19,7 @@
             "tested_versions": ["5.0.0"]
         },
         "platforms": ["x86_64", "aarch64"],
-        "tags": ["Radar", "Angle", "Subarray", "GPU", "FMCW", "Pulse-Doppler", "SIMO", "MIMO"],
+        "tags": ["Radar", "Angle", "Subarray", "GPU", "SIMO", "MIMO"],
         "ranking": 3,
         "requirements": {}
     }

@@ -194,7 +194,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `SnapshotGatherOp` F32/F64 + Graph C++ tests (OnAligned 2-in/2-out) | landed; Exact `snapshot_window` on an unconditional entry — `expect_snapshot_window` retired (§11); live-override unit deferred (§1); Graph perf `snapshot_window` `override_ms` restored (§8) |
 | `PhaseShiftBeamformerOp` F32/F64 + Graph C++ tests | landed; `[live]` geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); no POD live Inputs, so Graph live tests still skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `peak_interpolation` (unconditional entry) with its enum live-override unit landed now that §12 is fixed; optional `is_valid` Graph wiring deferred (§11); geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `SubarraySelectionOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; outputs `snapshot_out` / `is_valid_out` (§2); `array_geometry` emitted as packed float64 Tensor (§10); `array_geometry` wire-schema and `subarray` bounded host-Tensor lives (§9); optional `is_valid` Graph wiring deferred (§11); no dedicated `perf_*` driver |
+| `SubarraySelectionOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; tick-local config/plan, constructor-created selection cache + bounded index table; required `snapshot_out` before independent latched geometry/mask outputs; outputs `snapshot_out` / `is_valid_out` (§2); `array_geometry` emitted as packed float64 Tensor (§10); geometry wire-schema and bounded host-Tensor `subarray` lives (§9); optional `is_valid` Graph wiring deferred (§11); Graph perf cold/steady landed (live deferred §9) |
 | `ClusterDBSCANOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; tick-local config/plan; Exact `epsilon`/`min_points`/`max_clusters` with Graph coverage; bounded host-Tensor `epsilon`, `max_features` checked on arrival (§9); required `labels` plus optional/latched `sizes`; Graph perf uses production Exact `min_points` (§8) |
 | `MVDREstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `diagonal_loading`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/grid/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `diagonal_loading` `override_ms` restored (§8) |
 | `MUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/grid/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
@@ -735,9 +735,11 @@ documentation for the admitted families and the POD restrictions:
 (§9 has the FlatBuffers-schema alternative these pages point to).
 
 **Contract.** Operators that *compute* geometry at runtime
-(`SubarraySelectionOp`, `VirtualArrayAssemblyOp`) must still emit it on a
-data-plane port each tick — Params / side-channel return is not acceptable
-(downstream estimators need the reduced / virtual geometry).
+(`SubarraySelectionOp`, `VirtualArrayAssemblyOp`) expose it on a data-plane
+port — Params / side-channel return is not acceptable for runtime-varying
+geometry. `VirtualArrayAssemblyOp.array_geometry` is required.
+`SubarraySelectionOp.array_geometry` is latched-optional for snapshot-only
+consumers; while consumed, it emits on the same ticks as `snapshot_out`.
 
 **Interim.** `SubarraySelectionOp` emits `array_geometry` as a float64
 device Tensor of shape `(num_elements + 1, 3)` via
