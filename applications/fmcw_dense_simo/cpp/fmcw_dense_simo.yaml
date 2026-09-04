@@ -46,7 +46,6 @@ cfar_detector:
   guard_cells: [3, 3]
   training_cells: [3, 3]
   pfa: 1.0e-9
-  os_rank: 0
   # Peak-grouping (non-maximum suppression), applied per-beam on the RDA cube
   # (AnglePeakPickOp still does the cross-beam collapse). A native CFAR param;
   # the app also reads this key (a read-only mirror of this block) to drop the

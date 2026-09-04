@@ -51,7 +51,6 @@ cfar_detector:
   guard_cells: [3, 3]
   training_cells: [3, 3]
   pfa: 1.0e-9
-  os_rank: 0
   # Peak-grouping (non-maximum suppression). A native CFAR param; true → CFAR
   # emits one detection per target. The app also reads this key (a read-only
   # mirror of this block) to drop the DBSCAN clustering + reduction stages and

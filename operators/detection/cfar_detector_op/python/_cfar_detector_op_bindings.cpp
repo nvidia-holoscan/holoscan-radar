@@ -34,7 +34,7 @@ class PyCFARDetectorOp : public CFARDetectorOp<T> {
   PyCFARDetectorOp(
       Fragment* fragment, const py::args& args,
       CfarVariant cfar_variant = CfarVariant::kCA,
-      int64_t os_rank = 0,
+      int64_t os_rank = -1,
       const std::vector<int64_t>& guard_cells = {},
       const std::vector<int64_t>& training_cells = {},
       double pfa = 1e-6,
@@ -42,7 +42,6 @@ class PyCFARDetectorOp : public CFARDetectorOp<T> {
       double threshold_scale = 1.0,
       const std::vector<int64_t>& nci_axes = {},
       int64_t max_detections = 0,
-      int64_t max_cached_kernels = 4,
       bool blocking_alpha_lut_rebuild = false,
       bool peak_only = false,
       CfarPeakNeighborhood peak_neighborhood = CfarPeakNeighborhood::kSquare8,
@@ -78,7 +77,6 @@ class PyCFARDetectorOp : public CFARDetectorOp<T> {
     this->add_arg(Arg("threshold_scale") = threshold_scale);
     this->add_arg(Arg("nci_axes") = nci_axes);
     this->add_arg(Arg("max_detections") = max_detections);
-    this->add_arg(Arg("max_cached_kernels") = max_cached_kernels);
     this->add_arg(Arg("blocking_alpha_lut_rebuild") =
                       blocking_alpha_lut_rebuild);
     this->add_arg(Arg("peak_only") = peak_only);
@@ -107,7 +105,6 @@ void bind_cfar_detector(py::module_& m, const char* class_name) {
       "threshold_scale : float, optional\n"
       "nci_axes : list[int], optional\n"
       "max_detections : int, optional\n"
-      "max_cached_kernels : int, optional\n"
       "blocking_alpha_lut_rebuild : bool, optional\n"
       "peak_only : bool, optional\n"
       "peak_neighborhood : CfarPeakNeighborhood, optional\n"
@@ -116,13 +113,13 @@ void bind_cfar_detector(py::module_& m, const char* class_name) {
                     const std::vector<int64_t>&,
                     const std::vector<int64_t>&, double,
                     const std::vector<double>&, double,
-                    const std::vector<int64_t>&, int64_t, int64_t,
-                    bool, bool, CfarPeakNeighborhood, int64_t,
+                    const std::vector<int64_t>&, int64_t, bool, bool,
+                    CfarPeakNeighborhood, int64_t,
                     int64_t, int64_t, int64_t, int64_t,
                     const std::string&>(),
            py::arg("fragment"),
            py::arg("cfar_variant") = CfarVariant::kCA,
-           py::arg("os_rank") = int64_t{0},
+          py::arg("os_rank") = int64_t{-1},
            py::arg("guard_cells") = std::vector<int64_t>{},
            py::arg("training_cells") = std::vector<int64_t>{},
            py::arg("pfa") = 1e-6,
@@ -130,7 +127,6 @@ void bind_cfar_detector(py::module_& m, const char* class_name) {
            py::arg("threshold_scale") = 1.0,
            py::arg("nci_axes") = std::vector<int64_t>{},
            py::arg("max_detections") = int64_t{0},
-           py::arg("max_cached_kernels") = int64_t{4},
            py::arg("blocking_alpha_lut_rebuild") = false,
            py::arg("peak_only") = false,
            py::arg("peak_neighborhood") =

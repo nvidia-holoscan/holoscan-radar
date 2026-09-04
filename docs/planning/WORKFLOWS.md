@@ -101,7 +101,7 @@ Cross-cutting wiring facts (apply across the diagrams):
 - **Dense angle path:** `PhaseShiftBeamformerOp.rda_cube → CFARDetectorOp.rd_maps` — the RDA cube's `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps` input (the CFAR plane stays the last two axes).
 - **Sparse angle path:** `SnapshotGatherOp` consumes **two** ports — the RD maps and CFAR's `detection_idx` — and emits `snapshot` (plus an optional `is_valid` mask when a `clamp` edge is used), feeding `⟨sparse angle estimator⟩`.
 - **`array_geometry`:** in SIMO it is a static parameter (physical RX positions). In MIMO it is computed at runtime — `VirtualArrayAssemblyOp.array_geometry → ⟨angle op⟩.array_geometry` (the `[live]` override input port).
-- **CFAR maps:** `detection_mask`, `detection_score`, `noise_estimate` are always emitted; the ones consumed downstream are `detection_idx` (drives the gather / reduction; sized to the detection count) and `detection_score` (the per-detection strength `FeatureAssemblyOp` folds into `points`).
+- **CFAR outputs:** all five are optional/latched, so applications wire only what they consume. The usual downstream pair is `detection_idx` (drives the gather / reduction; sized to the detection count) and `detection_score` (the per-detection strength `FeatureAssemblyOp` folds into `points`).
 
 ---
 

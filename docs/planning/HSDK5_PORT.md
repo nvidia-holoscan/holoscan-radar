@@ -202,7 +202,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | landed; always emits optional `doa_multi`/`source_count`/`eigenvalues` (no `angle_spectrum`); Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports, `subarray_spec` static (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
 | `FeatureAssemblyOp` F32/F64 + Graph C++ tests (Params-derived aligned gathers) | landed; static `features` selects required zero-window aligned sources; unselected Tensor gathers use Exact + SafeDefault (§11); no `[live]` params; C++ apps use the library op; Graph perf cold/steady landed |
 | `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; static `representative` Params selects the compiled aligned presence set (`first`: labels + idx, `peak`/`medoid`: labels + idx + points), with unselected `points` as Exact + SafeDefault; Exact `representative`/`score_method`/`feature_weights` are unconditional non-member entries; all `expect_*` retired (§11); enum live units landed (§12 fixed); `feature_weights` is a bounded host Tensor (§9); Graph perf cold/steady landed |
-| `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; always emits all 5 outs; Exact POD lives (unconditional entries) (Graph live deferred §1); vector lives on bounded host-Tensor ports, fixed tuples on ChannelPod (§9); statistical MC suite on label `statistical`; Graph perf `threshold_scale` `override_ms` restored (§8) |
+| `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; all 5 outputs optional/latched; unconditional Exact lives with scalar, bounded host-Tensor, and ChannelPod payloads; Graph tests cover every live family and unwired outputs; statistical MC suite on label `statistical`; Graph perf measures `threshold_scale` `override_ms` (§8) |
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph live-override/`TXSchedule` N/A (Params-only schedule); Graph perf cold/steady landed |
 | `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` on a generated wire-schema port (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
 | `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); Exact `wavelength` (unconditional entry) (Graph live deferred §1); Graph perf `wavelength` `override_ms` restored (§8); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
@@ -410,24 +410,16 @@ lives, so only their optional-input limitations remain.
   `LiveScoreMethodAppliesForOneTick` and the `LiveFeatureWeights*` suite run.
   Params cover selection and the compiled optional-`points` join; the custom
   `ScoreFn` specialization also runs through the Graph harness from a CUDA TU.
-- `CFARDetectorOpTest.LiveThresholdScaleOverrideMidStream` /
-  `LivePfaOverrideMidStream` /
-  `LiveMaxDetectionsOverrideMidStream` are still skipped for the
-  harness reason above (they are scalars, so §12 does not apply — writing them
-  is the same work that landed the scalars listed earlier);
-  vector lives (`guard_cells` / `training_cells` /
-  `nci_axes` / `alpha_lut`) skipped under §9. Params cover selection
-  (`ThresholdScaleConfigurableFromParams` / `PfaConfigurableFromParams` /
-  `MaxDetectionsConfigurableFromParams` /
-  `GuardCellsConfigurableFromParams` /
-  `TrainingCellsConfigurableFromParams`).
+- `CFARDetectorOpTest` covers one-tick `pfa`, `threshold_scale`, `os_rank`,
+  `max_detections`, cell-window, `nci_axes`, and `alpha_lut` overrides,
+  including revert-to-Params and malformed vector payloads. Params cover the
+  corresponding configurable-from-Params paths.
 - Graph perf now measures inline POD transitions through the supported shape:
   CFAR `threshold_scale`, DBSCAN `min_points`, MUSIC / Root-MUSIC / ESPRIT
   `max_sources`, MVDR `diagonal_loading`, SnapshotGather `snapshot_window`,
   and VirtualArrayAssembly `wavelength`. `override_ms` /
   `override_delta_ms` are populated in the smoke JSON. Enum live ports and
-  vector/descriptor lives remain deferred; perf does not claim to replace the
-  skipped one-shot live-override unit tests.
+  vector/descriptor lives remain untimed; unit tests cover their behavior.
 
 **Next.** Generalize the range-processor `nfft` recipe (manual partitions
 for the control-plane source, one shared transmit stamp, `Exact{}` +
@@ -1048,7 +1040,7 @@ application that actually declined one of those died on its *first* tick. It
 had gone unnoticed only because every app and test harness wires everything.
 
 `OPERATOR_API.md` now carries an **Optional output convention** giving each of
-the 22 optional outputs one of two dispositions, both of which absorb the
+the 27 optional outputs one of two dispositions, both of which absorb the
 failed emit so no unwired port can fail a run:
 
 - **`always`** (11 ports) — `(void)emit_prepared_tensor(...)`, silent. Used
@@ -1056,13 +1048,15 @@ failed emit so no unwired port can fail a run:
   stopping saves nothing (an `angle_spectrum` is the same scan-grid pass that
   yields `aoa_estimates`; a MUSIC `eigenvalues` re-exports the eig its own
   projector requires).
-- **`latched`** (11 ports) — a `LatchedOutput` in `radar_common/sdk/tensor_io.hpp`
+- **`latched`** (16 ports) — a `LatchedOutput` in `radar_common/sdk/tensor_io.hpp`
   warns once on the first failed emit and then skips everything done solely for
   that port. It latches only on `kFailure`, the code an unconsumed output
   reports, so a transient fault costs one frame rather than the whole run;
   that is sound because wiring is fixed once the plan compiles. The largest
   saving is `MVDREstimatorOp.eigenvalues`, which sheds a batched Hermitian
-  `matx::eig` that exists only to fill the port.
+  `matx::eig` that exists only to fill the port. CFAR's five outputs also latch:
+  each skips its pool loan and D2D copy, while `detection_idx` additionally
+  skips the exact-count host sync and compaction.
 
 Required outputs keep `HOLOSCAN_TRY`, where a failed emit *is* an error.
 `(void)` is the SDK's own idiom for a discarded `[[nodiscard]]` result (its

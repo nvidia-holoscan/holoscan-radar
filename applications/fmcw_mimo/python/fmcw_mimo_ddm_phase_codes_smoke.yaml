@@ -38,7 +38,6 @@ cfar_detector:
   guard_cells: [3, 3]
   training_cells: [3, 3]
   pfa: 1.0e-9
-  os_rank: 0
   nci_axes: [0]
   # Correlate pedestal needs a higher margin than linear DDM (see cpp YAML).
   threshold_scale: 16.0

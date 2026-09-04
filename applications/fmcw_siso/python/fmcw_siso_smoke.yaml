@@ -27,7 +27,6 @@ cfar_detector:
   guard_cells: [3, 3]
   training_cells: [3, 3]
   pfa: 1.0e-9
-  os_rank: 0
 
 cluster_dbscan:
   epsilon: [3.0, 2.0]

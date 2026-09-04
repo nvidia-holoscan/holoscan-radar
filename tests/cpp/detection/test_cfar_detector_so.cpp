@@ -487,21 +487,6 @@ TEST(CFARDetectorOpSoTest, LessConservativeThanGoWithOneSidedInterferer) {
             out_go.noise.as<double>()[dt * kRange + rt]);
 }
 
-TEST(CFARDetectorOpSoTest, LiveThresholdScaleOverrideMidStream) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live harness "
-                   "deferred (HSDK5_PORT.md §1)";
-}
-
-TEST(CFARDetectorOpSoTest, LivePfaOverrideMidStream) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live harness "
-                   "deferred (HSDK5_PORT.md §1)";
-}
-
-TEST(CFARDetectorOpSoTest, LiveMaxDetectionsOverrideMidStream) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live harness "
-                   "deferred (HSDK5_PORT.md §1)";
-}
-
 TEST(CFARDetectorOpSoTest, GuardCellsConfigurableFromParams) {
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;

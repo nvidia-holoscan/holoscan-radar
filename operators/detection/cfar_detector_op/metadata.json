@@ -9,19 +9,23 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.4.0",
+        "version": "0.8.0",
         "changelog": {
             "0.1.0": "Initial Release",
             "0.2.0": "Add optional peak-grouping (peak_only / peak_neighborhood) non-maximum-suppression stage; off by default",
             "0.3.0": "Emit the thresholded surface on a new cfar_power output port (post-NCI integrated power, or the raw square-law power map when nci_axes is empty); additive, existing ports unchanged",
-            "0.4.0": "HSDK 5 Operator<Params> / Graph port (always emit all 5 outs; vector lives Params-only; single-tick POD scalar Inputs)"
+            "0.4.0": "HSDK 5 Operator<Params> / Graph port with five pooled outputs and single-tick live overrides",
+            "0.5.0": "Align the operator with the tick-shell model and add Graph coverage for every scalar live override",
+            "0.6.0": "Make all five outputs optional and latch unwired outputs to skip their dedicated publication work",
+            "0.7.0": "Represent an unset OS rank with -1 and reject OS configurations that do not supply an explicit rank",
+            "0.8.0": "Validate sparse GO/SO and OS K>1 alpha LUTs against the indices reachable by the current map and window"
         },
         "holoscan_sdk": {
             "minimum_required_version": "5.0.0",
             "tested_versions": ["5.0.0"]
         },
         "platforms": ["x86_64", "aarch64"],
-        "tags": ["Radar", "Signal Processing", "GPU", "FMCW", "Pulse-Doppler", "Detection", "CFAR"],
+        "tags": ["Radar", "Signal Processing", "GPU", "FMCW", "Detection", "CFAR"],
         "ranking": 3,
         "requirements": {}
     }

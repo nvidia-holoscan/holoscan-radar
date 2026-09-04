@@ -6,10 +6,9 @@
 // one session and emits a single unified report. Measurement tool only: no
 // timing assertions.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite. Measures a mid-session threshold_scale
-// override. alpha_lut / training_cells and the other vectors remain Params-only
-// (HSDK5_PORT.md §9). The post_run calibration summary is kept for alpha_lut
-// vs pfa cold-start comparison.
+// [EA HSDK5 ONLY] Graph-based harness. Measures a mid-session threshold_scale
+// override. The post_run calibration summary is kept for alpha_lut vs pfa
+// cold-start comparison; other live ports are not timed here.
 
 #include <cuda_runtime_api.h>
 
@@ -184,8 +183,8 @@ perf::TimingCollector run_cfar_graph(const CfarScenario& scen,
   auto input =
       perf::make_power_map_device<PerfPrecision>(scen.input_shape);
   using BaseOp = hr::CFARDetectorOp<PerfPrecision>;
-  using LiveOp =
-      perf::PerfLiveContractOp<BaseOp, &BaseOp::threshold_scale>;
+  // Production Exact{} + per-tick co-emit. Restacking LatestWithin through
+  // PerfLiveContractOp would make the temporal contract invalid.
   constexpr double kInitialThresholdScale = 1.0;
   constexpr double kOverrideThresholdScale = 1.1;
   return perf::run_perf_graph_with_override(
@@ -209,7 +208,7 @@ perf::TimingCollector run_cfar_graph(const CfarScenario& scen,
         extents.max_detections = out_batch *
             extents.max_doppler_bins.value() *
             extents.max_range_bins.value();
-        auto op = graph.op<LiveOp>("cfar", extents);
+        auto op = graph.op<BaseOp>("cfar", extents);
         hr::CFARParams params;
         params.cfar_variant = scen.variant;
         params.guard_cells = scen.footprint.guard;
@@ -300,8 +299,7 @@ perf::ResultRow base_row(const CfarScenario& scen) {
   row.k = k;
   row.calibration_pair = scen.calibration_pair;
   row.calibration_mode = scen.use_alpha_lut ? "alpha_lut" : "pfa";
-  row.notes =
-      "live_override=threshold_scale; vector overrides remain Params-only";
+  row.notes = "live_override=threshold_scale; other lives not timed";
   return row;
 }
 
@@ -642,12 +640,12 @@ struct CfarTraits : perf::PerfDriverDefaults {
       row.notes =
           "cold_ms includes initial alpha_lut H2D; median/p90 are "
           "steady state; override_ms is the peak after an inline "
-          "threshold_scale change; vector overrides remain Params-only";
+          "threshold_scale change; other lives are not timed";
     } else {
       row.notes =
           "cold_ms includes initial LUT calibration; median/p90 are "
           "steady state; override_ms is the peak after an inline "
-          "threshold_scale change; vector overrides remain Params-only";
+          "threshold_scale change; other lives are not timed";
     }
     if (scen.peak_only) {
       row.notes +=

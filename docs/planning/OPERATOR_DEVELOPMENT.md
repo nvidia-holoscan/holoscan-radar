@@ -719,7 +719,7 @@ Exemplar code to read (patterns, not copy-paste requirements):
 - Device compaction — `cfar_compact.cuh`
 - Slow vs fast calibration — `alpha_lut` live override + warn-once on `pfa` MC
 - Perf harness consumer — `performance/cpp/perf_cfar_detector.cpp`
-- Open-item style — `operators/detection/cfar_detector_op/OPEN_ITEMS.md`
+- Open-item style — `operators/clustering/cluster_dbscan_op/OPEN_ITEMS.md`
 
 ---
 

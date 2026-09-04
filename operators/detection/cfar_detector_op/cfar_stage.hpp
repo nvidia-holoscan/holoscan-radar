@@ -31,6 +31,23 @@
 
 namespace holoscan::radar::detail {
 
+// Fully resolved kernel and output policy for one operator tick. Fields follow
+// CFARParams order; live values have already been merged over pinned Params.
+struct CfarStageConfig {
+  CfarVariant cfar_variant;
+  int64_t os_rank;
+  std::vector<int64_t> guard_cells;
+  std::vector<int64_t> training_cells;
+  double pfa;
+  std::vector<double> alpha_lut;
+  double threshold_scale;
+  std::vector<int64_t> nci_axes;
+  int64_t max_detections;
+  bool blocking_alpha_lut_rebuild;
+  bool peak_only;
+  CfarPeakNeighborhood peak_neighborhood;
+};
+
 // Sum power along integrated leading axes using a host-built lookup table.
 // in_power is (batch_in, doppler, range); out_power is (out_batch, doppler,
 // range).
@@ -441,21 +458,23 @@ __global__ void cfar_peak_suppress_kernel(const T* power, const bool* mask,
 // When peak_only is set, a peak-grouping (NMS) pass refines the raw mask into
 // peak_mask (a distinct caller-preallocated bool buffer of the same shape as
 // mask): one detection per contiguous above-threshold blob, keeping the
-// local-maximum cell of the CFAR statistic. peak_full8 selects the 8-connected
-// (true) vs 4-connected (false) neighborhood. The raw mask/score/noise outputs
+// local-maximum cell of the CFAR statistic. The raw mask/score/noise outputs
 // are unaffected; only peak_mask reflects the grouping.
 //
 // v1 implements CfarVariant::kCA, kGO, kSO, and kOS.
 template <typename T>
-void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
-                    int64_t batch_in, int64_t out_batch, int64_t num_doppler,
-                    int64_t num_range, int guard_d, int guard_r, int train_d,
-                    int train_r, int64_t os_rank, double threshold_scale,
+void run_cfar_stage(const CfarStageConfig& config, const void* in,
+                    bool input_is_complex, int64_t batch_in,
+                    int64_t out_batch, int64_t num_doppler, int64_t num_range,
                     int64_t nci_fold, const int64_t* batch_in_table_dev,
                     const void* alpha_lut, int64_t alpha_lut_size, void* power,
                     void* integrated_power, void* score, void* noise,
-                    void* mask, bool peak_only, bool peak_full8,
-                    void* peak_mask, cudaStream_t stream) {
+                    void* mask, void* peak_mask, cudaStream_t stream) {
+  const CfarVariant variant = config.cfar_variant;
+  const int guard_d = static_cast<int>(config.guard_cells[0]);
+  const int guard_r = static_cast<int>(config.guard_cells[1]);
+  const int train_d = static_cast<int>(config.training_cells[0]);
+  const int train_r = static_cast<int>(config.training_cells[1]);
   if (variant != CfarVariant::kCA && variant != CfarVariant::kGO &&
       variant != CfarVariant::kSO && variant != CfarVariant::kOS) {
     throw std::invalid_argument(
@@ -510,35 +529,36 @@ void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
     if (variant == CfarVariant::kCA) {
       cfar_ca_kernel<T><<<grid, block, 0, stream>>>(
           cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
-          train_d, train_r, static_cast<T>(threshold_scale), alpha_lut_t,
+          train_d, train_r, static_cast<T>(config.threshold_scale), alpha_lut_t,
           alpha_lut_size, static_cast<T*>(score) + b * plane,
           static_cast<T*>(noise) + b * plane,
           static_cast<bool*>(mask) + b * plane);
     } else if (variant == CfarVariant::kGO) {
       cfar_goso_kernel<T, true><<<grid, block, 0, stream>>>(
           cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
-          train_d, train_r, static_cast<T>(threshold_scale), alpha_lut_t,
+          train_d, train_r, static_cast<T>(config.threshold_scale), alpha_lut_t,
           alpha_lut_size, static_cast<T*>(score) + b * plane,
           static_cast<T*>(noise) + b * plane,
           static_cast<bool*>(mask) + b * plane);
     } else if (variant == CfarVariant::kSO) {
       cfar_goso_kernel<T, false><<<grid, block, 0, stream>>>(
           cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
-          train_d, train_r, static_cast<T>(threshold_scale), alpha_lut_t,
+          train_d, train_r, static_cast<T>(config.threshold_scale), alpha_lut_t,
           alpha_lut_size, static_cast<T*>(score) + b * plane,
           static_cast<T*>(noise) + b * plane,
           static_cast<bool*>(mask) + b * plane);
     } else {
       cfar_os_kernel<T><<<grid, block, 0, stream>>>(
           cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
-          train_d, train_r, os_rank, static_cast<T>(threshold_scale),
+          train_d, train_r, config.os_rank,
+          static_cast<T>(config.threshold_scale),
           alpha_lut_t, alpha_lut_size, static_cast<T*>(score) + b * plane,
           static_cast<T*>(noise) + b * plane,
           static_cast<bool*>(mask) + b * plane);
     }
   }
 
-  if (peak_only) {
+  if (config.peak_only) {
     // Non-maximum suppression over cfar_power (the map that was thresholded),
     // reading the raw mask and writing the refined peak_mask. One launch over
     // all out_batch planes; peak_mask must be distinct from mask (neighbor
@@ -550,7 +570,7 @@ void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
     cfar_peak_suppress_kernel<T><<<peak_grid, block, 0, stream>>>(
         cfar_power, static_cast<const bool*>(mask),
         static_cast<bool*>(peak_mask), out_batch, num_doppler, num_range,
-        peak_full8);
+        config.peak_neighborhood == CfarPeakNeighborhood::kSquare8);
     if (cudaGetLastError() != cudaSuccess) {
       throw std::runtime_error("run_cfar_stage: peak-suppress kernel launch "
                                "failed");

@@ -17,15 +17,14 @@ Typical placement:
 
 | Operator | In → Out | Function |
 | --- | --- | --- |
-| [`CFARDetectorOp<T>`](cfar_detector_op/README.md) | `rd_maps` (…, doppler, range; complex or real power) → `detection_mask`, `detection_score`, `noise_estimate`, `detection_idx` | 2-D CFAR on the (Doppler, range) plane; complex input → square-law power, real input → thresholded directly; per-cell adaptive threshold from the training-cell noise estimate |
+| [`CFARDetectorOp<T>`](cfar_detector_op/README.md) | `rd_maps` (…, doppler, range; complex or real power) → `detection_mask`, `detection_score`, `noise_estimate`, `cfar_power`, `detection_idx` | 2-D CFAR on the (Doppler, range) plane; complex input → square-law power, real input → thresholded directly; per-cell adaptive threshold from the training-cell noise estimate |
 | [`FeatureAssemblyOp<T>`](feature_assembly_op/README.md) | `detection_idx` (+ optional `range_bins` / `velocity_bins` / `detection_score` / `aoa_estimates` / `az_angles` / `el_angles`) → `points` | Range–Doppler clustering-prep bridge: gather / bin→physical lookup into `points`. Lives here (not under `clustering/`) because it speaks CFAR `detection_idx`; static `features` list sets column layout |
 | [`DetectionReductionOp<T>`](detection_reduction_op/README.md) | `labels` + `detection_idx` (+ `points`) → `rep_idx` | One representative CFAR cell per cluster (`first` / `peak` / `medoid`) for cluster-then-angle |
 
 ## Implementation status
 
-`CFARDetectorOp` is landing incrementally against its locked contract in
-[`docs/planning/OPERATOR_API.md`](../../docs/planning/OPERATOR_API.md). The
-header is the full contract; the current build implements a faithful subset:
+All three operators implement their locked contracts in
+[`docs/planning/OPERATOR_API.md`](../../docs/planning/OPERATOR_API.md).
 
 - **`DetectionReductionOp` (checklist-complete):** group-by-label reduction
   with `first` / `peak` / `medoid`, built-in peak scorers plus compile-time
@@ -46,13 +45,12 @@ header is the full contract; the current build implements a faithful subset:
   non-coherent integration over leading axes with Gamma(`K`) thresholding
   (CA: host incomplete-beta LUT; GO/SO: Monte Carlo GOGO/SOSO LUT; OS: closed
   form for `K = 1`, Monte Carlo for `K > 1`), batch-widened `detection_idx`,
-  unit + Monte Carlo statistical tests per variant, and the four output ports.
+  unit + Monte Carlo statistical tests per variant, and all five output ports.
   `detection_score`, `detection_mask` (uint8 0/1), and `noise_estimate` are
   dense maps; `detection_idx` is compacted per tick on the GPU. The `detection_
   mask` dtype (uint8 rather than bool, for HSDK 4.3 NumPy visibility) was settled
   2026-07-22 (STATUS.md L1); the `alpha_lut` / calibration contract was adopted
-  2026-07-21 (STATUS.md L5). Remaining notes live in
-  [`cfar_detector_op/OPEN_ITEMS.md`](cfar_detector_op/OPEN_ITEMS.md).
+  2026-07-21 (STATUS.md L5).
 - **Staged follow-ups (not contract changes):**
   - ~~Device-side `detection_idx` compaction~~ **landed** — CUB reduce +
     exclusive-scan scatter builds `detection_idx` on the GPU (raster-stable);
@@ -109,6 +107,6 @@ header is the full contract; the current build implements a faithful subset:
   now pinned in the contract (settled — STATUS.md L2).
   Preserved leading axes stay batched and are recorded in `detection_idx` as
   extra columns before `(doppler_bin, range_bin)`.
-- **Streams.** Work is enqueued on the stream from `receive_cuda_stream()`;
+- **Streams.** Work is enqueued on `ExecutionContext::cuda_stream()`;
   the input tensor is retained until the next tick as a stream-ordered
   lifetime guard.

@@ -500,29 +500,6 @@ TEST(CFARDetectorOpOsTest, NoiseEstimateMatchesOrderStatistic) {
   EXPECT_LT(noise, 50.0);
 }
 
-TEST(CFARDetectorOpOsTest,
-     LiveThresholdScaleOverrideMidStream) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live "
-                  "harness deferred (HSDK5_PORT.md §1)";
-}
-
-TEST(CFARDetectorOpOsTest, LivePfaOverrideMidStream) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live "
-                  "harness deferred (HSDK5_PORT.md §1)";
-}
-
-TEST(CFARDetectorOpOsTest,
-     LiveMaxDetectionsOverrideMidStream) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live "
-                  "harness deferred (HSDK5_PORT.md §1)";
-}
-
-TEST(CFARDetectorOpOsTest,
-     LiveOsRankOverrideMidStream) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream live "
-                  "harness deferred (HSDK5_PORT.md §1)";
-}
-
 TEST(CFARDetectorOpOsTest, OsRankConfigurableFromParams) {
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
@@ -711,6 +688,22 @@ TEST(CFARDetectorOpOsTest, RejectsInvalidNciAxis) {
                                         real_dtype<double>());
   CFARParams params = os_params(1e-3);
   params.nci_axes = {0};
+  const FiveOutGraphRunResult result =
+      run_cfar_result<double>(input, params);
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames0.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
+TEST(CFARDetectorOpOsTest, RejectsUnsetOsRank) {
+  const auto map = power_map(1.0, {{8, 16}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
+                                        real_dtype<double>());
+  CFARParams params{};
+  params.cfar_variant = CfarVariant::kOS;
+  params.guard_cells = {1, 1};
+  params.training_cells = {2, 2};
+  params.pfa = 1e-3;
   const FiveOutGraphRunResult result =
       run_cfar_result<double>(input, params);
   EXPECT_TRUE(result.plan_ok);

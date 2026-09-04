@@ -925,6 +925,17 @@ def test_RejectsOsRankOutOfRange():
         )
 
 
+def test_RejectsUnsetOsRankWithClearError():
+    mp = power_map(1.0, [(8, 16)], 100.0)
+    with pytest.raises(ValueError, match="os_rank is required for OS variant"):
+        run_cfar(
+            mp,
+            (K_DOPPLER, K_RANGE),
+            pfa=1e-3,
+            cfar_variant=CfarVariant.OS,
+        )
+
+
 def test_LiveOsRankOverrideAppliesPerTick():
     dt, rt = 8, 16
     mp = np.empty(K_DOPPLER * K_RANGE, dtype=np.float64)

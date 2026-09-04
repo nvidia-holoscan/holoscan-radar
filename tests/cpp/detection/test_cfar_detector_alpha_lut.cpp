@@ -175,6 +175,33 @@ std::vector<double> inflated_lut(const std::vector<double>& lut,
   return out;
 }
 
+std::vector<int64_t> reachable_lut_indices(CfarVariant variant) {
+  if (variant == CfarVariant::kGO || variant == CfarVariant::kSO) {
+    return holoscan::radar::detail::reachable_go_lut_indices(
+        static_cast<int>(kDoppler), static_cast<int>(kRange), kGuardD, kGuardR,
+        kTrainD, kTrainR);
+  }
+  return holoscan::radar::detail::reachable_training_cell_counts(
+      static_cast<int>(kDoppler), static_cast<int>(kRange), kGuardD, kGuardR,
+      kTrainD, kTrainR);
+}
+
+std::vector<double> sparse_external_lut(CfarVariant variant) {
+  const int64_t max_index =
+      variant == CfarVariant::kOS
+          ? holoscan::radar::detail::max_training_cell_count(
+                static_cast<int>(kDoppler), static_cast<int>(kRange), kGuardD,
+                kGuardR, kTrainD, kTrainR)
+          : holoscan::radar::detail::max_go_lut_index(
+                static_cast<int>(kDoppler), static_cast<int>(kRange), kGuardD,
+                kGuardR, kTrainD, kTrainR);
+  std::vector<double> lut(static_cast<size_t>(max_index + 1), 0.0);
+  for (const int64_t idx : reachable_lut_indices(variant)) {
+    lut[static_cast<size_t>(idx)] = 1.0;
+  }
+  return lut;
+}
+
 TEST(CFARDetectorAlphaLutTest, AlphaLutPrecedenceOverPfaCA) {
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
   const auto input = to_device_tensor<double>(
@@ -296,6 +323,87 @@ TEST(CFARDetectorAlphaLutTest, RejectsZeroAlphaLutEntry) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
+TEST(CFARDetectorAlphaLutTest,
+     SparseExternalLutAllowsOnlyUnreachableZeros) {
+  constexpr int64_t kFold = 2;
+  const std::vector<double> cube(
+      static_cast<size_t>(kFold * kDoppler * kRange), 1.0);
+  for (const CfarVariant variant :
+       {CfarVariant::kGO, CfarVariant::kSO, CfarVariant::kOS}) {
+    auto input = to_device_tensor<double>(
+        cube, {kFold, kDoppler, kRange}, real_dtype<double>());
+    auto lut = sparse_external_lut(variant);
+    ASSERT_NE(std::find(lut.begin() + 1, lut.end(), 0.0), lut.end());
+    CFARParams params = base_params(variant, 1e-3);
+    params.nci_axes = {0};
+    params.alpha_lut = std::move(lut);
+    if (variant == CfarVariant::kOS) {
+      params.os_rank = 18;
+    }
+    const FiveOutGraphRunResult result =
+        run_cfar_result<double>(input, params);
+    EXPECT_TRUE(result.plan_ok);
+    EXPECT_TRUE(result.diagnostics.empty());
+    EXPECT_EQ(result.frames0.size(), 1U);
+  }
+}
+
+TEST(CFARDetectorAlphaLutTest,
+     SparseExternalLutRejectsReachableZero) {
+  constexpr int64_t kFold = 2;
+  const std::vector<double> cube(
+      static_cast<size_t>(kFold * kDoppler * kRange), 1.0);
+  for (const CfarVariant variant :
+       {CfarVariant::kGO, CfarVariant::kSO, CfarVariant::kOS}) {
+    auto lut = sparse_external_lut(variant);
+    const std::vector<int64_t> reachable = reachable_lut_indices(variant);
+    ASSERT_FALSE(reachable.empty());
+    lut[static_cast<size_t>(reachable.front())] = 0.0;
+
+    auto input = to_device_tensor<double>(
+        cube, {kFold, kDoppler, kRange}, real_dtype<double>());
+    CFARParams params = base_params(variant, 1e-3);
+    params.nci_axes = {0};
+    params.alpha_lut = std::move(lut);
+    if (variant == CfarVariant::kOS) {
+      params.os_rank = 18;
+    }
+    const FiveOutGraphRunResult result =
+        run_cfar_result<double>(input, params);
+    EXPECT_TRUE(result.plan_ok);
+    EXPECT_TRUE(result.frames0.empty());
+    EXPECT_FALSE(result.diagnostics.empty());
+  }
+}
+
+TEST(CFARDetectorAlphaLutTest,
+     SparseExternalLutRejectsNegativeAtUnreachableIndex) {
+  constexpr int64_t kFold = 2;
+  const std::vector<double> cube(
+      static_cast<size_t>(kFold * kDoppler * kRange), 1.0);
+  for (const CfarVariant variant :
+       {CfarVariant::kGO, CfarVariant::kSO, CfarVariant::kOS}) {
+    auto lut = sparse_external_lut(variant);
+    const auto unreachable = std::find(lut.begin() + 1, lut.end(), 0.0);
+    ASSERT_NE(unreachable, lut.end());
+    *unreachable = -1.0;
+
+    auto input = to_device_tensor<double>(
+        cube, {kFold, kDoppler, kRange}, real_dtype<double>());
+    CFARParams params = base_params(variant, 1e-3);
+    params.nci_axes = {0};
+    params.alpha_lut = std::move(lut);
+    if (variant == CfarVariant::kOS) {
+      params.os_rank = 18;
+    }
+    const FiveOutGraphRunResult result =
+        run_cfar_result<double>(input, params);
+    EXPECT_TRUE(result.plan_ok);
+    EXPECT_TRUE(result.frames0.empty());
+    EXPECT_FALSE(result.diagnostics.empty());
+  }
+}
+
 TEST(CFARDetectorAlphaLutTest, RejectsNonFiniteAlphaLutEntry) {
   const auto map = power_map(1.0, {}, 1.0);
   auto input = to_device_tensor<double>(
@@ -350,13 +458,6 @@ TEST(CFARDetectorAlphaLutTest,
       num_detections(
           run_cfar<double>(input, params).idx),
       0);
-}
-
-TEST(CFARDetectorAlphaLutTest,
-     NonBlockingPfaOverrideServesStaleLut) {
-  GTEST_SKIP()
-      << "[EA HSDK5 ONLY] Graph mid-stream live "
-         "harness deferred (HSDK5_PORT.md §1)";
 }
 
 int64_t brute_max_go_lut_index(int num_doppler,

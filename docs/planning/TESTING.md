@@ -112,6 +112,18 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - `nci_axes` integration raises detectability and the realized Pfa still matches (Gamma(K) threshold with the correct `K`).
 - Real-power input (float dtype) thresholds directly and yields the same detections as the complex `|·|²` path.
 - `detection_idx` lists exactly the detected cells, sized to the count; a set `max_detections` caps and warns on overflow.
+- Selecting OS with the `-1` unset `os_rank` sentinel rejects with a targeted
+  required-parameter error; explicit rank 0 remains valid.
+- Sparse external α LUTs for GO/SO and OS `K > 1` may contain zero only at
+  unreachable indices; zero at any reachable index rejects.
+- Every `[live]` family is exercised through Graph with an Exact mid-stream
+  match and a following miss that reverts to Params; malformed cell-window and
+  host-Tensor payloads reject.
+- Every output is optional/latched; leaving either the four non-index outputs
+  or `detection_idx` unwired does not fail active sibling outputs or later
+  ticks.
+- Extra leading rank beyond the ctor-admitted named axes is rejected (no
+  opaque module batch).
 
 #### ClusterDBSCANOp
 
