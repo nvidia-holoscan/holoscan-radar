@@ -22,11 +22,11 @@ detection group). That bridge stays under `detection/` because it speaks CFAR
 
 | Operator | In → Out | Function |
 | --- | --- | --- |
-| [`ClusterDBSCANOp<T>`](cluster_dbscan_op/README.md) | `points` (num_points, num_features) → `labels` (num_points,), `sizes` (num_clusters,) | Density clustering (DBSCAN) over an N-D feature matrix; per-axis `epsilon` neighborhood, `min_points` core threshold, optional `max_clusters` cap; noise labeled `-1` |
+| [`ClusterDBSCANOp<T>`](cluster_dbscan_op/README.md) | `points` (num_points, num_features) → `labels` (num_points,), optional `sizes` (num_clusters,) | Density clustering (DBSCAN) over an N-D feature matrix; per-axis `epsilon` neighborhood, `min_points` core threshold, optional `max_clusters` cap; noise labeled `-1` |
 
 ## Implementation status
 
-`ClusterDBSCANOp` is landing against its locked contract in
+`ClusterDBSCANOp` implements its locked contract in
 [`docs/planning/OPERATOR_API.md`](../../docs/planning/OPERATOR_API.md). The
 header is the full contract.
 
@@ -36,21 +36,18 @@ header is the full contract.
   `2·num_features`); ids numbered by **descending cluster size** (cluster 0 =
   largest, tie-break ascending root); optional `max_clusters` cap (drops the
   **smallest** surplus clusters to noise with a warn-once); `labels`
-  (noise = `-1`, row-aligned with `points`) and per-tick reallocated `sizes`
-  (non-increasing); all three parameters `[live]`-overridable per tick;
+  (noise = `-1`, row-aligned with `points`) and optional/latched, exact-sized
+  `sizes` (non-increasing); all three parameters `[live]`-overridable per tick;
   float and double; empty `points` → empty `labels` / `sizes`. Unit
   tests cover the [`TESTING.md`](../../docs/planning/TESTING.md) clustering
   checks and a `perf_cluster_dbscan` characterization harness measures an
   inline live `min_points` override.
-- **Staged follow-ups (not contract changes):** the neighbor graph is a
-  brute-force `O(N²)` sweep with iterative min-label connected components —
-  correct and appropriate for the sparse post-CFAR detection counts this stage
-  sees, but a uniform-grid spatial index / atomic union-find upgrade for large
-  point clouds is tracked in
-  [`cluster_dbscan_op/OPEN_ITEMS.md`](cluster_dbscan_op/OPEN_ITEMS.md), along
-  with a deferred `cluster_order` parameter (the descending-size numbering /
-  `max_clusters` surplus policy is now settled — STATUS.md L7 / L10). The
-  `epsilon` length-1-list encoding is settled (STATUS.md L8).
+- **Scaling boundary:** the neighbor graph is a brute-force `O(N²)` sweep with
+  iterative min-label connected components. It is correct and appropriate for
+  sparse post-CFAR detection counts; a spatial index or union-find upgrade is
+  profiling-driven future work. Descending-size numbering, the
+  `max_clusters` surplus policy, and the `epsilon` length-1-list encoding are
+  settled (STATUS.md L7 / L8 / L10).
 
 ## Shared kernel conventions
 
@@ -63,6 +60,6 @@ header is the full contract.
   core-marking, label-propagation, border-assignment, relabel, and histogram
   steps are custom kernels; CUB provides the exclusive-scan used to compact
   cluster roots into dense `[0, num_clusters)` ids.
-- **Streams.** Work is enqueued on the stream from `receive_cuda_stream()`; the
+- **Streams.** Work is enqueued on `context.cuda_stream()`; the
   `points` input is retained until the next tick as a stream-ordered lifetime
   guard.

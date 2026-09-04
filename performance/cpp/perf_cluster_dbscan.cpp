@@ -8,9 +8,8 @@
 // typically F∈{2,3,5}). Measurement tool only: no timing assertions. See
 // docs/planning/OPERATOR_DEVELOPMENT.md.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
-// Measures a mid-session min_points override. The epsilon vector remains
-// Params-only (HSDK5_PORT.md §9).
+// Measures a mid-session min_points override through the production Exact
+// contract. The epsilon and max_clusters live ports are not timed.
 
 #include <cuda_runtime_api.h>
 
@@ -152,8 +151,6 @@ perf::TimingCollector run_dbscan_graph(
   auto pts = make_points<PerfPrecision>(
       scen.num_points, scen.num_features, scen.num_clusters);
   using BaseOp = hr::ClusterDBSCANOp<PerfPrecision>;
-  using LiveOp =
-      perf::PerfLiveContractOp<BaseOp, &BaseOp::min_points>;
   const int64_t override_min_points = scen.min_points + 1;
   return perf::run_perf_graph_with_override(
       std::move(pts), plan.total_frames, plan.override_at,
@@ -165,7 +162,7 @@ perf::TimingCollector run_dbscan_graph(
             scen.num_points, 1);
         extents.max_clusters = std::max<int64_t>(
             scen.num_clusters, 1);
-        auto op = graph.op<LiveOp>("dbscan", extents);
+        auto op = graph.op<BaseOp>("dbscan", extents);
         hr::ClusterDBSCANParams params;
         params.epsilon = scen.epsilon;
         params.min_points = scen.min_points;
@@ -224,7 +221,7 @@ perf::ResultRow base_row(const DbscanScenario& scen) {
   row.input_shape = {scen.num_points, scen.num_features};
   row.out_batch = scen.num_clusters;
   row.k = scen.num_features;
-  row.notes = "live_override=min_points; epsilon remains Params-only";
+  row.notes = "live_override=min_points; epsilon/max_clusters not timed";
   return row;
 }
 
@@ -328,7 +325,7 @@ struct DbscanTraits : perf::PerfDriverDefaults {
     row.notes =
         "cold_ms is first-frame latency; median/p90 are "
         "post-warmup steady state; override_ms is the peak after an inline "
-        "min_points change; epsilon remains Params-only; cells/s is "
+        "min_points change; epsilon/max_clusters not timed; cells/s is "
         "points/s";
     report->results.push_back(row);
   }

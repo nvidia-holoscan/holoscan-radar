@@ -328,6 +328,25 @@ TEST(ClusterDBSCANOpTest, MaxClustersKeepsLargest) {
   EXPECT_EQ(out.sizes.as<int64_t>()[0], 3);
 }
 
+TEST(ClusterDBSCANOpTest, BorderPointJoinsMinRootCluster) {
+  // Two disconnected four-point core components straddle row 8. The border
+  // point sees only each component's nearest edge point plus itself, so it is
+  // not core at min_points=4. It must join the component with root row 0.
+  const std::vector<double> pts = {
+      -0.9, -1.4, -1.4, -1.4,  // left core component, root row 0
+      0.9,  1.4,  1.4,  1.4,   // right core component, root row 4
+      0.0,                      // border point, row 8
+  };
+  auto p = points_tensor<double>(pts, 9, 1);
+  const auto out = run_dbscan<double>(p, make_params({1.0}, 4));
+  const int64_t* lab = out.labels.as<int64_t>();
+  EXPECT_EQ(lab[8], lab[0]);
+  EXPECT_NE(lab[8], lab[4]);
+  ASSERT_EQ(out.sizes.shape[0], 2);
+  EXPECT_EQ(out.sizes.as<int64_t>()[0], 5);
+  EXPECT_EQ(out.sizes.as<int64_t>()[1], 4);
+}
+
 TEST(ClusterDBSCANOpTest, EmptyPointsEmitsEmptyOutputs) {
   std::vector<double> pts;
   auto p = points_tensor<double>(pts, 0, 2);
@@ -373,8 +392,7 @@ TEST(ClusterDBSCANOpTest, EpsilonConfigurableFromParams) {
 }
 
 TEST(ClusterDBSCANOpTest, MinPointsConfigurableFromParams) {
-  // Authoring Params must select min_points (live Graph override deferred —
-  // HSDK5_PORT §1).
+  // Authoring Params select min_points when no Exact override matches.
   std::vector<double> pts = {
       0.0, 0.0,  0.1, 0.0,  0.2, 0.0,  10.0, 0.0, 10.1, 0.0,
   };
@@ -387,8 +405,7 @@ TEST(ClusterDBSCANOpTest, MinPointsConfigurableFromParams) {
 }
 
 TEST(ClusterDBSCANOpTest, MaxClustersConfigurableFromParams) {
-  // Authoring Params must select max_clusters (live Graph override deferred —
-  // HSDK5_PORT §1).
+  // Authoring Params select max_clusters when no Exact override matches.
   std::vector<double> pts = {
       0.0, 0.0,  0.1, 0.0,  10.0, 0.0, 10.1, 0.0,  20.0, 0.0, 20.1, 0.0,
   };
@@ -431,6 +448,15 @@ TEST(ClusterDBSCANOpTest, RejectsBadPointsRank) {
   auto p = real_cube_to_device<double>(pts, {3});  // rank 1
   DualIOGraphRunResult result =
       run_dbscan_result<double>(p, make_params({0.5}));
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
+TEST(ClusterDBSCANOpTest, RejectsOpaqueLeadingBatch) {
+  const std::vector<double> pts = {0.0, 0.0, 0.1, 0.0};
+  auto p = real_cube_to_device<double>(pts, {1, 2, 2});
+  DualIOGraphRunResult result =
+      run_dbscan_result<double>(p, make_params({0.5}, 2));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_FALSE(result.diagnostics.empty());
 }

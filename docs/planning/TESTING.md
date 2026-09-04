@@ -129,7 +129,14 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 
 - Synthetic blobs in feature space → correct membership; noise points labeled `−1`.
 - Per-axis `epsilon` correctly handles mixed-unit (anisotropic) features; `min_points` separates core vs. noise.
+- A non-core point neighboring two disconnected core components joins the
+  component with the numerically smallest root.
 - `labels` row-aligned with `points`; `sizes` counts per cluster; `max_clusters` caps.
+- Every `[live]` family is exercised through Graph with an Exact match or
+  skewed miss and a following miss that reverts to Params.
+- `sizes` is optional/latched; leaving it unwired does not fail `labels` or
+  disturb descending-size cluster numbering on later ticks.
+- Rank-3 input is rejected; the contract admits no opaque leading batch.
 
 #### FeatureAssemblyOp (bridge)
 

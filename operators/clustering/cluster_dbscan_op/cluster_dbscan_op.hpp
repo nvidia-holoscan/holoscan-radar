@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <type_traits>
 #include <vector>
 
@@ -26,6 +27,10 @@
 
 namespace holoscan::radar {
 
+namespace detail {
+struct ClusterDBSCANState;
+}  // namespace detail
+
 // Density clustering (DBSCAN) over a caller-assembled feature matrix. This
 // header is the contract reference for ports, shapes, dtypes, and parameters;
 // module-wide conventions live in operators/common/README.md.
@@ -37,10 +42,11 @@ namespace holoscan::radar {
 //               at 0); noise = -1. Row-aligned with points. Clusters numbered
 //               by descending point count (cluster 0 = largest); ties broken
 //               by ascending component root.
-// Out: sizes   — int64, (num_clusters,). Point count per cluster; sized to the
-//               actual cluster count and reallocated per tick. When
-//               max_clusters is exceeded, surplus clusters are dropped (their
-//               points relabeled to noise) and a warning is raised.
+// Out: sizes   — optional/latched int64, (num_clusters,). Point count per
+//               cluster; sized to the actual cluster count and reallocated per
+//               tick. When max_clusters is exceeded, surplus clusters are
+//               dropped (their points relabeled to noise) and a warning is
+//               raised.
 //
 // Parameters (OPERATOR_API.md [live] tags):
 //   epsilon      — std::vector<double>. Neighborhood radius per feature axis.
@@ -61,8 +67,7 @@ namespace holoscan::radar {
 //
 // Precision is fixed at compile time (T = float | double). The clustering is a
 // brute-force O(num_points²) neighbor sweep with iterative min-label connected
-// components — appropriate for the sparse detection counts this stage sees; see
-// OPEN_ITEMS.md for the spatial-index / union-find scaling follow-up.
+// components — appropriate for the sparse detection counts this stage sees.
 
 struct ClusterDBSCANParams {
   std::vector<double> epsilon{};
@@ -97,7 +102,7 @@ class ClusterDBSCANOp : public holoscan::Operator<ClusterDBSCANParams> {
                 "ClusterDBSCANOp supports float and double precision");
 
  public:
-  // Required: sizes output pools. A live epsilon port also requires
+  // Required: labels and sizes output pools. A live epsilon port also requires
   // max_features to bound its vector payload.
   explicit ClusterDBSCANOp(const MaxTensorExtents& extents);
 
@@ -115,17 +120,16 @@ class ClusterDBSCANOp : public holoscan::Operator<ClusterDBSCANParams> {
   Input<int64_t> max_clusters{"max_clusters"};
 
  private:
-  MaxTensorExtents extents_;
-  std::int64_t max_features_{0};
-  std::size_t max_labels_byte_span_{0U};
-  std::size_t max_sizes_byte_span_{0U};
-
   // Keep the previous activation's input alive across ticks so async device
   // reads cannot outlive the buffer.
   Tensor retained_points_;
   // sizes is optional/latched (OPERATOR_API.md).
   LatchedOutput sizes_out_;
-  bool warned_max_clusters_{false};
+  std::shared_ptr<detail::ClusterDBSCANState> state_;
+
+  std::int64_t max_features_{0};
+  std::size_t max_labels_byte_span_{0U};
+  std::size_t max_sizes_byte_span_{0U};
 };
 
 extern template class ClusterDBSCANOp<float>;

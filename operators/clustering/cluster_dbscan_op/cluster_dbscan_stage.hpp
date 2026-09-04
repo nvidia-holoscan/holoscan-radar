@@ -126,7 +126,7 @@ __global__ void cc_step_kernel(const T* __restrict__ points,
   }
   cc_out[i] = m;
   if (m != self) {
-    *changed = 1;
+    atomicExch(changed, 1);
   }
 }
 
