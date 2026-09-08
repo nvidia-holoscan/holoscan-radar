@@ -17,6 +17,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -429,6 +430,546 @@ expected<ESPRITEstimationInput<T>, Error> prepare_smoothed_input(
   return result;
 }
 
+using ESPRITTensorLoanWriter = std::remove_cvref_t<decltype(
+    *std::declval<TensorOutputLoan&>().write(
+        std::declval<ExecutionContext&>().cuda_stream()))>;
+
+struct ESPRITPreparedOutputs {
+  TensorOutputLoan aoa_loan;
+  TensorOutputLoan doa_loan;
+  TensorOutputLoan count_loan;
+  TensorOutputLoan eigenvalue_loan;
+  ESPRITTensorLoanWriter aoa_writer;
+  ESPRITTensorLoanWriter doa_writer;
+  ESPRITTensorLoanWriter count_writer;
+  ESPRITTensorLoanWriter eigenvalue_writer;
+  std::vector<std::shared_ptr<holoscan::Tensor>> workspace_keepalive;
+};
+
+template <typename T>
+struct ESPRITPreparedCommonWorkspace {
+  std::shared_ptr<holoscan::Tensor> covariance;
+  std::shared_ptr<holoscan::Tensor> eigenvectors;
+  std::shared_ptr<holoscan::Tensor> valid_counts;
+  std::shared_ptr<holoscan::Tensor> model_order;
+  cuda::std::complex<T>* covariance_ptr{nullptr};
+  cuda::std::complex<T>* eigenvectors_ptr{nullptr};
+  int64_t* valid_counts_ptr{nullptr};
+  int32_t* model_order_ptr{nullptr};
+};
+
+expected<void, Error> emit_empty_outputs(
+    Output<Tensor>& aoa_port, Output<Tensor>& doa_port,
+    Output<Tensor>& count_port, Output<Tensor>& eigenvalue_port,
+    ExecutionContext& context, const ESPRITStagePlan& plan,
+    DLDataType output_dtype) {
+  const std::vector<int64_t> eigenvalue_shape = {
+      plan.num_items, plan.num_channels};
+  const DLDataType i32_dtype{kDLInt, 32, 1};
+  auto noop = [](void*, std::size_t) -> expected<void, Error> {
+    return {};
+  };
+  HOLOSCAN_TRY(
+      auto aoa_loan,
+      prepare_device_tensor(aoa_port, context, plan.aoa_shape,
+                            output_dtype, noop));
+  HOLOSCAN_TRY(
+      auto doa_loan,
+      prepare_device_tensor(doa_port, context, plan.doa_shape,
+                            output_dtype, noop));
+  HOLOSCAN_TRY(
+      auto count_loan,
+      prepare_device_tensor(count_port, context, plan.count_shape,
+                            i32_dtype, noop));
+  HOLOSCAN_TRY(
+      auto eigenvalue_loan,
+      prepare_device_tensor(eigenvalue_port, context, eigenvalue_shape,
+                            output_dtype, noop));
+  HOLOSCAN_TRY(
+      emit_prepared_tensor(aoa_port, context, std::move(aoa_loan)));
+  (void)emit_prepared_tensor(doa_port, context, std::move(doa_loan));
+  (void)emit_prepared_tensor(count_port, context, std::move(count_loan));
+  (void)emit_prepared_tensor(
+      eigenvalue_port, context, std::move(eigenvalue_loan));
+  return {};
+}
+
+template <typename T>
+expected<ESPRITPreparedCommonWorkspace<T>, Error>
+prepare_esprit_common_workspace(ESPRITRuntimeState<T>& state,
+                                int64_t num_items,
+                                int64_t estimation_channels) {
+  const DLDataType cplx_dtype = complex_dtype<T>();
+  const DLDataType i32_dtype{kDLInt, 32, 1};
+  const DLDataType i64_dtype{kDLInt, 64, 1};
+  ESPRITPreparedCommonWorkspace<T> result;
+  result.covariance =
+      state.covariance
+          ? state.covariance
+          : make_device_tensor(
+                {num_items, estimation_channels, estimation_channels},
+                cplx_dtype);
+  result.eigenvectors =
+      state.eigenvectors
+          ? state.eigenvectors
+          : make_device_tensor(
+                {num_items, estimation_channels, estimation_channels},
+                cplx_dtype);
+  result.valid_counts =
+      state.valid_counts
+          ? state.valid_counts
+          : make_device_tensor({num_items}, i64_dtype);
+  result.model_order =
+      state.model_order
+          ? state.model_order
+          : make_device_tensor({num_items}, i32_dtype);
+  HOLOSCAN_TRY(
+      auto covariance,
+      writable_ptr(*result.covariance, "covariance"));
+  HOLOSCAN_TRY(
+      auto eigenvectors,
+      writable_ptr(*result.eigenvectors, "eigenvectors"));
+  HOLOSCAN_TRY(
+      auto valid_counts,
+      writable_ptr(*result.valid_counts, "valid_counts"));
+  HOLOSCAN_TRY(
+      auto model_order,
+      writable_ptr(*result.model_order, "model_order"));
+  result.covariance_ptr =
+      static_cast<cuda::std::complex<T>*>(covariance);
+  result.eigenvectors_ptr =
+      static_cast<cuda::std::complex<T>*>(eigenvectors);
+  result.valid_counts_ptr = static_cast<int64_t*>(valid_counts);
+  result.model_order_ptr = static_cast<int32_t*>(model_order);
+  return result;
+}
+
+expected<ESPRITPreparedOutputs, Error> prepare_esprit_outputs(
+    Output<Tensor>& aoa_port, Output<Tensor>& doa_port,
+    Output<Tensor>& count_port, Output<Tensor>& eigenvalue_port,
+    ExecutionContext& context, const ESPRITStagePlan& plan,
+    int64_t estimation_channels, DLDataType output_dtype) {
+  const std::vector<int64_t> eigenvalue_shape = {
+      plan.num_items, estimation_channels};
+  const DLDataType i32_dtype{kDLInt, 32, 1};
+  HOLOSCAN_TRY(
+      auto aoa_loan,
+      aoa_port.allocate_tensor(
+          TensorLoanRequest{.shape = plan.aoa_shape,
+                            .dtype = output_dtype}));
+  HOLOSCAN_TRY(
+      auto doa_loan,
+      doa_port.allocate_tensor(
+          TensorLoanRequest{.shape = plan.doa_shape,
+                            .dtype = output_dtype}));
+  HOLOSCAN_TRY(
+      auto count_loan,
+      count_port.allocate_tensor(
+          TensorLoanRequest{.shape = plan.count_shape,
+                            .dtype = i32_dtype}));
+  HOLOSCAN_TRY(
+      auto eigenvalue_loan,
+      eigenvalue_port.allocate_tensor(
+          TensorLoanRequest{.shape = eigenvalue_shape,
+                            .dtype = output_dtype}));
+  HOLOSCAN_TRY(auto aoa_writer,
+               aoa_loan.write(context.cuda_stream()));
+  HOLOSCAN_TRY(auto doa_writer,
+               doa_loan.write(context.cuda_stream()));
+  HOLOSCAN_TRY(auto count_writer,
+               count_loan.write(context.cuda_stream()));
+  HOLOSCAN_TRY(auto eigenvalue_writer,
+               eigenvalue_loan.write(context.cuda_stream()));
+  return ESPRITPreparedOutputs{
+      .aoa_loan = std::move(aoa_loan),
+      .doa_loan = std::move(doa_loan),
+      .count_loan = std::move(count_loan),
+      .eigenvalue_loan = std::move(eigenvalue_loan),
+      .aoa_writer = std::move(aoa_writer),
+      .doa_writer = std::move(doa_writer),
+      .count_writer = std::move(count_writer),
+      .eigenvalue_writer = std::move(eigenvalue_writer),
+  };
+}
+
+expected<void, Error> commit_and_publish_esprit_outputs(
+    Output<Tensor>& aoa_port, Output<Tensor>& doa_port,
+    Output<Tensor>& count_port, Output<Tensor>& eigenvalue_port,
+    ExecutionContext& context, ESPRITPreparedOutputs outputs) {
+  HOLOSCAN_TRY(std::move(outputs.aoa_writer).commit());
+  HOLOSCAN_TRY(std::move(outputs.doa_writer).commit());
+  HOLOSCAN_TRY(std::move(outputs.count_writer).commit());
+  HOLOSCAN_TRY(std::move(outputs.eigenvalue_writer).commit());
+
+  const EmitOptions emit_options{
+      .capture_time = context.activation_time()};
+  HOLOSCAN_TRY(
+      aoa_port.emit(std::move(outputs.aoa_loan), emit_options));
+  (void)doa_port.emit(std::move(outputs.doa_loan), emit_options);
+  (void)count_port.emit(std::move(outputs.count_loan), emit_options);
+  (void)eigenvalue_port.emit(
+      std::move(outputs.eigenvalue_loan), emit_options);
+  return {};
+}
+
+template <typename T>
+expected<ESPRITPreparedOutputs, Error> execute_esprit_auto_ura(
+    ESPRITRuntimeState<T>& state, const ESPRITStagePlan& plan,
+    const ESPRITEstimationInput<T>& estimation,
+    const PlanarAperturePlan& planar,
+    const detail::DeviceAngleConvention<T>& convention,
+    bool geometry_changed, Output<Tensor>& aoa_port,
+    Output<Tensor>& doa_port, Output<Tensor>& count_port,
+    Output<Tensor>& eigenvalue_port, ExecutionContext& context,
+    cudaStream_t stream) {
+  const int64_t y_pairs = planar.nz * (planar.ny - 1);
+  const int64_t z_pairs = (planar.nz - 1) * planar.ny;
+  if (plan.stage.num_sources >= 0) {
+    if (plan.stage.num_sources > std::min(y_pairs, z_pairs)) {
+      return make_unexpected(Error{
+          ErrorCode::kInvalidArgument,
+          "ESPRITEstimatorOp: num_sources must not exceed the URA "
+          "invariance subarray size"});
+    }
+    if (plan.stage.num_sources >= estimation.num_channels) {
+      return make_unexpected(Error{
+          ErrorCode::kInvalidArgument,
+          "ESPRITEstimatorOp: num_sources must leave at least one "
+          "noise-subspace dimension"});
+    }
+  }
+
+  std::ostringstream ura_key;
+  ura_key << geometry_key(*estimation.geometry) << '|' << planar.ny
+          << 'x' << planar.nz;
+  if (ura_key.str() != state.ura_key) {
+    UraInvariancePairs pairs;
+    try {
+      pairs = build_ura_dual_invariance(planar.ny, planar.nz);
+    } catch (const std::invalid_argument& error) {
+      return make_unexpected(
+          Error{ErrorCode::kInvalidArgument, error.what()});
+    } catch (const std::runtime_error& error) {
+      return make_unexpected(
+          Error{ErrorCode::kFailure, error.what()});
+    }
+    state.ura_y_pairs =
+        static_cast<int64_t>(pairs.y_reference.size());
+    state.ura_z_pairs =
+        static_cast<int64_t>(pairs.z_reference.size());
+    const auto upload =
+        [&](const std::vector<int64_t>& source,
+            std::shared_ptr<holoscan::Tensor>& destination,
+            const char* what) -> expected<void, Error> {
+      destination = make_device_tensor(
+          {static_cast<int64_t>(source.size())},
+          DLDataType{kDLInt, 32, 1});
+      HOLOSCAN_TRY(
+          auto destination_ptr,
+          writable_ptr(*destination, what));
+      std::vector<int32_t> host(source.size());
+      for (size_t index = 0; index < source.size(); ++index) {
+        host[index] = static_cast<int32_t>(source[index]);
+      }
+      if (cudaMemcpyAsync(
+              destination_ptr, host.data(),
+              host.size() * sizeof(int32_t), cudaMemcpyHostToDevice,
+              stream) != cudaSuccess) {
+        return fail_runtime(
+            "ESPRITEstimatorOp: URA invariance index upload failed");
+      }
+      if (cudaStreamSynchronize(stream) != cudaSuccess) {
+        return fail_runtime(
+            "ESPRITEstimatorOp: URA invariance index sync failed");
+      }
+      return {};
+    };
+    HOLOSCAN_TRY(
+        upload(pairs.y_reference, state.d_y_reference, "y_reference"));
+    HOLOSCAN_TRY(
+        upload(pairs.y_shifted, state.d_y_shifted, "y_shifted"));
+    HOLOSCAN_TRY(
+        upload(pairs.z_reference, state.d_z_reference, "z_reference"));
+    HOLOSCAN_TRY(
+        upload(pairs.z_shifted, state.d_z_shifted, "z_shifted"));
+    state.ura_key = ura_key.str();
+  }
+
+  if (geometry_changed) {
+    HOLOSCAN_LOG_WARN(
+        "ESPRITEstimatorOp: unseen array_geometry override; revalidating "
+        "the URA dual-invariance pairs");
+  }
+  if (estimation.smoothing_changed) {
+    HOLOSCAN_LOG_WARN(
+        "ESPRITEstimatorOp: spatial smoothing override changes the ESPRIT "
+        "aperture and derived subarray pairs");
+  }
+
+  const int64_t model_order_cap = std::min(
+      {plan.stage.max_sources, state.ura_y_pairs, state.ura_z_pairs,
+       estimation.num_channels - 1});
+  const int64_t workspace_dim =
+      std::max<int64_t>(model_order_cap, 1);
+  HOLOSCAN_TRY(
+      auto common,
+      prepare_esprit_common_workspace<T>(
+          state, plan.num_items, estimation.num_channels));
+
+  const DLDataType cplx_dtype = complex_dtype<T>();
+  std::array<std::shared_ptr<holoscan::Tensor>, 6> local_workspace;
+  if (!state.matrix_workspace[0]) {
+    for (auto& item : local_workspace) {
+      item = make_device_tensor(
+          {plan.num_items, workspace_dim, workspace_dim}, cplx_dtype);
+    }
+  }
+  const auto& matrix =
+      state.matrix_workspace[0] ? state.matrix_workspace : local_workspace;
+  HOLOSCAN_TRY(auto psi_y, writable_ptr(*matrix[0], "psi_y"));
+  HOLOSCAN_TRY(auto psi_z, writable_ptr(*matrix[1], "psi_z"));
+  HOLOSCAN_TRY(auto z_workspace, writable_ptr(*matrix[2], "z_ws"));
+  HOLOSCAN_TRY(auto q_workspace, writable_ptr(*matrix[3], "q_ws"));
+  HOLOSCAN_TRY(auto r_workspace, writable_ptr(*matrix[4], "r_ws"));
+  HOLOSCAN_TRY(auto temporary, writable_ptr(*matrix[5], "tmp_ws"));
+
+  HOLOSCAN_TRY(
+      auto outputs,
+      prepare_esprit_outputs(
+          aoa_port, doa_port, count_port, eigenvalue_port, context,
+          plan, estimation.num_channels, real_dtype<T>()));
+
+  const double k = kTwoPi / estimation.geometry->wavelength;
+  try {
+    detail::run_esprit_2d_stage<T>(
+        estimation.data, estimation.mask, plan.num_items,
+        estimation.num_channels, estimation.num_snapshots,
+        plan.stage.num_sources, plan.stage.source_count_pfa,
+        model_order_cap,
+        static_cast<const int32_t*>(state.d_y_reference->data()),
+        static_cast<const int32_t*>(state.d_y_shifted->data()),
+        state.ura_y_pairs,
+        static_cast<const int32_t*>(state.d_z_reference->data()),
+        static_cast<const int32_t*>(state.d_z_shifted->data()),
+        state.ura_z_pairs, workspace_dim,
+        static_cast<T>(k * planar.dy), static_cast<T>(k * planar.dz),
+        static_cast<T>(planar.y_axis[0]),
+        static_cast<T>(planar.y_axis[1]),
+        static_cast<T>(planar.y_axis[2]),
+        static_cast<T>(planar.z_axis[0]),
+        static_cast<T>(planar.z_axis[1]),
+        static_cast<T>(planar.z_axis[2]),
+        static_cast<T>(planar.normal[0]),
+        static_cast<T>(planar.normal[1]),
+        static_cast<T>(planar.normal[2]), convention,
+        common.covariance_ptr, common.eigenvectors_ptr,
+        common.valid_counts_ptr, common.model_order_ptr,
+        static_cast<T*>(outputs.eigenvalue_writer.data()),
+        static_cast<cuda::std::complex<T>*>(psi_y),
+        static_cast<cuda::std::complex<T>*>(psi_z),
+        static_cast<cuda::std::complex<T>*>(z_workspace),
+        static_cast<cuda::std::complex<T>*>(q_workspace),
+        static_cast<cuda::std::complex<T>*>(r_workspace),
+        static_cast<cuda::std::complex<T>*>(temporary),
+        static_cast<T*>(outputs.aoa_writer.data()),
+        static_cast<T*>(outputs.doa_writer.data()),
+        plan.stage.max_sources,
+        static_cast<int32_t*>(outputs.count_writer.data()), stream);
+    check_cuda("ESPRIT 2-D stage", kOpName);
+  } catch (const std::runtime_error& error) {
+    return make_unexpected(
+        Error{ErrorCode::kFailure, error.what()});
+  }
+
+  if (plan.stage.num_sources < 0 && estimation.mask == nullptr &&
+      estimation.num_snapshots < estimation.num_channels &&
+      !state.warned_rank_deficient) {
+    HOLOSCAN_LOG_WARN(
+        "ESPRITEstimatorOp: num_sources=auto with fewer snapshots than "
+        "channels; falling back to one source");
+    state.warned_rank_deficient = true;
+  }
+  outputs.workspace_keepalive = {
+      std::move(common.covariance), std::move(common.eigenvectors),
+      std::move(common.valid_counts), std::move(common.model_order)};
+  outputs.workspace_keepalive.insert(
+      outputs.workspace_keepalive.end(), matrix.begin(), matrix.end());
+  return outputs;
+}
+
+template <typename T>
+expected<ESPRITPreparedOutputs, Error>
+execute_esprit_shift_invariant_1d(
+    ESPRITRuntimeState<T>& state, const ESPRITStagePlan& plan,
+    const ESPRITEstimationInput<T>& estimation,
+    const detail::DeviceAngleConvention<T>& convention,
+    bool geometry_changed, Output<Tensor>& aoa_port,
+    Output<Tensor>& doa_port, Output<Tensor>& count_port,
+    Output<Tensor>& eigenvalue_port, ExecutionContext& context,
+    cudaStream_t stream) {
+  const std::string current_pair_key =
+      pair_key(*estimation.geometry, plan.stage.subarray_spec);
+  if (current_pair_key != state.subarray_key) {
+    try {
+      state.subarray_plan = build_shift_invariant_subarray_plan(
+          *estimation.geometry, plan.stage.subarray_spec);
+    } catch (const std::invalid_argument& error) {
+      return make_unexpected(
+          Error{ErrorCode::kInvalidArgument, error.what()});
+    } catch (const std::runtime_error& error) {
+      return make_unexpected(
+          Error{ErrorCode::kFailure, error.what()});
+    }
+    state.subarray_key = current_pair_key;
+    const int64_t pair_size = static_cast<int64_t>(
+        state.subarray_plan.pair.reference_indices.size());
+    state.d_reference_indices =
+        make_device_tensor({pair_size}, DLDataType{kDLInt, 32, 1});
+    state.d_shifted_indices =
+        make_device_tensor({pair_size}, DLDataType{kDLInt, 32, 1});
+    std::vector<int32_t> reference(static_cast<size_t>(pair_size));
+    std::vector<int32_t> shifted(static_cast<size_t>(pair_size));
+    for (int64_t index = 0; index < pair_size; ++index) {
+      reference[static_cast<size_t>(index)] = static_cast<int32_t>(
+          state.subarray_plan.pair.reference_indices[
+              static_cast<size_t>(index)]);
+      shifted[static_cast<size_t>(index)] = static_cast<int32_t>(
+          state.subarray_plan.pair.shifted_indices[
+              static_cast<size_t>(index)]);
+    }
+    HOLOSCAN_TRY(
+        auto reference_ptr,
+        writable_ptr(*state.d_reference_indices, "reference_indices"));
+    HOLOSCAN_TRY(
+        auto shifted_ptr,
+        writable_ptr(*state.d_shifted_indices, "shifted_indices"));
+    if (cudaMemcpyAsync(
+            reference_ptr, reference.data(),
+            reference.size() * sizeof(int32_t), cudaMemcpyHostToDevice,
+            stream) != cudaSuccess ||
+        cudaMemcpyAsync(
+            shifted_ptr, shifted.data(),
+            shifted.size() * sizeof(int32_t), cudaMemcpyHostToDevice,
+            stream) != cudaSuccess) {
+      return make_unexpected(
+          Error{ErrorCode::kFailure,
+                "ESPRITEstimatorOp: subarray index upload failed"});
+    }
+  }
+
+  const int64_t pair_size = static_cast<int64_t>(
+      state.subarray_plan.pair.reference_indices.size());
+  if (plan.stage.num_sources >= 0 &&
+      plan.stage.num_sources > pair_size) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument,
+              "ESPRITEstimatorOp: num_sources must not exceed the number of "
+              "corresponding subarray elements"});
+  }
+  if (plan.stage.num_sources >= estimation.num_channels) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument,
+              "ESPRITEstimatorOp: num_sources must leave at least one "
+              "noise-subspace dimension"});
+  }
+  if (geometry_changed) {
+    HOLOSCAN_LOG_WARN(
+        "ESPRITEstimatorOp: unseen array_geometry override; "
+        "revalidating the shift-invariant subarray pair");
+  }
+  if (estimation.smoothing_changed) {
+    HOLOSCAN_LOG_WARN(
+        "ESPRITEstimatorOp: spatial smoothing override changes the ESPRIT "
+        "aperture and derived subarray pair");
+  }
+
+  const int64_t model_order_cap =
+      std::min(plan.stage.max_sources, pair_size);
+  const int64_t workspace_dim =
+      std::max<int64_t>(model_order_cap, 1);
+  HOLOSCAN_TRY(
+      auto common,
+      prepare_esprit_common_workspace<T>(
+          state, plan.num_items, estimation.num_channels));
+  const DLDataType cplx_dtype = complex_dtype<T>();
+  auto matrix_workspace =
+      state.matrix_workspace[0]
+          ? state.matrix_workspace[0]
+          : make_device_tensor(
+                {plan.num_items, workspace_dim, workspace_dim},
+                cplx_dtype);
+  auto q_workspace =
+      state.matrix_workspace[1]
+          ? state.matrix_workspace[1]
+          : make_device_tensor(
+                {plan.num_items, workspace_dim, workspace_dim},
+                cplx_dtype);
+  auto r_workspace =
+      state.matrix_workspace[2]
+          ? state.matrix_workspace[2]
+          : make_device_tensor(
+                {plan.num_items, workspace_dim, workspace_dim},
+                cplx_dtype);
+  HOLOSCAN_TRY(
+      auto matrix_ptr,
+      writable_ptr(*matrix_workspace, "matrix_ws"));
+  HOLOSCAN_TRY(auto q_ptr, writable_ptr(*q_workspace, "q_ws"));
+  HOLOSCAN_TRY(auto r_ptr, writable_ptr(*r_workspace, "r_ws"));
+
+  HOLOSCAN_TRY(
+      auto outputs,
+      prepare_esprit_outputs(
+          aoa_port, doa_port, count_port, eigenvalue_port, context,
+          plan, estimation.num_channels, real_dtype<T>()));
+  try {
+    detail::run_esprit_stage<T>(
+        estimation.data, estimation.mask, plan.num_items,
+        estimation.num_channels, estimation.num_snapshots,
+        plan.stage.num_sources, plan.stage.source_count_pfa,
+        model_order_cap,
+        static_cast<const int32_t*>(state.d_reference_indices->data()),
+        static_cast<const int32_t*>(state.d_shifted_indices->data()),
+        pair_size, workspace_dim,
+        static_cast<T>(kTwoPi * state.subarray_plan.spacing /
+                       estimation.geometry->wavelength),
+        static_cast<T>(state.subarray_plan.axis[0]),
+        static_cast<T>(state.subarray_plan.axis[1]),
+        static_cast<T>(state.subarray_plan.axis[2]),
+        static_cast<T>(state.subarray_plan.broadside[0]),
+        static_cast<T>(state.subarray_plan.broadside[1]),
+        static_cast<T>(state.subarray_plan.broadside[2]), convention,
+        common.covariance_ptr, common.eigenvectors_ptr,
+        common.valid_counts_ptr, common.model_order_ptr,
+        static_cast<T*>(outputs.eigenvalue_writer.data()),
+        static_cast<cuda::std::complex<T>*>(matrix_ptr),
+        static_cast<cuda::std::complex<T>*>(q_ptr),
+        static_cast<cuda::std::complex<T>*>(r_ptr),
+        static_cast<T*>(outputs.aoa_writer.data()),
+        static_cast<T*>(outputs.doa_writer.data()),
+        plan.stage.max_sources,
+        static_cast<int32_t*>(outputs.count_writer.data()), stream);
+    check_cuda("ESPRIT stage", kOpName);
+  } catch (const std::runtime_error& error) {
+    return make_unexpected(
+        Error{ErrorCode::kFailure, error.what()});
+  }
+
+  if (plan.stage.num_sources < 0 && estimation.mask == nullptr &&
+      estimation.num_snapshots < estimation.num_channels &&
+      !state.warned_rank_deficient) {
+    HOLOSCAN_LOG_WARN(
+        "ESPRITEstimatorOp: num_sources=auto with fewer snapshots than "
+        "channels; falling back to one source");
+    state.warned_rank_deficient = true;
+  }
+  outputs.workspace_keepalive = {
+      std::move(common.covariance), std::move(common.eigenvectors),
+      std::move(common.valid_counts), std::move(common.model_order),
+      std::move(matrix_workspace), std::move(q_workspace),
+      std::move(r_workspace)};
+  return outputs;
+}
+
 }  // namespace
 
 template <typename T>
@@ -525,7 +1066,8 @@ Contract ESPRITEstimatorOp<T>::contract() const {
 template <typename T>
 expected<void, Error> ESPRITEstimatorOp<T>::compute(
     ExecutionContext& context) {
-  // Receive and validate the required trigger tensor.
+  // 1. Receive the snapshot cube and resolve this tick's live configuration
+  // into one validated plan with all output shapes.
   HOLOSCAN_TRY(auto snap, receive_tensor(snapshot, kOpName));
   try {
     require_cuda_accessible(snap, "snapshot", kOpName);
@@ -535,8 +1077,6 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
     return fail_invalid(error.what());
   }
 
-  // Resolve this tick's Exact overrides, then validate named axes and derive
-  // output shapes in one immutable plan.
   const ESPRITParams& pinned = context.params<ESPRITParams>();
   HOLOSCAN_TRY(
       auto stage,
@@ -545,10 +1085,6 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
   HOLOSCAN_TRY(
       auto plan,
       build_esprit_stage_plan(snap, std::move(stage), extents_));
-  auto& geometry = plan.stage.geometry;
-  const int64_t effective_num_sources = plan.stage.num_sources;
-  const double effective_pfa = plan.stage.source_count_pfa;
-  const int64_t effective_max_sources = plan.stage.max_sources;
 
   if (state_->seeded_angle_convention.has_value() &&
       *state_->seeded_angle_convention != plan.stage.convention) {
@@ -557,13 +1093,9 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
         "after the first successful activation; instantiate a separate "
         "operator per convention");
   }
-  const ShiftInvariantSubarrayPair& requested_pair =
-      plan.stage.subarray_spec;
-  const int64_t num_items = plan.num_items;
-  const int64_t num_channels = plan.num_channels;
-  const int64_t num_snapshots = plan.num_snapshots;
 
-  // Validate the optional same-tick mask against the planned snapshot axes.
+  // 2. Validate the optional mask and runtime stream, then prepare the
+  // convention representation that becomes permanent only after publication.
   HOLOSCAN_TRY(auto maybe_valid, receive_optional_value(is_valid));
   const unsigned char* mask_ptr = nullptr;
   if (maybe_valid.has_value()) {
@@ -575,8 +1107,8 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
           "ESPRITEstimatorOp: is_valid must have dtype bool or uint8");
     }
     const auto& vshape = maybe_valid->shape();
-    if (vshape.size() != 2 || vshape[0] != num_items ||
-        vshape[1] != num_snapshots) {
+    if (vshape.size() != 2 || vshape[0] != plan.num_items ||
+        vshape[1] != plan.num_snapshots) {
       return fail_invalid(
           "ESPRITEstimatorOp: is_valid must have shape "
           "(num_items, num_snapshots) matching snapshot");
@@ -590,15 +1122,12 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
     mask_ptr = static_cast<const unsigned char*>(maybe_valid->data());
   }
 
-  // Resolve the runtime stream before touching cached device artifacts.
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
     return make_unexpected(Error{ErrorCode::kNotSupported,
                                  "ESPRITEstimatorOp: no CUDA compute stream"});
   }
 
-  // Tick-local convention until the first successful emit locks the static
-  // seed — geometry / subarray validation below can still fail this tick.
   detail::DeviceAngleConvention<T> tick_convention{};
   const detail::DeviceAngleConvention<T>* convention =
       &state_->device_angle_convention;
@@ -614,48 +1143,13 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
     }
   };
 
-  const DLDataType out_dtype = real_dtype<T>();
-  const DLDataType cplx_dtype = complex_dtype<T>();
-  const DLDataType i32_dtype{kDLInt, 32, 1};
-  const DLDataType i64_dtype{kDLInt, 64, 1};
-  const auto& aoa_shape = plan.aoa_shape;
-  const auto& doa_shape = plan.doa_shape;
-  const auto& count_shape = plan.count_shape;
-
-  auto emit_empty = [&]() -> expected<void, Error> {
-    // Estimation channel count equals full aperture when smoothing is off
-    // (empty items never exercise the smoothing front-end).
-    // Prepare every loan before any publish so a late allocate/commit
-    // failure cannot leave a sibling port already downstream.
-    const std::vector<int64_t> eig_shape = {num_items, num_channels};
-    auto noop = [](void*, std::size_t) -> expected<void, Error> {
-      return {};
-    };
-    HOLOSCAN_TRY(auto aoa_loan,
-                 prepare_device_tensor(aoa_estimates, context, aoa_shape,
-                                      out_dtype, noop));
-    HOLOSCAN_TRY(auto doa_loan,
-                 prepare_device_tensor(doa_multi, context, doa_shape,
-                                      out_dtype, noop));
-    HOLOSCAN_TRY(auto cnt_loan,
-                 prepare_device_tensor(source_count, context, count_shape,
-                                      i32_dtype, noop));
-    HOLOSCAN_TRY(auto eig_loan,
-                 prepare_device_tensor(eigenvalues, context, eig_shape,
-                                      out_dtype, noop));
+  // 3. Preserve the output contract for an empty item axis without entering
+  // covariance, eigendecomposition, or rotational-invariance work.
+  if (plan.num_items == 0) {
     HOLOSCAN_TRY(
-        emit_prepared_tensor(aoa_estimates, context, std::move(aoa_loan)));
-    // doa_multi, source_count and eigenvalues are optional/always
-    // (OPERATOR_API.md): all three come from work the primary outputs need
-    // anyway, so an unwired sink saves nothing and is not an error.
-    (void)emit_prepared_tensor(doa_multi, context, std::move(doa_loan));
-    (void)emit_prepared_tensor(source_count, context, std::move(cnt_loan));
-    (void)emit_prepared_tensor(eigenvalues, context, std::move(eig_loan));
-    return {};
-  };
-
-  if (num_items == 0) {
-    HOLOSCAN_TRY(emit_empty());
+        emit_empty_outputs(
+            aoa_estimates, doa_multi, source_count, eigenvalues,
+            context, plan, real_dtype<T>()));
     seed_angle_convention_after_emit();
     retained_snapshot_ = std::move(snap);
     if (maybe_valid.has_value()) {
@@ -664,513 +1158,57 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
     return {};
   }
 
-  // Warn once per previously unseen geometry key.
-  const std::string geom_key = geometry_key(geometry);
+  // 4. Track runtime geometry, form the effective covariance input, and
+  // analyze an automatic subarray request for the native filled-URA path.
+  const std::string geom_key = geometry_key(plan.stage.geometry);
   const bool geometry_is_new =
       state_->seen_geometry_keys.insert(geom_key).second;
   const bool geometry_changed =
       geometry_is_new && state_->seen_geometry_keys.size() > 1;
 
-  // Prepare the effective covariance input: either the original snapshot or
-  // gathered overlapping looks on the reduced smoothing aperture.
   HOLOSCAN_TRY(
       auto estimation,
       prepare_smoothed_input(*state_, snap, mask_ptr, plan, stream));
-  const ArrayGeometry* estimation_geometry = estimation.geometry;
-  const int64_t estimation_channels = estimation.num_channels;
-  const int64_t estimation_snapshots = estimation.num_snapshots;
-  const cuda::std::complex<T>* estimation_data = estimation.data;
-  const unsigned char* estimation_mask = estimation.mask;
-  const bool smoothing_changed = estimation.smoothing_changed;
 
-  const std::vector<int64_t> eig_shape = {num_items, estimation_channels};
-
-  // A filled URA with `subarray_spec: auto` takes the native 2-D
-  // dual-invariance path; an explicit subarray pair always stays on the 1-D
-  // path (and must never trigger planar-aperture analysis, which is defined
-  // only for auto derivation).
   PlanarAperturePlan planar{};
-  if (requested_pair.is_auto()) {
+  if (plan.stage.subarray_spec.is_auto()) {
     try {
-      planar = analyze_planar_aperture(*estimation_geometry);
+      planar = analyze_planar_aperture(*estimation.geometry);
     } catch (const std::invalid_argument& e) {
       return fail_invalid(e.what());
     } catch (const std::runtime_error& e) {
       return fail_runtime(e.what());
     }
   }
-  if (planar.is_ura && requested_pair.is_auto()) {
-    const int64_t y_pairs = planar.nz * (planar.ny - 1);
-    const int64_t z_pairs = (planar.nz - 1) * planar.ny;
-    if (effective_num_sources >= 0) {
-      if (effective_num_sources > std::min(y_pairs, z_pairs)) {
-        return fail_invalid(
-            "ESPRITEstimatorOp: num_sources must not exceed the URA "
-            "invariance subarray size");
-      }
-      if (effective_num_sources >= estimation_channels) {
-        return fail_invalid(
-            "ESPRITEstimatorOp: num_sources must leave at least one "
-            "noise-subspace dimension");
-      }
-    }
 
-    std::ostringstream ura_key;
-    ura_key << geometry_key(*estimation_geometry) << '|' << planar.ny << 'x'
-            << planar.nz;
-    if (ura_key.str() != state_->ura_key) {
-      UraInvariancePairs pairs;
-      try {
-        pairs = build_ura_dual_invariance(planar.ny, planar.nz);
-      } catch (const std::invalid_argument& e) {
-        return fail_invalid(e.what());
-      } catch (const std::runtime_error& e) {
-        return fail_runtime(e.what());
-      }
-      state_->ura_y_pairs =
-          static_cast<int64_t>(pairs.y_reference.size());
-      state_->ura_z_pairs =
-          static_cast<int64_t>(pairs.z_reference.size());
-      const auto upload =
-          [&](const std::vector<int64_t>& src,
-              std::shared_ptr<holoscan::Tensor>& dst,
-              const char* what) -> expected<void, Error> {
-        dst = make_device_tensor({static_cast<int64_t>(src.size())},
-                                 DLDataType{kDLInt, 32, 1});
-        HOLOSCAN_TRY(auto dst_ptr, writable_ptr(*dst, what));
-        std::vector<int32_t> host(src.size());
-        for (size_t i = 0; i < src.size(); ++i) {
-          host[i] = static_cast<int32_t>(src[i]);
-        }
-        if (cudaMemcpyAsync(dst_ptr, host.data(),
-                            host.size() * sizeof(int32_t),
-                            cudaMemcpyHostToDevice, stream) != cudaSuccess) {
-          return fail_runtime(
-              "ESPRITEstimatorOp: URA invariance index upload failed");
-        }
-        if (cudaStreamSynchronize(stream) != cudaSuccess) {
-          return fail_runtime(
-              "ESPRITEstimatorOp: URA invariance index sync failed");
-        }
-        return {};
-      };
-      HOLOSCAN_TRY(
-          upload(pairs.y_reference, state_->d_y_reference, "y_reference"));
-      HOLOSCAN_TRY(
-          upload(pairs.y_shifted, state_->d_y_shifted, "y_shifted"));
-      HOLOSCAN_TRY(
-          upload(pairs.z_reference, state_->d_z_reference, "z_reference"));
-      HOLOSCAN_TRY(
-          upload(pairs.z_shifted, state_->d_z_shifted, "z_shifted"));
-      state_->ura_key = ura_key.str();
-    }
-
-    if (geometry_changed) {
-      HOLOSCAN_LOG_WARN(
-          "ESPRITEstimatorOp: unseen array_geometry override; revalidating "
-          "the URA dual-invariance pairs");
-    }
-    if (smoothing_changed) {
-      HOLOSCAN_LOG_WARN(
-          "ESPRITEstimatorOp: spatial smoothing override changes the ESPRIT "
-          "aperture and derived subarray pairs");
-    }
-
-    const int64_t model_order_cap = std::min(
-        {effective_max_sources, state_->ura_y_pairs, state_->ura_z_pairs,
-         estimation_channels - 1});
-    const int64_t workspace_dim = std::max<int64_t>(model_order_cap, 1);
-    auto covariance =
-        state_->covariance
-            ? state_->covariance
-            : make_device_tensor(
-                  {num_items, estimation_channels, estimation_channels},
-                  cplx_dtype);
-    auto eigenvectors =
-        state_->eigenvectors
-            ? state_->eigenvectors
-            : make_device_tensor(
-                  {num_items, estimation_channels, estimation_channels},
-                  cplx_dtype);
-    auto valid_counts = state_->valid_counts
-                            ? state_->valid_counts
-                            : make_device_tensor({num_items}, i64_dtype);
-    auto model_order = state_->model_order
-                           ? state_->model_order
-                           : make_device_tensor({num_items}, i32_dtype);
-    std::array<std::shared_ptr<holoscan::Tensor>, 6> local_workspace;
-    if (!state_->matrix_workspace[0]) {
-      for (auto& workspace : local_workspace) {
-        workspace = make_device_tensor(
-            {num_items, workspace_dim, workspace_dim}, cplx_dtype);
-      }
-    }
-    const auto& workspace =
-        state_->matrix_workspace[0] ? state_->matrix_workspace
-                                    : local_workspace;
-    const auto& psi_y = workspace[0];
-    const auto& psi_z = workspace[1];
-    const auto& z_ws = workspace[2];
-    const auto& q_ws = workspace[3];
-    const auto& r_ws = workspace[4];
-    const auto& tmp_ws = workspace[5];
-
-    HOLOSCAN_TRY(auto cov_ptr, writable_ptr(*covariance, "covariance"));
-    HOLOSCAN_TRY(auto evec_ptr, writable_ptr(*eigenvectors, "eigenvectors"));
-    HOLOSCAN_TRY(auto vc_ptr, writable_ptr(*valid_counts, "valid_counts"));
-    HOLOSCAN_TRY(auto mo_ptr, writable_ptr(*model_order, "model_order"));
-    HOLOSCAN_TRY(auto psi_y_ptr, writable_ptr(*psi_y, "psi_y"));
-    HOLOSCAN_TRY(auto psi_z_ptr, writable_ptr(*psi_z, "psi_z"));
-    HOLOSCAN_TRY(auto z_ptr, writable_ptr(*z_ws, "z_ws"));
-    HOLOSCAN_TRY(auto q_ptr, writable_ptr(*q_ws, "q_ws"));
-    HOLOSCAN_TRY(auto r_ptr, writable_ptr(*r_ws, "r_ws"));
-    HOLOSCAN_TRY(auto tmp_ptr, writable_ptr(*tmp_ws, "tmp_ws"));
-
-    auto aoa_loan = aoa_estimates.allocate_tensor(
-        TensorLoanRequest{.shape = aoa_shape, .dtype = out_dtype});
-    if (!aoa_loan) {
-      return make_unexpected(std::move(aoa_loan).error());
-    }
-    auto doa_loan = doa_multi.allocate_tensor(
-        TensorLoanRequest{.shape = doa_shape, .dtype = out_dtype});
-    if (!doa_loan) {
-      return make_unexpected(std::move(doa_loan).error());
-    }
-    auto cnt_loan = source_count.allocate_tensor(
-        TensorLoanRequest{.shape = count_shape, .dtype = i32_dtype});
-    if (!cnt_loan) {
-      return make_unexpected(std::move(cnt_loan).error());
-    }
-    auto eig_loan = eigenvalues.allocate_tensor(
-        TensorLoanRequest{.shape = eig_shape, .dtype = out_dtype});
-    if (!eig_loan) {
-      return make_unexpected(std::move(eig_loan).error());
-    }
-
-    auto aoa_writer = aoa_loan->write(context.cuda_stream());
-    if (!aoa_writer) {
-      return make_unexpected(std::move(aoa_writer).error());
-    }
-    auto doa_writer = doa_loan->write(context.cuda_stream());
-    if (!doa_writer) {
-      return make_unexpected(std::move(doa_writer).error());
-    }
-    auto cnt_writer = cnt_loan->write(context.cuda_stream());
-    if (!cnt_writer) {
-      return make_unexpected(std::move(cnt_writer).error());
-    }
-    auto eig_writer = eig_loan->write(context.cuda_stream());
-    if (!eig_writer) {
-      return make_unexpected(std::move(eig_writer).error());
-    }
-
-    const double k = kTwoPi / estimation_geometry->wavelength;
-    try {
-      detail::run_esprit_2d_stage<T>(
-          estimation_data, estimation_mask, num_items, estimation_channels,
-          estimation_snapshots, effective_num_sources, effective_pfa,
-          model_order_cap,
-          static_cast<const int32_t*>(state_->d_y_reference->data()),
-          static_cast<const int32_t*>(state_->d_y_shifted->data()),
-          state_->ura_y_pairs,
-          static_cast<const int32_t*>(state_->d_z_reference->data()),
-          static_cast<const int32_t*>(state_->d_z_shifted->data()),
-          state_->ura_z_pairs,
-          workspace_dim, static_cast<T>(k * planar.dy),
-          static_cast<T>(k * planar.dz), static_cast<T>(planar.y_axis[0]),
-          static_cast<T>(planar.y_axis[1]), static_cast<T>(planar.y_axis[2]),
-          static_cast<T>(planar.z_axis[0]), static_cast<T>(planar.z_axis[1]),
-          static_cast<T>(planar.z_axis[2]), static_cast<T>(planar.normal[0]),
-          static_cast<T>(planar.normal[1]), static_cast<T>(planar.normal[2]),
-          *convention,
-          static_cast<cuda::std::complex<T>*>(cov_ptr),
-          static_cast<cuda::std::complex<T>*>(evec_ptr),
-          static_cast<int64_t*>(vc_ptr),
-          static_cast<int32_t*>(mo_ptr),
-          static_cast<T*>(eig_writer->data()),
-          static_cast<cuda::std::complex<T>*>(psi_y_ptr),
-          static_cast<cuda::std::complex<T>*>(psi_z_ptr),
-          static_cast<cuda::std::complex<T>*>(z_ptr),
-          static_cast<cuda::std::complex<T>*>(q_ptr),
-          static_cast<cuda::std::complex<T>*>(r_ptr),
-          static_cast<cuda::std::complex<T>*>(tmp_ptr),
-          static_cast<T*>(aoa_writer->data()),
-          static_cast<T*>(doa_writer->data()), effective_max_sources,
-          static_cast<int32_t*>(cnt_writer->data()), stream);
-      check_cuda("ESPRIT 2-D stage", kOpName);
-    } catch (const std::runtime_error& e) {
-      return fail_runtime(e.what());
-    }
-
-    if (effective_num_sources < 0 && mask_ptr == nullptr &&
-        estimation_snapshots < estimation_channels &&
-        !state_->warned_rank_deficient) {
-      HOLOSCAN_LOG_WARN(
-          "ESPRITEstimatorOp: num_sources=auto with fewer snapshots than "
-          "channels; falling back to one source");
-      state_->warned_rank_deficient = true;
-    }
-
-    auto aoa_committed = std::move(*aoa_writer).commit();
-    if (!aoa_committed) {
-      return make_unexpected(std::move(aoa_committed).error());
-    }
-    auto doa_committed = std::move(*doa_writer).commit();
-    if (!doa_committed) {
-      return make_unexpected(std::move(doa_committed).error());
-    }
-    auto cnt_committed = std::move(*cnt_writer).commit();
-    if (!cnt_committed) {
-      return make_unexpected(std::move(cnt_committed).error());
-    }
-    auto eig_committed = std::move(*eig_writer).commit();
-    if (!eig_committed) {
-      return make_unexpected(std::move(eig_committed).error());
-    }
-
-    const EmitOptions emit_opts{.capture_time = context.activation_time()};
-    auto aoa_emitted = aoa_estimates.emit(std::move(*aoa_loan), emit_opts);
-    if (!aoa_emitted) {
-      return make_unexpected(std::move(aoa_emitted).error());
-    }
-    // doa_multi, source_count and eigenvalues are optional/always
-    // (OPERATOR_API.md): all three come from work the primary outputs need
-    // anyway, so an unwired sink saves nothing and is not an error.
-    (void)doa_multi.emit(std::move(*doa_loan), emit_opts);
-    (void)source_count.emit(std::move(*cnt_loan), emit_opts);
-    (void)eigenvalues.emit(std::move(*eig_loan), emit_opts);
-
-    seed_angle_convention_after_emit();
-    retained_snapshot_ = std::move(snap);
-    if (maybe_valid.has_value()) {
-      retained_is_valid_ = std::move(*maybe_valid);
-    }
-    return {};
+  // 5. Dispatch the geometry-specific algorithm. Auto URA uses two invariance
+  // axes and pairs them; all explicit or linear cases use one subarray pair.
+  if (planar.is_ura && plan.stage.subarray_spec.is_auto()) {
+    HOLOSCAN_TRY(
+        auto outputs,
+        execute_esprit_auto_ura(
+            *state_, plan, estimation, planar, *convention,
+            geometry_changed, aoa_estimates, doa_multi, source_count,
+            eigenvalues, context, stream));
+    HOLOSCAN_TRY(
+        commit_and_publish_esprit_outputs(
+            aoa_estimates, doa_multi, source_count, eigenvalues,
+            context, std::move(outputs)));
+  } else {
+    HOLOSCAN_TRY(
+        auto outputs,
+        execute_esprit_shift_invariant_1d(
+            *state_, plan, estimation, *convention, geometry_changed,
+            aoa_estimates, doa_multi, source_count, eigenvalues, context,
+            stream));
+    HOLOSCAN_TRY(
+        commit_and_publish_esprit_outputs(
+            aoa_estimates, doa_multi, source_count, eigenvalues,
+            context, std::move(outputs)));
   }
 
-  const std::string current_pair_key =
-      pair_key(*estimation_geometry, requested_pair);
-  if (current_pair_key != state_->subarray_key) {
-    try {
-      state_->subarray_plan = build_shift_invariant_subarray_plan(
-          *estimation_geometry, requested_pair);
-    } catch (const std::invalid_argument& e) {
-      return fail_invalid(e.what());
-    } catch (const std::runtime_error& e) {
-      return fail_runtime(e.what());
-    }
-    state_->subarray_key = current_pair_key;
-    const int64_t pair_size = static_cast<int64_t>(
-        state_->subarray_plan.pair.reference_indices.size());
-    state_->d_reference_indices =
-        make_device_tensor({pair_size}, DLDataType{kDLInt, 32, 1});
-    state_->d_shifted_indices =
-        make_device_tensor({pair_size}, DLDataType{kDLInt, 32, 1});
-    std::vector<int32_t> reference(static_cast<size_t>(pair_size));
-    std::vector<int32_t> shifted(static_cast<size_t>(pair_size));
-    for (int64_t index = 0; index < pair_size; ++index) {
-      reference[static_cast<size_t>(index)] = static_cast<int32_t>(
-          state_->subarray_plan.pair.reference_indices[
-              static_cast<size_t>(index)]);
-      shifted[static_cast<size_t>(index)] = static_cast<int32_t>(
-          state_->subarray_plan.pair.shifted_indices[
-              static_cast<size_t>(index)]);
-    }
-    HOLOSCAN_TRY(auto ref_ptr,
-                 writable_ptr(*state_->d_reference_indices,
-                              "reference_indices"));
-    HOLOSCAN_TRY(auto sh_ptr,
-                 writable_ptr(*state_->d_shifted_indices,
-                              "shifted_indices"));
-    if (cudaMemcpyAsync(ref_ptr, reference.data(),
-                        reference.size() * sizeof(int32_t),
-                        cudaMemcpyHostToDevice, stream) != cudaSuccess ||
-        cudaMemcpyAsync(sh_ptr, shifted.data(),
-                        shifted.size() * sizeof(int32_t),
-                        cudaMemcpyHostToDevice, stream) != cudaSuccess) {
-      return fail_runtime(
-          "ESPRITEstimatorOp: subarray index upload failed");
-    }
-  }
-
-  const int64_t pair_size = static_cast<int64_t>(
-      state_->subarray_plan.pair.reference_indices.size());
-  if (effective_num_sources >= 0 && effective_num_sources > pair_size) {
-    return fail_invalid(
-        "ESPRITEstimatorOp: num_sources must not exceed the number of "
-        "corresponding subarray elements");
-  }
-  if (effective_num_sources >= estimation_channels) {
-    return fail_invalid(
-        "ESPRITEstimatorOp: num_sources must leave at least one "
-        "noise-subspace dimension");
-  }
-  if (geometry_changed) {
-    HOLOSCAN_LOG_WARN(
-        "ESPRITEstimatorOp: unseen array_geometry override; "
-        "revalidating the shift-invariant subarray pair");
-  }
-  if (smoothing_changed) {
-    HOLOSCAN_LOG_WARN(
-        "ESPRITEstimatorOp: spatial smoothing override changes the ESPRIT "
-        "aperture and derived subarray pair");
-  }
-
-  const int64_t model_order_cap =
-      std::min(effective_max_sources, pair_size);
-  const int64_t workspace_dim = std::max<int64_t>(model_order_cap, 1);
-  auto covariance =
-      state_->covariance
-          ? state_->covariance
-          : make_device_tensor(
-                {num_items, estimation_channels, estimation_channels},
-                cplx_dtype);
-  auto eigenvectors =
-      state_->eigenvectors
-          ? state_->eigenvectors
-          : make_device_tensor(
-                {num_items, estimation_channels, estimation_channels},
-                cplx_dtype);
-  auto valid_counts = state_->valid_counts
-                          ? state_->valid_counts
-                          : make_device_tensor({num_items}, i64_dtype);
-  auto model_order = state_->model_order
-                         ? state_->model_order
-                         : make_device_tensor({num_items}, i32_dtype);
-  auto matrix_workspace =
-      state_->matrix_workspace[0]
-          ? state_->matrix_workspace[0]
-          : make_device_tensor(
-                {num_items, workspace_dim, workspace_dim}, cplx_dtype);
-  auto q_workspace =
-      state_->matrix_workspace[1]
-          ? state_->matrix_workspace[1]
-          : make_device_tensor(
-                {num_items, workspace_dim, workspace_dim}, cplx_dtype);
-  auto r_workspace =
-      state_->matrix_workspace[2]
-          ? state_->matrix_workspace[2]
-          : make_device_tensor(
-                {num_items, workspace_dim, workspace_dim}, cplx_dtype);
-
-  HOLOSCAN_TRY(auto cov_ptr, writable_ptr(*covariance, "covariance"));
-  HOLOSCAN_TRY(auto evec_ptr, writable_ptr(*eigenvectors, "eigenvectors"));
-  HOLOSCAN_TRY(auto vc_ptr, writable_ptr(*valid_counts, "valid_counts"));
-  HOLOSCAN_TRY(auto mo_ptr, writable_ptr(*model_order, "model_order"));
-  HOLOSCAN_TRY(auto mat_ptr, writable_ptr(*matrix_workspace, "matrix_ws"));
-  HOLOSCAN_TRY(auto q_ptr, writable_ptr(*q_workspace, "q_ws"));
-  HOLOSCAN_TRY(auto r_ptr, writable_ptr(*r_workspace, "r_ws"));
-
-  auto aoa_loan = aoa_estimates.allocate_tensor(
-      TensorLoanRequest{.shape = aoa_shape, .dtype = out_dtype});
-  if (!aoa_loan) {
-    return make_unexpected(std::move(aoa_loan).error());
-  }
-  auto doa_loan = doa_multi.allocate_tensor(
-      TensorLoanRequest{.shape = doa_shape, .dtype = out_dtype});
-  if (!doa_loan) {
-    return make_unexpected(std::move(doa_loan).error());
-  }
-  auto cnt_loan = source_count.allocate_tensor(
-      TensorLoanRequest{.shape = count_shape, .dtype = i32_dtype});
-  if (!cnt_loan) {
-    return make_unexpected(std::move(cnt_loan).error());
-  }
-  auto eig_loan = eigenvalues.allocate_tensor(
-      TensorLoanRequest{.shape = eig_shape, .dtype = out_dtype});
-  if (!eig_loan) {
-    return make_unexpected(std::move(eig_loan).error());
-  }
-
-  auto aoa_writer = aoa_loan->write(context.cuda_stream());
-  if (!aoa_writer) {
-    return make_unexpected(std::move(aoa_writer).error());
-  }
-  auto doa_writer = doa_loan->write(context.cuda_stream());
-  if (!doa_writer) {
-    return make_unexpected(std::move(doa_writer).error());
-  }
-  auto cnt_writer = cnt_loan->write(context.cuda_stream());
-  if (!cnt_writer) {
-    return make_unexpected(std::move(cnt_writer).error());
-  }
-  auto eig_writer = eig_loan->write(context.cuda_stream());
-  if (!eig_writer) {
-    return make_unexpected(std::move(eig_writer).error());
-  }
-
-  try {
-    detail::run_esprit_stage<T>(
-        estimation_data, estimation_mask, num_items, estimation_channels,
-        estimation_snapshots, effective_num_sources, effective_pfa,
-        model_order_cap,
-        static_cast<const int32_t*>(state_->d_reference_indices->data()),
-        static_cast<const int32_t*>(state_->d_shifted_indices->data()),
-        pair_size,
-        workspace_dim,
-        static_cast<T>(kTwoPi * state_->subarray_plan.spacing /
-                       estimation_geometry->wavelength),
-        static_cast<T>(state_->subarray_plan.axis[0]),
-        static_cast<T>(state_->subarray_plan.axis[1]),
-        static_cast<T>(state_->subarray_plan.axis[2]),
-        static_cast<T>(state_->subarray_plan.broadside[0]),
-        static_cast<T>(state_->subarray_plan.broadside[1]),
-        static_cast<T>(state_->subarray_plan.broadside[2]),
-        *convention,
-        static_cast<cuda::std::complex<T>*>(cov_ptr),
-        static_cast<cuda::std::complex<T>*>(evec_ptr),
-        static_cast<int64_t*>(vc_ptr),
-        static_cast<int32_t*>(mo_ptr),
-        static_cast<T*>(eig_writer->data()),
-        static_cast<cuda::std::complex<T>*>(mat_ptr),
-        static_cast<cuda::std::complex<T>*>(q_ptr),
-        static_cast<cuda::std::complex<T>*>(r_ptr),
-        static_cast<T*>(aoa_writer->data()),
-        static_cast<T*>(doa_writer->data()), effective_max_sources,
-        static_cast<int32_t*>(cnt_writer->data()), stream);
-    check_cuda("ESPRIT stage", kOpName);
-  } catch (const std::runtime_error& e) {
-    return fail_runtime(e.what());
-  }
-
-  if (effective_num_sources < 0 && mask_ptr == nullptr &&
-      estimation_snapshots < estimation_channels &&
-      !state_->warned_rank_deficient) {
-    HOLOSCAN_LOG_WARN(
-        "ESPRITEstimatorOp: num_sources=auto with fewer snapshots than "
-        "channels; falling back to one source");
-    state_->warned_rank_deficient = true;
-  }
-
-  auto aoa_committed = std::move(*aoa_writer).commit();
-  if (!aoa_committed) {
-    return make_unexpected(std::move(aoa_committed).error());
-  }
-  auto doa_committed = std::move(*doa_writer).commit();
-  if (!doa_committed) {
-    return make_unexpected(std::move(doa_committed).error());
-  }
-  auto cnt_committed = std::move(*cnt_writer).commit();
-  if (!cnt_committed) {
-    return make_unexpected(std::move(cnt_committed).error());
-  }
-  auto eig_committed = std::move(*eig_writer).commit();
-  if (!eig_committed) {
-    return make_unexpected(std::move(eig_committed).error());
-  }
-
-  const EmitOptions emit_opts{.capture_time = context.activation_time()};
-  auto aoa_emitted = aoa_estimates.emit(std::move(*aoa_loan), emit_opts);
-  if (!aoa_emitted) {
-    return make_unexpected(std::move(aoa_emitted).error());
-  }
-  // doa_multi, source_count and eigenvalues are optional/always
-  // (OPERATOR_API.md): all three come from work the primary outputs need
-  // anyway, so an unwired sink saves nothing and is not an error.
-  (void)doa_multi.emit(std::move(*doa_loan), emit_opts);
-  (void)source_count.emit(std::move(*cnt_loan), emit_opts);
-  (void)eigenvalues.emit(std::move(*eig_loan), emit_opts);
-
+  // 6. Publication succeeded: lock the static convention and retain input
+  // storage until asynchronous work from this tick has completed.
   seed_angle_convention_after_emit();
   retained_snapshot_ = std::move(snap);
   if (maybe_valid.has_value()) {

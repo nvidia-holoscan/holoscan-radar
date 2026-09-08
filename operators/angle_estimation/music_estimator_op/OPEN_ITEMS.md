@@ -1,31 +1,18 @@
 # MUSICEstimatorOp — open items
 
-The first HSDK 5 cleanup pass covers optional `is_valid`, scalar live
-overrides, optional outputs, constructor-created core workspace, complete
-steering artifacts, encapsulated effective-input preparation, and production
-Graph performance timing.
+## Cross-item steering-manifold reuse
 
-## Remaining workspace and performance cleanup
+After the noise-subspace projector was conditionally staged in shared memory,
+profiling identified per-beam steering-manifold reads as the remaining
+`music_reduce_kernel` L2-bandwidth pressure. The manifold is immutable for a
+cached geometry and scan grid and is reused by every item, but the current
+kernel independently reads it while evaluating each item.
 
-- Reuse spatial-smoothing gather buffers rather than allocating them on each
-  smoothed tick.
-- Add isolated production-contract timing for geometry, both scan grids,
-  spatial smoothing, `num_sources`, and `source_count_pfa`; only
-  `max_sources` is timed now.
-
-## Algorithm and performance follow-ups
-
-- The shared EFT source-count helper uses a first-order Gaussian threshold
-  rather than Monte-Carlo-calibrated η_P. `source_count_pfa` is a target, not
-  a guaranteed false-alarm rate. Rank-deficient inputs fall back to one source.
-- `music_reduce_kernel` remains L2-bound on per-beam manifold reads; further
-  cross-item manifold reuse is deferred.
-- The performance harness fixes `num_sources = 1` for determinism. A model-order
-  sweep remains open.
-- `kMusicDenomFloor<T> = 1e-6` remains a first-cut numerical floor.
-
-## Python bindings
-
-The HSDK 4.x pybind trampoline is not built while
-`HOLOSCAN_RADAR_BUILD_PYTHON=OFF`. Porting it remains deferred under
-`docs/planning/HSDK5_PORT.md`.
+Further optimization is deferred because sharing manifold tiles across items
+changes the kernel mapping and may trade lower L2 traffic for additional
+shared-memory use, synchronization, register pressure, or reduced occupancy.
+Before changing the kernel, re-profile current HSDK 5 builds on representative
+small and large scenarios. Compare candidate item/beam tilings against the
+existing occupancy-gated projector staging, and retain the change only if it
+improves steady-state latency without regressing smaller grids or either
+precision.

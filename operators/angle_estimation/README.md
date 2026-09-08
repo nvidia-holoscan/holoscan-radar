@@ -119,9 +119,9 @@ stage would occupy the same slot.
   `Pn` is now staged in shared memory, gated to grids of ≥1 occupancy wave —
   another -18.7% at `xl` (21.0→17.2 ms) with no `lg` regression, leaving MUSIC
   faster than MVDR at every measured size. See
-  `music_estimator_op/OPEN_ITEMS.md` (EFT fidelity note, denominator-floor
-  rationale, the full ncu-driven perf writeup incl. a recorded negative result,
-  and the `nsys`-in-a-sandbox workaround).
+  [`OPEN_ITEMS.md`](OPEN_ITEMS.md) for the shared EFT fidelity item and
+  `music_estimator_op/OPEN_ITEMS.md` for MUSIC-specific numerical and
+  performance follow-ups.
 - **`RootMUSICEstimatorOp` (checklist-complete, C++ and Python — dpc):**
   gridless Root-MUSIC on a **ULA or filled URA**. A ULA resolves azimuth
   (single-axis cone, one polynomial); a URA resolves native `(az, el)` via

@@ -401,6 +401,345 @@ expected<MVDREstimationInput<T>, Error> prepare_smoothed_input(
   return result;
 }
 
+expected<const unsigned char*, Error> prepare_mvdr_mask(
+    std::optional<Tensor>& maybe_valid, int64_t num_items,
+    int64_t num_snapshots) {
+  if (!maybe_valid.has_value()) {
+    return nullptr;
+  }
+  const DLDataType dtype = maybe_valid->dtype();
+  const bool valid_dtype =
+      (dtype.code == kDLBool || dtype.code == kDLUInt) &&
+      dtype.bits == 8 && dtype.lanes == 1;
+  if (!valid_dtype) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument,
+              "MVDREstimatorOp: is_valid must have dtype bool or uint8"});
+  }
+  const auto& shape = maybe_valid->shape();
+  if (shape.size() != 2 || shape[0] != num_items ||
+      shape[1] != num_snapshots) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument,
+              "MVDREstimatorOp: is_valid must have shape "
+              "(num_items, num_snapshots) matching snapshot"});
+  }
+  try {
+    require_cuda_accessible(*maybe_valid, "is_valid", kOpName);
+    require_contiguous(*maybe_valid, "is_valid", kOpName);
+  } catch (const std::invalid_argument& error) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, error.what()});
+  }
+  return static_cast<const unsigned char*>(maybe_valid->data());
+}
+
+template <typename T>
+expected<void, Error> emit_empty_mvdr_outputs(
+    Output<Tensor>& aoa_port, Output<Tensor>& spectrum_port,
+    Output<Tensor>& doa_port, Output<Tensor>& count_port,
+    Output<Tensor>& eigenvalues_port, LatchedOutput& doa_latch,
+    LatchedOutput& count_latch, LatchedOutput& eigenvalues_latch,
+    ExecutionContext& context, const MVDRStagePlan& plan) {
+  const DLDataType output_dtype = real_dtype<T>();
+  const DLDataType count_dtype{kDLInt, 32, 1};
+  const std::vector<int64_t> eigenvalues_shape{
+      plan.num_items, plan.num_channels};
+  auto noop = [](void*, std::size_t) -> expected<void, Error> {
+    return {};
+  };
+
+  HOLOSCAN_TRY(auto aoa_loan,
+               prepare_device_tensor(aoa_port, context, plan.aoa_shape,
+                                     output_dtype, noop));
+  HOLOSCAN_TRY(auto spectrum_loan,
+               prepare_device_tensor(spectrum_port, context,
+                                     plan.spectrum_shape, output_dtype, noop));
+  std::optional<TensorOutputLoan> doa_loan;
+  std::optional<TensorOutputLoan> count_loan;
+  std::optional<TensorOutputLoan> eigenvalues_loan;
+  if (doa_latch.active()) {
+    HOLOSCAN_TRY(auto loan,
+                 prepare_device_tensor(doa_port, context, plan.doa_shape,
+                                       output_dtype, noop));
+    doa_loan.emplace(std::move(loan));
+  }
+  if (count_latch.active()) {
+    HOLOSCAN_TRY(auto loan,
+                 prepare_device_tensor(count_port, context, plan.count_shape,
+                                       count_dtype, noop));
+    count_loan.emplace(std::move(loan));
+  }
+  if (eigenvalues_latch.active()) {
+    HOLOSCAN_TRY(auto loan,
+                 prepare_device_tensor(
+                     eigenvalues_port, context, eigenvalues_shape,
+                     output_dtype, noop));
+    eigenvalues_loan.emplace(std::move(loan));
+  }
+
+  HOLOSCAN_TRY(
+      emit_prepared_tensor(aoa_port, context, std::move(aoa_loan)));
+  (void)emit_prepared_tensor(
+      spectrum_port, context, std::move(spectrum_loan));
+  if (doa_loan.has_value()) {
+    doa_latch.emit(doa_port, context, std::move(*doa_loan),
+                   "MVDREstimatorOp.doa_multi");
+  }
+  if (count_loan.has_value()) {
+    count_latch.emit(count_port, context, std::move(*count_loan),
+                     "MVDREstimatorOp.source_count");
+  }
+  if (eigenvalues_loan.has_value()) {
+    eigenvalues_latch.emit(
+        eigenvalues_port, context, std::move(*eigenvalues_loan),
+        "MVDREstimatorOp.eigenvalues");
+  }
+  return {};
+}
+
+template <typename T>
+expected<std::shared_ptr<MVDRSteeringArtifact>, Error>
+prepare_mvdr_steering(
+    MVDRRuntimeState<T>& state, const ArrayGeometry& geometry,
+    const AngleConvention& convention, const std::vector<double>& azimuth,
+    const std::vector<double>& elevation, int64_t num_az, int64_t num_el,
+    cudaStream_t stream) {
+  const DLDataType output_dtype = real_dtype<T>();
+  const std::string cache_key = steering_cache_key(
+      geometry, convention, azimuth, elevation, WindowSpec{});
+  const std::shared_ptr<MVDRSteeringArtifact>& steering =
+      state.steering_cache.get_or_build(
+          cache_key, "steering manifold and scan grids", [&] {
+            auto artifact = std::make_shared<MVDRSteeringArtifact>();
+            artifact->manifold = build_steering_weights_device<T>(
+                geometry, convention, azimuth, elevation, WindowSpec{},
+                BeamOrder::kElMajor, SteeringLayout::kBeamMajor,
+                /*conjugate=*/false, stream);
+            const auto azimuth_host = cast_vector<T>(azimuth);
+            const auto elevation_host = cast_vector<T>(elevation);
+            artifact->az_grid =
+                make_device_tensor({num_az}, output_dtype);
+            artifact->el_grid =
+                make_device_tensor({num_el}, output_dtype);
+            auto azimuth_mut = artifact->az_grid->mutable_data();
+            auto elevation_mut = artifact->el_grid->mutable_data();
+            if (!azimuth_mut || !elevation_mut ||
+                cudaMemcpyAsync(
+                    *azimuth_mut, azimuth_host.data(),
+                    azimuth_host.size() * sizeof(T), cudaMemcpyHostToDevice,
+                    stream) != cudaSuccess ||
+                cudaMemcpyAsync(
+                    *elevation_mut, elevation_host.data(),
+                    elevation_host.size() * sizeof(T), cudaMemcpyHostToDevice,
+                    stream) != cudaSuccess) {
+              return std::shared_ptr<MVDRSteeringArtifact>{};
+            }
+            return artifact;
+          });
+  if (!steering || !steering->manifold || !steering->az_grid ||
+      !steering->el_grid) {
+    return make_unexpected(
+        Error{ErrorCode::kFailure,
+              "MVDREstimatorOp: steering artifact build failed"});
+  }
+  return steering;
+}
+
+template <typename T>
+struct MVDRPreparedWorkspace {
+  std::shared_ptr<holoscan::Tensor> covariance;
+  std::shared_ptr<holoscan::Tensor> inverse;
+  std::shared_ptr<holoscan::Tensor> valid_counts;
+  cuda::std::complex<T>* covariance_ptr{nullptr};
+  cuda::std::complex<T>* inverse_ptr{nullptr};
+  int64_t* valid_counts_ptr{nullptr};
+};
+
+template <typename T>
+expected<MVDRPreparedWorkspace<T>, Error> prepare_mvdr_workspace(
+    MVDRRuntimeState<T>& state, int64_t num_items, int64_t num_channels) {
+  const DLDataType complex_type = complex_dtype<T>();
+  const DLDataType int64_type{kDLInt, 64, 1};
+  MVDRPreparedWorkspace<T> workspace;
+  workspace.covariance =
+      state.covariance
+          ? state.covariance
+          : make_device_tensor(
+                {num_items, num_channels, num_channels}, complex_type);
+  workspace.inverse =
+      state.inverse
+          ? state.inverse
+          : make_device_tensor(
+                {num_items, num_channels, num_channels}, complex_type);
+  workspace.valid_counts =
+      state.valid_counts
+          ? state.valid_counts
+          : make_device_tensor({num_items}, int64_type);
+  HOLOSCAN_TRY(auto covariance_ptr,
+               writable_ptr(*workspace.covariance, "cov"));
+  HOLOSCAN_TRY(auto inverse_ptr,
+               writable_ptr(*workspace.inverse, "rinv"));
+  HOLOSCAN_TRY(auto valid_counts_ptr,
+               writable_ptr(*workspace.valid_counts, "k_counts"));
+  workspace.covariance_ptr =
+      static_cast<cuda::std::complex<T>*>(covariance_ptr);
+  workspace.inverse_ptr =
+      static_cast<cuda::std::complex<T>*>(inverse_ptr);
+  workspace.valid_counts_ptr = static_cast<int64_t*>(valid_counts_ptr);
+  return workspace;
+}
+
+struct MVDRPreparedOutputs {
+  std::optional<TensorOutputLoan> aoa_loan;
+  std::optional<TensorOutputLoan> spectrum_loan;
+  std::optional<TensorOutputLoan> doa_loan;
+  std::optional<TensorOutputLoan> count_loan;
+  std::optional<TensorOutputLoan> eigenvalues_loan;
+  std::optional<TensorOutputWriteGuard> aoa_writer;
+  std::optional<TensorOutputWriteGuard> spectrum_writer;
+  std::optional<TensorOutputWriteGuard> doa_writer;
+  std::optional<TensorOutputWriteGuard> count_writer;
+  std::optional<TensorOutputWriteGuard> eigenvalues_writer;
+};
+
+template <typename T>
+expected<MVDRPreparedOutputs, Error> prepare_mvdr_outputs(
+    Output<Tensor>& aoa_port, Output<Tensor>& spectrum_port,
+    Output<Tensor>& doa_port, Output<Tensor>& count_port,
+    Output<Tensor>& eigenvalues_port, ExecutionContext& context,
+    const MVDRStagePlan& plan, int64_t estimation_channels,
+    bool want_peaks, bool want_eigenvalues) {
+  const DLDataType output_dtype = real_dtype<T>();
+  const DLDataType count_dtype{kDLInt, 32, 1};
+  const std::vector<int64_t> eigenvalues_shape{
+      plan.num_items, estimation_channels};
+  MVDRPreparedOutputs outputs;
+
+  HOLOSCAN_TRY(auto aoa,
+               aoa_port.allocate_tensor(TensorLoanRequest{
+                   .shape = plan.aoa_shape, .dtype = output_dtype}));
+  outputs.aoa_loan.emplace(std::move(aoa));
+  HOLOSCAN_TRY(auto spectrum,
+               spectrum_port.allocate_tensor(TensorLoanRequest{
+                   .shape = plan.spectrum_shape, .dtype = output_dtype}));
+  outputs.spectrum_loan.emplace(std::move(spectrum));
+  if (want_peaks) {
+    HOLOSCAN_TRY(auto doa,
+                 doa_port.allocate_tensor(TensorLoanRequest{
+                     .shape = plan.doa_shape, .dtype = output_dtype}));
+    outputs.doa_loan.emplace(std::move(doa));
+    HOLOSCAN_TRY(auto count,
+                 count_port.allocate_tensor(TensorLoanRequest{
+                     .shape = plan.count_shape, .dtype = count_dtype}));
+    outputs.count_loan.emplace(std::move(count));
+  }
+  if (want_eigenvalues) {
+    HOLOSCAN_TRY(auto eigenvalues,
+                 eigenvalues_port.allocate_tensor(TensorLoanRequest{
+                     .shape = eigenvalues_shape, .dtype = output_dtype}));
+    outputs.eigenvalues_loan.emplace(std::move(eigenvalues));
+  }
+
+  HOLOSCAN_TRY(auto aoa_writer,
+               outputs.aoa_loan->write(context.cuda_stream()));
+  outputs.aoa_writer.emplace(std::move(aoa_writer));
+  HOLOSCAN_TRY(auto spectrum_writer,
+               outputs.spectrum_loan->write(context.cuda_stream()));
+  outputs.spectrum_writer.emplace(std::move(spectrum_writer));
+  if (want_peaks) {
+    HOLOSCAN_TRY(auto doa_writer,
+                 outputs.doa_loan->write(context.cuda_stream()));
+    outputs.doa_writer.emplace(std::move(doa_writer));
+    HOLOSCAN_TRY(auto count_writer,
+                 outputs.count_loan->write(context.cuda_stream()));
+    outputs.count_writer.emplace(std::move(count_writer));
+  }
+  if (want_eigenvalues) {
+    HOLOSCAN_TRY(auto eigenvalues_writer,
+                 outputs.eigenvalues_loan->write(context.cuda_stream()));
+    outputs.eigenvalues_writer.emplace(std::move(eigenvalues_writer));
+  }
+  return outputs;
+}
+
+template <typename T>
+expected<void, Error> execute_mvdr(
+    const MVDREstimationInput<T>& estimation, const MVDRStagePlan& plan,
+    const MVDRSteeringArtifact& steering,
+    const MVDRPreparedWorkspace<T>& workspace,
+    MVDRPreparedOutputs& outputs, cudaStream_t stream) {
+  try {
+    detail::run_mvdr_stage<T>(
+        estimation.data, estimation.mask, plan.num_items,
+        estimation.num_channels, estimation.num_snapshots,
+        plan.stage.diagonal_loading,
+        static_cast<const cuda::std::complex<T>*>(
+            steering.manifold->data()),
+        plan.num_az, plan.num_el,
+        static_cast<const T*>(steering.az_grid->data()),
+        static_cast<const T*>(steering.el_grid->data()),
+        plan.stage.max_sources, workspace.covariance_ptr,
+        workspace.inverse_ptr, workspace.valid_counts_ptr,
+        static_cast<T*>(outputs.spectrum_writer->data()),
+        static_cast<T*>(outputs.aoa_writer->data()),
+        outputs.eigenvalues_writer
+            ? static_cast<T*>(outputs.eigenvalues_writer->data())
+            : nullptr,
+        outputs.doa_writer
+            ? static_cast<T*>(outputs.doa_writer->data())
+            : nullptr,
+        outputs.count_writer
+            ? static_cast<int32_t*>(outputs.count_writer->data())
+            : nullptr,
+        stream);
+    check_cuda("mvdr stage", kOpName);
+  } catch (const std::runtime_error& error) {
+    return fail_runtime(error.what());
+  }
+  return {};
+}
+
+expected<void, Error> publish_mvdr_outputs(
+    Output<Tensor>& aoa_port, Output<Tensor>& spectrum_port,
+    Output<Tensor>& doa_port, Output<Tensor>& count_port,
+    Output<Tensor>& eigenvalues_port, LatchedOutput& doa_latch,
+    LatchedOutput& count_latch, LatchedOutput& eigenvalues_latch,
+    ExecutionContext& context, MVDRPreparedOutputs outputs) {
+  HOLOSCAN_TRY(std::move(*outputs.aoa_writer).commit());
+  HOLOSCAN_TRY(std::move(*outputs.spectrum_writer).commit());
+  if (outputs.doa_writer.has_value()) {
+    HOLOSCAN_TRY(std::move(*outputs.doa_writer).commit());
+  }
+  if (outputs.count_writer.has_value()) {
+    HOLOSCAN_TRY(std::move(*outputs.count_writer).commit());
+  }
+  if (outputs.eigenvalues_writer.has_value()) {
+    HOLOSCAN_TRY(std::move(*outputs.eigenvalues_writer).commit());
+  }
+
+  const EmitOptions emit_options{
+      .capture_time = context.activation_time()};
+  HOLOSCAN_TRY(
+      aoa_port.emit(std::move(*outputs.aoa_loan), emit_options));
+  (void)spectrum_port.emit(
+      std::move(*outputs.spectrum_loan), emit_options);
+  if (outputs.doa_loan.has_value()) {
+    doa_latch.emit(doa_port, context, std::move(*outputs.doa_loan),
+                   "MVDREstimatorOp.doa_multi");
+  }
+  if (outputs.count_loan.has_value()) {
+    count_latch.emit(count_port, context, std::move(*outputs.count_loan),
+                     "MVDREstimatorOp.source_count");
+  }
+  if (outputs.eigenvalues_loan.has_value()) {
+    eigenvalues_latch.emit(
+        eigenvalues_port, context, std::move(*outputs.eigenvalues_loan),
+        "MVDREstimatorOp.eigenvalues");
+  }
+  return {};
+}
+
 }  // namespace
 
 template <typename T>
@@ -505,7 +844,8 @@ Contract MVDREstimatorOp<T>::contract() const {
 
 template <typename T>
 expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
-  // Receive and validate the required trigger tensor.
+  // 1. Receive the snapshot cube and resolve this tick's live configuration
+  // into one validated plan with all output shapes.
   HOLOSCAN_TRY(auto snap, receive_tensor(snapshot, kOpName));
   try {
     require_cuda_accessible(snap, "snapshot", kOpName);
@@ -515,8 +855,6 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
     return fail_invalid(error.what());
   }
 
-  // Resolve this tick's Exact overrides, then validate named axes and derive
-  // output shapes in one immutable plan.
   const MVDRParams& pinned = context.params<MVDRParams>();
   HOLOSCAN_TRY(
       auto stage,
@@ -525,140 +863,46 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
   HOLOSCAN_TRY(
       auto plan,
       build_mvdr_stage_plan(snap, std::move(stage), extents_));
-  auto& geometry = plan.stage.geometry;
-  auto& az = plan.stage.az_angles;
-  auto& el = plan.stage.el_angles;
-  auto& smoothing = plan.stage.spatial_smoothing;
-  const double effective_loading = plan.stage.diagonal_loading;
-  const int64_t effective_max_sources = plan.stage.max_sources;
-  const AngleConvention& convention = plan.stage.convention;
-  const bool forward_backward = plan.stage.forward_backward;
 
-  // Prepare any host-side smoothing-plan replacement without mutating runtime
-  // state until all validation for this tick has succeeded.
+  // 2. Validate tick sidebands and prepare any host-side smoothing-plan
+  // replacement before mutating cached device state.
   const std::string candidate_smoothing_key =
-      smoothing.empty()
+      plan.stage.spatial_smoothing.empty()
           ? std::string{}
-          : spatial_smoothing_key(geometry, smoothing, forward_backward);
+          : spatial_smoothing_key(
+                plan.stage.geometry, plan.stage.spatial_smoothing,
+                plan.stage.forward_backward);
   std::optional<SpatialSmoothingPlan> candidate_smoothing_plan;
-  if (!smoothing.empty() &&
+  if (!plan.stage.spatial_smoothing.empty() &&
       candidate_smoothing_key != state_->smoothing_key) {
     try {
       candidate_smoothing_plan = build_spatial_smoothing_plan(
-          geometry, smoothing, forward_backward);
-    } catch (const std::invalid_argument& e) {
-      return fail_invalid(e.what());
-    } catch (const std::runtime_error& e) {
-      return fail_runtime(e.what());
+          plan.stage.geometry, plan.stage.spatial_smoothing,
+          plan.stage.forward_backward);
+    } catch (const std::invalid_argument& error) {
+      return fail_invalid(error.what());
+    } catch (const std::runtime_error& error) {
+      return fail_runtime(error.what());
     }
   }
 
-  const int64_t num_items = plan.num_items;
-  const int64_t num_channels = plan.num_channels;
-  const int64_t num_snapshots = plan.num_snapshots;
-
-  // Validate the optional same-tick mask against the planned snapshot axes.
   HOLOSCAN_TRY(auto maybe_valid, receive_optional_value(is_valid));
-  const unsigned char* mask_ptr = nullptr;
-  if (maybe_valid.has_value()) {
-    const DLDataType dt = maybe_valid->dtype();
-    const bool ok_dtype = (dt.code == kDLBool || dt.code == kDLUInt) &&
-                          dt.bits == 8 && dt.lanes == 1;
-    if (!ok_dtype) {
-      return fail_invalid(
-          "MVDREstimatorOp: is_valid must have dtype bool or uint8");
-    }
-    const auto& vshape = maybe_valid->shape();
-    if (vshape.size() != 2 || vshape[0] != num_items ||
-        vshape[1] != num_snapshots) {
-      return fail_invalid(
-          "MVDREstimatorOp: is_valid must have shape "
-          "(num_items, num_snapshots) matching snapshot");
-    }
-    try {
-      require_cuda_accessible(*maybe_valid, "is_valid", kOpName);
-      require_contiguous(*maybe_valid, "is_valid", kOpName);
-    } catch (const std::invalid_argument& e) {
-      return fail_invalid(e.what());
-    }
-    mask_ptr = static_cast<const unsigned char*>(maybe_valid->data());
-  }
+  HOLOSCAN_TRY(auto mask_ptr,
+               prepare_mvdr_mask(
+                   maybe_valid, plan.num_items, plan.num_snapshots));
 
-  // Resolve the runtime stream before touching cached device artifacts.
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
     return make_unexpected(Error{ErrorCode::kNotSupported,
                                  "MVDREstimatorOp: no CUDA compute stream"});
   }
 
-  const int64_t num_az = plan.num_az;
-  const int64_t num_el = plan.num_el;
-  const DLDataType out_dtype = real_dtype<T>();
-  const DLDataType cplx_dtype = complex_dtype<T>();
-  const DLDataType i32_dtype{kDLInt, 32, 1};
-  const DLDataType i64_dtype{kDLInt, 64, 1};
-  const auto& aoa_shape = plan.aoa_shape;
-  const auto& spec_shape = plan.spectrum_shape;
-  const auto& doa_shape = plan.doa_shape;
-  const auto& count_shape = plan.count_shape;
-
-  auto emit_empty = [&]() -> expected<void, Error> {
-    // Estimation channel count equals full aperture when smoothing is off
-    // (empty items never exercise the smoothing front-end).
-    // Prepare every loan before any publish so a late allocate/commit
-    // failure cannot leave a sibling port already downstream.
-    const std::vector<int64_t> eig_shape = {num_items, num_channels};
-    auto noop = [](void*, std::size_t) -> expected<void, Error> {
-      return {};
-    };
-    HOLOSCAN_TRY(auto aoa_loan,
-                 prepare_device_tensor(aoa_estimates, context, aoa_shape,
-                                      out_dtype, noop));
-    HOLOSCAN_TRY(auto spec_loan,
-                 prepare_device_tensor(angle_spectrum, context, spec_shape,
-                                      out_dtype, noop));
-    std::optional<TensorOutputLoan> doa_loan;
-    std::optional<TensorOutputLoan> cnt_loan;
-    std::optional<TensorOutputLoan> eig_loan;
-    if (doa_multi_out_.active()) {
-      HOLOSCAN_TRY(auto loan,
-                   prepare_device_tensor(doa_multi, context, doa_shape,
-                                        out_dtype, noop));
-      doa_loan.emplace(std::move(loan));
-    }
-    if (source_count_out_.active()) {
-      HOLOSCAN_TRY(auto loan,
-                   prepare_device_tensor(source_count, context, count_shape,
-                                        i32_dtype, noop));
-      cnt_loan.emplace(std::move(loan));
-    }
-    if (eigenvalues_out_.active()) {
-      HOLOSCAN_TRY(auto loan,
-                   prepare_device_tensor(eigenvalues, context, eig_shape,
-                                        out_dtype, noop));
-      eig_loan.emplace(std::move(loan));
-    }
-    HOLOSCAN_TRY(
-        emit_prepared_tensor(aoa_estimates, context, std::move(aoa_loan)));
-    // angle_spectrum is optional/always (OPERATOR_API.md).
-    (void)emit_prepared_tensor(angle_spectrum, context, std::move(spec_loan));
-    if (doa_loan.has_value()) {
-      doa_multi_out_.emit(doa_multi, context, std::move(*doa_loan),
-                          "MVDREstimatorOp.doa_multi");
-    }
-    if (cnt_loan.has_value()) {
-      source_count_out_.emit(source_count, context, std::move(*cnt_loan),
-                             "MVDREstimatorOp.source_count");
-    }
-    if (eig_loan.has_value()) {
-      eigenvalues_out_.emit(eigenvalues, context, std::move(*eig_loan),
-                            "MVDREstimatorOp.eigenvalues");
-    }
-    return {};
-  };
-
-  if (num_items == 0) {
-    HOLOSCAN_TRY(emit_empty());
+  // 3. Preserve the output contract for an empty item axis without entering
+  // covariance inversion or scan work.
+  if (plan.num_items == 0) {
+    HOLOSCAN_TRY(emit_empty_mvdr_outputs<T>(
+        aoa_estimates, angle_spectrum, doa_multi, source_count, eigenvalues,
+        doa_multi_out_, source_count_out_, eigenvalues_out_, context, plan));
     retained_snapshot_ = std::move(snap);
     if (maybe_valid.has_value()) {
       retained_is_valid_ = std::move(*maybe_valid);
@@ -666,216 +910,48 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
     return {};
   }
 
-  // Prepare the effective covariance input: either the original snapshot or
-  // gathered overlapping looks on the reduced smoothing aperture.
+  // 4. Form the effective covariance input. Spatial smoothing may replace the
+  // original aperture and expand the number of looks.
   HOLOSCAN_TRY(
       auto estimation,
       prepare_smoothed_input(
           *state_, snap, mask_ptr, plan, candidate_smoothing_key,
           std::move(candidate_smoothing_plan), stream));
-  const ArrayGeometry* manifold_geom = estimation.geometry;
-  const int64_t est_channels = estimation.num_channels;
-  const int64_t est_snapshots = estimation.num_snapshots;
-  const cuda::std::complex<T>* est_snapshot = estimation.data;
-  const unsigned char* est_mask = estimation.mask;
 
-  const std::string cache_key =
-      steering_cache_key(*manifold_geom, convention, az, el, WindowSpec{});
-  const std::shared_ptr<MVDRSteeringArtifact>& steering =
-      state_->steering_cache.get_or_build(
-          cache_key, "steering manifold and scan grids", [&] {
-            auto artifact = std::make_shared<MVDRSteeringArtifact>();
-            artifact->manifold = build_steering_weights_device<T>(
-                *manifold_geom, convention, az, el, WindowSpec{},
-                BeamOrder::kElMajor, SteeringLayout::kBeamMajor,
-                /*conjugate=*/false, stream);
-            const auto az_host = cast_vector<T>(az);
-            const auto el_host = cast_vector<T>(el);
-            artifact->az_grid = make_device_tensor({num_az}, out_dtype);
-            artifact->el_grid = make_device_tensor({num_el}, out_dtype);
-            auto az_mut = artifact->az_grid->mutable_data();
-            auto el_mut = artifact->el_grid->mutable_data();
-            if (!az_mut || !el_mut ||
-                cudaMemcpyAsync(*az_mut, az_host.data(),
-                                az_host.size() * sizeof(T),
-                                cudaMemcpyHostToDevice, stream) !=
-                    cudaSuccess ||
-                cudaMemcpyAsync(*el_mut, el_host.data(),
-                                el_host.size() * sizeof(T),
-                                cudaMemcpyHostToDevice, stream) !=
-                    cudaSuccess) {
-              return std::shared_ptr<MVDRSteeringArtifact>{};
-            }
-            return artifact;
-          });
-  if (!steering || !steering->manifold || !steering->az_grid ||
-      !steering->el_grid) {
-    return fail_runtime(
-        "MVDREstimatorOp: steering artifact build failed");
-  }
+  // 5. Prepare immutable steering data, reusable covariance workspace, and
+  // output buffers. Optional diagnostics gate eig and peak-only work.
+  HOLOSCAN_TRY(
+      auto steering,
+      prepare_mvdr_steering<T>(
+          *state_, *estimation.geometry, plan.stage.convention,
+          plan.stage.az_angles, plan.stage.el_angles, plan.num_az,
+          plan.num_el, stream));
+  HOLOSCAN_TRY(
+      auto workspace,
+      prepare_mvdr_workspace<T>(
+          *state_, plan.num_items, estimation.num_channels));
 
-  const std::vector<int64_t> eig_shape = {num_items, est_channels};
-  auto cov = state_->covariance
-                 ? state_->covariance
-                 : make_device_tensor(
-                       {num_items, est_channels, est_channels}, cplx_dtype);
-  auto rinv = state_->inverse
-                  ? state_->inverse
-                  : make_device_tensor(
-                        {num_items, est_channels, est_channels}, cplx_dtype);
-  auto k_counts = state_->valid_counts
-                      ? state_->valid_counts
-                      : make_device_tensor({num_items}, i64_dtype);
-  HOLOSCAN_TRY(auto cov_ptr, writable_ptr(*cov, "cov"));
-  HOLOSCAN_TRY(auto rinv_ptr, writable_ptr(*rinv, "rinv"));
-  HOLOSCAN_TRY(auto k_ptr, writable_ptr(*k_counts, "k_counts"));
-
-  // Allocate the output loans, fill on the runtime stream, then commit/emit.
-  // The latched optional ports (OPERATOR_API.md) drop out of all of it once
-  // known unconsumed: eigenvalues then skips a batched Hermitian eig, and
-  // doa_multi / source_count skip the peak-extraction pass. That one pass
-  // writes both, so the pair drops out only once both have latched.
-  const bool want_eig = eigenvalues_out_.active();
+  const bool want_eigenvalues = eigenvalues_out_.active();
   const bool want_peaks =
       doa_multi_out_.active() || source_count_out_.active();
+  HOLOSCAN_TRY(
+      auto outputs,
+      prepare_mvdr_outputs<T>(
+          aoa_estimates, angle_spectrum, doa_multi, source_count,
+          eigenvalues, context, plan, estimation.num_channels, want_peaks,
+          want_eigenvalues));
 
-  auto aoa_loan = aoa_estimates.allocate_tensor(
-      TensorLoanRequest{.shape = aoa_shape, .dtype = out_dtype});
-  if (!aoa_loan) {
-    return make_unexpected(std::move(aoa_loan).error());
-  }
-  auto spec_loan = angle_spectrum.allocate_tensor(
-      TensorLoanRequest{.shape = spec_shape, .dtype = out_dtype});
-  if (!spec_loan) {
-    return make_unexpected(std::move(spec_loan).error());
-  }
-  std::optional<TensorOutputLoan> doa_loan;
-  std::optional<TensorOutputLoan> cnt_loan;
-  if (want_peaks) {
-    auto doa = doa_multi.allocate_tensor(
-        TensorLoanRequest{.shape = doa_shape, .dtype = out_dtype});
-    if (!doa) {
-      return make_unexpected(std::move(doa).error());
-    }
-    doa_loan.emplace(std::move(*doa));
-    auto cnt = source_count.allocate_tensor(
-        TensorLoanRequest{.shape = count_shape, .dtype = i32_dtype});
-    if (!cnt) {
-      return make_unexpected(std::move(cnt).error());
-    }
-    cnt_loan.emplace(std::move(*cnt));
-  }
-  std::optional<TensorOutputLoan> eig_loan;
-  if (want_eig) {
-    auto eig = eigenvalues.allocate_tensor(
-        TensorLoanRequest{.shape = eig_shape, .dtype = out_dtype});
-    if (!eig) {
-      return make_unexpected(std::move(eig).error());
-    }
-    eig_loan.emplace(std::move(*eig));
-  }
+  // 6. Run covariance → diagonal loading / inversion → Capon scan and
+  // optional diagnostics, then publish outputs in contract order.
+  HOLOSCAN_TRY(
+      execute_mvdr(estimation, plan, *steering, workspace, outputs, stream));
+  HOLOSCAN_TRY(publish_mvdr_outputs(
+      aoa_estimates, angle_spectrum, doa_multi, source_count, eigenvalues,
+      doa_multi_out_, source_count_out_, eigenvalues_out_, context,
+      std::move(outputs)));
 
-  auto aoa_writer = aoa_loan->write(context.cuda_stream());
-  if (!aoa_writer) {
-    return make_unexpected(std::move(aoa_writer).error());
-  }
-  auto spec_writer = spec_loan->write(context.cuda_stream());
-  if (!spec_writer) {
-    return make_unexpected(std::move(spec_writer).error());
-  }
-  std::optional<TensorOutputWriteGuard> doa_writer;
-  std::optional<TensorOutputWriteGuard> cnt_writer;
-  if (want_peaks) {
-    auto doa = doa_loan->write(context.cuda_stream());
-    if (!doa) {
-      return make_unexpected(std::move(doa).error());
-    }
-    doa_writer.emplace(std::move(*doa));
-    auto cnt = cnt_loan->write(context.cuda_stream());
-    if (!cnt) {
-      return make_unexpected(std::move(cnt).error());
-    }
-    cnt_writer.emplace(std::move(*cnt));
-  }
-  std::optional<TensorOutputWriteGuard> eig_writer;
-  if (want_eig) {
-    auto eig = eig_loan->write(context.cuda_stream());
-    if (!eig) {
-      return make_unexpected(std::move(eig).error());
-    }
-    eig_writer.emplace(std::move(*eig));
-  }
-
-  try {
-    detail::run_mvdr_stage<T>(
-        est_snapshot, est_mask, num_items, est_channels, est_snapshots,
-        effective_loading,
-        static_cast<const cuda::std::complex<T>*>(
-            steering->manifold->data()),
-        num_az, num_el, static_cast<const T*>(steering->az_grid->data()),
-        static_cast<const T*>(steering->el_grid->data()),
-        effective_max_sources,
-        static_cast<cuda::std::complex<T>*>(cov_ptr),
-        static_cast<cuda::std::complex<T>*>(rinv_ptr),
-        static_cast<int64_t*>(k_ptr), static_cast<T*>(spec_writer->data()),
-        static_cast<T*>(aoa_writer->data()),
-        eig_writer ? static_cast<T*>(eig_writer->data()) : nullptr,
-        doa_writer ? static_cast<T*>(doa_writer->data()) : nullptr,
-        cnt_writer ? static_cast<int32_t*>(cnt_writer->data()) : nullptr,
-        stream);
-    check_cuda("mvdr stage", kOpName);
-  } catch (const std::runtime_error& e) {
-    return fail_runtime(e.what());
-  }
-
-  auto aoa_committed = std::move(*aoa_writer).commit();
-  if (!aoa_committed) {
-    return make_unexpected(std::move(aoa_committed).error());
-  }
-  auto spec_committed = std::move(*spec_writer).commit();
-  if (!spec_committed) {
-    return make_unexpected(std::move(spec_committed).error());
-  }
-  if (doa_writer.has_value()) {
-    auto doa_committed = std::move(*doa_writer).commit();
-    if (!doa_committed) {
-      return make_unexpected(std::move(doa_committed).error());
-    }
-  }
-  if (cnt_writer.has_value()) {
-    auto cnt_committed = std::move(*cnt_writer).commit();
-    if (!cnt_committed) {
-      return make_unexpected(std::move(cnt_committed).error());
-    }
-  }
-  if (eig_writer.has_value()) {
-    auto eig_committed = std::move(*eig_writer).commit();
-    if (!eig_committed) {
-      return make_unexpected(std::move(eig_committed).error());
-    }
-  }
-
-  const EmitOptions emit_opts{.capture_time = context.activation_time()};
-  auto aoa_emitted = aoa_estimates.emit(std::move(*aoa_loan), emit_opts);
-  if (!aoa_emitted) {
-    return make_unexpected(std::move(aoa_emitted).error());
-  }
-  // angle_spectrum is optional/always (OPERATOR_API.md): the Capon grid is the
-  // same pass that yields aoa_estimates, so there is nothing to skip.
-  (void)angle_spectrum.emit(std::move(*spec_loan), emit_opts);
-  if (doa_loan.has_value()) {
-    doa_multi_out_.emit(doa_multi, context, std::move(*doa_loan),
-                        "MVDREstimatorOp.doa_multi");
-  }
-  if (cnt_loan.has_value()) {
-    source_count_out_.emit(source_count, context, std::move(*cnt_loan),
-                           "MVDREstimatorOp.source_count");
-  }
-  if (eig_loan.has_value()) {
-    eigenvalues_out_.emit(eigenvalues, context, std::move(*eig_loan),
-                          "MVDREstimatorOp.eigenvalues");
-  }
-
+  // 7. Keep input storage alive until all asynchronous work from this tick has
+  // completed on the runtime stream.
   retained_snapshot_ = std::move(snap);
   if (maybe_valid.has_value()) {
     retained_is_valid_ = std::move(*maybe_valid);

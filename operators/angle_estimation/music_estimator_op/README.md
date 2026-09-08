@@ -49,7 +49,7 @@ R_i = (1/K_i) Σ_{s valid} x_{i,s} x_{i,s}^H
 MUSICEstimatorOp: num_sources=auto with num_snapshots ({}) < num_channels ({}) - covariance is rank-deficient; falling back to num_sources=1 for all items
 ```
 
-EFT uses Quinlan et al. 2007’s closed-form noise-eigenvalue profile for prediction and a first-order Gaussian threshold rather than the paper’s Monte-Carlo `η_P`. `source_count_pfa` is therefore a **target**, not a guaranteed false-alarm rate (see `radar_common/dsp/source_count.hpp` and `OPEN_ITEMS.md`). Seeding from the CFAR/cluster detection count is rejected (STATUS.md S2).
+EFT uses Quinlan et al. 2007’s closed-form noise-eigenvalue profile for prediction and a first-order Gaussian threshold rather than the paper’s Monte-Carlo `η_P`. `source_count_pfa` is therefore a **target**, not a guaranteed false-alarm rate (see `radar_common/dsp/source_count.hpp` and the [shared angle-estimation open items](../OPEN_ITEMS.md)). Seeding from the CFAR/cluster detection count is rejected (STATUS.md S2).
 
 **4. Noise-subspace projector** (`projector_kernel`):
 
@@ -144,8 +144,8 @@ Rejected combinations (operator’s own message unless noted):
 - **Triggering.** `contract()` is `OnEach{snapshot}`. Optional `is_valid` and every live override are unconditional non-members with `Exact{}` + `SafeDefault{}`; unwired means absent/all-valid or Params for that tick. A producer must publish a same-tick mask before `snapshot`.
 - **Ports and queues.** The data Tensor ports declare `MemoryKind::kCudaDevice`, queue depth `2`. Dtype/rank are enforced in `compute()`. Pooled output ranks: `aoa_estimates` 2, `angle_spectrum` 3, `doa_multi` 3, `source_count` 1, `eigenvalues` 2. Live Inputs also queue depth `2`; `az_angles` / `el_angles` are rank-1 pageable-host float64 config Tensors, the rest are wire-object / POD / scalar payloads.
 - **Live override payloads.** `array_geometry` is `Input<WireArrayGeometry>`, a generated descriptor-schema type; `spatial_smoothing` is `Input<SpatialSmoothingOverride>`, a bounded `{count, first, second}` int64 POD (`count` must be 0, 1, or 2). Both convert with `from_wire` inside `resolve_live_override_via`, so neither wire storage nor the POD reaches operator state. `az_angles` / `el_angles` ride rank-1 pageable-host float64 config Tensors validated on arrival (rank, host memory, contiguity, dtype, `max_az` / `max_el` extent). `num_sources` / `source_count_pfa` / `max_sources` are plain scalar `Input<>` ports resolved with `resolve_live_override`. Logical `MUSICParams` types are unchanged (`HSDK5_PORT.md` §9).
-- **Tick flow.** `compute()` resolves overrides and builds the plan, validates the optional mask, handles the empty path, asks `prepare_smoothed_input` for the effective covariance input, runs the estimator-specific path, and emits. Smoothing gather storage is still allocated per smoothed tick (tracked in `OPEN_ITEMS.md`).
-- **Streams and lifetime.** Work uses `context.cuda_stream()` only. Inputs are retained at the end of `compute()`. Stable eigenspace/count buffers avoid per-tick core-workspace allocation. The MatX plan clear remains; `stop()` drains the MatX `MemTracker`.
+- **Tick flow.** `compute()` is the high-level shell: receive and plan → validate mask / stream → empty path → prepare smoothed input → validate effective aperture → prepare steering, workspace, and outputs → execute MUSIC → publish and retain. Operator-local helpers own the cache, Tensor-loan, execution-call, and optional-output plumbing.
+- **Streams and lifetime.** Work uses `context.cuda_stream()` only. Inputs and smoothing gather buffers remain alive through estimator execution. `MUSICPreparedWorkspace` points into stable eigenspace/count buffers; `MUSICPreparedOutputs` keeps every loan and write guard alive through execution and commits all siblings before required-first publication. The MatX plan clear remains; `stop()` drains the MatX `MemTracker`.
 - **Emission.** Required `aoa_estimates` publishes first. `angle_spectrum` and `eigenvalues` are optional/always; `doa_multi` and `source_count` share a latched peak pass.
 - **Parameter authoring.** Schema `com.nvidia.holoscan.radar.MUSICParams` version `1`. YAML / `from_config` / `set_params` field names match the table above.
 - **Precision.** Explicit instantiations `MUSICEstimatorOp<float>` and `MUSICEstimatorOp<double>`.
@@ -161,15 +161,15 @@ Every output is a fresh device Tensor from the operator’s output pool (loan �
 
 **Steady.** Covariance, eig, EFT, projector, and scan run every tick on stable constructor-created workspace. Device scan grids are reused with the cached manifold; the peak pass drops out once both associated optional outputs latch unwired.
 
-**`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives. The reduce kernel stages `P_n` in shared memory only when it fits a 40 KiB budget **and** the item grid covers at least one occupancy wave; otherwise it reads `P_n` from global memory.
+**`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives. The Graph harness isolates all seven live inputs. The reduce kernel stages `P_n` in shared memory only when it fits a 40 KiB budget **and** the item grid covers at least one occupancy wave; otherwise it reads `P_n` from global memory.
 
-Harness (Graph, `num_sources` fixed at 1; production Exact `max_sources` timing):
+Harness (Graph, isolated production-Exact timing for every live input):
 
 ```bash
 ctest --test-dir build -R perf_music_estimator_smoke
 ```
 
-Size ladder axes: channels, detections (`num_items`), snapshots, and `num_az × num_el` (`xs`…`xl`; default smoke is `xs`/`sm`/`md`). Recorded HSDK 4.x `ncu` notes in the group README / `OPEN_ITEMS.md` (ILP unroll then shared-`P_n` staging on an RTX PRO 6000 Blackwell) are historical kernel work, not this Graph harness.
+Size ladder axes: channels, detections (`num_items`), snapshots, and `num_az × num_el` (`xs`…`xl`; default smoke is `xs`/`sm`/`md`). Each size runs `array_geometry`, both scan grids, `spatial_smoothing`, `num_sources`, `source_count_pfa`, and `max_sources` scenarios plus a separate fixed model-order sweep at 1, 2, and `min(4, num_channels − 1)`. The Pfa scenario uses automatic source count; other live-override steady paths fix one source. Recorded HSDK 4.x `ncu` notes in the group README / `OPEN_ITEMS.md` are historical kernel work, not this Graph harness.
 
 ## Tests and verification
 
