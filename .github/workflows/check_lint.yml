@@ -50,7 +50,7 @@ jobs:
         run: pip install -r utilities/requirements.lint.txt
 
       - name: Test workflow helpers
-        run: python3 .github/workflows/scripts/test_gitutils.py
+        run: python3 -m unittest discover -s .github/workflows/scripts -p 'test_*.py'
 
       # The check-copyright pre-commit hook uses --git-modified-only with no
       # ref, which finds zero uncommitted files in a clean CI checkout (no-op).
