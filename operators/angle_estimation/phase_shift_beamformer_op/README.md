@@ -18,8 +18,7 @@ In-tree `rd_maps` producers are the FMCW Doppler paths and virtual-array
 assembly.
 
 Contract: [`OPERATOR_API.md` § `PhaseShiftBeamformerOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md) ·
-open items: [`OPEN_ITEMS.md`](OPEN_ITEMS.md)
+group: [`operators/angle_estimation/README.md`](../README.md)
 
 ## Algorithm
 
@@ -102,13 +101,13 @@ Contract marks geometry / grids / taper **[live]** (warn-once, cache), and each 
 
 ## Consumer lifetime notes
 
-`rda_cube` is a fresh pool loan filled and committed each tick. A consumer may retain it. The cube is large — see OPEN_ITEMS.md §2.
+`rda_cube` is a fresh pool loan filled and committed each tick. A consumer may retain it. The full dense cube is intentionally caller-sized through the scan grid and captured RD extents.
 
 ## Performance
 
-Cold / first unseen steering key: host taper + per-beam `boundary_to_canonical`, H2D scratch, and the weight kernel; then the GEMM. Steady: cache hit + one broadcast `matx::matmul` (cuBLAS). The key covers the complete `AngleConvention` (including custom signed axes and elevation reference), wavelength, positions, both grids, and window key, so an override costs one weight rebuild on the tick it arrives. Inline live-override timing remains an ordinary perf-harness follow-up (OPEN_ITEMS.md).
+Cold / first unseen steering key: host taper + per-beam `boundary_to_canonical`, H2D scratch, and the weight kernel; then the GEMM. Steady: cache hit + one broadcast `matx::matmul` (cuBLAS). The key covers the complete `AngleConvention` (including custom signed axes and elevation reference), wavelength, positions, both grids, and window key, so an override costs one weight rebuild on the tick it arrives.
 
-Harness: `performance/cpp/perf_phase_shift_beamformer.cpp`. Size ladder `xs`…`xl` (channels × `num_az` × `num_el` × RD extent). Live `az_angles` override measurement is deferred. No in-repo measured numbers for this operator; run:
+Harness: `performance/cpp/perf_phase_shift_beamformer.cpp`. Size ladder `xs`…`xl` (channels × `num_az` × `num_el` × RD extent). Every selected size runs four isolated inline-override scenarios: `array_geometry`, `az_angles`, `el_angles`, and `array_taper`. The source co-emits the complete live bundle before the triggering `rd_maps`; one value changes mid-session, and the report records `override_ms` / `override_delta_ms` against pre-override steady state. No in-repo measured numbers for this operator; run:
 
 ```bash
 ctest --test-dir build -R perf_phase_shift_beamformer_smoke
@@ -171,13 +170,13 @@ Python bindings exist at `python/_phase_shift_beamformer_op_bindings.cpp` as an 
 
 ## Contract conformance
 
-Matches the dense Bartlett contract for ports, rank, GEMM, convention boundary, taper, live overrides, and required grids. One shared Params-representation question remains documented in `OPEN_ITEMS.md`.
+Matches the dense Bartlett contract for ports, rank, GEMM, convention boundary, taper, live overrides, and required grids.
 
 | Contract claim | Verdict | Detail |
 | --- | --- | --- |
-| `array_geometry` / `array_taper` **[live]** | conforms (payload form differs) | Unconditional Exact `Input<WireArrayGeometry>` / `Input<WireWindowSpec>` in `contract()`, not `Input<ArrayGeometry>` / `Input<WindowSpec>` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9, OPEN_ITEMS.md §1). |
+| `array_geometry` / `array_taper` **[live]** | conforms (payload form differs) | Unconditional Exact `Input<WireArrayGeometry>` / `Input<WireWindowSpec>` in `contract()`, not `Input<ArrayGeometry>` / `Input<WindowSpec>` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9). |
 | `az_angles` / `el_angles` **[live]** | conforms (payload form differs) | Rank-1 host config Tensors bounded by `max_az` / `max_el`, not `Input<std::vector<double>>` (§9). |
 | `rd_maps` shape `(num_channels, D, R)` | conforms | The stage plan requires rank 3; no opaque leading batch is admitted. |
 | Steering cache identity | conforms | The shared key includes every `AngleConvention` field, geometry, grids, and taper. |
 
-The C++ Graph suite, performance smoke, and focused lint commands are the verification surface for this cleanup.
+The C++ Graph suite, four-scenario live-override performance smoke, and focused lint commands are the verification surface for this cleanup.

@@ -163,5 +163,5 @@ stage would occupy the same slot.
   exact rank-3 input; unit tests (dense DOA-bin recovery,
   convention relabeling + direction-cosine masking, taper sidelobes,
   live overrides, error paths); `performance/cpp/perf_phase_shift_beamformer.cpp`
-  characterizes dense beamforming cold/steady cost. Open items in
-  `phase_shift_beamformer_op/OPEN_ITEMS.md` cover inline live timing.
+  characterizes dense beamforming cold/steady cost plus each live override.
+  No operator-local open items remain.

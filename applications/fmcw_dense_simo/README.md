@@ -114,8 +114,7 @@ true`). The `DenseClusterReportOp` cluster log runs in both modes.
   preserved `(az_bin, el_bin)` batch columns. This op maps those detection bins
   through the scan grids to physical angles and emits `aoa_estimates`
   `(num_points, 2)`. It is a plain-tensor add-on (per the data-plane invariant),
-  not a shared type or an operator contract change. See the
-  `PhaseShiftBeamformerOp` `OPEN_ITEMS.md` for the underlying contract gap.
+  not a shared type or an operator contract change.
 - **`DenseClusterReportOp`** — a dense-aware clone of `radar_app`'s
   `ClusterReportOp`, handling the 4-column `points` / `rep_idx` layout.
 - **`EntityDrainOp`** — a local copy of `radar_app`'s `NullSinkOp` (raw Entity
