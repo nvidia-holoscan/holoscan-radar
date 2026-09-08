@@ -164,5 +164,4 @@ stage would occupy the same slot.
   convention relabeling + direction-cosine masking, taper sidelobes,
   live overrides, error paths); `performance/cpp/perf_phase_shift_beamformer.cpp`
   characterizes dense beamforming cold/steady cost. Open items in
-  `phase_shift_beamformer_op/OPEN_ITEMS.md` cover geometry transport,
-  dense-cube memory, required-convention representation, and inline live timing.
+  `phase_shift_beamformer_op/OPEN_ITEMS.md` cover inline live timing.

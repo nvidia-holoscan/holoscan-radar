@@ -2,7 +2,7 @@
 
 Subspace (MUSIC) sparse-path DOA: for each gathered snapshot item it forms a sample covariance, splits signal from noise, and scans an `(az, el)` grid for the MUSIC pseudospectrum peak.
 
-It sits in the pluggable sparse slot after `SnapshotGatherOp` (SIMO physical RX or MIMO virtual channels). It solves the same “one DOA per detection/cluster” problem as Beamscan, but resolves closely spaced sources that a conventional scan cannot. The fact a caller must not miss: `angle_convention` is required with no default, the scan grid is required, and on this branch every “optional” Tensor output is still allocated and emitted each tick.
+It sits in the pluggable sparse slot after `SnapshotGatherOp` (SIMO physical RX or MIMO virtual channels). It solves the same “one DOA per detection/cluster” problem as Beamscan, but resolves closely spaced sources that a conventional scan cannot. The fact a caller must not miss: `angle_convention` defaults to `radar_boresight`, the scan grid is required, and on this branch every “optional” Tensor output is still allocated and emitted each tick.
 
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
@@ -125,7 +125,7 @@ A tick whose `num_items` / grid / `max_sources` / `C_est` exceeds the ctor-captu
 | Parameter | Type | Default | Override | Cost | Meaning |
 | --- | --- | --- | --- | --- | --- |
 | `array_geometry` | `ArrayGeometry` | none (required) | `[live]` Exact wire-schema override (§9) | Rebuilds steering (+ smoothing plan if enabled); warn-once on smoothing enable | Element positions + `λ`; `num_elements` must match `snapshot` channels |
-| `angle_convention` | `AngleConvention` | none (required) | static | Fixes output meaning for the graph | Boundary `(az, el)` ↔ unit-vector map; `direction_cosine` is `(u, v)` |
+| `angle_convention` | `AngleConvention` | `radar_boresight` | static | Fixes output meaning for the graph | Boundary `(az, el)` ↔ unit-vector map; `direction_cosine` is `(u, v)` |
 | `az_angles` | `vector<double>` | none (required, non-empty) | `[live]` Exact host config Tensor, extent bounded by `max_az` (§9) | Rebuilds steering manifold | Azimuth (or `u`) scan grid |
 | `el_angles` | `vector<double>` | none (required, non-empty) | `[live]` Exact host config Tensor, extent bounded by `max_el` (§9) | Rebuilds steering manifold | Elevation (or `v`) grid; a singleton (e.g. `[0]`) is a 1-D azimuth scan |
 | `num_sources` | int64 | `-1` (`auto`) | `[live]` Exact | Free (device EFT or a fill); no FFT | Signal-subspace dimension; `< 0` → per-item EFT |

@@ -582,6 +582,11 @@ FiveOutGraphRunResult run_live_mvdr(std::vector<LiveMvdrTick> ticks,
   return result;
 }
 
+TEST(MVDREstimatorOpTest, DefaultsToRadarBoresightConvention) {
+  EXPECT_EQ(MVDRParams{}.angle_convention.preset,
+            AngleConventionPreset::kRadarBoresight);
+}
+
 TEST(MVDREstimatorOpTest, SpatialSmoothingResolvesCoherentSourcesUla) {
   constexpr int64_t kN = 10;
   constexpr int64_t kS = 64;

@@ -9,7 +9,8 @@ namespace holoscan::radar {
 
 // Boundary AER parameterization for angle operators. Kernels run in the fixed
 // internal canonical convention; this descriptor relabels scan grids and DOA
-// outputs only.
+// outputs only. Default construction selects the canonical radar_boresight
+// preset; callers choose another boundary convention explicitly.
 struct AngleConvention {
   AngleConventionPreset preset{AngleConventionPreset::kRadarBoresight};
   SignedAxis boresight_axis{SignedAxis::kPlusX};

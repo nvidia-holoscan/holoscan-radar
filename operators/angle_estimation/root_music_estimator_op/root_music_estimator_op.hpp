@@ -85,7 +85,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&RootMUSICParams::angle_convention>("angle_convention")
         .description(
             "Static AER labeling for the gridless DOA output "
-            "(no live port)"),
+            "(default radar_boresight; no live port)"),
     holoscan::field<&RootMUSICParams::num_sources>("num_sources")
         .description(
             "Signal-subspace dimension; negative selects per-item EFT auto"),

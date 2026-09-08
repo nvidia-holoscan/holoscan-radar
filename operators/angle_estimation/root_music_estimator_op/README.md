@@ -2,7 +2,7 @@
 
 Gridless Root-MUSIC sparse-path DOA: the same covariance / eig / EFT front-end as `MUSICEstimatorOp`, then polynomial roots instead of a scan grid.
 
-It occupies the same pluggable sparse slot after `SnapshotGatherOp`. A ULA (or single row/column) resolves one coordinate (azimuth; elevation degenerate); a filled URA resolves native `(az, el)` by reduced-dimension per-axis rooting plus 2-D MUSIC-metric pairing. The fact a caller must not miss: there is **no** `angle_spectrum` and **no** scan-grid parameter; `array_geometry` must be a ULA or a filled URA (`(iz` outer, `iy` inner)), and `angle_convention` is required and locked after the first successful tick.
+It occupies the same pluggable sparse slot after `SnapshotGatherOp`. A ULA (or single row/column) resolves one coordinate (azimuth; elevation degenerate); a filled URA resolves native `(az, el)` by reduced-dimension per-axis rooting plus 2-D MUSIC-metric pairing. The fact a caller must not miss: there is **no** `angle_spectrum` and **no** scan-grid parameter; `array_geometry` must be a ULA or a filled URA (`(iz` outer, `iy` inner)), and `angle_convention` defaults to `radar_boresight` and is locked after the first successful tick.
 
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
@@ -122,7 +122,7 @@ Rejected combinations (operator’s message unless noted):
 | Parameter | Type | Default | Override | Cost | Meaning |
 | --- | --- | --- | --- | --- | --- |
 | `array_geometry` | `ArrayGeometry` | none (required) | `[live]` Exact wire-schema override (§9) | Revalidates ULA/URA; rebuilds smoothing plan; may resize cuSOLVER workspace | ULA or filled URA + `λ`; `num_elements` must match channels |
-| `angle_convention` | `AngleConvention` | none (required) | static (rejected if changed after first emit) | Seeds device relabeling once | Boundary meaning of `(az, el)` / `(u, v)` |
+| `angle_convention` | `AngleConvention` | `radar_boresight` | static (rejected if changed after first emit) | Seeds device relabeling once | Boundary meaning of `(az, el)` / `(u, v)` |
 | `num_sources` | int64 | `-1` (`auto`) | `[live]` Exact | Free (EFT or fill) | Signal-subspace dimension / root count |
 | `source_count_pfa` | double | `1e-2` | `[live]` Exact | Free | Target EFT Pfa; `auto` only. Same EFT fidelity note as MUSIC |
 | `max_sources` | int64 | `4` | `[live]` Exact | Reallocates `doa_multi`; cap `64` | Capacity and EFT `K_max` |

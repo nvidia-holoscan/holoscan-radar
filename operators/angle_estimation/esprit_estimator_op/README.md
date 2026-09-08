@@ -2,7 +2,7 @@
 
 Gridless least-squares ESPRIT sparse-path DOA: the same covariance / eig / EFT front-end as `MUSICEstimatorOp`, then a closed-form rotation of the signal subspace instead of a scan grid or a polynomial.
 
-It occupies the same pluggable sparse slot after `SnapshotGatherOp`. A ULA (or an explicit `ShiftInvariantSubarrayPair`) resolves one coordinate; a filled URA with `subarray_spec: auto` resolves native `(az, el)` by dual-invariance joint diagonalization. The fact a caller must not miss: there is **no** `angle_spectrum`; an explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclusive; `angle_convention` is required and locked after the first successful tick.
+It occupies the same pluggable sparse slot after `SnapshotGatherOp`. A ULA (or an explicit `ShiftInvariantSubarrayPair`) resolves one coordinate; a filled URA with `subarray_spec: auto` resolves native `(az, el)` by dual-invariance joint diagonalization. The fact a caller must not miss: there is **no** `angle_spectrum`; an explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclusive; `angle_convention` defaults to `radar_boresight` and is locked after the first successful tick.
 
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
@@ -113,7 +113,7 @@ A ULA `∥` canonical `+x` is rejected by the shift-invariant planner (same embe
 | Parameter | Type | Default | Override | Cost | Meaning |
 | --- | --- | --- | --- | --- | --- |
 | `array_geometry` | `ArrayGeometry` | none (required) | `[live]` Exact wire-schema override (§9) | Revalidates pair / URA invariances; rebuilds smoothing | Shift-invariant positions + `λ` |
-| `angle_convention` | `AngleConvention` | none (required) | static (rejected if changed after first emit) | Seeds device relabeling once | Boundary meaning of `(az, el)` / `(u, v)` |
+| `angle_convention` | `AngleConvention` | `radar_boresight` | static (rejected if changed after first emit) | Seeds device relabeling once | Boundary meaning of `(az, el)` / `(u, v)` |
 | `num_sources` | int64 | `-1` (`auto`) | `[live]` Exact | Free | Signal-subspace dimension |
 | `source_count_pfa` | double | `1e-2` | `[live]` Exact | Free | Target EFT Pfa; `auto` only |
 | `max_sources` | int64 | `4` | `[live]` Exact | Reallocates `doa_multi`; cap `64` | Capacity and EFT `K_max` |

@@ -66,7 +66,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&BeamscanParams::angle_convention>("angle_convention")
         .description(
             "Static AER labeling for the scan grid and DOA output "
-            "(no live port)"),
+            "(default radar_boresight; no live port)"),
     holoscan::field<&BeamscanParams::az_angles>("az_angles")
         .description(
             "Azimuth scan grid (or u under direction_cosine); required "

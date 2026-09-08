@@ -70,7 +70,8 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&PhaseShiftBeamformerParams::angle_convention>(
         "angle_convention")
         .description(
-            "Boundary AER labeling for scan grid and beam axes (STATIC)"),
+            "Boundary AER labeling for scan grid and beam axes; defaults to "
+            "radar_boresight (STATIC)"),
     holoscan::field<&PhaseShiftBeamformerParams::az_angles>("az_angles")
         .description(
             "Azimuth scan grid (u grid under direction_cosine)"),

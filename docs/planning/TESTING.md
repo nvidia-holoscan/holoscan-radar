@@ -167,7 +167,7 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 #### PhaseShiftBeamformerOp (dense)
 
 - RD maps synthesized as a steering vector for a known (az, el) → `rda_cube` peak at the expected beam bin.
-- `angle_convention`: the same physical direction is reported with the expected (az, el) labels under different presets; `direction_cosine` masks the invisible region (`u²+v² > 1`).
+- `angle_convention`: default-constructed Params select `radar_boresight`; the same physical direction is reported with the expected (az, el) labels under different presets; `direction_cosine` masks the invisible region (`u²+v² > 1`).
 - `array_taper` lowers spatial sidelobes.
 - `[live]` overrides (`array_geometry` / `az_angles` / `el_angles` / `array_taper`) change the output and reuse cached weights when unchanged.
 - Input rank is exactly 3; an opaque leading batch axis is rejected, and Doppler/range or scan-grid extents above `MaxTensorExtents` fail before output allocation.
@@ -194,7 +194,7 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 
 #### Sparse angle estimators (shared slot)
 
-Common check (all five): `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_estimates ≈ θ` within grid/interpolation or the CRLB; an `is_valid` mask correctly excludes masked snapshots.
+Common check (all five): default-constructed Params select `radar_boresight`; `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_estimates ≈ θ` within grid/interpolation or the CRLB under both the default and at least one non-default convention; an `is_valid` mask correctly excludes masked snapshots.
 
 - **BeamscanEstimatorOp** — single-source recovery; accepts 2-D or 3-D-with-`num_snapshots=1`; errors on 3-D with `num_snapshots ≠ 1`.
 - **MVDREstimatorOp** — multi-snapshot covariance nulls an interferer better than Beamscan; `diagonal_loading` stabilizes the low-snapshot / ill-conditioned case.

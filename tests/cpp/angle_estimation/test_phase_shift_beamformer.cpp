@@ -505,6 +505,11 @@ GraphRunResult run_live_beamformer_graph(
   return result;
 }
 
+TEST(PhaseShiftBeamformerOpTest, DefaultsToRadarBoresightConvention) {
+  EXPECT_EQ(PhaseShiftBeamformerParams{}.angle_convention.preset,
+            AngleConventionPreset::kRadarBoresight);
+}
+
 TEST(PhaseShiftBeamformerOpTest, RecoversKnownBeamBin2D) {
   constexpr int64_t kNy = 4;
   constexpr int64_t kNz = 4;

@@ -178,6 +178,11 @@ EspritOutputs run_esprit(std::shared_ptr<holoscan::Tensor> snapshot,
           std::move(result.frames2.front()), std::move(result.frames3.front())};
 }
 
+TEST(ESPRITEstimatorOpTest, DefaultsToRadarBoresightConvention) {
+  EXPECT_EQ(ESPRITParams{}.angle_convention.preset,
+            AngleConventionPreset::kRadarBoresight);
+}
+
 TEST(ESPRITEstimatorOpTest, RecoversKnownDoaUlaFixedOneSource) {
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;

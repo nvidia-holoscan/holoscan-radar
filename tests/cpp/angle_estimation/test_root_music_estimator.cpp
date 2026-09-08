@@ -176,6 +176,11 @@ RootMusicOutputs run_root_music(std::shared_ptr<holoscan::Tensor> snapshot,
           std::move(result.frames2.front()), std::move(result.frames3.front())};
 }
 
+TEST(RootMUSICEstimatorOpTest, DefaultsToRadarBoresightConvention) {
+  EXPECT_EQ(RootMUSICParams{}.angle_convention.preset,
+            AngleConventionPreset::kRadarBoresight);
+}
+
 TEST(RootMUSICEstimatorOpTest, RecoversKnownDoaUlaFixedOneSource) {
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;

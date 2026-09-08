@@ -1,6 +1,6 @@
 # `BeamscanEstimatorOp`
 
-Conventional (Bartlett) sparse-path DOA: one look per item, scan a grid, emit the dominant `(az, el)` (or `(u, v)`). It fills the shared sparse-estimator slot after `SnapshotGatherOp` (or `SubarraySelectionOp`). Beamscan is single-snapshot — a 3-D `snapshot` with `num_snapshots ≠ 1` is an error; the 2-D form is canonical. `angle_convention` is static and required.
+Conventional (Bartlett) sparse-path DOA: one look per item, scan a grid, emit the dominant `(az, el)` (or `(u, v)`). It fills the shared sparse-estimator slot after `SnapshotGatherOp` (or `SubarraySelectionOp`). Beamscan is single-snapshot — a 3-D `snapshot` with `num_snapshots ≠ 1` is an error; the 2-D form is canonical. `angle_convention` is static and defaults to `radar_boresight`.
 
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
@@ -79,7 +79,7 @@ Rejected combinations and the operator's own messages:
 | Parameter | Type | Default | Override | Cost | Meaning |
 | --- | --- | --- | --- | --- | --- |
 | `array_geometry` | `ArrayGeometry` | none (required; empty fails `validate`) | `[live]` Exact wire-schema override | Rebuilds cached steering weights | Element positions + wavelength. |
-| `angle_convention` | `AngleConvention` | contract: none (required). Params default-construct to `radar_boresight` — see conformance | static | Rebuilds weights (part of the cache key) | Boundary labeling of the grid and `aoa_estimates`, or `direction_cosine`. |
+| `angle_convention` | `AngleConvention` | `radar_boresight` | static | Rebuilds weights (part of the cache key) | Boundary labeling of the grid and `aoa_estimates`, or `direction_cosine`. |
 | `az_angles` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_az` | Rebuilds weights | Azimuth (`u`) scan grid. |
 | `el_angles` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_el` | Rebuilds weights | Elevation (`v`) scan grid; `[0]` is a 1-D azimuth scan. |
 | `array_taper` | `WindowSpec` | `kNone` (rectangular) | `[live]` Exact wire-schema override | Rebuilds weights | Spatial amplitude taper. |
@@ -176,7 +176,6 @@ Matches the shared sparse slot plus Beamscan's single-snapshot / spectrum-only s
 | `peak_interpolation` **[live]** | conforms | Unconditional Exact `Input<>` in `contract()`; the app enables the override by wiring the port. Covered by `LivePeakInterpolationAppliesForOneTick` since the enum-edge fix (§12). |
 | `is_valid` optional Graph wiring | EA-deferred | `receive_optional_value` + blanking implemented; port omitted from `contract()` (§11); connected Graph tests skipped (OPEN_ITEMS.md §3). |
 | `angle_spectrum` optional | Done | `always` disposition: fused with the argmax that yields `aoa_estimates`, so an unwired sink costs nothing and is discarded |
-| `angle_convention` required, no default | deviates | `BeamscanParams` default-constructs `AngleConvention{}` → `kRadarBoresight` (`beamscan_estimator_op.hpp` line 51). |
 | `parabolic` sub-grid refinement | deviates | Requires `num_az >= 3 && num_el >= 3` and an interior peak on both axes (`beamscan_stage.hpp` lines 135–137). 1-D scans (`el_angles = [0]`) never refine. |
 | Steering cache identity | deviates | Shared `steering_cache_key` hashes only `convention.preset` (`steering_weights.cpp` lines 23–24) — same as PhaseShift. |
 

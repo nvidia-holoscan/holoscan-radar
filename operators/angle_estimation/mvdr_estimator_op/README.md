@@ -2,7 +2,7 @@
 
 Adaptive MVDR / Capon sparse-path DOA: for each gathered snapshot item it forms a sample covariance, regularizes and inverts it, and scans an `(az, el)` grid for the Capon power peak.
 
-It sits in the pluggable sparse slot after `SnapshotGatherOp`, the same wiring as Beamscan / MUSIC. It solves “one (or a few) DOAs per detection/cluster” with data-adaptive nulls that a conventional scan cannot place. The fact a caller must not miss: `angle_convention` and the scan grid are required; there is no array taper (the beam is shaped from `R̂`); and on this branch every “optional” Tensor output is still allocated and emitted each tick.
+It sits in the pluggable sparse slot after `SnapshotGatherOp`, the same wiring as Beamscan / MUSIC. It solves “one (or a few) DOAs per detection/cluster” with data-adaptive nulls that a conventional scan cannot place. The fact a caller must not miss: `angle_convention` defaults to `radar_boresight`, the scan grid is required, there is no array taper (the beam is shaped from `R̂`), and on this branch every “optional” Tensor output is still allocated and emitted each tick.
 
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
@@ -100,7 +100,7 @@ A tick that exceeds ctor-captured spans fails at Tensor-loan allocate.
 | Parameter | Type | Default | Override | Cost | Meaning |
 | --- | --- | --- | --- | --- | --- |
 | `array_geometry` | `ArrayGeometry` | none (required) | `[live]` Exact wire-schema override (§9) | Rebuilds steering (+ smoothing plan if enabled) | Element positions + `λ` |
-| `angle_convention` | `AngleConvention` | none (required) | static | Fixes output meaning for the graph | Boundary `(az, el)` ↔ unit-vector map |
+| `angle_convention` | `AngleConvention` | `radar_boresight` | static | Fixes output meaning for the graph | Boundary `(az, el)` ↔ unit-vector map |
 | `az_angles` | `vector<double>` | none (required, non-empty) | `[live]` Exact host config Tensor, extent bounded by `max_az` (§9) | Rebuilds steering manifold | Azimuth (or `u`) scan grid |
 | `el_angles` | `vector<double>` | none (required, non-empty) | `[live]` Exact host config Tensor, extent bounded by `max_el` (§9) | Rebuilds steering manifold | Elevation (or `v`); singleton → 1-D az scan |
 | `diagonal_loading` | double | `-1` (`auto`) | `[live]` Exact | Free (kernel reload of `δ`) | `R + δI`; `< 0` → `0.01 · trace(R̂)/C` |

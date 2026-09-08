@@ -711,6 +711,11 @@ int64_t count_prominent_local_maxima_1d(const double* spec, int64_t num_az,
   return count;
 }
 
+TEST(MUSICEstimatorOpTest, DefaultsToRadarBoresightConvention) {
+  EXPECT_EQ(MUSICParams{}.angle_convention.preset,
+            AngleConventionPreset::kRadarBoresight);
+}
+
 TEST(MUSICEstimatorOpTest, RecoversKnownDoaUlaAzOnlyFixedOneSource) {
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;

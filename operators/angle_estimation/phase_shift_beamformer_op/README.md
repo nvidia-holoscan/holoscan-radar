@@ -1,6 +1,6 @@
 # `PhaseShiftBeamformerOp`
 
-Forms a conventional (Bartlett) beam for every range-Doppler cell, replacing the channel axis with the `(num_az, num_el)` scan grid to build the Range-Doppler-Angle cube. It is the dense angle path: per-channel `rd_maps` → this operator → `CFARDetectorOp.rd_maps` (angle-then-cluster only). A full MVDR/MUSIC cube over every RD cell is prohibitive, so this is the only dense estimator. `angle_convention` is static and required — it fixes the meaning of the beam axes for the whole graph.
+Forms a conventional (Bartlett) beam for every range-Doppler cell, replacing the channel axis with the `(num_az, num_el)` scan grid to build the Range-Doppler-Angle cube. It is the dense angle path: per-channel `rd_maps` → this operator → `CFARDetectorOp.rd_maps` (angle-then-cluster only). A full MVDR/MUSIC cube over every RD cell is prohibitive, so this is the only dense estimator. `angle_convention` is static and defaults to `radar_boresight` — it fixes the meaning of the beam axes for the whole graph.
 
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
@@ -74,14 +74,14 @@ Rejected combinations and the operator's own messages:
 | non-contiguous / pageable-host | `PhaseShiftBeamformerOp: tensor received on input port 'rd_maps' must be contiguous (compact row-major)` / `… is not CUDA-accessible (device, managed, or pinned-host memory required)` |
 | no CUDA compute stream | `PhaseShiftBeamformerOp: no CUDA compute stream` |
 
-Dense-cube memory remains the caller's footgun (OPEN_ITEMS.md §2), but each named extent is rejected before allocation when it exceeds the constructor capture.
+Dense-cube memory is an accepted caller-owned trade-off, but each named extent is rejected before allocation when it exceeds the constructor capture.
 
 ## Parameters
 
 | Parameter | Type | Default | Override | Cost | Meaning |
 | --- | --- | --- | --- | --- | --- |
 | `array_geometry` | `ArrayGeometry` | none (required; empty fails `validate`) | `[live]` Exact wire-schema override ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9) | Rebuilds cached steering weights | Virtual/physical element positions + wavelength. `num_elements` must match `rd_maps` channels. |
-| `angle_convention` | `AngleConvention` | contract: none (required). Params default-construct to `radar_boresight` — see conformance | static | Rebuilds weights (part of the cache key) | How `az_angles` / `el_angles` and the output beam axes map to unit vectors, or `direction_cosine` for `(u, v)`. |
+| `angle_convention` | `AngleConvention` | `radar_boresight` | static | Rebuilds weights (part of the cache key) | How `az_angles` / `el_angles` and the output beam axes map to unit vectors, or `direction_cosine` for `(u, v)`. |
 | `az_angles` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_az` (§9) | Rebuilds weights | Azimuth scan grid (`u` under `direction_cosine`). |
 | `el_angles` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_el` (§9) | Rebuilds weights | Elevation scan grid (`v` under `direction_cosine`). |
 | `array_taper` | `WindowSpec` | `WindowType::kNone` (rectangular) | `[live]` Exact wire-schema override (§9) | Rebuilds weights | Amplitude taper across elements. |
@@ -177,7 +177,6 @@ Matches the dense Bartlett contract for ports, rank, GEMM, convention boundary, 
 | --- | --- | --- |
 | `array_geometry` / `array_taper` **[live]** | conforms (payload form differs) | Unconditional Exact `Input<WireArrayGeometry>` / `Input<WireWindowSpec>` in `contract()`, not `Input<ArrayGeometry>` / `Input<WindowSpec>` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9, OPEN_ITEMS.md §1). |
 | `az_angles` / `el_angles` **[live]** | conforms (payload form differs) | Rank-1 host config Tensors bounded by `max_az` / `max_el`, not `Input<std::vector<double>>` (§9). |
-| `angle_convention` required, no default | open representation question | `PhaseShiftBeamformerParams` uses the shared default-constructible `AngleConvention`; see OPEN_ITEMS.md. |
 | `rd_maps` shape `(num_channels, D, R)` | conforms | The stage plan requires rank 3; no opaque leading batch is admitted. |
 | Steering cache identity | conforms | The shared key includes every `AngleConvention` field, geometry, grids, and taper. |
 
