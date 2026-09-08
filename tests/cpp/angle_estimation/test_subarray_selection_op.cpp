@@ -3,7 +3,7 @@
 
 // SubarraySelectionOp contract tests (HSDK 5 Graph harness): S3 select a
 // uniform sub-array from a holey MIMO virtual array; emit reduced snapshot +
-// packed array_geometry Tensor.
+// WireArrayGeometry.
 
 #include <gtest/gtest.h>
 
@@ -39,6 +39,7 @@
 #include <holoscan/core/tensor_output_loan.hpp>
 #include <holoscan/time/realtime_clock.hpp>
 
+#include "angle_estimation/beamscan_estimator_op/beamscan_estimator_op.hpp"
 #include "angle_estimation/subarray_selection_op/subarray_selection_op.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/array_geometry_tensor.hpp"
@@ -51,17 +52,23 @@
 namespace {
 
 using holoscan::radar::ArrayGeometry;
+using holoscan::radar::BeamscanEstimatorOp;
+using holoscan::radar::BeamscanParams;
 using holoscan::radar::SubarraySelectionOp;
 using holoscan::radar::SubarraySelectionParams;
 using holoscan::radar::WireArrayGeometry;
 using holoscan::radar::complex_dtype;
+using holoscan::radar::from_wire;
 using holoscan::radar::pack_array_geometry;
 using holoscan::radar::testing::default_test_extents;
-using holoscan::radar::testing::DualIOGraphRunResult;
 using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
+using holoscan::radar::testing::TensorWireGraphRunResult;
+using holoscan::radar::testing::WireCaptureBank;
+using holoscan::radar::testing::WireCaptureOp;
 using holoscan::radar::testing::run_single_io_operator_graph_result;
-using holoscan::radar::testing::run_single_in_dual_out_operator_graph_result;
+using holoscan::radar::testing::
+    run_single_in_tensor_wire_out_operator_graph_result;  // NOLINT
 using holoscan::radar::testing::to_device_tensor;
 using holoscan::radar::testing::to_pageable_host_tensor;
 using holoscan::radar::to_wire;
@@ -109,13 +116,13 @@ void wire_subarray(holoscan::Graph& graph, const Source& source, OpRef& op,
   graph.add_flow(op->array_geometry, sink1->in, q);
 }
 
-DualIOGraphRunResult run_select_result(
+TensorWireGraphRunResult<WireArrayGeometry> run_select_result(
     std::shared_ptr<holoscan::Tensor> snap, SubarraySelectionParams params,
     const holoscan::radar::MaxTensorExtents& extents =
         default_test_extents()) {
-  return run_single_in_dual_out_operator_graph_result<
-      SubarraySelectionOp<double>>(
-      {std::move(snap)}, std::move(params), "snapshot_out", "array_geometry",
+  return run_single_in_tensor_wire_out_operator_graph_result<
+      WireArrayGeometry, SubarraySelectionOp<double>>(
+      {std::move(snap)}, std::move(params), "snapshot_out",
       [](holoscan::Graph& graph, const auto& source, auto& op,
          const auto& sink0, const auto& sink1) {
         wire_subarray(graph, source, op, sink0, sink1);
@@ -127,7 +134,7 @@ DualIOGraphRunResult run_select_result(
 
 Result run_select(std::shared_ptr<holoscan::Tensor> snap,
                   SubarraySelectionParams params) {
-  DualIOGraphRunResult result =
+  TensorWireGraphRunResult<WireArrayGeometry> result =
       run_select_result(std::move(snap), std::move(params));
   if (!result.plan_ok) {
     throw std::runtime_error(std::string("compile failed: ") +
@@ -147,14 +154,12 @@ Result run_select(std::shared_ptr<holoscan::Tensor> snap,
         std::to_string(result.frames0.size()) + "/" +
         std::to_string(result.frames1.size()));
   }
-  const HostTensor& geom_t = result.frames1.front();
-  if (geom_t.shape.size() != 2U) {
+  auto geometry = from_wire(result.frames1.front());
+  if (!geometry) {
     throw std::runtime_error(
-        "SubarraySelectionOp test: array_geometry rank != 2");
+        "SubarraySelectionOp test: invalid WireArrayGeometry");
   }
-  ArrayGeometry geom = unpack_array_geometry(
-      geom_t.as<double>(), geom_t.shape[0], geom_t.shape[1]);
-  return {std::move(result.frames0.front()), std::move(geom)};
+  return {std::move(result.frames0.front()), std::move(*geometry)};
 }
 
 GraphRunResult run_snapshot_only(
@@ -168,7 +173,7 @@ GraphRunResult run_snapshot_only(
         graph.add_flow(source->out, op->snapshot, queue);
         graph.add_flow(op->snapshot_out, sink->in, queue);
       },
-      {"array_geometry", "is_valid_out"});
+      {"is_valid_out"});
 }
 
 std::set<double> y_set(const ArrayGeometry& g) {
@@ -447,13 +452,13 @@ struct LiveSubarrayWiring {
   bool subarray{false};
 };
 
-DualIOGraphRunResult run_live_subarray_graph(
+TensorWireGraphRunResult<WireArrayGeometry> run_live_subarray_graph(
     std::vector<LiveSubarrayTick> ticks, SubarraySelectionParams params,
     LiveSubarrayWiring wiring,
     holoscan::radar::MaxTensorExtents extents = default_test_extents()) {
-  DualIOGraphRunResult result;
+  TensorWireGraphRunResult<WireArrayGeometry> result;
   holoscan::radar::testing::detail::FrameBank::reset();
-  holoscan::radar::testing::detail::FrameBankB::reset();
+  WireCaptureBank<WireArrayGeometry>::reset();
   LiveSubarrayBank::reset(std::move(ticks));
   const std::size_t expected = LiveSubarrayBank::ticks.size();
 
@@ -466,7 +471,7 @@ DualIOGraphRunResult run_live_subarray_graph(
   const auto sink0 =
       graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink0");
   const auto sink1 =
-      graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("sink1");
+      graph.op<WireCaptureOp<WireArrayGeometry>>("sink1");
   const holoscan::ConnectionOptions q{.queue_depth = 8U};
   graph.add_flow(snapshot_source->snapshot, op->snapshot, q);
   auto control_partition = graph.partition("control");
@@ -511,8 +516,6 @@ DualIOGraphRunResult run_live_subarray_graph(
   holoscan::radar::testing::detail::bind_op_device_output(
       options, "snapshot_out");
   holoscan::radar::testing::detail::bind_op_device_output(
-      options, "array_geometry");
-  holoscan::radar::testing::detail::bind_op_device_output(
       options, "is_valid_out");
 
   try {
@@ -538,9 +541,8 @@ DualIOGraphRunResult run_live_subarray_graph(
       }
       {
         const std::lock_guard lock(
-            holoscan::radar::testing::detail::FrameBankB::mutex);
-        count1 =
-            holoscan::radar::testing::detail::FrameBankB::captured.size();
+            WireCaptureBank<WireArrayGeometry>::mutex);
+        count1 = WireCaptureBank<WireArrayGeometry>::payloads.size();
       }
       if (count0 >= expected && count1 >= expected) {
         break;
@@ -566,9 +568,11 @@ DualIOGraphRunResult run_live_subarray_graph(
   }
   {
     const std::lock_guard lock(
-        holoscan::radar::testing::detail::FrameBankB::mutex);
-    result.frames1 = std::move(
-        holoscan::radar::testing::detail::FrameBankB::captured);
+        WireCaptureBank<WireArrayGeometry>::mutex);
+    result.frames1 =
+        std::move(WireCaptureBank<WireArrayGeometry>::payloads);
+    result.frame1_capture_times =
+        std::move(WireCaptureBank<WireArrayGeometry>::capture_times);
   }
   return result;
 }
@@ -580,9 +584,12 @@ std::shared_ptr<holoscan::Tensor> host_subarray(
       DLDataType{kDLInt, 64U, 1U});
 }
 
-ArrayGeometry unpack_output_geometry(const HostTensor& tensor) {
-  return unpack_array_geometry(
-      tensor.as<double>(), tensor.shape[0], tensor.shape[1]);
+ArrayGeometry unpack_output_geometry(const WireArrayGeometry& wire) {
+  auto geometry = from_wire(wire);
+  if (!geometry) {
+    throw std::runtime_error("invalid WireArrayGeometry output");
+  }
+  return std::move(*geometry);
 }
 
 TEST(SubarraySelectionOpTest, HoleyUlaSelectsLongestRun) {
@@ -630,6 +637,93 @@ TEST(SubarraySelectionOpTest, OptionalGeometryMayBeLeftUnwired) {
   expect_channels(out.frames[1], {0, 1, 2, 3}, 2);
 }
 
+TEST(SubarraySelectionOpTest, ReducedGeometryDirectlyDrivesBeamscan) {
+  namespace detail = holoscan::radar::testing::detail;
+  detail::FrameBank::reset();
+  detail::FrameBankB::reset();
+  detail::FrameBank::input_frames = {
+      to_device_tensor(
+          std::vector<std::complex<double>>(6U, {1.0, 0.0}), {1, 6},
+          complex_dtype<double>())};
+
+  holoscan::Graph graph{"subarray-geometry-to-beamscan"};
+  const auto source = graph.op<detail::TensorSourceOp>("source");
+  auto extents = default_test_extents();
+  auto selector =
+      graph.op<SubarraySelectionOp<double>>("selector", extents);
+  const ArrayGeometry full = make_linear({0, 1, 2, 3, 5, 6});
+  selector.set_params(make_params(full, {0, 1, 2, 3}));
+
+  auto beamscan =
+      graph.op<BeamscanEstimatorOp<double>>("beamscan", extents);
+  BeamscanParams beamscan_params;
+  // Deliberately incompatible with the 4-channel selected snapshot.
+  // Successful steering proves the same-tick wire geometry won over Params.
+  beamscan_params.array_geometry = make_linear({0, 1, 2});
+  beamscan_params.az_angles = {-0.2, 0.0, 0.2};
+  beamscan_params.el_angles = {0.0};
+  beamscan.set_params(std::move(beamscan_params));
+
+  const auto aoa_sink = graph.op<detail::TensorCaptureOp>("aoa_sink");
+  const auto spectrum_sink =
+      graph.op<detail::TensorCaptureBOp>("spectrum_sink");
+  const holoscan::ConnectionOptions queue{.queue_depth = 4U};
+  graph.add_flow(source->out, selector->snapshot, queue);
+  graph.add_flow(selector->snapshot_out, beamscan->snapshot, queue);
+  graph.add_flow(
+      selector->array_geometry, beamscan->array_geometry, queue);
+  graph.add_flow(beamscan->aoa_estimates, aoa_sink->in, queue);
+  graph.add_flow(beamscan->angle_spectrum, spectrum_sink->in, queue);
+  graph.partition("integration")
+      .add(source)
+      .add(selector)
+      .add(beamscan)
+      .add(aoa_sink)
+      .add(spectrum_sink);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  auto bind = [&options](const char* op, const char* port) {
+    options.deployment.bind_tensor_output_device(
+        holoscan::TensorOutputDevicePlacement{
+            .operator_path = op,
+            .output_port = port,
+            .device = holoscan::DeviceId{0}});
+  };
+  bind("source", "out");
+  bind("selector", "snapshot_out");
+  bind("selector", "is_valid_out");
+  bind("beamscan", "aoa_estimates");
+  bind("beamscan", "angle_spectrum");
+
+  const holoscan::ExecutionPlan plan =
+      holoscan::compile(graph, std::move(options));
+  ASSERT_TRUE(plan.ok()) << plan.json();
+  holoscan::RunSession session = holoscan::run_async(plan);
+  const auto deadline =
+      std::chrono::steady_clock::now() + detail::kHarnessDeadline;
+  while (session.diagnostics().empty() &&
+         std::chrono::steady_clock::now() < deadline) {
+    bool captured = false;
+    {
+      const std::lock_guard lock(detail::FrameBank::mutex);
+      captured = !detail::FrameBank::captured.empty();
+    }
+    if (captured) {
+      break;
+    }
+    std::this_thread::sleep_for(detail::kHarnessPoll);
+  }
+  session.request_stop();
+  session.wait();
+  ASSERT_TRUE(session.diagnostics().empty());
+  const std::lock_guard lock(detail::FrameBank::mutex);
+  ASSERT_EQ(detail::FrameBank::captured.size(), 1U);
+  const auto& aoa = detail::FrameBank::captured.front();
+  ASSERT_EQ(aoa.shape, (std::vector<int64_t>{1, 2}));
+  EXPECT_NEAR(aoa.as<double>()[0], 0.0, 1e-12);
+}
+
 TEST(SubarraySelectionOpTest, ExplicitSubarray) {
   const auto geom = make_linear({0, 1, 2, 3, 4, 5, 6, 7});
   auto snap = make_snapshot(1, 8, 3);
@@ -657,7 +751,8 @@ TEST(SubarraySelectionOpTest, LiveOverridesRequireExactCaptureTime) {
     changed.element_positions[static_cast<size_t>(i * 3 + 1)] += 10.0;
   }
   SubarraySelectionParams params = make_params(base, {0, 1});
-  const DualIOGraphRunResult out = run_live_subarray_graph(
+  const TensorWireGraphRunResult<WireArrayGeometry> out =
+      run_live_subarray_graph(
       {{make_snapshot(1, 8, 2), changed, host_subarray({2, 3, 4})},
        {make_snapshot(1, 8, 2), changed, host_subarray({2, 3, 4}),
         /*geometry_skew_ns=*/1, /*subarray_skew_ns=*/1}},
@@ -682,7 +777,8 @@ TEST(SubarraySelectionOpTest, LiveOverridesRevertToParamsAfterExactMiss) {
     changed.element_positions[static_cast<size_t>(i * 3 + 1)] += 30.0;
   }
   SubarraySelectionParams params = make_params(base, {0, 1});
-  const DualIOGraphRunResult out = run_live_subarray_graph(
+  const TensorWireGraphRunResult<WireArrayGeometry> out =
+      run_live_subarray_graph(
       {{make_snapshot(1, 8, 2), changed, host_subarray({4, 5, 6})},
        {make_snapshot(1, 8, 2), std::nullopt, nullptr}},
       std::move(params), {.geometry = true, .subarray = true});
@@ -700,7 +796,8 @@ TEST(SubarraySelectionOpTest, LiveOverridesRevertToParamsAfterExactMiss) {
 TEST(SubarraySelectionOpTest, RejectsMalformedLivePayloads) {
   const auto geom = make_linear({0, 1, 2, 3});
   SubarraySelectionParams geometry_params = make_params(geom, {0, 1});
-  const DualIOGraphRunResult bad_geometry = run_live_subarray_graph(
+  const TensorWireGraphRunResult<WireArrayGeometry> bad_geometry =
+      run_live_subarray_graph(
       {{make_snapshot(1, 4, 2), geom, nullptr, 0, 0,
         /*malformed_geometry=*/true}},
       std::move(geometry_params), {.geometry = true});
@@ -709,7 +806,8 @@ TEST(SubarraySelectionOpTest, RejectsMalformedLivePayloads) {
   EXPECT_FALSE(bad_geometry.diagnostics.empty());
 
   SubarraySelectionParams subarray_params = make_params(geom, {0, 1});
-  const DualIOGraphRunResult bad_subarray = run_live_subarray_graph(
+  const TensorWireGraphRunResult<WireArrayGeometry> bad_subarray =
+      run_live_subarray_graph(
       {{make_snapshot(1, 4, 2), std::nullopt,
         host_subarray({0, 1, 3})}},
       std::move(subarray_params), {.subarray = true});
@@ -723,7 +821,8 @@ TEST(SubarraySelectionOpTest, RejectsLiveSubarrayBeyondCapturedBound) {
   SubarraySelectionParams params = make_params(geom, {0, 1});
   auto extents = default_test_extents();
   extents.max_subarray_channels = 2;
-  const DualIOGraphRunResult out = run_live_subarray_graph(
+  const TensorWireGraphRunResult<WireArrayGeometry> out =
+      run_live_subarray_graph(
       {{make_snapshot(1, 4, 2), std::nullopt,
         host_subarray({0, 1, 2})}},
       std::move(params), {.subarray = true}, extents);
@@ -737,7 +836,8 @@ TEST(SubarraySelectionOpTest, RejectsSelectionBeyondCapturedOutputBound) {
   const auto geom = make_linear({0, 1, 2, 3});
   auto extents = default_test_extents();
   extents.max_subarray_channels = 2;
-  const DualIOGraphRunResult out = run_select_result(
+  const TensorWireGraphRunResult<WireArrayGeometry> out =
+      run_select_result(
       make_snapshot(1, 4, 2), make_params(geom), extents);
 
   EXPECT_TRUE(out.plan_ok) << out.plan_json;

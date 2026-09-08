@@ -58,8 +58,11 @@ Capabilities deliberately deferred out of the current scope (e.g. staggered TDM,
 sum-set holey subarray smoothing) are tracked under STATUS.md → Roadmap, not
 here.
 
-**None currently.** L16/L17 settled temporal semantics and L18 settled the
-mixed HSDK 5 physical `[live]` payload policy. Transmit-stamp ownership
-(sequencer versus device report) remains an application architecture choice;
-the consumer contract is unchanged
-([`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md)).
+| ID | Question | Current state | Detail |
+| --- | --- | --- | --- |
+| A1 | How should required `AngleConvention` Params represent omission? | The contract says no default, but the shared value type default-constructs to valid `radar_boresight`, so operators cannot distinguish omission from an explicit preset. Choose optional Params, an unset enum value, or schema-level presence module-wide. | [`PhaseShiftBeamformerOp` OPEN_ITEMS §3](../../operators/angle_estimation/phase_shift_beamformer_op/OPEN_ITEMS.md) |
+
+L16/L17 settled temporal semantics and L18 settled the mixed HSDK 5 physical
+`[live]` payload policy. Transmit-stamp ownership (sequencer versus device
+report) remains an application architecture choice; the consumer contract is
+unchanged ([`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md)).

@@ -160,9 +160,9 @@ stage would occupy the same slot.
   `ArrayGeometry` / `AngleConvention` / `array_taper` steering machinery from
   Beamscan (one broadcast complex GEMM per tick); `[live]` overrides for
   geometry, scan grid, and taper; static `angle_convention`; float/double;
-  rank-agnostic leading batch dims; unit tests (dense DOA-bin recovery,
-  convention relabeling + direction-cosine masking, taper sidelobes, batch,
+  exact rank-3 input; unit tests (dense DOA-bin recovery,
+  convention relabeling + direction-cosine masking, taper sidelobes,
   live overrides, error paths); `performance/cpp/perf_phase_shift_beamformer.cpp`
-  characterizes dense beamforming cost + the `[live] az_angles` override spike.
-  Open items in `phase_shift_beamformer_op/OPEN_ITEMS.md` (dense-cube memory
-  footprint).
+  characterizes dense beamforming cold/steady cost. Open items in
+  `phase_shift_beamformer_op/OPEN_ITEMS.md` cover geometry transport,
+  dense-cube memory, required-convention representation, and inline live timing.

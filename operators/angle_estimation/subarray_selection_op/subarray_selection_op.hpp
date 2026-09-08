@@ -48,12 +48,8 @@ struct SubarraySelectionState;
 // Out: snapshot_out   — complex64/complex128, (num_items, L[, num_snapshots]).
 //                       [EA HSDK5 ONLY] unique in/out port names (was
 //                       "snapshot").
-// Out: array_geometry — optional/latched float64 Tensor, shape (L + 1, 3):
-//                       packed reduced
-//                       ArrayGeometry (see array_geometry_tensor.hpp).
-//                       [EA HSDK5 ONLY] Output<ArrayGeometry> is not a
-//                       PublishedPayload (owns vector/optional); serialized
-//                       Tensor interim — HSDK5_PORT.md §10.
+// Out: array_geometry — optional/latched WireArrayGeometry carrying the
+//                       reduced positions, wavelength, and geometry type.
 // Out: is_valid_out   — optional; the input mask, forwarded.
 //                       [EA HSDK5 ONLY] renamed from "is_valid".
 //
@@ -112,8 +108,7 @@ class SubarraySelectionOp
   Input<Tensor> subarray{"subarray"};
   // [EA HSDK5 ONLY] unique in/out names — see OPERATOR_API.md / HSDK5_PORT §2.
   Output<Tensor> snapshot_out{"snapshot_out"};
-  // Packed ArrayGeometry (float64 Tensor) — HSDK5_PORT §10.
-  Output<Tensor> array_geometry{"array_geometry"};
+  Output<WireArrayGeometry> array_geometry{"array_geometry"};
   Output<Tensor> is_valid_out{"is_valid_out"};
 
  private:

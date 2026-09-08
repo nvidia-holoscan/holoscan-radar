@@ -120,7 +120,7 @@ No `num_sources` / EFT — Capon has no model-order concept. `diagonal_loading` 
 - **Emission.** Loan → fill → commit → emit (`aoa_estimates`, `angle_spectrum`, `doa_multi`, `source_count`, `eigenvalues`). **[EA HSDK5 ONLY]** all five always produced (OPEN_ITEMS §4); bind every device output.
 - **Parameter authoring.** Schema `com.nvidia.holoscan.radar.MVDRParams` version `1`.
 - **Precision.** `MVDREstimatorOp<float>` and `<double>`.
-- **[EA HSDK5 ONLY]** All six override ports are unconditionally in `contract()`; the `diagonal_loading` / `max_sources` Graph mid-stream tests remain skipped (§1) while the descriptor / grid / smoothing ones run. An upstream descriptor output cannot drive `array_geometry`: `VirtualArrayAssemblyOp` / `SubarraySelectionOp` emit a packed float64 Tensor (§10) while this port takes the wire-schema type, so the override has to come from an application-side wire producer (§9 / §10). Python bindings deferred (`HOLOSCAN_RADAR_BUILD_PYTHON=OFF`).
+- **[EA HSDK5 ONLY]** All six override ports are unconditionally in `contract()`; the descriptor / grid / smoothing Graph tests run. Runtime geometry producers connect directly to `array_geometry` with `WireArrayGeometry`; Python remains Params-only for schema payloads.
 
 ## Consumer lifetime notes
 

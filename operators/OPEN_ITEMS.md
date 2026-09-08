@@ -155,7 +155,7 @@ is pinned per operator:
 | --- | --- |
 | `MIMODeinterleaveOp` | none (uniformity / PRI / gather-axis pins live in the operator README; staggered TDM is STATUS.md L12 / Roadmap) |
 | `MIMOCoherentCompensationOp` | none (TDM firing-slot map is `tx_schedule`; ÷M aliased velocity is the module pin below) |
-| `VirtualArrayAssemblyOp` | none (flatten / overlap / geometry pins live in the operator README; packed Tensor emit is HSDK5_PORT §10; Graph live unit skip is §1) |
+| `VirtualArrayAssemblyOp` | none (flatten / overlap / geometry pins live in the operator README; `WireArrayGeometry` transport is HSDK5_PORT §10; Graph live unit skip is §1) |
 
 **Module-level pins (not re-litigated per operator):**
 

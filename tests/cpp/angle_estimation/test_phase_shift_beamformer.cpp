@@ -39,6 +39,7 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/dsp/angle_convention.hpp"
+#include "radar_common/dsp/steering_weights.hpp"
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -675,9 +676,8 @@ TEST(PhaseShiftBeamformerOpTest, PreservesRangeDopplerPlanePerCell) {
 }
 
 TEST(PhaseShiftBeamformerOpTest,
-     RejectsOpaqueLeadingBatchWhenExtentsOmitRxTx) {
+     RejectsOpaqueLeadingBatch) {
   // Contract is (num_channels, D, R); an extra leading dim is opaque batch.
-  // Omit max_rx / max_tx / max_channels so named leading rank is 0.
   constexpr int64_t kN = 8;
   constexpr int64_t kBatch = 2;
   constexpr double kAz0 = 0.12;
@@ -695,18 +695,11 @@ TEST(PhaseShiftBeamformerOpTest,
   auto rd = to_device_tensor(host, {kBatch, kN, 1, 1},
                              complex_dtype<double>());
 
-  holoscan::radar::MaxTensorExtents extents =
-      holoscan::radar::testing::default_test_extents();
-  extents.max_rx.reset();
-  extents.max_tx.reset();
-  extents.max_channels.reset();
-
   const auto az = linspace(-0.4, 0.4, 81);
   const GraphRunResult result = run_beamformer_result<double>(
-      rd, make_params(geom, conv, az, std::vector<double>{0.0}), extents);
-  EXPECT_TRUE(result.plan_ok);
+      rd, make_params(geom, conv, az, std::vector<double>{0.0}));
   EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_TRUE(!result.plan_ok || !result.diagnostics.empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, FloatDoubleAgreeOnPeakBeam) {
@@ -789,6 +782,60 @@ TEST(PhaseShiftBeamformerOpTest, RejectsRankTooLow) {
   const GraphRunResult result = run_beamformer_result<double>(
       rd, make_params(geom, conv, std::vector<double>{0.0},
                       std::vector<double>{0.0}));
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_TRUE(!result.plan_ok || !result.diagnostics.empty());
+}
+
+TEST(PhaseShiftBeamformerOpTest, RejectsInputBeyondCapturedExtents) {
+  constexpr int64_t kN = 4;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto steering =
+      make_steering_vector(geom, AngleConvention{}, 0.0, 0.0);
+  std::vector<std::complex<double>> host;
+  host.reserve(static_cast<std::size_t>(kN * 2 * 3));
+  for (const auto value : steering) {
+    host.insert(host.end(), 6U, value);
+  }
+  auto rd = to_device_tensor(host, {kN, 2, 3}, complex_dtype<double>());
+  auto extents = holoscan::radar::testing::extents_for_scan_grid(
+      1, 1, /*max_doppler=*/1, /*max_range=*/3);
+  const GraphRunResult result = run_beamformer_result<double>(
+      rd, make_params(geom, AngleConvention{}, {0.0}, {0.0}), extents);
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
+TEST(PhaseShiftBeamformerOpTest, CacheKeyIncludesCustomConventionAxes) {
+  const auto geom = make_ula_geometry(4, 0.5, 1.0);
+  AngleConvention first;
+  first.preset = AngleConventionPreset::kCustom;
+  AngleConvention second = first;
+  second.boresight_axis = holoscan::radar::SignedAxis::kPlusY;
+  second.azimuth_positive_axis = holoscan::radar::SignedAxis::kMinusX;
+
+  const std::string first_key = holoscan::radar::steering_cache_key(
+      geom, first, {0.0}, {0.0}, WindowSpec{});
+  const std::string second_key = holoscan::radar::steering_cache_key(
+      geom, second, {0.0}, {0.0}, WindowSpec{});
+  EXPECT_NE(first_key, second_key);
+
+  const std::string close_grid_key = holoscan::radar::steering_cache_key(
+      geom, first, {0.000000000000001}, {0.0}, WindowSpec{});
+  EXPECT_NE(first_key, close_grid_key);
+}
+
+TEST(PhaseShiftBeamformerOpTest, RejectsDegenerateCustomConvention) {
+  constexpr int64_t kN = 4;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  auto rd = vector_to_rd_maps<double>(
+      make_steering_vector(geom, AngleConvention{}, 0.0, 0.0),
+      {kN, 1, 1});
+  AngleConvention invalid;
+  invalid.preset = AngleConventionPreset::kCustom;
+  invalid.azimuth_positive_axis = invalid.boresight_axis;
+  const GraphRunResult result = run_beamformer_result<double>(
+      rd, make_params(geom, invalid, {0.0}, {0.0}));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());

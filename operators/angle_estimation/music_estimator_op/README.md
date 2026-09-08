@@ -146,7 +146,7 @@ A tick whose `num_items` / grid / `max_sources` / `C_est` exceeds the ctor-captu
 - **Emission.** Loan → write on the runtime stream → `run_music_stage` → commit → emit with `capture_time = context.activation_time()`. Empty-item path prepares all five loans before any emit so a late allocate cannot publish a sibling. Order: `aoa_estimates`, `angle_spectrum`, `doa_multi`, `source_count`, `eigenvalues`. **[EA HSDK5 ONLY]** all five are always produced (OPEN_ITEMS §4); unused outputs still need a sink or `bind_tensor_output_device` (`IMPLICIT_DEVICE_ZERO_REJECTED`).
 - **Parameter authoring.** Schema `com.nvidia.holoscan.radar.MUSICParams` version `1`. YAML / `from_config` / `set_params` field names match the table above.
 - **Precision.** Explicit instantiations `MUSICEstimatorOp<float>` and `MUSICEstimatorOp<double>`.
-- **[EA HSDK5 ONLY]** All seven override ports join the contract unconditionally; the `num_sources` / `source_count_pfa` / `max_sources` Graph mid-stream tests are still skipped (§1) while the descriptor / grid / smoothing ones run. An upstream descriptor output cannot drive `array_geometry`: `VirtualArrayAssemblyOp` / `SubarraySelectionOp` emit a packed float64 Tensor (§10) while this port takes the wire-schema type, so the override has to come from an application-side wire producer (§9 / §10). Python bindings in `python/` remain the HSDK 4.x `add_arg` trampoline and are not built while `HOLOSCAN_RADAR_BUILD_PYTHON=OFF`.
+- **[EA HSDK5 ONLY]** All seven override ports join the contract unconditionally; descriptor / grid / smoothing Graph tests run. Runtime geometry producers connect directly to `array_geometry` with `WireArrayGeometry`; Python remains Params-only for schema payloads.
 
 ## Consumer lifetime notes
 

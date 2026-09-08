@@ -192,9 +192,9 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | Shared Tensor I/O + Exact `[live]` helpers (`radar_common/sdk/`) | landed (ClutterFilter pilot; Exact since 2026-08-21) |
 | `ClutterFilterOp` F32/F64 + Graph C++ tests | landed; Exact `method` (unconditional entry); Graph perf cold/steady landed; enum `method` live-override units landed now that §12 is fixed; Graph perf `method` `override_ms` landed (§8) |
 | `SnapshotGatherOp` F32/F64 + Graph C++ tests (OnAligned 2-in/2-out) | landed; tick-local config/plan and constructor-created workspace; Exact `snapshot_window` on an unconditional entry with mid-stream/revert Graph coverage; optional/always `is_valid`; Graph perf `snapshot_window` `override_ms` restored (§8) |
-| `PhaseShiftBeamformerOp` F32/F64 + Graph C++ tests | landed; `[live]` geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); no POD live Inputs, so Graph live tests still skipped; Graph perf cold/steady landed (live deferred §1/§8/§9) |
+| `PhaseShiftBeamformerOp` F32/F64 + Graph C++ tests | landed; tick-local config/plan, exact rank-3 input, captured-extent checks, and complete custom-convention steering-cache identity; `[live]` geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9) with mid-stream/revert Graph coverage; Graph perf cold/steady landed (inline live timing is ordinary follow-up) |
 | `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `peak_interpolation` (unconditional entry) with its enum live-override unit landed now that §12 is fixed; optional `is_valid` Graph wiring deferred (§11); geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `SubarraySelectionOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; tick-local config/plan, constructor-created selection cache + bounded index table; required `snapshot_out` before independent latched geometry/mask outputs; outputs `snapshot_out` / `is_valid_out` (§2); `array_geometry` emitted as packed float64 Tensor (§10); geometry wire-schema and bounded host-Tensor `subarray` lives (§9); optional `is_valid` Graph wiring deferred (§11); Graph perf cold/steady landed (live deferred §9) |
+| `SubarraySelectionOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; tick-local config/plan, constructor-created selection cache + bounded index table; required snapshot prepared first, then latched geometry published before the snapshot trigger for downstream Exact coherence; outputs `snapshot_out` / `is_valid_out` (§2); geometry input/output use `WireArrayGeometry` (§9/§10); bounded host-Tensor `subarray` live (§9); Graph perf cold/steady landed |
 | `ClusterDBSCANOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; tick-local config/plan; Exact `epsilon`/`min_points`/`max_clusters` with Graph coverage; bounded host-Tensor `epsilon`, `max_features` checked on arrival (§9); required `labels` plus optional/latched `sizes`; Graph perf uses production Exact `min_points` (§8) |
 | `MVDREstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `diagonal_loading`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/grid/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `diagonal_loading` `override_ms` restored (§8) |
 | `MUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `num_sources`/`source_count_pfa`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/grid/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `max_sources` `override_ms` restored (§8) |
@@ -205,7 +205,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; all 5 outputs optional/latched; unconditional Exact lives with scalar, bounded host-Tensor, and ChannelPod payloads; Graph tests cover every live family and unwired outputs; statistical MC suite on label `statistical`; Graph perf measures `threshold_scale` `override_ms` (§8) |
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph live-override/`TXSchedule` N/A (Params-only schedule); Graph perf cold/steady landed |
 | `MIMOCoherentCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` on a generated wire-schema port (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
-| `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); `array_geometry` packed float64 Tensor (§10); Exact `wavelength` (unconditional entry) (Graph live deferred §1); Graph perf `wavelength` `override_ms` restored (§8); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
+| `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); required `array_geometry` uses `WireArrayGeometry` and directly drives angle live inputs (§9/§10); Exact `wavelength` (unconditional entry) (Graph live deferred §1); Graph perf `wavelength` `override_ms` restored (§8); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
 | `FMCWRangeProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `range_bins` only with waveform; Exact lives (unconditional entries); `range_window`/`waveform` restored through generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
 | `FMCWDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–2-out) | landed; optional `velocity_bins` only with waveform; Exact lives (unconditional entries); `doppler_window`/`waveform` restored through generated schema payloads (§9); Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
 | `FMCWRangeDopplerProcessorOp` F32/F64 + Graph C++ tests (1-in/1–3-out) | landed; optional axis outs with waveform; Exact lives incl. `clutter_filter` (unconditional entries); windows/`waveform` restored through generated schema payloads (§9); UlpParity vs split chain preserved; Graph perf cold/steady landed (live timing deferred §1/§8/§9) |
@@ -701,33 +701,29 @@ rules, `MaxTensorExtents` bounds, bridge/install/test sync surface, and
 C++-only wire-type limitation are in
 [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md). Python continues through Params.
 
-**One connection the categories do not make.** `ArrayGeometry` rides *into* an
-operator as a generated wire type but comes *out* of
-`VirtualArrayAssemblyOp.array_geometry` as a packed float64 `Output<Tensor>`
-(§10, the sanctioned descriptor output). The types differ, so VAA cannot drive
-an angle operator's `array_geometry` port directly — that override has to come
-from an application-side wire-schema producer. Closing it means either giving
-the descriptor output a wire payload or bridging the two representations; it
-is not a Params-only fallback and should not be documented as one.
+Runtime producers now use the same category:
+`VirtualArrayAssemblyOp.array_geometry` and
+`SubarraySelectionOp.array_geometry` are `Output<WireArrayGeometry>`.
+Their descriptor-Tensor pools are pageable-host and bounded from
+`MaxTensorExtents`; C++ graphs connect them directly to angle operators'
+same-schema Exact inputs. Python remains Params-only because generated wire
+objects are not exposed there.
 
-**Next.** Extend Graph Exact coverage over the landed ports (§1), and decide
-the VAA descriptor-output representation above.
-
-**Status:** policy settled (L18); implementation landed for every `[live]`
-port. Remaining work is test coverage and the VAA descriptor-output type.
+**Status:** policy and implementation landed for every `[live]` port and both
+runtime geometry producers.
 
 ---
 
-### 10. Descriptor output ports (`ArrayGeometry`) are not PublishedPayloads
+### 10. Descriptor output ports use the shared wire schema
 
 **Class:** Durable HSDK 5 (`PublishedPayload` admission).
 
-**What fails.** `ArrayGeometry` owns `std::vector<double>` and
+**Constraint.** `ArrayGeometry` owns `std::vector<double>` and
 `std::optional<ArrayGeometryType>` — not a ChannelPod (requires standard
 layout + trivially copyable) and not a SchemaIdentity type. Declaring
 `Output<ArrayGeometry>` (or `Input<ArrayGeometry>`) fails the
 `PublishedPayload` concept at compile time. The same blocker applies to
-`VirtualArrayAssemblyOp.array_geometry` when that op ports. SDK
+runtime geometry outputs. SDK
 documentation for the admitted families and the POD restrictions:
 [payload type rules](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/data-and-payloads/payload-type-rules.md),
 [experimental raw POD payloads](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/advanced/experimental-pod-payloads.md)
@@ -740,22 +736,19 @@ geometry. `VirtualArrayAssemblyOp.array_geometry` is required.
 `SubarraySelectionOp.array_geometry` is latched-optional for snapshot-only
 consumers; while consumed, it emits on the same ticks as `snapshot_out`.
 
-**Interim.** `SubarraySelectionOp` emits `array_geometry` as a float64
-device Tensor of shape `(num_elements + 1, 3)` via
-`radar_common/descriptors/array_geometry_tensor.hpp` (positions in rows
-`[0, N)`, metadata row `[wavelength, geometry_type_code, 0]`). Documented
-in `OPERATOR_API.md` under SubarraySelectionOp. Live *input* overrides of
-`ArrayGeometry` ride a generated wire type instead (§9), so a descriptor
-output cannot currently feed a descriptor override port.
+**Implementation.** Both runtime producers emit
+`Output<WireArrayGeometry>`, the same generated descriptor-Tensor schema used
+by angle operators' live inputs. A shared helper prepares the bounded
+pageable-host `(num_elements + 1, 3)` member, commits the loan, and publishes
+it with `to_wire()`. `array_geometry_tensor.hpp` remains only the schema
+bridge's internal packing format. `VirtualArrayAssemblyOp.array_geometry` is
+required; `SubarraySelectionOp.array_geometry` uses the shared latched
+schema-output path and skips packing, allocation, and emission after an
+unwired first emit.
 
-**Next.** Prefer a durable schema / ChannelPod-compatible wrapper (or SDK
-admission for owning containers) shared with VirtualArrayAssembly; restore
-typed `Output<ArrayGeometry>` when available. Do not invent a second
-descriptor type.
-
-**Status:** open — SubarraySelection + VirtualArrayAssembly Tensor pack
-landed; restore typed `Output<ArrayGeometry>` when the SDK admits owning
-containers / a durable ChannelPod schema.
+**Status:** resolved — C++ producer/consumer ports share
+`WireArrayGeometry`; Python remains Params-only until generated schema
+payloads are exposed.
 
 ---
 

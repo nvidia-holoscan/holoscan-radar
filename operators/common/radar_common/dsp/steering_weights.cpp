@@ -4,6 +4,8 @@
 #include "radar_common/dsp/steering_weights.hpp"
 
 #include <cmath>
+#include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -21,8 +23,13 @@ std::string steering_cache_key(const ArrayGeometry& geometry,
                                const std::vector<double>& el_angles,
                                const WindowSpec& array_taper) {
   std::ostringstream os;
-  os << static_cast<int>(convention.preset) << "|" << geometry.wavelength << "|"
-     << geometry.element_positions.size() << "|";
+  os << std::setprecision(std::numeric_limits<double>::max_digits10);
+  os << static_cast<int>(convention.preset) << ","
+     << static_cast<int>(convention.boresight_axis) << ","
+     << static_cast<int>(convention.azimuth_positive_axis) << ","
+     << static_cast<int>(convention.elevation_positive_axis) << ","
+     << static_cast<int>(convention.elevation_reference) << "|"
+     << geometry.wavelength << "|" << geometry.element_positions.size() << "|";
   for (double v : geometry.element_positions) {
     os << v << ",";
   }

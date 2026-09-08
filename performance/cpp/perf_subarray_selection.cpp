@@ -20,6 +20,7 @@
 #include "angle_estimation/subarray_selection_op/subarray_selection_op.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_process_warmup.hpp"
@@ -131,15 +132,14 @@ perf::TimingCollector run_subarray_graph(
         const auto snapshot_sink =
             graph.op<perf::PerfTerminalSinkOp>("snapshot_sink");
         const auto geometry_drain =
-            graph.op<perf::PerfNullSinkOp>("geometry_drain");
+            graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>(
+                "geometry_drain");
         const holoscan::ConnectionOptions queue{.queue_depth = 4U};
         graph.add_flow(source->out, op->snapshot, queue);
         graph.add_flow(op->snapshot_out, snapshot_sink->in, queue);
         graph.add_flow(op->array_geometry, geometry_drain->in, queue);
         perf::bind_tensor_out(
             options, "subarray_selection", "snapshot_out");
-        perf::bind_tensor_out(
-            options, "subarray_selection", "array_geometry");
         // Declared optional device outputs still require placement on EA.
         perf::bind_tensor_out(
             options, "subarray_selection", "is_valid_out");

@@ -133,7 +133,7 @@ Displacement is derived from `array_geometry`, never stored on the descriptor. S
 - **Emission.** Loan → fill → commit → emit (`aoa_estimates`, `doa_multi`, `source_count`, `eigenvalues`). **[EA HSDK5 ONLY]** all four always emitted (OPEN_ITEMS §4).
 - **Parameter authoring.** Schema `com.nvidia.holoscan.radar.ESPRITParams` version `1`.
 - **Precision.** `ESPRITEstimatorOp<float>` and `<double>`.
-- **[EA HSDK5 ONLY]** All five override ports are unconditionally in `contract()`; the `num_sources` / `source_count_pfa` / `max_sources` Graph mid-stream tests remain skipped (§1) while the geometry / smoothing ones run. An upstream descriptor output cannot drive `array_geometry`: `VirtualArrayAssemblyOp` / `SubarraySelectionOp` emit a packed float64 Tensor (§10) while this port takes the wire-schema type, so the override has to come from an application-side wire producer (§9 / §10). Python bindings deferred (`HOLOSCAN_RADAR_BUILD_PYTHON=OFF`).
+- **[EA HSDK5 ONLY]** All five override ports are unconditionally in `contract()`; geometry / smoothing Graph tests run. Runtime geometry producers connect directly to `array_geometry` with `WireArrayGeometry`; Python remains Params-only for schema payloads.
 
 ## Consumer lifetime notes
 

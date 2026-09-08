@@ -213,7 +213,7 @@ flowchart TD
   DOPP -->|"rd_maps (M_tx, N_rx, num_doppler, num_range)"| COMP["MIMOCoherentCompensationOp"]
   COMP -->|"rd_maps_out"| VAA["VirtualArrayAssemblyOp"]
   VAA -->|"rd_maps_out (num_virtual, num_doppler, num_range)"| ANGLE["angle path (dense or sparse) + CFARDetectorOp"]
-  VAA -->|"array_geometry (packed Tensor) → ⟨angle op⟩.array_geometry"| ANGLE
+  VAA -->|"array_geometry (WireArrayGeometry) → ⟨angle op⟩.array_geometry"| ANGLE
   class CLUT opt
 ```
 
@@ -235,7 +235,7 @@ flowchart TD
   COMP -->|"rd_maps_out → ClutterFilterOp.range_profiles † (M_tx, N_rx, num_doppler_per_tx, num_range)"| CLUT["ClutterFilterOp (post-demux)"]
   CLUT -->|"range_profiles_out"| VAA["VirtualArrayAssemblyOp"]
   VAA -->|"rd_maps_out (num_virtual, num_doppler, num_range)"| ANGLE["angle path (dense or sparse) + CFARDetectorOp"]
-  VAA -->|"array_geometry (packed Tensor) → ⟨angle op⟩.array_geometry"| ANGLE
+  VAA -->|"array_geometry (WireArrayGeometry) → ⟨angle op⟩.array_geometry"| ANGLE
   class CLUT opt
 ```
 

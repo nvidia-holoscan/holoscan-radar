@@ -41,10 +41,10 @@ namespace holoscan::radar {
 // only). This is the *only* dense estimator: a full MVDR/MUSIC cube over every
 // RD cell is prohibitive, so the dense slot is conventional beamforming.
 //
-// In:  rd_maps   — complex64/complex128, (..., num_channels, num_doppler,
+// In:  rd_maps   — complex64/complex128, (num_channels, num_doppler,
 //                  num_range_bins). Channel axis immediately before the
 //                  (doppler, range) plane; must match array_geometry.
-// Out: rda_cube  — complex64/complex128, (..., num_az, num_el, num_doppler,
+// Out: rda_cube  — complex64/complex128, (num_az, num_el, num_doppler,
 //                  num_range_bins). Channel axis replaced by the az x el beam
 //                  grid (u x v under direction_cosine).
 //
@@ -113,23 +113,19 @@ class PhaseShiftBeamformerOp
   Input<WireWindowSpec> array_taper{"array_taper"};
 
  private:
-  MaxTensorExtents extents_;
-  std::uint32_t max_rank_{4U};
-  std::size_t max_byte_span_{0U};
-  std::int64_t max_az_{0};
-  std::int64_t max_el_{0};
-
   // Keep the previous activation's input alive across ticks so async
   // device reads cannot outlive the buffer.
   Tensor retained_input_;
 
-
-  // Conjugated steering weights, built on device, laid out
-  // (num_beams, num_channels) with the beam axis enumerated az-major
-  // (beam = ia * num_el + ie) so the GEMM output reshapes directly
-  // to the (..., num_az, num_el, D, R) cube. Cached, warn-once on
-  // rebuild.
+  // Conjugated steering weights, built on device and cached by the complete
+  // geometry/convention/grid/taper configuration.
   ConfigCache<std::shared_ptr<holoscan::Tensor>> steering_cache_;
+
+  std::int64_t max_az_{0};
+  std::int64_t max_el_{0};
+  std::int64_t max_doppler_{0};
+  std::int64_t max_range_{0};
+  std::size_t max_byte_span_{0U};
 };
 
 extern template class PhaseShiftBeamformerOp<float>;

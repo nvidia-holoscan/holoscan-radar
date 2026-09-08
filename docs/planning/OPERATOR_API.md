@@ -584,7 +584,7 @@ Selects a uniform ULA/URA sub-array from a (possibly holey) MIMO virtual array a
 - **In:** `snapshot` — complex64 / complex128, `(num_items, N_virtual)` or `(num_items, N_virtual, num_snapshots)`. Holey virtual-array snapshot from `SnapshotGatherOp`; `N_virtual` must match `array_geometry.num_elements`.
 - **In:** `is_valid` (optional) — bool or uint8, `(num_items, num_snapshots)`. Forwarded unchanged when present (channel selection leaves the mask intact).
 - **Out:** `snapshot_out` — complex64 / complex128, `(num_items, L[, num_snapshots])`. Selected-channel snapshot (`L` = sub-array size). HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `snapshot_out` rather than repeating `snapshot` ([EA HSDK5 ONLY]).
-- **Out:** `array_geometry` (optional, **latched**) — reduced geometry for the estimator. Logical type is `ArrayGeometry`; on HSDK 5 EA the physical port is a float64 Tensor of shape `(L + 1, 3)` packing positions + wavelength + optional `geometry_type` ([EA HSDK5 ONLY] — `Output<ArrayGeometry>` is not a PublishedPayload because the descriptor owns `std::vector` / `std::optional`; see `array_geometry_tensor.hpp` / HSDK5_PORT.md §10). When consumed, it is emitted on the same tick as `snapshot_out`; Params side-channel is not acceptable for runtime-varying geometry. A consumer using a separately configured static geometry must keep geometry/subarray overrides disabled or maintain equivalent coherence itself.
+- **Out:** `array_geometry` (optional, **latched**) — `WireArrayGeometry`, carrying the reduced logical `ArrayGeometry` for the estimator in the shared generated descriptor-Tensor schema. When consumed, it is emitted on the same tick as `snapshot_out` and directly wires to an angle operator's same-schema `[live] array_geometry` input; Params side-channel is not acceptable for runtime-varying geometry. A consumer using a separately configured static geometry must keep geometry/subarray overrides disabled or maintain equivalent coherence itself.
 - **Out:** `is_valid_out` (optional, **latched**) — the input mask, forwarded. Physical name `is_valid_out` ([EA HSDK5 ONLY] unique in/out names).
 
 **Parameters:**
@@ -758,7 +758,7 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 
 - **In:** `rd_maps` — complex64 / complex128, `(M_tx, N_rx, num_doppler, num_range_bins)`. Separated `(tx, rx)` block. (TX/RX element positions are parameters.)
 - **Out:** `rd_maps_out` — complex64 / complex128, `(num_virtual, num_doppler, num_range_bins)`. `(tx, rx)` flattened to a single virtual channel axis (`c = tx·N_rx + rx`), overlapped virtual elements deduped, so `num_virtual ≤ M·N`. [EA HSDK5 ONLY] physical port name `rd_maps_out` (unique in/out namespace).
-- **Out:** `array_geometry` — float64 Tensor, shape `(num_virtual + 1, 3)`: packed ArrayGeometry via `array_geometry_tensor.hpp` (HSDK5_PORT §10). Virtual `element_positions` (`p_virtual = p_tx + p_rx`) + wavelength in the metadata row; consumers unpack with `unpack_array_geometry`. [EA HSDK5 ONLY] `Output<ArrayGeometry>` is not a PublishedPayload; serialized Tensor interim.
+- **Out:** `array_geometry` — `WireArrayGeometry`, carrying the logical virtual `ArrayGeometry` in the shared generated descriptor-Tensor schema: `element_positions` (`p_virtual = p_tx + p_rx`), wavelength, and optional geometry type. It directly wires to angle operators' same-schema `[live] array_geometry` inputs.
 
 **Parameters:**
 

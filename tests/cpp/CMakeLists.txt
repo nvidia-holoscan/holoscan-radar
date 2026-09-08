@@ -85,7 +85,9 @@ radar_add_test(fmcw/test_mimo_deinterleave
 radar_add_test(fmcw/test_mimo_coherent_compensation
     holoscan::mimo_coherent_compensation_op)
 radar_add_test(fmcw/test_virtual_array_assembly
-    holoscan::virtual_array_assembly_op)
+    holoscan::virtual_array_assembly_op
+    holoscan::beamscan_estimator_op
+    holoscan::radar_common_steering)
 radar_add_test(fmcw/test_fmcw_doppler_processor
     holoscan::fmcw_doppler_processor_op)
 radar_add_test(fmcw/test_fmcw_range_processor
@@ -105,6 +107,8 @@ radar_add_test(angle_estimation/test_phase_shift_beamformer
     holoscan::radar_common_steering)
 radar_add_test(angle_estimation/test_subarray_selection_op
     holoscan::subarray_selection_op
+    holoscan::beamscan_estimator_op
+    holoscan::radar_common_steering
     holoscan::radar_common_spatial_smoothing)
 radar_add_test(angle_estimation/test_mvdr_estimator
     holoscan::mvdr_estimator_op

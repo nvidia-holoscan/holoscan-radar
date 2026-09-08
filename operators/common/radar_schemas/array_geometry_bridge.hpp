@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <span>
@@ -11,10 +12,14 @@
 #include <vector>
 
 #include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
 #include <holoscan/core/expected.hpp>
+#include <holoscan/core/port.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/array_geometry_tensor.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_schemas/bridge_utils.hpp"
 #include "radar_schemas/array_geometry_schema_traits.hpp"
 
@@ -40,6 +45,41 @@ inline WireArrayGeometry to_wire(const ArrayGeometry& source) {
         static_cast<std::uint8_t>(*source.geometry_type));
   }
   return result;
+}
+
+struct PreparedWireArrayGeometry {
+  TensorOutputLoan loan;
+  WireArrayGeometry payload;
+};
+
+inline expected<PreparedWireArrayGeometry, Error>
+prepare_wire_array_geometry(Output<WireArrayGeometry>& output,
+                            const ArrayGeometry& geometry) {
+  const std::vector<double> packed = pack_array_geometry(geometry);
+  const std::vector<int64_t> shape = array_geometry_tensor_shape(geometry);
+  auto loan = output.allocate_tensor(TensorLoanRequest{
+      .shape = shape, .dtype = DLDataType{kDLFloat, 64U, 1U}});
+  if (!loan) {
+    return make_unexpected(std::move(loan).error());
+  }
+  auto written = loan->write_host_and_commit(
+      [&packed](const TensorOutputWriteGuard& writer) {
+        std::copy(packed.begin(), packed.end(), writer.data_as<double>());
+      });
+  if (!written) {
+    return make_unexpected(std::move(written).error());
+  }
+  return PreparedWireArrayGeometry{
+      .loan = std::move(*loan),
+      .payload = to_wire(geometry),
+  };
+}
+
+inline expected<void, Error> emit_prepared_wire_array_geometry(
+    Output<WireArrayGeometry>& output, ExecutionContext& context,
+    PreparedWireArrayGeometry prepared) {
+  return emit_prepared_schema_tensor(
+      output, context, std::move(prepared.loan), std::move(prepared.payload));
 }
 
 inline expected<ArrayGeometry, Error> from_wire(

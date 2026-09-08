@@ -23,11 +23,12 @@
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_stage.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
 
 namespace holoscan::radar {
 
 // MIMO marshaling: flatten separated (tx, rx) RD maps into a virtual channel
-// axis and emit the matching ArrayGeometry as a packed float64 Tensor.
+// axis and emit the matching ArrayGeometry in the shared wire schema.
 // Contract reference: ports, shapes, dtypes, parameters.
 //
 // In:  rd_maps — complex64/complex128, (M_tx, N_rx, num_doppler,
@@ -35,10 +36,8 @@ namespace holoscan::radar {
 // Out: rd_maps_out — same dtype, (num_virtual, num_doppler,
 //               num_range_bins).
 //               [EA HSDK5 ONLY] unique in/out port names required.
-// Out: array_geometry — float64 Tensor, shape (num_virtual + 1, 3): packed
-//               ArrayGeometry (see array_geometry_tensor.hpp).
-//               [EA HSDK5 ONLY] Output<ArrayGeometry> is not a
-//               PublishedPayload; serialized Tensor interim — HSDK5_PORT §10.
+// Out: array_geometry — WireArrayGeometry carrying the virtual element
+//               positions, wavelength, and optional geometry type.
 //
 // Precision is fixed at compile time by the template instantiation.
 // Fat output pool sizing requires MaxTensorExtents at graph.op() (ctor).
@@ -83,8 +82,8 @@ class VirtualArrayAssemblyOp
                 "VirtualArrayAssemblyOp supports float and double precision");
 
  public:
-  // Required: sizes the rd_maps_out and array_geometry Tensor pools at
-  // setup(), and the private index tables.
+  // Required: sizes the rd_maps_out and array_geometry descriptor-Tensor
+  // pools at setup(), and the private index tables.
   explicit VirtualArrayAssemblyOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
@@ -98,8 +97,7 @@ class VirtualArrayAssemblyOp
   // remains "rd_maps"; the physical port name is rd_maps_out.
   // [EA HSDK5 ONLY] revisit naming once the full port is settled.
   Output<Tensor> rd_maps_out{"rd_maps_out"};
-  // Packed ArrayGeometry (float64 Tensor) — HSDK5_PORT §10.
-  Output<Tensor> array_geometry{"array_geometry"};
+  Output<WireArrayGeometry> array_geometry{"array_geometry"};
 
   // [live] Exact override (OPERATOR_API.md).
   Input<double> wavelength{"wavelength"};

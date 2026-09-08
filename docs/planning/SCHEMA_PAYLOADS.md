@@ -151,3 +151,11 @@ cannot construct or publish them, so Python callers configure the equivalent
 logical values through Params. That limitation does not change the logical
 `[live]` contract and must be re-evaluated when the Python payload surface
 gains schema-object support.
+
+`VirtualArrayAssemblyOp.array_geometry` and
+`SubarraySelectionOp.array_geometry` are runtime producers of
+`WireArrayGeometry`. Their pageable-host descriptor-Tensor pools are bounded
+from `MaxTensorExtents`; the internal `(N + 1, 3)` float64 packing remains an
+implementation detail of the shared wire schema. C++ graphs can connect these
+outputs directly to angle operators' same-schema Exact live inputs. Python
+applications remain Params-only until generated payload ports are exposed.

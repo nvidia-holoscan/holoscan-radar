@@ -17,12 +17,12 @@
 #include <holoscan/core/payload_options.hpp>
 
 #include "radar_common/descriptors/array_geometry.hpp"
-#include "radar_common/descriptors/array_geometry_tensor.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
 
 namespace holoscan::radar {
 
@@ -86,7 +86,6 @@ struct VirtualAssemblyStagePlan {
   detail::RdMapsLayout layout;
   detail::VirtualAssemblyPlan gather;
   std::vector<int64_t> out_shape;
-  std::vector<int64_t> geom_shape;
 };
 
 // Merge the Exact [live] wavelength onto pinned Params. Map the
@@ -155,7 +154,6 @@ expected<VirtualAssemblyStagePlan, Error> build_assembly_stage_plan(
 
   plan.out_shape =
       detail::assembled_rd_shape(plan.layout, plan.gather.num_virtual);
-  plan.geom_shape = {plan.gather.num_virtual + 1, 3};
   return plan;
 }
 
@@ -205,6 +203,11 @@ void VirtualArrayAssemblyOp<T>::setup(OperatorSpec& spec) {
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
+  constexpr TensorRepresentation kHostGeometry{
+      .memory_kind = MemoryKind::kHost,
+      .dtype = DLDataType{kDLFloat, 64U, 1U},
+      .rank = 2U,
+  };
   const TensorBounds bounds{
       .max_rank = max_rank_,
       .max_byte_span = max_byte_span_};
@@ -216,7 +219,8 @@ void VirtualArrayAssemblyOp<T>::setup(OperatorSpec& spec) {
   spec.output(rd_maps_out)
       .produces_tensor(pooled_tensor_output(kDevice, bounds));
   spec.output(array_geometry)
-      .produces_tensor(pooled_tensor_output(kDevice, geom_bounds));
+      .max_emits_per_compute(1U)
+      .produces_tensor(pooled_tensor_output(kHostGeometry, geom_bounds));
 
   // [live] Exact overrides, Params order (schema and POD alike).
   spec.input(wavelength).queue_depth(2U);
@@ -284,7 +288,7 @@ expected<void, Error> VirtualArrayAssemblyOp<T>::compute(
   HOLOSCAN_TRY(auto plan,
                build_assembly_stage_plan(std::move(stage), input, extents_));
 
-  // Gather and geometry H2D run on the runtime compute stream.
+  // Gather runs on the runtime compute stream.
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
     return make_unexpected(
@@ -322,30 +326,14 @@ expected<void, Error> VirtualArrayAssemblyOp<T>::compute(
 
   const ArrayGeometry geom =
       detail::make_array_geometry(plan.gather, plan.stage.wavelength);
-  const std::vector<double> packed = pack_array_geometry(geom);
-  const DLDataType f64 = real_dtype<double>();
   HOLOSCAN_TRY(
-      auto geom_loan,
-      prepare_device_tensor(
-          array_geometry, context, plan.geom_shape, f64,
-          [&](void* dst, std::size_t nbytes) -> expected<void, Error> {
-            if (nbytes != packed.size() * sizeof(double)) {
-              return fail_runtime(
-                  std::string(kOpName) + ": array_geometry size mismatch");
-            }
-            if (cudaMemcpyAsync(dst, packed.data(), nbytes,
-                                cudaMemcpyHostToDevice,
-                                stream) != cudaSuccess) {
-              return fail_runtime(
-                  std::string(kOpName) + ": array_geometry H2D failed");
-            }
-            return {};
-          }));
+      auto geom_prepared,
+      prepare_wire_array_geometry(array_geometry, geom));
 
+  HOLOSCAN_TRY(emit_prepared_wire_array_geometry(
+      array_geometry, context, std::move(geom_prepared)));
   HOLOSCAN_TRY(emit_prepared_tensor(rd_maps_out, context,
                                     std::move(rd_loan)));
-  HOLOSCAN_TRY(emit_prepared_tensor(array_geometry, context,
-                                    std::move(geom_loan)));
 
   // Keep rd_maps alive until stream-ordered reads complete.
   retained_input_ = std::move(input);

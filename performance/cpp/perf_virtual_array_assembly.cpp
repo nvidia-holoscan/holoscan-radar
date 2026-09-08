@@ -31,6 +31,7 @@
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
@@ -133,8 +134,6 @@ perf::TimingCollector run_assembly_graph(
       separated_shape(scen));
   // Value-agnostic gather: zero-fill loan is valid. Remaining xl gap vs
   // Holoscan 4.3 is accepted Graph publish-path cost (HSDK5_PORT.md §3).
-  using BaseOp = hr::VirtualArrayAssemblyOp<PerfPrecision>;
-  using LiveOp = perf::PerfLiveContractOp<BaseOp, &BaseOp::wavelength>;
   constexpr double kOverrideWavelength = kDefaultWavelength * 1.1;
   return perf::run_perf_graph_with_override(
       std::move(cube), plan.total_frames, plan.override_at,
@@ -146,7 +145,8 @@ perf::TimingCollector run_assembly_graph(
         extents.max_rx = scen.num_rx;
         extents.max_doppler_bins = scen.num_doppler;
         extents.max_range_bins = scen.num_range_bins;
-        auto op = graph.op<LiveOp>("virtual_array", extents);
+        auto op = graph.op<hr::VirtualArrayAssemblyOp<PerfPrecision>>(
+            "virtual_array", extents);
         hr::VirtualArrayAssemblyParams params;
         params.tx_positions =
             linear_positions(scen.num_tx, 0.5);
@@ -158,7 +158,8 @@ perf::TimingCollector run_assembly_graph(
         const auto sink =
             graph.op<perf::PerfTerminalSinkOp>("out_sink");
         const auto geom_drain =
-            graph.op<perf::PerfNullSinkOp>("geom_drain");
+            graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>(
+                "geom_drain");
         const holoscan::ConnectionOptions q{
             .queue_depth = 4U};
         graph.add_flow(src->out, op->rd_maps, q);
@@ -173,8 +174,6 @@ perf::TimingCollector run_assembly_graph(
             .add(geom_drain);
         perf::bind_tensor_out(
             options, "virtual_array", "rd_maps_out");
-        perf::bind_tensor_out(
-            options, "virtual_array", "array_geometry");
       },
       perf::PerfPublishMode::kFillInPlace);
 }

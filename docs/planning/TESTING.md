@@ -170,6 +170,8 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - `angle_convention`: the same physical direction is reported with the expected (az, el) labels under different presets; `direction_cosine` masks the invisible region (`u²+v² > 1`).
 - `array_taper` lowers spatial sidelobes.
 - `[live]` overrides (`array_geometry` / `az_angles` / `el_angles` / `array_taper`) change the output and reuse cached weights when unchanged.
+- Input rank is exactly 3; an opaque leading batch axis is rejected, and Doppler/range or scan-grid extents above `MaxTensorExtents` fail before output allocation.
+- Distinct `custom` angle frames and distinct floating-point grids produce distinct steering-cache identities; degenerate custom frames reject.
 
 #### SnapshotGatherOp (bridge)
 
@@ -188,6 +190,7 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - Explicit indices are range/uniqueness checked, reordered into lattice order, and rejected when they leave a hole.
 - A 3-D aperture or selected size below `min_subarray_size` fails predictably.
 - Leaving optional/latched `array_geometry` unwired does not suppress required `snapshot_out`; a wired geometry emits on the same tick.
+- `snapshot_out` and `WireArrayGeometry` directly drive an angle estimator; the Exact join preserves their shared capture time and the reduced geometry yields the expected steering result.
 
 #### Sparse angle estimators (shared slot)
 
@@ -220,6 +223,7 @@ Common check (all five): `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_e
 - `overlap_policy`: `dedup` collapses coincident positions (`num_virtual` = unique count); `keep_all` retains `M·N`; `average` combines coincident samples.
 - `num_virtual ≤ M·N`.
 - Extra leading axes are rejected (input rank is exactly 4; no module batch).
+- Emitted `WireArrayGeometry` directly drives an angle estimator's Exact live input and yields the expected steering result without an adapter.
 
 ---
 

@@ -11,51 +11,9 @@ if it affects the module, then remove or archive the section here.
 
 ---
 
-## 1. `array_geometry` overrides have no in-module producer
-
-**Blocks checklist:** Performance → inline live-override measurement (when
-Graph-ported). The ports and their mid-stream Graph coverage are in place.
-
-**Contract.** `OPERATOR_API.md` marks `array_geometry`, `az_angles`,
-`el_angles`, and `array_taper` as `[live]`; `angle_convention`
-remains STATIC.
-
-**Ports (settled — L16 / L17 / L18).** `contract()` unconditionally joins
-`Input<WireArrayGeometry> array_geometry`, `Input<WireWindowSpec>
-array_taper`, and the rank-1 pageable-host float64 config Tensors
-`az_angles` / `el_angles` to the data trigger with `Exact{}` +
-`on_missing SafeDefault{}`; the application enables an override by wiring
-the port, and a matched override applies for that tick only —
-[`TEMPORAL_CONTRACTS.md`](../../../docs/planning/TEMPORAL_CONTRACTS.md).
-`compute()` resolves each with `resolve_live_override_via`, validating the
-Tensors against `max_az` / `max_el` from `MaxTensorExtents`. Logical Params
-types are unchanged; the `ConfigCache` steering rebuild keys on the
-resolved geometry / grid / taper either way.
-
-Graph coverage: `LiveAzGridAppliesForOneTick`, `LiveElGridAppliesForOneTick`,
-`LiveArrayGeometryAppliesForOneTick`, `LiveArrayTaperAppliesForOneTick`,
-`LiveOverridesRejectMalformedAndBounds`. Params authoring still covers
-selection (`ScanGridConfigurableFromParams`,
-`ArrayTaperConfigurableFromParams`).
-
-**Still open.** `VirtualArrayAssemblyOp` / `SubarraySelectionOp` emit
-geometry as a packed float64 `(N + 1, 3)` Tensor (§10), not the
-wire-schema type this port consumes (§9). The representations differ, so a
-runtime virtual geometry cannot drive this override directly — it has to
-come from an app-side wire-schema producer. The generated wire objects are
-also C++-only, so Python drives the parameter through Params.
-
-**Next.** Settle one `ArrayGeometry` transport so a descriptor output can
-feed a descriptor override port. Document any OPERATOR_API physical-type
-divergence.
-
-**Status:** open — `ArrayGeometry` transport decision.
-
----
-
 ## 2. Dense RDA-cube memory footprint
 
-**Context.** The output cube is `(..., num_az, num_el, num_doppler,
+**Context.** The output cube is `(num_az, num_el, num_doppler,
 num_range_bins)` complex, allocated per tick (the output is owned downstream).
 For a fine scan grid over a full RD map this is large (e.g. a 61×31 grid over
 128×256 cells is ~250 MB in complex64), which is inherent to the dense path —
@@ -69,28 +27,32 @@ chunked-emit variant to bound peak memory.
 
 ---
 
-## 3. Beam-axis enumeration (implementation note, not a team question)
+## 3. Required `angle_convention` has no unset representation
 
-The GEMM emits beams az-major (`beam = ia * num_el + ie`) so the output buffer
-aliases the `(..., num_az, num_el, D, R)` cube with no post-permute. The device
-steering builder (`radar_common/dsp/steering_weights`) is asked for
-`BeamOrder::kAzMajor` +
-`SteeringLayout::kBeamMajor` + `conjugate`, so the weights land directly in
-that order/layout — no host reorder. Recorded here only to explain the beam
-order; not an open decision.
+**Contract.** `AngleConvention` is required with no default on every operator
+that consumes or emits angles.
+
+**Current representation.** `PhaseShiftBeamformerParams` contains an
+`AngleConvention` value rather than an optional or a type with an unset
+sentinel. Default construction therefore produces the valid
+`radar_boresight` convention, and `compute()` cannot distinguish omission from
+an explicit request for that preset. This is shared by the angle-estimator
+Params types, not specific to this operator.
+
+**Decision needed.** Choose a module-wide required-parameter representation:
+an optional Params field, an explicit unset enum value, or a schema-level
+presence mechanism. Do not make one estimator interpret the shared descriptor
+differently.
+
+**Status:** open — module-wide contract representation.
 
 ---
 
-## 4. Python bindings
+## 4. Inline live-override performance timing
 
-**Blocks checklist:** only if this PR were a bindings wave (module-wide
-Python is deferred per checklist / STATUS).
+The C++ Graph tests cover all four live payload families and their one-tick
+revert behavior. The performance harness still reports only cold and steady
+Params-driven runs; it does not co-emit a host-Tensor or wire-schema override
+mid-session and populate `override_ms` / `override_delta_ms`.
 
-**Class:** Our deferred work + EA incomplete Python surface. See
-[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §6.
-
-Existing `python/_phase_shift_beamformer_op_bindings.cpp` is still the
-HSDK 4.x `Fragment` / `Arg` trampoline and is not built
-(`HOLOSCAN_RADAR_BUILD_PYTHON=OFF`).
-
-**Status:** open — deferred; not required to land the C++ HSDK 5 port.
+**Status:** open — ordinary performance-harness work, no SDK blocker.

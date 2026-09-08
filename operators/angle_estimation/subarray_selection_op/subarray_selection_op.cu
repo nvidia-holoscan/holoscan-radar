@@ -19,7 +19,6 @@
 #include <holoscan/core/payload_options.hpp>
 #include <holoscan/logger/logger.hpp>
 
-#include "radar_common/descriptors/array_geometry_tensor.hpp"
 #include "radar_common/dsp/spatial_smoothing_device.hpp"
 #include "radar_common/dsp/subarray_selection.hpp"
 #include "radar_common/sdk/config_tensor.hpp"
@@ -29,6 +28,7 @@
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
 
 namespace holoscan::radar {
 
@@ -294,28 +294,6 @@ expected<TensorOutputLoan, Error> prepare_snapshot_output(
       });
 }
 
-expected<TensorOutputLoan, Error> prepare_geometry_output(
-    Output<Tensor>& output, ExecutionContext& context,
-    const ArrayGeometry& geometry, const std::vector<double>& packed,
-    cudaStream_t stream) {
-  const std::vector<int64_t> shape =
-      array_geometry_tensor_shape(geometry);
-  return prepare_device_tensor(
-      output, context, shape, real_dtype<double>(),
-      [&](void* destination, std::size_t bytes) -> expected<void, Error> {
-        if (bytes != packed.size() * sizeof(double)) {
-          return fail_runtime(
-              "SubarraySelectionOp: array_geometry size mismatch");
-        }
-        if (cudaMemcpyAsync(destination, packed.data(), bytes,
-                            cudaMemcpyHostToDevice, stream) != cudaSuccess) {
-          return fail_runtime(
-              "SubarraySelectionOp: array_geometry H2D failed");
-        }
-        return {};
-      });
-}
-
 expected<TensorOutputLoan, Error> prepare_mask_output(
     Output<Tensor>& output, ExecutionContext& context, const Tensor& mask,
     cudaStream_t stream) {
@@ -391,6 +369,11 @@ void SubarraySelectionOp<T>::setup(OperatorSpec& spec) {
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
+  constexpr TensorRepresentation kHostGeometry{
+      .memory_kind = MemoryKind::kHost,
+      .dtype = DLDataType{kDLFloat, 64U, 1U},
+      .rank = 2U,
+  };
   constexpr TensorRepresentation kHostIndexVector{
       .memory_kind = MemoryKind::kHost,
       .dtype = DLDataType{kDLInt, 64U, 1U},
@@ -402,9 +385,10 @@ void SubarraySelectionOp<T>::setup(OperatorSpec& spec) {
   spec.output(snapshot_out)
       .produces_tensor(pooled_tensor_output(
           kDevice, 3U, snapshot_max_byte_span_));
-  // Packed ArrayGeometry (host-planned; H2D each rebuild / tick).
   spec.output(array_geometry)
-      .produces_tensor(pooled_tensor_output(kDevice, 2U, geom_max_byte_span_));
+      .max_emits_per_compute(1U)
+      .produces_tensor(pooled_tensor_output(
+          kHostGeometry, 2U, geom_max_byte_span_));
   spec.output(is_valid_out)
       .produces_tensor(pooled_tensor_output(
           kDevice, 2U, is_valid_max_byte_span_));
@@ -479,27 +463,29 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
                 plan.num_items, out_channels, plan.num_snapshots}
           : std::vector<int64_t>{plan.num_items, out_channels};
 
-  // Publish the required selected snapshot.
+  // Prepare the required selected snapshot before any publication.
   HOLOSCAN_TRY(
       auto snap_loan,
       prepare_snapshot_output<T>(
           snapshot_out, context, snap, plan, *selection,
           state_->channel_index, out_shape, stream));
-  HOLOSCAN_TRY(
-      emit_prepared_tensor(snapshot_out, context, std::move(snap_loan)));
 
-  // Publish each independent latched optional after the required snapshot.
+  // Publish the geometry sideband before the Tensor that triggers downstream
+  // Exact joins. An unwired optional is absorbed before snapshot publication.
   if (array_geometry_out_.active()) {
-    const std::vector<double> packed = pack_array_geometry(out_geometry);
     HOLOSCAN_TRY(
         auto prepared,
-        prepare_geometry_output(
-            array_geometry, context, out_geometry, packed, stream));
-    array_geometry_out_.emit(
-        array_geometry, context, std::move(prepared),
+        prepare_wire_array_geometry(array_geometry, out_geometry));
+    array_geometry_out_.emit_schema_tensor(
+        array_geometry, context, std::move(prepared.loan),
+        std::move(prepared.payload),
         "SubarraySelectionOp.array_geometry");
   }
 
+  HOLOSCAN_TRY(
+      emit_prepared_tensor(snapshot_out, context, std::move(snap_loan)));
+
+  // is_valid_out is not a selector for snapshot_out and remains independent.
   if (maybe_valid.has_value() && is_valid_out_.active()) {
     HOLOSCAN_TRY(
         auto prepared,

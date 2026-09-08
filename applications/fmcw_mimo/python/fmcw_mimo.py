@@ -217,7 +217,9 @@ class FmcwMimoApp(Application):
         self.add_flow(vaa, gather, {("rd_maps_out", "rd_maps")})
         self.add_flow(cfar, gather, {("detection_idx", "detection_idx")})
         self.add_flow(gather, beamscan, {("snapshot", "snapshot"), ("is_valid", "is_valid")})
-        self.add_flow(vaa, beamscan, {("array_geometry", "array_geometry")})
+        # Generated schema payload ports are not exposed to Python yet.
+        # Beamscan keeps equivalent static Params geometry; this HSDK 5 Python
+        # graph remains deferred until VAA's required schema output is exposed.
         self.add_flow(beamscan, spectrum_sink, {("angle_spectrum", "input")})
 
         self.add_flow(cfar, det_report, {("detection_idx", "detection_idx")})

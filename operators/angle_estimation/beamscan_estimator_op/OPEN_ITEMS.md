@@ -41,41 +41,6 @@ time on both the override and the snapshot — see
 
 ---
 
-## 2. `array_geometry` overrides have no in-module producer
-
-**Blocks checklist:** nothing on its own — the port and its Graph
-mid-stream coverage are in place; this is the transport decision behind
-the port.
-
-**Class:** Open `ArrayGeometry` transport decision. See
-[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9 / §10.
-
-**Ports (settled — L18).** `contract()` unconditionally joins
-`Input<WireArrayGeometry> array_geometry`, `Input<WireWindowSpec>
-array_taper`, and the rank-1 pageable-host float64 config Tensors
-`az_angles` / `el_angles` to the data trigger with `Exact{}` and
-`on_missing SafeDefault{}`; `compute()` resolves each with
-`resolve_live_override_via`, validating the Tensors against `max_az` /
-`max_el` from `MaxTensorExtents`. Logical Params types are unchanged.
-`angle_convention` stays static (Params only) per OPERATOR_API.md. Graph
-coverage: `LiveAzGridAppliesForOneTick`, `LiveElGridAppliesForOneTick`,
-`LiveArrayGeometryAppliesForOneTick`, `LiveArrayTaperAppliesForOneTick`,
-`LiveOverridesRejectMalformedAndBounds`.
-
-**Still open.** `VirtualArrayAssemblyOp` / `SubarraySelectionOp` emit
-geometry as a packed float64 `(N + 1, 3)` Tensor (§10), not the
-wire-schema type this port consumes (§9). The representations differ, so
-a runtime virtual geometry cannot drive this override directly — it has to
-come from an app-side wire-schema producer. The generated wire objects are
-also C++-only, so Python drives the parameter through Params.
-
-**Next.** Settle one `ArrayGeometry` transport so a descriptor output can
-feed a descriptor override port.
-
-**Status:** open — `ArrayGeometry` transport decision.
-
----
-
 ## 3. Optional `is_valid` Graph wiring
 
 **Blocks checklist:** Tests → optional `is_valid` connected Graph paths.

@@ -53,40 +53,6 @@ Isolated `num_sources` / `source_count_pfa` perf is still open;
 
 ---
 
-## 2. `array_geometry` overrides have no in-module producer
-
-**Blocks checklist:** nothing on its own — the descriptor / grid /
-smoothing ports and their Graph coverage are in place; this is the
-transport decision behind the geometry port.
-
-**Class:** Open `ArrayGeometry` transport decision. See
-[`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9 / §10.
-
-**Ports (settled — L18).** `contract()` unconditionally joins
-`Input<WireArrayGeometry> array_geometry`, the rank-1 pageable-host float64
-config Tensors `az_angles` / `el_angles` (bounded by `max_az` / `max_el`),
-and the bounded `{count, first, second}` int64 POD
-`Input<SpatialSmoothingOverride> spatial_smoothing`; `compute()` resolves
-each with `resolve_live_override_via`. Logical `MUSICParams` types are
-unchanged. `angle_convention` and `forward_backward` stay Params-only
-(STATIC / not `[live]`). Graph coverage: `LiveAzGridAppliesForOneTick`,
-`LiveElGridAppliesForOneTick`, `LiveArrayGeometryAppliesForOneTick`,
-`LiveSpatialSmoothingAppliesForOneTick`.
-
-**Still open.** `VirtualArrayAssemblyOp` / `SubarraySelectionOp` emit
-geometry as a packed float64 `(N + 1, 3)` Tensor (§10), not the
-wire-schema type this port consumes (§9). The representations differ, so a
-runtime virtual geometry cannot drive this override directly — it has to
-come from an app-side wire-schema producer. The generated wire objects are
-also C++-only, so Python drives the parameter through Params.
-
-**Next.** Settle one `ArrayGeometry` transport so a descriptor output can
-feed a descriptor override port.
-
-**Status:** open — `ArrayGeometry` transport decision.
-
----
-
 ## 3. Optional `is_valid` Graph wiring
 
 **Blocks checklist:** Tests → optional `is_valid` connected Graph paths.

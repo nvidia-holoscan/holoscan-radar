@@ -45,6 +45,7 @@
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "utils/tensor_fixtures.hpp"
+#include "utils/wire_capture.hpp"
 
 namespace holoscan::radar::testing {
 
@@ -796,6 +797,17 @@ struct DualIOGraphRunResult {
   std::vector<std::string> diagnostics;
 };
 
+template <typename Payload>
+struct TensorWireGraphRunResult {
+  std::vector<HostTensor> frames0;
+  std::vector<Payload> frames1;
+  std::vector<TimePoint> frame1_capture_times;
+  bool plan_ok{true};
+  std::string plan_json;
+  holoscan::RunTermination termination{holoscan::RunTermination::kStopped};
+  std::vector<std::string> diagnostics;
+};
+
 // 1-in / 3-out Graph result (e.g. FMCWRangeDopplerProcessorOp: rd_maps,
 // range_bins, velocity_bins — all emitted / bound in tests).
 struct ThreeOutGraphRunResult {
@@ -1116,6 +1128,90 @@ DualIOGraphRunResult run_single_in_dual_out_operator_graph_result(
   {
     const std::lock_guard lock(detail::FrameBankB::mutex);
     result.frames1 = std::move(detail::FrameBankB::captured);
+  }
+  return result;
+}
+
+// 1-in / Tensor + typed schema-output Graph runner. Only the Tensor output
+// receives a device placement; the schema's DescriptorTensor pool declares
+// its own host representation.
+template <typename Payload, typename OpT, typename ParamsT, typename WireFn>
+TensorWireGraphRunResult<Payload>
+run_single_in_tensor_wire_out_operator_graph_result(
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
+    const char* tensor_out_port, WireFn&& wire,
+    std::initializer_list<const char*> extra_op_out_ports = {},
+    const MaxTensorExtents& extents = default_test_extents()) {
+  TensorWireGraphRunResult<Payload> result;
+  detail::FrameBank::reset();
+  WireCaptureBank<Payload>::reset();
+  detail::FrameBank::input_frames = std::move(inputs);
+  const std::size_t expected = detail::FrameBank::input_frames.size();
+
+  holoscan::Graph graph{"single-in-tensor-wire-out-harness"};
+  const auto source = graph.op<detail::TensorSourceOp>("source");
+  auto op = emplace_harness_op<OpT>(graph, extents);
+  op.set_params(std::move(params));
+  const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
+  const auto sink1 = graph.op<WireCaptureOp<Payload>>("sink1");
+  wire(graph, source, op, sink0, sink1);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  detail::bind_single_io_device_pools(options, tensor_out_port);
+  for (const char* port : extra_op_out_ports) {
+    detail::bind_op_device_output(options, port);
+  }
+
+  try {
+    const holoscan::ExecutionPlan plan =
+        holoscan::compile(graph, std::move(options));
+    result.plan_ok = plan.ok();
+    result.plan_json = plan.json();
+    if (!plan.ok()) {
+      return result;
+    }
+
+    holoscan::RunSession session = holoscan::run_async(plan);
+    const auto deadline =
+        std::chrono::steady_clock::now() + detail::kHarnessDeadline;
+    while (session.diagnostics().empty() &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::size_t tensor_count = 0;
+      std::size_t wire_count = 0;
+      {
+        const std::lock_guard lock(detail::FrameBank::mutex);
+        tensor_count = detail::FrameBank::captured.size();
+      }
+      {
+        const std::lock_guard lock(WireCaptureBank<Payload>::mutex);
+        wire_count = WireCaptureBank<Payload>::payloads.size();
+      }
+      if (tensor_count >= expected && wire_count >= expected) {
+        break;
+      }
+      std::this_thread::sleep_for(detail::kHarnessPoll);
+    }
+    session.request_stop();
+    session.wait();
+    result.termination = session.termination();
+    for (const auto& diagnostic : session.diagnostics()) {
+      result.diagnostics.push_back(std::string(diagnostic.token));
+    }
+  } catch (const holoscan::RuntimeError& error) {
+    result.plan_ok = false;
+    result.plan_json = std::string("RuntimeError: ") + error.what();
+    return result;
+  }
+  {
+    const std::lock_guard lock(detail::FrameBank::mutex);
+    result.frames0 = std::move(detail::FrameBank::captured);
+  }
+  {
+    const std::lock_guard lock(WireCaptureBank<Payload>::mutex);
+    result.frames1 = std::move(WireCaptureBank<Payload>::payloads);
+    result.frame1_capture_times =
+        std::move(WireCaptureBank<Payload>::capture_times);
   }
   return result;
 }

@@ -156,6 +156,17 @@ expected<TensorOutputLoan, Error> prepare_device_tensor(
                    EmitOptions{.capture_time = context.activation_time()});
 }
 
+// Emit a schema payload whose DescriptorTensor storage is a prepared Tensor
+// loan. This is the schema-valued counterpart of emit_prepared_tensor above.
+template <typename Payload>
+[[nodiscard]] expected<void, Error> emit_prepared_schema_tensor(
+    Output<Payload>& port, ExecutionContext& context, TensorOutputLoan loan,
+    Payload payload) {
+  return port.emit_tensor(
+      std::move(loan), std::move(payload),
+      EmitOptions{.capture_time = context.activation_time()});
+}
+
 // A `latched` optional output (OPERATOR_API.md, "Optional output
 // convention"). An application may leave an optional output unwired, but
 // nothing exposes an output's wiring to the operator, so it cannot ask —
@@ -183,6 +194,21 @@ class LatchedOutput {
   void emit(Output<Tensor>& port, ExecutionContext& context,
             TensorOutputLoan loan, std::string_view op_and_port) {
     const auto emitted = emit_prepared_tensor(port, context, std::move(loan));
+    absorb_emit_result(emitted, op_and_port);
+  }
+
+  template <typename Payload>
+  void emit_schema_tensor(Output<Payload>& port, ExecutionContext& context,
+                          TensorOutputLoan loan, Payload payload,
+                          std::string_view op_and_port) {
+    const auto emitted = emit_prepared_schema_tensor(
+        port, context, std::move(loan), std::move(payload));
+    absorb_emit_result(emitted, op_and_port);
+  }
+
+ private:
+  void absorb_emit_result(const expected<void, Error>& emitted,
+                          std::string_view op_and_port) {
     if (emitted) {
       return;
     }
@@ -197,7 +223,6 @@ class LatchedOutput {
     disabled_ = true;
   }
 
- private:
   bool disabled_{false};
 };
 

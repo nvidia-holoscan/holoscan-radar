@@ -689,6 +689,32 @@ class PerfNullSinkOp final : public holoscan::Operator<> {
   holoscan::Input<holoscan::Tensor> in{"in"};
 };
 
+// Untimed drain for a generated schema payload.
+template <typename Payload>
+class PerfPayloadSinkOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input(in, "in").queue_depth(8U);
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnEach{in});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext&) override {
+    auto sample = in.receive_data();
+    if (!sample) {
+      return holoscan::make_unexpected(std::move(sample).error());
+    }
+    return {};
+  }
+
+  holoscan::Input<Payload> in{"in"};
+};
+
 // BuildFn signature:
 //   void(holoscan::Graph& graph,
 //        const auto& src,   // shared_ptr-like op handle from graph.op
