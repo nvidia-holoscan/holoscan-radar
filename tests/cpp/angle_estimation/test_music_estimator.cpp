@@ -64,7 +64,6 @@ using holoscan::radar::testing::HostTensor;
 using holoscan::radar::testing::run_single_in_dual_out_operator_graph_result;
 using holoscan::radar::testing::run_single_in_five_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
-using holoscan::radar::testing::to_pageable_host_tensor;
 
 ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing,
                                 double wavelength) {
@@ -1068,11 +1067,6 @@ TEST(MUSICEstimatorOpTest, RejectsSnapshotDtypeMismatch) {
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
-}
-
-TEST(MUSICEstimatorOpTest, RejectsPageableHostSnapshot) {
-  GTEST_SKIP() << "HSDK 5 EA: pageable-host rejection not exercisable via "
-                  "device Graph harness (same as MVDREstimator)";
 }
 
 TEST(MUSICEstimatorOpTest, FloatInstantiationSmoke) {

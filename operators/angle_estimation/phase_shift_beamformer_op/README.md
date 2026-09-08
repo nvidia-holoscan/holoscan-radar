@@ -136,7 +136,6 @@ C++: `tests/cpp/angle_estimation/test_phase_shift_beamformer.cpp`. Python: `test
 | `RejectsDegenerateCustomConvention` | Invalid custom signed-axis frames fail in plan construction |
 | `LiveAzGridAppliesForOneTick` / `LiveElGridAppliesForOneTick` / `LiveArrayGeometryAppliesForOneTick` / `LiveArrayTaperAppliesForOneTick` | Mid-stream override reshapes / rebuilds the cube, then the following miss reverts to Params |
 | `LiveOverridesRejectMalformedAndBounds` | Malformed wire payload and an over-`max_az` / `max_el` grid are diagnosed, not consumed |
-| `RejectsPageableHostInput` | [EA HSDK5 ONLY] `GTEST_SKIP`'d |
 
 ```bash
 ctest --test-dir build -R test_phase_shift_beamformer --output-on-failure

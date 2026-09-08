@@ -480,6 +480,17 @@ Reusing one operator-owned buffer across ticks is also disallowed:
 `emit(TensorOutputLoan)` consumes the loan each publish, and a foreign
 `emit(Tensor)` hits the same binding diagnostic.
 
+**Input-memory test consequence.** The shared Graph test source also publishes
+through a device-bound output loan, so an input fixture backed by pageable-host
+memory is copied into device memory before the operator receives it. Operator
+Graph tests therefore cannot exercise their `require_cuda_accessible()` rejection
+path. `common/test_tensor.cpp` directly verifies the shared guard and its clear
+diagnostic; individual operator suites do not carry duplicate skipped tests.
+Keep the guard at every CUDA data-input boundary because custom producers may
+still supply a non-CUDA-accessible Tensor. Revisit Graph-level device, managed,
+pinned-host, and pageable-host coverage if public GA adds a supported host or
+foreign-handle publish path.
+
 **Interim.** Graph harness helper `bind_device_pools` in
 `tests/cpp/utils/sdk_harness.hpp` binds `source`/`out` and
 `op`/`range_profiles_out`. Dual-IO graphs use

@@ -379,16 +379,6 @@ TEST(MIMODeinterleaveOp, RejectsIndivisibleSlowTime) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(MIMODeinterleaveOp, RejectsPageableHostInput) {
-  // [EA HSDK5 ONLY] The Graph harness materializes all inputs through
-  // device-bound tensor loans, so pageable host data never reaches the
-  // operator's compute(). The require_cuda_accessible guard remains for
-  // safety, but is untestable through the Graph model. Restore if a
-  // direct-call harness is added later.
-  GTEST_SKIP() << "HSDK 5 Graph: pageable host input cannot reach "
-                  "the operator through device-bound tensor loans";
-}
-
 TEST(MIMODeinterleaveOp, FloatDoubleAgreement) {
   const std::vector<int64_t> shape = {kNumRx, kSlowTime, kSamples};
   const TXSchedule schedule = round_robin_schedule();

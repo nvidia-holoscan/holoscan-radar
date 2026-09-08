@@ -869,15 +869,6 @@ TEST(MIMOCoherentCompensationOp, RejectsRankTooSmall) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(MIMOCoherentCompensationOp, RejectsPageableHostInput) {
-  // [EA HSDK5 ONLY] The Graph harness materializes all inputs through
-  // device-bound tensor loans, so pageable host data never reaches the
-  // operator's compute(). The require_cuda_accessible guard remains for
-  // safety, but is untestable through the Graph model.
-  GTEST_SKIP() << "HSDK 5 Graph: pageable host input cannot reach "
-                  "the operator through device-bound tensor loans";
-}
-
 TEST(MIMOCoherentCompensationOp, AcceptsPinnedHostInput) {
   // [EA HSDK5 ONLY] Graph harness only delivers device Tensors.
   GTEST_SKIP() << "HSDK 5 Graph: pinned host input not deliverable "
@@ -1510,11 +1501,6 @@ TEST(MIMOCoherentCompensationOp, DdmAcceptsPinnedHostInput) {
 TEST(MIMOCoherentCompensationOp, DdmAcceptsManagedInput) {
   GTEST_SKIP() << "HSDK 5 Graph: managed input not deliverable "
                   "through device-bound tensor loans";
-}
-
-TEST(MIMOCoherentCompensationOp, DdmRejectsPageableHostInput) {
-  GTEST_SKIP() << "HSDK 5 Graph: pageable host input cannot reach "
-                  "the operator through device-bound tensor loans";
 }
 
 TEST(MIMOCoherentCompensationOp, DdmWaveformOverrideAcceptedButInert) {

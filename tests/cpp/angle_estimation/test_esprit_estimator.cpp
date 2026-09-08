@@ -570,14 +570,6 @@ TEST(ESPRITEstimatorOpTest, RejectsSnapshotDtypeMismatch) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(ESPRITEstimatorOpTest, RejectsPageableHostSnapshot) {
-  // Graph harness copies FrameBank tensors into a device Output loan before
-  // the operator receives them, so ESPRIT never observes a pageable-host
-  // Tensor.
-  GTEST_SKIP() << "HSDK 5 EA: pageable-host rejection not exercisable via "
-                  "device Graph harness (same as BeamscanEstimator)";
-}
-
 TEST(ESPRITEstimatorOpTest, RejectsSnapshotRank2) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);

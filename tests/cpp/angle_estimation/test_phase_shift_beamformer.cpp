@@ -887,16 +887,6 @@ TEST(PhaseShiftBeamformerOpTest, RejectsDtypeMismatch) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(PhaseShiftBeamformerOpTest, RejectsPageableHostInput) {
-  // [EA HSDK5 ONLY] Graph harness TensorSourceOp always allocates a device
-  // loan and memcpy's into it (bind_tensor_output_device), so the operator
-  // never observes a pageable-host Tensor. require_cuda_accessible remains
-  // in compute(); restore a direct-injection check if the harness gains a
-  // host-producer path.
-  GTEST_SKIP() << "HSDK 5 EA: pageable-host rejection not exercisable via "
-                  "device-bound Graph harness";
-}
-
 TEST(PhaseShiftBeamformerOpTest, LiveAzGridAppliesForOneTick) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);

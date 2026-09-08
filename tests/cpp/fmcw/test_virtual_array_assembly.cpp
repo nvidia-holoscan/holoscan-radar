@@ -622,14 +622,6 @@ TEST(VirtualArrayAssemblyOp, RejectsInvalidWavelength) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(VirtualArrayAssemblyOp, RejectsPageableHostInput) {
-  // [EA HSDK5 ONLY] Graph harness materializes inputs through device-bound
-  // tensor loans, so pageable host data never reaches compute(). Guard
-  // remains but is untestable through the Graph model.
-  GTEST_SKIP() << "HSDK 5 Graph: pageable host input cannot reach "
-                  "the operator through device-bound tensor loans";
-}
-
 TEST(VirtualArrayAssemblyOp, RejectsRankTooSmall) {
   const std::vector<int64_t> shape = {kNumTx, kNumRx, kDoppler};
   const std::vector<std::complex<float>> host(

@@ -138,7 +138,6 @@ C++ Graph suite: `tests/cpp/fmcw/test_virtual_array_assembly.cpp`. Ground truth 
 | `RejectsOpaqueLeadingBatch` | extra leading dim is not a named axis; `parse_rd_maps_layout` fail-closes (Part B) |
 | `FloatDoubleAgreement` / `ComplexDoublePreservesValues` | precision |
 | `LiveWavelengthOverrideMidStream` | **[EA HSDK5 ONLY]** `GTEST_SKIP` (HSDK5_PORT §1) |
-| `RejectsPageableHostInput` | **[EA HSDK5 ONLY]** skipped (device-bound loans) |
 
 Python `tests/python/fmcw/test_virtual_array_assembly.py` ports the layout/policy tests. **[EA HSDK5 ONLY]** Python Graph is phase-4 deferred; `test_LeadingBatchAxesPreservedAndIndependent` still asserts leading-batch preservation, which disagrees with the C++ Graph suite.
 

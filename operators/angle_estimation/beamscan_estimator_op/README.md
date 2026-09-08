@@ -130,7 +130,7 @@ C++: `tests/cpp/angle_estimation/test_beamscan_estimator.cpp`. Python: `tests/py
 | `CheckIsValidMask*` | Mask dtype/shape/pageable validation (direct helper, not Graph) |
 | `LiveAzGridAppliesForOneTick` / `LiveElGridAppliesForOneTick` / `LiveArrayGeometryAppliesForOneTick` / `LiveArrayTaperAppliesForOneTick` | Mid-stream override reshapes / rebuilds, and sticks after the next miss |
 | `LiveOverridesRejectMalformedAndBounds` | Malformed wire payload and an over-`max_el` grid are diagnosed, not consumed |
-| `LivePeakInterpolationAppliesForOneTick` / `AcceptsValidIsValidMask*` / `RejectsPageableHostSnapshot` | [EA HSDK5 ONLY] `GTEST_SKIP`'d |
+| `LivePeakInterpolationAppliesForOneTick` / `AcceptsValidIsValidMask*` | [EA HSDK5 ONLY] `GTEST_SKIP`'d |
 
 TESTING.md's connected `is_valid` exclude-masked-snapshots check is owed and skipped on Graph (helper covers transport only).
 

@@ -60,7 +60,6 @@ using holoscan::radar::testing::FiveOutGraphRunResult;
 using holoscan::radar::testing::HostTensor;
 using holoscan::radar::testing::run_single_in_five_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
-using holoscan::radar::testing::to_pageable_host_tensor;
 
 ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing,
                                 double wavelength) {
@@ -1106,13 +1105,6 @@ TEST(MVDREstimatorOpTest, RejectsSnapshotDtypeMismatch) {
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
-}
-
-TEST(MVDREstimatorOpTest, RejectsPageableHostSnapshot) {
-  // Graph harness copies FrameBank tensors into a device Output loan before
-  // the operator receives them, so MVDR never observes a pageable-host Tensor.
-  GTEST_SKIP() << "HSDK 5 EA: pageable-host rejection not exercisable via "
-                  "device Graph harness (same as BeamscanEstimator)";
 }
 
 TEST(MVDREstimatorOpTest, IsValidMaskExcludesWrongDoaSnapshots) {

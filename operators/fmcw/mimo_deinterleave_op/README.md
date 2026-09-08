@@ -119,11 +119,10 @@ C++ Graph suite: `tests/cpp/fmcw/test_mimo_deinterleave.cpp`. Ground truth is a 
 | `RejectsOpaqueLeadingBatch` | Extra leading dim is not a named axis; `parse_adc_cube_layout` fail-closes (Part B) |
 | `FloatDoubleAgreement` | F32 vs F64 markers agree to `1e-4` |
 | `FiringSlotByTxIdentityAndPermutation` | `TXSchedule::firing_slot_by_tx()` identity / empty / permuted cycle (compensation consumer) |
-| `RejectsPageableHostInput` | **[EA HSDK5 ONLY]** `GTEST_SKIP`: Graph device-bound loans never deliver pageable host to `compute()`; `require_cuda_accessible` remains in the operator |
 
 Python: `tests/python/fmcw/test_mimo_deinterleave.py` ports the marker tests. **[EA HSDK5 ONLY]** Python operator Graph is still phase-4 deferred ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §6); that file still wires output port `"adc_cube"` and still asserts leading-batch preservation (`test_LeadingBatchAxesPreservedAndIndependent`), which disagrees with the C++ Graph suite.
 
-Owed by TESTING.md and covered in C++: round-robin + custom order split, non-uniform rejection, dtype preservation, opaque leading-batch rejection. Not covered: a Graph test that quotes the exact non-uniform error string; pageable-host rejection through Graph.
+Owed by TESTING.md and covered in C++: round-robin + custom order split, non-uniform rejection, dtype preservation, opaque leading-batch rejection. Not covered: a Graph test that quotes the exact non-uniform error string.
 
 ```bash
 ctest --test-dir build -R MIMODeinterleaveOp --output-on-failure
