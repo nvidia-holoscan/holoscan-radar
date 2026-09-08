@@ -7,7 +7,7 @@ It occupies the same pluggable sparse slot after `SnapshotGatherOp`. A ULA (or s
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
 | in | `snapshot` | complex64 / complex128 | `(num_items, num_channels, num_snapshots)` | Rank-2 rejected |
-| in | `is_valid` | bool or uint8 (`0`/`1`) | `(num_items, num_snapshots)` | Optional; covariance sums only marked slots. Omitted from `contract()` ([EA HSDK5 ONLY] `HSDK5_PORT.md` §11) |
+| in | `is_valid` | bool or uint8 (`0`/`1`) | `(num_items, num_snapshots)` | Optional same-tick mask; non-member Exact + SafeDefault. Publish before `snapshot` |
 | out | `aoa_estimates` | float32 / float64 | `(num_items, 2)` | Dominant DOA; always emitted |
 | out | `doa_multi` | float32 / float64 | `(num_items, max_sources, 2)` | Selected roots / pairs; unused rows NaN |
 | out | `source_count` | int32 | `(num_items,)` | Roots / pairs actually written |
@@ -73,7 +73,7 @@ a_c = exp(j · (iy · k·dy · u + iz · k·dz · v)),   c = iz·ny + iy
 dir = u · y_axis + v · z_axis + sqrt(max(0, 1−u²−v²)) · normal
 ```
 
-There is no canonical single-polynomial 2-D Root-MUSIC; this reduced-dimension + pairing method is the documented design (OPEN_ITEMS §8 / `OPERATOR_API.md`). A joint 2-D polynomial and explicit non-ULA-per-axis subarray specs are deferred.
+There is no canonical single-polynomial 2-D Root-MUSIC; this reduced-dimension + pairing method is the documented `OPERATOR_API.md` design. A joint 2-D polynomial and explicit non-ULA-per-axis subarray specs are deferred.
 
 **Spatial smoothing** is the same S1 front-end as MUSIC (per-axis counts, optional forward-backward). Changing an already-built plan logs:
 
@@ -83,9 +83,11 @@ RootMUSICEstimatorOp: spatial smoothing override changes the Root-MUSIC aperture
 
 A newly seen `array_geometry` after the first warns `unseen array_geometry override; revalidating ULA|URA aperture and solver dimensions`. Rank-deficient `auto` (no mask, `K < C_est`) warns once: `num_sources=auto with fewer snapshots than channels; falling back to one source`.
 
+The tick shell follows `resolve/plan → optional mask → empty path → prepare effective covariance input → Root-MUSIC ULA/URA path → emit`. `prepare_smoothed_input` owns smoothing-plan cache updates, index uploads, and gather dispatch; with smoothing off it passes the original geometry, pointers, and dimensions through unchanged.
+
 ## Shape and dtype rules
 
-Precision is the template `T` ∈ {`float`, `double`}. `snapshot` must be rank 3; rank 2 is rejected (unlike MUSIC). Extra leading batch dims are not admitted.
+Precision is the template `T` ∈ {`float`, `double`}. `snapshot` must be rank 3; rank 2 and extra leading batch dims are rejected.
 
 - `aoa_estimates`: `(num_items, 2)`.
 - `doa_multi`: `(num_items, effective_max_sources, 2)`.
@@ -133,12 +135,13 @@ No `az_angles` / `el_angles`. `num_sources` encoding is the same `int64` negativ
 
 ## SDK implementation notes
 
-- **Construction.** `RootMUSICEstimatorOp(const MaxTensorExtents&)`. If both `max_items` and `max_sources` are unset, pool spans stay `0`. Otherwise `max_items`, `max_sources`, and `max_channels` must be positive. They size `aoa_estimates` `(max_items, 2)`, `doa_multi` `(max_items, max_sources, 2)`, `source_count` `(max_items,)`, and `eigenvalues` `(max_items, max_channels)`. `max_az` / `max_el` are unused (no spectrum).
-- **Triggering.** `contract()` is `OnEach{snapshot}` plus an unconditional `Exact{}` + `SafeDefault{}` entry for every override port. Wiring is the application's only obligation: an `add_flow` into a port enables that override, and leaving it unwired compiles (warning `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT`) and reports `kNotConnected` on every activation, which `compute()` reads as no override this tick. A wired port that is *not* in the contract still fails the second activation with `RUNTIME_OPERATOR_REPLAY_MISMATCH` (`HSDK5_PORT.md` §1) — which is why optional `is_valid`, omitted from the contract (§11), must stay unwired.
+- **Construction.** `RootMUSICEstimatorOp(const MaxTensorExtents&)`. If both `max_items` and `max_sources` are unset, pool spans stay `0`. Otherwise `max_items`, `max_sources`, and `max_channels` must be positive. Constructor-created runtime state owns stable covariance/eigenspace and ULA polynomial workspace plus both cuSOLVER states.
+- **Triggering.** `contract()` is `OnEach{snapshot}`. Optional `is_valid` and every live override are unconditional non-members with `Exact{}` + `SafeDefault{}`; unwired means absent/all-valid or Params for that tick. A producer must publish a same-tick mask before `snapshot`.
 - **Ports and queues.** Device Tensor ports, queue depth `2`. All four outputs declare `max_rank = 3` (the fat-cube bound; actual ranks are 1–3). Live Inputs also queue depth `2` — wire-object, POD, and scalar payloads only (no config Tensor, since there is no scan grid).
 - **Live override payloads.** `array_geometry` is `Input<WireArrayGeometry>`, a generated descriptor-schema type; `spatial_smoothing` is `Input<SpatialSmoothingOverride>`, a bounded `{count, first, second}` int64 POD (`count` must be 0, 1, or 2). Both convert with `from_wire` inside `resolve_live_override_via`, so neither wire storage nor the POD reaches operator state. `num_sources` / `source_count_pfa` / `max_sources` are plain scalar `Input<>` ports resolved with `resolve_live_override`. Logical `RootMUSICParams` types are unchanged (`HSDK5_PORT.md` §9).
-- **Streams and lifetime.** Work uses `context.cuda_stream()`. Inputs are retained at the end of `compute()`. `solve_companion_roots` **does** `cudaStreamSynchronize` to read per-item `geev` info codes. Transient 2-D axis scratch is `cudaFree`’d on return (device sync). `stop()` calls `retire_music_matx_caches()`; cuSOLVER workspaces die with `RootMUSICSolverState`.
-- **Emission.** Loan → fill → commit → emit (`aoa_estimates`, `doa_multi`, `source_count`, `eigenvalues`) with `capture_time = context.activation_time()`. Empty-item path prepares all four loans first. **[EA HSDK5 ONLY]** all four always emitted (OPEN_ITEMS §4); bind every device output.
+- **Tick flow.** `compute()` resolves overrides and builds the plan, validates the optional mask, handles the empty path, asks `prepare_smoothed_input` for the effective covariance input, runs the ULA or URA estimator path, and emits. Smoothing gather and remaining URA transient storage are still allocated per applicable tick (tracked in `OPEN_ITEMS.md`).
+- **Streams and lifetime.** Work uses `context.cuda_stream()`. Inputs are retained at the end of `compute()`. `solve_companion_roots` synchronizes to read per-item `geev` info codes. `stop()` calls `retire_music_matx_caches()`; cuSOLVER workspaces die with the runtime state.
+- **Emission.** Required `aoa_estimates` publishes first; optional/always `doa_multi`, `source_count`, and `eigenvalues` absorb declined emits.
 - **Parameter authoring.** Schema `com.nvidia.holoscan.radar.RootMUSICParams` version `1`.
 - **Precision.** `RootMUSICEstimatorOp<float>` and `<double>`.
 - **[EA HSDK5 ONLY]** All five override ports are unconditionally in `contract()`; geometry / smoothing Graph tests run. Runtime geometry producers connect directly to `array_geometry` with `WireArrayGeometry`; Python remains Params-only for schema payloads.
@@ -149,9 +152,9 @@ Every output is a fresh pool loan. A consumer may keep the Tensor for the usual 
 
 ## Performance
 
-**Cold.** First tick builds the cuSOLVER handle / workspace (`RootMUSICSolverState`; a second state for the URA z-axis), optional smoothing plan, and the first `matx::eig` plan. A new geometry key revalidates the aperture.
+**Cold.** The constructor creates both cuSOLVER states and bounded core workspace. First use initializes solver internals, an optional smoothing plan, and the first `matx::eig` plan. A new geometry key revalidates the aperture.
 
-**Steady.** Covariance + eig + projector every tick; then one serial `cusolverDnXgeev` per item per rooted polynomial (ULA: one of degree `2(C−1)`; URA: two smaller companions plus pairing). OPEN_ITEMS §6 records that this serial hybrid dominates latency; a batched device root solver is postponed, not a contract gap. Per-tick MatX eig-plan clear matches MUSIC (`cudaDeviceSynchronize` inside `clear_music_matx_caches`).
+**Steady.** Covariance + eig + projector every tick; then one serial `cusolverDnXgeev` per item per rooted polynomial (ULA: one of degree `2(C−1)`; URA: two smaller companions plus pairing). The serial hybrid dominates latency; a batched device root solver is postponed, not a contract gap. Per-tick MatX eig-plan clear matches MUSIC (`cudaDeviceSynchronize` inside `clear_music_matx_caches`).
 
 **`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the aperture and rebuilds the smoothing plan (and can resize the cuSOLVER workspace) on the tick it arrives.
 
@@ -159,7 +162,7 @@ Every output is a fresh pool loan. A consumer may keep the Tensor for the usual 
 ctest --test-dir build -R perf_root_music_estimator_smoke
 ```
 
-Harness axes: channels, detections, snapshots (`xs`…`xl` ULA); `--full` also adds URA rungs (`ura_sm` 6×6, `ura_lg` 8×8). `num_sources` is fixed at 1. Live-override timing is deferred. Do not treat OPEN_ITEMS’ “see git history” note as a cited number.
+Harness axes: channels, detections, snapshots (`xs`…`xl` ULA); `--full` also adds URA rungs (`ura_sm` 6×6, `ura_lg` 8×8). `num_sources` is fixed at 1. The harness measures production Exact `max_sources` timing.
 
 ## Tests and verification
 
@@ -171,14 +174,13 @@ Harness axes: channels, detections, snapshots (`xs`…`xl` ULA); `--full` also a
 | `SpatialSmoothing1DRecoversDoa` | S1 on a ULA; eigenvalues shrink with `L` |
 | `DirectionCosineConventionMapsUlaProjection` / `CustomConvention*` / `…Zenith…` / `DirectionCosineNearEndfirePreservesSign` | Convention-free kernel + boundary relabel; endfire sign |
 | `MaxSourcesCapsReportedRoots` / `UnusedDoaRowsAreNan` | `doa_multi` capacity + NaN fill |
-| `LiveArrayGeometryAppliesForOneTick` / `LiveSpatialSmoothingAppliesForOneTick` | Mid-stream override revalidates / rebuilds, and sticks after the next miss |
-| `IsValidMask…` / `AllInvalidMask…` / `LiveNumSources…` / `LiveSourceCountPfa…` / `LiveMaxSources…` | **[EA HSDK5 ONLY]** Graph `GTEST_SKIP` (§1) |
-| `RejectsSnapshotRank2` | Contract 3-D `snapshot` (no MUSIC-style rank-2) |
+| `LiveArrayGeometryAppliesForOneTick` / `LiveSpatialSmoothingAppliesForOneTick` | Mid-stream override applies for one tick; the next miss reverts to Params |
+| `IsValidMask…` / `AllInvalidMask…` | Connected Exact mask and all-invalid blanking |
+| `LiveNumSources…` / `LiveSourceCountPfa…` / `LiveMaxSources…` | Scalar Exact override and revert |
+| `RejectsSnapshotRank2` | Contract 3-D `snapshot` |
 | Memory-space / precision / determinism / rejects | TESTING.md cross-cuts |
 
 Analytic ground truth is a host steering-vector snapshot in the test file. C++ Graph tests bind all four outputs.
-
-Owed and not Graph-runnable: mid-stream `[live]` for the three scalar overrides, and connected `is_valid`. Python tests exist but are deferred with the bindings.
 
 ```bash
 ctest --test-dir build -R test_root_music_estimator --output-on-failure
@@ -218,15 +220,15 @@ graph.add_flow(root->eigenvalues, eig_sink->in);
 
 ## Contract conformance
 
-HSDK 5 EA C++ compute path matches the locked gridless ULA/URA algorithm; the scalar Graph override/`is_valid` harness and optional-output Connectivity are EA-deferred.
+The HSDK 5 C++ compute path matches the locked gridless ULA/URA algorithm and optional-port convention.
 
 | Contract claim | Verdict | Detail |
 | --- | --- | --- |
-| `array_geometry` **[live]** | conforms (payload form differs) | Unconditional Exact `Input<WireArrayGeometry>` in `contract()`, not `Input<ArrayGeometry>` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9, OPEN_ITEMS §2) |
+| `array_geometry` **[live]** | conforms (payload form differs) | Unconditional Exact `Input<WireArrayGeometry>` in `contract()`, not `Input<ArrayGeometry>` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9) |
 | `spatial_smoothing` **[live]** | conforms (payload form differs) | Bounded `{count, first, second}` int64 POD, not `Input<std::vector<int64_t>>` (§9) |
-| `num_sources` / `source_count_pfa` / `max_sources` **[live]** | conforms | Unconditional Exact `Input<>` in `contract()`; the app enables each override by wiring the port. Graph mid-stream tests still skipped (§1) |
-| Optional `is_valid` connected in Graph | EA-deferred | Omitted from `contract()` (§11); OPEN_ITEMS §3 |
-| Optional `doa_multi` / `source_count` / `eigenvalues` | Done | All `always`: fused with `aoa_estimates` in the select kernel, so unwired sinks are discarded. No `angle_spectrum` (OPEN_ITEMS §4) |
+| `num_sources` / `source_count_pfa` / `max_sources` **[live]** | conforms | Unconditional Exact inputs with active mid-stream/revert tests |
+| Optional `is_valid` connected in Graph | conforms | Non-member Exact + SafeDefault; connected mask tests run |
+| Optional `doa_multi` / `source_count` / `eigenvalues` | conforms | All `always`: fused with `aoa_estimates`, so unwired sinks are discarded. No `angle_spectrum` |
 | `max_sources` unbounded except by `doa_multi` capacity | deviates | Rejects values outside `[1, 64]` (`kMaxSourcesCap` in `root_music_estimator_op.cu`) |
 | URA of any filled size | deviates | Pairing kernel caps `ny·nz` at 64 (`kRootMusicPairChannelCap`, `root_music_stage.hpp`) and per-axis candidates at 8 (`kRootMusicPairCandCap`) |
 

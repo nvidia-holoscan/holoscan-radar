@@ -544,7 +544,7 @@ __global__ void blank_empty_items_kernel(
 // snapshot counts (empty items are blanked after Capon).
 //
 //   snapshots — device ptr, [num_items, num_channels, num_snapshots]
-//               cuda::std::complex<T> (a 2-D input aliases num_snapshots == 1).
+//               cuda::std::complex<T>; a single look uses a trailing extent 1.
 //   mask      — device ptr, [num_items, num_snapshots] uint8/bool, or nullptr.
 //   manifold  — device ptr, [num_beams, num_channels] cuda::std::complex<T>
 //               untapered steering vectors, beam el-major (invalid beams zero).

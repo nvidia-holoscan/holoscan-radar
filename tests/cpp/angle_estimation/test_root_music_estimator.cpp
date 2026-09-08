@@ -3,8 +3,8 @@
 
 // RootMUSICEstimatorOp contract tests (HSDK 5 Graph harness): known-DOA
 // recovery, multi-source / eigenvalues / spatial smoothing / EFT Params
-// coverage, float/double agreement, and error paths. Live / is_valid Graph
-// wiring deferred.
+// coverage, float/double agreement, optional-mask wiring, live overrides,
+// and error paths.
 
 #include <gtest/gtest.h>
 
@@ -61,6 +61,7 @@ using holoscan::radar::testing::make_planar_ura_geometry;
 using holoscan::radar::testing::make_ula_geometry;
 namespace radar_testing = holoscan::radar::testing;
 using radar_testing::run_exact_override_four_out_operator_graph_result;
+using holoscan::radar::testing::run_dual_io_operator_graph_result;
 using holoscan::radar::testing::run_single_in_four_out_operator_graph_result;
 using holoscan::radar::testing::steering_vector;
 using holoscan::radar::testing::to_device_tensor;
@@ -805,13 +806,85 @@ TEST(RootMUSICEstimatorOpTest, UnusedDoaRowsAreNan) {
 }
 
 TEST(RootMUSICEstimatorOpTest, IsValidMaskExcludesWrongSnapshots) {
-  GTEST_SKIP() << "HSDK 5 EA: optional is_valid Graph wiring deferred "
-                  "(HSDK5_PORT.md §1 / OPEN_ITEMS.md)";
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  constexpr double kTruthAz = 0.14;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto truth =
+      make_block(geometry, conv, kTruthAz, 0.0, kS, 0.01, 701u);
+  const auto wrong =
+      make_block(geometry, conv, -0.24, 0.0, kS, 0.01, 702u);
+  std::vector<std::complex<double>> mixed(
+      static_cast<size_t>(kN * 2 * kS));
+  for (int64_t channel = 0; channel < kN; ++channel) {
+    for (int64_t look = 0; look < kS; ++look) {
+      mixed[static_cast<size_t>(channel * 2 * kS + look)] =
+          truth[static_cast<size_t>(channel * kS + look)];
+      mixed[static_cast<size_t>(channel * 2 * kS + kS + look)] =
+          wrong[static_cast<size_t>(channel * kS + look)];
+    }
+  }
+  auto snapshot = block_to_device<double>(mixed, {1, kN, 2 * kS});
+  std::vector<uint8_t> mask_host(static_cast<size_t>(2 * kS), uint8_t{0});
+  std::fill_n(mask_host.begin(), static_cast<size_t>(kS), uint8_t{1});
+  auto mask = to_device_tensor(mask_host, {1, 2 * kS},
+                               DLDataType{kDLUInt, 8, 1});
+
+  const auto result =
+      run_dual_io_operator_graph_result<RootMUSICEstimatorOp<double>>(
+          {mask}, {snapshot},
+          make_params(geometry, conv, /*num_sources=*/1),
+          "aoa_estimates", "source_count",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->is_valid, q);
+            graph.add_flow(source->out1, op->snapshot, q);
+            graph.add_flow(op->aoa_estimates, sink0->in, q);
+            graph.add_flow(op->source_count, sink1->in, q);
+          },
+          holoscan::radar::testing::default_test_extents(),
+          {"doa_multi", "eigenvalues"});
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames0.size(), 1U);
+  EXPECT_NEAR(result.frames0[0].as<double>()[0], kTruthAz, 0.03);
 }
 
 TEST(RootMUSICEstimatorOpTest, AllInvalidMaskBlanksDoa) {
-  GTEST_SKIP() << "HSDK 5 EA: optional is_valid Graph wiring deferred "
-                  "(HSDK5_PORT.md §1 / OPEN_ITEMS.md)";
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 16;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geometry, conv, 0.1, 0.0, kS, 0.01, 703u);
+  auto snapshot = block_to_device<double>(block, {1, kN, kS});
+  auto mask = to_device_tensor(std::vector<uint8_t>(kS, uint8_t{0}), {1, kS},
+                               DLDataType{kDLUInt, 8, 1});
+
+  const auto result =
+      run_dual_io_operator_graph_result<RootMUSICEstimatorOp<double>>(
+          {mask}, {snapshot},
+          make_params(geometry, conv, /*num_sources=*/1),
+          "aoa_estimates", "source_count",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->is_valid, q);
+            graph.add_flow(source->out1, op->snapshot, q);
+            graph.add_flow(op->aoa_estimates, sink0->in, q);
+            graph.add_flow(op->source_count, sink1->in, q);
+          },
+          holoscan::radar::testing::default_test_extents(),
+          {"doa_multi", "eigenvalues"});
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames0.size(), 1U);
+  ASSERT_EQ(result.frames1.size(), 1U);
+  EXPECT_TRUE(std::isnan(result.frames0[0].as<double>()[0]));
+  EXPECT_EQ(result.frames1[0].as<int32_t>()[0], 0);
 }
 
 // num_sources is reported verbatim on source_count (clamped by max_sources),

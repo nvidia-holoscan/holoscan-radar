@@ -4,7 +4,7 @@
 // MUSICEstimatorOp contract tests (HSDK 5 Graph harness): known-DOA recovery,
 // multi-source / eigenvalues / spatial smoothing / EFT Params coverage,
 // Beamscan interchange + super-resolution, float/double agreement, and error
-// paths. Live / is_valid Graph wiring deferred.
+// paths, optional-mask wiring, and live override/revert behavior.
 
 #include <gtest/gtest.h>
 
@@ -61,6 +61,7 @@ using holoscan::radar::kPi;
 using holoscan::radar::testing::DualIOGraphRunResult;
 using holoscan::radar::testing::FiveOutGraphRunResult;
 using holoscan::radar::testing::HostTensor;
+using holoscan::radar::testing::run_dual_io_operator_graph_result;
 using holoscan::radar::testing::run_single_in_dual_out_operator_graph_result;
 using holoscan::radar::testing::run_single_in_five_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
@@ -906,7 +907,7 @@ TEST(MUSICEstimatorOpTest, SpatialSmoothingRejectsNonUniformGeometry) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
-  auto snap = block_to_device<double>(a, {1, geom.num_elements()});
+  auto snap = block_to_device<double>(a, {1, geom.num_elements(), 1});
 
   const FiveOutGraphRunResult result = run_music_result<double>(
       snap, make_params(geom, conv, {0.0}, {0.0}, 1, 1e-2, 4, {2}));
@@ -962,7 +963,7 @@ TEST(MUSICEstimatorOpTest, RejectsNumSourcesTooLarge) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
-  auto snap = block_to_device<double>(a, {1, kN});
+  auto snap = block_to_device<double>(a, {1, kN, 1});
   const FiveOutGraphRunResult result = run_music_result<double>(
       snap, make_params(geom, conv, {0.0}, {0.0}, kN));
   EXPECT_TRUE(result.plan_ok);
@@ -976,7 +977,7 @@ TEST(MUSICEstimatorOpTest, RejectsInvalidMaxSources) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
-  auto snap = block_to_device<double>(a, {1, kN});
+  auto snap = block_to_device<double>(a, {1, kN, 1});
   const FiveOutGraphRunResult result = run_music_result<double>(
       snap, make_params(geom, conv, {0.0}, {0.0}, 1, 1e-2, 0));
   EXPECT_TRUE(result.plan_ok);
@@ -990,7 +991,7 @@ TEST(MUSICEstimatorOpTest, RejectsInvalidSourceCountPfa) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
-  auto snap = block_to_device<double>(a, {1, kN});
+  auto snap = block_to_device<double>(a, {1, kN, 1});
   const FiveOutGraphRunResult result = run_music_result<double>(
       snap, make_params(geom, conv, {0.0}, {0.0}, -1, 0.0));
   EXPECT_TRUE(result.plan_ok);
@@ -1066,7 +1067,7 @@ TEST(MUSICEstimatorOpTest, RejectsSnapshotDtypeMismatch) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
-  auto snap_f = block_to_device<float>(a, {1, kN});
+  auto snap_f = block_to_device<float>(a, {1, kN, 1});
   const FiveOutGraphRunResult result = run_music_result<double>(
       snap_f, make_params(geom, conv, {0.0}, {0.0}, 1));
   EXPECT_TRUE(result.plan_ok);
@@ -1326,7 +1327,7 @@ TEST(MUSICEstimatorOpTest, MultipleItemsRecoverIndependentDoa) {
   EXPECT_NEAR(aoa[3], kEl1, 0.02);
 }
 
-TEST(MUSICEstimatorOpTest, Accepts2DSingleSnapshot) {
+TEST(MUSICEstimatorOpTest, Rejects2DSingleSnapshot) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   AngleConvention conv;
@@ -1334,11 +1335,11 @@ TEST(MUSICEstimatorOpTest, Accepts2DSingleSnapshot) {
   const auto a = steering_vector(geom, conv, 0.05, 0.0);
   auto snap = block_to_device<double>(a, {1, kN});
 
-  const auto out = run_music<double>(
+  const auto result = run_music_result<double>(
       snap, make_params(geom, conv, linspace(-0.2, 0.2, 21), {0.0}, 1));
-  EXPECT_EQ(out.spectrum.shape[0], 1);
-  const double* aoa = out.aoa.as<double>();
-  EXPECT_NEAR(aoa[0], 0.05, 0.03);
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames0.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(MUSICEstimatorOpTest, SpatialSmoothing2DUraRecoversDoa) {
@@ -1383,13 +1384,90 @@ TEST(MUSICEstimatorOpTest,
 }
 
 TEST(MUSICEstimatorOpTest, IsValidMaskExcludesWrongDoaSnapshots) {
-  GTEST_SKIP() << "HSDK 5 EA: optional is_valid Graph wiring deferred "
-                  "(HSDK5_PORT.md §1 / OPEN_ITEMS.md)";
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  constexpr double kTruthAz = 0.14;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto truth = make_block(geom, conv, kTruthAz, 0.0, kS, 0.01, 701u);
+  const auto wrong = make_block(geom, conv, -0.24, 0.0, kS, 0.01, 702u);
+  std::vector<std::complex<double>> mixed(
+      static_cast<size_t>(kN * 2 * kS));
+  for (int64_t channel = 0; channel < kN; ++channel) {
+    for (int64_t look = 0; look < kS; ++look) {
+      mixed[static_cast<size_t>(channel * 2 * kS + look)] =
+          truth[static_cast<size_t>(channel * kS + look)];
+      mixed[static_cast<size_t>(channel * 2 * kS + kS + look)] =
+          wrong[static_cast<size_t>(channel * kS + look)];
+    }
+  }
+  auto snap = block_to_device<double>(mixed, {1, kN, 2 * kS});
+  std::vector<uint8_t> mask_host(static_cast<size_t>(2 * kS), uint8_t{0});
+  std::fill_n(mask_host.begin(), static_cast<size_t>(kS), uint8_t{1});
+  auto mask = to_device_tensor(mask_host, {1, 2 * kS},
+                               DLDataType{kDLUInt, 8, 1});
+  auto params =
+      make_params(geom, conv, linspace(-0.4, 0.4, 81), {0.0}, 1);
+  const auto extents = holoscan::radar::testing::extents_for_scan_grid(
+      params.az_angles.size(), params.el_angles.size());
+
+  const auto result =
+      run_dual_io_operator_graph_result<MUSICEstimatorOp<double>>(
+          {mask}, {snap}, std::move(params),
+          "aoa_estimates", "angle_spectrum",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->is_valid, q);
+            graph.add_flow(source->out1, op->snapshot, q);
+            graph.add_flow(op->aoa_estimates, sink0->in, q);
+            graph.add_flow(op->angle_spectrum, sink1->in, q);
+          },
+          extents,
+          {"doa_multi", "source_count", "eigenvalues"});
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames0.size(), 1U);
+  EXPECT_NEAR(result.frames0[0].as<double>()[0], kTruthAz, 0.03);
 }
 
 TEST(MUSICEstimatorOpTest, AllInvalidMaskBlanksDoaAndSpectrum) {
-  GTEST_SKIP() << "HSDK 5 EA: optional is_valid Graph wiring deferred "
-                  "(HSDK5_PORT.md §1 / OPEN_ITEMS.md)";
+  constexpr int64_t kN = 4;
+  constexpr int64_t kS = 8;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.01, 703u);
+  auto snap = block_to_device<double>(block, {1, kN, kS});
+  auto mask = to_device_tensor(std::vector<uint8_t>(kS, uint8_t{0}), {1, kS},
+                               DLDataType{kDLUInt, 8, 1});
+
+  const auto result =
+      run_dual_io_operator_graph_result<MUSICEstimatorOp<double>>(
+          {mask}, {snap},
+          make_params(geom, conv, {-0.1, 0.0, 0.1}, {0.0}, 1),
+          "aoa_estimates", "angle_spectrum",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->is_valid, q);
+            graph.add_flow(source->out1, op->snapshot, q);
+            graph.add_flow(op->aoa_estimates, sink0->in, q);
+            graph.add_flow(op->angle_spectrum, sink1->in, q);
+          },
+          holoscan::radar::testing::default_test_extents(),
+          {"doa_multi", "source_count", "eigenvalues"});
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames0.size(), 1U);
+  ASSERT_EQ(result.frames1.size(), 1U);
+  EXPECT_TRUE(std::isnan(result.frames0[0].as<double>()[0]));
+  const double* spectrum = result.frames1[0].as<double>();
+  for (size_t index = 0;
+       index < result.frames1[0].data.size() / sizeof(double); ++index) {
+    EXPECT_EQ(spectrum[index], 0.0);
+  }
 }
 
 TEST(MUSICEstimatorOpTest, LiveAzGridAppliesForOneTick) {

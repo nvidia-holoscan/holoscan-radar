@@ -10,8 +10,8 @@
 // assertions. See docs/planning/OPERATOR_DEVELOPMENT.md.
 //
 // [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
-// Measures a mid-session max_sources override. Descriptor and smoothing-vector
-// overrides remain Params-only (HSDK5_PORT.md §9).
+// Measures a mid-session max_sources override through the production Exact
+// contract. Descriptor and smoothing-vector overrides are not timed here.
 //
 // num_sources is fixed (=1) across the steady matrix rather than auto:
 // this keeps the model order — and hence the noise-subspace projector's
@@ -168,9 +168,6 @@ perf::TimingCollector run_root_music_graph(
     const RootMusicScenario& scen, const perf::RunPlan& plan) {
   auto snap = perf::make_iq_cube_device<PerfPrecision>(
       {scen.detections, scen.channels, scen.snapshots});
-  using BaseOp = hr::RootMUSICEstimatorOp<PerfPrecision>;
-  using LiveOp =
-      perf::PerfLiveContractOp<BaseOp, &BaseOp::max_sources>;
   constexpr int64_t kInitialMaxSources = 4;
   constexpr int64_t kOverrideMaxSources = 3;
   return perf::run_perf_graph_with_override(
@@ -182,7 +179,8 @@ perf::TimingCollector run_root_music_graph(
         extents.max_items = scen.detections;
         extents.max_sources = 4;
         extents.max_channels = scen.channels;
-        auto op = graph.op<LiveOp>("root_music", extents);
+        auto op = graph.op<hr::RootMUSICEstimatorOp<PerfPrecision>>(
+            "root_music", extents);
         hr::RootMUSICParams params;
         params.array_geometry =
             scenario_geometry(scen, 0.5, 1.0);
@@ -212,14 +210,6 @@ perf::TimingCollector run_root_music_graph(
         graph.add_flow(
             op->source_count, ns2->in, q);
         graph.add_flow(op->eigenvalues, ns3->in, q);
-        graph.partition("perf")
-            .add(src)
-            .add(op)
-            .add(sink)
-            .add(ns1)
-            .add(ns2)
-            .add(ns3);
-
         perf::bind_tensor_out(
             options, "root_music", "aoa_estimates");
         perf::bind_tensor_out(
@@ -253,8 +243,8 @@ perf::ResultRow base_row(const RootMusicScenario& scen) {
   row.out_batch = scen.detections;
   row.k = scen.channels;
   row.notes =
-      "live_override=max_sources; descriptor and smoothing vector remain "
-      "Params-only";
+      "live_override=max_sources; descriptor and smoothing-vector overrides "
+      "are not timed";
   return row;
 }
 
@@ -388,8 +378,8 @@ struct RootMusicTraits : perf::PerfDriverDefaults {
         "num_sources fixed=1 (deterministic model "
         "order); cold_ms is first-frame latency; "
         "median/p90 are post-warmup steady state; override_ms is the peak "
-        "after an inline max_sources change; descriptor and smoothing "
-        "vector remain Params-only; "
+        "after an inline max_sources change; descriptor and smoothing-vector "
+        "overrides are not timed; "
         "cells/s is detections/s";
     report->results.push_back(row);
   }

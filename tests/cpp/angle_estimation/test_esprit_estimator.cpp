@@ -3,29 +3,36 @@
 
 // ESPRITEstimatorOp contract tests (HSDK 5 Graph harness): known-DOA recovery,
 // multi-source / eigenvalues / spatial smoothing / explicit subarray / URA
-// Params coverage, float/double agreement, and error paths. Live / is_valid
-// Graph wiring deferred.
+// Params coverage, float/double agreement, optional-mask wiring, live
+// overrides, and error paths.
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
+#include <holoscan/core/compile.hpp>
 #include <holoscan/core/connection_options.hpp>
 #include <holoscan/core/graph.hpp>
 #include <holoscan/core/payload_options.hpp>
+#include <holoscan/core/run.hpp>
+#include <holoscan/time/realtime_clock.hpp>
 
 #include "angle_estimation/esprit_estimator_op/esprit_estimator_op.hpp"
+#include "angle_estimation/subarray_selection_op/subarray_selection_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/enums.hpp"
@@ -49,6 +56,8 @@ using holoscan::radar::ESPRITParams;
 using holoscan::radar::ShiftInvariantSubarrayPair;
 using holoscan::radar::SpatialSmoothingOverride;
 using holoscan::radar::SignedAxis;
+using holoscan::radar::SubarraySelectionOp;
+using holoscan::radar::SubarraySelectionParams;
 using holoscan::radar::WireArrayGeometry;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::real_dtype;
@@ -62,6 +71,7 @@ using holoscan::radar::testing::make_planar_ura_geometry;
 using holoscan::radar::testing::make_ula_geometry;
 namespace radar_testing = holoscan::radar::testing;
 using radar_testing::run_exact_override_four_out_operator_graph_result;
+using holoscan::radar::testing::run_dual_io_operator_graph_result;
 using holoscan::radar::testing::run_single_in_four_out_operator_graph_result;
 using holoscan::radar::testing::steering_vector;
 using holoscan::radar::testing::to_device_tensor;
@@ -804,13 +814,85 @@ TEST(ESPRITEstimatorOpTest, UnusedDoaRowsAreNan) {
 }
 
 TEST(ESPRITEstimatorOpTest, IsValidMaskExcludesWrongSnapshots) {
-  GTEST_SKIP() << "HSDK 5 EA: optional is_valid Graph wiring deferred "
-                  "(HSDK5_PORT.md §1 / OPEN_ITEMS.md)";
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  constexpr double kTruthAz = 0.14;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto truth =
+      make_block(geometry, conv, kTruthAz, 0.0, kS, 0.01, 701u);
+  const auto wrong =
+      make_block(geometry, conv, -0.24, 0.0, kS, 0.01, 702u);
+  std::vector<std::complex<double>> mixed(
+      static_cast<size_t>(kN * 2 * kS));
+  for (int64_t channel = 0; channel < kN; ++channel) {
+    for (int64_t look = 0; look < kS; ++look) {
+      mixed[static_cast<size_t>(channel * 2 * kS + look)] =
+          truth[static_cast<size_t>(channel * kS + look)];
+      mixed[static_cast<size_t>(channel * 2 * kS + kS + look)] =
+          wrong[static_cast<size_t>(channel * kS + look)];
+    }
+  }
+  auto snapshot = block_to_device<double>(mixed, {1, kN, 2 * kS});
+  std::vector<uint8_t> mask_host(static_cast<size_t>(2 * kS), uint8_t{0});
+  std::fill_n(mask_host.begin(), static_cast<size_t>(kS), uint8_t{1});
+  auto mask = to_device_tensor(mask_host, {1, 2 * kS},
+                               DLDataType{kDLUInt, 8, 1});
+
+  const auto result =
+      run_dual_io_operator_graph_result<ESPRITEstimatorOp<double>>(
+          {mask}, {snapshot},
+          make_params(geometry, conv, /*num_sources=*/1),
+          "aoa_estimates", "source_count",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->is_valid, q);
+            graph.add_flow(source->out1, op->snapshot, q);
+            graph.add_flow(op->aoa_estimates, sink0->in, q);
+            graph.add_flow(op->source_count, sink1->in, q);
+          },
+          holoscan::radar::testing::default_test_extents(),
+          {"doa_multi", "eigenvalues"});
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames0.size(), 1U);
+  EXPECT_NEAR(result.frames0[0].as<double>()[0], kTruthAz, 0.03);
 }
 
 TEST(ESPRITEstimatorOpTest, AllInvalidMaskBlanksDoa) {
-  GTEST_SKIP() << "HSDK 5 EA: optional is_valid Graph wiring deferred "
-                  "(HSDK5_PORT.md §1 / OPEN_ITEMS.md)";
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 16;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geometry, conv, 0.1, 0.0, kS, 0.01, 703u);
+  auto snapshot = block_to_device<double>(block, {1, kN, kS});
+  auto mask = to_device_tensor(std::vector<uint8_t>(kS, uint8_t{0}), {1, kS},
+                               DLDataType{kDLUInt, 8, 1});
+
+  const auto result =
+      run_dual_io_operator_graph_result<ESPRITEstimatorOp<double>>(
+          {mask}, {snapshot},
+          make_params(geometry, conv, /*num_sources=*/1),
+          "aoa_estimates", "source_count",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->is_valid, q);
+            graph.add_flow(source->out1, op->snapshot, q);
+            graph.add_flow(op->aoa_estimates, sink0->in, q);
+            graph.add_flow(op->source_count, sink1->in, q);
+          },
+          holoscan::radar::testing::default_test_extents(),
+          {"doa_multi", "eigenvalues"});
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames0.size(), 1U);
+  ASSERT_EQ(result.frames1.size(), 1U);
+  EXPECT_TRUE(std::isnan(result.frames0[0].as<double>()[0]));
+  EXPECT_EQ(result.frames1[0].as<int32_t>()[0], 0);
 }
 
 // num_sources is reported verbatim on source_count (clamped by max_sources),
@@ -1360,6 +1442,105 @@ TEST(ESPRITEstimatorOpTest, FixedSourceCountWorksWithFewSnapshots) {
 
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 1);
   EXPECT_NEAR(out.aoa.as<double>()[0], kTruthAz, 0.02);
+}
+
+TEST(ESPRITEstimatorOpTest, ReducedSubarrayDirectlyDrivesEstimator) {
+  namespace detail = holoscan::radar::testing::detail;
+  constexpr int64_t kChannels = 6;
+  constexpr int64_t kSnapshots = 32;
+  constexpr double kTruthAz = 0.12;
+  const std::array<int64_t, kChannels> positions{0, 1, 2, 3, 5, 6};
+  ArrayGeometry full;
+  full.wavelength = 1.0;
+  for (int64_t position : positions) {
+    full.element_positions.insert(
+        full.element_positions.end(),
+        {0.0, 0.5 * static_cast<double>(position), 0.0});
+  }
+  AngleConvention convention;
+  convention.preset = AngleConventionPreset::kRadarBoresight;
+  const auto block = make_block(
+      full, convention, kTruthAz, 0.0, kSnapshots, 0.001, 209u);
+
+  detail::FrameBank::reset();
+  detail::FrameBank::input_frames = {
+      block_to_device<double>(
+          block, {1, kChannels, kSnapshots})};
+  holoscan::Graph graph{"subarray-to-esprit"};
+  const auto source = graph.op<detail::TensorSourceOp>("source");
+  auto extents = radar_testing::default_test_extents();
+  extents.max_snapshots = kSnapshots;
+  auto selector =
+      graph.op<SubarraySelectionOp<double>>("selector", extents);
+  SubarraySelectionParams selection;
+  selection.array_geometry = full;
+  selection.subarray = {0, 1, 2, 3};
+  selector.set_params(std::move(selection));
+
+  auto estimator =
+      graph.op<ESPRITEstimatorOp<double>>("esprit", extents);
+  // Deliberately wrong spacing for the selected snapshot. Accurate estimation
+  // proves the same-tick wire geometry won over Params.
+  estimator.set_params(make_params(
+      make_ula_geometry(4, 0.25, 1.0), convention,
+      /*num_sources=*/1, 1e-2, /*max_sources=*/2));
+  const auto aoa_sink = graph.op<detail::TensorCaptureOp>("aoa_sink");
+  const holoscan::ConnectionOptions queue{.queue_depth = 4U};
+  graph.add_flow(source->out, selector->snapshot, queue);
+  graph.add_flow(selector->snapshot_out, estimator->snapshot, queue);
+  graph.add_flow(
+      selector->array_geometry, estimator->array_geometry, queue);
+  graph.add_flow(estimator->aoa_estimates, aoa_sink->in, queue);
+  graph.partition("integration")
+      .add(source)
+      .add(selector)
+      .add(estimator)
+      .add(aoa_sink);
+  graph.set_default_clock(
+      graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  const auto bind = [&options](const char* op, const char* port) {
+    options.deployment.bind_tensor_output_device(
+        holoscan::TensorOutputDevicePlacement{
+            .operator_path = op,
+            .output_port = port,
+            .device = holoscan::DeviceId{0}});
+  };
+  bind("source", "out");
+  bind("selector", "snapshot_out");
+  bind("selector", "is_valid_out");
+  bind("esprit", "aoa_estimates");
+  bind("esprit", "doa_multi");
+  bind("esprit", "source_count");
+  bind("esprit", "eigenvalues");
+
+  const holoscan::ExecutionPlan plan =
+      holoscan::compile(graph, std::move(options));
+  ASSERT_TRUE(plan.ok()) << plan.json();
+  holoscan::RunSession session = holoscan::run_async(plan);
+  const auto deadline =
+      std::chrono::steady_clock::now() + detail::kHarnessDeadline;
+  while (session.diagnostics().empty() &&
+         std::chrono::steady_clock::now() < deadline) {
+    bool captured = false;
+    {
+      const std::lock_guard lock(detail::FrameBank::mutex);
+      captured = !detail::FrameBank::captured.empty();
+    }
+    if (captured) {
+      break;
+    }
+    std::this_thread::sleep_for(detail::kHarnessPoll);
+  }
+  session.request_stop();
+  session.wait();
+  ASSERT_TRUE(session.diagnostics().empty());
+  const std::lock_guard lock(detail::FrameBank::mutex);
+  ASSERT_EQ(detail::FrameBank::captured.size(), 1U);
+  const auto& aoa = detail::FrameBank::captured.front();
+  ASSERT_EQ(aoa.shape, (std::vector<int64_t>{1, 2}));
+  EXPECT_NEAR(aoa.as<double>()[0], kTruthAz, 0.02);
 }
 
 TEST(ESPRITEstimatorOpTest, DoubleInstantiationSmoke) {

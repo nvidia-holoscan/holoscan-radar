@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -34,6 +33,9 @@
 
 namespace holoscan::radar {
 
+template <typename T>
+struct MVDRRuntimeState;
+
 // Retire MatX eig/inv plan caches while CUDA is still alive. Implemented
 // in the .cu (MatX headers stay out of the public .hpp / pybind TU).
 // Prefer install_matx_cache_atexit() from Python after importing cupy.
@@ -49,15 +51,13 @@ void retire_matx_solver_caches();
 // (uniform weighting) — MVDR shapes the beam adaptively from the data, so no
 // array taper parameter.
 //
-// In:  snapshot        — complex64/complex128, (num_items, num_channels) or
-//                       (num_items, num_channels, num_snapshots). The 2-D form
-//                       is treated as num_snapshots == 1 (rank-1 covariance —
-//                       relies on diagonal loading for invertibility).
+// In:  snapshot        — complex64/complex128,
+//                       (num_items, num_channels, num_snapshots).
 // In:  is_valid        — optional bool/uint8, (num_items, num_snapshots). When
 //                       present the covariance sums only over marked slots (so
 //                       the effective K is the per-item valid count); absent →
-//                       all num_snapshots are used. Omitted from the temporal
-//                       contract when unconnected (HSDK5_PORT §1).
+//                       all num_snapshots are used. Exact + SafeDefault admits
+//                       an unwired port; publish a mask before its snapshot.
 // Out: aoa_estimates   — float32/float64, (num_items, 2).
 // Out: angle_spectrum  — float32/float64, (num_items, num_az, num_el). Always
 //                       emitted (optional in OPERATOR_API.md; see OPEN_ITEMS).
@@ -138,7 +138,7 @@ class MVDREstimatorOp : public holoscan::Operator<MVDRParams> {
   void stop() override;
 
   Input<Tensor> snapshot{"snapshot"};
-  // Optional; unconnected graphs omit it from the temporal contract.
+  // Optional same-tick mask; Exact + SafeDefault admits an unwired port.
   Input<Tensor> is_valid{"is_valid"};
   Output<Tensor> aoa_estimates{"aoa_estimates"};
   Output<Tensor> angle_spectrum{"angle_spectrum"};
@@ -154,13 +154,6 @@ class MVDREstimatorOp : public holoscan::Operator<MVDRParams> {
   Input<int64_t> max_sources{"max_sources"};
 
  private:
-  MaxTensorExtents extents_;
-  std::size_t spectrum_max_byte_span_{0U};
-  std::size_t aoa_max_byte_span_{0U};
-  std::size_t doa_max_byte_span_{0U};
-  std::size_t count_max_byte_span_{0U};
-  std::size_t eig_max_byte_span_{0U};
-
   // Keep the previous activation's inputs alive across ticks so async device
   // reads cannot outlive the buffers.
   Tensor retained_snapshot_;
@@ -172,18 +165,14 @@ class MVDREstimatorOp : public holoscan::Operator<MVDRParams> {
   LatchedOutput source_count_out_;
   LatchedOutput eigenvalues_out_;
 
-  // Untapered steering manifold a(θ) (num_beams, num_channels), beam el-major
-  // (beam = ie * num_az + ia) to match the Capon reduce kernel's decode. Built
-  // against the reduced sub-array geometry when smoothing is on. Cached,
-  // warn-once on rebuild (geometry / scan-grid / smoothing change).
-  ConfigCache<std::shared_ptr<holoscan::Tensor>> steering_cache_;
+  std::shared_ptr<MVDRRuntimeState<T>> state_;
 
-  // Spatial-smoothing plan + uploaded index tables, rebuilt only when the
-  // geometry / smoothing config changes (keyed by smoothing_key_).
-  SpatialSmoothingPlan smoothing_plan_{};
-  std::string smoothing_key_{};
-  std::shared_ptr<holoscan::Tensor> d_subarray_index_{};
-  std::shared_ptr<holoscan::Tensor> d_fb_flip_{};
+  MaxTensorExtents extents_;
+  std::size_t spectrum_max_byte_span_{0U};
+  std::size_t aoa_max_byte_span_{0U};
+  std::size_t doa_max_byte_span_{0U};
+  std::size_t count_max_byte_span_{0U};
+  std::size_t eig_max_byte_span_{0U};
 };
 
 extern template class MVDREstimatorOp<float>;

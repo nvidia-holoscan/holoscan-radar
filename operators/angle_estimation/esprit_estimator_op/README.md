@@ -7,7 +7,7 @@ It occupies the same pluggable sparse slot after `SnapshotGatherOp`. A ULA (or a
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
 | in | `snapshot` | complex64 / complex128 | `(num_items, num_channels, num_snapshots)` | Rank-2 rejected |
-| in | `is_valid` | bool or uint8 (`0`/`1`) | `(num_items, num_snapshots)` | Optional; covariance sums only marked slots. Omitted from `contract()` ([EA HSDK5 ONLY] `HSDK5_PORT.md` §11) |
+| in | `is_valid` | bool or uint8 (`0`/`1`) | `(num_items, num_snapshots)` | Optional same-tick mask; non-member Exact + SafeDefault. Publish before `snapshot` |
 | out | `aoa_estimates` | float32 / float64 | `(num_items, 2)` | Dominant DOA; always emitted |
 | out | `doa_multi` | float32 / float64 | `(num_items, max_sources, 2)` | Rotation eigenvalues mapped to angles; unused rows NaN |
 | out | `source_count` | int32 | `(num_items,)` | DOAs actually written |
@@ -31,7 +31,7 @@ open items: [`OPEN_ITEMS.md`](OPEN_ITEMS.md)
 
 ## Algorithm
 
-Covariance, Hermitian `matx::eig` (VECTOR, ascending), and fixed-or-EFT model order match MUSIC (`run_esprit_stage` / `run_esprit_2d_stage` in `esprit_stage.hpp`). The signal subspace is the **last** `d` eigenvector columns (largest eigenvalues). v1 is **LS-ESPRIT** only (TLS / Unitary are deferred, OPEN_ITEMS §6).
+Covariance, Hermitian `matx::eig` (VECTOR, ascending), and fixed-or-EFT model order match MUSIC (`run_esprit_stage` / `run_esprit_2d_stage` in `esprit_stage.hpp`). The signal subspace is the **last** `d` eigenvector columns (largest eigenvalues). v1 is **LS-ESPRIT** only; TLS and Unitary variants are deferred.
 
 **Subarray pair.** `subarray_spec` is structural and static. Empty vectors (`is_auto()`) derive:
 
@@ -80,6 +80,8 @@ ESPRITEstimatorOp: unseen array_geometry override; revalidating the [URA dual-in
 
 Rank-deficient `auto` warns once (same condition as Root-MUSIC).
 
+The tick shell follows `resolve/plan → optional mask → empty path → prepare effective covariance input → ESPRIT ULA/URA path → emit`. `prepare_smoothed_input` owns smoothing-plan cache updates, index uploads, and gather dispatch; with smoothing off it passes the original geometry, pointers, and dimensions through unchanged.
+
 ## Shape and dtype rules
 
 Precision is the template `T`. `snapshot` must be rank 3. Extra leading batch dims are not admitted.
@@ -125,12 +127,13 @@ Displacement is derived from `array_geometry`, never stored on the descriptor. S
 
 ## SDK implementation notes
 
-- **Construction.** `ESPRITEstimatorOp(const MaxTensorExtents&)`. If both `max_items` and `max_sources` are unset, pool spans stay `0`. Otherwise `max_items`, `max_sources`, and `max_channels` must be positive. Same four-output spans as Root-MUSIC. `max_az` / `max_el` unused.
-- **Triggering.** `contract()` is `OnEach{snapshot}` plus an unconditional `Exact{}` + `SafeDefault{}` entry for every override port. Wiring is the application's only obligation: an `add_flow` into a port enables that override, and leaving it unwired compiles (warning `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT`) and reports `kNotConnected` on every activation, which `compute()` reads as no override this tick. A wired port that is *not* in the contract still fails the second activation with `RUNTIME_OPERATOR_REPLAY_MISMATCH` (`HSDK5_PORT.md` §1) — which is why optional `is_valid`, omitted from the contract (§11), must stay unwired.
+- **Construction.** `ESPRITEstimatorOp(const MaxTensorExtents&)`. If both `max_items` and `max_sources` are unset, pool spans stay `0`. Otherwise `max_items`, `max_sources`, and `max_channels` must be positive. Constructor-created runtime state owns stable covariance/eigenspace/count and six bounded small-matrix workspaces.
+- **Triggering.** `contract()` is `OnEach{snapshot}`. Optional `is_valid` and every live override are unconditional non-members with `Exact{}` + `SafeDefault{}`; unwired means absent/all-valid or Params for that tick. A producer must publish a same-tick mask before `snapshot`.
 - **Ports and queues.** Device Tensor ports, queue depth `2`. All four outputs declare `max_rank = 3`. Live Inputs also queue depth `2` — wire-object, POD, and scalar payloads only (no config Tensor, since there is no scan grid).
 - **Live override payloads.** `array_geometry` is `Input<WireArrayGeometry>`, a generated descriptor-schema type; `spatial_smoothing` is `Input<SpatialSmoothingOverride>`, a bounded `{count, first, second}` int64 POD (`count` must be 0, 1, or 2). Both convert with `from_wire` inside `resolve_live_override_via`, so neither wire storage nor the POD reaches operator state. `num_sources` / `source_count_pfa` / `max_sources` are plain scalar `Input<>` ports resolved with `resolve_live_override`. Logical `ESPRITParams` types are unchanged (`HSDK5_PORT.md` §9); `subarray_spec` has no port at all — it is static by contract.
-- **Streams and lifetime.** `context.cuda_stream()`. Inputs retained at end of `compute()`. Rotation eigenproblems run in-kernel (no cuSOLVER). URA index upload **does** `cudaStreamSynchronize` once when the invariance tables are rebuilt. `stop()` calls `retire_music_matx_caches()`.
-- **Emission.** Loan → fill → commit → emit (`aoa_estimates`, `doa_multi`, `source_count`, `eigenvalues`). **[EA HSDK5 ONLY]** all four always emitted (OPEN_ITEMS §4).
+- **Tick flow.** `compute()` resolves overrides and builds the plan, validates the optional mask, handles the empty path, asks `prepare_smoothed_input` for the effective covariance input, runs the ULA or URA estimator path, and emits. Runtime state retains capacity-managed smoothing gather buffers and grows them only when a larger effective input arrives.
+- **Streams and lifetime.** `context.cuda_stream()`. Inputs and smoothing gather buffers remain alive through estimator execution. Rotation eigenproblems run in-kernel (no cuSOLVER). URA index upload **does** `cudaStreamSynchronize` once when the invariance tables are rebuilt. `stop()` calls `retire_music_matx_caches()`.
+- **Emission.** Required `aoa_estimates` publishes first; optional/always `doa_multi`, `source_count`, and `eigenvalues` absorb declined emits.
 - **Parameter authoring.** Schema `com.nvidia.holoscan.radar.ESPRITParams` version `1`.
 - **Precision.** `ESPRITEstimatorOp<float>` and `<double>`.
 - **[EA HSDK5 ONLY]** All five override ports are unconditionally in `contract()`; geometry / smoothing Graph tests run. Runtime geometry producers connect directly to `array_geometry` with `WireArrayGeometry`; Python remains Params-only for schema payloads.
@@ -143,15 +146,15 @@ Every output is a fresh pool loan. A consumer may keep the Tensor for the usual 
 
 **Cold.** First tick: `matx::eig` plan, optional smoothing plan, and (auto URA) dual-invariance index H2D + sync. First unseen geometry revalidates the pair.
 
-**Steady.** Covariance + eig + EFT every tick; then one CUDA block per item (thread 0) for the `d×d` LS solve / QR or Schur. `d` is small (`≤ max_sources ≤ 64`). No per-item host `geev`. Per-tick MatX eig-plan clear matches MUSIC.
+**Steady.** Covariance + eig + EFT run on stable constructor-created workspace; then one CUDA block per item (thread 0) handles the `d×d` LS solve / QR or Schur. `d` is small (`≤ max_sources ≤ 64`). No per-item host `geev`.
 
-**`[live]` cost.** Scalar overrides cheap; `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the pair, rebuilds the smoothing plan, and (auto URA) re-uploads the invariance tables on the tick it arrives.
+**`[live]` cost.** Scalar overrides are cheap; `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the pair, rebuilds the smoothing plan, and (auto URA) re-uploads the invariance tables on the tick it arrives. The Graph harness isolates all five live inputs.
 
 ```bash
 ctest --test-dir build -R perf_esprit_estimator_smoke
 ```
 
-Harness axes: channels, detections, snapshots (ULA `xs`…`xl`); default matrix includes `ura_sm` (6×6); `--full` adds `ura_lg` (8×8). `num_sources` fixed at 1. Live-override timing deferred. No measured numbers are recorded in-repo for this Graph harness.
+Harness axes: channels, detections, snapshots (ULA `xs`…`xl`); default matrix includes `ura_sm` (6×6); `--full` adds `ura_lg` (8×8). Each size runs isolated production-Exact scenarios for `array_geometry`, `spatial_smoothing`, `num_sources`, `source_count_pfa`, and `max_sources`. The Pfa scenario uses automatic source count; other steady paths fix one source.
 
 ## Tests and verification
 
@@ -164,11 +167,13 @@ Harness axes: channels, detections, snapshots (ULA `xs`…`xl`); default matrix 
 | `SpatialSmoothing1DRecoversDoa` / `ForwardOnlySmoothingRecoversCoherentSources` | S1 front-end |
 | `RejectsNonUniformLinearGeometry` / `RejectsUlaParallelToBoresight` | Geometry constraint |
 | Convention / zenith / endfire / NaN pad | Same family as Root-MUSIC |
-| `LiveArrayGeometryAppliesForOneTick` / `LiveSpatialSmoothingAppliesForOneTick` | Mid-stream override revalidates / rebuilds, and sticks after the next miss |
-| `IsValidMask…` / `AllInvalidMask…` / `LiveNumSources…` / `LiveSourceCountPfa…` / `LiveMaxSources…` | **[EA HSDK5 ONLY]** Graph `GTEST_SKIP` |
+| `LiveArrayGeometryAppliesForOneTick` / `LiveSpatialSmoothingAppliesForOneTick` | Mid-stream override applies for one tick; the next miss reverts to Params |
+| `IsValidMask…` / `AllInvalidMask…` | Connected Exact mask and all-invalid blanking |
+| `LiveNumSources…` / `LiveSourceCountPfa…` / `LiveMaxSources…` | Scalar Exact override and revert |
+| `ReducedSubarrayDirectlyDrivesEstimator` | `SubarraySelectionOp` snapshot and runtime geometry directly drive ESPRIT |
 | `RejectsSnapshotRank2` | Contract 3-D `snapshot` |
 
-Analytic ground truth is a host steering-vector snapshot. C++ Graph tests bind all four outputs. OPEN_ITEMS §8 still wants an end-to-end `SubarraySelectionOp` → ESPRIT Graph test (not written).
+Analytic ground truth is a host steering-vector snapshot. C++ Graph tests bind all four outputs and include the direct reduced-subarray integration path.
 
 ```bash
 ctest --test-dir build -R test_esprit_estimator --output-on-failure
@@ -208,15 +213,15 @@ graph.add_flow(esprit->eigenvalues, eig_sink->in);
 
 ## Contract conformance
 
-HSDK 5 EA C++ compute path matches the locked LS-ESPRIT ULA/URA algorithm; the scalar Graph override/`is_valid` harness and optional-output Connectivity are EA-deferred.
+The HSDK 5 C++ compute path matches the locked LS-ESPRIT ULA/URA algorithm and optional-port convention.
 
 | Contract claim | Verdict | Detail |
 | --- | --- | --- |
-| `array_geometry` **[live]** | conforms (payload form differs) | Unconditional Exact `Input<WireArrayGeometry>` in `contract()`, not `Input<ArrayGeometry>` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9, OPEN_ITEMS §2) |
+| `array_geometry` **[live]** | conforms (payload form differs) | Unconditional Exact `Input<WireArrayGeometry>` in `contract()`, not `Input<ArrayGeometry>` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9) |
 | `spatial_smoothing` **[live]** | conforms (payload form differs) | Bounded `{count, first, second}` int64 POD, not `Input<std::vector<int64_t>>` (§9) |
-| `num_sources` / `source_count_pfa` / `max_sources` **[live]** | conforms | Unconditional Exact `Input<>` in `contract()`; the app enables each override by wiring the port. Graph mid-stream tests still skipped (§1) |
-| Optional `is_valid` connected in Graph | EA-deferred | Omitted from `contract()` (§11); OPEN_ITEMS §3 |
-| Optional `doa_multi` / `source_count` / `eigenvalues` | Done | All `always`: fused with `aoa_estimates` in the solve kernel, so unwired sinks are discarded. No `angle_spectrum` (OPEN_ITEMS §4) |
+| `num_sources` / `source_count_pfa` / `max_sources` **[live]** | conforms | Unconditional Exact inputs with active mid-stream/revert tests |
+| Optional `is_valid` connected in Graph | conforms | Non-member Exact + SafeDefault; connected mask tests run |
+| Optional `doa_multi` / `source_count` / `eigenvalues` | conforms | All `always`: fused with `aoa_estimates`, so unwired sinks are discarded. No `angle_spectrum` |
 | `max_sources` unbounded except by `doa_multi` capacity | deviates | Rejects values outside `[1, 64]` (`kMaxSourcesCap` in `esprit_estimator_op.cu`) |
 
 `subarray_spec` is **static** in the contract, so having no override port is conformance. TLS/Unitary variants are documented follow-ups, not unimplemented contract modes.

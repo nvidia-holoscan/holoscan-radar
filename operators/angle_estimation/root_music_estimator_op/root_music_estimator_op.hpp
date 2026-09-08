@@ -6,10 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
-#include <string>
 #include <type_traits>
-#include <unordered_set>
 #include <vector>
 
 #include <holoscan/core/domain/dlpack.hpp>
@@ -39,6 +36,9 @@ namespace detail {
 struct RootMUSICSolverState;
 }  // namespace detail
 
+template <typename T>
+struct RootMUSICRuntimeState;
+
 // Gridless Root-MUSIC sparse-path DOA estimator. Contract reference:
 // docs/planning/OPERATOR_API.md → "RootMUSICEstimatorOp".
 //
@@ -50,8 +50,8 @@ struct RootMUSICSolverState;
 // In:  snapshot       — complex64/complex128,
 //                       (num_items, num_channels, num_snapshots).
 // In:  is_valid       — optional bool/uint8, (num_items, num_snapshots).
-//                       Omitted from the temporal contract when unconnected
-//                       (HSDK5_PORT §1).
+//                       Exact + SafeDefault admits an unwired port; publish a
+//                       mask before its snapshot.
 // Out: aoa_estimates  — float32/float64, (num_items, 2). Always emitted.
 // Out: doa_multi      — float32/float64, (num_items, max_sources, 2).
 //                       Always emitted (optional in OPERATOR_API.md).
@@ -125,7 +125,7 @@ class RootMUSICEstimatorOp : public holoscan::Operator<RootMUSICParams> {
   void stop() override;
 
   Input<Tensor> snapshot{"snapshot"};
-  // Optional; unconnected graphs omit it from the temporal contract.
+  // Optional same-tick mask; Exact + SafeDefault admits an unwired port.
   Input<Tensor> is_valid{"is_valid"};
   Output<Tensor> aoa_estimates{"aoa_estimates"};
   Output<Tensor> doa_multi{"doa_multi"};
@@ -139,31 +139,16 @@ class RootMUSICEstimatorOp : public holoscan::Operator<RootMUSICParams> {
   Input<int64_t> max_sources{"max_sources"};
 
  private:
+  Tensor retained_snapshot_;
+  Tensor retained_is_valid_;
+
+  std::shared_ptr<RootMUSICRuntimeState<T>> state_;
+
   MaxTensorExtents extents_;
   std::size_t aoa_max_byte_span_{0U};
   std::size_t doa_max_byte_span_{0U};
   std::size_t count_max_byte_span_{0U};
   std::size_t eig_max_byte_span_{0U};
-  std::optional<int64_t> max_channels_;
-
-  Tensor retained_snapshot_;
-  Tensor retained_is_valid_;
-
-  bool warned_rank_deficient_{false};
-  detail::DeviceAngleConvention<T> device_angle_convention_{};
-  // The convention the device relabeling was built from; angle_convention is
-  // contract-static, so a later change is rejected rather than ignored.
-  std::optional<AngleConvention> seeded_angle_convention_{};
-
-  SpatialSmoothingPlan smoothing_plan_{};
-  std::string smoothing_key_{};
-  std::unordered_set<std::string> seen_geometry_keys_{};
-  std::shared_ptr<holoscan::Tensor> d_subarray_index_{};
-  std::shared_ptr<holoscan::Tensor> d_fb_flip_{};
-
-  std::shared_ptr<detail::RootMUSICSolverState> solver_state_{};
-  // Second companion-root solver for the URA elevation axis.
-  std::shared_ptr<detail::RootMUSICSolverState> solver_state_z_{};
 };
 
 extern template class RootMUSICEstimatorOp<float>;

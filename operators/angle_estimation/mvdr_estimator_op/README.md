@@ -2,12 +2,12 @@
 
 Adaptive MVDR / Capon sparse-path DOA: for each gathered snapshot item it forms a sample covariance, regularizes and inverts it, and scans an `(az, el)` grid for the Capon power peak.
 
-It sits in the pluggable sparse slot after `SnapshotGatherOp`, the same wiring as Beamscan / MUSIC. It solves “one (or a few) DOAs per detection/cluster” with data-adaptive nulls that a conventional scan cannot place. The fact a caller must not miss: `angle_convention` defaults to `radar_boresight`, the scan grid is required, there is no array taper (the beam is shaped from `R̂`), and on this branch every “optional” Tensor output is still allocated and emitted each tick.
+It sits in the pluggable sparse slot after `SnapshotGatherOp`, the same wiring as Beamscan / MUSIC. It solves “one (or a few) DOAs per detection/cluster” with data-adaptive nulls that a conventional scan cannot place. The fact a caller must not miss: `angle_convention` defaults to `radar_boresight`, the scan grid is required, and there is no array taper (the beam is shaped from `R̂`).
 
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
-| in | `snapshot` | complex64 / complex128 | `(num_items, num_channels[, num_snapshots])` | Rank-2 treated as `num_snapshots == 1` |
-| in | `is_valid` | bool or uint8 (`0`/`1`) | `(num_items, num_snapshots)` | Optional; covariance sums only marked slots. Omitted from `contract()` ([EA HSDK5 ONLY] `HSDK5_PORT.md` §11) |
+| in | `snapshot` | complex64 / complex128 | `(num_items, num_channels, num_snapshots)` | Exact rank 3; no opaque leading batch |
+| in | `is_valid` | bool or uint8 (`0`/`1`) | `(num_items, num_snapshots)` | Optional same-tick mask; non-member Exact + SafeDefault. Publish before `snapshot` |
 | out | `aoa_estimates` | float32 / float64 | `(num_items, 2)` | Dominant Capon DOA `(az, el)` or `(u, v)` |
 | out | `angle_spectrum` | float32 / float64 | `(num_items, num_az, num_el)` | Capon spectrum. Optional (`always` disposition): the grid is the same pass that yields `aoa_estimates`, so it is produced regardless and an unwired sink is silently discarded |
 | out | `doa_multi` | float32 / float64 | `(num_items, max_sources, 2)` | Up to `max_sources` peaks; unused rows NaN |
@@ -24,7 +24,7 @@ It sits in the pluggable sparse slot after `SnapshotGatherOp`, the same wiring a
   → SnapshotGatherOp → snapshot → MVDREstimatorOp → aoa_estimates
 ```
 
-`num_snapshots` should be ≳ `num_channels` for a well-conditioned inverse; rank-1 (`K = 1`) still runs because diagonal loading regularizes `R̂`.
+`num_snapshots` should be ≳ `num_channels` for a well-conditioned inverse; a singleton snapshot axis (`K = 1`) still runs because diagonal loading regularizes `R̂`.
 
 Contract: [`OPERATOR_API.md` § `MVDREstimatorOp`](../../../docs/planning/OPERATOR_API.md) ·
 group: [`operators/angle_estimation/README.md`](../README.md) ·
@@ -69,11 +69,13 @@ Unlike MUSIC, a non-positive denominator is **gated to zero** (`power = denom > 
 
 **Spatial smoothing** is the same S1 front-end as MUSIC (per-axis counts, optional forward-backward, holey reject). First enable warns `MVDREstimatorOp: spatial smoothing on — aperture {}->{} channels, {} sub-arrays[ (forward-backward)]`. Steering is rebuilt against `reduced_geometry`. The first manifold build is silent; a later unseen steering key warns once, then caches.
 
+The tick shell follows `resolve/plan → optional mask → empty path → prepare effective covariance input → MVDR path → emit`. `prepare_smoothed_input` owns smoothing-plan cache updates, index uploads, and gather dispatch; with smoothing off it passes the original geometry, pointers, and dimensions through unchanged.
+
 ## Shape and dtype rules
 
 Precision is the template `T` ∈ {`float`, `double`}. Named leading axes stop at `num_items`.
 
-- `snapshot` rank 2 → `K = 1`. Rank 3 → trailing `num_snapshots`. Any other rank is rejected.
+- `snapshot` has exact rank 3. Use a singleton trailing axis for one look.
 - `num_channels` must equal `array_geometry.num_elements()` (pre-smoothing). After smoothing, estimation and `eigenvalues` use `C_est = L`.
 - `aoa_estimates` `(num_items, 2)`; `angle_spectrum` `(num_items, len(az), len(el))`; `doa_multi` `(num_items, effective_max_sources, 2)`; `source_count` `(num_items,)`.
 - `num_items == 0` still emits all five (eigenvalues use the pre-smoothing channel count).
@@ -85,7 +87,7 @@ Rejected combinations:
 | --- | --- |
 | Empty `az_angles` or `el_angles` | `MVDREstimatorOp: az_angles and el_angles must be non-empty` |
 | `max_sources` not in `[1, 64]` | `MVDREstimatorOp: max_sources must be in [1, 64]` |
-| `snapshot` rank not 2 or 3 | `MVDREstimatorOp: snapshot must have shape (num_items, num_channels) or (num_items, num_channels, num_snapshots)` |
+| `snapshot` not rank 3 | `MVDREstimatorOp: snapshot must have shape (num_items, num_channels, num_snapshots)` |
 | Channel mismatch | `MVDREstimatorOp: snapshot num_channels must match array_geometry.num_elements` |
 | `is_valid` dtype / shape | same wording as MUSIC, with this operator name |
 | Pageable / non-contiguous / dtype | shared `require_*` strings with `MVDREstimatorOp` |
@@ -93,7 +95,7 @@ Rejected combinations:
 | Missing stream | `MVDREstimatorOp: no CUDA compute stream` |
 | Missing ctor extents (when any sizing field is set) | `MVDREstimatorOp: MaxTensorExtents.<field> must be a positive value …` |
 
-A tick that exceeds ctor-captured spans fails at Tensor-loan allocate.
+`num_items`, scan grids, channels, and `max_sources` are checked against the captured extents before compute.
 
 ## Parameters
 
@@ -112,12 +114,13 @@ No `num_sources` / EFT — Capon has no model-order concept. `diagonal_loading` 
 
 ## SDK implementation notes
 
-- **Construction.** `MVDREstimatorOp(const MaxTensorExtents&)`. If both `max_items` and `max_az` are unset, pool spans stay `0`. Otherwise `max_items`, `max_az`, `max_el`, `max_sources`, and `max_channels` must be positive. Same five-output spans as MUSIC.
-- **Triggering.** `contract()` is `OnEach{snapshot}` plus an unconditional `Exact{}` + `SafeDefault{}` entry for every override port. Wiring is the application's only obligation: an `add_flow` into a port enables that override, and leaving it unwired compiles (warning `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT`) and reports `kNotConnected` on every activation, which `compute()` reads as no override this tick. A wired port that is *not* in the contract still fails the second activation with `RUNTIME_OPERATOR_REPLAY_MISMATCH` (`HSDK5_PORT.md` §1) — which is why optional `is_valid`, omitted from the contract (§11), must stay unwired.
+- **Construction.** `MVDREstimatorOp(const MaxTensorExtents&)`. If both `max_items` and `max_az` are unset, pool spans stay `0`. Otherwise `max_items`, `max_az`, `max_el`, `max_sources`, and `max_channels` must be positive. Constructor-created runtime state owns stable covariance/inverse/count workspace and the steering cache.
+- **Triggering.** `contract()` is `OnEach{snapshot}`. Optional `is_valid` and every live override are unconditional non-members with `Exact{}` + `SafeDefault{}`; unwired means absent/all-valid or Params for that tick. A producer must publish a same-tick mask before `snapshot`.
 - **Ports and queues.** Device Tensor ports, queue depth `2`. Output ranks: `aoa_estimates` 2, `angle_spectrum` 3, `doa_multi` 3, `source_count` 1, `eigenvalues` 2. Live Inputs also queue depth `2`; `az_angles` / `el_angles` are rank-1 pageable-host float64 config Tensors, the rest are wire-object / POD / scalar payloads.
 - **Live override payloads.** `array_geometry` is `Input<WireArrayGeometry>`, a generated descriptor-schema type; `spatial_smoothing` is `Input<SpatialSmoothingOverride>`, a bounded `{count, first, second}` int64 POD (`count` must be 0, 1, or 2). Both convert with `from_wire` inside `resolve_live_override_via`, so neither wire storage nor the POD reaches operator state. `az_angles` / `el_angles` ride rank-1 pageable-host float64 config Tensors validated on arrival (rank, host memory, contiguity, dtype, `max_az` / `max_el` extent). `diagonal_loading` / `max_sources` are plain scalar `Input<>` ports resolved with `resolve_live_override`. Logical Params types are unchanged (`HSDK5_PORT.md` §9).
-- **Streams and lifetime.** `context.cuda_stream()`. Inputs retained at end of `compute()`. Hot path does not synchronize except the per-tick MatX eig/**inv** plan clear (`cudaDeviceSynchronize` inside `clear_matx_solver_plan_caches`). `stop()` drains `GetAllocMap()` via `retire_matx_solver_caches()`.
-- **Emission.** Loan → fill → commit → emit (`aoa_estimates`, `angle_spectrum`, `doa_multi`, `source_count`, `eigenvalues`). **[EA HSDK5 ONLY]** all five always produced (OPEN_ITEMS §4); bind every device output.
+- **Tick flow.** `compute()` resolves overrides and builds the plan, validates the optional mask, handles the empty path, asks `prepare_smoothed_input` for the effective covariance input, runs the estimator-specific path, and emits. Smoothing gather storage is still allocated per smoothed tick (tracked in `OPEN_ITEMS.md`).
+- **Streams and lifetime.** `context.cuda_stream()`. Inputs are retained at end of `compute()`. Stable covariance/inverse/count buffers avoid per-tick solver scratch allocation. The MatX plan clear remains; `stop()` drains `GetAllocMap()` via `retire_matx_solver_caches()`.
+- **Emission.** Required `aoa_estimates` publishes first. `angle_spectrum` is optional/always; `doa_multi` and `source_count` share a latched peak pass; `eigenvalues` is independently latched.
 - **Parameter authoring.** Schema `com.nvidia.holoscan.radar.MVDRParams` version `1`.
 - **Precision.** `MVDREstimatorOp<float>` and `<double>`.
 - **[EA HSDK5 ONLY]** All six override ports are unconditionally in `contract()`; the descriptor / grid / smoothing Graph tests run. Runtime geometry producers connect directly to `array_geometry` with `WireArrayGeometry`; Python remains Params-only for schema payloads.
@@ -130,7 +133,7 @@ Every output is a fresh pool loan. A consumer may keep the Tensor for the usual 
 
 **Cold.** First unseen geometry / grid / smoothing key builds the steering manifold and (if enabled) the smoothing plan. First `matx::eig` and `matx::inv` create plans.
 
-**Steady.** Covariance, eig (raw `R̂`), load, inv, Capon scan, and peak extract run every tick. `eigenvalues` always pays `matx::eig` even if unused (OPEN_ITEMS: ~2–4% on lg/xl, historical HSDK 4.x note). Capon reduce is documented as latency-bound; `R̂⁻¹` stays in global memory (shared staging measured slower). Per-tick plan clear does not drain the global MatX allocator.
+**Steady.** Covariance, load, inv, and Capon scan run every tick using stable constructor-created workspace. The steering artifact caches its manifold and device scan grids. Eigen decomposition and peak extraction drop out after their optional outputs latch unwired. Per-tick plan clear does not drain the global MatX allocator.
 
 **`[live]` cost.** `diagonal_loading` is free. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives.
 
@@ -138,7 +141,7 @@ Every output is a fresh pool loan. A consumer may keep the Tensor for the usual 
 ctest --test-dir build -R perf_mvdr_estimator_smoke
 ```
 
-Size ladder axes: channels, detections, snapshots, `num_az × num_el` (`xs`…`xl`; default smoke `xs`/`sm`/`md`). Live-override timing deferred. Do not treat OPEN_ITEMS’ “~2–4%” / “~97% GPU time” notes as current Graph-harness numbers.
+Size ladder axes: channels, detections, snapshots, `num_az × num_el` (`xs`…`xl`; default smoke `xs`/`sm`/`md`). The Graph harness measures the production Exact `diagonal_loading` override. Do not treat historical kernel notes as current Graph results.
 
 ## Tests and verification
 
@@ -149,12 +152,13 @@ Size ladder axes: channels, detections, snapshots, `num_az × num_el` (`xs`…`x
 | `MultiSourceRecoversTwoDoa` / `MaxSourcesCapacityNanFillsUnusedRows` | `doa_multi` always targets `max_sources`; NaN pad |
 | `EigenvaluesRankOneSourceDominant` | Unloaded spectrum; one dominant eigenvalue |
 | `SpatialSmoothing*` | S1 1-D/2-D; eigenvalues shrink; holey reject |
-| `Accepts2DSingleSnapshot` | Rank-2 `K=1` + loading invertibility |
+| `Rejects2DSingleSnapshot` | Locked exact-rank snapshot contract |
 | `DirectionCosineMasksInvisibleRegion` | Invisible `(u, v)` → zero Capon power |
-| `LiveAzGridAppliesForOneTick` / `LiveSpatialSmoothingAppliesForOneTick` | Mid-stream override reshapes / rebuilds, and sticks after the next miss |
-| `LiveArrayGeometryAppliesForOneTick` | Same for `array_geometry`; **red** on the tick-invariance bug (OPEN_ITEMS §6), left failing deliberately |
+| `LiveAzGridAppliesForOneTick` / `LiveSpatialSmoothingAppliesForOneTick` | Mid-stream override applies for one tick; the next miss reverts to Params |
+| `LiveArrayGeometryAppliesForOneTick` | Same for `array_geometry`; active and passing |
 | `LiveSpatialSmoothingRejectsMalformedPod` / `LiveAzGridRejectsExtentAboveMaxAz` | Out-of-range `count` and an over-`max_az` grid are diagnosed, not consumed |
-| `IsValidMask…` / `AllInvalidMask…` / `LiveDiagonalLoading…` / `LiveMaxSources…` | **[EA HSDK5 ONLY]** Graph `GTEST_SKIP` |
+| `IsValidMask…` / `AllInvalidMask…` | Connected Exact mask and all-invalid blanking |
+| `LiveMaxSources…` | Scalar Exact override and revert; loading value comparison remains blocked by the documented MVDR solver bug |
 | Rejects / precision / multi-item | TESTING.md cross-cuts |
 
 Analytic ground truth is a host steering-vector snapshot. C++ Graph tests bind all five outputs.
@@ -202,16 +206,16 @@ graph.add_flow(mvdr->eigenvalues, eig_sink->in);
 
 ## Contract conformance
 
-HSDK 5 EA C++ compute path matches the locked Capon algorithm; the scalar Graph override/`is_valid` harness and optional-output Connectivity are EA-deferred.
+The HSDK 5 C++ compute path matches the locked Capon algorithm and optional-port convention.
 
 | Contract claim | Verdict | Detail |
 | --- | --- | --- |
-| `array_geometry` **[live]** | conforms (payload form differs) | Unconditional Exact `Input<WireArrayGeometry>` in `contract()`, not `Input<ArrayGeometry>` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9, OPEN_ITEMS §2) |
+| `array_geometry` **[live]** | conforms (payload form differs) | Unconditional Exact `Input<WireArrayGeometry>` in `contract()`, not `Input<ArrayGeometry>` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9) |
 | `az_angles` / `el_angles` **[live]** | conforms (payload form differs) | Rank-1 host config Tensors bounded by `max_az` / `max_el`, not `Input<std::vector<double>>` (§9) |
 | `spatial_smoothing` **[live]** | conforms (payload form differs) | Bounded `{count, first, second}` int64 POD, not `Input<std::vector<int64_t>>` (§9) |
-| `diagonal_loading` / `max_sources` **[live]** | conforms | Unconditional Exact `Input<>` in `contract()`; the app enables each override by wiring the port. Graph mid-stream tests still skipped (§1) |
-| Optional `is_valid` connected in Graph | EA-deferred | Omitted from `contract()` (§11); OPEN_ITEMS §3 |
-| Optional `angle_spectrum` / `doa_multi` / `source_count` / `eigenvalues` | Done | `angle_spectrum` always (fused with `aoa`); the other three latched — `eigenvalues` sheds its batched eig (OPEN_ITEMS §4) |
+| `diagonal_loading` / `max_sources` **[live]** | conforms | Unconditional Exact `Input<>`; production-contract Graph performance and `max_sources` revert coverage |
+| Optional `is_valid` connected in Graph | conforms | Non-member Exact + SafeDefault; connected mask tests run |
+| Optional `angle_spectrum` / `doa_multi` / `source_count` / `eigenvalues` | conforms | `angle_spectrum` always (fused with `aoa`); the other three latched, and `eigenvalues` sheds its batched eig |
 | `max_sources` unbounded except by `doa_multi` capacity | deviates | Rejects values outside `[1, 64]` (`kMaxSourcesCap` in `mvdr_estimator_op.cu`) |
 
 Audit scope (static; no build or test run): `OPERATOR_API.md` § MVDREstimatorOp, `WORKFLOWS.md`, `TESTING.md`, `HSDK5_PORT.md`, `STATUS.md`, group/common READMEs, `OPEN_ITEMS.md`, `mvdr_estimator_op.hpp` / `.cu`, `mvdr_stage.hpp`, `metadata.json`, C++ tests, `perf_mvdr_estimator.cpp`. Deviations that are team questions are proposed in chat, not appended to `OPEN_ITEMS.md`.

@@ -1648,7 +1648,8 @@ DualIOGraphRunResult run_dual_io_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs1, ParamsT params,
     const char* out0_port, const char* out1_port, WireFn&& wire,
-    const MaxTensorExtents& extents = default_test_extents()) {
+    const MaxTensorExtents& extents = default_test_extents(),
+    std::initializer_list<const char*> extra_op_out_ports = {}) {
   DualIOGraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -1672,6 +1673,9 @@ DualIOGraphRunResult run_dual_io_operator_graph_result(
 
   holoscan::CompileOptions options;
   detail::bind_dual_io_device_pools(options, out0_port, out1_port);
+  for (const char* port : extra_op_out_ports) {
+    detail::bind_op_device_output(options, port);
+  }
 
   try {
     const holoscan::ExecutionPlan plan =

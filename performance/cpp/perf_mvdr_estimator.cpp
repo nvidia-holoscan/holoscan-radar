@@ -9,9 +9,7 @@
 // docs/planning/OPERATOR_DEVELOPMENT.md.
 //
 // [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
-// Mid-session [live] override measurement is deferred until
-// docs/planning/HSDK5_PORT.md §1 (EA partition / device binding). Params
-// still select the scan grid under test.
+// The source exercises the production Exact diagonal_loading contract.
 
 #include <cstdint>
 #include <cstdlib>
@@ -134,9 +132,6 @@ perf::TimingCollector run_mvdr_graph(
     const MvdrScenario& scen, const perf::RunPlan& plan) {
   auto snap = perf::make_iq_cube_device<PerfPrecision>(
       {scen.detections, scen.channels, scen.snapshots});
-  using BaseOp = hr::MVDREstimatorOp<PerfPrecision>;
-  using LiveOp =
-      perf::PerfLiveContractOp<BaseOp, &BaseOp::diagonal_loading>;
   constexpr double kInitialLoading = -1.0;
   constexpr double kOverrideLoading = 1e-2;
   return perf::run_perf_graph_with_override(
@@ -150,7 +145,8 @@ perf::TimingCollector run_mvdr_graph(
         extents.max_el = scen.num_el;
         extents.max_sources = 4;
         extents.max_channels = scen.channels;
-        auto op = graph.op<LiveOp>("mvdr", extents);
+        auto op =
+            graph.op<hr::MVDREstimatorOp<PerfPrecision>>("mvdr", extents);
         hr::MVDRParams params;
         params.array_geometry =
             make_ula_geometry(scen.channels, 0.5, 1.0);
@@ -185,15 +181,6 @@ perf::TimingCollector run_mvdr_graph(
         graph.add_flow(op->doa_multi, ns2->in, q);
         graph.add_flow(op->source_count, ns3->in, q);
         graph.add_flow(op->eigenvalues, ns4->in, q);
-        graph.partition("perf")
-            .add(src)
-            .add(op)
-            .add(sink)
-            .add(ns1)
-            .add(ns2)
-            .add(ns3)
-            .add(ns4);
-
         perf::bind_tensor_out(
             options, "mvdr", "aoa_estimates");
         perf::bind_tensor_out(

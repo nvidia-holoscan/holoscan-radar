@@ -120,6 +120,7 @@ radar_add_test(angle_estimation/test_root_music_estimator
     holoscan::radar_common_source_count)
 radar_add_test(angle_estimation/test_esprit_estimator
     holoscan::esprit_estimator_op
+    holoscan::subarray_selection_op
     holoscan::radar_common_spatial_smoothing
     holoscan::radar_common_source_count)
 radar_add_test(angle_estimation/test_music_estimator
