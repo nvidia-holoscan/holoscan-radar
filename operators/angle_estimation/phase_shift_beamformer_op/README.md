@@ -4,7 +4,7 @@ Forms a conventional (Bartlett) beam for every range-Doppler cell, replacing the
 
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
-| in | `rd_maps` | complex64 / complex128 | `(num_channels, num_doppler, num_range_bins)` | Channel axis immediately before the `(doppler, range)` plane; `num_channels` must match `array_geometry`. See Shape for named-leading admission. |
+| in | `rd_maps` | complex64 / complex128 | `(num_channels, num_doppler, num_range_bins)` | Channel axis immediately before the `(doppler, range)` plane; `num_channels` must match `array_geometry`. See Shape for the exact-rank rule. |
 | out | `rda_cube` | complex64 / complex128 | `(num_az, num_el, num_doppler, num_range_bins)` | Channel axis replaced by the `az × el` beam grid (`u × v` under `direction_cosine`). Always emitted. |
 | live | `array_geometry` | `WireArrayGeometry` | descriptor wire object | `[live]` Exact override; always declared, wire to enable. |
 | live | `az_angles` / `el_angles` | float64 config Tensor | `(num_az,)` / `(num_el,)`, rank-1 pageable host | `[live]` Exact override; extents bounded by `max_az` / `max_el`. |
@@ -107,7 +107,7 @@ Contract marks geometry / grids / taper **[live]** (warn-once, cache), and each 
 
 Cold / first unseen steering key: host taper + per-beam `boundary_to_canonical`, H2D scratch, and the weight kernel; then the GEMM. Steady: cache hit + one broadcast `matx::matmul` (cuBLAS). The key covers the complete `AngleConvention` (including custom signed axes and elevation reference), wavelength, positions, both grids, and window key, so an override costs one weight rebuild on the tick it arrives.
 
-Harness: `performance/cpp/perf_phase_shift_beamformer.cpp`. Size ladder `xs`…`xl` (channels × `num_az` × `num_el` × RD extent). Every selected size runs four isolated inline-override scenarios: `array_geometry`, `az_angles`, `el_angles`, and `array_taper`. The source co-emits the complete live bundle before the triggering `rd_maps`; one value changes mid-session, and the report records `override_ms` / `override_delta_ms` against pre-override steady state. No in-repo measured numbers for this operator; run:
+Harness: `performance/cpp/perf_phase_shift_beamformer.cpp`. Size ladder `xs`…`xl` (channels × `num_az` × `num_el` × RD extent). Every selected size runs four isolated inline-override scenarios: `array_geometry`, `az_angles`, `el_angles`, and `array_taper`. The source co-emits the complete live bundle before the triggering `rd_maps`; one value changes mid-session, and the report records `override_ms` / `override_delta_ms` against pre-override steady state. No current HSDK 5 Graph results are checked in; run:
 
 ```bash
 ctest --test-dir build -R perf_phase_shift_beamformer_smoke
@@ -121,6 +121,7 @@ C++: `tests/cpp/angle_estimation/test_phase_shift_beamformer.cpp`. Python: `test
 
 | Check | Proves |
 | --- | --- |
+| `DefaultsToRadarBoresightConvention` | Default-constructed Params select the documented `radar_boresight` convention |
 | `RecoversKnownBeamBin2D` | URA steering vector → cube peak within 0.02 rad of truth |
 | `RecoversKnownBeamAzOnly1DScan` | ULA + `el_angles = [0]` → azimuth peak |
 | `ConventionRelabelsSamePhysicalDirection` | `radar_boresight` and `aerospace_ned` report the same labels |
