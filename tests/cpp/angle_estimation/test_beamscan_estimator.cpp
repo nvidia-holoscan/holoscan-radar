@@ -59,8 +59,10 @@ using holoscan::radar::complex_dtype;
 using holoscan::radar::detail::check_is_valid_mask;
 using holoscan::radar::kPi;
 using holoscan::radar::testing::DualIOGraphRunResult;
+using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
 using holoscan::radar::testing::run_dual_io_operator_graph_result;
+using holoscan::radar::testing::run_single_io_operator_graph_result;
 using holoscan::radar::testing::run_single_in_dual_out_operator_graph_result;
 using holoscan::radar::testing::to_device_bool_tensor;
 using holoscan::radar::testing::to_device_tensor;
@@ -162,15 +164,15 @@ void wire_beamscan(holoscan::Graph& graph, const Source& source, OpRef& op,
 }
 
 // Dual-input wiring for optional is_valid (DualTensorSourceOp out0/out1).
-// Graph-level is_valid tests are still GTEST_SKIP'd on EA (HSDK5_PORT §1);
-// this keeps the deferred helper compile-clean when instantiated.
 template <typename Source, typename OpRef, typename Sink0, typename Sink1>
 void wire_beamscan_with_is_valid(holoscan::Graph& graph, const Source& source,
                                  OpRef& op, const Sink0& sink0,
                                  const Sink1& sink1) {
   const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->out0, op->snapshot, q);
-  graph.add_flow(source->out1, op->is_valid, q);
+  // Publish is_valid (out0) before snapshot (out1), matching production
+  // causal order for the Exact optional sideband.
+  graph.add_flow(source->out0, op->is_valid, q);
+  graph.add_flow(source->out1, op->snapshot, q);
   graph.add_flow(op->aoa_estimates, sink0->in, q);
   graph.add_flow(op->angle_spectrum, sink1->in, q);
 }
@@ -237,18 +239,13 @@ DualIOGraphRunResult run_beamscan_with_mask_result(
     std::shared_ptr<holoscan::Tensor> snapshot,
     std::shared_ptr<holoscan::Tensor> is_valid, BeamscanParams params) {
   return run_dual_io_operator_graph_result<BeamscanEstimatorOp<T>>(
-      {std::move(snapshot)}, {std::move(is_valid)}, std::move(params),
+      {std::move(is_valid)}, {std::move(snapshot)}, std::move(params),
       "aoa_estimates", "angle_spectrum",
       [](holoscan::Graph& graph, const auto& source, auto& op,
          const auto& sink0, const auto& sink1) {
         wire_beamscan_with_is_valid(graph, source, op, sink0, sink1);
       });
 }
-
-// Instantiate while Graph is_valid tests remain GTEST_SKIP'd so the deferred
-// dual-input helper stays type-checked.
-[[maybe_unused]] auto* const kForceBeamscanMaskHelper =
-    &run_beamscan_with_mask_result<double>;  // NOLINT(whitespace/indent_namespace)
 
 struct LiveBeamscanTick {
   std::shared_ptr<holoscan::Tensor> snapshot;
@@ -850,23 +847,35 @@ TEST(BeamscanEstimatorOpTest, ArrayTaperConfigurableFromParams) {
 
 TEST(BeamscanEstimatorOpTest, RecoversKnownDoaAzOnly1DScan) {
   constexpr int64_t kN = 8;
-  constexpr double kTruthAz = 0.08;
+  constexpr double kTruthAz = 0.083;
 
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   const auto snap_host = make_steering_snapshot(geom, conv, kTruthAz, 0.0);
-  auto snap_t = to_device_tensor(snap_host, {1, kN}, complex_dtype<double>());
+  auto snap_none =
+      to_device_tensor(snap_host, {1, kN}, complex_dtype<double>());
+  auto snap_parabolic =
+      to_device_tensor(snap_host, {1, kN}, complex_dtype<double>());
 
-  const auto out = run_beamscan<double>(
-      snap_t,
+  const auto out_none = run_beamscan<double>(
+      snap_none,
+      make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0},
+                  PeakInterpolation::kNone));
+  const auto out_parabolic = run_beamscan<double>(
+      snap_parabolic,
       make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0},
                   PeakInterpolation::kParabolic));
 
-  ASSERT_EQ(out.spectrum.shape, (std::vector<int64_t>{1, 61, 1}));
-  const double* aoa = out.aoa.as<double>();
-  EXPECT_NEAR(aoa[0], kTruthAz, 0.01);
-  EXPECT_NEAR(aoa[1], 0.0, 1e-6);
+  ASSERT_EQ(out_parabolic.spectrum.shape,
+            (std::vector<int64_t>{1, 61, 1}));
+  const double none_az = out_none.aoa.as<double>()[0];
+  const double parabolic_az = out_parabolic.aoa.as<double>()[0];
+  EXPECT_NEAR(none_az, 0.08, 1e-6);
+  EXPECT_NEAR(parabolic_az, kTruthAz, 0.003);
+  EXPECT_LT(std::abs(parabolic_az - kTruthAz),
+            std::abs(none_az - kTruthAz));
+  EXPECT_NEAR(out_parabolic.aoa.as<double>()[1], 0.0, 1e-6);
 }
 
 TEST(BeamscanEstimatorOpTest, RecoversKnownDoaPhysicsSpherical) {
@@ -977,6 +986,30 @@ TEST(BeamscanEstimatorOpTest, EmptyItemsProducesEmptyOutputs) {
   EXPECT_EQ(out.spectrum.shape, (std::vector<int64_t>{0, 3, 1}));
 }
 
+TEST(BeamscanEstimatorOpTest, OptionalSpectrumMayBeLeftUnwired) {
+  constexpr int64_t kN = 4;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  auto snapshot = snapshot_to_device<double>(
+      make_steering_snapshot(geom, AngleConvention{}, 0.0, 0.0), {1, kN});
+  auto params = make_params(geom, AngleConvention{}, {-0.1, 0.0, 0.1}, {0.0});
+  const auto extents =
+      holoscan::radar::testing::extents_for_scan_grid(3, 1);
+  const GraphRunResult result =
+      run_single_io_operator_graph_result<BeamscanEstimatorOp<double>>(
+          {std::move(snapshot)}, std::move(params), "aoa_estimates",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out, op->snapshot, q);
+            graph.add_flow(op->aoa_estimates, sink->in, q);
+          },
+          {"angle_spectrum"}, extents);
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames.size(), 1U);
+  EXPECT_EQ(result.frames[0].shape, (std::vector<int64_t>{1, 2}));
+}
+
 TEST(BeamscanEstimatorOpTest, RejectsInvalidSnapshotRank) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
@@ -1002,6 +1035,30 @@ TEST(BeamscanEstimatorOpTest, RejectsSnapshotDtypeMismatch) {
   const DualIOGraphRunResult result = run_beamscan_result<double>(
       snap_f, make_params(geom, conv, {0.0}, {0.0}));
   EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames0.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
+TEST(BeamscanEstimatorOpTest, RejectsItemsBeyondCapturedExtent) {
+  constexpr int64_t kN = 4;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  std::vector<std::complex<double>> host(static_cast<size_t>(2 * kN),
+                                         {1.0, 0.0});
+  auto snapshot =
+      to_device_tensor(host, {2, kN}, complex_dtype<double>());
+  auto extents = holoscan::radar::testing::extents_for_scan_grid(1, 1);
+  extents.max_items = 1;
+  const DualIOGraphRunResult result =
+      run_single_in_dual_out_operator_graph_result<BeamscanEstimatorOp<double>>(
+          {std::move(snapshot)},
+          make_params(geom, AngleConvention{}, {0.0}, {0.0}),
+          "aoa_estimates", "angle_spectrum",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1) {
+            wire_beamscan(graph, source, op, sink0, sink1);
+          },
+          {}, extents);
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
 }
@@ -1058,17 +1115,39 @@ TEST(BeamscanEstimatorOpTest, MultipleItemsRecoverIndependentDoa) {
 }
 
 TEST(BeamscanEstimatorOpTest, AcceptsValidIsValidMaskOn3DSnapshot) {
-  // [EA HSDK5 ONLY] Wiring optional is_valid beside snapshot yields
-  // RUNTIME_OPERATOR_REPLAY_MISMATCH when the port is omitted from contract
-  // (required for unwired graphs — TEMPORAL_INPUT_UNCONNECTED otherwise).
-  // Mask validation remains covered by CheckIsValidMask* unit tests.
-  GTEST_SKIP() << "HSDK 5 EA: optional is_valid Graph wiring deferred "
-                  "(HSDK5_PORT.md §1 / OPEN_ITEMS.md §3)";
+  constexpr int64_t kN = 4;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  auto snapshot = snapshot_to_device<double>(
+      make_steering_snapshot(geom, AngleConvention{}, 0.0, 0.0),
+      {1, kN, 1});
+  auto mask = to_device_bool_tensor({0}, {1, 1});
+  const DualIOGraphRunResult result = run_beamscan_with_mask_result<double>(
+      std::move(snapshot), std::move(mask),
+      make_params(geom, AngleConvention{}, {-0.1, 0.0, 0.1}, {0.0}));
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames0.size(), 1U);
+  ASSERT_EQ(result.frames1.size(), 1U);
+  EXPECT_TRUE(std::isnan(result.frames0[0].as<double>()[0]));
+  EXPECT_TRUE(std::isnan(result.frames0[0].as<double>()[1]));
+  for (int64_t i = 0; i < result.frames1[0].size(); ++i) {
+    EXPECT_EQ(result.frames1[0].as<double>()[i], 0.0);
+  }
 }
 
 TEST(BeamscanEstimatorOpTest, RejectsInvalidIsValidMaskOn3DSnapshot) {
-  GTEST_SKIP() << "HSDK 5 EA: optional is_valid Graph wiring deferred "
-                  "(HSDK5_PORT.md §1 / OPEN_ITEMS.md §3)";
+  constexpr int64_t kN = 4;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  auto snapshot = snapshot_to_device<double>(
+      make_steering_snapshot(geom, AngleConvention{}, 0.0, 0.0),
+      {1, kN, 1});
+  auto mask = to_device_bool_tensor({1, 1}, {1, 2});
+  const DualIOGraphRunResult result = run_beamscan_with_mask_result<double>(
+      std::move(snapshot), std::move(mask),
+      make_params(geom, AngleConvention{}, {0.0}, {0.0}));
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  EXPECT_TRUE(result.frames0.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(BeamscanEstimatorOpTest, CheckIsValidMaskAcceptsTrueBoolDevice) {

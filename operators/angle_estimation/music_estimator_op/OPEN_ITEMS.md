@@ -57,9 +57,8 @@ Isolated `num_sources` / `source_count_pfa` perf is still open;
 
 **Blocks checklist:** Tests → optional `is_valid` connected Graph paths.
 
-**Class:** HSDK 5 EA gap — no optional input
-([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11). Same as
-Beamscan / MVDR OPEN_ITEMS §3.
+**Class:** stale HSDK 5 EA optional-input gap; §11 is closed. This operator has
+not yet migrated its mask contract and Graph tests.
 
 **Interim.** Port registered in `setup()`; omitted from `contract()` so
 unwired graphs compile (wiring it anyway is

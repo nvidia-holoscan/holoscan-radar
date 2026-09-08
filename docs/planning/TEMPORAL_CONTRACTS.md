@@ -63,11 +63,12 @@ margin. It does **not** hold for a companion produced by a sibling branch of the
 same frame, which is the case an earlier probe measured as failing with
 `kNeverSeen` on every activation. Both facts are true; the distinction is
 whether the companion causally precedes the driver. Any contract using `Exact{}`
-must be able to state why it does. For one operator producing both a live
-descriptor and the Tensor that triggers its downstream consumer, prepare both
-outputs first and publish the descriptor before the Tensor. Equal
-`capture_time` alone is insufficient: publishing the Tensor first resolves
-`SafeDefault` before the descriptor arrives.
+must be able to state why it does. For one operator producing both a sideband
+and the Tensor that triggers its downstream consumer, prepare both outputs
+first and publish the sideband before the Tensor. This applies to live
+descriptors and optional data sidebands such as `SnapshotGatherOp.is_valid`.
+Equal `capture_time` alone is insufficient: publishing the Tensor first
+resolves `SafeDefault` before the sideband arrives.
 
 ## What we rejected, and what killed it
 

@@ -192,6 +192,13 @@ failure drop the required output. Exception: if the axis fill synchronizes
 the compute stream, enqueue it before the hot-path kernel so the wait stays
 off that path.
 
+A second exception is causal publication: when an optional output is the
+same-tick Exact sideband for a downstream `OnEach` consumer, publish that
+sideband before the Tensor that triggers the consumer. Absorb the optional
+emit failure first, then publish the required trigger, so declining the
+sideband still cannot suppress the required output. `SnapshotGatherOp.is_valid`
+→ `BeamscanEstimatorOp` is the reference shape.
+
 ```cpp
 HOLOSCAN_TRY(emit_prepared_tensor(rd_maps, context, std::move(rd_loan)));
 if (plan.stage.waveform.has_value() && velocity_bins_out_.active()) {

@@ -7,7 +7,7 @@
 //   P[i, b] = | Σ_c conj(w[b, c]) · x[i, c] |²
 // i.e. the elementwise magnitude² of the matrix product X · Wᶜ, where
 //   X  = snapshots           [num_items,    num_channels]
-//   Wᶜ = conj(w)ᵀ            [num_channels, num_beams]   (built host-side)
+//   Wᶜ = conj(w)ᵀ            [num_channels, num_beams]   (built on device)
 //   Y  = X · Wᶜ              [num_items,    num_beams]
 // Casting the beamformer as one complex GEMM (cuBLAS, via MatX) is what makes
 // this fast: the steering table is streamed once and reused across every
@@ -133,21 +133,23 @@ __global__ void beamscan_reduce_kernel(
     T az = az_grid[ia];
     T el = el_grid[ie];
     if (peak_interp == peak_interp_id(PeakInterpolation::kParabolic) &&
-        num_az >= 3 && num_el >= 3 && ia > 0 && ia + 1 < num_az && ie > 0 &&
-        ie + 1 < num_el) {
+        num_az >= 3 && ia > 0 && ia + 1 < num_az) {
       const T az_step_left = az_grid[ia] - az_grid[ia - 1];
       const T az_step_right = az_grid[ia + 1] - az_grid[ia];
-      const T el_step_left = el_grid[ie] - el_grid[ie - 1];
-      const T el_step_right = el_grid[ie + 1] - el_grid[ie];
       const T off_az =
           parabolic_offset(spectrum_at(spec, ia - 1, ie, num_el),
                            spectrum_at(spec, ia, ie, num_el),
                            spectrum_at(spec, ia + 1, ie, num_el));
+      az += off_az * (az_step_left + az_step_right) * T{0.5};
+    }
+    if (peak_interp == peak_interp_id(PeakInterpolation::kParabolic) &&
+        num_el >= 3 && ie > 0 && ie + 1 < num_el) {
+      const T el_step_left = el_grid[ie] - el_grid[ie - 1];
+      const T el_step_right = el_grid[ie + 1] - el_grid[ie];
       const T off_el =
           parabolic_offset(spectrum_at(spec, ia, ie - 1, num_el),
                            spectrum_at(spec, ia, ie, num_el),
                            spectrum_at(spec, ia, ie + 1, num_el));
-      az += off_az * (az_step_left + az_step_right) * T{0.5};
       el += off_el * (el_step_left + el_step_right) * T{0.5};
     }
     out0 = az;

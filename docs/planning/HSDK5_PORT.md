@@ -193,7 +193,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `ClutterFilterOp` F32/F64 + Graph C++ tests | landed; Exact `method` (unconditional entry); Graph perf cold/steady landed; enum `method` live-override units landed now that §12 is fixed; Graph perf `method` `override_ms` landed (§8) |
 | `SnapshotGatherOp` F32/F64 + Graph C++ tests (OnAligned 2-in/2-out) | landed; tick-local config/plan and constructor-created workspace; Exact `snapshot_window` on an unconditional entry with mid-stream/revert Graph coverage; optional/always `is_valid`; Graph perf `snapshot_window` `override_ms` restored (§8) |
 | `PhaseShiftBeamformerOp` F32/F64 + Graph C++ tests | landed; tick-local config/plan, exact rank-3 input, captured-extent checks, and complete custom-convention steering-cache identity; `[live]` geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9) with mid-stream/revert Graph coverage; Graph perf reports cold/steady plus isolated inline `array_geometry`, `az_angles`, `el_angles`, and `array_taper` override timing |
-| `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; Exact `peak_interpolation` (unconditional entry) with its enum live-override unit landed now that §12 is fixed; optional `is_valid` Graph wiring deferred (§11); geometry/grid/taper on wire-schema and bounded host-Tensor ports (§9); Graph perf cold/steady landed (live deferred §1/§8/§9) |
+| `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; tick-local config/plan, constructor-created GEMM workspace, cached steering weights + scan grids, axis-wise parabolic interpolation, and optional same-tick `is_valid` as an Exact sideband published before the `OnEach` snapshot trigger; all five Exact lives have mid-stream/revert unit coverage and isolated Graph performance timing |
 | `SubarraySelectionOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; tick-local config/plan, constructor-created selection cache + bounded index table; required snapshot prepared first, then latched geometry published before the snapshot trigger for downstream Exact coherence; outputs `snapshot_out` / `is_valid_out` (§2); geometry input/output use `WireArrayGeometry` (§9/§10); bounded host-Tensor `subarray` live (§9); Graph perf cold/steady landed |
 | `ClusterDBSCANOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; tick-local config/plan; Exact `epsilon`/`min_points`/`max_clusters` with Graph coverage; bounded host-Tensor `epsilon`, `max_features` checked on arrival (§9); required `labels` plus optional/latched `sizes`; Graph perf uses production Exact `min_points` (§8) |
 | `MVDREstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | landed; always emits optional `angle_spectrum`/`doa_multi`/`source_count`/`eigenvalues`; Exact `diagonal_loading`/`max_sources` (unconditional entries) (Graph live deferred §1); geometry/grid/`spatial_smoothing` on wire-schema, bounded host-Tensor, and ChannelPod ports (§9); optional `is_valid` Graph deferred (§11); `stop()` MatX retire preserved; Graph perf `diagonal_loading` `override_ms` restored (§8) |
@@ -1243,8 +1243,10 @@ extends to the remaining sparse/dense FMCW demos under
 Shared helpers: `radar_app/app/graph_params.hpp` (YAML → Params),
 DetectionReport/ClusterReport
 `Config` flags (`report_aoa` / `report_detection_idx`) so optional ports
-enter `contract()` only when wired. Beamscan `is_valid` stays unwired
-(§1). Smoke YAMLs: `*_smoke.yaml` (+ `fmcw_mimo_ddm_smoke.yaml`) — note
+enter `contract()` only when wired. The SIMO and MIMO apps now align
+`SnapshotGatherOp.is_valid` directly into Beamscan; the estimator-rotation app
+still drains the multi-look mask before its Beamscan-only K=1 slice. Smoke
+YAMLs: `*_smoke.yaml` (+ `fmcw_mimo_ddm_smoke.yaml`) — note
 these run log-only, so also run each app's default YAML under a real /
 `Xvfb` `DISPLAY`: the viz subgraph is where the partitioning gap above
 surfaced.

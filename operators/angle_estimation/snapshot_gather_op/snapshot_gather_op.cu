@@ -18,7 +18,6 @@
 #include <vector>
 
 #include <holoscan/core/expected_macros.hpp>
-#include <holoscan/core/payload_options.hpp>
 
 #include "angle_estimation/snapshot_gather_op/snapshot_gather_stage.hpp"
 #include "radar_common/sdk/override_param.hpp"
@@ -467,11 +466,11 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
     HOLOSCAN_TRY(auto valid_loan,
                  prepare_device_tensor(is_valid, context, valid_shape,
                                       kMaskDtype, noop));
+    // Publish the optional sideband first so a downstream Exact selector sees
+    // it when snapshot triggers. A declined optional emit remains harmless.
+    (void)emit_prepared_tensor(is_valid, context, std::move(valid_loan));
     HOLOSCAN_TRY(
         emit_prepared_tensor(snapshot, context, std::move(snap_loan)));
-    // is_valid is optional/always (OPERATOR_API.md): an unwired sink is the
-    // application's choice, and the mask costs nothing beyond this emit.
-    (void)emit_prepared_tensor(is_valid, context, std::move(valid_loan));
     retained_rd_maps_ = std::move(rd);
     retained_detection_idx_ = std::move(idx);
     return {};
@@ -515,14 +514,11 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
     return make_unexpected(std::move(valid_committed).error());
   }
 
-  auto snap_emitted = snapshot.emit(
-      std::move(*snap_loan),
-      EmitOptions{.capture_time = context.activation_time()});
-  if (!snap_emitted) {
-    return make_unexpected(std::move(snap_emitted).error());
-  }
-  // is_valid is optional/always: it is a byproduct of the gather kernel.
+  // Publish the optional sideband before the triggering snapshot for Exact
+  // downstream coherence. A declined optional emit cannot suppress snapshot.
   (void)emit_prepared_tensor(is_valid, context, std::move(*valid_loan));
+  HOLOSCAN_TRY(
+      emit_prepared_tensor(snapshot, context, std::move(*snap_loan)));
 
   // Retain source buffers until the next tick after asynchronous reads.
   retained_rd_maps_ = std::move(rd);

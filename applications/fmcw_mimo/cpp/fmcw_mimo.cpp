@@ -12,8 +12,8 @@
 //        -> DetectionReportOp / ClusterReportOp
 //        [-> RdMapToImageOp(cfar_power) -> X11RdViewerOp]
 //
-// Beamscan is_valid remains unwired (EA optional-port gap — HSDK5_PORT §1);
-// VAA geometry directly drives Beamscan's Exact live override.
+// SnapshotGather's is_valid mask aligns into Beamscan; VAA geometry directly
+// drives Beamscan's Exact live override.
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/fmcw_mimo/cpp/fmcw_mimo [config.yaml]
 
@@ -189,15 +189,13 @@ int main(int argc, char** argv) {
         auto noise_sink = graph.op<NullSinkOp>("noise_estimate_sink");
         auto power_sink = graph.op<NullSinkOp>("cfar_power_sink");
         auto spectrum_sink = graph.op<NullSinkOp>("angle_spectrum_sink");
-        auto is_valid_sink = graph.op<NullSinkOp>("is_valid_sink");
 
         graph.add_flow(vaa->rd_maps_out, cfar->rd_maps, q);
         graph.add_flow(vaa->rd_maps_out, gather->rd_maps, q);
         graph.add_flow(cfar->detection_idx, gather->detection_idx, q);
-        // is_valid left unwired into beamscan (EA optional-port gap).
         graph.add_flow(gather->snapshot, beamscan->snapshot, q);
         graph.add_flow(vaa->array_geometry, beamscan->array_geometry, q);
-        graph.add_flow(gather->is_valid, is_valid_sink->input, q);
+        graph.add_flow(gather->is_valid, beamscan->is_valid, q);
         graph.add_flow(beamscan->angle_spectrum, spectrum_sink->input, q);
 
         graph.add_flow(cfar->detection_idx, sink->detection_idx, q);
