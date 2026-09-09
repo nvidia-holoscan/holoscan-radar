@@ -196,9 +196,9 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `BeamscanEstimatorOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; tick-local config/plan, constructor-created GEMM workspace, cached steering weights + scan grids, axis-wise parabolic interpolation, and optional same-tick `is_valid` as an Exact sideband published before the `OnEach` snapshot trigger; all five Exact lives have mid-stream/revert unit coverage and isolated Graph performance timing |
 | `SubarraySelectionOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; tick-local config/plan, constructor-created selection cache + bounded index table; required snapshot prepared first, then latched geometry published before the snapshot trigger for downstream Exact coherence; outputs `snapshot_out` / `is_valid_out` (§2); geometry input/output use `WireArrayGeometry` (§9/§10); bounded host-Tensor `subarray` live (§9); Graph perf cold/steady landed |
 | `ClusterDBSCANOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; tick-local config/plan; Exact `epsilon`/`min_points`/`max_clusters` with Graph coverage; bounded host-Tensor `epsilon`, `max_features` checked on arrival (§9); required `labels` plus optional/latched `sizes`; Graph perf uses production Exact `min_points` (§8) |
-| `MVDREstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | cleanup pass landed: tick-local StageConfig/StagePlan validation and prepared workspace/output execution shell; exact-rank snapshot; optional `is_valid` and live inputs are non-member Exact + SafeDefault with active Graph coverage; bounded core workspace and complete steering-artifact cache; optional-output dispositions implemented; production Graph perf measures `diagonal_loading`; smoothing scratch/full-live-perf work and the pre-existing MatX process-state bug remain |
+| `MVDREstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | cleanup landed: tick-local StageConfig/StagePlan and prepared execution shell; reusable smoothing/core workspace; stable MatX plans; internal two-matrix inversion works around MatX 1.0.0's corrupt cached single-item cuSolver path; exact-rank snapshot; optional `is_valid` and all lives have Exact/revert Graph coverage; complete steering cache; optional-output dispositions; Graph perf isolates all six live overrides |
 | `MUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/5-out) | cleanup pass landed: tick-local StageConfig/StagePlan validation and prepared workspace/output execution shell; exact-rank snapshot; optional `is_valid` and all live inputs have active Exact/revert Graph coverage; bounded core eigenspace workspace, reusable smoothing gather buffers, and complete steering-artifact cache; optional-output dispositions implemented; production Graph perf isolates all seven live overrides and sweeps fixed model order |
-| `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | cleanup pass landed: tick-local StageConfig/StagePlan validation, prepared common workspace/output state, and explicit ULA/URA execution helpers; optional `is_valid` and all live inputs have active Exact/revert Graph coverage; bounded core eigenspace/polynomial workspace and constructor-created cuSOLVER states; optional-output dispositions implemented; production Graph perf measures `max_sources`; URA scratch/full-live-perf work remains |
+| `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | cleanup landed: tick-local StageConfig/StagePlan and explicit ULA/URA execution helpers; reusable smoothing and bounded core/URA axis/pairing workspace; optional `is_valid` and all lives have Exact/revert Graph coverage; constructor-created cuSOLVER states; optional-output dispositions; Graph perf isolates all five live overrides plus fixed model-order scenarios |
 | `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | cleanup pass landed: tick-local StageConfig/StagePlan validation, prepared common workspace/output state, and explicit auto-URA/shift-invariant execution helpers; optional `is_valid` and all live inputs have active Exact/revert Graph coverage; bounded core eigenspace/small-matrix workspace plus reusable smoothing gather buffers; direct `SubarraySelectionOp` snapshot/geometry integration; optional-output dispositions implemented; `subarray_spec` remains static; production Graph perf isolates all five live overrides |
 | `FeatureAssemblyOp` F32/F64 + Graph C++ tests (Params-derived aligned gathers) | landed; static `features` selects required zero-window aligned sources; unselected Tensor gathers use Exact + SafeDefault (§11); no `[live]` params; C++ apps use the library op; Graph perf cold/steady landed |
 | `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; static `representative` Params selects the compiled aligned presence set (`first`: labels + idx, `peak`/`medoid`: labels + idx + points), with unselected `points` as Exact + SafeDefault; Exact `representative`/`score_method`/`feature_weights` are unconditional non-member entries; all `expect_*` retired (§11); enum live units landed (§12 fixed); `feature_weights` is a bounded host Tensor (§9); Graph perf cold/steady landed |
@@ -382,13 +382,13 @@ lives, so only their optional-input limitations remain.
   passes; dual-OnClock / co-emit wirings fail with
   compile rejection or runtime diagnostics (see test stdout +
   `/tmp/live_override_repro_*.json`).
-- `MVDREstimatorOpTest.LiveMaxSourcesAppliesForOneTickAndReallocates` now passes;
-  its geometry / grid / `spatial_smoothing` live Graph tests are active.
-  `LiveDiagonalLoadingAppliesForOneTick` stays skipped, but **not** for an SDK
-  reason: δ is observable only in float values, and MVDR corrupts later runs
-  in the same process, so any two-run value comparison is untrustworthy. See
-  `mvdr_estimator_op/OPEN_ITEMS.md` — an operator-state bug, not a port-binding
-  one.
+- All MVDR live Graph tests are active, including
+  `LiveDiagonalLoadingAppliesForOneTick`. MatX 1.0.0's cached single-item
+  cuSolver inverse produced materially different spectra for identical ticks;
+  MVDR now promotes only that internal inversion to a duplicated two-matrix
+  batch, preserving one-item public shapes while selecting the repeatable
+  batched backend. Regressions cover identical one-item ticks below and above
+  the 32-channel backend threshold.
 - `MUSICEstimatorOpTest.LiveNumSourcesAppliesForOneTick` /
   `LiveSourceCountPfaAppliesForOneTick` /
   `LiveMaxSourcesAppliesForOneTickAndReallocates` now pass; its geometry / grid /

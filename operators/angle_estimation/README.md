@@ -77,13 +77,15 @@ stage would occupy the same slot.
   untapered `build_steering_weights_device` manifold and the `ArrayGeometry` /
   `AngleConvention` machinery from Beamscan; `[live]` overrides for
   geometry, scan grid, `diagonal_loading`, and `max_sources`; static
-  `angle_convention`; float/double; the four estimator-specific outputs carry
-  `kNone` so a consumer wanting only `aoa_estimates` leaves them unwired. Unit
-  tests (analytic URA/ULA DOA recovery, two-source recovery, `max_sources`
-  capacity + NaN fill, rank-one eigenvalue dominance, `is_valid` exclusion /
-  all-invalid blanking, live
-  overrides incl. `max_sources` realloc, error paths) +
-  `performance/cpp/perf_mvdr_estimator.cpp`. `spatial_smoothing` /
+  `angle_convention`; float/double; the four estimator-specific outputs use the
+  shared optional-output dispositions, so a consumer wanting only
+  `aoa_estimates` leaves them unwired. Reusable smoothing/core workspace and
+  stable MatX plans avoid steady-state allocation; a one-item inversion is
+  internally duplicated to select MatX 1.0.0's repeatable batched backend
+  without changing public shapes. Unit tests cover analytic recovery,
+  repeatability across the 32-channel backend threshold, masks, lives, and
+  errors; `performance/cpp/perf_mvdr_estimator.cpp` isolates all six live
+  overrides. `spatial_smoothing` /
   `forward_backward` are implemented as a front-end transform (settled — S1,
   STATUS.md L13); see `mvdr_estimator_op/OPEN_ITEMS.md` for the residual notes
   (the `diagonal_loading` float-or-`auto` encoding note and the eigenvalues
@@ -132,11 +134,11 @@ stage would occupy the same slot.
   in-unit-circle roots to continuous DOAs (no `angle_spectrum`). **Contract
   change:** geometry relaxed from ULA-only to ULA-or-URA (`OPERATOR_API.md`).
   `spatial_smoothing` / `forward_backward` match MVDR/MUSIC; all named and
-  custom angle conventions; float/double; 41 C++ + 38 Python behavioral tests
+  custom angle conventions; float/double; 45 C++ + 38 Python behavioral tests
   (1-D ULA + 2-D URA recovery and cross-axis pairing);
   `performance/cpp/perf_root_music_estimator.cpp` +
-  `performance/python/perf_root_music_estimator.py` (inline live overrides for
-  geometry, auto/EFT, Pfa, capacity, smoothing). Custom batched device root
+  `performance/python/perf_root_music_estimator.py` (all five C++ live
+  overrides plus a separate fixed model-order sweep). Custom batched device root
   solver tracked in `root_music_estimator_op/OPEN_ITEMS.md`.
 - **`ESPRITEstimatorOp` (checklist-complete, C++ and Python — dpc):**
   gridless ESPRIT on a **ULA or filled URA**. A ULA uses a single-shift

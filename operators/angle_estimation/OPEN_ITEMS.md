@@ -31,9 +31,9 @@ Root-MUSIC behavior.
 
 ## Subspace model-order performance sweeps
 
-MUSIC now measures fixed source counts 1, 2, and
-`min(4, num_channels - 1)` independently from its live-override matrix.
-Root-MUSIC and ESPRIT also have model-order-dependent work but do not yet carry
-equivalent sweeps. Add estimator-specific fixed-order scenarios when their
-performance harnesses are next revised; do not multiply each operator's full
-live-override matrix by every model order.
+MUSIC and Root-MUSIC now measure fixed source counts 1, 2, and
+`min(4, num_channels - 1)` independently from their live-override matrices.
+ESPRIT also has model-order-dependent work but does not yet carry an equivalent
+sweep. Add estimator-specific fixed-order scenarios when its performance
+harness is next revised; do not multiply the full live-override matrix by every
+model order.
