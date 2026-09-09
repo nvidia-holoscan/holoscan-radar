@@ -457,7 +457,10 @@ struct LiveMvdrWiring {
 
 FiveOutGraphRunResult run_live_mvdr(std::vector<LiveMvdrTick> ticks,
                                     MVDRParams params,
-                                    LiveMvdrWiring wiring) {
+                                    LiveMvdrWiring wiring,
+                                    const holoscan::radar::MaxTensorExtents&
+                                        extents = holoscan::radar::testing::
+                                            default_test_extents()) {
   FiveOutGraphRunResult result;
   holoscan::radar::testing::detail::FrameBank::reset();
   holoscan::radar::testing::detail::FrameBankB::reset();
@@ -470,8 +473,7 @@ FiveOutGraphRunResult run_live_mvdr(std::vector<LiveMvdrTick> ticks,
   holoscan::Graph graph{"mvdr-live-container-overrides"};
   const auto source = graph.op<LiveMvdrSourceOp>("source");
   auto op = holoscan::radar::testing::emplace_harness_op<
-      MVDREstimatorOp<double>>(
-      graph, holoscan::radar::testing::default_test_extents());
+      MVDREstimatorOp<double>>(graph, extents);
   op.set_params(std::move(params));
   const auto sink0 =
       graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink0");
@@ -888,6 +890,58 @@ TEST(MVDREstimatorOpTest, FloatDoubleAgreeOnDoa) {
   EXPECT_NEAR(aoa_f[0], static_cast<float>(aoa_d[0]), 1e-2f);
 }
 
+TEST(MVDREstimatorOpTest, DeterministicAcrossTicks) {
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 64;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto block = make_block(geom, conv, 0.09, 0.0, kS, 0.02, 171u);
+  auto snap = block_to_device<double>(block, {1, kN, kS});
+  MVDRParams params =
+      make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1e-2, 2);
+  auto extents = holoscan::radar::testing::default_test_extents();
+  extents.max_items = 1;
+
+  const FiveOutGraphRunResult result = run_live_mvdr(
+      {{snap}, {snap}}, std::move(params), {}, extents);
+
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames1.size(), 2U);
+  ASSERT_EQ(result.frames2.size(), 2U);
+  ASSERT_EQ(result.frames4.size(), 2U);
+  EXPECT_EQ(result.frames1[0].data, result.frames1[1].data);
+  EXPECT_EQ(result.frames2[0].data, result.frames2[1].data);
+  EXPECT_EQ(result.frames4[0].data, result.frames4[1].data);
+}
+
+TEST(MVDREstimatorOpTest, DeterministicAcrossTicksAboveMatInvThreshold) {
+  constexpr int64_t kN = 40;
+  constexpr int64_t kS = 64;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto block = make_block(geom, conv, 0.09, 0.0, kS, 0.02, 172u);
+  auto snap = block_to_device<double>(block, {1, kN, kS});
+  MVDRParams params =
+      make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0}, 1e-2);
+  auto extents = holoscan::radar::testing::default_test_extents();
+  extents.max_items = 1;
+
+  const FiveOutGraphRunResult result = run_live_mvdr(
+      {{snap}, {snap}}, std::move(params), {}, extents);
+
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames1.size(), 2U);
+  ASSERT_EQ(result.frames2.size(), 2U);
+  ASSERT_EQ(result.frames4.size(), 2U);
+  EXPECT_EQ(result.frames1[0].data, result.frames1[1].data);
+  EXPECT_EQ(result.frames2[0].data, result.frames2[1].data);
+  EXPECT_EQ(result.frames4[0].data, result.frames4[1].data);
+}
+
 TEST(MVDREstimatorOpTest, DirectionCosineMasksInvisibleRegion) {
   constexpr int64_t kN = 4;
   constexpr int64_t kS = 16;
@@ -1225,16 +1279,31 @@ TEST(MVDREstimatorOpTest, LiveAzGridAppliesForOneTick) {
             (std::vector<int64_t>{1, 2, 1}));
 }
 
-// Blocked by the process-state contamination tracked in OPEN_ITEMS.md, not by
-// the SDK.
-// delta only moves spectrum values, so any assertion has to compare two runs
-// that should agree -- and MVDR's first graph run in a process disagrees with
-// later ones on identical input. Written and measured: comparing an override
-// delta against the identical Params delta fails 8/8 as the first run in a
-// fresh process and passes once the process is warm. Unskip with item 6.
 TEST(MVDREstimatorOpTest, LiveDiagonalLoadingAppliesForOneTick) {
-  GTEST_SKIP() << "MVDR cold-run divergence (OPEN_ITEMS.md): a "
-                  "value-comparison override test is not yet trustworthy";
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.02, 617u);
+  auto snap = block_to_device<double>(block, {1, kN, kS});
+  MVDRParams params =
+      make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0}, 1e-3);
+
+  const FiveOutGraphRunResult result = run_live_mvdr(
+      {{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+        std::nullopt, std::nullopt},
+       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+        1.0, std::nullopt},
+       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+        std::nullopt, std::nullopt}},
+      std::move(params), {.diagonal_loading = true});
+
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames1.size(), 3U);
+  EXPECT_EQ(result.frames1[0].data, result.frames1[2].data);
+  EXPECT_NE(result.frames1[0].data, result.frames1[1].data);
 }
 
 // max_sources widens doa_multi to {items, max_sources, 2}, so the override is

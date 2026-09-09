@@ -57,6 +57,10 @@ struct MVDRRuntimeState {
   std::shared_ptr<holoscan::Tensor> covariance;
   std::shared_ptr<holoscan::Tensor> inverse;
   std::shared_ptr<holoscan::Tensor> valid_counts;
+  std::shared_ptr<holoscan::Tensor> smoothed_snapshot;
+  std::shared_ptr<holoscan::Tensor> smoothed_mask;
+  std::size_t smoothed_snapshot_capacity{0U};
+  std::size_t smoothed_mask_capacity{0U};
 };
 
 namespace {
@@ -361,15 +365,29 @@ expected<MVDREstimationInput<T>, Error> prepare_smoothed_input(
   const int64_t subarray_size = state.smoothing_plan.subarray_size;
   const int64_t looks =
       state.smoothing_plan.looks_per_snapshot() * plan.num_snapshots;
-  result.snapshot_keepalive = make_device_tensor(
-      {plan.num_items, subarray_size, looks}, complex_dtype<T>());
+  const std::size_t snapshot_elements = product_extents(
+      {plan.num_items, subarray_size, looks}, kOpName);
+  if (!state.smoothed_snapshot ||
+      snapshot_elements > state.smoothed_snapshot_capacity) {
+    state.smoothed_snapshot = make_device_tensor(
+        {plan.num_items, subarray_size, looks}, complex_dtype<T>());
+    state.smoothed_snapshot_capacity = snapshot_elements;
+  }
+  result.snapshot_keepalive = state.smoothed_snapshot;
   HOLOSCAN_TRY(
       auto smoothed_ptr,
       writable_ptr(*result.snapshot_keepalive, "ss_snapshot"));
   unsigned char* smoothed_mask_ptr = nullptr;
   if (mask != nullptr) {
-    result.mask_keepalive = make_device_tensor(
-        {plan.num_items, looks}, DLDataType{kDLUInt, 8, 1});
+    const std::size_t mask_elements =
+        product_extents({plan.num_items, looks}, kOpName);
+    if (!state.smoothed_mask ||
+        mask_elements > state.smoothed_mask_capacity) {
+      state.smoothed_mask = make_device_tensor(
+          {plan.num_items, looks}, DLDataType{kDLUInt, 8, 1});
+      state.smoothed_mask_capacity = mask_elements;
+    }
+    result.mask_keepalive = state.smoothed_mask;
     HOLOSCAN_TRY(
         auto mask_out,
         writable_ptr(*result.mask_keepalive, "ss_mask"));
@@ -561,17 +579,18 @@ expected<MVDRPreparedWorkspace<T>, Error> prepare_mvdr_workspace(
     MVDRRuntimeState<T>& state, int64_t num_items, int64_t num_channels) {
   const DLDataType complex_type = complex_dtype<T>();
   const DLDataType int64_type{kDLInt, 64, 1};
+  const int64_t inverse_items = num_items == 1 ? 2 : num_items;
   MVDRPreparedWorkspace<T> workspace;
   workspace.covariance =
       state.covariance
           ? state.covariance
           : make_device_tensor(
-                {num_items, num_channels, num_channels}, complex_type);
+                {inverse_items, num_channels, num_channels}, complex_type);
   workspace.inverse =
       state.inverse
           ? state.inverse
           : make_device_tensor(
-                {num_items, num_channels, num_channels}, complex_type);
+                {inverse_items, num_channels, num_channels}, complex_type);
   workspace.valid_counts =
       state.valid_counts
           ? state.valid_counts
@@ -772,10 +791,11 @@ MVDREstimatorOp<T>::MVDREstimatorOp(
       product_extents({max_items}, who), 4U, who);
   eig_max_byte_span_ =
       byte_span_real_cube<T>({max_items, max_channels}, who);
+  const int64_t inverse_items = max_items < 2 ? 2 : max_items;
   state_->covariance = make_device_tensor(
-      {max_items, max_channels, max_channels}, complex_dtype<T>());
+      {inverse_items, max_channels, max_channels}, complex_dtype<T>());
   state_->inverse = make_device_tensor(
-      {max_items, max_channels, max_channels}, complex_dtype<T>());
+      {inverse_items, max_channels, max_channels}, complex_dtype<T>());
   state_->valid_counts =
       make_device_tensor({max_items}, DLDataType{kDLInt, 64, 1});
 }

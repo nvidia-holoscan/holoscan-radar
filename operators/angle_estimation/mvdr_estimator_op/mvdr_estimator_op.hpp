@@ -133,8 +133,8 @@ class MVDREstimatorOp : public holoscan::Operator<MVDRParams> {
   [[nodiscard]] expected<void, Error> compute(
       ExecutionContext& context) override;
   // Drain MatX solver plan caches + the global MemTracker once at graph stop,
-  // while CUDA is still valid (per-tick only clears plan caches; see
-  // mvdr_stage.hpp). HSDK 5 still exposes OperatorBase::stop().
+  // while CUDA and the stable operator-owned solver buffers are still valid.
+  // HSDK 5 still exposes OperatorBase::stop().
   void stop() override;
 
   Input<Tensor> snapshot{"snapshot"};

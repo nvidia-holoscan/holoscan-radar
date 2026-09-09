@@ -118,8 +118,8 @@ No `num_sources` / EFT — Capon has no model-order concept. `diagonal_loading` 
 - **Triggering.** `contract()` is `OnEach{snapshot}`. Optional `is_valid` and every live override are unconditional non-members with `Exact{}` + `SafeDefault{}`; unwired means absent/all-valid or Params for that tick. A producer must publish a same-tick mask before `snapshot`.
 - **Ports and queues.** Device Tensor ports, queue depth `2`. Output ranks: `aoa_estimates` 2, `angle_spectrum` 3, `doa_multi` 3, `source_count` 1, `eigenvalues` 2. Live Inputs also queue depth `2`; `az_angles` / `el_angles` are rank-1 pageable-host float64 config Tensors, the rest are wire-object / POD / scalar payloads.
 - **Live override payloads.** `array_geometry` is `Input<WireArrayGeometry>`, a generated descriptor-schema type; `spatial_smoothing` is `Input<SpatialSmoothingOverride>`, a bounded `{count, first, second}` int64 POD (`count` must be 0, 1, or 2). Both convert with `from_wire` inside `resolve_live_override_via`, so neither wire storage nor the POD reaches operator state. `az_angles` / `el_angles` ride rank-1 pageable-host float64 config Tensors validated on arrival (rank, host memory, contiguity, dtype, `max_az` / `max_el` extent). `diagonal_loading` / `max_sources` are plain scalar `Input<>` ports resolved with `resolve_live_override`. Logical Params types are unchanged (`HSDK5_PORT.md` §9).
-- **Tick flow.** `compute()` is the high-level shell: receive and plan → validate mask / stream → empty path → prepare smoothed input → prepare steering, workspace, and outputs → execute MVDR → publish and retain. Operator-local helpers own the cache, Tensor-loan, execution-call, and optional-output plumbing. Smoothing gather storage is still allocated per smoothed tick (tracked in `OPEN_ITEMS.md`).
-- **Streams and lifetime.** `context.cuda_stream()`. Inputs are retained at end of `compute()`. `MVDRPreparedWorkspace` points into stable covariance/inverse/count buffers; `MVDRPreparedOutputs` keeps every active loan and write guard alive through execution and commits all siblings before required-first publication. The MatX plan clear remains; `stop()` drains `GetAllocMap()` via `retire_matx_solver_caches()`.
+- **Tick flow.** `compute()` is the high-level shell: receive and plan → validate mask / stream → empty path → prepare smoothed input → prepare steering, workspace, and outputs → execute MVDR → publish and retain. Operator-local helpers own the cache, Tensor-loan, execution-call, and optional-output plumbing. Runtime state retains capacity-managed smoothing gather buffers and grows them only for a larger effective input.
+- **Streams and lifetime.** `context.cuda_stream()`. Inputs and smoothing gather buffers remain alive through estimator execution. `MVDRPreparedWorkspace` points into stable covariance/inverse/count buffers; `MVDRPreparedOutputs` keeps every active loan and write guard alive through execution and commits all siblings before required-first publication. Stable-pointer MatX eig/inv plans persist across ticks; `stop()` clears them and drains `GetAllocMap()` via `retire_matx_solver_caches()`.
 - **Emission.** Required `aoa_estimates` publishes first. `angle_spectrum` is optional/always; `doa_multi` and `source_count` share a latched peak pass; `eigenvalues` is independently latched.
 - **Parameter authoring.** Schema `com.nvidia.holoscan.radar.MVDRParams` version `1`.
 - **Precision.** `MVDREstimatorOp<float>` and `<double>`.
@@ -133,15 +133,15 @@ Every output is a fresh pool loan. A consumer may keep the Tensor for the usual 
 
 **Cold.** First unseen geometry / grid / smoothing key builds the steering manifold and (if enabled) the smoothing plan. First `matx::eig` and `matx::inv` create plans.
 
-**Steady.** Covariance, load, inv, and Capon scan run every tick using stable constructor-created workspace. The steering artifact caches its manifold and device scan grids. Eigen decomposition and peak extraction drop out after their optional outputs latch unwired. Per-tick plan clear does not drain the global MatX allocator.
+**Steady.** Covariance, load, inv, and Capon scan run every tick using stable constructor-created workspace and retained MatX plans. The steering artifact caches its manifold and device scan grids. Eigen decomposition and peak extraction drop out after their optional outputs latch unwired. MatX 1.0.0's cached single-matrix cuSolver inverse is not repeatable, so a one-item tick duplicates its loaded covariance internally and inverts a two-matrix batch; public and downstream item counts remain one.
 
-**`[live]` cost.** `diagonal_loading` is free. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives.
+**`[live]` cost.** `diagonal_loading` is free. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives. The Graph harness isolates all six live inputs.
 
 ```bash
 ctest --test-dir build -R perf_mvdr_estimator_smoke
 ```
 
-Size ladder axes: channels, detections, snapshots, `num_az × num_el` (`xs`…`xl`; default smoke `xs`/`sm`/`md`). The Graph harness measures the production Exact `diagonal_loading` override. Do not treat historical kernel notes as current Graph results.
+Size ladder axes: channels, detections, snapshots, `num_az × num_el` (`xs`…`xl`; default smoke `xs`/`sm`/`md`). Every size isolates production Exact timing for `array_geometry`, both scan grids, `spatial_smoothing`, `diagonal_loading`, and `max_sources`. Do not treat historical kernel notes as current Graph results.
 
 ## Tests and verification
 
@@ -158,7 +158,8 @@ Size ladder axes: channels, detections, snapshots, `num_az × num_el` (`xs`…`x
 | `LiveArrayGeometryAppliesForOneTick` | Same for `array_geometry`; active and passing |
 | `LiveSpatialSmoothingRejectsMalformedPod` / `LiveAzGridRejectsExtentAboveMaxAz` | Out-of-range `count` and an over-`max_az` grid are diagnosed, not consumed |
 | `IsValidMask…` / `AllInvalidMask…` | Connected Exact mask and all-invalid blanking |
-| `LiveMaxSources…` | Scalar Exact override and revert; loading value comparison remains blocked by the documented MVDR solver bug |
+| `LiveDiagonalLoading…` / `LiveMaxSources…` | Scalar Exact override and revert |
+| `DeterministicAcrossTicks` / `…AboveMatInvThreshold` | Repeatable one-item inversion on both sides of MatX's 32-channel backend threshold |
 | Rejects / precision / multi-item | TESTING.md cross-cuts |
 
 Analytic ground truth is a host steering-vector snapshot. C++ Graph tests bind all five outputs.
