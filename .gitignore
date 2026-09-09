@@ -8,6 +8,7 @@ CMakeCache.txt
 data/
 .claude/
 .cursor/
+.vscode/
 _CPack_Packages/
 __pycache__/
 .cache/
