@@ -398,6 +398,29 @@ inline void solve_companion_roots(RootMUSICSolverState* solver, int64_t degree,
 inline constexpr int64_t kRootMusicPairChannelCap = 64;
 inline constexpr int64_t kRootMusicPairCandCap = 8;
 
+template <typename T>
+struct RootMUSICAxisWorkspace {
+  cuda::std::complex<T>* eigenvectors{nullptr};
+  T* eigenvalues{nullptr};
+  cuda::std::complex<T>* projector{nullptr};
+  int32_t* model_order{nullptr};
+  cuda::std::complex<T>* coefficients{nullptr};
+  cuda::std::complex<T>* companion{nullptr};
+  cuda::std::complex<T>* roots{nullptr};
+};
+
+template <typename T>
+struct RootMUSICURAScratch {
+  cuda::std::complex<T>* cov_y{nullptr};
+  cuda::std::complex<T>* cov_z{nullptr};
+  RootMUSICAxisWorkspace<T> axis_y;
+  RootMUSICAxisWorkspace<T> axis_z;
+  T* u_candidates{nullptr};
+  T* v_candidates{nullptr};
+  int32_t* u_counts{nullptr};
+  int32_t* v_counts{nullptr};
+};
+
 // One block per item. Row/column subarray-averages the full covariance R
 // (channels = ny*nz, row-major) into an ny x ny azimuth covariance and an
 // nz x nz elevation covariance (forward spatial averaging over the orthogonal
@@ -663,14 +686,13 @@ __global__ void root_music_pair_kernel(
 // Root one aperture axis: eig its subarray-averaged covariance, build the
 // noise-subspace projector at the per-axis-clamped model order, form the
 // Root-MUSIC polynomial, solve for its roots, and emit candidate cosines.
-// Allocates its own transient device scratch (freed on return, which
-// synchronizes the device via cudaFree, matching the 1-D stage's lifetime).
 template <typename T>
 inline void root_music_axis_roots(cuda::std::complex<T>* cov_axis,
                                   int64_t num_items, int64_t axis_channels,
                                   const int64_t* valid_counts,
                                   const int32_t* model_order_full,
                                   int64_t cand_cap, T wave_number_spacing,
+                                  const RootMUSICAxisWorkspace<T>& workspace,
                                   RootMUSICSolverState* solver, T* cand,
                                   int32_t* cand_count, cudaStream_t stream) {
   if (num_items <= 0 || axis_channels < 2) {
@@ -678,39 +700,14 @@ inline void root_music_axis_roots(cuda::std::complex<T>* cov_axis,
   }
   constexpr int block = 256;
   const int grid = static_cast<int>(num_items);
-  auto evec = make_device_tensor(
-      {num_items, axis_channels, axis_channels}, complex_dtype<T>());
-  auto eval =
-      make_device_tensor({num_items, axis_channels}, real_dtype<T>());
-  auto proj = make_device_tensor(
-      {num_items, axis_channels, axis_channels}, complex_dtype<T>());
-  auto mo = make_device_tensor({num_items}, DLDataType{kDLInt, 32, 1});
   const int64_t degree = 2 * (axis_channels - 1);
-  auto coeff =
-      make_device_tensor({num_items, degree + 1}, complex_dtype<T>());
-  auto comp =
-      make_device_tensor({num_items, degree, degree}, complex_dtype<T>());
-  auto roots = make_device_tensor({num_items, degree}, complex_dtype<T>());
-
-  auto* evec_p =
-      require_mutable<cuda::std::complex<T>>(*evec, "axis eigenvectors");
-  auto* eval_p = require_mutable<T>(*eval, "axis eigenvalues");
-  auto* proj_p =
-      require_mutable<cuda::std::complex<T>>(*proj, "axis projector");
-  auto* mo_p = require_mutable<int32_t>(*mo, "axis model order");
-  auto* coeff_p =
-      require_mutable<cuda::std::complex<T>>(*coeff, "axis coefficients");
-  auto* comp_p =
-      require_mutable<cuda::std::complex<T>>(*comp, "axis companion");
-  auto* roots_p =
-      require_mutable<cuda::std::complex<T>>(*roots, "axis roots");
 
   auto cov_view = matx::make_tensor<cuda::std::complex<T>, 3>(
       cov_axis, {num_items, axis_channels, axis_channels});
   auto evec_view = matx::make_tensor<cuda::std::complex<T>, 3>(
-      evec_p, {num_items, axis_channels, axis_channels});
-  auto eval_view =
-      matx::make_tensor<T, 2>(eval_p, {num_items, axis_channels});
+      workspace.eigenvectors, {num_items, axis_channels, axis_channels});
+  auto eval_view = matx::make_tensor<T, 2>(
+      workspace.eigenvalues, {num_items, axis_channels});
   matx::cudaExecutor eig_exec{stream};
   (matx::mtie(evec_view, eval_view) =
        matx::eig(cov_view, matx::EigenMode::VECTOR))
@@ -720,26 +717,28 @@ inline void root_music_axis_roots(cuda::std::complex<T>* cov_axis,
   const int clamp_grid =
       static_cast<int>((num_items + clamp_block - 1) / clamp_block);
   clamp_model_order_kernel<<<clamp_grid, clamp_block, 0, stream>>>(
-      model_order_full, mo_p, num_items,
+      model_order_full, workspace.model_order, num_items,
       static_cast<int32_t>(axis_channels - 1));
-  projector_kernel<T><<<grid, block, 0, stream>>>(evec_p, mo_p, num_items,
-                                                  axis_channels, proj_p);
+  projector_kernel<T><<<grid, block, 0, stream>>>(
+      workspace.eigenvectors, workspace.model_order, num_items,
+      axis_channels, workspace.projector);
   root_music_coefficients_kernel<T><<<grid, block, 0, stream>>>(
-      proj_p, num_items, axis_channels, coeff_p);
+      workspace.projector, num_items, axis_channels, workspace.coefficients);
   root_music_companion_kernel<T><<<grid, block, 0, stream>>>(
-      coeff_p, valid_counts, num_items, degree, comp_p);
-  solve_companion_roots<T>(solver, degree, comp_p, roots_p, num_items,
-                           stream);
+      workspace.coefficients, valid_counts, num_items, degree,
+      workspace.companion);
+  solve_companion_roots<T>(solver, degree, workspace.companion,
+                           workspace.roots, num_items, stream);
   root_music_axis_candidates_kernel<T><<<grid, 1, 0, stream>>>(
-      roots_p, mo_p, valid_counts, num_items, degree, cand_cap,
-      wave_number_spacing, cand, cand_count);
+      workspace.roots, workspace.model_order, valid_counts, num_items, degree,
+      cand_cap, wave_number_spacing, cand, cand_count);
 }
 
 // Full 2-D URA Root-MUSIC for one tick. `covariance`, `eigenvectors`,
 // `projector`, `eigenvalues`, `valid_counts`, `model_order`, `aoa`,
 // `doa_multi`, and `source_count` are operator-owned scratch sized for the
-// full ny*nz aperture (same shapes the 1-D stage uses). Per-axis scratch is
-// allocated internally.
+// full ny*nz aperture (same shapes the 1-D stage uses). The remaining
+// per-axis and pairing scratch is operator-owned and passed explicitly.
 template <typename T>
 inline void run_root_music_2d_stage(
     const cuda::std::complex<T>* snapshots, const unsigned char* mask,
@@ -750,7 +749,8 @@ inline void run_root_music_2d_stage(
     cuda::std::complex<T>* covariance, cuda::std::complex<T>* eigenvectors,
     cuda::std::complex<T>* projector, int64_t* valid_counts,
     int32_t* model_order, T* eigenvalues, T* aoa, T* doa_multi,
-    int32_t* source_count, RootMUSICSolverState* solver_y,
+    int32_t* source_count, const RootMUSICURAScratch<T>& scratch,
+    RootMUSICSolverState* solver_y,
     RootMUSICSolverState* solver_z, cudaStream_t stream) {
   const int64_t channels = ny * nz;
   if (num_items <= 0 || channels < 4) {
@@ -786,40 +786,27 @@ inline void run_root_music_2d_stage(
   projector_kernel<T><<<grid, block, 0, stream>>>(
       eigenvectors, model_order, num_items, channels, projector);
 
-  auto cov_y = make_device_tensor({num_items, ny, ny}, complex_dtype<T>());
-  auto cov_z = make_device_tensor({num_items, nz, nz}, complex_dtype<T>());
-  auto* cov_y_p =
-      require_mutable<cuda::std::complex<T>>(*cov_y, "ura cov_y");
-  auto* cov_z_p =
-      require_mutable<cuda::std::complex<T>>(*cov_z, "ura cov_z");
   ura_axis_covariance_kernel<T><<<grid, block, 0, stream>>>(
-      covariance, num_items, ny, nz, cov_y_p, cov_z_p);
+      covariance, num_items, ny, nz, scratch.cov_y, scratch.cov_z);
 
   const int64_t u_cap = std::min<int64_t>(ny - 1, kRootMusicPairCandCap);
   const int64_t v_cap = std::min<int64_t>(nz - 1, kRootMusicPairCandCap);
-  auto u_cand = make_device_tensor({num_items, u_cap}, real_dtype<T>());
-  auto v_cand = make_device_tensor({num_items, v_cap}, real_dtype<T>());
-  auto u_count =
-      make_device_tensor({num_items}, DLDataType{kDLInt, 32, 1});
-  auto v_count =
-      make_device_tensor({num_items}, DLDataType{kDLInt, 32, 1});
-  auto* u_cand_p = require_mutable<T>(*u_cand, "ura u candidates");
-  auto* v_cand_p = require_mutable<T>(*v_cand, "ura v candidates");
-  auto* u_count_p = require_mutable<int32_t>(*u_count, "ura u counts");
-  auto* v_count_p = require_mutable<int32_t>(*v_count, "ura v counts");
 
-  root_music_axis_roots<T>(cov_y_p, num_items, ny, valid_counts, model_order,
-                           u_cap, ky_spacing, solver_y, u_cand_p, u_count_p,
-                           stream);
-  root_music_axis_roots<T>(cov_z_p, num_items, nz, valid_counts, model_order,
-                           v_cap, kz_spacing, solver_z, v_cand_p, v_count_p,
-                           stream);
+  root_music_axis_roots<T>(
+      scratch.cov_y, num_items, ny, valid_counts, model_order, u_cap,
+      ky_spacing, scratch.axis_y, solver_y, scratch.u_candidates,
+      scratch.u_counts, stream);
+  root_music_axis_roots<T>(
+      scratch.cov_z, num_items, nz, valid_counts, model_order, v_cap,
+      kz_spacing, scratch.axis_z, solver_z, scratch.v_candidates,
+      scratch.v_counts, stream);
 
   root_music_pair_kernel<T><<<grid, 1, 0, stream>>>(
-      u_cand_p, u_count_p, v_cand_p, v_count_p, projector, model_order,
-      valid_counts, num_items, ny, nz, u_cap, v_cap, ky_spacing, kz_spacing,
-      yax_x, yax_y, yax_z, zax_x, zax_y, zax_z, nrm_x, nrm_y, nrm_z,
-      convention, max_sources, aoa, doa_multi, source_count);
+      scratch.u_candidates, scratch.u_counts, scratch.v_candidates,
+      scratch.v_counts, projector, model_order, valid_counts, num_items, ny,
+      nz, u_cap, v_cap, ky_spacing, kz_spacing, yax_x, yax_y, yax_z, zax_x,
+      zax_y, zax_z, nrm_x, nrm_y, nrm_z, convention, max_sources, aoa,
+      doa_multi, source_count);
 
   mark_music_eig_cache_live();
   clear_music_matx_caches();

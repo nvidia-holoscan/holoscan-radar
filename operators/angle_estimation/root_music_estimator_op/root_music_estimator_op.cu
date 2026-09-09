@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -40,6 +41,34 @@
 
 namespace holoscan::radar {
 
+struct RootMUSICDeviceBuffer {
+  std::shared_ptr<holoscan::Tensor> tensor;
+  std::size_t capacity{0U};
+};
+
+template <typename T>
+struct RootMUSICAxisRuntimeBuffers {
+  RootMUSICDeviceBuffer eigenvectors;
+  RootMUSICDeviceBuffer eigenvalues;
+  RootMUSICDeviceBuffer projector;
+  RootMUSICDeviceBuffer model_order;
+  RootMUSICDeviceBuffer coefficients;
+  RootMUSICDeviceBuffer companion;
+  RootMUSICDeviceBuffer roots;
+};
+
+template <typename T>
+struct RootMUSICURARuntimeBuffers {
+  RootMUSICDeviceBuffer cov_y;
+  RootMUSICDeviceBuffer cov_z;
+  RootMUSICAxisRuntimeBuffers<T> axis_y;
+  RootMUSICAxisRuntimeBuffers<T> axis_z;
+  RootMUSICDeviceBuffer u_candidates;
+  RootMUSICDeviceBuffer v_candidates;
+  RootMUSICDeviceBuffer u_counts;
+  RootMUSICDeviceBuffer v_counts;
+};
+
 template <typename T>
 struct RootMUSICRuntimeState {
   bool warned_rank_deficient{false};
@@ -50,6 +79,8 @@ struct RootMUSICRuntimeState {
   std::unordered_set<std::string> seen_geometry_keys;
   std::shared_ptr<holoscan::Tensor> d_subarray_index;
   std::shared_ptr<holoscan::Tensor> d_fb_flip;
+  RootMUSICDeviceBuffer smoothed_snapshot;
+  RootMUSICDeviceBuffer smoothed_mask;
   std::shared_ptr<holoscan::Tensor> covariance;
   std::shared_ptr<holoscan::Tensor> eigenvectors;
   std::shared_ptr<holoscan::Tensor> projector;
@@ -58,6 +89,7 @@ struct RootMUSICRuntimeState {
   std::shared_ptr<holoscan::Tensor> coefficients;
   std::shared_ptr<holoscan::Tensor> companion;
   std::shared_ptr<holoscan::Tensor> roots;
+  RootMUSICURARuntimeBuffers<T> ura;
   std::shared_ptr<detail::RootMUSICSolverState> solver;
   std::shared_ptr<detail::RootMUSICSolverState> solver_z;
 };
@@ -85,6 +117,17 @@ expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
             mut.error().message});
   }
   return *mut;
+}
+
+expected<void*, Error> prepare_runtime_buffer(
+    RootMUSICDeviceBuffer& buffer, std::initializer_list<int64_t> shape,
+    DLDataType dtype, const char* what) {
+  const std::size_t elements = product_extents(shape, kOpName);
+  if (!buffer.tensor || elements > buffer.capacity) {
+    buffer.tensor = make_device_tensor(shape, dtype);
+    buffer.capacity = elements;
+  }
+  return writable_ptr(*buffer.tensor, what);
 }
 
 struct RootMUSICStageConfig {
@@ -346,18 +389,21 @@ expected<RootMUSICEstimationInput<T>, Error> prepare_smoothed_input(
   const int64_t subarray_size = state.smoothing_plan.subarray_size;
   const int64_t looks =
       state.smoothing_plan.looks_per_snapshot() * plan.num_snapshots;
-  result.snapshot_keepalive = make_device_tensor(
-      {plan.num_items, subarray_size, looks}, complex_dtype<T>());
   HOLOSCAN_TRY(
       auto smoothed_ptr,
-      writable_ptr(*result.snapshot_keepalive, "smoothed_snapshot"));
+      prepare_runtime_buffer(
+          state.smoothed_snapshot,
+          {plan.num_items, subarray_size, looks}, complex_dtype<T>(),
+          "smoothed_snapshot"));
+  result.snapshot_keepalive = state.smoothed_snapshot.tensor;
   unsigned char* smoothed_mask_ptr = nullptr;
   if (mask != nullptr) {
-    result.mask_keepalive = make_device_tensor(
-        {plan.num_items, looks}, DLDataType{kDLUInt, 8, 1});
     HOLOSCAN_TRY(
         auto mask_out,
-        writable_ptr(*result.mask_keepalive, "smoothed_mask"));
+        prepare_runtime_buffer(
+            state.smoothed_mask, {plan.num_items, looks},
+            DLDataType{kDLUInt, 8, 1}, "smoothed_mask"));
+    result.mask_keepalive = state.smoothed_mask.tensor;
     smoothed_mask_ptr = static_cast<unsigned char*>(mask_out);
   }
   try {
@@ -595,6 +641,121 @@ prepare_root_music_workspace(RootMUSICRuntimeState<T>& state,
   return result;
 }
 
+template <typename T>
+expected<detail::RootMUSICAxisWorkspace<T>, Error>
+prepare_root_music_axis_workspace(
+    RootMUSICAxisRuntimeBuffers<T>& buffers, int64_t num_items,
+    int64_t axis_channels) {
+  const int64_t degree = 2 * (axis_channels - 1);
+  HOLOSCAN_TRY(
+      auto eigenvectors,
+      prepare_runtime_buffer(
+          buffers.eigenvectors,
+          {num_items, axis_channels, axis_channels}, complex_dtype<T>(),
+          "axis eigenvectors"));
+  HOLOSCAN_TRY(
+      auto eigenvalues,
+      prepare_runtime_buffer(
+          buffers.eigenvalues, {num_items, axis_channels}, real_dtype<T>(),
+          "axis eigenvalues"));
+  HOLOSCAN_TRY(
+      auto projector,
+      prepare_runtime_buffer(
+          buffers.projector,
+          {num_items, axis_channels, axis_channels}, complex_dtype<T>(),
+          "axis projector"));
+  HOLOSCAN_TRY(
+      auto model_order,
+      prepare_runtime_buffer(
+          buffers.model_order, {num_items}, DLDataType{kDLInt, 32, 1},
+          "axis model order"));
+  HOLOSCAN_TRY(
+      auto coefficients,
+      prepare_runtime_buffer(
+          buffers.coefficients, {num_items, degree + 1}, complex_dtype<T>(),
+          "axis coefficients"));
+  HOLOSCAN_TRY(
+      auto companion,
+      prepare_runtime_buffer(
+          buffers.companion, {num_items, degree, degree}, complex_dtype<T>(),
+          "axis companion"));
+  HOLOSCAN_TRY(
+      auto roots,
+      prepare_runtime_buffer(
+          buffers.roots, {num_items, degree}, complex_dtype<T>(),
+          "axis roots"));
+  return detail::RootMUSICAxisWorkspace<T>{
+      .eigenvectors =
+          static_cast<cuda::std::complex<T>*>(eigenvectors),
+      .eigenvalues = static_cast<T*>(eigenvalues),
+      .projector = static_cast<cuda::std::complex<T>*>(projector),
+      .model_order = static_cast<int32_t*>(model_order),
+      .coefficients =
+          static_cast<cuda::std::complex<T>*>(coefficients),
+      .companion = static_cast<cuda::std::complex<T>*>(companion),
+      .roots = static_cast<cuda::std::complex<T>*>(roots),
+  };
+}
+
+template <typename T>
+expected<detail::RootMUSICURAScratch<T>, Error>
+prepare_root_music_ura_scratch(RootMUSICRuntimeState<T>& state,
+                               int64_t num_items, int64_t ny, int64_t nz) {
+  HOLOSCAN_TRY(
+      auto cov_y,
+      prepare_runtime_buffer(
+          state.ura.cov_y, {num_items, ny, ny}, complex_dtype<T>(),
+          "ura cov_y"));
+  HOLOSCAN_TRY(
+      auto cov_z,
+      prepare_runtime_buffer(
+          state.ura.cov_z, {num_items, nz, nz}, complex_dtype<T>(),
+          "ura cov_z"));
+  HOLOSCAN_TRY(
+      auto axis_y,
+      prepare_root_music_axis_workspace<T>(
+          state.ura.axis_y, num_items, ny));
+  HOLOSCAN_TRY(
+      auto axis_z,
+      prepare_root_music_axis_workspace<T>(
+          state.ura.axis_z, num_items, nz));
+
+  const int64_t u_cap =
+      std::min<int64_t>(ny - 1, detail::kRootMusicPairCandCap);
+  const int64_t v_cap =
+      std::min<int64_t>(nz - 1, detail::kRootMusicPairCandCap);
+  HOLOSCAN_TRY(
+      auto u_candidates,
+      prepare_runtime_buffer(
+          state.ura.u_candidates, {num_items, u_cap}, real_dtype<T>(),
+          "ura u candidates"));
+  HOLOSCAN_TRY(
+      auto v_candidates,
+      prepare_runtime_buffer(
+          state.ura.v_candidates, {num_items, v_cap}, real_dtype<T>(),
+          "ura v candidates"));
+  HOLOSCAN_TRY(
+      auto u_counts,
+      prepare_runtime_buffer(
+          state.ura.u_counts, {num_items}, DLDataType{kDLInt, 32, 1},
+          "ura u counts"));
+  HOLOSCAN_TRY(
+      auto v_counts,
+      prepare_runtime_buffer(
+          state.ura.v_counts, {num_items}, DLDataType{kDLInt, 32, 1},
+          "ura v counts"));
+  return detail::RootMUSICURAScratch<T>{
+      .cov_y = static_cast<cuda::std::complex<T>*>(cov_y),
+      .cov_z = static_cast<cuda::std::complex<T>*>(cov_z),
+      .axis_y = axis_y,
+      .axis_z = axis_z,
+      .u_candidates = static_cast<T*>(u_candidates),
+      .v_candidates = static_cast<T*>(v_candidates),
+      .u_counts = static_cast<int32_t*>(u_counts),
+      .v_counts = static_cast<int32_t*>(v_counts),
+  };
+}
+
 expected<RootMUSICPreparedOutputs, Error> prepare_root_music_outputs(
     Output<Tensor>& aoa_port, Output<Tensor>& doa_port,
     Output<Tensor>& count_port, Output<Tensor>& eigenvalue_port,
@@ -669,6 +830,10 @@ expected<void, Error> execute_root_music_ura(
         "RootMUSICEstimatorOp: unseen array_geometry override; "
         "revalidating URA aperture and solver dimensions");
   }
+  HOLOSCAN_TRY(
+      auto scratch,
+      prepare_root_music_ura_scratch<T>(
+          state, plan.num_items, planar.ny, planar.nz));
   const double k = kTwoPi / estimation.geometry->wavelength;
   try {
     detail::run_root_music_2d_stage<T>(
@@ -692,7 +857,7 @@ expected<void, Error> execute_root_music_ura(
         static_cast<T*>(outputs.aoa_writer.data()),
         static_cast<T*>(outputs.doa_writer.data()),
         static_cast<int32_t*>(outputs.count_writer.data()),
-        state.solver.get(), state.solver_z.get(), stream);
+        scratch, state.solver.get(), state.solver_z.get(), stream);
     check_cuda("root music stage", kOpName);
   } catch (const std::invalid_argument& error) {
     return fail_invalid(error.what());

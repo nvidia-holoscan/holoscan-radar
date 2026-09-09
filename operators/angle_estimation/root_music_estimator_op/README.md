@@ -135,12 +135,12 @@ No `az_angles` / `el_angles`. `num_sources` encoding is the same `int64` negativ
 
 ## SDK implementation notes
 
-- **Construction.** `RootMUSICEstimatorOp(const MaxTensorExtents&)`. If both `max_items` and `max_sources` are unset, pool spans stay `0`. Otherwise `max_items`, `max_sources`, and `max_channels` must be positive. Constructor-created runtime state owns stable covariance/eigenspace and ULA polynomial workspace plus both cuSOLVER states.
+- **Construction.** `RootMUSICEstimatorOp(const MaxTensorExtents&)`. If both `max_items` and `max_sources` are unset, pool spans stay `0`. Otherwise `max_items`, `max_sources`, and `max_channels` must be positive. Constructor-created runtime state owns stable covariance/eigenspace, ULA polynomial, bounded URA axis/pairing workspace, and both cuSOLVER states.
 - **Triggering.** `contract()` is `OnEach{snapshot}`. Optional `is_valid` and every live override are unconditional non-members with `Exact{}` + `SafeDefault{}`; unwired means absent/all-valid or Params for that tick. A producer must publish a same-tick mask before `snapshot`.
 - **Ports and queues.** Device Tensor ports, queue depth `2`. All four outputs declare `max_rank = 3` (the fat-cube bound; actual ranks are 1–3). Live Inputs also queue depth `2` — wire-object, POD, and scalar payloads only (no config Tensor, since there is no scan grid).
 - **Live override payloads.** `array_geometry` is `Input<WireArrayGeometry>`, a generated descriptor-schema type; `spatial_smoothing` is `Input<SpatialSmoothingOverride>`, a bounded `{count, first, second}` int64 POD (`count` must be 0, 1, or 2). Both convert with `from_wire` inside `resolve_live_override_via`, so neither wire storage nor the POD reaches operator state. `num_sources` / `source_count_pfa` / `max_sources` are plain scalar `Input<>` ports resolved with `resolve_live_override`. Logical `RootMUSICParams` types are unchanged (`HSDK5_PORT.md` §9).
-- **Tick flow.** `compute()` is the high-level shell: receive and plan → validate mask / stream / convention → empty path → prepare smoothed input and planar aperture → prepare common workspace and outputs → dispatch the explicit ULA or URA helper → warn, publish, seed the convention, and retain. Smoothing gather and remaining URA transient storage are still allocated per applicable tick (tracked in `OPEN_ITEMS.md`).
-- **Streams and lifetime.** Work uses `context.cuda_stream()`. Inputs are retained at the end of `compute()`. `RootMUSICPreparedWorkspace` and `RootMUSICPreparedOutputs` keep common scratch pointers, loans, and write guards valid across either variant; all siblings commit before required-first publication. `solve_companion_roots` synchronizes to read per-item `geev` info codes. `stop()` calls `retire_music_matx_caches()`; cuSOLVER workspaces die with the runtime state.
+- **Tick flow.** `compute()` is the high-level shell: receive and plan → validate mask / stream / convention → empty path → prepare smoothed input and planar aperture → prepare common workspace and outputs → dispatch the explicit ULA or URA helper → warn, publish, seed the convention, and retain. Capacity-managed smoothing buffers grow only for a larger effective input; bounded URA workspace is reused every applicable tick.
+- **Streams and lifetime.** Work uses `context.cuda_stream()`. Inputs and smoothing gather buffers remain alive through estimator execution. `RootMUSICPreparedWorkspace` and `RootMUSICPreparedOutputs` keep common/axis scratch pointers, loans, and write guards valid across either variant; all siblings commit before required-first publication. `solve_companion_roots` synchronizes to read per-item `geev` info codes. `stop()` calls `retire_music_matx_caches()`; cuSOLVER workspaces die with the runtime state.
 - **Emission.** Required `aoa_estimates` publishes first; optional/always `doa_multi`, `source_count`, and `eigenvalues` absorb declined emits.
 - **Parameter authoring.** Schema `com.nvidia.holoscan.radar.RootMUSICParams` version `1`.
 - **Precision.** `RootMUSICEstimatorOp<float>` and `<double>`.
@@ -154,15 +154,15 @@ Every output is a fresh pool loan. A consumer may keep the Tensor for the usual 
 
 **Cold.** The constructor creates both cuSOLVER states and bounded core workspace. First use initializes solver internals, an optional smoothing plan, and the first `matx::eig` plan. A new geometry key revalidates the aperture.
 
-**Steady.** Covariance + eig + projector every tick; then one serial `cusolverDnXgeev` per item per rooted polynomial (ULA: one of degree `2(C−1)`; URA: two smaller companions plus pairing). The serial hybrid dominates latency; a batched device root solver is postponed, not a contract gap. Per-tick MatX eig-plan clear matches MUSIC (`cudaDeviceSynchronize` inside `clear_music_matx_caches`).
+**Steady.** Covariance + eig + projector every tick on stable operator-owned workspace; then one serial `cusolverDnXgeev` per item per rooted polynomial (ULA: one of degree `2(C−1)`; URA: two smaller companions plus pairing). The serial hybrid dominates latency; a batched device root solver is postponed, not a contract gap. Per-tick MatX eig-plan clear matches MUSIC (`cudaDeviceSynchronize` inside `clear_music_matx_caches`).
 
-**`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the aperture and rebuilds the smoothing plan (and can resize the cuSOLVER workspace) on the tick it arrives.
+**`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the aperture and rebuilds the smoothing plan (and can resize the cuSOLVER workspace) on the tick it arrives. The Graph harness isolates all five live inputs.
 
 ```bash
 ctest --test-dir build -R perf_root_music_estimator_smoke
 ```
 
-Harness axes: channels, detections, snapshots (`xs`…`xl` ULA); `--full` also adds URA rungs (`ura_sm` 6×6, `ura_lg` 8×8). `num_sources` is fixed at 1. The harness measures production Exact `max_sources` timing.
+Harness axes: channels, detections, snapshots (`xs`…`xl` ULA); `--full` also adds URA rungs (`ura_sm` 6×6, `ura_lg` 8×8). Every geometry isolates production Exact timing for `array_geometry`, `spatial_smoothing`, `num_sources`, `source_count_pfa`, and `max_sources`, plus separate fixed model-order scenarios at 1, 2, and `min(4, num_channels − 1)`.
 
 ## Tests and verification
 
@@ -175,6 +175,7 @@ Harness axes: channels, detections, snapshots (`xs`…`xl` ULA); `--full` also a
 | `DirectionCosineConventionMapsUlaProjection` / `CustomConvention*` / `…Zenith…` / `DirectionCosineNearEndfirePreservesSign` | Convention-free kernel + boundary relabel; endfire sign |
 | `MaxSourcesCapsReportedRoots` / `UnusedDoaRowsAreNan` | `doa_multi` capacity + NaN fill |
 | `LiveArrayGeometryAppliesForOneTick` / `LiveSpatialSmoothingAppliesForOneTick` | Mid-stream override applies for one tick; the next miss reverts to Params |
+| `RepeatedUraSmoothingSupportsChangingEffectiveAperture` | Reused smoothing and URA scratch remain correct as the effective aperture changes |
 | `IsValidMask…` / `AllInvalidMask…` | Connected Exact mask and all-invalid blanking |
 | `LiveNumSources…` / `LiveSourceCountPfa…` / `LiveMaxSources…` | Scalar Exact override and revert |
 | `RejectsSnapshotRank2` | Contract 3-D `snapshot` |

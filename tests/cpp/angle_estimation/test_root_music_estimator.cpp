@@ -1007,10 +1007,11 @@ TEST(RootMUSICEstimatorOpTest, LiveSpatialSmoothingAppliesForOneTick) {
     frames.push_back(block_to_device<double>(block, {1, kN, kS}));
   }
   RootMUSICParams params =
-      make_params(geometry, conv, /*num_sources=*/1, 1e-2, 4);
+      make_params(geometry, conv, /*num_sources=*/1, 1e-2, 4,
+                  /*smoothing=*/{2});
   std::vector<std::optional<SpatialSmoothingOverride>> payloads{
       std::nullopt,
-      SpatialSmoothingOverride{.count = 1, .first = 2},
+      SpatialSmoothingOverride{.count = 1, .first = 4},
       std::nullopt,
   };
 
@@ -1029,8 +1030,8 @@ TEST(RootMUSICEstimatorOpTest, LiveSpatialSmoothingAppliesForOneTick) {
   EXPECT_TRUE(result.plan_ok) << result.plan_json;
   EXPECT_TRUE(result.diagnostics.empty());
   ASSERT_EQ(result.frames3.size(), 3U);
-  // Smoothing shortens the sub-array, so the eigenvalue count is the
-  // observable. Ticks 0 and 2 publish nothing and share the Params order.
+  // Every tick is smoothed. The override grows the smoothing count and
+  // shrinks the effective aperture; tick 2 reuses the Params-sized buffers.
   EXPECT_NE(result.frames3[1].shape, result.frames3[0].shape);
   EXPECT_EQ(result.frames3[2].shape, result.frames3[0].shape);
 
@@ -1054,6 +1055,62 @@ TEST(RootMUSICEstimatorOpTest, LiveSpatialSmoothingAppliesForOneTick) {
   EXPECT_TRUE(invalid.plan_ok) << invalid.plan_json;
   EXPECT_TRUE(invalid.frames0.empty());
   EXPECT_FALSE(invalid.diagnostics.empty());
+}
+
+TEST(RootMUSICEstimatorOpTest,
+     RepeatedUraSmoothingSupportsChangingEffectiveAperture) {
+  constexpr int64_t kNy = 4;
+  constexpr int64_t kNz = 4;
+  constexpr int64_t kS = 64;
+  constexpr double kAz = 0.12;
+  constexpr double kEl = -0.08;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry =
+      make_planar_ura_geometry(kNy, kNz, 0.5, 1.0);
+  const auto block =
+      make_block(geometry, conv, kAz, kEl, kS, 0.02, 303u);
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  for (int tick = 0; tick < 3; ++tick) {
+    frames.push_back(block_to_device<double>(
+        block, {1, geometry.num_elements(), kS}));
+  }
+  RootMUSICParams params =
+      make_params(geometry, conv, /*num_sources=*/1, 1e-2, 4,
+                  /*smoothing=*/{1, 1});
+  std::vector<std::optional<SpatialSmoothingOverride>> payloads{
+      std::nullopt,
+      SpatialSmoothingOverride{.count = 2, .first = 2, .second = 2},
+      std::nullopt,
+  };
+
+  const auto result =
+      run_exact_override_four_out_operator_graph_result<
+          RootMUSICEstimatorOp<double>>(
+          std::move(frames), std::move(payloads), std::move(params),
+          "aoa_estimates", "doa_multi", "source_count", "eigenvalues",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink0, const auto& sink1, const auto& sink2,
+             const auto& sink3) {
+            wire_root_music(graph, source, op, sink0, sink1, sink2, sink3);
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->override_out, op->spatial_smoothing, q);
+          });
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames0.size(), 3U);
+  ASSERT_EQ(result.frames3.size(), 3U);
+  EXPECT_EQ(result.frames3[0].shape, (std::vector<int64_t>{1, 16}));
+  EXPECT_EQ(result.frames3[1].shape, (std::vector<int64_t>{1, 9}));
+  EXPECT_EQ(result.frames3[2].shape, result.frames3[0].shape);
+  for (const auto& frame : result.frames0) {
+    EXPECT_TRUE(std::isfinite(frame.as<double>()[0]));
+    EXPECT_TRUE(std::isfinite(frame.as<double>()[1]));
+  }
+  EXPECT_EQ(result.frames2[0].as<int32_t>()[0], 1);
+  EXPECT_EQ(result.frames2[1].as<int32_t>()[0], 1);
+  EXPECT_EQ(result.frames2[2].as<int32_t>()[0], 1);
+  EXPECT_EQ(result.frames0[2].data, result.frames0[0].data);
 }
 
 // source_count_pfa only steers the EFT model order, so the observable is the
