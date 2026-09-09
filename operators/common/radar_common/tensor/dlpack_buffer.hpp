@@ -82,8 +82,8 @@ inline std::shared_ptr<holoscan::Tensor> make_device_tensor(
     throw std::runtime_error("make_device_tensor: cudaMalloc failed");
   }
 
-  int device_id = 0;
-  if (cudaGetDevice(&device_id) != cudaSuccess) {
+  int current_device_id = -1;
+  if (cudaGetDevice(&current_device_id) != cudaSuccess) {
     throw std::runtime_error("make_device_tensor: cudaGetDevice failed");
   }
 
@@ -91,7 +91,7 @@ inline std::shared_ptr<holoscan::Tensor> make_device_tensor(
   context->memory_reference = memory;
   context->dl_shape = shape;
   context->tensor.dl_tensor.data = memory->data;
-  context->tensor.dl_tensor.device = DLDevice{kDLCUDA, device_id};
+  context->tensor.dl_tensor.device = DLDevice{kDLCUDA, current_device_id};
   context->tensor.dl_tensor.ndim =
       static_cast<int32_t>(context->dl_shape.size());
   context->tensor.dl_tensor.dtype = dtype;

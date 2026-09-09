@@ -384,10 +384,12 @@ TEST(FeatureAssemblyOpTest, RejectsNonContiguousDetectionIdx) {
   std::vector<int64_t> host = {0, 0, 1, 0};
   cudaMemcpy(holder->data, host.data(), 4 * sizeof(int64_t),
              cudaMemcpyHostToDevice);
-  int device_id = 0;
-  cudaGetDevice(&device_id);
+  int current_device_id = -1;
+  if (cudaGetDevice(&current_device_id) != cudaSuccess) {
+    throw std::runtime_error("make_idx_with_strides: cudaGetDevice failed");
+  }
   holder->dl.dl_tensor.data = holder->data;
-  holder->dl.dl_tensor.device = DLDevice{kDLCUDA, device_id};
+  holder->dl.dl_tensor.device = DLDevice{kDLCUDA, current_device_id};
   holder->dl.dl_tensor.ndim = 2;
   holder->dl.dl_tensor.dtype = kInt64Dtype;
   holder->dl.dl_tensor.shape = holder->shape.data();

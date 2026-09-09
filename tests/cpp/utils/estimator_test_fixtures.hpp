@@ -65,9 +65,11 @@ std::shared_ptr<holoscan::Tensor> make_tensor(
   auto holder = std::make_unique<BufferHolder>();
   holder->shape = shape;
   const size_t nbytes = host.size() * sizeof(ElementT);
-  int device_id = 0;
-  cudaGetDevice(&device_id);
-  holder->device = DLDevice{device_type, device_id};
+  int current_device_id = -1;
+  if (cudaGetDevice(&current_device_id) != cudaSuccess) {
+    throw std::runtime_error("cuda_accessible: cudaGetDevice failed");
+  }
+  holder->device = DLDevice{device_type, current_device_id};
   if (device_type == kDLCUDAManaged) {
     if (cudaMallocManaged(&holder->data, nbytes) != cudaSuccess) {
       throw std::runtime_error("cuda_accessible: cudaMallocManaged failed");
