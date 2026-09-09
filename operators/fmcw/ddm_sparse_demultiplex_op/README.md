@@ -31,8 +31,9 @@ Sparse v1 accepts only a complete linear exact-bin M-band code. `fold_idx=k`
 in `[0,M)` undoes the cyclic TX-band permutation caused by velocity aliasing.
 The default `k=0` is correct only in the principal reduced interval; an
 unresolved nonzero fold can produce plausible but angle-wrong ordering.
-Fold resolution belongs in a future `DDMFoldResolverOp` that inspects the
-pre-demux cube, or in an external staggered-CRI/code-rotation observation.
+Applications needing wider velocity coverage must supply `fold_idx` from an
+external observation. An M+1 empty-band layout is a research item; no generic
+resolver operator is defined until that or another observable is selected.
 The static `ddm_code` parameter does not support frame-to-frame rotation in
 one instance. Nonlinear/fractional layouts and clutter-before-demux are
 unsupported.

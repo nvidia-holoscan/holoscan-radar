@@ -299,7 +299,7 @@ YAML tokens match `to_string(AssemblyFeature)`: `range`, `velocity`, `score`, `a
 
 ## Consumer lifetime notes
 
-`points` is a fresh pool-loaned device buffer each tick. A consumer may retain it. Module-wide ping-pong reuse of emitted outputs is [`operators/OPEN_ITEMS.md`](../../OPEN_ITEMS.md) §1 — not implemented here. `points` is `(num_detections, num_features)` (typically small); measure `perf_feature_assembly` across the detection-count ladder before adding lifetime state.
+`points` is a fresh pool-loaned device buffer each tick. A consumer may retain it. `points` is `(num_detections, num_features)` (typically small).
 
 ## Performance
 

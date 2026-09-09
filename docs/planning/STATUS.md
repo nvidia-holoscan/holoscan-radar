@@ -189,7 +189,7 @@ needs it.
 
 | Capability | Why deferred | Where tracked |
 | --- | --- | --- |
-| **Staggered / non-uniform TDM schedules** (varying TX dwell or count) | Needs a per-TX-timing schedule descriptor **and** a generalized `TDMDenseCompensationOp / DDMDenseDemultiplexOp` model (the compensation for arbitrary timing is an open design question). Uniform round-robin covers the FMCW workflows; non-uniform is rejected with a clear error today. Settled L12 | [`MIMODeinterleaveOp` README](../../operators/fmcw/mimo_deinterleave_op/README.md) (uniformity pin) |
+| **Staggered / non-uniform TDM schedules** (varying TX dwell or count) | Needs a per-TX-timing schedule descriptor **and** generalized deinterleave plus dense/sparse TDM compensation based on actual firing times. Uniform repeating TDM covers the current workflows; non-uniform timing is rejected with a clear error today. Settled L12 | [`operators/OPEN_ITEMS.md` §2](../../operators/OPEN_ITEMS.md#2-support-staggered-and-non-uniform-tdm-timing) |
 | **Sum-set ("Harnessing Holes") holey subarray smoothing** | S3 selects a contiguous filled ULA/URA today; a sum-set decomposition (`S_b + S_c`, keeping holes for aperture when the array is sum-set smoothable) would recover more DOF / aperture from holey MIMO co-arrays. Research item; the current gridless estimators consume the contiguous result. Settled L14 (fork 3) | [SubarraySelection README](../../operators/angle_estimation/subarray_selection_op/README.md) |
 
 ## Open items for team review

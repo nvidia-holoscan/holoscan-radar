@@ -110,7 +110,7 @@ YAML field names: `tx_positions`, `rx_positions`, `wavelength`, `overlap_policy`
 
 ## Consumer lifetime notes
 
-Both outputs are fresh pool loans each tick. The consumer may retain them. `array_geometry` is a generated wire payload backed by a pageable-host descriptor-Tensor member; consumers convert it through `from_wire`. Module-wide ping-pong reuse of emitted outputs is [`operators/OPEN_ITEMS.md`](../../OPEN_ITEMS.md) §1 — not implemented here.
+Both outputs are fresh pool loans each tick. The consumer may retain them. `array_geometry` is a generated wire payload backed by a pageable-host descriptor-Tensor member; consumers convert it through `from_wire`.
 
 ## Performance
 

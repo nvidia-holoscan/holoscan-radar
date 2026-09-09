@@ -838,7 +838,7 @@ Sparse DDM bridge for detect-before-demux workflows. It gathers each TX band onl
 - `wavelength` **[live]** — float. Required operating wavelength for emitted geometry; it does not affect DDM demultiplexing.
 - `snapshot_window` **[live]**, `doppler_edge`, `range_edge` — same neighborhood and edge semantics as `TDMSparseCompensationOp`, applied on the folded `W` axis.
 
-`fold_idx` undoes the cyclic TX permutation for an aliased target. The default zero is correct only in the principal reduced interval `[-PRF/(2M), PRF/(2M))`; outside it, unresolved zero can produce a plausible but wrong virtual ordering and angle. Fold resolution is not hidden here: a future `DDMFoldResolverOp`, an external staggered-CRI burst, or code-rotation logic consumes the pre-demux cube and detections and supplies `fold_idx`. Sparse DDM v1 does not support clutter filtering; the existing slow-time clutter filter remains valid only after dense demultiplexing.
+`fold_idx` undoes the cyclic TX permutation for an aliased target. The default zero is correct only in the principal reduced interval `[-PRF/(2M), PRF/(2M))`; outside it, unresolved zero can produce a plausible but wrong virtual ordering and angle. Callers needing wider velocity coverage must supply `fold_idx` from an external staggered-CRI, code-rotation, or other observation. An M+1 empty-band layout is a research item; no generic resolver operator is defined until a specific observable and algorithm are selected. Sparse DDM v1 does not support clutter filtering; the existing slow-time clutter filter remains valid only after dense demultiplexing.
 
 ---
 

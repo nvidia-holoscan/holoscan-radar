@@ -270,7 +270,7 @@ flowchart TD
   FOLD -->|"power_map (W, R)"| CFAR["CFARDetectorOp (preintegrated_looks: M·N_rx)"]
   DOPP -->|"rd_maps"| SPARSE["DDMSparseDemultiplexOp"]
   CFAR -->|"detection_idx (d_prime, r)"| SPARSE
-  RESOLVE["Future DDMFoldResolverOp or external burst"] -.->|"fold_idx k; default 0"| SPARSE
+  FOLD_SOURCE["External fold observation"] -.->|"fold_idx k; default 0"| SPARSE
   SPARSE -->|"snapshot (num_detections, num_virtual, num_snapshots)"| EST["sparse angle estimator"]
   SPARSE -.->|"is_valid (optional)"| EST
   SPARSE -->|"array_geometry (WireArrayGeometry)"| EST
@@ -278,7 +278,7 @@ flowchart TD
 
 `DDMPowerFoldOp` sums power over every TX band and RX channel, so CFAR receives a rank-2 real map and uses `preintegrated_looks = M·N_rx` under the independent-look model. Correlated channel noise or clutter residue lowers the effective degrees of freedom and requires empirical calibration. Discarding `G` bins from each width-`B` band creates blind fraction `G/B`; choose `G` from the slow-time window response.
 
-Power folding deliberately removes the velocity-fold identity. `DDMSparseDemultiplexOp.fold_idx` carries that identity separately and corrects the corresponding cyclic TX permutation. Missing `fold_idx` means zero, which is valid only in the principal reduced interval `[-PRF/(2M), PRF/(2M))`; a future resolver must inspect the pre-demux cube or use an external staggered-CRI/code-rotation observation. The static `ddm_code` in v1 does not itself support frame-to-frame code rotation.
+Power folding deliberately removes the velocity-fold identity. `DDMSparseDemultiplexOp.fold_idx` carries that identity separately and corrects the corresponding cyclic TX permutation. Missing `fold_idx` means zero, which is valid only in the principal reduced interval `[-PRF/(2M), PRF/(2M))`; wider coverage requires an external observation. An M+1 empty-band layout is a research item, not an already-defined resolver operator. The static `ddm_code` in v1 does not itself support frame-to-frame code rotation.
 
 ---
 

@@ -94,7 +94,7 @@ There are no `[live]` parameters. `tx_schedule` has no Exact port and is not dec
 
 ## Consumer lifetime notes
 
-`adc_cube_out` is a fresh Tensor-pool buffer for that tick. A consumer may retain it without copying. `retained_input_` is the input-side counterpart and is not visible to consumers. Module-wide ping-pong reuse of emitted outputs is [`operators/OPEN_ITEMS.md`](../../OPEN_ITEMS.md) §1 — not implemented here.
+`adc_cube_out` is a fresh Tensor-pool buffer for that tick. A consumer may retain it without copying. `retained_input_` is the input-side counterpart and is not visible to consumers.
 
 ## Performance
 
