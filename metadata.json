@@ -42,6 +42,7 @@
       "root_music_estimator_op",
       "snapshot_gather_op",
       "subarray_selection_op",
+      "tdm_sparse_compensation_op",
       "virtual_array_assembly_op"
     ],
     "dockerfile": "Dockerfile"

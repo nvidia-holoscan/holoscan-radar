@@ -26,6 +26,7 @@ def test_import_all_operators_and_descriptors():
         "MVDREstimatorOp",
         "MIMODeinterleaveOp",
         "MIMOCoherentCompensationOp",
+        "TDMSparseCompensationOp",
         "VirtualArrayAssemblyOp",
         "CfarVariant",
         "AssemblyFeature",

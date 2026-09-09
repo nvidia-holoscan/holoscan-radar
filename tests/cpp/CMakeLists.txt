@@ -84,6 +84,8 @@ radar_add_test(fmcw/test_mimo_deinterleave
     holoscan::mimo_deinterleave_op)
 radar_add_test(fmcw/test_mimo_coherent_compensation
     holoscan::mimo_coherent_compensation_op)
+radar_add_test(fmcw/test_tdm_sparse_compensation
+    holoscan::tdm_sparse_compensation_op)
 radar_add_test(fmcw/test_virtual_array_assembly
     holoscan::virtual_array_assembly_op
     holoscan::beamscan_estimator_op

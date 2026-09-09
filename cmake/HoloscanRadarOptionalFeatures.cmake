@@ -90,6 +90,7 @@ set(HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS
     esprit_estimator_op
     mimo_deinterleave_op
     mimo_coherent_compensation_op
+    tdm_sparse_compensation_op
     virtual_array_assembly_op
     fmcw_doppler_processor_op
     fmcw_range_processor_op

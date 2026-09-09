@@ -767,6 +767,36 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 - `wavelength` **[live]** — float. Operating wavelength (m) for the emitted `array_geometry` (`= c / carrier_frequency`); `[live]` so it tracks a changing carrier. The virtual `element_positions` themselves are wavelength-independent. Default: none (required).
 - `overlap_policy` — enum {dedup, average, keep_all}. How coincident virtual elements (`p_virtual = p_tx + p_rx` collisions) are handled: `dedup` keeps one representative (default), `average` combines their samples, `keep_all` retains duplicates. Sets `num_virtual`. Static. Default: dedup.
 
+#### TDMSparseCompensationOp
+
+Sparse TDM bridge for detect-before-compensate workflows. It replaces the dense `MIMOCoherentCompensationOp → VirtualArrayAssemblyOp → SnapshotGatherOp` segment by gathering only detected RD cells, applying each cell's Doppler-dependent TDM phase correction, and assembling its virtual-channel snapshot.
+
+- **In:** `rd_maps` — complex64 / complex128, `(M_tx, N_rx, num_doppler, num_range_bins)`. Uncompensated, center-zero post-Doppler TDM maps with an explicit TX axis. No opaque leading batch.
+- **In:** `detection_idx` — int64, `(num_detections, 2)`. Detected `(doppler_bin, range_bin)` cells in the uncompensated map. Both coordinates must be in bounds. The exact row count is `num_detections`.
+- **Out:** `snapshot` — complex64 / complex128, `(num_detections, num_virtual, num_snapshots)`. Per-detection virtual-array snapshots, phase-corrected at each gathered neighborhood cell and assembled according to `overlap_policy`. `num_snapshots` has the same definition as `SnapshotGatherOp`.
+- **Out:** `is_valid` (optional, **always**) — uint8 (`0`/`1`), `(num_detections, num_snapshots)`. Same edge-mask semantics as `SnapshotGatherOp`; emitted before `snapshot` when connected.
+- **Out:** `array_geometry` — `WireArrayGeometry`, carrying the virtual positions generated from `tx_positions + rx_positions` and the wavelength derived from the effective `waveform.carrier_frequency`. It is emitted before `snapshot`, so the estimator's `Exact{}` join sees geometry and data from the same tick.
+
+**Parameters:**
+
+- `waveform` **[live]** — FMCWWaveformDescriptor. Per-TX PRI and carrier frequency for the TDM correction; carrier frequency also determines the emitted geometry wavelength. Default: none (required). HSDK 5 physical live payload uses the shared generated waveform descriptor-Tensor schema.
+- `tx_schedule` — TXSchedule. Static TDM firing cycle used to index correction by firing slot. Default: empty (identity round-robin). Uniformity and `num_tx` validation match `MIMOCoherentCompensationOp`.
+- `tx_positions` — float, `(num_tx, 3)`. Static TX element positions (m); length must match `M_tx`. Default: none (required).
+- `rx_positions` — float, `(num_rx, 3)`. Static RX element positions (m); length must match `N_rx`. Default: none (required).
+- `overlap_policy` — enum {dedup, average, keep_all}. Same virtual-element grouping and ordering as `VirtualArrayAssemblyOp`. Static. Default: dedup.
+- `snapshot_window` **[live]** — int per axis `(doppler, range)`. Same normalization, output-shape behavior, and one-tick override semantics as `SnapshotGatherOp`. Every neighborhood cell uses its own Doppler bin for phase correction. Default: `(0, 0)`.
+- `doppler_edge` — enum {wrap, clamp, shift}. Same semantics as `SnapshotGatherOp`. Static. Default: wrap.
+- `range_edge` — enum {wrap, clamp, shift}. Same semantics as `SnapshotGatherOp`. Static. Default: shift.
+
+**Algorithm and detection boundary:**
+
+1. For each `detection_idx` row, resolve the configured RD neighborhood and edge behavior.
+2. For each valid neighborhood cell `(d, r)`, multiply every `(tx, rx)` sample by the cached TDM correction for `(tx, d)`.
+3. Apply the same virtual assembly plan as `VirtualArrayAssemblyOp`, including overlap handling, and write the virtual vector into the estimator-facing snapshot.
+4. Derive `array_geometry.wavelength = c / waveform.carrier_frequency` from the same effective build-time or live waveform used for correction.
+
+TDM correction is unit magnitude, so pre-compensation CFAR with non-coherent integration over both TX and RX (`nci_axes = {0, 1}`) is power-equivalent when channels remain independent (`keep_all`, or no coincident virtual elements). It is not generally byte- or statistic-equivalent to CFAR after `dedup` or coherent `average`, because those policies change the channel set before detection. Sparse DDM recovery is a separate future operator and detector recipe; it is not a mode of this operator.
+
 ---
 
 ## Supporting data structures

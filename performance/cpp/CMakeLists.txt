@@ -27,6 +27,7 @@ set(HOLOSCAN_RADAR_HSDK5_PORTED_PERF
     mimo_deinterleave
     phase_shift_beamformer
     mimo_coherent_compensation
+    tdm_sparse_compensation
     virtual_array_assembly
     fmcw_range_processor
     fmcw_doppler_processor
@@ -105,6 +106,8 @@ radar_add_perf(mimo_deinterleave holoscan::mimo_deinterleave_op)
 radar_add_perf(virtual_array_assembly holoscan::virtual_array_assembly_op)
 radar_add_perf(mimo_coherent_compensation
     holoscan::mimo_coherent_compensation_op)
+radar_add_perf(tdm_sparse_compensation
+    holoscan::tdm_sparse_compensation_op)
 
 # Optional smoke: runs a tiny scenario subset and verifies a report file is
 # written. No timing thresholds — CI only checks the tool executes and emits.

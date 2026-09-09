@@ -114,6 +114,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 
 | Work item | Owner | Branch | State |
 | --- | --- | --- | --- |
+| `TDMSparseCompensationOp` | deustice | `deustice/hsdk5-updates` | **checklist-complete** — detect-before-compensate TDM bridge: uncompensated `(M_tx, N_rx, D, R)` + exact-sized detections → phase-corrected virtual snapshots, validity mask, and tick-coherent `WireArrayGeometry`; fused CUDA path supports all overlap/edge policies and live waveform/window overrides; C++/Python coverage + perf drivers landed (HSDK 5 Python remains branch-disabled globally) |
 | HSDK 5 Graph perf live overrides | dpc | `dpc/hs5.0-fixes` | done — supported single-clock / exact-contract / single-partition shape populates POD `override_ms`; enum (§12), one-shot override, and §9 vector/descriptor cases remain tracked in `HSDK5_PORT.md` §1/§8/§9/§12 |
 | HSDK 5 EA operator wave (all C++ ops) | dpc | `dpc/hs5.0-fixes` | **C++ first-pass + phase-3 Graph perf + `fmcw_siso` Graph pilot** — 19 ops + Graph perf drivers allow-listed; CFAR variant Graph units; POD `override_ms` restored (enum §12 / §9 lives remain, `HSDK5_PORT.md` §1/§8/§9/§12). Deferred: Python; other Holoviz demos; EA close-deferred (phase 5). |
 | HSDK 5 MIMO marshaling port | dpc | `dpc/hs5.0-fixes` | **landed** — `MIMODeinterleaveOp` (`adc_cube_out`), `MIMOCoherentCompensationOp` (`rd_maps_out`, wire-schema `waveform` live §9), `VirtualArrayAssemblyOp` (`rd_maps_out` + `WireArrayGeometry` §10); Graph unit tests + allow-list; `fmcw_mimo`/`WORKFLOWS` wiring updated |

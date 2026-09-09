@@ -140,6 +140,15 @@ except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
     VirtualArrayAssemblyOpF32 = None  # type: ignore[misc, assignment]
     VirtualArrayAssemblyOpF64 = None  # type: ignore[misc, assignment]
 
+try:
+    from .tdm_sparse_compensation_op import (  # noqa: F401
+        TDMSparseCompensationOpF32,
+        TDMSparseCompensationOpF64,
+    )
+except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+    TDMSparseCompensationOpF32 = None  # type: ignore[misc, assignment]
+    TDMSparseCompensationOpF64 = None  # type: ignore[misc, assignment]
+
 # Holoviz-backed radar_app symbols are absent when Holoviz is gated off
 # ([EA HSDK5 ONLY]); report sinks above still import.
 try:
@@ -185,6 +194,7 @@ PhaseShiftBeamformerOp = PhaseShiftBeamformerOpF32
 RootMUSICEstimatorOp = RootMUSICEstimatorOpF32
 ESPRITEstimatorOp = ESPRITEstimatorOpF32
 SnapshotGatherOp = SnapshotGatherOpF32
+TDMSparseCompensationOp = TDMSparseCompensationOpF32
 VirtualArrayAssemblyOp = VirtualArrayAssemblyOpF32
 
 __all__ = [
@@ -279,6 +289,9 @@ __all__ = [
     "SnapshotGatherOp",
     "SnapshotGatherOpF32",
     "SnapshotGatherOpF64",
+    "TDMSparseCompensationOp",
+    "TDMSparseCompensationOpF32",
+    "TDMSparseCompensationOpF64",
     "TXSchedule",
     "VirtualArrayAssemblyOp",
     "VirtualArrayAssemblyOpF32",

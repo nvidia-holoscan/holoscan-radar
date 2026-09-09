@@ -222,6 +222,22 @@ flowchart TD
 - **Clustering:** attaches on the assembled virtual RD maps exactly as in SIMO (angle-then-cluster in either path, or cluster-then-angle in the sparse path). Nothing MIMO-specific.
 - The fused `FMCWRangeDopplerProcessorOp` may replace the range/Doppler pair *after* `MIMODeinterleaveOp`, but `MIMOCoherentCompensationOp` and `VirtualArrayAssemblyOp` still follow it.
 
+#### Sparse TDM detect-before-compensate
+
+Applications with sparse scenes may move TDM compensation and virtual assembly after CFAR. `TDMSparseCompensationOp` fuses the detection-indexed gather, per-cell TDM phase correction, and virtual-array assembly; it emits the estimator-ready snapshots and their coherent runtime geometry.
+
+```mermaid
+flowchart TD
+  DOPP["Uncompensated RD maps (M_tx, N_rx, D, R)"] -->|"rd_maps"| CFAR["CFARDetectorOp (nci_axes: [0, 1])"]
+  DOPP -->|"rd_maps"| SPARSE["TDMSparseCompensationOp"]
+  CFAR -->|"detection_idx"| SPARSE
+  SPARSE -->|"snapshot (num_detections, num_virtual, num_snapshots)"| EST["⟨sparse angle estimator⟩"]
+  SPARSE -.->|"is_valid (optional)"| EST
+  SPARSE -->|"array_geometry (WireArrayGeometry)"| EST
+```
+
+TDM correction is a unit-magnitude phase rotation, so TX/RX non-coherent power is unchanged when channels remain independent. The pre-compensation detector is therefore equivalent to the dense-first detector for `keep_all` or an array without coincident virtual elements. It is not generally statistic-equivalent when the dense path uses `dedup` or coherent `average`, because virtual assembly then changes the channel set before CFAR. The sparse path intentionally trades full-cube compensation and assembly cost for work proportional to the detection count.
+
 ### MIMO — DDM (M × N, Doppler-division)
 
 The M TX transmit **simultaneously** with per-chirp phase codes that place each TX in a distinct Doppler sub-band. There is no slow-time interleave, so no de-interleave step; TX separation happens by demuxing the Doppler bands *after* the Doppler FFT.

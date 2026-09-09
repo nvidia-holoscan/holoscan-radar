@@ -217,6 +217,14 @@ Common check (all five): default-constructed Params select `radar_boresight`; `s
 - **DDM:** a multi-TX coded cube → demux recovers each TX into the `M_tx` axis at its band with the code phase removed.
 - `num_tx` derived correctly (TDM from the input axis, DDM from `ddm_code`).
 
+#### TDMSparseCompensationOp
+
+- For identical detections and configuration, output snapshots and geometry match the corresponding cells from `MIMOCoherentCompensationOp → VirtualArrayAssemblyOp → SnapshotGatherOp` under every overlap policy.
+- A moving target's gathered virtual snapshot yields an unbiased DOA; omitting the sparse correction biases it by the same amount as omitting dense TDM compensation.
+- Each cell in a nonzero `snapshot_window` uses its own resolved Doppler bin for phase correction. Edge modes, `is_valid`, exact-sized zero/nonzero detection outputs, and `[live] snapshot_window` override/revert match `SnapshotGatherOp`.
+- Round-robin and custom uniform `tx_schedule` mappings produce the same firing-slot correction as `MIMOCoherentCompensationOp`; malformed shapes, indices, extents, schedules, and live waveforms fail predictably.
+- The emitted `WireArrayGeometry` matches the virtual snapshot ordering and overlap policy, derives wavelength from the same effective waveform used for correction, and directly drives an angle estimator under an `Exact{}` join.
+
 #### VirtualArrayAssemblyOp
 
 - `(tx, rx)` block → virtual channel axis with `p_virtual = p_tx + p_rx`; emitted `array_geometry.element_positions` match the analytic virtual layout.

@@ -130,7 +130,7 @@ HSDK 4.x `InputContext` / `TensorMap` / `HOLOSCAN_OPERATOR_FORWARD_ARGS`.
 7. **Record** progress in the table below, durable deltas under **Open**
    or **Resolved**, and a `STATUS.md` line when claiming or landing.
 
-**C++ operator first-pass:** complete (all 19 operators allow-listed). CFAR
+**C++ operator first-pass:** complete (all 20 operators allow-listed). CFAR
 GO/SO/OS/alpha_lut Graph unit suites + statistical MC (`ctest -L statistical`)
 landed. Graph perf (phase 3) cold/steady smokes landed for all drivers; POD
 `override_ms` restored for applicable consumers (§8). Enum `ClutterFilterOp.method`
@@ -1123,13 +1123,13 @@ rather than papered over.
 
 **Class:** Our deferred work (allow-list retained until EA cleanup).
 
-All 19 operators are on `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS`. The
+All 20 operators are on `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS`. The
 allow-list remains until public HSDK 5 / cleanup gate so apps and packaging
 stay gated intentionally. Demo apps still need
 Holoviz (§6) and Graph-port of remaining app scaffolding. CFAR GO/SO/OS /
 alpha_lut Graph unit suites and the `statistical`-labeled MC suite have
 landed (phase-2 unit coverage). Perf drivers are on the separate
-`HOLOSCAN_RADAR_HSDK5_PORTED_PERF` list (phase 3: all 19 drivers + split_vs_fused; POD `override_ms` restored §8; clutter `method` enum `override_ms` landed; remaining enum/§9 lives remain open).
+`HOLOSCAN_RADAR_HSDK5_PORTED_PERF` list (phase 3: all 20 drivers + split_vs_fused; POD `override_ms` restored §8; clutter `method` enum `override_ms` landed; remaining enum/§9 lives remain open).
 
 **Status:** C++ first-pass + CFAR variant Graph units landed; allow-list
 kept for EA gating / cleanup.

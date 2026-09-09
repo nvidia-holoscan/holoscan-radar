@@ -20,7 +20,7 @@ HSDK 5 Graph + `Operator<Params>` with typed Tensor ports — **no 4.x shim**.
 | --- | --- | --- |
 | 0 — Foundation | EA image, CMake/MatX, Holoviz probe, Python forced off | Landed |
 | 1 — Shared glue | `radar_common/sdk/` Tensor I/O + `[live]` override helpers; Graph test harness | Landed |
-| 2 — Operator wave | All 19 ops → Graph/`Operator<Params>` + unit tests (allow-list) | Landed (intentional live skips OK) |
+| 2 — Operator wave | All 20 ops → Graph/`Operator<Params>` + unit tests (allow-list) | Landed (intentional live skips OK) |
 | 3 — Perf wave | Graph `perf_*` drivers + cold/steady smokes | Landed (POD `override_ms` restored; clutter `method` enum `override_ms` landed — remaining enum lives still unmeasured, §8) |
 | 4 — Apps / Python | Demos + bindings when Holoviz / Python EA surface exists | **Partial:** C++ Graph demos + X11 RD viewer; Holoviz/Python still off |
 | 5 — Close deferred | Re-probe EA gaps; ratify durable API deltas; unskip live Graph | **Open** — see blockers below |
@@ -41,7 +41,7 @@ do not infer Graph behavior from 4.x.
 
 ## What landed (high level)
 
-- **Operators:** all 19 FMCW / detection / clustering / angle / MIMO
+- **Operators:** all 20 FMCW / detection / clustering / angle / MIMO
   marshaling ops on Graph; CFAR GO/SO/OS/alpha_lut + statistical Graph
   suites; allow-lists for ops and perf.
 - **Perf:** shared `perf_graph.hpp`; all drivers cold/steady via
