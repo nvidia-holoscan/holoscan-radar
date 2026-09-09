@@ -114,13 +114,40 @@ except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
     FMCWRangeProcessorOpF64 = None  # type: ignore[misc, assignment]
 
 try:
-    from .mimo_coherent_compensation_op import (  # noqa: F401
-        MIMOCoherentCompensationOpF32,
-        MIMOCoherentCompensationOpF64,
+    from .tdm_dense_compensation_op import (  # noqa: F401
+        TDMDenseCompensationOpF32,
+        TDMDenseCompensationOpF64,
     )
 except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
-    MIMOCoherentCompensationOpF32 = None  # type: ignore[misc, assignment]
-    MIMOCoherentCompensationOpF64 = None  # type: ignore[misc, assignment]
+    TDMDenseCompensationOpF32 = None  # type: ignore[misc, assignment]
+    TDMDenseCompensationOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .ddm_dense_demultiplex_op import (  # noqa: F401
+        DDMDenseDemultiplexOpF32,
+        DDMDenseDemultiplexOpF64,
+    )
+except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+    DDMDenseDemultiplexOpF32 = None  # type: ignore[misc, assignment]
+    DDMDenseDemultiplexOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .ddm_power_fold_op import (  # noqa: F401
+        DDMPowerFoldOpF32,
+        DDMPowerFoldOpF64,
+    )
+except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+    DDMPowerFoldOpF32 = None  # type: ignore[misc, assignment]
+    DDMPowerFoldOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .ddm_sparse_demultiplex_op import (  # noqa: F401
+        DDMSparseDemultiplexOpF32,
+        DDMSparseDemultiplexOpF64,
+    )
+except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+    DDMSparseDemultiplexOpF32 = None  # type: ignore[misc, assignment]
+    DDMSparseDemultiplexOpF64 = None  # type: ignore[misc, assignment]
 
 try:
     from .mimo_deinterleave_op import (  # noqa: F401
@@ -186,7 +213,10 @@ FeatureAssemblyOp = FeatureAssemblyOpF32
 FMCWDopplerProcessorOp = FMCWDopplerProcessorOpF32
 FMCWRangeDopplerProcessorOp = FMCWRangeDopplerProcessorOpF32
 FMCWRangeProcessorOp = FMCWRangeProcessorOpF32
-MIMOCoherentCompensationOp = MIMOCoherentCompensationOpF32
+TDMDenseCompensationOp = TDMDenseCompensationOpF32
+DDMDenseDemultiplexOp = DDMDenseDemultiplexOpF32
+DDMPowerFoldOp = DDMPowerFoldOpF32
+DDMSparseDemultiplexOp = DDMSparseDemultiplexOpF32
 MIMODeinterleaveOp = MIMODeinterleaveOpF32
 MUSICEstimatorOp = MUSICEstimatorOpF32
 MVDREstimatorOp = MVDREstimatorOpF32
@@ -248,9 +278,18 @@ __all__ = [
     "FeatureAssemblyOpF32",
     "FeatureAssemblyOpF64",
     "FftNorm",
-    "MIMOCoherentCompensationOp",
-    "MIMOCoherentCompensationOpF32",
-    "MIMOCoherentCompensationOpF64",
+    "DDMDenseDemultiplexOp",
+    "DDMDenseDemultiplexOpF32",
+    "DDMDenseDemultiplexOpF64",
+    "DDMPowerFoldOp",
+    "DDMPowerFoldOpF32",
+    "DDMPowerFoldOpF64",
+    "DDMSparseDemultiplexOp",
+    "DDMSparseDemultiplexOpF32",
+    "DDMSparseDemultiplexOpF64",
+    "TDMDenseCompensationOp",
+    "TDMDenseCompensationOpF32",
+    "TDMDenseCompensationOpF64",
     "MIMODeinterleaveOp",
     "MIMODeinterleaveOpF32",
     "MIMODeinterleaveOpF64",

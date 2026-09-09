@@ -38,7 +38,10 @@ If unset, scripts default to `../../build` relative to this directory.
 | `perf_fmcw_range_doppler_processor.py` | `FMCWRangeDopplerProcessorOp` | clutter modes × sizes × channels |
 | `perf_fmcw_split_vs_fused.py` | split chain vs fused RD | noclt+msub pairs × sizes (e2e compare) |
 | `perf_mimo_deinterleave.py` | `MIMODeinterleaveOp` | sizes + batch (no live override) |
-| `perf_mimo_coherent_compensation.py` | `MIMOCoherentCompensationOp` | TDM/DDM × sizes × batch |
+| `perf_tdm_dense_compensation.py` | `TDMDenseCompensationOp` | TDM sizes × batch |
+| `perf_ddm_dense_demultiplex.py` | `DDMDenseDemultiplexOp` | Linear/nonlinear DDM × sizes |
+| `perf_ddm_power_fold.py` | `DDMPowerFoldOp` | Linear folded-power sizes |
+| `perf_ddm_sparse_demultiplex.py` | `DDMSparseDemultiplexOp` | Detection-count × sizes |
 | `perf_virtual_array_assembly.py` | `VirtualArrayAssemblyOp` | policies × sizes × batch |
 | `perf_phase_shift_beamformer.py` | `PhaseShiftBeamformerOp` | size ladder (az override) |
 | `perf_beamscan_estimator.py` | `BeamscanEstimatorOp` | size ladder (az override) |

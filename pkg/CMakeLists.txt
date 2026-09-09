@@ -35,7 +35,8 @@ holoscan_radar_operators_ported(_HOLOSCAN_RADAR_PKG_FMCW_CHAIN
     fmcw_doppler_processor_op)
 holoscan_radar_operators_ported(_HOLOSCAN_RADAR_PKG_MIMO
     mimo_deinterleave_op
-    mimo_coherent_compensation_op
+    tdm_dense_compensation_op
+    ddm_dense_demultiplex_op
     virtual_array_assembly_op)
 
 set(_HOLOSCAN_RADAR_PKG_APPLICATIONS)

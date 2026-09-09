@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fmcw/mimo_coherent_compensation_op/mimo_coherent_compensation_stage.hpp"
+#include "radar_common/dsp/mimo_coherent_compensation_stage.hpp"
 
 #include <cuda/std/complex>
 #include <cuda_runtime_api.h>
@@ -44,7 +44,8 @@ __global__ void ddm_demux_gather_kernel(const Complex<T>* input,
                                         int64_t num_rx, int64_t num_doppler,
                                         int64_t num_range, int64_t num_tx,
                                         int64_t num_doppler_per_tx,
-                                        const int64_t* table) {
+                                        const int64_t* table,
+                                        const Complex<T>* phase_weights) {
   // Each block handles one output row (batch, tx, rx, out_doppler) of length
   // num_range. The source Doppler bin is constant along the row (one table
   // lookup per row); the inner loop is a fully coalesced gather along range.
@@ -63,7 +64,7 @@ __global__ void ddm_demux_gather_kernel(const Complex<T>* input,
     const int64_t out_base = row * num_range;
     for (int64_t r = threadIdx.x; r < num_range;
          r += static_cast<int64_t>(blockDim.x)) {
-      output[out_base + r] = input[in_base + r];
+      output[out_base + r] = input[in_base + r] * phase_weights[tx];
     }
   }
 }
@@ -137,7 +138,7 @@ std::vector<int64_t> tdm_firing_slots(const TXSchedule& schedule,
                                       int64_t num_tx) {
   if (num_tx <= 0) {
     throw std::invalid_argument(
-        "MIMOCoherentCompensationOp: num_tx must be positive");
+        "dense MIMO stage: num_tx must be positive");
   }
   if (schedule.num_tx == 0 && schedule.tx_order.empty() &&
       schedule.chirp_tx_index.empty()) {
@@ -149,7 +150,7 @@ std::vector<int64_t> tdm_firing_slots(const TXSchedule& schedule,
   }
   if (schedule.num_tx != num_tx) {
     throw std::invalid_argument(
-        "MIMOCoherentCompensationOp: tx_schedule.num_tx (" +
+        "dense MIMO stage: tx_schedule.num_tx (" +
         std::to_string(schedule.num_tx) + ") must match input M_tx (" +
         std::to_string(num_tx) + ")");
   }
@@ -161,11 +162,11 @@ std::vector<std::complex<double>> build_tdm_correction_table(
     int64_t num_doppler, const std::vector<int64_t>& slot_by_tx) {
   if (!waveform.is_valid()) {
     throw std::invalid_argument(
-        "MIMOCoherentCompensationOp: waveform must be valid");
+        "dense MIMO stage: waveform must be valid");
   }
   if (num_tx <= 0 || num_doppler <= 0) {
     throw std::invalid_argument(
-        "MIMOCoherentCompensationOp: num_tx and num_doppler must be positive");
+        "dense MIMO stage: num_tx and num_doppler must be positive");
   }
   std::vector<int64_t> slots = slot_by_tx;
   if (slots.empty()) {
@@ -175,7 +176,7 @@ std::vector<std::complex<double>> build_tdm_correction_table(
     }
   } else if (static_cast<int64_t>(slots.size()) != num_tx) {
     throw std::invalid_argument(
-        "MIMOCoherentCompensationOp: slot_by_tx length must equal num_tx");
+        "dense MIMO stage: slot_by_tx length must equal num_tx");
   }
   const double pri = waveform.chirp_repetition_interval();
   const double prf = 1.0 / pri;
@@ -189,7 +190,7 @@ std::vector<std::complex<double>> build_tdm_correction_table(
       const int64_t slot = slots[static_cast<size_t>(tx)];
       if (slot < 0 || slot >= num_tx) {
         throw std::invalid_argument(
-            "MIMOCoherentCompensationOp: firing slot out of range [0, num_tx)");
+            "dense MIMO stage: firing slot out of range [0, num_tx)");
       }
       const double phase =
           -2.0 * kPi * f_d * static_cast<double>(slot) * t_inter_chirp;
@@ -338,7 +339,7 @@ std::vector<double> ddm_resolve_offsets(const DDMCodeDescriptor& code) {
         d -= kTwoPi * std::round(d / kTwoPi);
         if (std::abs(d) > 1e-3) {
           throw std::invalid_argument(
-              "MIMOCoherentCompensationOp: DDM phase_codes are not linear-"
+              "dense MIMO stage: DDM phase_codes are not linear-"
               "phase; use the correlate path for non-linear codes");
         }
       }
@@ -350,19 +351,80 @@ std::vector<double> ddm_resolve_offsets(const DDMCodeDescriptor& code) {
   }
 
   throw std::invalid_argument(
-      "MIMOCoherentCompensationOp: DDM requires ddm_code with doppler_offsets "
+      "dense MIMO stage: DDM requires ddm_code with doppler_offsets "
       "or phase_codes");
+}
+
+std::vector<int64_t> ddm_exact_band_indices(const DDMCodeDescriptor& code,
+                                            int64_t num_doppler) {
+  if (ddm_classify_codes(code) != DdmCodeMode::kLinear) {
+    throw std::invalid_argument(
+        "DDM linear M-band layout does not accept non-linear phase_codes");
+  }
+  const int64_t num_tx = code.num_tx;
+  (void)ddm_num_doppler_per_tx(
+      num_doppler, num_tx, code.guard_bands);
+  const int64_t band_width = num_doppler / num_tx;
+  const auto offsets = ddm_resolve_offsets(code);
+  std::vector<int64_t> band_by_tx(static_cast<size_t>(num_tx), -1);
+  std::vector<bool> occupied(static_cast<size_t>(num_tx), false);
+  constexpr double kBinTolerance = 1e-8;
+  for (int64_t tx = 0; tx < num_tx; ++tx) {
+    const double bins =
+        offsets[static_cast<size_t>(tx)] * static_cast<double>(num_doppler);
+    const int64_t integer_bin = static_cast<int64_t>(std::llround(bins));
+    if (std::abs(bins - static_cast<double>(integer_bin)) > kBinTolerance) {
+      throw std::invalid_argument(
+          "DDM linear offset for TX " + std::to_string(tx) +
+          " is fractional for num_doppler=" + std::to_string(num_doppler));
+    }
+    const int64_t wrapped_bin =
+        ((integer_bin % num_doppler) + num_doppler) % num_doppler;
+    if (wrapped_bin % band_width != 0) {
+      throw std::invalid_argument(
+          "DDM linear offset for TX " + std::to_string(tx) +
+          " is not aligned to an M-band origin");
+    }
+    const int64_t band = wrapped_bin / band_width;
+    if (occupied[static_cast<size_t>(band)]) {
+      throw std::invalid_argument(
+          "DDM linear offsets must occupy every M-band exactly once");
+    }
+    occupied[static_cast<size_t>(band)] = true;
+    band_by_tx[static_cast<size_t>(tx)] = band;
+  }
+  return band_by_tx;
+}
+
+std::vector<std::complex<double>> ddm_initial_phase_weights(
+    const DDMCodeDescriptor& code) {
+  if (ddm_classify_codes(code) != DdmCodeMode::kLinear) {
+    throw std::invalid_argument(
+        "DDM initial phase weights require linear phase codes");
+  }
+  std::vector<std::complex<double>> weights(
+      static_cast<size_t>(code.num_tx), {1.0, 0.0});
+  if (code.phase_codes.empty()) {
+    return weights;
+  }
+  const int64_t num_chirps =
+      static_cast<int64_t>(code.phase_codes.size()) / code.num_tx;
+  for (int64_t tx = 0; tx < code.num_tx; ++tx) {
+    weights[static_cast<size_t>(tx)] =
+        std::conj(code.phase_codes[static_cast<size_t>(tx * num_chirps)]);
+  }
+  return weights;
 }
 
 int64_t ddm_num_doppler_per_tx(int64_t num_doppler, int64_t num_tx,
                                int64_t guard_bands) {
   if (num_tx <= 0) {
     throw std::invalid_argument(
-        "MIMOCoherentCompensationOp: DDM num_tx must be positive");
+        "dense MIMO stage: DDM num_tx must be positive");
   }
   if (num_doppler % num_tx != 0) {
     throw std::invalid_argument(
-        "MIMOCoherentCompensationOp: DDM requires num_doppler (" +
+        "dense MIMO stage: DDM requires num_doppler (" +
         std::to_string(num_doppler) + ") divisible by num_tx (" +
         std::to_string(num_tx) + ")");
   }
@@ -370,7 +432,7 @@ int64_t ddm_num_doppler_per_tx(int64_t num_doppler, int64_t num_tx,
   const int64_t width = band - guard_bands;
   if (width < 1) {
     throw std::invalid_argument(
-        "MIMOCoherentCompensationOp: DDM guard_bands (" +
+        "dense MIMO stage: DDM guard_bands (" +
         std::to_string(guard_bands) + ") leaves no Doppler bins in a band of "
         "width " + std::to_string(band));
   }
@@ -440,6 +502,7 @@ template <typename T>
 void run_ddm_demux_stage(const void* input, void* output,
                          const DdmRdMapsLayout& layout, int64_t num_tx,
                          int64_t num_doppler_per_tx, const int64_t* d_table,
+                         const void* d_initial_phase_weights,
                          cudaStream_t stream) {
   const int64_t num_rows =
       layout.batch * num_tx * layout.num_rx * num_doppler_per_tx;
@@ -453,7 +516,7 @@ void run_ddm_demux_stage(const void* input, void* output,
       static_cast<const Complex<T>*>(input),
       static_cast<Complex<T>*>(output), num_rows, layout.num_rx,
       layout.num_doppler, layout.num_range, num_tx, num_doppler_per_tx,
-      d_table);
+      d_table, static_cast<const Complex<T>*>(d_initial_phase_weights));
   if (cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error("ddm demux stage: kernel launch failed");
   }
@@ -464,12 +527,14 @@ template void run_ddm_demux_stage<float>(const void* input, void* output,
                                          int64_t num_tx,
                                          int64_t num_doppler_per_tx,
                                          const int64_t* d_table,
+                                         const void* d_initial_phase_weights,
                                          cudaStream_t stream);
 template void run_ddm_demux_stage<double>(const void* input, void* output,
                                           const DdmRdMapsLayout& layout,
                                           int64_t num_tx,
                                           int64_t num_doppler_per_tx,
                                           const int64_t* d_table,
+                                          const void* d_initial_phase_weights,
                                           cudaStream_t stream);
 
 // ---- Non-linear DDM correlate path ----------------------------------------
@@ -666,7 +731,7 @@ struct TileWorkspace {
   }
 };
 
-// Per-operator-instance scratch (keyed by MIMOCoherentCompensationOp*).
+// Per-operator-instance scratch (keyed by DDMDenseDemultiplexOp*).
 // Not shared across instances so interleaved compute() cannot destroy another
 // op's in-flight cuFFT plan.
 struct CorrelateScratch {

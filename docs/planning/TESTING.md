@@ -211,19 +211,40 @@ Common check (all five): default-constructed Params select `radar_boresight`; `s
 - Dtype preserved.
 - Extra leading axes are rejected (input rank is exactly 3; no module batch).
 
-#### MIMOCoherentCompensationOp
+#### TDMDenseCompensationOp
 
 - **TDM:** a moving target → after compensation the inter-TX motion phase is removed, so the assembled virtual array yields an **unbiased** DOA (whereas skipping compensation biases it) — this is the key regression.
-- **DDM:** a multi-TX coded cube → demux recovers each TX into the `M_tx` axis at its band with the code phase removed.
-- `num_tx` derived correctly (TDM from the input axis, DDM from `ddm_code`).
+- `num_tx` is derived from the input axis; round-robin and custom uniform schedules index phase by firing slot.
+
+#### DDMDenseDemultiplexOp
+
+- A multi-TX coded cube → demux recovers each TX into the `M_tx` axis at its band with linear-code initial phase removed.
+- Offset-only, linear phase-code, guard-band, nonuniform integer-offset permutation, and nonlinear full-axis correlation cases retain the existing dense behavior.
+- Fractional-bin linear offsets fail predictably; `num_tx` is derived from `ddm_code`.
 
 #### TDMSparseCompensationOp
 
-- For identical detections and configuration, output snapshots and geometry match the corresponding cells from `MIMOCoherentCompensationOp → VirtualArrayAssemblyOp → SnapshotGatherOp` under every overlap policy.
+- For identical detections and configuration, output snapshots and geometry match the corresponding cells from `TDMDenseCompensationOp → VirtualArrayAssemblyOp → SnapshotGatherOp` under every overlap policy.
 - A moving target's gathered virtual snapshot yields an unbiased DOA; omitting the sparse correction biases it by the same amount as omitting dense TDM compensation.
 - Each cell in a nonzero `snapshot_window` uses its own resolved Doppler bin for phase correction. Edge modes, `is_valid`, exact-sized zero/nonzero detection outputs, and `[live] snapshot_window` override/revert match `SnapshotGatherOp`.
-- Round-robin and custom uniform `tx_schedule` mappings produce the same firing-slot correction as `MIMOCoherentCompensationOp`; malformed shapes, indices, extents, schedules, and live waveforms fail predictably.
+- Round-robin and custom uniform `tx_schedule` mappings produce the same firing-slot correction as `TDMDenseCompensationOp`; malformed shapes, indices, extents, schedules, and live waveforms fail predictably.
 - The emitted `WireArrayGeometry` matches the virtual snapshot ordering and overlap policy, derives wavelength from the same effective waveform used for correction, and directly drives an angle estimator under an `Exact{}` join.
+
+#### DDMPowerFoldOp
+
+- Folded power matches an independent host sum over the dense demux table for every TX/RX look, including nonuniform integer offsets and guard bands.
+- Output shape is exactly `(D/M-G, R)`; bins discarded by `G` are absent and the documented blind fraction is `G/(D/M)`.
+- Fractional-bin offsets, nonlinear codes, non-divisible Doppler extents, malformed shapes, and invalid guard widths fail predictably.
+- Float/double agree; output is device-resident real power.
+- White-noise Monte Carlo through `CFARDetectorOp(preintegrated_looks=M·N_rx)` reaches the requested Pfa. A correlated-noise characterization demonstrates that nominal `M·N_rx` is not exact and a lower empirically calibrated effective look count improves agreement.
+
+#### DDMSparseDemultiplexOp
+
+- For identical detections and linear codes, snapshots and geometry match `DDMDenseDemultiplexOp → VirtualArrayAssemblyOp → SnapshotGatherOp` under every overlap, window, and edge policy.
+- Offset-only and phase-code descriptors agree; nonzero initial code phase is removed consistently by dense and sparse demux.
+- A principal-fold target (`k=0`) recovers with the missing-input `SafeDefault{0}`. An aliased target with unresolved zero exhibits the documented cyclic TX permutation, while the same target with supplied nonzero `fold_idx` recovers the reference snapshot and unbiased DOA.
+- `fold_idx` values outside `[0,M)` or with a row count different from `detection_idx` fail predictably.
+- Nonlinear and fractional-bin codes reject. Exact-sized zero/nonzero outputs, `is_valid`, `[live]` snapshot-window/wavelength override/revert, and `WireArrayGeometry` coherence match `TDMSparseCompensationOp`.
 
 #### VirtualArrayAssemblyOp
 

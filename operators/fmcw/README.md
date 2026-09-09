@@ -19,19 +19,22 @@ SISO / SIMO (fused):
 
 MIMO TDM (split):
   adc_cube → MIMODeinterleaveOp → FMCWRangeProcessorOp → [ClutterFilterOp]
-           → FMCWDopplerProcessorOp → MIMOCoherentCompensationOp
+           → FMCWDopplerProcessorOp → TDMDenseCompensationOp
            → VirtualArrayAssemblyOp → ⟨AoA operator⟩
 MIMO TDM (fused):
   adc_cube → MIMODeinterleaveOp → FMCWRangeDopplerProcessorOp
-           → MIMOCoherentCompensationOp → VirtualArrayAssemblyOp → ⟨AoA operator⟩
+           → TDMDenseCompensationOp / DDMDenseDemultiplexOp → VirtualArrayAssemblyOp → ⟨AoA operator⟩
 
 MIMO DDM (split):
   adc_cube → FMCWRangeProcessorOp → FMCWDopplerProcessorOp
-           → MIMOCoherentCompensationOp → [ClutterFilterOp]
+           → DDMDenseDemultiplexOp → [ClutterFilterOp]
            → VirtualArrayAssemblyOp → ⟨AoA operator⟩
 MIMO DDM (fused):
-  adc_cube → FMCWRangeDopplerProcessorOp → MIMOCoherentCompensationOp
+  adc_cube → FMCWRangeDopplerProcessorOp → DDMDenseDemultiplexOp
            → [ClutterFilterOp] → VirtualArrayAssemblyOp → ⟨AoA operator⟩
+MIMO DDM sparse (linear exact-bin only):
+  rd_maps → DDMPowerFoldOp → CFARDetectorOp
+          → DDMSparseDemultiplexOp → ⟨sparse AoA operator⟩
 ```
 
 SIMO continues from `rd_maps` to an AoA operator on the physical RX axis;
@@ -49,7 +52,10 @@ correlate share the DDM chain.
 | [`FMCWDopplerProcessorOp<T>`](fmcw_doppler_processor_op/README.md) | `range_profiles` → `rd_maps` (…, doppler, range bins) + optional `velocity_bins` axis | Doppler compression: windowed slow-time FFT (`nfft` zero-pad), zero-Doppler centered by default (numpy-style fftshift) |
 | [`FMCWRangeDopplerProcessorOp<T>`](fmcw_range_doppler_processor_op/README.md) | `adc_cube` → `rd_maps` + optional `range_bins`/`velocity_bins` | Fused range + optional inline clutter + Doppler in one node; per-axis `nfft_range`/`nfft_doppler` |
 | [`MIMODeinterleaveOp<T>`](mimo_deinterleave_op/README.md) | `adc_cube` (`N_rx`, `M·L`, samples; complex or real IF) → `adc_cube_out` (`M_tx`, `N_rx`, `L`, samples) | TDM marshaling: split interleaved slow-time into an explicit TX axis via `TXSchedule` gather. **Uniform round-robin TDM only** — non-uniform / staggered schedules are rejected (staggered TDM deferred; STATUS.md L12) |
-| [`MIMOCoherentCompensationOp<T>`](mimo_coherent_compensation_op/README.md) | TDM: `rd_maps` (…, M_tx, N_rx, D, R) → same shape. DDM: `rd_maps` (…, N_rx, D, R) → (…, M_tx, N_rx, D/M−guard, R) (linear) or full `D` (non-linear correlate) | MIMO marshaling: TDM per-Doppler-bin inter-TX phase correction; DDM Doppler-band demux into an explicit TX axis (linear gather or non-linear conjugate correlation) |
+| [`TDMDenseCompensationOp<T>`](tdm_dense_compensation_op/README.md) | `(M_tx, N_rx, D, R)` → same shape | Firing-slot-aware TDM inter-TX motion-phase correction |
+| [`DDMDenseDemultiplexOp<T>`](ddm_dense_demultiplex_op/README.md) | `(N_rx, D, R)` → `(M_tx, N_rx, D_out, R)` | Linear DDM gather or nonlinear full-axis correlation |
+| [`DDMPowerFoldOp<T>`](ddm_power_fold_op/README.md) | `(N_rx,D,R)` → real `(D/M-G,R)` | Fold all linear DDM bands and RX looks into detector power |
+| [`DDMSparseDemultiplexOp<T>`](ddm_sparse_demultiplex_op/README.md) | pre-demux maps + folded detections + optional fold index → snapshots + mask + geometry | Sparse linear DDM gather, fold recovery, and virtual assembly |
 | [`TDMSparseCompensationOp<T>`](tdm_sparse_compensation_op/README.md) | uncompensated `rd_maps` (`M_tx`, `N_rx`, D, R) + `detection_idx` → `snapshot` (`num_detections`, `num_virtual`, K) + mask + geometry | Sparse TDM bridge: gather detected cells, apply firing-slot-aware phase correction, and assemble virtual snapshots without processing the full cube |
 | [`VirtualArrayAssemblyOp<T>`](virtual_array_assembly_op/README.md) | `rd_maps` (`M_tx`, `N_rx`, D, R) → `rd_maps_out` (`num_virtual`, D, R) + `WireArrayGeometry` | MIMO marshaling: flatten separated TX×RX channels into a virtual axis (`p_tx + p_rx`) |
 

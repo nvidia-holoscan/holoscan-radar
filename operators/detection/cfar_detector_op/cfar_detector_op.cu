@@ -99,6 +99,7 @@ struct CfarStagePlan {
   detail::CfarStageConfig stage;
   detail::NciPlan nci;
   bool input_is_complex;
+  int64_t effective_fold;
   int64_t num_doppler;
   int64_t num_range;
   int guard_d;
@@ -400,6 +401,7 @@ expected<detail::CfarStageConfig, Error> resolve_params(
                resolve_config_tensor_override(
                    nci_axes, pinned.nci_axes, kInt64Dtype,
                    static_cast<int64_t>(max_leading), "nci_axes"));
+  stage.preintegrated_looks = pinned.preintegrated_looks;
   HOLOSCAN_TRY(stage.max_detections,
                resolve_live_override(max_detections,
                                      pinned.max_detections));
@@ -480,6 +482,26 @@ expected<CfarStagePlan, Error> build_cfar_stage_plan(
 
     detail::NciPlan nci =
         detail::NciPlan::from_shape(input.shape(), stage.nci_axes, "rd_maps");
+    if (stage.preintegrated_looks <= 0) {
+      return make_unexpected(Error{
+          ErrorCode::kInvalidArgument,
+          "CFARDetectorOp: preintegrated_looks must be positive"});
+    }
+    if (precision == InputPrecision::kComplex &&
+        stage.preintegrated_looks != 1) {
+      return make_unexpected(Error{
+          ErrorCode::kInvalidArgument,
+          "CFARDetectorOp: preintegrated_looks applies only to real power "
+          "input"});
+    }
+    if (nci.fold >
+        std::numeric_limits<int64_t>::max() / stage.preintegrated_looks) {
+      return make_unexpected(Error{
+          ErrorCode::kInvalidArgument,
+          "CFARDetectorOp: effective integration fold overflows int64"});
+    }
+    const int64_t effective_fold =
+        nci.fold * stage.preintegrated_looks;
     const int guard_d = static_cast<int>(stage.guard_cells[0]);
     const int guard_r = static_cast<int>(stage.guard_cells[1]);
     const int train_d = static_cast<int>(stage.training_cells[0]);
@@ -525,6 +547,7 @@ expected<CfarStagePlan, Error> build_cfar_stage_plan(
         .stage = std::move(stage),
         .nci = std::move(nci),
         .input_is_complex = precision == InputPrecision::kComplex,
+        .effective_fold = effective_fold,
         .num_doppler = num_doppler,
         .num_range = num_range,
         .guard_d = guard_d,
@@ -591,7 +614,7 @@ expected<void, Error> update_alpha_lut(
   }
 
   const CfarAlphaLutKey lut_key{
-      stage.cfar_variant, stage.pfa,         plan.nci.fold,
+      stage.cfar_variant, stage.pfa,         plan.effective_fold,
       stage.os_rank,      plan.guard_d,      plan.guard_r,
       plan.train_d,       plan.train_r,      plan.key_num_doppler,
       plan.key_num_range};
@@ -629,7 +652,7 @@ expected<void, Error> update_alpha_lut(
     const bool geometry_changed =
         !state.external_alpha_lut_validated ||
         state.validated_external_variant != stage.cfar_variant ||
-        state.validated_external_fold != plan.nci.fold ||
+        state.validated_external_fold != plan.effective_fold ||
         state.validated_external_num_doppler != plan.num_doppler ||
         state.validated_external_num_range != plan.num_range ||
         state.validated_external_guard_d != plan.guard_d ||
@@ -642,13 +665,14 @@ expected<void, Error> update_alpha_lut(
           static_cast<int>(plan.num_range), plan.guard_d, plan.guard_r,
           plan.train_d, plan.train_r);
       HOLOSCAN_TRY(validate_external_alpha_lut(
-          stage.cfar_variant, plan.nci.fold, stage.alpha_lut, max_lut_index,
+          stage.cfar_variant, plan.effective_fold, stage.alpha_lut,
+          max_lut_index,
           static_cast<int>(plan.num_doppler),
           static_cast<int>(plan.num_range), plan.guard_d, plan.guard_r,
           plan.train_d, plan.train_r));
       state.external_alpha_lut_validated = true;
       state.validated_external_variant = stage.cfar_variant;
-      state.validated_external_fold = plan.nci.fold;
+      state.validated_external_fold = plan.effective_fold;
       state.validated_external_num_doppler = plan.num_doppler;
       state.validated_external_num_range = plan.num_range;
       state.validated_external_guard_d = plan.guard_d;
@@ -860,7 +884,13 @@ void CFARDetectorOp<T>::start() {
     return;
   }
 
-  int64_t fold = 1;
+  if (pinned.preintegrated_looks <= 0) {
+    HOLOSCAN_LOG_WARN(
+        "CFARDetectorOp: preintegrated_looks must be positive; deferring "
+        "validation to the first tick.");
+    return;
+  }
+  int64_t fold = pinned.preintegrated_looks;
   if (!pinned.nci_axes.empty()) {
     const int64_t hint = pinned.nci_fold;
     if (hint <= 0) {
@@ -870,7 +900,14 @@ void CFARDetectorOp<T>::start() {
           "the integration fold K to pre-warm at start).");
       return;
     }
-    fold = hint;
+    if (hint >
+        std::numeric_limits<int64_t>::max() / pinned.preintegrated_looks) {
+      HOLOSCAN_LOG_WARN(
+          "CFARDetectorOp: effective integration fold overflows int64; "
+          "deferring validation to the first tick.");
+      return;
+    }
+    fold *= hint;
   }
 
   const int gd = static_cast<int>(guard[0]);

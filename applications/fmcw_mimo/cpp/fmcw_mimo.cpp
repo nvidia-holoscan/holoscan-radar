@@ -4,9 +4,9 @@
 // MIMO FMCW sparse angle-then-cluster pipeline (HSDK 5 Graph; TDM or DDM):
 //
 // TDM: MimoTdmAdcSourceOp -> Deinterleave -> Range -> Clutter -> Doppler
-//        -> Compensation -> VirtualArrayAssemblyOp -> ...
-// DDM: MimoDdmAdcSourceOp -> Range -> Doppler -> Compensation -> Clutter
-//        -> VirtualArrayAssemblyOp -> ...
+//        -> TDMDenseCompensationOp -> VirtualArrayAssemblyOp -> ...
+// DDM: MimoDdmAdcSourceOp -> Range -> Doppler
+//        -> DDMDenseDemultiplexOp -> Clutter -> VirtualArrayAssemblyOp -> ...
 // Then: CFAR -> SnapshotGather -> Beamscan
 //        -> [FeatureAssemblyOp -> DBSCAN -> Reduction]
 //        -> DetectionReportOp / ClusterReportOp
@@ -35,7 +35,8 @@
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
-#include "fmcw/mimo_coherent_compensation_op/mimo_coherent_compensation_op.hpp"
+#include "fmcw/ddm_dense_demultiplex_op/ddm_dense_demultiplex_op.hpp"
+#include "fmcw/tdm_dense_compensation_op/tdm_dense_compensation_op.hpp"
 #include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_op.hpp"
 #include "radar_app/app/graph_driver.hpp"
@@ -95,11 +96,6 @@ int main(int argc, char** argv) {
             "doppler_processor", extents);
         doppler.set_params(cfg.doppler_params);
 
-        auto compensation =
-            graph.op<radar::MIMOCoherentCompensationOp<float>>(
-                "mimo_coherent_compensation", extents);
-        compensation.set_params(cfg.compensation_params);
-
         auto vaa = graph.op<radar::VirtualArrayAssemblyOp<float>>(
             "virtual_array_assembly", extents);
         vaa.set_params(cfg.vaa_params);
@@ -121,6 +117,9 @@ int main(int argc, char** argv) {
         }
 
         if (ddm) {
+          auto demultiplex = graph.op<radar::DDMDenseDemultiplexOp<float>>(
+              "ddm_dense_demultiplex", extents);
+          demultiplex.set_params(cfg.ddm_demultiplex_params);
           MimoDdmAdcSourceConfig src_cfg;
           src_cfg.scene = cfg.scene;
           src_cfg.use_phase_codes = cfg.ddm_correlate;
@@ -141,11 +140,14 @@ int main(int argc, char** argv) {
               graph.op<NullSinkOp>("doppler_velocity_bins_sink");
           graph.add_flow(source->adc_cube, range->adc_cube, q);
           graph.add_flow(range->range_profiles, doppler->range_profiles, q);
-          graph.add_flow(doppler->rd_maps, compensation->rd_maps, q);
+          graph.add_flow(doppler->rd_maps, demultiplex->rd_maps, q);
           graph.add_flow(doppler->velocity_bins, doppler_vel_sink->input, q);
-          graph.add_flow(compensation->rd_maps_out, clutter->range_profiles, q);
+          graph.add_flow(demultiplex->rd_maps_out, clutter->range_profiles, q);
           graph.add_flow(clutter->range_profiles_out, vaa->rd_maps, q);
         } else {
+          auto compensation = graph.op<radar::TDMDenseCompensationOp<float>>(
+              "tdm_dense_compensation", extents);
+          compensation.set_params(cfg.tdm_compensation_params);
           MimoTdmAdcSourceConfig src_cfg;
           src_cfg.scene = cfg.scene;
           src_cfg.tx_schedule = cfg.tx_schedule;
@@ -339,7 +341,11 @@ int main(int argc, char** argv) {
         bind_out(options, "clutter_filter", "range_profiles_out");
         bind_out(options, "doppler_processor", "rd_maps");
         bind_out(options, "doppler_processor", "velocity_bins");
-        bind_out(options, "mimo_coherent_compensation", "rd_maps_out");
+        if (ddm) {
+          bind_out(options, "ddm_dense_demultiplex", "rd_maps_out");
+        } else {
+          bind_out(options, "tdm_dense_compensation", "rd_maps_out");
+        }
         bind_out(options, "virtual_array_assembly", "rd_maps_out");
         bind_out(options, "cfar_detector", "detection_mask");
         bind_out(options, "cfar_detector", "detection_score");

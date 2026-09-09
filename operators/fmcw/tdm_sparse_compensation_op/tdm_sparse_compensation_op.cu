@@ -19,8 +19,8 @@
 #include <holoscan/core/expected_macros.hpp>
 #include <holoscan/core/payload_options.hpp>
 
-#include "fmcw/mimo_coherent_compensation_op/mimo_coherent_compensation_stage.hpp"
 #include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_stage.hpp"
+#include "radar_common/dsp/mimo_coherent_compensation_stage.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"

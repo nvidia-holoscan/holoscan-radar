@@ -11,7 +11,7 @@
 namespace holoscan::radar {
 
 // TDM slow-time firing pattern for MIMODeinterleaveOp (gather) and
-// MIMOCoherentCompensationOp (per-TX firing-slot index). Describes how an
+// TDMDenseCompensationOp / DDMDenseDemultiplexOp (per-TX firing-slot index). Describes how an
 // interleaved (M·L) chirp axis splits into explicit (M_tx, L) axes.
 //
 // v1 scope: uniform spacing — the length-M firing cycle repeats identically

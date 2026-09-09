@@ -5,7 +5,7 @@ Detection-indexed TDM compensation for sparse angle pipelines.
 The operator consumes uncompensated `(M_tx, N_rx, doppler, range)` maps and
 exact-sized `(doppler_bin, range_bin)` detections. For each detection and
 configured RD-neighborhood cell it applies the same firing-slot-aware phase
-correction as `MIMOCoherentCompensationOp`, assembles the same virtual-channel
+correction as `TDMDenseCompensationOp`, assembles the same virtual-channel
 ordering as `VirtualArrayAssemblyOp`, and emits estimator-ready snapshots.
 
 Outputs are:

@@ -82,8 +82,14 @@ radar_add_test(fmcw/test_clutter_filter
     holoscan::clutter_filter_op)
 radar_add_test(fmcw/test_mimo_deinterleave
     holoscan::mimo_deinterleave_op)
-radar_add_test(fmcw/test_mimo_coherent_compensation
-    holoscan::mimo_coherent_compensation_op)
+radar_add_test(fmcw/test_tdm_dense_compensation
+    holoscan::tdm_dense_compensation_op)
+radar_add_test(fmcw/test_ddm_dense_demultiplex
+    holoscan::ddm_dense_demultiplex_op)
+radar_add_test(fmcw/test_ddm_power_fold
+    holoscan::ddm_power_fold_op)
+radar_add_test(fmcw/test_ddm_sparse_demultiplex
+    holoscan::ddm_sparse_demultiplex_op)
 radar_add_test(fmcw/test_tdm_sparse_compensation
     holoscan::tdm_sparse_compensation_op)
 radar_add_test(fmcw/test_virtual_array_assembly

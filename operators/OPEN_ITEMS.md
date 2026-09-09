@@ -75,7 +75,7 @@ does **not** change tensor shapes. On the default perf matrix (xl median
 profile seen on `MIMODeinterleaveOp` xl — defer ping-pong here as well;
 revisit only if profiling flags allocation at target sizes.
 
-`MIMOCoherentCompensationOp` (2026-07-16, TDM slice): same allocate-per-tick
+`TDMDenseCompensationOp / DDMDenseDemultiplexOp` (2026-07-16, TDM slice): same allocate-per-tick
 output path. **Diagnostic (xl, RTX PRO 6000 Blackwell):** kernel ~6.7 ms
 (~1.28 TB/s, nsys) vs harness tick median ~14.5 ms — roughly half the tick is
 `cudaMalloc`/`cudaFree` on the ~4.3 GB output buffer, not compute. Kernel
@@ -154,7 +154,7 @@ is pinned per operator:
 | Operator | Open items |
 | --- | --- |
 | `MIMODeinterleaveOp` | none (uniformity / PRI / gather-axis pins live in the operator README; staggered TDM is STATUS.md L12 / Roadmap) |
-| `MIMOCoherentCompensationOp` | none (TDM firing-slot map is `tx_schedule`; ÷M aliased velocity is the module pin below) |
+| `TDMDenseCompensationOp / DDMDenseDemultiplexOp` | none (TDM firing-slot map is `tx_schedule`; ÷M aliased velocity is the module pin below) |
 | `VirtualArrayAssemblyOp` | none (flatten / overlap / geometry pins live in the operator README; `WireArrayGeometry` transport is HSDK5_PORT §10; Graph live unit skip is §1) |
 
 **Module-level pins (not re-litigated per operator):**
@@ -168,7 +168,7 @@ is pinned per operator:
   graph wiring concern.
 - **Velocity ÷M ambiguity.** TDM and DDM reduce unambiguous velocity by `M`.
   Downstream sees the aliased per-TX Doppler axis. Disambiguation (staggered
-  PRI, band tricks) is out of scope — not a `MIMOCoherentCompensationOp` mode.
+  PRI, band tricks) is out of scope — not a `TDMDenseCompensationOp / DDMDenseDemultiplexOp` mode.
 - **Shared descriptors.** `DDMCodeDescriptor` and `TXSchedule` validation rules
   (mutually exclusive offset forms, uniform TDM schedule) live with the
   consuming operator README / descriptor code.

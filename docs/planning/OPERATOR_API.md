@@ -83,7 +83,7 @@ The standard operator flow graphs the module must support, abbreviated from `hol
 
 Modality acronyms (SISO / SIMO / MIMO) follow the wireless channel convention: **input** = transmit side, **output** = receive side — so SIMO is 1 TX × N RX. See `WORKFLOWS.md` *Modality naming* for the full table and rationale.
 
-Out of scope here. **CDM / BPM** (code-division / binary-phase multiplexing) are **under consideration for a future wave** — architecturally a small extension of the DDM path (all TX on, per-chirp phase code, separated after the Doppler stage), reusing `MIMOCoherentCompensationOp` in a code-correlation mode and the rest of the MIMO chain unchanged — but not implemented here. **FDM** (frequency-division) and **PMCW** (fast-time code division — a different waveform, not FMCW) are excluded.
+Out of scope here. **CDM / BPM** (code-division / binary-phase multiplexing) are **under consideration for a future wave** — architecturally a small extension of the DDM path (all TX on, per-chirp phase code, separated after the Doppler stage), reusing `TDMDenseCompensationOp / DDMDenseDemultiplexOp` in a code-correlation mode and the rest of the MIMO chain unchanged — but not implemented here. **FDM** (frequency-division) and **PMCW** (fast-time code division — a different waveform, not FMCW) are excluded.
 
 ### Cross-cutting structure
 
@@ -162,7 +162,7 @@ ADC (N_rx, M·L, samples)     [L = chirps per TX; slow-time interleaves the M TX
   → FMCWRangeProcessorOp       → (M_tx, N_rx, L, num_range)
   → [ClutterFilterOp]          → (M_tx, N_rx, L, num_range)
   → FMCWDopplerProcessorOp     → (M_tx, N_rx, num_doppler, num_range)
-  → MIMOCoherentCompensationOp → (M_tx, N_rx, num_doppler, num_range)  [per-Doppler-bin TX phase correction]
+  → TDMDenseCompensationOp / DDMDenseDemultiplexOp → (M_tx, N_rx, num_doppler, num_range)  [per-Doppler-bin TX phase correction]
   → VirtualArrayAssemblyOp     → (num_virtual, num_doppler, num_range) + virtual element_positions
   → angle path (dense or sparse) + CFARDetectorOp
 ```
@@ -177,7 +177,7 @@ M TX transmit simultaneously with per-chirp phase codes placing each TX in a dis
 ADC (N_rx, num_chirps, samples)   [all M TX present every chirp, per-chirp phase codes]
   → FMCWRangeProcessorOp       → (N_rx, num_chirps, num_range)
   → FMCWDopplerProcessorOp     → (N_rx, num_doppler, num_range)               [Doppler holds M TX bands]
-  → MIMOCoherentCompensationOp → (M_tx, N_rx, num_doppler_out, num_range)   [demux → TX axis]
+  → TDMDenseCompensationOp / DDMDenseDemultiplexOp → (M_tx, N_rx, num_doppler_out, num_range)   [demux → TX axis]
        num_doppler_out = num_doppler_per_tx  (linear gather / doppler_offsets)
                        = num_doppler         (non-linear phase_codes correlate)
   → [ClutterFilterOp]          → (M_tx, N_rx, num_doppler_out, num_range)    [after demux]
@@ -189,7 +189,7 @@ No `MIMODeinterleaveOp` (nothing interleaved in slow-time). `ClutterFilterOp` ru
 
 ### Workflow comparison
 
-| Modality   | TX × RX | `MIMODeinterleaveOp` | `MIMOCoherentCompensationOp`  | `VirtualArrayAssemblyOp` | Angle path      | Channel axis      |
+| Modality   | TX × RX | `MIMODeinterleaveOp` | Dense TX separation           | `VirtualArrayAssemblyOp` | Angle path      | Channel axis      |
 | :--------- | :------ | :------------------- | :---------------------------- | :----------------------- | :-------------- | :---------------- |
 | SISO       | 1 × 1   | —                    | —                             | —                        | none            | — (`1`)           |
 | SIMO       | 1 × N   | —                    | —                             | —                        | dense or sparse | physical RX (`N`) |
@@ -238,7 +238,7 @@ The covariance-estimator open items are now **settled** (see STATUS.md): the sou
 Three operators, one per responsibility, spanning TX separation through virtual-array assembly.
 
 - **MIMODeinterleaveOp** — TDM only: split the interleaved slow-time axis into an explicit TX axis (front of chain). Pure data marshaling.
-- **MIMOCoherentCompensationOp** — TX separation + phase-aware coherent compensation (TDM: per-Doppler-bin phase correction; DDM: band demux + code removal + alignment). The one genuine MIMO compute step.
+- **TDMDenseCompensationOp / DDMDenseDemultiplexOp** — TX separation + phase-aware coherent compensation (TDM: per-Doppler-bin phase correction; DDM: band demux + code removal + alignment). The one genuine MIMO compute step.
 - **VirtualArrayAssemblyOp** — flatten the separated `(tx, rx)` block into a virtual channel axis and emit the matching virtual `ArrayGeometry` (`p_virtual = p_tx + p_rx`, with overlap dedup).
 
 ### I/O bridges
@@ -251,7 +251,7 @@ The small add-on operators that connect detection, clustering, and the sparse an
 
 ### Explicitly out of scope for this FMCW pass
 
-**Not** required by the FMCW workflows, so excluded from this lockdown: Pulse-Doppler operators, SAR image-formation operators, and PVA SDK operators. Multiplexing scope (see Workflows → Scope): **CDM / BPM** are under consideration for a future wave (would reuse `MIMOCoherentCompensationOp` in a code-correlation mode, rest of the MIMO chain unchanged); **FDM** and **PMCW** are excluded.
+**Not** required by the FMCW workflows, so excluded from this lockdown: Pulse-Doppler operators, SAR image-formation operators, and PVA SDK operators. Multiplexing scope (see Workflows → Scope): **CDM / BPM** are under consideration for a future wave (would reuse `TDMDenseCompensationOp / DDMDenseDemultiplexOp` in a code-correlation mode, rest of the MIMO chain unchanged); **FDM** and **PMCW** are excluded.
 
 ---
 
@@ -424,10 +424,11 @@ optional array is absent; null is invalid. See
 
   Slot 0 is unused. Length must exceed the maximum LUT index for the configured variant, footprint, and map size (`len > max_n`). CA and OS with `K = 1` require every index in `1..max_n` to be finite and strictly positive. GO/SO and OS with `K > 1` may leave zero only at indices unreachable for the current map and window geometry; every reachable `go_lut_index` (GO/SO) or training-cell count `N` (OS) must be finite and strictly positive. Negative or non-finite entries are always rejected, including unreachable slots; slot 0 and entries past `max_n` are ignored. Cheap: validation and host→device upload only. Default: `[]` (unset → `pfa`-derived calibration). Precedence: `alpha_lut` if provided, else `pfa`-derived calibration.
 - `blocking_alpha_lut_rebuild` — bool. When `true`, a `pfa`-derived LUT cache miss blocks the tick until calibration finishes. When `false` (default), an unseen key starts a background build and the previous LUT is served for the tick (warn once); if no previous LUT exists yet, the tick still blocks on the first build. Has no effect while an external `alpha_lut` is supplied. Static. Default: `false`.
-- `nci_fold` — int. Optional integration fold `K = ∏ sizes of nci_axes`, used only to pre-calibrate the α LUT at `start()` when `nci_axes` is set (the fold is otherwise unknown until the first tick). Ignored when `nci_axes` is empty (`K = 1`). `<= 0` → unset (defer calibration to the first tick). Static. Default: 0.
+- `preintegrated_looks` — int. Number of statistically independent power looks already summed in a real-valued input sample before CFAR. The effective Gamma shape is `K = preintegrated_looks · ∏ sizes of nci_axes`; complex input with no leading-axis NCI therefore keeps `K = 1` at the default. This is an independent-look model: correlated RX noise, shared-LO noise, or clutter residue reduce the effective degrees of freedom and require empirical calibration (or an external `alpha_lut`). Static. Default: 1.
+- `nci_fold` — int. Optional leading-axis integration-fold hint `∏ sizes of nci_axes`, used to pre-calibrate the α LUT at `start()` when `nci_axes` is set (the fold is otherwise unknown until the first tick). The pre-warm uses `K = preintegrated_looks · nci_fold`. `<= 0` → unset (defer calibration to the first tick). Static. Default: 0.
 - **Start-time pre-calibration (CA / OS).** At `start()` the operator pre-builds the `pfa`-derived α LUT so the first tick does not stall on a Monte Carlo build. **CA and OS only:** their LUTs are indexed by training-cell count `N`, map-size-independent while the RD map is ≥ the CFAR window, so the warm build keys on a canonical window-sized geometry (no RD-map shape needed). **GO / SO** are indexed by the aliased `go_lut_index` and are map-dependent (a window-sized map is non-convergent at low `pfa`), so they are **not** pre-warmed — they calibrate on the first tick (supply `alpha_lut`). A sub-window CA/OS map, an NCI fold not covered by `nci_fold`, or a `[live]` override falls back to a runtime build. **Any runtime (in-`compute`) calibration warns once per configuration.**
 - `threshold_scale` **[live]** — float. Empirical multiplier on top of the active α source (`alpha_lut` or `pfa`-derived): `threshold = threshold_scale · α · noise_estimate`; `1.0` = pure CFAR. Cheap; hand-tuning without changing the CFAR model. Default: 1.0.
-- `nci_axes` **[live]** — set/vector of leading-axis indices to non-coherently integrate before thresholding; other leading axes stay batched. Changes the output shape (integrated axes reduced — downstream infers) and the integration fold count `K = ∏ sizes of nci_axes`, which sets the cell statistic to Gamma(K); α takes `K` and is recomputed from `pfa` (closed form for CA; Monte Carlo for GO/SO/OS when `K > 1` and `alpha_lut` is unset). Default: `[]` (no integration; `K = 1`, exponential cell statistic). Validated by Monte Carlo (`test_cfar_detector_statistical` — `CaMonteCarloPfaK1`, `CaMonteCarloPfaNciK8`).
+- `nci_axes` **[live]** — set/vector of leading-axis indices to non-coherently integrate before thresholding; other leading axes stay batched. Changes the output shape (integrated axes reduced — downstream infers) and contributes `∏ sizes of nci_axes` to the effective Gamma shape `K = preintegrated_looks · ∏ sizes of nci_axes`; α takes `K` and is recomputed from `pfa` (closed form for CA; Monte Carlo for GO/SO/OS when `K > 1` and `alpha_lut` is unset). Default: `[]` (no additional integration; `K = preintegrated_looks`). Validated by Monte Carlo (`test_cfar_detector_statistical` — `CaMonteCarloPfaK1`, `CaMonteCarloPfaNciK8`, and pre-integrated-power cases).
 - `max_detections` (optional) **[live]** — int. Upper cap on the number of detections emitted in `detection_idx`; if the scene produces more, the surplus is dropped and a warning raised. `detection_idx` is always sized to the actual count (≤ this cap, reallocated per tick). Unset → no cap (emit all detections). Default: none (uncapped).
 - `peak_only` (optional) — bool. **Static.** Opt-in peak-grouping (non-maximum suppression): each contiguous above-threshold blob is collapsed to its local-maximum cell, so `detection_idx` / `detection_mask` carry **one point per CFAR peak** rather than every candidate cell. Runs on the thresholded statistic, **restricted to detected neighbors**, so a weaker separate target nearby cannot suppress a real peak; exact ties break by raster order (lowest linear index survives). Additive to the exact-sized `detection_idx` contract — only the row count shrinks, so the downstream positional join still holds; it composes with clustering (DBSCAN sees ~one point per target). Sub-bin interpolation and angle-peak search are out of scope. Off (default) preserves the raw-mask contract. Default: false.
 - `peak_neighborhood` (optional) — enum {cross4, square8}. **Static.** Neighborhood for the `peak_only` NMS test: `cross4` = the 2 range + 2 Doppler orthogonal neighbors; `square8` = the full 8-cell neighborhood (a more aggressive collapse). Used only when `peak_only` is set. Default: square8.
@@ -738,21 +739,30 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 
 **Parameters:**
 
-- `tx_schedule` — TXSchedule. The TDM firing pattern (carries `num_tx`); determines how the interleaved `M·L` slow-time axis splits into `(M_tx, L)`. The split is not inferable from the input alone — the `M·L` axis carries no marker of the boundaries — so this is required; `chirps_per_tx` (L) is then `(M·L)/num_tx`. Static (a fixed waveform / hardware property). TDM only. Default: none (required). The first-wave TDM chain assumes **uniform** per-TX spacing, so a non-uniform / staggered schedule is rejected with an error. A uniform-repeating `tx_order` permutation is accepted; pass the same `tx_schedule` to `MIMOCoherentCompensationOp` so the inter-TX phase uses firing slot, not TX id. Staggered / per-TX-timing TDM is a **deferred future enhancement** — see STATUS.md → Roadmap (settled as L12).
+- `tx_schedule` — TXSchedule. Determines how interleaved `M·L` slow time splits into `(M_tx, L)`; `L = (M·L)/num_tx`. Static, TDM only, required. The first-wave chain rejects non-uniform / staggered schedules. A uniform-repeating `tx_order` permutation is accepted; pass the same schedule to `TDMDenseCompensationOp` or `TDMSparseCompensationOp` so phase uses firing slot, not TX id. Staggered TDM is deferred — see STATUS.md Roadmap (L12).
 
-#### MIMOCoherentCompensationOp
+#### TDMDenseCompensationOp
 
-- **In:** `rd_maps` — complex64 / complex128. **TDM mode:** `(M_tx, N_rx, num_doppler, num_range_bins)` (TX axis already explicit from de-interleave). **DDM mode:** `(N_rx, num_doppler, num_range_bins)` (the M TX sit in distinct Doppler sub-bands). Rank/interpretation set by the `multiplexing_scheme` parameter.
-- **Out:** `rd_maps_out` — complex64 / complex128, `(M_tx, N_rx, num_doppler_out, num_range_bins)`. Separated, phase-aligned `(tx, rx)` block. `num_doppler_out = num_doppler` (TDM, or DDM non-linear correlate) or `num_doppler_per_tx` (DDM linear-phase band gather). [EA HSDK5 ONLY] unique in/out port names required; logical output channel remains `rd_maps`.
+- **In:** `rd_maps` — complex64 / complex128, `(M_tx, N_rx, num_doppler, num_range_bins)`. TX axis already explicit from de-interleave.
+- **Out:** `rd_maps_out` — complex64 / complex128, same shape. Per-Doppler-bin inter-TX motion phase removed. [EA HSDK5 ONLY] unique in/out port names required; logical output channel remains `rd_maps`.
 
 **Parameters:**
 
-- `multiplexing_scheme` — enum {TDM, DDM}. Selects the compensation path — TDM: per-Doppler-bin inter-TX phase correction; DDM: Doppler-band demux + per-chirp code removal + alignment — and how the `rd_maps` input rank is interpreted. Static (selects the kernel; instantiate separate ops to switch). Default: none (required).
-- `waveform` **[live]** — FMCWWaveformDescriptor. Per-TX PRI and carrier frequency for the Doppler-dependent phase math (the inter-TX correction under TDM; band alignment under DDM). Default: none (required). HSDK 5 physical live payload: the shared generated waveform descriptor-Tensor schema; logical Params type remains `FMCWWaveformDescriptor`.
-- `ddm_code` — DDMCodeDescriptor. The Doppler-band / phase-code layout to demux (carries `num_tx`). Static. Default: none (required for DDM; unused for TDM).
+- `waveform` **[live]** — FMCWWaveformDescriptor. Per-TX PRI for the Doppler-dependent inter-TX correction. Default: none (required). HSDK 5 physical live payload: the shared generated waveform descriptor-Tensor schema; logical Params type remains `FMCWWaveformDescriptor`.
 - `tx_schedule` — TXSchedule. TDM firing cycle used to index the inter-TX phase correction by **firing slot** (the same descriptor as `MIMODeinterleaveOp`). Static. Default: empty (identity round-robin: TX id == firing slot). Unused for DDM. When set, `num_tx` must match the input `M_tx` axis; uniformity rules match deinterleave (one repeating cycle; `chirp_tx_index` overrides `tx_order` when present).
 
-*(No array/element geometry is needed here — this is a phase/demux operation, not a spatial one; `element_positions` enter only downstream at VirtualArrayAssemblyOp. `num_tx` is not a separate parameter — TDM reads it from the input's `M_tx` axis, DDM from `ddm_code`; anything sized by `num_tx` (e.g. the TDM per-Doppler-bin correction table) is built lazily on the first tick and cached, as with FFT plans, so it needs no init-time `num_tx`. TDM assumes uniform per-TX spacing; a non-uniform schedule is rejected upstream (see MIMODeinterleaveOp). TDM and DDM reduce unambiguous velocity by `M`; this operator does not unfold that aliasing — downstream sees the per-TX Doppler axis from `FMCWDopplerProcessorOp`.)*
+No array geometry is needed. `num_tx` comes from the input axis. Correction tables are built lazily and cached. A non-uniform schedule is rejected.
+
+#### DDMDenseDemultiplexOp
+
+- **In:** `rd_maps` — complex64 / complex128, `(N_rx, num_doppler, num_range_bins)`. The M simultaneous TX occupy coded Doppler bands.
+- **Out:** `rd_maps_out` — complex64 / complex128, `(M_tx, N_rx, num_doppler_out, num_range_bins)`. `num_doppler_out = num_doppler_per_tx` for linear-phase band gather or `num_doppler` for nonlinear full-axis correlation. Linear `phase_codes` are additionally dephased by `conj(code[tx,0])`; offsets-only codes use unity.
+
+**Parameters:**
+
+- `ddm_code` — DDMCodeDescriptor. Static TX code/band layout (carries `num_tx`). Exactly one of Doppler offsets or phase codes is required. Linear offsets must map to integer bins for the current Doppler extent; nonlinear phase codes use full-axis correlation. Static means frame-to-frame code rotation requires separate operator instances or a future live-code contract. Default: none (required).
+
+No waveform is required: the demultiplexing math is defined by `ddm_code` and tensor extents. Packed M-band DDM retains the reduced, aliased Doppler interval; this operator does not resolve the ambiguity fold.
 
 #### VirtualArrayAssemblyOp
 
@@ -769,7 +779,7 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 
 #### TDMSparseCompensationOp
 
-Sparse TDM bridge for detect-before-compensate workflows. It replaces the dense `MIMOCoherentCompensationOp → VirtualArrayAssemblyOp → SnapshotGatherOp` segment by gathering only detected RD cells, applying each cell's Doppler-dependent TDM phase correction, and assembling its virtual-channel snapshot.
+Sparse TDM bridge for detect-before-compensate workflows. It replaces the dense `TDMDenseCompensationOp → VirtualArrayAssemblyOp → SnapshotGatherOp` segment by gathering only detected RD cells, applying each cell's Doppler-dependent TDM phase correction, and assembling its virtual-channel snapshot.
 
 - **In:** `rd_maps` — complex64 / complex128, `(M_tx, N_rx, num_doppler, num_range_bins)`. Uncompensated, center-zero post-Doppler TDM maps with an explicit TX axis. No opaque leading batch.
 - **In:** `detection_idx` — int64, `(num_detections, 2)`. Detected `(doppler_bin, range_bin)` cells in the uncompensated map. Both coordinates must be in bounds. The exact row count is `num_detections`.
@@ -780,7 +790,7 @@ Sparse TDM bridge for detect-before-compensate workflows. It replaces the dense 
 **Parameters:**
 
 - `waveform` **[live]** — FMCWWaveformDescriptor. Per-TX PRI and carrier frequency for the TDM correction; carrier frequency also determines the emitted geometry wavelength. Default: none (required). HSDK 5 physical live payload uses the shared generated waveform descriptor-Tensor schema.
-- `tx_schedule` — TXSchedule. Static TDM firing cycle used to index correction by firing slot. Default: empty (identity round-robin). Uniformity and `num_tx` validation match `MIMOCoherentCompensationOp`.
+- `tx_schedule` — TXSchedule. Static TDM firing cycle used to index correction by firing slot. Default: empty (identity round-robin). Uniformity and `num_tx` validation match `TDMDenseCompensationOp`.
 - `tx_positions` — float, `(num_tx, 3)`. Static TX element positions (m); length must match `M_tx`. Default: none (required).
 - `rx_positions` — float, `(num_rx, 3)`. Static RX element positions (m); length must match `N_rx`. Default: none (required).
 - `overlap_policy` — enum {dedup, average, keep_all}. Same virtual-element grouping and ordering as `VirtualArrayAssemblyOp`. Static. Default: dedup.
@@ -795,7 +805,40 @@ Sparse TDM bridge for detect-before-compensate workflows. It replaces the dense 
 3. Apply the same virtual assembly plan as `VirtualArrayAssemblyOp`, including overlap handling, and write the virtual vector into the estimator-facing snapshot.
 4. Derive `array_geometry.wavelength = c / waveform.carrier_frequency` from the same effective build-time or live waveform used for correction.
 
-TDM correction is unit magnitude, so pre-compensation CFAR with non-coherent integration over both TX and RX (`nci_axes = {0, 1}`) is power-equivalent when channels remain independent (`keep_all`, or no coincident virtual elements). It is not generally byte- or statistic-equivalent to CFAR after `dedup` or coherent `average`, because those policies change the channel set before detection. Sparse DDM recovery is a separate future operator and detector recipe; it is not a mode of this operator.
+TDM correction is unit magnitude, so pre-compensation CFAR with non-coherent integration over both TX and RX (`nci_axes = {0, 1}`) is power-equivalent when channels remain independent (`keep_all`, or no coincident virtual elements). It is not generally byte- or statistic-equivalent to CFAR after `dedup` or coherent `average`, because those policies change the channel set before detection.
+
+#### DDMPowerFoldOp
+
+Power-domain detector preparation for sparse DDM. It folds every usable TX band onto the reduced Doppler axis and non-coherently integrates RX without materializing a demultiplexed cube.
+
+- **In:** `rd_maps` — complex64 / complex128, `(N_rx, num_doppler, num_range_bins)`. Pre-demux, center-zero Doppler maps.
+- **Out:** `power_map` — float32 / float64, `(num_doppler_per_tx, num_range_bins)`, where `B = num_doppler/M_tx` and `num_doppler_per_tx = B - guard_bands`.
+
+**Parameters:**
+
+- `ddm_code` — DDMCodeDescriptor. Required and static. Sparse v1 accepts only linear M-band codes whose offsets map to integer Doppler bins; nonlinear codes and fractional-bin offsets reject.
+
+For each folded cell, sum `|rd_maps[rx, mapped_bin(tx,d),r]|²` over all `M_tx·N_rx` looks using the exact table shared with `DDMDenseDemultiplexOp`. CFAR consumes this real map with `nci_axes: []` and `preintegrated_looks: M_tx·N_rx`. That Gamma model assumes independent looks; correlated channels require empirical calibration. `G` discarded bins per width-`B` band create a blind-velocity fraction `G/B`; applications should derive `G` from the slow-time window main-lobe/transition width.
+
+#### DDMSparseDemultiplexOp
+
+Sparse DDM bridge for detect-before-demux workflows. It gathers each TX band only around folded CFAR detections, applies linear-code dephasing and a supplied velocity-fold correction, and assembles estimator-ready virtual snapshots.
+
+- **In:** `rd_maps` — complex64 / complex128, `(N_rx, num_doppler, num_range_bins)`. Same pre-demux cube as `DDMPowerFoldOp`.
+- **In:** `detection_idx` — int64, `(num_detections, 2)`. `(folded_doppler_bin, range_bin)` on the reduced `(W,R)` surface.
+- **In:** `fold_idx` — int64, `(num_detections)`. Doppler ambiguity integer in `[0,M_tx)`. Unconditional Exact side input with `SafeDefault{0}`; when connected its row count must equal `num_detections`.
+- **Out:** `snapshot` — complex64 / complex128, `(num_detections, num_virtual, num_snapshots)`.
+- **Out:** `is_valid` (optional, **always**) — uint8, `(num_detections, num_snapshots)`.
+- **Out:** `array_geometry` — `WireArrayGeometry`, coherent with snapshot ordering and emitted before `snapshot`.
+
+**Parameters:**
+
+- `ddm_code` — DDMCodeDescriptor. Required, static, linear integer-bin codes only.
+- `tx_positions`, `rx_positions`, `overlap_policy` — same static geometry and virtual grouping semantics as `TDMSparseCompensationOp`.
+- `wavelength` **[live]** — float. Required operating wavelength for emitted geometry; it does not affect DDM demultiplexing.
+- `snapshot_window` **[live]**, `doppler_edge`, `range_edge` — same neighborhood and edge semantics as `TDMSparseCompensationOp`, applied on the folded `W` axis.
+
+`fold_idx` undoes the cyclic TX permutation for an aliased target. The default zero is correct only in the principal reduced interval `[-PRF/(2M), PRF/(2M))`; outside it, unresolved zero can produce a plausible but wrong virtual ordering and angle. Fold resolution is not hidden here: a future `DDMFoldResolverOp`, an external staggered-CRI burst, or code-rotation logic consumes the pre-demux cube and detections and supplies `fold_idx`. Sparse DDM v1 does not support clutter filtering; the existing slow-time clutter filter remains valid only after dense demultiplexing.
 
 ---
 
@@ -861,20 +904,24 @@ Used by: `FMCWRangeProcessorOp` (dechirp reference; slope + sample rate for `ran
 
 ### DDMCodeDescriptor
 
-Describes the Doppler-division multiplexing scheme for `MIMOCoherentCompensationOp` (DDM mode) — how the M TX are separated after the Doppler FFT. (The forward-looking CDM/BPM extension would carry its orthogonal code here in a code-correlation mode; out of scope for now.)
+Describes the Doppler-division layout consumed by
+`DDMDenseDemultiplexOp`, `DDMPowerFoldOp`, and
+`DDMSparseDemultiplexOp`: how the M TX are separated after the Doppler FFT.
 
 - `num_tx` — int. M, the number of TX multiplexed into distinct Doppler sub-bands.
 - `phase_codes` (optional) — float or complex, `(num_tx, num_chirps)`. The per-chirp phase (or unit-magnitude code) applied to each TX; the general form, demuxed by conjugate correlation. Provide this **or** `doppler_offsets`. **Implemented:** *linear-phase* codes (constant per-chirp phase increment per TX) are reduced to `doppler_offsets` and demuxed by Doppler-band gather; *non-linear* codes use the correlate path (full Doppler axis out, `guard_bands` must be 0, `num_chirps` must equal `num_doppler`). Algorithm detail: the operator README.
-- `doppler_offsets` (optional) — float, `(num_tx,)`. Per-TX Doppler sub-band offset **as a fraction of PRF (cycles/chirp) in `[0, 1)`** (e.g. `m/M` for uniform DDM); the compact form for standard linear-phase DDM, from which `phase_codes` are synthesized. Fractions (not bins) are canonical because the descriptor is static config built before `num_doppler` (a runtime shape) is known; the operator converts to a bin offset `round(offset · num_doppler)` per tick. Provide this **or** `phase_codes`.
+- `doppler_offsets` (optional) — float, `(num_tx,)`. Per-TX Doppler sub-band offset **as a fraction of PRF (cycles/chirp) in `[0, 1)`** (e.g. `m/M` for uniform DDM); the compact form for standard linear-phase DDM. Fractions are canonical because the descriptor is built before runtime `num_doppler` is known. Linear M-band consumers require `offset · num_doppler` to be an exact integer band origin and require every band to be occupied exactly once. Provide this **or** `phase_codes`.
 - `guard_bands` — int. Guard bins reserved between adjacent TX Doppler bands to keep them separable. Default: 0.
 
 Notes: the `[0, PRF)` Doppler span is shared across the M bands, so unambiguous velocity is reduced by M; band width `num_doppler_per_tx` follows the offset/guard layout. There is no unfold / disambiguation step — the demuxed axis is that reduced span.
 
-**Imposed layout (current slice):** `num_doppler` must be divisible by `num_tx`; each band is `num_doppler / num_tx` bins wide, and `num_doppler_per_tx = num_doppler / num_tx − guard_bands` (the top `guard_bands` fft-order bins of each band are discarded as the inter-band guard). The demuxed output Doppler axis is center-zero over the reduced `[−PRF/2M, PRF/2M)` span, with every TX lane un-shifted to a common reduced-Doppler axis so the emitted `(tx, rx)` block is coherent. For standard linear-phase DDM this demux is a pure Doppler-bin gather and is **waveform-independent** (the `waveform` parameter is still required for contract parity).
+**Imposed layout (current slice):** `num_doppler` must be divisible by `num_tx`; each band is `num_doppler / num_tx` bins wide, and `num_doppler_per_tx = num_doppler / num_tx − guard_bands` (the top `guard_bands` fft-order bins of each band are discarded as the inter-band guard). The demuxed output Doppler axis is center-zero over the reduced `[−PRF/2M, PRF/2M)` span, with every TX lane un-shifted to a common reduced-Doppler axis so the emitted `(tx, rx)` block is coherent. Standard linear-phase demux is a waveform-independent Doppler-bin gather.
 
 ### TXSchedule
 
-Describes the TDM slow-time firing pattern for `MIMODeinterleaveOp` — how the interleaved slow-time axis (`M·L` chirps) splits into an explicit TX axis — and, for `MIMOCoherentCompensationOp` (TDM), which firing slot each TX id occupied so the inter-TX phase uses slot, not axis index.
+Describes the TDM slow-time firing pattern for `MIMODeinterleaveOp` and
+`TDMDenseCompensationOp` / `TDMSparseCompensationOp`: how interleaved slow
+time splits into a TX axis and which firing slot each TX id occupied.
 
 - `num_tx` — int. M, the number of time-multiplexed TX.
 - `tx_order` (optional) — int, `(num_tx,)`. TX firing order within one repetition cycle; the schedule repeats it `L` times. Default: round-robin `[0, 1, …, M−1]` (the common case). De-interleave gathers per this order; compensation indexes the TDM phase by the inverse (firing slot of each TX id).

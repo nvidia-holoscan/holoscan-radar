@@ -15,9 +15,9 @@ target_link_libraries(tdm_sparse_compensation_op
     PUBLIC
         holoscan::core
         holoscan::radar_common
+        holoscan::radar_common_mimo_compensation
         holoscan::radar_schemas
     PRIVATE
-        holoscan::mimo_coherent_compensation_op
         holoscan::virtual_array_assembly_op)
 
 set_property(TARGET tdm_sparse_compensation_op

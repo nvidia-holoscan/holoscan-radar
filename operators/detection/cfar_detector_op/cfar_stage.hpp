@@ -42,6 +42,7 @@ struct CfarStageConfig {
   std::vector<double> alpha_lut;
   double threshold_scale;
   std::vector<int64_t> nci_axes;
+  int64_t preintegrated_looks;
   int64_t max_detections;
   bool blocking_alpha_lut_rebuild;
   bool peak_only;

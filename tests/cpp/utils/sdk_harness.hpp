@@ -385,6 +385,9 @@ class DualTensorOverrideSourceOp final : public holoscan::Operator<> {
 };
 
 // Three tensors on one OnClock activation (labels + detection_idx + points).
+// OptionalThirdFirst publishes out2 before the trigger-forming required inputs,
+// allowing out2 to exercise Exact instead of racing the required-input join.
+template <bool OptionalThirdFirst = false>
 class TripleTensorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
@@ -427,18 +430,33 @@ class TripleTensorSourceOp final : public holoscan::Operator<> {
       frame1 = FrameBankB::input_frames[FrameBankB::input_index++];
       frame2 = FrameBankC::input_frames[FrameBankC::input_index++];
     }
-    auto first = emit_bank_frame(out0, context, frame0,
-                                 "TripleTensorSourceOp.out0");
-    if (!first) {
-      return first;
+    if constexpr (OptionalThirdFirst) {
+      auto optional = emit_bank_frame(out2, context, frame2,
+                                      "TripleTensorSourceOp.out2");
+      if (!optional) {
+        return optional;
+      }
+      auto first = emit_bank_frame(out0, context, frame0,
+                                   "TripleTensorSourceOp.out0");
+      if (!first) {
+        return first;
+      }
+      return emit_bank_frame(out1, context, frame1,
+                             "TripleTensorSourceOp.out1");
+    } else {
+      auto first = emit_bank_frame(out0, context, frame0,
+                                   "TripleTensorSourceOp.out0");
+      if (!first) {
+        return first;
+      }
+      auto second = emit_bank_frame(out1, context, frame1,
+                                    "TripleTensorSourceOp.out1");
+      if (!second) {
+        return second;
+      }
+      return emit_bank_frame(out2, context, frame2,
+                             "TripleTensorSourceOp.out2");
     }
-    auto second = emit_bank_frame(out1, context, frame1,
-                                  "TripleTensorSourceOp.out1");
-    if (!second) {
-      return second;
-    }
-    return emit_bank_frame(out2, context, frame2,
-                           "TripleTensorSourceOp.out2");
   }
 
   holoscan::Output<holoscan::Tensor> out0{"out0"};
@@ -1880,13 +1898,15 @@ GraphRunResult run_exact_override_dual_in_single_out_operator_graph_result(
 
 // 3-in / 1-out Graph runner (e.g. DetectionReductionOp with points).
 // `WireFn` receives (graph, source, op, sink); source is TripleTensorSourceOp.
-template <typename OpT, typename ParamsT, typename WireFn>
+template <typename OpT, bool OptionalThirdFirst = false, typename ParamsT,
+typename WireFn>
 GraphRunResult run_triple_in_single_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs1,
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs2, ParamsT params,
     const char* out_port, WireFn&& wire,
-    const MaxTensorExtents& extents = default_test_extents()) {
+    const MaxTensorExtents& extents = default_test_extents(),
+    std::initializer_list<const char*> extra_op_out_ports = {}) {
   GraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -1903,7 +1923,8 @@ GraphRunResult run_triple_in_single_out_operator_graph_result(
   }
 
   holoscan::Graph graph{"triple-in-single-out-harness"};
-  const auto source = graph.op<detail::TripleTensorSourceOp>("source");
+  const auto source =
+      graph.op<detail::TripleTensorSourceOp<OptionalThirdFirst>>("source");
   auto op = emplace_harness_op<OpT>(graph, extents);
   op.set_params(std::move(params));
   const auto sink = graph.op<detail::TensorCaptureOp>("sink");
@@ -1912,6 +1933,9 @@ GraphRunResult run_triple_in_single_out_operator_graph_result(
 
   holoscan::CompileOptions options;
   detail::bind_triple_in_single_out_device_pools(options, out_port);
+  for (const char* port : extra_op_out_ports) {
+    detail::bind_op_device_output(options, port);
+  }
 
   try {
     const holoscan::ExecutionPlan plan =

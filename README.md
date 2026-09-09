@@ -64,7 +64,8 @@ Shared conventions and the full table live in
 | `FMCWRangeDopplerProcessorOp<T>` | Fused range + optional inline clutter + Doppler in one node (bitwise parity with the split chain) |
 | `MIMODeinterleaveOp<T>` | TDM marshaling: split interleaved slow-time into an explicit TX axis via `TXSchedule` gather |
 | `VirtualArrayAssemblyOp<T>` | MIMO marshaling: flatten separated TX×RX channels into a virtual array axis |
-| `MIMOCoherentCompensationOp<T>` | MIMO marshaling: TDM inter-TX phase correction, or DDM Doppler-band demux into an explicit TX axis |
+| `TDMDenseCompensationOp<T>` | Dense TDM inter-TX motion-phase correction |
+| `DDMDenseDemultiplexOp<T>` | Dense DDM linear gather or nonlinear correlation into an explicit TX axis |
 
 ### Detection
 

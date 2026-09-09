@@ -1,6 +1,6 @@
 # `VirtualArrayAssemblyOp`
 
-MIMO marshaling: flatten a separated `(tx, rx)` RD block into one virtual channel axis and emit the matching virtual `ArrayGeometry`. It sits after `MIMOCoherentCompensationOp` (and after optional post-demux clutter on DDM) and feeds CFAR plus the angle path. Virtual positions are `p_virtual = p_tx + p_rx` in the array-local frame; coincident elements are handled by `overlap_policy` so `num_virtual ≤ M·N`.
+MIMO marshaling: flatten a separated `(tx, rx)` RD block into one virtual channel axis and emit the matching virtual `ArrayGeometry`. It sits after `TDMDenseCompensationOp / DDMDenseDemultiplexOp` (and after optional post-demux clutter on DDM) and feeds CFAR plus the angle path. Virtual positions are `p_virtual = p_tx + p_rx` in the array-local frame; coincident elements are handled by `overlap_policy` so `num_virtual ≤ M·N`.
 
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
@@ -10,7 +10,7 @@ MIMO marshaling: flatten a separated `(tx, rx)` RD block into one virtual channe
 | live | `wavelength` | float64 scalar | scalar | Exact override; wire to enable, unwired = miss |
 
 ```text
-… → MIMOCoherentCompensationOp → [ClutterFilterOp (DDM only)] → VirtualArrayAssemblyOp → CFARDetectorOp / SnapshotGatherOp / ⟨angle op⟩
+… → TDMDenseCompensationOp / DDMDenseDemultiplexOp → [ClutterFilterOp (DDM only)] → VirtualArrayAssemblyOp → CFARDetectorOp / SnapshotGatherOp / ⟨angle op⟩
 ```
 
 Contract: [`OPERATOR_API.md` § `VirtualArrayAssemblyOp`](../../../docs/planning/OPERATOR_API.md) ·

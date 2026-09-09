@@ -26,7 +26,10 @@ set(HOLOSCAN_RADAR_HSDK5_PORTED_PERF
     clutter_filter
     mimo_deinterleave
     phase_shift_beamformer
-    mimo_coherent_compensation
+    tdm_dense_compensation
+    ddm_dense_demultiplex
+    ddm_power_fold
+    ddm_sparse_demultiplex
     tdm_sparse_compensation
     virtual_array_assembly
     fmcw_range_processor
@@ -104,8 +107,14 @@ radar_add_perf(esprit_estimator holoscan::esprit_estimator_op)
 radar_add_perf(phase_shift_beamformer holoscan::phase_shift_beamformer_op)
 radar_add_perf(mimo_deinterleave holoscan::mimo_deinterleave_op)
 radar_add_perf(virtual_array_assembly holoscan::virtual_array_assembly_op)
-radar_add_perf(mimo_coherent_compensation
-    holoscan::mimo_coherent_compensation_op)
+radar_add_perf(tdm_dense_compensation
+    holoscan::tdm_dense_compensation_op)
+radar_add_perf(ddm_dense_demultiplex
+    holoscan::ddm_dense_demultiplex_op)
+radar_add_perf(ddm_power_fold
+    holoscan::ddm_power_fold_op)
+radar_add_perf(ddm_sparse_demultiplex
+    holoscan::ddm_sparse_demultiplex_op)
 radar_add_perf(tdm_sparse_compensation
     holoscan::tdm_sparse_compensation_op)
 

@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Performance characterization for MIMOCoherentCompensationOp (Python).
+"""Performance characterization for TDMDenseCompensationOp (Python).
 
 Measurement tool only: no timing assertions. Mirrors
-``performance/cpp/perf_mimo_coherent_compensation.cpp``: TDM per-Doppler
+``performance/cpp/perf_tdm_dense_compensation.cpp``: TDM per-Doppler
 inter-TX phase correction on separated RD maps, sweeping (M_tx, N_rx,
 num_doppler, num_range_bins), a leading batch axis, and inlining a
 mid-session ``[live]`` waveform override so correction-table rebuild cost is
@@ -46,15 +46,14 @@ from holoscan.radar import DDMCodeDescriptor  # noqa: E402
 from holoscan.radar import (
     FMCWWaveformDescriptor,
     FMCWWaveformSpec,
-    MIMOCoherentCompensationOpF32,
-    MultiplexingScheme,
+    TDMDenseCompensationOpF32,
 )
 
 _DEFAULT_PRI = 25.0e-6
 _OVERRIDE_PRI = 27.5e-6
 
 # ---------------------------------------------------------------------------
-# Size ladder — keep aligned with perf_mimo_coherent_compensation.cpp
+# Size ladder — keep aligned with perf_tdm_dense_compensation.cpp
 # ---------------------------------------------------------------------------
 
 SIZE_LADDER = [
@@ -80,7 +79,6 @@ _SIZE_BY_ID = {item.id: item for item in SIZE_LADDER}
 class CompensationScenario:
     id: str
     size_id: str
-    scheme: MultiplexingScheme
     variant: str
     num_tx: int
     num_rx: int
@@ -130,86 +128,48 @@ def make_ddm_nl_code(num_tx: int, num_doppler: int) -> DDMCodeDescriptor:
 
 
 def input_shape(scen: CompensationScenario) -> list[int]:
-    ddm = scen.scheme == MultiplexingScheme.DDM
     shape: list[int] = []
     if scen.batch > 1:
         shape.append(scen.batch)
-    if not ddm:
-        shape.append(scen.num_tx)
-    shape.append(scen.num_rx)
-    shape.append(scen.num_doppler)
-    shape.append(scen.num_range_bins)
+    shape.extend([scen.num_tx, scen.num_rx, scen.num_doppler, scen.num_range_bins])
     return shape
 
 
-def make_scenario(
-    size_id: str,
-    scheme: MultiplexingScheme = MultiplexingScheme.TDM,
-    batch: int = 1,
-    *,
-    non_linear_ddm: bool = False,
-) -> CompensationScenario:
+def make_scenario(size_id: str, batch: int = 1) -> CompensationScenario:
     num_tx, num_rx, num_doppler, num_range_bins = _must_find_size(size_id)
-    if scheme == MultiplexingScheme.DDM:
-        variant = "ddm_nl" if non_linear_ddm else "ddm"
-    else:
-        variant = "tdm"
-    scen_id = f"compensation_{variant}_{size_id}"
+    scen_id = f"tdm_dense_compensation_{size_id}"
     if batch > 1:
         scen_id += f"_b{batch}"
     return CompensationScenario(
         id=scen_id,
         size_id=size_id,
-        scheme=scheme,
-        variant=variant,
+        variant="tdm",
         num_tx=num_tx,
         num_rx=num_rx,
         num_doppler=num_doppler,
         num_range_bins=num_range_bins,
         batch=batch,
-        non_linear_ddm=non_linear_ddm,
     )
 
 
 def build_default_matrix() -> list[CompensationScenario]:
-    out: list[CompensationScenario] = []
-    for sid in ("xs", "md", "lg", "xl"):
-        out.append(make_scenario(sid))
-    out.append(make_scenario("md", MultiplexingScheme.TDM, 4))
-    for sid in ("xs", "md", "xl"):
-        out.append(make_scenario(sid, MultiplexingScheme.DDM))
-        out.append(make_scenario(sid, MultiplexingScheme.DDM, non_linear_ddm=True))
+    out = [make_scenario(sid) for sid in ("xs", "md", "lg", "xl")]
+    out.append(make_scenario("md", batch=4))
     return out
 
 
 def build_size_sweep(size_ids: list[str]) -> list[CompensationScenario]:
-    out: list[CompensationScenario] = []
-    for sid in size_ids:
-        if sid not in _SIZE_BY_ID:
-            print(f"warning: unknown size id '{sid}', skipping", file=sys.stderr)
-            continue
-        out.append(make_scenario(sid))
-        out.append(make_scenario(sid, MultiplexingScheme.DDM))
-        out.append(make_scenario(sid, MultiplexingScheme.DDM, non_linear_ddm=True))
-    return out
+    return [make_scenario(sid) for sid in size_ids if sid in _SIZE_BY_ID]
 
 
 def build_full_matrix() -> list[CompensationScenario]:
-    out: list[CompensationScenario] = []
-    for item in SIZE_LADDER:
-        out.append(make_scenario(item.id))
-    for sid in ("md", "lg"):
-        out.append(make_scenario(sid, MultiplexingScheme.TDM, 4))
-    for item in SIZE_LADDER:
-        out.append(make_scenario(item.id, MultiplexingScheme.DDM))
-        out.append(make_scenario(item.id, MultiplexingScheme.DDM, non_linear_ddm=True))
-    return out
+    return [make_scenario(item.id) for item in SIZE_LADDER]
 
 
 def _base_row(scen: CompensationScenario) -> ResultRow:
     return ResultRow(
         scenario_id=scen.id,
-        op_name="MIMOCoherentCompensationOp",
+        op_name="TDMDenseCompensationOp",
         variant=scen.variant,
         size_id=scen.size_id,
         input_shape=input_shape(scen),
@@ -226,7 +186,7 @@ def _fill_throughput(row: ResultRow, scen: CompensationScenario) -> None:
     batch = float(scen.batch)
     # Input samples touched: TDM carries M_tx explicitly; DDM folds the M TX
     # into the (already counted) Doppler axis, so it has no M_tx factor.
-    tx_factor = 1.0 if scen.scheme == MultiplexingScheme.DDM else float(scen.num_tx)
+    tx_factor = float(scen.num_tx)
     elems = (
         batch
         * tx_factor
@@ -250,16 +210,10 @@ def _run_graph(
 ) -> None:
     class CompensationPerfApp(Application):
         def compose(self) -> None:
-            ddm_code = (
-                make_ddm_nl_code(scen.num_tx, scen.num_doppler)
-                if scen.non_linear_ddm
-                else make_ddm_code(scen.num_tx)
-            )
-            op = MIMOCoherentCompensationOpF32(
+
+            op = TDMDenseCompensationOpF32(
                 self,
-                multiplexing_scheme=scen.scheme,
                 waveform=make_waveform(_DEFAULT_PRI),
-                ddm_code=ddm_code,
                 name="compensation",
             )
 
@@ -310,29 +264,11 @@ def run_scenario(scen: CompensationScenario, rs: RunSettings, report: PerfReport
     row = _base_row(scen)
     fill_compute_row(row, samples)
     _fill_throughput(row, scen)
-    if scen.non_linear_ddm:
-        row.notes = (
-            "DDM non-linear phase_codes conjugate-correlation demux "
-            "(waveform-independent); cold_ms includes initial corr-weights "
-            "build; median/p90 are steady state; [live] waveform override is "
-            "inert; cells/s counts input complex samples read; output keeps "
-            "full Doppler axis"
-        )
-    elif scen.scheme == MultiplexingScheme.DDM:
-        row.notes = (
-            "DDM per-band Doppler gather (waveform-independent); cold_ms is "
-            "first-frame latency including initial demux-table build; "
-            "median/p90 are steady state; the [live] waveform override is "
-            "inert for DDM; cells/s counts input complex samples read"
-        )
-    else:
-        row.notes = (
-            "TDM per-bin complex multiply; cold_ms is first-frame latency "
-            "including initial correction-table build; median/p90 are "
-            "pre-override steady state; override_ms is peak latency over the "
-            "3-frame live waveform rebuild window; cells/s counts complex "
-            "samples touched"
-        )
+    row.notes = (
+        "TDM per-bin complex multiply; cold_ms includes the initial "
+        "correction-table build; median/p90 are steady state; cells/s "
+        "counts complex samples touched"
+    )
     report.results.append(row)
 
 
@@ -344,8 +280,8 @@ def _process_warmup(_rs: RunSettings) -> None:
 
 def main() -> int:
     return run_perf_matrix_main(
-        tool_name="perf_mimo_coherent_compensation",
-        description="MIMOCoherentCompensationOp performance characterization (Python)",
+        tool_name="perf_tdm_dense_compensation",
+        description="TDMDenseCompensationOp performance characterization (Python)",
         size_ladder_defs=SIZE_LADDER,
         build_full_matrix=build_full_matrix,
         build_default_matrix=build_default_matrix,

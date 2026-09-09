@@ -41,6 +41,8 @@ class PyCFARDetectorOp : public CFARDetectorOp<T> {
       const std::vector<double>& alpha_lut = {},
       double threshold_scale = 1.0,
       const std::vector<int64_t>& nci_axes = {},
+      int64_t preintegrated_looks = 1,
+      int64_t nci_fold = 0,
       int64_t max_detections = 0,
       bool blocking_alpha_lut_rebuild = false,
       bool peak_only = false,
@@ -76,6 +78,8 @@ class PyCFARDetectorOp : public CFARDetectorOp<T> {
     this->add_arg(Arg("alpha_lut") = alpha_lut);
     this->add_arg(Arg("threshold_scale") = threshold_scale);
     this->add_arg(Arg("nci_axes") = nci_axes);
+    this->add_arg(Arg("preintegrated_looks") = preintegrated_looks);
+    this->add_arg(Arg("nci_fold") = nci_fold);
     this->add_arg(Arg("max_detections") = max_detections);
     this->add_arg(Arg("blocking_alpha_lut_rebuild") =
                       blocking_alpha_lut_rebuild);
@@ -104,6 +108,8 @@ void bind_cfar_detector(py::module_& m, const char* class_name) {
       "alpha_lut : list[float], optional\n"
       "threshold_scale : float, optional\n"
       "nci_axes : list[int], optional\n"
+      "preintegrated_looks : int, optional\n"
+      "nci_fold : int, optional\n"
       "max_detections : int, optional\n"
       "blocking_alpha_lut_rebuild : bool, optional\n"
       "peak_only : bool, optional\n"
@@ -113,8 +119,8 @@ void bind_cfar_detector(py::module_& m, const char* class_name) {
                     const std::vector<int64_t>&,
                     const std::vector<int64_t>&, double,
                     const std::vector<double>&, double,
-                    const std::vector<int64_t>&, int64_t, bool, bool,
-                    CfarPeakNeighborhood, int64_t,
+                    const std::vector<int64_t>&, int64_t, int64_t, int64_t,
+                    bool, bool, CfarPeakNeighborhood, int64_t,
                     int64_t, int64_t, int64_t, int64_t,
                     const std::string&>(),
            py::arg("fragment"),
@@ -126,6 +132,8 @@ void bind_cfar_detector(py::module_& m, const char* class_name) {
            py::arg("alpha_lut") = std::vector<double>{},
            py::arg("threshold_scale") = 1.0,
            py::arg("nci_axes") = std::vector<int64_t>{},
+           py::arg("preintegrated_looks") = int64_t{1},
+           py::arg("nci_fold") = int64_t{0},
            py::arg("max_detections") = int64_t{0},
            py::arg("blocking_alpha_lut_rebuild") = false,
            py::arg("peak_only") = false,

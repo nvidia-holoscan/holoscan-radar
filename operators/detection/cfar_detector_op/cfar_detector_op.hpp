@@ -138,6 +138,8 @@ struct CFARParams {
   std::vector<double> alpha_lut{};
   double threshold_scale{1.0};
   std::vector<int64_t> nci_axes{};
+  // Independent power looks already summed in each real input sample.
+  int64_t preintegrated_looks{1};
   // Optional NCI fold hint (K). Static. YAML name nci_fold.
   int64_t nci_fold{0};
   int64_t max_detections{0};  // <= 0 → uncapped
@@ -177,9 +179,13 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Leading-axis indices to non-coherently integrate before "
             "thresholding"),
+    holoscan::field<&CFARParams::preintegrated_looks>("preintegrated_looks")
+        .description(
+            "Independent power looks already summed in each real input "
+            "sample; static; default 1"),
     holoscan::field<&CFARParams::nci_fold>("nci_fold")
         .description(
-            "Optional integration fold K for start-time alpha LUT "
+            "Optional leading-axis integration fold for start-time alpha LUT "
             "pre-warm when nci_axes is set; <= 0 → unset; static"),
     holoscan::field<&CFARParams::max_detections>("max_detections")
         .description("Cap on emitted detections (<= 0 → uncapped)"),

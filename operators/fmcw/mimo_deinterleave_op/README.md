@@ -8,7 +8,7 @@ TDM front-of-chain marshaling: gather an interleaved slow-time ADC cube into an 
 | out | `adc_cube_out` | same as input | `(M_tx, N_rx, L, samples_per_chirp)` | Always emitted. `L = (M·L) / num_tx`. **[EA HSDK5 ONLY]** physical name `adc_cube_out` (logical channel `adc_cube`) |
 
 ```text
-adc_cube → MIMODeinterleaveOp → FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp → MIMOCoherentCompensationOp → VirtualArrayAssemblyOp
+adc_cube → MIMODeinterleaveOp → FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp → TDMDenseCompensationOp / DDMDenseDemultiplexOp → VirtualArrayAssemblyOp
 ```
 
 Contract: [`OPERATOR_API.md` § `MIMODeinterleaveOp`](../../../docs/planning/OPERATOR_API.md) ·
@@ -20,7 +20,7 @@ The operator is data marshaling only. `compute()` is a thin Holoscan shell; tick
 
 Trailing rank is `(N_rx, M·L, samples)`, not an FMCW `(chirps, bins)` cube, so the plan builder uses `parse_adc_cube_layout` instead of `collapse_named_tx_rx_batch`. Rank must be exactly 3.
 
-**Schedule expansion.** `TXSchedule` describes how the interleaved `M·L` slow-time axis splits. `num_tx` is M. Empty `tx_order` means round-robin `[0, 1, …, M−1]`; a nonempty `tx_order` is a permutation of that set and is the firing cycle. Optional `chirp_tx_index` (length `M·L`) overrides `tx_order` when present. The cycle repeats `L` times. Expansion lives in `TXSchedule::expand_chirp_tx_index` (`operators/common/radar_common/descriptors/tx_schedule.cpp`). Pass the same `TXSchedule` to `MIMOCoherentCompensationOp` so TDM phase uses firing slot, not TX id (`firing_slot_by_tx()`).
+**Schedule expansion.** `TXSchedule` describes how the interleaved `M·L` slow-time axis splits. `num_tx` is M. Empty `tx_order` means round-robin `[0, 1, …, M−1]`; a nonempty `tx_order` is a permutation of that set and is the firing cycle. Optional `chirp_tx_index` (length `M·L`) overrides `tx_order` when present. The cycle repeats `L` times. Expansion lives in `TXSchedule::expand_chirp_tx_index` (`operators/common/radar_common/descriptors/tx_schedule.cpp`). Pass the same `TXSchedule` to `TDMDenseCompensationOp / DDMDenseDemultiplexOp` so TDM phase uses firing slot, not TX id (`firing_slot_by_tx()`).
 
 **Uniformity (v1 scope).** First-wave TDM assumes uniform per-TX spacing. After expansion, the pattern must be a length-M cycle that repeats identically across all `L` repetitions, and each TX must appear exactly `chirps_per_tx = slow_time / num_tx` times. Custom permutations of `[0, …, M−1]` are allowed when they still repeat uniformly. Non-uniform / staggered schedules are rejected with `"TXSchedule: non-uniform / non-repeating schedule is rejected for first-wave TDM"` (or `"TXSchedule: each TX must appear exactly chirps_per_tx times"`). Staggered TDM is deferred (STATUS.md L12 / Roadmap).
 
@@ -78,7 +78,7 @@ Output extents are inferred each tick from `adc_cube` and `tx_schedule.num_tx`:
 
 `TXSchedule` YAML / `set_params` fields: `num_tx` (int, required), `tx_order` (int vector, optional), `chirp_tx_index` (int vector, optional). Decode runs `TXSchedule::validate()`. Empty `tx_order` is round-robin; nonempty `chirp_tx_index` wins over `tx_order`.
 
-There are no `[live]` parameters. `tx_schedule` has no Exact port and is not declared as `spec.input`. A live schedule on this producer would be a new contract, and would have to land with a live consumer (`MIMOCoherentCompensationOp`) at the same time — do not add one here to "complete" the Params surface. HSDK 5 Graph live-override harness notes in [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1 / §8 / §9 do not apply to this operator.
+There are no `[live]` parameters. `tx_schedule` has no Exact port and is not declared as `spec.input`. A live schedule on this producer would be a new contract, and would have to land with a live consumer (`TDMDenseCompensationOp / DDMDenseDemultiplexOp`) at the same time — do not add one here to "complete" the Params surface. HSDK 5 Graph live-override harness notes in [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1 / §8 / §9 do not apply to this operator.
 
 ## SDK implementation notes
 
@@ -146,7 +146,7 @@ graph.add_flow(source->adc_cube, deinterleave->adc_cube, q);
 graph.add_flow(deinterleave->adc_cube_out, range->adc_cube, q);
 ```
 
-`extents` must fill `max_tx`, `max_rx`, `max_chirps` (per-TX `L`), and `max_samples_per_chirp`. Device Tensor producers also need `CompileOptions.deployment.bind_tensor_output_device` on `"adc_cube_out"` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §3). Set downstream `waveform.chirp_repetition_interval` to the per-TX effective PRI (`M ×` physical spacing). Copy the same `tx_schedule` onto `MIMOCoherentCompensationOp` under TDM.
+`extents` must fill `max_tx`, `max_rx`, `max_chirps` (per-TX `L`), and `max_samples_per_chirp`. Device Tensor producers also need `CompileOptions.deployment.bind_tensor_output_device` on `"adc_cube_out"` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §3). Set downstream `waveform.chirp_repetition_interval` to the per-TX effective PRI (`M ×` physical spacing). Copy the same `tx_schedule` onto `TDMDenseCompensationOp / DDMDenseDemultiplexOp` under TDM.
 
 Python bindings exist (`MIMODeinterleaveOpF32` / `MIMODeinterleaveOpF64`). **[EA HSDK5 ONLY]** the public Python Graph / Holoviz path is still deferred (HSDK5_PORT §6); the C++ Graph construction above is the ported surface.
 

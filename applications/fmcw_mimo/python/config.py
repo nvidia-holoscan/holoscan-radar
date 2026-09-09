@@ -4,8 +4,8 @@
 # App-owned config for fmcw_mimo: the AppConfig type and its YAML loader
 # (TDM/DDM branch, virtual array geometry, targets, the DDM code helpers).
 # Colocated with the app; the graph wiring lives in fmcw_mimo.py. Operator
-# blocks are NOT parsed here except mimo_coherent_compensation, which must
-# stay manual (see parse_mimo_coherent_compensation's docstring) — every
+# blocks are NOT parsed here except dense MIMO split, which must
+# stay manual (see parse_dense MIMO split's docstring) — every
 # other block flows through Holoscan's from_config().
 #
 # Imported bare (``import config``) from fmcw_mimo.py: each app is invoked as
@@ -28,9 +28,10 @@ from common.python.demo_config import (
     make_virtual_geometry,
     parse_common_run_config,
     parse_ddm_code,
-    parse_mimo_coherent_compensation,
+    parse_ddm_dense_demultiplex,
     parse_noise,
     parse_target,
+    parse_tdm_dense_compensation,
     parse_tx_schedule,
     parse_waveform,
 )
@@ -68,10 +69,11 @@ class AppConfig(CommonRunConfig):
     el_hi: float = 0.1
     report_waveform: object = None
     report_num_doppler: int = 0
-    # mimo_coherent_compensation stays a manual kwargs dict (see
-    # parse_mimo_coherent_compensation): fmcw_mimo.py builds the op from
-    # **cfg.mimo_coherent_compensation, not self.from_config(...).
-    mimo_coherent_compensation: dict = field(default_factory=dict)
+    # dense MIMO split stays a manual kwargs dict (see
+    # parse_dense MIMO split): fmcw_mimo.py builds the op from
+    # **cfg.dense MIMO split, not self.from_config(...).
+    tdm_dense_compensation: dict = field(default_factory=dict)
+    ddm_dense_demultiplex: dict = field(default_factory=dict)
 
 
 def _scale_position(iy: float, iz: float, spacing_wl: float, wavelength: float):
@@ -123,10 +125,11 @@ def load_config(path: Path) -> AppConfig:
         chirp_repetition_interval=waveform.chirp_repetition_interval(),
     )
 
-    mcc = root.get("mimo_coherent_compensation", {})
-    if not mcc or "multiplexing_scheme" not in mcc:
-        raise ValueError("fmcw_mimo: mimo_coherent_compensation.multiplexing_scheme is required")
-    cfg.scheme = parse_mimo_coherent_compensation(mcc)["multiplexing_scheme"]
+    if "multiplexing_scheme" not in root:
+        raise ValueError("fmcw_mimo: multiplexing_scheme is required")
+    from common.python.demo_config import parse_enum
+
+    cfg.scheme = parse_enum(MultiplexingScheme, root["multiplexing_scheme"], "MultiplexingScheme")
     if cfg.scheme not in (MultiplexingScheme.TDM, MultiplexingScheme.DDM):
         raise ValueError("fmcw_mimo: multiplexing_scheme must be tdm or ddm")
 
@@ -150,13 +153,14 @@ def load_config(path: Path) -> AppConfig:
             cfg.scene.num_chirps = int(cube["num_chirps"])
         else:
             cfg.scene.num_chirps = int(cube["chirps_per_tx"])
-        if "ddm_code" not in mcc:
-            raise ValueError("fmcw_mimo: mimo_coherent_compensation.ddm_code is required for DDM")
-        cfg.ddm_code = parse_ddm_code(mcc["ddm_code"])
+        ddm = root.get("ddm_dense_demultiplex", {})
+        if "ddm_code" not in ddm:
+            raise ValueError("fmcw_mimo: ddm_dense_demultiplex.ddm_code is required for DDM")
+        cfg.ddm_code = parse_ddm_code(ddm["ddm_code"])
         if cfg.ddm_code.num_tx != cfg.scene.num_tx:
             raise ValueError("fmcw_mimo: ddm_code.num_tx must match tx_array.num_tx")
-        if "generate_phase_codes" in mcc["ddm_code"]:
-            kind = str(mcc["ddm_code"]["generate_phase_codes"])
+        if "generate_phase_codes" in ddm["ddm_code"]:
+            kind = str(ddm["ddm_code"]["generate_phase_codes"])
             if kind in ("zadoff_chu", "zc"):
                 fill_zadoff_chu_phase_codes(cfg.ddm_code, cfg.scene.num_chirps)
             elif kind == "sin":
@@ -226,12 +230,13 @@ def load_config(path: Path) -> AppConfig:
         [float(x) for x in be.get("el_angles", [])] or None, -0.1, 0.1
     )
 
-    cfg.mimo_coherent_compensation = parse_mimo_coherent_compensation(mcc)
-    # Prefer the app-resolved descriptor (may expand generate_phase_codes).
-    if cfg.scheme == MultiplexingScheme.DDM:
-        cfg.mimo_coherent_compensation["ddm_code"] = cfg.ddm_code
-    if cfg.scheme == MultiplexingScheme.TDM:
-        cfg.mimo_coherent_compensation["tx_schedule"] = cfg.tx_schedule
+    cfg.tdm_dense_compensation = parse_tdm_dense_compensation(
+        root.get("tdm_dense_compensation", {})
+    )
+    cfg.tdm_dense_compensation.setdefault("waveform", waveform)
+    cfg.tdm_dense_compensation["tx_schedule"] = cfg.tx_schedule
+    cfg.ddm_dense_demultiplex = parse_ddm_dense_demultiplex(root.get("ddm_dense_demultiplex", {}))
+    cfg.ddm_dense_demultiplex["ddm_code"] = cfg.ddm_code
     # READ-ONLY MIRROR of the cfar_detector operator block: peak_only stays a
     # native CFAR param (from_config); the app reads it only to gate the graph.
     cfg.peak_only = bool((root.get("cfar_detector") or {}).get("peak_only", False))

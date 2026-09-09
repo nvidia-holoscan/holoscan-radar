@@ -1,7 +1,7 @@
 # FMCW MIMO — Python demo
 
 Python Holoviz demo mirroring [`../cpp/fmcw_mimo.cpp`](../cpp/fmcw_mimo.cpp). Supports
-TDM and DDM multiplexing via `mimo_coherent_compensation.multiplexing_scheme` in the
+TDM and DDM multiplexing via top-level `multiplexing_scheme` in the
 YAML config.
 
 ## Prerequisites
@@ -55,8 +55,8 @@ Same layering as the C++ side (see [`../README.md`](../README.md) and
 - `fmcw_mimo.py` — the graph only: `FmcwMimoApp.compose()` plus a `main()`
   that calls the shared `common.python.driver.run_fmcw_app()`. Every operator
   block flows through Holoscan's `from_config()` **except**
-  `mimo_coherent_compensation`, which must stay a manual kwargs dict (see
-  `demo_config.parse_mimo_coherent_compensation`'s docstring): the app
+  the selected dense operator block, which must stay a manual kwargs dict (see
+  the split dense parsers's docstring): the app
   injects an app-resolved `ddm_code` that shares a YAML key with that block,
   and Holoscan's Python `Operator.__init__` applies `from_config()`'s
   `ArgList` after all kwargs regardless of call-site order, so `from_config()`

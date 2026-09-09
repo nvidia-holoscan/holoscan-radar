@@ -7,7 +7,8 @@ find_package(yaml-cpp REQUIRED)
 
 target_link_libraries(fmcw_mimo PRIVATE
     holoscan::mimo_deinterleave_op
-    holoscan::mimo_coherent_compensation_op
+    holoscan::tdm_dense_compensation_op
+    holoscan::ddm_dense_demultiplex_op
     holoscan::virtual_array_assembly_op
     holoscan::fmcw_range_processor_op
     holoscan::clutter_filter_op

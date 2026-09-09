@@ -26,7 +26,6 @@ from holoscan.radar import (
     DDMCodeDescriptor,
     FMCWWaveformDescriptor,
     FMCWWaveformSpec,
-    MultiplexingScheme,
     TXSchedule,
     WindowSpec,
     WindowType,
@@ -155,29 +154,21 @@ def parse_angle_convention(node: Any) -> AngleConvention:
     return conv
 
 
-def parse_mimo_coherent_compensation(block: dict[str, Any]) -> dict[str, Any]:
-    """Extract mimo_coherent_compensation's ``multiplexing_scheme`` / kwargs.
-
-    Kept manual (not routed through ``self.from_config()``): unlike the other
-    operator blocks, ``fmcw_mimo`` must inject an app-resolved ``ddm_code``
-    (which may expand ``generate_phase_codes`` into explicit ``phase_codes``)
-    that shares this block's YAML key. Holoscan's Python ``Operator.__init__``
-    applies ``from_config()``'s ``ArgList`` (a positional arg) *after* all
-    kwargs regardless of call-site order, so ``from_config()`` would always
-    win and silently discard the resolved override. See fmcw_mimo/python/
-    config.py::load_config.
-    """
-    kwargs: dict[str, Any] = {"name": "mimo_coherent_compensation"}
-    if "multiplexing_scheme" in block:
-        kwargs["multiplexing_scheme"] = parse_enum(
-            MultiplexingScheme, block["multiplexing_scheme"], "MultiplexingScheme"
-        )
+def parse_tdm_dense_compensation(block: dict[str, Any]) -> dict[str, Any]:
+    """Build kwargs for TDMDenseCompensationOp."""
+    kwargs: dict[str, Any] = {"name": "tdm_dense_compensation"}
     if "waveform" in block:
         kwargs["waveform"] = parse_waveform(block["waveform"])
-    if "ddm_code" in block:
-        kwargs["ddm_code"] = parse_ddm_code(block["ddm_code"])
     if "tx_schedule" in block:
         kwargs["tx_schedule"] = parse_tx_schedule(block["tx_schedule"])
+    return kwargs
+
+
+def parse_ddm_dense_demultiplex(block: dict[str, Any]) -> dict[str, Any]:
+    """Build kwargs for DDMDenseDemultiplexOp."""
+    kwargs: dict[str, Any] = {"name": "ddm_dense_demultiplex"}
+    if "ddm_code" in block:
+        kwargs["ddm_code"] = parse_ddm_code(block["ddm_code"])
     return kwargs
 
 

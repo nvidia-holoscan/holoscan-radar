@@ -27,7 +27,8 @@
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
-#include "fmcw/mimo_coherent_compensation_op/mimo_coherent_compensation_op.hpp"
+#include "fmcw/ddm_dense_demultiplex_op/ddm_dense_demultiplex_op.hpp"
+#include "fmcw/tdm_dense_compensation_op/tdm_dense_compensation_op.hpp"
 #include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_op.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
@@ -149,6 +150,10 @@ inline void load_cfar_params(const YAML::Node& node, CFARParams* p) {
   if (node["nci_axes"]) {
     p->nci_axes = node["nci_axes"].as<std::vector<int64_t>>();
   }
+  if (node["preintegrated_looks"]) {
+    p->preintegrated_looks =
+        node["preintegrated_looks"].as<int64_t>();
+  }
   if (node["nci_fold"]) {
     p->nci_fold = node["nci_fold"].as<int64_t>();
   }
@@ -248,30 +253,21 @@ inline void load_deinterleave_params(const YAML::Node& node,
   }
 }
 
-// Loads multiplexing_scheme / waveform / ddm_code / tx_schedule from YAML.
-// Apps that expand generate_phase_codes overwrite ddm_code after this call.
-// TDM apps typically overwrite tx_schedule from the deinterleave block.
-inline void load_coherent_compensation_params(
-    const YAML::Node& node, MIMOCoherentCompensationParams* p) {
-  if (!node || node.IsNull()) {
-    return;
-  }
-  if (node["multiplexing_scheme"]) {
-    p->multiplexing_scheme =
-        node["multiplexing_scheme"].as<MultiplexingScheme>();
-  }
-  if (node["waveform"]) {
-    p->waveform = node["waveform"].as<FMCWWaveformDescriptor>();
-  }
-  if (node["ddm_code"]) {
-    p->ddm_code = node["ddm_code"].as<DDMCodeDescriptor>();
-  }
-  if (node["tx_schedule"]) {
-    p->tx_schedule = node["tx_schedule"].as<TXSchedule>();
-  }
+// Load the two dense MIMO operator parameter blocks. Modality selection is
+// app-owned; neither operator carries a multiplexing switch.
+inline void load_tdm_dense_compensation_params(
+    const YAML::Node& node, TDMDenseCompensationParams* p) {
+  if (!node || node.IsNull()) return;
+  if (node["waveform"]) p->waveform = node["waveform"].as<FMCWWaveformDescriptor>();
+  if (node["tx_schedule"]) p->tx_schedule = node["tx_schedule"].as<TXSchedule>();
 }
 
-// Loads overlap_policy only; tx/rx positions + wavelength are set by the app.
+inline void load_ddm_dense_demultiplex_params(
+    const YAML::Node& node, DDMDenseDemultiplexParams* p) {
+  if (!node || node.IsNull()) return;
+  if (node["ddm_code"]) p->ddm_code = node["ddm_code"].as<DDMCodeDescriptor>();
+}
+
 inline void load_vaa_params(const YAML::Node& node,
                             VirtualArrayAssemblyParams* p) {
   if (!node || node.IsNull()) {

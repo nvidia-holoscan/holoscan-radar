@@ -158,8 +158,8 @@ interpreter would collide in `sys.modules`.
 The config-boundary rule is the same as the C++ side (see above): operator
 YAML blocks flow through Holoscan's `from_config()`, never manual per-app
 parsing. All four Python demos follow this for every operator block **except
-one**: `fmcw_mimo`'s `mimo_coherent_compensation`, which stays a manual kwargs
-dict (`demo_config.parse_mimo_coherent_compensation`).
+one**: `fmcw_mimo`'s selected dense TDM/DDM block, which stays a manual kwargs
+dict (the split dense parsers).
 
 The reason is a Python-only pybind11 quirk, not a design choice: Holoscan's
 Python `Operator.__init__` applies `from_config()`'s `ArgList` (arrives as a

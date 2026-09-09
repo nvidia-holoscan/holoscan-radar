@@ -16,7 +16,10 @@ holoscan_radar_add_operator(fmcw_range_doppler_processor_op
 )
 holoscan_radar_add_operator(tdm_sparse_compensation_op
     DEPENDS OPERATORS
-        mimo_coherent_compensation_op
+        virtual_array_assembly_op
+)
+holoscan_radar_add_operator(ddm_sparse_demultiplex_op
+    DEPENDS OPERATORS
         virtual_array_assembly_op
 )
 holoscan_radar_add_operator(fmcw_range_processor_op)
@@ -24,4 +27,6 @@ holoscan_radar_add_operator(clutter_filter_op)
 holoscan_radar_add_operator(fmcw_doppler_processor_op)
 holoscan_radar_add_operator(mimo_deinterleave_op)
 holoscan_radar_add_operator(virtual_array_assembly_op)
-holoscan_radar_add_operator(mimo_coherent_compensation_op)
+holoscan_radar_add_operator(tdm_dense_compensation_op)
+holoscan_radar_add_operator(ddm_dense_demultiplex_op)
+holoscan_radar_add_operator(ddm_power_fold_op)

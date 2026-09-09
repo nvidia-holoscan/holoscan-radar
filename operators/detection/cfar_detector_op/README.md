@@ -51,7 +51,7 @@ group: [`operators/detection/README.md`](../README.md)
 
    GO, SO, and OS with `K > 1` have no closed form and invert Pfa by Monte Carlo. An external `alpha_lut` skips calibration and ignores `pfa` for α. `threshold_scale` always multiplies the active α.
 
-5. **Start-time pre-warm.** `start()` pre-builds the pfa-derived LUT for **CA and OS only**, keyed on a canonical window-sized map (`win = 2·(guard+train)+1` per axis). GO / SO are map-dependent (`go_lut_index`) and are **not** pre-warmed. A missing `nci_fold` when `nci_axes` is set defers calibration to the first tick.
+5. **Start-time pre-warm.** `start()` pre-builds the pfa-derived LUT for **CA and OS only**, keyed on a canonical window-sized map (`win = 2·(guard+train)+1` per axis). GO / SO are map-dependent (`go_lut_index`) and are **not** pre-warmed. A missing `nci_fold` when `nci_axes` is set defers calibration to the first tick. `preintegrated_looks` contributes to `K` even when `nci_axes` is empty.
 
 6. **`peak_only` NMS** (static, default off). `cfar_peak_suppress_kernel` refines the raw mask: a detected cell survives only if its `cfar_power` is a local maximum over **detected** neighbors (`cross4` = orthogonal 4; `square8` = full 8). Exact ties break by raster order — lowest within-plane index `d·num_range + r` wins. `detection_score` / `noise_estimate` stay the dense raw maps; `detection_mask` / `detection_idx` follow the refined peaks.
 
@@ -96,6 +96,7 @@ group: [`operators/detection/README.md`](../README.md)
 | `alpha_lut` | float64 vector | `[]` | `[live]` Exact host config Tensor | Validation + H2D upload | Precomputed α table; non-empty → used directly, `pfa` ignored for α |
 | `blocking_alpha_lut_rebuild` | bool | `false` | static | — | `true` blocks the tick on a pfa-LUT miss; `false` serves the previous LUT while a background build runs (first build still blocks) |
 | `nci_fold` | int64 | `0` (unset) | static | — | Optional `K` hint so `start()` can pre-warm when `nci_axes` is set; `<= 0` defers |
+| `preintegrated_looks` | int64 | `1` | static | Changes α calibration | Independent power looks already summed in each real input cell; effective `K = preintegrated_looks · NCI fold` |
 | `threshold_scale` | float64 | `1.0` | `[live]` Exact | Free (kernel argument) | Empirical multiplier: `threshold = threshold_scale · α · noise`; `1.0` = pure CFAR |
 | `nci_axes` | int64 vector | `[]` | `[live]` Exact host config Tensor | Changes `K` and output shape; may recalibrate α | Leading-axis indices to sum in power before CFAR |
 | `max_detections` | int64 | `0` (uncapped) | `[live]` Exact | Free (cap after count) | `> 0` caps `detection_idx` rows and warns on surplus |
@@ -131,6 +132,11 @@ group: [`operators/detection/README.md`](../README.md)
 **Steady.** Fused stencil + optional NCI/NMS; CUB compact while `detection_idx` is active; one D2D emit per active output. Workspace and CUB state reuse when `(batch_in, out_batch, num_doppler, num_range)` is unchanged. Previously seen LUT keys are served from the process-wide `CfarAlphaLutKey` cache (variant, pfa, fold, os_rank, guard, train, key map size).
 
 **Live rebuilds.** `pfa` / `os_rank` / `guard_cells` / `training_cells` / `nci_axes` / `alpha_lut` can miss the LUT cache: warn once per configuration (`CFARDetectorOp: calibrating the alpha LUT at runtime …`). `threshold_scale` and `max_detections` do not rebuild. `blocking_alpha_lut_rebuild = false` serves the previous LUT while the new table builds (`CFARDetectorOp: alpha LUT for the new configuration is still calibrating; using the previous LUT for this tick`).
+
+`preintegrated_looks` assumes independent Gamma-distributed looks. Spatially
+correlated receiver noise, shared-LO phase noise, mutual coupling, or clutter
+residue lower the effective degrees of freedom; calibrate an effective value
+or provide `alpha_lut` when nominal Pfa must be maintained under those models.
 
 Harness: `performance/cpp/perf_cfar_detector.cpp` (Graph). It wires all five outputs, so its steady timings include every publication copy plus `detection_idx` count/compaction. Axes: size ladder (`xs`…`xlw`), variant {CA, GO, SO, OS}, window footprint, NCI fold, `peak_only` × {`square8`, `cross4`}, `alpha_lut` vs pfa calibration pair. It measures an inline `threshold_scale` Exact override; other live ports are not timed. No measured numbers are recorded in-repo; run the smoke:
 

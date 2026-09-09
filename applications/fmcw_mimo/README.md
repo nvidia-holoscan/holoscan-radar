@@ -1,7 +1,7 @@
 # FMCW MIMO example application
 
 Sparse **angle-then-cluster** MIMO pipeline (TDM or DDM) selected by
-`mimo_coherent_compensation.multiplexing_scheme` in the YAML config.
+top-level `multiplexing_scheme` in the YAML config.
 
 ## TDM (default)
 
@@ -10,7 +10,7 @@ Sparse **angle-then-cluster** MIMO pipeline (TDM or DDM) selected by
 ```text
 MimoTdmAdcSourceOp (N_rx, M·L, samples)
   → MIMODeinterleaveOp → Range → Clutter → Doppler
-  → MIMOCoherentCompensationOp → VirtualArrayAssemblyOp → ...
+  → TDMDenseCompensationOp → VirtualArrayAssemblyOp → ...
 ```
 
 Config: [`cpp/fmcw_mimo.yaml`](cpp/fmcw_mimo.yaml)
@@ -21,7 +21,7 @@ Config: [`cpp/fmcw_mimo.yaml`](cpp/fmcw_mimo.yaml)
 
 ```text
 MimoDdmAdcSourceOp (N_rx, num_chirps, samples)
-  → Range → Doppler → MIMOCoherentCompensationOp
+  → Range → Doppler → DDMDenseDemultiplexOp
   → ClutterFilterOp (post-demux) → VirtualArrayAssemblyOp → ...
 ```
 
@@ -32,7 +32,7 @@ Config: [`cpp/fmcw_mimo_ddm.yaml`](cpp/fmcw_mimo_ddm.yaml)
 Same DDM chain, but `ddm_code` uses non-linear codes
 (`generate_phase_codes: zadoff_chu` expands to distinct Zadoff-Chu roots —
 low periodic crosstalk, still non-linear so the correlate path runs).
-`MIMOCoherentCompensationOp` takes the conjugate-correlation path (full Doppler
+`DDMDenseDemultiplexOp` takes the conjugate-correlation path (full Doppler
 axis out; `guard_bands` must be 0). Use `generate_phase_codes: sin` only to
 intentionally stress high-crosstalk leakage.
 

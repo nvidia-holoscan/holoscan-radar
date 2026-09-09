@@ -19,7 +19,6 @@
 #include <string>
 #include <vector>
 
-#include "fmcw/mimo_coherent_compensation_op/mimo_coherent_compensation_stage.hpp"
 #include "radar_app/app/config.hpp"
 #include "radar_app/app/graph_params.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
@@ -28,6 +27,7 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
+#include "radar_common/dsp/mimo_coherent_compensation_stage.hpp"
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
 #include "radar_common/sim/array_builders.hpp"
@@ -60,7 +60,8 @@ struct AppConfig : CommonRunConfig {
   radar::ClutterFilterParams clutter_params;
   radar::FMCWDopplerProcessorParams doppler_params;
   radar::MIMODeinterleaveParams deinterleave_params;
-  radar::MIMOCoherentCompensationParams compensation_params;
+  radar::TDMDenseCompensationParams tdm_compensation_params;
+  radar::DDMDenseDemultiplexParams ddm_demultiplex_params;
   radar::VirtualArrayAssemblyParams vaa_params;
   radar::CFARParams cfar_params;
   radar::SnapshotGatherParams gather_params;
@@ -234,13 +235,10 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   cfg.scene.waveform.sample_rate = waveform.sample_rate();
   cfg.report_waveform = waveform;
 
-  const YAML::Node mcc = root["mimo_coherent_compensation"];
-  if (!mcc || !mcc["multiplexing_scheme"]) {
-    throw std::runtime_error(
-        "fmcw_mimo: mimo_coherent_compensation.multiplexing_scheme is "
-        "required");
+  if (!root["multiplexing_scheme"]) {
+    throw std::runtime_error("fmcw_mimo: multiplexing_scheme is required");
   }
-  cfg.scheme = mcc["multiplexing_scheme"].as<radar::MultiplexingScheme>();
+  cfg.scheme = root["multiplexing_scheme"].as<radar::MultiplexingScheme>();
   if (cfg.scheme != radar::MultiplexingScheme::kTdm &&
       cfg.scheme != radar::MultiplexingScheme::kDdm) {
     throw std::runtime_error(
@@ -271,20 +269,21 @@ inline AppConfig load_config(const std::filesystem::path& path) {
     } else {
       cfg.scene.num_chirps = root["cube"]["chirps_per_tx"].as<int64_t>();
     }
-    if (!mcc["ddm_code"]) {
+    const YAML::Node ddm = root["ddm_dense_demultiplex"];
+    if (!ddm || !ddm["ddm_code"]) {
       throw std::runtime_error(
-          "fmcw_mimo: mimo_coherent_compensation.ddm_code is required for DDM");
+          "fmcw_mimo: ddm_dense_demultiplex.ddm_code is required for DDM");
     }
-    cfg.ddm_code = mcc["ddm_code"].as<radar::DDMCodeDescriptor>();
+    cfg.ddm_code = ddm["ddm_code"].as<radar::DDMCodeDescriptor>();
     if (cfg.ddm_code.num_tx != num_tx) {
       throw std::runtime_error(
           "fmcw_mimo: ddm_code.num_tx must match tx_array.num_tx");
     }
     // Demo-only: expand generate_phase_codes into explicit phase_codes so YAML
     // need not list num_tx * num_chirps complex values.
-    if (mcc["ddm_code"]["generate_phase_codes"]) {
+    if (ddm["ddm_code"]["generate_phase_codes"]) {
       const std::string kind =
-          mcc["ddm_code"]["generate_phase_codes"].as<std::string>();
+          ddm["ddm_code"]["generate_phase_codes"].as<std::string>();
       if (kind == "zadoff_chu" || kind == "zc") {
         fill_zadoff_chu_phase_codes(&cfg.ddm_code, cfg.scene.num_chirps);
       } else if (kind == "sin") {
@@ -375,16 +374,15 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   load_deinterleave_params(root["mimo_deinterleave"],
                            &cfg.deinterleave_params);
   cfg.deinterleave_params.tx_schedule = cfg.tx_schedule;
-  load_coherent_compensation_params(mcc, &cfg.compensation_params);
-  // Prefer the app-resolved descriptor (may expand generate_phase_codes).
-  cfg.compensation_params.ddm_code = cfg.ddm_code;
-  cfg.compensation_params.multiplexing_scheme = cfg.scheme;
-  if (cfg.scheme == radar::MultiplexingScheme::kTdm) {
-    cfg.compensation_params.tx_schedule = cfg.tx_schedule;
+  load_tdm_dense_compensation_params(root["tdm_dense_compensation"],
+                                     &cfg.tdm_compensation_params);
+  cfg.tdm_compensation_params.tx_schedule = cfg.tx_schedule;
+  if (!cfg.tdm_compensation_params.waveform.is_valid()) {
+    cfg.tdm_compensation_params.waveform = waveform;
   }
-  if (!cfg.compensation_params.waveform.is_valid()) {
-    cfg.compensation_params.waveform = waveform;
-  }
+  load_ddm_dense_demultiplex_params(root["ddm_dense_demultiplex"],
+                                    &cfg.ddm_demultiplex_params);
+  cfg.ddm_demultiplex_params.ddm_code = cfg.ddm_code;
   load_vaa_params(root["virtual_array_assembly"], &cfg.vaa_params);
   cfg.vaa_params.tx_positions = cfg.tx_positions_flat;
   cfg.vaa_params.rx_positions = cfg.rx_positions_flat;

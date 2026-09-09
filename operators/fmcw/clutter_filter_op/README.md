@@ -12,7 +12,7 @@ Slow-time static-clutter / zero-Doppler suppression on range profiles, between r
 FMCWRangeProcessorOp → ClutterFilterOp → FMCWDopplerProcessorOp
 ```
 
-On MIMO-DDM the same ports sit **after** `MIMOCoherentCompensationOp` demux (the input is still named `range_profiles` but carries the demuxed block). The fused `FMCWRangeDopplerProcessorOp` inlines this stage and does not emit intermediate profiles.
+On MIMO-DDM the same ports sit **after** `TDMDenseCompensationOp / DDMDenseDemultiplexOp` demux (the input is still named `range_profiles` but carries the demuxed block). The fused `FMCWRangeDopplerProcessorOp` inlines this stage and does not emit intermediate profiles.
 
 Contract: [`OPERATOR_API.md` § `ClutterFilterOp`](../../../docs/planning/OPERATOR_API.md) ·
 group: [`operators/fmcw/README.md`](../README.md)

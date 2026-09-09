@@ -13,23 +13,10 @@
 #include <holoscan/core/domain/tensor.hpp>
 
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
-#include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 
 namespace holoscan::radar::detail {
-
-// Kernel knobs for one tick. multiplexing_scheme, ddm_code, and tx_schedule
-// are Params-only (static). waveform is the live-merged descriptor: empty
-// Params / override is rejected in resolve_params, so this is always
-// valid after that call. TDM uses PRI/carrier and optional tx_schedule;
-// DDM validates waveform and ignores it (and ignores tx_schedule).
-struct CompensationStageConfig {
-  MultiplexingScheme multiplexing_scheme{MultiplexingScheme::kUnspecified};
-  FMCWWaveformDescriptor waveform{};
-  DDMCodeDescriptor ddm_code{};
-  TXSchedule tx_schedule{};
-};
 
 struct TdmRdMapsLayout {
   std::vector<int64_t> leading;
@@ -96,6 +83,18 @@ DdmCodeMode ddm_classify_codes(const DDMCodeDescriptor& code);
 // Requires a validated descriptor.
 std::vector<double> ddm_resolve_offsets(const DDMCodeDescriptor& code);
 
+// Validate the sparse/linear M-band layout for a concrete Doppler extent.
+// Every offset must land on an exact integer FFT bin and on one of the M
+// width-D/M band origins; each band must be occupied exactly once. Returns the
+// occupied band index [0, M) for each physical TX.
+std::vector<int64_t> ddm_exact_band_indices(const DDMCodeDescriptor& code,
+                                            int64_t num_doppler);
+
+// Linear gather dephasing weights. phase_codes use conj(code[tx, 0]) so an
+// arbitrary initial code phase is removed; offsets-only descriptors use unity.
+std::vector<std::complex<double>> ddm_initial_phase_weights(
+    const DDMCodeDescriptor& code);
+
 // num_doppler_per_tx = num_doppler / num_tx - guard_bands. Throws if
 // num_doppler is not divisible by num_tx (equal-width bands) or the
 // resulting band width is < 1.
@@ -123,6 +122,7 @@ template <typename T>
 void run_ddm_demux_stage(const void* input, void* output,
                          const DdmRdMapsLayout& layout, int64_t num_tx,
                          int64_t num_doppler_per_tx, const int64_t* d_table,
+                         const void* d_initial_phase_weights,
                          cudaStream_t stream);
 
 // DDM non-linear correlate path output shape: full Doppler axis preserved.
@@ -142,7 +142,7 @@ std::string ddm_correlate_cache_key(const DDMCodeDescriptor& code,
                                     int64_t num_doppler);
 
 // Release per-operator cuFFT plan / tile workspace owned by `owner`
-// (pass the MIMOCoherentCompensationOp `this` pointer). Safe no-op if absent.
+// (pass the DDMDenseDemultiplexOp `this` pointer). Safe no-op if absent.
 void release_ddm_correlate_scratch(void* owner);
 
 // Conjugate-correlation DDM demux via FFT:

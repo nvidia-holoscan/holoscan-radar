@@ -143,6 +143,22 @@ App fills MaxTensorExtents (from YAML or cfg)
 So apps can build `MaxTensorExtents` from config in time for construction.
 `from_config` / `set_params` remain for algorithm Params only.
 
+### Sparse DDM and split-dense requirements
+
+- `TDMDenseCompensationOp`: requires `max_tx`, `max_rx`,
+  `max_doppler_bins`, and `max_range_bins` for its rank-4 output.
+- `DDMDenseDemultiplexOp`: requires the same fields; nonlinear correlation
+  may retain the full `max_doppler_bins`, while linear demultiplexing emits no
+  more than that bound.
+- `DDMPowerFoldOp`: requires `max_rx` to admit the named input channel axis,
+  plus `max_doppler_bins` and `max_range_bins` for its rank-2 real output.
+- `DDMSparseDemultiplexOp`: requires `max_tx`, `max_rx`,
+  `max_doppler_bins`, `max_range_bins`, `max_detections`, and
+  `max_snapshots`. `max_virtual_channels`, when supplied, bounds the assembled
+  virtual axis; otherwise the safe bound is `max_tx * max_rx`. Its geometry
+  wire output uses the same bounded host representation as
+  `TDMSparseCompensationOp`.
+
 ### Library pieces (after approval)
 
 1. `MaxTensorExtents` + YAML parse helper + byte-span helpers per op/out kind.

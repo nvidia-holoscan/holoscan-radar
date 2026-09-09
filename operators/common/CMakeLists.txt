@@ -55,6 +55,40 @@ install(DIRECTORY radar_common
     FILES_MATCHING PATTERN "*.hpp"
 )
 
+# CUDA TDM/DDM coherent-compensation stages shared by the dense MIMO operator,
+# sparse TDM operator, tests, and application planning helpers. The host-only
+# radar_common target remains CUDA-free; this target owns the kernels and
+# per-instance cuFFT scratch.
+add_library(radar_common_mimo_compensation STATIC
+    radar_common/dsp/mimo_coherent_compensation_stage.cu)
+add_library(holoscan::radar_common_mimo_compensation ALIAS
+    radar_common_mimo_compensation)
+
+target_include_directories(radar_common_mimo_compensation
+    PUBLIC
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators/common>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar>
+)
+
+target_link_libraries(radar_common_mimo_compensation
+    PUBLIC
+        holoscan::radar_common
+    PRIVATE
+        CUDA::cufft
+)
+
+set_property(TARGET radar_common_mimo_compensation
+    PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+install(TARGETS radar_common_mimo_compensation
+    EXPORT holoscan_radar_common_mimo_compensation_targets
+)
+
+install(EXPORT holoscan_radar_common_mimo_compensation_targets
+    NAMESPACE holoscan::
+    DESTINATION lib/cmake/holoscan_radar
+)
+
 # Generated wire schemas and descriptor bridges depend on radar_common.
 add_subdirectory(radar_schemas)
 

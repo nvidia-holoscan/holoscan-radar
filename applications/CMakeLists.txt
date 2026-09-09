@@ -43,7 +43,8 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
     holoscan_radar_add_application(fmcw_mimo
         DEPENDS OPERATORS
             mimo_deinterleave_op
-            mimo_coherent_compensation_op
+            tdm_dense_compensation_op
+            ddm_dense_demultiplex_op
             virtual_array_assembly_op
             fmcw_range_processor_op
             clutter_filter_op

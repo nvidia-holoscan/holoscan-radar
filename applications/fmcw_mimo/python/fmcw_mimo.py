@@ -12,8 +12,8 @@
 # or fmcw_mimo_ddm_phase_codes.yaml (non-linear correlate). This file is the
 # graph only - AppConfig / load_config live in config.py, the TDM/DDM ADC
 # sources in custom_ops.py (both colocated). Every operator block flows
-# through Holoscan's from_config() except mimo_coherent_compensation, which
-# must stay manual (see demo_config.parse_mimo_coherent_compensation).
+# through Holoscan's from_config() except the dense TDM/DDM blocks, which
+# must stay manual (see demo_config.parse_the dense TDM/DDM blocks).
 
 from __future__ import annotations
 
@@ -55,7 +55,8 @@ from holoscan.radar import (  # noqa: E402
     FeatureAssemblyOp,
     FMCWDopplerProcessorOp,
     FMCWRangeProcessorOp,
-    MIMOCoherentCompensationOp,
+    DDMDenseDemultiplexOp,
+    TDMDenseCompensationOp,
     MIMODeinterleaveOp,
     MultiplexingScheme,
     NullSinkOp,
@@ -127,12 +128,7 @@ class FmcwMimoApp(Application):
         doppler = FMCWDopplerProcessorOp(
             self, self.from_config("doppler_processor"), name="doppler_processor"
         )
-        # Avoid from_config: it overwrites the app-expanded ddm_code (see
-        # demo_config.parse_mimo_coherent_compensation's docstring).
-        compensation = MIMOCoherentCompensationOp(
-            self,
-            **cfg.mimo_coherent_compensation,
-        )
+
         vaa = VirtualArrayAssemblyOp(
             self,
             self.from_config("virtual_array_assembly"),
@@ -143,6 +139,7 @@ class FmcwMimoApp(Application):
         )
 
         if ddm:
+            compensation = DDMDenseDemultiplexOp(self, **cfg.ddm_dense_demultiplex)
             source = custom_ops.MimoDdmAdcSourceOp(
                 self,
                 CountCondition(self, count=cfg.num_frames),
@@ -161,6 +158,7 @@ class FmcwMimoApp(Application):
             self.add_flow(compensation, clutter, {("rd_maps_out", "range_profiles")})
             self.add_flow(clutter, vaa, {("range_profiles_out", "rd_maps")})
         else:
+            compensation = TDMDenseCompensationOp(self, **cfg.tdm_dense_compensation)
             source = custom_ops.MimoTdmAdcSourceOp(
                 self,
                 CountCondition(self, count=cfg.num_frames),

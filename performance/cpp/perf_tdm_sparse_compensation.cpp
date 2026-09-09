@@ -174,7 +174,7 @@ perf::ResultRow base_row(const Scenario& scenario) {
   row.out_batch = size.detections;
   row.k = size.tx * size.rx;
   row.notes =
-      "compare with perf_mimo_coherent_compensation and "
+      "compare with perf_tdm_dense_compensation and "
       "perf_virtual_array_assembly at the same cube shape";
   return row;
 }

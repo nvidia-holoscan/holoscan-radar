@@ -13,9 +13,9 @@ waveform: &waveform
   sample_rate: 12.8e6
   chirp_repetition_interval: 25.0e-6
 
-mimo_coherent_compensation:
-  multiplexing_scheme: ddm
-  waveform: *waveform
+multiplexing_scheme: ddm
+
+ddm_dense_demultiplex:
   ddm_code:
     num_tx: 2
     doppler_offsets: [0.0, 0.5]

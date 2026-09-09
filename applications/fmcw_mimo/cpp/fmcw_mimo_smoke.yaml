@@ -17,8 +17,9 @@ mimo_deinterleave:
   tx_schedule:
     num_tx: 2
 
-mimo_coherent_compensation:
-  multiplexing_scheme: tdm
+multiplexing_scheme: tdm
+
+tdm_dense_compensation:
   waveform: *waveform
 
 virtual_array_assembly:
