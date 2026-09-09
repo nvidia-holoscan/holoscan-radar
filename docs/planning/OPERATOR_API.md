@@ -15,7 +15,7 @@ memory; **named contract axes with no opaque leading `...` batch** (multi-item
 throughput is an application concern; see
 [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md)); industry-standard operator
 names; and angle operators that make the az/el convention explicit at the API
-boundary (required, no default).
+boundary (standalone, defaulting to `radar_boresight`).
 
 Fat Tensor outputs take `MaxTensorExtents` at `graph.op()` for HSDK 5 pool sizing.
 
@@ -39,7 +39,7 @@ The angle-estimation operators carry azimuth/elevation, which is the module's si
 - **The internal canonical parameterization is fixed** (boresight = +x, +y to the left, +z up; azimuth CCW from +x about +z; elevation up from the x-y plane). Direction cosines: `u = cos(el)·sin(az)`, `v = sin(el)`, `w = cos(el)·cos(az)`. All internal kernels operate in this one convention.
 - **The AER parameterization is made explicit at the API boundary** via a shared `AngleConvention` descriptor (see Supporting data structures), reused by every angle operator and by anything that emits `(az, el)`.
   - It ships with named per-domain presets plus a fully-parameterized `custom` form, and is applied as a thin relabeling on the input scan grids and the output `doa` — never inside the kernels.
-  - It is a **required, standalone parameter (no default)** on operators that consume or emit angles, so the frame is never silently inherited.
+  - It is a **standalone parameter defaulting to `radar_boresight`** on operators that consume or emit angles; callers select another convention explicitly when needed.
   - Cartesian `element_positions` carry no convention, but the convention's axis references are interpreted in that same array-local frame.
   - Frame-to-frame transforms remain the caller's job; `AngleConvention` resolves only the angular naming. Angles are radians throughout.
 - **A convention-free direction-cosine (u, v / sine-space) scan mode** is offered as an escape hatch: unambiguous, singularity-free (no degeneracy at the pole), uniform in beam spacing, and the natural form for the spatial-FFT fast path on uniform arrays.

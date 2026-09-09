@@ -2,24 +2,34 @@
 
 GPU radar signal-processing operator library for the NVIDIA Holoscan SDK: Holoscan operators implemented in C++/CUDA on [MatX](https://github.com/NVIDIA/MatX), composed into pipelines purely by port connections — no glue code between operators.
 
-**Current phase: FMCW implementation.** The operator contracts (ports, shapes, dtypes, parameters) are fully specified in `docs/planning/`; implementation lands against them. The signal-processing (`operators/fmcw/`: range, clutter, Doppler, fused range-Doppler), detection, clustering, and angle-estimation groups plus the shared `operators/common/` library are implemented; MIMO marshaling is next. **[EA HSDK5 ONLY]** On this branch, "implemented" and "ported to HSDK 5" differ — see the allow-list and progress table in [`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md).
+**Current phase: HSDK 5 port close-out.** The operator contracts (ports,
+shapes, dtypes, parameters) are fully specified in `docs/planning/`;
+implementation lands against them. All 19 C++ operators, including FMCW MIMO
+marshaling, have completed the HSDK 5 operator and performance passes. Remaining
+SDK, application, Python, and cleanup work is tracked in
+[`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md).
+**[EA HSDK5 ONLY]**
 
 ## [EA HSDK5 ONLY] Temporary development environment
 
-The `hsdk-5.0` branch temporarily builds HSDK 5 EA from the internal repository
-and installs it into a local devcontainer base image. This workflow exists only
-until the public HSDK 5 release; see
+This development line temporarily builds the pinned HSDK 5 branch from the
+internal repository and installs it into a local devcontainer base image. The
+module has moved beyond the `v5.0.0.1` tag onto the `main-5x` Tensor API; the
+exact pin is recorded in [`.devcontainer/README.md`](.devcontainer/README.md).
+This workflow exists only until the public HSDK 5 release; see
 [`.devcontainer/README.md`](.devcontainer/README.md) for build, `holohub`, and
 cleanup instructions.
 
-For SDK APIs and migration behavior on this branch, use the
+Use the
 [HSDK 5 preview documentation](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/introduction/overview.md)
-as the source of truth; prefer each page's `.md` form, and use the
+as the documented baseline; prefer each page's `.md` form, and use the
 [documentation index](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/llms.txt)
-to find applicable pages. Do not infer HSDK 5 behavior from HSDK 4.x code.
-Repository planning documents remain authoritative for this library's operator
-contracts. Record durable migration decisions there rather than in this file.
-Track HSDK 5 / EA port friction in
+to find applicable pages. For APIs changed on the pinned `main-5x` branch, use
+the pinned SDK source plus the recorded probes and decisions in
+[`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md); do not infer HSDK
+5 behavior from HSDK 4.x code. Repository planning documents remain
+authoritative for this library's operator contracts. Record durable migration
+decisions there rather than in this file. Track HSDK 5 / EA port friction in
 [`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md) (not
 `TEAM_BLOCKED.md`).
 
@@ -47,11 +57,9 @@ Rules that follow from "lockdown":
 - **Docs first.** Code must match `OPERATOR_API.md` exactly — port names, shapes, dtype pairs, parameter names/defaults, `[live]` tags. To change an interface, change the doc (in the same PR at minimum), call it out as a contract change in the PR description, and get it reviewed as such. Never deviate silently in code.
 - **Do not silently resolve documented open items.** Team-blocked questions are
   indexed in [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md)
-  (detail in each operator’s `OPEN_ITEMS.md`). Known highlights: the covariance
-  estimators' multi-snapshot / spatial-smoothing input form; where the source
-  count comes from (fixed vs. MDL/AIC vs. CFAR-cluster); ULA/subarray selection
-  for Root-MUSIC/ESPRIT on non-uniform virtual arrays. Surface these for a team
-  decision instead of picking an answer in code.
+  (detail in each operator’s `OPEN_ITEMS.md`). Surface any listed question for
+  a team decision instead of picking an answer in code. There are currently no
+  team-blocked items; re-check the index rather than relying on this sentence.
 - **Checklist + development guidance.** Follow `NEW_OPERATOR_CHECKLIST.md` as the done gate; use `OPERATOR_DEVELOPMENT.md` when designing `compute()`, live overrides, tests, or chasing performance.
 
 ## Design invariants (do not violate)
@@ -89,12 +97,13 @@ Rules that follow from "lockdown":
 | `docs/planning/OPERATOR_DEVELOPMENT.md` | Agent/human guidance for implementing operators (hot path, diagnosis, perf) |
 | `operators/` | Operator libraries, one dir per group, gated by `add_holohub_operator()` / `OP_<name>` CMake options |
 | `operators/common/` | Shared `radar_common` library: descriptors, window generation, point-target simulator, config cache, tensor/MatX utilities |
-| `operators/fmcw/` | FMCW signal-processing operators (+ future MIMO marshaling) |
-| `applications/fmcw_siso/` | Example SISO FMCW pipeline (C++ + Python Holoviz) |
-| `applications/fmcw_simo/` | Sparse SIMO angle-then-cluster demo (C++ + Python) |
-| `applications/fmcw_mimo/` | MIMO TDM/DDM demo (C++ + Python) |
-| `applications/fmcw_dense_simo/` | Dense SIMO beamformer demo (C++ + Python) |
-| `applications/common/radar_app/` | Shared report + Holoviz viz operators (C++ header + Python bindings) |
+| `operators/fmcw/` | FMCW signal processing and MIMO marshaling |
+| `applications/fmcw_siso/` | Example SISO FMCW pipeline |
+| `applications/fmcw_simo/` | Sparse SIMO angle-then-cluster demo |
+| `applications/fmcw_mimo/` | MIMO TDM/DDM demo |
+| `applications/fmcw_dense_simo/` | Dense SIMO beamformer demo |
+| `applications/fmcw_aoa_estimators/` | Interchangeable sparse AoA estimator demo |
+| `applications/common/radar_app/` | Shared Graph driver, source, report, and visualization support |
 | `performance/` | Measurement harness (C++ + Python) — cold vs steady, not pass/fail tests |
 | `python/holoscan/radar/` | Python package root; re-exports operators from per-operator pybind11 submodules |
 | `tests/cpp/`, `tests/python/` | GTest and pytest suites (Python: set `HOLOSCAN_RADAR_BUILD_DIR`) |
@@ -108,19 +117,17 @@ The `applications/fmcw_*` examples follow a strict layering so each app's `.cpp`
 reads as the graph, not scaffolding. When adding or changing an app, keep code
 in the right layer:
 
-- **App `.cpp` = the graph.** `compose()` (operators + `add_flow`) plus a
-  one-line `main` that calls `radar_app`'s `run_fmcw_app<App>()`. Nothing else
-  belongs here.
+- **App `.cpp` = the graph.** `main()` calls
+  `radar_app`'s `run_fmcw_graph_app()` with the graph-building lambda
+  (operators, connections, and device placement). Nothing else belongs here.
 - **App-owned code is colocated** in the app's `cpp/` dir: `config.hpp`
   (`AppConfig : app::CommonRunConfig` + `load_config`) and `custom_ops.hpp`
   (operators specific to one app — e.g. the MIMO ADC sources, the dense-path
   bridges). Same-dir headers, included bare with `// NOLINT(build/include_subdir)`.
 - **Reusable, Holoscan-aware app helpers → `applications/common/radar_app/`**
-  (see its README): the report/viz operators and the `app/` scaffolding
-  (`CommonRunConfig` + `parse_*`, `run_fmcw_app`, the rank-agnostic
-  `SimAdcSourceOp`, the `HolovizLayout` builder). Header-only (`inline` /
-  in-class); it is not a wrapper around `HolovizOp` — the app keeps its own
-  `add_flow` wiring, `radar_app` supplies data + operators + a factory.
+  (see its source): the Graph driver, rank-agnostic `SimAdcSourceOp`, report
+  operators, and optional X11 visualization support. Header-only helpers are
+  `inline` / in-class; each app keeps its own graph wiring.
 - **Pure model helpers → `operators/common/radar_common/`**: the analytic
   simulators and array builders (`sim/`), descriptors, DSP — no Holoscan / CUDA /
   Holoviz. `point_target_sim.hpp` stays minimal-dependency (STL only); the MIMO
@@ -137,8 +144,8 @@ axis or geometry grid is allowed, but must be commented as a read-only mirror.
 See [`DEVELOPER.md`](DEVELOPER.md) for detail. Quick reference:
 
 ```bash
-# Configure + build (requires Holoscan SDK >= 4.3.0 discoverable via find_package;
-# `pip install holoscan` gives a CPU-capable config, or use `./holohub run-container`)
+# Configure + build in the HSDK 5 devcontainer. find_package(holoscan) must
+# resolve the pinned 5.x SDK; this branch has no HSDK 4.x compatibility layer.
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
 cmake --build build -j"$(nproc)"
 
@@ -154,7 +161,7 @@ pytest tests/python/ -v
 pre-commit run --all-files
 ```
 
-The lint stack (`.pre-commit-config.yaml`): ruff + isort + black (Python), cpplint (C++), cmakelint, markdownlint, codespell, `metadata.json` schema validation, and NVIDIA SPDX copyright headers on all code/CMake/YAML/Docker files (`check_copyright.py`; markdown is exempt). Every new source file needs the two-line SPDX header — copy it from any existing file of the same type. cpplint enforces 80-column lines and include-what-you-use (add the direct `#include` for every type you name, e.g. `<string>` for `std::string`); run it before pushing, not after CI fails.
+The lint stack (`.pre-commit-config.yaml`): ruff + isort + black (Python), cpplint (C++), cmakelint, markdownlint, codespell, `metadata.json` schema validation, and NVIDIA SPDX copyright headers on all code/CMake/YAML/Docker files (`check_copyright.py`; markdown is exempt). Every new source file needs the two-line SPDX header — copy it from any existing file of the same type. cpplint enforces 100-column lines and include-what-you-use (add the direct `#include` for every type you name, e.g. `<string>` for `std::string`); run it before pushing, not after CI fails.
 
 **markdownlint caps line length at 800** (`MD013`, incl. table rows + headings; no table exemption and table cells can't wrap, so keep dense one-line `STATUS.md` rows / contract bullets under 800 by tightening prose — and keep dense one-line prose paragraphs under 800 too, this line included). Other markdownlint rules that bite: fenced code blocks need a language (use ` ```text ` for diagrams / log excerpts, `MD040`), and a table's delimiter row must use the same padded pipe style as its data rows (`| --- |`, not `|---|`, `MD060`).
 
