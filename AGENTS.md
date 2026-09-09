@@ -60,7 +60,21 @@ Rules that follow from "lockdown":
 2. **Shared descriptors are bounded.** Exactly seven shared config-plane types exist: `ArrayGeometry`, `ShiftInvariantSubarrayPair`, `AngleConvention`, `WindowSpec`, `FMCWWaveformDescriptor`, `DDMCodeDescriptor`, `TXSchedule`. They are parameters, and ride input ports only as `[live]` overrides; the single sanctioned descriptor *output* port is `VirtualArrayAssemblyOp.array_geometry` (runtime-computed virtual geometry). Do not add new shared types or new descriptor-carrying ports without a contract change to `OPERATOR_API.md`. Separately, `MaxTensorExtents` is a **ctor-capture sizing type** for HSDK 5 Tensor pools (not a descriptor, never a Tensor port) — see [`docs/planning/MAX_TENSOR_EXTENTS.md`](docs/planning/MAX_TENSOR_EXTENTS.md).
 3. **Precision by compile-time template instantiation** (single + double). Never a runtime dtype flag, never inferred from data; an instance's inputs and outputs match its templated precision.
 4. **Named trailing axes; no opaque leading batch.** Operate on the contract's named axes; infer those extents from the tensors each tick rather than taking them as parameters. Do **not** treat an open-ended leading `...` as an opaque module batch axis — multi-item throughput is an application concern (loop / fan-out). Named leading axes that are part of the contract (e.g. `N_rx`, `M_tx`, `num_az`/`num_el`) remain. Downstream never assumes fixed shapes for those named axes — that is what makes shape-changing `[live]` overrides legal. Fat Tensor outputs take `MaxTensorExtents` at `graph.op()` so pools can be sized before arm.
-5. **`[live]` override convention.** Parameters are build-time config by default; a `[live]` parameter may additionally be overridden in-flight via a same-named input port. Every `[live]` port joins the data trigger with `Exact{}` and `on_missing SafeDefault{}`, declared unconditionally — wiring the port enables it. A match is the effective value for that tick only, a miss takes Params, and no latch is kept. Costly overrides (FFT plans, window coefficients, CFAR kernels) warn once per new configuration and cache prior ones. Structural parameters (e.g. `cfar_variant`, `angle_convention`, `multiplexing_scheme`) stay static — instantiate separate operators to vary them. Philosophy: don't over-constrain a caller who knows what they're doing; allow reasonable footguns and warn where relevant.
+5. **`[live]` override convention.** Parameters are build-time config by default.
+   A value qualifies as `[live]` only when it describes the tensor for this tick
+   and an upstream producer can stamp the matching value onto that tick; making
+   an encoding or marshaling parameter live at the consumer alone creates
+   silent data/config desynchronization. A `[live]` parameter may additionally
+   be overridden in-flight via a same-named input port. Every `[live]` port
+   joins the data trigger with `Exact{}` and `on_missing SafeDefault{}`,
+   declared unconditionally — wiring the port enables it. A match is the
+   effective value for that tick only, a miss takes Params, and no latch is
+   kept. Costly overrides (FFT plans, window coefficients, CFAR kernels) warn
+   once per new configuration and cache prior ones. Structural parameters
+   (e.g. `cfar_variant`, `angle_convention`, `multiplexing_scheme`) stay
+   static — instantiate separate operators to vary them. Philosophy: don't
+   over-constrain a caller who knows what they're doing; allow reasonable
+   footguns and warn where relevant.
 6. **Convention-free kernels, explicit angle boundary.** Kernels only dot direction vectors with element positions in the fixed canonical array-local frame. `AngleConvention` defaults to `radar_boresight` on every operator that consumes or emits angles; callers select another convention explicitly when needed. It is applied only as a boundary relabeling. `direction_cosine` (u, v) is the convention-free escape hatch.
 7. **Industry-standard operator names** over internal schemes.
 8. **A CUDA-capable NVIDIA GPU is a hard dependency** — for the operators, the apps, and the C++ test suite (decided 2026-07-10). Do not add CPU fallback compute paths, skip-if-no-GPU test guards, or GPU-optional build modes; the only host-only code is deliberately host-only by design (the analytic simulator, window generation).

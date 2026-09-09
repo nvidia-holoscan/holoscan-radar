@@ -98,6 +98,22 @@ Keep `compute()` thin: resolve overrides → obtain buffers → call stage → e
 Put math in the stage. Put host calibration / LUT builders in dedicated TUs
 (`.cpp` / `.cu`) so the operator shell stays readable.
 
+### Per-tick data model
+
+Use three roles when an operator has live values to merge:
+
+- `*Params` is the Holoscan schema, including build-time sentinels.
+- `*StageConfig` is the effective kernel configuration for one tick; map
+  sentinels to optionals or reject them while resolving live values.
+- `*StagePlan` is the validated stage config plus input-dependent output
+  geometry and other derived execution facts.
+
+Do not add a fourth Params-shaped `Effective*`, `Validated*`, or
+`ResolvedParams` snapshot. Once live values and sentinels are resolved, the
+result is the stage config. Conversely, do not add `resolve_params()` merely
+for sibling uniformity when there is nothing to merge; pass pinned Params to
+the plan builder and validate there.
+
 ### Shared helpers (prefer these over reinventing)
 
 | Need | Header |
@@ -125,6 +141,12 @@ inlining a private version — silent per-operator copies drift apart (subtly
 different messages, empty-map handling, null checks) and are exactly what the
 detection and FMCW operators were consolidated *out of* once each had grown its
 own near-identical set.
+
+Promote a helper only after a second **compatible** use exists. Similar-looking
+stateful paths may have different ownership, validation, cache mutation, or
+lifetime requirements; keep those operator-local. Likewise, keep materially
+different algorithm variants explicit rather than hiding them behind a generic
+cross-operator abstraction.
 
 ---
 
@@ -159,6 +181,10 @@ because downstream re-infers named extents. Fat Tensor outs take
   (`retained_input_` pattern).
 - Prefer stream-ordered work; avoid `cudaStreamSynchronize` on the hot path
   unless a scalar result is truly required (and even then, minimize it).
+- Treat pointer-keyed library plans as owning a lifetime dependency on their
+  scratch addresses. Plans must retire before those allocations. Test repeated
+  execution both in isolation and in a whole-suite process when persistent
+  plans or stable scratch addresses change library cache behavior.
 
 ### Optional outputs: never `HOLOSCAN_TRY`, and pick a disposition
 
@@ -169,6 +195,11 @@ fails. Wrapping that emit in `HOLOSCAN_TRY` — the right reflex everywhere else
 — propagates the failure out of `compute()` and fails the entire activation,
 so declining an optional output would silently kill the tick's other outputs
 too. Keep `HOLOSCAN_TRY` for required outputs only.
+
+For multiple required outputs, prepare every loan and complete every fallible
+fill before publishing any sibling. Carry loans and write guards through a
+prepared-output object when useful, then commit all writes and publish. This
+prevents a late failure from exposing a partial required-output set.
 
 Every optional output takes one of the two dispositions locked in
 [`OPERATOR_API.md`](OPERATOR_API.md), "Optional output convention". Choose by
@@ -394,6 +425,18 @@ CUB state. Rules from `operators/common/README.md`:
 - Initial parameter-driven build: silent.
 - Override to an unseen key: warn once, build, cache.
 - Alternating values must not thrash.
+
+Choose state by ownership and cardinality:
+
+- Bounded scratch or index tables whose maximum follows from constructor
+  extents are constructor-created reusable state.
+- One replace-in-place artifact uses a simple structural key.
+- Multiple costly configurations with warn-once history use `ConfigCache`.
+
+A cache key covers every behavior-affecting field, including
+variant-specific fields, and the cached value is the complete immutable
+artifact built from that key. Do not cache only the expensive centerpiece
+while rebuilding sibling grids or tables on every steady tick.
 
 If a contract parameter implies caching but the implementation has nothing to
 cache, do not pretend eviction works: record the no-op in `OPEN_ITEMS.md` as a
@@ -667,6 +710,12 @@ Create when the first team question appears. Keep items concrete:
 
 Resolve into `STATUS.md` settled decisions when the answer affects the module;
 then archive or remove the section.
+
+Settled algorithm choices, imposed layouts, and accepted workspace trade-offs
+belong in the operator README, not `OPEN_ITEMS.md`. Remove an operator-local
+open-items file when no unresolved item remains. SDK-wide migration facts
+belong in `HSDK5_PORT.md`; do not retain an operator `SDK_WORKAROUNDS.md` that
+only restates module conventions or accepted operator-owned workspace.
 
 ### Code ahead of contract
 
