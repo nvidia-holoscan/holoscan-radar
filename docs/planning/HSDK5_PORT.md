@@ -645,15 +645,18 @@ therefore always carry the Tensor: zero-length is the absent optional-array
 representation, nonzero is present, and null is invalid. This is a measured
 transport rule, not by itself ratification of the schema payload design.
 
-**Two EA generator workarounds remain.** Descriptor-traits generation emits
-invalid C++ for FlatBuffers nullable scalars, so the two schemas encode each
-optional double losslessly as a value plus an explicit `has_*` field rather
-than reserving a valid numeric sentinel. The generated traits also place their
-unqualified `CreateTensor` forwarding block after the generated root header;
-`radar_schemas` post-processes the build output to include its forwarding
-overload first. Neither workaround changes committed generated files (none are
-tracked). Re-probe both against the public SDK and remove or version the schema
-workarounds before the EA cleanup.
+**One EA generator workaround remains, plus a multi-schema include guard.**
+Descriptor-traits generation emits invalid C++ for FlatBuffers nullable
+scalars, so the two schemas encode each optional double losslessly as a value
+plus an explicit `has_*` field rather than reserving a valid numeric sentinel.
+Current `holoscan_add_flatbuffer_schema` emits the unqualified `CreateTensor`
+overload before the generated root header and requires a four-byte
+`file_identifier` on each `.fbs` root; traits are inferred from the BFBS once
+`MAX_SERIALIZED_SIZE` is set. Each generated traits header still defines that
+same `CreateTensor` in `holoscan::radar::wire`, so including more than one
+schema in a TU needs an include-guard post-process (`normalize_traits.cmake`).
+Re-probe the nullable-scalar workaround against the public SDK before the EA
+cleanup.
 
 **Artifact and packaging shape.** The
 `.fbs` files are committed source, not generated: schema compatibility is

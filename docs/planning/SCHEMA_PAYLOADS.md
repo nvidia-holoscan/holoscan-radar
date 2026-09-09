@@ -70,9 +70,12 @@ objects, or Tensor members. Keep ordinary numeric bulk data on Tensor ports.
 - [ ] Put the committed `.fbs` under the single shared
       `operators/common/radar_schemas/` owner; generated files stay in the
       build output.
-- [ ] Record every generator argument, including descriptor-Tensor mode,
-      schema version, metadata capacity, include roots, output directory, and
-      `--require-explicit-ids`.
+- [ ] Record every generator argument: `SCHEMA`, `MAX_SERIALIZED_SIZE`
+      (metadata bound; also enables traits / descriptor-Tensor inference),
+      `BFBS_EMBED`, include roots, output directory, and the four-byte
+      `file_identifier` on the `.fbs` root. The SDK infers root type, native
+      type, package, canonical name, and descriptor-Tensor mode from the BFBS;
+      do not pass the retired `DESCRIPTOR_TENSOR` / `TRAITS_*` CMake flags.
 - [ ] Use the `holoscan.radar.wire` FlatBuffers namespace and verify the
       generated canonical name is the intended stable payload identity.
 - [ ] Give every field an explicit id. Never infer compatibility from C++

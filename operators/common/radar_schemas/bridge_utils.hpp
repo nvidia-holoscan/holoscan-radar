@@ -19,20 +19,6 @@
 #include <holoscan/core/errors.hpp>
 #include <holoscan/core/expected.hpp>
 
-#include "tensor_generated.h"  // NOLINT(build/include_subdir)
-
-// FlatBuffers 25.12 emits an unqualified cross-namespace Tensor pack call.
-// Define the SDK generator's forwarding overload once for both radar schemas.
-namespace holoscan::radar::wire {
-
-inline flatbuffers::Offset<holoscan::schema::Tensor> CreateTensor(
-    flatbuffers::FlatBufferBuilder& builder, const holoscan::Tensor* tensor,
-    const flatbuffers::rehasher_function_t* rehasher = nullptr) {
-  return holoscan::schema::CreateTensor(builder, tensor, rehasher);
-}
-
-}  // namespace holoscan::radar::wire
-
 namespace holoscan::radar::wire_bridge_detail {
 
 struct AggregateInitializer {

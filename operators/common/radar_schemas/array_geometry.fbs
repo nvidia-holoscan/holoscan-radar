@@ -22,3 +22,4 @@ table ArrayGeometry {
 }
 
 root_type ArrayGeometry;
+file_identifier "RAGY";

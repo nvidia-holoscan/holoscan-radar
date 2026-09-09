@@ -13,6 +13,7 @@
 
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_schemas/bridge_utils.hpp"
+#include "radar_schemas/window_spec_bfbs_generated.h"
 #include "radar_schemas/window_spec_schema_traits.hpp"
 
 namespace holoscan::radar {

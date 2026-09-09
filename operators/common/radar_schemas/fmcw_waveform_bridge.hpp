@@ -15,6 +15,7 @@
 
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_schemas/bridge_utils.hpp"
+#include "radar_schemas/fmcw_waveform_bfbs_generated.h"
 #include "radar_schemas/fmcw_waveform_schema_traits.hpp"
 
 namespace holoscan::radar {

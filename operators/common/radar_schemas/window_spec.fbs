@@ -33,3 +33,4 @@ table WindowSpec {
 }
 
 root_type WindowSpec;
+file_identifier "RWSP";

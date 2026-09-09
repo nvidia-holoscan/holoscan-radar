@@ -20,8 +20,9 @@
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/array_geometry_tensor.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
-#include "radar_schemas/bridge_utils.hpp"
+#include "radar_schemas/array_geometry_bfbs_generated.h"
 #include "radar_schemas/array_geometry_schema_traits.hpp"
+#include "radar_schemas/bridge_utils.hpp"
 
 namespace holoscan::radar {
 

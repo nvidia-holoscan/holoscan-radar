@@ -6,28 +6,30 @@ if(NOT DEFINED TRAITS_FILE)
 endif()
 
 file(READ "${TRAITS_FILE}" _traits)
-set(_replacement "#include \"radar_schemas/bridge_utils.hpp\"\n")
-string(FIND "${_traits}" "${_replacement}" _already_normalized)
-if(NOT _already_normalized EQUAL -1)
+if(_traits MATCHES "HOLOSCAN_RADAR_WIRE_CREATE_TENSOR")
     return()
 endif()
 
-set(_marker
-    "// FlatBuffers 25.12 emits an unqualified CreateTensor call")
-string(FIND "${_traits}" "${_marker}" _begin)
-if(_begin EQUAL -1)
-    message(FATAL_ERROR
-        "Tensor forwarding block not found in ${TRAITS_FILE}")
-endif()
+set(_original
+    [=[inline flatbuffers::Offset<holoscan::schema::Tensor> CreateTensor(
+    flatbuffers::FlatBufferBuilder& builder, const holoscan::Tensor* tensor,
+    const flatbuffers::rehasher_function_t* rehasher = nullptr) {
+  return holoscan::schema::CreateTensor(builder, tensor, rehasher);
+}]=])
+set(_guarded
+    [=[#ifndef HOLOSCAN_RADAR_WIRE_CREATE_TENSOR
+#define HOLOSCAN_RADAR_WIRE_CREATE_TENSOR
+inline flatbuffers::Offset<holoscan::schema::Tensor> CreateTensor(
+    flatbuffers::FlatBufferBuilder& builder, const holoscan::Tensor* tensor,
+    const flatbuffers::rehasher_function_t* rehasher = nullptr) {
+  return holoscan::schema::CreateTensor(builder, tensor, rehasher);
+}
+#endif]=])
 
-string(SUBSTRING "${_traits}" ${_begin} -1 _tail)
-string(FIND "${_tail}" "#include \"" _relative_include)
-if(_relative_include EQUAL -1)
+string(FIND "${_traits}" "${_original}" _found)
+if(_found EQUAL -1)
     message(FATAL_ERROR
-        "Generated root include not found in ${TRAITS_FILE}")
+        "CreateTensor forwarding block not found in ${TRAITS_FILE}")
 endif()
-math(EXPR _next_include "${_begin} + ${_relative_include}")
-
-string(SUBSTRING "${_traits}" 0 ${_begin} _prefix)
-string(SUBSTRING "${_traits}" ${_next_include} -1 _suffix)
-file(WRITE "${TRAITS_FILE}" "${_prefix}${_replacement}\n${_suffix}")
+string(REPLACE "${_original}" "${_guarded}" _traits "${_traits}")
+file(WRITE "${TRAITS_FILE}" "${_traits}")

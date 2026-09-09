@@ -125,7 +125,7 @@ against the EA image from the host, run:
 
 ```bash
 ./holohub run-container \
-  --base-img holoscan-radar-hsdk5-ea:deustice-5x-optional-port-contracts-906fc1247
+  --base-img holoscan-radar-hsdk5-ea:deustice-5x-optional-port-contracts-4fd17e7
 ```
 
 Inside the EA devcontainer, use local execution so `holohub` uses the HSDK 5

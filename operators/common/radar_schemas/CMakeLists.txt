@@ -8,67 +8,38 @@ set(RADAR_SCHEMAS_GENERATED_ROOT
 set(RADAR_SCHEMAS_GENERATED_DIR
     "${RADAR_SCHEMAS_GENERATED_ROOT}/radar_schemas")
 
+# HSDK 5 infers root type, native type, package, canonical name, and
+# descriptor-Tensor mode from the BFBS. Traits generation is selected by
+# MAX_SERIALIZED_SIZE (metadata-only bound for descriptor-Tensor schemas).
+# Each .fbs root must declare a four-byte file_identifier.
 holoscan_add_flatbuffer_schema(
     TARGET radar_array_geometry_schema
-    SCHEMAS array_geometry.fbs
+    SCHEMA array_geometry.fbs
     INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
     OUTPUT_DIR "${RADAR_SCHEMAS_GENERATED_DIR}"
     BFBS_EMBED
-    DESCRIPTOR_TENSOR
     TRAITS_HEADER array_geometry_schema_traits.hpp
-    TRAITS_ROOT_TYPE holoscan::radar::wire::ArrayGeometry
-    TRAITS_NATIVE_TYPE holoscan::radar::wire::ArrayGeometryT
-    TRAITS_BINARY_SCHEMA_TYPE
-        holoscan::radar::wire::ArrayGeometryBinarySchema
-    TRAITS_PACKAGE_NAMESPACE
-        holoscan::radar::wire::array_geometry_package
-    TRAITS_CANONICAL_NAME
-        com.nvidia.holoscan.radar.wire.ArrayGeometry
-    TRAITS_SCHEMA_VERSION 1
-    TRAITS_MAX_SERIALIZED_SIZE 512
-    TRAITS_DESCRIPTOR_METADATA_CAPACITY 512
+    MAX_SERIALIZED_SIZE 512
 )
 
 holoscan_add_flatbuffer_schema(
     TARGET radar_window_spec_schema
-    SCHEMAS window_spec.fbs
+    SCHEMA window_spec.fbs
     INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
     OUTPUT_DIR "${RADAR_SCHEMAS_GENERATED_DIR}"
     BFBS_EMBED
-    DESCRIPTOR_TENSOR
     TRAITS_HEADER window_spec_schema_traits.hpp
-    TRAITS_ROOT_TYPE holoscan::radar::wire::WindowSpec
-    TRAITS_NATIVE_TYPE holoscan::radar::wire::WindowSpecT
-    TRAITS_BINARY_SCHEMA_TYPE
-        holoscan::radar::wire::WindowSpecBinarySchema
-    TRAITS_PACKAGE_NAMESPACE
-        holoscan::radar::wire::window_spec_package
-    TRAITS_CANONICAL_NAME
-        com.nvidia.holoscan.radar.wire.WindowSpec
-    TRAITS_SCHEMA_VERSION 1
-    TRAITS_MAX_SERIALIZED_SIZE 1024
-    TRAITS_DESCRIPTOR_METADATA_CAPACITY 1024
+    MAX_SERIALIZED_SIZE 1024
 )
 
 holoscan_add_flatbuffer_schema(
     TARGET radar_fmcw_waveform_schema
-    SCHEMAS fmcw_waveform.fbs
+    SCHEMA fmcw_waveform.fbs
     INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
     OUTPUT_DIR "${RADAR_SCHEMAS_GENERATED_DIR}"
     BFBS_EMBED
-    DESCRIPTOR_TENSOR
     TRAITS_HEADER fmcw_waveform_schema_traits.hpp
-    TRAITS_ROOT_TYPE holoscan::radar::wire::FMCWWaveform
-    TRAITS_NATIVE_TYPE holoscan::radar::wire::FMCWWaveformT
-    TRAITS_BINARY_SCHEMA_TYPE
-        holoscan::radar::wire::FMCWWaveformBinarySchema
-    TRAITS_PACKAGE_NAMESPACE
-        holoscan::radar::wire::fmcw_waveform_package
-    TRAITS_CANONICAL_NAME
-        com.nvidia.holoscan.radar.wire.FMCWWaveform
-    TRAITS_SCHEMA_VERSION 1
-    TRAITS_MAX_SERIALIZED_SIZE 1024
-    TRAITS_DESCRIPTOR_METADATA_CAPACITY 1024
+    MAX_SERIALIZED_SIZE 1024
 )
 
 function(radar_normalize_schema_traits SCHEMA_TARGET TRAITS_FILE)
