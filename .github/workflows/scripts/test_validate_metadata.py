@@ -37,6 +37,16 @@ class ValidateMetadataTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "regular file"):
             validate_metadata.read_metadata_file(path, self.repo_root)
 
+    def test_rejects_parent_directory_symlink(self):
+        target_dir = self.repo_root / "target"
+        target_dir.mkdir()
+        (target_dir / "metadata.json").write_text("{}")
+        link = self.repo_root / "linked"
+        link.symlink_to(target_dir, target_is_directory=True)
+
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            validate_metadata.read_metadata_file(link / "metadata.json", self.repo_root)
+
     def test_rejects_oversized_file(self):
         path = self.repo_root / "metadata.json"
         path.write_bytes(b" " * (validate_metadata._MAX_METADATA_BYTES + 1))
@@ -49,6 +59,13 @@ class ValidateMetadataTest(unittest.TestCase):
         path.write_text("{}")
 
         with self.assertRaisesRegex(ValueError, "outside"):
+            validate_metadata.read_metadata_file(path, self.repo_root)
+
+    def test_rejects_invalid_utf8(self):
+        path = self.repo_root / "metadata.json"
+        path.write_bytes(b"\xff")
+
+        with self.assertRaisesRegex(ValueError, "not UTF-8"):
             validate_metadata.read_metadata_file(path, self.repo_root)
 
 
