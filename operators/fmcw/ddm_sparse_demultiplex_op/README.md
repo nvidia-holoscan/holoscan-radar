@@ -21,6 +21,12 @@ The same neighborhood semantics and virtual grouping as
 `TDMSparseCompensationOp` are used, but Doppler edges apply to folded width
 `W=D/M-guard_bands`.
 
+Virtual grouping and geometry construction use the CUDA-free
+`radar_common/dsp/virtual_array` planner shared with
+`VirtualArrayAssemblyOp` and `TDMSparseCompensationOp`. This operator fuses
+that plan into its sparse demultiplex kernel and does not build or link the
+public dense VAA operator.
+
 Sparse v1 accepts only a complete linear exact-bin M-band code. `fold_idx=k`
 in `[0,M)` undoes the cyclic TX-band permutation caused by velocity aliasing.
 The default `k=0` is correct only in the principal reduced interval; an

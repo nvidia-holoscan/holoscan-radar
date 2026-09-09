@@ -90,7 +90,7 @@ struct SparseStageConfig {
 
 struct SparseStagePlan {
   SparseStageConfig stage;
-  detail::RdMapsLayout layout;
+  detail::TdmRdMapsLayout layout;
   detail::VirtualAssemblyPlan virtual_plan;
   std::vector<int64_t> slot_by_tx;
   int64_t num_detections{0};
@@ -147,11 +147,16 @@ expected<SparseStagePlan, Error> build_stage_plan(
   SparseStagePlan plan;
   plan.stage = std::move(stage);
   try {
-    plan.layout = detail::parse_rd_maps_layout(rd_maps, "rd_maps");
+    plan.layout = detail::parse_tdm_rd_maps_layout(rd_maps, "rd_maps");
+    if (!plan.layout.leading.empty()) {
+      return fail_invalid(
+          "TDMSparseCompensationOp: rd_maps must have rank 4 "
+          "(M_tx,N_rx,D,R)");
+    }
     plan.virtual_plan = detail::build_virtual_plan(
         plan.stage.tx_positions, plan.stage.rx_positions,
         plan.layout.num_tx, plan.layout.num_rx,
-        plan.stage.overlap_policy);
+        plan.stage.overlap_policy, kOpName);
     plan.slot_by_tx = detail::tdm_firing_slots(
         plan.stage.tx_schedule, plan.layout.num_tx);
   } catch (const std::invalid_argument& error) {

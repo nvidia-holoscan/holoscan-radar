@@ -7,8 +7,9 @@
 
 #include <cstdint>
 
-#include "fmcw/virtual_array_assembly_op/virtual_array_assembly_stage.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/dsp/mimo_coherent_compensation_stage.hpp"
+#include "radar_common/dsp/virtual_array.hpp"
 
 namespace holoscan::radar::detail {
 
@@ -17,7 +18,7 @@ constexpr int kSparseTdmErrCellCoord = 1;
 template <typename T>
 void run_tdm_sparse_compensation_stage(
     const void* rd_maps, const int64_t* detection_idx,
-    int64_t num_detections, const RdMapsLayout& layout,
+    int64_t num_detections, const TdmRdMapsLayout& layout,
     int64_t num_snapshots, int64_t doppler_half, int64_t range_half,
     SnapshotEdgeMode doppler_edge, SnapshotEdgeMode range_edge,
     const VirtualAssemblyPlan& virtual_plan, const void* correction,

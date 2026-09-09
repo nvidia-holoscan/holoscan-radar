@@ -142,7 +142,7 @@ expected<SparsePlan, Error> build_plan(
         params.ddm_code.guard_bands);
     plan.virtual_plan = detail::build_virtual_plan(
         params.tx_positions, params.rx_positions, params.ddm_code.num_tx,
-        plan.layout.num_rx, params.overlap_policy);
+        plan.layout.num_rx, params.overlap_policy, kOpName);
   } catch (const std::invalid_argument& error) {
     return fail_invalid(error.what());
   }

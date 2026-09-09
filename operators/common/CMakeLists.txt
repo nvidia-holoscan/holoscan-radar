@@ -18,6 +18,7 @@ add_library(radar_common STATIC
     radar_common/dsp/planar_aperture.cpp
     radar_common/dsp/subarray_selection.cpp
     radar_common/dsp/source_count.cpp
+    radar_common/dsp/virtual_array.cpp
     radar_common/descriptors/tx_schedule.cpp
     radar_common/descriptors/ddm_code_descriptor.cpp
 )

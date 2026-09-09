@@ -64,6 +64,7 @@ radar_add_test(common/test_max_tensor_extents yaml-cpp)
 radar_add_test(common/test_sim)
 radar_add_test(common/test_sim_gpu holoscan::radar_common_simulator)
 radar_add_test(common/test_tensor)
+radar_add_test(common/test_virtual_array)
 # Holoscan EA reproducer for mid-stream scalar override + device Tensor path
 # (HSDK5_PORT.md §1). Not in the default `unit` label — run with -L ea_repro.
 radar_add_test(utils/test_live_override_repro LABELS ea_repro)

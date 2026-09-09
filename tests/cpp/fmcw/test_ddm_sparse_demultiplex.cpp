@@ -21,8 +21,8 @@
 
 #include "fmcw/ddm_sparse_demultiplex_op/ddm_sparse_demultiplex_op.hpp"
 #include "fmcw/ddm_sparse_demultiplex_op/ddm_sparse_demultiplex_stage.hpp"
-#include "fmcw/virtual_array_assembly_op/virtual_array_assembly_stage.hpp"
 #include "radar_common/dsp/mimo_coherent_compensation_stage.hpp"
+#include "radar_common/dsp/virtual_array.hpp"
 #include "radar_common/math/constants.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -233,7 +233,7 @@ std::vector<std::complex<T>> run_stage(const int64_t* fold_ptr,
   const std::vector<int64_t> detection{kFoldedD, 0};
   auto virtual_plan = hr::detail::build_virtual_plan(
       {0, 0, 0, 10, 0, 0}, {0, 0, 0, 1, 0, 0}, kTx, kRx,
-      hr::OverlapPolicy::kKeepAll);
+      hr::OverlapPolicy::kKeepAll, "DDMSparseDemultiplexOp");
   auto d_input = device(input, {kRx, kD, kR}, hr::complex_dtype<T>());
   auto d_detection = device(
       detection, {1, 2}, DLDataType{kDLInt, 64, 1});
@@ -308,7 +308,7 @@ TEST(DDMSparseDemultiplexMath, GeometryAndInitialPhaseAreCoherent) {
   EXPECT_NEAR(weights[1].real(), -1.0, 1e-12);
   const auto plan = hr::detail::build_virtual_plan(
       {0, 0, 0, 2, 0, 0}, {0, 0, 0, 1, 0, 0}, 2, 2,
-      hr::OverlapPolicy::kAverage);
+      hr::OverlapPolicy::kAverage, "DDMSparseDemultiplexOp");
   const auto geometry = hr::detail::make_array_geometry(plan, 0.004);
   EXPECT_EQ(geometry.num_elements(), plan.num_virtual);
   EXPECT_DOUBLE_EQ(geometry.wavelength, 0.004);

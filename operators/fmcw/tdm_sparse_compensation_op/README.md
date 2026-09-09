@@ -7,6 +7,9 @@ exact-sized `(doppler_bin, range_bin)` detections. For each detection and
 configured RD-neighborhood cell it applies the same firing-slot-aware phase
 correction as `TDMDenseCompensationOp`, assembles the same virtual-channel
 ordering as `VirtualArrayAssemblyOp`, and emits estimator-ready snapshots.
+Both operators use the CUDA-free `radar_common/dsp/virtual_array` planner;
+this fused sparse operator does not build or link the public dense VAA
+operator.
 
 Outputs are:
 
@@ -19,6 +22,7 @@ waveform, so it remains coherent with the correction table. Geometry and mask
 are published before `snapshot` for downstream Exact joins.
 
 This is a TDM-only bridge. Sparse DDM processing changes the detector because
-TX separation occurs in Doppler bands; it remains a separate future operator.
+TX separation occurs in Doppler bands and is handled separately by
+`DDMPowerFoldOp` plus `DDMSparseDemultiplexOp`.
 See `docs/planning/OPERATOR_API.md` for the locked contract and
 `docs/planning/WORKFLOWS.md` for dense and sparse graph placement.

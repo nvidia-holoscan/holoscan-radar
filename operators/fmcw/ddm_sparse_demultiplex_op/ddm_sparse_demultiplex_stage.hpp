@@ -7,9 +7,9 @@
 
 #include <cstdint>
 
-#include "fmcw/virtual_array_assembly_op/virtual_array_assembly_stage.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/dsp/mimo_coherent_compensation_stage.hpp"
+#include "radar_common/dsp/virtual_array.hpp"
 
 namespace holoscan::radar::detail {
 

@@ -136,7 +136,7 @@ expected<VirtualAssemblyStagePlan, Error> build_assembly_stage_plan(
   try {
     plan.gather = detail::build_virtual_plan(
         plan.stage.tx_positions, plan.stage.rx_positions, plan.layout.num_tx,
-        plan.layout.num_rx, plan.stage.overlap_policy);
+        plan.layout.num_rx, plan.stage.overlap_policy, kOpName);
   } catch (const std::invalid_argument& e) {
     return make_unexpected(Error{ErrorCode::kInvalidArgument, e.what()});
   }

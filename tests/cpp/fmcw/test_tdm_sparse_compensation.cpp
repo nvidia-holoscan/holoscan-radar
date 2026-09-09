@@ -13,9 +13,9 @@
 
 #include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_op.hpp"
 #include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_stage.hpp"
-#include "fmcw/virtual_array_assembly_op/virtual_array_assembly_stage.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/dsp/mimo_coherent_compensation_stage.hpp"
+#include "radar_common/dsp/virtual_array.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
@@ -112,7 +112,8 @@ StageResult<T> run_stage(
       0.0, 0.0, 0.0,
       1.0, 0.0, 0.0};
   auto virtual_plan = hr::detail::build_virtual_plan(
-      tx_positions, rx_positions, kNumTx, kNumRx, policy);
+      tx_positions, rx_positions, kNumTx, kNumRx, policy,
+      "TDMSparseCompensationOp");
   const int64_t snapshots = 2 * doppler_half + 1;
 
   auto rd_device = device_tensor(
@@ -158,7 +159,7 @@ StageResult<T> run_stage(
           const_cast<void*>(error_device->data()), 0, sizeof(int)),
       cudaSuccess);
 
-  const hr::detail::RdMapsLayout layout{
+  const hr::detail::TdmRdMapsLayout layout{
       .num_tx = kNumTx,
       .num_rx = kNumRx,
       .num_doppler = kDoppler,

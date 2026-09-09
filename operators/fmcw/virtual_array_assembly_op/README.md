@@ -33,7 +33,7 @@ p_virtual[tx, rx] = p_tx[tx] + p_rx[rx]
 c = tx · N_rx + rx
 ```
 
-**Coincidence**: two positions match when all three components agree within `kPositionTol = 1e-9` m (`virtual_array_assembly_stage.cu`). Not scaled by wavelength. Near-duplicates closer than this are merged; farther apart are distinct virtual elements. A wavelength-relative / λ/2-grid overlap rule is out of scope.
+**Coincidence**: two positions match when all three components agree within `kPositionTol = 1e-9` m (`radar_common/dsp/virtual_array.cpp`). Not scaled by wavelength. Near-duplicates closer than this are merged; farther apart are distinct virtual elements. A wavelength-relative / λ/2-grid overlap rule is out of scope.
 
 **Overlap policies**, scan order `(tx = 0..M−1, rx = 0..N−1)`:
 
@@ -43,7 +43,7 @@ c = tx · N_rx + rx
 | `average` | unique coincident groups | complex mean `sum(members) / count` | one row per group |
 | `keep_all` | `M_tx · N_rx` | identity gather `src_channel[c] = c` | all `M·N` positions, duplicates retained |
 
-`dedup` and `keep_all` share `gather_single_source_kernel` (one source channel per virtual index). `average` uses `gather_average_kernel` over CSR-style `member_offsets` / `member_indices`. Host grouping lives in `build_virtual_plan`; a new `(tx_positions, rx_positions, overlap_policy, M_tx, N_rx)` pair rebuilds the host tables and async-H2Ds them into ctor-sized device buffers. A previously seen key is a cache hit. Wavelength is not part of that key.
+`dedup` and `keep_all` share `gather_single_source_kernel` (one source channel per virtual index). `average` uses `gather_average_kernel` over CSR-style `member_offsets` / `member_indices`. Host grouping lives in the CUDA-free `radar_common/dsp/virtual_array` planner shared with the fused sparse operators; this public operator retains only rank-4 dense layout handling and CUDA gather/average execution. A new `(tx_positions, rx_positions, overlap_policy, M_tx, N_rx)` pair rebuilds the host tables and async-H2Ds them into ctor-sized device buffers. A previously seen key is a cache hit. Wavelength is not part of that key.
 
 **Emitted geometry.** `make_array_geometry` copies post-policy `virtual_positions` and the effective `wavelength`; `geometry_type` is left unset. `prepare_wire_array_geometry` publishes that logical value as `WireArrayGeometry`. Its pageable-host descriptor-Tensor member uses the schema bridge's internal float64 packing:
 
@@ -53,7 +53,7 @@ row  num_virtual:       [wavelength, geometry_type_code, 0]
   geometry_type_code: 0=ULA, 1=URA, 2=UCA, 3=CONFORMAL; NaN if unset
 ```
 
-Consumers receive the coherent descriptor with `from_wire`; direct angle operators do that in their live resolvers. Virtual positions do not depend on wavelength; only metadata does. `num_doppler` and `num_range` pass through unchanged. This is the one sanctioned descriptor *output* port (design invariant 2). C++ graphs connect it directly to angle operators' same-schema live inputs. Python remains on equivalent static Params because generated schema payloads are not exposed there.
+Consumers receive the coherent descriptor with `from_wire`; direct angle operators do that in their live resolvers. Virtual positions do not depend on wavelength; only metadata does. `num_doppler` and `num_range` pass through unchanged. This is the public dense virtual-array boundary; fused sparse TDM/DDM operators emit the same sanctioned descriptor beside their final snapshots. C++ graphs connect it directly to angle operators' same-schema live inputs. Python remains on equivalent static Params because generated schema payloads are not exposed there.
 
 ## Shape and dtype rules
 

@@ -15,8 +15,7 @@ target_link_libraries(ddm_sparse_demultiplex_op
         holoscan::radar_common
         holoscan::radar_common_mimo_compensation
         holoscan::radar_schemas
-    PRIVATE
-        holoscan::virtual_array_assembly_op)
+)
 set_property(TARGET ddm_sparse_demultiplex_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 install(TARGETS ddm_sparse_demultiplex_op

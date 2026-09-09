@@ -101,7 +101,7 @@ __global__ void sparse_compensation_kernel(
 template <typename T>
 void run_tdm_sparse_compensation_stage(
     const void* rd_maps, const int64_t* detection_idx,
-    int64_t num_detections, const RdMapsLayout& layout,
+    int64_t num_detections, const TdmRdMapsLayout& layout,
     int64_t num_snapshots, int64_t doppler_half, int64_t range_half,
     SnapshotEdgeMode doppler_edge, SnapshotEdgeMode range_edge,
     const VirtualAssemblyPlan& virtual_plan, const void* correction,
@@ -128,12 +128,12 @@ void run_tdm_sparse_compensation_stage(
 }
 
 template void run_tdm_sparse_compensation_stage<float>(
-    const void*, const int64_t*, int64_t, const RdMapsLayout&, int64_t,
+    const void*, const int64_t*, int64_t, const TdmRdMapsLayout&, int64_t,
     int64_t, int64_t, SnapshotEdgeMode, SnapshotEdgeMode,
     const VirtualAssemblyPlan&, const void*, const int64_t*,
     const int64_t*, const int64_t*, void*, uint8_t*, int*, cudaStream_t);
 template void run_tdm_sparse_compensation_stage<double>(
-    const void*, const int64_t*, int64_t, const RdMapsLayout&, int64_t,
+    const void*, const int64_t*, int64_t, const TdmRdMapsLayout&, int64_t,
     int64_t, int64_t, SnapshotEdgeMode, SnapshotEdgeMode,
     const VirtualAssemblyPlan&, const void*, const int64_t*,
     const int64_t*, const int64_t*, void*, uint8_t*, int*, cudaStream_t);

@@ -20,10 +20,10 @@
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
 
-#include "fmcw/virtual_array_assembly_op/virtual_array_assembly_stage.hpp"
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/dsp/virtual_array.hpp"
 #include "radar_common/sdk/config_cache.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
 
