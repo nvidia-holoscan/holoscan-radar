@@ -286,6 +286,8 @@ int main(int argc, char** argv) {
         bind_out(options, "doppler_processor", "rd_maps");
         bind_out(options, "doppler_processor", "velocity_bins");
         bind_out(options, "phase_shift_beamformer", "rda_cube");
+        bind_out(options, "phase_shift_beamformer", "az_grid");
+        bind_out(options, "phase_shift_beamformer", "el_grid");
         bind_out(options, "cfar_detector", "detection_mask");
         bind_out(options, "cfar_detector", "detection_score");
         bind_out(options, "cfar_detector", "noise_estimate");

@@ -25,6 +25,7 @@
 #include <holoscan/core/temporal_contract.hpp>
 
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/sdk/config_codecs.hpp"
 
 namespace holoscan::radar {
 
@@ -70,6 +71,47 @@ constexpr std::string_view to_string(AssemblyFeature feature) {
   }
   return "unknown";
 }
+
+namespace config_detail {
+
+inline constexpr AssemblyFeature kAssemblyFeatures[] = {
+    AssemblyFeature::kRange,
+    AssemblyFeature::kVelocity,
+    AssemblyFeature::kScore,
+    AssemblyFeature::kAz,
+    AssemblyFeature::kEl,
+    AssemblyFeature::kAzEstimate,
+    AssemblyFeature::kElEstimate,
+    AssemblyFeature::kDopplerBin,
+    AssemblyFeature::kRangeBin,
+    AssemblyFeature::kAzBin,
+    AssemblyFeature::kElBin,
+};
+using AssemblyFeatureCodec =
+    CanonicalEnumCodec<AssemblyFeature, kAssemblyFeatures>;  // NOLINT
+using AssemblyFeatureStorage =
+    PortableParamStorageTraits<AssemblyFeature>;  // NOLINT
+
+}  // namespace config_detail
+}  // namespace holoscan::radar
+
+namespace holoscan::config {
+
+template <>
+struct ConfigCodec<radar::AssemblyFeature>
+    : radar::config_detail::AssemblyFeatureCodec {};  // NOLINT
+
+}  // namespace holoscan::config
+
+namespace holoscan {
+
+template <>
+struct ParamStorageTraits<radar::AssemblyFeature>
+    : radar::config_detail::AssemblyFeatureStorage {};  // NOLINT
+
+}  // namespace holoscan
+
+namespace holoscan::radar {
 
 // Assembles the `points` feature matrix for clustering / DetectionReductionOp.
 // This header is the contract reference for ports, shapes, dtypes, and

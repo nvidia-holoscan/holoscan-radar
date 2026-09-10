@@ -534,6 +534,8 @@ Reduces each cluster to one **representative detection** so the cluster-then-ang
 
 - **In:** `rd_maps` — complex64 / complex128, `(num_channels, num_doppler, num_range_bins)`. The channel axis sits immediately before the `(doppler, range)` plane and is reduced into the beam axes; `num_channels` must match `array_geometry`.
 - **Out:** `rda_cube` — complex64 / complex128, `(num_az, num_el, num_doppler, num_range_bins)`. Channel axis replaced by the `az × el` beam grid (or `u × v` under the `direction_cosine` convention); feeds CFARDetectorOp's dense path directly.
+- **Out:** `az_grid` (optional, **latched**) — float32 / float64, `(num_az,)`. The effective azimuth scan grid (or `u` grid) used to form `rda_cube` on this tick, including a matched `[live] az_angles` override. Feeds `FeatureAssemblyOp.az_angles` so dense angle-bin indices can be converted to physical coordinates without an application bridge.
+- **Out:** `el_grid` (optional, **latched**) — float32 / float64, `(num_el,)`. The effective elevation scan grid (or `v` grid) used to form `rda_cube` on this tick, including a matched `[live] el_angles` override. Feeds `FeatureAssemblyOp.el_angles`.
 
 **Parameters:**
 

@@ -24,6 +24,7 @@
 #include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/sdk/config_codecs.hpp"
 #include "radar_common/sdk/live_override_payloads.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 
@@ -73,6 +74,54 @@ constexpr std::string_view to_string(CfarPeakNeighborhood neighborhood) {
   }
   return "unknown";
 }
+
+namespace config_detail {
+
+inline constexpr CfarVariant kCfarVariants[] = {
+    CfarVariant::kCA,
+    CfarVariant::kGO,
+    CfarVariant::kSO,
+    CfarVariant::kOS,
+};
+inline constexpr CfarPeakNeighborhood kCfarPeakNeighborhoods[] = {
+    CfarPeakNeighborhood::kCross4,
+    CfarPeakNeighborhood::kSquare8,
+};
+using CfarVariantCodec =
+    CanonicalEnumCodec<CfarVariant, kCfarVariants>;  // NOLINT
+using CfarPeakNeighborhoodCodec =
+    CanonicalEnumCodec<CfarPeakNeighborhood, kCfarPeakNeighborhoods>;  // NOLINT
+using CfarVariantStorage = PortableParamStorageTraits<CfarVariant>;
+using CfarPeakNeighborhoodStorage =
+    PortableParamStorageTraits<CfarPeakNeighborhood>;  // NOLINT
+
+}  // namespace config_detail
+}  // namespace holoscan::radar
+
+namespace holoscan::config {
+
+template <>
+struct ConfigCodec<radar::CfarVariant>
+    : radar::config_detail::CfarVariantCodec {};  // NOLINT
+
+template <>
+struct ConfigCodec<radar::CfarPeakNeighborhood>
+    : radar::config_detail::CfarPeakNeighborhoodCodec {};  // NOLINT
+
+}  // namespace holoscan::config
+
+namespace holoscan {
+
+template <>
+struct ParamStorageTraits<radar::CfarVariant>
+    : radar::config_detail::CfarVariantStorage {};  // NOLINT
+template <>
+struct ParamStorageTraits<radar::CfarPeakNeighborhood>
+    : radar::config_detail::CfarPeakNeighborhoodStorage {};  // NOLINT
+
+}  // namespace holoscan
+
+namespace holoscan::radar {
 
 // Cache key for the host-built per-training-count alpha LUT. Shared between
 // operator instances via detail::get_cached_alpha_lut.

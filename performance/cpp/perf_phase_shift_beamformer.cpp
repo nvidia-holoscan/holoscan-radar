@@ -376,6 +376,8 @@ perf::TimingCollector run_beamformer_graph(
   holoscan::CompileOptions options;
   perf::bind_tensor_out(options, "src", "rd_maps");
   perf::bind_tensor_out(options, "beamformer", "rda_cube");
+  perf::bind_tensor_out(options, "beamformer", "az_grid");
+  perf::bind_tensor_out(options, "beamformer", "el_grid");
   graph.set_default_clock(
       graph.add_clock<holoscan::RealtimeClock>("clock"));
   const holoscan::ExecutionPlan compiled =

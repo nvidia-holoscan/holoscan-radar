@@ -98,7 +98,7 @@ Each workflow below is a **Mermaid flowchart**. Nodes are operators; each edge i
 
 Cross-cutting wiring facts (apply across the diagrams):
 
-- **Dense angle path:** `PhaseShiftBeamformerOp.rda_cube → CFARDetectorOp.rd_maps` — the RDA cube's `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps` input (the CFAR plane stays the last two axes).
+- **Dense angle path:** `PhaseShiftBeamformerOp.rda_cube → CFARDetectorOp.rd_maps` — the RDA cube's `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps` input (the CFAR plane stays the last two axes). The beamformer's optional `az_grid` / `el_grid` outputs carry the effective per-tick axis values to `FeatureAssemblyOp`.
 - **Sparse angle path:** `SnapshotGatherOp` consumes **two** ports — the RD maps and CFAR's `detection_idx` — and emits `snapshot` (plus an optional `is_valid` mask when a `clamp` edge is used), feeding `⟨sparse angle estimator⟩`.
 - **`array_geometry`:** in SIMO it is a static parameter (physical RX positions). In MIMO it is computed at runtime — `VirtualArrayAssemblyOp.array_geometry → ⟨angle op⟩.array_geometry` (the `[live]` override input port).
 - **CFAR outputs:** all five are optional/latched, so applications wire only what they consume. The usual downstream pair is `detection_idx` (drives the gather / reduction; sized to the detection count) and `detection_score` (the per-detection strength `FeatureAssemblyOp` folds into `points`).
@@ -152,6 +152,7 @@ flowchart TD
   DOPP["FMCWDopplerProcessorOp"] -->|"rd_maps"| BEAM["PhaseShiftBeamformerOp"]
   BEAM -->|"rda_cube → CFARDetectorOp.rd_maps (num_az, num_el, num_doppler, num_range)"| CFAR["CFARDetectorOp (on the RDA cube)"]
   CFAR -->|"detection_idx + detection_score"| FEAT["FeatureAssemblyOp (bridge)"]
+  BEAM -.->|"az_grid / el_grid → az_angles / el_angles"| FEAT
   FEAT -->|"points (range, vel, az, el, score)"| CLUS["ClusterDBSCANOp"]
   class FEAT,CLUS opt
 ```

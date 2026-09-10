@@ -59,7 +59,7 @@ radar_add_test(common/test_wire_descriptors holoscan::radar_schemas)
 # yaml_converters.hpp / max_tensor_extents_yaml.hpp are header-only; HSDK 5
 # no longer re-exports yaml-cpp.
 find_package(yaml-cpp REQUIRED)
-radar_add_test(common/test_sdk yaml-cpp)
+radar_add_test(common/test_sdk yaml-cpp holoscan::config_io)
 radar_add_test(common/test_max_tensor_extents yaml-cpp)
 radar_add_test(common/test_sim)
 radar_add_test(common/test_sim_gpu holoscan::radar_common_simulator)
@@ -161,6 +161,24 @@ radar_add_test(detection/test_cfar_detector_go
 radar_add_test(detection/test_cfar_detector_statistical
     LABELS statistical
     holoscan::cfar_detector_op)
+
+radar_add_test(app/test_fmcw_simo_config
+    holoscan::params_io
+    holoscan::radar_app
+    holoscan::fmcw_range_processor_op
+    holoscan::clutter_filter_op
+    holoscan::fmcw_doppler_processor_op
+    holoscan::cfar_detector_op
+    holoscan::snapshot_gather_op
+    holoscan::beamscan_estimator_op
+    holoscan::phase_shift_beamformer_op
+    holoscan::cluster_dbscan_op
+    holoscan::detection_reduction_op)
+target_include_directories(test_fmcw_simo_config PRIVATE
+    ${PROJECT_SOURCE_DIR}/applications/fmcw/simo/cpp
+    ${PROJECT_SOURCE_DIR}/operators)
+target_compile_definitions(test_fmcw_simo_config PRIVATE
+    HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
 # [EA HSDK5 ONLY] Interim X11 live RD viewer (HSDK5_PORT.md §6). Skips itself
 # when no display is reachable; needs the radar_app viz headers + kernels.

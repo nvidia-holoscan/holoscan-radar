@@ -126,9 +126,11 @@ endfunction()
 # holoscan_radar_add_operator() still skips unported names, so the app would
 # link against a target that was never created.
 function(holoscan_radar_add_application NAME)
-    set(_deps ${ARGN})
-    list(REMOVE_ITEM _deps DEPENDS OPERATORS)
-    holoscan_radar_operators_ported(_deps_ported ${_deps})
+    cmake_parse_arguments(APP "" "DIRECTORY" "DEPENDS" ${ARGN})
+    cmake_parse_arguments(DEPS "" "" "EXTENSIONS;OPERATORS" ${APP_DEPENDS})
+    set(_operator_deps ${DEPS_OPERATORS})
+    list(REMOVE_ITEM _operator_deps OPTIONAL)
+    holoscan_radar_operators_ported(_deps_ported ${_operator_deps})
     if(NOT _deps_ported)
         message(STATUS
             "[EA HSDK5 ONLY] Skipping application ${NAME} "

@@ -26,11 +26,23 @@
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
+#include "radar_common/sdk/config_codecs.hpp"
 #include "radar_common/sdk/config_cache.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
 #include "radar_schemas/window_spec_bridge.hpp"
 
 namespace holoscan::radar {
+
+namespace detail {
+
+struct PhaseShiftBeamformerArtifacts {
+  std::shared_ptr<Tensor> weights;
+  std::shared_ptr<Tensor> az_grid;
+  std::shared_ptr<Tensor> el_grid;
+};
+
+}  // namespace detail
 
 // Conventional (Bartlett) dense-path beamformer. Contract reference: ports,
 // shapes, dtypes, parameters.
@@ -47,6 +59,10 @@ namespace holoscan::radar {
 // Out: rda_cube  — complex64/complex128, (num_az, num_el, num_doppler,
 //                  num_range_bins). Channel axis replaced by the az x el beam
 //                  grid (u x v under direction_cosine).
+// Out: az_grid   — optional float32/float64, (num_az,). Effective scan axis
+//                  for this tick, including a matched live override.
+// Out: el_grid   — optional float32/float64, (num_el,). Effective scan axis
+//                  for this tick, including a matched live override.
 //
 // Precision is fixed at compile time by the template instantiation.
 //
@@ -108,6 +124,8 @@ class PhaseShiftBeamformerOp
 
   Input<Tensor> rd_maps{"rd_maps"};
   Output<Tensor> rda_cube{"rda_cube"};
+  Output<Tensor> az_grid{"az_grid"};
+  Output<Tensor> el_grid{"el_grid"};
   Input<WireArrayGeometry> array_geometry{"array_geometry"};
   Input<Tensor> az_angles{"az_angles"};
   Input<Tensor> el_angles{"el_angles"};
@@ -118,15 +136,21 @@ class PhaseShiftBeamformerOp
   // device reads cannot outlive the buffer.
   Tensor retained_input_;
 
-  // Conjugated steering weights, built on device and cached by the complete
-  // geometry/convention/grid/taper configuration.
-  ConfigCache<std::shared_ptr<holoscan::Tensor>> steering_cache_;
+  // Conjugated steering weights and their physical axes, built on device and
+  // cached by the complete geometry/convention/grid/taper configuration.
+  ConfigCache<detail::PhaseShiftBeamformerArtifacts> artifact_cache_;
+
+  // The physical axes are optional/latched outputs.
+  LatchedOutput az_grid_out_;
+  LatchedOutput el_grid_out_;
 
   std::int64_t max_az_{0};
   std::int64_t max_el_{0};
   std::int64_t max_doppler_{0};
   std::int64_t max_range_{0};
   std::size_t max_byte_span_{0U};
+  std::size_t max_az_grid_byte_span_{0U};
+  std::size_t max_el_grid_byte_span_{0U};
 };
 
 extern template class PhaseShiftBeamformerOp<float>;

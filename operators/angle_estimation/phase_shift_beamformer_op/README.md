@@ -6,12 +6,15 @@ Forms a conventional (Bartlett) beam for every range-Doppler cell, replacing the
 | --- | --- | --- | --- | --- |
 | in | `rd_maps` | complex64 / complex128 | `(num_channels, num_doppler, num_range_bins)` | Channel axis immediately before the `(doppler, range)` plane; `num_channels` must match `array_geometry`. See Shape for the exact-rank rule. |
 | out | `rda_cube` | complex64 / complex128 | `(num_az, num_el, num_doppler, num_range_bins)` | Channel axis replaced by the `az × el` beam grid (`u × v` under `direction_cosine`). Always emitted. |
+| out | `az_grid` | float32 / float64 | `(num_az,)` | Optional/latched effective azimuth (or `u`) grid for this tick; includes a matched live override. |
+| out | `el_grid` | float32 / float64 | `(num_el,)` | Optional/latched effective elevation (or `v`) grid for this tick; includes a matched live override. |
 | live | `array_geometry` | `WireArrayGeometry` | descriptor wire object | `[live]` Exact override; always declared, wire to enable. |
 | live | `az_angles` / `el_angles` | float64 config Tensor | `(num_az,)` / `(num_el,)`, rank-1 pageable host | `[live]` Exact override; extents bounded by `max_az` / `max_el`. |
 | live | `array_taper` | `WireWindowSpec` | descriptor wire object | `[live]` Exact override; always declared, wire to enable. |
 
 ```text
-rd_maps (per-channel) → PhaseShiftBeamformerOp → rda_cube → CFARDetectorOp.rd_maps
+rd_maps → PhaseShiftBeamformerOp → rda_cube → CFARDetectorOp.rd_maps
+                              └──→ az_grid / el_grid → FeatureAssemblyOp
 ```
 
 In-tree `rd_maps` producers are the FMCW Doppler paths and virtual-array
@@ -22,7 +25,7 @@ group: [`operators/angle_estimation/README.md`](../README.md)
 
 ## Algorithm
 
-The shell (`phase_shift_beamformer_op.cu`) receives and validates the rank-3 cube, resolves the four live values into a tick-local `PhaseShiftBeamformerStageConfig`, and builds a `PhaseShiftBeamformerStagePlan` with captured-extent checks and output geometry. It then obtains the runtime stream, fetches conjugated steering weights from `ConfigCache`, emits the required cube, and retains the input. Weights are built on device (`build_steering_weights_device`) as `(num_beams, num_channels)` with `BeamOrder::kAzMajor` (`beam = ia * num_el + ie`), `SteeringLayout::kBeamMajor`, `conjugate = true`. The stage is one broadcast complex GEMM (`phase_shift_beamformer_stage.hpp`):
+The shell (`phase_shift_beamformer_op.cu`) receives and validates the rank-3 cube, resolves the four live values into a tick-local `PhaseShiftBeamformerStageConfig`, and builds a `PhaseShiftBeamformerStagePlan` with captured-extent checks and output geometry. It then obtains the runtime stream and fetches conjugated steering weights plus device-resident effective grids from one `ConfigCache`. The required cube is prepared first; active grid sidebands are published before the cube so downstream Exact joins see the axes for that activation. Weights are built on device (`build_steering_weights_device`) as `(num_beams, num_channels)` with `BeamOrder::kAzMajor` (`beam = ia * num_el + ie`), `SteeringLayout::kBeamMajor`, `conjugate = true`. The stage is one broadcast complex GEMM (`phase_shift_beamformer_stage.hpp`):
 
 ```text
 Y[b, beam, n] = Σ_c Wᶜ[beam, c] · X[b, c, n]
@@ -51,6 +54,7 @@ Wᶜ = taper[m] · (cos(phase) − j sin(phase))   # conjugate=true
 ## Shape and dtype rules
 
 - `rda_cube` `num_az` / `num_el` = `az_angles.size()` / `el_angles.size()`.
+- `az_grid` / `el_grid` contain those same effective values and lengths in template precision.
 - `rda_cube` `num_doppler` / `num_range_bins` copy the input trailing pair.
 - A size-1 `el_angles` (e.g. `[0]`) is a 1-D azimuth scan: shape `(num_az, 1, D, R)`.
 - Precision is the template instantiation. Real-IF `rd_maps` is rejected.
@@ -89,23 +93,23 @@ Contract marks geometry / grids / taper **[live]** (warn-once, cache), and each 
 
 ## SDK implementation notes
 
-- **Construction.** `PhaseShiftBeamformerOp(const MaxTensorExtents&)`. **Requires** `max_az`, `max_el`, `max_doppler_bins`, `max_range_bins` (no empty-span Python path). Sizes `rda_cube` as a rank-4 complex cube of those extents. There is no `max_channels` in the output span — beamforming collapses channels. A tick that exceeds the span fails at loan allocate.
-- **Triggering.** `contract()` is `OnEach{rd_maps}` plus one unconditional `Exact{}` + `SafeDefault{}` entry per `[live]` override (`array_geometry`, `az_angles`, `el_angles`, `array_taper`). There are no optional ports. The application enables an override by `add_flow`-ing its port (an unwired entry reports `kNotConnected` and reads as no override; a wired port missing from the contract is `RUNTIME_OPERATOR_REPLAY_MISMATCH` — [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1).
-- **Ports and queues.** Data plane first: `rd_maps` (rank checked by the stage plan), then rank-4 `rda_cube`, both device-memory representations with dtype enforced in `compute()`. The live block follows in Params order; all Inputs use `queue_depth(2)`. `az_angles` / `el_angles` are rank-1 pageable-host float64 config Tensors and `array_geometry` / `array_taper` are wire objects. Output uses `TensorBounds` `{max_rank = 4, max_byte_span = …}`.
+- **Construction.** `PhaseShiftBeamformerOp(const MaxTensorExtents&)`. **Requires** `max_az`, `max_el`, `max_doppler_bins`, `max_range_bins` (no empty-span Python path). Sizes `rda_cube` as a rank-4 complex cube and the two rank-1 grid pools from those extents. There is no `max_channels` in the output span — beamforming collapses channels. A tick that exceeds the span fails at loan allocate.
+- **Triggering.** `contract()` is `OnEach{rd_maps}` plus one unconditional `Exact{}` + `SafeDefault{}` entry per `[live]` override (`array_geometry`, `az_angles`, `el_angles`, `array_taper`). Optional outputs stay out of the contract so unwired grids do not gate scheduling. The application enables an override by `add_flow`-ing its port (an unwired entry reports `kNotConnected` and reads as no override; a wired port missing from the contract is `RUNTIME_OPERATOR_REPLAY_MISMATCH` — [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §1).
+- **Ports and queues.** Data plane first: `rd_maps`, required rank-4 `rda_cube`, then optional rank-1 `az_grid` / `el_grid`; all use device memory and template precision. The live block follows in Params order; all Inputs use `queue_depth(2)`. `az_angles` / `el_angles` overrides are rank-1 pageable-host float64 config Tensors and `array_geometry` / `array_taper` are wire objects.
 - **Live override payloads.** `array_geometry` is `Input<WireArrayGeometry>` and `array_taper` is `Input<WireWindowSpec>` — generated descriptor-schema types converted with `from_wire` inside `resolve_live_override_via`, so wire storage never reaches operator state. `az_angles` / `el_angles` are validated on arrival (rank, host memory, contiguity, dtype, `max_az` / `max_el` extent) and converted per tick, with no state kept ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9).
-- **Streams and lifetime.** GEMM and weight builds use `context.cuda_stream()`. `rd_maps` is retained across ticks. The hot path does not synchronize. Weight-builder scratch is `cudaMallocAsync` / `cudaFreeAsync` on that stream.
-- **Emission.** `emit_device_tensor` on `rda_cube`: loan → fill (GEMM) → commit → emit.
+- **Streams and lifetime.** GEMM and artifact builds use `context.cuda_stream()`. `rd_maps` is retained across ticks; cached device grids remain alive across their stream-ordered D2D copies. The hot path does not synchronize. Weight-builder scratch is `cudaMallocAsync` / `cudaFreeAsync` on that stream.
+- **Emission.** Prepare the required `rda_cube` loan first, publish active latched grid sidebands from cached device tensors, then publish the cube trigger. An unwired grid is attempted once and latched off without suppressing `rda_cube`.
 - **Parameter authoring.** Schema id `com.nvidia.holoscan.radar.PhaseShiftBeamformerParams`, version 1.
 - **Precision.** `PhaseShiftBeamformerOp<float>`, `PhaseShiftBeamformerOp<double>`.
 - **[EA HSDK5 ONLY]** Runtime geometry producers connect directly to `array_geometry` with `WireArrayGeometry`; Python remains Params-only for schema payloads. Pageable-host rejection is not exercisable via the device-bound Graph harness.
 
 ## Consumer lifetime notes
 
-`rda_cube` is a fresh pool loan filled and committed each tick. A consumer may retain it. The full dense cube is intentionally caller-sized through the scan grid and captured RD extents.
+Every emitted tensor is a fresh pool loan. Consumers may retain the cube and grids. The full dense cube is intentionally caller-sized through the scan grid and captured RD extents.
 
 ## Performance
 
-Cold / first unseen steering key: host taper + per-beam `boundary_to_canonical`, H2D scratch, and the weight kernel; then the GEMM. Steady: cache hit + one broadcast `matx::matmul` (cuBLAS). The key covers the complete `AngleConvention` (including custom signed axes and elevation reference), wavelength, positions, both grids, and window key, so an override costs one weight rebuild on the tick it arrives.
+Cold / first unseen steering key: host taper + per-beam `boundary_to_canonical`, H2D scratch, the weight kernel, and device-grid materialization; then the GEMM. Steady with grid outputs wired: cache hit + one broadcast `matx::matmul` (cuBLAS) + two small D2D grid copies. The key covers the complete `AngleConvention` (including custom signed axes and elevation reference), wavelength, positions, both grids, and window key, so an override costs one artifact rebuild on the tick it arrives.
 
 Harness: `performance/cpp/perf_phase_shift_beamformer.cpp`. Size ladder `xs`…`xl` (channels × `num_az` × `num_el` × RD extent). Every selected size runs four isolated inline-override scenarios: `array_geometry`, `az_angles`, `el_angles`, and `array_taper`. The source co-emits the complete live bundle before the triggering `rd_maps`; one value changes mid-session, and the report records `override_ms` / `override_delta_ms` against pre-override steady state. No current HSDK 5 Graph results are checked in; run:
 
@@ -122,6 +126,8 @@ C++: `tests/cpp/angle_estimation/test_phase_shift_beamformer.cpp`. Python: `test
 | Check | Proves |
 | --- | --- |
 | `DefaultsToRadarBoresightConvention` | Default-constructed Params select the documented `radar_boresight` convention |
+| `PublishesEffectiveGridsFloat` / `PublishesEffectiveGridsDouble` | Optional grid outputs preserve configured values, shapes, and template precision |
+| `OptionalGridsMayRemainUnwired` | Cube-only consumers run without draining either grid |
 | `RecoversKnownBeamBin2D` | URA steering vector → cube peak within 0.02 rad of truth |
 | `RecoversKnownBeamAzOnly1DScan` | ULA + `el_angles = [0]` → azimuth peak |
 | `ConventionRelabelsSamePhysicalDirection` | `radar_boresight` and `aerospace_ned` report the same labels |
@@ -134,7 +140,7 @@ C++: `tests/cpp/angle_estimation/test_phase_shift_beamformer.cpp`. Python: `test
 | `RejectsRankTooLow` / `RejectsChannelMismatch` / `RejectsEmptyScanGrid` / `RejectsDtypeMismatch` / `RejectsInputBeyondCapturedExtents` | Named error paths and constructor bounds |
 | `CacheKeyIncludesCustomConventionAxes` | Distinct custom frames and close floating-point grids cannot alias one steering-table cache entry |
 | `RejectsDegenerateCustomConvention` | Invalid custom signed-axis frames fail in plan construction |
-| `LiveAzGridAppliesForOneTick` / `LiveElGridAppliesForOneTick` / `LiveArrayGeometryAppliesForOneTick` / `LiveArrayTaperAppliesForOneTick` | Mid-stream override reshapes / rebuilds the cube, then the following miss reverts to Params |
+| `LiveAzGridAppliesForOneTick` / `LiveElGridAppliesForOneTick` / `LiveArrayGeometryAppliesForOneTick` / `LiveArrayTaperAppliesForOneTick` | Mid-stream override reshapes / rebuilds the cube and corresponding grid output, then the following miss reverts to Params |
 | `LiveOverridesRejectMalformedAndBounds` | Malformed wire payload and an over-`max_az` / `max_el` grid are diagnosed, not consumed |
 
 ```bash
@@ -165,18 +171,21 @@ beamformer.set_params(cfg.beamformer_params);
 
 graph.add_flow(doppler->rd_maps, beamformer->rd_maps, q);
 graph.add_flow(beamformer->rda_cube, cfar->rd_maps, q);
+graph.add_flow(beamformer->az_grid, features->az_angles, q);
+graph.add_flow(beamformer->el_grid, features->el_angles, q);
 ```
 
 Python bindings exist at `python/_phase_shift_beamformer_op_bindings.cpp` as an HSDK 4.x trampoline and are not built (`HOLOSCAN_RADAR_BUILD_PYTHON=OFF`).
 
 ## Contract conformance
 
-Matches the dense Bartlett contract for ports, rank, GEMM, convention boundary, taper, live overrides, and required grids.
+Matches the dense Bartlett contract for ports, rank, GEMM, convention boundary, taper, live overrides, and coherent optional grid outputs.
 
 | Contract claim | Verdict | Detail |
 | --- | --- | --- |
 | `array_geometry` / `array_taper` **[live]** | conforms (payload form differs) | Unconditional Exact `Input<WireArrayGeometry>` / `Input<WireWindowSpec>` in `contract()`, not `Input<ArrayGeometry>` / `Input<WindowSpec>` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9). |
 | `az_angles` / `el_angles` **[live]** | conforms (payload form differs) | Rank-1 host config Tensors bounded by `max_az` / `max_el`, not `Input<std::vector<double>>` (§9). |
+| `az_grid` / `el_grid` optional outputs | conforms | Rank-1 device Tensors in template precision publish the effective tick-local grids and latch off when unwired. |
 | `rd_maps` shape `(num_channels, D, R)` | conforms | The stage plan requires rank 3; no opaque leading batch is admitted. |
 | Steering cache identity | conforms | The shared key includes every `AngleConvention` field, geometry, grids, and taper. |
 

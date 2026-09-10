@@ -1257,6 +1257,38 @@ these run log-only, so also run each app's default YAML under a real /
 `Xvfb` `DISPLAY`: the viz subgraph is where the partitioning gap above
 surfaced.
 
+**Fresh SIMO consolidation (2026-09-09).** The active `fmcw_simo`
+registration now points at `applications/fmcw/simo` and builds two explicitly
+ordered workflows: `fmcw_simo_detect_then_beamform` and
+`fmcw_simo_beamform_then_detect`. They share only `default.yaml` and
+`smoke.yaml`; incompatible CFAR and angle-grid settings live in matching nested
+sections. The full-cube path sends every CFAR detection into four-dimensional
+feature assembly and DBSCAN, then uses `DetectionReductionOp` to choose cluster
+representatives. `FeatureAssemblyOp`'s dense `az`/`el` contract receives
+tick-coherent `PhaseShiftBeamformerOp.az_grid` / `el_grid` tensors rather than
+an application-local stamper or the legacy `CubeAoaLookupOp` computational
+bridge. The old sparse and dense source directories remain
+unregistered temporarily for output comparison. The new `python/` directory
+is only a package marker: executable Python variants remain deferred until the
+HSDK 5 Python operator surface is enabled. As of 2026-09-10, the consolidated
+app intentionally has no visualization graph or visualization configuration;
+both workflows terminate at the cluster report.
+
+**Native typed-config pilot (2026-09-09).** The consolidated SIMO app no
+longer uses the EA `radar_app/app/graph_params.hpp` YAML loaders. App-owned
+settings live under one schema-backed `app:` object; HSDK `config_io` loads the
+document once, and each operator block decodes through its locked
+`HOLOSCAN_PARAM_SCHEMA` into `PreparedParams<T>`. Shared descriptor/string-enum
+`ConfigCodec` support mirrors the legacy yaml-cpp spellings and validation.
+App-derived array geometry and sparse CFAR fold enter as decode baselines and
+cannot be duplicated in operator blocks. Unmigrated Graph apps retain
+`graph_params.hpp`, `YAML::convert`, and argument setters until their own
+config migrations. **EA friction:** the pinned Params decoder still routes
+direct enum fields through their integer representation even when the schema
+reports a portable string codec. The SIMO loader therefore immutably
+normalizes canonical enum strings before `decode_params`; remove that step
+when the SDK honors the field codec directly.
+
 **Deferred:** ~~`fmcw_aoa_estimators` — Application `set_dynamic_flows()`
 has no Graph equivalent~~ **landed (Graph-native, 2026-08-17):**
 `EstimatorRouterOp` emits on one of five `snapshot_*` outs; idle estimators
@@ -1269,8 +1301,9 @@ legacy `perf_source.hpp` / `perf_sink.hpp` remain for reference only.
 CMake gates drivers via `HOLOSCAN_RADAR_HSDK5_PORTED_PERF` (all drivers
 listed — see §8). Python perf drivers stay deferred with bindings.
 
-**Status:** open — phase 4: Graph demos landed for siso/simo/dense/mimo/aoa
-(+ X11 overlays); Holoviz / Python still deferred; C++ Graph perf done.
+**Status:** open — phase 4: Graph demos landed for siso/SIMO
+detect-then-beamform/SIMO beamform-then-detect/mimo/aoa (+ X11 overlays);
+Holoviz / Python still deferred; C++ Graph perf done.
 
 ---
 

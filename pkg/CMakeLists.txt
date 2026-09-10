@@ -43,7 +43,6 @@ set(_HOLOSCAN_RADAR_PKG_APPLICATIONS)
 if(HOLOSCAN_RADAR_HAS_HOLOVIZ AND _HOLOSCAN_RADAR_PKG_FMCW_CHAIN)
     list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS
         fmcw_aoa_estimators
-        fmcw_dense_simo
         fmcw_simo
         fmcw_siso)
     if(_HOLOSCAN_RADAR_PKG_MIMO)

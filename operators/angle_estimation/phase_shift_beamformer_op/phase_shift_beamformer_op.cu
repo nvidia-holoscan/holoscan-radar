@@ -27,6 +27,7 @@
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
+#include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
@@ -181,29 +182,55 @@ build_phase_shift_beamformer_stage_plan(
 }
 
 template <typename T>
-expected<std::shared_ptr<holoscan::Tensor>, Error>
-prepare_steering_weights(
-    ConfigCache<std::shared_ptr<holoscan::Tensor>>& cache,
+std::shared_ptr<holoscan::Tensor> make_device_grid(
+    const std::vector<double>& values, cudaStream_t stream) {
+  auto result = make_device_tensor(
+      {static_cast<int64_t>(values.size())}, real_dtype<T>());
+  std::vector<T> cast(values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    cast[i] = static_cast<T>(values[i]);
+  }
+  auto writable = result->mutable_data();
+  if (!writable) {
+    throw std::runtime_error(
+        "PhaseShiftBeamformerOp: angle grid is not writable");
+  }
+  if (!cast.empty() &&
+      cudaMemcpyAsync(*writable, cast.data(), cast.size() * sizeof(T),
+                      cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+    throw std::runtime_error(
+        "PhaseShiftBeamformerOp: angle-grid H2D copy failed");
+  }
+  return result;
+}
+
+template <typename T>
+expected<const detail::PhaseShiftBeamformerArtifacts*, Error>
+prepare_steering_artifacts(
+    ConfigCache<detail::PhaseShiftBeamformerArtifacts>& cache,
     const PhaseShiftBeamformerStageConfig& stage, cudaStream_t stream) {
   try {
     const std::string cache_key =
         steering_cache_key(stage.geometry, stage.convention, stage.az_angles,
                            stage.el_angles, stage.taper);
-    const std::shared_ptr<holoscan::Tensor>& weights =
+    const detail::PhaseShiftBeamformerArtifacts& artifacts =
         cache.get_or_build(
-            cache_key, "steering weights", [&] {
-              return build_steering_weights_device<T>(
-                  stage.geometry, stage.convention, stage.az_angles,
-                  stage.el_angles, stage.taper, BeamOrder::kAzMajor,
-                  SteeringLayout::kBeamMajor, /*conjugate=*/true, stream);
+            cache_key, "steering artifacts", [&] {
+              return detail::PhaseShiftBeamformerArtifacts{
+                  .weights = build_steering_weights_device<T>(
+                      stage.geometry, stage.convention, stage.az_angles,
+                      stage.el_angles, stage.taper, BeamOrder::kAzMajor,
+                      SteeringLayout::kBeamMajor, /*conjugate=*/true, stream),
+                  .az_grid = make_device_grid<T>(stage.az_angles, stream),
+                  .el_grid = make_device_grid<T>(stage.el_angles, stream)};
             });
-    if (!weights) {
+    if (!artifacts.weights || !artifacts.az_grid || !artifacts.el_grid) {
       return make_unexpected(Error{
           ErrorCode::kFailure,
           std::string(kOpName) +
-              ": internal error: steering weights missing"});
+              ": internal error: steering artifacts missing"});
     }
-    return weights;
+    return &artifacts;
   } catch (const std::invalid_argument& e) {
     return make_unexpected(
         Error{ErrorCode::kInvalidArgument, e.what()});
@@ -232,6 +259,10 @@ PhaseShiftBeamformerOp<T>::PhaseShiftBeamformerOp(
   // rda_cube is (num_az, num_el, D, R) — beamforming collapses channels.
   max_byte_span_ = byte_span_complex_cube<T>(
       {max_az, max_el, max_doppler, max_range}, kOpName);
+  max_az_grid_byte_span_ =
+      byte_span_real_cube<T>({max_az}, kOpName);
+  max_el_grid_byte_span_ =
+      byte_span_real_cube<T>({max_el}, kOpName);
 }
 
 template <typename T>
@@ -248,6 +279,11 @@ void PhaseShiftBeamformerOp<T>::setup(OperatorSpec& spec) {
       .dtype = std::nullopt,
       .rank = 4U,
   };
+  constexpr TensorRepresentation kGridDevice{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = real_dtype<T>(),
+      .rank = 1U,
+  };
   constexpr TensorRepresentation kHostF64{
       .memory_kind = MemoryKind::kHost,
       .dtype = DLDataType{kDLFloat, 64U, 1U},
@@ -257,6 +293,12 @@ void PhaseShiftBeamformerOp<T>::setup(OperatorSpec& spec) {
   spec.output(rda_cube)
       .produces_tensor(
           pooled_tensor_output(kOutputDevice, 4U, max_byte_span_));
+  spec.output(az_grid)
+      .produces_tensor(
+          pooled_tensor_output(kGridDevice, 2U, max_az_grid_byte_span_));
+  spec.output(el_grid)
+      .produces_tensor(
+          pooled_tensor_output(kGridDevice, 2U, max_el_grid_byte_span_));
   // [live] Exact overrides, Params order (schema and host-Tensor alike).
   spec.input(array_geometry).queue_depth(2U);
   spec.input(az_angles).queue_depth(2U).expects_tensor(tensor_input(kHostF64));
@@ -309,13 +351,14 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
               "PhaseShiftBeamformerOp: no CUDA compute stream"});
   }
   HOLOSCAN_TRY(
-      auto weights,
-      prepare_steering_weights<T>(steering_cache_, plan.stage, stream));
+      auto artifacts,
+      prepare_steering_artifacts<T>(artifact_cache_, plan.stage, stream));
 
-  // Allocate, run, and publish the required dense cube.
+  // Prepare the required dense cube before publishing optional sidebands.
   const void* input_ptr = rd.data();
-  const void* weights_ptr = weights->data();
-  HOLOSCAN_TRY(emit_device_tensor(
+  const void* weights_ptr = artifacts->weights->data();
+  HOLOSCAN_TRY(auto cube_loan,
+               prepare_device_tensor(
       rda_cube, context, plan.output_shape, complex_dtype<T>(),
       [&](void* out_ptr, std::size_t) -> expected<void, Error> {
         try {
@@ -333,6 +376,41 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
         }
         return {};
       }));
+
+  // Publish effective grid sidebands before the cube that triggers downstream
+  // work. The cached sources remain alive for all stream-ordered D2D copies.
+  const auto emit_grid =
+      [&](Output<Tensor>& output, LatchedOutput& latched,
+          const std::shared_ptr<Tensor>& source,
+          const char* port_name) -> expected<void, Error> {
+    if (!latched.active()) {
+      return {};
+    }
+    HOLOSCAN_TRY(
+        auto loan,
+        prepare_device_tensor(
+            output, context, source->shape(), real_dtype<T>(),
+            [&](void* dst, std::size_t bytes) -> expected<void, Error> {
+              if (bytes != 0U &&
+                  cudaMemcpyAsync(dst, source->data(), bytes,
+                                  cudaMemcpyDeviceToDevice,
+                                  stream) != cudaSuccess) {
+                return fail_runtime(
+                    std::string(kOpName) + "." + port_name +
+                    ": device copy failed");
+              }
+              return {};
+            }));
+    latched.emit(output, context, std::move(loan),
+                 std::string(kOpName) + "." + port_name);
+    return {};
+  };
+  HOLOSCAN_RETURN_IF_ERROR(
+      emit_grid(az_grid, az_grid_out_, artifacts->az_grid, "az_grid"));
+  HOLOSCAN_RETURN_IF_ERROR(
+      emit_grid(el_grid, el_grid_out_, artifacts->el_grid, "el_grid"));
+  HOLOSCAN_TRY(
+      emit_prepared_tensor(rda_cube, context, std::move(cube_loan)));
 
   // Retain the borrowed input until the next activation.
   retained_input_ = std::move(rd);

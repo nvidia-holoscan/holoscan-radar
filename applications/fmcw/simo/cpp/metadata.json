@@ -1,0 +1,42 @@
+{
+    "$schema": "urn:holohub:application:v1",
+    "application": {
+        "name": "fmcw_simo",
+        "authors": [
+            {
+                "name": "Holoscan Team",
+                "affiliation": "NVIDIA"
+            }
+        ],
+        "language": ["C++"],
+        "version": "0.1.0",
+        "changelog": {
+            "0.1.0": "Add detect-then-beamform and beamform-then-detect workflows"
+        },
+        "holoscan_sdk": {
+            "minimum_required_version": "5.0.0",
+            "tested_versions": ["5.0.0"]
+        },
+        "platforms": ["x86_64", "aarch64"],
+        "tags": ["Radar", "Signal Processing", "GPU", "FMCW", "SIMO", "Angle"],
+        "ranking": 3,
+        "requirements": {},
+        "default_mode": "detect_then_beamform",
+        "modes": {
+            "detect_then_beamform": {
+                "description": "Detect RD cells before per-detection beamforming",
+                "run": {
+                    "command": "<holohub_app_bin>/fmcw_simo_detect_then_beamform",
+                    "workdir": "holohub_app_bin"
+                }
+            },
+            "beamform_then_detect": {
+                "description": "Beamform the full RD cube before detection",
+                "run": {
+                    "command": "<holohub_app_bin>/fmcw_simo_beamform_then_detect",
+                    "workdir": "holohub_app_bin"
+                }
+            }
+        }
+    }
+}

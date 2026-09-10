@@ -33,6 +33,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -61,7 +62,9 @@ struct X11RdViewerConfig {
   // punctuation renders as mojibake.
   std::string title{"Range-Doppler"};
   // Wire detection_idx + range_bins + velocity_bins (detection dots + physical
-  // axis ticks). Without it the viewer shows the raster and bin-index ticks.
+  // axis ticks). The final two index columns are (doppler, range), so sparse
+  // (N, 2) and dense (N, 4) detections are both accepted. Without it the
+  // viewer shows the raster and bin-index ticks.
   bool overlay_detections{false};
   // Additionally wire labels + rep_idx (per-cluster colors, representative
   // markers, legend). Requires overlay_detections; off in CFAR peak_only mode,
@@ -73,8 +76,9 @@ struct X11RdViewerConfig {
   double frame_period{0.1};
   // Boresight (angular field-of-view) scatter panel: each detection at its
   // (az, el) estimate. Requires the aoa_estimates port to be wired, rows
-  // aligned with detection_idx. Angular extents in radians (the estimator's
-  // scan grid), labeled in degrees.
+  // aligned with detection_idx. The final two columns are used, admitting
+  // either (N, 2) estimator output or (N, 4) physical feature points. Angular
+  // extents are radians (the estimator's scan grid), labeled in degrees.
   bool overlay_boresight{false};
   double az_lo{-0.35};
   double az_hi{0.35};
@@ -198,6 +202,30 @@ class X11RdViewerOp : public holoscan::Operator<> {
     }
 
     cudaStream_t stream = context.cuda_stream().get();
+    const auto copy_trailing_pair =
+        [&](const char* name, const holoscan::Tensor& tensor,
+            auto* destination) -> holoscan::expected<void, holoscan::Error> {
+      using Value = typename std::remove_reference_t<
+          decltype(*destination)>::value_type;
+      const auto shape = tensor.shape();
+      if (shape.size() != 2 || shape[1] < 2) {
+        return holoscan::make_unexpected(holoscan::Error{
+            holoscan::ErrorCode::kInvalidArgument,
+            std::string("X11RdViewerOp: ") + name + " must be (N, K>=2)"});
+      }
+      const std::size_t rows = static_cast<std::size_t>(shape[0]);
+      const std::size_t columns = static_cast<std::size_t>(shape[1]);
+      std::vector<Value> full(rows * columns);
+      HOLOSCAN_RETURN_IF_ERROR(copy_d2h(
+          name, full.data(), tensor, full.size() * sizeof(Value), stream));
+      destination->resize(rows * 2);
+      for (std::size_t row = 0; row < rows; ++row) {
+        (*destination)[row * 2] = full[row * columns + columns - 2];
+        (*destination)[row * 2 + 1] =
+            full[row * columns + columns - 1];
+      }
+      return {};
+    };
     host_lut_.resize(static_cast<std::size_t>(num_doppler_ * num_range_));
     HOLOSCAN_RETURN_IF_ERROR(copy_d2h("rd_image", host_lut_.data(), image,
                                       host_lut_.size() * sizeof(float),
@@ -213,17 +241,10 @@ class X11RdViewerOp : public holoscan::Operator<> {
       HOLOSCAN_TRY(auto range_t, receive_tensor(range_bins, who));
       HOLOSCAN_TRY(auto velocity_t, receive_tensor(velocity_bins, who));
       const auto idx_shape = idx_t.shape();
-      if (idx_shape.size() != 2 || idx_shape[1] != 2) {
-        return holoscan::make_unexpected(holoscan::Error{
-            holoscan::ErrorCode::kInvalidArgument,
-            "X11RdViewerOp: detection_idx must be (N, 2)"});
-      }
-      detections_.resize(static_cast<std::size_t>(idx_shape[0] * 2));
       ranges_.resize(static_cast<std::size_t>(range_t.shape()[0]));
       velocities_.resize(static_cast<std::size_t>(velocity_t.shape()[0]));
       HOLOSCAN_RETURN_IF_ERROR(
-          copy_d2h("detection_idx", detections_.data(), idx_t,
-                   detections_.size() * sizeof(std::int64_t), stream));
+          copy_trailing_pair("detection_idx", idx_t, &detections_));
       HOLOSCAN_RETURN_IF_ERROR(
           copy_d2h("range_bins", ranges_.data(), range_t,
                    ranges_.size() * sizeof(float), stream));
@@ -234,34 +255,19 @@ class X11RdViewerOp : public holoscan::Operator<> {
     if (cfg_.overlay_clusters) {
       HOLOSCAN_TRY(auto labels_t, receive_tensor(labels, who));
       HOLOSCAN_TRY(auto rep_t, receive_tensor(rep_idx, who));
-      const auto rep_shape = rep_t.shape();
-      if (rep_shape.size() != 2 || rep_shape[1] != 2) {
-        return holoscan::make_unexpected(holoscan::Error{
-            holoscan::ErrorCode::kInvalidArgument,
-            "X11RdViewerOp: rep_idx must be (num_clusters, 2)"});
-      }
       labels_.resize(static_cast<std::size_t>(labels_t.shape()[0]));
-      rep_.resize(static_cast<std::size_t>(rep_shape[0] * 2));
       HOLOSCAN_RETURN_IF_ERROR(
           copy_d2h("labels", labels_.data(), labels_t,
                    labels_.size() * sizeof(std::int64_t), stream));
-      HOLOSCAN_RETURN_IF_ERROR(copy_d2h("rep_idx", rep_.data(), rep_t,
-                                        rep_.size() * sizeof(std::int64_t),
-                                        stream));
+      HOLOSCAN_RETURN_IF_ERROR(
+          copy_trailing_pair("rep_idx", rep_t, &rep_));
     }
     angles_.clear();
     if (cfg_.overlay_boresight) {
       HOLOSCAN_TRY(auto aoa_t, receive_tensor(aoa_estimates, who));
       const auto aoa_shape = aoa_t.shape();
-      if (aoa_shape.size() != 2 || aoa_shape[1] != 2) {
-        return holoscan::make_unexpected(holoscan::Error{
-            holoscan::ErrorCode::kInvalidArgument,
-            "X11RdViewerOp: aoa_estimates must be (N, 2)"});
-      }
-      angles_.resize(static_cast<std::size_t>(aoa_shape[0] * 2));
       HOLOSCAN_RETURN_IF_ERROR(
-          copy_d2h("aoa_estimates", angles_.data(), aoa_t,
-                   angles_.size() * sizeof(float), stream));
+          copy_trailing_pair("aoa_estimates", aoa_t, &angles_));
       if (cfg_.overlay_detections &&
           aoa_shape[0] != static_cast<std::int64_t>(detections_.size() / 2)) {
         return holoscan::make_unexpected(holoscan::Error{

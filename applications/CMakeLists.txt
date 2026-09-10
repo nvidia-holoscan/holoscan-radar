@@ -29,6 +29,7 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
             cluster_dbscan_op
     )
     holoscan_radar_add_application(fmcw_simo
+        DIRECTORY fmcw/simo
         DEPENDS OPERATORS
             fmcw_range_processor_op
             clutter_filter_op
@@ -36,6 +37,7 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
             cfar_detector_op
             snapshot_gather_op
             beamscan_estimator_op
+            phase_shift_beamformer_op
             feature_assembly_op
             detection_reduction_op
             cluster_dbscan_op
@@ -52,17 +54,6 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
             cfar_detector_op
             snapshot_gather_op
             beamscan_estimator_op
-            feature_assembly_op
-            detection_reduction_op
-            cluster_dbscan_op
-    )
-    holoscan_radar_add_application(fmcw_dense_simo
-        DEPENDS OPERATORS
-            fmcw_range_processor_op
-            clutter_filter_op
-            fmcw_doppler_processor_op
-            phase_shift_beamformer_op
-            cfar_detector_op
             feature_assembly_op
             detection_reduction_op
             cluster_dbscan_op
@@ -85,6 +76,6 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
     )
 else()
     message(STATUS
-        "Skipping Graph-ported demos (fmcw_siso/simo/mimo/dense_simo/aoa); "
+        "Skipping Graph-ported demos (fmcw_siso/simo/mimo/aoa); "
         "no Holoviz/X11 live RD")
 endif()

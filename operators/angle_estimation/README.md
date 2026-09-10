@@ -36,7 +36,7 @@ stage would occupy the same slot.
 | [`MUSICEstimatorOp<T>`](music_estimator_op/README.md) | `snapshot` [+ `is_valid`] → `aoa_estimates`, `angle_spectrum`, `doa_multi`, `source_count`, `eigenvalues` | Subspace (MUSIC) sparse-path DOA on a scan grid; per-item model order fixed or auto (EFT); noise-subspace pseudospectrum |
 | [`RootMUSICEstimatorOp<T>`](root_music_estimator_op/README.md) | `snapshot` [+ `is_valid`] → `aoa_estimates`, `doa_multi`, `source_count`, `eigenvalues` | Gridless Root-MUSIC on a ULA; polynomial roots (no scan grid / no spectrum) |
 | [`ESPRITEstimatorOp<T>`](esprit_estimator_op/README.md) | `snapshot` [+ `is_valid`] → `aoa_estimates`, `doa_multi`, `source_count`, `eigenvalues` | Gridless LS-ESPRIT on shift-invariant geometry (ULA auto-pair or explicit `ShiftInvariantSubarrayPair`) |
-| [`PhaseShiftBeamformerOp<T>`](phase_shift_beamformer_op/README.md) | `rd_maps` → `rda_cube` | Conventional (Bartlett) dense-path beamformer: a beam for every RD cell → Range-Doppler-Angle cube for CFAR's dense path |
+| [`PhaseShiftBeamformerOp<T>`](phase_shift_beamformer_op/README.md) | `rd_maps` → `rda_cube`, `az_grid`, `el_grid` | Conventional (Bartlett) dense-path beamformer: a beam for every RD cell → Range-Doppler-Angle cube plus coherent physical axes for CFAR and feature assembly |
 
 ## Implementation status
 
@@ -164,6 +164,7 @@ stage would occupy the same slot.
   geometry, scan grid, and taper; static `angle_convention`; float/double;
   exact rank-3 input; unit tests (dense DOA-bin recovery,
   convention relabeling + direction-cosine masking, taper sidelobes,
-  live overrides, error paths); `performance/cpp/perf_phase_shift_beamformer.cpp`
+  effective grid outputs, live overrides, error paths);
+  `performance/cpp/perf_phase_shift_beamformer.cpp`
   characterizes dense beamforming cold/steady cost plus each live override.
   No operator-local open items remain.

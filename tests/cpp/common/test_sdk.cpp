@@ -16,12 +16,14 @@
 #include <string>
 #include <vector>
 
+#include <holoscan/config/io.hpp>
 #include <holoscan/logger/logger.hpp>
 
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/sdk/config_cache.hpp"
+#include "radar_common/sdk/config_codecs.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
 
 namespace {
@@ -222,6 +224,66 @@ TEST(YamlConverters, WaveformDecodesBothSpellingsAndValidates) {
   EXPECT_EQ(YAML::convert<FMCWWaveformDescriptor>::encode(by_bandwidth)
                 .as<FMCWWaveformDescriptor>(),
             by_bandwidth);
+}
+
+TEST(ConfigCodecs, EnumsAndWindowShorthandMatchYaml) {
+  auto window_doc = holoscan::config_io::parse(
+      "hann", holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(window_doc) << holoscan::config::format_error(
+      window_doc.error());
+  const auto window = window_doc->get<WindowSpec>("");
+  ASSERT_TRUE(window) << holoscan::config::format_error(window.error());
+  EXPECT_EQ(window->type, WindowType::kHann);
+
+  auto norm_doc = holoscan::config_io::parse(
+      "ortho", holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(norm_doc);
+  const auto norm = norm_doc->get<holoscan::radar::FftNorm>("");
+  ASSERT_TRUE(norm);
+  EXPECT_EQ(*norm, holoscan::radar::FftNorm::kOrtho);
+
+  auto invalid_doc = holoscan::config_io::parse(
+      "hanning", holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(invalid_doc);
+  EXPECT_FALSE(invalid_doc->get<WindowType>(""));
+}
+
+TEST(ConfigCodecs, WindowMapAndWaveformValidate) {
+  auto window_doc = holoscan::config_io::parse(
+      "{type: kaiser, kaiser_beta: 8.5, "
+      "coherent_gain_normalization: false}",
+      holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(window_doc);
+  const auto window = window_doc->get<WindowSpec>("");
+  ASSERT_TRUE(window);
+  EXPECT_EQ(window->type, WindowType::kKaiser);
+  ASSERT_TRUE(window->kaiser_beta.has_value());
+  EXPECT_DOUBLE_EQ(*window->kaiser_beta, 8.5);
+  EXPECT_FALSE(window->coherent_gain_normalization);
+
+  auto waveform_doc = holoscan::config_io::parse(
+      "{carrier_frequency: 77.0e9, bandwidth: 150.0e6, "
+      "chirp_duration: 20.0e-6, sample_rate: 12.8e6, "
+      "chirp_repetition_interval: 25.0e-6}",
+      holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(waveform_doc);
+  const auto waveform = waveform_doc->get<FMCWWaveformDescriptor>("");
+  ASSERT_TRUE(waveform);
+  EXPECT_TRUE(waveform->is_valid());
+
+  auto invalid_waveform_doc = holoscan::config_io::parse(
+      "{carrier_frequency: 77.0e9, chirp_duration: 20.0e-6, "
+      "sample_rate: 12.8e6, chirp_repetition_interval: 25.0e-6}",
+      holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(invalid_waveform_doc);
+  EXPECT_FALSE(
+      invalid_waveform_doc->get<FMCWWaveformDescriptor>(""));
+
+  auto unknown_field_doc = holoscan::config_io::parse(
+      "{type: hann, unexpected: true}",
+      holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(unknown_field_doc);
+  EXPECT_FALSE(unknown_field_doc->get<WindowSpec>(""));
 }
 
 TEST(YamlConverters, ShiftInvariantSubarrayPairRoundTrips) {

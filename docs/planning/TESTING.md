@@ -170,6 +170,7 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - `angle_convention`: default-constructed Params select `radar_boresight`; the same physical direction is reported with the expected (az, el) labels under different presets; `direction_cosine` masks the invisible region (`u²+v² > 1`).
 - `array_taper` lowers spatial sidelobes.
 - `[live]` overrides (`array_geometry` / `az_angles` / `el_angles` / `array_taper`) change the output and reuse cached weights when unchanged.
+- Optional `az_grid` / `el_grid` outputs equal the effective scan grids in template precision; live grid overrides reshape both the corresponding cube axis and grid output for one tick, then a missing override reverts both to Params.
 - Input rank is exactly 3; an opaque leading batch axis is rejected, and Doppler/range or scan-grid extents above `MaxTensorExtents` fail before output allocation.
 - Distinct `custom` angle frames and distinct floating-point grids produce distinct steering-cache identities; degenerate custom frames reject.
 

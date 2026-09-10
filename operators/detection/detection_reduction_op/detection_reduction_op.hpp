@@ -24,6 +24,7 @@
 
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/reduce/reduction_enums.hpp"
+#include "radar_common/sdk/config_codecs.hpp"
 
 namespace holoscan::radar {
 

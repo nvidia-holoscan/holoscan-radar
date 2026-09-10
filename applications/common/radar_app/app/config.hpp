@@ -28,55 +28,12 @@
 #include <string>
 #include <vector>
 
+#include "radar_app/app/run_config.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
 #include "radar_common/sim/scene.hpp"
 
 namespace holoscan::radar::app {
-
-// Run cadence + visualization toggles shared by every app. Each app embeds this
-// as a base class of AppConfig and adds its scene + app-specific fields;
-// run_fmcw_app() (driver.hpp) reads the visualize/headless/skip_display_check
-// members through the derived cfg.
-struct CommonRunConfig {
-  int64_t num_frames{1};
-  double frame_period{0.1};  // s, between emitted cubes (and target motion)
-  // Wall-clock CadenceMeter (source inter-emit + DetectionReport e2e).
-  bool meter_cadence{true};
-  int64_t meter_log_every{0};  // 0 = warn-only + end summary; N = INFO every N
-  bool visualize{false};     // live Holoviz window (requires a GUI host); set
-                             // from visualization.enabled (legacy: `visualize`)
-  bool skip_display_check{false};  // skip the startup display probe
-  bool headless{false};            // render offscreen (no window / display)
-  // Detection-marker geometry for the RD-map overlay (ClusterOverlayOp), as a
-  // fraction of the image extent. Parsed from the `visualization:` block.
-  struct VisualizationConfig {
-    float marker_radius{0.004F};   // filled-disc radius
-    float marker_outline{0.002F};  // extra radius of the black outline disc
-    int64_t marker_segments{20};   // triangle-fan segments per disc
-    // Vertical sync. true -> HolovizOp uses a FIFO present mode (frame-rate
-    // capped, internally queued); false -> IMMEDIATE (uncapped, may tear).
-    // FIFO issues far fewer swap-chain acquires per window resize, which makes
-    // the resize path markedly more robust against Holoviz's fatal
-    // "Failed to acquire next swap chain image" on an out-of-date surface.
-    bool vsync{true};
-    // Live-window size in pixels. Consumed by the [EA HSDK5 ONLY] X11 RD
-    // viewer; the Holoviz apps size their own window.
-    int64_t window_width{1280};
-    int64_t window_height{720};
-  } viz;
-  // CFAR peak-grouping mode. A native CFARDetectorOp parameter (set through the
-  // cfar_detector YAML block via from_config); each app also reads the same key
-  // as a read-only mirror of that operator block to gate its graph shape (drop
-  // the DBSCAN clustering + reduction stages
-  // when set). Populated per app in its
-  // load_config, not by the shared parse helpers below (which stay app-owned).
-  bool peak_only{false};
-  struct PlotsConfig {
-    bool enable{true};
-    int64_t window{120};  // frames retained in the scrolling window
-  } plots;
-};
 
 // Throw with the offending key rather than failing mid-graph: these values feed
 // cudaMalloc sizing and the Count/Periodic conditions, where bad values surface

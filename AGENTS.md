@@ -120,6 +120,9 @@ in the right layer:
 - **App `.cpp` = the graph.** `main()` calls
   `radar_app`'s `run_fmcw_graph_app()` with the graph-building lambda
   (operators, connections, and device placement). Nothing else belongs here.
+- **Application README = the visual graph.** Include a Mermaid `flowchart LR`
+  diagram for each executable workflow, with branches and joins that match the
+  graph entry point. Update it whenever operators or connections change.
 - **App-owned code is colocated** in the app's `cpp/` dir: `config.hpp`
   (`AppConfig : app::CommonRunConfig` + `load_config`) and `custom_ops.hpp`
   (operators specific to one app — e.g. the MIMO ADC sources, the dense-path
