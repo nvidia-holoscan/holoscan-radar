@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <initializer_list>
 #include <memory>
 #include <utility>
 
@@ -36,6 +37,13 @@ void bind_output(holoscan::CompileOptions& options, const char* op,
       });
 }
 
+void bind_outputs(holoscan::CompileOptions& options, const char* op,
+                  std::initializer_list<const char*> ports) {
+  for (const char* port : ports) {
+    bind_output(options, op, port);
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -61,23 +69,47 @@ int main(int argc, char** argv) {
           *cadence_out = cadence;
         }
 
+        // Simulated ADC source.
         auto source = graph.op<app::SimAdcSourceOp>(
             "adc_source", extents, std::move(source_config));
+        bind_outputs(options, "adc_source", {"adc_cube"});
+
+        // Range processing.
         auto range = graph.op<radar::FMCWRangeProcessorOp<float>>(
             "range_processor", extents);
         range.set_params(cfg.range_params);
+        bind_outputs(options, "range_processor",
+                     {"range_profiles", "range_bins"});
+
+        // Static-clutter suppression.
         auto clutter = graph.op<radar::ClutterFilterOp<float>>(
             "clutter_filter", extents);
         clutter.set_params(cfg.clutter_params);
+        bind_outputs(options, "clutter_filter", {"range_profiles_out"});
+
+        // Doppler processing.
         auto doppler = graph.op<radar::FMCWDopplerProcessorOp<float>>(
             "doppler_processor", extents);
         doppler.set_params(cfg.doppler_params);
+        bind_outputs(options, "doppler_processor",
+                     {"rd_maps", "velocity_bins"});
+
+        // Dense angle beamforming.
         auto beamformer = graph.op<radar::PhaseShiftBeamformerOp<float>>(
             "phase_shift_beamformer", extents);
         beamformer.set_params(cfg.beamformer_params);
+        bind_outputs(options, "phase_shift_beamformer",
+                     {"rda_cube", "az_grid", "el_grid"});
+
+        // Per-angle-plane CFAR detection.
         auto cfar = graph.op<radar::CFARDetectorOp<float>>(
             "cfar_detector", cfg.cfar_extents);
         cfar.set_params(cfg.cfar_params);
+        bind_outputs(options, "cfar_detector",
+                     {"detection_mask", "detection_score", "noise_estimate",
+                      "detection_idx", "cfar_power"});
+
+        // Physical feature assembly.
         auto features = graph.op<radar::FeatureAssemblyOp<float>>(
             "feature_assembly", extents);
         radar::FeatureAssemblyParams feature_params;
@@ -87,12 +119,21 @@ int main(int argc, char** argv) {
             radar::AssemblyFeature::kAz,
             radar::AssemblyFeature::kEl};
         features.set_params(std::move(feature_params));
+        bind_outputs(options, "feature_assembly", {"points"});
+
+        // Detection clustering.
         auto cluster = graph.op<radar::ClusterDBSCANOp<float>>(
             "cluster_dbscan", extents);
         cluster.set_params(cfg.dbscan_params);
+        bind_outputs(options, "cluster_dbscan", {"labels", "sizes"});
+
+        // Cluster representative selection.
         auto reduction = graph.op<radar::DetectionReductionOp<float>>(
             "detection_reduction", extents);
         reduction.set_params(cfg.reduction_params);
+        bind_outputs(options, "detection_reduction", {"rep_idx"});
+
+        // Final log report.
         auto report = graph.op<app::ClusterReportOp>(
             "cluster_report",
             app::ClusterReportOp::Config{
@@ -134,24 +175,5 @@ int main(int argc, char** argv) {
         graph.add_flow(reduction->rep_idx, report->rep_idx, queue);
         graph.add_flow(range->range_bins, report->range_bins, queue);
         graph.add_flow(doppler->velocity_bins, report->velocity_bins, queue);
-
-        bind_output(options, "adc_source", "adc_cube");
-        bind_output(options, "range_processor", "range_profiles");
-        bind_output(options, "range_processor", "range_bins");
-        bind_output(options, "clutter_filter", "range_profiles_out");
-        bind_output(options, "doppler_processor", "rd_maps");
-        bind_output(options, "doppler_processor", "velocity_bins");
-        bind_output(options, "phase_shift_beamformer", "rda_cube");
-        bind_output(options, "phase_shift_beamformer", "az_grid");
-        bind_output(options, "phase_shift_beamformer", "el_grid");
-        bind_output(options, "cfar_detector", "detection_mask");
-        bind_output(options, "cfar_detector", "detection_score");
-        bind_output(options, "cfar_detector", "noise_estimate");
-        bind_output(options, "cfar_detector", "detection_idx");
-        bind_output(options, "cfar_detector", "cfar_power");
-        bind_output(options, "feature_assembly", "points");
-        bind_output(options, "cluster_dbscan", "labels");
-        bind_output(options, "cluster_dbscan", "sizes");
-        bind_output(options, "detection_reduction", "rep_idx");
       });
 }
