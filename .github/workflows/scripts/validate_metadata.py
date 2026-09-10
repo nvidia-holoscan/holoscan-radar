@@ -60,6 +60,7 @@ def read_metadata_file(path: Path, repo_root: Path) -> str:
     try:
         nofollow_flag = os.O_NOFOLLOW
         directory_flag = os.O_DIRECTORY
+        nonblock_flag = os.O_NONBLOCK
     except AttributeError as exc:
         raise ValueError(
             "secure metadata validation requires no-follow directory traversal"
@@ -91,7 +92,7 @@ def read_metadata_file(path: Path, repo_root: Path) -> str:
         try:
             file_descriptor = os.open(
                 relative_path.parts[-1],
-                os.O_RDONLY | nofollow_flag,
+                os.O_RDONLY | nofollow_flag | nonblock_flag,
                 dir_fd=directory_descriptors[-1],
             )
         except OSError as exc:

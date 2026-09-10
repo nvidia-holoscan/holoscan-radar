@@ -3,11 +3,24 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 """
 
+import multiprocessing
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
 import validate_metadata
+
+
+def _read_metadata_in_child(path, repo_root, result_pipe):
+    try:
+        validate_metadata.read_metadata_file(path, repo_root)
+    except ValueError as exc:
+        result_pipe.send(str(exc))
+    else:
+        result_pipe.send(None)
+    finally:
+        result_pipe.close()
 
 
 class ValidateMetadataTest(unittest.TestCase):
@@ -36,6 +49,34 @@ class ValidateMetadataTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "regular file"):
             validate_metadata.read_metadata_file(path, self.repo_root)
+
+    def test_rejects_fifo_without_blocking(self):
+        path = self.repo_root / "metadata.json"
+        os.mkfifo(path)
+
+        context = multiprocessing.get_context("fork")
+        result_pipe, child_pipe = context.Pipe(duplex=False)
+        process = context.Process(
+            target=_read_metadata_in_child,
+            args=(path, self.repo_root, child_pipe),
+        )
+        process.start()
+        child_pipe.close()
+        try:
+            process.join(timeout=1)
+            if process.is_alive():
+                process.terminate()
+                process.join()
+                self.fail("reading a FIFO metadata.json blocked")
+
+            self.assertEqual(process.exitcode, 0)
+            self.assertTrue(result_pipe.poll(1))
+            self.assertRegex(result_pipe.recv(), "regular file")
+        finally:
+            if process.is_alive():
+                process.terminate()
+                process.join()
+            result_pipe.close()
 
     def test_rejects_parent_directory_symlink(self):
         target_dir = self.repo_root / "target"
