@@ -99,7 +99,7 @@ Rules that follow from "lockdown":
 | `operators/common/` | Shared `radar_common` library: descriptors, window generation, point-target simulator, config cache, tensor/MatX utilities |
 | `operators/fmcw/` | FMCW signal processing and MIMO marshaling |
 | `applications/fmcw_siso/` | Example SISO FMCW pipeline |
-| `applications/fmcw_simo/` | Sparse SIMO angle-then-cluster demo |
+| `applications/fmcw/simo/` | Consolidated SIMO detect/beamform workflows |
 | `applications/fmcw_mimo/` | MIMO TDM/DDM demo |
 | `applications/fmcw_dense_simo/` | Dense SIMO beamformer demo |
 | `applications/fmcw_aoa_estimators/` | Interchangeable sparse AoA estimator demo |

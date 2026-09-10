@@ -1267,9 +1267,9 @@ feature assembly and DBSCAN, then uses `DetectionReductionOp` to choose cluster
 representatives. `FeatureAssemblyOp`'s dense `az`/`el` contract receives
 tick-coherent `PhaseShiftBeamformerOp.az_grid` / `el_grid` tensors rather than
 an application-local stamper or the legacy `CubeAoaLookupOp` computational
-bridge. The old sparse and dense source directories remain
-unregistered temporarily for output comparison. The new `python/` directory
-is only a package marker: executable Python variants remain deferred until the
+bridge. The old sparse source directory was removed; the old dense source
+directory remains unregistered temporarily for output comparison. The new
+`python/` directory is only a package marker: executable Python variants remain deferred until the
 HSDK 5 Python operator surface is enabled. As of 2026-09-10, the consolidated
 app intentionally has no visualization graph or visualization configuration;
 both workflows terminate at the cluster report.

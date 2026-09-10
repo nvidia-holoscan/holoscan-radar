@@ -28,7 +28,7 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
             detection_reduction_op
             cluster_dbscan_op
     )
-    holoscan_radar_add_application(fmcw_simo
+    holoscan_radar_add_application(simo
         DIRECTORY fmcw/simo
         DEPENDS OPERATORS
             fmcw_range_processor_op

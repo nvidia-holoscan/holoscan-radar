@@ -1,7 +1,7 @@
 {
     "$schema": "urn:holohub:application:v1",
     "application": {
-        "name": "fmcw_simo",
+        "name": "simo",
         "authors": [
             {
                 "name": "Holoscan Team",

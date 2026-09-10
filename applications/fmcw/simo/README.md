@@ -75,19 +75,26 @@ now.
 - `python/` is an intentionally empty package stub. Python applications are
   deferred until the HSDK 5 Python surface is ready.
 
-The former `applications/fmcw_simo` and `applications/fmcw_dense_simo`
-directories remain temporarily as behavior-comparison references, but CMake
-does not register or package them.
+The former sparse `applications/fmcw_simo` application has been removed.
+`applications/fmcw_dense_simo` remains temporarily as a behavior-comparison
+reference, but CMake does not register or package it.
 
 ## Build and run
 
 ```bash
-cmake -S . -B build -DBUILD_ALL=OFF -DAPP_fmcw_simo=ON
+cmake -S . -B build -DBUILD_ALL=OFF -DAPP_simo=ON
 cmake --build build --target fmcw_simo_detect_then_beamform
 cmake --build build --target fmcw_simo_beamform_then_detect
 
 ./build/applications/fmcw/simo/cpp/fmcw_simo_detect_then_beamform
 ./build/applications/fmcw/simo/cpp/fmcw_simo_beamform_then_detect
+```
+
+The HoloHub CLI project name follows the leaf application directory:
+
+```bash
+./holohub run simo detect_then_beamform --local
+./holohub run simo beamform_then_detect --local
 ```
 
 Each executable defaults to the staged `default.yaml` and accepts a config path
