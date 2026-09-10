@@ -16,6 +16,15 @@ app:
     frame_period: 0.1
     meter_cadence: true
     meter_log_every: 0
+  visualization:
+    enabled: true
+    window_width: 1280
+    window_height: 720
+    window_title: FMCW SIMO
+    display_rate_hz: 60.0
+    dynamic_range_db: 60.0
+    detection_radius: 0.006
+    representative_size: 0.014
   rx_array:
     az_elements: 8
     el_elements: 8

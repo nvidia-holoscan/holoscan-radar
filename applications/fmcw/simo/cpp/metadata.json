@@ -9,8 +9,9 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.1.0",
+        "version": "0.2.0",
         "changelog": {
+            "0.2.0": "Add native HSDK 5 range-Doppler visualization",
             "0.1.0": "Add detect-then-beamform and beamform-then-detect workflows"
         },
         "holoscan_sdk": {

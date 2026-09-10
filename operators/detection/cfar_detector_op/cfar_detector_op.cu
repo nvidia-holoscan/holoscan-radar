@@ -946,21 +946,37 @@ void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
+  const TensorRepresentation real_device{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = real_dtype<T>(),
+      .rank = std::nullopt,
+  };
+  constexpr TensorRepresentation kMaskDevice{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = kMaskDtype,
+      .rank = std::nullopt,
+  };
+  constexpr TensorRepresentation kIndexDevice{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = kInt64Dtype,
+      .rank = 2U,
+  };
   spec.input(rd_maps).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   const TensorBounds map_bounds{
       .max_rank = max_map_rank_,
       .max_byte_span = max_map_byte_span_};
   // detection_mask is uint8 — map_bounds (real T) is a safe ceiling.
   spec.output(detection_mask)
-      .produces_tensor(pooled_tensor_output(kDevice, map_bounds));
+      .produces_tensor(pooled_tensor_output(kMaskDevice, map_bounds));
   spec.output(detection_score)
-      .produces_tensor(pooled_tensor_output(kDevice, map_bounds));
+      .produces_tensor(pooled_tensor_output(real_device, map_bounds));
   spec.output(noise_estimate)
-      .produces_tensor(pooled_tensor_output(kDevice, map_bounds));
+      .produces_tensor(pooled_tensor_output(real_device, map_bounds));
   spec.output(cfar_power)
-      .produces_tensor(pooled_tensor_output(kDevice, map_bounds));
+      .produces_tensor(pooled_tensor_output(real_device, map_bounds));
   spec.output(detection_idx)
-      .produces_tensor(pooled_tensor_output(kDevice, 2U, max_idx_byte_span_));
+      .produces_tensor(
+          pooled_tensor_output(kIndexDevice, 2U, max_idx_byte_span_));
   constexpr TensorRepresentation kHostInt64Vector{
       .memory_kind = MemoryKind::kHost,
       .dtype = kInt64Dtype,

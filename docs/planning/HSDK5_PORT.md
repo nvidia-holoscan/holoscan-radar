@@ -1271,8 +1271,27 @@ bridge. The old sparse source directory was removed; the old dense source
 directory remains unregistered temporarily for output comparison. The new
 `python/` directory is only a package marker: executable Python variants remain deferred until the
 HSDK 5 Python operator surface is enabled. As of 2026-09-10, the consolidated
-app intentionally has no visualization graph or visualization configuration;
-both workflows terminate at the cluster report.
+app has a fresh HSDK 5-native Holoviz branch in both workflows: an app-local
+CUDA adapter max-projects `cfar_power` to an RGBA RD image, a second app-local
+adapter emits host float geometry, and the stock
+`holoscan::holoviz::HolovizOp` declares the image, white clustered-detection
+ovals, and white representative crosses. The HSDK 5 CMake target is
+`holoscan::operators::holoviz`, detected separately from the legacy HSDK 4
+target pair. `default.yaml` enables this branch and `smoke.yaml` disables it.
+
+**Closed (2026-09-10): native Holoviz physical lowering.** Two independent
+admission failures were masked by the same secondary
+`PROCESS_LOCAL_CHANNEL_PLAN_INVALID` artifact-validation error. First, placing
+the independently clock-driven source and Holoviz sink in one manual partition
+violated the partition-cover rule; Holoviz now has its own partition. After
+that correction, compiler instrumentation identified a rejected
+`CFARDetectorOp.cfar_power -> SimoRdHeatmapOp.cfar_power` layout: the consumer
+correctly required float32, but CFAR's pooled map outputs advertised an
+unspecified dtype. `CFARDetectorOp` now freezes its output layouts to uint8
+(`detection_mask`), float32/float64 (`detection_score`, `noise_estimate`,
+`cfar_power`), and int64 rank-2 (`detection_idx`), matching the locked
+contract. Both display-enabled SIMO workflows now run end to end with the
+stock Holoviz sink and drop-oldest visualization queues.
 
 **Native typed-config pilot (2026-09-09).** The consolidated SIMO app no
 longer uses the EA `radar_app/app/graph_params.hpp` YAML loaders. App-owned

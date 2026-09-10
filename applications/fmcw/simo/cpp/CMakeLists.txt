@@ -3,6 +3,21 @@
 
 find_package(holoscan REQUIRED COMPONENTS core params_io)
 
+if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
+    add_library(simo_viz STATIC viz/simo_viz_ops.cu)
+    add_library(holoscan::simo_viz ALIAS simo_viz)
+    target_include_directories(simo_viz PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
+    target_link_libraries(simo_viz PUBLIC
+        holoscan::core
+        holoscan::radar_common
+        holoscan::operators::holoviz
+        CUDA::cudart)
+    target_compile_definitions(simo_viz PUBLIC
+        HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ=1)
+    set_property(TARGET simo_viz PROPERTY POSITION_INDEPENDENT_CODE ON)
+endif()
+
 set(_simo_common_libraries
     holoscan::fmcw_range_processor_op
     holoscan::clutter_filter_op
@@ -17,6 +32,10 @@ set(_simo_common_libraries
     holoscan::params_io
     holoscan::core
     CUDA::cudart)
+
+if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
+    list(APPEND _simo_common_libraries holoscan::simo_viz)
+endif()
 
 add_executable(fmcw_simo_detect_then_beamform
     detect_then_beamform/fmcw_simo_detect_then_beamform.cpp)

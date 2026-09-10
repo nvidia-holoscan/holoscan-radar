@@ -16,6 +16,15 @@ app:
     frame_period: 0.05
     meter_cadence: true
     meter_log_every: 0
+  visualization:
+    enabled: false
+    window_width: 1280
+    window_height: 720
+    window_title: FMCW SIMO smoke
+    display_rate_hz: 60.0
+    dynamic_range_db: 60.0
+    detection_radius: 0.006
+    representative_size: 0.014
   rx_array:
     az_elements: 4
     el_elements: 4

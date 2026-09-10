@@ -18,12 +18,29 @@ if(TARGET holoscan::viz AND TARGET holoscan::ops::holoviz)
     set(HOLOSCAN_RADAR_HAS_HOLOVIZ TRUE)
 endif()
 
+# The pinned main-5x SDK exports the rewritten Graph-native operator as one
+# target. Keep this separate from the 4.x pair above: existing demos still
+# include the old Holoviz API, while the consolidated SIMO app starts fresh on
+# the HSDK 5 surface. [EA HSDK5 ONLY]
+set(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ FALSE)
+if(TARGET holoscan::operators::holoviz)
+    set(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ TRUE)
+endif()
+
 if(HOLOSCAN_RADAR_HAS_HOLOVIZ)
     message(STATUS "Holoviz: found (demo apps + radar_app viz enabled)")
 else()
     message(STATUS
         "Holoviz: not found (holoscan::viz / holoscan::ops::holoviz); "
         "demo applications and Holoviz-backed radar_app symbols are disabled")
+endif()
+
+if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
+    message(STATUS "HSDK 5 Holoviz: found (Graph-native SIMO display enabled)")
+else()
+    message(STATUS
+        "HSDK 5 Holoviz: not found (holoscan::operators::holoviz); "
+        "Graph-native SIMO display disabled")
 endif()
 
 # X11 — interim live RD-map viewer when Holoviz is absent (XPutImage stand-in).
@@ -52,7 +69,9 @@ endif()
 
 # Live RD display is available via Holoviz or the X11 stand-in.
 set(HOLOSCAN_RADAR_HAS_RD_LIVE FALSE)
-if(HOLOSCAN_RADAR_HAS_HOLOVIZ OR HOLOSCAN_RADAR_HAS_X11)
+if(HOLOSCAN_RADAR_HAS_HOLOVIZ
+   OR HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
+   OR HOLOSCAN_RADAR_HAS_X11)
     set(HOLOSCAN_RADAR_HAS_RD_LIVE TRUE)
 endif()
 

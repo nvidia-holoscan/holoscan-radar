@@ -21,6 +21,10 @@
 #include "radar_app/report/report_ops.hpp"
 #include "config.hpp"  // NOLINT(build/include_subdir): app-private header
 
+#if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
+#include "viz/simo_viz_graph.hpp"  // NOLINT(build/include_subdir)
+#endif
+
 namespace radar = holoscan::radar;
 namespace app = holoscan::radar::app;
 namespace simo = holoscan::radar::app::simo;
@@ -142,6 +146,19 @@ int main(int argc, char** argv) {
                 cfg.beamformer_params->el_angles,
                 cadence});
 
+        // Processing and reporting share one source-driven partition.
+        auto application = graph.partition("application");
+        application.add(source)
+            .add(range)
+            .add(clutter)
+            .add(doppler)
+            .add(beamformer)
+            .add(cfar)
+            .add(features)
+            .add(cluster)
+            .add(reduction)
+            .add(report);
+
         // FMCW front end: ADC cube -> per-channel range-Doppler maps.
         graph.add_flow(source->adc_cube, range->adc_cube, queue);
         graph.add_flow(range->range_profiles, clutter->range_profiles, queue);
@@ -175,5 +192,17 @@ int main(int argc, char** argv) {
         graph.add_flow(reduction->rep_idx, report->rep_idx, queue);
         graph.add_flow(range->range_bins, report->range_bins, queue);
         graph.add_flow(doppler->velocity_bins, report->velocity_bins, queue);
+
+#if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
+        if (cfg.visualize) {
+          simo::viz::add_simo_visualization(
+              graph, application, options, extents, cfg.visualization,
+              cfg.frame_period, "Beamform then detect",
+              simo::viz::SimoVizInputs{
+                  cfar->cfar_power, cfar->detection_idx, cluster->labels,
+                  reduction->rep_idx, range->range_bins,
+                  doppler->velocity_bins});
+        }
+#endif
       });
 }

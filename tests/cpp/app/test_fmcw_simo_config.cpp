@@ -40,6 +40,7 @@ TEST(FmcwSimoConfig, DecodesDetectThenBeamformSmoke) {
   EXPECT_EQ(config.extents.max_snapshots, 1);
   EXPECT_EQ(config.extents.max_az, 5);
   EXPECT_EQ(config.extents.max_el, 5);
+  EXPECT_FALSE(config.visualize);
 }
 
 TEST(FmcwSimoConfig, DecodesBeamformThenDetectSmoke) {
@@ -67,6 +68,8 @@ TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
   EXPECT_EQ(detect.extents.max_az, 13);
   EXPECT_EQ(beamform.extents.max_el, 13);
   EXPECT_EQ(beamform.dbscan_params->min_points, 2);
+  EXPECT_TRUE(detect.visualize);
+  EXPECT_DOUBLE_EQ(detect.visualization.dynamic_range_db, 60.0);
 }
 
 TEST(FmcwSimoConfig, RejectsAuthoredDerivedFields) {

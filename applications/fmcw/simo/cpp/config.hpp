@@ -46,6 +46,7 @@ struct RuntimeConfig : CommonRunConfig {
   ArrayGeometry array_geometry;
   MaxTensorExtents extents;
   MaxTensorExtents cfar_extents;
+  ::holoscan::radar::app::simo::VisualizationConfig visualization;
 };
 
 struct DetectThenBeamformConfig : RuntimeConfig {
@@ -130,12 +131,46 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored,
   result.frame_period = authored.run.frame_period;
   result.meter_cadence = authored.run.meter_cadence;
   result.meter_log_every = authored.run.meter_log_every;
+  result.visualization = authored.visualization;
+  result.visualize = authored.visualization.enabled;
+  result.viz.window_width = authored.visualization.window_width;
+  result.viz.window_height = authored.visualization.window_height;
 
   require_positive("app.run.num_frames", result.num_frames);
   require_positive("app.run.frame_period", result.frame_period);
   validate_frame_period(result.frame_period);
   if (result.meter_log_every < 0) {
     throw std::runtime_error("app.run.meter_log_every must be >= 0");
+  }
+  require_positive("app.visualization.window_width",
+                   result.visualization.window_width);
+  require_positive("app.visualization.window_height",
+                   result.visualization.window_height);
+  if (result.visualization.window_width >
+          std::numeric_limits<std::uint32_t>::max() ||
+      result.visualization.window_height >
+          std::numeric_limits<std::uint32_t>::max()) {
+    throw std::runtime_error(
+        "app.visualization window dimensions exceed uint32");
+  }
+  require_positive("app.visualization.display_rate_hz",
+                   result.visualization.display_rate_hz);
+  require_positive("app.visualization.dynamic_range_db",
+                   result.visualization.dynamic_range_db);
+  require_positive("app.visualization.detection_radius",
+                   result.visualization.detection_radius);
+  require_positive("app.visualization.representative_size",
+                   result.visualization.representative_size);
+  if (result.visualization.window_title.empty()) {
+    throw std::runtime_error(
+        "app.visualization.window_title must not be empty");
+  }
+  if (!std::isfinite(result.visualization.display_rate_hz) ||
+      !std::isfinite(result.visualization.dynamic_range_db) ||
+      !std::isfinite(result.visualization.detection_radius) ||
+      !std::isfinite(result.visualization.representative_size)) {
+    throw std::runtime_error(
+        "app.visualization floating-point values must be finite");
   }
   require_positive("app.cube.num_chirps", authored.cube.num_chirps);
   require_positive("app.cube.samples_per_chirp",

@@ -180,6 +180,12 @@ target_include_directories(test_fmcw_simo_config PRIVATE
 target_compile_definitions(test_fmcw_simo_config PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
+if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
+    radar_add_test(app/test_fmcw_simo_viz holoscan::simo_viz)
+    target_include_directories(test_fmcw_simo_viz PRIVATE
+        ${PROJECT_SOURCE_DIR}/applications/fmcw/simo/cpp)
+endif()
+
 # [EA HSDK5 ONLY] Interim X11 live RD viewer (HSDK5_PORT.md §6). Skips itself
 # when no display is reachable; needs the radar_app viz headers + kernels.
 if(HOLOSCAN_RADAR_HAS_X11)
