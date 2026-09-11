@@ -21,6 +21,7 @@ limitations under the License.
 
 import argparse
 import datetime
+import fnmatch
 import itertools
 import os
 import re
@@ -40,21 +41,31 @@ FilesToCheck = [
 ]
 ExemptFiles = []
 
+MAX_EXCLUDE_PATTERN_LENGTH = 256
+MAX_HEADER_BYTES = 64 * 1024
+MAX_HEADER_LINES = 100
+
 # Require the full NVIDIA entity; bare "NVIDIA" must not pass.
 _NVIDIA_ENTITY = r"NVIDIA CORPORATION & AFFILIATES(?:\. All rights reserved)?"
 
 CheckSPDXWithCopyright = re.compile(
-    rf"(^|\s*[#*/*]\s*)?SPDX-FileCopyrightText: Copyright(?: \(c\))? *(\d{{4}})(?:-(\d{{4}}))?,? ({_NVIDIA_ENTITY})\.?",
-    re.MULTILINE | re.DOTALL | re.IGNORECASE,
+    rf"^(\s*(?:(?:#|//|/\*|\*|<!--)\s*)?)SPDX-FileCopyrightText: Copyright(?: \(c\))? *(\d{{4}})(?:-(\d{{4}}))?,? ({_NVIDIA_ENTITY})\.?",
+    re.IGNORECASE,
 )
 CheckSPDXREUSE = re.compile(
-    rf"(^|\s*[#*/*]\s*)?SPDX-FileCopyrightText: *(\d{{4}})(?:-(\d{{4}}))? ({_NVIDIA_ENTITY})",
-    re.MULTILINE | re.DOTALL | re.IGNORECASE,
+    rf"^(\s*(?:(?:#|//|/\*|\*|<!--)\s*)?)SPDX-FileCopyrightText: *(\d{{4}})(?:-(\d{{4}}))? ({_NVIDIA_ENTITY})",
+    re.IGNORECASE,
 )
 CheckNonSPDX = re.compile(
-    rf"(^|\s*[#*/*]\s*)?Copyright(?: \(c\))? *(\d{{4}})(?:-(\d{{4}}))?,? ({_NVIDIA_ENTITY})\.?",
-    re.MULTILINE | re.DOTALL | re.IGNORECASE,
+    rf"^(\s*(?:(?:#|//|/\*|\*|<!--)\s*)?)Copyright(?: \(c\))? *(\d{{4}})(?:-(\d{{4}}))?,? ({_NVIDIA_ENTITY})\.?",
+    re.IGNORECASE,
 )
+
+
+def matches_exclude(path, pattern):
+    """Match a short shell glob as a path substring."""
+    normalized = path.replace(os.sep, "/")
+    return fnmatch.fnmatchcase(normalized, f"*{pattern}*")
 
 
 def check_this_file(f):
@@ -64,21 +75,22 @@ def check_this_file(f):
     if gitutils and gitutils.is_file_empty(f):
         return False
     for exempt in ExemptFiles:
-        if exempt.search(f):
+        if matches_exclude(f, exempt):
             return False
     return any(checker.search(f) for checker in FilesToCheck)
 
 
-def get_copyright_years(line):
-    # Check all three patterns
-    for pattern in [CheckSPDXWithCopyright, CheckSPDXREUSE, CheckNonSPDX]:
-        res = pattern.search(line)
-        if res:
-            start_year = int(res.group(2))
-            end_year = int(res.group(3)) if res.group(3) else start_year
-            return (start_year, end_year)
+def get_copyright_years(lines):
+    """Return the first copyright year range in bounded header lines."""
+    for line_num, line in enumerate(lines, start=1):
+        for pattern in [CheckSPDXWithCopyright, CheckSPDXREUSE, CheckNonSPDX]:
+            res = pattern.search(line)
+            if res:
+                start_year = int(res.group(2))
+                end_year = int(res.group(3)) if res.group(3) else start_year
+                return (start_year, end_year, line_num, line)
 
-    return (None, None)
+    return (None, None, None, None)
 
 
 def replace_current_year(line, start, end):
@@ -105,41 +117,43 @@ def replace_current_year(line, start, end):
     return res
 
 
+def read_header_lines(path):
+    """Read only the bounded region in which a file header may appear."""
+    with open(path, "rb") as fp:
+        prefix = fp.read(MAX_HEADER_BYTES)
+    return prefix.decode("utf-8", errors="replace").splitlines(keepends=True)[:MAX_HEADER_LINES]
+
+
 def check_copyright(f, update_current_year, ignore_year_mismatch=False):
     """
     Checks for copyright headers and their years
     """
     errs = []
     this_year = datetime.datetime.now().year
-    line_num = 0
     cr_found = False
     year_matched = False
-    with open(f, encoding="utf-8") as fp:
-        lines = fp.readlines()
-        content = "".join(lines)
+    lines = read_header_lines(f)
 
-    # Check the entire file content for copyright headers
-    start, end = get_copyright_years(content)
+    start, end, line_num, header_line = get_copyright_years(lines)
     if start is not None:
         cr_found = True
         if start > end:
             e = [
                 f,
-                1,
+                line_num,
                 "First year after second year in the copyright header (manual fix required)",
                 None,
             ]
             errs.append(e)
         if not ignore_year_mismatch and (this_year < start or this_year > end):
-            e = [f, 1, "Current year not included in the copyright header", None]
+            e = [f, line_num, "Current year not included in the copyright header", None]
             if this_year < start:
-                e[-1] = replace_current_year(content, this_year, end)
+                e[-1] = replace_current_year(header_line, this_year, end)
             if this_year > end:
-                e[-1] = replace_current_year(content, start, this_year)
+                e[-1] = replace_current_year(header_line, start, this_year)
             errs.append(e)
         else:
             year_matched = True
-    fp.close()
     # copyright header itself not found
     if not cr_found:
         e = [
@@ -161,18 +175,12 @@ def check_copyright(f, update_current_year, ignore_year_mismatch=False):
                     f, ", ".join(str(x[1]) for x in errs if x[-1] is not None)
                 )
             )
-            # Check if we're updating the entire file content (line_num == 1 and replacement is entire content)
-            if len(errs_update) == 1 and errs_update[0][1] == 1 and "\n" in errs_update[0][3]:
-                # This is a full file content replacement
-                with open(f, "w", encoding="utf-8") as out_file:
-                    out_file.write(errs_update[0][3])
-            else:
-                # This is line-by-line replacement
-                for _, line_num, __, replacement in errs_update:
-                    lines[line_num - 1] = replacement
-                with open(f, "w", encoding="utf-8") as out_file:
-                    for new_line in lines:
-                        out_file.write(new_line)
+            with open(f, encoding="utf-8") as fp:
+                file_lines = fp.readlines()
+            for _, line_num, __, replacement in errs_update:
+                file_lines[line_num - 1] = replacement
+            with open(f, "w", encoding="utf-8") as out_file:
+                out_file.writelines(file_lines)
         errs = [x for x in errs if x[-1] is None]
 
     return errs
@@ -224,7 +232,7 @@ def check_copyright_main():
         action="append",
         required=False,
         default=[],
-        help=("Exclude the paths specified (regexp). Can be specified multiple times."),
+        help=("Exclude paths matching a glob. Can be specified multiple times."),
     )
     argparser.add_argument(
         "--exclude-config",
@@ -233,7 +241,7 @@ def check_copyright_main():
         required=False,
         default=None,
         help=(
-            "Path to a file containing exclude patterns (one per line). "
+            "Path to a file containing exclude globs (one per line). "
             "Lines starting with # are treated as comments."
         ),
     )
@@ -270,15 +278,13 @@ def check_copyright_main():
         else:
             print(f"Warning: Config file not found at {config_path}")
 
-    try:
-        # Combine config file excludes with command line excludes
-        all_excludes = config_excludes + args.exclude
-        ExemptFiles = ExemptFiles + [pathName for pathName in all_excludes]
-        ExemptFiles = [re.compile(file) for file in ExemptFiles]
-    except re.error as reException:
-        print("Regular expression error:")
-        print(reException)
+    # Combine config file excludes with command line excludes. These are
+    # bounded globs, never caller-controlled regular expressions.
+    all_excludes = config_excludes + args.exclude
+    if any(len(pattern) > MAX_EXCLUDE_PATTERN_LENGTH for pattern in all_excludes):
+        print(f"Exclude globs may not exceed {MAX_EXCLUDE_PATTERN_LENGTH} characters")
         return 1
+    ExemptFiles = ExemptFiles + all_excludes
 
     all_files = []
     if dirs:
