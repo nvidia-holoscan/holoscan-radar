@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <deque>
 #include <vector>
 
 #include "viz/simo_viz_ops.hpp"
@@ -37,33 +38,37 @@ TEST(SimoRdHeatmapTest, DenseLeadingAxesUseMaxProjection) {
   EXPECT_EQ(dense, projected);
 }
 
-TEST(SimoClusterGeometryTest, UsesTrailingSparseAndDenseIndices) {
-  const std::vector<float> sparse = viz::detail::make_cluster_ovals(
-      {1, 2}, {0}, 2, 4, 8, 0.01F);
-  const std::vector<float> dense = viz::detail::make_cluster_ovals(
-      {9, 7, 1, 2}, {3}, 4, 4, 8, 0.01F);
-  EXPECT_EQ(sparse, dense);
-  ASSERT_EQ(sparse.size(), 4U);
-  EXPECT_FLOAT_EQ(sparse[0], 0.3125F);
-  EXPECT_FLOAT_EQ(sparse[1], 0.375F);
+TEST(SimoDashboardTest, ComputesClusterCentroids) {
+  const std::vector<viz::ClusterCentroid> centroids =
+      viz::detail::compute_cluster_centroids(
+          {0, 2, 2, 4, 3, 6},
+          {10.0F, 1.0F, 0.1F, 0.2F,
+           14.0F, 3.0F, 0.3F, 0.4F,
+           30.0F, -2.0F, -0.2F, -0.3F},
+          {0, 0, 1}, {2, 1}, 2, 4);
+  ASSERT_EQ(centroids.size(), 2U);
+  EXPECT_FLOAT_EQ(centroids[0].doppler_bin, 1.0F);
+  EXPECT_FLOAT_EQ(centroids[0].range_bin, 3.0F);
+  EXPECT_FLOAT_EQ(centroids[0].features[0], 12.0F);
+  EXPECT_FLOAT_EQ(centroids[0].features[3], 0.3F);
+  EXPECT_EQ(centroids[0].color_bucket, 0);
+  EXPECT_EQ(centroids[1].color_bucket, 1);
 }
 
-TEST(SimoClusterGeometryTest, FiltersNoiseLabels) {
-  const std::vector<float> ovals = viz::detail::make_cluster_ovals(
-      {0, 0, 1, 1, 2, 2}, {0, -1, 1}, 2, 4, 4, 0.02F);
-  ASSERT_EQ(ovals.size(), 8U);
-  EXPECT_FLOAT_EQ(ovals[0], 0.125F);
-  EXPECT_FLOAT_EQ(ovals[4], 0.625F);
-}
-
-TEST(SimoClusterGeometryTest, BuildsRepresentativeCrosses) {
-  const std::vector<float> crosses =
-      viz::detail::make_representative_crosses(
-          {4, 5, 2, 3}, 2, 8, 10, 0.03F);
-  ASSERT_EQ(crosses.size(), 6U);
-  EXPECT_FLOAT_EQ(crosses[0], 0.55F);
-  EXPECT_FLOAT_EQ(crosses[1], 0.5625F);
-  EXPECT_FLOAT_EQ(crosses[2], 0.03F);
+TEST(SimoDashboardTest, BoundsHistoryAndMapsPanelCoordinates) {
+  std::deque<viz::HistorySample> history;
+  const viz::ClusterCentroid centroid{
+      .features = {10.0F, 0.0F, 0.25F, -0.25F},
+      .color_bucket = 3};
+  for (std::int64_t frame = 0; frame < 5; ++frame) {
+    viz::detail::append_history(&history, {centroid}, frame, 3);
+  }
+  ASSERT_EQ(history.size(), 3U);
+  EXPECT_EQ(history.front().frame, 2);
+  const auto position = viz::detail::history_plot_position(
+      history.back(), 4, 3, 2, {-0.5F, 0.5F});
+  EXPECT_FLOAT_EQ(position[0], 1.0F);
+  EXPECT_FLOAT_EQ(position[1], 0.75F);
 }
 
 }  // namespace

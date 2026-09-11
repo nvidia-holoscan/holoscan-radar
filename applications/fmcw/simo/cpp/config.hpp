@@ -159,16 +159,25 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored,
                    result.visualization.dynamic_range_db);
   require_positive("app.visualization.detection_radius",
                    result.visualization.detection_radius);
-  require_positive("app.visualization.representative_size",
-                   result.visualization.representative_size);
+  require_positive("app.visualization.history_frames",
+                   result.visualization.history_frames);
+  if (result.visualization.enabled &&
+      (result.visualization.window_width < 640 ||
+       result.visualization.window_height < 360)) {
+    throw std::runtime_error(
+        "app.visualization dashboard requires at least a 640x360 window");
+  }
+  if (result.visualization.history_frames < 2) {
+    throw std::runtime_error(
+        "app.visualization.history_frames must be >= 2");
+  }
   if (result.visualization.window_title.empty()) {
     throw std::runtime_error(
         "app.visualization.window_title must not be empty");
   }
   if (!std::isfinite(result.visualization.display_rate_hz) ||
       !std::isfinite(result.visualization.dynamic_range_db) ||
-      !std::isfinite(result.visualization.detection_radius) ||
-      !std::isfinite(result.visualization.representative_size)) {
+      !std::isfinite(result.visualization.detection_radius)) {
     throw std::runtime_error(
         "app.visualization floating-point values must be finite");
   }

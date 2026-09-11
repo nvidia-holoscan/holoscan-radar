@@ -3,9 +3,12 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -17,22 +20,36 @@
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
 
-#include "radar_common/descriptors/max_tensor_extents.hpp"
-
 namespace holoscan::radar::app::simo::viz {
 
-struct RdHeatmapConfig {
+struct ClusterCentroid {
+  float doppler_bin{0.0F};
+  float range_bin{0.0F};
+  std::array<float, 4> features{};
+  int color_bucket{0};
+};
+
+struct HistorySample {
+  std::int64_t frame{0};
+  std::array<float, 4> features{};
+  int color_bucket{0};
+};
+
+struct SimoDisplayConfig {
   float dynamic_range_db{60.0F};
+  float detection_radius{0.010F};
+  double frame_period{0.1};
+  std::int64_t history_frames{120};
+  std::int64_t width{1280};
+  std::int64_t height{720};
+  std::array<float, 2> az_bounds{};
+  std::array<float, 2> el_bounds{};
+  std::string title;
 };
 
-struct ClusterGeometryConfig {
-  float detection_radius{0.006F};
-  float representative_size{0.014F};
-};
-
-class SimoRdHeatmapOp : public holoscan::Operator<> {
+class SimoDisplayOp : public holoscan::Operator<> {
  public:
-  SimoRdHeatmapOp(const MaxTensorExtents& extents, RdHeatmapConfig config);
+  explicit SimoDisplayOp(SimoDisplayConfig config);
 
   void setup(holoscan::OperatorSpec& spec) override;
   [[nodiscard]] holoscan::Contract contract() const override;
@@ -40,38 +57,22 @@ class SimoRdHeatmapOp : public holoscan::Operator<> {
       holoscan::ExecutionContext& context) override;
 
   holoscan::Input<holoscan::Tensor> cfar_power{"cfar_power"};
+  holoscan::Input<holoscan::Tensor> detection_idx{"detection_idx"};
+  holoscan::Input<holoscan::Tensor> points{"points"};
+  holoscan::Input<holoscan::Tensor> labels{"labels"};
+  holoscan::Input<holoscan::Tensor> sizes{"sizes"};
+  holoscan::Input<holoscan::Tensor> range_bins{"range_bins"};
+  holoscan::Input<holoscan::Tensor> velocity_bins{"velocity_bins"};
   holoscan::Output<holoscan::Tensor> rgba{"rgba"};
 
  private:
-  RdHeatmapConfig config_;
+  SimoDisplayConfig config_;
   std::size_t max_byte_span_{0U};
   std::shared_ptr<holoscan::Tensor> peak_power_;
+  std::shared_ptr<holoscan::Tensor> annotation_;
   holoscan::Tensor retained_input_;
-};
-
-class SimoClusterGeometryOp : public holoscan::Operator<> {
- public:
-  SimoClusterGeometryOp(const MaxTensorExtents& extents,
-                        ClusterGeometryConfig config);
-
-  void setup(holoscan::OperatorSpec& spec) override;
-  [[nodiscard]] holoscan::Contract contract() const override;
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext& context) override;
-
-  holoscan::Input<holoscan::Tensor> detection_idx{"detection_idx"};
-  holoscan::Input<holoscan::Tensor> labels{"labels"};
-  holoscan::Input<holoscan::Tensor> rep_idx{"rep_idx"};
-  holoscan::Input<holoscan::Tensor> range_bins{"range_bins"};
-  holoscan::Input<holoscan::Tensor> velocity_bins{"velocity_bins"};
-  holoscan::Output<holoscan::Tensor> detection_ovals{"detection_ovals"};
-  holoscan::Output<holoscan::Tensor> representative_crosses{
-      "representative_crosses"};
-
- private:
-  ClusterGeometryConfig config_;
-  std::size_t max_ovals_byte_span_{0U};
-  std::size_t max_crosses_byte_span_{0U};
+  std::int64_t frame_index_{0};
+  std::deque<HistorySample> history_;
 };
 
 namespace detail {
@@ -80,14 +81,20 @@ std::vector<std::uint8_t> make_heatmap_rgba_reference(
     const std::vector<float>& power, const std::vector<std::int64_t>& shape,
     float dynamic_range_db);
 
-std::vector<float> make_cluster_ovals(
+std::vector<ClusterCentroid> compute_cluster_centroids(
     const std::vector<std::int64_t>& detection_idx,
-    const std::vector<std::int64_t>& labels, std::int64_t idx_cols,
-    std::int64_t num_doppler, std::int64_t num_range, float radius);
+    const std::vector<float>& points, const std::vector<std::int64_t>& labels,
+    const std::vector<std::int64_t>& sizes, std::int64_t idx_cols,
+    std::int64_t point_cols);
 
-std::vector<float> make_representative_crosses(
-    const std::vector<std::int64_t>& rep_idx, std::int64_t idx_cols,
-    std::int64_t num_doppler, std::int64_t num_range, float size);
+void append_history(std::deque<HistorySample>* history,
+                    const std::vector<ClusterCentroid>& centroids,
+                    std::int64_t frame, std::int64_t history_frames);
+
+std::array<float, 2> history_plot_position(
+    const HistorySample& sample, std::int64_t current_frame,
+    std::int64_t history_frames, int feature,
+    std::array<float, 2> bounds);
 
 }  // namespace detail
 

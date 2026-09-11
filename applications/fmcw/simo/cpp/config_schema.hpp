@@ -37,8 +37,8 @@ struct VisualizationConfig {
   std::string window_title{"FMCW SIMO"};
   double display_rate_hz{60.0};
   double dynamic_range_db{60.0};
-  double detection_radius{0.006};
-  double representative_size{0.014};
+  double detection_radius{0.010};
+  int64_t history_frames{120};
 };
 
 struct RxArrayConfig {
@@ -155,8 +155,7 @@ struct ConfigCodec<radar::app::simo::VisualizationConfig>
       defaulted_object_field("display_rate_hz", &Config::display_rate_hz),
       defaulted_object_field("dynamic_range_db", &Config::dynamic_range_db),
       defaulted_object_field("detection_radius", &Config::detection_radius),
-      defaulted_object_field("representative_size",
-                             &Config::representative_size));
+      defaulted_object_field("history_frames", &Config::history_frames));
 };
 
 template <>

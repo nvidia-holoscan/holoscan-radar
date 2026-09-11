@@ -30,12 +30,12 @@ flowchart LR
     Features --> Report[Cluster report]
     DBSCAN --> Report
     Reduction --> Report
-    CFAR -- CFAR power --> Heatmap[RD heatmap adapter]
-    CFAR -- detection indices --> Geometry[Cluster geometry adapter]
-    DBSCAN -- labels --> Geometry
-    Reduction -- representatives --> Geometry
-    Heatmap --> Holoviz[HSDK 5 Holoviz]
-    Geometry -- white ovals and crosses --> Holoviz
+    CFAR -- CFAR power and indices --> Display[Annotated RD compositor]
+    Features -- physical points --> Display
+    DBSCAN -- labels and sizes --> Display
+    Range -- physical bins --> Display
+    Doppler -- physical bins --> Display
+    Display -- retained RGBA frame --> Holoviz[HSDK 5 Holoviz]
 ```
 
 This is the workflow called the *sparse angle path* in
@@ -62,12 +62,12 @@ flowchart LR
     Features --> Report[Cluster report]
     DBSCAN --> Report
     Reduction --> Report
-    CFAR -- CFAR power --> Heatmap[RD max projection<br/>and RGBA adapter]
-    CFAR -- detection indices --> Geometry[Cluster geometry adapter]
-    DBSCAN -- labels --> Geometry
-    Reduction -- representatives --> Geometry
-    Heatmap --> Holoviz[HSDK 5 Holoviz]
-    Geometry -- white ovals and crosses --> Holoviz
+    CFAR -- CFAR power and indices --> Display[Annotated RD compositor]
+    Features -- physical points --> Display
+    DBSCAN -- labels and sizes --> Display
+    Range -- physical bins --> Display
+    Doppler -- physical bins --> Display
+    Display -- retained RGBA frame --> Holoviz[HSDK 5 Holoviz]
 ```
 
 This is the workflow called the *dense angle path* in `WORKFLOWS.md`.
@@ -75,10 +75,12 @@ This is the workflow called the *dense angle path* in `WORKFLOWS.md`.
 Both applications report clustered detections and their selected
 representatives to the log. When visualization is enabled, the stock HSDK 5
 Holoviz sink shows the CFAR power projected onto the range-Doppler plane,
-clustered detections as white ovals, and representatives as white crosses.
-The fresh adapters in `cpp/viz/` do only the conversions required by the
-current native image and geometry layer formats; they do not use the legacy
-`radar_app/viz` implementation.
+clustered detections as color-coded ovals. A 2×2 grid to the right shows
+unconnected rolling centroid
+samples for range, velocity, azimuth, and elevation versus scenario time. The
+retained RGBA frame keeps the complete dashboard visible between slower radar
+frames on the faster display clock. The fresh compositor in `cpp/viz/` is
+independent of the legacy `radar_app/viz` implementation.
 
 ## Layout
 
@@ -137,7 +139,7 @@ as its sole argument. For a short smoke:
 
 The YAML files put app-owned waveform, scene, run, array, and `visualization`
 settings under `app:`. Visualization controls the window size/title, requested
-display rate, relative dB range, oval radius, and representative cross size.
+display rate, relative dB range, detection oval radius, and history length.
 Operator blocks remain separate:
 `detect_then_beamform` and `beamform_then_detect` own their incompatible
 settings, while the range/clutter/Doppler front end is shared. HSDK

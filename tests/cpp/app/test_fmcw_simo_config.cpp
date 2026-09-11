@@ -70,6 +70,8 @@ TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
   EXPECT_EQ(beamform.dbscan_params->min_points, 2);
   EXPECT_TRUE(detect.visualize);
   EXPECT_DOUBLE_EQ(detect.visualization.dynamic_range_db, 60.0);
+  EXPECT_DOUBLE_EQ(detect.visualization.detection_radius, 0.010);
+  EXPECT_EQ(detect.visualization.history_frames, 120);
 }
 
 TEST(FmcwSimoConfig, RejectsAuthoredDerivedFields) {

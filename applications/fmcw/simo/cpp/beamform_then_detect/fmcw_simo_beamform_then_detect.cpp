@@ -196,11 +196,12 @@ int main(int argc, char** argv) {
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
         if (cfg.visualize) {
           simo::viz::add_simo_visualization(
-              graph, application, options, extents, cfg.visualization,
-              cfg.frame_period, "Beamform then detect",
+              graph, application, options, cfg.visualization,
+              cfg.frame_period, cfg.beamformer_params->az_angles,
+              cfg.beamformer_params->el_angles, "Beamform then detect",
               simo::viz::SimoVizInputs{
-                  cfar->cfar_power, cfar->detection_idx, cluster->labels,
-                  reduction->rep_idx, range->range_bins,
+                  cfar->cfar_power, cfar->detection_idx, features->points,
+                  cluster->labels, cluster->sizes, range->range_bins,
                   doppler->velocity_bins});
         }
 #endif

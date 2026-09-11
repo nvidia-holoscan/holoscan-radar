@@ -23,8 +23,8 @@ app:
     window_title: FMCW SIMO smoke
     display_rate_hz: 60.0
     dynamic_range_db: 60.0
-    detection_radius: 0.006
-    representative_size: 0.014
+    detection_radius: 0.010
+    history_frames: 120
   rx_array:
     az_elements: 4
     el_elements: 4

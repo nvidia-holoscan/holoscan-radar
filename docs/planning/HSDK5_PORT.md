@@ -1272,10 +1272,13 @@ directory remains unregistered temporarily for output comparison. The new
 `python/` directory is only a package marker: executable Python variants remain deferred until the
 HSDK 5 Python operator surface is enabled. As of 2026-09-10, the consolidated
 app has a fresh HSDK 5-native Holoviz branch in both workflows: an app-local
-CUDA adapter max-projects `cfar_power` to an RGBA RD image, a second app-local
-adapter emits host float geometry, and the stock
-`holoscan::holoviz::HolovizOp` declares the image, white clustered-detection
-ovals, and white representative crosses. The HSDK 5 CMake target is
+compositor max-projects `cfar_power` and burns the tick-coherent cluster
+overlays, physical range/Doppler axes, and scenario clock into one CUDA RGBA
+frame. Holoviz retains that image between radar ticks, avoiding the geometry
+flicker caused by its current `SafeDefault` handling of slower geometry
+layers. The dashboard plots DBSCAN-centroid detection ovals and adds a
+right-side 2×2 grid of unconnected
+range, velocity, azimuth, and elevation centroid histories. The HSDK 5 CMake target is
 `holoscan::operators::holoviz`, detected separately from the legacy HSDK 4
 target pair. `default.yaml` enables this branch and `smoke.yaml` disables it.
 
@@ -1291,7 +1294,9 @@ unspecified dtype. `CFARDetectorOp` now freezes its output layouts to uint8
 (`detection_mask`), float32/float64 (`detection_score`, `noise_estimate`,
 `cfar_power`), and int64 rank-2 (`detection_idx`), matching the locked
 contract. Both display-enabled SIMO workflows now run end to end with the
-stock Holoviz sink and drop-oldest visualization queues.
+stock Holoviz sink and drop-oldest visualization queues. The later single-image
+compositor keeps the independently clocked partition arrangement while making
+the complete annotated frame subject to Holoviz's bounded image hold-last.
 
 **Native typed-config pilot (2026-09-09).** The consolidated SIMO app no
 longer uses the EA `radar_app/app/graph_params.hpp` YAML loaders. App-owned
