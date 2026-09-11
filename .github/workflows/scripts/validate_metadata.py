@@ -21,12 +21,15 @@ registry (operator, application, module, package, …).  The correct
 schema is chosen automatically from the top-level envelope key.
 """
 
+import errno
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 
 _EXCLUDE_DIRS = {".git", ".local", ".cache", "_CPack_Packages"}
+_MAX_METADATA_BYTES = 512 * 1024
 
 
 def _is_excluded_dir(name: str) -> bool:
@@ -40,6 +43,81 @@ def iter_metadata_files(repo_root: Path):
         dirnames[:] = [d for d in dirnames if not _is_excluded_dir(d)]
         if "metadata.json" in filenames:
             yield Path(dirpath) / "metadata.json"
+
+
+def read_metadata_file(path: Path, repo_root: Path) -> str:
+    """Read one bounded, regular metadata file within ``repo_root``."""
+    try:
+        relative_path = path.relative_to(repo_root)
+    except ValueError as exc:
+        raise ValueError("metadata.json resolves outside the repository") from exc
+
+    if not relative_path.parts or any(
+        part in (os.curdir, os.pardir) for part in relative_path.parts
+    ):
+        raise ValueError("metadata.json resolves outside the repository")
+
+    try:
+        nofollow_flag = os.O_NOFOLLOW
+        directory_flag = os.O_DIRECTORY
+        nonblock_flag = os.O_NONBLOCK
+    except AttributeError as exc:
+        raise ValueError(
+            "secure metadata validation requires no-follow directory traversal"
+        ) from exc
+
+    directory_flags = os.O_RDONLY | directory_flag | nofollow_flag
+    try:
+        root_descriptor = os.open(repo_root, directory_flags)
+    except OSError as exc:
+        raise ValueError(f"unable to open repository root safely: {exc}") from exc
+
+    directory_descriptors = [root_descriptor]
+    try:
+        for component in relative_path.parts[:-1]:
+            try:
+                descriptor = os.open(
+                    component,
+                    directory_flags,
+                    dir_fd=directory_descriptors[-1],
+                )
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                    raise ValueError(
+                        "metadata path contains a symlink or non-directory component"
+                    ) from exc
+                raise ValueError(f"unable to open metadata path safely: {exc}") from exc
+            directory_descriptors.append(descriptor)
+
+        try:
+            file_descriptor = os.open(
+                relative_path.parts[-1],
+                os.O_RDONLY | nofollow_flag | nonblock_flag,
+                dir_fd=directory_descriptors[-1],
+            )
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise ValueError("metadata.json must be a regular file, not a symlink") from exc
+            raise ValueError(f"unable to open metadata.json safely: {exc}") from exc
+
+        with os.fdopen(file_descriptor, "rb") as metadata_file:
+            file_info = os.fstat(metadata_file.fileno())
+            if not stat.S_ISREG(file_info.st_mode):
+                raise ValueError("metadata.json must be a regular file")
+            if file_info.st_size > _MAX_METADATA_BYTES:
+                raise ValueError(f"metadata.json exceeds {_MAX_METADATA_BYTES} byte limit")
+            content = metadata_file.read(_MAX_METADATA_BYTES + 1)
+    finally:
+        for descriptor in reversed(directory_descriptors):
+            os.close(descriptor)
+
+    if len(content) > _MAX_METADATA_BYTES:
+        raise ValueError(f"metadata.json exceeds {_MAX_METADATA_BYTES} byte limit")
+
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"metadata.json is not UTF-8: {exc}") from exc
 
 
 def main():
@@ -60,9 +138,9 @@ def main():
     for path in sorted(iter_metadata_files(repo_root)):
         rel = path.relative_to(repo_root)
         try:
-            data = json.loads(path.read_text())
-        except json.JSONDecodeError as exc:
-            print(f"{rel}: invalid JSON — {exc}", file=sys.stderr)
+            data = json.loads(read_metadata_file(path, repo_root))
+        except (json.JSONDecodeError, ValueError) as exc:
+            print(f"{rel}: invalid metadata — {exc}", file=sys.stderr)
             failed = True
             continue
 
