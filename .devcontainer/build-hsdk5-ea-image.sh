@@ -190,15 +190,39 @@ echo "[EA HSDK5 ONLY] Building ${PIN}"
     ./public/run build
 )
 
+BUILD_DIR="$(
+    cd "${HSDK_ROOT}"
+    ./public/run get_build_dir
+)"
+INSTALL_DIR="$(
+    cd "${HSDK_ROOT}"
+    ./public/run get_install_dir
+)"
+
+# [EA HSDK5 ONLY] Visualization is built by the current SDK checkout but is
+# not yet included in public/run's installed component set. Install the
+# generated component without modifying the SDK source checkout. public/run
+# launch mounts public/ at /workspace/holoscan-sdk in the build container.
+if grep -Rqs --include=cmake_install.cmake \
+    'CMAKE_INSTALL_COMPONENT.*"holoscan-visualization"' \
+    "${HSDK_ROOT}/public/${BUILD_DIR}"; then
+    echo "[EA HSDK5 ONLY] Installing HSDK visualization component"
+    (
+        cd "${HSDK_ROOT}"
+        ./public/run launch "${BUILD_DIR}" --run-cmd \
+            "cmake --install . \
+                --prefix /workspace/holoscan-sdk/${INSTALL_DIR} \
+                --component holoscan-visualization"
+    )
+else
+    echo "[EA HSDK5 ONLY] Visualization component was not generated; skipping"
+fi
+
 BASE_IMAGE="$(
     cd "${HSDK_ROOT}"
     printf '%s:%s' \
         "$(./public/run get_build_img_name)" \
         "$(./public/run get_git_sha)"
-)"
-INSTALL_DIR="$(
-    cd "${HSDK_ROOT}"
-    ./public/run get_install_dir
 )"
 
 if [[ ! -d "${HSDK_ROOT}/public/${INSTALL_DIR}" ]]; then

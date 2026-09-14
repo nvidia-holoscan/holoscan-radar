@@ -79,6 +79,12 @@ The script clones the internal HSDK repository into the ignored `.cache/`
 directory, builds the SDK, and creates a local image. It requires internal
 GitLab SSH access and Docker.
 
+The current EA checkout builds visualization but does not install its separate
+`holoscan-visualization` component. The script installs that generated
+component through the SDK build container before creating the image, without
+modifying the SDK checkout. This workaround keeps native Holoviz available
+until the public HSDK 5 package ships it; remove the marked EA workflow at GA.
+
 The default pin is the branch `deustice/5x/optional-port-contracts`, which
 carries the optional-unwired-input feature this module needs in order to retire
 its `expect_*` parameters ([`../docs/planning/HSDK5_PORT.md`](../docs/planning/HSDK5_PORT.md)
@@ -125,7 +131,7 @@ against the EA image from the host, run:
 
 ```bash
 ./holohub run-container \
-  --base-img holoscan-radar-hsdk5-ea:deustice-5x-optional-port-contracts-4fd17e7
+  --base-img holoscan-radar-hsdk5-ea:deustice-5x-optional-port-contracts-b2f25ef
 ```
 
 Inside the EA devcontainer, use local execution so `holohub` uses the HSDK 5
