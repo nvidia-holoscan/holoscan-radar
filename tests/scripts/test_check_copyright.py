@@ -44,6 +44,28 @@ class CopyrightInputTest(unittest.TestCase):
             source.flush()
             self.assertEqual(check_copyright.check_copyright(source.name, False), [])
 
+    def test_year_update_preserves_crlf_line_endings(self):
+        year = datetime.datetime.now().year
+        with tempfile.NamedTemporaryFile("w+b") as source:
+            source.write(
+                b"# SPDX-FileCopyrightText: Copyright (c) "
+                + str(year - 1).encode()
+                + b" NVIDIA CORPORATION & AFFILIATES\r\n"
+                + b"# Keep this line unchanged.\r\n"
+            )
+            source.flush()
+            self.assertEqual(check_copyright.check_copyright(source.name, True), [])
+            source.seek(0)
+            self.assertEqual(
+                source.read(),
+                b"# SPDX-FileCopyrightText: Copyright (c) "
+                + str(year - 1).encode()
+                + b"-"
+                + str(year).encode()
+                + b" NVIDIA CORPORATION & AFFILIATES\r\n"
+                + b"# Keep this line unchanged.\r\n",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

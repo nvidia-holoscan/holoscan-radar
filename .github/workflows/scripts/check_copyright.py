@@ -175,11 +175,11 @@ def check_copyright(f, update_current_year, ignore_year_mismatch=False):
                     f, ", ".join(str(x[1]) for x in errs if x[-1] is not None)
                 )
             )
-            with open(f, encoding="utf-8") as fp:
+            with open(f, encoding="utf-8", newline="") as fp:
                 file_lines = fp.readlines()
             for _, line_num, __, replacement in errs_update:
                 file_lines[line_num - 1] = replacement
-            with open(f, "w", encoding="utf-8") as out_file:
+            with open(f, "w", encoding="utf-8", newline="") as out_file:
                 out_file.writelines(file_lines)
         errs = [x for x in errs if x[-1] is None]
 
