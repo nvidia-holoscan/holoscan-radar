@@ -201,7 +201,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `RootMUSICEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | cleanup landed: tick-local StageConfig/StagePlan and explicit ULA/URA execution helpers; reusable smoothing and bounded core/URA axis/pairing workspace; optional `is_valid` and all lives have Exact/revert Graph coverage; constructor-created cuSOLVER states; optional-output dispositions; Graph perf isolates all five live overrides plus fixed model-order scenarios |
 | `ESPRITEstimatorOp` F32/F64 + Graph C++ tests (1-in/4-out) | cleanup pass landed: tick-local StageConfig/StagePlan validation, prepared common workspace/output state, and explicit auto-URA/shift-invariant execution helpers; optional `is_valid` and all live inputs have active Exact/revert Graph coverage; bounded core eigenspace/small-matrix workspace plus reusable smoothing gather buffers; direct `SubarraySelectionOp` snapshot/geometry integration; optional-output dispositions implemented; `subarray_spec` remains static; production Graph perf isolates all five live overrides |
 | `FeatureAssemblyOp` F32/F64 + Graph C++ tests (Params-derived aligned gathers) | landed; static `features` selects required zero-window aligned sources; unselected Tensor gathers use Exact + SafeDefault (§11); no `[live]` params; C++ apps use the library op; Graph perf cold/steady landed |
-| `DetectionReductionOp` F32/F64 + Graph C++ tests (2/3-in/1-out) | landed; static `representative` Params selects the compiled aligned presence set (`first`: labels + idx, `peak`/`medoid`: labels + idx + points), with unselected `points` as Exact + SafeDefault; Exact `representative`/`score_method`/`feature_weights` are unconditional non-member entries; all `expect_*` retired (§11); enum live units landed (§12 fixed); `feature_weights` is a bounded host Tensor (§9); Graph perf cold/steady landed |
+| `DetectionReductionOp` F32/F64 + Graph C++ tests (3-in/1-out) | landed; `labels` + `detection_idx` + `points` always form the compiled aligned trigger, so `representative` remains an ordinary `[live]` Params field without changing required input membership; Exact `representative`/`score_method`/`feature_weights` are unconditional non-member entries; all `expect_*` retired (§11); enum live units landed (§12 fixed); `feature_weights` is a bounded host Tensor (§9); Graph perf cold/steady landed |
 | `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; all 5 outputs optional/latched; unconditional Exact lives with scalar, bounded host-Tensor, and ChannelPod payloads; Graph tests cover every live family and unwired outputs; statistical MC suite on label `statistical`; Graph perf measures `threshold_scale` `override_ms` (§8) |
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph live-override/`TXSchedule` N/A (Params-only schedule); Graph perf cold/steady landed |
 | `TDMDenseCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` uses the generated wire-schema port (§9); Graph perf cold/steady landed |
@@ -410,8 +410,9 @@ lives, so only their optional-input limitations remain.
   selected-source joins.
 - `DetectionReductionOpTest.LiveRepresentativeAppliesForOneTick` /
   `LiveScoreMethodAppliesForOneTick` and the `LiveFeatureWeights*` suite run.
-  Params cover selection and the compiled optional-`points` join; the custom
-  `ScoreFn` specialization also runs through the Graph harness from a CUDA TU.
+  Params cover selection while `points` remains in the fixed required join;
+  the custom `ScoreFn` specialization also runs through the Graph harness from
+  a CUDA TU.
 - `CFARDetectorOpTest` covers one-tick `pfa`, `threshold_scale`, `os_rank`,
   `max_detections`, cell-window, `nci_axes`, and `alpha_lut` overrides,
   including revert-to-Params and malformed vector payloads. Params cover the
@@ -874,17 +875,14 @@ inputs, and statically unselected `FeatureAssemblyOp` sources now use the
 explicit marker. Required data and statically selected FeatureAssembly inputs
 remain required.
 
-**Open — Params-conditioned input sets (2026-09-11).**
-`DetectionReductionOp.representative` and `FeatureAssemblyOp.features` select
-their required input sets from build-time Params. `OperatorHandle::set_params`
-now replays `setup()` and rejects the resulting required/optional-bit change
-with `GRAPH_PARAMETER_PORT_SHAPE_CHANGED`; marking every conditional input
-optional would conflict with required `OnAligned` membership. The current
-module-side migration therefore passes 807 of 831 registered non-performance
-tests, with 11 failures in each affected operator and two X11 skips. The same
-shape rejection prevents application graph compilation. Resolving this needs
-an SDK initial-Params-before-setup path or an explicit module contract/API
-change; neither is selected here.
+**Resolved — Params-conditioned input sets (2026-09-14).**
+`FeatureAssemblyOp.features` selects its required input set. It is now a
+replayable `graph.op()` constructor capture rather than an ordinary Params
+field, so every factory replay sees one fixed input shape and temporal join.
+`DetectionReductionOp` avoids conditional topology entirely: `points` is always
+required and always joins `labels` and `detection_idx`, while
+`representative` remains an ordinary `[live]` Params field. Consequently
+`set_params()` cannot change either operator's required/optional port shape.
 
 **Getting here required the Tensor spec migration.** The branch sits on
 `main-5x`, which has reshaped the Tensor spec surface past `v5.0.0.1`, so the
@@ -1303,14 +1301,14 @@ range, velocity, azimuth, and elevation centroid histories. The HSDK 5 CMake tar
 `holoscan::operators::holoviz`, detected separately from the legacy HSDK 4
 target pair. `default.yaml` enables this branch and `smoke.yaml` disables it.
 
-**Open — SDK install component (2026-09-11).** SDK image `7b9cfe3` exports
-`holoscan::operators::holoviz` and installs its shared library, but
-`public/run build` omits the `holoscan-visualization` component, so the
-installed image has no `<holoscan/operators/holoviz/holoviz_op.hpp>` or
-`<holoviz/...>` headers. The module's feature probe now requires both the
-target and a compilable public header, preventing a false-positive SIMO build;
-native visualization remains disabled until the SDK install includes that
-component.
+**EA workaround — SDK install component (2026-09-14).** SDK image `7b9cfe3`
+exports `holoscan::operators::holoviz` and builds its shared library, but
+`public/run build` omits the separate `holoscan-visualization` component.
+`.devcontainer/build-hsdk5-ea-image.sh` now installs that generated component
+through the SDK build container before copying the install tree, without
+modifying the SDK checkout. The module's feature probe still requires both the
+target and a compilable public header. Remove this workaround when the public
+HSDK 5 package ships visualization.
 
 **Closed (2026-09-10): native Holoviz physical lowering.** Two independent
 admission failures were masked by the same secondary
@@ -1340,8 +1338,13 @@ cannot be duplicated in operator blocks. Unmigrated Graph apps retain
 config migrations. **EA friction:** the pinned Params decoder still routes
 direct enum fields through their integer representation even when the schema
 reports a portable string codec. The SIMO loader therefore immutably
-normalizes canonical enum strings before `decode_params`; remove that step
+normalizes canonical enum strings before `try_decode`; remove that step
 when the SDK honors the field codec directly.
+
+**Params decoder rename (2026-09-14).** SDK revision `b2f25ef` renamed the
+public standalone decoder from `holoscan::params::decode_params` to
+`holoscan::params::try_decode`; the consolidated SIMO loader follows the
+pinned API.
 
 **Deferred:** ~~`fmcw_aoa_estimators` — Application `set_dynamic_flows()`
 has no Graph equivalent~~ **landed (Graph-native, 2026-08-17):**
