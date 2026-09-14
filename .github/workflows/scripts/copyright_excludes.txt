@@ -1,5 +1,6 @@
-# Copyright check exclude patterns
-# One pattern per line, comments start with #
+# Copyright check exclude globs
+# One glob fragment per line, comments start with #. `build` excludes generated
+# build trees at any depth.
 #
 # Usage:
 #   In CI: python3 .github/workflows/scripts/check_copyright.py --exclude-config .github/workflows/scripts/copyright_excludes.txt .
