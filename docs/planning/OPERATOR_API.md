@@ -469,9 +469,11 @@ Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`
 - **In:** `el_angles` (optional) — float32 / float64, `(num_el,)`. Elevation scan grid; indexed by the preserved `el_bin` column for physical `el`. Required when `el` is selected.
 - **Out:** `points` — float32 / float64, `(num_points, num_features)`. Assembled feature matrix, columns in the configured order, sized to the detection count. Feeds `ClusterDBSCANOp.points` and `DetectionReductionOp.points`.
 
-**Parameters:**
+**Constructor configuration:**
 
-- `features` — ordered list over {range, velocity, score, az, el, az_estimate, el_estimate, doppler_bin, range_bin, az_bin, el_bin}. Selects columns and their order, fixing `num_features`, the layout, and the compile-time temporal join. `range`/`velocity` use physical RD axes; dense `az`/`el` use angle-grid lookups; sparse `az_estimate`/`el_estimate` use row-aligned `aoa_estimates`; the four `*_bin` tokens emit indices directly. Selected source ports are required zero-window `OnAligned` members; raw tokens require only `detection_idx`. Unselected gathers are optional `Exact` + `SafeDefault` side inputs. A selected source input that is absent is an error. Static; changing it requires graph recompilation. Default: none (required).
+- `features` — ordered list over {range, velocity, score, az, el, az_estimate, el_estimate, doppler_bin, range_bin, az_bin, el_bin}. Selects columns and their order, fixing `num_features`, the layout, and the compile-time temporal join. `range`/`velocity` use physical RD axes; dense `az`/`el` use angle-grid lookups; sparse `az_estimate`/`el_estimate` use row-aligned `aoa_estimates`; the four `*_bin` tokens emit indices directly.
+  Selected source ports are required zero-window `OnAligned` members; raw tokens require only `detection_idx`. Unselected gathers are optional `Exact` + `SafeDefault` side inputs. A selected source input that is absent is an error.
+  Constructor-only because it determines input requiredness before `setup()`; it is not an ordinary Params field. Changing it requires a new operator instance and graph recompilation. Default: none (required).
 
 **Algorithm:**
 

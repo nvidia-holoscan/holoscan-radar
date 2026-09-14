@@ -267,16 +267,14 @@ int main(int argc, char** argv) {
         if (cfg.peak_only) {
           graph.add_flow(aoa_merge->aoa_estimates, sink->aoa_estimates, q);
         } else {
-          auto feature_assembly =
-              graph.op<radar::FeatureAssemblyOp<float>>("feature_assembly",
-                                                        extents);
-          radar::FeatureAssemblyParams feature_params;
-          feature_params.features = {
+          std::vector<radar::AssemblyFeature> features{
               radar::AssemblyFeature::kRange,
               radar::AssemblyFeature::kVelocity,
               radar::AssemblyFeature::kAzEstimate,
               radar::AssemblyFeature::kElEstimate};
-          feature_assembly.set_params(std::move(feature_params));
+          auto feature_assembly =
+              graph.op<radar::FeatureAssemblyOp<float>>(
+                  "feature_assembly", extents, std::move(features));
           auto cluster = graph.op<radar::ClusterDBSCANOp<float>>(
               "cluster_dbscan", extents);
           cluster.set_params(cfg.dbscan_params);

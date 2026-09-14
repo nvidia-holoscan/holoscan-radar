@@ -141,32 +141,16 @@ namespace holoscan::radar {
 // output pool sizing and private workspace require MaxTensorExtents at
 // graph.op() (ctor).
 
-struct FeatureAssemblyParams {
-  std::vector<AssemblyFeature> features{};
-};
-
-HOLOSCAN_PARAM_SCHEMA(
-    FeatureAssemblyParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.FeatureAssemblyParams",
-                           1),
-    holoscan::field<&FeatureAssemblyParams::features>("features").description(
-        "Ordered AssemblyFeature tokens selecting points columns "
-        "(static; defines output layout and contract; required, non-empty)"));
-
-static_assert(holoscan::param_schema_availability<FeatureAssemblyParams>() ==
-                  holoscan::ParamSchemaAvailability::kDeclared,
-              "HOLOSCAN_PARAM_SCHEMA must be in FeatureAssemblyParams's "
-              "namespace");
-
 template <typename T>
-class FeatureAssemblyOp : public holoscan::Operator<FeatureAssemblyParams> {
+class FeatureAssemblyOp : public holoscan::Operator<> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "FeatureAssemblyOp supports float and double precision");
 
  public:
-  // Required: sizes the points Tensor pool and the private workspace
-  // tables (feature ids, score offsets, score leading dims, error flag).
-  explicit FeatureAssemblyOp(const MaxTensorExtents& extents);
+  // Features is constructor-only because it fixes both the points layout and
+  // the compiled input join before setup().
+  FeatureAssemblyOp(const MaxTensorExtents& extents,
+                    std::vector<AssemblyFeature> features);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -215,6 +199,7 @@ class FeatureAssemblyOp : public holoscan::Operator<FeatureAssemblyParams> {
   // successful non-empty emit and reject a later Params permute.
   std::optional<std::vector<int>> seeded_feature_ids_{};
 
+  std::vector<AssemblyFeature> features_;
   MaxTensorExtents extents_;
   std::size_t max_byte_span_{0U};
 };

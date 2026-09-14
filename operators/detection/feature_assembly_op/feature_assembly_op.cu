@@ -416,7 +416,9 @@ expected<AssemblyStagePlan, Error> build_assembly_stage_plan(
 }  // namespace
 
 template <typename T>
-FeatureAssemblyOp<T>::FeatureAssemblyOp(const MaxTensorExtents& extents) {
+FeatureAssemblyOp<T>::FeatureAssemblyOp(const MaxTensorExtents& extents,
+                                        std::vector<AssemblyFeature> features)
+: features_(std::move(features)) {
   const char* who = kOpName;
   const std::int64_t max_points =
       require_extent(extents.max_points, "max_points", who);
@@ -448,7 +450,7 @@ void FeatureAssemblyOp<T>::setup(OperatorSpec& spec) {
   const TensorBounds bounds{
       .max_rank = 2U,
       .max_byte_span = max_byte_span_};
-  const RequiredSources required = required_sources(params().features);
+  const RequiredSources required = required_sources(features_);
 
   // Data plane: trigger tensor, optional gathers, required output.
   spec.input(detection_idx)
@@ -492,7 +494,7 @@ template <typename T>
 Contract FeatureAssemblyOp<T>::contract() const {
   // Static features defines both the output columns and the compiled join.
   // setup() remains shape-stable: all ports are always registered.
-  const RequiredSources required = required_sources(params().features);
+  const RequiredSources required = required_sources(features_);
   std::vector<PortRef> aligned{detection_idx};
   if (required.range) {
     aligned.emplace_back(range_bins);
@@ -600,11 +602,9 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
   // Trailing rank is (num_points, 2 [+ n_preserved]), not a
   // (chirps, samples) ADC cube — layout parse lives in the plan builder.
   // No [live] merge.
-  const FeatureAssemblyParams& pinned =
-      context.params<FeatureAssemblyParams>();
   HOLOSCAN_TRY(auto plan,
                build_assembly_stage_plan<T>(
-                   pinned.features, detection_idx_in, gathers, extents_));
+                   features_, detection_idx_in, gathers, extents_));
 
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {

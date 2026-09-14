@@ -798,6 +798,20 @@ auto emplace_harness_op(holoscan::Graph& graph,
   }
 }
 
+template <typename OpT, typename ParamsT>
+auto emplace_configured_harness_op(holoscan::Graph& graph,
+                                   const MaxTensorExtents& extents,
+                                   ParamsT params) {
+  if constexpr (std::is_constructible_v<
+                    OpT, const MaxTensorExtents&, ParamsT>) {
+    return graph.op<OpT>("op", extents, std::move(params));
+  } else {
+    auto op = emplace_harness_op<OpT>(graph, extents);
+    op.set_params(std::move(params));
+    return op;
+  }
+}
+
 struct GraphRunResult {
   std::vector<HostTensor> frames;
   bool plan_ok{true};
@@ -883,8 +897,8 @@ GraphRunResult run_single_io_operator_graph_result(
 
   holoscan::Graph graph{"single-io-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = emplace_harness_op<OpT>(graph, extents);
-  op.set_params(std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(
+      graph, extents, std::move(params));
   const auto sink = graph.op<detail::TensorCaptureOp>("sink");
   wire(graph, source, op, sink);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
@@ -952,8 +966,8 @@ GraphRunResult run_exact_override_single_io_operator_graph_result(
   holoscan::Graph graph{"exact-override-single-io-harness"};
   const auto source =
       graph.op<detail::TensorOverrideSourceOp<Payload>>("source");
-  auto op = emplace_harness_op<OpT>(graph, extents);
-  op.set_params(std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(
+      graph, extents, std::move(params));
   const auto sink = graph.op<detail::TensorCaptureOp>("sink");
   wire(graph, source, op, sink);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
@@ -1080,8 +1094,8 @@ DualIOGraphRunResult run_single_in_dual_out_operator_graph_result(
 
   holoscan::Graph graph{"single-in-dual-out-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = emplace_harness_op<OpT>(graph, extents);
-  op.set_params(std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(
+      graph, extents, std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
   wire(graph, source, op, sink0, sink1);
@@ -1168,8 +1182,8 @@ run_single_in_tensor_wire_out_operator_graph_result(
 
   holoscan::Graph graph{"single-in-tensor-wire-out-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = emplace_harness_op<OpT>(graph, extents);
-  op.set_params(std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(
+      graph, extents, std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<WireCaptureOp<Payload>>("sink1");
   wire(graph, source, op, sink0, sink1);
@@ -1255,8 +1269,8 @@ ThreeOutGraphRunResult run_single_in_three_out_operator_graph_result(
 
   holoscan::Graph graph{"single-in-three-out-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = emplace_harness_op<OpT>(graph, extents);
-  op.set_params(std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(
+      graph, extents, std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
   const auto sink2 = graph.op<detail::TensorCaptureCOp>("sink2");
@@ -1350,8 +1364,8 @@ FourOutGraphRunResult run_single_in_four_out_operator_graph_result(
 
   holoscan::Graph graph{"single-in-four-out-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = emplace_harness_op<OpT>(graph, extents);
-  op.set_params(std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(
+      graph, extents, std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
   const auto sink2 = graph.op<detail::TensorCaptureCOp>("sink2");
@@ -1456,8 +1470,8 @@ FourOutGraphRunResult run_exact_override_four_out_operator_graph_result(
   holoscan::Graph graph{"exact-override-four-out-harness"};
   const auto source =
       graph.op<detail::TensorOverrideSourceOp<Payload>>("source");
-  auto op = emplace_harness_op<OpT>(graph, extents);
-  op.set_params(std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(
+      graph, extents, std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
   const auto sink2 = graph.op<detail::TensorCaptureCOp>("sink2");
@@ -1562,8 +1576,8 @@ FiveOutGraphRunResult run_single_in_five_out_operator_graph_result(
 
   holoscan::Graph graph{"single-in-five-out-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = emplace_harness_op<OpT>(graph, extents);
-  op.set_params(std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(
+      graph, extents, std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
   const auto sink2 = graph.op<detail::TensorCaptureCOp>("sink2");
@@ -1682,8 +1696,8 @@ DualIOGraphRunResult run_dual_io_operator_graph_result(
 
   holoscan::Graph graph{"dual-io-harness"};
   const auto source = graph.op<detail::DualTensorSourceOp>("source");
-  auto op = emplace_harness_op<OpT>(graph, extents);
-  op.set_params(std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(
+      graph, extents, std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
   wire(graph, source, op, sink0, sink1);
@@ -1771,8 +1785,8 @@ GraphRunResult run_dual_in_single_out_operator_graph_result(
 
   holoscan::Graph graph{"dual-in-single-out-harness"};
   const auto source = graph.op<detail::DualTensorSourceOp>("source");
-  auto op = emplace_harness_op<OpT>(graph, extents);
-  op.set_params(std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(
+      graph, extents, std::move(params));
   const auto sink = graph.op<detail::TensorCaptureOp>("sink");
   wire(graph, source, op, sink);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
@@ -1846,8 +1860,8 @@ GraphRunResult run_exact_override_dual_in_single_out_operator_graph_result(
   holoscan::Graph graph{"exact-override-dual-in-harness"};
   const auto source =
       graph.op<detail::DualTensorOverrideSourceOp<Payload>>("source");
-  auto op = emplace_harness_op<OpT>(graph, extents);
-  op.set_params(std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(
+      graph, extents, std::move(params));
   const auto sink = graph.op<detail::TensorCaptureOp>("sink");
   wire(graph, source, op, sink);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
@@ -1925,8 +1939,8 @@ GraphRunResult run_triple_in_single_out_operator_graph_result(
   holoscan::Graph graph{"triple-in-single-out-harness"};
   const auto source =
       graph.op<detail::TripleTensorSourceOp<OptionalThirdFirst>>("source");
-  auto op = emplace_harness_op<OpT>(graph, extents);
-  op.set_params(std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(
+      graph, extents, std::move(params));
   const auto sink = graph.op<detail::TensorCaptureOp>("sink");
   wire(graph, source, op, sink);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));

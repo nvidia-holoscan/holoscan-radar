@@ -161,13 +161,12 @@ int main(int argc, char** argv) {
 #endif
 
         if (!cfg.peak_only) {
+          std::vector<radar::AssemblyFeature> features{
+              radar::AssemblyFeature::kRange,
+              radar::AssemblyFeature::kVelocity};
           auto feature_assembly =
-              graph.op<radar::FeatureAssemblyOp<float>>("feature_assembly",
-                                                        extents);
-          radar::FeatureAssemblyParams feature_params;
-          feature_params.features = {radar::AssemblyFeature::kRange,
-                                     radar::AssemblyFeature::kVelocity};
-          feature_assembly.set_params(std::move(feature_params));
+              graph.op<radar::FeatureAssemblyOp<float>>(
+                  "feature_assembly", extents, std::move(features));
 
           auto cluster = graph.op<radar::ClusterDBSCANOp<float>>(
               "cluster_dbscan", extents);

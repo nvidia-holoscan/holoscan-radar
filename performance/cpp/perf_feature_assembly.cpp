@@ -158,12 +158,10 @@ perf::TimingCollector run_feat_graph(const FeatScenario& scen,
             scen.num_detections, 1);
         extents.max_features = static_cast<int64_t>(
             pack_features().size());
+        auto features = pack_features();
         auto op =
             graph.op<hr::FeatureAssemblyOp<PerfPrecision>>(
-                "feat", extents);
-        hr::FeatureAssemblyParams params;
-        params.features = pack_features();
-        op.set_params(std::move(params));
+                "feat", extents, std::move(features));
 
         const auto pts_sink =
             graph.op<perf::PerfTerminalSinkOp>("pts_sink");

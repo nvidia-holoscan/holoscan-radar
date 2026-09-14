@@ -4,6 +4,7 @@
 #include <initializer_list>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include <holoscan/core/connection_options.hpp>
 #include <holoscan/core/graph.hpp>
@@ -114,15 +115,13 @@ int main(int argc, char** argv) {
                       "detection_idx", "cfar_power"});
 
         // Physical feature assembly.
-        auto features = graph.op<radar::FeatureAssemblyOp<float>>(
-            "feature_assembly", extents);
-        radar::FeatureAssemblyParams feature_params;
-        feature_params.features = {
+        std::vector<radar::AssemblyFeature> feature_config{
             radar::AssemblyFeature::kRange,
             radar::AssemblyFeature::kVelocity,
             radar::AssemblyFeature::kAz,
             radar::AssemblyFeature::kEl};
-        features.set_params(std::move(feature_params));
+        auto features = graph.op<radar::FeatureAssemblyOp<float>>(
+            "feature_assembly", extents, std::move(feature_config));
         bind_outputs(options, "feature_assembly", {"points"});
 
         // Detection clustering.

@@ -76,7 +76,7 @@ map, or a row-aligned companion. For each row, the last two columns are
 `(doppler_bin, range_bin)`. On the dense RDA path the two preserved columns
 immediately before that pair are `(az_bin, el_bin)`.
 
-Every row below is a value accepted in `FeatureAssemblyParams.features`. The
+Every row below is a value accepted by the constructor `features` list. The
 list order is the output-column order.
 
 | Config token | C++ enum | Emitted value | Required input |
@@ -104,7 +104,9 @@ and the compile-time temporal join; instantiate a separate operator or
 recompile the graph to vary it. Only source ports used by the selected features
 must be wired. Unselected gather ports may remain unwired.
 
-Ctor extents must set `max_points` and `max_features`.
+Pass the final `features` list to `graph.op()` so it is fixed before `setup()`
+declares required and optional ports. It is constructor-only and cannot be set
+through Params. Ctor extents must set `max_points` and `max_features`.
 
 ### Pre-angle (cluster-then-angle, range–Doppler only)
 
@@ -116,10 +118,10 @@ feature_assembly:
 ```
 
 ```cpp
-FeatureAssemblyParams params;
-params.features = {AssemblyFeature::kRange, AssemblyFeature::kVelocity,
+std::vector<AssemblyFeature> features{AssemblyFeature::kRange, AssemblyFeature::kVelocity,
                    AssemblyFeature::kScore};
-feat.set_params(std::move(params));
+auto feat = graph.op<FeatureAssemblyOp<float>>(
+    "feature_assembly", extents, std::move(features));
 
 graph.add_flow(cfar->detection_idx, feat->detection_idx, q);
 graph.add_flow(range->range_bins, feat->range_bins, q);
@@ -139,12 +141,12 @@ feature_assembly:
 ```
 
 ```cpp
-FeatureAssemblyParams params;
-params.features = {AssemblyFeature::kRange, AssemblyFeature::kVelocity,
+std::vector<AssemblyFeature> features{AssemblyFeature::kRange, AssemblyFeature::kVelocity,
                    AssemblyFeature::kScore,
                    AssemblyFeature::kAzEstimate,
                    AssemblyFeature::kElEstimate};
-feat.set_params(std::move(params));
+auto feat = graph.op<FeatureAssemblyOp<float>>(
+    "feature_assembly", extents, std::move(features));
 
 graph.add_flow(estimator->aoa_estimates, feat->aoa_estimates, q);
 ```
@@ -160,11 +162,11 @@ feature_assembly:
 ```
 
 ```cpp
-FeatureAssemblyParams params;
-params.features = {AssemblyFeature::kRange, AssemblyFeature::kVelocity,
+std::vector<AssemblyFeature> features{AssemblyFeature::kRange, AssemblyFeature::kVelocity,
                    AssemblyFeature::kScore, AssemblyFeature::kAz,
                    AssemblyFeature::kEl};
-feat.set_params(std::move(params));
+auto feat = graph.op<FeatureAssemblyOp<float>>(
+    "feature_assembly", extents, std::move(features));
 
 graph.add_flow(grid_source->az_angles, feat->az_angles, q);
 graph.add_flow(grid_source->el_angles, feat->el_angles, q);
@@ -185,10 +187,10 @@ feature_assembly:
 ```
 
 ```cpp
-FeatureAssemblyParams params;
-params.features = {AssemblyFeature::kDopplerBin,
+std::vector<AssemblyFeature> features{AssemblyFeature::kDopplerBin,
                    AssemblyFeature::kRangeBin};
-feat.set_params(std::move(params));
+auto feat = graph.op<FeatureAssemblyOp<float>>(
+    "feature_assembly", extents, std::move(features));
 graph.add_flow(cfar->detection_idx, feat->detection_idx, q);
 ```
 
@@ -203,12 +205,12 @@ feature_assembly:
 ```
 
 ```cpp
-FeatureAssemblyParams params;
-params.features = {AssemblyFeature::kAzBin,
+std::vector<AssemblyFeature> features{AssemblyFeature::kAzBin,
                    AssemblyFeature::kElBin,
                    AssemblyFeature::kDopplerBin,
                    AssemblyFeature::kRangeBin};
-feat.set_params(std::move(params));
+auto feat = graph.op<FeatureAssemblyOp<float>>(
+    "feature_assembly", extents, std::move(features));
 graph.add_flow(cfar->detection_idx, feat->detection_idx, q);
 ```
 
@@ -274,26 +276,26 @@ set a device error flag; the host maps it after a stream sync **before**
   | Non-device / non-contiguous / wrong dtype | `FeatureAssemblyOp: tensor received on input port '…' is not CUDA-accessible …` / `… must be contiguous (compact row-major)` / `… has dtype …, expected …` |
   | Missing ctor extent | `FeatureAssemblyOp: MaxTensorExtents.max_points must be a positive value (required for Tensor pool sizing)` (same for `max_features`) |
 
-## Parameters
+## Constructor configuration
 
-| Parameter | Type | Default | Override | Cost | Meaning |
+| Field | Type | Default | Override | Cost | Meaning |
 | --- | --- | --- | --- | --- | --- |
-| `features` | ordered list of {range, velocity, score, az, el, az_estimate, el_estimate, doppler_bin, range_bin, az_bin, el_bin} | none (required, non-empty) | static (Params-only) | Feature-id vector uploaded once into a ctor-sized int32 table | Column set and order; fixes `num_features` and the compiled temporal join |
+| `features` | ordered list of {range, velocity, score, az, el, az_estimate, el_estimate, doppler_bin, range_bin, az_bin, el_bin} | none (required, non-empty) | constructor-only | Feature-id vector uploaded once into a ctor-sized int32 table | Column set and order; fixes `num_features` and the compiled temporal join |
 
-There are no `[live]` parameters. `features` has no Exact port and is not declared as `spec.input`. Set it before `Graph::compile()`; `contract()` reads the resolved Params when declaration replay runs. Mid-run `set_params()` does not alter the running plan. Do not invent gather-port `[live]` tags: those Inputs are data sources, and their requiredness follows from `features`.
+There are no Params or `[live]` parameters. `features` has no Exact port and is not declared as `spec.input`. Pass it directly to `graph.op()`; `setup()` and `contract()` read the immutable constructor capture. Do not invent gather-port `[live]` tags: those Inputs are data sources, and their requiredness follows from `features`.
 
 YAML tokens match `to_string(AssemblyFeature)`: `range`, `velocity`, `score`, `az`, `el`, `az_estimate`, `el_estimate`, `doppler_bin`, `range_bin`, `az_bin`, `el_bin`.
 
 ## SDK implementation notes
 
-- **Construction.** `explicit FeatureAssemblyOp(const MaxTensorExtents& extents)`. Required: `max_points`, `max_features`. The `points` pool is `max_rank = 2`, `max_byte_span` = real-`T` `(max_points, max_features)`. A tick with more rows than `max_points`, or more columns than `max_features`, is rejected in the plan builder.
+- **Construction.** `FeatureAssemblyOp(const MaxTensorExtents& extents, std::vector<AssemblyFeature> features)`. The constructor stores the immutable column list because it controls port requiredness. Required extents: `max_points`, `max_features`. The `points` pool is `max_rank = 2`, `max_byte_span` = real-`T` `(max_points, max_features)`. A tick with more rows than `max_points`, or more columns than `max_features`, is rejected in the plan builder.
 - **Workspace.** Four ctor-sized device Tensors (`make_device_tensor`), not `ConfigCache` and not a first-tick `cudaMalloc`: `feature_ids` (`max_features` int32), `score_offsets` (`max_points` int64 — worst-case source count, not the collapsed output width), `score_leading` (`kMaxPreservedBatchDims` int64), `error_flag` (one int32). Tensor pools are per output port only; there is no scratch-loan API for these tables. Feature-id H2D is keyed on the first successful non-empty emit; score leading dims re-upload when that layout changes. `DLDataType{kDLInt, 64, 1}` / `{kDLInt, 32, 1}` are DLPack encodings of scalar `int64_t` / `int32_t` (signed, 64 or 32 bits, 1 lane), independent of template `T`.
-- **Triggering.** `contract()` reads static `params().features`. Raw-bin-only layouts use `OnEach{detection_idx}`. Any selected source adds its port to a zero-window `OnAligned` trigger with `detection_idx`; every member selects `Exact{}`. The source set is deduplicated, so `az_estimate` + `el_estimate` add `aoa_estimates` once.
+- **Triggering.** `contract()` reads constructor-captured `features`. Raw-bin-only layouts use `OnEach{detection_idx}`. Any selected source adds its port to a zero-window `OnAligned` trigger with `detection_idx`; every member selects `Exact{}`. The source set is deduplicated, so `az_estimate` + `el_estimate` add `aoa_estimates` once.
 - **Unselected gathers.** Every gather not selected by `features` is still declared as a non-member `Exact{}` + `SafeDefault{}` input. The pinned SDK admits such an unwired Tensor input ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11), reporting `kNotConnected`; `receive_optional_value` maps that to absence. This keeps one fixed `setup()` port set while preventing a wired-but-undeclared replay mismatch.
 - **Ports and queues.** Every Input: `queue_depth(2)`, device tensors. `points`: device, allocation bounds above. `setup()` registers data-plane I/O only (trigger, then optional gathers, then `points`). There is no live block. Dtype is not pinned on the port (enforced in `compute()`).
 - **Streams and lifetime.** Work is enqueued on `context.cuda_stream()`. Every received Tensor is retained until the next tick. The hot path **does** synchronize: a scalar error-flag D2H + `cudaStreamSynchronize` after the assemble kernel, **before** emit, so an OOB index fails the tick rather than publishing a partial `points`. That sync is accepted operator-owned workspace (Holoscan `Error` is host-side); it dominates small-N steady time and is separate from the `points` alloc question.
 - **Emission.** Single required output. Empty `detection_idx` is a no-op fill. Non-empty ticks `prepare_device_tensor` (stream-ordered kernels only), inspect the error flag, then `emit_prepared_tensor` — the prepare/emit split exists here so a device OOB can drop the loan before publish, not because there is a latched optional sibling. `emit_device_tensor`'s fill must not host-sync, so the D2H sits between prepare and emit.
-- **Parameter authoring.** Schema `com.nvidia.holoscan.radar.FeatureAssemblyParams` version 1. Field name: `features`. Apps on this branch `set_params` a loaded `FeatureAssemblyParams` ([EA HSDK5 ONLY] Graph has no `from_config()`).
+- **Configuration authoring.** There is no Params schema. Apps pass the selected `features` vector directly to `graph.op()` as a replayable constructor capture.
 - **Precision.** `FeatureAssemblyOp<float>`, `FeatureAssemblyOp<double>`.
 - **[EA HSDK5 ONLY]** No port renames. The contract relies on the optional non-member Tensor support in the pinned SDK ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11). Graph live tests are N/A (no `[live]` params).
 
@@ -331,8 +333,8 @@ Direct `launch_assemble_features` tests retain focused kernel and OOB coverage.
 | `RejectsScoreFeatureWithoutScoreInput` / `RejectsAzEstimateWithoutAoaInput` / `RejectsElEstimateWithoutAoaInput` / `RejectsAzWithoutGrid` | Selecting a token whose required input is absent (`TESTING.md`) |
 | `RejectsOob*` / `RejectsAzWithTooFewPreservedColumns` / `RejectsScoreLeadingRankMismatch` | Bounds and shape errors |
 | `RejectsOpaqueLeadingBatch` | Extra leading dim is not a named axis; `parse_detection_idx_layout` fail-closes (Part B) |
-| `FeaturesConfigurableFromParams` / `FloatDoubleAgreeOnPhysicalLookup` | Params field + both precisions |
-| selected-source Graph joins | Params-derived trigger requires exactly the source ports used by `features` |
+| `FeaturesConfiguredAtConstruction` / `FloatDoubleAgreeOnPhysicalLookup` | Constructor field + both precisions |
+| selected-source Graph joins | Constructor-derived trigger requires exactly the source ports used by `features` |
 
 `TESTING.md` row-alignment is implied by the gather tests (one output row per `detection_idx` row). Mid-stream optional Graph wiring is skipped. Python tests exist but are not built (HSDK5_PORT §6).
 
@@ -343,9 +345,9 @@ ctest --test-dir build -R test_feature_assembly --output-on-failure
 ## Contract conformance
 
 Conforms on ports, dtypes, explicit physical-versus-raw token semantics,
-Params-derived temporal joins, row alignment, rank-2 `detection_idx`
+Constructor-derived temporal joins, row alignment, rank-2 `detection_idx`
 (fail-closed extra leading axes), and dense az/el lookup. The operator is
 checklist-complete with no operator-local open items.
 
-Header comment block matches the implementation (Params-derived required
+Header comment block matches the implementation (constructor-derived required
 sources, no `[live]` params, explicit raw tokens, ctor-sized workspace).

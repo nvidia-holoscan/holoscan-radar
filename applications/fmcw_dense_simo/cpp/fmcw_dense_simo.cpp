@@ -213,16 +213,14 @@ int main(int argc, char** argv) {
           graph.add_flow(doppler->velocity_bins, sink->velocity_bins, q);
           bind_out(options, "detection_score_max", "rd_map");
         } else {
-          auto feature_assembly =
-              graph.op<radar::FeatureAssemblyOp<float>>("feature_assembly",
-                                                        extents);
-          radar::FeatureAssemblyParams feature_params;
-          feature_params.features = {
+          std::vector<radar::AssemblyFeature> features{
               radar::AssemblyFeature::kRange,
               radar::AssemblyFeature::kVelocity,
               radar::AssemblyFeature::kAzEstimate,
               radar::AssemblyFeature::kElEstimate};
-          feature_assembly.set_params(std::move(feature_params));
+          auto feature_assembly =
+              graph.op<radar::FeatureAssemblyOp<float>>(
+                  "feature_assembly", extents, std::move(features));
 
           auto cluster = graph.op<radar::ClusterDBSCANOp<float>>(
               "cluster_dbscan", extents);

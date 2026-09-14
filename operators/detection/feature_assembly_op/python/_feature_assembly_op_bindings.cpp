@@ -39,11 +39,11 @@ class PyFeatureAssemblyOp : public FeatureAssemblyOp<T> {
           extents.max_points = max_points;
           extents.max_features = max_features;
           return extents;
-        }()) {
+        }(),
+        features) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
-    this->add_arg(Arg("features") = features);
     this->setup(*this->spec_);
     python::add_conditions_and_resources(this, args);
   }
