@@ -271,15 +271,15 @@ void FMCWRangeDopplerProcessorOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(pooled_tensor_output(kDevice, vb_bounds));
 
   // [live] Exact overrides, Params order (schema and POD alike).
-  spec.input(range_window_in).queue_depth(2U);
-  spec.input(doppler_window_in).queue_depth(2U);
-  spec.input(apply_dechirp_in).queue_depth(2U);
-  spec.input(clutter_filter_in).queue_depth(2U);
-  spec.input(waveform_in).queue_depth(2U);
-  spec.input(fft_norm_in).queue_depth(2U);
-  spec.input(center_zero_doppler_in).queue_depth(2U);
-  spec.input(nfft_range_in).queue_depth(2U);
-  spec.input(nfft_doppler_in).queue_depth(2U);
+  spec.input(range_window_in).optional().queue_depth(2U);
+  spec.input(doppler_window_in).optional().queue_depth(2U);
+  spec.input(apply_dechirp_in).optional().queue_depth(2U);
+  spec.input(clutter_filter_in).optional().queue_depth(2U);
+  spec.input(waveform_in).optional().queue_depth(2U);
+  spec.input(fft_norm_in).optional().queue_depth(2U);
+  spec.input(center_zero_doppler_in).optional().queue_depth(2U);
+  spec.input(nfft_range_in).optional().queue_depth(2U);
+  spec.input(nfft_doppler_in).optional().queue_depth(2U);
 }
 
 template <typename T>

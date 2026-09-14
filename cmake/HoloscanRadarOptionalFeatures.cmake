@@ -11,6 +11,8 @@
 # HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS. Remove this file (and every consumer)
 # before the public HSDK 5 release once the modules and port are complete.
 
+include(CheckCXXSourceCompiles)
+
 # Holoviz — visualization library + HolovizOp. Required by demo apps and the
 # radar_app viz/ helpers; report sinks (NullSinkOp, …) do not need it.
 set(HOLOSCAN_RADAR_HAS_HOLOVIZ FALSE)
@@ -24,7 +26,18 @@ endif()
 # the HSDK 5 surface. [EA HSDK5 ONLY]
 set(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ FALSE)
 if(TARGET holoscan::operators::holoviz)
-    set(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ TRUE)
+    get_target_property(_HOLOSCAN_RADAR_HSDK5_HOLOVIZ_INCLUDE_DIRS
+        holoscan::operators::holoviz INTERFACE_INCLUDE_DIRECTORIES)
+    foreach(_HOLOSCAN_RADAR_INCLUDE_DIR
+            IN LISTS _HOLOSCAN_RADAR_HSDK5_HOLOVIZ_INCLUDE_DIRS)
+        if(EXISTS
+           "${_HOLOSCAN_RADAR_INCLUDE_DIR}/holoscan/operators/holoviz/holoviz_op.hpp")
+            set(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ TRUE)
+            break()
+        endif()
+    endforeach()
+    unset(_HOLOSCAN_RADAR_INCLUDE_DIR)
+    unset(_HOLOSCAN_RADAR_HSDK5_HOLOVIZ_INCLUDE_DIRS)
 endif()
 
 if(HOLOSCAN_RADAR_HAS_HOLOVIZ)
@@ -45,7 +58,6 @@ endif()
 
 # X11 — interim live RD-map viewer when Holoviz is absent (XPutImage stand-in).
 # Uses packages already in the EA image (libx11-dev); no Dockerfile change.
-include(CheckCXXSourceCompiles)
 set(_HOLOSCAN_RADAR_X11_PROBE_SAVE_LIBS "${CMAKE_REQUIRED_LIBRARIES}")
 set(CMAKE_REQUIRED_LIBRARIES X11)
 check_cxx_source_compiles("

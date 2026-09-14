@@ -77,7 +77,7 @@ void TDMDenseCompensationOp<T>::setup(OperatorSpec& spec) {
   spec.output(rd_maps_out)
       .produces_tensor(pooled_tensor_output(
           device, {.max_rank = max_rank_, .max_byte_span = max_byte_span_}));
-  spec.input(waveform_in).queue_depth(2U);
+  spec.input(waveform_in).optional().queue_depth(2U);
 }
 template <typename T>
 Contract TDMDenseCompensationOp<T>::contract() const {

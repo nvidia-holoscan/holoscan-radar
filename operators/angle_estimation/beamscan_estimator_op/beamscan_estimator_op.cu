@@ -314,18 +314,27 @@ void BeamscanEstimatorOp<T>::setup(OperatorSpec& spec) {
       .rank = 1U,
   };
   spec.input(snapshot).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  spec.input(is_valid).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  spec.input(is_valid)
+      .optional()
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kDevice));
   spec.output(aoa_estimates)
       .produces_tensor(pooled_tensor_output(kDevice, 2U, aoa_max_byte_span_));
   spec.output(angle_spectrum)
       .produces_tensor(pooled_tensor_output(
           kDevice, 3U, spectrum_max_byte_span_));
   // [live] Exact overrides, Params order (schema and host-Tensor alike).
-  spec.input(array_geometry).queue_depth(2U);
-  spec.input(az_angles).queue_depth(2U).expects_tensor(tensor_input(kHostF64));
-  spec.input(el_angles).queue_depth(2U).expects_tensor(tensor_input(kHostF64));
-  spec.input(array_taper).queue_depth(2U);
-  spec.input(peak_interpolation).queue_depth(2U);
+  spec.input(array_geometry).optional().queue_depth(2U);
+  spec.input(az_angles)
+      .optional()
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kHostF64));
+  spec.input(el_angles)
+      .optional()
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kHostF64));
+  spec.input(array_taper).optional().queue_depth(2U);
+  spec.input(peak_interpolation).optional().queue_depth(2U);
 }
 
 template <typename T>

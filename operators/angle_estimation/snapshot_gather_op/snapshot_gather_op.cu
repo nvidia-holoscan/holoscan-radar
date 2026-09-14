@@ -398,7 +398,7 @@ void SnapshotGatherOp<T>::setup(OperatorSpec& spec) {
           kDevice, 2U, is_valid_max_byte_span_));
 
   // [live] Exact overrides, Params order.
-  spec.input(snapshot_window).queue_depth(2U);
+  spec.input(snapshot_window).optional().queue_depth(2U);
 }
 
 template <typename T>

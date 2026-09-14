@@ -854,7 +854,10 @@ void MUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
       .rank = 1U,
   };
   spec.input(snapshot).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  spec.input(is_valid).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  spec.input(is_valid)
+      .optional()
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kDevice));
   spec.output(aoa_estimates)
       .produces_tensor(pooled_tensor_output(kDevice, 2U, aoa_max_byte_span_));
   // Optional in OPERATOR_API.md — always emitted so unwired consumers do
@@ -869,17 +872,19 @@ void MUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
   spec.output(eigenvalues)
       .produces_tensor(pooled_tensor_output(kDevice, 2U, eig_max_byte_span_));
   // [live] Exact overrides, Params order.
-  spec.input(array_geometry).queue_depth(2U);
+  spec.input(array_geometry).optional().queue_depth(2U);
   spec.input(az_angles)
+      .optional()
       .queue_depth(2U)
       .expects_tensor(tensor_input(kHostF64Vector));
   spec.input(el_angles)
+      .optional()
       .queue_depth(2U)
       .expects_tensor(tensor_input(kHostF64Vector));
-  spec.input(spatial_smoothing).queue_depth(2U);
-  spec.input(num_sources).queue_depth(2U);
-  spec.input(source_count_pfa).queue_depth(2U);
-  spec.input(max_sources).queue_depth(2U);
+  spec.input(spatial_smoothing).optional().queue_depth(2U);
+  spec.input(num_sources).optional().queue_depth(2U);
+  spec.input(source_count_pfa).optional().queue_depth(2U);
+  spec.input(max_sources).optional().queue_depth(2U);
 }
 
 template <typename T>

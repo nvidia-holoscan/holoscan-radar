@@ -126,7 +126,7 @@ void ClutterFilterOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(pooled_tensor_output(kDevice, fat_bounds));
 
   // [live] Exact overrides, Params order (schema and POD alike).
-  spec.input(method).queue_depth(2U);
+  spec.input(method).optional().queue_depth(2U);
 }
 
 template <typename T>

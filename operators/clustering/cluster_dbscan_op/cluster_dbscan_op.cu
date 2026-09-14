@@ -558,9 +558,12 @@ void ClusterDBSCANOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(pooled_tensor_output(kDevice, 1U, max_sizes_byte_span_));
 
   // [live] Exact overrides, Params order.
-  spec.input(epsilon).queue_depth(2U).expects_tensor(tensor_input(kHostVector));
-  spec.input(min_points).queue_depth(2U);
-  spec.input(max_clusters).queue_depth(2U);
+  spec.input(epsilon)
+      .optional()
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kHostVector));
+  spec.input(min_points).optional().queue_depth(2U);
+  spec.input(max_clusters).optional().queue_depth(2U);
 }
 
 template <typename T>

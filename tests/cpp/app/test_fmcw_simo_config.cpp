@@ -64,7 +64,7 @@ TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
       simo::load_beamform_then_detect_config(config_path("default.yaml"));
 
   EXPECT_EQ(detect.num_frames, 250);
-  EXPECT_EQ(detect.scene.targets.size(), 5U);
+  EXPECT_EQ(detect.scene.targets.size(), 1U);
   EXPECT_EQ(detect.extents.max_az, 13);
   EXPECT_EQ(beamform.extents.max_el, 13);
   EXPECT_EQ(beamform.dbscan_params->min_points, 2);

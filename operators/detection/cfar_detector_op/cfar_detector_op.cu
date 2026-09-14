@@ -988,18 +988,20 @@ void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
       .rank = 1U,
   };
   // [live] Exact overrides, Params order (schema and POD alike).
-  spec.input(os_rank).queue_depth(2U);
-  spec.input(guard_cells).queue_depth(2U);
-  spec.input(training_cells).queue_depth(2U);
-  spec.input(pfa).queue_depth(2U);
+  spec.input(os_rank).optional().queue_depth(2U);
+  spec.input(guard_cells).optional().queue_depth(2U);
+  spec.input(training_cells).optional().queue_depth(2U);
+  spec.input(pfa).optional().queue_depth(2U);
   spec.input(alpha_lut)
+      .optional()
       .queue_depth(2U)
       .expects_tensor(tensor_input(kHostFloat64Vector));
-  spec.input(threshold_scale).queue_depth(2U);
+  spec.input(threshold_scale).optional().queue_depth(2U);
   spec.input(nci_axes)
+      .optional()
       .queue_depth(2U)
       .expects_tensor(tensor_input(kHostInt64Vector));
-  spec.input(max_detections).queue_depth(2U);
+  spec.input(max_detections).optional().queue_depth(2U);
 }
 
 template <typename T>

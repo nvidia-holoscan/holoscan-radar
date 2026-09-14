@@ -773,7 +773,7 @@ payloads are exposed.
 
 **Class:** SDK feature request (EA gap; the semantics are already reserved).
 
-**What fails.** An operator with an optional `[live]` override cannot be
+**Original EA gap.** An operator with an optional `[live]` override could not be
 written so that connecting the port is the *only* thing an application does.
 The contract's input set must match the wiring exactly — a declared entry with
 no producer is rejected at compile with `TEMPORAL_INPUT_UNCONNECTED`, and a
@@ -781,7 +781,7 @@ wired port absent from the contract kills the second activation with
 `RUNTIME_OPERATOR_REPLAY_MISMATCH` (§1). Nothing lets the operator resolve
 that itself: its virtual surface is `setup` / `contract` / `start` / `stop` /
 `compute`, `contract()` is const with access only to `params()` and its own
-port handles, `InputSpecBuilder` offers no `optional()`, `Input<T>` exposes
+port handles, `InputSpecBuilder` offered no `optional()`, `Input<T>` exposed
 only compute-time selection state, and the graph-side `InputPortConfigurator`
 reaches only `queue_depth` / `expects_tensor` / `memory_conversion` /
 `diagnostic_alias` — never a selector. `on_missing` does not help: it governs a
@@ -864,6 +864,27 @@ with the corresponding test wiring (the two `OnAligned` operators followed on
 2026-08-28, below). Tests that used to set an `expect_*` flag now pass an
 explicit wiring struct to their graph helper, so the fact that used to be
 stated twice (the flag and the `add_flow`) is stated once.
+
+**Explicit setup declaration (2026-09-11).** SDK revision `7b9cfe3` added
+`InputSpecBuilder::optional()` and now requires every input that may be unwired
+to carry that marker in `setup()`; `SafeDefault{}` remains the temporal
+missing-value policy but no longer declares graph connectivity optional by
+itself. All `[live]` override inputs, optional `is_valid` / `fold_idx` side
+inputs, and statically unselected `FeatureAssemblyOp` sources now use the
+explicit marker. Required data and statically selected FeatureAssembly inputs
+remain required.
+
+**Open — Params-conditioned input sets (2026-09-11).**
+`DetectionReductionOp.representative` and `FeatureAssemblyOp.features` select
+their required input sets from build-time Params. `OperatorHandle::set_params`
+now replays `setup()` and rejects the resulting required/optional-bit change
+with `GRAPH_PARAMETER_PORT_SHAPE_CHANGED`; marking every conditional input
+optional would conflict with required `OnAligned` membership. The current
+module-side migration therefore passes 807 of 831 registered non-performance
+tests, with 11 failures in each affected operator and two X11 skips. The same
+shape rejection prevents application graph compilation. Resolving this needs
+an SDK initial-Params-before-setup path or an explicit module contract/API
+change; neither is selected here.
 
 **Getting here required the Tensor spec migration.** The branch sits on
 `main-5x`, which has reshaped the Tensor spec surface past `v5.0.0.1`, so the
@@ -1281,6 +1302,15 @@ right-side 2×2 grid of unconnected
 range, velocity, azimuth, and elevation centroid histories. The HSDK 5 CMake target is
 `holoscan::operators::holoviz`, detected separately from the legacy HSDK 4
 target pair. `default.yaml` enables this branch and `smoke.yaml` disables it.
+
+**Open — SDK install component (2026-09-11).** SDK image `7b9cfe3` exports
+`holoscan::operators::holoviz` and installs its shared library, but
+`public/run build` omits the `holoscan-visualization` component, so the
+installed image has no `<holoscan/operators/holoviz/holoviz_op.hpp>` or
+`<holoviz/...>` headers. The module's feature probe now requires both the
+target and a compilable public header, preventing a false-positive SIMO build;
+native visualization remains disabled until the SDK install includes that
+component.
 
 **Closed (2026-09-10): native Holoviz physical lowering.** Two independent
 admission failures were masked by the same secondary

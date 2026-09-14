@@ -249,9 +249,12 @@ void DDMSparseDemultiplexOp<T>::setup(OperatorSpec& spec) {
       .rank = 2U};
   spec.input(rd_maps).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.input(detection_idx).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  spec.input(fold_idx).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  spec.input(wavelength_in).queue_depth(2U);
-  spec.input(snapshot_window_in).queue_depth(2U);
+  spec.input(fold_idx)
+      .optional()
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kDevice));
+  spec.input(wavelength_in).optional().queue_depth(2U);
+  spec.input(snapshot_window_in).optional().queue_depth(2U);
   spec.output(snapshot).produces_tensor(
       pooled_tensor_output(kDevice, 3U, snapshot_max_byte_span_));
   spec.output(is_valid).produces_tensor(

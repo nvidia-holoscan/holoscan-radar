@@ -448,23 +448,42 @@ void FeatureAssemblyOp<T>::setup(OperatorSpec& spec) {
   const TensorBounds bounds{
       .max_rank = 2U,
       .max_byte_span = max_byte_span_};
+  const RequiredSources required = required_sources(params().features);
 
   // Data plane: trigger tensor, optional gathers, required output.
   spec.input(detection_idx)
       .queue_depth(2U)
       .expects_tensor(tensor_input(kDevice));
-  spec.input(range_bins).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  spec.input(velocity_bins)
-      .queue_depth(2U)
-      .expects_tensor(tensor_input(kDevice));
-  spec.input(detection_score)
-      .queue_depth(2U)
-      .expects_tensor(tensor_input(kDevice));
-  spec.input(aoa_estimates)
-      .queue_depth(2U)
-      .expects_tensor(tensor_input(kDevice));
-  spec.input(az_angles).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  spec.input(el_angles).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  auto& range_bins_spec = spec.input(range_bins).queue_depth(2U);
+  if (!required.range) {
+    range_bins_spec.optional();
+  }
+  range_bins_spec.expects_tensor(tensor_input(kDevice));
+  auto& velocity_bins_spec = spec.input(velocity_bins).queue_depth(2U);
+  if (!required.velocity) {
+    velocity_bins_spec.optional();
+  }
+  velocity_bins_spec.expects_tensor(tensor_input(kDevice));
+  auto& detection_score_spec = spec.input(detection_score).queue_depth(2U);
+  if (!required.score) {
+    detection_score_spec.optional();
+  }
+  detection_score_spec.expects_tensor(tensor_input(kDevice));
+  auto& aoa_estimates_spec = spec.input(aoa_estimates).queue_depth(2U);
+  if (!required.aoa) {
+    aoa_estimates_spec.optional();
+  }
+  aoa_estimates_spec.expects_tensor(tensor_input(kDevice));
+  auto& az_angles_spec = spec.input(az_angles).queue_depth(2U);
+  if (!required.az_angles) {
+    az_angles_spec.optional();
+  }
+  az_angles_spec.expects_tensor(tensor_input(kDevice));
+  auto& el_angles_spec = spec.input(el_angles).queue_depth(2U);
+  if (!required.el_angles) {
+    el_angles_spec.optional();
+  }
+  el_angles_spec.expects_tensor(tensor_input(kDevice));
   spec.output(points).produces_tensor(pooled_tensor_output(kDevice, bounds));
   // No [live] Exact overrides.
 }

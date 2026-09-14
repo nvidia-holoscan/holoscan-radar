@@ -300,10 +300,16 @@ void PhaseShiftBeamformerOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(
           pooled_tensor_output(kGridDevice, 2U, max_el_grid_byte_span_));
   // [live] Exact overrides, Params order (schema and host-Tensor alike).
-  spec.input(array_geometry).queue_depth(2U);
-  spec.input(az_angles).queue_depth(2U).expects_tensor(tensor_input(kHostF64));
-  spec.input(el_angles).queue_depth(2U).expects_tensor(tensor_input(kHostF64));
-  spec.input(array_taper).queue_depth(2U);
+  spec.input(array_geometry).optional().queue_depth(2U);
+  spec.input(az_angles)
+      .optional()
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kHostF64));
+  spec.input(el_angles)
+      .optional()
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kHostF64));
+  spec.input(array_taper).optional().queue_depth(2U);
 }
 
 template <typename T>

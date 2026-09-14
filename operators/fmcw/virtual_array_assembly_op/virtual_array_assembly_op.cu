@@ -223,7 +223,7 @@ void VirtualArrayAssemblyOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(pooled_tensor_output(kHostGeometry, geom_bounds));
 
   // [live] Exact overrides, Params order (schema and POD alike).
-  spec.input(wavelength).queue_depth(2U);
+  spec.input(wavelength).optional().queue_depth(2U);
 }
 
 template <typename T>

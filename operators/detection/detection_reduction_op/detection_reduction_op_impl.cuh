@@ -346,13 +346,20 @@ void DetectionReductionOp<T, ScoreFn>::setup(OperatorSpec& spec) {
   };
   spec.input(labels).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.input(detection_idx).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  spec.input(points).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  auto& points_spec = spec.input(points).queue_depth(2U);
+  if (params().representative == RepresentativePolicy::kFirst) {
+    points_spec.optional();
+  }
+  points_spec.expects_tensor(tensor_input(kDevice));
   spec.output(rep_idx)
       .produces_tensor(pooled_tensor_output(kDevice, 2U, max_byte_span_));
   // [live] Exact overrides, Params order (schema and POD alike).
-  spec.input(representative).queue_depth(2U);
-  spec.input(score_method).queue_depth(2U);
-  spec.input(feature_weights).queue_depth(2U).expects_tensor(tensor_input(kHostVector));
+  spec.input(representative).optional().queue_depth(2U);
+  spec.input(score_method).optional().queue_depth(2U);
+  spec.input(feature_weights)
+      .optional()
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kHostVector));
 }
 
 template <typename T, typename ScoreFn>

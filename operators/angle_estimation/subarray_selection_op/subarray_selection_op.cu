@@ -380,8 +380,11 @@ void SubarraySelectionOp<T>::setup(OperatorSpec& spec) {
       .rank = 1U,
   };
   spec.input(snapshot).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  // Optional is_valid: omitted from contract so unconnected graphs compile.
-  spec.input(is_valid).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  // Optional is_valid joins the trigger tick when connected.
+  spec.input(is_valid)
+      .optional()
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kDevice));
   spec.output(snapshot_out)
       .produces_tensor(pooled_tensor_output(
           kDevice, 3U, snapshot_max_byte_span_));
@@ -393,19 +396,18 @@ void SubarraySelectionOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(pooled_tensor_output(
           kDevice, 2U, is_valid_max_byte_span_));
   // [live] Exact overrides, Params order (schema and host Tensor).
-  spec.input(array_geometry_in).queue_depth(2U);
+  spec.input(array_geometry_in).optional().queue_depth(2U);
   spec.input(subarray)
+      .optional()
       .queue_depth(2U)
       .expects_tensor(tensor_input(kHostIndexVector));
 }
 
 template <typename T>
 Contract SubarraySelectionOp<T>::contract() const {
-  // Trigger on the data tensor only. Optional is_valid is omitted so
-  // unconnected graphs do not yield TEMPORAL_INPUT_UNCONNECTED (same pattern
-  // as BeamscanEstimatorOp).
   Contract result;
   result.trigger(OnEach{snapshot});
+  result.input(is_valid, Exact{}).on_missing(is_valid, SafeDefault{});
   add_live_override_to_contract(result, array_geometry_in);
   add_live_override_to_contract(result, subarray);
   return result;
