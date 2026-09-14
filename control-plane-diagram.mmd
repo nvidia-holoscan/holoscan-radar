@@ -1,0 +1,13 @@
+flowchart TD
+    CP["Control Plane"] -->|waveform| TX["TX Sink"]
+    CP -->|waveform| DSP["DSP"]
+    %% CP -->|flush trigger| RX["RX Source"]
+    TX -.- SIM["Simulation / \n Wave Propagation"]
+    SIM -.- RX
+    RX -->|ADC cube| DSP
+
+    style CP fill:#2962FF, color:#FFFFFF
+    style TX fill:#2962FF, color:#FFFFFF
+    style RX fill:#AA00FF, color:#FFFFFF
+    style DSP fill:#AA00FF, color:#FFFFFF
+    style SIM fill:#FFFFFF, color:#333333, stroke-dasharray: 5 5
