@@ -31,10 +31,10 @@ app:
     spacing: 0.5
   targets:
     - {range: 245.0, azimuth: 0.15, elevation: 0.10, velocity: [-6.3375, -1.4129, -0.5494], amplitude: 0.8}
-    # - {range: 132.0, azimuth: -0.10, elevation: -0.12, velocity: [1.5025, -0.3015, 0.1183], amplitude: 0.6}
-    # - {range: 22.0, azimuth: 0.0, elevation: 0.08, velocity: [8.9712, 0.0, 0.7192], amplitude: 0.7}
-    # - {range: 117.0, azimuth: 0.20, elevation: 0.10, velocity: [2.9310, 0.7166, 0.0010], amplitude: 0.55}
-    # - {range: 218.0, azimuth: 0.17, elevation: 0.04, velocity: [-4.8577, -1.2600, -0.0800], amplitude: 0.7}
+    - {range: 132.0, azimuth: -0.10, elevation: -0.12, velocity: [1.5025, -0.3015, 0.1183], amplitude: 0.6}
+    - {range: 22.0, azimuth: 0.0, elevation: 0.08, velocity: [8.9712, 0.0, 0.7192], amplitude: 0.7}
+    - {range: 117.0, azimuth: 0.20, elevation: 0.10, velocity: [2.9310, 0.7166, 0.0010], amplitude: 0.55}
+    - {range: 218.0, azimuth: 0.17, elevation: 0.04, velocity: [-4.8577, -1.2600, -0.0800], amplitude: 0.7}
   noise_snr_db: 18.0
 
 range_processor:
@@ -89,7 +89,7 @@ beamform_then_detect:
     peak_only: false
     nci_axes: []
   cluster_dbscan:
-    epsilon: [3.0, 2.0, 0.08, 0.08]
+    epsilon: [5.0, 2.0, 0.08, 0.08]
     min_points: 2
     max_clusters: 32
   reduction: *reduction
