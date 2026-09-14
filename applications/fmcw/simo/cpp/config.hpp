@@ -102,7 +102,7 @@ template <typename Params>
 holoscan::PreparedParams<Params> decode_params(
     const holoscan::config::Document& document, std::string_view path,
     Params baseline = Params{}) {
-  auto decoded = holoscan::params::decode_params<Params>(
+  auto decoded = holoscan::params::try_decode<Params>(
       document, path, std::move(baseline));
   if (!decoded) {
     throw std::runtime_error(
