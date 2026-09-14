@@ -174,15 +174,15 @@ perf::TimingCollector run_reduction_graph(const RedScenario& scen,
             scen.num_clusters, 1);
         extents.max_points = std::max<int64_t>(
             scen.num_points, 1);
-        auto op =
-            graph.op<hr::DetectionReductionOp<PerfPrecision>>(
-                "reduction", extents);
         hr::DetectionReductionParams params;
         params.representative = scen.policy;
         params.score_method = scen.score_method;
         std::vector<double> weights(
             static_cast<size_t>(scen.num_features), 1.0);
         params.feature_weights = std::move(weights);
+        auto op =
+            graph.op<hr::DetectionReductionOp<PerfPrecision>>(
+                "reduction", extents);
         op.set_params(std::move(params));
 
         const auto rep_sink =

@@ -37,6 +37,8 @@ def run_reduction(
 ) -> np.ndarray:
     labels_t = to_device_array(np.asarray(labels, dtype=np.int64))
     idx_t = to_device_array(np.asarray(idx, dtype=np.int64))
+    if points is None and kwargs.get("representative") is RepresentativePolicy.FIRST:
+        points = np.zeros((len(labels), 1), dtype=np.float32)
     extra = {
         "detection_idx": [single_map(idx_t, "detection_idx")],
     }
@@ -157,7 +159,7 @@ def test_ExcludesNoiseAndEmitsOnePerCluster():
     assert rep[1, 1] == 3
 
 
-def test_RejectsPeakWithoutPoints():
+def test_RejectsMissingRequiredPoints():
     labels = np.array([0], dtype=np.int64)
     idx = np.array([[0, 0]], dtype=np.int64)
     with pytest.raises(ValueError):

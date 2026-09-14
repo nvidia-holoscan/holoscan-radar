@@ -31,8 +31,8 @@ All three operators implement their locked contracts in
   `ScoreFn` for `score_method=custom`, `[live]` overrides
   (`representative`, `score_method`, `feature_weights`), exact-sized
   `rep_idx`, public `radar_common/reduce/` primitives, unit tests, and
-  `perf_detection_reduction` smoke. Static `representative` Params also
-  determine whether `points` joins the compiled aligned trigger.
+  `perf_detection_reduction` smoke. `points` always joins the compiled aligned
+  trigger so every live representative policy shares one fixed contract.
 
 - **Implemented (all four CFAR variants — checklist-complete per variant as landed):**
   CA (cell-averaging), GO (2-D GOGO greatest-of), SO (2-D SOSO smallest-of),

@@ -6,14 +6,14 @@ Reduces labeled detections to one **representative detection** per non-noise clu
 | --- | --- | --- | --- | --- |
 | in | `labels` | int64 | `(num_points,)` | Cluster id per detection; noise = `-1` (no representative). Row-aligned with `detection_idx` |
 | in | `detection_idx` | int64 | `(num_points, 2 [+ n_preserved])` | Detection coordinates; row-aligned with `labels` |
-| in | `points` | float32 / float64 | `(num_points, num_features)` | Same matrix clustered on. Required unless effective `representative == first` |
+| in | `points` | float32 / float64 | `(num_points, num_features)` | Same matrix clustered on. Always required; `first` ignores its values |
 | out | `rep_idx` | int64 | `(num_clusters, 2 [+ n_preserved])` | One `detection_idx` row per non-noise cluster; row count *is* `num_clusters` |
 | live | `representative` | enum | scalar | Exact override; the `contract()` entry is unconditional and wiring enables it |
 | live | `score_method` | enum | scalar | Exact override; the `contract()` entry is unconditional and wiring enables it |
 | live | `feature_weights` | float64 config Tensor | `(num_features,)`, rank-1 pageable host | Exact override; the `contract()` entry is unconditional and wiring enables it |
 
 ```text
-labels + detection_idx + [points]
+labels + detection_idx + points
   → DetectionReductionOp → rep_idx
 ```
 
@@ -54,7 +54,7 @@ Thin operator over the public `radar_common/reduce/` group-by-label primitive (`
 ## Shape and dtype rules
 
 - **`rep_idx`.** Same column count as `detection_idx`. Rows = occupied non-noise labels (`≤ max_label + 1`, after skipping gaps).
-- **Alignment.** `labels` rank 1; `detection_idx` rank 2 with `≥ 2` columns; `labels.shape[0] == detection_idx.shape[0]`. `points`, when present, is `(num_points, num_features)` with the same row count.
+- **Alignment.** `labels` rank 1; `detection_idx` rank 2 with `≥ 2` columns; `labels.shape[0] == detection_idx.shape[0]`. `points` is `(num_points, num_features)` with the same row count.
 - **Precision.** Template `T ∈ {float, double}` for `points`. Index ports are int64.
 - **Extents.** Ctor requires `max_clusters` (pool rows). The `rep_idx` pool span is `(max_clusters, 10) · sizeof(int64)`, covering the two cell coordinates plus the module's eight preserved-index columns. Wider `detection_idx` inputs are rejected explicitly; too many output rows fail the bounded loan.
 - **Legal mid-stream change.** `num_points`, `num_features`, and `num_clusters` are inferred per tick. A `[live]` `representative` / `score_method` / `feature_weights` change switches policy or metric without reallocating the output rank (row count still follows the scene).
@@ -67,7 +67,7 @@ Thin operator over the public `radar_common/reduce/` group-by-label primitive (`
   | Bad `detection_idx` | `DetectionReductionOp: detection_idx must have shape (num_points, 2 [+ n_batch])` |
   | More than eight preserved-index columns | `DetectionReductionOp: detection_idx has too many columns for the rep_idx pool` |
   | Row-count mismatch | `DetectionReductionOp: labels and detection_idx row counts must match` |
-  | `peak`/`medoid` without `points` | `DetectionReductionOp: points required for representative='peak'` (or `'medoid'`) |
+  | Missing `points` connection | Graph compilation rejects the missing required input |
   | Bad `points` shape | `DetectionReductionOp: points must have shape (num_points, num_features)` |
   | `feature_weights` length ≠ `num_features` | `DetectionReductionOp: feature_weights length must equal num_features` |
   | `max_label + 1 > 2^20` | `DetectionReductionOp: max cluster label exceeds supported range (expected DBSCAN-style dense labels)` |
@@ -86,12 +86,12 @@ Thin operator over the public `radar_common/reduce/` group-by-label primitive (`
 
 `feature_weights` has no universal default because features may use mixed units. One-hot `w` reduces `weighted_sum` to “max of a single column.” When labels were produced with a weighted feature-space metric, matching those weights keeps medoid selection consistent with that metric.
 
-Static Params also define the compiled data join. `peak` and `medoid` compile `points` into the zero-width aligned trigger. `first` compiles only `labels` + `detection_idx`; `points` becomes a non-member `Exact` + `SafeDefault` input and may remain unwired. A live override from a statically configured `first` policy to `peak`/`medoid` therefore requires a same-stamped `points` sample to have arrived for that tick or runtime validation rejects the activation.
+`points` is always part of the zero-window aligned trigger. Consequently every live `representative` value is legal without changing required input membership; `first` simply ignores the aligned matrix values.
 
 ## SDK implementation notes
 
-- **Construction.** `explicit DetectionReductionOp(const MaxTensorExtents& extents)`. Required: `max_clusters`. `max_features` is required whenever an application wires the `feature_weights` override — it bounds the payload, and a sample arriving without it is rejected with the message above. `rep_idx` pool: `max_rank = 2`, span for `(max_clusters, 10)` int64 rows.
-- **Triggering.** Static `representative` Params selects `OnAligned{labels, detection_idx, points}` for `peak`/`medoid`, or `OnAligned{labels, detection_idx}` with non-member `points: Exact + SafeDefault` for `first`. The three `[live]` overrides are unconditional non-members with the same `Exact + SafeDefault` behavior. Wiring is the application's only override statement.
+- **Construction.** `DetectionReductionOp(const MaxTensorExtents& extents)`. Required extent: `max_clusters`. `max_features` is required whenever an application wires the `feature_weights` override — it bounds the payload, and a sample arriving without it is rejected with the message above. `rep_idx` pool: `max_rank = 2`, span for `(max_clusters, 10)` int64 rows.
+- **Triggering.** `OnAligned{labels, detection_idx, points}` always selects all three required data inputs at zero window. The three `[live]` overrides are unconditional non-members with `Exact + SafeDefault`; wiring is the application's only override statement.
 - **Ports and queues.** `labels`, `detection_idx`, and `points`: `queue_depth(2)`, device. Live enums and the `feature_weights` config Tensor (rank-1 pageable host): `queue_depth(2)`.
 - **Streams and lifetime.** `context.cuda_stream()`. Inputs retained until the next tick. The hot path **does** synchronize twice: max-label D2H, then cluster-count D2H, so the contract-required `rep_idx` loan can be exact-sized.
 - **Emission.** One required output through `emit_device_tensor`; its fill launches `compact_and_gather` after the exact row count is known. Empty scenes use the same helper with a no-op fill.
@@ -131,10 +131,10 @@ ctest --test-dir build -R perf_detection_reduction_smoke
 | `RejectsOpaqueLeadingBatch` / `RejectsTooManyDetectionIdxCols` | Fail-closed rank and preserved-index bounds |
 | `EmptyInputEmitsZeroClusters` / `AllNoiseEmitsZeroClusters` | `(0, idx_cols)` |
 | `RejectsMismatchedFeatureWeights` / `RejectsCustomWithoutScoreFn` | Weight length and default-`ScoreFn` reject |
-| `*ConfigurableFromParams` | YAML / `set_params` field names |
+| `RepresentativeConfigurableFromParams` / `ScoreMethodConfigurableFromParams` / `FeatureWeightsConfigurableFromParams` | Params field names |
 | `FloatDoubleAgreeOnPeak` | Both precisions |
 | `LiveFeatureWeights*` (Exact match, skewed capture, revert-to-Params, malformed, bound overflow) | Config-Tensor override: Exact join, revert-to-Params, payload rejects |
-| `FirstSelectsLowestIndexPerCluster` / `RejectsPeakWithoutPoints` | Params-derived optional-`points` contract: first compiles without it; peak requires it |
+| `RejectsMissingRequiredPoints` | The graph rejects an unwired required `points` input |
 | `LiveRepresentativeAppliesForOneTick` / `LiveScoreMethodAppliesForOneTick` | Exact enum overrides apply for one tick and then revert to Params |
 | `test_detection_reduction_custom.cu` | Graph coverage for a non-default `ScoreFn` instantiated in a CUDA TU |
 
@@ -156,11 +156,11 @@ reduction:
 ```cpp
 auto reduction = graph.op<DetectionReductionOp<float>>(
     "detection_reduction", extents);
-reduction.set_params(from_config("reduction"));
+reduction.set_params(from_config<DetectionReductionParams>("reduction"));
 
 graph.add_flow(cluster->labels, reduction->labels, q);
 graph.add_flow(cfar->detection_idx, reduction->detection_idx, q);
-graph.add_flow(feat->points, reduction->points, q);  // omit for static first
+graph.add_flow(feat->points, reduction->points, q);
 graph.add_flow(reduction->rep_idx, snap->detection_idx, q);
 ```
 
@@ -168,7 +168,7 @@ graph.add_flow(reduction->rep_idx, snap->detection_idx, q);
 
 ## Contract conformance
 
-Conforms on ports, dtypes, all three policies, built-in peak scorers, compile-time `ScoreFn`, Params-derived optional `points`, exact-sized `rep_idx`, and “representative is a real cell.”
+Conforms on ports, dtypes, all three policies, built-in peak scorers, compile-time `ScoreFn`, required aligned `points`, exact-sized `rep_idx`, and “representative is a real cell.”
 
 `feature_weights` uses the module's bounded rank-1 host config-Tensor representation for variable-length `[live]` vectors ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9). The reduction primitive currently uses custom CUDA atomics and compact kernels; CUB/MatX may replace that implementation without changing the operator contract.
 

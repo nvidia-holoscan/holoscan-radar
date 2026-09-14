@@ -39,8 +39,8 @@ namespace holoscan::radar {
 //                       when compacting to num_clusters.
 // In:  detection_idx  — int64, (num_points, 2 [+ n_batch]). CFAR cells;
 //                       row-aligned with labels.
-// In:  points         — float32/float64, (num_points, num_features). Optional;
-//                       required unless effective representative == first.
+// In:  points         — float32/float64, (num_points, num_features). Required;
+//                       first ignores its values.
 // Out: rep_idx        — int64, (num_clusters, 2 [+ n_batch]). One real
 //                       detection_idx row per non-noise cluster; sized to the
 //                       cluster count and reallocated per tick.
@@ -98,10 +98,7 @@ class DetectionReductionOp
                 "DetectionReductionOp supports float and double precision");
 
  public:
-  // Required: sizes rep_idx. A live feature_weights port also requires
-  // max_features to bound its vector payload.
-  explicit DetectionReductionOp(
-      const MaxTensorExtents& extents);
+  explicit DetectionReductionOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -110,8 +107,6 @@ class DetectionReductionOp
 
   Input<Tensor> labels{"labels"};
   Input<Tensor> detection_idx{"detection_idx"};
-  // Optional per OPERATOR_API (required unless representative == first).
-  // Static Params determines whether it joins the compiled aligned trigger.
   Input<Tensor> points{"points"};
   Output<Tensor> rep_idx{"rep_idx"};
   // [live] Exact overrides; the entries are unconditional and wiring the port

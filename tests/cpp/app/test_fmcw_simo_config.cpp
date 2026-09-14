@@ -40,6 +40,8 @@ TEST(FmcwSimoConfig, DecodesDetectThenBeamformSmoke) {
   EXPECT_EQ(config.extents.max_snapshots, 1);
   EXPECT_EQ(config.extents.max_az, 5);
   EXPECT_EQ(config.extents.max_el, 5);
+  EXPECT_EQ(config.reduction_params->representative,
+            holoscan::radar::RepresentativePolicy::kMedoid);
   EXPECT_FALSE(config.visualize);
 }
 
@@ -55,6 +57,8 @@ TEST(FmcwSimoConfig, DecodesBeamformThenDetectSmoke) {
   EXPECT_EQ(config.cfar_extents.max_tx, 5);
   EXPECT_EQ(config.cfar_extents.max_rx, 5);
   EXPECT_FALSE(config.cfar_extents.max_channels.has_value());
+  EXPECT_EQ(config.reduction_params->representative,
+            holoscan::radar::RepresentativePolicy::kMedoid);
 }
 
 TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {

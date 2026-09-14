@@ -93,6 +93,13 @@ GraphRunResult run_reduction_result(
     std::shared_ptr<holoscan::Tensor> detection_idx,
     std::shared_ptr<holoscan::Tensor> points,
     DetectionReductionParams params) {
+  if (!points &&
+      params.representative == RepresentativePolicy::kFirst) {
+    const int64_t num_points = labels->shape()[0];
+    points = to_device_tensor(
+        std::vector<T>(static_cast<std::size_t>(num_points)),
+        {num_points, 1}, real_dtype<T>());
+  }
   if (!points) {
     return run_dual_in_single_out_operator_graph_result<
         DetectionReductionOp<T>>(
@@ -249,7 +256,7 @@ TEST(DetectionReductionOpTest, ExcludesNoiseAndEmitsOnePerCluster) {
   EXPECT_EQ(r[3], 3);
 }
 
-TEST(DetectionReductionOpTest, RejectsPeakWithoutPoints) {
+TEST(DetectionReductionOpTest, RejectsMissingRequiredPoints) {
   std::vector<int64_t> labels = {0};
   std::vector<int64_t> idx = {0, 0};
   auto lab_t = to_device_tensor(labels, {1}, kInt64);
@@ -436,8 +443,8 @@ TEST(DetectionReductionOpTest, CustomScoreMethodIgnoredForFirst) {
 }
 
 TEST(DetectionReductionOpTest, RepresentativeConfigurableFromParams) {
-  // Authoring Params selects both the policy and whether points joins the
-  // compiled aligned trigger.
+  // Authored Params select the policy while the required input join remains
+  // fixed.
   std::vector<int64_t> labels = {0, 0};
   std::vector<int64_t> idx = {0, 0, 1, 1};
   std::vector<float> points = {1.0f, 5.0f};

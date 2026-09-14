@@ -13,7 +13,6 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -108,8 +107,7 @@ inline expected<DetectionReductionStageConfig, Error> resolve_params(
 
 template <typename T, typename ScoreFn>
 expected<DetectionReductionStagePlan<T>, Error> build_reduction_stage_plan(
-    const Tensor& labels, const Tensor& detection_idx,
-    const std::optional<Tensor>& points,
+    const Tensor& labels, const Tensor& detection_idx, const Tensor& points,
     DetectionReductionStageConfig stage) {
   try {
     require_cuda_accessible(labels, "labels", kOpName);
@@ -118,6 +116,9 @@ expected<DetectionReductionStagePlan<T>, Error> build_reduction_stage_plan(
     require_cuda_accessible(detection_idx, "detection_idx", kOpName);
     require_contiguous(detection_idx, "detection_idx", kOpName);
     require_dtype(detection_idx, kInt64Dtype, "detection_idx", kOpName);
+    require_cuda_accessible(points, "points", kOpName);
+    require_contiguous(points, "points", kOpName);
+    require_dtype(points, real_dtype<T>(), "points", kOpName);
   } catch (const std::invalid_argument& e) {
     return make_unexpected(
         Error{ErrorCode::kInvalidArgument, e.what()});
@@ -161,41 +162,21 @@ expected<DetectionReductionStagePlan<T>, Error> build_reduction_stage_plan(
             "template argument (DetectionReductionOp<T, ScoreFn>)"});
   }
 
-  const bool needs_points =
-      stage.representative != RepresentativePolicy::kFirst;
   const bool needs_weights =
       stage.representative == RepresentativePolicy::kMedoid ||
       (stage.representative == RepresentativePolicy::kPeak &&
        stage.score_method != ScoreMethod::kCustom);
-  if (needs_points && !points.has_value()) {
+  if (points.shape().size() != 2 ||
+      points.shape()[0] != num_points) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
-        std::string(kOpName) + ": points required for representative='" +
-            std::string(to_string(stage.representative)) + "'"});
+        std::string(kOpName) +
+            ": points must have shape "
+            "(num_points, num_features)"});
   }
 
-  std::int64_t num_features = 0;
-  const T* points_ptr = nullptr;
-  if (points.has_value()) {
-    try {
-      require_cuda_accessible(*points, "points", kOpName);
-      require_contiguous(*points, "points", kOpName);
-      require_dtype(*points, real_dtype<T>(), "points", kOpName);
-    } catch (const std::invalid_argument& e) {
-      return make_unexpected(
-          Error{ErrorCode::kInvalidArgument, e.what()});
-    }
-    if (points->shape().size() != 2 ||
-        points->shape()[0] != num_points) {
-      return make_unexpected(Error{
-          ErrorCode::kInvalidArgument,
-          std::string(kOpName) +
-              ": points must have shape "
-              "(num_points, num_features)"});
-    }
-    num_features = points->shape()[1];
-    points_ptr = static_cast<const T*>(points->data());
-  }
+  const std::int64_t num_features = points.shape()[1];
+  const T* points_ptr = static_cast<const T*>(points.data());
   if (needs_weights &&
       static_cast<std::int64_t>(stage.feature_weights.size()) !=
           num_features) {
@@ -346,11 +327,7 @@ void DetectionReductionOp<T, ScoreFn>::setup(OperatorSpec& spec) {
   };
   spec.input(labels).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.input(detection_idx).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  auto& points_spec = spec.input(points).queue_depth(2U);
-  if (params().representative == RepresentativePolicy::kFirst) {
-    points_spec.optional();
-  }
-  points_spec.expects_tensor(tensor_input(kDevice));
+  spec.input(points).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.output(rep_idx)
       .produces_tensor(pooled_tensor_output(kDevice, 2U, max_byte_span_));
   // [live] Exact overrides, Params order (schema and POD alike).
@@ -364,25 +341,13 @@ void DetectionReductionOp<T, ScoreFn>::setup(OperatorSpec& spec) {
 
 template <typename T, typename ScoreFn>
 Contract DetectionReductionOp<T, ScoreFn>::contract() const {
-  // Static Params defines the compiled data-plane join. A first-policy graph
-  // can leave points unwired; peak/medoid waits for the same-frame matrix.
   Contract result;
-  const bool points_required =
-      params().representative != RepresentativePolicy::kFirst;
-  if (points_required) {
-    result.trigger(OnAligned{
-        .ports = ports(labels, detection_idx, points),
-        .window = std::chrono::nanoseconds{0}});
-  } else {
-    result.trigger(OnAligned{
-        .ports = ports(labels, detection_idx),
-        .window = std::chrono::nanoseconds{0}});
-  }
-  result.input(labels, Exact{}).input(detection_idx, Exact{});
-  result.input(points, Exact{});
-  if (!points_required) {
-    result.on_missing(points, SafeDefault{});
-  }
+  result.trigger(OnAligned{
+      .ports = ports(labels, detection_idx, points),
+      .window = std::chrono::nanoseconds{0}});
+  result.input(labels, Exact{})
+      .input(detection_idx, Exact{})
+      .input(points, Exact{});
   add_live_override_to_contract(result, representative);
   add_live_override_to_contract(result, score_method);
   add_live_override_to_contract(result, feature_weights);
@@ -395,7 +360,7 @@ expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
   // Receive the aligned data plane.
   HOLOSCAN_TRY(auto labels_in, receive_tensor(labels, kOpName));
   HOLOSCAN_TRY(auto idx_in, receive_tensor(detection_idx, kOpName));
-  HOLOSCAN_TRY(auto maybe_points, receive_optional_value(points));
+  HOLOSCAN_TRY(auto points_in, receive_tensor(points, kOpName));
 
   // Resolve this tick's Exact overrides onto pinned Params.
   const DetectionReductionParams& pinned =
@@ -409,7 +374,7 @@ expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
   HOLOSCAN_TRY(
       auto plan,
       (build_reduction_stage_plan<T, ScoreFn>(
-          labels_in, idx_in, maybe_points, std::move(stage))));
+          labels_in, idx_in, points_in, std::move(stage))));
   const auto effective_representative = plan.stage.representative;
   const auto effective_score_method = plan.stage.score_method;
   const auto& effective_feature_weights = plan.stage.feature_weights;
@@ -583,9 +548,7 @@ expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
   // Retain inputs and borrowed workspace across the async boundary.
   retained_labels_ = std::move(labels_in);
   retained_idx_ = std::move(idx_in);
-  if (maybe_points.has_value()) {
-    retained_points_ = std::move(*maybe_points);
-  }
+  retained_points_ = std::move(points_in);
   retained_weights_ = std::move(weights_dev);
   return {};
 }
