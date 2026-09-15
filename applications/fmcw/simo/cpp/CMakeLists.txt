@@ -3,6 +3,16 @@
 
 find_package(holoscan REQUIRED COMPONENTS core params_io)
 
+add_library(simo_peak_identity STATIC custom_ops.cu)
+add_library(holoscan::simo_peak_identity ALIAS simo_peak_identity)
+target_include_directories(simo_peak_identity PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
+target_link_libraries(simo_peak_identity PUBLIC
+    holoscan::radar_common
+    holoscan::core
+    CUDA::cudart)
+set_property(TARGET simo_peak_identity PROPERTY POSITION_INDEPENDENT_CODE ON)
+
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     add_library(simo_viz STATIC viz/simo_viz_ops.cu)
     add_library(holoscan::simo_viz ALIAS simo_viz)
@@ -24,8 +34,6 @@ set(_simo_common_libraries
     holoscan::fmcw_doppler_processor_op
     holoscan::cfar_detector_op
     holoscan::feature_assembly_op
-    holoscan::detection_reduction_op
-    holoscan::cluster_dbscan_op
     holoscan::radar_app
     holoscan::radar_common_simulator
     holoscan::radar_common
@@ -42,12 +50,15 @@ add_executable(fmcw_simo_detect_then_beamform
 target_link_libraries(fmcw_simo_detect_then_beamform PRIVATE
     ${_simo_common_libraries}
     holoscan::snapshot_gather_op
-    holoscan::beamscan_estimator_op)
+    holoscan::beamscan_estimator_op
+    holoscan::cluster_dbscan_op
+    holoscan::detection_reduction_op)
 
 add_executable(fmcw_simo_beamform_then_detect
     beamform_then_detect/fmcw_simo_beamform_then_detect.cpp)
 target_link_libraries(fmcw_simo_beamform_then_detect PRIVATE
     ${_simo_common_libraries}
+    holoscan::simo_peak_identity
     holoscan::phase_shift_beamformer_op)
 
 foreach(_target IN ITEMS

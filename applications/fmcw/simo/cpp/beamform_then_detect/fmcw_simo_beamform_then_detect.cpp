@@ -10,9 +10,7 @@
 #include <holoscan/core/graph.hpp>
 
 #include "angle_estimation/phase_shift_beamformer_op/phase_shift_beamformer_op.hpp"
-#include "clustering/cluster_dbscan_op/cluster_dbscan_op.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
-#include "detection/detection_reduction_op/detection_reduction_op.hpp"
 #include "detection/feature_assembly_op/feature_assembly_op.hpp"
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
@@ -21,6 +19,7 @@
 #include "radar_app/app/source.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "config.hpp"  // NOLINT(build/include_subdir): app-private header
+#include "custom_ops.hpp"  // NOLINT(build/include_subdir): app-private header
 
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
 #include "viz/simo_viz_graph.hpp"  // NOLINT(build/include_subdir)
@@ -106,7 +105,7 @@ int main(int argc, char** argv) {
         bind_outputs(options, "phase_shift_beamformer",
                      {"rda_cube", "az_grid", "el_grid"});
 
-        // Per-angle-plane CFAR detection.
+        // CFAR detection plus full az/el/Doppler/range peak suppression.
         auto cfar = graph.op<radar::CFARDetectorOp<float>>(
             "cfar_detector", cfg.cfar_extents);
         cfar.set_params(cfg.cfar_params);
@@ -125,18 +124,11 @@ int main(int argc, char** argv) {
             "feature_assembly", extents, std::move(feature_config));
         bind_outputs(options, "feature_assembly", {"points"});
 
-        // Detection clustering.
-        auto cluster = graph.op<radar::ClusterDBSCANOp<float>>(
-            "cluster_dbscan", extents);
-        cluster.set_params(cfg.dbscan_params);
-        bind_outputs(options, "cluster_dbscan", {"labels", "sizes"});
-
-        // Cluster representative selection.
-        auto reduction = graph.op<radar::DetectionReductionOp<float>>(
-            "detection_reduction", extents);
-        reduction.set_params(cfg.reduction_params);
-        bind_outputs(options, "detection_reduction",
-                     {"rep_idx", "reduced_points"});
+        // Give each retained N-D maximum an identity label for shared
+        // display/report consumers; no clustering or reduction is performed.
+        auto peaks = graph.op<simo::PeakIdentityOp>("peak_identity", extents);
+        bind_outputs(options, "peak_identity",
+                     {"labels", "sizes", "rep_idx"});
 
         // Final log report.
         auto report = graph.op<app::ClusterReportOp>(
@@ -145,7 +137,8 @@ int main(int argc, char** argv) {
                 /*report_detection_idx=*/false,
                 cfg.beamformer_params->az_angles,
                 cfg.beamformer_params->el_angles,
-                cadence});
+                cadence,
+                /*identity_peaks=*/true});
 
         // Processing and reporting share one source-driven partition.
         auto application = graph.partition("application");
@@ -156,8 +149,7 @@ int main(int argc, char** argv) {
             .add(beamformer)
             .add(cfar)
             .add(features)
-            .add(cluster)
-            .add(reduction)
+            .add(peaks)
             .add(report);
 
         // FMCW front end: ADC cube -> per-channel range-Doppler maps.
@@ -167,7 +159,7 @@ int main(int argc, char** argv) {
                        queue);
 
         // Beamforming-first branch: form the complete range-Doppler-angle
-        // cube, then detect independently across its angle planes.
+        // cube, then detect and suppress neighboring peaks across every axis.
         graph.add_flow(doppler->rd_maps, beamformer->rd_maps, queue);
         graph.add_flow(beamformer->rda_cube, cfar->rd_maps, queue);
 
@@ -180,18 +172,13 @@ int main(int argc, char** argv) {
         graph.add_flow(beamformer->el_grid, features->el_angles, queue);
         graph.add_flow(cfar->detection_score, features->detection_score, queue);
 
-        // Fan out the complete row. DBSCAN ignores its zero-epsilon score
-        // column; reduction uses that same column as the representative weight.
-        graph.add_flow(features->points, cluster->points, queue);
-        graph.add_flow(cluster->labels, reduction->labels, queue);
-        graph.add_flow(cfar->detection_idx, reduction->detection_idx, queue);
-        graph.add_flow(features->points, reduction->points, queue);
+        graph.add_flow(cfar->detection_idx, peaks->detection_idx, queue);
 
-        // Report clustered detections with physical range/velocity axes.
+        // Report each retained CFAR power peak directly.
         graph.add_flow(features->points, report->points, queue);
-        graph.add_flow(cluster->labels, report->labels, queue);
-        graph.add_flow(cluster->sizes, report->sizes, queue);
-        graph.add_flow(reduction->rep_idx, report->rep_idx, queue);
+        graph.add_flow(peaks->labels, report->labels, queue);
+        graph.add_flow(peaks->sizes, report->sizes, queue);
+        graph.add_flow(peaks->rep_idx, report->rep_idx, queue);
         graph.add_flow(range->range_bins, report->range_bins, queue);
         graph.add_flow(doppler->velocity_bins, report->velocity_bins, queue);
 
@@ -204,8 +191,8 @@ int main(int argc, char** argv) {
               "Beamform then detect",
               simo::viz::SimoVizInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,
-                  cluster->labels, cluster->sizes, range->range_bins,
-                  doppler->velocity_bins, reduction->reduced_points});
+                  peaks->labels, peaks->sizes, range->range_bins,
+                  doppler->velocity_bins, features->points});
         }
 #endif
       });

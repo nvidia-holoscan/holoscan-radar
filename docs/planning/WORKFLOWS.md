@@ -144,25 +144,25 @@ flowchart TD
   class CLUT opt
 ```
 
-**Dense angle path** (angle-then-cluster only — angle is formed before detection):
+**Dense angle path** (angle-then-detect; angle is formed before detection):
 
 ```mermaid
 flowchart TD
   classDef opt stroke-dasharray:4 3
   DOPP["FMCWDopplerProcessorOp"] -->|"rd_maps"| BEAM["PhaseShiftBeamformerOp"]
-  BEAM -->|"rda_cube → CFARDetectorOp.rd_maps (num_az, num_el, num_doppler, num_range)"| CFAR["CFARDetectorOp (on the RDA cube)"]
+  BEAM -->|"rda_cube → rd_maps (num_az, num_el, num_doppler, num_range)"| CFAR["CFARDetectorOp (peak_mode: all)"]
   CFAR -->|"detection_idx + detection_score"| FEAT["FeatureAssemblyOp (bridge)"]
   BEAM -.->|"az_grid / el_grid → az_angles / el_angles"| FEAT
-  FEAT -->|"points (range, vel, az, el, score)"| CLUS["ClusterDBSCANOp"]
-  class FEAT,CLUS opt
+  FEAT -->|"points (range, vel, az, el, score)"| REPORT["Direct peak report / visualization"]
+  class FEAT opt
 ```
 
 > **Dense az/el assembly caveat (open).** On this path the `(az, el)` beam
 > indices arrive as the leading *preserved-batch* columns of CFAR's
 > `detection_idx` (`(az_bin, el_bin, doppler_bin, range_bin)`).
 > `FeatureAssemblyOp` maps those `(az_bin, el_bin)` columns through the beam grid
-> itself via the `az_bin` / `el_bin` feature tokens + optional
-> `az_angles` / `el_angles` grid inputs (settled — STATUS.md S4), so the direct
+> itself via the `az` / `el` feature tokens + optional
+> `az_angles` / `el_angles` grid inputs, so the direct
 > `CFAR → FeatureAssemblyOp` edge carries the dense path with no angle-lookup
 > adapter. (`fmcw_dense_simo`'s app-local `CubeAoaLookupOp` predates S4 and can
 > be dropped at leisure.)

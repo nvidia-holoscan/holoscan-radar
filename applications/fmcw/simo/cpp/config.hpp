@@ -66,8 +66,6 @@ struct BeamformThenDetectConfig : RuntimeConfig {
   holoscan::PreparedParams<FMCWDopplerProcessorParams> doppler_params;
   holoscan::PreparedParams<PhaseShiftBeamformerParams> beamformer_params;
   holoscan::PreparedParams<CFARParams> cfar_params;
-  holoscan::PreparedParams<ClusterDBSCANParams> dbscan_params;
-  holoscan::PreparedParams<DetectionReductionParams> reduction_params;
 };
 
 template <typename T>
@@ -239,7 +237,7 @@ inline MaxTensorExtents make_extents(
     const FMCWRangeProcessorParams& range,
     const FMCWDopplerProcessorParams& doppler,
     const AngleParams& angle, const SnapshotGatherParams* gather,
-    const ClusterDBSCANParams& dbscan) {
+    const ClusterDBSCANParams* dbscan) {
   MaxTensorExtents result;
   const int64_t num_rx = runtime.array_geometry.num_elements();
   const int64_t num_chirps = runtime.scene.num_chirps;
@@ -266,14 +264,16 @@ inline MaxTensorExtents make_extents(
   result.max_detections = max_points;
   result.max_items = max_points;
   result.max_points = max_points;
-  // Four spatial clustering features plus the reduction-only detection score.
+  // Four physical features plus the CFAR score.
   result.max_features = 5;
   result.max_snapshots =
       gather == nullptr ? 1 : snapshot_count(gather->snapshot_window);
   result.max_az = num_az;
   result.max_el = num_el;
   result.max_clusters =
-      dbscan.max_clusters > 0 ? dbscan.max_clusters : max_points;
+      dbscan != nullptr && dbscan->max_clusters > 0
+          ? dbscan->max_clusters
+          : max_points;
   return result;
 }
 
@@ -342,6 +342,8 @@ inline holoscan::config::Document normalize_operator_enums(
           : "/beamform_then_detect";
   document = normalize_enum_field<CfarVariant>(
       std::move(document), base + "/cfar_detector/cfar_variant");
+  document = normalize_enum_field<CfarPeakMode>(
+      std::move(document), base + "/cfar_detector/peak_mode");
   document = normalize_enum_field<CfarPeakNeighborhood>(
       std::move(document),
       base + "/cfar_detector/peak_neighborhood");
@@ -398,9 +400,9 @@ inline DetectThenBeamformConfig load_detect_then_beamform_config(
   auto reduction = decode_params<DetectionReductionParams>(
       document, "/detect_then_beamform/reduction");
 
-  if (cfar->peak_only) {
+  if (cfar->peak_mode != CfarPeakMode::kNone) {
     throw std::runtime_error(
-        "detect_then_beamform.cfar_detector.peak_only must be false");
+        "detect_then_beamform.cfar_detector.peak_mode must be none");
   }
   if (cfar->nci_axes != std::vector<int64_t>{0}) {
     throw std::runtime_error(
@@ -414,7 +416,7 @@ inline DetectThenBeamformConfig load_detect_then_beamform_config(
       beamscan->el_angles);
   runtime.extents = make_extents(
       runtime, Workflow::kDetectThenBeamform, *range, *doppler, *beamscan,
-      &gather.value(), *dbscan);
+      &gather.value(), &dbscan.value());
   runtime.cfar_extents = runtime.extents;
 
   return DetectThenBeamformConfig{
@@ -447,14 +449,9 @@ inline BeamformThenDetectConfig load_beamform_then_detect_config(
       std::move(beamformer_baseline));
   auto cfar = decode_params<CFARParams>(
       document, "/beamform_then_detect/cfar_detector");
-  auto dbscan = decode_params<ClusterDBSCANParams>(
-      document, "/beamform_then_detect/cluster_dbscan");
-  auto reduction = decode_params<DetectionReductionParams>(
-      document, "/beamform_then_detect/reduction");
-
-  if (cfar->peak_only) {
+  if (cfar->peak_mode != CfarPeakMode::kAll) {
     throw std::runtime_error(
-        "beamform_then_detect.cfar_detector.peak_only must be false");
+        "beamform_then_detect.cfar_detector.peak_mode must be all");
   }
   if (!cfar->nci_axes.empty()) {
     throw std::runtime_error(
@@ -468,13 +465,12 @@ inline BeamformThenDetectConfig load_beamform_then_detect_config(
       beamformer->el_angles);
   runtime.extents = make_extents(
       runtime, Workflow::kBeamformThenDetect, *range, *doppler,
-      *beamformer, nullptr, *dbscan);
+      *beamformer, nullptr, nullptr);
   runtime.cfar_extents = make_dense_cfar_extents(runtime.extents);
 
   return BeamformThenDetectConfig{
       std::move(runtime), std::move(range), std::move(clutter),
-      std::move(doppler), std::move(beamformer), std::move(cfar),
-      std::move(dbscan), std::move(reduction)};
+      std::move(doppler), std::move(beamformer), std::move(cfar)};
 }
 
 }  // namespace holoscan::radar::app::simo

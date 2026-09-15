@@ -56,17 +56,12 @@ flowchart LR
     Beamformer -- angle grids --> Features
     Range -- range bins --> Features
     Doppler -- velocity bins --> Features
-    Features --> DBSCAN[DBSCAN]
-    Features --> Reduction[Detection reduction]
-    CFAR --> Reduction
-    DBSCAN --> Reduction
-    Features --> Report[Cluster report]
-    DBSCAN --> Report
-    Reduction --> Report
+    CFAR -- peak indices --> Peaks[Peak identity bridge]
+    Features --> Report[Peak report]
+    Peaks -- identity labels, unit sizes, indices --> Report
     CFAR -- CFAR power and indices --> Display[Annotated RD compositor]
     Features -- physical points --> Display
-    Reduction -- score-weighted points --> Display
-    DBSCAN -- labels and sizes --> Display
+    Peaks -- identity labels and unit sizes --> Display
     Range -- physical bins --> Display
     Doppler -- physical bins --> Display
     Display -- retained RGBA frame --> Holoviz[HSDK 5 Holoviz]
@@ -74,16 +69,19 @@ flowchart LR
 
 This is the workflow called the *dense angle path* in `WORKFLOWS.md`.
 
-Both applications report clustered detections and their selected
-representatives to the log. When visualization is enabled, the stock HSDK 5
+The detect-then-beamform application reports clustered detections and their
+selected representatives. The beamform-then-detect application selects
+`peak_mode: all`, suppressing duplicates across azimuth, elevation, Doppler,
+and range, and reports each N-D local power maximum directly without DBSCAN or
+detection reduction. When visualization is enabled, HSDK 5
 Holoviz sink shows the CFAR power projected onto the range-Doppler plane,
-clustered detections as color-coded ovals. A 2×2 grid to the right shows
+with clustered detections or direct CFAR peaks as color-coded ovals. A 2×2 grid
+to the right shows
 the simulated target truth as continuous color-coded trajectories behind
 rolling score-weighted cluster means for range, velocity, azimuth, and
-elevation versus scenario time. One five-column matrix contains
-`[range, velocity, azimuth, elevation, detection_score]`; DBSCAN ignores the
-zero-epsilon score column while reduction uses it for weighting. Truth and
-reduced-point colors are assigned by ascending
+elevation versus scenario time. The sparse path uses score-weighted cluster
+means; the dense path plots each peak's physical feature row directly. Truth
+and detection colors are assigned by ascending
 range so corresponding tracks are easy to compare. The
 retained RGBA frame keeps the complete dashboard visible between slower radar
 frames on the faster display clock. The fresh compositor in `cpp/viz/` is

@@ -63,7 +63,7 @@ class DetectionReportOp : public holoscan::Operator<> {
   struct Config {
     std::shared_ptr<CadenceMeter> cadence;
     // When true, aoa_estimates is a required OnAligned Exact input (SIMO /
-    // peak_only). When false it stays registered-but-unwired for SISO —
+    // direct peak mode). When false it stays registered-but-unwired for SISO —
     // wiring it without putting it in contract() yields
     // RUNTIME_OPERATOR_REPLAY_MISMATCH on EA.
     bool report_aoa{false};
@@ -295,7 +295,7 @@ class DetectionReportOp : public holoscan::Operator<> {
   bool report_aoa_{false};
 };
 
-// Reports the DBSCAN clusters formed over the CFAR detections.
+// Reports grouped or identity-labeled CFAR detections.
 class ClusterReportOp : public holoscan::Operator<> {
  public:
   struct Config {
@@ -309,6 +309,8 @@ class ClusterReportOp : public holoscan::Operator<> {
     std::vector<double> el_grid;
     // Optional e2e meter when ClusterReport is the sole completion sink.
     std::shared_ptr<CadenceMeter> cadence;
+    // Identity labels represent direct CFAR peaks rather than DBSCAN clusters.
+    bool identity_peaks{false};
   };
 
   ClusterReportOp() = default;
@@ -316,7 +318,8 @@ class ClusterReportOp : public holoscan::Operator<> {
       : report_detection_idx_(config.report_detection_idx),
         az_grid_(std::move(config.az_grid)),
         el_grid_(std::move(config.el_grid)),
-        cadence_(std::move(config.cadence)) {}
+        cadence_(std::move(config.cadence)),
+        identity_peaks_(config.identity_peaks) {}
 
   void setup(holoscan::OperatorSpec& spec) override {
     constexpr holoscan::TensorRepresentation kDevice{
@@ -571,8 +574,13 @@ class ClusterReportOp : public holoscan::Operator<> {
       *out_el = 0.0;
     };
 
-    HOLOSCAN_LOG_INFO("DBSCAN clusters: {} ({} points, {} noise)",
-                      num_clusters, num_points, noise);
+    if (identity_peaks_) {
+      HOLOSCAN_LOG_INFO("CFAR power peaks: {}", num_clusters);
+    } else {
+      HOLOSCAN_LOG_INFO("DBSCAN clusters: {} ({} points, {} noise)",
+                        num_clusters, num_points, noise);
+    }
+    const char* item_name = identity_peaks_ ? "peak" : "cluster";
     constexpr int64_t kMaxLogged = 16;
     const int64_t n_log = std::min(num_clusters, kMaxLogged);
     for (int64_t c = 0; c < n_log; ++c) {
@@ -611,10 +619,10 @@ class ClusterReportOp : public holoscan::Operator<> {
       }
       if (has_angles) {
         HOLOSCAN_LOG_INFO(
-            "  cluster {}: {} pts, centroid range {:.2f} m, velocity "
+            "  {} {}: {} pts, centroid range {:.2f} m, velocity "
             "{:+.2f} m/s, az {:.3f} rad, el {:.3f} rad; rep range {:.2f} m, "
             "velocity {:+.2f} m/s, az {:.3f} rad, el {:.3f} rad",
-            c, n, sum_range[static_cast<size_t>(c)] * inv,
+            item_name, c, n, sum_range[static_cast<size_t>(c)] * inv,
             sum_velocity[static_cast<size_t>(c)] * inv,
             sum_az[static_cast<size_t>(c)] * inv,
             sum_el[static_cast<size_t>(c)] * inv,
@@ -622,9 +630,9 @@ class ClusterReportOp : public holoscan::Operator<> {
             velocities[static_cast<size_t>(rep_dd)], rep_az, rep_el);
       } else {
         HOLOSCAN_LOG_INFO(
-            "  cluster {}: {} pts, centroid range {:.2f} m, velocity "
+            "  {} {}: {} pts, centroid range {:.2f} m, velocity "
             "{:+.2f} m/s; rep range {:.2f} m, velocity {:+.2f} m/s",
-            c, n, sum_range[static_cast<size_t>(c)] * inv,
+            item_name, c, n, sum_range[static_cast<size_t>(c)] * inv,
             sum_velocity[static_cast<size_t>(c)] * inv,
             ranges[static_cast<size_t>(rep_rr)],
             velocities[static_cast<size_t>(rep_dd)]);
@@ -655,6 +663,7 @@ class ClusterReportOp : public holoscan::Operator<> {
   std::vector<double> az_grid_;
   std::vector<double> el_grid_;
   std::shared_ptr<CadenceMeter> cadence_;
+  bool identity_peaks_{false};
 };
 
 // Drain an always-emitted Tensor output so the producer can keep ticking.

@@ -1222,8 +1222,8 @@ variant changes.
 
 Overlay ports are wired per config (`X11RdViewerConfig`): the contract is
 `OnAligned`/`Exact` over exactly the wired set (rd_image +
-detection_idx/range_bins/velocity_bins, plus labels/rep_idx outside
-`peak_only`, plus aoa_estimates with the boresight panel and label_idx with
+detection_idx/range_bins/velocity_bins, plus labels/rep_idx outside direct
+CFAR peak modes, plus aoa_estimates with the boresight panel and label_idx with
 the variant label), since on EA a
 registered-but-unwired port must stay out of `contract()` and a wired one
 must be in it (§1). Alignment across `RdMapToImageOp`, CFAR, DBSCAN,
@@ -1281,11 +1281,13 @@ registration now points at `applications/fmcw/simo` and builds two explicitly
 ordered workflows: `fmcw_simo_detect_then_beamform` and
 `fmcw_simo_beamform_then_detect`. They share only `default.yaml` and
 `smoke.yaml`; incompatible CFAR and angle-grid settings live in matching nested
-sections. Both paths assemble
-`[range, velocity, azimuth, elevation, detection_score]` once and fan the
-matrix out to DBSCAN, reduction, reporting, and visualization. DBSCAN's
-trailing zero epsilon excludes score from its metric while
-`DetectionReductionOp` uses score for weighted representatives.
+sections. The sparse path assembles
+`[range, velocity, azimuth, elevation, detection_score]` once and fans the
+matrix out to DBSCAN, reduction, reporting, and visualization; DBSCAN's
+trailing zero epsilon excludes score from its metric. The dense path selects
+CFAR `peak_mode: all`, suppresses across azimuth, elevation, Doppler, and
+range, and sends each retained N-D maximum directly to reporting and
+visualization without DBSCAN or reduction.
 `FeatureAssemblyOp`'s dense `az`/`el` contract receives
 tick-coherent `PhaseShiftBeamformerOp.az_grid` / `el_grid` tensors rather than
 an application-local stamper or the legacy `CubeAoaLookupOp` computational
@@ -1298,11 +1300,13 @@ compositor max-projects `cfar_power` and burns the tick-coherent cluster
 overlays, physical range/Doppler axes, and scenario clock into one CUDA RGBA
 frame. Holoviz retains that image between radar ticks, avoiding the geometry
 flicker caused by its current `SafeDefault` handling of slower geometry
-layers. The dashboard plots DBSCAN-centroid detection ovals and adds a
+layers. The dashboard plots sparse DBSCAN centroids or dense CFAR peaks and adds a
 right-side 2×2 grid of unconnected
 range, velocity, azimuth, and elevation centroid histories. The HSDK 5 CMake target is
 `holoscan::operators::holoviz`, detected separately from the legacy HSDK 4
 target pair. `default.yaml` enables this branch and `smoke.yaml` disables it.
+The 2026-09-15 peak-mode Python test attempt remains blocked because the EA
+image does not install the `holoscan` Python package (`ModuleNotFoundError`).
 
 **EA workaround — SDK install component (2026-09-14).** SDK image `7b9cfe3`
 exports `holoscan::operators::holoviz` and builds its shared library, but

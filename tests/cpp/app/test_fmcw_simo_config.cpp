@@ -58,8 +58,8 @@ TEST(FmcwSimoConfig, DecodesBeamformThenDetectSmoke) {
   EXPECT_EQ(config.cfar_extents.max_tx, 5);
   EXPECT_EQ(config.cfar_extents.max_rx, 5);
   EXPECT_FALSE(config.cfar_extents.max_channels.has_value());
-  EXPECT_EQ(config.reduction_params->representative,
-            holoscan::radar::RepresentativePolicy::kMedoid);
+  EXPECT_EQ(config.cfar_params->peak_mode,
+            holoscan::radar::CfarPeakMode::kAll);
 }
 
 TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
@@ -72,15 +72,16 @@ TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
   EXPECT_EQ(detect.scene.targets.size(), 5U);
   EXPECT_EQ(detect.extents.max_az, 13);
   EXPECT_EQ(beamform.extents.max_el, 13);
-  EXPECT_EQ(beamform.dbscan_params->min_points, 2);
+  EXPECT_EQ(detect.cfar_params->peak_mode,
+            holoscan::radar::CfarPeakMode::kNone);
+  EXPECT_EQ(beamform.cfar_params->peak_mode,
+            holoscan::radar::CfarPeakMode::kAll);
   EXPECT_EQ(detect.reduction_params->representative,
             holoscan::radar::RepresentativePolicy::kWeightedMean);
   EXPECT_EQ(detect.reduction_params->feature_weights,
             (std::vector<double>{0.0, 0.0, 0.0, 0.0, 1.0}));
   EXPECT_EQ(detect.dbscan_params->epsilon,
             (std::vector<double>{3.0, 2.0, 0.08, 0.08, 0.0}));
-  EXPECT_EQ(beamform.dbscan_params->epsilon,
-            (std::vector<double>{5.0, 2.0, 0.08, 0.08, 0.0}));
   EXPECT_EQ(detect.extents.max_features, 5);
   EXPECT_TRUE(detect.visualize);
   EXPECT_DOUBLE_EQ(detect.visualization.dynamic_range_db, 60.0);

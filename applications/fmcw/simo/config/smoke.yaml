@@ -49,7 +49,6 @@ detect_then_beamform:
     guard_cells: [3, 3]
     training_cells: [3, 3]
     pfa: 1.0e-9
-    peak_only: false
     nci_axes: [0]
   snapshot_gather:
     snapshot_window: [0, 0]
@@ -79,10 +78,5 @@ beamform_then_detect:
     guard_cells: [3, 3]
     training_cells: [3, 3]
     pfa: 1.0e-9
-    peak_only: false
+    peak_mode: all
     nci_axes: []
-  cluster_dbscan:
-    epsilon: [3.0, 2.0, 0.15, 0.15, 0.0]
-    min_points: 1
-    max_clusters: 16
-  reduction: *reduction
