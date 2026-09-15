@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -217,6 +218,27 @@ TEST(ClusterDBSCANOpTest, AnisotropicPerAxisEpsilon) {
   EXPECT_EQ(out.sizes.as<int64_t>()[0], 3);
 }
 
+TEST(ClusterDBSCANOpTest, IgnoredFeatureDoesNotAffectLabelsOrReadValues) {
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  std::vector<double> pts = {
+      0.0, 0.0, 0.0, 0.0, nan,   0.1, 0.0, 0.0, 0.0, inf,
+      10.0, 0.0, 0.0, 0.0, -inf, 10.1, 0.0, 0.0, 0.0, nan,
+  };
+  auto p = points_tensor<double>(pts, 4, 5);
+  const auto out =
+      run_dbscan<double>(p, make_params({0.5, 0.5, 0.5, 0.5, 0.0}, 2));
+
+  EXPECT_EQ(
+      std::vector<int64_t>(out.labels.as<int64_t>(),
+                           out.labels.as<int64_t>() + out.labels.shape[0]),
+      (std::vector<int64_t>{0, 0, 1, 1}));
+  EXPECT_EQ(
+      std::vector<int64_t>(out.sizes.as<int64_t>(),
+                           out.sizes.as<int64_t>() + out.sizes.shape[0]),
+      (std::vector<int64_t>{2, 2}));
+}
+
 TEST(ClusterDBSCANOpTest, MinPointsSeparatesCoreFromNoise) {
   // Group 1: a triple; group 2: a pair. epsilon=0.5.
   std::vector<double> pts = {
@@ -264,6 +286,20 @@ TEST(ClusterDBSCANOpTest, DefaultMinPointsIsTwiceNumFeatures) {
   EXPECT_EQ(lab[1], -1);
   EXPECT_EQ(lab[2], -1);
   EXPECT_EQ(out.sizes.shape[0], 0);
+}
+
+TEST(ClusterDBSCANOpTest, DefaultMinPointsCountsOnlyActiveFeatures) {
+  std::vector<double> pts = {
+      0.0, 100.0, 200.0, 300.0, 400.0,
+      0.1, 101.0, 201.0, 301.0, 401.0,
+      0.2, 102.0, 202.0, 302.0, 402.0,
+  };
+  auto p = points_tensor<double>(pts, 3, 5);
+  const auto out =
+      run_dbscan<double>(p, make_params({0.5, 0.0, 0.0, 0.0, 0.0}));
+
+  ASSERT_EQ(out.sizes.shape[0], 1);
+  EXPECT_EQ(out.sizes.as<int64_t>()[0], 3);
 }
 
 TEST(ClusterDBSCANOpTest, MaxClustersCapsAndDropsSurplus) {
@@ -434,11 +470,29 @@ TEST(ClusterDBSCANOpTest, RejectsEpsilonLengthMismatch) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(ClusterDBSCANOpTest, RejectsNonPositiveEpsilon) {
+TEST(ClusterDBSCANOpTest, RejectsScalarZeroEpsilon) {
   std::vector<double> pts = {0.0, 0.0, 1.0, 1.0};
   auto p = points_tensor<double>(pts, 2, 2);
   DualIOGraphRunResult result =
       run_dbscan_result<double>(p, make_params({0.0}));
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
+TEST(ClusterDBSCANOpTest, RejectsAllIgnoredEpsilon) {
+  std::vector<double> pts = {0.0, 0.0, 1.0, 1.0};
+  auto p = points_tensor<double>(pts, 2, 2);
+  DualIOGraphRunResult result =
+      run_dbscan_result<double>(p, make_params({0.0, 0.0}));
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
+TEST(ClusterDBSCANOpTest, RejectsNegativeEpsilon) {
+  std::vector<double> pts = {0.0, 0.0, 1.0, 1.0};
+  auto p = points_tensor<double>(pts, 2, 2);
+  DualIOGraphRunResult result =
+      run_dbscan_result<double>(p, make_params({1.0, -1.0}));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_FALSE(result.diagnostics.empty());
 }
@@ -697,6 +751,23 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonRevertsToParamsAfterMiss) {
   ASSERT_EQ(out.frames1.size(), 2U);
   EXPECT_EQ(out.frames1[0].shape[0], 1);
   EXPECT_EQ(out.frames1[1].shape[0], 0);
+}
+
+TEST(ClusterDBSCANOpTest, LiveEpsilonCanToggleIgnoredAxis) {
+  const auto make_points = [] {
+    return points_tensor<double>(
+        {0.0, 0.0, 0.1, 0.0, 0.0, 10.0, 0.1, 10.0}, 4, 2);
+  };
+  const auto out = run_epsilon_override_graph(
+      {{make_points(), std::vector<double>{0.5, 0.0}},
+       {make_points(), std::vector<double>{0.5, 1.0}}},
+      make_params({0.5, 1.0}, 2));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames1.size(), 2U);
+  EXPECT_EQ(out.frames1[0].shape[0], 1);
+  EXPECT_EQ(out.frames1[1].shape[0], 2);
 }
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsMalformedVector) {

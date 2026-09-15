@@ -32,8 +32,9 @@ header is the full contract.
 
 - **Implemented:** anisotropic per-axis `epsilon` (length-1 list `[ε]` →
   isotropic, or a `(num_features,)` vector giving the ellipsoidal neighborhood
-  `Σ_i ((p_i − q_i) / ε_i)² ≤ 1`); `min_points` core threshold (default
-  `2·num_features`); ids numbered by **descending cluster size** (cluster 0 =
+  `Σ_i ((p_i − q_i) / ε_i)² ≤ 1`, with zero excluding an axis);
+  `min_points` core threshold (default `2·active_features`); ids numbered by
+  **descending cluster size** (cluster 0 =
   largest, tie-break ascending root); optional `max_clusters` cap (drops the
   **smallest** surplus clusters to noise with a warn-once); `labels`
   (noise = `-1`, row-aligned with `points`) and optional/latched, exact-sized

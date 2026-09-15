@@ -8,7 +8,7 @@ Density clustering (DBSCAN) over a caller-assembled N-D feature matrix — radar
 | out | `labels` | int64 | `(num_points,)` | Cluster id per point; noise = `-1`; ids by descending size (tie: ascending component root) |
 | out (optional, latched) | `sizes` | int64 | `(num_clusters,)` | Point count per cluster, non-increasing; sized to the reported count |
 | live | `epsilon` | float64 config Tensor | `(1,)` or `(num_features,)`, rank-1 pageable host | Exact override; wire to enable; extent bounded by `max_features` |
-| live | `min_points` | int64 | scalar | Exact override (`<= 0` → `2 · num_features`); wire to enable |
+| live | `min_points` | int64 | scalar | Exact override (`<= 0` → `2 · active_features`); wire to enable |
 | live | `max_clusters` | int64 | scalar | Exact override (`<= 0` → uncapped); wire to enable |
 
 ```text
@@ -32,10 +32,10 @@ Neighbor test, quoted from `dbscan_neighbor`:
 
 ```text
 q is a neighbor of p when Σ_a ((p_a − q_a) · eps_inv2_a) ≤ 1
-where eps_inv2_a = 1 / epsilon_a²
+where eps_inv2_a = epsilon_a > 0 ? 1 / epsilon_a² : 0
 ```
 
-That is the contract ellipsoid `Σ_i ((p_i − q_i) / epsilon_i)² ≤ 1`. Length-1 `epsilon` broadcasts to every axis.
+That is the contract ellipsoid `Σ_i ((p_i − q_i) / epsilon_i)² ≤ 1` over positive `epsilon` entries. A per-axis zero excludes that feature from the metric while preserving its value in the input row. Length-1 positive `epsilon` broadcasts to every axis.
 
 1. **`mark_core`.** Count neighbors of each point **including itself** over all `num_points` (brute-force `O(N²)`). `is_core` when `count >= min_points`. Seed CC: core → own row index; non-core → `kNoiseRoot` (`-1`).
 
@@ -69,7 +69,9 @@ Empty `points` → `labels` and `sizes` both shape `(0,)`.
   | `num_features < 1` | `ClusterDBSCANOp: num_features must be >= 1` |
   | Empty `epsilon` | `ClusterDBSCANOp: epsilon is required` |
   | `epsilon` length not 1 and not `num_features` | `ClusterDBSCANOp: epsilon must be a scalar (length 1) or match num_features` |
-  | Non-finite or `<= 0` entry | `ClusterDBSCANOp: epsilon values must be finite and > 0` |
+
+| Non-finite or negative entry | `ClusterDBSCANOp: epsilon values must be finite and >= 0` |
+| Scalar zero or all-zero vector | `ClusterDBSCANOp: epsilon must select at least one active feature` |
   | `epsilon` override with no `max_features` | `ClusterDBSCANOp: MaxTensorExtents.max_features must be positive to accept an epsilon override` |
   | `num_points > INT_MAX` | `ClusterDBSCANOp: num_points exceeds the supported range` |
   | Missing ctor extent | `ClusterDBSCANOp: MaxTensorExtents.max_points must be a positive value (required for Tensor pool sizing)` (same for `max_clusters`) |
@@ -80,8 +82,8 @@ Empty `points` → `labels` and `sizes` both shape `(0,)`.
 
 | Parameter | Type | Default | Override | Cost | Meaning |
 | --- | --- | --- | --- | --- | --- |
-| `epsilon` | float64 vector, length `1` or `num_features` | none (required) | `[live]` Exact host config Tensor | H2D of `1/ε²` on a new `(epsilon, num_features)` key | Neighborhood radius; `[0.5]` is the isotropic (scalar) encoding |
-| `min_points` | int64 | `0` → `2 · num_features` | `[live]` Exact | Free (core threshold) | DBSCAN `minPts` (neighbors including self) |
+| `epsilon` | float64 vector, length `1` or `num_features` | none (required) | `[live]` Exact host config Tensor | H2D of `1/ε²` or zero on a new `(epsilon, num_features)` key | Neighborhood radius; per-axis zero ignores a feature; `[0.5]` is isotropic |
+| `min_points` | int64 | `0` → `2 · active_features` | `[live]` Exact | Free (core threshold) | DBSCAN `minPts` (neighbors including self) |
 | `max_clusters` | int64 | `0` (uncapped) | `[live]` Exact | Free (relabel surplus to noise) | Keep the largest `max_clusters`; warn once on overflow |
 
 YAML uses the one-element-list convention for isotropic `epsilon` (`epsilon: [0.5]`), consistent with other vector params (STATUS.md L8).

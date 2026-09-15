@@ -52,13 +52,14 @@ struct ClusterDBSCANState;
 //   epsilon      — std::vector<double>. Neighborhood radius per feature axis.
 //                  Length 1 → isotropic scalar; length num_features → per-axis
 //                  (anisotropic) ellipsoid: q is a neighbor of p when
-//                  Σ_i ((p_i − q_i) / epsilon_i)² ≤ 1. All values must be
-//                  finite and > 0. Required (no default).
+//                  Σ_i ((p_i − q_i) / epsilon_i)² ≤ 1 over positive entries.
+//                  A per-axis zero ignores that feature. Values must be finite
+//                  and >= 0, with at least one active feature. Required.
 //                  [live] Exact rank-1 pageable-host float64 Tensor Input,
 //                  bounded by MaxTensorExtents.max_features.
 //   min_points   — int64. Minimum neighbors (including the point itself) for a
 //                  core point (DBSCAN minPts). <= 0 selects the default
-//                  heuristic 2·num_features (resolved per tick from the input).
+//                  heuristic 2·active_features (resolved per tick).
 //                  [live] Exact Input.
 //   max_clusters — int64. Upper cap on the number of clusters reported; surplus
 //                  clusters are dropped (points relabeled to noise) and a
@@ -81,11 +82,12 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&ClusterDBSCANParams::epsilon>("epsilon")
         .description(
             "Neighborhood radius: length 1 (isotropic) or num_features "
-            "(per-axis); all values finite and > 0; required"),
+            "(per-axis); zero ignores an axis; values finite and >= 0 with at "
+            "least one positive entry; required"),
     holoscan::field<&ClusterDBSCANParams::min_points>("min_points")
         .description(
             "Minimum neighbors (incl. self) for a core point; <= 0 selects "
-            "the 2*num_features default"),
+            "the 2*active_features default"),
     holoscan::field<&ClusterDBSCANParams::max_clusters>("max_clusters")
         .description(
             "Upper cap on reported clusters (surplus dropped to noise with a "

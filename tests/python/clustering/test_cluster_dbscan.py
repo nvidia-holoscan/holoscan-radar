@@ -102,6 +102,24 @@ def test_AnisotropicPerAxisEpsilon():
     assert out["sizes"][0] == 3
 
 
+def test_IgnoredFeatureDoesNotAffectLabelsOrReadValues():
+    pts = [
+        [0.0, 0.0, 0.0, 0.0, np.nan],
+        [0.1, 0.0, 0.0, 0.0, np.inf],
+        [10.0, 0.0, 0.0, 0.0, -np.inf],
+        [10.1, 0.0, 0.0, 0.0, np.nan],
+    ]
+    out = run_dbscan(
+        pts,
+        4,
+        5,
+        epsilon=[0.5, 0.5, 0.5, 0.5, 0.0],
+        min_points=2,
+    )
+    assert list(out["labels"]) == [0, 0, 1, 1]
+    assert list(out["sizes"]) == [2, 2]
+
+
 def test_MinPointsSeparatesCoreFromNoise():
     pts = [0.0, 0.0, 0.1, 0.0, 0.2, 0.0, 10.0, 0.0, 10.1, 0.0]
 
@@ -122,6 +140,17 @@ def test_DefaultMinPointsIsTwiceNumFeatures():
     out = run_dbscan(pts, 3, 2, epsilon=[0.5])
     assert list(out["labels"]) == [-1, -1, -1]
     assert out["sizes"].shape == (0,)
+
+
+def test_DefaultMinPointsCountsOnlyActiveFeatures():
+    pts = [
+        [0.0, 100.0, 200.0, 300.0, 400.0],
+        [0.1, 101.0, 201.0, 301.0, 401.0],
+        [0.2, 102.0, 202.0, 302.0, 402.0],
+    ]
+    out = run_dbscan(pts, 3, 5, epsilon=[0.5, 0.0, 0.0, 0.0, 0.0])
+    assert list(out["labels"]) == [0, 0, 0]
+    assert list(out["sizes"]) == [3]
 
 
 def test_MaxClustersCapsAndDropsSurplus():
@@ -198,6 +227,13 @@ def test_RejectsEmptyEpsilon():
         run_dbscan(pts, 2, 2, epsilon=[])
 
 
+@pytest.mark.parametrize("epsilon", [[0.0], [0.0, 0.0], [1.0, -1.0]])
+def test_RejectsInvalidIgnoredFeatureEncodings(epsilon):
+    pts = [0.0, 0.0, 1.0, 1.0]
+    with pytest.raises(ValueError):
+        run_dbscan(pts, 2, 2, epsilon=epsilon)
+
+
 def test_LiveEpsilonOverrideAppliesPerTick():
     # Two nearby pairs. epsilon=0.9 keeps them separate (2 clusters);
     # epsilon=3.0 links them (1 cluster).
@@ -221,3 +257,27 @@ def test_LiveEpsilonOverrideAppliesPerTick():
     assert outs["sizes"][1].shape[0] == 2  # eps=0.9 → split
     assert outs["sizes"][2].shape[0] == 2  # no override → Params 0.9 → split
     assert int(outs["sizes"][0][0]) == 4
+
+
+def test_LiveEpsilonOverrideCanToggleIgnoredAxis():
+    pts = [0.0, 0.0, 0.1, 0.0, 0.0, 10.0, 0.1, 10.0]
+    arr = np.asarray(pts, dtype=np.float64).reshape(4, 2)
+    frame = single_map(to_device_array(arr), "points")
+
+    def make_op(app):
+        return ClusterDBSCANOpF64(
+            app,
+            epsilon=[0.5, 1.0],
+            min_points=2,
+            name="op_under_test",
+        )
+
+    outs = run_operator_multi(
+        make_op,
+        [frame, frame],
+        input_port="points",
+        output_ports=["labels", "sizes"],
+        overrides={"epsilon": [[0.5, 0.0], [0.5, 1.0]]},
+    )
+    assert outs["sizes"][0].shape[0] == 1
+    assert outs["sizes"][1].shape[0] == 2

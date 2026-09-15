@@ -129,6 +129,7 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 
 - Synthetic blobs in feature space → correct membership; noise points labeled `−1`.
 - Per-axis `epsilon` correctly handles mixed-unit (anisotropic) features; `min_points` separates core vs. noise.
+- A zero per-axis `epsilon` excludes that feature completely, including non-finite pass-through values; all-zero and negative encodings reject, and default `min_points` counts only active features.
 - A non-core point neighboring two disconnected core components joins the
   component with the numerically smallest root.
 - `labels` row-aligned with `points`; `sizes` counts per cluster; `max_clusters` caps.

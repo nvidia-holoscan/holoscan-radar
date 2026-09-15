@@ -67,7 +67,9 @@ void bind_cluster_dbscan(py::module_& m, const char* class_name) {
       "Parameters\n----------\n"
       "fragment : holoscan.core.Fragment\n"
       "epsilon : list[float], optional\n"
+      "    Isotropic or per-axis radius; a per-axis zero ignores that feature.\n"
       "min_points : int, optional\n"
+      "    Non-positive selects twice the number of active features.\n"
       "max_clusters : int, optional\n"
       "max_points_ext, max_clusters_ext, max_features_ext : int, optional\n"
       "name : str, optional\n")

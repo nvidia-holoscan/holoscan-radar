@@ -194,16 +194,27 @@ expected<ClusterDBSCANStagePlan, Error> build_cluster_stage_plan(
         "ClusterDBSCANOp: epsilon must be a scalar (length 1) or match "
         "num_features"});
   }
+  int64_t active_features = 0;
   for (const double value : stage.epsilon) {
-    if (!std::isfinite(value) || value <= 0.0) {
+    if (!std::isfinite(value) || value < 0.0) {
       return make_unexpected(Error{
           ErrorCode::kInvalidArgument,
-          "ClusterDBSCANOp: epsilon values must be finite and > 0"});
+          "ClusterDBSCANOp: epsilon values must be finite and >= 0"});
     }
+    if (value > 0.0) {
+      active_features += stage.epsilon.size() == 1
+                             ? num_features
+                             : int64_t{1};
+    }
+  }
+  if (active_features == 0) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        "ClusterDBSCANOp: epsilon must select at least one active feature"});
   }
 
   const int64_t resolved_min_points =
-      stage.min_points.value_or(2 * num_features);
+      stage.min_points.value_or(2 * active_features);
   return ClusterDBSCANStagePlan{
       .stage = std::move(stage),
       .num_points = num_points,
@@ -229,7 +240,8 @@ expected<PreparedEpsilon<T>, Error> prepare_epsilon_inverse(
               ? plan.stage.epsilon[0]
               : plan.stage.epsilon[static_cast<size_t>(axis)];
       prepared.host_staging[static_cast<size_t>(axis)] =
-          static_cast<T>(1.0 / (value * value));
+          value == 0.0 ? static_cast<T>(0)
+                       : static_cast<T>(1.0 / (value * value));
     }
     auto epsilon_inv2 =
         make_device_tensor({plan.num_features}, real_dtype<T>());
