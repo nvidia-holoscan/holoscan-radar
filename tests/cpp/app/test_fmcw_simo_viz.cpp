@@ -44,10 +44,10 @@ TEST(SimoDashboardTest, ComputesClusterCentroids) {
   const std::vector<viz::ClusterCentroid> centroids =
       viz::detail::compute_cluster_centroids(
           {0, 2, 2, 4, 3, 6},
-          {10.0F, 1.0F, 0.1F, 0.2F,
-           14.0F, 3.0F, 0.3F, 0.4F,
-           30.0F, -2.0F, -0.2F, -0.3F},
-          {0, 0, 1}, {2, 1}, 2, 4);
+          {10.0F, 1.0F, 0.1F, 0.2F, 1000.0F,
+           14.0F, 3.0F, 0.3F, 0.4F, -1000.0F,
+           30.0F, -2.0F, -0.2F, -0.3F, 7.0F},
+          {0, 0, 1}, {2, 1}, 2, 5);
   ASSERT_EQ(centroids.size(), 2U);
   EXPECT_FLOAT_EQ(centroids[0].doppler_bin, 1.0F);
   EXPECT_FLOAT_EQ(centroids[0].range_bin, 3.0F);

@@ -59,7 +59,7 @@ detect_then_beamform:
     el_angles: [-0.2, -0.1, 0.0, 0.1, 0.2]
     peak_interpolation: parabolic
   cluster_dbscan:
-    epsilon: [3.0, 2.0, 0.15, 0.15]
+    epsilon: [3.0, 2.0, 0.15, 0.15, 0.0]
     min_points: 1
     max_clusters: 16
   reduction: &reduction
@@ -82,7 +82,7 @@ beamform_then_detect:
     peak_only: false
     nci_axes: []
   cluster_dbscan:
-    epsilon: [3.0, 2.0, 0.15, 0.15]
+    epsilon: [3.0, 2.0, 0.15, 0.15, 0.0]
     min_points: 1
     max_clusters: 16
   reduction: *reduction

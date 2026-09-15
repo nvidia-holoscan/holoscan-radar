@@ -164,7 +164,7 @@ void validate_dashboard_inputs(const Tensor& detection_idx,
                                const Tensor& reduced_points) {
   if (detection_idx.shape().size() != 2U ||
       detection_idx.shape()[1] < 2 ||
-      points.shape().size() != 2U || points.shape()[1] != 4 ||
+      points.shape().size() != 2U || points.shape()[1] < 4 ||
       points.shape()[0] != detection_idx.shape()[0] ||
       labels.shape().size() != 1U ||
       labels.shape()[0] != detection_idx.shape()[0] ||
@@ -889,7 +889,7 @@ std::vector<ClusterCentroid> compute_cluster_centroids(
     const std::vector<float>& points, const std::vector<std::int64_t>& labels,
     const std::vector<std::int64_t>& sizes, std::int64_t idx_cols,
     std::int64_t point_cols) {
-  if (idx_cols < 2 || point_cols != 4 ||
+  if (idx_cols < 2 || point_cols < 4 ||
       detection_idx.size() % static_cast<std::size_t>(idx_cols) != 0U) {
     throw std::invalid_argument(
         "compute_cluster_centroids: invalid column counts");

@@ -1281,9 +1281,12 @@ registration now points at `applications/fmcw/simo` and builds two explicitly
 ordered workflows: `fmcw_simo_detect_then_beamform` and
 `fmcw_simo_beamform_then_detect`. They share only `default.yaml` and
 `smoke.yaml`; incompatible CFAR and angle-grid settings live in matching nested
-sections. The full-cube path sends every CFAR detection into four-dimensional
-feature assembly and DBSCAN, then uses `DetectionReductionOp` to choose cluster
-representatives. `FeatureAssemblyOp`'s dense `az`/`el` contract receives
+sections. Both paths assemble
+`[range, velocity, azimuth, elevation, detection_score]` once and fan the
+matrix out to DBSCAN, reduction, reporting, and visualization. DBSCAN's
+trailing zero epsilon excludes score from its metric while
+`DetectionReductionOp` uses score for weighted representatives.
+`FeatureAssemblyOp`'s dense `az`/`el` contract receives
 tick-coherent `PhaseShiftBeamformerOp.az_grid` / `el_grid` tensors rather than
 an application-local stamper or the legacy `CubeAoaLookupOp` computational
 bridge. The old sparse source directory was removed; the old dense source

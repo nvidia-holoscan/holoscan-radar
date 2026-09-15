@@ -88,7 +88,7 @@ All five share one **pluggable sparse-slot contract** (input `snapshot`, output 
 
 SISO has no angle stage, so clustering there is simply an optional trailing stage over the range-Doppler detections.
 
-In every case `ClusterDBSCANOp` consumes a homogeneous float feature matrix (`ClusterDBSCANOp.points`) assembled from detection attributes by `FeatureAssemblyOp`. A reduction consumer may use a separate row-aligned superset — for example `[range, velocity, azimuth, elevation, detection_score]` for score-weighted means — without adding the score column to the clustering metric. `DetectionReductionOp.reduced_points` exposes selected or synthetic per-cluster features while `rep_idx` remains a real cell for snapshot gathering. The feature set, representative policy, and snapshot gather are locked operators (`FeatureAssemblyOp`, `DetectionReductionOp`, `SnapshotGatherOp`); see the operator API doc.
+In every case `ClusterDBSCANOp` consumes a homogeneous float feature matrix (`ClusterDBSCANOp.points`) assembled from detection attributes by `FeatureAssemblyOp`. A zero per-axis `epsilon` excludes a pass-through column from the clustering metric, so one `[range, velocity, azimuth, elevation, detection_score]` matrix can feed both DBSCAN and score-weighted reduction. `DetectionReductionOp.reduced_points` exposes selected or synthetic per-cluster features while `rep_idx` remains a real cell for snapshot gathering. The feature set, representative policy, and snapshot gather are locked operators (`FeatureAssemblyOp`, `DetectionReductionOp`, `SnapshotGatherOp`); see the operator API doc.
 
 ---
 
@@ -179,7 +179,7 @@ flowchart TD
   SNAP -.->|"is_valid (optional)"| EST
   EST -->|"aoa_estimates"| FEAT["FeatureAssemblyOp (bridge)"]
   CFAR -->|"detection_idx + detection_score"| FEAT
-  FEAT -->|"points (range, vel, az, el)"| CLUS["ClusterDBSCANOp"]
+  FEAT -->|"points (range, vel, az, el, score)"| CLUS["ClusterDBSCANOp"]
   class FEAT,CLUS opt
 ```
 

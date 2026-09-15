@@ -77,7 +77,10 @@ TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
             holoscan::radar::RepresentativePolicy::kWeightedMean);
   EXPECT_EQ(detect.reduction_params->feature_weights,
             (std::vector<double>{0.0, 0.0, 0.0, 0.0, 1.0}));
-  EXPECT_EQ(detect.dbscan_params->epsilon.size(), 4U);
+  EXPECT_EQ(detect.dbscan_params->epsilon,
+            (std::vector<double>{3.0, 2.0, 0.08, 0.08, 0.0}));
+  EXPECT_EQ(beamform.dbscan_params->epsilon,
+            (std::vector<double>{5.0, 2.0, 0.08, 0.08, 0.0}));
   EXPECT_EQ(detect.extents.max_features, 5);
   EXPECT_TRUE(detect.visualize);
   EXPECT_DOUBLE_EQ(detect.visualization.dynamic_range_db, 60.0);

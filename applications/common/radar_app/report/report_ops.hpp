@@ -300,7 +300,7 @@ class ClusterReportOp : public holoscan::Operator<> {
  public:
   struct Config {
     // When true, detection_idx is a required OnAligned Exact input (needed to
-    // look up rep az/el from 4-column points + 2-column rep_idx). Leave false
+    // look up rep az/el from the first four point columns + 2-column rep_idx).
     // for SISO 2-feature points — wiring without contract membership yields
     // RUNTIME_OPERATOR_REPLAY_MISMATCH on EA.
     bool report_detection_idx{false};
@@ -393,12 +393,14 @@ class ClusterReportOp : public holoscan::Operator<> {
 
     const auto pshape = points_t.shape();
     const int64_t num_features = pshape.size() == 2 ? pshape[1] : 0;
-    if (pshape.size() != 2 || (num_features != 2 && num_features != 4)) {
+    if (pshape.size() != 2 || (num_features != 2 && num_features < 4)) {
       return holoscan::make_unexpected(holoscan::Error{
           holoscan::ErrorCode::kInvalidArgument,
-          "ClusterReportOp: points must be (N, 2) or (N, 4), got rank " +
+          "ClusterReportOp: points must be (N, 2) or have at least four "
+          "columns, got rank " +
               std::to_string(pshape.size())});
     }
+    const bool has_angles = num_features >= 4;
     const int64_t num_points = pshape[0];
     const auto lshape = labels_t.shape();
     if (lshape.size() != 1 || lshape[0] != num_points) {
@@ -425,8 +427,8 @@ class ClusterReportOp : public holoscan::Operator<> {
     const int64_t rep_cols = rshape[1];
     const int64_t num_az = static_cast<int64_t>(az_grid_.size());
     const int64_t num_el = static_cast<int64_t>(el_grid_.size());
-    const bool use_det_idx = (num_features == 4 && rep_cols == 2);
-    if (num_features == 4) {
+    const bool use_det_idx = has_angles && rep_cols == 2;
+    if (has_angles) {
       if (rep_cols == 4) {
         if (num_az == 0 || num_el == 0) {
           return holoscan::make_unexpected(holoscan::Error{
@@ -443,7 +445,7 @@ class ClusterReportOp : public holoscan::Operator<> {
     } else if (rep_cols == 4) {
       return holoscan::make_unexpected(holoscan::Error{
           holoscan::ErrorCode::kInvalidArgument,
-          "ClusterReportOp: 4-column rep_idx requires 4-column points "
+          "ClusterReportOp: 4-column rep_idx requires points beginning with "
           "(range, velocity, az, el)"});
     }
     const int64_t num_range = range_bins_t.shape()[0];
@@ -527,7 +529,7 @@ class ClusterReportOp : public holoscan::Operator<> {
     std::vector<double> sum_velocity(static_cast<size_t>(num_clusters), 0.0);
     std::vector<double> sum_az;
     std::vector<double> sum_el;
-    if (num_features == 4) {
+    if (has_angles) {
       sum_az.assign(static_cast<size_t>(num_clusters), 0.0);
       sum_el.assign(static_cast<size_t>(num_clusters), 0.0);
     }
@@ -547,7 +549,7 @@ class ClusterReportOp : public holoscan::Operator<> {
           pts[static_cast<size_t>(i * num_features + 0)];
       sum_velocity[static_cast<size_t>(c)] +=
           pts[static_cast<size_t>(i * num_features + 1)];
-      if (num_features == 4) {
+      if (has_angles) {
         sum_az[static_cast<size_t>(c)] +=
             pts[static_cast<size_t>(i * num_features + 2)];
         sum_el[static_cast<size_t>(c)] +=
@@ -607,7 +609,7 @@ class ClusterReportOp : public holoscan::Operator<> {
           rep_az_el_from_detidx(rep_dd, rep_rr, &rep_az, &rep_el);
         }
       }
-      if (num_features == 4) {
+      if (has_angles) {
         HOLOSCAN_LOG_INFO(
             "  cluster {}: {} pts, centroid range {:.2f} m, velocity "
             "{:+.2f} m/s, az {:.3f} rad, el {:.3f} rad; rep range {:.2f} m, "

@@ -19,16 +19,12 @@ flowchart LR
     Doppler -- RD maps --> Gather[Snapshot gather]
     CFAR -- detection indices --> Gather
     Gather --> Beamscan[Beamscan estimator]
-    CFAR --> Features[Clustering feature assembly]
+    CFAR -- indices and score --> Features[Feature assembly]
     Range -- range bins --> Features
     Doppler -- velocity bins --> Features
     Beamscan -- AoA estimates --> Features
     Features --> DBSCAN[DBSCAN]
-    CFAR -- indices and score --> ReductionFeatures[Reduction feature assembly]
-    Range -- range bins --> ReductionFeatures
-    Doppler -- velocity bins --> ReductionFeatures
-    Beamscan -- AoA estimates --> ReductionFeatures
-    ReductionFeatures --> Reduction[Detection reduction]
+    Features --> Reduction[Detection reduction]
     CFAR --> Reduction
     DBSCAN --> Reduction
     Features --> Report[Cluster report]
@@ -56,16 +52,12 @@ flowchart LR
     Clutter --> Doppler[Doppler processor]
     Doppler --> Beamformer[Phase-shift beamformer]
     Beamformer --> CFAR[CFAR per angle plane]
-    CFAR --> Features[Clustering feature assembly]
+    CFAR -- indices and score --> Features[Feature assembly]
     Beamformer -- angle grids --> Features
     Range -- range bins --> Features
     Doppler -- velocity bins --> Features
     Features --> DBSCAN[DBSCAN]
-    CFAR -- indices and score --> ReductionFeatures[Reduction feature assembly]
-    Beamformer -- angle grids --> ReductionFeatures
-    Range -- range bins --> ReductionFeatures
-    Doppler -- velocity bins --> ReductionFeatures
-    ReductionFeatures --> Reduction[Detection reduction]
+    Features --> Reduction[Detection reduction]
     CFAR --> Reduction
     DBSCAN --> Reduction
     Features --> Report[Cluster report]
@@ -88,9 +80,10 @@ Holoviz sink shows the CFAR power projected onto the range-Doppler plane,
 clustered detections as color-coded ovals. A 2×2 grid to the right shows
 the simulated target truth as continuous color-coded trajectories behind
 rolling score-weighted cluster means for range, velocity, azimuth, and
-elevation versus scenario time. A separate five-column reduction feature
-matrix adds `detection_score`; DBSCAN continues to cluster only the four
-physical columns. Truth and reduced-point colors are assigned by ascending
+elevation versus scenario time. One five-column matrix contains
+`[range, velocity, azimuth, elevation, detection_score]`; DBSCAN ignores the
+zero-epsilon score column while reduction uses it for weighting. Truth and
+reduced-point colors are assigned by ascending
 range so corresponding tracks are easy to compare. The
 retained RGBA frame keeps the complete dashboard visible between slower radar
 frames on the faster display clock. The fresh compositor in `cpp/viz/` is
