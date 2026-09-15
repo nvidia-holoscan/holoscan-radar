@@ -524,6 +524,52 @@ class TensorCaptureBOp final : public holoscan::Operator<> {
   holoscan::Input<holoscan::Tensor> in{"in"};
 };
 
+class DualTensorCaptureOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input(in0, "in0").queue_depth(8U);
+    spec.input(in1, "in1").queue_depth(8U);
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnAligned{
+        .ports = holoscan::ports(in0, in1),
+        .window = std::chrono::nanoseconds{0}});
+    result.input(in0, holoscan::Exact{})
+        .input(in1, holoscan::Exact{});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext&) override {
+    auto sample0 = in0.receive_data();
+    if (!sample0) {
+      return holoscan::make_unexpected(std::move(sample0).error());
+    }
+    auto sample1 = in1.receive_data();
+    if (!sample1) {
+      return holoscan::make_unexpected(std::move(sample1).error());
+    }
+    HostTensor host0 = to_host(*sample0);
+    HostTensor host1 = to_host(*sample1);
+    {
+      const std::lock_guard lock0(FrameBank::mutex);
+      FrameBank::captured.push_back(std::move(host0));
+    }
+    {
+      const std::lock_guard lock1(FrameBankB::mutex);
+      FrameBankB::captured.push_back(std::move(host1));
+    }
+    FrameBank::ready.notify_all();
+    FrameBankB::ready.notify_all();
+    return {};
+  }
+
+  holoscan::Input<holoscan::Tensor> in0{"in0"};
+  holoscan::Input<holoscan::Tensor> in1{"in1"};
+};
+
 class TensorCaptureCOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
@@ -1984,6 +2030,97 @@ GraphRunResult run_triple_in_single_out_operator_graph_result(
   {
     const std::lock_guard lock(detail::FrameBank::mutex);
     result.frames = std::move(detail::FrameBank::captured);
+  }
+  return result;
+}
+
+// 3-in / 2-out Graph runner (e.g. DetectionReductionOp with reduced_points).
+// `WireFn` receives (graph, source, op, sink).
+template <typename OpT, bool OptionalThirdFirst = false, typename ParamsT,
+typename WireFn>
+DualIOGraphRunResult run_triple_in_dual_out_operator_graph_result(
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs1,
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs2, ParamsT params,
+    const char* out0_port, const char* out1_port, WireFn&& wire,
+    const MaxTensorExtents& extents = default_test_extents()) {
+  DualIOGraphRunResult result;
+  detail::FrameBank::reset();
+  detail::FrameBankB::reset();
+  detail::FrameBankC::reset();
+  detail::FrameBank::input_frames = std::move(inputs0);
+  detail::FrameBankB::input_frames = std::move(inputs1);
+  detail::FrameBankC::input_frames = std::move(inputs2);
+  const std::size_t expected = detail::FrameBank::input_frames.size();
+  if (detail::FrameBankB::input_frames.size() != expected ||
+      detail::FrameBankC::input_frames.size() != expected) {
+    result.plan_ok = false;
+    result.plan_json = "triple-in dual-out harness: input bank sizes differ";
+    return result;
+  }
+
+  holoscan::Graph graph{"triple-in-dual-out-harness"};
+  const auto source =
+      graph.op<detail::TripleTensorSourceOp<OptionalThirdFirst>>("source");
+  auto op = emplace_configured_harness_op<OpT>(
+      graph, extents, std::move(params));
+  const auto sink = graph.op<detail::DualTensorCaptureOp>("sink");
+  wire(graph, source, op, sink);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  detail::bind_triple_in_single_out_device_pools(options, out0_port);
+  detail::bind_op_device_output(options, out1_port);
+
+  try {
+    const holoscan::ExecutionPlan plan =
+        holoscan::compile(graph, std::move(options));
+    result.plan_ok = plan.ok();
+    result.plan_json = plan.json();
+    if (!plan.ok()) {
+      return result;
+    }
+
+    holoscan::RunSession session = holoscan::run_async(plan);
+    {
+      const auto deadline =
+          std::chrono::steady_clock::now() + detail::kHarnessDeadline;
+      while (session.diagnostics().empty() &&
+             std::chrono::steady_clock::now() < deadline) {
+        std::size_t n0 = 0;
+        std::size_t n1 = 0;
+        {
+          const std::lock_guard lock0(detail::FrameBank::mutex);
+          n0 = detail::FrameBank::captured.size();
+        }
+        {
+          const std::lock_guard lock1(detail::FrameBankB::mutex);
+          n1 = detail::FrameBankB::captured.size();
+        }
+        if (n0 >= expected && n1 >= expected) {
+          break;
+        }
+        std::this_thread::sleep_for(detail::kHarnessPoll);
+      }
+    }
+    session.request_stop();
+    session.wait();
+    result.termination = session.termination();
+    for (const auto& diagnostic : session.diagnostics()) {
+      result.diagnostics.push_back(std::string(diagnostic.token));
+    }
+  } catch (const holoscan::RuntimeError& e) {
+    result.plan_ok = false;
+    result.plan_json = std::string("RuntimeError: ") + e.what();
+    return result;
+  }
+  {
+    const std::lock_guard lock(detail::FrameBank::mutex);
+    result.frames0 = std::move(detail::FrameBank::captured);
+  }
+  {
+    const std::lock_guard lock(detail::FrameBankB::mutex);
+    result.frames1 = std::move(detail::FrameBankB::captured);
   }
   return result;
 }

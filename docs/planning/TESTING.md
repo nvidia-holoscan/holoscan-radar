@@ -157,6 +157,9 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 #### DetectionReductionOp (bridge)
 
 - `peak` policy → `rep_idx` is the max-score member of each cluster; `first` / `medoid` select the expected member (`medoid` respects `feature_weights`).
+- `weighted_mean` with empty `feature_weights` emits the ordinary feature mean; one-hot score weighting emits the analytic score-weighted mean. Its `rep_idx` is the real member nearest the same weighted centroid over all detection-index columns.
+- `reduced_points` gathers the selected member for `first` / `peak` / `medoid`, is synthetic only for `weighted_mean`, and may be left unwired without suppressing `rep_idx`.
+- `weighted_mean` rejects a negative or non-finite row weight and a non-positive per-cluster weight sum.
 - Every `rep_idx` addresses a real detected cell (a subset of `detection_idx`); one per cluster; noise (`−1`) excluded.
 - `points` is always a required exact-aligned input, including for `representative=first`; an unwired graph is rejected for every policy.
 - A caller-instantiated compile-time `ScoreFn` is exercised through the Graph harness from a CUDA translation unit.

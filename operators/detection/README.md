@@ -10,7 +10,7 @@ Typical placement:
 
 ```text
 … → CFARDetectorOp → detection_idx (+ score) → FeatureAssemblyOp → points → …
-… → ClusterDBSCANOp.labels + detection_idx + points → DetectionReductionOp → rep_idx
+… → ClusterDBSCANOp.labels + detection_idx + points → DetectionReductionOp → rep_idx + reduced_points
 ```
 
 ## Operators
@@ -19,7 +19,7 @@ Typical placement:
 | --- | --- | --- |
 | [`CFARDetectorOp<T>`](cfar_detector_op/README.md) | `rd_maps` (…, doppler, range; complex or real power) → `detection_mask`, `detection_score`, `noise_estimate`, `cfar_power`, `detection_idx` | 2-D CFAR on the (Doppler, range) plane; complex input → square-law power, real input → thresholded directly; per-cell adaptive threshold from the training-cell noise estimate |
 | [`FeatureAssemblyOp<T>`](feature_assembly_op/README.md) | `detection_idx` (+ optional `range_bins` / `velocity_bins` / `detection_score` / `aoa_estimates` / `az_angles` / `el_angles`) → `points` | Range–Doppler clustering-prep bridge: gather / bin→physical lookup into `points`. Lives here (not under `clustering/`) because it speaks CFAR `detection_idx`; static `features` list sets column layout |
-| [`DetectionReductionOp<T>`](detection_reduction_op/README.md) | `labels` + `detection_idx` (+ `points`) → `rep_idx` | One representative CFAR cell per cluster (`first` / `peak` / `medoid`) for cluster-then-angle |
+| [`DetectionReductionOp<T>`](detection_reduction_op/README.md) | `labels` + `detection_idx` + `points` → `rep_idx` (+ optional `reduced_points`) | One real CFAR cell per cluster (`first` / `peak` / `medoid` / nearest weighted-index mean) plus optional selected/synthetic features |
 
 ## Implementation status
 
@@ -27,10 +27,11 @@ All three operators implement their locked contracts in
 [`docs/planning/OPERATOR_API.md`](../../docs/planning/OPERATOR_API.md).
 
 - **`DetectionReductionOp` (checklist-complete):** group-by-label reduction
-  with `first` / `peak` / `medoid`, built-in peak scorers plus compile-time
+  with `first` / `peak` / `medoid` / `weighted_mean`, built-in scorers plus compile-time
   `ScoreFn` for `score_method=custom`, `[live]` overrides
   (`representative`, `score_method`, `feature_weights`), exact-sized
-  `rep_idx`, public `radar_common/reduce/` primitives, unit tests, and
+  real-cell `rep_idx`, optional/latched `reduced_points`, public
+  `radar_common/reduce/` primitives, unit tests, and
   `perf_detection_reduction` smoke. `points` always joins the compiled aligned
   trigger so every live representative policy shares one fixed contract.
 

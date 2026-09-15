@@ -25,6 +25,7 @@
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/reduce/reduction_enums.hpp"
 #include "radar_common/sdk/config_codecs.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 
 namespace holoscan::radar {
 
@@ -44,13 +45,18 @@ namespace holoscan::radar {
 // Out: rep_idx        — int64, (num_clusters, 2 [+ n_batch]). One real
 //                       detection_idx row per non-noise cluster; sized to the
 //                       cluster count and reallocated per tick.
+// Out: reduced_points — optional/latched T, (num_clusters, num_features).
+//                       Selected input rows for member policies; synthetic
+//                       weighted feature means for weighted_mean.
 //
 // Parameters (OPERATOR_API.md [live] tags):
-//   representative  — enum {peak, medoid, first}. [live] Exact Input.
+//   representative  — enum {peak, medoid, first, weighted_mean}. [live] Exact
+//                     Input.
 //   score_method    — enum {weighted_sum, weighted_l2, weighted_max, custom}.
-//                     Used by peak. [live] Exact Input.
+//                     Used by peak and weighted_mean. [live] Exact Input.
 //   feature_weights — std::vector<double>, length num_features. Required for
-//                     peak (non-custom) / medoid.
+//                     peak (non-custom) / medoid; empty selects uniform mean
+//                     for weighted_mean.
 //                     [live] Exact rank-1 pageable-host float64 Tensor Input,
 //                     bounded by MaxTensorExtents.max_features.
 //
@@ -74,17 +80,17 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&DetectionReductionParams::representative>(
         "representative")
         .description(
-            "Which cluster member to keep {peak, medoid, first}; default "
-            "peak"),
+            "Reduction {peak, medoid, first, weighted_mean}; rep_idx always "
+            "selects a real member; default peak"),
     holoscan::field<&DetectionReductionParams::score_method>("score_method")
         .description(
-            "Peak score collapse {weighted_sum, weighted_l2, weighted_max, "
-            "custom}; used only by peak; default weighted_sum"),
+            "Peak score or weighted-mean row-weight collapse {weighted_sum, "
+            "weighted_l2, weighted_max, custom}; default weighted_sum"),
     holoscan::field<&DetectionReductionParams::feature_weights>(
         "feature_weights")
         .description(
-            "Per-feature weights for peak/medoid (length num_features); "
-            "required for those policies unless peak+custom"));
+            "Per-feature weights for peak/medoid/weighted_mean (length "
+            "num_features); empty requests uniform weighted_mean"));
 
 static_assert(
     holoscan::param_schema_availability<DetectionReductionParams>() ==
@@ -109,6 +115,7 @@ class DetectionReductionOp
   Input<Tensor> detection_idx{"detection_idx"};
   Input<Tensor> points{"points"};
   Output<Tensor> rep_idx{"rep_idx"};
+  Output<Tensor> reduced_points{"reduced_points"};
   // [live] Exact overrides; the entries are unconditional and wiring the port
   // enables it (OPERATOR_API.md).
   Input<RepresentativePolicy> representative{"representative"};
@@ -124,7 +131,9 @@ class DetectionReductionOp
   std::shared_ptr<holoscan::Tensor> retained_weights_;
 
   std::int64_t max_features_{0};
-  std::size_t max_byte_span_{0U};
+  std::size_t max_rep_idx_byte_span_{0U};
+  std::size_t max_reduced_points_byte_span_{0U};
+  LatchedOutput reduced_points_output_;
 };
 
 extern template class DetectionReductionOp<float>;

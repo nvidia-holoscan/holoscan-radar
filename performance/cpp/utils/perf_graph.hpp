@@ -664,6 +664,50 @@ class PerfTerminalSinkOp final : public holoscan::Operator<> {
   holoscan::Input<holoscan::Tensor> in{"in"};
 };
 
+// Timed terminal sink for two exact-aligned outputs from one operator.
+class PerfDualTerminalSinkOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input(in0, "in0").queue_depth(8U);
+    spec.input(in1, "in1").queue_depth(8U);
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnAligned{
+        .ports = holoscan::ports(in0, in1),
+        .window = std::chrono::nanoseconds{0}});
+    result.input(in0, holoscan::Exact{})
+        .input(in1, holoscan::Exact{});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext&) override {
+    auto sample0 = in0.receive_data();
+    if (!sample0) {
+      return holoscan::make_unexpected(std::move(sample0).error());
+    }
+    auto sample1 = in1.receive_data();
+    if (!sample1) {
+      return holoscan::make_unexpected(std::move(sample1).error());
+    }
+    cudaDeviceSynchronize();
+    {
+      const std::lock_guard lock(PerfFrameBank::mutex);
+      if (PerfFrameBank::collector_ != nullptr) {
+        PerfFrameBank::collector_->ends.push_back(Clock::now());
+      }
+      ++PerfFrameBank::captured;
+    }
+    PerfFrameBank::ready.notify_all();
+    return {};
+  }
+
+  holoscan::Input<holoscan::Tensor> in0{"in0"};
+  holoscan::Input<holoscan::Tensor> in1{"in1"};
+};
+
 // Untimed drain for always-emitted optional outs (keeps the producer ticking).
 class PerfNullSinkOp final : public holoscan::Operator<> {
  public:

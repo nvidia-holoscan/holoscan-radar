@@ -49,6 +49,7 @@ inline constexpr RepresentativePolicy kRepresentativePolicies[] = {
     RepresentativePolicy::kPeak,
     RepresentativePolicy::kMedoid,
     RepresentativePolicy::kFirst,
+    RepresentativePolicy::kWeightedMean,
 };
 inline constexpr ScoreMethod kScoreMethods[] = {
     ScoreMethod::kWeightedSum,

@@ -270,6 +270,31 @@ __global__ void compact_and_gather_kernel(const int64_t* best_rows,
   }
 }
 
+template <typename T>
+__global__ void compact_points_kernel(const int64_t* best_rows,
+                                      const T* points, const T* slot_points,
+                                      int64_t n_slots, int64_t num_features,
+                                      bool use_slot_points,
+                                      T* reduced_points) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) {
+    return;
+  }
+  int64_t out = 0;
+  for (int64_t lab = 0; lab < n_slots; ++lab) {
+    if (best_rows[lab] == kEmptyRow) {
+      continue;
+    }
+    const T* src =
+        use_slot_points ? slot_points + lab * num_features
+                        : points + best_rows[lab] * num_features;
+    T* dst = reduced_points + out * num_features;
+    for (int64_t f = 0; f < num_features; ++f) {
+      dst[f] = src[f];
+    }
+    ++out;
+  }
+}
+
 }  // namespace
 
 void launch_find_max_label(const int64_t* labels, int64_t n,
@@ -349,6 +374,16 @@ void launch_compact_and_gather(const int64_t* best_rows,
       best_rows, detection_idx, n_slots, idx_cols, rep_idx);
 }
 
+template <typename T>
+void launch_compact_points(const int64_t* best_rows, const T* points,
+                           const T* slot_points, int64_t n_slots,
+                           int64_t num_features, bool use_slot_points,
+                           T* reduced_points, cudaStream_t stream) {
+  compact_points_kernel<T><<<1, 1, 0, stream>>>(
+      best_rows, points, slot_points, n_slots, num_features, use_slot_points,
+      reduced_points);
+}
+
 template void launch_init_t_zero<float>(float*, int64_t, cudaStream_t);
 template void launch_init_t_zero<double>(double*, int64_t, cudaStream_t);
 
@@ -370,5 +405,12 @@ template void launch_medoid_select<double>(const int64_t*, const double*,
                                            int64_t, int64_t, int64_t,
                                            cuda_u64*, int64_t*,
                                            cudaStream_t);
+
+template void launch_compact_points<float>(
+    const int64_t*, const float*, const float*, int64_t, int64_t, bool, float*,
+    cudaStream_t);
+template void launch_compact_points<double>(
+    const int64_t*, const double*, const double*, int64_t, int64_t, bool,
+    double*, cudaStream_t);
 
 }  // namespace holoscan::radar::detail

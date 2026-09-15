@@ -110,7 +110,8 @@ PYBIND11_MODULE(_radar_common, m) {
   py::enum_<RepresentativePolicy>(m, "RepresentativePolicy")
       .value("PEAK", RepresentativePolicy::kPeak)
       .value("MEDOID", RepresentativePolicy::kMedoid)
-      .value("FIRST", RepresentativePolicy::kFirst);
+      .value("FIRST", RepresentativePolicy::kFirst)
+      .value("WEIGHTED_MEAN", RepresentativePolicy::kWeightedMean);
 
   py::enum_<ScoreMethod>(m, "ScoreMethod")
       .value("WEIGHTED_SUM", ScoreMethod::kWeightedSum)

@@ -37,7 +37,7 @@ from utils.perf_runner import (
     fill_compute_row,
     make_run_plan,
 )
-from utils.perf_sink import PerfTerminalSinkOp  # noqa: E402
+from utils.perf_sink import PerfTerminalSinkOp, make_null_sink  # noqa: E402
 from utils.perf_source import PerfOverrideSourceOp  # noqa: E402
 from utils.tensor_factory import single_map  # noqa: E402
 
@@ -102,6 +102,7 @@ ALL_POLICIES = (
     RepresentativePolicy.FIRST,
     RepresentativePolicy.PEAK,
     RepresentativePolicy.MEDOID,
+    RepresentativePolicy.WEIGHTED_MEAN,
 )
 
 
@@ -234,6 +235,8 @@ def _run_graph(
 
             term = PerfTerminalSinkOp(self, collector=collector, name="rep_sink")
             self.add_flow(op, term, {("rep_idx", "input")})
+            reduced = make_null_sink(self, "reduced_points_sink")
+            self.add_flow(op, reduced, {("reduced_points", "input")})
 
             if scen.override_kind == OverrideKind.REPRESENTATIVE:
                 ovr = PerfOverrideSourceOp(
@@ -293,7 +296,10 @@ def _fill_throughput(row: ResultRow, scen: RedScenario) -> None:
     # peak/medoid).
     points_bytes = n * float(scen.num_features) * tsz
     rep_bytes = float(scen.num_clusters) * 2.0 * 8.0
-    row.estimated_effective_gbps = (labels_bytes + idx_bytes + points_bytes + rep_bytes) / sec / 1e9
+    reduced_bytes = float(scen.num_clusters * scen.num_features) * tsz
+    row.estimated_effective_gbps = (
+        (labels_bytes + idx_bytes + points_bytes + rep_bytes + reduced_bytes) / sec / 1e9
+    )
 
 
 def _base_row(scen: RedScenario) -> ResultRow:

@@ -63,7 +63,8 @@ void bind_detection_reduction(py::module_& m, const char* class_name) {
 
   py::class_<Op, PyOp, Operator, std::shared_ptr<Op>>(
       m, class_name,
-      "Reduces each cluster to one representative detection cell.\n\n"
+      "Reduces each cluster to a real representative cell and optional "
+      "reduced feature row.\n\n"
       "Parameters\n----------\n"
       "fragment : holoscan.core.Fragment\n"
       "representative : RepresentativePolicy, optional\n"

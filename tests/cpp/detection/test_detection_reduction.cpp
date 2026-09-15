@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -44,12 +45,15 @@ namespace {
 
 using holoscan::radar::DetectionReductionOp;
 using holoscan::radar::DetectionReductionParams;
+using holoscan::radar::MaxTensorExtents;
 using holoscan::radar::RepresentativePolicy;
 using holoscan::radar::ScoreMethod;
 using holoscan::radar::real_dtype;
+using holoscan::radar::testing::DualIOGraphRunResult;
 using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
 using holoscan::radar::testing::run_dual_in_single_out_operator_graph_result;
+using holoscan::radar::testing::run_triple_in_dual_out_operator_graph_result;
 using holoscan::radar::testing::run_triple_in_single_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 
@@ -87,6 +91,17 @@ void wire_reduction_without_points(holoscan::Graph& graph,
   graph.add_flow(op->rep_idx, sink->in, q);
 }
 
+template <typename Source, typename OpRef, typename Sink>
+void wire_reduction_dual_output(holoscan::Graph& graph, const Source& source,
+                                OpRef& op, const Sink& sink) {
+  const holoscan::ConnectionOptions q{.queue_depth = 4U};
+  graph.add_flow(source->out0, op->labels, q);
+  graph.add_flow(source->out1, op->detection_idx, q);
+  graph.add_flow(source->out2, op->points, q);
+  graph.add_flow(op->rep_idx, sink->in0, q);
+  graph.add_flow(op->reduced_points, sink->in1, q);
+}
+
 template <typename T>
 GraphRunResult run_reduction_result(
     std::shared_ptr<holoscan::Tensor> labels,
@@ -108,7 +123,9 @@ GraphRunResult run_reduction_result(
         [](holoscan::Graph& graph, const auto& source, auto& op,
            const auto& sink) {
           wire_reduction_without_points(graph, source, op, sink);
-        });
+        },
+        holoscan::radar::testing::default_test_extents(),
+        {"reduced_points"});
   }
   return run_triple_in_single_out_operator_graph_result<
       DetectionReductionOp<T>>(
@@ -117,7 +134,9 @@ GraphRunResult run_reduction_result(
       [](holoscan::Graph& graph, const auto& source, auto& op,
          const auto& sink) {
         wire_reduction_with_points(graph, source, op, sink);
-      });
+      },
+      holoscan::radar::testing::default_test_extents(),
+      {"reduced_points"});
 }
 
 template <typename T>
@@ -148,7 +167,59 @@ HostTensor run_reduction(std::shared_ptr<holoscan::Tensor> labels,
   return std::move(result.frames.front());
 }
 
+template <typename T>
+DualIOGraphRunResult run_reduction_dual_result(
+    std::shared_ptr<holoscan::Tensor> labels,
+    std::shared_ptr<holoscan::Tensor> detection_idx,
+    std::shared_ptr<holoscan::Tensor> points,
+    DetectionReductionParams params) {
+  return run_triple_in_dual_out_operator_graph_result<
+      DetectionReductionOp<T>>(
+      {std::move(labels)}, {std::move(detection_idx)}, {std::move(points)},
+      std::move(params), "rep_idx", "reduced_points",
+      [](holoscan::Graph& graph, const auto& source, auto& op,
+         const auto& sink) {
+        wire_reduction_dual_output(graph, source, op, sink);
+      });
+}
+
+template <typename T>
+std::pair<HostTensor, HostTensor> run_reduction_dual(
+    std::shared_ptr<holoscan::Tensor> labels,
+    std::shared_ptr<holoscan::Tensor> detection_idx,
+    std::shared_ptr<holoscan::Tensor> points,
+    DetectionReductionParams params) {
+  DualIOGraphRunResult result = run_reduction_dual_result<T>(
+      std::move(labels), std::move(detection_idx), std::move(points),
+      std::move(params));
+  if (!result.plan_ok) {
+    throw std::runtime_error(std::string("compile failed: ") +
+                             result.plan_json);
+  }
+  if (!result.diagnostics.empty()) {
+    std::string message = "run diagnostics:";
+    for (const auto& diagnostic : result.diagnostics) {
+      message += " ";
+      message += diagnostic;
+    }
+    throw std::runtime_error(message);
+  }
+  if (result.frames0.size() != 1U || result.frames1.size() != 1U) {
+    throw std::runtime_error(
+        "DetectionReductionOp test: expected one frame on each output");
+  }
+  return {std::move(result.frames0.front()),
+          std::move(result.frames1.front())};
+}
+
 // ---------------------------------------------------------------------------
+
+TEST(DetectionReductionOpTest, RequiresMaxFeaturesForReducedPointsPool) {
+  MaxTensorExtents extents;
+  extents.max_clusters = 4;
+  EXPECT_THROW((DetectionReductionOp<float>{extents}),
+               std::invalid_argument);
+}
 
 TEST(DetectionReductionOpTest, FirstSelectsLowestIndexPerCluster) {
   // rows: 0→cluster0, 1→cluster1, 2→cluster0, 3→noise
@@ -428,6 +499,160 @@ TEST(DetectionReductionOpTest, MedoidEqualDistancePicksLowestIndex) {
   EXPECT_EQ(rep.as<int64_t>()[1], 1);
 }
 
+TEST(DetectionReductionOpTest, WeightedMeanUsesScoreAndNearestRealIndex) {
+  std::vector<int64_t> labels = {0, 0, 0};
+  std::vector<int64_t> idx = {0, 0, 4, 0, 10, 0};
+  // Feature columns are (value, score). Row weights are 1, 2, 1.
+  std::vector<float> points = {10.0F, 1.0F, 20.0F, 2.0F, 40.0F, 1.0F};
+  auto lab_t = to_device_tensor(labels, {3}, kInt64);
+  auto idx_t = to_device_tensor(idx, {3, 2}, kInt64);
+  auto pts_t = to_device_tensor(points, {3, 2}, real_dtype<float>());
+  const auto [rep, reduced] = run_reduction_dual<float>(
+      lab_t, idx_t, pts_t,
+      make_params(RepresentativePolicy::kWeightedMean,
+                  ScoreMethod::kWeightedSum, {0.0, 1.0}));
+
+  ASSERT_EQ(rep.shape, (std::vector<int64_t>{1, 2}));
+  EXPECT_EQ(rep.as<int64_t>()[0], 4);
+  EXPECT_EQ(rep.as<int64_t>()[1], 0);
+  ASSERT_EQ(reduced.shape, (std::vector<int64_t>{1, 2}));
+  EXPECT_NEAR(reduced.as<float>()[0], 22.5F, 1.0e-5F);
+  EXPECT_NEAR(reduced.as<float>()[1], 1.5F, 1.0e-5F);
+}
+
+TEST(DetectionReductionOpTest, WeightedMeanEmptyWeightsMeansUniformMean) {
+  std::vector<int64_t> labels = {0, 0};
+  std::vector<int64_t> idx = {0, 0, 2, 2};
+  std::vector<double> points = {2.0, 4.0, 6.0, 8.0};
+  auto lab_t = to_device_tensor(labels, {2}, kInt64);
+  auto idx_t = to_device_tensor(idx, {2, 2}, kInt64);
+  auto pts_t = to_device_tensor(points, {2, 2}, real_dtype<double>());
+  const auto [rep, reduced] = run_reduction_dual<double>(
+      lab_t, idx_t, pts_t,
+      make_params(RepresentativePolicy::kWeightedMean));
+
+  EXPECT_EQ(rep.as<int64_t>()[0], 0);
+  EXPECT_EQ(rep.as<int64_t>()[1], 0);
+  EXPECT_DOUBLE_EQ(reduced.as<double>()[0], 4.0);
+  EXPECT_DOUBLE_EQ(reduced.as<double>()[1], 6.0);
+}
+
+TEST(DetectionReductionOpTest, WeightedMeanNearestUsesAllIndexColumnsAndTies) {
+  std::vector<int64_t> labels = {0, 0, 0};
+  std::vector<int64_t> idx = {0, 100, 2, 0, 4, 100};
+  std::vector<float> points = {1.0F, 2.0F, 3.0F};
+  auto lab_t = to_device_tensor(labels, {3}, kInt64);
+  auto idx_t = to_device_tensor(idx, {3, 2}, kInt64);
+  auto pts_t = to_device_tensor(points, {3, 1}, real_dtype<float>());
+  const auto [rep, reduced] = run_reduction_dual<float>(
+      lab_t, idx_t, pts_t,
+      make_params(RepresentativePolicy::kWeightedMean));
+
+  // Rows 0 and 2 tie nearest the (2, 66.67) index centroid. Lowest input row
+  // wins; using only the first coordinate would incorrectly choose row 1.
+  EXPECT_EQ(rep.as<int64_t>()[0], 0);
+  EXPECT_EQ(rep.as<int64_t>()[1], 100);
+  EXPECT_FLOAT_EQ(reduced.as<float>()[0], 2.0F);
+}
+
+TEST(DetectionReductionOpTest, MemberPoliciesGatherReducedPoints) {
+  std::vector<int64_t> labels = {0, 0};
+  std::vector<int64_t> idx = {3, 4, 5, 6};
+  std::vector<float> points = {1.0F, 2.0F, 7.0F, 8.0F};
+  auto lab_t = to_device_tensor(labels, {2}, kInt64);
+  auto idx_t = to_device_tensor(idx, {2, 2}, kInt64);
+  auto pts_t = to_device_tensor(points, {2, 2}, real_dtype<float>());
+  const auto [rep, reduced] = run_reduction_dual<float>(
+      lab_t, idx_t, pts_t,
+      make_params(RepresentativePolicy::kPeak,
+                  ScoreMethod::kWeightedSum, {1.0, 0.0}));
+
+  EXPECT_EQ(rep.as<int64_t>()[0], 5);
+  EXPECT_EQ(rep.as<int64_t>()[1], 6);
+  EXPECT_FLOAT_EQ(reduced.as<float>()[0], 7.0F);
+  EXPECT_FLOAT_EQ(reduced.as<float>()[1], 8.0F);
+}
+
+TEST(DetectionReductionOpTest, WeightedMeanRejectsInvalidRowWeights) {
+  for (const float score :
+       {-1.0F, 0.0F, std::numeric_limits<float>::infinity()}) {
+    std::vector<int64_t> labels = {0};
+    std::vector<int64_t> idx = {0, 0};
+    std::vector<float> points = {1.0F, score};
+    auto lab_t = to_device_tensor(labels, {1}, kInt64);
+    auto idx_t = to_device_tensor(idx, {1, 2}, kInt64);
+    auto pts_t = to_device_tensor(points, {1, 2}, real_dtype<float>());
+    const GraphRunResult result = run_reduction_result<float>(
+        lab_t, idx_t, pts_t,
+        make_params(RepresentativePolicy::kWeightedMean,
+                    ScoreMethod::kWeightedSum, {0.0, 1.0}));
+    EXPECT_TRUE(result.plan_ok);
+    EXPECT_FALSE(result.diagnostics.empty());
+  }
+}
+
+TEST(DetectionReductionOpTest, ReducedPointsCompactSparseLabelsInOrder) {
+  std::vector<int64_t> labels = {2, 0};
+  std::vector<int64_t> idx = {20, 2, 10, 1};
+  std::vector<float> points = {20.0F, 2.0F, 10.0F, 1.0F};
+  auto lab_t = to_device_tensor(labels, {2}, kInt64);
+  auto idx_t = to_device_tensor(idx, {2, 2}, kInt64);
+  auto pts_t = to_device_tensor(points, {2, 2}, real_dtype<float>());
+  const auto [rep, reduced] = run_reduction_dual<float>(
+      lab_t, idx_t, pts_t,
+      make_params(RepresentativePolicy::kFirst));
+
+  ASSERT_EQ(rep.shape[0], 2);
+  ASSERT_EQ(reduced.shape, (std::vector<int64_t>{2, 2}));
+  EXPECT_FLOAT_EQ(reduced.as<float>()[0], 10.0F);
+  EXPECT_FLOAT_EQ(reduced.as<float>()[1], 1.0F);
+  EXPECT_FLOAT_EQ(reduced.as<float>()[2], 20.0F);
+  EXPECT_FLOAT_EQ(reduced.as<float>()[3], 2.0F);
+}
+
+TEST(DetectionReductionOpTest, EmptyWeightedMeanEmitsBothZeroRowOutputs) {
+  std::vector<int64_t> labels;
+  std::vector<int64_t> idx;
+  std::vector<float> points;
+  auto lab_t = to_device_tensor(labels, {0}, kInt64);
+  auto idx_t = to_device_tensor(idx, {0, 2}, kInt64);
+  auto pts_t = to_device_tensor(points, {0, 2}, real_dtype<float>());
+  const auto [rep, reduced] = run_reduction_dual<float>(
+      lab_t, idx_t, pts_t,
+      make_params(RepresentativePolicy::kWeightedMean));
+
+  EXPECT_EQ(rep.shape, (std::vector<int64_t>{0, 2}));
+  EXPECT_EQ(reduced.shape, (std::vector<int64_t>{0, 2}));
+}
+
+TEST(DetectionReductionOpTest, FloatDoubleAgreeOnWeightedMean) {
+  const std::vector<int64_t> labels = {0, 0};
+  const std::vector<int64_t> idx = {0, 0, 4, 2};
+  auto lab_f = to_device_tensor(labels, {2}, kInt64);
+  auto lab_d = to_device_tensor(labels, {2}, kInt64);
+  auto idx_f = to_device_tensor(idx, {2, 2}, kInt64);
+  auto idx_d = to_device_tensor(idx, {2, 2}, kInt64);
+  auto pts_f = to_device_tensor(
+      std::vector<float>{2.0F, 1.0F, 6.0F, 3.0F}, {2, 2},
+      real_dtype<float>());
+  auto pts_d = to_device_tensor(
+      std::vector<double>{2.0, 1.0, 6.0, 3.0}, {2, 2},
+      real_dtype<double>());
+  const auto [rep_f, reduced_f] = run_reduction_dual<float>(
+      lab_f, idx_f, pts_f,
+      make_params(RepresentativePolicy::kWeightedMean,
+                  ScoreMethod::kWeightedSum, {0.0, 1.0}));
+  const auto [rep_d, reduced_d] = run_reduction_dual<double>(
+      lab_d, idx_d, pts_d,
+      make_params(RepresentativePolicy::kWeightedMean,
+                  ScoreMethod::kWeightedSum, {0.0, 1.0}));
+
+  EXPECT_EQ(rep_f.as<int64_t>()[0], rep_d.as<int64_t>()[0]);
+  EXPECT_EQ(rep_f.as<int64_t>()[1], rep_d.as<int64_t>()[1]);
+  EXPECT_NEAR(reduced_f.as<float>()[0], reduced_d.as<double>()[0], 1.0e-6);
+  EXPECT_NEAR(reduced_f.as<float>()[1], reduced_d.as<double>()[1], 1.0e-6);
+}
+
 TEST(DetectionReductionOpTest, CustomScoreMethodIgnoredForFirst) {
   // score_method is unused for first — custom must not require ScoreFn.
   std::vector<int64_t> labels = {0, 0};
@@ -685,6 +910,8 @@ GraphRunResult run_weights_override_graph(
   holoscan::CompileOptions options;
   holoscan::radar::testing::detail::bind_triple_in_single_out_device_pools(
       options, "rep_idx");
+  holoscan::radar::testing::detail::bind_op_device_output(
+      options, "reduced_points");
   try {
     const holoscan::ExecutionPlan plan =
         holoscan::compile(graph, std::move(options));
@@ -854,6 +1081,23 @@ TEST(DetectionReductionOpTest, LiveRepresentativeAppliesForOneTick) {
   ASSERT_TRUE(out.diagnostics.empty());
   ASSERT_EQ(out.frames.size(), 3U);
   // Params `first` on the silent ticks either side of the `peak` override.
+  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 10);
+  EXPECT_EQ(out.frames[1].as<int64_t>()[0], 20);
+  EXPECT_EQ(out.frames[2].as<int64_t>()[0], 10);
+}
+
+TEST(DetectionReductionOpTest, LiveWeightedMeanAppliesForOneTick) {
+  auto params = make_params(RepresentativePolicy::kFirst,
+                            ScoreMethod::kWeightedSum, {1.0, 0.0});
+  const auto out = run_weights_override_graph(
+      {make_representative_tick(std::nullopt),
+       make_representative_tick(RepresentativePolicy::kWeightedMean),
+       make_representative_tick(std::nullopt)},
+      std::move(params));
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 3U);
   EXPECT_EQ(out.frames[0].as<int64_t>()[0], 10);
   EXPECT_EQ(out.frames[1].as<int64_t>()[0], 20);
   EXPECT_EQ(out.frames[2].as<int64_t>()[0], 10);

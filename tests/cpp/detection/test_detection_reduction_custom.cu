@@ -74,7 +74,9 @@ TEST(DetectionReductionOpCustomTest, CustomScoreFnSelectsPeak) {
             graph.add_flow(source->out1, op->detection_idx, q);
             graph.add_flow(source->out2, op->points, q);
             graph.add_flow(op->rep_idx, sink->in, q);
-          });
+          },
+          holoscan::radar::testing::default_test_extents(),
+          {"reduced_points"});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
