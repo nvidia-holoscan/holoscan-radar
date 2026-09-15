@@ -9,8 +9,9 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.2.0",
+        "version": "0.3.0",
         "changelog": {
+            "0.3.0": "Allow standalone method none as a materialized pass-through",
             "0.2.0": "HSDK 5 EA port: Operator<Params>, typed Tensor ports, range_profiles_out rename",
             "0.1.0": "Initial Release"
         },

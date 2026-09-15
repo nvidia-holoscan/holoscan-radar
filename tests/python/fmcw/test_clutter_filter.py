@@ -361,10 +361,19 @@ def test_LiveMethodOverrideAppliesPerTick():
 # ---------------------------------------------------------------------------
 
 
-def test_RejectsMethodNone():
-    tone = doppler_tone(K_CHIRPS, K_BINS, 0.19)
-    with pytest.raises(ValueError, match="none"):
-        _run_single(tone, (K_CHIRPS, K_BINS), ClutterFilterMethod.NONE)
+@pytest.mark.parametrize(
+    ("dtype", "op_cls"),
+    [(np.complex64, ClutterFilterOpF32), (np.complex128, ClutterFilterOpF64)],
+)
+def test_MethodNonePassesThrough(dtype, op_cls):
+    tone = doppler_tone(K_CHIRPS, K_BINS, 0.19, dtype=dtype)
+    output = _run_single(
+        tone,
+        (K_CHIRPS, K_BINS),
+        ClutterFilterMethod.NONE,
+        op_cls=op_cls,
+    )
+    np.testing.assert_array_equal(output, tone)
 
 
 def test_RejectsRealInput():

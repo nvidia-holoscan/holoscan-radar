@@ -26,16 +26,14 @@
 namespace holoscan::radar::detail {
 
 // Kernel-facing knobs for one tick. method is always a concrete enum (no
-// Params sentinel). kNone is a fused-only pass-through; the standalone
-// operator rejects it in resolve_params before calling the stage.
-// run_clutter_stage still takes the enum so the fused operator can pass
-// its clutter_filter field without a second wrapper.
+// Params sentinel). kNone is a pass-through for both standalone and fused
+// execution.
 struct ClutterStageConfig {
   ClutterFilterMethod method{ClutterFilterMethod::kMeanSubtraction};
 };
 
 // Output chirp count for a method, per the locked contract. kNone passes
-// through unchanged (fused operator's inline stage only).
+// through unchanged.
 inline int64_t clutter_num_chirps_out(ClutterFilterMethod method,
                                       int64_t num_chirps) {
   switch (method) {
@@ -54,7 +52,7 @@ inline int64_t clutter_num_chirps_out(ClutterFilterMethod method,
 // rank-3 MatX operator, (batch, num_chirps, num_range_bins),
 // cuda::std::complex — and invoke fn(expr). The expression's chirp axis has
 // clutter_num_chirps_out(method, num_chirps) elements. kNone invokes fn(in)
-// directly (zero added kernels). Single source of the clutter math for both
+// directly. Single source of the clutter math for both
 // the split ClutterFilterOp (materialized below) and the fused operator's
 // Doppler pre-FFT expression.
 //
@@ -62,7 +60,7 @@ inline int64_t clutter_num_chirps_out(ClutterFilterMethod method,
 //   kMeanSubtraction — subtract the per-(batch, range-bin) slow-time mean.
 //   kSingleDelay     — first difference  x[k+1] - x[k]        (1st-order MTI)
 //   kDoubleDelay     — x[k] - 2 x[k+1] + x[k+2]               (2nd-order MTI)
-//   kNone            — pass through (fused inline stage only).
+//   kNone            — pass through.
 //
 // Throws std::invalid_argument when num_chirps is too small for the
 // selected method (single_delay needs >= 2, double_delay needs >= 3).

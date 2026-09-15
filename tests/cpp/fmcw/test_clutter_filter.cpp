@@ -334,15 +334,35 @@ TEST(ClutterFilterOpTest, LiveMethodRevertsToParamsAfterMiss) {
   EXPECT_EQ(out.frames[1].shape, (std::vector<int64_t>{kChirps, kBins}));
 }
 
-TEST(ClutterFilterOpTest, RejectsMethodNone) {
+TEST(ClutterFilterOpTest, LiveMethodNonePassesThroughForOneTick) {
   const auto tone = doppler_tone<float>(kChirps, kBins, 0.19);
-  const GraphRunResult result =
-      run_operator_graph_result<ClutterFilterOp<float>>(
-          {to_device_tensor(tone, {kChirps, kBins}, complex_dtype<float>())},
-          ClutterFilterParams{.method = ClutterFilterMethod::kNone});
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const GraphRunResult out =
+      run_method_override({ClutterFilterMethod::kNone});
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 1U);
+  const auto* actual = out.frames[0].as<std::complex<float>>();
+  for (std::size_t index = 0; index < tone.size(); ++index) {
+    EXPECT_EQ(actual[index], tone[index]);
+  }
+}
+
+template <typename T>
+void expect_none_passes_through() {
+  const auto tone = doppler_tone<T>(kChirps, kBins, 0.19);
+  const HostTensor output =
+      run_single<T>(tone, {kChirps, kBins}, ClutterFilterMethod::kNone);
+  EXPECT_EQ(output.shape, (std::vector<int64_t>{kChirps, kBins}));
+  const auto* actual = output.as<std::complex<T>>();
+  for (std::size_t index = 0; index < tone.size(); ++index) {
+    EXPECT_EQ(actual[index], tone[index]);
+  }
+}
+
+TEST(ClutterFilterOpTest, MethodNonePassesThroughFloatAndDouble) {
+  expect_none_passes_through<float>();
+  expect_none_passes_through<double>();
 }
 
 TEST(ClutterFilterOpTest, RejectsRealInput) {

@@ -1,6 +1,6 @@
 # `ClutterFilterOp`
 
-Slow-time static-clutter / zero-Doppler suppression on range profiles, between range compression and the Doppler FFT. It nulls DC-across-chirps (`mean_subtraction`, no chirp loss) or applies a 1st/2nd-order MTI delay canceller (`single_delay` / `double_delay`, dropping 1–2 chirps). Switching method mid-stream is allowed: `num_chirps_out` follows the method and the downstream Doppler stage re-infers it. **[EA HSDK5 ONLY]** the physical output port is `range_profiles_out` (HSDK 5 unique in/out names).
+Slow-time static-clutter / zero-Doppler suppression on range profiles, between range compression and the Doppler FFT. It can pass through unchanged (`none`), null DC across chirps (`mean_subtraction`, no chirp loss), or apply a 1st/2nd-order MTI delay canceller (`single_delay` / `double_delay`, dropping 1–2 chirps). Switching method mid-stream is allowed: `num_chirps_out` follows the method and the downstream Doppler stage re-infers it. **[EA HSDK5 ONLY]** the physical output port is `range_profiles_out` (HSDK 5 unique in/out names).
 
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
@@ -19,14 +19,14 @@ group: [`operators/fmcw/README.md`](../README.md)
 
 ## Algorithm
 
-All math lives in `clutter_stage.hpp` (`with_clutter_expr`). `compute()` is a thin Holoscan shell; tick helpers stay in the `.cu` anonymous namespace. It receives the cube, classifies dtype and named-axis shape (`collapse_named_tx_rx_batch`), merges this tick's Exact match onto pinned Params (`resolve_params` → `ClutterStageConfig`; standalone `none` is rejected here), and binds that config to this input (`build_clutter_stage_plan` → `ClutterStagePlan` with `chirps_out`). Required `range_profiles_out` is the only published tensor (`emit_device_tensor`). There is no latched optional axis. The fused operator composes the same expression into the Doppler pre-FFT pass (no extra cube write), which is why split-vs-fused parity is at expression granularity.
+All math lives in `clutter_stage.hpp` (`with_clutter_expr`). `compute()` is a thin Holoscan shell; tick helpers stay in the `.cu` anonymous namespace. It receives the cube, classifies dtype and named-axis shape (`collapse_named_tx_rx_batch`), merges this tick's Exact match onto pinned Params (`resolve_params` → `ClutterStageConfig`), and binds that config to this input (`build_clutter_stage_plan` → `ClutterStagePlan` with `chirps_out`). Required `range_profiles_out` is the only published tensor (`emit_device_tensor`). There is no latched optional axis. The fused operator composes the same expression into the Doppler pre-FFT pass (no extra cube write), which is why split-vs-fused parity is at expression granularity.
 
-`method` selects one of three kernels (plus `none`, which this standalone operator rejects):
+`method` selects one of three filters plus pass-through:
 
 - **`mean_subtraction`.** Subtract the per-(batch, range-bin) slow-time mean, broadcast back over chirps. Shape preserved: `out = in − clone(mean(in, {1}), {keep, num_chirps, keep})`. Nulls zero-Doppler; a moving tone is kept.
 - **`single_delay`.** First-order MTI: `out[k] = in[k+1] − in[k]` for `k ∈ [0, num_chirps−1)`. `num_chirps_out = num_chirps − 1`. Needs `num_chirps ≥ 2`.
 - **`double_delay`.** Second-order MTI: `out[k] = in[k] − 2·in[k+1] + in[k+2]` for `k ∈ [0, num_chirps−2)`. `num_chirps_out = num_chirps − 2`. Needs `num_chirps ≥ 3`.
-- **`none`.** Pass-through in `with_clutter_expr` (fused inline stage only). Standalone `resolve_params` returns `ClutterFilterOp: method 'none' is not supported by the standalone operator (it exists only for the fused operator's inline clutter stage); use one of {mean_subtraction, single_delay, double_delay}`.
+- **`none`.** Identity expression in `with_clutter_expr`. The standalone operator materializes it into its output pool; the fused operator keeps it inline without an intermediate cube.
 
 Stateless: no FFT plan, no coefficient cache. Work is enqueued on the compute stream with no synchronization.
 
@@ -45,9 +45,9 @@ Stateless: no FFT plan, no coefficient cache. Work is enqueued on the compute st
 
 | Parameter | Type | Default | Override | Cost | Meaning |
 | --- | --- | --- | --- | --- | --- |
-| `method` | `ClutterFilterMethod` {`mean_subtraction`, `single_delay`, `double_delay`} | `mean_subtraction` | `[live]` Exact | None (stateless). Shape-changing when a delay canceller is selected | Slow-time clutter suppression. `none` is rejected here |
+| `method` | `ClutterFilterMethod` {`none`, `mean_subtraction`, `single_delay`, `double_delay`} | `mean_subtraction` | `[live]` Exact | None (stateless). Shape-changing when a delay canceller is selected | Slow-time clutter suppression or materialized pass-through |
 
-YAML spelling is the canonical `to_string` form (`mean_subtraction`, `single_delay`, `double_delay`).
+YAML spelling is the canonical `to_string` form (`none`, `mean_subtraction`, `single_delay`, `double_delay`).
 
 There is no Params-only field (unlike range `propagation_speed`).
 

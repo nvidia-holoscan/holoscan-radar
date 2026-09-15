@@ -37,22 +37,13 @@ struct ClutterStagePlan {
   int64_t chirps_out;
 };
 
-// Merge the Exact [live] method onto pinned Params. kNone is illegal here
-// (fused inline pass-through only); there are no Params sentinels to map.
+// Merge the Exact [live] method onto pinned Params. There are no Params
+// sentinels to map.
 expected<detail::ClutterStageConfig, Error> resolve_params(
     Input<ClutterFilterMethod>& method_in,
     const ClutterFilterParams& pinned) {
   HOLOSCAN_TRY(auto method,
                resolve_live_override(method_in, pinned.method));
-  if (method == ClutterFilterMethod::kNone) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) +
-            ": method 'none' is not supported by the standalone "
-            "operator (it exists only for the fused operator's inline "
-            "clutter stage); use one of {mean_subtraction, single_delay, "
-            "double_delay}"});
-  }
   return detail::ClutterStageConfig{.method = method};
 }
 

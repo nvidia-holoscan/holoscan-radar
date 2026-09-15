@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gtest/gtest.h>
+
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -10,7 +12,6 @@
 #include <utility>
 #include <vector>
 
-#include <gtest/gtest.h>
 #include <holoscan/core/graph.hpp>
 
 #include "custom_ops.hpp"  // NOLINT(build/include_subdir)

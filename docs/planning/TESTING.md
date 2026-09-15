@@ -88,6 +88,7 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 
 #### ClutterFilterOp
 
+- `none` preserves shape and values exactly through the operator-owned output.
 - Zero-Doppler (DC-across-chirps) input → `mean_subtraction` nulls it (≈ 0 at those cells); a moving target is preserved.
 - `single_delay` / `double_delay`: output chirp count drops by 1 / 2; response is the binomial high-pass (DC notch).
 - Leading axes preserved.

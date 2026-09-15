@@ -50,10 +50,10 @@ HOLOSCAN_PARAM_SCHEMA(
     ClutterFilterParams,
     holoscan::param_schema("com.nvidia.holoscan.radar.ClutterFilterParams", 1),
     holoscan::field<&ClutterFilterParams::method>("method").description(
-        "Slow-time clutter suppression {mean_subtraction, single_delay, "
-        "double_delay}: mean_subtraction nulls zero-Doppler with no chirp "
-        "loss; the delay cancellers are 1st/2nd-order MTI high-pass filters "
-        "and drop 1-2 chirps."));
+        "Slow-time clutter suppression {none, mean_subtraction, single_delay, "
+        "double_delay}: none is pass-through; mean_subtraction nulls "
+        "zero-Doppler with no chirp loss; the delay cancellers are 1st/2nd-"
+        "order MTI high-pass filters and drop 1-2 chirps."));
 
 static_assert(holoscan::param_schema_availability<ClutterFilterParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
