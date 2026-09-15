@@ -124,6 +124,19 @@ int main(int argc, char** argv) {
             "feature_assembly", extents, std::move(feature_config));
         bind_outputs(options, "feature_assembly", {"points"});
 
+        // Row-aligned reduction features add CFAR score without changing the
+        // four-dimensional DBSCAN metric.
+        std::vector<radar::AssemblyFeature> reduction_feature_config{
+            radar::AssemblyFeature::kRange,
+            radar::AssemblyFeature::kVelocity,
+            radar::AssemblyFeature::kAz,
+            radar::AssemblyFeature::kEl,
+            radar::AssemblyFeature::kScore};
+        auto reduction_features = graph.op<radar::FeatureAssemblyOp<float>>(
+            "reduction_feature_assembly", extents,
+            std::move(reduction_feature_config));
+        bind_outputs(options, "reduction_feature_assembly", {"points"});
+
         // Detection clustering.
         auto cluster = graph.op<radar::ClusterDBSCANOp<float>>(
             "cluster_dbscan", extents);
@@ -134,7 +147,8 @@ int main(int argc, char** argv) {
         auto reduction = graph.op<radar::DetectionReductionOp<float>>(
             "detection_reduction", extents);
         reduction.set_params(cfg.reduction_params);
-        bind_outputs(options, "detection_reduction", {"rep_idx"});
+        bind_outputs(options, "detection_reduction",
+                     {"rep_idx", "reduced_points"});
 
         // Final log report.
         auto report = graph.op<app::ClusterReportOp>(
@@ -154,6 +168,7 @@ int main(int argc, char** argv) {
             .add(beamformer)
             .add(cfar)
             .add(features)
+            .add(reduction_features)
             .add(cluster)
             .add(reduction)
             .add(report);
@@ -176,13 +191,25 @@ int main(int argc, char** argv) {
         graph.add_flow(doppler->velocity_bins, features->velocity_bins, queue);
         graph.add_flow(beamformer->az_grid, features->az_angles, queue);
         graph.add_flow(beamformer->el_grid, features->el_angles, queue);
+        graph.add_flow(cfar->detection_idx,
+                       reduction_features->detection_idx, queue);
+        graph.add_flow(range->range_bins, reduction_features->range_bins,
+                       queue);
+        graph.add_flow(doppler->velocity_bins,
+                       reduction_features->velocity_bins, queue);
+        graph.add_flow(beamformer->az_grid, reduction_features->az_angles,
+                       queue);
+        graph.add_flow(beamformer->el_grid, reduction_features->el_angles,
+                       queue);
+        graph.add_flow(cfar->detection_score,
+                       reduction_features->detection_score, queue);
 
         // Cluster physical range, velocity, azimuth, and elevation features,
         // then choose one real detection cell per cluster.
         graph.add_flow(features->points, cluster->points, queue);
         graph.add_flow(cluster->labels, reduction->labels, queue);
         graph.add_flow(cfar->detection_idx, reduction->detection_idx, queue);
-        graph.add_flow(features->points, reduction->points, queue);
+        graph.add_flow(reduction_features->points, reduction->points, queue);
 
         // Report clustered detections with physical range/velocity axes.
         graph.add_flow(features->points, report->points, queue);

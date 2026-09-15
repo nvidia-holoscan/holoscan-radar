@@ -266,7 +266,8 @@ inline MaxTensorExtents make_extents(
   result.max_detections = max_points;
   result.max_items = max_points;
   result.max_points = max_points;
-  result.max_features = 4;
+  // Four spatial clustering features plus the reduction-only detection score.
+  result.max_features = 5;
   result.max_snapshots =
       gather == nullptr ? 1 : snapshot_count(gather->snapshot_window);
   result.max_az = num_az;

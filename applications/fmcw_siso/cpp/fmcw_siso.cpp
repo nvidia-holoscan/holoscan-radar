@@ -207,6 +207,7 @@ int main(int argc, char** argv) {
           bind_out(options, "cluster_dbscan", "labels");
           bind_out(options, "cluster_dbscan", "sizes");
           bind_out(options, "detection_reduction", "rep_idx");
+          bind_out(options, "detection_reduction", "reduced_points");
         }
 
         bind_out(options, "adc_source", "adc_cube");

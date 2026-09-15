@@ -1070,7 +1070,7 @@ application that actually declined one of those died on its *first* tick. It
 had gone unnoticed only because every app and test harness wires everything.
 
 `OPERATOR_API.md` now carries an **Optional output convention** giving each of
-the 27 optional outputs one of two dispositions, both of which absorb the
+the 28 optional outputs one of two dispositions, both of which absorb the
 failed emit so no unwired port can fail a run:
 
 - **`always`** (11 ports) — `(void)emit_prepared_tensor(...)`, silent. Used
@@ -1078,7 +1078,7 @@ failed emit so no unwired port can fail a run:
   stopping saves nothing (an `angle_spectrum` is the same scan-grid pass that
   yields `aoa_estimates`; a MUSIC `eigenvalues` re-exports the eig its own
   projector requires).
-- **`latched`** (16 ports) — a `LatchedOutput` in `radar_common/sdk/tensor_io.hpp`
+- **`latched`** (17 ports) — a `LatchedOutput` in `radar_common/sdk/tensor_io.hpp`
   warns once on the first failed emit and then skips everything done solely for
   that port. It latches only on `kFailure`, the code an unconsumed output
   reports, so a transient fault costs one frame rather than the whole run;

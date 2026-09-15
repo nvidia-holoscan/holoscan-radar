@@ -38,6 +38,7 @@ TEST(FmcwSimoConfig, DecodesDetectThenBeamformSmoke) {
   EXPECT_EQ(config.beamscan_params->array_geometry,
             config.array_geometry);
   EXPECT_EQ(config.extents.max_snapshots, 1);
+  EXPECT_EQ(config.extents.max_features, 5);
   EXPECT_EQ(config.extents.max_az, 5);
   EXPECT_EQ(config.extents.max_el, 5);
   EXPECT_EQ(config.reduction_params->representative,
@@ -68,10 +69,16 @@ TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
       simo::load_beamform_then_detect_config(config_path("default.yaml"));
 
   EXPECT_EQ(detect.num_frames, 250);
-  EXPECT_EQ(detect.scene.targets.size(), 1U);
+  EXPECT_EQ(detect.scene.targets.size(), 5U);
   EXPECT_EQ(detect.extents.max_az, 13);
   EXPECT_EQ(beamform.extents.max_el, 13);
   EXPECT_EQ(beamform.dbscan_params->min_points, 2);
+  EXPECT_EQ(detect.reduction_params->representative,
+            holoscan::radar::RepresentativePolicy::kWeightedMean);
+  EXPECT_EQ(detect.reduction_params->feature_weights,
+            (std::vector<double>{0.0, 0.0, 0.0, 0.0, 1.0}));
+  EXPECT_EQ(detect.dbscan_params->epsilon.size(), 4U);
+  EXPECT_EQ(detect.extents.max_features, 5);
   EXPECT_TRUE(detect.visualize);
   EXPECT_DOUBLE_EQ(detect.visualization.dynamic_range_db, 60.0);
   EXPECT_DOUBLE_EQ(detect.visualization.detection_radius, 0.010);

@@ -88,7 +88,7 @@ All five share one **pluggable sparse-slot contract** (input `snapshot`, output 
 
 SISO has no angle stage, so clustering there is simply an optional trailing stage over the range-Doppler detections.
 
-In every case `ClusterDBSCANOp` consumes a homogeneous float feature matrix (`ClusterDBSCANOp.points`) assembled from detection attributes by `FeatureAssemblyOp` (the bin→physical mapping + `detection_score` gather). The feature set, the representative-selection policy, and the snapshot gather are all locked operators now (`FeatureAssemblyOp`, `DetectionReductionOp`, `SnapshotGatherOp`); see the operator API doc.
+In every case `ClusterDBSCANOp` consumes a homogeneous float feature matrix (`ClusterDBSCANOp.points`) assembled from detection attributes by `FeatureAssemblyOp`. A reduction consumer may use a separate row-aligned superset — for example `[range, velocity, azimuth, elevation, detection_score]` for score-weighted means — without adding the score column to the clustering metric. `DetectionReductionOp.reduced_points` exposes selected or synthetic per-cluster features while `rep_idx` remains a real cell for snapshot gathering. The feature set, representative policy, and snapshot gather are locked operators (`FeatureAssemblyOp`, `DetectionReductionOp`, `SnapshotGatherOp`); see the operator API doc.
 
 ---
 

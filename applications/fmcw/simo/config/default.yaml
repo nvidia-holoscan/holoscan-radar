@@ -68,8 +68,9 @@ detect_then_beamform:
     min_points: 1
     max_clusters: 32
   reduction: &reduction
-    representative: medoid
-    feature_weights: [0.3333, 0.5, 20.0, 20.0]
+    representative: weighted_mean
+    score_method: weighted_sum
+    feature_weights: [0.0, 0.0, 0.0, 0.0, 1.0]
 
 beamform_then_detect:
   phase_shift_beamformer:
