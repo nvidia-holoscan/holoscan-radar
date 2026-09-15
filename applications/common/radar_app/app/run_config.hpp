@@ -28,7 +28,7 @@ struct CommonRunConfig {
     int64_t window_height{720};
   } viz;
 
-  bool peak_only{false};
+  bool use_cfar_peaks{false};
 
   struct PlotsConfig {
     bool enable{true};

@@ -64,6 +64,21 @@ inline CfarPeakNeighborhood parse_peak_neighborhood(const std::string& text) {
       "' (accepted: cross4, square8)");
 }
 
+inline CfarPeakMode parse_peak_mode(const std::string& text) {
+  if (text == "none") {
+    return CfarPeakMode::kNone;
+  }
+  if (text == "range_doppler") {
+    return CfarPeakMode::kRangeDoppler;
+  }
+  if (text == "all") {
+    return CfarPeakMode::kAll;
+  }
+  throw std::invalid_argument(
+      "peak_mode: unknown value '" + text +
+      "' (accepted: none, range_doppler, all)");
+}
+
 inline void load_range_params(const YAML::Node& node,
                               FMCWRangeProcessorParams* p) {
   if (!node || node.IsNull()) {
@@ -164,8 +179,9 @@ inline void load_cfar_params(const YAML::Node& node, CFARParams* p) {
     p->blocking_alpha_lut_rebuild =
         node["blocking_alpha_lut_rebuild"].as<bool>();
   }
-  if (node["peak_only"]) {
-    p->peak_only = node["peak_only"].as<bool>();
+  if (node["peak_mode"]) {
+    p->peak_mode =
+        parse_peak_mode(node["peak_mode"].as<std::string>());
   }
   if (node["peak_neighborhood"]) {
     p->peak_neighborhood = parse_peak_neighborhood(

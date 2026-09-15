@@ -5,7 +5,7 @@
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
 | in | `rd_maps` | complex64 / complex128, or float32 / float64 | `(num_doppler, num_range_bins)`, optional named leading axes | Path auto-selected by dtype: complex → square-law abs2; real → already-formed power |
-| out (optional, latched) | `detection_mask` | uint8 (`0`/`1`) | same trailing plane; `nci_axes` reduced; other leading axes preserved | `1` where `detection_score > 1`; with `peak_only`, only retained peaks |
+| out (optional, latched) | `detection_mask` | uint8 (`0`/`1`) | same trailing plane; `nci_axes` reduced; other leading axes preserved | Raw threshold mask for `none`; retained maxima for other peak modes |
 | out (optional, latched) | `detection_score` | float32 / float64 | same as `detection_mask` | `P / (threshold_scale · α · noise_estimate)`; `> 1` ⇔ detected |
 | out (optional, latched) | `noise_estimate` | float32 / float64 | same as `detection_mask` | Per-cell training-window noise |
 | out (optional, latched) | `cfar_power` | float32 / float64 | same as `detection_mask` | Surface that was thresholded: square-law abs2, or post-NCI sum of abs2 |
@@ -53,14 +53,14 @@ group: [`operators/detection/README.md`](../README.md)
 
 5. **Start-time pre-warm.** `start()` pre-builds the pfa-derived LUT for **CA and OS only**, keyed on a canonical window-sized map (`win = 2·(guard+train)+1` per axis). GO / SO are map-dependent (`go_lut_index`) and are **not** pre-warmed. A missing `nci_fold` when `nci_axes` is set defers calibration to the first tick. `preintegrated_looks` contributes to `K` even when `nci_axes` is empty.
 
-6. **`peak_only` NMS** (static, default off). `cfar_peak_suppress_kernel` refines the raw mask: a detected cell survives only if its `cfar_power` is a local maximum over **detected** neighbors (`cross4` = orthogonal 4; `square8` = full 8). Exact ties break by raster order — lowest within-plane index `d·num_range + r` wins. `detection_score` / `noise_estimate` stay the dense raw maps; `detection_mask` / `detection_idx` follow the refined peaks.
+6. **Peak-mode NMS** (static, default `none`). `range_doppler` runs `cfar_peak_suppress_kernel` independently in every leading plane over detected RD neighbors (`cross4` or `square8`). `all` dispatches rank-2/3/4 N-D kernels and compares the full immediate Chebyshev neighborhood over every output axis. Both use raw `cfar_power`; exact ties retain the lowest full row-major index. Dense score/noise/power remain unchanged; mask/index follow the selected peaks.
 
 7. **`detection_idx` compaction.** CUB reduce + exclusive-scan scatter writes rows in batch-major raster order: preserved leading coordinates, then `(doppler_bin, range_bin)`. A scalar device→host count sync sizes the exact output (`count_mask_detections`). If `max_detections > 0` and the scene exceeds it, surplus rows are dropped (raster-first kept) and the operator warns.
 
 ## Shape and dtype rules
 
 - **`detection_mask` / `detection_score` / `noise_estimate` / `cfar_power`.** Trailing axes are the input `(num_doppler, num_range_bins)`. Leading axes listed in `nci_axes` are reduced; remaining leading axes are preserved in the same order. `NciPlan::output_shape` is `preserved_dims + (num_doppler, num_range)`.
-- **`detection_idx`.** Rows = detection count (after `peak_only` and `max_detections`). Columns = `2 + n_preserved`: any preserved leading indices, then `doppler_bin`, then `range_bin`. Empty scene → shape `(0, 2 [+ n_preserved])`.
+- **`detection_idx`.** Rows = detection count after peak selection and `max_detections`. Columns = `2 + n_preserved`: preserved leading indices, then `doppler_bin`, then `range_bin`. Empty scene → shape `(0, 2 [+ n_preserved])`.
 - **Named leading axes.** Admitted only up to the rank implied by ctor `MaxTensorExtents`: none, one (`max_rx` or `max_channels`), or two (`max_tx` plus `max_rx` / `max_channels`). Extra leading rank is rejected. The dense RDA path (`num_az`, `num_el` leading) is admitted by standing `max_tx` / `max_rx` in for `max_az` / `max_el` (see Construction); the operator does not read `max_az` / `max_el`.
 - **Precision.** Template `T ∈ {float, double}` only. Complex input must be `complex<T>`; real input must be `T`. A mismatched dtype is rejected (message starts `rd_maps: received dtype … does not match this operator's float|double-precision instantiation`).
 - **Legal mid-stream shape change.** A `[live]` `nci_axes` change changes the output rank (downstream re-infers); any change that alters the workspace geometry reallocates the ping-pong buffers.
@@ -100,8 +100,8 @@ group: [`operators/detection/README.md`](../README.md)
 | `threshold_scale` | float64 | `1.0` | `[live]` Exact | Free (kernel argument) | Empirical multiplier: `threshold = threshold_scale · α · noise`; `1.0` = pure CFAR |
 | `nci_axes` | int64 vector | `[]` | `[live]` Exact host config Tensor | Changes `K` and output shape; may recalibrate α | Leading-axis indices to sum in power before CFAR |
 | `max_detections` | int64 | `0` (uncapped) | `[live]` Exact | Free (cap after count) | `> 0` caps `detection_idx` rows and warns on surplus |
-| `peak_only` | bool | `false` | static | Extra NMS launch when true | Collapse each above-threshold blob to its local-max cell |
-| `peak_neighborhood` | enum {cross4, square8} | `square8` | static | — | NMS neighborhood; used only when `peak_only` is set |
+| `peak_mode` | enum {none, range_doppler, all} | `none` | static | NMS launch unless none | Raw detections, per-plane RD maxima, or full N-D maxima |
+| `peak_neighborhood` | enum {cross4, square8} | `square8` | static | — | RD neighborhood for `range_doppler`; `all` always uses full N-D |
 
 `os_rank` is contract-required when `cfar_variant = OS` (typical `≈ floor(0.75·N)`). Params and bindings use `-1` only as the unset sentinel; selecting OS without an explicit non-negative rank fails with a required-parameter error. `guard_cells` and `training_cells` have no Params default and are rejected if missing at the first tick.
 
@@ -138,7 +138,7 @@ correlated receiver noise, shared-LO phase noise, mutual coupling, or clutter
 residue lower the effective degrees of freedom; calibrate an effective value
 or provide `alpha_lut` when nominal Pfa must be maintained under those models.
 
-Harness: `performance/cpp/perf_cfar_detector.cpp` (Graph). It wires all five outputs, so its steady timings include every publication copy plus `detection_idx` count/compaction. Axes: size ladder (`xs`…`xlw`), variant {CA, GO, SO, OS}, window footprint, NCI fold, `peak_only` × {`square8`, `cross4`}, `alpha_lut` vs pfa calibration pair. It measures an inline `threshold_scale` Exact override; other live ports are not timed. No measured numbers are recorded in-repo; run the smoke:
+Harness: `performance/cpp/perf_cfar_detector.cpp` (Graph). It wires all five outputs, so steady timings include publication copies plus index compaction. Axes include size, variant, footprint, NCI fold, peak mode/neighborhood, and alpha source. Rank-3/4 `all` rows characterize full N-D NMS.
 
 ```bash
 ctest --test-dir build -R perf_cfar_detector_smoke
@@ -184,7 +184,7 @@ cfar_detector:
   guard_cells: [3, 3]
   training_cells: [3, 3]
   pfa: 1.0e-9
-  peak_only: false
+  peak_mode: none
 ```
 
 ```cpp
@@ -202,6 +202,6 @@ Python bindings (`python/_cfar_detector_op_bindings.cpp`) are the HSDK 4.x tramp
 
 ## Contract conformance
 
-Conforms on optional ports, dtypes, score formula, all four variants, NCI, `peak_only`, exact-sized `detection_idx`, external-LUT reachability validation, and the locked α relations.
+Conforms on optional ports, dtypes, score formula, all four variants, NCI, all peak modes, exact-sized `detection_idx`, external-LUT reachability validation, and the locked α relations.
 
 Header comment block agrees with the implementation (five latched optional outputs, Exact live Inputs with unconditional `contract()` entries, POD windows and config-Tensor vectors). It describes named leading as none / `N_rx` / `(M_tx, N_rx)` and notes a separate dense instance — that matches the `max_tx`/`max_rx` stand-in, not a first-class `max_az`/`max_el` admission.

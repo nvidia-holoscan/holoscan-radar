@@ -37,7 +37,7 @@ cfar_detector:
   guard_cells: [3, 3]
   training_cells: [3, 3]
   pfa: 1.0e-9
-  peak_only: false
+  peak_mode: none
   nci_axes: [0]
 
 snapshot_gather:

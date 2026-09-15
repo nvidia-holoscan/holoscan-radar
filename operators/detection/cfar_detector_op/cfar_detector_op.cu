@@ -406,7 +406,7 @@ expected<detail::CfarStageConfig, Error> resolve_params(
                resolve_live_override(max_detections,
                                      pinned.max_detections));
   stage.blocking_alpha_lut_rebuild = pinned.blocking_alpha_lut_rebuild;
-  stage.peak_only = pinned.peak_only;
+  stage.peak_mode = pinned.peak_mode;
   stage.peak_neighborhood = pinned.peak_neighborhood;
   return stage;
 }
@@ -1057,20 +1057,24 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
   try {
     detail::run_cfar_stage<T>(
         plan.stage, input.data(), plan.input_is_complex, plan.nci.batch_in,
-        plan.nci.out_batch, plan.num_doppler, plan.num_range, plan.nci.fold,
-        nci_table_dev_ptr, state.alpha_lut_dev->data(),
+        plan.nci.out_batch, plan.num_doppler, plan.num_range,
+        plan.output_shape, plan.nci.fold, nci_table_dev_ptr,
+        state.alpha_lut_dev->data(),
         static_cast<int64_t>(state.alpha_lut_host_cache.size()),
         workspace.power, workspace.integrated_power, workspace.score,
         workspace.noise, workspace.mask,
-        plan.stage.peak_only ? workspace.peak_mask : nullptr, stream);
+        plan.stage.peak_mode != CfarPeakMode::kNone ? workspace.peak_mask
+                                                   : nullptr,
+        stream);
   } catch (const std::exception& e) {
     return fail_runtime(e.what());
   }
 
   // Get the detection mask from the workspace.
   const void* det_mask_src =
-      plan.stage.peak_only ? workspace.tensors->peak_mask->data()
-                           : workspace.tensors->mask->data();
+      plan.stage.peak_mode != CfarPeakMode::kNone
+          ? workspace.tensors->peak_mask->data()
+          : workspace.tensors->mask->data();
   const bool* det_mask = static_cast<const bool*>(det_mask_src);
 
   // Every output is optional/latched. Prepare every still-active loan before

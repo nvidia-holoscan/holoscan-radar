@@ -191,7 +191,8 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   cfg.root_music_params.array_geometry = cfg.array_geometry;
   cfg.esprit_params.array_geometry = cfg.array_geometry;
 
-  cfg.peak_only = cfg.cfar_params.peak_only;
+  cfg.use_cfar_peaks =
+      cfg.cfar_params.peak_mode != holoscan::radar::CfarPeakMode::kNone;
 
   if (const YAML::Node er = root["estimator_router"]; er && !er.IsNull()) {
     if (er["mode"]) {

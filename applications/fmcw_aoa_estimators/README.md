@@ -176,7 +176,7 @@ SimAdcSourceOp                 (GPU-simulated SIMO ADC cube: N_rx, chirps, sampl
   -> ClusterReportOp             (logs cluster centroids + representatives)
 ```
 
-Setting `cfar_detector.peak_only: true` drops the clustering tail (FeatureAssembly
+Selecting a non-`none` `cfar_detector.peak_mode` drops the clustering tail (FeatureAssembly
 / DBSCAN / Reduction / ClusterReport): CFAR already emits one detection per
 target, so the per-detection angle is logged straight from `DetectionReportOp`
 instead. The estimator branch is unaffected — it is the DOA stage, not

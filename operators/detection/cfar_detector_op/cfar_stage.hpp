@@ -45,7 +45,7 @@ struct CfarStageConfig {
   int64_t preintegrated_looks;
   int64_t max_detections;
   bool blocking_alpha_lut_rebuild;
-  bool peak_only;
+  CfarPeakMode peak_mode;
   CfarPeakNeighborhood peak_neighborhood;
 };
 
@@ -438,6 +438,80 @@ __global__ void cfar_peak_suppress_kernel(const T* power, const bool* mask,
   peak_mask[idx] = survive;
 }
 
+// Full immediate-neighborhood N-D NMS for rank 2-4 output tensors. Each
+// thread owns one cell and enumerates the 3^Rank - 1 Chebyshev neighbors.
+template <typename T, int Rank>
+__global__ void cfar_peak_suppress_all_kernel(
+    const T* power, const bool* mask, bool* peak_mask, int64_t total,
+    int64_t dim0, int64_t dim1, int64_t dim2, int64_t dim3) {
+  const int64_t index =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (index >= total) {
+    return;
+  }
+  if (!mask[index]) {
+    peak_mask[index] = false;
+    return;
+  }
+
+  const int64_t dims[4] = {dim0, dim1, dim2, dim3};
+  int64_t coordinates[4] = {};
+  int64_t remainder = index;
+#pragma unroll
+  for (int axis = Rank - 1; axis >= 0; --axis) {
+    coordinates[axis] = remainder % dims[axis];
+    remainder /= dims[axis];
+  }
+
+  int neighbor_count = 1;
+#pragma unroll
+  for (int axis = 0; axis < Rank; ++axis) {
+    neighbor_count *= 3;
+  }
+  const T center_power = power[index];
+  bool survive = true;
+  for (int code = 0; code < neighbor_count && survive; ++code) {
+    int remaining_code = code;
+    bool is_center = true;
+    bool in_bounds = true;
+    int64_t neighbor_index = 0;
+#pragma unroll
+    for (int axis = Rank - 1; axis >= 0; --axis) {
+      const int offset = remaining_code % 3 - 1;
+      remaining_code /= 3;
+      is_center = is_center && offset == 0;
+      const int64_t coordinate = coordinates[axis] + offset;
+      in_bounds =
+          in_bounds && coordinate >= 0 && coordinate < dims[axis];
+    }
+    if (is_center || !in_bounds) {
+      continue;
+    }
+
+    remaining_code = code;
+    int offsets[4] = {};
+#pragma unroll
+    for (int axis = Rank - 1; axis >= 0; --axis) {
+      offsets[axis] = remaining_code % 3 - 1;
+      remaining_code /= 3;
+    }
+#pragma unroll
+    for (int axis = 0; axis < Rank; ++axis) {
+      neighbor_index =
+          neighbor_index * dims[axis] + coordinates[axis] + offsets[axis];
+    }
+    if (!mask[neighbor_index]) {
+      continue;
+    }
+    const T neighbor_power = power[neighbor_index];
+    if (neighbor_power > center_power ||
+        (neighbor_power == center_power && neighbor_index < index)) {
+      survive = false;
+    }
+  }
+  peak_mask[index] = survive;
+}
+
 // Run the CFAR stage over a collapsed batch of (doppler, range) planes.
 //
 //   in     — device pointer, (batch_in, num_doppler, num_range).
@@ -456,17 +530,17 @@ __global__ void cfar_peak_suppress_kernel(const T* power, const bool* mask,
 // All outputs are preallocated by the caller. Work is enqueued on `stream`;
 // no synchronization here.
 //
-// When peak_only is set, a peak-grouping (NMS) pass refines the raw mask into
-// peak_mask (a distinct caller-preallocated bool buffer of the same shape as
-// mask): one detection per contiguous above-threshold blob, keeping the
-// local-maximum cell of the CFAR statistic. The raw mask/score/noise outputs
-// are unaffected; only peak_mask reflects the grouping.
+// A non-none peak mode refines the raw mask into peak_mask (a distinct
+// caller-preallocated bool buffer). range_doppler compares within each trailing
+// plane; all compares the full immediate N-D neighborhood. Dense power, score,
+// and noise outputs are unaffected.
 //
 // v1 implements CfarVariant::kCA, kGO, kSO, and kOS.
 template <typename T>
 void run_cfar_stage(const CfarStageConfig& config, const void* in,
                     bool input_is_complex, int64_t batch_in,
                     int64_t out_batch, int64_t num_doppler, int64_t num_range,
+                    const std::vector<int64_t>& output_shape,
                     int64_t nci_fold, const int64_t* batch_in_table_dev,
                     const void* alpha_lut, int64_t alpha_lut_size, void* power,
                     void* integrated_power, void* score, void* noise,
@@ -559,7 +633,7 @@ void run_cfar_stage(const CfarStageConfig& config, const void* in,
     }
   }
 
-  if (config.peak_only) {
+  if (config.peak_mode == CfarPeakMode::kRangeDoppler) {
     // Non-maximum suppression over cfar_power (the map that was thresholded),
     // reading the raw mask and writing the refined peak_mask. One launch over
     // all out_batch planes; peak_mask must be distinct from mask (neighbor
@@ -575,6 +649,39 @@ void run_cfar_stage(const CfarStageConfig& config, const void* in,
     if (cudaGetLastError() != cudaSuccess) {
       throw std::runtime_error("run_cfar_stage: peak-suppress kernel launch "
                                "failed");
+    }
+  } else if (config.peak_mode == CfarPeakMode::kAll) {
+    constexpr int kPeakBlock = 256;
+    const int64_t total = out_batch * num_doppler * num_range;
+    const int peak_grid = static_cast<int>(
+        (total + kPeakBlock - 1) / kPeakBlock);
+    if (output_shape.size() < 2U || output_shape.size() > 4U) {
+      throw std::invalid_argument(
+          "run_cfar_stage: all peak mode requires output rank 2-4");
+    }
+    const int64_t dim0 = output_shape[0];
+    const int64_t dim1 = output_shape[1];
+    const int64_t dim2 = output_shape.size() > 2U ? output_shape[2] : 1;
+    const int64_t dim3 = output_shape.size() > 3U ? output_shape[3] : 1;
+    if (output_shape.size() == 2U) {
+      cfar_peak_suppress_all_kernel<T, 2>
+          <<<peak_grid, kPeakBlock, 0, stream>>>(
+              cfar_power, static_cast<const bool*>(mask),
+              static_cast<bool*>(peak_mask), total, dim0, dim1, dim2, dim3);
+    } else if (output_shape.size() == 3U) {
+      cfar_peak_suppress_all_kernel<T, 3>
+          <<<peak_grid, kPeakBlock, 0, stream>>>(
+              cfar_power, static_cast<const bool*>(mask),
+              static_cast<bool*>(peak_mask), total, dim0, dim1, dim2, dim3);
+    } else if (output_shape.size() == 4U) {
+      cfar_peak_suppress_all_kernel<T, 4>
+          <<<peak_grid, kPeakBlock, 0, stream>>>(
+              cfar_power, static_cast<const bool*>(mask),
+              static_cast<bool*>(peak_mask), total, dim0, dim1, dim2, dim3);
+    }
+    if (cudaGetLastError() != cudaSuccess) {
+      throw std::runtime_error(
+          "run_cfar_stage: all-axis peak-suppress kernel launch failed");
     }
   }
 }

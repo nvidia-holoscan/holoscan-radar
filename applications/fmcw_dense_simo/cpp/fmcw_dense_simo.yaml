@@ -50,7 +50,7 @@ cfar_detector:
   # (AnglePeakPickOp still does the cross-beam collapse). A native CFAR param;
   # the app also reads this key (a read-only mirror of this block) to drop the
   # DBSCAN clustering + reduction stages and report the cube peaks directly.
-  peak_only: false
+  peak_mode: none
   nci_axes: []
 
 cluster_dbscan:

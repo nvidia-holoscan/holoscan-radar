@@ -429,12 +429,9 @@ class CommonRunConfig:
     visualize: bool = False
     skip_display_check: bool = False
     headless: bool = False
-    # CFAR peak-grouping mode. A native CFARDetectorOp parameter (set through the
-    # cfar_detector YAML block via from_config); each app also reads the same key
-    # as a read-only mirror of that operator block to gate its graph shape (drop
-    # the DBSCAN clustering + reduction stages when set). Populated per app in
-    # its load_config, not by parse_common_run_config below.
-    peak_only: bool = False
+    # Read-only mirror derived from CFARDetectorOp.peak_mode. Apps use it to
+    # drop clustering/reduction when CFAR emits peaks directly.
+    use_cfar_peaks: bool = False
     plots: PlotsConfig = field(default_factory=PlotsConfig)
     viz: VisualizationConfig = field(default_factory=VisualizationConfig)
 

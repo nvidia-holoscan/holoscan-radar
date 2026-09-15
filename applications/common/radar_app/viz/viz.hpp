@@ -483,7 +483,7 @@ class ClusterOverlayOp : public holoscan::Operator {
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("detection_idx");
     // Optional: DBSCAN cluster ids (row-aligned with detection_idx). Present →
-    // clustered mode: each detection colors by its cluster. Absent → peak_only:
+    // clustered mode: each detection colors by cluster. Absent → direct peaks:
     // each detection colors by its own row index.
     spec.input<holoscan::TensorMap>("labels")
         .condition(holoscan::ConditionType::kNone);
@@ -698,7 +698,7 @@ class ClusterOverlayOp : public holoscan::Operator {
       }
       // Clustered (labels present): color by the cluster's range rank when rep
       // cells are available (stable, collision-free), else the size-rank label;
-      // noise (-1) → gray. peak_only (no labels): color each detection by its
+      // noise (-1) → gray. Direct peaks (no labels): color each row by its
       // row index so individual peaks stay distinct and match the side panels.
       size_t bucket;
       if (have_labels) {
@@ -1362,7 +1362,7 @@ inline void emit_rd_axes(holoscan::TensorMap& out,
 //                     cluster (doppler_bin, range_bin); the dot markers.
 // In:  labels        — int64, (num_points,), optional: presence flags clustered
 //                     mode (reps color by their RD cell, matching the RD-map /
-//                     boresight markers); absent → peak_only (color by row
+//                     boresight markers); absent → direct peaks (color by row
 //                     index). The label values themselves are not read.
 // In:  range_bins    — float32, (num_range,): range plot Y extent + rep lookup.
 // In:  velocity_bins — float32, (num_doppler,): velocity Y extent + rep lookup.
@@ -1411,7 +1411,7 @@ class RollingPlotOp : public holoscan::Operator {
     spec.input<holoscan::TensorMap>("rep_idx");
     // Optional: per-detection DBSCAN labels. Only their presence is used, as a
     // mode flag: present → clustered (each rep's trace color keyed off its RD
-    // cell, matching the RD-map / boresight markers); absent → peak_only (color
+    // cell, matching RD-map / boresight markers); absent → direct peaks (color
     // by rep_idx row index).
     spec.input<holoscan::TensorMap>("labels")
         .condition(holoscan::ConditionType::kNone);
@@ -1506,7 +1506,7 @@ class RollingPlotOp : public holoscan::Operator {
     // Clustered (labels present): color each rep by its cluster's range rank
     // (rep_color_ranks) — the same stable,
     // collision-free key ClusterOverlayOp /
-    // BoresightViewOp use, keeping all three panels in sync. peak_only (no
+    // BoresightViewOp use, keeping all three panels in sync. Direct peaks (no
     // labels): the "reps" are the raw peaks, so color by row index like the
     // overlay. labels are only a mode flag here; their values are not read.
     const bool have_labels = static_cast<bool>(labels);
@@ -1774,7 +1774,7 @@ class BoresightViewOp : public holoscan::Operator {
   void setup(holoscan::OperatorSpec& spec) override {
     spec.input<holoscan::TensorMap>("aoa_estimates");
     // Optional: cluster ids (row-aligned with aoa_estimates). Present →
-    // clustered mode: markers color by their cluster. Absent → peak_only: each
+    // clustered mode: markers color by cluster. Absent → direct peaks: each
     // marker colors by its own row index.
     spec.input<holoscan::TensorMap>("labels")
         .condition(holoscan::ConditionType::kNone);
@@ -1885,7 +1885,7 @@ class BoresightViewOp : public holoscan::Operator {
     // Per-detection color bucket. Clustered (labels present): color by the
     // cluster's range rank when rep cells are available (stable, collision-
     // free), else the size-rank label; noise
-    // (-1) → gray. peak_only (no labels):
+    // (-1) → gray. Direct peaks (no labels):
     // color by row index so peaks stay distinct — matching the RD map / plots.
     std::vector<int> bucket(static_cast<size_t>(n));
     for (int64_t i = 0; i < n; ++i) {

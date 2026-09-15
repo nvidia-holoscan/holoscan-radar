@@ -237,7 +237,6 @@ def load_config(path: Path) -> AppConfig:
     cfg.tdm_dense_compensation["tx_schedule"] = cfg.tx_schedule
     cfg.ddm_dense_demultiplex = parse_ddm_dense_demultiplex(root.get("ddm_dense_demultiplex", {}))
     cfg.ddm_dense_demultiplex["ddm_code"] = cfg.ddm_code
-    # READ-ONLY MIRROR of the cfar_detector operator block: peak_only stays a
-    # native CFAR param (from_config); the app reads it only to gate the graph.
-    cfg.peak_only = bool((root.get("cfar_detector") or {}).get("peak_only", False))
+    # READ-ONLY MIRROR of the native CFAR peak-mode parameter.
+    cfg.use_cfar_peaks = (root.get("cfar_detector") or {}).get("peak_mode", "none") != "none"
     return cfg

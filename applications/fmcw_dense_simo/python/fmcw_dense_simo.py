@@ -133,9 +133,9 @@ class FmcwDenseSimoApp(Application):
             array_geometry=cfg.array_geometry,
             name="phase_shift_beamformer",
         )
-        # peak_only is a native cfar_detector param (from_config), applied
+        # peak_mode is a native cfar_detector param (from_config), applied
         # per-beam (nci_axes=[]); AnglePeakPickOp below still does the cross-beam
-        # collapse. The app reads cfg.peak_only to drop the clustering subgraph.
+        # collapse. The app mirrors peak selection to gate clustering.
         cfar = CFARDetectorOp(self, self.from_config("cfar_detector"), name="cfar_detector")
         peak_pick = custom_ops.AnglePeakPickOp(self, name="angle_peak_pick")
         aoa_lookup = custom_ops.CubeAoaLookupOp(
@@ -168,14 +168,14 @@ class FmcwDenseSimoApp(Application):
         row_index_sink = NullSinkOp(self, name="aoa_row_index_sink")
         self.add_flow(aoa_lookup, row_index_sink, {("row_index", "input")})
 
-        # Clustering subgraph — dropped when peak_only is set. The cube peaks
+        # Clustering subgraph — dropped when CFAR emits peaks directly. Cube peaks
         # (already one per RD cell after AnglePeakPickOp) are reported directly
         # via DetectionReportOp: CubeAoaLookupOp supplies az/el and the 4-col
         # detection_idx is sliced to (doppler, range). The dense score is a
         # rank-4 per-beam cube with no 2-D map, so it is omitted from the report.
         cluster = None
         reduction = None
-        if not cfg.peak_only:
+        if not cfg.use_cfar_peaks:
             feature_assembly = FeatureAssemblyOp(
                 self,
                 features=[
@@ -351,9 +351,9 @@ class FmcwDenseSimoApp(Application):
         # Physical axis bins for the RD-map tick labels (range X, velocity Y).
         self.add_flow(range_op, overlay, {("range_bins", "range_bins")})
         self.add_flow(doppler, overlay, {("velocity_bins", "velocity_bins")})
-        # Cluster labels color the dots when clustering runs; peak_only has no
+        # Cluster labels color the dots when clustering runs; peak mode has no
         # labels, so the overlay colors each peak by its row index instead.
-        if not cfg.peak_only:
+        if not cfg.use_cfar_peaks:
             self.add_flow(cluster, overlay, {("labels", "labels")})
             if rep_idx_rd is not None:
                 # Color clusters by their representative RD cell (stable across
@@ -370,13 +370,13 @@ class FmcwDenseSimoApp(Application):
             self.add_flow(overlay, visualizer, {("time_specs", "input_specs")})
 
         # Plot/boresight read the per-cluster representative (clustered) or the
-        # raw cube peaks (peak_only); both carry the 4-col idx.
-        rep_src = reduction if not cfg.peak_only else detections
-        rep_port = "rep_idx" if not cfg.peak_only else "detection_idx"
+        # raw cube peaks; both carry the 4-col idx.
+        rep_src = reduction if not cfg.use_cfar_peaks else detections
+        rep_port = "rep_idx" if not cfg.use_cfar_peaks else "detection_idx"
         if plot is not None and rep_idx_rd is not None and rep_aoa is not None:
             self.add_flow(rep_src, rep_idx_rd, {(rep_port, "idx")})
             self.add_flow(rep_idx_rd, plot, {("idx", "rep_idx")})
-            if not cfg.peak_only:
+            if not cfg.use_cfar_peaks:
                 # labels flag clustered mode; the plot then colors each rep by
                 # its RD cell (matching the RD-map / boresight markers).
                 self.add_flow(cluster, plot, {("labels", "labels")})
@@ -385,7 +385,7 @@ class FmcwDenseSimoApp(Application):
             self.add_flow(plot, visualizer, {("plots", "receivers")})
         if boresight is not None and rep_aoa is not None:
             self.add_flow(rep_src, rep_aoa, {(rep_port, "detection_idx")})
-            if not cfg.peak_only and rep_idx_rd is not None:
+            if not cfg.use_cfar_peaks and rep_idx_rd is not None:
                 # Match the overlay/plot: color each cluster by its rep RD cell.
                 # row_index (passed as labels) indexes rep_idx_rd row-for-row.
                 self.add_flow(rep_idx_rd, boresight, {("idx", "rep_idx")})

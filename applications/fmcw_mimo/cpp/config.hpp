@@ -400,7 +400,8 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   load_dbscan_params(root["cluster_dbscan"], &cfg.dbscan_params);
   load_reduction_params(root["reduction"], &cfg.reduction_params);
 
-  cfg.peak_only = cfg.cfar_params.peak_only;
+  cfg.use_cfar_peaks =
+      cfg.cfar_params.peak_mode != holoscan::radar::CfarPeakMode::kNone;
   grid_extent(cfg.beamscan_params.az_angles, -0.35, 0.35, &cfg.az_lo,
               &cfg.az_hi);
   grid_extent(cfg.beamscan_params.el_angles, -0.1, 0.1, &cfg.el_lo, &cfg.el_hi);

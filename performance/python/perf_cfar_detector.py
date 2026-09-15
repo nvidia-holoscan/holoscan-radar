@@ -13,7 +13,7 @@ C++/Python matrix sync is an open question — see
 Default CLI matches C++ (default matrix, not ``--full``): mid/large GO/SO/OS
 footprints are Monte Carlo–heavy (~tens of seconds cold) and are only in
 ``--full``. Curated pfa↔alpha_lut calibration pairs are included in both.
-Default also includes ``peak_only`` NMS rows (CA × default sizes ×
+Default also includes peak-mode NMS rows (CA × default sizes ×
 ``{square8, cross4}``); ``--full`` extends those across the size ladder and
 adds GO/SO/OS at ``md``.
 """
@@ -53,6 +53,7 @@ from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application  # noqa: E402
 from holoscan.radar import (  # noqa: E402
     CFARDetectorOpF32,
+    CfarPeakMode,
     CfarPeakNeighborhood,
     CfarVariant,
     build_ca_alpha_lut,
@@ -122,8 +123,7 @@ class CfarScenario:
     use_alpha_lut: bool = False
     alpha_lut: list[float] = field(default_factory=list)
     calibration_pair: str = ""
-    # Optional peak-grouping (NMS) stage — static; off by default.
-    peak_only: bool = False
+    peak_mode: CfarPeakMode = CfarPeakMode.NONE
     peak_neighborhood: CfarPeakNeighborhood = CfarPeakNeighborhood.SQUARE8
     # Filled per run for live-override wiring.
     override_at: int = 0
@@ -206,9 +206,9 @@ def make_peak_scenario(
     fp: Footprint,
     neighborhood: CfarPeakNeighborhood,
 ) -> CfarScenario:
-    """Compute scenario with peak_only NMS; id inserts ``_peak_<nb>``."""
+    """Compute scenario with range-Doppler NMS."""
     sc = make_compute_scenario(variant, size, fp, out_batch=1)
-    sc.peak_only = True
+    sc.peak_mode = CfarPeakMode.RANGE_DOPPLER
     sc.peak_neighborhood = neighborhood
     insert = f"_peak_{_peak_neighborhood_tag(neighborhood)}"
     if sc.id.endswith("_compute"):
@@ -218,18 +218,28 @@ def make_peak_scenario(
     return sc
 
 
-def append_peak_only_scenarios(
+def append_peak_scenarios(
     scenarios: list[CfarScenario],
     size_ids: list[str],
     *,
     all_variants_at_md: bool,
 ) -> None:
-    """Mirror C++ append_peak_only_scenarios."""
+    """Mirror C++ append_peak_scenarios."""
     fp = FOOTPRINT_SMALL
     for sid in size_ids:
         size = _must_find_size(sid)
         for nb in ALL_PEAK_NEIGHBORHOODS:
             scenarios.append(make_peak_scenario(CfarVariant.CA, size, fp, nb))
+        if sid == "xs":
+            rank3 = make_compute_scenario(CfarVariant.CA, size, fp, out_batch=8)
+            rank3.peak_mode = CfarPeakMode.ALL
+            rank3.id = "cfar_CA_xs_small_peak_all_rank3_compute"
+            scenarios.append(rank3)
+            rank4 = make_compute_scenario(CfarVariant.CA, size, fp, out_batch=1)
+            rank4.input_shape = [4, 4, *size.shape]
+            rank4.peak_mode = CfarPeakMode.ALL
+            rank4.id = "cfar_CA_xs_small_peak_all_rank4_compute"
+            scenarios.append(rank4)
     if not all_variants_at_md:
         return
     md = _must_find_size("md")
@@ -337,8 +347,8 @@ def build_default_matrix() -> list[CfarScenario]:
         for variant in ALL_VARIANTS:
             out.append(make_nci_scenario(variant, size, 8))
     tag_and_append_alpha_lut_pairs(out)
-    # peak_only NMS characterization (CA × default sizes × both neighborhoods).
-    append_peak_only_scenarios(out, ["xs", "md", "lg", "xlw"], all_variants_at_md=False)
+    # Peak-mode NMS characterization.
+    append_peak_scenarios(out, ["xs", "md", "lg", "xlw"], all_variants_at_md=False)
     return out
 
 
@@ -350,9 +360,9 @@ def build_size_sweep(size_ids: list[str]) -> list[CfarScenario]:
         size = _must_find_size(sid)
         out.append(make_compute_scenario(CfarVariant.CA, size, fp, 1))
         known.append(sid)
-    # Include peak_only NMS on the same CA×sizes subset so --size(s) / smoke
+    # Include peak-mode NMS on the same CA×sizes subset so --size(s) / smoke
     # exercises the new stage (both neighborhoods).
-    append_peak_only_scenarios(out, known, all_variants_at_md=False)
+    append_peak_scenarios(out, known, all_variants_at_md=False)
     return out
 
 
@@ -373,8 +383,8 @@ def build_full_matrix() -> list[CfarScenario]:
         for variant in ALL_VARIANTS:
             out.append(make_nci_scenario(variant, size, 8))
     tag_and_append_alpha_lut_pairs(out)
-    # peak_only: CA × full ladder × both neighborhoods; GO/SO/OS at md.
-    append_peak_only_scenarios(
+    # Peak modes: CA × full ladder × both neighborhoods; GO/SO/OS at md.
+    append_peak_scenarios(
         out,
         [item.id for item in SIZE_LADDER],
         all_variants_at_md=True,
@@ -424,6 +434,8 @@ def _run_graph(
 ) -> None:
     class CfarPerfApp(Application):
         def compose(self) -> None:
+            max_rx = scen.input_shape[-3] if len(scen.input_shape) >= 3 else 1
+            max_tx = scen.input_shape[0] if len(scen.input_shape) == 4 else 0
             op = CFARDetectorOpF32(
                 self,
                 cfar_variant=scen.variant,
@@ -436,8 +448,10 @@ def _run_graph(
                 os_rank=scen.os_rank,
                 max_detections=0,
                 blocking_alpha_lut_rebuild=scen.blocking_rebuild,
-                peak_only=scen.peak_only,
+                peak_mode=scen.peak_mode,
                 peak_neighborhood=scen.peak_neighborhood,
+                max_rx=max_rx,
+                max_tx=max_tx,
                 name="cfar",
             )
             src = PerfDataSourceOp(
@@ -524,9 +538,12 @@ def run_scenario(scen: CfarScenario, rs: RunSettings, report: PerfReport) -> Non
             "median/p90 are pre-override steady state; override_ms is peak "
             "latency over the blocking pfa reconfig window"
         )
-    if scen.peak_only:
-        nb = _peak_neighborhood_tag(scen.peak_neighborhood)
-        compute.notes += f"; peak_only NMS enabled (neighborhood={nb})"
+    if scen.peak_mode != CfarPeakMode.NONE:
+        mode = getattr(scen.peak_mode, "name", str(scen.peak_mode)).lower()
+        compute.notes += f"; peak_mode={mode}"
+        if scen.peak_mode == CfarPeakMode.RANGE_DOPPLER:
+            nb = _peak_neighborhood_tag(scen.peak_neighborhood)
+            compute.notes += f" (neighborhood={nb})"
     report.results.append(compute)
 
 
@@ -587,7 +604,7 @@ def main() -> int:
         full_help=(
             "Full matrix: all variants/footprints/batch/NCI (includes mid/large "
             "GO/SO/OS Monte Carlo cold builds — same cost class as C++ --full) "
-            "plus peak_only NMS rows (CA×ladder×{square8,cross4}; GO/SO/OS at md)."
+            "plus peak-mode NMS rows (CA×ladder; GO/SO/OS at md)."
         ),
     )
 

@@ -67,7 +67,7 @@ struct X11RdViewerConfig {
   // viewer shows the raster and bin-index ticks.
   bool overlay_detections{false};
   // Additionally wire labels + rep_idx (per-cluster colors, representative
-  // markers, legend). Requires overlay_detections; off in CFAR peak_only mode,
+  // markers, legend). Requires overlay_detections; off in direct CFAR peak mode,
   // where there is no clustering stage.
   bool overlay_clusters{false};
   // Rolling range-vs-time / velocity-vs-time panels right of the RD map.

@@ -112,6 +112,11 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - `nci_axes` integration raises detectability and the realized Pfa still matches (Gamma(K) threshold with the correct `K`).
 - Real-power input (float dtype) thresholds directly and yields the same detections as the complex `|·|²` path.
 - `detection_idx` lists exactly the detected cells, sized to the count; a set `max_detections` caps and warns on overflow.
+- `peak_mode` covers `none`, per-plane `range_doppler`, and full rank-2/3/4
+  `all` NMS; detected-neighbor comparisons use raw CFAR power, do not wrap at
+  axis boundaries, and break equal-power ties by full row-major index.
+- Peak selection changes only `detection_mask` / `detection_idx`; dense
+  `detection_score`, `noise_estimate`, and `cfar_power` remain unchanged.
 - Selecting OS with the `-1` unset `os_rank` sentinel rejects with a targeted
   required-parameter error; explicit rank 0 remains valid.
 - Sparse external α LUTs for GO/SO and OS `K > 1` may contain zero only at

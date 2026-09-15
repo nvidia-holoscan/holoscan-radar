@@ -126,8 +126,8 @@ class FmcwSisoApp(Application):
         doppler = FMCWDopplerProcessorOp(
             self, self.from_config("doppler_processor"), name="doppler_processor"
         )
-        # peak_only is a native cfar_detector param (from_config); the app also
-        # reads it (cfg.peak_only) to drop the clustering subgraph below.
+        # peak_mode is native to cfar_detector; the app mirrors whether it
+        # emits peaks directly to gate the clustering subgraph below.
         cfar = CFARDetectorOp(self, self.from_config("cfar_detector"), name="cfar_detector")
         det_report = DetectionReportOp(self, name="detection_report")
         if cadence is not None:
@@ -146,13 +146,13 @@ class FmcwSisoApp(Application):
         self.add_flow(cfar, mask_sink, {("detection_mask", "input")})
         self.add_flow(cfar, noise_sink, {("noise_estimate", "input")})
 
-        # Clustering subgraph — dropped entirely when peak_only is set (CFAR then
+        # Clustering subgraph — dropped when CFAR emits peaks directly (CFAR then
         # emits one detection per target, so DBSCAN + reduction are redundant and
         # DetectionReportOp above reports the CFAR peaks directly). cluster /
         # reduction stay None in that mode and the viz block below adapts.
         cluster = None
         reduction = None
-        if not cfg.peak_only:
+        if not cfg.use_cfar_peaks:
             feature_assembly = FeatureAssemblyOp(
                 self,
                 features=[AssemblyFeature.RANGE, AssemblyFeature.VELOCITY],
@@ -253,7 +253,7 @@ class FmcwSisoApp(Application):
 
             self.add_flow(doppler, to_image, {("rd_maps", "rd_maps")})
             self.add_flow(to_image, visualizer, {("rd_image", "receivers")})
-            # Cluster labels color the dots when clustering runs; in peak_only
+            # Cluster labels color the dots when clustering runs; in peak mode
             # mode there are no labels, so the overlay colors each CFAR peak by
             # its row index (ClusterOverlayOp treats absent labels that way).
             self.add_flow(cfar, overlay, {("detection_idx", "detection_idx")})
@@ -261,7 +261,7 @@ class FmcwSisoApp(Application):
             # Physical axis bins for the RD-map tick labels (range X, velocity Y).
             self.add_flow(range_op, overlay, {("range_bins", "range_bins")})
             self.add_flow(doppler, overlay, {("velocity_bins", "velocity_bins")})
-            if not cfg.peak_only:
+            if not cfg.use_cfar_peaks:
                 self.add_flow(cluster, overlay, {("labels", "labels")})
                 # rep_idx colors each cluster by its representative RD cell
                 # (stable across frames) instead of the flickery size-rank label.
@@ -277,8 +277,8 @@ class FmcwSisoApp(Application):
 
             if plot is not None:
                 # Rolling plots read the per-cluster representative (clustered) or
-                # the raw CFAR peaks (peak_only); both are (N, 2) (doppler, range).
-                if not cfg.peak_only:
+                # raw CFAR peaks; both are (N, 2) (doppler, range).
+                if not cfg.use_cfar_peaks:
                     self.add_flow(reduction, plot, {("rep_idx", "rep_idx")})
                     # labels flag clustered mode; the plot then colors each rep by
                     # its RD cell (matching the RD-map / boresight markers).

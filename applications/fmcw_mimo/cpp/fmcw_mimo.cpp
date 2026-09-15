@@ -186,7 +186,8 @@ int main(int argc, char** argv) {
 
         auto sink = graph.op<DetectionReportOp>(
             "detection_report",
-            DetectionReportOp::Config{cadence, /*report_aoa=*/cfg.peak_only});
+            DetectionReportOp::Config{
+                cadence, /*report_aoa=*/cfg.use_cfar_peaks});
         auto mask_sink = graph.op<NullSinkOp>("detection_mask_sink");
         auto noise_sink = graph.op<NullSinkOp>("noise_estimate_sink");
         auto power_sink = graph.op<NullSinkOp>("cfar_power_sink");
@@ -226,7 +227,7 @@ int main(int argc, char** argv) {
           viz_cfg.width = static_cast<int>(cfg.viz.window_width);
           viz_cfg.height = static_cast<int>(cfg.viz.window_height);
           viz_cfg.overlay_detections = true;
-          viz_cfg.overlay_clusters = !cfg.peak_only;
+          viz_cfg.overlay_clusters = !cfg.use_cfar_peaks;
           viz_cfg.plots_enabled = cfg.plots.enable;
           viz_cfg.plot_window = cfg.plots.window;
           viz_cfg.frame_period = cfg.frame_period;
@@ -266,7 +267,7 @@ int main(int argc, char** argv) {
         }
 #endif
 
-        if (cfg.peak_only) {
+        if (cfg.use_cfar_peaks) {
           graph.add_flow(beamscan->aoa_estimates, sink->aoa_estimates, q);
         } else {
           std::vector<radar::AssemblyFeature> features{

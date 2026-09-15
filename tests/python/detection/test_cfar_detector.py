@@ -16,7 +16,12 @@ cupy = pytest.importorskip("cupy")
 from utils.harness import run_operator_multi, single_map, to_device_array  # noqa: E402
 
 from holoscan.radar import CFARDetectorOpF64  # noqa: E402
-from holoscan.radar import CFARDetectorOpF32, CfarPeakNeighborhood, CfarVariant
+from holoscan.radar import (
+    CFARDetectorOpF32,
+    CfarPeakMode,
+    CfarPeakNeighborhood,
+    CfarVariant,
+)
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -306,46 +311,61 @@ def test_CfarPowerIsNciSumOverFold():
 
 
 # ---------------------------------------------------------------------------
-# Peak grouping (peak_only) — port of tests/cpp/detection/test_cfar_detector.cpp
+# Peak modes — port of tests/cpp/detection/test_cfar_detector.cpp
 # ---------------------------------------------------------------------------
 
 
-def test_PeakOnlyOffMatchesRawMask():
-    # Off by default (and peak_only=False) keeps the raw candidate mask: a
+def test_PeakModeNoneMatchesRawMask():
+    # None by default keeps the raw candidate mask: a
     # contiguous 3-cell strip stays 3 detections either way.
     mp = power_map(1.0, [(8, 15), (8, 16), (8, 17)], 100.0)
     raw = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2)
-    off = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2, peak_only=False)
+    off = run_cfar(
+        mp,
+        (K_DOPPLER, K_RANGE),
+        pfa=1e-2,
+        peak_mode=CfarPeakMode.NONE,
+    )
     assert num_detections(raw["idx"]) == 3
     assert num_detections(off["idx"]) == num_detections(raw["idx"])
 
 
-def test_PeakOnlyKeepsSingleMax():
-    # Adjacent (guard-separated) pair with distinct power: peak_only keeps the
+def test_PeakModeRangeDopplerKeepsSingleMax():
+    # Adjacent (guard-separated) pair: range-Doppler mode keeps the
     # maximum only; detection_mask agrees with the reduced count.
     flat = power_map(1.0, [], 1.0).reshape(K_DOPPLER, K_RANGE)
     flat[8, 16] = 100.0
     flat[8, 17] = 50.0
     off = run_cfar(flat, (K_DOPPLER, K_RANGE), pfa=1e-3)
-    on = run_cfar(flat, (K_DOPPLER, K_RANGE), pfa=1e-3, peak_only=True)
+    on = run_cfar(
+        flat,
+        (K_DOPPLER, K_RANGE),
+        pfa=1e-3,
+        peak_mode=CfarPeakMode.RANGE_DOPPLER,
+    )
     assert num_detections(off["idx"]) == 2
     assert num_detections(on["idx"]) == 1
     assert idx_contains(on["idx"], 8, 16)  # the max, not (8, 17)
     assert int((on["mask"] != 0).sum()) == 1
 
 
-def test_PeakOnlyCollapsesStripRasterTiebreak():
+def test_PeakModeRangeDopplerUsesRasterTiebreak():
     # A flat contiguous strip collapses to its lowest-raster-index cell.
     mp = power_map(1.0, [(8, 15), (8, 16), (8, 17)], 100.0)
     off = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2)
-    on = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2, peak_only=True)
+    on = run_cfar(
+        mp,
+        (K_DOPPLER, K_RANGE),
+        pfa=1e-2,
+        peak_mode=CfarPeakMode.RANGE_DOPPLER,
+    )
     assert num_detections(off["idx"]) == 3
     assert num_detections(on["idx"]) == 1
     assert idx_contains(on["idx"], 8, 15)  # lowest linear index survives
     assert int((on["mask"] != 0).sum()) == 1
 
 
-def test_PeakOnlyNeighborhoodCross4VsSquare8():
+def test_PeakModeRangeDopplerUsesConfiguredNeighborhood():
     # square8 sees a diagonal neighbor (collapses a diagonal equal pair to one);
     # cross4 does not (both survive).
     mp = power_map(1.0, [(5, 5), (6, 6)], 100.0)
@@ -353,19 +373,76 @@ def test_PeakOnlyNeighborhoodCross4VsSquare8():
         mp,
         (K_DOPPLER, K_RANGE),
         pfa=1e-3,
-        peak_only=True,
+        peak_mode=CfarPeakMode.RANGE_DOPPLER,
         peak_neighborhood=CfarPeakNeighborhood.SQUARE8,
     )
     cross4 = run_cfar(
         mp,
         (K_DOPPLER, K_RANGE),
         pfa=1e-3,
-        peak_only=True,
+        peak_mode=CfarPeakMode.RANGE_DOPPLER,
         peak_neighborhood=CfarPeakNeighborhood.CROSS4,
     )
     assert num_detections(square8["idx"]) == 1
     assert idx_contains(square8["idx"], 5, 5)  # lower linear index survives
     assert num_detections(cross4["idx"]) == 2
+
+
+def test_PeakModeAllSuppressesAcrossEveryRank4Axis():
+    shape = (2, 2, K_DOPPLER, K_RANGE)
+    data = np.ones(shape, dtype=np.float64)
+    data[0, 0, 8, 16] = 100.0
+    data[0, 1, 8, 16] = 110.0
+    data[1, 0, 8, 16] = 120.0
+    data[1, 1, 8, 16] = 130.0
+    none = run_cfar(data, shape, pfa=1e-2, max_tx=2, max_rx=2)
+    rd = run_cfar(
+        data,
+        shape,
+        pfa=1e-2,
+        peak_mode=CfarPeakMode.RANGE_DOPPLER,
+        max_tx=2,
+        max_rx=2,
+    )
+    all_axes = run_cfar(
+        data,
+        shape,
+        pfa=1e-2,
+        peak_mode=CfarPeakMode.ALL,
+        max_tx=2,
+        max_rx=2,
+    )
+    assert num_detections(none["idx"]) == 4
+    assert num_detections(rd["idx"]) == 4
+    assert all_axes["idx"].tolist() == [[1, 1, 8, 16]]
+    assert int((all_axes["mask"] != 0).sum()) == 1
+    np.testing.assert_array_equal(none["score"], all_axes["score"])
+    np.testing.assert_array_equal(none["noise"], all_axes["noise"])
+    np.testing.assert_array_equal(none["power"], all_axes["power"])
+
+
+def test_PeakModeAllRank3TiesAndDoesNotWrapAxes():
+    shape = (2, K_DOPPLER, K_RANGE)
+    data = np.ones(shape, dtype=np.float32)
+    data[0, 8, 16] = 100.0
+    data[1, 8, 16] = 100.0
+    data[0, 4, K_RANGE - 1] = 90.0
+    data[0, 5, 0] = 80.0
+    out = run_cfar(
+        data,
+        shape,
+        dtype=np.float32,
+        op_cls=CFARDetectorOpF32,
+        pfa=1e-2,
+        peak_mode=CfarPeakMode.ALL,
+        max_rx=2,
+    )
+    assert out["idx"].tolist() == [
+        [0, 4, K_RANGE - 1],
+        [0, 5, 0],
+        [0, 8, 16],
+    ]
+    assert int((out["mask"] != 0).sum()) == 3
 
 
 # ---------------------------------------------------------------------------

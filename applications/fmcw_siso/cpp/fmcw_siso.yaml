@@ -58,7 +58,7 @@ cfar_detector:
   # emits one detection per target. The app also reads this key (a read-only
   # mirror of this block) to drop the DBSCAN clustering + reduction stages and
   # report the CFAR peaks directly.
-  peak_only: false
+  peak_mode: none
 
 # ClusterDBSCANOp parameters (native from_config). FeatureAssemblyOp assembles
 # the `points` matrix (this app fixes its columns to [range (m), velocity

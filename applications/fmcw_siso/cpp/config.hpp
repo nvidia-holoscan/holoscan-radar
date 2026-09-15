@@ -76,7 +76,8 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   load_dbscan_params(root["cluster_dbscan"], &cfg.dbscan_params);
   load_reduction_params(root["reduction"], &cfg.reduction_params);
 
-  cfg.peak_only = cfg.cfar_params.peak_only;
+  cfg.use_cfar_peaks =
+      cfg.cfar_params.peak_mode != holoscan::radar::CfarPeakMode::kNone;
   cfg.extents = make_siso_extents(cfg);
   return cfg;
 }

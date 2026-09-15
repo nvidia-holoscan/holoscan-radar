@@ -13,7 +13,7 @@
 //                                         [-> RdMapToImageOp -> X11RdViewerOp]
 //
 // With visualize on, the X11 viewer also takes the detection cells, the range /
-// velocity bins, and (outside peak_only) the cluster labels + representatives,
+// velocity bins, and (outside CFAR peak modes) cluster labels + representatives,
 // so it draws the RD-map overlays the Holoviz demo drew: physical axes, cluster
 // -colored detections, a legend, and the rolling range/velocity plots.
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
           viz_cfg.width = static_cast<int>(cfg.viz.window_width);
           viz_cfg.height = static_cast<int>(cfg.viz.window_height);
           viz_cfg.overlay_detections = true;
-          viz_cfg.overlay_clusters = !cfg.peak_only;
+          viz_cfg.overlay_clusters = !cfg.use_cfar_peaks;
           viz_cfg.plots_enabled = cfg.plots.enable;
           viz_cfg.plot_window = cfg.plots.window;
           viz_cfg.frame_period = cfg.frame_period;
@@ -160,7 +160,7 @@ int main(int argc, char** argv) {
         }
 #endif
 
-        if (!cfg.peak_only) {
+        if (!cfg.use_cfar_peaks) {
           std::vector<radar::AssemblyFeature> features{
               radar::AssemblyFeature::kRange,
               radar::AssemblyFeature::kVelocity};

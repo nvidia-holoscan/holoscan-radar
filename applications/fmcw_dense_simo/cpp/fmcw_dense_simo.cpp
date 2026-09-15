@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
                                     cfg.beamformer_params.el_angles});
 
         // (N,4) → (N,2) trailing (doppler, range) for PhysicalPoints / viewer
-        // / peak_only DetectionReport.
+        // / direct CFAR-peak DetectionReport.
         auto det_idx_rd =
             graph.op<TrailingIdxColumnsOp>("det_idx_rd_slice", extents);
 
@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
           viz_cfg.width = static_cast<int>(cfg.viz.window_width);
           viz_cfg.height = static_cast<int>(cfg.viz.window_height);
           viz_cfg.overlay_detections = true;
-          viz_cfg.overlay_clusters = !cfg.peak_only;
+          viz_cfg.overlay_clusters = !cfg.use_cfar_peaks;
           viz_cfg.plots_enabled = cfg.plots.enable;
           viz_cfg.plot_window = cfg.plots.window;
           viz_cfg.frame_period = cfg.frame_period;
@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
         graph.add_flow(cfar->cfar_power, power_sink->input, q);
 #endif
 
-        if (cfg.peak_only) {
+        if (cfg.use_cfar_peaks) {
           // Dense detection_score is rank-4; collapse to (D,R) for the report.
           auto score_max =
               graph.op<RdAngleMaxOp>("detection_score_max", extents);

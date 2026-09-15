@@ -179,8 +179,8 @@ class FmcwMimoApp(Application):
             self.add_flow(doppler, compensation, {("rd_maps", "rd_maps")})
             self.add_flow(compensation, vaa, {("rd_maps_out", "rd_maps")})
 
-        # peak_only is a native cfar_detector param (from_config); the app reads
-        # it (cfg.peak_only) to drop the clustering subgraph below.
+        # peak_mode is native to cfar_detector; the app mirrors whether it
+        # emits peaks directly to gate the clustering subgraph below.
         cfar = CFARDetectorOp(self, self.from_config("cfar_detector"), name="cfar_detector")
         gather = SnapshotGatherOp(self, self.from_config("snapshot_gather"), name="snapshot_gather")
         beamscan = BeamscanEstimatorOp(
@@ -230,12 +230,12 @@ class FmcwMimoApp(Application):
         self.add_flow(cfar, mask_sink, {("detection_mask", "input")})
         self.add_flow(cfar, noise_sink, {("noise_estimate", "input")})
 
-        # Clustering subgraph — dropped when peak_only is set. The angle branch
-        # (gather/beamscan) still runs; in peak_only its aoa feeds
+        # Clustering subgraph — dropped when CFAR emits peaks directly. The
+        # angle branch still runs; in peak mode its aoa feeds
         # DetectionReportOp (optional aoa_estimates) instead of feature_assembly.
         cluster = None
         reduction = None
-        if not cfg.peak_only:
+        if not cfg.use_cfar_peaks:
             feature_assembly = FeatureAssemblyOp(
                 self,
                 features=[
@@ -373,7 +373,7 @@ class FmcwMimoApp(Application):
             self.add_flow(cfar, to_image, {("cfar_power", "rd_maps")})
             self.add_flow(to_image, visualizer, {("rd_image", "receivers")})
             # Overlay/plot/boresight color or index by cluster when clustering
-            # runs; in peak_only mode they fall back to the raw CFAR peaks.
+            # runs; in peak mode they fall back to raw CFAR peaks.
             self.add_flow(cfar, overlay, {("detection_idx", "detection_idx")})
             self.add_flow(cfar, overlay, {("cfar_power", "rd_maps")})
             # Physical axis bins for the RD-map tick labels (range X, velocity Y);
@@ -383,7 +383,7 @@ class FmcwMimoApp(Application):
                 self.add_flow(ddm_velocity_bins, overlay, {("velocity_bins", "velocity_bins")})
             else:
                 self.add_flow(doppler, overlay, {("velocity_bins", "velocity_bins")})
-            if not cfg.peak_only:
+            if not cfg.use_cfar_peaks:
                 self.add_flow(cluster, overlay, {("labels", "labels")})
                 # rep_idx colors each cluster by its representative RD cell
                 # (stable across frames) instead of the flickery size-rank label.
@@ -398,7 +398,7 @@ class FmcwMimoApp(Application):
                 self.add_flow(overlay, visualizer, {("time_specs", "input_specs")})
 
             if plot is not None:
-                if not cfg.peak_only:
+                if not cfg.use_cfar_peaks:
                     self.add_flow(reduction, plot, {("rep_idx", "rep_idx")})
                     # labels flag clustered mode; the plot then colors each rep by
                     # its RD cell (matching the RD-map / boresight markers).
@@ -413,7 +413,7 @@ class FmcwMimoApp(Application):
                 self.add_flow(plot, visualizer, {("plots", "receivers")})
             if boresight is not None:
                 self.add_flow(beamscan, boresight, {("aoa_estimates", "aoa_estimates")})
-                if not cfg.peak_only:
+                if not cfg.use_cfar_peaks:
                     self.add_flow(cluster, boresight, {("labels", "labels")})
                     self.add_flow(reduction, boresight, {("rep_idx", "rep_idx")})
                 self.add_flow(boresight, visualizer, {("plot", "receivers")})

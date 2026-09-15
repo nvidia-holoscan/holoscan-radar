@@ -29,6 +29,7 @@ namespace {
 
 using holoscan::radar::CFARDetectorOp;
 using holoscan::radar::CFARParams;
+using holoscan::radar::CfarPeakMode;
 using holoscan::radar::CfarPeakNeighborhood;
 using holoscan::radar::CfarVariant;
 using holoscan::radar::complex_dtype;
@@ -754,7 +755,7 @@ TEST(CFARDetectorOpOsTest,
       << " alpha_large=" << alpha_large;
 }
 
-TEST(CFARDetectorOpOsTest, PeakOnlyOffMatchesRawMask) {
+TEST(CFARDetectorOpOsTest, PeakModeNoneMatchesRawMask) {
   const auto map =
       power_map(1.0, {{8, 15}, {8, 16}, {8, 17}}, 100.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange},
@@ -762,7 +763,7 @@ TEST(CFARDetectorOpOsTest, PeakOnlyOffMatchesRawMask) {
 
   const auto raw = run_cfar<double>(input, os_params(1e-2));
   CFARParams off = os_params(1e-2);
-  off.peak_only = false;
+  off.peak_mode = CfarPeakMode::kNone;
   const auto out = run_cfar<double>(input, off);
 
   EXPECT_EQ(num_detections(raw.idx), 3);
@@ -772,7 +773,7 @@ TEST(CFARDetectorOpOsTest, PeakOnlyOffMatchesRawMask) {
   }
 }
 
-TEST(CFARDetectorOpOsTest, PeakOnlyKeepsSingleMax) {
+TEST(CFARDetectorOpOsTest, PeakModeRangeDopplerKeepsSingleMax) {
   auto data = power_map(1.0, {}, 1.0);
   data[static_cast<size_t>(8 * kRange + 16)] = 100.0;
   data[static_cast<size_t>(8 * kRange + 17)] = 50.0;
@@ -780,7 +781,7 @@ TEST(CFARDetectorOpOsTest, PeakOnlyKeepsSingleMax) {
                                         real_dtype<double>());
 
   CFARParams params = os_params(1e-2);
-  params.peak_only = true;
+  params.peak_mode = CfarPeakMode::kRangeDoppler;
   const auto out = run_cfar<double>(input, params);
 
   ASSERT_EQ(num_detections(out.idx), 1);
@@ -792,14 +793,14 @@ TEST(CFARDetectorOpOsTest, PeakOnlyKeepsSingleMax) {
 }
 
 TEST(CFARDetectorOpOsTest,
-     PeakOnlyCollapsesStripRasterTiebreak) {
+     PeakModeRangeDopplerUsesRasterTiebreak) {
   const auto map =
       power_map(1.0, {{8, 15}, {8, 16}, {8, 17}}, 100.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange},
                                         real_dtype<double>());
 
   CFARParams params = os_params(1e-2);
-  params.peak_only = true;
+  params.peak_mode = CfarPeakMode::kRangeDoppler;
   const auto out = run_cfar<double>(input, params);
 
   ASSERT_EQ(num_detections(out.idx), 1);
@@ -807,7 +808,7 @@ TEST(CFARDetectorOpOsTest,
 }
 
 TEST(CFARDetectorOpOsTest,
-     PeakOnlyNeighborhoodCross4VsSquare8) {
+     PeakModeRangeDopplerUsesConfiguredNeighborhood) {
   auto data = power_map(1.0, {}, 1.0);
   data[static_cast<size_t>(8 * kRange + 16)] = 100.0;
   data[static_cast<size_t>(9 * kRange + 17)] = 90.0;
@@ -815,7 +816,7 @@ TEST(CFARDetectorOpOsTest,
                                         real_dtype<double>());
 
   CFARParams cross = os_params(1e-2);
-  cross.peak_only = true;
+  cross.peak_mode = CfarPeakMode::kRangeDoppler;
   cross.peak_neighborhood = CfarPeakNeighborhood::kCross4;
   CFARParams square = cross;
   square.peak_neighborhood = CfarPeakNeighborhood::kSquare8;

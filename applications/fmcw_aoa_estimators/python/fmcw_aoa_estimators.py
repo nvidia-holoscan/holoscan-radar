@@ -280,13 +280,13 @@ class FmcwAoaEstimatorsApp(Application):
         self.add_flow(cfar, mask_sink, {("detection_mask", "input")})
         self.add_flow(cfar, noise_sink, {("noise_estimate", "input")})
 
-        # Clustering subgraph - dropped when peak_only is set. In that mode CFAR
+        # Clustering subgraph - dropped when CFAR emits peaks directly. Then CFAR
         # already emits one detection per target, so the per-detection angle is
         # reported through DetectionReportOp's optional aoa_estimates input
         # instead of via the (removed) cluster report.
         cluster = None
         reduction = None
-        if not cfg.peak_only:
+        if not cfg.use_cfar_peaks:
             feature_assembly = FeatureAssemblyOp(
                 self,
                 features=[
@@ -466,13 +466,13 @@ class FmcwAoaEstimatorsApp(Application):
         self.add_flow(label, visualizer, {("input_specs", "input_specs")})
         self.add_flow(label, visualizer, {("label_pos", "receivers")})
         # Overlay/plot/boresight color or index by cluster when clustering runs;
-        # in peak_only mode they fall back to the raw CFAR peaks.
+        # in peak mode they fall back to raw CFAR peaks.
         self.add_flow(cfar, overlay, {("detection_idx", "detection_idx")})
         self.add_flow(cfar, overlay, {("cfar_power", "rd_maps")})
         # Physical axis bins for the RD-map tick labels (range X, velocity Y).
         self.add_flow(range_op, overlay, {("range_bins", "range_bins")})
         self.add_flow(doppler, overlay, {("velocity_bins", "velocity_bins")})
-        if not cfg.peak_only:
+        if not cfg.use_cfar_peaks:
             self.add_flow(cluster, overlay, {("labels", "labels")})
             # rep_idx colors each cluster by its representative RD cell (stable
             # across frames) instead of the flickery size-rank label.
@@ -488,7 +488,7 @@ class FmcwAoaEstimatorsApp(Application):
             self.add_flow(overlay, label, {("time_specs", "specs_in")})
 
         if plot is not None:
-            if not cfg.peak_only:
+            if not cfg.use_cfar_peaks:
                 self.add_flow(reduction, plot, {("rep_idx", "rep_idx")})
                 # labels flag clustered mode; the plot then colors each rep by
                 # its RD cell (matching the RD-map / boresight markers).
@@ -502,7 +502,7 @@ class FmcwAoaEstimatorsApp(Application):
             # Boresight az/el is fed by whichever estimator ran this frame.
             for est in estimators:
                 self.add_flow(est, boresight, {("aoa_estimates", "aoa_estimates")})
-            if not cfg.peak_only:
+            if not cfg.use_cfar_peaks:
                 self.add_flow(cluster, boresight, {("labels", "labels")})
                 self.add_flow(reduction, boresight, {("rep_idx", "rep_idx")})
             self.add_flow(boresight, visualizer, {("plot", "receivers")})

@@ -43,6 +43,7 @@ from .beamscan_estimator_op import BeamscanEstimatorOpF64
 from .cfar_detector_op import CFARDetectorOpF32  # noqa: F401
 from .cfar_detector_op import (
     CFARDetectorOpF64,
+    CfarPeakMode,
     CfarPeakNeighborhood,
     CfarVariant,
     build_ca_alpha_lut,
@@ -246,6 +247,7 @@ __all__ = [
     "CFARDetectorOpF32",
     "CFARDetectorOpF64",
     "CadenceMeter",
+    "CfarPeakMode",
     "CfarPeakNeighborhood",
     "CfarVariant",
     "ClusterDBSCANOp",

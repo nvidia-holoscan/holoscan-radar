@@ -57,9 +57,29 @@ constexpr std::string_view to_string(CfarVariant variant) {
   return "unknown";
 }
 
-// Neighborhood for the optional peak-grouping (non-maximum-suppression) stage
-// (peak_only). Static per instance. cross4 = the 2 range + 2 Doppler orthogonal
-// neighbors; square8 = the full 8-cell neighborhood.
+// Static peak-selection policy. range_doppler applies NMS independently to
+// each leading plane; all applies full immediate-neighborhood N-D NMS.
+enum class CfarPeakMode {
+  kNone,
+  kRangeDoppler,
+  kAll,
+};
+
+constexpr std::string_view to_string(CfarPeakMode mode) {
+  switch (mode) {
+    case CfarPeakMode::kNone:
+      return "none";
+    case CfarPeakMode::kRangeDoppler:
+      return "range_doppler";
+    case CfarPeakMode::kAll:
+      return "all";
+  }
+  return "unknown";
+}
+
+// Neighborhood for range-Doppler NMS. Static per instance. cross4 = the 2
+// range + 2 Doppler orthogonal neighbors; square8 = the full 8-cell
+// neighborhood. CfarPeakMode::kAll always uses its full N-D neighborhood.
 enum class CfarPeakNeighborhood {
   kCross4,   // 4-connected (2 range + 2 Doppler)
   kSquare8,  // 8-connected (full 3x3 minus the center)
@@ -87,13 +107,22 @@ inline constexpr CfarPeakNeighborhood kCfarPeakNeighborhoods[] = {
     CfarPeakNeighborhood::kCross4,
     CfarPeakNeighborhood::kSquare8,
 };
+inline constexpr CfarPeakMode kCfarPeakModes[] = {
+    CfarPeakMode::kNone,
+    CfarPeakMode::kRangeDoppler,
+    CfarPeakMode::kAll,
+};
 using CfarVariantCodec =
     CanonicalEnumCodec<CfarVariant, kCfarVariants>;  // NOLINT
 using CfarPeakNeighborhoodCodec =
     CanonicalEnumCodec<CfarPeakNeighborhood, kCfarPeakNeighborhoods>;  // NOLINT
+using CfarPeakModeCodec =
+    CanonicalEnumCodec<CfarPeakMode, kCfarPeakModes>;  // NOLINT
 using CfarVariantStorage = PortableParamStorageTraits<CfarVariant>;
 using CfarPeakNeighborhoodStorage =
     PortableParamStorageTraits<CfarPeakNeighborhood>;  // NOLINT
+using CfarPeakModeStorage =
+    PortableParamStorageTraits<CfarPeakMode>;  // NOLINT
 
 }  // namespace config_detail
 }  // namespace holoscan::radar
@@ -107,6 +136,9 @@ struct ConfigCodec<radar::CfarVariant>
 template <>
 struct ConfigCodec<radar::CfarPeakNeighborhood>
     : radar::config_detail::CfarPeakNeighborhoodCodec {};  // NOLINT
+template <>
+struct ConfigCodec<radar::CfarPeakMode>
+    : radar::config_detail::CfarPeakModeCodec {};  // NOLINT
 
 }  // namespace holoscan::config
 
@@ -118,6 +150,9 @@ struct ParamStorageTraits<radar::CfarVariant>
 template <>
 struct ParamStorageTraits<radar::CfarPeakNeighborhood>
     : radar::config_detail::CfarPeakNeighborhoodStorage {};  // NOLINT
+template <>
+struct ParamStorageTraits<radar::CfarPeakMode>
+    : radar::config_detail::CfarPeakModeStorage {};  // NOLINT
 
 }  // namespace holoscan
 
@@ -163,7 +198,7 @@ struct CfarAlphaLutKey {
 //                       (..., num_doppler, num_range_bins), with nci_axes
 //                       reduced. 1 where detected (detection_score > 1).
 //                       uint8 rather than bool so the mask is NumPy-visible.
-//                       When peak_only is set, only retained peaks are marked.
+//                       When peak_mode selects NMS, only retained peaks mark.
 // Out (optional/latched): detection_score — float32/float64, mask shape.
 // Out (optional/latched): noise_estimate — float32/float64, mask shape.
 // Out (optional/latched): cfar_power — float32/float64, mask shape; the exact
@@ -193,7 +228,7 @@ struct CFARParams {
   int64_t nci_fold{0};
   int64_t max_detections{0};  // <= 0 → uncapped
   bool blocking_alpha_lut_rebuild{false};
-  bool peak_only{false};
+  CfarPeakMode peak_mode{CfarPeakMode::kNone};
   CfarPeakNeighborhood peak_neighborhood{CfarPeakNeighborhood::kSquare8};
 };
 
@@ -243,13 +278,14 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "When false, serve the previous LUT while a new one calibrates "
             "after a config change; when true, block until ready; static"),
-    holoscan::field<&CFARParams::peak_only>("peak_only")
+    holoscan::field<&CFARParams::peak_mode>("peak_mode")
         .description(
-            "When true, collapse each contiguous above-threshold blob to its "
-            "local-maximum cell; static"),
+            "Peak selection {none, range_doppler, all}; all uses full N-D "
+            "local-maximum suppression; static"),
     holoscan::field<&CFARParams::peak_neighborhood>("peak_neighborhood")
         .description(
-            "Neighborhood for peak_only NMS {cross4, square8}; static"));
+            "Neighborhood for range_doppler peak NMS {cross4, square8}; "
+            "ignored by other peak modes; static"));
 
 static_assert(holoscan::param_schema_availability<CFARParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,

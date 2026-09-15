@@ -45,7 +45,7 @@ class PyCFARDetectorOp : public CFARDetectorOp<T> {
       int64_t nci_fold = 0,
       int64_t max_detections = 0,
       bool blocking_alpha_lut_rebuild = false,
-      bool peak_only = false,
+      CfarPeakMode peak_mode = CfarPeakMode::kNone,
       CfarPeakNeighborhood peak_neighborhood = CfarPeakNeighborhood::kSquare8,
       int64_t max_doppler_bins = 512,
       int64_t max_range_bins = 4096,
@@ -83,7 +83,7 @@ class PyCFARDetectorOp : public CFARDetectorOp<T> {
     this->add_arg(Arg("max_detections") = max_detections);
     this->add_arg(Arg("blocking_alpha_lut_rebuild") =
                       blocking_alpha_lut_rebuild);
-    this->add_arg(Arg("peak_only") = peak_only);
+    this->add_arg(Arg("peak_mode") = peak_mode);
     this->add_arg(Arg("peak_neighborhood") = peak_neighborhood);
     this->setup(*this->spec_);
     python::add_conditions_and_resources(this, args);
@@ -112,7 +112,7 @@ void bind_cfar_detector(py::module_& m, const char* class_name) {
       "nci_fold : int, optional\n"
       "max_detections : int, optional\n"
       "blocking_alpha_lut_rebuild : bool, optional\n"
-      "peak_only : bool, optional\n"
+      "peak_mode : CfarPeakMode, optional\n"
       "peak_neighborhood : CfarPeakNeighborhood, optional\n"
       "name : str, optional\n")
       .def(py::init<Fragment*, const py::args&, CfarVariant, int64_t,
@@ -120,7 +120,7 @@ void bind_cfar_detector(py::module_& m, const char* class_name) {
                     const std::vector<int64_t>&, double,
                     const std::vector<double>&, double,
                     const std::vector<int64_t>&, int64_t, int64_t, int64_t,
-                    bool, bool, CfarPeakNeighborhood, int64_t,
+                    bool, CfarPeakMode, CfarPeakNeighborhood, int64_t,
                     int64_t, int64_t, int64_t, int64_t,
                     const std::string&>(),
            py::arg("fragment"),
@@ -136,7 +136,7 @@ void bind_cfar_detector(py::module_& m, const char* class_name) {
            py::arg("nci_fold") = int64_t{0},
            py::arg("max_detections") = int64_t{0},
            py::arg("blocking_alpha_lut_rebuild") = false,
-           py::arg("peak_only") = false,
+           py::arg("peak_mode") = CfarPeakMode::kNone,
            py::arg("peak_neighborhood") =
                CfarPeakNeighborhood::kSquare8,
            py::arg("max_doppler_bins") = int64_t{512},
@@ -162,6 +162,13 @@ void bind_cfar_peak_neighborhood(py::module_& m) {
       .value("SQUARE8", CfarPeakNeighborhood::kSquare8);
 }
 
+void bind_cfar_peak_mode(py::module_& m) {
+  py::enum_<CfarPeakMode>(m, "CfarPeakMode")
+      .value("NONE", CfarPeakMode::kNone)
+      .value("RANGE_DOPPLER", CfarPeakMode::kRangeDoppler)
+      .value("ALL", CfarPeakMode::kAll);
+}
+
 }  // namespace
 
 }  // namespace holoscan::radar
@@ -170,6 +177,7 @@ PYBIND11_MODULE(_cfar_detector_op, m) {
   holoscan::radar::ensure_radar_arg_setters();
   m.doc() = "CFARDetectorOp Python bindings";
   holoscan::radar::bind_cfar_variant(m);
+  holoscan::radar::bind_cfar_peak_mode(m);
   holoscan::radar::bind_cfar_peak_neighborhood(m);
   holoscan::radar::bind_cfar_detector<float>(m, "CFARDetectorOpF32");
   holoscan::radar::bind_cfar_detector<double>(m, "CFARDetectorOpF64");
