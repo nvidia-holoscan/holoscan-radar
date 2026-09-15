@@ -3,6 +3,8 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <vector>
@@ -55,6 +57,19 @@ TEST(SimoDashboardTest, ComputesClusterCentroids) {
   EXPECT_EQ(centroids[1].color_bucket, 1);
 }
 
+TEST(SimoDashboardTest, UsesReducedFeaturesForHistory) {
+  std::vector<viz::ClusterCentroid> centroids(2);
+  viz::detail::apply_reduced_features(
+      &centroids,
+      {10.0F, 1.0F, 0.1F, 0.2F, 3.0F,
+       20.0F, 2.0F, 0.3F, 0.4F, 4.0F},
+      5);
+  EXPECT_EQ(centroids[0].features,
+            (std::array<float, 4>{10.0F, 1.0F, 0.1F, 0.2F}));
+  EXPECT_EQ(centroids[1].features,
+            (std::array<float, 4>{20.0F, 2.0F, 0.3F, 0.4F}));
+}
+
 TEST(SimoDashboardTest, BoundsHistoryAndMapsPanelCoordinates) {
   std::deque<viz::HistorySample> history;
   const viz::ClusterCentroid centroid{
@@ -69,6 +84,18 @@ TEST(SimoDashboardTest, BoundsHistoryAndMapsPanelCoordinates) {
       history.back(), 4, 3, 2, {-0.5F, 0.5F});
   EXPECT_FLOAT_EQ(position[0], 1.0F);
   EXPECT_FLOAT_EQ(position[1], 0.75F);
+}
+
+TEST(SimoDashboardTest, DerivesMovingTargetTruthFeatures) {
+  const viz::TruthTarget target{
+      .position = {1.0, 0.0, 0.0},
+      .velocity = {0.0, 1.0, 1.0},
+  };
+  const auto features = viz::detail::truth_features_at_time(target, 1.0);
+  EXPECT_NEAR(features[0], std::sqrt(3.0F), 1.0e-6F);
+  EXPECT_NEAR(features[1], 2.0F / std::sqrt(3.0F), 1.0e-6F);
+  EXPECT_NEAR(features[2], std::acos(-1.0F) / 4.0F, 1.0e-6F);
+  EXPECT_NEAR(features[3], std::asin(1.0F / std::sqrt(3.0F)), 1.0e-6F);
 }
 
 }  // namespace

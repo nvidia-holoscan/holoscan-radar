@@ -35,6 +35,12 @@ struct HistorySample {
   int color_bucket{0};
 };
 
+struct TruthTarget {
+  std::array<double, 3> position{};
+  std::array<double, 3> velocity{};
+  int color_bucket{0};
+};
+
 struct SimoDisplayConfig {
   float dynamic_range_db{60.0F};
   float detection_radius{0.010F};
@@ -45,6 +51,7 @@ struct SimoDisplayConfig {
   std::array<float, 2> az_bounds{};
   std::array<float, 2> el_bounds{};
   std::string title;
+  std::vector<TruthTarget> truth_targets;
 };
 
 class SimoDisplayOp : public holoscan::Operator<> {
@@ -63,6 +70,7 @@ class SimoDisplayOp : public holoscan::Operator<> {
   holoscan::Input<holoscan::Tensor> sizes{"sizes"};
   holoscan::Input<holoscan::Tensor> range_bins{"range_bins"};
   holoscan::Input<holoscan::Tensor> velocity_bins{"velocity_bins"};
+  holoscan::Input<holoscan::Tensor> reduced_points{"reduced_points"};
   holoscan::Output<holoscan::Tensor> rgba{"rgba"};
 
  private:
@@ -87,6 +95,10 @@ std::vector<ClusterCentroid> compute_cluster_centroids(
     const std::vector<std::int64_t>& sizes, std::int64_t idx_cols,
     std::int64_t point_cols);
 
+void apply_reduced_features(std::vector<ClusterCentroid>* centroids,
+                            const std::vector<float>& reduced_points,
+                            std::int64_t reduced_cols);
+
 void append_history(std::deque<HistorySample>* history,
                     const std::vector<ClusterCentroid>& centroids,
                     std::int64_t frame, std::int64_t history_frames);
@@ -95,6 +107,9 @@ std::array<float, 2> history_plot_position(
     const HistorySample& sample, std::int64_t current_frame,
     std::int64_t history_frames, int feature,
     std::array<float, 2> bounds);
+
+std::array<float, 4> truth_features_at_time(const TruthTarget& target,
+                                            double time);
 
 }  // namespace detail
 

@@ -224,11 +224,12 @@ int main(int argc, char** argv) {
           simo::viz::add_simo_visualization(
               graph, application, options, cfg.visualization,
               cfg.frame_period, cfg.beamformer_params->az_angles,
-              cfg.beamformer_params->el_angles, "Beamform then detect",
+              cfg.beamformer_params->el_angles, cfg.scene.targets,
+              "Beamform then detect",
               simo::viz::SimoVizInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,
                   cluster->labels, cluster->sizes, range->range_bins,
-                  doppler->velocity_bins});
+                  doppler->velocity_bins, reduction->reduced_points});
         }
 #endif
       });

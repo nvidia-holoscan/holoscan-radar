@@ -19,12 +19,16 @@ flowchart LR
     Doppler -- RD maps --> Gather[Snapshot gather]
     CFAR -- detection indices --> Gather
     Gather --> Beamscan[Beamscan estimator]
-    CFAR --> Features[Feature assembly]
+    CFAR --> Features[Clustering feature assembly]
     Range -- range bins --> Features
     Doppler -- velocity bins --> Features
     Beamscan -- AoA estimates --> Features
     Features --> DBSCAN[DBSCAN]
-    Features --> Reduction[Detection reduction]
+    CFAR -- indices and score --> ReductionFeatures[Reduction feature assembly]
+    Range -- range bins --> ReductionFeatures
+    Doppler -- velocity bins --> ReductionFeatures
+    Beamscan -- AoA estimates --> ReductionFeatures
+    ReductionFeatures --> Reduction[Detection reduction]
     CFAR --> Reduction
     DBSCAN --> Reduction
     Features --> Report[Cluster report]
@@ -32,6 +36,7 @@ flowchart LR
     Reduction --> Report
     CFAR -- CFAR power and indices --> Display[Annotated RD compositor]
     Features -- physical points --> Display
+    Reduction -- score-weighted points --> Display
     DBSCAN -- labels and sizes --> Display
     Range -- physical bins --> Display
     Doppler -- physical bins --> Display
@@ -51,12 +56,16 @@ flowchart LR
     Clutter --> Doppler[Doppler processor]
     Doppler --> Beamformer[Phase-shift beamformer]
     Beamformer --> CFAR[CFAR per angle plane]
-    CFAR --> Features[Feature assembly]
+    CFAR --> Features[Clustering feature assembly]
     Beamformer -- angle grids --> Features
     Range -- range bins --> Features
     Doppler -- velocity bins --> Features
     Features --> DBSCAN[DBSCAN]
-    Features --> Reduction[Detection reduction]
+    CFAR -- indices and score --> ReductionFeatures[Reduction feature assembly]
+    Beamformer -- angle grids --> ReductionFeatures
+    Range -- range bins --> ReductionFeatures
+    Doppler -- velocity bins --> ReductionFeatures
+    ReductionFeatures --> Reduction[Detection reduction]
     CFAR --> Reduction
     DBSCAN --> Reduction
     Features --> Report[Cluster report]
@@ -64,6 +73,7 @@ flowchart LR
     Reduction --> Report
     CFAR -- CFAR power and indices --> Display[Annotated RD compositor]
     Features -- physical points --> Display
+    Reduction -- score-weighted points --> Display
     DBSCAN -- labels and sizes --> Display
     Range -- physical bins --> Display
     Doppler -- physical bins --> Display
@@ -76,8 +86,12 @@ Both applications report clustered detections and their selected
 representatives to the log. When visualization is enabled, the stock HSDK 5
 Holoviz sink shows the CFAR power projected onto the range-Doppler plane,
 clustered detections as color-coded ovals. A 2×2 grid to the right shows
-unconnected rolling centroid
-samples for range, velocity, azimuth, and elevation versus scenario time. The
+the simulated target truth as continuous color-coded trajectories behind
+rolling score-weighted cluster means for range, velocity, azimuth, and
+elevation versus scenario time. A separate five-column reduction feature
+matrix adds `detection_score`; DBSCAN continues to cluster only the four
+physical columns. Truth and reduced-point colors are assigned by ascending
+range so corresponding tracks are easy to compare. The
 retained RGBA frame keeps the complete dashboard visible between slower radar
 frames on the faster display clock. The fresh compositor in `cpp/viz/` is
 independent of the legacy `radar_app/viz` implementation.

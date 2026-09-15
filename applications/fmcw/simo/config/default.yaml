@@ -41,7 +41,7 @@ range_processor:
   waveform: *waveform
   range_window: hann
 clutter_filter:
-  method: mean_subtraction
+  method: double_delay
 doppler_processor:
   waveform: *waveform
   doppler_window: hann

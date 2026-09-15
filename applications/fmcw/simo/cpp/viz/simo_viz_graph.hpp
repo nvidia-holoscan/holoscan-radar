@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -21,6 +22,7 @@
 #include <holoviz/sink_desc.hpp>
 
 #include "config_schema.hpp"  // NOLINT(build/include_subdir): app-private header
+#include "radar_common/sim/scene.hpp"
 #include "viz/simo_viz_ops.hpp"  // NOLINT(build/include_subdir)
 
 namespace holoscan::radar::app::simo::viz {
@@ -33,6 +35,25 @@ inline std::array<float, 2> axis_bounds(const std::vector<double>& grid) {
                        : std::array<float, 2>{lower - 0.5F, upper + 0.5F};
 }
 
+inline std::vector<TruthTarget> make_truth_targets(
+    std::vector<sim::PointTarget> targets) {
+  std::stable_sort(
+      targets.begin(), targets.end(),
+      [](const sim::PointTarget& lhs, const sim::PointTarget& rhs) {
+        return sim::norm(lhs.position) < sim::norm(rhs.position);
+      });
+  std::vector<TruthTarget> result;
+  result.reserve(targets.size());
+  for (std::size_t rank = 0; rank < targets.size(); ++rank) {
+    result.push_back(TruthTarget{
+        .position = targets[rank].position,
+        .velocity = targets[rank].velocity,
+        .color_bucket = static_cast<int>(rank),
+    });
+  }
+  return result;
+}
+
 struct SimoVizInputs {
   const holoscan::Output<holoscan::Tensor>& cfar_power;
   const holoscan::Output<holoscan::Tensor>& detection_idx;
@@ -41,13 +62,16 @@ struct SimoVizInputs {
   const holoscan::Output<holoscan::Tensor>& sizes;
   const holoscan::Output<holoscan::Tensor>& range_bins;
   const holoscan::Output<holoscan::Tensor>& velocity_bins;
+  const holoscan::Output<holoscan::Tensor>& reduced_points;
 };
 
 inline void add_simo_visualization(
     holoscan::Graph& graph, holoscan::PartitionHandle& application,
     holoscan::CompileOptions& options, const VisualizationConfig& config,
     double frame_period, const std::vector<double>& az_grid,
-    const std::vector<double>& el_grid, std::string workflow_title,
+    const std::vector<double>& el_grid,
+    const std::vector<sim::PointTarget>& truth_targets,
+    std::string workflow_title,
     const SimoVizInputs& inputs) {
   auto display = graph.op<SimoDisplayOp>(
       "display_compositor",
@@ -63,6 +87,7 @@ inline void add_simo_visualization(
           .az_bounds = axis_bounds(az_grid),
           .el_bounds = axis_bounds(el_grid),
           .title = workflow_title,
+          .truth_targets = make_truth_targets(truth_targets),
       });
   options.deployment.bind_tensor_output_device(
       holoscan::TensorOutputDevicePlacement{
@@ -109,6 +134,8 @@ inline void add_simo_visualization(
   graph.add_flow(inputs.sizes, display->sizes, processing_queue);
   graph.add_flow(inputs.range_bins, display->range_bins, processing_queue);
   graph.add_flow(inputs.velocity_bins, display->velocity_bins,
+                 processing_queue);
+  graph.add_flow(inputs.reduced_points, display->reduced_points,
                  processing_queue);
   graph.add_flow(display->rgba, holoviz->layer_input(0), display_queue);
 }

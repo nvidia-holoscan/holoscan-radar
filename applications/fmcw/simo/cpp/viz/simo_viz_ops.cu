@@ -160,7 +160,8 @@ expected<std::vector<float>, Error> copy_float_to_host(
 void validate_dashboard_inputs(const Tensor& detection_idx,
                                const Tensor& points, const Tensor& labels,
                                const Tensor& sizes, const Tensor& range_bins,
-                               const Tensor& velocity_bins) {
+                               const Tensor& velocity_bins,
+                               const Tensor& reduced_points) {
   if (detection_idx.shape().size() != 2U ||
       detection_idx.shape()[1] < 2 ||
       points.shape().size() != 2U || points.shape()[1] != 4 ||
@@ -169,7 +170,10 @@ void validate_dashboard_inputs(const Tensor& detection_idx,
       labels.shape()[0] != detection_idx.shape()[0] ||
       sizes.shape().size() != 1U ||
       range_bins.shape().size() != 1U || range_bins.shape()[0] <= 0 ||
-      velocity_bins.shape().size() != 1U || velocity_bins.shape()[0] <= 0) {
+      velocity_bins.shape().size() != 1U || velocity_bins.shape()[0] <= 0 ||
+      reduced_points.shape().size() != 2U ||
+      reduced_points.shape()[0] != sizes.shape()[0] ||
+      reduced_points.shape()[1] < 4) {
     throw std::invalid_argument(
         "SimoDisplayOp: incompatible detection, cluster, or axis shapes");
   }
@@ -460,6 +464,38 @@ void draw_history_panel(
               plot.y + plot.height + 4, x_label, 1);
   }
 
+  const std::int64_t first_truth_frame =
+      std::max<std::int64_t>(0, frame_index - config.history_frames + 1);
+  for (const TruthTarget& target : config.truth_targets) {
+    const auto& color =
+        kClusterColors[static_cast<std::size_t>(target.color_bucket) %
+                       kClusterColors.size()];
+    std::array<int, 2> previous{};
+    bool have_previous = false;
+    for (std::int64_t frame = first_truth_frame; frame <= frame_index;
+         ++frame) {
+      const HistorySample truth_sample{
+          .frame = frame,
+          .features = detail::truth_features_at_time(
+              target, static_cast<double>(frame) * config.frame_period)};
+      const auto position = detail::history_plot_position(
+          truth_sample, frame_index, config.history_frames, feature, bounds);
+      const std::array<int, 2> pixel{
+          plot.x + static_cast<int>(position[0] * (plot.width - 1)),
+          plot.y + plot.height - 1 -
+              static_cast<int>(position[1] * (plot.height - 1))};
+      if (have_previous) {
+        draw_line(image, width, height, previous[0], previous[1], pixel[0],
+                  pixel[1], color);
+      }
+      previous = pixel;
+      have_previous = true;
+    }
+    if (have_previous && first_truth_frame == frame_index) {
+      draw_disc(image, width, height, previous[0], previous[1], 1, color);
+    }
+  }
+
   for (const HistorySample& sample : history) {
     const auto position = detail::history_plot_position(
         sample, frame_index, config.history_frames, feature, bounds);
@@ -629,6 +665,9 @@ void SimoDisplayOp::setup(holoscan::OperatorSpec& spec) {
   spec.input(velocity_bins)
       .queue_depth(2U)
       .expects_tensor(tensor_input(kDevice));
+  spec.input(reduced_points)
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kDevice));
   spec.output(rgba).produces_tensor(
       pooled_tensor_output(kImage, 3U, max_byte_span_));
 }
@@ -639,7 +678,8 @@ holoscan::Contract SimoDisplayOp::contract() const {
       .trigger(holoscan::OnAligned{
           .ports = holoscan::ports(cfar_power, detection_idx, points, labels,
                                    sizes,
-                                   range_bins, velocity_bins),
+                                   range_bins, velocity_bins,
+                                   reduced_points),
           .window = std::chrono::nanoseconds{0}})
       .input(cfar_power, holoscan::Exact{})
       .input(detection_idx, holoscan::Exact{})
@@ -647,7 +687,8 @@ holoscan::Contract SimoDisplayOp::contract() const {
       .input(labels, holoscan::Exact{})
       .input(sizes, holoscan::Exact{})
       .input(range_bins, holoscan::Exact{})
-      .input(velocity_bins, holoscan::Exact{});
+      .input(velocity_bins, holoscan::Exact{})
+      .input(reduced_points, holoscan::Exact{});
   return result;
 }
 
@@ -661,11 +702,12 @@ expected<void, Error> SimoDisplayOp::compute(
   HOLOSCAN_TRY(auto cluster_sizes, receive_tensor(sizes, kWho));
   HOLOSCAN_TRY(auto ranges, receive_tensor(range_bins, kWho));
   HOLOSCAN_TRY(auto velocities, receive_tensor(velocity_bins, kWho));
+  HOLOSCAN_TRY(auto reduced, receive_tensor(reduced_points, kWho));
   BatchedShape layout;
   try {
     layout = collapse_batch(power, "SimoDisplayOp.cfar_power");
     validate_dashboard_inputs(idx, feature_points, cluster_labels,
-                              cluster_sizes, ranges, velocities);
+                              cluster_sizes, ranges, velocities, reduced);
   } catch (const std::invalid_argument& e) {
     return make_unexpected(
         Error{ErrorCode::kInvalidArgument, std::string(e.what())});
@@ -692,16 +734,20 @@ expected<void, Error> SimoDisplayOp::compute(
                copy_float_to_host(ranges, stream, "range_bins"));
   HOLOSCAN_TRY(auto host_velocities,
                copy_float_to_host(velocities, stream, "velocity_bins"));
+  HOLOSCAN_TRY(auto host_reduced,
+               copy_float_to_host(reduced, stream, "reduced_points"));
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
     return cuda_failure(kWho, "annotation input synchronization");
   }
 
   std::vector<std::uint8_t> host_annotation;
   try {
-    const std::vector<ClusterCentroid> centroids =
+    std::vector<ClusterCentroid> centroids =
         detail::compute_cluster_centroids(
             host_idx, host_points, host_labels, host_sizes, idx.shape()[1],
             feature_points.shape()[1]);
+    detail::apply_reduced_features(
+        &centroids, host_reduced, reduced.shape()[1]);
     detail::append_history(&history_, centroids, frame_index_,
                            config_.history_frames);
     host_annotation = make_annotation(
@@ -923,6 +969,24 @@ std::vector<ClusterCentroid> compute_cluster_centroids(
   return result;
 }
 
+void apply_reduced_features(std::vector<ClusterCentroid>* centroids,
+                            const std::vector<float>& reduced_points,
+                            std::int64_t reduced_cols) {
+  if (centroids == nullptr || reduced_cols < 4 ||
+      reduced_points.size() !=
+          centroids->size() * static_cast<std::size_t>(reduced_cols)) {
+    throw std::invalid_argument(
+        "apply_reduced_features: incompatible reduced points");
+  }
+  for (std::size_t cluster = 0; cluster < centroids->size(); ++cluster) {
+    for (std::size_t feature = 0; feature < 4U; ++feature) {
+      (*centroids)[cluster].features[feature] =
+          reduced_points[cluster * static_cast<std::size_t>(reduced_cols) +
+                         feature];
+    }
+  }
+}
+
 void append_history(std::deque<HistorySample>* history,
                     const std::vector<ClusterCentroid>& centroids,
                     std::int64_t frame, std::int64_t history_frames) {
@@ -957,6 +1021,36 @@ std::array<float, 2> history_plot_position(
                    bounds[0]) /
                   (bounds[1] - bounds[0]);
   return {std::clamp(x, 0.0F, 1.0F), std::clamp(y, 0.0F, 1.0F)};
+}
+
+std::array<float, 4> truth_features_at_time(const TruthTarget& target,
+                                            double time) {
+  if (!std::isfinite(time)) {
+    throw std::invalid_argument("truth_features_at_time: non-finite time");
+  }
+  std::array<double, 3> position{};
+  double range_squared = 0.0;
+  for (std::size_t axis = 0; axis < position.size(); ++axis) {
+    position[axis] =
+        target.position[axis] + time * target.velocity[axis];
+    range_squared += position[axis] * position[axis];
+  }
+  const double range = std::sqrt(range_squared);
+  if (!std::isfinite(range) || range <= 0.0) {
+    throw std::invalid_argument(
+        "truth_features_at_time: target position has no finite direction");
+  }
+  const double radial_velocity =
+      (target.velocity[0] * position[0] +
+       target.velocity[1] * position[1] +
+       target.velocity[2] * position[2]) /
+      range;
+  const double azimuth = std::atan2(position[1], position[0]);
+  const double elevation =
+      std::atan2(position[2],
+                 std::hypot(position[0], position[1]));
+  return {static_cast<float>(range), static_cast<float>(radial_velocity),
+          static_cast<float>(azimuth), static_cast<float>(elevation)};
 }
 
 }  // namespace detail
