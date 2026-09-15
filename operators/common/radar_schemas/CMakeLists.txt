@@ -81,8 +81,16 @@ add_dependencies(radar_schemas
 target_compile_features(radar_schemas INTERFACE cxx_std_20)
 target_include_directories(radar_schemas INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
-    $<BUILD_INTERFACE:${RADAR_SCHEMAS_GENERATED_ROOT}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar>)
+# The generated tree is -isystem, not -I: every flatc Pack() declares a
+# _VectorArgs struct that only vector fields read, and the `(void)_va;` flatc
+# emits to suppress that satisfies GCC but not nvcc's EDG frontend, which
+# warns #550-D in every CUDA TU including a schema. Keep this call separate
+# from the one above — the hand-written bridge headers next to this file stay
+# on -I so their warnings still surface. INSTALL_INTERFACE needs no SYSTEM:
+# CMake already treats an imported target's interface includes as system.
+target_include_directories(radar_schemas SYSTEM INTERFACE
+    $<BUILD_INTERFACE:${RADAR_SCHEMAS_GENERATED_ROOT}>)
 target_link_libraries(radar_schemas INTERFACE
     holoscan::schema
     holoscan::radar_common)
