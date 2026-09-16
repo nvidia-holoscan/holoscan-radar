@@ -26,8 +26,14 @@ TEST(FmcwSimoConfig, DecodesDetectThenBeamformSmoke) {
       simo::load_detect_then_beamform_config(config_path("smoke.yaml"));
 
   EXPECT_EQ(config.num_frames, 5);
+  EXPECT_DOUBLE_EQ(config.frame_period, 0.1);
   EXPECT_EQ(config.scene.num_chirps, 64);
   EXPECT_EQ(config.scene.samples_per_chirp, 256);
+  EXPECT_EQ(config.scene.targets.size(), 1U);
+  ASSERT_TRUE(config.scene.snr_db.has_value());
+  EXPECT_DOUBLE_EQ(*config.scene.snr_db, 5.0);
+  EXPECT_EQ(config.clutter_params->method,
+            holoscan::radar::ClutterFilterMethod::kNone);
   EXPECT_EQ(config.array_geometry.num_elements(), 16);
   EXPECT_EQ(config.cfar_params->nci_axes, (std::vector<int64_t>{0}));
   EXPECT_EQ(config.cfar_params->nci_fold, 16);
@@ -51,11 +57,11 @@ TEST(FmcwSimoConfig, DecodesDetectThenBeamformSmoke) {
   EXPECT_EQ(config.dbscan_params->epsilon,
             (std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0, 1.5, 1.5}));
   EXPECT_EQ(config.reduction_params->feature_weights,
-            (std::vector<double>{0.3333, 0.5, 20.0, 20.0, 0.0, 0.0, 0.0}));
+            (std::vector<double>{0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0}));
   EXPECT_EQ(config.extents.max_az, 5);
   EXPECT_EQ(config.extents.max_el, 5);
   EXPECT_EQ(config.reduction_params->representative,
-            holoscan::radar::RepresentativePolicy::kMedoid);
+            holoscan::radar::RepresentativePolicy::kWeightedMean);
   EXPECT_FALSE(config.visualize);
 }
 
@@ -74,7 +80,7 @@ TEST(FmcwSimoConfig, DecodesBeamformThenDetectSmoke) {
   EXPECT_EQ(config.cfar_params->peak_mode,
             holoscan::radar::CfarPeakMode::kAll);
   EXPECT_EQ(config.cfar_params->peak_radius,
-            (std::vector<int64_t>{2, 2, 1, 1}));
+            (std::vector<int64_t>{2, 2, 2, 2}));
   EXPECT_EQ(config.extents.max_features, 9);
   EXPECT_EQ(config.assembly_params->features,
             (std::vector<holoscan::radar::AssemblyFeature>{
@@ -96,7 +102,7 @@ TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
       simo::load_beamform_then_detect_config(config_path("default.yaml"));
 
   EXPECT_EQ(detect.num_frames, 250);
-  EXPECT_EQ(detect.scene.targets.size(), 1U);
+  EXPECT_EQ(detect.scene.targets.size(), 5U);
   EXPECT_EQ(detect.extents.max_az, 13);
   EXPECT_EQ(beamform.extents.max_el, 13);
   EXPECT_EQ(detect.cfar_params->peak_mode,
