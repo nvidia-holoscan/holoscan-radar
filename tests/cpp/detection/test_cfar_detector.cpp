@@ -44,7 +44,6 @@ using holoscan::radar::CFARDetectorOp;
 using holoscan::radar::CFARParams;
 using holoscan::radar::CfarCellWindowOverride;
 using holoscan::radar::CfarPeakMode;
-using holoscan::radar::CfarPeakNeighborhood;
 using holoscan::radar::CfarVariant;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::real_dtype;
@@ -1620,30 +1619,87 @@ TEST(CFARDetectorOpTest, PeakModeRangeDopplerUsesRasterTiebreak) {
   EXPECT_TRUE(idx_contains(out.idx, 8, 15));
 }
 
-TEST(CFARDetectorOpTest, PeakModeRangeDopplerUsesConfiguredNeighborhood) {
+TEST(CFARDetectorOpTest, PeakModeRangeDopplerUsesConfiguredRadius) {
   auto data = power_map(1.0, {}, 1.0);
   data[static_cast<size_t>(8 * kRange + 16)] = 100.0;
   data[static_cast<size_t>(9 * kRange + 17)] = 90.0;
   auto input = to_device_tensor<double>(data, {kDoppler, kRange},
                                         real_dtype<double>());
 
-  CFARParams cross = ca_params(1e-2);
-  cross.peak_mode = CfarPeakMode::kRangeDoppler;
-  cross.peak_neighborhood = CfarPeakNeighborhood::kCross4;
-  CFARParams square = cross;
-  square.peak_neighborhood = CfarPeakNeighborhood::kSquare8;
-  CFARParams all = cross;
+  CFARParams doppler_only = ca_params(1e-2);
+  doppler_only.peak_mode = CfarPeakMode::kRangeDoppler;
+  doppler_only.peak_radius = {1, 0};
+  CFARParams square = doppler_only;
+  square.peak_radius = {1, 1};
+  CFARParams all = square;
   all.peak_mode = CfarPeakMode::kAll;
 
-  const auto out_cross = run_cfar<double>(input, cross);
+  const auto out_doppler_only = run_cfar<double>(input, doppler_only);
   const auto out_square = run_cfar<double>(input, square);
   const auto out_all = run_cfar<double>(input, all);
 
-  EXPECT_EQ(num_detections(out_cross.idx), 2);
+  EXPECT_EQ(num_detections(out_doppler_only.idx), 2);
   EXPECT_EQ(num_detections(out_square.idx), 1);
   EXPECT_EQ(num_detections(out_all.idx), 1);
   EXPECT_TRUE(idx_contains(out_square.idx, 8, 16));
   EXPECT_TRUE(idx_contains(out_all.idx, 8, 16));
+}
+
+TEST(CFARDetectorOpTest, PeakRadiusSuppressesWiderRangeNeighbors) {
+  auto data = power_map(1.0, {}, 1.0);
+  data[static_cast<size_t>(8 * kRange + 16)] = 100.0;
+  data[static_cast<size_t>(8 * kRange + 18)] = 90.0;
+  auto input = to_device_tensor<double>(data, {kDoppler, kRange},
+                                        real_dtype<double>());
+  CFARParams radius_one = ca_params(1e-2);
+  radius_one.peak_mode = CfarPeakMode::kRangeDoppler;
+  radius_one.peak_radius = {1};
+  CFARParams radius_two = radius_one;
+  radius_two.peak_radius = {1, 2};
+
+  EXPECT_EQ(num_detections(run_cfar<double>(input, radius_one).idx), 2);
+  const auto wider = run_cfar<double>(input, radius_two);
+  ASSERT_EQ(num_detections(wider.idx), 1);
+  EXPECT_TRUE(idx_contains(wider.idx, 8, 16));
+}
+
+TEST(CFARDetectorOpTest, PeakRadiusRejectsInvalidEncodings) {
+  const auto map = power_map(1.0, {{8, 16}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
+                                        real_dtype<double>());
+  for (const std::vector<int64_t>& radius :
+       {std::vector<int64_t>{-1}, std::vector<int64_t>{0, 0},
+        std::vector<int64_t>{1, 1, 1}}) {
+    CFARParams params = ca_params(1e-2);
+    params.peak_mode = CfarPeakMode::kRangeDoppler;
+    params.peak_radius = radius;
+    const auto result = run_cfar_result<double>(input, params);
+    EXPECT_TRUE(result.plan_ok);
+    EXPECT_TRUE(result.frames3.empty());
+    EXPECT_FALSE(result.diagnostics.empty());
+  }
+}
+
+TEST(CFARDetectorOpTest, PeakRadiusMustMatchPostNciOutputRank) {
+  constexpr int64_t kChannels = 2;
+  std::vector<double> data(
+      static_cast<size_t>(kChannels * kDoppler * kRange), 1.0);
+  data[static_cast<size_t>(8 * kRange + 16)] = 100.0;
+  data[static_cast<size_t>(kDoppler * kRange + 8 * kRange + 16)] = 100.0;
+  auto input = to_device_tensor<double>(
+      data, {kChannels, kDoppler, kRange}, real_dtype<double>());
+  auto extents = holoscan::radar::testing::default_test_extents();
+  extents.max_rx = kChannels;
+  CFARParams params = ca_params(1e-2);
+  params.nci_axes = {0};
+  params.peak_mode = CfarPeakMode::kAll;
+  params.peak_radius = {1, 1, 1};
+
+  const auto result =
+      run_cfar_result<double>(input, params, extents);
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames3.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(CFARDetectorOpTest, PeakModeAllSuppressesAcrossEveryRank4Axis) {

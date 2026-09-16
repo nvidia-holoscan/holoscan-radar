@@ -19,7 +19,6 @@ from holoscan.radar import CFARDetectorOpF64  # noqa: E402
 from holoscan.radar import (
     CFARDetectorOpF32,
     CfarPeakMode,
-    CfarPeakNeighborhood,
     CfarVariant,
 )
 
@@ -365,27 +364,76 @@ def test_PeakModeRangeDopplerUsesRasterTiebreak():
     assert int((on["mask"] != 0).sum()) == 1
 
 
-def test_PeakModeRangeDopplerUsesConfiguredNeighborhood():
-    # square8 sees a diagonal neighbor (collapses a diagonal equal pair to one);
-    # cross4 does not (both survive).
+def test_PeakModeRangeDopplerUsesConfiguredRadius():
+    # Excluding range leaves a diagonal pair separate; enabling it suppresses.
     mp = power_map(1.0, [(5, 5), (6, 6)], 100.0)
-    square8 = run_cfar(
+    square = run_cfar(
         mp,
         (K_DOPPLER, K_RANGE),
         pfa=1e-3,
         peak_mode=CfarPeakMode.RANGE_DOPPLER,
-        peak_neighborhood=CfarPeakNeighborhood.SQUARE8,
+        peak_radius=[1, 1],
     )
-    cross4 = run_cfar(
+    doppler_only = run_cfar(
         mp,
         (K_DOPPLER, K_RANGE),
         pfa=1e-3,
         peak_mode=CfarPeakMode.RANGE_DOPPLER,
-        peak_neighborhood=CfarPeakNeighborhood.CROSS4,
+        peak_radius=[1, 0],
     )
-    assert num_detections(square8["idx"]) == 1
-    assert idx_contains(square8["idx"], 5, 5)  # lower linear index survives
-    assert num_detections(cross4["idx"]) == 2
+    assert num_detections(square["idx"]) == 1
+    assert idx_contains(square["idx"], 5, 5)
+    assert num_detections(doppler_only["idx"]) == 2
+
+
+def test_PeakRadiusSuppressesWiderRangeNeighbors():
+    mp = power_map(1.0, [], 1.0).reshape(K_DOPPLER, K_RANGE)
+    mp[8, 16] = 100.0
+    mp[8, 18] = 90.0
+    radius_one = run_cfar(
+        mp,
+        (K_DOPPLER, K_RANGE),
+        pfa=1e-2,
+        peak_mode=CfarPeakMode.RANGE_DOPPLER,
+        peak_radius=[1],
+    )
+    radius_two = run_cfar(
+        mp,
+        (K_DOPPLER, K_RANGE),
+        pfa=1e-2,
+        peak_mode=CfarPeakMode.RANGE_DOPPLER,
+        peak_radius=[1, 2],
+    )
+    assert num_detections(radius_one["idx"]) == 2
+    assert radius_two["idx"].tolist() == [[8, 16]]
+
+
+@pytest.mark.parametrize("radius", [[-1], [0, 0], [1, 1, 1]])
+def test_PeakRadiusRejectsInvalidRangeDopplerEncodings(radius):
+    mp = power_map(1.0, [(8, 16)], 100.0)
+    with pytest.raises(ValueError, match="peak_radius"):
+        run_cfar(
+            mp,
+            (K_DOPPLER, K_RANGE),
+            pfa=1e-2,
+            peak_mode=CfarPeakMode.RANGE_DOPPLER,
+            peak_radius=radius,
+        )
+
+
+def test_PeakRadiusMustMatchPostNciOutputRank():
+    data = np.ones((2, K_DOPPLER, K_RANGE), dtype=np.float64)
+    data[:, 8, 16] = 100.0
+    with pytest.raises(ValueError, match="post-NCI output axis"):
+        run_cfar(
+            data,
+            data.shape,
+            pfa=1e-2,
+            nci_axes=[0],
+            peak_mode=CfarPeakMode.ALL,
+            peak_radius=[1, 1, 1],
+            max_rx=2,
+        )
 
 
 def test_PeakModeAllSuppressesAcrossEveryRank4Axis():

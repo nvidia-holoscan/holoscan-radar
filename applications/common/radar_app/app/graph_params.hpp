@@ -52,18 +52,6 @@ inline CfarVariant parse_cfar_variant(const std::string& text) {
                               "' (accepted: CA, GO, SO, OS)");
 }
 
-inline CfarPeakNeighborhood parse_peak_neighborhood(const std::string& text) {
-  if (text == "cross4") {
-    return CfarPeakNeighborhood::kCross4;
-  }
-  if (text == "square8") {
-    return CfarPeakNeighborhood::kSquare8;
-  }
-  throw std::invalid_argument(
-      "peak_neighborhood: unknown value '" + text +
-      "' (accepted: cross4, square8)");
-}
-
 inline CfarPeakMode parse_peak_mode(const std::string& text) {
   if (text == "none") {
     return CfarPeakMode::kNone;
@@ -183,9 +171,8 @@ inline void load_cfar_params(const YAML::Node& node, CFARParams* p) {
     p->peak_mode =
         parse_peak_mode(node["peak_mode"].as<std::string>());
   }
-  if (node["peak_neighborhood"]) {
-    p->peak_neighborhood = parse_peak_neighborhood(
-        node["peak_neighborhood"].as<std::string>());
+  if (node["peak_radius"]) {
+    p->peak_radius = node["peak_radius"].as<std::vector<int64_t>>();
   }
 }
 

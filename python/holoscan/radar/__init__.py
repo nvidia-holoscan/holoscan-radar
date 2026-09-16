@@ -44,7 +44,6 @@ from .cfar_detector_op import CFARDetectorOpF32  # noqa: F401
 from .cfar_detector_op import (
     CFARDetectorOpF64,
     CfarPeakMode,
-    CfarPeakNeighborhood,
     CfarVariant,
     build_ca_alpha_lut,
     build_go_alpha_lut,
@@ -248,7 +247,6 @@ __all__ = [
     "CFARDetectorOpF64",
     "CadenceMeter",
     "CfarPeakMode",
-    "CfarPeakNeighborhood",
     "CfarVariant",
     "ClusterDBSCANOp",
     "ClusterDBSCANOpF32",

@@ -46,7 +46,7 @@ struct CfarStageConfig {
   int64_t max_detections;
   bool blocking_alpha_lut_rebuild;
   CfarPeakMode peak_mode;
-  CfarPeakNeighborhood peak_neighborhood;
+  std::vector<int64_t> peak_radius;
 };
 
 // Sum power along integrated leading axes using a host-built lookup table.
@@ -386,7 +386,9 @@ template <typename T>
 __global__ void cfar_peak_suppress_kernel(const T* power, const bool* mask,
                                           bool* peak_mask, int64_t batch,
                                           int64_t num_doppler,
-                                          int64_t num_range, bool full8) {
+                                          int64_t num_range,
+                                          int64_t radius_doppler,
+                                          int64_t radius_range) {
   const int64_t r = blockIdx.x * blockDim.x + threadIdx.x;
   const int64_t d = blockIdx.y * blockDim.y + threadIdx.y;
   const int64_t b = blockIdx.z;
@@ -404,22 +406,21 @@ __global__ void cfar_peak_suppress_kernel(const T* power, const bool* mask,
 
   const T pc = power[idx];
   bool survive = true;
-  for (int dd = -1; dd <= 1 && survive; ++dd) {
+  const int64_t dd_min = -(radius_doppler < d ? radius_doppler : d);
+  const int64_t doppler_right = num_doppler - 1 - d;
+  const int64_t dd_max =
+      radius_doppler < doppler_right ? radius_doppler : doppler_right;
+  const int64_t rr_min = -(radius_range < r ? radius_range : r);
+  const int64_t range_right = num_range - 1 - r;
+  const int64_t rr_max =
+      radius_range < range_right ? radius_range : range_right;
+  for (int64_t dd = dd_min; dd <= dd_max && survive; ++dd) {
     const int64_t nd = d + dd;
-    if (nd < 0 || nd >= num_doppler) {
-      continue;
-    }
-    for (int rr = -1; rr <= 1; ++rr) {
+    for (int64_t rr = rr_min; rr <= rr_max; ++rr) {
       if (dd == 0 && rr == 0) {
         continue;
       }
-      if (!full8 && dd != 0 && rr != 0) {
-        continue;  // 4-connected: skip diagonals.
-      }
       const int64_t nr = r + rr;
-      if (nr < 0 || nr >= num_range) {
-        continue;
-      }
       const int64_t neighbor_lin = nd * num_range + nr;
       const int64_t neighbor_idx = b * plane + neighbor_lin;
       if (!mask[neighbor_idx]) {
@@ -438,12 +439,12 @@ __global__ void cfar_peak_suppress_kernel(const T* power, const bool* mask,
   peak_mask[idx] = survive;
 }
 
-// Full immediate-neighborhood N-D NMS for rank 2-4 output tensors. Each
-// thread owns one cell and enumerates the 3^Rank - 1 Chebyshev neighbors.
+// Configurable hyperrectangular N-D NMS for rank 2-4 output tensors.
 template <typename T, int Rank>
 __global__ void cfar_peak_suppress_all_kernel(
     const T* power, const bool* mask, bool* peak_mask, int64_t total,
-    int64_t dim0, int64_t dim1, int64_t dim2, int64_t dim3) {
+    int64_t dim0, int64_t dim1, int64_t dim2, int64_t dim3,
+    int64_t radius0, int64_t radius1, int64_t radius2, int64_t radius3) {
   const int64_t index =
       static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (index >= total) {
@@ -455,6 +456,7 @@ __global__ void cfar_peak_suppress_all_kernel(
   }
 
   const int64_t dims[4] = {dim0, dim1, dim2, dim3};
+  const int64_t radii[4] = {radius0, radius1, radius2, radius3};
   int64_t coordinates[4] = {};
   int64_t remainder = index;
 #pragma unroll
@@ -463,37 +465,36 @@ __global__ void cfar_peak_suppress_all_kernel(
     remainder /= dims[axis];
   }
 
-  int neighbor_count = 1;
+  int64_t offset_min[4] = {};
+  int64_t widths[4] = {};
+  int64_t neighbor_count = 1;
 #pragma unroll
   for (int axis = 0; axis < Rank; ++axis) {
-    neighbor_count *= 3;
+    const int64_t left =
+        radii[axis] < coordinates[axis] ? radii[axis] : coordinates[axis];
+    const int64_t right_space = dims[axis] - 1 - coordinates[axis];
+    const int64_t right =
+        radii[axis] < right_space ? radii[axis] : right_space;
+    offset_min[axis] = -left;
+    widths[axis] = left + right + 1;
+    neighbor_count *= widths[axis];
   }
   const T center_power = power[index];
   bool survive = true;
-  for (int code = 0; code < neighbor_count && survive; ++code) {
-    int remaining_code = code;
+  for (int64_t code = 0; code < neighbor_count && survive; ++code) {
+    int64_t remaining_code = code;
     bool is_center = true;
-    bool in_bounds = true;
     int64_t neighbor_index = 0;
+    int64_t offsets[4] = {};
 #pragma unroll
     for (int axis = Rank - 1; axis >= 0; --axis) {
-      const int offset = remaining_code % 3 - 1;
-      remaining_code /= 3;
-      is_center = is_center && offset == 0;
-      const int64_t coordinate = coordinates[axis] + offset;
-      in_bounds =
-          in_bounds && coordinate >= 0 && coordinate < dims[axis];
+      offsets[axis] =
+          offset_min[axis] + remaining_code % widths[axis];
+      remaining_code /= widths[axis];
+      is_center = is_center && offsets[axis] == 0;
     }
-    if (is_center || !in_bounds) {
+    if (is_center) {
       continue;
-    }
-
-    remaining_code = code;
-    int offsets[4] = {};
-#pragma unroll
-    for (int axis = Rank - 1; axis >= 0; --axis) {
-      offsets[axis] = remaining_code % 3 - 1;
-      remaining_code /= 3;
     }
 #pragma unroll
     for (int axis = 0; axis < Rank; ++axis) {
@@ -532,7 +533,7 @@ __global__ void cfar_peak_suppress_all_kernel(
 //
 // A non-none peak mode refines the raw mask into peak_mask (a distinct
 // caller-preallocated bool buffer). range_doppler compares within each trailing
-// plane; all compares the full immediate N-D neighborhood. Dense power, score,
+// plane; all compares the configured N-D hyperrectangle. Dense power, score,
 // and noise outputs are unaffected.
 //
 // v1 implements CfarVariant::kCA, kGO, kSO, and kOS.
@@ -645,7 +646,8 @@ void run_cfar_stage(const CfarStageConfig& config, const void* in,
     cfar_peak_suppress_kernel<T><<<peak_grid, block, 0, stream>>>(
         cfar_power, static_cast<const bool*>(mask),
         static_cast<bool*>(peak_mask), out_batch, num_doppler, num_range,
-        config.peak_neighborhood == CfarPeakNeighborhood::kSquare8);
+        config.peak_radius[config.peak_radius.size() - 2],
+        config.peak_radius.back());
     if (cudaGetLastError() != cudaSuccess) {
       throw std::runtime_error("run_cfar_stage: peak-suppress kernel launch "
                                "failed");
@@ -663,21 +665,30 @@ void run_cfar_stage(const CfarStageConfig& config, const void* in,
     const int64_t dim1 = output_shape[1];
     const int64_t dim2 = output_shape.size() > 2U ? output_shape[2] : 1;
     const int64_t dim3 = output_shape.size() > 3U ? output_shape[3] : 1;
+    const int64_t radius0 = config.peak_radius[0];
+    const int64_t radius1 = config.peak_radius[1];
+    const int64_t radius2 =
+        output_shape.size() > 2U ? config.peak_radius[2] : 0;
+    const int64_t radius3 =
+        output_shape.size() > 3U ? config.peak_radius[3] : 0;
     if (output_shape.size() == 2U) {
       cfar_peak_suppress_all_kernel<T, 2>
           <<<peak_grid, kPeakBlock, 0, stream>>>(
               cfar_power, static_cast<const bool*>(mask),
-              static_cast<bool*>(peak_mask), total, dim0, dim1, dim2, dim3);
+              static_cast<bool*>(peak_mask), total, dim0, dim1, dim2, dim3,
+              radius0, radius1, radius2, radius3);
     } else if (output_shape.size() == 3U) {
       cfar_peak_suppress_all_kernel<T, 3>
           <<<peak_grid, kPeakBlock, 0, stream>>>(
               cfar_power, static_cast<const bool*>(mask),
-              static_cast<bool*>(peak_mask), total, dim0, dim1, dim2, dim3);
+              static_cast<bool*>(peak_mask), total, dim0, dim1, dim2, dim3,
+              radius0, radius1, radius2, radius3);
     } else if (output_shape.size() == 4U) {
       cfar_peak_suppress_all_kernel<T, 4>
           <<<peak_grid, kPeakBlock, 0, stream>>>(
               cfar_power, static_cast<const bool*>(mask),
-              static_cast<bool*>(peak_mask), total, dim0, dim1, dim2, dim3);
+              static_cast<bool*>(peak_mask), total, dim0, dim1, dim2, dim3,
+              radius0, radius1, radius2, radius3);
     }
     if (cudaGetLastError() != cudaSuccess) {
       throw std::runtime_error(

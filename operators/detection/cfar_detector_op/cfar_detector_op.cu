@@ -407,8 +407,73 @@ expected<detail::CfarStageConfig, Error> resolve_params(
                                      pinned.max_detections));
   stage.blocking_alpha_lut_rebuild = pinned.blocking_alpha_lut_rebuild;
   stage.peak_mode = pinned.peak_mode;
-  stage.peak_neighborhood = pinned.peak_neighborhood;
+  stage.peak_radius = pinned.peak_radius;
   return stage;
+}
+
+expected<std::vector<int64_t>, Error> resolve_peak_radius(
+    CfarPeakMode mode, const std::vector<int64_t>& authored,
+    const std::vector<int64_t>& output_shape) {
+  if (authored.empty()) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        "CFARDetectorOp: peak_radius must contain at least one value"});
+  }
+  for (const int64_t radius : authored) {
+    if (radius < 0) {
+      return make_unexpected(Error{
+          ErrorCode::kInvalidArgument,
+          "CFARDetectorOp: peak_radius values must be non-negative"});
+    }
+  }
+  if (mode == CfarPeakMode::kNone) {
+    return authored;
+  }
+
+  const std::size_t rank = output_shape.size();
+  std::vector<int64_t> resolved(rank, 0);
+  if (mode == CfarPeakMode::kRangeDoppler) {
+    if (authored.size() == 1U) {
+      resolved[rank - 2] = authored[0];
+      resolved[rank - 1] = authored[0];
+    } else if (authored.size() == 2U) {
+      resolved[rank - 2] = authored[0];
+      resolved[rank - 1] = authored[1];
+    } else {
+      return make_unexpected(Error{
+          ErrorCode::kInvalidArgument,
+          "CFARDetectorOp: range_doppler peak_radius must have one value or "
+          "two values (doppler, range)"});
+    }
+  } else if (mode == CfarPeakMode::kAll) {
+    if (rank < 2U || rank > 4U) {
+      return make_unexpected(Error{
+          ErrorCode::kInvalidArgument,
+          "CFARDetectorOp: all peak mode requires post-NCI output rank 2-4"});
+    }
+    if (authored.size() == 1U) {
+      std::fill(resolved.begin(), resolved.end(), authored[0]);
+    } else if (authored.size() == rank) {
+      resolved = authored;
+    } else {
+      return make_unexpected(Error{
+          ErrorCode::kInvalidArgument,
+          "CFARDetectorOp: all peak_radius must have one value or one value "
+          "per post-NCI output axis"});
+    }
+  } else {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        "CFARDetectorOp: unsupported peak_mode value"});
+  }
+
+  if (std::none_of(resolved.begin(), resolved.end(),
+                   [](int64_t radius) { return radius > 0; })) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        "CFARDetectorOp: peak_radius must select at least one active axis"});
+  }
+  return resolved;
 }
 
 template <typename T>
@@ -543,6 +608,9 @@ expected<CfarStagePlan, Error> build_cfar_stage_plan(
         map_independent && num_doppler >= win_d && num_range >= win_r;
     std::vector<int64_t> output_shape =
         nci.output_shape(num_doppler, num_range);
+    HOLOSCAN_TRY(stage.peak_radius,
+                 resolve_peak_radius(stage.peak_mode, stage.peak_radius,
+                                     output_shape));
     return CfarStagePlan{
         .stage = std::move(stage),
         .nci = std::move(nci),

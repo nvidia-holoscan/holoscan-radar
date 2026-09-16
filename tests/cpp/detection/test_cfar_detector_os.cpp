@@ -30,7 +30,6 @@ namespace {
 using holoscan::radar::CFARDetectorOp;
 using holoscan::radar::CFARParams;
 using holoscan::radar::CfarPeakMode;
-using holoscan::radar::CfarPeakNeighborhood;
 using holoscan::radar::CfarVariant;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::real_dtype;
@@ -808,23 +807,23 @@ TEST(CFARDetectorOpOsTest,
 }
 
 TEST(CFARDetectorOpOsTest,
-     PeakModeRangeDopplerUsesConfiguredNeighborhood) {
+     PeakModeRangeDopplerUsesConfiguredRadius) {
   auto data = power_map(1.0, {}, 1.0);
   data[static_cast<size_t>(8 * kRange + 16)] = 100.0;
   data[static_cast<size_t>(9 * kRange + 17)] = 90.0;
   auto input = to_device_tensor<double>(data, {kDoppler, kRange},
                                         real_dtype<double>());
 
-  CFARParams cross = os_params(1e-2);
-  cross.peak_mode = CfarPeakMode::kRangeDoppler;
-  cross.peak_neighborhood = CfarPeakNeighborhood::kCross4;
-  CFARParams square = cross;
-  square.peak_neighborhood = CfarPeakNeighborhood::kSquare8;
+  CFARParams doppler_only = os_params(1e-2);
+  doppler_only.peak_mode = CfarPeakMode::kRangeDoppler;
+  doppler_only.peak_radius = {1, 0};
+  CFARParams square = doppler_only;
+  square.peak_radius = {1, 1};
 
-  const auto out_cross = run_cfar<double>(input, cross);
+  const auto out_doppler_only = run_cfar<double>(input, doppler_only);
   const auto out_square = run_cfar<double>(input, square);
 
-  EXPECT_EQ(num_detections(out_cross.idx), 2);
+  EXPECT_EQ(num_detections(out_doppler_only.idx), 2);
   EXPECT_EQ(num_detections(out_square.idx), 1);
   EXPECT_TRUE(idx_contains(out_square.idx, 8, 16));
 }

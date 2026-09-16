@@ -77,24 +77,6 @@ constexpr std::string_view to_string(CfarPeakMode mode) {
   return "unknown";
 }
 
-// Neighborhood for range-Doppler NMS. Static per instance. cross4 = the 2
-// range + 2 Doppler orthogonal neighbors; square8 = the full 8-cell
-// neighborhood. CfarPeakMode::kAll always uses its full N-D neighborhood.
-enum class CfarPeakNeighborhood {
-  kCross4,   // 4-connected (2 range + 2 Doppler)
-  kSquare8,  // 8-connected (full 3x3 minus the center)
-};
-
-constexpr std::string_view to_string(CfarPeakNeighborhood neighborhood) {
-  switch (neighborhood) {
-    case CfarPeakNeighborhood::kCross4:
-      return "cross4";
-    case CfarPeakNeighborhood::kSquare8:
-      return "square8";
-  }
-  return "unknown";
-}
-
 namespace config_detail {
 
 inline constexpr CfarVariant kCfarVariants[] = {
@@ -103,10 +85,6 @@ inline constexpr CfarVariant kCfarVariants[] = {
     CfarVariant::kSO,
     CfarVariant::kOS,
 };
-inline constexpr CfarPeakNeighborhood kCfarPeakNeighborhoods[] = {
-    CfarPeakNeighborhood::kCross4,
-    CfarPeakNeighborhood::kSquare8,
-};
 inline constexpr CfarPeakMode kCfarPeakModes[] = {
     CfarPeakMode::kNone,
     CfarPeakMode::kRangeDoppler,
@@ -114,13 +92,9 @@ inline constexpr CfarPeakMode kCfarPeakModes[] = {
 };
 using CfarVariantCodec =
     CanonicalEnumCodec<CfarVariant, kCfarVariants>;  // NOLINT
-using CfarPeakNeighborhoodCodec =
-    CanonicalEnumCodec<CfarPeakNeighborhood, kCfarPeakNeighborhoods>;  // NOLINT
 using CfarPeakModeCodec =
     CanonicalEnumCodec<CfarPeakMode, kCfarPeakModes>;  // NOLINT
 using CfarVariantStorage = PortableParamStorageTraits<CfarVariant>;
-using CfarPeakNeighborhoodStorage =
-    PortableParamStorageTraits<CfarPeakNeighborhood>;  // NOLINT
 using CfarPeakModeStorage =
     PortableParamStorageTraits<CfarPeakMode>;  // NOLINT
 
@@ -134,9 +108,6 @@ struct ConfigCodec<radar::CfarVariant>
     : radar::config_detail::CfarVariantCodec {};  // NOLINT
 
 template <>
-struct ConfigCodec<radar::CfarPeakNeighborhood>
-    : radar::config_detail::CfarPeakNeighborhoodCodec {};  // NOLINT
-template <>
 struct ConfigCodec<radar::CfarPeakMode>
     : radar::config_detail::CfarPeakModeCodec {};  // NOLINT
 
@@ -147,9 +118,6 @@ namespace holoscan {
 template <>
 struct ParamStorageTraits<radar::CfarVariant>
     : radar::config_detail::CfarVariantStorage {};  // NOLINT
-template <>
-struct ParamStorageTraits<radar::CfarPeakNeighborhood>
-    : radar::config_detail::CfarPeakNeighborhoodStorage {};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::CfarPeakMode>
     : radar::config_detail::CfarPeakModeStorage {};  // NOLINT
@@ -229,7 +197,7 @@ struct CFARParams {
   int64_t max_detections{0};  // <= 0 → uncapped
   bool blocking_alpha_lut_rebuild{false};
   CfarPeakMode peak_mode{CfarPeakMode::kNone};
-  CfarPeakNeighborhood peak_neighborhood{CfarPeakNeighborhood::kSquare8};
+  std::vector<int64_t> peak_radius{1};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -282,10 +250,11 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Peak selection {none, range_doppler, all}; all uses full N-D "
             "local-maximum suppression; static"),
-    holoscan::field<&CFARParams::peak_neighborhood>("peak_neighborhood")
+    holoscan::field<&CFARParams::peak_radius>("peak_radius")
         .description(
-            "Neighborhood for range_doppler peak NMS {cross4, square8}; "
-            "ignored by other peak modes; static"));
+            "Per-axis NMS radius in bins; range_doppler accepts one value or "
+            "(doppler, range), all accepts one value or one per post-NCI "
+            "output axis; zero excludes an axis; static"));
 
 static_assert(holoscan::param_schema_availability<CFARParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,

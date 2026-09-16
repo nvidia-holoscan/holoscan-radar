@@ -70,7 +70,7 @@ Default CLI (no flags): `--warmup 5`, `--measured 20`, `--repeats 1`,
 - **`perf_cfar_detector`**: mid/large GO/SO/OS footprints are Monte Carlo–heavy;
   only in `--full`. Curated pfa↔lut calibration pairs are included. Default and
   `--full` also includes peak-mode NMS characterization rows
-  (`_peak_square8` / `_peak_cross4` scenario ids).
+  (`_peak_radius1` / `_peak_radius2` scenario ids).
 - Import order: load `holoscan.radar` **before** CuPy (the package
   `utils/__init__.py` stays import-light so `utils.bootstrap` cannot pull CuPy
   early — that footgun aborted MVDR MatX cache retirement).

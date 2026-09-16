@@ -72,8 +72,7 @@ struct CfarScenario {
   bool use_alpha_lut{false};
   std::vector<double> alpha_lut;
   hr::CfarPeakMode peak_mode{hr::CfarPeakMode::kNone};
-  hr::CfarPeakNeighborhood peak_neighborhood{
-      hr::CfarPeakNeighborhood::kSquare8};
+  std::vector<int64_t> peak_radius{1};
 };
 
 const std::vector<SizeSpec>& size_ladder() {
@@ -223,7 +222,7 @@ perf::TimingCollector run_cfar_graph(const CfarScenario& scen,
         params.max_detections = 0;
         params.alpha_lut = scen.alpha_lut;
         params.peak_mode = scen.peak_mode;
-        params.peak_neighborhood = scen.peak_neighborhood;
+        params.peak_radius = scen.peak_radius;
         op.set_params(std::move(params));
 
         const auto idx_sink =
@@ -359,13 +358,12 @@ CfarScenario make_nci_scenario(hr::CfarVariant v,
 
 CfarScenario make_peak_scenario(hr::CfarVariant v, const SizeSpec& s,
                                 const Footprint& fp,
-                                hr::CfarPeakNeighborhood nb) {
+                                int64_t radius) {
   CfarScenario sc = make_compute_scenario(v, s, fp, 1);
   sc.peak_mode = hr::CfarPeakMode::kRangeDoppler;
-  sc.peak_neighborhood = nb;
+  sc.peak_radius = {radius};
   const std::string suffix = "_compute";
-  const std::string insert =
-      std::string("_peak_") + std::string(hr::to_string(nb));
+  const std::string insert = "_peak_radius" + std::to_string(radius);
   if (sc.id.size() > suffix.size() &&
       sc.id.compare(sc.id.size() - suffix.size(), suffix.size(),
                     suffix) == 0) {
@@ -376,23 +374,15 @@ CfarScenario make_peak_scenario(hr::CfarVariant v, const SizeSpec& s,
   return sc;
 }
 
-const std::vector<hr::CfarPeakNeighborhood>&
-all_peak_neighborhoods() {
-  static const std::vector<hr::CfarPeakNeighborhood> nbs = {
-      hr::CfarPeakNeighborhood::kSquare8,
-      hr::CfarPeakNeighborhood::kCross4};
-  return nbs;
-}
-
 void append_peak_scenarios(std::vector<CfarScenario>* out,
                            const std::vector<std::string>& sizes,
                            bool all_variants_at_md) {
   const Footprint fp = footprint_small();
   for (const auto& sid : sizes) {
     const SizeSpec& s = must_find_size(sid);
-    for (auto nb : all_peak_neighborhoods()) {
+    for (const int64_t radius : {int64_t{1}, int64_t{2}}) {
       out->push_back(
-          make_peak_scenario(hr::CfarVariant::kCA, s, fp, nb));
+          make_peak_scenario(hr::CfarVariant::kCA, s, fp, radius));
     }
     if (sid == "xs") {
       CfarScenario rank3 =
@@ -417,8 +407,8 @@ void append_peak_scenarios(std::vector<CfarScenario>* out,
     if (v == hr::CfarVariant::kCA) {
       continue;
     }
-    for (auto nb : all_peak_neighborhoods()) {
-      out->push_back(make_peak_scenario(v, md, fp, nb));
+    for (const int64_t radius : {int64_t{1}, int64_t{2}}) {
+      out->push_back(make_peak_scenario(v, md, fp, radius));
     }
   }
 }
@@ -668,9 +658,8 @@ struct CfarTraits : perf::PerfDriverDefaults {
       row.notes += "; peak_mode=" +
                    std::string(hr::to_string(scen.peak_mode));
       if (scen.peak_mode == hr::CfarPeakMode::kRangeDoppler) {
-        row.notes +=
-            " (neighborhood=" +
-            std::string(hr::to_string(scen.peak_neighborhood)) + ")";
+        row.notes += " (radius=" +
+                     std::to_string(scen.peak_radius.front()) + ")";
       }
     }
     report->results.push_back(row);

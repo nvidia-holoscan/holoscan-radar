@@ -116,6 +116,9 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - `peak_mode` covers `none`, per-plane `range_doppler`, and full rank-2/3/4
   `all` NMS; detected-neighbor comparisons use raw CFAR power, do not wrap at
   axis boundaries, and break equal-power ties by full row-major index.
+- Scalar and per-axis `peak_radius` values produce the expected wider
+  hyperrectangular suppression; negative, all-zero, and post-NCI rank-mismatched
+  vectors reject.
 - Peak selection changes only `detection_mask` / `detection_idx`; dense
   `detection_score`, `noise_estimate`, and `cfar_power` remain unchanged.
 - Selecting OS with the `-1` unset `os_rank` sentinel rejects with a targeted

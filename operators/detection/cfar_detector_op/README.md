@@ -53,7 +53,7 @@ group: [`operators/detection/README.md`](../README.md)
 
 5. **Start-time pre-warm.** `start()` pre-builds the pfa-derived LUT for **CA and OS only**, keyed on a canonical window-sized map (`win = 2·(guard+train)+1` per axis). GO / SO are map-dependent (`go_lut_index`) and are **not** pre-warmed. A missing `nci_fold` when `nci_axes` is set defers calibration to the first tick. `preintegrated_looks` contributes to `K` even when `nci_axes` is empty.
 
-6. **Peak-mode NMS** (static, default `none`). `range_doppler` runs `cfar_peak_suppress_kernel` independently in every leading plane over detected RD neighbors (`cross4` or `square8`). `all` dispatches rank-2/3/4 N-D kernels and compares the full immediate Chebyshev neighborhood over every output axis. Both use raw `cfar_power`; exact ties retain the lowest full row-major index. Dense score/noise/power remain unchanged; mask/index follow the selected peaks.
+6. **Peak-mode NMS** (static, default `none`). `range_doppler` runs `cfar_peak_suppress_kernel` independently in every leading plane. `all` dispatches rank-2/3/4 N-D kernels. `peak_radius` defines a full hyperrectangle in bins; a scalar broadcasts, while `all` also accepts one value per post-NCI output axis. Zero excludes an axis. Both modes compare only detected neighbors using raw `cfar_power`; exact ties retain the lowest full row-major index. Dense score/noise/power remain unchanged; mask/index follow selected peaks.
 
 7. **`detection_idx` compaction.** CUB reduce + exclusive-scan scatter writes rows in batch-major raster order: preserved leading coordinates, then `(doppler_bin, range_bin)`. A scalar device→host count sync sizes the exact output (`count_mask_detections`). If `max_detections > 0` and the scene exceeds it, surplus rows are dropped (raster-first kept) and the operator warns.
 
@@ -101,7 +101,7 @@ group: [`operators/detection/README.md`](../README.md)
 | `nci_axes` | int64 vector | `[]` | `[live]` Exact host config Tensor | Changes `K` and output shape; may recalibrate α | Leading-axis indices to sum in power before CFAR |
 | `max_detections` | int64 | `0` (uncapped) | `[live]` Exact | Free (cap after count) | `> 0` caps `detection_idx` rows and warns on surplus |
 | `peak_mode` | enum {none, range_doppler, all} | `none` | static | NMS launch unless none | Raw detections, per-plane RD maxima, or full N-D maxima |
-| `peak_neighborhood` | enum {cross4, square8} | `square8` | static | — | RD neighborhood for `range_doppler`; `all` always uses full N-D |
+| `peak_radius` | int64 vector | `[1]` | static | Grows neighborhood traversal multiplicatively | NMS half-width: scalar or RD pair for `range_doppler`; scalar or post-NCI-rank vector for `all`; zero excludes an axis |
 
 `os_rank` is contract-required when `cfar_variant = OS` (typical `≈ floor(0.75·N)`). Params and bindings use `-1` only as the unset sentinel; selecting OS without an explicit non-negative rank fails with a required-parameter error. `guard_cells` and `training_cells` have no Params default and are rejected if missing at the first tick.
 
@@ -138,7 +138,7 @@ correlated receiver noise, shared-LO phase noise, mutual coupling, or clutter
 residue lower the effective degrees of freedom; calibrate an effective value
 or provide `alpha_lut` when nominal Pfa must be maintained under those models.
 
-Harness: `performance/cpp/perf_cfar_detector.cpp` (Graph). It wires all five outputs, so steady timings include publication copies plus index compaction. Axes include size, variant, footprint, NCI fold, peak mode/neighborhood, and alpha source. Rank-3/4 `all` rows characterize full N-D NMS.
+Harness: `performance/cpp/perf_cfar_detector.cpp` (Graph). It wires all five outputs, so steady timings include publication copies plus index compaction. Axes include size, variant, footprint, NCI fold, peak mode/radius, and alpha source. Rank-3/4 `all` rows characterize full N-D NMS.
 
 ```bash
 ctest --test-dir build -R perf_cfar_detector_smoke

@@ -13,8 +13,8 @@ C++/Python matrix sync is an open question — see
 Default CLI matches C++ (default matrix, not ``--full``): mid/large GO/SO/OS
 footprints are Monte Carlo–heavy (~tens of seconds cold) and are only in
 ``--full``. Curated pfa↔alpha_lut calibration pairs are included in both.
-Default also includes peak-mode NMS rows (CA × default sizes ×
-``{square8, cross4}``); ``--full`` extends those across the size ladder and
+Default also includes peak-mode NMS rows (CA × default sizes × radii 1 and 2);
+``--full`` extends those across the size ladder and
 adds GO/SO/OS at ``md``.
 """
 
@@ -54,7 +54,6 @@ from holoscan.core import Application  # noqa: E402
 from holoscan.radar import (  # noqa: E402
     CFARDetectorOpF32,
     CfarPeakMode,
-    CfarPeakNeighborhood,
     CfarVariant,
     build_ca_alpha_lut,
     build_go_alpha_lut,
@@ -81,10 +80,7 @@ _SIZE_BY_ID = {item.id: item for item in SIZE_LADDER}
 
 ALL_VARIANTS = (CfarVariant.CA, CfarVariant.GO, CfarVariant.SO, CfarVariant.OS)
 
-ALL_PEAK_NEIGHBORHOODS = (
-    CfarPeakNeighborhood.SQUARE8,
-    CfarPeakNeighborhood.CROSS4,
-)
+ALL_PEAK_RADII = (1, 2)
 
 CALIBRATION_PAIR_SPECS = (
     ("cfar_GO_xlw_small_k1_compute", "GO_xlw_k1"),
@@ -124,7 +120,7 @@ class CfarScenario:
     alpha_lut: list[float] = field(default_factory=list)
     calibration_pair: str = ""
     peak_mode: CfarPeakMode = CfarPeakMode.NONE
-    peak_neighborhood: CfarPeakNeighborhood = CfarPeakNeighborhood.SQUARE8
+    peak_radius: list[int] = field(default_factory=lambda: [1])
     # Filled per run for live-override wiring.
     override_at: int = 0
     override_pfa: float = 1e-6
@@ -192,25 +188,17 @@ def make_compute_scenario(
     )
 
 
-def _peak_neighborhood_tag(nb: CfarPeakNeighborhood) -> str:
-    name = getattr(nb, "name", None)
-    if isinstance(name, str) and name:
-        # CROSS4 / SQUARE8 → cross4 / square8 (match C++ to_string)
-        return name.lower()
-    return str(nb).rsplit(".", maxsplit=1)[-1].lower()
-
-
 def make_peak_scenario(
     variant: CfarVariant,
     size: SizeDef,
     fp: Footprint,
-    neighborhood: CfarPeakNeighborhood,
+    radius: int,
 ) -> CfarScenario:
     """Compute scenario with range-Doppler NMS."""
     sc = make_compute_scenario(variant, size, fp, out_batch=1)
     sc.peak_mode = CfarPeakMode.RANGE_DOPPLER
-    sc.peak_neighborhood = neighborhood
-    insert = f"_peak_{_peak_neighborhood_tag(neighborhood)}"
+    sc.peak_radius = [radius]
+    insert = f"_peak_radius{radius}"
     if sc.id.endswith("_compute"):
         sc.id = sc.id[: -len("_compute")] + insert + "_compute"
     else:
@@ -228,8 +216,8 @@ def append_peak_scenarios(
     fp = FOOTPRINT_SMALL
     for sid in size_ids:
         size = _must_find_size(sid)
-        for nb in ALL_PEAK_NEIGHBORHOODS:
-            scenarios.append(make_peak_scenario(CfarVariant.CA, size, fp, nb))
+        for radius in ALL_PEAK_RADII:
+            scenarios.append(make_peak_scenario(CfarVariant.CA, size, fp, radius))
         if sid == "xs":
             rank3 = make_compute_scenario(CfarVariant.CA, size, fp, out_batch=8)
             rank3.peak_mode = CfarPeakMode.ALL
@@ -246,8 +234,8 @@ def append_peak_scenarios(
     for variant in ALL_VARIANTS:
         if variant == CfarVariant.CA:
             continue
-        for nb in ALL_PEAK_NEIGHBORHOODS:
-            scenarios.append(make_peak_scenario(variant, md, fp, nb))
+        for radius in ALL_PEAK_RADII:
+            scenarios.append(make_peak_scenario(variant, md, fp, radius))
 
 
 def make_nci_scenario(variant: CfarVariant, size: SizeDef, channels: int) -> CfarScenario:
@@ -361,7 +349,7 @@ def build_size_sweep(size_ids: list[str]) -> list[CfarScenario]:
         out.append(make_compute_scenario(CfarVariant.CA, size, fp, 1))
         known.append(sid)
     # Include peak-mode NMS on the same CA×sizes subset so --size(s) / smoke
-    # exercises the new stage (both neighborhoods).
+    # exercises the new stage (radii 1 and 2).
     append_peak_scenarios(out, known, all_variants_at_md=False)
     return out
 
@@ -383,7 +371,7 @@ def build_full_matrix() -> list[CfarScenario]:
         for variant in ALL_VARIANTS:
             out.append(make_nci_scenario(variant, size, 8))
     tag_and_append_alpha_lut_pairs(out)
-    # Peak modes: CA × full ladder × both neighborhoods; GO/SO/OS at md.
+    # Peak modes: CA × full ladder × both radii; GO/SO/OS at md.
     append_peak_scenarios(
         out,
         [item.id for item in SIZE_LADDER],
@@ -449,7 +437,7 @@ def _run_graph(
                 max_detections=0,
                 blocking_alpha_lut_rebuild=scen.blocking_rebuild,
                 peak_mode=scen.peak_mode,
-                peak_neighborhood=scen.peak_neighborhood,
+                peak_radius=scen.peak_radius,
                 max_rx=max_rx,
                 max_tx=max_tx,
                 name="cfar",
@@ -542,8 +530,7 @@ def run_scenario(scen: CfarScenario, rs: RunSettings, report: PerfReport) -> Non
         mode = getattr(scen.peak_mode, "name", str(scen.peak_mode)).lower()
         compute.notes += f"; peak_mode={mode}"
         if scen.peak_mode == CfarPeakMode.RANGE_DOPPLER:
-            nb = _peak_neighborhood_tag(scen.peak_neighborhood)
-            compute.notes += f" (neighborhood={nb})"
+            compute.notes += f" (radius={scen.peak_radius})"
     report.results.append(compute)
 
 
