@@ -88,7 +88,8 @@ radar_add_test(fmcw/test_mimo_deinterleave
 radar_add_test(fmcw/test_tdm_dense_compensation
     holoscan::tdm_dense_compensation_op)
 radar_add_test(fmcw/test_ddm_dense_demultiplex
-    holoscan::ddm_dense_demultiplex_op)
+    holoscan::ddm_dense_demultiplex_op
+    holoscan::fmcw_doppler_processor_op)
 radar_add_test(fmcw/test_ddm_power_fold
     holoscan::ddm_power_fold_op)
 radar_add_test(fmcw/test_ddm_sparse_demultiplex
@@ -151,7 +152,8 @@ radar_add_test(detection/test_feature_assembly
     EXT .cu
     holoscan::feature_assembly_op)
 radar_add_test(detection/test_cfar_detector
-    holoscan::cfar_detector_op)
+    holoscan::cfar_detector_op
+    holoscan::feature_assembly_op)
 radar_add_test(detection/test_cfar_detector_alpha_lut
     holoscan::cfar_detector_op)
 radar_add_test(detection/test_cfar_detector_os
@@ -184,6 +186,29 @@ target_include_directories(test_fmcw_simo_config PRIVATE
 target_compile_definitions(test_fmcw_simo_config PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
+radar_add_test(app/test_fmcw_mimo_config
+    yaml-cpp
+    holoscan::params_io
+    holoscan::radar_app
+    holoscan::fmcw_range_processor_op
+    holoscan::clutter_filter_op
+    holoscan::fmcw_doppler_processor_op
+    holoscan::mimo_deinterleave_op
+    holoscan::tdm_sparse_compensation_op
+    holoscan::ddm_dense_demultiplex_op
+    holoscan::virtual_array_assembly_op
+    holoscan::cfar_detector_op
+    holoscan::snapshot_gather_op
+    holoscan::beamscan_estimator_op
+    holoscan::cluster_dbscan_op
+    holoscan::feature_assembly_op
+    holoscan::detection_reduction_op)
+target_include_directories(test_fmcw_mimo_config PRIVATE
+    ${PROJECT_SOURCE_DIR}/applications/fmcw/mimo/cpp
+    ${PROJECT_SOURCE_DIR}/operators)
+target_compile_definitions(test_fmcw_mimo_config PRIVATE
+    HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+
 radar_add_test(app/test_fmcw_simo_report
     holoscan::radar_app)
 target_include_directories(test_fmcw_simo_report PRIVATE
@@ -191,9 +216,7 @@ target_include_directories(test_fmcw_simo_report PRIVATE
     ${PROJECT_SOURCE_DIR}/operators)
 
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
-    radar_add_test(app/test_fmcw_simo_viz holoscan::simo_viz)
-    target_include_directories(test_fmcw_simo_viz PRIVATE
-        ${PROJECT_SOURCE_DIR}/applications/fmcw/simo/cpp)
+    radar_add_test(app/test_fmcw_dashboard holoscan::fmcw_dashboard)
 endif()
 
 # [EA HSDK5 ONLY] Interim X11 live RD viewer (HSDK5_PORT.md §6). Skips itself

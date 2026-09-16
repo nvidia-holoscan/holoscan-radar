@@ -1,12 +1,11 @@
 # Application-support library (`radar_app` / `python/`)
 
-Shared, app-agnostic building blocks for the FMCW example applications
-(`fmcw_siso`, `fmcw_simo`, `fmcw_dense_simo`, `fmcw_mimo`), for both the C++
-side (`radar_app/`, this directory's original content) and the Python side
-(`python/`, documented in its own section below — same layering, same
-three-tier breakdown). It exists so those apps stay small and readable: each
-app is mostly a graph-wiring `compose()` plus its own `AppConfig`, not a pile
-of copy-pasted operators and scaffolding.
+Shared, app-agnostic building blocks for the FMCW example applications,
+including the consolidated `fmcw/simo` and `fmcw/mimo` Graph applications.
+The C++ support lives in `radar_app/`; retained Python support lives in
+`python/` and is documented separately below. It exists so those apps stay
+small and readable: each app is mostly graph wiring plus its own configuration,
+not a pile of copy-pasted operators and scaffolding.
 
 The applications are organized around three kinds of component:
 
@@ -118,17 +117,18 @@ layout data; the app decides how they connect and where they render.
 
 ## Python (`applications/common/python/`)
 
-The Python demos (`fmcw_siso.py`, `fmcw_simo.py`, `fmcw_dense_simo.py`,
-`fmcw_mimo.py`) mirror the same three-tier breakdown as the C++ side:
+The retained Python demos (`fmcw_siso.py`, `fmcw_dense_simo.py`, and
+`fmcw_aoa_estimators.py`) mirror the same three-tier breakdown as the C++ side.
+The consolidated SIMO and MIMO applications currently provide package stubs
+only; HSDK 5 Python application execution remains deferred.
 
 1. **Graph / flow wiring** — each app's `FmcwXApp.compose()`, in the app's own
    `python/fmcw_X.py`. Thin: construct operators, `add_flow`, done.
 2. **App-specific operators / config** — colocated with the app in its own
    `python/config.py` (`AppConfig` + `load_config`) and, where the app needs
-   truly app-specific operators, `python/custom_ops.py`. SISO and SIMO have no
-   `custom_ops.py` — they use the shared `SimAdcSourceOp` unchanged; dense and
-   MIMO do (dense: the angle bridges + `DenseClusterReportOp`; MIMO: the
-   TDM/DDM ADC sources + `DdmReportVelocityBinsOp`).
+   truly app-specific operators, `python/custom_ops.py`. SISO uses the shared
+   `SimAdcSourceOp` unchanged; dense SIMO and AoA-estimator demos retain their
+   own bridge or routing operators.
 3. **App-generalized operators / helpers** — reused across apps, here in
    `applications/common/python/`. Most of the viz/report operators are
    already bound from C++ (`radar_app`'s `DetectionReportOp`, `RollingPlotOp`,
@@ -158,24 +158,8 @@ interpreter would collide in `sys.modules`.
 
 The config-boundary rule is the same as the C++ side (see above): operator
 YAML blocks flow through Holoscan's `from_config()`, never manual per-app
-parsing. All four Python demos follow this for every operator block **except
-one**: `fmcw_mimo`'s selected dense TDM/DDM block, which stays a manual kwargs
-dict (the split dense parsers).
-
-The reason is a Python-only pybind11 quirk, not a design choice: Holoscan's
-Python `Operator.__init__` applies `from_config()`'s `ArgList` (arrives as a
-positional arg) **after** all keyword arguments, regardless of the order they
-appear at the call site. In C++, `make_operator<Op>(name, from_config(...),
-Arg("x") = resolved_value)` applies arguments strictly in the order given, so
-a trailing explicit `Arg` overrides `from_config()`. In Python, that ordering
-guarantee does not hold — `from_config()` always wins over a same-named kwarg.
-This only matters when an app must inject a resolved value that shares a YAML
-key with the block (MIMO's `ddm_code`, which the app may expand from
-`generate_phase_codes` into explicit `phase_codes`); it does not matter when
-the injected kwarg has no corresponding YAML key (e.g. `array_geometry` on
-`BeamscanEstimatorOp`, `tx_positions` / `rx_positions` / `wavelength` on
-`VirtualArrayAssemblyOp` — both combine `from_config()` with extra kwargs
-safely).
+parsing. The removed legacy MIMO Python application was the sole exception;
+the consolidated MIMO loader now uses HSDK 5 schema-backed C++ decoding.
 
 ### Known binding gaps (not fixed here)
 

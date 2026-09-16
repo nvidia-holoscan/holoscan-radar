@@ -51,11 +51,11 @@ per demo.
 Python).
 
 The direct-peak app mode (forward a non-`none` `CFARDetectorOp.peak_mode`; drop
-DBSCAN and reduction, then report CFAR peaks directly) is in all four
-**C++ and Python** apps (`fmcw_siso`, `fmcw_simo`, `fmcw_mimo`,
-`fmcw_dense_simo`), plus the shared `radar_app` ops (`DetectionReportOp` optional
-`detection_score` / `aoa_estimates`; optional `labels` on `ClusterOverlayOp` /
-`BoresightViewOp`).
+DBSCAN and reduction, then report CFAR peaks directly) is complete in the
+consolidated C++ SIMO beamform-then-detect workflow. The consolidated MIMO
+workflows intentionally use the clustered sparse-angle tail. Shared
+`radar_app` reporting and dashboard operators support both raw and clustered
+input contracts.
 
 Remaining optional follow-up:
 

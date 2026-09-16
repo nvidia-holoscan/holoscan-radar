@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 
 def resolve_config_path(argv: list[str], cpp_dir: Path, default_yaml: str) -> Path:
     """Resolve the config path: the first CLI arg if given, else `default_yaml`
-    staged next to the app's ``cpp/`` YAMLs. A bare filename (e.g.
-    ``fmcw_mimo_ddm.yaml``) also resolves beside `cpp_dir`; any other path
-    (including a smoke YAML under ``python/``) is used as given.
+    staged next to the app's ``cpp/`` YAMLs. A bare filename also resolves
+    beside `cpp_dir`; any other path (including a smoke YAML under ``python/``)
+    is used as given.
     """
     if len(argv) > 1:
         given = Path(argv[1])

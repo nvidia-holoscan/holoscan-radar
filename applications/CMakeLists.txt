@@ -16,7 +16,7 @@ add_subdirectory(common)
 # alone is not a sufficient gate because DEPENDS OPERATORS would FORCE OP_*=ON
 # for targets holoscan_radar_add_operator() never creates.
 
-# The consolidated SIMO workflows are the active HSDK 5 applications.
+# The consolidated SIMO and MIMO workflows are the active HSDK 5 applications.
 if(HOLOSCAN_RADAR_HAS_RD_LIVE)
     holoscan_radar_add_application(simo
         DIRECTORY fmcw/simo
@@ -32,7 +32,24 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
             detection_reduction_op
             cluster_dbscan_op
     )
+    holoscan_radar_add_application(mimo
+        DIRECTORY fmcw/mimo
+        DEPENDS OPERATORS
+            fmcw_range_processor_op
+            clutter_filter_op
+            fmcw_doppler_processor_op
+            mimo_deinterleave_op
+            tdm_sparse_compensation_op
+            ddm_dense_demultiplex_op
+            virtual_array_assembly_op
+            cfar_detector_op
+            snapshot_gather_op
+            beamscan_estimator_op
+            feature_assembly_op
+            detection_reduction_op
+            cluster_dbscan_op
+    )
 else()
     message(STATUS
-        "Skipping consolidated SIMO applications; no Holoviz/X11 live RD")
+        "Skipping consolidated SIMO/MIMO applications; no Holoviz/X11 live RD")
 endif()

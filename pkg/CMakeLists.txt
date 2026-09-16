@@ -24,18 +24,18 @@
 # absent here is never enabled, never built, and never installed — it simply
 # does not appear in the .deb. Nothing warns about the omission.
 #
-# [EA HSDK5 ONLY] Demo applications require Holoviz *and* their operator
-# dependencies on the port allow-list — listing an app here FORCEs APP_<name>
-# and its OP_<dep> options ON, and an unported dep is never created as a
-# target. Every app needs the FMCW range/Doppler chain; fmcw_mimo also needs
-# the MIMO marshaling group. Keep these gates in step with
-# applications/CMakeLists.txt.
+# [EA HSDK5 ONLY] Demo applications require their visualization path and
+# operator dependencies on the port allow-list — listing an app here FORCEs
+# APP_<name> and its OP_<dep> options ON, and an unported dep is never created
+# as a target. Every app needs the FMCW range/Doppler chain; mimo also needs
+# the MIMO marshaling group. Keep these gates in step with applications/
+# CMakeLists.txt.
 holoscan_radar_operators_ported(_HOLOSCAN_RADAR_PKG_FMCW_CHAIN
     fmcw_range_processor_op
     fmcw_doppler_processor_op)
 holoscan_radar_operators_ported(_HOLOSCAN_RADAR_PKG_MIMO
     mimo_deinterleave_op
-    tdm_dense_compensation_op
+    tdm_sparse_compensation_op
     ddm_dense_demultiplex_op
     virtual_array_assembly_op)
 
@@ -43,10 +43,12 @@ set(_HOLOSCAN_RADAR_PKG_APPLICATIONS)
 if(HOLOSCAN_RADAR_HAS_HOLOVIZ AND _HOLOSCAN_RADAR_PKG_FMCW_CHAIN)
     list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS
         fmcw_aoa_estimators
-        fmcw_simo
         fmcw_siso)
+endif()
+if(HOLOSCAN_RADAR_HAS_RD_LIVE AND _HOLOSCAN_RADAR_PKG_FMCW_CHAIN)
+    list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS simo)
     if(_HOLOSCAN_RADAR_PKG_MIMO)
-        list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS fmcw_mimo)
+        list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS mimo)
     endif()
 endif()
 

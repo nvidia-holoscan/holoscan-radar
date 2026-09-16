@@ -8,8 +8,8 @@ to mitigate it at the app level, and the proposed upstream fix.
 
 - **SDK version observed:** Holoscan 4.3.0 (`nvcr.io/nvidia/clara-holoscan/holoscan:v4.3.0-cuda13`)
 - **Component:** `modules/holoviz` (`libholoscan_viz.so.4.3.0`) + `src/operators/holoviz`
-- **Affected apps:** all four demos (`fmcw_siso`, `fmcw_simo`, `fmcw_mimo`,
-  `fmcw_dense_simo`), C++ and Python, whenever a live Holoviz window is shown
+- **Affected apps:** every display-enabled demo, including consolidated
+  `fmcw/simo` and `fmcw/mimo`, whenever a live Holoviz window is shown
   (`visualization.enabled: true`).
 
 > SDK source paths below are relative to `/workspace/holoscan-sdk` inside the
@@ -90,12 +90,11 @@ to land on an out-of-date surface during a drag. This only changes the
 ### App-level mitigation (in this repo)
 
 Commit `ae33d1b` added a `visualization.vsync` toggle, **defaulting to `true`**,
-threaded through the shared `VisualizationConfig` (C++ `config.hpp` + Python
-`demo_config.py`), `HolovizLayout` / `make_rd_holoviz_op`, all four C++ and
-Python apps, and the six YAMLs. With `vsync: true` the apps use a FIFO present
-mode (frame-rate capped, internally queued), which issues far fewer acquires per
-resize and makes the crash substantially rarer. Set `vsync: false` for uncapped
-/ low-latency rendering at the cost of resize robustness (and possible tearing).
+to the then-current shared C++/Python visualization path. With `vsync: true`
+those apps use a FIFO present mode (frame-rate capped, internally queued),
+which issues far fewer acquires per resize and makes the crash substantially
+rarer. Set `vsync: false` for uncapped / low-latency rendering at the cost of
+resize robustness (and possible tearing).
 
 This is a probability reduction, **not a fix** — the fatal throw remains
 reachable during an active drag.

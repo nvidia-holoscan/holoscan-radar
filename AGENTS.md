@@ -100,7 +100,7 @@ Rules that follow from "lockdown":
 | `operators/fmcw/` | FMCW signal processing and MIMO marshaling |
 | `applications/fmcw_siso/` | Example SISO FMCW pipeline |
 | `applications/fmcw/simo/` | Consolidated SIMO detect/beamform workflows |
-| `applications/fmcw_mimo/` | MIMO TDM/DDM demo |
+| `applications/fmcw/mimo/` | Consolidated MIMO TDM/DDM workflows |
 | `applications/fmcw_dense_simo/` | Dense SIMO beamformer demo |
 | `applications/fmcw_aoa_estimators/` | Interchangeable sparse AoA estimator demo |
 | `applications/common/radar_app/` | Shared Graph driver, source, report, and visualization support |

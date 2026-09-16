@@ -1,16 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MIMO TDM/DDM scene + analytic simulators for the fmcw_mimo example app.
+"""MIMO TDM/DDM scene + analytic simulators for FMCW example applications.
 
 Python port of ``radar_common/sim/mimo_sim.hpp``: reuses the shared
 point-target primitives from ``sim.py`` (``SimWaveform``, ``PointTarget``,
 ``SimResult``) and adds the MIMO-specific scene (multiple TX elements), the
 TDM slow-time-interleaved and DDM (linear-offset and non-linear phase-coded)
 IF-cube simulators, and the DDM code helpers (linear-phase classification,
-offset resolution, demo-only code generators). One consumer today
-(fmcw_mimo), co-located at this layer to mirror the C++ file placement
-(mimo_sim.hpp lives beside point_target_sim.hpp, not inside the app).
+offset resolution, and demo-only code generators). It remains co-located at
+this layer to mirror the C++ file placement (``mimo_sim.hpp`` lives beside
+``point_target_sim.hpp``, not inside an application).
 """
 
 from __future__ import annotations

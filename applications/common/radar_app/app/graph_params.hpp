@@ -4,8 +4,8 @@
 #pragma once
 
 // [EA HSDK5 ONLY] Manual YAML → Params loaders for Graph apps (no
-// from_config()). Shared by fmcw_siso / fmcw_simo / fmcw_mimo / …; fold back
-// to from_config() when Application demos return.
+// from_config()). Shared by the legacy demos; consolidated fmcw/simo and
+// fmcw/mimo use schema-backed Params decoding.
 
 #include <yaml-cpp/yaml.h>
 
