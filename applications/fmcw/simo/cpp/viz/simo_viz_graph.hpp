@@ -123,8 +123,14 @@ inline void add_simo_visualization(
   application.add(display);
   graph.partition("visualization").add(holoviz);
 
-  const holoscan::ConnectionOptions processing_queue{.queue_depth = 4U};
-  const holoscan::ConnectionOptions display_queue{.queue_depth = 8U};
+  // Visualization is best-effort: discard stale frames instead of
+  // backpressuring the radar pipeline when rendering falls behind.
+  const holoscan::ConnectionOptions processing_queue{
+      .queue_policy = holoscan::QueuePolicy::kDropOldest,
+      .queue_depth = 4U};
+  const holoscan::ConnectionOptions display_queue{
+      .queue_policy = holoscan::QueuePolicy::kDropOldest,
+      .queue_depth = 8U};
 
   graph.add_flow(inputs.cfar_power, display->cfar_power, processing_queue);
   graph.add_flow(inputs.detection_idx, display->detection_idx,
