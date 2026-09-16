@@ -173,6 +173,7 @@ radar_add_test(app/test_fmcw_simo_config
     holoscan::beamscan_estimator_op
     holoscan::phase_shift_beamformer_op
     holoscan::cluster_dbscan_op
+    holoscan::feature_assembly_op
     holoscan::detection_reduction_op)
 target_include_directories(test_fmcw_simo_config PRIVATE
     ${PROJECT_SOURCE_DIR}/applications/fmcw/simo/cpp

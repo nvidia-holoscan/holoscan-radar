@@ -83,7 +83,7 @@ All five share one **pluggable sparse-slot contract** (input `snapshot`, output 
 
 `ClusterDBSCANOp` groups detections in a feature space (range, velocity, angle). Because the detections are just points, it is **orthogonal to the antenna/multiplexing modality** — it does not fan out per workflow — and attaches to the detection/angle stage in one of two patterns:
 
-- **Angle-then-cluster (post-angle)** — estimate DOA for every detection, then cluster in the full `(range, velocity, az, el)` feature space. The default placement; available in every angle-bearing workflow and in **both** angle paths. In the **dense** path it is the *only* option, since angle is already formed on each cell before detection.
+- **Angle-then-cluster (post-angle)** — estimate DOA for every detection, then cluster in the full `(range, velocity, az, el)` feature space. The default clustering placement; available in every angle-bearing workflow and in **both** angle paths. In the **dense** path it is the only clustering placement, since angle is already formed on each cell before detection; clustering itself remains optional, and N-D CFAR peaks may be reported directly.
 - **Cluster-then-angle (pre-angle)** — **sparse path only**: cluster the CFAR detections in range-Doppler first, reduce each cluster to one representative (`DetectionReductionOp`), then estimate angle **once per representative** — saving snapshots / beamform calls when detections are dense (extended targets, multipath).
 
 SISO has no angle stage, so clustering there is simply an optional trailing stage over the range-Doppler detections.

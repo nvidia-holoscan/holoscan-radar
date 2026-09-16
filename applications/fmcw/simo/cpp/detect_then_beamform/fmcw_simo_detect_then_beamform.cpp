@@ -4,7 +4,6 @@
 #include <initializer_list>
 #include <memory>
 #include <utility>
-#include <vector>
 
 #include <holoscan/core/connection_options.hpp>
 #include <holoscan/core/graph.hpp>
@@ -121,15 +120,9 @@ int main(int argc, char** argv) {
         bind_outputs(options, "beamscan_estimator",
                      {"aoa_estimates", "angle_spectrum"});
 
-        // Physical feature assembly.
-        std::vector<radar::AssemblyFeature> feature_config{
-            radar::AssemblyFeature::kRange,
-            radar::AssemblyFeature::kVelocity,
-            radar::AssemblyFeature::kAzEstimate,
-            radar::AssemblyFeature::kElEstimate,
-            radar::AssemblyFeature::kScore};
+        // Feature assembly: physical columns plus RD bins (YAML).
         auto features = graph.op<radar::FeatureAssemblyOp<float>>(
-            "feature_assembly", extents, std::move(feature_config));
+            "feature_assembly", extents, cfg.assembly_params->features);
         bind_outputs(options, "feature_assembly", {"points"});
 
         // Detection clustering.
@@ -187,8 +180,8 @@ int main(int argc, char** argv) {
         graph.add_flow(beamscan->aoa_estimates, features->aoa_estimates, queue);
         graph.add_flow(cfar->detection_score, features->detection_score, queue);
 
-        // Fan out the complete row. DBSCAN ignores its zero-epsilon score
-        // column; reduction uses that same column as the representative weight.
+        // Fan out the complete row. DBSCAN clusters on the RD-bin columns
+        // (zero-epsilon on physical and score); reduction uses score.
         graph.add_flow(features->points, cluster->points, queue);
         graph.add_flow(cluster->labels, reduction->labels, queue);
         graph.add_flow(cfar->detection_idx, reduction->detection_idx, queue);

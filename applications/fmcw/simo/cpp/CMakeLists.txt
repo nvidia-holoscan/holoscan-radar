@@ -58,8 +58,8 @@ add_executable(fmcw_simo_beamform_then_detect
     beamform_then_detect/fmcw_simo_beamform_then_detect.cpp)
 target_link_libraries(fmcw_simo_beamform_then_detect PRIVATE
     ${_simo_common_libraries}
-    holoscan::simo_peak_identity
-    holoscan::phase_shift_beamformer_op)
+    holoscan::phase_shift_beamformer_op
+    holoscan::simo_peak_identity)
 
 foreach(_target IN ITEMS
         fmcw_simo_detect_then_beamform

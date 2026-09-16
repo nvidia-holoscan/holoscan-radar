@@ -56,12 +56,12 @@ flowchart LR
     Beamformer -- angle grids --> Features
     Range -- range bins --> Features
     Doppler -- velocity bins --> Features
-    CFAR -- peak indices --> Peaks[Peak identity bridge]
+    CFAR -- peak indices --> Identity[Peak identity]
     Features --> Report[Peak report]
-    Peaks -- identity labels, unit sizes, indices --> Report
+    Identity --> Report
     CFAR -- CFAR power and indices --> Display[Annotated RD compositor]
     Features -- physical points --> Display
-    Peaks -- identity labels and unit sizes --> Display
+    Identity -- labels and sizes --> Display
     Range -- physical bins --> Display
     Doppler -- physical bins --> Display
     Display -- retained RGBA frame --> Holoviz[HSDK 5 Holoviz]
@@ -69,14 +69,15 @@ flowchart LR
 
 This is the workflow called the *dense angle path* in `WORKFLOWS.md`.
 
-The detect-then-beamform application reports clustered detections and their
-selected representatives. The beamform-then-detect application selects
-`peak_mode: all`, suppressing duplicates across azimuth, elevation, Doppler,
-and range, and reports each N-D local power maximum directly without DBSCAN or
-detection reduction. When visualization is enabled, HSDK 5
-Holoviz sink shows the CFAR power projected onto the range-Doppler plane,
-with clustered detections or direct CFAR peaks as color-coded ovals. A 2×2 grid
-to the right shows
+Detect-then-beamform reports clustered detections and their selected
+representatives. Beamform-then-detect uses `peak_mode: all` with
+`peak_radius` in `(az, el, Doppler, range)` order (`[2, 2, 2, 2]` in the
+default configuration and `[2, 2, 1, 1]` in the smaller smoke configuration)
+and reports each retained N-D CFAR power maximum directly, without DBSCAN or
+reduction.
+When visualization is enabled, the stock HSDK 5 Holoviz sink shows the CFAR
+power projected onto the range-Doppler plane,
+clustered detections as color-coded ovals. A 2×2 grid to the right shows
 the simulated target truth as continuous color-coded trajectories behind
 rolling score-weighted cluster means for range, velocity, azimuth, and
 elevation versus scenario time. The sparse path uses score-weighted cluster
@@ -152,6 +153,18 @@ settings, while the range/clutter/Doppler front end is shared. HSDK
 `PreparedParams<T>` values that retain source evidence through
 `OperatorHandle::set_params()`. In particular, detection-first CFAR requires
 `nci_axes: [0]`, while beamforming-first CFAR requires `nci_axes: []`.
+
+Detect-then-beamform and beamform-then-detect both author
+`feature_assembly.features` (constructor capture for `FeatureAssemblyOp`, not a
+live Params override). The default lists keep physical range, velocity,
+azimuth, elevation, and score first for the cluster report and visualization,
+then append bin columns. Dense-path angles use `az` / `el` grid lookups plus
+`az_bin` / `el_bin` in the clustering metric; the sparse path uses
+`az_estimate` / `el_estimate` and clusters only on `range_bin` / `doppler_bin`.
+On the sparse path, `cluster_dbscan.epsilon` zeros the physical and score
+columns and uses 1.5 on each active bin axis so neighboring cells (including
+2-D diagonals) merge; reduction still scores from the `score` column. The
+dense path keeps the bin columns for reporting and visualization only.
 
 The RX geometry and sparse CFAR `nci_fold` are derived from `app:` and supplied
 as decode baselines. They must not also be authored in operator blocks.

@@ -57,13 +57,16 @@ detect_then_beamform:
     az_angles: [-0.2, -0.1, 0.0, 0.1, 0.2]
     el_angles: [-0.2, -0.1, 0.0, 0.1, 0.2]
     peak_interpolation: parabolic
+  feature_assembly:
+    features: [range, velocity, az_estimate, el_estimate, score,
+      range_bin, doppler_bin]
   cluster_dbscan:
-    epsilon: [3.0, 2.0, 0.15, 0.15, 0.0]
+    epsilon: [0.0, 0.0, 0.0, 0.0, 0.0, 1.5, 1.5]
     min_points: 1
     max_clusters: 16
-  reduction: &reduction
+  reduction:
     representative: medoid
-    feature_weights: [0.3333, 0.5, 20.0, 20.0, 0.0]
+    feature_weights: [0.3333, 0.5, 20.0, 20.0, 0.0, 0.0, 0.0]
 
 beamform_then_detect:
   phase_shift_beamformer:
@@ -79,4 +82,8 @@ beamform_then_detect:
     training_cells: [3, 3]
     pfa: 1.0e-9
     peak_mode: all
+    peak_radius: [2, 2, 1, 1]
     nci_axes: []
+  feature_assembly:
+    features: [range, velocity, az, el, score, range_bin, doppler_bin,
+      az_bin, el_bin]

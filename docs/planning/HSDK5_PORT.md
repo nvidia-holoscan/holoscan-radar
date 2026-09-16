@@ -1285,8 +1285,8 @@ sections. The sparse path assembles
 `[range, velocity, azimuth, elevation, detection_score]` once and fans the
 matrix out to DBSCAN, reduction, reporting, and visualization; DBSCAN's
 trailing zero epsilon excludes score from its metric. The dense path selects
-CFAR `peak_mode: all`, suppresses across azimuth, elevation, Doppler, and
-range, and sends each retained N-D maximum directly to reporting and
+CFAR `peak_mode: all` with a per-axis `peak_radius`, suppresses across azimuth,
+elevation, Doppler, and range, and sends each retained N-D maximum directly to reporting and
 visualization without DBSCAN or reduction.
 `FeatureAssemblyOp`'s dense `az`/`el` contract receives
 tick-coherent `PhaseShiftBeamformerOp.az_grid` / `el_grid` tensors rather than

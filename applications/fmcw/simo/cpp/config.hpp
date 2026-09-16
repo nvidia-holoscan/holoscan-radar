@@ -56,6 +56,7 @@ struct DetectThenBeamformConfig : RuntimeConfig {
   holoscan::PreparedParams<CFARParams> cfar_params;
   holoscan::PreparedParams<SnapshotGatherParams> gather_params;
   holoscan::PreparedParams<BeamscanParams> beamscan_params;
+  holoscan::PreparedParams<FeatureAssemblyParams> assembly_params;
   holoscan::PreparedParams<ClusterDBSCANParams> dbscan_params;
   holoscan::PreparedParams<DetectionReductionParams> reduction_params;
 };
@@ -66,6 +67,7 @@ struct BeamformThenDetectConfig : RuntimeConfig {
   holoscan::PreparedParams<FMCWDopplerProcessorParams> doppler_params;
   holoscan::PreparedParams<PhaseShiftBeamformerParams> beamformer_params;
   holoscan::PreparedParams<CFARParams> cfar_params;
+  holoscan::PreparedParams<FeatureAssemblyParams> assembly_params;
 };
 
 template <typename T>
@@ -93,6 +95,16 @@ inline void require_angle_grid(std::string_view key,
                                const std::vector<double>& grid) {
   if (grid.empty()) {
     throw std::runtime_error(std::string(key) + " must not be empty");
+  }
+}
+
+inline void require_assembly_features(std::string_view key,
+                                      const FeatureAssemblyParams& assembly) {
+  if (assembly.features.size() < 4U) {
+    throw std::runtime_error(
+        std::string(key) +
+        " must list at least four columns so report and visualization "
+        "keep range, velocity, azimuth, and elevation");
   }
 }
 
@@ -237,7 +249,7 @@ inline MaxTensorExtents make_extents(
     const FMCWRangeProcessorParams& range,
     const FMCWDopplerProcessorParams& doppler,
     const AngleParams& angle, const SnapshotGatherParams* gather,
-    const ClusterDBSCANParams* dbscan) {
+    const ClusterDBSCANParams* dbscan, int64_t max_features = 5) {
   MaxTensorExtents result;
   const int64_t num_rx = runtime.array_geometry.num_elements();
   const int64_t num_chirps = runtime.scene.num_chirps;
@@ -264,8 +276,7 @@ inline MaxTensorExtents make_extents(
   result.max_detections = max_points;
   result.max_items = max_points;
   result.max_points = max_points;
-  // Four physical features plus the CFAR score.
-  result.max_features = 5;
+  result.max_features = max_features;
   result.max_snapshots =
       gather == nullptr ? 1 : snapshot_count(gather->snapshot_window);
   result.max_az = num_az;
@@ -344,14 +355,11 @@ inline holoscan::config::Document normalize_operator_enums(
       std::move(document), base + "/cfar_detector/cfar_variant");
   document = normalize_enum_field<CfarPeakMode>(
       std::move(document), base + "/cfar_detector/peak_mode");
-  document = normalize_enum_field<CfarPeakNeighborhood>(
-      std::move(document),
-      base + "/cfar_detector/peak_neighborhood");
-  document = normalize_enum_field<RepresentativePolicy>(
-      std::move(document), base + "/reduction/representative");
-  document = normalize_enum_field<ScoreMethod>(
-      std::move(document), base + "/reduction/score_method");
   if (workflow == Workflow::kDetectThenBeamform) {
+    document = normalize_enum_field<RepresentativePolicy>(
+        std::move(document), base + "/reduction/representative");
+    document = normalize_enum_field<ScoreMethod>(
+        std::move(document), base + "/reduction/score_method");
     document = normalize_enum_field<SnapshotEdgeMode>(
         std::move(document),
         base + "/snapshot_gather/doppler_edge");
@@ -395,6 +403,8 @@ inline DetectThenBeamformConfig load_detect_then_beamform_config(
   auto beamscan = decode_params<BeamscanParams>(
       document, "/detect_then_beamform/beamscan_estimator",
       std::move(beamscan_baseline));
+  auto assembly = decode_params<FeatureAssemblyParams>(
+      document, "/detect_then_beamform/feature_assembly");
   auto dbscan = decode_params<ClusterDBSCANParams>(
       document, "/detect_then_beamform/cluster_dbscan");
   auto reduction = decode_params<DetectionReductionParams>(
@@ -414,15 +424,19 @@ inline DetectThenBeamformConfig load_detect_then_beamform_config(
   require_angle_grid(
       "detect_then_beamform.beamscan_estimator.el_angles",
       beamscan->el_angles);
+  require_assembly_features(
+      "detect_then_beamform.feature_assembly.features", *assembly);
   runtime.extents = make_extents(
       runtime, Workflow::kDetectThenBeamform, *range, *doppler, *beamscan,
-      &gather.value(), &dbscan.value());
+      &gather.value(), &dbscan.value(),
+      static_cast<int64_t>(assembly->features.size()));
   runtime.cfar_extents = runtime.extents;
 
   return DetectThenBeamformConfig{
       std::move(runtime), std::move(range), std::move(clutter),
       std::move(doppler), std::move(cfar), std::move(gather),
-      std::move(beamscan), std::move(dbscan), std::move(reduction)};
+      std::move(beamscan), std::move(assembly), std::move(dbscan),
+      std::move(reduction)};
 }
 
 inline BeamformThenDetectConfig load_beamform_then_detect_config(
@@ -449,6 +463,8 @@ inline BeamformThenDetectConfig load_beamform_then_detect_config(
       std::move(beamformer_baseline));
   auto cfar = decode_params<CFARParams>(
       document, "/beamform_then_detect/cfar_detector");
+  auto assembly = decode_params<FeatureAssemblyParams>(
+      document, "/beamform_then_detect/feature_assembly");
   if (cfar->peak_mode != CfarPeakMode::kAll) {
     throw std::runtime_error(
         "beamform_then_detect.cfar_detector.peak_mode must be all");
@@ -463,14 +479,18 @@ inline BeamformThenDetectConfig load_beamform_then_detect_config(
   require_angle_grid(
       "beamform_then_detect.phase_shift_beamformer.el_angles",
       beamformer->el_angles);
+  require_assembly_features(
+      "beamform_then_detect.feature_assembly.features", *assembly);
   runtime.extents = make_extents(
       runtime, Workflow::kBeamformThenDetect, *range, *doppler,
-      *beamformer, nullptr, nullptr);
+      *beamformer, nullptr, nullptr,
+      static_cast<int64_t>(assembly->features.size()));
   runtime.cfar_extents = make_dense_cfar_extents(runtime.extents);
 
   return BeamformThenDetectConfig{
       std::move(runtime), std::move(range), std::move(clutter),
-      std::move(doppler), std::move(beamformer), std::move(cfar)};
+      std::move(doppler), std::move(beamformer), std::move(cfar),
+      std::move(assembly)};
 }
 
 }  // namespace holoscan::radar::app::simo

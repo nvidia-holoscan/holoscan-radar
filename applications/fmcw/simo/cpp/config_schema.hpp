@@ -13,6 +13,7 @@
 #include <holoscan/core/parameter_schema.hpp>
 #include <holoscan/params/config.hpp>
 
+#include "detection/feature_assembly_op/feature_assembly_op.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/sdk/config_codecs.hpp"
 
@@ -55,6 +56,12 @@ struct TargetConfig {
   double amplitude{0.0};
 };
 
+// Constructor-capture authoring for FeatureAssemblyOp.features. Not operator
+// Params / not [live]: the decoded list is still passed to graph.op().
+struct FeatureAssemblyParams {
+  std::vector<AssemblyFeature> features{};
+};
+
 using CubeStorage = radar::config_detail::PortableParamStorageTraits<
     CubeConfig>;  // NOLINT
 using RunStorage = radar::config_detail::PortableParamStorageTraits<
@@ -65,6 +72,8 @@ using RxArrayStorage = radar::config_detail::PortableParamStorageTraits<
     RxArrayConfig>;  // NOLINT
 using TargetStorage = radar::config_detail::PortableParamStorageTraits<
     TargetConfig>;  // NOLINT
+using FeatureAssemblyStorage = radar::config_detail::PortableParamStorageTraits<
+    FeatureAssemblyParams>;  // NOLINT
 
 }  // namespace holoscan::radar::app::simo
 
@@ -85,6 +94,9 @@ struct ParamStorageTraits<radar::app::simo::RxArrayConfig>
 template <>
 struct ParamStorageTraits<radar::app::simo::TargetConfig>
     : radar::app::simo::TargetStorage {};  // NOLINT
+template <>
+struct ParamStorageTraits<radar::app::simo::FeatureAssemblyParams>
+    : radar::app::simo::FeatureAssemblyStorage {};  // NOLINT
 
 }  // namespace holoscan
 
@@ -115,6 +127,20 @@ HOLOSCAN_PARAM_SCHEMA(
 static_assert(holoscan::param_schema_availability<AppParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
               "HOLOSCAN_PARAM_SCHEMA must be in AppParams's namespace");
+
+HOLOSCAN_PARAM_SCHEMA(
+    FeatureAssemblyParams,
+    holoscan::param_schema(
+        "com.nvidia.holoscan.radar.app.simo.FeatureAssemblyParams", 1),
+    holoscan::field<&FeatureAssemblyParams::features>("features")
+        .description(
+            "Ordered FeatureAssemblyOp column tokens; constructor-capture "
+            "only"));
+
+static_assert(
+    holoscan::param_schema_availability<FeatureAssemblyParams>() ==
+        holoscan::ParamSchemaAvailability::kDeclared,
+    "HOLOSCAN_PARAM_SCHEMA must be in FeatureAssemblyParams's namespace");
 
 }  // namespace holoscan::radar::app::simo
 
@@ -183,5 +209,12 @@ struct ConfigCodec<radar::app::simo::TargetConfig>
 template <>
 struct ConfigCodec<radar::app::simo::AppParams>
     : AppParamsCodec {};  // NOLINT
+
+using FeatureAssemblyParamsCodec = params::DefaultedParamSchemaCodec<
+    radar::app::simo::FeatureAssemblyParams>;  // NOLINT
+
+template <>
+struct ConfigCodec<radar::app::simo::FeatureAssemblyParams>
+    : FeatureAssemblyParamsCodec {};  // NOLINT
 
 }  // namespace holoscan::config
