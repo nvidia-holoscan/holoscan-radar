@@ -56,12 +56,10 @@ flowchart LR
     Beamformer -- angle grids --> Features
     Range -- range bins --> Features
     Doppler -- velocity bins --> Features
-    CFAR -- peak indices --> Identity[Peak identity]
-    Features --> Report[Peak report]
-    Identity --> Report
+    CFAR -- peak indices --> Report[Detection report]
+    Features -- physical points --> Report
     CFAR -- CFAR power and indices --> Display[Annotated RD compositor]
     Features -- physical points --> Display
-    Identity -- labels and sizes --> Display
     Range -- physical bins --> Display
     Doppler -- physical bins --> Display
     Display -- retained RGBA frame --> Holoviz[HSDK 5 Holoviz]
@@ -75,6 +73,11 @@ representatives. Beamform-then-detect uses `peak_mode: all` with
 default and smoke configurations)
 and reports each retained N-D CFAR power maximum directly, without DBSCAN or
 reduction.
+`DetectionReportOp` and the display compositor select their raw-detection or
+clustered input contract at construction. The raw dense path consumes
+`detection_idx` and physical `points` directly; the clustered sparse path also
+consumes DBSCAN `labels` / `sizes`, with reduction representatives wired to the
+report's `detection_idx` input.
 When visualization is enabled, the stock HSDK 5 Holoviz sink shows the CFAR
 power projected onto the range-Doppler plane, with Doppler/velocity on the
 horizontal axis and range increasing upward; current detections are compact

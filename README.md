@@ -107,7 +107,7 @@ either side.
 ### App-support library (`radar_app`)
 
 Report + Holoviz visualization operators reused across the example apps
-(`ClusterReportOp`, `DetectionReportOp`, `RollingPlotOp`, `BoresightViewOp`,
+(`DetectionReportOp`, `RollingPlotOp`, `BoresightViewOp`,
 `ClusterOverlayOp`, `RdMapToImageOp`, `RdChannelSliceOp`, `NullSinkOp`,
 `CadenceMeter`) — see
 [`applications/common/README.md`](applications/common/README.md). Also bound

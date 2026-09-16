@@ -180,6 +180,22 @@ void validate_dashboard_inputs(const Tensor& detection_idx,
   }
 }
 
+void validate_detection_inputs(const Tensor& detection_idx,
+                               const Tensor& points,
+                               const Tensor& range_bins,
+                               const Tensor& velocity_bins) {
+  if (detection_idx.shape().size() != 2U ||
+      detection_idx.shape()[1] < 2 ||
+      points.shape().size() != 2U || points.shape()[1] < 4 ||
+      points.shape()[0] != detection_idx.shape()[0] ||
+      range_bins.shape().size() != 1U || range_bins.shape()[0] <= 0 ||
+      velocity_bins.shape().size() != 1U ||
+      velocity_bins.shape()[0] <= 0) {
+    throw std::invalid_argument(
+        "SimoDisplayOp: incompatible raw detection or axis shapes");
+  }
+}
+
 std::array<std::uint8_t, 7> glyph(char value) {
   switch (static_cast<char>(std::toupper(static_cast<unsigned char>(value)))) {
     case 'A': return {14, 17, 17, 31, 17, 17, 17};
@@ -700,7 +716,7 @@ void draw_history_panel(
 
 std::vector<std::uint8_t> make_annotation(
     std::int64_t rows, std::int64_t cols,
-    const std::vector<ClusterCentroid>& centroids,
+    const std::vector<DetectionMarker>& markers,
     const std::deque<HistorySample>& history,
     const std::deque<HistorySample>& detection_history,
     const std::vector<float>& ranges, const std::vector<float>& velocities,
@@ -769,12 +785,12 @@ std::vector<std::uint8_t> make_annotation(
   }
 
   constexpr std::array<std::uint8_t, 4> kBlack{0U, 0U, 0U, 255U};
-  for (const ClusterCentroid& centroid : centroids) {
+  for (const DetectionMarker& marker : markers) {
     const auto& color =
-        kClusterColors[static_cast<std::size_t>(centroid.color_bucket) %
+        kClusterColors[static_cast<std::size_t>(marker.color_bucket) %
                        kClusterColors.size()];
     const auto position = detail::rd_plot_position(
-        centroid.doppler_bin, centroid.range_bin, rows, cols);
+        marker.doppler_bin, marker.range_bin, rows, cols);
     const float x = plot.x + position[0] * plot.width;
     const float y = plot.y + position[1] * plot.height;
     const float outer_rx =
@@ -861,38 +877,54 @@ void SimoDisplayOp::setup(holoscan::OperatorSpec& spec) {
       .queue_depth(2U)
       .expects_tensor(tensor_input(kDevice));
   spec.input(points).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  spec.input(labels).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  spec.input(sizes).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  if (config_.mode == SimoDisplayMode::kClusters) {
+    spec.input(labels).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+    spec.input(sizes).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  }
   spec.input(range_bins)
       .queue_depth(2U)
       .expects_tensor(tensor_input(kDevice));
   spec.input(velocity_bins)
       .queue_depth(2U)
       .expects_tensor(tensor_input(kDevice));
-  spec.input(reduced_points)
-      .queue_depth(2U)
-      .expects_tensor(tensor_input(kDevice));
+  if (config_.mode == SimoDisplayMode::kClusters) {
+    spec.input(reduced_points)
+        .queue_depth(2U)
+        .expects_tensor(tensor_input(kDevice));
+  }
   spec.output(rgba).produces_tensor(
       pooled_tensor_output(kImage, 3U, max_byte_span_));
 }
 
 holoscan::Contract SimoDisplayOp::contract() const {
   holoscan::Contract result;
-  result
-      .trigger(holoscan::OnAligned{
-          .ports = holoscan::ports(cfar_power, detection_idx, points, labels,
-                                   sizes,
-                                   range_bins, velocity_bins,
-                                   reduced_points),
-          .window = std::chrono::nanoseconds{0}})
-      .input(cfar_power, holoscan::Exact{})
-      .input(detection_idx, holoscan::Exact{})
-      .input(points, holoscan::Exact{})
-      .input(labels, holoscan::Exact{})
-      .input(sizes, holoscan::Exact{})
-      .input(range_bins, holoscan::Exact{})
-      .input(velocity_bins, holoscan::Exact{})
-      .input(reduced_points, holoscan::Exact{});
+  if (config_.mode == SimoDisplayMode::kClusters) {
+    result
+        .trigger(holoscan::OnAligned{
+            .ports = holoscan::ports(cfar_power, detection_idx, points, labels,
+                                     sizes, range_bins, velocity_bins,
+                                     reduced_points),
+            .window = std::chrono::nanoseconds{0}})
+        .input(cfar_power, holoscan::Exact{})
+        .input(detection_idx, holoscan::Exact{})
+        .input(points, holoscan::Exact{})
+        .input(labels, holoscan::Exact{})
+        .input(sizes, holoscan::Exact{})
+        .input(range_bins, holoscan::Exact{})
+        .input(velocity_bins, holoscan::Exact{})
+        .input(reduced_points, holoscan::Exact{});
+  } else {
+    result
+        .trigger(holoscan::OnAligned{
+            .ports = holoscan::ports(cfar_power, detection_idx, points,
+                                     range_bins, velocity_bins),
+            .window = std::chrono::nanoseconds{0}})
+        .input(cfar_power, holoscan::Exact{})
+        .input(detection_idx, holoscan::Exact{})
+        .input(points, holoscan::Exact{})
+        .input(range_bins, holoscan::Exact{})
+        .input(velocity_bins, holoscan::Exact{});
+  }
   return result;
 }
 
@@ -902,16 +934,25 @@ expected<void, Error> SimoDisplayOp::compute(
   HOLOSCAN_TRY(auto power, receive_tensor(cfar_power, kWho));
   HOLOSCAN_TRY(auto idx, receive_tensor(detection_idx, kWho));
   HOLOSCAN_TRY(auto feature_points, receive_tensor(points, kWho));
-  HOLOSCAN_TRY(auto cluster_labels, receive_tensor(labels, kWho));
-  HOLOSCAN_TRY(auto cluster_sizes, receive_tensor(sizes, kWho));
   HOLOSCAN_TRY(auto ranges, receive_tensor(range_bins, kWho));
   HOLOSCAN_TRY(auto velocities, receive_tensor(velocity_bins, kWho));
-  HOLOSCAN_TRY(auto reduced, receive_tensor(reduced_points, kWho));
+  Tensor cluster_labels;
+  Tensor cluster_sizes;
+  Tensor reduced;
+  if (config_.mode == SimoDisplayMode::kClusters) {
+    HOLOSCAN_TRY(cluster_labels, receive_tensor(labels, kWho));
+    HOLOSCAN_TRY(cluster_sizes, receive_tensor(sizes, kWho));
+    HOLOSCAN_TRY(reduced, receive_tensor(reduced_points, kWho));
+  }
   BatchedShape layout;
   try {
     layout = collapse_batch(power, "SimoDisplayOp.cfar_power");
-    validate_dashboard_inputs(idx, feature_points, cluster_labels,
-                              cluster_sizes, ranges, velocities, reduced);
+    if (config_.mode == SimoDisplayMode::kClusters) {
+      validate_dashboard_inputs(idx, feature_points, cluster_labels,
+                                cluster_sizes, ranges, velocities, reduced);
+    } else {
+      validate_detection_inputs(idx, feature_points, ranges, velocities);
+    }
   } catch (const std::invalid_argument& e) {
     return make_unexpected(
         Error{ErrorCode::kInvalidArgument, std::string(e.what())});
@@ -930,34 +971,44 @@ expected<void, Error> SimoDisplayOp::compute(
   HOLOSCAN_TRY(auto host_idx, copy_int64_to_host(idx, stream, "detection_idx"));
   HOLOSCAN_TRY(auto host_points,
                copy_float_to_host(feature_points, stream, "points"));
-  HOLOSCAN_TRY(
-      auto host_labels, copy_int64_to_host(cluster_labels, stream, "labels"));
-  HOLOSCAN_TRY(auto host_sizes,
-               copy_int64_to_host(cluster_sizes, stream, "sizes"));
   HOLOSCAN_TRY(auto host_ranges,
                copy_float_to_host(ranges, stream, "range_bins"));
   HOLOSCAN_TRY(auto host_velocities,
                copy_float_to_host(velocities, stream, "velocity_bins"));
-  HOLOSCAN_TRY(auto host_reduced,
-               copy_float_to_host(reduced, stream, "reduced_points"));
+  std::vector<std::int64_t> host_labels;
+  std::vector<std::int64_t> host_sizes;
+  std::vector<float> host_reduced;
+  if (config_.mode == SimoDisplayMode::kClusters) {
+    HOLOSCAN_TRY(host_labels,
+                 copy_int64_to_host(cluster_labels, stream, "labels"));
+    HOLOSCAN_TRY(host_sizes,
+                 copy_int64_to_host(cluster_sizes, stream, "sizes"));
+    HOLOSCAN_TRY(host_reduced,
+                 copy_float_to_host(reduced, stream, "reduced_points"));
+  }
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
     return cuda_failure(kWho, "annotation input synchronization");
   }
 
   std::vector<std::uint8_t> host_annotation;
   try {
-    std::vector<ClusterCentroid> centroids =
-        detail::compute_cluster_centroids(
-            host_idx, host_points, host_labels, host_sizes, idx.shape()[1],
-            feature_points.shape()[1]);
-    detail::apply_reduced_features(
-        &centroids, host_reduced, reduced.shape()[1]);
-    detail::append_history(&history_, centroids, frame_index_,
+    std::vector<DetectionMarker> markers;
+    if (config_.mode == SimoDisplayMode::kClusters) {
+      markers = detail::make_cluster_markers(
+          host_idx, host_points, host_labels, host_sizes, idx.shape()[1],
+          feature_points.shape()[1]);
+      detail::apply_reduced_features(
+          &markers, host_reduced, reduced.shape()[1]);
+    } else {
+      markers = detail::make_raw_detection_markers(
+          host_idx, host_points, idx.shape()[1], feature_points.shape()[1]);
+    }
+    detail::append_history(&history_, markers, frame_index_,
                            config_.history_frames);
-    detail::append_history(&detection_history_, centroids, frame_index_,
+    detail::append_history(&detection_history_, markers, frame_index_,
                            config_.detection_trail_frames);
     host_annotation = make_annotation(
-        layout.rows, layout.cols, centroids, history_, detection_history_,
+        layout.rows, layout.cols, markers, history_, detection_history_,
         host_ranges, host_velocities, config_, frame_index_);
   } catch (const std::invalid_argument& e) {
     return make_unexpected(
@@ -1090,7 +1141,7 @@ std::vector<std::uint8_t> make_heatmap_rgba_reference(
   return result;
 }
 
-std::vector<ClusterCentroid> compute_cluster_centroids(
+std::vector<DetectionMarker> make_cluster_markers(
     const std::vector<std::int64_t>& detection_idx,
     const std::vector<float>& points, const std::vector<std::int64_t>& labels,
     const std::vector<std::int64_t>& sizes, std::int64_t idx_cols,
@@ -1098,14 +1149,14 @@ std::vector<ClusterCentroid> compute_cluster_centroids(
   if (idx_cols < 2 || point_cols < 4 ||
       detection_idx.size() % static_cast<std::size_t>(idx_cols) != 0U) {
     throw std::invalid_argument(
-        "compute_cluster_centroids: invalid column counts");
+        "make_cluster_markers: invalid column counts");
   }
   const std::size_t rows =
       detection_idx.size() / static_cast<std::size_t>(idx_cols);
   if (labels.size() != rows ||
       points.size() != rows * static_cast<std::size_t>(point_cols)) {
     throw std::invalid_argument(
-        "compute_cluster_centroids: row counts do not match");
+        "make_cluster_markers: row counts do not match");
   }
 
   struct Accumulator {
@@ -1122,7 +1173,7 @@ std::vector<ClusterCentroid> compute_cluster_centroids(
     }
     if (label >= static_cast<std::int64_t>(sizes.size())) {
       throw std::invalid_argument(
-          "compute_cluster_centroids: label is out of bounds");
+          "make_cluster_markers: label is out of bounds");
     }
     Accumulator& accumulator =
         accumulators[static_cast<std::size_t>(label)];
@@ -1141,12 +1192,12 @@ std::vector<ClusterCentroid> compute_cluster_centroids(
     ++accumulator.count;
   }
 
-  std::vector<ClusterCentroid> result(sizes.size());
+  std::vector<DetectionMarker> result(sizes.size());
   for (std::size_t cluster = 0; cluster < sizes.size(); ++cluster) {
     const Accumulator& accumulator = accumulators[cluster];
     if (sizes[cluster] <= 0 || accumulator.count != sizes[cluster]) {
       throw std::invalid_argument(
-          "compute_cluster_centroids: cluster size does not match labels");
+          "make_cluster_markers: cluster size does not match labels");
     }
     const double inv = 1.0 / static_cast<double>(accumulator.count);
     result[cluster].doppler_bin =
@@ -1175,18 +1226,64 @@ std::vector<ClusterCentroid> compute_cluster_centroids(
   return result;
 }
 
-void apply_reduced_features(std::vector<ClusterCentroid>* centroids,
+std::vector<DetectionMarker> make_raw_detection_markers(
+    const std::vector<std::int64_t>& detection_idx,
+    const std::vector<float>& points, std::int64_t idx_cols,
+    std::int64_t point_cols) {
+  if (idx_cols < 2 || point_cols < 4 ||
+      detection_idx.size() % static_cast<std::size_t>(idx_cols) != 0U) {
+    throw std::invalid_argument(
+        "make_raw_detection_markers: invalid column counts");
+  }
+  const std::size_t rows =
+      detection_idx.size() / static_cast<std::size_t>(idx_cols);
+  if (points.size() != rows * static_cast<std::size_t>(point_cols)) {
+    throw std::invalid_argument(
+        "make_raw_detection_markers: row counts do not match");
+  }
+
+  std::vector<DetectionMarker> result(rows);
+  for (std::size_t row = 0; row < rows; ++row) {
+    const std::size_t idx_offset =
+        row * static_cast<std::size_t>(idx_cols);
+    result[row].doppler_bin = static_cast<float>(
+        detection_idx[idx_offset + static_cast<std::size_t>(idx_cols - 2)]);
+    result[row].range_bin = static_cast<float>(
+        detection_idx[idx_offset + static_cast<std::size_t>(idx_cols - 1)]);
+    const std::size_t point_offset =
+        row * static_cast<std::size_t>(point_cols);
+    std::copy_n(points.begin() + static_cast<std::ptrdiff_t>(point_offset), 4,
+                result[row].features.begin());
+  }
+
+  std::vector<std::size_t> range_order(rows);
+  for (std::size_t i = 0; i < rows; ++i) {
+    range_order[i] = i;
+  }
+  std::stable_sort(
+      range_order.begin(), range_order.end(),
+      [&result](std::size_t lhs, std::size_t rhs) {
+        return result[lhs].features[0] < result[rhs].features[0];
+      });
+  for (std::size_t rank = 0; rank < range_order.size(); ++rank) {
+    result[range_order[rank]].color_bucket =
+        static_cast<int>(rank % kClusterColors.size());
+  }
+  return result;
+}
+
+void apply_reduced_features(std::vector<DetectionMarker>* markers,
                             const std::vector<float>& reduced_points,
                             std::int64_t reduced_cols) {
-  if (centroids == nullptr || reduced_cols < 4 ||
+  if (markers == nullptr || reduced_cols < 4 ||
       reduced_points.size() !=
-          centroids->size() * static_cast<std::size_t>(reduced_cols)) {
+          markers->size() * static_cast<std::size_t>(reduced_cols)) {
     throw std::invalid_argument(
         "apply_reduced_features: incompatible reduced points");
   }
-  for (std::size_t cluster = 0; cluster < centroids->size(); ++cluster) {
+  for (std::size_t cluster = 0; cluster < markers->size(); ++cluster) {
     for (std::size_t feature = 0; feature < 4U; ++feature) {
-      (*centroids)[cluster].features[feature] =
+      (*markers)[cluster].features[feature] =
           reduced_points[cluster * static_cast<std::size_t>(reduced_cols) +
                          feature];
     }
@@ -1194,18 +1291,18 @@ void apply_reduced_features(std::vector<ClusterCentroid>* centroids,
 }
 
 void append_history(std::deque<HistorySample>* history,
-                    const std::vector<ClusterCentroid>& centroids,
+                    const std::vector<DetectionMarker>& markers,
                     std::int64_t frame, std::int64_t history_frames) {
   if (history == nullptr || history_frames < 1) {
     throw std::invalid_argument("append_history: invalid history");
   }
-  for (const ClusterCentroid& centroid : centroids) {
+  for (const DetectionMarker& marker : markers) {
     history->push_back(HistorySample{
         .frame = frame,
-        .doppler_bin = centroid.doppler_bin,
-        .range_bin = centroid.range_bin,
-        .features = centroid.features,
-        .color_bucket = centroid.color_bucket,
+        .doppler_bin = marker.doppler_bin,
+        .range_bin = marker.range_bin,
+        .features = marker.features,
+        .color_bucket = marker.color_bucket,
     });
   }
   const std::int64_t oldest = frame - history_frames + 1;

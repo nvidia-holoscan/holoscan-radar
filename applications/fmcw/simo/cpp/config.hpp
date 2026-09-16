@@ -3,9 +3,11 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -107,6 +109,23 @@ inline void require_assembly_features(std::string_view key,
         " must list at least four columns so report and visualization "
         "keep range, velocity, azimuth, and elevation");
   }
+}
+
+inline std::vector<int64_t> report_index_columns(
+    const FeatureAssemblyParams& assembly) {
+  const auto find_column = [&assembly](AssemblyFeature feature) {
+    const auto iter =
+        std::find(assembly.features.begin(), assembly.features.end(), feature);
+    if (iter == assembly.features.end()) {
+      throw std::runtime_error(
+          "cluster reporting requires feature_assembly.features to include " +
+          std::string(to_string(feature)));
+    }
+    return static_cast<int64_t>(
+        std::distance(assembly.features.begin(), iter));
+  };
+  return {find_column(AssemblyFeature::kDopplerBin),
+          find_column(AssemblyFeature::kRangeBin)};
 }
 
 template <typename Params>

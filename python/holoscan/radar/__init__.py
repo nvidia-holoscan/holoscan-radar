@@ -74,7 +74,7 @@ from .phase_shift_beamformer_op import (  # noqa: F401
     PhaseShiftBeamformerOpF64,
 )
 from .radar_app import CadenceMeter  # noqa: F401
-from .radar_app import ClusterReportOp, DetectionReportOp, NullSinkOp
+from .radar_app import DetectionReportMode, DetectionReportOp, NullSinkOp
 from .root_music_estimator_op import (  # noqa: F401
     RootMUSICEstimatorOpF32,
     RootMUSICEstimatorOpF64,
@@ -252,7 +252,6 @@ __all__ = [
     "ClusterDBSCANOpF32",
     "ClusterDBSCANOpF64",
     "ClusterOverlayOp",
-    "ClusterReportOp",
     "ClutterFilterMethod",
     "ClutterFilterOp",
     "ClutterFilterOpF32",
@@ -262,6 +261,7 @@ __all__ = [
     "DetectionReductionOpF32",
     "DetectionReductionOpF64",
     "DetectionReportOp",
+    "DetectionReportMode",
     "ElevationReference",
     "FMCWDopplerProcessorOp",
     "FMCWDopplerProcessorOpF32",

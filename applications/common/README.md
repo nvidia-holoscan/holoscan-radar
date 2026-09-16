@@ -61,8 +61,8 @@ radar_app/
   app/holoviz_layout.hpp  HolovizLayout / RightPanel + build_holoviz_input_specs
                           + make_rd_holoviz_op factory + panel presets
   report/cadence_meter.hpp  CadenceMeter — wall-clock source / e2e probe
-  report/report_ops.hpp   DetectionReportOp, ClusterReportOp (2- or 4-column
-                          rep_idx), NullSinkOp, TensorMapDiscardOp
+  report/report_ops.hpp   DetectionReportOp (raw/clustered modes), NullSinkOp,
+                          TensorMapDiscardOp
   viz/viz.hpp             RdChannelSliceOp (SIMO per-RX RD slice),
                           RdMapToImageOp, ClusterOverlayOp, RollingPlotOp,
                           BoresightViewOp (az/el scatter), the turbo LUT, the
@@ -180,11 +180,6 @@ safely).
 
 - `radar_app::TensorMapDiscardOp` (`report_ops.hpp`) is not exposed to
   Python, so `ops.TensorMapDiscardOp` is a small Python-only reimplementation.
-- The Python `ClusterReportOp` binding does not expose `az_grid` / `el_grid` /
-  `cadence` as read-write the way the C++ struct fields do, so
-  `fmcw_dense_simo` keeps its own `DenseClusterReportOp` in `custom_ops.py`
-  rather than reusing the shared op the C++ app uses.
-
-Both are candidates for a future pybind11-binding change (touching
+This is a candidate for a future pybind11-binding change (touching
 `_radar_app_bindings.cpp` + a rebuild), out of scope for the Python
 application-structure work that landed this section.

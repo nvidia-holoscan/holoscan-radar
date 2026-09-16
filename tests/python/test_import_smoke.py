@@ -41,7 +41,7 @@ def test_import_all_operators_and_descriptors():
         "DDMCodeDescriptor",
         "NullSinkOp",
         "DetectionReportOp",
-        "ClusterReportOp",
+        "DetectionReportMode",
         "RdMapToImageOp",
         "ClusterOverlayOp",
         "RollingPlotOp",
@@ -55,7 +55,6 @@ def test_import_all_operators_and_descriptors():
         if name.endswith("Op") and name not in (
             "NullSinkOp",
             "DetectionReportOp",
-            "ClusterReportOp",
             "RdMapToImageOp",
             "ClusterOverlayOp",
             "RollingPlotOp",

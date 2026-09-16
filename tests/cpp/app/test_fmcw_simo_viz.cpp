@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <deque>
+#include <stdexcept>
 #include <vector>
 
 #include "viz/simo_viz_ops.hpp"
@@ -52,44 +53,74 @@ TEST(SimoRdHeatmapTest, MapsDopplerToXAndRangeUpward) {
 }
 
 TEST(SimoDashboardTest, ComputesClusterCentroids) {
-  const std::vector<viz::ClusterCentroid> centroids =
-      viz::detail::compute_cluster_centroids(
+  const std::vector<viz::DetectionMarker> markers =
+      viz::detail::make_cluster_markers(
           {0, 2, 2, 4, 3, 6},
           {10.0F, 1.0F, 0.1F, 0.2F, 1000.0F,
            14.0F, 3.0F, 0.3F, 0.4F, -1000.0F,
            30.0F, -2.0F, -0.2F, -0.3F, 7.0F},
           {0, 0, 1}, {2, 1}, 2, 5);
-  ASSERT_EQ(centroids.size(), 2U);
-  EXPECT_FLOAT_EQ(centroids[0].doppler_bin, 1.0F);
-  EXPECT_FLOAT_EQ(centroids[0].range_bin, 3.0F);
-  EXPECT_FLOAT_EQ(centroids[0].features[0], 12.0F);
-  EXPECT_FLOAT_EQ(centroids[0].features[3], 0.3F);
-  EXPECT_EQ(centroids[0].color_bucket, 0);
-  EXPECT_EQ(centroids[1].color_bucket, 1);
+  ASSERT_EQ(markers.size(), 2U);
+  EXPECT_FLOAT_EQ(markers[0].doppler_bin, 1.0F);
+  EXPECT_FLOAT_EQ(markers[0].range_bin, 3.0F);
+  EXPECT_FLOAT_EQ(markers[0].features[0], 12.0F);
+  EXPECT_FLOAT_EQ(markers[0].features[3], 0.3F);
+  EXPECT_EQ(markers[0].color_bucket, 0);
+  EXPECT_EQ(markers[1].color_bucket, 1);
+}
+
+TEST(SimoDashboardTest, MakesRawDetectionMarkers) {
+  const std::vector<viz::DetectionMarker> markers =
+      viz::detail::make_raw_detection_markers(
+          {0, 1, 2, 3, 1, 0, 4, 5},
+          {14.0F, 3.0F, 0.3F, 0.4F, -1000.0F,
+           10.0F, 1.0F, 0.1F, 0.2F, 1000.0F},
+          4, 5);
+  ASSERT_EQ(markers.size(), 2U);
+  EXPECT_FLOAT_EQ(markers[0].doppler_bin, 2.0F);
+  EXPECT_FLOAT_EQ(markers[0].range_bin, 3.0F);
+  EXPECT_EQ(markers[0].features,
+            (std::array<float, 4>{14.0F, 3.0F, 0.3F, 0.4F}));
+  EXPECT_EQ(markers[0].color_bucket, 1);
+  EXPECT_EQ(markers[1].color_bucket, 0);
+}
+
+TEST(SimoDashboardTest, AcceptsEmptyRawDetections) {
+  EXPECT_TRUE(
+      viz::detail::make_raw_detection_markers({}, {}, 4, 5).empty());
+}
+
+TEST(SimoDashboardTest, RejectsMismatchedRawDetectionRows) {
+  EXPECT_THROW(
+      viz::detail::make_raw_detection_markers(
+          {0, 1, 2, 3},
+          {10.0F, 1.0F, 0.1F, 0.2F, 11.0F, 2.0F, 0.2F, 0.3F},
+          4, 4),
+      std::invalid_argument);
 }
 
 TEST(SimoDashboardTest, UsesReducedFeaturesForHistory) {
-  std::vector<viz::ClusterCentroid> centroids(2);
+  std::vector<viz::DetectionMarker> markers(2);
   viz::detail::apply_reduced_features(
-      &centroids,
+      &markers,
       {10.0F, 1.0F, 0.1F, 0.2F, 3.0F,
        20.0F, 2.0F, 0.3F, 0.4F, 4.0F},
       5);
-  EXPECT_EQ(centroids[0].features,
+  EXPECT_EQ(markers[0].features,
             (std::array<float, 4>{10.0F, 1.0F, 0.1F, 0.2F}));
-  EXPECT_EQ(centroids[1].features,
+  EXPECT_EQ(markers[1].features,
             (std::array<float, 4>{20.0F, 2.0F, 0.3F, 0.4F}));
 }
 
 TEST(SimoDashboardTest, BoundsHistoryAndMapsPanelCoordinates) {
   std::deque<viz::HistorySample> history;
-  const viz::ClusterCentroid centroid{
+  const viz::DetectionMarker marker{
       .doppler_bin = 7.0F,
       .range_bin = 11.0F,
       .features = {10.0F, 0.0F, 0.25F, -0.25F},
       .color_bucket = 3};
   for (std::int64_t frame = 0; frame < 5; ++frame) {
-    viz::detail::append_history(&history, {centroid}, frame, 3);
+    viz::detail::append_history(&history, {marker}, frame, 3);
   }
   ASSERT_EQ(history.size(), 3U);
   EXPECT_EQ(history.front().frame, 2);
@@ -103,12 +134,12 @@ TEST(SimoDashboardTest, BoundsHistoryAndMapsPanelCoordinates) {
 
 TEST(SimoDashboardTest, ExpiresDetectionAfterConfiguredFrames) {
   std::deque<viz::HistorySample> history;
-  const viz::ClusterCentroid centroid{
+  const viz::DetectionMarker marker{
       .doppler_bin = 7.0F,
       .range_bin = 11.0F,
       .features = {10.0F, 0.0F, 0.25F, -0.25F},
   };
-  viz::detail::append_history(&history, {centroid}, 0, 3);
+  viz::detail::append_history(&history, {marker}, 0, 3);
   viz::detail::append_history(&history, {}, 1, 3);
   viz::detail::append_history(&history, {}, 2, 3);
   ASSERT_EQ(history.size(), 1U);

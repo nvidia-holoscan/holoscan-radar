@@ -18,7 +18,6 @@
 #include "radar_app/app/source.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "config.hpp"  // NOLINT(build/include_subdir): app-private header
-#include "custom_ops.hpp"  // NOLINT(build/include_subdir): app-private header
 
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
 #include "viz/simo_viz_graph.hpp"  // NOLINT(build/include_subdir)
@@ -117,21 +116,12 @@ int main(int argc, char** argv) {
             "feature_assembly", extents, cfg.assembly_params->features);
         bind_outputs(options, "feature_assembly", {"points"});
 
-        // Give every retained CFAR peak an identity label and unit size so the
-        // shared report and display paths can consume peaks directly.
-        auto identity = graph.op<simo::PeakIdentityOp>(
-            "peak_identity", extents);
-        bind_outputs(options, "peak_identity", {"labels", "sizes", "rep_idx"});
-
         // Final log report.
-        auto report = graph.op<app::ClusterReportOp>(
-            "cluster_report",
-            app::ClusterReportOp::Config{
-                /*report_detection_idx=*/false,
-                cfg.beamformer_params->az_angles,
-                cfg.beamformer_params->el_angles,
-                cadence,
-                /*identity_peaks=*/true});
+        auto report = graph.op<app::DetectionReportOp>(
+            "detection_report",
+            app::DetectionReportOp::Config{
+                .mode = app::DetectionReportMode::kRawDetections,
+                .cadence = cadence});
 
         // Processing and reporting share one source-driven partition.
         auto application = graph.partition("application");
@@ -142,7 +132,6 @@ int main(int argc, char** argv) {
             .add(beamformer)
             .add(cfar)
             .add(features)
-            .add(identity)
             .add(report);
 
         // FMCW front end: ADC cube -> per-channel range-Doppler maps.
@@ -165,13 +154,9 @@ int main(int argc, char** argv) {
         graph.add_flow(beamformer->el_grid, features->el_angles, queue);
         graph.add_flow(cfar->detection_score, features->detection_score, queue);
 
-        graph.add_flow(cfar->detection_idx, identity->detection_idx, queue);
-
         // Report each retained N-D peak directly.
         graph.add_flow(features->points, report->points, queue);
-        graph.add_flow(identity->labels, report->labels, queue);
-        graph.add_flow(identity->sizes, report->sizes, queue);
-        graph.add_flow(identity->rep_idx, report->rep_idx, queue);
+        graph.add_flow(cfar->detection_idx, report->detection_idx, queue);
         graph.add_flow(range->range_bins, report->range_bins, queue);
         graph.add_flow(doppler->velocity_bins, report->velocity_bins, queue);
 
@@ -182,10 +167,9 @@ int main(int argc, char** argv) {
               cfg.frame_period, cfg.beamformer_params->az_angles,
               cfg.beamformer_params->el_angles, cfg.scene.targets,
               "Beamform then detect",
-              simo::viz::SimoVizInputs{
+              simo::viz::SimoRawVizInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,
-                  identity->labels, identity->sizes, range->range_bins,
-                  doppler->velocity_bins, features->points});
+                  range->range_bins, doppler->velocity_bins});
         }
 #endif
       });

@@ -183,9 +183,9 @@ target_include_directories(test_fmcw_simo_config PRIVATE
 target_compile_definitions(test_fmcw_simo_config PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
-radar_add_test(app/test_fmcw_simo_peak_identity
-    holoscan::simo_peak_identity)
-target_include_directories(test_fmcw_simo_peak_identity PRIVATE
+radar_add_test(app/test_fmcw_simo_report
+    holoscan::radar_app)
+target_include_directories(test_fmcw_simo_report PRIVATE
     ${PROJECT_SOURCE_DIR}/applications/fmcw/simo/cpp
     ${PROJECT_SOURCE_DIR}/operators)
 

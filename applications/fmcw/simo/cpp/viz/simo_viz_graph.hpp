@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -54,7 +55,15 @@ inline std::vector<TruthTarget> make_truth_targets(
   return result;
 }
 
-struct SimoVizInputs {
+struct SimoRawVizInputs {
+  const holoscan::Output<holoscan::Tensor>& cfar_power;
+  const holoscan::Output<holoscan::Tensor>& detection_idx;
+  const holoscan::Output<holoscan::Tensor>& points;
+  const holoscan::Output<holoscan::Tensor>& range_bins;
+  const holoscan::Output<holoscan::Tensor>& velocity_bins;
+};
+
+struct SimoClusterVizInputs {
   const holoscan::Output<holoscan::Tensor>& cfar_power;
   const holoscan::Output<holoscan::Tensor>& detection_idx;
   const holoscan::Output<holoscan::Tensor>& points;
@@ -65,6 +74,7 @@ struct SimoVizInputs {
   const holoscan::Output<holoscan::Tensor>& reduced_points;
 };
 
+template <typename Inputs>
 inline void add_simo_visualization(
     holoscan::Graph& graph, holoscan::PartitionHandle& application,
     holoscan::CompileOptions& options, const VisualizationConfig& config,
@@ -72,10 +82,17 @@ inline void add_simo_visualization(
     const std::vector<double>& el_grid,
     const std::vector<sim::PointTarget>& truth_targets,
     std::string workflow_title,
-    const SimoVizInputs& inputs) {
+    const Inputs& inputs) {
+  static_assert(std::is_same_v<Inputs, SimoRawVizInputs> ||
+                    std::is_same_v<Inputs, SimoClusterVizInputs>,
+                "unsupported SIMO visualization input bundle");
+  constexpr bool kClustered =
+      std::is_same_v<Inputs, SimoClusterVizInputs>;
   auto display = graph.op<SimoDisplayOp>(
       "display_compositor",
       SimoDisplayConfig{
+          .mode = kClustered ? SimoDisplayMode::kClusters
+                             : SimoDisplayMode::kRawDetections,
           .dynamic_range_db =
               static_cast<float>(config.dynamic_range_db),
           .detection_radius =
@@ -137,13 +154,17 @@ inline void add_simo_visualization(
   graph.add_flow(inputs.detection_idx, display->detection_idx,
                  processing_queue);
   graph.add_flow(inputs.points, display->points, processing_queue);
-  graph.add_flow(inputs.labels, display->labels, processing_queue);
-  graph.add_flow(inputs.sizes, display->sizes, processing_queue);
+  if constexpr (kClustered) {
+    graph.add_flow(inputs.labels, display->labels, processing_queue);
+    graph.add_flow(inputs.sizes, display->sizes, processing_queue);
+  }
   graph.add_flow(inputs.range_bins, display->range_bins, processing_queue);
   graph.add_flow(inputs.velocity_bins, display->velocity_bins,
                  processing_queue);
-  graph.add_flow(inputs.reduced_points, display->reduced_points,
-                 processing_queue);
+  if constexpr (kClustered) {
+    graph.add_flow(inputs.reduced_points, display->reduced_points,
+                   processing_queue);
+  }
   graph.add_flow(display->rgba, holoviz->layer_input(0), display_queue);
 }
 

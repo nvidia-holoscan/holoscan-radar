@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <holoscan/core/fragment.hpp>
@@ -33,23 +34,11 @@ class PyDetectionReportOp : public DetectionReportOp {
   using DetectionReportOp::DetectionReportOp;
 
   PyDetectionReportOp(Fragment* fragment, const py::args& args,
+                      DetectionReportMode mode,
+                      std::vector<int64_t> point_index_columns,
                       const std::string& name = "detection_report")
-      : DetectionReportOp() {
-    name_ = name;
-    fragment_ = fragment;
-    spec_ = std::make_shared<OperatorSpec>(fragment);
-    setup(*spec_);
-    python::add_conditions_and_resources(this, args);
-  }
-};
-
-class PyClusterReportOp : public ClusterReportOp {
- public:
-  using ClusterReportOp::ClusterReportOp;
-
-  PyClusterReportOp(Fragment* fragment, const py::args& args,
-                    const std::string& name = "cluster_report")
-      : ClusterReportOp() {
+      : DetectionReportOp(DetectionReportOp::Config{
+            mode, std::move(point_index_columns), nullptr}) {
     name_ = name;
     fragment_ = fragment;
     spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -196,22 +185,22 @@ void bind_radar_app(py::module_& m) {
       .def_property_readonly("overdue_emits", &CadenceMeter::overdue_emits)
       .def_property_readonly("late_frames", &CadenceMeter::late_frames);
 
+  py::enum_<DetectionReportMode>(m, "DetectionReportMode")
+      .value("RAW_DETECTIONS", DetectionReportMode::kRawDetections)
+      .value("CLUSTERS", DetectionReportMode::kClusters);
+
   py::class_<DetectionReportOp, PyDetectionReportOp, Operator,
              std::shared_ptr<DetectionReportOp>>(
       m, "DetectionReportOp",
-      "Log CFAR detections in physical units via axis bins.")
-      .def(py::init<Fragment*, const py::args&, const std::string&>(),
-           py::arg("fragment"), py::arg("name") = "detection_report")
+      "Log raw or clustered detections in physical units.")
+      .def(py::init<Fragment*, const py::args&, DetectionReportMode,
+                    std::vector<int64_t>, const std::string&>(),
+           py::arg("fragment"),
+           py::arg("mode") = DetectionReportMode::kRawDetections,
+           py::arg("point_index_columns") = std::vector<int64_t>{},
+           py::arg("name") = "detection_report")
       .def("setup", &DetectionReportOp::setup, py::arg("spec"))
       .def_readwrite("cadence", &DetectionReportOp::cadence);
-
-  py::class_<ClusterReportOp, PyClusterReportOp, Operator,
-             std::shared_ptr<ClusterReportOp>>(
-      m, "ClusterReportOp",
-      "Log DBSCAN clusters (centroids + representative cells).")
-      .def(py::init<Fragment*, const py::args&, const std::string&>(),
-           py::arg("fragment"), py::arg("name") = "cluster_report")
-      .def("setup", &ClusterReportOp::setup, py::arg("spec"));
 
   py::class_<NullSinkOp, PyNullSinkOp, Operator, std::shared_ptr<NullSinkOp>>(
       m, "NullSinkOp",

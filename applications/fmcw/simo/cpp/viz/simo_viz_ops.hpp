@@ -22,7 +22,9 @@
 
 namespace holoscan::radar::app::simo::viz {
 
-struct ClusterCentroid {
+// Common render/history item produced from either a raw detection row or a
+// clustered detection centroid.
+struct DetectionMarker {
   float doppler_bin{0.0F};
   float range_bin{0.0F};
   std::array<float, 4> features{};
@@ -43,7 +45,13 @@ struct TruthTarget {
   int color_bucket{0};
 };
 
+enum class SimoDisplayMode {
+  kRawDetections,
+  kClusters,
+};
+
 struct SimoDisplayConfig {
+  SimoDisplayMode mode{SimoDisplayMode::kRawDetections};
   float dynamic_range_db{60.0F};
   float detection_radius{0.010F};
   double frame_period{0.1};
@@ -93,18 +101,23 @@ std::vector<std::uint8_t> make_heatmap_rgba_reference(
     const std::vector<float>& power, const std::vector<std::int64_t>& shape,
     float dynamic_range_db);
 
-std::vector<ClusterCentroid> compute_cluster_centroids(
+std::vector<DetectionMarker> make_cluster_markers(
     const std::vector<std::int64_t>& detection_idx,
     const std::vector<float>& points, const std::vector<std::int64_t>& labels,
     const std::vector<std::int64_t>& sizes, std::int64_t idx_cols,
     std::int64_t point_cols);
 
-void apply_reduced_features(std::vector<ClusterCentroid>* centroids,
+std::vector<DetectionMarker> make_raw_detection_markers(
+    const std::vector<std::int64_t>& detection_idx,
+    const std::vector<float>& points, std::int64_t idx_cols,
+    std::int64_t point_cols);
+
+void apply_reduced_features(std::vector<DetectionMarker>* markers,
                             const std::vector<float>& reduced_points,
                             std::int64_t reduced_cols);
 
 void append_history(std::deque<HistorySample>* history,
-                    const std::vector<ClusterCentroid>& centroids,
+                    const std::vector<DetectionMarker>& markers,
                     std::int64_t frame, std::int64_t history_frames);
 
 std::array<float, 2> rd_plot_position(float doppler_bin, float range_bin,

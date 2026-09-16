@@ -139,10 +139,13 @@ int main(int argc, char** argv) {
                      {"rep_idx", "reduced_points"});
 
         // Final log report.
-        auto report = graph.op<app::ClusterReportOp>(
+        auto report = graph.op<app::DetectionReportOp>(
             "cluster_report",
-            app::ClusterReportOp::Config{
-                /*report_detection_idx=*/true, {}, {}, cadence});
+            app::DetectionReportOp::Config{
+                .mode = app::DetectionReportMode::kClusters,
+                .point_index_columns =
+                    simo::report_index_columns(*cfg.assembly_params),
+                .cadence = cadence});
 
         // Processing and reporting share one source-driven partition.
         auto application = graph.partition("application");
@@ -191,10 +194,9 @@ int main(int argc, char** argv) {
         graph.add_flow(features->points, report->points, queue);
         graph.add_flow(cluster->labels, report->labels, queue);
         graph.add_flow(cluster->sizes, report->sizes, queue);
-        graph.add_flow(reduction->rep_idx, report->rep_idx, queue);
+        graph.add_flow(reduction->rep_idx, report->detection_idx, queue);
         graph.add_flow(range->range_bins, report->range_bins, queue);
         graph.add_flow(doppler->velocity_bins, report->velocity_bins, queue);
-        graph.add_flow(cfar->detection_idx, report->detection_idx, queue);
 
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
         if (cfg.visualize) {
@@ -203,7 +205,7 @@ int main(int argc, char** argv) {
               cfg.frame_period, cfg.beamscan_params->az_angles,
               cfg.beamscan_params->el_angles, cfg.scene.targets,
               "Detect then beamform",
-              simo::viz::SimoVizInputs{
+              simo::viz::SimoClusterVizInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,
                   cluster->labels, cluster->sizes, range->range_bins,
                   doppler->velocity_bins, reduction->reduced_points});

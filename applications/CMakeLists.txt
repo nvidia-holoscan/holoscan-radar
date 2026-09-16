@@ -16,18 +16,8 @@ add_subdirectory(common)
 # alone is not a sufficient gate because DEPENDS OPERATORS would FORCE OP_*=ON
 # for targets holoscan_radar_add_operator() never creates.
 
-# Graph-ported demos: build when X11 and/or Holoviz is present.
+# The consolidated SIMO workflows are the active HSDK 5 applications.
 if(HOLOSCAN_RADAR_HAS_RD_LIVE)
-    holoscan_radar_add_application(fmcw_siso
-        DEPENDS OPERATORS
-            fmcw_range_processor_op
-            clutter_filter_op
-            fmcw_doppler_processor_op
-            cfar_detector_op
-            feature_assembly_op
-            detection_reduction_op
-            cluster_dbscan_op
-    )
     holoscan_radar_add_application(simo
         DIRECTORY fmcw/simo
         DEPENDS OPERATORS
@@ -42,40 +32,7 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
             detection_reduction_op
             cluster_dbscan_op
     )
-    holoscan_radar_add_application(fmcw_mimo
-        DEPENDS OPERATORS
-            mimo_deinterleave_op
-            tdm_dense_compensation_op
-            ddm_dense_demultiplex_op
-            virtual_array_assembly_op
-            fmcw_range_processor_op
-            clutter_filter_op
-            fmcw_doppler_processor_op
-            cfar_detector_op
-            snapshot_gather_op
-            beamscan_estimator_op
-            feature_assembly_op
-            detection_reduction_op
-            cluster_dbscan_op
-    )
-    holoscan_radar_add_application(fmcw_aoa_estimators
-        DEPENDS OPERATORS
-            fmcw_range_processor_op
-            clutter_filter_op
-            fmcw_doppler_processor_op
-            cfar_detector_op
-            snapshot_gather_op
-            beamscan_estimator_op
-            mvdr_estimator_op
-            music_estimator_op
-            root_music_estimator_op
-            esprit_estimator_op
-            feature_assembly_op
-            detection_reduction_op
-            cluster_dbscan_op
-    )
 else()
     message(STATUS
-        "Skipping Graph-ported demos (fmcw_siso/simo/mimo/aoa); "
-        "no Holoviz/X11 live RD")
+        "Skipping consolidated SIMO applications; no Holoviz/X11 live RD")
 endif()
