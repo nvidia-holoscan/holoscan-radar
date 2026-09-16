@@ -125,6 +125,15 @@ void run_ddm_demux_stage(const void* input, void* output,
                          const void* d_initial_phase_weights,
                          cudaStream_t stream);
 
+// Transform an upstream center-zero physical Doppler axis alongside dense DDM
+// demultiplexing. A reduced linear path takes the contiguous centered slice;
+// a full-axis nonlinear path is an identity D2D copy.
+template <typename T>
+void run_ddm_velocity_axis_stage(const void* input, void* output,
+                                 int64_t num_doppler,
+                                 int64_t num_doppler_out,
+                                 cudaStream_t stream);
+
 // DDM non-linear correlate path output shape: full Doppler axis preserved.
 std::vector<int64_t> ddm_correlate_output_shape(const DdmRdMapsLayout& in,
                                                 int64_t num_tx);

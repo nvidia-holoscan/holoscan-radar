@@ -44,6 +44,8 @@ DDMDenseDemultiplexOp<T>::DDMDenseDemultiplexOp(const MaxTensorExtents& e) {
   const auto mg = require_extent(e.max_range_bins, "max_range_bins", kOpName);
   extents_ = e;
   max_byte_span_ = byte_span_complex_cube<T>({mt, mr, md, mg}, kOpName);
+  velocity_bins_max_byte_span_ =
+      byte_span_real_cube<T>({md}, kOpName);
 }
 template <typename T>
 DDMDenseDemultiplexOp<T>::~DDMDenseDemultiplexOp() {
@@ -54,19 +56,38 @@ void DDMDenseDemultiplexOp<T>::setup(OperatorSpec& spec) {
   constexpr TensorRepresentation device{.memory_kind = MemoryKind::kCudaDevice,
                                         .dtype = std::nullopt,
                                         .rank = std::nullopt};
+  constexpr TensorRepresentation axis_input{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = std::nullopt,
+      .rank = std::nullopt};
+  constexpr TensorRepresentation axis_output{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = std::nullopt,
+      .rank = 1U};
   spec.input(rd_maps).queue_depth(2U).expects_tensor(tensor_input(device));
+  spec.input(velocity_bins)
+      .optional()
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(axis_input));
   spec.output(rd_maps_out)
       .produces_tensor(pooled_tensor_output(
           device, {.max_rank = max_rank_, .max_byte_span = max_byte_span_}));
+  spec.output(velocity_bins_out)
+      .produces_tensor(pooled_tensor_output(
+          axis_output, {.max_rank = 1U,
+                        .max_byte_span = velocity_bins_max_byte_span_}));
 }
 template <typename T>
 Contract DDMDenseDemultiplexOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{rd_maps});
+  result.input(velocity_bins, Exact{})
+      .on_missing(velocity_bins, SafeDefault{});
   return result;
 }
 template <typename T>
-expected<void, Error> DDMDenseDemultiplexOp<T>::run_demux(
+expected<TensorOutputLoan, Error>
+DDMDenseDemultiplexOp<T>::prepare_demux(
     ExecutionContext& context, const detail::DdmRdMapsLayout& layout,
     const DDMCodeDescriptor& code, int64_t width,
     const std::vector<int64_t>& shape, const Tensor& input,
@@ -102,7 +123,7 @@ expected<void, Error> DDMDenseDemultiplexOp<T>::run_demux(
         return e;
       });
   const void* p = input.data();
-  HOLOSCAN_TRY(emit_device_tensor(
+  return prepare_device_tensor(
       rd_maps_out, context, shape, input.dtype(),
       [&](void* out, std::size_t) -> expected<void, Error> {
         try {
@@ -114,11 +135,11 @@ expected<void, Error> DDMDenseDemultiplexOp<T>::run_demux(
           return fail_invalid(e.what());
         }
         return {};
-      }));
-  return {};
+      });
 }
 template <typename T>
-expected<void, Error> DDMDenseDemultiplexOp<T>::run_correlate(
+expected<TensorOutputLoan, Error>
+DDMDenseDemultiplexOp<T>::prepare_correlate(
     ExecutionContext& context, const detail::DdmRdMapsLayout& layout,
     const DDMCodeDescriptor& code, const std::vector<int64_t>& shape,
     const Tensor& input, cudaStream_t stream) {
@@ -141,7 +162,7 @@ expected<void, Error> DDMDenseDemultiplexOp<T>::run_correlate(
         return e;
       });
   const void* p = input.data();
-  HOLOSCAN_TRY(emit_device_tensor(
+  return prepare_device_tensor(
       rd_maps_out, context, shape, input.dtype(),
       [&](void* out, std::size_t) -> expected<void, Error> {
         try {
@@ -152,8 +173,7 @@ expected<void, Error> DDMDenseDemultiplexOp<T>::run_correlate(
           return fail_invalid(e.what());
         }
         return {};
-      }));
-  return {};
+      });
 }
 template <typename T>
 expected<void, Error> DDMDenseDemultiplexOp<T>::compute(
@@ -166,6 +186,8 @@ expected<void, Error> DDMDenseDemultiplexOp<T>::compute(
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
+  HOLOSCAN_TRY(auto maybe_velocity_bins,
+               receive_optional_value(velocity_bins));
   detail::DdmRdMapsLayout layout;
   const auto& code = context.params<DDMDenseDemultiplexParams>().ddm_code;
   detail::DdmCodeMode mode;
@@ -212,16 +234,75 @@ expected<void, Error> DDMDenseDemultiplexOp<T>::compute(
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
+  if (maybe_velocity_bins.has_value()) {
+    try {
+      require_cuda_accessible(
+          *maybe_velocity_bins, "velocity_bins", kOpName);
+      require_contiguous(*maybe_velocity_bins, "velocity_bins", kOpName);
+      require_dtype(
+          *maybe_velocity_bins, real_dtype<T>(), "velocity_bins", kOpName);
+      if (maybe_velocity_bins->shape().size() != 1U ||
+          maybe_velocity_bins->shape()[0] != layout.num_doppler) {
+        return fail_invalid(
+            std::string(kOpName) +
+            ": velocity_bins must have shape (num_doppler,) matching "
+            "rd_maps");
+      }
+    } catch (const std::invalid_argument& e) {
+      return fail_invalid(e.what());
+    }
+  }
   cudaStream_t stream = context.cuda_stream().get();
   if (!stream)
     return make_unexpected(
         Error{ErrorCode::kNotSupported,
               std::string(kOpName) + ": no CUDA compute stream"});
-  if (mode == detail::DdmCodeMode::kNonLinear)
-    HOLOSCAN_TRY(run_correlate(context, layout, code, shape, input, stream));
-  else
-    HOLOSCAN_TRY(run_demux(context, layout, code, width, shape, input, stream));
+  HOLOSCAN_TRY(
+      auto rd_loan,
+      mode == detail::DdmCodeMode::kNonLinear
+          ? prepare_correlate(context, layout, code, shape, input, stream)
+          : prepare_demux(
+                context, layout, code, width, shape, input, stream));
+
+  // The optional physical axis is a causal companion to rd_maps_out.
+  // Prepare and publish it first so a downstream Exact join sees the value
+  // when rd_maps_out triggers its consumer.
+  if (maybe_velocity_bins.has_value() && velocity_bins_out_.active()) {
+    const int64_t num_doppler_out =
+        mode == detail::DdmCodeMode::kNonLinear
+            ? layout.num_doppler
+            : width;
+    HOLOSCAN_TRY(
+        auto axis_loan,
+        prepare_device_tensor(
+            velocity_bins_out, context,
+            std::vector<int64_t>{num_doppler_out}, real_dtype<T>(),
+            [&](void* output, std::size_t) -> expected<void, Error> {
+              try {
+                detail::run_ddm_velocity_axis_stage<T>(
+                    maybe_velocity_bins->data(), output,
+                    layout.num_doppler, num_doppler_out, stream);
+              } catch (const std::invalid_argument& e) {
+                return fail_invalid(e.what());
+              } catch (const std::runtime_error& e) {
+                return make_unexpected(
+                    Error{ErrorCode::kFailure, e.what()});
+              }
+              return {};
+            }));
+    velocity_bins_out_.emit(
+        velocity_bins_out, context, std::move(axis_loan),
+        "DDMDenseDemultiplexOp.velocity_bins_out");
+  }
+
+  HOLOSCAN_TRY(
+      emit_prepared_tensor(rd_maps_out, context, std::move(rd_loan)));
   retained_input_ = std::move(input);
+  if (maybe_velocity_bins.has_value()) {
+    retained_velocity_bins_ = std::move(*maybe_velocity_bins);
+  } else {
+    retained_velocity_bins_ = {};
+  }
   return {};
 }
 template class DDMDenseDemultiplexOp<float>;

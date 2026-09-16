@@ -23,6 +23,7 @@
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/dsp/mimo_coherent_compensation_stage.hpp"
 #include "radar_common/sdk/config_cache.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 
 namespace holoscan::radar {
 struct DDMDenseDemultiplexParams {
@@ -50,7 +51,9 @@ class DDMDenseDemultiplexOp
   [[nodiscard]] expected<void, Error> compute(
       ExecutionContext& context) override;
   Input<Tensor> rd_maps{"rd_maps"};
+  Input<Tensor> velocity_bins{"velocity_bins"};
   Output<Tensor> rd_maps_out{"rd_maps_out"};
+  Output<Tensor> velocity_bins_out{"velocity_bins_out"};
 
  private:
   struct CachedDemux {
@@ -60,23 +63,24 @@ class DDMDenseDemultiplexOp
   struct CachedCorrelate {
     std::shared_ptr<Tensor> device_corr_weights;
   };
-  expected<void, Error> run_demux(ExecutionContext& context,
-                                  const detail::DdmRdMapsLayout& layout,
-                                  const DDMCodeDescriptor& code,
-                                  int64_t num_doppler_per_tx,
-                                  const std::vector<int64_t>& out_shape,
-                                  const Tensor& input, cudaStream_t stream);
-  expected<void, Error> run_correlate(ExecutionContext& context,
-                                      const detail::DdmRdMapsLayout& layout,
-                                      const DDMCodeDescriptor& code,
-                                      const std::vector<int64_t>& out_shape,
-                                      const Tensor& input, cudaStream_t stream);
+  expected<TensorOutputLoan, Error> prepare_demux(
+      ExecutionContext& context, const detail::DdmRdMapsLayout& layout,
+      const DDMCodeDescriptor& code, int64_t num_doppler_per_tx,
+      const std::vector<int64_t>& out_shape, const Tensor& input,
+      cudaStream_t stream);
+  expected<TensorOutputLoan, Error> prepare_correlate(
+      ExecutionContext& context, const detail::DdmRdMapsLayout& layout,
+      const DDMCodeDescriptor& code, const std::vector<int64_t>& out_shape,
+      const Tensor& input, cudaStream_t stream);
   Tensor retained_input_;
+  Tensor retained_velocity_bins_;
   ConfigCache<CachedDemux> demux_cache_{};
   ConfigCache<CachedCorrelate> correlate_cache_{};
+  LatchedOutput velocity_bins_out_{};
   MaxTensorExtents extents_;
   std::uint32_t max_rank_{4U};
   std::size_t max_byte_span_{0U};
+  std::size_t velocity_bins_max_byte_span_{0U};
 };
 extern template class DDMDenseDemultiplexOp<float>;
 extern template class DDMDenseDemultiplexOp<double>;

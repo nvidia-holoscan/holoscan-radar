@@ -33,6 +33,7 @@
 
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
+#include "detection/feature_assembly_op/feature_assembly_op.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/sdk_harness.hpp"
@@ -45,6 +46,8 @@ using holoscan::radar::CFARParams;
 using holoscan::radar::CfarCellWindowOverride;
 using holoscan::radar::CfarPeakMode;
 using holoscan::radar::CfarVariant;
+using holoscan::radar::AssemblyFeature;
+using holoscan::radar::FeatureAssemblyOp;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::real_dtype;
 using holoscan::radar::testing::FiveOutGraphRunResult;
@@ -787,6 +790,70 @@ double score_at(const HostTensor& score, int64_t d, int64_t r) {
 }
 
 }  // namespace
+
+TEST(CFARDetectorOpTest, FeatureAssemblyWaitsForCfarScoreAndIndex) {
+  namespace harness = holoscan::radar::testing::detail;
+  harness::FrameBank::reset();
+  harness::FrameBank::input_frames = {to_device_tensor<double>(
+      power_map(1.0, {{8, 16}}, 100.0), {kDoppler, kRange},
+      real_dtype<double>())};
+
+  holoscan::Graph graph{"cfar-feature-assembly"};
+  const auto source = graph.op<harness::TensorSourceOp>("source");
+  const auto extents = holoscan::radar::testing::default_test_extents();
+  auto cfar = graph.op<CFARDetectorOp<double>>("cfar", extents);
+  cfar.set_params(ca_params(1e-3));
+  auto features = graph.op<FeatureAssemblyOp<double>>(
+      "features", extents, std::vector<AssemblyFeature>{
+                               AssemblyFeature::kScore});
+  const auto sink = graph.op<harness::TensorCaptureOp>("sink");
+  const holoscan::ConnectionOptions queue{.queue_depth = 4U};
+  graph.add_flow(source->out, cfar->rd_maps, queue);
+  graph.add_flow(cfar->detection_idx, features->detection_idx, queue);
+  graph.add_flow(cfar->detection_score, features->detection_score, queue);
+  graph.add_flow(features->points, sink->in, queue);
+  graph.partition("integration").add(source).add(cfar).add(features).add(sink);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  const auto bind = [&options](const char* op, const char* port) {
+    options.deployment.bind_tensor_output_device(
+        holoscan::TensorOutputDevicePlacement{
+            .operator_path = op,
+            .output_port = port,
+            .device = holoscan::DeviceId{0}});
+  };
+  bind("source", "out");
+  bind("cfar", "detection_mask");
+  bind("cfar", "detection_score");
+  bind("cfar", "noise_estimate");
+  bind("cfar", "detection_idx");
+  bind("cfar", "cfar_power");
+  bind("features", "points");
+
+  const holoscan::ExecutionPlan plan =
+      holoscan::compile(graph, std::move(options));
+  ASSERT_TRUE(plan.ok()) << plan.json();
+  holoscan::RunSession session = holoscan::run_async(plan);
+  const auto deadline =
+      std::chrono::steady_clock::now() + harness::kHarnessDeadline;
+  {
+    std::unique_lock lock(harness::FrameBank::mutex);
+    while (harness::FrameBank::captured.empty() &&
+           session.diagnostics().empty() &&
+           std::chrono::steady_clock::now() < deadline) {
+      harness::FrameBank::ready.wait_for(lock, harness::kHarnessPoll);
+    }
+  }
+  session.request_stop();
+  session.wait();
+  ASSERT_TRUE(session.diagnostics().empty());
+  const std::lock_guard lock(harness::FrameBank::mutex);
+  ASSERT_EQ(harness::FrameBank::captured.size(), 1U);
+  const HostTensor& points = harness::FrameBank::captured.front();
+  ASSERT_EQ(points.shape, (std::vector<int64_t>{1, 1}));
+  EXPECT_GT(points.as<double>()[0], 1.0);
+}
 
 TEST(CFARDetectorOpTest, DetectsSingleTargetRealPath) {
   const int64_t dt = 8;

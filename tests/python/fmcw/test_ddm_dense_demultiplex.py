@@ -18,7 +18,12 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
+from utils.harness import (  # noqa: E402
+    run_operator,
+    run_operator_multi,
+    single_map,
+    to_device_array,
+)
 from utils.mimo_helpers import K_DDM_RANGE  # noqa: E402
 from utils.mimo_helpers import (
     K_DDM_DOPPLER,
@@ -66,10 +71,35 @@ def run_compensation(
         make_op,
         frame,
         input_port="rd_maps",
-        output_port="rd_maps",
+        output_port="rd_maps_out",
     )
     assert len(outs) == 1
     return outs[0]
+
+
+def run_compensation_with_axis(
+    host: np.ndarray,
+    axis: np.ndarray,
+    *,
+    op_cls=DDMDenseDemultiplexOpF32,
+    ddm_code,
+) -> dict[str, np.ndarray]:
+    real_dtype = np.float32 if op_cls is DDMDenseDemultiplexOpF32 else np.float64
+    complex_type = np.complex64 if op_cls is DDMDenseDemultiplexOpF32 else np.complex128
+    frame = single_map(to_device_array(host, dtype=complex_type), "rd_maps")
+    axis_frame = single_map(to_device_array(axis, dtype=real_dtype), "velocity_bins")
+
+    def make_op(app):
+        return op_cls(app, ddm_code=ddm_code, name="op_under_test")
+
+    outputs = run_operator_multi(
+        make_op,
+        frame,
+        input_port="rd_maps",
+        output_ports=("rd_maps_out", "velocity_bins_out"),
+        extra_inputs={"velocity_bins": [axis_frame]},
+    )
+    return {port: frames[0] for port, frames in outputs.items()}
 
 
 def test_DdmDemuxRecoversEachTxIntoBand():
@@ -124,6 +154,26 @@ def test_DdmGuardBandsReduceWidth():
                     got = out[m, rx, o, r]
                     assert got.real == pytest.approx(expected.real, abs=1e-4)
                     assert got.imag == pytest.approx(expected.imag, abs=1e-4)
+
+
+def test_LinearVelocityAxisUsesCenteredPhysicalSlice():
+    code = make_offset_code(K_DDM_TX)
+    offsets = uniform_ddm_offsets(K_DDM_TX)
+    host = build_ddm_input_host(offsets, K_DDM_TX, K_DDM_RX, K_DDM_DOPPLER, K_DDM_RANGE, 0)
+    axis = (np.arange(K_DDM_DOPPLER, dtype=np.float32) - K_DDM_DOPPLER // 2) * 0.25
+    outputs = run_compensation_with_axis(host, axis, ddm_code=code)
+    np.testing.assert_array_equal(
+        outputs["velocity_bins_out"], np.asarray([-0.5, -0.25, 0.0, 0.25])
+    )
+
+
+def test_GuardBandsKeepCenteredVelocityInterval():
+    code = make_offset_code(K_DDM_TX, guard=1)
+    offsets = uniform_ddm_offsets(K_DDM_TX)
+    host = build_ddm_input_host(offsets, K_DDM_TX, K_DDM_RX, K_DDM_DOPPLER, K_DDM_RANGE, 0)
+    axis = np.arange(K_DDM_DOPPLER, dtype=np.float32) - K_DDM_DOPPLER // 2
+    outputs = run_compensation_with_axis(host, axis, ddm_code=code)
+    np.testing.assert_array_equal(outputs["velocity_bins_out"], np.asarray([-1.0, 0.0, 1.0]))
 
 
 def test_DdmGuardBandDiscardsEdgeBin():

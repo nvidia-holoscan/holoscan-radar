@@ -221,6 +221,43 @@ TEST(DetectionReductionOpTest, RequiresMaxFeaturesForReducedPointsPool) {
                std::invalid_argument);
 }
 
+TEST(DetectionReductionOpTest,
+     UnwiredReducedPointsDoesNotSuppressRepIdxAcrossFrames) {
+  std::vector<std::shared_ptr<holoscan::Tensor>> label_frames;
+  std::vector<std::shared_ptr<holoscan::Tensor>> index_frames;
+  std::vector<std::shared_ptr<holoscan::Tensor>> point_frames;
+  for (int frame = 0; frame < 4; ++frame) {
+    label_frames.push_back(
+        to_device_tensor(std::vector<int64_t>{0, 0}, {2}, kInt64));
+    index_frames.push_back(to_device_tensor(
+        std::vector<int64_t>{1, 2, 3, 4}, {2, 2}, kInt64));
+    point_frames.push_back(to_device_tensor(
+        std::vector<double>{1.0, 2.0}, {2, 1}, real_dtype<double>()));
+  }
+  const GraphRunResult result =
+      run_triple_in_single_out_operator_graph_result<
+          DetectionReductionOp<double>>(
+          std::move(label_frames), std::move(index_frames),
+          std::move(point_frames),
+          make_params(
+              RepresentativePolicy::kPeak, ScoreMethod::kWeightedSum, {1.0}),
+          "rep_idx",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            wire_reduction_with_points(graph, source, op, sink);
+          },
+          holoscan::radar::testing::default_test_extents(),
+          {"reduced_points"});
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames.size(), 4U);
+  for (const HostTensor& frame : result.frames) {
+    ASSERT_EQ(frame.shape, (std::vector<int64_t>{1, 2}));
+    EXPECT_EQ(frame.as<int64_t>()[0], 3);
+    EXPECT_EQ(frame.as<int64_t>()[1], 4);
+  }
+}
+
 TEST(DetectionReductionOpTest, FirstSelectsLowestIndexPerCluster) {
   // rows: 0→cluster0, 1→cluster1, 2→cluster0, 3→noise
   std::vector<int64_t> labels = {0, 1, 0, -1};

@@ -11,8 +11,9 @@
         "language": [
             "C++"
         ],
-        "version": "0.1.0",
+        "version": "0.2.0",
         "changelog": {
+            "0.2.0": "Add optional causally published physical velocity-axis transformation",
             "0.1.0": "Initial release split from the dense MIMO implementation"
         },
         "holoscan_sdk": {

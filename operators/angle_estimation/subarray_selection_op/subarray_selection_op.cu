@@ -472,33 +472,41 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
           snapshot_out, context, snap, plan, *selection,
           state_->channel_index, out_shape, stream));
 
-  // Publish the geometry sideband before the Tensor that triggers downstream
-  // Exact joins. An unwired optional is absorbed before snapshot publication.
+  // Prepare every active causal sideband before any publication.
+  std::optional<PreparedWireArrayGeometry> geometry_prepared;
   if (array_geometry_out_.active()) {
     HOLOSCAN_TRY(
         auto prepared,
         prepare_wire_array_geometry(array_geometry, out_geometry));
-    array_geometry_out_.emit_schema_tensor(
-        array_geometry, context, std::move(prepared.loan),
-        std::move(prepared.payload),
-        "SubarraySelectionOp.array_geometry");
+    geometry_prepared.emplace(std::move(prepared));
   }
-
-  HOLOSCAN_TRY(
-      emit_prepared_tensor(snapshot_out, context, std::move(snap_loan)));
-
-  // is_valid_out is not a selector for snapshot_out and remains independent.
+  std::optional<TensorOutputLoan> mask_prepared;
   if (maybe_valid.has_value() && is_valid_out_.active()) {
     HOLOSCAN_TRY(
         auto prepared,
         prepare_mask_output(is_valid_out, context, *maybe_valid, stream));
-    is_valid_out_.emit(is_valid_out, context, std::move(prepared),
+    mask_prepared.emplace(std::move(prepared));
+  }
+
+  // Publish geometry and mask before the Tensor that triggers downstream
+  // Exact joins. Declined optional emits are absorbed before snapshot.
+  if (geometry_prepared.has_value()) {
+    array_geometry_out_.emit_schema_tensor(
+        array_geometry, context, std::move(geometry_prepared->loan),
+        std::move(geometry_prepared->payload),
+        "SubarraySelectionOp.array_geometry");
+  }
+  if (mask_prepared.has_value()) {
+    is_valid_out_.emit(is_valid_out, context, std::move(*mask_prepared),
                        "SubarraySelectionOp.is_valid_out");
     // Keeps the D2D source alive until the copy enqueued above retires.
     retained_is_valid_ = std::move(*maybe_valid);
   } else if (!maybe_valid.has_value()) {
     retained_is_valid_ = {};
   }
+
+  HOLOSCAN_TRY(
+      emit_prepared_tensor(snapshot_out, context, std::move(snap_loan)));
 
   // Keep the trigger allocation alive until the next activation.
   retained_snapshot_ = std::move(snap);

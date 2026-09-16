@@ -537,6 +537,36 @@ template void run_ddm_demux_stage<double>(const void* input, void* output,
                                           const void* d_initial_phase_weights,
                                           cudaStream_t stream);
 
+template <typename T>
+void run_ddm_velocity_axis_stage(const void* input, void* output,
+                                 int64_t num_doppler,
+                                 int64_t num_doppler_out,
+                                 cudaStream_t stream) {
+  if (input == nullptr || output == nullptr || num_doppler <= 0 ||
+      num_doppler_out <= 0 || num_doppler_out > num_doppler) {
+    throw std::invalid_argument(
+        "DDM velocity axis: invalid input/output extent");
+  }
+  const int64_t input_zero = num_doppler / 2;
+  const int64_t output_zero = num_doppler_out / 2;
+  const int64_t start = input_zero - output_zero;
+  const auto* source = static_cast<const T*>(input) + start;
+  const size_t bytes =
+      static_cast<size_t>(num_doppler_out) * sizeof(T);
+  if (cudaMemcpyAsync(
+          output, source, bytes, cudaMemcpyDeviceToDevice, stream) !=
+      cudaSuccess) {
+    throw std::runtime_error("DDM velocity axis: D2D copy failed");
+  }
+}
+
+template void run_ddm_velocity_axis_stage<float>(
+    const void* input, void* output, int64_t num_doppler,
+    int64_t num_doppler_out, cudaStream_t stream);
+template void run_ddm_velocity_axis_stage<double>(
+    const void* input, void* output, int64_t num_doppler,
+    int64_t num_doppler_out, cudaStream_t stream);
+
 // ---- Non-linear DDM correlate path ----------------------------------------
 
 std::vector<int64_t> ddm_correlate_output_shape(const DdmRdMapsLayout& in,

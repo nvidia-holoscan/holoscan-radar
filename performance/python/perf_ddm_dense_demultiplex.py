@@ -36,21 +36,18 @@ from utils.perf_runner import (
     fill_compute_row,
     make_run_plan,
 )
-from utils.perf_sink import PerfTerminalSinkOp  # noqa: E402
-from utils.perf_source import PerfOverrideSourceOp, PerfTensorSourceOp  # noqa: E402
-from utils.tensor_factory import make_iq_cube_device, single_map  # noqa: E402
+from utils.perf_sink import PerfTerminalSinkOp, make_null_sink  # noqa: E402
+from utils.perf_source import PerfDualTensorSourceOp, PerfTensorSourceOp  # noqa: E402
+from utils.tensor_factory import (  # noqa: E402
+    make_iq_cube_device,
+    make_power_map_device,
+    single_map,
+)
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application  # noqa: E402
 from holoscan.radar import DDMCodeDescriptor  # noqa: E402
-from holoscan.radar import (
-    DDMDenseDemultiplexOpF32,
-    FMCWWaveformDescriptor,
-    FMCWWaveformSpec,
-)
-
-_DEFAULT_PRI = 25.0e-6
-_OVERRIDE_PRI = 27.5e-6
+from holoscan.radar import DDMDenseDemultiplexOpF32  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Size ladder — keep aligned with perf_ddm_dense_demultiplex.cpp
@@ -86,6 +83,7 @@ class CompensationScenario:
     num_range_bins: int
     batch: int = 1
     non_linear_ddm: bool = False
+    velocity_axis: bool = False
 
 
 def _must_find_size(size_id: str) -> tuple[int, int, int, int]:
@@ -93,16 +91,6 @@ def _must_find_size(size_id: str) -> tuple[int, int, int, int]:
         return _SIZE_SPECS[size_id]
     except KeyError as exc:
         raise ValueError(f"unknown size id '{size_id}'") from exc
-
-
-def make_waveform(pri: float) -> FMCWWaveformDescriptor:
-    spec = FMCWWaveformSpec()
-    spec.carrier_frequency = 77.0e9
-    spec.bandwidth = 150.0e6
-    spec.chirp_duration = 20.0e-6
-    spec.sample_rate = 12.8e6
-    spec.chirp_repetition_interval = pri
-    return FMCWWaveformDescriptor(spec)
 
 
 def make_ddm_code(num_tx: int) -> DDMCodeDescriptor:
@@ -135,11 +123,16 @@ def input_shape(scen: CompensationScenario) -> list[int]:
     return shape
 
 
-def make_scenario(size_id: str, *, non_linear_ddm: bool = False) -> CompensationScenario:
+def make_scenario(
+    size_id: str,
+    *,
+    non_linear_ddm: bool = False,
+    velocity_axis: bool = False,
+) -> CompensationScenario:
     num_tx, num_rx, num_doppler, num_range_bins = _must_find_size(size_id)
     variant = "ddm_nl" if non_linear_ddm else "ddm"
     return CompensationScenario(
-        id=f"ddm_dense_demultiplex_{variant}_{size_id}",
+        id=f"ddm_dense_demultiplex_{variant}_{size_id}" f"{'_axis' if velocity_axis else ''}",
         size_id=size_id,
         variant=variant,
         num_tx=num_tx,
@@ -147,6 +140,7 @@ def make_scenario(size_id: str, *, non_linear_ddm: bool = False) -> Compensation
         num_doppler=num_doppler,
         num_range_bins=num_range_bins,
         non_linear_ddm=non_linear_ddm,
+        velocity_axis=velocity_axis,
     )
 
 
@@ -154,6 +148,13 @@ def build_default_matrix() -> list[CompensationScenario]:
     out: list[CompensationScenario] = []
     for sid in ("xs", "md", "xl"):
         out.extend([make_scenario(sid), make_scenario(sid, non_linear_ddm=True)])
+        if sid == "md":
+            out.extend(
+                [
+                    make_scenario(sid, velocity_axis=True),
+                    make_scenario(sid, non_linear_ddm=True, velocity_axis=True),
+                ]
+            )
     return out
 
 
@@ -161,7 +162,14 @@ def build_size_sweep(size_ids: list[str]) -> list[CompensationScenario]:
     out: list[CompensationScenario] = []
     for sid in size_ids:
         if sid in _SIZE_BY_ID:
-            out.extend([make_scenario(sid), make_scenario(sid, non_linear_ddm=True)])
+            out.extend(
+                [
+                    make_scenario(sid),
+                    make_scenario(sid, non_linear_ddm=True),
+                    make_scenario(sid, velocity_axis=True),
+                    make_scenario(sid, non_linear_ddm=True, velocity_axis=True),
+                ]
+            )
     return out
 
 
@@ -173,7 +181,7 @@ def _base_row(scen: CompensationScenario) -> ResultRow:
     return ResultRow(
         scenario_id=scen.id,
         op_name="DDMDenseDemultiplexOp",
-        variant=scen.variant,
+        variant=scen.variant + ("_axis" if scen.velocity_axis else ""),
         size_id=scen.size_id,
         input_shape=input_shape(scen),
         out_batch=scen.batch,
@@ -208,7 +216,6 @@ def _run_graph(
     scen: CompensationScenario,
     collector: TimingCollector,
     frame: dict,
-    override_at: int,
     total_frames: int,
 ) -> None:
     class CompensationPerfApp(Application):
@@ -224,33 +231,44 @@ def _run_graph(
                 name="compensation",
             )
 
-            src = PerfTensorSourceOp(
-                self,
-                CountCondition(self, count=total_frames),
-                output_port="rd_maps",
-                frame=frame,
-                collector=collector,
-                name="src",
-            )
-            self.add_flow(src, op, {("rd_maps", "rd_maps")})
+            if scen.velocity_axis:
+                axis = single_map(
+                    make_power_map_device([scen.num_doppler]),
+                    "velocity_bins",
+                )
+                src = PerfDualTensorSourceOp(
+                    self,
+                    CountCondition(self, count=total_frames),
+                    sideband_port="velocity_bins",
+                    sideband_frame=axis,
+                    trigger_port="rd_maps",
+                    trigger_frame=frame,
+                    collector=collector,
+                    name="src",
+                )
+                self.add_flow(src, op, {("velocity_bins", "velocity_bins")})
+                self.add_flow(src, op, {("rd_maps", "rd_maps")})
+                axis_sink = make_null_sink(self, "velocity_axis_sink")
+                self.add_flow(op, axis_sink, {("velocity_bins_out", "input")})
+            else:
+                src = PerfTensorSourceOp(
+                    self,
+                    CountCondition(self, count=total_frames),
+                    output_port="rd_maps",
+                    frame=frame,
+                    collector=collector,
+                    name="src",
+                )
+                self.add_flow(src, op, {("rd_maps", "rd_maps")})
 
             sink = PerfTerminalSinkOp(self, collector=collector, name="sink")
-            self.add_flow(op, sink, {("rd_maps", "input")})
-
-            ovr = PerfOverrideSourceOp(
-                self,
-                CountCondition(self, count=total_frames),
-                target_tick=override_at,
-                value=make_waveform(_OVERRIDE_PRI),
-                name="ovr",
-            )
-            self.add_flow(ovr, op, {("output", "waveform")})
+            self.add_flow(op, sink, {("rd_maps_out", "input")})
 
     CompensationPerfApp().run()
 
 
 def run_scenario(scen: CompensationScenario, rs: RunSettings, report: PerfReport) -> None:
-    plan = make_run_plan(rs, has_override=True)
+    plan = make_run_plan(rs, has_override=False)
 
     def run_rep(_rep: int, run_plan: RunPlan) -> TimingCollector:
         collector = TimingCollector()
@@ -260,7 +278,6 @@ def run_scenario(scen: CompensationScenario, rs: RunSettings, report: PerfReport
             scen=scen,
             collector=collector,
             frame=frame,
-            override_at=run_plan.override_at,
             total_frames=run_plan.total_frames,
         )
         return collector
@@ -280,6 +297,7 @@ def run_scenario(scen: CompensationScenario, rs: RunSettings, report: PerfReport
         row.notes = (
             "DDM linear per-band gather; cold_ms includes the initial " "demultiplex table build"
         )
+    row.notes += "; velocity_axis=wired" if scen.velocity_axis else "; velocity_axis=absent"
     report.results.append(row)
 
 

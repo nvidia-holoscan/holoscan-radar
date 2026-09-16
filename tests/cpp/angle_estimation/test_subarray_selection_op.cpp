@@ -643,11 +643,15 @@ TEST(SubarraySelectionOpTest, ReducedGeometryDirectlyDrivesBeamscan) {
   detail::FrameBankB::reset();
   detail::FrameBank::input_frames = {
       to_device_tensor(
+          std::vector<uint8_t>{0U}, {1, 1},
+          DLDataType{kDLUInt, 8U, 1U})};
+  detail::FrameBankB::input_frames = {
+      to_device_tensor(
           std::vector<std::complex<double>>(6U, {1.0, 0.0}), {1, 6},
           complex_dtype<double>())};
 
   holoscan::Graph graph{"subarray-geometry-to-beamscan"};
-  const auto source = graph.op<detail::TensorSourceOp>("source");
+  const auto source = graph.op<detail::DualTensorSourceOp>("source");
   auto extents = default_test_extents();
   auto selector =
       graph.op<SubarraySelectionOp<double>>("selector", extents);
@@ -668,10 +672,12 @@ TEST(SubarraySelectionOpTest, ReducedGeometryDirectlyDrivesBeamscan) {
   const auto spectrum_sink =
       graph.op<detail::TensorCaptureBOp>("spectrum_sink");
   const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-  graph.add_flow(source->out, selector->snapshot, queue);
+  graph.add_flow(source->out0, selector->is_valid, queue);
+  graph.add_flow(source->out1, selector->snapshot, queue);
   graph.add_flow(selector->snapshot_out, beamscan->snapshot, queue);
   graph.add_flow(
       selector->array_geometry, beamscan->array_geometry, queue);
+  graph.add_flow(selector->is_valid_out, beamscan->is_valid, queue);
   graph.add_flow(beamscan->aoa_estimates, aoa_sink->in, queue);
   graph.add_flow(beamscan->angle_spectrum, spectrum_sink->in, queue);
   graph.partition("integration")
@@ -690,7 +696,8 @@ TEST(SubarraySelectionOpTest, ReducedGeometryDirectlyDrivesBeamscan) {
             .output_port = port,
             .device = holoscan::DeviceId{0}});
   };
-  bind("source", "out");
+  bind("source", "out0");
+  bind("source", "out1");
   bind("selector", "snapshot_out");
   bind("selector", "is_valid_out");
   bind("beamscan", "aoa_estimates");
@@ -721,7 +728,11 @@ TEST(SubarraySelectionOpTest, ReducedGeometryDirectlyDrivesBeamscan) {
   ASSERT_EQ(detail::FrameBank::captured.size(), 1U);
   const auto& aoa = detail::FrameBank::captured.front();
   ASSERT_EQ(aoa.shape, (std::vector<int64_t>{1, 2}));
-  EXPECT_NEAR(aoa.as<double>()[0], 0.0, 1e-12);
+  // The forwarded all-invalid mask must arrive before snapshot_out. If it
+  // misses the downstream Exact selector, SafeDefault would produce finite
+  // boresight output instead.
+  EXPECT_TRUE(std::isnan(aoa.as<double>()[0]));
+  EXPECT_TRUE(std::isnan(aoa.as<double>()[1]));
 }
 
 TEST(SubarraySelectionOpTest, ExplicitSubarray) {

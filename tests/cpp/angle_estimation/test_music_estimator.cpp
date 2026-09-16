@@ -61,10 +61,12 @@ using holoscan::radar::complex_dtype;
 using holoscan::radar::kPi;
 using holoscan::radar::testing::DualIOGraphRunResult;
 using holoscan::radar::testing::FiveOutGraphRunResult;
+using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
 using holoscan::radar::testing::run_dual_io_operator_graph_result;
 using holoscan::radar::testing::run_single_in_dual_out_operator_graph_result;
 using holoscan::radar::testing::run_single_in_five_out_operator_graph_result;
+using holoscan::radar::testing::run_single_io_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 
 ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing,
@@ -716,6 +718,42 @@ int64_t count_prominent_local_maxima_1d(const double* spec, int64_t num_az,
 TEST(MUSICEstimatorOpTest, DefaultsToRadarBoresightConvention) {
   EXPECT_EQ(MUSICParams{}.angle_convention.preset,
             AngleConventionPreset::kRadarBoresight);
+}
+
+TEST(MUSICEstimatorOpTest, UnwiredOptionalOutputsDoNotSuppressAoa) {
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  constexpr std::size_t kFrames = 8;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geom, conv, 0.08, 0.0, kS, 0.05, 11u);
+  std::vector<std::shared_ptr<holoscan::Tensor>> snapshots;
+  for (std::size_t frame = 0; frame < kFrames; ++frame) {
+    snapshots.push_back(block_to_device<double>(block, {1, kN, kS}));
+  }
+  auto params =
+      make_params(geom, conv, linspace(-0.5, 0.5, 101), {0.0}, 1);
+  const holoscan::radar::MaxTensorExtents extents =
+      holoscan::radar::testing::extents_for_scan_grid(
+          params.az_coordinates.size(), params.el_coordinates.size());
+  const GraphRunResult result =
+      run_single_io_operator_graph_result<MUSICEstimatorOp<double>>(
+          std::move(snapshots), std::move(params), "aoa_estimates",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out, op->snapshot, q);
+            graph.add_flow(op->aoa_estimates, sink->in, q);
+          },
+          {"angle_spectrum", "doa_multi", "source_count", "eigenvalues"},
+          extents);
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  EXPECT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames.size(), kFrames);
+  for (const HostTensor& frame : result.frames) {
+    EXPECT_EQ(frame.shape, (std::vector<int64_t>{1, 2}));
+  }
 }
 
 TEST(MUSICEstimatorOpTest, RecoversKnownDoaUlaAzOnlyFixedOneSource) {

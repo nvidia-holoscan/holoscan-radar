@@ -233,10 +233,9 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
                      }
                      return {};
                    }));
-  HOLOSCAN_TRY(emit_prepared_tensor(rd_maps, context, std::move(rd_loan)));
-
-  // Optional velocity_bins: waveform present and the latched sink still
-  // active. Independent of the FFT; an unwired emit is absorbed.
+  // Optional velocity_bins is a causal sideband when the map immediately
+  // drives DDMDenseDemultiplexOp. Publish it before rd_maps so that consumer's
+  // Exact selector sees the matching axis. An unwired emit remains absorbed.
   if (plan.stage.waveform.has_value() && velocity_bins_out_.active()) {
     HOLOSCAN_TRY(auto bins_loan,
                  prepare_device_tensor(
@@ -259,6 +258,8 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
     velocity_bins_out_.emit(velocity_bins, context, std::move(bins_loan),
                             "FMCWDopplerProcessorOp.velocity_bins");
   }
+
+  HOLOSCAN_TRY(emit_prepared_tensor(rd_maps, context, std::move(rd_loan)));
 
   // Keep range_profiles alive until stream-ordered reads complete.
   retained_input_ = std::move(input);
