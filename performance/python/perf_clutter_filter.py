@@ -42,7 +42,12 @@ from utils.tensor_factory import make_iq_cube_device, single_map  # noqa: E402
 
 from holoscan.conditions import CountCondition  # noqa: E402
 from holoscan.core import Application  # noqa: E402
-from holoscan.radar import ClutterFilterMethod, ClutterFilterOpF32  # noqa: E402
+from holoscan.radar import (  # noqa: E402
+    ClutterFilterMethod,
+    ClutterFilterOpF32,
+    WindowSpec,
+    WindowType,
+)
 
 # ---------------------------------------------------------------------------
 # Size ladder — keep aligned with perf_clutter_filter.cpp
@@ -74,6 +79,8 @@ class ClutterScenario:
     num_range_bins: int
     channels: int = 1
     method: ClutterFilterMethod = ClutterFilterMethod.MEAN_SUBTRACTION
+    window: WindowType = WindowType.NONE
+    time_window_override: bool = False
 
 
 # Short tags so the report's variant column (width 6) stays aligned.
@@ -95,15 +102,27 @@ def _flip_method(method: ClutterFilterMethod) -> ClutterFilterMethod:
     return ClutterFilterMethod.MEAN_SUBTRACTION
 
 
+def _window_spec(kind: WindowType) -> WindowSpec:
+    spec = WindowSpec()
+    spec.type = kind
+    return spec
+
+
 def _profiles_shape(scen: ClutterScenario) -> tuple[int, ...]:
     if scen.channels > 1:
         return (scen.channels, scen.num_chirps, scen.num_range_bins)
     return (scen.num_chirps, scen.num_range_bins)
 
 
-def make_scenario(method: ClutterFilterMethod, size: SizeDef, channels: int = 1) -> ClutterScenario:
+def make_scenario(
+    method: ClutterFilterMethod,
+    size: SizeDef,
+    channels: int = 1,
+    window: WindowType = WindowType.NONE,
+    time_window_override: bool = False,
+) -> ClutterScenario:
     num_chirps, num_range_bins = size.shape
-    sid = f"clutter_{_method_tag(method)}_{size.id}"
+    sid = f"clutter_{_method_tag(method)}_{window.name.lower()}_{size.id}"
     if channels > 1:
         sid += f"_ch{channels}"
     sid += "_compute"
@@ -114,6 +133,8 @@ def make_scenario(method: ClutterFilterMethod, size: SizeDef, channels: int = 1)
         num_range_bins=num_range_bins,
         channels=channels,
         method=method,
+        window=window,
+        time_window_override=time_window_override,
     )
 
 
@@ -125,6 +146,14 @@ def build_default_matrix() -> list[ClutterScenario]:
     out.append(make_scenario(ClutterFilterMethod.SINGLE_DELAY, md))
     out.append(make_scenario(ClutterFilterMethod.DOUBLE_DELAY, md))
     out.append(make_scenario(ClutterFilterMethod.MEAN_SUBTRACTION, md, 4))
+    out.append(
+        make_scenario(
+            ClutterFilterMethod.MEAN_SUBTRACTION,
+            md,
+            window=WindowType.HANN,
+            time_window_override=True,
+        )
+    )
     return out
 
 
@@ -145,6 +174,14 @@ def build_full_matrix() -> list[ClutterScenario]:
     for size in SIZE_LADDER:
         for method in methods:
             out.append(make_scenario(method, size))
+        out.append(
+            make_scenario(
+                ClutterFilterMethod.MEAN_SUBTRACTION,
+                size,
+                window=WindowType.HANN,
+                time_window_override=True,
+            )
+        )
     for sid in ("md", "lg"):
         size = _must_find_size(sid)
         for channels in (4, 16):
@@ -162,7 +199,11 @@ def _base_row(scen: ClutterScenario) -> ResultRow:
         input_shape=list(_profiles_shape(scen)),
         out_batch=scen.channels,
         k=scen.num_chirps,
-        notes="live_override=method",
+        notes=(
+            "live_override=doppler_window(unseen_hamming)"
+            if scen.time_window_override
+            else "live_override=method"
+        ),
     )
 
 
@@ -187,13 +228,20 @@ def _run_graph(
     scen: ClutterScenario,
     collector: TimingCollector,
     frame: dict,
-    override_method: ClutterFilterMethod,
+    override_value,
     override_at: int,
     total_frames: int,
 ) -> None:
     class ClutterPerfApp(Application):
         def compose(self) -> None:
-            op = ClutterFilterOpF32(self, method=scen.method, name="clutter")
+            window = WindowSpec()
+            window.type = scen.window
+            op = ClutterFilterOpF32(
+                self,
+                method=scen.method,
+                doppler_window=window,
+                name="clutter",
+            )
             src = PerfTensorSourceOp(
                 self,
                 CountCondition(self, count=total_frames),
@@ -211,10 +259,11 @@ def _run_graph(
                 self,
                 CountCondition(self, count=total_frames),
                 target_tick=override_at,
-                value=override_method,
+                value=override_value,
                 name="ovr",
             )
-            self.add_flow(override, op, {("output", "method")})
+            target_port = "doppler_window" if scen.time_window_override else "method"
+            self.add_flow(override, op, {("output", target_port)})
 
     ClutterPerfApp().run()
 
@@ -230,7 +279,11 @@ def run_scenario(scen: ClutterScenario, rs: RunSettings, report: PerfReport) -> 
             scen=scen,
             collector=collector,
             frame=frame,
-            override_method=_flip_method(scen.method),
+            override_value=(
+                _window_spec(WindowType.HAMMING)
+                if scen.time_window_override
+                else _flip_method(scen.method)
+            ),
             override_at=run_plan.override_at,
             total_frames=run_plan.total_frames,
         )
@@ -242,11 +295,15 @@ def run_scenario(scen: ClutterScenario, rs: RunSettings, report: PerfReport) -> 
     compute = _base_row(scen)
     fill_compute_row(compute, samples)
     _fill_throughput(compute, scen)
+    switch = (
+        "doppler_window switch to an unseen Hamming cache key"
+        if scen.time_window_override
+        else "method switch (changes kernel and output shape)"
+    )
     compute.notes = (
         "cold_ms is first-frame latency; median/p90 are pre-override steady "
-        "state; override_ms is peak latency over the 3-frame live method "
-        "switch (changes the kernel path and output chirp count); cells/s is "
-        "complex cells/s"
+        f"state; override_ms is peak latency over the 3-frame live {switch}; "
+        "cells/s is complex cells/s"
     )
     report.results.append(compute)
 

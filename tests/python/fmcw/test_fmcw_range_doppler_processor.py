@@ -36,6 +36,7 @@ from holoscan.radar import (
     FMCWWaveformDescriptor,
     FMCWWaveformSpec,
     WindowSpec,
+    WindowType,
 )
 
 pytestmark = pytest.mark.requires_gpu
@@ -188,7 +189,13 @@ def _run_split(
         prof_frame = _profiles_frame(profiles)
 
         def make_clutter(app):
-            return ClutterFilterOpF32(app, method=cfg.clutter, name="clutter_op")
+            kwargs = {"method": cfg.clutter, "name": "clutter_op"}
+            if (
+                cfg.clutter == ClutterFilterMethod.MEAN_SUBTRACTION
+                and cfg.doppler_window is not None
+            ):
+                kwargs["doppler_window"] = cfg.doppler_window
+            return ClutterFilterOpF32(app, **kwargs)
 
         profiles = run_operator(
             make_clutter,
@@ -322,6 +329,22 @@ def test_ParityMeanSubtractionSplitChain():
     assert rel < 1e-5
     np.testing.assert_array_equal(fused["range_bins"], split["range_bins"])
     np.testing.assert_allclose(fused["velocity_bins"], split["velocity_bins"], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("window_type", [WindowType.HANN, WindowType.HAMMING])
+def test_ParityMeanSubtractionSplitChainWithWindow(window_type):
+    waveform = _to_descriptor(SimWaveform())
+    window = WindowSpec()
+    window.type = window_type
+    cfg = ParityConfig(
+        clutter=ClutterFilterMethod.MEAN_SUBTRACTION,
+        doppler_window=window,
+    )
+    frame = _adc_frame(_PARITY_SIM)
+    fused = _run_fused(frame, cfg, waveform)
+    split = _run_split(frame, cfg, waveform)
+    reference = _max_abs(split["rd_maps"])
+    assert _max_abs_diff(fused["rd_maps"], split["rd_maps"]) / reference < 1e-5
 
 
 def test_ParityApplyDechirp():

@@ -368,9 +368,22 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
                    rd_maps, context, out_shape, out_dtype,
                    [&](void* dst, std::size_t) -> expected<void, Error> {
                      try {
-                       detail::with_clutter_expr(
+                       const detail::CachedWindow<T>* clutter_window = nullptr;
+                       if (plan.stage.clutter_filter ==
+                               ClutterFilterMethod::kMeanSubtraction &&
+                           plan.stage.doppler.window.type !=
+                               WindowType::kNone) {
+                         clutter_window = &detail::get_cached_window<T>(
+                             plan.stage.doppler.window, batched.rows,
+                             doppler_state_->windows, "Doppler window",
+                             stream);
+                         detail::require_nonzero_window_sum(
+                             plan.stage.doppler.window, *clutter_window);
+                       }
+                       detail::with_clutter_expr<T>(
                            plan.stage.clutter_filter, profiles,
-                           batched.rows, [&](const auto& expr) {
+                           batched.rows, clutter_window,
+                           [&](const auto& expr) {
                              detail::run_doppler_stage<T>(
                                  plan.stage.doppler, *doppler_state_, expr,
                                  dst, plan.num_doppler, stream);

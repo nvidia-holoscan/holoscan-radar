@@ -6,6 +6,7 @@
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -41,10 +42,17 @@ struct ClutterStagePlan {
 // sentinels to map.
 expected<detail::ClutterStageConfig, Error> resolve_params(
     Input<ClutterFilterMethod>& method_in,
+    Input<wire::WindowSpecT>& doppler_window_in,
     const ClutterFilterParams& pinned) {
   HOLOSCAN_TRY(auto method,
                resolve_live_override(method_in, pinned.method));
-  return detail::ClutterStageConfig{.method = method};
+  HOLOSCAN_TRY(
+      auto doppler_window,
+      resolve_live_override_via(
+          doppler_window_in, pinned.doppler_window,
+          [](const wire::WindowSpecT& value) { return from_wire(value); }));
+  return detail::ClutterStageConfig{
+      .method = method, .window = std::move(doppler_window)};
 }
 
 // Check the stage config against this tick's input and size the chirp axis.
@@ -83,7 +91,8 @@ expected<ClutterStagePlan, Error> build_clutter_stage_plan(
 }  // namespace
 
 template <typename T>
-ClutterFilterOp<T>::ClutterFilterOp(const MaxTensorExtents& extents) {
+ClutterFilterOp<T>::ClutterFilterOp(const MaxTensorExtents& extents)
+    : state_(std::make_shared<detail::ClutterStageState<T>>()) {  // NOLINT
   const char* who = kOpName;
   const std::int64_t max_chirps =
       require_extent(extents.max_chirps, "max_chirps", who);
@@ -98,6 +107,9 @@ ClutterFilterOp<T>::ClutterFilterOp(const MaxTensorExtents& extents) {
   max_byte_span_ = byte_span_complex_cube<T>(
       {max_tx, max_rx, max_chirps, max_range_bins}, who);
 }
+
+template <typename T>
+ClutterFilterOp<T>::~ClutterFilterOp() = default;
 
 template <typename T>
 void ClutterFilterOp<T>::setup(OperatorSpec& spec) {
@@ -118,6 +130,7 @@ void ClutterFilterOp<T>::setup(OperatorSpec& spec) {
 
   // [live] Exact overrides, Params order (schema and POD alike).
   spec.input(method).optional().queue_depth(2U);
+  spec.input(doppler_window_in).optional().queue_depth(2U);
 }
 
 template <typename T>
@@ -128,6 +141,7 @@ Contract ClutterFilterOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{range_profiles});
   add_live_override_to_contract(result, method);
+  add_live_override_to_contract(result, doppler_window_in);
   return result;
 }
 
@@ -150,7 +164,8 @@ expected<void, Error> ClutterFilterOp<T>::compute(ExecutionContext& context) {
 
   // This tick's Params: pinned defaults with any matched [live] override.
   const ClutterFilterParams& pinned = context.params<ClutterFilterParams>();
-  HOLOSCAN_TRY(auto stage, resolve_params(method, pinned));
+  HOLOSCAN_TRY(auto stage,
+               resolve_params(method, doppler_window_in, pinned));
 
   // Bind the stage config to this input's shape.
   HOLOSCAN_TRY(auto plan,
@@ -174,9 +189,9 @@ expected<void, Error> ClutterFilterOp<T>::compute(ExecutionContext& context) {
       range_profiles_out, context, out_shape, dtype,
       [&](void* out_ptr, std::size_t) -> expected<void, Error> {
         try {
-          detail::run_clutter_stage<T>(plan.stage.method, input_ptr,
-                                       batched.batch, batched.rows,
-                                       batched.cols, out_ptr, stream);
+          detail::run_clutter_stage<T>(
+              plan.stage, *state_, input_ptr, batched.batch, batched.rows,
+              batched.cols, out_ptr, stream);
         } catch (const std::invalid_argument& e) {
           return fail_invalid(e.what());
         }

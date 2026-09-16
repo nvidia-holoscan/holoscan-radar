@@ -27,6 +27,7 @@
 
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/window_spec.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
@@ -56,6 +57,8 @@ struct ClutterScenario {
   int64_t num_range_bins{0};
   int64_t channels{1};
   hr::ClutterFilterMethod method{hr::ClutterFilterMethod::kMeanSubtraction};
+  hr::WindowSpec window{};
+  bool time_window_override{false};
 };
 
 const std::vector<SizeSpec>& size_ladder() {
@@ -96,6 +99,12 @@ std::string method_tag(hr::ClutterFilterMethod m) {
   return "unk";
 }
 
+std::string window_tag(const hr::WindowSpec& window) {
+  return window.type == hr::WindowType::kNone
+             ? "rect"
+             : std::string(hr::to_string(window.type));
+}
+
 // Flip to a different valid method so a live override always changes the
 // kernel path (and the output chirp count). kNone is invalid here.
 hr::ClutterFilterMethod flip_method(hr::ClutterFilterMethod m) {
@@ -125,6 +134,28 @@ perf::TimingCollector run_clutter_graph(const ClutterScenario& scen,
   using BaseOp = hr::ClutterFilterOp<PerfPrecision>;
   // Production Exact{} + per-tick co-emit. Do not wrap PerfLiveContractOp
   // (restacking LatestWithin is TEMPORAL_CONTRACT_INVALID).
+  if (scen.time_window_override) {
+    hr::WindowSpec unseen;
+    unseen.type = hr::WindowType::kHamming;
+    return perf::run_perf_graph_with_window_override(
+        std::move(cube), plan.total_frames, plan.override_at,
+        scen.window, unseen, "clutter-window-perf",
+        [&](holoscan::Graph& graph, const auto& src,
+            holoscan::CompileOptions& options) {
+          auto op = graph.op<BaseOp>("clutter", extents);
+          hr::ClutterFilterParams params;
+          params.method = scen.method;
+          params.doppler_window = scen.window;
+          op.set_params(std::move(params));
+          const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
+          const holoscan::ConnectionOptions q{.queue_depth = 4U};
+          graph.add_flow(src->out, op->range_profiles, q);
+          graph.add_flow(src->override_out, op->doppler_window_in, q);
+          graph.add_flow(op->range_profiles_out, sink->in, q);
+          graph.partition("perf").add(src).add(op).add(sink);
+          perf::bind_tensor_out(options, "clutter", "range_profiles_out");
+        });
+  }
   const hr::ClutterFilterMethod override_method = flip_method(scen.method);
   return perf::run_perf_graph_with_override(
       std::move(cube), plan.total_frames, plan.override_at, scen.method,
@@ -134,6 +165,7 @@ perf::TimingCollector run_clutter_graph(const ClutterScenario& scen,
         auto op = graph.op<BaseOp>("clutter", extents);
         hr::ClutterFilterParams params;
         params.method = scen.method;
+        params.doppler_window = scen.window;
         op.set_params(std::move(params));
         const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
@@ -166,26 +198,33 @@ perf::ResultRow base_row(const ClutterScenario& scen) {
   perf::ResultRow row;
   row.scenario_id = scen.id;
   row.op_name = "ClutterFilterOp";
-  row.variant = method_tag(scen.method);
+  row.variant = method_tag(scen.method) + "_" + window_tag(scen.window);
   row.size_id = scen.size_id;
   row.map_shape = {scen.num_chirps, scen.num_range_bins};
   row.input_shape = profiles_shape(scen);
   row.out_batch = scen.channels;
   row.k = scen.num_chirps;
-  row.notes = "live_override=method";
+  row.notes = scen.time_window_override
+                  ? "live_override=doppler_window(unseen_hamming)"
+                  : "live_override=method";
   return row;
 }
 
 ClutterScenario make_scenario(hr::ClutterFilterMethod method, const SizeSpec& s,
-                              int64_t channels = 1) {
+                              int64_t channels = 1,
+                              hr::WindowType window = hr::WindowType::kNone,
+                              bool time_window_override = false) {
   ClutterScenario sc;
   sc.size_id = s.id;
   sc.num_chirps = s.num_chirps;
   sc.num_range_bins = s.num_range_bins;
   sc.channels = channels;
   sc.method = method;
+  sc.window.type = window;
+  sc.time_window_override = time_window_override;
   std::ostringstream id;
-  id << "clutter_" << method_tag(method) << "_" << s.id;
+  id << "clutter_" << method_tag(method) << "_" << window_tag(sc.window)
+     << "_" << s.id;
   if (channels > 1) {
     id << "_ch" << channels;
   }
@@ -236,6 +275,9 @@ struct ClutterTraits : perf::PerfDriverDefaults {
     out.push_back(make_scenario(hr::ClutterFilterMethod::kDoubleDelay, md));
     out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, md,
                                 4));
+    out.push_back(make_scenario(
+        hr::ClutterFilterMethod::kMeanSubtraction, md, 1,
+        hr::WindowType::kHann, /*time_window_override=*/true));
     return out;
   }
 
@@ -263,6 +305,9 @@ struct ClutterTraits : perf::PerfDriverDefaults {
       for (auto m : methods) {
         out.push_back(make_scenario(m, s));
       }
+      out.push_back(make_scenario(
+          hr::ClutterFilterMethod::kMeanSubtraction, s, 1,
+          hr::WindowType::kHann, /*time_window_override=*/true));
     }
     for (const char* sid : {"md", "lg"}) {
       const SizeSpec& s = must_find_size(sid);
@@ -290,9 +335,11 @@ struct ClutterTraits : perf::PerfDriverDefaults {
     fill_throughput(&row, scen, row.latency.median_ms);
     row.notes =
         "cold_ms is first-frame latency; median/p90 are pre-override "
-        "steady state; override_ms is peak latency over the 3-frame live "
-        "method switch (changes the kernel path and output chirp count); "
-        "cells/s is complex cells/s";
+        "steady state; override_ms is peak latency over the 3-frame live ";
+    row.notes += scen.time_window_override
+                     ? "doppler_window switch to an unseen Hamming cache key; "
+                     : "method switch (changes kernel and output shape); ";
+    row.notes += "cells/s is complex cells/s";
     report->results.push_back(row);
   }
 

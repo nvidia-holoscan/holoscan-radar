@@ -20,12 +20,11 @@
 #include <string>
 #include <type_traits>
 
-#include "radar_common/sdk/config_cache.hpp"
+#include "fmcw/window_stage.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
-#include "radar_common/tensor/matx_utils.hpp"
-#include "radar_common/dsp/window.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
+#include "radar_common/tensor/matx_utils.hpp"
 
 namespace holoscan::radar::detail {
 
@@ -43,7 +42,7 @@ struct DopplerStageConfig {
 // RangeStageState for the caching/warn-once contract).
 template <typename T>
 struct DopplerStageState {
-  ConfigCache<matx::tensor_t<T, 1>> windows;
+  ConfigCache<CachedWindow<T>> windows;
   ConfigCache<bool> seen_fft_keys;
 };
 
@@ -146,15 +145,10 @@ void run_doppler_stage(const DopplerStageConfig& cfg,
   };
 
   if (cfg.window.type != WindowType::kNone) {
-    const std::string key = window_cache_key(cfg.window, num_chirps);
-    const auto& window = state.windows.get_or_build(
-        key, "Doppler window", [&]() {
-          return upload_coefficients<T>(generate_window(cfg.window,
-                                                        num_chirps),
-                                        stream);
-        });
+    const auto& window = get_cached_window<T>(
+        cfg.window, num_chirps, state.windows, "Doppler window", stream);
     auto window_bcast = matx::clone<3>(
-        window, {batch, num_range_bins, matx::matxKeepDim});
+        window.taps, {batch, num_range_bins, matx::matxKeepDim});
     fft_into_out(matx::permute(in_op, {0, 2, 1}) * window_bcast);
   } else {
     fft_into_out(matx::permute(in_op, {0, 2, 1}));

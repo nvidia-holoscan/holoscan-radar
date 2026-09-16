@@ -63,6 +63,9 @@ by this library:
   `holoscan::radar::wire` descriptor-Tensor payloads and validated bridges;
   Python remains Params-only for those physical ports. See
   [`SCHEMA_PAYLOADS.md`](../../docs/planning/SCHEMA_PAYLOADS.md).
+  `ClutterFilterOp.doppler_window` follows this convention: its logical
+  `WindowSpec` parameter and generated-wire input select one tick's weighted
+  mean projection without latching.
 - **Params schema replaces ArgumentSetter.** [EA HSDK5 ONLY] Ported
   operators use `Operator<Params>` + `HOLOSCAN_PARAM_SCHEMA` (YAML /
   `set_params` / `from_config`). Drop `HOLOSCAN_OPERATOR_FORWARD_ARGS`

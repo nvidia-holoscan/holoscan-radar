@@ -125,6 +125,9 @@ inline void load_clutter_params(const YAML::Node& node,
   if (node["method"]) {
     p->method = node["method"].as<ClutterFilterMethod>();
   }
+  if (node["doppler_window"]) {
+    p->doppler_window = node["doppler_window"].as<WindowSpec>();
+  }
 }
 
 inline void load_doppler_params(const YAML::Node& node,

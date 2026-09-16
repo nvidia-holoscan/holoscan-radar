@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <type_traits>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -20,9 +21,16 @@
 
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/sdk/config_codecs.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 
 namespace holoscan::radar {
+
+namespace detail {
+template <typename T>
+struct ClutterStageState;  // kernel-side caches; defined in clutter_stage.hpp
+}  // namespace detail
 
 // Static-clutter / zero-Doppler suppression along slow-time; sits between
 // the range and Doppler stages. This header is the contract reference for
@@ -39,21 +47,31 @@ namespace holoscan::radar {
 //                       num_chirps - 2 (double_delay).
 //                       [EA HSDK5 ONLY] unique in/out port names required.
 //
+// mean_subtraction uses a uniform mean when doppler_window is none and a
+// window-weighted mean otherwise. The chirp count is unchanged. Other methods
+// ignore doppler_window.
+//
 // Precision is fixed at compile time by the template instantiation.
 // Fat output pool sizing requires MaxTensorExtents at graph.op() (ctor).
 
 struct ClutterFilterParams {
   ClutterFilterMethod method{ClutterFilterMethod::kMeanSubtraction};
+  WindowSpec doppler_window{};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
     ClutterFilterParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.ClutterFilterParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.ClutterFilterParams", 2),
     holoscan::field<&ClutterFilterParams::method>("method").description(
         "Slow-time clutter suppression {none, mean_subtraction, single_delay, "
         "double_delay}: none is pass-through; mean_subtraction nulls "
         "zero-Doppler with no chirp loss; the delay cancellers are 1st/2nd-"
-        "order MTI high-pass filters and drop 1-2 chirps."));
+        "order MTI high-pass filters and drop 1-2 chirps."),
+    holoscan::field<&ClutterFilterParams::doppler_window>("doppler_window")
+        .description(
+            "WindowSpec weighting the slow-time mean for mean_subtraction. "
+            "Default none uses a uniform mean. Ignored by none and the delay "
+            "cancellers."));
 
 static_assert(holoscan::param_schema_availability<ClutterFilterParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -68,6 +86,7 @@ class ClutterFilterOp : public holoscan::Operator<ClutterFilterParams> {
  public:
   // Required: sizes the range_profiles_out Tensor pool at setup().
   explicit ClutterFilterOp(const MaxTensorExtents& extents);
+  ~ClutterFilterOp() override;
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -83,13 +102,16 @@ class ClutterFilterOp : public holoscan::Operator<ClutterFilterParams> {
 
   // [live] Exact override (OPERATOR_API.md).
   Input<ClutterFilterMethod> method{"method"};
+  Input<wire::WindowSpecT> doppler_window_in{"doppler_window"};
 
  private:
   // Keep the previous activation's input alive across ticks so async device
   // reads cannot outlive the buffer.
   Tensor retained_input_;
 
-  // Stateless stage (no FFT plan / coefficient cache). Pool bounds only.
+  // Kernel-side window coefficient cache, allocated in the constructor.
+  std::shared_ptr<detail::ClutterStageState<T>> state_;
+
   MaxTensorExtents extents_;
   std::uint32_t max_rank_{2U};
   std::size_t max_byte_span_{0U};

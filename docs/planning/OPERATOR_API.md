@@ -344,12 +344,14 @@ optional array is absent; null is invalid. See
 #### ClutterFilterOp
 
 - **In:** `range_profiles` — complex64 / complex128, `(num_chirps, num_range_bins)` or with named leading `N_rx` / `(M_tx, N_rx)` (no opaque leading batch). Slow-time (chirp) axis second-to-last.
+- **In:** `doppler_window` (optional, **[live]**) — logical `WindowSpec`; the HSDK 5 physical payload is the generated `holoscan::radar::wire::WindowSpecT`. Same-named one-tick override joined to `range_profiles` with `Exact{}` + `SafeDefault{}`; a match applies only to that tick, while a miss uses Params without latching.
 - **Out:** `range_profiles_out` — complex64 / complex128, same leading + `(num_chirps_out, num_range_bins)`. `num_chirps_out = num_chirps` (`none` / `mean_subtraction`), `num_chirps − 1` (`single_delay`), `num_chirps − 2` (`double_delay`). `none` materializes an identity copy into the operator-owned output pool; it does not alias the input. HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `range_profiles_out` rather than repeating `range_profiles` ([EA HSDK5 ONLY] — same pattern will apply to other operators that previously reused an input name on the output).
 - **Ctor:** `MaxTensorExtents` required (`max_chirps`, `max_range_bins`; optional `max_rx` / `max_tx` / `max_channels` admit named leading axes).
 
 **Parameters:**
 
-- `method` **[live]** — enum {none, mean_subtraction, single_delay, double_delay}. `none` is a materialized pass-through; `mean_subtraction` nulls zero-Doppler with no chirp loss; the delay cancellers are 1st/2nd-order MTI high-pass (wider near-DC notch, and drop 1–2 chirps). Switching to/from a delay canceller changes `num_chirps_out`; the downstream Doppler stage infers the chirp count, so this is allowed. No setup cost. Default: mean_subtraction.
+- `method` **[live]** — enum {none, mean_subtraction, single_delay, double_delay}. `none` is a materialized pass-through; `mean_subtraction` subtracts the slow-time mean weighted by `doppler_window` and has no chirp loss; the delay cancellers are 1st/2nd-order MTI high-pass (wider near-DC notch, and drop 1–2 chirps). Switching to/from a delay canceller changes `num_chirps_out`; the downstream Doppler stage infers the chirp count, so this is allowed. No setup cost. Default: mean_subtraction.
+- `doppler_window` **[live]** — WindowSpec. For `mean_subtraction`, taps `w[k]` define `mu_w = sum(w[k] * x[k]) / sum(w[k])`, and the output is `x[k] - mu_w`; `none` uses the existing uniform mean exactly. The chirp count is unchanged. `none`, `single_delay`, and `double_delay` ignore this parameter. Unseen configured windows rebuild and cache their taps with a warn-once notice. Default: none.
 
 #### FMCWDopplerProcessorOp
 
@@ -389,9 +391,9 @@ optional array is absent; null is invalid. See
 **Parameters:** (fused; union of the split operators, same semantics)
 
 - `range_window` **[live]** — WindowSpec. Window along fast-time (range FFT). Overriding to an unseen window rebuilds its coefficients and warns once; cached. Default: none.
-- `doppler_window` **[live]** — WindowSpec. Window along the chirp axis (Doppler FFT). Overriding to an unseen window rebuilds its coefficients and warns once; cached. Default: none.
+- `doppler_window` **[live]** — WindowSpec. Window along the chirp axis (Doppler FFT). When `clutter_filter = mean_subtraction`, this same resolved window also weights the clutter projection before it is applied as the Doppler analysis window. This intentionally corrects the previous fused behavior, which used a uniform projection even with a tapered analysis window. A split chain must configure matching `ClutterFilterOp.doppler_window` and `FMCWDopplerProcessorOp.doppler_window` values for equivalent weighted projection and analysis. Overriding to an unseen window rebuilds its coefficients and warns once; cached. Default: none.
 - `apply_dechirp` **[live]** — bool. Software dechirp before the range FFT. Requires a `waveform` and complex-IF input when `true` (same constraint as FMCWRangeProcessorOp). Default: `false`.
-- `clutter_filter` **[live]** — enum {none, mean_subtraction, single_delay, double_delay}. Optional inline clutter stage between the range and Doppler stages (same semantics as ClutterFilterOp `method`); the delay cancellers reduce `num_doppler` (downstream infers it). No setup cost. Default: none.
+- `clutter_filter` **[live]** — enum {none, mean_subtraction, single_delay, double_delay}. Optional inline clutter stage between the range and Doppler stages (same semantics as ClutterFilterOp `method`); `mean_subtraction` uses the resolved `doppler_window`, while the other methods ignore it for clutter projection. The delay cancellers reduce `num_doppler` (downstream infers it). No setup cost. Default: none.
 - `waveform` **[live]** — FMCWWaveformDescriptor. Dechirp reference and the `range_bins` / `velocity_bins` axes. Override for a changing waveform. Default: none (required for software dechirp and/or those outputs).
 - `fft_norm` **[live]** — enum {backward, ortho, forward}. One normalization convention for both transforms. Default: backward.
 - `center_zero_doppler` **[live]** — bool. Center zero-Doppler on the Doppler axis. Default: `true`.

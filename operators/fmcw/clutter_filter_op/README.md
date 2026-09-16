@@ -1,12 +1,13 @@
 # `ClutterFilterOp`
 
-Slow-time static-clutter / zero-Doppler suppression on range profiles, between range compression and the Doppler FFT. It can pass through unchanged (`none`), null DC across chirps (`mean_subtraction`, no chirp loss), or apply a 1st/2nd-order MTI delay canceller (`single_delay` / `double_delay`, dropping 1–2 chirps). Switching method mid-stream is allowed: `num_chirps_out` follows the method and the downstream Doppler stage re-infers it. **[EA HSDK5 ONLY]** the physical output port is `range_profiles_out` (HSDK 5 unique in/out names).
+Slow-time static-clutter / zero-Doppler suppression on range profiles, between range compression and the Doppler FFT. It can pass through unchanged (`none`), null DC across chirps (`mean_subtraction`, no chirp loss), or apply a 1st/2nd-order MTI delay canceller (`single_delay` / `double_delay`, dropping 1–2 chirps). `mean_subtraction` uses a uniform mean by default or a `doppler_window`-weighted mean when configured. Switching method mid-stream is allowed: `num_chirps_out` follows the method and the downstream Doppler stage re-infers it. **[EA HSDK5 ONLY]** the physical output port is `range_profiles_out` (HSDK 5 unique in/out names).
 
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
 | in | `range_profiles` | complex64 / complex128 | `(num_chirps, num_range_bins)`, optional named leading `N_rx` / `(M_tx, N_rx)` | Slow-time axis is second-to-last. Real IF is rejected |
 | out | `range_profiles_out` | complex64 / complex128 | same leading + `(num_chirps_out, num_range_bins)` | `num_chirps_out = num_chirps` / `num_chirps−1` / `num_chirps−2` by method. **[EA HSDK5 ONLY]** renamed from logical `range_profiles` |
 | live | `method` | `ClutterFilterMethod` | scalar | Exact override; wire to enable, unwired = miss |
+| live | `doppler_window` | `holoscan::radar::wire::WindowSpecT` | schema metadata + descriptor Tensor | Exact override; one tick only, then a miss reverts to Params |
 
 ```text
 FMCWRangeProcessorOp → ClutterFilterOp → FMCWDopplerProcessorOp
@@ -23,12 +24,12 @@ All math lives in `clutter_stage.hpp` (`with_clutter_expr`). `compute()` is a th
 
 `method` selects one of three filters plus pass-through:
 
-- **`mean_subtraction`.** Subtract the per-(batch, range-bin) slow-time mean, broadcast back over chirps. Shape preserved: `out = in − clone(mean(in, {1}), {keep, num_chirps, keep})`. Nulls zero-Doppler; a moving tone is kept.
+- **`mean_subtraction`.** Subtract the per-(batch, range-bin) weighted slow-time mean `mu_w = sum(w[k] * in[k]) / sum(w[k])`, broadcast back over chirps. `doppler_window: none` uses the existing uniform mean exactly. Shape and chirp count are preserved. Matching the projection taps to the downstream Doppler analysis window guarantees a zero DC bin after windowing.
 - **`single_delay`.** First-order MTI: `out[k] = in[k+1] − in[k]` for `k ∈ [0, num_chirps−1)`. `num_chirps_out = num_chirps − 1`. Needs `num_chirps ≥ 2`.
 - **`double_delay`.** Second-order MTI: `out[k] = in[k] − 2·in[k+1] + in[k+2]` for `k ∈ [0, num_chirps−2)`. `num_chirps_out = num_chirps − 2`. Needs `num_chirps ≥ 3`.
 - **`none`.** Identity expression in `with_clutter_expr`. The standalone operator materializes it into its output pool; the fused operator keeps it inline without an intermediate cube.
 
-Stateless: no FFT plan, no coefficient cache. Work is enqueued on the compute stream with no synchronization.
+`none`, `single_delay`, and `double_delay` ignore `doppler_window`; there are no new method enum values or YAML method spellings. Weighted projection taps use the shared `WindowSpec` generation and cache conventions. An unseen configuration rebuilds taps and warns once; prior configurations are reused.
 
 ## Shape and dtype rules
 
@@ -40,12 +41,14 @@ Stateless: no FFT plan, no coefficient cache. Work is enqueued on the compute st
 - **Layout.** `range_profiles` must be CUDA-accessible and compact row-major: `ClutterFilterOp: tensor received on input port 'range_profiles' is not CUDA-accessible (device, managed, or pinned-host memory required)` / `… must be contiguous (compact row-major)`.
 - **No CUDA stream.** `ClutterFilterOp: no CUDA compute stream`.
 - **`[live]` `method`.** Switching to/from a delay canceller changes `num_chirps_out` mid-stream; downstream re-infers.
+- **`[live]` `doppler_window`.** The generated-wire `WindowSpec` joins the data trigger with `Exact{}` + `SafeDefault{}`. A match applies to one tick; a miss uses Params and never latches.
 
 ## Parameters
 
 | Parameter | Type | Default | Override | Cost | Meaning |
 | --- | --- | --- | --- | --- | --- |
-| `method` | `ClutterFilterMethod` {`none`, `mean_subtraction`, `single_delay`, `double_delay`} | `mean_subtraction` | `[live]` Exact | None (stateless). Shape-changing when a delay canceller is selected | Slow-time clutter suppression or materialized pass-through |
+| `method` | `ClutterFilterMethod` {`none`, `mean_subtraction`, `single_delay`, `double_delay`} | `mean_subtraction` | `[live]` Exact | Shape-changing when a delay canceller is selected | Slow-time clutter suppression or materialized pass-through |
+| `doppler_window` | `WindowSpec` | `none` | `[live]` Exact via wire schema | Unseen windows rebuild and cache taps, warning once | Weighting for `mean_subtraction`; ignored by other methods |
 
 YAML spelling is the canonical `to_string` form (`none`, `mean_subtraction`, `single_delay`, `double_delay`).
 
@@ -53,12 +56,12 @@ There is no Params-only field (unlike range `propagation_speed`).
 
 ## SDK implementation notes
 
-- **Construction.** `ClutterFilterOp(const MaxTensorExtents&)` **requires** `max_chirps` and `max_range_bins` (contract `Ctor:` line). Optional `max_rx` / `max_channels` / `max_tx` admit named leading axes via `require_tx_rx_pool_extents`. Those fields size `range_profiles_out` (`max_rank` 2–4, complex cube `{max_tx, max_rx, max_chirps, max_range_bins}`). A tick above the admitted leading rank, leading product, or chirp/bin ceilings is rejected. There is no stage-state allocation (stateless).
-- **Triggering.** `contract()` is `OnEach{range_profiles}` plus an `Exact{}` + `SafeDefault{}` entry for `method`, wired or not. An unwired override compiles to a `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT` warning and reads as `kNotConnected` on every tick, so wiring the port is the application's only obligation. This requires an SDK carrying CONTRACT-020 ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11). Wiring a port `contract()` does not declare is still `RUNTIME_OPERATOR_REPLAY_MISMATCH` (§1).
-- **Ports and queues.** `range_profiles` and `method` use `queue_depth(2)` (operator default; a graph may raise it per edge with `ConnectionOptions`). Data Tensor ports are `MemoryKind::kCudaDevice`. The fat out carries ctor-derived `TensorBounds` via `pooled_tensor_output`. `setup()` registers data-plane I/O first (`range_profiles`, then `range_profiles_out`), then the `[live]` Exact input in Params field order. `method` is `Input<ClutterFilterMethod>` and does not take `expects_tensor`. Dtype is not pinned on the port (enforced in `compute()`).
+- **Construction.** `ClutterFilterOp(const MaxTensorExtents&)` **requires** `max_chirps` and `max_range_bins` (contract `Ctor:` line). Optional `max_rx` / `max_channels` / `max_tx` admit named leading axes via `require_tx_rx_pool_extents`. Those fields size `range_profiles_out` (`max_rank` 2–4, complex cube `{max_tx, max_rx, max_chirps, max_range_bins}`). A tick above the admitted leading rank, leading product, or chirp/bin ceilings is rejected. The operator owns a window-tap cache across ticks.
+- **Triggering.** The locked contract is `OnEach{range_profiles}` plus an `Exact{}` + `SafeDefault{}` entry for both `method` and `doppler_window`, wired or not. An unwired override compiles to a `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT` warning and reads as `kNotConnected` on every tick, so wiring the port is the application's only obligation. This requires an SDK carrying CONTRACT-020 ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11). Wiring a port `contract()` does not declare is still `RUNTIME_OPERATOR_REPLAY_MISMATCH` (§1).
+- **Ports and queues.** `range_profiles`, `method`, and generated-wire `doppler_window` use `queue_depth(2)` (operator default; a graph may raise it per edge with `ConnectionOptions`). Data Tensor ports are `MemoryKind::kCudaDevice`. The fat out carries ctor-derived `TensorBounds` via `pooled_tensor_output`. `setup()` registers data-plane I/O first (`range_profiles`, then `range_profiles_out`), then the `[live]` Exact inputs in Params field order. Dtype is not pinned on the data port (enforced in `compute()`).
 - **Streams and lifetime.** Work is enqueued on `context.cuda_stream()`. After emit, `range_profiles` is moved into `retained_input_` so the stage can finish reading it after `compute()` returns. That is a different buffer from the published loan: emit never publishes the input (HSDK 5 rejects a foreign Tensor on a pooled output). The MatX expression does not synchronize.
 - **Emission.** Single required output: `emit_device_tensor` (loan → `run_clutter_stage` → commit → emit). There is no latched optional, so the prepare-then-`emit_prepared_tensor` split used by range/Doppler is not needed here.
-- **Parameter authoring.** Schema id `com.nvidia.holoscan.radar.ClutterFilterParams`, version 1. Apps on this branch `set_params` a loaded `ClutterFilterParams` ([EA HSDK5 ONLY] Graph has no `from_config()`).
+- **Parameter authoring.** Schema id `com.nvidia.holoscan.radar.ClutterFilterParams`, version 2. Apps on this branch `set_params` a loaded `ClutterFilterParams` ([EA HSDK5 ONLY] Graph has no `from_config()`).
 - **Precision.** Explicit instantiations `ClutterFilterOp<float>` and `ClutterFilterOp<double>`.
 - **[EA HSDK5 ONLY]** Output port `range_profiles_out` (unique in/out names; [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §2). A POD Exact `Input<>` is declared unconditionally for `method` (see Triggering). Graph mid-stream `method` tests run since the enum-edge fix (§12); Graph perf reports `override_ms` for a mid-session method switch. This operator was the HSDK 5 Tensor I/O + live-override pilot.
 
@@ -68,7 +71,7 @@ There is no Params-only field (unlike range `propagation_speed`).
 
 ## Performance
 
-**Cold / steady.** No operator-owned cache: first tick and later ticks enqueue the same MatX expression. `mean_subtraction` materializes a small stream-ordered mean temp during the consuming expression’s PreRun; delay cancellers are slices plus an elementwise combo. Each tick loans `range_profiles_out`. A `[live]` `method` change has no setup cost (it can change `num_chirps_out`).
+**Cold / steady.** The weighted kernel caches generated projection taps. Its first configured window and later unseen overrides incur generation/upload; seen windows reuse cached taps. `doppler_window: none` retains the current uniform reduction. Delay cancellers remain slices plus an elementwise combo and ignore the window. Each tick loans `range_profiles_out`; a `[live]` `method` change can change `num_chirps_out`.
 
 Harness: `performance/cpp/perf_clutter_filter.cpp`. Axes: size ladder `{xs, sm, md, lg, xl}` = `(16×128) … (256×2048)` chirps × range bins; method `{msub, sdel, ddel}`; optional channel batch. Default matrix: msub `{xs, md, lg, xl}` plus sdel/ddel on `md` and msub/`md`/4 channels. `--full` crosses methods × sizes and adds channel batches on `md`/`lg`. Every compute run inlines a mid-session `[live] method` flip and reports `override_ms` / `override_delta_ms`. No measured numbers are recorded in-tree.
 
@@ -88,7 +91,8 @@ C++ Graph suite: `tests/cpp/fmcw/test_clutter_filter.cpp`. Ground truth is `rada
 | `DelayCancellersNotchDC` | DC tone residual `< 1e-5` for both delay methods |
 | `NamedRxAxisPreservedAndIndependent` | `N_rx = 2` preserved; per-RX mean-sub matches the host mean; single-delay drops chirps on the chirp axis only |
 | `RejectsOpaqueLeadingBatchWhenExtentsAreSiso` | Extra leading axis with SISO extents raises diagnostics |
-| `RejectsMethodNone` / `RejectsRealInput` / `RejectsTooFewChirps` | The three contract-illegal combinations fail closed |
+| `MethodNonePassesThroughFloatAndDouble` | `none` materializes an exact identity copy in both precisions |
+| `RejectsRealInput` / `RejectsTooFewChirps` | Contract-illegal dtype and delay lengths fail closed |
 | `MethodConfigurableFromParams` | Params authoring of `method` |
 | `FloatAndDoubleAgree` | F32 vs F64 within `1e-5` of the F64 peak for all three methods |
 | `LiveMethodOverrideAppliesForOneTick` | A mid-stream `method` override changes the output chirp count for that tick only |
@@ -105,6 +109,7 @@ ctest --test-dir build -R ClutterFilterOpTest --output-on-failure
 ```yaml
 clutter_filter:
   method: mean_subtraction
+  doppler_window: hann
 ```
 
 ```cpp

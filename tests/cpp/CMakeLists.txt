@@ -13,6 +13,7 @@ target_include_directories(radar_test_utils INTERFACE
 target_link_libraries(radar_test_utils INTERFACE
     holoscan::core
     holoscan::radar_common
+    holoscan::radar_schemas
     CUDA::cudart
     GTest::gtest)
 

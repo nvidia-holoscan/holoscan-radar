@@ -23,7 +23,7 @@ Fused range compression, optional inline clutter, and Doppler compression in one
 adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
 ```
 
-On MIMO-TDM the fused node may replace the range/Doppler pair **after** `MIMODeinterleaveOp`; compensation and virtual-array assembly still follow. MIMO-DDM cannot use the fused clutter stage in place of post-demux `ClutterFilterOp`.
+On MIMO-TDM the fused node may replace the range/Doppler pair **after** `MIMODeinterleaveOp`; compensation and virtual-array assembly still follow. MIMO-DDM may not enable the fused clutter stage: ordinary slow-time filtering is invalid on coded pre-demux chirps, and the v1 DDM workflow omits clutter suppression.
 
 `range_window`, `doppler_window`, and `waveform` remain logical `WindowSpec` / `FMCWWaveformDescriptor` Params. Their HSDK 5 physical ports use the L18 generated `holoscan::radar::wire` descriptor-Tensor encoding because the SDK does not admit container-owning C++ types directly. The Tensor member is always present: rank-1 zero-length represents an absent optional array, while null is invalid. See [`SCHEMA_PAYLOADS.md`](../../../docs/planning/SCHEMA_PAYLOADS.md).
 
@@ -38,11 +38,11 @@ There is no fused-specific stage header. `compute()` is a thin Holoscan shell; t
 Per tick the shell sequences the split stages:
 
 1. **Range.** `run_range_stage` into a stream-ordered MatX tensor `profiles` of shape `(batch, num_chirps, num_range_bins)` (`MATX_ASYNC_DEVICE_MEMORY`). Same dechirp / window / C2C-or-R2C FFT / no-`fftshift` rules as [`FMCWRangeProcessorOp`](../fmcw_range_processor_op/README.md). This cube never leaves the operator.
-2. **Inline clutter.** `with_clutter_expr(clutter_filter, profiles, num_chirps, …)` — the same expression as [`ClutterFilterOp`](../clutter_filter_op/README.md). `none` passes `profiles` through (zero added kernels). Delay cancellers shrink the chirp axis; `mean_subtraction` does not. The expression is **not** materialized to its own cube.
+2. **Inline clutter.** `with_clutter_expr(clutter_filter, profiles, num_chirps, …)` — the same expression as [`ClutterFilterOp`](../clutter_filter_op/README.md). `none` passes `profiles` through (zero added kernels). Delay cancellers shrink the chirp axis; `mean_subtraction` does not and uses the resolved `doppler_window` for its weighted projection. The expression is **not** materialized to its own cube.
 3. **Doppler.** That expression is the `in_op` of `run_doppler_stage` (expression overload). Same window / FFT / `fftshift` / `v = −f_d·λ/2` rules as [`FMCWDopplerProcessorOp`](../fmcw_doppler_processor_op/README.md). `num_chirps` seen by Doppler is the post-clutter count. MatX evaluates the clutter expression inside the fused pass that materializes the FFT input.
 4. **Axes (conditional).** When a valid `waveform` is present, `fill_range_bins` and `fill_velocity_bins` run after the required `rd_maps` emit, each gated on its own `LatchedOutput` (`range_bins_out_.active()` / `velocity_bins_out_.active()`). The two `has_value()` checks are the same optional: `resolve_params` copies one descriptor onto both stage configs. Both fills are MatX expressions on the compute stream (no host staging).
 
-`fft_norm` is one value applied to both transforms. Invariants of the split operators (bin 0 = zero range; zero-Doppler centered by default; `v_r > 0` receding) hold.
+`fft_norm` is one value applied to both transforms. When `clutter_filter = mean_subtraction`, `doppler_window` intentionally supplies both the clutter-projection weights and the Doppler analysis taper. This corrects the prior fused behavior, which projected with a uniform mean before applying a tapered window. Split chains require matching `ClutterFilterOp.doppler_window` and `FMCWDopplerProcessorOp.doppler_window` values for parity. Invariants of the split operators (bin 0 = zero range; zero-Doppler centered by default; `v_r > 0` receding) hold.
 
 The locked contract says the fused `rd_maps` are **bit-identical** to the split chain. The shared stages make that true for delay cancellers and the no-clutter path to within a few ULP of the split Graph (host capture / re-upload between split nodes). `mean_subtraction` is **not** bit-exact: MatX `mean` reduction order can differ between a materialized clutter write and the fused pre-FFT expression ([`OPEN_ITEMS.md`](OPEN_ITEMS.md) §1). Tests gate **8 ULP** (`kParityUlps`), not bitwise equality.
 
@@ -70,9 +70,9 @@ Union of the split operators; semantics match those READMEs.
 | Parameter | Type | Default | Override | Cost | Meaning |
 | --- | --- | --- | --- | --- | --- |
 | `range_window` | `WindowSpec` | `none` (rectangular) | `[live]` Exact via wire schema | Rebuilds range premultiplier / taps, warning once | Fast-time window |
-| `doppler_window` | `WindowSpec` | `none` (rectangular) | `[live]` Exact via wire schema | Rebuilds Doppler taps, warning once | Slow-time window |
+| `doppler_window` | `WindowSpec` | `none` (rectangular) | `[live]` Exact via wire schema | Rebuilds Doppler/projection taps, warning once | Slow-time analysis window and, for `mean_subtraction`, clutter-projection weights |
 | `apply_dechirp` | bool | `false` | `[live]` Exact | Rebuilds range premultiplier | Software dechirp; needs waveform + complex IF |
-| `clutter_filter` | `ClutterFilterMethod` {`none`, `mean_subtraction`, `single_delay`, `double_delay`} | `none` | `[live]` Exact | None (expression choice). Delay cancellers shrink `num_doppler` | Inline clutter; `none` is pass-through |
+| `clutter_filter` | `ClutterFilterMethod` {`none`, `mean_subtraction`, `single_delay`, `double_delay`} | `none` | `[live]` Exact | None (expression choice). Delay cancellers shrink `num_doppler` | Inline clutter; mean subtraction uses `doppler_window`, other methods ignore it for projection |
 | `waveform` | `FMCWWaveformDescriptor` | none (`is_valid() == false`) | `[live]` Exact via wire schema | Dechirp reference + both axis fills | Required for dechirp and/or `range_bins` / `velocity_bins` |
 | `fft_norm` | `FftNorm` {`backward`, `ortho`, `forward`} | `backward` | `[live]` Exact | Free | Shared FFT normalization |
 | `center_zero_doppler` | bool | `true` | `[live]` Exact | Free | Center DC on the Doppler axis |
@@ -171,6 +171,6 @@ Python bindings (`FMCWRangeDopplerProcessorOpF32` / `F64`) are deferred on this 
 
 ## Contract conformance
 
-The locked [`OPERATOR_API.md`](../../../docs/planning/OPERATOR_API.md) surface is implemented. `range_window`, `doppler_window`, and `waveform` `[live]` ports use the L18 generated `holoscan::radar::wire` descriptor-Tensor encoding ([`SCHEMA_PAYLOADS.md`](../../../docs/planning/SCHEMA_PAYLOADS.md)); that is the contract physical form, not a gap. Tests require 8 ULP against the split chain (`kParityUlps`), not bitwise equality — [`OPEN_ITEMS.md`](OPEN_ITEMS.md) §1 records the `mean_subtraction` summation-order caveat.
+The window-weighted clutter behavior is contractually corrected but its `.cu` call-through and stage math remain in progress with the standalone kernel slice. Until that lands, fused `mean_subtraction` still performs the prior uniform projection. `range_window`, `doppler_window`, and `waveform` `[live]` ports use the L18 generated `holoscan::radar::wire` descriptor-Tensor encoding ([`SCHEMA_PAYLOADS.md`](../../../docs/planning/SCHEMA_PAYLOADS.md)).
 
 Audit scope (static; no build or test run): `docs/planning/OPERATOR_API.md` § `FMCWRangeDopplerProcessorOp`, `WORKFLOWS.md`, `TESTING.md`, `HSDK5_PORT.md` §1/§6/§8/§9, `STATUS.md`, `operators/common/README.md`, `operators/fmcw/README.md`, `OPEN_ITEMS.md`, `fmcw_range_doppler_processor_op.hpp` / `.cu`, the three stage headers it includes, `metadata.json`, `python/_fmcw_range_doppler_processor_op_bindings.cpp`, `tests/cpp/fmcw/test_fmcw_range_doppler_processor.cpp`, `tests/python/fmcw/test_fmcw_range_doppler_processor.py`, `performance/cpp/perf_fmcw_range_doppler_processor.cpp`, `performance/cpp/perf_fmcw_split_vs_fused.cpp`.

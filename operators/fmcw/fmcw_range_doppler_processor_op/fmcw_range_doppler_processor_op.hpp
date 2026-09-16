@@ -43,7 +43,10 @@ struct DopplerStageState;  // defined in doppler_stage.hpp
 // dtypes, and parameters. Drop-in replacement for the split
 // FMCWRangeProcessorOp -> [ClutterFilterOp] -> FMCWDopplerProcessorOp chain
 // where the intermediate range profiles are not needed; produces identical
-// rd_maps (within tolerance) by calling the same stage functions.
+// rd_maps (within tolerance) by calling the same stage functions. For
+// mean_subtraction, doppler_window supplies both the weighted clutter
+// projection and the Doppler analysis taper. Split chains must configure the
+// same window on ClutterFilterOp and FMCWDopplerProcessorOp.
 //
 // In:  adc_cube      — complex64/complex128 (IQ IF) or float32/float64
 //                      (real IF), (num_chirps, samples_per_chirp) or with
@@ -86,7 +89,9 @@ HOLOSCAN_PARAM_SCHEMA(
         "doppler_window")
         .description(
             "WindowSpec applied along the chirp (slow-time) axis before "
-            "the Doppler FFT (coherent-gain normalized). Default: none."),
+            "the Doppler FFT (coherent-gain normalized), and also used for "
+            "the clutter projection when clutter_filter is mean_subtraction. "
+            "Default: none."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::apply_dechirp>(
         "apply_dechirp")
         .description(
@@ -97,8 +102,8 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Optional inline clutter stage between the range and Doppler "
             "stages {none, mean_subtraction, single_delay, double_delay}; "
-            "same semantics as ClutterFilterOp's method. The delay "
-            "cancellers reduce num_doppler."),
+            "same semantics as ClutterFilterOp's method. Mean subtraction "
+            "uses doppler_window; the delay cancellers reduce num_doppler."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::waveform>("waveform")
         .description(
             "Dechirp reference and the range_bins / velocity_bins axes. "

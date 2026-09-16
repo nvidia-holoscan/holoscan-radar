@@ -64,6 +64,7 @@ struct FusedScenario {
   int64_t samples_per_chirp{0};
   int64_t channels{1};
   hr::ClutterFilterMethod clutter{hr::ClutterFilterMethod::kNone};
+  hr::WindowType doppler_window{hr::WindowType::kNone};
 };
 
 const std::vector<SizeSpec>& size_ladder() {
@@ -152,6 +153,7 @@ perf::TimingCollector run_fused_graph(
         hr::FMCWRangeDopplerProcessorParams params;
         params.waveform = make_waveform();
         params.clutter_filter = scen.clutter;
+        params.doppler_window.type = scen.doppler_window;
         op.set_params(std::move(params));
         const auto sink =
             graph.op<perf::PerfTerminalSinkOp>(
@@ -204,7 +206,8 @@ perf::ResultRow base_row(const FusedScenario& scen) {
   perf::ResultRow row;
   row.scenario_id = scen.id;
   row.op_name = "FMCWRangeDopplerProcessorOp";
-  row.variant = clutter_tag(scen.clutter);
+  row.variant = clutter_tag(scen.clutter) + "_" +
+      std::string(hr::to_string(scen.doppler_window));
   row.size_id = scen.size_id;
   row.map_shape = {scen.num_chirps,
                    scen.samples_per_chirp};
@@ -218,15 +221,19 @@ perf::ResultRow base_row(const FusedScenario& scen) {
 
 FusedScenario make_scenario(hr::ClutterFilterMethod clutter,
                             const SizeSpec& s,
-                            int64_t channels = 1) {
+                            int64_t channels = 1,
+                            hr::WindowType doppler_window =
+                                hr::WindowType::kNone) {
   FusedScenario sc;
   sc.size_id = s.id;
   sc.num_chirps = s.num_chirps;
   sc.samples_per_chirp = s.samples_per_chirp;
   sc.channels = channels;
   sc.clutter = clutter;
+  sc.doppler_window = doppler_window;
   std::ostringstream id;
   id << "rdproc_" << clutter_tag(clutter) << "_"
+     << hr::to_string(doppler_window) << "_"
      << s.id;
   if (channels > 1) {
     id << "_ch" << channels;
@@ -291,6 +298,9 @@ struct FusedTraits : perf::PerfDriverDefaults {
     out.push_back(make_scenario(
         hr::ClutterFilterMethod::kMeanSubtraction, md));
     out.push_back(make_scenario(
+        hr::ClutterFilterMethod::kMeanSubtraction, md, 1,
+        hr::WindowType::kHann));
+    out.push_back(make_scenario(
         hr::ClutterFilterMethod::kNone, md, 4));
     return out;
   }
@@ -321,6 +331,9 @@ struct FusedTraits : perf::PerfDriverDefaults {
             hr::ClutterFilterMethod::kSingleDelay}) {
         out.push_back(make_scenario(c, s));
       }
+      out.push_back(make_scenario(
+          hr::ClutterFilterMethod::kMeanSubtraction, s, 1,
+          hr::WindowType::kHann));
     }
     for (const char* sid : {"md", "lg"}) {
       const SizeSpec& s = must_find_size(sid);

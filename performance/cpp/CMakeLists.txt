@@ -18,6 +18,7 @@ target_include_directories(radar_perf_utils INTERFACE
 target_link_libraries(radar_perf_utils INTERFACE
     holoscan::core
     holoscan::radar_common
+    holoscan::radar_schemas
     CUDA::cudart)
 
 # Perf drivers rewritten for HSDK 5 Graph (not the same as the operator

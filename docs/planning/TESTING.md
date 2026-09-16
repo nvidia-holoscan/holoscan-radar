@@ -90,6 +90,9 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 
 - `none` preserves shape and values exactly through the operator-owned output.
 - Zero-Doppler (DC-across-chirps) input → `mean_subtraction` nulls it (≈ 0 at those cells); a moving target is preserved.
+- `mean_subtraction` with `doppler_window: none` exactly retains the uniform-mean behavior. Hann, Hamming, and custom taps match an independent host weighted projection `mu_w = sum(w[k] * x[k]) / sum(w[k])`, preserve the chirp count, and make the matching windowed Doppler DC bin zero. A custom window with numerically zero weight sum fails predictably.
+- A one-tick Exact `doppler_window` override changes only that tick's weighted projection; a following miss takes the Params window with no latch.
+- `none`, `single_delay`, and `double_delay` produce the same results for every `doppler_window` value because those methods ignore the projection window.
 - `single_delay` / `double_delay`: output chirp count drops by 1 / 2; response is the binomial high-pass (DC notch).
 - Leading axes preserved.
 
@@ -101,7 +104,8 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 
 #### FMCWRangeDopplerProcessorOp (fused)
 
-- **Parity:** identical `rd_maps` (within tolerance) to the split `FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp` chain for matching parameters.
+- **Parity:** identical `rd_maps` (within tolerance) to the split `FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp` chain for matching parameters. Under `mean_subtraction`, matching means the standalone clutter and Doppler operators both receive the fused operator's `doppler_window`.
+- Fused `mean_subtraction` intentionally uses its resolved `doppler_window` for both the weighted clutter projection and Doppler analysis. An off-bin target followed by a taper leaves a center-bin residual with the old uniform projection and removes it with the corrected matching weighted projection.
 - Inline `clutter_filter` reduces `num_doppler` consistently with the standalone op; `range_bins` / `velocity_bins` match the split.
 
 ### Detection & clustering

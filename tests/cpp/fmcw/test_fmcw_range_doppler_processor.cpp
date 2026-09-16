@@ -137,6 +137,7 @@ struct ParityConfig {
   std::optional<int64_t> nfft_doppler{};
   WindowSpec range_window{};
   WindowSpec doppler_window{};
+  bool match_clutter_window{true};
   bool apply_dechirp{false};
 };
 
@@ -240,6 +241,10 @@ ChainOutputs run_split(
   if (cfg.clutter != ClutterFilterMethod::kNone) {
     ClutterFilterParams cp;
     cp.method = cfg.clutter;
+    if (cfg.clutter == ClutterFilterMethod::kMeanSubtraction &&
+        cfg.match_clutter_window) {
+      cp.doppler_window = cfg.doppler_window;
+    }
     auto frames = run_operator_graph<ClutterFilterOp<T>>(
         {reupload<T>(profiles_host)}, std::move(cp));
     EXPECT_EQ(frames.size(), 1u);
@@ -507,6 +512,42 @@ TEST(FMCWRangeDopplerProcessorOpTest, ParityWindows) {
   const auto fused = run_fused<float>(make(), cfg, waveform);
   const auto split = run_split<float>(make(), cfg, waveform);
   expect_parity<float>(fused, split, 1e-5, "hann range + hamming doppler");
+}
+
+TEST(FMCWRangeDopplerProcessorOpTest,
+     MatchingWindowRemovesCenterBinForOffBinTone) {
+  std::vector<std::complex<float>> cube(
+      static_cast<size_t>(kChirps * kSamples));
+  constexpr double kCyclesPerChirp = 0.137;
+  for (int64_t chirp = 0; chirp < kChirps; ++chirp) {
+    const auto tone = std::polar(
+        1.0, 2.0 * holoscan::radar::kPi * kCyclesPerChirp *
+                 static_cast<double>(chirp));
+    for (int64_t sample = 0; sample < kSamples; ++sample) {
+      cube[static_cast<size_t>(chirp * kSamples + sample)] =
+          std::complex<float>(tone);
+    }
+  }
+  const auto waveform = to_descriptor(sim::SimWaveform{});
+  ParityConfig matched;
+  matched.clutter = ClutterFilterMethod::kMeanSubtraction;
+  matched.doppler_window.type = WindowType::kHann;
+  const ChainOutputs weighted = run_fused<float>(
+      to_device_tensor(cube, {kChirps, kSamples}, complex_dtype<float>()),
+      matched, waveform);
+
+  ParityConfig uniform = matched;
+  uniform.match_clutter_window = false;
+  const ChainOutputs legacy = run_split<float>(
+      to_device_tensor(cube, {kChirps, kSamples}, complex_dtype<float>()),
+      uniform, waveform);
+  const int64_t center = kChirps / 2;
+  const double weighted_center =
+      std::abs(weighted.rd.as<std::complex<float>>()[center * kSamples]);
+  const double uniform_center =
+      std::abs(legacy.rd.as<std::complex<float>>()[center * kSamples]);
+  EXPECT_LT(weighted_center, 1e-3);
+  EXPECT_GT(uniform_center, 1e-2);
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, ParityRealIfInput) {
