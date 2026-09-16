@@ -22,7 +22,7 @@
 
 #include "radar_common/descriptors/angle_convention.hpp"
 
-namespace holoscan::radar::app::simo::viz {
+namespace holoscan::radar::app::viz {
 
 // Common render/history item produced from either a raw detection row or a
 // clustered detection centroid.
@@ -47,13 +47,13 @@ struct TruthTarget {
   int color_bucket{0};
 };
 
-enum class SimoDisplayMode {
+enum class DashboardMode {
   kRawDetections,
   kClusters,
 };
 
-struct SimoDisplayConfig {
-  SimoDisplayMode mode{SimoDisplayMode::kRawDetections};
+struct FmcwDashboardConfig {
+  DashboardMode mode{DashboardMode::kRawDetections};
   float dynamic_range_db{60.0F};
   float detection_radius{0.010F};
   double frame_period{0.1};
@@ -68,9 +68,9 @@ struct SimoDisplayConfig {
   std::vector<TruthTarget> truth_targets;
 };
 
-class SimoDisplayOp : public holoscan::Operator<> {
+class FmcwDashboardOp : public holoscan::Operator<> {
  public:
-  explicit SimoDisplayOp(SimoDisplayConfig config);
+  explicit FmcwDashboardOp(FmcwDashboardConfig config);
 
   void setup(holoscan::OperatorSpec& spec) override;
   [[nodiscard]] holoscan::Contract contract() const override;
@@ -88,7 +88,7 @@ class SimoDisplayOp : public holoscan::Operator<> {
   holoscan::Output<holoscan::Tensor> rgba{"rgba"};
 
  private:
-  SimoDisplayConfig config_;
+  FmcwDashboardConfig config_;
   std::size_t max_byte_span_{0U};
   std::shared_ptr<holoscan::Tensor> peak_power_;
   std::shared_ptr<holoscan::Tensor> annotation_;
@@ -142,4 +142,4 @@ std::array<float, 4> truth_features_at_time(const TruthTarget& target,
 
 }  // namespace detail
 
-}  // namespace holoscan::radar::app::simo::viz
+}  // namespace holoscan::radar::app::viz

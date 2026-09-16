@@ -11,11 +11,11 @@
 #include <vector>
 
 #include "radar_app/app/angle_presentation.hpp"
-#include "viz/simo_viz_ops.hpp"
+#include "radar_app/viz/fmcw_dashboard_op.hpp"
 
 namespace {
 
-namespace viz = holoscan::radar::app::simo::viz;
+namespace viz = holoscan::radar::app::viz;
 
 TEST(AnglePresentationTest, ConvertsDirectionCosinesToPhysicalAngles) {
   holoscan::radar::AngleConvention convention;
@@ -66,7 +66,7 @@ TEST(AnglePresentationTest, CentroidHandlesAzimuthWrap) {
   EXPECT_NEAR(angles.el, 0.1, 1e-5);
 }
 
-TEST(SimoRdHeatmapTest, MapsPeakAndDynamicRange) {
+TEST(FmcwRdHeatmapTest, MapsPeakAndDynamicRange) {
   const std::vector<std::uint8_t> rgba =
       viz::detail::make_heatmap_rgba_reference(
           {1.0F, 1000000.0F}, {1, 2}, 60.0F);
@@ -81,7 +81,7 @@ TEST(SimoRdHeatmapTest, MapsPeakAndDynamicRange) {
   EXPECT_EQ(rgba[7], 255U);
 }
 
-TEST(SimoRdHeatmapTest, DenseLeadingAxesUseMaxProjection) {
+TEST(FmcwRdHeatmapTest, DenseLeadingAxesUseMaxProjection) {
   const std::vector<std::uint8_t> dense =
       viz::detail::make_heatmap_rgba_reference(
           {1.0F, 10.0F, 100.0F, 1.0F}, {2, 1, 1, 2}, 20.0F);
@@ -91,7 +91,7 @@ TEST(SimoRdHeatmapTest, DenseLeadingAxesUseMaxProjection) {
   EXPECT_EQ(dense, projected);
 }
 
-TEST(SimoRdHeatmapTest, MapsDopplerToXAndRangeUpward) {
+TEST(FmcwRdHeatmapTest, MapsDopplerToXAndRangeUpward) {
   const auto low_range =
       viz::detail::rd_plot_position(1.0F, 0.0F, 4, 8);
   const auto high_range =
@@ -102,7 +102,7 @@ TEST(SimoRdHeatmapTest, MapsDopplerToXAndRangeUpward) {
   EXPECT_GT(low_range[1], high_range[1]);
 }
 
-TEST(SimoDashboardTest, UsesUpwardSemicircleForAtMost180DegreeCoverage) {
+TEST(FmcwDashboardTest, UsesUpwardSemicircleForAtMost180DegreeCoverage) {
   constexpr float kHalfPi = 1.57079632679489661923F;
   EXPECT_TRUE(viz::detail::use_azimuth_sector({-0.3F, 0.3F}));
   EXPECT_TRUE(
@@ -111,7 +111,7 @@ TEST(SimoDashboardTest, UsesUpwardSemicircleForAtMost180DegreeCoverage) {
   EXPECT_FALSE(viz::detail::use_azimuth_sector({-2.0F, 2.0F}));
 }
 
-TEST(SimoDashboardTest, ComputesClusterCentroids) {
+TEST(FmcwDashboardTest, ComputesClusterCentroids) {
   const std::vector<viz::DetectionMarker> markers =
       viz::detail::make_cluster_markers(
           {0, 2, 2, 4, 3, 6},
@@ -128,7 +128,7 @@ TEST(SimoDashboardTest, ComputesClusterCentroids) {
   EXPECT_EQ(markers[1].color_bucket, 1);
 }
 
-TEST(SimoDashboardTest, ClusterCentroidHandlesAzimuthWrap) {
+TEST(FmcwDashboardTest, ClusterCentroidHandlesAzimuthWrap) {
   const auto markers = viz::detail::make_cluster_markers(
       {0, 1, 0, 1},
       {10.0F, 1.0F, 3.13F, 0.1F, 10.0F, 1.0F, -3.13F, 0.1F},
@@ -138,7 +138,7 @@ TEST(SimoDashboardTest, ClusterCentroidHandlesAzimuthWrap) {
   EXPECT_NEAR(markers[0].features[3], 0.1F, 1e-5F);
 }
 
-TEST(SimoDashboardTest, MakesRawDetectionMarkers) {
+TEST(FmcwDashboardTest, MakesRawDetectionMarkers) {
   const std::vector<viz::DetectionMarker> markers =
       viz::detail::make_raw_detection_markers(
           {0, 1, 2, 3, 1, 0, 4, 5},
@@ -154,7 +154,7 @@ TEST(SimoDashboardTest, MakesRawDetectionMarkers) {
   EXPECT_EQ(markers[1].color_bucket, 0);
 }
 
-TEST(SimoDashboardTest, ConvertsDirectionCosineMarkersBeforeHistory) {
+TEST(FmcwDashboardTest, ConvertsDirectionCosineMarkersBeforeHistory) {
   holoscan::radar::AngleConvention convention;
   convention.preset =
       holoscan::radar::AngleConventionPreset::kDirectionCosine;
@@ -166,12 +166,12 @@ TEST(SimoDashboardTest, ConvertsDirectionCosineMarkersBeforeHistory) {
   EXPECT_NEAR(markers[0].features[3], std::asin(0.25), 1e-6);
 }
 
-TEST(SimoDashboardTest, AcceptsEmptyRawDetections) {
+TEST(FmcwDashboardTest, AcceptsEmptyRawDetections) {
   EXPECT_TRUE(
       viz::detail::make_raw_detection_markers({}, {}, 4, 5).empty());
 }
 
-TEST(SimoDashboardTest, RejectsMismatchedRawDetectionRows) {
+TEST(FmcwDashboardTest, RejectsMismatchedRawDetectionRows) {
   EXPECT_THROW(
       viz::detail::make_raw_detection_markers(
           {0, 1, 2, 3},
@@ -180,7 +180,7 @@ TEST(SimoDashboardTest, RejectsMismatchedRawDetectionRows) {
       std::invalid_argument);
 }
 
-TEST(SimoDashboardTest, UsesReducedFeaturesForHistory) {
+TEST(FmcwDashboardTest, UsesReducedFeaturesForHistory) {
   std::vector<viz::DetectionMarker> markers(2);
   viz::detail::apply_reduced_features(
       &markers,
@@ -193,7 +193,7 @@ TEST(SimoDashboardTest, UsesReducedFeaturesForHistory) {
             (std::array<float, 4>{20.0F, 2.0F, 0.3F, 0.4F}));
 }
 
-TEST(SimoDashboardTest, BoundsHistoryAndMapsPanelCoordinates) {
+TEST(FmcwDashboardTest, BoundsHistoryAndMapsPanelCoordinates) {
   std::deque<viz::HistorySample> history;
   const viz::DetectionMarker marker{
       .doppler_bin = 7.0F,
@@ -213,7 +213,7 @@ TEST(SimoDashboardTest, BoundsHistoryAndMapsPanelCoordinates) {
   EXPECT_FLOAT_EQ(position[1], 0.75F);
 }
 
-TEST(SimoDashboardTest, ExpiresDetectionAfterConfiguredFrames) {
+TEST(FmcwDashboardTest, ExpiresDetectionAfterConfiguredFrames) {
   std::deque<viz::HistorySample> history;
   const viz::DetectionMarker marker{
       .doppler_bin = 7.0F,
@@ -228,7 +228,7 @@ TEST(SimoDashboardTest, ExpiresDetectionAfterConfiguredFrames) {
   EXPECT_TRUE(history.empty());
 }
 
-TEST(SimoDashboardTest, DerivesMovingTargetTruthFeatures) {
+TEST(FmcwDashboardTest, DerivesMovingTargetTruthFeatures) {
   const viz::TruthTarget target{
       .position = {1.0, 0.0, 0.0},
       .velocity = {0.0, 1.0, 1.0},

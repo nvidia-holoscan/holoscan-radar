@@ -49,7 +49,7 @@ struct RuntimeConfig : CommonRunConfig {
   ArrayGeometry array_geometry;
   MaxTensorExtents extents;
   MaxTensorExtents cfar_extents;
-  ::holoscan::radar::app::simo::VisualizationConfig visualization;
+  ::holoscan::radar::app::VisualizationConfig visualization;
 };
 
 struct DetectThenBeamformConfig : RuntimeConfig {

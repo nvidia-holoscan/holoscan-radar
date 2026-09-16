@@ -23,7 +23,7 @@
 #include "config.hpp"  // NOLINT(build/include_subdir): app-private header
 
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
-#include "viz/simo_viz_graph.hpp"  // NOLINT(build/include_subdir)
+#include "radar_app/viz/fmcw_dashboard_graph.hpp"
 #endif
 
 namespace radar = holoscan::radar;
@@ -202,13 +202,13 @@ int main(int argc, char** argv) {
 
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
         if (cfg.visualize) {
-          simo::viz::add_simo_visualization(
+          app::viz::add_fmcw_dashboard(
               graph, application, options, cfg.visualization,
               cfg.frame_period, cfg.beamscan_params->az_coordinates,
               cfg.beamscan_params->el_coordinates,
               cfg.beamscan_params->angle_convention, cfg.scene.targets,
               "Detect then beamform",
-              simo::viz::SimoClusterVizInputs{
+              app::viz::ClusterDashboardInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,
                   cluster->labels, cluster->sizes, range->range_bins,
                   doppler->velocity_bins, reduction->reduced_points});

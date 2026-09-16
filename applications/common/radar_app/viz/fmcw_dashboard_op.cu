@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "viz/simo_viz_ops.hpp"  // NOLINT(build/include_subdir)
+#include "radar_app/viz/fmcw_dashboard_op.hpp"
 
 #include <cuda_runtime_api.h>
 
@@ -32,7 +32,7 @@
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
-namespace holoscan::radar::app::simo::viz {
+namespace holoscan::radar::app::viz {
 namespace {
 
 constexpr DLDataType kFloat32{kDLFloat, 32U, 1U};
@@ -119,7 +119,7 @@ expected<std::vector<std::int64_t>, Error> copy_int64_to_host(
   if (!dldatatype_equals(tensor.dtype(), kInt64) || !tensor.is_contiguous()) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
-        std::string("SimoDisplayOp.") + name +
+        std::string("FmcwDashboardOp.") + name +
             ": expected a compact int64 Tensor"});
   }
   const std::size_t count =
@@ -130,7 +130,7 @@ expected<std::vector<std::int64_t>, Error> copy_int64_to_host(
                       cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
     return make_unexpected(Error{
         ErrorCode::kFailure,
-        std::string("SimoDisplayOp.") + name +
+        std::string("FmcwDashboardOp.") + name +
             ": device-to-host copy failed"});
   }
   return result;
@@ -142,7 +142,7 @@ expected<std::vector<float>, Error> copy_float_to_host(
       !tensor.is_contiguous()) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
-        std::string("SimoDisplayOp.") + name +
+        std::string("FmcwDashboardOp.") + name +
             ": expected a compact float32 Tensor"});
   }
   const std::size_t count =
@@ -153,7 +153,7 @@ expected<std::vector<float>, Error> copy_float_to_host(
                       cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
     return make_unexpected(Error{
         ErrorCode::kFailure,
-        std::string("SimoDisplayOp.") + name +
+        std::string("FmcwDashboardOp.") + name +
             ": device-to-host copy failed"});
   }
   return result;
@@ -177,7 +177,7 @@ void validate_dashboard_inputs(const Tensor& detection_idx,
       reduced_points.shape()[0] != sizes.shape()[0] ||
       reduced_points.shape()[1] < 4) {
     throw std::invalid_argument(
-        "SimoDisplayOp: incompatible detection, cluster, or axis shapes");
+        "FmcwDashboardOp: incompatible detection, cluster, or axis shapes");
   }
 }
 
@@ -193,7 +193,7 @@ void validate_detection_inputs(const Tensor& detection_idx,
       velocity_bins.shape().size() != 1U ||
       velocity_bins.shape()[0] <= 0) {
     throw std::invalid_argument(
-        "SimoDisplayOp: incompatible raw detection or axis shapes");
+        "FmcwDashboardOp: incompatible raw detection or axis shapes");
   }
 }
 
@@ -518,7 +518,7 @@ void draw_spatial_panel(
     std::int64_t height, const PixelRect& panel, std::string_view title,
     SpatialView view, const std::deque<HistorySample>& history,
     const std::array<float, 2>& range_bounds, std::int64_t frame_index,
-    const SimoDisplayConfig& config) {
+    const FmcwDashboardConfig& config) {
   constexpr std::array<std::uint8_t, 4> kBackground{12U, 12U, 18U, 255U};
   constexpr std::array<std::uint8_t, 4> kGrid{70U, 70U, 82U, 255U};
   constexpr std::array<std::uint8_t, 4> kWhite{255U, 255U, 255U, 255U};
@@ -700,7 +700,7 @@ void draw_history_panel(
     std::int64_t height, const PixelRect& panel, std::string_view title,
     int feature, std::array<float, 2> bounds,
     const std::deque<HistorySample>& history, std::int64_t frame_index,
-    const SimoDisplayConfig& config) {
+    const FmcwDashboardConfig& config) {
   constexpr std::array<std::uint8_t, 4> kBackground{12U, 12U, 18U, 255U};
   constexpr std::array<std::uint8_t, 4> kGrid{70U, 70U, 82U, 255U};
   fill_rect(image, width, height, panel, kBackground);
@@ -800,7 +800,7 @@ std::vector<std::uint8_t> make_annotation(
     const std::deque<HistorySample>& history,
     const std::deque<HistorySample>& detection_history,
     const std::vector<float>& ranges, const std::vector<float>& velocities,
-    const SimoDisplayConfig& config, std::int64_t frame_index) {
+    const FmcwDashboardConfig& config, std::int64_t frame_index) {
   const std::int64_t width = config.width;
   const std::int64_t height = config.height;
   const DashboardLayout layout = make_dashboard_layout(width, height);
@@ -915,7 +915,7 @@ std::vector<std::uint8_t> make_annotation(
 
 }  // namespace
 
-SimoDisplayOp::SimoDisplayOp(SimoDisplayConfig config)
+FmcwDashboardOp::FmcwDashboardOp(FmcwDashboardConfig config)
     : config_(std::move(config)) {
   if (!std::isfinite(config_.dynamic_range_db) ||
       config_.dynamic_range_db <= 0.0F ||
@@ -927,7 +927,7 @@ SimoDisplayOp::SimoDisplayOp(SimoDisplayConfig config)
       config_.height < 360 || !(config_.az_bounds[0] < config_.az_bounds[1]) ||
       !(config_.el_bounds[0] < config_.el_bounds[1])) {
     throw std::invalid_argument(
-        "SimoDisplayOp: invalid scales, history, bounds, or canvas size");
+        "FmcwDashboardOp: invalid scales, history, bounds, or canvas size");
   }
   const std::vector<std::int64_t> max_shape{
       config_.height, config_.width, 4};
@@ -936,7 +936,7 @@ SimoDisplayOp::SimoDisplayOp(SimoDisplayConfig config)
   annotation_ = make_device_tensor(max_shape, kRgba8);
 }
 
-void SimoDisplayOp::setup(holoscan::OperatorSpec& spec) {
+void FmcwDashboardOp::setup(holoscan::OperatorSpec& spec) {
   constexpr TensorRepresentation kPower{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = kFloat32,
@@ -957,7 +957,7 @@ void SimoDisplayOp::setup(holoscan::OperatorSpec& spec) {
       .queue_depth(2U)
       .expects_tensor(tensor_input(kDevice));
   spec.input(points).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  if (config_.mode == SimoDisplayMode::kClusters) {
+  if (config_.mode == DashboardMode::kClusters) {
     spec.input(labels).queue_depth(2U).expects_tensor(tensor_input(kDevice));
     spec.input(sizes).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   }
@@ -967,7 +967,7 @@ void SimoDisplayOp::setup(holoscan::OperatorSpec& spec) {
   spec.input(velocity_bins)
       .queue_depth(2U)
       .expects_tensor(tensor_input(kDevice));
-  if (config_.mode == SimoDisplayMode::kClusters) {
+  if (config_.mode == DashboardMode::kClusters) {
     spec.input(reduced_points)
         .queue_depth(2U)
         .expects_tensor(tensor_input(kDevice));
@@ -976,9 +976,9 @@ void SimoDisplayOp::setup(holoscan::OperatorSpec& spec) {
       pooled_tensor_output(kImage, 3U, max_byte_span_));
 }
 
-holoscan::Contract SimoDisplayOp::contract() const {
+holoscan::Contract FmcwDashboardOp::contract() const {
   holoscan::Contract result;
-  if (config_.mode == SimoDisplayMode::kClusters) {
+  if (config_.mode == DashboardMode::kClusters) {
     result
         .trigger(holoscan::OnAligned{
             .ports = holoscan::ports(cfar_power, detection_idx, points, labels,
@@ -1008,9 +1008,9 @@ holoscan::Contract SimoDisplayOp::contract() const {
   return result;
 }
 
-expected<void, Error> SimoDisplayOp::compute(
+expected<void, Error> FmcwDashboardOp::compute(
     holoscan::ExecutionContext& context) {
-  constexpr const char* kWho = "SimoDisplayOp";
+  constexpr const char* kWho = "FmcwDashboardOp";
   HOLOSCAN_TRY(auto power, receive_tensor(cfar_power, kWho));
   HOLOSCAN_TRY(auto idx, receive_tensor(detection_idx, kWho));
   HOLOSCAN_TRY(auto feature_points, receive_tensor(points, kWho));
@@ -1019,15 +1019,15 @@ expected<void, Error> SimoDisplayOp::compute(
   Tensor cluster_labels;
   Tensor cluster_sizes;
   Tensor reduced;
-  if (config_.mode == SimoDisplayMode::kClusters) {
+  if (config_.mode == DashboardMode::kClusters) {
     HOLOSCAN_TRY(cluster_labels, receive_tensor(labels, kWho));
     HOLOSCAN_TRY(cluster_sizes, receive_tensor(sizes, kWho));
     HOLOSCAN_TRY(reduced, receive_tensor(reduced_points, kWho));
   }
   BatchedShape layout;
   try {
-    layout = collapse_batch(power, "SimoDisplayOp.cfar_power");
-    if (config_.mode == SimoDisplayMode::kClusters) {
+    layout = collapse_batch(power, "FmcwDashboardOp.cfar_power");
+    if (config_.mode == DashboardMode::kClusters) {
       validate_dashboard_inputs(idx, feature_points, cluster_labels,
                                 cluster_sizes, ranges, velocities, reduced);
     } else {
@@ -1058,7 +1058,7 @@ expected<void, Error> SimoDisplayOp::compute(
   std::vector<std::int64_t> host_labels;
   std::vector<std::int64_t> host_sizes;
   std::vector<float> host_reduced;
-  if (config_.mode == SimoDisplayMode::kClusters) {
+  if (config_.mode == DashboardMode::kClusters) {
     HOLOSCAN_TRY(host_labels,
                  copy_int64_to_host(cluster_labels, stream, "labels"));
     HOLOSCAN_TRY(host_sizes,
@@ -1073,7 +1073,7 @@ expected<void, Error> SimoDisplayOp::compute(
   std::vector<std::uint8_t> host_annotation;
   try {
     std::vector<DetectionMarker> markers;
-    if (config_.mode == SimoDisplayMode::kClusters) {
+    if (config_.mode == DashboardMode::kClusters) {
       markers = detail::make_cluster_markers(
           host_idx, host_points, host_labels, host_sizes, idx.shape()[1],
           feature_points.shape()[1], config_.angle_convention);
@@ -1481,4 +1481,4 @@ std::array<float, 4> truth_features_at_time(const TruthTarget& target,
 }
 
 }  // namespace detail
-}  // namespace holoscan::radar::app::simo::viz
+}  // namespace holoscan::radar::app::viz

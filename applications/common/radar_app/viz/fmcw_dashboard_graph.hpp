@@ -22,12 +22,12 @@
 #include <holoviz/layer_desc.hpp>
 #include <holoviz/sink_desc.hpp>
 
-#include "config_schema.hpp"  // NOLINT(build/include_subdir): app-private header
 #include "radar_app/app/angle_presentation.hpp"
+#include "radar_app/app/visualization_config.hpp"
+#include "radar_app/viz/fmcw_dashboard_op.hpp"
 #include "radar_common/sim/scene.hpp"
-#include "viz/simo_viz_ops.hpp"  // NOLINT(build/include_subdir)
 
-namespace holoscan::radar::app::simo::viz {
+namespace holoscan::radar::app::viz {
 
 inline std::array<float, 2> display_bounds(const std::array<double, 2>& bounds) {
   const float lower = static_cast<float>(bounds[0]);
@@ -55,7 +55,7 @@ inline std::vector<TruthTarget> make_truth_targets(
   return result;
 }
 
-struct SimoRawVizInputs {
+struct RawDashboardInputs {
   const holoscan::Output<holoscan::Tensor>& cfar_power;
   const holoscan::Output<holoscan::Tensor>& detection_idx;
   const holoscan::Output<holoscan::Tensor>& points;
@@ -63,7 +63,7 @@ struct SimoRawVizInputs {
   const holoscan::Output<holoscan::Tensor>& velocity_bins;
 };
 
-struct SimoClusterVizInputs {
+struct ClusterDashboardInputs {
   const holoscan::Output<holoscan::Tensor>& cfar_power;
   const holoscan::Output<holoscan::Tensor>& detection_idx;
   const holoscan::Output<holoscan::Tensor>& points;
@@ -75,7 +75,7 @@ struct SimoClusterVizInputs {
 };
 
 template <typename Inputs>
-inline void add_simo_visualization(
+inline void add_fmcw_dashboard(
     holoscan::Graph& graph, holoscan::PartitionHandle& application,
     holoscan::CompileOptions& options, const VisualizationConfig& config,
     double frame_period, const std::vector<double>& az_grid,
@@ -83,18 +83,18 @@ inline void add_simo_visualization(
     const std::vector<sim::PointTarget>& truth_targets,
     std::string workflow_title,
     const Inputs& inputs) {
-  static_assert(std::is_same_v<Inputs, SimoRawVizInputs> ||
-                    std::is_same_v<Inputs, SimoClusterVizInputs>,
-                "unsupported SIMO visualization input bundle");
+  static_assert(std::is_same_v<Inputs, RawDashboardInputs> ||
+                    std::is_same_v<Inputs, ClusterDashboardInputs>,
+                "unsupported FMCW dashboard input bundle");
   constexpr bool kClustered =
-      std::is_same_v<Inputs, SimoClusterVizInputs>;
+      std::is_same_v<Inputs, ClusterDashboardInputs>;
   const PhysicalAngleBounds physical_bounds =
       physical_scan_grid_bounds(angle_convention, az_grid, el_grid);
-  auto display = graph.op<SimoDisplayOp>(
+  auto display = graph.op<FmcwDashboardOp>(
       "display_compositor",
-      SimoDisplayConfig{
-          .mode = kClustered ? SimoDisplayMode::kClusters
-                             : SimoDisplayMode::kRawDetections,
+      FmcwDashboardConfig{
+          .mode = kClustered ? DashboardMode::kClusters
+                             : DashboardMode::kRawDetections,
           .dynamic_range_db =
               static_cast<float>(config.dynamic_range_db),
           .detection_radius =
@@ -171,4 +171,4 @@ inline void add_simo_visualization(
   graph.add_flow(display->rgba, holoviz->layer_input(0), display_queue);
 }
 
-}  // namespace holoscan::radar::app::simo::viz
+}  // namespace holoscan::radar::app::viz

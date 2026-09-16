@@ -14,6 +14,7 @@
 #include <holoscan/params/config.hpp>
 
 #include "detection/feature_assembly_op/feature_assembly_op.hpp"
+#include "radar_app/app/visualization_config.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/sdk/config_codecs.hpp"
 
@@ -29,18 +30,6 @@ struct RunConfig {
   double frame_period{0.1};
   bool meter_cadence{true};
   int64_t meter_log_every{0};
-};
-
-struct VisualizationConfig {
-  bool enabled{true};
-  int64_t window_width{1280};
-  int64_t window_height{720};
-  std::string window_title{"FMCW SIMO"};
-  double display_rate_hz{60.0};
-  double dynamic_range_db{60.0};
-  double detection_radius{0.010};
-  int64_t history_frames{120};
-  int64_t detection_trail_frames{12};
 };
 
 struct RxArrayConfig {
@@ -67,8 +56,6 @@ using CubeStorage = radar::config_detail::PortableParamStorageTraits<
     CubeConfig>;  // NOLINT
 using RunStorage = radar::config_detail::PortableParamStorageTraits<
     RunConfig>;  // NOLINT
-using VisualizationStorage = radar::config_detail::PortableParamStorageTraits<
-    VisualizationConfig>;  // NOLINT
 using RxArrayStorage = radar::config_detail::PortableParamStorageTraits<
     RxArrayConfig>;  // NOLINT
 using TargetStorage = radar::config_detail::PortableParamStorageTraits<
@@ -87,9 +74,6 @@ template <>
 struct ParamStorageTraits<radar::app::simo::RunConfig>
     : radar::app::simo::RunStorage {};  // NOLINT
 template <>
-struct ParamStorageTraits<radar::app::simo::VisualizationConfig>
-    : radar::app::simo::VisualizationStorage {};  // NOLINT
-template <>
 struct ParamStorageTraits<radar::app::simo::RxArrayConfig>
     : radar::app::simo::RxArrayStorage {};  // NOLINT
 template <>
@@ -103,11 +87,19 @@ struct ParamStorageTraits<radar::app::simo::FeatureAssemblyParams>
 
 namespace holoscan::radar::app::simo {
 
+inline ::holoscan::radar::app::VisualizationConfig
+default_visualization_config() {
+  ::holoscan::radar::app::VisualizationConfig config;
+  config.window_title = "FMCW SIMO";
+  return config;
+}
+
 struct AppParams {
   FMCWWaveformDescriptor waveform;
   CubeConfig cube;
   RunConfig run;
-  VisualizationConfig visualization;
+  ::holoscan::radar::app::VisualizationConfig visualization{
+      default_visualization_config()};
   RxArrayConfig rx_array;
   std::vector<TargetConfig> targets;
   std::optional<double> noise_snr_db{};
@@ -168,23 +160,6 @@ struct ConfigCodec<radar::app::simo::RunConfig>
       object_field("frame_period", &Config::frame_period),
       defaulted_object_field("meter_cadence", &Config::meter_cadence),
       defaulted_object_field("meter_log_every", &Config::meter_log_every));
-};
-
-template <>
-struct ConfigCodec<radar::app::simo::VisualizationConfig>
-    : ObjectCodec<radar::app::simo::VisualizationConfig> {  // NOLINT
-  using Config = radar::app::simo::VisualizationConfig;
-  static constexpr auto fields = std::make_tuple(
-      defaulted_object_field("enabled", &Config::enabled),
-      defaulted_object_field("window_width", &Config::window_width),
-      defaulted_object_field("window_height", &Config::window_height),
-      defaulted_object_field("window_title", &Config::window_title),
-      defaulted_object_field("display_rate_hz", &Config::display_rate_hz),
-      defaulted_object_field("dynamic_range_db", &Config::dynamic_range_db),
-      defaulted_object_field("detection_radius", &Config::detection_radius),
-      defaulted_object_field("history_frames", &Config::history_frames),
-      defaulted_object_field("detection_trail_frames",
-                             &Config::detection_trail_frames));
 };
 
 template <>
