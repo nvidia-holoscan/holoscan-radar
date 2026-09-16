@@ -171,6 +171,8 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored,
                    result.visualization.detection_radius);
   require_positive("app.visualization.history_frames",
                    result.visualization.history_frames);
+  require_positive("app.visualization.detection_trail_frames",
+                   result.visualization.detection_trail_frames);
   if (result.visualization.enabled &&
       (result.visualization.window_width < 640 ||
        result.visualization.window_height < 360)) {

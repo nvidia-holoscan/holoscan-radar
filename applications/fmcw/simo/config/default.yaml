@@ -21,10 +21,11 @@ app:
         window_width: 1280
         window_height: 720
         window_title: FMCW SIMO
-        display_rate_hz: 60.0
+        display_rate_hz: 20.0
         dynamic_range_db: 60.0
         detection_radius: 0.010
         history_frames: 120
+        detection_trail_frames: 50
     rx_array:
         az_elements: 8
         el_elements: 8
@@ -142,20 +143,20 @@ detect_then_beamform:
         # Common options: range, velocity, score.
         # See operators/detection/feature_assembly_op/README.md.
         features:
-            - range
-            - velocity
-            - az_estimate
-            - el_estimate
-            - score
-            - range_bin
-            - doppler_bin
+            - range        # Reporting
+            - velocity     # Reporting
+            - az_estimate  # Reporting
+            - el_estimate  # Reporting
+            - score        # Cluster reduction
+            - range_bin    # Clustering
+            - doppler_bin  # Clustering
     cluster_dbscan:
         epsilon:
-            - 0.0  # Range
-            - 0.0  # Velocity
-            - 0.0  # Azimuth estimate
-            - 0.0  # Elevation estimate
-            - 0.0  # Score
+            - 0.0  # Range (ignored)
+            - 0.0  # Velocity (ignored)
+            - 0.0  # Azimuth estimate (ignored)
+            - 0.0  # Elevation estimate (ignored)
+            - 0.0  # Score (ignored)
             - 1.5  # Range bin
             - 1.5  # Doppler bin
         min_points: 1
@@ -166,13 +167,13 @@ detect_then_beamform:
         # Options: weighted_sum, weighted_l2, weighted_max, custom.
         score_method: weighted_sum
         feature_weights:
-            - 0.0  # Range
-            - 0.0  # Velocity
-            - 0.0  # Azimuth estimate
-            - 0.0  # Elevation estimate
+            - 0.0  # Range (ignored)
+            - 0.0  # Velocity (ignored)
+            - 0.0  # Azimuth estimate (ignored)
+            - 0.0  # Elevation estimate (ignored)
             - 1.0  # Score
-            - 0.0  # Range bin
-            - 0.0  # Doppler bin
+            - 0.0  # Range bin (ignored)
+            - 0.0  # Doppler bin (ignored)
 
 beamform_then_detect:
     phase_shift_beamformer:

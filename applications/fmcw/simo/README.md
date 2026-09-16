@@ -72,18 +72,21 @@ This is the workflow called the *dense angle path* in `WORKFLOWS.md`.
 Detect-then-beamform reports clustered detections and their selected
 representatives. Beamform-then-detect uses `peak_mode: all` with
 `peak_radius` in `(az, el, Doppler, range)` order (`[2, 2, 2, 2]` in the
-default configuration and `[2, 2, 1, 1]` in the smaller smoke configuration)
+default and smoke configurations)
 and reports each retained N-D CFAR power maximum directly, without DBSCAN or
 reduction.
 When visualization is enabled, the stock HSDK 5 Holoviz sink shows the CFAR
-power projected onto the range-Doppler plane,
-clustered detections as color-coded ovals. A 2×2 grid to the right shows
-the simulated target truth as continuous color-coded trajectories behind
-rolling score-weighted cluster means for range, velocity, azimuth, and
-elevation versus scenario time. The sparse path uses score-weighted cluster
+power projected onto the range-Doppler plane with current detections shown as
+compact filled ovals with black borders. The side dashboard adds a top-down
+azimuth-range view and a boresight azimuth-elevation view above the 2×2 rolling
+range, velocity, azimuth, and elevation history grid. Detection markers persist
+only in the two side spatial views for `detection_trail_frames`, dim as
+they age, and then disappear; the range-Doppler map shows only the current
+frame. Simulated truth is drawn as continuous color-coded trajectories behind
+the score-weighted cluster means. The sparse path uses score-weighted cluster
 means; the dense path plots each peak's physical feature row directly. Truth
-and detection colors are assigned by ascending
-range so corresponding tracks are easy to compare. The
+and detection colors are assigned by ascending range so corresponding tracks
+are easy to compare. The
 retained RGBA frame keeps the complete dashboard visible between slower radar
 frames on the faster display clock. The fresh compositor in `cpp/viz/` is
 independent of the legacy `radar_app/viz` implementation.
@@ -145,7 +148,9 @@ as its sole argument. For a short smoke:
 
 The YAML files put app-owned waveform, scene, run, array, and `visualization`
 settings under `app:`. Visualization controls the window size/title, requested
-display rate, relative dB range, detection oval radius, and history length.
+display rate, relative dB range, current-detection oval radius,
+`history_frames` for the four feature plots, and
+`detection_trail_frames` for the two spatial views.
 Operator blocks remain separate:
 `detect_then_beamform` and `beamform_then_detect` own their incompatible
 settings, while the range/clutter/Doppler front end is shared. HSDK

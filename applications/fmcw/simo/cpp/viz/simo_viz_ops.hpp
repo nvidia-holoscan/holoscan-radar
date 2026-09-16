@@ -31,6 +31,8 @@ struct ClusterCentroid {
 
 struct HistorySample {
   std::int64_t frame{0};
+  float doppler_bin{0.0F};
+  float range_bin{0.0F};
   std::array<float, 4> features{};
   int color_bucket{0};
 };
@@ -46,6 +48,7 @@ struct SimoDisplayConfig {
   float detection_radius{0.010F};
   double frame_period{0.1};
   std::int64_t history_frames{120};
+  std::int64_t detection_trail_frames{12};
   std::int64_t width{1280};
   std::int64_t height{720};
   std::array<float, 2> az_bounds{};
@@ -81,6 +84,7 @@ class SimoDisplayOp : public holoscan::Operator<> {
   holoscan::Tensor retained_input_;
   std::int64_t frame_index_{0};
   std::deque<HistorySample> history_;
+  std::deque<HistorySample> detection_history_;
 };
 
 namespace detail {

@@ -73,6 +73,8 @@ TEST(SimoDashboardTest, UsesReducedFeaturesForHistory) {
 TEST(SimoDashboardTest, BoundsHistoryAndMapsPanelCoordinates) {
   std::deque<viz::HistorySample> history;
   const viz::ClusterCentroid centroid{
+      .doppler_bin = 7.0F,
+      .range_bin = 11.0F,
       .features = {10.0F, 0.0F, 0.25F, -0.25F},
       .color_bucket = 3};
   for (std::int64_t frame = 0; frame < 5; ++frame) {
@@ -80,10 +82,27 @@ TEST(SimoDashboardTest, BoundsHistoryAndMapsPanelCoordinates) {
   }
   ASSERT_EQ(history.size(), 3U);
   EXPECT_EQ(history.front().frame, 2);
+  EXPECT_FLOAT_EQ(history.front().doppler_bin, 7.0F);
+  EXPECT_FLOAT_EQ(history.front().range_bin, 11.0F);
   const auto position = viz::detail::history_plot_position(
       history.back(), 4, 3, 2, {-0.5F, 0.5F});
   EXPECT_FLOAT_EQ(position[0], 1.0F);
   EXPECT_FLOAT_EQ(position[1], 0.75F);
+}
+
+TEST(SimoDashboardTest, ExpiresDetectionAfterConfiguredFrames) {
+  std::deque<viz::HistorySample> history;
+  const viz::ClusterCentroid centroid{
+      .doppler_bin = 7.0F,
+      .range_bin = 11.0F,
+      .features = {10.0F, 0.0F, 0.25F, -0.25F},
+  };
+  viz::detail::append_history(&history, {centroid}, 0, 3);
+  viz::detail::append_history(&history, {}, 1, 3);
+  viz::detail::append_history(&history, {}, 2, 3);
+  ASSERT_EQ(history.size(), 1U);
+  viz::detail::append_history(&history, {}, 3, 3);
+  EXPECT_TRUE(history.empty());
 }
 
 TEST(SimoDashboardTest, DerivesMovingTargetTruthFeatures) {

@@ -21,10 +21,11 @@ app:
         window_width: 1280
         window_height: 720
         window_title: FMCW SIMO smoke
-        display_rate_hz: 10.0
+        display_rate_hz: 20.0
         dynamic_range_db: 60.0
         detection_radius: 0.010
         history_frames: 120
+        detection_trail_frames: 12
     rx_array:
         az_elements: 4
         el_elements: 4
@@ -43,7 +44,7 @@ app:
 range_processor:
     waveform: *waveform
     # Common options: none, hann, hamming.
-    # See ../../../../operators/fmcw/fmcw_range_processor_op/README.md.
+    # See operators/fmcw/fmcw_range_processor_op/README.md.
     range_window: hann
 clutter_filter:
     # Options: none, mean_subtraction, single_delay, double_delay.
@@ -51,7 +52,7 @@ clutter_filter:
 doppler_processor:
     waveform: *waveform
     # Common options: none, hann, hamming.
-    # See ../../../../operators/fmcw/fmcw_doppler_processor_op/README.md.
+    # See operators/fmcw/fmcw_doppler_processor_op/README.md.
     doppler_window: hann
 
 detect_then_beamform:
@@ -74,7 +75,7 @@ detect_then_beamform:
     beamscan_estimator:
         angle_convention:
             # Common options: radar_boresight, direction_cosine, custom.
-            # See ../../../../operators/angle_estimation/beamscan_estimator_op/README.md.
+            # See operators/angle_estimation/beamscan_estimator_op/README.md.
             preset: radar_boresight
         az_angles:
             - -0.3
@@ -92,7 +93,7 @@ detect_then_beamform:
         peak_interpolation: parabolic
     feature_assembly:
         # Common options: range, velocity, score.
-        # See ../../../../operators/detection/feature_assembly_op/README.md.
+        # See operators/detection/feature_assembly_op/README.md.
         features:
             - range
             - velocity
@@ -130,7 +131,7 @@ beamform_then_detect:
     phase_shift_beamformer:
         angle_convention:
             # Common options: radar_boresight, direction_cosine, custom.
-            # See ../../../../operators/angle_estimation/phase_shift_beamformer_op/README.md.
+            # See operators/angle_estimation/phase_shift_beamformer_op/README.md.
             preset: radar_boresight
         az_angles:
             - -0.3
@@ -146,7 +147,7 @@ beamform_then_detect:
             - 0.3
         array_taper:
             # Common options: none, hann, taylor.
-            # See ../../../../operators/angle_estimation/phase_shift_beamformer_op/README.md.
+            # See operators/angle_estimation/phase_shift_beamformer_op/README.md.
             type: taylor
             sidelobe_attenuation_db: 35.0
     cfar_detector:
@@ -169,7 +170,7 @@ beamform_then_detect:
         nci_axes: []
     feature_assembly:
         # Common options: range, velocity, score.
-        # See ../../../../operators/detection/feature_assembly_op/README.md.
+        # See operators/detection/feature_assembly_op/README.md.
         features:
             - range
             - velocity

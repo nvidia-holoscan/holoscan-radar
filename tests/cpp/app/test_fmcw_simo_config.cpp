@@ -123,6 +123,7 @@ TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
   EXPECT_DOUBLE_EQ(detect.visualization.dynamic_range_db, 60.0);
   EXPECT_DOUBLE_EQ(detect.visualization.detection_radius, 0.010);
   EXPECT_EQ(detect.visualization.history_frames, 120);
+  EXPECT_EQ(detect.visualization.detection_trail_frames, 12);
 }
 
 TEST(FmcwSimoConfig, RejectsAuthoredDerivedFields) {

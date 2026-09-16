@@ -329,6 +329,8 @@ struct PixelRect {
 
 struct DashboardLayout {
   PixelRect rd_plot;
+  PixelRect azimuth_range_panel;
+  PixelRect boresight_panel;
   std::array<PixelRect, 4> history_panels;
 };
 
@@ -338,9 +340,9 @@ DashboardLayout make_dashboard_layout(std::int64_t width,
   constexpr int kGap = 10;
   const int canvas_width = static_cast<int>(width);
   const int canvas_height = static_cast<int>(height);
-  const int history_width = std::max(360, canvas_width * 38 / 100);
-  const int history_x = canvas_width - kOuter - history_width;
-  const int rd_right = history_x - kGap;
+  const int side_width = std::max(360, canvas_width * 38 / 100);
+  const int side_x = canvas_width - kOuter - side_width;
+  const int rd_right = side_x - kGap;
 
   DashboardLayout result;
   result.rd_plot = PixelRect{
@@ -349,16 +351,26 @@ DashboardLayout make_dashboard_layout(std::int64_t width,
       .width = rd_right - 66,
       .height = canvas_height - 82,
   };
-  const int panel_width = (history_width - kGap) / 2;
-  const int panel_height = (canvas_height - 2 * kOuter - kGap) / 2;
+  const int panel_width = (side_width - kGap) / 2;
+  const int available_height = canvas_height - 2 * kOuter;
+  const int spatial_height = std::max(180, available_height * 42 / 100);
+  result.azimuth_range_panel =
+      PixelRect{side_x, kOuter, panel_width, spatial_height};
+  result.boresight_panel =
+      PixelRect{side_x + panel_width + kGap, kOuter, panel_width,
+                spatial_height};
+
+  const int history_y = kOuter + spatial_height + kGap;
+  const int history_height = available_height - spatial_height - kGap;
+  const int panel_height = (history_height - kGap) / 2;
   result.history_panels = {
-      PixelRect{history_x, kOuter, panel_width, panel_height},
-      PixelRect{history_x + panel_width + kGap, kOuter, panel_width,
+      PixelRect{side_x, history_y, panel_width, panel_height},
+      PixelRect{side_x + panel_width + kGap, history_y, panel_width,
                 panel_height},
-      PixelRect{history_x, kOuter + panel_height + kGap, panel_width,
+      PixelRect{side_x, history_y + panel_height + kGap, panel_width,
                 panel_height},
-      PixelRect{history_x + panel_width + kGap,
-                kOuter + panel_height + kGap, panel_width, panel_height},
+      PixelRect{side_x + panel_width + kGap,
+                history_y + panel_height + kGap, panel_width, panel_height},
   };
   return result;
 }
@@ -396,6 +408,24 @@ void draw_disc(std::vector<std::uint8_t>* image, std::int64_t width,
   }
 }
 
+void fill_oval(std::vector<std::uint8_t>* image, std::int64_t width,
+               std::int64_t height, float cx, float cy, float rx, float ry,
+               const std::array<std::uint8_t, 4>& color) {
+  const int x_radius = static_cast<int>(std::ceil(rx));
+  const int y_radius = static_cast<int>(std::ceil(ry));
+  for (int y = -y_radius; y <= y_radius; ++y) {
+    for (int x = -x_radius; x <= x_radius; ++x) {
+      const float normalized_x = static_cast<float>(x) / rx;
+      const float normalized_y = static_cast<float>(y) / ry;
+      if (normalized_x * normalized_x + normalized_y * normalized_y <= 1.0F) {
+        set_pixel(image, width, height,
+                  static_cast<int>(std::lround(cx)) + x,
+                  static_cast<int>(std::lround(cy)) + y, color);
+      }
+    }
+  }
+}
+
 void draw_oval(std::vector<std::uint8_t>* image, std::int64_t width,
                std::int64_t height, float cx, float cy, float rx, float ry,
                const std::array<std::uint8_t, 4>& color, int segments) {
@@ -408,6 +438,147 @@ void draw_oval(std::vector<std::uint8_t>* image, std::int64_t width,
               static_cast<int>(std::lround(cy + ry * std::sin(a0))),
               static_cast<int>(std::lround(cx + rx * std::cos(a1))),
               static_cast<int>(std::lround(cy + ry * std::sin(a1))), color);
+  }
+}
+
+std::array<std::uint8_t, 4> aged_color(
+    const std::array<std::uint8_t, 4>& color, std::int64_t age,
+    std::int64_t lifetime) {
+  const float fraction =
+      std::clamp(static_cast<float>(age) /
+                     static_cast<float>(std::max<std::int64_t>(1, lifetime - 1)),
+                 0.0F, 1.0F);
+  const float scale = 1.0F - 0.75F * fraction;
+  return {
+      static_cast<std::uint8_t>(scale * color[0]),
+      static_cast<std::uint8_t>(scale * color[1]),
+      static_cast<std::uint8_t>(scale * color[2]),
+      color[3],
+  };
+}
+
+enum class SpatialView {
+  kAzimuthRange,
+  kBoresight,
+};
+
+void draw_spatial_panel(
+    std::vector<std::uint8_t>* image, std::int64_t width,
+    std::int64_t height, const PixelRect& panel, std::string_view title,
+    SpatialView view, const std::deque<HistorySample>& history,
+    const std::array<float, 2>& range_bounds, std::int64_t frame_index,
+    const SimoDisplayConfig& config) {
+  constexpr std::array<std::uint8_t, 4> kBackground{12U, 12U, 18U, 255U};
+  constexpr std::array<std::uint8_t, 4> kGrid{70U, 70U, 82U, 255U};
+  constexpr std::array<std::uint8_t, 4> kWhite{255U, 255U, 255U, 255U};
+  fill_rect(image, width, height, panel, kBackground);
+  const PixelRect plot{
+      .x = panel.x + 38,
+      .y = panel.y + 22,
+      .width = panel.width - 46,
+      .height = panel.height - 48,
+  };
+  if (plot.width <= 1 || plot.height <= 1) {
+    return;
+  }
+  draw_text(image, width, height,
+            panel.x + (panel.width - static_cast<int>(title.size()) * 6) / 2,
+            panel.y + 5, title, 1);
+  const std::string_view x_label =
+      view == SpatialView::kAzimuthRange ? "LATERAL (M)" : "AZ (RAD)";
+  const std::string_view y_label =
+      view == SpatialView::kAzimuthRange ? "FORWARD (M)" : "EL (RAD)";
+  draw_text(image, width, height,
+            plot.x + (plot.width - static_cast<int>(x_label.size()) * 6) / 2,
+            plot.y + plot.height + 4, x_label, 1);
+  draw_text_ccw(
+      image, width, height, panel.x + 2,
+      plot.y +
+          (plot.height - static_cast<int>(y_label.size()) * 6) / 2,
+      y_label, 1);
+
+  const float max_range = std::max(1.0F, range_bounds[1]);
+  const float max_abs_az =
+      std::min(1.57079632679F,
+               std::max(std::abs(config.az_bounds[0]),
+                        std::abs(config.az_bounds[1])));
+  const float lateral_extent =
+      std::max(1.0F, max_range * std::sin(max_abs_az));
+  const std::array<float, 2> x_bounds =
+      view == SpatialView::kAzimuthRange
+          ? std::array<float, 2>{-lateral_extent, lateral_extent}
+          : config.az_bounds;
+  const std::array<float, 2> y_bounds =
+      view == SpatialView::kAzimuthRange
+          ? std::array<float, 2>{0.0F, max_range}
+          : config.el_bounds;
+
+  for (int tick = 0; tick < 3; ++tick) {
+    const float fraction = static_cast<float>(tick) / 2.0F;
+    const int x = plot.x + static_cast<int>(fraction * (plot.width - 1));
+    const int y = plot.y + static_cast<int>(fraction * (plot.height - 1));
+    draw_line(image, width, height, x, plot.y, x,
+              plot.y + plot.height - 1, kGrid);
+    draw_line(image, width, height, plot.x, y,
+              plot.x + plot.width - 1, y, kGrid);
+  }
+
+  const auto to_pixel = [&](const std::array<float, 4>& features) {
+    float x_value = features[2];
+    float y_value = features[3];
+    if (view == SpatialView::kAzimuthRange) {
+      x_value = features[0] * std::sin(features[2]);
+      y_value = features[0] * std::cos(features[2]);
+    }
+    const float x_fraction =
+        std::clamp((x_value - x_bounds[0]) / (x_bounds[1] - x_bounds[0]),
+                   0.0F, 1.0F);
+    const float y_fraction =
+        std::clamp((y_value - y_bounds[0]) / (y_bounds[1] - y_bounds[0]),
+                   0.0F, 1.0F);
+    return std::array<int, 2>{
+        plot.x + static_cast<int>(x_fraction * (plot.width - 1)),
+        plot.y + plot.height - 1 -
+            static_cast<int>(y_fraction * (plot.height - 1)),
+    };
+  };
+
+  const std::int64_t first_truth_frame =
+      std::max<std::int64_t>(
+          0, frame_index - config.detection_trail_frames + 1);
+  for (const TruthTarget& target : config.truth_targets) {
+    const auto& color =
+        kClusterColors[static_cast<std::size_t>(target.color_bucket) %
+                       kClusterColors.size()];
+    std::array<int, 2> previous{};
+    bool have_previous = false;
+    for (std::int64_t frame = first_truth_frame; frame <= frame_index;
+         ++frame) {
+      const auto pixel = to_pixel(detail::truth_features_at_time(
+          target, static_cast<double>(frame) * config.frame_period));
+      if (have_previous) {
+        draw_line(image, width, height, previous[0], previous[1], pixel[0],
+                  pixel[1], color);
+      }
+      previous = pixel;
+      have_previous = true;
+    }
+  }
+
+  for (const HistorySample& sample : history) {
+    const auto& base_color =
+        kClusterColors[static_cast<std::size_t>(sample.color_bucket) %
+                       kClusterColors.size()];
+    const std::int64_t age = frame_index - sample.frame;
+    const auto color =
+        aged_color(base_color, age, config.detection_trail_frames);
+    const auto pixel = to_pixel(sample.features);
+    const int radius = age == 0 ? 4 : 2;
+    draw_disc(image, width, height, pixel[0], pixel[1], radius, color);
+    if (age == 0) {
+      draw_oval(image, width, height, static_cast<float>(pixel[0]),
+                static_cast<float>(pixel[1]), 7.0F, 7.0F, kWhite, 16);
+    }
   }
 }
 
@@ -514,6 +685,7 @@ std::vector<std::uint8_t> make_annotation(
     std::int64_t rows, std::int64_t cols,
     const std::vector<ClusterCentroid>& centroids,
     const std::deque<HistorySample>& history,
+    const std::deque<HistorySample>& detection_history,
     const std::vector<float>& ranges, const std::vector<float>& velocities,
     const SimoDisplayConfig& config, std::int64_t frame_index) {
   const std::int64_t width = config.width;
@@ -579,28 +751,44 @@ std::vector<std::uint8_t> make_annotation(
               y_positions[i], tick, 1);
   }
 
+  constexpr std::array<std::uint8_t, 4> kBlack{0U, 0U, 0U, 255U};
   for (const ClusterCentroid& centroid : centroids) {
     const auto& color =
         kClusterColors[static_cast<std::size_t>(centroid.color_bucket) %
                        kClusterColors.size()];
-    draw_oval(
-        &image, width, height,
+    const float x =
         plot.x + (centroid.range_bin + 0.5F) /
-                     static_cast<float>(cols) * plot.width,
+                     static_cast<float>(cols) * plot.width;
+    const float y =
         plot.y + (centroid.doppler_bin + 0.5F) /
-                     static_cast<float>(rows) * plot.height,
-        std::max(3.0F, config.detection_radius * plot.width),
-        std::max(3.0F, config.detection_radius * plot.height), color, 20);
+                     static_cast<float>(rows) * plot.height;
+    const float outer_rx =
+        std::max(4.0F, 0.65F * config.detection_radius * plot.width);
+    const float outer_ry =
+        std::max(4.0F, 0.65F * config.detection_radius * plot.height);
+    fill_oval(&image, width, height, x, y, outer_rx, outer_ry, kBlack);
+    fill_oval(&image, width, height, x, y,
+              std::max(1.0F, outer_rx - 2.0F),
+              std::max(1.0F, outer_ry - 2.0F), color);
   }
 
   const auto range_bounds =
       std::minmax_element(ranges.begin(), ranges.end());
   const auto velocity_bounds =
       std::minmax_element(velocities.begin(), velocities.end());
+  const std::array<float, 2> physical_range_bounds{
+      *range_bounds.first, *range_bounds.second};
+  draw_spatial_panel(
+      &image, width, height, layout.azimuth_range_panel, "AZIMUTH-RANGE",
+      SpatialView::kAzimuthRange, detection_history, physical_range_bounds,
+      frame_index, config);
+  draw_spatial_panel(
+      &image, width, height, layout.boresight_panel, "BORESIGHT",
+      SpatialView::kBoresight, detection_history, physical_range_bounds,
+      frame_index, config);
   draw_history_panel(
       &image, width, height, layout.history_panels[0], "RANGE (M)", 0,
-      {*range_bounds.first, *range_bounds.second}, history, frame_index,
-      config);
+      physical_range_bounds, history, frame_index, config);
   draw_history_panel(
       &image, width, height, layout.history_panels[1], "VELOCITY (M/S)", 1,
       {*velocity_bounds.first, *velocity_bounds.second}, history, frame_index,
@@ -623,7 +811,8 @@ SimoDisplayOp::SimoDisplayOp(SimoDisplayConfig config)
       !std::isfinite(config_.detection_radius) ||
       config_.detection_radius <= 0.0F ||
       !std::isfinite(config_.frame_period) || config_.frame_period <= 0.0 ||
-      config_.history_frames < 2 || config_.width < 640 ||
+      config_.history_frames < 2 ||
+      config_.detection_trail_frames < 1 || config_.width < 640 ||
       config_.height < 360 || !(config_.az_bounds[0] < config_.az_bounds[1]) ||
       !(config_.el_bounds[0] < config_.el_bounds[1])) {
     throw std::invalid_argument(
@@ -750,9 +939,11 @@ expected<void, Error> SimoDisplayOp::compute(
         &centroids, host_reduced, reduced.shape()[1]);
     detail::append_history(&history_, centroids, frame_index_,
                            config_.history_frames);
+    detail::append_history(&detection_history_, centroids, frame_index_,
+                           config_.detection_trail_frames);
     host_annotation = make_annotation(
-        layout.rows, layout.cols, centroids, history_, host_ranges,
-        host_velocities, config_, frame_index_);
+        layout.rows, layout.cols, centroids, history_, detection_history_,
+        host_ranges, host_velocities, config_, frame_index_);
   } catch (const std::invalid_argument& e) {
     return make_unexpected(
         Error{ErrorCode::kInvalidArgument, std::string(e.what())});
@@ -990,12 +1181,14 @@ void apply_reduced_features(std::vector<ClusterCentroid>* centroids,
 void append_history(std::deque<HistorySample>* history,
                     const std::vector<ClusterCentroid>& centroids,
                     std::int64_t frame, std::int64_t history_frames) {
-  if (history == nullptr || history_frames < 2) {
+  if (history == nullptr || history_frames < 1) {
     throw std::invalid_argument("append_history: invalid history");
   }
   for (const ClusterCentroid& centroid : centroids) {
     history->push_back(HistorySample{
         .frame = frame,
+        .doppler_bin = centroid.doppler_bin,
+        .range_bin = centroid.range_bin,
         .features = centroid.features,
         .color_bucket = centroid.color_bucket,
     });

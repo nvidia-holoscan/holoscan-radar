@@ -82,6 +82,7 @@ inline void add_simo_visualization(
               static_cast<float>(config.detection_radius),
           .frame_period = frame_period,
           .history_frames = config.history_frames,
+          .detection_trail_frames = config.detection_trail_frames,
           .width = config.window_width,
           .height = config.window_height,
           .az_bounds = axis_bounds(az_grid),
