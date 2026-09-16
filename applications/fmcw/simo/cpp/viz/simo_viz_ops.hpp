@@ -123,6 +123,8 @@ void append_history(std::deque<HistorySample>* history,
 std::array<float, 2> rd_plot_position(float doppler_bin, float range_bin,
                                       std::int64_t rows, std::int64_t cols);
 
+bool use_azimuth_sector(const std::array<float, 2>& az_bounds);
+
 std::array<float, 2> history_plot_position(
     const HistorySample& sample, std::int64_t current_frame,
     std::int64_t history_frames, int feature,

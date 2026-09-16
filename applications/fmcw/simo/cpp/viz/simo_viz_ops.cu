@@ -240,6 +240,7 @@ std::array<std::uint8_t, 7> glyph(char value) {
     case '/': return {1, 2, 2, 4, 8, 8, 16};
     case '(': return {2, 4, 8, 8, 8, 4, 2};
     case ')': return {8, 4, 2, 2, 2, 4, 8};
+    case '+': return {0, 4, 4, 31, 4, 4, 0};
     case ':': return {0, 12, 12, 0, 12, 12, 0};
     default: return {};
   }
@@ -334,6 +335,19 @@ void draw_line(std::vector<std::uint8_t>* image, std::int64_t width,
 std::string format_value(float value) {
   char buffer[32];
   std::snprintf(buffer, sizeof(buffer), "%.1f", static_cast<double>(value));
+  return buffer;
+}
+
+std::string format_degrees(float radians) {
+  constexpr float kRadiansToDegrees = 57.2957795130823208768F;
+  const float degrees = radians * kRadiansToDegrees;
+  char buffer[32];
+  if (std::abs(degrees) < 0.5F) {
+    std::snprintf(buffer, sizeof(buffer), "0 DEG");
+  } else {
+    std::snprintf(buffer, sizeof(buffer), "%+.0f DEG",
+                  static_cast<double>(degrees));
+  }
   return buffer;
 }
 
@@ -456,6 +470,27 @@ void draw_oval(std::vector<std::uint8_t>* image, std::int64_t width,
   }
 }
 
+void draw_polar_arc(std::vector<std::uint8_t>* image, std::int64_t width,
+                    std::int64_t height, float cx, float cy, float radius,
+                    float start_azimuth, float end_azimuth,
+                    const std::array<std::uint8_t, 4>& color, int segments) {
+  for (int segment = 0; segment < segments; ++segment) {
+    const float fraction0 = static_cast<float>(segment) / segments;
+    const float fraction1 = static_cast<float>(segment + 1) / segments;
+    const float azimuth0 =
+        start_azimuth + fraction0 * (end_azimuth - start_azimuth);
+    const float azimuth1 =
+        start_azimuth + fraction1 * (end_azimuth - start_azimuth);
+    draw_line(
+        image, width, height,
+        static_cast<int>(std::lround(cx + radius * std::sin(azimuth0))),
+        static_cast<int>(std::lround(cy - radius * std::cos(azimuth0))),
+        static_cast<int>(std::lround(cx + radius * std::sin(azimuth1))),
+        static_cast<int>(std::lround(cy - radius * std::cos(azimuth1))),
+        color);
+  }
+}
+
 std::array<std::uint8_t, 4> aged_color(
     const std::array<std::uint8_t, 4>& color, std::int64_t age,
     std::int64_t lifetime) {
@@ -487,10 +522,11 @@ void draw_spatial_panel(
   constexpr std::array<std::uint8_t, 4> kGrid{70U, 70U, 82U, 255U};
   constexpr std::array<std::uint8_t, 4> kWhite{255U, 255U, 255U, 255U};
   fill_rect(image, width, height, panel, kBackground);
+  const bool is_polar = view == SpatialView::kAzimuthRange;
   const PixelRect plot{
-      .x = panel.x + 38,
+      .x = panel.x + (is_polar ? 12 : 38),
       .y = panel.y + 22,
-      .width = panel.width - 46,
+      .width = panel.width - (is_polar ? 24 : 46),
       .height = panel.height - 48,
   };
   if (plot.width <= 1 || plot.height <= 1) {
@@ -499,41 +535,96 @@ void draw_spatial_panel(
   draw_text(image, width, height,
             panel.x + (panel.width - static_cast<int>(title.size()) * 6) / 2,
             panel.y + 5, title, 1);
-  const std::string_view x_label =
-      view == SpatialView::kAzimuthRange ? "LATERAL (M)" : "AZ (RAD)";
-  const std::string_view y_label =
-      view == SpatialView::kAzimuthRange ? "FORWARD (M)" : "EL (RAD)";
-  draw_text(image, width, height,
-            plot.x + (plot.width - static_cast<int>(x_label.size()) * 6) / 2,
-            plot.y + plot.height + 4, x_label, 1);
-  draw_text_ccw(
-      image, width, height, panel.x + 2,
-      plot.y +
-          (plot.height - static_cast<int>(y_label.size()) * 6) / 2,
-      y_label, 1);
+  if (!is_polar) {
+    constexpr std::string_view kXLabel = "AZ (RAD)";
+    constexpr std::string_view kYLabel = "EL (RAD)";
+    draw_text(
+        image, width, height,
+        plot.x + (plot.width - static_cast<int>(kXLabel.size()) * 6) / 2,
+        plot.y + plot.height + 4, kXLabel, 1);
+    draw_text_ccw(
+        image, width, height, panel.x + 2,
+        plot.y + (plot.height - static_cast<int>(kYLabel.size()) * 6) / 2,
+        kYLabel, 1);
+  }
 
   const float max_range = std::max(1.0F, range_bounds[1]);
   const float circle_cx = plot.x + 0.5F * (plot.width - 1);
-  const float circle_cy = plot.y + 0.5F * (plot.height - 1);
+  const bool use_sector =
+      is_polar && detail::use_azimuth_sector(config.az_bounds);
+  const float display_center_azimuth =
+      use_sector ? 0.5F * (config.az_bounds[0] + config.az_bounds[1])
+                 : 0.0F;
+  const float display_half_span =
+      use_sector ? 0.5F * (config.az_bounds[1] - config.az_bounds[0])
+                 : 0.0F;
+  const float circle_cy =
+      use_sector
+          ? static_cast<float>(plot.y + plot.height - 12)
+          : plot.y + 0.5F * (plot.height - 1);
+  const float projected_half_width =
+      std::max(0.001F, std::sin(display_half_span));
   const float circle_radius =
-      0.5F * static_cast<float>(std::min(plot.width, plot.height) - 2);
+      use_sector
+          ? std::min(0.5F * (plot.width - 2) / projected_half_width,
+                     static_cast<float>(plot.height - 20))
+          : 0.5F *
+                static_cast<float>(std::min(plot.width, plot.height) - 2);
   if (view == SpatialView::kAzimuthRange) {
-    draw_oval(image, width, height, circle_cx, circle_cy, circle_radius,
-              circle_radius, kGrid, 48);
-    draw_oval(image, width, height, circle_cx, circle_cy,
-              0.5F * circle_radius, 0.5F * circle_radius, kGrid, 32);
+    if (use_sector) {
+      draw_polar_arc(image, width, height, circle_cx, circle_cy,
+                     circle_radius, -display_half_span, display_half_span,
+                     kGrid, 48);
+      draw_polar_arc(image, width, height, circle_cx, circle_cy,
+                     0.5F * circle_radius, -display_half_span,
+                     display_half_span, kGrid, 32);
+      const std::string left_label =
+          format_degrees(config.az_bounds[0]);
+      const std::string center_label =
+          format_degrees(display_center_azimuth);
+      const std::string right_label =
+          format_degrees(config.az_bounds[1]);
+      const float edge_dx = circle_radius * std::sin(display_half_span);
+      const float edge_y =
+          circle_cy - circle_radius * std::cos(display_half_span);
+      if (2.0F * edge_dx >
+          static_cast<float>(
+              6 * std::max(left_label.size(), right_label.size()) + 6U)) {
+        draw_text(
+            image, width, height,
+            static_cast<int>(std::lround(circle_cx - edge_dx)),
+            static_cast<int>(std::lround(edge_y + 3)), left_label, 1);
+        draw_text(
+            image, width, height,
+            static_cast<int>(std::lround(circle_cx + edge_dx)) -
+                static_cast<int>(right_label.size()) * 6,
+            static_cast<int>(std::lround(edge_y + 3)), right_label, 1);
+      }
+      draw_text(
+          image, width, height,
+          static_cast<int>(std::lround(circle_cx)) -
+              static_cast<int>(center_label.size()) * 3,
+          static_cast<int>(std::lround(circle_cy - circle_radius)) - 9,
+          center_label, 1);
+    } else {
+      draw_oval(image, width, height, circle_cx, circle_cy, circle_radius,
+                circle_radius, kGrid, 48);
+      draw_oval(image, width, height, circle_cx, circle_cy,
+                0.5F * circle_radius, 0.5F * circle_radius, kGrid, 32);
+    }
     draw_line(image, width, height, static_cast<int>(circle_cx),
               static_cast<int>(circle_cy),
               static_cast<int>(circle_cx),
               static_cast<int>(circle_cy - circle_radius), kGrid);
     for (float azimuth : config.az_bounds) {
+      const float display_azimuth = azimuth - display_center_azimuth;
       draw_line(
           image, width, height, static_cast<int>(circle_cx),
           static_cast<int>(circle_cy),
           static_cast<int>(circle_cx +
-                           circle_radius * std::sin(azimuth)),
+                           circle_radius * std::sin(display_azimuth)),
           static_cast<int>(circle_cy -
-                           circle_radius * std::cos(azimuth)),
+                           circle_radius * std::cos(display_azimuth)),
           kGrid);
     }
   } else {
@@ -552,13 +643,15 @@ void draw_spatial_panel(
     if (view == SpatialView::kAzimuthRange) {
       const float normalized_range =
           std::clamp(features[0] / max_range, 0.0F, 1.0F);
+      const float display_azimuth =
+          features[2] - display_center_azimuth;
       return std::array<int, 2>{
           static_cast<int>(
               circle_cx +
-              normalized_range * circle_radius * std::sin(features[2])),
+              normalized_range * circle_radius * std::sin(display_azimuth)),
           static_cast<int>(
               circle_cy -
-              normalized_range * circle_radius * std::cos(features[2])),
+              normalized_range * circle_radius * std::cos(display_azimuth)),
       };
     }
     const float x_fraction =
@@ -1321,6 +1414,14 @@ std::array<float, 2> rd_plot_position(float doppler_bin, float range_bin,
   const float y =
       1.0F - (range_bin + 0.5F) / static_cast<float>(cols);
   return {std::clamp(x, 0.0F, 1.0F), std::clamp(y, 0.0F, 1.0F)};
+}
+
+bool use_azimuth_sector(const std::array<float, 2>& az_bounds) {
+  constexpr float kPi = 3.14159265358979323846F;
+  constexpr float kTolerance = 1.0e-5F;
+  return std::isfinite(az_bounds[0]) && std::isfinite(az_bounds[1]) &&
+         az_bounds[0] <= az_bounds[1] &&
+         az_bounds[1] - az_bounds[0] <= kPi + kTolerance;
 }
 
 std::array<float, 2> history_plot_position(

@@ -52,6 +52,15 @@ TEST(SimoRdHeatmapTest, MapsDopplerToXAndRangeUpward) {
   EXPECT_GT(low_range[1], high_range[1]);
 }
 
+TEST(SimoDashboardTest, UsesUpwardSemicircleForAtMost180DegreeCoverage) {
+  constexpr float kHalfPi = 1.57079632679489661923F;
+  EXPECT_TRUE(viz::detail::use_azimuth_sector({-0.3F, 0.3F}));
+  EXPECT_TRUE(
+      viz::detail::use_azimuth_sector({-kHalfPi, kHalfPi}));
+  EXPECT_TRUE(viz::detail::use_azimuth_sector({-2.0F, 0.0F}));
+  EXPECT_FALSE(viz::detail::use_azimuth_sector({-2.0F, 2.0F}));
+}
+
 TEST(SimoDashboardTest, ComputesClusterCentroids) {
   const std::vector<viz::DetectionMarker> markers =
       viz::detail::make_cluster_markers(

@@ -81,9 +81,10 @@ report's `detection_idx` input.
 When visualization is enabled, the stock HSDK 5 Holoviz sink shows the CFAR
 power projected onto the range-Doppler plane, with Doppler/velocity on the
 horizontal axis and range increasing upward; current detections are compact
-filled ovals with black borders. The six equal-sized side panels comprise a
-top-down circular azimuth-range view, a boresight azimuth-elevation view, and
-the 2×2 rolling range, velocity, azimuth, and elevation history grid. Detection
+filled ovals with black borders. The six equal-sized side panels comprise an
+upward-facing azimuth-range sector cropped to the configured scan span and
+labeled in degrees, a boresight azimuth-elevation view, and the 2×2 rolling
+range, velocity, azimuth, and elevation history grid. Detection
 markers persist only in the two side spatial views for
 `detection_trail_frames`, dim as
 they age, and then disappear; the range-Doppler map shows only the current
