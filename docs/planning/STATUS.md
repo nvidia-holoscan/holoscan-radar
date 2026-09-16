@@ -220,3 +220,4 @@ FMCW schema-backed ports and the range `nfft` pilot.
 HSDK 5 Tensor pool sizing (**C++ wave landed** — apps/Python still phase 4):
 [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md) (pinned baseline:
 [`MAX_TENSOR_EXTENTS_2026-08-15.md`](MAX_TENSOR_EXTENTS_2026-08-15.md)).
+- **2026-09-15** — **Separable URA taper correction and flattening audit complete.** Shared steering now applies non-custom windows as `w_y[iy] * w_z[iz]` on recognized URAs and preserves custom per-element coefficients. Helper, host/device parity, and both-axis operator tests pass. In the 250-frame dense SIMO default, the expected target was the sole peak in 246 frames versus 2 before the fix; the four extras were unrelated noise cells. No similar window-flattening call site remains. CFAR NCI, visualization projection, covariance layouts, and documented ESPRIT/Root-MUSIC channel-order assumptions are intentional.

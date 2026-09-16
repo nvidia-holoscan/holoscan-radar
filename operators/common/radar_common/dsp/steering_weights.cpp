@@ -12,10 +12,39 @@
 #include <vector>
 
 #include "radar_common/dsp/angle_convention.hpp"
+#include "radar_common/dsp/planar_aperture.hpp"
 #include "radar_common/dsp/window.hpp"
 #include "radar_common/math/constants.hpp"
 
 namespace holoscan::radar {
+
+std::vector<double> generate_steering_taper(
+    const ArrayGeometry& geometry, const WindowSpec& array_taper) {
+  geometry.validate();
+  const int64_t num_elements = geometry.num_elements();
+  if (array_taper.type == WindowType::kCustom) {
+    return generate_window(array_taper, num_elements);
+  }
+
+  const PlanarAperturePlan aperture = analyze_planar_aperture(geometry);
+  if (!aperture.is_ura) {
+    return generate_window(array_taper, num_elements);
+  }
+
+  const std::vector<double> taper_y =
+      generate_window(array_taper, aperture.ny);
+  const std::vector<double> taper_z =
+      generate_window(array_taper, aperture.nz);
+  std::vector<double> taper(static_cast<size_t>(num_elements));
+  for (int64_t iz = 0; iz < aperture.nz; ++iz) {
+    for (int64_t iy = 0; iy < aperture.ny; ++iy) {
+      taper[static_cast<size_t>(iz * aperture.ny + iy)] =
+          taper_y[static_cast<size_t>(iy)] *
+          taper_z[static_cast<size_t>(iz)];
+    }
+  }
+  return taper;
+}
 
 std::string steering_cache_key(const ArrayGeometry& geometry,
                                const AngleConvention& convention,
@@ -57,8 +86,7 @@ SteeringTable build_steering_table(const ArrayGeometry& geometry,
   }
 
   const int64_t num_elements = geometry.num_elements();
-  const auto taper =
-      generate_window(array_taper, static_cast<int64_t>(num_elements));
+  const auto taper = generate_steering_taper(geometry, array_taper);
   const double k = kTwoPi / geometry.wavelength;
 
   SteeringTable table;

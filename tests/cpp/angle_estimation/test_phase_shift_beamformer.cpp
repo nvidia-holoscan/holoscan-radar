@@ -746,6 +746,52 @@ TEST(PhaseShiftBeamformerOpTest, ArrayTaperLowersSidelobes) {
   EXPECT_LT(hann_ratio, rect_ratio);
 }
 
+TEST(PhaseShiftBeamformerOpTest, UraArrayTaperLowersBothAxisSidelobes) {
+  constexpr int64_t kNy = 8;
+  constexpr int64_t kNz = 8;
+  constexpr int64_t kGrid = 201;
+  const auto geom = make_planar_ura_geometry(kNy, kNz, 0.5, 1.0);
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto vec = make_steering_vector(geom, conv, 0.0, 0.0);
+  const auto angles = linspace(-1.0, 1.0, kGrid);
+
+  const auto sidelobe_ratio = [&](const WindowSpec& taper, bool scan_azimuth) {
+    auto rd = vector_to_rd_maps<double>(vec, {kNy * kNz, 1, 1});
+    const std::vector<double> az =
+        scan_azimuth ? angles : std::vector<double>{0.0};
+    const std::vector<double> el =
+        scan_azimuth ? std::vector<double>{0.0} : angles;
+    const auto cube = run_beamformer<double>(
+        rd, make_params(geom, conv, az, el, taper));
+    double peak = 0.0;
+    double sidelobe = 0.0;
+    for (int64_t i = 0; i < kGrid; ++i) {
+      const int64_t ia = scan_azimuth ? i : 0;
+      const int64_t ie = scan_azimuth ? 0 : i;
+      const double power =
+          cube_power<double>(cube, ia, ie, 0, 0,
+                             static_cast<int64_t>(el.size()), 1, 1);
+      peak = std::max(peak, power);
+      if (std::abs(angles[static_cast<size_t>(i)]) > 0.65) {
+        sidelobe = std::max(sidelobe, power);
+      }
+    }
+    return sidelobe / peak;
+  };
+
+  WindowSpec hann;
+  hann.type = WindowType::kHann;
+  const double rect_az = sidelobe_ratio(WindowSpec{}, true);
+  const double rect_el = sidelobe_ratio(WindowSpec{}, false);
+  const double tapered_az = sidelobe_ratio(hann, true);
+  const double tapered_el = sidelobe_ratio(hann, false);
+  EXPECT_GT(rect_az, 0.0);
+  EXPECT_GT(rect_el, 0.0);
+  EXPECT_LT(tapered_az, rect_az);
+  EXPECT_LT(tapered_el, rect_el);
+}
+
 TEST(PhaseShiftBeamformerOpTest, PreservesRangeDopplerPlanePerCell) {
   // Two point targets at distinct (doppler, range) cells with distinct DOAs;
   // each cell's peak beam must recover its own DOA (validates the per-cell

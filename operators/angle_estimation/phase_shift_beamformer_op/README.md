@@ -49,7 +49,7 @@ Wᶜ = taper[m] · (cos(phase) − j sin(phase))   # conjugate=true
 
 `dir_b` comes from `boundary_to_canonical(convention, az, el)` — kernels only dot positions with canonical direction vectors. `AngleConvention` is a boundary relabel. Under `direction_cosine`, a grid point with `u² + v² > 1` is unphysical: `beam_valid = 0` and that beam's weights (hence cube power) are zero. Named presets and `custom` share the same path (STATUS.md L11).
 
-`array_taper` is `generate_window(spec, num_channels)` across elements (`WindowType::kNone` → all-ones / rectangular). Taylor / Chebyshev are the usual spatial sidelobe tapers.
+`array_taper` is an element-wise window on ULAs and unrecognized geometries. On a recognized filled URA in `(iz, iy)` channel order, non-custom windows use the separable product `w_y[iy] * w_z[iz]`; custom coefficients remain explicit per-element values. `WindowType::kNone` is all-ones / rectangular. Taylor / Chebyshev are the usual spatial sidelobe tapers.
 
 ## Shape and dtype rules
 

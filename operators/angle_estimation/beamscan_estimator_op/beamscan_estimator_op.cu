@@ -23,7 +23,6 @@
 #include "radar_common/dsp/angle_convention.hpp"
 #include "radar_common/dsp/steering_weights.hpp"
 #include "radar_common/dsp/steering_weights_device.hpp"
-#include "radar_common/dsp/window.hpp"
 #include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/sdk/config_tensor.hpp"
 #include "radar_common/sdk/override_param.hpp"
@@ -182,7 +181,7 @@ expected<BeamscanStagePlan, Error> build_beamscan_stage_plan(
       throw std::invalid_argument(
           "BeamscanEstimatorOp: input or scan grid exceeds MaxTensorExtents");
     }
-    generate_window(stage.taper, stage.geometry.num_elements());
+    generate_steering_taper(stage.geometry, stage.taper);
     (void)boundary_to_canonical(
         stage.convention, stage.az_angles.front(), stage.el_angles.front());
   } catch (const std::invalid_argument& error) {

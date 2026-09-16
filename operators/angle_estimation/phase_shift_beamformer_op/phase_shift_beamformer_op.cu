@@ -22,7 +22,6 @@
 #include "radar_common/dsp/angle_convention.hpp"
 #include "radar_common/dsp/steering_weights.hpp"
 #include "radar_common/dsp/steering_weights_device.hpp"
-#include "radar_common/dsp/window.hpp"
 #include "radar_common/sdk/config_tensor.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
@@ -136,7 +135,7 @@ build_phase_shift_beamformer_stage_plan(
           "PhaseShiftBeamformerOp: input or scan grid exceeds "
           "MaxTensorExtents");
     }
-    generate_window(stage.taper, stage.geometry.num_elements());
+    generate_steering_taper(stage.geometry, stage.taper);
     // Also validates the signed-axis frame for a custom convention.
     (void)boundary_to_canonical(
         stage.convention, stage.az_angles.front(), stage.el_angles.front());

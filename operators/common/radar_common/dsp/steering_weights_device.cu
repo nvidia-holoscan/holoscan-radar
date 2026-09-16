@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "radar_common/dsp/angle_convention.hpp"
-#include "radar_common/dsp/window.hpp"
+#include "radar_common/dsp/steering_weights.hpp"
 #include "radar_common/math/constants.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -111,9 +111,11 @@ std::shared_ptr<holoscan::Tensor> build_steering_weights_device(
   const int64_t num_el = static_cast<int64_t>(el_angles.size());
   const int64_t num_beams = num_az * num_el;
 
-  // Host: taper (O(num_channels)) and per-beam directions + validity
-  // (O(num_beams), the convention-dependent part) in the requested beam order.
-  const std::vector<double> taper = generate_window(array_taper, num_channels);
+  // Host: geometry-aware taper (O(num_channels)) and per-beam directions +
+  // validity (O(num_beams), the convention-dependent part) in the requested
+  // beam order.
+  const std::vector<double> taper =
+      generate_steering_taper(geometry, array_taper);
   std::vector<double> dirs(static_cast<size_t>(num_beams * 3));
   std::vector<unsigned char> beam_valid(static_cast<size_t>(num_beams));
   const bool dc = convention.uses_direction_cosine();

@@ -547,7 +547,7 @@ Reduces each cluster to one **representative detection** and, optionally, one re
 - `angle_convention` — AngleConvention. How `az_angles` / `el_angles` and the output beam axes map to unit vectors in the array frame, or `direction_cosine` to scan in sine-space `(u, v)`. **Static** — it fixes the *meaning* of the output angles for the whole graph; vary it by instantiating a separate operator. Default: `radar_boresight`.
 - `az_angles` **[live]** — float vector. Azimuth scan grid (the `u` grid under `direction_cosine`). Overriding steers the scan and rebuilds weights (cached). Default: none (required).
 - `el_angles` **[live]** — float vector. Elevation scan grid (the `v` grid under `direction_cosine`); a single value (e.g. `[0]`) gives a 1-D azimuth scan. Default: none (required).
-- `array_taper` **[live]** — WindowSpec. Amplitude taper across the elements for spatial sidelobe control (aperture shading); Taylor / Chebyshev are canonical. Overriding rebuilds weights (cached). Default: none.
+- `array_taper` **[live]** — WindowSpec. Amplitude taper for spatial sidelobe control (aperture shading); Taylor / Chebyshev are canonical. A non-custom window is applied element-wise on a ULA or unrecognized geometry and as the separable product `w_y[iy] * w_z[iz]` on each recognized filled URA. A custom window remains an explicit per-element vector in geometry/channel order. Overriding rebuilds weights (cached). Default: none.
 
 *(The beam weights W depend on `array_geometry`, `az_angles`, `el_angles`, and `array_taper`; overriding any of them rebuilds W — cached keyed on the inputs, so an unchanged override is free and a continuously-steered grid rebuilds as its expected per-tick cost.)*
 
@@ -639,7 +639,7 @@ Per-estimator deviations from the shared contract:
 
 **Parameters:** shared (`array_geometry`, `angle_convention`, `az_angles`, `el_angles`) plus:
 
-- `array_taper` **[live]** — WindowSpec. Amplitude taper across the elements for spatial sidelobe control (aperture shading). Overriding rebuilds weights (cached). Default: none.
+- `array_taper` **[live]** — WindowSpec. Amplitude taper for spatial sidelobe control (aperture shading). A non-custom window is applied element-wise on a ULA or unrecognized geometry and as the separable product `w_y[iy] * w_z[iz]` on each recognized filled URA. A custom window remains an explicit per-element vector in geometry/channel order. Overriding rebuilds weights (cached). Default: none.
 - `peak_interpolation` **[live]** — enum {none, parabolic}. Sub-grid peak refinement: `parabolic` fits a quadratic around the grid maximum for sub-bin accuracy; `none` returns the argmax cell. Default: none.
 
 ##### MVDREstimatorOp

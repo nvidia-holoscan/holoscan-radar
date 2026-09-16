@@ -739,6 +739,11 @@ change.
 - **`ensure_radar_arg_setters()`** in `initialize()` before
   `Operator::initialize()`.
 - **Compact row-major** inputs this wave; reject non-contiguous if unsupported.
+- **Geometry-aware element operations** — do not apply an axis-dependent
+  window, neighborhood, or stencil to a flattened multidimensional aperture.
+  Recover named lattice axes and test each axis independently; preserve flat
+  indexing only when it is the documented tensor layout or explicit
+  per-element behavior.
 - **Incomplete types in headers** — prefer `shared_ptr` with type-erased
   deleter over `unique_ptr` to CUDA state defined only in `.cu`.
 - **Emitted tensor lifetime** — ping-pong or equivalent; do not overwrite a

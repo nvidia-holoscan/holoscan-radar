@@ -82,7 +82,7 @@ Rejected combinations and the operator's own messages:
 | `angle_convention` | `AngleConvention` | `radar_boresight` | static | Rebuilds weights (part of the cache key) | Boundary labeling of the grid and `aoa_estimates`, or `direction_cosine`. |
 | `az_angles` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_az` | Rebuilds weights | Azimuth (`u`) scan grid. |
 | `el_angles` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_el` | Rebuilds weights | Elevation (`v`) scan grid; `[0]` is a 1-D azimuth scan. |
-| `array_taper` | `WindowSpec` | `kNone` (rectangular) | `[live]` Exact wire-schema override | Rebuilds weights | Spatial amplitude taper. |
+| `array_taper` | `WindowSpec` | `kNone` (rectangular) | `[live]` Exact wire-schema override | Rebuilds weights | Spatial amplitude taper; non-custom windows are separable on recognized filled URAs, while custom coefficients stay per-element. |
 | `peak_interpolation` | `PeakInterpolation` | `none` | `[live]` Exact | Free — no weight rebuild | `none` = argmax cell; `parabolic` = quadratic refinement (2-D interior peaks only). |
 
 Schema id `com.nvidia.holoscan.radar.BeamscanParams`, version 1. `peak_interpolation` resolution: Params seed; an Exact match on the override port wins for that tick, and any tick without a match uses the Params value.
