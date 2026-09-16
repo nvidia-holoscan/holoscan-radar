@@ -20,7 +20,8 @@ In-tree `rd_maps` today: `FMCWDopplerProcessorOp`.
 On the cluster-then-angle path, `DetectionReductionOp.rep_idx` feeds `detection_idx` (one cell per cluster) instead of CFAR's full list.
 
 Contract: [`OPERATOR_API.md` § `SnapshotGatherOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md)
+group: [`operators/angle_estimation/README.md`](../README.md) ·
+open items: [`OPEN_ITEMS.md`](OPEN_ITEMS.md)
 
 ## Algorithm
 
