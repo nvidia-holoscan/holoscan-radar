@@ -242,18 +242,6 @@ inline void parse_targets_range_az_el(const YAML::Node& root, Scene* scene,
   }
 }
 
-// Convert a YAML sequence of scalars to a vector<double> (empty if absent).
-inline std::vector<double> extract_grid(const YAML::Node& seq) {
-  std::vector<double> grid;
-  if (seq && seq.IsSequence()) {
-    grid.reserve(seq.size());
-    for (const YAML::Node& v : seq) {
-      grid.push_back(v.as<double>());
-    }
-  }
-  return grid;
-}
-
 // Derive an axis extent [lo, hi] from an angle grid, falling back to
 // [def_lo, def_hi] when the grid is empty and padding a degenerate
 // (single-value) axis so it renders a visible span.

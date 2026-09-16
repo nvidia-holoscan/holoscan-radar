@@ -85,6 +85,8 @@ Rejected combinations and the operator's own messages:
 | `array_taper` | `WindowSpec` | `kNone` (rectangular) | `[live]` Exact wire-schema override | Rebuilds weights | Spatial amplitude taper; non-custom windows are separable on recognized filled URAs, while custom coefficients stay per-element. |
 | `peak_interpolation` | `PeakInterpolation` | `none` | `[live]` Exact | Free — no weight rebuild | `none` = argmax cell; `parabolic` = quadratic refinement (2-D interior peaks only). |
 
+Application YAML accepts explicit arrays or inclusive `{min: ..., max: ..., step: ...}` mappings for `az_angles` and `el_angles`. Range mappings require finite values, `step > 0`, `min <= max`, and endpoint alignment within floating-point tolerance. They expand to the same `std::vector<double>` Params before construction; live ports remain rank-1 float64 Tensors.
+
 Schema id `com.nvidia.holoscan.radar.BeamscanParams`, version 1. `peak_interpolation` resolution: Params seed; an Exact match on the override port wins for that tick, and any tick without a match uses the Params value.
 
 ## SDK implementation notes

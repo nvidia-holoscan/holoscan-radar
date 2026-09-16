@@ -104,6 +104,11 @@ independent of the legacy `radar_app/viz` implementation.
 - `python/` is an intentionally empty package stub. Python applications are
   deferred until the HSDK 5 Python surface is ready.
 
+The `az_angles` and `el_angles` YAML fields accept either explicit arrays or
+inclusive `{min, max, step}` mappings. The default config demonstrates the
+shorthand while the smoke config retains arrays; both decode to the operators'
+unchanged `std::vector<double>` Params.
+
 The former sparse `applications/fmcw_simo` application has been removed.
 `applications/fmcw_dense_simo` remains temporarily as a behavior-comparison
 reference, but CMake does not register or package it.

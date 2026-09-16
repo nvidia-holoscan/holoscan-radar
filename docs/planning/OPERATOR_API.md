@@ -551,6 +551,8 @@ Reduces each cluster to one **representative detection** and, optionally, one re
 
 *(The beam weights W depend on `array_geometry`, `az_angles`, `el_angles`, and `array_taper`; overriding any of them rebuilds W — cached keyed on the inputs, so an unchanged override is free and a continuously-steered grid rebuilds as its expected per-tick cost.)*
 
+Application YAML may spell either scan axis as an explicit array or as `{min: ..., max: ..., step: ...}`. The shorthand includes both endpoints and requires finite values, positive `step`, `min <= max`, and an integral number of steps within `64 * epsilon * max(1, abs((max - min) / step))`. It is expanded before Params decoding; the operator Params remain `std::vector<double>` and live overrides remain rank-1 float64 Tensors.
+
 #### SnapshotGatherOp
 
 Gathers, for each detection, the per-channel complex snapshot(s) from the RD maps — the channel vector at the detected cell plus a configurable range-Doppler neighborhood — into the `snapshot` matrix the sparse angle estimators consume. Pure indexed gather; no arithmetic.
@@ -628,6 +630,8 @@ Grid-scan estimators (Beamscan, MVDR, MUSIC) additionally take a scan grid; the 
 
 - `az_angles` **[live]** — float vector. Azimuth scan grid (the `u` grid under `direction_cosine`). Overriding steers the scan and rebuilds weights (cached). Default: none (required for grid-scan estimators).
 - `el_angles` **[live]** — float vector. Elevation scan grid (the `v` grid under `direction_cosine`); a single value (e.g. `[0]`) gives a 1-D azimuth scan. Default: none (required for grid-scan estimators).
+
+Application YAML accepts either an explicit array or inclusive `{min: ..., max: ..., step: ...}` for each grid. The shorthand has the same finite, positive-step, ordered, integral-endpoint requirements as PhaseShift and is expanded before Params decoding; it does not change the vector Params or live Tensor ports.
 
 Per-estimator deviations from the shared contract:
 

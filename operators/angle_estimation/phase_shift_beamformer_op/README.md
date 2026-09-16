@@ -89,6 +89,8 @@ Dense-cube memory is an accepted caller-owned trade-off, but each named extent i
 | `el_angles` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_el` (§9) | Rebuilds weights | Elevation scan grid (`v` under `direction_cosine`). |
 | `array_taper` | `WindowSpec` | `WindowType::kNone` (rectangular) | `[live]` Exact wire-schema override (§9) | Rebuilds weights | Amplitude taper across elements. |
 
+Application YAML accepts explicit arrays or inclusive `{min: ..., max: ..., step: ...}` mappings for `az_angles` and `el_angles`. Range mappings require finite values, `step > 0`, `min <= max`, and endpoint alignment within floating-point tolerance. They expand to the same `std::vector<double>` Params before construction; live ports remain rank-1 float64 Tensors.
+
 Contract marks geometry / grids / taper **[live]** (warn-once, cache), and each has an override port whose match applies for one tick before the effective value reverts to Params. The logical Params types stay `ArrayGeometry` / `std::vector<double>` / `WindowSpec` — the wire-object and host-Tensor payloads are a port detail (HSDK5_PORT.md §9). `ConfigCache` dedupes identical keys and warns once per unseen key after the first. YAML / `from_config` / `set_params` use the table names. `angle_convention` is never live.
 
 ## SDK implementation notes

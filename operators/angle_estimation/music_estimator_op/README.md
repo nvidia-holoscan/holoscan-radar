@@ -136,6 +136,8 @@ Rejected combinations (operator’s own message unless noted):
 | `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD (§9) | Rebuilds plan + index H2D; warns once | Per-axis sub-array **counts** `[P]` / `[P_az, P_el]` on a filled ULA/URA |
 | `forward_backward` | bool | `true` | static | Part of the smoothing-plan key | Conjugate-reversed looks; ignored unless smoothing is on |
 
+Application YAML accepts explicit arrays or inclusive `{min: ..., max: ..., step: ...}` mappings for `az_angles` and `el_angles`. Range mappings require finite values, `step > 0`, `min <= max`, and endpoint alignment within floating-point tolerance. They expand to the same vector Params before construction; live ports remain rank-1 float64 Tensors.
+
 `num_sources` encoding is `int64_t`: negative → `auto`, non-negative → fixed order. There is no YAML `auto` token. `array_geometry.validate()` runs every tick; `geometry_type` is informational.
 
 ## SDK implementation notes

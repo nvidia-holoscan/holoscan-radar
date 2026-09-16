@@ -47,6 +47,7 @@ message(STATUS
     "[EA HSDK5 ONLY] C++ tests limited to common helpers + ported operators")
 
 radar_add_test(common/test_window)
+radar_add_test(common/test_uniform_grid)
 radar_add_test(common/test_steering_weights_device
     holoscan::radar_common_steering)
 radar_add_test(common/test_spatial_smoothing)
@@ -163,6 +164,7 @@ radar_add_test(detection/test_cfar_detector_statistical
     holoscan::cfar_detector_op)
 
 radar_add_test(app/test_fmcw_simo_config
+    yaml-cpp
     holoscan::params_io
     holoscan::radar_app
     holoscan::fmcw_range_processor_op

@@ -110,6 +110,8 @@ Rejected combinations:
 | `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD (§9) | Rebuilds plan + index H2D; warns once | Per-axis sub-array **counts** on a filled ULA/URA |
 | `forward_backward` | bool | `true` | static | Part of the smoothing-plan key | Conjugate-reversed looks; ignored unless smoothing is on |
 
+Application YAML accepts explicit arrays or inclusive `{min: ..., max: ..., step: ...}` mappings for `az_angles` and `el_angles`. Range mappings require finite values, `step > 0`, `min <= max`, and endpoint alignment within floating-point tolerance. They expand to the same vector Params before construction; live ports remain rank-1 float64 Tensors.
+
 No `num_sources` / EFT — Capon has no model-order concept. `diagonal_loading` encoding is `double`: negative → `auto`, non-negative → absolute `δ` (the app YAML `diagonal_loading: -1.0` is `auto`).
 
 ## SDK implementation notes

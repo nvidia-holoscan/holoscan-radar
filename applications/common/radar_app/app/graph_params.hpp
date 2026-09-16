@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "angle_estimation/beamscan_estimator_op/beamscan_estimator_op.hpp"
@@ -31,9 +32,33 @@
 #include "fmcw/tdm_dense_compensation_op/tdm_dense_compensation_op.hpp"
 #include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_op.hpp"
+#include "radar_common/math/uniform_grid.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
 
 namespace holoscan::radar::app {
+
+inline std::vector<double> load_angle_grid(const YAML::Node& node,
+                                           std::string_view name) {
+  if (!node || node.IsNull()) {
+    return {};
+  }
+  if (node.IsSequence()) {
+    return node.as<std::vector<double>>();
+  }
+  if (!node.IsMap() || node.size() != 3U || !node["min"] || !node["max"] ||
+      !node["step"]) {
+    throw std::runtime_error(
+        std::string(name) +
+        " must be an explicit array or a {min, max, step} mapping");
+  }
+  try {
+    return make_uniform_grid(node["min"].as<double>(),
+                             node["max"].as<double>(),
+                             node["step"].as<double>(), name);
+  } catch (const std::invalid_argument& error) {
+    throw std::runtime_error(error.what());
+  }
+}
 
 inline CfarVariant parse_cfar_variant(const std::string& text) {
   if (text == "CA") {
@@ -232,10 +257,10 @@ inline void load_beamscan_params(const YAML::Node& node, BeamscanParams* p) {
     p->angle_convention = node["angle_convention"].as<AngleConvention>();
   }
   if (node["az_angles"]) {
-    p->az_angles = node["az_angles"].as<std::vector<double>>();
+    p->az_angles = load_angle_grid(node["az_angles"], "az_angles");
   }
   if (node["el_angles"]) {
-    p->el_angles = node["el_angles"].as<std::vector<double>>();
+    p->el_angles = load_angle_grid(node["el_angles"], "el_angles");
   }
   if (node["array_taper"]) {
     p->array_taper = node["array_taper"].as<WindowSpec>();
@@ -290,10 +315,10 @@ inline void load_phase_shift_beamformer_params(
     p->angle_convention = node["angle_convention"].as<AngleConvention>();
   }
   if (node["az_angles"]) {
-    p->az_angles = node["az_angles"].as<std::vector<double>>();
+    p->az_angles = load_angle_grid(node["az_angles"], "az_angles");
   }
   if (node["el_angles"]) {
-    p->el_angles = node["el_angles"].as<std::vector<double>>();
+    p->el_angles = load_angle_grid(node["el_angles"], "el_angles");
   }
   if (node["array_taper"]) {
     p->array_taper = node["array_taper"].as<WindowSpec>();
@@ -309,10 +334,10 @@ inline void load_mvdr_params(const YAML::Node& node, MVDRParams* p) {
     p->angle_convention = node["angle_convention"].as<AngleConvention>();
   }
   if (node["az_angles"]) {
-    p->az_angles = node["az_angles"].as<std::vector<double>>();
+    p->az_angles = load_angle_grid(node["az_angles"], "az_angles");
   }
   if (node["el_angles"]) {
-    p->el_angles = node["el_angles"].as<std::vector<double>>();
+    p->el_angles = load_angle_grid(node["el_angles"], "el_angles");
   }
   if (node["diagonal_loading"]) {
     p->diagonal_loading = node["diagonal_loading"].as<double>();
@@ -336,10 +361,10 @@ inline void load_music_params(const YAML::Node& node, MUSICParams* p) {
     p->angle_convention = node["angle_convention"].as<AngleConvention>();
   }
   if (node["az_angles"]) {
-    p->az_angles = node["az_angles"].as<std::vector<double>>();
+    p->az_angles = load_angle_grid(node["az_angles"], "az_angles");
   }
   if (node["el_angles"]) {
-    p->el_angles = node["el_angles"].as<std::vector<double>>();
+    p->el_angles = load_angle_grid(node["el_angles"], "el_angles");
   }
   if (node["num_sources"]) {
     p->num_sources = node["num_sources"].as<int64_t>();

@@ -30,6 +30,7 @@
 #include "radar_app/app/run_config.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/math/uniform_grid.hpp"
 #include "radar_common/sim/array_builders.hpp"
 #include "radar_common/sim/scene.hpp"
 #include "config_schema.hpp"  // NOLINT(build/include_subdir): app-private
@@ -341,6 +342,50 @@ inline holoscan::config::Document normalize_enum_field(
   return std::move(*replaced);
 }
 
+inline holoscan::config::Document normalize_angle_grid_field(
+    holoscan::config::Document document, std::string_view path) {
+  auto found = document.find(path);
+  if (!found) {
+    throw std::runtime_error(holoscan::config::format_error(found.error()));
+  }
+  if (!found->has_value() ||
+      found->value().kind() == holoscan::config::ConfigValueKind::kArray) {
+    return document;
+  }
+  const auto view = found->value();
+  if (view.kind() != holoscan::config::ConfigValueKind::kObject ||
+      view.size() != 3U) {
+    throw std::runtime_error(
+        std::string(path) +
+        " must be an explicit array or a {min, max, step} mapping");
+  }
+  const auto decode_member = [&](std::string_view member) {
+    const std::string member_path =
+        std::string(path) + "/" + std::string(member);
+    auto decoded = document.get<double>(member_path);
+    if (!decoded) {
+      throw std::runtime_error(
+          holoscan::config::format_error(decoded.error()));
+    }
+    return *decoded;
+  };
+
+  std::vector<double> grid;
+  try {
+    grid = make_uniform_grid(
+        decode_member("min"), decode_member("max"), decode_member("step"),
+        path);
+  } catch (const std::invalid_argument& error) {
+    throw std::runtime_error(error.what());
+  }
+  auto replaced = document.replace(path, std::move(grid));
+  if (!replaced) {
+    throw std::runtime_error(
+        holoscan::config::format_error(replaced.error()));
+  }
+  return std::move(*replaced);
+}
+
 inline holoscan::config::Document normalize_operator_enums(
     holoscan::config::Document document, Workflow workflow) {
   document = normalize_enum_field<FftNorm>(
@@ -371,6 +416,17 @@ inline holoscan::config::Document normalize_operator_enums(
     document = normalize_enum_field<PeakInterpolation>(
         std::move(document),
         base + "/beamscan_estimator/peak_interpolation");
+    document = normalize_angle_grid_field(
+        std::move(document), base + "/beamscan_estimator/az_angles");
+    document = normalize_angle_grid_field(
+        std::move(document), base + "/beamscan_estimator/el_angles");
+  } else {
+    document = normalize_angle_grid_field(
+        std::move(document),
+        base + "/phase_shift_beamformer/az_angles");
+    document = normalize_angle_grid_field(
+        std::move(document),
+        base + "/phase_shift_beamformer/el_angles");
   }
   return document;
 }
