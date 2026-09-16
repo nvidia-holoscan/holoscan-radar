@@ -29,6 +29,7 @@
 #include "detection/cfar_detector_op/params_config.hpp"
 #include "detection/detection_reduction_op/params_config.hpp"
 #include "fmcw/clutter_filter_op/params_config.hpp"
+#include "fmcw/doppler_notch_op/doppler_notch_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/params_config.hpp"
 #include "fmcw/fmcw_range_processor_op/params_config.hpp"
 #include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_op.hpp"
@@ -76,6 +77,7 @@ struct DdmConfig : RuntimeConfig {
   holoscan::PreparedParams<FMCWRangeProcessorParams> range_params;
   holoscan::PreparedParams<FMCWDopplerProcessorParams> doppler_params;
   holoscan::PreparedParams<DDMDenseDemultiplexParams> demultiplex_params;
+  holoscan::PreparedParams<DopplerNotchParams> notch_params;
   holoscan::PreparedParams<VirtualArrayAssemblyParams> vaa_params;
   holoscan::PreparedParams<CFARParams> cfar_params;
   holoscan::PreparedParams<SnapshotGatherParams> gather_params;
@@ -776,6 +778,8 @@ inline DdmConfig load_ddm_config(const std::filesystem::path& path) {
   }
   auto demultiplex = decode_params<DDMDenseDemultiplexParams>(
       document, "/ddm_dense_demultiplex");
+  auto notch =
+      decode_params<DopplerNotchParams>(document, "/doppler_notch");
   DDMCodeDescriptor code = demultiplex->ddm_code;
   code.validate();
   if (code.num_tx != app_params->tx_array.num_tx) {
@@ -815,7 +819,7 @@ inline DdmConfig load_ddm_config(const std::filesystem::path& path) {
   return DdmConfig{
       std::move(common.runtime), std::move(code), std::move(offsets),
       correlate, std::move(common.range), std::move(common.doppler),
-      std::move(demultiplex), std::move(common.vaa),
+      std::move(demultiplex), std::move(notch), std::move(common.vaa),
       std::move(common.cfar), std::move(common.gather),
       std::move(common.beamscan), std::move(common.assembly),
       std::move(common.dbscan), std::move(common.reduction)};

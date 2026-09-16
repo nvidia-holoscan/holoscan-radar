@@ -89,6 +89,11 @@ doppler_processor:
     # Common options: none, hann, hamming.
     doppler_window: none
 ddm_dense_demultiplex: {}
+doppler_notch:
+    center_velocity: 0.0
+    stop_half_width: 0.61
+    transition_width: 0.61
+    cyclic_velocity_axis: true
 virtual_array_assembly:
     overlap_policy: keep_all
 cfar_detector:

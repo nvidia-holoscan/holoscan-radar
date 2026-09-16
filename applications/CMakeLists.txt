@@ -41,6 +41,7 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
             mimo_deinterleave_op
             tdm_sparse_compensation_op
             ddm_dense_demultiplex_op
+            doppler_notch_op
             virtual_array_assembly_op
             cfar_detector_op
             snapshot_gather_op

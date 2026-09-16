@@ -63,6 +63,11 @@ ddm_dense_demultiplex:
             - 0.0
             - 0.5
         guard_bands: 4
+doppler_notch:
+    center_velocity: 0.0
+    stop_half_width: 1.22
+    transition_width: 2.44
+    cyclic_velocity_axis: true
 virtual_array_assembly:
     overlap_policy: keep_all
 cfar_detector:

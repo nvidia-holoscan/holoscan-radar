@@ -151,6 +151,10 @@ TEST(FmcwMimoConfig, DecodesLinearDdmDefault) {
   EXPECT_EQ(config.ddm_code.num_tx, 2);
   EXPECT_EQ(config.doppler_offsets, (std::vector<double>{0.0, 0.5}));
   EXPECT_TRUE(config.doppler_params->waveform.is_valid());
+  EXPECT_DOUBLE_EQ(config.notch_params->center_velocity, 0.0);
+  EXPECT_DOUBLE_EQ(config.notch_params->stop_half_width, 0.61);
+  EXPECT_DOUBLE_EQ(config.notch_params->transition_width, 1.22);
+  EXPECT_TRUE(config.notch_params->cyclic_velocity_axis);
   EXPECT_EQ(config.cfar_params->nci_axes, (std::vector<int64_t>{0}));
   EXPECT_EQ(config.cfar_params->nci_fold, 32);
   EXPECT_EQ(config.beamscan_params->array_geometry, config.array_geometry);
@@ -167,6 +171,8 @@ TEST(FmcwMimoConfig, DecodesLinearDdmSmoke) {
   EXPECT_FALSE(config.visualize);
   EXPECT_EQ(config.doppler_offsets, (std::vector<double>{0.0, 0.5}));
   EXPECT_TRUE(config.doppler_params->waveform.is_valid());
+  EXPECT_DOUBLE_EQ(config.notch_params->stop_half_width, 1.22);
+  EXPECT_DOUBLE_EQ(config.notch_params->transition_width, 2.44);
   EXPECT_EQ(config.extents.max_doppler_bins, 64);
   EXPECT_EQ(config.extents.max_detections, 28 * 256);
   expect_common_geometry_and_tail(config, 5, 16);
@@ -182,6 +188,8 @@ TEST(FmcwMimoConfig, DecodesNonlinearDdmPhaseCodes) {
   EXPECT_EQ(config.ddm_code.phase_codes.size(), 2U * 128U);
   EXPECT_EQ(config.ddm_code.guard_bands, 0);
   EXPECT_TRUE(config.doppler_params->waveform.is_valid());
+  EXPECT_DOUBLE_EQ(config.notch_params->stop_half_width, 0.61);
+  EXPECT_DOUBLE_EQ(config.notch_params->transition_width, 0.61);
   EXPECT_EQ(config.extents.max_doppler_bins, 128);
   EXPECT_EQ(config.extents.max_detections, 128 * 256);
   expect_common_geometry_and_tail(config, 13, 32);

@@ -34,7 +34,8 @@ target_link_libraries(fmcw_mimo_tdm PRIVATE
 add_executable(fmcw_mimo_ddm ddm/fmcw_mimo_ddm.cpp)
 target_link_libraries(fmcw_mimo_ddm PRIVATE
     ${_mimo_common_libraries}
-    holoscan::ddm_dense_demultiplex_op)
+    holoscan::ddm_dense_demultiplex_op
+    holoscan::doppler_notch_op)
 
 foreach(_target IN ITEMS fmcw_mimo_tdm fmcw_mimo_ddm)
     target_include_directories(${_target} PRIVATE

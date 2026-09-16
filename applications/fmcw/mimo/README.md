@@ -44,16 +44,17 @@ flowchart LR
 `fmcw_mimo_ddm` simulates a coded DDM ADC stream. Doppler processing precedes
 dense demultiplexing, which transforms the Doppler processor's physical
 velocity axis into the reduced linear-DDM axis or preserved nonlinear
-correlation axis selected by the code descriptor. DDM clutter suppression is
-omitted in v1 because the ordinary slow-time filter is invalid both on coded
-pre-demux chirps and on already-Doppler-domain demultiplexed maps:
+correlation axis selected by the code descriptor. `DopplerNotchOp` then
+applies the configured physical-velocity stopband; the ordinary slow-time
+clutter filter remains invalid on coded DDM chirps:
 
 ```mermaid
 flowchart LR
     ADC[DDM ADC source] --> Range[Range processor]
     Range --> Doppler[Doppler processor]
     Doppler -- RD maps and velocity bins --> Demux[Dense DDM demultiplex]
-    Demux --> VAA[Virtual-array assembly]
+    Demux -- RD maps and physical velocity bins --> Notch[Doppler notch]
+    Notch --> VAA[Virtual-array assembly]
     VAA -- RD maps --> CFAR[CFAR NCI over virtual channels]
     VAA -- RD maps --> Gather[Snapshot gather]
     CFAR -- detection indices --> Gather
@@ -177,6 +178,12 @@ Linear DDM is configured by
 injects it into the dense demultiplexer, and selects its nonlinear correlation
 path. `sin` remains available as a code-generator stress case. The alternate
 file does not add a third application mode or binary.
+
+All DDM configs express the post-demux notch in physical m/s:
+`center_velocity` selects the stopband center, `stop_half_width` is fully
+rejected, and `transition_width` adds the raised-cosine edge. Set
+`transition_width: 0.0` for a hard notch. Remove `DopplerNotchOp` from a custom
+graph to disable filtering; it has no pass-through mode.
 
 Operator blocks remain separate and decode to schema-backed
 `PreparedParams<T>`. TDM configures overlap, snapshot-window, and edge behavior

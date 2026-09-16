@@ -15,6 +15,7 @@
 #include "detection/detection_reduction_op/detection_reduction_op.hpp"
 #include "detection/feature_assembly_op/feature_assembly_op.hpp"
 #include "fmcw/ddm_dense_demultiplex_op/ddm_dense_demultiplex_op.hpp"
+#include "fmcw/doppler_notch_op/doppler_notch_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_op.hpp"
@@ -104,6 +105,12 @@ int main(int argc, char** argv) {
         bind_outputs(options, "ddm_dense_demultiplex",
                      {"velocity_bins_out", "rd_maps_out"});
 
+        // Suppress a physical-velocity band after the DDM codes are removed.
+        auto notch = graph.op<radar::DopplerNotchOp<float>>(
+            "doppler_notch", extents);
+        notch.set_params(cfg.notch_params);
+        bind_outputs(options, "doppler_notch", {"rd_maps_out"});
+
         // Flatten TX/RX channels into the physical virtual array.
         auto vaa = graph.op<radar::VirtualArrayAssemblyOp<float>>(
             "virtual_array_assembly", extents);
@@ -166,6 +173,7 @@ int main(int argc, char** argv) {
             .add(range)
             .add(doppler)
             .add(demultiplex)
+            .add(notch)
             .add(vaa)
             .add(cfar)
             .add(gather)
@@ -182,7 +190,10 @@ int main(int argc, char** argv) {
         graph.add_flow(doppler->velocity_bins, demultiplex->velocity_bins,
                        queue);
         graph.add_flow(doppler->rd_maps, demultiplex->rd_maps, queue);
-        graph.add_flow(demultiplex->rd_maps_out, vaa->rd_maps, queue);
+        graph.add_flow(demultiplex->rd_maps_out, notch->rd_maps, queue);
+        graph.add_flow(demultiplex->velocity_bins_out,
+                       notch->velocity_bins, queue);
+        graph.add_flow(notch->rd_maps_out, vaa->rd_maps, queue);
 
         // Detection-first angle branch. Runtime VAA geometry remains coherent
         // with the snapshots consumed by Beamscan on the same tick.
