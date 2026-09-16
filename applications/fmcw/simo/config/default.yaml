@@ -80,12 +80,14 @@ range_processor:
     range_window: hann
 clutter_filter:
     # Options: none, mean_subtraction, single_delay, double_delay.
-    method: none
+    method: mean_subtraction
+    # Match the weighted clutter projection to Doppler analysis.
+    doppler_window: &doppler_window hann
 doppler_processor:
     waveform: *waveform
     # Common options: none, hann, hamming.
     # See operators/fmcw/fmcw_doppler_processor_op/README.md.
-    doppler_window: hann
+    doppler_window: *doppler_window
 
 detect_then_beamform:
     cfar_detector:
