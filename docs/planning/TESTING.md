@@ -241,6 +241,9 @@ Common check (all five): default-constructed Params select `radar_boresight`; `s
 - A multi-TX coded cube → demux recovers each TX into the `M_tx` axis at its band with linear-code initial phase removed.
 - Offset-only, linear phase-code, guard-band, nonuniform integer-offset permutation, and nonlinear full-axis correlation cases retain the existing dense behavior.
 - Fractional-bin linear offsets fail predictably; `num_tx` is derived from `ddm_code`.
+- An optional center-zero `velocity_bins` input is paired exactly with `rd_maps`; linear demux emits the centered reduced slice with unchanged spacing, while nonlinear correlation emits an identical full axis. Missing input emits no axis, malformed rank/length/dtype fail predictably, and an unwired latched output never suppresses `rd_maps_out`.
+- A direct `FMCWDopplerProcessorOp → DDMDenseDemultiplexOp` Graph test proves that `velocity_bins` is published before the `rd_maps` trigger and matches on every tick.
+- Dense and sparse DDM applications omit `ClutterFilterOp`: config loading rejects a DDM `clutter_filter` block, and application smokes prove the demultiplexed Doppler-domain map flows directly to virtual-array assembly without the range-aligned pedestal produced by slow-time mean subtraction in the wrong domain.
 
 #### TDMSparseCompensationOp
 

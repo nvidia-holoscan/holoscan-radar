@@ -61,23 +61,23 @@ cross-path tests. Do not introduce a generic `DDMFoldResolverOp` until a
 specific observable and resolution algorithm are selected. Keep `fold_idx`
 available for applications that resolve the ambiguity externally.
 
-## 4. Add sparse-compatible DDM clutter suppression
+## 4. Add code-aware DDM clutter suppression
 
-**Status:** deferred 2026-09-09; sparse DDM v1 explicitly does not support
-clutter filtering.
+**Status:** corrected and deferred 2026-09-16; dense and sparse DDM v1
+explicitly do not support clutter filtering.
 
-The existing slow-time clutter filter is valid after
-`DDMDenseDemultiplexOp`, when TX channels have been separated. Applying that
-filter directly to coded pre-demux chirps is not equivalent, while power
-folding concentrates zero-Doppler clutter into the folded zero bin. The sparse
-workflow therefore currently requires scenes where omitting clutter
-suppression is acceptable.
+The existing `ClutterFilterOp` is not valid after `DDMDenseDemultiplexOp`:
+demultiplexed outputs are already Doppler-domain maps, so mean subtraction acts
+across Doppler bins and creates a range-aligned pedestal. Applying that filter
+directly to coded pre-demux chirps is not equivalent either, while power folding
+concentrates zero-Doppler clutter into the folded zero bin. Both DDM workflows
+therefore currently require scenes where omitting clutter suppression is
+acceptable.
 
 Design a code-aware pre-demux or folded-domain suppression method and validate
-its Pfa/Pd impact before adding it to the sparse workflow. Fully demultiplexing
-only to run the existing filter defeats the sparse path's purpose. Any new
-operator or parameter is a contract change and must preserve the current
-dense post-demux placement.
+its Pfa/Pd impact before adding it to either workflow, or define a dedicated
+post-demux operator that notches physical zero velocity in the RD domain. Any
+new operator or parameter is a contract change.
 
 ## 5. Extend sparse DDM beyond linear integer-bin codes
 
@@ -116,7 +116,7 @@ with the code that produced them.
 **Status:** deferred 2026-09-09; intentionally excluded from the first
 operator implementation.
 
-Add an `applications/fmcw_mimo` sparse-DDM graph/config path that wires
+Add an `applications/fmcw/mimo` sparse-DDM graph/config path that wires
 `DDMPowerFoldOp → CFARDetectorOp → DDMSparseDemultiplexOp → angle estimator`,
 including `preintegrated_looks = M_tx * N_rx`, geometry and validity sidebands,
 and performance/reporting integration. The example must label

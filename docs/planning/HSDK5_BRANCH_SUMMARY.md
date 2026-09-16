@@ -22,7 +22,7 @@ HSDK 5 Graph + `Operator<Params>` with typed Tensor ports — **no 4.x shim**.
 | 1 — Shared glue | `radar_common/sdk/` Tensor I/O + `[live]` override helpers; Graph test harness | Landed |
 | 2 — Operator wave | All 20 ops → Graph/`Operator<Params>` + unit tests (allow-list) | Landed (intentional live skips OK) |
 | 3 — Perf wave | Graph `perf_*` drivers + cold/steady smokes | Landed (POD `override_ms` restored; clutter `method` enum `override_ms` landed — remaining enum lives still unmeasured, §8) |
-| 4 — Apps / Python | Demos + bindings when Holoviz / Python EA surface exists | **Partial:** C++ Graph demos + X11 RD viewer; Holoviz/Python still off |
+| 4 — Apps / Python | Demos + bindings when Holoviz / Python EA surface exists | **Partial:** consolidated C++ SIMO/MIMO Graph demos use native Holoviz; Python execution remains off |
 | 5 — Close deferred | Re-probe EA gaps; ratify durable API deltas; unskip live Graph | **Open** — see blockers below |
 | 6 — Cleanup | Drop allow-lists, `[EA HSDK5 ONLY]`, this file / `HSDK5_PORT.md` | Blocked on phase 5 |
 
@@ -50,8 +50,9 @@ do not infer Graph behavior from 4.x.
   enum `override_ms` on `ClutterFilterOp.method`.
 - **Pool sizing:** `MaxTensorExtents` through fat ops, Graph units, apps,
   and Python binding constructors (no empty extents).
-- **Demos:** `fmcw_siso`, `fmcw_simo`, `fmcw_dense_simo`, `fmcw_mimo`
-  (TDM/DDM), `fmcw_aoa_estimators` under `HOLOSCAN_RADAR_HAS_RD_LIVE`.
+- **Demos:** active registrations are consolidated `fmcw/simo` and
+  `fmcw/mimo` under `HOLOSCAN_RADAR_HAS_RD_LIVE`; MIMO exposes separate TDM
+  and DDM binaries with one shared clustered sparse-angle tail.
 - **Viz interim:** Holoviz-free X11 RD viewer with Holoviz-parity overlays
   (axes, detections/clusters, legend, rolling plots, boresight, estimator
   name).

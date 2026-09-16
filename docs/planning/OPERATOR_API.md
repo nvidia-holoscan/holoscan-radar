@@ -180,12 +180,11 @@ ADC (N_rx, num_chirps, samples)   [all M TX present every chirp, per-chirp phase
   → TDMDenseCompensationOp / DDMDenseDemultiplexOp → (M_tx, N_rx, num_doppler_out, num_range)   [demux → TX axis]
        num_doppler_out = num_doppler_per_tx  (linear gather / doppler_offsets)
                        = num_doppler         (non-linear phase_codes correlate)
-  → [ClutterFilterOp]          → (M_tx, N_rx, num_doppler_out, num_range)    [after demux]
   → VirtualArrayAssemblyOp     → (num_virtual, num_doppler_out, num_range) + virtual element_positions
   → angle path (dense or sparse) + CFARDetectorOp
 ```
 
-No `MIMODeinterleaveOp` (nothing interleaved in slow-time). `ClutterFilterOp` runs *after* demux here (the per-chirp TX codes ride on the raw chirps, so a slow-time clutter filter must follow demux). Clustering as in SIMO/TDM.
+No `MIMODeinterleaveOp` (nothing is interleaved in slow-time). The v1 DDM chains do not use `ClutterFilterOp`: coded pre-demux chirps do not admit its ordinary slow-time mean, while demultiplexed outputs are already Doppler-domain maps and therefore cannot satisfy its range-profile input contract. DDM clutter suppression requires a future code-aware pre-demux or physical-zero-velocity post-demux stage. Clustering remains the same as SIMO/TDM.
 
 ### Workflow comparison
 
@@ -768,13 +767,15 @@ No array geometry is needed. `num_tx` comes from the input axis. Correction tabl
 #### DDMDenseDemultiplexOp
 
 - **In:** `rd_maps` — complex64 / complex128, `(N_rx, num_doppler, num_range_bins)`. The M simultaneous TX occupy coded Doppler bands.
+- **In:** `velocity_bins` (optional) — float32 / float64, `(num_doppler,)`. The physical center-zero axis matching `rd_maps`. It joins `rd_maps` by `Exact{}` + `SafeDefault{}` and is omitted when no physical axis is available.
 - **Out:** `rd_maps_out` — complex64 / complex128, `(M_tx, N_rx, num_doppler_out, num_range_bins)`. `num_doppler_out = num_doppler_per_tx` for linear-phase band gather or `num_doppler` for nonlinear full-axis correlation. Linear `phase_codes` are additionally dephased by `conj(code[tx,0])`; offsets-only codes use unity.
+- **Out:** `velocity_bins_out` (optional, **latched**) — float32 / float64, `(num_doppler_out,)`. Emitted only when `velocity_bins` is present. Linear demultiplexing takes the centered `num_doppler_per_tx`-element slice of the input axis, preserving physical bin spacing and discarding guard bins symmetrically in the reported center-zero interval; nonlinear correlation preserves the full axis. This sideband is published before `rd_maps_out`.
 
 **Parameters:**
 
 - `ddm_code` — DDMCodeDescriptor. Static TX code/band layout (carries `num_tx`). Exactly one of Doppler offsets or phase codes is required. Linear offsets must map to integer bins for the current Doppler extent; nonlinear phase codes use full-axis correlation. Static means frame-to-frame code rotation requires separate operator instances or a future live-code contract. Default: none (required).
 
-No waveform is required: the demultiplexing math is defined by `ddm_code` and tensor extents. Packed M-band DDM retains the reduced, aliased Doppler interval; this operator does not resolve the ambiguity fold.
+No waveform is required: the demultiplexing math is defined by `ddm_code` and tensor extents, and the optional physical axis is transformed from the upstream Doppler output rather than regenerated. Packed M-band DDM retains the reduced, aliased Doppler interval; this operator does not resolve the ambiguity fold.
 
 #### VirtualArrayAssemblyOp
 

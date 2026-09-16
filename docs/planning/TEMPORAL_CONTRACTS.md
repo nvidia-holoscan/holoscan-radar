@@ -70,6 +70,13 @@ descriptors and optional data sidebands such as `SnapshotGatherOp.is_valid`.
 Equal `capture_time` alone is insufficient: publishing the Tensor first
 resolves `SafeDefault` before the sideband arrives.
 
+This is an output-role rule, not an “optional first” rule. Classify sibling
+outputs as causal sidebands, drivers, aligned members, or independent
+diagnostics. Only a causal sideband must precede its `OnEach` driver.
+`OnAligned` waits for all members at the same capture time, while an independent
+optional diagnostic normally follows the primary output so its dedicated work
+cannot delay publication unnecessarily.
+
 ## What we rejected, and what killed it
 
 **Stamping the cube with the config's publication time.** Mechanically legal —

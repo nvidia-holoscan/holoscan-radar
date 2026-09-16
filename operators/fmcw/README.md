@@ -27,33 +27,33 @@ MIMO TDM (fused):
 
 MIMO DDM (split):
   adc_cube → FMCWRangeProcessorOp → FMCWDopplerProcessorOp
-           → DDMDenseDemultiplexOp → [ClutterFilterOp]
-           → VirtualArrayAssemblyOp → ⟨AoA operator⟩
+           → DDMDenseDemultiplexOp → VirtualArrayAssemblyOp
+           → ⟨AoA operator⟩
 MIMO DDM (fused):
   adc_cube → FMCWRangeDopplerProcessorOp → DDMDenseDemultiplexOp
-           → [ClutterFilterOp] → VirtualArrayAssemblyOp → ⟨AoA operator⟩
+           → VirtualArrayAssemblyOp → ⟨AoA operator⟩
 MIMO DDM sparse (linear exact-bin only):
   rd_maps → DDMPowerFoldOp → CFARDetectorOp
           → DDMSparseDemultiplexOp → ⟨sparse AoA operator⟩
 ```
 
 SIMO continues from `rd_maps` to an AoA operator on the physical RX axis;
-SISO has no angle stage. DDM has no deinterleave (TX fire together). Clutter
-is post-demux on DDM because the codes ride on the chirps, so fused inline
-clutter does not replace that filter. Linear-phase gather and non-linear
-correlate share the DDM chain.
+SISO has no angle stage. DDM has no deinterleave (TX fire together) and omits
+clutter filtering in v1: coded chirps cannot use the ordinary pre-FFT mean,
+and post-demux data is already Doppler-domain. Linear-phase gather and
+non-linear correlate share the DDM chain.
 
 ## Operators
 
 | Operator | In → Out | Function |
 | --- | --- | --- |
 | [`FMCWRangeProcessorOp<T>`](fmcw_range_processor_op/README.md) | `adc_cube` (…, chirps, samples; complex or real IF) → `range_profiles` (…, chirps, range bins) + optional `range_bins` axis | Range compression: optional software dechirp, windowed fast-time FFT (`nfft` zero-pad, `fft_norm`); real IF takes the R2C path (`nfft/2+1` bins); bin 0 = zero range (no fftshift) |
-| [`ClutterFilterOp<T>`](clutter_filter_op/README.md) | `range_profiles` → `range_profiles_out` (chirp count preserved / −1 / −2) | Slow-time clutter suppression: `mean_subtraction` (zero-Doppler nulled, no chirp loss) or 1st/2nd-order MTI delay cancellers. **[EA HSDK5 ONLY]** ported on HSDK 5; see [`HSDK5_PORT.md`](../../docs/planning/HSDK5_PORT.md) |
+| [`ClutterFilterOp<T>`](clutter_filter_op/README.md) | `range_profiles` → `range_profiles_out` (chirp count preserved / −1 / −2) | Slow-time clutter suppression: uniform or `doppler_window`-weighted `mean_subtraction` (zero-Doppler nulled, no chirp loss), or 1st/2nd-order MTI delay cancellers. **[EA HSDK5 ONLY]** ported on HSDK 5; see [`HSDK5_PORT.md`](../../docs/planning/HSDK5_PORT.md) |
 | [`FMCWDopplerProcessorOp<T>`](fmcw_doppler_processor_op/README.md) | `range_profiles` → `rd_maps` (…, doppler, range bins) + optional `velocity_bins` axis | Doppler compression: windowed slow-time FFT (`nfft` zero-pad), zero-Doppler centered by default (numpy-style fftshift) |
-| [`FMCWRangeDopplerProcessorOp<T>`](fmcw_range_doppler_processor_op/README.md) | `adc_cube` → `rd_maps` + optional `range_bins`/`velocity_bins` | Fused range + optional inline clutter + Doppler in one node; per-axis `nfft_range`/`nfft_doppler` |
+| [`FMCWRangeDopplerProcessorOp<T>`](fmcw_range_doppler_processor_op/README.md) | `adc_cube` → `rd_maps` + optional `range_bins`/`velocity_bins` | Fused range + optional inline clutter + Doppler in one node; `doppler_window` supplies both weighted mean projection and analysis taper under `mean_subtraction` |
 | [`MIMODeinterleaveOp<T>`](mimo_deinterleave_op/README.md) | `adc_cube` (`N_rx`, `M·L`, samples; complex or real IF) → `adc_cube_out` (`M_tx`, `N_rx`, `L`, samples) | TDM marshaling: split interleaved slow-time into an explicit TX axis via `TXSchedule` gather. **Uniform round-robin TDM only** — non-uniform / staggered schedules are rejected (staggered TDM deferred; STATUS.md L12) |
 | [`TDMDenseCompensationOp<T>`](tdm_dense_compensation_op/README.md) | `(M_tx, N_rx, D, R)` → same shape | Firing-slot-aware TDM inter-TX motion-phase correction |
-| [`DDMDenseDemultiplexOp<T>`](ddm_dense_demultiplex_op/README.md) | `(N_rx, D, R)` → `(M_tx, N_rx, D_out, R)` | Linear DDM gather or nonlinear full-axis correlation |
+| [`DDMDenseDemultiplexOp<T>`](ddm_dense_demultiplex_op/README.md) | `(N_rx, D, R)` + optional `(D,)` velocity axis → `(M_tx, N_rx, D_out, R)` + optional `(D_out,)` axis | Linear DDM gather or nonlinear full-axis correlation with matching physical-axis transformation |
 | [`DDMPowerFoldOp<T>`](ddm_power_fold_op/README.md) | `(N_rx,D,R)` → real `(D/M-G,R)` | Fold all linear DDM bands and RX looks into detector power |
 | [`DDMSparseDemultiplexOp<T>`](ddm_sparse_demultiplex_op/README.md) | pre-demux maps + folded detections + optional fold index → snapshots + mask + geometry | Sparse linear DDM gather, fold recovery, and virtual assembly |
 | [`TDMSparseCompensationOp<T>`](tdm_sparse_compensation_op/README.md) | uncompensated `rd_maps` (`M_tx`, `N_rx`, D, R) + `detection_idx` → `snapshot` (`num_detections`, `num_virtual`, K) + mask + geometry | Sparse TDM bridge: gather detected cells, apply firing-slot-aware phase correction, and assemble virtual snapshots without processing the full cube |
@@ -75,6 +75,10 @@ physical units through them.
   The fused operator calls the same stage functions back-to-back, which is
   why its output is bitwise-identical to the split chain for matching
   parameters (verified by the parity test suite).
+- **Weighted clutter parity.** For `mean_subtraction`, the fused processor
+  uses its `doppler_window` for both clutter projection and Doppler analysis.
+  A split chain must set the same window on `ClutterFilterOp` and
+  `FMCWDopplerProcessorOp`; `none` retains the uniform-mean behavior.
 - **Dechirp reference convention.** `apply_dechirp` conjugate-multiplies
   the input against the reference chirp
   `r[s] = exp(+j·π·slope·t_s²)`, `t_s = s / sample_rate` (or

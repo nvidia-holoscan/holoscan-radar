@@ -149,7 +149,8 @@ So apps can build `MaxTensorExtents` from config in time for construction.
   `max_doppler_bins`, and `max_range_bins` for its rank-4 output.
 - `DDMDenseDemultiplexOp`: requires the same fields; nonlinear correlation
   may retain the full `max_doppler_bins`, while linear demultiplexing emits no
-  more than that bound.
+  more than that bound. Its optional `velocity_bins_out` pool is rank 1 and
+  uses `max_doppler_bins` real elements.
 - `DDMPowerFoldOp`: requires `max_rx` to admit the named input channel axis,
   plus `max_doppler_bins` and `max_range_bins` for its rank-2 real output.
 - `DDMSparseDemultiplexOp`: requires `max_tx`, `max_rx`,

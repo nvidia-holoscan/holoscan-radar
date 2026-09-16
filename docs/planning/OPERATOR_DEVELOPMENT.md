@@ -201,9 +201,14 @@ fill before publishing any sibling. Carry loans and write guards through a
 prepared-output object when useful, then commit all writes and publish. This
 prevents a late failure from exposing a partial required-output set.
 
-Every optional output takes one of the two dispositions locked in
-[`OPERATOR_API.md`](OPERATOR_API.md), "Optional output convention". Choose by
-asking what work exists **solely** to produce the port:
+Classify every output of a multi-output operator before choosing publication
+order: **driver** (its arrival triggers the downstream consumer), **causal
+sideband** (an Exact companion to that driver), **aligned member** (joined by
+`OnAligned`), or **diagnostic** (independent result). Optionality alone does not
+decide order. Every optional output also takes one of the two dispositions
+locked in [`OPERATOR_API.md`](OPERATOR_API.md), "Optional output convention".
+Choose the disposition by asking what work exists **solely** to produce the
+port:
 
 **`always`** — nothing to save, because the value falls out of work another
 output needs anyway (`angle_spectrum` is the same scan-grid pass that yields
@@ -223,20 +228,22 @@ failure drop the required output. Exception: if the axis fill synchronizes
 the compute stream, enqueue it before the hot-path kernel so the wait stays
 off that path.
 
-A second exception is causal publication: when an optional output is the
-same-tick Exact sideband for a downstream `OnEach` consumer, publish that
-sideband before the Tensor that triggers the consumer. Absorb the optional
-emit failure first, then publish the required trigger, so declining the
-sideband still cannot suppress the required output. `SnapshotGatherOp.is_valid`
-→ `BeamscanEstimatorOp` is the reference shape.
+A second exception is causal publication: when an output is the same-tick
+Exact sideband for a downstream `OnEach` consumer, prepare the active output
+set, publish every causal sideband first, and publish the driver last. Absorb
+an optional sideband's declined emit before publishing the required trigger,
+so leaving the sideband unwired still cannot suppress the required output.
+`SnapshotGatherOp.is_valid` → `BeamscanEstimatorOp.snapshot` is the reference
+shape. Outputs that meet only under `OnAligned` need no publication-order
+dependency; independent diagnostics normally remain after the primary output.
 
 ```cpp
-HOLOSCAN_TRY(emit_prepared_tensor(rd_maps, context, std::move(rd_loan)));
 if (plan.stage.waveform.has_value() && velocity_bins_out_.active()) {
   HOLOSCAN_TRY(auto bins_loan, prepare_device_tensor(/* fill */));
   velocity_bins_out_.emit(velocity_bins, context, std::move(bins_loan),
                           "FMCWDopplerProcessorOp.velocity_bins");
 }
+HOLOSCAN_TRY(emit_prepared_tensor(rd_maps, context, std::move(rd_loan)));
 ```
 
 Gate the whole cost, not just the emit — that is the point. Where one kernel

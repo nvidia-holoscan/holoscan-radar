@@ -205,7 +205,7 @@ Allow-list: `HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS` in
 | `CFARDetectorOp` F32/F64 + Graph C++ tests (1-in/5-out; CA + GO/SO/OS + alpha_lut) | landed; all 5 outputs optional/latched; unconditional Exact lives with scalar, bounded host-Tensor, and ChannelPod payloads; Graph tests cover every live family and unwired outputs; statistical MC suite on label `statistical`; Graph perf measures `threshold_scale` `override_ms` (§8) |
 | `MIMODeinterleaveOp` F32/F64 + Graph C++ tests | landed; output `adc_cube_out` (§2); Graph live-override/`TXSchedule` N/A (Params-only schedule); Graph perf cold/steady landed |
 | `TDMDenseCompensationOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); `[live]` `waveform` uses the generated wire-schema port (§9); Graph perf cold/steady landed |
-| `DDMDenseDemultiplexOp` F32/F64 + Graph C++ tests | landed; output `rd_maps_out` (§2); static `ddm_code` only; linear gather and nonlinear correlation Graph coverage and perf landed |
+| `DDMDenseDemultiplexOp` F32/F64 + Graph C++ tests | landed; required output `rd_maps_out` (§2); optional Exact `velocity_bins` input and causally prior optional/latched `velocity_bins_out`; static `ddm_code` only; linear gather and nonlinear correlation Graph coverage and perf landed |
 | `DDMPowerFoldOp` F32/F64 + Graph C++ tests | landed; static exact-bin linear `ddm_code`; shared dense demux gather table; device real folded output; Graph correctness and perf coverage |
 | `DDMSparseDemultiplexOp` F32/F64 + Graph C++ tests | landed; aligned pre-demux maps/detections plus unconditional Exact+SafeDefault `fold_idx`; Exact wavelength/window lives; optional/always mask and causally prior pageable-host geometry; Graph perf landed |
 | `VirtualArrayAssemblyOp` F32/F64 + Graph C++ tests (1-in/2-out) | landed; output `rd_maps_out` (§2); required `array_geometry` uses `WireArrayGeometry` and directly drives angle live inputs (§9/§10); Exact `wavelength` (unconditional entry) (Graph live deferred §1); Graph perf `wavelength` `override_ms` restored (§8); lg/xl vs 4.3 gap accepted as Graph publish-path artifact (§3) |
@@ -1070,7 +1070,7 @@ application that actually declined one of those died on its *first* tick. It
 had gone unnoticed only because every app and test harness wires everything.
 
 `OPERATOR_API.md` now carries an **Optional output convention** giving each of
-the 28 optional outputs one of two dispositions, both of which absorb the
+the 29 optional outputs one of two dispositions, both of which absorb the
 failed emit so no unwired port can fail a run:
 
 - **`always`** (11 ports) — `(void)emit_prepared_tensor(...)`, silent. Used
@@ -1078,7 +1078,7 @@ failed emit so no unwired port can fail a run:
   stopping saves nothing (an `angle_spectrum` is the same scan-grid pass that
   yields `aoa_estimates`; a MUSIC `eigenvalues` re-exports the eig its own
   projector requires).
-- **`latched`** (17 ports) — a `LatchedOutput` in `radar_common/sdk/tensor_io.hpp`
+- **`latched`** (18 ports) — a `LatchedOutput` in `radar_common/sdk/tensor_io.hpp`
   warns once on the first failed emit and then skips everything done solely for
   that port. It latches only on `kFailure`, the code an unconsumed output
   reports, so a transient fault costs one frame rather than the whole run;
@@ -1262,7 +1262,7 @@ extends to the remaining sparse/dense FMCW demos under
 | --- | --- |
 | `fmcw_simo` | Sparse SIMO: SnapshotGather → Beamscan; `FeatureAssemblyOp` (4 features); `cfar_power` → RD image; boresight from `beamscan.aoa_estimates` |
 | `fmcw_dense_simo` | Dense: PhaseShiftBeamformer + Graph `AnglePeakPick`/`CubeAoaLookup`/`TrailingIdxColumns`/`RdAngleMaxOp`; 4-col `rep_idx` ClusterReport with az/el grids; boresight from `CubeAoaLookupOp` |
-| `fmcw_mimo` | Graph `MimoTdm`/`MimoDdm` sources + `DdmReportVelocityBinsOp`; TDM/DDM compose branches; same sparse tail as SIMO; boresight over the virtual-array scan grid |
+| `fmcw/mimo` | Separate `fmcw_mimo_tdm` / `fmcw_mimo_ddm` Graph binaries with MIMO sources + `DdmReportVelocityBinsOp`; dense TDM/DDM front ends; clustered sparse angle tail; shared retained-frame dashboard |
 | `fmcw_aoa_estimators` | Five sparse estimators behind Graph `EstimatorRouterOp` (N snapshot outs) + `AoaMergeOp` (`OnAnyInput`); rotates beamscan/MVDR/MUSIC/Root-MUSIC/ESPRIT; X11 overlays + boresight + the active estimator's name in the header (`AoaMergeOp.estimator_idx` → viewer `label_idx`, also always drained) |
 
 Shared helpers: `radar_app/app/graph_params.hpp` (YAML → Params),
@@ -1270,13 +1270,22 @@ DetectionReport/ClusterReport
 `Config` flags (`report_aoa` / `report_detection_idx`) so optional ports
 enter `contract()` only when wired. The SIMO and MIMO apps now align
 `SnapshotGatherOp.is_valid` directly into Beamscan; the estimator-rotation app
-still drains the multi-look mask before its Beamscan-only K=1 slice. Smoke
-YAMLs: `*_smoke.yaml` (+ `fmcw_mimo_ddm_smoke.yaml`) — note
-these run log-only, so also run each app's default YAML under a real /
-`Xvfb` `DISPLAY`: the viz subgraph is where the partitioning gap above
-surfaced.
+still drains the multi-look mask before its Beamscan-only K=1 slice. MIMO
+smokes are `applications/fmcw/mimo/config/tdm_smoke.yaml` and
+`ddm_smoke.yaml`; `ddm_phase_codes.yaml` is an alternate nonlinear-correlation
+config for the DDM binary, not a third mode. Smoke files run log-only, so also
+run each app's default YAML under a real / `Xvfb` `DISPLAY`: the viz subgraph
+is where the partitioning gap above surfaced.
 
-**Fresh SIMO consolidation (2026-09-09).** The active `fmcw_simo`
+**Fresh MIMO consolidation (2026-09-16).** The active `mimo` registration now
+points at `applications/fmcw/mimo` and builds `fmcw_mimo_tdm` and
+`fmcw_mimo_ddm`. Both use dense multiplexing-specific front ends followed by
+the clustered sparse angle tail and shared retained-frame dashboard.
+`ddm_phase_codes.yaml` selects the DDM binary's nonlinear correlation path.
+The replaced `applications/fmcw_mimo` C++/Python application is removed;
+Python remains an intentionally empty package stub on HSDK 5.
+
+**Fresh SIMO consolidation (2026-09-09).** The active `simo`
 registration now points at `applications/fmcw/simo` and builds two explicitly
 ordered workflows: `fmcw_simo_detect_then_beamform` and
 `fmcw_simo_beamform_then_detect`. They share only `default.yaml` and

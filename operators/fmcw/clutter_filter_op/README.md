@@ -13,7 +13,7 @@ Slow-time static-clutter / zero-Doppler suppression on range profiles, between r
 FMCWRangeProcessorOp → ClutterFilterOp → FMCWDopplerProcessorOp
 ```
 
-On MIMO-DDM the same ports sit **after** `TDMDenseCompensationOp / DDMDenseDemultiplexOp` demux (the input is still named `range_profiles` but carries the demuxed block). The fused `FMCWRangeDopplerProcessorOp` inlines this stage and does not emit intermediate profiles.
+The current MIMO-DDM workflows omit this operator; code-aware DDM clutter suppression remains a separate design question. The fused `FMCWRangeDopplerProcessorOp` inlines this stage and does not emit intermediate profiles.
 
 Contract: [`OPERATOR_API.md` § `ClutterFilterOp`](../../../docs/planning/OPERATOR_API.md) ·
 group: [`operators/fmcw/README.md`](../README.md)
@@ -120,10 +120,8 @@ graph.add_flow(range->range_profiles, clutter->range_profiles, q);
 graph.add_flow(clutter->range_profiles_out, doppler->range_profiles, q);
 ```
 
-Python bindings (`ClutterFilterOpF32` / `F64`) are deferred on this branch ([EA HSDK5 ONLY] [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §6); the 4.x Fragment trampoline in `python/` is not built.
+The Python constructors (`ClutterFilterOpF32` / `F64`) expose `doppler_window: WindowSpec` after `method`. Python bindings remain build-deferred on this branch ([EA HSDK5 ONLY] [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §6).
 
 ## Contract conformance
 
-The locked [`OPERATOR_API.md`](../../../docs/planning/OPERATOR_API.md) surface is implemented. The physical output port is `range_profiles_out` ([EA HSDK5 ONLY] unique in/out names; already locked in `OPERATOR_API.md` and [`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §2). Graph mid-stream `[live] method` is covered; Graph perf reports `override_ms` for a mid-session method switch.
-
-Audit scope (static; no build or test run): `docs/planning/OPERATOR_API.md` § `ClutterFilterOp`, `WORKFLOWS.md`, `TESTING.md`, `HSDK5_PORT.md` §1/§2/§6/§8/§11/§12, `STATUS.md`, `operators/common/README.md`, `operators/fmcw/README.md`, `clutter_filter_op.hpp` / `.cu`, `clutter_stage.hpp`, `metadata.json`, `python/_clutter_filter_op_bindings.cpp`, `tests/cpp/fmcw/test_clutter_filter.cpp`, `tests/python/fmcw/test_clutter_filter.py`, `performance/cpp/perf_clutter_filter.cpp`.
+The weighted-projection contract is implemented across Params/schema, Exact live input, Python constructor, shared stage math, cache, split/fused tests, performance harnesses, and the production MIMO-TDM configuration.
