@@ -61,7 +61,8 @@ radar_app/
   app/holoviz_layout.hpp  HolovizLayout / RightPanel + build_holoviz_input_specs
                           + make_rd_holoviz_op factory + panel presets
   report/cadence_meter.hpp  CadenceMeter — wall-clock source / e2e probe
-  report/report_ops.hpp   DetectionReportOp (raw/clustered modes), NullSinkOp,
+  report/report_ops.hpp   DetectionReportOp (raw/clustered, physical-angle
+                          presentation modes), NullSinkOp,
                           TensorMapDiscardOp
   viz/viz.hpp             RdChannelSliceOp (SIMO per-RX RD slice),
                           RdMapToImageOp, ClusterOverlayOp, RollingPlotOp,
@@ -130,7 +131,7 @@ The Python demos (`fmcw_siso.py`, `fmcw_simo.py`, `fmcw_dense_simo.py`,
    TDM/DDM ADC sources + `DdmReportVelocityBinsOp`).
 3. **App-generalized operators / helpers** — reused across apps, here in
    `applications/common/python/`. Most of the viz/report operators are
-   already bound from C++ (`radar_app`'s `ClusterReportOp`, `RollingPlotOp`,
+   already bound from C++ (`radar_app`'s `DetectionReportOp`, `RollingPlotOp`,
    `BoresightViewOp`, etc. — imported straight from `holoscan.radar`); this
    directory covers what is Python-only.
 

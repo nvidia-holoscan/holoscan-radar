@@ -128,6 +128,8 @@ build_phase_shift_beamformer_stage_plan(
       throw std::invalid_argument(
           "PhaseShiftBeamformerOp: az_angles and el_angles must be non-empty");
     }
+    validate_scan_grid_axes(stage.convention, stage.az_angles, stage.el_angles,
+                            "PhaseShiftBeamformerOp");
     if (stage.az_angles.size() > static_cast<std::size_t>(max_az) ||
         stage.el_angles.size() > static_cast<std::size_t>(max_el) ||
         num_doppler > max_doppler || num_range > max_range) {

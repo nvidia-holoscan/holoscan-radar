@@ -84,11 +84,14 @@ horizontal axis and range increasing upward; current detections are compact
 filled ovals with black borders. The six equal-sized side panels comprise an
 upward-facing azimuth-range sector cropped to the configured scan span and
 labeled in degrees, a boresight azimuth-elevation view, and the 2×2 rolling
-range, velocity, azimuth, and elevation history grid. Detection
-markers persist only in the two side spatial views for
+range, velocity, azimuth, and elevation history grid. Detection markers persist
+only in the two side spatial views for
 `detection_trail_frames`, dim as
 they age, and then disappear; the range-Doppler map shows only the current
-frame. Simulated truth is drawn as continuous color-coded trajectories behind
+frame. Reports and dashboard angle views convert the selected operator
+convention to physical `radar_boresight` radians; `direction_cosine` remains
+the operator's native scan/output space and is not mislabeled as radians.
+Simulated truth is drawn as continuous color-coded trajectories behind
 the score-weighted cluster means. The sparse path uses score-weighted cluster
 means; the dense path plots each peak's physical feature row directly. Truth
 and detection colors are assigned by ascending range so corresponding tracks

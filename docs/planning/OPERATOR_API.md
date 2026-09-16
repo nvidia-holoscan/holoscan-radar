@@ -883,7 +883,7 @@ Defines the azimuth/elevation (AER) parameterization at the API boundary — the
 - `elevation_positive_axis` — signed-axis enum. Axis increasing elevation rotates toward (`+z` = up, `−z` = NED-style down). Orthogonal to both other axes. `custom` only.
 - `elevation_reference` — enum {horizon, zenith}. Elevation up from the azimuth plane (radar/robotics/aviation) vs. polar angle from boresight/pole (physics). `zenith` carries `el ↔ π/2 − polar` (a genuine angle transform). Default: horizon (`custom` only).
 
-*Angle ranges.* Input scan-grid angles may be any real value — the boundary→canonical map is periodic in azimuth (period `2π`), so `az` and `az ± 2πk` are equivalent and no normalization is required. Emitted `doa`/`(az, el)` are returned in the **principal range**: `az ∈ (−π, π]` and `el ∈ [−π/2, π/2]` (or `el ∈ [0, π]` under `zenith`). At a pole (`el = ±π/2`) azimuth is undefined and reported as `0`.
+*Scan-grid ranges.* Every authored scan-grid coordinate must be finite. For angular conventions, grid coordinates may otherwise be any real value: the boundary→canonical map is periodic in azimuth (period `2π`), so `az` and `az ± 2πk` are equivalent and no normalization is required. Under `direction_cosine`, every authored `u` and `v` axis value must lie in `[-1, 1]`; Cartesian-product corners with `u² + v² > 1` remain valid grid construction and are intentionally masked per beam (`−inf` spectrum, NaN `doa`). Emitted `doa`/`(az, el)` are returned in the **principal range**: `az ∈ (−π, π]` and `el ∈ [−π/2, π/2]` (or `el ∈ [0, π]` under `zenith`). At a pole (`el = ±π/2`) azimuth is undefined and reported as `0`.
 
 ### WindowSpec
 

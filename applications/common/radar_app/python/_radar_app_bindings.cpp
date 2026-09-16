@@ -38,7 +38,8 @@ class PyDetectionReportOp : public DetectionReportOp {
                       std::vector<int64_t> point_index_columns,
                       const std::string& name = "detection_report")
       : DetectionReportOp(DetectionReportOp::Config{
-            mode, std::move(point_index_columns), nullptr}) {
+            .mode = mode,
+            .point_index_columns = std::move(point_index_columns)}) {
     name_ = name;
     fragment_ = fragment;
     spec_ = std::make_shared<OperatorSpec>(fragment);

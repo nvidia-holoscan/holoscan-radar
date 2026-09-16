@@ -105,6 +105,8 @@ std::shared_ptr<holoscan::Tensor> build_steering_weights_device(
         "build_steering_weights_device: az_angles and el_angles must be "
         "non-empty");
   }
+  validate_scan_grid_axes(convention, az_angles, el_angles,
+                          "build_steering_weights_device");
 
   const int64_t num_channels = geometry.num_elements();
   const int64_t num_az = static_cast<int64_t>(az_angles.size());

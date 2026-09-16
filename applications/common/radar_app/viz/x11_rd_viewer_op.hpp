@@ -48,6 +48,7 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/logger/logger.hpp>
 
+#include "radar_app/app/angle_presentation.hpp"
 #include "radar_app/viz/colormap.hpp"
 #include "radar_app/viz/overlay_style.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
@@ -80,6 +81,9 @@ struct X11RdViewerConfig {
   // either (N, 2) estimator output or (N, 4) physical feature points. Angular
   // extents are radians (the estimator's scan grid), labeled in degrees.
   bool overlay_boresight{false};
+  AngleConvention angle_convention;
+  // Optional convention per label_idx for routed-estimator applications.
+  std::vector<AngleConvention> angle_conventions;
   double az_lo{-0.35};
   double az_hi{0.35};
   double el_lo{-0.1};
@@ -284,6 +288,30 @@ class X11RdViewerOp : public holoscan::Operator<> {
       return holoscan::make_unexpected(holoscan::Error{
           holoscan::ErrorCode::kFailure,
           "X11RdViewerOp: cudaStreamSynchronize failed"});
+    }
+    try {
+      const AngleConvention* active_convention = &cfg_.angle_convention;
+      if (!cfg_.angle_conventions.empty()) {
+        if (label_index_ < 0 ||
+            label_index_ >=
+                static_cast<std::int64_t>(cfg_.angle_conventions.size())) {
+          throw std::invalid_argument(
+              "label_idx is out of range for angle_conventions");
+        }
+        active_convention =
+            &cfg_.angle_conventions[static_cast<std::size_t>(label_index_)];
+      }
+      for (std::size_t row = 0; row < angles_.size() / 2U; ++row) {
+        const PhysicalAngles physical =
+            to_physical_angles(*active_convention, angles_[row * 2U],
+                               angles_[row * 2U + 1U]);
+        angles_[row * 2U] = static_cast<float>(physical.az);
+        angles_[row * 2U + 1U] = static_cast<float>(physical.el);
+      }
+    } catch (const std::invalid_argument& error) {
+      return holoscan::make_unexpected(holoscan::Error{
+          holoscan::ErrorCode::kInvalidArgument,
+          std::string("X11RdViewerOp: ") + error.what()});
     }
 
     try {

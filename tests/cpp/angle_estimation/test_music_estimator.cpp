@@ -14,6 +14,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -1146,11 +1147,31 @@ TEST(MUSICEstimatorOpTest, DirectionCosineMasksInvisibleRegion) {
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
   const auto out = run_music<double>(
-      snap, make_params(geom, conv, linspace(-1.2, 1.2, 5),
-                        linspace(-1.2, 1.2, 5), 1));
+      snap, make_params(geom, conv, linspace(-1.0, 1.0, 5),
+                        linspace(-1.0, 1.0, 5), 1));
 
   const double* spec = out.spectrum.as<double>();
   EXPECT_NEAR(spec[0], 0.0, 1e-3);
+}
+
+TEST(MUSICEstimatorOpTest, RejectsInvalidScanCoordinates) {
+  constexpr int64_t kN = 4;
+  constexpr int64_t kS = 16;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block =
+      make_block(geom, AngleConvention{}, 0.0, 0.0, kS, 0.02, 2u);
+  AngleConvention direction_cosine;
+  direction_cosine.preset = AngleConventionPreset::kDirectionCosine;
+  auto out_of_range = run_music_result<double>(
+      block_to_device<double>(block, {1, kN, kS}),
+      make_params(geom, direction_cosine, {0.0}, {1.01}, 1));
+  EXPECT_FALSE(out_of_range.diagnostics.empty());
+
+  auto non_finite = run_music_result<double>(
+      block_to_device<double>(block, {1, kN, kS}),
+      make_params(geom, AngleConvention{},
+                  {std::numeric_limits<double>::infinity()}, {0.0}, 1));
+  EXPECT_FALSE(non_finite.diagnostics.empty());
 }
 
 TEST(MUSICEstimatorOpTest, NumSourcesConfigurableFromParams) {

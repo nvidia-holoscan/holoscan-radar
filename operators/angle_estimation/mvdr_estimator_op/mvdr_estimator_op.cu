@@ -23,6 +23,7 @@
 
 #include "angle_estimation/mvdr_estimator_op/mvdr_stage.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
+#include "radar_common/dsp/angle_convention.hpp"
 #include "radar_common/dsp/spatial_smoothing.hpp"
 #include "radar_common/dsp/spatial_smoothing_device.hpp"
 #include "radar_common/dsp/steering_weights.hpp"
@@ -221,6 +222,15 @@ expected<MVDRStagePlan, Error> build_mvdr_stage_plan(
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
         "MVDREstimatorOp: az_angles and el_angles must be non-empty"});
+  }
+  try {
+    validate_scan_grid_axes(stage.convention, stage.az_angles, stage.el_angles,
+                            "MVDREstimatorOp");
+    (void)boundary_to_canonical(
+        stage.convention, stage.az_angles.front(), stage.el_angles.front());
+  } catch (const std::invalid_argument& error) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, error.what()});
   }
   const int64_t max_az =
       require_extent(extents.max_az, "max_az", kOpName);

@@ -23,15 +23,15 @@
 #include <holoviz/sink_desc.hpp>
 
 #include "config_schema.hpp"  // NOLINT(build/include_subdir): app-private header
+#include "radar_app/app/angle_presentation.hpp"
 #include "radar_common/sim/scene.hpp"
 #include "viz/simo_viz_ops.hpp"  // NOLINT(build/include_subdir)
 
 namespace holoscan::radar::app::simo::viz {
 
-inline std::array<float, 2> axis_bounds(const std::vector<double>& grid) {
-  const auto bounds = std::minmax_element(grid.begin(), grid.end());
-  const float lower = static_cast<float>(*bounds.first);
-  const float upper = static_cast<float>(*bounds.second);
+inline std::array<float, 2> display_bounds(const std::array<double, 2>& bounds) {
+  const float lower = static_cast<float>(bounds[0]);
+  const float upper = static_cast<float>(bounds[1]);
   return lower < upper ? std::array<float, 2>{lower, upper}
                        : std::array<float, 2>{lower - 0.5F, upper + 0.5F};
 }
@@ -79,7 +79,7 @@ inline void add_simo_visualization(
     holoscan::Graph& graph, holoscan::PartitionHandle& application,
     holoscan::CompileOptions& options, const VisualizationConfig& config,
     double frame_period, const std::vector<double>& az_grid,
-    const std::vector<double>& el_grid,
+    const std::vector<double>& el_grid, const AngleConvention& angle_convention,
     const std::vector<sim::PointTarget>& truth_targets,
     std::string workflow_title,
     const Inputs& inputs) {
@@ -88,6 +88,8 @@ inline void add_simo_visualization(
                 "unsupported SIMO visualization input bundle");
   constexpr bool kClustered =
       std::is_same_v<Inputs, SimoClusterVizInputs>;
+  const PhysicalAngleBounds physical_bounds =
+      physical_scan_grid_bounds(angle_convention, az_grid, el_grid);
   auto display = graph.op<SimoDisplayOp>(
       "display_compositor",
       SimoDisplayConfig{
@@ -102,8 +104,9 @@ inline void add_simo_visualization(
           .detection_trail_frames = config.detection_trail_frames,
           .width = config.window_width,
           .height = config.window_height,
-          .az_bounds = axis_bounds(az_grid),
-          .el_bounds = axis_bounds(el_grid),
+          .az_bounds = display_bounds(physical_bounds.az),
+          .el_bounds = display_bounds(physical_bounds.el),
+          .angle_convention = angle_convention,
           .title = workflow_title,
           .truth_targets = make_truth_targets(truth_targets),
       });

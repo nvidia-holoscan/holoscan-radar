@@ -22,6 +22,7 @@
 #include <holoscan/holoscan.hpp>
 #include <holoscan/operators/holoviz/holoviz.hpp>
 
+#include "radar_app/app/angle_presentation.hpp"
 #include "radar_app/viz/colormap.hpp"
 #include "radar_app/viz/viz_kernels.hpp"
 #include "radar_common/math/constants.hpp"
@@ -1755,8 +1756,9 @@ class BoresightViewOp : public holoscan::Operator {
   HOLOSCAN_OPERATOR_FORWARD_ARGS(BoresightViewOp)
   BoresightViewOp() = default;
 
-  // Angular extents (radians), set from the beamscan grid before the run.
+  // Physical radar-boresight extents (radians), derived from the scan grid.
   double az_lo{-0.35}, az_hi{0.35}, el_lo{-0.1}, el_hi{0.1};
+  AngleConvention angle_convention;
 
   static constexpr int64_t kW = 420;
   static constexpr int64_t kH = 300;
@@ -1877,6 +1879,13 @@ class BoresightViewOp : public holoscan::Operator {
     if ((n > 0 || num_rep > 0) &&
         cudaStreamSynchronize(stream) != cudaSuccess) {
       throw std::runtime_error("BoresightViewOp: stream sync failed");
+    }
+    for (int64_t i = 0; i < n; ++i) {
+      const PhysicalAngles physical =
+          to_physical_angles(angle_convention, ang[static_cast<size_t>(i * 2)],
+                             ang[static_cast<size_t>(i * 2 + 1)]);
+      ang[static_cast<size_t>(i * 2)] = static_cast<float>(physical.az);
+      ang[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(physical.el);
     }
     const bool have_rep = rep_idx && num_rep > 0;
     const std::vector<int> ranks =

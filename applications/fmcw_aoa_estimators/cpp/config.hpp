@@ -10,6 +10,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cctype>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
@@ -17,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "radar_app/app/angle_presentation.hpp"
 #include "radar_app/app/config.hpp"
 #include "radar_app/app/graph_params.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
@@ -220,10 +222,26 @@ inline AppConfig load_config(const std::filesystem::path& path) {
     throw std::runtime_error("estimator_router.log_every must be >= 0");
   }
 
-  grid_extent(cfg.beamscan_params.az_angles, -0.35, 0.35, &cfg.az_lo,
-              &cfg.az_hi);
-  grid_extent(cfg.beamscan_params.el_angles, -0.35, 0.35, &cfg.el_lo,
-              &cfg.el_hi);
+  const std::array<PhysicalAngleBounds, 3> scan_bounds{
+      physical_scan_grid_bounds(
+          cfg.beamscan_params.angle_convention, cfg.beamscan_params.az_angles,
+          cfg.beamscan_params.el_angles),
+      physical_scan_grid_bounds(
+          cfg.mvdr_params.angle_convention, cfg.mvdr_params.az_angles,
+          cfg.mvdr_params.el_angles),
+      physical_scan_grid_bounds(
+          cfg.music_params.angle_convention, cfg.music_params.az_angles,
+          cfg.music_params.el_angles)};
+  cfg.az_lo = scan_bounds[0].az[0];
+  cfg.az_hi = scan_bounds[0].az[1];
+  cfg.el_lo = scan_bounds[0].el[0];
+  cfg.el_hi = scan_bounds[0].el[1];
+  for (const PhysicalAngleBounds& bounds : scan_bounds) {
+    cfg.az_lo = std::min(cfg.az_lo, bounds.az[0]);
+    cfg.az_hi = std::max(cfg.az_hi, bounds.az[1]);
+    cfg.el_lo = std::min(cfg.el_lo, bounds.el[0]);
+    cfg.el_hi = std::max(cfg.el_hi, bounds.el[1]);
+  }
   cfg.extents = make_aoa_extents(cfg);
   return cfg;
 }

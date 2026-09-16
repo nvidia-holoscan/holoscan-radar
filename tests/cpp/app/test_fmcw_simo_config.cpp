@@ -119,23 +119,26 @@ TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
   EXPECT_EQ(detect.num_frames, 250);
   EXPECT_EQ(detect.scene.targets.size(), 5U);
   EXPECT_EQ(detect.extents.max_az, 13);
-  EXPECT_EQ(beamform.extents.max_el, 13);
+  EXPECT_EQ(beamform.extents.max_el, 11);
   ASSERT_EQ(detect.beamscan_params->az_angles.size(), 13U);
-  ASSERT_EQ(beamform.beamformer_params->el_angles.size(), 13U);
+  ASSERT_EQ(beamform.beamformer_params->el_angles.size(), 11U);
   for (std::size_t index = 0; index < 13U; ++index) {
     const double expected = -0.3 + static_cast<double>(index) * 0.05;
     EXPECT_NEAR(detect.beamscan_params->az_angles[index], expected, 1.0e-14);
+  }
+  for (std::size_t index = 0; index < 11U; ++index) {
+    const double expected = -1.0 + static_cast<double>(index) * 0.2;
     EXPECT_NEAR(beamform.beamformer_params->el_angles[index], expected,
                 1.0e-14);
   }
   EXPECT_DOUBLE_EQ(detect.beamscan_params->az_angles.back(), 0.3);
-  EXPECT_DOUBLE_EQ(beamform.beamformer_params->el_angles.back(), 0.3);
+  EXPECT_DOUBLE_EQ(beamform.beamformer_params->el_angles.back(), 1.0);
   EXPECT_EQ(detect.cfar_params->peak_mode,
             holoscan::radar::CfarPeakMode::kNone);
   EXPECT_EQ(beamform.cfar_params->peak_mode,
             holoscan::radar::CfarPeakMode::kAll);
   EXPECT_EQ(beamform.cfar_params->peak_radius,
-            (std::vector<int64_t>{2, 2, 2, 2}));
+            (std::vector<int64_t>{4, 4, 4, 4}));
   EXPECT_EQ(detect.reduction_params->representative,
             holoscan::radar::RepresentativePolicy::kWeightedMean);
   EXPECT_EQ(detect.reduction_params->feature_weights,

@@ -13,6 +13,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -588,11 +589,30 @@ TEST(BeamscanEstimatorOpTest, DirectionCosineMasksInvisibleRegion) {
   auto snap_t = to_device_tensor(snap_host, {1, kN}, complex_dtype<double>());
 
   const auto out = run_beamscan<double>(
-      snap_t, make_params(geom, conv, linspace(-1.2, 1.2, 5),
-                          linspace(-1.2, 1.2, 5)));
+      snap_t, make_params(geom, conv, linspace(-1.0, 1.0, 5),
+                          linspace(-1.0, 1.0, 5)));
 
   const double* spec = out.spectrum.as<double>();
   EXPECT_NEAR(spec[0], 0.0, 1e-6);
+}
+
+TEST(BeamscanEstimatorOpTest, RejectsInvalidScanCoordinates) {
+  constexpr int64_t kN = 4;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const std::vector<std::complex<double>> host(static_cast<size_t>(kN),
+                                               {1.0, 0.0});
+  AngleConvention direction_cosine;
+  direction_cosine.preset = AngleConventionPreset::kDirectionCosine;
+  auto out_of_range = run_beamscan_result<double>(
+      to_device_tensor(host, {1, kN}, complex_dtype<double>()),
+      make_params(geom, direction_cosine, {0.0}, {-1.01}));
+  EXPECT_FALSE(out_of_range.diagnostics.empty());
+
+  auto non_finite = run_beamscan_result<double>(
+      to_device_tensor(host, {1, kN}, complex_dtype<double>()),
+      make_params(geom, AngleConvention{},
+                  {std::numeric_limits<double>::quiet_NaN()}, {0.0}));
+  EXPECT_FALSE(non_finite.diagnostics.empty());
 }
 
 TEST(BeamscanEstimatorOpTest, FloatInstantiationSmoke) {

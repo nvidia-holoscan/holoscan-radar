@@ -27,6 +27,7 @@
 #include <holoscan/core/tensor_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 
+#include "radar_app/app/angle_presentation.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -343,9 +344,9 @@ std::string format_degrees(float radians) {
   const float degrees = radians * kRadiansToDegrees;
   char buffer[32];
   if (std::abs(degrees) < 0.5F) {
-    std::snprintf(buffer, sizeof(buffer), "0 DEG");
+    std::snprintf(buffer, sizeof(buffer), "0");
   } else {
-    std::snprintf(buffer, sizeof(buffer), "%+.0f DEG",
+    std::snprintf(buffer, sizeof(buffer), "%+.0f",
                   static_cast<double>(degrees));
   }
   return buffer;
@@ -584,28 +585,14 @@ void draw_spatial_panel(
           format_degrees(display_center_azimuth);
       const std::string right_label =
           format_degrees(config.az_bounds[1]);
-      const float edge_dx = circle_radius * std::sin(display_half_span);
-      const float edge_y =
-          circle_cy - circle_radius * std::cos(display_half_span);
-      if (2.0F * edge_dx >
-          static_cast<float>(
-              6 * std::max(left_label.size(), right_label.size()) + 6U)) {
-        draw_text(
-            image, width, height,
-            static_cast<int>(std::lround(circle_cx - edge_dx)),
-            static_cast<int>(std::lround(edge_y + 3)), left_label, 1);
-        draw_text(
-            image, width, height,
-            static_cast<int>(std::lround(circle_cx + edge_dx)) -
-                static_cast<int>(right_label.size()) * 6,
-            static_cast<int>(std::lround(edge_y + 3)), right_label, 1);
-      }
+      const std::string degree_legend =
+          "AZ: " + left_label + " / " + center_label + " / " +
+          right_label + " DEG";
       draw_text(
           image, width, height,
-          static_cast<int>(std::lround(circle_cx)) -
-              static_cast<int>(center_label.size()) * 3,
-          static_cast<int>(std::lround(circle_cy - circle_radius)) - 9,
-          center_label, 1);
+          panel.x +
+              (panel.width - static_cast<int>(degree_legend.size()) * 6) / 2,
+          panel.y + 14, degree_legend, 1);
     } else {
       draw_oval(image, width, height, circle_cx, circle_cy, circle_radius,
                 circle_radius, kGrid, 48);
@@ -1089,12 +1076,14 @@ expected<void, Error> SimoDisplayOp::compute(
     if (config_.mode == SimoDisplayMode::kClusters) {
       markers = detail::make_cluster_markers(
           host_idx, host_points, host_labels, host_sizes, idx.shape()[1],
-          feature_points.shape()[1]);
+          feature_points.shape()[1], config_.angle_convention);
       detail::apply_reduced_features(
-          &markers, host_reduced, reduced.shape()[1]);
+          &markers, host_reduced, reduced.shape()[1],
+          config_.angle_convention);
     } else {
       markers = detail::make_raw_detection_markers(
-          host_idx, host_points, idx.shape()[1], feature_points.shape()[1]);
+          host_idx, host_points, idx.shape()[1], feature_points.shape()[1],
+          config_.angle_convention);
     }
     detail::append_history(&history_, markers, frame_index_,
                            config_.history_frames);
@@ -1238,7 +1227,7 @@ std::vector<DetectionMarker> make_cluster_markers(
     const std::vector<std::int64_t>& detection_idx,
     const std::vector<float>& points, const std::vector<std::int64_t>& labels,
     const std::vector<std::int64_t>& sizes, std::int64_t idx_cols,
-    std::int64_t point_cols) {
+    std::int64_t point_cols, const AngleConvention& angle_convention) {
   if (idx_cols < 2 || point_cols < 4 ||
       detection_idx.size() % static_cast<std::size_t>(idx_cols) != 0U) {
     throw std::invalid_argument(
@@ -1256,6 +1245,7 @@ std::vector<DetectionMarker> make_cluster_markers(
     double doppler_bin{0.0};
     double range_bin{0.0};
     std::array<double, 4> features{};
+    PhysicalAngleCentroid angle_centroid;
     std::int64_t count{0};
   };
   std::vector<Accumulator> accumulators(sizes.size());
@@ -1278,10 +1268,13 @@ std::vector<DetectionMarker> make_cluster_markers(
         detection_idx[idx_offset + static_cast<std::size_t>(idx_cols - 1)]);
     const std::size_t point_offset =
         row * static_cast<std::size_t>(point_cols);
-    for (std::size_t feature = 0; feature < 4U; ++feature) {
+    for (std::size_t feature = 0; feature < 2U; ++feature) {
       accumulator.features[feature] +=
           static_cast<double>(points[point_offset + feature]);
     }
+    accumulator.angle_centroid.add(angle_convention,
+                                   points[point_offset + 2U],
+                                   points[point_offset + 3U]);
     ++accumulator.count;
   }
 
@@ -1297,10 +1290,13 @@ std::vector<DetectionMarker> make_cluster_markers(
         static_cast<float>(accumulator.doppler_bin * inv);
     result[cluster].range_bin =
         static_cast<float>(accumulator.range_bin * inv);
-    for (std::size_t feature = 0; feature < 4U; ++feature) {
+    for (std::size_t feature = 0; feature < 2U; ++feature) {
       result[cluster].features[feature] =
           static_cast<float>(accumulator.features[feature] * inv);
     }
+    const PhysicalAngles angles = accumulator.angle_centroid.mean();
+    result[cluster].features[2] = static_cast<float>(angles.az);
+    result[cluster].features[3] = static_cast<float>(angles.el);
   }
 
   std::vector<std::size_t> range_order(result.size());
@@ -1322,7 +1318,7 @@ std::vector<DetectionMarker> make_cluster_markers(
 std::vector<DetectionMarker> make_raw_detection_markers(
     const std::vector<std::int64_t>& detection_idx,
     const std::vector<float>& points, std::int64_t idx_cols,
-    std::int64_t point_cols) {
+    std::int64_t point_cols, const AngleConvention& angle_convention) {
   if (idx_cols < 2 || point_cols < 4 ||
       detection_idx.size() % static_cast<std::size_t>(idx_cols) != 0U) {
     throw std::invalid_argument(
@@ -1345,8 +1341,13 @@ std::vector<DetectionMarker> make_raw_detection_markers(
         detection_idx[idx_offset + static_cast<std::size_t>(idx_cols - 1)]);
     const std::size_t point_offset =
         row * static_cast<std::size_t>(point_cols);
-    std::copy_n(points.begin() + static_cast<std::ptrdiff_t>(point_offset), 4,
+    std::copy_n(points.begin() + static_cast<std::ptrdiff_t>(point_offset), 2,
                 result[row].features.begin());
+    const PhysicalAngles angles =
+        to_physical_angles(angle_convention, points[point_offset + 2U],
+                           points[point_offset + 3U]);
+    result[row].features[2] = static_cast<float>(angles.az);
+    result[row].features[3] = static_cast<float>(angles.el);
   }
 
   std::vector<std::size_t> range_order(rows);
@@ -1367,7 +1368,8 @@ std::vector<DetectionMarker> make_raw_detection_markers(
 
 void apply_reduced_features(std::vector<DetectionMarker>* markers,
                             const std::vector<float>& reduced_points,
-                            std::int64_t reduced_cols) {
+                            std::int64_t reduced_cols,
+                            const AngleConvention& angle_convention) {
   if (markers == nullptr || reduced_cols < 4 ||
       reduced_points.size() !=
           markers->size() * static_cast<std::size_t>(reduced_cols)) {
@@ -1375,11 +1377,18 @@ void apply_reduced_features(std::vector<DetectionMarker>* markers,
         "apply_reduced_features: incompatible reduced points");
   }
   for (std::size_t cluster = 0; cluster < markers->size(); ++cluster) {
-    for (std::size_t feature = 0; feature < 4U; ++feature) {
+    for (std::size_t feature = 0; feature < 2U; ++feature) {
       (*markers)[cluster].features[feature] =
           reduced_points[cluster * static_cast<std::size_t>(reduced_cols) +
                          feature];
     }
+    const std::size_t offset =
+        cluster * static_cast<std::size_t>(reduced_cols);
+    const PhysicalAngles angles =
+        to_physical_angles(angle_convention, reduced_points[offset + 2U],
+                           reduced_points[offset + 3U]);
+    (*markers)[cluster].features[2] = static_cast<float>(angles.az);
+    (*markers)[cluster].features[3] = static_cast<float>(angles.el);
   }
 }
 

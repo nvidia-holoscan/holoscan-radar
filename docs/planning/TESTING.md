@@ -180,7 +180,7 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 #### PhaseShiftBeamformerOp (dense)
 
 - RD maps synthesized as a steering vector for a known (az, el) → `rda_cube` peak at the expected beam bin.
-- `angle_convention`: default-constructed Params select `radar_boresight`; the same physical direction is reported with the expected (az, el) labels under different presets; `direction_cosine` masks the invisible region (`u²+v² > 1`).
+- `angle_convention`: default-constructed Params select `radar_boresight`; the same physical direction is reported with the expected (az, el) labels under different presets; all scan coordinates must be finite, `direction_cosine` axis values outside `[-1, 1]` reject, and valid-axis Cartesian corners in the invisible region (`u²+v² > 1`) remain masked.
 - `array_taper` lowers spatial sidelobes; recognized URAs use a separable
   per-axis product and must suppress azimuth and elevation sidelobes
   independently, while custom coefficients remain per-element.

@@ -234,8 +234,8 @@ TEST(SteeringWeightsDeviceTest, DirectionCosineMasksInvisibleBeams) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kDirectionCosine;
   const auto geom = make_ula(4, 0.5, 1.0);
-  const auto uu = linspace(-1.2, 1.2, 5);
-  const auto vv = linspace(-1.2, 1.2, 5);
+  const auto uu = linspace(-1.0, 1.0, 5);
+  const auto vv = linspace(-1.0, 1.0, 5);
   auto dev = build_steering_weights_device<double>(
       geom, conv, uu, vv, WindowSpec{}, BeamOrder::kAzMajor,
       SteeringLayout::kBeamMajor, /*conjugate=*/true, /*stream=*/0);
@@ -244,7 +244,7 @@ TEST(SteeringWeightsDeviceTest, DirectionCosineMasksInvisibleBeams) {
   const auto* d = host.as<std::complex<double>>();
   const int64_t nch = geom.num_elements();
   const int64_t num_el = 5;
-  // Corner (u,v)=(-1.2,-1.2): u^2+v^2 > 1 -> invisible -> zero weights.
+  // Corner (u,v)=(-1,-1): u^2+v^2 > 1 -> invisible -> zero weights.
   const int64_t beam_corner = 0 * num_el + 0;  // ia=0, ie=0 (az-major)
   for (int64_t c = 0; c < nch; ++c) {
     const std::complex<double> w =
@@ -261,6 +261,19 @@ TEST(SteeringWeightsDeviceTest, DirectionCosineMasksInvisibleBeams) {
     mag += std::abs(w);
   }
   EXPECT_GT(mag, 0.0);
+}
+
+TEST(SteeringWeightsDeviceTest, HostAndDeviceRejectInvalidScanCoordinates) {
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kDirectionCosine;
+  const auto geom = make_ula(4, 0.5, 1.0);
+  EXPECT_THROW(build_steering_table(geom, conv, {1.01}, {0.0}, WindowSpec{}),
+               std::invalid_argument);
+  EXPECT_THROW(
+      build_steering_weights_device<double>(
+          geom, conv, {1.01}, {0.0}, WindowSpec{}, BeamOrder::kAzMajor,
+          SteeringLayout::kBeamMajor, /*conjugate=*/true, /*stream=*/0),
+      std::invalid_argument);
 }
 
 TEST(SteeringWeightsDeviceTest, NonConjugateFlipsImaginarySign) {

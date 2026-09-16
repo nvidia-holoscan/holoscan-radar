@@ -184,10 +184,23 @@ int main(int argc, char** argv) {
             "beamscan_estimator", extents);
         beamscan.set_params(cfg.beamscan_params);
 
-        auto sink = graph.op<DetectionReportOp>(
+        std::vector<radar::AssemblyFeature> report_features{
+            radar::AssemblyFeature::kRange,
+            radar::AssemblyFeature::kVelocity,
+            radar::AssemblyFeature::kAzEstimate,
+            radar::AssemblyFeature::kElEstimate};
+        auto feature_assembly = graph.op<radar::FeatureAssemblyOp<float>>(
+            "feature_assembly", extents, std::move(report_features));
+        auto report = graph.op<DetectionReportOp>(
             "detection_report",
             DetectionReportOp::Config{
-                cadence, /*report_aoa=*/cfg.use_cfar_peaks});
+                .mode = cfg.use_cfar_peaks
+                            ? DetectionReportMode::kRawDetections
+                            : DetectionReportMode::kClusters,
+                .use_reduced_points = !cfg.use_cfar_peaks,
+                .angle_convention =
+                    cfg.beamscan_params.angle_convention,
+                .cadence = cadence});
         auto mask_sink = graph.op<NullSinkOp>("detection_mask_sink");
         auto noise_sink = graph.op<NullSinkOp>("noise_estimate_sink");
         auto power_sink = graph.op<NullSinkOp>("cfar_power_sink");
@@ -201,14 +214,21 @@ int main(int argc, char** argv) {
         graph.add_flow(gather->is_valid, beamscan->is_valid, q);
         graph.add_flow(beamscan->angle_spectrum, spectrum_sink->input, q);
 
-        graph.add_flow(cfar->detection_idx, sink->detection_idx, q);
-        graph.add_flow(cfar->detection_score, sink->detection_score, q);
-        graph.add_flow(range->range_bins, sink->range_bins, q);
+        graph.add_flow(cfar->detection_idx, feature_assembly->detection_idx, q);
+        graph.add_flow(range->range_bins, feature_assembly->range_bins, q);
+        graph.add_flow(beamscan->aoa_estimates,
+                       feature_assembly->aoa_estimates, q);
+        graph.add_flow(feature_assembly->points, report->points, q);
+        graph.add_flow(range->range_bins, report->range_bins, q);
         if (ddm) {
-          graph.add_flow((*ddm_velocity)->velocity_bins, sink->velocity_bins,
-                         q);
+          graph.add_flow((*ddm_velocity)->velocity_bins,
+                         feature_assembly->velocity_bins, q);
+          graph.add_flow((*ddm_velocity)->velocity_bins,
+                         report->velocity_bins, q);
         } else {
-          graph.add_flow(doppler->velocity_bins, sink->velocity_bins, q);
+          graph.add_flow(doppler->velocity_bins,
+                         feature_assembly->velocity_bins, q);
+          graph.add_flow(doppler->velocity_bins, report->velocity_bins, q);
         }
         graph.add_flow(cfar->detection_mask, mask_sink->input, q);
         graph.add_flow(cfar->noise_estimate, noise_sink->input, q);
@@ -235,6 +255,8 @@ int main(int argc, char** argv) {
           viz_cfg.marker_outline = cfg.viz.marker_outline;
           // Virtual-array beamscan angles over the scan grid extents.
           viz_cfg.overlay_boresight = true;
+          viz_cfg.angle_convention =
+              cfg.beamscan_params.angle_convention;
           viz_cfg.az_lo = cfg.az_lo;
           viz_cfg.az_hi = cfg.az_hi;
           viz_cfg.el_lo = cfg.el_lo;
@@ -268,17 +290,8 @@ int main(int argc, char** argv) {
 #endif
 
         if (cfg.use_cfar_peaks) {
-          graph.add_flow(beamscan->aoa_estimates, sink->aoa_estimates, q);
+          graph.add_flow(cfar->detection_idx, report->detection_idx, q);
         } else {
-          std::vector<radar::AssemblyFeature> features{
-              radar::AssemblyFeature::kRange,
-              radar::AssemblyFeature::kVelocity,
-              radar::AssemblyFeature::kAzEstimate,
-              radar::AssemblyFeature::kElEstimate};
-          auto feature_assembly =
-              graph.op<radar::FeatureAssemblyOp<float>>(
-                  "feature_assembly", extents, std::move(features));
-
           auto cluster = graph.op<radar::ClusterDBSCANOp<float>>(
               "cluster_dbscan", extents);
           cluster.set_params(cfg.dbscan_params);
@@ -287,39 +300,14 @@ int main(int argc, char** argv) {
               "detection_reduction", extents);
           reduction.set_params(cfg.reduction_params);
 
-          auto cluster_report = graph.op<ClusterReportOp>(
-              "cluster_report",
-              ClusterReportOp::Config{/*report_detection_idx=*/true});
-
-          graph.add_flow(cfar->detection_idx, feature_assembly->detection_idx,
-                         q);
-          graph.add_flow(range->range_bins, feature_assembly->range_bins, q);
-          if (ddm) {
-            graph.add_flow((*ddm_velocity)->velocity_bins,
-                           feature_assembly->velocity_bins, q);
-          } else {
-            graph.add_flow(doppler->velocity_bins,
-                           feature_assembly->velocity_bins, q);
-          }
-          graph.add_flow(beamscan->aoa_estimates,
-                         feature_assembly->aoa_estimates, q);
           graph.add_flow(feature_assembly->points, cluster->points, q);
-          graph.add_flow(feature_assembly->points, cluster_report->points, q);
-          graph.add_flow(cluster->labels, cluster_report->labels, q);
-          graph.add_flow(cluster->sizes, cluster_report->sizes, q);
           graph.add_flow(cluster->labels, reduction->labels, q);
           graph.add_flow(cfar->detection_idx, reduction->detection_idx, q);
           graph.add_flow(feature_assembly->points, reduction->points, q);
-          graph.add_flow(reduction->rep_idx, cluster_report->rep_idx, q);
-          graph.add_flow(cfar->detection_idx, cluster_report->detection_idx, q);
-          graph.add_flow(range->range_bins, cluster_report->range_bins, q);
-          if (ddm) {
-            graph.add_flow((*ddm_velocity)->velocity_bins,
-                           cluster_report->velocity_bins, q);
-          } else {
-            graph.add_flow(doppler->velocity_bins,
-                           cluster_report->velocity_bins, q);
-          }
+          graph.add_flow(cluster->labels, report->labels, q);
+          graph.add_flow(cluster->sizes, report->sizes, q);
+          graph.add_flow(reduction->rep_idx, report->detection_idx, q);
+          graph.add_flow(reduction->reduced_points, report->reduced_points, q);
 
 #if defined(HOLOSCAN_RADAR_HAS_X11)
           if (viewer) {
@@ -328,13 +316,13 @@ int main(int argc, char** argv) {
           }
 #endif
 
-          bind_out(options, "feature_assembly", "points");
           bind_out(options, "cluster_dbscan", "labels");
           bind_out(options, "cluster_dbscan", "sizes");
           bind_out(options, "detection_reduction", "rep_idx");
           bind_out(options, "detection_reduction", "reduced_points");
         }
 
+        bind_out(options, "feature_assembly", "points");
         bind_out(options, "adc_source", "adc_cube");
         bind_out(options, "range_processor", "range_profiles");
         bind_out(options, "range_processor", "range_bins");

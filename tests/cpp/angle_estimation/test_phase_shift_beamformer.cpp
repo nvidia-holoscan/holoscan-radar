@@ -14,6 +14,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -700,15 +701,33 @@ TEST(PhaseShiftBeamformerOpTest, DirectionCosineMasksInvisibleRegion) {
   const auto vec = make_steering_vector(geom, conv, 0.0, 0.0);  // u=0,v=0
   auto rd = vector_to_rd_maps<double>(vec, {kN, 1, 1});
 
-  const auto uu = linspace(-1.2, 1.2, 5);
-  const auto vv = linspace(-1.2, 1.2, 5);
+  const auto uu = linspace(-1.0, 1.0, 5);
+  const auto vv = linspace(-1.0, 1.0, 5);
   const auto cube = run_beamformer<double>(
       rd, make_params(geom, conv, uu, vv));
 
-  // Corner (u,v)=(-1.2,-1.2): u^2+v^2 > 1 -> invisible -> zero weight -> zero.
+  // Corner (u,v)=(-1,-1): u^2+v^2 > 1 -> invisible -> zero weight -> zero.
   EXPECT_NEAR(cube_power<double>(cube, 0, 0, 0, 0, 5, 1, 1), 0.0, 1e-9);
   // Center (u,v)=(0,0) carries the target energy.
   EXPECT_GT(cube_power<double>(cube, 2, 2, 0, 0, 5, 1, 1), 0.0);
+}
+
+TEST(PhaseShiftBeamformerOpTest, RejectsInvalidScanCoordinates) {
+  constexpr int64_t kN = 4;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  std::vector<std::complex<double>> host(static_cast<size_t>(kN), {1.0, 0.0});
+  AngleConvention direction_cosine;
+  direction_cosine.preset = AngleConventionPreset::kDirectionCosine;
+  auto out_of_range = run_beamformer_result<double>(
+      to_device_tensor(host, {kN, 1, 1}, complex_dtype<double>()),
+      make_params(geom, direction_cosine, {1.01}, {0.0}));
+  EXPECT_FALSE(out_of_range.diagnostics.empty());
+
+  auto non_finite = run_beamformer_result<double>(
+      to_device_tensor(host, {kN, 1, 1}, complex_dtype<double>()),
+      make_params(geom, AngleConvention{},
+                  {std::numeric_limits<double>::infinity()}, {0.0}));
+  EXPECT_FALSE(non_finite.diagnostics.empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, ArrayTaperLowersSidelobes) {

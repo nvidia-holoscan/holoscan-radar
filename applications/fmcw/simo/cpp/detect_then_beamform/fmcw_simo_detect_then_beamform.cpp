@@ -145,6 +145,8 @@ int main(int argc, char** argv) {
                 .mode = app::DetectionReportMode::kClusters,
                 .point_index_columns =
                     simo::report_index_columns(*cfg.assembly_params),
+                .angle_convention =
+                    cfg.beamscan_params->angle_convention,
                 .cadence = cadence});
 
         // Processing and reporting share one source-driven partition.
@@ -203,7 +205,8 @@ int main(int argc, char** argv) {
           simo::viz::add_simo_visualization(
               graph, application, options, cfg.visualization,
               cfg.frame_period, cfg.beamscan_params->az_angles,
-              cfg.beamscan_params->el_angles, cfg.scene.targets,
+              cfg.beamscan_params->el_angles,
+              cfg.beamscan_params->angle_convention, cfg.scene.targets,
               "Detect then beamform",
               simo::viz::SimoClusterVizInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,

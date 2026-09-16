@@ -10,11 +10,61 @@
 #include <stdexcept>
 #include <vector>
 
+#include "radar_app/app/angle_presentation.hpp"
 #include "viz/simo_viz_ops.hpp"
 
 namespace {
 
 namespace viz = holoscan::radar::app::simo::viz;
+
+TEST(AnglePresentationTest, ConvertsDirectionCosinesToPhysicalAngles) {
+  holoscan::radar::AngleConvention convention;
+  convention.preset =
+      holoscan::radar::AngleConventionPreset::kDirectionCosine;
+  const auto angles =
+      holoscan::radar::app::to_physical_angles(convention, 0.5, 0.25);
+  EXPECT_NEAR(angles.az, std::atan2(0.5, std::sqrt(0.6875)), 1e-12);
+  EXPECT_NEAR(angles.el, std::asin(0.25), 1e-12);
+}
+
+TEST(AnglePresentationTest, RejectsNonPhysicalDirectionCosinePair) {
+  holoscan::radar::AngleConvention convention;
+  convention.preset =
+      holoscan::radar::AngleConventionPreset::kDirectionCosine;
+  EXPECT_THROW(holoscan::radar::app::to_physical_angles(convention, 0.9, 0.9),
+               std::invalid_argument);
+}
+
+TEST(AnglePresentationTest, ComputesBoundsFromValidGridCombinations) {
+  holoscan::radar::AngleConvention convention;
+  convention.preset =
+      holoscan::radar::AngleConventionPreset::kDirectionCosine;
+  const auto bounds = holoscan::radar::app::physical_scan_grid_bounds(
+      convention, {-1.0, 0.0, 1.0}, {-1.0, 0.0, 1.0});
+  EXPECT_NEAR(bounds.az[0], -1.5707963267948966, 1e-12);
+  EXPECT_NEAR(bounds.az[1], 1.5707963267948966, 1e-12);
+  EXPECT_NEAR(bounds.el[0], -1.5707963267948966, 1e-12);
+  EXPECT_NEAR(bounds.el[1], 1.5707963267948966, 1e-12);
+}
+
+TEST(AnglePresentationTest, ConvertsPhysicsSphericalToRadarBoresight) {
+  holoscan::radar::AngleConvention convention;
+  convention.preset =
+      holoscan::radar::AngleConventionPreset::kPhysicsSpherical;
+  const auto angles =
+      holoscan::radar::app::to_physical_angles(convention, 0.3, 1.2);
+  EXPECT_NEAR(angles.az, 0.3, 1e-12);
+  EXPECT_NEAR(angles.el, 1.5707963267948966 - 1.2, 1e-12);
+}
+
+TEST(AnglePresentationTest, CentroidHandlesAzimuthWrap) {
+  holoscan::radar::app::PhysicalAngleCentroid centroid;
+  centroid.add(holoscan::radar::AngleConvention{}, 3.13, 0.1);
+  centroid.add(holoscan::radar::AngleConvention{}, -3.13, 0.1);
+  const auto angles = centroid.mean();
+  EXPECT_GT(std::abs(angles.az), 3.0);
+  EXPECT_NEAR(angles.el, 0.1, 1e-5);
+}
 
 TEST(SimoRdHeatmapTest, MapsPeakAndDynamicRange) {
   const std::vector<std::uint8_t> rgba =
@@ -73,9 +123,19 @@ TEST(SimoDashboardTest, ComputesClusterCentroids) {
   EXPECT_FLOAT_EQ(markers[0].doppler_bin, 1.0F);
   EXPECT_FLOAT_EQ(markers[0].range_bin, 3.0F);
   EXPECT_FLOAT_EQ(markers[0].features[0], 12.0F);
-  EXPECT_FLOAT_EQ(markers[0].features[3], 0.3F);
+  EXPECT_NEAR(markers[0].features[3], 0.3015F, 0.002F);
   EXPECT_EQ(markers[0].color_bucket, 0);
   EXPECT_EQ(markers[1].color_bucket, 1);
+}
+
+TEST(SimoDashboardTest, ClusterCentroidHandlesAzimuthWrap) {
+  const auto markers = viz::detail::make_cluster_markers(
+      {0, 1, 0, 1},
+      {10.0F, 1.0F, 3.13F, 0.1F, 10.0F, 1.0F, -3.13F, 0.1F},
+      {0, 0}, {2}, 2, 4);
+  ASSERT_EQ(markers.size(), 1U);
+  EXPECT_GT(std::abs(markers[0].features[2]), 3.0F);
+  EXPECT_NEAR(markers[0].features[3], 0.1F, 1e-5F);
 }
 
 TEST(SimoDashboardTest, MakesRawDetectionMarkers) {
@@ -92,6 +152,18 @@ TEST(SimoDashboardTest, MakesRawDetectionMarkers) {
             (std::array<float, 4>{14.0F, 3.0F, 0.3F, 0.4F}));
   EXPECT_EQ(markers[0].color_bucket, 1);
   EXPECT_EQ(markers[1].color_bucket, 0);
+}
+
+TEST(SimoDashboardTest, ConvertsDirectionCosineMarkersBeforeHistory) {
+  holoscan::radar::AngleConvention convention;
+  convention.preset =
+      holoscan::radar::AngleConventionPreset::kDirectionCosine;
+  const auto markers = viz::detail::make_raw_detection_markers(
+      {2, 3}, {14.0F, 3.0F, 0.5F, 0.25F}, 2, 4, convention);
+  ASSERT_EQ(markers.size(), 1U);
+  EXPECT_NEAR(markers[0].features[2],
+              std::atan2(0.5, std::sqrt(0.6875)), 1e-6);
+  EXPECT_NEAR(markers[0].features[3], std::asin(0.25), 1e-6);
 }
 
 TEST(SimoDashboardTest, AcceptsEmptyRawDetections) {

@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "radar_app/app/angle_presentation.hpp"
 #include "radar_app/app/config.hpp"
 #include "radar_app/app/graph_params.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
@@ -145,10 +146,13 @@ inline AppConfig load_config(const std::filesystem::path& path) {
 
   cfg.use_cfar_peaks =
       cfg.cfar_params.peak_mode != holoscan::radar::CfarPeakMode::kNone;
-  grid_extent(cfg.beamformer_params.az_angles, -0.35, 0.35, &cfg.az_lo,
-              &cfg.az_hi);
-  grid_extent(cfg.beamformer_params.el_angles, -0.1, 0.1, &cfg.el_lo,
-              &cfg.el_hi);
+  const PhysicalAngleBounds physical_bounds = physical_scan_grid_bounds(
+      cfg.beamformer_params.angle_convention, cfg.beamformer_params.az_angles,
+      cfg.beamformer_params.el_angles);
+  cfg.az_lo = physical_bounds.az[0];
+  cfg.az_hi = physical_bounds.az[1];
+  cfg.el_lo = physical_bounds.el[0];
+  cfg.el_hi = physical_bounds.el[1];
   cfg.extents = make_dense_simo_extents(cfg);
   cfg.cfar_extents = make_dense_cfar_extents(cfg.extents);
   return cfg;

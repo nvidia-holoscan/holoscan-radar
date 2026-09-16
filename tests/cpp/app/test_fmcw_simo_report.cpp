@@ -267,7 +267,8 @@ TEST(DetectionReportOpTest, ReportsClustersWithRepresentativeLookup) {
   expect_report_ok(
       std::move(frames),
       app::DetectionReportOp::Config{
-          app::DetectionReportMode::kClusters, {6, 5}, nullptr});
+          .mode = app::DetectionReportMode::kClusters,
+          .point_index_columns = {6, 5}});
 }
 
 TEST(DetectionReportOpTest, ReportsAllNoiseAsNoClusters) {
@@ -284,14 +285,16 @@ TEST(DetectionReportOpTest, ReportsAllNoiseAsNoClusters) {
   expect_report_ok(
       std::move(frames),
       app::DetectionReportOp::Config{
-          app::DetectionReportMode::kClusters, {6, 5}, nullptr});
+          .mode = app::DetectionReportMode::kClusters,
+          .point_index_columns = {6, 5}});
 }
 
 TEST(DetectionReportOpTest, RejectsIncompletePointIndexMapping) {
   const auto diagnostics = run_report(
       single_cluster_frames({10, 20}),
       app::DetectionReportOp::Config{
-          app::DetectionReportMode::kClusters, {6}, nullptr});
+          .mode = app::DetectionReportMode::kClusters,
+          .point_index_columns = {6}});
   EXPECT_FALSE(diagnostics.empty());
 }
 
@@ -299,7 +302,8 @@ TEST(DetectionReportOpTest, RejectsDuplicatePointIndexMapping) {
   const auto diagnostics = run_report(
       single_cluster_frames({10, 20}),
       app::DetectionReportOp::Config{
-          app::DetectionReportMode::kClusters, {6, 6}, nullptr});
+          .mode = app::DetectionReportMode::kClusters,
+          .point_index_columns = {6, 6}});
   EXPECT_FALSE(diagnostics.empty());
 }
 
@@ -307,7 +311,8 @@ TEST(DetectionReportOpTest, RejectsOutOfRangePointIndexMapping) {
   const auto diagnostics = run_report(
       single_cluster_frames({10, 20}),
       app::DetectionReportOp::Config{
-          app::DetectionReportMode::kClusters, {6, 7}, nullptr});
+          .mode = app::DetectionReportMode::kClusters,
+          .point_index_columns = {6, 7}});
   EXPECT_FALSE(diagnostics.empty());
 }
 
@@ -315,7 +320,8 @@ TEST(DetectionReportOpTest, RejectsUnmatchedRepresentativeIndex) {
   const auto diagnostics = run_report(
       single_cluster_frames({11, 20}),
       app::DetectionReportOp::Config{
-          app::DetectionReportMode::kClusters, {6, 5}, nullptr});
+          .mode = app::DetectionReportMode::kClusters,
+          .point_index_columns = {6, 5}});
   EXPECT_FALSE(diagnostics.empty());
 }
 

@@ -9,8 +9,9 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.5.0",
+        "version": "0.6.0",
         "changelog": {
+            "0.6.0": "Reject non-finite scan coordinates and direction-cosine axis values outside [-1, 1]",
             "0.5.0": "Apply non-custom aperture tapers separably on recognized filled URAs",
             "0.4.0": "Tick-shell cleanup, optional-mask Graph wiring, axis-wise interpolation, cached workspace, and inline live timing",
             "0.3.0": "Document radar_boresight as the default angle convention",

@@ -20,6 +20,8 @@
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
 
+#include "radar_common/descriptors/angle_convention.hpp"
+
 namespace holoscan::radar::app::simo::viz {
 
 // Common render/history item produced from either a raw detection row or a
@@ -61,6 +63,7 @@ struct SimoDisplayConfig {
   std::int64_t height{720};
   std::array<float, 2> az_bounds{};
   std::array<float, 2> el_bounds{};
+  AngleConvention angle_convention;
   std::string title;
   std::vector<TruthTarget> truth_targets;
 };
@@ -105,16 +108,20 @@ std::vector<DetectionMarker> make_cluster_markers(
     const std::vector<std::int64_t>& detection_idx,
     const std::vector<float>& points, const std::vector<std::int64_t>& labels,
     const std::vector<std::int64_t>& sizes, std::int64_t idx_cols,
-    std::int64_t point_cols);
+    std::int64_t point_cols,
+    const AngleConvention& angle_convention = AngleConvention{});
 
 std::vector<DetectionMarker> make_raw_detection_markers(
     const std::vector<std::int64_t>& detection_idx,
     const std::vector<float>& points, std::int64_t idx_cols,
-    std::int64_t point_cols);
+    std::int64_t point_cols,
+    const AngleConvention& angle_convention = AngleConvention{});
 
 void apply_reduced_features(std::vector<DetectionMarker>* markers,
                             const std::vector<float>& reduced_points,
-                            std::int64_t reduced_cols);
+                            std::int64_t reduced_cols,
+                            const AngleConvention& angle_convention =
+                                AngleConvention{});
 
 void append_history(std::deque<HistorySample>* history,
                     const std::vector<DetectionMarker>& markers,

@@ -121,6 +121,8 @@ int main(int argc, char** argv) {
             "detection_report",
             app::DetectionReportOp::Config{
                 .mode = app::DetectionReportMode::kRawDetections,
+                .angle_convention =
+                    cfg.beamformer_params->angle_convention,
                 .cadence = cadence});
 
         // Processing and reporting share one source-driven partition.
@@ -165,7 +167,8 @@ int main(int argc, char** argv) {
           simo::viz::add_simo_visualization(
               graph, application, options, cfg.visualization,
               cfg.frame_period, cfg.beamformer_params->az_angles,
-              cfg.beamformer_params->el_angles, cfg.scene.targets,
+              cfg.beamformer_params->el_angles,
+              cfg.beamformer_params->angle_convention, cfg.scene.targets,
               "Beamform then detect",
               simo::viz::SimoRawVizInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,

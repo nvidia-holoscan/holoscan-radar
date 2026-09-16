@@ -84,6 +84,7 @@ SteeringTable build_steering_table(const ArrayGeometry& geometry,
     throw std::invalid_argument(
         "steering table: az_angles and el_angles must be non-empty");
   }
+  validate_scan_grid_axes(convention, az_angles, el_angles, "steering table");
 
   const int64_t num_elements = geometry.num_elements();
   const auto taper = generate_steering_taper(geometry, array_taper);

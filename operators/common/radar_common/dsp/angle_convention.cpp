@@ -5,7 +5,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 #include "radar_common/math/constants.hpp"
 
@@ -79,6 +82,30 @@ CustomFrame custom_frame(const AngleConvention& conv) {
 }
 
 }  // namespace
+
+void validate_scan_grid_axes(const AngleConvention& conv,
+                             const std::vector<double>& az_angles,
+                             const std::vector<double>& el_angles,
+                             std::string_view who) {
+  const auto validate_axis = [&](const std::vector<double>& values,
+                                 std::string_view name) {
+    for (std::size_t index = 0; index < values.size(); ++index) {
+      const double value = values[index];
+      const std::string location =
+          std::string(who) + ": " + std::string(name) + "[" +
+          std::to_string(index) + "]";
+      if (!std::isfinite(value)) {
+        throw std::invalid_argument(location + " must be finite");
+      }
+      if (conv.uses_direction_cosine() && (value < -1.0 || value > 1.0)) {
+        throw std::invalid_argument(
+            location + " must be within [-1, 1] for direction_cosine");
+      }
+    }
+  };
+  validate_axis(az_angles, "az_angles");
+  validate_axis(el_angles, "el_angles");
+}
 
 CanonicalDirection boundary_to_canonical(const AngleConvention& conv, double az,
                                          double el) {

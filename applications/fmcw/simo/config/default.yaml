@@ -155,7 +155,7 @@ beamform_then_detect:
         angle_convention:
             # Common options: radar_boresight, direction_cosine, custom.
             # See operators/angle_estimation/phase_shift_beamformer_op/README.md.
-            preset: radar_boresight
+            preset: direction_cosine
         # Angle grids accept an explicit array or inclusive {min, max, step}.
         az_angles: {min: -0.3, max: 0.3, step: 0.05}
         el_angles: {min: -0.3, max: 0.3, step: 0.05}

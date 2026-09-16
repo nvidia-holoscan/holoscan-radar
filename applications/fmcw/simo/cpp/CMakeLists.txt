@@ -10,6 +10,7 @@ if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
     target_link_libraries(simo_viz PUBLIC
         holoscan::core
+        holoscan::radar_app
         holoscan::radar_common
         holoscan::operators::holoviz
         CUDA::cudart)
