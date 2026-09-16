@@ -71,8 +71,9 @@ __global__ void power_to_rgba(const float* power, std::int64_t num_planes,
   }
   const std::int64_t output_row = output_pixel / plot_width;
   const std::int64_t output_col = output_pixel % plot_width;
-  const std::int64_t source_row = output_row * source_rows / plot_height;
-  const std::int64_t source_col = output_col * source_cols / plot_width;
+  const std::int64_t source_row = output_col * source_rows / plot_width;
+  const std::int64_t source_col =
+      (plot_height - 1 - output_row) * source_cols / plot_height;
   const std::int64_t source_pixel = source_row * source_cols + source_col;
   const std::int64_t source_pixels = source_rows * source_cols;
   float value = 0.0F;
@@ -353,24 +354,22 @@ DashboardLayout make_dashboard_layout(std::int64_t width,
   };
   const int panel_width = (side_width - kGap) / 2;
   const int available_height = canvas_height - 2 * kOuter;
-  const int spatial_height = std::max(180, available_height * 42 / 100);
+  const int panel_height = (available_height - 2 * kGap) / 3;
   result.azimuth_range_panel =
-      PixelRect{side_x, kOuter, panel_width, spatial_height};
+      PixelRect{side_x, kOuter, panel_width, panel_height};
   result.boresight_panel =
       PixelRect{side_x + panel_width + kGap, kOuter, panel_width,
-                spatial_height};
+                panel_height};
 
-  const int history_y = kOuter + spatial_height + kGap;
-  const int history_height = available_height - spatial_height - kGap;
-  const int panel_height = (history_height - kGap) / 2;
+  const int second_row_y = kOuter + panel_height + kGap;
+  const int third_row_y = second_row_y + panel_height + kGap;
   result.history_panels = {
-      PixelRect{side_x, history_y, panel_width, panel_height},
-      PixelRect{side_x + panel_width + kGap, history_y, panel_width,
+      PixelRect{side_x, second_row_y, panel_width, panel_height},
+      PixelRect{side_x + panel_width + kGap, second_row_y, panel_width,
                 panel_height},
-      PixelRect{side_x, history_y + panel_height + kGap, panel_width,
-                panel_height},
+      PixelRect{side_x, third_row_y, panel_width, panel_height},
       PixelRect{side_x + panel_width + kGap,
-                history_y + panel_height + kGap, panel_width, panel_height},
+                third_row_y, panel_width, panel_height},
   };
   return result;
 }
@@ -498,43 +497,61 @@ void draw_spatial_panel(
       y_label, 1);
 
   const float max_range = std::max(1.0F, range_bounds[1]);
-  const float max_abs_az =
-      std::min(1.57079632679F,
-               std::max(std::abs(config.az_bounds[0]),
-                        std::abs(config.az_bounds[1])));
-  const float lateral_extent =
-      std::max(1.0F, max_range * std::sin(max_abs_az));
-  const std::array<float, 2> x_bounds =
-      view == SpatialView::kAzimuthRange
-          ? std::array<float, 2>{-lateral_extent, lateral_extent}
-          : config.az_bounds;
-  const std::array<float, 2> y_bounds =
-      view == SpatialView::kAzimuthRange
-          ? std::array<float, 2>{0.0F, max_range}
-          : config.el_bounds;
-
-  for (int tick = 0; tick < 3; ++tick) {
-    const float fraction = static_cast<float>(tick) / 2.0F;
-    const int x = plot.x + static_cast<int>(fraction * (plot.width - 1));
-    const int y = plot.y + static_cast<int>(fraction * (plot.height - 1));
-    draw_line(image, width, height, x, plot.y, x,
-              plot.y + plot.height - 1, kGrid);
-    draw_line(image, width, height, plot.x, y,
-              plot.x + plot.width - 1, y, kGrid);
+  const float circle_cx = plot.x + 0.5F * (plot.width - 1);
+  const float circle_cy = plot.y + 0.5F * (plot.height - 1);
+  const float circle_radius =
+      0.5F * static_cast<float>(std::min(plot.width, plot.height) - 2);
+  if (view == SpatialView::kAzimuthRange) {
+    draw_oval(image, width, height, circle_cx, circle_cy, circle_radius,
+              circle_radius, kGrid, 48);
+    draw_oval(image, width, height, circle_cx, circle_cy,
+              0.5F * circle_radius, 0.5F * circle_radius, kGrid, 32);
+    draw_line(image, width, height, static_cast<int>(circle_cx),
+              static_cast<int>(circle_cy),
+              static_cast<int>(circle_cx),
+              static_cast<int>(circle_cy - circle_radius), kGrid);
+    for (float azimuth : config.az_bounds) {
+      draw_line(
+          image, width, height, static_cast<int>(circle_cx),
+          static_cast<int>(circle_cy),
+          static_cast<int>(circle_cx +
+                           circle_radius * std::sin(azimuth)),
+          static_cast<int>(circle_cy -
+                           circle_radius * std::cos(azimuth)),
+          kGrid);
+    }
+  } else {
+    for (int tick = 0; tick < 3; ++tick) {
+      const float fraction = static_cast<float>(tick) / 2.0F;
+      const int x = plot.x + static_cast<int>(fraction * (plot.width - 1));
+      const int y = plot.y + static_cast<int>(fraction * (plot.height - 1));
+      draw_line(image, width, height, x, plot.y, x,
+                plot.y + plot.height - 1, kGrid);
+      draw_line(image, width, height, plot.x, y,
+                plot.x + plot.width - 1, y, kGrid);
+    }
   }
 
   const auto to_pixel = [&](const std::array<float, 4>& features) {
-    float x_value = features[2];
-    float y_value = features[3];
     if (view == SpatialView::kAzimuthRange) {
-      x_value = features[0] * std::sin(features[2]);
-      y_value = features[0] * std::cos(features[2]);
+      const float normalized_range =
+          std::clamp(features[0] / max_range, 0.0F, 1.0F);
+      return std::array<int, 2>{
+          static_cast<int>(
+              circle_cx +
+              normalized_range * circle_radius * std::sin(features[2])),
+          static_cast<int>(
+              circle_cy -
+              normalized_range * circle_radius * std::cos(features[2])),
+      };
     }
     const float x_fraction =
-        std::clamp((x_value - x_bounds[0]) / (x_bounds[1] - x_bounds[0]),
+        std::clamp((features[2] - config.az_bounds[0]) /
+                       (config.az_bounds[1] - config.az_bounds[0]),
                    0.0F, 1.0F);
     const float y_fraction =
-        std::clamp((y_value - y_bounds[0]) / (y_bounds[1] - y_bounds[0]),
+        std::clamp((features[3] - config.el_bounds[0]) /
+                       (config.el_bounds[1] - config.el_bounds[0]),
                    0.0F, 1.0F);
     return std::array<int, 2>{
         plot.x + static_cast<int>(x_fraction * (plot.width - 1)),
@@ -706,7 +723,7 @@ std::vector<std::uint8_t> make_annotation(
             plot.x + plot.width, plot.y + plot.height, kWhite);
 
   const std::string title =
-      config.title + " | SCENARIO T = " +
+      config.title + " | DT: " +
       format_value(static_cast<float>(frame_index * config.frame_period)) +
       " S";
   const std::int64_t title_width =
@@ -715,27 +732,27 @@ std::vector<std::uint8_t> make_annotation(
             std::max<std::int64_t>(
                 2, plot.x + (plot.width - title_width) / 2),
             9, title, 2);
-  constexpr std::string_view kRangeLabel = "RANGE (M)";
+  constexpr std::string_view kDopplerLabel = "VELOCITY (M/S)";
   draw_text(&image, width, height,
             plot.x + (plot.width - static_cast<std::int64_t>(
-                                      kRangeLabel.size()) * 6) /
+                                      kDopplerLabel.size()) * 6) /
                          2,
-            plot.y + plot.height + 25, kRangeLabel, 1);
-  constexpr std::string_view kDopplerLabel = "VELOCITY (M/S)";
+            plot.y + plot.height + 25, kDopplerLabel, 1);
+  constexpr std::string_view kRangeLabel = "RANGE (M)";
   draw_text_ccw(
       &image, width, height, 2,
       std::max<std::int64_t>(
           0, plot.y + (plot.height - static_cast<std::int64_t>(
-                                   kDopplerLabel.size()) * 6) /
+                                   kRangeLabel.size()) * 6) /
                                 2),
-      kDopplerLabel, 1);
+      kRangeLabel, 1);
 
   const std::array<std::int64_t, 3> x_positions{
       plot.x, plot.x + plot.width / 2, plot.x + plot.width - 1};
   const std::array<std::size_t, 3> x_indices{
-      0U, ranges.size() / 2U, ranges.size() - 1U};
+      0U, velocities.size() / 2U, velocities.size() - 1U};
   for (std::size_t i = 0; i < x_positions.size(); ++i) {
-    const std::string tick = format_value(ranges[x_indices[i]]);
+    const std::string tick = format_value(velocities[x_indices[i]]);
     draw_text(&image, width, height,
               x_positions[i] - static_cast<std::int64_t>(tick.size()) * 3,
               plot.y + plot.height + 5, tick, 1);
@@ -743,9 +760,9 @@ std::vector<std::uint8_t> make_annotation(
   const std::array<std::int64_t, 3> y_positions{
       plot.y, plot.y + plot.height / 2, plot.y + plot.height - 7};
   const std::array<std::size_t, 3> y_indices{
-      0U, velocities.size() / 2U, velocities.size() - 1U};
+      ranges.size() - 1U, ranges.size() / 2U, 0U};
   for (std::size_t i = 0; i < y_positions.size(); ++i) {
-    const std::string tick = format_value(velocities[y_indices[i]]);
+    const std::string tick = format_value(ranges[y_indices[i]]);
     draw_text(&image, width, height,
               plot.x - 4 - static_cast<std::int64_t>(tick.size()) * 6,
               y_positions[i], tick, 1);
@@ -756,12 +773,10 @@ std::vector<std::uint8_t> make_annotation(
     const auto& color =
         kClusterColors[static_cast<std::size_t>(centroid.color_bucket) %
                        kClusterColors.size()];
-    const float x =
-        plot.x + (centroid.range_bin + 0.5F) /
-                     static_cast<float>(cols) * plot.width;
-    const float y =
-        plot.y + (centroid.doppler_bin + 0.5F) /
-                     static_cast<float>(rows) * plot.height;
+    const auto position = detail::rd_plot_position(
+        centroid.doppler_bin, centroid.range_bin, rows, cols);
+    const float x = plot.x + position[0] * plot.width;
+    const float y = plot.y + position[1] * plot.height;
     const float outer_rx =
         std::max(4.0F, 0.65F * config.detection_radius * plot.width);
     const float outer_ry =
@@ -1197,6 +1212,18 @@ void append_history(std::deque<HistorySample>* history,
   while (!history->empty() && history->front().frame < oldest) {
     history->pop_front();
   }
+}
+
+std::array<float, 2> rd_plot_position(float doppler_bin, float range_bin,
+                                      std::int64_t rows, std::int64_t cols) {
+  if (rows <= 0 || cols <= 0) {
+    throw std::invalid_argument("rd_plot_position: invalid map shape");
+  }
+  const float x =
+      (doppler_bin + 0.5F) / static_cast<float>(rows);
+  const float y =
+      1.0F - (range_bin + 0.5F) / static_cast<float>(cols);
+  return {std::clamp(x, 0.0F, 1.0F), std::clamp(y, 0.0F, 1.0F)};
 }
 
 std::array<float, 2> history_plot_position(

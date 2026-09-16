@@ -40,6 +40,17 @@ TEST(SimoRdHeatmapTest, DenseLeadingAxesUseMaxProjection) {
   EXPECT_EQ(dense, projected);
 }
 
+TEST(SimoRdHeatmapTest, MapsDopplerToXAndRangeUpward) {
+  const auto low_range =
+      viz::detail::rd_plot_position(1.0F, 0.0F, 4, 8);
+  const auto high_range =
+      viz::detail::rd_plot_position(1.0F, 7.0F, 4, 8);
+  const auto later_doppler =
+      viz::detail::rd_plot_position(2.0F, 0.0F, 4, 8);
+  EXPECT_LT(low_range[0], later_doppler[0]);
+  EXPECT_GT(low_range[1], high_range[1]);
+}
+
 TEST(SimoDashboardTest, ComputesClusterCentroids) {
   const std::vector<viz::ClusterCentroid> centroids =
       viz::detail::compute_cluster_centroids(

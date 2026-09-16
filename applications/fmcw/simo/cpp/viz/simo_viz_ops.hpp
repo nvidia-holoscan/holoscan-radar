@@ -107,6 +107,9 @@ void append_history(std::deque<HistorySample>* history,
                     const std::vector<ClusterCentroid>& centroids,
                     std::int64_t frame, std::int64_t history_frames);
 
+std::array<float, 2> rd_plot_position(float doppler_bin, float range_bin,
+                                      std::int64_t rows, std::int64_t cols);
+
 std::array<float, 2> history_plot_position(
     const HistorySample& sample, std::int64_t current_frame,
     std::int64_t history_frames, int feature,
