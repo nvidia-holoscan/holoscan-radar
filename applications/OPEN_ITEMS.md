@@ -64,3 +64,35 @@ Remaining optional follow-up:
   map to index. If a per-detection score is wanted, extend `AnglePeakPickOp` to
   emit the peak beam's score `(M,)` and teach `DetectionReportOp` to accept a
   per-detection score vector.
+
+## 4. HDF5 ADC replay source
+
+**Status:** open — shared application input option; simulator sources remain
+the default.
+
+Each application should be able to select recorded HDF5 ADC data instead of
+the analytic simulator without changing its downstream processing graph. Add
+a reusable source under `applications/common/radar_app/` that reads framed ADC
+tensors, validates the application-specific shape and complex dtype, uploads
+each frame into a device Tensor pool, and emits the same `adc_cube` contract
+and cadence/timestamps as the corresponding simulator source.
+
+The application-owned YAML boundary should select `simulator` or `hdf5` and
+carry only replay concerns such as file path, dataset path, end-of-file policy,
+and optional frame range. Operator parameter blocks remain unchanged. SISO,
+SIMO, MIMO-TDM, and MIMO-DDM must each validate the recorded tensor against
+their existing named ADC axes before the graph starts; file metadata must not
+silently override waveform, array, schedule, or DDM-code configuration.
+
+Before implementation, define and document:
+
+- the HDF5 dataset layout and complex-number encoding;
+- fixed-shape versus per-frame datasets and supported precisions;
+- stop, loop, and bounded-frame behavior at end of file;
+- timestamp/cadence behavior needed by Exact side inputs;
+- HDF5 build, container, and package dependencies;
+- focused reader tests with small deterministic fixtures plus one smoke per
+  application family.
+
+This remains a GPU application path: host file I/O is expected, but emitted
+ADC tensors are CUDA-accessible and there is no CPU signal-processing fallback.
