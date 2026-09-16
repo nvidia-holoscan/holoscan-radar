@@ -122,6 +122,7 @@ set(HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS
     mimo_deinterleave_op
     tdm_dense_compensation_op
     ddm_dense_demultiplex_op
+    doppler_notch_op
     ddm_power_fold_op
     ddm_sparse_demultiplex_op
     tdm_sparse_compensation_op

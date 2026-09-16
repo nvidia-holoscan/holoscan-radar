@@ -250,14 +250,16 @@ flowchart TD
   RANGE -->|"range_profiles"| DOPP["FMCWDopplerProcessorOp"]
   DOPP -->|"rd_maps (N_rx, num_doppler, num_range)"| COMP["DDMDenseDemultiplexOp"]
   DOPP -->|"velocity_bins"| COMP
-  COMP -->|"rd_maps_out (M_tx, N_rx, num_doppler_per_tx, num_range)"| VAA["VirtualArrayAssemblyOp"]
+  COMP -->|"rd_maps_out (M_tx, N_rx, num_doppler_per_tx, num_range)"| NOTCH["DopplerNotchOp"]
+  COMP -->|"velocity_bins_out"| NOTCH
+  NOTCH -->|"rd_maps_out"| VAA["VirtualArrayAssemblyOp"]
   COMP -->|"velocity_bins_out (num_doppler_per_tx)"| AXIS["Feature/report velocity axis"]
   VAA -->|"rd_maps_out (num_virtual, num_doppler, num_range)"| ANGLE["angle path (dense or sparse) + CFARDetectorOp"]
   VAA -->|"array_geometry (WireArrayGeometry) → ⟨angle op⟩.array_geometry"| ANGLE
 ```
 
 - **No** `MIMODeinterleaveOp` (nothing is interleaved in slow-time).
-- **Clutter suppression:** omitted in DDM v1. A plain slow-time mean over coded pre-demux chirps does not cleanly null stationary clutter. After `DDMDenseDemultiplexOp`, the data is already Doppler-domain; routing it through `ClutterFilterOp` subtracts a mean across Doppler bins rather than slow-time chirps and creates a range-aligned pedestal. A future DDM solution must be code-aware before demux or explicitly notch physical zero velocity after demux.
+- **Clutter suppression:** `DopplerNotchOp` applies an optional hard or raised-cosine physical-velocity stopband after dense demultiplexing. A plain slow-time mean over coded pre-demux chirps does not cleanly null stationary clutter, while routing post-demux RD maps through `ClutterFilterOp` subtracts a mean across Doppler bins and creates a range-aligned pedestal. The notch applies one gain to every TX/RX channel at each physical velocity, preserving channel phase.
 - **Velocity:** the `[0, PRF)` Doppler span is shared across M bands, so unambiguous velocity is reduced by `M`; DDM needs guard bands / a band-assignment convention to keep the TX bands separable (handled in the compensation operator's `ddm_code`). `FMCWDopplerProcessorOp.velocity_bins` is causally published before `rd_maps` and `DDMDenseDemultiplexOp` transforms that same-tick physical axis alongside the map: a centered reduced slice for linear M-band demux, or identity for nonlinear full-axis correlation.
 - **Clustering:** same as SIMO/TDM — attaches on the assembled virtual RD maps.
 
@@ -292,7 +294,7 @@ Power folding deliberately removes the velocity-fold identity. `DDMSparseDemulti
 | MIMO — TDM | M × N | `MIMODeinterleaveOp` | `TDMDenseCompensationOp` | `TDMSparseCompensationOp` | standalone or sparse-fused | ÷ M |
 | MIMO — DDM | M × N | — | `DDMDenseDemultiplexOp` | `DDMPowerFoldOp` + `DDMSparseDemultiplexOp` | standalone or sparse-fused | ÷ M; sparse needs `fold_idx` outside principal interval |
 
-The range/Doppler processors, `CFARDetectorOp`, and the angle operators are common to every workflow with angle. `ClutterFilterOp` is part of the ordinary SISO/SIMO/TDM slow-time chain but is omitted for coded DDM in v1. The virtual-array assembly is identical across TDM and DDM — only the *TX-separation* step (`MIMODeinterleaveOp` + phase correction for TDM; band demux for DDM) differs.
+The range/Doppler processors, `CFARDetectorOp`, and the angle operators are common to every workflow with angle. `ClutterFilterOp` is part of the ordinary SISO/SIMO/TDM slow-time chain; dense DDM instead uses optional post-demux `DopplerNotchOp`. The virtual-array assembly is identical across TDM and DDM — only the *TX-separation* step (`MIMODeinterleaveOp` + phase correction for TDM; band demux for DDM) differs.
 
 Clustering is not a column because it is orthogonal to the modality: every angle-bearing row supports *angle-then-cluster*, and the sparse angle path additionally supports *cluster-then-angle* (see *Clustering placement*).
 

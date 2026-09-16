@@ -48,6 +48,7 @@
       "ddm_power_fold_op",
       "ddm_sparse_demultiplex_op",
       "detection_reduction_op",
+      "doppler_notch_op",
       "esprit_estimator_op",
       "feature_assembly_op",
       "fmcw_doppler_processor_op",

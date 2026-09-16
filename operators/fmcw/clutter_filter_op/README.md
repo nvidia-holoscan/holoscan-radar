@@ -13,7 +13,12 @@ Slow-time static-clutter / zero-Doppler suppression on range profiles, between r
 FMCWRangeProcessorOp → ClutterFilterOp → FMCWDopplerProcessorOp
 ```
 
-The current MIMO-DDM workflows omit this operator; code-aware DDM clutter suppression remains a separate design question. The fused `FMCWRangeDopplerProcessorOp` inlines this stage and does not emit intermediate profiles.
+MIMO-DDM must not use this operator on coded pre-demux chirps or on
+post-demux range-Doppler maps. Coded chirps do not have ordinary stationary
+slow-time semantics, while post-demux data is already in the Doppler domain.
+Use `DopplerNotchOp` after dense demultiplexing. The fused
+`FMCWRangeDopplerProcessorOp` inlines this stage for ordinary SISO, SIMO, and
+TDM chains and does not emit intermediate profiles.
 
 Contract: [`OPERATOR_API.md` § `ClutterFilterOp`](../../../docs/planning/OPERATOR_API.md) ·
 group: [`operators/fmcw/README.md`](../README.md)
@@ -24,9 +29,14 @@ All math lives in `clutter_stage.hpp` (`with_clutter_expr`). `compute()` is a th
 
 `method` selects one of three filters plus pass-through:
 
-- **`mean_subtraction`.** Subtract the per-(batch, range-bin) weighted slow-time mean `mu_w = sum(w[k] * in[k]) / sum(w[k])`, broadcast back over chirps. `doppler_window: none` uses the existing uniform mean exactly. Shape and chirp count are preserved. Matching the projection taps to the downstream Doppler analysis window guarantees a zero DC bin after windowing.
-- **`single_delay`.** First-order MTI: `out[k] = in[k+1] − in[k]` for `k ∈ [0, num_chirps−1)`. `num_chirps_out = num_chirps − 1`. Needs `num_chirps ≥ 2`.
-- **`double_delay`.** Second-order MTI: `out[k] = in[k] − 2·in[k+1] + in[k+2]` for `k ∈ [0, num_chirps−2)`. `num_chirps_out = num_chirps − 2`. Needs `num_chirps ≥ 3`.
+- **`mean_subtraction`.** Static clutter removal by subtracting the weighted
+  slow-time mean and broadcasting it over chirps. This is not a pulse
+  canceller. `doppler_window: none` uses a uniform mean; matching the
+  projection taps to the downstream window guarantees a zero DC bin.
+- **`single_delay`.** Two-pulse canceller (chirp-to-chirp here), first-order
+  MTI: `out[k] = in[k+1] − in[k]`. It drops one chirp.
+- **`double_delay`.** Three-pulse canceller (chirp-to-chirp here), second-order
+  MTI: `out[k] = in[k] − 2·in[k+1] + in[k+2]`. It drops two chirps.
 - **`none`.** Identity expression in `with_clutter_expr`. The standalone operator materializes it into its output pool; the fused operator keeps it inline without an intermediate cube.
 
 `none`, `single_delay`, and `double_delay` ignore `doppler_window`; there are no new method enum values or YAML method spellings. Weighted projection taps use the shared `WindowSpec` generation and cache conventions. An unseen configuration rebuilds taps and warns once; prior configurations are reused.

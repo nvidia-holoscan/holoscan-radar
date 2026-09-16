@@ -177,14 +177,15 @@ M TX transmit simultaneously with per-chirp phase codes placing each TX in a dis
 ADC (N_rx, num_chirps, samples)   [all M TX present every chirp, per-chirp phase codes]
   → FMCWRangeProcessorOp       → (N_rx, num_chirps, num_range)
   → FMCWDopplerProcessorOp     → (N_rx, num_doppler, num_range)               [Doppler holds M TX bands]
-  → TDMDenseCompensationOp / DDMDenseDemultiplexOp → (M_tx, N_rx, num_doppler_out, num_range)   [demux → TX axis]
+  → DDMDenseDemultiplexOp    → (M_tx, N_rx, num_doppler_out, num_range)   [demux → TX axis]
        num_doppler_out = num_doppler_per_tx  (linear gather / doppler_offsets)
                        = num_doppler         (non-linear phase_codes correlate)
+  → [DopplerNotchOp]         → (M_tx, N_rx, num_doppler_out, num_range)
   → VirtualArrayAssemblyOp     → (num_virtual, num_doppler_out, num_range) + virtual element_positions
   → angle path (dense or sparse) + CFARDetectorOp
 ```
 
-No `MIMODeinterleaveOp` (nothing is interleaved in slow-time). The v1 DDM chains do not use `ClutterFilterOp`: coded pre-demux chirps do not admit its ordinary slow-time mean, while demultiplexed outputs are already Doppler-domain maps and therefore cannot satisfy its range-profile input contract. DDM clutter suppression requires a future code-aware pre-demux or physical-zero-velocity post-demux stage. Clustering remains the same as SIMO/TDM.
+No `MIMODeinterleaveOp` (nothing is interleaved in slow-time). DDM does not use `ClutterFilterOp`: coded pre-demux chirps do not admit its ordinary slow-time mean, while demultiplexed outputs are already Doppler-domain maps. `DopplerNotchOp` supplies optional physical-velocity suppression after dense demultiplexing. Folded sparse DDM remains unsupported because one folded bin represents multiple physical velocities. Clustering remains the same as SIMO/TDM.
 
 ### Workflow comparison
 
@@ -210,6 +211,7 @@ Common to every workflow (SISO through MIMO). The split trio plus the fused drop
 - **FMCWRangeProcessorOp** — range compression: windowed FFT along fast-time, ADC cube → range profiles.
 - **ClutterFilterOp** — static-clutter / zero-Doppler suppression along slow-time, between range and Doppler.
 - **FMCWDopplerProcessorOp** — Doppler compression: windowed FFT along slow-time, range profiles → range-Doppler maps.
+- **DopplerNotchOp** — optional physical-velocity stopband on an already formed RD tensor; hard null when its transition width is zero, otherwise a raised-cosine transition.
 - **FMCWRangeDopplerProcessorOp** — fused range + optional clutter + Doppler in one graph node (drop-in for the split trio where the intermediate range profiles aren't needed; for MIMO, usable up to the point a marshaling step must interpose).
 
 ### Detection & clustering
@@ -372,6 +374,22 @@ optional array is absent; null is invalid. See
 - `waveform` **[live]** — FMCWWaveformDescriptor. Source for the `velocity_bins` axis (carrier → λ, chirp repetition interval → PRF). Override for a changing waveform. Default: none (required only when `velocity_bins` is used).
 - `fft_norm` **[live]** — enum {backward, ortho, forward}. Same convention and rationale as FMCWRangeProcessorOp. Default: backward.
 - `nfft` **[live]** — int, ≥ `num_chirps`. Doppler FFT length; larger interpolates the velocity grid over the same span (also the large-prime escape hatch). The output Doppler-bin count follows `nfft` (downstream infers it). Overriding to an unseen length builds a new FFT plan and warns; seen lengths reused from the MatX plan cache. Default: none (= `num_chirps`, exact N-point).
+
+#### DopplerNotchOp
+
+- **In:** `rd_maps` — complex64 / complex128, one of the named shapes `(num_doppler, num_range_bins)`, `(N_rx, num_doppler, num_range_bins)`, or `(M_tx, N_rx, num_doppler, num_range_bins)`. Doppler is the second-to-last axis; no opaque leading batch is accepted.
+- **In:** `velocity_bins` — float32 / float64 matching the templated precision, `(num_doppler,)`. Required and aligned exactly with `rd_maps`; values are finite, strictly increasing physical radial velocities in m/s.
+- **Out:** `rd_maps_out` — same dtype and shape as `rd_maps`. Every named channel receives the same Doppler gain, preserving relative channel phase.
+- **Ctor:** `MaxTensorExtents` required (`max_doppler_bins`, `max_range_bins`; optional `max_rx` / `max_tx` admit the named leading axes).
+
+The operator acts only on an unfolded physical velocity axis. It must not consume `DDMPowerFoldOp` output: one folded bin represents multiple physical velocities. Omit the operator from a graph for pass-through; there is no `none` mode. No mask output exists in v1; whether CFAR needs a generic exclusion mask is deferred in the operator-local open items.
+
+**Parameters:**
+
+- `center_velocity` **[live]** — float, center of the notch in m/s. Cyclic distance is measured over the uniformly spaced aliased velocity interval. Default: `0.0`.
+- `stop_half_width` **[live]** — non-negative float in m/s. Bins at or inside this distance receive zero gain; the nearest bin to `center_velocity` is always included so zero width remains a one-bin hard null. Default: `0.0`.
+- `transition_width` **[live]** — non-negative float in m/s. `0.0` gives a hard notch. Positive values apply a raised-cosine gain from zero at the stopband edge to one at `stop_half_width + transition_width`. Default: `0.0`.
+- `cyclic_velocity_axis` — bool, static. When `true`, distance wraps over `num_doppler × bin_spacing`; when `false`, distance is ordinary absolute velocity difference. Default: `true`.
 
 #### FMCWRangeDopplerProcessorOp (fused)
 

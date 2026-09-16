@@ -29,6 +29,7 @@ set(HOLOSCAN_RADAR_HSDK5_PORTED_PERF
     phase_shift_beamformer
     tdm_dense_compensation
     ddm_dense_demultiplex
+    doppler_notch
     ddm_power_fold
     ddm_sparse_demultiplex
     tdm_sparse_compensation
@@ -112,6 +113,7 @@ radar_add_perf(tdm_dense_compensation
     holoscan::tdm_dense_compensation_op)
 radar_add_perf(ddm_dense_demultiplex
     holoscan::ddm_dense_demultiplex_op)
+radar_add_perf(doppler_notch holoscan::doppler_notch_op)
 radar_add_perf(ddm_power_fold
     holoscan::ddm_power_fold_op)
 radar_add_perf(ddm_sparse_demultiplex

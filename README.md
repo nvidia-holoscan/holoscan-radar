@@ -61,6 +61,7 @@ Shared conventions and the full table live in
 | `FMCWRangeProcessorOp<T>` | Range compression: optional software dechirp, windowed fast-time FFT; `range_bins` axis output |
 | `ClutterFilterOp<T>` | Slow-time clutter suppression: mean subtraction or 1st/2nd-order MTI delay cancellers |
 | `FMCWDopplerProcessorOp<T>` | Doppler compression: windowed slow-time FFT, zero-Doppler centering; `velocity_bins` axis output |
+| `DopplerNotchOp<T>` | Post-Doppler hard or raised-cosine stopband on a physical velocity axis |
 | `FMCWRangeDopplerProcessorOp<T>` | Fused range + optional inline clutter + Doppler in one node (bitwise parity with the split chain) |
 | `MIMODeinterleaveOp<T>` | TDM marshaling: split interleaved slow-time into an explicit TX axis via `TXSchedule` gather |
 | `VirtualArrayAssemblyOp<T>` | MIMO marshaling: flatten separated TX×RX channels into a virtual array axis |

@@ -132,6 +132,15 @@ except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
     DDMDenseDemultiplexOpF64 = None  # type: ignore[misc, assignment]
 
 try:
+    from .doppler_notch_op import (  # noqa: F401
+        DopplerNotchOpF32,
+        DopplerNotchOpF64,
+    )
+except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+    DopplerNotchOpF32 = None  # type: ignore[misc, assignment]
+    DopplerNotchOpF64 = None  # type: ignore[misc, assignment]
+
+try:
     from .ddm_power_fold_op import (  # noqa: F401
         DDMPowerFoldOpF32,
         DDMPowerFoldOpF64,
@@ -215,6 +224,7 @@ FMCWRangeDopplerProcessorOp = FMCWRangeDopplerProcessorOpF32
 FMCWRangeProcessorOp = FMCWRangeProcessorOpF32
 TDMDenseCompensationOp = TDMDenseCompensationOpF32
 DDMDenseDemultiplexOp = DDMDenseDemultiplexOpF32
+DopplerNotchOp = DopplerNotchOpF32
 DDMPowerFoldOp = DDMPowerFoldOpF32
 DDMSparseDemultiplexOp = DDMSparseDemultiplexOpF32
 MIMODeinterleaveOp = MIMODeinterleaveOpF32

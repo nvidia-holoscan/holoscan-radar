@@ -90,6 +90,8 @@ radar_add_test(fmcw/test_tdm_dense_compensation
 radar_add_test(fmcw/test_ddm_dense_demultiplex
     holoscan::ddm_dense_demultiplex_op
     holoscan::fmcw_doppler_processor_op)
+radar_add_test(fmcw/test_doppler_notch
+    holoscan::doppler_notch_op)
 radar_add_test(fmcw/test_ddm_power_fold
     holoscan::ddm_power_fold_op)
 radar_add_test(fmcw/test_ddm_sparse_demultiplex
@@ -196,6 +198,7 @@ radar_add_test(app/test_fmcw_mimo_config
     holoscan::mimo_deinterleave_op
     holoscan::tdm_sparse_compensation_op
     holoscan::ddm_dense_demultiplex_op
+    holoscan::doppler_notch_op
     holoscan::virtual_array_assembly_op
     holoscan::cfar_detector_op
     holoscan::snapshot_gather_op

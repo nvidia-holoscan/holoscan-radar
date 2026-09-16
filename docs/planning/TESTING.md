@@ -102,6 +102,14 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - `center_zero_doppler`: zero-Doppler centered (true) vs. DC at bin 0 (false).
 - Windowing / `nfft` behave as in the range operator.
 
+#### DopplerNotchOp
+
+- Hard mode (`transition_width = 0`) zeros the nearest bin to `center_velocity` plus every bin inside `stop_half_width`, preserving all bins outside.
+- Positive `transition_width` matches an independent cyclic-distance raised-cosine reference, reaches exactly zero/one at the stop/transition boundaries, and never changes relative channel phase.
+- Named rank-2 SISO, rank-3 SIMO, and rank-4 MIMO layouts agree; unexpected leading axes reject. Float/double agree within tolerance.
+- Live center/width overrides apply to one exactly paired activation; a following miss reverts to Params. Malformed axis shape/dtype, non-finite or non-increasing values, precision mismatch, and exceeded extents fail predictably.
+- Linear-offset and nonlinear-code dense DDM integrations suppress a stationary target at physical zero velocity, preserve targets outside the transition, and introduce no range-aligned pedestal. Folded sparse-DDM input is outside the contract.
+
 #### FMCWRangeDopplerProcessorOp (fused)
 
 - **Parity:** identical `rd_maps` (within tolerance) to the split `FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp` chain for matching parameters. Under `mean_subtraction`, matching means the standalone clutter and Doppler operators both receive the fused operator's `doppler_window`.
@@ -243,7 +251,7 @@ Common check (all five): default-constructed Params select `radar_boresight`; `s
 - Fractional-bin linear offsets fail predictably; `num_tx` is derived from `ddm_code`.
 - An optional center-zero `velocity_bins` input is paired exactly with `rd_maps`; linear demux emits the centered reduced slice with unchanged spacing, while nonlinear correlation emits an identical full axis. Missing input emits no axis, malformed rank/length/dtype fail predictably, and an unwired latched output never suppresses `rd_maps_out`.
 - A direct `FMCWDopplerProcessorOp → DDMDenseDemultiplexOp` Graph test proves that `velocity_bins` is published before the `rd_maps` trigger and matches on every tick.
-- Dense and sparse DDM applications omit `ClutterFilterOp`: config loading rejects a DDM `clutter_filter` block, and application smokes prove the demultiplexed Doppler-domain map flows directly to virtual-array assembly without the range-aligned pedestal produced by slow-time mean subtraction in the wrong domain.
+- Dense and sparse DDM applications reject `ClutterFilterOp`. Dense DDM may instead wire `DopplerNotchOp` after demultiplexing; sparse folded DDM remains unsupported.
 
 #### TDMSparseCompensationOp
 
