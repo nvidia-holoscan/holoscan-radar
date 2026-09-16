@@ -77,13 +77,13 @@ detect_then_beamform:
             # Common options: radar_boresight, direction_cosine, custom.
             # See operators/angle_estimation/beamscan_estimator_op/README.md.
             preset: radar_boresight
-        az_angles:
+        az_coordinates:
             - -0.3
             - -0.15
             - 0.0
             - 0.15
             - 0.3
-        el_angles:
+        el_coordinates:
             - -0.3
             - -0.15
             - 0.0
@@ -133,13 +133,13 @@ beamform_then_detect:
             # Common options: radar_boresight, direction_cosine, custom.
             # See operators/angle_estimation/phase_shift_beamformer_op/README.md.
             preset: radar_boresight
-        az_angles:
+        az_coordinates:
             - -0.3
             - -0.15
             - 0.0
             - 0.15
             - 0.3
-        el_angles:
+        el_coordinates:
             - -0.3
             - -0.15
             - 0.0

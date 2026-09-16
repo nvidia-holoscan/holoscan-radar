@@ -75,9 +75,9 @@ inline radar::MaxTensorExtents make_aoa_extents(const AppConfig& cfg) {
       cfg.doppler_params.nfft > 0 ? cfg.doppler_params.nfft : chirps;
   const int64_t map_cells = doppler_bins * range_bins;
   const int64_t num_az =
-      static_cast<int64_t>(cfg.beamscan_params.az_angles.size());
+      static_cast<int64_t>(cfg.beamscan_params.az_coordinates.size());
   const int64_t num_el =
-      static_cast<int64_t>(cfg.beamscan_params.el_angles.size());
+      static_cast<int64_t>(cfg.beamscan_params.el_coordinates.size());
   const int64_t k_snaps = snapshot_count(cfg.gather_params.snapshot_window);
 
   e.max_rx = n_rx;
@@ -224,14 +224,14 @@ inline AppConfig load_config(const std::filesystem::path& path) {
 
   const std::array<PhysicalAngleBounds, 3> scan_bounds{
       physical_scan_grid_bounds(
-          cfg.beamscan_params.angle_convention, cfg.beamscan_params.az_angles,
-          cfg.beamscan_params.el_angles),
+          cfg.beamscan_params.angle_convention, cfg.beamscan_params.az_coordinates,
+          cfg.beamscan_params.el_coordinates),
       physical_scan_grid_bounds(
-          cfg.mvdr_params.angle_convention, cfg.mvdr_params.az_angles,
-          cfg.mvdr_params.el_angles),
+          cfg.mvdr_params.angle_convention, cfg.mvdr_params.az_coordinates,
+          cfg.mvdr_params.el_coordinates),
       physical_scan_grid_bounds(
-          cfg.music_params.angle_convention, cfg.music_params.az_angles,
-          cfg.music_params.el_angles)};
+          cfg.music_params.angle_convention, cfg.music_params.az_coordinates,
+          cfg.music_params.el_coordinates)};
   cfg.az_lo = scan_bounds[0].az[0];
   cfg.az_hi = scan_bounds[0].az[1];
   cfg.el_lo = scan_bounds[0].el[0];

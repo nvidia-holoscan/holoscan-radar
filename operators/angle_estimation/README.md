@@ -52,8 +52,8 @@ stage would occupy the same slot.
   descriptors in `operators/common/`; `[live]` overrides for geometry,
   scan grid, taper, and peak interpolation; float/double; unit tests (2-D DOA
   recovery on a planar URA, 3-D single-look input, direction-cosine masking,
-  error paths, live `az_angles` override); `performance/cpp/perf_beamscan_estimator.cpp`
-  characterizes scan cost + the `[live] az_angles` override spike. The `custom`
+  error paths, live `az_coordinates` override); `performance/cpp/perf_beamscan_estimator.cpp`
+  characterizes scan cost + the `[live] az_coordinates` override spike. The `custom`
   angle preset (STATUS.md L11) and `uint8` `is_valid` transport (STATUS.md L1)
   are both settled.
 - **`SubarraySelectionOp` (checklist-complete — deustice):** selects a uniform
@@ -114,7 +114,7 @@ stage would occupy the same slot.
   remain C++-only; `is_valid` input works via `uint8`);
   `performance/cpp/perf_music_estimator.cpp` +
   `performance/python/perf_music_estimator.py` (same size ladder as MVDR's,
-  inline `[live]` `az_angles` override). Two profile-driven `music_reduce_kernel`
+  inline `[live]` `az_coordinates` override). Two profile-driven `music_reduce_kernel`
   fixes: (1) it was missing MVDR's 4-way-accumulator ILP unrolling — porting it
   gave -25.8% at `xl` (26.9→19.9 ms); (2) `ncu` then showed the kernel is
   L1-bandwidth-bound (not latency-bound as MVDR's inherited note assumed), so

@@ -48,8 +48,8 @@ std::vector<double> generate_steering_taper(
 
 std::string steering_cache_key(const ArrayGeometry& geometry,
                                const AngleConvention& convention,
-                               const std::vector<double>& az_angles,
-                               const std::vector<double>& el_angles,
+                               const std::vector<double>& az_coordinates,
+                               const std::vector<double>& el_coordinates,
                                const WindowSpec& array_taper) {
   std::ostringstream os;
   os << std::setprecision(std::numeric_limits<double>::max_digits10);
@@ -63,11 +63,11 @@ std::string steering_cache_key(const ArrayGeometry& geometry,
     os << v << ",";
   }
   os << "|";
-  for (double v : az_angles) {
+  for (double v : az_coordinates) {
     os << v << ",";
   }
   os << "|";
-  for (double v : el_angles) {
+  for (double v : el_coordinates) {
     os << v << ",";
   }
   os << "|" << window_cache_key(array_taper, geometry.num_elements());
@@ -76,30 +76,30 @@ std::string steering_cache_key(const ArrayGeometry& geometry,
 
 SteeringTable build_steering_table(const ArrayGeometry& geometry,
                                    const AngleConvention& convention,
-                                   const std::vector<double>& az_angles,
-                                   const std::vector<double>& el_angles,
+                                   const std::vector<double>& az_coordinates,
+                                   const std::vector<double>& el_coordinates,
                                    const WindowSpec& array_taper) {
   geometry.validate();
-  if (az_angles.empty() || el_angles.empty()) {
+  if (az_coordinates.empty() || el_coordinates.empty()) {
     throw std::invalid_argument(
-        "steering table: az_angles and el_angles must be non-empty");
+        "steering table: az_coordinates and el_coordinates must be non-empty");
   }
-  validate_scan_grid_axes(convention, az_angles, el_angles, "steering table");
+  validate_scan_grid_axes(convention, az_coordinates, el_coordinates, "steering table");
 
   const int64_t num_elements = geometry.num_elements();
   const auto taper = generate_steering_taper(geometry, array_taper);
   const double k = kTwoPi / geometry.wavelength;
 
   SteeringTable table;
-  table.num_az = static_cast<int64_t>(az_angles.size());
-  table.num_el = static_cast<int64_t>(el_angles.size());
+  table.num_az = static_cast<int64_t>(az_coordinates.size());
+  table.num_el = static_cast<int64_t>(el_coordinates.size());
   const int64_t num_beams = table.num_az * table.num_el;
   table.weights.resize(static_cast<size_t>(num_beams * num_elements));
   table.beam_valid.assign(static_cast<size_t>(num_beams), 1);
 
   size_t beam = 0;
-  for (double el_b : el_angles) {
-    for (double az_b : az_angles) {
+  for (double el_b : el_coordinates) {
+    for (double az_b : az_coordinates) {
       const CanonicalDirection dir =
           boundary_to_canonical(convention, az_b, el_b);
       const bool valid =

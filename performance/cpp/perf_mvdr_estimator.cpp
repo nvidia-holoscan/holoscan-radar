@@ -91,9 +91,9 @@ const char* override_name(MvdrScenario::OverrideKind kind) {
     case MvdrScenario::OverrideKind::kArrayGeometry:
       return "array_geometry";
     case MvdrScenario::OverrideKind::kAzAngles:
-      return "az_angles";
+      return "az_coordinates";
     case MvdrScenario::OverrideKind::kElAngles:
-      return "el_angles";
+      return "el_coordinates";
     case MvdrScenario::OverrideKind::kSpatialSmoothing:
       return "spatial_smoothing";
     case MvdrScenario::OverrideKind::kDiagonalLoading:
@@ -261,11 +261,11 @@ class PerfMVDROverrideSourceOp final : public holoscan::Operator<> {
         .max_emits_per_compute(1U)
         .produces_tensor(
             hr::pooled_tensor_output(kHostMatrix, 2U, kHostPayloadSpan));
-    spec.output(az_angles)
+    spec.output(az_coordinates)
         .max_emits_per_compute(1U)
         .produces_tensor(
             hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
-    spec.output(el_angles)
+    spec.output(el_coordinates)
         .max_emits_per_compute(1U)
         .produces_tensor(
             hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
@@ -308,11 +308,11 @@ class PerfMVDROverrideSourceOp final : public holoscan::Operator<> {
     if (!emitted) {
       return emitted;
     }
-    emitted = emit_host_vector(az_angles, values.az_angles, time);
+    emitted = emit_host_vector(az_coordinates, values.az_coordinates, time);
     if (!emitted) {
       return emitted;
     }
-    emitted = emit_host_vector(el_angles, values.el_angles, time);
+    emitted = emit_host_vector(el_coordinates, values.el_coordinates, time);
     if (!emitted) {
       return emitted;
     }
@@ -345,8 +345,8 @@ class PerfMVDROverrideSourceOp final : public holoscan::Operator<> {
   holoscan::Output<holoscan::Tensor> snapshot{"snapshot"};
   holoscan::Output<hr::WireArrayGeometry>
       array_geometry{"array_geometry"};
-  holoscan::Output<holoscan::Tensor> az_angles{"az_angles"};
-  holoscan::Output<holoscan::Tensor> el_angles{"el_angles"};
+  holoscan::Output<holoscan::Tensor> az_coordinates{"az_coordinates"};
+  holoscan::Output<holoscan::Tensor> el_coordinates{"el_coordinates"};
   holoscan::Output<hr::SpatialSmoothingOverride>
       spatial_smoothing{"spatial_smoothing"};
   holoscan::Output<double> diagonal_loading{"diagonal_loading"};
@@ -372,8 +372,8 @@ perf::TimingCollector run_mvdr_graph(
       make_ula_geometry(scen.channels, 0.5, 1.0);
   initial.angle_convention.preset =
       hr::AngleConventionPreset::kRadarBoresight;
-  initial.az_angles = linspace(-0.5, 0.5, scen.num_az);
-  initial.el_angles = linspace(-0.3, 0.3, scen.num_el);
+  initial.az_coordinates = linspace(-0.5, 0.5, scen.num_az);
+  initial.el_coordinates = linspace(-0.3, 0.3, scen.num_el);
   initial.diagonal_loading = kInitialLoading;
   initial.max_sources = kInitialMaxSources;
   hr::MVDRParams override = initial;
@@ -383,10 +383,10 @@ perf::TimingCollector run_mvdr_graph(
           make_ula_geometry(scen.channels, 0.45, 1.0);
       break;
     case MvdrScenario::OverrideKind::kAzAngles:
-      override.az_angles = linspace(-0.45, 0.55, scen.num_az);
+      override.az_coordinates = linspace(-0.45, 0.55, scen.num_az);
       break;
     case MvdrScenario::OverrideKind::kElAngles:
-      override.el_angles = linspace(-0.25, 0.35, scen.num_el);
+      override.el_coordinates = linspace(-0.25, 0.35, scen.num_el);
       break;
     case MvdrScenario::OverrideKind::kSpatialSmoothing:
       override.spatial_smoothing = {2};
@@ -427,8 +427,8 @@ perf::TimingCollector run_mvdr_graph(
 
   graph.add_flow(source->snapshot, op->snapshot, q);
   graph.add_flow(source->array_geometry, op->array_geometry, q);
-  graph.add_flow(source->az_angles, op->az_angles, q);
-  graph.add_flow(source->el_angles, op->el_angles, q);
+  graph.add_flow(source->az_coordinates, op->az_coordinates, q);
+  graph.add_flow(source->el_coordinates, op->el_coordinates, q);
   graph.add_flow(source->spatial_smoothing, op->spatial_smoothing, q);
   graph.add_flow(source->diagonal_loading, op->diagonal_loading, q);
   graph.add_flow(source->max_sources, op->max_sources, q);

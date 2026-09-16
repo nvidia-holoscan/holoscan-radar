@@ -142,8 +142,8 @@ def test_RecoversKnownDoaUra():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.5, 0.5, 101),
-        el_angles=linspace(-0.3, 0.3, 61),
+        az_coordinates=linspace(-0.5, 0.5, 101),
+        el_coordinates=linspace(-0.3, 0.3, 61),
     )
     assert out["aoa"].shape == (1, 2)
     assert out["aoa"][0, 0] == pytest.approx(truth_az, abs=0.02)
@@ -161,8 +161,8 @@ def test_RecoversKnownDoaUlaAzOnly():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.3, 0.3, 61),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.3, 0.3, 61),
+        el_coordinates=[0.0],
     )
     assert out["spectrum"].shape == (1, 61, 1)
     assert out["aoa"][0, 0] == pytest.approx(truth_az, abs=0.02)
@@ -180,8 +180,8 @@ def test_FloatInstantiationSmoke():
         op_cls=MVDREstimatorOpF32,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.3, 0.3, 61),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.3, 0.3, 61),
+        el_coordinates=[0.0],
     )
     assert out["aoa"].shape == (1, 2)
     assert out["aoa"][0, 0] == pytest.approx(0.06, abs=0.03)
@@ -198,8 +198,8 @@ def test_RejectsInvalidMaxSources():
             snap,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=[0.0],
-            el_angles=[0.0],
+            az_coordinates=[0.0],
+            el_coordinates=[0.0],
             max_sources=0,
         )
 
@@ -213,8 +213,8 @@ def test_EmptyItemsProducesEmptyOutputs():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=[-0.1, 0.0, 0.1],
-        el_angles=[0.0],
+        az_coordinates=[-0.1, 0.0, 0.1],
+        el_coordinates=[0.0],
     )
     assert out["aoa"].shape == (0, 2)
     assert out["spectrum"].shape == (0, 3, 1)
@@ -229,8 +229,8 @@ def test_FloatDoubleAgreeOnDoa():
     kwargs = dict(
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.3, 0.3, 61),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.3, 0.3, 61),
+        el_coordinates=[0.0],
     )
     out_f = run_mvdr(
         block.reshape(1, k_n, k_s).astype(np.complex64),
@@ -254,8 +254,8 @@ def test_MultipleItemsRecoverIndependentDoa():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.4, 0.4, 81),
-        el_angles=linspace(-0.2, 0.2, 41),
+        az_coordinates=linspace(-0.4, 0.4, 81),
+        el_coordinates=linspace(-0.2, 0.2, 41),
     )
     assert out["aoa"].shape == (2, 2)
     assert out["aoa"][0, 0] == pytest.approx(az0, abs=0.02)
@@ -274,8 +274,8 @@ def test_MultiSourceRecoversTwoDoa():
         block.reshape(1, k_n, k_s),
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.5, 0.5, 201),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.5, 0.5, 201),
+        el_coordinates=[0.0],
         max_sources=2,
     )
     assert out["doa_multi"].shape == (1, 2, 2)
@@ -301,8 +301,8 @@ def test_MaxSourcesCapacityNanFillsUnusedRows():
         block.reshape(1, k_n, k_s),
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.3, 0.3, 61),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.3, 0.3, 61),
+        el_coordinates=[0.0],
         max_sources=4,
     )
     assert out["doa_multi"].shape == (1, 4, 2)

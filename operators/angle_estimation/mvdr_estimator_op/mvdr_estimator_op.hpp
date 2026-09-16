@@ -73,8 +73,8 @@ void retire_matx_solver_caches();
 struct MVDRParams {
   ArrayGeometry array_geometry{};
   AngleConvention angle_convention{};
-  std::vector<double> az_angles{};
-  std::vector<double> el_angles{};
+  std::vector<double> az_coordinates{};
+  std::vector<double> el_coordinates{};
   // Negative → auto (δ ~ trace(R̂)/C); non-negative → absolute δ. Default -1.
   double diagonal_loading{-1.0};
   int64_t max_sources{1};
@@ -85,7 +85,7 @@ struct MVDRParams {
 
 HOLOSCAN_PARAM_SCHEMA(
     MVDRParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.MVDRParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.MVDRParams", 2),
     holoscan::field<&MVDRParams::array_geometry>("array_geometry")
         .description(
             "Element positions and wavelength; num_elements must match "
@@ -94,14 +94,16 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Static AER labeling for the scan grid and DOA output "
             "(default radar_boresight; no live port)"),
-    holoscan::field<&MVDRParams::az_angles>("az_angles")
+    holoscan::field<&MVDRParams::az_coordinates>("az_coordinates")
         .description(
-            "Azimuth scan grid (or u under direction_cosine); required "
-            "non-empty"),
-    holoscan::field<&MVDRParams::el_angles>("el_angles")
+            "First scan-coordinate grid: azimuth radians for angular "
+            "conventions, or dimensionless u under direction_cosine; "
+            "required non-empty"),
+    holoscan::field<&MVDRParams::el_coordinates>("el_coordinates")
         .description(
-            "Elevation scan grid (or v under direction_cosine); required "
-            "non-empty"),
+            "Second scan-coordinate grid: elevation radians for angular "
+            "conventions, or dimensionless v under direction_cosine; "
+            "required non-empty"),
     holoscan::field<&MVDRParams::diagonal_loading>("diagonal_loading")
         .description(
             "R + delta*I regularization; negative selects auto"),
@@ -147,8 +149,8 @@ class MVDREstimatorOp : public holoscan::Operator<MVDRParams> {
   Output<Tensor> eigenvalues{"eigenvalues"};
   // [live] Exact overrides.
   Input<WireArrayGeometry> array_geometry{"array_geometry"};
-  Input<Tensor> az_angles{"az_angles"};
-  Input<Tensor> el_angles{"el_angles"};
+  Input<Tensor> az_coordinates{"az_coordinates"};
+  Input<Tensor> el_coordinates{"el_coordinates"};
   Input<SpatialSmoothingOverride> spatial_smoothing{"spatial_smoothing"};
   Input<double> diagonal_loading{"diagonal_loading"};
   Input<int64_t> max_sources{"max_sources"};

@@ -81,8 +81,8 @@ expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
 struct BeamscanStageConfig {
   ArrayGeometry geometry;
   AngleConvention convention;
-  std::vector<double> az_angles;
-  std::vector<double> el_angles;
+  std::vector<double> az_coordinates;
+  std::vector<double> el_coordinates;
   WindowSpec taper;
   PeakInterpolation peak_interpolation{PeakInterpolation::kNone};
 };
@@ -110,18 +110,18 @@ expected<BeamscanStageConfig, Error> resolve_params(
   HOLOSCAN_TRY(
       auto az,
       resolve_live_override_via(
-          az_port, pinned.az_angles,
+          az_port, pinned.az_coordinates,
           [max_az](const Tensor& value) {
             return read_host_config_vector<double>(
-                value, DLDataType{kDLFloat, 64U, 1U}, max_az, "az_angles");
+                value, DLDataType{kDLFloat, 64U, 1U}, max_az, "az_coordinates");
           }));
   HOLOSCAN_TRY(
       auto el,
       resolve_live_override_via(
-          el_port, pinned.el_angles,
+          el_port, pinned.el_coordinates,
           [max_el](const Tensor& value) {
             return read_host_config_vector<double>(
-                value, DLDataType{kDLFloat, 64U, 1U}, max_el, "el_angles");
+                value, DLDataType{kDLFloat, 64U, 1U}, max_el, "el_coordinates");
           }));
   HOLOSCAN_TRY(
       auto taper,
@@ -134,8 +134,8 @@ expected<BeamscanStageConfig, Error> resolve_params(
   return BeamscanStageConfig{
       .geometry = std::move(geometry),
       .convention = pinned.angle_convention,
-      .az_angles = std::move(az),
-      .el_angles = std::move(el),
+      .az_coordinates = std::move(az),
+      .el_coordinates = std::move(el),
       .taper = std::move(taper),
       .peak_interpolation = interpolation,
   };
@@ -171,21 +171,21 @@ expected<BeamscanStagePlan, Error> build_beamscan_stage_plan(
   }
   try {
     stage.geometry.validate();
-    if (stage.az_angles.empty() || stage.el_angles.empty()) {
+    if (stage.az_coordinates.empty() || stage.el_coordinates.empty()) {
       throw std::invalid_argument(
-          "BeamscanEstimatorOp: az_angles and el_angles must be non-empty");
+          "BeamscanEstimatorOp: az_coordinates and el_coordinates must be non-empty");
     }
-    validate_scan_grid_axes(stage.convention, stage.az_angles, stage.el_angles,
+    validate_scan_grid_axes(stage.convention, stage.az_coordinates, stage.el_coordinates,
                             "BeamscanEstimatorOp");
     if (num_items > max_items ||
-        stage.az_angles.size() > static_cast<std::size_t>(max_az) ||
-        stage.el_angles.size() > static_cast<std::size_t>(max_el)) {
+        stage.az_coordinates.size() > static_cast<std::size_t>(max_az) ||
+        stage.el_coordinates.size() > static_cast<std::size_t>(max_el)) {
       throw std::invalid_argument(
           "BeamscanEstimatorOp: input or scan grid exceeds MaxTensorExtents");
     }
     generate_steering_taper(stage.geometry, stage.taper);
     (void)boundary_to_canonical(
-        stage.convention, stage.az_angles.front(), stage.el_angles.front());
+        stage.convention, stage.az_coordinates.front(), stage.el_coordinates.front());
   } catch (const std::invalid_argument& error) {
     return make_unexpected(
         Error{ErrorCode::kInvalidArgument, error.what()});
@@ -201,8 +201,8 @@ expected<BeamscanStagePlan, Error> build_beamscan_stage_plan(
   std::size_t num_beams = 0U;
   try {
     num_beams = product_extents(
-        {static_cast<int64_t>(stage.az_angles.size()),
-         static_cast<int64_t>(stage.el_angles.size())},
+        {static_cast<int64_t>(stage.az_coordinates.size()),
+         static_cast<int64_t>(stage.el_coordinates.size())},
         kOpName);
   } catch (const std::invalid_argument& error) {
     return make_unexpected(
@@ -215,8 +215,8 @@ expected<BeamscanStagePlan, Error> build_beamscan_stage_plan(
         std::string(kOpName) + ": scan-grid size overflows int64"});
   }
 
-  const int64_t num_az = static_cast<int64_t>(stage.az_angles.size());
-  const int64_t num_el = static_cast<int64_t>(stage.el_angles.size());
+  const int64_t num_az = static_cast<int64_t>(stage.az_coordinates.size());
+  const int64_t num_el = static_cast<int64_t>(stage.el_coordinates.size());
   return BeamscanStagePlan{
       .stage = std::move(stage),
       .num_items = num_items,
@@ -235,17 +235,17 @@ prepare_steering_artifact(BeamscanRuntimeState& state,
                           cudaStream_t stream) {
   try {
     const std::string key =
-        steering_cache_key(stage.geometry, stage.convention, stage.az_angles,
-                           stage.el_angles, stage.taper);
+        steering_cache_key(stage.geometry, stage.convention, stage.az_coordinates,
+                           stage.el_coordinates, stage.taper);
     return state.steering_cache.get_or_build(
         key, "steering weights and scan grids", [&] {
           auto artifact = std::make_shared<BeamscanSteeringArtifact>();
           artifact->weights = build_steering_weights_device<T>(
-              stage.geometry, stage.convention, stage.az_angles,
-              stage.el_angles, stage.taper, BeamOrder::kElMajor,
+              stage.geometry, stage.convention, stage.az_coordinates,
+              stage.el_coordinates, stage.taper, BeamOrder::kElMajor,
               SteeringLayout::kChannelMajor, /*conjugate=*/true, stream);
-          const auto az_host = cast_vector<T>(stage.az_angles);
-          const auto el_host = cast_vector<T>(stage.el_angles);
+          const auto az_host = cast_vector<T>(stage.az_coordinates);
+          const auto el_host = cast_vector<T>(stage.el_coordinates);
           artifact->az_grid =
               make_device_tensor({static_cast<int64_t>(az_host.size())},
                                  real_dtype<T>());
@@ -326,11 +326,11 @@ void BeamscanEstimatorOp<T>::setup(OperatorSpec& spec) {
           kDevice, 3U, spectrum_max_byte_span_));
   // [live] Exact overrides, Params order (schema and host-Tensor alike).
   spec.input(array_geometry).optional().queue_depth(2U);
-  spec.input(az_angles)
+  spec.input(az_coordinates)
       .optional()
       .queue_depth(2U)
       .expects_tensor(tensor_input(kHostF64));
-  spec.input(el_angles)
+  spec.input(el_coordinates)
       .optional()
       .queue_depth(2U)
       .expects_tensor(tensor_input(kHostF64));
@@ -345,8 +345,8 @@ Contract BeamscanEstimatorOp<T>::contract() const {
       .input(is_valid, Exact{})
       .on_missing(is_valid, SafeDefault{});
   add_live_override_to_contract(result, array_geometry);
-  add_live_override_to_contract(result, az_angles);
-  add_live_override_to_contract(result, el_angles);
+  add_live_override_to_contract(result, az_coordinates);
+  add_live_override_to_contract(result, el_coordinates);
   add_live_override_to_contract(result, array_taper);
   add_live_override_to_contract(result, peak_interpolation);
   return result;
@@ -370,7 +370,7 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
   const BeamscanParams& pinned = context.params<BeamscanParams>();
   HOLOSCAN_TRY(
       auto stage,
-      resolve_params(array_geometry, az_angles, el_angles, array_taper,
+      resolve_params(array_geometry, az_coordinates, el_coordinates, array_taper,
                      peak_interpolation, pinned, max_az_, max_el_));
   HOLOSCAN_TRY(
       auto plan,

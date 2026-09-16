@@ -48,23 +48,23 @@ estimator_router:
 beamscan_estimator:
   angle_convention:
     preset: radar_boresight
-  az_angles: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
-  el_angles: [-0.15, -0.1, -0.05, 0.0, 0.05, 0.1, 0.15]
+  az_coordinates: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
+  el_coordinates: [-0.15, -0.1, -0.05, 0.0, 0.05, 0.1, 0.15]
   peak_interpolation: parabolic
 
 mvdr_estimator:
   angle_convention:
     preset: radar_boresight
-  az_angles: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
-  el_angles: [-0.15, -0.1, -0.05, 0.0, 0.05, 0.1, 0.15]
+  az_coordinates: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
+  el_coordinates: [-0.15, -0.1, -0.05, 0.0, 0.05, 0.1, 0.15]
   diagonal_loading: -1.0
   max_sources: 1
 
 music_estimator:
   angle_convention:
     preset: radar_boresight
-  az_angles: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
-  el_angles: [-0.15, -0.1, -0.05, 0.0, 0.05, 0.1, 0.15]
+  az_coordinates: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
+  el_coordinates: [-0.15, -0.1, -0.05, 0.0, 0.05, 0.1, 0.15]
   num_sources: 1
   max_sources: 1
 

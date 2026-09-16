@@ -152,8 +152,8 @@ int main(int argc, char** argv) {
         graph.add_flow(cfar->detection_idx, features->detection_idx, queue);
         graph.add_flow(range->range_bins, features->range_bins, queue);
         graph.add_flow(doppler->velocity_bins, features->velocity_bins, queue);
-        graph.add_flow(beamformer->az_grid, features->az_angles, queue);
-        graph.add_flow(beamformer->el_grid, features->el_angles, queue);
+        graph.add_flow(beamformer->az_grid, features->az_grid, queue);
+        graph.add_flow(beamformer->el_grid, features->el_grid, queue);
         graph.add_flow(cfar->detection_score, features->detection_score, queue);
 
         // Report each retained N-D peak directly.
@@ -166,8 +166,8 @@ int main(int argc, char** argv) {
         if (cfg.visualize) {
           simo::viz::add_simo_visualization(
               graph, application, options, cfg.visualization,
-              cfg.frame_period, cfg.beamformer_params->az_angles,
-              cfg.beamformer_params->el_angles,
+              cfg.frame_period, cfg.beamformer_params->az_coordinates,
+              cfg.beamformer_params->el_coordinates,
               cfg.beamformer_params->angle_convention, cfg.scene.targets,
               "Beamform then detect",
               simo::viz::SimoRawVizInputs{

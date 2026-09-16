@@ -60,8 +60,8 @@ class AppConfig(CommonRunConfig):
     tx_positions_flat: list[float] = field(default_factory=list)
     rx_positions_flat: list[float] = field(default_factory=list)
     wavelength: float = 0.0
-    # Boresight-view axis extents only (beamscan_estimator's az_angles /
-    # el_angles are read-only mirrored here to size the plot, not to
+    # Boresight-view axis extents only (beamscan_estimator's az_coordinates /
+    # el_coordinates are read-only mirrored here to size the plot, not to
     # configure the operator - that flows through from_config()).
     az_lo: float = -0.35
     az_hi: float = 0.35
@@ -220,14 +220,14 @@ def load_config(path: Path) -> AppConfig:
 
     parse_noise(root, cfg.scene)
 
-    # Read-only mirror: az_angles/el_angles are BeamscanEstimatorOp's own
+    # Read-only mirror: az_coordinates/el_coordinates are BeamscanEstimatorOp's own
     # from_config() parameters; this only sizes the boresight-view axes.
     be = root.get("beamscan_estimator", {})
     cfg.az_lo, cfg.az_hi = grid_extent(
-        [float(x) for x in be.get("az_angles", [])] or None, -0.35, 0.35
+        [float(x) for x in be.get("az_coordinates", [])] or None, -0.35, 0.35
     )
     cfg.el_lo, cfg.el_hi = grid_extent(
-        [float(x) for x in be.get("el_angles", [])] or None, -0.1, 0.1
+        [float(x) for x in be.get("el_coordinates", [])] or None, -0.1, 0.1
     )
 
     cfg.tdm_dense_compensation = parse_tdm_dense_compensation(

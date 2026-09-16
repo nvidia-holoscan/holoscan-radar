@@ -277,7 +277,7 @@ Two usage patterns do degrade, and both are the application's to avoid:
 - **A genuinely new value every tick** rebuilds the artifact every tick *and* grows the cache without bound, since it is keyed by configuration and never evicts. Sweeping a grid or a window length frame-by-frame is the case to watch; alternating among a few values is fine.
 - **Publishing intermittently on a costly port** is worse than it looks now that overrides last one tick: the effective value alternates between the sample and the Params value, so the operator flips configuration on every gap. That is a correctness surprise first — the operator is not running what the last publish asked for — and only then a cost. Publish every tick, or leave the port unwired and set the parameter.
 
-The costly ports, by operator: `nfft` and `range_window` / `doppler_window` on the FMCW range, Doppler, and fused range-Doppler operators (FFT plan + window coefficients); `waveform` on the same three (range/velocity axis rebuild); `pfa`, `threshold_scale`, `guard_cells` and `training_cells` on `CFARDetectorOp` (α LUT and window kernels); and `array_geometry`, `az_angles`, `el_angles` and `array_taper` on every scan-grid estimator — `BeamscanEstimatorOp`, `MVDREstimatorOp`, `MUSICEstimatorOp`, `PhaseShiftBeamformerOp` — where they rebuild the steering manifold, the largest of these artifacts.
+The costly ports, by operator: `nfft` and `range_window` / `doppler_window` on the FMCW range, Doppler, and fused range-Doppler operators (FFT plan + window coefficients); `waveform` on the same three (range/velocity axis rebuild); `pfa`, `threshold_scale`, `guard_cells` and `training_cells` on `CFARDetectorOp` (α LUT and window kernels); and `array_geometry`, `az_coordinates`, `el_coordinates` and `array_taper` on every scan-grid estimator — `BeamscanEstimatorOp`, `MVDREstimatorOp`, `MUSICEstimatorOp`, `PhaseShiftBeamformerOp` — where they rebuild the steering manifold, the largest of these artifacts.
 
 - A few parameters are genuinely fixed for an instance's lifetime (e.g. the CFAR variant, which selects the kernel) and are **static**; instantiate separate operators to vary those.
 
@@ -465,8 +465,8 @@ Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`
 - **In:** `velocity_bins` (optional port; required by `velocity`) — float32 / float64, `(num_doppler,)`. Physical velocity (m/s) per Doppler bin (Doppler-processor `velocity_bins`; in-tree: `FMCWDopplerProcessorOp`); indexed by `doppler_bin`. Select `doppler_bin` instead when the raw index is wanted.
 - **In:** `detection_score` (optional) — float32 / float64, `(num_doppler, num_range)`. CFAR's per-cell score map; gathered at each detection cell → the strength feature.
 - **In:** `aoa_estimates` (optional) — float32 / float64, `(num_points, 2)`. Per-detection `(az, el)` **values** (sparse post-angle path), row-aligned with `detection_idx`; supplies `az_estimate` / `el_estimate`.
-- **In:** `az_angles` (optional) — float32 / float64, `(num_az,)`. Azimuth scan grid; indexed by the preserved `az_bin` column for physical `az` (dense path). Required when `az` is selected.
-- **In:** `el_angles` (optional) — float32 / float64, `(num_el,)`. Elevation scan grid; indexed by the preserved `el_bin` column for physical `el`. Required when `el` is selected.
+- **In:** `az_grid` (optional) — float32 / float64, `(num_az,)`. First scan-coordinate grid; indexed by the preserved `az_bin` column for `az` (dense path). Values are radians for angular conventions and dimensionless `u` for `direction_cosine`. Required when `az` is selected.
+- **In:** `el_grid` (optional) — float32 / float64, `(num_el,)`. Second scan-coordinate grid; indexed by the preserved `el_bin` column for `el`. Values are radians for angular conventions and dimensionless `v` for `direction_cosine`. Required when `el` is selected.
 - **Out:** `points` — float32 / float64, `(num_points, num_features)`. Assembled feature matrix, columns in the configured order, sized to the detection count. Feeds `ClusterDBSCANOp.points` and `DetectionReductionOp.points`.
 
 **Constructor configuration:**
@@ -478,7 +478,7 @@ Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`
 **Algorithm:**
 
 1. For each `detection_idx` row, read `(doppler_bin, range_bin)` (last two columns); on the dense path the two preserved columns just before them are `(az_bin, el_bin)`.
-2. Build each configured feature: `range = range_bins[range_bin]`, `velocity = velocity_bins[doppler_bin]`, `az = az_angles[az_bin]`, `el = el_angles[el_bin]`, `az_estimate` / `el_estimate = aoa_estimates[row]`, the four `*_bin` features = raw indices, and `score =` gather `detection_score` at the cell.
+2. Build each configured feature: `range = range_bins[range_bin]`, `velocity = velocity_bins[doppler_bin]`, `az = az_grid[az_bin]`, `el = el_grid[el_bin]`, `az_estimate` / `el_estimate = aoa_estimates[row]`, the four `*_bin` features = raw indices, and `score =` gather `detection_score` at the cell.
 3. Stack the columns in `features` order → `points`. Pure gather / 1-D
    lookup (custom CUDA; MatX is a poor fit for sparse irregular gathers);
    no scaling.
@@ -487,7 +487,7 @@ Assembles the `points` feature matrix for clustering (and `DetectionReductionOp`
 
 - *Delivery model — mainstream thin operator:* the gather + bin→physical lookup + column stack is mechanical and reusable, so it ships as a **mainstream operator with a configurable `features` list**. It is the most application-specific of the three bridges (which columns to cluster on is a modeling choice), so a per-application implementation remains a reasonable alternative; the configurable op is the default.
 - *No scaling here:* `points` carries raw physical columns; per-axis scaling for clustering / reduction lives in `ClusterDBSCANOp.epsilon` and `DetectionReductionOp.feature_weights`, so mixed units are handled once, downstream — not baked into the matrix.
-- *Placement:* pre-angle (cluster-then-angle) uses `features = [range, velocity, score]` (no angle inputs); sparse post-angle (angle-then-cluster) adds `[az_estimate, el_estimate]` from `aoa_estimates`; the **dense** path (RDA-cube CFAR) adds physical `[az, el]` from the `az_angles`/`el_angles` grids or raw `[az_bin, el_bin]`. The `features` list + optional angle inputs cover all three without a variant (resolves S4 / PhaseShift §6).
+- *Placement:* pre-angle (cluster-then-angle) uses `features = [range, velocity, score]` (no coordinate inputs); sparse post-angle (angle-then-cluster) adds `[az_estimate, el_estimate]` from `aoa_estimates`; the **dense** path (RDA-cube CFAR) adds convention-labelled `[az, el]` from the `az_grid`/`el_grid` inputs or raw `[az_bin, el_bin]`. The `features` list + optional coordinate inputs cover all three without a variant (resolves S4 / PhaseShift §6).
 - *Separate gather kernel:* `FeatureAssemblyOp` gathers heterogeneous scalar sources into configurable columns with one thread per detection. `SnapshotGatherOp` gathers complex channel vectors over a configurable 2-D neighborhood with edge policies and a different execution shape. They intentionally keep separate optimized kernels; only their plain `detection_idx` contract is shared.
 - *Row alignment:* `points` rows are 1:1 with `detection_idx` rows, so `labels` positionally join back and `DetectionReductionOp.rep_idx` resolves to real cells.
 - *Carried over:* plain-tensor ports; precision by template instantiation;
@@ -538,18 +538,18 @@ Reduces each cluster to one **representative detection** and, optionally, one re
 
 - **In:** `rd_maps` — complex64 / complex128, `(num_channels, num_doppler, num_range_bins)`. The channel axis sits immediately before the `(doppler, range)` plane and is reduced into the beam axes; `num_channels` must match `array_geometry`.
 - **Out:** `rda_cube` — complex64 / complex128, `(num_az, num_el, num_doppler, num_range_bins)`. Channel axis replaced by the `az × el` beam grid (or `u × v` under the `direction_cosine` convention); feeds CFARDetectorOp's dense path directly.
-- **Out:** `az_grid` (optional, **latched**) — float32 / float64, `(num_az,)`. The effective azimuth scan grid (or `u` grid) used to form `rda_cube` on this tick, including a matched `[live] az_angles` override. Feeds `FeatureAssemblyOp.az_angles` so dense angle-bin indices can be converted to physical coordinates without an application bridge.
-- **Out:** `el_grid` (optional, **latched**) — float32 / float64, `(num_el,)`. The effective elevation scan grid (or `v` grid) used to form `rda_cube` on this tick, including a matched `[live] el_angles` override. Feeds `FeatureAssemblyOp.el_angles`.
+- **Out:** `az_grid` (optional, **latched**) — float32 / float64, `(num_az,)`. The effective first scan-coordinate grid used to form `rda_cube` on this tick, including a matched `[live] az_coordinates` override. Values are radians for angular conventions and dimensionless `u` for `direction_cosine`. Feeds `FeatureAssemblyOp.az_grid`.
+- **Out:** `el_grid` (optional, **latched**) — float32 / float64, `(num_el,)`. The effective second scan-coordinate grid used to form `rda_cube` on this tick, including a matched `[live] el_coordinates` override. Values are radians for angular conventions and dimensionless `v` for `direction_cosine`. Feeds `FeatureAssemblyOp.el_grid`.
 
 **Parameters:**
 
 - `array_geometry` **[live]** — ArrayGeometry (virtual-element positions + wavelength). `num_elements` must match the `num_channels` axis (mismatch errors). Overriding (reconfigurable aperture / changed wavelength) rebuilds the beam weights and warns once; cached, keyed on the descriptor. Default: none (required).
-- `angle_convention` — AngleConvention. How `az_angles` / `el_angles` and the output beam axes map to unit vectors in the array frame, or `direction_cosine` to scan in sine-space `(u, v)`. **Static** — it fixes the *meaning* of the output angles for the whole graph; vary it by instantiating a separate operator. Default: `radar_boresight`.
-- `az_angles` **[live]** — float vector. Azimuth scan grid (the `u` grid under `direction_cosine`). Overriding steers the scan and rebuilds weights (cached). Default: none (required).
-- `el_angles` **[live]** — float vector. Elevation scan grid (the `v` grid under `direction_cosine`); a single value (e.g. `[0]`) gives a 1-D azimuth scan. Default: none (required).
+- `angle_convention` — AngleConvention. How `az_coordinates` / `el_coordinates` and the output beam axes map to unit vectors in the array frame, or `direction_cosine` to scan in sine-space `(u, v)`. **Static** — it fixes the *meaning* of the output angles for the whole graph; vary it by instantiating a separate operator. Default: `radar_boresight`.
+- `az_coordinates` **[live]** — float vector. First scan-coordinate grid: azimuth radians for angular conventions, or dimensionless `u` under `direction_cosine`. Overriding steers the scan and rebuilds weights (cached). Default: none (required).
+- `el_coordinates` **[live]** — float vector. Second scan-coordinate grid: elevation radians for angular conventions, or dimensionless `v` under `direction_cosine`; a single value (e.g. `[0]`) gives a 1-D azimuth scan. Default: none (required).
 - `array_taper` **[live]** — WindowSpec. Amplitude taper for spatial sidelobe control (aperture shading); Taylor / Chebyshev are canonical. A non-custom window is applied element-wise on a ULA or unrecognized geometry and as the separable product `w_y[iy] * w_z[iz]` on each recognized filled URA. A custom window remains an explicit per-element vector in geometry/channel order. Overriding rebuilds weights (cached). Default: none.
 
-*(The beam weights W depend on `array_geometry`, `az_angles`, `el_angles`, and `array_taper`; overriding any of them rebuilds W — cached keyed on the inputs, so an unchanged override is free and a continuously-steered grid rebuilds as its expected per-tick cost.)*
+*(The beam weights W depend on `array_geometry`, `az_coordinates`, `el_coordinates`, and `array_taper`; overriding any of them rebuilds W — cached keyed on the inputs, so an unchanged override is free and a continuously-steered grid rebuilds as its expected per-tick cost.)*
 
 Application YAML may spell either scan axis as an explicit array or as `{min: ..., max: ..., step: ...}`. The shorthand includes both endpoints and requires finite values, positive `step`, `min <= max`, and an integral number of steps within `64 * epsilon * max(1, abs((max - min) / step))`. It is expanded before Params decoding; the operator Params remain `std::vector<double>` and live overrides remain rank-1 float64 Tensors.
 
@@ -628,8 +628,8 @@ Selects a uniform ULA/URA sub-array from a (possibly holey) MIMO virtual array a
 
 Grid-scan estimators (Beamscan, MVDR, MUSIC) additionally take a scan grid; the gridless pair (Root-MUSIC, ESPRIT) have none:
 
-- `az_angles` **[live]** — float vector. Azimuth scan grid (the `u` grid under `direction_cosine`). Overriding steers the scan and rebuilds weights (cached). Default: none (required for grid-scan estimators).
-- `el_angles` **[live]** — float vector. Elevation scan grid (the `v` grid under `direction_cosine`); a single value (e.g. `[0]`) gives a 1-D azimuth scan. Default: none (required for grid-scan estimators).
+- `az_coordinates` **[live]** — float vector. First scan-coordinate grid: azimuth radians for angular conventions, or dimensionless `u` under `direction_cosine`. Overriding steers the scan and rebuilds weights (cached). Default: none (required for grid-scan estimators).
+- `el_coordinates` **[live]** — float vector. Second scan-coordinate grid: elevation radians for angular conventions, or dimensionless `v` under `direction_cosine`; a single value (e.g. `[0]`) gives a 1-D azimuth scan. Default: none (required for grid-scan estimators).
 
 Application YAML accepts either an explicit array or inclusive `{min: ..., max: ..., step: ...}` for each grid. The shorthand has the same finite, positive-step, ordered, integral-endpoint requirements as PhaseShift and is expanded before Params decoding; it does not change the vector Params or live Tensor ports.
 
@@ -641,7 +641,7 @@ Per-estimator deviations from the shared contract:
 - **Out:** `aoa_estimates` — `(num_items, 2)`.
 - **Out:** `angle_spectrum` (optional, **always**) — `(num_items, num_az, num_el)`. Single-source, single-snapshot — no `doa_multi`, no `eigenvalues`. `always` because the scan grid is the same pass that yields `aoa_estimates`.
 
-**Parameters:** shared (`array_geometry`, `angle_convention`, `az_angles`, `el_angles`) plus:
+**Parameters:** shared (`array_geometry`, `angle_convention`, `az_coordinates`, `el_coordinates`) plus:
 
 - `array_taper` **[live]** — WindowSpec. Amplitude taper for spatial sidelobe control (aperture shading). A non-custom window is applied element-wise on a ULA or unrecognized geometry and as the separable product `w_y[iy] * w_z[iz]` on each recognized filled URA. A custom window remains an explicit per-element vector in geometry/channel order. Overriding rebuilds weights (cached). Default: none.
 - `peak_interpolation` **[live]** — enum {none, parabolic}. Sub-grid peak refinement: `parabolic` fits a quadratic around the grid maximum for sub-bin accuracy; `none` returns the argmax cell. Default: none.
@@ -653,7 +653,7 @@ Per-estimator deviations from the shared contract:
 - **Out:** `angle_spectrum` (optional, **always**) — Capon spectrum, `(num_items, num_az, num_el)`. `always` because the Capon grid also yields `aoa_estimates`.
 - **Out:** `doa_multi` + `source_count` (optional, **latched** — one shared peak-extraction pass, skipped only once both latch); `eigenvalues` (optional, **latched** — latching skips a batched Hermitian eigendecomposition run solely for this port).
 
-**Parameters:** shared (`array_geometry`, `angle_convention`, `az_angles`, `el_angles`) plus:
+**Parameters:** shared (`array_geometry`, `angle_convention`, `az_coordinates`, `el_coordinates`) plus:
 
 - `diagonal_loading` **[live]** — float or `auto`. Diagonal loading added to the covariance for robustness / invertibility (`R + δI`); `auto` scales δ to a small multiple of the estimated noise floor. Default: auto.
 - `spatial_smoothing` **[live]** — int-vector or none. Per-aperture-axis sub-array **counts** for forward spatial smoothing on a filled ULA/URA (`[P]` on a ULA, `[P_az, P_el]` on a URA; empty = off). Decorrelates coherent multipath and raises covariance rank at the cost of effective aperture (sub-array length `L_axis = M_axis − P_axis + 1`, so up to `∏P` — or `2∏P` with forward-backward — coherent sources). A non-uniform / holey virtual array must be reduced to a uniform sub-array upstream first (see S3). Default: none.
@@ -667,7 +667,7 @@ Per-estimator deviations from the shared contract:
 - **Out:** `angle_spectrum` (optional, **always**) — MUSIC pseudo-spectrum, `(num_items, num_az, num_el)`. `always` because the pseudo-spectrum also yields `aoa_estimates` and feeds peak extraction.
 - **Out:** `doa_multi` + `source_count` (optional, **latched** — one shared peak-extraction pass, skipped only once both latch); `eigenvalues` (optional, **always** — the eigendecomposition is required for the subspace projector, so the port is a re-export with no dedicated work).
 
-**Parameters:** shared (`array_geometry`, `angle_convention`, `az_angles`, `el_angles`) plus:
+**Parameters:** shared (`array_geometry`, `angle_convention`, `az_coordinates`, `el_coordinates`) plus:
 
 - `num_sources` **[live]** — int or `auto`. Signal-subspace dimension (model order). `auto` = per-item **EFT** (Exponential Fitting Test — robust at the low, `M≈N` snapshot counts of automotive radar, where MDL/AIC collapse) on the **forward-backward-smoothed** covariance eigenvalue spectrum (the `eigenvalues` output), clamped to `[1, max_sources]`; an integer fixes the order uniformly. A rank-deficient covariance (smoothing off, `K < channels`) falls back to 1 and warns. Default: auto. *(Seeding from the CFAR/cluster detection count is **rejected** — that is the detection count, not the per-cell angular multiplicity `num_sources` denotes; RMT/Kritchman–Nadler, AIC, and an upstream-seed port are deferred. See STATUS.md S2.)*
 - `source_count_pfa` **[live]** — float. EFT over-estimation (false-alarm) probability for `auto`; higher → more sources admitted. Coherent with CFAR `pfa`. Default: 1e-2.

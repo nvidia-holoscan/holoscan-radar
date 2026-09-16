@@ -52,15 +52,15 @@ struct BeamscanRuntimeState;
 struct BeamscanParams {
   ArrayGeometry array_geometry{};
   AngleConvention angle_convention{};
-  std::vector<double> az_angles{};
-  std::vector<double> el_angles{};
+  std::vector<double> az_coordinates{};
+  std::vector<double> el_coordinates{};
   WindowSpec array_taper{};
   PeakInterpolation peak_interpolation{PeakInterpolation::kNone};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
     BeamscanParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.BeamscanParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.BeamscanParams", 2),
     holoscan::field<&BeamscanParams::array_geometry>("array_geometry")
         .description(
             "Element positions and wavelength; num_elements must match "
@@ -69,14 +69,16 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Static AER labeling for the scan grid and DOA output "
             "(default radar_boresight; no live port)"),
-    holoscan::field<&BeamscanParams::az_angles>("az_angles")
+    holoscan::field<&BeamscanParams::az_coordinates>("az_coordinates")
         .description(
-            "Azimuth scan grid (or u under direction_cosine); required "
-            "non-empty"),
-    holoscan::field<&BeamscanParams::el_angles>("el_angles")
+            "First scan-coordinate grid: azimuth radians for angular "
+            "conventions, or dimensionless u under direction_cosine; "
+            "required non-empty"),
+    holoscan::field<&BeamscanParams::el_coordinates>("el_coordinates")
         .description(
-            "Elevation scan grid (or v under direction_cosine); required "
-            "non-empty"),
+            "Second scan-coordinate grid: elevation radians for angular "
+            "conventions, or dimensionless v under direction_cosine; "
+            "required non-empty"),
     holoscan::field<&BeamscanParams::array_taper>("array_taper")
         .description("Amplitude taper across array elements"),
     holoscan::field<&BeamscanParams::peak_interpolation>("peak_interpolation")
@@ -107,8 +109,8 @@ class BeamscanEstimatorOp : public holoscan::Operator<BeamscanParams> {
   Output<Tensor> aoa_estimates{"aoa_estimates"};
   Output<Tensor> angle_spectrum{"angle_spectrum"};
   Input<WireArrayGeometry> array_geometry{"array_geometry"};
-  Input<Tensor> az_angles{"az_angles"};
-  Input<Tensor> el_angles{"el_angles"};
+  Input<Tensor> az_coordinates{"az_coordinates"};
+  Input<Tensor> el_coordinates{"el_coordinates"};
   Input<WireWindowSpec> array_taper{"array_taper"};
   Input<PeakInterpolation> peak_interpolation{"peak_interpolation"};
 

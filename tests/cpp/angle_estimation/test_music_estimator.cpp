@@ -260,8 +260,8 @@ MUSICParams make_params(ArrayGeometry geom, AngleConvention conv,
   MUSICParams params{};
   params.array_geometry = std::move(geom);
   params.angle_convention = std::move(conv);
-  params.az_angles = std::move(az);
-  params.el_angles = std::move(el);
+  params.az_coordinates = std::move(az);
+  params.el_coordinates = std::move(el);
   params.num_sources = num_sources;
   params.source_count_pfa = source_count_pfa;
   params.max_sources = max_sources;
@@ -275,7 +275,7 @@ FiveOutGraphRunResult run_music_result(std::shared_ptr<holoscan::Tensor> snapsho
                                        MUSICParams params) {
   const holoscan::radar::MaxTensorExtents sized =
       holoscan::radar::testing::extents_for_scan_grid(
-          params.az_angles.size(), params.el_angles.size());
+          params.az_coordinates.size(), params.el_coordinates.size());
   return run_single_in_five_out_operator_graph_result<MUSICEstimatorOp<T>>(
       {std::move(snapshot)}, std::move(params), "aoa_estimates",
       "angle_spectrum", "doa_multi", "source_count", "eigenvalues",
@@ -470,8 +470,8 @@ class LiveMusicSourceOp final : public holoscan::Operator<> {
 
   holoscan::Output<holoscan::Tensor> snapshot{"snapshot"};
   holoscan::Output<WireArrayGeometry> geometry{"array_geometry"};
-  holoscan::Output<holoscan::Tensor> az{"az_angles"};
-  holoscan::Output<holoscan::Tensor> el{"el_angles"};
+  holoscan::Output<holoscan::Tensor> az{"az_coordinates"};
+  holoscan::Output<holoscan::Tensor> el{"el_coordinates"};
   holoscan::Output<SpatialSmoothingOverride> smoothing{"spatial_smoothing"};
   holoscan::Output<int64_t> num_sources{"num_sources"};
   holoscan::Output<double> source_count_pfa{"source_count_pfa"};
@@ -524,10 +524,10 @@ FiveOutGraphRunResult run_live_music(std::vector<LiveMusicTick> ticks,
     graph.add_flow(source->geometry, op->array_geometry, q);
   }
   if (wiring.az) {
-    graph.add_flow(source->az, op->az_angles, q);
+    graph.add_flow(source->az, op->az_coordinates, q);
   }
   if (wiring.el) {
-    graph.add_flow(source->el, op->el_angles, q);
+    graph.add_flow(source->el, op->el_coordinates, q);
   }
   if (wiring.smoothing) {
     graph.add_flow(source->smoothing, op->spatial_smoothing, q);
@@ -642,8 +642,8 @@ BeamscanParams make_beamscan_params(ArrayGeometry geom, AngleConvention conv,
   BeamscanParams params{};
   params.array_geometry = std::move(geom);
   params.angle_convention = std::move(conv);
-  params.az_angles = std::move(az);
-  params.el_angles = std::move(el);
+  params.az_coordinates = std::move(az);
+  params.el_coordinates = std::move(el);
   return params;
 }
 
@@ -652,7 +652,7 @@ DualIOGraphRunResult run_beamscan_result(
     std::shared_ptr<holoscan::Tensor> snapshot, BeamscanParams params) {
   const holoscan::radar::MaxTensorExtents sized =
       holoscan::radar::testing::extents_for_scan_grid(
-          params.az_angles.size(), params.el_angles.size());
+          params.az_coordinates.size(), params.el_coordinates.size());
   return run_single_in_dual_out_operator_graph_result<BeamscanEstimatorOp<T>>(
       {std::move(snapshot)}, std::move(params), "aoa_estimates",
       "angle_spectrum",
@@ -1431,7 +1431,7 @@ TEST(MUSICEstimatorOpTest, IsValidMaskExcludesWrongDoaSnapshots) {
   auto params =
       make_params(geom, conv, linspace(-0.4, 0.4, 81), {0.0}, 1);
   const auto extents = holoscan::radar::testing::extents_for_scan_grid(
-      params.az_angles.size(), params.el_angles.size());
+      params.az_coordinates.size(), params.el_coordinates.size());
 
   const auto result =
       run_dual_io_operator_graph_result<MUSICEstimatorOp<double>>(
@@ -1491,7 +1491,7 @@ TEST(MUSICEstimatorOpTest, AllInvalidMaskBlanksDoaAndSpectrum) {
   }
 }
 
-TEST(MUSICEstimatorOpTest, LiveAzGridAppliesForOneTick) {
+TEST(MUSICEstimatorOpTest, LiveAzCoordinatesAppliesForOneTick) {
   constexpr int64_t kN = 4;
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
@@ -1518,7 +1518,7 @@ TEST(MUSICEstimatorOpTest, LiveAzGridAppliesForOneTick) {
             (std::vector<int64_t>{1, 2, 1}));
 }
 
-TEST(MUSICEstimatorOpTest, LiveElGridAppliesForOneTick) {
+TEST(MUSICEstimatorOpTest, LiveElCoordinatesAppliesForOneTick) {
   constexpr int64_t kN = 4;
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;

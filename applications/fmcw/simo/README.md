@@ -53,7 +53,7 @@ flowchart LR
     Doppler --> Beamformer[Phase-shift beamformer]
     Beamformer --> CFAR[CFAR per angle plane]
     CFAR -- indices and score --> Features[Feature assembly]
-    Beamformer -- angle grids --> Features
+    Beamformer -- scan-coordinate grids --> Features
     Range -- range bins --> Features
     Doppler -- velocity bins --> Features
     CFAR -- peak indices --> Report[Detection report]
@@ -111,10 +111,11 @@ independent of the legacy `radar_app/viz` implementation.
 - `python/` is an intentionally empty package stub. Python applications are
   deferred until the HSDK 5 Python surface is ready.
 
-The `az_angles` and `el_angles` YAML fields accept either explicit arrays or
-inclusive `{min, max, step}` mappings. The default config demonstrates the
-shorthand while the smoke config retains arrays; both decode to the operators'
-unchanged `std::vector<double>` Params.
+The `az_coordinates` and `el_coordinates` YAML fields accept either explicit
+arrays or inclusive `{min, max, step}` mappings. Their units follow
+`angle_convention`: radians for angular conventions and dimensionless `u/v`
+for `direction_cosine`. The default config demonstrates the shorthand while
+the smoke config retains arrays; both decode to `std::vector<double>` Params.
 
 The former sparse `applications/fmcw_simo` application has been removed.
 `applications/fmcw_dense_simo` remains temporarily as a behavior-comparison
@@ -175,12 +176,13 @@ settings, while the range/clutter/Doppler front end is shared. HSDK
 
 Detect-then-beamform and beamform-then-detect both author
 `feature_assembly.features` (constructor capture for `FeatureAssemblyOp`, not a
-live Params override). The default lists keep physical range, velocity,
-azimuth, elevation, and score first for the cluster report and visualization,
-then append bin columns. Dense-path angles use `az` / `el` grid lookups plus
+live Params override). The default lists keep range, velocity,
+convention-labelled direction coordinates, and score first for the cluster
+report and visualization, then append bin columns. Dense-path coordinates use
+`az` / `el` grid lookups plus
 `az_bin` / `el_bin` in the clustering metric; the sparse path uses
 `az_estimate` / `el_estimate` and clusters only on `range_bin` / `doppler_bin`.
-On the sparse path, `cluster_dbscan.epsilon` zeros the physical and score
+On the sparse path, `cluster_dbscan.epsilon` zeros the coordinate and score
 columns and uses 1.5 on each active bin axis so neighboring cells (including
 2-D diagonals) merge; reduction still scores from the `score` column. The
 dense path keeps the bin columns for reporting and visualization only.
@@ -188,7 +190,7 @@ dense path keeps the bin columns for reporting and visualization only.
 The RX geometry and sparse CFAR `nci_fold` are derived from `app:` and supplied
 as decode baselines. They must not also be authored in operator blocks.
 
-Angle grids are also variant-local. The full-cube workflow's grid directly
+Scan-coordinate grids are also variant-local. The full-cube workflow's grid directly
 multiplies its RDA allocation, so its configured grid and
 `MaxTensorExtents` must remain intentionally bounded.
 

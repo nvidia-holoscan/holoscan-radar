@@ -131,7 +131,7 @@ Rejected combinations (operator’s message unless noted):
 | `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD (§9) | Rebuilds plan + H2D; changes polynomial degree | Per-axis counts on a filled ULA/URA |
 | `forward_backward` | bool | `true` | static | Part of the smoothing-plan key | FB looks; ignored unless smoothing is on |
 
-No `az_angles` / `el_angles`. `num_sources` encoding is the same `int64` negative-`auto` convention as MUSIC.
+No `az_coordinates` / `el_coordinates`. `num_sources` encoding is the same `int64` negative-`auto` convention as MUSIC.
 
 ## SDK implementation notes
 

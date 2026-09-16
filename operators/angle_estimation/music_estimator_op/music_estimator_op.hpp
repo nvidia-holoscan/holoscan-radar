@@ -77,8 +77,8 @@ void retire_music_matx_caches();
 struct MUSICParams {
   ArrayGeometry array_geometry{};
   AngleConvention angle_convention{};
-  std::vector<double> az_angles{};
-  std::vector<double> el_angles{};
+  std::vector<double> az_coordinates{};
+  std::vector<double> el_coordinates{};
   // Signal-subspace dimension. Negative → auto (per-item EFT); non-negative
   // → fixed order. Default -1 (auto).
   int64_t num_sources{-1};
@@ -94,7 +94,7 @@ struct MUSICParams {
 
 HOLOSCAN_PARAM_SCHEMA(
     MUSICParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.MUSICParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.MUSICParams", 2),
     holoscan::field<&MUSICParams::array_geometry>("array_geometry")
         .description(
             "Element positions and wavelength; num_elements must match "
@@ -103,14 +103,16 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Static AER labeling for the scan grid and DOA output "
             "(default radar_boresight; no live port)"),
-    holoscan::field<&MUSICParams::az_angles>("az_angles")
+    holoscan::field<&MUSICParams::az_coordinates>("az_coordinates")
         .description(
-            "Azimuth scan grid (or u under direction_cosine); required "
-            "non-empty"),
-    holoscan::field<&MUSICParams::el_angles>("el_angles")
+            "First scan-coordinate grid: azimuth radians for angular "
+            "conventions, or dimensionless u under direction_cosine; "
+            "required non-empty"),
+    holoscan::field<&MUSICParams::el_coordinates>("el_coordinates")
         .description(
-            "Elevation scan grid (or v under direction_cosine); required "
-            "non-empty"),
+            "Second scan-coordinate grid: elevation radians for angular "
+            "conventions, or dimensionless v under direction_cosine; "
+            "required non-empty"),
     holoscan::field<&MUSICParams::num_sources>("num_sources")
         .description(
             "Signal-subspace dimension; negative selects auto (per-item "
@@ -162,8 +164,8 @@ class MUSICEstimatorOp : public holoscan::Operator<MUSICParams> {
   Output<Tensor> eigenvalues{"eigenvalues"};
   // [live] Exact overrides.
   Input<WireArrayGeometry> array_geometry{"array_geometry"};
-  Input<Tensor> az_angles{"az_angles"};
-  Input<Tensor> el_angles{"el_angles"};
+  Input<Tensor> az_coordinates{"az_coordinates"};
+  Input<Tensor> el_coordinates{"el_coordinates"};
   Input<SpatialSmoothingOverride> spatial_smoothing{"spatial_smoothing"};
   Input<int64_t> num_sources{"num_sources"};
   Input<double> source_count_pfa{"source_count_pfa"};

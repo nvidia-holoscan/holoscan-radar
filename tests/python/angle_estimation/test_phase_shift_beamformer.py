@@ -80,8 +80,8 @@ def test_RecoversKnownBeamBin2D():
         rd,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=az,
-        el_angles=el,
+        az_coordinates=az,
+        el_coordinates=el,
     )
     assert cube.shape == (101, 61, 1, 1)
     ia, ie = peak_beam_at(cube, 101, 61, 0, 0)
@@ -99,8 +99,8 @@ def test_RejectsEmptyScanGrid():
             rd,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=[],
-            el_angles=[0.0],
+            az_coordinates=[],
+            el_coordinates=[0.0],
         )
 
 
@@ -115,8 +115,8 @@ def test_FloatDoubleAgreeOnPeakBeam():
     kwargs = dict(
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=az,
-        el_angles=[0.0],
+        az_coordinates=az,
+        el_coordinates=[0.0],
     )
     cube_f = run_beamformer(rd.astype(np.complex64), op_cls=PhaseShiftBeamformerOpF32, **kwargs)
     cube_d = run_beamformer(rd, op_cls=PhaseShiftBeamformerOpF64, **kwargs)
@@ -142,8 +142,8 @@ def test_PreservesRangeDopplerPlanePerCell():
         rd,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=az,
-        el_angles=[0.0],
+        az_coordinates=az,
+        el_coordinates=[0.0],
     )
     assert cube.shape == (81, 1, k_d, k_r)
     ia0, _ = peak_beam_at(cube, 81, 1, 0, 0)
@@ -170,8 +170,8 @@ def test_BatchLeadingDimsRecoverIndependentDoa():
         rd,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=az,
-        el_angles=[0.0],
+        az_coordinates=az,
+        el_coordinates=[0.0],
     )
     assert cube.shape == (2, 81, 1, 1, 1)
 
@@ -209,8 +209,8 @@ def test_ConventionRelabelsSamePhysicalDirection():
             vec.reshape(geom.num_elements(), 1, 1),
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=az,
-            el_angles=el,
+            az_coordinates=az,
+            el_coordinates=el,
         )
         ia, ie = peak_beam_at(cube, 101, 61, 0, 0)
         assert az[ia] == pytest.approx(truth_az, abs=0.02)

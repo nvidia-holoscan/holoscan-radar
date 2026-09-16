@@ -84,8 +84,8 @@ CustomFrame custom_frame(const AngleConvention& conv) {
 }  // namespace
 
 void validate_scan_grid_axes(const AngleConvention& conv,
-                             const std::vector<double>& az_angles,
-                             const std::vector<double>& el_angles,
+                             const std::vector<double>& az_coordinates,
+                             const std::vector<double>& el_coordinates,
                              std::string_view who) {
   const auto validate_axis = [&](const std::vector<double>& values,
                                  std::string_view name) {
@@ -103,8 +103,8 @@ void validate_scan_grid_axes(const AngleConvention& conv,
       }
     }
   };
-  validate_axis(az_angles, "az_angles");
-  validate_axis(el_angles, "el_angles");
+  validate_axis(az_coordinates, "az_coordinates");
+  validate_axis(el_coordinates, "el_coordinates");
 }
 
 CanonicalDirection boundary_to_canonical(const AngleConvention& conv, double az,

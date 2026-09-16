@@ -47,7 +47,7 @@ class AppConfig(CommonRunConfig):
     array_geometry: object = None
     router: RouterConfig = field(default_factory=RouterConfig)
     # Boresight-view axis extents only (read-only mirror of the grid estimator's
-    # az_angles/el_angles; the operators still get them via from_config()).
+    # az_coordinates/el_coordinates; the operators still get them via from_config()).
     az_lo: float = -0.35
     az_hi: float = 0.35
     el_lo: float = -0.35
@@ -112,11 +112,15 @@ def load_config(path: Path) -> AppConfig:
     if router.log_every < 0:
         raise ValueError("estimator_router.log_every must be >= 0")
 
-    # Read-only mirror: az_angles/el_angles are the grid estimator's own
+    # Read-only mirror: az_coordinates/el_coordinates are the grid estimator's own
     # from_config() parameters; this only sizes the boresight-view axes.
     be = root.get("beamscan_estimator", {})
-    az_lo, az_hi = grid_extent([float(x) for x in be.get("az_angles", [])] or None, -0.35, 0.35)
-    el_lo, el_hi = grid_extent([float(x) for x in be.get("el_angles", [])] or None, -0.35, 0.35)
+    az_lo, az_hi = grid_extent(
+        [float(x) for x in be.get("az_coordinates", [])] or None, -0.35, 0.35
+    )
+    el_lo, el_hi = grid_extent(
+        [float(x) for x in be.get("el_coordinates", [])] or None, -0.35, 0.35
+    )
 
     common = parse_common_run_config(root, config_path=path.resolve())
     cfg = AppConfig(

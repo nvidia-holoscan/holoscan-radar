@@ -9,7 +9,7 @@ Conventional (Bartlett) sparse-path DOA: one look per item, scan a grid, emit th
 | out | `aoa_estimates` | float32 / float64 | `(num_items, 2)` | Dominant DOA `(az, el)` or `(u, v)`, row-aligned with items. Always emitted. |
 | out | `angle_spectrum` | float32 / float64 | `(num_items, num_az, num_el)` | Bartlett power grid. Optional (`always` disposition): the grid is the same pass that yields `aoa_estimates`, so it is produced regardless and an unwired sink is silently discarded. No `doa_multi` / `eigenvalues`. |
 | live | `array_geometry` | `WireArrayGeometry` | descriptor wire object | `[live]` Exact override; always declared, wire to enable. |
-| live | `az_angles` / `el_angles` | float64 config Tensor | `(num_az,)` / `(num_el,)`, rank-1 pageable host | `[live]` Exact override; extents bounded by `max_az` / `max_el`. |
+| live | `az_coordinates` / `el_coordinates` | float64 config Tensor | `(num_az,)` / `(num_el,)`, rank-1 pageable host | `[live]` Exact override; extents bounded by `max_az` / `max_el`. |
 | live | `array_taper` | `WireWindowSpec` | descriptor wire object | `[live]` Exact override; always declared, wire to enable. |
 | live | `peak_interpolation` | `PeakInterpolation` `{none, parabolic}` | scalar enum | `[live]` Exact override; always declared, wire to enable. |
 
@@ -46,14 +46,14 @@ az += off_az * (az_step_left + az_step_right) / 2
 el += off_el * (el_step_left + el_step_right) / 2
 ```
 
-Each axis refines independently when it has at least three grid points and the peak is interior on that axis. A 1-D azimuth scan (`el_angles` size 1) therefore refines azimuth while leaving elevation at its sole grid value.
+Each axis refines independently when it has at least three grid points and the peak is interior on that axis. A 1-D azimuth scan (`el_coordinates` size 1) therefore refines azimuth while leaving elevation at its sole grid value.
 
 Steering-weight sign and `direction_cosine` masking match PhaseShift (`k = 2π/λ`, `phase = k (p·dir)`, invalid `u²+v² > 1` → zero weights). `is_valid` does not change the GEMM; `blank_empty_beamscan_items` then overwrites items whose mask row is all zero.
 
 ## Shape and dtype rules
 
 - `aoa_estimates` rows = `snapshot` axis 0 (`num_items`).
-- `angle_spectrum` = `(num_items, az_angles.size(), el_angles.size())`.
+- `angle_spectrum` = `(num_items, az_coordinates.size(), el_coordinates.size())`.
 - 2-D snapshot is canonical; 3-D is legal only with `num_snapshots == 1` (aliases the same contiguous layout).
 - No leading batch beyond `(num_items, …)`.
 - Precision is the template instantiation (complex in, real out).
@@ -65,7 +65,7 @@ Rejected combinations and the operator's own messages:
 
 | Condition | Message |
 | --- | --- |
-| empty `az_angles` or `el_angles` | `BeamscanEstimatorOp: az_angles and el_angles must be non-empty` |
+| empty `az_coordinates` or `el_coordinates` | `BeamscanEstimatorOp: az_coordinates and el_coordinates must be non-empty` |
 | input or scan grid beyond captured maxima | `BeamscanEstimatorOp: input or scan grid exceeds MaxTensorExtents` |
 | `snapshot` rank not 2 or 3 | `BeamscanEstimatorOp: snapshot must have shape (num_items, num_channels) or (num_items, num_channels, num_snapshots)` |
 | 3-D `num_snapshots ≠ 1` | `BeamscanEstimatorOp: snapshot num_snapshots must be 1 for single-snapshot Beamscan` |
@@ -80,21 +80,21 @@ Rejected combinations and the operator's own messages:
 | --- | --- | --- | --- | --- | --- |
 | `array_geometry` | `ArrayGeometry` | none (required; empty fails `validate`) | `[live]` Exact wire-schema override | Rebuilds cached steering weights | Element positions + wavelength. |
 | `angle_convention` | `AngleConvention` | `radar_boresight` | static | Rebuilds weights (part of the cache key) | Boundary labeling of the grid and `aoa_estimates`, or `direction_cosine`. |
-| `az_angles` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_az` | Rebuilds weights | Azimuth (`u`) scan grid. |
-| `el_angles` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_el` | Rebuilds weights | Elevation (`v`) scan grid; `[0]` is a 1-D azimuth scan. |
+| `az_coordinates` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_az` | Rebuilds weights | First coordinate: azimuth radians for angular conventions, dimensionless `u` for `direction_cosine`. |
+| `el_coordinates` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_el` | Rebuilds weights | Second coordinate: elevation radians for angular conventions, dimensionless `v` for `direction_cosine`; `[0]` gives a 1-D scan. |
 | `array_taper` | `WindowSpec` | `kNone` (rectangular) | `[live]` Exact wire-schema override | Rebuilds weights | Spatial amplitude taper; non-custom windows are separable on recognized filled URAs, while custom coefficients stay per-element. |
 | `peak_interpolation` | `PeakInterpolation` | `none` | `[live]` Exact | Free — no weight rebuild | `none` = argmax cell; `parabolic` = quadratic refinement (2-D interior peaks only). |
 
-Application YAML accepts explicit arrays or inclusive `{min: ..., max: ..., step: ...}` mappings for `az_angles` and `el_angles`. Range mappings require finite values, `step > 0`, `min <= max`, and endpoint alignment within floating-point tolerance. They expand to the same `std::vector<double>` Params before construction; live ports remain rank-1 float64 Tensors. Every effective grid coordinate must be finite. Under `direction_cosine`, each authored axis value must lie in `[-1, 1]`; square-grid corners outside `u² + v² <= 1` remain legal and are masked per beam.
+Application YAML accepts explicit arrays or inclusive `{min: ..., max: ..., step: ...}` mappings for `az_coordinates` and `el_coordinates`. Range mappings require finite values, `step > 0`, `min <= max`, and endpoint alignment within floating-point tolerance. They expand to the same `std::vector<double>` Params before construction; live ports remain rank-1 float64 Tensors. Every effective grid coordinate must be finite. Under `direction_cosine`, each authored axis value must lie in `[-1, 1]`; square-grid corners outside `u² + v² <= 1` remain legal and are masked per beam.
 
 Schema id `com.nvidia.holoscan.radar.BeamscanParams`, version 1. `peak_interpolation` resolution: Params seed; an Exact match on the override port wins for that tick, and any tick without a match uses the Params value.
 
 ## SDK implementation notes
 
 - **Construction.** `BeamscanEstimatorOp(const MaxTensorExtents&)`. **Requires** `max_items`, `max_az`, `max_el`. Sizes `angle_spectrum` as `{max_items, max_az, max_el}` real, `aoa_estimates` as `{max_items, 2}` real, and a reusable complex GEMM workspace as `{max_items, max_az, max_el}`. The plan rejects a tick beyond those bounds before requesting an output loan.
-- **Triggering.** `contract()` is `OnEach{snapshot}`. Optional `is_valid` and each `[live]` override (`array_geometry`, `az_angles`, `el_angles`, `array_taper`, `peak_interpolation`) are unconditional non-member `Exact{}` + `SafeDefault{}` entries. Producers publish a same-stamped mask before `snapshot`, so Exact sees it when the trigger arrives. Wiring enables a sideband for one tick; a miss uses all-valid behavior or Params.
-- **Ports and queues.** Inputs `queue_depth(2)`, device, rank-agnostic. `aoa_estimates` `max_rank = 2`; `angle_spectrum` `max_rank = 3`. Live Inputs `queue_depth(2)`; `az_angles` / `el_angles` are rank-1 pageable-host config Tensors, the rest are wire-object / enum payloads.
-- **Live override payloads.** `array_geometry` is `Input<WireArrayGeometry>` and `array_taper` is `Input<WireWindowSpec>` — generated descriptor-schema types, converted with `from_wire` inside `resolve_live_override_via` so wire storage never reaches operator state. `az_angles` / `el_angles` ride rank-1 pageable-host float64 config Tensors validated on arrival (rank, host memory, contiguity, dtype, `max_az` / `max_el` extent) and converted per tick, with no state kept ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9). `peak_interpolation` is a plain enum `Input<>` resolved with `resolve_live_override`. The logical Params types are unchanged — the wire / Tensor form is a port detail.
+- **Triggering.** `contract()` is `OnEach{snapshot}`. Optional `is_valid` and each `[live]` override (`array_geometry`, `az_coordinates`, `el_coordinates`, `array_taper`, `peak_interpolation`) are unconditional non-member `Exact{}` + `SafeDefault{}` entries. Producers publish a same-stamped mask before `snapshot`, so Exact sees it when the trigger arrives. Wiring enables a sideband for one tick; a miss uses all-valid behavior or Params.
+- **Ports and queues.** Inputs `queue_depth(2)`, device, rank-agnostic. `aoa_estimates` `max_rank = 2`; `angle_spectrum` `max_rank = 3`. Live Inputs `queue_depth(2)`; `az_coordinates` / `el_coordinates` are rank-1 pageable-host config Tensors, the rest are wire-object / enum payloads.
+- **Live override payloads.** `array_geometry` is `Input<WireArrayGeometry>` and `array_taper` is `Input<WireWindowSpec>` — generated descriptor-schema types, converted with `from_wire` inside `resolve_live_override_via` so wire storage never reaches operator state. `az_coordinates` / `el_coordinates` ride rank-1 pageable-host float64 config Tensors validated on arrival (rank, host memory, contiguity, dtype, `max_az` / `max_el` extent) and converted per tick, with no state kept ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9). `peak_interpolation` is a plain enum `Input<>` resolved with `resolve_live_override`. The logical Params types are unchanged — the wire / Tensor form is a port detail.
 - **Streams and lifetime.** GEMM, reduce, blanking, and steering-artifact builds use `context.cuda_stream()`. `snapshot` and `is_valid` (when present) are retained. The hot path does not synchronize. The constructor-created GEMM workspace is reused; device scan grids are cached with the steering weights, so unchanged ticks do not allocate scratch or repeat grid H2D copies.
 - **Emission.** Both loans are prepared before the shared stage writes either buffer; required `aoa_estimates` publishes before optional/always `angle_spectrum`. Zero-item ticks use no-op preparations in the same order.
 - **Precision.** `BeamscanEstimatorOp<float>`, `BeamscanEstimatorOp<double>`.
@@ -146,8 +146,8 @@ ctest --test-dir build -R test_beamscan_estimator --output-on-failure
 beamscan_estimator:
   angle_convention:
     preset: radar_boresight
-  az_angles: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
-  el_angles: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
+  az_coordinates: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
+  el_coordinates: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
   peak_interpolation: parabolic
   # array_geometry set in C++ from the RX / virtual array
 ```

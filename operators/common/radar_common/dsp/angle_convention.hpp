@@ -28,8 +28,8 @@ inline bool is_physical_direction_cosine(double u, double v) {
 // stay within [-1, 1]; Cartesian-product corners outside the unit disk remain
 // valid authored axes and are masked per beam.
 void validate_scan_grid_axes(const AngleConvention& conv,
-                             const std::vector<double>& az_angles,
-                             const std::vector<double>& el_angles,
+                             const std::vector<double>& az_coordinates,
+                             const std::vector<double>& el_coordinates,
                              std::string_view who = "scan grid");
 
 // Map boundary scan coordinates to a canonical unit vector. For

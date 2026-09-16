@@ -37,7 +37,7 @@
 
 namespace holoscan::radar::app {
 
-inline std::vector<double> load_angle_grid(const YAML::Node& node,
+inline std::vector<double> load_scan_coordinates(const YAML::Node& node,
                                            std::string_view name) {
   if (!node || node.IsNull()) {
     return {};
@@ -256,11 +256,11 @@ inline void load_beamscan_params(const YAML::Node& node, BeamscanParams* p) {
   if (node["angle_convention"]) {
     p->angle_convention = node["angle_convention"].as<AngleConvention>();
   }
-  if (node["az_angles"]) {
-    p->az_angles = load_angle_grid(node["az_angles"], "az_angles");
+  if (node["az_coordinates"]) {
+    p->az_coordinates = load_scan_coordinates(node["az_coordinates"], "az_coordinates");
   }
-  if (node["el_angles"]) {
-    p->el_angles = load_angle_grid(node["el_angles"], "el_angles");
+  if (node["el_coordinates"]) {
+    p->el_coordinates = load_scan_coordinates(node["el_coordinates"], "el_coordinates");
   }
   if (node["array_taper"]) {
     p->array_taper = node["array_taper"].as<WindowSpec>();
@@ -314,11 +314,11 @@ inline void load_phase_shift_beamformer_params(
   if (node["angle_convention"]) {
     p->angle_convention = node["angle_convention"].as<AngleConvention>();
   }
-  if (node["az_angles"]) {
-    p->az_angles = load_angle_grid(node["az_angles"], "az_angles");
+  if (node["az_coordinates"]) {
+    p->az_coordinates = load_scan_coordinates(node["az_coordinates"], "az_coordinates");
   }
-  if (node["el_angles"]) {
-    p->el_angles = load_angle_grid(node["el_angles"], "el_angles");
+  if (node["el_coordinates"]) {
+    p->el_coordinates = load_scan_coordinates(node["el_coordinates"], "el_coordinates");
   }
   if (node["array_taper"]) {
     p->array_taper = node["array_taper"].as<WindowSpec>();
@@ -333,11 +333,11 @@ inline void load_mvdr_params(const YAML::Node& node, MVDRParams* p) {
   if (node["angle_convention"]) {
     p->angle_convention = node["angle_convention"].as<AngleConvention>();
   }
-  if (node["az_angles"]) {
-    p->az_angles = load_angle_grid(node["az_angles"], "az_angles");
+  if (node["az_coordinates"]) {
+    p->az_coordinates = load_scan_coordinates(node["az_coordinates"], "az_coordinates");
   }
-  if (node["el_angles"]) {
-    p->el_angles = load_angle_grid(node["el_angles"], "el_angles");
+  if (node["el_coordinates"]) {
+    p->el_coordinates = load_scan_coordinates(node["el_coordinates"], "el_coordinates");
   }
   if (node["diagonal_loading"]) {
     p->diagonal_loading = node["diagonal_loading"].as<double>();
@@ -360,11 +360,11 @@ inline void load_music_params(const YAML::Node& node, MUSICParams* p) {
   if (node["angle_convention"]) {
     p->angle_convention = node["angle_convention"].as<AngleConvention>();
   }
-  if (node["az_angles"]) {
-    p->az_angles = load_angle_grid(node["az_angles"], "az_angles");
+  if (node["az_coordinates"]) {
+    p->az_coordinates = load_scan_coordinates(node["az_coordinates"], "az_coordinates");
   }
-  if (node["el_angles"]) {
-    p->el_angles = load_angle_grid(node["el_angles"], "el_angles");
+  if (node["el_coordinates"]) {
+    p->el_coordinates = load_scan_coordinates(node["el_coordinates"], "el_coordinates");
   }
   if (node["num_sources"]) {
     p->num_sources = node["num_sources"].as<int64_t>();

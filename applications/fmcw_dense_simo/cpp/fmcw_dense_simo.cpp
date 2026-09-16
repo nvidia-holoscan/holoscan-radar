@@ -14,7 +14,7 @@
 // Dense detection_idx / rep_idx carry (az_bin, el_bin) ahead of
 // (doppler, range); TrailingIdxColumnsOp slices the trailing two columns for
 // FeatureAssembly and the X11 viewer. CubeAoaLookupOp resolves physical angle
-// values because the beamformer's angle grids are parameters/live inputs, not
+// values because the beamformer's scan-coordinate grids are parameters/live inputs, not
 // output ports.
 // Build: cmake -S . -B build -DBUILD_ALL=ON && cmake --build build
 // Run:   ./build/applications/fmcw_dense_simo/cpp/fmcw_dense_simo [config.yaml]
@@ -114,8 +114,8 @@ int main(int argc, char** argv) {
             graph.op<AnglePeakPickOp>("angle_peak_pick", extents);
         auto aoa_lookup = graph.op<CubeAoaLookupOp>(
             "cube_aoa_lookup", extents,
-            CubeAoaLookupOp::Config{cfg.beamformer_params.az_angles,
-                                    cfg.beamformer_params.el_angles});
+            CubeAoaLookupOp::Config{cfg.beamformer_params.az_coordinates,
+                                    cfg.beamformer_params.el_coordinates});
 
         // (N,4) → (N,2) trailing (doppler, range) for PhysicalPoints / viewer
         // / direct CFAR-peak DetectionReport.

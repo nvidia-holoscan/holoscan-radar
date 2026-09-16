@@ -47,8 +47,8 @@ expected<void, Error> fail_runtime(const std::string& message) {
 struct PhaseShiftBeamformerStageConfig {
   ArrayGeometry geometry;
   AngleConvention convention;
-  std::vector<double> az_angles;
-  std::vector<double> el_angles;
+  std::vector<double> az_coordinates;
+  std::vector<double> el_coordinates;
   WindowSpec taper;
 };
 
@@ -73,18 +73,18 @@ expected<PhaseShiftBeamformerStageConfig, Error> resolve_params(
   HOLOSCAN_TRY(
       auto az,
       resolve_live_override_via(
-          az_port, pinned.az_angles,
+          az_port, pinned.az_coordinates,
           [max_az](const Tensor& value) {
             return read_host_config_vector<double>(
-                value, DLDataType{kDLFloat, 64U, 1U}, max_az, "az_angles");
+                value, DLDataType{kDLFloat, 64U, 1U}, max_az, "az_coordinates");
           }));
   HOLOSCAN_TRY(
       auto el,
       resolve_live_override_via(
-          el_port, pinned.el_angles,
+          el_port, pinned.el_coordinates,
           [max_el](const Tensor& value) {
             return read_host_config_vector<double>(
-                value, DLDataType{kDLFloat, 64U, 1U}, max_el, "el_angles");
+                value, DLDataType{kDLFloat, 64U, 1U}, max_el, "el_coordinates");
           }));
   HOLOSCAN_TRY(
       auto taper,
@@ -94,8 +94,8 @@ expected<PhaseShiftBeamformerStageConfig, Error> resolve_params(
   return PhaseShiftBeamformerStageConfig{
       .geometry = std::move(geometry),
       .convention = pinned.angle_convention,
-      .az_angles = std::move(az),
-      .el_angles = std::move(el),
+      .az_coordinates = std::move(az),
+      .el_coordinates = std::move(el),
       .taper = std::move(taper),
   };
 }
@@ -124,14 +124,14 @@ build_phase_shift_beamformer_stage_plan(
 
   try {
     stage.geometry.validate();
-    if (stage.az_angles.empty() || stage.el_angles.empty()) {
+    if (stage.az_coordinates.empty() || stage.el_coordinates.empty()) {
       throw std::invalid_argument(
-          "PhaseShiftBeamformerOp: az_angles and el_angles must be non-empty");
+          "PhaseShiftBeamformerOp: az_coordinates and el_coordinates must be non-empty");
     }
-    validate_scan_grid_axes(stage.convention, stage.az_angles, stage.el_angles,
+    validate_scan_grid_axes(stage.convention, stage.az_coordinates, stage.el_coordinates,
                             "PhaseShiftBeamformerOp");
-    if (stage.az_angles.size() > static_cast<std::size_t>(max_az) ||
-        stage.el_angles.size() > static_cast<std::size_t>(max_el) ||
+    if (stage.az_coordinates.size() > static_cast<std::size_t>(max_az) ||
+        stage.el_coordinates.size() > static_cast<std::size_t>(max_el) ||
         num_doppler > max_doppler || num_range > max_range) {
       throw std::invalid_argument(
           "PhaseShiftBeamformerOp: input or scan grid exceeds "
@@ -140,7 +140,7 @@ build_phase_shift_beamformer_stage_plan(
     generate_steering_taper(stage.geometry, stage.taper);
     // Also validates the signed-axis frame for a custom convention.
     (void)boundary_to_canonical(
-        stage.convention, stage.az_angles.front(), stage.el_angles.front());
+        stage.convention, stage.az_coordinates.front(), stage.el_coordinates.front());
   } catch (const std::invalid_argument& e) {
     return make_unexpected(
         Error{ErrorCode::kInvalidArgument, e.what()});
@@ -153,8 +153,8 @@ build_phase_shift_beamformer_stage_plan(
             "array_geometry.num_elements"});
   }
 
-  const int64_t num_az = static_cast<int64_t>(stage.az_angles.size());
-  const int64_t num_el = static_cast<int64_t>(stage.el_angles.size());
+  const int64_t num_az = static_cast<int64_t>(stage.az_coordinates.size());
+  const int64_t num_el = static_cast<int64_t>(stage.el_coordinates.size());
   std::size_t num_cells_size = 0U;
   std::size_t num_beams_size = 0U;
   try {
@@ -194,7 +194,7 @@ std::shared_ptr<holoscan::Tensor> make_device_grid(
   auto writable = result->mutable_data();
   if (!writable) {
     throw std::runtime_error(
-        "PhaseShiftBeamformerOp: angle grid is not writable");
+        "PhaseShiftBeamformerOp: scan-coordinate grid is not writable");
   }
   if (!cast.empty() &&
       cudaMemcpyAsync(*writable, cast.data(), cast.size() * sizeof(T),
@@ -212,18 +212,18 @@ prepare_steering_artifacts(
     const PhaseShiftBeamformerStageConfig& stage, cudaStream_t stream) {
   try {
     const std::string cache_key =
-        steering_cache_key(stage.geometry, stage.convention, stage.az_angles,
-                           stage.el_angles, stage.taper);
+        steering_cache_key(stage.geometry, stage.convention, stage.az_coordinates,
+                           stage.el_coordinates, stage.taper);
     const detail::PhaseShiftBeamformerArtifacts& artifacts =
         cache.get_or_build(
             cache_key, "steering artifacts", [&] {
               return detail::PhaseShiftBeamformerArtifacts{
                   .weights = build_steering_weights_device<T>(
-                      stage.geometry, stage.convention, stage.az_angles,
-                      stage.el_angles, stage.taper, BeamOrder::kAzMajor,
+                      stage.geometry, stage.convention, stage.az_coordinates,
+                      stage.el_coordinates, stage.taper, BeamOrder::kAzMajor,
                       SteeringLayout::kBeamMajor, /*conjugate=*/true, stream),
-                  .az_grid = make_device_grid<T>(stage.az_angles, stream),
-                  .el_grid = make_device_grid<T>(stage.el_angles, stream)};
+                  .az_grid = make_device_grid<T>(stage.az_coordinates, stream),
+                  .el_grid = make_device_grid<T>(stage.el_coordinates, stream)};
             });
     if (!artifacts.weights || !artifacts.az_grid || !artifacts.el_grid) {
       return make_unexpected(Error{
@@ -302,11 +302,11 @@ void PhaseShiftBeamformerOp<T>::setup(OperatorSpec& spec) {
           pooled_tensor_output(kGridDevice, 2U, max_el_grid_byte_span_));
   // [live] Exact overrides, Params order (schema and host-Tensor alike).
   spec.input(array_geometry).optional().queue_depth(2U);
-  spec.input(az_angles)
+  spec.input(az_coordinates)
       .optional()
       .queue_depth(2U)
       .expects_tensor(tensor_input(kHostF64));
-  spec.input(el_angles)
+  spec.input(el_coordinates)
       .optional()
       .queue_depth(2U)
       .expects_tensor(tensor_input(kHostF64));
@@ -318,8 +318,8 @@ Contract PhaseShiftBeamformerOp<T>::contract() const {
   Contract result;
   result.trigger(OnEach{rd_maps});
   add_live_override_to_contract(result, array_geometry);
-  add_live_override_to_contract(result, az_angles);
-  add_live_override_to_contract(result, el_angles);
+  add_live_override_to_contract(result, az_coordinates);
+  add_live_override_to_contract(result, el_coordinates);
   add_live_override_to_contract(result, array_taper);
   return result;
 }
@@ -343,7 +343,7 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
       context.params<PhaseShiftBeamformerParams>();
   HOLOSCAN_TRY(
       auto stage,
-      resolve_params(array_geometry, az_angles, el_angles, array_taper,
+      resolve_params(array_geometry, az_coordinates, el_coordinates, array_taper,
                      pinned, max_az_, max_el_));
   HOLOSCAN_TRY(
       auto plan,

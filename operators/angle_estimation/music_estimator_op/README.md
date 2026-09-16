@@ -14,7 +14,7 @@ It sits in the pluggable sparse slot after `SnapshotGatherOp` (SIMO physical RX 
 | out | `source_count` | int32 | `(num_items,)` | Peaks actually written into `doa_multi` |
 | out | `eigenvalues` | float32 / float64 | `(num_items, C_est)` | Ascending covariance spectrum; `C_est` is post-smoothing |
 | live | `array_geometry` | `WireArrayGeometry` | descriptor wire object | `[live]` Exact override; always declared, wire to enable |
-| live | `az_angles` / `el_angles` | float64 config Tensor | `(num_az,)` / `(num_el,)`, rank-1 pageable host | `[live]` Exact override; extents bounded by `max_az` / `max_el` |
+| live | `az_coordinates` / `el_coordinates` | float64 config Tensor | `(num_az,)` / `(num_el,)`, rank-1 pageable host | `[live]` Exact override; extents bounded by `max_az` / `max_el` |
 | live | `spatial_smoothing` | `SpatialSmoothingOverride` | `{count, first, second}` int64 POD | `[live]` Exact override; `count` 0–2 selects 1-D / 2-D counts |
 | live | `num_sources` | int64 | scalar | `[live]` Exact override; always declared, wire to enable. Negative → per-item EFT `auto` |
 | live | `source_count_pfa` | float64 | scalar | `[live]` Exact override; always declared, wire to enable. EFT target Pfa for `auto` |
@@ -94,7 +94,7 @@ Precision is the template argument `T` ∈ {`float`, `double`}: inputs are `comp
 - `snapshot` has exact rank 3. Use a singleton trailing axis for one look.
 - `num_channels` must equal `array_geometry.num_elements()` (pre-smoothing). After smoothing, estimation and `eigenvalues` use `C_est = L`.
 - `aoa_estimates` is always `(num_items, 2)`.
-- `angle_spectrum` is `(num_items, len(az_angles), len(el_angles))`.
+- `angle_spectrum` is `(num_items, len(az_coordinates), len(el_coordinates))`.
 - `doa_multi` is `(num_items, effective_max_sources, 2)`.
 - `source_count` is `(num_items,)`.
 - Named leading axes stop at `num_items`. Extra leading batch dims are not admitted.
@@ -105,7 +105,7 @@ Rejected combinations (operator’s own message unless noted):
 
 | Condition | Message |
 | --- | --- |
-| Empty `az_angles` or `el_angles` | `MUSICEstimatorOp: az_angles and el_angles must be non-empty` |
+| Empty `az_coordinates` or `el_coordinates` | `MUSICEstimatorOp: az_coordinates and el_coordinates must be non-empty` |
 | `max_sources` not in `[1, 64]` | `MUSICEstimatorOp: max_sources must be in [1, 64]` |
 | `source_count_pfa` not in `(0, 1)` | `MUSICEstimatorOp: source_count_pfa must be in (0, 1)` |
 | `snapshot` not rank 3 | `MUSICEstimatorOp: snapshot must have shape (num_items, num_channels, num_snapshots)` |
@@ -128,15 +128,15 @@ Rejected combinations (operator’s own message unless noted):
 | --- | --- | --- | --- | --- | --- |
 | `array_geometry` | `ArrayGeometry` | none (required) | `[live]` Exact wire-schema override (§9) | Rebuilds steering (+ smoothing plan if enabled); warn-once on smoothing enable | Element positions + `λ`; `num_elements` must match `snapshot` channels |
 | `angle_convention` | `AngleConvention` | `radar_boresight` | static | Fixes output meaning for the graph | Boundary `(az, el)` ↔ unit-vector map; `direction_cosine` is `(u, v)` |
-| `az_angles` | `vector<double>` | none (required, non-empty) | `[live]` Exact host config Tensor, extent bounded by `max_az` (§9) | Rebuilds steering manifold | Azimuth (or `u`) scan grid |
-| `el_angles` | `vector<double>` | none (required, non-empty) | `[live]` Exact host config Tensor, extent bounded by `max_el` (§9) | Rebuilds steering manifold | Elevation (or `v`) grid; a singleton (e.g. `[0]`) is a 1-D azimuth scan |
+| `az_coordinates` | `vector<double>` | none (required, non-empty) | `[live]` Exact host config Tensor, extent bounded by `max_az` (§9) | Rebuilds steering manifold | First coordinate: azimuth radians for angular conventions, dimensionless `u` for `direction_cosine` |
+| `el_coordinates` | `vector<double>` | none (required, non-empty) | `[live]` Exact host config Tensor, extent bounded by `max_el` (§9) | Rebuilds steering manifold | Second coordinate: elevation radians for angular conventions, dimensionless `v` for `direction_cosine`; singleton gives a 1-D scan |
 | `num_sources` | int64 | `-1` (`auto`) | `[live]` Exact | Free (device EFT or a fill); no FFT | Signal-subspace dimension; `< 0` → per-item EFT |
 | `source_count_pfa` | double | `1e-2` | `[live]` Exact | Free (EFT threshold only) | Target EFT over-estimation probability; used only for `auto` |
 | `max_sources` | int64 | `4` | `[live]` Exact | Reallocates `doa_multi`; implementation cap `64` | `doa_multi` / EFT `K_max`; MUSIC targets `min(d_i, max_sources)` peaks |
 | `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD (§9) | Rebuilds plan + index H2D; warns once | Per-axis sub-array **counts** `[P]` / `[P_az, P_el]` on a filled ULA/URA |
 | `forward_backward` | bool | `true` | static | Part of the smoothing-plan key | Conjugate-reversed looks; ignored unless smoothing is on |
 
-Application YAML accepts explicit arrays or inclusive `{min: ..., max: ..., step: ...}` mappings for `az_angles` and `el_angles`. Range mappings require finite values, `step > 0`, `min <= max`, and endpoint alignment within floating-point tolerance. They expand to the same vector Params before construction; live ports remain rank-1 float64 Tensors. Every effective grid coordinate must be finite. Under `direction_cosine`, each authored axis value must lie in `[-1, 1]`; square-grid corners outside `u² + v² <= 1` remain legal and are masked per beam.
+Application YAML accepts explicit arrays or inclusive `{min: ..., max: ..., step: ...}` mappings for `az_coordinates` and `el_coordinates`. Range mappings require finite values, `step > 0`, `min <= max`, and endpoint alignment within floating-point tolerance. They expand to the same vector Params before construction; live ports remain rank-1 float64 Tensors. Every effective grid coordinate must be finite. Under `direction_cosine`, each authored axis value must lie in `[-1, 1]`; square-grid corners outside `u² + v² <= 1` remain legal and are masked per beam.
 
 `num_sources` encoding is `int64_t`: negative → `auto`, non-negative → fixed order. There is no YAML `auto` token. `array_geometry.validate()` runs every tick; `geometry_type` is informational.
 
@@ -144,8 +144,8 @@ Application YAML accepts explicit arrays or inclusive `{min: ..., max: ..., step
 
 - **Construction.** `MUSICEstimatorOp(const MaxTensorExtents&)`. If both `max_items` and `max_az` are unset, pool spans stay `0`. Otherwise all of `max_items`, `max_az`, `max_el`, `max_sources`, and `max_channels` must be positive. Constructor-created runtime state owns stable covariance/eigenvector/projector/count workspace and the steering cache.
 - **Triggering.** `contract()` is `OnEach{snapshot}`. Optional `is_valid` and every live override are unconditional non-members with `Exact{}` + `SafeDefault{}`; unwired means absent/all-valid or Params for that tick. A producer must publish a same-tick mask before `snapshot`.
-- **Ports and queues.** The data Tensor ports declare `MemoryKind::kCudaDevice`, queue depth `2`. Dtype/rank are enforced in `compute()`. Pooled output ranks: `aoa_estimates` 2, `angle_spectrum` 3, `doa_multi` 3, `source_count` 1, `eigenvalues` 2. Live Inputs also queue depth `2`; `az_angles` / `el_angles` are rank-1 pageable-host float64 config Tensors, the rest are wire-object / POD / scalar payloads.
-- **Live override payloads.** `array_geometry` is `Input<WireArrayGeometry>`, a generated descriptor-schema type; `spatial_smoothing` is `Input<SpatialSmoothingOverride>`, a bounded `{count, first, second}` int64 POD (`count` must be 0, 1, or 2). Both convert with `from_wire` inside `resolve_live_override_via`, so neither wire storage nor the POD reaches operator state. `az_angles` / `el_angles` ride rank-1 pageable-host float64 config Tensors validated on arrival (rank, host memory, contiguity, dtype, `max_az` / `max_el` extent). `num_sources` / `source_count_pfa` / `max_sources` are plain scalar `Input<>` ports resolved with `resolve_live_override`. Logical `MUSICParams` types are unchanged (`HSDK5_PORT.md` §9).
+- **Ports and queues.** The data Tensor ports declare `MemoryKind::kCudaDevice`, queue depth `2`. Dtype/rank are enforced in `compute()`. Pooled output ranks: `aoa_estimates` 2, `angle_spectrum` 3, `doa_multi` 3, `source_count` 1, `eigenvalues` 2. Live Inputs also queue depth `2`; `az_coordinates` / `el_coordinates` are rank-1 pageable-host float64 config Tensors, the rest are wire-object / POD / scalar payloads.
+- **Live override payloads.** `array_geometry` is `Input<WireArrayGeometry>`, a generated descriptor-schema type; `spatial_smoothing` is `Input<SpatialSmoothingOverride>`, a bounded `{count, first, second}` int64 POD (`count` must be 0, 1, or 2). Both convert with `from_wire` inside `resolve_live_override_via`, so neither wire storage nor the POD reaches operator state. `az_coordinates` / `el_coordinates` ride rank-1 pageable-host float64 config Tensors validated on arrival (rank, host memory, contiguity, dtype, `max_az` / `max_el` extent). `num_sources` / `source_count_pfa` / `max_sources` are plain scalar `Input<>` ports resolved with `resolve_live_override`. Logical `MUSICParams` types are unchanged (`HSDK5_PORT.md` §9).
 - **Tick flow.** `compute()` is the high-level shell: receive and plan → validate mask / stream → empty path → prepare smoothed input → validate effective aperture → prepare steering, workspace, and outputs → execute MUSIC → publish and retain. Operator-local helpers own the cache, Tensor-loan, execution-call, and optional-output plumbing.
 - **Streams and lifetime.** Work uses `context.cuda_stream()` only. Inputs and smoothing gather buffers remain alive through estimator execution. `MUSICPreparedWorkspace` points into stable eigenspace/count buffers; `MUSICPreparedOutputs` keeps every loan and write guard alive through execution and commits all siblings before required-first publication. The MatX plan clear remains; `stop()` drains the MatX `MemTracker`.
 - **Emission.** Required `aoa_estimates` publishes first. `angle_spectrum` and `eigenvalues` are optional/always; `doa_multi` and `source_count` share a latched peak pass.
@@ -209,8 +209,8 @@ ctest --test-dir build -R test_music_estimator --output-on-failure
 music_estimator:
   angle_convention:
     preset: radar_boresight
-  az_angles: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
-  el_angles: [0.0]
+  az_coordinates: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
+  el_coordinates: [0.0]
   num_sources: -1
   source_count_pfa: 0.01
   max_sources: 4
@@ -246,7 +246,7 @@ The HSDK 5 C++ compute path matches the locked algorithm contract and optional-p
 | Contract claim | Verdict | Detail |
 | --- | --- | --- |
 | `array_geometry` **[live]** | conforms (payload form differs) | Unconditional Exact `Input<WireArrayGeometry>` in `contract()`, not `Input<ArrayGeometry>` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9) |
-| `az_angles` / `el_angles` **[live]** | conforms (payload form differs) | Rank-1 host config Tensors bounded by `max_az` / `max_el`, not `Input<std::vector<double>>` (§9) |
+| `az_coordinates` / `el_coordinates` **[live]** | conforms (payload form differs) | Rank-1 host config Tensors bounded by `max_az` / `max_el`, not `Input<std::vector<double>>` (§9) |
 | `spatial_smoothing` **[live]** | conforms (payload form differs) | Bounded `{count, first, second}` int64 POD, not `Input<std::vector<int64_t>>` (§9) |
 | `num_sources` / `source_count_pfa` / `max_sources` **[live]** | conforms | Unconditional Exact inputs with active mid-stream/revert tests |
 | Optional `is_valid` connected in Graph | conforms | Non-member Exact + SafeDefault; connected mask tests run |

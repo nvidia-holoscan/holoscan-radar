@@ -96,21 +96,21 @@ void upload_async(void* dst, const void* src, size_t bytes,
 template <typename T>
 std::shared_ptr<holoscan::Tensor> build_steering_weights_device(
     const ArrayGeometry& geometry, const AngleConvention& convention,
-    const std::vector<double>& az_angles, const std::vector<double>& el_angles,
+    const std::vector<double>& az_coordinates, const std::vector<double>& el_coordinates,
     const WindowSpec& array_taper, BeamOrder beam_order, SteeringLayout layout,
     bool conjugate, cudaStream_t stream) {
   geometry.validate();
-  if (az_angles.empty() || el_angles.empty()) {
+  if (az_coordinates.empty() || el_coordinates.empty()) {
     throw std::invalid_argument(
-        "build_steering_weights_device: az_angles and el_angles must be "
+        "build_steering_weights_device: az_coordinates and el_coordinates must be "
         "non-empty");
   }
-  validate_scan_grid_axes(convention, az_angles, el_angles,
+  validate_scan_grid_axes(convention, az_coordinates, el_coordinates,
                           "build_steering_weights_device");
 
   const int64_t num_channels = geometry.num_elements();
-  const int64_t num_az = static_cast<int64_t>(az_angles.size());
-  const int64_t num_el = static_cast<int64_t>(el_angles.size());
+  const int64_t num_az = static_cast<int64_t>(az_coordinates.size());
+  const int64_t num_el = static_cast<int64_t>(el_coordinates.size());
   const int64_t num_beams = num_az * num_el;
 
   // Host: geometry-aware taper (O(num_channels)) and per-beam directions +
@@ -126,8 +126,8 @@ std::shared_ptr<holoscan::Tensor> build_steering_weights_device(
       const int64_t beam = (beam_order == BeamOrder::kAzMajor)
                                ? ia * num_el + ie
                                : ie * num_az + ia;
-      const double az_b = az_angles[static_cast<size_t>(ia)];
-      const double el_b = el_angles[static_cast<size_t>(ie)];
+      const double az_b = az_coordinates[static_cast<size_t>(ia)];
+      const double el_b = el_coordinates[static_cast<size_t>(ie)];
       const CanonicalDirection d =
           boundary_to_canonical(convention, az_b, el_b);
       const bool valid = dc ? is_physical_direction_cosine(az_b, el_b)

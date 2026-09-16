@@ -83,9 +83,9 @@ const char* override_name(BeamScenario::OverrideKind kind) {
     case BeamScenario::OverrideKind::kArrayGeometry:
       return "array_geometry";
     case BeamScenario::OverrideKind::kAzAngles:
-      return "az_angles";
+      return "az_coordinates";
     case BeamScenario::OverrideKind::kElAngles:
-      return "el_angles";
+      return "el_coordinates";
     case BeamScenario::OverrideKind::kArrayTaper:
       return "array_taper";
   }
@@ -228,11 +228,11 @@ class PerfBeamformerOverrideSourceOp final : public holoscan::Operator<> {
         .max_emits_per_compute(1U)
         .produces_tensor(
             hr::pooled_tensor_output(kHostMatrix, 2U, kHostPayloadSpan));
-    spec.output(az_angles)
+    spec.output(az_coordinates)
         .max_emits_per_compute(1U)
         .produces_tensor(
             hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
-    spec.output(el_angles)
+    spec.output(el_coordinates)
         .max_emits_per_compute(1U)
         .produces_tensor(
             hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
@@ -275,11 +275,11 @@ class PerfBeamformerOverrideSourceOp final : public holoscan::Operator<> {
     if (!emitted) {
       return emitted;
     }
-    emitted = emit_host_vector(az_angles, values.az_angles, time);
+    emitted = emit_host_vector(az_coordinates, values.az_coordinates, time);
     if (!emitted) {
       return emitted;
     }
-    emitted = emit_host_vector(el_angles, values.el_angles, time);
+    emitted = emit_host_vector(el_coordinates, values.el_coordinates, time);
     if (!emitted) {
       return emitted;
     }
@@ -303,8 +303,8 @@ class PerfBeamformerOverrideSourceOp final : public holoscan::Operator<> {
   holoscan::Output<holoscan::Tensor> rd_maps{"rd_maps"};
   holoscan::Output<hr::WireArrayGeometry>
       array_geometry{"array_geometry"};
-  holoscan::Output<holoscan::Tensor> az_angles{"az_angles"};
-  holoscan::Output<holoscan::Tensor> el_angles{"el_angles"};
+  holoscan::Output<holoscan::Tensor> az_coordinates{"az_coordinates"};
+  holoscan::Output<holoscan::Tensor> el_coordinates{"el_coordinates"};
   holoscan::Output<hr::WireWindowSpec> array_taper{"array_taper"};
 
  private:
@@ -321,8 +321,8 @@ perf::TimingCollector run_beamformer_graph(
   hr::PhaseShiftBeamformerParams initial;
   initial.array_geometry =
       make_ula_geometry(scen.channels, 0.5, 1.0);
-  initial.az_angles = linspace(-0.5, 0.5, scen.num_az);
-  initial.el_angles = linspace(-0.3, 0.3, scen.num_el);
+  initial.az_coordinates = linspace(-0.5, 0.5, scen.num_az);
+  initial.el_coordinates = linspace(-0.3, 0.3, scen.num_el);
   hr::PhaseShiftBeamformerParams override = initial;
   switch (scen.override_kind) {
     case BeamScenario::OverrideKind::kArrayGeometry:
@@ -330,10 +330,10 @@ perf::TimingCollector run_beamformer_graph(
           make_ula_geometry(scen.channels, 0.45, 1.0);
       break;
     case BeamScenario::OverrideKind::kAzAngles:
-      override.az_angles = linspace(-0.45, 0.55, scen.num_az);
+      override.az_coordinates = linspace(-0.45, 0.55, scen.num_az);
       break;
     case BeamScenario::OverrideKind::kElAngles:
-      override.el_angles = linspace(-0.25, 0.35, scen.num_el);
+      override.el_coordinates = linspace(-0.25, 0.35, scen.num_el);
       break;
     case BeamScenario::OverrideKind::kArrayTaper:
       override.array_taper.type = hr::WindowType::kHann;
@@ -368,8 +368,8 @@ perf::TimingCollector run_beamformer_graph(
   };
   add_flow(src->rd_maps, op->rd_maps, "rd_maps");
   add_flow(src->array_geometry, op->array_geometry, "array_geometry");
-  add_flow(src->az_angles, op->az_angles, "az_angles");
-  add_flow(src->el_angles, op->el_angles, "el_angles");
+  add_flow(src->az_coordinates, op->az_coordinates, "az_coordinates");
+  add_flow(src->el_coordinates, op->el_coordinates, "el_coordinates");
   add_flow(src->array_taper, op->array_taper, "array_taper");
   add_flow(op->rda_cube, sink->in, "rda_cube");
 

@@ -123,7 +123,7 @@ HostTensor stage_assemble(
     const T* velocity_bins, int64_t num_doppler, bool have_velocity,
     const T* score_map, int64_t num_score_doppler, int64_t num_score_range,
     const int64_t* score_plane_offsets, bool have_score, const T* aoa,
-    bool have_aoa, const T* az_angles, int64_t num_az, const T* el_angles,
+    bool have_aoa, const T* az_grid, int64_t num_az, const T* el_grid,
     int64_t num_el) {
   const int64_t num_features = static_cast<int64_t>(features.size());
   const int64_t n_preserved = idx_cols - 2;
@@ -213,8 +213,8 @@ HostTensor stage_assemble(
       static_cast<const int64_t*>(idx_dev->data()), num_points, idx_cols,
       n_preserved, range_bins, num_range, have_range, velocity_bins,
       num_doppler, have_velocity, score_map, num_score_doppler, num_score_range,
-      score_plane_offsets, have_score, aoa, have_aoa, az_angles, num_az,
-      el_angles, num_el, static_cast<const int*>(feat_dev->data()),
+      score_plane_offsets, have_score, aoa, have_aoa, az_grid, num_az,
+      el_grid, num_el, static_cast<const int*>(feat_dev->data()),
       num_features, static_cast<T*>(points_mut.value()),
       static_cast<int*>(err_mut.value()), stream);
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
@@ -511,8 +511,8 @@ TEST(FeatureAssemblyOpTest, GathersAlignedDenseAngleGrids) {
              const auto& sink) {
             const holoscan::ConnectionOptions q{.queue_depth = 4U};
             graph.add_flow(source->out0, op->detection_idx, q);
-            graph.add_flow(source->out1, op->az_angles, q);
-            graph.add_flow(source->out2, op->el_angles, q);
+            graph.add_flow(source->out1, op->az_grid, q);
+            graph.add_flow(source->out2, op->el_grid, q);
             graph.add_flow(op->points, sink->in, q);
           });
   const HostTensor points = require_one_frame(std::move(result));
@@ -750,7 +750,7 @@ TEST(FeatureAssemblyOpTest, RejectsAzWithTooFewPreservedColumns) {
   // Graph path rejects dense az when n_preserved < 2.
   std::vector<int64_t> idx = {0, 0};
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
-  // Wire would need az_angles; without it Graph already fails for missing
+  // Wire would need az_grid; without it Graph already fails for missing
   // grid. Stage path with n_preserved=0 simply skips az lookup (value 0);
   // the operator-level guard is what matters for the contract.
   const auto result = run_assembly_result<double>(

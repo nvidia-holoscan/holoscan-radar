@@ -125,8 +125,8 @@ expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
 struct MUSICStageConfig {
   ArrayGeometry geometry;
   AngleConvention convention;
-  std::vector<double> az_angles;
-  std::vector<double> el_angles;
+  std::vector<double> az_coordinates;
+  std::vector<double> el_coordinates;
   std::vector<int64_t> spatial_smoothing;
   int64_t num_sources{-1};
   double source_count_pfa{1e-2};
@@ -173,22 +173,22 @@ expected<MUSICStageConfig, Error> resolve_params(
   HOLOSCAN_TRY(
       auto az,
       resolve_live_override_via(
-          az_port, pinned.az_angles,
+          az_port, pinned.az_coordinates,
           [&extents](const Tensor& value) {
             return read_host_config_vector<double>(
                 value, DLDataType{kDLFloat, 64U, 1U},
                 require_extent(extents.max_az, "max_az", kOpName),
-                "az_angles");
+                "az_coordinates");
           }));
   HOLOSCAN_TRY(
       auto el,
       resolve_live_override_via(
-          el_port, pinned.el_angles,
+          el_port, pinned.el_coordinates,
           [&extents](const Tensor& value) {
             return read_host_config_vector<double>(
                 value, DLDataType{kDLFloat, 64U, 1U},
                 require_extent(extents.max_el, "max_el", kOpName),
-                "el_angles");
+                "el_coordinates");
           }));
   HOLOSCAN_TRY(
       auto smoothing,
@@ -209,8 +209,8 @@ expected<MUSICStageConfig, Error> resolve_params(
   return MUSICStageConfig{
       .geometry = std::move(geometry),
       .convention = pinned.angle_convention,
-      .az_angles = std::move(az),
-      .el_angles = std::move(el),
+      .az_coordinates = std::move(az),
+      .el_coordinates = std::move(el),
       .spatial_smoothing = std::move(smoothing),
       .num_sources = resolved_num_sources,
       .source_count_pfa = pfa,
@@ -228,16 +228,16 @@ expected<MUSICStagePlan, Error> build_music_stage_plan(
     return make_unexpected(
         Error{ErrorCode::kInvalidArgument, error.what()});
   }
-  if (stage.az_angles.empty() || stage.el_angles.empty()) {
+  if (stage.az_coordinates.empty() || stage.el_coordinates.empty()) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
-        "MUSICEstimatorOp: az_angles and el_angles must be non-empty"});
+        "MUSICEstimatorOp: az_coordinates and el_coordinates must be non-empty"});
   }
   try {
-    validate_scan_grid_axes(stage.convention, stage.az_angles, stage.el_angles,
+    validate_scan_grid_axes(stage.convention, stage.az_coordinates, stage.el_coordinates,
                             "MUSICEstimatorOp");
     (void)boundary_to_canonical(
-        stage.convention, stage.az_angles.front(), stage.el_angles.front());
+        stage.convention, stage.az_coordinates.front(), stage.el_coordinates.front());
   } catch (const std::invalid_argument& error) {
     return make_unexpected(
         Error{ErrorCode::kInvalidArgument, error.what()});
@@ -248,8 +248,8 @@ expected<MUSICStagePlan, Error> build_music_stage_plan(
       require_extent(extents.max_el, "max_el", kOpName);
   const int64_t max_channels =
       require_extent(extents.max_channels, "max_channels", kOpName);
-  if (static_cast<int64_t>(stage.az_angles.size()) > max_az ||
-      static_cast<int64_t>(stage.el_angles.size()) > max_el ||
+  if (static_cast<int64_t>(stage.az_coordinates.size()) > max_az ||
+      static_cast<int64_t>(stage.el_coordinates.size()) > max_el ||
       stage.geometry.num_elements() > max_channels) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
@@ -297,8 +297,8 @@ expected<MUSICStagePlan, Error> build_music_stage_plan(
               "array_geometry.num_elements"});
   }
 
-  const int64_t num_az = static_cast<int64_t>(stage.az_angles.size());
-  const int64_t num_el = static_cast<int64_t>(stage.el_angles.size());
+  const int64_t num_az = static_cast<int64_t>(stage.az_coordinates.size());
+  const int64_t num_el = static_cast<int64_t>(stage.el_coordinates.size());
   const int64_t max_sources = stage.max_sources;
   return MUSICStagePlan{
       .stage = std::move(stage),
@@ -883,11 +883,11 @@ void MUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(pooled_tensor_output(kDevice, 2U, eig_max_byte_span_));
   // [live] Exact overrides, Params order.
   spec.input(array_geometry).optional().queue_depth(2U);
-  spec.input(az_angles)
+  spec.input(az_coordinates)
       .optional()
       .queue_depth(2U)
       .expects_tensor(tensor_input(kHostF64Vector));
-  spec.input(el_angles)
+  spec.input(el_coordinates)
       .optional()
       .queue_depth(2U)
       .expects_tensor(tensor_input(kHostF64Vector));
@@ -904,8 +904,8 @@ Contract MUSICEstimatorOp<T>::contract() const {
       .input(is_valid, Exact{})
       .on_missing(is_valid, SafeDefault{});
   add_live_override_to_contract(result, array_geometry);
-  add_live_override_to_contract(result, az_angles);
-  add_live_override_to_contract(result, el_angles);
+  add_live_override_to_contract(result, az_coordinates);
+  add_live_override_to_contract(result, el_coordinates);
   add_live_override_to_contract(result, spatial_smoothing);
   add_live_override_to_contract(result, num_sources);
   add_live_override_to_contract(result, source_count_pfa);
@@ -929,7 +929,7 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
   const MUSICParams& pinned = context.params<MUSICParams>();
   HOLOSCAN_TRY(
       auto stage,
-      resolve_params(array_geometry, az_angles, el_angles, spatial_smoothing,
+      resolve_params(array_geometry, az_coordinates, el_coordinates, spatial_smoothing,
                      num_sources, source_count_pfa, max_sources, pinned,
                      extents_));
   HOLOSCAN_TRY(
@@ -1004,7 +1004,7 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
       auto steering,
       prepare_music_steering<T>(
           *state_, *estimation.geometry, plan.stage.convention,
-          plan.stage.az_angles, plan.stage.el_angles, plan.num_az,
+          plan.stage.az_coordinates, plan.stage.el_coordinates, plan.num_az,
           plan.num_el, stream));
   HOLOSCAN_TRY(
       auto workspace,

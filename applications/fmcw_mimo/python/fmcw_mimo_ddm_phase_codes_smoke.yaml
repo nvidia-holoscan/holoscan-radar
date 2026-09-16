@@ -48,8 +48,8 @@ snapshot_gather:
 beamscan_estimator:
   angle_convention:
     preset: radar_boresight
-  az_angles: [-0.2, -0.1, 0.0, 0.1, 0.2]
-  el_angles: [-0.2, -0.1, 0.0, 0.1, 0.2]
+  az_coordinates: [-0.2, -0.1, 0.0, 0.1, 0.2]
+  el_coordinates: [-0.2, -0.1, 0.0, 0.1, 0.2]
   peak_interpolation: parabolic
 
 cluster_dbscan:

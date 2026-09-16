@@ -6,7 +6,7 @@
 Conventional (Bartlett) dense-path beamforming forming a beam for every
 range-Doppler cell (the Range-Doppler-Angle cube). Sweeps channel count,
 scan-grid size, and RD extent, and inlines a mid-session ``[live]``
-``az_angles`` override (finer grid -> steering-weight rebuild). Measurement
+``az_coordinates`` override (finer grid -> steering-weight rebuild). Measurement
 tool only: no timing assertions.
 
 Scenario matrix mirrors ``performance/cpp/perf_phase_shift_beamformer.cpp``.
@@ -210,8 +210,8 @@ def _run_graph(
                 self,
                 array_geometry=geometry,
                 angle_convention=convention,
-                az_angles=list(az_grid),
-                el_angles=list(el_grid),
+                az_coordinates=list(az_grid),
+                el_coordinates=list(el_grid),
                 name="beamformer",
             )
             src = PerfTensorSourceOp(
@@ -234,7 +234,7 @@ def _run_graph(
                 value=linspace(-0.5, 0.5, scen.override_num_az),
                 name="ovr",
             )
-            self.add_flow(override, op, {("output", "az_angles")})
+            self.add_flow(override, op, {("output", "az_coordinates")})
 
     BeamformerPerfApp().run()
 
@@ -272,7 +272,7 @@ def run_scenario(scen: BeamScenario, rs: RunSettings, report: PerfReport) -> Non
     _fill_throughput(compute, scen)
     compute.notes = (
         "cold_ms is first-frame latency; median/p90 are pre-override steady "
-        "state; override_ms is peak latency over the live-az_angles (finer "
+        "state; override_ms is peak latency over the live-az_coordinates (finer "
         "grid) window; cells/s is RD-cells/s (beams/s = slices/s)"
     )
     report.results.append(compute)

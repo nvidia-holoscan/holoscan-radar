@@ -315,8 +315,8 @@ TEST(VirtualArrayAssemblyOp, GeometryDirectlyDrivesBeamscan) {
   beamscan_params.array_geometry = ArrayGeometry{
       .element_positions = {0.0, 0.0, 0.0, 0.0, 0.5, 0.0},
       .wavelength = 1.0};
-  beamscan_params.az_angles = {-0.2, 0.0, 0.2};
-  beamscan_params.el_angles = {0.0};
+  beamscan_params.az_coordinates = {-0.2, 0.0, 0.2};
+  beamscan_params.el_coordinates = {0.0};
   beamscan.set_params(std::move(beamscan_params));
 
   const auto aoa_sink = graph.op<detail::TensorCaptureOp>("aoa_sink");

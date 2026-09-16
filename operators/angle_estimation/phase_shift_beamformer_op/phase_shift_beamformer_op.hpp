@@ -69,15 +69,15 @@ struct PhaseShiftBeamformerArtifacts {
 struct PhaseShiftBeamformerParams {
   ArrayGeometry array_geometry{};
   AngleConvention angle_convention{};
-  std::vector<double> az_angles{};
-  std::vector<double> el_angles{};
+  std::vector<double> az_coordinates{};
+  std::vector<double> el_coordinates{};
   WindowSpec array_taper{};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
     PhaseShiftBeamformerParams,
     holoscan::param_schema(
-        "com.nvidia.holoscan.radar.PhaseShiftBeamformerParams", 1),
+        "com.nvidia.holoscan.radar.PhaseShiftBeamformerParams", 2),
     holoscan::field<&PhaseShiftBeamformerParams::array_geometry>(
         "array_geometry")
         .description(
@@ -88,13 +88,15 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Boundary AER labeling for scan grid and beam axes; defaults to "
             "radar_boresight (STATIC)"),
-    holoscan::field<&PhaseShiftBeamformerParams::az_angles>("az_angles")
+    holoscan::field<&PhaseShiftBeamformerParams::az_coordinates>("az_coordinates")
         .description(
-            "Azimuth scan grid (u grid under direction_cosine)"),
-    holoscan::field<&PhaseShiftBeamformerParams::el_angles>("el_angles")
+            "First scan-coordinate grid: azimuth radians for angular "
+            "conventions, or dimensionless u under direction_cosine"),
+    holoscan::field<&PhaseShiftBeamformerParams::el_coordinates>("el_coordinates")
         .description(
-            "Elevation scan grid (v grid under direction_cosine); "
-            "size-1 yields a 1-D azimuth scan"),
+            "Second scan-coordinate grid: elevation radians for angular "
+            "conventions, or dimensionless v under direction_cosine; size-1 "
+            "yields a 1-D azimuth scan"),
     holoscan::field<&PhaseShiftBeamformerParams::array_taper>("array_taper")
         .description(
             "Amplitude taper across elements for spatial sidelobe control"));
@@ -127,8 +129,8 @@ class PhaseShiftBeamformerOp
   Output<Tensor> az_grid{"az_grid"};
   Output<Tensor> el_grid{"el_grid"};
   Input<WireArrayGeometry> array_geometry{"array_geometry"};
-  Input<Tensor> az_angles{"az_angles"};
-  Input<Tensor> el_angles{"el_angles"};
+  Input<Tensor> az_coordinates{"az_coordinates"};
+  Input<Tensor> el_coordinates{"el_coordinates"};
   Input<WireWindowSpec> array_taper{"array_taper"};
 
  private:

@@ -195,9 +195,9 @@ inline radar::MaxTensorExtents make_mimo_extents(const AppConfig& cfg) {
   const int64_t map_cells = map_doppler * range_bins;
   const int64_t n_virtual = cfg.array_geometry.num_elements();
   const int64_t num_az =
-      static_cast<int64_t>(cfg.beamscan_params.az_angles.size());
+      static_cast<int64_t>(cfg.beamscan_params.az_coordinates.size());
   const int64_t num_el =
-      static_cast<int64_t>(cfg.beamscan_params.el_angles.size());
+      static_cast<int64_t>(cfg.beamscan_params.el_coordinates.size());
 
   e.max_tx = n_tx;
   e.max_rx = n_rx;
@@ -404,8 +404,8 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   cfg.use_cfar_peaks =
       cfg.cfar_params.peak_mode != holoscan::radar::CfarPeakMode::kNone;
   const PhysicalAngleBounds physical_bounds = physical_scan_grid_bounds(
-      cfg.beamscan_params.angle_convention, cfg.beamscan_params.az_angles,
-      cfg.beamscan_params.el_angles);
+      cfg.beamscan_params.angle_convention, cfg.beamscan_params.az_coordinates,
+      cfg.beamscan_params.el_coordinates);
   cfg.az_lo = physical_bounds.az[0];
   cfg.az_hi = physical_bounds.az[1];
   cfg.el_lo = physical_bounds.el[0];

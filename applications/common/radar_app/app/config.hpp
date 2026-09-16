@@ -10,7 +10,7 @@
 // Holoscan's from_config() (backed by the YAML::convert<> specializations in
 // radar_common), so their blocks are NEVER read here. An app may separately
 // read an operator block purely to *mirror* a value into a viz/geometry grid
-// (e.g. the beamscan angle grids for the boresight axes) — that stays in the
+// (e.g. the beamscan scan-coordinate grids for the boresight axes) — that stays in the
 // app and must be commented as a read-only mirror, not moved here.
 //
 // Header-only: every helper is inline / a template, so multiple app TUs can
@@ -242,7 +242,7 @@ inline void parse_targets_range_az_el(const YAML::Node& root, Scene* scene,
   }
 }
 
-// Derive an axis extent [lo, hi] from an angle grid, falling back to
+// Derive an axis extent [lo, hi] from an scan-coordinate grid, falling back to
 // [def_lo, def_hi] when the grid is empty and padding a degenerate
 // (single-value) axis so it renders a visible span.
 inline void grid_extent(const std::vector<double>& grid, double def_lo,

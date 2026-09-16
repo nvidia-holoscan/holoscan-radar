@@ -185,8 +185,8 @@ BeamscanParams make_params(ArrayGeometry geom, AngleConvention conv,
   BeamscanParams params{};
   params.array_geometry = std::move(geom);
   params.angle_convention = std::move(conv);
-  params.az_angles = std::move(az);
-  params.el_angles = std::move(el);
+  params.az_coordinates = std::move(az);
+  params.el_coordinates = std::move(el);
   params.peak_interpolation = peak;
   params.array_taper = std::move(taper);
   return params;
@@ -197,7 +197,7 @@ DualIOGraphRunResult run_beamscan_result(
     std::shared_ptr<holoscan::Tensor> snapshot, BeamscanParams params) {
   const holoscan::radar::MaxTensorExtents sized =
       holoscan::radar::testing::extents_for_scan_grid(
-          params.az_angles.size(), params.el_angles.size());
+          params.az_coordinates.size(), params.el_coordinates.size());
   return run_single_in_dual_out_operator_graph_result<BeamscanEstimatorOp<T>>(
       {std::move(snapshot)}, std::move(params), "aoa_estimates",
       "angle_spectrum",
@@ -338,7 +338,7 @@ class LiveBeamscanSourceOp final : public holoscan::Operator<> {
         .max_emits_per_compute(1U)
         .produces_tensor(holoscan::radar::pooled_tensor_output(
             kHostMatrix, 2U, 4096U * sizeof(double)));
-    for (auto* output : {&az_angles, &el_angles}) {
+    for (auto* output : {&az_coordinates, &el_coordinates}) {
       spec.output(*output)
           .max_emits_per_compute(1U)
           .produces_tensor(holoscan::radar::pooled_tensor_output(
@@ -382,14 +382,14 @@ class LiveBeamscanSourceOp final : public holoscan::Operator<> {
     }
     if (tick.az.has_value()) {
       auto emitted =
-          emit_beamscan_host_vector(az_angles, *tick.az, time);
+          emit_beamscan_host_vector(az_coordinates, *tick.az, time);
       if (!emitted) {
         return emitted;
       }
     }
     if (tick.el.has_value()) {
       auto emitted =
-          emit_beamscan_host_vector(el_angles, *tick.el, time);
+          emit_beamscan_host_vector(el_coordinates, *tick.el, time);
       if (!emitted) {
         return emitted;
       }
@@ -419,8 +419,8 @@ class LiveBeamscanSourceOp final : public holoscan::Operator<> {
   holoscan::Output<holoscan::Tensor> snapshot{"snapshot"};
   holoscan::Output<holoscan::radar::WireArrayGeometry>
       array_geometry{"array_geometry"};
-  holoscan::Output<holoscan::Tensor> az_angles{"az_angles"};
-  holoscan::Output<holoscan::Tensor> el_angles{"el_angles"};
+  holoscan::Output<holoscan::Tensor> az_coordinates{"az_coordinates"};
+  holoscan::Output<holoscan::Tensor> el_coordinates{"el_coordinates"};
   holoscan::Output<holoscan::radar::WireWindowSpec>
       array_taper{"array_taper"};
   holoscan::Output<PeakInterpolation>
@@ -448,8 +448,8 @@ DualIOGraphRunResult run_live_beamscan_graph(
   const holoscan::ConnectionOptions q{.queue_depth = 8U};
   graph.add_flow(source->snapshot, op->snapshot, q);
   graph.add_flow(source->array_geometry, op->array_geometry, q);
-  graph.add_flow(source->az_angles, op->az_angles, q);
-  graph.add_flow(source->el_angles, op->el_angles, q);
+  graph.add_flow(source->az_coordinates, op->az_coordinates, q);
+  graph.add_flow(source->el_coordinates, op->el_coordinates, q);
   graph.add_flow(source->array_taper, op->array_taper, q);
   graph.add_flow(source->peak_interpolation, op->peak_interpolation, q);
   graph.add_flow(op->aoa_estimates, sink0->in, q);
@@ -732,7 +732,7 @@ TEST(BeamscanEstimatorOpTest, LivePeakInterpolationAppliesForOneTick) {
   EXPECT_EQ(reverted_az, params_az);
 }
 
-TEST(BeamscanEstimatorOpTest, LiveAzGridAppliesForOneTick) {
+TEST(BeamscanEstimatorOpTest, LiveAzCoordinatesAppliesForOneTick) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   auto snapshot = snapshot_to_device<double>(
@@ -752,7 +752,7 @@ TEST(BeamscanEstimatorOpTest, LiveAzGridAppliesForOneTick) {
   EXPECT_EQ(out.frames1[2].shape[1], 3);
 }
 
-TEST(BeamscanEstimatorOpTest, LiveElGridAppliesForOneTick) {
+TEST(BeamscanEstimatorOpTest, LiveElCoordinatesAppliesForOneTick) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   auto snapshot = snapshot_to_device<double>(

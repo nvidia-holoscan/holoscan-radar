@@ -38,11 +38,11 @@ class AppConfig(CommonRunConfig):
     # The dense beam grid: a genuine app need (CubeAoaLookupOp /
     # DenseClusterReportOp map az/el bins back to these radians, and the
     # boresight-view axes are sized from them), not just a viz-sizing mirror
-    # - phase_shift_beamformer.az_angles/el_angles are read from the operator
+    # - phase_shift_beamformer.az_coordinates/el_coordinates are read from the operator
     # block for this reason, in addition to flowing through from_config() for
     # the operator itself.
-    az_angles: list[float] = field(default_factory=list)
-    el_angles: list[float] = field(default_factory=list)
+    az_coordinates: list[float] = field(default_factory=list)
+    el_coordinates: list[float] = field(default_factory=list)
 
 
 def load_config(path: Path) -> AppConfig:
@@ -86,10 +86,10 @@ def load_config(path: Path) -> AppConfig:
             )
 
     beam = root.get("phase_shift_beamformer", {})
-    if not beam or "az_angles" not in beam or "el_angles" not in beam:
-        raise ValueError("phase_shift_beamformer.az_angles and el_angles are required")
-    az_angles = [float(x) for x in beam["az_angles"]]
-    el_angles = [float(x) for x in beam["el_angles"]]
+    if not beam or "az_coordinates" not in beam or "el_coordinates" not in beam:
+        raise ValueError("phase_shift_beamformer.az_coordinates and el_coordinates are required")
+    az_coordinates = [float(x) for x in beam["az_coordinates"]]
+    el_coordinates = [float(x) for x in beam["el_coordinates"]]
 
     for t in root.get("targets", []):
         position, velocity, amplitude = parse_target(t, app_name="fmcw_dense_simo")
@@ -102,8 +102,8 @@ def load_config(path: Path) -> AppConfig:
         **vars(common),
         scene=scene,
         array_geometry=array_geometry,
-        az_angles=az_angles,
-        el_angles=el_angles,
+        az_coordinates=az_coordinates,
+        el_coordinates=el_coordinates,
     )
     # READ-ONLY MIRROR of the native CFAR peak-mode parameter.
     cfg.use_cfar_peaks = (root.get("cfar_detector") or {}).get("peak_mode", "none") != "none"

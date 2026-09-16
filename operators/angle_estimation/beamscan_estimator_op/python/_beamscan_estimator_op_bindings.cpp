@@ -37,8 +37,8 @@ class PyBeamscanEstimatorOp : public BeamscanEstimatorOp<T> {
       Fragment* fragment, const py::args& args,
       const ArrayGeometry& array_geometry = ArrayGeometry{},
       const AngleConvention& angle_convention = AngleConvention{},
-      const std::vector<double>& az_angles = {},
-      const std::vector<double>& el_angles = {},
+      const std::vector<double>& az_coordinates = {},
+      const std::vector<double>& el_coordinates = {},
       const WindowSpec& array_taper = WindowSpec{},
       PeakInterpolation peak_interpolation =
           PeakInterpolation::kNone,
@@ -58,8 +58,8 @@ class PyBeamscanEstimatorOp : public BeamscanEstimatorOp<T> {
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
     this->add_arg(Arg("array_geometry") = array_geometry);
     this->add_arg(Arg("angle_convention") = angle_convention);
-    this->add_arg(Arg("az_angles") = az_angles);
-    this->add_arg(Arg("el_angles") = el_angles);
+    this->add_arg(Arg("az_coordinates") = az_coordinates);
+    this->add_arg(Arg("el_coordinates") = el_coordinates);
     this->add_arg(Arg("array_taper") = array_taper);
     this->add_arg(Arg("peak_interpolation") = peak_interpolation);
     this->setup(*this->spec_);
@@ -79,8 +79,8 @@ void bind_beamscan_estimator(py::module_& m, const char* class_name) {
       "fragment : holoscan.core.Fragment\n"
       "array_geometry : ArrayGeometry, optional\n"
       "angle_convention : AngleConvention, optional\n"
-      "az_angles : list[float], optional\n"
-      "el_angles : list[float], optional\n"
+      "az_coordinates : list[float], optional\n"
+      "el_coordinates : list[float], optional\n"
       "array_taper : WindowSpec, optional\n"
       "peak_interpolation : PeakInterpolation, optional\n"
       "name : str, optional\n")
@@ -95,8 +95,8 @@ void bind_beamscan_estimator(py::module_& m, const char* class_name) {
            py::arg("fragment"),
            py::arg("array_geometry") = ArrayGeometry{},
            py::arg("angle_convention") = AngleConvention{},
-           py::arg("az_angles") = std::vector<double>{},
-           py::arg("el_angles") = std::vector<double>{},
+           py::arg("az_coordinates") = std::vector<double>{},
+           py::arg("el_coordinates") = std::vector<double>{},
            py::arg("array_taper") = WindowSpec{},
            py::arg("peak_interpolation") =
                PeakInterpolation::kNone,

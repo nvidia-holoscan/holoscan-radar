@@ -50,7 +50,7 @@ enum class SteeringLayout {
 template <typename T>
 std::shared_ptr<holoscan::Tensor> build_steering_weights_device(
     const ArrayGeometry& geometry, const AngleConvention& convention,
-    const std::vector<double>& az_angles, const std::vector<double>& el_angles,
+    const std::vector<double>& az_coordinates, const std::vector<double>& el_coordinates,
     const WindowSpec& array_taper, BeamOrder beam_order, SteeringLayout layout,
     bool conjugate, cudaStream_t stream);
 

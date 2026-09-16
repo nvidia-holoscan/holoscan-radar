@@ -34,8 +34,8 @@ enum class AssemblyFeature {
   kRange,       // range_bins[range_bin] (input required)
   kVelocity,    // velocity_bins[doppler_bin] (input required)
   kScore,       // gather detection_score at the cell (input required)
-  kAz,          // az_angles[az_bin] (dense path; input required)
-  kEl,          // el_angles[el_bin] (dense path; input required)
+  kAz,          // az_grid[az_bin] (dense path; input required)
+  kEl,          // el_grid[el_bin] (dense path; input required)
   kAzEstimate,  // aoa_estimates[row, 0] (sparse path; input required)
   kElEstimate,  // aoa_estimates[row, 1] (sparse path; input required)
   kDopplerBin,  // raw doppler_bin escape hatch
@@ -128,9 +128,9 @@ namespace holoscan::radar {
 //                       num_range). Required when `score` is in features.
 // In:  aoa_estimates   — optional float32/float64, (num_points, 2). Required
 //                       for `az_estimate` / `el_estimate` (sparse path).
-// In:  az_angles       — optional float32/float64, (num_az,). Azimuth scan
+// In:  az_grid       — optional float32/float64, (num_az,). Azimuth scan
 //                       grid; required when `az` is in features (dense).
-// In:  el_angles       — optional float32/float64, (num_el,). Elevation scan
+// In:  el_grid       — optional float32/float64, (num_el,). Elevation scan
 //                       grid; required when `el` is in features (dense).
 // Out: points          — float32/float64, (num_points, num_features). Columns
 //                       in `features` order; rows 1:1 with detection_idx.
@@ -165,8 +165,8 @@ class FeatureAssemblyOp : public holoscan::Operator<> {
   Input<Tensor> velocity_bins{"velocity_bins"};
   Input<Tensor> detection_score{"detection_score"};
   Input<Tensor> aoa_estimates{"aoa_estimates"};
-  Input<Tensor> az_angles{"az_angles"};
-  Input<Tensor> el_angles{"el_angles"};
+  Input<Tensor> az_grid{"az_grid"};
+  Input<Tensor> el_grid{"el_grid"};
   Output<Tensor> points{"points"};
 
  private:
@@ -182,8 +182,8 @@ class FeatureAssemblyOp : public holoscan::Operator<> {
   Tensor retained_velocity_bins_;
   Tensor retained_score_;
   Tensor retained_aoa_;
-  Tensor retained_az_angles_;
-  Tensor retained_el_angles_;
+  Tensor retained_az_grid_;
+  Tensor retained_el_grid_;
 
   // Ctor-sized workspace (not ConfigCache): feature-id table, score-plane
   // offsets, score leading dims, and the device error flag.

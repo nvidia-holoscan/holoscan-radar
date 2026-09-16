@@ -178,8 +178,8 @@ def test_RecoversKnownDoaUlaAzOnlyFixedOneSource():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.3, 0.3, 61),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.3, 0.3, 61),
+        el_coordinates=[0.0],
         num_sources=1,
     )
     assert out["spectrum"].shape == (1, 61, 1)
@@ -198,8 +198,8 @@ def test_SharedSparseSlotInterchangesWithBeamscan():
     kwargs = {
         "array_geometry": geom,
         "angle_convention": conv,
-        "az_angles": linspace(-0.3, 0.3, 61),
-        "el_angles": [0.0],
+        "az_coordinates": linspace(-0.3, 0.3, 61),
+        "el_coordinates": [0.0],
     }
 
     def make_beamscan(app):
@@ -229,8 +229,8 @@ def test_RecoversKnownDoaUraFixedOneSource():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.5, 0.5, 101),
-        el_angles=linspace(-0.3, 0.3, 61),
+        az_coordinates=linspace(-0.5, 0.5, 101),
+        el_coordinates=linspace(-0.3, 0.3, 61),
         num_sources=1,
     )
     assert out["aoa"].shape == (1, 2)
@@ -248,8 +248,8 @@ def test_AutoNumSourcesRecoversOneSource():
         block.reshape(1, k_n, k_s),
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.3, 0.3, 61),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.3, 0.3, 61),
+        el_coordinates=[0.0],
         max_sources=4,
     )
     assert int(out["source_count"][0]) == 1
@@ -266,8 +266,8 @@ def test_MultiSourceRecoversTwoDoa():
         block.reshape(1, k_n, k_s),
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.5, 0.5, 201),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.5, 0.5, 201),
+        el_coordinates=[0.0],
         num_sources=2,
         max_sources=2,
     )
@@ -294,8 +294,8 @@ def test_MaxSourcesCapsBelowNumSourcesNanFillsRest():
         block.reshape(1, k_n, k_s),
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.5, 0.5, 201),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.5, 0.5, 201),
+        el_coordinates=[0.0],
         num_sources=2,
         max_sources=1,
     )
@@ -313,8 +313,8 @@ def test_SpatialSmoothingResolvesCoherentSourcesUla():
         block.reshape(1, k_n, k_s),
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.6, 0.6, 241),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.6, 0.6, 241),
+        el_coordinates=[0.0],
         spatial_smoothing=[4],
         forward_backward=True,
         num_sources=2,
@@ -340,8 +340,8 @@ def test_EigenvaluesAscendingAndNonNegative():
         block.reshape(1, k_n, k_s),
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.3, 0.3, 31),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.3, 0.3, 31),
+        el_coordinates=[0.0],
         num_sources=1,
     )
     assert out["eigenvalues"].shape == (1, k_n)
@@ -362,8 +362,8 @@ def test_RankDeficientAutoFallsBackToOneSource():
         block.reshape(1, k_n, k_s),
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.3, 0.3, 31),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.3, 0.3, 31),
+        el_coordinates=[0.0],
         max_sources=4,
     )
     assert int(out["source_count"][0]) == 1
@@ -380,8 +380,8 @@ def test_RejectsNumSourcesTooLarge():
             snap,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=[0.0],
-            el_angles=[0.0],
+            az_coordinates=[0.0],
+            el_coordinates=[0.0],
             num_sources=k_n,
         )
 
@@ -397,8 +397,8 @@ def test_RejectsInvalidMaxSources():
             snap,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=[0.0],
-            el_angles=[0.0],
+            az_coordinates=[0.0],
+            el_coordinates=[0.0],
             max_sources=0,
         )
 
@@ -414,8 +414,8 @@ def test_RejectsInvalidSourceCountPfa():
             snap,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=[0.0],
-            el_angles=[0.0],
+            az_coordinates=[0.0],
+            el_coordinates=[0.0],
             source_count_pfa=0.0,
         )
 
@@ -429,8 +429,8 @@ def test_EmptyItemsProducesEmptyOutputs():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=[-0.1, 0.0, 0.1],
-        el_angles=[0.0],
+        az_coordinates=[-0.1, 0.0, 0.1],
+        el_coordinates=[0.0],
     )
     assert out["aoa"].shape == (0, 2)
     assert out["spectrum"].shape == (0, 3, 1)
@@ -447,8 +447,8 @@ def test_FloatInstantiationSmoke():
         op_cls=MUSICEstimatorOpF32,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.3, 0.3, 61),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.3, 0.3, 61),
+        el_coordinates=[0.0],
         num_sources=1,
     )
     assert out["aoa"].shape == (1, 2)
@@ -464,8 +464,8 @@ def test_FloatDoubleAgreeOnDoa():
     kwargs = {
         "array_geometry": geom,
         "angle_convention": conv,
-        "az_angles": linspace(-0.3, 0.3, 61),
-        "el_angles": [0.0],
+        "az_coordinates": linspace(-0.3, 0.3, 61),
+        "el_coordinates": [0.0],
         "num_sources": 1,
     }
     out_f = run_music(
@@ -485,8 +485,8 @@ def test_DeterministicAcrossRuns():
     kwargs = {
         "array_geometry": geom,
         "angle_convention": conv,
-        "az_angles": linspace(-0.3, 0.3, 61),
-        "el_angles": [0.0],
+        "az_coordinates": linspace(-0.3, 0.3, 61),
+        "el_coordinates": [0.0],
         "num_sources": 1,
         "max_sources": 2,
     }
@@ -510,8 +510,8 @@ def test_LiveNumSourcesOverrideAppliesPerTick():
             name="op_under_test",
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=linspace(-0.5, 0.5, 101),
-            el_angles=[0.0],
+            az_coordinates=linspace(-0.5, 0.5, 101),
+            el_coordinates=[0.0],
             num_sources=1,
             max_sources=4,
         )
@@ -581,8 +581,8 @@ def test_ResolvesCloselySpacedSourcesBeamscanCannot():
             app,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=az_grid,
-            el_angles=[0.0],
+            az_coordinates=az_grid,
+            el_coordinates=[0.0],
             name="op_under_test",
         ),
         single_map(beamscan_snap, "snapshot"),
@@ -598,8 +598,8 @@ def test_ResolvesCloselySpacedSourcesBeamscanCannot():
         block.reshape(1, k_n, k_s),
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=az_grid,
-        el_angles=[0.0],
+        az_coordinates=az_grid,
+        el_coordinates=[0.0],
         num_sources=2,
         max_sources=2,
     )
@@ -626,8 +626,8 @@ def test_AutoNumSourcesResolvesTwoCloselySpacedSources():
         block.reshape(1, k_n, k_s),
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=az_grid,
-        el_angles=[0.0],
+        az_coordinates=az_grid,
+        el_coordinates=[0.0],
         max_sources=2,
     )
     assert int(out["source_count"][0]) == 2
@@ -656,8 +656,8 @@ def test_MultipleItemsRecoverIndependentDoa():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.4, 0.4, 81),
-        el_angles=linspace(-0.2, 0.2, 41),
+        az_coordinates=linspace(-0.4, 0.4, 81),
+        el_coordinates=linspace(-0.2, 0.2, 41),
         num_sources=1,
     )
     assert out["aoa"].shape == (2, 2)
@@ -680,8 +680,8 @@ def test_Accepts2DSingleSnapshot():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.2, 0.2, 21),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.2, 0.2, 21),
+        el_coordinates=[0.0],
         num_sources=1,
     )
     assert out["spectrum"].shape[0] == 1
@@ -701,8 +701,8 @@ def test_RejectsEmptyScanGrid():
             snap,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=[],
-            el_angles=[0.0],
+            az_coordinates=[],
+            el_coordinates=[0.0],
         )
 
 
@@ -716,8 +716,8 @@ def test_RejectsInvalidSnapshotRank():
             snap,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=[0.0],
-            el_angles=[0.0],
+            az_coordinates=[0.0],
+            el_coordinates=[0.0],
         )
 
 
@@ -737,8 +737,8 @@ def test_SpatialSmoothing2DUraRecoversDoa():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.4, 0.4, 81),
-        el_angles=linspace(-0.3, 0.3, 61),
+        az_coordinates=linspace(-0.4, 0.4, 81),
+        el_coordinates=linspace(-0.3, 0.3, 61),
         spatial_smoothing=[2, 2],
         forward_backward=True,
         num_sources=1,
@@ -757,8 +757,8 @@ def test_SpatialSmoothingForwardOnlyReducesEigenvalueChannels():
         block.reshape(1, k_n, k_s),
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.3, 0.3, 61),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.3, 0.3, 61),
+        el_coordinates=[0.0],
         spatial_smoothing=[3],
         forward_backward=False,
         num_sources=1,
@@ -789,8 +789,8 @@ def test_LiveSourceCountPfaOverrideAppliesPerTick():
             app,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=linspace(-0.5, 0.5, 51),
-            el_angles=[0.0],
+            az_coordinates=linspace(-0.5, 0.5, 51),
+            el_coordinates=[0.0],
             num_sources=-1,
             source_count_pfa=1e-4,
             max_sources=4,
@@ -826,8 +826,8 @@ def test_LiveSpatialSmoothingOverrideAppliesPerTick():
             app,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=linspace(-0.3, 0.3, 31),
-            el_angles=[0.0],
+            az_coordinates=linspace(-0.3, 0.3, 31),
+            el_coordinates=[0.0],
             spatial_smoothing=[],
             num_sources=1,
             name="op_under_test",
@@ -848,7 +848,7 @@ def test_LiveSpatialSmoothingOverrideAppliesPerTick():
     assert outs["eigenvalues"][2].shape == (1, k_n)
 
 
-def test_LiveAzGridOverrideAppliesPerTick():
+def test_LiveAzCoordinatesOverrideAppliesPerTick():
     k_n, k_s = 4, 16
     conv = radar_boresight_convention()
     geom = make_ula_geometry(k_n, 0.5, 1.0)
@@ -861,8 +861,8 @@ def test_LiveAzGridOverrideAppliesPerTick():
             app,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=[-0.1, 0.0, 0.1],
-            el_angles=[0.0],
+            az_coordinates=[-0.1, 0.0, 0.1],
+            el_coordinates=[0.0],
             num_sources=1,
             name="op_under_test",
         )
@@ -872,7 +872,7 @@ def test_LiveAzGridOverrideAppliesPerTick():
         [frame, frame],
         input_port="snapshot",
         output_ports=["angle_spectrum"],
-        overrides={"az_angles": [[-0.1, 0.0, 0.1], linspace(-0.2, 0.2, 11)]},
+        overrides={"az_coordinates": [[-0.1, 0.0, 0.1], linspace(-0.2, 0.2, 11)]},
         drain_ports=["aoa_estimates", "doa_multi", "source_count", "eigenvalues"],
     )
     assert len(outs["angle_spectrum"]) == 2
@@ -880,7 +880,7 @@ def test_LiveAzGridOverrideAppliesPerTick():
     assert outs["angle_spectrum"][1].shape[1] == 11
 
 
-def test_LiveElGridOverrideAppliesPerTick():
+def test_LiveElCoordinatesOverrideAppliesPerTick():
     k_ny, k_nz, k_s = 4, 4, 48
     truth_el = 0.06
     conv = radar_boresight_convention()
@@ -894,8 +894,8 @@ def test_LiveElGridOverrideAppliesPerTick():
             app,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=linspace(-0.3, 0.3, 31),
-            el_angles=[0.0],
+            az_coordinates=linspace(-0.3, 0.3, 31),
+            el_coordinates=[0.0],
             num_sources=1,
             name="op_under_test",
         )
@@ -905,7 +905,7 @@ def test_LiveElGridOverrideAppliesPerTick():
         [frame, frame],
         input_port="snapshot",
         output_ports=["angle_spectrum"],
-        overrides={"el_angles": [[0.0], linspace(-0.2, 0.2, 11)]},
+        overrides={"el_coordinates": [[0.0], linspace(-0.2, 0.2, 11)]},
         drain_ports=["aoa_estimates", "doa_multi", "source_count", "eigenvalues"],
     )
     assert len(outs["angle_spectrum"]) == 2
@@ -928,8 +928,8 @@ def test_LiveArrayGeometryOverrideAppliesPerTick():
             app,
             array_geometry=geom_a,
             angle_convention=conv,
-            az_angles=linspace(-0.2, 0.2, 11),
-            el_angles=[0.0],
+            az_coordinates=linspace(-0.2, 0.2, 11),
+            el_coordinates=[0.0],
             num_sources=1,
             name="op_under_test",
         )
@@ -962,8 +962,8 @@ def test_LiveMaxSourcesOverrideReallocatesPerTick():
             app,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=linspace(-0.3, 0.3, 61),
-            el_angles=[0.0],
+            az_coordinates=linspace(-0.3, 0.3, 61),
+            el_coordinates=[0.0],
             num_sources=2,
             max_sources=max_sources_overrides[0],
             name="op_under_test",
@@ -1004,8 +1004,8 @@ def test_SpatialSmoothingRejectsNonUniformGeometry():
             snap,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=[0.0],
-            el_angles=[0.0],
+            az_coordinates=[0.0],
+            el_coordinates=[0.0],
             spatial_smoothing=[2],
         )
 
@@ -1020,8 +1020,8 @@ def test_RejectsChannelMismatch():
             host,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=[0.0],
-            el_angles=[0.0],
+            az_coordinates=[0.0],
+            el_coordinates=[0.0],
         )
 
 
@@ -1040,8 +1040,8 @@ def test_RejectsSnapshotDtypeMismatch():
             app,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=[0.0],
-            el_angles=[0.0],
+            az_coordinates=[0.0],
+            el_coordinates=[0.0],
             name="op_under_test",
         )
 
@@ -1070,8 +1070,8 @@ def test_RejectsPageableHostSnapshot():
             app,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=[0.0],
-            el_angles=[0.0],
+            az_coordinates=[0.0],
+            el_coordinates=[0.0],
             name="op_under_test",
         )
 
@@ -1094,8 +1094,8 @@ def test_DirectionCosineMasksInvisibleRegion():
         block.reshape(1, k_n, k_s),
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-1.2, 1.2, 5),
-        el_angles=linspace(-1.2, 1.2, 5),
+        az_coordinates=linspace(-1.2, 1.2, 5),
+        el_coordinates=linspace(-1.2, 1.2, 5),
         num_sources=1,
     )
     # corner (u,v)=(-1.2,-1.2): invisible.
@@ -1128,8 +1128,8 @@ def test_IsValidMaskExcludesWrongDoaSnapshots():
             app,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=linspace(-0.4, 0.4, 81),
-            el_angles=[0.0],
+            az_coordinates=linspace(-0.4, 0.4, 81),
+            el_coordinates=[0.0],
             num_sources=1,
             max_sources=2,
             name="op_under_test",
@@ -1162,8 +1162,8 @@ def test_AllInvalidMaskBlanksDoaAndSpectrum():
             app,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=linspace(-0.4, 0.4, 41),
-            el_angles=[0.0],
+            az_coordinates=linspace(-0.4, 0.4, 41),
+            el_coordinates=[0.0],
             num_sources=1,
             max_sources=2,
             name="op_under_test",

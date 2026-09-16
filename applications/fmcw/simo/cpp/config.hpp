@@ -94,7 +94,7 @@ inline void validate_frame_period(double seconds) {
   }
 }
 
-inline void require_angle_grid(std::string_view key,
+inline void require_scan_coordinates(std::string_view key,
                                const std::vector<double>& grid) {
   if (grid.empty()) {
     throw std::runtime_error(std::string(key) + " must not be empty");
@@ -280,8 +280,8 @@ inline MaxTensorExtents make_extents(
       range.nfft > 0 ? range.nfft : num_samples;
   const int64_t num_doppler =
       doppler.nfft > 0 ? doppler.nfft : num_chirps;
-  const int64_t num_az = static_cast<int64_t>(angle.az_angles.size());
-  const int64_t num_el = static_cast<int64_t>(angle.el_angles.size());
+  const int64_t num_az = static_cast<int64_t>(angle.az_coordinates.size());
+  const int64_t num_el = static_cast<int64_t>(angle.el_coordinates.size());
   const int64_t map_cells = num_doppler * num_range;
   const int64_t max_points =
       workflow == Workflow::kDetectThenBeamform
@@ -361,7 +361,7 @@ inline holoscan::config::Document normalize_enum_field(
   return std::move(*replaced);
 }
 
-inline holoscan::config::Document normalize_angle_grid_field(
+inline holoscan::config::Document normalize_scan_coordinate_field(
     holoscan::config::Document document, std::string_view path) {
   auto found = document.find(path);
   if (!found) {
@@ -435,17 +435,17 @@ inline holoscan::config::Document normalize_operator_enums(
     document = normalize_enum_field<PeakInterpolation>(
         std::move(document),
         base + "/beamscan_estimator/peak_interpolation");
-    document = normalize_angle_grid_field(
-        std::move(document), base + "/beamscan_estimator/az_angles");
-    document = normalize_angle_grid_field(
-        std::move(document), base + "/beamscan_estimator/el_angles");
+    document = normalize_scan_coordinate_field(
+        std::move(document), base + "/beamscan_estimator/az_coordinates");
+    document = normalize_scan_coordinate_field(
+        std::move(document), base + "/beamscan_estimator/el_coordinates");
   } else {
-    document = normalize_angle_grid_field(
+    document = normalize_scan_coordinate_field(
         std::move(document),
-        base + "/phase_shift_beamformer/az_angles");
-    document = normalize_angle_grid_field(
+        base + "/phase_shift_beamformer/az_coordinates");
+    document = normalize_scan_coordinate_field(
         std::move(document),
-        base + "/phase_shift_beamformer/el_angles");
+        base + "/phase_shift_beamformer/el_coordinates");
   }
   return document;
 }
@@ -495,12 +495,12 @@ inline DetectThenBeamformConfig load_detect_then_beamform_config(
     throw std::runtime_error(
         "detect_then_beamform.cfar_detector.nci_axes must be [0]");
   }
-  require_angle_grid(
-      "detect_then_beamform.beamscan_estimator.az_angles",
-      beamscan->az_angles);
-  require_angle_grid(
-      "detect_then_beamform.beamscan_estimator.el_angles",
-      beamscan->el_angles);
+  require_scan_coordinates(
+      "detect_then_beamform.beamscan_estimator.az_coordinates",
+      beamscan->az_coordinates);
+  require_scan_coordinates(
+      "detect_then_beamform.beamscan_estimator.el_coordinates",
+      beamscan->el_coordinates);
   require_assembly_features(
       "detect_then_beamform.feature_assembly.features", *assembly);
   runtime.extents = make_extents(
@@ -550,12 +550,12 @@ inline BeamformThenDetectConfig load_beamform_then_detect_config(
     throw std::runtime_error(
         "beamform_then_detect.cfar_detector.nci_axes must be empty");
   }
-  require_angle_grid(
-      "beamform_then_detect.phase_shift_beamformer.az_angles",
-      beamformer->az_angles);
-  require_angle_grid(
-      "beamform_then_detect.phase_shift_beamformer.el_angles",
-      beamformer->el_angles);
+  require_scan_coordinates(
+      "beamform_then_detect.phase_shift_beamformer.az_coordinates",
+      beamformer->az_coordinates);
+  require_scan_coordinates(
+      "beamform_then_detect.phase_shift_beamformer.el_coordinates",
+      beamformer->el_coordinates);
   require_assembly_features(
       "beamform_then_detect.feature_assembly.features", *assembly);
   runtime.extents = make_extents(

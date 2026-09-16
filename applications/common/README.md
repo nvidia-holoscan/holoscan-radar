@@ -40,8 +40,8 @@ toggles, and the array geometry (`rx_array`/`tx_array`) — *are* shared, via th
 sections.
 
 An app may separately read an *operator* block purely to **mirror** a value into
-a visualization or geometry grid — e.g. `beamscan_estimator.az_angles` /
-`phase_shift_beamformer.az_angles` are read to size the boresight-view axes and
+a visualization or geometry grid — e.g. `beamscan_estimator.az_coordinates` /
+`phase_shift_beamformer.az_coordinates` are read to size the boresight-view axes and
 the dense az/el lookup. That read stays app-side and is commented as a
 **read-only mirror**: the operator still owns the parameter via `from_config()`.
 

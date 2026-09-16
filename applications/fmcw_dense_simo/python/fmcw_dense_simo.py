@@ -140,8 +140,8 @@ class FmcwDenseSimoApp(Application):
         peak_pick = custom_ops.AnglePeakPickOp(self, name="angle_peak_pick")
         aoa_lookup = custom_ops.CubeAoaLookupOp(
             self,
-            az_grid=cfg.az_angles,
-            el_grid=cfg.el_angles,
+            az_grid=cfg.az_coordinates,
+            el_grid=cfg.el_coordinates,
             name="cube_aoa_lookup",
         )
 
@@ -192,8 +192,8 @@ class FmcwDenseSimoApp(Application):
             reduction = DetectionReductionOp(self, self.from_config("reduction"), name="reduction")
             report = custom_ops.DenseClusterReportOp(
                 self,
-                az_grid=cfg.az_angles,
-                el_grid=cfg.el_angles,
+                az_grid=cfg.az_coordinates,
+                el_grid=cfg.el_coordinates,
                 cadence=cadence,
                 name="dense_cluster_report",
             )
@@ -309,12 +309,12 @@ class FmcwDenseSimoApp(Application):
             rep_idx_rd = custom_ops.TrailingIdxColumnsOp(self, name="rep_idx_rd_slice")
             rep_aoa = custom_ops.CubeAoaLookupOp(
                 self,
-                az_grid=cfg.az_angles,
-                el_grid=cfg.el_angles,
+                az_grid=cfg.az_coordinates,
+                el_grid=cfg.el_coordinates,
                 name="cube_aoa_lookup_rep",
             )
-            az_lo, az_hi = grid_extent(cfg.az_angles, -0.35, 0.35)
-            el_lo, el_hi = grid_extent(cfg.el_angles, -0.1, 0.1)
+            az_lo, az_hi = grid_extent(cfg.az_coordinates, -0.35, 0.35)
+            el_lo, el_hi = grid_extent(cfg.el_coordinates, -0.1, 0.1)
             boresight = BoresightViewOp(
                 self,
                 az_lo=az_lo,

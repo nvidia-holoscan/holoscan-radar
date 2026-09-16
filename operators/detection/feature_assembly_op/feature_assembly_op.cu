@@ -139,9 +139,9 @@ const char* kernel_error_message(int code) {
       return "FeatureAssemblyOp: (doppler_bin, range_bin) out of range for "
              "detection_score";
     case detail::kErrAzBin:
-      return "FeatureAssemblyOp: az_bin out of range for az_angles";
+      return "FeatureAssemblyOp: az_bin out of range for az_grid";
     case detail::kErrElBin:
-      return "FeatureAssemblyOp: el_bin out of range for el_angles";
+      return "FeatureAssemblyOp: el_bin out of range for el_grid";
     case detail::kErrRangeSource:
       return "FeatureAssemblyOp: range feature requires range_bins";
     case detail::kErrVelocitySource:
@@ -158,8 +158,8 @@ struct OptionalGathers {
   const Tensor* velocity_bins = nullptr;
   const Tensor* detection_score = nullptr;
   const Tensor* aoa_estimates = nullptr;
-  const Tensor* az_angles = nullptr;
-  const Tensor* el_angles = nullptr;
+  const Tensor* az_grid = nullptr;
+  const Tensor* el_grid = nullptr;
 };
 
 struct RequiredSources {
@@ -167,8 +167,8 @@ struct RequiredSources {
   bool velocity{false};
   bool score{false};
   bool aoa{false};
-  bool az_angles{false};
-  bool el_angles{false};
+  bool az_grid{false};
+  bool el_grid{false};
 };
 
 RequiredSources required_sources(
@@ -181,8 +181,8 @@ RequiredSources required_sources(
     result.score = result.score || feature == AssemblyFeature::kScore;
     result.aoa = result.aoa || feature == AssemblyFeature::kAzEstimate ||
                  feature == AssemblyFeature::kElEstimate;
-    result.az_angles = result.az_angles || feature == AssemblyFeature::kAz;
-    result.el_angles = result.el_angles || feature == AssemblyFeature::kEl;
+    result.az_grid = result.az_grid || feature == AssemblyFeature::kAz;
+    result.el_grid = result.el_grid || feature == AssemblyFeature::kEl;
   }
   return result;
 }
@@ -278,8 +278,8 @@ expected<AssemblyStagePlan, Error> build_assembly_stage_plan(
   plan.have_velocity = gathers.velocity_bins != nullptr;
   plan.have_score = gathers.detection_score != nullptr;
   plan.have_aoa = gathers.aoa_estimates != nullptr;
-  plan.have_az = gathers.az_angles != nullptr;
-  plan.have_el = gathers.el_angles != nullptr;
+  plan.have_az = gathers.az_grid != nullptr;
+  plan.have_el = gathers.el_grid != nullptr;
   plan.gather_score = plan.have_score && required.score;
 
   if (required.range && !plan.have_range) {
@@ -310,17 +310,17 @@ expected<AssemblyStagePlan, Error> build_assembly_stage_plan(
             std::string(to_string(AssemblyFeature::kElEstimate)) +
             "' but aoa_estimates input is absent"});
   }
-  if (required.az_angles && !plan.have_az) {
+  if (required.az_grid && !plan.have_az) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
         std::string(kOpName) +
-            ": features includes 'az' but az_angles input is absent"});
+            ": features includes 'az' but az_grid input is absent"});
   }
-  if (required.el_angles && !plan.have_el) {
+  if (required.el_grid && !plan.have_el) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
         std::string(kOpName) +
-            ": features includes 'el' but el_angles input is absent"});
+            ": features includes 'el' but el_grid input is absent"});
   }
   if (needs_dense_coordinates && plan.layout.n_preserved < 2) {
     return make_unexpected(Error{
@@ -400,13 +400,13 @@ expected<AssemblyStagePlan, Error> build_assembly_stage_plan(
   }
   if (plan.have_az) {
     HOLOSCAN_TRY(plan.num_az,
-                 parse_rank1_real<T>(*gathers.az_angles, "az_angles",
-                                     "az_angles must be rank-1 (num_az,)"));
+                 parse_rank1_real<T>(*gathers.az_grid, "az_grid",
+                                     "az_grid must be rank-1 (num_az,)"));
   }
   if (plan.have_el) {
     HOLOSCAN_TRY(plan.num_el,
-                 parse_rank1_real<T>(*gathers.el_angles, "el_angles",
-                                     "el_angles must be rank-1 (num_el,)"));
+                 parse_rank1_real<T>(*gathers.el_grid, "el_grid",
+                                     "el_grid must be rank-1 (num_el,)"));
   }
 
   plan.out_shape = {plan.layout.num_points, plan.num_features};
@@ -476,16 +476,16 @@ void FeatureAssemblyOp<T>::setup(OperatorSpec& spec) {
     aoa_estimates_spec.optional();
   }
   aoa_estimates_spec.expects_tensor(tensor_input(kDevice));
-  auto& az_angles_spec = spec.input(az_angles).queue_depth(2U);
-  if (!required.az_angles) {
-    az_angles_spec.optional();
+  auto& az_grid_spec = spec.input(az_grid).queue_depth(2U);
+  if (!required.az_grid) {
+    az_grid_spec.optional();
   }
-  az_angles_spec.expects_tensor(tensor_input(kDevice));
-  auto& el_angles_spec = spec.input(el_angles).queue_depth(2U);
-  if (!required.el_angles) {
-    el_angles_spec.optional();
+  az_grid_spec.expects_tensor(tensor_input(kDevice));
+  auto& el_grid_spec = spec.input(el_grid).queue_depth(2U);
+  if (!required.el_grid) {
+    el_grid_spec.optional();
   }
-  el_angles_spec.expects_tensor(tensor_input(kDevice));
+  el_grid_spec.expects_tensor(tensor_input(kDevice));
   spec.output(points).produces_tensor(pooled_tensor_output(kDevice, bounds));
   // No [live] Exact overrides.
 }
@@ -508,11 +508,11 @@ Contract FeatureAssemblyOp<T>::contract() const {
   if (required.aoa) {
     aligned.emplace_back(aoa_estimates);
   }
-  if (required.az_angles) {
-    aligned.emplace_back(az_angles);
+  if (required.az_grid) {
+    aligned.emplace_back(az_grid);
   }
-  if (required.el_angles) {
-    aligned.emplace_back(el_angles);
+  if (required.el_grid) {
+    aligned.emplace_back(el_grid);
   }
 
   Contract result;
@@ -536,8 +536,8 @@ Contract FeatureAssemblyOp<T>::contract() const {
   add_source(velocity_bins, required.velocity);
   add_source(detection_score, required.score);
   add_source(aoa_estimates, required.aoa);
-  add_source(az_angles, required.az_angles);
-  add_source(el_angles, required.el_angles);
+  add_source(az_grid, required.az_grid);
+  add_source(el_grid, required.el_grid);
   return result;
 }
 
@@ -589,15 +589,15 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
   HOLOSCAN_TRY(auto maybe_velocity, receive_optional_value(velocity_bins));
   HOLOSCAN_TRY(auto maybe_score, receive_optional_value(detection_score));
   HOLOSCAN_TRY(auto maybe_aoa, receive_optional_value(aoa_estimates));
-  HOLOSCAN_TRY(auto maybe_az, receive_optional_value(az_angles));
-  HOLOSCAN_TRY(auto maybe_el, receive_optional_value(el_angles));
+  HOLOSCAN_TRY(auto maybe_az, receive_optional_value(az_grid));
+  HOLOSCAN_TRY(auto maybe_el, receive_optional_value(el_grid));
   const OptionalGathers gathers{
       .range_bins = maybe_range ? &*maybe_range : nullptr,
       .velocity_bins = maybe_velocity ? &*maybe_velocity : nullptr,
       .detection_score = maybe_score ? &*maybe_score : nullptr,
       .aoa_estimates = maybe_aoa ? &*maybe_aoa : nullptr,
-      .az_angles = maybe_az ? &*maybe_az : nullptr,
-      .el_angles = maybe_el ? &*maybe_el : nullptr};
+      .az_grid = maybe_az ? &*maybe_az : nullptr,
+      .el_grid = maybe_el ? &*maybe_el : nullptr};
 
   // Trailing rank is (num_points, 2 [+ n_preserved]), not a
   // (chirps, samples) ADC cube — layout parse lives in the plan builder.
@@ -729,10 +729,10 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
     retained_aoa_ = std::move(*maybe_aoa);
   }
   if (plan.have_az) {
-    retained_az_angles_ = std::move(*maybe_az);
+    retained_az_grid_ = std::move(*maybe_az);
   }
   if (plan.have_el) {
-    retained_el_angles_ = std::move(*maybe_el);
+    retained_el_grid_ = std::move(*maybe_el);
   }
   return {};
 }

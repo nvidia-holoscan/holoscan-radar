@@ -183,8 +183,8 @@ PhaseShiftBeamformerParams make_params(ArrayGeometry geom,
   PhaseShiftBeamformerParams params;
   params.array_geometry = std::move(geom);
   params.angle_convention = conv;
-  params.az_angles = std::move(az);
-  params.el_angles = std::move(el);
+  params.az_coordinates = std::move(az);
+  params.el_coordinates = std::move(el);
   params.array_taper = std::move(taper);
   return params;
 }
@@ -208,7 +208,7 @@ GraphRunResult run_beamformer_result(
   const auto rd_shape = rd_maps->shape();
   const holoscan::radar::MaxTensorExtents sized =
       extents.value_or(holoscan::radar::testing::extents_for_scan_grid(
-          params.az_angles.size(), params.el_angles.size(),
+          params.az_coordinates.size(), params.el_coordinates.size(),
           rd_shape.size() > 1U ? std::optional<std::size_t>(
                                      static_cast<std::size_t>(rd_shape[1]))
                                : std::nullopt,
@@ -230,7 +230,7 @@ ThreeOutGraphRunResult run_beamformer_with_grids(
   const auto rd_shape = rd_maps->shape();
   const holoscan::radar::MaxTensorExtents extents =
       holoscan::radar::testing::extents_for_scan_grid(
-          params.az_angles.size(), params.el_angles.size(),
+          params.az_coordinates.size(), params.el_coordinates.size(),
           static_cast<std::size_t>(rd_shape[1]),
           static_cast<std::size_t>(rd_shape[2]));
   return run_single_in_three_out_operator_graph_result<
@@ -362,7 +362,7 @@ class LiveBeamformerSourceOp final : public holoscan::Operator<> {
         .max_emits_per_compute(1U)
         .produces_tensor(holoscan::radar::pooled_tensor_output(
             kHostMatrix, 2U, 4096U * sizeof(double)));
-    for (auto* output : {&az_angles, &el_angles}) {
+    for (auto* output : {&az_coordinates, &el_coordinates}) {
       spec.output(*output)
           .max_emits_per_compute(1U)
           .produces_tensor(holoscan::radar::pooled_tensor_output(
@@ -404,13 +404,13 @@ class LiveBeamformerSourceOp final : public holoscan::Operator<> {
       }
     }
     if (tick.az.has_value()) {
-      auto emitted = emit_host_vector(az_angles, *tick.az, time);
+      auto emitted = emit_host_vector(az_coordinates, *tick.az, time);
       if (!emitted) {
         return emitted;
       }
     }
     if (tick.el.has_value()) {
-      auto emitted = emit_host_vector(el_angles, *tick.el, time);
+      auto emitted = emit_host_vector(el_coordinates, *tick.el, time);
       if (!emitted) {
         return emitted;
       }
@@ -432,8 +432,8 @@ class LiveBeamformerSourceOp final : public holoscan::Operator<> {
   holoscan::Output<holoscan::Tensor> rd_maps{"rd_maps"};
   holoscan::Output<holoscan::radar::WireArrayGeometry>
       array_geometry{"array_geometry"};
-  holoscan::Output<holoscan::Tensor> az_angles{"az_angles"};
-  holoscan::Output<holoscan::Tensor> el_angles{"el_angles"};
+  holoscan::Output<holoscan::Tensor> az_coordinates{"az_coordinates"};
+  holoscan::Output<holoscan::Tensor> el_coordinates{"el_coordinates"};
   holoscan::Output<holoscan::radar::WireWindowSpec>
       array_taper{"array_taper"};
 };
@@ -483,8 +483,8 @@ ThreeOutGraphRunResult run_live_beamformer_graph(
   const holoscan::ConnectionOptions q{.queue_depth = 8U};
   graph.add_flow(source->rd_maps, op->rd_maps, q);
   graph.add_flow(source->array_geometry, op->array_geometry, q);
-  graph.add_flow(source->az_angles, op->az_angles, q);
-  graph.add_flow(source->el_angles, op->el_angles, q);
+  graph.add_flow(source->az_coordinates, op->az_coordinates, q);
+  graph.add_flow(source->el_coordinates, op->el_coordinates, q);
   graph.add_flow(source->array_taper, op->array_taper, q);
   graph.add_flow(op->rda_cube, cube_sink->in, q);
   graph.add_flow(op->az_grid, az_sink->in, q);
@@ -1071,7 +1071,7 @@ TEST(PhaseShiftBeamformerOpTest, RejectsDtypeMismatch) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(PhaseShiftBeamformerOpTest, LiveAzGridAppliesForOneTick) {
+TEST(PhaseShiftBeamformerOpTest, LiveAzCoordinatesAppliesForOneTick) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   const auto vec =
@@ -1096,7 +1096,7 @@ TEST(PhaseShiftBeamformerOpTest, LiveAzGridAppliesForOneTick) {
   EXPECT_DOUBLE_EQ(out.frames1[2].as<double>()[0], -0.1);
 }
 
-TEST(PhaseShiftBeamformerOpTest, LiveElGridAppliesForOneTick) {
+TEST(PhaseShiftBeamformerOpTest, LiveElCoordinatesAppliesForOneTick) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   auto rd = vector_to_rd_maps<double>(

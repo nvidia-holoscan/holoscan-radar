@@ -204,8 +204,8 @@ int main(int argc, char** argv) {
         if (cfg.visualize) {
           simo::viz::add_simo_visualization(
               graph, application, options, cfg.visualization,
-              cfg.frame_period, cfg.beamscan_params->az_angles,
-              cfg.beamscan_params->el_angles,
+              cfg.frame_period, cfg.beamscan_params->az_coordinates,
+              cfg.beamscan_params->el_coordinates,
               cfg.beamscan_params->angle_convention, cfg.scene.targets,
               "Detect then beamform",
               simo::viz::SimoClusterVizInputs{

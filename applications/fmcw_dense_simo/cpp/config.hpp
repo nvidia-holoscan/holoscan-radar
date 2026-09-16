@@ -55,9 +55,9 @@ inline radar::MaxTensorExtents make_dense_simo_extents(const AppConfig& cfg) {
   const int64_t doppler_bins =
       cfg.doppler_params.nfft > 0 ? cfg.doppler_params.nfft : chirps;
   const int64_t num_az =
-      static_cast<int64_t>(cfg.beamformer_params.az_angles.size());
+      static_cast<int64_t>(cfg.beamformer_params.az_coordinates.size());
   const int64_t num_el =
-      static_cast<int64_t>(cfg.beamformer_params.el_angles.size());
+      static_cast<int64_t>(cfg.beamformer_params.el_coordinates.size());
   const int64_t map_cells = doppler_bins * range_bins;
   const int64_t beam_cells = (num_az > 0 ? num_az : 1) *
                              (num_el > 0 ? num_el : 1) * map_cells;
@@ -128,10 +128,10 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   load_phase_shift_beamformer_params(root["phase_shift_beamformer"],
                                      &cfg.beamformer_params);
   cfg.beamformer_params.array_geometry = cfg.array_geometry;
-  if (cfg.beamformer_params.az_angles.empty() ||
-      cfg.beamformer_params.el_angles.empty()) {
+  if (cfg.beamformer_params.az_coordinates.empty() ||
+      cfg.beamformer_params.el_coordinates.empty()) {
     throw std::runtime_error(
-        "phase_shift_beamformer.az_angles and el_angles are required");
+        "phase_shift_beamformer.az_coordinates and el_coordinates are required");
   }
   load_cfar_params(root["cfar_detector"], &cfg.cfar_params);
   // Dense path: nci_axes empty so az/el ride as batch columns on
@@ -147,8 +147,8 @@ inline AppConfig load_config(const std::filesystem::path& path) {
   cfg.use_cfar_peaks =
       cfg.cfar_params.peak_mode != holoscan::radar::CfarPeakMode::kNone;
   const PhysicalAngleBounds physical_bounds = physical_scan_grid_bounds(
-      cfg.beamformer_params.angle_convention, cfg.beamformer_params.az_angles,
-      cfg.beamformer_params.el_angles);
+      cfg.beamformer_params.angle_convention, cfg.beamformer_params.az_coordinates,
+      cfg.beamformer_params.el_coordinates);
   cfg.az_lo = physical_bounds.az[0];
   cfg.az_hi = physical_bounds.az[1];
   cfg.el_lo = physical_bounds.el[0];

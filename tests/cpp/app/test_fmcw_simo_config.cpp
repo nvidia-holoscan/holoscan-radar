@@ -71,9 +71,9 @@ TEST(FmcwSimoConfig, DecodesDetectThenBeamformSmoke) {
             (std::vector<double>{0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0}));
   EXPECT_EQ(config.extents.max_az, 5);
   EXPECT_EQ(config.extents.max_el, 5);
-  EXPECT_EQ(config.beamscan_params->az_angles,
+  EXPECT_EQ(config.beamscan_params->az_coordinates,
             (std::vector<double>{-0.3, -0.15, 0.0, 0.15, 0.3}));
-  EXPECT_EQ(config.beamscan_params->el_angles,
+  EXPECT_EQ(config.beamscan_params->el_coordinates,
             (std::vector<double>{-0.3, -0.15, 0.0, 0.15, 0.3}));
   EXPECT_EQ(config.reduction_params->representative,
             holoscan::radar::RepresentativePolicy::kWeightedMean);
@@ -119,26 +119,26 @@ TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
   EXPECT_EQ(detect.num_frames, 250);
   EXPECT_EQ(detect.scene.targets.size(), 5U);
   EXPECT_EQ(detect.extents.max_az, 13);
-  EXPECT_EQ(beamform.extents.max_el, 11);
-  ASSERT_EQ(detect.beamscan_params->az_angles.size(), 13U);
-  ASSERT_EQ(beamform.beamformer_params->el_angles.size(), 11U);
+  EXPECT_EQ(beamform.extents.max_el, 13);
+  ASSERT_EQ(detect.beamscan_params->az_coordinates.size(), 13U);
+  ASSERT_EQ(beamform.beamformer_params->el_coordinates.size(), 13U);
   for (std::size_t index = 0; index < 13U; ++index) {
     const double expected = -0.3 + static_cast<double>(index) * 0.05;
-    EXPECT_NEAR(detect.beamscan_params->az_angles[index], expected, 1.0e-14);
+    EXPECT_NEAR(detect.beamscan_params->az_coordinates[index], expected, 1.0e-14);
   }
-  for (std::size_t index = 0; index < 11U; ++index) {
-    const double expected = -1.0 + static_cast<double>(index) * 0.2;
-    EXPECT_NEAR(beamform.beamformer_params->el_angles[index], expected,
+  for (std::size_t index = 0; index < 13U; ++index) {
+    const double expected = -0.3 + static_cast<double>(index) * 0.05;
+    EXPECT_NEAR(beamform.beamformer_params->el_coordinates[index], expected,
                 1.0e-14);
   }
-  EXPECT_DOUBLE_EQ(detect.beamscan_params->az_angles.back(), 0.3);
-  EXPECT_DOUBLE_EQ(beamform.beamformer_params->el_angles.back(), 1.0);
+  EXPECT_DOUBLE_EQ(detect.beamscan_params->az_coordinates.back(), 0.3);
+  EXPECT_DOUBLE_EQ(beamform.beamformer_params->el_coordinates.back(), 0.3);
   EXPECT_EQ(detect.cfar_params->peak_mode,
             holoscan::radar::CfarPeakMode::kNone);
   EXPECT_EQ(beamform.cfar_params->peak_mode,
             holoscan::radar::CfarPeakMode::kAll);
   EXPECT_EQ(beamform.cfar_params->peak_radius,
-            (std::vector<int64_t>{4, 4, 4, 4}));
+            (std::vector<int64_t>{2, 2, 2, 2}));
   EXPECT_EQ(detect.reduction_params->representative,
             holoscan::radar::RepresentativePolicy::kWeightedMean);
   EXPECT_EQ(detect.reduction_params->feature_weights,
@@ -163,43 +163,43 @@ TEST(FmcwSimoConfig, RejectsAuthoredDerivedFields) {
   EXPECT_NO_THROW(simo::reject_authored(*document, "/missing"));
 }
 
-TEST(FmcwSimoConfig, RejectsInvalidAngleRangeMapping) {
+TEST(FmcwSimoConfig, RejectsInvalidScanCoordinateRangeMapping) {
   auto document = holoscan::config_io::parse(
       "{grid: {min: 0.0, max: 1.0, step: 0.3}}",
       holoscan::config_io::Format::kYaml);
   ASSERT_TRUE(document);
   EXPECT_THROW(
-      simo::normalize_angle_grid_field(std::move(*document), "/grid"),
+      simo::normalize_scan_coordinate_field(std::move(*document), "/grid"),
       std::runtime_error);
 }
 
-TEST(GraphParamsAngleGrid, LoadsBothYamlFormsForAllScanOperators) {
+TEST(GraphParamsScanCoordinates, LoadsBothYamlFormsForAllScanOperators) {
   const YAML::Node node = YAML::Load(R"(
-az_angles: {min: -0.2, max: 0.2, step: 0.1}
-el_angles: [0.0]
+az_coordinates: {min: -0.2, max: 0.2, step: 0.1}
+el_coordinates: [0.0]
 )");
   const std::vector<double> expected_az{-0.2, -0.1, 0.0, 0.1, 0.2};
   const std::vector<double> expected_el{0.0};
 
   radar::BeamscanParams beamscan;
   radar::app::load_beamscan_params(node, &beamscan);
-  expect_grid_near(beamscan.az_angles, expected_az);
-  EXPECT_EQ(beamscan.el_angles, expected_el);
+  expect_grid_near(beamscan.az_coordinates, expected_az);
+  EXPECT_EQ(beamscan.el_coordinates, expected_el);
 
   radar::PhaseShiftBeamformerParams beamformer;
   radar::app::load_phase_shift_beamformer_params(node, &beamformer);
-  expect_grid_near(beamformer.az_angles, expected_az);
-  EXPECT_EQ(beamformer.el_angles, expected_el);
+  expect_grid_near(beamformer.az_coordinates, expected_az);
+  EXPECT_EQ(beamformer.el_coordinates, expected_el);
 
   radar::MVDRParams mvdr;
   radar::app::load_mvdr_params(node, &mvdr);
-  expect_grid_near(mvdr.az_angles, expected_az);
-  EXPECT_EQ(mvdr.el_angles, expected_el);
+  expect_grid_near(mvdr.az_coordinates, expected_az);
+  EXPECT_EQ(mvdr.el_coordinates, expected_el);
 
   radar::MUSICParams music;
   radar::app::load_music_params(node, &music);
-  expect_grid_near(music.az_angles, expected_az);
-  EXPECT_EQ(music.el_angles, expected_el);
+  expect_grid_near(music.az_coordinates, expected_az);
+  EXPECT_EQ(music.el_coordinates, expected_el);
 }
 
 }  // namespace

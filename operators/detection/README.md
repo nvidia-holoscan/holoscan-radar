@@ -18,7 +18,7 @@ Typical placement:
 | Operator | In → Out | Function |
 | --- | --- | --- |
 | [`CFARDetectorOp<T>`](cfar_detector_op/README.md) | `rd_maps` (…, doppler, range; complex or real power) → `detection_mask`, `detection_score`, `noise_estimate`, `cfar_power`, `detection_idx` | 2-D CFAR on the (Doppler, range) plane; complex input → square-law power, real input → thresholded directly; per-cell adaptive threshold from the training-cell noise estimate |
-| [`FeatureAssemblyOp<T>`](feature_assembly_op/README.md) | `detection_idx` (+ optional `range_bins` / `velocity_bins` / `detection_score` / `aoa_estimates` / `az_angles` / `el_angles`) → `points` | Range–Doppler clustering-prep bridge: gather / bin→physical lookup into `points`. Lives here (not under `clustering/`) because it speaks CFAR `detection_idx`; static `features` list sets column layout |
+| [`FeatureAssemblyOp<T>`](feature_assembly_op/README.md) | `detection_idx` (+ optional `range_bins` / `velocity_bins` / `detection_score` / `aoa_estimates` / `az_coordinates` / `el_coordinates`) → `points` | Range–Doppler clustering-prep bridge: gather / bin→physical lookup into `points`. Lives here (not under `clustering/`) because it speaks CFAR `detection_idx`; static `features` list sets column layout |
 | [`DetectionReductionOp<T>`](detection_reduction_op/README.md) | `labels` + `detection_idx` + `points` → `rep_idx` (+ optional `reduced_points`) | One real CFAR cell per cluster (`first` / `peak` / `medoid` / nearest weighted-index mean) plus optional selected/synthetic features |
 
 ## Implementation status

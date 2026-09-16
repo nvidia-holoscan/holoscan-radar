@@ -128,8 +128,8 @@ static __global__ void assemble_features_kernel(
     int64_t num_score_doppler, int64_t num_score_range,
     const int64_t* __restrict__ score_plane_offsets, bool have_score,
     const T* __restrict__ aoa, bool have_aoa,
-    const T* __restrict__ az_angles, int64_t num_az,
-    const T* __restrict__ el_angles, int64_t num_el,
+    const T* __restrict__ az_grid, int64_t num_az,
+    const T* __restrict__ el_grid, int64_t num_el,
     const int* __restrict__ feature_ids, int64_t num_features,
     T* __restrict__ points, int* __restrict__ error_flag) {
   const int64_t row = static_cast<int64_t>(blockIdx.x) * blockDim.x +
@@ -194,23 +194,23 @@ static __global__ void assemble_features_kernel(
       case kFeatAz:
         // Dense path: az is the preserved-batch column just before the
         // (doppler_bin, range_bin) pair; look it up in the azimuth scan grid.
-        if (az_angles != nullptr) {
+        if (az_grid != nullptr) {
           const int64_t az_bin = idx_row[n_preserved - 2];
           if (az_bin < 0 || az_bin >= num_az) {
             atomicExch(error_flag, kErrAzBin);
             return;
           }
-          value = az_angles[az_bin];
+          value = az_grid[az_bin];
         }
         break;
       case kFeatEl:
-        if (el_angles != nullptr) {
+        if (el_grid != nullptr) {
           const int64_t el_bin = idx_row[n_preserved - 1];
           if (el_bin < 0 || el_bin >= num_el) {
             atomicExch(error_flag, kErrElBin);
             return;
           }
-          value = el_angles[el_bin];
+          value = el_grid[el_bin];
         }
         break;
       case kFeatAzEstimate:
@@ -244,7 +244,7 @@ void launch_assemble_features(
     bool have_velocity_bins, const T* score_map, int64_t num_score_doppler,
     int64_t num_score_range,
     const int64_t* score_plane_offsets, bool have_score, const T* aoa,
-    bool have_aoa, const T* az_angles, int64_t num_az, const T* el_angles,
+    bool have_aoa, const T* az_grid, int64_t num_az, const T* el_grid,
     int64_t num_el, const int* feature_ids, int64_t num_features, T* points,
     int* error_flag, cudaStream_t stream) {
   if (num_points <= 0 || num_features <= 0) {
@@ -257,7 +257,7 @@ void launch_assemble_features(
       detection_idx, num_points, idx_cols, n_preserved, range_bins, num_range,
       have_range_bins, velocity_bins, num_doppler, have_velocity_bins,
       score_map, num_score_doppler, num_score_range, score_plane_offsets,
-      have_score, aoa, have_aoa, az_angles, num_az, el_angles, num_el,
+      have_score, aoa, have_aoa, az_grid, num_az, el_grid, num_el,
       feature_ids, num_features, points, error_flag);
 }
 
