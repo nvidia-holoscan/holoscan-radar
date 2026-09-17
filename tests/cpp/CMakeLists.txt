@@ -92,6 +92,11 @@ radar_add_test(fmcw/test_ddm_dense_demultiplex
     holoscan::fmcw_doppler_processor_op)
 radar_add_test(fmcw/test_doppler_notch
     holoscan::doppler_notch_op)
+radar_add_test(fmcw/test_doppler_notch_pipeline
+    holoscan::fmcw_range_processor_op
+    holoscan::fmcw_doppler_processor_op
+    holoscan::ddm_dense_demultiplex_op
+    holoscan::doppler_notch_op)
 radar_add_test(fmcw/test_ddm_power_fold
     holoscan::ddm_power_fold_op)
 radar_add_test(fmcw/test_ddm_sparse_demultiplex
