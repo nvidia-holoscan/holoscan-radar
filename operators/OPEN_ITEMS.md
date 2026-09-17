@@ -116,7 +116,7 @@ with the code that produced them.
 **Status:** deferred 2026-09-09; intentionally excluded from the first
 operator implementation.
 
-Add an `applications/fmcw/mimo` sparse-DDM graph/config path that wires
+Add an `applications/fmcw/mimo_ddm` sparse-DDM graph/config path that wires
 `DDMPowerFoldOp → CFARDetectorOp → DDMSparseDemultiplexOp → angle estimator`,
 including `preintegrated_looks = M_tx * N_rx`, geometry and validity sidebands,
 and performance/reporting integration. The example must label

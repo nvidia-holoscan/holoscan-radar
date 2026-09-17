@@ -6,12 +6,13 @@
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include <holoscan/config/io.hpp>
 
-#include "config.hpp"  // NOLINT(build/include_subdir): app-private header
+#include "radar_app/simple/simo/config.hpp"
 #include "radar_app/app/graph_params.hpp"
 
 namespace {
@@ -21,7 +22,19 @@ namespace radar = holoscan::radar;
 
 std::filesystem::path config_path(const char* name) {
   return std::filesystem::path(HOLOSCAN_RADAR_SOURCE_DIR) /
-         "applications/fmcw/simo/config" / name;
+         "applications/fmcw" / name;
+}
+
+void expect_smoke_matches_production(const char* production_name,
+                                     const char* smoke_name) {
+  YAML::Node expected = YAML::LoadFile(config_path(production_name).string());
+  const YAML::Node smoke = YAML::LoadFile(config_path(smoke_name).string());
+  expected["app"]["run"]["num_frames"] = 2;
+  expected["app"]["visualization"]["enabled"] = false;
+  YAML::Node targets(YAML::NodeType::Sequence);
+  targets.push_back(expected["app"]["targets"][0]);
+  expected["app"]["targets"] = targets;
+  EXPECT_EQ(YAML::Dump(expected), YAML::Dump(smoke));
 }
 
 void expect_grid_near(const std::vector<double>& actual,
@@ -34,20 +47,21 @@ void expect_grid_near(const std::vector<double>& actual,
 
 TEST(FmcwSimoConfig, DecodesDetectThenBeamformSmoke) {
   const auto config =
-      simo::load_detect_then_beamform_config(config_path("smoke.yaml"));
+      simo::load_detect_then_beamform_config(
+          config_path("simo_detect_then_beamform/config/simo_detect_then_beamform_smoke.yaml"));
 
-  EXPECT_EQ(config.num_frames, 5);
+  EXPECT_EQ(config.num_frames, 2);
   EXPECT_DOUBLE_EQ(config.frame_period, 0.1);
-  EXPECT_EQ(config.scene.num_chirps, 64);
+  EXPECT_EQ(config.scene.num_chirps, 128);
   EXPECT_EQ(config.scene.samples_per_chirp, 256);
   EXPECT_EQ(config.scene.targets.size(), 1U);
   ASSERT_TRUE(config.scene.snr_db.has_value());
   EXPECT_DOUBLE_EQ(*config.scene.snr_db, 5.0);
   EXPECT_EQ(config.clutter_params->method,
-            holoscan::radar::ClutterFilterMethod::kNone);
-  EXPECT_EQ(config.array_geometry.num_elements(), 16);
+            holoscan::radar::ClutterFilterMethod::kMeanSubtraction);
+  EXPECT_EQ(config.array_geometry.num_elements(), 64);
   EXPECT_EQ(config.cfar_params->nci_axes, (std::vector<int64_t>{0}));
-  EXPECT_EQ(config.cfar_params->nci_fold, 16);
+  EXPECT_EQ(config.cfar_params->nci_fold, 64);
   EXPECT_EQ(config.gather_params->doppler_edge,
             holoscan::radar::SnapshotEdgeMode::kWrap);
   EXPECT_EQ(config.gather_params->range_edge,
@@ -69,12 +83,10 @@ TEST(FmcwSimoConfig, DecodesDetectThenBeamformSmoke) {
             (std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0, 1.5, 1.5}));
   EXPECT_EQ(config.reduction_params->feature_weights,
             (std::vector<double>{0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0}));
-  EXPECT_EQ(config.extents.max_az, 5);
-  EXPECT_EQ(config.extents.max_el, 5);
-  EXPECT_EQ(config.beamscan_params->az_coordinates,
-            (std::vector<double>{-0.3, -0.15, 0.0, 0.15, 0.3}));
-  EXPECT_EQ(config.beamscan_params->el_coordinates,
-            (std::vector<double>{-0.3, -0.15, 0.0, 0.15, 0.3}));
+  EXPECT_EQ(config.extents.max_az, 13);
+  EXPECT_EQ(config.extents.max_el, 13);
+  EXPECT_EQ(config.beamscan_params->az_coordinates.size(), 13U);
+  EXPECT_EQ(config.beamscan_params->el_coordinates.size(), 13U);
   EXPECT_EQ(config.reduction_params->representative,
             holoscan::radar::RepresentativePolicy::kWeightedMean);
   EXPECT_FALSE(config.visualize);
@@ -82,15 +94,17 @@ TEST(FmcwSimoConfig, DecodesDetectThenBeamformSmoke) {
 
 TEST(FmcwSimoConfig, DecodesBeamformThenDetectSmoke) {
   const auto config =
-      simo::load_beamform_then_detect_config(config_path("smoke.yaml"));
+      simo::load_beamform_then_detect_config(config_path(
+          "simo_beamform_then_detect/config/"
+          "simo_beamform_then_detect_smoke.yaml"));
 
-  EXPECT_EQ(config.num_frames, 5);
+  EXPECT_EQ(config.num_frames, 2);
   EXPECT_TRUE(config.cfar_params->nci_axes.empty());
   EXPECT_EQ(config.beamformer_params->array_geometry,
             config.array_geometry);
-  EXPECT_EQ(config.extents.max_channels, 25);
-  EXPECT_EQ(config.cfar_extents.max_tx, 5);
-  EXPECT_EQ(config.cfar_extents.max_rx, 5);
+  EXPECT_EQ(config.extents.max_channels, 169);
+  EXPECT_EQ(config.cfar_extents.max_tx, 13);
+  EXPECT_EQ(config.cfar_extents.max_rx, 13);
   EXPECT_FALSE(config.cfar_extents.max_channels.has_value());
   EXPECT_EQ(config.cfar_params->peak_mode,
             holoscan::radar::CfarPeakMode::kAll);
@@ -112,9 +126,12 @@ TEST(FmcwSimoConfig, DecodesBeamformThenDetectSmoke) {
 
 TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
   const auto detect =
-      simo::load_detect_then_beamform_config(config_path("default.yaml"));
+      simo::load_detect_then_beamform_config(
+          config_path("simo_detect_then_beamform/config/simo_detect_then_beamform.yaml"));
   const auto beamform =
-      simo::load_beamform_then_detect_config(config_path("default.yaml"));
+      simo::load_beamform_then_detect_config(config_path(
+          "simo_beamform_then_detect/config/"
+          "simo_beamform_then_detect.yaml"));
 
   EXPECT_EQ(detect.num_frames, 250);
   EXPECT_EQ(detect.scene.targets.size(), 5U);
@@ -152,6 +169,15 @@ TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
   EXPECT_DOUBLE_EQ(detect.visualization.detection_radius, 0.010);
   EXPECT_EQ(detect.visualization.history_frames, 120);
   EXPECT_EQ(detect.visualization.detection_trail_frames, 50);
+}
+
+TEST(FmcwSimoConfig, SmokeConfigsOnlyApplyAllowedOverrides) {
+  expect_smoke_matches_production(
+      "simo_detect_then_beamform/config/simo_detect_then_beamform.yaml",
+      "simo_detect_then_beamform/config/simo_detect_then_beamform_smoke.yaml");
+  expect_smoke_matches_production(
+      "simo_beamform_then_detect/config/simo_beamform_then_detect.yaml",
+      "simo_beamform_then_detect/config/simo_beamform_then_detect_smoke.yaml");
 }
 
 TEST(FmcwSimoConfig, RejectsAuthoredDerivedFields) {

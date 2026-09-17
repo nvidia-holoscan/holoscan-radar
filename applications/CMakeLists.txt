@@ -4,22 +4,15 @@
 # Shared application-support library (radar_app). Report sinks are always
 # available; Holoviz-backed viz helpers and the demo apps that need them are
 # gated on HOLOSCAN_RADAR_HAS_HOLOVIZ. [EA HSDK5 ONLY] Graph-ported demos
-# (fmcw_siso / fmcw_simo / …) build under HOLOSCAN_RADAR_HAS_RD_LIVE
+# (fmcw_siso and the standalone SIMO/MIMO apps) build under HOLOSCAN_RADAR_HAS_RD_LIVE
 # (X11 and/or Holoviz).
 add_subdirectory(common)
 
-# Each application is gated on its own APP_<name> option, defaulting to
-# ${BUILD_ALL}, and additionally requires a live RD path and/or Holoviz.
-#
-# [EA HSDK5 ONLY] holoscan_radar_add_application() additionally skips any app
-# whose operator dependencies are not on the HSDK 5 port allow-list; Holoviz
-# alone is not a sufficient gate because DEPENDS OPERATORS would FORCE OP_*=ON
-# for targets holoscan_radar_add_operator() never creates.
-
-# The consolidated SIMO and MIMO workflows are the active HSDK 5 applications.
+# Each workflow is a standalone application with its own APP_<name>
+# gate, executable, metadata, and configuration set.
 if(HOLOSCAN_RADAR_HAS_RD_LIVE)
-    holoscan_radar_add_application(simo
-        DIRECTORY fmcw/simo
+    holoscan_radar_add_application(simo_detect_then_beamform
+        DIRECTORY fmcw/simo_detect_then_beamform
         DEPENDS OPERATORS
             fmcw_range_processor_op
             clutter_filter_op
@@ -27,19 +20,39 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
             cfar_detector_op
             snapshot_gather_op
             beamscan_estimator_op
-            phase_shift_beamformer_op
             feature_assembly_op
             detection_reduction_op
             cluster_dbscan_op
     )
-    holoscan_radar_add_application(mimo
-        DIRECTORY fmcw/mimo
+    holoscan_radar_add_application(simo_beamform_then_detect
+        DIRECTORY fmcw/simo_beamform_then_detect
+        DEPENDS OPERATORS
+            fmcw_range_processor_op
+            clutter_filter_op
+            fmcw_doppler_processor_op
+            phase_shift_beamformer_op
+            cfar_detector_op
+            feature_assembly_op
+    )
+    holoscan_radar_add_application(mimo_tdm
+        DIRECTORY fmcw/mimo_tdm
         DEPENDS OPERATORS
             fmcw_range_processor_op
             clutter_filter_op
             fmcw_doppler_processor_op
             mimo_deinterleave_op
             tdm_sparse_compensation_op
+            cfar_detector_op
+            beamscan_estimator_op
+            feature_assembly_op
+            detection_reduction_op
+            cluster_dbscan_op
+    )
+    holoscan_radar_add_application(mimo_ddm
+        DIRECTORY fmcw/mimo_ddm
+        DEPENDS OPERATORS
+            fmcw_range_processor_op
+            fmcw_doppler_processor_op
             ddm_dense_demultiplex_op
             doppler_notch_op
             virtual_array_assembly_op
@@ -52,5 +65,5 @@ if(HOLOSCAN_RADAR_HAS_RD_LIVE)
     )
 else()
     message(STATUS
-        "Skipping consolidated SIMO/MIMO applications; no Holoviz/X11 live RD")
+        "Skipping standalone SIMO/MIMO applications; no Holoviz/X11 live RD")
 endif()

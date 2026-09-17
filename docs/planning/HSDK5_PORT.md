@@ -1261,9 +1261,9 @@ extends to the remaining sparse/dense FMCW demos under
 
 | App | Notes |
 | --- | --- |
-| `fmcw_simo` | Sparse SIMO: SnapshotGather → Beamscan; `FeatureAssemblyOp` (4 features); `cfar_power` → RD image; boresight from `beamscan.aoa_estimates` |
+| `fmcw/simo_detect_then_beamform` | Sparse SIMO: SnapshotGather → Beamscan; `FeatureAssemblyOp` (4 features); `cfar_power` → RD image; boresight from `beamscan.aoa_estimates` |
 | `fmcw_dense_simo` | Dense: PhaseShiftBeamformer + Graph `AnglePeakPick`/`CubeAoaLookup`/`TrailingIdxColumns`/`RdAngleMaxOp`; 4-col `rep_idx` ClusterReport with az/el grids; boresight from `CubeAoaLookupOp` |
-| `fmcw/mimo` | Separate `fmcw_mimo_tdm` / `fmcw_mimo_ddm` Graph binaries with MIMO sources + `DdmReportVelocityBinsOp`; dense TDM/DDM front ends; clustered sparse angle tail; shared retained-frame dashboard |
+| `fmcw/mimo_tdm`, `fmcw/mimo_ddm` | Standalone `mimo_tdm` / `mimo_ddm` Graph binaries with MIMO sources + `DdmReportVelocityBinsOp`; dense TDM/DDM front ends; clustered sparse angle tail; shared retained-frame dashboard |
 | `fmcw_aoa_estimators` | Five sparse estimators behind Graph `EstimatorRouterOp` (N snapshot outs) + `AoaMergeOp` (`OnAnyInput`); rotates beamscan/MVDR/MUSIC/Root-MUSIC/ESPRIT; X11 overlays + boresight + the active estimator's name in the header (`AoaMergeOp.estimator_idx` → viewer `label_idx`, also always drained) |
 
 Shared helpers: `radar_app/app/graph_params.hpp` (YAML → Params),
@@ -1271,52 +1271,13 @@ DetectionReport/ClusterReport
 `Config` flags (`report_aoa` / `report_detection_idx`) so optional ports
 enter `contract()` only when wired. The SIMO and MIMO apps now align
 `SnapshotGatherOp.is_valid` directly into Beamscan; the estimator-rotation app
-still drains the multi-look mask before its Beamscan-only K=1 slice. MIMO
-smokes are `applications/fmcw/mimo/config/tdm_smoke.yaml` and
-`ddm_smoke.yaml`; the comments in `ddm.yaml` document its optional nonlinear
-code-generator preset for the same DDM binary. Smoke files run log-only, so also
+still drains the multi-look mask before its Beamscan-only K=1 slice. MIMO smokes are the app-named `_smoke.yaml` files under `applications/fmcw/mimo_tdm/config` and `applications/fmcw/mimo_ddm/config`; DDM has separate linear and nonlinear production/smoke pairs. Smoke files run log-only, so also
 run each app's default YAML under a real / `Xvfb` `DISPLAY`: the viz subgraph
 is where the partitioning gap above surfaced.
 
-**Fresh MIMO consolidation (2026-09-16).** The active `mimo` registration now
-points at `applications/fmcw/mimo` and builds `fmcw_mimo_tdm` and
-`fmcw_mimo_ddm`. Both use dense multiplexing-specific front ends followed by
-the clustered sparse angle tail and shared retained-frame dashboard.
-`ddm.yaml` documents how its DDM binary selects the nonlinear correlation path.
-The replaced `applications/fmcw_mimo` C++/Python application is removed;
-Python remains an intentionally empty package stub on HSDK 5.
+**Standalone MIMO apps (updated 2026-09-17).** `APP_mimo_tdm` and `APP_mimo_ddm` point directly at `applications/fmcw/mimo_tdm` and `applications/fmcw/mimo_ddm`. Each builds one same-named Graph binary. DDM defaults to the linear YAML; the nonlinear Zadoff-Chu YAML selects the correlation path through root `ddm.generate_phase_codes`. The former consolidated directory and empty Python stub are removed.
 
-**Fresh SIMO consolidation (2026-09-09).** The active `simo`
-registration now points at `applications/fmcw/simo` and builds two explicitly
-ordered workflows: `fmcw_simo_detect_then_beamform` and
-`fmcw_simo_beamform_then_detect`. They share only `default.yaml` and
-`smoke.yaml`; incompatible CFAR and angle-grid settings live in matching nested
-sections. The sparse path assembles
-`[range, velocity, azimuth, elevation, detection_score]` once and fans the
-matrix out to DBSCAN, reduction, reporting, and visualization; DBSCAN's
-trailing zero epsilon excludes score from its metric. The dense path selects
-CFAR `peak_mode: all` with a per-axis `peak_radius`, suppresses across azimuth,
-elevation, Doppler, and range, and sends each retained N-D maximum directly to reporting and
-visualization without DBSCAN or reduction.
-`FeatureAssemblyOp`'s dense `az`/`el` contract receives
-tick-coherent `PhaseShiftBeamformerOp.az_grid` / `el_grid` tensors rather than
-an application-local stamper or the legacy `CubeAoaLookupOp` computational
-bridge. The old sparse source directory was removed; the old dense source
-directory remains unregistered temporarily for output comparison. The new
-`python/` directory is only a package marker: executable Python variants remain deferred until the
-HSDK 5 Python operator surface is enabled. As of 2026-09-10, the consolidated
-app has a fresh HSDK 5-native Holoviz branch in both workflows: an app-local
-compositor max-projects `cfar_power` and burns the tick-coherent cluster
-overlays, physical range/Doppler axes, and scenario clock into one CUDA RGBA
-frame. Holoviz retains that image between radar ticks, avoiding the geometry
-flicker caused by its current `SafeDefault` handling of slower geometry
-layers. The dashboard plots sparse DBSCAN centroids or dense CFAR peaks and adds a
-right-side 2×2 grid of unconnected
-range, velocity, azimuth, and elevation centroid histories. The HSDK 5 CMake target is
-`holoscan::operators::holoviz`, detected separately from the legacy HSDK 4
-target pair. `default.yaml` enables this branch and `smoke.yaml` disables it.
-The 2026-09-15 peak-mode Python test attempt remains blocked because the EA
-image does not install the `holoscan` Python package (`ModuleNotFoundError`).
+**Standalone SIMO apps (updated 2026-09-17).** `APP_simo_detect_then_beamform` and `APP_simo_beamform_then_detect` point directly at their same-named directories under `applications/fmcw` and build one Graph binary each. Every application owns a production/smoke pair. The sparse app retains detect-then-beamform clustering; the dense app retains full-cube beamform-then-detect N-D peak reporting. Reusable typed loading and derivation helpers live privately under `applications/common/radar_app/simple/simo`; the former consolidated application directory and empty Python stub are removed.
 
 **EA workaround — SDK install component (2026-09-14).** SDK image `7b9cfe3`
 exports `holoscan::operators::holoviz` and builds its shared library, but
@@ -1343,7 +1304,7 @@ stock Holoviz sink and drop-oldest visualization queues. The later single-image
 compositor keeps the independently clocked partition arrangement while making
 the complete annotated frame subject to Holoviz's bounded image hold-last.
 
-**Native typed-config pilot (2026-09-09).** The consolidated SIMO app no
+**Native typed-config pilot (2026-09-09).** The standalone SIMO apps no
 longer uses the EA `radar_app/app/graph_params.hpp` YAML loaders. App-owned
 settings live under one schema-backed `app:` object; HSDK `config_io` loads the
 document once, and each operator block decodes through its locked

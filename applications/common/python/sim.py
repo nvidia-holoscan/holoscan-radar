@@ -9,7 +9,7 @@ over (rx, chirp, fast-time sample), then adds noise. A single-element RX
 array (the default) reduces to the SISO cube; more RX elements produce the
 SIMO / dense-path cube - one ``simulate()`` for both, exactly like the C++
 ``point_target_sim.hpp::simulate()`` it mirrors. Used by
-``ops.SimAdcSourceOp`` so fmcw_siso / fmcw_simo / fmcw_dense_simo share one
+``ops.SimAdcSourceOp`` so fmcw_siso, simo_detect_then_beamform, and fmcw_dense_simo share one
 simulator instance instead of each keeping its own copy.
 """
 

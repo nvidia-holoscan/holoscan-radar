@@ -34,7 +34,7 @@ So output slot `(tx, l)` gathers from interleaved slow-time index `k`. Built on 
 
 **Row copy.** One CUDA block per output row `(tx, rx, l)` cooperatively copies the contiguous `samples` vector. Input layout is `(N_rx, slow_time, samples)`; output layout is `(M_tx, N_rx, L, samples)` with channel-major `(tx, rx)` ordering. The innermost `samples` axis is copied 1:1. Element size selects a 4-, 8-, or 16-byte word copy (`uint32_t` / `uint64_t` / `uint4`) so complex64, complex128, float32, and float64 all take the same path.
 
-**PRI is not applied here.** This operator does not read `FMCWWaveformDescriptor`. The caller must set `waveform.chirp_repetition_interval` on downstream operators to the **per-TX effective PRI** (`M ×` the physical inter-chirp spacing). See `TXSchedule` notes in `OPERATOR_API.md` and `applications/fmcw/mimo` for the simulator split between physical vs effective PRI.
+**PRI is not applied here.** This operator does not read `FMCWWaveformDescriptor`. The caller must set `waveform.chirp_repetition_interval` on downstream operators to the **per-TX effective PRI** (`M ×` the physical inter-chirp spacing). See `TXSchedule` notes in `OPERATOR_API.md` and `applications/fmcw/mimo_tdm` for the simulator split between physical vs effective PRI.
 
 TDM only. There is no DDM path — DDM has no slow-time interleave (`WORKFLOWS.md`).
 

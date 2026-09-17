@@ -190,7 +190,7 @@ radar_add_test(app/test_fmcw_simo_config
     holoscan::feature_assembly_op
     holoscan::detection_reduction_op)
 target_include_directories(test_fmcw_simo_config PRIVATE
-    ${PROJECT_SOURCE_DIR}/applications/fmcw/simo/cpp
+    ${PROJECT_SOURCE_DIR}/applications/common
     ${PROJECT_SOURCE_DIR}/operators)
 target_compile_definitions(test_fmcw_simo_config PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
@@ -214,7 +214,7 @@ radar_add_test(app/test_fmcw_mimo_config
     holoscan::feature_assembly_op
     holoscan::detection_reduction_op)
 target_include_directories(test_fmcw_mimo_config PRIVATE
-    ${PROJECT_SOURCE_DIR}/applications/fmcw/mimo/cpp
+    ${PROJECT_SOURCE_DIR}/applications/common
     ${PROJECT_SOURCE_DIR}/operators)
 target_compile_definitions(test_fmcw_mimo_config PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
@@ -222,7 +222,7 @@ target_compile_definitions(test_fmcw_mimo_config PRIVATE
 radar_add_test(app/test_fmcw_simo_report
     holoscan::radar_app)
 target_include_directories(test_fmcw_simo_report PRIVATE
-    ${PROJECT_SOURCE_DIR}/applications/fmcw/simo/cpp
+    ${PROJECT_SOURCE_DIR}/applications/common
     ${PROJECT_SOURCE_DIR}/operators)
 
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)

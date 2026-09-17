@@ -1,0 +1,138 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+app:
+    waveform: &waveform
+        carrier_frequency: 77.0e9
+        bandwidth: 150.0e6
+        chirp_duration: 20.0e-6
+        sample_rate: 12.8e6
+        chirp_repetition_interval: 25.0e-6
+    cube:
+        num_chirps: 128
+        samples_per_chirp: 256
+    run:
+        num_frames: 250
+        frame_period: 0.12
+        meter_cadence: true
+        meter_log_every: 0
+    visualization:
+        enabled: true
+        window_width: 1280
+        window_height: 720
+        window_title: FMCW SIMO
+        display_rate_hz: 20.0
+        dynamic_range_db: 60.0
+        detection_radius: 0.010
+        history_frames: 120
+        detection_trail_frames: 50
+    rx_array:
+        az_elements: 8
+        el_elements: 8
+        spacing: 0.5
+    targets:
+        - range: 245.0
+          azimuth: 0.15
+          elevation: 0.09
+          velocity:
+              - -6.3375  # x
+              - -1.4129  # y
+              - -0.5494  # z
+          amplitude: 0.8
+        - range: 132.0
+          azimuth: -0.10
+          elevation: -0.12
+          velocity:
+              - 1.5025  # x
+              - -0.3015  # y
+              - 0.1183  # z
+          amplitude: 0.6
+        - range: 22.0
+          azimuth: 0.0
+          elevation: 0.16
+          velocity:
+              - 8.9712  # x
+              - 0.0  # y
+              - 0.7192  # z
+          amplitude: 0.7
+        - range: 117.0
+          azimuth: 0.20
+          elevation: 0.10
+          velocity:
+              - 2.9310  # x
+              - 0.7166  # y
+              - 0.0010  # z
+          amplitude: 0.55
+        - range: 218.0
+          azimuth: 0.17
+          elevation: 0.04
+          velocity:
+              - -4.8577  # x
+              - -1.2600  # y
+              - -0.0800  # z
+          amplitude: 0.7
+    noise_snr_db: 5.0
+
+range_processor:
+    waveform: *waveform
+    # Common options: none, hann, hamming.
+    # See operators/fmcw/fmcw_range_processor_op/README.md.
+    range_window: hann
+clutter_filter:
+    # Options: none, mean_subtraction, single_delay, double_delay.
+    method: mean_subtraction
+    # Match the weighted clutter projection to Doppler analysis.
+    doppler_window: &doppler_window hann
+doppler_processor:
+    waveform: *waveform
+    # Common options: none, hann, hamming.
+    # See operators/fmcw/fmcw_doppler_processor_op/README.md.
+    doppler_window: *doppler_window
+
+
+beamform_then_detect:
+    phase_shift_beamformer:
+        angle_convention:
+            # Common options: radar_boresight, direction_cosine, custom.
+            # See operators/angle_estimation/phase_shift_beamformer_op/README.md.
+            preset: direction_cosine
+        # Scan coordinates accept an explicit array or inclusive {min, max, step}.
+        # Units follow angle_convention: dimensionless u/v here.
+        az_coordinates: {min: -0.3, max: 0.3, step: 0.05}
+        el_coordinates: {min: -0.3, max: 0.3, step: 0.05}
+        array_taper:
+            # Common options: none, hann, taylor.
+            # See operators/angle_estimation/phase_shift_beamformer_op/README.md.
+            type: taylor
+            sidelobe_attenuation_db: 35.0
+    cfar_detector:
+        # Options: CA, GO, SO, OS.
+        cfar_variant: CA
+        guard_cells:
+            - 3  # Doppler
+            - 3  # Range
+        training_cells:
+            - 3  # Doppler
+            - 3  # Range
+        pfa: 1.0e-9
+        # Options: none, range_doppler, all.
+        peak_mode: all
+        peak_radius:
+            - 2  # Azimuth
+            - 2  # Elevation
+            - 2  # Doppler
+            - 2  # Range
+        nci_axes: []
+    feature_assembly:
+        # Common options: range, velocity, score.
+        # See operators/detection/feature_assembly_op/README.md.
+        features:
+            - range
+            - velocity
+            - az
+            - el
+            - score
+            - range_bin
+            - doppler_bin
+            - az_bin
+            - el_bin

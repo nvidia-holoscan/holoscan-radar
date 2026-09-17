@@ -5,7 +5,7 @@ angle path, where a beam is formed for *every* range–Doppler cell to build a
 Range–Doppler–Angle (RDA) cube, and detection runs on that cube. It runs with an
 optional Holoviz display or fully headless (log-only).
 
-This is a sibling to [`fmcw_simo`](../fmcw_simo), which demonstrates the
+This is a sibling to [`simo_detect_then_beamform`](../fmcw/simo_detect_then_beamform), which demonstrates the
 **sparse** path (detect first on the RD map, estimate angle only at detections
 via `BeamscanEstimatorOp` + `SnapshotGatherOp`). The two are kept separate on
 purpose: the dense path diverges from the sparse path in both the detect+angle

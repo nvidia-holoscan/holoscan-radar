@@ -101,7 +101,7 @@ plots:
   enable: true
   window: 120
 
-# RX URA (uniform rectangular array) in the y-z plane, matching fmcw_simo.
+# RX URA (uniform rectangular array) in the y-z plane, matching simo_detect_then_beamform.
 rx_array:
   az_elements: 8
   el_elements: 8
