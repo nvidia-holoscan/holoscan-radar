@@ -5,12 +5,10 @@
 
 #include <algorithm>
 #include <cmath>
-#include <complex>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <iterator>
 #include <limits>
-#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -36,9 +34,9 @@
 #include "radar_app/app/run_config.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/dsp/ddm_code_generators.hpp"
 #include "radar_common/dsp/mimo_coherent_compensation_stage.hpp"
 #include "radar_common/dsp/virtual_array.hpp"
-#include "radar_common/math/constants.hpp"
 #include "radar_common/math/uniform_grid.hpp"
 #include "radar_common/sim/array_builders.hpp"
 #include "radar_common/sim/scene.hpp"
@@ -379,63 +377,6 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored,
   return result;
 }
 
-inline void fill_sin_phase_codes(DDMCodeDescriptor* code,
-                                 int64_t num_chirps) {
-  code->doppler_offsets.clear();
-  code->guard_bands = 0;
-  code->phase_codes.assign(
-      static_cast<std::size_t>(code->num_tx * num_chirps), {0.0, 0.0});
-  for (int64_t tx = 0; tx < code->num_tx; ++tx) {
-    for (int64_t chirp = 0; chirp < num_chirps; ++chirp) {
-      const double phase =
-          std::sin(0.7 * static_cast<double>(chirp) +
-                   static_cast<double>(tx)) *
-          2.0;
-      code->phase_codes[static_cast<std::size_t>(
-          tx * num_chirps + chirp)] =
-          {std::cos(phase), std::sin(phase)};
-    }
-  }
-}
-
-inline void fill_zadoff_chu_phase_codes(DDMCodeDescriptor* code,
-                                        int64_t num_chirps) {
-  std::vector<int64_t> roots;
-  for (int64_t root = 1;
-       root < num_chirps &&
-       static_cast<int64_t>(roots.size()) < code->num_tx;
-       ++root) {
-    if (std::gcd(root, num_chirps) == 1) {
-      roots.push_back(root);
-    }
-  }
-  if (static_cast<int64_t>(roots.size()) < code->num_tx) {
-    throw std::runtime_error(
-        "app.ddm.generate_phase_codes requires one distinct coprime "
-        "Zadoff-Chu root per TX; increase app.cube.num_chirps");
-  }
-  code->doppler_offsets.clear();
-  code->guard_bands = 0;
-  code->phase_codes.assign(
-      static_cast<std::size_t>(code->num_tx * num_chirps), {0.0, 0.0});
-  const bool odd = num_chirps % 2 != 0;
-  for (int64_t tx = 0; tx < code->num_tx; ++tx) {
-    const double root =
-        static_cast<double>(roots[static_cast<std::size_t>(tx)]);
-    for (int64_t chirp = 0; chirp < num_chirps; ++chirp) {
-      const double k = static_cast<double>(chirp);
-      const double phase =
-          odd ? -kPi * root * k * (k + 1.0) /
-                    static_cast<double>(num_chirps)
-              : -kPi * root * k * k /
-                    static_cast<double>(num_chirps);
-      code->phase_codes[static_cast<std::size_t>(
-          tx * num_chirps + chirp)] =
-          {std::cos(phase), std::sin(phase)};
-    }
-  }
-}
-
 inline int64_t snapshot_count(const std::vector<int64_t>& window) {
   const int64_t doppler_half = window.empty() ? 0 : window[0];
   const int64_t range_half =
@@ -758,15 +699,13 @@ inline DdmConfig load_ddm_config(const std::filesystem::path& path) {
           : std::nullopt;
   if (generator.has_value()) {
     reject_authored(document, "/ddm_dense_demultiplex/ddm_code");
-    demultiplex_baseline.ddm_code.num_tx =
-        app_params->tx_array.num_tx;
     if (*generator == "zadoff_chu" || *generator == "zc") {
-      fill_zadoff_chu_phase_codes(
-          &demultiplex_baseline.ddm_code,
+      demultiplex_baseline.ddm_code = make_zadoff_chu_ddm_code(
+          app_params->tx_array.num_tx,
           common.runtime.scene.num_chirps);
     } else if (*generator == "sin") {
-      fill_sin_phase_codes(
-          &demultiplex_baseline.ddm_code,
+      demultiplex_baseline.ddm_code = make_sinusoidal_ddm_stress_code(
+          app_params->tx_array.num_tx,
           common.runtime.scene.num_chirps);
     } else {
       throw std::runtime_error(

@@ -11,6 +11,7 @@
 add_library(radar_common STATIC
     radar_common/tensor/tensor_utils.cpp
     radar_common/dsp/window.cpp
+    radar_common/dsp/ddm_code_generators.cpp
     radar_common/dsp/angle_convention.cpp
     radar_common/dsp/steering_weights.cpp
     radar_common/dsp/spatial_smoothing.cpp
