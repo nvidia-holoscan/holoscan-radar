@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include <holoscan/core/connection_options.hpp>
@@ -20,6 +21,8 @@
 
 namespace {
 
+namespace radar_testing = holoscan::radar::testing;
+
 using holoscan::radar::DopplerNotchOp;
 using holoscan::radar::DopplerNotchParams;
 using holoscan::radar::MaxTensorExtents;
@@ -27,10 +30,8 @@ using holoscan::radar::complex_dtype;
 using holoscan::radar::real_dtype;
 using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::
-    run_dual_in_single_out_operator_graph_result;
-using holoscan::radar::testing::
-    run_exact_override_dual_in_single_out_operator_graph_result;
+using radar_testing::run_dual_in_single_out_operator_graph_result;
+using radar_testing::run_exact_override_dual_in_single_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 
 constexpr int64_t kDoppler = 5;

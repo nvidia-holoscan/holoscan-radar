@@ -71,9 +71,7 @@ def make_scenario(
     live_override: bool = False,
 ) -> NotchScenario:
     size = _SIZE_BY_ID[size_id]
-    variant = ("cosine" if cosine else "hard") + (
-        "_mimo" if rank4 else "_siso"
-    )
+    variant = ("cosine" if cosine else "hard") + ("_mimo" if rank4 else "_siso")
     if live_override:
         variant += "_live"
     return NotchScenario(
@@ -106,9 +104,7 @@ def build_size_sweep(size_ids: list[str]) -> list[NotchScenario]:
 
 def build_default_matrix() -> list[NotchScenario]:
     result = build_size_sweep(["xs", "md", "xl"])
-    result.append(
-        make_scenario("md", rank4=True, cosine=True, live_override=True)
-    )
+    result.append(make_scenario("md", rank4=True, cosine=True, live_override=True))
     return result
 
 
@@ -126,9 +122,7 @@ def _base_row(scenario: NotchScenario) -> ResultRow:
         size_id=scenario.size_id,
         input_shape=input_shape(scenario),
         k=scenario.num_doppler,
-        notes=(
-            "center_velocity live override" if scenario.live_override else ""
-        ),
+        notes=("center_velocity live override" if scenario.live_override else ""),
     )
 
 
@@ -149,9 +143,7 @@ def _run_graph(
 ) -> None:
     class NotchPerfApp(Application):
         def compose(self) -> None:
-            maps = single_map(
-                make_iq_cube_device(input_shape(scenario)), "rd_maps"
-            )
+            maps = single_map(make_iq_cube_device(input_shape(scenario)), "rd_maps")
             axis_host = np.linspace(
                 -20.0,
                 20.0,
@@ -190,9 +182,7 @@ def _run_graph(
                     value=1.0,
                     name="center_override",
                 )
-                self.add_flow(
-                    override, op, {("output", "center_velocity")}
-                )
+                self.add_flow(override, op, {("output", "center_velocity")})
             sink = PerfTerminalSinkOp(self, collector=collector, name="sink")
             self.add_flow(op, sink, {("rd_maps_out", "input")})
 
@@ -209,9 +199,7 @@ def run_scenario(
     def run_rep(_rep: int, run_plan: RunPlan) -> TimingCollector:
         collector = TimingCollector()
         collector.t_construct = now()
-        _run_graph(
-            scenario, collector, run_plan.total_frames, run_plan.override_at
-        )
+        _run_graph(scenario, collector, run_plan.total_frames, run_plan.override_at)
         return collector
 
     samples = collect_scenario_samples(settings, plan, run_rep)
