@@ -9,6 +9,7 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "config.hpp"  // NOLINT(build/include_subdir): app-private header
@@ -26,20 +27,30 @@ std::filesystem::path config_path(const char* name) {
 class MutatedConfig {
  public:
   MutatedConfig(const char* source_name, const std::string& old_text,
-                const std::string& new_text) {
+                const std::string& new_text)
+      : MutatedConfig(
+            source_name,
+            std::vector<std::pair<std::string, std::string>>{
+                {old_text, new_text}}) {}
+
+  MutatedConfig(
+      const char* source_name,
+      const std::vector<std::pair<std::string, std::string>>& replacements) {
     std::ifstream input(config_path(source_name));
     if (!input) {
       throw std::runtime_error("cannot read source config");
     }
     std::string contents{std::istreambuf_iterator<char>(input),
                          std::istreambuf_iterator<char>()};
-    const std::size_t position = contents.find(old_text);
-    if (position == std::string::npos ||
-        contents.find(old_text, position + old_text.size()) !=
-            std::string::npos) {
-      throw std::runtime_error("config mutation anchor must occur once");
+    for (const auto& [old_text, new_text] : replacements) {
+      const std::size_t position = contents.find(old_text);
+      if (position == std::string::npos ||
+          contents.find(old_text, position + old_text.size()) !=
+              std::string::npos) {
+        throw std::runtime_error("config mutation anchor must occur once");
+      }
+      contents.replace(position, old_text.size(), new_text);
     }
-    contents.replace(position, old_text.size(), new_text);
     path_ = std::filesystem::temp_directory_path() /
             ("holoscan_radar_mimo_config_" + std::to_string(next_id_++) +
              ".yaml");
@@ -178,9 +189,24 @@ TEST(FmcwMimoConfig, DecodesLinearDdmSmoke) {
   expect_common_geometry_and_tail(config, 5, 16);
 }
 
-TEST(FmcwMimoConfig, DecodesNonlinearDdmPhaseCodes) {
-  const auto config =
-      mimo::load_ddm_config(config_path("ddm_phase_codes.yaml"));
+TEST(FmcwMimoConfig, DecodesDocumentedNonlinearDdmPreset) {
+  const MutatedConfig preset(
+      "ddm.yaml",
+      std::vector<std::pair<std::string, std::string>>{
+          {"    targets:\n",
+           "    ddm:\n"
+           "        generate_phase_codes: zadoff_chu\n"
+           "    targets:\n"},
+          {"    doppler_window: hann\n", "    doppler_window: none\n"},
+          {"ddm_dense_demultiplex:\n"
+           "    ddm_code:\n"
+           "        num_tx: 2\n"
+           "        doppler_offsets:\n"
+           "            - 0.0  # TX 0, normalized Doppler\n"
+           "            - 0.5  # TX 1, normalized Doppler\n"
+           "        guard_bands: 4\n",
+           "ddm_dense_demultiplex: {}\n"}});
+  const auto config = mimo::load_ddm_config(preset.path());
 
   EXPECT_TRUE(config.correlate);
   EXPECT_TRUE(config.doppler_offsets.empty());
@@ -189,10 +215,38 @@ TEST(FmcwMimoConfig, DecodesNonlinearDdmPhaseCodes) {
   EXPECT_EQ(config.ddm_code.guard_bands, 0);
   EXPECT_TRUE(config.doppler_params->waveform.is_valid());
   EXPECT_DOUBLE_EQ(config.notch_params->stop_half_width, 0.61);
-  EXPECT_DOUBLE_EQ(config.notch_params->transition_width, 0.61);
+  EXPECT_DOUBLE_EQ(config.notch_params->transition_width, 1.22);
   EXPECT_EQ(config.extents.max_doppler_bins, 128);
   EXPECT_EQ(config.extents.max_detections, 128 * 256);
   expect_common_geometry_and_tail(config, 13, 32);
+}
+
+TEST(FmcwMimoConfig, DecodesNonlinearDdmGeneratorAliases) {
+  for (const char* generator : {"zc", "sin"}) {
+    const MutatedConfig preset(
+        "ddm_smoke.yaml",
+        std::vector<std::pair<std::string, std::string>>{
+            {"    targets:\n",
+             "    ddm:\n"
+             "        generate_phase_codes: " +
+                 std::string(generator) + "\n"
+                 "    targets:\n"},
+            {"ddm_dense_demultiplex:\n"
+             "    ddm_code:\n"
+             "        num_tx: 2\n"
+             "        doppler_offsets:\n"
+             "            - 0.0\n"
+             "            - 0.5\n"
+             "        guard_bands: 4\n",
+             "ddm_dense_demultiplex: {}\n"}});
+    const auto config = mimo::load_ddm_config(preset.path());
+
+    EXPECT_TRUE(config.correlate);
+    EXPECT_EQ(config.ddm_code.num_tx, 2);
+    EXPECT_EQ(config.ddm_code.phase_codes.size(), 2U * 64U);
+    EXPECT_TRUE(config.ddm_code.doppler_offsets.empty());
+    EXPECT_EQ(config.ddm_code.guard_bands, 0);
+  }
 }
 
 TEST(FmcwMimoConfig, RejectsWrongLoaderSection) {
@@ -262,9 +316,10 @@ TEST(FmcwMimoConfig, RejectsDdmClutterFilter) {
 
 TEST(FmcwMimoConfig, RejectsMalformedSchemeSpecificConfig) {
   const MutatedConfig config(
-      "ddm_phase_codes.yaml", "ddm_dense_demultiplex: {}",
-      "ddm_dense_demultiplex: {ddm_code: {num_tx: 2, "
-      "doppler_offsets: [0.0, 0.5]}}");
+      "ddm.yaml", "    targets:\n",
+      "    ddm:\n"
+      "        generate_phase_codes: zadoff_chu\n"
+      "    targets:\n");
   EXPECT_THROW(mimo::load_ddm_config(config.path()), std::runtime_error);
 }
 

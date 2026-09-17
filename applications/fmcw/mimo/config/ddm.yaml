@@ -76,6 +76,15 @@ app:
               - -0.0747  # z
           amplitude: 0.7
     noise_snr_db: 18.0
+    # Nonlinear DDM preset (same binary):
+    # 1. Uncomment `ddm` below. `zadoff_chu` is the low-crosstalk preset;
+    #    `sin` intentionally creates higher crosstalk for stress testing.
+    # 2. Replace the root `ddm_dense_demultiplex` mapping below with
+    #    `ddm_dense_demultiplex: {}` so the loader can inject generated codes.
+    # 3. Optionally set `doppler_processor.doppler_window: none` to better
+    #    preserve periodic code correlation. Notch and CFAR tuning is separate.
+    # ddm:
+    #     generate_phase_codes: zadoff_chu
 
 range_processor:
     waveform: *waveform

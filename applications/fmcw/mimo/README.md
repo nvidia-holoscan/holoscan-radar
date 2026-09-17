@@ -117,8 +117,6 @@ surface does not retain an avoidable center-Doppler clutter residual.
 - `cpp/custom_ops.hpp` contains the app-specific MIMO ADC sources.
 - `config/tdm.yaml` and `config/ddm.yaml` are display-enabled scenarios.
 - `config/tdm_smoke.yaml` and `config/ddm_smoke.yaml` are short headless runs.
-- `config/ddm_phase_codes.yaml` exercises nonlinear code correlation through
-  the same DDM executable and metadata mode.
 - `python/` is an intentionally empty package stub; HSDK 5 Python application
   execution remains deferred.
 
@@ -141,12 +139,7 @@ The HoloHub application name is `mimo`, with exactly `tdm` and `ddm` modes:
 ```
 
 Each executable defaults to its staged display-enabled YAML and accepts one
-alternate config path. The nonlinear phase-code scenario is still DDM:
-
-```bash
-./build/applications/fmcw/mimo/cpp/fmcw_mimo_ddm \
-  applications/fmcw/mimo/config/ddm_phase_codes.yaml
-```
+alternate config path.
 
 For headless smoke runs:
 
@@ -157,8 +150,8 @@ For headless smoke runs:
   applications/fmcw/mimo/config/ddm_smoke.yaml
 ```
 
-`tdm.yaml`, `ddm.yaml`, and `ddm_phase_codes.yaml` enable the display and need
-a working `DISPLAY`. The smoke configs disable visualization.
+`tdm.yaml` and `ddm.yaml` enable the display and need a working `DISPLAY`. The
+smoke configs disable visualization.
 
 ## Configuration
 
@@ -173,11 +166,15 @@ extents. These derived fields must not be authored.
 
 Linear DDM is configured by
 `ddm_dense_demultiplex.ddm_code.doppler_offsets` and `guard_bands`.
-`ddm_phase_codes.yaml` instead sets
-`app.ddm.generate_phase_codes: zadoff_chu`; the loader generates the code,
-injects it into the dense demultiplexer, and selects its nonlinear correlation
-path. `sin` remains available as a code-generator stress case. The alternate
-file does not add a third application mode or binary.
+A single comment block at the end of `ddm.yaml`'s `app` section groups the
+nonlinear preset instructions: uncomment `app.ddm.generate_phase_codes` with
+`zadoff_chu` (low crosstalk) or `sin` (stress case), then replace the explicit
+linear code descriptor with `ddm_dense_demultiplex: {}` so the loader generates
+and injects the codes. The app owns these preset names; `radar_common` owns the
+host-only code recipes so transmit simulation and demultiplexing receive one
+completed `DDMCodeDescriptor`. Rectangular Doppler weighting is recommended for
+periodic code correlation; notch and CFAR settings remain independent
+deployment tuning.
 
 All DDM configs express the post-demux notch in physical m/s:
 `center_velocity` selects the stopband center, `stop_half_width` is fully

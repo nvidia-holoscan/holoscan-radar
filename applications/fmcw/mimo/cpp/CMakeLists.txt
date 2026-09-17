@@ -47,8 +47,7 @@ foreach(_config IN ITEMS
         tdm.yaml
         tdm_smoke.yaml
         ddm.yaml
-        ddm_smoke.yaml
-        ddm_phase_codes.yaml)
+        ddm_smoke.yaml)
     configure_file(../config/${_config}
         ${CMAKE_CURRENT_BINARY_DIR}/${_config} COPYONLY)
 endforeach()

@@ -1273,8 +1273,8 @@ enter `contract()` only when wired. The SIMO and MIMO apps now align
 `SnapshotGatherOp.is_valid` directly into Beamscan; the estimator-rotation app
 still drains the multi-look mask before its Beamscan-only K=1 slice. MIMO
 smokes are `applications/fmcw/mimo/config/tdm_smoke.yaml` and
-`ddm_smoke.yaml`; `ddm_phase_codes.yaml` is an alternate nonlinear-correlation
-config for the DDM binary, not a third mode. Smoke files run log-only, so also
+`ddm_smoke.yaml`; the comments in `ddm.yaml` document its optional nonlinear
+code-generator preset for the same DDM binary. Smoke files run log-only, so also
 run each app's default YAML under a real / `Xvfb` `DISPLAY`: the viz subgraph
 is where the partitioning gap above surfaced.
 
@@ -1282,7 +1282,7 @@ is where the partitioning gap above surfaced.
 points at `applications/fmcw/mimo` and builds `fmcw_mimo_tdm` and
 `fmcw_mimo_ddm`. Both use dense multiplexing-specific front ends followed by
 the clustered sparse angle tail and shared retained-frame dashboard.
-`ddm_phase_codes.yaml` selects the DDM binary's nonlinear correlation path.
+`ddm.yaml` documents how its DDM binary selects the nonlinear correlation path.
 The replaced `applications/fmcw_mimo` C++/Python application is removed;
 Python remains an intentionally empty package stub on HSDK 5.
 
