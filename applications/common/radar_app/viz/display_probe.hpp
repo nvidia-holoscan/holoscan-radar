@@ -3,12 +3,9 @@
 
 #pragma once
 
-// Unified display probe for run_fmcw_app visualize downgrade.
-// Prefer Holoviz when present; otherwise X11; otherwise always false.
+// Display probe for the HSDK 5 dashboard.
 
-#if defined(HOLOSCAN_RADAR_HAS_HOLOVIZ)
-#include "radar_app/viz/display.hpp"
-#elif defined(HOLOSCAN_RADAR_HAS_X11)
+#if defined(HOLOSCAN_RADAR_HAS_X11)
 #include "radar_app/viz/x11_display.hpp"
 #else
 namespace holoscan::radar::app {

@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <yaml-cpp/yaml.h>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <stdexcept>
@@ -13,7 +14,6 @@
 #include <holoscan/config/io.hpp>
 
 #include "radar_app/simple/simo/config.hpp"
-#include "radar_app/app/graph_params.hpp"
 
 namespace {
 
@@ -35,14 +35,6 @@ void expect_smoke_matches_production(const char* production_name,
   targets.push_back(expected["app"]["targets"][0]);
   expected["app"]["targets"] = targets;
   EXPECT_EQ(YAML::Dump(expected), YAML::Dump(smoke));
-}
-
-void expect_grid_near(const std::vector<double>& actual,
-                      const std::vector<double>& expected) {
-  ASSERT_EQ(actual.size(), expected.size());
-  for (std::size_t index = 0; index < expected.size(); ++index) {
-    EXPECT_NEAR(actual[index], expected[index], 1.0e-14);
-  }
 }
 
 TEST(FmcwSimoConfig, DecodesDetectThenBeamformSmoke) {
@@ -197,35 +189,6 @@ TEST(FmcwSimoConfig, RejectsInvalidScanCoordinateRangeMapping) {
   EXPECT_THROW(
       simo::normalize_scan_coordinate_field(std::move(*document), "/grid"),
       std::runtime_error);
-}
-
-TEST(GraphParamsScanCoordinates, LoadsBothYamlFormsForAllScanOperators) {
-  const YAML::Node node = YAML::Load(R"(
-az_coordinates: {min: -0.2, max: 0.2, step: 0.1}
-el_coordinates: [0.0]
-)");
-  const std::vector<double> expected_az{-0.2, -0.1, 0.0, 0.1, 0.2};
-  const std::vector<double> expected_el{0.0};
-
-  radar::BeamscanParams beamscan;
-  radar::app::load_beamscan_params(node, &beamscan);
-  expect_grid_near(beamscan.az_coordinates, expected_az);
-  EXPECT_EQ(beamscan.el_coordinates, expected_el);
-
-  radar::PhaseShiftBeamformerParams beamformer;
-  radar::app::load_phase_shift_beamformer_params(node, &beamformer);
-  expect_grid_near(beamformer.az_coordinates, expected_az);
-  EXPECT_EQ(beamformer.el_coordinates, expected_el);
-
-  radar::MVDRParams mvdr;
-  radar::app::load_mvdr_params(node, &mvdr);
-  expect_grid_near(mvdr.az_coordinates, expected_az);
-  EXPECT_EQ(mvdr.el_coordinates, expected_el);
-
-  radar::MUSICParams music;
-  radar::app::load_music_params(node, &music);
-  expect_grid_near(music.az_coordinates, expected_az);
-  EXPECT_EQ(music.el_coordinates, expected_el);
 }
 
 }  // namespace

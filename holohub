@@ -9,8 +9,8 @@
 #
 # Usage:
 #   ./holohub run-container
-#   ./holohub build fmcw_siso
-#   ./holohub run   fmcw_siso --language python
+#   ./holohub build simo_detect_then_beamform
+#   ./holohub run   simo_detect_then_beamform
 #   ./holohub test
 #   ./holohub --help
 #

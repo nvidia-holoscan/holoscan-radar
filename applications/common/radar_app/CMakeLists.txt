@@ -9,10 +9,7 @@
 # components use separate compiled targets and expose headers under
 # "radar_app/...".
 #
-# Holoviz-backed pieces stay optional. When Holoviz is absent but X11 is
-# present ([EA HSDK5 ONLY]), the Holoviz-free RD raster + X11RdViewerOp still
-# build so Graph smokes / future Graph-ported apps can show a live RD window.
-# Report sinks always build.
+# The HSDK 5 dashboard stays optional; report sinks always build.
 add_library(radar_app INTERFACE)
 add_library(holoscan::radar_app ALIAS radar_app)
 
@@ -47,29 +44,6 @@ if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
 
     set_property(TARGET fmcw_dashboard
         PROPERTY POSITION_INDEPENDENT_CODE ON)
-endif()
-
-# RdMapToImageOp's dB mapping needs nvcc (CUB sort + column medians). Build
-# the kernels whenever any live RD path is available (Holoviz and/or X11).
-if(HOLOSCAN_RADAR_HAS_RD_LIVE)
-    add_library(radar_app_viz_kernels STATIC viz/viz_kernels.cu)
-    add_library(holoscan::radar_app_viz_kernels ALIAS radar_app_viz_kernels)
-
-    target_include_directories(radar_app_viz_kernels
-        PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/applications/common>)
-
-    target_link_libraries(radar_app_viz_kernels PUBLIC CUDA::cudart)
-
-    set_property(TARGET radar_app_viz_kernels
-        PROPERTY POSITION_INDEPENDENT_CODE ON)
-
-    target_link_libraries(radar_app INTERFACE
-        holoscan::radar_app_viz_kernels)
-endif()
-
-if(HOLOSCAN_RADAR_HAS_HOLOVIZ)
-    target_link_libraries(radar_app INTERFACE holoscan::viz)
-    target_compile_definitions(radar_app INTERFACE HOLOSCAN_RADAR_HAS_HOLOVIZ=1)
 endif()
 
 if(HOLOSCAN_RADAR_HAS_X11)

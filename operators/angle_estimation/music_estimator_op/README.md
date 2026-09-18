@@ -203,7 +203,7 @@ ctest --test-dir build -R test_music_estimator --output-on-failure
 
 ## Usage
 
-`array_geometry` is usually built in the app and applied with `set_params` (the `fmcw_aoa_estimators` demo does that). Other fields match `MUSICParams` / YAML `from_config`.
+`array_geometry` is usually built by the caller and applied with `set_params`. Other fields match `MUSICParams` / YAML `from_config`.
 
 ```yaml
 music_estimator:

@@ -41,15 +41,14 @@ holoscan_radar_operators_ported(_HOLOSCAN_RADAR_PKG_MIMO
     virtual_array_assembly_op)
 
 set(_HOLOSCAN_RADAR_PKG_APPLICATIONS)
-if(HOLOSCAN_RADAR_HAS_HOLOVIZ AND _HOLOSCAN_RADAR_PKG_FMCW_CHAIN)
+if(_HOLOSCAN_RADAR_PKG_FMCW_CHAIN)
     list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS
-        fmcw_aoa_estimators
-        fmcw_siso)
-endif()
-if(HOLOSCAN_RADAR_HAS_RD_LIVE AND _HOLOSCAN_RADAR_PKG_FMCW_CHAIN)
-    list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS simo)
+        simo_detect_then_beamform
+        simo_beamform_then_detect)
     if(_HOLOSCAN_RADAR_PKG_MIMO)
-        list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS mimo)
+        list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS
+            mimo_tdm
+            mimo_ddm)
     endif()
 endif()
 

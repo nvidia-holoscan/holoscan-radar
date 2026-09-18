@@ -27,15 +27,9 @@ devcontainer startup, `holohub` commands, and the required pre-GA cleanup.
 ## Quick Start
 
 ```bash
-# Run the C++ demo application (synthetic SISO FMCW chain)
-./holohub run fmcw_siso
+# Run the detect-then-beamform SIMO application
+./holohub run simo_detect_then_beamform
 ```
-
-**[EA HSDK5 ONLY]** On this branch the demo applications do not build: they
-need Holoviz (absent from the EA package) and the FMCW range/Doppler operators,
-which are not ported yet. Build and run the C++ test suite instead — see
-[`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md) for the port state
-and the working `cmake` / `ctest` invocations.
 
 ---
 
@@ -107,12 +101,10 @@ either side.
 
 ### App-support library (`radar_app`)
 
-Report + Holoviz visualization operators reused across the example apps
-(`DetectionReportOp`, `RollingPlotOp`, `BoresightViewOp`,
-`ClusterOverlayOp`, `RdMapToImageOp`, `RdChannelSliceOp`, `NullSinkOp`,
-`CadenceMeter`) — see
-[`applications/common/README.md`](applications/common/README.md). Also bound
-to Python; every `applications/fmcw_*` demo uses them from either language.
+Graph lifecycle, analytic sources, report sinks, typed application loaders,
+and the optional HSDK 5 dashboard reused by the four standalone FMCW apps —
+see [`applications/common/README.md`](applications/common/README.md).
+The report sinks remain available to Python operator tests.
 
 ### Namespace
 
@@ -161,8 +153,9 @@ class MyApp : public holoscan::Application {
 int main() { holoscan::make_application<MyApp>()->run(); }
 ```
 
-See [`applications/fmcw_siso`](applications/fmcw_siso) for the
-complete example, including the synthetic ADC source and peak reporting.
+See [`applications/fmcw/simo_detect_then_beamform`](applications/fmcw/simo_detect_then_beamform)
+for a complete graph with a synthetic ADC source, detection, angle estimation,
+clustering, and reporting.
 
 ### Python
 
@@ -194,9 +187,8 @@ self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
 self.add_flow(clutter, doppler, {("range_profiles_out", "range_profiles")})
 ```
 
-See [`applications/fmcw_siso/python`](applications/fmcw_siso/python) for the
-complete example. Every `applications/fmcw_*` app has a Python variant with
-the same graph as its C++ counterpart.
+The standalone applications are currently C++ Graph applications. Python
+bindings remain available for the reusable signal-processing operators.
 
 ---
 

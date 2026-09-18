@@ -164,8 +164,7 @@ flowchart TD
 > itself via the `az` / `el` feature tokens + optional
 > `az_grid` / `el_grid` inputs, so the direct
 > `CFAR → FeatureAssemblyOp` edge carries the dense path with no angle-lookup
-> adapter. (`fmcw_dense_simo`'s app-local `CubeAoaLookupOp` predates S4 and can
-> be dropped at leisure.)
+> adapter.
 
 **Sparse angle path — angle-then-cluster:**
 

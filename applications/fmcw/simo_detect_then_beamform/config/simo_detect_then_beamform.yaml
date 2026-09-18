@@ -152,4 +152,3 @@ detect_then_beamform:
             - 1.0  # Score
             - 0.0  # Range bin (ignored)
             - 0.0  # Doppler bin (ignored)
-

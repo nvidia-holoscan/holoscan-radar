@@ -185,33 +185,6 @@ except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
     TDMSparseCompensationOpF32 = None  # type: ignore[misc, assignment]
     TDMSparseCompensationOpF64 = None  # type: ignore[misc, assignment]
 
-# Holoviz-backed radar_app symbols are absent when Holoviz is gated off
-# ([EA HSDK5 ONLY]); report sinks above still import.
-try:
-    from .radar_app import BoresightViewOp  # noqa: F401
-    from .radar_app import (
-        ClusterOverlayOp,
-        PanelRect,
-        RdAngleMaxOp,
-        RdChannelSliceOp,
-        RdMapToImageOp,
-        RollingPlotOp,
-        cluster_palette,
-        gui_available,
-        make_turbo_lut,
-    )
-except ImportError:  # pragma: no cover - Holoviz-gated EA builds
-    BoresightViewOp = None  # type: ignore[misc, assignment]
-    ClusterOverlayOp = None  # type: ignore[misc, assignment]
-    PanelRect = None  # type: ignore[misc, assignment]
-    RdAngleMaxOp = None  # type: ignore[misc, assignment]
-    RdChannelSliceOp = None  # type: ignore[misc, assignment]
-    RdMapToImageOp = None  # type: ignore[misc, assignment]
-    RollingPlotOp = None  # type: ignore[misc, assignment]
-    cluster_palette = None  # type: ignore[misc, assignment]
-    gui_available = None  # type: ignore[misc, assignment]
-    make_turbo_lut = None  # type: ignore[misc, assignment]
-
 # Convenience aliases: bare name → single precision (matches C++ demo apps).
 BeamscanEstimatorOp = BeamscanEstimatorOpF32
 CFARDetectorOp = CFARDetectorOpF32
@@ -251,7 +224,6 @@ __all__ = [
     "BeamscanEstimatorOp",
     "BeamscanEstimatorOpF32",
     "BeamscanEstimatorOpF64",
-    "BoresightViewOp",
     "CFARDetectorOp",
     "CFARDetectorOpF32",
     "CFARDetectorOpF64",
@@ -261,7 +233,6 @@ __all__ = [
     "ClusterDBSCANOp",
     "ClusterDBSCANOpF32",
     "ClusterDBSCANOpF64",
-    "ClusterOverlayOp",
     "ClutterFilterMethod",
     "ClutterFilterOp",
     "ClutterFilterOpF32",
@@ -315,14 +286,10 @@ __all__ = [
     "MultiplexingScheme",
     "NullSinkOp",
     "OverlapPolicy",
-    "PanelRect",
     "PeakInterpolation",
     "PhaseShiftBeamformerOp",
     "PhaseShiftBeamformerOpF32",
     "PhaseShiftBeamformerOpF64",
-    "RdAngleMaxOp",
-    "RdChannelSliceOp",
-    "RdMapToImageOp",
     "RepresentativePolicy",
     "RootMUSICEstimatorOp",
     "RootMUSICEstimatorOpF32",
@@ -330,7 +297,6 @@ __all__ = [
     "ESPRITEstimatorOp",
     "ESPRITEstimatorOpF32",
     "ESPRITEstimatorOpF64",
-    "RollingPlotOp",
     "ScoreMethod",
     "ShiftInvariantSubarrayPair",
     "SignedAxis",
@@ -353,10 +319,7 @@ __all__ = [
     "build_go_alpha_lut",
     "build_so_alpha_lut",
     "build_os_alpha_lut",
-    "cluster_palette",
-    "gui_available",
     "make_device_tensor",
-    "make_turbo_lut",
 ]
 
 _matx_atexit_installed = False

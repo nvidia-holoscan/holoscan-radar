@@ -13,13 +13,6 @@
 
 include(CheckCXXSourceCompiles)
 
-# Holoviz — visualization library + HolovizOp. Required by demo apps and the
-# radar_app viz/ helpers; report sinks (NullSinkOp, …) do not need it.
-set(HOLOSCAN_RADAR_HAS_HOLOVIZ FALSE)
-if(TARGET holoscan::viz AND TARGET holoscan::ops::holoviz)
-    set(HOLOSCAN_RADAR_HAS_HOLOVIZ TRUE)
-endif()
-
 # The pinned main-5x SDK exports the rewritten Graph-native operator as one
 # target. Keep this separate from the 4.x pair above: existing demos still
 # include the old Holoviz API, while the consolidated SIMO app starts fresh on
@@ -40,14 +33,6 @@ if(TARGET holoscan::operators::holoviz)
     unset(_HOLOSCAN_RADAR_HSDK5_HOLOVIZ_INCLUDE_DIRS)
 endif()
 
-if(HOLOSCAN_RADAR_HAS_HOLOVIZ)
-    message(STATUS "Holoviz: found (demo apps + radar_app viz enabled)")
-else()
-    message(STATUS
-        "Holoviz: not found (holoscan::viz / holoscan::ops::holoviz); "
-        "demo applications and Holoviz-backed radar_app symbols are disabled")
-endif()
-
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     message(STATUS "HSDK 5 Holoviz: found (Graph-native SIMO display enabled)")
 else()
@@ -56,8 +41,7 @@ else()
         "Graph-native SIMO display disabled")
 endif()
 
-# X11 — interim live RD-map viewer when Holoviz is absent (XPutImage stand-in).
-# Uses packages already in the EA image (libx11-dev); no Dockerfile change.
+# X11 is used only to probe whether the HSDK 5 dashboard can open a display.
 set(_HOLOSCAN_RADAR_X11_PROBE_SAVE_LIBS "${CMAKE_REQUIRED_LIBRARIES}")
 set(CMAKE_REQUIRED_LIBRARIES X11)
 check_cxx_source_compiles("
@@ -72,19 +56,9 @@ set(CMAKE_REQUIRED_LIBRARIES "${_HOLOSCAN_RADAR_X11_PROBE_SAVE_LIBS}")
 unset(_HOLOSCAN_RADAR_X11_PROBE_SAVE_LIBS)
 
 if(HOLOSCAN_RADAR_HAS_X11)
-    message(STATUS
-        "X11: found (interim RD live viewer enabled when Holoviz is absent)")
+    message(STATUS "X11: found (dashboard display probing enabled)")
 else()
-    message(STATUS
-        "X11: not found (libX11); interim RD live viewer disabled")
-endif()
-
-# Live RD display is available via Holoviz or the X11 stand-in.
-set(HOLOSCAN_RADAR_HAS_RD_LIVE FALSE)
-if(HOLOSCAN_RADAR_HAS_HOLOVIZ
-   OR HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
-   OR HOLOSCAN_RADAR_HAS_X11)
-    set(HOLOSCAN_RADAR_HAS_RD_LIVE TRUE)
+    message(STATUS "X11: not found (dashboard display probing disabled)")
 endif()
 
 # Python bindings need holoscan::pybind11 (ABI helper) and a ported operator

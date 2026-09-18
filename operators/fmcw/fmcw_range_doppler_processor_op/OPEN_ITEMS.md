@@ -54,8 +54,7 @@ Default matrix: `{noclt, msub} × {xs, md, lg, xl}` plus `md_ch4` noclt.
 `perf_fmcw_doppler_processor` medians — that omits inter-op Holoscan cost on
 the split path (and was the gap this tool closes).
 
-**Decision to make after reviewing the table** (and optional `nsys` of
-`applications/fmcw_siso` split vs fused configs):
+**Decision to make after reviewing the table** (and optional `nsys` of a representative split-versus-fused application graph):
 
 - If the end-to-end gain is negligible at realistic workloads, consider
   retiring the operator (or demoting it to an example of stage

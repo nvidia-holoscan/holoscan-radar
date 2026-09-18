@@ -28,10 +28,12 @@ holoscan-radar/
 │           ├── <operator_name>_stage.hpp   # (stage header name varies)
 │           └── metadata.json       # Operator-level metadata
 ├── applications/
-│   └── fmcw_siso/
-│       └── cpp/
-│           ├── fmcw_siso.cpp        # Example SISO FMCW pipeline
-│           └── metadata.json        # Application-level metadata
+│   ├── common/radar_app/            # Shared Graph/config/report/dashboard support
+│   └── fmcw/
+│       ├── simo_detect_then_beamform/
+│       ├── simo_beamform_then_detect/
+│       ├── mimo_tdm/
+│       └── mimo_ddm/
 ├── python/holoscan/radar/
 │   └── __init__.py                 # Placeholder (bindings deferred)
 └── tests/
@@ -50,8 +52,8 @@ defaults. On first run it installs `holoscan-cli` via pip if it isn't already im
 | Command | What it does |
 | --- | --- |
 | `./holohub run-container` | Build and start the development container |
-| `./holohub build fmcw_siso` | Configure and build the example pipeline inside the container |
-| `./holohub run fmcw_siso` | Configure, build, and run the example pipeline inside the container |
+| `./holohub build simo_detect_then_beamform` | Configure and build the example pipeline inside the container |
+| `./holohub run simo_detect_then_beamform` | Configure, build, and run the example pipeline inside the container |
 | `./holohub test` | Configure, build, and run the test suite inside the container |
 | `./holohub install --dev` | Install a `.pth` hook so `import holoscan.radar` works in any shell |
 | `./holohub package holoscan-radar` | Build a native Debian package with Holoscan Radar operators |

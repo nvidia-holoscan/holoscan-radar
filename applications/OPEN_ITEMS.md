@@ -10,8 +10,8 @@ commit in the PR).
 **Status:** open — low-priority polish; agreed to defer until core signal
 chain is stable.
 
-The Holoviz GUIs across SISO, SIMO, MIMO, and dense-SIMO demos are functional
-but unpolished. Candidate improvements:
+The HSDK 5 dashboards across the standalone SIMO and MIMO applications are
+functional but unpolished. Candidate improvements:
 
 - Layout and panel sizing (consistent margins, panel proportions).
 - Color-map choices for RD maps and cluster overlays.
@@ -45,27 +45,7 @@ Whichever approach, the dynamic-range policy should be configurable via YAML
 and shared across apps via `radar_app` so it does not need to be re-implemented
 per demo.
 
-## 3. CFAR peak mode — dense per-detection score
-
-**Status:** open — one optional enhancement; the mode itself is complete (C++ +
-Python).
-
-The direct-peak app mode (forward a non-`none` `CFARDetectorOp.peak_mode`; drop
-DBSCAN and reduction, then report CFAR peaks directly) is complete in the
-consolidated C++ SIMO beamform-then-detect workflow. The consolidated MIMO
-workflows intentionally use the clustered sparse-angle tail. Shared
-`radar_app` reporting and dashboard operators support both raw and clustered
-input contracts.
-
-Remaining optional follow-up:
-
-- **Dense direct-peak score:** the dense report omits the per-detection score
-  because dense CFAR's `detection_score` is a rank-4 per-beam cube with no 2-D
-  map to index. If a per-detection score is wanted, extend `AnglePeakPickOp` to
-  emit the peak beam's score `(M,)` and teach `DetectionReportOp` to accept a
-  per-detection score vector.
-
-## 4. HDF5 ADC replay source
+## 3. HDF5 ADC replay source
 
 **Status:** open — shared application input option; simulator sources remain
 the default.
@@ -79,8 +59,7 @@ and cadence/timestamps as the corresponding simulator source.
 
 The application-owned YAML boundary should select `simulator` or `hdf5` and
 carry only replay concerns such as file path, dataset path, end-of-file policy,
-and optional frame range. Operator parameter blocks remain unchanged. SISO,
-SIMO, MIMO-TDM, and MIMO-DDM must each validate the recorded tensor against
+and optional frame range. Operator parameter blocks remain unchanged. SIMO, MIMO-TDM, and MIMO-DDM must each validate the recorded tensor against
 their existing named ADC axes before the graph starts; file metadata must not
 silently override waveform, array, schedule, or DDM-code configuration.
 

@@ -1167,113 +1167,23 @@ kept for EA gating / cleanup.
 **Class:** Our deferred work.
 
 `HOLOSCAN_RADAR_BUILD_PYTHON` is forced off (`FORCE` cache set, so a stale
-cache cannot resurrect it) until a fuller EA/GA Python operator surface +
-`holoscan::pybind11` are available (current EA `holoscan.core` is
-Tensor-only); `tests/CMakeLists.txt` therefore does not register the
-pytest suites, and `python/holoscan/radar/__init__.py` imports the
-unported operator modules optionally. Demo apps remain gated on Holoviz
-**and** ported dependencies (§5) until Graph-ported; Holoviz itself is
-still absent from the EA package.
+cache cannot resurrect it) until a fuller EA/GA Python operator surface and
+`holoscan::pybind11` are available. The reusable report bindings remain in
+`radar_app/python`; the legacy Python application framework has been removed.
 
-**Interim live RD path (2026-08-17).** When `libX11` is present,
-`HOLOSCAN_RADAR_HAS_X11` enables a Holoviz-free Graph viewer:
-`RdMapToImageOp` (LUT indices) → `X11RdViewerOp` (Xlib + turbo).
-No Dockerfile change. Smoke: `ctest -R X11RdViewer` (skips without
-`DISPLAY`) — a raster-only graph plus an overlay graph wiring all eight
-ports (detections, bins, cluster labels/representatives, aoa_estimates,
-label_idx).
+**Legacy application cleanup (2026-09-17).** The superseded
+`fmcw_siso`, `fmcw_simo`, `fmcw_dense_simo`, and
+`fmcw_aoa_estimators` trees are removed. Their Application/Holoviz helpers,
+X11 viewer/raster fallback, app-specific adapters, and Python demo framework
+were removed with them. X11 remains only as the runtime display probe for the
+optional Graph-native HSDK 5 dashboard. The four standalone SIMO/MIMO
+applications register independently of display availability and run headless
+when the dashboard is unavailable.
 
-Overlays (2026-08-17, same day): the viewer now draws the Holoviz demo's
-information layers itself, so nothing on the RD path waits on Holoviz.
-Window size comes from `visualization.window_width/window_height`
-(default 1280x720, resizable) and the frame is composited into a Pixmap
-back buffer: nearest-neighbor-scaled turbo raster, framed axes with
-physical range / velocity ticks read from the bin tensors, CFAR
-detections as outlined dots colored by DBSCAN cluster (noise gray), each
-cluster's `rep_idx` crosshaired, a per-cluster range/velocity legend
-(fixed-width slots in **range-rank** order — the DBSCAN label is
-size-ranked, so a label-ordered strip swapped columns on ~23% of frames
-on the SISO scene; counters and readouts are space-padded so a digit
-gained or lost cannot shift the line), a
-scenario clock + detection/cluster counters, and the rolling
-range-vs-time / velocity-vs-time panels under `plots.enable` (detection
-dots plus each cluster's representative as a `+`). Cluster
-colors use the Holoviz path's rank-based assignment, duplicated into the
-Holoviz-free `radar_app/viz/overlay_style.hpp` (fold back at cleanup —
-`viz.hpp` cannot be included without Holoviz). Text is `XDrawString`
-(Latin-1, ASCII titles only) and presents on the compute thread. The
-boresight panel followed (same day): `overlay_boresight` + the `az_lo` /
-`az_hi` / `el_lo` / `el_hi` extents add a third right-column panel — an
-instantaneous az/el scatter of the wired `aoa_estimates`, degrees on both
-axes over the estimator's scan grid, markers colored by the same cluster
-buckets as the RD map (SIMO / dense / MIMO; SISO has no angle stage). Panel
-titles sit above their frames, since a trace riding the top of an axis draws
-straight through a title placed inside. All Holoviz demo chrome is now
-reproduced.
-
-A header variant label followed: `overlay_label` + `label_caption` +
-`label_names` add a leading status field naming the algorithm variant a
-frame came from, fed by a `label_idx` port carrying an int64 `(1,)` index
-into `label_names` (`fmcw_aoa_estimators`: `AoaMergeOp` emits the index of
-whichever estimator port fired, beside `aoa_estimates`). A device tensor
-rather than a scalar port on purpose — mid-stream Graph scalar/enum sources
-are EA-open (§1) — and the name is right-padded to the widest configured
-name so the rest of the right-aligned status line does not slide when the
-variant changes.
-
-Overlay ports are wired per config (`X11RdViewerConfig`): the contract is
-`OnAligned`/`Exact` over exactly the wired set (rd_image +
-detection_idx/range_bins/velocity_bins, plus labels/rep_idx outside direct
-CFAR peak modes, plus aoa_estimates with the boresight panel and label_idx with
-the variant label), since on EA a
-registered-but-unwired port must stay out of `contract()` and a wired one
-must be in it (§1). Alignment across `RdMapToImageOp`, CFAR, DBSCAN,
-reduction, and beamscan/aoa outputs holds at window 0 — they share the
-source activation time, even where members sit at different hop counts from
-CFAR.
-
-**EA gap: an operator with no wired port kills auto-partitioning.** The
-angle demos created a `cfar_power_sink` `NullSinkOp` and then skipped wiring
-it when the viewer consumed `cfar_power` instead. That isolated vertex makes
-compile fail with `PARTITION_MANUAL_AUTHORING_REQUIRED` (the
-`holoscan.partition.exact_cover/v1` rule declines; the only alternative is
-authoring `graph.partition()` sets covering every operator exactly once).
-The diagnostic names no vertex, so it reads as an unrelated temporal /
-contract failure — it is not. Fix: always drain the port (fan-out to the
-sink alongside the viewer) rather than conditionally constructing sinks.
-Recheck after EA: auto-partitioning should tolerate an unreachable
-operator, or the diagnostic should name it.
-
-**`fmcw_siso` Graph pilot (2026-08-17).** Builds under
-`HOLOSCAN_RADAR_HAS_RD_LIVE` (X11 and/or Holoviz). Application scaffolding
-→ Graph: `SimAdcSourceOp`, report/null sinks, `run_fmcw_graph_app`, YAML →
-`Params` + `MaxTensorExtents` (no `from_config()`). Optional X11 RD window
-with the full overlay set when `visualization.enabled`. **EA workaround:**
-`FeatureAssemblyOp` now uses a Params-derived `OnAligned` contract for selected
-sources, so SISO wires its physical range/velocity axes directly to the library
-operator. The earlier app-local required-port stand-in is retired.
-Smoke: `./fmcw_siso fmcw_siso_smoke.yaml` (log-only) or enable
-visualization under a real/`Xvfb` `DISPLAY`.
-
-**Graph demo wave (2026-08-17, same day).** The same X11 overlay path
-extends to the remaining sparse/dense FMCW demos under
-`HOLOSCAN_RADAR_HAS_RD_LIVE`:
-
-| App | Notes |
-| --- | --- |
-| `fmcw/simo_detect_then_beamform` | Sparse SIMO: SnapshotGather → Beamscan; `FeatureAssemblyOp` (4 features); `cfar_power` → RD image; boresight from `beamscan.aoa_estimates` |
-| `fmcw_dense_simo` | Dense: PhaseShiftBeamformer + Graph `AnglePeakPick`/`CubeAoaLookup`/`TrailingIdxColumns`/`RdAngleMaxOp`; 4-col `rep_idx` ClusterReport with az/el grids; boresight from `CubeAoaLookupOp` |
-| `fmcw/mimo_tdm`, `fmcw/mimo_ddm` | Standalone `mimo_tdm` / `mimo_ddm` Graph binaries with MIMO sources + `DdmReportVelocityBinsOp`; dense TDM/DDM front ends; clustered sparse angle tail; shared retained-frame dashboard |
-| `fmcw_aoa_estimators` | Five sparse estimators behind Graph `EstimatorRouterOp` (N snapshot outs) + `AoaMergeOp` (`OnAnyInput`); rotates beamscan/MVDR/MUSIC/Root-MUSIC/ESPRIT; X11 overlays + boresight + the active estimator's name in the header (`AoaMergeOp.estimator_idx` → viewer `label_idx`, also always drained) |
-
-Shared helpers: `radar_app/app/graph_params.hpp` (YAML → Params),
-DetectionReport/ClusterReport
-`Config` flags (`report_aoa` / `report_detection_idx`) so optional ports
-enter `contract()` only when wired. The SIMO and MIMO apps now align
-`SnapshotGatherOp.is_valid` directly into Beamscan; the estimator-rotation app
-still drains the multi-look mask before its Beamscan-only K=1 slice. MIMO smokes are the app-named `_smoke.yaml` files under `applications/fmcw/mimo_tdm/config` and `applications/fmcw/mimo_ddm/config`; DDM has separate linear and nonlinear production/smoke pairs. Smoke files run log-only, so also
-run each app's default YAML under a real / `Xvfb` `DISPLAY`: the viz subgraph
-is where the partitioning gap above surfaced.
+The retired Graph demos established one durable EA finding: a constructed
+operator with no wired port can make auto-partitioning fail with
+`PARTITION_MANUAL_AUTHORING_REQUIRED`. Current graphs avoid isolated
+vertices and explicitly partition every active operator.
 
 **Standalone MIMO apps (updated 2026-09-17).** `APP_mimo_tdm` and `APP_mimo_ddm` point directly at `applications/fmcw/mimo_tdm` and `applications/fmcw/mimo_ddm`. Each builds one same-named Graph binary. DDM defaults to the linear YAML; the nonlinear Zadoff-Chu YAML selects the correlation path through root `ddm.generate_phase_codes`. The former consolidated directory and empty Python stub are removed.
 
@@ -1304,16 +1214,13 @@ stock Holoviz sink and drop-oldest visualization queues. The later single-image
 compositor keeps the independently clocked partition arrangement while making
 the complete annotated frame subject to Holoviz's bounded image hold-last.
 
-**Native typed-config pilot (2026-09-09).** The standalone SIMO apps no
-longer uses the EA `radar_app/app/graph_params.hpp` YAML loaders. App-owned
-settings live under one schema-backed `app:` object; HSDK `config_io` loads the
-document once, and each operator block decodes through its locked
-`HOLOSCAN_PARAM_SCHEMA` into `PreparedParams<T>`. Shared descriptor/string-enum
-`ConfigCodec` support mirrors the legacy yaml-cpp spellings and validation.
-App-derived array geometry and sparse CFAR fold enter as decode baselines and
-cannot be duplicated in operator blocks. Unmigrated Graph apps retain
-`graph_params.hpp`, `YAML::convert`, and argument setters until their own
-config migrations. **EA friction:** the pinned Params decoder still routes
+**Native typed-config pilot (2026-09-09).** The standalone applications use
+schema-backed `app:` objects; HSDK `config_io` loads each document once, and
+operator blocks decode through their locked `HOLOSCAN_PARAM_SCHEMA` into
+`PreparedParams<T>`. Shared descriptor/string-enum `ConfigCodec` support
+mirrors the legacy yaml-cpp spellings and validation. App-derived geometry and
+fold values enter as decode baselines and cannot be duplicated in operator
+blocks. The retired `graph_params.hpp` loader has been removed. **EA friction:** the pinned Params decoder still routes
 direct enum fields through their integer representation even when the schema
 reports a portable string codec. The SIMO loader therefore immutably
 normalizes canonical enum strings before `try_decode`; remove that step
@@ -1324,21 +1231,14 @@ public standalone decoder from `holoscan::params::decode_params` to
 `holoscan::params::try_decode`; the consolidated SIMO loader follows the
 pinned API.
 
-**Deferred:** ~~`fmcw_aoa_estimators` — Application `set_dynamic_flows()`
-has no Graph equivalent~~ **landed (Graph-native, 2026-08-17):**
-`EstimatorRouterOp` emits on one of five `snapshot_*` outs; idle estimators
-never receive (`OnEach`); `AoaMergeOp` uses synthesized `OnAnyInput` over
-five `aoa_*` ports and forwards the selected sample. Same X11 overlay path
-as the other Graph demos. Holoviz / Python bindings remain deferred.
-
 Shared `performance/cpp/utils/perf_graph.hpp` is the Graph harness;
 legacy `perf_source.hpp` / `perf_sink.hpp` remain for reference only.
 CMake gates drivers via `HOLOSCAN_RADAR_HSDK5_PORTED_PERF` (all drivers
 listed — see §8). Python perf drivers stay deferred with bindings.
 
-**Status:** open — phase 4: Graph demos landed for siso/SIMO
-detect-then-beamform/SIMO beamform-then-detect/mimo/aoa (+ X11 overlays);
-Holoviz / Python still deferred; C++ Graph perf done.
+**Status:** open — phase 4: the four standalone SIMO/MIMO Graph applications
+and native HSDK 5 dashboard are landed; legacy demos and the X11 viewer are
+retired; Python execution remains deferred; C++ Graph perf is complete.
 
 ---
 

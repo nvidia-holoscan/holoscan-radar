@@ -50,14 +50,12 @@ do not infer Graph behavior from 4.x.
   enum `override_ms` on `ClutterFilterOp.method`.
 - **Pool sizing:** `MaxTensorExtents` through fat ops, Graph units, apps,
   and Python binding constructors (no empty extents).
-- **Demos:** active registrations are consolidated `fmcw/simo` and
-  `fmcw/mimo` under `HOLOSCAN_RADAR_HAS_RD_LIVE`; MIMO exposes separate TDM
-  and DDM binaries with one shared clustered sparse-angle tail.
-- **Viz interim:** Holoviz-free X11 RD viewer with Holoviz-parity overlays
-  (axes, detections/clusters, legend, rolling plots, boresight, estimator
-  name).
-- **AoA without `set_dynamic_flows`:** `EstimatorRouterOp` + `AoaMergeOp`
-  (`OnAnyInput`) replace Application dynamic flows.
+- **Applications:** four standalone Graph applications:
+  `simo_detect_then_beamform`, `simo_beamform_then_detect`, `mimo_tdm`,
+  and `mimo_ddm`. The older SISO, consolidated SIMO, dense-SIMO, and routed
+  AoA demos are retired.
+- **Visualization:** the surviving applications use the Graph-native HSDK 5
+  dashboard when available and otherwise remain runnable headless.
 
 ---
 
@@ -94,7 +92,7 @@ Grouped by theme. Section numbers match [`HSDK5_PORT.md`](HSDK5_PORT.md)
 
 | Issue | What we did |
 | --- | --- |
-| Holoviz absent; Python operator surface Tensor-only | Force Python off; X11 RD viewer + Graph demos under `HOLOSCAN_RADAR_HAS_RD_LIVE` / `HOLOSCAN_RADAR_HAS_X11` |
+| Python operator surface Tensor-only | Force Python application execution off; retain C++ Graph apps and report bindings |
 | Legend / status flicker from DBSCAN label ranking and digit width | Range-rank legend order; fixed-width / right-padded status fields |
 | EA pin / “is there EA2?” | Stayed on `v5.0.0.1`; no newer Graph EA tag found; `pb6.5` is a different (Application) track |
 
@@ -153,8 +151,9 @@ ctest --test-dir build -L unit --output-on-failure
 ctest --test-dir build -L performance --output-on-failure
 ctest --test-dir build -L ea_repro --output-on-failure   # live override Graph repro
 
-# Demos (smoke YAMLs are log-only; default YAML needs DISPLAY/Xvfb for X11)
-./build/applications/fmcw_siso/fmcw_siso applications/fmcw_siso/fmcw_siso_smoke.yaml
+# Application smoke
+./build/applications/fmcw/simo_detect_then_beamform/cpp/simo_detect_then_beamform \
+  applications/fmcw/simo_detect_then_beamform/config/simo_detect_then_beamform_smoke.yaml
 ```
 
 ---

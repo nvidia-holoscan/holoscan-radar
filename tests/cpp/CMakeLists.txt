@@ -228,10 +228,3 @@ target_include_directories(test_fmcw_simo_report PRIVATE
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     radar_add_test(app/test_fmcw_dashboard holoscan::fmcw_dashboard)
 endif()
-
-# [EA HSDK5 ONLY] Interim X11 live RD viewer (HSDK5_PORT.md §6). Skips itself
-# when no display is reachable; needs the radar_app viz headers + kernels.
-if(HOLOSCAN_RADAR_HAS_X11)
-    radar_add_test(app/test_x11_rd_viewer
-        holoscan::radar_app)
-endif()

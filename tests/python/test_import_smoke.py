@@ -42,24 +42,11 @@ def test_import_all_operators_and_descriptors():
         "NullSinkOp",
         "DetectionReportOp",
         "DetectionReportMode",
-        "RdMapToImageOp",
-        "ClusterOverlayOp",
-        "RollingPlotOp",
-        "BoresightViewOp",
-        "RdChannelSliceOp",
-        "gui_available",
-        "make_turbo_lut",
-        "cluster_palette",
     ):
         assert hasattr(r, name), name
         if name.endswith("Op") and name not in (
             "NullSinkOp",
             "DetectionReportOp",
-            "RdMapToImageOp",
-            "ClusterOverlayOp",
-            "RollingPlotOp",
-            "BoresightViewOp",
-            "RdChannelSliceOp",
         ):
             assert getattr(r, name) is getattr(r, f"{name}F32")
             assert getattr(r, f"{name}F64") is not getattr(r, f"{name}F32")
