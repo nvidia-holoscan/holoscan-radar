@@ -23,15 +23,20 @@ namespace holoscan::radar::app::multi_waveform {
 struct Config : mimo::TdmConfig {
   explicit Config(mimo::TdmConfig base) : mimo::TdmConfig(std::move(base)) {}
 
+  // Resolved hardware/DSP descriptors for every authored waveform.
   std::vector<TdmTransmitProfile> profiles;
+  // Indices into profiles, preserving the authored cyclic schedule.
   std::vector<std::size_t> profile_sequence;
+  // Fixed dashboard selection and its longest recurrence interval.
   std::size_t visualization_profile_index{0U};
   std::size_t visualization_profile_max_gap_frames{1U};
+  // Bounds and cadence for the independently ticking TX/RX sources.
   std::size_t max_frames_in_flight{4U};
   double rx_poll_period{0.001};
   int simulated_receive_polls{2};
 };
 
+// Number of source activations Holoviz must retain the selected profile.
 inline std::size_t maximum_cyclic_profile_gap(
     const std::vector<std::size_t>& sequence, std::size_t profile_index) {
   std::vector<std::size_t> positions;
@@ -80,6 +85,7 @@ inline Config load_config(const std::filesystem::path& path) {
   const YAML::Node app = root["app"];
   const YAML::Node profiles = app["profiles"];
   const YAML::Node sequence = app["profile_sequence"];
+  // Profiles are the sole authority for waveform and cube shape.
   if (!profiles || !profiles.IsSequence() || profiles.size() == 0U) {
     throw std::runtime_error("app.profiles must be a non-empty sequence");
   }
@@ -92,6 +98,7 @@ inline Config load_config(const std::filesystem::path& path) {
     throw std::runtime_error(
         "multi-profile waveform, cube, and physical PRI belong only in app.profiles");
   }
+  // Decode source coordination bounds independently of DSP parameters.
   const std::size_t max_frames_in_flight =
       app["max_frames_in_flight"]
           ? app["max_frames_in_flight"].as<std::size_t>()
@@ -110,6 +117,8 @@ inline Config load_config(const std::filesystem::path& path) {
     throw std::runtime_error("app.simulated_receive_polls must be >= 0");
   }
 
+  // Resolve profiles once, derive both physical and effective-TDM timing,
+  // and accumulate pool maxima across every possible frame shape.
   const int64_t num_tx = app["tx_array"]["num_tx"].as<int64_t>();
   std::unordered_map<std::string, std::size_t> by_name;
   std::vector<TdmTransmitProfile> decoded_profiles;
@@ -171,6 +180,7 @@ inline Config load_config(const std::filesystem::path& path) {
     longest_cpi = std::max(
         longest_cpi, physical_pri * static_cast<double>(num_tx * chirps));
   }
+  // Convert the authored name schedule to stable profile indices.
   for (const YAML::Node& entry : sequence) {
     const std::string name = entry.as<std::string>();
     const auto found = by_name.find(name);
@@ -180,6 +190,8 @@ inline Config load_config(const std::filesystem::path& path) {
     decoded_sequence.push_back(found->second);
   }
 
+  // Reuse the ordinary TDM loader with the first profile as a temporary
+  // structural baseline; per-frame waveform inputs replace it below.
   mimo::AppParams baseline;
   baseline.waveform = decoded_profiles.front().waveform;
   baseline.cube = mimo::CubeConfig{
@@ -191,6 +203,7 @@ inline Config load_config(const std::filesystem::path& path) {
               .chirp_repetition_interval,
       .tx_order = {}};
   Config result{mimo::load_tdm_config(path, std::move(baseline))};
+  // Resolve fixed dashboard selection and retention from the full cycle.
   if (result.visualization.profile.empty()) {
     result.visualization.profile =
         decoded_profiles[decoded_sequence.front()].name;
@@ -215,6 +228,8 @@ inline Config load_config(const std::filesystem::path& path) {
         "app.run.frame_period must exceed the longest complete TDM CPI");
   }
 
+  // Clear static waveform defaults so the Exact TX-applied descriptor is
+  // the only waveform authority for every processing activation.
   auto range_params = result.range_params.value();
   range_params.waveform = FMCWWaveformDescriptor{};
   result.range_params = holoscan::detail::PreparedParamsAccess::make(
@@ -232,6 +247,7 @@ inline Config load_config(const std::filesystem::path& path) {
       holoscan::detail::PreparedParamsAccess::evidence(
           result.compensation_params));
 
+  // Tensor pools must admit the largest shape from any scheduled profile.
   result.extents.max_chirps = max_chirps;
   result.extents.max_interleaved_chirps = num_tx * max_chirps;
   result.extents.max_samples_per_chirp = max_samples;

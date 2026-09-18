@@ -33,6 +33,18 @@ flowchart LR
   WAVEFORM -->|Exact| COMP
 ```
 
+## Build and run
+
+```bash
+cmake -S . -B build -DBUILD_ALL=OFF -DAPP_multi_waveform=ON
+cmake --build build --target multi_waveform
+./build/applications/fmcw/multi_waveform/cpp/multi_waveform
+```
+
+The executable defaults to `config/multi_waveform.yaml`. Pass
+`config/multi_waveform_smoke.yaml` as the first argument for the two-frame,
+headless single-target smoke scene.
+
 The `app.profiles` list is the only waveform, sample-count, and physical-PRI
 authority; the YAML does not repeat a baseline waveform or cube. The default
 profiles use the same 77 GHz carrier and two-TX schedule. `near`

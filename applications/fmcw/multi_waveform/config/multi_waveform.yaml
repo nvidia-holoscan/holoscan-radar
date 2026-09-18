@@ -58,7 +58,7 @@ app:
           azimuth: 0.15
           elevation: 0.10
           velocity: [-4.0, -0.6, -0.4]
-          amplitude: 0.8
+          amplitude: 0.01
         - range: 80.0
           azimuth: -0.10
           elevation: -0.12

@@ -73,27 +73,32 @@ int main(int argc, char** argv) {
           *cadence_out = cadence;
         }
 
+        // Simulated single-channel ADC source.
         auto source = graph.op<app::SimAdcSourceOp>(
             "adc_source", extents, std::move(source_config));
         bind_outputs(options, "adc_source", {"adc_cube"});
 
+        // Range processing.
         auto range = graph.op<radar::FMCWRangeProcessorOp<float>>(
             "range_processor", extents);
         range.set_params(cfg.range_params);
         bind_outputs(options, "range_processor",
                      {"range_profiles", "range_bins"});
 
+        // Static-clutter suppression.
         auto clutter = graph.op<radar::ClutterFilterOp<float>>(
             "clutter_filter", extents);
         clutter.set_params(cfg.clutter_params);
         bind_outputs(options, "clutter_filter", {"range_profiles_out"});
 
+        // Doppler processing.
         auto doppler = graph.op<radar::FMCWDopplerProcessorOp<float>>(
             "doppler_processor", extents);
         doppler.set_params(cfg.doppler_params);
         bind_outputs(options, "doppler_processor",
                      {"rd_maps", "velocity_bins"});
 
+        // CFAR detection on the rank-2 range-Doppler map.
         auto cfar = graph.op<radar::CFARDetectorOp<float>>(
             "cfar_detector", extents);
         cfar.set_params(cfg.cfar_params);
@@ -101,21 +106,25 @@ int main(int argc, char** argv) {
                      {"detection_mask", "detection_score", "noise_estimate",
                       "detection_idx", "cfar_power"});
 
+        // Assemble physical range/velocity plus RD-bin clustering columns.
         auto features = graph.op<radar::FeatureAssemblyOp<float>>(
             "feature_assembly", extents, cfg.assembly_params->features);
         bind_outputs(options, "feature_assembly", {"points"});
 
+        // Group neighboring range-Doppler detections.
         auto cluster = graph.op<radar::ClusterDBSCANOp<float>>(
             "cluster_dbscan", extents);
         cluster.set_params(cfg.dbscan_params);
         bind_outputs(options, "cluster_dbscan", {"labels", "sizes"});
 
+        // Reduce each cluster to its configured representative feature row.
         auto reduction = graph.op<radar::DetectionReductionOp<float>>(
             "detection_reduction", extents);
         reduction.set_params(cfg.reduction_params);
         bind_outputs(options, "detection_reduction",
                      {"rep_idx", "reduced_points"});
 
+        // Final clustered detection report.
         auto report = graph.op<app::DetectionReportOp>(
             "cluster_report",
             app::DetectionReportOp::Config{
@@ -123,6 +132,7 @@ int main(int argc, char** argv) {
                 .use_reduced_points = true,
                 .cadence = cadence});
 
+        // Processing and reporting share one source-driven partition.
         auto application = graph.partition("application");
         application.add(source)
             .add(range)
@@ -134,21 +144,25 @@ int main(int argc, char** argv) {
             .add(reduction)
             .add(report);
 
+        // FMCW front end: ADC cube -> range-Doppler map -> detections.
         graph.add_flow(source->adc_cube, range->adc_cube, queue);
         graph.add_flow(range->range_profiles, clutter->range_profiles, queue);
         graph.add_flow(clutter->range_profiles_out, doppler->range_profiles,
                        queue);
         graph.add_flow(doppler->rd_maps, cfar->rd_maps, queue);
 
+        // Convert detected bin coordinates to physical range and velocity.
         graph.add_flow(cfar->detection_idx, features->detection_idx, queue);
         graph.add_flow(range->range_bins, features->range_bins, queue);
         graph.add_flow(doppler->velocity_bins, features->velocity_bins, queue);
 
+        // Cluster the complete feature rows and select one result per cluster.
         graph.add_flow(features->points, cluster->points, queue);
         graph.add_flow(cluster->labels, reduction->labels, queue);
         graph.add_flow(cfar->detection_idx, reduction->detection_idx, queue);
         graph.add_flow(features->points, reduction->points, queue);
 
+        // Report clusters against the same physical coordinate axes.
         graph.add_flow(features->points, report->points, queue);
         graph.add_flow(cluster->labels, report->labels, queue);
         graph.add_flow(cluster->sizes, report->sizes, queue);
@@ -164,7 +178,8 @@ int main(int argc, char** argv) {
           app::viz::add_fmcw_dashboard(
               graph, application, options, cfg.visualization,
               cfg.frame_period, false, no_angle_grid, no_angle_grid,
-              radar::AngleConvention{}, cfg.scene.targets, cfg.scene_visibility, "SISO",
+              radar::AngleConvention{}, cfg.scene.targets,
+              cfg.scene_visibility, "SISO",
               app::viz::ClusterDashboardInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,
                   cluster->labels, cluster->sizes, range->range_bins,
