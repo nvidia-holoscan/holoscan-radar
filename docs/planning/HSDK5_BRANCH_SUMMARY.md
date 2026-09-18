@@ -51,7 +51,7 @@ do not infer Graph behavior from 4.x.
 - **Pool sizing:** `MaxTensorExtents` through fat ops, Graph units, apps,
   and Python binding constructors (no empty extents).
 - **Applications:** four standalone Graph applications:
-  `simo_detect_then_beamform`, `simo_beamform_then_detect`, `mimo_tdm`,
+  `simo`, `simo_dense_beamforming`, `mimo_tdm`,
   and `mimo_ddm`. The older SISO, consolidated SIMO, dense-SIMO, and routed
   AoA demos are retired.
 - **Visualization:** the surviving applications use the Graph-native HSDK 5
@@ -152,8 +152,8 @@ ctest --test-dir build -L performance --output-on-failure
 ctest --test-dir build -L ea_repro --output-on-failure   # live override Graph repro
 
 # Application smoke
-./build/applications/fmcw/simo_detect_then_beamform/cpp/simo_detect_then_beamform \
-  applications/fmcw/simo_detect_then_beamform/config/simo_detect_then_beamform_smoke.yaml
+./build/applications/fmcw/simo/cpp/simo \
+  applications/fmcw/simo/config/simo_smoke.yaml
 ```
 
 ---

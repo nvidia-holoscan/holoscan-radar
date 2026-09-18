@@ -1,7 +1,7 @@
 {
   "$schema": "urn:holohub:application:v1",
   "application": {
-    "name": "simo_detect_then_beamform",
+    "name": "simo_dense_beamforming",
     "authors": [
       {
         "name": "Holoscan Team",
@@ -13,7 +13,7 @@
     ],
     "version": "0.1.0",
     "changelog": {
-      "0.1.0": "Detect range-Doppler cells before sparse receive beamforming"
+      "0.1.0": "Beamform the full SIMO range-Doppler cube before detection"
     },
     "holoscan_sdk": {
       "minimum_required_version": "5.0.0",
@@ -31,16 +31,17 @@
       "GPU",
       "FMCW",
       "SIMO",
-      "Angle"
+      "Angle",
+      "Beamforming"
     ],
     "ranking": 3,
     "requirements": {},
     "default_mode": "default",
     "modes": {
       "default": {
-        "description": "Detect range-Doppler cells before sparse receive beamforming",
+        "description": "Beamform the full SIMO range-Doppler cube before detection",
         "run": {
-          "command": "<holohub_app_bin>/simo_detect_then_beamform",
+          "command": "<holohub_app_bin>/simo_dense_beamforming",
           "workdir": "holohub_app_bin"
         }
       }

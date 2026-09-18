@@ -9,8 +9,8 @@
 #
 # Usage:
 #   ./holohub run-container
-#   ./holohub build simo_detect_then_beamform
-#   ./holohub run   simo_detect_then_beamform
+#   ./holohub build simo
+#   ./holohub run   simo
 #   ./holohub test
 #   ./holohub --help
 #

@@ -28,7 +28,7 @@ devcontainer startup, `holohub` commands, and the required pre-GA cleanup.
 
 ```bash
 # Run the detect-then-beamform SIMO application
-./holohub run simo_detect_then_beamform
+./holohub run simo
 ```
 
 ---
@@ -153,7 +153,7 @@ class MyApp : public holoscan::Application {
 int main() { holoscan::make_application<MyApp>()->run(); }
 ```
 
-See [`applications/fmcw/simo_detect_then_beamform`](applications/fmcw/simo_detect_then_beamform)
+See [`applications/fmcw/simo`](applications/fmcw/simo)
 for a complete graph with a synthetic ADC source, detection, angle estimation,
 clustering, and reporting.
 

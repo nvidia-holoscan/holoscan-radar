@@ -40,7 +40,7 @@ void expect_smoke_matches_production(const char* production_name,
 TEST(FmcwSimoConfig, DecodesDetectThenBeamformSmoke) {
   const auto config =
       simo::load_detect_then_beamform_config(
-          config_path("simo_detect_then_beamform/config/simo_detect_then_beamform_smoke.yaml"));
+          config_path("simo/config/simo_smoke.yaml"));
 
   EXPECT_EQ(config.num_frames, 2);
   EXPECT_DOUBLE_EQ(config.frame_period, 0.1);
@@ -87,8 +87,8 @@ TEST(FmcwSimoConfig, DecodesDetectThenBeamformSmoke) {
 TEST(FmcwSimoConfig, DecodesBeamformThenDetectSmoke) {
   const auto config =
       simo::load_beamform_then_detect_config(config_path(
-          "simo_beamform_then_detect/config/"
-          "simo_beamform_then_detect_smoke.yaml"));
+          "simo_dense_beamforming/config/"
+          "simo_dense_beamforming_smoke.yaml"));
 
   EXPECT_EQ(config.num_frames, 2);
   EXPECT_TRUE(config.cfar_params->nci_axes.empty());
@@ -119,11 +119,11 @@ TEST(FmcwSimoConfig, DecodesBeamformThenDetectSmoke) {
 TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
   const auto detect =
       simo::load_detect_then_beamform_config(
-          config_path("simo_detect_then_beamform/config/simo_detect_then_beamform.yaml"));
+          config_path("simo/config/simo.yaml"));
   const auto beamform =
       simo::load_beamform_then_detect_config(config_path(
-          "simo_beamform_then_detect/config/"
-          "simo_beamform_then_detect.yaml"));
+          "simo_dense_beamforming/config/"
+          "simo_dense_beamforming.yaml"));
 
   EXPECT_EQ(detect.num_frames, 250);
   EXPECT_EQ(detect.scene.targets.size(), 5U);
@@ -165,11 +165,11 @@ TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
 
 TEST(FmcwSimoConfig, SmokeConfigsOnlyApplyAllowedOverrides) {
   expect_smoke_matches_production(
-      "simo_detect_then_beamform/config/simo_detect_then_beamform.yaml",
-      "simo_detect_then_beamform/config/simo_detect_then_beamform_smoke.yaml");
+      "simo/config/simo.yaml",
+      "simo/config/simo_smoke.yaml");
   expect_smoke_matches_production(
-      "simo_beamform_then_detect/config/simo_beamform_then_detect.yaml",
-      "simo_beamform_then_detect/config/simo_beamform_then_detect_smoke.yaml");
+      "simo_dense_beamforming/config/simo_dense_beamforming.yaml",
+      "simo_dense_beamforming/config/simo_dense_beamforming_smoke.yaml");
 }
 
 TEST(FmcwSimoConfig, RejectsAuthoredDerivedFields) {

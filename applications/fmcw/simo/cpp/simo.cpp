@@ -20,7 +20,7 @@
 #include "radar_app/app/graph_driver.hpp"
 #include "radar_app/app/source.hpp"
 #include "radar_app/report/report_ops.hpp"
-#include "radar_app/simple/simo/simo_detect_then_beamform_config.hpp"
+#include "radar_app/simple/simo/simo_config.hpp"
 
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
 #include "radar_app/viz/fmcw_dashboard_graph.hpp"
@@ -28,7 +28,7 @@
 
 namespace radar = holoscan::radar;
 namespace app = holoscan::radar::app;
-namespace workflow = holoscan::radar::app::simo_detect_then_beamform;
+namespace workflow = holoscan::radar::app::simo;
 
 namespace {
 
@@ -53,8 +53,7 @@ void bind_outputs(holoscan::CompileOptions& options, const char* op,
 
 int main(int argc, char** argv) {
   return app::run_fmcw_graph_app<workflow::Config>(
-      argc, argv, "simo_detect_then_beamform", "simo_detect_then_beamform.yaml",
-      workflow::load_config,
+      argc, argv, "simo", "simo.yaml", workflow::load_config,
       [](holoscan::Graph& graph, holoscan::CompileOptions& options,
          workflow::Config& cfg,
          std::shared_ptr<app::CadenceMeter>* cadence_out) {
@@ -207,7 +206,7 @@ int main(int argc, char** argv) {
               cfg.frame_period, cfg.beamscan_params->az_coordinates,
               cfg.beamscan_params->el_coordinates,
               cfg.beamscan_params->angle_convention, cfg.scene.targets,
-              "Detect then beamform",
+              "SIMO",
               app::viz::ClusterDashboardInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,
                   cluster->labels, cluster->sizes, range->range_bins,

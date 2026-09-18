@@ -7,7 +7,7 @@
 
 #include "radar_app/simple/simo/config.hpp"
 
-namespace holoscan::radar::app::simo_beamform_then_detect {
+namespace holoscan::radar::app::simo_dense_beamforming {
 
 using Config = simo::BeamformThenDetectConfig;
 
@@ -15,4 +15,4 @@ inline Config load_config(const std::filesystem::path& path) {
   return simo::load_beamform_then_detect_config(path);
 }
 
-}  // namespace holoscan::radar::app::simo_beamform_then_detect
+}  // namespace holoscan::radar::app::simo_dense_beamforming

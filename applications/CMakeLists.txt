@@ -6,8 +6,8 @@ add_subdirectory(common)
 
 # Each workflow is a standalone application with its own APP_<name>
 # gate, executable, metadata, and configuration set.
-holoscan_radar_add_application(simo_detect_then_beamform
-    DIRECTORY fmcw/simo_detect_then_beamform
+holoscan_radar_add_application(simo
+    DIRECTORY fmcw/simo
     DEPENDS OPERATORS
         fmcw_range_processor_op
         clutter_filter_op
@@ -19,8 +19,8 @@ holoscan_radar_add_application(simo_detect_then_beamform
         detection_reduction_op
         cluster_dbscan_op
 )
-holoscan_radar_add_application(simo_beamform_then_detect
-    DIRECTORY fmcw/simo_beamform_then_detect
+holoscan_radar_add_application(simo_dense_beamforming
+    DIRECTORY fmcw/simo_dense_beamforming
     DEPENDS OPERATORS
         fmcw_range_processor_op
         clutter_filter_op

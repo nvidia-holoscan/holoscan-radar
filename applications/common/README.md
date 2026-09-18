@@ -2,8 +2,8 @@
 
 Shared C++ support for the four standalone FMCW applications:
 
-- `fmcw/simo_detect_then_beamform`
-- `fmcw/simo_beamform_then_detect`
+- `fmcw/simo`
+- `fmcw/simo_dense_beamforming`
 - `fmcw/mimo_tdm`
 - `fmcw/mimo_ddm`
 

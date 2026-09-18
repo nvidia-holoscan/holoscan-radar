@@ -30,8 +30,8 @@ holoscan-radar/
 ├── applications/
 │   ├── common/radar_app/            # Shared Graph/config/report/dashboard support
 │   └── fmcw/
-│       ├── simo_detect_then_beamform/
-│       ├── simo_beamform_then_detect/
+│       ├── simo/
+│       ├── simo_dense_beamforming/
 │       ├── mimo_tdm/
 │       └── mimo_ddm/
 ├── python/holoscan/radar/
@@ -52,8 +52,8 @@ defaults. On first run it installs `holoscan-cli` via pip if it isn't already im
 | Command | What it does |
 | --- | --- |
 | `./holohub run-container` | Build and start the development container |
-| `./holohub build simo_detect_then_beamform` | Configure and build the example pipeline inside the container |
-| `./holohub run simo_detect_then_beamform` | Configure, build, and run the example pipeline inside the container |
+| `./holohub build simo` | Configure and build the example pipeline inside the container |
+| `./holohub run simo` | Configure, build, and run the example pipeline inside the container |
 | `./holohub test` | Configure, build, and run the test suite inside the container |
 | `./holohub install --dev` | Install a `.pth` hook so `import holoscan.radar` works in any shell |
 | `./holohub package holoscan-radar` | Build a native Debian package with Holoscan Radar operators |
