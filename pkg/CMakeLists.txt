@@ -45,7 +45,7 @@ if(_HOLOSCAN_RADAR_PKG_FMCW_CHAIN)
     list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS
         siso
         simo
-        simo_dense_beamforming)
+        dense_beamforming)
     if(_HOLOSCAN_RADAR_PKG_MIMO)
         list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS
             mimo_tdm

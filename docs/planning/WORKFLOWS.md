@@ -286,9 +286,9 @@ Power folding deliberately removes the velocity-fold identity. `DDMSparseDemulti
 
 ## Workflow comparison
 
-### Multi-profile TDM application
+### Multi-waveform application
 
-`mimo_tdm_multi_profile` reuses the sparse TDM chain while alternating
+`multi_waveform` reuses the sparse TDM chain while alternating
 complete near/far CPIs. `FMCWTransmitSourceOp` owns profile selection and its
 TX backend; `CorrelatedMimoTdmAdcSourceOp` owns the RX backend. The sources
 tick independently and correlate through a bounded internal frame-token ledger.

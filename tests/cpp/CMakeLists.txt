@@ -254,16 +254,16 @@ radar_add_test(app/test_multi_profile_source
     holoscan::detection_reduction_op)
 target_include_directories(test_multi_profile_source PRIVATE
     ${PROJECT_SOURCE_DIR}/applications/common
-    ${PROJECT_SOURCE_DIR}/applications/fmcw/mimo_tdm_multi_profile/cpp
+    ${PROJECT_SOURCE_DIR}/applications/fmcw/multi_waveform/cpp
     ${PROJECT_SOURCE_DIR}/operators)
 target_compile_definitions(test_multi_profile_source PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
-if(TARGET mimo_tdm_multi_profile)
-    add_test(NAME MimoTdmMultiProfileSmoke
-        COMMAND $<TARGET_FILE:mimo_tdm_multi_profile>
-            ${PROJECT_SOURCE_DIR}/applications/fmcw/mimo_tdm_multi_profile/config/mimo_tdm_multi_profile_smoke.yaml)
-    set_tests_properties(MimoTdmMultiProfileSmoke
+if(TARGET multi_waveform)
+    add_test(NAME MultiWaveformSmoke
+        COMMAND $<TARGET_FILE:multi_waveform>
+            ${PROJECT_SOURCE_DIR}/applications/fmcw/multi_waveform/config/multi_waveform_smoke.yaml)
+    set_tests_properties(MultiWaveformSmoke
         PROPERTIES LABELS "application;smoke")
 endif()
 

@@ -12,7 +12,7 @@ app:
         profile: near
         window_width: 1280
         window_height: 720
-        window_title: FMCW MIMO TDM Multi-Profile
+        window_title: FMCW Multi-Waveform
         display_rate_hz: 20.0
         dynamic_range_db: 60.0
         detection_radius: 0.010

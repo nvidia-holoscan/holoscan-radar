@@ -1,7 +1,7 @@
 {
   "$schema": "urn:holohub:application:v1",
   "application": {
-    "name": "simo_dense_beamforming",
+    "name": "dense_beamforming",
     "authors": [
       {
         "name": "Holoscan Team",
@@ -41,7 +41,7 @@
       "default": {
         "description": "Beamform the full SIMO range-Doppler cube before detection",
         "run": {
-          "command": "<holohub_app_bin>/simo_dense_beamforming",
+          "command": "<holohub_app_bin>/dense_beamforming",
           "workdir": "holohub_app_bin"
         }
       }

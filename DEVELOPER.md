@@ -32,8 +32,9 @@ holoscan-radar/
 │   └── fmcw/
 │       ├── siso/
 │       ├── simo/
-│       ├── simo_dense_beamforming/
+│       ├── dense_beamforming/
 │       ├── mimo_tdm/
+│       ├── multi_waveform/
 │       └── mimo_ddm/
 ├── python/holoscan/radar/
 │   └── __init__.py                 # Placeholder (bindings deferred)

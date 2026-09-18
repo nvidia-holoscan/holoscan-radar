@@ -17,7 +17,7 @@
 #include "radar_app/app/graph_driver.hpp"
 #include "radar_app/app/source.hpp"
 #include "radar_app/report/report_ops.hpp"
-#include "radar_app/simple/simo/simo_dense_beamforming_config.hpp"
+#include "radar_app/simple/simo/dense_beamforming_config.hpp"
 
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
 #include "radar_app/viz/fmcw_dashboard_graph.hpp"
@@ -25,7 +25,7 @@
 
 namespace radar = holoscan::radar;
 namespace app = holoscan::radar::app;
-namespace workflow = holoscan::radar::app::simo_dense_beamforming;
+namespace workflow = holoscan::radar::app::dense_beamforming;
 
 namespace {
 
@@ -50,7 +50,7 @@ void bind_outputs(holoscan::CompileOptions& options, const char* op,
 
 int main(int argc, char** argv) {
   return app::run_fmcw_graph_app<workflow::Config>(
-      argc, argv, "simo_dense_beamforming", "simo_dense_beamforming.yaml",
+      argc, argv, "dense_beamforming", "dense_beamforming.yaml",
       workflow::load_config,
       [](holoscan::Graph& graph, holoscan::CompileOptions& options,
          workflow::Config& cfg,

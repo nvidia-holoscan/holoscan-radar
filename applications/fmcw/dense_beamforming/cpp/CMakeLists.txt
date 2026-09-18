@@ -3,35 +3,30 @@
 
 find_package(holoscan REQUIRED COMPONENTS core params_io)
 
-add_executable(mimo_tdm_multi_profile mimo_tdm_multi_profile.cpp)
-target_include_directories(mimo_tdm_multi_profile PRIVATE
+add_executable(dense_beamforming dense_beamforming.cpp)
+target_include_directories(dense_beamforming PRIVATE
     ${PROJECT_SOURCE_DIR}/operators)
-target_link_libraries(mimo_tdm_multi_profile PRIVATE
+target_link_libraries(dense_beamforming PRIVATE
     holoscan::fmcw_range_processor_op
     holoscan::clutter_filter_op
     holoscan::fmcw_doppler_processor_op
-    holoscan::mimo_deinterleave_op
-    holoscan::tdm_sparse_compensation_op
+    holoscan::phase_shift_beamformer_op
     holoscan::cfar_detector_op
-    holoscan::beamscan_estimator_op
     holoscan::feature_assembly_op
-    holoscan::cluster_dbscan_op
-    holoscan::detection_reduction_op
     holoscan::radar_app
     holoscan::radar_common_simulator
     holoscan::radar_common
     holoscan::params_io
     holoscan::core
-    yaml-cpp
     CUDA::cudart)
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
-    target_link_libraries(mimo_tdm_multi_profile PRIVATE
+    target_link_libraries(dense_beamforming PRIVATE
         holoscan::fmcw_dashboard)
 endif()
 
 foreach(_config IN ITEMS
-        mimo_tdm_multi_profile.yaml
-        mimo_tdm_multi_profile_smoke.yaml)
+        dense_beamforming.yaml
+        dense_beamforming_smoke.yaml)
     configure_file(../config/${_config}
         ${CMAKE_CURRENT_BINARY_DIR}/${_config} COPYONLY)
 endforeach()

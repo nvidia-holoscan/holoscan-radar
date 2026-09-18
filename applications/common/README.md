@@ -1,11 +1,12 @@
 # Application-support library (`radar_app`)
 
-Shared C++ support for the five standalone FMCW applications:
+Shared C++ support for the six standalone FMCW applications:
 
 - `fmcw/siso`
 - `fmcw/simo`
-- `fmcw/simo_dense_beamforming`
+- `fmcw/dense_beamforming`
 - `fmcw/mimo_tdm`
+- `fmcw/multi_waveform`
 - `fmcw/mimo_ddm`
 
 Each application entrypoint contains only Graph construction and port wiring.

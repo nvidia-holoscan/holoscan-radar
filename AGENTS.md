@@ -100,8 +100,9 @@ Rules that follow from "lockdown":
 | `operators/fmcw/` | FMCW signal processing and MIMO marshaling |
 | `applications/fmcw/simo/` | Detect-then-beamform SIMO workflow |
 | `applications/fmcw/siso/` | Baseline SISO range-Doppler workflow |
-| `applications/fmcw/simo_dense_beamforming/` | Dense beamform-then-detect SIMO workflow |
+| `applications/fmcw/dense_beamforming/` | Dense beamform-then-detect SIMO workflow |
 | `applications/fmcw/mimo_tdm/` | MIMO TDM workflow |
+| `applications/fmcw/multi_waveform/` | Alternating coherent FMCW waveform profiles over MIMO TDM |
 | `applications/fmcw/mimo_ddm/` | Linear and nonlinear MIMO DDM workflow |
 | `applications/common/radar_app/` | Shared Graph driver, source, report, and visualization support |
 | `performance/` | Measurement harness (C++ + Python) — cold vs steady, not pass/fail tests |

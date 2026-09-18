@@ -1,7 +1,7 @@
 {
   "$schema": "urn:holohub:application:v1",
   "application": {
-    "name": "mimo_tdm_multi_profile",
+    "name": "multi_waveform",
     "authors": [{"name": "Holoscan Team", "affiliation": "NVIDIA"}],
     "language": ["C++"],
     "version": "0.1.0",
@@ -19,7 +19,7 @@
       "default": {
         "description": "Coherent alternating near/far MIMO TDM processing",
         "run": {
-          "command": "<holohub_app_bin>/mimo_tdm_multi_profile",
+          "command": "<holohub_app_bin>/multi_waveform",
           "workdir": "holohub_app_bin"
         }
       }

@@ -1,7 +1,9 @@
-# MIMO TDM multi-profile application
+# Multi-waveform application
 
 This application alternates a high-resolution `near` CPI with a lower-slope
-`far` CPI. The independently scheduled transmit and receive sources share the
+`far` CPI. Its current graph uses MIMO TDM, but the application is named for
+the waveform diversity and coherent profile switching it demonstrates. The
+independently scheduled transmit and receive sources share the
 TX-applied event time through a bounded frame coordinator. The graph therefore
 delivers the waveform that produced each ADC cube to the range, Doppler, and
 TDM compensation operators through their existing `Exact{}` live inputs.

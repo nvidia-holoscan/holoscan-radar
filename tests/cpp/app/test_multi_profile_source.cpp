@@ -18,7 +18,7 @@
 namespace {
 
 namespace app = holoscan::radar::app;
-namespace workflow = holoscan::radar::app::mimo_tdm_multi_profile;
+namespace workflow = holoscan::radar::app::multi_waveform;
 
 holoscan::TimePoint time_at(int64_t timestamp) {
   return holoscan::TimePoint{timestamp, holoscan::ClockId{7}};
@@ -28,8 +28,8 @@ class MutatedConfig {
  public:
   MutatedConfig(const std::string& old_text, const std::string& new_text) {
     const auto source = std::filesystem::path(HOLOSCAN_RADAR_SOURCE_DIR) /
-                        "applications/fmcw/mimo_tdm_multi_profile/config/"
-                        "mimo_tdm_multi_profile_smoke.yaml";
+                        "applications/fmcw/multi_waveform/config/"
+                        "multi_waveform_smoke.yaml";
     std::ifstream input(source);
     std::string contents{std::istreambuf_iterator<char>(input),
                          std::istreambuf_iterator<char>()};
@@ -113,8 +113,8 @@ TEST(TransmitFrameCoordinator, RejectsPendingReceiveAtFinalization) {
 
 TEST(MultiProfileConfig, DecodesProductionRangeLoss) {
   const auto path = std::filesystem::path(HOLOSCAN_RADAR_SOURCE_DIR) /
-                    "applications/fmcw/mimo_tdm_multi_profile/config/"
-                    "mimo_tdm_multi_profile.yaml";
+                    "applications/fmcw/multi_waveform/config/"
+                    "multi_waveform.yaml";
   const workflow::Config config = workflow::load_config(path);
   EXPECT_EQ(config.scene.range_loss.model,
             holoscan::radar::sim::RangeLossModel::kMonostaticFreeSpace);
@@ -123,8 +123,8 @@ TEST(MultiProfileConfig, DecodesProductionRangeLoss) {
 
 TEST(MultiProfileConfig, DecodesProfilesAndMaximumExtents) {
   const auto path = std::filesystem::path(HOLOSCAN_RADAR_SOURCE_DIR) /
-                    "applications/fmcw/mimo_tdm_multi_profile/config/"
-                    "mimo_tdm_multi_profile_smoke.yaml";
+                    "applications/fmcw/multi_waveform/config/"
+                    "multi_waveform_smoke.yaml";
   const workflow::Config config = workflow::load_config(path);
   ASSERT_EQ(config.profiles.size(), 2U);
   EXPECT_EQ(config.profiles[0].name, "near");

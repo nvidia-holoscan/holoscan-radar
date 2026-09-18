@@ -30,8 +30,8 @@ holoscan_radar_add_application(simo
         detection_reduction_op
         cluster_dbscan_op
 )
-holoscan_radar_add_application(simo_dense_beamforming
-    DIRECTORY fmcw/simo_dense_beamforming
+holoscan_radar_add_application(dense_beamforming
+    DIRECTORY fmcw/dense_beamforming
     DEPENDS OPERATORS
         fmcw_range_processor_op
         clutter_filter_op
@@ -54,8 +54,8 @@ holoscan_radar_add_application(mimo_tdm
         detection_reduction_op
         cluster_dbscan_op
 )
-holoscan_radar_add_application(mimo_tdm_multi_profile
-    DIRECTORY fmcw/mimo_tdm_multi_profile
+holoscan_radar_add_application(multi_waveform
+    DIRECTORY fmcw/multi_waveform
     DEPENDS OPERATORS
         fmcw_range_processor_op
         clutter_filter_op

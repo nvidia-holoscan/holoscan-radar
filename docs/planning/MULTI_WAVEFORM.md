@@ -1,8 +1,8 @@
-# MIMO TDM Multi-Profile Application
+# Multi-Waveform Application
 
 ## Goal
 
-Add `applications/fmcw/mimo_tdm_multi_profile`, demonstrating alternating
+Add `applications/fmcw/multi_waveform`, demonstrating alternating
 high-resolution and long-range FMCW CPIs with exact waveform/data coherence
 between independently scheduled TX and RX source operators.
 

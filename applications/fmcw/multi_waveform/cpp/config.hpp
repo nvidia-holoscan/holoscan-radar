@@ -18,7 +18,7 @@
 #include "radar_app/app/multi_profile_source.hpp"
 #include "radar_app/simple/mimo/config.hpp"
 
-namespace holoscan::radar::app::mimo_tdm_multi_profile {
+namespace holoscan::radar::app::multi_waveform {
 
 struct Config : mimo::TdmConfig {
   explicit Config(mimo::TdmConfig base) : mimo::TdmConfig(std::move(base)) {}
@@ -244,4 +244,4 @@ inline Config load_config(const std::filesystem::path& path) {
   return result;
 }
 
-}  // namespace holoscan::radar::app::mimo_tdm_multi_profile
+}  // namespace holoscan::radar::app::multi_waveform

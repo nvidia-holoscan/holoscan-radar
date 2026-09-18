@@ -29,7 +29,7 @@
 
 namespace radar = holoscan::radar;
 namespace app = holoscan::radar::app;
-namespace workflow = holoscan::radar::app::mimo_tdm_multi_profile;
+namespace workflow = holoscan::radar::app::multi_waveform;
 
 namespace {
 
@@ -47,7 +47,7 @@ void bind_outputs(holoscan::CompileOptions& options, const char* op,
 
 int main(int argc, char** argv) {
   return app::run_fmcw_graph_app<workflow::Config>(
-      argc, argv, "mimo_tdm_multi_profile", "mimo_tdm_multi_profile.yaml",
+      argc, argv, "multi_waveform", "multi_waveform.yaml",
       workflow::load_config,
       [](holoscan::Graph& graph, holoscan::CompileOptions& options,
          workflow::Config& cfg,
@@ -192,7 +192,7 @@ int main(int argc, char** argv) {
               cfg.beamscan_params->el_coordinates,
               cfg.beamscan_params->angle_convention, cfg.scene.targets,
               cfg.scene_visibility,
-              "MIMO TDM Multi-Profile",
+              "Multi-Waveform",
               app::viz::ProfiledClusterDashboardInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,
                   cluster->labels, cluster->sizes, range->range_bins,

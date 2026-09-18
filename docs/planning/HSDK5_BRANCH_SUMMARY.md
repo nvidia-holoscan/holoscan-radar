@@ -50,9 +50,9 @@ do not infer Graph behavior from 4.x.
   enum `override_ms` on `ClutterFilterOp.method`.
 - **Pool sizing:** `MaxTensorExtents` through fat ops, Graph units, apps,
   and Python binding constructors (no empty extents).
-- **Applications:** five standalone Graph applications:
-  `siso`, `simo`, `simo_dense_beamforming`, `mimo_tdm`,
-  and `mimo_ddm`. The older SISO, consolidated SIMO, dense-SIMO, and routed
+- **Applications:** six standalone Graph applications:
+  `siso`, `simo`, `dense_beamforming`, `mimo_tdm`,
+  `multi_waveform`, and `mimo_ddm`. The older SISO, consolidated SIMO, dense-SIMO, and routed
   AoA demos are retired.
 - **Visualization:** the surviving applications use the Graph-native HSDK 5
   dashboard when available and otherwise remain runnable headless.
