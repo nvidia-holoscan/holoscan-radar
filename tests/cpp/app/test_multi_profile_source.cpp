@@ -128,8 +128,17 @@ TEST(MultiProfileConfig, DecodesProfilesAndMaximumExtents) {
   EXPECT_DOUBLE_EQ(
       config.profiles[1].waveform.chirp_repetition_interval(), 90.0e-6);
   EXPECT_DOUBLE_EQ(
+      config.profiles[0].physical_waveform.chirp_repetition_interval,
+      25.0e-6);
+  EXPECT_DOUBLE_EQ(
       config.profiles[1].physical_waveform.chirp_repetition_interval,
       45.0e-6);
+  EXPECT_EQ(config.scene.analog_if.sampling_mode,
+            holoscan::radar::sim::IfSamplingMode::kComplexIq);
+  EXPECT_EQ(config.scene.analog_if.response,
+            holoscan::radar::sim::AnalogIfResponseType::kRaisedCosine);
+  EXPECT_DOUBLE_EQ(config.scene.analog_if.passband_fraction, 0.9);
+  EXPECT_DOUBLE_EQ(config.scene.analog_if.stopband_fraction, 1.0);
   EXPECT_EQ(config.range_params->nfft, 0);
   EXPECT_EQ(config.doppler_params->nfft, 0);
   EXPECT_FALSE(config.range_params->waveform.is_valid());

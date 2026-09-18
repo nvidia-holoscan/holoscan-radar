@@ -6,6 +6,7 @@
 #include <yaml-cpp/yaml.h>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <holoscan/config/io.hpp>
