@@ -34,6 +34,7 @@
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/logger/logger.hpp>
 
 #include "radar_app/report/cadence_meter.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
@@ -137,6 +138,25 @@ class TransmitFrameCoordinator {
     return result;
   }
 
+  void register_receive(FrameToken token) {
+    std::lock_guard lock(mutex_);
+    if (pending_receives_.count(token) != 0U ||
+        tombstones_.count(token) != 0U) {
+      throw std::runtime_error("duplicate receive frame token");
+    }
+    if (pending_receives_.size() >= capacity_) {
+      throw std::runtime_error("receive frame coordinator capacity exceeded");
+    }
+    pending_receives_.insert(token);
+  }
+
+  void complete_receive(FrameToken token) {
+    std::lock_guard lock(mutex_);
+    if (pending_receives_.erase(token) == 0U) {
+      throw std::runtime_error("cannot complete unknown receive frame token");
+    }
+  }
+
   void advance_poll(std::size_t max_polls) {
     std::lock_guard lock(mutex_);
     for (auto& [token, record] : records_) {
@@ -151,6 +171,9 @@ class TransmitFrameCoordinator {
     std::lock_guard lock(mutex_);
     if (!records_.empty()) {
       throw std::runtime_error("frame coordinator finalized with unmatched TX frames");
+    }
+    if (!pending_receives_.empty()) {
+      throw std::runtime_error("frame coordinator finalized with pending RX frames");
     }
   }
 
@@ -180,6 +203,7 @@ class TransmitFrameCoordinator {
   std::size_t tombstone_capacity_;
   mutable std::mutex mutex_;
   std::unordered_map<FrameToken, Record> records_;
+  std::unordered_set<FrameToken> pending_receives_;
   std::unordered_set<FrameToken> tombstones_;
   std::deque<FrameToken> tombstone_order_;
 };
@@ -389,6 +413,14 @@ class FMCWTransmitSourceOp final : public holoscan::Operator<> {
     } catch (const std::exception& error) {
       return failure("publish", error.what());
     }
+    const auto& applied = config_.profiles[receipt.profile_index];
+    const auto effective_pri_ns = static_cast<int64_t>(std::llround(
+        applied.waveform.chirp_repetition_interval() * 1.0e9));
+    HOLOSCAN_LOG_INFO(
+        "multi-profile axes: frame={} profile={} range_bins={} "
+        "velocity_bins={} effective_pri_ns={}",
+        frames_emitted_, applied.name, applied.samples_per_chirp,
+        applied.chirps_per_tx, effective_pri_ns);
     ++frames_emitted_;
     return {};
   }
@@ -479,11 +511,13 @@ class CorrelatedMimoTdmAdcSourceOp final : public holoscan::Operator<> {
       if (!frame.adc_cube) {
         return failure("RX driver returned no ADC tensor");
       }
-      if (!seen_tokens_.insert(frame.token).second) {
-        return failure("duplicate RX frame token");
-      }
       if (pending_.size() >= config_.pending_capacity) {
         return failure("pending RX frame capacity exceeded");
+      }
+      try {
+        config_.coordinator->register_receive(frame.token);
+      } catch (const std::exception& error) {
+        return failure(error.what());
       }
       pending_.push_back(PendingFrame{std::move(frame), 0U});
     }
@@ -501,7 +535,16 @@ class CorrelatedMimoTdmAdcSourceOp final : public holoscan::Operator<> {
       }
       const ReceivedAdcFrame frame = it->frame;
       pending_.erase(it);
-      return copy_and_emit(context, frame, claim);
+      auto emitted = copy_and_emit(context, frame, claim);
+      if (!emitted) {
+        return emitted;
+      }
+      try {
+        config_.coordinator->complete_receive(frame.token);
+      } catch (const std::exception& error) {
+        return failure(error.what());
+      }
+      return {};
     }
     return {};
   }
@@ -509,6 +552,10 @@ class CorrelatedMimoTdmAdcSourceOp final : public holoscan::Operator<> {
   holoscan::Output<holoscan::Tensor> adc_cube{"adc_cube"};
 
   void stop() override {
+    if (!pending_.empty()) {
+      throw std::runtime_error(
+          "CorrelatedMimoTdmAdcSourceOp finalized with pending RX frames");
+    }
     config_.driver->finalize();
     config_.coordinator->finalize();
   }
@@ -561,7 +608,6 @@ class CorrelatedMimoTdmAdcSourceOp final : public holoscan::Operator<> {
   std::size_t max_pending_polls_{1U};
   int64_t frames_emitted_{0};
   std::deque<PendingFrame> pending_;
-  std::unordered_set<FrameToken> seen_tokens_;
 };
 
 }  // namespace holoscan::radar::app

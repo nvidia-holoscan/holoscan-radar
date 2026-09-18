@@ -100,6 +100,17 @@ TEST(TransmitFrameCoordinator, RejectsDuplicatesOverflowAndDoubleReady) {
   EXPECT_EQ(coordinator.outstanding(), 0U);
 }
 
+TEST(TransmitFrameCoordinator, RejectsPendingReceiveAtFinalization) {
+  app::TransmitFrameCoordinator coordinator(1U);
+  coordinator.register_receive(7U);
+  EXPECT_THROW(coordinator.finalize(), std::runtime_error);
+  EXPECT_THROW(coordinator.register_receive(7U), std::runtime_error);
+  EXPECT_THROW(coordinator.register_receive(8U), std::runtime_error);
+  coordinator.complete_receive(7U);
+  EXPECT_THROW(coordinator.complete_receive(7U), std::runtime_error);
+  EXPECT_NO_THROW(coordinator.finalize());
+}
+
 TEST(MultiProfileConfig, DecodesProfilesAndMaximumExtents) {
   const auto path = std::filesystem::path(HOLOSCAN_RADAR_SOURCE_DIR) /
                     "applications/fmcw/mimo_tdm_multi_profile/config/"
