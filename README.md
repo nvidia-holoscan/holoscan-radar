@@ -27,8 +27,8 @@ devcontainer startup, `holohub` commands, and the required pre-GA cleanup.
 ## Quick Start
 
 ```bash
-# Run the detect-then-beamform SIMO application
-./holohub run simo
+# Run the baseline SISO application
+./holohub run siso
 ```
 
 ---
@@ -102,7 +102,7 @@ either side.
 ### App-support library (`radar_app`)
 
 Graph lifecycle, analytic sources, report sinks, typed application loaders,
-and the optional HSDK 5 dashboard reused by the four standalone FMCW apps —
+and the optional HSDK 5 dashboard reused by the five standalone FMCW apps —
 see [`applications/common/README.md`](applications/common/README.md).
 The report sinks remain available to Python operator tests.
 

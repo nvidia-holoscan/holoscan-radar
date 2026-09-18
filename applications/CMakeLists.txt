@@ -6,6 +6,17 @@ add_subdirectory(common)
 
 # Each workflow is a standalone application with its own APP_<name>
 # gate, executable, metadata, and configuration set.
+holoscan_radar_add_application(siso
+    DIRECTORY fmcw/siso
+    DEPENDS OPERATORS
+        fmcw_range_processor_op
+        clutter_filter_op
+        fmcw_doppler_processor_op
+        cfar_detector_op
+        feature_assembly_op
+        detection_reduction_op
+        cluster_dbscan_op
+)
 holoscan_radar_add_application(simo
     DIRECTORY fmcw/simo
     DEPENDS OPERATORS

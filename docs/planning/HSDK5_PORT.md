@@ -1176,7 +1176,7 @@ cache cannot resurrect it) until a fuller EA/GA Python operator surface and
 `fmcw_aoa_estimators` trees are removed. Their Application/Holoviz helpers,
 X11 viewer/raster fallback, app-specific adapters, and Python demo framework
 were removed with them. X11 remains only as the runtime display probe for the
-optional Graph-native HSDK 5 dashboard. The four standalone SIMO/MIMO
+optional Graph-native HSDK 5 dashboard. The five standalone SISO/SIMO/MIMO
 applications register independently of display availability and run headless
 when the dashboard is unavailable.
 
@@ -1188,6 +1188,8 @@ vertices and explicitly partition every active operator.
 **Standalone MIMO apps (updated 2026-09-17).** `APP_mimo_tdm` and `APP_mimo_ddm` point directly at `applications/fmcw/mimo_tdm` and `applications/fmcw/mimo_ddm`. Each builds one same-named Graph binary. DDM defaults to the linear YAML; the nonlinear Zadoff-Chu YAML selects the correlation path through root `ddm.generate_phase_codes`. The former consolidated directory and empty Python stub are removed.
 
 **Standalone SIMO apps (updated 2026-09-17).** `APP_simo` and `APP_simo_dense_beamforming` point directly at their same-named directories under `applications/fmcw` and build one Graph binary each. Every application owns a production/smoke pair. The sparse app retains detect-then-beamform clustering; the dense app retains full-cube beamform-then-detect N-D peak reporting. Reusable typed loading and derivation helpers live privately under `applications/common/radar_app/simple/simo`; the former consolidated application directory and empty Python stub are removed.
+
+**Standalone SISO app (updated 2026-09-18).** `APP_siso` points directly at `applications/fmcw/siso` and builds the same-named Graph binary. It processes rank-2 ADC data through range, clutter, Doppler, CFAR, physical range/velocity clustering, medoid reduction, and reporting. Its dashboard uses the shared explicit no-angle presentation, retaining range-Doppler and range/velocity history panels without angle-derived artifacts. Private typed loading and extent derivation live under `applications/common/radar_app/simple/siso`.
 
 **EA workaround — SDK install component (2026-09-14).** SDK image `7b9cfe3`
 exports `holoscan::operators::holoviz` and builds its shared library, but
@@ -1236,7 +1238,7 @@ legacy `perf_source.hpp` / `perf_sink.hpp` remain for reference only.
 CMake gates drivers via `HOLOSCAN_RADAR_HSDK5_PORTED_PERF` (all drivers
 listed — see §8). Python perf drivers stay deferred with bindings.
 
-**Status:** open — phase 4: the four standalone SIMO/MIMO Graph applications
+**Status:** open — phase 4: the five standalone SISO/SIMO/MIMO Graph applications
 and native HSDK 5 dashboard are landed; legacy demos and the X11 viewer are
 retired; Python execution remains deferred; C++ Graph perf is complete.
 

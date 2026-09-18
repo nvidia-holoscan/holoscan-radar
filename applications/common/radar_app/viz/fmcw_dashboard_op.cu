@@ -163,10 +163,13 @@ void validate_dashboard_inputs(const Tensor& detection_idx,
                                const Tensor& points, const Tensor& labels,
                                const Tensor& sizes, const Tensor& range_bins,
                                const Tensor& velocity_bins,
-                               const Tensor& reduced_points) {
+                               const Tensor& reduced_points,
+                               bool show_angles) {
+  const std::int64_t min_features = show_angles ? 4 : 2;
   if (detection_idx.shape().size() != 2U ||
       detection_idx.shape()[1] < 2 ||
-      points.shape().size() != 2U || points.shape()[1] < 4 ||
+      points.shape().size() != 2U ||
+      points.shape()[1] < min_features ||
       points.shape()[0] != detection_idx.shape()[0] ||
       labels.shape().size() != 1U ||
       labels.shape()[0] != detection_idx.shape()[0] ||
@@ -175,7 +178,7 @@ void validate_dashboard_inputs(const Tensor& detection_idx,
       velocity_bins.shape().size() != 1U || velocity_bins.shape()[0] <= 0 ||
       reduced_points.shape().size() != 2U ||
       reduced_points.shape()[0] != sizes.shape()[0] ||
-      reduced_points.shape()[1] < 4) {
+      reduced_points.shape()[1] < min_features) {
     throw std::invalid_argument(
         "FmcwDashboardOp: incompatible detection, cluster, or axis shapes");
   }
@@ -184,10 +187,13 @@ void validate_dashboard_inputs(const Tensor& detection_idx,
 void validate_detection_inputs(const Tensor& detection_idx,
                                const Tensor& points,
                                const Tensor& range_bins,
-                               const Tensor& velocity_bins) {
+                               const Tensor& velocity_bins,
+                               bool show_angles) {
+  const std::int64_t min_features = show_angles ? 4 : 2;
   if (detection_idx.shape().size() != 2U ||
       detection_idx.shape()[1] < 2 ||
-      points.shape().size() != 2U || points.shape()[1] < 4 ||
+      points.shape().size() != 2U ||
+      points.shape()[1] < min_features ||
       points.shape()[0] != detection_idx.shape()[0] ||
       range_bins.shape().size() != 1U || range_bins.shape()[0] <= 0 ||
       velocity_bins.shape().size() != 1U ||
@@ -367,7 +373,8 @@ struct DashboardLayout {
 };
 
 DashboardLayout make_dashboard_layout(std::int64_t width,
-                                      std::int64_t height) {
+                                      std::int64_t height,
+                                      bool show_angles) {
   constexpr int kOuter = 10;
   constexpr int kGap = 10;
   const int canvas_width = static_cast<int>(width);
@@ -391,6 +398,17 @@ DashboardLayout make_dashboard_layout(std::int64_t width,
   result.boresight_panel =
       PixelRect{side_x + panel_width + kGap, kOuter, panel_width,
                 panel_height};
+
+  if (!show_angles) {
+    const int history_height = (available_height - kGap) / 2;
+    result.history_panels = {
+        PixelRect{side_x, kOuter, side_width, history_height},
+        PixelRect{side_x, kOuter + history_height + kGap,
+                  side_width, history_height},
+        PixelRect{}, PixelRect{},
+    };
+    return result;
+  }
 
   const int second_row_y = kOuter + panel_height + kGap;
   const int third_row_y = second_row_y + panel_height + kGap;
@@ -803,7 +821,8 @@ std::vector<std::uint8_t> make_annotation(
     const FmcwDashboardConfig& config, std::int64_t frame_index) {
   const std::int64_t width = config.width;
   const std::int64_t height = config.height;
-  const DashboardLayout layout = make_dashboard_layout(width, height);
+  const DashboardLayout layout =
+      make_dashboard_layout(width, height, config.show_angles);
   const PixelRect& plot = layout.rd_plot;
   std::vector<std::uint8_t> image(
       static_cast<std::size_t>(width * height * 4), 0U);
@@ -889,14 +908,16 @@ std::vector<std::uint8_t> make_annotation(
       std::minmax_element(velocities.begin(), velocities.end());
   const std::array<float, 2> physical_range_bounds{
       *range_bounds.first, *range_bounds.second};
-  draw_spatial_panel(
-      &image, width, height, layout.azimuth_range_panel, "AZIMUTH-RANGE",
-      SpatialView::kAzimuthRange, detection_history, physical_range_bounds,
-      frame_index, config);
-  draw_spatial_panel(
-      &image, width, height, layout.boresight_panel, "BORESIGHT",
-      SpatialView::kBoresight, detection_history, physical_range_bounds,
-      frame_index, config);
+  if (config.show_angles) {
+    draw_spatial_panel(
+        &image, width, height, layout.azimuth_range_panel, "AZIMUTH-RANGE",
+        SpatialView::kAzimuthRange, detection_history, physical_range_bounds,
+        frame_index, config);
+    draw_spatial_panel(
+        &image, width, height, layout.boresight_panel, "BORESIGHT",
+        SpatialView::kBoresight, detection_history, physical_range_bounds,
+        frame_index, config);
+  }
   draw_history_panel(
       &image, width, height, layout.history_panels[0], "RANGE (M)", 0,
       physical_range_bounds, history, frame_index, config);
@@ -904,12 +925,14 @@ std::vector<std::uint8_t> make_annotation(
       &image, width, height, layout.history_panels[1], "VELOCITY (M/S)", 1,
       {*velocity_bounds.first, *velocity_bounds.second}, history, frame_index,
       config);
-  draw_history_panel(&image, width, height, layout.history_panels[2],
-                     "AZIMUTH (RAD)", 2, config.az_bounds, history,
-                     frame_index, config);
-  draw_history_panel(&image, width, height, layout.history_panels[3],
-                     "ELEVATION (RAD)", 3, config.el_bounds, history,
-                     frame_index, config);
+  if (config.show_angles) {
+    draw_history_panel(&image, width, height, layout.history_panels[2],
+                       "AZIMUTH (RAD)", 2, config.az_bounds, history,
+                       frame_index, config);
+    draw_history_panel(&image, width, height, layout.history_panels[3],
+                       "ELEVATION (RAD)", 3, config.el_bounds, history,
+                       frame_index, config);
+  }
   return image;
 }
 
@@ -924,8 +947,10 @@ FmcwDashboardOp::FmcwDashboardOp(FmcwDashboardConfig config)
       !std::isfinite(config_.frame_period) || config_.frame_period <= 0.0 ||
       config_.history_frames < 2 ||
       config_.detection_trail_frames < 1 || config_.width < 640 ||
-      config_.height < 360 || !(config_.az_bounds[0] < config_.az_bounds[1]) ||
-      !(config_.el_bounds[0] < config_.el_bounds[1])) {
+      config_.height < 360 ||
+      (config_.show_angles &&
+       (!(config_.az_bounds[0] < config_.az_bounds[1]) ||
+        !(config_.el_bounds[0] < config_.el_bounds[1])))) {
     throw std::invalid_argument(
         "FmcwDashboardOp: invalid scales, history, bounds, or canvas size");
   }
@@ -1029,9 +1054,11 @@ expected<void, Error> FmcwDashboardOp::compute(
     layout = collapse_batch(power, "FmcwDashboardOp.cfar_power");
     if (config_.mode == DashboardMode::kClusters) {
       validate_dashboard_inputs(idx, feature_points, cluster_labels,
-                                cluster_sizes, ranges, velocities, reduced);
+                                cluster_sizes, ranges, velocities, reduced,
+                                config_.show_angles);
     } else {
-      validate_detection_inputs(idx, feature_points, ranges, velocities);
+      validate_detection_inputs(idx, feature_points, ranges, velocities,
+                                config_.show_angles);
     }
   } catch (const std::invalid_argument& e) {
     return make_unexpected(
@@ -1076,14 +1103,15 @@ expected<void, Error> FmcwDashboardOp::compute(
     if (config_.mode == DashboardMode::kClusters) {
       markers = detail::make_cluster_markers(
           host_idx, host_points, host_labels, host_sizes, idx.shape()[1],
-          feature_points.shape()[1], config_.angle_convention);
+          feature_points.shape()[1], config_.angle_convention,
+          config_.show_angles);
       detail::apply_reduced_features(
           &markers, host_reduced, reduced.shape()[1],
-          config_.angle_convention);
+          config_.angle_convention, config_.show_angles);
     } else {
       markers = detail::make_raw_detection_markers(
           host_idx, host_points, idx.shape()[1], feature_points.shape()[1],
-          config_.angle_convention);
+          config_.angle_convention, config_.show_angles);
     }
     detail::append_history(&history_, markers, frame_index_,
                            config_.history_frames);
@@ -1122,7 +1150,8 @@ expected<void, Error> FmcwDashboardOp::compute(
   const std::int64_t canvas_height = config_.height;
   const std::int64_t canvas_pixels = canvas_width * canvas_height;
   const DashboardLayout dashboard =
-      make_dashboard_layout(canvas_width, canvas_height);
+      make_dashboard_layout(canvas_width, canvas_height,
+                            config_.show_angles);
   const std::int64_t plot_pixels =
       static_cast<std::int64_t>(dashboard.rd_plot.width) *
       dashboard.rd_plot.height;
@@ -1227,8 +1256,10 @@ std::vector<DetectionMarker> make_cluster_markers(
     const std::vector<std::int64_t>& detection_idx,
     const std::vector<float>& points, const std::vector<std::int64_t>& labels,
     const std::vector<std::int64_t>& sizes, std::int64_t idx_cols,
-    std::int64_t point_cols, const AngleConvention& angle_convention) {
-  if (idx_cols < 2 || point_cols < 4 ||
+    std::int64_t point_cols, const AngleConvention& angle_convention,
+    bool show_angles) {
+  const std::int64_t min_features = show_angles ? 4 : 2;
+  if (idx_cols < 2 || point_cols < min_features ||
       detection_idx.size() % static_cast<std::size_t>(idx_cols) != 0U) {
     throw std::invalid_argument(
         "make_cluster_markers: invalid column counts");
@@ -1272,9 +1303,11 @@ std::vector<DetectionMarker> make_cluster_markers(
       accumulator.features[feature] +=
           static_cast<double>(points[point_offset + feature]);
     }
-    accumulator.angle_centroid.add(angle_convention,
-                                   points[point_offset + 2U],
-                                   points[point_offset + 3U]);
+    if (show_angles) {
+      accumulator.angle_centroid.add(angle_convention,
+                                     points[point_offset + 2U],
+                                     points[point_offset + 3U]);
+    }
     ++accumulator.count;
   }
 
@@ -1294,9 +1327,11 @@ std::vector<DetectionMarker> make_cluster_markers(
       result[cluster].features[feature] =
           static_cast<float>(accumulator.features[feature] * inv);
     }
-    const PhysicalAngles angles = accumulator.angle_centroid.mean();
-    result[cluster].features[2] = static_cast<float>(angles.az);
-    result[cluster].features[3] = static_cast<float>(angles.el);
+    if (show_angles) {
+      const PhysicalAngles angles = accumulator.angle_centroid.mean();
+      result[cluster].features[2] = static_cast<float>(angles.az);
+      result[cluster].features[3] = static_cast<float>(angles.el);
+    }
   }
 
   std::vector<std::size_t> range_order(result.size());
@@ -1318,8 +1353,10 @@ std::vector<DetectionMarker> make_cluster_markers(
 std::vector<DetectionMarker> make_raw_detection_markers(
     const std::vector<std::int64_t>& detection_idx,
     const std::vector<float>& points, std::int64_t idx_cols,
-    std::int64_t point_cols, const AngleConvention& angle_convention) {
-  if (idx_cols < 2 || point_cols < 4 ||
+    std::int64_t point_cols, const AngleConvention& angle_convention,
+    bool show_angles) {
+  const std::int64_t min_features = show_angles ? 4 : 2;
+  if (idx_cols < 2 || point_cols < min_features ||
       detection_idx.size() % static_cast<std::size_t>(idx_cols) != 0U) {
     throw std::invalid_argument(
         "make_raw_detection_markers: invalid column counts");
@@ -1343,11 +1380,13 @@ std::vector<DetectionMarker> make_raw_detection_markers(
         row * static_cast<std::size_t>(point_cols);
     std::copy_n(points.begin() + static_cast<std::ptrdiff_t>(point_offset), 2,
                 result[row].features.begin());
-    const PhysicalAngles angles =
-        to_physical_angles(angle_convention, points[point_offset + 2U],
-                           points[point_offset + 3U]);
-    result[row].features[2] = static_cast<float>(angles.az);
-    result[row].features[3] = static_cast<float>(angles.el);
+    if (show_angles) {
+      const PhysicalAngles angles =
+          to_physical_angles(angle_convention, points[point_offset + 2U],
+                             points[point_offset + 3U]);
+      result[row].features[2] = static_cast<float>(angles.az);
+      result[row].features[3] = static_cast<float>(angles.el);
+    }
   }
 
   std::vector<std::size_t> range_order(rows);
@@ -1369,8 +1408,10 @@ std::vector<DetectionMarker> make_raw_detection_markers(
 void apply_reduced_features(std::vector<DetectionMarker>* markers,
                             const std::vector<float>& reduced_points,
                             std::int64_t reduced_cols,
-                            const AngleConvention& angle_convention) {
-  if (markers == nullptr || reduced_cols < 4 ||
+                            const AngleConvention& angle_convention,
+                            bool show_angles) {
+  const std::int64_t min_features = show_angles ? 4 : 2;
+  if (markers == nullptr || reduced_cols < min_features ||
       reduced_points.size() !=
           markers->size() * static_cast<std::size_t>(reduced_cols)) {
     throw std::invalid_argument(
@@ -1382,13 +1423,15 @@ void apply_reduced_features(std::vector<DetectionMarker>* markers,
           reduced_points[cluster * static_cast<std::size_t>(reduced_cols) +
                          feature];
     }
-    const std::size_t offset =
-        cluster * static_cast<std::size_t>(reduced_cols);
-    const PhysicalAngles angles =
-        to_physical_angles(angle_convention, reduced_points[offset + 2U],
-                           reduced_points[offset + 3U]);
-    (*markers)[cluster].features[2] = static_cast<float>(angles.az);
-    (*markers)[cluster].features[3] = static_cast<float>(angles.el);
+    if (show_angles) {
+      const std::size_t offset =
+          cluster * static_cast<std::size_t>(reduced_cols);
+      const PhysicalAngles angles =
+          to_physical_angles(angle_convention, reduced_points[offset + 2U],
+                             reduced_points[offset + 3U]);
+      (*markers)[cluster].features[2] = static_cast<float>(angles.az);
+      (*markers)[cluster].features[3] = static_cast<float>(angles.el);
+    }
   }
 }
 

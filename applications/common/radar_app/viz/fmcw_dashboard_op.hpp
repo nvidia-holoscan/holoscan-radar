@@ -54,6 +54,7 @@ enum class DashboardMode {
 
 struct FmcwDashboardConfig {
   DashboardMode mode{DashboardMode::kRawDetections};
+  bool show_angles{true};
   float dynamic_range_db{60.0F};
   float detection_radius{0.010F};
   double frame_period{0.1};
@@ -109,19 +110,22 @@ std::vector<DetectionMarker> make_cluster_markers(
     const std::vector<float>& points, const std::vector<std::int64_t>& labels,
     const std::vector<std::int64_t>& sizes, std::int64_t idx_cols,
     std::int64_t point_cols,
-    const AngleConvention& angle_convention = AngleConvention{});
+    const AngleConvention& angle_convention = AngleConvention{},
+    bool show_angles = true);
 
 std::vector<DetectionMarker> make_raw_detection_markers(
     const std::vector<std::int64_t>& detection_idx,
     const std::vector<float>& points, std::int64_t idx_cols,
     std::int64_t point_cols,
-    const AngleConvention& angle_convention = AngleConvention{});
+    const AngleConvention& angle_convention = AngleConvention{},
+    bool show_angles = true);
 
 void apply_reduced_features(std::vector<DetectionMarker>* markers,
                             const std::vector<float>& reduced_points,
                             std::int64_t reduced_cols,
                             const AngleConvention& angle_convention =
-                                AngleConvention{});
+                                AngleConvention{},
+                            bool show_angles = true);
 
 void append_history(std::deque<HistorySample>* history,
                     const std::vector<DetectionMarker>& markers,

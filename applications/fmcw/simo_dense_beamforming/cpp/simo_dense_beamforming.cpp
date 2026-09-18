@@ -166,7 +166,7 @@ int main(int argc, char** argv) {
         if (cfg.visualize) {
           app::viz::add_fmcw_dashboard(
               graph, application, options, cfg.visualization,
-              cfg.frame_period, cfg.beamformer_params->az_coordinates,
+              cfg.frame_period, true, cfg.beamformer_params->az_coordinates,
               cfg.beamformer_params->el_coordinates,
               cfg.beamformer_params->angle_convention, cfg.scene.targets,
               "SIMO Dense Beamforming",

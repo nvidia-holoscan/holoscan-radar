@@ -99,6 +99,7 @@ Rules that follow from "lockdown":
 | `operators/common/` | Shared `radar_common` library: descriptors, window generation, point-target simulator, config cache, tensor/MatX utilities |
 | `operators/fmcw/` | FMCW signal processing and MIMO marshaling |
 | `applications/fmcw/simo/` | Detect-then-beamform SIMO workflow |
+| `applications/fmcw/siso/` | Baseline SISO range-Doppler workflow |
 | `applications/fmcw/simo_dense_beamforming/` | Dense beamform-then-detect SIMO workflow |
 | `applications/fmcw/mimo_tdm/` | MIMO TDM workflow |
 | `applications/fmcw/mimo_ddm/` | Linear and nonlinear MIMO DDM workflow |

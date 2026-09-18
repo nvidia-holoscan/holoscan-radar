@@ -10,7 +10,7 @@ commit in the PR).
 **Status:** open — low-priority polish; agreed to defer until core signal
 chain is stable.
 
-The HSDK 5 dashboards across the standalone SIMO and MIMO applications are
+The HSDK 5 dashboards across the standalone SISO, SIMO, and MIMO applications are
 functional but unpolished. Candidate improvements:
 
 - Layout and panel sizing (consistent margins, panel proportions).
@@ -59,7 +59,7 @@ and cadence/timestamps as the corresponding simulator source.
 
 The application-owned YAML boundary should select `simulator` or `hdf5` and
 carry only replay concerns such as file path, dataset path, end-of-file policy,
-and optional frame range. Operator parameter blocks remain unchanged. SIMO, MIMO-TDM, and MIMO-DDM must each validate the recorded tensor against
+and optional frame range. Operator parameter blocks remain unchanged. SISO, SIMO, MIMO-TDM, and MIMO-DDM must each validate the recorded tensor against
 their existing named ADC axes before the graph starts; file metadata must not
 silently override waveform, array, schedule, or DDM-code configuration.
 

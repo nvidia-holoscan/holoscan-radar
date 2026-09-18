@@ -43,6 +43,7 @@ holoscan_radar_operators_ported(_HOLOSCAN_RADAR_PKG_MIMO
 set(_HOLOSCAN_RADAR_PKG_APPLICATIONS)
 if(_HOLOSCAN_RADAR_PKG_FMCW_CHAIN)
     list(APPEND _HOLOSCAN_RADAR_PKG_APPLICATIONS
+        siso
         simo
         simo_dense_beamforming)
     if(_HOLOSCAN_RADAR_PKG_MIMO)

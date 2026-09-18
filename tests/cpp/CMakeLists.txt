@@ -195,6 +195,23 @@ target_include_directories(test_fmcw_simo_config PRIVATE
 target_compile_definitions(test_fmcw_simo_config PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
+radar_add_test(app/test_fmcw_siso_config
+    yaml-cpp
+    holoscan::params_io
+    holoscan::radar_app
+    holoscan::fmcw_range_processor_op
+    holoscan::clutter_filter_op
+    holoscan::fmcw_doppler_processor_op
+    holoscan::cfar_detector_op
+    holoscan::cluster_dbscan_op
+    holoscan::feature_assembly_op
+    holoscan::detection_reduction_op)
+target_include_directories(test_fmcw_siso_config PRIVATE
+    ${PROJECT_SOURCE_DIR}/applications/common
+    ${PROJECT_SOURCE_DIR}/operators)
+target_compile_definitions(test_fmcw_siso_config PRIVATE
+    HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+
 radar_add_test(app/test_fmcw_mimo_config
     yaml-cpp
     holoscan::params_io

@@ -78,7 +78,7 @@ template <typename Inputs>
 inline void add_fmcw_dashboard(
     holoscan::Graph& graph, holoscan::PartitionHandle& application,
     holoscan::CompileOptions& options, const VisualizationConfig& config,
-    double frame_period, const std::vector<double>& az_grid,
+    double frame_period, bool show_angles, const std::vector<double>& az_grid,
     const std::vector<double>& el_grid, const AngleConvention& angle_convention,
     const std::vector<sim::PointTarget>& truth_targets,
     std::string workflow_title,
@@ -89,12 +89,15 @@ inline void add_fmcw_dashboard(
   constexpr bool kClustered =
       std::is_same_v<Inputs, ClusterDashboardInputs>;
   const PhysicalAngleBounds physical_bounds =
-      physical_scan_grid_bounds(angle_convention, az_grid, el_grid);
+      show_angles
+          ? physical_scan_grid_bounds(angle_convention, az_grid, el_grid)
+          : PhysicalAngleBounds{{-1.0, 1.0}, {-1.0, 1.0}};
   auto display = graph.op<FmcwDashboardOp>(
       "display_compositor",
       FmcwDashboardConfig{
           .mode = kClustered ? DashboardMode::kClusters
                              : DashboardMode::kRawDetections,
+          .show_angles = show_angles,
           .dynamic_range_db =
               static_cast<float>(config.dynamic_range_db),
           .detection_radius =

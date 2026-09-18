@@ -171,6 +171,22 @@ TEST(FmcwDashboardTest, AcceptsEmptyRawDetections) {
       viz::detail::make_raw_detection_markers({}, {}, 4, 5).empty());
 }
 
+TEST(FmcwDashboardTest, AcceptsTwoColumnAngleFreePoints) {
+  const auto raw = viz::detail::make_raw_detection_markers(
+      {2, 3}, {14.0F, 3.0F}, 2, 2, holoscan::radar::AngleConvention{},
+      false);
+  ASSERT_EQ(raw.size(), 1U);
+  EXPECT_EQ(raw[0].features,
+            (std::array<float, 4>{14.0F, 3.0F, 0.0F, 0.0F}));
+
+  const auto clustered = viz::detail::make_cluster_markers(
+      {2, 3, 4, 5}, {14.0F, 3.0F, 16.0F, 5.0F}, {0, 0}, {2}, 2, 2,
+      holoscan::radar::AngleConvention{}, false);
+  ASSERT_EQ(clustered.size(), 1U);
+  EXPECT_EQ(clustered[0].features,
+            (std::array<float, 4>{15.0F, 4.0F, 0.0F, 0.0F}));
+}
+
 TEST(FmcwDashboardTest, RejectsMismatchedRawDetectionRows) {
   EXPECT_THROW(
       viz::detail::make_raw_detection_markers(
@@ -191,6 +207,17 @@ TEST(FmcwDashboardTest, UsesReducedFeaturesForHistory) {
             (std::array<float, 4>{10.0F, 1.0F, 0.1F, 0.2F}));
   EXPECT_EQ(markers[1].features,
             (std::array<float, 4>{20.0F, 2.0F, 0.3F, 0.4F}));
+}
+
+TEST(FmcwDashboardTest, UsesTwoColumnReducedFeaturesWithoutAngles) {
+  std::vector<viz::DetectionMarker> markers(2);
+  viz::detail::apply_reduced_features(
+      &markers, {10.0F, 1.0F, 20.0F, 2.0F}, 2,
+      holoscan::radar::AngleConvention{}, false);
+  EXPECT_EQ(markers[0].features,
+            (std::array<float, 4>{10.0F, 1.0F, 0.0F, 0.0F}));
+  EXPECT_EQ(markers[1].features,
+            (std::array<float, 4>{20.0F, 2.0F, 0.0F, 0.0F}));
 }
 
 TEST(FmcwDashboardTest, BoundsHistoryAndMapsPanelCoordinates) {

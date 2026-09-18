@@ -1,7 +1,8 @@
 # Application-support library (`radar_app`)
 
-Shared C++ support for the four standalone FMCW applications:
+Shared C++ support for the five standalone FMCW applications:
 
+- `fmcw/siso`
 - `fmcw/simo`
 - `fmcw/simo_dense_beamforming`
 - `fmcw/mimo_tdm`
@@ -26,6 +27,7 @@ radar_app/
     cadence_meter.hpp        Source and end-to-end cadence accounting
     report_ops.hpp           DetectionReportOp and drain helpers
   simple/
+    siso/                    Typed SISO schemas, loading, and extent derivation
     simo/                    Typed SIMO schemas, loaders, and workflow facades
     mimo/                    Typed MIMO schemas, loaders, sources, and facades
   viz/
@@ -44,7 +46,7 @@ the compiled CUDA dashboard compositor.
 Operator parameters remain owned by their operators. Application loaders decode
 only application-owned sections such as the waveform, run controls, cube
 dimensions, targets, arrays, and visualization settings. Derived operator
-parameters and maximum tensor extents are produced by the private SIMO/MIMO
+parameters and maximum tensor extents are produced by the private SISO/SIMO/MIMO
 loaders under `simple/`.
 
 Application entrypoints include one workflow facade rather than another

@@ -30,6 +30,7 @@ holoscan-radar/
 ├── applications/
 │   ├── common/radar_app/            # Shared Graph/config/report/dashboard support
 │   └── fmcw/
+│       ├── siso/
 │       ├── simo/
 │       ├── simo_dense_beamforming/
 │       ├── mimo_tdm/
