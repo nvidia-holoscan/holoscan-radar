@@ -73,6 +73,7 @@ void expect_smoke_matches_production(const char* production_name,
   expected["app"]["run"]["num_frames"] = 2;
   expected["app"]["visualization"]["enabled"] = false;
   expected["app"].remove("range_loss");
+  expected["app"].remove("scene_visibility");
   YAML::Node targets(YAML::NodeType::Sequence);
   targets.push_back(expected["app"]["targets"][0]);
   expected["app"]["targets"] = targets;
@@ -124,6 +125,8 @@ TEST(FmcwSimoConfig, DecodesDetectThenBeamformSmoke) {
   EXPECT_EQ(config.reduction_params->representative,
             holoscan::radar::RepresentativePolicy::kWeightedMean);
   EXPECT_FALSE(config.visualize);
+  EXPECT_EQ(config.scene_visibility.model,
+            radar::sim::SceneVisibilityModel::kFrontHalfSpace);
 }
 
 TEST(FmcwSimoConfig, DecodesBeamformThenDetectSmoke) {

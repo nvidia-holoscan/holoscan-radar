@@ -17,6 +17,7 @@
 namespace {
 
 namespace viz = holoscan::radar::app::viz;
+namespace radar = holoscan::radar;
 
 TEST(AnglePresentationTest, ConvertsDirectionCosinesToPhysicalAngles) {
   holoscan::radar::AngleConvention convention;
@@ -302,6 +303,22 @@ TEST(FmcwDashboardTest, DerivesMovingTargetTruthFeatures) {
   EXPECT_NEAR(features[1], 2.0F / std::sqrt(3.0F), 1.0e-6F);
   EXPECT_NEAR(features[2], std::acos(-1.0F) / 4.0F, 1.0e-6F);
   EXPECT_NEAR(features[3], std::asin(1.0F / std::sqrt(3.0F)), 1.0e-6F);
+}
+
+TEST(FmcwDashboardTest, TruthVisibilityTracksTargetMotion) {
+  const viz::TruthTarget target{
+      .position = {1.0, 0.0, 0.0},
+      .velocity = {-2.0, 0.0, 0.0},
+  };
+  radar::sim::SceneVisibility visibility;
+  EXPECT_TRUE(viz::detail::truth_target_is_visible_at_time(
+      target, 0.0, visibility));
+  EXPECT_FALSE(viz::detail::truth_target_is_visible_at_time(
+      target, 1.0, visibility));
+
+  visibility.model = radar::sim::SceneVisibilityModel::kAll;
+  EXPECT_TRUE(viz::detail::truth_target_is_visible_at_time(
+      target, 1.0, visibility));
 }
 
 }  // namespace

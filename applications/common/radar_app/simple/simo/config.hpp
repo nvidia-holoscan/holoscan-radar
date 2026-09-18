@@ -46,6 +46,7 @@ enum class Workflow {
 
 struct RuntimeConfig : CommonRunConfig {
   sim::SimScene scene;
+  sim::SceneVisibility scene_visibility{};
   ArrayGeometry array_geometry;
   MaxTensorExtents extents;
   MaxTensorExtents cfar_extents;
@@ -229,6 +230,9 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored,
   result.scene.snr_db = authored.noise_snr_db;
   ::holoscan::radar::app::configure_range_loss(
       authored.range_loss, &result.scene);
+  result.scene_visibility =
+      ::holoscan::radar::app::configure_scene_visibility(
+          authored.scene_visibility);
 
   const auto& rx = authored.rx_array;
   if (rx.az_elements < 2 || rx.el_elements < 2) {

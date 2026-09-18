@@ -41,6 +41,7 @@ namespace holoscan::radar::app::mimo {
 
 struct MimoTdmAdcSourceConfig {
   sim::SimScene scene;
+  sim::SceneVisibility scene_visibility{};
   TXSchedule tx_schedule;
   double frame_period{0.1};
   int64_t num_frames{1};
@@ -114,7 +115,8 @@ class MimoTdmAdcSourceOp : public holoscan::Operator<> {
     std::shared_ptr<holoscan::Tensor> staged;
     try {
       staged = sim::simulate_mimo_gpu(
-          config_.scene, weights, slow_time, stream);
+          sim::visible_scene(config_.scene, config_.scene_visibility),
+          weights, slow_time, stream);
       sim::add_thermal_noise_gpu(
           *staged, config_.scene.snr_db,
           config_.scene.seed + frames_emitted_, stream);
@@ -180,6 +182,7 @@ class MimoTdmAdcSourceOp : public holoscan::Operator<> {
 
 struct MimoDdmAdcSourceConfig {
   sim::SimScene scene;
+  sim::SceneVisibility scene_visibility{};
   std::vector<double> doppler_offsets;
   std::vector<std::complex<double>> phase_codes;
   double frame_period{0.1};
@@ -279,7 +282,8 @@ class MimoDdmAdcSourceOp : public holoscan::Operator<> {
     std::shared_ptr<holoscan::Tensor> staged;
     try {
       staged = sim::simulate_mimo_gpu(
-          config_.scene, weights, slow_time, stream);
+          sim::visible_scene(config_.scene, config_.scene_visibility),
+          weights, slow_time, stream);
       sim::add_thermal_noise_gpu(
           *staged, config_.scene.snr_db,
           config_.scene.seed + frames_emitted_, stream);

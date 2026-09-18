@@ -685,8 +685,15 @@ void draw_spatial_panel(
     bool have_previous = false;
     for (std::int64_t frame = first_truth_frame; frame <= frame_index;
          ++frame) {
+      const double truth_time =
+          static_cast<double>(frame) * config.frame_period;
+      if (!detail::truth_target_is_visible_at_time(
+              target, truth_time, config.scene_visibility)) {
+        have_previous = false;
+        continue;
+      }
       const auto pixel = to_pixel(detail::truth_features_at_time(
-          target, static_cast<double>(frame) * config.frame_period));
+          target, truth_time));
       if (have_previous) {
         draw_line(image, width, height, previous[0], previous[1], pixel[0],
                   pixel[1], color);
@@ -776,10 +783,16 @@ void draw_history_panel(
     bool have_previous = false;
     for (std::int64_t frame = first_truth_frame; frame <= frame_index;
          ++frame) {
+      const double truth_time =
+          static_cast<double>(frame) * config.frame_period;
+      if (!detail::truth_target_is_visible_at_time(
+              target, truth_time, config.scene_visibility)) {
+        have_previous = false;
+        continue;
+      }
       const HistorySample truth_sample{
           .frame = frame,
-          .features = detail::truth_features_at_time(
-              target, static_cast<double>(frame) * config.frame_period)};
+          .features = detail::truth_features_at_time(target, truth_time)};
       const auto position = detail::history_plot_position(
           truth_sample, frame_index, config.history_frames, feature, bounds);
       const std::array<int, 2> pixel{
@@ -940,6 +953,7 @@ std::vector<std::uint8_t> make_annotation(
 
 FmcwDashboardOp::FmcwDashboardOp(FmcwDashboardConfig config)
     : config_(std::move(config)) {
+  sim::validate_scene_visibility(config_.scene_visibility);
   if (!std::isfinite(config_.dynamic_range_db) ||
       config_.dynamic_range_db <= 0.0F ||
       !std::isfinite(config_.detection_radius) ||
@@ -1527,6 +1541,21 @@ std::array<float, 2> history_plot_position(
                    bounds[0]) /
                   (bounds[1] - bounds[0]);
   return {std::clamp(x, 0.0F, 1.0F), std::clamp(y, 0.0F, 1.0F)};
+}
+
+bool truth_target_is_visible_at_time(
+    const TruthTarget& target, double time,
+    const sim::SceneVisibility& visibility) {
+  if (!std::isfinite(time)) {
+    throw std::invalid_argument(
+        "truth_target_is_visible_at_time: non-finite time");
+  }
+  sim::Vec3 position{};
+  for (std::size_t axis = 0; axis < position.size(); ++axis) {
+    position[axis] =
+        target.position[axis] + time * target.velocity[axis];
+  }
+  return sim::target_is_visible(position, visibility);
 }
 
 std::array<float, 4> truth_features_at_time(const TruthTarget& target,

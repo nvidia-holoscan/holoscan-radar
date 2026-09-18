@@ -63,6 +63,7 @@ int main(int argc, char** argv) {
             app::SimulatedTdmLinkConfig{
                 .profiles = cfg.profiles,
                 .scene = cfg.scene,
+                .scene_visibility = cfg.scene_visibility,
                 .tx_schedule = cfg.tx_schedule,
                 .frame_period = cfg.frame_period,
                 .polls_before_ready = cfg.simulated_receive_polls});
@@ -190,6 +191,7 @@ int main(int argc, char** argv) {
               true, cfg.beamscan_params->az_coordinates,
               cfg.beamscan_params->el_coordinates,
               cfg.beamscan_params->angle_convention, cfg.scene.targets,
+              cfg.scene_visibility,
               "MIMO TDM Multi-Profile",
               app::viz::ProfiledClusterDashboardInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,

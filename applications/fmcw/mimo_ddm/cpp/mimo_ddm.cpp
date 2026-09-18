@@ -66,6 +66,7 @@ int main(int argc, char** argv) {
         // Simulated coded DDM ADC source.
         mimo::MimoDdmAdcSourceConfig source_config;
         source_config.scene = cfg.scene;
+        source_config.scene_visibility = cfg.scene_visibility;
         source_config.doppler_offsets = cfg.doppler_offsets;
         if (cfg.correlate) {
           source_config.phase_codes = cfg.ddm_code.phase_codes;
@@ -238,6 +239,7 @@ int main(int argc, char** argv) {
               cfg.frame_period, true, cfg.beamscan_params->az_coordinates,
               cfg.beamscan_params->el_coordinates,
               cfg.beamscan_params->angle_convention, cfg.scene.targets,
+              cfg.scene_visibility,
               "MIMO DDM",
               app::viz::ClusterDashboardInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,

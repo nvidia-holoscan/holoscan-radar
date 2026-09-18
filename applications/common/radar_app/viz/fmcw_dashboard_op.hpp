@@ -24,6 +24,7 @@
 
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/sim/scene.hpp"
 #include "radar_schemas/fmcw_waveform_bridge.hpp"
 
 namespace holoscan::radar::app::viz {
@@ -73,6 +74,7 @@ struct FmcwDashboardConfig {
   std::string selected_profile;
   FMCWWaveformDescriptor selected_waveform;
   std::vector<TruthTarget> truth_targets;
+  sim::SceneVisibility scene_visibility{};
 };
 
 class FmcwDashboardOp : public holoscan::Operator<> {
@@ -155,6 +157,10 @@ std::array<float, 2> history_plot_position(
 
 std::array<float, 4> truth_features_at_time(const TruthTarget& target,
                                             double time);
+
+bool truth_target_is_visible_at_time(
+    const TruthTarget& target, double time,
+    const sim::SceneVisibility& visibility);
 
 }  // namespace detail
 

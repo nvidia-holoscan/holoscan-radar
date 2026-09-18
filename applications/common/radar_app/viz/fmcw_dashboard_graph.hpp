@@ -96,6 +96,7 @@ inline void add_fmcw_dashboard(
     double frame_period, bool show_angles, const std::vector<double>& az_grid,
     const std::vector<double>& el_grid, const AngleConvention& angle_convention,
     const std::vector<sim::PointTarget>& truth_targets,
+    const sim::SceneVisibility& scene_visibility,
     std::string workflow_title,
     const Inputs& inputs) {
   static_assert(std::is_same_v<Inputs, RawDashboardInputs> ||
@@ -144,6 +145,7 @@ inline void add_fmcw_dashboard(
           .selected_profile = std::move(selected_profile),
           .selected_waveform = std::move(selected_waveform),
           .truth_targets = make_truth_targets(truth_targets),
+          .scene_visibility = scene_visibility,
       });
   options.deployment.bind_tensor_output_device(
       holoscan::TensorOutputDevicePlacement{

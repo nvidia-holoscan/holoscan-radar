@@ -181,6 +181,87 @@ TEST(PointTargetSim, SimoCubeHasRxLeadingAxis) {
   }
 }
 
+// --- Application scene visibility seam ---
+
+TEST(SceneVisibility, FrontHalfSpaceFiltersWithoutMutatingScene) {
+  sim::SimScene scene;
+  scene.targets = {
+      {sim::Vec3{10.0, 0.0, 0.0}, sim::Vec3{}, {1.0, 0.0}},
+      {sim::Vec3{-10.0, 0.0, 0.0}, sim::Vec3{}, {2.0, 0.0}},
+      {sim::Vec3{0.0, 10.0, 0.0}, sim::Vec3{}, {3.0, 0.0}},
+  };
+  scene.analog_if.response = sim::AnalogIfResponseType::kNone;
+  scene.range_loss.model = sim::RangeLossModel::kMonostaticFreeSpace;
+  scene.range_loss.reference_range = 17.0;
+  scene.snr_db = 23.0;
+  scene.seed = 1234U;
+
+  const sim::SimScene visible = sim::visible_scene(scene, {});
+  ASSERT_EQ(visible.targets.size(), 1U);
+  EXPECT_EQ(visible.targets[0].position, (sim::Vec3{10.0, 0.0, 0.0}));
+  EXPECT_EQ(scene.targets.size(), 3U);
+  EXPECT_EQ(visible.analog_if.response, sim::AnalogIfResponseType::kNone);
+  EXPECT_EQ(visible.range_loss.model,
+            sim::RangeLossModel::kMonostaticFreeSpace);
+  EXPECT_DOUBLE_EQ(visible.range_loss.reference_range, 17.0);
+  EXPECT_EQ(visible.snr_db, scene.snr_db);
+  EXPECT_EQ(visible.seed, scene.seed);
+}
+
+TEST(SceneVisibility, AllAndRotatedBoresightAreSupported) {
+  sim::SimScene scene;
+  scene.targets = {
+      {sim::Vec3{-10.0, 0.0, 0.0}, sim::Vec3{}, {1.0, 0.0}},
+      {sim::Vec3{0.0, 10.0, 0.0}, sim::Vec3{}, {1.0, 0.0}},
+  };
+  sim::SceneVisibility all;
+  all.model = sim::SceneVisibilityModel::kAll;
+  EXPECT_EQ(sim::visible_scene(scene, all).targets.size(), 2U);
+
+  sim::SceneVisibility rotated;
+  rotated.boresight_direction = sim::Vec3{0.0, 2.0, 0.0};
+  const sim::SimScene visible = sim::visible_scene(scene, rotated);
+  ASSERT_EQ(visible.targets.size(), 1U);
+  EXPECT_EQ(visible.targets[0].position, (sim::Vec3{0.0, 10.0, 0.0}));
+
+  rotated.boresight_direction = sim::Vec3{0.0, 0.0, 1.0};
+  EXPECT_TRUE(sim::target_is_visible({0.0, 0.0, 10.0}, rotated));
+}
+
+TEST(SceneVisibility, RectangularFrustumUsesHorizontalAndVerticalFov) {
+  sim::SceneVisibility frustum;
+  frustum.model = sim::SceneVisibilityModel::kFrustum;
+  frustum.horizontal_fov = kPi / 2.0;
+  frustum.vertical_fov = kPi / 2.0;
+
+  EXPECT_TRUE(sim::target_is_visible({10.0, 9.0, 9.0}, frustum));
+  EXPECT_TRUE(sim::target_is_visible({10.0, 10.0, 10.0}, frustum));
+  EXPECT_FALSE(sim::target_is_visible({10.0, 11.0, 0.0}, frustum));
+  EXPECT_FALSE(sim::target_is_visible({10.0, 0.0, 11.0}, frustum));
+  EXPECT_FALSE(sim::target_is_visible({-10.0, 0.0, 0.0}, frustum));
+
+  frustum.vertical_fov.reset();
+  EXPECT_THROW(sim::validate_scene_visibility(frustum),
+               std::invalid_argument);
+  frustum.vertical_fov = kPi / 2.0;
+  frustum.up_direction = frustum.boresight_direction;
+  EXPECT_THROW(sim::validate_scene_visibility(frustum),
+               std::invalid_argument);
+}
+
+TEST(SceneVisibility, AuthoritativeTargetCanExitAndReenter) {
+  sim::SimScene scene;
+  scene.targets = {{sim::Vec3{1.0, 0.0, 0.0},
+                    sim::Vec3{-2.0, 0.0, 0.0}, {1.0, 0.0}}};
+  const sim::SceneVisibility visibility;
+  EXPECT_EQ(sim::visible_scene(scene, visibility).targets.size(), 1U);
+  sim::advance_scene(&scene, 1.0);
+  EXPECT_TRUE(sim::visible_scene(scene, visibility).targets.empty());
+  scene.targets[0].velocity[0] = 2.0;
+  sim::advance_scene(&scene, 1.0);
+  EXPECT_EQ(sim::visible_scene(scene, visibility).targets.size(), 1U);
+}
+
 // --- SceneMover seam (pluggable per-frame target evolution) ---
 
 TEST(SceneMover, LinearMoverMatchesAdvanceScene) {

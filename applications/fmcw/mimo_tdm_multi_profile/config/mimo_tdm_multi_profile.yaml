@@ -46,6 +46,10 @@ app:
     max_frames_in_flight: 4
     rx_poll_period: 0.001
     simulated_receive_polls: 2
+    # Binary geometric coverage; forward is +x in the radar-local frame.
+    scene_visibility:
+        model: front_half_space
+        boresight_direction: [1.0, 0.0, 0.0]
     range_loss:
         model: monostatic_free_space
         reference_range: 100.0

@@ -226,6 +226,7 @@ class MimoTdmReceiveDriver {
 struct SimulatedTdmLinkConfig {
   std::vector<TdmTransmitProfile> profiles;
   sim::SimScene scene;
+  sim::SceneVisibility scene_visibility{};
   TXSchedule tx_schedule;
   double frame_period{0.1};
   int polls_before_ready{2};
@@ -287,7 +288,9 @@ class SimulatedTdmLink final : public FMCWTransmitDriver,
           {1.0, 0.0};
     }
     const cudaStream_t stream = context.cuda_stream().get();
-    auto adc = sim::simulate_mimo_gpu(config_.scene, weights, slow_time, stream);
+    auto adc = sim::simulate_mimo_gpu(
+        sim::visible_scene(config_.scene, config_.scene_visibility), weights,
+        slow_time, stream);
     sim::add_thermal_noise_gpu(*adc, config_.scene.snr_db,
                                config_.scene.seed + frames_received_, stream);
     if (cudaStreamSynchronize(stream) != cudaSuccess) {

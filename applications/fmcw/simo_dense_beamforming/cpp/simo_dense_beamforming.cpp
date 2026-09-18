@@ -60,6 +60,7 @@ int main(int argc, char** argv) {
 
         app::SimAdcSourceConfig source_config;
         source_config.scene = cfg.scene;
+        source_config.scene_visibility = cfg.scene_visibility;
         source_config.frame_period = cfg.frame_period;
         source_config.num_frames = cfg.num_frames;
         std::shared_ptr<app::CadenceMeter> cadence;
@@ -169,6 +170,7 @@ int main(int argc, char** argv) {
               cfg.frame_period, true, cfg.beamformer_params->az_coordinates,
               cfg.beamformer_params->el_coordinates,
               cfg.beamformer_params->angle_convention, cfg.scene.targets,
+              cfg.scene_visibility,
               "SIMO Dense Beamforming",
               app::viz::RawDashboardInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,

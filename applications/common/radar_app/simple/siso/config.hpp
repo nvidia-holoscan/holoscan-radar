@@ -33,6 +33,7 @@ namespace holoscan::radar::app::siso {
 
 struct RuntimeConfig : CommonRunConfig {
   sim::SimScene scene;
+  sim::SceneVisibility scene_visibility{};
   MaxTensorExtents extents;
   ::holoscan::radar::app::VisualizationConfig visualization;
 };
@@ -223,6 +224,9 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored) {
   result.scene.snr_db = authored.noise_snr_db;
   ::holoscan::radar::app::configure_range_loss(
       authored.range_loss, &result.scene);
+  result.scene_visibility =
+      ::holoscan::radar::app::configure_scene_visibility(
+          authored.scene_visibility);
 
   result.scene.targets.reserve(authored.targets.size());
   for (const TargetConfig& target : authored.targets) {

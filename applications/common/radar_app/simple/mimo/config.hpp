@@ -46,6 +46,7 @@ namespace holoscan::radar::app::mimo {
 
 struct RuntimeConfig : CommonRunConfig {
   sim::SimScene scene;
+  sim::SceneVisibility scene_visibility{};
   ArrayGeometry array_geometry;
   std::vector<double> tx_positions;
   std::vector<double> rx_positions;
@@ -343,6 +344,9 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored,
   result.scene.snr_db = authored.noise_snr_db;
   ::holoscan::radar::app::configure_range_loss(
       authored.range_loss, &result.scene);
+  result.scene_visibility =
+      ::holoscan::radar::app::configure_scene_visibility(
+          authored.scene_visibility);
   result.scene.tx_positions = sim::make_linear_positions(
       authored.tx_array.num_tx, authored.tx_array.spacing,
       waveform.wavelength());

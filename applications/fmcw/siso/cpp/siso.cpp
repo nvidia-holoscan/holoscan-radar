@@ -61,6 +61,7 @@ int main(int argc, char** argv) {
 
         app::SimAdcSourceConfig source_config;
         source_config.scene = cfg.scene;
+        source_config.scene_visibility = cfg.scene_visibility;
         source_config.frame_period = cfg.frame_period;
         source_config.num_frames = cfg.num_frames;
         std::shared_ptr<app::CadenceMeter> cadence;
@@ -163,7 +164,7 @@ int main(int argc, char** argv) {
           app::viz::add_fmcw_dashboard(
               graph, application, options, cfg.visualization,
               cfg.frame_period, false, no_angle_grid, no_angle_grid,
-              radar::AngleConvention{}, cfg.scene.targets, "SISO",
+              radar::AngleConvention{}, cfg.scene.targets, cfg.scene_visibility, "SISO",
               app::viz::ClusterDashboardInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,
                   cluster->labels, cluster->sizes, range->range_bins,
