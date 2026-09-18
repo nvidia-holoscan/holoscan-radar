@@ -120,6 +120,9 @@ TEST(MultiProfileConfig, DecodesProfilesAndMaximumExtents) {
   EXPECT_EQ(config.profiles[0].name, "near");
   EXPECT_EQ(config.profiles[1].name, "far");
   EXPECT_EQ(config.profile_sequence, (std::vector<std::size_t>{0U, 1U}));
+  EXPECT_EQ(config.visualization.profile, "near");
+  EXPECT_EQ(config.visualization_profile_index, 0U);
+  EXPECT_EQ(config.visualization_profile_max_gap_frames, 2U);
   EXPECT_EQ(config.extents.max_samples_per_chirp, 512);
   EXPECT_EQ(config.extents.max_chirps, 64);
   EXPECT_EQ(config.extents.max_interleaved_chirps, 128);
@@ -144,6 +147,35 @@ TEST(MultiProfileConfig, DecodesProfilesAndMaximumExtents) {
   EXPECT_FALSE(config.range_params->waveform.is_valid());
   EXPECT_FALSE(config.doppler_params->waveform.is_valid());
   EXPECT_FALSE(config.compensation_params->waveform.is_valid());
+}
+
+TEST(MultiProfileConfig, DefaultsVisualizationToFirstScheduledProfile) {
+  const MutatedConfig authored("        profile: near\n", "");
+  const workflow::Config config = workflow::load_config(authored.path());
+  EXPECT_EQ(config.visualization.profile, "near");
+  EXPECT_EQ(config.visualization_profile_index, 0U);
+  EXPECT_EQ(config.visualization_profile_max_gap_frames, 2U);
+}
+
+TEST(MultiProfileConfig, SelectsNamedVisualizationProfile) {
+  const MutatedConfig authored("profile: near", "profile: far");
+  const workflow::Config config = workflow::load_config(authored.path());
+  EXPECT_EQ(config.visualization.profile, "far");
+  EXPECT_EQ(config.visualization_profile_index, 1U);
+  EXPECT_EQ(config.visualization_profile_max_gap_frames, 2U);
+}
+
+TEST(MultiProfileConfig, RejectsUnknownVisualizationProfileWhenDisabled) {
+  const MutatedConfig authored("profile: near", "profile: missing");
+  EXPECT_THROW(workflow::load_config(authored.path()), std::runtime_error);
+}
+
+TEST(MultiProfileConfig, ComputesMaximumCyclicVisualizationGap) {
+  EXPECT_EQ(workflow::maximum_cyclic_profile_gap(
+                {0U, 1U, 1U, 0U, 1U}, 0U),
+            3U);
+  EXPECT_THROW(workflow::maximum_cyclic_profile_gap({0U, 0U}, 1U),
+               std::runtime_error);
 }
 
 TEST(MultiProfileConfig, RejectsDuplicateNames) {

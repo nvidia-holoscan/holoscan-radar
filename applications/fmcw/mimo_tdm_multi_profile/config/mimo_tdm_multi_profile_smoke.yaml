@@ -7,6 +7,7 @@ app:
     run: {num_frames: 2, frame_period: 0.1, meter_cadence: true, meter_log_every: 0}
     visualization:
         enabled: false
+        profile: near
         window_width: 1280
         window_height: 720
         window_title: FMCW MIMO TDM Multi-Profile

@@ -1191,6 +1191,18 @@ vertices and explicitly partition every active operator.
 
 **Standalone SISO app (updated 2026-09-18).** `APP_siso` points directly at `applications/fmcw/siso` and builds the same-named Graph binary. It processes rank-2 ADC data through range, clutter, Doppler, CFAR, physical range/velocity clustering, medoid reduction, and reporting. Its dashboard uses the shared explicit no-angle presentation, retaining range-Doppler and range/velocity history panels without angle-derived artifacts. Private typed loading and extent derivation live under `applications/common/radar_app/simple/siso`.
 
+**Open — interactive multi-profile dashboard selection (2026-09-18).** The
+multi-profile TDM dashboard currently uses fixed
+`app.visualization.profile` selection and Exact TX-applied waveform matching.
+The pinned HSDK 5 `HolovizOp` owns its window privately and does not expose the
+underlying `holoviz::rhi::WindowInputCallbacks`, so the application cannot
+receive public keyboard events. When that operator API becomes available, add
+a composite dashboard that caches one rendered view per profile and switches
+the visible view with left/right arrows or numeric keys `1` through `9`.
+Do not intercept X11 events, find the window by title, or replace Holoviz with
+a radar-owned presentation loop as an interim workaround. Retain the current
+configuration selection as the startup/default view.
+
 **EA workaround — SDK install component (2026-09-14).** SDK image `7b9cfe3`
 exports `holoscan::operators::holoviz` and builds its shared library, but
 `public/run build` omits the separate `holoscan-visualization` component.

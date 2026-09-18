@@ -948,6 +948,7 @@ FmcwDashboardOp::FmcwDashboardOp(FmcwDashboardConfig config)
       config_.history_frames < 2 ||
       config_.detection_trail_frames < 1 || config_.width < 640 ||
       config_.height < 360 ||
+      (config_.selected_profile.empty() == config_.selected_waveform.is_valid()) ||
       (config_.show_angles &&
        (!(config_.az_bounds[0] < config_.az_bounds[1]) ||
         !(config_.el_bounds[0] < config_.el_bounds[1])))) {
@@ -997,6 +998,9 @@ void FmcwDashboardOp::setup(holoscan::OperatorSpec& spec) {
         .queue_depth(2U)
         .expects_tensor(tensor_input(kDevice));
   }
+  if (!config_.selected_profile.empty()) {
+    spec.input(waveform_in).queue_depth(2U);
+  }
   spec.output(rgba).produces_tensor(
       pooled_tensor_output(kImage, 3U, max_byte_span_));
 }
@@ -1030,6 +1034,10 @@ holoscan::Contract FmcwDashboardOp::contract() const {
         .input(range_bins, holoscan::Exact{})
         .input(velocity_bins, holoscan::Exact{});
   }
+  if (!config_.selected_profile.empty()) {
+    result.input(waveform_in, holoscan::Exact{})
+        .on_missing(waveform_in, holoscan::SafeDefault{});
+  }
   return result;
 }
 
@@ -1049,6 +1057,19 @@ expected<void, Error> FmcwDashboardOp::compute(
     HOLOSCAN_TRY(cluster_sizes, receive_tensor(sizes, kWho));
     HOLOSCAN_TRY(reduced, receive_tensor(reduced_points, kWho));
   }
+  std::optional<wire::FMCWWaveformT> wire_waveform;
+  if (!config_.selected_profile.empty()) {
+    HOLOSCAN_TRY(wire_waveform, receive_optional_value(waveform_in));
+  }
+  HOLOSCAN_TRY(
+      bool render_profile,
+      detail::selected_profile_matches(
+          wire_waveform, config_.selected_profile, config_.selected_waveform));
+  if (!render_profile) {
+    ++frame_index_;
+    return {};
+  }
+  const std::int64_t current_frame = frame_index_++;
   BatchedShape layout;
   try {
     layout = collapse_batch(power, "FmcwDashboardOp.cfar_power");
@@ -1113,13 +1134,13 @@ expected<void, Error> FmcwDashboardOp::compute(
           host_idx, host_points, idx.shape()[1], feature_points.shape()[1],
           config_.angle_convention, config_.show_angles);
     }
-    detail::append_history(&history_, markers, frame_index_,
+    detail::append_history(&history_, markers, current_frame,
                            config_.history_frames);
-    detail::append_history(&detection_history_, markers, frame_index_,
+    detail::append_history(&detection_history_, markers, current_frame,
                            config_.detection_trail_frames);
     host_annotation = make_annotation(
         layout.rows, layout.cols, markers, history_, detection_history_,
-        host_ranges, host_velocities, config_, frame_index_);
+        host_ranges, host_velocities, config_, current_frame);
   } catch (const std::invalid_argument& e) {
     return make_unexpected(
         Error{ErrorCode::kInvalidArgument, std::string(e.what())});
@@ -1194,14 +1215,29 @@ expected<void, Error> FmcwDashboardOp::compute(
     return cuda_failure(kWho, "composition synchronization");
   }
   retained_input_ = std::move(power);
-  auto emitted = emit_prepared_tensor(rgba, context, std::move(loan));
-  if (emitted) {
-    ++frame_index_;
-  }
-  return emitted;
+  return emit_prepared_tensor(rgba, context, std::move(loan));
 }
 
 namespace detail {
+
+expected<bool, Error> selected_profile_matches(
+    const std::optional<wire::FMCWWaveformT>& applied_waveform,
+    std::string_view selected_profile,
+    const FMCWWaveformDescriptor& selected_waveform) {
+  if (selected_profile.empty()) {
+    return true;
+  }
+  if (!applied_waveform.has_value()) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        "FmcwDashboardOp: selected profile requires an Exact waveform input"});
+  }
+  auto decoded = from_wire(*applied_waveform);
+  if (!decoded) {
+    return make_unexpected(std::move(decoded).error());
+  }
+  return *decoded == selected_waveform;
+}
 
 std::vector<std::uint8_t> make_heatmap_rgba_reference(
     const std::vector<float>& power, const std::vector<std::int64_t>& shape,

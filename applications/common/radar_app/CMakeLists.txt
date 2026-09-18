@@ -37,6 +37,7 @@ if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
         holoscan::radar_app
         holoscan::radar_common
         holoscan::operators::holoviz
+        holoscan::radar_schemas
         CUDA::cudart)
 
     target_compile_definitions(fmcw_dashboard PUBLIC

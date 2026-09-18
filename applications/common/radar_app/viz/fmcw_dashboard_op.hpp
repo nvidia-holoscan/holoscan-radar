@@ -8,7 +8,9 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -21,6 +23,8 @@
 #include <holoscan/core/temporal_contract.hpp>
 
 #include "radar_common/descriptors/angle_convention.hpp"
+#include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_schemas/fmcw_waveform_bridge.hpp"
 
 namespace holoscan::radar::app::viz {
 
@@ -66,6 +70,8 @@ struct FmcwDashboardConfig {
   std::array<float, 2> el_bounds{};
   AngleConvention angle_convention;
   std::string title;
+  std::string selected_profile;
+  FMCWWaveformDescriptor selected_waveform;
   std::vector<TruthTarget> truth_targets;
 };
 
@@ -86,6 +92,7 @@ class FmcwDashboardOp : public holoscan::Operator<> {
   holoscan::Input<holoscan::Tensor> range_bins{"range_bins"};
   holoscan::Input<holoscan::Tensor> velocity_bins{"velocity_bins"};
   holoscan::Input<holoscan::Tensor> reduced_points{"reduced_points"};
+  holoscan::Input<wire::FMCWWaveformT> waveform_in{"waveform"};
   holoscan::Output<holoscan::Tensor> rgba{"rgba"};
 
  private:
@@ -100,6 +107,11 @@ class FmcwDashboardOp : public holoscan::Operator<> {
 };
 
 namespace detail {
+
+expected<bool, Error> selected_profile_matches(
+    const std::optional<wire::FMCWWaveformT>& applied_waveform,
+    std::string_view selected_profile,
+    const FMCWWaveformDescriptor& selected_waveform);
 
 std::vector<std::uint8_t> make_heatmap_rgba_reference(
     const std::vector<float>& power, const std::vector<std::int64_t>& shape,

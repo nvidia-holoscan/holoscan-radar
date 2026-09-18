@@ -9,6 +9,7 @@ app:
         meter_log_every: 0
     visualization:
         enabled: true
+        profile: near
         window_width: 1280
         window_height: 720
         window_title: FMCW MIMO TDM Multi-Profile

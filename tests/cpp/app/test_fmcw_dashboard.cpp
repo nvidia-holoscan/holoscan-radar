@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -64,6 +65,42 @@ TEST(AnglePresentationTest, CentroidHandlesAzimuthWrap) {
   const auto angles = centroid.mean();
   EXPECT_GT(std::abs(angles.az), 3.0);
   EXPECT_NEAR(angles.el, 0.1, 1e-5);
+}
+
+TEST(FmcwDashboardTest, MatchesExactSelectedWaveformAndRejectsMissing) {
+  const holoscan::radar::FMCWWaveformDescriptor near(
+      holoscan::radar::FMCWWaveformSpec{
+          .carrier_frequency = 77.0e9,
+          .bandwidth = 300.0e6,
+          .chirp_duration = 20.0e-6,
+          .sample_rate = 12.8e6,
+          .chirp_repetition_interval = 50.0e-6});
+  const holoscan::radar::FMCWWaveformDescriptor far(
+      holoscan::radar::FMCWWaveformSpec{
+          .carrier_frequency = 77.0e9,
+          .bandwidth = 150.0e6,
+          .chirp_duration = 40.0e-6,
+          .sample_rate = 12.8e6,
+          .chirp_repetition_interval = 90.0e-6});
+  const auto near_wire = holoscan::radar::to_wire(near);
+  const auto far_wire = holoscan::radar::to_wire(far);
+
+  auto match = viz::detail::selected_profile_matches(near_wire, "near", near);
+  ASSERT_TRUE(match);
+  EXPECT_TRUE(*match);
+  auto mismatch =
+      viz::detail::selected_profile_matches(far_wire, "near", near);
+  ASSERT_TRUE(mismatch);
+  EXPECT_FALSE(*mismatch);
+
+  const std::optional<holoscan::radar::wire::FMCWWaveformT> missing;
+  auto absent = viz::detail::selected_profile_matches(missing, "near", near);
+  EXPECT_FALSE(absent);
+  EXPECT_EQ(absent.error().code, holoscan::ErrorCode::kInvalidArgument);
+
+  auto unprofiled = viz::detail::selected_profile_matches(missing, "", {});
+  ASSERT_TRUE(unprofiled);
+  EXPECT_TRUE(*unprofiled);
 }
 
 TEST(FmcwRdHeatmapTest, MapsPeakAndDynamicRange) {

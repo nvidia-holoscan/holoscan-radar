@@ -191,10 +191,12 @@ int main(int argc, char** argv) {
               cfg.beamscan_params->el_coordinates,
               cfg.beamscan_params->angle_convention, cfg.scene.targets,
               "MIMO TDM Multi-Profile",
-              app::viz::ClusterDashboardInputs{
+              app::viz::ProfiledClusterDashboardInputs{
                   cfar->cfar_power, cfar->detection_idx, features->points,
                   cluster->labels, cluster->sizes, range->range_bins,
-                  doppler->velocity_bins, reduction->reduced_points});
+                  doppler->velocity_bins, reduction->reduced_points, tx->waveform,
+                  cfg.profiles[cfg.visualization_profile_index].waveform,
+                  cfg.visualization_profile_max_gap_frames});
         }
 #endif
       });

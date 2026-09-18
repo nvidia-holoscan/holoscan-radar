@@ -23,6 +23,7 @@ struct VisualizationConfig {
   double detection_radius{0.010};
   int64_t history_frames{120};
   int64_t detection_trail_frames{12};
+  std::string profile;
 };
 
 }  // namespace holoscan::radar::app
@@ -52,7 +53,8 @@ struct ConfigCodec<radar::app::VisualizationConfig>
       defaulted_object_field("detection_radius", &Config::detection_radius),
       defaulted_object_field("history_frames", &Config::history_frames),
       defaulted_object_field("detection_trail_frames",
-                             &Config::detection_trail_frames));
+                             &Config::detection_trail_frames),
+      defaulted_object_field("profile", &Config::profile));
 };
 
 }  // namespace holoscan::config

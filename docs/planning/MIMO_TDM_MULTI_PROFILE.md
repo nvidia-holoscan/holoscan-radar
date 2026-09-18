@@ -83,6 +83,19 @@ clustering, reduction, report, and optional dashboard. Set static waveform
 Params invalid so the live descriptor is authoritative. Keep default targets
 inside the principal CRI interval and both profiles' operational range.
 
+The dashboard is profile-stable rather than sequence-rotating. Optional
+`app.visualization.profile` names the displayed profile and defaults to the
+first scheduled profile. The dashboard receives the TX-applied waveform as an
+`Exact{}` side input, renders only matching CPIs, and advances its scenario
+clock across every consumed CPI. Its histories therefore contain one profile
+only, while Holoviz holds the last selected image for the maximum cyclic gap
+derived from `profile_sequence`. Unknown or unscheduled selections are
+configuration errors even when visualization is disabled.
+
+Interactive profile selection is deferred to the HSDK 5 open item in
+`HSDK5_PORT.md` section 6; the fixed selection does not introduce an X11
+event workaround or a radar-owned presentation loop.
+
 ## Contracts and verification
 
 Update `OPERATOR_API.md` with the narrow rule that an authoritative source may
@@ -98,5 +111,5 @@ grouped-operator diagram to `WORKFLOWS.md`, the application README, and
 Tests cover coordinator ordering and failures, deliberately different source
 activation times, exact waveform/ADC capture times, alternating descriptor and
 tensor shapes, per-profile range/velocity axes, physical-versus-effective TDM
-PRI, configuration validation, complete-chain smoke, and visualization with
-changing range-axis lengths.
+PRI, configuration validation, complete-chain smoke, and Exact dashboard
+profile filtering while the processing path changes range-axis lengths.

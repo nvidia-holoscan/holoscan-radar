@@ -25,10 +25,32 @@ struct Config : mimo::TdmConfig {
 
   std::vector<TdmTransmitProfile> profiles;
   std::vector<std::size_t> profile_sequence;
+  std::size_t visualization_profile_index{0U};
+  std::size_t visualization_profile_max_gap_frames{1U};
   std::size_t max_frames_in_flight{4U};
   double rx_poll_period{0.001};
   int simulated_receive_polls{2};
 };
+
+inline std::size_t maximum_cyclic_profile_gap(
+    const std::vector<std::size_t>& sequence, std::size_t profile_index) {
+  std::vector<std::size_t> positions;
+  for (std::size_t i = 0; i < sequence.size(); ++i) {
+    if (sequence[i] == profile_index) {
+      positions.push_back(i);
+    }
+  }
+  if (positions.empty()) {
+    throw std::runtime_error(
+        "app.visualization.profile must appear in app.profile_sequence");
+  }
+  std::size_t max_gap =
+      positions.front() + sequence.size() - positions.back();
+  for (std::size_t i = 1; i < positions.size(); ++i) {
+    max_gap = std::max(max_gap, positions[i] - positions[i - 1U]);
+  }
+  return max_gap;
+}
 
 inline double require_scalar(const YAML::Node& node, const char* field) {
   if (!node[field]) {
@@ -169,6 +191,20 @@ inline Config load_config(const std::filesystem::path& path) {
               .chirp_repetition_interval,
       .tx_order = {}};
   Config result{mimo::load_tdm_config(path, std::move(baseline))};
+  if (result.visualization.profile.empty()) {
+    result.visualization.profile =
+        decoded_profiles[decoded_sequence.front()].name;
+  }
+  const auto selected = by_name.find(result.visualization.profile);
+  if (selected == by_name.end()) {
+    throw std::runtime_error(
+        "app.visualization.profile references unknown profile: " +
+        result.visualization.profile);
+  }
+  result.visualization_profile_index = selected->second;
+  result.visualization_profile_max_gap_frames = maximum_cyclic_profile_gap(
+      decoded_sequence, result.visualization_profile_index);
+
   result.profiles = std::move(decoded_profiles);
   result.profile_sequence = std::move(decoded_sequence);
   result.max_frames_in_flight = max_frames_in_flight;

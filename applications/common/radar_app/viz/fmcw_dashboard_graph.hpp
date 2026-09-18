@@ -26,6 +26,7 @@
 #include "radar_app/app/visualization_config.hpp"
 #include "radar_app/viz/fmcw_dashboard_op.hpp"
 #include "radar_common/sim/scene.hpp"
+#include "radar_schemas/fmcw_waveform_bridge.hpp"
 
 namespace holoscan::radar::app::viz {
 
@@ -74,6 +75,20 @@ struct ClusterDashboardInputs {
   const holoscan::Output<holoscan::Tensor>& reduced_points;
 };
 
+struct ProfiledClusterDashboardInputs {
+  const holoscan::Output<holoscan::Tensor>& cfar_power;
+  const holoscan::Output<holoscan::Tensor>& detection_idx;
+  const holoscan::Output<holoscan::Tensor>& points;
+  const holoscan::Output<holoscan::Tensor>& labels;
+  const holoscan::Output<holoscan::Tensor>& sizes;
+  const holoscan::Output<holoscan::Tensor>& range_bins;
+  const holoscan::Output<holoscan::Tensor>& velocity_bins;
+  const holoscan::Output<holoscan::Tensor>& reduced_points;
+  const holoscan::Output<wire::FMCWWaveformT>& waveform;
+  FMCWWaveformDescriptor selected_waveform;
+  std::size_t max_profile_gap_frames{1U};
+};
+
 template <typename Inputs>
 inline void add_fmcw_dashboard(
     holoscan::Graph& graph, holoscan::PartitionHandle& application,
@@ -84,10 +99,22 @@ inline void add_fmcw_dashboard(
     std::string workflow_title,
     const Inputs& inputs) {
   static_assert(std::is_same_v<Inputs, RawDashboardInputs> ||
-                    std::is_same_v<Inputs, ClusterDashboardInputs>,
+                    std::is_same_v<Inputs, ClusterDashboardInputs> ||
+                    std::is_same_v<Inputs, ProfiledClusterDashboardInputs>,
                 "unsupported FMCW dashboard input bundle");
   constexpr bool kClustered =
-      std::is_same_v<Inputs, ClusterDashboardInputs>;
+      std::is_same_v<Inputs, ClusterDashboardInputs> ||
+      std::is_same_v<Inputs, ProfiledClusterDashboardInputs>;
+  constexpr bool kProfiled =
+      std::is_same_v<Inputs, ProfiledClusterDashboardInputs>;
+  std::string selected_profile;
+  FMCWWaveformDescriptor selected_waveform;
+  std::size_t max_profile_gap_frames = 1U;
+  if constexpr (kProfiled) {
+    selected_profile = config.profile;
+    selected_waveform = inputs.selected_waveform;
+    max_profile_gap_frames = inputs.max_profile_gap_frames;
+  }
   const PhysicalAngleBounds physical_bounds =
       show_angles
           ? physical_scan_grid_bounds(angle_convention, az_grid, el_grid)
@@ -110,7 +137,12 @@ inline void add_fmcw_dashboard(
           .az_bounds = display_bounds(physical_bounds.az),
           .el_bounds = display_bounds(physical_bounds.el),
           .angle_convention = angle_convention,
-          .title = workflow_title,
+          .title = workflow_title +
+                   (selected_profile.empty()
+                        ? ""
+                        : " | PROFILE: " + selected_profile),
+          .selected_profile = std::move(selected_profile),
+          .selected_waveform = std::move(selected_waveform),
           .truth_targets = make_truth_targets(truth_targets),
       });
   options.deployment.bind_tensor_output_device(
@@ -134,7 +166,10 @@ inline void add_fmcw_dashboard(
   const auto max_input_age =
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::duration<double>{
-              std::max(2.0 * frame_period, 2.0 / config.display_rate_hz)});
+              std::max(
+                  static_cast<double>(max_profile_gap_frames + 1U) *
+                      frame_period,
+                  2.0 / config.display_rate_hz)});
   auto holoviz = graph.op<holoscan::holoviz::HolovizOp>(
       "holoviz", std::move(layers),
       ::holoviz::WindowSinkDesc{
@@ -170,6 +205,11 @@ inline void add_fmcw_dashboard(
   if constexpr (kClustered) {
     graph.add_flow(inputs.reduced_points, display->reduced_points,
                    processing_queue);
+  }
+  if constexpr (kProfiled) {
+    const holoscan::ConnectionOptions waveform_queue{
+        .queue_depth = max_profile_gap_frames + 2U};
+    graph.add_flow(inputs.waveform, display->waveform_in, waveform_queue);
   }
   graph.add_flow(display->rgba, holoviz->layer_input(0), display_queue);
 }

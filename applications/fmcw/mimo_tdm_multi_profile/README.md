@@ -24,6 +24,9 @@ flowchart LR
   DOPPLER --> COMP
   COMP --> ANGLE["BeamscanEstimatorOp"] --> TAIL["features / clusters / report"]
   WAVEFORM -->|Exact| RANGE
+  TAIL --> DASHBOARD["FmcwDashboardOp"]
+  WAVEFORM -->|Exact profile identity| DASHBOARD
+
   WAVEFORM -->|Exact| DOPPLER
   WAVEFORM -->|Exact| COMP
 ```
@@ -40,3 +43,13 @@ Frame tokens never cross graph ports. Hardware backends can replace the
 simulated link without changing the source ports or downstream graph. Receive
 backends return the actual ADC tensor; the RX source only correlates its token,
 copies it into an output loan, and publishes it at the TX-applied time.
+
+The dashboard shows one profile at a time so alternating range and velocity
+axes do not flicker. Set `app.visualization.profile` to a name from
+`app.profiles`; omitting it selects the first entry in `profile_sequence`.
+The TX-applied waveform joins the processing outputs with `Exact{}`. CPIs from
+other profiles are consumed without updating the image or its histories, and
+Holoviz retains the last selected frame across the selected profile's maximum
+cyclic recurrence gap. Changing the selection requires restarting the
+application. Interactive arrow and numeric-key switching remains deferred
+until the HSDK 5 `HolovizOp` exposes public keyboard callbacks.
