@@ -12,8 +12,7 @@ app:
         num_chirps: 128
         samples_per_chirp: 256
     run:
-        # Frames 0..2199 cover 219.9 s and include the first CRI wrap at 200 s.
-        num_frames: 2200
+        num_frames: 250
         frame_period: 0.1
         meter_cadence: true
         meter_log_every: 0
@@ -27,15 +26,16 @@ app:
         detection_radius: 0.010
         history_frames: 120
         detection_trail_frames: 50
-    # Relative monostatic range loss calibrates the target amplitude at its
-    # 40 m initial range. CRI folding never resets this physical-distance loss.
     range_loss:
         model: monostatic_free_space
-        reference_range: 40.0
-    # R_CRI = c * 25 us / 2 = 3747.405725 m. Starting at 40 m and
-    # receding at 18.537028625 m/s crosses that boundary at exactly 200 s.
+        reference_range: 100.0
+    # Baseline SIMO targets projected onto the SISO radial axis.
     targets:
-        - {range: 40.0, velocity: 18.537028625, amplitude: 0.8}
+        - {range: 245.0, velocity: -6.5006, amplitude: 0.8}
+        - {range: 132.0, velocity: 1.5000, amplitude: 0.6}
+        - {range: 22.0, velocity: 8.9712, amplitude: 0.7}
+        - {range: 117.0, velocity: 3.0000, amplitude: 0.55}
+        - {range: 218.0, velocity: -5.0000, amplitude: 0.7}
     noise_snr_db: 20.0
 
 range_processor:

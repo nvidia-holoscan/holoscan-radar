@@ -25,7 +25,7 @@ ddm:
 ddm_dense_demultiplex: {}
 ```
 
-The matching `_smoke.yaml` files retain the same waveform and DSP tuning while changing only the frame count, visualization enablement, and target list.
+The normal linear and nonlinear presets enable relative monostatic free-space range loss with a 100 m reference. The matching `_smoke.yaml` files omit range loss, use the constant-amplitude analytic model with a warning, and otherwise retain the same waveform and DSP tuning while changing only the frame count, visualization enablement, and target list.
 
 ## Build and run
 

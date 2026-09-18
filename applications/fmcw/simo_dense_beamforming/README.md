@@ -19,4 +19,6 @@ cmake --build build --target simo_dense_beamforming
 ./build/applications/fmcw/simo_dense_beamforming/cpp/simo_dense_beamforming
 ```
 
+The normal preset enables relative monostatic free-space range loss with a 100 m reference. The smoke preset intentionally omits it, uses the constant-amplitude analytic model, and emits a warning.
+
 The executable defaults to `config/simo_dense_beamforming.yaml`. Pass `config/simo_dense_beamforming_smoke.yaml` as the first argument for the two-frame, headless single-target smoke scene.

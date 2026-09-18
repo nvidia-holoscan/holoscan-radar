@@ -20,4 +20,6 @@ cmake --build build --target simo
 ./build/applications/fmcw/simo/cpp/simo
 ```
 
+The normal preset enables relative monostatic free-space range loss with a 100 m reference. The smoke preset intentionally omits it, uses the constant-amplitude analytic model, and emits a warning.
+
 The executable defaults to `config/simo.yaml`. Pass `config/simo_smoke.yaml` as the first argument for the two-frame, headless single-target smoke scene.

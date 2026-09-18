@@ -40,6 +40,9 @@ app:
         tx_order:
             - 0
             - 1
+    range_loss:
+        model: monostatic_free_space
+        reference_range: 100.0
     targets:
         - range: 245.0
           azimuth: 0.15

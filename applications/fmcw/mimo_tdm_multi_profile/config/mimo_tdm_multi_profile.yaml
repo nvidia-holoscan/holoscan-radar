@@ -46,6 +46,9 @@ app:
     max_frames_in_flight: 4
     rx_poll_period: 0.001
     simulated_receive_polls: 2
+    range_loss:
+        model: monostatic_free_space
+        reference_range: 100.0
     targets:
         - range: 35.0
           azimuth: 0.15

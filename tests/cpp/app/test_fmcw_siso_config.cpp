@@ -25,16 +25,16 @@ std::filesystem::path config_path(const char* name) {
 
 TEST(FmcwSisoConfig, DecodesProductionAndDerivesRankTwoExtents) {
   const auto config = siso::load_config(config_path("siso.yaml"));
-  EXPECT_EQ(config.num_frames, 2200);
+  EXPECT_EQ(config.num_frames, 250);
   EXPECT_DOUBLE_EQ(config.frame_period, 0.1);
   EXPECT_EQ(config.scene.num_chirps, 128);
   EXPECT_EQ(config.scene.samples_per_chirp, 256);
-  EXPECT_EQ(config.scene.targets.size(), 1U);
+  EXPECT_EQ(config.scene.targets.size(), 5U);
   ASSERT_TRUE(config.scene.snr_db.has_value());
   EXPECT_DOUBLE_EQ(*config.scene.snr_db, 20.0);
   EXPECT_EQ(config.scene.range_loss.model,
             radar::sim::RangeLossModel::kMonostaticFreeSpace);
-  EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 40.0);
+  EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 100.0);
   ASSERT_EQ(config.scene.rx_positions.size(), 1U);
   EXPECT_EQ(config.scene.rx_positions[0],
             (radar::sim::Vec3{0.0, 0.0, 0.0}));

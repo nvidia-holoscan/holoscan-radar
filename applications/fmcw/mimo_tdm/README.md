@@ -22,4 +22,6 @@ cmake --build build --target mimo_tdm
 ./build/applications/fmcw/mimo_tdm/cpp/mimo_tdm
 ```
 
+The normal preset enables relative monostatic free-space range loss with a 100 m reference. The smoke preset intentionally omits it, uses the constant-amplitude analytic model, and emits a warning.
+
 The executable defaults to `config/mimo_tdm.yaml`. Pass `config/mimo_tdm_smoke.yaml` as the first argument for the two-frame, headless single-target smoke scene.

@@ -111,6 +111,16 @@ TEST(TransmitFrameCoordinator, RejectsPendingReceiveAtFinalization) {
   EXPECT_NO_THROW(coordinator.finalize());
 }
 
+TEST(MultiProfileConfig, DecodesProductionRangeLoss) {
+  const auto path = std::filesystem::path(HOLOSCAN_RADAR_SOURCE_DIR) /
+                    "applications/fmcw/mimo_tdm_multi_profile/config/"
+                    "mimo_tdm_multi_profile.yaml";
+  const workflow::Config config = workflow::load_config(path);
+  EXPECT_EQ(config.scene.range_loss.model,
+            holoscan::radar::sim::RangeLossModel::kMonostaticFreeSpace);
+  EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 100.0);
+}
+
 TEST(MultiProfileConfig, DecodesProfilesAndMaximumExtents) {
   const auto path = std::filesystem::path(HOLOSCAN_RADAR_SOURCE_DIR) /
                     "applications/fmcw/mimo_tdm_multi_profile/config/"
@@ -136,6 +146,8 @@ TEST(MultiProfileConfig, DecodesProfilesAndMaximumExtents) {
   EXPECT_DOUBLE_EQ(
       config.profiles[1].physical_waveform.chirp_repetition_interval,
       45.0e-6);
+  EXPECT_EQ(config.scene.range_loss.model,
+            holoscan::radar::sim::RangeLossModel::kNone);
   EXPECT_EQ(config.scene.analog_if.sampling_mode,
             holoscan::radar::sim::IfSamplingMode::kComplexIq);
   EXPECT_EQ(config.scene.analog_if.response,

@@ -46,7 +46,7 @@ With `R`, `v_r`, and `û` derived from each target's Cartesian position and velo
 - the **TX modulation** — TDM: placed in its time slot; DDM: the per-chirp code phase,
 - the target's **complex amplitude** (× an optional range law).
 
-The optional relative monostatic free-space law applies voltage gain `(R_ref / R_k)^2` from the full physical center range before CRI folding, so received power scales as `R_k^-4`. Constant-amplitude mode remains available for analytic fixtures. Target amplitude contains the otherwise-fixed link-budget terms and is defined at `R_ref` when the law is enabled.
+The optional relative monostatic free-space law applies voltage gain `(R_ref / R_k)^2` from the full physical center range before CRI folding, so received power scales as `R_k^-4`. Constant-amplitude mode remains available for analytic fixtures. Target amplitude contains the otherwise-fixed link-budget terms and is defined at `R_ref` when the law is enabled. The simulator default remains constant amplitude; application loading warns when that default is selected explicitly or by omission. Normal application presets select free-space loss at a 100 m reference, while smoke presets deliberately exercise the analytic default.
 
 Sum over targets, add noise.
 

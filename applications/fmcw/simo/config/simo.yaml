@@ -30,6 +30,9 @@ app:
         az_elements: 8
         el_elements: 8
         spacing: 0.5
+    range_loss:
+        model: monostatic_free_space
+        reference_range: 100.0
     targets:
         - range: 245.0
           azimuth: 0.15

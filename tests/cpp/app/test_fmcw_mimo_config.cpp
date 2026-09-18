@@ -32,6 +32,7 @@ void expect_smoke_matches_production(const char* production_name,
   const YAML::Node smoke = YAML::LoadFile(config_path(smoke_name).string());
   expected["app"]["run"]["num_frames"] = 2;
   expected["app"]["visualization"]["enabled"] = false;
+  expected["app"].remove("range_loss");
   YAML::Node targets(YAML::NodeType::Sequence);
   targets.push_back(expected["app"]["targets"][0]);
   expected["app"]["targets"] = targets;
@@ -107,6 +108,9 @@ TEST(FmcwMimoConfig, DecodesTdmDefault) {
       config_path("mimo_tdm/config/mimo_tdm.yaml"));
 
   EXPECT_EQ(config.num_frames, 250);
+  EXPECT_EQ(config.scene.range_loss.model,
+            radar::sim::RangeLossModel::kMonostaticFreeSpace);
+  EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 100.0);
   EXPECT_EQ(config.tx_schedule.num_tx, 2);
   EXPECT_EQ(config.tx_schedule.tx_order, (std::vector<int64_t>{0, 1}));
   EXPECT_EQ(config.deinterleave_params->tx_schedule, config.tx_schedule);
@@ -176,6 +180,9 @@ TEST(FmcwMimoConfig, DecodesLinearDdmDefault) {
       config_path("mimo_ddm/config/mimo_ddm_linear.yaml"));
 
   EXPECT_FALSE(config.correlate);
+  EXPECT_EQ(config.scene.range_loss.model,
+            radar::sim::RangeLossModel::kMonostaticFreeSpace);
+  EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 100.0);
   EXPECT_EQ(config.ddm_code.num_tx, 2);
   EXPECT_EQ(config.doppler_offsets, (std::vector<double>{0.0, 0.5}));
   EXPECT_TRUE(config.doppler_params->waveform.is_valid());
@@ -213,6 +220,9 @@ TEST(FmcwMimoConfig, DecodesDocumentedNonlinearDdmPreset) {
       config_path("mimo_ddm/config/mimo_ddm_nonlinear.yaml"));
 
   EXPECT_TRUE(config.correlate);
+  EXPECT_EQ(config.scene.range_loss.model,
+            radar::sim::RangeLossModel::kMonostaticFreeSpace);
+  EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 100.0);
   EXPECT_TRUE(config.doppler_offsets.empty());
   EXPECT_EQ(config.ddm_code.num_tx, 2);
   EXPECT_EQ(config.ddm_code.phase_codes.size(), 2U * 128U);

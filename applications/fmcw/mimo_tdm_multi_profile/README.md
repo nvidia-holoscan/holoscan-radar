@@ -38,6 +38,8 @@ uses 300 MHz over 20 us with 256 samples; `far` uses 150 MHz over 40 us with
 512 samples. YAML authors the physical on-wire PRI. The application derives
 the effective per-TX DSP PRI as `num_tx * physical_pri`.
 
+The normal preset enables relative monostatic free-space range loss with a 100 m reference. The smoke preset intentionally omits it, uses the constant-amplitude analytic model, and emits a warning.
+
 The coordinator and backend interfaces live in shared `radar_app` support.
 Frame tokens never cross graph ports. Hardware backends can replace the
 simulated link without changing the source ports or downstream graph. Receive

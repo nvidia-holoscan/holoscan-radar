@@ -72,6 +72,7 @@ void expect_smoke_matches_production(const char* production_name,
   const YAML::Node smoke = YAML::LoadFile(config_path(smoke_name).string());
   expected["app"]["run"]["num_frames"] = 2;
   expected["app"]["visualization"]["enabled"] = false;
+  expected["app"].remove("range_loss");
   YAML::Node targets(YAML::NodeType::Sequence);
   targets.push_back(expected["app"]["targets"][0]);
   expected["app"]["targets"] = targets;
@@ -168,6 +169,12 @@ TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
 
   EXPECT_EQ(detect.num_frames, 250);
   EXPECT_EQ(detect.scene.targets.size(), 5U);
+  EXPECT_EQ(detect.scene.range_loss.model,
+            radar::sim::RangeLossModel::kMonostaticFreeSpace);
+  EXPECT_DOUBLE_EQ(detect.scene.range_loss.reference_range, 100.0);
+  EXPECT_EQ(beamform.scene.range_loss.model,
+            radar::sim::RangeLossModel::kMonostaticFreeSpace);
+  EXPECT_DOUBLE_EQ(beamform.scene.range_loss.reference_range, 100.0);
   EXPECT_EQ(detect.extents.max_az, 13);
   EXPECT_EQ(beamform.extents.max_el, 13);
   ASSERT_EQ(detect.beamscan_params->az_coordinates.size(), 13U);

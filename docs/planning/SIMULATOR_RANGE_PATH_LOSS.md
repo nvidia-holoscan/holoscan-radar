@@ -112,20 +112,17 @@ configuration schemas:
 app:
     range_loss:
         model: monostatic_free_space
-        reference_range: 40.0
+        reference_range: 100.0
 ```
 
-Accepted models are none and monostatic_free_space. Omission selects none.
-Reject unknown models and invalid or missing reference ranges.
+Accepted models are none and monostatic_free_space. Omission selects none. The
+application loader warns when none is selected explicitly or by omission because
+target amplitude then remains independent of physical range. Reject unknown
+models and invalid or missing reference ranges.
 
-Enable free-space loss in the production SISO range-ambiguity demonstration,
-using its initial target range as reference_range. Keep the short SISO smoke in
-none mode. Do not broadly retune every application in this change; other
-production presets can opt in deliberately later.
-
-Document that the target fades beyond the IF limit and reappears after one CRI
-with full-distance attenuation. The 200-second real-time run remains a manual
-demonstration, not a CI test.
+All normal application presets explicitly enable free-space loss with a 100 m
+reference. Short smoke presets retain none as deterministic constant-amplitude
+analytic fixtures and therefore emit the warning.
 
 ## Independent implementations
 
