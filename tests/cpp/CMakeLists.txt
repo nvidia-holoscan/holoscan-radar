@@ -236,6 +236,28 @@ target_include_directories(test_fmcw_mimo_config PRIVATE
 target_compile_definitions(test_fmcw_mimo_config PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
+radar_add_test(app/test_multi_profile_source
+    yaml-cpp
+    holoscan::params_io
+    holoscan::radar_app
+    holoscan::radar_common_simulator
+    holoscan::fmcw_range_processor_op
+    holoscan::clutter_filter_op
+    holoscan::fmcw_doppler_processor_op
+    holoscan::mimo_deinterleave_op
+    holoscan::tdm_sparse_compensation_op
+    holoscan::cfar_detector_op
+    holoscan::beamscan_estimator_op
+    holoscan::cluster_dbscan_op
+    holoscan::feature_assembly_op
+    holoscan::detection_reduction_op)
+target_include_directories(test_multi_profile_source PRIVATE
+    ${PROJECT_SOURCE_DIR}/applications/common
+    ${PROJECT_SOURCE_DIR}/applications/fmcw/mimo_tdm_multi_profile/cpp
+    ${PROJECT_SOURCE_DIR}/operators)
+target_compile_definitions(test_multi_profile_source PRIVATE
+    HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+
 radar_add_test(app/test_fmcw_simo_report
     holoscan::radar_app)
 target_include_directories(test_fmcw_simo_report PRIVATE

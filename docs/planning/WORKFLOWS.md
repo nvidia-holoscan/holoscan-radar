@@ -286,6 +286,18 @@ Power folding deliberately removes the velocity-fold identity. `DDMSparseDemulti
 
 ## Workflow comparison
 
+### Multi-profile TDM application
+
+`mimo_tdm_multi_profile` reuses the sparse TDM chain while alternating
+complete near/far CPIs. `FMCWTransmitSourceOp` owns profile selection and its
+TX backend; `CorrelatedMimoTdmAdcSourceOp` owns the RX backend. The sources
+tick independently and correlate through a bounded internal frame-token ledger.
+The TX-applied timestamp is copied onto both the per-frame waveform descriptor
+and ADC cube, allowing the existing range, Doppler, and sparse compensation
+`Exact{}` waveform inputs follow changing samples and physical repetition intervals.
+The physical on-wire PRI stays in the simulator/backend profile; the descriptor
+sent to DSP carries the effective per-TX TDM PRI.
+
 | Modality | TX × RX | De-interleave | Dense TX processing | Sparse TX processing | Virtual assembly | Unambig. velocity |
 | :------- | :------ | :------------ | :------------------ | :------------------- | :--------------- | :---------------- |
 | SISO | 1 × 1 | — | — | — | — | full |

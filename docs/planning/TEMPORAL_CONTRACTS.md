@@ -153,11 +153,10 @@ For the agent applying this to `contract()` bodies and `OPERATOR_API.md`:
    century-scale window nor operator-side state is the right place to
    express persistence. `DrainAll` remains the tool for an unpaced fast side
    stream that is *not* a `[live]` Exact join.
-3. **Do not add descriptor-carrying output ports** to make a device echo work.
-   Design invariant 2 sanctions exactly one (`VirtualArrayAssemblyOp.array_geometry`),
-   and the paced-sequencer topology does not need a second one. If a hardware
-   path later demands the device report what it radiated, that is a contract
-   change with a team decision, not an implementation detail.
+3. **Descriptor outputs remain control-plane boundaries.** In addition to the
+   sanctioned computed-geometry boundaries, an authoritative source may emit
+   an existing descriptor representing the configuration its backend actually
+   applied. Processing operators still do not echo descriptors.
 4. **Size queue depth from frames in flight** (acquisition + readout latency
    over the frame period), and say so where a depth is specified. It is not a
    staleness bound and does not scale with `max_age`.
@@ -181,13 +180,20 @@ For the agent applying this to `contract()` bodies and `OPERATOR_API.md`:
   aligned trigger too, so the gate is gone module-wide and §11 is closed
   ([`HSDK5_PORT.md`](HSDK5_PORT.md) §11).
 
-## Still open
+## TX/RX source coordination
 
-- **Who owns the transmit stamp.** The paced sequencer is faithful for
-  simulation and for a host-sequenced front end. Real hardware timestamps its
-  own frames, which argues for the device reporting the config it applied. The
-  consumer's contract is identical either way, so this can be decided later —
-  but it should be decided, not defaulted into.
+The TX driver's applied transmit time owns the shared frame timestamp. A TX
+source emits the applied waveform at that time before marking a bounded,
+thread-safe frame-token record RX-ready. The independently triggered RX source
+claims the device token and copies the recorded time onto the ADC cube; neither
+source substitutes its activation time. Early RX completions wait in bounded
+storage. Duplicate tokens, capacity overflow, failed waveform publication, and
+unmatched frames fail closed.
+
+Frame tokens remain inside the driver/coordinator boundary and never become
+graph payloads. Each waveform fan-out edge is non-dropping and has depth at
+least `1 + ceil(max publication-to-consumer latency / frame period)`, or the
+equivalent configured maximum number of frames in flight plus one.
 
 ## Evidence index
 

@@ -65,6 +65,17 @@ struct TdmSimulationConfig {
   std::vector<int64_t> tx_order{};
 };
 
+struct TdmProfileConfig {
+  std::string name;
+  double carrier_frequency{0.0};
+  double bandwidth{0.0};
+  double chirp_duration{0.0};
+  double sample_rate{0.0};
+  double physical_chirp_repetition_interval{0.0};
+  int64_t chirps_per_tx{0};
+  int64_t samples_per_chirp{0};
+};
+
 struct DdmSimulationConfig {
   // Empty uses the authored native ddm_code. Supported generated values:
   // zadoff_chu (or zc) and sin.
@@ -108,6 +119,10 @@ struct ParamStorageTraits<radar::app::mimo::TdmSimulationConfig>
     : radar::app::mimo::AppStorage<
           radar::app::mimo::TdmSimulationConfig> {};  // NOLINT
 template <>
+struct ParamStorageTraits<radar::app::mimo::TdmProfileConfig>
+    : radar::app::mimo::AppStorage<
+          radar::app::mimo::TdmProfileConfig> {};  // NOLINT
+template <>
 struct ParamStorageTraits<radar::app::mimo::DdmSimulationConfig>
     : radar::app::mimo::AppStorage<
           radar::app::mimo::DdmSimulationConfig> {};  // NOLINT
@@ -150,6 +165,11 @@ struct AppParams {
   std::vector<TargetConfig> targets;
   std::optional<double> noise_snr_db{};
   std::optional<TdmSimulationConfig> tdm{};
+  std::vector<TdmProfileConfig> profiles{};
+  std::vector<std::string> profile_sequence{};
+  int64_t max_frames_in_flight{4};
+  double rx_poll_period{0.001};
+  int64_t simulated_receive_polls{2};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
@@ -164,7 +184,14 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&AppParams::rx_array>("rx_array"),
     holoscan::field<&AppParams::targets>("targets"),
     holoscan::field<&AppParams::noise_snr_db>("noise_snr_db"),
-    holoscan::field<&AppParams::tdm>("tdm"));
+    holoscan::field<&AppParams::tdm>("tdm"),
+    holoscan::field<&AppParams::profiles>("profiles"),
+    holoscan::field<&AppParams::profile_sequence>("profile_sequence"),
+    holoscan::field<&AppParams::max_frames_in_flight>(
+        "max_frames_in_flight"),
+    holoscan::field<&AppParams::rx_poll_period>("rx_poll_period"),
+    holoscan::field<&AppParams::simulated_receive_polls>(
+        "simulated_receive_polls"));
 
 static_assert(holoscan::param_schema_availability<AppParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared);
@@ -245,6 +272,22 @@ struct ConfigCodec<radar::app::mimo::TdmSimulationConfig>
       "physical_chirp_repetition_interval",
       &Config::physical_chirp_repetition_interval),
       defaulted_object_field("tx_order", &Config::tx_order));
+};
+
+template <>
+struct ConfigCodec<radar::app::mimo::TdmProfileConfig>
+    : ObjectCodec<radar::app::mimo::TdmProfileConfig> {
+  using Config = radar::app::mimo::TdmProfileConfig;
+  static constexpr auto fields = std::make_tuple(
+      object_field("name", &Config::name),
+      object_field("carrier_frequency", &Config::carrier_frequency),
+      object_field("bandwidth", &Config::bandwidth),
+      object_field("chirp_duration", &Config::chirp_duration),
+      object_field("sample_rate", &Config::sample_rate),
+      object_field("physical_chirp_repetition_interval",
+                   &Config::physical_chirp_repetition_interval),
+      object_field("chirps_per_tx", &Config::chirps_per_tx),
+      object_field("samples_per_chirp", &Config::samples_per_chirp));
 };
 
 template <>

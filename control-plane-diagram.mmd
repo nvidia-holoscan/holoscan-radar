@@ -1,13 +1,22 @@
-flowchart TD
-    CP["Control Plane"] -->|waveform| TX["TX Sink"]
-    CP -->|waveform| DSP["DSP"]
-    %% CP -->|flush trigger| RX["RX Source"]
-    TX -.- SIM["Simulation / \n Wave Propagation"]
-    SIM -.- RX
-    RX -->|ADC cube| DSP
+flowchart LR
+    subgraph TX["FMCWTransmitSourceOp — independent source"]
+        SELECT["select next CPI profile"] --> DRIVER["TX backend"]
+        DRIVER --> APPLIED["applied profile + token + t_tx"]
+        APPLIED --> WAVEFORM["publish waveform @ t_tx"]
+    end
+    COORD["TransmitFrameCoordinator<br/>bounded token to t_tx ledger"]
+    subgraph RX["CorrelatedMimoTdmAdcSourceOp — independent source"]
+        RXDRIVER["RX backend: ADC + token"] --> CLAIM["claim coordinator record"]
+        CLAIM --> ADC["publish ADC cube @ t_tx"]
+    end
+    APPLIED --> COORD
+    WAVEFORM -->|"mark ready after emit"| COORD
+    COORD --> CLAIM
+    DRIVER -. "transmission / simulation" .-> RXDRIVER
+    ADC --> DSP["existing MIMO TDM DSP"]
+    WAVEFORM -->|"Exact live waveform"| DSP
 
-    style CP fill:#2962FF, color:#FFFFFF
     style TX fill:#2962FF, color:#FFFFFF
     style RX fill:#AA00FF, color:#FFFFFF
     style DSP fill:#AA00FF, color:#FFFFFF
-    style SIM fill:#FFFFFF, color:#333333, stroke-dasharray: 5 5
+    style COORD fill:#FFFFFF, color:#333333, stroke-dasharray: 5 5

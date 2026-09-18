@@ -54,6 +54,20 @@ holoscan_radar_add_application(mimo_tdm
         detection_reduction_op
         cluster_dbscan_op
 )
+holoscan_radar_add_application(mimo_tdm_multi_profile
+    DIRECTORY fmcw/mimo_tdm_multi_profile
+    DEPENDS OPERATORS
+        fmcw_range_processor_op
+        clutter_filter_op
+        fmcw_doppler_processor_op
+        mimo_deinterleave_op
+        tdm_sparse_compensation_op
+        cfar_detector_op
+        beamscan_estimator_op
+        feature_assembly_op
+        detection_reduction_op
+        cluster_dbscan_op
+)
 holoscan_radar_add_application(mimo_ddm
     DIRECTORY fmcw/mimo_ddm
     DEPENDS OPERATORS
