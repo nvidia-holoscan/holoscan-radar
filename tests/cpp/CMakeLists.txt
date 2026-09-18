@@ -260,10 +260,8 @@ target_compile_definitions(test_multi_profile_source PRIVATE
 
 if(TARGET mimo_tdm_multi_profile)
     add_test(NAME MimoTdmMultiProfileSmoke
-        COMMAND ${CMAKE_COMMAND}
-            -DAPP=$<TARGET_FILE:mimo_tdm_multi_profile>
-            -DCONFIG=${PROJECT_SOURCE_DIR}/applications/fmcw/mimo_tdm_multi_profile/config/mimo_tdm_multi_profile_smoke.yaml
-            -P ${PROJECT_SOURCE_DIR}/applications/fmcw/mimo_tdm_multi_profile/cpp/check_smoke.cmake)
+        COMMAND $<TARGET_FILE:mimo_tdm_multi_profile>
+            ${PROJECT_SOURCE_DIR}/applications/fmcw/mimo_tdm_multi_profile/config/mimo_tdm_multi_profile_smoke.yaml)
     set_tests_properties(MimoTdmMultiProfileSmoke
         PROPERTIES LABELS "application;smoke")
 endif()
