@@ -114,7 +114,9 @@ row-major `(num_tx, slow_time)` matrix of the per-`(tx, slot)` excitation:
 | DDM (phase-coded) | `num_chirps` | the arbitrary unit-magnitude `(tx, k)` code |
 
 (Single-TX is just `num_tx == 1` with unit weights — the two entry points share
-one kernel internally.)
+one kernel internally.) Both entry points apply the analog IF response to the
+dechirped beat before honoring `SimScene::dechirped`; when it is `false`, the
+filtered result is multiplied by the reference chirp to produce pre-mixer IQ.
 
 ### Additive — `simulator.hpp`
 

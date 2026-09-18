@@ -338,6 +338,24 @@ std::shared_ptr<holoscan::Tensor> simulate_mimo_gpu(
 
   accumulate_scene(acc, scene, weights, slow_time, t_dev, exec, stream);
 
+  // Match the single-TX solver pre-mixer contract. Filtering is applied to
+  // the dechirped beat first; dechirped=false then restores the transmitted
+  // reference chirp without changing the modeled analog IF response.
+  if (!scene.dechirped) {
+    const double fs = scene.waveform.sample_rate;
+    const double slope = scene.waveform.slope();
+    std::vector<std::complex<double>> ref_host(static_cast<size_t>(samples));
+    for (int64_t s = 0; s < samples; ++s) {
+      const double t = static_cast<double>(s) / fs;
+      const double ph = kPi * slope * t * t;
+      ref_host[static_cast<size_t>(s)] = {std::cos(ph), std::sin(ph)};
+    }
+    auto ref_dev = upload_complex_coefficients<double>(ref_host, stream);
+    auto ref3 =
+        matx::clone<3>(ref_dev, {num_rx, slow_time, matx::matxKeepDim});
+    (acc = acc * ref3).run(exec);
+  }
+
   auto out_mut = out->mutable_data();
   if (!out_mut) {
     throw std::runtime_error(

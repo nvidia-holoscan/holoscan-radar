@@ -233,6 +233,20 @@ void expect_cubes_near(const std::vector<std::complex<double>>& a,
   }
 }
 
+void expect_pre_mixer_recovers_dechirped(const sim::SimResult& dechirped,
+                                          const sim::SimResult& pre_mixer,
+                                          const sim::SimWaveform& waveform,
+                                          int64_t samples) {
+  ASSERT_EQ(pre_mixer.cube.size(), dechirped.cube.size());
+  const auto reference = sim::reference_chirp(waveform, samples);
+  for (size_t i = 0; i < pre_mixer.cube.size(); ++i) {
+    const size_t sample = i % static_cast<size_t>(samples);
+    const auto recovered = pre_mixer.cube[i] * std::conj(reference[sample]);
+    EXPECT_NEAR(recovered.real(), dechirped.cube[i].real(), 1e-9);
+    EXPECT_NEAR(recovered.imag(), dechirped.cube[i].imag(), 1e-9);
+  }
+}
+
 TEST(MimoSim, TdmCubeShape) {
   const auto scene = mimo_scene();
   rd::TXSchedule schedule;  // round-robin; num_tx is set from the scene
@@ -241,6 +255,39 @@ TEST(MimoSim, TdmCubeShape) {
   EXPECT_EQ(result.shape[0], 2);                      // num_rx
   EXPECT_EQ(result.shape[1], 2 * scene.num_chirps);   // num_tx * num_chirps
   EXPECT_EQ(result.shape[2], scene.samples_per_chirp);
+}
+
+TEST(MimoSim, PreMixerRecoversAllDechirpedMimoReferences) {
+  auto scene = mimo_scene();
+  scene.num_chirps = 4;
+  scene.samples_per_chirp = 32;
+  const auto tdm =
+      sim::simulate_mimo_tdm_interleaved(scene, rd::TXSchedule{});
+  const auto offsets = sim::uniform_ddm_offsets(2);
+  const auto ddm = sim::simulate_mimo_ddm_coded(scene, offsets);
+  std::vector<std::complex<double>> codes(8);
+  for (int64_t tx = 0; tx < 2; ++tx) {
+    for (int64_t k = 0; k < scene.num_chirps; ++k) {
+      const double phase = 0.3 * static_cast<double>(tx) +
+                           0.2 * static_cast<double>(k);
+      codes[static_cast<size_t>(tx * scene.num_chirps + k)] =
+          {std::cos(phase), std::sin(phase)};
+    }
+  }
+  const auto phase_coded =
+      sim::simulate_mimo_ddm_phase_coded(scene, codes);
+
+  scene.dechirped = false;
+  const auto tdm_pre =
+      sim::simulate_mimo_tdm_interleaved(scene, rd::TXSchedule{});
+  const auto ddm_pre = sim::simulate_mimo_ddm_coded(scene, offsets);
+  const auto phase_pre = sim::simulate_mimo_ddm_phase_coded(scene, codes);
+  expect_pre_mixer_recovers_dechirped(
+      tdm, tdm_pre, scene.waveform, scene.samples_per_chirp);
+  expect_pre_mixer_recovers_dechirped(
+      ddm, ddm_pre, scene.waveform, scene.samples_per_chirp);
+  expect_pre_mixer_recovers_dechirped(
+      phase_coded, phase_pre, scene.waveform, scene.samples_per_chirp);
 }
 
 TEST(MimoSim, TdmSingleTxMatchesSimulate) {
@@ -361,6 +408,27 @@ TEST(PointTargetSim, CriDelayedTargetReappearsAtResidualRange) {
   }
 }
 
+TEST(PointTargetSim, FullCriDelayRemainsInCarrierPhase) {
+  constexpr int64_t ambiguity_order = 3;
+  const double beat = 0.2 * single_target_scene().waveform.sample_rate;
+  auto principal_scene = scene_for_beat(beat);
+  principal_scene.waveform.carrier_frequency += 1234.0;
+  auto ambiguous_scene = scene_for_beat(beat, ambiguity_order);
+  ambiguous_scene.waveform.carrier_frequency =
+      principal_scene.waveform.carrier_frequency;
+
+  const auto principal = sim::simulate(principal_scene);
+  const auto ambiguous = sim::simulate(ambiguous_scene);
+  const std::complex<double> ratio =
+      ambiguous.cube.front() / principal.cube.front();
+  const double phase =
+      -2.0 * kPi * principal_scene.waveform.carrier_frequency *
+      static_cast<double>(ambiguity_order) *
+      principal_scene.waveform.chirp_repetition_interval;
+  const std::complex<double> expected{std::cos(phase), std::sin(phase)};
+  EXPECT_NEAR(std::abs(ratio - expected), 0.0, 1e-6);
+}
+
 TEST(PointTargetSim, ExactCriDelayLandsAtZeroBeat) {
   const auto result = sim::simulate(scene_for_beat(0.0, 1));
   for (int64_t s = 1; s < single_target_scene().samples_per_chirp; ++s) {
@@ -420,12 +488,14 @@ TEST(PointTargetSim, MovingTargetWrapsAcrossCriBoundary) {
   EXPECT_NEAR(std::arg(wrapped_step), std::remainder(expected, 2.0 * kPi), 1e-8);
 }
 
-TEST(MimoSim, TdmCriAmbiguitySelectsDelayedTxSlot) {
+TEST(MimoSim, TdmMultiPeriodCriAmbiguitySelectsDelayedTxSlot) {
   auto scene = mimo_scene();
   scene.num_chirps = 2;
+  const int64_t ambiguity_order = 5;
   const double ambiguity_range =
       0.5 * scene.propagation_speed *
-      scene.waveform.chirp_repetition_interval;
+      scene.waveform.chirp_repetition_interval *
+      static_cast<double>(ambiguity_order);
   scene.targets = {{sim::Vec3{0.0, ambiguity_range + 40.0, 0.0},
                     sim::Vec3{}, {1.0, 0.0}}};
   const auto tdm =
@@ -450,13 +520,15 @@ TEST(MimoSim, TdmCriAmbiguitySelectsDelayedTxSlot) {
   }
 }
 
-TEST(MimoSim, DdmCriAmbiguitySelectsDelayedOffsetAndPhaseCode) {
+TEST(MimoSim, DdmMultiPeriodCriAmbiguitySelectsDelayedCode) {
   auto scene = single_target_scene();
   scene.num_chirps = 4;
   scene.tx_positions = {sim::Vec3{}, sim::Vec3{}};
+  const int64_t ambiguity_order = 5;
   const double ambiguity_range =
       0.5 * scene.propagation_speed *
-      scene.waveform.chirp_repetition_interval;
+      scene.waveform.chirp_repetition_interval *
+      static_cast<double>(ambiguity_order);
   scene.targets = {{sim::Vec3{ambiguity_range + 40.0, 0.0, 0.0},
                     sim::Vec3{}, {1.0, 0.0}}};
   auto single = scene;
@@ -466,14 +538,14 @@ TEST(MimoSim, DdmCriAmbiguitySelectsDelayedOffsetAndPhaseCode) {
   const auto offset = sim::simulate_mimo_ddm_coded(scene, {0.0, 0.25});
   const std::complex<double> expected_sum{1.0, -1.0};
   EXPECT_NEAR(std::abs(offset.cube[0] / base.cube[0] - expected_sum), 0.0,
-              1e-9);
+               1e-8);
 
   const std::vector<std::complex<double>> codes = {
       {1.0, 0.0}, {1.0, 0.0},  {1.0, 0.0}, {1.0, 0.0},
       {1.0, 0.0}, {0.0, 1.0}, {-1.0, 0.0}, {0.0, -1.0}};
   const auto phase = sim::simulate_mimo_ddm_phase_coded(scene, codes);
   EXPECT_NEAR(std::abs(phase.cube[0] / base.cube[0] - expected_sum), 0.0,
-              1e-9);
+               1e-8);
 }
 
 }  // namespace

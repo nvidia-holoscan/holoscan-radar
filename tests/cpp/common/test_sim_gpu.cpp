@@ -45,6 +45,21 @@ sim::SimScene base_scene() {
   return scene;
 }
 
+sim::SimScene scene_for_beat(double beat_frequency,
+                             int64_t ambiguity_order = 0) {
+  auto scene = base_scene();
+  scene.num_chirps = 2;
+  scene.targets.clear();
+  const double delay =
+      beat_frequency / scene.waveform.slope() +
+      static_cast<double>(ambiguity_order) *
+          scene.waveform.chirp_repetition_interval;
+  const double range = 0.5 * scene.propagation_speed * delay;
+  scene.targets.push_back(
+      {sim::Vec3{range, 0.0, 0.0}, sim::Vec3{}, {1.0, 0.0}});
+  return scene;
+}
+
 // Max |gpu - cpu| over the cube, comparing the GPU complex<float> cube against
 // the CPU double cube cast to float.
 double max_abs_diff(const sim::SimScene& scene) {
@@ -83,6 +98,45 @@ TEST(SimGpu, MatchesCpuMultiRx) {
 TEST(SimGpu, MatchesCpuPreMixer) {
   auto scene = base_scene();
   scene.dechirped = false;
+  EXPECT_LT(max_abs_diff(scene), 1e-3);
+}
+
+TEST(SimGpu, MatchesCpuInRaisedCosineTransition) {
+  const double fs = base_scene().waveform.sample_rate;
+  const auto scene = scene_for_beat(0.95 * fs);
+  EXPECT_NEAR(std::abs(sim::simulate(scene).cube.front()), 0.5, 1e-12);
+  EXPECT_LT(max_abs_diff(scene), 1e-3);
+}
+
+TEST(SimGpu, MatchesCpuInFilteredStopband) {
+  const double fs = base_scene().waveform.sample_rate;
+  const auto scene = scene_for_beat(1.05 * fs);
+  EXPECT_NEAR(std::abs(sim::simulate(scene).cube.front()), 0.0, 1e-12);
+  EXPECT_LT(max_abs_diff(scene), 1e-3);
+}
+
+TEST(SimGpu, MatchesCpuAtRealIfBoundary) {
+  const double fs = base_scene().waveform.sample_rate;
+  auto scene = scene_for_beat(0.5 * fs);
+  scene.analog_if.sampling_mode = sim::IfSamplingMode::kReal;
+  EXPECT_NEAR(std::abs(sim::simulate(scene).cube.front()), 0.0, 1e-12);
+  EXPECT_LT(max_abs_diff(scene), 1e-3);
+}
+
+TEST(SimGpu, MatchesCpuWithExplicitUnfilteredResponse) {
+  const double fs = base_scene().waveform.sample_rate;
+  auto scene = scene_for_beat(1.05 * fs);
+  scene.analog_if.response = sim::AnalogIfResponseType::kNone;
+  EXPECT_NEAR(std::abs(sim::simulate(scene).cube.front()), 1.0, 1e-12);
+  EXPECT_LT(max_abs_diff(scene), 1e-3);
+}
+
+TEST(SimGpu, MatchesCpuSimoAcrossMultipleCriIntervals) {
+  const double fs = base_scene().waveform.sample_rate;
+  auto scene = scene_for_beat(0.2 * fs, 2);
+  scene.rx_positions = {sim::Vec3{0.0, 0.0, 0.0},
+                        sim::Vec3{0.002, 0.0, 0.0},
+                        sim::Vec3{0.004, 0.0, 0.0}};
   EXPECT_LT(max_abs_diff(scene), 1e-3);
 }
 
@@ -188,8 +242,9 @@ TEST(SimGpuMimo, DdmCodedCriAmbiguousMatchesCpu) {
   EXPECT_LT(cube_diff(dev, cpu.cube), 1e-3);
 }
 
-TEST(SimGpuMimo, DdmPhaseCodedCriAmbiguousMatchesCpu) {
+TEST(SimGpuMimo, DdmPhaseCodedPreMixerCriAmbiguousMatchesCpu) {
   auto scene = mimo_scene();
+  scene.dechirped = false;
   scene.targets[0].position[1] +=
       0.5 * scene.propagation_speed *
       scene.waveform.chirp_repetition_interval;

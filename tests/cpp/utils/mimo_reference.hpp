@@ -35,6 +35,26 @@ inline int64_t reference_wrap_slot(int64_t slot, int64_t period) {
   return wrapped < 0 ? wrapped + period : wrapped;
 }
 
+inline void apply_mimo_reference_chirp(SimResult* result,
+                                       const SimScene& scene,
+                                       int64_t slow_time) {
+  if (scene.dechirped) {
+    return;
+  }
+  const int64_t num_rx = static_cast<int64_t>(scene.rx_positions.size());
+  const int64_t samples = scene.samples_per_chirp;
+  const auto reference = reference_chirp(scene.waveform, samples);
+  for (int64_t rx = 0; rx < num_rx; ++rx) {
+    for (int64_t k = 0; k < slow_time; ++k) {
+      for (int64_t s = 0; s < samples; ++s) {
+        const size_t idx =
+            static_cast<size_t>((rx * slow_time + k) * samples + s);
+        result->cube[idx] *= reference[static_cast<size_t>(s)];
+      }
+    }
+  }
+}
+
 // Uniform DDM per-TX Doppler offsets: TX m rides at m/num_tx of the PRF.
 inline std::vector<double> uniform_ddm_offsets(int64_t num_tx) {
   std::vector<double> offsets(static_cast<size_t>(num_tx));
@@ -130,6 +150,8 @@ inline SimResult simulate_mimo_tdm_interleaved(const SimScene& scene,
     }
   }
 
+  apply_mimo_reference_chirp(&result, scene, slow_time);
+
   // Clean scatterer response; the caller
   // applies sim::add_thermal_noise (and any
   // other I/Q additives) to the cube.
@@ -207,6 +229,8 @@ inline SimResult simulate_mimo_ddm_coded(const SimScene& scene,
     }
   }
 
+  apply_mimo_reference_chirp(&result, scene, num_chirps);
+
   // Clean scatterer response; the caller
   // applies sim::add_thermal_noise (and any
   // other I/Q additives) to the cube.
@@ -283,6 +307,8 @@ inline SimResult simulate_mimo_ddm_phase_coded(
       }
     }
   }
+
+  apply_mimo_reference_chirp(&result, scene, num_chirps);
 
   // Clean scatterer response; the caller
   // applies sim::add_thermal_noise (and any
