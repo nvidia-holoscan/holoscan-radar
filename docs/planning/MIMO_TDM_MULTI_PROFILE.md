@@ -19,7 +19,9 @@ frame token, the profile actually applied, and the TX-applied
 `holoscan::TimePoint`. It emits `wire::FMCWWaveformT` at that time and only then
 marks the coordinator record RX-ready.
 
-The independently triggered RX source receives an ADC tensor and frame token.
+The independently triggered RX driver produces the actual ADC tensor and frame
+token; simulation is one driver implementation, not source-operator behavior.
+The RX source receives that pair from its backend.
 It holds early frames in bounded storage, claims the matching coordinator
 record, and emits the ADC cube at the TX-applied time. Therefore:
 
@@ -38,9 +40,9 @@ Add reusable Holoscan-aware helpers under `applications/common/radar_app/`:
 - A bounded, thread-safe `TransmitFrameCoordinator`.
 - `FMCWTransmitSourceOp` and `CorrelatedMimoTdmAdcSourceOp`.
 
-The simulator-backed reference driver uses the existing simulator API. Hardware
-drivers may later replace polling with an SDK readiness trigger without
-changing ports or coordinator semantics.
+The simulator-backed reference driver uses the existing simulator API and owns
+signal generation. Hardware drivers may replace it without rewriting the RX
+source, changing ports, or changing coordinator semantics.
 
 Duplicate tokens, duplicate claims, capacity overflow, expired unmatched
 frames, invalid applied profiles, failed waveform publication, and shutdown
@@ -50,7 +52,9 @@ ADC frame. Records are erased after one successful claim.
 ## Profiles and graph
 
 Author physical profiles under `app.profiles` and a name sequence under
-`app.profile_sequence`. Each profile owns waveform fields, physical PRI,
+`app.profile_sequence`. This is the sole waveform, cube-shape, and physical
+PRI authority; do not repeat a baseline `app.waveform`, `app.cube`, or
+operator waveform. Each profile owns waveform fields, physical PRI,
 chirps per TX, and samples per chirp. Derive the DSP descriptor with
 `chirp_repetition_interval = num_tx * physical_pri`; never author both values.
 

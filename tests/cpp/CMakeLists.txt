@@ -258,6 +258,14 @@ target_include_directories(test_multi_profile_source PRIVATE
 target_compile_definitions(test_multi_profile_source PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
+if(TARGET mimo_tdm_multi_profile)
+    add_test(NAME MimoTdmMultiProfileSmoke
+        COMMAND $<TARGET_FILE:mimo_tdm_multi_profile>
+            ${PROJECT_SOURCE_DIR}/applications/fmcw/mimo_tdm_multi_profile/config/mimo_tdm_multi_profile_smoke.yaml)
+    set_tests_properties(MimoTdmMultiProfileSmoke
+        PROPERTIES LABELS "application;smoke")
+endif()
+
 radar_add_test(app/test_fmcw_simo_report
     holoscan::radar_app)
 target_include_directories(test_fmcw_simo_report PRIVATE

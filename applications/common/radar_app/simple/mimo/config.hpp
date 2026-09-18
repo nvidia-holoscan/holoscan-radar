@@ -574,10 +574,15 @@ inline CommonPrepared prepare_common(
       std::move(dbscan), std::move(reduction)};
 }
 
-inline TdmConfig load_tdm_config(const std::filesystem::path& path) {
+inline TdmConfig load_tdm_config_impl(
+    const std::filesystem::path& path,
+    std::optional<AppParams> app_baseline) {
   auto document =
       normalize_operator_fields(load_document(path), true);
-  const auto app_params = decode_params<AppParams>(document, "/app");
+  const auto app_params = app_baseline.has_value()
+                              ? decode_params<AppParams>(
+                                    document, "/app", std::move(*app_baseline))
+                              : decode_params<AppParams>(document, "/app");
   if (!app_params->tdm.has_value()) {
     throw std::runtime_error(
         "tdm: app.tdm.physical_chirp_repetition_interval is required");
@@ -677,6 +682,15 @@ inline TdmConfig load_tdm_config(const std::filesystem::path& path) {
       std::move(range), std::move(clutter), std::move(doppler),
       std::move(compensation), std::move(cfar), std::move(beamscan),
       std::move(assembly), std::move(dbscan), std::move(reduction)};
+}
+
+inline TdmConfig load_tdm_config(const std::filesystem::path& path) {
+  return load_tdm_config_impl(path, std::nullopt);
+}
+
+inline TdmConfig load_tdm_config(const std::filesystem::path& path,
+                                 AppParams app_baseline) {
+  return load_tdm_config_impl(path, std::move(app_baseline));
 }
 
 inline DdmConfig load_ddm_config(const std::filesystem::path& path) {

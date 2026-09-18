@@ -184,11 +184,13 @@ For the agent applying this to `contract()` bodies and `OPERATOR_API.md`:
 
 The TX driver's applied transmit time owns the shared frame timestamp. A TX
 source emits the applied waveform at that time before marking a bounded,
-thread-safe frame-token record RX-ready. The independently triggered RX source
-claims the device token and copies the recorded time onto the ADC cube; neither
+thread-safe frame-token record RX-ready. The independently triggered RX driver
+returns the actual ADC tensor with its device token; the RX source only claims
+that token, copies the tensor, and publishes it at the recorded time. Neither
 source substitutes its activation time. Early RX completions wait in bounded
-storage. Duplicate tokens, capacity overflow, failed waveform publication, and
-unmatched frames fail closed.
+storage. Bounded tombstones reject duplicate claims; deterministic poll expiry,
+capacity overflow, failed waveform publication, and non-empty finalization
+fail closed.
 
 Frame tokens remain inside the driver/coordinator boundary and never become
 graph payloads. Each waveform fan-out edge is non-dropping and has depth at

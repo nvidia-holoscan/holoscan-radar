@@ -60,7 +60,12 @@ int main(int argc, char** argv) {
         auto coordinator = std::make_shared<app::TransmitFrameCoordinator>(
             cfg.max_frames_in_flight);
         auto link = std::make_shared<app::SimulatedTdmLink>(
-            cfg.simulated_receive_polls);
+            app::SimulatedTdmLinkConfig{
+                .profiles = cfg.profiles,
+                .scene = cfg.scene,
+                .tx_schedule = cfg.tx_schedule,
+                .frame_period = cfg.frame_period,
+                .polls_before_ready = cfg.simulated_receive_polls});
         app::FMCWTransmitSourceConfig tx_config{
             .profiles = cfg.profiles,
             .profile_sequence = cfg.profile_sequence,
@@ -80,9 +85,6 @@ int main(int argc, char** argv) {
           *cadence_out = cadence;
         }
         app::CorrelatedMimoTdmAdcSourceConfig rx_config{
-            .profiles = cfg.profiles,
-            .scene = cfg.scene,
-            .tx_schedule = cfg.tx_schedule,
             .poll_period = cfg.rx_poll_period,
             .frame_period = cfg.frame_period,
             .num_frames = cfg.num_frames,

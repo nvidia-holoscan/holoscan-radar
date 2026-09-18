@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <complex>
 #include <cstdint>
 #include <deque>
@@ -65,6 +66,7 @@ struct TransmitReceipt {
 struct ReceivedAdcFrame {
   FrameToken token{0};
   std::size_t profile_index{0U};
+  std::shared_ptr<holoscan::Tensor> adc_cube;
 };
 
 class TransmitFrameCoordinator {
@@ -77,7 +79,8 @@ class TransmitFrameCoordinator {
     std::size_t profile_index{0U};
   };
 
-  explicit TransmitFrameCoordinator(std::size_t capacity) : capacity_(capacity) {
+  explicit TransmitFrameCoordinator(std::size_t capacity)
+      : capacity_(capacity), tombstone_capacity_(capacity * 2U) {
     if (capacity_ == 0U) {
       throw std::invalid_argument("TransmitFrameCoordinator capacity must be > 0");
     }
@@ -85,7 +88,8 @@ class TransmitFrameCoordinator {
 
   void register_transmit(const TransmitReceipt& receipt) {
     std::lock_guard lock(mutex_);
-    if (records_.count(receipt.token) != 0U) {
+    if (records_.count(receipt.token) != 0U ||
+        tombstones_.count(receipt.token) != 0U) {
       throw std::runtime_error("duplicate transmit frame token");
     }
     if (records_.size() >= capacity_) {
@@ -108,13 +112,18 @@ class TransmitFrameCoordinator {
 
   void cancel(FrameToken token) {
     std::lock_guard lock(mutex_);
-    records_.erase(token);
+    if (records_.erase(token) != 0U) {
+      add_tombstone(token);
+    }
   }
 
   ClaimResult claim(FrameToken token) {
     std::lock_guard lock(mutex_);
     auto found = records_.find(token);
     if (found == records_.end()) {
+      if (tombstones_.count(token) != 0U) {
+        throw std::runtime_error("duplicate claim for retired frame token");
+      }
       return {};
     }
     if (!found->second.ready) {
@@ -124,7 +133,25 @@ class TransmitFrameCoordinator {
     ClaimResult result{ClaimStatus::kReady, found->second.transmit_time,
                        found->second.profile_index};
     records_.erase(found);
+    add_tombstone(token);
     return result;
+  }
+
+  void advance_poll(std::size_t max_polls) {
+    std::lock_guard lock(mutex_);
+    for (auto& [token, record] : records_) {
+      (void)token;
+      if (++record.poll_age > max_polls) {
+        throw std::runtime_error("unmatched TX frame expired");
+      }
+    }
+  }
+
+  void finalize() const {
+    std::lock_guard lock(mutex_);
+    if (!records_.empty()) {
+      throw std::runtime_error("frame coordinator finalized with unmatched TX frames");
+    }
   }
 
   [[nodiscard]] std::size_t outstanding() const {
@@ -137,11 +164,24 @@ class TransmitFrameCoordinator {
     holoscan::TimePoint transmit_time;
     std::size_t profile_index;
     bool ready;
+    std::size_t poll_age{0U};
   };
 
+  void add_tombstone(FrameToken token) {
+    tombstones_.insert(token);
+    tombstone_order_.push_back(token);
+    if (tombstone_order_.size() > tombstone_capacity_) {
+      tombstones_.erase(tombstone_order_.front());
+      tombstone_order_.pop_front();
+    }
+  }
+
   std::size_t capacity_;
+  std::size_t tombstone_capacity_;
   mutable std::mutex mutex_;
   std::unordered_map<FrameToken, Record> records_;
+  std::unordered_set<FrameToken> tombstones_;
+  std::deque<FrameToken> tombstone_order_;
 };
 
 class FMCWTransmitDriver {
@@ -154,16 +194,31 @@ class FMCWTransmitDriver {
 class MimoTdmReceiveDriver {
  public:
   virtual ~MimoTdmReceiveDriver() = default;
-  virtual std::optional<ReceivedAdcFrame> try_receive() = 0;
+  virtual std::optional<ReceivedAdcFrame> try_receive(
+      holoscan::ExecutionContext& context) = 0;
+  virtual void finalize() = 0;
+};
+
+struct SimulatedTdmLinkConfig {
+  std::vector<TdmTransmitProfile> profiles;
+  sim::SimScene scene;
+  TXSchedule tx_schedule;
+  double frame_period{0.1};
+  int polls_before_ready{2};
 };
 
 class SimulatedTdmLink final : public FMCWTransmitDriver,
                                public MimoTdmReceiveDriver {
  public:
-  explicit SimulatedTdmLink(int polls_before_ready = 2)
-      : polls_before_ready_(polls_before_ready) {
-    if (polls_before_ready_ < 0) {
+  explicit SimulatedTdmLink(SimulatedTdmLinkConfig config)
+      : config_(std::move(config)) {
+    const int polls_before_ready = config_.polls_before_ready;
+    if (polls_before_ready < 0) {
       throw std::invalid_argument("polls_before_ready must be >= 0");
+    }
+    polls_before_ready_ = polls_before_ready;
+    if (config_.profiles.empty()) {
+      throw std::invalid_argument("simulated link requires profiles");
     }
   }
 
@@ -175,17 +230,55 @@ class SimulatedTdmLink final : public FMCWTransmitDriver,
     return TransmitReceipt{token, requested_time, profile_index};
   }
 
-  std::optional<ReceivedAdcFrame> try_receive() override {
+  std::optional<ReceivedAdcFrame> try_receive(
+      holoscan::ExecutionContext& context) override {
+    DeviceFrame frame;
+    {
+      std::lock_guard lock(mutex_);
+      if (pending_.empty()) {
+        return std::nullopt;
+      }
+      if (pending_.front().polls_remaining-- > 0) {
+        return std::nullopt;
+      }
+      frame = pending_.front();
+      pending_.pop_front();
+    }
+    if (frame.profile_index >= config_.profiles.size()) {
+      throw std::runtime_error("simulated RX received invalid profile index");
+    }
+    const auto& profile = config_.profiles[frame.profile_index];
+    config_.scene.waveform = profile.physical_waveform;
+    config_.scene.num_chirps = profile.chirps_per_tx;
+    config_.scene.samples_per_chirp = profile.samples_per_chirp;
+    const int64_t num_tx = static_cast<int64_t>(config_.scene.tx_positions.size());
+    const int64_t slow_time = num_tx * profile.chirps_per_tx;
+    const std::vector<int64_t> pattern =
+        config_.tx_schedule.expand_chirp_tx_index(slow_time);
+    std::vector<std::complex<double>> weights(
+        static_cast<std::size_t>(num_tx * slow_time), {0.0, 0.0});
+    for (int64_t chirp = 0; chirp < slow_time; ++chirp) {
+      weights[static_cast<std::size_t>(
+          pattern[static_cast<std::size_t>(chirp)] * slow_time + chirp)] =
+          {1.0, 0.0};
+    }
+    const cudaStream_t stream = context.cuda_stream().get();
+    auto adc = sim::simulate_mimo_gpu(config_.scene, weights, slow_time, stream);
+    sim::add_thermal_noise_gpu(*adc, config_.scene.snr_db,
+                               config_.scene.seed + frames_received_, stream);
+    if (cudaStreamSynchronize(stream) != cudaSuccess) {
+      throw std::runtime_error("simulated RX stream synchronization failed");
+    }
+    sim::advance_scene(&config_.scene, config_.frame_period);
+    ++frames_received_;
+    return ReceivedAdcFrame{frame.token, frame.profile_index, std::move(adc)};
+  }
+
+  void finalize() override {
     std::lock_guard lock(mutex_);
-    if (pending_.empty()) {
-      return std::nullopt;
+    if (!pending_.empty()) {
+      throw std::runtime_error("simulated link finalized with pending frames");
     }
-    if (pending_.front().polls_remaining-- > 0) {
-      return std::nullopt;
-    }
-    const DeviceFrame frame = pending_.front();
-    pending_.pop_front();
-    return ReceivedAdcFrame{frame.token, frame.profile_index};
   }
 
  private:
@@ -196,7 +289,9 @@ class SimulatedTdmLink final : public FMCWTransmitDriver,
   };
 
   int polls_before_ready_;
+  SimulatedTdmLinkConfig config_;
   FrameToken next_token_{1};
+  uint64_t frames_received_{0U};
   std::mutex mutex_;
   std::deque<DeviceFrame> pending_;
 };
@@ -313,9 +408,6 @@ class FMCWTransmitSourceOp final : public holoscan::Operator<> {
 };
 
 struct CorrelatedMimoTdmAdcSourceConfig {
-  std::vector<TdmTransmitProfile> profiles;
-  sim::SimScene scene;
-  TXSchedule tx_schedule;
   double poll_period{0.001};
   double frame_period{0.1};
   int64_t num_frames{1};
@@ -338,8 +430,9 @@ class CorrelatedMimoTdmAdcSourceOp final : public holoscan::Operator<> {
     max_byte_span_ = tensor_byte_span(
         std::vector<int64_t>{max_rx, max_interleaved, max_samples},
         complex_dtype<float>());
-    if (!config_.driver || !config_.coordinator || config_.profiles.empty() ||
-        config_.pending_capacity == 0U) {
+    if (!config_.driver || !config_.coordinator ||
+        config_.pending_capacity == 0U || config_.poll_period <= 0.0 ||
+        config_.frame_period <= 0.0) {
       throw std::invalid_argument(std::string(name()) + " has incomplete configuration");
     }
     max_pending_polls_ = std::max<std::size_t>(
@@ -370,14 +463,29 @@ class CorrelatedMimoTdmAdcSourceOp final : public holoscan::Operator<> {
     if (frames_emitted_ >= config_.num_frames) {
       return {};
     }
-    if (auto frame = config_.driver->try_receive(); frame.has_value()) {
-      if (!seen_tokens_.insert(frame->token).second) {
+    try {
+      config_.coordinator->advance_poll(max_pending_polls_);
+    } catch (const std::exception& error) {
+      return failure(error.what());
+    }
+    std::optional<ReceivedAdcFrame> received;
+    try {
+      received = config_.driver->try_receive(context);
+    } catch (const std::exception& error) {
+      return failure(error.what());
+    }
+    if (received.has_value()) {
+      auto& frame = *received;
+      if (!frame.adc_cube) {
+        return failure("RX driver returned no ADC tensor");
+      }
+      if (!seen_tokens_.insert(frame.token).second) {
         return failure("duplicate RX frame token");
       }
       if (pending_.size() >= config_.pending_capacity) {
         return failure("pending RX frame capacity exceeded");
       }
-      pending_.push_back(PendingFrame{*frame, 0U});
+      pending_.push_back(PendingFrame{std::move(frame), 0U});
     }
     for (auto it = pending_.begin(); it != pending_.end(); ++it) {
       const auto claim = config_.coordinator->claim(it->frame.token);
@@ -388,18 +496,22 @@ class CorrelatedMimoTdmAdcSourceOp final : public holoscan::Operator<> {
         }
         continue;
       }
-      if (claim.profile_index != it->frame.profile_index ||
-          claim.profile_index >= config_.profiles.size()) {
+      if (claim.profile_index != it->frame.profile_index) {
         return failure("RX/TX applied-profile correlation mismatch");
       }
       const ReceivedAdcFrame frame = it->frame;
       pending_.erase(it);
-      return simulate_and_emit(context, frame, claim);
+      return copy_and_emit(context, frame, claim);
     }
     return {};
   }
 
   holoscan::Output<holoscan::Tensor> adc_cube{"adc_cube"};
+
+  void stop() override {
+    config_.driver->finalize();
+    config_.coordinator->finalize();
+  }
 
  private:
   static constexpr const char* name() { return "CorrelatedMimoTdmAdcSourceOp"; }
@@ -409,40 +521,11 @@ class CorrelatedMimoTdmAdcSourceOp final : public holoscan::Operator<> {
         holoscan::ErrorCode::kFailure, std::string(name()) + ": " + message});
   }
 
-  holoscan::expected<void, holoscan::Error> simulate_and_emit(
-      holoscan::ExecutionContext& context, const ReceivedAdcFrame&,
+  holoscan::expected<void, holoscan::Error> copy_and_emit(
+      holoscan::ExecutionContext& context, const ReceivedAdcFrame& frame,
       const TransmitFrameCoordinator::ClaimResult& claim) {
-    const auto& profile = config_.profiles[claim.profile_index];
-    config_.scene.waveform = profile.physical_waveform;
-    config_.scene.num_chirps = profile.chirps_per_tx;
-    config_.scene.samples_per_chirp = profile.samples_per_chirp;
-    const int64_t num_tx = static_cast<int64_t>(config_.scene.tx_positions.size());
-    const int64_t slow_time = num_tx * profile.chirps_per_tx;
-    const std::vector<int64_t> pattern =
-        config_.tx_schedule.expand_chirp_tx_index(slow_time);
-    std::vector<std::complex<double>> weights(
-        static_cast<std::size_t>(num_tx * slow_time), {0.0, 0.0});
-    for (int64_t chirp = 0; chirp < slow_time; ++chirp) {
-      weights[static_cast<std::size_t>(
-          pattern[static_cast<std::size_t>(chirp)] * slow_time + chirp)] =
-          {1.0, 0.0};
-    }
-
-    std::shared_ptr<holoscan::Tensor> staged;
-    try {
-      const cudaStream_t stream = context.cuda_stream().get();
-      staged = sim::simulate_mimo_gpu(config_.scene, weights, slow_time, stream);
-      sim::add_thermal_noise_gpu(*staged, config_.scene.snr_db,
-                                 config_.scene.seed + frames_emitted_, stream);
-      if (cudaStreamSynchronize(stream) != cudaSuccess) {
-        throw std::runtime_error("stream synchronization failed");
-      }
-    } catch (const std::exception& error) {
-      return failure(error.what());
-    }
-
     auto loan = adc_cube.allocate_tensor(holoscan::TensorLoanRequest{
-        .shape = staged->shape(), .dtype = staged->dtype()});
+        .shape = frame.adc_cube->shape(), .dtype = frame.adc_cube->dtype()});
     if (!loan) {
       return holoscan::make_unexpected(std::move(loan).error());
     }
@@ -450,7 +533,7 @@ class CorrelatedMimoTdmAdcSourceOp final : public holoscan::Operator<> {
     if (!writer) {
       return holoscan::make_unexpected(std::move(writer).error());
     }
-    if (cudaMemcpyAsync(writer->data(), staged->data(), writer->byte_size(),
+    if (cudaMemcpyAsync(writer->data(), frame.adc_cube->data(), writer->byte_size(),
                         cudaMemcpyDeviceToDevice,
                         context.cuda_stream().get()) != cudaSuccess) {
       return failure("output D2D failed");
@@ -465,7 +548,6 @@ class CorrelatedMimoTdmAdcSourceOp final : public holoscan::Operator<> {
     if (config_.cadence) {
       config_.cadence->on_source_emit();
     }
-    sim::advance_scene(&config_.scene, config_.frame_period);
     ++frames_emitted_;
     return {};
   }

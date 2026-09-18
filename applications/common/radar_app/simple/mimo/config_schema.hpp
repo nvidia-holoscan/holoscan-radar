@@ -268,7 +268,7 @@ template <>
 struct ConfigCodec<radar::app::mimo::TdmSimulationConfig>
     : ObjectCodec<radar::app::mimo::TdmSimulationConfig> {
   using Config = radar::app::mimo::TdmSimulationConfig;
-  static constexpr auto fields = std::make_tuple(object_field(
+  static constexpr auto fields = std::make_tuple(defaulted_object_field(
       "physical_chirp_repetition_interval",
       &Config::physical_chirp_repetition_interval),
       defaulted_object_field("tx_order", &Config::tx_order));

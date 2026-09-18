@@ -6,7 +6,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "config.hpp"  // NOLINT(build/include_subdir)
@@ -21,7 +24,38 @@ holoscan::TimePoint time_at(int64_t timestamp) {
   return holoscan::TimePoint{timestamp, holoscan::ClockId{7}};
 }
 
-TEST(TransmitFrameCoordinator, HoldsUntilPublicationAndConsumesOnce) {
+class MutatedConfig {
+ public:
+  MutatedConfig(const std::string& old_text, const std::string& new_text) {
+    const auto source = std::filesystem::path(HOLOSCAN_RADAR_SOURCE_DIR) /
+                        "applications/fmcw/mimo_tdm_multi_profile/config/"
+                        "mimo_tdm_multi_profile_smoke.yaml";
+    std::ifstream input(source);
+    std::string contents{std::istreambuf_iterator<char>(input),
+                         std::istreambuf_iterator<char>()};
+    const std::size_t position = contents.find(old_text);
+    if (position == std::string::npos ||
+        contents.find(old_text, position + old_text.size()) !=
+            std::string::npos) {
+      throw std::runtime_error("mutation anchor must occur exactly once");
+    }
+    contents.replace(position, old_text.size(), new_text);
+    path_ = std::filesystem::temp_directory_path() /
+            ("multi_profile_config_" + std::to_string(next_id_++) + ".yaml");
+    std::ofstream output(path_);
+    output << contents;
+  }
+
+  ~MutatedConfig() { std::filesystem::remove(path_); }
+  const std::filesystem::path& path() const { return path_; }
+
+ private:
+  inline static int64_t next_id_{0};
+  std::filesystem::path path_;
+};
+
+TEST(TransmitFrameCoordinator,
+     PreservesTransmitStampAcrossDifferentSourceActivations) {
   app::TransmitFrameCoordinator coordinator(2U);
   coordinator.register_transmit(app::TransmitReceipt{11U, time_at(100), 1U});
 
@@ -29,6 +63,8 @@ TEST(TransmitFrameCoordinator, HoldsUntilPublicationAndConsumesOnce) {
   EXPECT_EQ(early.status,
             app::TransmitFrameCoordinator::ClaimStatus::kNotReady);
   EXPECT_EQ(early.transmit_time, time_at(100));
+  const holoscan::TimePoint rx_activation_time = time_at(900);
+  EXPECT_NE(early.transmit_time, rx_activation_time);
 
   coordinator.mark_ready(11U);
   const auto ready = coordinator.claim(11U);
@@ -36,8 +72,17 @@ TEST(TransmitFrameCoordinator, HoldsUntilPublicationAndConsumesOnce) {
   EXPECT_EQ(ready.transmit_time, time_at(100));
   EXPECT_EQ(ready.profile_index, 1U);
   EXPECT_EQ(coordinator.outstanding(), 0U);
-  EXPECT_EQ(coordinator.claim(11U).status,
-            app::TransmitFrameCoordinator::ClaimStatus::kMissing);
+  EXPECT_THROW(coordinator.claim(11U), std::runtime_error);
+}
+
+TEST(TransmitFrameCoordinator, ExpiresAndFinalizesUnmatchedFrames) {
+  app::TransmitFrameCoordinator coordinator(2U);
+  coordinator.register_transmit(app::TransmitReceipt{4U, time_at(40), 0U});
+  EXPECT_THROW(coordinator.finalize(), std::runtime_error);
+  coordinator.advance_poll(1U);
+  EXPECT_THROW(coordinator.advance_poll(1U), std::runtime_error);
+  coordinator.cancel(4U);
+  EXPECT_NO_THROW(coordinator.finalize());
 }
 
 TEST(TransmitFrameCoordinator, RejectsDuplicatesOverflowAndDoubleReady) {
@@ -79,6 +124,31 @@ TEST(MultiProfileConfig, DecodesProfilesAndMaximumExtents) {
   EXPECT_FALSE(config.range_params->waveform.is_valid());
   EXPECT_FALSE(config.doppler_params->waveform.is_valid());
   EXPECT_FALSE(config.compensation_params->waveform.is_valid());
+}
+
+TEST(MultiProfileConfig, RejectsDuplicateNames) {
+  const MutatedConfig config(
+      "name: far, carrier_frequency", "name: near, carrier_frequency");
+  EXPECT_THROW(workflow::load_config(config.path()), std::runtime_error);
+}
+
+TEST(MultiProfileConfig, RejectsUnknownSequenceProfile) {
+  const MutatedConfig config(
+      "profile_sequence: [near, far]",
+      "profile_sequence: [near, missing]");
+  EXPECT_THROW(workflow::load_config(config.path()), std::runtime_error);
+}
+
+TEST(MultiProfileConfig, RejectsNonIntegralSamples) {
+  const MutatedConfig config(
+      "samples_per_chirp: 512}", "samples_per_chirp: 511}");
+  EXPECT_THROW(workflow::load_config(config.path()), std::runtime_error);
+}
+
+TEST(MultiProfileConfig, RejectsDuplicatedLegacyWaveformAuthoring) {
+  const MutatedConfig config(
+      "app:\n", "app:\n    waveform: {carrier_frequency: 77.0e9}\n");
+  EXPECT_THROW(workflow::load_config(config.path()), std::runtime_error);
 }
 
 }  // namespace

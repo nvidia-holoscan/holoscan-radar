@@ -54,7 +54,6 @@ inline int64_t require_integer(const YAML::Node& node, const char* field) {
 }
 
 inline Config load_config(const std::filesystem::path& path) {
-  Config result{mimo::load_tdm_config(path)};
   const YAML::Node root = YAML::LoadFile(path.string());
   const YAML::Node app = root["app"];
   const YAML::Node profiles = app["profiles"];
@@ -65,30 +64,39 @@ inline Config load_config(const std::filesystem::path& path) {
   if (!sequence || !sequence.IsSequence() || sequence.size() == 0U) {
     throw std::runtime_error("app.profile_sequence must be a non-empty sequence");
   }
-  if (app["max_frames_in_flight"]) {
-    result.max_frames_in_flight = app["max_frames_in_flight"].as<std::size_t>();
+  if (app["waveform"] || app["cube"] ||
+      (app["tdm"] &&
+       app["tdm"]["physical_chirp_repetition_interval"])) {
+    throw std::runtime_error(
+        "multi-profile waveform, cube, and physical PRI belong only in app.profiles");
   }
-  if (result.max_frames_in_flight == 0U) {
+  const std::size_t max_frames_in_flight =
+      app["max_frames_in_flight"]
+          ? app["max_frames_in_flight"].as<std::size_t>()
+          : 4U;
+  if (max_frames_in_flight == 0U) {
     throw std::runtime_error("app.max_frames_in_flight must be > 0");
   }
-  if (app["rx_poll_period"]) {
-    result.rx_poll_period = app["rx_poll_period"].as<double>();
-  }
-  mimo::require_finite_positive("app.rx_poll_period", result.rx_poll_period);
-  if (app["simulated_receive_polls"]) {
-    result.simulated_receive_polls = app["simulated_receive_polls"].as<int>();
-  }
-  if (result.simulated_receive_polls < 0) {
+  const double rx_poll_period =
+      app["rx_poll_period"] ? app["rx_poll_period"].as<double>() : 0.001;
+  mimo::require_finite_positive("app.rx_poll_period", rx_poll_period);
+  const int simulated_receive_polls =
+      app["simulated_receive_polls"]
+          ? app["simulated_receive_polls"].as<int>()
+          : 2;
+  if (simulated_receive_polls < 0) {
     throw std::runtime_error("app.simulated_receive_polls must be >= 0");
   }
 
-  const int64_t num_tx = result.tx_schedule.num_tx;
+  const int64_t num_tx = app["tx_array"]["num_tx"].as<int64_t>();
   std::unordered_map<std::string, std::size_t> by_name;
+  std::vector<TdmTransmitProfile> decoded_profiles;
+  std::vector<std::size_t> decoded_sequence;
   int64_t max_chirps = 0;
   int64_t max_samples = 0;
   double longest_cpi = 0.0;
   double carrier = 0.0;
-  result.profiles.reserve(profiles.size());
+  decoded_profiles.reserve(profiles.size());
   for (const YAML::Node& authored : profiles) {
     const std::string name = authored["name"] ? authored["name"].as<std::string>() : "";
     if (name.empty() || by_name.count(name) != 0U) {
@@ -134,15 +142,12 @@ inline Config load_config(const std::filesystem::path& path) {
     };
     profile.chirps_per_tx = chirps;
     profile.samples_per_chirp = samples;
-    by_name.emplace(name, result.profiles.size());
-    result.profiles.push_back(std::move(profile));
+    by_name.emplace(name, decoded_profiles.size());
+    decoded_profiles.push_back(std::move(profile));
     max_chirps = std::max(max_chirps, chirps);
     max_samples = std::max(max_samples, samples);
     longest_cpi = std::max(
         longest_cpi, physical_pri * static_cast<double>(num_tx * chirps));
-  }
-  if (result.frame_period <= longest_cpi) {
-    throw std::runtime_error("app.run.frame_period must exceed the longest complete TDM CPI");
   }
   for (const YAML::Node& entry : sequence) {
     const std::string name = entry.as<std::string>();
@@ -150,7 +155,28 @@ inline Config load_config(const std::filesystem::path& path) {
     if (found == by_name.end()) {
       throw std::runtime_error("app.profile_sequence references unknown profile: " + name);
     }
-    result.profile_sequence.push_back(found->second);
+    decoded_sequence.push_back(found->second);
+  }
+
+  mimo::AppParams baseline;
+  baseline.waveform = decoded_profiles.front().waveform;
+  baseline.cube = mimo::CubeConfig{
+      .num_chirps = decoded_profiles.front().chirps_per_tx,
+      .samples_per_chirp = decoded_profiles.front().samples_per_chirp};
+  baseline.tdm = mimo::TdmSimulationConfig{
+      .physical_chirp_repetition_interval =
+          decoded_profiles.front().physical_waveform
+              .chirp_repetition_interval,
+      .tx_order = {}};
+  Config result{mimo::load_tdm_config(path, std::move(baseline))};
+  result.profiles = std::move(decoded_profiles);
+  result.profile_sequence = std::move(decoded_sequence);
+  result.max_frames_in_flight = max_frames_in_flight;
+  result.rx_poll_period = rx_poll_period;
+  result.simulated_receive_polls = simulated_receive_polls;
+  if (result.frame_period <= longest_cpi) {
+    throw std::runtime_error(
+        "app.run.frame_period must exceed the longest complete TDM CPI");
   }
 
   auto range_params = result.range_params.value();

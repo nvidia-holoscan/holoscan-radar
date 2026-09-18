@@ -2,16 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 app:
-    # Baseline values size static geometry and are also the first profile.
-    waveform: &near_waveform
-        carrier_frequency: 77.0e9
-        bandwidth: 300.0e6
-        chirp_duration: 20.0e-6
-        sample_rate: 12.8e6
-        chirp_repetition_interval: 50.0e-6
-    cube:
-        num_chirps: 64
-        samples_per_chirp: 256
     run:
         num_frames: 250
         frame_period: 0.1
@@ -34,9 +24,6 @@ app:
         az_elements: 4
         el_elements: 4
         spacing: 0.5
-    tdm:
-        physical_chirp_repetition_interval: 25.0e-6
-        tx_order: [0, 1]
     profiles:
         - name: near
           carrier_frequency: 77.0e9
@@ -73,14 +60,12 @@ app:
 
 mimo_deinterleave: {}
 range_processor:
-    waveform: *near_waveform
     range_window: hann
     nfft: 0
 clutter_filter:
     method: mean_subtraction
     doppler_window: &doppler_window hann
 doppler_processor:
-    waveform: *near_waveform
     doppler_window: *doppler_window
     nfft: 0
 tdm_sparse_compensation:
