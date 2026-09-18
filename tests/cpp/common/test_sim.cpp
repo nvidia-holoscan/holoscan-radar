@@ -43,6 +43,20 @@ sim::SimScene single_target_scene() {
   return scene;
 }
 
+sim::SimScene scene_for_beat(double beat_frequency, int64_t ambiguity_order = 0) {
+  auto scene = single_target_scene();
+  scene.num_chirps = 2;
+  scene.targets.clear();
+  const double residual_delay = beat_frequency / scene.waveform.slope();
+  const double delay = residual_delay +
+                       static_cast<double>(ambiguity_order) *
+                           scene.waveform.chirp_repetition_interval;
+  const double range = 0.5 * scene.propagation_speed * delay;
+  scene.targets.push_back(
+      {sim::Vec3{range, 0.0, 0.0}, sim::Vec3{}, {1.0, 0.0}});
+  return scene;
+}
+
 TEST(PointTargetSim, GroundTruthDerivation) {
   const auto scene = single_target_scene();
   const auto result = sim::simulate(scene);
@@ -305,6 +319,161 @@ TEST(MimoSim, ResolveDdmOffsets) {
   explicit_code.doppler_offsets = {0.1, 0.4, 0.7};
   EXPECT_EQ(sim::resolve_ddm_offsets(explicit_code),
             (std::vector<double>{0.1, 0.4, 0.7}));
+}
+
+TEST(PointTargetSim, AnalogIfRaisedCosineHasExpectedGain) {
+  const double fs = single_target_scene().waveform.sample_rate;
+  const auto magnitude = [](sim::SimScene scene) {
+    return std::abs(sim::simulate(scene).cube.front());
+  };
+
+  EXPECT_NEAR(magnitude(scene_for_beat(0.5 * fs)), 1.0, 1e-12);
+  EXPECT_NEAR(magnitude(scene_for_beat(0.925 * fs)),
+              0.5 * (1.0 + std::cos(0.25 * kPi)), 1e-12);
+  EXPECT_NEAR(magnitude(scene_for_beat(0.95 * fs)), 0.5, 1e-12);
+  EXPECT_NEAR(magnitude(scene_for_beat(0.975 * fs)),
+              0.5 * (1.0 + std::cos(0.75 * kPi)), 1e-12);
+  EXPECT_NEAR(magnitude(scene_for_beat(fs)), 0.0, 1e-12);
+}
+
+TEST(PointTargetSim, ExplicitUnfilteredModeRetainsAdcAliasingTone) {
+  const double fs = single_target_scene().waveform.sample_rate;
+  auto filtered = scene_for_beat(1.05 * fs);
+  auto unfiltered = filtered;
+  unfiltered.analog_if.response = sim::AnalogIfResponseType::kNone;
+
+  EXPECT_NEAR(std::abs(sim::simulate(filtered).cube.front()), 0.0, 1e-12);
+  EXPECT_NEAR(std::abs(sim::simulate(unfiltered).cube.front()), 1.0, 1e-12);
+  const auto result = sim::simulate(unfiltered);
+  const std::complex<double> step = result.cube[1] * std::conj(result.cube[0]);
+  EXPECT_NEAR(std::arg(step), 2.0 * kPi * 0.05, 1e-9);
+}
+
+TEST(PointTargetSim, CriDelayedTargetReappearsAtResidualRange) {
+  const double beat = 0.2 * single_target_scene().waveform.sample_rate;
+  const auto principal = sim::simulate(scene_for_beat(beat));
+  const auto ambiguous = sim::simulate(scene_for_beat(beat, 1));
+
+  ASSERT_EQ(principal.cube.size(), ambiguous.cube.size());
+  for (size_t i = 0; i < principal.cube.size(); ++i) {
+    EXPECT_NEAR(std::abs(principal.cube[i]), std::abs(ambiguous.cube[i]),
+                1e-12);
+  }
+}
+
+TEST(PointTargetSim, ExactCriDelayLandsAtZeroBeat) {
+  const auto result = sim::simulate(scene_for_beat(0.0, 1));
+  for (int64_t s = 1; s < single_target_scene().samples_per_chirp; ++s) {
+    EXPECT_NEAR(std::abs(result.cube[static_cast<size_t>(s)] - result.cube[0]),
+                0.0, 1e-9);
+  }
+}
+
+TEST(PointTargetSim, RealIfUsesHalfRateBoundaryAndConversionIsExplicit) {
+  const double fs = single_target_scene().waveform.sample_rate;
+  auto complex_scene = scene_for_beat(0.75 * fs);
+  auto real_scene = complex_scene;
+  real_scene.analog_if.sampling_mode = sim::IfSamplingMode::kReal;
+
+  const auto complex_result = sim::simulate(complex_scene);
+  const auto real_result = sim::simulate(real_scene);
+  EXPECT_NEAR(std::abs(complex_result.cube.front()), 1.0, 1e-12);
+  EXPECT_NEAR(std::abs(real_result.cube.front()), 0.0, 1e-12);
+  EXPECT_THROW(sim::to_real_if(complex_result), std::invalid_argument);
+  EXPECT_EQ(sim::to_real_if(real_result).size(), real_result.cube.size());
+}
+
+TEST(PointTargetSim, ValidatesIfFractionsAndWaveformTiming) {
+  auto scene = single_target_scene();
+  scene.analog_if.passband_fraction = 1.0;
+  EXPECT_THROW(sim::simulate(scene), std::invalid_argument);
+  scene = single_target_scene();
+  scene.analog_if.stopband_fraction = 1.1;
+  EXPECT_THROW(sim::simulate(scene), std::invalid_argument);
+  scene = single_target_scene();
+  scene.samples_per_chirp += 1;
+  EXPECT_THROW(sim::simulate(scene), std::invalid_argument);
+  scene = single_target_scene();
+  scene.waveform.chirp_repetition_interval = 19e-6;
+  EXPECT_THROW(sim::simulate(scene), std::invalid_argument);
+}
+
+TEST(PointTargetSim, MovingTargetWrapsAcrossCriBoundary) {
+  auto scene = single_target_scene();
+  scene.num_chirps = 2;
+  scene.analog_if.response = sim::AnalogIfResponseType::kNone;
+  const double cri = scene.waveform.chirp_repetition_interval;
+  const double initial_delay = cri - 0.1e-6;
+  const double delay_step = 0.2e-6;
+  const double range = 0.5 * scene.propagation_speed * initial_delay;
+  const double velocity =
+      0.5 * scene.propagation_speed * delay_step / cri;
+  scene.targets = {{sim::Vec3{range, 0.0, 0.0},
+                    sim::Vec3{velocity, 0.0, 0.0}, {1.0, 0.0}}};
+
+  const auto result = sim::simulate(scene);
+  const size_t n = static_cast<size_t>(scene.samples_per_chirp);
+  const std::complex<double> wrapped_step =
+      result.cube[n + 1] * std::conj(result.cube[n]);
+  const double expected =
+      2.0 * kPi * scene.waveform.slope() * 0.1e-6 / scene.waveform.sample_rate;
+  EXPECT_NEAR(std::arg(wrapped_step), std::remainder(expected, 2.0 * kPi), 1e-8);
+}
+
+TEST(MimoSim, TdmCriAmbiguitySelectsDelayedTxSlot) {
+  auto scene = mimo_scene();
+  scene.num_chirps = 2;
+  const double ambiguity_range =
+      0.5 * scene.propagation_speed *
+      scene.waveform.chirp_repetition_interval;
+  scene.targets = {{sim::Vec3{0.0, ambiguity_range + 40.0, 0.0},
+                    sim::Vec3{}, {1.0, 0.0}}};
+  const auto tdm =
+      sim::simulate_mimo_tdm_interleaved(scene, rd::TXSchedule{});
+
+  for (int64_t receive_slot = 0; receive_slot < 2; ++receive_slot) {
+    auto single = scene;
+    single.num_chirps = 1;
+    const int64_t delayed_tx = receive_slot == 0 ? 1 : 0;
+    single.tx_positions = {
+        scene.tx_positions[static_cast<size_t>(delayed_tx)]};
+    const auto expected = sim::simulate(single);
+    for (int64_t rx = 0; rx < 2; ++rx) {
+      const size_t actual_idx = static_cast<size_t>(
+          (rx * 2 * scene.num_chirps + receive_slot) *
+          scene.samples_per_chirp);
+      const size_t expected_idx =
+          static_cast<size_t>(rx * scene.samples_per_chirp);
+      EXPECT_NEAR(std::abs(tdm.cube[actual_idx] - expected.cube[expected_idx]),
+                  0.0, 1e-9);
+    }
+  }
+}
+
+TEST(MimoSim, DdmCriAmbiguitySelectsDelayedOffsetAndPhaseCode) {
+  auto scene = single_target_scene();
+  scene.num_chirps = 4;
+  scene.tx_positions = {sim::Vec3{}, sim::Vec3{}};
+  const double ambiguity_range =
+      0.5 * scene.propagation_speed *
+      scene.waveform.chirp_repetition_interval;
+  scene.targets = {{sim::Vec3{ambiguity_range + 40.0, 0.0, 0.0},
+                    sim::Vec3{}, {1.0, 0.0}}};
+  auto single = scene;
+  single.tx_positions = {sim::Vec3{}};
+  const auto base = sim::simulate(single);
+
+  const auto offset = sim::simulate_mimo_ddm_coded(scene, {0.0, 0.25});
+  const std::complex<double> expected_sum{1.0, -1.0};
+  EXPECT_NEAR(std::abs(offset.cube[0] / base.cube[0] - expected_sum), 0.0,
+              1e-9);
+
+  const std::vector<std::complex<double>> codes = {
+      {1.0, 0.0}, {1.0, 0.0},  {1.0, 0.0}, {1.0, 0.0},
+      {1.0, 0.0}, {0.0, 1.0}, {-1.0, 0.0}, {0.0, -1.0}};
+  const auto phase = sim::simulate_mimo_ddm_phase_coded(scene, codes);
+  EXPECT_NEAR(std::abs(phase.cube[0] / base.cube[0] - expected_sum), 0.0,
+              1e-9);
 }
 
 }  // namespace

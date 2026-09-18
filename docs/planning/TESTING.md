@@ -25,7 +25,7 @@ The simulator is a **signal model, not a physics/EM solver**: it synthesizes the
 - **Waveform** — the fields of `FMCWWaveformDescriptor` (carrier frequency, bandwidth/slope, chirp duration, sample rate, PRI), plus `num_chirps` and `samples_per_chirp`.
 - **TX multiplexing** — SISO / SIMO / MIMO-TDM (a `TXSchedule`) / MIMO-DDM (a `DDMCodeDescriptor`).
 - **Noise** — additive complex Gaussian, configurable by SNR or noise power, with a seed.
-- **Output dtype** — complex IF (analytic) or real IF, to exercise both front-end paths.
+- **Output dtype** — complex IF (analytic) or real IF, selected before synthesis so the analog anti-alias boundary matches the intended front end.
 
 ### Outputs it must produce
 
@@ -40,7 +40,7 @@ The simulator is a **signal model, not a physics/EM solver**: it synthesizes the
 
 With `R`, `v_r`, and `û` derived from each target's Cartesian position and velocity, the contribution for each (tx `m`, rx `n`, chirp `k`, sample `s`) is the product of:
 
-- a **fast-time beat phase** ∝ `R` (→ beat frequency via the sweep slope and sample rate),
+- a **fast-time beat phase** from delay modulo the physical CRI (→ apparent range via sweep slope and sample rate),
 - a **slow-time Doppler phase** ∝ `v_r` (advances by `2π·f_d·PRI` per chirp, evaluated at that TX's firing time within the cycle),
 - a **spatial phase** `∝ (p_tx,m + p_rx,n)·û / λ` — the two-way array phase, with `û` the target's Cartesian look direction (no angle naming — it dots directly with element positions; this is what makes the virtual-array and angle operators testable),
 - the **TX modulation** — TDM: placed in its time slot; DDM: the per-chirp code phase,
@@ -56,15 +56,15 @@ The scene is specified in the **array-local Cartesian frame**, so the simulator 
 
 - **Stop-and-hop.** The target is frozen *within* a chirp (fast-time) and advances in phase *between* chirps (slow-time). This models motion-between-chirps at the Doppler-phase level and **omits intra-CPI range migration** (range-Doppler coupling) — matching the operators' scope (range-Doppler coupling is out of the first wave). Valid while range·velocity products are modest; breaks for very fast targets × long CPIs × wide bandwidth.
 - **Ego motion frozen over a CPI.** The platform sits at one position/orientation for the CPI (ranges and angles constant across chirps). Ego motion is **not** dropped from velocity — it folds into each target's *relative* velocity vector (target world velocity minus platform velocity), from which the radial component is derived; otherwise-static clutter then carries a nonzero ego-Doppler. Cross-frame ego motion and world-frame placement are the caller's responsibility (upstream frame transforms), consistent with the coordinate-conventions stance.
-- **Far-field plane wave**, **monostatic**, **single-slope sweeps**, **ideal hardware**.
+- **Far-field plane wave**, **monostatic**, **single-slope sweeps**, and a magnitude-only analog IF response before sampling. The configured chirp and TX excitation repeat cyclically across CPI boundaries.
 
 ### Explicitly out of scope (first wave)
 
-EM propagation / scattering; multipath; antenna element patterns and mutual coupling; hardware impairments (phase noise, IQ imbalance, ADC quantization); intra-CPI range migration; SAR aperture synthesis; near-field; bistatic geometry. These mirror the operator-lockdown exclusions and can be added later as optional layers.
+EM propagation / scattering; multipath; antenna element patterns and mutual coupling; hardware impairments beyond the magnitude-only IF response (filter phase/group delay, phase noise, IQ imbalance, ADC quantization); intra-CPI range migration; SAR aperture synthesis; near-field; bistatic geometry. These mirror the operator-lockdown exclusions and can be added later as optional layers.
 
 ### Cross-cutting simulator requirements
 
-- **Aliasing modeled.** Targets beyond the unambiguous range / velocity must fold correctly, so wrap-around behavior (and the ÷M MIMO velocity reduction) can be tested.
+- **Aliasing modeled by mechanism.** The default analog IF response attenuates same-sweep beats before sampling; explicit unfiltered scenes exercise ADC aliasing. Delays beyond a physical CRI fold modulo `c·CRI/2`, using the delayed TDM slot or DDM code, while slow-time sampling retains velocity folding (including the ÷M MIMO reduction).
 - **Determinism.** A fixed seed reproduces the cube bit-for-bit.
 - **Guard against tautology.** Derive the signal model independently of the operator implementations, and cross-check a few canonical cases against an independent reference (a textbook closed form or an established external radar model). Tests assert against **analytic ground truth** (target at 12.3 m / 4.1 m/s / +7°), not merely that the generator round-trips through the pipeline.
 - **No kinematic driver (yet).** The simulator is **per-frame**: velocity is a frame parameter (it lives in the slow-time phase within one CPI), so a static generator exercises range, Doppler, angle, and all MIMO paths. A time-stepping driver (targets evolving across frames) is deferred until a frame-spanning consumer exists (a tracker, multi-frame integration, or clutter-map CFAR — all out of scope now). Inter-frame coverage is instead obtained by parameter-sweeping the static generator across many independent scenes. The generator's per-frame API should be shaped so a driver is a thin future add.

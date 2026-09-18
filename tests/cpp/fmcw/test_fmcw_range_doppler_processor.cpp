@@ -125,6 +125,15 @@ const sim::SimResult& parity_sim() {
   return result;
 }
 
+const sim::SimResult& parity_sim_real() {
+  static const sim::SimResult result = [] {
+    auto scene = parity_scene();
+    scene.analog_if.sampling_mode = sim::IfSamplingMode::kReal;
+    return sim::simulate(scene);
+  }();
+  return result;
+}
+
 const sim::SimResult& parity_sim_pre_mixer() {
   static const sim::SimResult result =
       sim::simulate(parity_scene(/*dechirped=*/false));
@@ -467,7 +476,7 @@ TEST(FMCWRangeDopplerProcessorOpTest, UlpParityNfftDoppler) {
 
 TEST(FMCWRangeDopplerProcessorOpTest, UlpParityRealIf) {
   const auto waveform = to_descriptor(sim::SimWaveform{});
-  const sim::SimResult& sim_result = parity_sim();
+  const sim::SimResult& sim_result = parity_sim_real();
   const std::vector<double> real_cube = sim::to_real_if(sim_result);
   auto make = [&] {
     return real_cube_to_device<float>(real_cube, sim_result.shape);
@@ -552,7 +561,7 @@ TEST(FMCWRangeDopplerProcessorOpTest,
 
 TEST(FMCWRangeDopplerProcessorOpTest, ParityRealIfInput) {
   const auto waveform = to_descriptor(sim::SimWaveform{});
-  const sim::SimResult& sim_result = parity_sim();
+  const sim::SimResult& sim_result = parity_sim_real();
   const std::vector<double> real_cube = sim::to_real_if(sim_result);
   auto make = [&] {
     return real_cube_to_device<float>(real_cube, sim_result.shape);
@@ -706,7 +715,7 @@ TEST(FMCWRangeDopplerProcessorOpTest, ApplyDechirpWithoutWaveformErrors) {
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, ApplyDechirpWithRealInputErrors) {
-  const sim::SimResult& sim_result = parity_sim();
+  const sim::SimResult& sim_result = parity_sim_real();
   const auto real_cube = sim::to_real_if(sim_result);
   auto input = real_cube_to_device<float>(real_cube, sim_result.shape);
 

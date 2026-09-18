@@ -7,8 +7,8 @@ runs on the GPU (MatX); an independent CPU implementation under `tests/` is the
 analytic ground truth it is validated against.
 
 It is a closed-form signal model, **not** an EM solver: each target's
-contribution (far-field two-way delay → beat frequency → slow-time carrier
-phase) is summed over `(rx, slot, fast-time sample)`.
+contribution (far-field two-way delay → CRI residual beat → analog IF magnitude →
+slow-time carrier phase) is summed over `(rx, slot, fast-time sample)`.
 
 ## Files
 
@@ -75,6 +75,7 @@ Link: `target_link_libraries(<you> PRIVATE holoscan::radar_common_simulator)`
 | `tx_positions` | `vector<Vec3>` | TX element positions, m, array frame. Single-TX path needs exactly 1. |
 | `rx_positions` | `vector<Vec3>` | RX element positions, m, array frame. |
 | `propagation_speed` | `double` | m/s (defaults to c). |
+| `analog_if` | `AnalogIfConfig` | Sampling mode and magnitude-only analog IF response; defaults to filtered complex-IQ. |
 | `snr_db` | `optional<double>` | Noise SNR in dB vs. a unit-amplitude target; unset = noise-free. |
 | `seed` | `uint64_t` | Noise RNG seed. |
 | `dechirped` | `bool` | `true` = dechirped IF cube (normal); `false` = pre-mixer cube. |
@@ -84,6 +85,7 @@ Link: `target_link_libraries(<you> PRIVATE holoscan::radar_common_simulator)`
 - **`SimWaveform`** — `carrier_frequency` (Hz), `bandwidth` (Hz) **or** derive
   from `chirp_duration`, `sample_rate` (Hz), `chirp_repetition_interval` (s,
   PRI). Helpers: `slope()`, `wavelength()`. `Vec3 = std::array<double,3>`.
+- **`AnalogIfConfig`** — `sampling_mode` (`kComplexIq` gives a positive-beat boundary of `sample_rate`; `kReal` gives `sample_rate/2`), `response` (`kRaisedCosine` or explicit unfiltered `kNone`), and pass/stop fractions. The default is unity through 90% of the boundary and a raised-cosine transition to zero at 100%. `SimResult` records the selected mode; `to_real_if()` rejects results not synthesized as `kReal`. Existing 245 m application targets intentionally sit in the default transition band and retain their configured geometry while receiving the modeled attenuation.
 
 ### Solvers — `simulator.hpp`
 
@@ -143,15 +145,12 @@ element counts + spacing (in wavelengths).
 
 ## Conventions (must match the operators)
 
-- **Dechirped sample:** `s(k,t) = A·exp(+j·2π·f_b(k)·t − j·2π·f_c·τ_k)` with beat
-  `f_b(k) = slope·τ_k`, so a forward FFT along fast-time peaks at the positive
-  beat frequency (bin 0 = zero range).
+- **Dechirped sample:** for `τ_k = q·CRI + δ`, `s(k,t) = H(slope·δ)·A·exp(+j·2π·slope·δ·t − j·2π·f_c·τ_k)`. A forward FFT therefore reports the CRI-folded apparent range; full delay remains in carrier/spatial phase.
 - **Doppler:** the slow-time phase `−2π·f_c·τ_k` advances by `2π·f_d·PRI` per
   chirp with `f_d = −2·v_r/λ`; radial velocity `v_r` positive = receding.
 - **Reference chirp:** `r(t) = exp(+j·π·slope·t²)`; pre-mixer = `s·r`, dechirp =
   multiply by `conj(r)`.
-- Far-field plane wave, monostatic, stop-and-hop (target frozen within a chirp,
-  advances between chirps), single-slope sweeps, ideal hardware.
+- Far-field plane wave, monostatic, stop-and-hop (target frozen within a chirp, advances between chirps), single-slope sweeps, and a cyclic waveform/excitation sequence. The IF response is magnitude-only; finite chirp/idle overlap and cross-profile history are not modeled.
 
 ## Extension points
 

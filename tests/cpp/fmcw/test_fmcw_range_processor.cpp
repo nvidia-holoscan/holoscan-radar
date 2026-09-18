@@ -216,7 +216,9 @@ TEST(FMCWRangeProcessorOpTest, SingleTargetComplexIfPeakAndRangeAxis) {
 TEST(FMCWRangeProcessorOpTest, RealIfPathPeakAtRange) {
   const sim::SimWaveform waveform{};
   const double target_range = range_at_bin(30.0);
-  const auto result = sim::simulate(make_scene(target_range));
+  auto scene = make_scene(target_range);
+  scene.analog_if.sampling_mode = sim::IfSamplingMode::kReal;
+  const auto result = sim::simulate(scene);
   const auto real_cube = sim::to_real_if(result);
 
   FMCWRangeProcessorParams params;
@@ -366,7 +368,9 @@ TEST(FMCWRangeProcessorOpTest, ApplyDechirpWithoutWaveformErrors) {
 
 TEST(FMCWRangeProcessorOpTest, ApplyDechirpWithRealInputErrors) {
   const sim::SimWaveform waveform{};
-  const auto result = sim::simulate(make_scene(range_at_bin(30.0)));
+  auto scene = make_scene(range_at_bin(30.0));
+  scene.analog_if.sampling_mode = sim::IfSamplingMode::kReal;
+  const auto result = sim::simulate(scene);
   const auto real_cube = sim::to_real_if(result);
   auto input = real_cube_to_device<float>(real_cube, result.shape);
 

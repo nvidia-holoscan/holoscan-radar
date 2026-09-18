@@ -140,8 +140,11 @@ double cube_diff(const std::shared_ptr<holoscan::Tensor>& dev,
   return worst;
 }
 
-TEST(SimGpuMimo, TdmMatchesCpu) {
-  const auto scene = mimo_scene();
+TEST(SimGpuMimo, TdmCriAmbiguousMatchesCpu) {
+  auto scene = mimo_scene();
+  scene.targets[0].position[1] +=
+      0.5 * scene.propagation_speed *
+      scene.waveform.chirp_repetition_interval;
   const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
   const int64_t slow = num_tx * scene.num_chirps;
   rd::TXSchedule sched;
@@ -161,8 +164,11 @@ TEST(SimGpuMimo, TdmMatchesCpu) {
   EXPECT_LT(cube_diff(dev, cpu.cube), 1e-3);
 }
 
-TEST(SimGpuMimo, DdmCodedMatchesCpu) {
-  const auto scene = mimo_scene();
+TEST(SimGpuMimo, DdmCodedCriAmbiguousMatchesCpu) {
+  auto scene = mimo_scene();
+  scene.targets[0].position[1] +=
+      0.5 * scene.propagation_speed *
+      scene.waveform.chirp_repetition_interval;
   const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
   const int64_t slow = scene.num_chirps;
   const auto offsets = sim::uniform_ddm_offsets(num_tx);
@@ -182,8 +188,11 @@ TEST(SimGpuMimo, DdmCodedMatchesCpu) {
   EXPECT_LT(cube_diff(dev, cpu.cube), 1e-3);
 }
 
-TEST(SimGpuMimo, DdmPhaseCodedMatchesCpu) {
-  const auto scene = mimo_scene();
+TEST(SimGpuMimo, DdmPhaseCodedCriAmbiguousMatchesCpu) {
+  auto scene = mimo_scene();
+  scene.targets[0].position[1] +=
+      0.5 * scene.propagation_speed *
+      scene.waveform.chirp_repetition_interval;
   const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
   const int64_t slow = scene.num_chirps;
   std::vector<std::complex<double>> codes(static_cast<size_t>(num_tx * slow));

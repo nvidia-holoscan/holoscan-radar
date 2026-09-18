@@ -18,12 +18,16 @@
 //
 // Modeling assumptions: stop-and-hop (target frozen within a chirp, advances
 // between chirps), ego motion folded into target relative velocity by the
-// caller, far-field plane wave, monostatic, single-slope sweeps, ideal
-// hardware. Aliasing folds naturally through the phase arithmetic.
+// caller, far-field plane wave, monostatic, and single-slope sweeps. The
+// configured waveform and excitation repeat cyclically: propagation delay is
+// folded by the physical CRI for fast-time beat generation, while the full
+// delay remains in carrier/spatial phase. A magnitude-only analog IF response
+// precedes sampling.
 //
 // Sign conventions (must match the operators' locked semantics):
 //  - Dechirped sample: s(k, t) = A * exp(+j*2*pi*f_b(k)*t - j*2*pi*f_c*tau_k)
-//    with beat frequency f_b(k) = slope * tau_k, so a forward FFT along
+//    with tau_k = q*CRI + delta and beat frequency f_b(k) = slope * delta,
+//    so a forward FFT along
 //    fast-time peaks at the positive beat frequency (bin 0 = zero range).
 //  - The slow-time carrier phase -2*pi*f_c*tau_k advances by
 //    2*pi*f_d*PRI per chirp with f_d = -2*v_r/lambda, so radial velocity
@@ -78,6 +82,23 @@ struct SimWaveform {
   }
 };
 
+enum class IfSamplingMode {
+  kComplexIq,
+  kReal,
+};
+
+enum class AnalogIfResponseType {
+  kRaisedCosine,
+  kNone,
+};
+
+struct AnalogIfConfig {
+  IfSamplingMode sampling_mode{IfSamplingMode::kComplexIq};
+  AnalogIfResponseType response{AnalogIfResponseType::kRaisedCosine};
+  double passband_fraction{0.9};
+  double stopband_fraction{1.0};
+};
+
 struct SimScene {
   std::vector<PointTarget> targets;
   SimWaveform waveform{};
@@ -89,6 +110,9 @@ struct SimScene {
   std::vector<Vec3> tx_positions{Vec3{0.0, 0.0, 0.0}};
   std::vector<Vec3> rx_positions{Vec3{0.0, 0.0, 0.0}};
   double propagation_speed{kSimSpeedOfLight};
+  // Magnitude-only analog IF response applied to each clean target tone before
+  // sampling. The default is complex-IQ with a 10% anti-alias transition band.
+  AnalogIfConfig analog_if{};
   // Additive complex white Gaussian noise, relative to a unit-amplitude
   // target (SNR in dB). Unset → noise-free.
   std::optional<double> snr_db{};
@@ -113,6 +137,7 @@ struct SimResult {
   std::vector<std::complex<double>> cube;
   std::vector<int64_t> shape;
   std::vector<TargetTruth> truth;
+  IfSamplingMode sampling_mode{IfSamplingMode::kComplexIq};
 };
 
 inline TargetTruth derive_truth(const PointTarget& target) {
