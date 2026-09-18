@@ -90,6 +90,12 @@ void validate_scene(const SimScene& scene, const char* caller) {
         std::string(caller) +
         ": analog IF fractions must satisfy 0 < passband < stopband <= 1");
   }
+  if (scene.range_loss.model == RangeLossModel::kMonostaticFreeSpace &&
+      !finite_positive(scene.range_loss.reference_range)) {
+    throw std::invalid_argument(
+        std::string(caller) +
+        ": free-space range-loss reference range must be finite and positive");
+  }
 }
 
 FoldedDelay fold_delay(double delay, double cri) {
@@ -127,6 +133,18 @@ double analog_if_gain(const SimScene& scene, double beat_frequency) {
   }
   const double x = (frequency - passband) / (stopband - passband);
   return 0.5 * (1.0 + std::cos(kPi * x));
+}
+
+double range_loss_gain(const SimScene& scene, double range) {
+  if (scene.range_loss.model == RangeLossModel::kNone) {
+    return 1.0;
+  }
+  if (!std::isfinite(range) || range <= 0.0) {
+    throw std::invalid_argument(
+        "range_loss_gain: modeled range must be finite and positive");
+  }
+  const double ratio = scene.range_loss.reference_range / range;
+  return ratio * ratio;
 }
 
 int64_t wrap_slot(int64_t slot, int64_t period) {
@@ -224,6 +242,7 @@ void accumulate_scene(matx::tensor_t<cuda::std::complex<double>, 3>& acc,
           const int64_t excitation_slot =
               wrap_slot(k - folded.ambiguity_order, slow_time);
           weight_host[idx] =
+              range_loss_gain(scene, range_k) *
               analog_if_gain(scene, beat_host[idx]) *
               weights[static_cast<size_t>(tx * slow_time + excitation_slot)];
         }

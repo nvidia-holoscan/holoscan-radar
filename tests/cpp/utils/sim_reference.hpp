@@ -82,6 +82,12 @@ inline void validate_scene(const SimScene& scene, const char* caller) {
         std::string(caller) +
         ": analog IF fractions must satisfy 0 < passband < stopband <= 1");
   }
+  if (scene.range_loss.model == RangeLossModel::kMonostaticFreeSpace &&
+      !finite_positive(scene.range_loss.reference_range)) {
+    throw std::invalid_argument(
+        std::string(caller) +
+        ": free-space range-loss reference range must be finite and positive");
+  }
 }
 
 inline FoldedDelay fold_delay(double delay, double cri) {
@@ -115,6 +121,18 @@ inline double analog_if_gain(const SimScene& scene, double beat_frequency) {
   if (frequency >= stopband) return 0.0;
   const double x = (frequency - passband) / (stopband - passband);
   return 0.5 * (1.0 + std::cos(kPi * x));
+}
+
+inline double range_loss_gain(const SimScene& scene, double range) {
+  if (scene.range_loss.model == RangeLossModel::kNone) {
+    return 1.0;
+  }
+  if (!std::isfinite(range) || range <= 0.0) {
+    throw std::invalid_argument(
+        "range_loss_gain: modeled range must be finite and positive");
+  }
+  const double ratio = scene.range_loss.reference_range / range;
+  return ratio * ratio;
 }
 
 }  // namespace reference_detail
@@ -181,7 +199,9 @@ inline SimResult simulate(const SimScene& scene) {
         const double tau = (2.0 * range_k - aperture) / c;
         const auto folded = reference_detail::fold_delay(tau, pri);
         const double beat = slope * folded.residual;
-        const double gain = reference_detail::analog_if_gain(scene, beat);
+        const double gain =
+            reference_detail::range_loss_gain(scene, range_k) *
+            reference_detail::analog_if_gain(scene, beat);
         for (int64_t s = 0; s < samples; ++s) {
           const double t = static_cast<double>(s) / fs;
           const double phase =

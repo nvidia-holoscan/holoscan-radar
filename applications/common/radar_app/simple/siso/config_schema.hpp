@@ -13,6 +13,7 @@
 #include <holoscan/params/config.hpp>
 
 #include "detection/feature_assembly_op/feature_assembly_op.hpp"
+#include "radar_app/app/range_loss_config.hpp"
 #include "radar_app/app/visualization_config.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/sdk/config_codecs.hpp"
@@ -84,6 +85,7 @@ struct AppParams {
   RunConfig run;
   ::holoscan::radar::app::VisualizationConfig visualization{
       default_visualization_config()};
+  std::optional<::holoscan::radar::app::RangeLossConfig> range_loss{};
   std::vector<TargetConfig> targets;
   std::optional<double> noise_snr_db{};
 };
@@ -96,6 +98,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&AppParams::cube>("cube"),
     holoscan::field<&AppParams::run>("run"),
     holoscan::field<&AppParams::visualization>("visualization"),
+    holoscan::field<&AppParams::range_loss>("range_loss"),
     holoscan::field<&AppParams::targets>("targets"),
     holoscan::field<&AppParams::noise_snr_db>("noise_snr_db"));
 

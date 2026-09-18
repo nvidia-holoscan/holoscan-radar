@@ -133,7 +133,9 @@ inline SimResult simulate_mimo_tdm_interleaved(const SimScene& scene,
             continue;
           }
           const double beat = slope * folded.residual;
-          const double gain = reference_detail::analog_if_gain(scene, beat);
+          const double gain =
+              reference_detail::range_loss_gain(scene, range_k) *
+              reference_detail::analog_if_gain(scene, beat);
           for (int64_t s = 0; s < samples; ++s) {
             const double t = static_cast<double>(s) / fs;
             const double phase =
@@ -210,7 +212,9 @@ inline SimResult simulate_mimo_ddm_coded(const SimScene& scene,
             const double tau = (2.0 * range_k - aperture) / c;
             const auto folded = reference_detail::fold_delay(tau, pri);
             const double beat = slope * folded.residual;
-            const double gain = reference_detail::analog_if_gain(scene, beat);
+            const double gain =
+              reference_detail::range_loss_gain(scene, range_k) *
+              reference_detail::analog_if_gain(scene, beat);
             const int64_t excitation_slot = reference_wrap_slot(
                 k - folded.ambiguity_order, num_chirps);
             const double code_phase = 2.0 * kPi *
@@ -289,7 +293,9 @@ inline SimResult simulate_mimo_ddm_phase_coded(
             const double tau = (2.0 * range_k - aperture) / c;
             const auto folded = reference_detail::fold_delay(tau, pri);
             const double beat = slope * folded.residual;
-            const double gain = reference_detail::analog_if_gain(scene, beat);
+            const double gain =
+              reference_detail::range_loss_gain(scene, range_k) *
+              reference_detail::analog_if_gain(scene, beat);
             const int64_t excitation_slot = reference_wrap_slot(
                 k - folded.ambiguity_order, num_chirps);
             const double phase =

@@ -368,6 +368,157 @@ TEST(MimoSim, ResolveDdmOffsets) {
             (std::vector<double>{0.1, 0.4, 0.7}));
 }
 
+TEST(PointTargetSim, RangeLossUsesInverseSquareVoltageGain) {
+  auto scene = single_target_scene();
+  scene.analog_if.response = sim::AnalogIfResponseType::kNone;
+  scene.targets[0].velocity = sim::Vec3{};
+  const auto none = sim::simulate(scene);
+
+  scene.range_loss = {
+      sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+  const auto at_reference = sim::simulate(scene);
+  expect_cubes_near(none.cube, at_reference.cube, 1e-12);
+
+  scene.targets[0].position = sim::Vec3{0.0, 80.0, 0.0};
+  scene.targets[0].amplitude = {0.0, 1.0};
+  const auto doubled = sim::simulate(scene);
+  scene.range_loss.model = sim::RangeLossModel::kNone;
+  const auto doubled_none = sim::simulate(scene);
+  const auto ratio = doubled.cube.front() / doubled_none.cube.front();
+  EXPECT_NEAR(std::abs(ratio), 0.25, 1e-12);
+  EXPECT_NEAR(std::arg(ratio), 0.0, 1e-12);
+}
+
+TEST(PointTargetSim, RangeLossTracksMovingCenterRange) {
+  auto scene = single_target_scene();
+  scene.num_chirps = 2;
+  scene.samples_per_chirp = 1;
+  scene.analog_if.response = sim::AnalogIfResponseType::kNone;
+  scene.range_loss = {
+      sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+  scene.targets = {{sim::Vec3{40.0, 0.0, 0.0},
+                    sim::Vec3{40.0 / scene.waveform.chirp_repetition_interval,
+                              0.0, 0.0},
+                    {1.0, 0.0}}};
+
+  const auto result = sim::simulate(scene);
+  EXPECT_NEAR(std::abs(result.cube[1]) / std::abs(result.cube[0]), 0.25,
+              1e-12);
+}
+
+TEST(PointTargetSim, CriFoldingRetainsFullRangeLoss) {
+  auto near_scene = single_target_scene();
+  near_scene.num_chirps = 1;
+  near_scene.analog_if.response = sim::AnalogIfResponseType::kNone;
+  near_scene.range_loss = {
+      sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+  near_scene.targets = {
+      {sim::Vec3{40.0, 0.0, 0.0}, sim::Vec3{}, {1.0, 0.0}}};
+
+  auto far_scene = near_scene;
+  const double ambiguity_range =
+      0.5 * far_scene.propagation_speed *
+      far_scene.waveform.chirp_repetition_interval;
+  far_scene.targets[0].position =
+      sim::Vec3{ambiguity_range + 40.0, 0.0, 0.0};
+
+  const auto near_result = sim::simulate(near_scene);
+  const auto far_result = sim::simulate(far_scene);
+  const double expected =
+      std::pow(40.0 / (ambiguity_range + 40.0), 2);
+  EXPECT_NEAR(std::abs(far_result.cube.front()) /
+                  std::abs(near_result.cube.front()),
+              expected, 1e-12);
+  EXPECT_NEAR(20.0 * std::log10(expected), -79.0513, 1e-4);
+}
+
+TEST(PointTargetSim, RangeLossMatchesPreMixerAndSimoChannels) {
+  auto scene = single_target_scene();
+  scene.range_loss = {
+      sim::RangeLossModel::kMonostaticFreeSpace, 20.0};
+  scene.rx_positions = {sim::Vec3{}, sim::Vec3{0.002, 0.0, 0.0}};
+  const auto dechirped = sim::simulate(scene);
+  scene.dechirped = false;
+  const auto pre_mixer = sim::simulate(scene);
+  expect_pre_mixer_recovers_dechirped(
+      dechirped, pre_mixer, scene.waveform, scene.samples_per_chirp);
+
+  const size_t per_rx =
+      static_cast<size_t>(scene.num_chirps * scene.samples_per_chirp);
+  EXPECT_NEAR(std::abs(dechirped.cube[0]),
+              std::abs(dechirped.cube[per_rx]), 1e-12);
+}
+
+TEST(PointTargetSim, RangeLossChangesSignalButNotNoisePower) {
+  auto near_scene = single_target_scene();
+  near_scene.targets[0].velocity = sim::Vec3{};
+  near_scene.range_loss = {
+      sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+  auto far_scene = near_scene;
+  far_scene.targets[0].position = sim::Vec3{0.0, 80.0, 0.0};
+
+  const auto near_result = sim::simulate(near_scene);
+  const auto far_result = sim::simulate(far_scene);
+  EXPECT_NEAR(std::norm(near_result.cube.front()) /
+                  std::norm(far_result.cube.front()),
+              16.0, 1e-10);
+
+  std::vector<std::complex<double>> near_noise(near_result.cube.size());
+  std::vector<std::complex<double>> far_noise(far_result.cube.size());
+  sim::add_thermal_noise(near_noise, 20.0, near_scene.seed);
+  sim::add_thermal_noise(far_noise, 20.0, far_scene.seed);
+  EXPECT_EQ(near_noise, far_noise);
+}
+
+TEST(PointTargetSim, RangeLossRejectsInvalidRanges) {
+  auto scene = single_target_scene();
+  scene.range_loss = {
+      sim::RangeLossModel::kMonostaticFreeSpace, 0.0};
+  EXPECT_THROW(sim::simulate(scene), std::invalid_argument);
+
+  scene.range_loss.reference_range = 40.0;
+  scene.num_chirps = 2;
+  scene.targets[0].velocity =
+      sim::Vec3{0.0, -80.0 / scene.waveform.chirp_repetition_interval, 0.0};
+  EXPECT_THROW(sim::simulate(scene), std::invalid_argument);
+}
+
+TEST(MimoSim, RangeLossScalesTdmAndBothDdmReferences) {
+  auto scene = mimo_scene();
+  scene.num_chirps = 4;
+  scene.samples_per_chirp = 16;
+  scene.targets[0].velocity = sim::Vec3{};
+  scene.analog_if.response = sim::AnalogIfResponseType::kNone;
+  const auto tdm_none =
+      sim::simulate_mimo_tdm_interleaved(scene, rd::TXSchedule{});
+  const auto offsets = sim::uniform_ddm_offsets(2);
+  const auto ddm_none = sim::simulate_mimo_ddm_coded(scene, offsets);
+  std::vector<std::complex<double>> codes(8, {1.0, 0.0});
+  const auto phase_none =
+      sim::simulate_mimo_ddm_phase_coded(scene, codes);
+
+  scene.range_loss = {
+      sim::RangeLossModel::kMonostaticFreeSpace, 20.0};
+  const auto tdm_loss =
+      sim::simulate_mimo_tdm_interleaved(scene, rd::TXSchedule{});
+  const auto ddm_loss = sim::simulate_mimo_ddm_coded(scene, offsets);
+  const auto phase_loss =
+      sim::simulate_mimo_ddm_phase_coded(scene, codes);
+
+  const auto expect_quarter = [](const sim::SimResult& loss,
+                                 const sim::SimResult& none) {
+    ASSERT_EQ(loss.cube.size(), none.cube.size());
+    for (size_t i = 0; i < loss.cube.size(); ++i) {
+      if (std::abs(none.cube[i]) > 1e-10) {
+        EXPECT_NEAR(std::abs(loss.cube[i] / none.cube[i]), 0.25, 1e-10);
+      }
+    }
+  };
+  expect_quarter(tdm_loss, tdm_none);
+  expect_quarter(ddm_loss, ddm_none);
+  expect_quarter(phase_loss, phase_none);
+}
+
 TEST(PointTargetSim, AnalogIfRaisedCosineHasExpectedGain) {
   const double fs = single_target_scene().waveform.sample_rate;
   const auto magnitude = [](sim::SimScene scene) {

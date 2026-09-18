@@ -6,6 +6,8 @@
 #include <yaml-cpp/yaml.h>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -24,6 +26,45 @@ std::filesystem::path config_path(const char* name) {
   return std::filesystem::path(HOLOSCAN_RADAR_SOURCE_DIR) /
          "applications/fmcw" / name;
 }
+
+class MutatedConfig {
+ public:
+  MutatedConfig(const char* source_name, const std::string& old_text,
+                const std::string& new_text) {
+    std::ifstream input(config_path(source_name));
+    if (!input) {
+      throw std::runtime_error("cannot read source config");
+    }
+    std::string contents{std::istreambuf_iterator<char>(input),
+                         std::istreambuf_iterator<char>()};
+    const std::size_t position = contents.find(old_text);
+    if (position == std::string::npos ||
+        contents.find(old_text, position + old_text.size()) !=
+            std::string::npos) {
+      throw std::runtime_error("config mutation anchor must occur once");
+    }
+    contents.replace(position, old_text.size(), new_text);
+    path_ = std::filesystem::temp_directory_path() /
+            ("holoscan_radar_simo_config_" + std::to_string(next_id_++) +
+             ".yaml");
+    std::ofstream output(path_);
+    output << contents;
+    if (!output) {
+      throw std::runtime_error("cannot write temporary config");
+    }
+  }
+
+  ~MutatedConfig() { std::filesystem::remove(path_); }
+
+  MutatedConfig(const MutatedConfig&) = delete;
+  MutatedConfig& operator=(const MutatedConfig&) = delete;
+
+  const std::filesystem::path& path() const { return path_; }
+
+ private:
+  inline static int64_t next_id_{0};
+  std::filesystem::path path_;
+};
 
 void expect_smoke_matches_production(const char* production_name,
                                      const char* smoke_name) {
@@ -189,6 +230,19 @@ TEST(FmcwSimoConfig, RejectsInvalidScanCoordinateRangeMapping) {
   EXPECT_THROW(
       simo::normalize_scan_coordinate_field(std::move(*document), "/grid"),
       std::runtime_error);
+}
+
+TEST(FmcwSimoConfig, DecodesSharedRangeLossBlock) {
+  const MutatedConfig preset(
+      "simo/config/simo_smoke.yaml", "    rx_array:\n",
+      "    range_loss:\n"
+      "        model: monostatic_free_space\n"
+      "        reference_range: 40.0\n"
+      "    rx_array:\n");
+  const auto config = simo::load_detect_then_beamform_config(preset.path());
+  EXPECT_EQ(config.scene.range_loss.model,
+            radar::sim::RangeLossModel::kMonostaticFreeSpace);
+  EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 40.0);
 }
 
 }  // namespace

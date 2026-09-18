@@ -99,6 +99,16 @@ struct AnalogIfConfig {
   double stopband_fraction{1.0};
 };
 
+enum class RangeLossModel {
+  kNone,
+  kMonostaticFreeSpace,
+};
+
+struct RangeLossConfig {
+  RangeLossModel model{RangeLossModel::kNone};
+  double reference_range{1.0};  // m
+};
+
 struct SimScene {
   std::vector<PointTarget> targets;
   SimWaveform waveform{};
@@ -113,6 +123,9 @@ struct SimScene {
   // Magnitude-only analog IF response applied to each clean target tone before
   // sampling. The default is complex-IQ with a 10% anti-alias transition band.
   AnalogIfConfig analog_if{};
+  // Optional relative monostatic propagation law. Target amplitude is the
+  // received-voltage coefficient at reference_range when enabled.
+  RangeLossConfig range_loss{};
   // Additive complex white Gaussian noise, relative to a unit-amplitude
   // target (SNR in dB). Unset → noise-free.
   std::optional<double> snr_db{};

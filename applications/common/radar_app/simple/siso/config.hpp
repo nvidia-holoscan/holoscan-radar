@@ -221,6 +221,8 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored) {
   result.scene.num_chirps = authored.cube.num_chirps;
   result.scene.samples_per_chirp = authored.cube.samples_per_chirp;
   result.scene.snr_db = authored.noise_snr_db;
+  ::holoscan::radar::app::configure_range_loss(
+      authored.range_loss, &result.scene);
 
   result.scene.targets.reserve(authored.targets.size());
   for (const TargetConfig& target : authored.targets) {

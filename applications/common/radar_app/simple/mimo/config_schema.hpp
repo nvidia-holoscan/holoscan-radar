@@ -20,6 +20,7 @@
 #include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
 #include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_op.hpp"
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_op.hpp"
+#include "radar_app/app/range_loss_config.hpp"
 #include "radar_app/app/visualization_config.hpp"
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
@@ -160,6 +161,7 @@ struct AppParams {
   RunConfig run;
   ::holoscan::radar::app::VisualizationConfig visualization{
       default_visualization_config()};
+  std::optional<::holoscan::radar::app::RangeLossConfig> range_loss{};
   TxArrayConfig tx_array;
   RxArrayConfig rx_array;
   std::vector<TargetConfig> targets;
@@ -180,6 +182,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&AppParams::cube>("cube"),
     holoscan::field<&AppParams::run>("run"),
     holoscan::field<&AppParams::visualization>("visualization"),
+    holoscan::field<&AppParams::range_loss>("range_loss"),
     holoscan::field<&AppParams::tx_array>("tx_array"),
     holoscan::field<&AppParams::rx_array>("rx_array"),
     holoscan::field<&AppParams::targets>("targets"),

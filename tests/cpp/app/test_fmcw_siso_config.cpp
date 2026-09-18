@@ -25,13 +25,16 @@ std::filesystem::path config_path(const char* name) {
 
 TEST(FmcwSisoConfig, DecodesProductionAndDerivesRankTwoExtents) {
   const auto config = siso::load_config(config_path("siso.yaml"));
-  EXPECT_EQ(config.num_frames, 250);
+  EXPECT_EQ(config.num_frames, 2200);
   EXPECT_DOUBLE_EQ(config.frame_period, 0.1);
   EXPECT_EQ(config.scene.num_chirps, 128);
   EXPECT_EQ(config.scene.samples_per_chirp, 256);
-  EXPECT_EQ(config.scene.targets.size(), 5U);
+  EXPECT_EQ(config.scene.targets.size(), 1U);
   ASSERT_TRUE(config.scene.snr_db.has_value());
   EXPECT_DOUBLE_EQ(*config.scene.snr_db, 20.0);
+  EXPECT_EQ(config.scene.range_loss.model,
+            radar::sim::RangeLossModel::kMonostaticFreeSpace);
+  EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 40.0);
   ASSERT_EQ(config.scene.rx_positions.size(), 1U);
   EXPECT_EQ(config.scene.rx_positions[0],
             (radar::sim::Vec3{0.0, 0.0, 0.0}));
@@ -62,6 +65,8 @@ TEST(FmcwSisoConfig, DecodesSmoke) {
   ASSERT_EQ(config.scene.targets.size(), 1U);
   EXPECT_DOUBLE_EQ(config.scene.targets[0].position[0], 245.0);
   EXPECT_DOUBLE_EQ(config.scene.targets[0].velocity[0], -6.5006);
+  EXPECT_EQ(config.scene.range_loss.model,
+            radar::sim::RangeLossModel::kNone);
   EXPECT_FALSE(config.visualize);
 }
 
@@ -71,9 +76,8 @@ TEST(FmcwSisoConfig, SmokeOnlyAppliesAllowedOverrides) {
       YAML::LoadFile(config_path("siso_smoke.yaml").string());
   expected["app"]["run"]["num_frames"] = 2;
   expected["app"]["visualization"]["enabled"] = false;
-  YAML::Node targets(YAML::NodeType::Sequence);
-  targets.push_back(expected["app"]["targets"][0]);
-  expected["app"]["targets"] = targets;
+  expected["app"].remove("range_loss");
+  expected["app"]["targets"] = smoke["app"]["targets"];
   EXPECT_EQ(YAML::Dump(expected), YAML::Dump(smoke));
 }
 
@@ -92,6 +96,29 @@ TEST(FmcwSisoConfig, RejectsMalformedApplicationParameters) {
   params.cube.samples_per_chirp = 256;
   params.targets.push_back(siso::TargetConfig{
       .range = -1.0, .velocity = 0.0, .amplitude = 1.0});
+  EXPECT_THROW(siso::make_runtime_config(params), std::runtime_error);
+}
+
+TEST(FmcwSisoConfig, ValidatesRangeLossConfiguration) {
+  siso::AppParams params;
+  params.cube.num_chirps = 2;
+  params.cube.samples_per_chirp = 2;
+  params.targets.push_back(
+      siso::TargetConfig{.range = 40.0, .velocity = 0.0, .amplitude = 1.0});
+
+  params.range_loss = radar::app::RangeLossConfig{
+      .model = "monostatic_free_space", .reference_range = 40.0};
+  const auto configured = siso::make_runtime_config(params);
+  EXPECT_EQ(configured.scene.range_loss.model,
+            radar::sim::RangeLossModel::kMonostaticFreeSpace);
+  EXPECT_DOUBLE_EQ(configured.scene.range_loss.reference_range, 40.0);
+
+  params.range_loss->reference_range.reset();
+  EXPECT_THROW(siso::make_runtime_config(params), std::runtime_error);
+  params.range_loss = radar::app::RangeLossConfig{.model = "unknown"};
+  EXPECT_THROW(siso::make_runtime_config(params), std::runtime_error);
+  params.range_loss = radar::app::RangeLossConfig{
+      .model = "none", .reference_range = -1.0};
   EXPECT_THROW(siso::make_runtime_config(params), std::runtime_error);
 }
 

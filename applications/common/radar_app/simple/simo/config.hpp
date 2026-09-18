@@ -227,6 +227,8 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored,
   result.scene.num_chirps = authored.cube.num_chirps;
   result.scene.samples_per_chirp = authored.cube.samples_per_chirp;
   result.scene.snr_db = authored.noise_snr_db;
+  ::holoscan::radar::app::configure_range_loss(
+      authored.range_loss, &result.scene);
 
   const auto& rx = authored.rx_array;
   if (rx.az_elements < 2 || rx.el_elements < 2) {

@@ -46,6 +46,8 @@ With `R`, `v_r`, and `û` derived from each target's Cartesian position and velo
 - the **TX modulation** — TDM: placed in its time slot; DDM: the per-chirp code phase,
 - the target's **complex amplitude** (× an optional range law).
 
+The optional relative monostatic free-space law applies voltage gain `(R_ref / R_k)^2` from the full physical center range before CRI folding, so received power scales as `R_k^-4`. Constant-amplitude mode remains available for analytic fixtures. Target amplitude contains the otherwise-fixed link-budget terms and is defined at `R_ref` when the law is enabled.
+
 Sum over targets, add noise.
 
 ### Scene frame and angle conventions
@@ -60,7 +62,7 @@ The scene is specified in the **array-local Cartesian frame**, so the simulator 
 
 ### Explicitly out of scope (first wave)
 
-EM propagation / scattering; multipath; antenna element patterns and mutual coupling; hardware impairments beyond the magnitude-only IF response (filter phase/group delay, phase noise, IQ imbalance, ADC quantization); intra-CPI range migration; SAR aperture synthesis; near-field; bistatic geometry. These mirror the operator-lockdown exclusions and can be added later as optional layers.
+Absolute radar-equation calibration and electromagnetic scattering beyond the optional relative range law; multipath; antenna element patterns and mutual coupling; hardware impairments beyond the magnitude-only IF response (filter phase/group delay, phase noise, IQ imbalance, ADC quantization); intra-CPI range migration; SAR aperture synthesis; near-field; bistatic geometry. These mirror the operator-lockdown exclusions and can be added later as optional layers.
 
 ### Cross-cutting simulator requirements
 

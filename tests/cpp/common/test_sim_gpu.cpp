@@ -140,6 +140,26 @@ TEST(SimGpu, MatchesCpuSimoAcrossMultipleCriIntervals) {
   EXPECT_LT(max_abs_diff(scene), 1e-3);
 }
 
+TEST(SimGpu, MatchesCpuWithRangeLossAtReferenceTwiceAndFolded) {
+  for (const double range : {40.0, 80.0, 3787.405725}) {
+    auto scene = base_scene();
+    scene.targets = {
+        {sim::Vec3{range, 0.0, 0.0}, sim::Vec3{}, {1.0, -0.2}}};
+    scene.range_loss = {
+        sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+    EXPECT_LT(max_abs_diff(scene), 1e-3);
+  }
+
+  auto pre_mixer = base_scene();
+  pre_mixer.targets = {
+      {sim::Vec3{80.0, 0.0, 0.0}, sim::Vec3{}, {1.0, -0.2}}};
+  pre_mixer.range_loss = {
+      sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+  pre_mixer.analog_if.response = sim::AnalogIfResponseType::kNone;
+  pre_mixer.dechirped = false;
+  EXPECT_LT(max_abs_diff(pre_mixer), 1e-3);
+}
+
 TEST(SimGpu, NoiseHasExpectedVariance) {
   // Pure-noise cube (no targets): E[|z|^2] = 2*sigma^2 = noise_power.
   auto scene = base_scene();
@@ -199,6 +219,8 @@ TEST(SimGpuMimo, TdmCriAmbiguousMatchesCpu) {
   scene.targets[0].position[1] +=
       0.5 * scene.propagation_speed *
       scene.waveform.chirp_repetition_interval;
+  scene.range_loss = {
+      sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
   const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
   const int64_t slow = num_tx * scene.num_chirps;
   rd::TXSchedule sched;
@@ -223,6 +245,8 @@ TEST(SimGpuMimo, DdmCodedCriAmbiguousMatchesCpu) {
   scene.targets[0].position[1] +=
       0.5 * scene.propagation_speed *
       scene.waveform.chirp_repetition_interval;
+  scene.range_loss = {
+      sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
   const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
   const int64_t slow = scene.num_chirps;
   const auto offsets = sim::uniform_ddm_offsets(num_tx);
@@ -248,6 +272,8 @@ TEST(SimGpuMimo, DdmPhaseCodedPreMixerCriAmbiguousMatchesCpu) {
   scene.targets[0].position[1] +=
       0.5 * scene.propagation_speed *
       scene.waveform.chirp_repetition_interval;
+  scene.range_loss = {
+      sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
   const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
   const int64_t slow = scene.num_chirps;
   std::vector<std::complex<double>> codes(static_cast<size_t>(num_tx * slow));

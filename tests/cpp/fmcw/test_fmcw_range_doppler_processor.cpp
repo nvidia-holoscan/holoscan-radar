@@ -37,6 +37,7 @@
 #include <holoscan/core/tensor_output_loan.hpp>
 #include <holoscan/time/realtime_clock.hpp>
 
+#include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "fmcw/fmcw_range_doppler_processor_op/fmcw_range_doppler_processor_op.hpp"
@@ -47,6 +48,7 @@
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_schemas/fmcw_waveform_bridge.hpp"
 #include "radar_schemas/window_spec_bridge.hpp"
+#include "utils/additives_reference.hpp"
 #include "utils/bin_model.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/sim_reference.hpp"
@@ -54,6 +56,9 @@
 
 namespace {
 
+using holoscan::radar::CFARDetectorOp;
+using holoscan::radar::CFARParams;
+using holoscan::radar::CfarVariant;
 using holoscan::radar::ClutterFilterMethod;
 using holoscan::radar::ClutterFilterOp;
 using holoscan::radar::ClutterFilterParams;
@@ -675,6 +680,110 @@ TEST(FMCWRangeDopplerProcessorOpTest, PeakMapsToTruthRangeAndVelocity) {
   EXPECT_NEAR(velocity_axis[peak_doppler],
               sim_result.truth[0].radial_velocity,
               velocity_bin_width + 1e-9);
+}
+
+TEST(FMCWRangeDopplerProcessorOpTest,
+     CriFoldedPeakPowerRetainsPhysicalRangeLoss) {
+  auto make_scene = [](double range) {
+    sim::SimScene scene;
+    scene.num_chirps = kChirps;
+    scene.samples_per_chirp = kSamples;
+    scene.range_loss = {
+        sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+    scene.targets = {
+        {sim::Vec3{range, 0.0, 0.0}, sim::Vec3{}, {1.0, 0.0}}};
+    return scene;
+  };
+
+  const auto near_scene = make_scene(40.0);
+  const double ambiguity_range =
+      0.5 * near_scene.propagation_speed *
+      near_scene.waveform.chirp_repetition_interval;
+  const auto far_scene = make_scene(ambiguity_range + 40.0);
+  const auto near_sim = sim::simulate(near_scene);
+  const auto far_sim = sim::simulate(far_scene);
+  const auto waveform = to_descriptor(near_scene.waveform);
+
+  const auto near = run_fused<float>(
+      complex_cube_to_device<float>(near_sim.cube, near_sim.shape),
+      ParityConfig{}, waveform);
+  const auto far = run_fused<float>(
+      complex_cube_to_device<float>(far_sim.cube, far_sim.shape),
+      ParityConfig{}, waveform);
+  const double near_peak = max_abs<float>(near.rd);
+  const double far_peak = max_abs<float>(far.rd);
+  const double expected_voltage =
+      40.0 / (ambiguity_range + 40.0) *
+      40.0 / (ambiguity_range + 40.0);
+  const double expected_power = expected_voltage * expected_voltage;
+
+  ASSERT_GT(near_peak, 0.0);
+  EXPECT_NEAR((far_peak * far_peak) / (near_peak * near_peak),
+              expected_power, 1e-4 * expected_power);
+}
+
+TEST(FMCWRangeDopplerProcessorOpTest,
+     RangeLossMakesCriFoldedTargetFallBelowCfar) {
+  auto make_scene = [](double range) {
+    sim::SimScene scene;
+    scene.num_chirps = kChirps;
+    scene.samples_per_chirp = kSamples;
+    scene.range_loss = {
+        sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+    scene.snr_db = 20.0;
+    scene.targets = {
+        {sim::Vec3{range, 0.0, 0.0}, sim::Vec3{}, {1.0, 0.0}}};
+    return scene;
+  };
+  auto near_scene = make_scene(40.0);
+  const double ambiguity_range =
+      0.5 * near_scene.propagation_speed *
+      near_scene.waveform.chirp_repetition_interval;
+  auto far_scene = make_scene(ambiguity_range + 40.0);
+  auto near_sim = sim::simulate(near_scene);
+  auto far_sim = sim::simulate(far_scene);
+  sim::add_thermal_noise(
+      near_sim.cube, near_scene.snr_db, near_scene.seed);
+  sim::add_thermal_noise(
+      far_sim.cube, far_scene.snr_db, far_scene.seed);
+
+  ParityConfig processing;
+  processing.range_window.type = WindowType::kHann;
+  processing.doppler_window.type = WindowType::kHann;
+  const auto waveform = to_descriptor(near_scene.waveform);
+  const auto near = run_fused<float>(
+      complex_cube_to_device<float>(near_sim.cube, near_sim.shape),
+      processing, waveform);
+  const auto far = run_fused<float>(
+      complex_cube_to_device<float>(far_sim.cube, far_sim.shape),
+      processing, waveform);
+
+  const auto detection_count = [](const HostTensor& rd) {
+    CFARParams params;
+    params.cfar_variant = CfarVariant::kCA;
+    params.guard_cells = {3, 3};
+    params.training_cells = {3, 3};
+    params.pfa = 1e-9;
+    const holoscan::ConnectionOptions queue{.queue_depth = 4U};
+    const GraphRunResult result =
+        run_single_io_operator_graph_result<CFARDetectorOp<float>>(
+            {reupload<float>(rd)}, std::move(params), "detection_idx",
+            [queue](holoscan::Graph& graph, const auto& source, auto& op,
+                    const auto& sink) {
+              graph.add_flow(source->out, op->rd_maps, queue);
+              graph.add_flow(op->detection_idx, sink->in, queue);
+            },
+            {"detection_mask", "detection_score", "noise_estimate",
+             "cfar_power"});
+    EXPECT_TRUE(result.plan_ok) << result.plan_json;
+    EXPECT_TRUE(result.diagnostics.empty());
+    EXPECT_EQ(result.frames.size(), 1U);
+    return result.frames.empty() ? int64_t{-1} :
+                                   result.frames.front().shape.front();
+  };
+
+  EXPECT_GT(detection_count(near.rd), 0);
+  EXPECT_EQ(detection_count(far.rd), 0);
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, OptionalOutputsOnlyWithWaveform) {

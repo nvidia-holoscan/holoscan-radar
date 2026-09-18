@@ -157,8 +157,9 @@ Do not share the production range-gain helper with the CPU oracle.
 - Equal targets at R and q*c*CRI/2 + R land at the same apparent range when
   their residual beats are in band, but their amplitude ratio follows their
   full physical ranges.
-- Compare 40 m with 3747.405725 m for the 25 us CRI case. The far target power
-  must be approximately 78.9 dB below the 40 m target before IF loss and noise.
+- Compare 40 m with 3787.405725 m for the 25 us CRI case. The far target has
+  the same 40 m apparent range and must be approximately 79.05 dB below the
+  physical 40 m target before IF loss and noise.
 - Cover exact-CRI and just-beyond-CRI targets; folding must never restore
   near-range amplitude.
 - Cover q greater than one independently of cyclic TDM/DDM excitation shifts.

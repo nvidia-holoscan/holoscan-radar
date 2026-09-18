@@ -21,4 +21,6 @@ cmake --build build --target siso
 ./build/applications/fmcw/siso/cpp/siso
 ```
 
-The executable defaults to `config/siso.yaml`. Pass `config/siso_smoke.yaml` as the first argument for the two-frame, headless single-target smoke scene.
+The executable defaults to `config/siso.yaml`. Its target begins at 40 m and recedes at 18.537028625 m/s, crossing the 25 µs CRI ambiguity boundary at 200 s. The apparent range wraps, but the relative monostatic free-space model continues to attenuate it from its full physical range; folding does not restore near-range brightness. This is a manual long-running fidelity demonstration, not a CI test.
+
+Pass `config/siso_smoke.yaml` as the first argument for the two-frame, headless single-target smoke scene. The smoke preset omits range loss and therefore retains the constant-amplitude analytic mode.

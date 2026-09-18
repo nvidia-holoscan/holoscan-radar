@@ -114,6 +114,7 @@ radar_add_test(fmcw/test_fmcw_doppler_processor
 radar_add_test(fmcw/test_fmcw_range_processor
     holoscan::fmcw_range_processor_op)
 radar_add_test(fmcw/test_fmcw_range_doppler_processor
+    holoscan::cfar_detector_op
     holoscan::fmcw_range_doppler_processor_op
     holoscan::fmcw_range_processor_op
     holoscan::clutter_filter_op

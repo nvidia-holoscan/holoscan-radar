@@ -19,6 +19,7 @@
 namespace {
 
 namespace mimo = holoscan::radar::app::mimo;
+namespace radar = holoscan::radar;
 
 std::filesystem::path config_path(const char* name) {
   return std::filesystem::path(HOLOSCAN_RADAR_SOURCE_DIR) /
@@ -336,6 +337,19 @@ TEST(FmcwMimoConfig, RejectsInvalidClusteredTailShape) {
       "        - score\n        - range_bin\n        - doppler_bin\n",
       "        - score\n        - doppler_bin\n        - range_bin\n");
   EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
+}
+
+TEST(FmcwMimoConfig, DecodesSharedRangeLossBlock) {
+  const MutatedConfig preset(
+      "mimo_tdm/config/mimo_tdm_smoke.yaml", "    tx_array:\n",
+      "    range_loss:\n"
+      "        model: monostatic_free_space\n"
+      "        reference_range: 40.0\n"
+      "    tx_array:\n");
+  const auto config = mimo::load_tdm_config(preset.path());
+  EXPECT_EQ(config.scene.range_loss.model,
+            radar::sim::RangeLossModel::kMonostaticFreeSpace);
+  EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 40.0);
 }
 
 }  // namespace
