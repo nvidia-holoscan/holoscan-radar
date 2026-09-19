@@ -84,6 +84,7 @@ set(HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS
     snapshot_gather_op
     phase_shift_beamformer_op
     beamscan_estimator_op
+    rank_one_residual_screen_op
     subarray_selection_op
     cluster_dbscan_op
     detection_reduction_op

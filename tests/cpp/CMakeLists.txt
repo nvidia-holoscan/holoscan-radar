@@ -124,6 +124,9 @@ radar_add_test(angle_estimation/test_snapshot_gather
 radar_add_test(angle_estimation/test_beamscan_estimator
     holoscan::beamscan_estimator_op
     holoscan::radar_common_steering)
+radar_add_test(angle_estimation/test_rank_one_residual_screen
+    EXT .cu
+    holoscan::rank_one_residual_screen_op)
 radar_add_test(angle_estimation/test_phase_shift_beamformer
     holoscan::phase_shift_beamformer_op
     holoscan::radar_common_steering)

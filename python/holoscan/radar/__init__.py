@@ -75,6 +75,10 @@ from .phase_shift_beamformer_op import (  # noqa: F401
 )
 from .radar_app import CadenceMeter  # noqa: F401
 from .radar_app import DetectionReportMode, DetectionReportOp, NullSinkOp
+from .rank_one_residual_screen_op import (  # noqa: F401
+    RankOneResidualScreenOpF32,
+    RankOneResidualScreenOpF64,
+)
 from .root_music_estimator_op import (  # noqa: F401
     RootMUSICEstimatorOpF32,
     RootMUSICEstimatorOpF64,
@@ -203,6 +207,7 @@ DDMSparseDemultiplexOp = DDMSparseDemultiplexOpF32
 MIMODeinterleaveOp = MIMODeinterleaveOpF32
 MUSICEstimatorOp = MUSICEstimatorOpF32
 MVDREstimatorOp = MVDREstimatorOpF32
+RankOneResidualScreenOp = RankOneResidualScreenOpF32
 PhaseShiftBeamformerOp = PhaseShiftBeamformerOpF32
 RootMUSICEstimatorOp = RootMUSICEstimatorOpF32
 ESPRITEstimatorOp = ESPRITEstimatorOpF32
@@ -280,6 +285,9 @@ __all__ = [
     "MVDREstimatorOp",
     "MVDREstimatorOpF32",
     "MVDREstimatorOpF64",
+    "RankOneResidualScreenOp",
+    "RankOneResidualScreenOpF32",
+    "RankOneResidualScreenOpF64",
     "retire_matx_solver_caches",
     "retire_music_matx_caches",
     "install_matx_cache_atexit",

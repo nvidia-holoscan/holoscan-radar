@@ -666,6 +666,32 @@ Per-estimator deviations from the shared contract:
 - `array_taper` **[live]** — WindowSpec. Amplitude taper for spatial sidelobe control (aperture shading). A non-custom window is applied element-wise on a ULA or unrecognized geometry and as the separable product `w_y[iy] * w_z[iz]` on each recognized filled URA. A custom window remains an explicit per-element vector in geometry/channel order. Overriding rebuilds weights (cached). Default: none.
 - `peak_interpolation` **[live]** — enum {none, parabolic}. Sub-grid peak refinement: `parabolic` fits a quadratic around the grid maximum for sub-bin accuracy; `none` returns the argmax cell. Default: none.
 
+##### RankOneResidualScreenOp
+
+Cheap routing screen for sparse angle pipelines. It tests how much snapshot
+energy remains after projection onto the steering vector specified by any
+row-aligned single-source baseline angle estimate. Beamscan is the normal
+producer, but it is not required by the contract. The score detects rank-one
+directional-model mismatch; it is a routing heuristic, not a calibrated source
+count.
+
+- **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`.
+- **In:** `baseline_aoa` — float32 / float64, `(num_items, 2)`, row-aligned single-source directions.
+- **In:** `is_valid` (optional) — bool or uint8, `(num_items, num_snapshots)`.
+- **Out:** `snapshot_out` — compacted flagged snapshots, `(num_selected, num_channels, num_snapshots)`.
+- **Out:** `selected_idx` — int64, `(num_selected,)`, strictly increasing indices into the input item axis.
+- **Out:** `is_valid_out` (optional, **always**) — uint8, `(num_selected, num_snapshots)`.
+- **Out:** `residual_score` (optional, **always**) — float32 / float64, `(num_items,)`.
+- **Out:** `selection_mask` (optional, **always**) — uint8, `(num_items,)`.
+- `array_geometry` **[live]** — ArrayGeometry matching the snapshot channel axis.
+- `angle_convention` — static AngleConvention matching the Beamscan output. Default: `radar_boresight`.
+- `residual_threshold` — static float in `[0, 1]`; select scores greater than or equal to the threshold. Default: `0.10`.
+
+For item `i`, valid looks `k`, and steering vector `a_i`, the score is
+`1 - sum_k |a_i^H x_ik|^2 / ((a_i^H a_i) sum_k ||x_ik||^2)`, clamped to
+`[0, 1]`. An item with no valid looks or non-finite baseline angles is not
+selected and receives a NaN score. Outputs keep the snapshot timestamp.
+
 ##### MVDREstimatorOp
 
 - **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`. `num_snapshots` should be ≳ `num_channels` for a well-conditioned (invertible) covariance.

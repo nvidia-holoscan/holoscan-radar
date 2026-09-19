@@ -7,6 +7,7 @@
 holoscan_radar_add_operator(snapshot_gather_op)
 holoscan_radar_add_operator(subarray_selection_op)
 holoscan_radar_add_operator(beamscan_estimator_op)
+holoscan_radar_add_operator(rank_one_residual_screen_op)
 holoscan_radar_add_operator(mvdr_estimator_op)
 holoscan_radar_add_operator(music_estimator_op)
 holoscan_radar_add_operator(root_music_estimator_op)
