@@ -380,6 +380,34 @@ TEST(RootMUSICEstimatorOpTest, RecoversUraTwoSourcesAzElPairing) {
                        << dm[2] << "," << dm[3] << ")";
 }
 
+TEST(RootMUSICEstimatorOpTest, RecoversUraTwoSourcesWithCommonElevation) {
+  constexpr int64_t kNy = 8;
+  constexpr int64_t kNz = 8;
+  constexpr int64_t kS = 512;
+  constexpr double kAz0 = -0.15;
+  constexpr double kAz1 = 0.20;
+  constexpr double kEl = 0.08;
+
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geom = make_planar_ura_geometry(kNy, kNz, 0.5, 1.0);
+  const auto block =
+      make_block_two(geom, conv, kAz0, kEl, kAz1, kEl, kS, 0.01, 83u);
+  auto snap = block_to_device<double>(block, {1, geom.num_elements(), kS});
+  const auto out = run_root_music<double>(
+      snap, make_params(geom, conv, /*num_sources=*/2, 1e-2,
+                        /*max_sources=*/2));
+
+  ASSERT_EQ(out.source_count.as<int32_t>()[0], 2);
+  const double* dm = out.doa_multi.as<double>();
+  std::array<double, 2> az{dm[0], dm[2]};
+  std::sort(az.begin(), az.end());
+  EXPECT_NEAR(az[0], kAz0, 0.04);
+  EXPECT_NEAR(az[1], kAz1, 0.04);
+  EXPECT_NEAR(dm[1], kEl, 0.04);
+  EXPECT_NEAR(dm[3], kEl, 0.04);
+}
+
 TEST(RootMUSICEstimatorOpTest, RecoversUraSingleSourceAzElFloat) {
   constexpr int64_t kNy = 6;
   constexpr int64_t kNz = 6;

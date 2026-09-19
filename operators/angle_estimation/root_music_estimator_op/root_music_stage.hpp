@@ -554,9 +554,12 @@ __global__ void root_music_axis_candidates_kernel(
 
 // One block per item (thread 0). Pairs the per-axis candidate cosines by
 // evaluating the full 2-D MUSIC subspace metric 1/(a^H P_n a) at each
-// (u_i, v_k) and greedily assigning the `target` best mutually-exclusive
-// pairs; each selected (u, v) is mapped through the aperture-axis frame to a
-// canonical direction and then to boundary angles.
+// (u_i, v_k) and greedily assigning the `target` best distinct pairs. Axis
+// candidates are deliberately reusable: two sources may share azimuth or
+// elevation, so requiring a one-to-one assignment across each axis invents a
+// spurious coordinate for that valid geometry. Each selected (u, v) is mapped
+// through the aperture-axis frame to a canonical direction and then to
+// boundary angles.
 template <typename T>
 __global__ void root_music_pair_kernel(
     const T* __restrict__ u_cand, const int32_t* __restrict__ u_count,
@@ -593,8 +596,7 @@ __global__ void root_music_pair_kernel(
   int64_t target = static_cast<int64_t>(model_order[item]);
   target = target < 1 ? 1 : target;
   target = target > max_sources ? max_sources : target;
-  target = target > nu ? nu : target;
-  target = target > nv ? nv : target;
+  target = target > nu * nv ? nu * nv : target;
   if (target < 1) {
     return;
   }
@@ -627,13 +629,9 @@ __global__ void root_music_pair_kernel(
     }
   }
 
-  bool u_used[kRootMusicPairCandCap];
-  bool v_used[kRootMusicPairCandCap];
-  for (int64_t i = 0; i < nu; ++i) {
-    u_used[i] = false;
-  }
-  for (int64_t k = 0; k < nv; ++k) {
-    v_used[k] = false;
+  bool pair_used[kRootMusicPairCandCap * kRootMusicPairCandCap];
+  for (int64_t candidate = 0; candidate < nu * nv; ++candidate) {
+    pair_used[candidate] = false;
   }
 
   int64_t found = 0;
@@ -642,11 +640,8 @@ __global__ void root_music_pair_kernel(
     int64_t best_i = -1;
     int64_t best_k = -1;
     for (int64_t i = 0; i < nu; ++i) {
-      if (u_used[i]) {
-        continue;
-      }
       for (int64_t k = 0; k < nv; ++k) {
-        if (v_used[k]) {
+        if (pair_used[i * nv + k]) {
           continue;
         }
         const T m = metric[i * nv + k];
@@ -660,8 +655,7 @@ __global__ void root_music_pair_kernel(
     if (best_i < 0) {
       break;
     }
-    u_used[best_i] = true;
-    v_used[best_k] = true;
+    pair_used[best_i * nv + best_k] = true;
     const T u = u_cand[item * u_cap + best_i];
     const T v = v_cand[item * v_cap + best_k];
     const T w = sqrt(fmax(T{0}, T{1} - u * u - v * v));
