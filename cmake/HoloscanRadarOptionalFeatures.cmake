@@ -91,6 +91,7 @@ set(HOLOSCAN_RADAR_HSDK5_PORTED_OPERATORS
     mvdr_estimator_op
     music_estimator_op
     feature_assembly_op
+    multi_source_expansion_op
     cfar_detector_op
     root_music_estimator_op
     esprit_estimator_op

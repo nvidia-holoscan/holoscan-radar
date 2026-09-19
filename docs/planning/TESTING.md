@@ -236,6 +236,18 @@ Common check (all five): default-constructed Params select `radar_boresight`; `s
 - **MUSICEstimatorOp** — resolves two closely-spaced sources that Beamscan cannot, given the source count (fixed or EFT `auto`).
 - **RootMUSICEstimatorOp / ESPRITEstimatorOp** — gridless DOA ≈ truth, with **no** `angle_spectrum` output. On a **1-D ULA** / shift-invariant geometry they resolve azimuth; on a **filled URA** (`subarray_spec: auto`) they resolve native (az, el) — assert single- and two-source recovery with sources distinct in **both** azimuth and elevation so mispairing is detectable (Root-MUSIC per-axis rooting + pairing; ESPRIT dual-invariance + joint-diagonalization pairing), plus Root-MUSIC recovery when two sources share elevation. On a non-uniform virtual array they either use the subarray/smoothing step or fail predictably.
 - Multi-source estimators fill `doa_multi` / `source_count` up to `max_sources`.
+- Multi-look Beamscan averages valid per-look Bartlett power and is identical
+  to the established path for one look.
+- `RankOneResidualScreenOp` agrees with an independent rank-one projection
+  reference, compacts selected rows in ascending order, and covers masked,
+  empty, zero-selected, and all-selected inputs. Its Graph tests cover every
+  emitted output, Exact timestamp propagation, and live-geometry match followed
+  by Params fallback.
+- `MultiSourceExpansionOp` preserves input-row order, expands confirmed
+  multi-source rows, and falls back to the baseline angle for unconfirmed rows.
+  A modality-independent Graph fixture composes the screen, synthetic common-
+  contract estimator outputs, and expansion without a radar simulator, TDM, or
+  application dependency.
 
 ### MIMO marshaling
 

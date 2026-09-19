@@ -62,6 +62,10 @@ from .esprit_estimator_op import (  # noqa: F401
 )
 from .feature_assembly_op import AssemblyFeature  # noqa: F401
 from .feature_assembly_op import FeatureAssemblyOpF32, FeatureAssemblyOpF64
+from .multi_source_expansion_op import (  # noqa: F401
+    MultiSourceExpansionOpF32,
+    MultiSourceExpansionOpF64,
+)
 from .music_estimator_op import MUSICEstimatorOpF32  # noqa: F401
 from .music_estimator_op import (
     MUSICEstimatorOpF64,
@@ -208,6 +212,7 @@ MIMODeinterleaveOp = MIMODeinterleaveOpF32
 MUSICEstimatorOp = MUSICEstimatorOpF32
 MVDREstimatorOp = MVDREstimatorOpF32
 RankOneResidualScreenOp = RankOneResidualScreenOpF32
+MultiSourceExpansionOp = MultiSourceExpansionOpF32
 PhaseShiftBeamformerOp = PhaseShiftBeamformerOpF32
 RootMUSICEstimatorOp = RootMUSICEstimatorOpF32
 ESPRITEstimatorOp = ESPRITEstimatorOpF32
@@ -288,6 +293,9 @@ __all__ = [
     "RankOneResidualScreenOp",
     "RankOneResidualScreenOpF32",
     "RankOneResidualScreenOpF64",
+    "MultiSourceExpansionOp",
+    "MultiSourceExpansionOpF32",
+    "MultiSourceExpansionOpF64",
     "retire_matx_solver_caches",
     "retire_music_matx_caches",
     "install_matx_cache_atexit",

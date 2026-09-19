@@ -164,6 +164,12 @@ radar_add_test(detection/test_detection_reduction_custom
 radar_add_test(detection/test_feature_assembly
     EXT .cu
     holoscan::feature_assembly_op)
+radar_add_test(detection/test_multi_source_expansion
+    EXT .cu
+    holoscan::multi_source_expansion_op)
+radar_add_test(integration/test_selective_aoa_operators
+    holoscan::rank_one_residual_screen_op
+    holoscan::multi_source_expansion_op)
 radar_add_test(detection/test_cfar_detector
     holoscan::cfar_detector_op
     holoscan::feature_assembly_op)

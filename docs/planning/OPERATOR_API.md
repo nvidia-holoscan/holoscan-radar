@@ -692,6 +692,26 @@ For item `i`, valid looks `k`, and steering vector `a_i`, the score is
 `[0, 1]`. An item with no valid looks or non-finite baseline angles is not
 selected and receives a NaN score. Outputs keep the snapshot timestamp.
 
+##### MultiSourceExpansionOp
+
+Merges a selectively evaluated multi-source estimator back into the complete
+CFAR row set without inventing a record payload.
+
+- **In:** `detection_idx` — int64, `(num_items, num_index_columns)`.
+- **In:** `baseline_aoa` — float32 / float64, `(num_items, 2)`.
+- **In:** `selected_idx` — int64, `(num_selected,)`, strictly increasing input-row indices.
+- **In:** `resolved_aoa` — float32 / float64, `(num_selected, 2)`.
+- **In:** `doa_multi` — float32 / float64, `(num_selected, max_sources, 2)`.
+- **In:** `source_count` — int32, `(num_selected,)`.
+- **Out:** `detection_idx_out` — int64, `(num_output, num_index_columns)`.
+- **Out:** `aoa_estimates_out` — float32 / float64, `(num_output, 2)`.
+
+Rows stay in original detection order. An unselected row emits its baseline
+angle once. A selected row with `source_count >= 2` emits the dominant
+`resolved_aoa` followed by `doa_multi[1:source_count]`; a selected row with
+fewer sources falls back to its baseline angle. Output capacity is
+`MaxTensorExtents.max_points`.
+
 ##### MVDREstimatorOp
 
 - **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels, num_snapshots)`. `num_snapshots` should be ≳ `num_channels` for a well-conditioned (invertible) covariance.

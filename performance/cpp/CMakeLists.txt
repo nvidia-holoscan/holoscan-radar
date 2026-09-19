@@ -50,6 +50,7 @@ set(HOLOSCAN_RADAR_HSDK5_PORTED_PERF
     detection_reduction
     feature_assembly
     rank_one_residual_screen
+    multi_source_expansion
 )
 
 function(radar_add_perf NAME)
@@ -76,6 +77,8 @@ radar_add_perf(detection_reduction holoscan::detection_reduction_op)
 radar_add_perf(feature_assembly holoscan::feature_assembly_op)
 radar_add_perf(rank_one_residual_screen
     holoscan::rank_one_residual_screen_op)
+radar_add_perf(multi_source_expansion
+    holoscan::multi_source_expansion_op)
 radar_add_perf(fmcw_range_processor holoscan::fmcw_range_processor_op)
 radar_add_perf(fmcw_doppler_processor holoscan::fmcw_doppler_processor_op)
 radar_add_perf(clutter_filter holoscan::clutter_filter_op)
