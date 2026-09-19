@@ -40,7 +40,8 @@ struct BeamscanRuntimeState;
 // parameters; module-wide conventions live in operators/common/README.md.
 //
 // In:  snapshot        — complex64/complex128, (num_items, num_channels) or
-//                       (num_items, num_channels, 1).
+//                       (num_items, num_channels, num_snapshots). Multiple
+//                       looks average valid per-look Bartlett power.
 // In:  is_valid        — optional bool/uint8, (num_items, num_snapshots);
 //                       validated when present (num_snapshots is 1 for the
 //                       2-D snapshot form).

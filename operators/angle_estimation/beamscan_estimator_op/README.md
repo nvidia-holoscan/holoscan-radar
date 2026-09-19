@@ -1,10 +1,10 @@
 # `BeamscanEstimatorOp`
 
-Conventional (Bartlett) sparse-path DOA: one look per item, scan a grid, emit the dominant `(az, el)` (or `(u, v)`). It fills the shared sparse-estimator slot after `SnapshotGatherOp` (or `SubarraySelectionOp`). Beamscan is single-snapshot — a 3-D `snapshot` with `num_snapshots ≠ 1` is an error; the 2-D form is canonical. `angle_convention` is static and defaults to `radar_boresight`.
+Conventional (Bartlett) sparse-path DOA: scan a grid and emit the dominant `(az, el)` (or `(u, v)`). It fills the shared sparse-estimator slot after `SnapshotGatherOp` (or `SubarraySelectionOp`). A 2-D snapshot is one look; a 3-D snapshot averages Bartlett power over valid looks before peak selection. `angle_convention` is static and defaults to `radar_boresight`.
 
 | Kind | Port | Dtype | Shape | Notes |
 | --- | --- | --- | --- | --- |
-| in | `snapshot` | complex64 / complex128 | `(num_items, num_channels)` or `(num_items, num_channels, 1)` | One `(num_channels,)` look per item. `num_channels` must match `array_geometry`. |
+| in | `snapshot` | complex64 / complex128 | `(num_items, num_channels)` or `(num_items, num_channels, num_snapshots)` | One or more looks per item. `num_channels` must match `array_geometry`. |
 | in | `is_valid` | bool or uint8 | `(num_items, num_snapshots)` | Optional same-tick mask. All-zero rows are blanked to NaN AOA / zero spectrum. |
 | out | `aoa_estimates` | float32 / float64 | `(num_items, 2)` | Dominant DOA `(az, el)` or `(u, v)`, row-aligned with items. Always emitted. |
 | out | `angle_spectrum` | float32 / float64 | `(num_items, num_az, num_el)` | Bartlett power grid. Optional (`always` disposition): the grid is the same pass that yields `aoa_estimates`, so it is produced regardless and an unwired sink is silently discarded. No `doa_multi` / `eigenvalues`. |
@@ -25,7 +25,7 @@ group: [`operators/angle_estimation/README.md`](../README.md)
 
 The shell (`beamscan_estimator_op.cu`) receives and validates the snapshot, resolves all five `[live]` values into one tick-local `BeamscanStageConfig`, builds a `BeamscanStagePlan`, resolves cached steering artifacts, prepares both output loans, runs the stage, publishes required `aoa_estimates` before optional/always `angle_spectrum`, and retains borrowed inputs. The cached artifact holds conjugated steering weights plus device azimuth/elevation grids; weights use `BeamOrder::kElMajor` (`beam = ie * num_az + ia`), `SteeringLayout::kChannelMajor` (`(num_channels, num_beams)`), and `conjugate = true` — the transpose of PhaseShift's az-major / beam-major table so the GEMM is `X · Wᶜ`.
 
-The stage (`beamscan_stage.hpp`):
+The one-look stage (`beamscan_stage.hpp`):
 
 ```text
 P[i, b] = | Σ_c conj(w[b, c]) · x[i, c] |²
@@ -48,13 +48,13 @@ el += off_el * (el_step_left + el_step_right) / 2
 
 Each axis refines independently when it has at least three grid points and the peak is interior on that axis. A 1-D azimuth scan (`el_coordinates` size 1) therefore refines azimuth while leaving elevation at its sole grid value.
 
-Steering-weight sign and `direction_cosine` masking match PhaseShift (`k = 2π/λ`, `phase = k (p·dir)`, invalid `u²+v² > 1` → zero weights). `is_valid` does not change the GEMM; `blank_empty_beamscan_items` then overwrites items whose mask row is all zero.
+For `num_snapshots > 1`, `beamscan_multilook_kernel` forms the same beam output for every valid look and writes their mean power before the same deterministic peak selection and interpolation. Steering-weight sign and `direction_cosine` masking match PhaseShift (`k = 2π/λ`, `phase = k (p·dir)`, invalid `u²+v² > 1` → zero weights). On the one-look path, `is_valid` does not change the GEMM; `blank_empty_beamscan_items` overwrites items whose mask row is all zero.
 
 ## Shape and dtype rules
 
 - `aoa_estimates` rows = `snapshot` axis 0 (`num_items`).
 - `angle_spectrum` = `(num_items, az_coordinates.size(), el_coordinates.size())`.
-- 2-D snapshot is canonical; 3-D is legal only with `num_snapshots == 1` (aliases the same contiguous layout).
+- A 2-D snapshot aliases the one-look layout; a 3-D snapshot requires a positive snapshot extent.
 - No leading batch beyond `(num_items, …)`.
 - Precision is the template instantiation (complex in, real out).
 - `is_valid` accepts `bool` or `uint8` (8-bit, 1 lane), shape `(num_items, num_snapshots)`.
@@ -68,7 +68,7 @@ Rejected combinations and the operator's own messages:
 | empty `az_coordinates` or `el_coordinates` | `BeamscanEstimatorOp: az_coordinates and el_coordinates must be non-empty` |
 | input or scan grid beyond captured maxima | `BeamscanEstimatorOp: input or scan grid exceeds MaxTensorExtents` |
 | `snapshot` rank not 2 or 3 | `BeamscanEstimatorOp: snapshot must have shape (num_items, num_channels) or (num_items, num_channels, num_snapshots)` |
-| 3-D `num_snapshots ≠ 1` | `BeamscanEstimatorOp: snapshot num_snapshots must be 1 for single-snapshot Beamscan` |
+| 3-D `num_snapshots <= 0` | `BeamscanEstimatorOp: snapshot num_snapshots must be positive` |
 | channel count mismatch | `BeamscanEstimatorOp: snapshot num_channels must match array_geometry.num_elements` |
 | `is_valid` not bool/uint8 | `BeamscanEstimatorOp: is_valid must have dtype bool or uint8` |
 | `is_valid` shape mismatch | `BeamscanEstimatorOp: is_valid must have shape (num_items, num_snapshots) matching snapshot` |

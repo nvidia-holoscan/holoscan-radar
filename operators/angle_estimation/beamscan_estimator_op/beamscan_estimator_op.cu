@@ -19,7 +19,7 @@
 #include <holoscan/core/payload_options.hpp>
 
 #include "angle_estimation/beamscan_estimator_op/beamscan_stage.hpp"
-#include "angle_estimation/beamscan_estimator_op/is_valid_mask.hpp"
+#include "angle_estimation/is_valid_mask.hpp"
 #include "radar_common/dsp/angle_convention.hpp"
 #include "radar_common/dsp/steering_weights.hpp"
 #include "radar_common/dsp/steering_weights_device.hpp"
@@ -162,12 +162,11 @@ expected<BeamscanStagePlan, Error> build_beamscan_stage_plan(
             ": snapshot num_items must be non-negative and num_channels "
             "must be positive"});
   }
-  if (num_snapshots != 1) {
+  if (num_snapshots <= 0) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
         std::string(kOpName) +
-            ": snapshot num_snapshots must be 1 for single-snapshot "
-            "Beamscan"});
+            ": snapshot num_snapshots must be positive"});
   }
   try {
     stage.geometry.validate();
@@ -463,21 +462,34 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
       writable_ptr(*state_->beamformed, "beamformed workspace"));
 
   try {
-    detail::run_beamscan_stage<T>(
-        static_cast<const cuda::std::complex<T>*>(snap.data()),
-        plan.num_items, plan.num_channels,
-        static_cast<const cuda::std::complex<T>*>(steering->weights->data()),
-        static_cast<cuda::std::complex<T>*>(beamformed_ptr),
-        plan.spectrum_shape[1], plan.spectrum_shape[2],
-        static_cast<const T*>(steering->az_grid->data()),
-        static_cast<const T*>(steering->el_grid->data()),
-        plan.stage.peak_interpolation,
-        static_cast<T*>(spectrum_writer->data()),
-        static_cast<T*>(aoa_writer->data()), stream);
-    detail::blank_empty_beamscan_items(
-        mask_ptr, plan.num_items, plan.num_snapshots, plan.num_beams,
-        static_cast<T*>(spectrum_writer->data()),
-        static_cast<T*>(aoa_writer->data()), stream);
+    if (plan.num_snapshots == 1) {
+      detail::run_beamscan_stage<T>(
+          static_cast<const cuda::std::complex<T>*>(snap.data()),
+          plan.num_items, plan.num_channels,
+          static_cast<const cuda::std::complex<T>*>(steering->weights->data()),
+          static_cast<cuda::std::complex<T>*>(beamformed_ptr),
+          plan.spectrum_shape[1], plan.spectrum_shape[2],
+          static_cast<const T*>(steering->az_grid->data()),
+          static_cast<const T*>(steering->el_grid->data()),
+          plan.stage.peak_interpolation,
+          static_cast<T*>(spectrum_writer->data()),
+          static_cast<T*>(aoa_writer->data()), stream);
+      detail::blank_empty_beamscan_items(
+          mask_ptr, plan.num_items, plan.num_snapshots, plan.num_beams,
+          static_cast<T*>(spectrum_writer->data()),
+          static_cast<T*>(aoa_writer->data()), stream);
+    } else {
+      detail::run_beamscan_multilook_stage<T>(
+          static_cast<const cuda::std::complex<T>*>(snap.data()), mask_ptr,
+          plan.num_items, plan.num_channels, plan.num_snapshots,
+          static_cast<const cuda::std::complex<T>*>(steering->weights->data()),
+          plan.spectrum_shape[1], plan.spectrum_shape[2],
+          static_cast<const T*>(steering->az_grid->data()),
+          static_cast<const T*>(steering->el_grid->data()),
+          plan.stage.peak_interpolation,
+          static_cast<T*>(spectrum_writer->data()),
+          static_cast<T*>(aoa_writer->data()), stream);
+    }
     check_cuda("beamscan stage", kOpName);
   } catch (const std::invalid_argument& error) {
     return fail_invalid(error.what());

@@ -657,9 +657,9 @@ Per-estimator deviations from the shared contract:
 
 ##### BeamscanEstimatorOp
 
-- **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels)` **or** `(num_items, num_channels, num_snapshots)`. Beamscan is single-snapshot: a 3D input with `num_snapshots ≠ 1` is an error (a 2D input is the canonical form).
+- **In:** `snapshot` — complex64 / complex128, `(num_items, num_channels)` **or** `(num_items, num_channels, num_snapshots)`. A 2-D input is one look. For multiple looks, Bartlett power is averaged over the valid snapshot slots before peak selection.
 - **Out:** `aoa_estimates` — `(num_items, 2)`.
-- **Out:** `angle_spectrum` (optional, **always**) — `(num_items, num_az, num_el)`. Single-source, single-snapshot — no `doa_multi`, no `eigenvalues`. `always` because the scan grid is the same pass that yields `aoa_estimates`.
+- **Out:** `angle_spectrum` (optional, **always**) — `(num_items, num_az, num_el)`. Single-source conventional spectrum — no `doa_multi`, no `eigenvalues`. `always` because the scan grid is the same pass that yields `aoa_estimates`.
 
 **Parameters:** shared (`array_geometry`, `angle_convention`, `az_coordinates`, `el_coordinates`) plus:
 

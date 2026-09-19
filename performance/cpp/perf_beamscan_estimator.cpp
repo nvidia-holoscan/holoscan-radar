@@ -3,7 +3,8 @@
 
 // Performance characterization for BeamscanEstimatorOp — conventional
 // sparse-path Bartlett DOA on a scan grid. Sweeps detection count, channel
-// count, and scan-grid size. Measurement tool only: no timing assertions.
+// count, snapshot count, and scan-grid size. Measurement tool only: no timing
+// assertions.
 // See docs/planning/OPERATOR_DEVELOPMENT.md.
 //
 // [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
@@ -56,6 +57,7 @@ struct SizeSpec {
   std::string id;
   int64_t channels;
   int64_t detections;
+  int64_t snapshots;
   int64_t num_az;
   int64_t num_el;
   std::string role;
@@ -66,6 +68,7 @@ struct BeamScenario {
   std::string size_id;
   int64_t channels{0};
   int64_t detections{0};
+  int64_t snapshots{1};
   int64_t num_az{0};
   int64_t num_el{0};
   enum class OverrideKind {
@@ -95,11 +98,11 @@ const char* override_name(BeamScenario::OverrideKind kind) {
 
 const std::vector<SizeSpec>& size_ladder() {
   static const std::vector<SizeSpec> ladder = {
-      {"xs", 4, 64, 21, 11, "small array; fast smoke"},
-      {"sm", 8, 256, 41, 21, "compact SIMO array"},
-      {"md", 16, 1024, 61, 31, "common dev size"},
-      {"lg", 32, 4096, 81, 41, "dense virtual array"},
-      {"xl", 64, 16384, 101, 51,
+      {"xs", 4, 64, 1, 21, 11, "small array; one-look compatibility"},
+      {"sm", 8, 256, 3, 41, 21, "compact multi-look array"},
+      {"md", 16, 1024, 9, 61, 31, "3x3 sparse-window look count"},
+      {"lg", 32, 4096, 9, 81, 41, "dense virtual array"},
+      {"xl", 64, 16384, 9, 101, 51,
        "upper characterization bound"}};
   return ladder;
 }
@@ -333,7 +336,7 @@ class PerfBeamscanOverrideSourceOp final : public holoscan::Operator<> {
 perf::TimingCollector run_beamscan_graph(
     const BeamScenario& scen, const perf::RunPlan& plan) {
   auto snapshot = perf::make_iq_cube_device<PerfPrecision>(
-      {scen.detections, scen.channels});
+      {scen.detections, scen.channels, scen.snapshots});
   hr::BeamscanParams initial;
   initial.array_geometry =
       make_ula_geometry(scen.channels, 0.5, 1.0);
@@ -361,6 +364,7 @@ perf::TimingCollector run_beamscan_graph(
   }
   hr::MaxTensorExtents extents;
   extents.max_items = scen.detections;
+  extents.max_snapshots = scen.snapshots;
   extents.max_az = scen.num_az;
   extents.max_el = scen.num_el;
   perf::TimingCollector collector;
@@ -438,7 +442,7 @@ void fill_throughput(perf::ResultRow* row,
 
   const double csz =
       2.0 * static_cast<double>(sizeof(PerfPrecision));
-  const double snap_bytes = n * ch * csz;
+  const double snap_bytes = n * ch * static_cast<double>(scen.snapshots) * csz;
   const double weight_bytes = beams * ch * csz;
   const double spec_bytes =
       n * beams *
@@ -459,7 +463,7 @@ perf::ResultRow base_row(const BeamScenario& scen) {
   row.variant = "bartlett";
   row.size_id = scen.size_id;
   row.map_shape = {scen.num_az, scen.num_el};
-  row.input_shape = {scen.detections, scen.channels};
+  row.input_shape = {scen.detections, scen.channels, scen.snapshots};
   row.out_batch = scen.detections;
   row.k = scen.channels;
   return row;
@@ -471,13 +475,15 @@ BeamScenario make_scenario(const SizeSpec& s,
   sc.size_id = s.id;
   sc.channels = s.channels;
   sc.detections = s.detections;
+  sc.snapshots = s.snapshots;
   sc.num_az = s.num_az;
   sc.num_el = s.num_el;
   sc.override_kind = kind;
   std::ostringstream id;
   id << "beamscan_" << s.id << "_c" << s.channels
      << "_n" << s.detections << "_g" << s.num_az
-     << "x" << s.num_el << "_" << override_name(kind);
+     << "x" << s.num_el << "_s" << s.snapshots << "_"
+     << override_name(kind);
   sc.id = id.str();
   return sc;
 }

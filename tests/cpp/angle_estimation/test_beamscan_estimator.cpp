@@ -33,7 +33,7 @@
 #include <holoscan/time/realtime_clock.hpp>
 
 #include "angle_estimation/beamscan_estimator_op/beamscan_estimator_op.hpp"
-#include "angle_estimation/beamscan_estimator_op/is_valid_mask.hpp"
+#include "angle_estimation/is_valid_mask.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/enums.hpp"
@@ -567,17 +567,68 @@ TEST(BeamscanEstimatorOpTest, Accepts3DSnapshotWithOneLook) {
   EXPECT_EQ(out.spectrum.shape[0], 1);
 }
 
-TEST(BeamscanEstimatorOpTest, RejectsMultiSnapshotInput) {
-  constexpr int64_t kN = 4;
+TEST(BeamscanEstimatorOpTest, MultiLookSpectrumAveragesPerLookPower) {
+  constexpr int64_t kN = 6;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  std::vector<std::complex<double>> host(static_cast<size_t>(kN * 3),
-                                         {1.0, 0.0});
-  auto snap_t = to_device_tensor(host, {1, kN, 3}, complex_dtype<double>());
-  const DualIOGraphRunResult result = run_beamscan_result<double>(
-      snap_t, make_params(geom, AngleConvention{}, {0.0}, {0.0}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto first =
+      make_steering_snapshot(geom, AngleConvention{}, -0.12, 0.0);
+  const auto second =
+      make_steering_snapshot(geom, AngleConvention{}, 0.18, 0.0);
+  const auto grid = linspace(-0.3, 0.3, 31);
+  const auto first_out = run_beamscan<double>(
+      snapshot_to_device<double>(first, {1, kN}),
+      make_params(geom, AngleConvention{}, grid, {0.0}));
+  const auto second_out = run_beamscan<double>(
+      snapshot_to_device<double>(second, {1, kN}),
+      make_params(geom, AngleConvention{}, grid, {0.0}));
+
+  std::vector<std::complex<double>> looks(static_cast<size_t>(kN * 2));
+  for (int64_t channel = 0; channel < kN; ++channel) {
+    looks[static_cast<size_t>(channel * 2)] =
+        first[static_cast<size_t>(channel)];
+    looks[static_cast<size_t>(channel * 2 + 1)] =
+        second[static_cast<size_t>(channel)];
+  }
+  const auto multi_out = run_beamscan<double>(
+      snapshot_to_device<double>(looks, {1, kN, 2}),
+      make_params(geom, AngleConvention{}, grid, {0.0}));
+  for (int64_t i = 0; i < multi_out.spectrum.size(); ++i) {
+    const double expected =
+        0.5 * (first_out.spectrum.as<double>()[i] +
+               second_out.spectrum.as<double>()[i]);
+    EXPECT_NEAR(multi_out.spectrum.as<double>()[i], expected, 1e-10);
+  }
+}
+
+TEST(BeamscanEstimatorOpTest, MultiLookValidityMaskExcludesInvalidLook) {
+  constexpr int64_t kN = 6;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
+  const auto first =
+      make_steering_snapshot(geom, AngleConvention{}, -0.12, 0.0);
+  const auto second =
+      make_steering_snapshot(geom, AngleConvention{}, 0.18, 0.0);
+  std::vector<std::complex<double>> looks(static_cast<size_t>(kN * 2));
+  for (int64_t channel = 0; channel < kN; ++channel) {
+    looks[static_cast<size_t>(channel * 2)] =
+        first[static_cast<size_t>(channel)];
+    looks[static_cast<size_t>(channel * 2 + 1)] =
+        second[static_cast<size_t>(channel)];
+  }
+  const auto grid = linspace(-0.3, 0.3, 31);
+  const auto single = run_beamscan<double>(
+      snapshot_to_device<double>(first, {1, kN}),
+      make_params(geom, AngleConvention{}, grid, {0.0}));
+  const DualIOGraphRunResult masked = run_beamscan_with_mask_result<double>(
+      snapshot_to_device<double>(looks, {1, kN, 2}),
+      to_device_bool_tensor({1, 0}, {1, 2}),
+      make_params(geom, AngleConvention{}, grid, {0.0}));
+  ASSERT_TRUE(masked.plan_ok) << masked.plan_json;
+  ASSERT_TRUE(masked.diagnostics.empty());
+  ASSERT_EQ(masked.frames1.size(), 1U);
+  for (int64_t i = 0; i < masked.frames1[0].size(); ++i) {
+    EXPECT_NEAR(masked.frames1[0].as<double>()[i],
+                single.spectrum.as<double>()[i], 1e-10);
+  }
 }
 
 TEST(BeamscanEstimatorOpTest, DirectionCosineMasksInvisibleRegion) {

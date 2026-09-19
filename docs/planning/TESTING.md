@@ -229,7 +229,9 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 
 Common check (all five): default-constructed Params select `radar_boresight`; `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_estimates ≈ θ` within grid/interpolation or the CRLB under both the default and at least one non-default convention; an `is_valid` mask correctly excludes masked snapshots.
 
-- **BeamscanEstimatorOp** — single-source recovery; accepts 2-D or 3-D-with-`num_snapshots=1`; errors on 3-D with `num_snapshots ≠ 1`.
+- **BeamscanEstimatorOp** — single-source recovery; accepts 2-D one-look or 3-D
+  multi-look input, averages valid per-look Bartlett power, rejects an item with
+  no valid looks, and preserves the established result for one look.
 - **MVDREstimatorOp** — multi-snapshot covariance nulls an interferer better than Beamscan; `diagonal_loading` stabilizes the low-snapshot / ill-conditioned case.
 - **MUSICEstimatorOp** — resolves two closely-spaced sources that Beamscan cannot, given the source count (fixed or EFT `auto`).
 - **RootMUSICEstimatorOp / ESPRITEstimatorOp** — gridless DOA ≈ truth, with **no** `angle_spectrum` output. On a **1-D ULA** / shift-invariant geometry they resolve azimuth; on a **filled URA** (`subarray_spec: auto`) they resolve native (az, el) — assert single- and two-source recovery with sources distinct in **both** azimuth and elevation so mispairing is detectable (Root-MUSIC per-axis rooting + pairing; ESPRIT dual-invariance + joint-diagonalization pairing). On a non-uniform virtual array they either use the subarray/smoothing step or fail predictably.
