@@ -246,6 +246,39 @@ target_include_directories(test_fmcw_mimo_config PRIVATE
 target_compile_definitions(test_fmcw_mimo_config PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
+radar_add_test(app/test_adaptive_aoa_config
+    yaml-cpp
+    holoscan::params_io
+    holoscan::radar_app
+    holoscan::fmcw_range_processor_op
+    holoscan::clutter_filter_op
+    holoscan::fmcw_doppler_processor_op
+    holoscan::mimo_deinterleave_op
+    holoscan::tdm_sparse_compensation_op
+    holoscan::cfar_detector_op
+    holoscan::beamscan_estimator_op
+    holoscan::rank_one_residual_screen_op
+    holoscan::music_estimator_op
+    holoscan::root_music_estimator_op
+    holoscan::esprit_estimator_op
+    holoscan::mvdr_estimator_op
+    holoscan::feature_assembly_op
+    holoscan::multi_source_expansion_op)
+target_include_directories(test_adaptive_aoa_config PRIVATE
+    ${PROJECT_SOURCE_DIR}/applications/common
+    ${PROJECT_SOURCE_DIR}/applications/fmcw/adaptive_aoa/cpp
+    ${PROJECT_SOURCE_DIR}/operators)
+target_compile_definitions(test_adaptive_aoa_config PRIVATE
+    HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+
+if(TARGET adaptive_aoa)
+    add_test(NAME AdaptiveAoASmoke
+        COMMAND $<TARGET_FILE:adaptive_aoa>
+            ${PROJECT_SOURCE_DIR}/applications/fmcw/adaptive_aoa/config/adaptive_aoa_smoke.yaml)
+    set_tests_properties(AdaptiveAoASmoke
+        PROPERTIES LABELS "application;smoke")
+endif()
+
 radar_add_test(app/test_multi_profile_source
     yaml-cpp
     holoscan::params_io

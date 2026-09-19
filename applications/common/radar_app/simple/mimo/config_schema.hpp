@@ -157,6 +157,9 @@ default_visualization_config() {
 }
 
 struct AppParams {
+  // Optional startup selector used only by adaptive_aoa. Other MIMO apps
+  // ignore it and retain their fixed estimator graph.
+  std::string aoa_algorithm{"music"};
   FMCWWaveformDescriptor waveform;
   CubeConfig cube;
   RunConfig run;
@@ -180,6 +183,7 @@ HOLOSCAN_PARAM_SCHEMA(
     AppParams,
     holoscan::param_schema(
         "com.nvidia.holoscan.radar.app.mimo.AppParams", 1),
+    holoscan::field<&AppParams::aoa_algorithm>("aoa_algorithm"),
     holoscan::field<&AppParams::waveform>("waveform"),
     holoscan::field<&AppParams::cube>("cube"),
     holoscan::field<&AppParams::run>("run"),

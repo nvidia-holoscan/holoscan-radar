@@ -326,6 +326,16 @@ The scheme-specific operators span TX separation through virtual-array assembly.
 
 ## Notes & open items
 
+### Adaptive sparse-angle cascade
+
+The `adaptive_aoa` application adds a reusable selective-resolution pattern to
+the MIMO-TDM sparse path: multi-look Beamscan feeds
+`RankOneResidualScreenOp`; compacted flagged snapshots feed one configured
+multi-source estimator; `MultiSourceExpansionOp` merges resolved 1..N angles
+with the unflagged Beamscan rows before `FeatureAssemblyOp`. CFAR uses TX/RX
+NCI plus `range_doppler` peak selection and the application deliberately omits
+clustering. See [`ADAPTIVE_AOA.md`](ADAPTIVE_AOA.md).
+
 - **Bridges are locked, not handwaved.** The snapshot gather, feature assembly, and cluster reduction are the operators `SnapshotGatherOp`, `FeatureAssemblyOp`, and `DetectionReductionOp` (contracts in the operator API doc); their delivery models (mainstream ops / thin op over a shared reduction primitive) are settled there.
 - **Detection before or after virtual assembly:** detection uses non-coherent power, so it can run on the per-channel RD maps (with `nci_axes` over the channel set) or on the assembled cube; only the *angle* path requires the coherent compensation + virtual assembly. The chains show assembly first for a single clear ordering.
 - **Velocity ambiguity (TDM and DDM):** both reduce unambiguous velocity by `M`. Dense downstream sees that aliased per-TX Doppler axis. Sparse DDM makes the fold explicit through `fold_idx`; resolution remains a separate future operator or external observation.

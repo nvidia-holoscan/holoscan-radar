@@ -54,6 +54,24 @@ holoscan_radar_add_application(mimo_tdm
         detection_reduction_op
         cluster_dbscan_op
 )
+holoscan_radar_add_application(adaptive_aoa
+    DIRECTORY fmcw/adaptive_aoa
+    DEPENDS OPERATORS
+        fmcw_range_processor_op
+        clutter_filter_op
+        fmcw_doppler_processor_op
+        mimo_deinterleave_op
+        tdm_sparse_compensation_op
+        cfar_detector_op
+        beamscan_estimator_op
+        rank_one_residual_screen_op
+        music_estimator_op
+        root_music_estimator_op
+        esprit_estimator_op
+        mvdr_estimator_op
+        multi_source_expansion_op
+        feature_assembly_op
+)
 holoscan_radar_add_application(multi_waveform
     DIRECTORY fmcw/multi_waveform
     DEPENDS OPERATORS
