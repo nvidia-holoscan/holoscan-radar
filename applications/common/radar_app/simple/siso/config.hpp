@@ -85,7 +85,7 @@ inline holoscan::PreparedParams<Params> decode_params(
 
 inline void reject_authored(const holoscan::config::Document& document,
                             std::string_view path) {
-  auto value = document.find(path);
+  auto value = document.try_find(path);
   if (!value) {
     throw std::runtime_error(holoscan::config::format_error(value.error()));
   }
@@ -100,7 +100,7 @@ inline holoscan::config::Document load_document(
   if (!std::filesystem::exists(path)) {
     throw std::runtime_error("config file not found: " + path.string());
   }
-  auto loaded = holoscan::config_io::load(
+  auto loaded = holoscan::config_io::try_load(
       path, holoscan::config_io::Format::kYaml);
   if (!loaded) {
     throw std::runtime_error(holoscan::config::format_error(loaded.error()));
@@ -111,20 +111,20 @@ inline holoscan::config::Document load_document(
 template <typename Enum>
 inline holoscan::config::Document normalize_enum_field(
     holoscan::config::Document document, std::string_view path) {
-  auto found = document.find(path);
+  auto found = document.try_find(path);
   if (!found) {
     throw std::runtime_error(holoscan::config::format_error(found.error()));
   }
   if (!found->has_value()) {
     return document;
   }
-  auto decoded = document.get<Enum>(path);
+  auto decoded = document.try_get<Enum>(path);
   if (!decoded) {
     throw std::runtime_error(
         holoscan::config::format_error(decoded.error()));
   }
   using Underlying = std::underlying_type_t<Enum>;
-  auto replaced = document.replace(path, static_cast<Underlying>(*decoded));
+  auto replaced = document.try_replace(path, static_cast<Underlying>(*decoded));
   if (!replaced) {
     throw std::runtime_error(
         holoscan::config::format_error(replaced.error()));

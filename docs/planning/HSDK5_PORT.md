@@ -1176,7 +1176,7 @@ cache cannot resurrect it) until a fuller EA/GA Python operator surface and
 `fmcw_aoa_estimators` trees are removed. Their Application/Holoviz helpers,
 X11 viewer/raster fallback, app-specific adapters, and Python demo framework
 were removed with them. X11 remains only as the runtime display probe for the
-optional Graph-native HSDK 5 dashboard. The five standalone SISO/SIMO/MIMO
+optional Graph-native HSDK 5 dashboard. The seven standalone FMCW
 applications register independently of display availability and run headless
 when the dashboard is unavailable.
 
@@ -1245,12 +1245,20 @@ public standalone decoder from `holoscan::params::decode_params` to
 `holoscan::params::try_decode`; the consolidated SIMO loader follows the
 pinned API.
 
+**Config fallible API rename (2026-09-20).** SDK revision `8b7416a` made the
+unprefixed `config_io::load` / `config_io::parse` and `Document::find` / `get` /
+`replace` entry points throwing APIs. Application loaders and config tests use
+the explicit fallible `try_load` / `try_parse` / `try_find` / `try_get` /
+`try_replace` variants so their existing contextual error handling is
+preserved. The repository builds against resolved commit
+`8b7416af9f29fee714e85576a2d481605e526934` from `main-5x`.
+
 Shared `performance/cpp/utils/perf_graph.hpp` is the Graph harness;
 legacy `perf_source.hpp` / `perf_sink.hpp` remain for reference only.
 CMake gates drivers via `HOLOSCAN_RADAR_HSDK5_PORTED_PERF` (all drivers
 listed — see §8). Python perf drivers stay deferred with bindings.
 
-**Status:** open — phase 4: the five standalone SISO/SIMO/MIMO Graph applications
+**Status:** open — phase 4: the seven standalone FMCW Graph applications
 and native HSDK 5 dashboard are landed; legacy demos and the X11 viewer are
 retired; Python execution remains deferred; C++ Graph perf is complete.
 

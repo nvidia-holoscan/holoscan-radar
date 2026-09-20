@@ -224,7 +224,7 @@ TEST(FmcwSimoConfig, SmokeConfigsOnlyApplyAllowedOverrides) {
 }
 
 TEST(FmcwSimoConfig, RejectsAuthoredDerivedFields) {
-  auto document = holoscan::config_io::parse(
+  auto document = holoscan::config_io::try_parse(
       "{derived: 1}", holoscan::config_io::Format::kYaml);
   ASSERT_TRUE(document);
   EXPECT_THROW(simo::reject_authored(*document, "/derived"),
@@ -233,7 +233,7 @@ TEST(FmcwSimoConfig, RejectsAuthoredDerivedFields) {
 }
 
 TEST(FmcwSimoConfig, RejectsInvalidScanCoordinateRangeMapping) {
-  auto document = holoscan::config_io::parse(
+  auto document = holoscan::config_io::try_parse(
       "{grid: {min: 0.0, max: 1.0, step: 0.3}}",
       holoscan::config_io::Format::kYaml);
   ASSERT_TRUE(document);

@@ -63,11 +63,10 @@ the same path the `holohub` wrapper uses for `HOLOSCAN_CLI_DATA_DIR`.
 ## [EA HSDK5 ONLY] Build the SDK base image
 
 This temporary workflow creates a devcontainer with HSDK 5 installed; it does
-not build the radar module. The module is **partially** ported: the allow-listed
-operators and their C++ tests build and run, while the FMCW range/Doppler and
-MIMO marshaling operators, the Python bindings, and the demo applications are
-still gated off. See [`../docs/planning/HSDK5_PORT.md`](../docs/planning/HSDK5_PORT.md)
-for the current state.
+not build the radar module. The C++ operators, tests, performance drivers, and
+applications are ported; Python remains gated off during the EA. See
+[`../docs/planning/HSDK5_PORT.md`](../docs/planning/HSDK5_PORT.md) for the
+current state.
 
 On the host, from the root of this repository, run:
 
@@ -85,10 +84,13 @@ component through the SDK build container before creating the image, without
 modifying the SDK checkout. This workaround keeps native Holoviz available
 until the public HSDK 5 package ships it; remove the marked EA workflow at GA.
 
-The default pin is the branch `deustice/5x/optional-port-contracts`, which
+The default pin is the SDK development branch `main-5x`, which
 carries the optional-unwired-input feature this module needs in order to retire
 its `expect_*` parameters ([`../docs/planning/HSDK5_PORT.md`](../docs/planning/HSDK5_PORT.md)
 §11), and [`devcontainer.json`](devcontainer.json) names the image it produces.
+The currently resolved SDK commit is
+`8b7416af9f29fee714e85576a2d481605e526934` (image tag
+`holoscan-radar-hsdk5-ea:main-5x-8b7416a`).
 The module no longer builds against the `v5.0.0.1` EA tag: it uses that
 branch's Tensor spec API, and its operators declare optional `[live]` inputs
 the tag rejects as unconnected. Because a branch pin's image tag carries its
@@ -107,7 +109,7 @@ several pins can coexist:
 ```bash
 ./.devcontainer/build-hsdk5-ea-image.sh --pin v5.0.0.1
 ./.devcontainer/build-hsdk5-ea-image.sh --pin 9bd905908
-./.devcontainer/build-hsdk5-ea-image.sh --pin deustice/5x/optional-port-contracts
+./.devcontainer/build-hsdk5-ea-image.sh --pin main-5x
 ```
 
 A tag or sha pin is immutable, and the script verifies the cached checkout
@@ -131,7 +133,7 @@ against the EA image from the host, run:
 
 ```bash
 ./holohub run-container \
-  --base-img holoscan-radar-hsdk5-ea:deustice-5x-optional-port-contracts-b2f25ef
+  --base-img holoscan-radar-hsdk5-ea:main-5x-8b7416a
 ```
 
 Inside the EA devcontainer, use local execution so `holohub` uses the HSDK 5

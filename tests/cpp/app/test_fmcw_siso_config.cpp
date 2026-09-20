@@ -86,7 +86,7 @@ TEST(FmcwSisoConfig, SmokeOnlyAppliesAllowedOverrides) {
 }
 
 TEST(FmcwSisoConfig, RejectsAuthoredDerivedFields) {
-  auto document = holoscan::config_io::parse(
+  auto document = holoscan::config_io::try_parse(
       "{derived: 1}", holoscan::config_io::Format::kYaml);
   ASSERT_TRUE(document);
   EXPECT_THROW(siso::reject_authored(*document, "/derived"),

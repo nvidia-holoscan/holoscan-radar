@@ -8,7 +8,7 @@
 set -euo pipefail
 
 readonly HSDK_REPOSITORY="ssh://git@gitlab-master.nvidia.com:12051/holoscan/holoscan-sdk.git"
-readonly DEFAULT_PIN="deustice/5x/optional-port-contracts"
+readonly DEFAULT_PIN="main-5x"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -18,7 +18,7 @@ usage() {
 Usage: build-hsdk5-ea-image.sh [--pin <tag|branch|sha>] [--print-pin]
 
   --pin <ref>   HSDK 5 tag, branch, or commit sha to build.
-                Default: $HSDK_PIN, else deustice/5x/optional-port-contracts.
+                Default: $HSDK_PIN, else main-5x.
   --print-pin   Resolve and verify the pin, print the commit and the image it
                 would produce, then exit without building.
 
